@@ -30,3 +30,6 @@ $RECYCLE.BIN/
 
 # ===== 杂项（疑似误生成的文件）=====
 clear()
+
+# ===== 第三方安装包（不应入库）=====
+tools/opencv-4.13.0-windows.exe

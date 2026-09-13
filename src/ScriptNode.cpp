@@ -1,6 +1,7 @@
 #include "ScriptNode.h"
 #include "DataObject.h"
 #include "AppLog.h"
+#include "ScriptSecurityPolicy.h"
 #include <QWidget>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -49,6 +50,24 @@ void ScriptNode::run(bool /*autoSwitch*/)
     QStringList args = m_params.value(QStringLiteral("scriptArgs")).toStringList();
     QString lang = m_params.value(QStringLiteral("language")).toString();
 
+    {
+        ScriptSecurityPolicy &policy = ScriptSecurityPolicy::instance();
+        QString denyReason;
+        if (!policy.evaluate(lang, script, denyReason)) {
+            policy.audit(lang, script, false, denyReason);
+            m_params[QStringLiteral("lastOutput")] = denyReason;
+            m_outputImage = m_inputImage;
+            return;
+        }
+        if (!policy.requestConfirmation(lang, script)) {
+            policy.audit(lang, script, false, QStringLiteral("用户取消了脚本执行"));
+            m_params[QStringLiteral("lastOutput")] = QStringLiteral("用户取消了脚本执行");
+            m_outputImage = m_inputImage;
+            return;
+        }
+        policy.audit(lang, script, true, QString());
+    }
+
     QString output;
     if (lang == QStringLiteral("Python")) {
         output = executePythonScript(script, args);
@@ -81,15 +100,17 @@ QString ScriptNode::executePythonScript(const QString &script, const QStringList
 
     QProcess process;
     QStringList processArgs;
+    processArgs << ScriptSecurityPolicy::instance().interpreterFlags(QStringLiteral("Python"));
     processArgs << tmpFile.fileName();
     processArgs << args;
 
+    process.setProcessEnvironment(ScriptSecurityPolicy::instance().buildEnvironment());
     process.start(QStringLiteral("python"), processArgs);
     if (!process.waitForStarted(5000)) {
-        return QStringLiteral("Python \u672A\u627E\u5230\u6216\u65E0\u6CD5\u542F\u52A8");
+        return QStringLiteral("Python \u672A\u627E\u5230\u6216\u65E0\u6CD5\u542F\u52A0");
     }
 
-    if (!process.waitForFinished(30000)) {
+    if (!process.waitForFinished(ScriptSecurityPolicy::instance().maxExecutionMs())) {
         process.kill();
         return QStringLiteral("\u811A\u672C\u6267\u884C\u8D85\u65F6");
     }
@@ -120,12 +141,13 @@ QString ScriptNode::executeLuaScript(const QString &script, const QStringList &a
     processArgs << tmpFile.fileName();
     processArgs << args;
 
+    process.setProcessEnvironment(ScriptSecurityPolicy::instance().buildEnvironment());
     process.start(QStringLiteral("lua"), processArgs);
     if (!process.waitForStarted(5000)) {
         return QStringLiteral("Lua \u672A\u627E\u5230\u6216\u65E0\u6CD5\u542F\u52A8");
     }
 
-    if (!process.waitForFinished(30000)) {
+    if (!process.waitForFinished(ScriptSecurityPolicy::instance().maxExecutionMs())) {
         process.kill();
         return QStringLiteral("\u811A\u672C\u6267\u884C\u8D85\u65F6");
     }
@@ -147,6 +169,11 @@ QWidget *ScriptNode::createParamPanel()
     layout->setSpacing(8);
 
     layout->addWidget(new QLabel(QStringLiteral("<b>\u811A\u672C\u6267\u884C</b>")));
+
+    auto *warnLabel = new QLabel(QStringLiteral("⚠ 脚本以当前用户权限运行，存在任意代码执行风险，仅运行可信脚本。"));
+    warnLabel->setWordWrap(true);
+    warnLabel->setStyleSheet(QStringLiteral("QLabel { color: #b00020; font-size: 11px; }"));
+    layout->addWidget(warnLabel);
 
     // Language selection
     auto *langCombo = new QComboBox();

@@ -201,6 +201,7 @@ set(SOURCES
     src/AlarmHistoryDialog.cpp
     src/InspectionResultDialog.cpp
     src/ScriptNode.cpp
+    src/ScriptSecurityPolicy.cpp
     # \u901A\u4FE1\u7B97\u5B50
     src/ReceiveDataNode.cpp
     src/SendDataNode.cpp
@@ -360,6 +361,7 @@ set(HEADERS
     include/AlarmHistoryDialog.h
     include/InspectionResultDialog.h
     include/ScriptNode.h
+    include/ScriptSecurityPolicy.h
     # \u901A\u4FE1\u7B97\u5B50
     include/ReceiveDataNode.h
     include/SendDataNode.h
