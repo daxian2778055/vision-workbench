@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<hdevelop file_version="1.2" halcon_version="24.11.1.0">
+<procedure name="main">
+<interface/>
+<body>
+<c>minimal DL detection train via official DLDataset flow</c>
+<l>create_dl_dataset (DLDataset)</l>
+<l>for i := 1 to 8 by 1</l>
+<l>    gen_rectangle1 (ROI, 8, 8, 24, 24)</l>
+<l>    gen_image_const (Img, 'byte', 64, 64)</l>
+<l>    paint_region (ROI, Img, ImgPainted, 200)</l>
+<l>    Sample := dict{}</l>
+<l>    Sample['image'] := ImgPainted</l>
+<l>    Sample['bbox'] := [8.0, 8.0, 24.0, 24.0]</l>
+<l>    Sample['bbox_class'] := 0</l>
+<l>    Sample['bbox_label'] := 'block'</l>
+<l>    add_sample_to_dl_dataset (DLDataset, Sample)</l>
+<l>endfor</l>
+<l>set_dl_dataset_param (DLDataset, 'image_width', 64)</l>
+<l>set_dl_dataset_param (DLDataset, 'image_height', 64)</l>
+<l>split_dl_dataset (DLDataset, 80, 0, 20)</l>
+<l>create_dl_model_detection ('pretrained_dl_classifier_compact', 1, DLModelHandle)</l>
+<l>set_dl_model_param (DLModelHandle, 'image_width', 64)</l>
+<l>set_dl_model_param (DLModelHandle, 'image_height', 64)</l>
+<l>set_dl_model_param (DLModelHandle, 'runtime', 'cpu')</l>
+<l>set_dl_model_param (DLModelHandle, 'batch_size', 2)</l>
+<l>set_dl_model_param (DLModelHandle, 'max_iterations', 2)</l>
+<l>gen_dl_samples (DLDataset, 'train', 'detection', [], DLSamples)</l>
+<l>open_file (F, 'hde_train_result.txt', 'output')</l>
+<l>try</l>
+<l>    train_dl_model_batch (DLModelHandle, DLSamples, DLTrainResult)</l>
+<l>    fwrite_string (F, 'TRAIN_OK samples=' + |DLSamples|)</l>
+<l>catch (Exception)</l>
+<l>    fwrite_string (F, 'TRAIN_EXC ' + Exception['error_code'] + ' ' + Exception['error_message'])</l>
+<l>endtry</l>
+<l>fclose (F)</l>
+</body>
+</procedure>
+</hdevelop>

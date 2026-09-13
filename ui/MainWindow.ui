@@ -1,0 +1,472 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1200</width>
+    <height>800</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Vision Flow Platform</string>
+  </property>
+
+  <!-- ====== Dock: 工具箱 (左) ====== -->
+  <widget class="QDockWidget" name="toolDock">
+   <property name="windowTitle">
+    <string>工具箱</string>
+   </property>
+   <attribute name="dockWidgetArea">
+    <number>1</number>
+   </attribute>
+   <widget class="QWidget" name="toolDockContents">
+    <layout class="QVBoxLayout" name="toolDockLayout">
+     <property name="leftMargin">2</property>
+     <property name="topMargin">2</property>
+     <property name="rightMargin">2</property>
+     <property name="bottomMargin">2</property>
+     <item>
+      <widget class="QTreeWidget" name="toolLibrary">
+       <property name="headerLabel">
+        <string>Tool Library</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </widget>
+  </widget>
+
+  <!-- ====== Dock: 流程编辑 (中) ====== -->
+  <widget class="QDockWidget" name="flowDock">
+   <property name="windowTitle">
+    <string>流程编辑</string>
+   </property>
+   <attribute name="dockWidgetArea">
+    <number>1</number>
+   </attribute>
+   <widget class="QWidget" name="flowDockContents">
+    <layout class="QVBoxLayout" name="flowDockLayout">
+     <property name="leftMargin">0</property>
+     <property name="topMargin">0</property>
+     <property name="rightMargin">0</property>
+     <property name="bottomMargin">0</property>
+     <item>
+      <widget class="QTabWidget" name="flowTabs">
+       <property name="tabsClosable">
+        <bool>true</bool>
+       </property>
+       <property name="documentMode">
+        <bool>true</bool>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </widget>
+  </widget>
+
+  <!-- ====== Dock: 图像显示 (右) ====== -->
+  <widget class="QDockWidget" name="imageDock">
+   <property name="windowTitle">
+    <string>图像显示</string>
+   </property>
+   <attribute name="dockWidgetArea">
+    <number>2</number>
+   </attribute>
+   <widget class="QWidget" name="imageDockContents">
+    <layout class="QVBoxLayout" name="imageDockLayout">
+     <property name="leftMargin">0</property>
+     <property name="topMargin">0</property>
+     <property name="rightMargin">0</property>
+     <property name="bottomMargin">0</property>
+    </layout>
+   </widget>
+  </widget>
+
+  <!-- ====== Dock: 参数面板 (右) ====== -->
+  <widget class="QDockWidget" name="paramDock">
+   <property name="windowTitle">
+    <string>参数面板</string>
+   </property>
+   <attribute name="dockWidgetArea">
+    <number>2</number>
+   </attribute>
+   <widget class="QWidget" name="paramDockContents">
+    <layout class="QVBoxLayout" name="paramDockLayout">
+     <property name="leftMargin">0</property>
+     <property name="topMargin">0</property>
+     <property name="rightMargin">0</property>
+     <property name="bottomMargin">0</property>
+     <item>
+      <widget class="QWidget" name="parameterPanel" native="true"/>
+     </item>
+    </layout>
+   </widget>
+  </widget>
+
+  <!-- ====== Dock: 日志 (底) ====== -->
+  <widget class="QDockWidget" name="logDock">
+   <property name="windowTitle">
+    <string>日志</string>
+   </property>
+   <attribute name="dockWidgetArea">
+    <number>8</number>
+   </attribute>
+   <widget class="QWidget" name="logDockContents">
+    <layout class="QVBoxLayout" name="logDockLayout">
+     <property name="leftMargin">0</property>
+     <property name="topMargin">0</property>
+     <property name="rightMargin">0</property>
+     <property name="bottomMargin">0</property>
+     <item>
+      <widget class="QPlainTextEdit" name="logTextEdit">
+       <property name="readOnly">
+        <bool>true</bool>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </widget>
+  </widget>
+
+  <!-- ====== Central Widget (minimal placeholder for QMainWindow compliance) ====== -->
+  <widget class="QWidget" name="centralWidget" native="true">
+   <layout class="QVBoxLayout" name="centralLayout">
+    <property name="leftMargin">0</property>
+    <property name="topMargin">0</property>
+    <property name="rightMargin">0</property>
+    <property name="bottomMargin">0</property>
+   </layout>
+  </widget>
+
+  <!-- ====== Menu Bar ====== -->
+  <widget class="QMenuBar" name="menuBar">
+   <widget class="QMenu" name="menuFile">
+    <property name="title">
+     <string>文件</string>
+    </property>
+    <addaction name="actionNew"/>
+    <addaction name="actionOpenScheme"/>
+    <addaction name="actionSaveScheme"/>
+    <addaction name="separator"/>
+    <addaction name="actionExit"/>
+   </widget>
+   <widget class="QMenu" name="menuEdit">
+    <property name="title">
+     <string>编辑</string>
+    </property>
+    <addaction name="actionAddFlow"/>
+    <addaction name="actionDeleteFlow"/>
+   </widget>
+   <widget class="QMenu" name="menuView">
+    <property name="title">
+     <string>视图</string>
+    </property>
+    <addaction name="actionToggleToolDock"/>
+    <addaction name="actionToggleParamDock"/>
+    <addaction name="actionToggleLogDock"/>
+    <addaction name="actionToggleImageDock"/>
+    <addaction name="separator"/>
+    <addaction name="actionDesignMode"/>
+    <addaction name="actionRuntimeMode"/>
+    <addaction name="separator"/>
+    <addaction name="actionRuntimeDesigner"/>
+   </widget>
+   <widget class="QMenu" name="menuCommunication">
+    <property name="title">
+     <string>通讯</string>
+    </property>
+    <addaction name="actionCommDevice"/>
+    <addaction name="actionCommReceiveEvent"/>
+    <addaction name="actionCommSendEvent"/>
+    <addaction name="actionCommHeartbeat"/>
+    <addaction name="separator"/>
+    <addaction name="actionCommMonitor"/>
+   </widget>
+   <widget class="QMenu" name="menuSystem">
+    <property name="title">
+     <string>系统</string>
+    </property>
+    <addaction name="actionGlobalTrigger"/>
+    <addaction name="actionGlobalVariables"/>
+    <addaction name="actionCameraConfig"/>
+    <addaction name="separator"/>
+    <addaction name="actionParameterSearch"/>
+    <addaction name="actionCodeExport"/>
+    <addaction name="separator"/>
+    <addaction name="actionUserManagement"/>
+    <addaction name="actionOperationLog"/>
+    <addaction name="actionRecipeManager"/>
+    <addaction name="actionAlarmHistory"/>
+    <addaction name="actionInspectionResults"/>
+    <addaction name="actionReport"/>
+    <addaction name="separator"/>
+    <addaction name="actionStopOnFailure"/>
+   </widget>
+   <widget class="QMenu" name="menuLanguage">
+    <property name="title">
+     <string>语言</string>
+    </property>
+    <addaction name="actionChinese"/>
+    <addaction name="actionEnglish"/>
+   </widget>
+   <addaction name="menuFile"/>
+   <addaction name="menuEdit"/>
+   <addaction name="menuView"/>
+   <addaction name="menuCommunication"/>
+   <addaction name="menuSystem"/>
+   <addaction name="menuLanguage"/>
+  </widget>
+
+  <!-- ====== Status Bar ====== -->
+  <widget class="QStatusBar" name="statusBar"/>
+
+  <!-- ====== Actions ====== -->
+  <action name="actionNew">
+   <property name="text">
+    <string>New</string>
+   </property>
+  </action>
+  <action name="actionSave">
+   <property name="text">
+    <string>Save</string>
+   </property>
+  </action>
+  <action name="actionLoad">
+   <property name="text">
+    <string>Load</string>
+   </property>
+  </action>
+  <action name="actionExit">
+   <property name="text">
+    <string>Exit</string>
+   </property>
+  </action>
+  <action name="actionAddFlow">
+   <property name="text">
+    <string>Add Flow</string>
+   </property>
+  </action>
+  <action name="actionDeleteFlow">
+   <property name="text">
+    <string>Delete Flow</string>
+   </property>
+  </action>
+  <action name="actionSaveScheme">
+   <property name="text">
+    <string>保存方案</string>
+   </property>
+  </action>
+  <action name="actionOpenScheme">
+   <property name="text">
+    <string>打开方案</string>
+   </property>
+  </action>
+  <action name="actionChinese">
+   <property name="text">
+    <string>Chinese</string>
+   </property>
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+  </action>
+  <action name="actionEnglish">
+   <property name="text">
+    <string>English</string>
+   </property>
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+  </action>
+  <action name="actionStartExecution">
+   <property name="text">
+    <string>开始执行</string>
+   </property>
+   <property name="icon">
+    <iconset>:/icons/start.png</iconset>
+   </property>
+  </action>
+  <action name="actionStopExecution">
+   <property name="text">
+    <string>停止执行</string>
+   </property>
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="icon">
+    <iconset>:/icons/stop.png</iconset>
+   </property>
+  </action>
+  <action name="actionToggleToolDock">
+   <property name="text">
+    <string>显示/隐藏工具箱</string>
+   </property>
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
+   </property>
+  </action>
+  <action name="actionToggleParamDock">
+   <property name="text">
+    <string>显示/隐藏参数面板</string>
+   </property>
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
+   </property>
+  </action>
+  <action name="actionToggleImageDock">
+   <property name="text">
+    <string>显示/隐藏图像显示</string>
+   </property>
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
+   </property>
+  </action>
+  <action name="actionToggleLogDock">
+   <property name="text">
+    <string>显示/隐藏日志</string>
+   </property>
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
+   </property>
+  </action>
+  <action name="actionDesignMode">
+   <property name="text">
+    <string>设计模式</string>
+   </property>
+  </action>
+  <action name="actionRuntimeMode">
+   <property name="text">
+    <string>运行模式</string>
+   </property>
+  </action>
+  <action name="actionCommDevice">
+   <property name="text">
+    <string>设备管理</string>
+   </property>
+  </action>
+  <action name="actionCommReceiveEvent">
+   <property name="text">
+    <string>接收事件</string>
+   </property>
+  </action>
+  <action name="actionCommSendEvent">
+   <property name="text">
+    <string>发送事件</string>
+   </property>
+  </action>
+  <action name="actionCommHeartbeat">
+   <property name="text">
+    <string>心跳管理</string>
+   </property>
+  </action>
+  <action name="actionCommMonitor">
+   <property name="text">
+    <string>数据监视</string>
+   </property>
+  </action>
+  <action name="actionGlobalTrigger">
+   <property name="text">
+    <string>全局触发</string>
+   </property>
+  </action>
+  <action name="actionGlobalVariables">
+   <property name="text">
+    <string>全局变量</string>
+   </property>
+  </action>
+  <action name="actionCameraConfig">
+   <property name="text">
+    <string>MVS相机配置</string>
+   </property>
+  </action>
+  <action name="actionUserManagement">
+   <property name="text">
+    <string>用户管理</string>
+   </property>
+  </action>
+  <action name="actionRecipeManager">
+   <property name="text">
+    <string>配方管理</string>
+   </property>
+  </action>
+  <action name="actionAlarmHistory">
+   <property name="text">
+    <string>报警历史</string>
+   </property>
+  </action>
+  <action name="actionInspectionResults">
+   <property name="text">
+    <string>检测结果</string>
+   </property>
+  </action>
+  <action name="actionParameterSearch">
+   <property name="text">
+    <string>参数查找</string>
+   </property>
+  </action>
+  <action name="actionCodeExport">
+   <property name="text">
+    <string>算子代码导出</string>
+   </property>
+  </action>
+  <action name="actionOperationLog">
+   <property name="text">
+    <string>操作日志</string>
+   </property>
+  </action>
+  <action name="actionReport">
+   <property name="text">
+    <string>统计报表</string>
+   </property>
+  </action>
+  <action name="actionStopOnFailure">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>失败时停止流程</string>
+   </property>
+  </action>
+  <action name="actionRuntimeDesigner">
+   <property name="text">
+    <string>运行界面设计</string>
+   </property>
+  </action>
+ </widget>
+ <resources/>
+ <connections>
+  <connection>
+   <sender>actionExit</sender>
+   <signal>triggered()</signal>
+   <receiver>MainWindow</receiver>
+   <slot>close()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>30</x>
+     <y>30</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>30</x>
+     <y>30</y>
+    </hint>
+   </hints>
+  </connection>
+ </connections>
+</ui>

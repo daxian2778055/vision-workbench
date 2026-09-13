@@ -1,0 +1,32 @@
+# ===== 构建产物 =====
+build/
+dist/
+
+# ===== 第三方依赖（vendored 开源库：opencv/tesseract/zxing/leptonica）=====
+# 默认不入库，保持仓库轻量；如需"克隆即可构建"可移除此段。
+thirdparty/
+
+# ===== IDE / 工具目录 =====
+.codex/
+.cursor/
+.trae-html-share-packages/
+.qtcreator/
+.reasonix/
+.agents/
+.github/
+
+# ===== 操作系统垃圾文件 =====
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# ===== 编辑器 / VS 临时文件 =====
+*.suo
+*.user
+*.user.*
+.vs/
+
+# ===== 杂项（疑似误生成的文件）=====
+clear()

@@ -1,0 +1,625 @@
+#include "ModbusNode.h"
+#include "AppLog.h"
+#include <QModbusDataUnit>
+#include <QModbusReply>
+#include <QVBoxLayout>
+#include <QLabel>
+#include <QLineEdit>
+#include <QComboBox>
+#include <QPushButton>
+#include <QSpinBox>
+#include <QCheckBox>
+#include <QSignalBlocker>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QDataStream>
+
+ModbusNode::ModbusNode(QObject *parent)
+    : CommunicationNodeBase(parent)
+{
+    setName(QStringLiteral("Modbus\u901A\u4FE1"));
+    m_commType = CommunicationNodeBase::MODBUS_MASTER;
+    m_type = OUTPUT;
+}
+
+void ModbusNode::init()
+{
+    // 不调用 HalconNode::init() / CommunicationNodeBase::init() — Modbus 不处理图像
+    // 添加输入和输出端口
+    addInputPort(QStringLiteral("data"), PortDataType::String);
+    addOutputPort(QStringLiteral("\u5BC4\u5B58\u5668\u6570\u636E"), PortDataType::String);
+
+    // 参数初始化
+    m_params[QStringLiteral("role")] = QStringLiteral("\u5BA2\u6237\u7AEF"); // 客户端 / 服务器
+    m_params[QStringLiteral("slaveAddress")] = 1;
+    m_params[QStringLiteral("connectionType")] = QStringLiteral("TCP");
+    m_params[QStringLiteral("host")] = QStringLiteral("127.0.0.1");
+    m_params[QStringLiteral("port")] = 502;
+    m_params[QStringLiteral("autoReconnect")] = true;
+    m_params[QStringLiteral("reconnectInterval")] = 3000;
+    m_params[QStringLiteral("pollInterval")] = 100;
+    m_params[QStringLiteral("connected")] = false;
+
+    // 自动重连定时器
+    m_reconnectTimer = new QTimer(this);
+    m_reconnectTimer->setSingleShot(true);
+    connect(m_reconnectTimer, &QTimer::timeout, this, [this]() {
+        if (!m_connected && m_autoReconnect && m_role == MODBUS_CLIENT) {
+            VFP_DEBUG << "Modbus auto-reconnecting...";
+            openConnection();
+        }
+    });
+
+    // 轮询定时器
+    m_pollTimer = new QTimer(this);
+    connect(m_pollTimer, &QTimer::timeout, this, &ModbusNode::onPollTimeout);
+}
+
+void ModbusNode::setRole(Role role)
+{
+    if (m_role == role) return;
+    bool wasConnected = m_connected;
+    closeConnection();
+    m_role = role;
+    m_params[QStringLiteral("role")] = (role == MODBUS_SERVER)
+        ? QStringLiteral("\u670D\u52A1\u5668") : QStringLiteral("\u5BA2\u6237\u7AEF");
+    if (wasConnected) openConnection();
+}
+
+void ModbusNode::applyRoleParam(const QString &mode)
+{
+    if (mode == QStringLiteral("\u670D\u52A1\u5668") || mode == QStringLiteral("Server")) {
+        if (m_role != MODBUS_SERVER) {
+            bool wasConnected = m_connected;
+            closeConnection();
+            m_role = MODBUS_SERVER;
+            if (wasConnected) openConnection();
+        }
+    } else {
+        if (m_role != MODBUS_CLIENT) {
+            bool wasConnected = m_connected;
+            closeConnection();
+            m_role = MODBUS_CLIENT;
+            if (wasConnected) openConnection();
+        }
+    }
+}
+
+bool ModbusNode::openConnection()
+{
+    closeConnection();
+
+    // ===== 服务器模式：监听端口，对外提供寄存器 =====
+    if (m_role == MODBUS_SERVER) {
+        m_modbusServer = new QModbusTcpServer(this);
+        m_modbusServer->setServerAddress(static_cast<quint8>(m_slaveAddress));
+        m_modbusServer->setConnectionParameter(
+            QModbusDevice::NetworkPortParameter,
+            m_params.value(QStringLiteral("port"), 502).toInt());
+
+        // 用寄存器表格初始化服务器的数据单元
+        syncServerRegisters();
+
+        connect(m_modbusServer, &QModbusServer::dataWritten,
+                this, &ModbusNode::onServerDataWritten);
+        connect(m_modbusServer, &QModbusDevice::stateChanged,
+                this, &ModbusNode::onServerStateChanged);
+
+        if (!m_modbusServer->connectDevice()) {
+            m_connected = false;
+            m_params[QStringLiteral("connected")] = false;
+            emit communicationError(
+                QStringLiteral("Modbus\u670D\u52A1\u5668\u542F\u52A8\u5931\u8D25: %1")
+                    .arg(m_modbusServer->errorString()));
+            return false;
+        }
+
+        m_connected = true;
+        m_params[QStringLiteral("connected")] = true;
+        emit connectionOpened();
+        VFP_DEBUG << "Modbus server listening on port"
+                  << m_params.value(QStringLiteral("port"), 502).toInt();
+        return true;
+    }
+
+    // ===== 客户端模式：连接外部设备 =====
+    QString connType = m_params.value(QStringLiteral("connectionType")).toString();
+    if (connType == QStringLiteral("TCP")) {
+        m_modbus = new QModbusTcpClient(this);
+    } else {
+        m_modbus = new QModbusRtuSerialMaster(this);
+    }
+
+    if (!m_modbus) return false;
+
+    // 连接参数
+    if (connType == QStringLiteral("TCP")) {
+        m_modbus->setConnectionParameter(QModbusDevice::NetworkPortParameter,
+                                          m_params.value(QStringLiteral("port"), 502).toInt());
+        m_modbus->setConnectionParameter(QModbusDevice::NetworkAddressParameter,
+                                          m_params.value(QStringLiteral("host")).toString());
+    }
+
+    // 状态变更信号
+    connect(m_modbus, &QModbusClient::stateChanged,
+            this, &ModbusNode::onModbusStateChanged);
+
+    if (!m_modbus->connectDevice()) {
+        m_connected = false;
+        m_params[QStringLiteral("connected")] = false;
+        emit communicationError(QStringLiteral("Modbus\u8FDE\u63A5\u5931\u8D25"));
+
+        // 自动重连
+        if (m_autoReconnect && m_reconnectTimer) {
+            m_reconnectTimer->start(m_reconnectInterval);
+        }
+        return false;
+    }
+
+    m_connected = true;
+    m_params[QStringLiteral("connected")] = true;
+    m_slaveAddress = m_params.value(QStringLiteral("slaveAddress"), 1).toInt();
+    emit connectionOpened();
+
+    // 启动轮询
+    startPolling();
+    return true;
+}
+
+void ModbusNode::closeConnection()
+{
+    stopPolling();
+    m_pendingQueue.clear();
+
+    if (m_reconnectTimer) m_reconnectTimer->stop();
+
+    if (m_modbus) {
+        m_modbus->disconnectDevice();
+        m_modbus->deleteLater();
+        m_modbus = nullptr;
+    }
+    if (m_modbusServer) {
+        m_modbusServer->disconnectDevice();
+        m_modbusServer->deleteLater();
+        m_modbusServer = nullptr;
+    }
+    m_connected = false;
+    m_params[QStringLiteral("connected")] = false;
+    emit connectionClosed();
+}
+
+bool ModbusNode::isConnected() const
+{
+    return m_connected;
+}
+
+bool ModbusNode::isServerListening() const
+{
+    return m_role == MODBUS_SERVER && m_modbusServer
+           && m_modbusServer->state() == QModbusDevice::ConnectedState;
+}
+
+void ModbusNode::syncServerRegisters()
+{
+    if (!m_modbusServer) return;
+
+    // 将每个寄存器写入服务器数据单元（Hold 寄存器）
+    for (const auto &r : m_registers) {
+        if (r.address < 0 || r.address > 65535) continue;
+        m_modbusServer->setData(
+            QModbusDataUnit::HoldingRegisters,
+            static_cast<quint16>(r.address),
+            static_cast<quint16>(static_cast<int>(r.currentValue)));
+    }
+}
+
+void ModbusNode::setRegisters(const QList<ModbusRegisterItem> &regs)
+{
+    m_registers = regs;
+    m_currentRegIdx = 0;
+    if (m_role == MODBUS_SERVER && m_modbusServer) {
+        syncServerRegisters();
+    }
+}
+
+bool ModbusNode::setLocalRegisterValue(int address, quint16 value)
+{
+    // 更新本地寄存器表
+    for (auto &r : m_registers) {
+        if (r.address == address) {
+            r.currentValue = static_cast<double>(value);
+            r.displayValue = QString::number(value);
+            break;
+        }
+    }
+
+    if (m_role == MODBUS_SERVER && m_modbusServer) {
+        bool ok = m_modbusServer->setData(
+            QModbusDataUnit::HoldingRegisters,
+            static_cast<quint16>(address), value);
+        if (ok) {
+            emit registerCurrentValueChanged(address, static_cast<double>(value),
+                                             QString::number(value));
+        }
+        return ok;
+    }
+    // 客户端模式下作为写请求发送给外部设备
+    return writeRegister(address, value);
+}
+
+void ModbusNode::onServerDataWritten(QModbusDataUnit::RegisterType table, int address, int size)
+{
+    if (table != QModbusDataUnit::HoldingRegisters || !m_modbusServer) return;
+
+    for (int i = 0; i < size; ++i) {
+        int regAddr = address + i;
+        quint16 raw = 0;
+        if (!m_modbusServer->data(QModbusDataUnit::HoldingRegisters,
+                                  static_cast<quint16>(regAddr), &raw)) {
+            continue;
+        }
+
+        // 更新寄存器表中的当前值
+        bool found = false;
+        for (auto &r : m_registers) {
+            if (r.address == regAddr) {
+                r.currentValue = static_cast<double>(raw);
+                r.displayValue = QString::number(raw);
+                emit registerCurrentValueChanged(regAddr, r.currentValue, r.displayValue);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            ModbusRegisterItem r;
+            r.address = regAddr;
+            r.currentValue = static_cast<double>(raw);
+            r.displayValue = QString::number(raw);
+            r.accessMode = QStringLiteral("ReadWrite");
+            m_registers.append(r);
+            emit registerCurrentValueChanged(regAddr, r.currentValue, r.displayValue);
+        }
+
+        emit registerWrittenByClient(regAddr, raw);
+    }
+}
+
+void ModbusNode::onServerStateChanged(int state)
+{
+    if (state == QModbusDevice::ConnectedState) {
+        VFP_DEBUG << "Modbus server client connected";
+    } else if (state == QModbusDevice::UnconnectedState) {
+        VFP_DEBUG << "Modbus server client disconnected";
+    }
+}
+
+void ModbusNode::setParam(const QString &name, const QVariant &value)
+{
+    if (name == QStringLiteral("role")) {
+        applyRoleParam(value.toString());
+    } else if (name == QStringLiteral("autoReconnect")) {
+        m_autoReconnect = value.toBool();
+    } else if (name == QStringLiteral("reconnectInterval")) {
+        m_reconnectInterval = qMax(500, value.toInt());
+    } else if (name == QStringLiteral("pollInterval")) {
+        m_pollInterval = qMax(10, value.toInt());
+        if (m_pollTimer) m_pollTimer->setInterval(m_pollInterval);
+    } else if (name == QStringLiteral("slaveAddress")) {
+        m_slaveAddress = value.toInt();
+    }
+    CommunicationNodeBase::setParam(name, value);
+}
+
+QVariant ModbusNode::getParam(const QString &name) const
+{
+    return CommunicationNodeBase::getParam(name);
+}
+
+// ---- 轮询 ----
+
+void ModbusNode::startPolling()
+{
+    if (!m_pollTimer) return;
+    m_currentRegIdx = 0;
+    m_pollTimer->setInterval(m_pollInterval);
+    m_pollTimer->start();
+}
+
+void ModbusNode::stopPolling()
+{
+    if (m_pollTimer) m_pollTimer->stop();
+}
+
+void ModbusNode::onPollTimeout()
+{
+    if (!m_connected || !m_modbus || m_registers.isEmpty()) return;
+
+    // 按寄存器表格逐一读取（一次读一个，避免冲突）
+    // 先处理队列中的残留请求
+    if (!m_pendingQueue.isEmpty()) return;
+
+    // 找到下一个启用的寄存器
+    int startIdx = m_currentRegIdx;
+    for (int i = 0; i < m_registers.size(); ++i) {
+        int idx = (startIdx + i) % m_registers.size();
+        const auto &reg = m_registers[idx];
+        if (!reg.enabled) continue;
+
+        int byteCount = 2;
+        if (reg.dataType == QStringLiteral("int32") || reg.dataType == QStringLiteral("float"))
+            byteCount = 4;
+
+        int regCount = byteCount / 2; // 每个寄存器 2 字节
+
+        PendingRead pr;
+        pr.slaveAddr = m_slaveAddress;
+        pr.regAddr = reg.address;
+        pr.count = regCount;
+        pr.regIndex = idx;
+
+        m_pendingQueue.append(pr);
+        readRegister(m_slaveAddress, reg.address, regCount);
+        m_currentRegIdx = (idx + 1) % m_registers.size();
+        break;
+    }
+
+    // 如果所有寄存器都轮询完一轮，重置
+    m_currentRegIdx = (m_currentRegIdx + 1) % m_registers.size();
+}
+
+void ModbusNode::readRegister(int slaveAddr, int regAddr, int count)
+{
+    if (!m_modbus) return;
+
+    QModbusDataUnit readUnit(QModbusDataUnit::HoldingRegisters, regAddr, count);
+    QModbusReply *reply = m_modbus->sendReadRequest(readUnit, slaveAddr);
+
+    if (reply) {
+        if (!reply->isFinished()) {
+            connect(reply, &QModbusReply::finished, this, [this, reply, regAddr]() {
+                // 查找对应的待处理项
+                int regIndex = -1;
+                for (int i = 0; i < m_pendingQueue.size(); ++i) {
+                    if (m_pendingQueue[i].regAddr == regAddr) {
+                        regIndex = m_pendingQueue[i].regIndex;
+                        m_pendingQueue.removeAt(i);
+                        break;
+                    }
+                }
+
+                if (reply->error() == QModbusDevice::NoError) {
+                    const QModbusDataUnit unit = reply->result();
+                    const QVector<quint16> values = unit.values();
+
+                    if (!values.isEmpty() && regIndex >= 0 && regIndex < m_registers.size()) {
+                        auto &reg = m_registers[regIndex];
+
+                        // 将 values 转为原始字节
+                        QByteArray raw;
+                        QDataStream stream(&raw, QIODevice::WriteOnly);
+                        stream.setByteOrder(QDataStream::BigEndian); // Modbus 是 Big Endian
+
+                        // 根据字节顺序重新排列
+                        if (reg.byteOrder == QStringLiteral("ABCD") || values.size() == 1) {
+                            for (quint16 v : values) {
+                                stream << v;
+                            }
+                        } else if (reg.byteOrder == QStringLiteral("CDAB") && values.size() >= 2) {
+                            // CDAB: 交换两个 word 的顺序
+                            stream << values[1] << values[0];
+                        } else if (reg.byteOrder == QStringLiteral("BADC") && values.size() >= 2) {
+                            // BADC: 每个 word 高/低字节互换
+                            for (int i = 0; i < values.size(); ++i) {
+                                quint16 swapped = ((values[i] & 0xFF) << 8) | ((values[i] >> 8) & 0xFF);
+                                stream << swapped;
+                            }
+                        } else {
+                            // DCBA: 完全反转
+                            for (int i = values.size() - 1; i >= 0; --i) {
+                                quint16 swapped = ((values[i] & 0xFF) << 8) | ((values[i] >> 8) & 0xFF);
+                                stream << swapped;
+                            }
+                        }
+
+                        // 更新当前解析值
+                        double parsed = parseRawToValue(raw, reg.dataType, reg.byteOrder);
+                        reg.currentValue = parsed;
+                        reg.displayValue = QString::number(parsed, 'f',
+                            reg.dataType == QStringLiteral("float") ? 4 : 0);
+                        emit registerCurrentValueChanged(reg.address, parsed, reg.displayValue);
+
+                        // 检查值是否变化
+                        if (!reg.hasLastValue || raw != reg.lastRaw) {
+                            reg.lastRaw = raw;
+                            reg.hasLastValue = true;
+
+                            emit registerValueChanged(
+                                reg.address, raw, reg.dataType);
+                        }
+                    }
+                } else {
+                    VFP_DEBUG << "Modbus read error at address" << regAddr << ":" << reply->errorString();
+                }
+                reply->deleteLater();
+            });
+        } else {
+            reply->deleteLater();
+        }
+    }
+}
+
+void ModbusNode::onModbusStateChanged(int state)
+{
+    if (state == QModbusDevice::ConnectedState) {
+        if (!m_connected) {
+            m_connected = true;
+            m_params[QStringLiteral("connected")] = true;
+            emit connectionOpened();
+            startPolling();
+        }
+        if (m_reconnectTimer) m_reconnectTimer->stop();
+    } else if (state == QModbusDevice::UnconnectedState) {
+        if (m_connected) {
+            m_connected = false;
+            m_params[QStringLiteral("connected")] = false;
+            emit connectionClosed();
+            stopPolling();
+        }
+
+        // 自动重连
+        if (m_autoReconnect && m_reconnectTimer) {
+            m_reconnectTimer->start(m_reconnectInterval);
+        }
+    }
+}
+
+void ModbusNode::run(bool /*autoSwitch*/)
+{
+    // Modbus 运行时不执行图像处理
+    // 轮询数据在 onPollTimeout 中异步完成
+    // 输出会通过 registerValueChanged 信号 + receiveEvent 系统路由
+}
+
+double ModbusNode::parseRawToValue(const QByteArray &raw, const QString &dataType, const QString &byteOrder) const
+{
+    if (raw.isEmpty()) return 0.0;
+
+    QDataStream::ByteOrder order = QDataStream::BigEndian;
+    if (byteOrder == QStringLiteral("DCBA") || byteOrder == QStringLiteral("BADC"))
+        order = QDataStream::LittleEndian;
+
+    if (dataType == QStringLiteral("int16")) {
+        if (raw.size() < 2) return 0.0;
+        qint16 val;
+        QDataStream s(raw);
+        s.setByteOrder(order);
+        s >> val;
+        return static_cast<double>(val);
+    } else if (dataType == QStringLiteral("uint16")) {
+        if (raw.size() < 2) return 0.0;
+        quint16 val;
+        QDataStream s(raw);
+        s.setByteOrder(order);
+        s >> val;
+        return static_cast<double>(val);
+    } else if (dataType == QStringLiteral("int32")) {
+        if (raw.size() < 4) return 0.0;
+        qint32 val;
+        QDataStream s(raw);
+        s.setByteOrder(order);
+        s >> val;
+        return static_cast<double>(val);
+    } else if (dataType == QStringLiteral("float")) {
+        if (raw.size() < 4) return 0.0;
+        float val;
+        QDataStream s(raw);
+        s.setByteOrder(order);
+        s >> val;
+        return static_cast<double>(val);
+    }
+    return 0.0;
+}
+
+bool ModbusNode::writeRegister(int address, quint16 value)
+{
+    if (!m_connected || !m_modbus) return false;
+
+    QModbusDataUnit writeUnit(QModbusDataUnit::HoldingRegisters, address, 1);
+    writeUnit.setValue(0, value);
+
+    QModbusReply *reply = m_modbus->sendWriteRequest(writeUnit, m_slaveAddress);
+    if (reply) {
+        if (!reply->isFinished()) {
+            connect(reply, &QModbusReply::finished, this, [this, reply, address]() {
+                if (reply->error() == QModbusDevice::NoError) {
+                    VFP_DEBUG << "Modbus write success at address" << address;
+                } else {
+                    VFP_DEBUG << "Modbus write error at address" << address << ":" << reply->errorString();
+                    emit communicationError(
+                        QStringLiteral("Modbus写寄存器失败(地址%1):%2")
+                            .arg(address).arg(reply->errorString()));
+                }
+                reply->deleteLater();
+            });
+        } else {
+            reply->deleteLater();
+        }
+        return true;
+    }
+    return false;
+}
+
+double ModbusNode::registerCurrentValue(int address) const
+{
+    for (const auto &r : m_registers) {
+        if (r.address == address) return r.currentValue;
+    }
+    return 0.0;
+}
+
+QString ModbusNode::registerDisplayValue(int address) const
+{
+    for (const auto &r : m_registers) {
+        if (r.address == address) return r.displayValue;
+    }
+    return QString();
+}
+
+QJsonObject ModbusNode::toJson() const
+{
+    QJsonObject obj = CommunicationNodeBase::toJson();
+    obj[QStringLiteral("role")] = (m_role == MODBUS_SERVER)
+        ? QStringLiteral("\u670D\u52A1\u5668") : QStringLiteral("\u5BA2\u6237\u7AEF");
+    obj[QStringLiteral("autoReconnect")] = m_autoReconnect;
+    obj[QStringLiteral("reconnectInterval")] = m_reconnectInterval;
+    obj[QStringLiteral("pollInterval")] = m_pollInterval;
+    obj[QStringLiteral("slaveAddress")] = m_slaveAddress;
+
+    QJsonArray regsArr;
+    for (const auto &r : m_registers) {
+        QJsonObject ro;
+        ro[QStringLiteral("address")] = r.address;
+        ro[QStringLiteral("dataType")] = r.dataType;
+        ro[QStringLiteral("byteOrder")] = r.byteOrder;
+        ro[QStringLiteral("accessMode")] = r.accessMode;
+        ro[QStringLiteral("enabled")] = r.enabled;
+        ro[QStringLiteral("description")] = r.description;
+        regsArr.append(ro);
+    }
+    obj[QStringLiteral("registers")] = regsArr;
+    return obj;
+}
+
+void ModbusNode::fromJson(const QJsonObject &json)
+{
+    CommunicationNodeBase::fromJson(json);
+    QString role = json[QStringLiteral("role")].toString(QStringLiteral("\u5BA2\u6237\u7AEF"));
+    m_role = (role == QStringLiteral("\u670D\u52A1\u5668") || role == QStringLiteral("Server"))
+        ? MODBUS_SERVER : MODBUS_CLIENT;
+    m_params[QStringLiteral("role")] = (m_role == MODBUS_SERVER)
+        ? QStringLiteral("\u670D\u52A1\u5668") : QStringLiteral("\u5BA2\u6237\u7AEF");
+    m_autoReconnect = json[QStringLiteral("autoReconnect")].toBool(true);
+    m_reconnectInterval = json[QStringLiteral("reconnectInterval")].toInt(3000);
+    m_pollInterval = json[QStringLiteral("pollInterval")].toInt(100);
+    m_slaveAddress = json[QStringLiteral("slaveAddress")].toInt(1);
+
+    m_registers.clear();
+    QJsonArray regsArr = json[QStringLiteral("registers")].toArray();
+    for (const auto &v : regsArr) {
+        QJsonObject ro = v.toObject();
+        ModbusRegisterItem r;
+        r.address = ro[QStringLiteral("address")].toInt();
+        r.dataType = ro[QStringLiteral("dataType")].toString(QStringLiteral("int16"));
+        r.byteOrder = ro[QStringLiteral("byteOrder")].toString(QStringLiteral("ABCD"));
+        r.accessMode = ro[QStringLiteral("accessMode")].toString(QStringLiteral("Read"));
+        r.enabled = ro[QStringLiteral("enabled")].toBool(true);
+        r.description = ro[QStringLiteral("description")].toString();
+        m_registers.append(r);
+    }
+
+    m_params[QStringLiteral("autoReconnect")] = m_autoReconnect;
+    m_params[QStringLiteral("reconnectInterval")] = m_reconnectInterval;
+    m_params[QStringLiteral("pollInterval")] = m_pollInterval;
+    m_params[QStringLiteral("slaveAddress")] = m_slaveAddress;
+}

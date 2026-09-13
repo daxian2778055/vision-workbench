@@ -1,0 +1,597 @@
+#include "RuntimeInterfaceDesigner.h"
+#include "GlobalVariableManager.h"
+
+#include <QListWidget>
+#include <QComboBox>
+#include <QLineEdit>
+#include <QSpinBox>
+#include <QLabel>
+#include <QPushButton>
+#include <QHBoxLayout>
+#include <QVBoxLayout>
+#include <QGridLayout>
+#include <QFormLayout>
+#include <QGroupBox>
+#include <QScrollArea>
+#include <QFrame>
+#include <QPainter>
+#include <QMouseEvent>
+#include <QMessageBox>
+#include <QFileDialog>
+#include <QCoreApplication>
+#include <QJsonDocument>
+#include <QFile>
+
+// ==================== RuntimeDesignerCanvas ====================
+
+RuntimeDesignerCanvas::RuntimeDesignerCanvas(QWidget *parent)
+    : QWidget(parent)
+{
+    setFixedSize(1200, 760);
+    setMouseTracking(true);
+}
+
+void RuntimeDesignerCanvas::setInterface(RuntimeInterface *layout)
+{
+    m_layout = layout;
+    rebuild();
+}
+
+void RuntimeDesignerCanvas::rebuild()
+{
+    for (QWidget *w : m_frames) {
+        w->setParent(nullptr);
+        w->deleteLater();
+    }
+    m_frames.clear();
+    m_selected = -1;
+
+    if (!m_layout) return;
+    for (int i = 0; i < m_layout->controls.size(); ++i) {
+        auto *frame = new DesignerControlFrame(this, i);
+        frame->setGeometry(m_layout->controls[i].geometry);
+        frame->show();
+        m_frames.append(frame);
+    }
+    update();
+}
+
+void RuntimeDesignerCanvas::selectIndex(int index)
+{
+    m_selected = index;
+    for (int i = 0; i < m_frames.size(); ++i) {
+        m_frames[i]->update();
+    }
+    emit controlSelected(index);
+}
+
+void RuntimeDesignerCanvas::refreshControl(int index)
+{
+    if (!m_layout) return;
+    if (index < 0 || index >= m_frames.size()) return;
+    m_frames[index]->setGeometry(m_layout->controls[index].geometry);
+    m_frames[index]->update();
+}
+
+void RuntimeDesignerCanvas::paintEvent(QPaintEvent *event)
+{
+    QWidget::paintEvent(event);
+    QPainter p(this);
+    p.fillRect(rect(), QColor(0x1a, 0x1a, 0x20));
+
+    // 网格背景
+    p.setPen(QPen(QColor(0x28, 0x28, 0x32), 1));
+    const int grid = 20;
+    for (int x = 0; x <= width(); x += grid) {
+        p.drawLine(x, 0, x, height());
+    }
+    for (int y = 0; y <= height(); y += grid) {
+        p.drawLine(0, y, width(), y);
+    }
+
+    // 页面提示
+    p.setPen(QColor(0x60, 0x64, 0x72));
+    p.drawText(10, height() - 10, QStringLiteral("画布 1200×760 · 拖动控件移动，右下角缩放"));
+}
+
+// ==================== DesignerControlFrame ====================
+
+DesignerControlFrame::DesignerControlFrame(RuntimeDesignerCanvas *canvas, int index)
+    : QWidget(canvas), m_canvas(canvas), m_index(index)
+{
+    setMouseTracking(true);
+    setCursor(Qt::SizeAllCursor);
+}
+
+void DesignerControlFrame::paintEvent(QPaintEvent *event)
+{
+    Q_UNUSED(event);
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+
+    if (!m_canvas || !m_canvas->m_layout) return;
+    if (m_index < 0 || m_index >= m_canvas->m_layout->controls.size()) return;
+    const RuntimeControl &ctrl = m_canvas->m_layout->controls[m_index];
+
+    const bool selected = (m_canvas->m_selected == m_index);
+
+    // 背景
+    p.fillRect(rect(), QColor(0x26, 0x28, 0x30));
+
+    // 边框
+    QColor border = selected ? QColor(0x40, 0xa9, 0xff) : QColor(0x4a, 0x4e, 0x5a);
+    p.setPen(QPen(border, selected ? 2 : 1));
+    p.drawRect(rect().adjusted(0, 0, -1, -1));
+
+    // 标题
+    p.setPen(QColor(0x9a, 0x9e, 0xac));
+    QFont titleFont = p.font();
+    titleFont.setPointSizeF(9);
+    p.setFont(titleFont);
+    p.drawText(QRect(6, 4, width() - 12, 18), Qt::AlignLeft | Qt::AlignVCenter,
+               QStringLiteral("%1 · %2").arg(runtimeControlTypeName(ctrl.type), ctrl.displayTitle()));
+
+    // 类型预览
+    QRect body(8, 24, width() - 16, height() - 30);
+    if (body.width() <= 0 || body.height() <= 0) return;
+
+    switch (ctrl.type) {
+    case RuntimeControlType::ImageView: {
+        p.setPen(QPen(QColor(0x3a, 0x3a, 0x4a), 1));
+        p.setBrush(QColor(0x11, 0x11, 0x14));
+        p.drawRect(body);
+        p.setPen(QColor(0x66, 0x6a, 0x78));
+        QFont imgFont = p.font();
+        imgFont.setPointSizeF(10);
+        p.setFont(imgFont);
+        p.drawText(body, Qt::AlignCenter, QStringLiteral("图像\n%1").arg(ctrl.bindKey));
+        break;
+    }
+    case RuntimeControlType::ValueDisplay:
+    case RuntimeControlType::TextLabel: {
+        p.setPen(QColor(ctrl.color));
+        QFont valFont = p.font();
+        valFont.setPointSizeF(qMax(8, ctrl.fontSize / 2));
+        valFont.setBold(true);
+        p.setFont(valFont);
+        p.drawText(body, Qt::AlignCenter,
+                   ctrl.type == RuntimeControlType::TextLabel
+                       ? ctrl.displayTitle()
+                       : QStringLiteral("123.456"));
+        break;
+    }
+    case RuntimeControlType::StatusLight: {
+        const int r = qMin(16, body.height() / 2 - 4);
+        QPoint c(body.left() + r + 4, body.center().y());
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(ctrl.color));
+        p.drawEllipse(c, r, r);
+        p.setPen(QColor(0x9a, 0x9e, 0xac));
+        QFont lightFont = p.font();
+        lightFont.setPointSizeF(10);
+        p.setFont(lightFont);
+        p.drawText(QRect(c.x() + r + 6, body.top(), body.right() - c.x() - r - 6, body.height()),
+                   Qt::AlignLeft | Qt::AlignVCenter, ctrl.displayTitle());
+        break;
+    }
+    case RuntimeControlType::Button: {
+        QRect btnRect = body.adjusted(4, 4, -4, -4);
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(ctrl.color));
+        p.drawRoundedRect(btnRect, 4, 4);
+        p.setPen(Qt::white);
+        QFont btnFont = p.font();
+        btnFont.setPointSizeF(10);
+        btnFont.setBold(true);
+        p.setFont(btnFont);
+        p.drawText(btnRect, Qt::AlignCenter, ctrl.displayTitle());
+        break;
+    }
+    }
+
+    // 缩放指示（右下角）
+    if (selected) {
+        p.setPen(QColor(0x40, 0xa9, 0xff));
+        const int g = 6;
+        p.drawLine(width() - g, height() - 1, width() - 1, height() - g);
+    }
+}
+
+void DesignerControlFrame::mousePressEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton) {
+        m_canvas->selectIndex(m_index);
+        const QPoint local = event->pos();
+        // 右下角 14px 区域 = 缩放
+        if (local.x() >= width() - 14 && local.y() >= height() - 14) {
+            m_resizing = true;
+            m_geoStart = geometry();
+        } else {
+            m_dragging = true;
+            m_geoStart = geometry();
+        }
+        m_dragStartGlobal = event->globalPosition().toPoint();
+        event->accept();
+    }
+}
+
+void DesignerControlFrame::mouseMoveEvent(QMouseEvent *event)
+{
+    if (!m_dragging && !m_resizing) {
+        const QPoint local = event->pos();
+        setCursor((local.x() >= width() - 14 && local.y() >= height() - 14)
+                      ? Qt::SizeFDiagCursor : Qt::SizeAllCursor);
+        return;
+    }
+
+    const QPoint delta = event->globalPosition().toPoint() - m_dragStartGlobal;
+    if (m_resizing) {
+        QRect g = m_geoStart;
+        g.setWidth(qMax(80, m_geoStart.width() + delta.x()));
+        g.setHeight(qMax(40, m_geoStart.height() + delta.y()));
+        setGeometry(g);
+    } else {
+        QRect g = m_geoStart.translated(delta);
+        g.moveLeft(qMax(0, g.left()));
+        g.moveTop(qMax(0, g.top()));
+        setGeometry(g);
+    }
+
+    if (m_canvas->m_layout && m_index >= 0 && m_index < m_canvas->m_layout->controls.size()) {
+        m_canvas->m_layout->controls[m_index].geometry = geometry();
+    }
+    event->accept();
+}
+
+void DesignerControlFrame::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton) {
+        m_dragging = false;
+        m_resizing = false;
+        event->accept();
+    }
+}
+
+// ==================== RuntimeInterfaceDesigner ====================
+
+QString RuntimeInterfaceDesigner::defaultLayoutPath()
+{
+    return QCoreApplication::applicationDirPath() + QStringLiteral("/runtime_interface.json");
+}
+
+RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNames, QWidget *parent)
+    : QDialog(parent)
+    , m_nodeNames(nodeFullNames)
+{
+    setWindowTitle(QStringLiteral("运行界面设计"));
+    resize(1400, 860);
+
+    // 初始布局：从默认路径加载（若存在）
+    m_layout.loadFromFile(defaultLayoutPath());
+
+    // ---- 左侧：控件面板 ----
+    auto *paletteGroup = new QGroupBox(QStringLiteral("控件库"), this);
+    m_palette = new QListWidget(paletteGroup);
+    const QStringList types = {
+        QStringLiteral("图像显示"), QStringLiteral("数值显示"),
+        QStringLiteral("文本标签"), QStringLiteral("状态灯"), QStringLiteral("按钮")
+    };
+    m_palette->addItems(types);
+    m_palette->setCurrentRow(0);
+    m_palette->setMaximumWidth(160);
+
+    auto *addBtn = new QPushButton(QStringLiteral("添加控件"), paletteGroup);
+    addBtn->setStyleSheet("QPushButton{background:#3a6ea5;color:white;border:none;border-radius:4px;padding:6px;}");
+    connect(addBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::addCurrentPaletteControl);
+    connect(m_palette, &QListWidget::itemDoubleClicked, this,
+            [this](QListWidgetItem *) { addCurrentPaletteControl(); });
+
+    auto *paletteLay = new QVBoxLayout(paletteGroup);
+    paletteLay->addWidget(m_palette, 1);
+    paletteLay->addWidget(addBtn);
+
+    // ---- 中间：画布 ----
+    auto *canvasGroup = new QGroupBox(QStringLiteral("画布"), this);
+    m_canvasScroll = new QScrollArea(canvasGroup);
+    m_canvas = new RuntimeDesignerCanvas(m_canvasScroll);
+    m_canvas->setInterface(&m_layout);
+    m_canvasScroll->setWidget(m_canvas);
+    m_canvasScroll->setWidgetResizable(true);
+    m_canvasScroll->setStyleSheet("QScrollArea{background:#1a1a20;border:1px solid #3a3a4a;}");
+
+    auto *delBtn = new QPushButton(QStringLiteral("删除选中"), canvasGroup);
+    auto *clearBtn = new QPushButton(QStringLiteral("清空全部"), canvasGroup);
+    delBtn->setStyleSheet("QPushButton{background:#8a3a3a;color:white;border:none;border-radius:4px;padding:6px;}");
+    clearBtn->setStyleSheet("QPushButton{background:#5a5a6a;color:white;border:none;border-radius:4px;padding:6px;}");
+    connect(delBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::deleteSelected);
+    connect(clearBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::clearAll);
+
+    auto *canvasToolRow = new QHBoxLayout();
+    canvasToolRow->addStretch();
+    canvasToolRow->addWidget(delBtn);
+    canvasToolRow->addWidget(clearBtn);
+
+    auto *canvasLay = new QVBoxLayout(canvasGroup);
+    canvasLay->addWidget(m_canvasScroll, 1);
+    canvasLay->addLayout(canvasToolRow);
+
+    // ---- 右侧：属性面板 ----
+    auto *propGroup = new QGroupBox(QStringLiteral("属性"), this);
+    auto *form = new QFormLayout(propGroup);
+
+    m_titleEdit = new QLineEdit(propGroup);
+    m_typeLabel = new QLabel(QStringLiteral("-"), propGroup);
+    m_bindTypeCombo = new QComboBox(propGroup);
+    m_bindKeyCombo = new QComboBox(propGroup);
+    m_colorEdit = new QLineEdit(propGroup);
+    m_fontSpin = new QSpinBox(propGroup);
+    m_fontSpin->setRange(8, 96);
+
+    form->addRow(QStringLiteral("标题"), m_titleEdit);
+    form->addRow(QStringLiteral("类型"), m_typeLabel);
+    form->addRow(QStringLiteral("绑定方式"), m_bindTypeCombo);
+    form->addRow(QStringLiteral("绑定对象"), m_bindKeyCombo);
+    form->addRow(QStringLiteral("颜色(Hex)"), m_colorEdit);
+    form->addRow(QStringLiteral("字号"), m_fontSpin);
+
+    auto *propHint = new QLabel(QStringLiteral("绑定方式说明:\n· 全局变量: 实时显示全局变量值\n· 节点输出: 绑定流程中算子的输出\n· 动作: 按钮点击触发的流程操作"), propGroup);
+    propHint->setWordWrap(true);
+    propHint->setStyleSheet("color:#8a8a9a;font-size:11px;");
+    auto *propLay = new QVBoxLayout(propGroup);
+    propLay->addLayout(form);
+    propLay->addWidget(propHint);
+    propLay->addStretch();
+    propGroup->setMaximumWidth(320);
+
+    // ---- 底部按钮 ----
+    auto *saveBtn = new QPushButton(QStringLiteral("保存布局"), this);
+    auto *loadBtn = new QPushButton(QStringLiteral("加载布局"), this);
+    auto *applyBtn = new QPushButton(QStringLiteral("应用并进入运行模式"), this);
+    applyBtn->setStyleSheet("QPushButton{background:#3d9a5a;color:white;border:none;border-radius:4px;padding:8px 16px;font-weight:bold;}");
+    connect(saveBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::saveLayout);
+    connect(loadBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::loadLayout);
+    connect(applyBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::applyAndClose);
+
+    auto *btnRow = new QHBoxLayout();
+    btnRow->addWidget(saveBtn);
+    btnRow->addWidget(loadBtn);
+    btnRow->addStretch();
+    btnRow->addWidget(applyBtn);
+
+    // ---- 总布局 ----
+    auto *mainLay = new QHBoxLayout();
+    mainLay->addWidget(paletteGroup);
+    mainLay->addWidget(canvasGroup, 1);
+    mainLay->addWidget(propGroup);
+
+    auto *root = new QVBoxLayout(this);
+    root->addLayout(mainLay, 1);
+    root->addLayout(btnRow);
+
+    // ---- 信号 ----
+    connect(m_canvas, &RuntimeDesignerCanvas::controlSelected,
+            this, &RuntimeInterfaceDesigner::onControlSelected);
+
+    connect(m_titleEdit, &QLineEdit::textChanged, this, &RuntimeInterfaceDesigner::onPropertyEdited);
+    connect(m_colorEdit, &QLineEdit::textChanged, this, &RuntimeInterfaceDesigner::onPropertyEdited);
+    connect(m_fontSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, &RuntimeInterfaceDesigner::onPropertyEdited);
+    connect(m_bindTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int) {
+        if (m_updatingProps) return;
+        populateBindKeyCombo();
+        onPropertyEdited();
+    });
+    connect(m_bindKeyCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int) { onPropertyEdited(); });
+
+    onControlSelected(-1);
+}
+
+RuntimeControl *RuntimeInterfaceDesigner::selectedControl()
+{
+    if (m_selected < 0 || m_selected >= m_layout.controls.size()) return nullptr;
+    return &m_layout.controls[m_selected];
+}
+
+void RuntimeInterfaceDesigner::addCurrentPaletteControl()
+{
+    const int row = m_palette->currentRow();
+    RuntimeControlType type;
+    switch (row) {
+    case 0: type = RuntimeControlType::ImageView; break;
+    case 1: type = RuntimeControlType::ValueDisplay; break;
+    case 2: type = RuntimeControlType::TextLabel; break;
+    case 3: type = RuntimeControlType::StatusLight; break;
+    case 4: type = RuntimeControlType::Button; break;
+    default: return;
+    }
+
+    const int n = m_layout.controls.size();
+    const int cascade = (n % 8) * 24;
+    QRect geo(40 + cascade, 40 + cascade, 300, 190);
+    if (type == RuntimeControlType::StatusLight) geo.setHeight(70);
+    if (type == RuntimeControlType::Button)     { geo.setWidth(160); geo.setHeight(48); }
+    if (type == RuntimeControlType::TextLabel)  { geo.setWidth(240); geo.setHeight(60); }
+    if (type == RuntimeControlType::ValueDisplay){ geo.setHeight(90); }
+
+    RuntimeControl *ctrl = m_layout.addControl(type, geo);
+    m_canvas->rebuild();
+    const int idx = m_layout.indexOf(ctrl);
+    if (idx >= 0) m_canvas->selectIndex(idx);
+}
+
+void RuntimeInterfaceDesigner::deleteSelected()
+{
+    if (m_selected < 0) return;
+    m_layout.removeControl(m_selected);
+    m_selected = -1;
+    m_canvas->rebuild();
+    refreshPropertyPanel();
+}
+
+void RuntimeInterfaceDesigner::clearAll()
+{
+    if (m_layout.controls.isEmpty()) return;
+    if (QMessageBox::question(this, QStringLiteral("清空全部"),
+                              QStringLiteral("确定清空全部运行界面控件？")) != QMessageBox::Yes)
+        return;
+    m_layout.clear();
+    m_selected = -1;
+    m_canvas->rebuild();
+    refreshPropertyPanel();
+}
+
+void RuntimeInterfaceDesigner::saveLayout()
+{
+    QString path = QFileDialog::getSaveFileName(
+        this, QStringLiteral("保存运行界面布局"), defaultLayoutPath(),
+        QStringLiteral("JSON (*.json)"));
+    if (path.isEmpty()) return;
+    if (m_layout.saveToFile(path)) {
+        QMessageBox::information(this, QStringLiteral("保存布局"),
+                                 QStringLiteral("已保存到 %1").arg(path));
+    } else {
+        QMessageBox::warning(this, QStringLiteral("保存布局"),
+                             QStringLiteral("保存失败"));
+    }
+}
+
+void RuntimeInterfaceDesigner::loadLayout()
+{
+    QString path = QFileDialog::getOpenFileName(
+        this, QStringLiteral("加载运行界面布局"), defaultLayoutPath(),
+        QStringLiteral("JSON (*.json)"));
+    if (path.isEmpty()) return;
+    RuntimeInterface tmp;
+    if (tmp.loadFromFile(path)) {
+        m_layout = tmp;
+        m_selected = -1;
+        m_canvas->rebuild();
+        refreshPropertyPanel();
+    } else {
+        QMessageBox::warning(this, QStringLiteral("加载布局"),
+                             QStringLiteral("加载失败，文件格式不正确"));
+    }
+}
+
+void RuntimeInterfaceDesigner::applyAndClose()
+{
+    m_layout.saveToFile(defaultLayoutPath());
+    accept();
+}
+
+void RuntimeInterfaceDesigner::onControlSelected(int index)
+{
+    m_selected = index;
+    refreshPropertyPanel();
+}
+
+void RuntimeInterfaceDesigner::populateBindKeyCombo()
+{
+    RuntimeControl *ctrl = selectedControl();
+    if (!ctrl) { m_bindKeyCombo->clear(); return; }
+
+    const QString bindType = m_bindTypeCombo->currentData().toString();
+    m_bindKeyCombo->clear();
+    m_bindKeyCombo->addItem(QStringLiteral("(无)"), QString());
+
+    if (ctrl->type == RuntimeControlType::Button) {
+        // 动作绑定
+        m_bindKeyCombo->addItem(QStringLiteral("开始执行"), QStringLiteral("start"));
+        m_bindKeyCombo->addItem(QStringLiteral("停止执行"), QStringLiteral("stop"));
+        m_bindKeyCombo->addItem(QStringLiteral("单次执行"), QStringLiteral("single"));
+        m_bindKeyCombo->addItem(QStringLiteral("触发流程"), QStringLiteral("trigger"));
+        int idx = m_bindKeyCombo->findData(ctrl->bindKey);
+        if (idx < 0 && ctrl->bindKey.isEmpty())
+            idx = m_bindKeyCombo->findData(QStringLiteral("start"));
+        m_bindKeyCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+        return;
+    }
+
+    if (bindType == QStringLiteral("global")) {
+        const auto vars = GlobalVariableManager::instance()->variables();
+        for (auto it = vars.constBegin(); it != vars.constEnd(); ++it) {
+            m_bindKeyCombo->addItem(it.key(), it.key());
+        }
+    } else if (bindType == QStringLiteral("node")) {
+        for (const QString &n : m_nodeNames) {
+            m_bindKeyCombo->addItem(n, n);
+        }
+    }
+    int idx = m_bindKeyCombo->findData(ctrl->bindKey);
+    m_bindKeyCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+}
+
+void RuntimeInterfaceDesigner::refreshPropertyPanel()
+{
+    m_updatingProps = true;
+    RuntimeControl *ctrl = selectedControl();
+    if (!ctrl) {
+        m_titleEdit->setEnabled(false);
+        m_colorEdit->setEnabled(false);
+        m_fontSpin->setEnabled(false);
+        m_bindTypeCombo->setEnabled(false);
+        m_bindKeyCombo->setEnabled(false);
+        m_typeLabel->setText(QStringLiteral("-"));
+        m_updatingProps = false;
+        return;
+    }
+
+    m_titleEdit->setEnabled(true);
+    m_colorEdit->setEnabled(true);
+    m_fontSpin->setEnabled(true);
+    m_bindTypeCombo->setEnabled(true);
+    m_bindKeyCombo->setEnabled(true);
+
+    m_typeLabel->setText(runtimeControlTypeName(ctrl->type));
+    m_titleEdit->setText(ctrl->title);
+    m_colorEdit->setText(ctrl->color);
+    m_fontSpin->setValue(ctrl->fontSize);
+
+    // 绑定方式选项
+    m_bindTypeCombo->clear();
+    m_bindTypeCombo->addItem(QStringLiteral("无绑定"), QString());
+    if (ctrl->type == RuntimeControlType::Button) {
+        // 按钮仅动作绑定
+        m_bindTypeCombo->clear();
+        m_bindTypeCombo->addItem(QStringLiteral("动作"), QStringLiteral("action"));
+    } else if (ctrl->type == RuntimeControlType::ImageView) {
+        m_bindTypeCombo->addItem(QStringLiteral("节点输出"), QStringLiteral("node"));
+    } else if (ctrl->type == RuntimeControlType::ValueDisplay ||
+               ctrl->type == RuntimeControlType::StatusLight) {
+        m_bindTypeCombo->addItem(QStringLiteral("全局变量"), QStringLiteral("global"));
+        m_bindTypeCombo->addItem(QStringLiteral("节点输出"), QStringLiteral("node"));
+    } else {
+        // TextLabel：仅文本
+        m_bindTypeCombo->setEnabled(false);
+    }
+
+    int idx = m_bindTypeCombo->findData(ctrl->bindType);
+    m_bindTypeCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+    populateBindKeyCombo();
+
+    m_updatingProps = false;
+}
+
+void RuntimeInterfaceDesigner::onPropertyEdited()
+{
+    if (m_updatingProps) return;
+    RuntimeControl *ctrl = selectedControl();
+    if (!ctrl) return;
+
+    ctrl->title = m_titleEdit->text().trimmed();
+    ctrl->color = m_colorEdit->text().trimmed().isEmpty()
+                      ? QStringLiteral("#3a6ea5") : m_colorEdit->text().trimmed();
+    ctrl->fontSize = m_fontSpin->value();
+
+    if (ctrl->type != RuntimeControlType::Button) {
+        ctrl->bindType = m_bindTypeCombo->currentData().toString();
+        ctrl->bindKey = m_bindKeyCombo->currentData().toString();
+    } else {
+        ctrl->bindType = QStringLiteral("action");
+        ctrl->bindKey = m_bindKeyCombo->currentData().toString();
+    }
+
+    m_canvas->refreshControl(m_selected);
+}
