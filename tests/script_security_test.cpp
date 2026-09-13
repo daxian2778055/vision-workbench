@@ -3,6 +3,7 @@
 #include <QtTest/QtTest>
 #include <QCoreApplication>
 #include <QFile>
+#include <QProcess>
 #include <QProcessEnvironment>
 #include <QTemporaryDir>
 
@@ -26,6 +27,7 @@ private slots:
     void buildEnvironment_stripsDangerousVars();
     void audit_writesStructuredLog();
     void toggleOff_blocksEverything();
+    void sandbox_disabled_isNoOp();
 };
 
 void ScriptSecurityPolicyTest::languageWhitelist_blocksUnknown()
@@ -111,6 +113,22 @@ void ScriptSecurityPolicyTest::toggleOff_blocksEverything()
 
     p.setEnabled(prev);
     QVERIFY(p.evaluate(QStringLiteral("Python"), QStringLiteral("x"), reason));
+}
+
+void ScriptSecurityPolicyTest::sandbox_disabled_isNoOp()
+{
+    ScriptSecurityPolicy &p = ScriptSecurityPolicy::instance();
+    const bool prev = p.isSandboxEnabled();
+    p.setSandboxEnabled(false);
+
+    QProcess proc;
+    // 未启用沙箱时：applyProcessSandbox 不应抛异常；attachJob 对未启动/未启用返回 false；
+    // closeJob 对无作业句柄应安全无操作。该用例同时锁定沙箱 API 在所有平台可编译。
+    p.applyProcessSandbox(&proc);
+    QCOMPARE(p.attachJob(&proc), false);
+    p.closeJob(&proc);
+
+    p.setSandboxEnabled(prev);
 }
 
 QTEST_GUILESS_MAIN(ScriptSecurityPolicyTest)

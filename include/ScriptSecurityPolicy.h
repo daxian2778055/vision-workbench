@@ -4,6 +4,8 @@
 #include <QStringList>
 #include <QProcessEnvironment>
 
+class QProcess;
+
 /// ScriptNode 任意代码执行安全策略
 ///
 /// ScriptNode 通过 QProcess 以当前用户完整权限启动 python/lua 解释器执行任意脚本，
@@ -53,6 +55,9 @@ public:
     bool blockWhenElevated() const { return m_blockWhenElevated; }
     void setBlockWhenElevated(bool v) { m_blockWhenElevated = v; }
 
+    bool isSandboxEnabled() const { return m_sandboxEnabled; }
+    void setSandboxEnabled(bool v) { m_sandboxEnabled = v; }
+
     /// 评估脚本是否允许执行。拒绝时通过 reason 返回原因。
     bool evaluate(const QString &language, const QString &script, QString &reason) const;
 
@@ -71,8 +76,21 @@ public:
     /// 当前进程是否以管理员（提权）身份运行。
     bool isElevated() const;
 
+    /// 进程级沙箱（仅 Windows 生效，其它平台为空操作）。三层防护：
+    ///   - applyProcessSandbox：QProcess::start() 之前调用，给子进程套"受限令牌"
+    ///     （去除全部特权、管理员 SID 降级为 deny-only、低完整性级别）。
+    ///   - attachJob：start() 成功之后调用，把子进程关入 Job Object，限制其
+    ///     创建桌面/改显示设置/退出 Windows/读写剪贴板/跨句柄；并设置
+    ///     KILL_ON_JOB_CLOSE，作业句柄关闭时整棵进程树被强杀，超时可控。
+    ///   - closeJob：执行结束（含超时 kill 之后）调用，关闭作业句柄释放并触发杀树。
+    /// 注意：Job Object 无法限制网络访问；网络隔离须依赖系统防火墙 + 低完整性令牌。
+    void applyProcessSandbox(QProcess *proc);
+    bool attachJob(QProcess *proc);
+    void closeJob(QProcess *proc);
+
 private:
     ScriptSecurityPolicy();
+    void ensureRestrictedToken();
 
     bool m_enabled = true;
     QStringList m_allowedLanguages = { QStringLiteral("Python"), QStringLiteral("Lua") };
@@ -83,4 +101,6 @@ private:
     bool m_auditLogEnabled = true;
     QString m_auditLogPath;
     bool m_blockWhenElevated = false;
+    bool m_sandboxEnabled = true;
+    void *m_restrictedToken = nullptr;   // Windows HANDLE；非 Windows 恒为 nullptr
 };

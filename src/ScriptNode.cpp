@@ -16,6 +16,7 @@
 #include <QTemporaryFile>
 #include <QTextStream>
 #include <QSignalBlocker>
+#include <QCheckBox>
 
 ScriptNode::ScriptNode(QObject *parent)
     : HalconNode(parent)
@@ -104,16 +105,22 @@ QString ScriptNode::executePythonScript(const QString &script, const QStringList
     processArgs << tmpFile.fileName();
     processArgs << args;
 
-    process.setProcessEnvironment(ScriptSecurityPolicy::instance().buildEnvironment());
+    auto &policy = ScriptSecurityPolicy::instance();
+    process.setProcessEnvironment(policy.buildEnvironment());
+    policy.applyProcessSandbox(&process);
     process.start(QStringLiteral("python"), processArgs);
     if (!process.waitForStarted(5000)) {
         return QStringLiteral("Python \u672A\u627E\u5230\u6216\u65E0\u6CD5\u542F\u52A0");
     }
 
-    if (!process.waitForFinished(ScriptSecurityPolicy::instance().maxExecutionMs())) {
+    policy.attachJob(&process);
+
+    if (!process.waitForFinished(policy.maxExecutionMs())) {
         process.kill();
+        policy.closeJob(&process);
         return QStringLiteral("\u811A\u672C\u6267\u884C\u8D85\u65F6");
     }
+    policy.closeJob(&process);
 
     QString stdOut = QString::fromLocal8Bit(process.readAllStandardOutput());
     QString stdErr = QString::fromLocal8Bit(process.readAllStandardError());
@@ -141,16 +148,22 @@ QString ScriptNode::executeLuaScript(const QString &script, const QStringList &a
     processArgs << tmpFile.fileName();
     processArgs << args;
 
-    process.setProcessEnvironment(ScriptSecurityPolicy::instance().buildEnvironment());
+    auto &policy = ScriptSecurityPolicy::instance();
+    process.setProcessEnvironment(policy.buildEnvironment());
+    policy.applyProcessSandbox(&process);
     process.start(QStringLiteral("lua"), processArgs);
     if (!process.waitForStarted(5000)) {
         return QStringLiteral("Lua \u672A\u627E\u5230\u6216\u65E0\u6CD5\u542F\u52A8");
     }
 
-    if (!process.waitForFinished(ScriptSecurityPolicy::instance().maxExecutionMs())) {
+    policy.attachJob(&process);
+
+    if (!process.waitForFinished(policy.maxExecutionMs())) {
         process.kill();
+        policy.closeJob(&process);
         return QStringLiteral("\u811A\u672C\u6267\u884C\u8D85\u65F6");
     }
+    policy.closeJob(&process);
 
     QString stdOut = QString::fromLocal8Bit(process.readAllStandardOutput());
     QString stdErr = QString::fromLocal8Bit(process.readAllStandardError());
@@ -174,6 +187,14 @@ QWidget *ScriptNode::createParamPanel()
     warnLabel->setWordWrap(true);
     warnLabel->setStyleSheet(QStringLiteral("QLabel { color: #b00020; font-size: 11px; }"));
     layout->addWidget(warnLabel);
+
+    auto *sandboxChk = new QCheckBox(QStringLiteral("进程沙箱（降权令牌 + Job Object 限制桌面/剪贴板，防任意代码执行越权）"));
+    sandboxChk->setToolTip(QStringLiteral("默认开启。脚本子进程以受限令牌（去特权/低完整性）运行并关入 Job Object；关闭后仅保留解释器隔离与环境清理。"));
+    sandboxChk->setChecked(ScriptSecurityPolicy::instance().isSandboxEnabled());
+    connect(sandboxChk, &QCheckBox::toggled, this, [](bool on) {
+        ScriptSecurityPolicy::instance().setSandboxEnabled(on);
+    });
+    layout->addWidget(sandboxChk);
 
     // Language selection
     auto *langCombo = new QComboBox();
