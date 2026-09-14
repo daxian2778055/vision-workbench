@@ -3,6 +3,7 @@
 #include <QString>
 #include <QStringList>
 #include <QProcessEnvironment>
+#include <functional>
 
 class QProcess;
 
@@ -77,11 +78,11 @@ public:
     bool isElevated() const;
 
     /// 进程隔离（仅 Windows 生效，其它平台为空操作）：
-    ///   - applyProcessSandbox：start() 之前调用。仅设置 CREATE_BREAKAWAY_FROM_JOB，
-    ///     使子进程可脱离父作业并被纳入我们自己的 Job Object 生命周期管理。
+    ///   - applyProcessSandbox：start() 之前调用（仅 QProcess 路径）。只设置
+    ///     CREATE_BREAKAWAY_FROM_JOB，使子进程可脱离父作业并被纳入 Job Object 生命周期管理。
     ///     【重要】Qt 6.11 起 QProcess::CreateProcessArguments 不再提供 token 成员，
-    ///     因此当前无法施加受限令牌（去特权 / 管理员 SID deny-only / 低完整性）降权；
-    ///     若产品需要执行不可信脚本，须另行实现 CreateProcessAsUserW 受限令牌启动。
+    ///     QProcess 路径自身无法降权；需要降权请使用 runWithRestrictedToken()
+    ///     （CreateProcessAsUserW + 受限令牌，当前提供「去特权」）。
     ///   - attachJob：start() 成功之后调用，把子进程关入 Job Object，限制其
     ///     创建桌面/改显示设置/退出 Windows/读写剪贴板/跨句柄；并设置
     ///     KILL_ON_JOB_CLOSE，作业句柄关闭时整棵进程树被强杀，超时可控。
@@ -92,6 +93,26 @@ public:
     void applyProcessSandbox(QProcess *proc);
     bool attachJob(QProcess *proc);
     void closeJob(QProcess *proc);
+
+    /// 以「受限令牌」启动子进程并收集 stdout/stderr（仅 Windows 实现；其它平台返回 false）。
+    ///
+    /// 这是 Qt 6.11 移除 QProcess token 钩子后，恢复"去特权 + 管理员 SID deny-only +
+    /// 低完整性"降权的替代路径：使用本次进程的受限令牌副本启动解释器，
+    /// 因此子进程拿不到当前用户的完整权限。
+    /// - 子进程会脱离父作业并被关入独立 Job Object（父退出即终止整棵进程树）。
+    /// - timeoutMs <= 0 表示不限时；cancelRequested() 返回 true 时立即终止子进程。
+    /// - 返回 false 时 error 说明原因（令牌不可用/进程创建失败/超时/被取消）。
+    bool runWithRestrictedToken(const QString &program,
+                               const QStringList &args,
+                               int timeoutMs,
+                               const std::function<bool()> &cancelRequested,
+                               QString &stdOut,
+                               QString &stdErr,
+                               QString &error,
+                               int *exitCode = nullptr);
+
+    /// 受限令牌是否已就绪（仅 Windows）；供自检/诊断使用
+    bool hasRestrictedToken() const;
 
 private:
     ScriptSecurityPolicy();

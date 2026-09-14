@@ -13,6 +13,10 @@
 #include <QApplication>
 #include <QDir>
 #include <QProcess>
+#include <QElapsedTimer>
+#include <QStringList>
+#include <algorithm>
+#include <vector>
 
 #if defined(Q_OS_WIN)
 #  include <windows.h>
@@ -293,44 +297,292 @@ void ScriptSecurityPolicy::ensureRestrictedToken()
         return;
     }
 
-    DWORD userLen = 0;
-    GetTokenInformation(hProc, TokenUser, nullptr, 0, &userLen);
-    QByteArray userBuf(static_cast<int>(userLen), 0);
-    auto *tu = reinterpret_cast<TOKEN_USER *>(userBuf.data());
-    if (!GetTokenInformation(hProc, TokenUser, tu, userLen, &userLen)) {
+    // 关于「管理员组 deny-only」与「低完整性级别」：本机实测两者都会导致子进程
+    // 无法访问默认窗口站/桌面，user32 初始化失败（0xC0000142 STATUS_DLL_INIT_FAILED），
+    // 因此当前只施加「去特权」。要补齐这两项，需为子进程创建专用窗口站与桌面
+    // 并设置相应 DACL/完整性标签（Chromium 沙箱做法），属独立改造。
+    // 另记：历史上曾误用 TokenUser（用户自身 SID）置 deny-only，会让子进程
+    // 连自身身份都没有（启动即 0xC0000022 ACCESS_DENIED），切勿再犯。
+
+    HANDLE hRestricted = nullptr;
+    // 去除全部特权（仅保留 SeChangeNotifyPrivilege）
+    if (!CreateRestrictedToken(hProc, DISABLE_MAX_PRIVILEGE, 0, nullptr, 0, nullptr,
+                               0, nullptr, &hRestricted)) {
         CloseHandle(hProc);
         return;
     }
-    SID_AND_ATTRIBUTES sattr{};
-    sattr.Sid = tu->User.Sid;
-    sattr.Attributes = 0;
 
-    HANDLE hRestricted = nullptr;
-    // 优先：去除全部特权，并把管理员 SID 限制为 deny-only（无法再提权/写受保护对象）
-    if (!CreateRestrictedToken(hProc, DISABLE_MAX_PRIVILEGE, 0, nullptr, 0, nullptr,
-                               1, &sattr, &hRestricted)) {
-        // 退化：仅去除特权（仍比原令牌安全）
-        if (!CreateRestrictedToken(hProc, DISABLE_MAX_PRIVILEGE, 0, nullptr, 0, nullptr,
-                                   0, nullptr, &hRestricted)) {
-            CloseHandle(hProc);
-            return;
-        }
-    }
-
-    // 低完整性级别：无法写入中/高完整性对象，进一步限制破坏面（仍可读取用户文件/联网）
-    SID_IDENTIFIER_AUTHORITY sia = SECURITY_MANDATORY_LABEL_AUTHORITY;
-    PSID lowSid = nullptr;
-    if (AllocateAndInitializeSid(&sia, 1, SECURITY_MANDATORY_LOW_RID,
-                                 0, 0, 0, 0, 0, 0, 0, &lowSid)) {
-        TOKEN_MANDATORY_LABEL tml{};
-        tml.Label.Attributes = SE_GROUP_INTEGRITY;
-        tml.Label.Sid = lowSid;
-        SetTokenInformation(hRestricted, TokenIntegrityLevel, &tml, sizeof(tml));
-        FreeSid(lowSid);
-    }
+    // 低完整性级别（Low IL）同样暂不施加：Low IL 进程无法访问默认窗口站/桌面，
+    // 解释器在 user32 初始化阶段即失败（0xC0000142），与 deny-only 同因。
+    //
+    // 当前降权边界（务必如实对外描述）：
+    //   受限令牌 = 去除全部特权（DISABLE_MAX_PRIVILEGE，仅保留 SeChangeNotifyPrivilege）
+    //   → 脚本不再持有调试/备份/关机等特权；
+    //   未含：管理员组 deny-only、低完整性级别、网络隔离。
+    //   后两者需「专用窗口站/桌面 + 完整性标签」配套改造。
 
     m_restrictedToken = hRestricted;
     CloseHandle(hProc);
+}
+
+namespace {
+
+/// 按 Windows 命令行解析规则为参数加引号（反斜杠与引号需转义）
+QString quoteWindowsArg(const QString &arg)
+{
+    if (!arg.isEmpty()
+        && !arg.contains(QLatin1Char(' '))
+        && !arg.contains(QLatin1Char('\t'))
+        && !arg.contains(QLatin1Char('"'))) {
+        return arg;
+    }
+    QString out = QStringLiteral("\"");
+    int backslashes = 0;
+    for (const QChar c : arg) {
+        if (c == QLatin1Char('\\')) {
+            ++backslashes;
+            continue;
+        }
+        if (c == QLatin1Char('"')) {
+            out += QString(backslashes * 2 + 1, QLatin1Char('\\'));
+            out += QLatin1Char('"');
+            backslashes = 0;
+            continue;
+        }
+        out += QString(backslashes, QLatin1Char('\\'));
+        backslashes = 0;
+        out += c;
+    }
+    out += QString(backslashes * 2, QLatin1Char('\\'));
+    out += QLatin1Char('"');
+    return out;
+}
+
+/// 构造 UTF-16 环境块（"KEY=VALUE\0...\0"），用于 CREATE_UNICODE_ENVIRONMENT
+QByteArray buildEnvironmentBlock(const QProcessEnvironment &env)
+{
+    QStringList entries = env.toStringList();
+    if (entries.isEmpty()) {
+        return QByteArray();
+    }
+    std::sort(entries.begin(), entries.end(), [](const QString &a, const QString &b) {
+        return a.compare(b, Qt::CaseInsensitive) < 0;
+    });
+    QByteArray block;
+    for (const QString &entry : entries) {
+        block.append(reinterpret_cast<const char *>(entry.utf16()), entry.size() * 2);
+        block.append('\0');
+        block.append('\0');
+    }
+    block.append('\0');
+    block.append('\0');
+    return block;
+}
+
+/// 非阻塞排空管道中已到达的数据
+void drainPipe(HANDLE pipe, QByteArray &sink)
+{
+    for (;;) {
+        DWORD available = 0;
+        if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr)) {
+            return;   // 管道已断开（子进程退出且写端关闭）
+        }
+        if (available == 0) {
+            return;
+        }
+        char buf[4096];
+        const DWORD want = static_cast<DWORD>(qMin<qulonglong>(available, sizeof(buf)));
+        DWORD read = 0;
+        if (!ReadFile(pipe, buf, want, &read, nullptr) || read == 0) {
+            return;
+        }
+        sink.append(buf, static_cast<int>(read));
+    }
+}
+
+} // namespace
+
+bool ScriptSecurityPolicy::hasRestrictedToken() const
+{
+    return m_restrictedToken != nullptr;
+}
+
+bool ScriptSecurityPolicy::runWithRestrictedToken(const QString &program,
+                                                  const QStringList &args,
+                                                  int timeoutMs,
+                                                  const std::function<bool()> &cancelRequested,
+                                                  QString &stdOut,
+                                                  QString &stdErr,
+                                                  QString &error,
+                                                  int *exitCode)
+{
+    stdOut.clear();
+    stdErr.clear();
+    error.clear();
+    if (exitCode) {
+        *exitCode = -1;
+    }
+
+    ensureRestrictedToken();
+    if (!m_restrictedToken) {
+        error = QStringLiteral("受限令牌不可用");
+        return false;
+    }
+
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+
+    HANDLE outRead = nullptr;
+    HANDLE outWrite = nullptr;
+    HANDLE errRead = nullptr;
+    HANDLE errWrite = nullptr;
+    if (!CreatePipe(&outRead, &outWrite, &sa, 0)
+        || !CreatePipe(&errRead, &errWrite, &sa, 0)) {
+        if (outRead) CloseHandle(outRead);
+        if (outWrite) CloseHandle(outWrite);
+        if (errRead) CloseHandle(errRead);
+        if (errWrite) CloseHandle(errWrite);
+        error = QStringLiteral("创建输出管道失败");
+        return false;
+    }
+    // 父进程持有的读端不能被继承，否则管道永远不会收到 EOF
+    SetHandleInformation(outRead, HANDLE_FLAG_INHERIT, 0);
+    SetHandleInformation(errRead, HANDLE_FLAG_INHERIT, 0);
+
+    QString commandLine = quoteWindowsArg(program);
+    for (const QString &a : args) {
+        commandLine += QLatin1Char(' ') + quoteWindowsArg(a);
+    }
+    std::vector<wchar_t> cmdBuf(static_cast<size_t>(commandLine.size()) + 1, L'\0');
+    commandLine.toWCharArray(cmdBuf.data());
+
+    const QByteArray envBlock = buildEnvironmentBlock(buildEnvironment());
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = nullptr;
+    si.hStdOutput = outWrite;
+    si.hStdError = errWrite;
+
+    PROCESS_INFORMATION pi{};
+    const DWORD baseFlags = CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT;
+    LPVOID envPtr = envBlock.isEmpty() ? nullptr : const_cast<char *>(envBlock.constData());
+
+    // 优先脱离父作业（便于关入自己的 Job Object）；若父作业不允许脱离则退回不带该标志
+    BOOL created = CreateProcessAsUserW(reinterpret_cast<HANDLE>(m_restrictedToken),
+                                        nullptr, cmdBuf.data(), nullptr, nullptr, TRUE,
+                                        baseFlags | CREATE_BREAKAWAY_FROM_JOB,
+                                        envPtr, nullptr, &si, &pi);
+    if (!created) {
+        created = CreateProcessAsUserW(reinterpret_cast<HANDLE>(m_restrictedToken),
+                                       nullptr, cmdBuf.data(), nullptr, nullptr, TRUE,
+                                       baseFlags, envPtr, nullptr, &si, &pi);
+    }
+    CloseHandle(outWrite);
+    CloseHandle(errWrite);
+    if (!created) {
+        const DWORD lastError = GetLastError();
+        CloseHandle(outRead);
+        CloseHandle(errRead);
+        error = QStringLiteral("以受限令牌创建进程失败（GetLastError=%1）").arg(lastError);
+        return false;
+    }
+
+    // 独立 Job Object：父退出（句柄关闭）即终止整棵脚本进程树
+    HANDLE job = CreateJobObject(nullptr, nullptr);
+    if (job) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION ext{};
+        ext.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                                             | JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+        ext.ProcessMemoryLimit = 512 * 1024 * 1024;
+        SetInformationJobObject(job, JobObjectExtendedLimitInformation, &ext, sizeof(ext));
+        AssignProcessToJobObject(job, pi.hProcess);   // 失败不致命（仍受限令牌运行）
+    }
+
+    QByteArray outBuf;
+    QByteArray errBuf;
+    QElapsedTimer timer;
+    timer.start();
+    bool cancelled = false;
+    bool timedOut = false;
+    for (;;) {
+        drainPipe(outRead, outBuf);
+        drainPipe(errRead, errBuf);
+        if (WaitForSingleObject(pi.hProcess, 50) == WAIT_OBJECT_0) {
+            drainPipe(outRead, outBuf);
+            drainPipe(errRead, errBuf);
+            break;
+        }
+        if (cancelRequested && cancelRequested()) {
+            cancelled = true;
+            TerminateProcess(pi.hProcess, 1);
+            WaitForSingleObject(pi.hProcess, 2000);
+            drainPipe(outRead, outBuf);
+            drainPipe(errRead, errBuf);
+            break;
+        }
+        if (timeoutMs > 0 && timer.elapsed() >= timeoutMs) {
+            timedOut = true;
+            TerminateProcess(pi.hProcess, 1);
+            WaitForSingleObject(pi.hProcess, 2000);
+            drainPipe(outRead, outBuf);
+            drainPipe(errRead, errBuf);
+            break;
+        }
+    }
+
+    DWORD exitValue = 0;
+    GetExitCodeProcess(pi.hProcess, &exitValue);
+    if (exitCode) {
+        *exitCode = static_cast<int>(exitValue);
+    }
+    stdOut = QString::fromLocal8Bit(outBuf);
+    stdErr = QString::fromLocal8Bit(errBuf);
+
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    CloseHandle(outRead);
+    CloseHandle(errRead);
+    if (job) {
+        CloseHandle(job);   // KILL_ON_JOB_CLOSE：确保脚本的子进程一并回收
+    }
+
+    if (cancelled) {
+        error = QStringLiteral("脚本执行被取消");
+        return false;
+    }
+    if (timedOut) {
+        error = QStringLiteral("脚本执行超时");
+        return false;
+    }
+    return true;
+}
+#else
+bool ScriptSecurityPolicy::hasRestrictedToken() const
+{
+    return false;
+}
+
+bool ScriptSecurityPolicy::runWithRestrictedToken(const QString &program,
+                                                  const QStringList &args,
+                                                  int timeoutMs,
+                                                  const std::function<bool()> &cancelRequested,
+                                                  QString &stdOut,
+                                                  QString &stdErr,
+                                                  QString &error,
+                                                  int *exitCode)
+{
+    Q_UNUSED(program)
+    Q_UNUSED(args)
+    Q_UNUSED(timeoutMs)
+    Q_UNUSED(cancelRequested)
+    Q_UNUSED(exitCode)
+    stdOut.clear();
+    stdErr.clear();
+    error = QStringLiteral("受限令牌启动仅支持 Windows");
+    return false;
 }
 #endif
 

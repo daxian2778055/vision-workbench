@@ -142,13 +142,44 @@ QString ScriptNode::executePythonScript(const QString &script, const QStringList
     }
     tmpFile.flush();
 
+    auto &policy = ScriptSecurityPolicy::instance();
+
+    // 沙箱开启：以「受限令牌」启动解释器（去特权）。Qt 6.11 起 QProcess 无法
+    // 施加令牌，故走 CreateProcessAsUserW 路径；建立失败即拒绝执行（fail-closed）。
+    if (policy.isSandboxEnabled()) {
+        QStringList restrictedArgs = policy.interpreterFlags(QStringLiteral("Python"));
+        restrictedArgs << tmpFile.fileName();
+        restrictedArgs << args;
+        QString stdOut;
+        QString stdErr;
+        QString runError;
+        int exitCode = -1;
+        const bool ok = policy.runWithRestrictedToken(
+            QStringLiteral("python"), restrictedArgs, policy.maxExecutionMs(),
+            [this]() {
+                FlowExecutor *exec = ownerExecutor();
+                return exec && exec->getState() == ExecutionState::Stopped;
+            },
+            stdOut, stdErr, runError, &exitCode);
+        if (!ok) {
+            m_lastRunFailed = true;
+            return runError;
+        }
+        if (exitCode != 0) {
+            m_lastRunFailed = true;
+        }
+        if (!stdErr.isEmpty()) {
+            return QStringLiteral("STDERR: %1\nSTDOUT: %2").arg(stdErr.trimmed(), stdOut.trimmed());
+        }
+        return stdOut.trimmed();
+    }
+
     QProcess process;
     QStringList processArgs;
-    processArgs << ScriptSecurityPolicy::instance().interpreterFlags(QStringLiteral("Python"));
+    processArgs << policy.interpreterFlags(QStringLiteral("Python"));
     processArgs << tmpFile.fileName();
     processArgs << args;
 
-    auto &policy = ScriptSecurityPolicy::instance();
     process.setProcessEnvironment(policy.buildEnvironment());
     policy.applyProcessSandbox(&process);
     process.start(QStringLiteral("python"), processArgs);
@@ -206,12 +237,42 @@ QString ScriptNode::executeLuaScript(const QString &script, const QStringList &a
     }
     tmpFile.flush();
 
+    auto &policy = ScriptSecurityPolicy::instance();
+
+    // 沙箱开启：同 Python，以「受限令牌」启动 Lua 解释器；失败即拒绝执行（fail-closed）
+    if (policy.isSandboxEnabled()) {
+        QStringList restrictedArgs = policy.interpreterFlags(QStringLiteral("Lua"));
+        restrictedArgs << tmpFile.fileName();
+        restrictedArgs << args;
+        QString stdOut;
+        QString stdErr;
+        QString runError;
+        int exitCode = -1;
+        const bool ok = policy.runWithRestrictedToken(
+            QStringLiteral("lua"), restrictedArgs, policy.maxExecutionMs(),
+            [this]() {
+                FlowExecutor *exec = ownerExecutor();
+                return exec && exec->getState() == ExecutionState::Stopped;
+            },
+            stdOut, stdErr, runError, &exitCode);
+        if (!ok) {
+            m_lastRunFailed = true;
+            return runError;
+        }
+        if (exitCode != 0) {
+            m_lastRunFailed = true;
+        }
+        if (!stdErr.isEmpty()) {
+            return QStringLiteral("STDERR: %1\nSTDOUT: %2").arg(stdErr.trimmed(), stdOut.trimmed());
+        }
+        return stdOut.trimmed();
+    }
+
     QProcess process;
     QStringList processArgs;
     processArgs << tmpFile.fileName();
     processArgs << args;
 
-    auto &policy = ScriptSecurityPolicy::instance();
     process.setProcessEnvironment(policy.buildEnvironment());
     policy.applyProcessSandbox(&process);
     process.start(QStringLiteral("lua"), processArgs);

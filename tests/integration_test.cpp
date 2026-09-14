@@ -59,6 +59,7 @@ private slots:
     void testConditionalBranchSkipClearsStaleOutput();
     void testNestedLoopIterations();
     void testRuntimeStatsCounters();
+    void testRestrictedTokenLaunch();
 
 private:
     FlowScene *m_scene = nullptr;
@@ -445,6 +446,7 @@ void IntegrationTest::testScriptNodeStopCancellable()
     policy.setMaxExecutionMs(30000);
     policy.setAuditLogEnabled(false);
     policy.setBlockWhenElevated(false);
+    policy.setSandboxEnabled(true);   // 强制走受限令牌启动路径
     FlowScene scene;
     FlowExecutor exec;
     exec.setFlowName(QStringLiteral("RegressionScriptCancel"));
@@ -626,6 +628,7 @@ void IntegrationTest::testScriptNodeReportsSuccess()
     policy.setMaxExecutionMs(30000);
     policy.setAuditLogEnabled(false);
     policy.setBlockWhenElevated(false);
+    policy.setSandboxEnabled(true);   // 强制走受限令牌启动路径
 
     FlowScene scene;
     FlowExecutor exec;
@@ -877,6 +880,76 @@ void IntegrationTest::testRuntimeStatsCounters()
         QVERIFY2(summary.contains(QStringLiteral("handles=")), "摘要缺少进程资源字段");
         QVERIFY2(summary.contains(QStringLiteral("failRounds=2")), "摘要缺少失败轮次字段");
     }
+}
+
+void IntegrationTest::testRestrictedTokenLaunch()
+{
+#if !defined(Q_OS_WIN)
+    QSKIP("受限令牌启动仅 Windows 支持");
+#else
+    ScriptSecurityPolicy &policy = ScriptSecurityPolicy::instance();
+    policy.setEnabled(true);
+    policy.setSandboxEnabled(true);
+    policy.setAuditLogEnabled(false);
+
+    // --- 1) 启动 + 输出捕获 + 降权确证（去特权）---
+    // 用 whoami /priv 判定：特权名始终是英文，与系统显示语言无关。
+    // 受限令牌应已剥离全部特权（DISABLE_MAX_PRIVILEGE），只剩 SeChangeNotifyPrivilege。
+    QString out, errOut, error;
+    int code = -1;
+    const bool ok = policy.runWithRestrictedToken(
+        QStringLiteral("cmd"),
+        { QStringLiteral("/c"), QStringLiteral("whoami /priv") },
+        15000,
+        []() { return false; },
+        out, errOut, error, &code);
+
+    QVERIFY2(policy.hasRestrictedToken(), "受限令牌未能创建");
+    QVERIFY2(ok, qPrintable(QStringLiteral("受限令牌启动失败：%1（stderr=%2）").arg(error, errOut)));
+    QCOMPARE(code, 0);
+    QVERIFY2(out.contains(QStringLiteral("SeChangeNotifyPrivilege")),
+             qPrintable(QStringLiteral("子进程未正常执行：%1").arg(out.left(300))));
+    QVERIFY2(!out.contains(QStringLiteral("SeDebugPrivilege")),
+             qPrintable(QStringLiteral("受限令牌仍保留调试特权（去特权失败）：%1").arg(out.left(400))));
+    QVERIFY2(!out.contains(QStringLiteral("SeBackupPrivilege")),
+             qPrintable(QStringLiteral("受限令牌仍保留备份特权（去特权失败）：%1").arg(out.left(400))));
+
+    // --- 2) 取消：长命令应被立即终止 ---
+    QElapsedTimer cancelTimer;
+    cancelTimer.start();
+    QString out2, err2, error2;
+    int code2 = -1;
+    const bool ok2 = policy.runWithRestrictedToken(
+        QStringLiteral("cmd"),
+        { QStringLiteral("/c"), QStringLiteral("ping -n 30 127.0.0.1 > nul") },
+        30000,
+        [&cancelTimer]() { return cancelTimer.elapsed() > 400; },
+        out2, err2, error2, &code2);
+    const qint64 cancelElapsed = cancelTimer.elapsed();
+    QVERIFY2(!ok2, "被取消的脚本不应报告成功");
+    QVERIFY2(error2.contains(QStringLiteral("取消")),
+             qPrintable(QStringLiteral("错误信息未标注取消：%1").arg(error2)));
+    QVERIFY2(cancelElapsed < 5000,
+             qPrintable(QStringLiteral("取消耗时 %1ms，未及时终止").arg(cancelElapsed)));
+
+    // --- 3) 超时：到点必须终止 ---
+    QString out3, err3, error3;
+    int code3 = -1;
+    QElapsedTimer timeoutTimer;
+    timeoutTimer.start();
+    const bool ok3 = policy.runWithRestrictedToken(
+        QStringLiteral("cmd"),
+        { QStringLiteral("/c"), QStringLiteral("ping -n 30 127.0.0.1 > nul") },
+        700,
+        []() { return false; },
+        out3, err3, error3, &code3);
+    const qint64 timeoutElapsed = timeoutTimer.elapsed();
+    QVERIFY2(!ok3, "超时脚本不应报告成功");
+    QVERIFY2(error3.contains(QStringLiteral("超时")),
+             qPrintable(QStringLiteral("错误信息未标注超时：%1").arg(error3)));
+    QVERIFY2(timeoutElapsed < 6000,
+             qPrintable(QStringLiteral("超时耗时 %1ms").arg(timeoutElapsed)));
+#endif
 }
 
 QTEST_MAIN(IntegrationTest)
