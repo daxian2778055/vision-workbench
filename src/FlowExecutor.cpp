@@ -584,13 +584,16 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
             collectNodeOutputVars(node);
         }
 
-        // 为输出数据设置来源信息（仅成功节点写入缓存；失败时清空输出与缓存，避免下游误用上一轮结果，P2）
+        // 为输出数据设置来源信息（仅成功节点写入缓存；失败或本轮无输出时清除缓存，避免下游误用上一轮结果，P2）
         if (success) {
             for (int i = 0; i < node->outputPorts().size(); i++) {
                 QSharedPointer<DataObject> outputData = node->getOutputData(i);
                 if (outputData) {
                     outputData->setSourceInfo(QString("%1 的输出").arg(node->fullName()));
                     m_nodeData[node][i] = outputData;
+                } else {
+                    // 本轮该端口无输出：移除上一轮残留，否则下游会读到旧数据
+                    m_nodeData[node].remove(i);
                 }
             }
         } else {

@@ -257,6 +257,9 @@ void FormulaNode::run(bool /*autoSwitch*/)
     if (evaluate(m_expression, vars, result)) {
         auto obj = QSharedPointer<DataObject>::create(DataObject::DataType::Number, QVariant(result));
         setOutputData(0, obj);
+    } else {
+        // 求值失败：清空输出，避免下游误用上一轮结果（P2）
+        setOutputData(0, QSharedPointer<DataObject>());
     }
 }
 

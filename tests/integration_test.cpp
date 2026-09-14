@@ -15,6 +15,7 @@
 #include "DisplaySinkNode.h"
 #include "LoopNode.h"
 #include "DelayNode.h"
+#include "FormulaNode.h"
 #include "Port.h"
 #include "Connection.h"
 #include <QElapsedTimer>
@@ -46,6 +47,9 @@ private slots:
     void testLoopIterationOrder();
     void testDelayStopCancellable();
     void testDelayPauseResumeKeepsRemaining();
+    void testContinuousSecondRoundClearsStaleData();
+    void testDestroyWhileRunningIsSafe();
+    void testTwoExecutorsIsolation();
 
 private:
     FlowScene *m_scene = nullptr;
@@ -279,6 +283,132 @@ void IntegrationTest::testDelayPauseResumeKeepsRemaining()
     QVERIFY2(finished, "延时流程未在 3 秒内结束");
     QVERIFY2(elapsed >= 1000,
              qPrintable(QStringLiteral("暂停 600ms 后总耗时仅 %1ms，暂停期间仍在消耗延时").arg(elapsed)));
+}
+
+void IntegrationTest::testContinuousSecondRoundClearsStaleData()
+{
+    // 连续两轮：第二轮上游不再产生输出，下游不得读到第一轮残留数据（P2）
+    FlowScene scene;
+    FlowExecutor exec;
+    exec.setFlowName(QStringLiteral("RegressionStaleRound"));
+
+    NodeBase *formula = scene.createNode(NodeBase::LOGIC, QPointF(120, 200), QStringLiteral("Formula"));
+    NodeBase *sink = scene.createNode(NodeBase::LOGIC, QPointF(340, 200), QStringLiteral("Delay"));
+    QVERIFY(formula != nullptr);
+    QVERIFY(sink != nullptr);
+    formula->setParam(QStringLiteral("expression"), QStringLiteral("1 + 2"));
+    sink->setParam(QStringLiteral("delayMs"), 0);
+    QVERIFY2(scene.createConnection(formula->outputPorts().first(),
+                                    sink->inputPorts().first(), true) != nullptr,
+             "无法建立 公式->下游 连线");
+
+    QList<bool> sinkInputPresent;
+    int formulaRounds = 0;
+    const auto connHandle = QObject::connect(
+        &exec, &FlowExecutor::nodeExecuted, &exec,
+        [&](NodeBase *n, bool ok) {
+            if (!ok) return;
+            if (n == formula) {
+                ++formulaRounds;
+                if (formulaRounds == 1) {
+                    // 第二轮改为引用未连接的 p0 → 求值失败，不再产生输出
+                    formula->setParam(QStringLiteral("expression"), QStringLiteral("p0 + 1"));
+                }
+            } else if (n == sink) {
+                sinkInputPresent.append(sink->getInputData(0) != nullptr);
+                if (sinkInputPresent.size() >= 2) {
+                    exec.stopExecution();   // 观察满两轮后结束
+                }
+            }
+        }, Qt::DirectConnection);
+
+    exec.setFlowScene(&scene);
+    exec.setFlowMode(FlowMode::Continuous);
+    exec.startExecution();
+    bool finished = exec.wait(5000);
+    if (!finished) {
+        exec.stopExecution();
+        finished = exec.wait(2000);
+    }
+    QObject::disconnect(connHandle);
+    exec.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+
+    QVERIFY2(finished, "连续流程未在 5 秒内结束");
+    QVERIFY2(sinkInputPresent.size() >= 2,
+             qPrintable(QStringLiteral("未观察到两轮执行，实际 %1 轮").arg(sinkInputPresent.size())));
+    QCOMPARE(sinkInputPresent.at(0), true);    // 第一轮：有输入
+    QCOMPARE(sinkInputPresent.at(1), false);   // 第二轮：不得残留第一轮输入
+}
+
+void IntegrationTest::testDestroyWhileRunningIsSafe()
+{
+    // 运行中销毁执行器：析构应唤醒阻塞节点并等线程真正退出，不得挂起（P1 #4）
+    FlowScene *scene = new FlowScene();
+    FlowExecutor *exec = new FlowExecutor();
+    exec->setFlowName(QStringLiteral("RegressionDestroy"));
+
+    NodeBase *delay = scene->createNode(NodeBase::LOGIC, QPointF(200, 200), QStringLiteral("Delay"));
+    if (delay == nullptr) {
+        delete exec;
+        delete scene;
+        QFAIL("无法创建延时节点");
+    }
+    delay->setParam(QStringLiteral("delayMs"), 5000);
+
+    exec->setFlowScene(scene);
+    exec->setFlowMode(FlowMode::SoftwareTrigger);
+    exec->startExecution();
+    QTest::qWait(300);
+
+    QElapsedTimer t;
+    t.start();
+    delete exec;                 // 销毁：内部 stopExecution + wait
+    const qint64 elapsed = t.elapsed();
+    delete scene;
+    QCoreApplication::processEvents();
+
+    QVERIFY2(elapsed < 2500,
+             qPrintable(QStringLiteral("运行中销毁执行器耗时 %1ms，阻塞节点未被唤醒").arg(elapsed)));
+}
+
+void IntegrationTest::testTwoExecutorsIsolation()
+{
+    // 多流程隔离：停止流程 A 不应影响流程 B 的阻塞等待（E3）
+    FlowScene sceneA;
+    FlowScene sceneB;
+    FlowExecutor execA;
+    FlowExecutor execB;
+    execA.setFlowName(QStringLiteral("RegressionIsolationA"));
+    execB.setFlowName(QStringLiteral("RegressionIsolationB"));
+
+    NodeBase *a = sceneA.createNode(NodeBase::LOGIC, QPointF(200, 200), QStringLiteral("Delay"));
+    NodeBase *b = sceneB.createNode(NodeBase::LOGIC, QPointF(200, 200), QStringLiteral("Delay"));
+    QVERIFY(a != nullptr);
+    QVERIFY(b != nullptr);
+    a->setParam(QStringLiteral("delayMs"), 5000);
+    b->setParam(QStringLiteral("delayMs"), 3000);
+
+    execA.setFlowScene(&sceneA);
+    execB.setFlowScene(&sceneB);
+    execA.setFlowMode(FlowMode::SoftwareTrigger);
+    execB.setFlowMode(FlowMode::SoftwareTrigger);
+
+    execA.startExecution();
+    execB.startExecution();
+    QTest::qWait(200);
+
+    execA.stopExecution();
+    const bool aFinished = execA.wait(2500);
+    QVERIFY2(aFinished, "停止后流程 A 未在 2.5 秒内退出（节点未使用所属执行器取消等待）");
+    QVERIFY2(execB.getState() == ExecutionState::Running,
+             "停止流程 A 影响了流程 B（多流程隔离失效）");
+    const bool bFinished = execB.wait(5000);
+    QVERIFY2(bFinished, "流程 B 未在预期时间内结束");
+
+    execA.setFlowScene(nullptr);
+    execB.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
 }
 
 QTEST_MAIN(IntegrationTest)
