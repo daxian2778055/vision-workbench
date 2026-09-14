@@ -13,10 +13,11 @@ thirdparty/
 .qtcreator/
 .reasonix/
 .agents/
-# .github 默认忽略，但 CI 工作流需要入库（否则无法在 GitHub 上运行）
+# .github 默认忽略；仅放行经过验证的 CI 工作流（避免未验证的脚手架被误触发）
 .github/*
 !.github/workflows/
-!.github/workflows/*.yml
+.github/workflows/*
+!.github/workflows/ci.yml
 
 # ===== 操作系统垃圾文件 =====
 Thumbs.db
