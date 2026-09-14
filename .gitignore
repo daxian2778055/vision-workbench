@@ -13,7 +13,10 @@ thirdparty/
 .qtcreator/
 .reasonix/
 .agents/
-.github/
+# .github 默认忽略，但 CI 工作流需要入库（否则无法在 GitHub 上运行）
+.github/*
+!.github/workflows/
+!.github/workflows/*.yml
 
 # ===== 操作系统垃圾文件 =====
 Thumbs.db
@@ -37,3 +40,6 @@ tools/opencv-4.13.0-windows.exe
 # ===== 临时脚本（含敏感凭据，严禁入库）=====
 .push-*.ps1
 *.push-*.ps1
+
+# ===== CI 运行产物（tools/ci.ps1 生成）=====
+ci-*.log

@@ -1,0 +1,57 @@
+# VisionFlowPlatform CI：构建 + 跑测（调用 tools/ci.ps1）
+#
+# 为什么必须用「自托管 runner」：
+#   本项目依赖 Qt 6.11 + HALCON（商业授权）+ 海康 MVS SDK + thirdparty（OpenCV/ZXing/Tesseract），
+#   这些无法在 GitHub 托管 runner 上安装；且测试需要 dist/VisionFlowPlatform 提供运行时 DLL。
+#
+# runner 前置条件（在自托管机器上准备一次）：
+#   1. Visual Studio 2022（含 C++ 桌面开发工具链）与 CMake；
+#   2. Qt 6.11，且 find_package(Qt6) 可发现（建议设置 CMAKE_PREFIX_PATH，
+#      例如 C:\Qt\6.11.0\msvc2022_64）；
+#   3. HALCON：设置环境变量 HALCONROOT，或安装在 CMakeLists 的默认路径；
+#   4. 仓库内 thirdparty/（OpenCV/ZXing/Tesseract）与 dist/VisionFlowPlatform（运行时 DLL）已就绪；
+#      thirdparty/ 与 dist/ 在 .gitignore 中，需在 runner 上单独放置；
+#   5. 安装 actions/runner 并以标签 [self-hosted, windows] 注册。
+#
+# 若暂时没有自托管 runner，可直接在本机执行同一脚本：
+#   powershell -ExecutionPolicy Bypass -File tools/ci.ps1
+
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    # 需自托管 Windows runner（见文件头说明）
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 90
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 构建并运行全部测试
+        shell: pwsh
+        run: ./tools/ci.ps1 -Config Release
+        # 脚本退出码：0=通过 / 1=构建失败 / 2=测试失败 / 3=环境缺失；
+        # 任一非 0 都会让本步骤失败，从而拦住回归。
+
+      - name: 失败时输出构建日志尾部
+        if: failure()
+        shell: pwsh
+        run: |
+          foreach ($f in @('ci-build.log', 'ci-test.log', 'ci-configure.log')) {
+            if (Test-Path $f) {
+              Write-Host "===== $f (tail) ====="
+              Get-Content $f -Tail 60
+            }
+          }
