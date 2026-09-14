@@ -19,9 +19,12 @@
 #include "ScriptSecurityPolicy.h"
 #include "Port.h"
 #include "Connection.h"
+#include "DataObject.h"
 #include <QElapsedTimer>
 #include <QThread>
 #include <QCoreApplication>
+#include <QTemporaryDir>
+#include <QFile>
 #include <QProcess>
 
 class IntegrationTest : public QObject
@@ -60,6 +63,7 @@ private slots:
     void testNestedLoopIterations();
     void testRuntimeStatsCounters();
     void testRestrictedTokenLaunch();
+    void testEndToEndPipelineSmoke();
 
 private:
     FlowScene *m_scene = nullptr;
@@ -954,6 +958,106 @@ void IntegrationTest::testRestrictedTokenLaunch()
     QVERIFY2(timeoutElapsed < 6000,
              qPrintable(QStringLiteral("超时耗时 %1ms").arg(timeoutElapsed)));
 #endif
+}
+
+void IntegrationTest::testEndToEndPipelineSmoke()
+{
+    // 端到端冒烟：真实图像文件 → 读取图像(HALCON 解码) → OpenCV 二值化 → 独立复核像素结果。
+    // 不依赖相机/PLC，可在 CI 上稳定复现；覆盖 HALCON↔OpenCV 图像桥接这一最易出问题的接缝。
+    QTemporaryDir tmpDir;
+    QVERIFY2(tmpDir.isValid(), "无法创建临时目录");
+    const QString imagePath = tmpDir.filePath(QStringLiteral("vfp_smoke.png"));
+
+    // 夹具：200x200 全黑底 + 居中 60x60 白色方块（白像素数应为 3600）
+    const int imgW = 200;
+    const int imgH = 200;
+    const int sqSize = 60;
+    const int expectedWhite = sqSize * sqSize;
+    {
+        HObject blank;
+        HObject rect;
+        HObject painted;
+        GenImageConst(&blank, "byte", imgW, imgH);
+        const int r1 = (imgH - sqSize) / 2;
+        const int c1 = (imgW - sqSize) / 2;
+        GenRectangle1(&rect, r1, c1, r1 + sqSize - 1, c1 + sqSize - 1);
+        PaintRegion(rect, blank, &painted, 255, "fill");
+        WriteImage(painted, "png", 0, imagePath.toStdString().c_str());
+    }
+    QVERIFY2(QFile::exists(imagePath), "测试图像未生成");
+
+    FlowScene scene;
+    FlowExecutor exec;
+    exec.setFlowName(QStringLiteral("RegressionEndToEnd"));
+
+    NodeBase *reader = scene.createNode(NodeBase::IMAGE_ACQUISITION, QPointF(120, 200),
+                                        QStringLiteral("读取图像"));
+    NodeBase *threshold = scene.createNode(NodeBase::IMAGE_PROCESSING, QPointF(340, 200),
+                                           QStringLiteral("OpenCV二值化"));
+    QVERIFY(reader != nullptr);
+    QVERIFY(threshold != nullptr);
+    reader->setParam(QStringLiteral("filePath"), imagePath);
+    threshold->setParam(QStringLiteral("mode"), 0);      // 固定阈值
+    threshold->setParam(QStringLiteral("minVal"), 128);
+    QVERIFY2(scene.createConnection(reader->outputPorts().first(),
+                                    threshold->inputPorts().first(), true) != nullptr,
+             "无法建立 读取图像->二值化 连线");
+
+    exec.setFlowScene(&scene);
+    exec.setFlowMode(FlowMode::SoftwareTrigger);
+
+    QList<bool> readerRuns;
+    QList<bool> thresholdRuns;
+    const auto connHandle = QObject::connect(
+        &exec, &FlowExecutor::nodeExecuted, &exec,
+        [&](NodeBase *n, bool ok) {
+            if (n == reader) readerRuns.append(ok);
+            if (n == threshold) thresholdRuns.append(ok);
+        }, Qt::DirectConnection);
+
+    auto runOnce = [&exec]() -> bool {
+        exec.startExecution();
+        bool finished = exec.wait(10000);
+        if (!finished) {
+            exec.stopExecution();
+            finished = exec.wait(3000);
+        }
+        return finished;
+    };
+
+    QVERIFY2(runOnce(), "端到端流程第一轮未在 10 秒内结束");
+    QVERIFY2(runOnce(), "端到端流程第二轮未在 10 秒内结束");
+    QObject::disconnect(connHandle);
+
+    const int readerW = reader->getParam(QStringLiteral("imageWidth")).toInt();
+    const int readerH = reader->getParam(QStringLiteral("imageHeight")).toInt();
+    const int fgPixels = threshold->getParam(QStringLiteral("foregroundPixels")).toInt();
+    const bool thresholdSuccess = threshold->executionSuccess();
+
+    // 从二值图输出独立复核白像素数（不依赖节点内部计数）
+    int measuredWhite = -1;
+    QSharedPointer<DataObject> binObj = threshold->getOutputData(1);
+    if (binObj && binObj->getHImage().IsInitialized()) {
+        HObject region;
+        HTuple area, row, col;
+        Threshold(binObj->getHImage(), &region, 128, 255);
+        AreaCenter(region, &area, &row, &col);
+        measuredWhite = area.I();
+    }
+
+    exec.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+
+    QVERIFY2(readerRuns.size() >= 2 && thresholdRuns.size() >= 2,
+             qPrintable(QStringLiteral("未观察到两轮执行：读取=%1 二值化=%2")
+                            .arg(readerRuns.size()).arg(thresholdRuns.size())));
+    QCOMPARE(readerRuns.at(0), true);
+    QCOMPARE(thresholdRuns.at(0), true);
+    QCOMPARE(readerW, imgW);                 // HALCON 确实解码了该文件
+    QCOMPARE(readerH, imgH);
+    QVERIFY2(thresholdSuccess, "二值化节点报告失败");
+    QCOMPARE(fgPixels, expectedWhite);       // 节点内部计数
+    QCOMPARE(measuredWhite, expectedWhite);  // 独立复核输出图像
 }
 
 QTEST_MAIN(IntegrationTest)
