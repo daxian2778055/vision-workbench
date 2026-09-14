@@ -122,8 +122,13 @@ QString ScriptNode::executePythonScript(const QString &script, const QStringList
         return QStringLiteral("\u65E0\u6CD5\u521B\u5EFA\u4E34\u65F6\u811A\u672C\u6587\u4EF6");
     }
 
-    QTextStream out(&tmpFile);
-    out << script;
+    {
+        // QTextStream 自带缓冲区：必须先 flush（或让流析构）再启动解释器，
+        // 否则解释器读到的是空脚本文件（历史缺陷：脚本静默不执行）
+        QTextStream out(&tmpFile);
+        out << script;
+        out.flush();
+    }
     tmpFile.flush();
 
     QProcess process;
@@ -165,8 +170,13 @@ QString ScriptNode::executeLuaScript(const QString &script, const QStringList &a
         return QStringLiteral("\u65E0\u6CD5\u521B\u5EFA\u4E34\u65F6\u811A\u672C\u6587\u4EF6");
     }
 
-    QTextStream out(&tmpFile);
-    out << script;
+    {
+        // QTextStream 自带缓冲区：必须先 flush（或让流析构）再启动解释器，
+        // 否则解释器读到的是空脚本文件（历史缺陷：脚本静默不执行）
+        QTextStream out(&tmpFile);
+        out << script;
+        out.flush();
+    }
     tmpFile.flush();
 
     QProcess process;

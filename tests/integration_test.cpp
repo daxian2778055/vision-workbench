@@ -16,11 +16,13 @@
 #include "LoopNode.h"
 #include "DelayNode.h"
 #include "FormulaNode.h"
+#include "ScriptSecurityPolicy.h"
 #include "Port.h"
 #include "Connection.h"
 #include <QElapsedTimer>
 #include <QThread>
 #include <QCoreApplication>
+#include <QProcess>
 
 class IntegrationTest : public QObject
 {
@@ -50,6 +52,7 @@ private slots:
     void testContinuousSecondRoundClearsStaleData();
     void testDestroyWhileRunningIsSafe();
     void testTwoExecutorsIsolation();
+    void testScriptNodeStopCancellable();
 
 private:
     FlowScene *m_scene = nullptr;
@@ -409,6 +412,62 @@ void IntegrationTest::testTwoExecutorsIsolation()
     execA.setFlowScene(nullptr);
     execB.setFlowScene(nullptr);
     QCoreApplication::processEvents();
+}
+
+void IntegrationTest::testScriptNodeStopCancellable()
+{
+    // 脚本节点阻塞等待应可被停止取消（P1 #4：默认 30s 超时不应阻塞关闭流程）
+    QProcess probe;
+    probe.start(QStringLiteral("python"), { QStringLiteral("-c"), QStringLiteral("pass") });
+    const bool hasPython = probe.waitForStarted(3000) && probe.waitForFinished(5000)
+                           && probe.exitCode() == 0;
+    if (!hasPython) {
+        QSKIP("本机无可用 Python，跳过脚本节点取消测试");
+    }
+
+    // 进程内强制放行（不落盘，避免影响用户配置）
+    ScriptSecurityPolicy &policy = ScriptSecurityPolicy::instance();
+    policy.setEnabled(true);
+    policy.setRequireConfirmation(false);
+    policy.setAllowedLanguages({ QStringLiteral("Python") });
+    policy.setMaxExecutionMs(30000);
+    policy.setAuditLogEnabled(false);
+    policy.setBlockWhenElevated(false);
+    FlowScene scene;
+    FlowExecutor exec;
+    exec.setFlowName(QStringLiteral("RegressionScriptCancel"));
+
+    NodeBase *script = scene.createNode(NodeBase::OUTPUT, QPointF(200, 200), QStringLiteral("Script"));
+    QVERIFY(script != nullptr);
+    script->setParam(QStringLiteral("language"), QStringLiteral("Python"));
+    script->setParam(QStringLiteral("scriptContent"),
+                     QStringLiteral("import time\ntime.sleep(30)\n"));
+
+    exec.setFlowScene(&scene);
+    exec.setFlowMode(FlowMode::SoftwareTrigger);
+    exec.startExecution();
+    QTest::qWait(700);
+    const bool runningBeforeStop = (exec.getState() == ExecutionState::Running);
+
+    QElapsedTimer t;
+    t.start();
+    exec.stopExecution();
+    bool finished = exec.wait(3000);
+    if (!finished) {
+        exec.stopExecution();
+        finished = exec.wait(2000);
+    }
+    const qint64 stopElapsed = t.elapsed();
+    exec.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+
+    if (!runningBeforeStop) {
+        QSKIP(qPrintable(QStringLiteral("脚本未在本环境启动，跳过取消验证（lastOutput=%1）")
+                             .arg(script->getParam(QStringLiteral("lastOutput")).toString())));
+    }
+    QVERIFY2(finished, "停止后执行器线程未退出");
+    QVERIFY2(stopElapsed < 2000,
+             qPrintable(QStringLiteral("停止后耗时 %1ms，脚本阻塞等待未被取消").arg(stopElapsed)));
 }
 
 QTEST_MAIN(IntegrationTest)
