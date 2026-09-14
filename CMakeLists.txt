@@ -70,6 +70,7 @@ set(MVS_LIBRARIES ${MVS_ROOT}/Development/Libraries/win64/MvCameraControl.lib)
 # 源文件
 set(SOURCES
     src/AppLog.cpp
+    src/FlowRuntimeStats.cpp
     src/AppDatabase.cpp
     src/HalconEnvCheck.cpp
     src/HelpDialog.cpp
@@ -250,6 +251,7 @@ set(SOURCES
 
 set(HEADERS
     include/AppLog.h
+    include/FlowRuntimeStats.h
     include/AppDatabase.h
     include/HalconEnvCheck.h
     include/HelpDialog.h
@@ -496,6 +498,7 @@ target_link_libraries(vfp_core PUBLIC
     ${MVS_LIBRARIES}
     ${OpenCV_LIBS}
     dbghelp.lib
+    psapi.lib
 )
 if(TARGET ZXing::ZXing)
     target_link_libraries(vfp_core PUBLIC ZXing::ZXing)

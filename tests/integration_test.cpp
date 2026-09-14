@@ -58,6 +58,7 @@ private slots:
     void testScriptNodeReportsSuccess();
     void testConditionalBranchSkipClearsStaleOutput();
     void testNestedLoopIterations();
+    void testRuntimeStatsCounters();
 
 private:
     FlowScene *m_scene = nullptr;
@@ -779,6 +780,103 @@ void IntegrationTest::testNestedLoopIterations()
     const QList<int> expectedOuter{1, 1, 1, 2, 2, 2};
     QCOMPARE(innerIters, expectedInner);
     QCOMPARE(outerIters, expectedOuter);
+}
+
+void IntegrationTest::testRuntimeStatsCounters()
+{
+    // 运行期统计：轮次 / 节点执行与失败计数 / 进程资源采样（现场长跑观测的基础）
+    // --- 阶段 1：正常流程跑两轮，校验执行计数 ---
+    {
+        FlowScene scene;
+        FlowExecutor exec;
+        exec.setFlowName(QStringLiteral("RegressionStatsOk"));
+        exec.setStatsLogIntervalMs(0);   // 测试内不输出统计日志
+
+        NodeBase *formula = scene.createNode(NodeBase::LOGIC, QPointF(120, 200), QStringLiteral("Formula"));
+        NodeBase *sink = scene.createNode(NodeBase::LOGIC, QPointF(340, 200), QStringLiteral("Delay"));
+        QVERIFY(formula != nullptr);
+        QVERIFY(sink != nullptr);
+        formula->setParam(QStringLiteral("expression"), QStringLiteral("1 + 2"));
+        sink->setParam(QStringLiteral("delayMs"), 0);
+        QVERIFY2(scene.createConnection(formula->outputPorts().first(),
+                                        sink->inputPorts().first(), true) != nullptr,
+                 "无法建立 公式->下游 连线");
+
+        int rounds = 0;
+        const auto h = QObject::connect(
+            &exec, &FlowExecutor::executionFinished, &exec,
+            [&]() { if (++rounds >= 2) exec.stopExecution(); }, Qt::DirectConnection);
+
+        exec.resetRuntimeStats();
+        exec.setFlowScene(&scene);
+        exec.setFlowMode(FlowMode::Continuous);
+        exec.startExecution();
+        bool finished = exec.wait(5000);
+        if (!finished) {
+            exec.stopExecution();
+            finished = exec.wait(2000);
+        }
+        QObject::disconnect(h);
+
+        const FlowRuntimeStats stats = exec.runtimeStats();
+        const QString sinkName = sink->fullName();
+        const QString summary = stats.summary();
+        exec.setFlowScene(nullptr);
+        QCoreApplication::processEvents();
+
+        QVERIFY2(finished, "统计流程未在 5 秒内结束");
+        QVERIFY2(stats.rounds >= 2, qPrintable(QStringLiteral("轮次统计不足：%1").arg(stats.rounds)));
+        QVERIFY2(stats.nodes.contains(sinkName), "缺少下游节点统计");
+        QCOMPARE(stats.nodes.value(sinkName).executions, quint64(2));
+        QCOMPARE(stats.nodes.value(sinkName).failures, quint64(0));
+        QCOMPARE(stats.failedRounds, quint64(0));
+        QVERIFY2(stats.maxRoundMs >= stats.lastRoundMs, "单轮最大耗时应不小于最近一轮耗时");
+        QVERIFY2(!summary.isEmpty(), "统计摘要不应为空");
+    }
+
+    // --- 阶段 2：失败流程（节点无输入必然失败），校验失败计数与进程资源采样 ---
+    {
+        FlowScene scene;
+        FlowExecutor exec;
+        exec.setFlowName(QStringLiteral("RegressionStatsFail"));
+        exec.setStatsLogIntervalMs(0);
+
+        NodeBase *bad = scene.createNode(NodeBase::IMAGE_PROCESSING, QPointF(200, 200),
+                                         QStringLiteral("OpenCV二值化"));
+        QVERIFY(bad != nullptr);
+
+        int rounds = 0;
+        const auto h = QObject::connect(
+            &exec, &FlowExecutor::executionFinished, &exec,
+            [&]() { if (++rounds >= 2) exec.stopExecution(); }, Qt::DirectConnection);
+
+        exec.resetRuntimeStats();
+        exec.setStopOnFailure(false);   // 允许连续两轮以便观察失败累计
+        exec.setFlowScene(&scene);
+        exec.setFlowMode(FlowMode::Continuous);
+        exec.startExecution();
+        bool finished = exec.wait(5000);
+        if (!finished) {
+            exec.stopExecution();
+            finished = exec.wait(2000);
+        }
+        QObject::disconnect(h);
+
+        const FlowRuntimeStats stats = exec.runtimeStats();
+        const QString badName = bad->fullName();
+        const QString summary = stats.summary();
+        exec.setFlowScene(nullptr);
+        QCoreApplication::processEvents();
+
+        QVERIFY2(finished, "失败统计流程未在 5 秒内结束");
+        QVERIFY2(stats.nodes.contains(badName), "缺少失败节点统计");
+        QCOMPARE(stats.nodes.value(badName).failures, quint64(2));
+        QCOMPARE(stats.failedRounds, quint64(2));
+        QVERIFY2(stats.processHandleCount > 0, "进程句柄数采样为 0");
+        QVERIFY2(stats.processWorkingSetBytes > 0, "进程内存采样为 0");
+        QVERIFY2(summary.contains(QStringLiteral("handles=")), "摘要缺少进程资源字段");
+        QVERIFY2(summary.contains(QStringLiteral("failRounds=2")), "摘要缺少失败轮次字段");
+    }
 }
 
 QTEST_MAIN(IntegrationTest)

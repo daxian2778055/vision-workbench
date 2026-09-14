@@ -238,6 +238,10 @@ void FlowExecutor::run()
         
         locker.unlock();
 
+        // 本轮计时（运行期统计用）
+        QElapsedTimer roundTimer;
+        roundTimer.start();
+
         FlowScene *scene = nullptr;
         {
             QMutexLocker sceneLocker(&m_mutex);
@@ -293,6 +297,7 @@ void FlowExecutor::run()
             // 循环体节点由所属 LoopNode 统一调度执行，主遍历不再重复执行（P3）
             if (m_loopBodyNodes.contains(node)) {
                 VFP_EXEC_DEBUG << "Node skipped (loop body, scheduled by LoopNode):" << node->fullName();
+                recordNodeSkipped(node);
                 continue;
             }
             VFP_EXEC_DEBUG << "Executing node:" << node->fullName();
@@ -320,6 +325,7 @@ void FlowExecutor::run()
                 }
                 m_nodeData[node].clear();   // 清空缓存，避免下游误用上一轮数据（E2）
                 m_nodeOutputVars[node->moduleId()].clear();  // 清空变量缓存，避免引用上一轮数值（P2）
+                recordNodeSkipped(node);
                 continue;
             }
             
@@ -359,6 +365,9 @@ void FlowExecutor::run()
             }
         }
         
+        // 轮次统计 + 周期性进程资源采样/日志
+        recordRoundFinished(roundTimer.elapsed());
+
         emit executionFinished();
 
         // 连续模式 / 硬触发模式：自动循环执行（硬触发模式由相机触发帧门控每次循环）
@@ -621,6 +630,15 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
         // 计算节点执行耗时
         qint64 nodeElapsed = nodeTimer.elapsed();
 
+        // 运行期统计：累计节点执行次数 / 失败次数 / 耗时
+        {
+            QMutexLocker statsLocker(&m_statsMutex);
+            m_stats.onNodeExecuted(node->fullName(), success, nodeElapsed);
+        }
+        if (!success) {
+            m_roundHadFailure = true;
+        }
+
         // 发出nodeExecuted信号，通知UI更新
         emit nodeExecuted(node, success);
 
@@ -857,7 +875,10 @@ void FlowExecutor::executeLoop(NodeBase *loopNode, int loopCount)
                 if (m_state == ExecutionState::Stopped) return;
             }
             // 内层循环的循环体由内层 LoopNode 调度，外层跳过（嵌套循环）
-            if (nestedBodyNodes.contains(bn)) continue;
+            if (nestedBodyNodes.contains(bn)) {
+                recordNodeSkipped(bn);
+                continue;
+            }
 
             if (!m_activeNodes.contains(bn)) {
                 // 跳过未激活分支：清空输出与缓存，避免下游误用旧数据（E2/E5/P2）
@@ -865,6 +886,7 @@ void FlowExecutor::executeLoop(NodeBase *loopNode, int loopCount)
                     bn->setOutputData(p, QSharedPointer<DataObject>());
                 m_nodeData[bn].clear();
                 m_nodeOutputVars[bn->moduleId()].clear();
+                recordNodeSkipped(bn);
                 continue;
             }
             executeNode(bn, false);
@@ -965,6 +987,61 @@ void FlowExecutor::resetState()
     m_nodeData.clear();
     m_nodeOutputVars.clear();   // 重新启动清空变量缓存，避免引用上一轮数值（P2）
     m_executionQueue.clear();
+}
+
+FlowRuntimeStats FlowExecutor::runtimeStats() const
+{
+    QMutexLocker locker(&m_statsMutex);
+    FlowRuntimeStats snapshot = m_stats;
+    // 采样放在查询侧：避免每轮都做系统调用，同时保证任何时刻取到的
+    // 句柄数/内存都是查询时刻的值（长跑诊断关心的是"现在多少"）
+    snapshot.sampleProcessResources();
+    return snapshot;
+}
+
+void FlowExecutor::resetRuntimeStats()
+{
+    QMutexLocker locker(&m_statsMutex);
+    m_stats.reset();
+}
+
+void FlowExecutor::setStatsLogIntervalMs(int ms)
+{
+    QMutexLocker locker(&m_statsMutex);
+    m_statsLogIntervalMs = qMax(0, ms);
+}
+
+void FlowExecutor::recordNodeSkipped(NodeBase *node)
+{
+    if (!node) {
+        return;
+    }
+    QMutexLocker locker(&m_statsMutex);
+    m_stats.onNodeSkipped(node->fullName());
+}
+
+void FlowExecutor::recordRoundFinished(qint64 roundMs)
+{
+    const bool hadFailure = m_roundHadFailure;
+    m_roundHadFailure = false;
+
+    bool shouldLog = false;
+    QString line;
+    {
+        QMutexLocker locker(&m_statsMutex);
+        m_stats.onRoundFinished(roundMs, hadFailure);
+        // 首个轮次立即输出一条（便于确认埋点生效），之后按间隔节流
+        if (m_statsLogIntervalMs > 0
+            && (!m_statsLogTimer.isValid() || m_statsLogTimer.elapsed() >= m_statsLogIntervalMs)) {
+            m_stats.sampleProcessResources();
+            m_statsLogTimer.start();
+            line = m_stats.summary();
+            shouldLog = true;
+        }
+    }
+    if (shouldLog) {
+        VFP_RUNTIME_INFO.noquote() << QStringLiteral("runtime stats:") << line;
+    }
 }
 
 bool FlowExecutor::interruptibleSleep(int ms)

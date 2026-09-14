@@ -9,9 +9,11 @@
 #include <QSharedPointer>
 #include <QSet>
 #include <QList>
+#include <QElapsedTimer>
 #include <atomic>
 #include <algorithm>
 #include <halconcpp/HalconCpp.h>
+#include "FlowRuntimeStats.h"
 
 class FlowScene;
 class NodeBase;
@@ -85,6 +87,14 @@ public:
     /// 连续/硬触发循环节拍间隔（ms），0 表示无额外限速（按相机/触发事件驱动，E6）
     void setLoopIntervalMs(int ms) { m_loopIntervalMs = qMax(0, ms); }
 
+    // ---- 运行期统计（现场长跑诊断：轮次/耗时/失败/句柄/内存）----
+    /// 取统计快照（线程安全；返回前会采样一次进程句柄数/内存，故资源字段为查询时刻值）
+    FlowRuntimeStats runtimeStats() const;
+    /// 清零统计（例如开始长跑观测前调用）
+    void resetRuntimeStats();
+    /// 统计日志间隔（ms），0=不输出；默认 60000（首轮立即输出一条便于确认埋点生效）
+    void setStatsLogIntervalMs(int ms);
+
     /// 执行从源节点到 endNode（含）的上游链路（空闲时同步执行，供右键调试）
     void executeUpTo(NodeBase *endNode);
     /// 执行从 startNode（含）到末端的下游链路
@@ -130,6 +140,10 @@ private:
     /// 识别循环体节点（按缓存拓扑序）
     QList<NodeBase *> collectLoopBody(NodeBase *loopNode) const;
     void resetState();
+    /// 记录一个节点被跳过（未激活分支 / 循环体由外层调度）
+    void recordNodeSkipped(NodeBase *node);
+    /// 轮次结束：累计轮次统计，并按间隔采样进程资源 + 输出统计日志
+    void recordRoundFinished(qint64 roundMs);
     void disconnectFromScene();
     void connectToScene(FlowScene *scene);
     /// 从场景构建「目标节点 -> 入边」索引（配合跨 run 缓存，图未变则跳过）
@@ -149,6 +163,12 @@ private:
     bool m_stopOnFailure = true;   /// 节点失败时停止流程（对标 VisionMaster 默认行为）
     bool m_stepMode = false;       /// 单步执行模式（每执行一个节点后暂停）
     int m_loopIntervalMs = 0;      /// 连续/硬触发循环节拍间隔（ms），0=无额外限速（E6）
+    /// 运行期统计（跨轮累计）
+    FlowRuntimeStats m_stats;
+    mutable QMutex m_statsMutex;      /// 统计读写锁（执行线程写 / 界面线程读）
+    QElapsedTimer m_statsLogTimer;    /// 统计日志节流
+    int m_statsLogIntervalMs = 60000; /// 统计日志间隔（ms），0=不输出
+    bool m_roundHadFailure = false;   /// 本轮是否出现失败节点（仅执行线程访问）
     QString m_flowName;            /// 流程名称
     mutable QMutex m_mutex;
     QWaitCondition m_waitCondition;
