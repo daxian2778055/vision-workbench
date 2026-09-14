@@ -55,6 +55,7 @@ private slots:
     void testScriptNodeStopCancellable();
     void testExecutorReuseAcrossScenesWithLoop();
     void testLoopAddedToSameSceneIsDetected();
+    void testScriptNodeReportsSuccess();
 
 private:
     FlowScene *m_scene = nullptr;
@@ -603,6 +604,51 @@ void IntegrationTest::testLoopAddedToSameSceneIsDetected()
     QCOMPARE(bodyRuns.size(), qsizetype(3));   // 漏登记会重复执行成 4 次
     const QList<int> expectedIterations{1, 2, 3};
     QCOMPARE(seenIterations, expectedIterations);
+}
+
+void IntegrationTest::testScriptNodeReportsSuccess()
+{
+    // 脚本节点正常跑完应报告成功并返回解释器输出；
+    // 否则默认的“失败时停止”会把整条流程误停
+    QProcess probe;
+    probe.start(QStringLiteral("python"), { QStringLiteral("-c"), QStringLiteral("pass") });
+    if (!(probe.waitForStarted(3000) && probe.waitForFinished(5000) && probe.exitCode() == 0)) {
+        QSKIP("本机无可用 Python，跳过脚本节点成功状态测试");
+    }
+
+    ScriptSecurityPolicy &policy = ScriptSecurityPolicy::instance();
+    policy.setEnabled(true);
+    policy.setRequireConfirmation(false);
+    policy.setAllowedLanguages({ QStringLiteral("Python") });
+    policy.setMaxExecutionMs(30000);
+    policy.setAuditLogEnabled(false);
+    policy.setBlockWhenElevated(false);
+
+    FlowScene scene;
+    FlowExecutor exec;
+    exec.setFlowName(QStringLiteral("RegressionScriptSuccess"));
+
+    NodeBase *script = scene.createNode(NodeBase::OUTPUT, QPointF(200, 200), QStringLiteral("Script"));
+    QVERIFY(script != nullptr);
+    script->setParam(QStringLiteral("language"), QStringLiteral("Python"));
+    script->setParam(QStringLiteral("scriptContent"), QStringLiteral("print('vfp-script-ok')\n"));
+
+    exec.setFlowScene(&scene);
+    exec.setFlowMode(FlowMode::SoftwareTrigger);
+    exec.startExecution();
+    bool finished = exec.wait(15000);
+    if (!finished) {
+        exec.stopExecution();
+        finished = exec.wait(3000);
+    }
+    const bool nodeOk = script->executionSuccess();
+    const QString lastOutput = script->getParam(QStringLiteral("lastOutput")).toString().trimmed();
+    exec.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+
+    QVERIFY2(finished, "脚本流程未在 15 秒内结束");
+    QVERIFY2(nodeOk, "脚本正常执行完却报告失败（moduleStatus 未置位，会误停流程）");
+    QCOMPARE(lastOutput, QStringLiteral("vfp-script-ok"));
 }
 
 QTEST_MAIN(IntegrationTest)

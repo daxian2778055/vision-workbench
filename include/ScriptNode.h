@@ -25,4 +25,7 @@ private:
     QString executeLuaScript(const QString &script, const QStringList &args);
     /// 可取消等待脚本进程结束：周期性轮询，流程被停止时立即终止进程并返回（P4）
     bool waitCancellable(QProcess &process, int maxMs, QString &errOut);
+
+    /// 最近一次执行是否失败（启动失败/超时/取消/沙箱不可用/解释器非正常退出）
+    bool m_lastRunFailed = false;
 };

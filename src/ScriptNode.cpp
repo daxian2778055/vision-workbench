@@ -42,10 +42,13 @@ void ScriptNode::init()
 void ScriptNode::run(bool /*autoSwitch*/)
 {
     m_params[QStringLiteral("lastOutput")] = QString();
+    m_params[QStringLiteral("moduleStatus")] = false;
+    m_lastRunFailed = false;
 
     QString script = m_params.value(QStringLiteral("scriptContent")).toString();
     if (script.isEmpty()) {
         m_params[QStringLiteral("lastOutput")] = QStringLiteral("\u811A\u672C\u5185\u5BB9\u4E3A\u7A7A");
+        m_lastRunFailed = true;
         m_outputImage = m_inputImage;
         return;
     }
@@ -59,12 +62,14 @@ void ScriptNode::run(bool /*autoSwitch*/)
         if (!policy.evaluate(lang, script, denyReason)) {
             policy.audit(lang, script, false, denyReason);
             m_params[QStringLiteral("lastOutput")] = denyReason;
+            m_lastRunFailed = true;
             m_outputImage = m_inputImage;
             return;
         }
         if (!policy.requestConfirmation(lang, script)) {
             policy.audit(lang, script, false, QStringLiteral("用户取消了脚本执行"));
             m_params[QStringLiteral("lastOutput")] = QStringLiteral("用户取消了脚本执行");
+            m_lastRunFailed = true;
             m_outputImage = m_inputImage;
             return;
         }
@@ -78,6 +83,7 @@ void ScriptNode::run(bool /*autoSwitch*/)
         output = executeLuaScript(script, args);
     } else {
         output = QStringLiteral("\u4E0D\u652F\u6301\u7684\u811A\u672C\u8BED\u8A00: %1").arg(lang);
+        m_lastRunFailed = true;
     }
 
     m_params[QStringLiteral("lastOutput")] = output;
@@ -88,6 +94,10 @@ void ScriptNode::run(bool /*autoSwitch*/)
         outObj->setHImage(m_outputImage);
         setOutputData(0, outObj);
     }
+
+    // 只有解释器正常执行完才算成功。此前 run() 从不置位 moduleStatus，
+    // 导致本节点恒报失败，默认的“失败时停止”会把含脚本节点的流程误停（P1）
+    m_params[QStringLiteral("moduleStatus")] = !m_lastRunFailed;
 }
 
 bool ScriptNode::waitCancellable(QProcess &process, int maxMs, QString &errOut)
@@ -119,6 +129,7 @@ QString ScriptNode::executePythonScript(const QString &script, const QStringList
 {
     QTemporaryFile tmpFile;
     if (!tmpFile.open()) {
+        m_lastRunFailed = true;
         return QStringLiteral("\u65E0\u6CD5\u521B\u5EFA\u4E34\u65F6\u811A\u672C\u6587\u4EF6");
     }
 
@@ -142,6 +153,7 @@ QString ScriptNode::executePythonScript(const QString &script, const QStringList
     policy.applyProcessSandbox(&process);
     process.start(QStringLiteral("python"), processArgs);
     if (!process.waitForStarted(5000)) {
+        m_lastRunFailed = true;
         return QStringLiteral("Python \u672A\u627E\u5230\u6216\u65E0\u6CD5\u542F\u52A0");
     }
 
@@ -151,14 +163,21 @@ QString ScriptNode::executePythonScript(const QString &script, const QStringList
         process.waitForFinished(2000);
         policy.audit(QStringLiteral("Python"), script, false,
                      QStringLiteral("进程沙箱不可用（Job Object 建立失败）"));
+        m_lastRunFailed = true;
         return QStringLiteral("进程沙箱不可用，已拒绝执行脚本");
     }
 
     QString waitErr;
     if (!waitCancellable(process, policy.maxExecutionMs(), waitErr)) {
+        m_lastRunFailed = true;
         return waitErr;
     }
     policy.closeJob(&process);
+
+    // 解释器非正常退出（语法错误/被终止等）视为执行失败
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+        m_lastRunFailed = true;
+    }
 
     QString stdOut = QString::fromLocal8Bit(process.readAllStandardOutput());
     QString stdErr = QString::fromLocal8Bit(process.readAllStandardError());
@@ -174,6 +193,7 @@ QString ScriptNode::executeLuaScript(const QString &script, const QStringList &a
 {
     QTemporaryFile tmpFile;
     if (!tmpFile.open()) {
+        m_lastRunFailed = true;
         return QStringLiteral("\u65E0\u6CD5\u521B\u5EFA\u4E34\u65F6\u811A\u672C\u6587\u4EF6");
     }
 
@@ -196,6 +216,7 @@ QString ScriptNode::executeLuaScript(const QString &script, const QStringList &a
     policy.applyProcessSandbox(&process);
     process.start(QStringLiteral("lua"), processArgs);
     if (!process.waitForStarted(5000)) {
+        m_lastRunFailed = true;
         return QStringLiteral("Lua \u672A\u627E\u5230\u6216\u65E0\u6CD5\u542F\u52A8");
     }
 
@@ -205,14 +226,21 @@ QString ScriptNode::executeLuaScript(const QString &script, const QStringList &a
         process.waitForFinished(2000);
         policy.audit(QStringLiteral("Lua"), script, false,
                      QStringLiteral("进程沙箱不可用（Job Object 建立失败）"));
+        m_lastRunFailed = true;
         return QStringLiteral("进程沙箱不可用，已拒绝执行脚本");
     }
 
     QString waitErr;
     if (!waitCancellable(process, policy.maxExecutionMs(), waitErr)) {
+        m_lastRunFailed = true;
         return waitErr;
     }
     policy.closeJob(&process);
+
+    // 解释器非正常退出（语法错误/被终止等）视为执行失败
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+        m_lastRunFailed = true;
+    }
 
     QString stdOut = QString::fromLocal8Bit(process.readAllStandardOutput());
     QString stdErr = QString::fromLocal8Bit(process.readAllStandardError());
