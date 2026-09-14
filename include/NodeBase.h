@@ -19,6 +19,7 @@
 class Port;
 class DataObject;
 class FlowScene;
+class FlowExecutor;   // 前向声明：仅以指针持有，避免与 FlowExecutor.h 循环依赖
 
 class NodeBase : public QObject
 {
@@ -113,10 +114,16 @@ public:
     void setFlowSceneRef(FlowScene *scene) { m_flowSceneRef = scene; }
     FlowScene *flowSceneRef() const { return m_flowSceneRef; }
 
+    /// 所属执行器（多流程隔离：节点查询运行状态应走 owner，而非全局 current()）
+    void setOwnerExecutor(FlowExecutor *exec) { m_ownerExecutor = exec; }
+    FlowExecutor *ownerExecutor() const { return m_ownerExecutor; }
+
     // 模块ID分配/回收（删除节点时释放ID，新建节点时复用）
     static int allocateModuleId();
     static void releaseModuleId(int id);
 
 protected:
     FlowScene *m_flowSceneRef = nullptr;
+    /// 所属执行器（多流程隔离：节点查询运行状态应走 owner，而非全局 current()）
+    FlowExecutor *m_ownerExecutor = nullptr;
 };

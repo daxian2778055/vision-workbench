@@ -141,6 +141,8 @@ void FlowExecutor::pauseExecution()
     QMutexLocker locker(&m_mutex);
     if (m_state == ExecutionState::Running) {
         m_state = ExecutionState::Paused;
+        // 唤醒正在可取消等待中的阻塞节点（延时等），使其停止计时并等待恢复（P5）
+        m_waitCondition.wakeAll();
         emit executionPaused();
     }
 }
@@ -281,6 +283,11 @@ void FlowExecutor::run()
 
         for (int i = 0; i < sortedNodes.size(); i++) {
             NodeBase *node = sortedNodes[i];
+            // 循环体节点由所属 LoopNode 统一调度执行，主遍历不再重复执行（P3）
+            if (m_loopBodyNodes.contains(node)) {
+                VFP_EXEC_DEBUG << "Node skipped (loop body, scheduled by LoopNode):" << node->fullName();
+                continue;
+            }
             VFP_EXEC_DEBUG << "Executing node:" << node->fullName();
             locker.relock();
             if (m_state == ExecutionState::Stopped) {
@@ -304,6 +311,8 @@ void FlowExecutor::run()
                 for (int p = 0; p < node->outputPorts().size(); ++p) {
                     node->setOutputData(p, QSharedPointer<DataObject>());
                 }
+                m_nodeData[node].clear();   // 清空缓存，避免下游误用上一轮数据（E2）
+                m_nodeOutputVars[node->moduleId()].clear();  // 清空变量缓存，避免引用上一轮数值（P2）
                 continue;
             }
             
@@ -311,16 +320,14 @@ void FlowExecutor::run()
             // 执行后激活下游（条件节点仅激活被选中分支）
             activateDownstream(node);
 
-            // 循环执行：LoopNode 设置 loopCount>1 时重复执行下游循环体
-            if (qobject_cast<LoopNode *>(node)) {
-                const int cnt = node->getParam(QStringLiteral("loopCount")).toInt();
-                if (cnt > 1) {
-                    runLoopBody(node, cnt - 1);
-                    if (!m_lastNodeSuccess && m_stopOnFailure) {
-                        QMutexLocker fl(&m_mutex);
-                        m_state = ExecutionState::Stopped;
-                        break;
-                    }
+            // 循环执行：由 LoopNode 统一调度全部迭代（1..loopCount），主遍历已跳过循环体节点（P3）
+            if (LoopNode *loopNode = qobject_cast<LoopNode *>(node)) {
+                const int cnt = qMax(1, node->getParam(QStringLiteral("loopCount")).toInt());
+                executeLoop(loopNode, cnt);
+                if (!m_lastNodeSuccess && m_stopOnFailure) {
+                    QMutexLocker fl(&m_mutex);
+                    m_state = ExecutionState::Stopped;
+                    break;
                 }
             }
 
@@ -378,7 +385,10 @@ void FlowExecutor::run()
                 }
             }
 
-            QThread::msleep(50); // 防止CPU满载
+            // 连续/硬触发：按可配置节拍调度（默认 0，由相机/触发事件驱动），不再固定限速（E6）
+            if (m_loopIntervalMs > 0) {
+                QThread::msleep(static_cast<unsigned long>(m_loopIntervalMs));
+            }
             continue;
         }
         break;
@@ -443,6 +453,17 @@ void FlowExecutor::rebuildIncomingIndex(FlowScene *scene)
         NodeBase *src = conn->getSourceNode();
         if (src) {
             m_outgoing[src].append(conn);
+        }
+    }
+
+    // 识别全部循环体节点（供主遍历跳过，统一由 LoopNode 调度执行，P3）
+    m_loopBodyNodes.clear();
+    const QList<NodeBase *> bodySeed = m_cachedSortedNodes.isEmpty() ? scene->nodes() : m_cachedSortedNodes;
+    for (NodeBase *n : bodySeed) {
+        if (LoopNode *ln = qobject_cast<LoopNode *>(n)) {
+            for (NodeBase *bn : collectLoopBody(ln)) {
+                m_loopBodyNodes.insert(bn);
+            }
         }
     }
 }
@@ -528,9 +549,15 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
         return;
     }
 
+    // 多流程隔离：把所属执行器上下文交给节点，供其查询运行状态（E3）
+    node->setOwnerExecutor(this);
+
     bool success = false;
     QElapsedTimer nodeTimer;
     nodeTimer.start();
+
+    // 参数引用解析备份：仅本轮临时替换为解析值，执行后还原表达式，避免永久写回（E1）
+    QList<QPair<QString, QString>> paramRefBackups;
 
     try {
         // 执行当前选中的算子
@@ -544,6 +571,7 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
             if (v.typeId() == QMetaType::QString) {
                 const QString s = v.toString();
                 if (s.contains(QLatin1Char('{')) && s.contains(QLatin1Char('}'))) {
+                    paramRefBackups.append(qMakePair(k, s));
                     node->setParam(k, resolveParamRefs(s));
                 }
             }
@@ -556,13 +584,20 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
             collectNodeOutputVars(node);
         }
 
-        // 为输出数据设置来源信息
-        for (int i = 0; i < node->outputPorts().size(); i++) {
-            QSharedPointer<DataObject> outputData = node->getOutputData(i);
-            if (outputData) {
-                outputData->setSourceInfo(QString("%1 的输出").arg(node->fullName()));
-                m_nodeData[node][i] = outputData;
+        // 为输出数据设置来源信息（仅成功节点写入缓存；失败时清空输出与缓存，避免下游误用上一轮结果，P2）
+        if (success) {
+            for (int i = 0; i < node->outputPorts().size(); i++) {
+                QSharedPointer<DataObject> outputData = node->getOutputData(i);
+                if (outputData) {
+                    outputData->setSourceInfo(QString("%1 的输出").arg(node->fullName()));
+                    m_nodeData[node][i] = outputData;
+                }
             }
+        } else {
+            for (int p = 0; p < node->outputPorts().size(); ++p)
+                node->setOutputData(p, QSharedPointer<DataObject>());
+            m_nodeData[node].clear();
+            m_nodeOutputVars[node->moduleId()].clear();
         }
 
         // 计算节点执行耗时
@@ -650,6 +685,12 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
         emit nodeExecuted(node, false);
         m_lastNodeSuccess = false;
     }
+
+    // 还原参数表达式，确保下一轮重新解析上游最新值（E1）
+    for (const auto &b : paramRefBackups) {
+        node->setParam(b.first, b.second);
+    }
+
     m_lastNodeSuccess = success;
 }
 
@@ -735,20 +776,71 @@ QString FlowExecutor::resolveParamRefs(const QString &raw) const
     return out;
 }
 
-void FlowExecutor::runLoopBody(NodeBase *loopNode, int extraRuns)
+void FlowExecutor::executeLoop(NodeBase *loopNode, int loopCount)
 {
     const QList<NodeBase *> body = collectLoopBody(loopNode);
     if (body.isEmpty()) return;
-    for (int run = 0; run < extraRuns; ++run) {
-        // 循环迭代变量：主循环第 1 次执行 iteration=1，此处更新为 2..loopCount
+
+    QSet<NodeBase *> bodySet(body.begin(), body.end());
+
+    // 统一调度全部迭代（1..loopCount），循环体内节点看到的迭代号为 1,2,...,loopCount（P3）
+    for (int iter = 1; iter <= loopCount; ++iter) {
+        // 迭代变量
         // （循环体内节点可经 {循环模块号.iteration} 引用当前次数）
-        loopNode->setParam(QStringLiteral("iteration"), run + 2);
-        m_nodeOutputVars[loopNode->moduleId()][QStringLiteral("iteration")] = run + 2;
+        loopNode->setParam(QStringLiteral("iteration"), iter);
+        m_nodeOutputVars[loopNode->moduleId()][QStringLiteral("iteration")] = iter;
+
+        // 重新评估循环体激活集合：尊重条件分支，每轮重算（E5/P3）
+        for (NodeBase *bn : body) m_activeNodes.remove(bn);
+        // 激活入口：循环节点的直接下游，以及由循环体外部输入驱动的节点
+        const auto outIt = m_outgoing.constFind(loopNode);
+        if (outIt != m_outgoing.cend()) {
+            for (MyProject::Connection *c : *outIt) {
+                NodeBase *dst = c ? c->getDestinationNode() : nullptr;
+                if (dst) m_activeNodes.insert(dst);
+            }
+        }
         for (NodeBase *bn : body) {
-            // 循环体节点强制激活（不依赖条件分支状态）
-            m_activeNodes.insert(bn);
+            const auto incIt = m_incoming.constFind(bn);
+            if (incIt == m_incoming.cend()) continue;
+            bool externalIn = false;
+            for (MyProject::Connection *c : *incIt) {
+                NodeBase *src = c ? c->getSourceNode() : nullptr;
+                if (src && !bodySet.contains(src)) { externalIn = true; break; }
+            }
+            if (externalIn) m_activeNodes.insert(bn);
+        }
+
+        // 迭代开始：暂停 / 停止检查（P5 取消语义）
+        {
+            QMutexLocker l(&m_mutex);
+            if (m_state == ExecutionState::Stopped) return;
+            while (m_state == ExecutionState::Paused) m_waitCondition.wait(&m_mutex);
+            if (m_state == ExecutionState::Stopped) return;
+        }
+
+        for (NodeBase *bn : body) {
+            // 每个循环体节点边界处理暂停（P5）
+            {
+                QMutexLocker l(&m_mutex);
+                if (m_state == ExecutionState::Stopped) return;
+                while (m_state == ExecutionState::Paused) m_waitCondition.wait(&m_mutex);
+                if (m_state == ExecutionState::Stopped) return;
+            }
+            if (!m_activeNodes.contains(bn)) {
+                // 跳过未激活分支：清空输出与缓存，避免下游误用旧数据（E2/E5/P2）
+                for (int p = 0; p < bn->outputPorts().size(); ++p)
+                    bn->setOutputData(p, QSharedPointer<DataObject>());
+                m_nodeData[bn].clear();
+                m_nodeOutputVars[bn->moduleId()].clear();
+                continue;
+            }
             executeNode(bn, false);
             activateDownstream(bn);
+            {
+                QMutexLocker l(&m_mutex);
+                if (m_state == ExecutionState::Stopped) return;
+            }
             if (!m_lastNodeSuccess && m_stopOnFailure) {
                 {
                     QMutexLocker failLocker(&m_mutex);
@@ -825,16 +917,39 @@ void FlowExecutor::propagateData(NodeBase *node)
 
         if (data) {
             data->setSourceInfo(QString("%1 的输出").arg(sourceNode->fullName()));
-            m_nodeData[node][destPort] = data;
-            node->setInputData(destPort, data);
         }
+        // 显式传播（含空值）：每轮覆盖下游旧输入，避免上一轮数据进入本轮检测（E2）
+        m_nodeData[node][destPort] = data;
+        node->setInputData(destPort, data);
     }
 }
 
 void FlowExecutor::resetState()
 {
     m_nodeData.clear();
+    m_nodeOutputVars.clear();   // 重新启动清空变量缓存，避免引用上一轮数值（P2）
     m_executionQueue.clear();
+}
+
+bool FlowExecutor::interruptibleSleep(int ms)
+{
+    if (ms <= 0) return true;
+    QMutexLocker locker(&m_mutex);
+    if (m_state == ExecutionState::Stopped) return false;
+    // 可取消等待：维护剩余时间，暂停期间不消耗延时预算，避免恢复时提前结束（E4/P5）
+    qint64 remaining = ms;
+    while (remaining > 0) {
+        if (m_state == ExecutionState::Stopped) return false;
+        if (m_state == ExecutionState::Paused) {
+            m_waitCondition.wait(&m_mutex);  // 暂停时一直等待，直到恢复唤醒
+            continue;                        // 不扣减 remaining（暂停时间不计入延时）
+        }
+        QElapsedTimer t;
+        t.start();
+        m_waitCondition.wait(&m_mutex, remaining);
+        remaining -= t.elapsed();            // 仅扣减实际等待时间
+    }
+    return true;
 }
 
 void FlowExecutor::executeUpTo(NodeBase *endNode)

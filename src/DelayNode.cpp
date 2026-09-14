@@ -2,6 +2,7 @@
 #include "DataObject.h"
 #include "Port.h"
 #include "PortDataType.h"
+#include "FlowExecutor.h"
 #include <QVBoxLayout>
 #include <QLabel>
 #include <QSignalBlocker>
@@ -31,7 +32,12 @@ bool DelayNode::process()
 void DelayNode::run(bool /*autoSwitch*/)
 {
     if (m_delayMs > 0) {
-        QThread::msleep(static_cast<unsigned long>(m_delayMs));
+        // 可取消等待：若所属执行器已停止/暂停，立即唤醒返回（E4）
+        if (FlowExecutor *exec = ownerExecutor()) {
+            exec->interruptibleSleep(static_cast<int>(m_delayMs));
+        } else {
+            QThread::msleep(static_cast<unsigned long>(m_delayMs));
+        }
     }
     // 数据透传
     auto input = getInputData(0);

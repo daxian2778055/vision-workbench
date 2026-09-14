@@ -201,16 +201,11 @@ void ScriptSecurityPolicy::applyProcessSandbox(QProcess *proc)
     if (!m_sandboxEnabled) {
         return;
     }
-    ensureRestrictedToken();
-    if (!m_restrictedToken) {
-        qWarning() << "[ScriptSecurityPolicy] 受限令牌不可用，脚本子进程将不降权运行";
-        return;
-    }
-    proc->setCreateProcessArgumentsModifier([this](QProcess::CreateProcessArguments *args) {
-        // 脱离父作业，使子进程可被关入我们自己的 Job Object
+    // Qt 6.11 起 QProcess::CreateProcessArguments 不再提供 token 成员，
+    // 因此无法通过 QProcess 钩子施加受限令牌（去特权/低完整性）降权；
+    // 保留 CREATE_BREAKAWAY_FROM_JOB，子进程仍可脱离父作业并被纳入本进程 Job Object（父退出即终止子进程）。
+    proc->setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments *args) {
         args->flags |= CREATE_BREAKAWAY_FROM_JOB;
-        // 以受限令牌启动解释器（去特权 + 管理员 SID deny-only + 低完整性）
-        args->token = reinterpret_cast<HANDLE>(m_restrictedToken);
     });
 #else
     Q_UNUSED(proc)

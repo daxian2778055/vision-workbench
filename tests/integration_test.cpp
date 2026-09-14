@@ -13,8 +13,13 @@
 #include "OpencvBlobNode.h"
 #include "ImageReadNode.h"
 #include "DisplaySinkNode.h"
+#include "LoopNode.h"
+#include "DelayNode.h"
 #include "Port.h"
 #include "Connection.h"
+#include <QElapsedTimer>
+#include <QThread>
+#include <QCoreApplication>
 
 class IntegrationTest : public QObject
 {
@@ -36,6 +41,11 @@ private slots:
 
     // 性能测试
     void testExecutionTime();
+
+    // 回归测试（复审 P1/P2）
+    void testLoopIterationOrder();
+    void testDelayStopCancellable();
+    void testDelayPauseResumeKeepsRemaining();
 
 private:
     FlowScene *m_scene = nullptr;
@@ -150,6 +160,125 @@ void IntegrationTest::testExecutionTime()
              qPrintable(QString("100次执行耗时 %1ms，超过10秒").arg(elapsed)));
 
     qDebug() << "100次阈值执行耗时:" << elapsed << "ms，平均:" << elapsed / 100.0 << "ms";
+}
+
+// ===== 回归测试（复审 P1/P2）=====
+
+void IntegrationTest::testLoopIterationOrder()
+{
+    // 循环体应完整执行 loopCount 次，且迭代号为 1,2,3（而非旧实现的 2,3,3）
+    // 使用本测试私有的场景与执行器，避免与其它用例共享状态
+    FlowScene scene;
+    FlowExecutor exec;
+    exec.setFlowName(QStringLiteral("RegressionLoopIteration"));
+
+    NodeBase *loop = scene.createNode(NodeBase::LOGIC, QPointF(100, 200), QStringLiteral("Loop"));
+    NodeBase *body = scene.createNode(NodeBase::LOGIC, QPointF(320, 200), QStringLiteral("Delay"));
+    QVERIFY2(loop != nullptr, "无法创建循环节点");
+    QVERIFY2(body != nullptr, "无法创建延时节点（循环体）");
+    loop->setParam(QStringLiteral("loopCount"), 3);
+    body->setParam(QStringLiteral("delayMs"), 0);
+
+    QVERIFY2(!loop->outputPorts().isEmpty(), "循环节点无输出端口");
+    QVERIFY2(!body->inputPorts().isEmpty(), "循环体节点无输入端口");
+    MyProject::Connection *conn = scene.createConnection(loop->outputPorts().first(),
+                                                         body->inputPorts().first(), true);
+    QVERIFY2(conn != nullptr, "无法建立 循环->循环体 连线");
+
+    QList<int> seenIterations;
+    QList<NodeBase *> bodyRuns;
+    const auto connHandle = QObject::connect(
+        &exec, &FlowExecutor::nodeExecuted, &exec,
+        [&](NodeBase *n, bool ok) {
+            if (ok && n == body) {
+                bodyRuns.append(n);
+                seenIterations.append(loop->getParam(QStringLiteral("iteration")).toInt());
+            }
+        }, Qt::DirectConnection);
+
+    exec.setFlowScene(&scene);
+    exec.setFlowMode(FlowMode::SoftwareTrigger);
+    exec.startExecution();
+    bool finished = exec.wait(10000);
+    if (!finished) {
+        exec.stopExecution();
+        finished = exec.wait(3000);
+    }
+    QObject::disconnect(connHandle);
+    // 先解绑并投递挂起信号，确保节点析构前不再被访问
+    exec.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+
+    QVERIFY2(finished, "循环流程未在 10 秒内结束");
+    QCOMPARE(bodyRuns.size(), qsizetype(3));
+    const QList<int> expectedIterations{1, 2, 3};
+    QCOMPARE(seenIterations, expectedIterations);
+}
+
+void IntegrationTest::testDelayStopCancellable()
+{
+    // 运行中停止流程：延时等待应被立即取消，而不是等满 delayMs
+    FlowScene scene;
+    FlowExecutor exec;
+    exec.setFlowName(QStringLiteral("RegressionDelayStop"));
+
+    NodeBase *delay = scene.createNode(NodeBase::LOGIC, QPointF(200, 200), QStringLiteral("Delay"));
+    QVERIFY(delay != nullptr);
+    delay->setParam(QStringLiteral("delayMs"), 5000);
+
+    exec.setFlowScene(&scene);
+    exec.setFlowMode(FlowMode::SoftwareTrigger);
+
+    QElapsedTimer t;
+    t.start();
+    exec.startExecution();
+    QTest::qWait(300);
+    exec.stopExecution();
+    const bool finished = exec.wait(3000);
+    const qint64 elapsed = t.elapsed();
+    exec.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+
+    QVERIFY2(finished, "停止后执行器线程未在 3 秒内退出");
+    QVERIFY2(elapsed < 2500,
+             qPrintable(QStringLiteral("延时 5000ms 被停止后仍耗时 %1ms，取消等待未生效").arg(elapsed)));
+}
+
+void IntegrationTest::testDelayPauseResumeKeepsRemaining()
+{
+    // 暂停不应消耗延时预算；恢复后延时应继续剩余时间而不是提前结束
+    FlowScene scene;
+    FlowExecutor exec;
+    exec.setFlowName(QStringLiteral("RegressionDelayPause"));
+
+    NodeBase *delay = scene.createNode(NodeBase::LOGIC, QPointF(200, 200), QStringLiteral("Delay"));
+    QVERIFY(delay != nullptr);
+    delay->setParam(QStringLiteral("delayMs"), 800);
+
+    exec.setFlowScene(&scene);
+    exec.setFlowMode(FlowMode::SoftwareTrigger);
+
+    QElapsedTimer t;
+    t.start();
+    exec.startExecution();
+    QTest::qWait(200);
+    exec.pauseExecution();
+    QTest::qWait(600);                 // 暂停期间不计入延时
+    exec.resumeExecution();
+    QTest::qWait(100);
+    const ExecutionState afterResume = exec.getState();
+
+    QVERIFY2(afterResume == ExecutionState::Running,
+             "恢复后延时被提前结束（剩余等待时间未维护）");
+
+    const bool finished = exec.wait(3000);
+    const qint64 elapsed = t.elapsed();
+    exec.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+
+    QVERIFY2(finished, "延时流程未在 3 秒内结束");
+    QVERIFY2(elapsed >= 1000,
+             qPrintable(QStringLiteral("暂停 600ms 后总耗时仅 %1ms，暂停期间仍在消耗延时").arg(elapsed)));
 }
 
 QTEST_MAIN(IntegrationTest)

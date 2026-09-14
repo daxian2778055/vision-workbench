@@ -80,6 +80,11 @@ public:
     /// 返回全局唯一 FlowExecutor 实例（供各算子检查运行状态）
     static FlowExecutor *current();
 
+    /// 可取消等待：等待 ms 毫秒，但若流程被停止/暂停会立即唤醒返回（供延时节点等阻塞算子取消等待，E4）
+    bool interruptibleSleep(int ms);
+    /// 连续/硬触发循环节拍间隔（ms），0 表示无额外限速（按相机/触发事件驱动，E6）
+    void setLoopIntervalMs(int ms) { m_loopIntervalMs = qMax(0, ms); }
+
     /// 执行从源节点到 endNode（含）的上游链路（空闲时同步执行，供右键调试）
     void executeUpTo(NodeBase *endNode);
     /// 执行从 startNode（含）到末端的下游链路
@@ -120,8 +125,8 @@ private:
     void collectNodeOutputVars(NodeBase *node);
     /// 替换字符串中的 {模块号} / {模块号.参数名} 引用
     QString resolveParamRefs(const QString &raw) const;
-    /// 循环执行：重复执行 LoopNode 下游循环体（至第一个多入边汇合点）
-    void runLoopBody(NodeBase *loopNode, int extraRuns);
+    /// 循环执行：由 LoopNode 统一调度全部迭代（1..loopCount），主遍历已跳过循环体节点（P3）
+    void executeLoop(NodeBase *loopNode, int loopCount);
     /// 识别循环体节点（按缓存拓扑序）
     QList<NodeBase *> collectLoopBody(NodeBase *loopNode) const;
     void resetState();
@@ -143,6 +148,7 @@ private:
     FlowMode m_flowMode;           /// 当前流程运行模式
     bool m_stopOnFailure = true;   /// 节点失败时停止流程（对标 VisionMaster 默认行为）
     bool m_stepMode = false;       /// 单步执行模式（每执行一个节点后暂停）
+    int m_loopIntervalMs = 0;      /// 连续/硬触发循环节拍间隔（ms），0=无额外限速（E6）
     QString m_flowName;            /// 流程名称
     mutable QMutex m_mutex;
     QWaitCondition m_waitCondition;
@@ -156,6 +162,8 @@ private:
     QSet<NodeBase *> m_activeNodes;                                /// 本轮执行激活集合（条件分支）
     /// 模块号 -> 输出变量表（供后级参数引用 {模块号.参数名}，跨轮保留最近值）
     QHash<int, QHash<QString, QVariant>> m_nodeOutputVars;
+    /// 循环体节点集合（由 LoopNode 统一调度，主遍历跳过，P3）
+    QSet<NodeBase *> m_loopBodyNodes;
 
     /// current() 可能被运行线程/界面线程并发读取，用原子变量避免数据竞争
     static std::atomic<FlowExecutor *> s_currentInstance;

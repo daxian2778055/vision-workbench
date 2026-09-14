@@ -2,7 +2,9 @@
 #include "DataObject.h"
 #include "AppLog.h"
 #include "ScriptSecurityPolicy.h"
+#include "FlowExecutor.h"
 #include <QWidget>
+#include <QElapsedTimer>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -88,6 +90,31 @@ void ScriptNode::run(bool /*autoSwitch*/)
     }
 }
 
+bool ScriptNode::waitCancellable(QProcess &process, int maxMs, QString &errOut)
+{
+    QElapsedTimer timer;
+    timer.start();
+    while (true) {
+        const int remain = maxMs - timer.elapsed();
+        const int chunk = remain > 0 ? qMin(remain, 200) : 100;
+        if (process.waitForFinished(chunk))
+            return true;
+        if (timer.elapsed() >= maxMs) {
+            process.kill();
+            ScriptSecurityPolicy::instance().closeJob(&process);
+            errOut = QStringLiteral("脚本执行超时");
+            return false;
+        }
+        FlowExecutor *exec = ownerExecutor();
+        if (exec && exec->getState() == ExecutionState::Stopped) {
+            process.kill();
+            ScriptSecurityPolicy::instance().closeJob(&process);
+            errOut = QStringLiteral("脚本执行被取消");
+            return false;
+        }
+    }
+}
+
 QString ScriptNode::executePythonScript(const QString &script, const QStringList &args)
 {
     QTemporaryFile tmpFile;
@@ -115,10 +142,9 @@ QString ScriptNode::executePythonScript(const QString &script, const QStringList
 
     policy.attachJob(&process);
 
-    if (!process.waitForFinished(policy.maxExecutionMs())) {
-        process.kill();
-        policy.closeJob(&process);
-        return QStringLiteral("\u811A\u672C\u6267\u884C\u8D85\u65F6");
+    QString waitErr;
+    if (!waitCancellable(process, policy.maxExecutionMs(), waitErr)) {
+        return waitErr;
     }
     policy.closeJob(&process);
 
@@ -158,10 +184,9 @@ QString ScriptNode::executeLuaScript(const QString &script, const QStringList &a
 
     policy.attachJob(&process);
 
-    if (!process.waitForFinished(policy.maxExecutionMs())) {
-        process.kill();
-        policy.closeJob(&process);
-        return QStringLiteral("\u811A\u672C\u6267\u884C\u8D85\u65F6");
+    QString waitErr;
+    if (!waitCancellable(process, policy.maxExecutionMs(), waitErr)) {
+        return waitErr;
     }
     policy.closeJob(&process);
 

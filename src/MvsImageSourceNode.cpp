@@ -423,9 +423,10 @@ bool MvsImageSourceNode::grabImage()
         }
 
         // 硬触发模式：一直等待相机触发源生效产生帧（期间每 1s 检查一次流程是否停止）
+        FlowExecutor *exec = ownerExecutor() ? ownerExecutor() : FlowExecutor::current();
         bool hardwareWait = false;
-        if (FlowExecutor::current()) {
-            hardwareWait = (FlowExecutor::current()->getFlowMode() == FlowMode::HardwareTrigger);
+        if (exec) {
+            hardwareWait = (exec->getFlowMode() == FlowMode::HardwareTrigger);
         }
 
         int nRet = MV_CC_GetOneFrameTimeout(m_hCamera, imgBuf, nDataSize, &frameInfo, 1000);
@@ -434,8 +435,8 @@ bool MvsImageSourceNode::grabImage()
             // 单次等待用 200ms（而非 1s）：FlowExecutor::stopExecution 只能在节点边界生效，
             // 缩短单次阻塞可让“停止/退出”在 ~200ms 内响应，避免线程未退出就被销毁。
             while (nRet != MV_OK) {
-                bool stillRunning = FlowExecutor::current()
-                                    && FlowExecutor::current()->getState() == ExecutionState::Running;
+                bool stillRunning = exec
+                                    && exec->getState() == ExecutionState::Running;
                 if (!stillRunning) {
                     break;
                 }
@@ -815,9 +816,9 @@ void MvsImageSourceNode::applyCameraParamsInThread()
 
     // 先检查当前 Flow 是否处于连续模式或正在运行
     bool skipPixelFormat = false;
-    if (FlowExecutor::current()) {
-        FlowMode mode = FlowExecutor::current()->getFlowMode();
-        ExecutionState state = FlowExecutor::current()->getState();
+    if (FlowExecutor *exec = ownerExecutor() ? ownerExecutor() : FlowExecutor::current()) {
+        FlowMode mode = exec->getFlowMode();
+        ExecutionState state = exec->getState();
         skipPixelFormat = (mode == FlowMode::Continuous) || (state == ExecutionState::Running);
     }
 
@@ -1057,9 +1058,9 @@ void MvsImageSourceNode::refreshPixelFormatEnabled()
     if (!m_pixelFormatCombo) return;
 
     bool running = false;
-    if (FlowExecutor::current()) {
-        FlowMode mode = FlowExecutor::current()->getFlowMode();
-        ExecutionState state = FlowExecutor::current()->getState();
+    if (FlowExecutor *exec = ownerExecutor() ? ownerExecutor() : FlowExecutor::current()) {
+        FlowMode mode = exec->getFlowMode();
+        ExecutionState state = exec->getState();
         running = (mode == FlowMode::Continuous) || (state == ExecutionState::Running);
     }
 

@@ -346,11 +346,10 @@ bool HalconNode::process()
     try {
         // 与 FlowExecutor::propagateData 对齐：连线上的图像进入 m_inputData，此处同步到 Halcon HObject
         if (!m_inputPorts.isEmpty()) {
-            if (m_inputData.contains(0) && m_inputData[0]) {
-                const HalconCpp::HImage wired = m_inputData[0]->getHImage();
-                if (wired.IsInitialized()) {
-                    m_inputImage = wired;
-                }
+            if (m_inputData.contains(0) && m_inputData[0] && m_inputData[0]->getHImage().IsInitialized()) {
+                m_inputImage = m_inputData[0]->getHImage();
+            } else {
+                m_inputImage.Clear();  // 输入变空/失效时清空旧图，避免保留上一轮图像（P2）
             }
         }
 
@@ -361,6 +360,9 @@ bool HalconNode::process()
         if (m_params.contains(QStringLiteral("moduleStatus"))
             && !m_params[QStringLiteral("moduleStatus")].toBool()) {
             m_outputImage.Clear();
+            // 失败清空全部输出，避免下游误用上一轮结果（P2）
+            for (int p = 0; p < outputPorts().size(); ++p)
+                setOutputData(p, QSharedPointer<DataObject>());
             return false;
         }
 
@@ -377,6 +379,10 @@ bool HalconNode::process()
         return true;
     } catch (...) {
         m_params["moduleStatus"] = false;
+        m_outputImage.Clear();
+        // 异常失败清空全部输出（P2）
+        for (int p = 0; p < outputPorts().size(); ++p)
+            setOutputData(p, QSharedPointer<DataObject>());
         return false;
     }
 }

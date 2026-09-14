@@ -23,4 +23,6 @@ public:
 private:
     QString executePythonScript(const QString &script, const QStringList &args);
     QString executeLuaScript(const QString &script, const QStringList &args);
+    /// 可取消等待脚本进程结束：周期性轮询，流程被停止时立即终止进程并返回（P4）
+    bool waitCancellable(QProcess &process, int maxMs, QString &errOut);
 };

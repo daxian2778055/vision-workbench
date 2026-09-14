@@ -733,7 +733,7 @@ endif()
 # Qt 找不到 QSQLITE 驱动 → 数据库测试报 "can not load requested driver"。
 if(MSVC)
     set(VFP_DEPLOY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/dist/VisionFlowPlatform")
-    set(VFP_TESTS NodeCoreTest OpencvSerializationTest IntegrationTest DatabaseTest PerfTest)
+    set(VFP_TESTS NodeCoreTest OpencvSerializationTest IntegrationTest DatabaseTest PerfTest ScriptSecurityPolicyTest)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
         # path_list_prepend 由 CMake 负责插入并处理平台路径分隔符，避免在
         # ENVIRONMENT 值里嵌套分号导致列表被错误拆分

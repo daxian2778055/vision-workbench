@@ -24,6 +24,7 @@ void LoopNode::run(bool /*autoSwitch*/)
     // 迭代变量：主循环第 1 次执行为 1，循环体重复执行时由 FlowExecutor 更新为 2..loopCount
     m_params[QStringLiteral("iteration")] = 1;
     m_outputImage = m_inputImage;
+    m_params[QStringLiteral("moduleStatus")] = true;  // 循环节点透传即视为成功（E5）
 }
 
 QWidget *LoopNode::createParamPanel()
