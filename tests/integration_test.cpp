@@ -56,6 +56,8 @@ private slots:
     void testExecutorReuseAcrossScenesWithLoop();
     void testLoopAddedToSameSceneIsDetected();
     void testScriptNodeReportsSuccess();
+    void testConditionalBranchSkipClearsStaleOutput();
+    void testNestedLoopIterations();
 
 private:
     FlowScene *m_scene = nullptr;
@@ -649,6 +651,134 @@ void IntegrationTest::testScriptNodeReportsSuccess()
     QVERIFY2(finished, "脚本流程未在 15 秒内结束");
     QVERIFY2(nodeOk, "脚本正常执行完却报告失败（moduleStatus 未置位，会误停流程）");
     QCOMPARE(lastOutput, QStringLiteral("vfp-script-ok"));
+}
+
+void IntegrationTest::testConditionalBranchSkipClearsStaleOutput()
+{
+    // 条件分支：未选中分支的节点必须被跳过，且其上一轮输出要清空（P2）
+    FlowScene scene;
+    FlowExecutor exec;
+    exec.setFlowName(QStringLiteral("RegressionBranchSkip"));
+
+    NodeBase *cond = scene.createNode(NodeBase::LOGIC, QPointF(100, 200), QStringLiteral("If-Else"));
+    NodeBase *trueB = scene.createNode(NodeBase::LOGIC, QPointF(340, 120), QStringLiteral("Formula"));
+    NodeBase *falseB = scene.createNode(NodeBase::LOGIC, QPointF(340, 300), QStringLiteral("Formula"));
+    QVERIFY(cond != nullptr);
+    QVERIFY(trueB != nullptr);
+    QVERIFY(falseB != nullptr);
+    cond->setParam(QStringLiteral("condition"), true);
+    trueB->setParam(QStringLiteral("expression"), QStringLiteral("1 + 2"));
+    falseB->setParam(QStringLiteral("expression"), QStringLiteral("2 + 3"));
+
+    QVERIFY2(cond->outputPorts().size() >= 3, "条件节点端口不足（需 TRUE/FALSE 分支端口）");
+    QVERIFY2(!trueB->inputPorts().isEmpty() && !falseB->inputPorts().isEmpty(), "分支节点无输入端口");
+    // 输出端口 1 = TRUE 分支，端口 2 = FALSE 分支
+    QVERIFY2(scene.createConnection(cond->outputPorts().value(1), trueB->inputPorts().first(), true) != nullptr,
+             "无法建立 TRUE 分支连线");
+    QVERIFY2(scene.createConnection(cond->outputPorts().value(2), falseB->inputPorts().first(), true) != nullptr,
+             "无法建立 FALSE 分支连线");
+
+    int trueRuns = 0;
+    int falseRuns = 0;
+    int rounds = 0;
+    const auto execHandle = QObject::connect(
+        &exec, &FlowExecutor::nodeExecuted, &exec,
+        [&](NodeBase *n, bool success) {
+            if (!success) return;
+            if (n == trueB) ++trueRuns;
+            if (n == falseB) ++falseRuns;
+            if (n == cond) {
+                ++rounds;
+                if (rounds == 1) {
+                    // 第二轮改走 FALSE 分支，使 TRUE 分支被跳过
+                    cond->setParam(QStringLiteral("condition"), false);
+                }
+            }
+        }, Qt::DirectConnection);
+    // 跑满两轮后再停止（避免中途停止导致跳过节点未被处理）
+    const auto finishHandle = QObject::connect(
+        &exec, &FlowExecutor::executionFinished, &exec,
+        [&]() {
+            if (rounds >= 2) exec.stopExecution();
+        }, Qt::DirectConnection);
+
+    exec.setFlowScene(&scene);
+    exec.setFlowMode(FlowMode::Continuous);
+    exec.startExecution();
+    bool finished = exec.wait(5000);
+    if (!finished) {
+        exec.stopExecution();
+        finished = exec.wait(2000);
+    }
+    QObject::disconnect(execHandle);
+    QObject::disconnect(finishHandle);
+
+    const bool trueOutputAfter = (trueB->getOutputData(0) != nullptr);
+    const bool falseOutputAfter = (falseB->getOutputData(0) != nullptr);
+    exec.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+
+    QVERIFY2(finished, "分支流程未在 5 秒内结束");
+    QCOMPARE(trueRuns, 1);              // TRUE 分支只在第一轮执行
+    QCOMPARE(falseRuns, 1);             // FALSE 分支只在第二轮执行
+    QCOMPARE(trueOutputAfter, false);   // 第二轮被跳过：输出必须清空，不能残留第一轮结果
+    QCOMPARE(falseOutputAfter, true);   // 第二轮实际执行的分支有输出
+}
+
+void IntegrationTest::testNestedLoopIterations()
+{
+    // 嵌套循环：外层 2 次 × 内层 3 次 → 最内层节点执行 6 次，
+    // 内层迭代号 1,2,3 循环两遍，外层迭代号 1,1,1,2,2,2
+    FlowScene scene;
+    FlowExecutor exec;
+    exec.setFlowName(QStringLiteral("RegressionNestedLoop"));
+
+    NodeBase *outer = scene.createNode(NodeBase::LOGIC, QPointF(80, 200), QStringLiteral("Loop"));
+    NodeBase *inner = scene.createNode(NodeBase::LOGIC, QPointF(280, 200), QStringLiteral("Loop"));
+    NodeBase *body = scene.createNode(NodeBase::LOGIC, QPointF(480, 200), QStringLiteral("Delay"));
+    QVERIFY(outer != nullptr);
+    QVERIFY(inner != nullptr);
+    QVERIFY(body != nullptr);
+    outer->setParam(QStringLiteral("loopCount"), 2);
+    inner->setParam(QStringLiteral("loopCount"), 3);
+    body->setParam(QStringLiteral("delayMs"), 0);
+
+    QVERIFY2(scene.createConnection(outer->outputPorts().first(), inner->inputPorts().first(), true) != nullptr,
+             "无法建立 外层->内层 连线");
+    QVERIFY2(scene.createConnection(inner->outputPorts().first(), body->inputPorts().first(), true) != nullptr,
+             "无法建立 内层->循环体 连线");
+
+    QList<int> innerIters;
+    QList<int> outerIters;
+    int bodyRuns = 0;
+    const auto connHandle = QObject::connect(
+        &exec, &FlowExecutor::nodeExecuted, &exec,
+        [&](NodeBase *n, bool success) {
+            if (success && n == body) {
+                ++bodyRuns;
+                innerIters.append(inner->getParam(QStringLiteral("iteration")).toInt());
+                outerIters.append(outer->getParam(QStringLiteral("iteration")).toInt());
+            }
+        }, Qt::DirectConnection);
+
+    exec.setFlowScene(&scene);
+    exec.setFlowMode(FlowMode::SoftwareTrigger);
+    exec.startExecution();
+    bool finished = exec.wait(10000);
+    if (!finished) {
+        exec.stopExecution();
+        finished = exec.wait(3000);
+    }
+    QObject::disconnect(connHandle);
+    exec.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+
+    QVERIFY2(finished, "嵌套循环流程未在 10 秒内结束");
+    QCOMPARE(bodyRuns, 6);
+    const QList<int> expectedInner{1, 2, 3, 1, 2, 3};
+    const QList<int> expectedOuter{1, 1, 1, 2, 2, 2};
+    QCOMPARE(innerIters, expectedInner);
+    QCOMPARE(outerIters, expectedOuter);
 }
 
 QTEST_MAIN(IntegrationTest)

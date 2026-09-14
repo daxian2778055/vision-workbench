@@ -801,6 +801,17 @@ void FlowExecutor::executeLoop(NodeBase *loopNode, int loopCount)
 
     QSet<NodeBase *> bodySet(body.begin(), body.end());
 
+    // 嵌套循环：循环体内若含 LoopNode，其循环体由内层自行调度，
+    // 外层不得再重复执行（否则内层循环次数不生效、或被外层多跑一遍）
+    QSet<NodeBase *> nestedBodyNodes;
+    for (NodeBase *bn : body) {
+        if (LoopNode *inner = qobject_cast<LoopNode *>(bn)) {
+            for (NodeBase *ib : collectLoopBody(inner)) {
+                nestedBodyNodes.insert(ib);
+            }
+        }
+    }
+
     // 统一调度全部迭代（1..loopCount），循环体内节点看到的迭代号为 1,2,...,loopCount（P3）
     for (int iter = 1; iter <= loopCount; ++iter) {
         // 迭代变量
@@ -845,6 +856,9 @@ void FlowExecutor::executeLoop(NodeBase *loopNode, int loopCount)
                 while (m_state == ExecutionState::Paused) m_waitCondition.wait(&m_mutex);
                 if (m_state == ExecutionState::Stopped) return;
             }
+            // 内层循环的循环体由内层 LoopNode 调度，外层跳过（嵌套循环）
+            if (nestedBodyNodes.contains(bn)) continue;
+
             if (!m_activeNodes.contains(bn)) {
                 // 跳过未激活分支：清空输出与缓存，避免下游误用旧数据（E2/E5/P2）
                 for (int p = 0; p < bn->outputPorts().size(); ++p)
@@ -855,6 +869,10 @@ void FlowExecutor::executeLoop(NodeBase *loopNode, int loopCount)
             }
             executeNode(bn, false);
             activateDownstream(bn);
+            // 循环体内嵌套的循环节点：递归调度其循环体（迭代号由内层自行维护）
+            if (LoopNode *inner = qobject_cast<LoopNode *>(bn)) {
+                executeLoop(inner, qMax(1, bn->getParam(QStringLiteral("loopCount")).toInt()));
+            }
             {
                 QMutexLocker l(&m_mutex);
                 if (m_state == ExecutionState::Stopped) return;
