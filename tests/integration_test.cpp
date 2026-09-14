@@ -53,6 +53,8 @@ private slots:
     void testDestroyWhileRunningIsSafe();
     void testTwoExecutorsIsolation();
     void testScriptNodeStopCancellable();
+    void testExecutorReuseAcrossScenesWithLoop();
+    void testLoopAddedToSameSceneIsDetected();
 
 private:
     FlowScene *m_scene = nullptr;
@@ -306,6 +308,7 @@ void IntegrationTest::testContinuousSecondRoundClearsStaleData()
              "无法建立 公式->下游 连线");
 
     QList<bool> sinkInputPresent;
+    QList<bool> sinkOutputPresent;
     int formulaRounds = 0;
     const auto connHandle = QObject::connect(
         &exec, &FlowExecutor::nodeExecuted, &exec,
@@ -319,6 +322,8 @@ void IntegrationTest::testContinuousSecondRoundClearsStaleData()
                 }
             } else if (n == sink) {
                 sinkInputPresent.append(sink->getInputData(0) != nullptr);
+                // 节点自身输出也必须是本轮结果：DelayNode 无输入时应清空输出（P1）
+                sinkOutputPresent.append(sink->getOutputData(0) != nullptr);
                 if (sinkInputPresent.size() >= 2) {
                     exec.stopExecution();   // 观察满两轮后结束
                 }
@@ -342,6 +347,9 @@ void IntegrationTest::testContinuousSecondRoundClearsStaleData()
              qPrintable(QStringLiteral("未观察到两轮执行，实际 %1 轮").arg(sinkInputPresent.size())));
     QCOMPARE(sinkInputPresent.at(0), true);    // 第一轮：有输入
     QCOMPARE(sinkInputPresent.at(1), false);   // 第二轮：不得残留第一轮输入
+    QVERIFY2(sinkOutputPresent.size() >= 2, "未观察到两轮输出状态");
+    QCOMPARE(sinkOutputPresent.at(0), true);   // 第一轮：Delay 透传有输出
+    QCOMPARE(sinkOutputPresent.at(1), false);  // 第二轮：Delay 自身输出也必须为空
 }
 
 void IntegrationTest::testDestroyWhileRunningIsSafe()
@@ -468,6 +476,133 @@ void IntegrationTest::testScriptNodeStopCancellable()
     QVERIFY2(finished, "停止后执行器线程未退出");
     QVERIFY2(stopElapsed < 2000,
              qPrintable(QStringLiteral("停止后耗时 %1ms，脚本阻塞等待未被取消").arg(stopElapsed)));
+}
+
+void IntegrationTest::testExecutorReuseAcrossScenesWithLoop()
+{
+    // 执行器复用：先跑场景 A（无循环），再切到含循环的场景 B。
+    // 切换后循环体缓存必须重建，否则循环体会被主遍历与 executeLoop 重复执行（P1）
+    FlowScene sceneA;
+    FlowScene sceneB;
+    FlowExecutor exec;
+    exec.setFlowName(QStringLiteral("RegressionSceneSwitch"));
+
+    // --- 场景 A：单个延时节点（先让执行器缓存一份“无循环”的图信息） ---
+    {
+        NodeBase *a = sceneA.createNode(NodeBase::LOGIC, QPointF(200, 200), QStringLiteral("Delay"));
+        QVERIFY(a != nullptr);
+        a->setParam(QStringLiteral("delayMs"), 0);
+        exec.setFlowScene(&sceneA);
+        exec.setFlowMode(FlowMode::SoftwareTrigger);
+        exec.startExecution();
+        bool ok = exec.wait(5000);
+        if (!ok) {
+            exec.stopExecution();
+            ok = exec.wait(2000);
+        }
+        QVERIFY2(ok, "场景 A 未在 5 秒内结束");
+    }
+
+    // --- 场景 B：Loop(3) -> Delay（循环体） ---
+    NodeBase *loop = sceneB.createNode(NodeBase::LOGIC, QPointF(100, 200), QStringLiteral("Loop"));
+    NodeBase *body = sceneB.createNode(NodeBase::LOGIC, QPointF(320, 200), QStringLiteral("Delay"));
+    QVERIFY(loop != nullptr);
+    QVERIFY(body != nullptr);
+    loop->setParam(QStringLiteral("loopCount"), 3);
+    body->setParam(QStringLiteral("delayMs"), 0);
+    QVERIFY2(sceneB.createConnection(loop->outputPorts().first(),
+                                     body->inputPorts().first(), true) != nullptr,
+             "无法建立 循环->循环体 连线");
+
+    QList<int> seenIterations;
+    QList<NodeBase *> bodyRuns;
+    const auto connHandle = QObject::connect(
+        &exec, &FlowExecutor::nodeExecuted, &exec,
+        [&](NodeBase *n, bool success) {
+            if (success && n == body) {
+                bodyRuns.append(n);
+                seenIterations.append(loop->getParam(QStringLiteral("iteration")).toInt());
+            }
+        }, Qt::DirectConnection);
+
+    exec.setFlowScene(&sceneB);     // 复用同一个执行器切换到新场景
+    exec.setFlowMode(FlowMode::SoftwareTrigger);
+    exec.startExecution();
+    bool finished = exec.wait(10000);
+    if (!finished) {
+        exec.stopExecution();
+        finished = exec.wait(3000);
+    }
+    QObject::disconnect(connHandle);
+    exec.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+
+    QVERIFY2(finished, "场景 B 未在 10 秒内结束");
+    QCOMPARE(bodyRuns.size(), qsizetype(3));   // 缓存未清会重复执行成 4 次
+    const QList<int> expectedIterations{1, 2, 3};
+    QCOMPARE(seenIterations, expectedIterations);
+}
+
+void IntegrationTest::testLoopAddedToSameSceneIsDetected()
+{
+    // 同一场景内新增循环节点：图缓存被置脏，但 m_cachedSortedNodes 仍是旧的
+    // （节点/连线变更只置脏、不清缓存），循环体识别必须以当前场景节点为准，
+    // 否则新增的循环体不会被登记，会被主遍历重复执行（P1）
+    FlowScene scene;
+    FlowExecutor exec;
+    exec.setFlowName(QStringLiteral("RegressionLoopAddedLater"));
+
+    // 首轮：场景内只有延时节点，先缓存一份“不含循环”的图
+    NodeBase *first = scene.createNode(NodeBase::LOGIC, QPointF(200, 200), QStringLiteral("Delay"));
+    QVERIFY(first != nullptr);
+    first->setParam(QStringLiteral("delayMs"), 0);
+
+    exec.setFlowScene(&scene);
+    exec.setFlowMode(FlowMode::SoftwareTrigger);
+    exec.startExecution();
+    bool ok = exec.wait(5000);
+    if (!ok) {
+        exec.stopExecution();
+        ok = exec.wait(2000);
+    }
+    QVERIFY2(ok, "首轮执行未在 5 秒内结束");
+
+    // 同场景内新增 Loop(3) -> Delay（循环体），不重新 setFlowScene
+    NodeBase *loop = scene.createNode(NodeBase::LOGIC, QPointF(420, 200), QStringLiteral("Loop"));
+    NodeBase *body = scene.createNode(NodeBase::LOGIC, QPointF(620, 200), QStringLiteral("Delay"));
+    QVERIFY(loop != nullptr);
+    QVERIFY(body != nullptr);
+    loop->setParam(QStringLiteral("loopCount"), 3);
+    body->setParam(QStringLiteral("delayMs"), 0);
+    QVERIFY2(scene.createConnection(loop->outputPorts().first(),
+                                    body->inputPorts().first(), true) != nullptr,
+             "无法建立 循环->循环体 连线");
+
+    QList<int> seenIterations;
+    QList<NodeBase *> bodyRuns;
+    const auto connHandle = QObject::connect(
+        &exec, &FlowExecutor::nodeExecuted, &exec,
+        [&](NodeBase *n, bool success) {
+            if (success && n == body) {
+                bodyRuns.append(n);
+                seenIterations.append(loop->getParam(QStringLiteral("iteration")).toInt());
+            }
+        }, Qt::DirectConnection);
+
+    exec.startExecution();
+    bool finished = exec.wait(10000);
+    if (!finished) {
+        exec.stopExecution();
+        finished = exec.wait(3000);
+    }
+    QObject::disconnect(connHandle);
+    exec.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+
+    QVERIFY2(finished, "第二轮未在 10 秒内结束");
+    QCOMPARE(bodyRuns.size(), qsizetype(3));   // 漏登记会重复执行成 4 次
+    const QList<int> expectedIterations{1, 2, 3};
+    QCOMPARE(seenIterations, expectedIterations);
 }
 
 QTEST_MAIN(IntegrationTest)

@@ -76,14 +76,19 @@ public:
     /// 当前进程是否以管理员（提权）身份运行。
     bool isElevated() const;
 
-    /// 进程级沙箱（仅 Windows 生效，其它平台为空操作）。三层防护：
-    ///   - applyProcessSandbox：QProcess::start() 之前调用，给子进程套"受限令牌"
-    ///     （去除全部特权、管理员 SID 降级为 deny-only、低完整性级别）。
+    /// 进程隔离（仅 Windows 生效，其它平台为空操作）：
+    ///   - applyProcessSandbox：start() 之前调用。仅设置 CREATE_BREAKAWAY_FROM_JOB，
+    ///     使子进程可脱离父作业并被纳入我们自己的 Job Object 生命周期管理。
+    ///     【重要】Qt 6.11 起 QProcess::CreateProcessArguments 不再提供 token 成员，
+    ///     因此当前无法施加受限令牌（去特权 / 管理员 SID deny-only / 低完整性）降权；
+    ///     若产品需要执行不可信脚本，须另行实现 CreateProcessAsUserW 受限令牌启动。
     ///   - attachJob：start() 成功之后调用，把子进程关入 Job Object，限制其
     ///     创建桌面/改显示设置/退出 Windows/读写剪贴板/跨句柄；并设置
     ///     KILL_ON_JOB_CLOSE，作业句柄关闭时整棵进程树被强杀，超时可控。
+    ///     返回 false 表示 Job 建立/加入失败；沙箱开启时调用方必须拒绝执行脚本。
     ///   - closeJob：执行结束（含超时 kill 之后）调用，关闭作业句柄释放并触发杀树。
-    /// 注意：Job Object 无法限制网络访问；网络隔离须依赖系统防火墙 + 低完整性令牌。
+    /// 边界：Job Object 不限制网络访问；无受限令牌时脚本以当前用户完整权限运行，
+    /// 仅适用于「内部可信脚本」场景，不构成不可信代码的安全隔离。
     void applyProcessSandbox(QProcess *proc);
     bool attachJob(QProcess *proc);
     void closeJob(QProcess *proc);

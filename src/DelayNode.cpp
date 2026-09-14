@@ -39,13 +39,15 @@ void DelayNode::run(bool /*autoSwitch*/)
             QThread::msleep(static_cast<unsigned long>(m_delayMs));
         }
     }
-    // 数据透传
+    // 数据透传；无输入时清空输出，避免把上一轮结果留给下游（P1）
     auto input = getInputData(0);
     if (input) {
         auto out = QSharedPointer<DataObject>::create();
         out->setType(input->getType());
         out->setData(input->getData());
         setOutputData(0, out);
+    } else {
+        setOutputData(0, QSharedPointer<DataObject>());
     }
 }
 

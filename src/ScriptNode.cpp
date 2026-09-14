@@ -145,7 +145,14 @@ QString ScriptNode::executePythonScript(const QString &script, const QStringList
         return QStringLiteral("Python \u672A\u627E\u5230\u6216\u65E0\u6CD5\u542F\u52A0");
     }
 
-    policy.attachJob(&process);
+    // 沙箱开启时，Job Object 建立/加入失败必须拒绝执行，否则脚本将以完整用户权限运行（P1）
+    if (policy.isSandboxEnabled() && !policy.attachJob(&process)) {
+        process.kill();
+        process.waitForFinished(2000);
+        policy.audit(QStringLiteral("Python"), script, false,
+                     QStringLiteral("进程沙箱不可用（Job Object 建立失败）"));
+        return QStringLiteral("进程沙箱不可用，已拒绝执行脚本");
+    }
 
     QString waitErr;
     if (!waitCancellable(process, policy.maxExecutionMs(), waitErr)) {
@@ -192,7 +199,14 @@ QString ScriptNode::executeLuaScript(const QString &script, const QStringList &a
         return QStringLiteral("Lua \u672A\u627E\u5230\u6216\u65E0\u6CD5\u542F\u52A8");
     }
 
-    policy.attachJob(&process);
+    // 沙箱开启时，Job Object 建立/加入失败必须拒绝执行，否则脚本将以完整用户权限运行（P1）
+    if (policy.isSandboxEnabled() && !policy.attachJob(&process)) {
+        process.kill();
+        process.waitForFinished(2000);
+        policy.audit(QStringLiteral("Lua"), script, false,
+                     QStringLiteral("进程沙箱不可用（Job Object 建立失败）"));
+        return QStringLiteral("进程沙箱不可用，已拒绝执行脚本");
+    }
 
     QString waitErr;
     if (!waitCancellable(process, policy.maxExecutionMs(), waitErr)) {
@@ -223,8 +237,10 @@ QWidget *ScriptNode::createParamPanel()
     warnLabel->setStyleSheet(QStringLiteral("QLabel { color: #b00020; font-size: 11px; }"));
     layout->addWidget(warnLabel);
 
-    auto *sandboxChk = new QCheckBox(QStringLiteral("进程沙箱（降权令牌 + Job Object 限制桌面/剪贴板，防任意代码执行越权）"));
-    sandboxChk->setToolTip(QStringLiteral("默认开启。脚本子进程以受限令牌（去特权/低完整性）运行并关入 Job Object；关闭后仅保留解释器隔离与环境清理。"));
+    auto *sandboxChk = new QCheckBox(QStringLiteral("进程隔离（Job Object 限制桌面/剪贴板/内存，父退出即终止脚本进程）"));
+    sandboxChk->setToolTip(QStringLiteral("默认开启。脚本子进程关入 Job Object 并限制 UI/内存，父进程退出时整棵进程树被终止；"
+                                          "同时保留解释器隔离（Python -I -E）与环境变量清理。"
+                                          "注意：当前 Qt 版本无法施加受限令牌，不含降权/低完整性级别。"));
     sandboxChk->setChecked(ScriptSecurityPolicy::instance().isSandboxEnabled());
     connect(sandboxChk, &QCheckBox::toggled, this, [](bool on) {
         ScriptSecurityPolicy::instance().setSandboxEnabled(on);

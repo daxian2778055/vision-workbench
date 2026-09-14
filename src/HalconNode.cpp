@@ -344,6 +344,10 @@ HObject HalconNode::getOutputImage() const
 bool HalconNode::process()
 {
     try {
+        // 每轮重新计算结果：先清空上一轮输出图像，避免本轮无有效结果时
+        // 仍把上一轮图像作为输出发布给下游（P1）
+        m_outputImage.Clear();
+
         // 与 FlowExecutor::propagateData 对齐：连线上的图像进入 m_inputData，此处同步到 Halcon HObject
         if (!m_inputPorts.isEmpty()) {
             if (m_inputData.contains(0) && m_inputData[0] && m_inputData[0]->getHImage().IsInitialized()) {

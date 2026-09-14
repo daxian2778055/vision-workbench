@@ -112,6 +112,13 @@ void FlowExecutor::setFlowScene(FlowScene *scene)
     {
         QMutexLocker locker(&m_graphCacheMutex);
         m_graphStructureDirty = true;
+        // 切换场景：立即清空上一场景的图缓存。否则下一次 rebuildIncomingIndex
+        // 识别循环体时会误用旧场景的节点（漏识别循环体），若旧场景已销毁还会
+        // 解引用已释放的节点指针（P1）
+        m_cachedSortedNodes.clear();
+        m_incoming.clear();
+        m_outgoing.clear();
+        m_loopBodyNodes.clear();
     }
     connectToScene(scene);
     // 多流程并发：最近激活的流程执行器作为 current()（供节点查询运行状态）
@@ -457,8 +464,10 @@ void FlowExecutor::rebuildIncomingIndex(FlowScene *scene)
     }
 
     // 识别全部循环体节点（供主遍历跳过，统一由 LoopNode 调度执行，P3）
+    // 注意：必须以当前场景的节点为准。本函数在拓扑排序前调用，m_cachedSortedNodes
+    // 可能仍属于上一个场景（切换场景后），用它做种子会漏识别循环体并可能解引用悬垂指针
     m_loopBodyNodes.clear();
-    const QList<NodeBase *> bodySeed = m_cachedSortedNodes.isEmpty() ? scene->nodes() : m_cachedSortedNodes;
+    const QList<NodeBase *> bodySeed = scene->nodes();
     for (NodeBase *n : bodySeed) {
         if (LoopNode *ln = qobject_cast<LoopNode *>(n)) {
             for (NodeBase *bn : collectLoopBody(ln)) {
@@ -576,6 +585,12 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
                 }
             }
         }
+
+        // 执行前统一清空输出端口：保证本轮下游可见的数据只可能由本轮产生。
+        // 否则“无输入/空结果”分支未清输出的节点（如 DelayNode 无输入时直接返回）
+        // 会把上一轮输出继续挂在端口上，被当作本轮结果写入缓存（P1）
+        for (int p = 0; p < node->outputPorts().size(); ++p)
+            node->setOutputData(p, QSharedPointer<DataObject>());
 
         success = node->execute();
 
