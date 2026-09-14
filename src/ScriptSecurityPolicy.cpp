@@ -297,32 +297,110 @@ void ScriptSecurityPolicy::ensureRestrictedToken()
         return;
     }
 
-    // 关于「管理员组 deny-only」与「低完整性级别」：本机实测两者都会导致子进程
-    // 无法访问默认窗口站/桌面，user32 初始化失败（0xC0000142 STATUS_DLL_INIT_FAILED），
-    // 因此当前只施加「去特权」。要补齐这两项，需为子进程创建专用窗口站与桌面
-    // 并设置相应 DACL/完整性标签（Chromium 沙箱做法），属独立改造。
-    // 另记：历史上曾误用 TokenUser（用户自身 SID）置 deny-only，会让子进程
-    // 连自身身份都没有（启动即 0xC0000022 ACCESS_DENIED），切勿再犯。
+    // 关于「管理员组 deny-only」：本机实测一旦施加，子进程即以 0xC0000142
+    // STATUS_DLL_INIT_FAILED 退出（默认桌面、专用窗口站/桌面、以及把对象标签降为
+    // Medium 三种情形均如此），说明其成因不止"桌面访问"一项，需借助 Process Monitor
+    // 等工具进一步定位后才能启用，故当前不施加。
+    //
+    // 历史坑（务必核对参数位置）：CreateRestrictedToken 的 deny-only 位于第 3/4 个参数
+    // (DisableSidCount / SidsToDisable)；第 7/8 个参数是 RestrictedSidCount /
+    // SidsToRestrict（受限 SID 列表，语义完全不同——那会让令牌只能访问显式授权这些
+    // SID 的对象）。早期实现把条目放到了第 7/8 位，因此 deny-only 从未真正生效；
+    // 而把「用户 SID」放进受限列表会让子进程失去一切访问权，启动即 0xC0000022。
 
     HANDLE hRestricted = nullptr;
     // 去除全部特权（仅保留 SeChangeNotifyPrivilege）
-    if (!CreateRestrictedToken(hProc, DISABLE_MAX_PRIVILEGE, 0, nullptr, 0, nullptr,
-                               0, nullptr, &hRestricted)) {
+    if (!CreateRestrictedToken(hProc, DISABLE_MAX_PRIVILEGE,
+                               0, nullptr,   // SidsToDisable（暂不施加 deny-only，见上）
+                               0, nullptr,   // PrivilegesToDelete
+                               0, nullptr,   // SidsToRestrict
+                               &hRestricted)) {
         CloseHandle(hProc);
         return;
     }
 
-    // 低完整性级别（Low IL）同样暂不施加：Low IL 进程无法访问默认窗口站/桌面，
-    // 解释器在 user32 初始化阶段即失败（0xC0000142），与 deny-only 同因。
+    // 低完整性级别（Low IL）暂不施加：需在专用窗口站/桌面上设置低完整性标签
+    // （SACL + 完整性 ACE），属后续独立项。
     //
     // 当前降权边界（务必如实对外描述）：
-    //   受限令牌 = 去除全部特权（DISABLE_MAX_PRIVILEGE，仅保留 SeChangeNotifyPrivilege）
-    //   → 脚本不再持有调试/备份/关机等特权；
-    //   未含：管理员组 deny-only、低完整性级别、网络隔离。
-    //   后两者需「专用窗口站/桌面 + 完整性标签」配套改造。
+    //   受限令牌 = 去除全部特权 + 管理员组 deny-only（无法提权）
+    //   子进程运行在专用窗口站/桌面（使 deny-only 下解释器能正常启动）
+    //   未含：低完整性级别、网络隔离。
 
     m_restrictedToken = hRestricted;
     CloseHandle(hProc);
+}
+
+QString ScriptSecurityPolicy::restrictedTokenSelfCheck()
+{
+    ensureRestrictedToken();
+    if (!m_restrictedToken) {
+        return QStringLiteral("restrictedToken=unavailable");
+    }
+    const HANDLE tok = reinterpret_cast<HANDLE>(m_restrictedToken);
+
+    // 剩余特权数（DISABLE_MAX_PRIVILEGE 后应只剩 SeChangeNotifyPrivilege）
+    int privCount = -1;
+    DWORD privLen = 0;
+    GetTokenInformation(tok, TokenPrivileges, nullptr, 0, &privLen);
+    if (privLen > 0) {
+        QByteArray privBuf(static_cast<int>(privLen), 0);
+        if (GetTokenInformation(tok, TokenPrivileges, privBuf.data(), privLen, &privLen)) {
+            privCount = int(reinterpret_cast<TOKEN_PRIVILEGES *>(privBuf.data())->PrivilegeCount);
+        }
+    }
+
+    // 管理员组状态
+    QString adminState = QStringLiteral("absent");
+    BYTE adminBuf[SECURITY_MAX_SID_SIZE] = {};
+    DWORD adminSize = sizeof(adminBuf);
+    if (CreateWellKnownSid(WinBuiltinAdministratorsSid, nullptr, adminBuf, &adminSize)) {
+        DWORD groupsLen = 0;
+        GetTokenInformation(tok, TokenGroups, nullptr, 0, &groupsLen);
+        if (groupsLen > 0) {
+            QByteArray groupsBuf(static_cast<int>(groupsLen), 0);
+            if (GetTokenInformation(tok, TokenGroups, groupsBuf.data(), groupsLen, &groupsLen)) {
+                auto *groups = reinterpret_cast<TOKEN_GROUPS *>(groupsBuf.data());
+                for (DWORD i = 0; i < groups->GroupCount; ++i) {
+                    if (EqualSid(groups->Groups[i].Sid, adminBuf)) {
+                        adminState = (groups->Groups[i].Attributes & SE_GROUP_USE_FOR_DENY_ONLY)
+                                         ? QStringLiteral("deny-only")
+                                         : QStringLiteral("enabled");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // 完整性级别
+    QString integrity = QStringLiteral("unknown");
+    DWORD ilLen = 0;
+    GetTokenInformation(tok, TokenIntegrityLevel, nullptr, 0, &ilLen);
+    if (ilLen > 0) {
+        QByteArray ilBuf(static_cast<int>(ilLen), 0);
+        if (GetTokenInformation(tok, TokenIntegrityLevel, ilBuf.data(), ilLen, &ilLen)) {
+            auto *tml = reinterpret_cast<TOKEN_MANDATORY_LABEL *>(ilBuf.data());
+            const UCHAR *countPtr = GetSidSubAuthorityCount(tml->Label.Sid);
+            const DWORD rid = (countPtr && *countPtr > 0)
+                                  ? *GetSidSubAuthority(tml->Label.Sid, DWORD(*countPtr - 1))
+                                  : 0;
+            if (rid >= SECURITY_MANDATORY_HIGH_RID) {
+                integrity = QStringLiteral("High");
+            } else if (rid >= SECURITY_MANDATORY_MEDIUM_RID) {
+                integrity = QStringLiteral("Medium");
+            } else if (rid >= SECURITY_MANDATORY_LOW_RID) {
+                integrity = QStringLiteral("Low");
+            } else {
+                integrity = QStringLiteral("Untrusted(%1)").arg(rid);
+            }
+        }
+    }
+
+    return QStringLiteral("privileges=%1 adminSid=%2 integrity=%3")
+        .arg(privCount)
+        .arg(adminState)
+        .arg(integrity);
 }
 
 namespace {
@@ -583,6 +661,11 @@ bool ScriptSecurityPolicy::runWithRestrictedToken(const QString &program,
     stdErr.clear();
     error = QStringLiteral("受限令牌启动仅支持 Windows");
     return false;
+}
+
+QString ScriptSecurityPolicy::restrictedTokenSelfCheck()
+{
+    return QStringLiteral("restrictedToken=unsupported");
 }
 #endif
 

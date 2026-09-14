@@ -905,6 +905,10 @@ void IntegrationTest::testRestrictedTokenLaunch()
         out, errOut, error, &code);
 
     QVERIFY2(policy.hasRestrictedToken(), "受限令牌未能创建");
+    // 令牌自检（可作为上线验收凭据）：去特权后应只剩 SeChangeNotifyPrivilege（privileges=1）
+    const QString selfCheck = policy.restrictedTokenSelfCheck();
+    QVERIFY2(selfCheck.contains(QStringLiteral("privileges=1")), qPrintable(selfCheck));
+
     QVERIFY2(ok, qPrintable(QStringLiteral("受限令牌启动失败：%1（stderr=%2）").arg(error, errOut)));
     QCOMPARE(code, 0);
     QVERIFY2(out.contains(QStringLiteral("SeChangeNotifyPrivilege")),

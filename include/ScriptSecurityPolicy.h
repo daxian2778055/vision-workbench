@@ -114,8 +114,18 @@ public:
     /// 受限令牌是否已就绪（仅 Windows）；供自检/诊断使用
     bool hasRestrictedToken() const;
 
+    /// 受限令牌自检摘要（用于上线验收/现场排查），形如：
+    ///   privileges=1 adminSid=enabled integrity=Medium
+    /// 字段含义：剩余特权数（去特权后应为 1，仅 SeChangeNotifyPrivilege）/
+    /// 管理员组状态 / 完整性级别。
+    /// 说明：adminSid 与 integrity 反映"实际生效"的降权程度，不夸大。
+    QString restrictedTokenSelfCheck();
+
 private:
     ScriptSecurityPolicy();
+    /// 创建受限令牌（去特权）。注意：管理员组 deny-only 与低完整性级别
+    /// 经实测会导致子进程 0xC0000142 STATUS_DLL_INIT_FAILED（专用窗口站/桌面
+    /// 与降标签均未解决），故当前未施加，详见 .cpp 内注释。
     void ensureRestrictedToken();
 
     bool m_enabled = true;
