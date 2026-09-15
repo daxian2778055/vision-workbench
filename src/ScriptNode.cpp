@@ -327,11 +327,13 @@ QWidget *ScriptNode::createParamPanel()
     layout->addWidget(warnLabel);
 
     auto *sandboxChk = new QCheckBox(QStringLiteral("进程隔离（Job Object 限制桌面/剪贴板/内存，父退出即终止脚本进程）"));
-    sandboxChk->setToolTip(QStringLiteral("Windows 默认开启（受限令牌与 Job Object 仅有 Windows 实现，"
+    sandboxChk->setToolTip(QStringLiteral("Windows 默认开启（受限令牌 / 低完整性 / Job Object 仅有 Windows 实现，"
                                           "非 Windows 平台默认关闭，否则脚本会因沙箱不可用被拒绝执行）。"
-                                          "子进程以受限令牌启动（去除全部特权）、关入 Job Object 限制 UI/内存，"
-                                          "父进程退出时整棵进程树被终止；同时保留解释器隔离（Python -I -E）与环境变量清理。"
-                                          "未施加：管理员组 deny-only、低完整性级别（实测会导致子进程 0xC0000142 无法启动）。"));
+                                          "子进程以受限令牌启动（去除全部特权 + 低完整性 Low IL）：**无法写入用户目录**，"
+                                          "临时文件只能写在本次执行专属的沙箱目录（执行结束即删除）；"
+                                          "进程关入 Job Object 限制 UI/内存，父进程退出时整棵进程树被终止；"
+                                          "同时保留解释器隔离（Python -I -E）与环境变量清理。"
+                                          "未施加：管理员组 deny-only（实测任何子进程都会 0xC0000142）、网络隔离。"));
     sandboxChk->setChecked(ScriptSecurityPolicy::instance().isSandboxEnabled());
     connect(sandboxChk, &QCheckBox::toggled, this, [](bool on) {
         ScriptSecurityPolicy::instance().setSandboxEnabled(on);

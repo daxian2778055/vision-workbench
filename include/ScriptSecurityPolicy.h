@@ -100,14 +100,18 @@ public:
     /// 这是 Qt 6.11 移除 QProcess token 钩子后恢复降权的替代路径：用本次进程的受限令牌副本
     /// 启动解释器。**当前实际边界（勿夸大）**：
     ///   - 已施加：去除全部特权（仅剩 SeChangeNotifyPrivilege）；
+    ///   - 已施加：低完整性级别（Low IL）——脚本无法写入 Medium 完整性的用户目录
+    ///     （即无法改动用户文件/持久化），读取不受影响；
+    ///   - 已施加：每次执行独立的 Low 私有临时目录，并把子进程 TEMP/TMP 指过去
+    ///     （否则依赖 tempfile 的脚本会失败），执行结束即删除；
     ///   - 已施加：子进程脱离父作业并关入独立 Job Object，限制 UI/剪贴板/内存，
     ///     且 Job Object 的创建/配置/加入任一失败即终止子进程并拒绝执行（fail-closed）；
     ///   - 已施加：仅 stdout/stderr 两个管道写端被继承（PROC_THREAD_ATTRIBUTE_HANDLE_LIST），
     ///     父进程其它可继承句柄不会泄漏给脚本进程；
-    ///   - 未施加：管理员组 deny-only、低完整性级别（实测会让子进程 0xC0000142 启动失败，
-    ///     见 .cpp 内注释与 restrictedTokenSelfCheck() 的实测输出）；
-    ///   - 未施加：网络隔离。
-    /// 因此对外只能描述为「已去特权」，不能描述为「管理员权限已降级」。
+    ///   - 未施加：管理员组 deny-only、受限 SID 列表（探针实测二者均使任何子进程以
+    ///     0xC0000142 退出，见 tests/restricted_token_probe.cpp 与 .cpp 内注释）；
+    ///   - 未施加：专用窗口站/桌面、网络隔离。
+    /// 因此只能描述为「已去特权 + 低完整性 + 进程树/句柄约束」，不等于完整沙箱。
     /// - timeoutMs <= 0 表示不限时；cancelRequested() 返回 true 时立即终止子进程。
     /// - 返回 false 时 error 说明原因（令牌不可用/进程创建失败/进程隔离失败/超时/被取消）。
     bool runWithRestrictedToken(const QString &program,

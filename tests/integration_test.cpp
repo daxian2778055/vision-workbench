@@ -25,6 +25,7 @@
 #include <QCoreApplication>
 #include <QTemporaryDir>
 #include <QFile>
+#include <QDir>
 #include <QProcess>
 
 class IntegrationTest : public QObject
@@ -59,6 +60,7 @@ private slots:
     void testExecutorReuseAcrossScenesWithLoop();
     void testLoopAddedToSameSceneIsDetected();
     void testScriptNodeReportsSuccess();
+    void testScriptNodeLowIntegrityContainment();
     void testConditionalBranchSkipClearsStaleOutput();
     void testNestedLoopIterations();
     void testRuntimeStatsCounters();
@@ -659,6 +661,70 @@ void IntegrationTest::testScriptNodeReportsSuccess()
     QVERIFY2(finished, "脚本流程未在 15 秒内结束");
     QVERIFY2(nodeOk, "脚本正常执行完却报告失败（moduleStatus 未置位，会误停流程）");
     QCOMPARE(lastOutput, QStringLiteral("vfp-script-ok"));
+}
+
+void IntegrationTest::testScriptNodeLowIntegrityContainment()
+{
+    // 低完整性隔离契约（数据来源：tests/restricted_token_probe.cpp 的组合矩阵）：
+    //   1) 令牌自检必须如实报告 integrity=Low；
+    //   2) 脚本不得写入 Medium 完整性的用户目录（否则仍能改动用户文件/持久化）；
+    //   3) 依赖 tempfile 的脚本必须能在私有沙箱目录里正常读写（否则隔离会破坏正常用法）；
+    //   4) 沙箱目录在执行结束后必须被清理。
+    QProcess probe;
+    probe.start(QStringLiteral("python"), { QStringLiteral("-c"), QStringLiteral("pass") });
+    const bool hasPython = probe.waitForStarted(3000) && probe.waitForFinished(5000)
+                           && probe.exitCode() == 0;
+    if (!hasPython) {
+        QSKIP("本机无可用 Python，跳过低完整性隔离测试");
+    }
+
+    ScriptSecurityPolicy &policy = ScriptSecurityPolicy::instance();
+    policy.setEnabled(true);
+    policy.setRequireConfirmation(false);
+    policy.setSandboxEnabled(true);
+    policy.setAuditLogEnabled(false);
+
+    QString out;
+    QString errOut;
+    QString error;
+    int code = -1;
+
+    // 1) 自检必须显示低完整性（不夸大也不隐瞒）
+    const QString selfCheck = policy.restrictedTokenSelfCheck();
+    QVERIFY2(selfCheck.contains(QStringLiteral("integrity=Low")), qPrintable(selfCheck));
+
+    // 2) 写入用户临时目录（Medium）→ 必须被拒（既非 0 退出，也不留下文件）
+    const QString outside = QDir::tempPath() + QStringLiteral("/vfp_containment_probe.txt");
+    QFile::remove(outside);
+    const QString writeOutside = QStringLiteral("open(r'%1','w').write('x')")
+                                     .arg(QDir::toNativeSeparators(outside));
+    const bool started = policy.runWithRestrictedToken(
+        QStringLiteral("python"), { QStringLiteral("-c"), writeOutside },
+        20000, []() { return false; }, out, errOut, error, &code);
+    QVERIFY2(started, qPrintable(error));
+    QVERIFY2(code != 0,
+             qPrintable(QStringLiteral("低完整性下仍成功写入用户目录（隔离失效）：out=%1 err=%2")
+                            .arg(out, errOut)));
+    QVERIFY2(!QFile::exists(outside), "低完整性下仍在用户目录留下了文件（隔离失效）");
+
+    // 3) 私有沙箱临时目录：tempfile 可用，且路径确实指向沙箱
+    const QString tempfileProbe = QStringLiteral(
+        "import tempfile,os;p=os.path.join(tempfile.gettempdir(),'x.txt');"
+        "open(p,'w').write('ok');print('tempfile-ok',tempfile.gettempdir())");
+    const bool ok = policy.runWithRestrictedToken(
+        QStringLiteral("python"), { QStringLiteral("-c"), tempfileProbe },
+        20000, []() { return false; }, out, errOut, error, &code);
+    QVERIFY2(ok, qPrintable(QStringLiteral("%1 / %2").arg(error, errOut)));
+    QCOMPARE(code, 0);
+    QVERIFY2(out.contains(QStringLiteral("tempfile-ok")), qPrintable(out));
+    QVERIFY2(out.contains(QStringLiteral("vfp-script-sandbox")),
+             qPrintable(QStringLiteral("TEMP 未指向私有沙箱目录：%1").arg(out)));
+
+    // 4) 执行结束后沙箱目录必须被清理
+    const QDir sandboxRoot(QDir::tempPath() + QStringLiteral("/vfp-script-sandbox"));
+    const QStringList leftovers = sandboxRoot.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    QVERIFY2(leftovers.isEmpty(),
+             qPrintable(QStringLiteral("沙箱临时目录未清理：%1").arg(leftovers.join(QStringLiteral(", ")))));
 }
 
 void IntegrationTest::testConditionalBranchSkipClearsStaleOutput()

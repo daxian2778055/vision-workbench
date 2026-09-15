@@ -20,6 +20,7 @@
 
 #if defined(Q_OS_WIN)
 #  include <windows.h>
+#  include <aclapi.h>   // SetNamedSecurityInfoW（给沙箱临时目录打 Low 完整性标签）
 #endif
 
 ScriptSecurityPolicy &ScriptSecurityPolicy::instance()
@@ -293,8 +294,12 @@ void ScriptSecurityPolicy::ensureRestrictedToken()
         return;
     }
     HANDLE hProc = nullptr;
+    // 必须同时申请 TOKEN_ADJUST_DEFAULT：受限令牌句柄的权限受源句柄限制，缺少它
+    // SetTokenInformation(TokenIntegrityLevel) 会以 ERROR_ACCESS_DENIED(5) 失败，
+    // 低完整性级别便静默失效（探针 tests/restricted_token_probe.cpp 正是靠这一点定位的）。
     if (!OpenProcessToken(GetCurrentProcess(),
-                           TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY, &hProc)) {
+                           TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT,
+                           &hProc)) {
         qWarning() << "[ScriptSecurityPolicy] OpenProcessToken 失败，沙箱降级为无降权";
         return;
     }
@@ -321,15 +326,37 @@ void ScriptSecurityPolicy::ensureRestrictedToken()
         return;
     }
 
-    // 低完整性级别（Low IL）暂不施加：需在专用窗口站/桌面上设置低完整性标签
-    // （SACL + 完整性 ACE），属后续独立项。
+    // 低完整性级别（Low IL）：实测可阻止子进程写入 Medium 完整性的用户目录（脚本无法改动
+    // 用户文件、无法持久化），同时不影响读取与执行——见 tests/restricted_token_probe.cpp
+    // 打印的组合矩阵（A 组 vs C 组的写入测试：fileWritten=YES vs no）。
+    // 注意：Low IL 下脚本无法向 Medium 目录写临时文件，故 runWithRestrictedToken 会为每次
+    // 执行准备一个打了 Low 标签的私有临时目录，并把子进程的 TEMP/TMP 指过去。
+    {
+        SID_IDENTIFIER_AUTHORITY authority = SECURITY_MANDATORY_LABEL_AUTHORITY;
+        PSID lowSid = nullptr;
+        if (AllocateAndInitializeSid(&authority, 1, SECURITY_MANDATORY_LOW_RID,
+                                     0, 0, 0, 0, 0, 0, 0, &lowSid)) {
+            TOKEN_MANDATORY_LABEL label{};
+            label.Label.Sid = lowSid;
+            label.Label.Attributes = SE_GROUP_INTEGRITY;
+            if (!SetTokenInformation(hRestricted, TokenIntegrityLevel, &label,
+                                     sizeof(label) + GetLengthSid(lowSid))) {
+                qWarning() << "[ScriptSecurityPolicy] 设置低完整性级别失败，降权仅剩去特权, err="
+                           << GetLastError();
+            }
+            FreeSid(lowSid);
+        }
+    }
     //
     // 当前降权边界（务必如实对外描述，不得夸大）：
     //   已施加：去除全部特权（仅剩 SeChangeNotifyPrivilege）
-    //   未施加：管理员组 deny-only（实测导致子进程 0xC0000142，见上文）
-    //   未施加：低完整性级别、专用窗口站/桌面（CreateProcessAsUserW 的 lpDesktop 传 nullptr，
-    //           子进程继承当前桌面）、网络隔离
-    //   结论：只能描述为「已去特权」，不能描述为「管理员权限已降级」。
+    //   已施加：低完整性级别（Low IL）+ 每次执行独立的 Low 私有临时目录
+    //   已施加：独立 Job Object（失败即拒绝执行）、仅继承 stdout/stderr 两个句柄
+    //   未施加：管理员组 deny-only、受限 SID 列表——探针实测二者均使**任何**子进程以
+    //           0xC0000142 STATUS_DLL_INIT_FAILED 退出（连 cmd /c echo、有无管道都一样，
+    //           即失败在进程初始化阶段，与 stdio/句柄无关）
+    //   未施加：专用窗口站/桌面（lpDesktop 传 nullptr，子进程继承当前桌面）、网络隔离
+    //   结论：可描述为「已去特权 + 低完整性 + 进程树/句柄约束」，仍不可描述为完整隔离。
 
     m_restrictedToken = hRestricted;
     CloseHandle(hProc);
@@ -483,6 +510,61 @@ void drainPipe(HANDLE pipe, QByteArray &sink)
     }
 }
 
+/// 为一次脚本执行创建私有临时目录，并标记为 Low 完整性（否则 Low IL 子进程无法写入）。
+/// 标签带继承标志，脚本在其中创建的文件/子目录同样为 Low。
+QString createSandboxTempDir()
+{
+    const QString runId = QStringLiteral("%1-%2")
+                              .arg(QCoreApplication::applicationPid())
+                              .arg(QDateTime::currentMSecsSinceEpoch());
+    const QString path = QDir::tempPath() + QStringLiteral("/vfp-script-sandbox/run-%1").arg(runId);
+    if (!QDir().mkpath(path)) {
+        return QString();
+    }
+
+    SID_IDENTIFIER_AUTHORITY authority = SECURITY_MANDATORY_LABEL_AUTHORITY;
+    PSID lowSid = nullptr;
+    if (!AllocateAndInitializeSid(&authority, 1, SECURITY_MANDATORY_LOW_RID,
+                                 0, 0, 0, 0, 0, 0, 0, &lowSid)) {
+        return path;   // 目录可用，但未降标签：脚本可写，隔离性弱
+    }
+    const DWORD sidLength = GetLengthSid(lowSid);
+    const DWORD aceLength = sizeof(SYSTEM_MANDATORY_LABEL_ACE) + sidLength - sizeof(DWORD);
+    std::vector<BYTE> aclStorage(sizeof(ACL) + aceLength);
+    PACL acl = reinterpret_cast<PACL>(aclStorage.data());
+    bool labelled = InitializeAcl(acl, static_cast<DWORD>(aclStorage.size()), ACL_REVISION)
+                    && AddMandatoryAce(acl, ACL_REVISION,
+                                       OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
+                                       SYSTEM_MANDATORY_LABEL_NO_WRITE_UP, lowSid);
+
+    if (labelled) {
+        std::wstring wide = path.toStdWString();
+        if (SetNamedSecurityInfoW(wide.data(), SE_FILE_OBJECT, LABEL_SECURITY_INFORMATION,
+                                  nullptr, nullptr, nullptr, acl) != ERROR_SUCCESS) {
+            qWarning() << "[ScriptSecurityPolicy] 沙箱临时目录设置 Low 标签失败, err="
+                       << GetLastError();
+        }
+    }
+    FreeSid(lowSid);
+
+    if (!labelled) {
+        // 未成功降标签：返回系统临时目录会失去"可写区"隔离，故仍返回该目录（至少是独立目录）
+        qWarning() << "[ScriptSecurityPolicy] 构造 Low 完整性标签失败，沙箱目录未降标签";
+    }
+    return path;
+}
+
+/// 离开作用域时删除沙箱临时目录（覆盖 runWithRestrictedToken 的所有返回路径）
+struct SandboxTempDirGuard {
+    QString path;
+    ~SandboxTempDirGuard()
+    {
+        if (!path.isEmpty()) {
+            QDir(path).removeRecursively();
+        }
+    }
+};
+
 } // namespace
 
 bool ScriptSecurityPolicy::hasRestrictedToken() const
@@ -546,7 +628,17 @@ bool ScriptSecurityPolicy::runWithRestrictedToken(const QString &program,
     std::vector<wchar_t> cmdBuf(static_cast<size_t>(commandLine.size()) + 1, L'\0');
     commandLine.toWCharArray(cmdBuf.data());
 
-    const QByteArray envBlock = buildEnvironmentBlock(buildEnvironment());
+    // Low IL 子进程无法写入 Medium 完整性的系统临时目录（Python 的 tempfile 会因此失败），
+    // 故每次执行都给一个打了 Low 标签的私有临时目录，并把 TEMP/TMP 指过去：
+    // 脚本仍能正常读写临时文件，但写入被约束在这个目录内。
+    const QString sandboxTemp = createSandboxTempDir();
+    SandboxTempDirGuard sandboxGuard{ sandboxTemp };
+    QProcessEnvironment childEnv = buildEnvironment();
+    if (!sandboxTemp.isEmpty()) {
+        childEnv.insert(QStringLiteral("TEMP"), sandboxTemp);
+        childEnv.insert(QStringLiteral("TMP"), sandboxTemp);
+    }
+    const QByteArray envBlock = buildEnvironmentBlock(childEnv);
 
     STARTUPINFOEXW siex{};
     siex.StartupInfo.cb = sizeof(STARTUPINFOW);
