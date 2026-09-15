@@ -57,6 +57,27 @@ foreach ($d in $dropped) {
 }
 Write-Host ("[ok]   PATH sanitized: kept " + $kept.Count + ", dropped " + $dropped.Count)
 
+# ------------------------- prefer the real PowerShell 7 over the Store alias stub
+# Windows ships an "app execution alias" at
+#   %LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.EXE
+# which is a zero-byte placeholder. When PowerShell 7 comes from the MSI/Store-less install,
+# launching that stub fails with "找不到适用的应用许可证" (no applicable app license) and
+# every shell step dies. Prepending the real install directory makes the runner pick it first.
+$pwshCandidates = @(
+    'C:\Program Files\PowerShell\7',
+    'D:\Program Files\PowerShell\7',
+    'C:\Program Files (x86)\PowerShell\7'
+)
+foreach ($dir in $pwshCandidates) {
+    if (Test-Path (Join-Path $dir 'pwsh.exe')) {
+        if ($env:Path -notlike ("*" + $dir + "*")) {
+            $env:Path = $dir + ';' + $env:Path
+            Write-Host ("[ok]   prepended real pwsh: " + $dir)
+        }
+        break
+    }
+}
+
 # ----------------------------------------------- make sure the step shell exists
 $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
 if ($pwsh) {

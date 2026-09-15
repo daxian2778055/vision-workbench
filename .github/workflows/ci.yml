@@ -15,7 +15,11 @@
 #        b) 保持本机某个目录（默认 E:/halcon/2/xin1）存放它们，由下方"准备本地资源"步骤
 #           创建目录联接（junction，只读使用、不复制）；可用环境变量 VFP_ASSETS_ROOT 覆盖该目录。
 #   5. 安装 actions/runner 并以标签 [self-hosted, windows] 注册；
-#   6. PowerShell 7（pwsh）——本工作流的步骤使用 shell: pwsh；
+#   6. PowerShell 7（pwsh）——本工作流的步骤使用 shell: pwsh。请安装 MSI 版
+#      （choco install powershell-core，装到 C:\Program Files\PowerShell\7）。
+#      勿用 Store/MSIX 版：其 %LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.EXE 只是个
+#      应用执行别名存根，在 runner 的启动上下文里会报「找不到适用的应用许可证」，
+#      导致每个 shell 步骤直接失败。tools/run-runner.ps1 会把 MSI 目录前置以规避。
 #   7. PATH 中不得存在「无法枚举」的目录，例如卸载残留的断链 junction 或已被删除的目录。
 #      runner 通过 WhichUtil.Which("pwsh") 逐个枚举 PATH 查找 shell，遇到这类条目会以
 #      System.IO.DirectoryNotFoundException 中断**每一个** run: 步骤（表现为步骤秒失败、
