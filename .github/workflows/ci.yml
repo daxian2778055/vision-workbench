@@ -10,7 +10,10 @@
 #      例如 C:\Qt\6.11.0\msvc2022_64）；
 #   3. HALCON：设置环境变量 HALCONROOT，或安装在 CMakeLists 的默认路径；
 #   4. 仓库内 thirdparty/（OpenCV/ZXing/Tesseract）与 dist/VisionFlowPlatform（运行时 DLL）已就绪；
-#      thirdparty/ 与 dist/ 在 .gitignore 中，需在 runner 上单独放置；
+#      thirdparty/ 与 dist/ 在 .gitignore 中，不会随 checkout 出现。两种方式二选一：
+#        a) 把它们直接放到 runner 工作区（需自行保证每次 checkout 后仍存在），或
+#        b) 保持本机某个目录（默认 E:/halcon/2/xin1）存放它们，由下方"准备本地资源"步骤
+#           创建目录联接（junction，只读使用、不复制）；可用环境变量 VFP_ASSETS_ROOT 覆盖该目录。
 #   5. 安装 actions/runner 并以标签 [self-hosted, windows] 注册。
 #
 # 若暂时没有自托管 runner，可直接在本机执行同一脚本：
@@ -38,6 +41,23 @@ jobs:
     steps:
       - name: 拉取代码
         uses: actions/checkout@v4
+
+      - name: 准备本地资源（thirdparty/dist 不在版本库中）
+        shell: pwsh
+        run: |
+          # thirdparty/（OpenCV/ZXing/Tesseract 的头文件与库）与 dist/VisionFlowPlatform（运行时 DLL）
+          # 都在 .gitignore 中，不会随 checkout 出现；这里用目录联接指向本机资源目录（只读，不复制）。
+          # 注：checkout 的 git clean 只会删除联接本身，不会影响目标目录内容。
+          $assets = if ($env:VFP_ASSETS_ROOT) { $env:VFP_ASSETS_ROOT } else { 'E:/halcon/2/xin1' }
+          foreach ($name in @('thirdparty', 'dist')) {
+            if (Test-Path $name) { Write-Host "[skip] $name 已存在"; continue }
+            $target = Join-Path $assets $name
+            if (-not (Test-Path $target)) {
+              throw "缺少资源目录 $target；请把 thirdparty/ 与 dist/ 放入仓库根，或设置环境变量 VFP_ASSETS_ROOT 指向包含它们的目录"
+            }
+            New-Item -ItemType Junction -Path $name -Target $target | Out-Null
+            Write-Host "[link] $name -> $target"
+          }
 
       - name: 构建并运行全部测试
         shell: pwsh
