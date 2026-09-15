@@ -287,6 +287,8 @@ void ScriptSecurityPolicy::closeJob(QProcess *proc)
 #if defined(Q_OS_WIN)
 void ScriptSecurityPolicy::ensureRestrictedToken()
 {
+    // 多个流程可并发执行脚本，这里必须串行化：否则会重复创建令牌并泄漏句柄（P1）
+    QMutexLocker locker(&m_tokenMutex);
     if (m_restrictedToken) {
         return;
     }
@@ -322,10 +324,12 @@ void ScriptSecurityPolicy::ensureRestrictedToken()
     // 低完整性级别（Low IL）暂不施加：需在专用窗口站/桌面上设置低完整性标签
     // （SACL + 完整性 ACE），属后续独立项。
     //
-    // 当前降权边界（务必如实对外描述）：
-    //   受限令牌 = 去除全部特权 + 管理员组 deny-only（无法提权）
-    //   子进程运行在专用窗口站/桌面（使 deny-only 下解释器能正常启动）
-    //   未含：低完整性级别、网络隔离。
+    // 当前降权边界（务必如实对外描述，不得夸大）：
+    //   已施加：去除全部特权（仅剩 SeChangeNotifyPrivilege）
+    //   未施加：管理员组 deny-only（实测导致子进程 0xC0000142，见上文）
+    //   未施加：低完整性级别、专用窗口站/桌面（CreateProcessAsUserW 的 lpDesktop 传 nullptr，
+    //           子进程继承当前桌面）、网络隔离
+    //   结论：只能描述为「已去特权」，不能描述为「管理员权限已降级」。
 
     m_restrictedToken = hRestricted;
     CloseHandle(hProc);
@@ -334,6 +338,7 @@ void ScriptSecurityPolicy::ensureRestrictedToken()
 QString ScriptSecurityPolicy::restrictedTokenSelfCheck()
 {
     ensureRestrictedToken();
+    QMutexLocker locker(&m_tokenMutex);   // 与创建路径互斥，避免读到半初始化状态（P1）
     if (!m_restrictedToken) {
         return QStringLiteral("restrictedToken=unavailable");
     }
@@ -482,6 +487,7 @@ void drainPipe(HANDLE pipe, QByteArray &sink)
 
 bool ScriptSecurityPolicy::hasRestrictedToken() const
 {
+    QMutexLocker locker(&m_tokenMutex);
     return m_restrictedToken != nullptr;
 }
 
@@ -502,7 +508,12 @@ bool ScriptSecurityPolicy::runWithRestrictedToken(const QString &program,
     }
 
     ensureRestrictedToken();
-    if (!m_restrictedToken) {
+    HANDLE restrictedToken = nullptr;
+    {
+        QMutexLocker locker(&m_tokenMutex);   // 与创建路径互斥（P1）
+        restrictedToken = reinterpret_cast<HANDLE>(m_restrictedToken);
+    }
+    if (!restrictedToken) {
         error = QStringLiteral("受限令牌不可用");
         return false;
     }
@@ -537,27 +548,59 @@ bool ScriptSecurityPolicy::runWithRestrictedToken(const QString &program,
 
     const QByteArray envBlock = buildEnvironmentBlock(buildEnvironment());
 
-    STARTUPINFOW si{};
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES;
-    si.hStdInput = nullptr;
-    si.hStdOutput = outWrite;
-    si.hStdError = errWrite;
+    STARTUPINFOEXW siex{};
+    siex.StartupInfo.cb = sizeof(STARTUPINFOW);
+    siex.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    siex.StartupInfo.hStdInput = nullptr;
+    siex.StartupInfo.hStdOutput = outWrite;
+    siex.StartupInfo.hStdError = errWrite;
+
+    // 只允许 stdout/stderr 两个管道写端被继承（P1）：否则父进程中所有带 HANDLE_FLAG_INHERIT
+    // 的句柄（文件/设备/同步对象）都会被一并继承，而受限令牌并不能收回这些句柄自身的访问权。
+    // 注意：使用 PROC_THREAD_ATTRIBUTE_HANDLE_LIST 时 bInheritHandles 仍须为 TRUE——
+    // 该属性起「过滤器」作用；若传 FALSE，连 stdout/stderr 都不会被继承，输出捕获会失效。
+    bool inheritFiltered = false;
+#if defined(PROC_THREAD_ATTRIBUTE_HANDLE_LIST)
+    HANDLE inheritList[2] = { outWrite, errWrite };
+    SIZE_T attrBytes = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &attrBytes);
+    std::vector<BYTE> attrBuf(attrBytes);
+    LPPROC_THREAD_ATTRIBUTE_LIST attrList =
+        reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attrBuf.data());
+    if (attrBytes > 0
+        && InitializeProcThreadAttributeList(attrList, 1, 0, &attrBytes)
+        && UpdateProcThreadAttribute(attrList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                                     inheritList, sizeof(inheritList), nullptr, nullptr)) {
+        siex.StartupInfo.cb = sizeof(siex);   // 使用扩展结构时 cb 必须为 STARTUPINFOEXW 大小
+        siex.lpAttributeList = attrList;
+        inheritFiltered = true;
+    } else {
+        qWarning() << "[ScriptSecurityPolicy] 句柄继承白名单不可用，退回默认继承语义（仍保留受限令牌）";
+    }
+#endif
 
     PROCESS_INFORMATION pi{};
-    const DWORD baseFlags = CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT;
+    const DWORD baseFlags = CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT
+                            | (inheritFiltered ? EXTENDED_STARTUPINFO_PRESENT : 0);
     LPVOID envPtr = envBlock.isEmpty() ? nullptr : const_cast<char *>(envBlock.constData());
 
+    auto spawnRestricted = [&](DWORD extraFlags) {
+        return CreateProcessAsUserW(restrictedToken,
+                                    nullptr, cmdBuf.data(), nullptr, nullptr, TRUE,
+                                    baseFlags | extraFlags,
+                                    envPtr, nullptr, &siex.StartupInfo, &pi);
+    };
+
     // 优先脱离父作业（便于关入自己的 Job Object）；若父作业不允许脱离则退回不带该标志
-    BOOL created = CreateProcessAsUserW(reinterpret_cast<HANDLE>(m_restrictedToken),
-                                        nullptr, cmdBuf.data(), nullptr, nullptr, TRUE,
-                                        baseFlags | CREATE_BREAKAWAY_FROM_JOB,
-                                        envPtr, nullptr, &si, &pi);
+    BOOL created = spawnRestricted(CREATE_BREAKAWAY_FROM_JOB);
     if (!created) {
-        created = CreateProcessAsUserW(reinterpret_cast<HANDLE>(m_restrictedToken),
-                                       nullptr, cmdBuf.data(), nullptr, nullptr, TRUE,
-                                       baseFlags, envPtr, nullptr, &si, &pi);
+        created = spawnRestricted(0);
     }
+#if defined(PROC_THREAD_ATTRIBUTE_HANDLE_LIST)
+    if (inheritFiltered) {
+        DeleteProcThreadAttributeList(attrList);   // 进程已创建，属性列表即可释放
+    }
+#endif
     CloseHandle(outWrite);
     CloseHandle(errWrite);
     if (!created) {
@@ -568,15 +611,37 @@ bool ScriptSecurityPolicy::runWithRestrictedToken(const QString &program,
         return false;
     }
 
-    // 独立 Job Object：父退出（句柄关闭）即终止整棵脚本进程树
+    // 独立 Job Object：父退出（句柄关闭）即终止整棵脚本进程树。
+    // 创建/配置/加入任一步失败都必须 fail-closed（P1）：否则超时或取消时只能终止根进程，
+    // 脚本派生的子进程会继续存活——Job Object 是「进程树回收」的唯一保障。这与 QProcess
+    // 路径的契约一致（ScriptNode：attachJob 失败即拒绝执行）。
     HANDLE job = CreateJobObject(nullptr, nullptr);
-    if (job) {
+    bool jobReady = (job != nullptr);
+    if (jobReady) {
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION ext{};
         ext.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
                                              | JOB_OBJECT_LIMIT_PROCESS_MEMORY;
         ext.ProcessMemoryLimit = 512 * 1024 * 1024;
-        SetInformationJobObject(job, JobObjectExtendedLimitInformation, &ext, sizeof(ext));
-        AssignProcessToJobObject(job, pi.hProcess);   // 失败不致命（仍受限令牌运行）
+        jobReady = SetInformationJobObject(job, JobObjectExtendedLimitInformation,
+                                           &ext, sizeof(ext)) != FALSE;
+        if (jobReady) {
+            jobReady = AssignProcessToJobObject(job, pi.hProcess) != FALSE;
+        }
+    }
+    if (!jobReady) {
+        const DWORD jobError = GetLastError();
+        TerminateProcess(pi.hProcess, 1);
+        WaitForSingleObject(pi.hProcess, 2000);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        CloseHandle(outRead);
+        CloseHandle(errRead);
+        if (job) {
+            CloseHandle(job);
+        }
+        error = QStringLiteral("脚本进程隔离（Job Object）建立失败，已拒绝执行（GetLastError=%1）")
+                    .arg(jobError);
+        return false;
     }
 
     QByteArray outBuf;

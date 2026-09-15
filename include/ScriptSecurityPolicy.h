@@ -3,6 +3,7 @@
 #include <QString>
 #include <QStringList>
 #include <QProcessEnvironment>
+#include <QMutex>
 #include <functional>
 
 class QProcess;
@@ -96,12 +97,19 @@ public:
 
     /// 以「受限令牌」启动子进程并收集 stdout/stderr（仅 Windows 实现；其它平台返回 false）。
     ///
-    /// 这是 Qt 6.11 移除 QProcess token 钩子后，恢复"去特权 + 管理员 SID deny-only +
-    /// 低完整性"降权的替代路径：使用本次进程的受限令牌副本启动解释器，
-    /// 因此子进程拿不到当前用户的完整权限。
-    /// - 子进程会脱离父作业并被关入独立 Job Object（父退出即终止整棵进程树）。
+    /// 这是 Qt 6.11 移除 QProcess token 钩子后恢复降权的替代路径：用本次进程的受限令牌副本
+    /// 启动解释器。**当前实际边界（勿夸大）**：
+    ///   - 已施加：去除全部特权（仅剩 SeChangeNotifyPrivilege）；
+    ///   - 已施加：子进程脱离父作业并关入独立 Job Object，限制 UI/剪贴板/内存，
+    ///     且 Job Object 的创建/配置/加入任一失败即终止子进程并拒绝执行（fail-closed）；
+    ///   - 已施加：仅 stdout/stderr 两个管道写端被继承（PROC_THREAD_ATTRIBUTE_HANDLE_LIST），
+    ///     父进程其它可继承句柄不会泄漏给脚本进程；
+    ///   - 未施加：管理员组 deny-only、低完整性级别（实测会让子进程 0xC0000142 启动失败，
+    ///     见 .cpp 内注释与 restrictedTokenSelfCheck() 的实测输出）；
+    ///   - 未施加：网络隔离。
+    /// 因此对外只能描述为「已去特权」，不能描述为「管理员权限已降级」。
     /// - timeoutMs <= 0 表示不限时；cancelRequested() 返回 true 时立即终止子进程。
-    /// - 返回 false 时 error 说明原因（令牌不可用/进程创建失败/超时/被取消）。
+    /// - 返回 false 时 error 说明原因（令牌不可用/进程创建失败/进程隔离失败/超时/被取消）。
     bool runWithRestrictedToken(const QString &program,
                                const QStringList &args,
                                int timeoutMs,
@@ -137,6 +145,13 @@ private:
     bool m_auditLogEnabled = true;
     QString m_auditLogPath;
     bool m_blockWhenElevated = false;
+#if defined(Q_OS_WIN)
     bool m_sandboxEnabled = true;
-    void *m_restrictedToken = nullptr;   // Windows HANDLE；非 Windows 恒为 nullptr
+#else
+    /// 受限令牌与 Job Object 仅有 Windows 实现：非 Windows 平台若默认开启，
+    /// 脚本会走「沙箱不可用」的 fail-closed 分支而完全无法执行，故此处默认关闭。
+    bool m_sandboxEnabled = false;
+#endif
+    void *m_restrictedToken = nullptr;        // Windows HANDLE；非 Windows 恒为 nullptr
+    mutable QMutex m_tokenMutex;              // 保护 m_restrictedToken 的创建与读取（多流程并发执行脚本）
 };

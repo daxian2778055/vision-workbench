@@ -26,6 +26,16 @@
 #      System.IO.DirectoryNotFoundException 中断**每一个** run: 步骤（表现为步骤秒失败、
 #      且不产生 ci-*.log）。可用 tools/run-runner.ps1 启动监听，它会在启动前清洗 PATH。
 #
+# 安全边界（自托管 runner 的信任模型，务必不要放宽）：
+#   本工作流运行在本机自托管 runner 上，而工作区里的构建脚本（tools/ci.ps1、CMakeLists、
+#   以及本工作流自身）都会被该 runner 执行。也就是说：**谁能让本工作流跑起来，谁就能在
+#   这台机器上以 runner 账户执行任意命令**。因此：
+#     - 只接受 main 的 push、手动触发，以及「同仓库分支」发起的 PR；
+#     - 外部 fork 的 PR 一律跳过（见 jobs.build-and-test.if）——公开仓库无法排除恶意提交，
+#       即使 GitHub 对首次贡献者要求人工批准，批准过一次之后该账号的后续 PR 就会自动运行；
+#     - 需要验证外部贡献时：把改动拉进本仓库分支再开 PR，或在受控机器上人工执行 tools/ci.ps1；
+#     - 不要给本工作流添加 pull_request_target / workflow_run 之类的提权触发方式。
+#
 # 若暂时没有自托管 runner，可直接在本机执行同一脚本：
 #   powershell -ExecutionPolicy Bypass -File tools/ci.ps1
 
@@ -44,6 +54,11 @@ concurrency:
 
 jobs:
   build-and-test:
+    # 信任边界：跳过外部 fork 的 PR（详见文件头「安全边界」）。
+    # 同仓库分支的 PR、main 的 push、手动触发照常运行。
+    if: >-
+      github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name == github.repository
     # 需自托管 Windows runner（见文件头说明）
     runs-on: [self-hosted, windows]
     timeout-minutes: 90
