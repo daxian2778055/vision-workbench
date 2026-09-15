@@ -21,6 +21,7 @@ param(
     [string]$TaskName = 'VFP-ActionsRunner',
     [string]$User = $env:USERNAME,
     [string]$RunnerScript = '',
+    [ValidateSet('Limited', 'Highest')][string]$RunLevel = 'Limited',
     [switch]$Remove
 )
 
@@ -48,7 +49,10 @@ if (-not (Test-Path $RunnerScript)) {
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
     -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $RunnerScript + '"')
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $User
-$principal = New-ScheduledTaskPrincipal -UserId $User -LogonType Interactive -RunLevel Highest
+# 默认 Limited：整条 CI（构建 + 6 项测试）已在非提权令牌下实测通过，
+# 因此没有理由让 runner 拿管理员权限——它执行的每个作业都会继承该令牌。
+# 若某些步骤确实需要提权，可显式传 -RunLevel Highest。
+$principal = New-ScheduledTaskPrincipal -UserId $User -LogonType Interactive -RunLevel $RunLevel
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero)
 

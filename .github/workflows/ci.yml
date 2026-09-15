@@ -77,6 +77,33 @@ jobs:
           # 默认的 clean: true 会执行 git clean -ffdx，把 build/ 一并清掉，导致每次推送都全量重建。
           clean: false
 
+      - name: 环境自检（权限 / pwsh / PATH 可枚举性）
+        shell: pwsh
+        run: |
+          # 这三项各自导致过一次无法定位的 CI 失败，故固化到每次运行的自检里：
+          #   elevated    —— runner 是否以管理员令牌运行（应为 False，作业会继承该令牌）
+          #   pwsh        —— 必须是 MSI 版（Store 别名存根会报「找不到适用的应用许可证」）
+          #   pathUnenumerable —— PATH 里任何不可枚举目录都会让 runner 的 shell 解析直接抛异常
+          $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+              [Security.Principal.WindowsBuiltInRole]::Administrator)
+          $pwsh = (Get-Command pwsh -ErrorAction SilentlyContinue).Source
+          $bad = @()
+          foreach ($p in ($env:Path -split ';')) {
+            if ([string]::IsNullOrWhiteSpace($p)) { continue }
+            try { [System.IO.Directory]::EnumerateFileSystemEntries($p) | Out-Null }
+            catch { $bad += $p }
+          }
+          $lines = @(
+            "runner           = $env:RUNNER_NAME",
+            "user             = $env:USERNAME",
+            "elevated         = $elevated",
+            "pwsh             = $pwsh",
+            "pathUnenumerable = $($bad.Count)"
+          )
+          foreach ($b in $bad) { $lines += "  unenumerable: $b" }
+          $lines | ForEach-Object { Write-Host $_ }
+          $lines | Set-Content -Path ci-env.log -Encoding utf8
+
       - name: 准备本地资源（thirdparty/dist 不在版本库中）
         shell: pwsh
         run: |
