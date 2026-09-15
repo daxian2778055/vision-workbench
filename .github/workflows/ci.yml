@@ -15,6 +15,7 @@
 #        b) 保持本机某个目录（默认 E:/halcon/2/xin1）存放它们，由下方"准备本地资源"步骤
 #           创建目录联接（junction，只读使用、不复制）；可用环境变量 VFP_ASSETS_ROOT 覆盖该目录。
 #   5. 安装 actions/runner 并以标签 [self-hosted, windows] 注册；
+#      版本需 ≥ 2.327.1——actions/checkout@v5 以 Node 24 运行，旧 runner 会拒绝；
 #   6. PowerShell 7（pwsh）——本工作流的步骤使用 shell: pwsh。请安装 MSI 版
 #      （choco install powershell-core，装到 C:\Program Files\PowerShell\7）。
 #      勿用 Store/MSIX 版：其 %LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.EXE 只是个
@@ -49,7 +50,7 @@ jobs:
 
     steps:
       - name: 拉取代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           # 保留工作区内的未跟踪文件（尤其是 CMake 的 build/ 目录），让自托管 runner 能增量构建。
           # 默认的 clean: true 会执行 git clean -ffdx，把 build/ 一并清掉，导致每次推送都全量重建。
