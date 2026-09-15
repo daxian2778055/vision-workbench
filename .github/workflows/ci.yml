@@ -34,7 +34,8 @@
 #     - 外部 fork 的 PR 一律跳过（见 jobs.build-and-test.if）——公开仓库无法排除恶意提交，
 #       即使 GitHub 对首次贡献者要求人工批准，批准过一次之后该账号的后续 PR 就会自动运行；
 #     - 需要验证外部贡献时：把改动拉进本仓库分支再开 PR，或在受控机器上人工执行 tools/ci.ps1；
-#     - 不要给本工作流添加 pull_request_target / workflow_run 之类的提权触发方式。
+#     - 不要给本工作流添加 pull_request_target / workflow_run 之类的提权触发方式；
+#     - 本仓库要求 action 钉到完整 commit SHA，故 uses 只能写 SHA（见「拉取代码」步骤注释）。
 #
 # 若暂时没有自托管 runner，可直接在本机执行同一脚本：
 #   powershell -ExecutionPolicy Bypass -File tools/ci.ps1
@@ -65,7 +66,12 @@ jobs:
 
     steps:
       - name: 拉取代码
-        uses: actions/checkout@v5
+        # 本仓库启用了「action 必须钉到完整 commit SHA」（Settings → Actions → General），
+        # 所以这里必须写 SHA、不能写 @v5，否则任务在 Job initialize 阶段就被拒绝
+        # （UnresolvableActionDownloadInfoException）。升级时用
+        #   git ls-remote https://github.com/actions/checkout 'refs/tags/v5*'
+        # 查新 SHA 并同步更新注释。
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
         with:
           # 保留工作区内的未跟踪文件（尤其是 CMake 的 build/ 目录），让自托管 runner 能增量构建。
           # 默认的 clean: true 会执行 git clean -ffdx，把 build/ 一并清掉，导致每次推送都全量重建。
