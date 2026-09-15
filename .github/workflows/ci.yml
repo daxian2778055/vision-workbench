@@ -50,6 +50,10 @@ jobs:
     steps:
       - name: 拉取代码
         uses: actions/checkout@v4
+        with:
+          # 保留工作区内的未跟踪文件（尤其是 CMake 的 build/ 目录），让自托管 runner 能增量构建。
+          # 默认的 clean: true 会执行 git clean -ffdx，把 build/ 一并清掉，导致每次推送都全量重建。
+          clean: false
 
       - name: 准备本地资源（thirdparty/dist 不在版本库中）
         shell: pwsh
