@@ -2,15 +2,17 @@
     VisionFlowPlatform: install and register a self-hosted GitHub Actions runner on Windows.
 
     Usage (elevated PowerShell if you plan to install it as a service):
-      powershell -ExecutionPolicy Bypass -File tools/setup-runner.ps1 -Token <REGISTRATION_TOKEN>
-      powershell -ExecutionPolicy Bypass -File tools/setup-runner.ps1 -Token <TOKEN> -Start
+      powershell -ExecutionPolicy Bypass -File tools/setup-runner.ps1 -Token <REGISTRATION_TOKEN> -Start
+      powershell -ExecutionPolicy Bypass -File tools/setup-runner.ps1 -Pat <PERSONAL_ACCESS_TOKEN> -Start
 
-    Get <REGISTRATION_TOKEN> from:
-      GitHub repo -> Settings -> Actions -> Runners -> New self-hosted runner
-    Registration tokens expire in about one hour.
+    Credentials (exactly one of them is required):
+      -Token  registration token from GitHub: repo -> Settings -> Actions -> Runners -> New runner.
+              Valid for about ONE HOUR and single use; prefer -Pat when scripting.
+      -Pat    classic personal access token with the "repo" scope; not time limited.
 
     Parameters:
-      -Token       (required) registration token issued by GitHub
+      -Token       registration token issued by GitHub
+      -Pat         personal access token (alternative to -Token)
       -RepoUrl     repository URL            (default: this project)
       -Name        runner name               (default: computer name)
       -Labels      extra custom labels       (default: vfp-win)
@@ -29,7 +31,8 @@
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)][string]$Token,
+    [string]$Token,
+    [string]$Pat,
     [string]$RepoUrl = 'https://github.com/daxian2778055/vision-workbench',
     [string]$Name = $env:COMPUTERNAME,
     [string]$Labels = 'vfp-win',
@@ -56,6 +59,11 @@ Write-Step 'Preflight'
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 Set-Location $InstallDir
 Write-Ok "install directory: $InstallDir"
+
+if (-not $Token -and -not $Pat) {
+    Write-Err 'provide either -Token (registration token, expires in ~1h) or -Pat (personal access token)'
+    exit 3
+}
 
 if ($AsService) {
     $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
@@ -111,7 +119,6 @@ if (Test-Path (Join-Path $InstallDir 'config.cmd')) {
 Write-Step 'Configure'
 $configArgs = @(
     '--url', $RepoUrl,
-    '--token', $Token,
     '--name', $Name,
     '--labels', $Labels,
     '--work', $WorkDir,
@@ -119,6 +126,13 @@ $configArgs = @(
     '--replace'
 )
 if ($AsService) { $configArgs += '--runasservice' }
+
+# 凭据：注册 token（约 1 小时有效、一次性）或 PAT（用于长期/自动化注册）
+if ($Pat) {
+    $configArgs = @('--pat', $Pat) + $configArgs
+} else {
+    $configArgs = @('--token', $Token) + $configArgs
+}
 
 & cmd /c "config.cmd $($configArgs -join ' ')" 2>&1 | ForEach-Object { Write-Host "    $_" }
 if ($LASTEXITCODE -ne 0) {
