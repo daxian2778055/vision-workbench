@@ -117,6 +117,13 @@ if ($SkipTests) {
 
 # ------------------------------------------------------------------ 5. tests
 Write-Step "Tests (CTest / $Config)"
+
+# QtTest 的结果与 qInfo 在进程无控制台时会被投递到调试器输出（OutputDebugString），
+# CI 日志里就完全没有内容——测试失败时看不到任何原因（表现为 LastTest.log 里的
+# "<end of output>"）。强制 Qt 把日志写到 stderr，ctest 才能捕获到。
+$env:QT_ASSUME_STDERR_HAS_CONSOLE = '1'
+$env:QT_FORCE_STDERR_LOGGING = '1'
+
 $testLog = Join-Path $RepoRoot 'ci-test.log'
 Push-Location $BuildDir
 & ctest -C $Config --output-on-failure 2>&1 | Tee-Object -FilePath (Join-Path $RepoRoot 'ci-test.log') | Out-Null
@@ -144,6 +151,12 @@ if ($testCode -ne 0 -or $failed -gt 0 -or $total -eq 0) {
     Write-Err "tests failed (ctest exit $testCode, failed=$failed, total=$total); see $testLog"
     Write-Host '  --- last 40 lines ---'
     Get-Content $testLog -Tail 40 | ForEach-Object { Write-Host "    $_" }
+    # ctest 把每个测试的完整输出写在 LastTest.log；它不依赖流重定向，失败时一并给出
+    $lastTestLog = Join-Path $BuildDir 'Testing\Temporary\LastTest.log'
+    if (Test-Path $lastTestLog) {
+        Write-Host "  --- $lastTestLog (tail 80) ---"
+        Get-Content $lastTestLog -Tail 80 | ForEach-Object { Write-Host "    $_" }
+    }
     Pop-Location
     exit 2
 }
