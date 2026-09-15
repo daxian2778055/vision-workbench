@@ -61,5 +61,5 @@ Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
     -Description 'Start the VisionFlowPlatform self-hosted GitHub Actions runner at logon (sanitizes PATH first).' | Out-Null
 
 Write-Host ("[ok]   registered scheduled task: " + $TaskName) -ForegroundColor Green
-Write-Host ("[ok]   runs at logon of " + $User + ", elevated, calling " + $RunnerScript)
+Write-Host ("[ok]   runs at logon of " + $User + ", RunLevel=" + $RunLevel + ", calling " + $RunnerScript)
 Write-Host '[ok]   remove it with: -Remove'
