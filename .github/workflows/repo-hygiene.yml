@@ -1,0 +1,38 @@
+# 仓库卫生与工作流策略检查（跑在 GitHub 托管 runner 上）
+#
+# 为什么单独一个工作流：
+#   主工作流 ci.yml 只能跑在「自托管」runner 上（构建需要本机 Qt/HALCON/MVS/thirdparty），
+#   而自托管 runner 会执行工作区里的任意脚本，因此绝不能接受外部 fork 的 PR（ci.yml 里
+#   用同仓库守卫跳过了它们）。为了让外部贡献者仍能拿到反馈，这里把所有「不需要本机依赖」
+#   的检查放到 GitHub 托管 runner 上：
+#     - pull_request 事件下 GITHUB_TOKEN 只读，且本工作流不引用任何 secret；
+#     - 全程不接触自托管 runner，因此 fork PR 在这里执行是安全的。
+#   检查项由 tools/repo_hygiene.py 提供，本地可用 `python tools/repo_hygiene.py` 复现。
+name: Repo Hygiene
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: hygiene-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hygiene:
+    # GitHub 托管 runner：不依赖本机资源，fork PR 可安全运行
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # 本仓库要求 action 钉到完整 commit SHA（见 ci.yml 中的说明）
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09   # v5.1.0
+
+      - name: 卫生检查（密钥/大文件/工作流策略/ASCII/gitignore）
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/hygiene-venv
+          /tmp/hygiene-venv/bin/pip install --quiet --disable-pip-version-check pyyaml
+          /tmp/hygiene-venv/bin/python tools/repo_hygiene.py
