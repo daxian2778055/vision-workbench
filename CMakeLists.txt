@@ -728,6 +728,14 @@ if(MSVC)
     add_test(NAME ScriptSecurityPolicyTest COMMAND script_security_test)
 endif()
 
+# 受限令牌组合探针（诊断用，非测试用例）：把 {去特权} × {管理员SID deny-only} × {低完整性}
+# × {受限SID列表} 的组合跑成矩阵，用于定位 STATUS_DLL_INIT_FAILED(0xC0000142) 的成因。
+# 纯 Win32、不链接 Qt/vfp_core（避免被测沙箱之外的因素干扰），也不注册为 ctest 用例。
+if(MSVC)
+    add_executable(restricted_token_probe tests/restricted_token_probe.cpp)
+    target_compile_options(restricted_token_probe PRIVATE /utf-8)
+endif()
+
 # ---------------------------------------------------------------
 # 测试运行环境
 # ---------------------------------------------------------------
