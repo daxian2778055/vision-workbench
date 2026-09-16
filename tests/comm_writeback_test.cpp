@@ -11,6 +11,7 @@
 #include "FlowExecutor.h"
 #include "FlowScene.h"
 #include "GlobalTriggerManager.h"
+#include "HeartbeatManager.h"
 #include "ModbusNode.h"
 #include "NodeBase.h"
 #include "ReceiveEvent.h"
@@ -49,6 +50,7 @@ private slots:
     void testWritebackFailureIsReported();
     void testModbusRegisterWritebackAndRawSendGuard();
     void testPlcDataTriggersFlowAndWritesBack();
+    void testHeartbeatActuallyGoesOnTheWire();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -303,6 +305,45 @@ void CommWritebackTest::testPlcDataTriggersFlowAndWritesBack()
     exec.setFlowScene(nullptr);
     QVERIFY(cm->closeDevice(QStringLiteral("SIM_TRIG")));
     QVERIFY(cm->removeDevice(QStringLiteral("SIM_TRIG")));
+}
+
+void CommWritebackTest::testHeartbeatActuallyGoesOnTheWire()
+{
+    // 心跳此前只 emit 一个无人接收的 heartBeatSent，设备侧永远收不到任何报文；
+    // 而且 intervalMs 从未被使用（基定时器固定 1s）。这里两个都验证。
+    QTcpServer plc;
+    QByteArray received;
+    startSimulatedPlc(plc, received);
+    QVERIFY2(plc.isListening(), qPrintable(plc.errorString()));
+
+    auto *cm = CommunicationManager::instance();
+    QVERIFY(cm->addDevice(QStringLiteral("SIM_HB"), QStringLiteral("TCP"),
+                          tcpClientConfig(plc.serverPort())));
+    QVERIFY(cm->openDevice(QStringLiteral("SIM_HB")));
+
+    auto *hb = HeartbeatManager::instance();
+    // 300ms 间隔：若 intervalMs 仍被忽略（固定 1s），"≥3 次"就来不及出现
+    QVERIFY2(hb->registerHeartbeat(QStringLiteral("SIM_HB"), 300,
+                                   QStringLiteral("HB0"), QStringLiteral("HB1")),
+             "注册心跳失败");
+    QVERIFY(hb->startHeartbeat(QStringLiteral("SIM_HB")));
+
+    // 2500ms 内至少 4 次：300ms 间隔约 1s 就到，而固定 1s 节拍需要 4s —— 因此这条断言
+    // 同时钉住"真的发包"和"intervalMs 被真正使用"
+    QTRY_VERIFY_WITH_TIMEOUT(received.count("HB") >= 4, 2500);
+    QVERIFY2(received.contains("HB0"), "未发出 pattern0");
+    QVERIFY2(received.contains("HB1"), "未发出 pattern1（交替逻辑或间隔未生效）");
+
+    // 停止后必须在线上安静（把"配了停止却不生效"也挡掉）
+    QVERIFY(hb->stopHeartbeat(QStringLiteral("SIM_HB")));
+    QTest::qWait(200);   // 让在途的那一次先落下来
+    const int afterStop = received.size();
+    QTest::qWait(800);   // 远超 300ms 间隔
+    QCOMPARE(received.size(), afterStop);
+
+    hb->unregisterHeartbeat(QStringLiteral("SIM_HB"));
+    QVERIFY(cm->closeDevice(QStringLiteral("SIM_HB")));
+    QVERIFY(cm->removeDevice(QStringLiteral("SIM_HB")));
 }
 
 // 必须用 QTEST_MAIN：流程用例要创建 FlowScene（QGraphicsScene），仅 QCoreApplication 会崩；

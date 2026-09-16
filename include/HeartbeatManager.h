@@ -13,6 +13,9 @@ struct HeartbeatEntry {
     QString pattern1 = QStringLiteral("HeartBeat1");
     bool active = false;
     int toggle = 0;
+    /// 上次实际发包时刻（ms，QDateTime::currentMSecsSinceEpoch）；
+    /// 基定时器只是扫描节拍，真正是否该发由本字段 + intervalMs 决定（不参与序列化）
+    qint64 lastSentMs = 0;
 };
 
 /// 心跳管理器 — 监测通信连接健康状态

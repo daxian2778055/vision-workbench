@@ -1,4 +1,6 @@
 #include "HeartbeatManager.h"
+#include "CommunicationManager.h"
+#include <QDateTime>
 #include "AppLog.h"
 #include <QJsonArray>
 #include <QJsonObject>
@@ -17,7 +19,10 @@ HeartbeatManager::HeartbeatManager(QObject *parent)
     : QObject(parent)
 {
     m_timer = new QTimer(this);
-    m_timer->setInterval(1000); // 1 second base tick
+    // 基定时器只是"扫描节拍"：每个条目是否该发包，由自身的 intervalMs 决定。
+    // 用 100ms 节拍是为了让 sub-second 的 intervalMs 也能生效（此前固定 1s 且 intervalMs
+    // 根本没被用到——配置写了多少都不影响发心跳频率）。
+    m_timer->setInterval(100);
     connect(m_timer, &QTimer::timeout, this, &HeartbeatManager::onTick);
 }
 
@@ -94,12 +99,26 @@ bool HeartbeatManager::stopHeartbeat(const QString &deviceName)
 
 void HeartbeatManager::onTick()
 {
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+
     for (auto &entry : m_entries) {
         if (!entry.active) continue;
 
-        entry.toggle = 1 - entry.toggle;
-        QString pattern = (entry.toggle == 0) ? entry.pattern0 : entry.pattern1;
+        // 按条目自身的间隔发包（此前完全不看 intervalMs，配置写了也无效）
+        if (entry.lastSentMs != 0 && now - entry.lastSentMs < entry.intervalMs)
+            continue;
+        entry.lastSentMs = now;
 
+        entry.toggle = 1 - entry.toggle;
+        const QString pattern = (entry.toggle == 0) ? entry.pattern0 : entry.pattern1;
+
+        // 真正发包：此前只 emit 了一个无人接收的 heartBeatSent，
+        // 设备侧永远收不到心跳——"心跳"配置了也是摆设。
+        auto *cm = CommunicationManager::instance();
+        if (!cm->sendData(entry.deviceName, pattern.toUtf8())) {
+            qWarning() << QStringLiteral("HeartbeatManager: 心跳发送失败（设备不存在或未连接）：")
+                       << entry.deviceName;
+        }
         emit heartBeatSent(entry.deviceName, pattern);
     }
 }
