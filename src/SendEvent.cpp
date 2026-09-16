@@ -1,4 +1,5 @@
 #include "SendEvent.h"
+#include "CommunicationManager.h"
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QDataStream>
@@ -54,10 +55,17 @@ bool TextDirectSendEvent::send(const QVariant &data)
 
     text += m_suffix;
 
-    // Send via CommunicationManager — the device node is resolved at send time
-    // We emit a signal that CommunicationManager connects to
-    emit sendCompleted(m_eventId, true);
-    return true;
+    // 真正发送：此前这里只 emit 了一个无人接收的 sendCompleted（注释写着
+    // "We emit a signal that CommunicationManager connects to"，但没有任何接收者），
+    // 且全仓库无人调用 send() ⇒ 配好的"发送事件"永远不会把数据发出去。
+    auto *cm = CommunicationManager::instance();
+    const bool ok = cm->sendData(m_deviceName, text.toUtf8());
+    if (!ok) {
+        qWarning() << QStringLiteral("TextDirectSendEvent: 发送失败（设备不存在或未连接）：")
+                   << m_eventId << m_deviceName;
+    }
+    emit sendCompleted(m_eventId, ok);
+    return ok;
 }
 
 QJsonObject TextDirectSendEvent::toJson() const
@@ -123,8 +131,15 @@ bool BytePackSendEvent::send(const QVariant &data)
     QByteArray packed = packData(data);
     if (packed.isEmpty()) return false;
 
-    emit sendCompleted(m_eventId, true);
-    return true;
+    // 同 TextDirectSendEvent：此前只 emit 信号，数据从未真正发出
+    auto *cm = CommunicationManager::instance();
+    const bool ok = cm->sendData(m_deviceName, packed);
+    if (!ok) {
+        qWarning() << QStringLiteral("BytePackSendEvent: 发送失败（设备不存在或未连接）：")
+                   << m_eventId << m_deviceName;
+    }
+    emit sendCompleted(m_eventId, ok);
+    return ok;
 }
 
 QJsonObject BytePackSendEvent::toJson() const

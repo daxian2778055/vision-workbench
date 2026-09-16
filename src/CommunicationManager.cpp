@@ -398,6 +398,16 @@ SendEvent *CommunicationManager::sendEvent(const QString &id) const
     return m_sendEvents.value(id, nullptr);
 }
 
+bool CommunicationManager::fireSendEvent(const QString &id, const QVariant &data)
+{
+    // 注意：必须在锁外调用 send()——send 内部会回调 sendData，而 sendData 会重新进入
+    // 本锁（非递归锁），持锁调用会自死锁。
+    SendEvent *ev = sendEvent(id);
+    if (!ev)
+        return false;
+    return ev->send(data);
+}
+
 bool CommunicationManager::addSendEvent(SendEvent *event)
 {
     if (!event) return false;

@@ -15,6 +15,7 @@
 #include "ModbusNode.h"
 #include "NodeBase.h"
 #include "ReceiveEvent.h"
+#include "SendEvent.h"
 
 namespace {
 
@@ -51,6 +52,7 @@ private slots:
     void testModbusRegisterWritebackAndRawSendGuard();
     void testPlcDataTriggersFlowAndWritesBack();
     void testHeartbeatActuallyGoesOnTheWire();
+    void testSendEventsActuallySend();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -344,6 +346,65 @@ void CommWritebackTest::testHeartbeatActuallyGoesOnTheWire()
     hb->unregisterHeartbeat(QStringLiteral("SIM_HB"));
     QVERIFY(cm->closeDevice(QStringLiteral("SIM_HB")));
     QVERIFY(cm->removeDevice(QStringLiteral("SIM_HB")));
+}
+
+void CommWritebackTest::testSendEventsActuallySend()
+{
+    // 发送事件此前只 emit 一个无人接收的 sendCompleted：模板替换、字节组包都写好了，
+    // 唯独"发出去"这一步没写（且全仓库无人调用 send()）。这里两条路径都验证到字节级。
+    QTcpServer plc;
+    QByteArray received;
+    startSimulatedPlc(plc, received);
+    QVERIFY2(plc.isListening(), qPrintable(plc.errorString()));
+
+    auto *cm = CommunicationManager::instance();
+    QVERIFY(cm->addDevice(QStringLiteral("SIM_SE"), QStringLiteral("TCP"),
+                          tcpClientConfig(plc.serverPort())));
+    QVERIFY(cm->openDevice(QStringLiteral("SIM_SE")));
+
+    // ① 文本-直接输出：模板 {} 替换 + 行尾后缀，且必须真的落线
+    auto *txt = new TextDirectSendEvent(QStringLiteral("SE_TXT"), QStringLiteral("SIM_SE"), cm);
+    txt->setTemplate(QStringLiteral("OK,{},END"));
+    txt->setSuffix(QStringLiteral("\r\n"));
+    QVERIFY(cm->addSendEvent(txt));
+    QVERIFY2(cm->fireSendEvent(QStringLiteral("SE_TXT"), 42), "文本发送事件应发送成功");
+    QTRY_VERIFY_WITH_TIMEOUT(received.contains("OK,42,END\r\n"), 3000);
+
+    // ② 字节组包：小端 int16（固定值 100）+ int16（数据值 7）→ 64 00 07 00
+    auto *bin = new BytePackSendEvent(QStringLiteral("SE_BIN"), QStringLiteral("SIM_SE"), cm);
+    BytePackField fixedField;
+    fixedField.dataType = QStringLiteral("int16");
+    fixedField.fixedValue = 100;
+    BytePackField dataField;
+    dataField.dataType = QStringLiteral("int16");   // 无固定值 → 取 send(data) 的值
+    bin->addField(fixedField);
+    bin->addField(dataField);
+    QVERIFY(cm->addSendEvent(bin));
+
+    received.clear();
+    QVERIFY2(cm->fireSendEvent(QStringLiteral("SE_BIN"), 7), "字节组包事件应发送成功");
+    QTRY_VERIFY_WITH_TIMEOUT(received.size() >= 4, 3000);
+    QByteArray expected;
+    expected.append(char(100)).append(char(0)).append(char(7)).append(char(0));
+    QCOMPARE(received.left(4), expected);
+
+    // ③ 失败必须可见：设备不存在 → false，且 sendCompleted 报 false（不再"静默成功"）
+    auto *bad = new TextDirectSendEvent(QStringLiteral("SE_BAD"), QStringLiteral("NO_SUCH_DEV"), cm);
+    bad->setTemplate(QStringLiteral("x"));
+    QVERIFY(cm->addSendEvent(bad));
+    QSignalSpy doneSpy(bad, &SendEvent::sendCompleted);
+    QVERIFY2(!cm->fireSendEvent(QStringLiteral("SE_BAD"), 1), "设备不存在时必须报失败");
+    QCOMPARE(doneSpy.count(), 1);
+    QCOMPARE(doneSpy.at(0).at(1).toBool(), false);
+
+    // ④ 未注册的事件 ID：入口本身也要能给出"没发"
+    QVERIFY(!cm->fireSendEvent(QStringLiteral("NO_SUCH_EVENT"), 1));
+
+    cm->removeSendEvent(QStringLiteral("SE_TXT"));
+    cm->removeSendEvent(QStringLiteral("SE_BIN"));
+    cm->removeSendEvent(QStringLiteral("SE_BAD"));
+    QVERIFY(cm->closeDevice(QStringLiteral("SIM_SE")));
+    QVERIFY(cm->removeDevice(QStringLiteral("SIM_SE")));
 }
 
 // 必须用 QTEST_MAIN：流程用例要创建 FlowScene（QGraphicsScene），仅 QCoreApplication 会崩；

@@ -54,6 +54,9 @@ public:
     QStringList sendEventIds() const;
     SendEvent *sendEvent(const QString &id) const;
     bool addSendEvent(SendEvent *event);
+    /// 触发一个已配置的发送事件（按其模板/字段组装后真正发出）。
+    /// 返回是否真的发出：事件不存在、被禁用、或设备不存在/未连接都返回 false。
+    bool fireSendEvent(const QString &id, const QVariant &data);
     bool removeSendEvent(const QString &id);
 
     // ---- 序列化 ----
