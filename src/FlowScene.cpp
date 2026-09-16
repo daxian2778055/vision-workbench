@@ -103,6 +103,12 @@ void FlowScene::requestExecuteFromHere(NodeBase *node)
         emit executeFromHereRequested(node);
 }
 
+void FlowScene::requestRecomputeFrom(NodeBase *node)
+{
+    if (node)
+        emit recomputeFromRequested(node);
+}
+
 void FlowScene::requestNodeEdit(NodeBase *node)
 {
     if (node)

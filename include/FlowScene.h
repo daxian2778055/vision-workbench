@@ -72,6 +72,8 @@ public:
     void requestNodeOutputData(NodeBase *node);
     void requestExecuteToHere(NodeBase *node);
     void requestExecuteFromHere(NodeBase *node);
+    /// 请求「重算该算子及其下游」（由 MainWindow 作废该段缓存后重跑）
+    void requestRecomputeFrom(NodeBase *node);
     void requestNodeEdit(NodeBase *node);
 
     /// 清空场景（唯一受支持的清空入口）。
@@ -144,6 +146,8 @@ signals:
     void nodeOutputDataRequested(NodeBase *node);
     void executeToHereRequested(NodeBase *node);
     void executeFromHereRequested(NodeBase *node);
+    /// 请求「重算该算子及其下游」（作废该段缓存后只重跑这一段）
+    void recomputeFromRequested(NodeBase *node);
     void nodeEditRequested(NodeBase *node);
 
 private:

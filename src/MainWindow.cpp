@@ -904,6 +904,10 @@ void MainWindow::hookFlowScene(FlowScene *scene)
         if (m_outputDataViewer)
             m_outputDataViewer->setNode(node);
     });
+    // 右键「重算此算子及下游」：调试时只重跑这一段，不必整图重跑
+    connect(scene, &FlowScene::recomputeFromRequested, this, [this](NodeBase *node) {
+        recomputeDownstream(node);
+    });
     connect(scene, &FlowScene::executeToHereRequested, this, [this](NodeBase *node) {
         int idx = ui->flowTabs->currentIndex();
         if (idx < 0 || idx >= m_flowScenes.size())

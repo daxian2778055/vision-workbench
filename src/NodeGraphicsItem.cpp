@@ -255,6 +255,9 @@ void NodeGraphicsItem::contextMenuEvent(QGraphicsSceneContextMenuEvent *event)
     executeFromHereAction->setEnabled(!locked);
     QAction *executeSingleNodeAction = menu.addAction(QStringLiteral("仅执行此算子"));
     executeSingleNodeAction->setEnabled(!locked);
+    // 与「仅执行此算子」的区别：会先作废本算子及下游缓存，因此下游拿到的是新值而非上一轮残留
+    QAction *recomputeDownstreamAction = menu.addAction(QStringLiteral("重算此算子及下游"));
+    recomputeDownstreamAction->setEnabled(!locked);
     menu.addSeparator();
 
     // 编辑相关
@@ -338,6 +341,8 @@ void NodeGraphicsItem::contextMenuEvent(QGraphicsSceneContextMenuEvent *event)
         scene->requestExecuteFromHere(m_node);
     } else if (selectedAction == executeSingleNodeAction && !locked) {
         m_node->execute();
+    } else if (selectedAction == recomputeDownstreamAction && !locked) {
+        scene->requestRecomputeFrom(m_node);
     } else if (selectedAction == viewOutputAction) {
         scene->requestNodeOutputData(m_node);
     } else if (selectedAction == viewHelpAction) {
