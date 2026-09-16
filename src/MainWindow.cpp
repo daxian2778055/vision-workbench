@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "ResultTablePanel.h"
 #include "ui_MainWindow.h"
 #include "FlowScene.h"
 #include "NodeBase.h"
@@ -424,6 +425,21 @@ MainWindow::MainWindow(QWidget *parent) :
         connect(m_executor, &FlowExecutor::executionStopped, this, &MainWindow::onExecutionStopped);
         connect(m_executor, &FlowExecutor::executionFinished, this, &MainWindow::onExecutionFinished);
         connect(m_executor, &FlowExecutor::executionError, this, &MainWindow::onExecutionError);
+
+        // 结果数据表：节点执行后把该模块的输出项/状态/耗时推给面板（UI 线程排队接收）
+        connect(m_executor, &FlowExecutor::nodeOutputsUpdated, this,
+                [this](NodeBase *node, bool ok, qint64 elapsedMs, const QVariantMap &vars) {
+            if (!m_resultTablePanel || !node)
+                return;
+            m_resultTablePanel->setModuleResult(node->moduleId(), node->fullName(), ok,
+                                                elapsedMs, vars);
+        });
+
+        // 「视图 → 结果表」菜单项（动作定义在 .ui 中，接线方式与其它视图项一致）
+        if (ui->actionResultTable) {
+            connect(ui->actionResultTable, &QAction::triggered, this,
+                    &MainWindow::onOpenResultTable);
+        }
 
         // 连接imageReady信号
         connect(m_executor, &FlowExecutor::imageReady, this, [this](NodeBase *node, const HalconCpp::HImage &image) {            // 运行界面图像控件转发（不受用户显示选择影响）
@@ -2900,6 +2916,25 @@ void MainWindow::onOpenPerformancePanel()
 
     m_performanceDock->show();
     m_performanceDock->raise();
+}
+
+void MainWindow::onOpenResultTable()
+{
+    // 打开结果数据表：一次运行后各模块的「输出项 / 数值 / 状态 / 耗时」
+    if (!m_resultTablePanel) {
+        m_resultTablePanel = new ResultTablePanel(this);
+        m_resultTableDock = new QDockWidget(QStringLiteral("结果表"), this);
+        m_resultTableDock->setObjectName(QStringLiteral("resultTableDock"));
+        m_resultTableDock->setWidget(m_resultTablePanel);
+        m_resultTableDock->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable);
+        m_resultTableDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+        m_resultTableDock->setMinimumWidth(320);
+        addDockWidget(Qt::RightDockWidgetArea, m_resultTableDock);
+    }
+
+    m_resultTableDock->show();
+    m_resultTableDock->raise();
+    logMessage(QStringLiteral("结果表已打开：运行流程后显示各模块的数值结果，可导出 CSV"));
 }
 
 void MainWindow::onOpenOutputViewer()

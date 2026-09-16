@@ -645,6 +645,17 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
         // 发出节点执行耗时信号
         emit nodeExecutionTime(node, nodeElapsed);
 
+        // 输出变量快照 → 结果数据表（成功时带本轮各输出项；失败时为空，由面板标注失败）
+        {
+            QVariantMap vars;
+            if (success) {
+                const QHash<QString, QVariant> collected = m_nodeOutputVars.value(node->moduleId());
+                for (auto it = collected.cbegin(); it != collected.cend(); ++it)
+                    vars.insert(it.key(), it.value());
+            }
+            emit nodeOutputsUpdated(node, success, nodeElapsed, vars);
+        }
+
         // Phase 4: \u4FDD\u5B58\u68C0\u6D4B\u7ED3\u679C\u5230\u6570\u636E\u5E93
         if (!AppDatabase::instance()->databasePath().isEmpty()) {
             // \u6570\u636E\u5E93\u5DF2\u521D\u59CB\u5316

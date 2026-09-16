@@ -173,7 +173,9 @@
     <addaction name="actionRuntimeMode"/>
     <addaction name="separator"/>
     <addaction name="actionRuntimeDesigner"/>
-   </widget>
+    <addaction name="separator"/>
+    <addaction name="actionResultTable"/>
+    </widget>
    <widget class="QMenu" name="menuCommunication">
     <property name="title">
      <string>通讯</string>
@@ -411,6 +413,11 @@
   <action name="actionInspectionResults">
    <property name="text">
     <string>检测结果</string>
+   </property>
+  </action>
+  <action name="actionResultTable">
+   <property name="text">
+    <string>结果表</string>
    </property>
   </action>
   <action name="actionParameterSearch">

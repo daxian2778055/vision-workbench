@@ -33,6 +33,7 @@ class ProjectManager;
 class HalconWindow;
 class RuntimeInterfaceView;
 class PerformancePanel;
+class ResultTablePanel;
 class OutputDataViewer;
 class NodeSearchWidget;
 class HelpViewer;
@@ -59,6 +60,8 @@ public:
     void runHalconEnvCheck();
 
 private slots:
+    /// 打开「结果表」面板（视图菜单）
+    void onOpenResultTable();
     void onNewProject();
     void onOpenProject();
     void onSaveProject();
@@ -218,6 +221,8 @@ protected:
     QDockWidget *m_performanceDock = nullptr;
     OutputDataViewer *m_outputDataViewer = nullptr;      // 输出数据查看器
     QDockWidget *m_outputViewerDock = nullptr;
+    ResultTablePanel *m_resultTablePanel = nullptr;      // 结果数据表（整条流程的全部数值结果）
+    QDockWidget *m_resultTableDock = nullptr;
     NodeSearchWidget *m_nodeSearchWidget = nullptr;      // 算子搜索控件
     HelpViewer *m_helpViewer = nullptr;                  // 算子帮助文档查看器
     QHash<NodeBase *, class ModuleEditorDialog *> m_moduleEditors;

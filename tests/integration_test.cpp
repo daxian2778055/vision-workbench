@@ -1082,6 +1082,19 @@ void IntegrationTest::testEndToEndPipelineSmoke()
             if (n == threshold) thresholdRuns.append(ok);
         }, Qt::DirectConnection);
 
+    // 结果表数据面：节点执行后应推出该模块的输出变量快照（结果面板即以此更新）
+    int outputsEmits = 0;
+    bool outputsOk = false;
+    QVariantMap outputsVars;
+    const auto outputsHandle = QObject::connect(
+        &exec, &FlowExecutor::nodeOutputsUpdated, &exec,
+        [&](NodeBase *n, bool ok, qint64, const QVariantMap &vars) {
+            if (n != threshold) return;
+            ++outputsEmits;
+            outputsOk = ok;
+            outputsVars = vars;
+        }, Qt::DirectConnection);
+
     auto runOnce = [&exec]() -> bool {
         exec.startExecution();
         bool finished = exec.wait(10000);
@@ -1125,6 +1138,11 @@ void IntegrationTest::testEndToEndPipelineSmoke()
     QVERIFY2(thresholdSuccess, "二值化节点报告失败");
     QCOMPARE(fgPixels, expectedWhite);       // 节点内部计数
     QCOMPARE(measuredWhite, expectedWhite);  // 独立复核输出图像
+
+    // 结果表数据面：两轮各推一次，且带本轮输出项（面板据此显示数值，不能是空快照）
+    QVERIFY2(outputsEmits >= 2, "执行时未推出输出变量快照（nodeOutputsUpdated）");
+    QCOMPARE(outputsOk, true);
+    QCOMPARE(outputsVars.value(QStringLiteral("foregroundPixels")).toInt(), expectedWhite);
 }
 
 void IntegrationTest::testRecomputeDownstreamOnly()

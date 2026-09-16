@@ -120,6 +120,8 @@ signals:
     void flowModeChanged(int mode);
     /// 单算子执行耗时信号（供性能面板接收）
     void nodeExecutionTime(NodeBase *node, qint64 elapsedMs);
+    /// 节点执行后的输出变量快照（供结果数据表；跨线程排队传递，UI 侧无需加锁读缓存）
+    void nodeOutputsUpdated(NodeBase *node, bool success, qint64 elapsedMs, const QVariantMap &vars);
     /// 整体流程执行耗时信号
     void flowExecutionTime(qint64 totalMs);
 
