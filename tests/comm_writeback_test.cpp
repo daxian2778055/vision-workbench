@@ -2,6 +2,7 @@
 // 再由流程里的「发送数据」算子把结果写回；并验证"设备不存在 / 未连接"时回写失败是**可见**的
 // （此前 process() 恒返回 true：PLC 什么都没收到，流程却显示成功、日志里也没有任何痕迹）。
 #include <QtTest>
+#include <QSignalSpy>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QJsonObject>
@@ -9,6 +10,7 @@
 #include "CommunicationManager.h"
 #include "FlowExecutor.h"
 #include "FlowScene.h"
+#include "ModbusNode.h"
 #include "NodeBase.h"
 
 namespace {
@@ -43,6 +45,7 @@ private slots:
     void testSendDataReachesSimulatedPlc();
     void testPipelineWritebackWithSuffix();
     void testWritebackFailureIsReported();
+    void testModbusRegisterWritebackAndRawSendGuard();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -138,6 +141,99 @@ void CommWritebackTest::testWritebackFailureIsReported()
     QVERIFY2(finished, "流程未在 10 秒内结束");
 
     QVERIFY2(!send->executionSuccess(), "设备不存在时回写必须报告失败，不能静默算成功");
+}
+
+void CommWritebackTest::testModbusRegisterWritebackAndRawSendGuard()
+{
+    // 用项目自带的 Modbus 双角色在本进程内回环：服务器（从站）+ 客户端（主站）
+    const int port = 15502;   // 高位端口，避开常见 Modbus 502
+    auto *cm = CommunicationManager::instance();
+
+    QJsonObject srvCfg;
+    srvCfg[QStringLiteral("role")] = QStringLiteral("服务器");
+    srvCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
+    srvCfg[QStringLiteral("port")] = port;
+    srvCfg[QStringLiteral("slaveAddress")] = 1;
+    QVERIFY2(cm->addDevice(QStringLiteral("MB_SRV"), QStringLiteral("Modbus"), srvCfg),
+             "addDevice(服务器) 失败");
+    auto *srv = qobject_cast<ModbusNode *>(cm->deviceNode(QStringLiteral("MB_SRV")));
+    QVERIFY2(srv != nullptr, "服务器节点类型不符");
+
+    // 先声明寄存器表再 open：openConnection() 里的 syncServerRegisters() 才会把它映射进数据单元，
+    // 否则客户端写到未映射地址会被服务器拒绝（本用例必须覆盖"真的写进去"）
+    QList<ModbusRegisterItem> regs;
+    ModbusRegisterItem reg;
+    reg.address = 0;
+    reg.dataType = QStringLiteral("uint16");
+    reg.byteOrder = QStringLiteral("ABCD");
+    reg.accessMode = QStringLiteral("ReadWrite");
+    reg.enabled = true;
+    regs.append(reg);
+    srv->setRegisters(regs);
+
+    QVERIFY2(cm->openDevice(QStringLiteral("MB_SRV")), "Modbus 服务器启动失败");
+    QTRY_VERIFY_WITH_TIMEOUT(srv->isServerListening(), 3000);
+
+    QJsonObject cliCfg;
+    cliCfg[QStringLiteral("role")] = QStringLiteral("客户端");
+    cliCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
+    cliCfg[QStringLiteral("host")] = QStringLiteral("127.0.0.1");
+    cliCfg[QStringLiteral("port")] = port;
+    cliCfg[QStringLiteral("slaveAddress")] = 1;
+    QVERIFY2(cm->addDevice(QStringLiteral("MB_CLI"), QStringLiteral("Modbus"), cliCfg),
+             "addDevice(客户端) 失败");
+    QVERIFY2(cm->openDevice(QStringLiteral("MB_CLI")), "Modbus 客户端连接请求失败");
+    auto *cli = qobject_cast<ModbusNode *>(cm->deviceNode(QStringLiteral("MB_CLI")));
+    QVERIFY2(cli != nullptr, "客户端节点类型不符");
+    // 注意：ModbusNode::isConnected() 只反映 m_connected，而它在 connectDevice() 返回 true
+    // 时就置位了——那只代表"连接请求已发出"，链路可能尚未建立（QModbus 是异步的）。
+    // 因此这里不停留在标志位，而是重试到真的写成功为止。
+    QSignalSpy writtenSpy(srv, &ModbusNode::registerWrittenByClient);
+    bool wrote = false;
+    for (int i = 0; i < 50 && !wrote; ++i) {   // 最多等约 5 秒
+        wrote = cli->writeRegister(0, 42);
+        if (!wrote)
+            QTest::qWait(100);
+    }
+    QVERIFY2(wrote, "写寄存器请求一直失败（Modbus 客户端未真正建立链路）");
+    QTRY_COMPARE_WITH_TIMEOUT(writtenSpy.count(), 1, 5000);
+    QCOMPARE(writtenSpy.at(0).at(0).toInt(), 0);
+    QCOMPARE(writtenSpy.at(0).at(1).toUInt(), quint16(42));
+
+    // 本次修复点：对 Modbus 设备调 sendData 没有"裸字节"语义，必须**立即失败**，
+    // 而不是像以前那样一路投递到基类空实现变成静默 no-op
+    QVERIFY2(!cm->sendData(QStringLiteral("MB_CLI"), QByteArray("OK,1")),
+             "Modbus 设备不支持原始字节发送，sendData 必须返回失败");
+
+    // 用户可见后果：把「发送数据」算子绑到 Modbus 设备时，流程必须报失败（而不是显示成功）
+    {
+        FlowScene scene;
+        FlowExecutor exec;
+        exec.setFlowName(QStringLiteral("CommWritebackModbus"));
+        exec.setFlowMode(FlowMode::SoftwareTrigger);
+        NodeBase *send = scene.createNode(NodeBase::OUTPUT, QPointF(120, 120),
+                                          QStringLiteral("发送数据"));
+        QVERIFY2(send != nullptr, "无法创建「发送数据」算子");
+        send->setParam(QStringLiteral("deviceName"), QStringLiteral("MB_CLI"));
+        send->setParam(QStringLiteral("sendText"), QStringLiteral("OK,1"));
+        exec.setFlowScene(&scene);
+
+        exec.startExecution();
+        bool finished = exec.wait(10000);
+        if (!finished) {
+            exec.stopExecution();
+            finished = exec.wait(3000);
+        }
+        exec.setFlowScene(nullptr);
+        QVERIFY2(finished, "流程未在 10 秒内结束");
+        QVERIFY2(!send->executionSuccess(),
+                 "对寄存器设备做裸发送时必须报失败（历史行为是静默 no-op，PLC 什么都没收到却显示成功）");
+    }
+
+    QVERIFY(cm->closeDevice(QStringLiteral("MB_CLI")));
+    QVERIFY(cm->removeDevice(QStringLiteral("MB_CLI")));
+    QVERIFY(cm->closeDevice(QStringLiteral("MB_SRV")));
+    QVERIFY(cm->removeDevice(QStringLiteral("MB_SRV")));
 }
 
 // 必须用 QTEST_MAIN：流程用例要创建 FlowScene（QGraphicsScene），仅 QCoreApplication 会崩；

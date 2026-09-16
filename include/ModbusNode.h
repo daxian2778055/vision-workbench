@@ -74,6 +74,9 @@ public:
     /// 服务器是否已启动监听
     bool isServerListening() const;
 
+    /// Modbus 为寄存器语义，无「原始字节发送」；返回 false 让上层显式失败而非静默忽略
+    bool supportsRawSend() const override { return false; }
+
 signals:
     /// 寄存器值变化时发出（带上设备名、寄存器地址、值字节、数据类型）
     void modbusRegisterChanged(const QString &deviceName, int address,

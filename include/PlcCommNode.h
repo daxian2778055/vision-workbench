@@ -21,6 +21,9 @@ public:
     bool openConnection() override;
     void closeConnection() override;
     bool isConnected() const override;
+
+    /// PLC（Modbus TCP）为寄存器语义，无「原始字节发送」；返回 false 让上层显式失败而非静默忽略
+    bool supportsRawSend() const override { return false; }
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;
     void setParam(const QString &name, const QVariant &value) override;

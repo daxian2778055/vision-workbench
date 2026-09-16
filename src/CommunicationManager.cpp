@@ -325,6 +325,16 @@ bool CommunicationManager::sendData(const QString &deviceName, const QByteArray 
     }
     if (!node || !node->isConnected()) return false;
 
+    // Modbus/PLC 是寄存器语义（写寄存器），没有「裸字节发送」。历史行为是一路投递到基类
+    // onSendRequested 的空实现 → 静默 no-op：上层以为回写成功、设备其实什么都没收到。
+    // 这里提前失败并留痕，让调用方（如「发送数据」算子）能正确上报失败。
+    if (!node->supportsRawSend()) {
+        qWarning() << QStringLiteral("CommunicationManager: 该设备不支持原始字节发送"
+                                     "（Modbus/PLC 请使用写寄存器）：")
+                   << deviceName;
+        return false;
+    }
+
     // 通过信号队列投递到节点线程执行实际 write（跨线程安全）
     node->requestSend(data);
     // 兼容旧逻辑：数据写入参数供节点/UI 读取

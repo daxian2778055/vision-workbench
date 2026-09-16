@@ -36,6 +36,12 @@ public:
     /// 发送外部数据（由 CommunicationManager::sendData 触发，队列投递到节点线程执行）
     void requestSend(const QByteArray &data) { emit sendRequested(data); }
 
+    /// 本节点是否支持「原始字节发送」。
+    /// Modbus/PLC 是寄存器语义（写寄存器），不支持裸字节；上层据此**提前失败**，
+    /// 而不是一路投递到 onSendRequested 的空实现变成静默 no-op（历史上就是这样：
+    /// 上层以为回写成功、设备其实什么都没收到）。
+    virtual bool supportsRawSend() const { return true; }
+
 signals:
     void connectionOpened();
     void connectionClosed();

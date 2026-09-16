@@ -98,6 +98,22 @@ bool ModbusNode::openConnection()
             QModbusDevice::NetworkPortParameter,
             m_params.value(QStringLiteral("port"), 502).toInt());
 
+        // 必须先 setMap：QModbusServer 默认寄存器表为空，未映射地址的写入会被直接拒绝——
+        // 既不会改值、也不会触发 dataWritten（表现为"客户端写成功、服务器毫无反应"）。
+        // 这里按寄存器表格把保持寄存器区映射出来，并至少保留一个可写寄存器。
+        {
+            int maxAddr = -1;
+            for (const auto &r : m_registers) {
+                if (r.address >= 0 && r.address <= 65535)
+                    maxAddr = qMax(maxAddr, r.address);
+            }
+            const quint16 count = static_cast<quint16>(maxAddr + 1 > 0 ? maxAddr + 1 : 1);
+            QModbusDataUnitMap map;
+            map.insert(QModbusDataUnit::HoldingRegisters,
+                       QModbusDataUnit(QModbusDataUnit::HoldingRegisters, 0, count));
+            m_modbusServer->setMap(map);
+        }
+
         // 用寄存器表格初始化服务器的数据单元
         syncServerRegisters();
 
