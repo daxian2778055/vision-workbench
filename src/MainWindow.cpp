@@ -2862,7 +2862,10 @@ void MainWindow::applyDefaultDockSizes()
 
     const int winH = qMax(height(), 720);
     const int winW = qMax(width(), 1100);
-    const int rightW = qBound(420, winW / 3, 640);
+    // 右侧（图像显示 / 参数配置 标签页）默认占窗口宽度约 45%：参数编辑已改为「双击算子
+    // 弹出模块编辑窗」，右侧不再需要长期驻留参数面板，故把空间让给图像显示（对标
+    // VisionMaster 的「图像为主视图」）。用户仍可拖分隔条自行调整。
+    const int rightW = qBound(520, static_cast<int>(winW * 0.45), 900);
     const int imageH = qBound(320, static_cast<int>(winH * 0.58), winH - 220);
     const int paramH = qBound(160, winH - imageH - 80, 360);
 
