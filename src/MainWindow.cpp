@@ -971,6 +971,23 @@ void MainWindow::onNodeSelected(NodeBase *node)
         m_selectedNode = node;
         
         if (node) {
+            // 选中算子即显示它的中间结果图（对标 VisionMaster 的操作性：点哪个模块就看哪个
+            // 模块的图，而不用先去执行它）。数据直接取自节点输出端口，无需改执行引擎；
+            // 尚未执行、没有可用图像时保持当前画面不动，避免把已有画面清空。
+            if (m_imageView) {
+                if (auto outputData = node->getOutputData(0)) {
+                    HImage image = outputData->getHImage();
+                    if (image.IsInitialized()) {
+                        m_imageView->setImage(image, node->fullName());
+                        m_imageView->setOverlay(collectOverlayFromNode(node));
+                        if (m_imageSourceLabel) {
+                            m_imageSourceLabel->setText(
+                                QStringLiteral("图像来源: %1").arg(node->fullName()));
+                        }
+                    }
+                }
+            }
+
             // 测量节点画布取点：连接 ROI 按钮信号（断开旧连接防重复）
             if (m_roiPickConn) {
                 QObject::disconnect(m_roiPickConn);
