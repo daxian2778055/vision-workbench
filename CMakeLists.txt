@@ -242,6 +242,7 @@ set(SOURCES
     src/OutputDataViewer.cpp
     src/ResultTablePanel.cpp
     src/VariablePanel.cpp
+    src/PanelVisibilityStore.cpp
     src/NodeSearchWidget.cpp
     src/ConnectionDragHelper.cpp
     src/HelpViewer.cpp
@@ -751,6 +752,15 @@ if(MSVC)
     target_link_libraries(variable_panel_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
     add_test(NAME VariablePanelTest COMMAND variable_panel_test)
     vfp_configure_gui_test(VariablePanelTest)
+endif()
+
+# 辅助面板显隐持久化：键定义 + 跨重启往返（用例本身不需要 GUI，但同样链接 vfp_core，
+# 因此仍需注入运行时 DLL 目录：干净环境下否则会在启动阶段以 0xc0000135 失败）
+if(MSVC)
+    add_executable(panel_visibility_test tests/panel_visibility_test.cpp)
+    target_link_libraries(panel_visibility_test PRIVATE vfp_core Qt6::Test)
+    add_test(NAME PanelVisibilityTest COMMAND panel_visibility_test)
+    vfp_configure_gui_test(PanelVisibilityTest)
 endif()
 
 # 数据库跨线程访问测试（QSqlDatabase 线程亲和性 / 每线程独立连接）

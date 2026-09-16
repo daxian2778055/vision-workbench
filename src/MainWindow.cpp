@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "ResultTablePanel.h"
 #include "VariablePanel.h"
+#include "PanelVisibilityStore.h"
 #include "ui_MainWindow.h"
 #include "FlowScene.h"
 #include "NodeBase.h"
@@ -1286,32 +1287,27 @@ void MainWindow::openAuxPanel(const QString &key)
 
 void MainWindow::saveAuxPanelVisibility() const
 {
-    QSettings settings;
-    settings.setValue(QStringLiteral("panels/resultTable"),
-                      m_resultTableDock && m_resultTableDock->isVisible());
-    settings.setValue(QStringLiteral("panels/variable"),
-                      m_variableDock && m_variableDock->isVisible());
-    settings.setValue(QStringLiteral("panels/performance"),
-                      m_performanceDock && m_performanceDock->isVisible());
-    settings.setValue(QStringLiteral("panels/outputData"),
-                      m_outputViewerDock && m_outputViewerDock->isVisible());
+    // 键名与读写规则集中在 PanelVisibilityStore（该类可单测；MainWindow 无法在 CI 中实例化）
+    PanelVisibilityStore store;
+    store.setVisible(QStringLiteral("resultTable"),
+                     m_resultTableDock && m_resultTableDock->isVisible());
+    store.setVisible(QStringLiteral("variable"),
+                     m_variableDock && m_variableDock->isVisible());
+    store.setVisible(QStringLiteral("performance"),
+                     m_performanceDock && m_performanceDock->isVisible());
+    store.setVisible(QStringLiteral("outputData"),
+                     m_outputViewerDock && m_outputViewerDock->isVisible());
 }
 
 void MainWindow::restoreAuxPanelVisibility()
 {
     // 只恢复「显隐」，不恢复几何：分辨率或显示器变化时几何恢复容易把窗口丢到屏幕外，
     // 反而让用户以为面板"打不开"。
-    static const struct { const char *key; const char *setting; } kPanels[] = {
-        { "resultTable", "panels/resultTable" },
-        { "variable",    "panels/variable" },
-        { "performance", "panels/performance" },
-        { "outputData",  "panels/outputData" },
-    };
-
-    QSettings settings;
-    for (const auto &p : kPanels) {
-        if (settings.value(QLatin1String(p.setting), false).toBool())
-            openAuxPanel(QLatin1String(p.key));
+    PanelVisibilityStore store;
+    const QStringList keys = PanelVisibilityStore::knownKeys();
+    for (const QString &key : keys) {
+        if (store.isVisible(key))
+            openAuxPanel(key);
     }
 }
 
