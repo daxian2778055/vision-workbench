@@ -3,6 +3,7 @@
 #include <QtTest>
 #include <QTemporaryDir>
 #include <QFile>
+#include <QTreeWidget>
 
 #include "ResultTablePanel.h"
 
@@ -12,6 +13,7 @@ class ResultTableTest : public QObject
 
 private slots:
     void testInPlaceUpdateAndCsv();
+    void testSortingAndFilter();
 };
 
 void ResultTableTest::testInPlaceUpdateAndCsv()
@@ -53,6 +55,46 @@ void ResultTableTest::testInPlaceUpdateAndCsv()
 
     panel.clearResults();
     QCOMPARE(panel.moduleCount(), 0);
+}
+
+void ResultTableTest::testSortingAndFilter()
+{
+    ResultTablePanel panel;
+    auto *tree = panel.findChild<QTreeWidget *>();
+    QVERIFY2(tree != nullptr, "未找到结果树");
+
+    QVariantMap v;
+    v.insert(QStringLiteral("value"), 1.0);
+    // 排序已启用：先插入 ModuleB 再插入 ModuleA，面板应按名称把 A 排在前
+    panel.setModuleResult(9, QStringLiteral("ModuleB"), true, 20, v);
+    panel.setModuleResult(8, QStringLiteral("ModuleA"), true, 10, v);
+    QCOMPARE(tree->topLevelItemCount(), 2);
+    QCOMPARE(tree->topLevelItem(0)->text(0), QStringLiteral("ModuleA"));
+    QCOMPARE(tree->topLevelItem(1)->text(0), QStringLiteral("ModuleB"));
+
+    // 筛选：未命中的模块行整行隐藏，命中的保留
+    panel.setFilterText(QStringLiteral("ModuleB"));
+    QVERIFY2(tree->topLevelItem(0)->isHidden(), "未命中筛选的模块行应隐藏");
+    QVERIFY2(!tree->topLevelItem(1)->isHidden(), "命中筛选的模块行应保留");
+
+    // 筛选生效期间新增的结果也要遵守筛选（否则一跑流程筛选就"失效"）
+    panel.setModuleResult(7, QStringLiteral("ModuleC"), true, 5, v);
+    QTreeWidgetItem *cRow = nullptr;
+    for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+        if (tree->topLevelItem(i)->text(0) == QStringLiteral("ModuleC"))
+            cRow = tree->topLevelItem(i);
+    }
+    QVERIFY2(cRow != nullptr, "新增模块未进入表格");
+    QVERIFY2(cRow->isHidden(), "筛选生效时新结果不应绕过筛选直接显示");
+
+    // 清空筛选恢复全部
+    panel.setFilterText(QString());
+    int visible = 0;
+    for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+        if (!tree->topLevelItem(i)->isHidden())
+            ++visible;
+    }
+    QCOMPARE(visible, tree->topLevelItemCount());
 }
 
 QTEST_MAIN(ResultTableTest)

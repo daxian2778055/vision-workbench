@@ -7,6 +7,7 @@
 class QTreeWidget;
 class QTreeWidgetItem;
 class QLabel;
+class QLineEdit;
 
 /// 结果数据表：一次运行后汇总「各模块 → 输出项 / 数值」，并标注状态与耗时。
 /// 与 OutputDataViewer（看选中节点的端口数据）互补：这里看整条流程的全部数值结果，
@@ -23,6 +24,8 @@ public:
                          qint64 elapsedMs, const QVariantMap &vars);
     /// 清空全部结果
     void clearResults();
+    /// 设置筛选关键字（按模块名/输出项/值模糊匹配；空串表示显示全部）
+    void setFilterText(const QString &text);
     /// 当前已展示的模块行数
     int moduleCount() const;
     /// 导出为 CSV（带 UTF-8 BOM，Excel 可直接打开）
@@ -30,8 +33,12 @@ public:
 
 private:
     void updateSummary();
+    /// 按 m_filterText 逐行套用筛选（模块行：自身或任一可见子项命中即保留）
+    void applyFilter();
 
     QTreeWidget *m_tree = nullptr;
     QLabel *m_summary = nullptr;
-    QHash<int, QTreeWidgetItem *> m_rows;   ///< 模块号 -> 顶层行
+    QLineEdit *m_filter = nullptr;           ///< 筛选输入框
+    QString m_filterText;                    ///< 当前筛选关键字（空=显示全部）
+    QHash<int, QTreeWidgetItem *> m_rows;    ///< 模块号 -> 顶层行
 };

@@ -6,6 +6,8 @@
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QPushButton>
+#include <QLineEdit>
+#include <QHeaderView>
 #include <QFileDialog>
 #include <QFile>
 #include <QTextStream>
@@ -31,8 +33,13 @@ ResultTablePanel::ResultTablePanel(QWidget *parent)
     auto *clearBtn = new QPushButton(QStringLiteral("清空"), this);
     auto *exportBtn = new QPushButton(QStringLiteral("导出 CSV"), this);
     exportBtn->setToolTip(QStringLiteral("把当前结果导出为 CSV（含模块/输出项/值/状态/耗时）"));
+    m_filter = new QLineEdit(this);
+    m_filter->setPlaceholderText(QStringLiteral("筛选：模块 / 输出项 / 值"));
+    m_filter->setClearButtonEnabled(true);
+    m_filter->setMaximumWidth(220);
     bar->addWidget(clearBtn);
     bar->addWidget(exportBtn);
+    bar->addWidget(m_filter);
     bar->addStretch();
     m_summary = new QLabel(QStringLiteral("暂无结果"), this);
     bar->addWidget(m_summary);
@@ -45,9 +52,14 @@ ResultTablePanel::ResultTablePanel(QWidget *parent)
     m_tree->setAlternatingRowColors(true);
     m_tree->setUniformRowHeights(true);
     m_tree->setRootIsDecorated(true);
+    // 开启表头点击排序，并显式设定初始排序键：只调 setSortingEnabled() 时 sortColumn() 仍是 -1，
+    // 后续按当前排序键重排会变成空操作（新模块不会归位）。
+    m_tree->setSortingEnabled(true);
+    m_tree->sortByColumn(kColName, Qt::AscendingOrder);
     root->addWidget(m_tree, 1);
 
     connect(clearBtn, &QPushButton::clicked, this, &ResultTablePanel::clearResults);
+    connect(m_filter, &QLineEdit::textChanged, this, [this](const QString &t) { setFilterText(t); });
     connect(exportBtn, &QPushButton::clicked, this, [this]() {
         const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("导出结果"),
                                                           QStringLiteral("results.csv"),
@@ -107,7 +119,53 @@ void ResultTablePanel::setModuleResult(int moduleId, const QString &moduleName, 
         // 首次出现时把列宽铺开，避免值/状态列被挤住
         m_tree->resizeColumnToContents(kColName);
     }
+    if (!m_filterText.isEmpty())
+        applyFilter();   // 筛选生效期间新增的结果也要遵守筛选
+    // 排序：Qt 只在「插入时」排序，而行文本是插入后才填的，所以这里按当前排序键显式重排；
+    // 否则新模块永远落在末尾，用户点了表头排序也会被新数据打乱。
+    if (m_tree->isSortingEnabled() && m_tree->topLevelItemCount() > 1)
+        m_tree->sortItems(m_tree->sortColumn(), m_tree->header()->sortIndicatorOrder());
     updateSummary();
+}
+
+void ResultTablePanel::setFilterText(const QString &text)
+{
+    m_filterText = text;
+    if (m_filter && m_filter->text() != text) {
+        // 程序化设置时同步输入框，但屏蔽信号避免再回调一次（递归）
+        const QSignalBlocker blocker(m_filter);
+        m_filter->setText(text);
+    }
+    applyFilter();
+}
+
+void ResultTablePanel::applyFilter()
+{
+    if (!m_tree)
+        return;
+
+    const bool filtering = !m_filterText.isEmpty();
+    auto matches = [this](const QTreeWidgetItem *item) {
+        for (int c = 0; c < m_tree->columnCount(); ++c) {
+            if (item->text(c).contains(m_filterText, Qt::CaseInsensitive))
+                return true;
+        }
+        return false;
+    };
+
+    for (int i = 0; i < m_tree->topLevelItemCount(); ++i) {
+        QTreeWidgetItem *row = m_tree->topLevelItem(i);
+        const bool rowHit = matches(row);   // 模块行：名称/状态/耗时命中
+        bool anyChildVisible = false;
+        for (int c = 0; c < row->childCount(); ++c) {
+            QTreeWidgetItem *child = row->child(c);
+            const bool visible = !filtering || rowHit || matches(child);
+            child->setHidden(!visible);
+            anyChildVisible = anyChildVisible || visible;
+        }
+        // 模块行：有子项时只要还有可见子项就保留；无子项时以自身命中为准
+        row->setHidden(filtering && !rowHit && !anyChildVisible);
+    }
 }
 
 void ResultTablePanel::clearResults()

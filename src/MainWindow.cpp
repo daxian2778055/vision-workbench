@@ -470,6 +470,14 @@ MainWindow::MainWindow(QWidget *parent) :
             });
         }
 
+        // 「视图 → 性能统计」：面板（PerformancePanel）早已实现，但此前没有任何入口，
+        // 属于不可达代码；这里补上菜单接线。
+        if (ui->menuView) {
+            QAction *perfAction = ui->menuView->addAction(QStringLiteral("性能统计"));
+            perfAction->setObjectName(QStringLiteral("actionPerformancePanel"));
+            connect(perfAction, &QAction::triggered, this, &MainWindow::onOpenPerformancePanel);
+        }
+
         // 「视图 → 结果表」菜单项（动作定义在 .ui 中，接线方式与其它视图项一致）
         if (ui->actionResultTable) {
             connect(ui->actionResultTable, &QAction::triggered, this,
