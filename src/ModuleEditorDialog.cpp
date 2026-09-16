@@ -33,6 +33,8 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
 
     auto *toolbar = new QHBoxLayout();
     auto *execBtn = new QPushButton(QStringLiteral("执行算子"));
+    auto *recomputeBtn = new QPushButton(QStringLiteral("重算下游"));
+    recomputeBtn->setToolTip(QStringLiteral("参数改完后：作废本算子及其下游的缓存，只重跑这一段链路（不重跑无关分支）"));
     auto *drawBtn = new QPushButton(QStringLiteral("在图上绘制"));
     auto *clearGeomBtn = new QPushButton(QStringLiteral("清除几何"));
     auto *maskBtn = new QPushButton(QStringLiteral("编辑掩膜"));
@@ -40,6 +42,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     auto *saveTmplBtn = new QPushButton(QStringLiteral("保存模板图像"));
     auto *fitBtn = new QPushButton(QStringLiteral("适应窗口"));
     toolbar->addWidget(execBtn);
+    toolbar->addWidget(recomputeBtn);
     toolbar->addWidget(drawBtn);
     toolbar->addWidget(clearGeomBtn);
     toolbar->addWidget(maskBtn);
@@ -105,6 +108,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     }
 
     connect(execBtn, &QPushButton::clicked, this, &ModuleEditorDialog::executeRequested);
+    connect(recomputeBtn, &QPushButton::clicked, this, &ModuleEditorDialog::recomputeRequested);
     connect(drawBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onDrawGeometry);
     connect(clearGeomBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onClearGeometry);
     connect(maskBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onEditMask);

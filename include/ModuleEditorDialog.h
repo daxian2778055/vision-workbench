@@ -23,6 +23,8 @@ public:
 
 signals:
     void executeRequested();
+    /// 参数改完后：只重算本算子及其下游（避免整条流程重跑，也避免下游读到旧值）
+    void recomputeRequested();
 
 private slots:
     void onDrawGeometry();

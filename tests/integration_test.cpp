@@ -66,6 +66,7 @@ private slots:
     void testRuntimeStatsCounters();
     void testRestrictedTokenLaunch();
     void testEndToEndPipelineSmoke();
+    void testRecomputeDownstreamOnly();
 
 private:
     FlowScene *m_scene = nullptr;
@@ -1124,6 +1125,97 @@ void IntegrationTest::testEndToEndPipelineSmoke()
     QVERIFY2(thresholdSuccess, "二值化节点报告失败");
     QCOMPARE(fgPixels, expectedWhite);       // 节点内部计数
     QCOMPARE(measuredWhite, expectedWhite);  // 独立复核输出图像
+}
+
+void IntegrationTest::testRecomputeDownstreamOnly()
+{
+    // 「参数改动后只重算下游」：作废本算子及下游缓存 → 只重跑这一段链路，
+    // 无关分支不得被重跑（否则大流程里改一个参数会牵动整张图）。
+    QTemporaryDir tmpDir;
+    QVERIFY2(tmpDir.isValid(), "无法创建临时目录");
+    const QString imageA = tmpDir.filePath(QStringLiteral("vfp_downstream_a.png"));
+    const QString imageB = tmpDir.filePath(QStringLiteral("vfp_downstream_b.png"));
+
+    const int sizeA = 200;
+    const int squareA = 60;   // 期望白像素 3600
+    const int sizeB = 120;
+    const int squareB = 50;   // 期望白像素 2500
+    auto makeImage = [](const QString &path, int size, int square) {
+        HObject blank;
+        HObject rect;
+        HObject painted;
+        GenImageConst(&blank, "byte", size, size);
+        const int r1 = (size - square) / 2;
+        GenRectangle1(&rect, r1, r1, r1 + square - 1, r1 + square - 1);
+        PaintRegion(rect, blank, &painted, 255, "fill");
+        WriteImage(painted, "png", 0, path.toStdString().c_str());
+    };
+    makeImage(imageA, sizeA, squareA);
+    makeImage(imageB, sizeB, squareB);
+
+    FlowScene scene;
+    FlowExecutor exec;
+    exec.setFlowName(QStringLiteral("RegressionDownstreamRecompute"));
+
+    // 链路 A：读取图像 → OpenCV二值化；链路 B：孤立读取图像（无关分支，用于证明不被重跑）
+    NodeBase *readerA = scene.createNode(NodeBase::IMAGE_ACQUISITION, QPointF(120, 160),
+                                         QStringLiteral("读取图像"));
+    NodeBase *thresholdA = scene.createNode(NodeBase::IMAGE_PROCESSING, QPointF(340, 160),
+                                            QStringLiteral("OpenCV二值化"));
+    NodeBase *readerB = scene.createNode(NodeBase::IMAGE_ACQUISITION, QPointF(120, 380),
+                                         QStringLiteral("读取图像"));
+    QVERIFY(readerA != nullptr);
+    QVERIFY(thresholdA != nullptr);
+    QVERIFY(readerB != nullptr);
+    readerA->setParam(QStringLiteral("filePath"), imageA);
+    readerB->setParam(QStringLiteral("filePath"), imageB);
+    thresholdA->setParam(QStringLiteral("mode"), 0);      // 固定阈值
+    thresholdA->setParam(QStringLiteral("minVal"), 128);
+    QVERIFY2(scene.createConnection(readerA->outputPorts().first(),
+                                    thresholdA->inputPorts().first(), true) != nullptr,
+             "无法建立 读取图像->二值化 连线");
+
+    exec.setFlowScene(&scene);
+    exec.setFlowMode(FlowMode::SoftwareTrigger);
+
+    QHash<NodeBase *, int> runs;
+    const auto connHandle = QObject::connect(
+        &exec, &FlowExecutor::nodeExecuted, &exec,
+        [&](NodeBase *n, bool) { runs[n] = runs.value(n) + 1; }, Qt::DirectConnection);
+
+    // 首轮全量执行，建立缓存与基线结果
+    exec.startExecution();
+    bool finished = exec.wait(10000);
+    if (!finished) {
+        exec.stopExecution();
+        finished = exec.wait(3000);
+    }
+    QVERIFY2(finished, "首轮未在 10 秒内结束");
+    QCOMPARE(thresholdA->getParam(QStringLiteral("foregroundPixels")).toInt(), squareA * squareA);
+
+    // 基线：首轮全量执行时三条链路各执行一次（含无关分支 readerB）——
+    // 否则下面 readerB==0 的断言会退化成"它本来就不跑"，测不出任何东西。
+    QCOMPARE(runs.value(readerA), 1);
+    QCOMPARE(runs.value(thresholdA), 1);
+    QCOMPARE(runs.value(readerB), 1);
+
+    // 改上游参数（换成另一张图）→ 只重算本算子及其下游
+    runs.clear();
+    readerA->setParam(QStringLiteral("filePath"), imageB);
+    exec.invalidateDownstreamOf(readerA);
+    exec.executeFrom(readerA);
+    QObject::disconnect(connHandle);
+
+    const int fg = thresholdA->getParam(QStringLiteral("foregroundPixels")).toInt();
+    const int widthA = readerA->getParam(QStringLiteral("imageWidth")).toInt();
+    exec.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+
+    QCOMPARE(runs.value(readerA), 1);        // 本算子重跑一次
+    QCOMPARE(runs.value(thresholdA), 1);     // 下游重跑一次
+    QCOMPARE(runs.value(readerB), 0);        // 无关分支不得被重跑
+    QCOMPARE(widthA, sizeB);                 // 上游确实换成了第二张图
+    QCOMPARE(fg, squareB * squareB);         // 下游拿到新值 → 缓存确实已作废并重算
 }
 
 QTEST_MAIN(IntegrationTest)

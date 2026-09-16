@@ -1165,8 +1165,51 @@ void MainWindow::openModuleEditor(NodeBase *node)
     connect(dlg, &ModuleEditorDialog::executeRequested, this, [this, node]() {
         executeNodeOnce(node);
     });
+    connect(dlg, &ModuleEditorDialog::recomputeRequested, this, [this, node]() {
+        recomputeDownstream(node);
+    });
     dlg->show();
     dlg->raise();
+}
+
+void MainWindow::recomputeDownstream(NodeBase *node)
+{
+    if (!node)
+        return;
+
+    const int idx = ui->flowTabs->currentIndex();
+    if (idx < 0 || idx >= m_flowScenes.size())
+        return;
+    FlowExecutor *ex = executorForScene(m_flowScenes[idx]);
+    if (!ex)
+        return;
+
+    const ExecutionState st = ex->getState();
+    if (st == ExecutionState::Running || st == ExecutionState::Paused) {
+        logMessage(QStringLiteral("流程正在运行（或暂停）中，已取消「重算下游」；请先停止流程"));
+        return;
+    }
+
+    // 先作废本算子及其下游的缓存，再执行这一段链路：不作废会让下游读到上一轮的旧值
+    // （与 E2/P2 同类问题：本轮无输出/参数变更后必须让下游看到新值）。
+    ex->invalidateDownstreamOf(node);
+    ex->executeFrom(node);
+    logMessage(QStringLiteral("已重算 %1 及其下游（未涉及的分支不重跑）").arg(node->fullName()));
+
+    // 与「执行此算子」保持一致：把结果刷到图像窗口，便于立刻核对
+    NodeBase *target = resolveDisplayNode(node);
+    if (target && m_imageView) {
+        if (auto outputData = target->getOutputData(0)) {
+            HImage image = outputData->getHImage();
+            if (image.IsInitialized()) {
+                m_imageView->setImage(image, target->fullName());
+                m_imageView->setOverlay(collectOverlayFromNode(target));
+                if (m_imageSourceLabel) {
+                    m_imageSourceLabel->setText(QStringLiteral("图像来源: %1").arg(target->fullName()));
+                }
+            }
+        }
+    }
 }
 
 void MainWindow::executeNodeOnce(NodeBase *node)

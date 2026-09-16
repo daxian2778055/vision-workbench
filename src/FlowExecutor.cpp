@@ -1148,3 +1148,48 @@ void FlowExecutor::executeFrom(NodeBase *startNode)
             break;
     }
 }
+
+void FlowExecutor::invalidateDownstreamOf(NodeBase *startNode)
+{
+    if (!startNode) {
+        return;
+    }
+
+    // 沿出边做传递闭包，收集 startNode 自身及其全部下游。
+    // m_outgoing 由 rebuildIncomingIndex() 构建，受 m_graphCacheMutex 保护。
+    QSet<NodeBase *> affected;
+    {
+        QMutexLocker graphLocker(&m_graphCacheMutex);
+        QQueue<NodeBase *> queue;
+        queue.enqueue(startNode);
+        affected.insert(startNode);
+        while (!queue.isEmpty()) {
+            NodeBase *cur = queue.dequeue();
+            const auto it = m_outgoing.constFind(cur);
+            if (it == m_outgoing.cend()) {
+                continue;
+            }
+            for (MyProject::Connection *conn : *it) {
+                NodeBase *dst = conn ? conn->getDestinationNode() : nullptr;
+                if (dst && !affected.contains(dst)) {
+                    affected.insert(dst);
+                    queue.enqueue(dst);
+                }
+            }
+        }
+    }
+
+    // 逐节点清空三类缓存：输出端口数据、按端口的 m_nodeData、{模块号.参数名} 输出变量表。
+    for (NodeBase *n : affected) {
+        if (!n) {
+            continue;
+        }
+        // setOutputData 以「输出端口索引」为参数（与主遍历清理缓存时的用法一致）
+        const QList<Port *> outPorts = n->outputPorts();
+        for (int i = 0; i < outPorts.size(); ++i) {
+            n->setOutputData(i, QSharedPointer<DataObject>());
+        }
+        m_nodeData[n].clear();
+        m_nodeOutputVars[n->moduleId()].clear();
+    }
+}

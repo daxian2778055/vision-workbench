@@ -100,6 +100,11 @@ public:
     /// 执行从 startNode（含）到末端的下游链路
     void executeFrom(NodeBase *startNode);
 
+    /// 作废 node 及其**传递下游**的缓存（输出端口 + m_nodeData + 输出变量表）。
+    /// 参数改动后只重算下游时必须先调用：否则下游会读到上一轮的旧值（与 E2/P2 同类问题）。
+    /// 仅应在流程空闲（Idle/Stopped）时调用。
+    void invalidateDownstreamOf(NodeBase *node);
+
 signals:
     void executionStarted();
     void executionPaused();

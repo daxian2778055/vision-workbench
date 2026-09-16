@@ -112,6 +112,8 @@ private:
     void showNodeParameters(NodeBase *node);
     void openModuleEditor(NodeBase *node);
     void executeNodeOnce(NodeBase *node);
+    /// 参数改动后只重算该算子及其下游：先作废缓存，再执行这一段链路
+    void recomputeDownstream(NodeBase *node);
     QWidget *createParameterWidget(const QString &name, const QVariant &value);
     void updateNodeParameters(NodeBase *node);
     void setupFlowSceneDragDrop(FlowScene *scene);
