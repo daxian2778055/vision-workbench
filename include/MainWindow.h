@@ -121,6 +121,12 @@ private:
     void recomputeDownstream(NodeBase *node, bool quiet = false);
     /// 构造可引用变量清单（{模块号.参数名} / {global.名称}），供模块编辑窗「变量引用」菜单
     QStringList buildVariableReferences() const;
+    /// 打开/聚焦辅助面板（key: resultTable / variable / performance / outputData）
+    void openAuxPanel(const QString &key);
+    /// 记住辅助面板的显隐（关闭时调用）
+    void saveAuxPanelVisibility() const;
+    /// 恢复上次退出时打开的辅助面板（懒创建，仅恢复显隐不恢复几何）
+    void restoreAuxPanelVisibility();
     QWidget *createParameterWidget(const QString &name, const QVariant &value);
     void updateNodeParameters(NodeBase *node);
     void setupFlowSceneDragDrop(FlowScene *scene);

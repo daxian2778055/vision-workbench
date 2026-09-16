@@ -239,6 +239,12 @@ MainWindow::MainWindow(QWidget *parent) :
             m_executor->setStopOnFailure(
                 settings.value(QStringLiteral("flow/stopOnFailure"), true).toBool());
         }
+        // 启动恢复阶段可能已按上次的显隐把性能面板打开（那时 m_executor 还不存在），
+        // 这里补一次绑定，否则面板会一直是空表。
+        if (m_performancePanel) {
+            m_performancePanel->bindExecutor(m_executor);
+        }
+
         VFP_DEBUG << "FlowExecutor created";
 
         // ── 流程运行模式组合框（放在顶部主工具栏，确保用户一眼看到）──
@@ -443,39 +449,20 @@ MainWindow::MainWindow(QWidget *parent) :
                 m_variablePanel->setModuleVars(node->moduleId(), node->fullName(), vars);
         });
 
-        // 「视图 → 变量」：变量面板把可引用变量（模块输出 / 全局变量）连同引用表达式一并列出，
-        // 双击或点「复制引用」即可粘贴到下游参数做表达式联动。动作在代码中创建，避免改动 .ui。
+        // 「视图 → 变量 / 性能统计」：动作在代码中创建（避免改动 .ui）；打开逻辑统一走
+        // openAuxPanel，与「关闭时记住显隐、启动时恢复」共用同一条创建路径。
         if (ui->menuView) {
             ui->menuView->addSeparator();
             QAction *varAction = ui->menuView->addAction(QStringLiteral("变量"));
             varAction->setObjectName(QStringLiteral("actionVariablePanel"));
-            connect(varAction, &QAction::triggered, this, [this]() {
-                if (!m_variablePanel) {
-                    m_variablePanel = new VariablePanel(this);
-                    m_variableDock = new QDockWidget(QStringLiteral("变量"), this);
-                    m_variableDock->setObjectName(QStringLiteral("variableDock"));
-                    m_variableDock->setWidget(m_variablePanel);
-                    m_variableDock->setFeatures(QDockWidget::DockWidgetClosable
-                                                | QDockWidget::DockWidgetMovable);
-                    m_variableDock->setAllowedAreas(Qt::LeftDockWidgetArea
-                                                    | Qt::RightDockWidgetArea);
-                    m_variableDock->setMinimumWidth(320);
-                    addDockWidget(Qt::RightDockWidgetArea, m_variableDock);
-                }
-                m_variableDock->show();
-                m_variableDock->raise();
-                // 全局变量随时可能被运行时改写（计数器等），打开时重新读一遍
-                m_variablePanel->refreshGlobalVariables();
-                logMessage(QStringLiteral("变量面板已打开：双击某行即可复制引用表达式"));
-            });
-        }
+            connect(varAction, &QAction::triggered, this,
+                    [this]() { openAuxPanel(QStringLiteral("variable")); });
 
-        // 「视图 → 性能统计」：面板（PerformancePanel）早已实现，但此前没有任何入口，
-        // 属于不可达代码；这里补上菜单接线。
-        if (ui->menuView) {
+            // 性能面板（PerformancePanel）早已实现却没有任何入口（不可达代码），这里补上接线
             QAction *perfAction = ui->menuView->addAction(QStringLiteral("性能统计"));
             perfAction->setObjectName(QStringLiteral("actionPerformancePanel"));
-            connect(perfAction, &QAction::triggered, this, &MainWindow::onOpenPerformancePanel);
+            connect(perfAction, &QAction::triggered, this,
+                    [this]() { openAuxPanel(QStringLiteral("performance")); });
         }
 
         // 「视图 → 结果表」菜单项（动作定义在 .ui 中，接线方式与其它视图项一致）
@@ -779,6 +766,8 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
+    // 记住辅助面板显隐，下次启动时恢复（避免每次重启都要重新打开结果表/变量面板）
+    saveAuxPanelVisibility();
     cleanupCameras();
     QMainWindow::closeEvent(event);
 }
@@ -1258,6 +1247,72 @@ QStringList MainWindow::buildVariableReferences() const
     // 统一排序，保证菜单顺序稳定（便于按位置快速选择）
     refs.sort();
     return refs;
+}
+
+void MainWindow::openAuxPanel(const QString &key)
+{
+    if (key == QStringLiteral("resultTable")) {
+        onOpenResultTable();
+        return;
+    }
+    if (key == QStringLiteral("performance")) {
+        onOpenPerformancePanel();
+        return;
+    }
+    if (key == QStringLiteral("outputData")) {
+        onOpenOutputViewer();
+        return;
+    }
+    if (key == QStringLiteral("variable")) {
+        if (!m_variablePanel) {
+            m_variablePanel = new VariablePanel(this);
+            m_variableDock = new QDockWidget(QStringLiteral("变量"), this);
+            m_variableDock->setObjectName(QStringLiteral("variableDock"));
+            m_variableDock->setWidget(m_variablePanel);
+            m_variableDock->setFeatures(QDockWidget::DockWidgetClosable
+                                        | QDockWidget::DockWidgetMovable);
+            m_variableDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
+            m_variableDock->setMinimumWidth(320);
+            addDockWidget(Qt::RightDockWidgetArea, m_variableDock);
+        }
+        m_variableDock->show();
+        m_variableDock->raise();
+        // 全局变量随时可能被运行时改写（计数器等），打开时重新读一遍
+        m_variablePanel->refreshGlobalVariables();
+        logMessage(QStringLiteral("变量面板已打开：双击某行即可复制引用表达式"));
+        return;
+    }
+}
+
+void MainWindow::saveAuxPanelVisibility() const
+{
+    QSettings settings;
+    settings.setValue(QStringLiteral("panels/resultTable"),
+                      m_resultTableDock && m_resultTableDock->isVisible());
+    settings.setValue(QStringLiteral("panels/variable"),
+                      m_variableDock && m_variableDock->isVisible());
+    settings.setValue(QStringLiteral("panels/performance"),
+                      m_performanceDock && m_performanceDock->isVisible());
+    settings.setValue(QStringLiteral("panels/outputData"),
+                      m_outputViewerDock && m_outputViewerDock->isVisible());
+}
+
+void MainWindow::restoreAuxPanelVisibility()
+{
+    // 只恢复「显隐」，不恢复几何：分辨率或显示器变化时几何恢复容易把窗口丢到屏幕外，
+    // 反而让用户以为面板"打不开"。
+    static const struct { const char *key; const char *setting; } kPanels[] = {
+        { "resultTable", "panels/resultTable" },
+        { "variable",    "panels/variable" },
+        { "performance", "panels/performance" },
+        { "outputData",  "panels/outputData" },
+    };
+
+    QSettings settings;
+    for (const auto &p : kPanels) {
+        if (settings.value(QLatin1String(p.setting), false).toBool())
+            openAuxPanel(QLatin1String(p.key));
+    }
 }
 
 void MainWindow::recomputeDownstream(NodeBase *node, bool quiet)
@@ -2478,6 +2533,9 @@ void MainWindow::setupDockWidgets()
         });
     }
 
+    // 恢复上次退出时打开的辅助面板（结果表 / 变量 / 性能统计 / 输出数据）
+    restoreAuxPanelVisibility();
+
     VFP_DEBUG << "setupDockWidgets completed";
 }
 
@@ -2984,6 +3042,11 @@ void MainWindow::onOpenPerformancePanel()
 
     m_performanceDock->show();
     m_performanceDock->raise();
+
+    // 面板必须显式 bindExecutor() 才会收到耗时数据；此前无人调用，即使打开也是空表
+    // （这是它长期不可达之外的**第二层**缺口）。
+    if (m_performancePanel && m_executor)
+        m_performancePanel->bindExecutor(m_executor);
 }
 
 void MainWindow::onOpenResultTable()
