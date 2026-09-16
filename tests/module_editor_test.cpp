@@ -5,6 +5,11 @@
 #include <QScrollArea>
 #include <QSpinBox>
 #include <QCheckBox>
+#include <QLineEdit>
+#include <QMenu>
+#include <QAction>
+#include <QFocusEvent>
+#include <QApplication>
 
 #include "ModuleEditorDialog.h"
 #include "FlowScene.h"
@@ -16,6 +21,7 @@ class ModuleEditorTest : public QObject
 
 private slots:
     void testParamEditTriggersDebouncedRecompute();
+    void testVariableReferenceInsert();
 };
 
 void ModuleEditorTest::testParamEditTriggersDebouncedRecompute()
@@ -59,6 +65,53 @@ void ModuleEditorTest::testParamEditTriggersDebouncedRecompute()
     spin->setValue(5);
     QTest::qWait(700);
     QCOMPARE(autoRequests, 2);
+}
+
+void ModuleEditorTest::testVariableReferenceInsert()
+{
+    FlowScene scene;
+    NodeBase *node = scene.createNode(NodeBase::IMAGE_PROCESSING, QPointF(120, 120),
+                                      QStringLiteral("OpenCV二值化"));
+    QVERIFY2(node != nullptr, "无法创建测试节点");
+
+    ModuleEditorDialog dlg(node);
+
+    // 注入一个参数编辑框（模拟节点自建的参数控件）
+    auto *host = dlg.findChild<QScrollArea *>();
+    QVERIFY2(host != nullptr, "未找到参数面板容器");
+    QWidget *panel = host->widget();
+    QVERIFY2(panel != nullptr, "参数面板为空");
+    auto *edit = new QLineEdit(panel);
+    edit->setText(QStringLiteral("阈值="));
+    edit->setCursorPosition(edit->text().size());
+    dlg.refreshParamHooks();   // 挂钩时会给控件装事件过滤器（用于记住最近编辑的控件）
+
+    // 还没有编辑框获得过焦点时应拒绝插入，而不是静默失败
+    const bool insertedWithoutTarget = dlg.insertReference(QStringLiteral("{9.none}"));
+    if (insertedWithoutTarget)
+        QFAIL("没有任何参数编辑框被编辑过时不应报告插入成功");
+
+    // 模拟该编辑框获得焦点（不 show 窗口也能派发焦点事件）
+    QFocusEvent focusIn(QEvent::FocusIn);
+    QApplication::sendEvent(edit, &focusIn);
+
+    dlg.setVariableReferenceProvider([]() {
+        return QStringList{QStringLiteral("{3.foregroundPixels}"),
+                           QStringLiteral("{global.triggerCount}")};
+    });
+    auto *menu = dlg.findChild<QMenu *>(QStringLiteral("varRefMenu"));
+    QVERIFY2(menu != nullptr, "未找到变量引用菜单");
+    QCOMPARE(menu->actions().size(), 2);
+    QCOMPARE(menu->actions().at(0)->text(), QStringLiteral("{3.foregroundPixels}"));
+
+    // 触发第一个菜单项 → 引用插入到光标处（成为下游可解析的表达式）
+    menu->actions().at(0)->trigger();
+    QCOMPARE(edit->text(), QStringLiteral("阈值={3.foregroundPixels}"));
+
+    // 无可用变量时给出不可点的提示项（避免空菜单让用户以为坏了）
+    dlg.setVariableReferenceProvider([]() { return QStringList(); });
+    QCOMPARE(menu->actions().size(), 1);
+    QVERIFY2(!menu->actions().at(0)->isEnabled(), "空列表提示项应不可点击");
 }
 
 QTEST_MAIN(ModuleEditorTest)

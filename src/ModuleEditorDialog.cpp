@@ -4,6 +4,7 @@
 #include "OpencvUtil.h"
 #include "DataObject.h"
 #include "FlowScene.h"
+#include "VariablePanel.h"
 
 #include <QHBoxLayout>
 #include <QVBoxLayout>
@@ -16,6 +17,10 @@
 #include <QDir>
 #include <QCheckBox>
 #include <QTimer>
+#include <QToolButton>
+#include <QMenu>
+#include <QApplication>
+#include <QEvent>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
@@ -54,6 +59,20 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     toolbar->addWidget(clearMaskBtn);
     toolbar->addWidget(saveTmplBtn);
     toolbar->addWidget(m_autoRecomputeCheck);
+
+    // 变量引用：点开即列出可引用的 {模块号.参数名} / {global.名称}，选中插入到参数编辑框。
+    // 列表在展开时实时生成（provider），因此运行中出现的新变量也能立刻引用。
+    m_varRefButton = new QToolButton(this);
+    m_varRefButton->setObjectName(QStringLiteral("varRefButton"));
+    m_varRefButton->setText(QStringLiteral("变量引用"));
+    m_varRefButton->setToolTip(QStringLiteral("把变量引用插入到「最近编辑的参数框」光标处，"
+                                              "实现上游结果 → 下游参数的表达式联动"));
+    m_varRefButton->setPopupMode(QToolButton::InstantPopup);
+    m_varRefMenu = new QMenu(m_varRefButton);
+    m_varRefMenu->setObjectName(QStringLiteral("varRefMenu"));
+    m_varRefButton->setMenu(m_varRefMenu);
+    connect(m_varRefMenu, &QMenu::aboutToShow, this, &ModuleEditorDialog::rebuildReferenceMenu);
+    toolbar->addWidget(m_varRefButton);
     toolbar->addWidget(fitBtn);
     toolbar->addStretch();
     root->addLayout(toolbar);
@@ -225,7 +244,60 @@ void ModuleEditorDialog::installParamHooks(QWidget *panel)
             QObject::disconnect(w, sig.constData(), this, SLOT(onParamWidgetEdited()));
             QObject::connect(w, sig.constData(), this, SLOT(onParamWidgetEdited()));
         }
+        // 记录「最近被编辑的参数控件」，「变量引用」据此把引用插到正确位置
+        w->installEventFilter(this);
     }
+}
+
+void ModuleEditorDialog::setVariableReferenceProvider(std::function<QStringList()> provider)
+{
+    m_varRefProvider = std::move(provider);
+    rebuildReferenceMenu();
+}
+
+void ModuleEditorDialog::rebuildReferenceMenu()
+{
+    if (!m_varRefMenu)
+        return;
+    m_varRefMenu->clear();
+
+    const QStringList refs = m_varRefProvider ? m_varRefProvider() : QStringList();
+    if (refs.isEmpty()) {
+        QAction *empty = m_varRefMenu->addAction(QStringLiteral("（暂无可引用变量：先运行一次流程）"));
+        empty->setEnabled(false);
+        return;
+    }
+    for (const QString &ref : refs) {
+        QAction *act = m_varRefMenu->addAction(ref);
+        connect(act, &QAction::triggered, this, [this, ref]() { insertReference(ref); });
+    }
+}
+
+bool ModuleEditorDialog::insertReference(const QString &ref)
+{
+    if (ref.isEmpty())
+        return false;
+
+    // 菜单展开时焦点已转到按钮上，所以优先用「最近编辑过的编辑框」；
+    // 直接用 focusWidget() 会把文本插到菜单/按钮上，等于丢失。
+    QWidget *target = m_lastEditor ? m_lastEditor : QApplication::focusWidget();
+    if (target && VariablePanel::insertReferenceInto(target, ref)) {
+        if (m_hintLabel)
+            m_hintLabel->setText(QStringLiteral("已插入引用 %1（执行时按上游当前值解析）").arg(ref));
+        return true;
+    }
+    if (m_hintLabel)
+        m_hintLabel->setText(QStringLiteral("请先点一下要插入的参数输入框，再选择变量引用"));
+    return false;
+}
+
+bool ModuleEditorDialog::eventFilter(QObject *watched, QEvent *event)
+{
+    if (event && event->type() == QEvent::FocusIn) {
+        if (auto *w = qobject_cast<QWidget *>(watched))
+            m_lastEditor = w;
+    }
+    return QDialog::eventFilter(watched, event);
 }
 
 void ModuleEditorDialog::onParamWidgetEdited()

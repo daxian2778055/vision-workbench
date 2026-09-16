@@ -436,6 +436,8 @@ MainWindow::MainWindow(QWidget *parent) :
                 m_resultTablePanel->setModuleResult(node->moduleId(), node->fullName(), ok,
                                                     elapsedMs, vars);
             }
+            // 供「变量引用」菜单构造引用列表（UI 线程缓存，不读执行线程内部状态）
+            m_lastModuleVars.insert(node->moduleId(), vars);
             // 变量面板只列可引用的值：失败节点本轮没有可引用输出
             if (m_variablePanel && ok)
                 m_variablePanel->setModuleVars(node->moduleId(), node->fullName(), vars);
@@ -1221,8 +1223,33 @@ void MainWindow::openModuleEditor(NodeBase *node)
     connect(dlg, &ModuleEditorDialog::autoRecomputeRequested, this, [this, node]() {
         recomputeDownstream(node, true);
     });
+    // 「变量引用」菜单：每次展开时按当前变量生成列表（上游结果 → 下游参数的一键联动）
+    dlg->setVariableReferenceProvider([this]() { return buildVariableReferences(); });
     dlg->show();
     dlg->raise();
+}
+
+QStringList MainWindow::buildVariableReferences() const
+{
+    QStringList refs;
+
+    // 模块输出 {模块号.参数名}
+    const QList<int> ids = m_lastModuleVars.keys();
+    for (int id : ids) {
+        const QStringList keys = m_lastModuleVars.value(id).keys();
+        for (const QString &k : keys)
+            refs << VariablePanel::moduleRefText(id, k);
+    }
+
+    // 全局变量 {global.名称}
+    const QMap<QString, GlobalVariableManager::Variable> vars =
+        GlobalVariableManager::instance()->variables();
+    for (auto it = vars.cbegin(); it != vars.cend(); ++it)
+        refs << VariablePanel::globalRefText(it.key());
+
+    // 统一排序，保证菜单顺序稳定（便于按位置快速选择）
+    refs.sort();
+    return refs;
 }
 
 void MainWindow::recomputeDownstream(NodeBase *node, bool quiet)

@@ -2,6 +2,7 @@
 
 #include <QDialog>
 #include <QVector>
+#include <functional>
 #include "HalconWindow.h"
 
 class NodeBase;
@@ -10,6 +11,8 @@ class QLabel;
 class QScrollArea;
 class QCheckBox;
 class QTimer;
+class QToolButton;
+class QMenu;
 
 /// 双击算子打开的模块编辑窗：大图 + 完整参数 + ROI/掩膜/模板
 class ModuleEditorDialog : public QDialog
@@ -54,6 +57,15 @@ private:
 public:
     /// 面板内容变化（含节点重建控件）后重新挂钩；由 rebuildParamPanel()/reloadFromNode() 调用
     void refreshParamHooks();
+    /// 变量引用菜单的数据源（每次展开菜单时调用，保证列表是当前值）
+    void setVariableReferenceProvider(std::function<QStringList()> provider);
+    /// 重建变量引用菜单（菜单展开前/流程变化后调用）
+    void rebuildReferenceMenu();
+    /// 把引用插入「最近获得焦点的参数编辑框」；没有可用编辑框时返回 false
+    bool insertReference(const QString &ref);
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     NodeBase *m_node = nullptr;
@@ -64,4 +76,8 @@ private:
     QCheckBox *m_autoRecomputeCheck = nullptr;   /// 「自动重算」开关
     QTimer *m_autoRecomputeTimer = nullptr;      /// 去抖定时器
     bool m_paramHookBusy = false;                /// 程序化回填参数期间抑制挂钩回调
+    QToolButton *m_varRefButton = nullptr;       /// 「变量引用」按钮
+    QMenu *m_varRefMenu = nullptr;               /// 变量引用下拉菜单
+    QWidget *m_lastEditor = nullptr;             /// 最近获得焦点的参数编辑控件（插入目标）
+    std::function<QStringList()> m_varRefProvider;
 };

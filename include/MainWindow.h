@@ -119,6 +119,8 @@ private:
     /// 参数改动后只重算该算子及其下游：先作废缓存，再执行这一段链路
     /// quiet=true 表示自动重算（不写日志、流程忙时静默跳过）
     void recomputeDownstream(NodeBase *node, bool quiet = false);
+    /// 构造可引用变量清单（{模块号.参数名} / {global.名称}），供模块编辑窗「变量引用」菜单
+    QStringList buildVariableReferences() const;
     QWidget *createParameterWidget(const QString &name, const QVariant &value);
     void updateNodeParameters(NodeBase *node);
     void setupFlowSceneDragDrop(FlowScene *scene);
@@ -226,6 +228,8 @@ protected:
     QDockWidget *m_resultTableDock = nullptr;
     VariablePanel *m_variablePanel = nullptr;            // 变量面板（引用表达式，供表达式联动）
     QDockWidget *m_variableDock = nullptr;
+    /// 最近一次执行各模块的输出变量（UI 线程缓存，供「变量引用」菜单构造引用列表）
+    QHash<int, QVariantMap> m_lastModuleVars;
     NodeSearchWidget *m_nodeSearchWidget = nullptr;      // 算子搜索控件
     HelpViewer *m_helpViewer = nullptr;                  // 算子帮助文档查看器
     QHash<NodeBase *, class ModuleEditorDialog *> m_moduleEditors;
