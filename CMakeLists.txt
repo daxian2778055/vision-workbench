@@ -707,6 +707,27 @@ if(MSVC)
     add_test(NAME IntegrationTest COMMAND integration_test)
 endif()
 
+# 模块编辑窗「自动重算」挂钩：参数控件变更 → 去抖 → 请求重算下游
+# 需要 Qt6::Widgets（QTEST_MAIN 据此创建 QApplication），且不 show() 窗口，可在 CI 稳定运行
+if(MSVC)
+    add_executable(module_editor_test tests/module_editor_test.cpp)
+    target_link_libraries(module_editor_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    add_test(NAME ModuleEditorTest COMMAND module_editor_test)
+    # 该用例创建 QApplication，需要 Qt 平台插件；同时链接了 OpenCV/HALCON 运行时。
+    # 显式把「部署目录（平台插件 + Qt/HALCON DLL）」与「OpenCV 运行库目录」加入测试环境，
+    # 不依赖调用方 shell 的 PATH；否则进程会在启动阶段就失败（0xc0000135：找不到 DLL）。
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
+        set(_vfp_me_mods
+            "QT_PLUGIN_PATH=path_list_prepend:${CMAKE_CURRENT_SOURCE_DIR}/dist/VisionFlowPlatform"
+            "PATH=path_list_prepend:${CMAKE_CURRENT_SOURCE_DIR}/dist/VisionFlowPlatform")
+        if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/opencv/build/x64/vc16/bin")
+            list(APPEND _vfp_me_mods
+                "PATH=path_list_prepend:${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/opencv/build/x64/vc16/bin")
+        endif()
+        set_tests_properties(ModuleEditorTest PROPERTIES ENVIRONMENT_MODIFICATION "${_vfp_me_mods}")
+    endif()
+endif()
+
 # 数据库跨线程访问测试（QSqlDatabase 线程亲和性 / 每线程独立连接）
 if(MSVC)
     add_executable(database_test tests/database_test.cpp)

@@ -1168,11 +1168,15 @@ void MainWindow::openModuleEditor(NodeBase *node)
     connect(dlg, &ModuleEditorDialog::recomputeRequested, this, [this, node]() {
         recomputeDownstream(node);
     });
+    // 自动重算（改参数/拖 ROI/涂掩膜）：静默执行，流程忙时直接跳过
+    connect(dlg, &ModuleEditorDialog::autoRecomputeRequested, this, [this, node]() {
+        recomputeDownstream(node, true);
+    });
     dlg->show();
     dlg->raise();
 }
 
-void MainWindow::recomputeDownstream(NodeBase *node)
+void MainWindow::recomputeDownstream(NodeBase *node, bool quiet)
 {
     if (!node)
         return;
@@ -1186,7 +1190,8 @@ void MainWindow::recomputeDownstream(NodeBase *node)
 
     const ExecutionState st = ex->getState();
     if (st == ExecutionState::Running || st == ExecutionState::Paused) {
-        logMessage(QStringLiteral("流程正在运行（或暂停）中，已取消「重算下游」；请先停止流程"));
+        if (!quiet)
+            logMessage(QStringLiteral("流程正在运行（或暂停）中，已取消「重算下游」；请先停止流程"));
         return;
     }
 
@@ -1194,7 +1199,8 @@ void MainWindow::recomputeDownstream(NodeBase *node)
     // （与 E2/P2 同类问题：本轮无输出/参数变更后必须让下游看到新值）。
     ex->invalidateDownstreamOf(node);
     ex->executeFrom(node);
-    logMessage(QStringLiteral("已重算 %1 及其下游（未涉及的分支不重跑）").arg(node->fullName()));
+    if (!quiet)
+        logMessage(QStringLiteral("已重算 %1 及其下游（未涉及的分支不重跑）").arg(node->fullName()));
 
     // 与「执行此算子」保持一致：把结果刷到图像窗口，便于立刻核对
     NodeBase *target = resolveDisplayNode(node);

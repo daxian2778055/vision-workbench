@@ -14,6 +14,8 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QDir>
+#include <QCheckBox>
+#include <QTimer>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
@@ -41,6 +43,9 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     auto *clearMaskBtn = new QPushButton(QStringLiteral("清除掩膜"));
     auto *saveTmplBtn = new QPushButton(QStringLiteral("保存模板图像"));
     auto *fitBtn = new QPushButton(QStringLiteral("适应窗口"));
+    m_autoRecomputeCheck = new QCheckBox(QStringLiteral("自动重算"));
+    m_autoRecomputeCheck->setChecked(true);
+    m_autoRecomputeCheck->setToolTip(QStringLiteral("改参数 / 拖 ROI / 涂掩膜后，自动重算本算子及其下游（去抖 400ms）"));
     toolbar->addWidget(execBtn);
     toolbar->addWidget(recomputeBtn);
     toolbar->addWidget(drawBtn);
@@ -48,6 +53,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     toolbar->addWidget(maskBtn);
     toolbar->addWidget(clearMaskBtn);
     toolbar->addWidget(saveTmplBtn);
+    toolbar->addWidget(m_autoRecomputeCheck);
     toolbar->addWidget(fitBtn);
     toolbar->addStretch();
     root->addLayout(toolbar);
@@ -119,6 +125,12 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     connect(m_view, &HalconWindow::roiEdited, this, &ModuleEditorDialog::onRoiEdited);
     connect(m_view, &HalconWindow::maskEdited, this, &ModuleEditorDialog::onMaskEdited);
 
+    // 自动重算去抖：连续微调参数只触发一次重算
+    m_autoRecomputeTimer = new QTimer(this);
+    m_autoRecomputeTimer->setSingleShot(true);
+    m_autoRecomputeTimer->setInterval(400);
+    connect(m_autoRecomputeTimer, &QTimer::timeout, this, &ModuleEditorDialog::onAutoRecomputeTimeout);
+
     rebuildParamPanel();
     reloadFromNode();
 }
@@ -135,8 +147,12 @@ void ModuleEditorDialog::reloadFromNode()
     if (HalconNode *hn = halconNode())
         m_view->setMaskImage(hn->editMask());
     refreshTemplatePreview();
+    // 程序化回填参数不应触发自动重算（否则会与用户操作形成回路）
+    m_paramHookBusy = true;
     if (QWidget *panel = m_paramHost->widget())
         m_node->updateParamPanel(panel);
+    m_paramHookBusy = false;
+    refreshParamHooks();   // 节点可能在回填时重建控件，重新挂钩
 }
 
 void ModuleEditorDialog::loadImage()
@@ -165,6 +181,72 @@ void ModuleEditorDialog::rebuildParamPanel()
         return;
     QWidget *panel = m_node->createParamPanel();
     m_paramHost->setWidget(panel);
+    installParamHooks(panel);
+}
+
+void ModuleEditorDialog::refreshParamHooks()
+{
+    installParamHooks(m_paramHost ? m_paramHost->widget() : nullptr);
+}
+
+void ModuleEditorDialog::installParamHooks(QWidget *panel)
+{
+    if (!panel)
+        return;
+
+    // 参数面板由各节点自行创建、控件种类不一，且 NodeBase 没有「参数已变更」信号。
+    // 这里不对任何节点做改动：用元对象系统按「基类 + 信号是否存在」通用挂钩可编辑控件，
+    // 变更后经去抖再请求重算下游（改参数即可立刻看到下游结果刷新）。
+    // base 用于排除同名的无关控件（如滚动条的 valueChanged、分组框的 toggled）。
+    static const struct { const char *base; const char *sig; } kHooks[] = {
+        { "QAbstractSpinBox", "valueChanged(int)" },      // QSpinBox
+        { "QAbstractSpinBox", "valueChanged(double)" },   // QDoubleSpinBox
+        { "QComboBox",        "currentIndexChanged(int)" },
+        { "QAbstractButton",  "toggled(bool)" },          // QCheckBox / QRadioButton
+        { "QSlider",          "valueChanged(int)" },      // 注意：不含 QScrollBar
+        { "QLineEdit",        "editingFinished()" },
+    };
+
+    const QList<QWidget *> widgets = panel->findChildren<QWidget *>();
+    for (QWidget *w : widgets) {
+        if (!w)
+            continue;
+        for (const auto &hook : kHooks) {
+            if (!w->inherits(hook.base))
+                continue;
+            const QByteArray norm = QMetaObject::normalizedSignature(hook.sig);
+            if (w->metaObject()->indexOfSignal(norm.constData()) < 0)
+                continue;   // 控件没有该信号：先判存在，避免连接时打印告警
+            // 旧式 connect 的信号串必须以成员代码 '2' 开头（等价于 SIGNAL() 宏的展开）：
+            // 少这个前缀时 Qt 会把首字符当成代码、截断信号名（valueChanged → alueChanged），
+            // 连接静默失效。
+            const QByteArray sig = QByteArray("2") + norm;
+            // 先断开旧连接：面板刷新时重复挂钩也不会重复触发
+            QObject::disconnect(w, sig.constData(), this, SLOT(onParamWidgetEdited()));
+            QObject::connect(w, sig.constData(), this, SLOT(onParamWidgetEdited()));
+        }
+    }
+}
+
+void ModuleEditorDialog::onParamWidgetEdited()
+{
+    if (m_paramHookBusy)
+        return;
+    scheduleAutoRecompute();
+}
+
+void ModuleEditorDialog::scheduleAutoRecompute()
+{
+    if (!m_autoRecomputeTimer)
+        return;
+    if (m_autoRecomputeCheck && !m_autoRecomputeCheck->isChecked())
+        return;   // 用户关掉了「自动重算」
+    m_autoRecomputeTimer->start();   // 去抖：连续微调只触发一次
+}
+
+void ModuleEditorDialog::onAutoRecomputeTimeout()
+{
+    emit autoRecomputeRequested();
 }
 
 void ModuleEditorDialog::echoGeometry()
@@ -198,11 +280,14 @@ void ModuleEditorDialog::onClearGeometry()
 {
     if (HalconNode *hn = halconNode()) {
         hn->applyGeometryRoi(RoiShape());
+        m_paramHookBusy = true;
         if (QWidget *panel = m_paramHost->widget())
             hn->updateParamPanel(panel);
+        m_paramHookBusy = false;
     }
     if (m_view)
         m_view->clearRoi();
+    scheduleAutoRecompute();
 }
 
 void ModuleEditorDialog::onEditMask()
@@ -222,6 +307,7 @@ void ModuleEditorDialog::onClearMask()
         m_view->setMaskImage(QImage());
         m_view->setMaskEditable(false);
     }
+    scheduleAutoRecompute();
 }
 
 void ModuleEditorDialog::onRoiEdited(const RoiShape &shape)
@@ -235,16 +321,21 @@ void ModuleEditorDialog::onRoiEdited(const RoiShape &shape)
     m_view->setRoiEditable(false);
     m_view->setRoiShape(hn->geometryRoi());
     m_view->setRoiHandleEditEnabled(true);
+    // 回填面板值属程序化更新，不重复触发自动重算
+    m_paramHookBusy = true;
     if (QWidget *panel = m_paramHost->widget())
         hn->updateParamPanel(panel);
+    m_paramHookBusy = false;
     refreshTemplatePreview();
-    m_hintLabel->setText(QStringLiteral("几何已写回。可拖角点/中心/旋转柄继续改，或执行算子看结果框。"));
+    m_hintLabel->setText(QStringLiteral("几何已写回并自动重算下游；可拖角点/中心/旋转柄继续改。"));
+    scheduleAutoRecompute();
 }
 
 void ModuleEditorDialog::onMaskEdited()
 {
     if (HalconNode *hn = halconNode())
         hn->setEditMask(m_view->maskImage());
+    scheduleAutoRecompute();   // 掩膜在执行时才参与运算，不重算就看不到效果
 }
 
 void ModuleEditorDialog::onSaveTemplate()
