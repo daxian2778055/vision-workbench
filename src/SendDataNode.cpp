@@ -28,14 +28,24 @@ void SendDataNode::init()
 
 bool SendDataNode::process()
 {
-    // 发送数据算子：不处理图像，直接通过 run 发送
+    // 发送数据算子：不处理图像。回写是它唯一的工作，因此 process 的返回值必须反映
+    // 「是否真的发出去了」——以前无条件返回 true，PLC 没收到也显示成功。
     run();
-    return true;
+    return m_lastSendOk;
 }
 
 void SendDataNode::run(bool /*autoSwitch*/)
 {
-    if (m_deviceName.isEmpty()) return;
+    m_lastSendOk = doSend();
+    m_executionSuccess = m_lastSendOk;
+}
+
+bool SendDataNode::doSend()
+{
+    if (m_deviceName.isEmpty()) {
+        qWarning() << QStringLiteral("SendDataNode: 未绑定通信设备，数据未发送");
+        return false;
+    }
 
     // 从输入端口获取数据
     QString dataStr;
@@ -52,16 +62,27 @@ void SendDataNode::run(bool /*autoSwitch*/)
         dataStr = m_params.value(QStringLiteral("sendText"), QString()).toString();
     }
 
-    if (dataStr.isEmpty()) return;
+    if (dataStr.isEmpty()) {
+        qWarning() << QStringLiteral("SendDataNode: 无待发送数据（输入端口为空且未设置 sendText），数据未发送");
+        return false;
+    }
 
     // 追加后缀
     dataStr += m_suffix;
 
     // 通过 CommunicationManager 发送
     auto *cm = CommunicationManager::instance();
-    if (cm->hasDevice(m_deviceName)) {
-        cm->sendData(m_deviceName, dataStr.toUtf8());
+    if (!cm->hasDevice(m_deviceName)) {
+        // 设备名写错 / 设备被删除：以前静默返回，现场表现为"流程全过、PLC 什么都没收到"
+        qWarning() << QStringLiteral("SendDataNode: 设备不存在，数据未发送：") << m_deviceName;
+        return false;
     }
+    if (!cm->sendData(m_deviceName, dataStr.toUtf8())) {
+        // 设备存在但未连接或投递失败：以前返回值被丢弃，同样没有任何痕迹
+        qWarning() << QStringLiteral("SendDataNode: 发送失败（未连接或投递失败）：") << m_deviceName;
+        return false;
+    }
+    return true;
 }
 
 void SendDataNode::setParam(const QString &name, const QVariant &value)

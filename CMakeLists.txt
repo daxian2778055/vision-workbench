@@ -792,6 +792,13 @@ if(MSVC)
     target_compile_options(restricted_token_probe PRIVATE /utf-8)
 endif()
 
+# 通讯回写链路：本机回环模拟 PLC（QTcpServer）→ TCP 客户端 → 「发送数据」算子回写
+if(MSVC)
+    add_executable(comm_writeback_test tests/comm_writeback_test.cpp)
+    target_link_libraries(comm_writeback_test PRIVATE vfp_core Qt6::Test)
+    add_test(NAME CommWritebackTest COMMAND comm_writeback_test)
+endif()
+
 # ---------------------------------------------------------------
 # 测试运行环境
 # ---------------------------------------------------------------
@@ -800,7 +807,8 @@ endif()
 # Qt 找不到 QSQLITE 驱动 → 数据库测试报 "can not load requested driver"。
 if(MSVC)
     set(VFP_DEPLOY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/dist/VisionFlowPlatform")
-    set(VFP_TESTS NodeCoreTest OpencvSerializationTest IntegrationTest DatabaseTest PerfTest ScriptSecurityPolicyTest)
+    set(VFP_TESTS NodeCoreTest OpencvSerializationTest IntegrationTest DatabaseTest PerfTest
+                  ScriptSecurityPolicyTest CommWritebackTest)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
         # path_list_prepend 由 CMake 负责插入并处理平台路径分隔符，避免在
         # ENVIRONMENT 值里嵌套分号导致列表被错误拆分

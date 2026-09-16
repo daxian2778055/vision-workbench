@@ -21,9 +21,14 @@ public:
     void fromJson(const QJsonObject &json) override;
 
 private:
+    /// 执行一次回写；返回是否**真的投递成功**（设备存在且已连接）
+    bool doSend();
+
     QString m_deviceName;      /// 绑定的通信设备名
     QString m_suffix;          /// 行尾追加（默认 \r\n）
     bool m_connected = false;
+    /// 最近一次回写是否成功：process() 以此上报执行结果，避免"PLC 没收到却显示成功"
+    bool m_lastSendOk = false;
 
     QComboBox *m_deviceCombo = nullptr;
 };
