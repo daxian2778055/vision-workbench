@@ -172,7 +172,10 @@ void GlobalTriggerManager::onDataReceived(const QString &deviceName, const QByte
 
         QList<QVariant> fields;
         if (ev->parse(data, fields)) {
-            // Will be handled via onEventTriggered
+            // 解析成功即视为该事件发生，交给事件触发路径。
+            // 此前这里什么都不做（注释写着"Will be handled via onEventTriggered"，但没有
+            // 任何地方调用它）⇒ 事件触发整条链是断的：配了"接收事件触发"也不会有流程被启动。
+            onEventTriggered(ev->eventId(), fields);
         }
     }
 }

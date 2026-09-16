@@ -10,8 +10,10 @@
 #include "CommunicationManager.h"
 #include "FlowExecutor.h"
 #include "FlowScene.h"
+#include "GlobalTriggerManager.h"
 #include "ModbusNode.h"
 #include "NodeBase.h"
+#include "ReceiveEvent.h"
 
 namespace {
 
@@ -46,6 +48,7 @@ private slots:
     void testPipelineWritebackWithSuffix();
     void testWritebackFailureIsReported();
     void testModbusRegisterWritebackAndRawSendGuard();
+    void testPlcDataTriggersFlowAndWritesBack();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -234,6 +237,72 @@ void CommWritebackTest::testModbusRegisterWritebackAndRawSendGuard()
     QVERIFY(cm->removeDevice(QStringLiteral("MB_CLI")));
     QVERIFY(cm->closeDevice(QStringLiteral("MB_SRV")));
     QVERIFY(cm->removeDevice(QStringLiteral("MB_SRV")));
+}
+
+void CommWritebackTest::testPlcDataTriggersFlowAndWritesBack()
+{
+    // 完整闭环：模拟 PLC 主动下发 → 接收事件解析 → 全局事件触发 → 流程执行 → 回写 ACK 给 PLC。
+    // 这条链此前是断的：GlobalTriggerManager::onDataReceived 解析成功后什么都不做，
+    // onEventTriggered 无人调用 ⇒ 配了"接收事件触发"也不会有流程被启动。
+    QTcpServer plc;
+    plc.listen(QHostAddress::LocalHost, 0);
+    QVERIFY2(plc.isListening(), qPrintable(plc.errorString()));
+
+    QByteArray fromPlatform;      // 平台回写的字节
+    QTcpSocket *peer = nullptr;   // PLC 侧的连接套接字（平台是 TCP 客户端，所以由服务端往连接上写）
+    QObject::connect(&plc, &QTcpServer::newConnection, &plc, [&]() {
+        peer = plc.nextPendingConnection();
+        QObject::connect(peer, &QTcpSocket::readyRead, peer,
+                         [&]() { fromPlatform += peer->readAll(); });
+    });
+
+    auto *cm = CommunicationManager::instance();
+    QVERIFY(cm->addDevice(QStringLiteral("SIM_TRIG"), QStringLiteral("TCP"),
+                          tcpClientConfig(plc.serverPort())));
+    QVERIFY(cm->openDevice(QStringLiteral("SIM_TRIG")));
+
+    // 接收事件：文本按分隔符解析（"OK,1" → 两个字段）
+    auto *ev = new TextProtocolReceiveEvent(QStringLiteral("EV_OK"), QStringLiteral("SIM_TRIG"));
+    ev->setDelimiter(QStringLiteral(","));
+    QVERIFY2(cm->addReceiveEvent(ev), "注册接收事件失败");
+
+    // 目标流程：单个「发送数据」算子，回写 ACK（流程是否执行，用"PLC 有没有收到 ACK"来证明）
+    FlowScene scene;
+    FlowExecutor exec;                       // 其构造函数把通讯数据源接到 GlobalTriggerManager
+    const QString flowName = QStringLiteral("CommTriggerFlow");
+    exec.setFlowName(flowName);
+    exec.setFlowMode(FlowMode::SoftwareTrigger);
+    NodeBase *send = scene.createNode(NodeBase::OUTPUT, QPointF(120, 120),
+                                      QStringLiteral("发送数据"));
+    QVERIFY2(send != nullptr, "无法创建「发送数据」算子");
+    send->setParam(QStringLiteral("deviceName"), QStringLiteral("SIM_TRIG"));
+    send->setParam(QStringLiteral("suffix"), QString());
+    send->setParam(QStringLiteral("sendText"), QStringLiteral("ACK"));
+    exec.setFlowScene(&scene);
+
+    auto *gtm = GlobalTriggerManager::instance();
+    QVERIFY2(gtm->setEventTrigger(QStringLiteral("EV_OK"), flowName), "配置事件触发失败");
+    gtm->registerFlow(flowName, &scene, &exec);
+    QSignalSpy firedSpy(gtm, &GlobalTriggerManager::triggerFired);
+
+    // 模拟 PLC 主动下发
+    QTRY_VERIFY_WITH_TIMEOUT(peer != nullptr, 3000);
+    peer->write("OK,1\r\n");
+    peer->flush();
+
+    // 触发确实发生（且指向目标流程）
+    QTRY_VERIFY_WITH_TIMEOUT(firedSpy.count() >= 1, 5000);
+    QCOMPARE(firedSpy.at(0).at(0).toString(), flowName);
+    // 流程确实执行了：ACK 被回写给 PLC
+    QTRY_VERIFY_WITH_TIMEOUT(fromPlatform.contains("ACK"), 5000);
+    QVERIFY2(send->executionSuccess(), "回写 ACK 应成功");
+
+    gtm->removeEventTrigger(QStringLiteral("EV_OK"));
+    gtm->unregisterFlow(flowName);
+    cm->removeReceiveEvent(QStringLiteral("EV_OK"));
+    exec.setFlowScene(nullptr);
+    QVERIFY(cm->closeDevice(QStringLiteral("SIM_TRIG")));
+    QVERIFY(cm->removeDevice(QStringLiteral("SIM_TRIG")));
 }
 
 // 必须用 QTEST_MAIN：流程用例要创建 FlowScene（QGraphicsScene），仅 QCoreApplication 会崩；
