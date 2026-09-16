@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include "ResultTablePanel.h"
+#include "VariablePanel.h"
 #include "ui_MainWindow.h"
 #include "FlowScene.h"
 #include "NodeBase.h"
@@ -426,14 +427,46 @@ MainWindow::MainWindow(QWidget *parent) :
         connect(m_executor, &FlowExecutor::executionFinished, this, &MainWindow::onExecutionFinished);
         connect(m_executor, &FlowExecutor::executionError, this, &MainWindow::onExecutionError);
 
-        // 结果数据表：节点执行后把该模块的输出项/状态/耗时推给面板（UI 线程排队接收）
+        // 结果数据表 / 变量面板：节点执行后把该模块的输出推到面板（UI 线程排队接收）
         connect(m_executor, &FlowExecutor::nodeOutputsUpdated, this,
                 [this](NodeBase *node, bool ok, qint64 elapsedMs, const QVariantMap &vars) {
-            if (!m_resultTablePanel || !node)
+            if (!node)
                 return;
-            m_resultTablePanel->setModuleResult(node->moduleId(), node->fullName(), ok,
-                                                elapsedMs, vars);
+            if (m_resultTablePanel) {
+                m_resultTablePanel->setModuleResult(node->moduleId(), node->fullName(), ok,
+                                                    elapsedMs, vars);
+            }
+            // 变量面板只列可引用的值：失败节点本轮没有可引用输出
+            if (m_variablePanel && ok)
+                m_variablePanel->setModuleVars(node->moduleId(), node->fullName(), vars);
         });
+
+        // 「视图 → 变量」：变量面板把可引用变量（模块输出 / 全局变量）连同引用表达式一并列出，
+        // 双击或点「复制引用」即可粘贴到下游参数做表达式联动。动作在代码中创建，避免改动 .ui。
+        if (ui->menuView) {
+            ui->menuView->addSeparator();
+            QAction *varAction = ui->menuView->addAction(QStringLiteral("变量"));
+            varAction->setObjectName(QStringLiteral("actionVariablePanel"));
+            connect(varAction, &QAction::triggered, this, [this]() {
+                if (!m_variablePanel) {
+                    m_variablePanel = new VariablePanel(this);
+                    m_variableDock = new QDockWidget(QStringLiteral("变量"), this);
+                    m_variableDock->setObjectName(QStringLiteral("variableDock"));
+                    m_variableDock->setWidget(m_variablePanel);
+                    m_variableDock->setFeatures(QDockWidget::DockWidgetClosable
+                                                | QDockWidget::DockWidgetMovable);
+                    m_variableDock->setAllowedAreas(Qt::LeftDockWidgetArea
+                                                    | Qt::RightDockWidgetArea);
+                    m_variableDock->setMinimumWidth(320);
+                    addDockWidget(Qt::RightDockWidgetArea, m_variableDock);
+                }
+                m_variableDock->show();
+                m_variableDock->raise();
+                // 全局变量随时可能被运行时改写（计数器等），打开时重新读一遍
+                m_variablePanel->refreshGlobalVariables();
+                logMessage(QStringLiteral("变量面板已打开：双击某行即可复制引用表达式"));
+            });
+        }
 
         // 「视图 → 结果表」菜单项（动作定义在 .ui 中，接线方式与其它视图项一致）
         if (ui->actionResultTable) {

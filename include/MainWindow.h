@@ -34,6 +34,7 @@ class HalconWindow;
 class RuntimeInterfaceView;
 class PerformancePanel;
 class ResultTablePanel;
+class VariablePanel;
 class OutputDataViewer;
 class NodeSearchWidget;
 class HelpViewer;
@@ -223,6 +224,8 @@ protected:
     QDockWidget *m_outputViewerDock = nullptr;
     ResultTablePanel *m_resultTablePanel = nullptr;      // 结果数据表（整条流程的全部数值结果）
     QDockWidget *m_resultTableDock = nullptr;
+    VariablePanel *m_variablePanel = nullptr;            // 变量面板（引用表达式，供表达式联动）
+    QDockWidget *m_variableDock = nullptr;
     NodeSearchWidget *m_nodeSearchWidget = nullptr;      // 算子搜索控件
     HelpViewer *m_helpViewer = nullptr;                  // 算子帮助文档查看器
     QHash<NodeBase *, class ModuleEditorDialog *> m_moduleEditors;

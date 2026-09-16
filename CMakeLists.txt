@@ -241,6 +241,7 @@ set(SOURCES
     src/PerformancePanel.cpp
     src/OutputDataViewer.cpp
     src/ResultTablePanel.cpp
+    src/VariablePanel.cpp
     src/NodeSearchWidget.cpp
     src/ConnectionDragHelper.cpp
     src/HelpViewer.cpp
@@ -430,6 +431,7 @@ set(HEADERS
     include/ConnectionDragHelper.h
     include/HelpViewer.h
     include/ResultTablePanel.h
+    include/VariablePanel.h
     include/ModuleEditorDialog.h
     include/CommentGraphicsItem.h
     include/FlowVariableDialog.h
@@ -741,6 +743,14 @@ if(MSVC)
     target_link_libraries(result_table_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
     add_test(NAME ResultTableTest COMMAND result_table_test)
     vfp_configure_gui_test(ResultTableTest)
+endif()
+
+# 变量面板：引用表达式语法 / 同一模块原地更新 / 全局变量可见 / 插入到编辑控件
+if(MSVC)
+    add_executable(variable_panel_test tests/variable_panel_test.cpp)
+    target_link_libraries(variable_panel_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    add_test(NAME VariablePanelTest COMMAND variable_panel_test)
+    vfp_configure_gui_test(VariablePanelTest)
 endif()
 
 # 数据库跨线程访问测试（QSqlDatabase 线程亲和性 / 每线程独立连接）
