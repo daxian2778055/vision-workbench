@@ -14,6 +14,7 @@ class ResultTableTest : public QObject
 private slots:
     void testInPlaceUpdateAndCsv();
     void testSortingAndFilter();
+    void testReportText();
 };
 
 void ResultTableTest::testInPlaceUpdateAndCsv()
@@ -95,6 +96,31 @@ void ResultTableTest::testSortingAndFilter()
             ++visible;
     }
     QCOMPARE(visible, tree->topLevelItemCount());
+}
+
+void ResultTableTest::testReportText()
+{
+    ResultTablePanel panel;
+
+    // 无数据时明确提示（不会生成一份"看起来正常但全空"的报告）
+    const QString empty = panel.toReportText(QStringLiteral("TestFlow"));
+    QVERIFY2(empty.contains(QStringLiteral("TestFlow")), "报告缺少流程名");
+    QVERIFY2(empty.contains(QStringLiteral("暂无结果")), "空面板应提示暂无结果");
+
+    QVariantMap ok;
+    ok.insert(QStringLiteral("foregroundPixels"), 3600);
+    ok.insert(QStringLiteral("value"), 3600.0);
+    panel.setModuleResult(3, QStringLiteral("OpenCV二值化"), true, 12, ok);
+    panel.setModuleResult(4, QStringLiteral("找边"), false, 5, QVariantMap());
+
+    const QString report = panel.toReportText(QStringLiteral("TestFlow"));
+    QVERIFY2(report.contains(QStringLiteral("TestFlow")), "报告缺少流程名");
+    QVERIFY2(report.contains(QStringLiteral("2 个模块")), "报告缺少模块汇总");
+    QVERIFY2(report.contains(QStringLiteral("失败 1 个")), "报告未统计失败模块");
+    QVERIFY2(report.contains(QStringLiteral("OpenCV二值化")), "报告缺少成功模块");
+    QVERIFY2(report.contains(QStringLiteral("foregroundPixels = 3600")), "报告缺少测量值明细");
+    QVERIFY2(report.contains(QStringLiteral("找边")), "报告缺少失败模块");
+    QVERIFY2(report.contains(QStringLiteral("失败")), "报告未标注失败状态");
 }
 
 QTEST_MAIN(ResultTableTest)

@@ -30,6 +30,9 @@ public:
     int moduleCount() const;
     /// 导出为 CSV（带 UTF-8 BOM，Excel 可直接打开）
     bool exportCsv(const QString &path, QString *errorOut = nullptr) const;
+    /// 本次运行的明细报告文本（流程名/时间/汇总 + 各模块输出项与数值）。
+    /// 报表对话框统计的是「数据库历史」，本报告补的是「数据库没存的测量值明细」。
+    QString toReportText(const QString &flowName = QString()) const;
 
 private:
     void updateSummary();

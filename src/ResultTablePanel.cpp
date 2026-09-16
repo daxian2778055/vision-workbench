@@ -33,12 +33,16 @@ ResultTablePanel::ResultTablePanel(QWidget *parent)
     auto *clearBtn = new QPushButton(QStringLiteral("清空"), this);
     auto *exportBtn = new QPushButton(QStringLiteral("导出 CSV"), this);
     exportBtn->setToolTip(QStringLiteral("把当前结果导出为 CSV（含模块/输出项/值/状态/耗时）"));
+    auto *reportBtn = new QPushButton(QStringLiteral("导出报告"), this);
+    reportBtn->setToolTip(QStringLiteral("导出本次运行的明细报告（含各模块测量值；"
+                                         "数据库只记 OK/失败，报告用于现场留档）"));
     m_filter = new QLineEdit(this);
     m_filter->setPlaceholderText(QStringLiteral("筛选：模块 / 输出项 / 值"));
     m_filter->setClearButtonEnabled(true);
     m_filter->setMaximumWidth(220);
     bar->addWidget(clearBtn);
     bar->addWidget(exportBtn);
+    bar->addWidget(reportBtn);
     bar->addWidget(m_filter);
     bar->addStretch();
     m_summary = new QLabel(QStringLiteral("暂无结果"), this);
@@ -70,6 +74,65 @@ ResultTablePanel::ResultTablePanel(QWidget *parent)
         if (!exportCsv(path, &err))
             QMessageBox::warning(this, QStringLiteral("导出失败"), err);
     });
+    connect(reportBtn, &QPushButton::clicked, this, [this]() {
+        const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("导出运行明细报告"),
+                                                          QStringLiteral("run-report.txt"),
+                                                          QStringLiteral("文本 (*.txt);;全部文件 (*)"));
+        if (path.isEmpty())
+            return;
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QMessageBox::warning(this, QStringLiteral("导出失败"),
+                                 QStringLiteral("无法写入 %1：%2").arg(path, file.errorString()));
+            return;
+        }
+        QTextStream out(&file);
+        out << toReportText();
+        file.close();
+    });
+}
+
+QString ResultTablePanel::toReportText(const QString &flowName) const
+{
+    QStringList lines;
+    lines << QStringLiteral("Vision Flow Platform · 运行明细报告");
+    lines << QStringLiteral("流程: %1")
+                 .arg(flowName.isEmpty() ? QStringLiteral("(未命名)") : flowName);
+    lines << QStringLiteral("生成时间: %1")
+                 .arg(QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")));
+
+    const int total = m_tree ? m_tree->topLevelItemCount() : 0;
+    if (total == 0) {
+        lines << QString();
+        lines << QStringLiteral("（暂无结果：请先运行一次流程）");
+        return lines.join(QLatin1Char('\n'));
+    }
+
+    int failed = 0;
+    for (int i = 0; i < total; ++i) {
+        if (m_tree->topLevelItem(i)->text(kColStatus) != QStringLiteral("成功"))
+            ++failed;
+    }
+    lines << QStringLiteral("汇总: %1 个模块，失败 %2 个").arg(total).arg(failed);
+    lines << QString();
+
+    for (int i = 0; i < total; ++i) {
+        QTreeWidgetItem *row = m_tree->topLevelItem(i);
+        lines << QStringLiteral("■ %1（%2，%3 ms）")
+                     .arg(row->text(kColName), row->text(kColStatus), row->text(kColElapsed));
+        if (row->childCount() == 0) {
+            lines << QStringLiteral("    - （无输出项）");
+            continue;
+        }
+        for (int c = 0; c < row->childCount(); ++c) {
+            QTreeWidgetItem *child = row->child(c);
+            const QString value = child->text(kColValue);
+            lines << (value.isEmpty()
+                          ? QStringLiteral("    - %1").arg(child->text(kColName))
+                          : QStringLiteral("    - %1 = %2").arg(child->text(kColName), value));
+        }
+    }
+    return lines.join(QLatin1Char('\n'));
 }
 
 void ResultTablePanel::setModuleResult(int moduleId, const QString &moduleName, bool success,
