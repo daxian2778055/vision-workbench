@@ -175,6 +175,10 @@ void GlobalTriggerManager::onDataReceived(const QString &deviceName, const QByte
             // 解析成功即视为该事件发生，交给事件触发路径。
             // 此前这里什么都不做（注释写着"Will be handled via onEventTriggered"，但没有
             // 任何地方调用它）⇒ 事件触发整条链是断的：配了"接收事件触发"也不会有流程被启动。
+            //
+            // 说明：ReceiveEvent 内部同时会 emit eventGenerated（供外部监听），这里**故意**
+            // 直连 onEventTriggered 而不依赖该信号——避免将来有人用同一事件做"测试解析"时
+            // 意外触发流程（一次数据到达只应触发一次）。
             onEventTriggered(ev->eventId(), fields);
         }
     }

@@ -176,7 +176,7 @@ void CommunicationManager::createDeviceNode(const QString &name, const QString &
             modbus->setRegisters(regs);
         }
         node = modbus;
-    } else if (type == QStringLiteral("PLC") || type == QStringLiteral("PLC")) {
+    } else if (type == QStringLiteral("PLC")) {   // 原为 "PLC" || "PLC"（复制粘贴的无效判断）
         PlcCommNode *plc = new PlcCommNode(this);
         plc->init();
         if (config.contains(QStringLiteral("plcBrand")))

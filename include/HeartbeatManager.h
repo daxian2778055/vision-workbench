@@ -16,6 +16,9 @@ struct HeartbeatEntry {
     /// 上次实际发包时刻（ms，QDateTime::currentMSecsSinceEpoch）；
     /// 基定时器只是扫描节拍，真正是否该发由本字段 + intervalMs 决定（不参与序列化）
     qint64 lastSentMs = 0;
+    /// 上次发包是否成功：connectionLost/connectionRestored 只在状态**边沿**上报一次
+    /// （否则每 300ms 就会刷一条报警）。不参与序列化。
+    bool lastSendOk = true;
 };
 
 /// 心跳管理器 — 监测通信连接健康状态

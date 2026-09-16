@@ -115,9 +115,19 @@ void HeartbeatManager::onTick()
         // 真正发包：此前只 emit 了一个无人接收的 heartBeatSent，
         // 设备侧永远收不到心跳——"心跳"配置了也是摆设。
         auto *cm = CommunicationManager::instance();
-        if (!cm->sendData(entry.deviceName, pattern.toUtf8())) {
+        const bool ok = cm->sendData(entry.deviceName, pattern.toUtf8());
+        // 失败/恢复只在**状态边沿**上报一次：否则 300ms 间隔就会刷一条报警，
+        // 报警会被淹没、值班的人会直接把报警灯忽略掉。
+        if (!ok) {
             qWarning() << QStringLiteral("HeartbeatManager: 心跳发送失败（设备不存在或未连接）：")
                        << entry.deviceName;
+            if (entry.lastSendOk) {
+                entry.lastSendOk = false;
+                emit connectionLost(entry.deviceName);
+            }
+        } else if (!entry.lastSendOk) {
+            entry.lastSendOk = true;
+            emit connectionRestored(entry.deviceName);
         }
         emit heartBeatSent(entry.deviceName, pattern);
     }

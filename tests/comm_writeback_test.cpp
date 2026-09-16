@@ -53,6 +53,7 @@ private slots:
     void testPlcDataTriggersFlowAndWritesBack();
     void testHeartbeatActuallyGoesOnTheWire();
     void testSendEventsActuallySend();
+    void testHeartbeatFailureRaisesAlarm();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -405,6 +406,46 @@ void CommWritebackTest::testSendEventsActuallySend()
     cm->removeSendEvent(QStringLiteral("SE_BAD"));
     QVERIFY(cm->closeDevice(QStringLiteral("SIM_SE")));
     QVERIFY(cm->removeDevice(QStringLiteral("SIM_SE")));
+}
+
+void CommWritebackTest::testHeartbeatFailureRaisesAlarm()
+{
+    // 心跳失败必须能被上层感知（此前 connectionLost/connectionRestored 无人 emit，
+    // 心跳断了也没有任何报警出口）。并验证是**边沿触发**：不会每 300ms 刷一条报警。
+    auto *hb = HeartbeatManager::instance();
+    QSignalSpy lostSpy(hb, &HeartbeatManager::connectionLost);
+    QSignalSpy restoredSpy(hb, &HeartbeatManager::connectionRestored);
+
+    const QString dev = QStringLiteral("SIM_HB_ALARM");
+    QVERIFY2(hb->registerHeartbeat(dev, 300, QStringLiteral("P"), QStringLiteral("Q")),
+             "注册心跳失败");
+    QVERIFY(hb->startHeartbeat(dev));
+
+    // 设备还不存在 → 第一次失败就应报 connectionLost
+    QTRY_VERIFY_WITH_TIMEOUT(lostSpy.count() >= 1, 3000);
+    QCOMPARE(lostSpy.at(0).at(0).toString(), dev);
+
+    // 仍持续失败，但不应重复刷报警
+    const int lostCount = lostSpy.count();
+    QTest::qWait(700);
+    QCOMPARE(lostSpy.count(), lostCount);
+
+    // 设备上线 → 心跳恢复 → connectionRestored（且心跳真的发到新设备上）
+    QTcpServer plc;
+    QByteArray received;
+    startSimulatedPlc(plc, received);
+    auto *cm = CommunicationManager::instance();
+    QVERIFY(cm->addDevice(dev, QStringLiteral("TCP"), tcpClientConfig(plc.serverPort())));
+    QVERIFY(cm->openDevice(dev));
+
+    QTRY_VERIFY_WITH_TIMEOUT(restoredSpy.count() >= 1, 3000);
+    QCOMPARE(restoredSpy.at(0).at(0).toString(), dev);
+    QTRY_VERIFY_WITH_TIMEOUT(received.contains("P") || received.contains("Q"), 3000);
+
+    hb->stopHeartbeat(dev);
+    hb->unregisterHeartbeat(dev);
+    QVERIFY(cm->closeDevice(dev));
+    QVERIFY(cm->removeDevice(dev));
 }
 
 // 必须用 QTEST_MAIN：流程用例要创建 FlowScene（QGraphicsScene），仅 QCoreApplication 会崩；
