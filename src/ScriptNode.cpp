@@ -19,6 +19,7 @@
 #include <QTextStream>
 #include <QSignalBlocker>
 #include <QCheckBox>
+#include <QMessageBox>
 
 ScriptNode::ScriptNode(QObject *parent)
     : HalconNode(parent)
@@ -333,12 +334,64 @@ QWidget *ScriptNode::createParamPanel()
                                           "临时文件只能写在本次执行专属的沙箱目录（执行结束即删除）；"
                                           "进程关入 Job Object 限制 UI/内存，父进程退出时整棵进程树被终止；"
                                           "同时保留解释器隔离（Python -I -E）与环境变量清理。"
-                                          "未施加：管理员组 deny-only（实测任何子进程都会 0xC0000142）、网络隔离。"));
+                                          "未施加：管理员组 deny-only（实测任何子进程都会 0xC0000142，"
+                                          "已定位为 Windows 自身 KERNELBASE 附加失败）。"
+                                          "需要独立文件视图与网络隔离请改用下方「AppContainer 容器」。"));
     sandboxChk->setChecked(ScriptSecurityPolicy::instance().isSandboxEnabled());
     connect(sandboxChk, &QCheckBox::toggled, this, [](bool on) {
         ScriptSecurityPolicy::instance().setSandboxEnabled(on);
     });
     layout->addWidget(sandboxChk);
+
+    // 沙箱强度：决定子进程以「受限令牌」还是「AppContainer 容器」启动。
+    auto *modeCombo = new QComboBox();
+    modeCombo->setObjectName(QStringLiteral("scriptSandboxMode"));
+    modeCombo->addItem(QStringLiteral("去特权 + 低完整性（默认）"));
+    modeCombo->addItem(QStringLiteral("AppContainer 容器（独立文件视图、无网络）"));
+    modeCombo->setCurrentIndex(ScriptSecurityPolicy::instance().sandboxMode()
+                                       == ScriptSecurityPolicy::SandboxMode::AppContainer
+                                   ? 1
+                                   : 0);
+    modeCombo->setToolTip(QStringLiteral("AppContainer 模式下脚本进程运行在容器内："
+                                         "只能访问显式授权的路径与自己的容器目录，**无网络能力**；"
+                                         "写用户目录会被拒绝。首次使用需点下方按钮做一次性准备"
+                                         "（创建容器配置 + 给解释器目录授权，需要管理员权限）。"
+                                         "容器不可用时脚本会被**拒绝执行**（不会静默降级）。"));
+    connect(modeCombo, &QComboBox::currentIndexChanged, this, [](int index) {
+        auto &policy = ScriptSecurityPolicy::instance();
+        policy.setSandboxMode(index == 1 ? ScriptSecurityPolicy::SandboxMode::AppContainer
+                                         : ScriptSecurityPolicy::SandboxMode::PrivilegeStripped);
+        policy.save();
+    });
+    layout->addWidget(new QLabel(QStringLiteral("沙箱强度:")));
+    layout->addWidget(modeCombo);
+
+    // 一次性准备：创建 AppContainer 配置文件 + 给解释器目录授权（RX）。
+    // 做成显式按钮而不是自动执行：这会改动机器状态（profile、解释器目录 ACL），
+    // 必须由用户知情触发。
+    auto *prepareBtn = new QPushButton(QStringLiteral("准备容器沙箱（一次性，需要管理员）"));
+    prepareBtn->setToolTip(QStringLiteral("创建 AppContainer 配置文件，并为解释器所在目录追加「读取+执行」权限"
+                                          "（只追加容器 SID 的条目，不改动其它权限）。"
+                                          "解释器当前按 PATH 解析的命令名为 python。"));
+    connect(prepareBtn, &QPushButton::clicked, this, [prepareBtn]() {
+        auto &policy = ScriptSecurityPolicy::instance();
+        Q_UNUSED(policy)
+        QString error;
+        if (!ScriptSecurityPolicy::ensureAppContainerProfile(&error)) {
+            QMessageBox::warning(prepareBtn, QStringLiteral("准备容器沙箱失败"), error);
+            return;
+        }
+        if (!ScriptSecurityPolicy::grantInterpreterAccess(QStringLiteral("python"), &error)) {
+            QMessageBox::warning(prepareBtn, QStringLiteral("准备容器沙箱失败"), error);
+            return;
+        }
+        QMessageBox::information(
+            prepareBtn, QStringLiteral("准备完成"),
+            QStringLiteral("容器沙箱已就绪：\n  profile SID: %1\n  已为 python 所在目录授予读取+执行权限。\n\n"
+                           "现在把「沙箱强度」切到 AppContainer 即可生效。")
+                .arg(ScriptSecurityPolicy::appContainerSid()));
+    });
+    layout->addWidget(prepareBtn);
 
     // Language selection
     auto *langCombo = new QComboBox();

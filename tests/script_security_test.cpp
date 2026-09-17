@@ -22,13 +22,25 @@ class ScriptSecurityPolicyTest : public QObject
     Q_OBJECT
 
 private slots:
+    void initTestCase();
     void languageWhitelist_blocksUnknown();
     void interpreterFlags_isolation();
     void buildEnvironment_stripsDangerousVars();
     void audit_writesStructuredLog();
     void toggleOff_blocksEverything();
     void sandbox_disabled_isNoOp();
+    void sandboxMode_persistsAcrossLoad();
 };
+
+void ScriptSecurityPolicyTest::initTestCase()
+{
+    // 给本测试进程一个**确定且独立**的 QSettings 作用域：
+    //   - 作用域不确定时 save()/load() 往返会悄悄落空（取决于组织名/应用名是否已被设置），
+    //     本机实测表现为"什么都没写"；
+    //   - 独立的应用名确保测试不会写进正式应用（VisionFlowPlatform）的设置里。
+    QCoreApplication::setOrganizationName(QStringLiteral("VisionFlowPlatform"));
+    QCoreApplication::setApplicationName(QStringLiteral("VisionFlowPlatform-Test"));
+}
 
 void ScriptSecurityPolicyTest::languageWhitelist_blocksUnknown()
 {
@@ -129,6 +141,31 @@ void ScriptSecurityPolicyTest::sandbox_disabled_isNoOp()
     p.closeJob(&proc);
 
     p.setSandboxEnabled(prev);
+}
+
+void ScriptSecurityPolicyTest::sandboxMode_persistsAcrossLoad()
+{
+    // 沙箱强度必须跨进程记住（面板上切换后重启仍生效）。用真实的 save()/load() 往返验证。
+    // 【重要】测试直接读写机器的 QSettings，结束后必须把设置恢复原状，
+    // 否则会把状态留在本机、污染其它运行（沙箱模式一旦被留在 AppContainer，
+    // 未做容器准备的机器上脚本会被整体拒绝执行）。
+    ScriptSecurityPolicy &p = ScriptSecurityPolicy::instance();
+    const auto originalMode = p.sandboxMode();
+    const QString originalAuditPath = p.auditLogPath();
+
+    p.setSandboxMode(ScriptSecurityPolicy::SandboxMode::AppContainer);
+    p.save();
+
+    p.setSandboxMode(ScriptSecurityPolicy::SandboxMode::PrivilegeStripped);   // 模拟"换了个进程"
+    p.load();
+    QVERIFY(p.sandboxMode() == ScriptSecurityPolicy::SandboxMode::AppContainer);
+
+    // 恢复现场（值 + 持久化）
+    p.setSandboxMode(originalMode);
+    p.setAuditLogPath(originalAuditPath);
+    p.save();
+    p.load();
+    QVERIFY(p.sandboxMode() == originalMode);
 }
 
 QTEST_GUILESS_MAIN(ScriptSecurityPolicyTest)

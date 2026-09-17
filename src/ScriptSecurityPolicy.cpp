@@ -37,6 +37,9 @@ ScriptSecurityPolicy::ScriptSecurityPolicy()
 void ScriptSecurityPolicy::load()
 {
     QSettings settings;
+    // QSettings 在进程内会缓存值：刚 save() 过就读，会读到旧值（有测试用例专门盯这一点）。
+    // 先 sync() 强制重新读取，保证 save→load 往返语义正确。
+    settings.sync();
     settings.beginGroup(QStringLiteral("scriptSecurity"));
     m_enabled = settings.value(QStringLiteral("enabled"), m_enabled).toBool();
     const QStringList def = { QStringLiteral("Python"), QStringLiteral("Lua") };

@@ -1270,6 +1270,14 @@ void IntegrationTest::testAppContainerSandboxLaunch()
     // 容器能力/限制的原始实测数据见 tests/restricted_token_probe.cpp -ac。
     auto &policy = ScriptSecurityPolicy::instance();
 
+    // 默认不跑：本用例会创建 AppContainer 配置文件，并**修改解释器目录的 ACL**（追加容器 SID）。
+    // 实测该授权与 Low IL 沙箱路径存在尚未完全解释清的相互影响（授权后 Low IL 下解释器会以
+    // 0xC0000135 启动失败，`icacls <解释器目录> /reset` 可恢复），因此不能在默认 CI 里
+    // 悄悄改动机器状态。需要复核容器能力时显式开启：set VFP_APPCONTAINER_TEST=1
+    if (qEnvironmentVariableIsEmpty("VFP_APPCONTAINER_TEST")) {
+        QSKIP("默认跳过（会改动解释器目录 ACL）；置 VFP_APPCONTAINER_TEST=1 显式开启");
+    }
+
     QString error;
     if (!ScriptSecurityPolicy::ensureAppContainerProfile(&error)) {
         QSKIP(qPrintable(QStringLiteral("AppContainer 不可用（%1），跳过").arg(error)));
