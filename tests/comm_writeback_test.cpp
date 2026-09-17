@@ -805,6 +805,8 @@ void CommWritebackTest::testRecipeTypeMismatchSkipped()
     QVERIFY2(circle != nullptr, "无法创建圆拟合算子");
     QVERIFY2(!circle->property("vfpNodeTypeId").toString().isEmpty(),
              "注册算子应有 vfpNodeTypeId");
+    sourceScene.adoptNode(circle, QPointF(10, 10));   // 必须接入场景，否则不在 scene.nodes() 里
+    circle->init();                                   // init 后参数才有默认值，再覆盖
     circle->setName(QStringLiteral("配方算子"));
     circle->setParam(QStringLiteral("minPoints"), 999);   // 易识别的值
 
@@ -817,6 +819,8 @@ void CommWritebackTest::testRecipeTypeMismatchSkipped()
     NodeBase *line = NodeRegistry::instance().createById(
         QStringLiteral("OpencvFitLineNode"), &targetScene);
     QVERIFY2(line != nullptr, "无法创建直线拟合算子");
+    targetScene.adoptNode(line, QPointF(10, 10));   // 必须接入场景，否则不在 scene.nodes() 里
+    line->init();
     line->setName(QStringLiteral("配方算子"));   // 同名 → 配方会按名称找到它
     line->setParam(QStringLiteral("minPoints"), 5);   // 原值（与圆拟合的 999 不同）
 
