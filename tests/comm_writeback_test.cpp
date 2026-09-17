@@ -17,6 +17,7 @@
 #include "NodeBase.h"
 #include "NodeTemplateStore.h"
 #include "RecipeManager.h"
+#include "NodeRegistry.h"
 #include "FindCircleNode.h"
 #include "FindLineNode.h"
 #include "CaliperMeasureNode.h"
@@ -70,6 +71,7 @@ private slots:
     void testNodeTemplateRoundTrip();
     void testRecipeSaveAndLoad();
     void testRoiParamRoundTrip();
+    void testRecipeTypeMismatchSkipped();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -784,6 +786,48 @@ void CommWritebackTest::testRoiParamRoundTrip()
     QCOMPARE(dynBack.p2, QPointF(130.0, 140.0));
     dyn.applyGeometryRoi(RoiShape());
     QVERIFY(dyn.geometryRoi().type == RoiType::None);
+}
+
+void CommWritebackTest::testRecipeTypeMismatchSkipped()
+{
+    // ② 配方加载的**类型校验**：名称相同但实现类型不同的算子应被跳过，
+    // 而不是把参数错写进去。这一层此前完全没被用例钉住——通用算子 typeId 为空走不进校验分支，
+    // 必须用两个**真实注册**算子（各有非空 vfpNodeTypeId）才能触发。
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    RecipeManager::setStoragePathOverride(tmp.filePath(QStringLiteral("recipes.json")));
+    registerAllNodes();   // 确保注册表已填充（createById 依赖它）
+
+    // 源场景：真实「圆拟合」算子，起一个易识别的参数值
+    FlowScene sourceScene;
+    NodeBase *circle = NodeRegistry::instance().createById(
+        QStringLiteral("OpencvFitCircleNode"), &sourceScene);
+    QVERIFY2(circle != nullptr, "无法创建圆拟合算子");
+    QVERIFY2(!circle->property("vfpNodeTypeId").toString().isEmpty(),
+             "注册算子应有 vfpNodeTypeId");
+    circle->setName(QStringLiteral("配方算子"));
+    circle->setParam(QStringLiteral("minPoints"), 999);   // 易识别的值
+
+    auto *rm = RecipeManager::instance();
+    QVERIFY2(rm->saveRecipe(QStringLiteral("VFP_TYPE_RECIPE"), QString(), &sourceScene),
+             "保存配方失败");
+
+    // 目标场景：真实「直线拟合」算子（同名、但类型不同）
+    FlowScene targetScene;
+    NodeBase *line = NodeRegistry::instance().createById(
+        QStringLiteral("OpencvFitLineNode"), &targetScene);
+    QVERIFY2(line != nullptr, "无法创建直线拟合算子");
+    line->setName(QStringLiteral("配方算子"));   // 同名 → 配方会按名称找到它
+    line->setParam(QStringLiteral("minPoints"), 5);   // 原值（与圆拟合的 999 不同）
+
+    // 加载应跳过类型不匹配的算子：返回 false，且参数不被改写
+    QVERIFY2(!rm->loadRecipe(QStringLiteral("VFP_TYPE_RECIPE"), &targetScene),
+             "类型不匹配时应跳过而不是写错参数");
+    QCOMPARE(line->toJson().value(QStringLiteral("params")).toObject()
+                 .value(QStringLiteral("minPoints")).toInt(), 5);   // 未被 999 覆盖
+
+    QVERIFY(rm->deleteRecipe(QStringLiteral("VFP_TYPE_RECIPE")));
+    RecipeManager::setStoragePathOverride(QString());
 }
 
 // 必须用 QTEST_MAIN：流程用例要创建 FlowScene（QGraphicsScene），仅 QCoreApplication 会崩；
