@@ -575,10 +575,15 @@ MainWindow::MainWindow(QWidget *parent) :
                     }
                 }
 
-                // === 转发节点输出值到运行界面（数值显示 / 状态灯） ===
+                // === 转发节点输出值到运行界面（数值显示 / 状态灯 / IO状态） ===
                 if (m_runtimeView) {
-                    QSharedPointer<DataObject> out = node->getOutputData(0);
-                    if (out) {
+                    // 全端口输出映射：端口0 走 updateNodeOutput（数值/状态灯）；
+                    // 全部端口按名走 updateNodePortMap（IO状态控件消费 成功/值/错误）
+                    QVariantMap portMap;
+                    const QList<Port *> outPorts = node->outputPorts();
+                    for (int pi = 0; pi < outPorts.size(); ++pi) {
+                        QSharedPointer<DataObject> out = node->getOutputData(pi);
+                        if (!out) continue;
                         QVariant v;
                         switch (out->getType()) {
                         case DataObject::DataType::Number:
@@ -600,9 +605,15 @@ MainWindow::MainWindow(QWidget *parent) :
                         default:
                             break;
                         }
-                        if (v.isValid())
-                            m_runtimeView->updateNodeOutput(node->fullName(), v);
+                        if (v.isValid()) {
+                            if (outPorts[pi])
+                                portMap.insert(outPorts[pi]->name(), v);
+                            if (pi == 0)
+                                m_runtimeView->updateNodeOutput(node->fullName(), v);
+                        }
                     }
+                    if (!portMap.isEmpty())
+                        m_runtimeView->updateNodePortMap(node->fullName(), portMap);
                 }
             }
         });

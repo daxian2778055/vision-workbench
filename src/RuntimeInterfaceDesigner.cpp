@@ -7,6 +7,7 @@
 #include <QSpinBox>
 #include <QLabel>
 #include <QPushButton>
+#include <QInputDialog>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QGridLayout>
@@ -31,9 +32,9 @@ RuntimeDesignerCanvas::RuntimeDesignerCanvas(QWidget *parent)
     setMouseTracking(true);
 }
 
-void RuntimeDesignerCanvas::setInterface(RuntimeInterface *layout)
+void RuntimeDesignerCanvas::setPage(RuntimeInterfacePage *page)
 {
-    m_layout = layout;
+    m_layout = page;
     rebuild();
 }
 
@@ -187,6 +188,56 @@ void DesignerControlFrame::paintEvent(QPaintEvent *event)
         p.drawText(btnRect, Qt::AlignCenter, ctrl.displayTitle());
         break;
     }
+    case RuntimeControlType::ResultTable: {
+        // 表格预览：表头 + 两行网格
+        p.setPen(QPen(QColor(0x3a, 0x3a, 0x4a), 1));
+        p.setBrush(QColor(0x11, 0x11, 0x14));
+        p.drawRect(body);
+        const int cols = qMax(1, ctrl.columns.size());
+        const int cw = body.width() / cols;
+        const int hh = 20;
+        // 表头
+        p.setBrush(QColor(0x2a, 0x2f, 0x40));
+        p.drawRect(QRect(body.left(), body.top(), body.width(), hh));
+        p.setPen(QColor(0x8a, 0x9a, 0xc0));
+        for (int i = 0; i < cols && i < 8; ++i) {
+            const QString h = ctrl.columns[i].header.isEmpty()
+                                  ? QStringLiteral("列%1").arg(i + 1) : ctrl.columns[i].header;
+            p.drawText(QRect(body.left() + i * cw, body.top(), cw, hh),
+                       Qt::AlignCenter, h);
+            p.setPen(QPen(QColor(0x3a, 0x3a, 0x4a), 1));
+            p.drawLine(body.left() + (i + 1) * cw, body.top(),
+                       body.left() + (i + 1) * cw, body.bottom());
+            p.setPen(QColor(0x8a, 0x9a, 0xc0));
+        }
+        // 行线
+        for (int r = 1; r <= 3; ++r) {
+            const int y = body.top() + hh * r;
+            if (y > body.bottom()) break;
+            p.setPen(QPen(QColor(0x2e, 0x2e, 0x3a), 1));
+            p.drawLine(body.left(), y, body.right(), y);
+        }
+        if (ctrl.columns.isEmpty()) {
+            p.setPen(QColor(0x66, 0x6a, 0x78));
+            p.drawText(body, Qt::AlignCenter, QStringLiteral("未配置列\n（属性面板填写列绑定）"));
+        }
+        break;
+    }
+    case RuntimeControlType::IoStatus: {
+        const int r = qMin(16, body.height() / 2 - 4);
+        QPoint c(body.left() + r + 4, body.center().y());
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0x55, 0x58, 0x62));
+        p.drawEllipse(c, r, r);
+        p.setPen(QColor(0x9a, 0x9e, 0xac));
+        QFont ioFont = p.font();
+        ioFont.setPointSizeF(10);
+        p.setFont(ioFont);
+        p.drawText(QRect(c.x() + r + 6, body.top(), body.right() - c.x() - r - 6, body.height()),
+                   Qt::AlignLeft | Qt::AlignVCenter,
+                   QStringLiteral("%1\n%2").arg(ctrl.displayTitle(), ctrl.bindKey));
+        break;
+    }
     }
 
     // 缩放指示（右下角）
@@ -268,13 +319,38 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
 
     // 初始布局：从默认路径加载（若存在）
     m_layout.loadFromFile(defaultLayoutPath());
+    m_layout.ensurePage();
 
-    // ---- 左侧：控件面板 ----
+    // ---- 左上：页面管理 ----
+    auto *pageGroup = new QGroupBox(QStringLiteral("页面"), this);
+    m_pageList = new QListWidget(pageGroup);
+    m_pageList->setMaximumHeight(110);
+    auto *pageBtnRow = new QHBoxLayout();
+    auto *addPageBtn = new QPushButton(QStringLiteral("＋页"), pageGroup);
+    auto *delPageBtn = new QPushButton(QStringLiteral("－页"), pageGroup);
+    auto *renPageBtn = new QPushButton(QStringLiteral("改名"), pageGroup);
+    addPageBtn->setToolTip(QStringLiteral("添加运行界面页"));
+    delPageBtn->setToolTip(QStringLiteral("删除当前页（至少保留一页）"));
+    renPageBtn->setToolTip(QStringLiteral("重命名当前页"));
+    pageBtnRow->addWidget(addPageBtn);
+    pageBtnRow->addWidget(delPageBtn);
+    pageBtnRow->addWidget(renPageBtn);
+    auto *pageLay = new QVBoxLayout(pageGroup);
+    pageLay->addWidget(m_pageList, 1);
+    pageLay->addLayout(pageBtnRow);
+    connect(addPageBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::addPage);
+    connect(delPageBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::removePage);
+    connect(renPageBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::renamePage);
+    connect(m_pageList, &QListWidget::currentRowChanged, this, &RuntimeInterfaceDesigner::onPageSelected);
+    refreshPageList();
+
+    // ---- 左下：控件面板 ----
     auto *paletteGroup = new QGroupBox(QStringLiteral("控件库"), this);
     m_palette = new QListWidget(paletteGroup);
     const QStringList types = {
         QStringLiteral("图像显示"), QStringLiteral("数值显示"),
-        QStringLiteral("文本标签"), QStringLiteral("状态灯"), QStringLiteral("按钮")
+        QStringLiteral("文本标签"), QStringLiteral("状态灯"), QStringLiteral("按钮"),
+        QStringLiteral("结果表格"), QStringLiteral("IO状态")
     };
     m_palette->addItems(types);
     m_palette->setCurrentRow(0);
@@ -294,13 +370,13 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     auto *canvasGroup = new QGroupBox(QStringLiteral("画布"), this);
     m_canvasScroll = new QScrollArea(canvasGroup);
     m_canvas = new RuntimeDesignerCanvas(m_canvasScroll);
-    m_canvas->setInterface(&m_layout);
+    m_canvas->setPage(m_layout.currentPage());
     m_canvasScroll->setWidget(m_canvas);
     m_canvasScroll->setWidgetResizable(true);
     m_canvasScroll->setStyleSheet("QScrollArea{background:#1a1a20;border:1px solid #3a3a4a;}");
 
     auto *delBtn = new QPushButton(QStringLiteral("删除选中"), canvasGroup);
-    auto *clearBtn = new QPushButton(QStringLiteral("清空全部"), canvasGroup);
+    auto *clearBtn = new QPushButton(QStringLiteral("清空本页"), canvasGroup);
     delBtn->setStyleSheet("QPushButton{background:#8a3a3a;color:white;border:none;border-radius:4px;padding:6px;}");
     clearBtn->setStyleSheet("QPushButton{background:#5a5a6a;color:white;border:none;border-radius:4px;padding:6px;}");
     connect(delBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::deleteSelected);
@@ -323,9 +399,15 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     m_typeLabel = new QLabel(QStringLiteral("-"), propGroup);
     m_bindTypeCombo = new QComboBox(propGroup);
     m_bindKeyCombo = new QComboBox(propGroup);
+    m_bindKeyCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_bindKeyCombo->setMinimumContentsLength(12);
     m_colorEdit = new QLineEdit(propGroup);
     m_fontSpin = new QSpinBox(propGroup);
     m_fontSpin->setRange(8, 96);
+    m_tableColumnsEdit = new QLineEdit(propGroup);
+    m_tableColumnsEdit->setPlaceholderText(QStringLiteral("列绑定，逗号分隔"));
+    m_tableMaxRows = new QSpinBox(propGroup);
+    m_tableMaxRows->setRange(1, 10000);
 
     form->addRow(QStringLiteral("标题"), m_titleEdit);
     form->addRow(QStringLiteral("类型"), m_typeLabel);
@@ -333,15 +415,17 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     form->addRow(QStringLiteral("绑定对象"), m_bindKeyCombo);
     form->addRow(QStringLiteral("颜色(Hex)"), m_colorEdit);
     form->addRow(QStringLiteral("字号"), m_fontSpin);
+    form->addRow(QStringLiteral("表格列"), m_tableColumnsEdit);
+    form->addRow(QStringLiteral("最大行数"), m_tableMaxRows);
 
-    auto *propHint = new QLabel(QStringLiteral("绑定方式说明:\n· 全局变量: 实时显示全局变量值\n· 节点输出: 绑定流程中算子的输出\n· 动作: 按钮点击触发的流程操作"), propGroup);
+    auto *propHint = new QLabel(QStringLiteral("绑定方式说明:\n· 全局变量: 实时显示全局变量值\n· 节点输出: 绑定流程中算子的输出\n· 动作: 按钮点击触发的流程操作\n· 表格列: 每轮把各列当前值提交为一行\n  格式: 变量名,变量名 或 节点:模块完整名\n· IO状态: 绑定相机IO控制节点\n  灯=执行成功, 文本=线值/错误"), propGroup);
     propHint->setWordWrap(true);
     propHint->setStyleSheet("color:#8a8a9a;font-size:11px;");
     auto *propLay = new QVBoxLayout(propGroup);
     propLay->addLayout(form);
     propLay->addWidget(propHint);
     propLay->addStretch();
-    propGroup->setMaximumWidth(320);
+    propGroup->setMaximumWidth(340);
 
     // ---- 底部按钮 ----
     auto *saveBtn = new QPushButton(QStringLiteral("保存布局"), this);
@@ -359,8 +443,12 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     btnRow->addWidget(applyBtn);
 
     // ---- 总布局 ----
+    auto *leftLay = new QVBoxLayout();
+    leftLay->addWidget(pageGroup);
+    leftLay->addWidget(paletteGroup, 1);
+
     auto *mainLay = new QHBoxLayout();
-    mainLay->addWidget(paletteGroup);
+    mainLay->addLayout(leftLay);
     mainLay->addWidget(canvasGroup, 1);
     mainLay->addWidget(propGroup);
 
@@ -376,6 +464,9 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     connect(m_colorEdit, &QLineEdit::textChanged, this, &RuntimeInterfaceDesigner::onPropertyEdited);
     connect(m_fontSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &RuntimeInterfaceDesigner::onPropertyEdited);
+    connect(m_tableColumnsEdit, &QLineEdit::textChanged, this, &RuntimeInterfaceDesigner::onPropertyEdited);
+    connect(m_tableMaxRows, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, &RuntimeInterfaceDesigner::onPropertyEdited);
     connect(m_bindTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int) {
         if (m_updatingProps) return;
@@ -390,8 +481,71 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
 
 RuntimeControl *RuntimeInterfaceDesigner::selectedControl()
 {
-    if (m_selected < 0 || m_selected >= m_layout.controls.size()) return nullptr;
-    return &m_layout.controls[m_selected];
+    RuntimeInterfacePage *pg = m_layout.currentPage();
+    if (!pg) return nullptr;
+    if (m_selected < 0 || m_selected >= pg->controls.size()) return nullptr;
+    return &pg->controls[m_selected];
+}
+
+void RuntimeInterfaceDesigner::refreshPageList()
+{
+    m_updatingPages = true;
+    m_pageList->clear();
+    for (const RuntimeInterfacePage &p : m_layout.pages)
+        m_pageList->addItem(p.pageName);
+    if (m_layout.currentPageIndex >= 0 && m_layout.currentPageIndex < m_pageList->count())
+        m_pageList->setCurrentRow(m_layout.currentPageIndex);
+    m_updatingPages = false;
+}
+
+void RuntimeInterfaceDesigner::addPage()
+{
+    m_layout.currentPageIndex = m_layout.addPage();
+    refreshPageList();
+    m_selected = -1;
+    m_canvas->setPage(m_layout.currentPage());
+    refreshPropertyPanel();
+}
+
+void RuntimeInterfaceDesigner::removePage()
+{
+    if (m_layout.pages.size() <= 1) {
+        QMessageBox::information(this, QStringLiteral("删除页"),
+                                 QStringLiteral("至少保留一页"));
+        return;
+    }
+    if (QMessageBox::question(this, QStringLiteral("删除页"),
+                              QStringLiteral("确定删除当前页「%1」及其全部控件？")
+                                  .arg(m_layout.currentPage()->pageName)) != QMessageBox::Yes)
+        return;
+    m_layout.removePage(m_layout.currentPageIndex);
+    refreshPageList();
+    m_selected = -1;
+    m_canvas->setPage(m_layout.currentPage());
+    refreshPropertyPanel();
+}
+
+void RuntimeInterfaceDesigner::renamePage()
+{
+    RuntimeInterfacePage *pg = m_layout.currentPage();
+    if (!pg) return;
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, QStringLiteral("重命名页面"),
+                                               QStringLiteral("页面名称:"), QLineEdit::Normal,
+                                               pg->pageName, &ok);
+    if (!ok) return;
+    pg->pageName = name.trimmed().isEmpty() ? pg->pageName : name.trimmed();
+    refreshPageList();
+}
+
+void RuntimeInterfaceDesigner::onPageSelected(int index)
+{
+    if (m_updatingPages) return;
+    if (index < 0 || index >= m_layout.pages.size()) return;
+    m_layout.currentPageIndex = index;
+    m_selected = -1;
+    m_canvas->setPage(m_layout.currentPage());
+    refreshPropertyPanel();
 }
 
 void RuntimeInterfaceDesigner::addCurrentPaletteControl()
@@ -404,27 +558,31 @@ void RuntimeInterfaceDesigner::addCurrentPaletteControl()
     case 2: type = RuntimeControlType::TextLabel; break;
     case 3: type = RuntimeControlType::StatusLight; break;
     case 4: type = RuntimeControlType::Button; break;
+    case 5: type = RuntimeControlType::ResultTable; break;
+    case 6: type = RuntimeControlType::IoStatus; break;
     default: return;
     }
 
-    const int n = m_layout.controls.size();
+    const int n = m_layout.currentPage()->controls.size();
     const int cascade = (n % 8) * 24;
     QRect geo(40 + cascade, 40 + cascade, 300, 190);
     if (type == RuntimeControlType::StatusLight) geo.setHeight(70);
     if (type == RuntimeControlType::Button)     { geo.setWidth(160); geo.setHeight(48); }
     if (type == RuntimeControlType::TextLabel)  { geo.setWidth(240); geo.setHeight(60); }
     if (type == RuntimeControlType::ValueDisplay){ geo.setHeight(90); }
+    if (type == RuntimeControlType::ResultTable){ geo.setWidth(460); geo.setHeight(260); }
+    if (type == RuntimeControlType::IoStatus)   { geo.setWidth(260); geo.setHeight(80); }
 
-    RuntimeControl *ctrl = m_layout.addControl(type, geo);
+    RuntimeControl *ctrl = m_layout.currentPage()->addControl(type, geo);
     m_canvas->rebuild();
-    const int idx = m_layout.indexOf(ctrl);
+    const int idx = m_layout.currentPage()->indexOf(ctrl);
     if (idx >= 0) m_canvas->selectIndex(idx);
 }
 
 void RuntimeInterfaceDesigner::deleteSelected()
 {
     if (m_selected < 0) return;
-    m_layout.removeControl(m_selected);
+    m_layout.currentPage()->removeControl(m_selected);
     m_selected = -1;
     m_canvas->rebuild();
     refreshPropertyPanel();
@@ -432,11 +590,12 @@ void RuntimeInterfaceDesigner::deleteSelected()
 
 void RuntimeInterfaceDesigner::clearAll()
 {
-    if (m_layout.controls.isEmpty()) return;
-    if (QMessageBox::question(this, QStringLiteral("清空全部"),
-                              QStringLiteral("确定清空全部运行界面控件？")) != QMessageBox::Yes)
+    RuntimeInterfacePage *pg = m_layout.currentPage();
+    if (!pg || pg->controls.isEmpty()) return;
+    if (QMessageBox::question(this, QStringLiteral("清空本页"),
+                              QStringLiteral("确定清空当前页全部控件？")) != QMessageBox::Yes)
         return;
-    m_layout.clear();
+    pg->clear();
     m_selected = -1;
     m_canvas->rebuild();
     refreshPropertyPanel();
@@ -466,8 +625,10 @@ void RuntimeInterfaceDesigner::loadLayout()
     RuntimeInterface tmp;
     if (tmp.loadFromFile(path)) {
         m_layout = tmp;
+        m_layout.ensurePage();
         m_selected = -1;
-        m_canvas->rebuild();
+        refreshPageList();
+        m_canvas->setPage(m_layout.currentPage());
         refreshPropertyPanel();
     } else {
         QMessageBox::warning(this, QStringLiteral("加载布局"),
@@ -533,6 +694,8 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
         m_fontSpin->setEnabled(false);
         m_bindTypeCombo->setEnabled(false);
         m_bindKeyCombo->setEnabled(false);
+        m_tableColumnsEdit->setEnabled(false);
+        m_tableMaxRows->setEnabled(false);
         m_typeLabel->setText(QStringLiteral("-"));
         m_updatingProps = false;
         return;
@@ -541,30 +704,53 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
     m_titleEdit->setEnabled(true);
     m_colorEdit->setEnabled(true);
     m_fontSpin->setEnabled(true);
-    m_bindTypeCombo->setEnabled(true);
-    m_bindKeyCombo->setEnabled(true);
 
     m_typeLabel->setText(runtimeControlTypeName(ctrl->type));
     m_titleEdit->setText(ctrl->title);
     m_colorEdit->setText(ctrl->color);
     m_fontSpin->setValue(ctrl->fontSize);
 
+    const bool isTable = (ctrl->type == RuntimeControlType::ResultTable);
+    const bool isIo = (ctrl->type == RuntimeControlType::IoStatus);
+    m_tableColumnsEdit->setEnabled(isTable);
+    m_tableMaxRows->setEnabled(isTable);
+    if (isTable) {
+        QStringList parts;
+        for (const ResultColumn &col : ctrl->columns) {
+            if (col.bindType == QStringLiteral("node"))
+                parts << QStringLiteral("节点:%1").arg(col.bindKey);
+            else
+                parts << (col.bindKey.isEmpty() ? col.header : col.bindKey);
+        }
+        m_tableColumnsEdit->setText(parts.join(QStringLiteral(",")));
+        m_tableMaxRows->setValue(ctrl->maxRows);
+    }
+
     // 绑定方式选项
     m_bindTypeCombo->clear();
-    m_bindTypeCombo->addItem(QStringLiteral("无绑定"), QString());
     if (ctrl->type == RuntimeControlType::Button) {
-        // 按钮仅动作绑定
-        m_bindTypeCombo->clear();
+        m_bindTypeCombo->setEnabled(true);
+        m_bindKeyCombo->setEnabled(true);
         m_bindTypeCombo->addItem(QStringLiteral("动作"), QStringLiteral("action"));
-    } else if (ctrl->type == RuntimeControlType::ImageView) {
+    } else if (ctrl->type == RuntimeControlType::ImageView || isIo) {
+        m_bindTypeCombo->setEnabled(true);
+        m_bindKeyCombo->setEnabled(true);
         m_bindTypeCombo->addItem(QStringLiteral("节点输出"), QStringLiteral("node"));
     } else if (ctrl->type == RuntimeControlType::ValueDisplay ||
                ctrl->type == RuntimeControlType::StatusLight) {
+        m_bindTypeCombo->setEnabled(true);
+        m_bindKeyCombo->setEnabled(true);
         m_bindTypeCombo->addItem(QStringLiteral("全局变量"), QStringLiteral("global"));
         m_bindTypeCombo->addItem(QStringLiteral("节点输出"), QStringLiteral("node"));
+    } else if (isTable) {
+        // 表格用列配置，不用整体绑定
+        m_bindTypeCombo->setEnabled(false);
+        m_bindKeyCombo->setEnabled(false);
+        m_bindTypeCombo->addItem(QStringLiteral("(列配置)"), QString());
     } else {
         // TextLabel：仅文本
         m_bindTypeCombo->setEnabled(false);
+        m_bindKeyCombo->setEnabled(false);
     }
 
     int idx = m_bindTypeCombo->findData(ctrl->bindType);
@@ -584,6 +770,31 @@ void RuntimeInterfaceDesigner::onPropertyEdited()
     ctrl->color = m_colorEdit->text().trimmed().isEmpty()
                       ? QStringLiteral("#3a6ea5") : m_colorEdit->text().trimmed();
     ctrl->fontSize = m_fontSpin->value();
+
+    if (ctrl->type == RuntimeControlType::ResultTable) {
+        // 解析列配置："变量名,变量名" 或 "节点:模块完整名"
+        ctrl->columns.clear();
+        const QString raw = m_tableColumnsEdit->text();
+        const QStringList parts = raw.split(QLatin1Char(','), Qt::SkipEmptyParts);
+        for (QString part : parts) {
+            part = part.trimmed();
+            if (part.isEmpty()) continue;
+            ResultColumn col;
+            if (part.startsWith(QStringLiteral("节点:"))) {
+                col.bindType = QStringLiteral("node");
+                col.bindKey = part.mid(3).trimmed();
+            } else {
+                col.bindType = QStringLiteral("global");
+                col.bindKey = part;
+            }
+            col.header = col.bindKey;
+            if (!col.bindKey.isEmpty())
+                ctrl->columns.append(col);
+        }
+        ctrl->maxRows = m_tableMaxRows->value();
+        m_canvas->refreshControl(m_selected);
+        return;
+    }
 
     if (ctrl->type != RuntimeControlType::Button) {
         ctrl->bindType = m_bindTypeCombo->currentData().toString();

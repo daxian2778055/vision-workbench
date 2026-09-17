@@ -13,7 +13,7 @@ class QLabel;
 class QScrollArea;
 class RuntimeDesignerCanvas;
 
-/// 自定义运行界面设计器（对齐 VisionMaster 4.4 运行界面设计）
+/// 自定义运行界面设计器（对齐 VisionMaster 4.4 运行界面设计；多页 + 结果表格 + IO 状态）
 class RuntimeInterfaceDesigner : public QDialog
 {
     Q_OBJECT
@@ -37,16 +37,23 @@ private slots:
     void applyAndClose();
     void onControlSelected(int index);
     void onPropertyEdited();
+    // 多页管理
+    void addPage();
+    void removePage();
+    void renamePage();
+    void onPageSelected(int index);
 
 private:
     void rebuildCanvas();
     void populateBindKeyCombo();
     void refreshPropertyPanel();
+    void refreshPageList();
     RuntimeControl *selectedControl();
 
     RuntimeInterface m_layout;
     QStringList m_nodeNames;
 
+    QListWidget *m_pageList = nullptr;
     QListWidget *m_palette = nullptr;
     RuntimeDesignerCanvas *m_canvas = nullptr;
     QScrollArea *m_canvasScroll = nullptr;
@@ -58,19 +65,23 @@ private:
     QComboBox *m_bindKeyCombo = nullptr;
     QLineEdit *m_colorEdit = nullptr;
     QSpinBox *m_fontSpin = nullptr;
+    // 结果表格专用
+    QLineEdit *m_tableColumnsEdit = nullptr;
+    QSpinBox *m_tableMaxRows = nullptr;
 
     int m_selected = -1;
     bool m_updatingProps = false;
+    bool m_updatingPages = false;
 };
 
-/// 设计画布：网格背景 + 可拖动/缩放的控件
+/// 设计画布：网格背景 + 可拖动/缩放的控件（工作于当前页）
 class RuntimeDesignerCanvas : public QWidget
 {
     Q_OBJECT
 
 public:
     explicit RuntimeDesignerCanvas(QWidget *parent = nullptr);
-    void setInterface(RuntimeInterface *layout);
+    void setPage(RuntimeInterfacePage *page);
     void rebuild();
     void selectIndex(int index);
     int selectedIndex() const { return m_selected; }
@@ -86,7 +97,7 @@ public:
     void refreshControl(int index);
 
 private:
-    RuntimeInterface *m_layout = nullptr;
+    RuntimeInterfacePage *m_layout = nullptr;
     QList<QWidget *> m_frames;
     int m_selected = -1;
 
