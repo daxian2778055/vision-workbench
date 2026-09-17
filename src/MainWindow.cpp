@@ -49,6 +49,7 @@
 #include "ReportDialog.h"
 #include "RuntimeInterfaceDesigner.h"
 #include "RuntimeInterfaceView.h"
+#include <QShortcut>
 #include "HeartbeatManager.h"
 #include "GlobalCameraManager.h"
 #include "GlobalCameraDialog.h"
@@ -2491,6 +2492,21 @@ void MainWindow::setupDockWidgets()
         // 全局变量变化 → 运行界面实时更新
         connect(GlobalVariableManager::instance(), &GlobalVariableManager::variableChanged,
                 m_runtimeView, &RuntimeInterfaceView::updateVariable);
+
+        // F11：运行界面全屏（dock 浮动 + 无边框全屏；现场大屏直接投全屏，再按 F11 还原）
+        auto *runtimeFsShortcut = new QShortcut(QKeySequence(QStringLiteral("F11")), this);
+        connect(runtimeFsShortcut, &QShortcut::activated, this, [this]() {
+            if (!m_runtimeViewDock) return;
+            if (!m_runtimeViewDock->isFullScreen()) {
+                m_runtimeViewDock->setFloating(true);
+                m_runtimeViewDock->showFullScreen();
+                logMessage(QStringLiteral("运行界面已全屏（F11 还原）"));
+            } else {
+                m_runtimeViewDock->showNormal();
+                m_runtimeViewDock->setFloating(false);
+                logMessage(QStringLiteral("运行界面已还原"));
+            }
+        });
     }
 
     // Connect view menu toggles

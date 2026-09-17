@@ -21,6 +21,8 @@
 #include <QShortcut>
 #include <QColorDialog>
 #include <QMessageBox>
+#include <algorithm>
+#include <climits>
 #include <QFileDialog>
 #include <QCoreApplication>
 #include <QJsonDocument>
@@ -49,6 +51,7 @@ void RuntimeDesignerCanvas::rebuild()
     }
     m_frames.clear();
     m_selected = -1;
+    m_selectedSet.clear();
 
     if (!m_layout) return;
     for (int i = 0; i < m_layout->controls.size(); ++i) {
@@ -62,11 +65,74 @@ void RuntimeDesignerCanvas::rebuild()
 
 void RuntimeDesignerCanvas::selectIndex(int index)
 {
-    m_selected = index;
+    selectIndex(index, false);
+}
+
+void RuntimeDesignerCanvas::selectIndex(int index, bool additive)
+{
+    if (additive) {
+        if (m_selectedSet.contains(index))
+            m_selectedSet.removeOne(index);
+        else
+            m_selectedSet.append(index);
+    } else {
+        m_selectedSet.clear();
+        if (index >= 0)
+            m_selectedSet.append(index);
+    }
+    m_selected = m_selectedSet.isEmpty() ? -1 : m_selectedSet.last();
     for (int i = 0; i < m_frames.size(); ++i) {
         m_frames[i]->update();
     }
-    emit controlSelected(index);
+    emit controlSelected(m_selected);
+}
+
+void RuntimeDesignerCanvas::alignSelected(AlignMode mode)
+{
+    if (!m_layout) return;
+    if (m_selectedSet.size() < 2) return;   // 至少两个控件才有对齐意义
+
+    // 收集选中几何（frames 与 controls 索引一一对应）
+    QList<int> idx = m_selectedSet;
+    QVector<QRect> rects;
+    for (int i : idx) {
+        if (i < 0 || i >= m_frames.size()) return;
+        rects.append(m_frames[i]->geometry());
+    }
+
+    if (mode == AlignLeft || mode == AlignTop) {
+        int target = INT_MAX;
+        for (const QRect &r : rects)
+            target = qMin(target, mode == AlignLeft ? r.left() : r.top());
+        for (int k = 0; k < idx.size(); ++k) {
+            QRect g = rects[k];
+            if (mode == AlignLeft) g.moveLeft(target); else g.moveTop(target);
+            m_frames[idx[k]]->setGeometry(g);
+            m_layout->controls[idx[k]].geometry = g;
+            m_frames[idx[k]]->update();
+        }
+        return;
+    }
+
+    // 均分：按坐标排序，首尾固定，中间等距
+    QList<QPair<int, int>> order;   // (排序键, 选中序号)
+    for (int k = 0; k < idx.size(); ++k)
+        order.append({ mode == AlignHSpread ? rects[k].left() : rects[k].top(), k });
+    std::sort(order.begin(), order.end());
+    const int n = order.size();
+    const int firstKey = order.first().first;
+    const int lastKey = order.last().first;
+    if (n < 3 || lastKey == firstKey) return;   // 无可分配间隙
+    const double step = double(lastKey - firstKey) / (n - 1);
+    for (int rank = 1; rank < n - 1; ++rank) {
+        const int k = order[rank].second;
+        const int want = qRound(firstKey + step * rank);
+        QRect g = rects[k];
+        if (mode == AlignHSpread) g.moveLeft(want); else g.moveTop(want);
+        m_frames[idx[k]]->setGeometry(g);
+        m_layout->controls[idx[k]].geometry = g;
+        m_frames[idx[k]]->update();
+    }
 }
 
 void RuntimeDesignerCanvas::refreshControl(int index)
@@ -255,7 +321,7 @@ void DesignerControlFrame::paintEvent(QPaintEvent *event)
 void DesignerControlFrame::mousePressEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton) {
-        m_canvas->selectIndex(m_index);
+        m_canvas->selectIndex(m_index, event->modifiers() & Qt::ControlModifier);
         const QPoint local = event->pos();
         // 右下角 14px 区域 = 缩放
         if (local.x() >= width() - 14 && local.y() >= height() - 14) {
@@ -291,10 +357,28 @@ void DesignerControlFrame::mouseMoveEvent(QMouseEvent *event)
         g.moveLeft(qMax(0, (g.left() + 5) / 10 * 10));
         g.moveTop(qMax(0, (g.top() + 5) / 10 * 10));
         setGeometry(g);
+
+        // 多选整体平移：随主控件同步移动其余选中控件
+        const QList<int> sel = m_canvas->m_selectedSet;
+        if (sel.size() > 1 && sel.contains(m_index)) {
+            for (int other : sel) {
+                if (other == m_index) continue;
+                if (other < 0 || other >= m_canvas->m_frames.size()) continue;
+                QWidget *f = m_canvas->m_frames[other];
+                QRect og = f->geometry().translated(delta);
+                og.moveLeft(qMax(0, (og.left() + 5) / 10 * 10));
+                og.moveTop(qMax(0, (og.top() + 5) / 10 * 10));
+                f->setGeometry(og);
+                f->update();
+            }
+        }
     }
 
-    if (m_canvas->m_layout && m_index >= 0 && m_index < m_canvas->m_layout->controls.size()) {
-        m_canvas->m_layout->controls[m_index].geometry = geometry();
+    if (m_canvas->m_layout) {
+        for (int i : m_canvas->m_selectedSet) {
+            if (i >= 0 && i < m_canvas->m_frames.size() && i < m_canvas->m_layout->controls.size())
+                m_canvas->m_layout->controls[i].geometry = m_canvas->m_frames[i]->geometry();
+        }
     }
     event->accept();
 }
@@ -353,20 +437,32 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     m_pageList->setMaximumHeight(110);
     auto *pageBtnRow = new QHBoxLayout();
     auto *addPageBtn = new QPushButton(QStringLiteral("＋页"), pageGroup);
+    auto *dupPageBtn = new QPushButton(QStringLiteral("复制"), pageGroup);
     auto *delPageBtn = new QPushButton(QStringLiteral("－页"), pageGroup);
     auto *renPageBtn = new QPushButton(QStringLiteral("改名"), pageGroup);
+    auto *upPageBtn = new QPushButton(QStringLiteral("↑"), pageGroup);
+    auto *downPageBtn = new QPushButton(QStringLiteral("↓"), pageGroup);
     addPageBtn->setToolTip(QStringLiteral("添加运行界面页"));
+    dupPageBtn->setToolTip(QStringLiteral("复制当前页（含全部控件）"));
     delPageBtn->setToolTip(QStringLiteral("删除当前页（至少保留一页）"));
     renPageBtn->setToolTip(QStringLiteral("重命名当前页"));
+    upPageBtn->setToolTip(QStringLiteral("当前页上移"));
+    downPageBtn->setToolTip(QStringLiteral("当前页下移"));
     pageBtnRow->addWidget(addPageBtn);
+    pageBtnRow->addWidget(dupPageBtn);
     pageBtnRow->addWidget(delPageBtn);
     pageBtnRow->addWidget(renPageBtn);
+    pageBtnRow->addWidget(upPageBtn);
+    pageBtnRow->addWidget(downPageBtn);
     auto *pageLay = new QVBoxLayout(pageGroup);
     pageLay->addWidget(m_pageList, 1);
     pageLay->addLayout(pageBtnRow);
     connect(addPageBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::addPage);
+    connect(dupPageBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::duplicatePage);
     connect(delPageBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::removePage);
     connect(renPageBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::renamePage);
+    connect(upPageBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::movePageUp);
+    connect(downPageBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::movePageDown);
     connect(m_pageList, &QListWidget::currentRowChanged, this, &RuntimeInterfaceDesigner::onPageSelected);
     refreshPageList();
 
@@ -415,6 +511,30 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     auto *dupShortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+D")), this);
     connect(dupShortcut, &QShortcut::activated, this, &RuntimeInterfaceDesigner::duplicateSelected);
 
+    // 撤销/重做（结构性操作：加删控件/页/列、复制、清空）
+    auto *undoShortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Z")), this);
+    connect(undoShortcut, &QShortcut::activated, this, &RuntimeInterfaceDesigner::undo);
+    auto *redoShortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Y")), this);
+    connect(redoShortcut, &QShortcut::activated, this, &RuntimeInterfaceDesigner::redo);
+
+    // 批量对齐（Ctrl+点击选 2 个以上后点用）
+    auto *alignRow = new QHBoxLayout();
+    auto *alignLeftBtn = new QPushButton(QStringLiteral("左对齐"), canvasGroup);
+    auto *alignTopBtn = new QPushButton(QStringLiteral("顶对齐"), canvasGroup);
+    auto *hSpreadBtn = new QPushButton(QStringLiteral("横均分"), canvasGroup);
+    auto *vSpreadBtn = new QPushButton(QStringLiteral("纵均分"), canvasGroup);
+    for (QPushButton *b : { alignLeftBtn, alignTopBtn, hSpreadBtn, vSpreadBtn })
+        b->setStyleSheet("QPushButton{background:#5a5a6a;color:white;border:none;border-radius:4px;padding:4px 8px;}");
+    alignRow->addWidget(alignLeftBtn);
+    alignRow->addWidget(alignTopBtn);
+    alignRow->addWidget(hSpreadBtn);
+    alignRow->addWidget(vSpreadBtn);
+    alignRow->addStretch();
+    connect(alignLeftBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::onAlignLeft);
+    connect(alignTopBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::onAlignTop);
+    connect(hSpreadBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::onAlignHSpread);
+    connect(vSpreadBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::onAlignVSpread);
+
     auto *canvasToolRow = new QHBoxLayout();
     canvasToolRow->addStretch();
     canvasToolRow->addWidget(dupBtn);
@@ -423,6 +543,7 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
 
     auto *canvasLay = new QVBoxLayout(canvasGroup);
     canvasLay->addWidget(m_canvasScroll, 1);
+    canvasLay->addLayout(alignRow);
     canvasLay->addLayout(canvasToolRow);
 
     // ---- 右侧：属性面板 ----
@@ -560,6 +681,7 @@ void RuntimeInterfaceDesigner::refreshPageList()
 
 void RuntimeInterfaceDesigner::addPage()
 {
+    pushUndo();
     m_layout.currentPageIndex = m_layout.addPage();
     refreshPageList();
     m_selected = -1;
@@ -578,6 +700,7 @@ void RuntimeInterfaceDesigner::removePage()
                               QStringLiteral("确定删除当前页「%1」及其全部控件？")
                                   .arg(m_layout.currentPage()->pageName)) != QMessageBox::Yes)
         return;
+    pushUndo();
     m_layout.removePage(m_layout.currentPageIndex);
     refreshPageList();
     m_selected = -1;
@@ -633,6 +756,7 @@ void RuntimeInterfaceDesigner::addCurrentPaletteControl()
     if (type == RuntimeControlType::ResultTable){ geo.setWidth(460); geo.setHeight(260); }
     if (type == RuntimeControlType::IoStatus)   { geo.setWidth(260); geo.setHeight(80); }
 
+    pushUndo();
     RuntimeControl *ctrl = m_layout.currentPage()->addControl(type, geo);
     m_canvas->rebuild();
     const int idx = m_layout.currentPage()->indexOf(ctrl);
@@ -642,6 +766,7 @@ void RuntimeInterfaceDesigner::addCurrentPaletteControl()
 void RuntimeInterfaceDesigner::deleteSelected()
 {
     if (m_selected < 0) return;
+    pushUndo();
     m_layout.currentPage()->removeControl(m_selected);
     m_selected = -1;
     m_canvas->rebuild();
@@ -655,6 +780,7 @@ void RuntimeInterfaceDesigner::clearAll()
     if (QMessageBox::question(this, QStringLiteral("清空本页"),
                               QStringLiteral("确定清空当前页全部控件？")) != QMessageBox::Yes)
         return;
+    pushUndo();
     pg->clear();
     m_selected = -1;
     m_canvas->rebuild();
@@ -723,6 +849,7 @@ void RuntimeInterfaceDesigner::onColumnAdd()
     for (const ResultColumn &c : ctrl->columns) {
         if (c.bindKey == col.bindKey && c.bindType == col.bindType) return;
     }
+    pushUndo();
     ctrl->columns.append(col);
     refreshPropertyPanel();          // 重填列列表（内部有 updating 保护）
     m_canvas->refreshControl(m_selected);
@@ -734,6 +861,7 @@ void RuntimeInterfaceDesigner::onColumnDel()
     if (!ctrl || ctrl->type != RuntimeControlType::ResultTable) return;
     const int row = m_columnList->currentRow();
     if (row < 0 || row >= ctrl->columns.size()) return;
+    pushUndo();
     ctrl->columns.removeAt(row);
     refreshPropertyPanel();
     m_canvas->refreshControl(m_selected);
@@ -745,10 +873,90 @@ void RuntimeInterfaceDesigner::duplicateSelected()
     if (!ctrl) return;
     RuntimeControl copy = *ctrl;
     copy.geometry = copy.geometry.translated(24, 24);   // 级联偏移避免完全重叠
+    pushUndo();
     m_layout.currentPage()->controls.append(copy);
     m_canvas->rebuild();
     m_canvas->selectIndex(m_layout.currentPage()->controls.size() - 1);
 }
+
+// ==================== 撤销/重做 ====================
+
+void RuntimeInterfaceDesigner::pushUndo()
+{
+    m_undoStack.append(m_layout);          // QList 值语义，整体深拷贝
+    while (m_undoStack.size() > 50)
+        m_undoStack.removeFirst();
+    m_redoStack.clear();                   // 新操作截断重做分支
+}
+
+void RuntimeInterfaceDesigner::afterRestore()
+{
+    m_layout.ensurePage();
+    m_selected = -1;
+    refreshPageList();
+    m_canvas->setPage(m_layout.currentPage());
+    refreshPropertyPanel();
+}
+
+void RuntimeInterfaceDesigner::undo()
+{
+    if (m_undoStack.isEmpty()) return;
+    m_redoStack.append(m_layout);
+    m_layout = m_undoStack.takeLast();
+    afterRestore();
+}
+
+void RuntimeInterfaceDesigner::redo()
+{
+    if (m_redoStack.isEmpty()) return;
+    m_undoStack.append(m_layout);
+    m_layout = m_redoStack.takeLast();
+    afterRestore();
+}
+
+// ==================== 页面复制/排序 ====================
+
+void RuntimeInterfaceDesigner::duplicatePage()
+{
+    RuntimeInterfacePage *src = m_layout.currentPage();
+    if (!src) return;
+    pushUndo();
+    RuntimeInterfacePage copy = *src;
+    copy.pageName = QStringLiteral("%1副本").arg(src->pageName);
+    m_layout.pages.append(copy);
+    m_layout.currentPageIndex = m_layout.pages.size() - 1;
+    refreshPageList();
+    m_selected = -1;
+    m_canvas->setPage(m_layout.currentPage());
+    refreshPropertyPanel();
+}
+
+void RuntimeInterfaceDesigner::movePage(int delta)
+{
+    const int n = m_layout.pages.size();
+    const int target = m_layout.currentPageIndex + delta;
+    if (n <= 1 || target < 0 || target >= n) return;
+    m_layout.pages.swapItemsAt(m_layout.currentPageIndex, target);
+    m_layout.currentPageIndex = target;
+    refreshPageList();                     // currentRowChanged → onPageSelected 重挂画布
+}
+
+void RuntimeInterfaceDesigner::movePageUp()
+{
+    movePage(-1);
+}
+
+void RuntimeInterfaceDesigner::movePageDown()
+{
+    movePage(1);
+}
+
+// ==================== 批量对齐 ====================
+
+void RuntimeInterfaceDesigner::onAlignLeft()   { m_canvas->alignSelected(RuntimeDesignerCanvas::AlignLeft); }
+void RuntimeInterfaceDesigner::onAlignTop()    { m_canvas->alignSelected(RuntimeDesignerCanvas::AlignTop); }
+void RuntimeInterfaceDesigner::onAlignHSpread(){ m_canvas->alignSelected(RuntimeDesignerCanvas::AlignHSpread); }
+void RuntimeInterfaceDesigner::onAlignVSpread(){ m_canvas->alignSelected(RuntimeDesignerCanvas::AlignVSpread); }
 
 void RuntimeInterfaceDesigner::onControlSelected(int index)
 {

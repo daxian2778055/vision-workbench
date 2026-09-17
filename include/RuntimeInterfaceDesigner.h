@@ -43,9 +43,20 @@ private slots:
     void onColumnDel();
     // 控件复制
     void duplicateSelected();
+    // 撤销/重做（结构性操作）
+    void undo();
+    void redo();
+    // 多选批量对齐
+    void onAlignLeft();
+    void onAlignTop();
+    void onAlignHSpread();
+    void onAlignVSpread();
     // 多页管理
     void addPage();
     void removePage();
+    void duplicatePage();
+    void movePageUp();
+    void movePageDown();
     void renamePage();
     void onPageSelected(int index);
 
@@ -54,10 +65,15 @@ private:
     void populateBindKeyCombo();
     void refreshPropertyPanel();
     void refreshPageList();
+    void pushUndo();
+    void afterRestore();
+    void movePage(int delta);
     RuntimeControl *selectedControl();
 
     RuntimeInterface m_layout;
     QStringList m_nodeNames;
+    QList<RuntimeInterface> m_undoStack;   /// 结构性操作快照（值语义深拷贝）
+    QList<RuntimeInterface> m_redoStack;
 
     QListWidget *m_pageList = nullptr;
     QListWidget *m_palette = nullptr;
@@ -83,17 +99,22 @@ private:
     bool m_updatingPages = false;
 };
 
-/// 设计画布：网格背景 + 可拖动/缩放的控件（工作于当前页）
+/// 设计画布：网格背景 + 可拖动/缩放的控件（工作于当前页；支持 Ctrl+点击多选与批量对齐）
 class RuntimeDesignerCanvas : public QWidget
 {
     Q_OBJECT
 
 public:
+    enum AlignMode { AlignLeft, AlignTop, AlignHSpread, AlignVSpread };
+
     explicit RuntimeDesignerCanvas(QWidget *parent = nullptr);
     void setPage(RuntimeInterfacePage *page);
     void rebuild();
     void selectIndex(int index);
+    void selectIndex(int index, bool additive);   /// additive=true 时切换多选
     int selectedIndex() const { return m_selected; }
+    const QList<int> &selectedSet() const { return m_selectedSet; }
+    void alignSelected(AlignMode mode);
 
 signals:
     void controlSelected(int index);
@@ -108,7 +129,8 @@ public:
 private:
     RuntimeInterfacePage *m_layout = nullptr;
     QList<QWidget *> m_frames;
-    int m_selected = -1;
+    int m_selected = -1;          /// 最后选中（属性面板目标）
+    QList<int> m_selectedSet;     /// 选中集合（多选）
 
     friend class DesignerControlFrame;
 };
