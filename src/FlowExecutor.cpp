@@ -609,12 +609,18 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
         }
 
         // 为输出数据设置来源信息（仅成功节点写入缓存；失败或本轮无输出时清除缓存，避免下游误用上一轮结果，P2）
+        // 顺带把端口 0 的输出指针留在 nodeOut0：后面的数据库记录、全局变量写入与预览推送都要用
+        // 同一份，不必各自再 getOutputData(0) 一次（每次都加锁 + 拷贝 QSharedPointer）。
+        QSharedPointer<DataObject> nodeOut0;
         if (success) {
             for (int i = 0; i < node->outputPorts().size(); i++) {
                 QSharedPointer<DataObject> outputData = node->getOutputData(i);
                 if (outputData) {
                     outputData->setSourceInfo(QString("%1 的输出").arg(node->fullName()));
                     m_nodeData[node][i] = outputData;
+                    if (i == 0) {
+                        nodeOut0 = outputData;
+                    }
                 } else {
                     // 本轮该端口无输出：移除上一轮残留，否则下游会读到旧数据
                     m_nodeData[node].remove(i);
@@ -663,8 +669,7 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
             // （reinterpret_cast<quintptr>(m_scene)），报表里显示内存地址且每次运行都不同。
             const QString flowName = m_flowName.isEmpty() ? QStringLiteral("(未命名流程)") : m_flowName;
             QString resultVal;
-            QSharedPointer<DataObject> resultData = node->getOutputData(0);
-            if (resultData) {
+            if (nodeOut0) {
                 resultVal = QStringLiteral("OK");
             }
             AppDatabase::instance()->saveInspectionResult(flowName, node->fullName(), success, resultVal);
@@ -676,9 +681,8 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
 
         // 运行界面推送：任意节点有图像输出即通知（按节点名查表）
         if (success) {
-            QSharedPointer<DataObject> imgData = node->getOutputData(0);
-            if (imgData) {
-                HalconCpp::HImage img = imgData->getHImage();
+            if (nodeOut0) {
+                HalconCpp::HImage img = nodeOut0->getHImage();
                 if (img.IsInitialized()) {
                     emit imageAvailable(node, img);
                 }
@@ -693,7 +697,7 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
                     if (key.startsWith(QStringLiteral("globalVarOutput_"))
                         && node->getParam(key).toBool()) {
                         const QString varName = key.mid(QStringLiteral("globalVarOutput_").size());
-                        QSharedPointer<DataObject> out = node->getOutputData(0);
+                        const QSharedPointer<DataObject> &out = nodeOut0;
                         if (out) {
                             switch (out->getType()) {
                             case DataObject::DataType::Number:
@@ -720,9 +724,8 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
 
         // 仅拓扑末端节点发出 imageReady，避免整链重复刷新预览（与其它节点仍可经 nodeExecuted 更新状态）
         if (success && isLastNode) {
-            QSharedPointer<DataObject> outputData = node->getOutputData(0);
-            if (outputData) {
-                HalconCpp::HImage image = outputData->getHImage();
+            if (nodeOut0) {
+                HalconCpp::HImage image = nodeOut0->getHImage();
                 if (image.IsInitialized()) {
                     emit imageReady(node, image);
                 }
@@ -1153,10 +1156,20 @@ void FlowExecutor::executeFrom(NodeBase *startNode)
     };
     walkDown(startNode);
 
+    // 末节点判定的修正：isLastNode 只用来决定"是否把执行结果推到预览"，
+    // 它应当是**本次实际执行的最后一个节点**（keep 集合的末端），而不是整张图的拓扑末端。
+    // 此前传 sorted.last()，导致「执行到此/重算下游」这类局部执行永远不满足条件，
+    // 结果算完了但预览不刷新（表现为"点了没反应"）。
+    NodeBase *lastKept = nullptr;
+    for (NodeBase *node : sorted) {
+        if (keep.contains(node))
+            lastKept = node;
+    }
+
     for (NodeBase *node : sorted) {
         if (!keep.contains(node))
             continue;
-        executeNode(node, node == sorted.last());
+        executeNode(node, node == lastKept);
         if (!m_lastNodeSuccess && m_stopOnFailure)
             break;
     }
