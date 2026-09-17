@@ -191,6 +191,9 @@ void ReportDialog::onExport()
         return;
     }
     QTextStream out(&file);
+    // 写 UTF-8 BOM：中文 Windows 的 Excel 默认按 ANSI 解析 CSV，没有 BOM 就会把中文表头/流程名
+    // 显示成乱码（结果表与检测记录两处导出已经这么做了，这里补齐一致）。
+    out << QChar(0xFEFF);
     out << QStringLiteral("\u6D41\u7A0B,\u603B\u6570,\u901A\u8FC7,\u5931\u8D25\n");
     for (const auto &s : m_stats) {
         out << s.flowName << ',' << s.total << ',' << s.passed << ',' << s.failed << '\n';

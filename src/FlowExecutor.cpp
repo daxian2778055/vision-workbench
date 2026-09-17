@@ -659,7 +659,9 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
         // Phase 4: \u4FDD\u5B58\u68C0\u6D4B\u7ED3\u679C\u5230\u6570\u636E\u5E93
         if (!AppDatabase::instance()->databasePath().isEmpty()) {
             // \u6570\u636E\u5E93\u5DF2\u521D\u59CB\u5316
-            QString flowName = m_scene ? QString::number(reinterpret_cast<quintptr>(m_scene)) : QString();
+            // 报表「流程」列必须是可读且跨会话稳定的流程名：此前写的是场景指针的十进制数字
+            // （reinterpret_cast<quintptr>(m_scene)），报表里显示内存地址且每次运行都不同。
+            const QString flowName = m_flowName.isEmpty() ? QStringLiteral("(未命名流程)") : m_flowName;
             QString resultVal;
             QSharedPointer<DataObject> resultData = node->getOutputData(0);
             if (resultData) {

@@ -179,17 +179,25 @@ QImage HalconWindow::convertHImageToQImage(const HImage &image)
             std::string typeStr = type.S().Text();
 
             if (typeStr == "byte") {
-                // 灰度8位：零拷贝包装，仅复制一次（HALCON行对齐保证 bytesPerLine == w）
-                QImage qImage((uchar*)pointer.L(), w, h, w, QImage::Format_Grayscale8);
+                // 灰度8位：按 HALCON 的**实际行距**包装，再 copy() 成 Qt 自有内存（一次深拷贝）。
+                // 注意：HALCON 行是 4 字节对齐的，widthByte 可能大于 w——此前写死 w，
+                // 宽度不是 4 的倍数时会错行（显示为斜纹）。
+                const int stride = widthByte.I();
+                QImage qImage((uchar*)pointer.L(), w, h, stride, QImage::Format_Grayscale8);
                 return qImage.copy();
             }
             if (typeStr == "uint2") {
-                // 16位无符号：归一化到8位显示（保留高8位）
+                // 16位无符号：归一化到8位显示（保留高8位）。
+                // 同样必须按行距逐行处理：uint2 的行距也按 4 字节对齐（宽度为奇数时多 2 字节填充），
+                // 而且 Qt 侧的 bytesPerLine 也可能有对齐填充，两端都不能按 w*h 线性访问。
+                const int srcStrideShorts = widthByte.I() / 2;
                 const ushort *src = (const ushort *)pointer.L();
                 QImage qImage(w, h, QImage::Format_Grayscale8);
-                uchar *dst = qImage.bits();
-                const int n = w * h;
-                for (int i = 0; i < n; ++i) dst[i] = (uchar)(src[i] >> 8);
+                for (int y = 0; y < h; ++y) {
+                    const ushort *srcRow = src + static_cast<size_t>(y) * srcStrideShorts;
+                    uchar *dstRow = qImage.scanLine(y);
+                    for (int x = 0; x < w; ++x) dstRow[x] = (uchar)(srcRow[x] >> 8);
+                }
                 return qImage;
             }
         } else if (channelCount == 3) {
