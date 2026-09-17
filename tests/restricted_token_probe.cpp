@@ -17,10 +17,17 @@
 // 建议在提权会话里跑（管理员 SID 处于 enabled 状态时，deny-only 才有对比意义）。
 
 #include <windows.h>
+#include <userenv.h>
+#include <sddl.h>
 
 #include <cstdio>
 #include <string>
 #include <vector>
+
+// AppContainer 相关 API（CreateAppContainerProfile / DeriveAppContainerSidFromAppContainerName /
+// GetAppContainerFolderPath）在 userenv.lib；advapi32（ConvertSidToStringSid 等）由默认库带入。
+#pragma comment(lib, "userenv.lib")
+#pragma comment(lib, "advapi32.lib")
 
 namespace {
 
@@ -584,12 +591,201 @@ void printTrace(const char *label, const DebugTrace &trace)
     printf("    exit=0x%08lX%s\n\n", trace.exitCode, trace.timedOut ? " (超时强杀)" : "");
 }
 
+// ---------------------------------------------------------------------------
+// AppContainer 探针：真正"独立视图"的沙箱（无需独立账户、无需口令）。
+//
+// 与 deny-only / 受限 SID 的区别：AppContainer 用的是**普通用户令牌 + 容器 SID**，
+// 不触碰任何"减弱型"令牌标志，因此不会触发 KERNELBASE 在进程附加阶段失败那条死路。
+// 隔离收益：只能访问显式授权的路径 + 自己的容器目录；无网络能力（不给 capabilities）；
+// 注册表写入被限制在容器 hive 内。
+// ---------------------------------------------------------------------------
+
+RunResult runChildInAppContainer(PSID containerSid, const std::wstring &command)
+{
+    RunResult result;
+
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+
+    HANDLE readEnd = nullptr;
+    HANDLE writeEnd = nullptr;
+    if (!CreatePipe(&readEnd, &writeEnd, &sa, 0)) {
+        result.lastError = GetLastError();
+        return result;
+    }
+    SetHandleInformation(readEnd, HANDLE_FLAG_INHERIT, 0);
+
+    STARTUPINFOEXW siex{};
+    siex.StartupInfo.cb = sizeof(siex);
+    siex.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    siex.StartupInfo.hStdOutput = writeEnd;
+    siex.StartupInfo.hStdError = writeEnd;
+
+    SECURITY_CAPABILITIES caps{};
+    caps.AppContainerSid = containerSid;
+    caps.Capabilities = nullptr;   // 不给任何能力：无 internetClient、无企业认证等
+    caps.CapabilityCount = 0;
+
+    SIZE_T attrBytes = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &attrBytes);
+    std::vector<BYTE> attrBuf(attrBytes);
+    auto *attrList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attrBuf.data());
+    const bool haveAttrs =
+        attrBytes > 0 && InitializeProcThreadAttributeList(attrList, 1, 0, &attrBytes)
+        && UpdateProcThreadAttribute(attrList, 0, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+                                     &caps, sizeof(caps), nullptr, nullptr);
+    if (haveAttrs) {
+        siex.lpAttributeList = attrList;
+    }
+
+    std::vector<wchar_t> cmdBuf(command.begin(), command.end());
+    cmdBuf.push_back(L'\0');
+
+    PROCESS_INFORMATION pi{};
+    const BOOL created = CreateProcessW(nullptr, cmdBuf.data(), nullptr, nullptr, TRUE,
+                                        CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT
+                                            | (haveAttrs ? EXTENDED_STARTUPINFO_PRESENT : 0),
+                                        nullptr, nullptr, &siex.StartupInfo, &pi);
+    if (writeEnd) {
+        CloseHandle(writeEnd);
+    }
+    if (haveAttrs) {
+        DeleteProcThreadAttributeList(attrList);
+    }
+    result.started = created != FALSE;
+    if (!created) {
+        result.lastError = GetLastError();
+        CloseHandle(readEnd);
+        return result;
+    }
+
+    WaitForSingleObject(pi.hProcess, kWaitMs);
+    GetExitCodeProcess(pi.hProcess, &result.exitCode);
+    char buf[512];
+    DWORD available = 0;
+    while (PeekNamedPipe(readEnd, nullptr, 0, nullptr, &available, nullptr) && available > 0) {
+        DWORD got = 0;
+        if (!ReadFile(readEnd, buf, sizeof(buf) - 1, &got, nullptr) || got == 0) {
+            break;
+        }
+        buf[got] = '\0';
+        result.output += buf;
+        if (result.output.size() > 300) {
+            break;
+        }
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    CloseHandle(readEnd);
+    for (char &ch : result.output) {
+        if (ch == '\r' || ch == '\n') {
+            ch = ' ';
+        }
+    }
+    return result;
+}
+
+int runAppContainerProbe()
+{
+    printf("=== AppContainer 探针 ===\n");
+
+    const wchar_t *profileName = L"VisionFlowPlatform.SandboxProbe";
+    PSID sid = nullptr;
+    HRESULT hr = CreateAppContainerProfile(profileName, L"VFP Sandbox Probe",
+                                          L"VFP script sandbox probe", nullptr, 0, &sid);
+    if (FAILED(hr) && hr == HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)) {
+        hr = DeriveAppContainerSidFromAppContainerName(profileName, &sid);
+    }
+    if (FAILED(hr) || !sid) {
+        printf("profile 建立失败 hr=0x%08lX（首次创建需要管理员权限）\n",
+               static_cast<unsigned>(hr));
+        return 1;
+    }
+
+    LPWSTR sidString = nullptr;
+    ConvertSidToStringSidW(sid, &sidString);
+    printf("profile SID: %ls\n", sidString ? sidString : L"(?)");
+
+    PWSTR containerFolder = nullptr;
+    if (sidString && SUCCEEDED(GetAppContainerFolderPath(sidString, &containerFolder))
+        && containerFolder) {
+        printf("容器专属目录: %ls\n", containerFolder);
+    }
+
+    wchar_t tempDir[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, tempDir);
+    const std::wstring userFile = std::wstring(tempDir) + L"vfp_ac_userwrite.txt";
+    const std::wstring containerFile =
+        containerFolder ? (std::wstring(containerFolder) + L"\\vfp_ac_containerwrite.txt")
+                        : std::wstring();
+
+    struct Case {
+        const char *label;
+        std::wstring command;
+    };
+    std::vector<Case> cases;
+    cases.push_back({ "cmd /c echo（能否启动）", L"cmd.exe /c echo ac-ok" });
+    cases.push_back({ "写用户临时目录（应被拒）", L"cmd.exe /c echo x> \"" + userFile + L"\"" });
+    if (!containerFile.empty()) {
+        cases.push_back({ "写容器专属目录（应成功）",
+                          L"cmd.exe /c echo y> \"" + containerFile + L"\"" });
+    }
+    cases.push_back({ "python -c print（解释器可用性）",
+                      L"python -c \"print('ac-py-ok')\"" });
+
+    DeleteFileW(userFile.c_str());
+    for (const Case &c : cases) {
+        const RunResult r = runChildInAppContainer(sid, c.command);
+        printf("    %-34s started=%s exit=0x%08lX out=\"%s\"\n", c.label,
+               r.started ? "yes" : "NO", r.exitCode, r.output.c_str());
+    }
+    printf("    用户临时目录被写入? %s（应为 no）\n",
+           GetFileAttributesW(userFile.c_str()) != INVALID_FILE_ATTRIBUTES ? "YES" : "no");
+    if (!containerFile.empty()) {
+        printf("    容器目录被写入? %s（应为 YES）\n",
+               GetFileAttributesW(containerFile.c_str()) != INVALID_FILE_ATTRIBUTES ? "YES" : "no");
+    }
+
+    printf("\n    若 python 因读不到安装目录而失败，按需授权（示例，需离线评估后执行）：\n");
+    printf("      icacls \"<pythonDir>\" /grant \"*%ls\":(OI)(CI)(RX)\n",
+           sidString ? sidString : L"<sid>");
+    printf("      icacls \"<pythonDir>\" /remove:g \"*%ls\"   (撤销)\n",
+           sidString ? sidString : L"<sid>");
+    printf("    删除探针 profile：restricted_token_probe.exe -ac-del\n");
+
+    if (containerFolder) {
+        CoTaskMemFree(containerFolder);
+    }
+    if (sidString) {
+        LocalFree(sidString);
+    }
+    FreeSid(sid);
+    return 0;
+}
+
+int deleteAppContainerProbeProfile()
+{
+    const HRESULT hr = DeleteAppContainerProfile(L"VisionFlowPlatform.SandboxProbe");
+    printf("DeleteAppContainerProfile hr=0x%08lX\n", static_cast<unsigned>(hr));
+    return SUCCEEDED(hr) ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char **argv)
 {
     printf("restricted token probe\n");
     printf("current process: elevated=%s\n\n", isElevated() ? "yes" : "no");
+
+    // -ac：AppContainer 探针（独立视图沙箱的候选方案，详见 runAppContainerProbe 注释）
+    if (argc > 1 && std::string(argv[1]) == "-ac") {
+        return runAppContainerProbe();
+    }
+    // -ac-del：删除探针创建的 AppContainer profile（清理）
+    if (argc > 1 && std::string(argv[1]) == "-ac-del") {
+        return deleteAppContainerProbeProfile();
+    }
 
     // -dbg：调试器模式。只跑 A（可用基线）与 B（deny-only，全挂），逐条打印 DLL 加载与异常，
     // 用来定位"到底是哪个组件在初始化阶段失败"，不依赖 ProcMon/DebugView。

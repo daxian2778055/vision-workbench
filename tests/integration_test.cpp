@@ -65,6 +65,7 @@ private slots:
     void testNestedLoopIterations();
     void testRuntimeStatsCounters();
     void testRestrictedTokenLaunch();
+    void testAppContainerSandboxLaunch();
     void testEndToEndPipelineSmoke();
     void testRecomputeDownstreamOnly();
 
@@ -1234,6 +1235,93 @@ void IntegrationTest::testRecomputeDownstreamOnly()
     QCOMPARE(runs.value(readerB), 0);        // 无关分支不得被重跑
     QCOMPARE(widthA, sizeB);                 // 上游确实换成了第二张图
     QCOMPARE(fg, squareB * squareB);         // 下游拿到新值 → 缓存确实已作废并重算
+}
+
+namespace {
+/// 用例结束后恢复沙箱模式与开关，避免影响同进程内其它用例
+class SandboxModeGuard
+{
+public:
+    explicit SandboxModeGuard(ScriptSecurityPolicy &policy)
+        : m_policy(policy), m_mode(policy.sandboxMode()), m_enabled(policy.isSandboxEnabled())
+    {
+    }
+    ~SandboxModeGuard()
+    {
+        m_policy.setSandboxMode(m_mode);
+        m_policy.setSandboxEnabled(m_enabled);
+    }
+    SandboxModeGuard(const SandboxModeGuard &) = delete;
+    SandboxModeGuard &operator=(const SandboxModeGuard &) = delete;
+
+private:
+    ScriptSecurityPolicy &m_policy;
+    ScriptSecurityPolicy::SandboxMode m_mode;
+    bool m_enabled;
+};
+} // namespace
+
+void IntegrationTest::testAppContainerSandboxLaunch()
+{
+    // AppContainer 沙箱（沙箱强度 = AppContainer）：走的是产品启动路径本身
+    // （ScriptSecurityPolicy::runWithRestrictedToken——名字沿用历史，两种模式共用同一条
+    //  管道/超时/取消/Job 回收实现，只在"令牌 vs 容器能力"处分流）。
+    // 期望：① 容器内进程能启动；② 写用户目录被拒（隔离生效）；③ 容器内解释器可运行且能 import。
+    // 容器能力/限制的原始实测数据见 tests/restricted_token_probe.cpp -ac。
+    auto &policy = ScriptSecurityPolicy::instance();
+
+    QString error;
+    if (!ScriptSecurityPolicy::ensureAppContainerProfile(&error)) {
+        QSKIP(qPrintable(QStringLiteral("AppContainer 不可用（%1），跳过").arg(error)));
+    }
+    QVERIFY2(!ScriptSecurityPolicy::appContainerSid().isEmpty(), "配置文件已建立却拿不到 SID");
+
+    // 解释器目录需要一次性 (RX) 授权；拿不到就跳过（而不是误报失败）
+    if (!ScriptSecurityPolicy::grantInterpreterAccess(QStringLiteral("python"), &error)) {
+        QSKIP(qPrintable(QStringLiteral("解释器目录授权未完成（%1），跳过").arg(error)));
+    }
+
+    const SandboxModeGuard guard(policy);   // 用例结束后恢复原模式/开关
+    policy.setSandboxMode(ScriptSecurityPolicy::SandboxMode::AppContainer);
+    policy.setSandboxEnabled(true);
+
+    QString out;
+    QString err;
+    QString runError;
+    int code = -1;
+    const std::function<bool()> notCancelled = []() { return false; };
+
+    // ① 容器内可以启动进程
+    const bool started = policy.runWithRestrictedToken(
+        QStringLiteral("cmd.exe"),
+        { QStringLiteral("/c"), QStringLiteral("echo"), QStringLiteral("ac-probe") },
+        8000, notCancelled, out, err, runError, &code);
+    QVERIFY2(started, qPrintable(runError));
+    QVERIFY2(out.contains(QStringLiteral("ac-probe")), qPrintable(out));
+
+    // ② 写用户临时目录必须被拒：用解释器写（比 cmd 重定向更可控，也顺带验证解释器可用）
+    const QString userFile = QDir::tempPath() + QStringLiteral("/vfp_ac_userwrite.txt");
+    QFile::remove(userFile);
+    out.clear(); err.clear(); runError.clear();
+    policy.runWithRestrictedToken(
+        QStringLiteral("python"),
+        { QStringLiteral("-I"), QStringLiteral("-E"), QStringLiteral("-c"),
+          QStringLiteral("open(r'%1','w').write('x');print('WROTE')").arg(userFile) },
+        20000, notCancelled, out, err, runError, &code);
+    QVERIFY2(!QFile::exists(userFile),
+             qPrintable(QStringLiteral("AppContainer 内竟写入了用户目录，隔离失效: out=%1 err=%2")
+                            .arg(out, err)));
+
+    // ③ 解释器在容器内可运行且能 import（验证 stdlib 路径在容器内正常）
+    out.clear(); err.clear(); runError.clear();
+    const bool imported = policy.runWithRestrictedToken(
+        QStringLiteral("python"),
+        { QStringLiteral("-I"), QStringLiteral("-E"), QStringLiteral("-c"),
+          QStringLiteral("import json,os;print('ac-import-ok')") },
+        20000, notCancelled, out, err, runError, &code);
+    QVERIFY2(imported, qPrintable(runError));
+    QVERIFY2(out.contains(QStringLiteral("ac-import-ok")),
+             qPrintable(QStringLiteral("容器内解释器/import 失败: out=%1 err=%2").arg(out, err)));
 }
 
 QTEST_MAIN(IntegrationTest)

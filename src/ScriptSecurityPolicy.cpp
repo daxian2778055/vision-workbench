@@ -49,6 +49,12 @@ void ScriptSecurityPolicy::load()
     m_auditLogPath = settings.value(QStringLiteral("auditLogPath"), m_auditLogPath).toString();
     m_blockWhenElevated = settings.value(QStringLiteral("blockWhenElevated"), m_blockWhenElevated).toBool();
     m_sandboxEnabled = settings.value(QStringLiteral("sandboxEnabled"), m_sandboxEnabled).toBool();
+    // 沙箱强度：以字符串持久化，避免将来枚举顺序变化导致误读
+    const QString sandboxModeName =
+        settings.value(QStringLiteral("sandboxMode"), QStringLiteral("privilegeStripped")).toString();
+    m_sandboxMode = (sandboxModeName.compare(QStringLiteral("appContainer"), Qt::CaseInsensitive) == 0)
+                        ? SandboxMode::AppContainer
+                        : SandboxMode::PrivilegeStripped;
     settings.endGroup();
 }
 
@@ -66,6 +72,10 @@ void ScriptSecurityPolicy::save()
     settings.setValue(QStringLiteral("auditLogPath"), m_auditLogPath);
     settings.setValue(QStringLiteral("blockWhenElevated"), m_blockWhenElevated);
     settings.setValue(QStringLiteral("sandboxEnabled"), m_sandboxEnabled);
+    settings.setValue(QStringLiteral("sandboxMode"),
+                      m_sandboxMode == SandboxMode::AppContainer
+                          ? QStringLiteral("appContainer")
+                          : QStringLiteral("privilegeStripped"));
     settings.endGroup();
 }
 
@@ -572,6 +582,69 @@ struct SandboxTempDirGuard {
     }
 };
 
+#if defined(Q_OS_WIN)
+// AppContainer 相关 API 在 userenv.lib（CreateAppContainerProfile / DeriveAppContainerSidFromAppContainerName /
+// GetAppContainerFolderPath）；SID 字符串转换在 advapi32（默认库）。放在这里是因为只被下方 Windows 分支使用。
+#include <QFileInfo>
+#include <userenv.h>
+#include <sddl.h>
+#pragma comment(lib, "userenv.lib")
+
+/// 产品使用的 AppContainer 配置文件（一次创建，长期复用）
+constexpr const wchar_t *kSandboxProfileName = L"VisionFlowPlatform.Sandbox";
+constexpr const wchar_t *kSandboxProfileDisplayName = L"VisionFlowPlatform Sandbox";
+
+/// 进程内缓存的容器 SID；返回空表示不可用（调用方必须 fail-closed，不得静默降级）。
+PSID appContainerSidRaw()
+{
+    static QMutex mutex;
+    static PSID cached = nullptr;
+    static bool attempted = false;
+    QMutexLocker locker(&mutex);
+    if (!attempted) {
+        attempted = true;
+        QString error;
+        if (!ScriptSecurityPolicy::ensureAppContainerProfile(&error)) {
+            qWarning() << "[ScriptSecurityPolicy] AppContainer 配置文件不可用:" << error;
+            return nullptr;
+        }
+        const QString sidString = ScriptSecurityPolicy::appContainerSid();
+        PSID parsed = nullptr;
+        if (!sidString.isEmpty()
+            && ConvertStringSidToSidW(reinterpret_cast<const wchar_t *>(sidString.utf16()),
+                                      &parsed)) {
+            cached = parsed;
+        } else {
+            qWarning() << "[ScriptSecurityPolicy] AppContainer SID 解析失败:" << sidString;
+        }
+    }
+    return cached;
+}
+
+/// 容器专属可写临时目录（<容器根>\Temp，幂等创建）。容器内解释器的 TEMP/TMP 指向这里：
+/// Low 标签目录容器内未必可写、用户目录更会被拒绝，否则解释器会报"找不到可用临时目录"。
+QString appContainerTempDir()
+{
+    PSID sid = appContainerSidRaw();
+    if (!sid) {
+        return QString();
+    }
+    LPWSTR sidString = nullptr;
+    if (!ConvertSidToStringSidW(sid, &sidString) || !sidString) {
+        return QString();
+    }
+    PWSTR folder = nullptr;
+    QString result;
+    if (SUCCEEDED(GetAppContainerFolderPath(sidString, &folder)) && folder) {
+        result = QDir(QString::fromWCharArray(folder)).filePath(QStringLiteral("Temp"));
+        QDir().mkpath(result);
+        CoTaskMemFree(folder);
+    }
+    LocalFree(sidString);
+    return result;
+}
+#endif
+
 } // namespace
 
 bool ScriptSecurityPolicy::hasRestrictedToken() const
@@ -596,15 +669,29 @@ bool ScriptSecurityPolicy::runWithRestrictedToken(const QString &program,
         *exitCode = -1;
     }
 
-    ensureRestrictedToken();
+    // AppContainer 模式不需要受限令牌：它用「普通用户令牌 + 容器 SID」，不触碰任何
+    // "减弱型"令牌标志，因此不会触发 deny-only 那条 KERNELBASE 附加失败的死路
+    // （实测见 restricted_token_probe.exe -ac / -dbg）。其余情况沿用受限令牌。
+    PSID containerSid = nullptr;
     HANDLE restrictedToken = nullptr;
-    {
-        QMutexLocker locker(&m_tokenMutex);   // 与创建路径互斥（P1）
-        restrictedToken = reinterpret_cast<HANDLE>(m_restrictedToken);
-    }
-    if (!restrictedToken) {
-        error = QStringLiteral("受限令牌不可用");
-        return false;
+    if (m_sandboxMode == SandboxMode::AppContainer) {
+        containerSid = appContainerSidRaw();
+        if (!containerSid) {
+            // fail-closed：拿不到容器 SID 就拒绝执行，绝不静默降级为"无隔离"
+            error = QStringLiteral("AppContainer 不可用：配置文件未建立或派生失败"
+                                   "（首次创建需要管理员权限）");
+            return false;
+        }
+    } else {
+        ensureRestrictedToken();
+        {
+            QMutexLocker locker(&m_tokenMutex);   // 与创建路径互斥（P1）
+            restrictedToken = reinterpret_cast<HANDLE>(m_restrictedToken);
+        }
+        if (!restrictedToken) {
+            error = QStringLiteral("受限令牌不可用");
+            return false;
+        }
     }
 
     SECURITY_ATTRIBUTES sa{};
@@ -638,8 +725,10 @@ bool ScriptSecurityPolicy::runWithRestrictedToken(const QString &program,
     // Low IL 子进程无法写入 Medium 完整性的系统临时目录（Python 的 tempfile 会因此失败），
     // 故每次执行都给一个打了 Low 标签的私有临时目录，并把 TEMP/TMP 指过去：
     // 脚本仍能正常读写临时文件，但写入被约束在这个目录内。
-    const QString sandboxTemp = createSandboxTempDir();
-    SandboxTempDirGuard sandboxGuard{ sandboxTemp };
+    // AppContainer 模式下必须把 TEMP/TMP 指向**容器自己的**可写目录：Low 标签目录在容器内
+    // 未必可写、用户目录更会被拒绝，否则解释器会报"找不到可用临时目录"。
+    const QString sandboxTemp = containerSid ? appContainerTempDir() : createSandboxTempDir();
+    SandboxTempDirGuard sandboxGuard{ containerSid ? QString() : sandboxTemp };   // 容器目录是持久的，不删
     QProcessEnvironment childEnv = buildEnvironment();
     if (!sandboxTemp.isEmpty()) {
         childEnv.insert(QStringLiteral("TEMP"), sandboxTemp);
@@ -658,18 +747,31 @@ bool ScriptSecurityPolicy::runWithRestrictedToken(const QString &program,
     // 的句柄（文件/设备/同步对象）都会被一并继承，而受限令牌并不能收回这些句柄自身的访问权。
     // 注意：使用 PROC_THREAD_ATTRIBUTE_HANDLE_LIST 时 bInheritHandles 仍须为 TRUE——
     // 该属性起「过滤器」作用；若传 FALSE，连 stdout/stderr 都不会被继承，输出捕获会失效。
+    // AppContainer 模式下再加一条 SECURITY_CAPABILITIES（属性列表容量随之 +1）。
     bool inheritFiltered = false;
 #if defined(PROC_THREAD_ATTRIBUTE_HANDLE_LIST)
     HANDLE inheritList[2] = { outWrite, errWrite };
+    SECURITY_CAPABILITIES caps{};
+    if (containerSid) {
+        caps.AppContainerSid = containerSid;   // 不给任何能力：无网络、无企业认证
+        caps.CapabilityCount = 0;
+        caps.Capabilities = nullptr;
+    }
+    const DWORD attrCount = containerSid ? 2 : 1;
     SIZE_T attrBytes = 0;
-    InitializeProcThreadAttributeList(nullptr, 1, 0, &attrBytes);
+    InitializeProcThreadAttributeList(nullptr, attrCount, 0, &attrBytes);
     std::vector<BYTE> attrBuf(attrBytes);
     LPPROC_THREAD_ATTRIBUTE_LIST attrList =
         reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attrBuf.data());
-    if (attrBytes > 0
-        && InitializeProcThreadAttributeList(attrList, 1, 0, &attrBytes)
-        && UpdateProcThreadAttribute(attrList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-                                     inheritList, sizeof(inheritList), nullptr, nullptr)) {
+    bool attrsOk = attrBytes > 0
+                   && InitializeProcThreadAttributeList(attrList, attrCount, 0, &attrBytes)
+                   && UpdateProcThreadAttribute(attrList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                                                inheritList, sizeof(inheritList), nullptr, nullptr);
+    if (attrsOk && containerSid) {
+        attrsOk = UpdateProcThreadAttribute(attrList, 0, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+                                           &caps, sizeof(caps), nullptr, nullptr);
+    }
+    if (attrsOk) {
         siex.StartupInfo.cb = sizeof(siex);   // 使用扩展结构时 cb 必须为 STARTUPINFOEXW 大小
         siex.lpAttributeList = attrList;
         inheritFiltered = true;
@@ -683,7 +785,12 @@ bool ScriptSecurityPolicy::runWithRestrictedToken(const QString &program,
                             | (inheritFiltered ? EXTENDED_STARTUPINFO_PRESENT : 0);
     LPVOID envPtr = envBlock.isEmpty() ? nullptr : const_cast<char *>(envBlock.constData());
 
-    auto spawnRestricted = [&](DWORD extraFlags) {
+    auto spawn = [&](DWORD extraFlags) {
+        if (containerSid) {
+            // AppContainer：普通用户令牌 + 容器 SID（CreateProcess 的 SECURITY_CAPABILITIES 路径）
+            return CreateProcessW(nullptr, cmdBuf.data(), nullptr, nullptr, TRUE,
+                                  baseFlags | extraFlags, envPtr, nullptr, &siex.StartupInfo, &pi);
+        }
         return CreateProcessAsUserW(restrictedToken,
                                     nullptr, cmdBuf.data(), nullptr, nullptr, TRUE,
                                     baseFlags | extraFlags,
@@ -691,9 +798,9 @@ bool ScriptSecurityPolicy::runWithRestrictedToken(const QString &program,
     };
 
     // 优先脱离父作业（便于关入自己的 Job Object）；若父作业不允许脱离则退回不带该标志
-    BOOL created = spawnRestricted(CREATE_BREAKAWAY_FROM_JOB);
+    BOOL created = spawn(CREATE_BREAKAWAY_FROM_JOB);
     if (!created) {
-        created = spawnRestricted(0);
+        created = spawn(0);
     }
 #if defined(PROC_THREAD_ATTRIBUTE_HANDLE_LIST)
     if (inheritFiltered) {
@@ -801,6 +908,123 @@ bool ScriptSecurityPolicy::runWithRestrictedToken(const QString &program,
     }
     return true;
 }
+
+bool ScriptSecurityPolicy::ensureAppContainerProfile(QString *error)
+{
+    PSID sid = nullptr;
+    HRESULT hr = CreateAppContainerProfile(kSandboxProfileName, kSandboxProfileDisplayName,
+                                          kSandboxProfileDisplayName, nullptr, 0, &sid);
+    if (FAILED(hr) && hr == HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)) {
+        hr = DeriveAppContainerSidFromAppContainerName(kSandboxProfileName, &sid);
+    }
+    if (SUCCEEDED(hr) && sid) {
+        FreeSid(sid);   // 这里只确认"可用"；SID 由 appContainerSid()/缓存另行获取
+        return true;
+    }
+    if (error) {
+        *error = QStringLiteral("AppContainer 配置文件不可用 hr=0x%1（首次创建需要管理员权限）")
+                     .arg(static_cast<quint32>(hr), 8, 16, QLatin1Char('0'));
+    }
+    return false;
+}
+
+QString ScriptSecurityPolicy::appContainerSid()
+{
+    PSID sid = nullptr;
+    if (FAILED(DeriveAppContainerSidFromAppContainerName(kSandboxProfileName, &sid)) || !sid) {
+        return QString();
+    }
+    LPWSTR sidString = nullptr;
+    QString result;
+    if (ConvertSidToStringSidW(sid, &sidString) && sidString) {
+        result = QString::fromWCharArray(sidString);
+        LocalFree(sidString);
+    }
+    FreeSid(sid);
+    return result;
+}
+
+bool ScriptSecurityPolicy::grantInterpreterAccess(const QString &program, QString *error)
+{
+    const QString sid = appContainerSid();
+    if (sid.isEmpty()) {
+        if (error) {
+            *error = QStringLiteral("AppContainer 配置文件不存在（请先确保容器可用）");
+        }
+        return false;
+    }
+    // 定位解释器目录：program 既可能是完整路径，也可能只是 PATH 中的命令名
+    QString dir = QFileInfo(program).absolutePath();
+    if (QFileInfo(program).isRelative() || dir.isEmpty() || dir == QLatin1String(".")) {
+        const QString found = QStandardPaths::findExecutable(program);
+        dir = found.isEmpty() ? QString() : QFileInfo(found).absolutePath();
+    }
+    if (dir.isEmpty()) {
+        if (error) {
+            *error = QStringLiteral("找不到解释器所在目录: %1").arg(program);
+        }
+        return false;
+    }
+    // 非破坏性授权：读出现有 DACL → 只追加/替换「容器 SID: 读取+执行（含子目录继承）」→ 写回。
+    // 【不要改用 icacls /grant】它会规范化并整体重写 DACL：本机实测重写后继承标记全部消失，
+    // 并连带影响其它沙箱模式下的解释器访问（表现为 0xC0000135 STATUS_DLL_NOT_FOUND），
+    // 这类副作用在工业现场极难排查。SetEntriesInAclW(SET_ACCESS) 只动该 SID 的条目，其余原样保留。
+    PSID sidRaw = nullptr;
+    if (!ConvertStringSidToSidW(reinterpret_cast<const wchar_t *>(sid.utf16()), &sidRaw) || !sidRaw) {
+        if (error) {
+            *error = QStringLiteral("无法解析容器 SID: %1").arg(sid);
+        }
+        return false;
+    }
+
+    const std::wstring nativeDir = QDir::toNativeSeparators(dir).toStdWString();
+    PACL oldDacl = nullptr;
+    PSECURITY_DESCRIPTOR sd = nullptr;
+    const DWORD readResult = GetNamedSecurityInfoW(
+        const_cast<LPWSTR>(nativeDir.c_str()), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+        nullptr, nullptr, &oldDacl, nullptr, &sd);
+    if (readResult != ERROR_SUCCESS) {
+        LocalFree(sidRaw);
+        if (error) {
+            *error = QStringLiteral("读取解释器目录权限失败（错误 %1）：%2")
+                         .arg(readResult)
+                         .arg(dir);
+        }
+        return false;
+    }
+
+    EXPLICIT_ACCESSW entry{};
+    entry.grfAccessPermissions = GENERIC_READ | GENERIC_EXECUTE;
+    entry.grfAccessMode = SET_ACCESS;                       // 只替换该 SID 的既有条目（幂等）
+    entry.grfInheritance = SUB_CONTAINERS_AND_OBJECTS_INHERIT;
+    entry.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    entry.Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
+    entry.Trustee.ptstrName = reinterpret_cast<LPWSTR>(sidRaw);
+
+    PACL newDacl = nullptr;
+    const DWORD mergeResult = SetEntriesInAclW(1, &entry, oldDacl, &newDacl);
+    bool granted = false;
+    if (mergeResult == ERROR_SUCCESS && newDacl) {
+        granted = SetNamedSecurityInfoW(const_cast<LPWSTR>(nativeDir.c_str()), SE_FILE_OBJECT,
+                                        DACL_SECURITY_INFORMATION, nullptr, nullptr, newDacl,
+                                        nullptr) == ERROR_SUCCESS;
+    }
+    if (newDacl) {
+        LocalFree(newDacl);
+    }
+    if (sd) {
+        LocalFree(sd);
+    }
+    LocalFree(sidRaw);
+
+    if (!granted) {
+        if (error) {
+            *error = QStringLiteral("为解释器目录授权失败（需要管理员权限）：%1").arg(dir);
+        }
+        return false;
+    }
+    return true;
+}
 #else
 bool ScriptSecurityPolicy::hasRestrictedToken() const
 {
@@ -824,6 +1048,28 @@ bool ScriptSecurityPolicy::runWithRestrictedToken(const QString &program,
     stdOut.clear();
     stdErr.clear();
     error = QStringLiteral("受限令牌启动仅支持 Windows");
+    return false;
+}
+
+bool ScriptSecurityPolicy::ensureAppContainerProfile(QString *error)
+{
+    if (error) {
+        *error = QStringLiteral("AppContainer 仅支持 Windows");
+    }
+    return false;
+}
+
+QString ScriptSecurityPolicy::appContainerSid()
+{
+    return QString();
+}
+
+bool ScriptSecurityPolicy::grantInterpreterAccess(const QString &program, QString *error)
+{
+    Q_UNUSED(program)
+    if (error) {
+        *error = QStringLiteral("AppContainer 仅支持 Windows");
+    }
     return false;
 }
 

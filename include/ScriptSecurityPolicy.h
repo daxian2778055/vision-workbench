@@ -60,6 +60,30 @@ public:
     bool isSandboxEnabled() const { return m_sandboxEnabled; }
     void setSandboxEnabled(bool v) { m_sandboxEnabled = v; }
 
+    /// 沙箱强度：
+    ///   - PrivilegeStripped（默认）：去特权 + Low IL + Job Object + 句柄收敛。兼容性最好。
+    ///   - AppContainer：在上一项基础上改用「普通用户令牌 + AppContainer 容器 SID」启动，
+    ///     得到真正独立的文件/注册表视图（只能访问显式授权的路径 + 自己的容器目录），
+    ///     且**不给任何能力 → 无网络**。
+    /// 实测数据（restricted_token_probe.exe -ac）：容器内进程可正常启动；写用户临时目录被拒；
+    /// 写容器专属目录成功；给解释器目录授权 (RX) 后 Python 可正常运行。
+    /// 代价：解释器目录需要一次性 ACL 授权（grantInterpreterAccess）；配置文件首次创建
+    /// 需要管理员权限；拿不到容器 SID 时**拒绝执行**（fail-closed，不会静默降级）。
+    enum class SandboxMode { PrivilegeStripped, AppContainer };
+
+    ScriptSecurityPolicy::SandboxMode sandboxMode() const { return m_sandboxMode; }
+    void setSandboxMode(SandboxMode mode) { m_sandboxMode = mode; }
+
+    /// 建立或派生 AppContainer 配置文件（幂等）。首次创建需要管理员权限。
+    /// 返回 false 时 error 说明原因（此调用本身不抛错、不降级）。
+    static bool ensureAppContainerProfile(QString *error = nullptr);
+    /// 当前用户的 AppContainer 配置文件 SID 字符串；未建立时返回空。
+    static QString appContainerSid();
+    /// 为容器 SID 授予「读取 + 执行」权限，使解释器能在容器内启动。
+    /// program 可以是解释器路径或 PATH 中的命令名（取其所在目录，含子目录）。
+    /// 需要管理员权限；ACL 是持久的，通常只需执行一次。失败时 error 说明原因。
+    static bool grantInterpreterAccess(const QString &program, QString *error = nullptr);
+
     /// 评估脚本是否允许执行。拒绝时通过 reason 返回原因。
     bool evaluate(const QString &language, const QString &script, QString &reason) const;
 
@@ -157,6 +181,7 @@ private:
     /// 脚本会走「沙箱不可用」的 fail-closed 分支而完全无法执行，故此处默认关闭。
     bool m_sandboxEnabled = false;
 #endif
+    SandboxMode m_sandboxMode = SandboxMode::PrivilegeStripped;   // 沙箱强度（见上方 SandboxMode）
     void *m_restrictedToken = nullptr;        // Windows HANDLE；非 Windows 恒为 nullptr
     mutable QMutex m_tokenMutex;              // 保护 m_restrictedToken 的创建与读取（多流程并发执行脚本）
 };
