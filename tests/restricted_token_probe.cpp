@@ -19,6 +19,7 @@
 #include <windows.h>
 #include <userenv.h>
 #include <sddl.h>
+#include <aclapi.h>
 
 #include <cstdio>
 #include <string>
@@ -771,6 +772,199 @@ int deleteAppContainerProbeProfile()
     return SUCCEEDED(hr) ? 0 : 1;
 }
 
+// ---------------------------------------------------------------------------
+// 受控矩阵：解释器目录 ACL × 完整性级别
+//
+// 背景：把 AppContainer 容器 SID 授权到解释器目录后，**Low IL**（受限令牌 + 低完整性）
+// 启动解释器会以 0xC0000135 STATUS_DLL_NOT_FOUND 失败；`icacls <dir> /reset` 后恢复。
+// 本模式在同一进程里翻转 ACL 并重复测量，直接建立因果关系：
+//   干净 → 授权(容器 SID) → 撤销并改授权(普通合成 SID) → 全部撤销
+// 每个状态各跑 High IL / Low IL 两格，用来确认"只影响 Low IL"这一特征，
+// 并区分"任何外来 ACE 都会引发"与"容器 SID 特有"两种机制。
+// ---------------------------------------------------------------------------
+
+/// 解释器目录（PATH 解析 python.exe，取其所在目录）
+std::wstring interpreterDir()
+{
+    wchar_t buf[MAX_PATH] = {};
+    const DWORD len = SearchPathW(nullptr, L"python.exe", nullptr, MAX_PATH, buf, nullptr);
+    if (len == 0 || len >= MAX_PATH) {
+        return std::wstring();
+    }
+    const std::wstring path(buf);
+    const size_t slash = path.find_last_of(L'\\');
+    return (slash == std::wstring::npos) ? std::wstring() : path.substr(0, slash);
+}
+
+/// 目录 DACL 中是否有该 SID 的允许条目；可选返回 ACE 总数
+bool daclHasSid(const std::wstring &dir, PSID sid, DWORD *aceCount = nullptr)
+{
+    PACL dacl = nullptr;
+    PSECURITY_DESCRIPTOR sd = nullptr;
+    bool found = false;
+    DWORD count = 0;
+    if (GetNamedSecurityInfoW(const_cast<LPWSTR>(dir.c_str()), SE_FILE_OBJECT,
+                              DACL_SECURITY_INFORMATION, nullptr, nullptr, &dacl, nullptr,
+                              &sd) == ERROR_SUCCESS) {
+        if (dacl) {
+            for (DWORD i = 0; i < dacl->AceCount; ++i) {
+                void *ace = nullptr;
+                if (!GetAce(dacl, i, &ace) || !ace) {
+                    continue;
+                }
+                ++count;
+                auto *header = static_cast<ACE_HEADER *>(ace);
+                if (header->AceType != ACCESS_ALLOWED_ACE_TYPE) {
+                    continue;
+                }
+                auto *allowed = static_cast<ACCESS_ALLOWED_ACE *>(ace);
+                if (EqualSid(reinterpret_cast<PSID>(&allowed->SidStart), sid)) {
+                    found = true;
+                }
+            }
+        }
+    }
+    if (sd) {
+        LocalFree(sd);
+    }
+    if (aceCount) {
+        *aceCount = count;
+    }
+    return found;
+}
+
+/// 追加(grant=true，SET_ACCESS)/撤销(grant=false，REVOKE_ACCESS) 某 SID 的
+/// 「读取+执行（含子目录继承）」条目——与产品 grantInterpreterAccess 使用同一套 API
+bool setDirAclForSid(const std::wstring &dir, PSID sid, bool grant,
+                     DWORD rights = GENERIC_READ | GENERIC_EXECUTE)
+{
+    if (!sid) {
+        return false;
+    }
+    PACL oldDacl = nullptr;
+    PSECURITY_DESCRIPTOR sd = nullptr;
+    if (GetNamedSecurityInfoW(const_cast<LPWSTR>(dir.c_str()), SE_FILE_OBJECT,
+                              DACL_SECURITY_INFORMATION, nullptr, nullptr, &oldDacl, nullptr,
+                              &sd) != ERROR_SUCCESS) {
+        return false;
+    }
+    EXPLICIT_ACCESSW ea{};
+    ea.grfAccessPermissions = rights;
+    ea.grfAccessMode = grant ? SET_ACCESS : REVOKE_ACCESS;
+    ea.grfInheritance = SUB_CONTAINERS_AND_OBJECTS_INHERIT;
+    ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    ea.Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
+    ea.Trustee.ptstrName = reinterpret_cast<LPWSTR>(sid);
+
+    PACL newDacl = nullptr;
+    const DWORD merged = SetEntriesInAclW(1, &ea, oldDacl, &newDacl);
+    bool ok = false;
+    if (merged == ERROR_SUCCESS && newDacl) {
+        ok = SetNamedSecurityInfoW(const_cast<LPWSTR>(dir.c_str()), SE_FILE_OBJECT,
+                                   DACL_SECURITY_INFORMATION, nullptr, nullptr, newDacl, nullptr)
+             == ERROR_SUCCESS;
+    }
+    if (newDacl) {
+        LocalFree(newDacl);
+    }
+    if (sd) {
+        LocalFree(sd);
+    }
+    return ok;
+}
+
+int runInterpreterAclMatrix()
+{
+    const std::wstring dir = interpreterDir();
+    if (dir.empty()) {
+        printf("=== 解释器 ACL 矩阵 ===\n找不到 python.exe（PATH），无法实验\n");
+        return 1;
+    }
+    printf("=== 解释器 ACL × 完整性级别 矩阵 ===\n解释器目录: %ls\n\n", dir.c_str());
+
+    // 容器 SID：优先复用产品 profile，缺失则退回探针 profile
+    PSID containerSid = nullptr;
+    if ((FAILED(DeriveAppContainerSidFromAppContainerName(L"VisionFlowPlatform.Sandbox",
+                                                           &containerSid))
+         || !containerSid)
+        && (FAILED(DeriveAppContainerSidFromAppContainerName(
+                       L"VisionFlowPlatform.SandboxProbe", &containerSid))
+            || !containerSid)) {
+        printf("两个容器 profile 都不存在，请先跑一次 -ac\n");
+        return 1;
+    }
+    // 对照 SID：一个不在任何令牌里的普通 SID（区分"任何外来 ACE"与"容器 SID 特有"）
+    SID_IDENTIFIER_AUTHORITY ntAuthority = SECURITY_NT_AUTHORITY;
+    PSID plainSid = nullptr;
+    AllocateAndInitializeSid(&ntAuthority, 3, 21, 0x1BADB002U, 0x7777U, 0, 0, 0, 0, 0, &plainSid);
+
+    const Variant highIl{ "去特权（High IL）", false, false, false };
+    const Variant lowIl{ "去特权 + Low IL", false, true, false };
+    auto cell = [](const char *label, const Variant &variant) {
+        std::string note;
+        HANDLE token = createVariantToken(variant, note);
+        if (!token) {
+            printf("    %-18s token=FAILED %s\n", label, note.c_str());
+            return;
+        }
+        const RunResult r = runChild(token, L"python.exe -I -E -c \"print('il-ok')\"", true);
+        printf("    %-18s exit=0x%08lX out=\"%s\"\n", label, r.exitCode, r.output.c_str());
+        CloseHandle(token);
+    };
+    auto phase = [&](const char *title) {
+        DWORD aceCount = 0;
+        const bool hasContainer = daclHasSid(dir, containerSid, &aceCount);
+        const bool hasPlain = daclHasSid(dir, plainSid, nullptr);
+        printf("[%s] ACE 总数=%lu 容器SID=%s 对照SID=%s\n", title, aceCount,
+               hasContainer ? "yes" : "no", hasPlain ? "yes" : "no");
+        cell("High IL", highIl);
+        cell("Low IL", lowIl);
+        printf("\n");
+    };
+
+    // 1) 干净态
+    setDirAclForSid(dir, containerSid, false);
+    setDirAclForSid(dir, plainSid, false);
+    phase("1 干净态");
+
+    // 2) 授权容器 SID（与产品同一 API：SetEntriesInAcl SET_ACCESS）
+    setDirAclForSid(dir, containerSid, true);
+    phase("2 已授权：容器 SID");
+
+    // 2b) 目录上只给「遍历 + 读属性 + 同步」（不给读写数据）：判断触发点究竟是
+    //     "目录上存在容器条目"，还是需要读/执行位。若 traverse-only 安全，即可给出
+    //     可用的产品修法（目录给遍历、文件给读写）。
+    setDirAclForSid(dir, containerSid, false);
+    setDirAclForSid(dir, containerSid, true,
+                    FILE_TRAVERSE | FILE_READ_ATTRIBUTES | SYNCHRONIZE);
+    phase("2b 容器 SID（目录仅 traverse）");
+    setDirAclForSid(dir, containerSid, false);
+
+    // 3) 换成普通对照 SID
+    setDirAclForSid(dir, containerSid, false);
+    setDirAclForSid(dir, plainSid, true);
+    phase("3 已授权：普通对照 SID");
+
+    // 3b) 只授权单个文件（不含目录条目）：判断触发点是"目录上的容器 ACE"还是"文件上的"
+    //     ——这一格直接决定产品修法（文件级授权是否可替代目录级授权）
+    const std::wstring pyExe = dir + L"\\python.exe";
+    setDirAclForSid(pyExe, containerSid, true);
+    phase("3b 容器 SID（仅 python.exe 文件）");
+    setDirAclForSid(pyExe, containerSid, false);
+
+    // 4) 全部撤销，恢复原状
+    setDirAclForSid(dir, plainSid, false);
+    phase("4 撤销后（应恢复如初）");
+
+    if (containerSid) {
+        FreeSid(containerSid);
+    }
+    if (plainSid) {
+        FreeSid(plainSid);
+    }
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -785,6 +979,10 @@ int main(int argc, char **argv)
     // -ac-del：删除探针创建的 AppContainer profile（清理）
     if (argc > 1 && std::string(argv[1]) == "-ac-del") {
         return deleteAppContainerProbeProfile();
+    }
+    // -il：解释器目录 ACL × 完整性级别 受控矩阵（定位"授权后 Low IL 启动失败"的因果）
+    if (argc > 1 && std::string(argv[1]) == "-il") {
+        return runInterpreterAclMatrix();
     }
 
     // -dbg：调试器模式。只跑 A（可用基线）与 B（deny-only，全挂），逐条打印 DLL 加载与异常，

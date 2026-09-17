@@ -970,8 +970,20 @@ bool ScriptSecurityPolicy::grantInterpreterAccess(const QString &program, QStrin
     }
     // 非破坏性授权：读出现有 DACL → 只追加/替换「容器 SID: 读取+执行（含子目录继承）」→ 写回。
     // 【不要改用 icacls /grant】它会规范化并整体重写 DACL：本机实测重写后继承标记全部消失，
-    // 并连带影响其它沙箱模式下的解释器访问（表现为 0xC0000135 STATUS_DLL_NOT_FOUND），
-    // 这类副作用在工业现场极难排查。SetEntriesInAclW(SET_ACCESS) 只动该 SID 的条目，其余原样保留。
+    // 并连带影响其它沙箱模式下的解释器访问，这类副作用在工业现场极难排查。
+    // SetEntriesInAclW(SET_ACCESS) 只动该 SID 的条目，其余原样保留。
+    //
+    // 【已知相互作用，勿盲目扩大授权范围】restricted_token_probe.exe -il 的受控矩阵实证
+    // （同一进程内翻转 ACL）：
+    //   · 目录 DACL 上**只要存在该 AppContainer SID 的条目**，Low IL（去特权 + 低完整性）
+    //     启动解释器就会以 0xC0000135 STATUS_DLL_NOT_FOUND 失败——**与权限位无关**（连只给
+    //     FILE_TRAVERSE 也照样失败）；
+    //   · 同样条件下换成任意**普通 SID** 的条目（同样 5→7 条 ACE）**毫无影响**；
+    //   · 条目加在**文件**上（如 python.exe）则**无害**（仅解释器打印一句
+    //     "Failed to find real location"，不影响运行）；
+    //   · 撤销目录条目后立即恢复。
+    // 即：容器模式与「去特权 + 低完整性」模式在同一台机器上会相互影响，
+    //     现场启用容器前需评估（或改用文件级授权，见 -il 矩阵结论）。
     PSID sidRaw = nullptr;
     if (!ConvertStringSidToSidW(reinterpret_cast<const wchar_t *>(sid.utf16()), &sidRaw) || !sidRaw) {
         if (error) {
