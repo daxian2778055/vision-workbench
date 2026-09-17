@@ -29,6 +29,16 @@
 
 using namespace HalconCpp;
 
+namespace {
+/// 窗口几何持久化文件（应用目录，随包走）。
+/// 不用 QSettings 默认构造（注册表）：现场实测注册表写入被静默丢弃
+/// （保存日志 66 字节但注册表无键，疑似权限虚拟化/组策略），INI 直写文件可靠可见。
+QString geometryStorePath()
+{
+    return QCoreApplication::applicationDirPath() + QStringLiteral("/module_editor.ini");
+}
+}
+
 ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     : QDialog(parent)
     , m_node(node)
@@ -39,9 +49,10 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     // 窗口几何持久化：用户拖过一次就永久记住（含位置），下次直接用；
     // 首次（无存档）按屏幕可用区自适应，绝不超出屏幕（旧固定 1100×720 在小屏/缩放屏会溢出）
     {
-        QSettings settings;
-        const QByteArray geo = settings.value(QStringLiteral("moduleEditor/geometry")).toByteArray();
-        qDebug() << "ModuleEditor: restore geometry bytes =" << geo.size();
+        QSettings settings(geometryStorePath(), QSettings::IniFormat);
+        const QByteArray geo = settings.value(QStringLiteral("editor/geometry")).toByteArray();
+        qDebug() << "ModuleEditor: restore geometry bytes =" << geo.size()
+                 << "from" << geometryStorePath();
         if (geo.isEmpty() || !restoreGeometry(geo)) {
             QRect avail;
             if (const QScreen *scr = QGuiApplication::primaryScreen())
@@ -237,12 +248,12 @@ void ModuleEditorDialog::moveEvent(QMoveEvent *event)
 void ModuleEditorDialog::saveGeometryNow()
 {
     const QByteArray geo = saveGeometry();
-    QSettings settings;
-    settings.setValue(QStringLiteral("moduleEditor/geometry"), geo);
+    QSettings settings(geometryStorePath(), QSettings::IniFormat);
+    settings.setValue(QStringLiteral("editor/geometry"), geo);
     if (m_splitter)
-        settings.setValue(QStringLiteral("moduleEditor/splitter"), m_splitter->saveState());
+        settings.setValue(QStringLiteral("editor/splitter"), m_splitter->saveState());
     qDebug() << "ModuleEditor: geometry saved bytes =" << geo.size()
-             << "size =" << size();
+             << "size =" << size() << "to" << geometryStorePath();
 }
 
 HalconNode *ModuleEditorDialog::halconNode() const
