@@ -22,6 +22,11 @@ void BlobAnalysisNode::init()
     m_params[QStringLiteral("minGray")] = 128.0;
     m_params[QStringLiteral("maxGray")] = 255.0;
     m_params[QStringLiteral("minArea")] = 100.0;
+    // 搜索区域（ROI）：模块编辑器里拖框即写回；宽或高为 0 = 全图（原行为）
+    m_params[QStringLiteral("roiRow")] = 0;
+    m_params[QStringLiteral("roiCol")] = 0;
+    m_params[QStringLiteral("roiWidth")] = 0;
+    m_params[QStringLiteral("roiHeight")] = 0;
 }
 
 void BlobAnalysisNode::run(bool /*autoSwitch*/)
@@ -39,6 +44,35 @@ void BlobAnalysisNode::run(bool /*autoSwitch*/)
         }
         if (!gray.IsInitialized()) return;
 
+        // 尺寸必须在 reduce **之前**取：reduce_domain 只改"域"、不动图像矩阵，但输出图像是用
+        // w/h 重建的——若用 reduce 之后的尺寸，输出会变成 ROI 大小，下游坐标系整体错位。
+        // 这是本文件最容易踩的一处，别"顺手"把这两行挪到下面去。
+        HTuple w, h;
+        GetImageSize(gray, &w, &h);
+
+        // ROI：只在矩形内分割+连通域分析。用 reduce_domain 而不是裁剪——它保留原图坐标系，
+        // 区域与连通域的坐标直接就是整图坐标，不需要任何偏移。
+        {
+            const int roiRow = m_params.value(QStringLiteral("roiRow"), 0).toInt();
+            const int roiCol = m_params.value(QStringLiteral("roiCol"), 0).toInt();
+            const int roiW = m_params.value(QStringLiteral("roiWidth"), 0).toInt();
+            const int roiH = m_params.value(QStringLiteral("roiHeight"), 0).toInt();
+            if (roiW > 0 && roiH > 0) {
+                const int imgW = w.I();
+                const int imgH = h.I();
+                const int r1 = qBound(0, roiRow, imgH);
+                const int c1 = qBound(0, roiCol, imgW);
+                const int r2 = qBound(0, roiRow + roiH, imgH);
+                const int c2 = qBound(0, roiCol + roiW, imgW);
+                if (r2 > r1 && c2 > c1) {
+                    HObject roiRegion, reduced;
+                    GenRectangle1(&roiRegion, r1, c1, r2, c2);
+                    ReduceDomain(gray, roiRegion, &reduced);
+                    gray = HImage(reduced);
+                }
+            }
+        }
+
         const HTuple minG = m_params.value(QStringLiteral("minGray"), 128.0).toDouble();
         const HTuple maxG = m_params.value(QStringLiteral("maxGray"), 255.0).toDouble();
         const double minArea = m_params.value(QStringLiteral("minArea"), 100.0).toDouble();
@@ -46,8 +80,6 @@ void BlobAnalysisNode::run(bool /*autoSwitch*/)
         Threshold(gray, &region, minG, maxG);
         Connection(region, &connected);
         SelectShape(connected, &selected, "area", "and", HTuple(minArea), HTuple(1e12));
-        HTuple w, h;
-        GetImageSize(gray, &w, &h);
         HTuple n;
         CountObj(selected, &n);
         const int rc = static_cast<int>(n.D());
@@ -135,4 +167,39 @@ void BlobAnalysisNode::updateParamPanel(QWidget *panel)
         QSignalBlocker b(w);
         w->setValue(m_params.value(QStringLiteral("minArea"), 100.0).toDouble());
     }
+}
+
+RoiShape BlobAnalysisNode::geometryRoi() const
+{
+    RoiShape s;
+    const int rw = m_params.value(QStringLiteral("roiWidth"), 0).toInt();
+    const int rh = m_params.value(QStringLiteral("roiHeight"), 0).toInt();
+    if (rw <= 0 || rh <= 0) {
+        return s;   // 未设置 ROI：不显示框（type 保持默认 None）
+    }
+    s.type = RoiType::Rect;
+    s.p1 = QPointF(m_params.value(QStringLiteral("roiCol"), 0).toInt(),
+                   m_params.value(QStringLiteral("roiRow"), 0).toInt());
+    s.p2 = QPointF(s.p1.x() + rw, s.p1.y() + rh);
+    return s;
+}
+
+void BlobAnalysisNode::applyGeometryRoi(const RoiShape &shape)
+{
+    // 「清除几何」= 回到全图（对整图做阈值+连通域本身是有意义的）
+    if (shape.type == RoiType::None) {
+        setParam(QStringLiteral("roiRow"), 0);
+        setParam(QStringLiteral("roiCol"), 0);
+        setParam(QStringLiteral("roiWidth"), 0);
+        setParam(QStringLiteral("roiHeight"), 0);
+        return;
+    }
+    if (shape.type != RoiType::Rect) {
+        return;
+    }
+    const QRectF r = QRectF(shape.p1, shape.p2).normalized();
+    setParam(QStringLiteral("roiCol"), qRound(r.left()));
+    setParam(QStringLiteral("roiRow"), qRound(r.top()));
+    setParam(QStringLiteral("roiWidth"), qRound(r.width()));
+    setParam(QStringLiteral("roiHeight"), qRound(r.height()));
 }

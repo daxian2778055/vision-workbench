@@ -21,6 +21,8 @@
 #include "FindLineNode.h"
 #include "CaliperMeasureNode.h"
 #include "EdgePointsNode.h"
+#include "ThresholdNode.h"
+#include "BlobAnalysisNode.h"
 #include "ReceiveEvent.h"
 #include "SendEvent.h"
 
@@ -736,6 +738,28 @@ void CommWritebackTest::testRoiParamRoundTrip()
     QCOMPARE(rBack.p2, QPointF(130.0, 140.0));
     edges.applyGeometryRoi(RoiShape());
     QVERIFY(edges.geometryRoi().type == RoiType::None);
+
+    // 阈值分割 / Blob 分析：矩形 ROI（同一套映射；它们的参数面板是手工搭的，
+    // 因此 ROI 靠画布拖框设置，不会出现在面板上）
+    ThresholdNode threshold;
+    threshold.init();
+    threshold.applyGeometryRoi(r);
+    const RoiShape thBack = threshold.geometryRoi();
+    QVERIFY(thBack.type == RoiType::Rect);
+    QCOMPARE(thBack.p1, QPointF(30.0, 40.0));
+    QCOMPARE(thBack.p2, QPointF(130.0, 140.0));
+    threshold.applyGeometryRoi(RoiShape());
+    QVERIFY(threshold.geometryRoi().type == RoiType::None);
+
+    BlobAnalysisNode blob;
+    blob.init();
+    blob.applyGeometryRoi(r);
+    const RoiShape blobBack = blob.geometryRoi();
+    QVERIFY(blobBack.type == RoiType::Rect);
+    QCOMPARE(blobBack.p1, QPointF(30.0, 40.0));
+    QCOMPARE(blobBack.p2, QPointF(130.0, 140.0));
+    blob.applyGeometryRoi(RoiShape());
+    QVERIFY(blob.geometryRoi().type == RoiType::None);
 }
 
 // 必须用 QTEST_MAIN：流程用例要创建 FlowScene（QGraphicsScene），仅 QCoreApplication 会崩；
