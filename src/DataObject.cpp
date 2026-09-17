@@ -115,6 +115,19 @@ void DataObject::setMeasureResult(const MeasureResult &r)
     m_type = DataType::Measure;
 }
 
+DetectionResult DataObject::getDetectionResult() const
+{
+    if (m_data.canConvert<DetectionResult>())
+        return m_data.value<DetectionResult>();
+    return DetectionResult();
+}
+
+void DataObject::setDetectionResult(const DetectionResult &r)
+{
+    m_data = QVariant::fromValue(r);
+    m_type = DataType::Detections;
+}
+
 QPointF DataObject::getPoint() const
 {
     return m_data.toPointF();
@@ -149,6 +162,8 @@ QString DataObject::getTypeString() const
             return "Matrix";
         case DataType::Bool:
             return "Bool";
+        case DataType::Detections:
+            return "Detections";
         default:
             return "Unknown";
     }

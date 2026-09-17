@@ -19,6 +19,24 @@ struct MeasureResult {
 };
 Q_DECLARE_METATYPE(MeasureResult)
 
+/// 单个目标检测框（原图像素坐标：左上角 x,y + 宽高 w,h）
+struct DetectionBox {
+    int classId = -1;            /// 类别索引（-1 表示未分类）
+    QString className;           /// 类别名（由 classes.txt 解析）
+    double confidence = 0.0;     /// 置信度 [0,1]
+    double x = 0.0, y = 0.0;     /// 左上角坐标
+    double w = 0.0, h = 0.0;     /// 宽高
+};
+Q_DECLARE_METATYPE(DetectionBox)
+
+/// 目标检测结果：若干检测框 + 原图尺寸
+struct DetectionResult {
+    QVector<DetectionBox> boxes;
+    int imageWidth = 0;
+    int imageHeight = 0;
+};
+Q_DECLARE_METATYPE(DetectionResult)
+
 class DataObject
 {
 public:
@@ -33,6 +51,7 @@ public:
         Measure,    /// 测量结果（MeasureResult）
         Matrix,     /// 齐次变换矩阵（HOMat2D / HTuple 6 元组）
         Bool,       /// 布尔
+        Detections, /// 目标检测结果（DetectionResult）
         Unknown
     };
 
@@ -71,6 +90,10 @@ public:
     // 测量结果
     MeasureResult getMeasureResult() const;
     void setMeasureResult(const MeasureResult &r);
+
+    // 目标检测结果
+    DetectionResult getDetectionResult() const;
+    void setDetectionResult(const DetectionResult &r);
 
     // 点
     QPointF getPoint() const;
