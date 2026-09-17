@@ -1,4 +1,5 @@
 #include "FlowScene.h"
+#include "NodeTemplateStore.h"
 #include "NodeFactory.h"
 #include "NodeRegistry.h"
 #include "NodeBase.h"
@@ -188,7 +189,6 @@ NodeBase *FlowScene::duplicateNode(NodeBase *node)
     if (!clone) return nullptr;
 
     clone->fromJson(json);
-    clone->setPosition(node->position() + QPointF(30, 30));
     if (node->name().contains(QStringLiteral("_副本"))) {
         clone->setName(node->name() + QStringLiteral("2"));
     } else {
@@ -196,16 +196,79 @@ NodeBase *FlowScene::duplicateNode(NodeBase *node)
     }
     clone->setEnabled(node->isEnabled());
 
+    adoptNode(clone, node->position() + QPointF(30, 30));
+    return clone;
+}
+
+void FlowScene::adoptNode(NodeBase *node, const QPointF &pos)
+{
+    if (!node) return;
+    node->setPosition(pos);
+
     // 创建图形项并加入场景
-    NodeGraphicsItem *item = new NodeGraphicsItem(clone);
-    item->setPos(clone->position());
+    NodeGraphicsItem *item = new NodeGraphicsItem(node);
+    item->setPos(pos);
     this->addItem(item);
     item->updatePorts();
 
-    m_nodeItems[clone] = item;
-    emit nodeAdded(clone);
+    m_nodeItems[node] = item;
+    emit nodeAdded(node);
     emit nodeGraphicsItemCreated(item);
-    return clone;
+}
+
+NodeBase *FlowScene::createNodeFromTemplate(const QString &templateName, const QPointF &pos)
+{
+    if (m_editLocked) return nullptr;
+
+    NodeTemplateStore &store = NodeTemplateStore::instance();
+    const QJsonObject nodeJson = store.nodeJson(templateName);
+    if (nodeJson.isEmpty()) return nullptr;
+
+    recordUndo();
+
+    // 优先按注册表 ID 克隆（保留具体算子类型），否则按类型枚举 + 名称回退
+    // ——与 duplicateNode 完全同一条路径，模板因此对新增算子自动可用。
+    NodeBase *node = nullptr;
+    const QString typeId = store.typeIdOf(templateName);
+    if (!typeId.isEmpty()) {
+        node = NodeRegistry::instance().createById(typeId, this);
+    }
+    if (!node) {
+        node = NodeFactory::createNode(
+            this, static_cast<NodeBase::NodeType>(store.typeValueOf(templateName)),
+            store.nodeNameOf(templateName));
+    }
+    if (!node) return nullptr;
+
+    node->fromJson(nodeJson);
+
+    // 重名就加后缀：变量引用按算子名定位，撞名会让"引用指向哪个算子"变得不确定。
+    QString base = node->name();
+    if (base.isEmpty()) {
+        base = templateName;
+    }
+    QString candidate = base;
+    int suffix = 2;
+    bool renamed = false;
+    for (;;) {
+        bool taken = false;
+        const QList<NodeBase *> existing = nodes();
+        for (NodeBase *other : existing) {
+            if (other && other != node && other->name() == candidate) {
+                taken = true;
+                break;
+            }
+        }
+        if (!taken) break;
+        renamed = true;
+        candidate = base + QStringLiteral("_%1").arg(suffix++);
+    }
+    if (renamed) {
+        node->setName(candidate);
+    }
+
+    adoptNode(node, pos);
+    return node;
 }
 
 void FlowScene::removeNode(NodeBase *node)

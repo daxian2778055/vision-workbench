@@ -175,6 +175,7 @@ set(SOURCES
     src/ColorConversionNode.cpp
     src/DataObject.cpp
     src/FlowScene.cpp
+    src/NodeTemplateStore.cpp
     src/FlowExecutor.cpp
     src/HalconWindow.cpp
     src/Connection.cpp
@@ -387,6 +388,7 @@ set(HEADERS
     include/ColorConversionNode.h
     include/DataObject.h
     include/FlowScene.h
+    include/NodeTemplateStore.h
     include/FlowExecutor.h
     include/HalconWindow.h
     include/Connection.h

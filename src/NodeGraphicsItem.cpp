@@ -3,6 +3,7 @@
 #include "Port.h"
 #include "PortGraphicsItem.h"
 #include "FlowScene.h"
+#include "NodeTemplateStore.h"
 #include "Connection.h"
 #include <QPainter>
 #include "ConnectionGraphicsItem.h"
@@ -15,6 +16,7 @@
 #include <QFont>
 #include <QInputDialog>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QStyleOptionGraphicsItem>
 #include <QStyle>
 #include <QJsonObject>
@@ -271,6 +273,24 @@ void NodeGraphicsItem::contextMenuEvent(QGraphicsSceneContextMenuEvent *event)
     pasteParamsAction->setEnabled(!locked && !s_copiedParams.isEmpty());
     menu.addSeparator();
 
+    // 算子模板：把一个算子（类型 + 全部参数）存成命名模板，之后可插进任意流程/工程。
+    // 与"复制"的区别：复制只在同一流程内、且带位置偏移；模板是跨流程跨会话的。
+    QAction *saveTemplateAction = menu.addAction(locked ? "锁定中，无法保存模板"
+                                                        : QStringLiteral("另存为算子模板..."));
+    saveTemplateAction->setEnabled(!locked);
+    QMenu *templateMenu = menu.addMenu(QStringLiteral("插入算子模板"));
+    const QStringList templateNames = NodeTemplateStore::instance().names();
+    if (templateNames.isEmpty()) {
+        QAction *emptyAction = templateMenu->addAction(QStringLiteral("(暂无模板)"));
+        emptyAction->setEnabled(false);
+    } else {
+        for (const QString &templateName : templateNames) {
+            QAction *act = templateMenu->addAction(templateName);
+            act->setData(templateName);   // 动作自带模板名，处理时无需再查表
+        }
+    }
+    menu.addSeparator();
+
     // 启用/禁用
     QAction *toggleAction = menu.addAction(m_node->isEnabled() ? QStringLiteral("禁用") : QStringLiteral("启用"));
     toggleAction->setEnabled(!locked);
@@ -327,6 +347,34 @@ void NodeGraphicsItem::contextMenuEvent(QGraphicsSceneContextMenuEvent *event)
         json.insert(QStringLiteral("params"), s_copiedParams);
         m_node->fromJson(json);
         update();
+    } else if (selectedAction == saveTemplateAction && !locked) {
+        bool ok = false;
+        const QString templateName = QInputDialog::getText(
+            nullptr, QStringLiteral("另存为算子模板"),
+            QStringLiteral("模板名称:"), QLineEdit::Normal, m_node->name(), &ok).trimmed();
+        if (ok && !templateName.isEmpty()) {
+            QString error;
+            // 同名直接覆盖：想改就叫同一个名字再存，比"先删后存"少一步
+            if (!NodeTemplateStore::instance().saveFromNode(templateName, m_node, &error)) {
+                QMessageBox::warning(nullptr, QStringLiteral("保存模板失败"), error);
+            }
+        }
+    } else if (selectedAction && selectedAction->parent() == templateMenu) {
+        // 「插入算子模板」子菜单：动作的 data 就是模板名
+        const QString templateName = selectedAction->data().toString();
+        if (!templateName.isEmpty()) {
+            NodeBase *inserted = scene->createNodeFromTemplate(templateName,
+                                                               mapToScene(event->pos()));
+            if (inserted) {
+                NodeGraphicsItem *insertedItem = scene->getGraphicsItemForNode(inserted);
+                if (insertedItem) insertedItem->setSelected(true);
+            } else {
+                QMessageBox::warning(
+                    nullptr, QStringLiteral("插入模板失败"),
+                    QStringLiteral("模板「%1」无法实例化：对应的算子类型可能已不存在。")
+                        .arg(templateName));
+            }
+        }
     } else if (selectedAction == toggleAction && !locked) {
         m_node->setEnabled(!m_node->isEnabled());
         update();

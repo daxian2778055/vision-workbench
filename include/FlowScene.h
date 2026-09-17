@@ -53,6 +53,12 @@ public:
     NodeBase *createNode(NodeBase::NodeType type, const QPointF &pos, const QString &nodeName = "");
     /// 复制算子（含参数），生成偏移的副本并加入场景；失败返回 nullptr
     NodeBase *duplicateNode(NodeBase *node);
+    /// 把已在场景外构造好的算子接入场景（建图形项、登记、发信号）。
+    /// 从 duplicateNode 尾部抽出，让"外部构造"的路径（如节点模板）复用同一套接入逻辑。
+    void adoptNode(NodeBase *node, const QPointF &pos);
+    /// 按节点模板插入算子（模板名来自 NodeTemplateStore）；失败返回 nullptr。
+    /// 重名时自动加后缀：变量引用按算子名定位，撞名会让引用指向哪个算子变得不确定。
+    NodeBase *createNodeFromTemplate(const QString &templateName, const QPointF &pos);
     void removeNode(NodeBase *node);
 
     /// @param relaxedSemantics true 时不校验语义类型（仅载入工程等）

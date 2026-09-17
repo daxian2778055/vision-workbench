@@ -6,6 +6,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QJsonObject>
+#include <QTemporaryDir>
 
 #include "CommunicationManager.h"
 #include "FlowExecutor.h"
@@ -14,6 +15,7 @@
 #include "HeartbeatManager.h"
 #include "ModbusNode.h"
 #include "NodeBase.h"
+#include "NodeTemplateStore.h"
 #include "ReceiveEvent.h"
 #include "SendEvent.h"
 
@@ -56,6 +58,7 @@ private slots:
     void testHeartbeatFailureRaisesAlarm();
     void testStringTriggerStartsFlow();
     void testEnabledSendEventsFireOnRoundEnd();
+    void testNodeTemplateRoundTrip();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -545,6 +548,51 @@ void CommWritebackTest::testEnabledSendEventsFireOnRoundEnd()
     cm->removeSendEvent(QStringLiteral("RSE_DEAD"));
     QVERIFY(cm->closeDevice(QStringLiteral("SIM_RSE")));
     QVERIFY(cm->removeDevice(QStringLiteral("SIM_RSE")));
+}
+
+void CommWritebackTest::testNodeTemplateRoundTrip()
+{
+    // 算子模板库：保存 = toJson()（去掉 moduleId/position），插入 = createById + fromJson。
+    // 这里要验证的正是模板存在的意义 —— **跨流程**成立，且参数真的跟着走。
+    // 注意必须重定向存储路径：否则测试会写进真实用户数据目录（QSettings 上踩过一次这个坑）。
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    NodeTemplateStore::instance().setStorageFilePathOverride(tmp.filePath(QStringLiteral("t.json")));
+
+    // 场景 A：造一个带标志性参数值的算子，存成模板
+    FlowScene sourceScene;
+    NodeBase *origin = sourceScene.createNode(NodeBase::OUTPUT, QPointF(100, 100),
+                                              QStringLiteral("模板源"));
+    QVERIFY2(origin != nullptr, "无法创建算子");
+    origin->setParam(QStringLiteral("sendText"), QStringLiteral("TMPL-VALUE-42"));
+    origin->setParam(QStringLiteral("deviceName"), QStringLiteral("SIM_X"));
+
+    QString error;
+    QVERIFY2(NodeTemplateStore::instance().saveFromNode(QStringLiteral("T1"), origin, &error),
+             qPrintable(error));
+    QVERIFY(NodeTemplateStore::instance().names().contains(QStringLiteral("T1")));
+
+    // 落盘记录里不应带 moduleId / position（实例要保持自己的模块 ID，位置由插入时决定）
+    const QJsonObject stored = NodeTemplateStore::instance().nodeJson(QStringLiteral("T1"));
+    QVERIFY2(!stored.contains(QStringLiteral("moduleId")), "模板不应携带 moduleId");
+    QVERIFY2(!stored.contains(QStringLiteral("position")), "模板不应携带 position");
+
+    // 场景 B（另一个流程）：按模板插入，参数应原样带过来、位置用插入点
+    FlowScene targetScene;
+    NodeBase *inserted = targetScene.createNodeFromTemplate(QStringLiteral("T1"), QPointF(10, 10));
+    QVERIFY2(inserted != nullptr, "模板实例化失败");
+    const QJsonObject params = inserted->toJson().value(QStringLiteral("params")).toObject();
+    QCOMPARE(params.value(QStringLiteral("sendText")).toString(), QStringLiteral("TMPL-VALUE-42"));
+    QCOMPARE(params.value(QStringLiteral("deviceName")).toString(), QStringLiteral("SIM_X"));
+    QCOMPARE(inserted->position(), QPointF(10, 10));
+
+    // 不存在的模板：不得崩、返回 nullptr
+    QVERIFY(targetScene.createNodeFromTemplate(QStringLiteral("没有这个模板"), QPointF(0, 0))
+            == nullptr);
+
+    QVERIFY(NodeTemplateStore::instance().remove(QStringLiteral("T1")));
+    QVERIFY(!NodeTemplateStore::instance().contains(QStringLiteral("T1")));
+    NodeTemplateStore::instance().setStorageFilePathOverride(QString());
 }
 
 // 必须用 QTEST_MAIN：流程用例要创建 FlowScene（QGraphicsScene），仅 QCoreApplication 会崩；
