@@ -6,6 +6,8 @@
 #include <QDateTime>
 #include <QSqlDatabase>
 
+#include "InspectionRecord.h"   // 瘦头文件：不让 QtSql 依赖扩散到执行器侧
+
 class QThread;
 
 /// \u62A5\u8B66\u8BB0\u5F55
@@ -14,16 +16,6 @@ struct AlarmRecord {
     QString module;
     QString level;   // "Info", "Warning", "Error"
     QString message;
-    QDateTime timestamp;
-};
-
-/// \u68C0\u6D4B\u7ED3\u679C\u8BB0\u5F55
-struct InspectionRecord {
-    int id = 0;
-    QString flowName;
-    QString nodeName;
-    bool passed = false;
-    QString value;
     QDateTime timestamp;
 };
 

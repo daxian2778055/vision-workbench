@@ -20,6 +20,13 @@ void OpencvFitCircleNode::init()
                      QStringLiteral("参与拟合的最小点数")),
         makeIntParam(QStringLiteral("maxContours"), 3, 1, 1000,
                      QStringLiteral("参与拟合的最大轮廓数")),
+        // 搜索区域（ROI）：模块编辑器里在图上拖矩形即可写回；宽或高为 0 表示全图（原行为）
+        makeIntParam(QStringLiteral("roiRow"), 0, 0, 100000, QStringLiteral("ROI 起始行")),
+        makeIntParam(QStringLiteral("roiCol"), 0, 0, 100000, QStringLiteral("ROI 起始列")),
+        makeIntParam(QStringLiteral("roiWidth"), 0, 0, 100000,
+                     QStringLiteral("ROI 宽度（0=全图）")),
+        makeIntParam(QStringLiteral("roiHeight"), 0, 0, 100000,
+                     QStringLiteral("ROI 高度（0=全图）")),
     });
     m_params[QStringLiteral("fitRow")] = 0.0;
     m_params[QStringLiteral("fitCol")] = 0.0;
@@ -46,6 +53,27 @@ void OpencvFitCircleNode::run(bool /*autoSwitch*/)
         const int minPoints = m_params.value(QStringLiteral("minPoints"), 10).toInt();
         const int maxContours = m_params.value(QStringLiteral("maxContours"), 3).toInt();
 
+        // ROI：只在用户拖出的矩形内找轮廓（宽或高为 0 = 全图，与原行为一致）。
+        // 关键是拟合结果要**加回偏移**（见下面 bestCol/bestRow），否则输出会变成 ROI 局部
+        // 坐标——对下游标定/定位是错的，而且这种错很难从数值上看出来。
+        int roiOffsetX = 0;
+        int roiOffsetY = 0;
+        {
+            const int roiRow = m_params.value(QStringLiteral("roiRow"), 0).toInt();
+            const int roiCol = m_params.value(QStringLiteral("roiCol"), 0).toInt();
+            const int roiW = m_params.value(QStringLiteral("roiWidth"), 0).toInt();
+            const int roiH = m_params.value(QStringLiteral("roiHeight"), 0).toInt();
+            if (roiW > 0 && roiH > 0) {
+                const cv::Rect box = cv::Rect(roiCol, roiRow, roiW, roiH)
+                                     & cv::Rect(0, 0, mat.cols, mat.rows);
+                if (box.width > 0 && box.height > 0) {
+                    mat = mat(box).clone();   // clone：ROI 视图不连续，threshold/findContours 需要连续内存
+                    roiOffsetX = box.x;
+                    roiOffsetY = box.y;
+                }
+            }
+        }
+
         cv::Mat bin;
         cv::threshold(mat, bin, 1, 255, cv::THRESH_BINARY);
 
@@ -67,8 +95,8 @@ void OpencvFitCircleNode::run(bool /*autoSwitch*/)
             if (radius > 0.0f) {
                 fitted = true;
                 bestRadius = radius;
-                bestCol = center.x;
-                bestRow = center.y;
+                bestCol = center.x + roiOffsetX;   // 加回 ROI 偏移：对外始终是整图坐标
+                bestRow = center.y + roiOffsetY;
                 bestPoints = static_cast<int>(contours[i].size());
                 break;
             }
@@ -114,4 +142,39 @@ QWidget *OpencvFitCircleNode::createParamPanel()
 void OpencvFitCircleNode::updateParamPanel(QWidget *panel)
 {
     updateAutoParamPanel(panel);
+}
+
+RoiShape OpencvFitCircleNode::geometryRoi() const
+{
+    RoiShape s;
+    const int w = m_params.value(QStringLiteral("roiWidth"), 0).toInt();
+    const int h = m_params.value(QStringLiteral("roiHeight"), 0).toInt();
+    if (w <= 0 || h <= 0) {
+        return s;   // 未设置 ROI：不显示框（type 保持默认 None）
+    }
+    s.type = RoiType::Rect;
+    s.p1 = QPointF(m_params.value(QStringLiteral("roiCol"), 0).toInt(),
+                   m_params.value(QStringLiteral("roiRow"), 0).toInt());
+    s.p2 = QPointF(s.p1.x() + w, s.p1.y() + h);
+    return s;
+}
+
+void OpencvFitCircleNode::applyGeometryRoi(const RoiShape &shape)
+{
+    // 「清除几何」传进来的是默认构造的 RoiShape（type=None）→ 回到全图
+    if (shape.type == RoiType::None) {
+        setParam(QStringLiteral("roiRow"), 0);
+        setParam(QStringLiteral("roiCol"), 0);
+        setParam(QStringLiteral("roiWidth"), 0);
+        setParam(QStringLiteral("roiHeight"), 0);
+        return;
+    }
+    if (shape.type != RoiType::Rect) {
+        return;
+    }
+    const QRectF r = QRectF(shape.p1, shape.p2).normalized();
+    setParam(QStringLiteral("roiCol"), qRound(r.left()));
+    setParam(QStringLiteral("roiRow"), qRound(r.top()));
+    setParam(QStringLiteral("roiWidth"), qRound(r.width()));
+    setParam(QStringLiteral("roiHeight"), qRound(r.height()));
 }

@@ -256,6 +256,7 @@ set(HEADERS
     include/AppLog.h
     include/FlowRuntimeStats.h
     include/AppDatabase.h
+    include/InspectionRecord.h
     include/HalconEnvCheck.h
     include/HelpDialog.h
     include/OpencvUtil.h

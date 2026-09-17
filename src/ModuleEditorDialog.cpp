@@ -16,6 +16,7 @@
 #include <QFileInfo>
 #include <QDir>
 #include <QCheckBox>
+#include <QSpinBox>
 #include <QTimer>
 #include <QToolButton>
 #include <QMenu>
@@ -108,6 +109,24 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
 
     auto *closeBtn = new QPushButton(QStringLiteral("完成"));
     auto *bottom = new QHBoxLayout();
+    // 掩膜画笔半径入口：此前 HalconWindow::setMaskBrushRadius 有实现却**没有任何调用者**，
+    // 半径永远固定为默认的 16，粗结构上涂抹太慢、细小区域又太糙。这里补上入口
+    // （只在支持掩膜的算子上显示），改动立即作用于正在进行的涂抹。
+    auto *maskBrushLabel = new QLabel(QStringLiteral("画笔半径:"));
+    auto *maskBrushSpin = new QSpinBox();
+    maskBrushSpin->setRange(2, 80);
+    maskBrushSpin->setValue(16);
+    maskBrushSpin->setToolTip(QStringLiteral("掩膜涂抹的画笔半径（像素），范围 2–80。"));
+    if (m_view) {
+        m_view->setMaskBrushRadius(maskBrushSpin->value());
+    }
+    connect(maskBrushSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int v) {
+        if (m_view) {
+            m_view->setMaskBrushRadius(v);
+        }
+    });
+    bottom->addWidget(maskBrushLabel);
+    bottom->addWidget(maskBrushSpin);
     bottom->addStretch();
     bottom->addWidget(closeBtn);
     root->addLayout(bottom);
@@ -120,6 +139,8 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     clearGeomBtn->setVisible(hasGeom);
     maskBtn->setVisible(hasMask);
     clearMaskBtn->setVisible(hasMask);
+    maskBrushLabel->setVisible(hasMask);
+    maskBrushSpin->setVisible(hasMask);
     saveTmplBtn->setVisible(isTmpl);
     m_templatePreview->setVisible(isTmpl);
 

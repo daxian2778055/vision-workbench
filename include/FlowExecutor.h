@@ -1,6 +1,6 @@
 #pragma once
 
-#include "AppDatabase.h"   // InspectionRecord（待落库的结果缓冲按值存放，需要完整类型）
+#include "InspectionRecord.h"   // 待落库的结果缓冲按值存放（瘦头：不再把 QtSql 牵进执行器）
 
 #include <QObject>
 #include <QThread>
