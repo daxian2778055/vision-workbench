@@ -17,6 +17,9 @@
 #include <QFrame>
 #include <QPainter>
 #include <QMouseEvent>
+#include <QKeyEvent>
+#include <QShortcut>
+#include <QColorDialog>
 #include <QMessageBox>
 #include <QFileDialog>
 #include <QCoreApplication>
@@ -102,6 +105,7 @@ DesignerControlFrame::DesignerControlFrame(RuntimeDesignerCanvas *canvas, int in
 {
     setMouseTracking(true);
     setCursor(Qt::SizeAllCursor);
+    setFocusPolicy(Qt::ClickFocus);   // 方向键微调需要焦点
 }
 
 void DesignerControlFrame::paintEvent(QPaintEvent *event)
@@ -283,8 +287,9 @@ void DesignerControlFrame::mouseMoveEvent(QMouseEvent *event)
         setGeometry(g);
     } else {
         QRect g = m_geoStart.translated(delta);
-        g.moveLeft(qMax(0, g.left()));
-        g.moveTop(qMax(0, g.top()));
+        // 10px 网格吸附（对齐画布网格，拖完自动落格）
+        g.moveLeft(qMax(0, (g.left() + 5) / 10 * 10));
+        g.moveTop(qMax(0, (g.top() + 5) / 10 * 10));
         setGeometry(g);
     }
 
@@ -301,6 +306,27 @@ void DesignerControlFrame::mouseReleaseEvent(QMouseEvent *event)
         m_resizing = false;
         event->accept();
     }
+}
+
+void DesignerControlFrame::keyPressEvent(QKeyEvent *event)
+{
+    // 方向键微调 1px，Shift+方向键 10px
+    const int step = (event->modifiers() & Qt::ShiftModifier) ? 10 : 1;
+    int dx = 0, dy = 0;
+    switch (event->key()) {
+    case Qt::Key_Left:  dx = -step; break;
+    case Qt::Key_Right: dx =  step; break;
+    case Qt::Key_Up:    dy = -step; break;
+    case Qt::Key_Down:  dy =  step; break;
+    default: QWidget::keyPressEvent(event); return;
+    }
+    QRect g = geometry().translated(dx, dy);
+    g.moveLeft(qMax(0, g.left()));
+    g.moveTop(qMax(0, g.top()));
+    setGeometry(g);
+    if (m_canvas->m_layout && m_index >= 0 && m_index < m_canvas->m_layout->controls.size())
+        m_canvas->m_layout->controls[m_index].geometry = g;
+    event->accept();
 }
 
 // ==================== RuntimeInterfaceDesigner ====================
@@ -382,8 +408,16 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     connect(delBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::deleteSelected);
     connect(clearBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::clearAll);
 
+    auto *dupBtn = new QPushButton(QStringLiteral("复制选中"), canvasGroup);
+    dupBtn->setToolTip(QStringLiteral("复制选中控件（Ctrl+D），偏移 24px"));
+    dupBtn->setStyleSheet("QPushButton{background:#3a6ea5;color:white;border:none;border-radius:4px;padding:6px;}");
+    connect(dupBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::duplicateSelected);
+    auto *dupShortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+D")), this);
+    connect(dupShortcut, &QShortcut::activated, this, &RuntimeInterfaceDesigner::duplicateSelected);
+
     auto *canvasToolRow = new QHBoxLayout();
     canvasToolRow->addStretch();
+    canvasToolRow->addWidget(dupBtn);
     canvasToolRow->addWidget(delBtn);
     canvasToolRow->addWidget(clearBtn);
 
@@ -404,18 +438,45 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     m_colorEdit = new QLineEdit(propGroup);
     m_fontSpin = new QSpinBox(propGroup);
     m_fontSpin->setRange(8, 96);
-    m_tableColumnsEdit = new QLineEdit(propGroup);
-    m_tableColumnsEdit->setPlaceholderText(QStringLiteral("列绑定，逗号分隔"));
+    m_columnSource = new QComboBox(propGroup);
+    m_columnSource->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_columnSource->setMinimumContentsLength(12);
+    m_columnList = new QListWidget(propGroup);
+    m_columnList->setMaximumHeight(90);
+    m_columnAddBtn = new QPushButton(QStringLiteral("＋添加列"), propGroup);
+    m_columnDelBtn = new QPushButton(QStringLiteral("－删除列"), propGroup);
     m_tableMaxRows = new QSpinBox(propGroup);
     m_tableMaxRows->setRange(1, 10000);
+    connect(m_columnAddBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::onColumnAdd);
+    connect(m_columnDelBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::onColumnDel);
+    connect(m_columnList, &QListWidget::itemDoubleClicked, this,
+            [this](QListWidgetItem *) { onColumnDel(); });
 
     form->addRow(QStringLiteral("标题"), m_titleEdit);
     form->addRow(QStringLiteral("类型"), m_typeLabel);
     form->addRow(QStringLiteral("绑定方式"), m_bindTypeCombo);
     form->addRow(QStringLiteral("绑定对象"), m_bindKeyCombo);
-    form->addRow(QStringLiteral("颜色(Hex)"), m_colorEdit);
+
+    // 颜色：取色器 + Hex 输入
+    auto *colorRow = new QHBoxLayout();
+    colorRow->addWidget(m_colorEdit, 1);
+    auto *colorPick = new QPushButton(QStringLiteral("选色"), propGroup);
+    colorPick->setFixedWidth(44);
+    colorRow->addWidget(colorPick);
+    form->addRow(QStringLiteral("颜色"), colorRow);
+    connect(colorPick, &QPushButton::clicked, this, [this]() {
+        const QColor c = QColorDialog::getColor(QColor(m_colorEdit->text()),
+                                                this, QStringLiteral("选择颜色"));
+        if (c.isValid()) m_colorEdit->setText(c.name());
+    });
+
     form->addRow(QStringLiteral("字号"), m_fontSpin);
-    form->addRow(QStringLiteral("表格列"), m_tableColumnsEdit);
+    form->addRow(QStringLiteral("新列来源"), m_columnSource);
+    form->addRow(QStringLiteral("已有列"), m_columnList);
+    auto *colBtnRow = new QHBoxLayout();
+    colBtnRow->addWidget(m_columnAddBtn);
+    colBtnRow->addWidget(m_columnDelBtn);
+    form->addRow(QString(), colBtnRow);
     form->addRow(QStringLiteral("最大行数"), m_tableMaxRows);
 
     auto *propHint = new QLabel(QStringLiteral("绑定方式说明:\n· 全局变量: 实时显示全局变量值\n· 节点输出: 绑定流程中算子的输出\n· 动作: 按钮点击触发的流程操作\n· 表格列: 每轮把各列当前值提交为一行\n  格式: 变量名,变量名 或 节点:模块完整名\n· IO状态: 绑定相机IO控制节点\n  灯=执行成功, 文本=线值/错误"), propGroup);
@@ -464,7 +525,6 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     connect(m_colorEdit, &QLineEdit::textChanged, this, &RuntimeInterfaceDesigner::onPropertyEdited);
     connect(m_fontSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &RuntimeInterfaceDesigner::onPropertyEdited);
-    connect(m_tableColumnsEdit, &QLineEdit::textChanged, this, &RuntimeInterfaceDesigner::onPropertyEdited);
     connect(m_tableMaxRows, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &RuntimeInterfaceDesigner::onPropertyEdited);
     connect(m_bindTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -642,6 +702,54 @@ void RuntimeInterfaceDesigner::applyAndClose()
     accept();
 }
 
+void RuntimeInterfaceDesigner::onColumnAdd()
+{
+    RuntimeControl *ctrl = selectedControl();
+    if (!ctrl || ctrl->type != RuntimeControlType::ResultTable) return;
+    const QString src = m_columnSource->currentText().trimmed();
+    if (src.isEmpty()) return;
+
+    ResultColumn col;
+    if (src.startsWith(QStringLiteral("节点:"))) {
+        col.bindType = QStringLiteral("node");
+        col.bindKey = src.mid(3).trimmed();
+    } else {
+        col.bindType = QStringLiteral("global");
+        col.bindKey = src;
+    }
+    col.header = col.bindKey;
+    if (col.bindKey.isEmpty()) return;
+    // 防重复列
+    for (const ResultColumn &c : ctrl->columns) {
+        if (c.bindKey == col.bindKey && c.bindType == col.bindType) return;
+    }
+    ctrl->columns.append(col);
+    refreshPropertyPanel();          // 重填列列表（内部有 updating 保护）
+    m_canvas->refreshControl(m_selected);
+}
+
+void RuntimeInterfaceDesigner::onColumnDel()
+{
+    RuntimeControl *ctrl = selectedControl();
+    if (!ctrl || ctrl->type != RuntimeControlType::ResultTable) return;
+    const int row = m_columnList->currentRow();
+    if (row < 0 || row >= ctrl->columns.size()) return;
+    ctrl->columns.removeAt(row);
+    refreshPropertyPanel();
+    m_canvas->refreshControl(m_selected);
+}
+
+void RuntimeInterfaceDesigner::duplicateSelected()
+{
+    RuntimeControl *ctrl = selectedControl();
+    if (!ctrl) return;
+    RuntimeControl copy = *ctrl;
+    copy.geometry = copy.geometry.translated(24, 24);   // 级联偏移避免完全重叠
+    m_layout.currentPage()->controls.append(copy);
+    m_canvas->rebuild();
+    m_canvas->selectIndex(m_layout.currentPage()->controls.size() - 1);
+}
+
 void RuntimeInterfaceDesigner::onControlSelected(int index)
 {
     m_selected = index;
@@ -694,7 +802,10 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
         m_fontSpin->setEnabled(false);
         m_bindTypeCombo->setEnabled(false);
         m_bindKeyCombo->setEnabled(false);
-        m_tableColumnsEdit->setEnabled(false);
+        m_columnSource->setEnabled(false);
+        m_columnList->setEnabled(false);
+        m_columnAddBtn->setEnabled(false);
+        m_columnDelBtn->setEnabled(false);
         m_tableMaxRows->setEnabled(false);
         m_typeLabel->setText(QStringLiteral("-"));
         m_updatingProps = false;
@@ -712,17 +823,26 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
 
     const bool isTable = (ctrl->type == RuntimeControlType::ResultTable);
     const bool isIo = (ctrl->type == RuntimeControlType::IoStatus);
-    m_tableColumnsEdit->setEnabled(isTable);
+    m_columnSource->setEnabled(isTable);
+    m_columnList->setEnabled(isTable);
+    m_columnAddBtn->setEnabled(isTable);
+    m_columnDelBtn->setEnabled(isTable);
     m_tableMaxRows->setEnabled(isTable);
     if (isTable) {
-        QStringList parts;
+        m_columnList->clear();
         for (const ResultColumn &col : ctrl->columns) {
-            if (col.bindType == QStringLiteral("node"))
-                parts << QStringLiteral("节点:%1").arg(col.bindKey);
-            else
-                parts << (col.bindKey.isEmpty() ? col.header : col.bindKey);
+            const QString tag = (col.bindType == QStringLiteral("node"))
+                                    ? QStringLiteral("节点:%1").arg(col.bindKey)
+                                    : QStringLiteral("变量:%1").arg(col.bindKey);
+            m_columnList->addItem(QStringLiteral("%1  ←  %2").arg(col.header, tag));
         }
-        m_tableColumnsEdit->setText(parts.join(QStringLiteral(",")));
+        // 新列来源：全局变量 + 节点输出（"节点:" 前缀）
+        m_columnSource->clear();
+        const auto vars = GlobalVariableManager::instance()->variables();
+        for (auto it = vars.constBegin(); it != vars.constEnd(); ++it)
+            m_columnSource->addItem(it.key());
+        for (const QString &n : m_nodeNames)
+            m_columnSource->addItem(QStringLiteral("节点:%1").arg(n));
         m_tableMaxRows->setValue(ctrl->maxRows);
     }
 
@@ -772,25 +892,7 @@ void RuntimeInterfaceDesigner::onPropertyEdited()
     ctrl->fontSize = m_fontSpin->value();
 
     if (ctrl->type == RuntimeControlType::ResultTable) {
-        // 解析列配置："变量名,变量名" 或 "节点:模块完整名"
-        ctrl->columns.clear();
-        const QString raw = m_tableColumnsEdit->text();
-        const QStringList parts = raw.split(QLatin1Char(','), Qt::SkipEmptyParts);
-        for (QString part : parts) {
-            part = part.trimmed();
-            if (part.isEmpty()) continue;
-            ResultColumn col;
-            if (part.startsWith(QStringLiteral("节点:"))) {
-                col.bindType = QStringLiteral("node");
-                col.bindKey = part.mid(3).trimmed();
-            } else {
-                col.bindType = QStringLiteral("global");
-                col.bindKey = part;
-            }
-            col.header = col.bindKey;
-            if (!col.bindKey.isEmpty())
-                ctrl->columns.append(col);
-        }
+        // 列由"＋添加列/－删除列"维护（见 onColumnAdd/onColumnDel），此处只同步行数
         ctrl->maxRows = m_tableMaxRows->value();
         m_canvas->refreshControl(m_selected);
         return;

@@ -52,6 +52,7 @@ private slots:
     void commitTableRows();
 
 private:
+    QRect scaledGeometry(const QRect &g) const;
     void rebuildWidgets();
     void clearWidgets();
     QWidget *createControlWidget(const RuntimeControl &ctrl);
@@ -67,6 +68,8 @@ private:
     QTabWidget *m_tabs = nullptr;                /// 多页时使用（单页直接铺在本控件上）
     QList<QWidget *> m_pageContainers;           /// 每页一个容器（控件父级）
     QList<QWidget *> m_widgets;                  /// 全部控件（清理用）
+    QList<const RuntimeControl *> m_widgetCtrls; /// 与 m_widgets 平行：等比缩放用
+    QSize m_designSize{1200, 760};               /// 设计画布基准（缩放源）
 
     QList<HalconWindow *> m_imageViews;          /// 图像控件
     QList<const RuntimeControl *> m_imageCtrls;

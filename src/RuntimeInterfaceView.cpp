@@ -49,6 +49,7 @@ void RuntimeInterfaceView::clearWidgets()
     }
     m_pageContainers.clear();
     m_widgets.clear();
+    m_widgetCtrls.clear();
     m_imageViews.clear();
     m_imageCtrls.clear();
     m_valueLabels.clear();
@@ -97,10 +98,11 @@ void RuntimeInterfaceView::rebuildWidgets()
 
             QWidget *w = createControlWidget(ctrl);
             if (!w) continue;
-            w->setGeometry(ctrl.geometry);
+            w->setGeometry(scaledGeometry(ctrl.geometry));
             w->setParent(container);
             w->show();
             m_widgets.append(w);
+            m_widgetCtrls.append(&ctrl);
 
             // 登记图像控件
             if (ctrl.type == RuntimeControlType::ImageView) {
@@ -542,9 +544,24 @@ void RuntimeInterfaceView::paintEvent(QPaintEvent *event)
     }
 }
 
+QRect RuntimeInterfaceView::scaledGeometry(const QRect &g) const
+{
+    // 设计画布 1200×760 → 当前窗口，等比映射；小控件给最小尺寸保护
+    const double sx = double(width()) / qMax(1, m_designSize.width());
+    const double sy = double(height()) / qMax(1, m_designSize.height());
+    return QRect(qRound(g.x() * sx), qRound(g.y() * sy),
+                 qMax(40, qRound(g.width() * sx)),
+                 qMax(24, qRound(g.height() * sy)));
+}
+
 void RuntimeInterfaceView::resizeEvent(QResizeEvent *event)
 {
     QWidget::resizeEvent(event);
     if (m_tabs)
         m_tabs->setGeometry(rect());
+    // 控件按设计基准等比缩放（大屏/小屏不跑版）
+    for (int i = 0; i < m_widgets.size() && i < m_widgetCtrls.size(); ++i) {
+        if (m_widgets[i] && m_widgetCtrls[i])
+            m_widgets[i]->setGeometry(scaledGeometry(m_widgetCtrls[i]->geometry));
+    }
 }

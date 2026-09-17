@@ -10,6 +10,7 @@ class QComboBox;
 class QLineEdit;
 class QSpinBox;
 class QLabel;
+class QPushButton;
 class QScrollArea;
 class RuntimeDesignerCanvas;
 
@@ -37,6 +38,11 @@ private slots:
     void applyAndClose();
     void onControlSelected(int index);
     void onPropertyEdited();
+    // 结果表格列交互
+    void onColumnAdd();
+    void onColumnDel();
+    // 控件复制
+    void duplicateSelected();
     // 多页管理
     void addPage();
     void removePage();
@@ -65,8 +71,11 @@ private:
     QComboBox *m_bindKeyCombo = nullptr;
     QLineEdit *m_colorEdit = nullptr;
     QSpinBox *m_fontSpin = nullptr;
-    // 结果表格专用
-    QLineEdit *m_tableColumnsEdit = nullptr;
+    // 结果表格专用（列 = 下拉添加 / 列表删除）
+    QListWidget *m_columnList = nullptr;
+    QComboBox *m_columnSource = nullptr;
+    QPushButton *m_columnAddBtn = nullptr;
+    QPushButton *m_columnDelBtn = nullptr;
     QSpinBox *m_tableMaxRows = nullptr;
 
     int m_selected = -1;
@@ -104,7 +113,7 @@ private:
     friend class DesignerControlFrame;
 };
 
-/// 设计器控件框（可拖动/右下角缩放）
+/// 设计器控件框（可拖动/右下角缩放/方向键微调）
 class DesignerControlFrame : public QWidget
 {
     Q_OBJECT
@@ -117,6 +126,7 @@ protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
 
 private:
     RuntimeDesignerCanvas *m_canvas;
