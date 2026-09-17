@@ -1954,6 +1954,17 @@ void MainWindow::onExecutionFinished()
         m_statusTimeLabel->setText(QStringLiteral("耗时: %1 ms").arg(m_lastRunMs));
     }
 
+    // 每轮结束 → 自动上报已启用的发送事件（未配置 / 被禁用 / 设备未连接都会静默跳过，
+    // 返回值即"真正发出的条数"，无需在这里判断）。连续模式下本槽会被高频调用，
+    // 故用一次性定时器把同一 UI 事件循环周期内的多轮合并为一次上报。
+    if (!m_sendEventFirePending) {
+        m_sendEventFirePending = true;
+        QTimer::singleShot(0, this, [this]() {
+            m_sendEventFirePending = false;
+            CommunicationManager::instance()->fireEnabledSendEvents();
+        });
+    }
+
     refreshAllMvsPixelFormats();
     updateEditLockForCurrentScene();
 }

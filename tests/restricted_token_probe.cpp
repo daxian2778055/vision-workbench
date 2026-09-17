@@ -8,8 +8,13 @@
 // 以排除「参数位置写错导致其实没生效」这类假结论。
 //
 // 纯 Win32 实现：不依赖 Qt/vfp_core，因此不受被测沙箱之外的因素干扰。
-// 用法：直接运行 build/bin/Release/restricted_token_probe.exe（建议在提权会话里跑，
-// 这样管理员 SID 处于 enabled 状态，deny-only 才有对比意义）。
+// 用法：
+//   restricted_token_probe.exe          跑完整组合矩阵（A–L，含若干对照组）
+//   restricted_token_probe.exe -dbg     调试器模式：对 A/B 两组逐条打印 DLL 加载、异常
+//                                       与加载器快照（自动开关 IFEO GlobalFlag 并恢复），
+//                                       用于定位"进程为什么起不来"。0xC0000142 就是这么
+//                                       定位到 KERNELBASE.dll 的 DLL_PROCESS_ATTACH 失败。
+// 建议在提权会话里跑（管理员 SID 处于 enabled 状态时，deny-only 才有对比意义）。
 
 #include <windows.h>
 
@@ -312,12 +317,320 @@ RunResult runChild(HANDLE token, const std::wstring &command, bool usePipes,
     return result;
 }
 
+/// 给指定镜像打开/关闭加载器快照（IFEO 的 GlobalFlag，FLG_SHOW_LDR_SNAPS=0x2）。
+/// 加载器会把这些诊断经 OutputDebugString 发出，而调试器（本探针）已能收到——
+/// 这正是 gflags + 调试器的标准用法，比 DebugView 可靠：子进程早死也不会丢消息。
+/// 返回原值：-1 表示原本没有该项（恢复时应删除），-2 表示本函数失败。
+long setLoaderSnaps(const std::wstring &imageName, bool enable)
+{
+    const std::wstring keyPath =
+        L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\"
+        + imageName;
+    HKEY key = nullptr;
+    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, keyPath.c_str(), 0, nullptr, 0,
+                        KEY_QUERY_VALUE | KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS) {
+        return -2;
+    }
+    DWORD prev = 0;
+    DWORD size = sizeof(prev);
+    DWORD type = 0;
+    const bool hadValue =
+        (RegQueryValueExW(key, L"GlobalFlag", nullptr, &type,
+                          reinterpret_cast<LPBYTE>(&prev), &size) == ERROR_SUCCESS);
+    DWORD flags = hadValue ? prev : 0;
+    constexpr DWORD kShowLdrSnaps = 0x00000002;
+    if (enable) {
+        flags |= kShowLdrSnaps;
+    } else {
+        flags &= ~kShowLdrSnaps;
+    }
+    const LONG written = RegSetValueExW(key, L"GlobalFlag", 0, REG_DWORD,
+                                       reinterpret_cast<const BYTE *>(&flags), sizeof(flags));
+    RegCloseKey(key);
+    if (written != ERROR_SUCCESS) {
+        return -2;
+    }
+    return hadValue ? static_cast<long>(prev) : -1;
+}
+
+/// 把 GlobalFlag 恢复到调用前的状态（prev 为 setLoaderSnaps 的返回值）。
+void restoreLoaderSnaps(const std::wstring &imageName, long prev)
+{
+    if (prev == -2) {
+        return;
+    }
+    const std::wstring keyPath =
+        L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\"
+        + imageName;
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, keyPath.c_str(), 0, KEY_SET_VALUE, &key)
+        != ERROR_SUCCESS) {
+        return;
+    }
+    if (prev < 0) {
+        RegDeleteValueW(key, L"GlobalFlag");
+    } else {
+        DWORD value = static_cast<DWORD>(prev);
+        RegSetValueExW(key, L"GlobalFlag", 0, REG_DWORD,
+                       reinterpret_cast<const BYTE *>(&value), sizeof(value));
+    }
+    RegCloseKey(key);
+}
+
+// ---------------------------------------------------------------------------
+// 调试器模式：用 CreateProcessAsUserW + DEBUG_ONLY_THIS_PROCESS 启动子进程并自己当调试器。
+//
+// 为什么不用 Process Monitor / DebugView：
+//   - ProcMon 只能给出文件/注册表访问，看不到"是哪个 DLL 在初始化阶段失败"；
+//   - DebugView 那条路依赖内核捕获，且子进程早死时输出可能丢失；
+//   - 调试器模式拿到的是加载器的**真实事件序列**：最后一个成功加载的 DLL 之后的退出状态
+//     （0xC0000142 = STATUS_DLL_INIT_FAILED）就是失败点，不需要任何外部工具。
+//     再配合加载器快照（见 setLoaderSnaps），可直接看到加载器自己的叙述。
+// ---------------------------------------------------------------------------
+
+struct DebugTrace {
+    std::vector<std::wstring> lastDlls;       ///< 最后若干个成功加载的 DLL（只留尾部）
+    std::vector<std::string> events;          ///< 异常/异常继续等事件
+    std::vector<std::string> ldrSnaps;        ///< 加载器快照尾部（开启 GlobalFlag 后才有）
+    std::string debugStrings;                 ///< 顺带收 OutputDebugString（简短汇总）
+    DWORD exitCode = 0;
+    bool started = false;
+    bool timedOut = false;
+    DWORD lastError = 0;
+};
+
+std::string hex32(DWORD value)
+{
+    char buf[16] = {};
+    snprintf(buf, sizeof(buf), "0x%08lX", value);
+    return buf;
+}
+
+/// 宽字符 → UTF-8。加载器快照全是宽字符串；若用 std::string(w.begin(), w.end())
+/// 逐字节截断，输出会变成乱码（本探针第一版就踩了这个）。
+std::string toUtf8(const std::wstring &wide)
+{
+    if (wide.empty()) {
+        return std::string();
+    }
+    const int need = WideCharToMultiByte(CP_UTF8, 0, wide.c_str(),
+                                         static_cast<int>(wide.size()),
+                                         nullptr, 0, nullptr, nullptr);
+    if (need <= 0) {
+        return std::string();
+    }
+    std::string out(static_cast<size_t>(need), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), static_cast<int>(wide.size()),
+                        out.data(), need, nullptr, nullptr);
+    return out;
+}
+
+std::wstring moduleNameFromHandle(HANDLE hFile, LPVOID base)
+{
+    wchar_t buf[32768] = {};
+    if (hFile) {
+        const DWORD len = GetFinalPathNameByHandleW(hFile, buf, 32768, FILE_NAME_NORMALIZED);
+        if (len > 0 && len < 32768) {
+            return buf;
+        }
+    }
+    if (base) {
+        // 退化路径：给不出名字时至少留下基址，便于人工定位
+        wchar_t fallback[64] = {};
+        swprintf(fallback, 64, L"<unknown @ %p>", base);
+        return fallback;
+    }
+    return L"<unknown>";
+}
+
+DebugTrace traceChildUnderDebugger(HANDLE token, const std::wstring &command,
+                                   const std::wstring &cwd = std::wstring())
+{
+    DebugTrace trace;
+
+    std::vector<wchar_t> cmdBuf(command.begin(), command.end());
+    cmdBuf.push_back(L'\0');
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    const BOOL created = CreateProcessAsUserW(token, nullptr, cmdBuf.data(), nullptr, nullptr,
+                                              FALSE,
+                                              CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT
+                                                  | DEBUG_ONLY_THIS_PROCESS,
+                                              nullptr,
+                                              cwd.empty() ? nullptr : cwd.c_str(), &si, &pi);
+    if (!created) {
+        trace.lastError = GetLastError();
+        return trace;
+    }
+    trace.started = true;
+
+    int timeoutSlices = 0;
+    for (;;) {
+        DEBUG_EVENT ev{};
+        if (!WaitForDebugEvent(&ev, 2000)) {
+            if (GetLastError() == ERROR_SEM_TIMEOUT) {
+                // 子进程可能停在未处理的异常上：给足时间后强杀，避免探针挂死
+                if (++timeoutSlices >= 10) {
+                    trace.timedOut = true;
+                    TerminateProcess(pi.hProcess, 0);
+                    break;
+                }
+                continue;
+            }
+            break;
+        }
+
+        DWORD continueStatus = DBG_CONTINUE;
+        switch (ev.dwDebugEventCode) {
+        case LOAD_DLL_DEBUG_EVENT: {
+            const std::wstring name = moduleNameFromHandle(ev.u.LoadDll.hFile,
+                                                           ev.u.LoadDll.lpBaseOfDll);
+            trace.lastDlls.push_back(name);
+            if (trace.lastDlls.size() > 10) {
+                trace.lastDlls.erase(trace.lastDlls.begin());
+            }
+            if (ev.u.LoadDll.hFile) {
+                CloseHandle(ev.u.LoadDll.hFile);
+            }
+            break;
+        }
+        case EXCEPTION_DEBUG_EVENT: {
+            const DWORD code = ev.u.Exception.ExceptionRecord.ExceptionCode;
+            trace.events.push_back(std::string("exception ") + hex32(code)
+                                   + (ev.u.Exception.dwFirstChance ? " (first-chance)"
+                                                                   : " (second-chance)"));
+            // 初始断点（STATUS_BREAKPOINT）必须放行，否则进程会以 0x80000003 结束；
+            // 其它异常交还系统处理，子进程才会以自己的真实状态码退出。
+            continueStatus = (code == STATUS_BREAKPOINT) ? DBG_CONTINUE : DBG_EXCEPTION_NOT_HANDLED;
+            break;
+        }
+        case OUTPUT_DEBUG_STRING_EVENT: {
+            const auto &ds = ev.u.DebugString;
+            std::string utf8;
+            if (ds.fUnicode) {
+                std::vector<wchar_t> text(ds.nDebugStringLength + 1, L'\0');
+                SIZE_T read = 0;
+                if (ds.lpDebugStringData && ds.nDebugStringLength > 0
+                    && ReadProcessMemory(pi.hProcess, ds.lpDebugStringData, text.data(),
+                                         ds.nDebugStringLength * sizeof(wchar_t), &read)) {
+                    utf8 = toUtf8(std::wstring(text.data()));
+                }
+            } else {
+                // 加载器快照走的是 ANSI（fUnicode=0）。若忽略该标志按宽字符读，
+                // 得到的会是"半个字节"的乱码——本探针第一版就踩了这个。
+                std::vector<char> text(ds.nDebugStringLength + 1, '\0');
+                SIZE_T read = 0;
+                if (ds.lpDebugStringData && ds.nDebugStringLength > 0
+                    && ReadProcessMemory(pi.hProcess, ds.lpDebugStringData, text.data(),
+                                         ds.nDebugStringLength, &read)) {
+                    utf8 = std::string(text.data());
+                }
+            }
+            for (char &ch : utf8) {
+                if (ch == '\r' || ch == '\n') {
+                    ch = ' ';
+                }
+            }
+            if (!utf8.empty()) {
+                // 逐条保留尾部：加载器快照很长，失败点永远在最后
+                trace.ldrSnaps.push_back(utf8);
+                if (trace.ldrSnaps.size() > 40) {
+                    trace.ldrSnaps.erase(trace.ldrSnaps.begin());
+                }
+                trace.debugStrings += utf8 + " | ";
+                if (trace.debugStrings.size() > 400) {
+                    trace.debugStrings.resize(400);
+                }
+            }
+            break;
+        }
+        case EXIT_PROCESS_DEBUG_EVENT:
+            trace.exitCode = ev.u.ExitProcess.dwExitCode;
+            ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, continueStatus);
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+            return trace;
+        default:
+            break;
+        }
+        ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, continueStatus);
+    }
+
+    GetExitCodeProcess(pi.hProcess, &trace.exitCode);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return trace;
+}
+
+void printTrace(const char *label, const DebugTrace &trace)
+{
+    printf("[dbg] %s\n", label);
+    if (!trace.started) {
+        printf("    create=FAILED err=%lu (0x%08lX)\n\n", trace.lastError, trace.lastError);
+        return;
+    }
+    printf("    最后成功加载的 DLL（尾部，最多 10 条）:\n");
+    for (const std::wstring &dll : trace.lastDlls) {
+        printf("      %ls\n", dll.c_str());
+    }
+    for (const std::string &e : trace.events) {
+        printf("    %s\n", e.c_str());
+    }
+    if (!trace.debugStrings.empty()) {
+        printf("    OutputDebugString: %s\n", trace.debugStrings.c_str());
+    }
+    printf("    exit=0x%08lX%s\n\n", trace.exitCode, trace.timedOut ? " (超时强杀)" : "");
+}
+
 } // namespace
 
-int main()
+int main(int argc, char **argv)
 {
     printf("restricted token probe\n");
     printf("current process: elevated=%s\n\n", isElevated() ? "yes" : "no");
+
+    // -dbg：调试器模式。只跑 A（可用基线）与 B（deny-only，全挂），逐条打印 DLL 加载与异常，
+    // 用来定位"到底是哪个组件在初始化阶段失败"，不依赖 ProcMon/DebugView。
+    if (argc > 1 && std::string(argv[1]) == "-dbg") {
+        const Variant cases[] = {
+            { "A 去特权（可用基线）", false, false, false },
+            { "B A + 管理员SID deny-only", true, false, false },
+        };
+        // 打开加载器快照：加载器会把内部叙述发给调试器（就是本进程），
+        // 从而直接看到"卡在哪个 DLL/哪一步"。用完必须恢复（见下方 restore）。
+        const std::wstring targetImage = L"cmd.exe";
+        const long prevFlag = setLoaderSnaps(targetImage, true);
+        printf("[dbg] loader snaps cmd.exe: prevGlobalFlag=%ld (-1=原本没有该项, -2=设置失败)\n\n",
+               prevFlag);
+
+        for (const Variant &variant : cases) {
+            std::string note;
+            HANDLE token = createVariantToken(variant, note);
+            if (!token) {
+                printf("[dbg] %s token=FAILED (%s)\n\n", variant.name, note.c_str());
+                continue;
+            }
+            const DebugTrace trace = traceChildUnderDebugger(token, L"cmd.exe /c echo probe-ok");
+            char label[256] = {};
+            snprintf(label, sizeof(label), "%s   cmd /c echo", variant.name);
+            printTrace(label, trace);
+            if (!trace.ldrSnaps.empty()) {
+                printf("    加载器快照（尾部 %d 条）:\n",
+                       static_cast<int>(trace.ldrSnaps.size()));
+                for (const std::string &line : trace.ldrSnaps) {
+                    printf("      %s\n", line.c_str());
+                }
+            }
+            printf("\n");
+            CloseHandle(token);
+        }
+
+        restoreLoaderSnaps(targetImage, prevFlag);
+        printf("[dbg] loader snaps 已恢复 (prevGlobalFlag=%ld)\n", prevFlag);
+        return 0;
+    }
 
     const Variant variants[] = {
         { "A 去特权（当前产品行为）", false, false, false },

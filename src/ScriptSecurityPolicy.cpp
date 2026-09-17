@@ -304,10 +304,17 @@ void ScriptSecurityPolicy::ensureRestrictedToken()
         return;
     }
 
-    // 关于「管理员组 deny-only」：本机实测一旦施加，子进程即以 0xC0000142
-    // STATUS_DLL_INIT_FAILED 退出（默认桌面、专用窗口站/桌面、以及把对象标签降为
-    // Medium 三种情形均如此），说明其成因不止"桌面访问"一项，需借助 Process Monitor
-    // 等工具进一步定位后才能启用，故当前不施加。
+    // 关于「管理员组 deny-only」：本机实测一旦施加，**任何**子进程都以 0xC0000142
+    // STATUS_DLL_INIT_FAILED 退出（默认桌面、专用窗口站/桌面、标签降为 Medium 均如此；
+    // 与管道/句柄继承、工作目录无关；连 cmd /c echo 也一样）。已用调试器 + 加载器快照
+    // 定位到确切失败点：
+    //   LdrpInitializeNode    - ERROR: Init routine ... for DLL "C:\WINDOWS\System32\KERNELBASE.dll"
+    //                                 failed during DLL_PROCESS_ATTACH
+    //   LdrpInitializeProcess - ERROR: Loading Windows subsystem DLL "KERNEL32.DLL" failed 0xc0000142
+    //   _LdrpInitialize       - ERROR: Process initialization failed with status 0xc0000142
+    // 即 **Windows 自身的 KERNELBASE.dll 在进程附加阶段就失败**，与本项目代码无关；
+    // 在这台机器/该 Windows 版本上 deny-only 与受限 SID 列表不具备可用性。
+    // 复现：build/bin/Release/restricted_token_probe.exe -dbg（见 tests/restricted_token_probe.cpp）。
     //
     // 历史坑（务必核对参数位置）：CreateRestrictedToken 的 deny-only 位于第 3/4 个参数
     // (DisableSidCount / SidsToDisable)；第 7/8 个参数是 RestrictedSidCount /

@@ -408,6 +408,21 @@ bool CommunicationManager::fireSendEvent(const QString &id, const QVariant &data
     return ev->send(data);
 }
 
+int CommunicationManager::fireEnabledSendEvents(const QVariant &data)
+{
+    // 「每轮结束自动上报」的落点。先取 ID 快照（sendEventIds 内部短暂持锁），
+    // 再在锁外逐个调用 fireSendEvent——原因同 fireSendEvent 的注释：
+    // send() 会回调 sendData 并重新进入本锁，持锁调用会自死锁。
+    const QStringList ids = sendEventIds();
+    int sent = 0;
+    for (const QString &id : ids) {
+        if (fireSendEvent(id, data)) {
+            ++sent;
+        }
+    }
+    return sent;
+}
+
 bool CommunicationManager::addSendEvent(SendEvent *event)
 {
     if (!event) return false;

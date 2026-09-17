@@ -57,6 +57,11 @@ public:
     /// 触发一个已配置的发送事件（按其模板/字段组装后真正发出）。
     /// 返回是否真的发出：事件不存在、被禁用、或设备不存在/未连接都返回 false。
     bool fireSendEvent(const QString &id, const QVariant &data);
+    /// 触发**全部已启用**的发送事件（「每轮结束自动上报」策略的落点）。
+    /// 返回真正发出的条数：被禁用、设备未连接、事件不存在的都不计入
+    /// （语义与 fireSendEvent 一致，"已启用"这一过滤天然成立，无需重复判断）。
+    /// 线程约束同 fireSendEvent：先取 ID 快照，再在锁外逐个调用（不持锁碰节点方法）。
+    int fireEnabledSendEvents(const QVariant &data = QVariant());
     bool removeSendEvent(const QString &id);
 
     // ---- 序列化 ----

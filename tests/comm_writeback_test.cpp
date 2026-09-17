@@ -55,6 +55,7 @@ private slots:
     void testSendEventsActuallySend();
     void testHeartbeatFailureRaisesAlarm();
     void testStringTriggerStartsFlow();
+    void testEnabledSendEventsFireOnRoundEnd();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -501,6 +502,49 @@ void CommWritebackTest::testStringTriggerStartsFlow()
     exec.setFlowScene(nullptr);
     QVERIFY(cm->closeDevice(QStringLiteral("SIM_STR")));
     QVERIFY(cm->removeDevice(QStringLiteral("SIM_STR")));
+}
+
+void CommWritebackTest::testEnabledSendEventsFireOnRoundEnd()
+{
+    // 「每轮结束自动上报已启用的发送事件」策略的落点在核心层
+    // （CommunicationManager::fireEnabledSendEvents），故这里能直接测到语义：
+    //   已启用 → 发出；被禁用 → 不发出且不计入；设备不存在 → 不计入。
+    QTcpServer plc;
+    QByteArray received;
+    startSimulatedPlc(plc, received);
+    QVERIFY2(plc.isListening(), qPrintable(plc.errorString()));
+
+    auto *cm = CommunicationManager::instance();
+    QVERIFY(cm->addDevice(QStringLiteral("SIM_RSE"), QStringLiteral("TCP"),
+                          tcpClientConfig(plc.serverPort())));
+    QVERIFY(cm->openDevice(QStringLiteral("SIM_RSE")));
+
+    auto *on = new TextDirectSendEvent(QStringLiteral("RSE_ON"), QStringLiteral("SIM_RSE"), cm);
+    on->setTemplate(QStringLiteral("ROUND-END"));
+    on->setSuffix(QStringLiteral("\r\n"));
+    QVERIFY(cm->addSendEvent(on));
+
+    auto *off = new TextDirectSendEvent(QStringLiteral("RSE_OFF"), QStringLiteral("SIM_RSE"), cm);
+    off->setTemplate(QStringLiteral("MUST-NOT-SEND"));
+    off->setSuffix(QStringLiteral("\r\n"));
+    off->setEnabled(false);   // 被禁用的事件不得发出
+    QVERIFY(cm->addSendEvent(off));
+
+    auto *dead = new TextDirectSendEvent(QStringLiteral("RSE_DEAD"), QStringLiteral("NO_SUCH_DEV"), cm);
+    dead->setTemplate(QStringLiteral("MUST-NOT-SEND-EITHER"));
+    QVERIFY(cm->addSendEvent(dead));   // 设备不存在 → 不得计入
+
+    const int sent = cm->fireEnabledSendEvents();
+    QCOMPARE(sent, 1);   // 只有 RSE_ON 真的发出
+    QTRY_VERIFY_WITH_TIMEOUT(received.contains("ROUND-END"), 3000);
+    QVERIFY2(!received.contains("MUST-NOT-SEND"), "被禁用的事件不得发出");
+    QVERIFY2(!received.contains("MUST-NOT-SEND-EITHER"), "设备不存在的事件不得发出");
+
+    cm->removeSendEvent(QStringLiteral("RSE_ON"));
+    cm->removeSendEvent(QStringLiteral("RSE_OFF"));
+    cm->removeSendEvent(QStringLiteral("RSE_DEAD"));
+    QVERIFY(cm->closeDevice(QStringLiteral("SIM_RSE")));
+    QVERIFY(cm->removeDevice(QStringLiteral("SIM_RSE")));
 }
 
 // 必须用 QTEST_MAIN：流程用例要创建 FlowScene（QGraphicsScene），仅 QCoreApplication 会崩；

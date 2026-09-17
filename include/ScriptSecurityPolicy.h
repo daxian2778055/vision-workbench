@@ -108,8 +108,9 @@ public:
     ///     且 Job Object 的创建/配置/加入任一失败即终止子进程并拒绝执行（fail-closed）；
     ///   - 已施加：仅 stdout/stderr 两个管道写端被继承（PROC_THREAD_ATTRIBUTE_HANDLE_LIST），
     ///     父进程其它可继承句柄不会泄漏给脚本进程；
-    ///   - 未施加：管理员组 deny-only、受限 SID 列表（探针实测二者均使任何子进程以
-    ///     0xC0000142 退出，见 tests/restricted_token_probe.cpp 与 .cpp 内注释）；
+    ///   - 未施加：管理员组 deny-only、受限 SID 列表——实测二者均使**任何**子进程以
+    ///     0xC0000142 退出，并已用「调试器 + 加载器快照」定位到确切失败点：Windows 自身的
+    ///     KERNELBASE.dll 在 DLL_PROCESS_ATTACH 阶段失败（restricted_token_probe.exe -dbg 可复现）；
     ///   - 未施加：专用窗口站/桌面、网络隔离。
     /// 因此只能描述为「已去特权 + 低完整性 + 进程树/句柄约束」，不等于完整沙箱。
     /// - timeoutMs <= 0 表示不限时；cancelRequested() 返回 true 时立即终止子进程。
