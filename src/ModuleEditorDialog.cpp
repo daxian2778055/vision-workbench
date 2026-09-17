@@ -201,20 +201,44 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     m_autoRecomputeTimer->setInterval(400);
     connect(m_autoRecomputeTimer, &QTimer::timeout, this, &ModuleEditorDialog::onAutoRecomputeTimeout);
 
+    // 几何即时持久化（去抖 600ms）：编辑窗是非模态的，用户习惯"调完大小直接双击下一个"，
+    // 旧窗不关则关闭钩子永远不触发（首版只在 done() 保存即踩中此坑）——拖完 600ms 就落盘
+    m_geoSaveTimer = new QTimer(this);
+    m_geoSaveTimer->setSingleShot(true);
+    m_geoSaveTimer->setInterval(600);
+    connect(m_geoSaveTimer, &QTimer::timeout, this, &ModuleEditorDialog::saveGeometryNow);
+
     rebuildParamPanel();
     reloadFromNode();
 }
 
 void ModuleEditorDialog::done(int r)
 {
-    // 完成 / 右上角 X / Esc 都会走到这里：保存窗口几何与分栏比例，下次打开原样恢复
-    {
-        QSettings settings;
-        settings.setValue(QStringLiteral("moduleEditor/geometry"), saveGeometry());
-        if (m_splitter)
-            settings.setValue(QStringLiteral("moduleEditor/splitter"), m_splitter->saveState());
-    }
+    // 完成 / 右上角 X / Esc 的兜底保存（平时调整大小/移动即已即时落盘）
+    saveGeometryNow();
     QDialog::done(r);
+}
+
+void ModuleEditorDialog::resizeEvent(QResizeEvent *event)
+{
+    QDialog::resizeEvent(event);
+    if (m_geoSaveTimer)
+        m_geoSaveTimer->start();
+}
+
+void ModuleEditorDialog::moveEvent(QMoveEvent *event)
+{
+    QDialog::moveEvent(event);
+    if (m_geoSaveTimer)
+        m_geoSaveTimer->start();
+}
+
+void ModuleEditorDialog::saveGeometryNow()
+{
+    QSettings settings;
+    settings.setValue(QStringLiteral("moduleEditor/geometry"), saveGeometry());
+    if (m_splitter)
+        settings.setValue(QStringLiteral("moduleEditor/splitter"), m_splitter->saveState());
 }
 
 HalconNode *ModuleEditorDialog::halconNode() const

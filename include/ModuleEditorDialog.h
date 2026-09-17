@@ -67,14 +67,21 @@ public:
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
-    /// 关闭（含 完成/右上角 X）时持久化窗口几何与左右分栏比例
+    /// 关闭（含 完成/右上角 X）时兜底持久化
     void done(int r) override;
+    /// 调整大小/移动窗口时即时持久化（去抖）——编辑窗非模态，用户常"调完直接双击下一个"
+    void resizeEvent(QResizeEvent *event) override;
+    void moveEvent(QMoveEvent *event) override;
+
+private slots:
+    void saveGeometryNow();
 
 private:
     NodeBase *m_node = nullptr;
     HalconWindow *m_view = nullptr;
     QScrollArea *m_paramHost = nullptr;
     QSplitter *m_splitter = nullptr;
+    QTimer *m_geoSaveTimer = nullptr;
     QLabel *m_hintLabel = nullptr;
     QLabel *m_templatePreview = nullptr;
     QCheckBox *m_autoRecomputeCheck = nullptr;   /// 「自动重算」开关
