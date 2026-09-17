@@ -26,6 +26,11 @@ struct Variant {
     bool denyAdminSid;     ///< SidsToDisable = {Administrators}
     bool lowIntegrity;     ///< TokenIntegrityLevel = Low
     bool restrictToWorld;  ///< SidsToRestrict = {Everyone}
+    // ---- 追加的对照组：用于定位"为什么任何子进程都起不来" ----
+    bool denyUsersSid = false;    ///< SidsToDisable={Users}：判断是否 Administrators 特有
+    bool denyAbsentSid = false;   ///< SidsToDisable={不在令牌中的合成 SID}：判断 API 调用本身是否有害
+    bool windowsCwd = false;      ///< 子进程显式以 C:\Windows 为工作目录
+    bool keepPrivileges = false;  ///< 不传 DISABLE_MAX_PRIVILEGE（隔离"去特权"是否是共因）
 };
 
 struct Child {
@@ -128,13 +133,39 @@ HANDLE createVariantToken(const Variant &variant, std::string &note)
         return nullptr;
     }
 
-    BYTE adminSid[SECURITY_MAX_SID_SIZE] = {};
-    DWORD adminSize = sizeof(adminSid);
-    SID_AND_ATTRIBUTES denySid{};
+    // 待禁用 SID 列表（最多 3 个：Administrators / Users / 一个不在令牌中的合成 SID）
+    BYTE sidBufs[3][SECURITY_MAX_SID_SIZE] = {};
+    SID_AND_ATTRIBUTES denySids[3] = {};
     DWORD denyCount = 0;
-    if (variant.denyAdminSid && CreateWellKnownSid(WinBuiltinAdministratorsSid, nullptr, adminSid, &adminSize)) {
-        denySid.Sid = adminSid;
-        denyCount = 1;
+
+    if (variant.denyAdminSid) {
+        DWORD size = sizeof(sidBufs[0]);
+        if (CreateWellKnownSid(WinBuiltinAdministratorsSid, nullptr, sidBufs[0], &size)) {
+            denySids[denyCount].Sid = sidBufs[0];
+            ++denyCount;
+        }
+    }
+    if (variant.denyUsersSid) {
+        DWORD size = sizeof(sidBufs[1]);
+        if (CreateWellKnownSid(WinBuiltinUsersSid, nullptr, sidBufs[1], &size)) {
+            denySids[denyCount].Sid = sidBufs[1];
+            ++denyCount;
+        }
+    }
+    if (variant.denyAbsentSid) {
+        // 合成 S-1-5-21-<随机>：几乎不可能出现在令牌里，用于验证"调用 API 本身"是否有副作用
+        SID_IDENTIFIER_AUTHORITY ntAuthority = SECURITY_NT_AUTHORITY;
+        PSID made = nullptr;
+        if (AllocateAndInitializeSid(&ntAuthority, 3, 21, 0x5A5A5A5AU, 0x1234U,
+                                     0, 0, 0, 0, 0, &made)) {
+            const DWORD len = GetLengthSid(made);
+            if (len > 0 && len <= sizeof(sidBufs[2])) {
+                CopyMemory(sidBufs[2], made, len);
+                denySids[denyCount].Sid = sidBufs[2];
+                ++denyCount;
+            }
+            FreeSid(made);
+        }
     }
 
     BYTE worldSid[SECURITY_MAX_SID_SIZE] = {};
@@ -148,8 +179,9 @@ HANDLE createVariantToken(const Variant &variant, std::string &note)
 
     // 参数位置必须核对：deny-only 在第 3/4 位，受限 SID 列表在第 7/8 位（语义完全不同）
     HANDLE restricted = nullptr;
-    if (!CreateRestrictedToken(processToken, DISABLE_MAX_PRIVILEGE,
-                               denyCount, denyCount ? &denySid : nullptr,
+    const DWORD tokenFlags = variant.keepPrivileges ? 0 : DISABLE_MAX_PRIVILEGE;
+    if (!CreateRestrictedToken(processToken, tokenFlags,
+                               denyCount, denyCount ? denySids : nullptr,
                                0, nullptr,
                                restrictCount, restrictCount ? &restrictSid : nullptr,
                                &restricted)) {
@@ -178,7 +210,8 @@ HANDLE createVariantToken(const Variant &variant, std::string &note)
     return restricted;
 }
 
-RunResult runChild(HANDLE token, const std::wstring &command, bool usePipes)
+RunResult runChild(HANDLE token, const std::wstring &command, bool usePipes,
+                   const std::wstring &cwd = std::wstring())
 {
     RunResult result;
 
@@ -226,7 +259,9 @@ RunResult runChild(HANDLE token, const std::wstring &command, bool usePipes)
 
     PROCESS_INFORMATION pi{};
     const BOOL created = CreateProcessAsUserW(token, nullptr, cmdBuf.data(), nullptr, nullptr,
-                                              TRUE, flags, nullptr, nullptr, &siex.StartupInfo, &pi);
+                                              TRUE, flags, nullptr,
+                                              cwd.empty() ? nullptr : cwd.c_str(),
+                                              &siex.StartupInfo, &pi);
     if (!created) {
         result.lastError = GetLastError();
     }
@@ -291,6 +326,13 @@ int main()
         { "D A + deny-only + Low IL", true, true, false },
         { "E A + 受限SID列表={Everyone}", false, false, true },
         { "F A + deny-only + 受限列表", true, false, true },
+        // ---- 定位对照组：回答"为什么任何子进程都起不来" ----
+        { "G A + Users deny-only", false, false, false, true, false, false },
+        { "H A + 不在令牌中的SID deny-only", false, false, false, false, true, false },
+        { "J B + 子进程工作目录 C:\\Windows", true, false, false, false, false, true },
+        // 隔离共因：去掉 DISABLE_MAX_PRIVILEGE 后，两种致命组合是否仍致命？
+        { "K 保留特权 + 管理员 deny-only", true, false, false, false, false, false, true },
+        { "L 保留特权 + 受限列表={Everyone}", false, false, true, false, false, false, true },
     };
 
     // 写入目标：一个普通用户可写的 Medium 完整性目录。Low IL 子进程应当无法写入，
@@ -328,6 +370,15 @@ int main()
                 printf("    %-24s started=NO  lastError=%lu (0x%08lX)\n",
                        child.label, result.lastError, result.lastError);
             }
+        }
+
+        // 工作目录对照：默认继承父进程 CWD（E:\halcon\2\xin1）。若"显式给一个肯定可访问的
+        // 工作目录"能让子进程活过来，则根因是 CWD 访问被拒，而不是 DLL 本身加载不了。
+        if (variant.windowsCwd) {
+            const RunResult cwdRun = runChild(token, children[0].command, true, L"C:\\Windows");
+            printf("    %-24s started=%s exit=0x%08lX out=\"%s\"\n",
+                   "cmd /c echo CWD=C:\\Windows", cwdRun.started ? "yes" : "NO",
+                   cwdRun.exitCode, cwdRun.output.c_str());
         }
 
         // 写入测试：Low IL 子进程应无法写入 Medium 完整性的普通用户目录（隔离收益的量化）

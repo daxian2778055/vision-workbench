@@ -54,6 +54,7 @@ private slots:
     void testHeartbeatActuallyGoesOnTheWire();
     void testSendEventsActuallySend();
     void testHeartbeatFailureRaisesAlarm();
+    void testStringTriggerStartsFlow();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -446,6 +447,60 @@ void CommWritebackTest::testHeartbeatFailureRaisesAlarm()
     hb->unregisterHeartbeat(dev);
     QVERIFY(cm->closeDevice(dev));
     QVERIFY(cm->removeDevice(dev));
+}
+
+void CommWritebackTest::testStringTriggerStartsFlow()
+{
+    // 字符串触发是此前唯一"一直可用"的触发路径，但一直没有用例保护。
+    // 与接收事件触发互补：PLC 下发匹配串 → 直接启动目标流程。
+    QTcpServer plc;
+    QByteArray fromPlatform;
+    QTcpSocket *peer = nullptr;
+    plc.listen(QHostAddress::LocalHost, 0);
+    QVERIFY2(plc.isListening(), qPrintable(plc.errorString()));
+    QObject::connect(&plc, &QTcpServer::newConnection, &plc, [&]() {
+        peer = plc.nextPendingConnection();
+        QObject::connect(peer, &QTcpSocket::readyRead, peer,
+                         [&]() { fromPlatform += peer->readAll(); });
+    });
+
+    auto *cm = CommunicationManager::instance();
+    QVERIFY(cm->addDevice(QStringLiteral("SIM_STR"), QStringLiteral("TCP"),
+                          tcpClientConfig(plc.serverPort())));
+    QVERIFY(cm->openDevice(QStringLiteral("SIM_STR")));
+
+    FlowScene scene;
+    FlowExecutor exec;
+    const QString flowName = QStringLiteral("CommStringTriggerFlow");
+    exec.setFlowName(flowName);
+    exec.setFlowMode(FlowMode::SoftwareTrigger);
+    NodeBase *send = scene.createNode(NodeBase::OUTPUT, QPointF(120, 120),
+                                      QStringLiteral("发送数据"));
+    QVERIFY2(send != nullptr, "无法创建「发送数据」算子");
+    send->setParam(QStringLiteral("deviceName"), QStringLiteral("SIM_STR"));
+    send->setParam(QStringLiteral("suffix"), QString());
+    send->setParam(QStringLiteral("sendText"), QStringLiteral("TRIGGERED"));
+    exec.setFlowScene(&scene);
+
+    auto *gtm = GlobalTriggerManager::instance();
+    QVERIFY2(gtm->setStringTrigger(QStringLiteral("GO"), flowName), "配置字符串触发失败");
+    gtm->registerFlow(flowName, &scene, &exec);
+    QSignalSpy firedSpy(gtm, &GlobalTriggerManager::triggerFired);
+
+    QTRY_VERIFY_WITH_TIMEOUT(peer != nullptr, 3000);
+    peer->write("GO\r\n");   // 触发按 trim 后匹配
+    peer->flush();
+
+    QTRY_VERIFY_WITH_TIMEOUT(firedSpy.count() >= 1, 5000);
+    QCOMPARE(firedSpy.at(0).at(0).toString(), flowName);
+    QTRY_VERIFY_WITH_TIMEOUT(fromPlatform.contains("TRIGGERED"), 5000);
+    QVERIFY2(send->executionSuccess(), "回写应成功");
+
+    gtm->removeStringTrigger(QStringLiteral("GO"));
+    gtm->unregisterFlow(flowName);
+    exec.setFlowScene(nullptr);
+    QVERIFY(cm->closeDevice(QStringLiteral("SIM_STR")));
+    QVERIFY(cm->removeDevice(QStringLiteral("SIM_STR")));
 }
 
 // 必须用 QTEST_MAIN：流程用例要创建 FlowScene（QGraphicsScene），仅 QCoreApplication 会崩；
