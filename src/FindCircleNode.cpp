@@ -4,6 +4,7 @@
 #include <QPushButton>
 #include <QVBoxLayout>
 #include <QLabel>
+#include <cmath>
 
 using namespace HalconCpp;
 
@@ -105,6 +106,40 @@ void FindCircleNode::run(bool)
         setOutputData(2, QSharedPointer<DataObject>());
         m_params["moduleStatus"] = false;
     }
+}
+
+RoiShape FindCircleNode::geometryRoi() const
+{
+    RoiShape s;
+    const double r = m_params.value(QStringLiteral("radius"), 0.0).toDouble();
+    if (r <= 0.0) {
+        return s;   // 半径还没设置：不显示（type 保持默认 None）
+    }
+    s.type = RoiType::Circle;
+    s.p1 = QPointF(m_params.value(QStringLiteral("column"), 0.0).toDouble(),
+                   m_params.value(QStringLiteral("row"), 0.0).toDouble());   // x=列, y=行
+    s.p2 = QPointF(s.p1.x() + r, s.p1.y());   // p2 = 圆上一点（画布按 |p2-p1| 取半径）
+    return s;
+}
+
+void FindCircleNode::applyGeometryRoi(const RoiShape &shape)
+{
+    // 「清除几何」：Metrology 的搜索圆是**必需**参数，这里把它归零而不是留着旧值——
+    // 节点随后会以"区域无效"明确失败，比悄悄沿用上一次的圆去测量安全得多。
+    if (shape.type == RoiType::None) {
+        setParam(QStringLiteral("row"), 0.0);
+        setParam(QStringLiteral("column"), 0.0);
+        setParam(QStringLiteral("radius"), 0.0);
+        return;
+    }
+    if (shape.type != RoiType::Circle) {
+        return;
+    }
+    const double dx = shape.p2.x() - shape.p1.x();
+    const double dy = shape.p2.y() - shape.p1.y();
+    setParam(QStringLiteral("column"), shape.p1.x());
+    setParam(QStringLiteral("row"), shape.p1.y());
+    setParam(QStringLiteral("radius"), std::sqrt(dx * dx + dy * dy));
 }
 
 QWidget *FindCircleNode::createParamPanel()

@@ -17,6 +17,8 @@
 #include "NodeBase.h"
 #include "NodeTemplateStore.h"
 #include "RecipeManager.h"
+#include "FindCircleNode.h"
+#include "FindLineNode.h"
 #include "ReceiveEvent.h"
 #include "SendEvent.h"
 
@@ -61,6 +63,7 @@ private slots:
     void testEnabledSendEventsFireOnRoundEnd();
     void testNodeTemplateRoundTrip();
     void testRecipeSaveAndLoad();
+    void testRoiParamRoundTrip();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -629,6 +632,46 @@ void CommWritebackTest::testRecipeSaveAndLoad()
     QVERIFY(rm->deleteRecipe(QStringLiteral("VFP_TEST_RECIPE")));
     QVERIFY(!rm->recipeNames().contains(QStringLiteral("VFP_TEST_RECIPE")));
     RecipeManager::setStoragePathOverride(QString());
+}
+
+void CommWritebackTest::testRoiParamRoundTrip()
+{
+    // ROI 的"几何 ⇄ 参数"映射：画布上的拖拽测不了，但真正容易出错的就是这一层
+    // （拖完框没写回参数、或参数改了框不跟着动）。这里直接构造节点（ctor 是 public，
+    // 不需要场景也不需要注册表），验证往返一致，并验证"清除几何"后不再显示。
+    FindCircleNode circle;
+    circle.init();
+    RoiShape c;
+    c.type = RoiType::Circle;
+    c.p1 = QPointF(300.0, 120.0);   // 圆心（x=列, y=行）
+    c.p2 = QPointF(340.0, 120.0);   // 圆上一点 → 半径 40
+    circle.applyGeometryRoi(c);
+
+    const RoiShape cBack = circle.geometryRoi();
+    QVERIFY(cBack.type == RoiType::Circle);
+    QCOMPARE(cBack.p1, QPointF(300.0, 120.0));
+    QVERIFY(qAbs((cBack.p2.x() - cBack.p1.x()) - 40.0) < 1e-6);   // 半径经参数往返不变
+
+    // 清除几何 → 半径归零 → 不再显示（搜索区域是必需参数，归零后节点会明确失败，
+    // 而不是悄悄沿用上一次的圆）
+    circle.applyGeometryRoi(RoiShape());
+    QVERIFY(circle.geometryRoi().type == RoiType::None);
+
+    FindLineNode line;
+    line.init();
+    RoiShape l;
+    l.type = RoiType::Line;
+    l.p1 = QPointF(50.0, 60.0);     // (列, 行)
+    l.p2 = QPointF(250.0, 160.0);
+    line.applyGeometryRoi(l);
+
+    const RoiShape lBack = line.geometryRoi();
+    QVERIFY(lBack.type == RoiType::Line);
+    QCOMPARE(lBack.p1, QPointF(50.0, 60.0));
+    QCOMPARE(lBack.p2, QPointF(250.0, 160.0));
+
+    line.applyGeometryRoi(RoiShape());
+    QVERIFY(line.geometryRoi().type == RoiType::None);
 }
 
 // 必须用 QTEST_MAIN：流程用例要创建 FlowScene（QGraphicsScene），仅 QCoreApplication 会崩；
