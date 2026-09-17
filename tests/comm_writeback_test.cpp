@@ -23,6 +23,8 @@
 #include "EdgePointsNode.h"
 #include "ThresholdNode.h"
 #include "BlobAnalysisNode.h"
+#include "OtsuThresholdNode.h"
+#include "DynThresholdNode.h"
 #include "ReceiveEvent.h"
 #include "SendEvent.h"
 
@@ -760,6 +762,28 @@ void CommWritebackTest::testRoiParamRoundTrip()
     QCOMPARE(blobBack.p2, QPointF(130.0, 140.0));
     blob.applyGeometryRoi(RoiShape());
     QVERIFY(blob.geometryRoi().type == RoiType::None);
+
+    // Otsu 二值化 / 动态阈值：矩形 ROI（这两个走 registerParams，
+    // ROI 参数与其它参数同一条面板/序列化通路）
+    OtsuThresholdNode otsu;
+    otsu.init();
+    otsu.applyGeometryRoi(r);
+    const RoiShape otsuBack = otsu.geometryRoi();
+    QVERIFY(otsuBack.type == RoiType::Rect);
+    QCOMPARE(otsuBack.p1, QPointF(30.0, 40.0));
+    QCOMPARE(otsuBack.p2, QPointF(130.0, 140.0));
+    otsu.applyGeometryRoi(RoiShape());
+    QVERIFY(otsu.geometryRoi().type == RoiType::None);
+
+    DynThresholdNode dyn;
+    dyn.init();
+    dyn.applyGeometryRoi(r);
+    const RoiShape dynBack = dyn.geometryRoi();
+    QVERIFY(dynBack.type == RoiType::Rect);
+    QCOMPARE(dynBack.p1, QPointF(30.0, 40.0));
+    QCOMPARE(dynBack.p2, QPointF(130.0, 140.0));
+    dyn.applyGeometryRoi(RoiShape());
+    QVERIFY(dyn.geometryRoi().type == RoiType::None);
 }
 
 // 必须用 QTEST_MAIN：流程用例要创建 FlowScene（QGraphicsScene），仅 QCoreApplication 会崩；
