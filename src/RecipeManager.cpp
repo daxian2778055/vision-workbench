@@ -4,11 +4,13 @@
 #include "AppLog.h"
 #include <QFile>
 #include <QDir>
+#include <QHash>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QStandardPaths>
 #include <QDateTime>
+#include <algorithm>
 
 RecipeManager *RecipeManager::instance()
 {
@@ -135,6 +137,33 @@ Recipe RecipeManager::recipe(const QString &name) const
     return m_recipes.value(name);
 }
 
+namespace {
+
+/// 配方里的算子键：用**名称**而不是 moduleId。
+/// moduleId 会随工程/流程重建而变，换个工程就一个都匹配不上（这就是"加载失败"的根因）；
+/// 名称是用户在界面上看到、也随时可改的东西，跨工程仍然有意义。
+/// 同名算子（例如两个「卡尺测量」）按屏幕顺序编号：第 1 个用原名，之后是 name#2、name#3…
+QString nodeKey(const QString &name, int sameNameIndex)
+{
+    return sameNameIndex <= 0 ? name
+                              : QStringLiteral("%1#%2").arg(name).arg(sameNameIndex + 1);
+}
+
+/// 屏幕顺序（上→下、左→右）：同名算子的编号必须确定且可复现，
+/// 否则同一份配方每次加载可能落到不同的算子上。
+void sortByScreenOrder(QList<NodeBase *> &nodes)
+{
+    std::sort(nodes.begin(), nodes.end(), [](NodeBase *a, NodeBase *b) {
+        if (!a || !b) return a != nullptr;   // 空指针排到最后
+        const QPointF pa = a->position();
+        const QPointF pb = b->position();
+        if (qAbs(pa.y() - pb.y()) > 0.5) return pa.y() < pb.y();
+        return pa.x() < pb.x();
+    });
+}
+
+} // namespace
+
 bool RecipeManager::saveRecipe(const QString &name, const QString &description, FlowScene *scene)
 {
     if (name.isEmpty() || !scene) return false;
@@ -144,14 +173,33 @@ bool RecipeManager::saveRecipe(const QString &name, const QString &description, 
     r.description = description;
     r.createdAt = m_recipes.contains(name) ? m_recipes[name].createdAt : QDateTime::currentDateTime();
     r.modifiedAt = QDateTime::currentDateTime();
+    r.parameters.clear();   // 同名覆盖：清掉上一次的键，避免残留
 
-    // Collect parameters from all nodes in the scene
-    for (NodeBase *node : scene->nodes()) {
+    QList<NodeBase *> sceneNodes = scene->nodes();
+    sortByScreenOrder(sceneNodes);
+
+    QHash<QString, int> sameNameCount;
+    for (NodeBase *node : sceneNodes) {
         if (!node) continue;
-        QString nodeId = QString::number(node->moduleId());
-        QJsonObject nodeJson = node->toJson();
-        r.parameters[nodeId + QStringLiteral("_type")] = node->fullName();
-        r.parameters[nodeId] = QJsonDocument(nodeJson).toJson(QJsonDocument::Compact);
+
+        const QByteArray blob = QJsonDocument(node->toJson()).toJson(QJsonDocument::Compact);
+        const QString typeId = node->property("vfpNodeTypeId").toString();
+
+        // 主键：名称（同名加 #n）。无名算子只写兼容键，不参与名称匹配。
+        if (!node->name().isEmpty()) {
+            const int idx = sameNameCount.value(node->name(), 0);
+            sameNameCount[node->name()] = idx + 1;
+
+            const QString key = nodeKey(node->name(), idx);
+            r.parameters[key] = blob;
+            r.parameters[key + QStringLiteral("_type")] = node->fullName();
+            r.parameters[key + QStringLiteral("_typeid")] = typeId;
+        }
+
+        // 兼容键：保留 moduleId 索引，旧版本仍能读这份配方
+        const QString legacy = QString::number(node->moduleId());
+        r.parameters[legacy] = blob;
+        r.parameters[legacy + QStringLiteral("_type")] = node->fullName();
     }
 
     m_recipes[name] = r;
@@ -165,18 +213,54 @@ bool RecipeManager::loadRecipe(const QString &name, FlowScene *scene)
     if (!m_recipes.contains(name) || !scene) return false;
 
     const Recipe &r = m_recipes[name];
-    // 按 moduleId 匹配场景节点并恢复其保存的参数（fromJson 覆盖参数与几何）
+
+    // 匹配顺序：① 算子名（同名按屏幕顺序编号）→ ② 退回 moduleId（读旧版本存的配方）
+    QList<NodeBase *> sceneNodes = scene->nodes();
+    sortByScreenOrder(sceneNodes);
+
+    QHash<QString, int> sameNameCount;
     int applied = 0;
-    for (NodeBase *node : scene->nodes()) {
-        QString nodeId = QString::number(node->moduleId());
-        if (!r.parameters.contains(nodeId)) continue;
-        const QByteArray jsonBytes = r.parameters[nodeId].toString().toUtf8();
+    int skippedByType = 0;
+    for (NodeBase *node : sceneNodes) {
+        if (!node) continue;
+
+        QString key;
+        if (!node->name().isEmpty()) {
+            const int idx = sameNameCount.value(node->name(), 0);
+            sameNameCount[node->name()] = idx + 1;
+            const QString nameKey = nodeKey(node->name(), idx);
+            if (r.parameters.contains(nameKey)) {
+                key = nameKey;
+            }
+        }
+        if (key.isEmpty()) {
+            const QString legacy = QString::number(node->moduleId());
+            if (r.parameters.contains(legacy)) {
+                key = legacy;   // 旧配方（按 moduleId 存的）
+            }
+        }
+        if (key.isEmpty()) continue;
+
+        // 类型校验：显示名被另一实现复用时参数名往往不同，直接 fromJson 会把参数写错、
+        // 甚至让算子按另一套默认值运行。方案加载那条链早有这条教训（见 ProjectManager），
+        // 配方这里此前完全没有这层校验。
+        const QString wantId = r.parameters.value(key + QStringLiteral("_typeid")).toString();
+        const QString gotId = node->property("vfpNodeTypeId").toString();
+        if (!wantId.isEmpty() && !gotId.isEmpty() && wantId != gotId) {
+            ++skippedByType;
+            VFP_DEBUG << "配方跳过类型不匹配的算子:" << node->name()
+                      << "配方类型:" << wantId << "当前类型:" << gotId;
+            continue;
+        }
+
+        const QByteArray jsonBytes = r.parameters[key].toString().toUtf8();
         QJsonDocument doc = QJsonDocument::fromJson(jsonBytes);
         if (!doc.isObject()) continue;
         node->fromJson(doc.object());
         ++applied;
     }
-    VFP_DEBUG << "Applied recipe" << name << "to" << applied << "nodes";
+    VFP_DEBUG << "Applied recipe" << name << "to" << applied << "nodes (type mismatch skipped:"
+              << skippedByType << ")";
     // 一个算子都没匹配上就是加载失败：以前这里无条件 return true，
     // 于是"提示加载成功"和"实际什么都没发生"可以同时出现。
     // 另外不再发 recipeListChanged——加载并不改动配方列表，发了只会误导监听者。

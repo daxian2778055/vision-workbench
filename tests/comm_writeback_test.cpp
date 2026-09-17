@@ -631,6 +631,42 @@ void CommWritebackTest::testRecipeSaveAndLoad()
     // 不存在的配方：false（不再谎报成功）
     QVERIFY(!rm->loadRecipe(QStringLiteral("VFP_TEST_NOT_EXIST"), &scene));
 
+    // ---- 改按名称匹配后：同一份配方要能加载到**另一个工程**里同名的算子上 ----
+    // 这是本次改动的核心：以前按 moduleId 匹配，换个工程必然一个都匹配不上。
+    FlowScene otherScene;
+    NodeBase *sameName = otherScene.createNode(NodeBase::OUTPUT, QPointF(70, 70),
+                                               QStringLiteral("配方算子"));
+    QVERIFY2(sameName != nullptr, "无法创建算子");
+    QVERIFY2(rm->loadRecipe(QStringLiteral("VFP_TEST_RECIPE"), &otherScene),
+             "同名算子跨工程加载失败");
+    QCOMPARE(sameName->toJson().value(QStringLiteral("params")).toObject()
+                 .value(QStringLiteral("sendText")).toString(),
+             QStringLiteral("RECIPE-A"));
+
+    // ---- 同名重复算子：按屏幕顺序（上→下、左→右）编号，各自往返 ----
+    FlowScene dupSource;
+    NodeBase *dup1 = dupSource.createNode(NodeBase::OUTPUT, QPointF(20, 20), QStringLiteral("同名"));
+    NodeBase *dup2 = dupSource.createNode(NodeBase::OUTPUT, QPointF(20, 120), QStringLiteral("同名"));
+    QVERIFY(dup1 != nullptr && dup2 != nullptr);
+    dup1->setParam(QStringLiteral("sendText"), QStringLiteral("DUP-FIRST"));
+    dup2->setParam(QStringLiteral("sendText"), QStringLiteral("DUP-SECOND"));
+    QVERIFY(rm->saveRecipe(QStringLiteral("VFP_TEST_DUP"), QString(), &dupSource));
+
+    FlowScene dupTarget;
+    NodeBase *t1 = dupTarget.createNode(NodeBase::OUTPUT, QPointF(20, 20), QStringLiteral("同名"));
+    NodeBase *t2 = dupTarget.createNode(NodeBase::OUTPUT, QPointF(20, 120), QStringLiteral("同名"));
+    QVERIFY(t1 != nullptr && t2 != nullptr);
+    t1->setParam(QStringLiteral("sendText"), QStringLiteral("CHANGED-1"));
+    t2->setParam(QStringLiteral("sendText"), QStringLiteral("CHANGED-2"));
+    QVERIFY2(rm->loadRecipe(QStringLiteral("VFP_TEST_DUP"), &dupTarget), "同名重复算子加载失败");
+    QCOMPARE(t1->toJson().value(QStringLiteral("params")).toObject()
+                 .value(QStringLiteral("sendText")).toString(),
+             QStringLiteral("DUP-FIRST"));
+    QCOMPARE(t2->toJson().value(QStringLiteral("params")).toObject()
+                 .value(QStringLiteral("sendText")).toString(),
+             QStringLiteral("DUP-SECOND"));
+    QVERIFY(rm->deleteRecipe(QStringLiteral("VFP_TEST_DUP")));
+
     QVERIFY(rm->deleteRecipe(QStringLiteral("VFP_TEST_RECIPE")));
     QVERIFY(!rm->recipeNames().contains(QStringLiteral("VFP_TEST_RECIPE")));
     RecipeManager::setStoragePathOverride(QString());
