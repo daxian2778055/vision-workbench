@@ -62,9 +62,10 @@ static QJsonObject controlToJson(const RuntimeControl &c)
     return o;
 }
 
-static RuntimeControl controlFromJson(const QJsonObject &o)
+static RuntimeControl controlFromJson(const QJsonObject &o, RuntimeControlType type)
 {
     RuntimeControl ctrl;
+    ctrl.type = type;
     ctrl.title = o["title"].toString();
     ctrl.bindType = o["bindType"].toString();
     ctrl.bindKey = o["bindKey"].toString();
@@ -145,9 +146,7 @@ bool RuntimeInterfacePage::fromJson(const QJsonObject &json)
         RuntimeControlType type;
         if (!runtimeControlTypeFromName(o["type"].toString(), type))
             continue;
-        RuntimeControl ctrl;
-        ctrl.type = type;
-        controls.append(controlFromJson(o));
+        controls.append(controlFromJson(o, type));
     }
     return true;
 }

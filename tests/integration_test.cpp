@@ -17,6 +17,7 @@
 #include "DelayNode.h"
 #include "FormulaNode.h"
 #include "ScriptSecurityPolicy.h"
+#include "RuntimeInterface.h"
 #include "Port.h"
 #include "Connection.h"
 #include "DataObject.h"
@@ -69,6 +70,11 @@ private slots:
     void testAppContainerSandboxLaunch();
     void testEndToEndPipelineSmoke();
     void testRecomputeDownstreamOnly();
+
+    // 运行界面（多页/结果表格/IO状态）
+    void testRuntimeInterfaceMultiPageRoundTrip();
+    void testRuntimeInterfaceLegacyCompat();
+    void testRuntimeControlTypeNames();
 
 private:
     FlowScene *m_scene = nullptr;
@@ -1401,6 +1407,115 @@ void IntegrationTest::testAppContainerSandboxLaunch()
     QVERIFY2(imported, qPrintable(runError));
     QVERIFY2(out.contains(QStringLiteral("ac-import-ok")),
              qPrintable(QStringLiteral("容器内解释器/import 失败: out=%1 err=%2").arg(out, err)));
+}
+
+void IntegrationTest::testRuntimeInterfaceMultiPageRoundTrip()
+{
+    // 多页布局 JSON 往返：页名/页序/控件属性/表格列配置/IO绑定 全量保持
+    RuntimeInterface layout;
+    QCOMPARE(layout.pages.size(), 1);                    // 空布局保底一页
+
+    layout.currentPageIndex = layout.addPage();
+    QCOMPARE(layout.pages.size(), 2);
+
+    RuntimeInterfacePage *p0 = layout.page(0);
+    p0->pageName = QStringLiteral("检测页");
+    RuntimeControl *img = p0->addControl(RuntimeControlType::ImageView, QRect(10, 10, 320, 240));
+    img->bindType = QStringLiteral("node");
+    img->bindKey = QStringLiteral("图像源1");
+
+    RuntimeInterfacePage *p1 = layout.page(1);
+    p1->pageName = QStringLiteral("IO页");
+    RuntimeControl *tbl = p1->addControl(RuntimeControlType::ResultTable, QRect(20, 20, 460, 260));
+    ResultColumn c1; c1.header = QStringLiteral("结果"); c1.bindType = QStringLiteral("global"); c1.bindKey = QStringLiteral("检测结果");
+    ResultColumn c2; c2.header = QStringLiteral("数值"); c2.bindType = QStringLiteral("node");   c2.bindKey = QStringLiteral("测量1");
+    tbl->columns << c1 << c2;
+    tbl->maxRows = 50;
+
+    RuntimeControl *io = p1->addControl(RuntimeControlType::IoStatus, QRect(20, 300, 260, 80));
+    io->bindType = QStringLiteral("node");
+    io->bindKey = QStringLiteral("相机IO控制1");
+
+    const QJsonObject json = layout.toJson();
+    RuntimeInterface loaded;
+    QVERIFY(loaded.fromJson(json));
+    QCOMPARE(loaded.pages.size(), 2);
+    QCOMPARE(loaded.currentPageIndex, 1);
+    QCOMPARE(loaded.page(0)->pageName, QStringLiteral("检测页"));
+    QCOMPARE(loaded.page(1)->pageName, QStringLiteral("IO页"));
+    QCOMPARE(loaded.page(0)->controls.size(), 1);
+    QCOMPARE(loaded.page(1)->controls.size(), 2);
+
+    const RuntimeControl &lt = loaded.page(1)->controls[0];
+    QCOMPARE(lt.type, RuntimeControlType::ResultTable);
+    QCOMPARE(lt.columns.size(), 2);
+    QCOMPARE(lt.columns[0].bindKey, QStringLiteral("检测结果"));
+    QCOMPARE(lt.columns[0].bindType, QStringLiteral("global"));
+    QCOMPARE(lt.columns[1].bindType, QStringLiteral("node"));
+    QCOMPARE(lt.columns[1].bindKey, QStringLiteral("测量1"));
+    QCOMPARE(lt.maxRows, 50);
+
+    const RuntimeControl &lio = loaded.page(1)->controls[1];
+    QCOMPARE(lio.type, RuntimeControlType::IoStatus);
+    QCOMPARE(lio.bindKey, QStringLiteral("相机IO控制1"));
+
+    // 文件往返
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("ri.json"));
+    QVERIFY(loaded.saveToFile(path));
+    RuntimeInterface fromFile;
+    QVERIFY(fromFile.loadFromFile(path));
+    QCOMPARE(fromFile.pages.size(), 2);
+    QCOMPARE(fromFile.totalControlCount(), 3);
+}
+
+void IntegrationTest::testRuntimeInterfaceLegacyCompat()
+{
+    // 旧单页格式（无 pages 键）必须零迁移加载为一页
+    QJsonObject ctrl;
+    ctrl["type"] = QStringLiteral("状态灯");
+    ctrl["title"] = QStringLiteral("OK灯");
+    ctrl["bindType"] = QStringLiteral("global");
+    ctrl["bindKey"] = QStringLiteral("判定结果");
+    ctrl["color"] = QStringLiteral("#3a6ea5");
+    ctrl["fontSize"] = 16;
+    ctrl["visible"] = true;
+    QJsonObject geo; geo["x"] = 5; geo["y"] = 6; geo["w"] = 200; geo["h"] = 60;
+    ctrl["geometry"] = geo;
+
+    QJsonObject legacy;
+    legacy["pageName"] = QStringLiteral("运行界面");
+    legacy["controls"] = QJsonArray{ ctrl };
+
+    RuntimeInterface loaded;
+    QVERIFY(loaded.fromJson(legacy));
+    QCOMPARE(loaded.pages.size(), 1);
+    QCOMPARE(loaded.page(0)->pageName, QStringLiteral("运行界面"));
+    QCOMPARE(loaded.page(0)->controls.size(), 1);
+    QCOMPARE(loaded.page(0)->controls[0].type, RuntimeControlType::StatusLight);
+    QCOMPARE(loaded.page(0)->controls[0].bindKey, QStringLiteral("判定结果"));
+    QCOMPARE(loaded.page(0)->controls[0].geometry, QRect(5, 6, 200, 60));
+
+    // 旧格式加载后再次保存应升级为多页格式且内容不变
+    const QJsonObject upgraded = loaded.toJson();
+    QVERIFY(upgraded.contains(QStringLiteral("pages")));
+    RuntimeInterface again;
+    QVERIFY(again.fromJson(upgraded));
+    QCOMPARE(again.page(0)->controls.size(), 1);
+    QCOMPARE(again.page(0)->controls[0].type, RuntimeControlType::StatusLight);
+}
+
+void IntegrationTest::testRuntimeControlTypeNames()
+{
+    // 新控件类型中文名双向映射（序列化靠它存取，改名即破坏兼容）
+    RuntimeControlType t;
+    QVERIFY(runtimeControlTypeFromName(QStringLiteral("结果表格"), t));
+    QCOMPARE(t, RuntimeControlType::ResultTable);
+    QVERIFY(runtimeControlTypeFromName(QStringLiteral("IO状态"), t));
+    QCOMPARE(t, RuntimeControlType::IoStatus);
+    QCOMPARE(runtimeControlTypeName(RuntimeControlType::ResultTable), QStringLiteral("结果表格"));
+    QCOMPARE(runtimeControlTypeName(RuntimeControlType::IoStatus), QStringLiteral("IO状态"));
+    QVERIFY(!runtimeControlTypeFromName(QStringLiteral("不存在"), t));
 }
 
 QTEST_MAIN(IntegrationTest)
