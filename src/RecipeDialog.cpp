@@ -1,5 +1,6 @@
 #include "RecipeDialog.h"
 #include "RecipeManager.h"
+#include "FlowScene.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QMessageBox>
@@ -66,6 +67,11 @@ void RecipeDialog::setupUI()
     connect(m_recipeList, &QListWidget::itemDoubleClicked, this, &RecipeDialog::onLoadRecipe);
 }
 
+void RecipeDialog::setFlowScene(FlowScene *scene)
+{
+    m_scene = scene;
+}
+
 void RecipeDialog::onNewRecipe()
 {
     bool ok = false;
@@ -81,10 +87,27 @@ void RecipeDialog::onNewRecipe()
         QLineEdit::Normal, QString(), &ok);
     if (!ok) desc.clear();
 
-    // Save empty recipe (actual parameter saving would require a scene reference)
-    RecipeManager::instance()->saveRecipe(name.trimmed(), desc, nullptr);
+    // 这里以前传的是 nullptr：RecipeManager 会立刻 return false，
+    // 于是"什么都没存"却照样 emit recipeSaved、界面还提示成功。
+    // 宁可不做，也不要假装做成了。
+    if (!m_scene) {
+        QMessageBox::warning(this, QStringLiteral("无法保存配方"),
+                             QStringLiteral("没有关联的流程，抓取不到算子参数。"));
+        return;
+    }
+
+    const QString recipeName = name.trimmed();
+    if (!RecipeManager::instance()->saveRecipe(recipeName, desc, m_scene)) {
+        QMessageBox::warning(this, QStringLiteral("保存配方失败"),
+                             QStringLiteral("配方「%1」未能保存。").arg(recipeName));
+        return;
+    }
     refreshRecipeList();
-    emit recipeSaved(name.trimmed());
+    emit recipeSaved(recipeName);
+    QMessageBox::information(this, QStringLiteral("成功"),
+                             QStringLiteral("配方「%1」已保存（当前流程 %2 个算子）。")
+                                 .arg(recipeName)
+                                 .arg(m_scene->nodes().size()));
 }
 
 void RecipeDialog::onLoadRecipe()
@@ -94,10 +117,32 @@ void RecipeDialog::onLoadRecipe()
         QMessageBox::warning(this, QStringLiteral("\u63D0\u793A"), QStringLiteral("\u8BF7\u9009\u62E9\u8981\u52A0\u8F7D\u7684\u914D\u65B9"));
         return;
     }
-    QString name = item->text();
-    emit recipeSelected(name);
-    QMessageBox::information(this, QStringLiteral("\u63D0\u793A"),
-        QStringLiteral("\u914D\u65B9 \"%1\" \u5DF2\u52A0\u8F7D").arg(name));
+    const QString name = item->text();
+
+    if (!m_scene) {
+        QMessageBox::warning(this, QStringLiteral("无法加载配方"),
+                             QStringLiteral("没有关联的流程，配方参数无从写回。"));
+        return;
+    }
+
+    // 以前这里只发信号、不真的加载，却无条件弹"已加载"——提示与实际脱节
+    // （而且信号当时根本没人接）。现在同步加载，并按**真实结果**提示。
+    const bool loaded = RecipeManager::instance()->loadRecipe(name, m_scene);
+    m_scene->update();   // 参数已变，重绘画布上的算子摘要
+
+    if (loaded) {
+        emit recipeSelected(name);   // 仍发信号：MainWindow 可据此做后续刷新
+        QMessageBox::information(this, QStringLiteral("成功"),
+                                 QStringLiteral("配方「%1」已加载。").arg(name));
+    } else {
+        // 配方按算子 ID 匹配：换了工程/流程后 ID 对不上，就会一个都匹配不到。
+        // 这时如实说清原因，比弹"已加载"有用得多。
+        QMessageBox::warning(
+            this, QStringLiteral("加载失败"),
+            QStringLiteral("配方「%1」没有任何参数匹配到当前流程的算子。\n"
+                           "配方按算子 ID 匹配，通常需先打开保存该配方时的工程。")
+                .arg(name));
+    }
 }
 
 void RecipeDialog::onDeleteRecipe()

@@ -49,6 +49,10 @@ public:
     /// Import recipe from JSON file
     bool importRecipe(const QString &filePath);
 
+    /// 仅测试用：把存储文件重定向到指定路径。storagePath() 是每次读写时现算的，
+    /// 因此在写之前设置即可生效（否则测试会写进真实用户 AppData 的 recipes.json）。
+    static void setStoragePathOverride(const QString &path);
+
 signals:
     void recipeListChanged();
 

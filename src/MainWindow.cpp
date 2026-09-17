@@ -2758,7 +2758,18 @@ void MainWindow::setupSystemMenu()
     });
 
     connect(ui->actionRecipeManager, &QAction::triggered, this, [this]() {
+        // 取当前流程的场景（与「流程变量」同一取法）：配方保存/加载都要靠它。
+        // 必须把场景交进去——否则「新建配方」无从抓取参数（RecipeManager 收到 nullptr
+        // 会立刻返回 false）、「加载配方」也无从写回，两处都会静默失败。
+        const int idx = ui->flowTabs->currentIndex();
+        FlowScene *scene = (idx >= 0 && idx < m_flowScenes.size()) ? m_flowScenes[idx] : nullptr;
+        if (!scene) {
+            QMessageBox::information(this, QStringLiteral("提示"),
+                                     QStringLiteral("请先打开一个流程，再使用配方管理。"));
+            return;
+        }
         RecipeDialog dialog(this);
+        dialog.setFlowScene(scene);
         dialog.exec();
     });
 

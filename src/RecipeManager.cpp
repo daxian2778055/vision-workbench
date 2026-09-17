@@ -27,8 +27,28 @@ RecipeManager::~RecipeManager()
     saveToStorage();
 }
 
+namespace {
+
+/// 仅测试用：非空时覆盖存储路径（见头文件说明）。
+/// storagePath() 在每次读/写时现算，所以"写之前设置"就能生效。
+QString &storageOverride()
+{
+    static QString path;
+    return path;
+}
+
+} // namespace
+
+void RecipeManager::setStoragePathOverride(const QString &path)
+{
+    storageOverride() = path;
+}
+
 QString RecipeManager::storagePath() const
 {
+    if (!storageOverride().isEmpty()) {
+        return storageOverride();
+    }
     QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     QDir dir(dataDir);
     if (!dir.exists()) dir.mkpath(QStringLiteral("."));
@@ -157,8 +177,10 @@ bool RecipeManager::loadRecipe(const QString &name, FlowScene *scene)
         ++applied;
     }
     VFP_DEBUG << "Applied recipe" << name << "to" << applied << "nodes";
-    emit recipeListChanged();
-    return true;
+    // 一个算子都没匹配上就是加载失败：以前这里无条件 return true，
+    // 于是"提示加载成功"和"实际什么都没发生"可以同时出现。
+    // 另外不再发 recipeListChanged——加载并不改动配方列表，发了只会误导监听者。
+    return applied > 0;
 }
 
 bool RecipeManager::deleteRecipe(const QString &name)

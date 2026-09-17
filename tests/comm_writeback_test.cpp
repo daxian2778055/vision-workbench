@@ -16,6 +16,7 @@
 #include "ModbusNode.h"
 #include "NodeBase.h"
 #include "NodeTemplateStore.h"
+#include "RecipeManager.h"
 #include "ReceiveEvent.h"
 #include "SendEvent.h"
 
@@ -59,6 +60,7 @@ private slots:
     void testStringTriggerStartsFlow();
     void testEnabledSendEventsFireOnRoundEnd();
     void testNodeTemplateRoundTrip();
+    void testRecipeSaveAndLoad();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -593,6 +595,40 @@ void CommWritebackTest::testNodeTemplateRoundTrip()
     QVERIFY(NodeTemplateStore::instance().remove(QStringLiteral("T1")));
     QVERIFY(!NodeTemplateStore::instance().contains(QStringLiteral("T1")));
     NodeTemplateStore::instance().setStorageFilePathOverride(QString());
+}
+
+void CommWritebackTest::testRecipeSaveAndLoad()
+{
+    // 配方功能此前是**完全失效**的：对话框拿不到场景（saveRecipe 收到 nullptr 立刻返回 false）
+    // 却照样发成功信号；loadRecipe 又无条件 return true。这里把两端都钉住：
+    //   保存 → 真的存下；加载 → 真的写回；匹配不上 → 如实返回 false；模块ID对不上 → 也是 false。
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    RecipeManager::setStoragePathOverride(tmp.filePath(QStringLiteral("recipes.json")));
+
+    FlowScene scene;
+    NodeBase *node = scene.createNode(NodeBase::OUTPUT, QPointF(20, 20),
+                                      QStringLiteral("配方算子"));
+    QVERIFY2(node != nullptr, "无法创建算子");
+    node->setParam(QStringLiteral("sendText"), QStringLiteral("RECIPE-A"));
+
+    auto *rm = RecipeManager::instance();
+    QVERIFY2(rm->saveRecipe(QStringLiteral("VFP_TEST_RECIPE"), QStringLiteral("自动用例"),
+                            &scene),
+             "保存配方失败");
+
+    // 改掉参数再加载回来 → 应恢复成保存时的值（证明参数真的被存下并写回）
+    node->setParam(QStringLiteral("sendText"), QStringLiteral("CHANGED"));
+    QVERIFY2(rm->loadRecipe(QStringLiteral("VFP_TEST_RECIPE"), &scene), "加载配方失败");
+    const QJsonObject params = node->toJson().value(QStringLiteral("params")).toObject();
+    QCOMPARE(params.value(QStringLiteral("sendText")).toString(), QStringLiteral("RECIPE-A"));
+
+    // 不存在的配方：false（不再谎报成功）
+    QVERIFY(!rm->loadRecipe(QStringLiteral("VFP_TEST_NOT_EXIST"), &scene));
+
+    QVERIFY(rm->deleteRecipe(QStringLiteral("VFP_TEST_RECIPE")));
+    QVERIFY(!rm->recipeNames().contains(QStringLiteral("VFP_TEST_RECIPE")));
+    RecipeManager::setStoragePathOverride(QString());
 }
 
 // 必须用 QTEST_MAIN：流程用例要创建 FlowScene（QGraphicsScene），仅 QCoreApplication 会崩；
