@@ -106,6 +106,42 @@ void CaliperMeasureNode::run(bool)
     }
 }
 
+RoiShape CaliperMeasureNode::geometryRoi() const
+{
+    RoiShape s;
+    const double r1 = m_params.value(QStringLiteral("row1"), 0.0).toDouble();
+    const double c1 = m_params.value(QStringLiteral("col1"), 0.0).toDouble();
+    const double r2 = m_params.value(QStringLiteral("row2"), 0.0).toDouble();
+    const double c2 = m_params.value(QStringLiteral("col2"), 0.0).toDouble();
+    if (r1 == 0.0 && c1 == 0.0 && r2 == 0.0 && c2 == 0.0) {
+        return s;   // 四个值全 0 = 还没设置过（含"清除几何"之后）：不显示
+    }
+    s.type = RoiType::Line;
+    s.p1 = QPointF(c1, r1);   // x=列, y=行
+    s.p2 = QPointF(c2, r2);
+    return s;
+}
+
+void CaliperMeasureNode::applyGeometryRoi(const RoiShape &shape)
+{
+    // 「清除几何」：卡尺的测量线是**必需**参数，归零而不是留旧值——节点随后会以"区域无效"
+    // 明确失败，比悄悄沿用上一次的测量线安全得多。
+    if (shape.type == RoiType::None) {
+        setParam(QStringLiteral("row1"), 0.0);
+        setParam(QStringLiteral("col1"), 0.0);
+        setParam(QStringLiteral("row2"), 0.0);
+        setParam(QStringLiteral("col2"), 0.0);
+        return;
+    }
+    if (shape.type != RoiType::Line) {
+        return;
+    }
+    setParam(QStringLiteral("col1"), shape.p1.x());
+    setParam(QStringLiteral("row1"), shape.p1.y());
+    setParam(QStringLiteral("col2"), shape.p2.x());
+    setParam(QStringLiteral("row2"), shape.p2.y());
+}
+
 QWidget *CaliperMeasureNode::createParamPanel()
 {
     auto *panel = createAutoParamPanel();

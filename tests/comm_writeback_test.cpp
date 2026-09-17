@@ -19,6 +19,8 @@
 #include "RecipeManager.h"
 #include "FindCircleNode.h"
 #include "FindLineNode.h"
+#include "CaliperMeasureNode.h"
+#include "EdgePointsNode.h"
 #include "ReceiveEvent.h"
 #include "SendEvent.h"
 
@@ -672,6 +674,32 @@ void CommWritebackTest::testRoiParamRoundTrip()
 
     line.applyGeometryRoi(RoiShape());
     QVERIFY(line.geometryRoi().type == RoiType::None);
+
+    // 卡尺测量：与线段查找同为 Metrology 线型（Line），复用上面的线段几何
+    CaliperMeasureNode caliper;
+    caliper.init();
+    caliper.applyGeometryRoi(l);
+    const RoiShape calBack = caliper.geometryRoi();
+    QVERIFY(calBack.type == RoiType::Line);
+    QCOMPARE(calBack.p1, l.p1);
+    QCOMPARE(calBack.p2, l.p2);
+    caliper.applyGeometryRoi(RoiShape());
+    QVERIFY(caliper.geometryRoi().type == RoiType::None);
+
+    // 亚像素边缘点：矩形 ROI（参数与几何的映射同拟合族）
+    EdgePointsNode edges;
+    edges.init();
+    RoiShape r;
+    r.type = RoiType::Rect;
+    r.p1 = QPointF(30.0, 40.0);     // 左上（列, 行）
+    r.p2 = QPointF(130.0, 140.0);   // 右下
+    edges.applyGeometryRoi(r);
+    const RoiShape rBack = edges.geometryRoi();
+    QVERIFY(rBack.type == RoiType::Rect);
+    QCOMPARE(rBack.p1, QPointF(30.0, 40.0));
+    QCOMPARE(rBack.p2, QPointF(130.0, 140.0));
+    edges.applyGeometryRoi(RoiShape());
+    QVERIFY(edges.geometryRoi().type == RoiType::None);
 }
 
 // 必须用 QTEST_MAIN：流程用例要创建 FlowScene（QGraphicsScene），仅 QCoreApplication 会崩；
