@@ -41,6 +41,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     {
         QSettings settings;
         const QByteArray geo = settings.value(QStringLiteral("moduleEditor/geometry")).toByteArray();
+        qDebug() << "ModuleEditor: restore geometry bytes =" << geo.size();
         if (geo.isEmpty() || !restoreGeometry(geo)) {
             QRect avail;
             if (const QScreen *scr = QGuiApplication::primaryScreen())
@@ -235,10 +236,13 @@ void ModuleEditorDialog::moveEvent(QMoveEvent *event)
 
 void ModuleEditorDialog::saveGeometryNow()
 {
+    const QByteArray geo = saveGeometry();
     QSettings settings;
-    settings.setValue(QStringLiteral("moduleEditor/geometry"), saveGeometry());
+    settings.setValue(QStringLiteral("moduleEditor/geometry"), geo);
     if (m_splitter)
         settings.setValue(QStringLiteral("moduleEditor/splitter"), m_splitter->saveState());
+    qDebug() << "ModuleEditor: geometry saved bytes =" << geo.size()
+             << "size =" << size();
 }
 
 HalconNode *ModuleEditorDialog::halconNode() const
