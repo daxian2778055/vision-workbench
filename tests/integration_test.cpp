@@ -63,6 +63,7 @@ private slots:
     void testScriptNodeLowIntegrityContainment();
     void testConditionalBranchSkipClearsStaleOutput();
     void testNestedLoopIterations();
+    void testParamRefResolvesEachRound();   // E1：参数引用跨轮必须重新解析上游最新值
     void testRuntimeStatsCounters();
     void testRestrictedTokenLaunch();
     void testAppContainerSandboxLaunch();
@@ -799,6 +800,70 @@ void IntegrationTest::testConditionalBranchSkipClearsStaleOutput()
     QCOMPARE(falseRuns, 1);             // FALSE 分支只在第二轮执行
     QCOMPARE(trueOutputAfter, false);   // 第二轮被跳过：输出必须清空，不能残留第一轮结果
     QCOMPARE(falseOutputAfter, true);   // 第二轮实际执行的分支有输出
+}
+
+void IntegrationTest::testParamRefResolvesEachRound()
+{
+    // E1：参数引用 {模块号} 跨轮必须重新解析上游最新值；且表达式不得被写回成常量。
+    // 若修复缺失：第一轮解析出 7+1=8 后，引用值被 setParam 永久写回成字面量，
+    // 第二轮即使上游改成 9，下游仍按 8 跑——且存方案会把引用直接存成常量。
+    FlowScene scene;
+    FlowExecutor exec;
+    exec.setFlowName(QStringLiteral("RegressionParamRefE1"));
+
+    NodeBase *source = scene.createNode(NodeBase::LOGIC, QPointF(120, 200), QStringLiteral("Formula"));
+    NodeBase *consumer = scene.createNode(NodeBase::LOGIC, QPointF(340, 200), QStringLiteral("Formula"));
+    QVERIFY(source != nullptr);
+    QVERIFY(consumer != nullptr);
+    source->setParam(QStringLiteral("expression"), QStringLiteral("7"));
+    // 下游引用源模块号（缺省取 value）；连一条线保证源先于下游执行
+    const QString refExpr = QStringLiteral("{%1} + 1").arg(source->moduleId());
+    consumer->setParam(QStringLiteral("expression"), refExpr);
+    QVERIFY2(scene.createConnection(source->outputPorts().first(),
+                                    consumer->inputPorts().first(), true) != nullptr,
+             "无法建立 源->下游 连线（保证源先执行）");
+
+    QList<double> consumerValues;
+    int rounds = 0;
+    const auto outHandle = QObject::connect(
+        &exec, &FlowExecutor::nodeOutputsUpdated, &exec,
+        [&](NodeBase *n, bool ok, qint64, const QVariantMap &vars) {
+            if (ok && n == consumer) {
+                consumerValues.append(vars.value(QStringLiteral("value")).toDouble());
+                ++rounds;
+                if (rounds == 1) {
+                    // 第一轮结束后改源值：引用必须重新解析成 9（而非沿用上一轮解析出的 7）
+                    source->setParam(QStringLiteral("expression"), QStringLiteral("9"));
+                }
+            }
+        }, Qt::DirectConnection);
+    const auto finishHandle = QObject::connect(
+        &exec, &FlowExecutor::executionFinished, &exec,
+        [&]() { if (rounds >= 2) exec.stopExecution(); }, Qt::DirectConnection);
+
+    exec.setFlowScene(&scene);
+    exec.setFlowMode(FlowMode::Continuous);
+    exec.startExecution();
+    bool finished = exec.wait(5000);
+    if (!finished) {
+        exec.stopExecution();
+        finished = exec.wait(2000);
+    }
+    QObject::disconnect(outHandle);
+    QObject::disconnect(finishHandle);
+
+    // E1 核心断言 1：跨轮重新解析——第一轮 7+1=8，第二轮 9+1=10（不是沿用 8）
+    const bool exprPreserved = consumer->getParam(QStringLiteral("expression"))
+                                   .toString().contains(QLatin1Char('{'));
+    exec.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+
+    QVERIFY2(finished, "参数引用流程未在 5 秒内结束");
+    QVERIFY2(consumerValues.size() >= 2,
+             qPrintable(QStringLiteral("未观察到两轮执行：%1").arg(consumerValues.size())));
+    QCOMPARE(consumerValues.at(0), 8.0);    // 第一轮：7 + 1
+    QCOMPARE(consumerValues.at(1), 10.0);   // 第二轮：9 + 1（重新解析，不是沿用 8）
+    QVERIFY2(exprPreserved, "参数引用表达式被写回成常量（E1：应保留 {模块号} 引用）");
 }
 
 void IntegrationTest::testNestedLoopIterations()
