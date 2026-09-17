@@ -22,6 +22,8 @@
 #include <QMenu>
 #include <QApplication>
 #include <QEvent>
+#include <QSettings>
+#include <QScreen>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
@@ -34,7 +36,19 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     setAttribute(Qt::WA_DeleteOnClose);
     setWindowTitle(node ? QStringLiteral("编辑模块 — %1").arg(node->fullName())
                         : QStringLiteral("编辑模块"));
-    resize(1100, 720);
+    // 窗口几何持久化：用户拖过一次就永久记住（含位置），下次直接用；
+    // 首次（无存档）按屏幕可用区自适应，绝不超出屏幕（旧固定 1100×720 在小屏/缩放屏会溢出）
+    {
+        QSettings settings;
+        const QByteArray geo = settings.value(QStringLiteral("moduleEditor/geometry")).toByteArray();
+        if (geo.isEmpty() || !restoreGeometry(geo)) {
+            QRect avail;
+            if (const QScreen *scr = QGuiApplication::primaryScreen())
+                avail = scr->availableGeometry();
+            resize(qMax(760, qMin(1100, avail.width() * 9 / 10)),
+                   qMax(540, qMin(720, avail.height() * 9 / 10)));
+        }
+    }
 
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(8, 8, 8, 8);
@@ -99,12 +113,28 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
 
     m_paramHost = new QScrollArea();
     m_paramHost->setWidgetResizable(true);
+    // 参数区只允许纵向滚动：横向滚动条强制关闭（参数被横向裁切/来回滚看的体验根因）
+    m_paramHost->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     rightLay->addWidget(m_paramHost, 1);
 
+    // 参数面板保底宽度：无论窗口怎么缩，右侧参数一列始终放得下（≥360px）
+    right->setMinimumWidth(360);
+
+    m_splitter = splitter;
     splitter->addWidget(m_view);
     splitter->addWidget(right);
     splitter->setStretchFactor(0, 3);
     splitter->setStretchFactor(1, 2);
+    // 分栏比例持久化：无存档时右侧固定 420px（参数列足够宽），左侧拿剩余
+    {
+        QSettings settings;
+        const QByteArray splitState =
+            settings.value(QStringLiteral("moduleEditor/splitter")).toByteArray();
+        if (splitState.isEmpty() || !splitter->restoreState(splitState)) {
+            QList<int> sizes { qMax(520, width() - 420), 420 };
+            splitter->setSizes(sizes);
+        }
+    }
     root->addWidget(splitter, 1);
 
     auto *closeBtn = new QPushButton(QStringLiteral("完成"));
@@ -173,6 +203,18 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
 
     rebuildParamPanel();
     reloadFromNode();
+}
+
+void ModuleEditorDialog::done(int r)
+{
+    // 完成 / 右上角 X / Esc 都会走到这里：保存窗口几何与分栏比例，下次打开原样恢复
+    {
+        QSettings settings;
+        settings.setValue(QStringLiteral("moduleEditor/geometry"), saveGeometry());
+        if (m_splitter)
+            settings.setValue(QStringLiteral("moduleEditor/splitter"), m_splitter->saveState());
+    }
+    QDialog::done(r);
 }
 
 HalconNode *ModuleEditorDialog::halconNode() const

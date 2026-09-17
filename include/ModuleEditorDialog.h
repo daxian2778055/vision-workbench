@@ -13,6 +13,7 @@ class QCheckBox;
 class QTimer;
 class QToolButton;
 class QMenu;
+class QSplitter;
 
 /// 双击算子打开的模块编辑窗：大图 + 完整参数 + ROI/掩膜/模板
 class ModuleEditorDialog : public QDialog
@@ -66,11 +67,14 @@ public:
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
+    /// 关闭（含 完成/右上角 X）时持久化窗口几何与左右分栏比例
+    void done(int r) override;
 
 private:
     NodeBase *m_node = nullptr;
     HalconWindow *m_view = nullptr;
     QScrollArea *m_paramHost = nullptr;
+    QSplitter *m_splitter = nullptr;
     QLabel *m_hintLabel = nullptr;
     QLabel *m_templatePreview = nullptr;
     QCheckBox *m_autoRecomputeCheck = nullptr;   /// 「自动重算」开关
