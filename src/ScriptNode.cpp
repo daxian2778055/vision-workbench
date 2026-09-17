@@ -390,9 +390,11 @@ QWidget *ScriptNode::createParamPanel()
             QStringLiteral("容器沙箱已就绪：\n  profile SID: %1\n  已为 python 所在目录授予读取+执行权限。\n\n"
                            "现在把「沙箱强度」切到 AppContainer 即可生效。\n\n"
                            "⚠ 注意：该授权会在解释器目录上留下容器 SID 条目，实测会使"
-                           "「去特权 + 低完整性」模式下的解释器无法启动（0xC0000135）。"
-                           "换言之两种强度在同一台机器上会相互影响——需要切回去特权模式时，"
-                           "请先移除该授权：icacls \"<解释器目录>\" /reset")
+                           "「去特权 + 低完整性」模式下的解释器无法启动（0xC0000135）；"
+                           "而只给文件授权又会让容器内解释器起不来（无法遍历目录）。"
+                           "即两种强度在同一台机器上**互斥，需二选一**。"
+                           "要切回「去特权 + 低完整性」，请先移除该授权：\n"
+                           "  icacls \"<解释器目录>\" /reset")
                 .arg(ScriptSecurityPolicy::appContainerSid()));
     });
     layout->addWidget(prepareBtn);

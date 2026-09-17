@@ -965,6 +965,108 @@ int runInterpreterAclMatrix()
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// AppContainer 文件级授权实验
+//
+// 动机：-il 矩阵已证明"目录 DACL 上的容器 SID 条目"会让 Low IL 启动解释器失败
+// （与权限位无关），而"文件上的条目"无害。于是关键问题变成：
+//   容器在**目录没有任何容器条目**、只有文件级授权时，能否遍历目录并跑起解释器？
+// 若可以 → 产品授权应改为「目录不加条目 + 文件递归授权」，两种强度即可共存，
+//           并且符合最小权限。
+// 本模式会递归给解释器目录下的**文件**追加条目（目录一律不碰），跑完容器内实测后
+// **自动还原**（同一套递归撤销），保证机器状态不被留下。
+// ---------------------------------------------------------------------------
+
+/// 递归对「文件」追加/撤销容器条目（目录一律不碰——这正是本实验要验证的）
+void touchFilesRecursive(const std::wstring &root, PSID sid, bool grant, int *touched, int *failed)
+{
+    const std::wstring pattern = root + L"\\*";
+    WIN32_FIND_DATAW fd{};
+    HANDLE find = FindFirstFileW(pattern.c_str(), &fd);
+    if (find == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    do {
+        const std::wstring name(fd.cFileName);
+        if (name == L"." || name == L"..") {
+            continue;
+        }
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+            continue;   // 跳过符号链接/联接，避免递归成环
+        }
+        const std::wstring full = root + L"\\" + name;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            touchFilesRecursive(full, sid, grant, touched, failed);
+        } else if (setDirAclForSid(full, sid, grant)) {
+            ++(*touched);
+        } else {
+            ++(*failed);
+        }
+    } while (FindNextFileW(find, &fd));
+    FindClose(find);
+}
+
+int runAppContainerFileOnlyProbe()
+{
+    printf("=== AppContainer 文件级授权实验（目录不加容器条目）===\n");
+    const std::wstring dir = interpreterDir();
+    if (dir.empty()) {
+        printf("找不到 python.exe（PATH），无法实验\n");
+        return 1;
+    }
+    printf("解释器目录: %ls\n", dir.c_str());
+
+    PSID containerSid = nullptr;
+    if ((FAILED(DeriveAppContainerSidFromAppContainerName(L"VisionFlowPlatform.Sandbox",
+                                                           &containerSid))
+         || !containerSid)
+        && (FAILED(DeriveAppContainerSidFromAppContainerName(
+                       L"VisionFlowPlatform.SandboxProbe", &containerSid))
+            || !containerSid)) {
+        printf("两个容器 profile 都不存在，请先跑一次 -ac\n");
+        return 1;
+    }
+
+    // 目录上的容器条目先清掉（可能是上一轮实验留下的），确保"目录无容器条目"这一前提成立
+    setDirAclForSid(dir, containerSid, false);
+    DWORD aceCount = 0;
+    const bool dirHasContainer = daclHasSid(dir, containerSid, &aceCount);
+    printf("目录容器条目=%s（ACE 总数=%lu）\n", dirHasContainer ? "yes" : "no", aceCount);
+
+    int touched = 0;
+    int failed = 0;
+    touchFilesRecursive(dir, containerSid, true, &touched, &failed);
+    printf("已按文件授权：成功 %d 个，失败 %d 个（目录一律未加容器条目）\n\n", touched, failed);
+
+    // 容器内实测：cmd（系统目录默认对包可读）与 python（依赖解释器目录下的文件）
+    struct Case {
+        const char *label;
+        std::wstring command;
+    };
+    const Case cases[] = {
+        { "cmd /c echo（基线）", L"cmd.exe /c echo ac-file-ok" },
+        { "python -c import", L"python.exe -I -E -c \"import json,os;print('ac-file-py-ok')\"" },
+    };
+    for (const Case &c : cases) {
+        const RunResult r = runChildInAppContainer(containerSid, c.command);
+        printf("    %-22s started=%s exit=0x%08lX out=\"%s\"\n", c.label,
+               r.started ? "yes" : "NO", r.exitCode, r.output.c_str());
+    }
+
+    // 自动还原：把刚加的文件条目全部撤销
+    int reverted = 0;
+    int revertFailed = 0;
+    touchFilesRecursive(dir, containerSid, false, &reverted, &revertFailed);
+    DWORD afterCount = 0;
+    const bool stillHas = daclHasSid(dir, containerSid, &afterCount);
+    printf("\n已还原：撤销文件条目 %d 个（失败 %d），目录容器条目=%s（ACE 总数=%lu）\n",
+           reverted, revertFailed, stillHas ? "yes" : "no", afterCount);
+    printf("判定：若 python 行为 exit=0 且打印 ac-file-py-ok，则「目录不加条目 + 文件级授权」可行。\n");
+
+    FreeSid(containerSid);
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -983,6 +1085,10 @@ int main(int argc, char **argv)
     // -il：解释器目录 ACL × 完整性级别 受控矩阵（定位"授权后 Low IL 启动失败"的因果）
     if (argc > 1 && std::string(argv[1]) == "-il") {
         return runInterpreterAclMatrix();
+    }
+    // -ac-file：文件级授权实验（目录不加容器条目），跑完自动还原
+    if (argc > 1 && std::string(argv[1]) == "-ac-file") {
+        return runAppContainerFileOnlyProbe();
     }
 
     // -dbg：调试器模式。只跑 A（可用基线）与 B（deny-only，全挂），逐条打印 DLL 加载与异常，

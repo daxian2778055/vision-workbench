@@ -982,8 +982,15 @@ bool ScriptSecurityPolicy::grantInterpreterAccess(const QString &program, QStrin
     //   · 条目加在**文件**上（如 python.exe）则**无害**（仅解释器打印一句
     //     "Failed to find real location"，不影响运行）；
     //   · 撤销目录条目后立即恢复。
-    // 即：容器模式与「去特权 + 低完整性」模式在同一台机器上会相互影响，
-    //     现场启用容器前需评估（或改用文件级授权，见 -il 矩阵结论）。
+    // 【结论：两种强度在同一台机器上互斥，已双向实证】
+    //   · 目录级授权 → 容器可用（python 正常），但 Low IL 失效（0xC0000135）；
+    //   · 仅文件级授权（-ac-file，实测递归授权 51979 个文件、目录零条目）→ Low IL 正常，
+    //     但容器内解释器起不来：getpath 需要 stat 'Lib/' 等目录，没有目录条目就遍历不了，
+    //     表现为 sys.path[0]=(not set) 的路径配置报错。
+    //   · 因此不能通过"缩小授权粒度"两全；现场必须在两者间二选一：
+    //     需要容器隔离（独立文件视图 + 无网络）就用 AppContainer 并接受 Low IL 不可用；
+    //     需要与现有去特权方案共存就别授权容器，直接用默认强度。
+    //     撤销授权：icacls "<解释器目录>" /reset（或 /reset /t 连子目录一起）。
     PSID sidRaw = nullptr;
     if (!ConvertStringSidToSidW(reinterpret_cast<const wchar_t *>(sid.utf16()), &sidRaw) || !sidRaw) {
         if (error) {
