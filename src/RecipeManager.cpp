@@ -224,34 +224,37 @@ bool RecipeManager::loadRecipe(const QString &name, FlowScene *scene)
     for (NodeBase *node : sceneNodes) {
         if (!node) continue;
 
-        QString key;
+        // 类型校验只看**名称匹配**的结果（也就是"同名的配方项"），不受 moduleId 兼容键影响：
+        // 因为所有节点的 moduleId 都不同（静态自增），moduleId 兼容键本意是"读旧版本配方"，
+        // 若它先命中就会落到别处，使同名的类型校验永远没机会触发——这会让同名不同实现的
+        // 危险写回被放行。所以这里只在"名称命中且类型不符"时跳过。
+        QString nameKey;
         if (!node->name().isEmpty()) {
             const int idx = sameNameCount.value(node->name(), 0);
             sameNameCount[node->name()] = idx + 1;
-            const QString nameKey = nodeKey(node->name(), idx);
-            if (r.parameters.contains(nameKey)) {
-                key = nameKey;
+            nameKey = nodeKey(node->name(), idx);
+        }
+
+        QString key;
+        if (!nameKey.isEmpty() && r.parameters.contains(nameKey)) {
+            // 优先名称匹配；命中时先过类型校验，不通过就跳过（不再回退到 moduleId 兼容键）
+            const QString wantId = r.parameters.value(nameKey + QStringLiteral("_typeid")).toString();
+            const QString gotId = node->property("vfpNodeTypeId").toString();
+            if (!wantId.isEmpty() && !gotId.isEmpty() && wantId != gotId) {
+                ++skippedByType;
+                VFP_DEBUG << "配方跳过类型不匹配的算子:" << node->name()
+                          << "配方类型:" << wantId << "当前类型:" << gotId;
+                continue;
             }
+            key = nameKey;
         }
         if (key.isEmpty()) {
             const QString legacy = QString::number(node->moduleId());
             if (r.parameters.contains(legacy)) {
-                key = legacy;   // 旧配方（按 moduleId 存的）
+                key = legacy;   // 旧配方（按 moduleId 存的）：名称没匹配上才退回这里
             }
         }
         if (key.isEmpty()) continue;
-
-        // 类型校验：显示名被另一实现复用时参数名往往不同，直接 fromJson 会把参数写错、
-        // 甚至让算子按另一套默认值运行。方案加载那条链早有这条教训（见 ProjectManager），
-        // 配方这里此前完全没有这层校验。
-        const QString wantId = r.parameters.value(key + QStringLiteral("_typeid")).toString();
-        const QString gotId = node->property("vfpNodeTypeId").toString();
-        if (!wantId.isEmpty() && !gotId.isEmpty() && wantId != gotId) {
-            ++skippedByType;
-            VFP_DEBUG << "配方跳过类型不匹配的算子:" << node->name()
-                      << "配方类型:" << wantId << "当前类型:" << gotId;
-            continue;
-        }
 
         const QByteArray jsonBytes = r.parameters[key].toString().toUtf8();
         QJsonDocument doc = QJsonDocument::fromJson(jsonBytes);
