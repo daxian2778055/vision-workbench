@@ -20,6 +20,9 @@ public:
     virtual QWidget *createParamPanel() override;
     virtual void updateParamPanel(QWidget *panel) override;
     virtual void displayImage() override;
+    /// 当前只有 0/1 个文件时，输出是路径的确定性函数（同一路径 → 同一图像），可被局部执行复用；
+    /// 多个文件时会随轮次切换取不同图，必须重跑。
+    virtual bool reusesCachedOutput() const override;
 
 signals:
     void imageRead(const HImage &image);

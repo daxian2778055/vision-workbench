@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AppDatabase.h"   // InspectionRecord（待落库的结果缓冲按值存放，需要完整类型）
+
 #include <QObject>
 #include <QThread>
 #include <QMutex>
@@ -180,6 +182,13 @@ private:
     mutable QMutex m_mutex;
     QWaitCondition m_waitCondition;
     QMap<NodeBase*, QMap<int, DataObjectPtr>> m_nodeData;
+    /// 本轮待落库的检测结果（仅执行线程访问）：按轮缓冲，轮末用**单个事务**批量提交。
+    /// 连续模式下"每节点一次自动提交"是主要固定开销（40 节点 = 40 次提交/轮）。
+    QList<InspectionRecord> m_pendingResults;
+    /// 输出仍然有效的节点：局部执行（executeUpTo/executeFrom）时，"输出可复用"的节点
+    /// （见 NodeBase::reusesCachedOutput）若仍在此集合中，就不必再跑一遍（例如重新读图）。
+    /// 参数改动会经 invalidateDownstreamOf 把相关节点移出该集合。
+    QHash<NodeBase*, bool> m_validOutputs;
     QQueue<NodeBase*> m_executionQueue;
     mutable QMutex m_graphCacheMutex;
     bool m_graphStructureDirty {true};

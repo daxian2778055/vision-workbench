@@ -598,6 +598,15 @@ void ImageReadNode::displayImage()
     }
 }
 
+bool ImageReadNode::reusesCachedOutput() const
+{
+    // 判据用"有没有可轮换的文件"，而不是 Mode 标志：
+    // 只要当前只有 0/1 个文件，输出就是路径的确定性函数（同一路径 → 同一图像），局部执行可复用；
+    // 一旦有多个文件（会随轮次/自动切换取不同图），就必须重跑。
+    // 这样无论用户怎么设置模式（甚至多图模式只选了一个文件），语义都成立。
+    return m_imageFiles.size() <= 1;
+}
+
 void ImageReadNode::updateThumbnails(QHBoxLayout *thumbnailLayout)
 {
     // 清空现有缩略图

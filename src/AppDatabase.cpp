@@ -270,6 +270,47 @@ QList<AlarmRecord> AppDatabase::queryAlarms(const QDateTime &from, const QDateTi
 
 // ---- Inspection results ----
 
+bool AppDatabase::saveInspectionResults(const QList<InspectionRecord> &records)
+{
+    if (records.isEmpty()) {
+        return true;   // 空批不产生事务
+    }
+    QMutexLocker locker(&s_dbMutex);
+    // 注意：不能用 const —— QSqlDatabase::transaction/commit/rollback 都是非 const 成员
+    QSqlDatabase db = threadDatabase();
+    if (!db.transaction()) {
+        VFP_DEBUG << "Failed to begin transaction for inspection results:"
+                  << db.lastError().text();
+        return false;
+    }
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral(
+        "INSERT INTO inspection_results (flow_name, node_name, passed, value) VALUES (?, ?, ?, ?)"
+    ));
+    bool ok = true;
+    for (const InspectionRecord &r : records) {
+        q.addBindValue(r.flowName);
+        q.addBindValue(r.nodeName);
+        q.addBindValue(r.passed ? 1 : 0);
+        q.addBindValue(r.value);
+        if (!q.exec()) {
+            VFP_DEBUG << "Failed to save inspection result (batch):" << q.lastError().text();
+            ok = false;
+            break;
+        }
+    }
+    if (!ok) {
+        db.rollback();   // 整批原子：任一条失败则全部回滚，避免"半轮结果"
+        return false;
+    }
+    if (!db.commit()) {
+        VFP_DEBUG << "Failed to commit inspection results:" << db.lastError().text();
+        db.rollback();
+        return false;
+    }
+    return true;
+}
+
 bool AppDatabase::saveInspectionResult(const QString &flowName, const QString &nodeName,
                                         bool passed, const QString &value)
 {

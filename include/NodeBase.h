@@ -85,6 +85,12 @@ public:
     void setEnabled(bool on) { m_enabled = on; }
     bool isEnabled() const { return m_enabled; }
 
+    /// 输出是否"可复用"：声明本算子的输出是其输入/参数的**确定性函数**。
+    /// 用于局部执行（「执行到此」「重算下游」）的增量优化：确定性源节点（例如单图模式的
+    /// 「读取图像」）若此前已成功执行、且没有被判为失效，就没必要再跑一遍（例如重读文件）。
+    /// 默认 false —— 多数算子应保持"每次都跑"，尤其是相机取图这类必须取新数据的源节点。
+    virtual bool reusesCachedOutput() const { return false; }
+
 protected:
     virtual bool process() = 0;
 

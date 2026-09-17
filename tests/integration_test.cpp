@@ -1235,6 +1235,12 @@ void IntegrationTest::testRecomputeDownstreamOnly()
     QCOMPARE(runs.value(readerB), 0);        // 无关分支不得被重跑
     QCOMPARE(widthA, sizeB);                 // 上游确实换成了第二张图
     QCOMPARE(fg, squareB * squareB);         // 下游拿到新值 → 缓存确实已作废并重算
+
+    // 【待办·增量执行复用】此处原计划追加一段"只改下游参数 + executeUpTo"的用例，
+    // 断言单图「读取图像」被跳过（runs==0）而目标节点照常重算（runs==1）。
+    // 首次实现后该断言失败（readerA 仍被重跑），且执行器侧诊断显示未进入复用分支，
+    // 与用例内直接调用 reusesCachedOutput() 返回 true 相矛盾，未能定位，
+    // 故连同执行器分支一并回退；契约声明（NodeBase/ImageReadNode）保留备查。
 }
 
 namespace {

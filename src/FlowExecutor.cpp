@@ -365,6 +365,16 @@ void FlowExecutor::run()
             }
         }
         
+        // 轮末批量落库：整轮结果一个事务提交。放在统计之前，保证本轮记录已落库。
+        // 未启用数据库（databasePath 为空）时只清缓冲，不做任何 IO。
+        if (!m_pendingResults.isEmpty()) {
+            const QList<InspectionRecord> batch = m_pendingResults;
+            m_pendingResults.clear();
+            if (!AppDatabase::instance()->databasePath().isEmpty()) {
+                AppDatabase::instance()->saveInspectionResults(batch);
+            }
+        }
+
         // 轮次统计 + 周期性进程资源采样/日志
         recordRoundFinished(roundTimer.elapsed());
 
@@ -598,6 +608,12 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
         // 执行前统一清空输出端口：保证本轮下游可见的数据只可能由本轮产生。
         // 否则“无输入/空结果”分支未清输出的节点（如 DelayNode 无输入时直接返回）
         // 会把上一轮输出继续挂在端口上，被当作本轮结果写入缓存（P1）
+        //
+        // 【待办·增量执行复用】原计划在此处加入"命中 NodeBase::reusesCachedOutput() ∧ 输出仍有效
+        // 则跳过 node->execute()"的分支（跳过时端口上保留上一次的输出，后续传播/缓存照常）。
+        // 首次实现后回归用例显示复用未生效（readerA 仍被重跑），但同一对象在用例内直接调用
+        // reusesCachedOutput() 却返回 true，两者矛盾且未能定位，故先回退该分支，
+        // 避免留下"看起来在优化、实际没生效"的代码。NodeBase/ImageReadNode 上的契约声明保留备查。
         for (int p = 0; p < node->outputPorts().size(); ++p)
             node->setOutputData(p, QSharedPointer<DataObject>());
 
@@ -626,6 +642,8 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
                     m_nodeData[node].remove(i);
                 }
             }
+            // 标记"输出有效"：供局部执行的可复用判定（见 reusesCachedOutput）
+            m_validOutputs[node] = true;
         } else {
             for (int p = 0; p < node->outputPorts().size(); ++p)
                 node->setOutputData(p, QSharedPointer<DataObject>());
@@ -672,7 +690,10 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
             if (nodeOut0) {
                 resultVal = QStringLiteral("OK");
             }
-            AppDatabase::instance()->saveInspectionResult(flowName, node->fullName(), success, resultVal);
+            // 不在这里直接落库：按轮缓冲，轮末用**单个事务**批量提交（见 run() 中的轮末刷新）。
+            // 连续模式下"每节点一次自动提交"是主要固定开销（40 节点 = 40 次提交/轮）。
+            m_pendingResults.append(InspectionRecord{ 0, flowName, node->fullName(), success,
+                                                      resultVal, QDateTime() });
             if (!success) {
                 AppDatabase::instance()->addAlarm(node->fullName(), QStringLiteral("Error"),
                     QStringLiteral("\u7B97\u5B50\u6267\u884C\u5931\u8D25: %1").arg(node->name()));
@@ -1217,5 +1238,7 @@ void FlowExecutor::invalidateDownstreamOf(NodeBase *startNode)
         }
         m_nodeData[n].clear();
         m_nodeOutputVars[n->moduleId()].clear();
+        // 同时判为失效：否则局部执行会把"已被作废的输出"当成可复用结果（数据其实是空的/旧的）
+        m_validOutputs.remove(n);
     }
 }

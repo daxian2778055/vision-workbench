@@ -82,6 +82,7 @@ private slots:
     void testWorkerThreadWriteRead();
     void testConcurrentWriters();
     void testPasswordHashRoundTrip();
+    void testBatchInspectionResults();
 
 private:
     QTemporaryDir m_tempDir;
@@ -152,6 +153,39 @@ void DatabaseTest::testPasswordHashRoundTrip()
     QVERIFY(hash.contains(QLatin1Char(':')));
     QVERIFY(AppDatabase::verifyPassword(QStringLiteral("p@ssw0rd"), hash));
     QVERIFY(!AppDatabase::verifyPassword(QStringLiteral("wrong"), hash));
+}
+
+// 一轮执行的检测结果应当整批落到**一个事务**里（连续模式下每节点一次自动提交是主要固定开销）
+void DatabaseTest::testBatchInspectionResults()
+{
+    AppDatabase *db = AppDatabase::instance();
+
+    // 空批：直接成功，不产生事务
+    QVERIFY2(db->saveInspectionResults(QList<InspectionRecord>()), "空批应当直接成功");
+
+    QList<InspectionRecord> batch;
+    for (int i = 0; i < 30; ++i) {
+        InspectionRecord r;
+        r.flowName = QStringLiteral("batchFlow");
+        r.nodeName = QStringLiteral("batchNode%1").arg(i);
+        r.passed = (i % 3) != 0;
+        r.value = QString::number(i * 1.5);
+        batch.append(r);
+    }
+    QVERIFY2(db->saveInspectionResults(batch), "批量写入失败");
+
+    // 用宽窗口查询避开时区/格式边界（与其它用例一致），再按流程名过滤
+    const QList<InspectionRecord> rows =
+        db->queryResults(QDateTime::currentDateTime().addYears(-1),
+                         QDateTime::currentDateTime().addDays(1),
+                         1000);
+    int found = 0;
+    for (const InspectionRecord &r : rows) {
+        if (r.flowName == QStringLiteral("batchFlow")) {
+            ++found;
+        }
+    }
+    QCOMPARE(found, 30);
 }
 
 QTEST_MAIN(DatabaseTest)

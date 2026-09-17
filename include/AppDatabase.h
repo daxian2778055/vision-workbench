@@ -62,6 +62,12 @@ public:
     // ---- \u68C0\u6D4B\u7ED3\u679C ----
     bool saveInspectionResult(const QString &flowName, const QString &nodeName,
                               bool passed, const QString &value);
+    /// 批量写入检测结果：整批在**同一个事务**内提交。
+    /// 为什么需要它：SQLite 每次自动提交都是一次真实的写事务（WAL 下要写帧、可能触发检查点），
+    /// 而连续模式下一轮里每个节点都会写一条记录（40 节点 = 40 次提交/轮），这是主要的固定开销；
+    /// 同一轮的结果本就是一次逻辑写入，合并成一个事务既省开销，语义也更合理。
+    /// 空列表直接返回 true（不产生任何事务）。
+    bool saveInspectionResults(const QList<InspectionRecord> &records);
     QList<InspectionRecord> queryResults(const QDateTime &from, const QDateTime &to,
                                          int limit = 500) const;
 
