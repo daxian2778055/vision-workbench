@@ -16,6 +16,7 @@ void OpencvBlobNode::init()
     HalconNode::init();
     addOutputPort(QStringLiteral("标记图"), PortDataType::Image);
     addOutputPort(QStringLiteral("Blob数量"), PortDataType::Number);
+    addOutputPort(QStringLiteral("面积"), PortDataType::Number);   // 🥇 暴露最大Blob面积端口（替代被禁的 HALCON AreaNode）
     registerParams({
         makeIntParam(QStringLiteral("minArea"), 0, 0, 1000000,
                      QStringLiteral("最小面积过滤")),
@@ -96,6 +97,11 @@ void OpencvBlobNode::run(bool /*autoSwitch*/)
         auto numObj = QSharedPointer<DataObject>::create();
         numObj->setValue(double(validCount));
         setOutputData(2, numObj);
+
+        // 🥇 面积端口：输出最大 Blob 的面积（像素）
+        auto areaObj = QSharedPointer<DataObject>::create();
+        areaObj->setValue(maxBlobArea);
+        setOutputData(3, areaObj);
     } catch (const std::exception &e) {
         VFP_DEBUG << "OpencvBlobNode error:" << e.what();
         m_params["moduleStatus"] = false;

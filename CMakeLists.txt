@@ -77,6 +77,7 @@ set(SOURCES
     src/OpencvUtil.cpp
     src/OpencvThresholdNode.cpp
     src/OpencvAdaptiveThresholdNode.cpp
+    src/OpencvAngleNode.cpp
     src/OpencvCropNode.cpp
     src/OpencvImageArithNode.cpp
     src/OpencvRotateNode.cpp
@@ -263,6 +264,7 @@ set(HEADERS
     include/OpencvUtil.h
     include/OpencvThresholdNode.h
     include/OpencvAdaptiveThresholdNode.h
+    include/OpencvAngleNode.h
     include/OpencvCropNode.h
     include/OpencvImageArithNode.h
     include/OpencvRotateNode.h
@@ -708,6 +710,13 @@ if(MSVC)
     add_test(NAME OpencvSerializationTest COMMAND opencv_serialization_test)
 endif()
 
+# OpenCV 角度/面积测量功能测试（🥇：角度几何计算 + Blob 面积端口）
+if(MSVC)
+    add_executable(opencv_angle_area_test tests/opencv_angle_area_test.cpp)
+    target_link_libraries(opencv_angle_area_test PRIVATE vfp_core Qt6::Test)
+    add_test(NAME OpencvAngleAreaTest COMMAND opencv_angle_area_test)
+endif()
+
 # 集成测试 - 测试多算子组合的流程执行
 if(MSVC)
     add_executable(integration_test tests/integration_test.cpp)
@@ -811,7 +820,7 @@ endif()
 if(MSVC)
     set(VFP_DEPLOY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/dist/VisionFlowPlatform")
     set(VFP_TESTS NodeCoreTest OpencvSerializationTest IntegrationTest DatabaseTest PerfTest
-                  ScriptSecurityPolicyTest CommWritebackTest)
+                  ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
         # path_list_prepend 由 CMake 负责插入并处理平台路径分隔符，避免在
         # ENVIRONMENT 值里嵌套分号导致列表被错误拆分

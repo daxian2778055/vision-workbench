@@ -18,6 +18,7 @@
 #include "OpencvFitLineNode.h"
 #include "OpencvFitCircleNode.h"
 #include "OpencvCaliperNode.h"
+#include "OpencvAngleNode.h"
 #include "OpencvTemplateMatchNode.h"
 #include "OpencvCalibNode.h"
 #include "OpencvQrNode.h"
@@ -60,6 +61,7 @@ private slots:
     void testFitLineSerialization();
     void testFitCircleSerialization();
     void testCaliperSerialization();
+    void testAngleSerialization();
 
     // OpenCV 模板匹配节点序列化测试
     void testTemplateMatchSerialization();
@@ -276,6 +278,20 @@ void OpencvSerializationTest::testCaliperSerialization()
     params["caliperLength"] = 100;
     params["edgeThreshold"] = 25;
     verifySerialization<OpencvCaliperNode>("OpenCV卡尺测量", params);
+}
+
+void OpencvSerializationTest::testAngleSerialization()
+{
+    QVariantMap params;
+    params["r1a"] = 100.0;
+    params["c1a"] = 100.0;
+    params["r1b"] = 200.0;
+    params["c1b"] = 100.0;
+    params["r2a"] = 100.0;
+    params["c2a"] = 100.0;
+    params["r2b"] = 100.0;
+    params["c2b"] = 200.0;
+    verifySerialization<OpencvAngleNode>("OpenCV角度测量", params);
 }
 
 // ==================== OpenCV 模板匹配节点 ====================

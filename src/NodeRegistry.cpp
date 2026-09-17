@@ -73,6 +73,7 @@
 #include "SortNode.h"
 #include "OpencvThresholdNode.h"
 #include "OpencvAdaptiveThresholdNode.h"
+#include "OpencvAngleNode.h"
 #include "OpencvCropNode.h"
 #include "OpencvImageArithNode.h"
 #include "OpencvRotateNode.h"
@@ -209,6 +210,9 @@ void registerAllNodes()
             NodeBase::SHAPE_ANALYSIS, "\u7279\u5F81\u5B9A\u4F4D");
     VFP_REG(OpencvCaliperNode,    "OpencvCaliperNode",    "卡尺测量", "Caliper",
             NodeBase::SHAPE_ANALYSIS, "\u51E0\u4F55\u6D4B\u91CF");
+    // 🥇 角度测量：替代替换版环境下被禁用的 HALCON AngleMeasureNode（纯几何，无 HALCON 区域链路）
+    VFP_REG(OpencvAngleNode,      "OpencvAngleNode",      "角度测量", "Angle Measure",
+            NodeBase::MEASUREMENT, "\u51E0\u4F55\u6D4B\u91CF");
     VFP_REG(OpencvTrainClassifierNode, "OpencvTrainClassifierNode", "分类器训练", "Classifier Train",
             NodeBase::IMAGE_PROCESSING, "\u6DF1\u5EA6\u5B66\u4E60");
     VFP_REG(OpencvClassifyNode,       "OpencvClassifyNode",       "分类推理", "Classify",
@@ -390,6 +394,8 @@ void registerAllNodes()
                  {QStringLiteral("OpenCV缺陷检测"), QStringLiteral("OpenCV Defect")});
     r.addAliases(QStringLiteral("OpencvCaliperNode"),
                  {QStringLiteral("OpenCV卡尺测量"), QStringLiteral("OpenCV Caliper")});
+    r.addAliases(QStringLiteral("OpencvAngleNode"),
+                 {QStringLiteral("OpenCV角度测量"), QStringLiteral("OpenCV Angle Measure")});
     r.addAliases(QStringLiteral("OpencvTrainClassifierNode"),
                  {QStringLiteral("OpenCV分类器训练"), QStringLiteral("OpenCV Classifier Train")});
     r.addAliases(QStringLiteral("OpencvClassifyNode"),
