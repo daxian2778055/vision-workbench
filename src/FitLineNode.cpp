@@ -47,6 +47,33 @@ void FitLineNode::run(bool /*autoSwitch*/)
             gray = input;
         }
 
+        // ROI：只在用户拖出的矩形内找区域（宽或高为 0 = 全图，与原行为一致）。
+        // 先与图像求交再交给 HALCON，避免越界矩形触发异常；两个端点都加回偏移
+        // （见下面 lineRow1..lineCol2）——角度由两点之差决定，平移不改变它。
+        int roiOffsetRow = 0;
+        int roiOffsetCol = 0;
+        {
+            const int roiRow = m_params.value(QStringLiteral("roiRow"), 0).toInt();
+            const int roiCol = m_params.value(QStringLiteral("roiCol"), 0).toInt();
+            const int roiW = m_params.value(QStringLiteral("roiWidth"), 0).toInt();
+            const int roiH = m_params.value(QStringLiteral("roiHeight"), 0).toInt();
+            if (roiW > 0 && roiH > 0) {
+                const int imgW = gray.Width().I();
+                const int imgH = gray.Height().I();
+                const int r1 = qBound(0, roiRow, imgH);
+                const int c1 = qBound(0, roiCol, imgW);
+                const int r2 = qBound(0, roiRow + roiH, imgH);
+                const int c2 = qBound(0, roiCol + roiW, imgW);
+                if (r2 > r1 && c2 > c1) {
+                    HImage cropped;
+                    CropRectangle1(gray, &cropped, r1, c1, r2, c2);
+                    gray = cropped;
+                    roiOffsetRow = r1;
+                    roiOffsetCol = c1;
+                }
+            }
+        }
+
         const int minG = m_params.value(QStringLiteral("minGray"), 128).toInt();
         const int maxG = m_params.value(QStringLiteral("maxGray"), 255).toInt();
         HObject region, connected, selected;
@@ -72,23 +99,28 @@ void FitLineNode::run(bool /*autoSwitch*/)
                             &nr, &nc, &dist);
 
             if (rowBegin.Length() > 0) {
-                m_params[QStringLiteral("lineRow1")] = rowBegin[0].D();
-                m_params[QStringLiteral("lineCol1")] = colBegin[0].D();
-                m_params[QStringLiteral("lineRow2")] = rowEnd[0].D();
-                m_params[QStringLiteral("lineCol2")] = colEnd[0].D();
+                // 两个端点都加回 ROI 偏移：对外始终是整图坐标。
+                // 角度写成两平移后端点之差——与原始表达式数值完全一致（平移相互抵消）。
+                const double r1 = rowBegin[0].D() + roiOffsetRow;
+                const double c1 = colBegin[0].D() + roiOffsetCol;
+                const double r2 = rowEnd[0].D() + roiOffsetRow;
+                const double c2 = colEnd[0].D() + roiOffsetCol;
+
+                m_params[QStringLiteral("lineRow1")] = r1;
+                m_params[QStringLiteral("lineCol1")] = c1;
+                m_params[QStringLiteral("lineRow2")] = r2;
+                m_params[QStringLiteral("lineCol2")] = c2;
 
                 // 输出拟合直线到 Measure 端口
                 MeasureResult res;
                 res.type = QStringLiteral("line");
                 res.valueName = QStringLiteral("直线参数");
                 res.valid = true;
-                res.point1 = QPointF(colBegin[0].D(), rowBegin[0].D());
-                res.point2 = QPointF(colEnd[0].D(), rowEnd[0].D());
-                double ang = std::atan2(rowEnd[0].D() - rowBegin[0].D(),
-                                        colEnd[0].D() - colBegin[0].D());
+                res.point1 = QPointF(c1, r1);
+                res.point2 = QPointF(c2, r2);
+                double ang = std::atan2(r2 - r1, c2 - c1);
                 res.value = ang * 180.0 / 3.14159265358979323846;
-                res.extraValues = QVector<double>({rowBegin[0].D(), colBegin[0].D(),
-                                                   rowEnd[0].D(), colEnd[0].D()});
+                res.extraValues = QVector<double>({r1, c1, r2, c2});
                 auto resObj = QSharedPointer<DataObject>::create();
                 resObj->setMeasureResult(res);
                 setOutputData(1, resObj);
@@ -115,6 +147,41 @@ void FitLineNode::run(bool /*autoSwitch*/)
         m_params["moduleStatus"] = false;
         m_outputImage.Clear();
     }
+}
+
+RoiShape FitLineNode::geometryRoi() const
+{
+    RoiShape s;
+    const int w = m_params.value(QStringLiteral("roiWidth"), 0).toInt();
+    const int h = m_params.value(QStringLiteral("roiHeight"), 0).toInt();
+    if (w <= 0 || h <= 0) {
+        return s;   // 未设置 ROI：不显示框（type 保持默认 None）
+    }
+    s.type = RoiType::Rect;
+    s.p1 = QPointF(m_params.value(QStringLiteral("roiCol"), 0).toInt(),
+                   m_params.value(QStringLiteral("roiRow"), 0).toInt());
+    s.p2 = QPointF(s.p1.x() + w, s.p1.y() + h);
+    return s;
+}
+
+void FitLineNode::applyGeometryRoi(const RoiShape &shape)
+{
+    // 「清除几何」传进来的是默认构造的 RoiShape（type=None）→ 回到全图
+    if (shape.type == RoiType::None) {
+        setParam(QStringLiteral("roiRow"), 0);
+        setParam(QStringLiteral("roiCol"), 0);
+        setParam(QStringLiteral("roiWidth"), 0);
+        setParam(QStringLiteral("roiHeight"), 0);
+        return;
+    }
+    if (shape.type != RoiType::Rect) {
+        return;
+    }
+    const QRectF r = QRectF(shape.p1, shape.p2).normalized();
+    setParam(QStringLiteral("roiCol"), qRound(r.left()));
+    setParam(QStringLiteral("roiRow"), qRound(r.top()));
+    setParam(QStringLiteral("roiWidth"), qRound(r.width()));
+    setParam(QStringLiteral("roiHeight"), qRound(r.height()));
 }
 
 QWidget *FitLineNode::createParamPanel()
