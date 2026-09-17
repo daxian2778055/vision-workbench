@@ -75,6 +75,7 @@
 #include "OpencvAdaptiveThresholdNode.h"
 #include "OpencvAngleNode.h"
 #include "DnnDetectNode.h"
+#include "CameraIoNode.h"
 #include "OpencvCropNode.h"
 #include "OpencvImageArithNode.h"
 #include "OpencvRotateNode.h"
@@ -223,6 +224,10 @@ void registerAllNodes()
     // 🥈 目标检测：替代替换版环境下被禁用的 HALCON 区域检测（FR13.3 / G-P0-1）
     VFP_REG(DnnDetectNode,            "DnnDetectNode",            "ONNX目标检测", "ONNX DNN Detect",
             NodeBase::IMAGE_PROCESSING, "\u6DF1\u5EA6\u5B66\u4E60");
+    // 🥉 相机 IO 控制：对标 VM 4.4 IO 控制（FR16.12），收敛为"仅相机 IO"
+    // （经 GlobalCameraManager 走海康 MVS GenICam LineSelector/LineMode/LineStatus）
+    VFP_REG(CameraIoNode,             "CameraIoNode",             "相机IO控制", "Camera IO Control",
+            NodeBase::OUTPUT, "\u76F8\u673A IO");
     VFP_REG(OpencvCalibNode,      "OpencvCalibNode",      "相机标定", "Camera Calibration",
             NodeBase::SHAPE_ANALYSIS, "\u6807\u5B9A");
     VFP_REG(OpencvQrNode,         "OpencvQrNode",         "二维码解码", "QR Decode",
@@ -402,6 +407,9 @@ void registerAllNodes()
                  {QStringLiteral("OpenCV角度测量"), QStringLiteral("OpenCV Angle Measure")});
     r.addAliases(QStringLiteral("DnnDetectNode"),
                  {QStringLiteral("OpenCV目标检测"), QStringLiteral("OpenCV YOLO"), QStringLiteral("ONNX检测")});
+    r.addAliases(QStringLiteral("CameraIoNode"),
+                 {QStringLiteral("相机IO"), QStringLiteral("相机数字IO"), QStringLiteral("Camera IO"),
+                  QStringLiteral("相机触发输出"), QStringLiteral("相机频闪")});
     r.addAliases(QStringLiteral("OpencvTrainClassifierNode"),
                  {QStringLiteral("OpenCV分类器训练"), QStringLiteral("OpenCV Classifier Train")});
     r.addAliases(QStringLiteral("OpencvClassifyNode"),

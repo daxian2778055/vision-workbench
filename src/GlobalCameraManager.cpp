@@ -446,6 +446,90 @@ void* GlobalCameraManager::getCameraHandle(const QString &cameraName)
     return nullptr;
 }
 
+bool GlobalCameraManager::setCameraLineMode(const QString &cameraName, int lineIndex, int mode)
+{
+    void *hCamera = nullptr;
+    {
+        QMutexLocker locker(&m_mutex);
+        if (m_cameraHandles.contains(cameraName))
+            hCamera = m_cameraHandles[cameraName];
+    }
+    if (!hCamera) {
+        VFP_DEBUG << "setCameraLineMode 失败：相机未打开/未找到" << cameraName;
+        return false;
+    }
+    // 线方向：GenICam LineMode 枚举 Input=0 / Output=1
+    int nRet = MV_CC_SetEnumValue(hCamera, "LineSelector", static_cast<unsigned int>(lineIndex));
+    if (nRet != MV_OK) {
+        VFP_DEBUG << "setCameraLineMode LineSelector 失败，错误码:" << nRet;
+        return false;
+    }
+    nRet = MV_CC_SetEnumValue(hCamera, "LineMode", static_cast<unsigned int>(mode));
+    if (nRet != MV_OK) {
+        VFP_DEBUG << "setCameraLineMode LineMode 失败，错误码:" << nRet;
+        return false;
+    }
+    return true;
+}
+
+bool GlobalCameraManager::setCameraLineValue(const QString &cameraName, int lineIndex, bool value)
+{
+    void *hCamera = nullptr;
+    {
+        QMutexLocker locker(&m_mutex);
+        if (m_cameraHandles.contains(cameraName))
+            hCamera = m_cameraHandles[cameraName];
+    }
+    if (!hCamera) {
+        VFP_DEBUG << "setCameraLineValue 失败：相机未打开/未找到" << cameraName;
+        return false;
+    }
+    int nRet = MV_CC_SetEnumValue(hCamera, "LineSelector", static_cast<unsigned int>(lineIndex));
+    if (nRet != MV_OK) {
+        VFP_DEBUG << "setCameraLineValue LineSelector 失败，错误码:" << nRet;
+        return false;
+    }
+    // 写入前确保该线为输出方向，避免对输入线误写
+    nRet = MV_CC_SetEnumValue(hCamera, "LineMode", 1);
+    if (nRet != MV_OK) {
+        VFP_DEBUG << "setCameraLineValue LineMode 失败，错误码:" << nRet;
+        return false;
+    }
+    nRet = MV_CC_SetBoolValue(hCamera, "LineStatus", value ? true : false);
+    if (nRet != MV_OK) {
+        VFP_DEBUG << "setCameraLineValue LineStatus 失败，错误码:" << nRet;
+        return false;
+    }
+    return true;
+}
+
+bool GlobalCameraManager::getCameraLineValue(const QString &cameraName, int lineIndex, bool &value)
+{
+    void *hCamera = nullptr;
+    {
+        QMutexLocker locker(&m_mutex);
+        if (m_cameraHandles.contains(cameraName))
+            hCamera = m_cameraHandles[cameraName];
+    }
+    if (!hCamera) {
+        VFP_DEBUG << "getCameraLineValue 失败：相机未打开/未找到" << cameraName;
+        return false;
+    }
+    int nRet = MV_CC_SetEnumValue(hCamera, "LineSelector", static_cast<unsigned int>(lineIndex));
+    if (nRet != MV_OK) {
+        VFP_DEBUG << "getCameraLineValue LineSelector 失败，错误码:" << nRet;
+        return false;
+    }
+    bool b = false;
+    nRet = MV_CC_GetBoolValue(hCamera, "LineStatus", &b);
+    if (nRet != MV_OK) {
+        VFP_DEBUG << "getCameraLineValue LineStatus 失败，错误码:" << nRet;
+        return false;
+    }
+    value = b;
+    return true;
+}
+
 bool GlobalCameraManager::openCamera(const QString &cameraName)
 {
     QString deviceName;

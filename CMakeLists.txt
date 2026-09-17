@@ -94,6 +94,7 @@ set(SOURCES
     src/OpencvClassifyNode.cpp
     src/DnnInferNode.cpp
     src/DnnDetectNode.cpp
+    src/CameraIoNode.cpp
     src/DeepOcrNode.cpp
     src/OpencvTrackNode.cpp
     src/OpencvCalibNode.cpp
@@ -286,6 +287,7 @@ set(HEADERS
     include/OpencvTrackNode.h
     include/DnnInferNode.h
     include/DnnDetectNode.h
+    include/CameraIoNode.h
     include/OpencvCalibNode.h
     include/OpencvQrNode.h
     include/ZxingBarcodeNode.h
@@ -726,6 +728,13 @@ if(MSVC)
     add_test(NAME DnnDetectTest COMMAND dnn_detect_test)
 endif()
 
+# 相机 IO 控制功能测试（🥉：MVS 数字 IO 逻辑 + 序列化 + 缺相机降级）
+if(MSVC)
+    add_executable(camera_io_test tests/camera_io_test.cpp)
+    target_link_libraries(camera_io_test PRIVATE vfp_core Qt6::Test)
+    add_test(NAME CameraIoTest COMMAND camera_io_test)
+endif()
+
 # 集成测试 - 测试多算子组合的流程执行
 if(MSVC)
     add_executable(integration_test tests/integration_test.cpp)
@@ -829,7 +838,7 @@ endif()
 if(MSVC)
     set(VFP_DEPLOY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/dist/VisionFlowPlatform")
     set(VFP_TESTS NodeCoreTest OpencvSerializationTest IntegrationTest DatabaseTest PerfTest
-                  ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest)
+                  ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest CameraIoTest)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
         # path_list_prepend 由 CMake 负责插入并处理平台路径分隔符，避免在
         # ENVIRONMENT 值里嵌套分号导致列表被错误拆分

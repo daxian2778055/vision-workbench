@@ -95,6 +95,18 @@ public:
     // 获取相机句柄
     void* getCameraHandle(const QString &cameraName);
 
+    /// 相机数字 IO：设置某条 IO 线的方向（mode: 0=输入, 1=输出）。需相机已打开。
+    /// 走 MVS GenICam 特性 LineSelector / LineMode，返回是否成功。
+    bool setCameraLineMode(const QString &cameraName, int lineIndex, int mode);
+
+    /// 相机数字 IO：写入输出线状态（value=true/false）。内部确保该线为输出方向，
+    /// 走 LineSelector / LineMode(Output) / LineStatus。返回是否成功。
+    bool setCameraLineValue(const QString &cameraName, int lineIndex, bool value);
+
+    /// 相机数字 IO：读取某条 IO 线状态（输入或输出回读），走 LineSelector / LineStatus。
+    /// 成功时 *value 被填充，返回是否成功（失败时不修改 *value）。
+    bool getCameraLineValue(const QString &cameraName, int lineIndex, bool &value);
+
     // 获取相机信息
     Camera getCamera(const QString &cameraName) const;
 
