@@ -99,6 +99,14 @@ public:
     /// 解释器隔离参数，例如 Python 返回 {"-I", "-E"}。
     QStringList interpreterFlags(const QString &language) const;
 
+    /// 解释器可执行文件路径（按语言）。默认空串 = 回落到命令名 "python"/"lua"（PATH 解析）。
+    /// 现场常有多套 Python（系统 / venv / 便携版）：显式指定可避免选错版本，
+    /// 也避免"当前目录优先"带来的隐患。
+    /// 【重要】所有启动路径与容器授权必须取本函数返回值（同一来源）：
+    /// 容器模式授权的是"哪个解释器"，启动的就必须是同一个，否则会以 0xC0000135 启动失败。
+    QString interpreterPath(const QString &language) const;
+    void setInterpreterPath(const QString &language, const QString &path);
+
     /// 当前进程是否以管理员（提权）身份运行。
     bool isElevated() const;
 
@@ -182,6 +190,8 @@ private:
     bool m_sandboxEnabled = false;
 #endif
     SandboxMode m_sandboxMode = SandboxMode::PrivilegeStripped;   // 沙箱强度（见上方 SandboxMode）
+    QString m_pythonPath;   // 解释器路径（空 = 用 PATH 中的 python，见 interpreterPath）
+    QString m_luaPath;      // 解释器路径（空 = 用 PATH 中的 lua）
     void *m_restrictedToken = nullptr;        // Windows HANDLE；非 Windows 恒为 nullptr
     mutable QMutex m_tokenMutex;              // 保护 m_restrictedToken 的创建与读取（多流程并发执行脚本）
 };

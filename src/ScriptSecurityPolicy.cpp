@@ -58,6 +58,9 @@ void ScriptSecurityPolicy::load()
     m_sandboxMode = (sandboxModeName.compare(QStringLiteral("appContainer"), Qt::CaseInsensitive) == 0)
                         ? SandboxMode::AppContainer
                         : SandboxMode::PrivilegeStripped;
+    // 解释器路径（空串 = 回落命令名，见 interpreterPath）
+    m_pythonPath = settings.value(QStringLiteral("interpreterPathPython"), m_pythonPath).toString();
+    m_luaPath = settings.value(QStringLiteral("interpreterPathLua"), m_luaPath).toString();
     settings.endGroup();
 }
 
@@ -79,7 +82,31 @@ void ScriptSecurityPolicy::save()
                       m_sandboxMode == SandboxMode::AppContainer
                           ? QStringLiteral("appContainer")
                           : QStringLiteral("privilegeStripped"));
+    settings.setValue(QStringLiteral("interpreterPathPython"), m_pythonPath);
+    settings.setValue(QStringLiteral("interpreterPathLua"), m_luaPath);
     settings.endGroup();
+}
+
+QString ScriptSecurityPolicy::interpreterPath(const QString &language) const
+{
+    const QString configured = (language == QStringLiteral("Python")) ? m_pythonPath : m_luaPath;
+    if (!configured.isEmpty()) {
+        return configured;
+    }
+    // 未配置：回落到命令名，与历史行为完全一致（由 PATH 解析）。
+    // 注意：现场多套 Python/venv 时应配置全路径——PATH 解析可能选错版本，
+    // 且"当前目录优先"在某些启动方式下存在被同目录同名可执行文件顶替的风险。
+    return (language == QStringLiteral("Python")) ? QStringLiteral("python") : QStringLiteral("lua");
+}
+
+void ScriptSecurityPolicy::setInterpreterPath(const QString &language, const QString &path)
+{
+    const QString trimmed = path.trimmed();
+    if (language == QStringLiteral("Python")) {
+        m_pythonPath = trimmed;
+    } else {
+        m_luaPath = trimmed;
+    }
 }
 
 bool ScriptSecurityPolicy::evaluate(const QString &language, const QString & /*script*/, QString &reason) const

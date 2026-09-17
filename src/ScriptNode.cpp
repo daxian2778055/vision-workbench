@@ -156,7 +156,7 @@ QString ScriptNode::executePythonScript(const QString &script, const QStringList
         QString runError;
         int exitCode = -1;
         const bool ok = policy.runWithRestrictedToken(
-            QStringLiteral("python"), restrictedArgs, policy.maxExecutionMs(),
+            policy.interpreterPath(QStringLiteral("Python")), restrictedArgs, policy.maxExecutionMs(),
             [this]() {
                 FlowExecutor *exec = ownerExecutor();
                 return exec && exec->getState() == ExecutionState::Stopped;
@@ -183,7 +183,7 @@ QString ScriptNode::executePythonScript(const QString &script, const QStringList
 
     process.setProcessEnvironment(policy.buildEnvironment());
     policy.applyProcessSandbox(&process);
-    process.start(QStringLiteral("python"), processArgs);
+    process.start(policy.interpreterPath(QStringLiteral("Python")), processArgs);
     if (!process.waitForStarted(5000)) {
         m_lastRunFailed = true;
         return QStringLiteral("Python \u672A\u627E\u5230\u6216\u65E0\u6CD5\u542F\u52A0");
@@ -250,7 +250,7 @@ QString ScriptNode::executeLuaScript(const QString &script, const QStringList &a
         QString runError;
         int exitCode = -1;
         const bool ok = policy.runWithRestrictedToken(
-            QStringLiteral("lua"), restrictedArgs, policy.maxExecutionMs(),
+            policy.interpreterPath(QStringLiteral("Lua")), restrictedArgs, policy.maxExecutionMs(),
             [this]() {
                 FlowExecutor *exec = ownerExecutor();
                 return exec && exec->getState() == ExecutionState::Stopped;
@@ -276,7 +276,7 @@ QString ScriptNode::executeLuaScript(const QString &script, const QStringList &a
 
     process.setProcessEnvironment(policy.buildEnvironment());
     policy.applyProcessSandbox(&process);
-    process.start(QStringLiteral("lua"), processArgs);
+    process.start(policy.interpreterPath(QStringLiteral("Lua")), processArgs);
     if (!process.waitForStarted(5000)) {
         m_lastRunFailed = true;
         return QStringLiteral("Lua \u672A\u627E\u5230\u6216\u65E0\u6CD5\u542F\u52A8");
@@ -381,7 +381,7 @@ QWidget *ScriptNode::createParamPanel()
             QMessageBox::warning(prepareBtn, QStringLiteral("准备容器沙箱失败"), error);
             return;
         }
-        if (!ScriptSecurityPolicy::grantInterpreterAccess(QStringLiteral("python"), &error)) {
+        if (!ScriptSecurityPolicy::grantInterpreterAccess(policy.interpreterPath(QStringLiteral("Python")), &error)) {
             QMessageBox::warning(prepareBtn, QStringLiteral("准备容器沙箱失败"), error);
             return;
         }
@@ -398,6 +398,28 @@ QWidget *ScriptNode::createParamPanel()
                 .arg(ScriptSecurityPolicy::appContainerSid()));
     });
     layout->addWidget(prepareBtn);
+
+    // 解释器路径（全局设置，按语言）：现场多套 Python/venv（系统/虚拟环境/便携版）时显式指定，
+    // 避免按 PATH 解析选错版本；留空 = 使用 PATH 中的 python（历史行为）。
+    // 注意：容器授权的是"哪个解释器目录"，与这里启动的解释器必须同源——改完路径后
+    // 建议重新点一次「准备容器沙箱」。
+    auto *interpRow = new QHBoxLayout();
+    auto *interpEdit = new QLineEdit();
+    interpEdit->setObjectName(QStringLiteral("scriptInterpreterPath"));
+    interpEdit->setPlaceholderText(QStringLiteral("留空 = 使用 PATH 中的 python"));
+    interpEdit->setText(ScriptSecurityPolicy::instance().interpreterPath(QStringLiteral("Python")));
+    interpEdit->setToolTip(QStringLiteral("解释器可执行文件全路径，例如 C:\\Python314\\python.exe。\n"
+                                          "留空则按 PATH 解析 python。\n"
+                                          "沙箱（含 AppContainer 授权）与启动都使用这里的值；\n"
+                                          "改动后请重新点一次「准备容器沙箱」，让授权对象同步。"));
+    interpRow->addWidget(interpEdit, 1);
+    layout->addWidget(new QLabel(QStringLiteral("解释器路径:")));
+    layout->addLayout(interpRow);
+    connect(interpEdit, &QLineEdit::editingFinished, this, [interpEdit]() {
+        auto &policy = ScriptSecurityPolicy::instance();
+        policy.setInterpreterPath(QStringLiteral("Python"), interpEdit->text());
+        policy.save();
+    });
 
     // Language selection
     auto *langCombo = new QComboBox();

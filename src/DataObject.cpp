@@ -52,8 +52,10 @@ void DataObject::setHImage(const HalconCpp::HImage &image)
     // 复制新的HImage对象
     m_hImage = image;
     m_type = DataType::Image;
-    // 同时更新m_data成员变量
-    m_data = QVariant::fromValue(image);
+    // 这里**不再**额外写一份 m_data = QVariant::fromValue(image)：
+    // 全仓读图像一律走 getHImage()，没有任何 getData().value<HImage>() 的读取者
+    // （已用 grep 核实），那份 QVariant 只是每次赋值多一次元类型拷贝与堆分配。
+    // m_data 仍继续承担数值/字符串/Bool/MeasureResult/Point 等非图像类型。
 }
 
 HalconCpp::HObject DataObject::getHObject() const

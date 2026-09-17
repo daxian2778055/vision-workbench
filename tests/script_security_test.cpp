@@ -30,6 +30,7 @@ private slots:
     void toggleOff_blocksEverything();
     void sandbox_disabled_isNoOp();
     void sandboxMode_persistsAcrossLoad();
+    void interpreterPath_persistsAndFallsBack();
 };
 
 void ScriptSecurityPolicyTest::initTestCase()
@@ -166,6 +167,33 @@ void ScriptSecurityPolicyTest::sandboxMode_persistsAcrossLoad()
     p.save();
     p.load();
     QVERIFY(p.sandboxMode() == originalMode);
+}
+
+void ScriptSecurityPolicyTest::interpreterPath_persistsAndFallsBack()
+{
+    // 解释器路径：现场常有多套 Python/venv，必须能显式指定并跨进程记住；
+    // 未配置时要回落到命令名（与历史行为一致，保证向后兼容）。
+    ScriptSecurityPolicy &p = ScriptSecurityPolicy::instance();
+    const QString original = p.interpreterPath(QStringLiteral("Python"));
+
+    // ① 未配置 → 回落命令名
+    p.setInterpreterPath(QStringLiteral("Python"), QString());
+    QCOMPARE(p.interpreterPath(QStringLiteral("Python")), QStringLiteral("python"));
+
+    // ② 显式路径 → save/load 往返保持（跨进程生效）
+    p.setInterpreterPath(QStringLiteral("Python"), QStringLiteral("C:/Python314/python.exe"));
+    p.save();
+    p.setInterpreterPath(QStringLiteral("Python"), QString());
+    p.load();
+    QCOMPARE(p.interpreterPath(QStringLiteral("Python")), QStringLiteral("C:/Python314/python.exe"));
+
+    // ③ 前后空格要清理（从资源管理器复制路径时常见）
+    p.setInterpreterPath(QStringLiteral("Python"), QStringLiteral("  C:/x/python.exe  "));
+    QCOMPARE(p.interpreterPath(QStringLiteral("Python")), QStringLiteral("C:/x/python.exe"));
+
+    // 恢复现场（值 + 落盘）
+    p.setInterpreterPath(QStringLiteral("Python"), original);
+    p.save();
 }
 
 QTEST_GUILESS_MAIN(ScriptSecurityPolicyTest)
