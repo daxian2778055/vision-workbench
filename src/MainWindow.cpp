@@ -846,6 +846,19 @@ void MainWindow::initActions()
     ui->actionStartExecution->setShortcut(QKeySequence(Qt::Key_F5));  // F5 运行
     ui->actionStopExecution->setShortcut(QKeySequence(Qt::SHIFT | Qt::Key_F5)); // Shift+F5 停止
 
+    // 添加/删除流程：Ctrl+T 快捷键 + 流程标签栏右上角「＋」按钮。
+    // 此前入口只有「编辑」菜单里的英文项 "Add Flow"，中文界面下很难发现。
+    ui->actionAddFlow->setShortcut(QKeySequence(QStringLiteral("Ctrl+T")));
+    ui->actionDeleteFlow->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+T")));
+    {
+        auto *addFlowBtn = new QToolButton(ui->flowTabs);
+        addFlowBtn->setText(QStringLiteral("＋ 新流程"));
+        addFlowBtn->setToolTip(QStringLiteral("添加新流程（Ctrl+T）"));
+        addFlowBtn->setAutoRaise(true);
+        connect(addFlowBtn, &QToolButton::clicked, this, &MainWindow::onAddFlowTab);
+        ui->flowTabs->setCornerWidget(addFlowBtn, Qt::TopRightCorner);
+    }
+
     // 撤销/重做（Ctrl+Z / Ctrl+Y，作用于当前流程标签页）
     auto currentScene = [this]() -> FlowScene * {
         const int idx = ui->flowTabs->currentIndex();
