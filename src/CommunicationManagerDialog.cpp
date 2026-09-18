@@ -283,7 +283,8 @@ void CommunicationManagerDialog::onAddDevice()
         QStringLiteral("TCP"),
         QStringLiteral("\u4E32\u53E3"),
         QStringLiteral("Modbus"),
-        QStringLiteral("PLC")
+        QStringLiteral("PLC"),
+        QStringLiteral("UDP")
     };
 
     bool ok = false;
@@ -332,6 +333,20 @@ void CommunicationManagerDialog::onAddDevice()
         dlg.setConfig(config);
         if (dlg.exec() != QDialog::Accepted) return;
         config = dlg.config();
+    } else if (type == QStringLiteral("UDP")) {
+        int localPort = QInputDialog::getInt(this, QStringLiteral("UDP配置"),
+            QStringLiteral("本地接收端口(0=随机):"), 8000, 0, 65535, 1, &ok);
+        if (!ok) return;
+        QString ip = QInputDialog::getText(this, QStringLiteral("UDP配置"),
+            QStringLiteral("目标IP(留空=仅接收):"), QLineEdit::Normal,
+            QStringLiteral("127.0.0.1"), &ok);
+        if (!ok) return;
+        int rport = QInputDialog::getInt(this, QStringLiteral("UDP配置"),
+            QStringLiteral("目标端口:"), 8000, 1, 65535, 1, &ok);
+        if (!ok) return;
+        config[QStringLiteral("localPort")] = localPort;
+        config[QStringLiteral("remoteIp")] = ip.trimmed();
+        config[QStringLiteral("remotePort")] = rport;
     } else if (type == QStringLiteral("PLC")) {
         PlcConfigDialog dlg(QStringLiteral("PLC\u914D\u7F6E - %1").arg(name), nullptr, this);
         dlg.setConfig(config);
@@ -393,6 +408,26 @@ void CommunicationManagerDialog::onConfigDevice()
             cm->addDevice(name, info.type, newConfig);
             // 移除旧的 + 重新创建设备节点
         }
+    } else if (info.type == QStringLiteral("UDP")) {
+        bool ok = false;
+        int localPort = QInputDialog::getInt(this, QStringLiteral("UDP配置"),
+            QStringLiteral("本地接收端口(0=随机):"),
+            info.config.value(QStringLiteral("localPort")).toInt(8000), 0, 65535, 1, &ok);
+        if (!ok) { refreshDeviceTable(); return; }
+        QString ip = QInputDialog::getText(this, QStringLiteral("UDP配置"),
+            QStringLiteral("目标IP(留空=仅接收):"), QLineEdit::Normal,
+            info.config.value(QStringLiteral("remoteIp")).toString(QStringLiteral("127.0.0.1")), &ok);
+        if (!ok) { refreshDeviceTable(); return; }
+        int rport = QInputDialog::getInt(this, QStringLiteral("UDP配置"),
+            QStringLiteral("目标端口:"),
+            info.config.value(QStringLiteral("remotePort")).toInt(8000), 1, 65535, 1, &ok);
+        if (!ok) { refreshDeviceTable(); return; }
+        QJsonObject newConfig;
+        newConfig[QStringLiteral("localPort")] = localPort;
+        newConfig[QStringLiteral("remoteIp")] = ip.trimmed();
+        newConfig[QStringLiteral("remotePort")] = rport;
+        cm->removeDevice(name);
+        cm->addDevice(name, info.type, newConfig);
     } else if (info.type == QStringLiteral("PLC")) {
         auto *plcNode = qobject_cast<PlcCommNode *>(cm->deviceNode(name));
         PlcConfigDialog dlg(QStringLiteral("PLC\u914D\u7F6E - %1").arg(name),
@@ -556,10 +591,23 @@ void CommunicationManagerDialog::onAddReceiveEvent()
     ReceiveEvent *ev = nullptr;
     if (type == types[0]) {
         auto *tev = new TextProtocolReceiveEvent(id.trimmed(), device, CommunicationManager::instance());
-        QString delim = QInputDialog::getText(this, QStringLiteral("\u5206\u9694\u7B26"),
-            QStringLiteral("\u534F\u8BAE\u5206\u9694\u7B26:"), QLineEdit::Normal,
-            QStringLiteral(","), &ok);
-        if (ok) tev->setDelimiter(delim);
+        QStringList modes = { QStringLiteral("分隔符拆分"), QStringLiteral("正则表达式") };
+        QString mode = QInputDialog::getItem(this, QStringLiteral("解析模式"),
+            QStringLiteral("文本解析模式:"), modes, 0, false, &ok);
+        if (!ok) return;
+        if (mode == modes[1]) {
+            QString re = QInputDialog::getText(this, QStringLiteral("正则表达式"),
+                QStringLiteral("正则(捕获组作为字段，如 (-?\\d+\\.?\\d*)):"), QLineEdit::Normal,
+                QStringLiteral("(-?\\d+\\.?\\d*)"), &ok);
+            if (!ok) return;
+            tev->setParseMode(TextProtocolReceiveEvent::Regex);
+            tev->setRegex(re.trimmed());
+        } else {
+            QString delim = QInputDialog::getText(this, QStringLiteral("\u5206\u9694\u7B26"),
+                QStringLiteral("\u534F\u8BAE\u5206\u9694\u7B26:"), QLineEdit::Normal,
+                QStringLiteral(","), &ok);
+            if (ok) tev->setDelimiter(delim);
+        }
         ev = tev;
     } else {
         auto *bev = new ByteMatchReceiveEvent(id.trimmed(), device, CommunicationManager::instance());
@@ -612,6 +660,15 @@ void CommunicationManagerDialog::setupSendEventTab(QTabWidget *tabs)
     auto *label = new QLabel(QStringLiteral("<b>\u53D1\u9001\u4E8B\u4EF6</b>"));
     label->setStyleSheet("font-size: 13px;");
     layout->addWidget(label);
+
+    auto *tmplInfo = new QLabel(QStringLiteral(
+        "发送事件把数据格式化为报文发给外部设备。\n"
+        "文本模板支持命名占位符：{模块号.参数名} / {global.变量名}，"
+        "例如 \"{1.结果},{global.计数}\"。\n"
+        "流程每轮结束会把本轮结果自动填入占位符后上报（对标 VM 的每轮上报）。"));
+    tmplInfo->setWordWrap(true);
+    tmplInfo->setStyleSheet("color: gray; font-size: 11px;");
+    layout->addWidget(tmplInfo);
 
     m_sendEventTable = new QTableWidget();
     m_sendEventTable->setColumnCount(4);

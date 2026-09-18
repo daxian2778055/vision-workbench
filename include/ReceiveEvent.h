@@ -44,16 +44,26 @@ protected:
     bool m_enabled = true;
 };
 
-/// 文本-协议解析：按分隔符拆分字符串
+/// 文本-协议解析：按分隔符拆分 / 按正则提取（对标 VM 4.4 文本解析的两种模式）
 class TextProtocolReceiveEvent : public ReceiveEvent
 {
     Q_OBJECT
 public:
+    enum ParseMode {
+        Delimiter = 0,   /// 按分隔符拆分（默认，兼容旧配置）
+        Regex     = 1    /// 按正则提取：有捕获组取各捕获组，无捕获组取整体匹配
+    };
+
     explicit TextProtocolReceiveEvent(const QString &id, const QString &deviceName,
                                       QObject *parent = nullptr);
 
     void setDelimiter(const QString &delim) { m_delimiter = delim; }
     QString delimiter() const { return m_delimiter; }
+
+    void setParseMode(ParseMode mode) { m_parseMode = mode; }
+    ParseMode parseMode() const { return m_parseMode; }
+    void setRegex(const QString &re) { m_regex = re; }
+    QString regex() const { return m_regex; }
 
     bool parse(const QByteArray &data, QList<QVariant> &fields) override;
 
@@ -62,6 +72,8 @@ public:
 
 private:
     QString m_delimiter = QStringLiteral(",");
+    ParseMode m_parseMode = Delimiter;
+    QString m_regex;
 };
 
 /// 字节匹配-协议组装：按字节规则匹配值变化

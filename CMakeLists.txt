@@ -168,6 +168,7 @@ set(SOURCES
     src/FitCircleNode.cpp
     src/CommunicationNodeBase.cpp
     src/SerialCommNode.cpp
+    src/UdpCommNode.cpp
     src/TcpCommNode.cpp
     src/ModbusNode.cpp
     src/ModbusConfigDialog.cpp
@@ -361,6 +362,7 @@ set(HEADERS
     include/FitCircleNode.h
     include/CommunicationNodeBase.h
     include/SerialCommNode.h
+    include/UdpCommNode.h
     include/TcpCommNode.h
     include/ModbusNode.h
     include/ModbusConfigDialog.h

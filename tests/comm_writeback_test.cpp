@@ -5,6 +5,7 @@
 #include <QSignalSpy>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QUdpSocket>
 #include <QJsonObject>
 #include <QTemporaryDir>
 
@@ -28,6 +29,7 @@
 #include "DynThresholdNode.h"
 #include "ReceiveEvent.h"
 #include "SendEvent.h"
+#include "CommunicationNodeBase.h"
 
 namespace {
 
@@ -72,6 +74,10 @@ private slots:
     void testRecipeSaveAndLoad();
     void testRoiParamRoundTrip();
     void testRecipeTypeMismatchSkipped();
+    // 对标 VM 4.4 通讯增强
+    void testMultiFieldTemplateWithInjectedData();
+    void testTextReceiveEventRegexParse();
+    void testUdpRoundTrip();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -832,6 +838,129 @@ void CommWritebackTest::testRecipeTypeMismatchSkipped()
 
     QVERIFY(rm->deleteRecipe(QStringLiteral("VFP_TYPE_RECIPE")));
     RecipeManager::setStoragePathOverride(QString());
+}
+
+void CommWritebackTest::testMultiFieldTemplateWithInjectedData()
+{
+    // 对标 VM 的"每轮上报结果"：文本模板的命名占位符 {模块号.参数名} / {global.变量名}
+    // 由每轮注入的 QVariantMap 填充（此前模板只能 {} 单个值，无法把多个结果拼成一条报文）
+    QTcpServer plc;
+    QByteArray received;
+    startSimulatedPlc(plc, received);
+    QVERIFY2(plc.isListening(), qPrintable(plc.errorString()));
+
+    auto *cm = CommunicationManager::instance();
+    QVERIFY(cm->addDevice(QStringLiteral("SIM_TMPL"), QStringLiteral("TCP"),
+                          tcpClientConfig(plc.serverPort())));
+    QVERIFY(cm->openDevice(QStringLiteral("SIM_TMPL")));
+
+    auto *ev = new TextDirectSendEvent(QStringLiteral("TMPL_MULTI"),
+                                       QStringLiteral("SIM_TMPL"), cm);
+    ev->setTemplate(QStringLiteral("{1.结果},{global.计数},{2.x}"));
+    ev->setSuffix(QStringLiteral("\r\n"));
+    QVERIFY(cm->addSendEvent(ev));
+
+    QVariantMap payload;
+    payload[QStringLiteral("1.结果")] = QStringLiteral("OK");
+    payload[QStringLiteral("global.计数")] = 42;
+    payload[QStringLiteral("2.x")] = 3.5;
+    QVERIFY2(cm->fireSendEvent(QStringLiteral("TMPL_MULTI"), payload), "多字段模板发送失败");
+    QTRY_VERIFY_WITH_TIMEOUT(received.contains("OK,42,3.5"), 3000);
+
+    // 未提供的占位符保留原样：便于现场一眼发现拼写错，而不是静默变空
+    received.clear();
+    ev->setTemplate(QStringLiteral("A{9.不存在}B"));
+    QVERIFY(cm->fireSendEvent(QStringLiteral("TMPL_MULTI"), payload));
+    QTRY_VERIFY_WITH_TIMEOUT(received.contains("A{9.不存在}B"), 3000);
+
+    cm->removeSendEvent(QStringLiteral("TMPL_MULTI"));
+    QVERIFY(cm->closeDevice(QStringLiteral("SIM_TMPL")));
+    QVERIFY(cm->removeDevice(QStringLiteral("SIM_TMPL")));
+}
+
+void CommWritebackTest::testTextReceiveEventRegexParse()
+{
+    // 正则解析模式（对标 VM 文本解析）：捕获组作为字段；无捕获组时整体匹配；不匹配不得虚报
+    TextProtocolReceiveEvent ev(QStringLiteral("EV_RE"), QStringLiteral("DEV"));
+    QVERIFY(ev.parseMode() == TextProtocolReceiveEvent::Delimiter);   // 默认保持旧行为
+    ev.setParseMode(TextProtocolReceiveEvent::Regex);
+    ev.setRegex(QStringLiteral("X(-?\\d+),Y(-?\\d+)"));
+
+    QList<QVariant> fields;
+    QVERIFY2(ev.parse(QByteArray("X12,Y-7\r\n"), fields), "正则应匹配");
+    QCOMPARE(fields.size(), 2);
+    QCOMPARE(fields[0].toString(), QStringLiteral("12"));
+    QCOMPARE(fields[1].toString(), QStringLiteral("-7"));
+
+    // 无捕获组 → 全局匹配，整体作为字段（一行多个数）
+    TextProtocolReceiveEvent ev2(QStringLiteral("EV_RE2"), QStringLiteral("DEV"));
+    ev2.setParseMode(TextProtocolReceiveEvent::Regex);
+    ev2.setRegex(QStringLiteral("-?\\d+\\.?\\d*"));
+    QList<QVariant> f2;
+    QVERIFY(ev2.parse(QByteArray("1.5 2.5 3"), f2));
+    QCOMPARE(f2.size(), 3);
+    QCOMPARE(f2[0].toString(), QStringLiteral("1.5"));
+
+    // 不匹配 → 不得发出事件
+    TextProtocolReceiveEvent ev3(QStringLiteral("EV_RE3"), QStringLiteral("DEV"));
+    ev3.setParseMode(TextProtocolReceiveEvent::Regex);
+    ev3.setRegex(QStringLiteral("NO_MATCH_(\\d+)"));
+    QList<QVariant> f3;
+    QVERIFY(!ev3.parse(QByteArray("hello"), f3));
+
+    // 非法正则 → false 而不是崩溃
+    TextProtocolReceiveEvent ev4(QStringLiteral("EV_RE4"), QStringLiteral("DEV"));
+    ev4.setParseMode(TextProtocolReceiveEvent::Regex);
+    ev4.setRegex(QStringLiteral("([unclosed"));
+    QList<QVariant> f4;
+    QVERIFY(!ev4.parse(QByteArray("x"), f4));
+
+    // 序列化往返：模式与表达式随方案保存
+    const QJsonObject j = ev.toJson();
+    QCOMPARE(j[QStringLiteral("parseMode")].toInt(),
+             int(TextProtocolReceiveEvent::Regex));
+    TextProtocolReceiveEvent back(QStringLiteral("EV_RE"), QStringLiteral("DEV"));
+    back.fromJson(j);
+    QVERIFY(back.parseMode() == TextProtocolReceiveEvent::Regex);
+    QCOMPARE(back.regex(), QStringLiteral("X(-?\\d+),Y(-?\\d+)"));
+}
+
+void CommWritebackTest::testUdpRoundTrip()
+{
+    // UDP 设备（对标 VM 4.4 UDP 通信）：发送到目标 + 从本地端口接收
+    const quint16 kUdpLocalPort = 15601;   // 高位端口，避开常见占用
+    QUdpSocket peer;
+    QVERIFY2(peer.bind(QHostAddress::LocalHost, 0), qPrintable(peer.errorString()));
+    const quint16 peerPort = peer.localPort();
+
+    auto *cm = CommunicationManager::instance();
+    QJsonObject cfg;
+    cfg[QStringLiteral("localPort")] = int(kUdpLocalPort);
+    cfg[QStringLiteral("remoteIp")] = QStringLiteral("127.0.0.1");
+    cfg[QStringLiteral("remotePort")] = int(peerPort);
+    QVERIFY2(cm->addDevice(QStringLiteral("SIM_UDP"), QStringLiteral("UDP"), cfg),
+             "addDevice(UDP) 失败");
+    QVERIFY2(cm->openDevice(QStringLiteral("SIM_UDP")), "UDP 绑定失败");
+
+    // ① 发送：平台 → 外部
+    QVERIFY2(cm->sendData(QStringLiteral("SIM_UDP"), QByteArray("UDP-HELLO")),
+             "UDP 发送投递失败");
+    QTRY_VERIFY_WITH_TIMEOUT(peer.hasPendingDatagrams(), 3000);
+    QByteArray got;
+    got.resize(int(peer.pendingDatagramSize()));
+    peer.readDatagram(got.data(), got.size());
+    QCOMPARE(got, QByteArray("UDP-HELLO"));
+
+    // ② 接收：外部 → 平台（节点的 dataReceived 必须真的触发）
+    auto *node = cm->deviceNode(QStringLiteral("SIM_UDP"));
+    QVERIFY(node != nullptr);
+    QSignalSpy rxSpy(node, &CommunicationNodeBase::dataReceived);
+    peer.writeDatagram(QByteArray("UDP-PING"), QHostAddress::LocalHost, kUdpLocalPort);
+    QTRY_VERIFY_WITH_TIMEOUT(rxSpy.count() >= 1, 3000);
+    QCOMPARE(rxSpy.at(0).at(0).toByteArray(), QByteArray("UDP-PING"));
+
+    QVERIFY(cm->closeDevice(QStringLiteral("SIM_UDP")));
+    QVERIFY(cm->removeDevice(QStringLiteral("SIM_UDP")));
 }
 
 // 必须用 QTEST_MAIN：流程用例要创建 FlowScene（QGraphicsScene），仅 QCoreApplication 会崩；

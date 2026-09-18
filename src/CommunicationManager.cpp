@@ -1,6 +1,7 @@
 #include "CommunicationManager.h"
 #include "CommunicationNodeBase.h"
 #include "SerialCommNode.h"
+#include "UdpCommNode.h"
 #include "TcpCommNode.h"
 #include "ModbusNode.h" // provides ModbusRegisterItem
 #include "PlcCommNode.h"
@@ -139,6 +140,16 @@ void CommunicationManager::createDeviceNode(const QString &name, const QString &
         if (config.contains(QStringLiteral("mode")))
             tcp->setParam(QStringLiteral("mode"), config[QStringLiteral("mode")].toString());
         node = tcp;
+    } else if (type == QStringLiteral("UDP")) {
+        UdpCommNode *udp = new UdpCommNode(this);
+        udp->init();
+        if (config.contains(QStringLiteral("localPort")))
+            udp->setParam(QStringLiteral("localPort"), config[QStringLiteral("localPort")].toInt());
+        if (config.contains(QStringLiteral("remoteIp")))
+            udp->setParam(QStringLiteral("remoteIp"), config[QStringLiteral("remoteIp")].toString());
+        if (config.contains(QStringLiteral("remotePort")))
+            udp->setParam(QStringLiteral("remotePort"), config[QStringLiteral("remotePort")].toInt());
+        node = udp;
     } else if (type == QStringLiteral("Modbus")) {
         ModbusNode *modbus = new ModbusNode(this);
         modbus->init();

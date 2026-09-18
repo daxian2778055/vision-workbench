@@ -15,7 +15,8 @@ public:
         TCP_CLIENT,
         TCP_SERVER,
         MODBUS_MASTER,
-        PLC
+        PLC,
+        UDP           /// UDP 收发（对标 VM 4.4 UDP 通信）
     };
 
     explicit CommunicationNodeBase(QObject *parent = nullptr);

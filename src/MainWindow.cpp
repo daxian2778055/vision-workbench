@@ -1973,7 +1973,18 @@ void MainWindow::onExecutionFinished()
         m_sendEventFirePending = true;
         QTimer::singleShot(0, this, [this]() {
             m_sendEventFirePending = false;
-            CommunicationManager::instance()->fireEnabledSendEvents();
+            // 每轮上报数据注入：{global.变量名} + {模块号.参数名}（与"变量引用"语法一致），
+            // 发送事件的文本模板据此把本轮结果格式化进报文（对标 VM 的每轮结果上报）
+            QVariantMap payload;
+            const auto gvars = GlobalVariableManager::instance()->variables();
+            for (auto it = gvars.constBegin(); it != gvars.constEnd(); ++it)
+                payload.insert(QStringLiteral("global.%1").arg(it.key()), it.value().value);
+            for (auto it = m_lastModuleVars.constBegin(); it != m_lastModuleVars.constEnd(); ++it) {
+                const QVariantMap &vars = it.value();
+                for (auto jt = vars.constBegin(); jt != vars.constEnd(); ++jt)
+                    payload.insert(QStringLiteral("%1.%2").arg(it.key()).arg(jt.key()), jt.value());
+            }
+            CommunicationManager::instance()->fireEnabledSendEvents(payload);
         });
     }
 

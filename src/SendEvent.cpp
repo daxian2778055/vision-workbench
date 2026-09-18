@@ -4,6 +4,8 @@
 #include <QJsonDocument>
 #include <QDataStream>
 #include <QIODevice>
+#include <QRegularExpression>
+#include <QVariantMap>
 
 // ==================== SendEvent Base ====================
 
@@ -44,7 +46,24 @@ bool TextDirectSendEvent::send(const QVariant &data)
     if (!m_enabled) return false;
 
     QString text;
-    if (data.typeId() == QMetaType::QString) {
+    if (data.typeId() == QMetaType::QVariantMap) {
+        // 多字段命名占位符：{模块号.参数名} / {global.变量名}（与流程"变量引用"同语法）。
+        // 每轮结束时由 MainWindow 注入本轮结果，模板如 "{1.结果},{global.计数}".
+        const QVariantMap map = data.toMap();
+        QString out = m_template;
+        static const QRegularExpression re(QStringLiteral("\\{([^{}]+)\\}"));
+        QList<QPair<QString, QString>> pairs;
+        auto it = re.globalMatch(m_template);
+        while (it.hasNext()) {
+            const QRegularExpressionMatch m = it.next();
+            const QString key = m.captured(1);
+            if (map.contains(key))
+                pairs.append({m.captured(0), map.value(key).toString()});
+        }
+        for (const auto &p : pairs)
+            out.replace(p.first, p.second);
+        text = out;
+    } else if (data.typeId() == QMetaType::QString) {
         text = data.toString();
     } else {
         text = m_template;

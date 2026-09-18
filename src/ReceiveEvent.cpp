@@ -1,6 +1,7 @@
 #include "ReceiveEvent.h"
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QRegularExpression>
 
 // ==================== ReceiveEvent Base ====================
 
@@ -40,10 +41,34 @@ bool TextProtocolReceiveEvent::parse(const QByteArray &data, QList<QVariant> &fi
 {
     if (!m_enabled || data.isEmpty()) return false;
 
-    QString text = QString::fromUtf8(data).trimmed();
+    const QString text = QString::fromUtf8(data).trimmed();
     if (text.isEmpty()) return false;
 
-    QStringList parts = text.split(m_delimiter, Qt::SkipEmptyParts);
+    if (m_parseMode == Regex) {
+        // 正则模式：全局匹配；有捕获组时各非空捕获组为一个字段，无捕获组时整体匹配为一个字段
+        if (m_regex.isEmpty()) return false;
+        const QRegularExpression re(m_regex);
+        if (!re.isValid()) return false;
+        auto it = re.globalMatch(text);
+        while (it.hasNext()) {
+            const QRegularExpressionMatch m = it.next();
+            const int n = m.lastCapturedIndex();
+            if (n >= 1) {
+                for (int gi = 1; gi <= n; ++gi) {
+                    const QString cap = m.captured(gi);
+                    if (!cap.isEmpty())
+                        fields.append(cap);
+                }
+            } else {
+                fields.append(m.captured(0));
+            }
+        }
+        if (fields.isEmpty()) return false;
+        emit eventGenerated(m_eventId, fields);
+        return true;
+    }
+
+    const QStringList parts = text.split(m_delimiter, Qt::SkipEmptyParts);
     if (parts.isEmpty()) return false;
 
     for (const QString &part : parts) {
@@ -58,6 +83,8 @@ QJsonObject TextProtocolReceiveEvent::toJson() const
 {
     QJsonObject obj = ReceiveEvent::toJson();
     obj[QStringLiteral("delimiter")] = m_delimiter;
+    obj[QStringLiteral("parseMode")] = static_cast<int>(m_parseMode);
+    obj[QStringLiteral("regex")] = m_regex;
     return obj;
 }
 
@@ -65,6 +92,8 @@ void TextProtocolReceiveEvent::fromJson(const QJsonObject &json)
 {
     ReceiveEvent::fromJson(json);
     m_delimiter = json[QStringLiteral("delimiter")].toString(QStringLiteral(","));
+    m_parseMode = static_cast<ParseMode>(json[QStringLiteral("parseMode")].toInt(0));
+    m_regex = json[QStringLiteral("regex")].toString();
 }
 
 // ==================== ByteMatchReceiveEvent ====================
