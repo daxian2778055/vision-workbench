@@ -1008,9 +1008,20 @@ void CommWritebackTest::testTcpAutoReconnect()
     QVERIFY2(resent, "断线后未能自动重连（sendData 一直失败）");
     QTRY_VERIFY_WITH_TIMEOUT(received.contains("AFTER"), 3000);
 
-    // 自动重连开关关闭后：断开就真的断开，不再自动重连
     auto *node = cm->deviceNode(QStringLiteral("SIM_RC"));
     QVERIFY(node != nullptr);
+
+    // 回归：重连成功后状态必须稳定保持（历史 bug：重连替换 socket 时，旧 socket 的延迟
+    // disconnected 信号把新连接误清为"未连接"→ 触发下一轮重连并切断健康连接 →
+    // 现场表现为网络调试助手反复 online/offline、界面永远显示"未连接"）
+    {
+        QSignalSpy closedSpy(node, &CommunicationNodeBase::connectionClosed);
+        QTest::qWait(kReconnectIntervalMs * 3);   // 覆盖至少 3 个重连周期
+        QVERIFY2(node->isConnected(), "重连成功后状态被误清（反复重连死循环回归）");
+        QCOMPARE(closedSpy.count(), 0);
+    }
+
+    // 自动重连开关关闭后：断开就真的断开，不再自动重连
     node->setParam(QStringLiteral("autoReconnect"), false);
     QVERIFY(cm->closeDevice(QStringLiteral("SIM_RC")));
     QVERIFY(cm->openDevice(QStringLiteral("SIM_RC")));

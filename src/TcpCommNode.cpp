@@ -125,20 +125,32 @@ bool TcpCommNode::openConnection()
 void TcpCommNode::hookSocket(QTcpSocket *socket)
 {
     if (!socket) return;
-    connect(socket, &QTcpSocket::readyRead, this, &TcpCommNode::onReadyRead);
-    connect(socket, &QTcpSocket::disconnected, this, &TcpCommNode::onSocketDisconnected);
+    // 所有信号都校验 sender 是"当前 socket"：重连会替换 socket，旧 socket 的延迟信号
+    // （disconnected/errorOccurred）若被当作当前连接处理，会把新连接误判为断开 →
+    // 触发下一轮重连 → closeConnection 又切断健康连接，形成"反复 online/offline"死循环。
+    connect(socket, &QTcpSocket::readyRead, this, [this, socket]() {
+        if (socket != m_socket) return;
+        onReadyRead();
+    });
+    connect(socket, &QTcpSocket::disconnected, this, [this, socket]() {
+        if (socket != m_socket) return;
+        onSocketDisconnected();
+    });
     // 异步连接成功（同步路径已在 openConnection 里置位，此判断会挡住重复处理）
-    connect(socket, &QAbstractSocket::connected, this, [this]() {
+    connect(socket, &QAbstractSocket::connected, this, [this, socket]() {
+        if (socket != m_socket) return;
         if (!m_connected) {
             m_connected = true;
             m_params[QStringLiteral("connected")] = true;
             emit connectionOpened();
         }
+        if (m_reconnectTimer) m_reconnectTimer->stop();   // 连上即停重连（防御）
     });
     // 连接失败（拒绝/不可达/超时）：异步路径靠这里安排下一次重连；
     // 同步路径的返回值分支也会排，scheduleReconnect 自带判重不会重复排。
     connect(socket, &QAbstractSocket::errorOccurred, this,
-            [this](QAbstractSocket::SocketError) {
+            [this, socket](QAbstractSocket::SocketError) {
+        if (socket != m_socket) return;
         if (!m_connected)
             scheduleReconnect();
     });
@@ -180,10 +192,11 @@ void TcpCommNode::closeConnection()
 {
     m_userClosed = true;                              // 主动关闭：不触发自动重连
     if (m_reconnectTimer) m_reconnectTimer->stop();
-    if (m_socket) {
-        m_socket->disconnectFromHost();
-        m_socket->deleteLater();
-        m_socket = nullptr;
+    QTcpSocket *old = m_socket;
+    m_socket = nullptr;   // 先解除引用：旧 socket 的延迟信号会被归属校验忽略，不影响新连接
+    if (old) {
+        old->disconnectFromHost();
+        old->deleteLater();
     }
     if (m_server) {
         m_server->close();
