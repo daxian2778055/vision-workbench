@@ -94,6 +94,15 @@ bool CommunicationManager::addDevice(const QString &name, const QString &type, c
     return true;
 }
 
+bool CommunicationManager::updateDeviceConfig(const QString &name, const QJsonObject &config)
+{
+    QMutexLocker locker(&m_mutex);
+    auto it = m_deviceInfos.find(name);
+    if (it == m_deviceInfos.end()) return false;
+    it.value().config = config;
+    return true;
+}
+
 bool CommunicationManager::removeDevice(const QString &name)
 {
     CommunicationNodeBase *node = nullptr;

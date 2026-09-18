@@ -78,6 +78,7 @@ private slots:
     void testMultiFieldTemplateWithInjectedData();
     void testTextReceiveEventRegexParse();
     void testUdpRoundTrip();
+    void testTcpAutoReconnect();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -961,6 +962,64 @@ void CommWritebackTest::testUdpRoundTrip()
 
     QVERIFY(cm->closeDevice(QStringLiteral("SIM_UDP")));
     QVERIFY(cm->removeDevice(QStringLiteral("SIM_UDP")));
+}
+
+void CommWritebackTest::testTcpAutoReconnect()
+{
+    // 历史缺陷：TCP 断线后只报警不重连、永久失联（Modbus/PLC/串口都有重连，唯独最常用的 TCP 没有）。
+    // 闭环：连上 → 服务端主动断开 → 服务端重开 → 客户端应在重连间隔内自动恢复并能再发数据。
+    const int kReconnectIntervalMs = 500;   // 用例里用最短间隔（下限 500）
+
+    QTcpServer plc;
+    QByteArray received;
+    startSimulatedPlc(plc, received);
+    QVERIFY2(plc.isListening(), qPrintable(plc.errorString()));
+    const quint16 port = plc.serverPort();
+
+    auto *cm = CommunicationManager::instance();
+    QJsonObject cfg = tcpClientConfig(port);
+    cfg[QStringLiteral("autoReconnect")] = true;
+    cfg[QStringLiteral("reconnectInterval")] = kReconnectIntervalMs;
+    QVERIFY(cm->addDevice(QStringLiteral("SIM_RC"), QStringLiteral("TCP"), cfg));
+    QVERIFY(cm->openDevice(QStringLiteral("SIM_RC")));
+    QVERIFY2(cm->sendData(QStringLiteral("SIM_RC"), QByteArray("BEFORE")), "初始发送失败");
+    QTRY_VERIFY_WITH_TIMEOUT(received.contains("BEFORE"), 3000);
+
+    // 服务端断开：关闭监听并踢掉现有连接
+    received.clear();
+    plc.close();
+    QTest::qWait(200);   // 让断开事件落地（客户端进入重连等待）
+
+    // 服务端在原端口重开：客户端应在重连间隔内自动连回来
+    QVERIFY2(plc.listen(QHostAddress::LocalHost, port), qPrintable(plc.errorString()));
+    QObject::connect(&plc, &QTcpServer::newConnection, &plc, [&plc, &received]() {
+        QTcpSocket *cli = plc.nextPendingConnection();
+        QObject::connect(cli, &QTcpSocket::readyRead, cli,
+                         [cli, &received]() { received += cli->readAll(); });
+    });
+
+    // 自动重连成功：无需任何手动 openDevice 就能把数据重新发到线路上
+    bool resent = false;
+    for (int i = 0; i < 40 && !resent; ++i) {   // 最多约 6 秒
+        resent = cm->sendData(QStringLiteral("SIM_RC"), QByteArray("AFTER"));
+        if (!resent)
+            QTest::qWait(150);
+    }
+    QVERIFY2(resent, "断线后未能自动重连（sendData 一直失败）");
+    QTRY_VERIFY_WITH_TIMEOUT(received.contains("AFTER"), 3000);
+
+    // 自动重连开关关闭后：断开就真的断开，不再自动重连
+    auto *node = cm->deviceNode(QStringLiteral("SIM_RC"));
+    QVERIFY(node != nullptr);
+    node->setParam(QStringLiteral("autoReconnect"), false);
+    QVERIFY(cm->closeDevice(QStringLiteral("SIM_RC")));
+    QVERIFY(cm->openDevice(QStringLiteral("SIM_RC")));
+    plc.close();
+    QTest::qWait(kReconnectIntervalMs * 3);
+    QVERIFY2(!node->isConnected(), "关闭自动重连后不得自行重连");
+
+    QVERIFY(cm->closeDevice(QStringLiteral("SIM_RC")));
+    QVERIFY(cm->removeDevice(QStringLiteral("SIM_RC")));
 }
 
 // 必须用 QTEST_MAIN：流程用例要创建 FlowScene（QGraphicsScene），仅 QCoreApplication 会崩；

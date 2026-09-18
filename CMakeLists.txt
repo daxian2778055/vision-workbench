@@ -169,6 +169,8 @@ set(SOURCES
     src/CommunicationNodeBase.cpp
     src/SerialCommNode.cpp
     src/UdpCommNode.cpp
+    src/CommEventEditDialogs.cpp
+    src/CommDeviceConfigDialog.cpp
     src/TcpCommNode.cpp
     src/ModbusNode.cpp
     src/ModbusConfigDialog.cpp
@@ -363,6 +365,8 @@ set(HEADERS
     include/CommunicationNodeBase.h
     include/SerialCommNode.h
     include/UdpCommNode.h
+    include/CommEventEditDialogs.h
+    include/CommDeviceConfigDialog.h
     include/TcpCommNode.h
     include/ModbusNode.h
     include/ModbusConfigDialog.h

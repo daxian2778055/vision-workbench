@@ -4,6 +4,8 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QComboBox>
+#include <QCheckBox>
+#include <QSpinBox>
 #include <QPushButton>
 #include <QSignalBlocker>
 
@@ -20,11 +22,49 @@ void TcpCommNode::init()
     m_params[QStringLiteral("serverIp")] = QStringLiteral("127.0.0.1");
     m_params[QStringLiteral("port")] = 502;
     m_params[QStringLiteral("mode")] = QStringLiteral("Client");
+    m_params[QStringLiteral("autoReconnect")] = true;
+    m_params[QStringLiteral("reconnectInterval")] = 3000;
+
+    // 断线自动重连定时器（对齐 Modbus/PLC 的做法）
+    m_reconnectTimer = new QTimer(this);
+    m_reconnectTimer->setSingleShot(true);
+    connect(m_reconnectTimer, &QTimer::timeout, this, [this]() {
+        if (!m_connected && !m_isServer && m_autoReconnect && !m_userClosed)
+            openConnection();
+    });
+}
+
+void TcpCommNode::setParam(const QString &name, const QVariant &value)
+{
+    if (name == QStringLiteral("autoReconnect")) {
+        m_autoReconnect = value.toBool();
+    } else if (name == QStringLiteral("reconnectInterval")) {
+        m_reconnectInterval = qMax(500, value.toInt());
+    }
+    HalconNode::setParam(name, value);   // 写入 m_params → 随方案自动序列化
+}
+
+void TcpCommNode::fromJson(const QJsonObject &json)
+{
+    HalconNode::fromJson(json);
+    // m_params 恢复后同步成员（否则存了 false 的"自动重连"重启后仍按默认 true 跑）
+    m_autoReconnect = m_params.value(QStringLiteral("autoReconnect"), true).toBool();
+    m_reconnectInterval =
+        qMax(500, m_params.value(QStringLiteral("reconnectInterval"), 3000).toInt());
+}
+
+void TcpCommNode::scheduleReconnect()
+{
+    if (m_isServer || !m_autoReconnect || m_userClosed) return;
+    if (m_reconnectTimer && !m_reconnectTimer->isActive())
+        m_reconnectTimer->start(m_reconnectInterval);
 }
 
 bool TcpCommNode::openConnection()
 {
-    closeConnection();
+    closeConnection();          // 内部会置 m_userClosed=true（防止关连触发重连）
+    m_userClosed = false;       // 本次是主动建立连接，允许后续断线自动重连
+    if (m_reconnectTimer) m_reconnectTimer->stop();
 
     QString mode = m_params.value(QStringLiteral("mode")).toString();
     m_isServer = (mode == QStringLiteral("Server"));
@@ -61,6 +101,7 @@ bool TcpCommNode::openConnection()
             emit communicationError(QStringLiteral("\u8FDE\u63A5TCP\u670D\u52A1\u5668\u5931\u8D25: %1").arg(m_socket->errorString()));
             m_connected = false;
             m_params[QStringLiteral("connected")] = false;
+            scheduleReconnect();   // 首次连接失败也自动重试（现场上电顺序不定）
             return false;
         }
         m_connected = true;
@@ -93,6 +134,7 @@ void TcpCommNode::onSocketDisconnected()
     m_params[QStringLiteral("connected")] = false;
     emit communicationError(QStringLiteral("TCP\u8FDE\u63A5\u5DF2\u65AD\u5F00"));
     emit connectionClosed();
+    scheduleReconnect();   // 断线自动重连（历史缺陷：只报警、永久失联）
 }
 
 void TcpCommNode::onSendRequested(const QByteArray &data)
@@ -110,6 +152,8 @@ void TcpCommNode::onSendRequested(const QByteArray &data)
 
 void TcpCommNode::closeConnection()
 {
+    m_userClosed = true;                              // 主动关闭：不触发自动重连
+    if (m_reconnectTimer) m_reconnectTimer->stop();
     if (m_socket) {
         m_socket->disconnectFromHost();
         m_socket->deleteLater();
@@ -173,6 +217,31 @@ QWidget *TcpCommNode::createParamPanel()
     layout->addWidget(new QLabel(QStringLiteral("\u7AEF\u53E3:")));
     layout->addWidget(portEdit);
 
+    // 自动重连（客户端模式生效）
+    auto *reconnectCheck = new QCheckBox(QStringLiteral("断线自动重连"));
+    reconnectCheck->setObjectName(QStringLiteral("tcpAutoReconnect"));
+    reconnectCheck->setChecked(m_autoReconnect);
+    connect(reconnectCheck, &QCheckBox::toggled, this, [this](bool on) {
+        setParam(QStringLiteral("autoReconnect"), on);
+    });
+    layout->addWidget(reconnectCheck);
+
+    auto *intervalSpin = new QSpinBox();
+    intervalSpin->setObjectName(QStringLiteral("tcpReconnectInterval"));
+    intervalSpin->setRange(500, 60000);
+    intervalSpin->setSingleStep(500);
+    intervalSpin->setValue(m_reconnectInterval);
+    connect(intervalSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this](int v) {
+        setParam(QStringLiteral("reconnectInterval"), v);
+    });
+    layout->addWidget(new QLabel(QStringLiteral("重连间隔(ms):")));
+    layout->addWidget(intervalSpin);
+
+    auto *stateLabel = new QLabel(m_connected ? QStringLiteral("状态: 已连接")
+                                              : QStringLiteral("状态: 未连接"));
+    stateLabel->setObjectName(QStringLiteral("tcpState"));
+    layout->addWidget(stateLabel);
+
     // Connect button
     auto *connectBtn = new QPushButton(m_connected ? QStringLiteral("\u65AD\u5F00") : QStringLiteral("\u8FDE\u63A5"));
     connectBtn->setObjectName(QStringLiteral("tcpConnect"));
@@ -205,6 +274,18 @@ void TcpCommNode::updateParamPanel(QWidget *panel)
     if (auto *w = panel->findChild<QLineEdit *>(QStringLiteral("tcpPort"))) {
         QSignalBlocker b(w);
         w->setText(QString::number(m_params.value(QStringLiteral("port"), 502).toInt()));
+    }
+    if (auto *cb = panel->findChild<QCheckBox *>(QStringLiteral("tcpAutoReconnect"))) {
+        QSignalBlocker b(cb);
+        cb->setChecked(m_autoReconnect);
+    }
+    if (auto *sp = panel->findChild<QSpinBox *>(QStringLiteral("tcpReconnectInterval"))) {
+        QSignalBlocker b(sp);
+        sp->setValue(m_reconnectInterval);
+    }
+    if (auto *lb = panel->findChild<QLabel *>(QStringLiteral("tcpState"))) {
+        lb->setText(m_connected ? QStringLiteral("状态: 已连接")
+                                : QStringLiteral("状态: 未连接"));
     }
     if (auto *btn = panel->findChild<QPushButton *>(QStringLiteral("tcpConnect"))) {
         btn->setText(m_connected ? QStringLiteral("\u65AD\u5F00") : QStringLiteral("\u8FDE\u63A5"));

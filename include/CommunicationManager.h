@@ -41,6 +41,9 @@ public:
     /// 移除通信设备
     bool removeDevice(const QString &name);
 
+    /// 更新设备配置记录（热更新参数后调用，保证方案保存的是最新配置；不触碰节点）
+    bool updateDeviceConfig(const QString &name, const QJsonObject &config);
+
     /// 获取设备的通信节点实例
     CommunicationNodeBase *deviceNode(const QString &name) const;
 

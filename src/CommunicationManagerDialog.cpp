@@ -7,6 +7,8 @@
 #include "PlcConfigDialog.h"
 #include "ReceiveEvent.h"
 #include "SendEvent.h"
+#include "CommEventEditDialogs.h"
+#include "CommDeviceConfigDialog.h"
 #include "HeartbeatManager.h"
 #include "AppLog.h"
 #include <QVBoxLayout>
@@ -305,27 +307,14 @@ void CommunicationManagerDialog::onAddDevice()
     QJsonObject config;
 
     if (type == QStringLiteral("TCP")) {
-        QString ip = QInputDialog::getText(this, QStringLiteral("TCP\u914D\u7F6E"),
-            QStringLiteral("\u670D\u52A1\u5668IP:"), QLineEdit::Normal,
-            QStringLiteral("127.0.0.1"), &ok);
-        if (!ok) return;
-        int port = QInputDialog::getInt(this, QStringLiteral("TCP\u914D\u7F6E"),
-            QStringLiteral("\u7AEF\u53E3:"), 502, 1, 65535, 1, &ok);
-        if (!ok) return;
-        config[QStringLiteral("serverIp")] = ip;
-        config[QStringLiteral("port")] = port;
-        config[QStringLiteral("mode")] = QStringLiteral("Client");
+        CommDeviceConfigDialog dlg(type, config, this);
+        if (dlg.exec() != QDialog::Accepted) return;
+        config = dlg.config();
 
     } else if (type == QStringLiteral("\u4E32\u53E3")) {
-        QString portName = QInputDialog::getText(this, QStringLiteral("\u4E32\u53E3\u914D\u7F6E"),
-            QStringLiteral("\u7AEF\u53E3\u53F7:"), QLineEdit::Normal,
-            QStringLiteral("COM1"), &ok);
-        if (!ok) return;
-        int baud = QInputDialog::getInt(this, QStringLiteral("\u4E32\u53E3\u914D\u7F6E"),
-            QStringLiteral("\u6CE2\u7279\u7387:"), 9600, 1200, 921600, 1, &ok);
-        if (!ok) return;
-        config[QStringLiteral("portName")] = portName;
-        config[QStringLiteral("baudRate")] = baud;
+        CommDeviceConfigDialog dlg(QStringLiteral("Serial"), config, this);
+        if (dlg.exec() != QDialog::Accepted) return;
+        config = dlg.config();
 
     } else if (type == QStringLiteral("Modbus")) {
         // 新增 Modbus 设备时，先创建设备再打开配置
@@ -334,19 +323,9 @@ void CommunicationManagerDialog::onAddDevice()
         if (dlg.exec() != QDialog::Accepted) return;
         config = dlg.config();
     } else if (type == QStringLiteral("UDP")) {
-        int localPort = QInputDialog::getInt(this, QStringLiteral("UDP配置"),
-            QStringLiteral("本地接收端口(0=随机):"), 8000, 0, 65535, 1, &ok);
-        if (!ok) return;
-        QString ip = QInputDialog::getText(this, QStringLiteral("UDP配置"),
-            QStringLiteral("目标IP(留空=仅接收):"), QLineEdit::Normal,
-            QStringLiteral("127.0.0.1"), &ok);
-        if (!ok) return;
-        int rport = QInputDialog::getInt(this, QStringLiteral("UDP配置"),
-            QStringLiteral("目标端口:"), 8000, 1, 65535, 1, &ok);
-        if (!ok) return;
-        config[QStringLiteral("localPort")] = localPort;
-        config[QStringLiteral("remoteIp")] = ip.trimmed();
-        config[QStringLiteral("remotePort")] = rport;
+        CommDeviceConfigDialog dlg(type, config, this);
+        if (dlg.exec() != QDialog::Accepted) return;
+        config = dlg.config();
     } else if (type == QStringLiteral("PLC")) {
         PlcConfigDialog dlg(QStringLiteral("PLC\u914D\u7F6E - %1").arg(name), nullptr, this);
         dlg.setConfig(config);
@@ -390,13 +369,10 @@ void CommunicationManagerDialog::onConfigDevice()
     QString name = m_deviceTable->item(row, 0)->text();
     auto *cm = CommunicationManager::instance();
     CommDeviceInfo info = cm->deviceInfo(name);
-
-    // 先关闭连接（配置更改需要重新连接）
-    if (info.isConnected) {
-        cm->closeDevice(name);
-    }
+    const bool wasConnected = info.isConnected;   // TCP/串口/UDP 热更新后恢复连接用
 
     if (info.type == QStringLiteral("Modbus")) {
+        if (wasConnected) cm->closeDevice(name);   // 删重建前必须先断开
         auto *modbusNode = qobject_cast<ModbusNode *>(cm->deviceNode(name));
         ModbusConfigDialog dlg(QStringLiteral("Modbus\u914D\u7F6E - %1").arg(name),
                                modbusNode, this);
@@ -408,27 +384,24 @@ void CommunicationManagerDialog::onConfigDevice()
             cm->addDevice(name, info.type, newConfig);
             // 移除旧的 + 重新创建设备节点
         }
-    } else if (info.type == QStringLiteral("UDP")) {
-        bool ok = false;
-        int localPort = QInputDialog::getInt(this, QStringLiteral("UDP配置"),
-            QStringLiteral("本地接收端口(0=随机):"),
-            info.config.value(QStringLiteral("localPort")).toInt(8000), 0, 65535, 1, &ok);
-        if (!ok) { refreshDeviceTable(); return; }
-        QString ip = QInputDialog::getText(this, QStringLiteral("UDP配置"),
-            QStringLiteral("目标IP(留空=仅接收):"), QLineEdit::Normal,
-            info.config.value(QStringLiteral("remoteIp")).toString(QStringLiteral("127.0.0.1")), &ok);
-        if (!ok) { refreshDeviceTable(); return; }
-        int rport = QInputDialog::getInt(this, QStringLiteral("UDP配置"),
-            QStringLiteral("目标端口:"),
-            info.config.value(QStringLiteral("remotePort")).toInt(8000), 1, 65535, 1, &ok);
-        if (!ok) { refreshDeviceTable(); return; }
-        QJsonObject newConfig;
-        newConfig[QStringLiteral("localPort")] = localPort;
-        newConfig[QStringLiteral("remoteIp")] = ip.trimmed();
-        newConfig[QStringLiteral("remotePort")] = rport;
-        cm->removeDevice(name);
-        cm->addDevice(name, info.type, newConfig);
+    } else if (info.type == QStringLiteral("TCP") || info.type == QStringLiteral("UDP")
+               || info.type == QStringLiteral("\u4E32\u53E3") || info.type == QStringLiteral("Serial")) {
+        // 单页表单 + 热更新：直接改现节点参数后重开连接，不再"删设备→重建"（避免连接被无谓打断）
+        const QString formType = (info.type == QStringLiteral("\u4E32\u53E3")
+                                  || info.type == QStringLiteral("Serial"))
+                                     ? QStringLiteral("Serial") : info.type;
+        CommDeviceConfigDialog dlg(formType, info.config, this);
+        if (dlg.exec() != QDialog::Accepted) { refreshDeviceTable(); return; }
+        const QJsonObject newConfig = dlg.config();
+        auto *node = cm->deviceNode(name);
+        if (!node) { refreshDeviceTable(); return; }
+        if (wasConnected) node->closeConnection();
+        for (auto it = newConfig.constBegin(); it != newConfig.constEnd(); ++it)
+            node->setParam(it.key(), it.value().toVariant());
+        if (wasConnected) node->openConnection();
+        cm->updateDeviceConfig(name, newConfig);   // 方案保存时写的是新配置
     } else if (info.type == QStringLiteral("PLC")) {
+        if (wasConnected) cm->closeDevice(name);
         auto *plcNode = qobject_cast<PlcCommNode *>(cm->deviceNode(name));
         PlcConfigDialog dlg(QStringLiteral("PLC\u914D\u7F6E - %1").arg(name),
                             plcNode, this);
@@ -644,10 +617,10 @@ void CommunicationManagerDialog::onEditReceiveEvent()
     auto *ev = CommunicationManager::instance()->receiveEvent(id);
     if (!ev) return;
 
-    bool enabled = (QMessageBox::question(this, QStringLiteral("\u7F16\u8F91"),
-        QStringLiteral("\u542F\u7528\u6B64\u4E8B\u4EF6?")) == QMessageBox::Yes);
-    ev->setEnabled(enabled);
-    refreshReceiveEventTable();
+    // 全参数可编辑（分隔符/正则/字节规则），不再"只能启停、改参数必须删重建"
+    ReceiveEventEditDialog dlg(ev, this);
+    if (dlg.exec() == QDialog::Accepted)
+        refreshReceiveEventTable();
 }
 
 // ==================== Send Event Tab ====================
@@ -791,10 +764,10 @@ void CommunicationManagerDialog::onEditSendEvent()
     auto *ev = CommunicationManager::instance()->sendEvent(id);
     if (!ev) return;
 
-    bool enabled = (QMessageBox::question(this, QStringLiteral("\u7F16\u8F91"),
-        QStringLiteral("\u542F\u7528\u6B64\u4E8B\u4EF6?")) == QMessageBox::Yes);
-    ev->setEnabled(enabled);
-    refreshSendEventTable();
+    // 全参数可编辑（模板/后缀/字段表），不再"只能启停、改参数必须删重建"
+    SendEventEditDialog dlg(ev, this);
+    if (dlg.exec() == QDialog::Accepted)
+        refreshSendEventTable();
 }
 
 // ==================== Heartbeat Tab ====================
