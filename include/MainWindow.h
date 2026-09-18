@@ -14,6 +14,7 @@
 #include <functional>
 
 class QDockWidget;
+class QDialog;
 
 #include <halconcpp/HalconCpp.h>
 #include "HalconWindow.h"
@@ -234,6 +235,12 @@ protected:
     /// 执行期间重复触发被忽略（避免排队雪崩）。quiet=true（自动重算）不弹反馈但仍防重入。
     bool runWithBusyFeedback(const QString &what, bool quiet, const std::function<void()> &fn);
     bool m_busyExecuting = false;
+
+    /// 非模态打开主功能窗口：已开着就前置激活（不重复开），关闭后自动销毁。
+    /// 主功能窗口一律非模态——打开任一窗口都不影响主界面及其它窗口的操作
+    /// （历史行为是 exec() 模态，打开通讯管理后主界面完全不可用）。
+    void showAuxDialog(const QString &key, const std::function<QDialog *()> &create);
+    QHash<QString, QDialog *> m_auxDialogs;
 
     // ---- 新增组件 ----
     PerformancePanel *m_performancePanel = nullptr;      // 性能分析面板

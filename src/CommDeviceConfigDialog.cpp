@@ -18,6 +18,8 @@ CommDeviceConfigDialog::CommDeviceConfigDialog(const QString &type, const QJsonO
 {
     setWindowTitle(QStringLiteral("设备配置 — %1").arg(type));
     resize(420, 260);
+    // 只阻塞父窗口（通信管理），不阻塞主界面
+    setWindowModality(Qt::WindowModal);
 
     auto *root = new QVBoxLayout(this);
     auto *gb = new QGroupBox(QStringLiteral("连接参数"), this);

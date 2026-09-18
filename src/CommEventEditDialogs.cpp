@@ -24,6 +24,8 @@ ReceiveEventEditDialog::ReceiveEventEditDialog(ReceiveEvent *event, QWidget *par
 {
     setWindowTitle(QStringLiteral("编辑接收事件 — %1").arg(event ? event->eventId() : QString()));
     resize(620, 460);
+    // 只阻塞父窗口（通信管理），不阻塞主界面
+    setWindowModality(Qt::WindowModal);
 
     auto *root = new QVBoxLayout(this);
 
@@ -233,6 +235,8 @@ SendEventEditDialog::SendEventEditDialog(SendEvent *event, QWidget *parent)
 {
     setWindowTitle(QStringLiteral("编辑发送事件 — %1").arg(event ? event->eventId() : QString()));
     resize(620, 420);
+    // 只阻塞父窗口（通信管理），不阻塞主界面
+    setWindowModality(Qt::WindowModal);
 
     auto *root = new QVBoxLayout(this);
 

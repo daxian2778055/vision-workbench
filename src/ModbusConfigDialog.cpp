@@ -21,6 +21,8 @@ ModbusConfigDialog::ModbusConfigDialog(const QString &title,
     setWindowTitle(title);
     setMinimumSize(850, 600);
     setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
+    // 只阻塞父窗口（通信管理），不阻塞主界面——exec() 会尊重已设置的 WindowModal
+    setWindowModality(Qt::WindowModal);
     setupUI();
     connectToNodeLiveUpdates();
     refreshRoleUi();

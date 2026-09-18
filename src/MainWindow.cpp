@@ -1618,10 +1618,12 @@ void MainWindow::onExit()
 
 void MainWindow::onManageGlobalCameras()
 {
-    // 管理全局相机
-    GlobalCameraDialog dialog(this);
-    connect(&dialog, &GlobalCameraDialog::logMessage, this, &MainWindow::logMessage);
-    dialog.exec();
+    // 管理全局相机（非模态：开着相机管理也能继续操作主界面）
+    showAuxDialog(QStringLiteral("globalCameras"), [this]() -> QDialog * {
+        auto *dlg = new GlobalCameraDialog(this);
+        connect(dlg, &GlobalCameraDialog::logMessage, this, &MainWindow::logMessage);
+        return dlg;
+    });
 }
 
 
@@ -2196,8 +2198,10 @@ void MainWindow::openManualDialog()
         return;
     }
 
-    HelpDialog dlg(markdown, this);
-    dlg.exec();
+    // 使用手册非模态：可以边看手册边操作主界面（重复打开前置已有窗口）
+    showAuxDialog(QStringLiteral("manual"), [this, markdown]() -> QDialog * {
+        return new HelpDialog(markdown, this);
+    });
 }
 
 void MainWindow::refreshAllMvsPixelFormats(){
@@ -2718,10 +2722,12 @@ QStringList MainWindow::allNodeFullNames() const
 
 void MainWindow::openRuntimeInterfaceDesigner()
 {
-    RuntimeInterfaceDesigner dialog(allNodeFullNames(), this);
-    dialog.exec();
-    // 设计器内部已保存布局，刷新运行视图
-    loadRuntimeInterfaceLayout();
+    // 非模态：开着设计器也能继续操作主界面；「应用并进入运行模式」后刷新运行视图
+    showAuxDialog(QStringLiteral("runtimeDesigner"), [this]() -> QDialog * {
+        auto *dlg = new RuntimeInterfaceDesigner(allNodeFullNames(), this);
+        connect(dlg, &QDialog::accepted, this, &MainWindow::loadRuntimeInterfaceLayout);
+        return dlg;
+    });
 }
 
 void MainWindow::loadRuntimeInterfaceLayout()
@@ -2779,35 +2785,55 @@ void MainWindow::setupSchemeMenu()
     });
 }
 
+void MainWindow::showAuxDialog(const QString &key, const std::function<QDialog *()> &create)
+{
+    if (QDialog *existing = m_auxDialogs.value(key, nullptr)) {
+        existing->show();
+        existing->raise();
+        existing->activateWindow();
+        return;
+    }
+    QDialog *dlg = create();
+    if (!dlg)
+        return;
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    m_auxDialogs.insert(key, dlg);
+    connect(dlg, &QObject::destroyed, this, [this, key]() { m_auxDialogs.remove(key); });
+    dlg->show();   // 非模态：不阻塞主界面与其它已开窗口
+    dlg->raise();
+    dlg->activateWindow();
+}
+
 void MainWindow::setupCommunicationMenu()
 {
     VFP_DEBUG << "setupCommunicationMenu called";
 
     if (!ui->menuCommunication) return;
 
+    // 非模态：打开通讯管理/监视后主界面仍可正常操作；重复点击前置已有窗口而不是再开一个
     connect(ui->actionCommDevice, &QAction::triggered, this, [this]() {
-        CommunicationManagerDialog dialog(this);
-        dialog.exec();
+        showAuxDialog(QStringLiteral("commManager"),
+                      [this]() -> QDialog * { return new CommunicationManagerDialog(this); });
     });
 
     connect(ui->actionCommReceiveEvent, &QAction::triggered, this, [this]() {
-        CommunicationManagerDialog dialog(this);
-        dialog.exec();
+        showAuxDialog(QStringLiteral("commManager"),
+                      [this]() -> QDialog * { return new CommunicationManagerDialog(this); });
     });
 
     connect(ui->actionCommSendEvent, &QAction::triggered, this, [this]() {
-        CommunicationManagerDialog dialog(this);
-        dialog.exec();
+        showAuxDialog(QStringLiteral("commManager"),
+                      [this]() -> QDialog * { return new CommunicationManagerDialog(this); });
     });
 
     connect(ui->actionCommHeartbeat, &QAction::triggered, this, [this]() {
-        CommunicationManagerDialog dialog(this);
-        dialog.exec();
+        showAuxDialog(QStringLiteral("commManager"),
+                      [this]() -> QDialog * { return new CommunicationManagerDialog(this); });
     });
 
     connect(ui->actionCommMonitor, &QAction::triggered, this, [this]() {
-        CommMonitorDialog dialog(this);
-        dialog.exec();
+        showAuxDialog(QStringLiteral("commMonitor"),
+                      [this]() -> QDialog * { return new CommMonitorDialog(this); });
     });
 }
 
@@ -2818,13 +2844,13 @@ void MainWindow::setupSystemMenu()
     if (!ui->menuSystem) return;
 
     connect(ui->actionGlobalTrigger, &QAction::triggered, this, [this]() {
-        GlobalTriggerDialog dialog(this);
-        dialog.exec();
+        showAuxDialog(QStringLiteral("globalTrigger"),
+                      [this]() -> QDialog * { return new GlobalTriggerDialog(this); });
     });
 
     connect(ui->actionGlobalVariables, &QAction::triggered, this, [this]() {
-        GlobalVariableDialog dialog(this);
-        dialog.exec();
+        showAuxDialog(QStringLiteral("globalVariables"),
+                      [this]() -> QDialog * { return new GlobalVariableDialog(this); });
     });
 
     if (ui->menuSystem) {
@@ -2834,16 +2860,17 @@ void MainWindow::setupSystemMenu()
             FlowScene *scene = (idx >= 0 && idx < m_flowScenes.size()) ? m_flowScenes[idx] : nullptr;
             if (!scene)
                 return;
-            FlowVariableDialog dialog(scene, this);
-            dialog.exec();
+            showAuxDialog(QStringLiteral("flowVariable"), [this, scene]() -> QDialog * {
+                return new FlowVariableDialog(scene, this);
+            });
         });
     }
 
     connect(ui->actionCameraConfig, &QAction::triggered, this, &MainWindow::onManageGlobalCameras);
 
     connect(ui->actionUserManagement, &QAction::triggered, this, [this]() {
-        UserManagementDialog dialog(this);
-        dialog.exec();
+        showAuxDialog(QStringLiteral("userManagement"),
+                      [this]() -> QDialog * { return new UserManagementDialog(this); });
     });
 
     connect(ui->actionRecipeManager, &QAction::triggered, this, [this]() {
@@ -2857,39 +2884,41 @@ void MainWindow::setupSystemMenu()
                                      QStringLiteral("请先打开一个流程，再使用配方管理。"));
             return;
         }
-        RecipeDialog dialog(this);
-        dialog.setFlowScene(scene);
-        dialog.exec();
+        showAuxDialog(QStringLiteral("recipe"), [this, scene]() -> QDialog * {
+            auto *dlg = new RecipeDialog(this);
+            dlg->setFlowScene(scene);
+            return dlg;
+        });
     });
 
     connect(ui->actionAlarmHistory, &QAction::triggered, this, [this]() {
-        AlarmHistoryDialog dialog(this);
-        dialog.exec();
+        showAuxDialog(QStringLiteral("alarmHistory"),
+                      [this]() -> QDialog * { return new AlarmHistoryDialog(this); });
     });
 
     connect(ui->actionInspectionResults, &QAction::triggered, this, [this]() {
-        InspectionResultDialog dialog(this);
-        dialog.exec();
+        showAuxDialog(QStringLiteral("inspectionResults"),
+                      [this]() -> QDialog * { return new InspectionResultDialog(this); });
     });
 
     connect(ui->actionParameterSearch, &QAction::triggered, this, [this]() {
-        ParameterSearchDialog dialog(m_flowScenes, this);
-        dialog.exec();
+        showAuxDialog(QStringLiteral("paramSearch"),
+                      [this]() -> QDialog * { return new ParameterSearchDialog(m_flowScenes, this); });
     });
 
     connect(ui->actionCodeExport, &QAction::triggered, this, [this]() {
-        CodeExportDialog dialog(m_flowScenes, this);
-        dialog.exec();
+        showAuxDialog(QStringLiteral("codeExport"),
+                      [this]() -> QDialog * { return new CodeExportDialog(m_flowScenes, this); });
     });
 
     connect(ui->actionOperationLog, &QAction::triggered, this, [this]() {
-        OperationLogDialog dialog(this);
-        dialog.exec();
+        showAuxDialog(QStringLiteral("operationLog"),
+                      [this]() -> QDialog * { return new OperationLogDialog(this); });
     });
 
     connect(ui->actionReport, &QAction::triggered, this, [this]() {
-        ReportDialog dialog(this);
-        dialog.exec();
+        showAuxDialog(QStringLiteral("report"),
+                      [this]() -> QDialog * { return new ReportDialog(this); });
     });
 }
 
