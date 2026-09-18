@@ -29,8 +29,12 @@ void TcpCommNode::init()
     m_reconnectTimer = new QTimer(this);
     m_reconnectTimer->setSingleShot(true);
     connect(m_reconnectTimer, &QTimer::timeout, this, [this]() {
-        if (!m_connected && !m_isServer && m_autoReconnect && !m_userClosed)
+        if (!m_connected && !m_isServer && m_autoReconnect && !m_userClosed) {
+            // 后台异步重连：connectToHost 立即返回，成功/失败由信号驱动。
+            // 同步 waitForConnected 会让"设备离线"变成"UI 周期性卡死"。
+            m_asyncConnect = true;
             openConnection();
+        }
     });
 }
 
@@ -95,9 +99,16 @@ bool TcpCommNode::openConnection()
     } else {
         m_socket = new QTcpSocket(this);
         hookSocket(m_socket);
-        m_socket->connectToHost(m_params.value(QStringLiteral("serverIp")).toString(),
-                                 m_params.value(QStringLiteral("port"), 502).toInt());
-        if (!m_socket->waitForConnected(3000)) {
+        const QString ip = m_params.value(QStringLiteral("serverIp")).toString();
+        const int port = m_params.value(QStringLiteral("port"), 502).toInt();
+        if (m_asyncConnect) {
+            // 后台重连路径：发起即返回（结果由 connected/errorOccurred 信号驱动），绝不阻塞 UI 线程
+            m_asyncConnect = false;
+            m_socket->connectToHost(ip, port);
+            return true;
+        }
+        m_socket->connectToHost(ip, port);
+        if (!m_socket->waitForConnected(1500)) {   // 手动连接：短等待（局域网连接通常 <100ms）
             emit communicationError(QStringLiteral("\u8FDE\u63A5TCP\u670D\u52A1\u5668\u5931\u8D25: %1").arg(m_socket->errorString()));
             m_connected = false;
             m_params[QStringLiteral("connected")] = false;
@@ -116,6 +127,21 @@ void TcpCommNode::hookSocket(QTcpSocket *socket)
     if (!socket) return;
     connect(socket, &QTcpSocket::readyRead, this, &TcpCommNode::onReadyRead);
     connect(socket, &QTcpSocket::disconnected, this, &TcpCommNode::onSocketDisconnected);
+    // 异步连接成功（同步路径已在 openConnection 里置位，此判断会挡住重复处理）
+    connect(socket, &QAbstractSocket::connected, this, [this]() {
+        if (!m_connected) {
+            m_connected = true;
+            m_params[QStringLiteral("connected")] = true;
+            emit connectionOpened();
+        }
+    });
+    // 连接失败（拒绝/不可达/超时）：异步路径靠这里安排下一次重连；
+    // 同步路径的返回值分支也会排，scheduleReconnect 自带判重不会重复排。
+    connect(socket, &QAbstractSocket::errorOccurred, this,
+            [this](QAbstractSocket::SocketError) {
+        if (!m_connected)
+            scheduleReconnect();
+    });
 }
 
 void TcpCommNode::onReadyRead()

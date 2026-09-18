@@ -11,6 +11,7 @@
 #include <QVector>
 #include <QHash>
 #include <QShowEvent>
+#include <functional>
 
 class QDockWidget;
 
@@ -227,6 +228,12 @@ protected:
     /// 「每轮结束自动上报发送事件」的合并标志：连续模式下 executionFinished 高频发出，
     /// 用它把同一 UI 事件循环周期内的多轮合并成一次上报（否则会淹没 UI 线程与设备）。
     bool m_sendEventFirePending = false;
+
+    /// 同步执行/重算的忙碌反馈 + 防重入（executeUpTo/executeFrom/executeNode 同步占用 UI 线程）：
+    /// 先亮等待光标 + 状态栏提示并强制刷新，让用户看到"正在执行"而不是"界面卡死"；
+    /// 执行期间重复触发被忽略（避免排队雪崩）。quiet=true（自动重算）不弹反馈但仍防重入。
+    bool runWithBusyFeedback(const QString &what, bool quiet, const std::function<void()> &fn);
+    bool m_busyExecuting = false;
 
     // ---- 新增组件 ----
     PerformancePanel *m_performancePanel = nullptr;      // 性能分析面板

@@ -926,7 +926,8 @@ void MainWindow::hookFlowScene(FlowScene *scene)
             return;
         FlowExecutor *ex = executorForScene(m_flowScenes[idx]);
         if (ex)
-            ex->executeUpTo(node);
+            runWithBusyFeedback(QStringLiteral("正在执行到 %1…").arg(node->fullName()), false,
+                                [ex, node]() { ex->executeUpTo(node); });
     });
     connect(scene, &FlowScene::executeFromHereRequested, this, [this](NodeBase *node) {
         int idx = ui->flowTabs->currentIndex();
@@ -934,7 +935,8 @@ void MainWindow::hookFlowScene(FlowScene *scene)
             return;
         FlowExecutor *ex = executorForScene(m_flowScenes[idx]);
         if (ex)
-            ex->executeFrom(node);
+            runWithBusyFeedback(QStringLiteral("正在从此处执行 %1…").arg(node->fullName()), false,
+                                [ex, node]() { ex->executeFrom(node); });
     });
     connect(scene, &FlowScene::nodeEditRequested, this, &MainWindow::openModuleEditor);
 }
@@ -1327,6 +1329,33 @@ void MainWindow::restoreAuxPanelVisibility()
     }
 }
 
+bool MainWindow::runWithBusyFeedback(const QString &what, bool quiet,
+                                     const std::function<void()> &fn)
+{
+    // executeUpTo/executeFrom/executeNode 是同步执行（占用 UI 线程）：
+    // 链路含耗时代工时，界面在期间不刷新——先绘制"正在执行"反馈，避免看起来像卡死。
+    if (m_busyExecuting) {
+        if (!quiet)
+            logMessage(QStringLiteral("正在执行中，已忽略重复触发：%1").arg(what));
+        return false;
+    }
+    m_busyExecuting = true;
+    if (!quiet) {
+        if (ui && ui->statusBar)
+            ui->statusBar->showMessage(what);
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        QApplication::processEvents();   // 先把提示/光标绘制出来，再进入同步执行
+    }
+    fn();
+    if (!quiet) {
+        QApplication::restoreOverrideCursor();
+        if (ui && ui->statusBar)
+            ui->statusBar->clearMessage();
+    }
+    m_busyExecuting = false;
+    return true;
+}
+
 void MainWindow::recomputeDownstream(NodeBase *node, bool quiet)
 {
     if (!node)
@@ -1348,8 +1377,12 @@ void MainWindow::recomputeDownstream(NodeBase *node, bool quiet)
 
     // 先作废本算子及其下游的缓存，再执行这一段链路：不作废会让下游读到上一轮的旧值
     // （与 E2/P2 同类问题：本轮无输出/参数变更后必须让下游看到新值）。
-    ex->invalidateDownstreamOf(node);
-    ex->executeFrom(node);
+    if (!runWithBusyFeedback(QStringLiteral("正在重算 %1 及其下游…").arg(node->fullName()),
+                             quiet, [ex, node]() {
+        ex->invalidateDownstreamOf(node);
+        ex->executeFrom(node);
+    }))
+        return;
     if (!quiet)
         logMessage(QStringLiteral("已重算 %1 及其下游（未涉及的分支不重跑）").arg(node->fullName()));
 
@@ -1373,14 +1406,19 @@ void MainWindow::executeNodeOnce(NodeBase *node)
 {
     if (!node)
         return;
-    const int currentIndex = ui->flowTabs->currentIndex();
-    if (currentIndex >= 0 && currentIndex < m_flowScenes.size()) {
-        FlowScene *currentScene = m_flowScenes[currentIndex];
-        m_executor = executorForScene(currentScene);
-        if (m_executor)
-            m_executor->propagateData(node);
-    }
-    const bool success = node->execute();
+    bool success = false;
+    if (!runWithBusyFeedback(QStringLiteral("正在执行 %1…").arg(node->fullName()), false,
+                             [this, node, &success]() {
+        const int currentIndex = ui->flowTabs->currentIndex();
+        if (currentIndex >= 0 && currentIndex < m_flowScenes.size()) {
+            FlowScene *currentScene = m_flowScenes[currentIndex];
+            m_executor = executorForScene(currentScene);
+            if (m_executor)
+                m_executor->propagateData(node);
+        }
+        success = node->execute();
+    }))
+        return;   // 执行中重复触发被忽略（已记日志）
     logMessage(success ? QStringLiteral("算子执行成功") : QStringLiteral("算子执行失败"));
     if (!success)
         return;

@@ -44,4 +44,7 @@ private:
     bool m_autoReconnect = true;
     int m_reconnectInterval = 3000;
     bool m_userClosed = false;   /// 用户/上层主动关闭：不触发自动重连
+    /// 异步连接模式（自动重连路径使用）：connectToHost 发起后立即返回，绝不阻塞 UI 线程。
+    /// 此前重连在 UI 线程同步 waitForConnected(3000)：设备离线时会周期性卡死界面。
+    bool m_asyncConnect = false;
 };
