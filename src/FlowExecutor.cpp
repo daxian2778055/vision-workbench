@@ -28,10 +28,18 @@ FlowExecutor::FlowExecutor(QObject *parent)
 {
     s_currentInstance = this;
 
-    // Connect to CommunicationManager data signals for trigger matching
-    connect(CommunicationManager::instance(), &CommunicationManager::dataReceived,
-            GlobalTriggerManager::instance(), &GlobalTriggerManager::onDataReceived);
-    // Connect CommunicationManager receive events to GlobalTriggerManager event triggers
+    // 全局转发（CM 接收 → GTM 触发匹配）只需建立**一次**：它是全局单例间的固定连线，
+    // 与具体执行器无关。原实现放在每个执行器构造里，N 个执行器会重复 connect N 次，
+    // 导致 onDataReceived 被重复触发 N 次（重复处理），且把执行器构造强耦合到全局单例。
+    // 用函数局部 static 保证首次构造时恰好连一次（C++11 起线程安全）。
+    static const bool s_forwardConnected = []() {
+        QObject::connect(CommunicationManager::instance(), &CommunicationManager::dataReceived,
+                        GlobalTriggerManager::instance(), &GlobalTriggerManager::onDataReceived);
+        return true;
+    }();
+    Q_UNUSED(s_forwardConnected)
+
+    // 本执行器专属：外部触发 → 启动（按 flowName 过滤，互不干扰）
     connect(GlobalTriggerManager::instance(), &GlobalTriggerManager::triggerFired,
             this, [this](const QString &flowName, const QString &triggerSource) {
         Q_UNUSED(triggerSource)

@@ -722,17 +722,17 @@ MainWindow::~MainWindow()
     // 在场景删除之后才被 delete，且非激活执行器只等 1 秒就删；等待超时后
     // QThread 析构会 terminate() 强杀线程，而紧接的场景删除又会让仍在执行的
     // 线程访问已释放节点（use-after-free + 强杀线程叠加）。
-    for (FlowExecutor *ex : qAsConst(m_flowExecutors)) {
-        if (!ex)
-            continue;
-        ex->stopExecution();
-        if (ex->isRunning() && !ex->wait(8000)) {
-            VFP_DEBUG << "FlowExecutor 未能在 8s 内退出（可能在长耗时算子中），继续关闭";
-        }
-        delete ex;
+    // 安全回收**全部**流程执行器（含当前激活的 m_executor）：先快照再逐个 retireExecutor，
+    // 杜绝等待超时后 terminate() 硬杀线程（可能卡在 HALCON/SQLite/锁上，叠加场景析构=UAF）。
+    QList<FlowExecutor *> allExecutors;
+    for (auto it = m_flowExecutors.constBegin(); it != m_flowExecutors.constEnd(); ++it) {
+        if (it.value())
+            allExecutors.append(it.value());
     }
     m_flowExecutors.clear();
-    m_executor = nullptr;   // 已随列表删除，置空避免悬垂
+    m_executor = nullptr;   // 已随列表摘除，置空避免悬垂
+    for (FlowExecutor *ex : qAsConst(allExecutors))
+        retireExecutor(ex);
     delete ui;
     qDeleteAll(m_flowScenes);
     m_flowScenes.clear();
@@ -756,6 +756,27 @@ FlowExecutor *MainWindow::executorForScene(FlowScene *scene)
     connectExecutorSignals(ex);
     m_flowExecutors.insert(scene, ex);
     return ex;
+}
+
+void MainWindow::retireExecutor(FlowExecutor *ex)
+{
+    if (!ex)
+        return;
+    // 先从注册表摘除：避免析构遍历二次处理，也清掉指向即将失效场景的悬垂键。
+    m_flowExecutors.remove(m_flowExecutors.key(ex));
+    // 置 Stopped + wakeAll，run() 在中断点（interruptibleSleep / 节点边界）自然退出。
+    ex->stopExecution();
+    if (!ex->isRunning() || ex->wait(15000)) {
+        delete ex;
+        return;
+    }
+    // 超时仍未退出：绝不 delete（QThread 析构会 terminate() 硬杀，可能卡在 HALCON 上下文 /
+    // SQLite 线程连接 / 持有锁，比一个随进程退出被 OS 回收的线程更危险）。
+    // 解除父子 + 断所有信号（避免执行器回调 MainWindow 已失效槽），挂 finished→deleteLater 自删。
+    VFP_DEBUG << "retireExecutor: 执行器超时未退出，放弃强杀，转 finished 自删";
+    ex->disconnect();
+    ex->setParent(nullptr);
+    QObject::connect(ex, &QThread::finished, ex, &QObject::deleteLater);
 }
 
 // 多流程并发：非激活流程执行器的轻量信号连接（状态/日志/运行界面推送）
@@ -1514,11 +1535,12 @@ void MainWindow::onNewProject()
         if (!ex)
             continue;
         GlobalTriggerManager::instance()->unregisterFlow(ex->flowName());
+        ex->stopExecution();          // 停掉旧方案可能运行中的流程（新方案首个流程会复用 spare）
         ex->setFlowScene(nullptr);
         if (!spareExecutor)
             spareExecutor = ex;   // 保留一个占位，供新方案首个流程复用
         else
-            delete ex;
+            retireExecutor(ex);   // 安全回收：stop+wait，超时绝不 terminate
     }
     m_flowExecutors.clear();
     m_executor = spareExecutor;
@@ -1662,11 +1684,12 @@ void MainWindow::loadProjectFile(const QString &fileName)
         if (!ex)
             continue;
         GlobalTriggerManager::instance()->unregisterFlow(ex->flowName());
+        ex->stopExecution();
         ex->setFlowScene(nullptr);
         if (!spareExecutor) {
             spareExecutor = ex;   // 保留一个作为占位执行器，供新方案首个流程复用
         } else {
-            delete ex;
+            retireExecutor(ex);   // 安全回收：stop+wait，超时绝不 terminate
         }
     }
     m_flowExecutors.clear();
@@ -1806,7 +1829,7 @@ void MainWindow::onCloseFlowTab(int index)
             m_flowExecutors.insert(nullptr, sceneEx);
             m_executor = sceneEx;
         } else if (sceneEx != m_executor) {
-            delete sceneEx;
+            retireExecutor(sceneEx);
         } else {
             m_executor = executorForScene(
                 m_flowScenes[qMin(index, m_flowScenes.size() - 1)]);

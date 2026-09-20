@@ -98,6 +98,9 @@ private:
     void addNode(const QString &nodeType);
     /// 多流程并发：获取场景专属执行器（不存在则创建并连接信号）
     FlowExecutor *executorForScene(FlowScene *scene);
+    /// 安全回收执行器：stopExecution + 有限等待；超时也**不** terminate（可能卡在 HALCON /
+    /// SQLite / 锁上，硬杀比随进程退出回收的线程更危险），改挂 finished→deleteLater 自删。
+    void retireExecutor(FlowExecutor *ex);
     /// 连接执行器信号到主窗口（状态栏/运行界面/参数面板）
     void connectExecutorSignals(FlowExecutor *ex);
     void setupToolLibrary();
