@@ -109,11 +109,15 @@ QString ResultTablePanel::toReportText(const QString &flowName) const
     }
 
     int failed = 0;
+    int skipped = 0;
     for (int i = 0; i < total; ++i) {
-        if (m_tree->topLevelItem(i)->text(kColStatus) != QStringLiteral("成功"))
+        const QString st = m_tree->topLevelItem(i)->text(kColStatus);
+        if (st == QStringLiteral("失败"))
             ++failed;
+        else if (st == QStringLiteral("跳过"))
+            ++skipped;   // 跳过 ≠ 失败：报告分开汇总
     }
-    lines << QStringLiteral("汇总: %1 个模块，失败 %2 个").arg(total).arg(failed);
+    lines << QStringLiteral("汇总: %1 个模块，失败 %2 个，跳过 %3 个").arg(total).arg(failed).arg(skipped);
     lines << QString();
 
     for (int i = 0; i < total; ++i) {
@@ -191,6 +195,36 @@ void ResultTablePanel::setModuleResult(int moduleId, const QString &moduleName, 
     updateSummary();
 }
 
+void ResultTablePanel::setModuleSkipped(int moduleId, const QString &moduleName)
+{
+    QTreeWidgetItem *row = m_rows.value(moduleId, nullptr);
+    const bool isNew = (row == nullptr);
+    if (isNew) {
+        row = new QTreeWidgetItem(m_tree);
+        m_rows.insert(moduleId, row);
+    }
+
+    row->setText(kColName, moduleName.isEmpty() ? QStringLiteral("模块 %1").arg(moduleId) : moduleName);
+    row->setText(kColStatus, QStringLiteral("跳过"));
+    row->setForeground(kColStatus, QBrush(QColor(0x80, 0x80, 0x80)));   // 灰色：未执行 ≠ 失败
+    row->setText(kColElapsed, QStringLiteral("-"));
+    row->setText(kColValue, QString());
+
+    const QList<QTreeWidgetItem *> old = row->takeChildren();
+    qDeleteAll(old);
+    auto *child = new QTreeWidgetItem(row);
+    child->setText(kColName, QStringLiteral("(本轮未执行：分支未激活或由循环调度)"));
+    row->setExpanded(true);
+
+    if (isNew)
+        m_tree->resizeColumnToContents(kColName);
+    if (!m_filterText.isEmpty())
+        applyFilter();
+    if (m_tree->isSortingEnabled() && m_tree->topLevelItemCount() > 1)
+        m_tree->sortItems(m_tree->sortColumn(), m_tree->header()->sortIndicatorOrder());
+    updateSummary();
+}
+
 void ResultTablePanel::setFilterText(const QString &text)
 {
     m_filterText = text;
@@ -249,18 +283,23 @@ void ResultTablePanel::updateSummary()
         return;
     int total = 0;
     int failed = 0;
+    int skipped = 0;
     for (int i = 0; i < m_tree->topLevelItemCount(); ++i) {
         ++total;
-        if (m_tree->topLevelItem(i)->text(kColStatus) != QStringLiteral("成功"))
+        const QString st = m_tree->topLevelItem(i)->text(kColStatus);
+        if (st == QStringLiteral("失败"))
             ++failed;
+        else if (st == QStringLiteral("跳过"))
+            ++skipped;   // 跳过 ≠ 失败：三态分开计数
     }
     if (total == 0) {
         m_summary->setText(QStringLiteral("暂无结果"));
         return;
     }
-    m_summary->setText(QStringLiteral("共 %1 个模块（失败 %2） · 更新于 %3")
+    m_summary->setText(QStringLiteral("共 %1 个模块（失败 %2，跳过 %3） · 更新于 %4")
                            .arg(total)
                            .arg(failed)
+                           .arg(skipped)
                            .arg(QTime::currentTime().toString(QStringLiteral("HH:mm:ss"))));
 }
 

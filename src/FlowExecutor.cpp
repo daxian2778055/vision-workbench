@@ -158,6 +158,7 @@ void FlowExecutor::resumeExecution()
 {
     QMutexLocker locker(&m_mutex);
     if (m_state == ExecutionState::Paused) {
+        m_stepMode = false;   // 显式"继续"= 退出单步模式，回到正常连续运行
         m_state = ExecutionState::Running;
         m_waitCondition.wakeAll();
         emit executionResumed();
@@ -188,6 +189,14 @@ void FlowExecutor::stopExecution()
     m_waitCondition.wakeAll();
 }
 
+void FlowExecutor::exitStepMode()
+{
+    // 历史缺陷：m_stepMode 只在 stopExecution 里清，单步用过一次后"开始执行"
+    // 仍然每节点暂停——单步模式粘住，流程无法回到正常连续运行（单步"一次性失效"）。
+    QMutexLocker locker(&m_mutex);
+    m_stepMode = false;
+}
+
 ExecutionState FlowExecutor::getState() const
 {
     QMutexLocker locker(&m_mutex);
@@ -201,6 +210,7 @@ void FlowExecutor::setFlowMode(FlowMode mode)
         QMutexLocker locker(&m_mutex);
         if (m_flowMode != mode) {
             m_flowMode = mode;
+            m_stepMode = false;   // 切换运行模式 = 明确要正常跑，退出单步模式
             changed = true;
         }
     }
@@ -249,11 +259,13 @@ void FlowExecutor::run()
         }
         if (!scene) {
             emit executionError(tr("Flow scene is not set"));
+            emit executionStopped();   // 终态信号：错误路径不发终态会让界面按钮停在"运行中"
             break;
         }
 
         QList<NodeBase *> nodes = scene->nodes();
         if (nodes.isEmpty()) {
+            emit executionStopped();   // 空场景同样需要终态信号（历史缺陷：静默退出，UI 卡"运行中"）
             break;
         }
 
@@ -270,6 +282,7 @@ void FlowExecutor::run()
                     m_graphStructureDirty = true;
                     cacheLock.unlock();
                     emit executionError(tr("流程中存在循环连接，无法确定执行顺序。"));
+                    emit executionStopped();   // 终态信号：恢复界面按钮状态
                     break;
                 }
                 m_cachedSortedNodes = topoOut;
@@ -297,7 +310,7 @@ void FlowExecutor::run()
             // 循环体节点由所属 LoopNode 统一调度执行，主遍历不再重复执行（P3）
             if (m_loopBodyNodes.contains(node)) {
                 VFP_EXEC_DEBUG << "Node skipped (loop body, scheduled by LoopNode):" << node->fullName();
-                recordNodeSkipped(node);
+                recordNodeSkipped(node, QStringLiteral("循环体由循环节点统一调度"));
                 continue;
             }
             VFP_EXEC_DEBUG << "Executing node:" << node->fullName();
@@ -325,7 +338,7 @@ void FlowExecutor::run()
                 }
                 m_nodeData[node].clear();   // 清空缓存，避免下游误用上一轮数据（E2）
                 m_nodeOutputVars[node->moduleId()].clear();  // 清空变量缓存，避免引用上一轮数值（P2）
-                recordNodeSkipped(node);
+                recordNodeSkipped(node, QStringLiteral("分支未激活"));
                 continue;
             }
             
@@ -479,6 +492,40 @@ void FlowExecutor::rebuildIncomingIndex(FlowScene *scene)
         NodeBase *src = conn->getSourceNode();
         if (src) {
             m_outgoing[src].append(conn);
+        }
+    }
+
+    // 图结构已变化：清掉指向"已不在当前场景中"的节点缓存条目。
+    // 撤销 / 删除节点后，旧指针地址与 moduleId 都可能被新节点复用，残留键会让
+    // 新节点被误判为"有缓存 / 输出有效"，把上一代节点的数据喂进算子
+    // （表面正常、结果错误——工业平台最坏故障）。
+    {
+        const QList<NodeBase *> liveNodes = scene->nodes();
+        QSet<NodeBase *> liveSet;
+        QSet<int> liveIds;
+        for (NodeBase *n : liveNodes) {
+            if (!n)
+                continue;
+            liveSet.insert(n);
+            liveIds.insert(n->moduleId());
+        }
+        for (auto it = m_nodeData.begin(); it != m_nodeData.end();) {
+            if (!liveSet.contains(it.key()))
+                it = m_nodeData.erase(it);
+            else
+                ++it;
+        }
+        for (auto it = m_validOutputs.begin(); it != m_validOutputs.end();) {
+            if (!liveSet.contains(it.key()))
+                it = m_validOutputs.erase(it);
+            else
+                ++it;
+        }
+        for (auto it = m_nodeOutputVars.begin(); it != m_nodeOutputVars.end();) {
+            if (!liveIds.contains(it.key()))
+                it = m_nodeOutputVars.erase(it);
+            else
+                ++it;
         }
     }
 
@@ -913,7 +960,7 @@ void FlowExecutor::executeLoop(NodeBase *loopNode, int loopCount)
             }
             // 内层循环的循环体由内层 LoopNode 调度，外层跳过（嵌套循环）
             if (nestedBodyNodes.contains(bn)) {
-                recordNodeSkipped(bn);
+                recordNodeSkipped(bn, QStringLiteral("嵌套循环体由内层循环节点调度"));
                 continue;
             }
 
@@ -923,7 +970,7 @@ void FlowExecutor::executeLoop(NodeBase *loopNode, int loopCount)
                     bn->setOutputData(p, QSharedPointer<DataObject>());
                 m_nodeData[bn].clear();
                 m_nodeOutputVars[bn->moduleId()].clear();
-                recordNodeSkipped(bn);
+                recordNodeSkipped(bn, QStringLiteral("分支未激活"));
                 continue;
             }
             executeNode(bn, false);
@@ -1048,13 +1095,17 @@ void FlowExecutor::setStatsLogIntervalMs(int ms)
     m_statsLogIntervalMs = qMax(0, ms);
 }
 
-void FlowExecutor::recordNodeSkipped(NodeBase *node)
+void FlowExecutor::recordNodeSkipped(NodeBase *node, const QString &reason)
 {
     if (!node) {
         return;
     }
-    QMutexLocker locker(&m_statsMutex);
-    m_stats.onNodeSkipped(node->fullName());
+    {
+        QMutexLocker locker(&m_statsMutex);
+        m_stats.onNodeSkipped(node->fullName());
+    }
+    // 三态可视化：把"跳过"从统计数字变成 UI 可消费的事件（跨线程排队到界面线程）
+    emit nodeSkipped(node, reason);
 }
 
 void FlowExecutor::recordRoundFinished(qint64 roundMs)
@@ -1202,11 +1253,45 @@ void FlowExecutor::invalidateDownstreamOf(NodeBase *startNode)
         return;
     }
 
+    // 运行/暂停中不得触碰执行器缓存：缓存由执行线程独占使用，界面线程清空会与之
+    // 竞争（QMap/QHash 结构破坏 → 随机崩溃或把旧数据喂给算子）。此场景跳过作废
+    // 是安全的：下次 startExecution 的 resetState 会整体清缓存。
+    {
+        QMutexLocker stateLock(&m_mutex);
+        if (m_state == ExecutionState::Running || m_state == ExecutionState::Paused) {
+            VFP_DEBUG << "invalidateDownstreamOf ignored: flow is running/paused";
+            return;
+        }
+    }
+
     // 沿出边做传递闭包，收集 startNode 自身及其全部下游。
     // m_outgoing 由 rebuildIncomingIndex() 构建，受 m_graphCacheMutex 保护。
     QSet<NodeBase *> affected;
     {
         QMutexLocker graphLocker(&m_graphCacheMutex);
+        // 图结构有变更（撤销/删除节点等）时 m_outgoing 可能仍指向已释放的连接/节点，
+        // 直接遍历会踩悬垂指针——先按当前场景重建索引（含缓存剪枝），再遍历。
+        if (m_graphStructureDirty) {
+            FlowScene *scene = nullptr;
+            {
+                QMutexLocker sceneLock(&m_mutex);
+                scene = m_scene;
+            }
+            if (scene) {
+                const QList<NodeBase *> nodes = scene->nodes();
+                rebuildIncomingIndex(scene);
+                QList<NodeBase *> sorted;
+                if (topologicalSort(nodes, sorted))
+                    m_cachedSortedNodes = sorted;
+                m_graphStructureDirty = false;
+            } else {
+                m_incoming.clear();
+                m_outgoing.clear();
+                m_cachedSortedNodes.clear();
+                m_loopBodyNodes.clear();
+                m_graphStructureDirty = false;
+            }
+        }
         QQueue<NodeBase *> queue;
         queue.enqueue(startNode);
         affected.insert(startNode);

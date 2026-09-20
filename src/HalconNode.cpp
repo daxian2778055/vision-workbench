@@ -56,7 +56,7 @@ void HalconNode::init()
     addOutputPort(QStringLiteral("输出图像"));
     
     // 初始化默认参数
-    m_params["moduleStatus"] = false; // 模块状态（bool量）
+    setParamDirect(QStringLiteral("moduleStatus"), false); // 模块状态（bool量）
 }
 
 void HalconNode::run(bool autoSwitch)
@@ -90,7 +90,7 @@ void HalconNode::setParam(const QString &name, const QVariant &value)
         break;
     }
 
-    m_params[name] = normalized;
+    m_params.insert(name, normalized);   // 参数表自带读写锁，与执行线程互斥
 
     // 参数变化时触发延迟预览
     if (m_autoPreviewEnabled) {
@@ -100,12 +100,17 @@ void HalconNode::setParam(const QString &name, const QVariant &value)
 
 QVariant HalconNode::getParam(const QString &name) const
 {
-    return m_params.value(name);
+    return m_params.value(name);   // 参数表自带读锁
 }
 
 bool HalconNode::hasParam(const QString &name) const
 {
     return m_params.contains(name);
+}
+
+void HalconNode::setParamDirect(const QString &name, const QVariant &value)
+{
+    m_params.insert(name, value);
 }
 
 void HalconNode::setAutoPreviewEnabled(bool enabled)
@@ -188,9 +193,10 @@ QJsonObject HalconNode::toJson() const
     json["executionSuccess"] = m_executionSuccess;
     json["enabled"] = m_enabled;
     
-    // Add parameters
+    // Add parameters（运行中保存方案也安全：snapshot 在锁内整体拷贝）
     QJsonObject params;
-    for (auto it = m_params.constBegin(); it != m_params.constEnd(); ++it) {
+    const QMap<QString, QVariant> snapshot = m_params.snapshot();
+    for (auto it = snapshot.constBegin(); it != snapshot.constEnd(); ++it) {
         params[it.key()] = QJsonValue::fromVariant(it.value());
     }
     json["params"] = params;

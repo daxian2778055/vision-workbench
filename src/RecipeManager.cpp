@@ -3,6 +3,7 @@
 #include "NodeBase.h"
 #include "AppLog.h"
 #include <QFile>
+#include <QSaveFile>
 #include <QDir>
 #include <QHash>
 #include <QJsonDocument>
@@ -96,7 +97,8 @@ void RecipeManager::loadFromStorage()
 void RecipeManager::saveToStorage()
 {
     QString path = storagePath();
-    QFile file(path);
+    // 原子写（QSaveFile）：配方库是共享单文件，写坏即全部配方丢失
+    QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly)) {
         VFP_DEBUG << "Failed to write recipe storage:" << path;
         return;
@@ -123,8 +125,11 @@ void RecipeManager::saveToStorage()
     }
 
     root[QStringLiteral("recipes")] = recipes;
-    file.write(QJsonDocument(root).toJson());
-    file.close();
+    const QByteArray payload = QJsonDocument(root).toJson();
+    if (file.write(payload) != payload.size() || !file.commit()) {
+        file.cancelWriting();
+        VFP_DEBUG << "Failed to write recipe storage (incomplete):" << path;
+    }
 }
 
 QStringList RecipeManager::recipeNames() const
@@ -309,11 +314,14 @@ bool RecipeManager::exportRecipe(const QString &name, const QString &filePath)
     }
     obj[QStringLiteral("parameters")] = params;
 
-    QFile file(filePath);
+    QSaveFile file(filePath);   // 原子写：导出文件同样避免半份
     if (!file.open(QIODevice::WriteOnly)) return false;
-    file.write(QJsonDocument(obj).toJson());
-    file.close();
-    return true;
+    const QByteArray payload = QJsonDocument(obj).toJson();
+    if (file.write(payload) != payload.size()) {
+        file.cancelWriting();
+        return false;
+    }
+    return file.commit();
 }
 
 bool RecipeManager::importRecipe(const QString &filePath)

@@ -12,6 +12,16 @@
 #include <QMessageBox>
 #include <QApplication>
 #include <QDir>
+#include <QFileInfo>
+#include <QDialog>
+#include <QLabel>
+#include <QVBoxLayout>
+#include <QPlainTextEdit>
+#include <QDialogButtonBox>
+#include <QPushButton>
+#include <QTextCursor>
+#include <QFont>
+#include <QThread>
 #include <QProcess>
 #include <QElapsedTimer>
 #include <QStringList>
@@ -90,13 +100,34 @@ void ScriptSecurityPolicy::save()
 QString ScriptSecurityPolicy::interpreterPath(const QString &language) const
 {
     const QString configured = (language == QStringLiteral("Python")) ? m_pythonPath : m_luaPath;
-    if (!configured.isEmpty()) {
+
+    // 1) 显式配置的绝对路径：原样使用（现场多套 Python/venv 的推荐做法）
+    if (!configured.isEmpty() && QFileInfo(configured).isAbsolute()) {
         return configured;
     }
-    // 未配置：回落到命令名，与历史行为完全一致（由 PATH 解析）。
-    // 注意：现场多套 Python/venv 时应配置全路径——PATH 解析可能选错版本，
-    // 且"当前目录优先"在某些启动方式下存在被同目录同名可执行文件顶替的风险。
-    return (language == QStringLiteral("Python")) ? QStringLiteral("python") : QStringLiteral("lua");
+
+    const QString candidate = configured.isEmpty()
+        ? ((language == QStringLiteral("Python")) ? QStringLiteral("python") : QStringLiteral("lua"))
+        : configured;
+
+    // 2) 按 PATH 解析成**绝对路径**（findExecutable 不搜当前工作目录）。
+    //    绝不把裸名交给启动接口：Windows 的 CreateProcess 搜索序会先看
+    //    应用目录与当前目录，攻击者在 exe 旁或工作目录放一个同名 python.exe，
+    //    就能顶替掉"确认过的可信脚本"实际执行的解释器（提权/横向）。
+    const QString byPath = QStandardPaths::findExecutable(candidate);
+    if (!byPath.isEmpty()) {
+        return byPath;
+    }
+
+    // 3) PATH 中找不到：显式退回 exe 同目录（便携部署把解释器放在程序旁），留日志便于溯源
+    const QString beside = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(candidate);
+    if (QFileInfo::exists(beside)) {
+        qWarning() << "解释器未在 PATH 中找到，改用程序目录内的解释器:" << beside;
+        return beside;
+    }
+
+    // 4) 解析失败：返回空串，调用方 fail-closed 拒绝执行并提示配置全路径
+    return QString();
 }
 
 void ScriptSecurityPolicy::setInterpreterPath(const QString &language, const QString &path)
@@ -126,27 +157,74 @@ bool ScriptSecurityPolicy::evaluate(const QString &language, const QString & /*s
     return true;
 }
 
+namespace {
+/// 展示"脚本执行确认"窗口——**必须在 GUI 线程调用**（QWidget 归属约束）。
+/// 完整展示脚本（只读、可滚动、不截断），默认按钮为"取消"（回车不会误确认）。
+bool showScriptConfirmationOnGuiThread(const QString &language, const QString &script)
+{
+    // 历史实现只显示前 400 字符并标注"已截断"——恶意 payload 只要落在第 401 字符
+    // 之后就完全不可见，确认框形同虚设（这是安全洞，不是排版问题）。
+    QDialog dlg;
+    dlg.setWindowTitle(QStringLiteral("脚本执行确认"));
+    dlg.resize(720, 480);
+    auto *layout = new QVBoxLayout(&dlg);
+
+    auto *head = new QLabel(&dlg);
+    head->setWordWrap(true);
+    head->setText(QStringLiteral(
+        "即将执行 <b>%1</b> 脚本（以当前用户权限运行，存在安全风险）。<br>"
+        "仅应运行你完全信任的脚本。请核对下方脚本<b>全部内容</b>（可滚动，共 %2 字符）：")
+        .arg(language.toHtmlEscaped())
+        .arg(script.size()));
+    layout->addWidget(head);
+
+    auto *view = new QPlainTextEdit(&dlg);
+    view->setReadOnly(true);
+    view->setPlainText(script);          // 全文：不截断
+    view->setLineWrapMode(QPlainTextEdit::NoWrap);
+    QFont monospace(QStringLiteral("Consolas"));
+    monospace.setStyleHint(QFont::Monospace);
+    monospace.setPointSize(9);
+    view->setFont(monospace);
+    view->moveCursor(QTextCursor::Start);   // 滚动位置回到开头
+    layout->addWidget(view, 1);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Yes | QDialogButtonBox::No, &dlg);
+    if (QPushButton *yes = buttons->button(QDialogButtonBox::Yes))
+        yes->setText(QStringLiteral("确认执行"));
+    if (QPushButton *no = buttons->button(QDialogButtonBox::No)) {
+        no->setText(QStringLiteral("取消"));
+        no->setDefault(true);   // 默认拒绝：回车不会误确认
+    }
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    return dlg.exec() == QDialog::Accepted;
+}
+}   // namespace
+
 bool ScriptSecurityPolicy::requestConfirmation(const QString &language, const QString &script) const
 {
     if (!m_requireConfirmation) {
         return true;
     }
-    const int previewLen = 400;
-    const QString preview = script.size() > previewLen
-        ? script.left(previewLen) + QStringLiteral("\n... (已截断)")
-        : script;
-    const QString text = QStringLiteral(
-        "即将执行 %1 脚本（以当前用户权限运行，存在安全风险）。\n\n"
-        "仅应运行你完全信任的脚本。脚本内容预览：\n\n%2")
-        .arg(language, preview);
 
-    // 无 QApplication（如测试）时不弹窗，直接放行。
-    if (!qobject_cast<QApplication *>(QCoreApplication::instance())) {
-        return true;
+    QApplication *app = qobject_cast<QApplication *>(QCoreApplication::instance());
+    if (!app) {
+        return true;   // 无 QApplication（如测试环境）：不弹窗直接放行
     }
-    const int ret = QMessageBox::warning(nullptr, QStringLiteral("脚本执行确认"), text,
-                                         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-    return ret == QMessageBox::Yes;
+
+    // 本函数会从执行线程调用（ScriptNode::run），而 QWidget 必须在其所属 GUI 线程创建：
+    // 非 GUI 线程时阻塞式切回主线程弹窗并取回结果（默认拒绝语义不变）。
+    if (QThread::currentThread() != app->thread()) {
+        bool accepted = false;
+        QMetaObject::invokeMethod(app, [&accepted, &language, &script]() {
+            accepted = showScriptConfirmationOnGuiThread(language, script);
+        }, Qt::BlockingQueuedConnection);
+        return accepted;
+    }
+    return showScriptConfirmationOnGuiThread(language, script);
 }
 
 void ScriptSecurityPolicy::audit(const QString &language, const QString &script,

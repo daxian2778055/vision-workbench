@@ -37,13 +37,13 @@ void CameraIoNode::init()
                       QStringLiteral("写入值（action=写 时生效）")),
     });
     m_params[QStringLiteral("lastError")] = QString();
-    m_params[QStringLiteral("moduleStatus")] = false;
+    setParamDirect(QStringLiteral("moduleStatus"), false);
 }
 
 void CameraIoNode::run(bool /*autoSwitch*/)
 {
     m_params[QStringLiteral("lastError")] = QString();
-    m_params[QStringLiteral("moduleStatus")] = false;
+    setParamDirect(QStringLiteral("moduleStatus"), false);
     bool value = false;
     try {
         const QString cameraName =
@@ -89,7 +89,7 @@ void CameraIoNode::run(bool /*autoSwitch*/)
             }
         }
 
-        m_params[QStringLiteral("moduleStatus")] = true;
+        setParamDirect(QStringLiteral("moduleStatus"), true);
 
         // 端口0：值（Bool）
         auto valObj = QSharedPointer<DataObject>::create();

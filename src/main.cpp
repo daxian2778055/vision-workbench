@@ -41,6 +41,36 @@ constexpr int kDatabaseRetainDays = 30;                        ///< 报警/检�
 constexpr int kDatabasePurgeFirstDelayMs = 60 * 1000;          ///< 启动后首次清理的延迟
 constexpr int kDatabasePurgeIntervalMs = 24 * 60 * 60 * 1000;  ///< 之后每日清理一次
 
+namespace {
+constexpr qint64 kCrashLogMaxBytes = 2 * 1024 * 1024;   ///< 崩溃日志单文件上限（超限轮转）
+
+/// 超过上限轮转一代：crash.log → crash.log.1（旧的 .1 覆盖），防长跑崩溃循环写满磁盘
+void rotateCrashLogIfNeeded(const QString &path)
+{
+    QFile f(path);
+    if (!f.exists() || f.size() < kCrashLogMaxBytes) {
+        return;
+    }
+    const QString backup = path + QStringLiteral(".1");
+    QFile::remove(backup);
+    QFile::rename(path, backup);
+}
+
+/// 确保日志目录存在、按需轮转，并返回崩溃日志路径。
+/// 固定落在 **exe 旁 logs/**（与部署目录结构一致）：历史实现用 QDir::current()
+/// （进程工作目录）——双击、命令行、快捷方式启动会落到不同目录，现场"找不到
+/// 崩溃日志"多半是这个原因；且旧实现只 append、无上限。
+QString prepareCrashLog()
+{
+    const QString dir = QDir(QCoreApplication::applicationDirPath())
+                            .absoluteFilePath(QStringLiteral("logs"));
+    QDir().mkpath(dir);
+    const QString path = dir + QStringLiteral("/crash.log");
+    rotateCrashLogIfNeeded(path);
+    return path;
+}
+}   // namespace
+
 /// 将所有 Qt 警告/错误/致命日志同时写入崩溃日志文件
 void crashLogHandler(QtMsgType type, const QMessageLogContext &ctx, const QString &msg)
 {
@@ -52,9 +82,8 @@ void crashLogHandler(QtMsgType type, const QMessageLogContext &ctx, const QStrin
     int idx = qBound(0, static_cast<int>(type), 4);
 
     QMutexLocker locker(&g_crashMutex);
-    QString dir = QDir::current().absoluteFilePath(QStringLiteral("logs"));
-    QDir().mkpath(dir);
-    QFile file(dir + QStringLiteral("/crash.log"));
+    const QString logPath = prepareCrashLog();
+    QFile file(logPath);
     if (file.open(QIODevice::Append | QIODevice::Text)) {
         QTextStream out(&file);
         out << QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"))
@@ -74,9 +103,8 @@ void uncaughtExceptionHandler()
         throw;
     } catch (const std::exception &e) {
         QMutexLocker locker(&g_crashMutex);
-        QString dir = QDir::current().absoluteFilePath(QStringLiteral("logs"));
-        QDir().mkpath(dir);
-        QFile file(dir + QStringLiteral("/crash.log"));
+        const QString logPath = prepareCrashLog();
+        QFile file(logPath);
         if (file.open(QIODevice::Append | QIODevice::Text)) {
             QTextStream out(&file);
             out << QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"))
@@ -122,9 +150,8 @@ void dumpStackToLog(QTextStream &out)
 void signalHandler(int sig)
 {
     QMutexLocker locker(&g_crashMutex);
-    QString dir = QDir::current().absoluteFilePath(QStringLiteral("logs"));
-    QDir().mkpath(dir);
-    QFile file(dir + QStringLiteral("/crash.log"));
+    const QString logPath = prepareCrashLog();
+    QFile file(logPath);
     if (file.open(QIODevice::Append | QIODevice::Text)) {
         QTextStream out(&file);
         out << QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"))
@@ -139,13 +166,17 @@ void signalHandler(int sig)
 /// SEH 异常（访问违例等）处理：记录文本栈 + 生成 minidump（.dmp），供现场回溯
 LONG WINAPI sehHandler(EXCEPTION_POINTERS *ep)
 {
-    QString dir = QDir::current().absoluteFilePath(QStringLiteral("logs"));
+    // 崩溃产物固定落在 exe 旁 logs/（与部署结构一致，避免随进程工作目录漂移）
+    const QString dir = QDir(QCoreApplication::applicationDirPath())
+                            .absoluteFilePath(QStringLiteral("logs"));
     QDir().mkpath(dir);
 
     // 1) 文本栈
     {
         QMutexLocker locker(&g_crashMutex);
-        QFile file(dir + QStringLiteral("/crash.log"));
+        const QString logPath = dir + QStringLiteral("/crash.log");
+        rotateCrashLogIfNeeded(logPath);
+        QFile file(logPath);
         if (file.open(QIODevice::Append | QIODevice::Text)) {
             QTextStream out(&file);
             out << QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"))

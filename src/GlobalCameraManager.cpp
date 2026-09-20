@@ -1,6 +1,7 @@
 #include "GlobalCameraManager.h"
 #include <QMutex>
 #include <QFile>
+#include <QSaveFile>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -776,11 +777,13 @@ void GlobalCameraManager::fromJson(const QJsonObject &json)
 bool GlobalCameraManager::saveToFile(const QString &fileName) const
 {
     QJsonDocument doc(toJson());
-    QFile file(fileName);
+    // 原子写（QSaveFile）：相机注册表是全局单文件，写坏即相机全丢
+    QSaveFile file(fileName);
     if (file.open(QIODevice::WriteOnly)) {
-        file.write(doc.toJson());
-        file.close();
-        return true;
+        const QByteArray payload = doc.toJson();
+        if (file.write(payload) == payload.size() && file.commit())
+            return true;
+        file.cancelWriting();
     }
     return false;
 }

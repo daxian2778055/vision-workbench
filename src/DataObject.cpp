@@ -24,27 +24,32 @@ DataObject::~DataObject()
 
 DataObject::DataType DataObject::getType() const
 {
+    QMutexLocker locker(&m_mutex);
     return m_type;
 }
 
 QVariant DataObject::getData() const
 {
+    QMutexLocker locker(&m_mutex);
     return m_data;
 }
 
 void DataObject::setData(const QVariant &data)
 {
+    QMutexLocker locker(&m_mutex);
     m_data = data;
 }
 
 // HImage相关方法
 HalconCpp::HImage DataObject::getHImage() const
 {
+    QMutexLocker locker(&m_mutex);
     return m_hImage;
 }
 
 void DataObject::setHImage(const HalconCpp::HImage &image)
 {
+    QMutexLocker locker(&m_mutex);
     // 清理旧的HImage对象
     if (m_hImage.IsInitialized()) {
         m_hImage.Clear();
@@ -60,11 +65,13 @@ void DataObject::setHImage(const HalconCpp::HImage &image)
 
 HalconCpp::HObject DataObject::getHObject() const
 {
+    QMutexLocker locker(&m_mutex);
     return m_hObject;
 }
 
 void DataObject::setHObject(const HalconCpp::HObject &obj)
 {
+    QMutexLocker locker(&m_mutex);
     if (m_hObject.IsInitialized()) {
         m_hObject.Clear();
     }
@@ -78,6 +85,7 @@ void DataObject::setHObject(const HalconCpp::HObject &obj)
 
 HalconCpp::HRegion DataObject::getHRegion() const
 {
+    QMutexLocker locker(&m_mutex);
     if (m_hObject.IsInitialized())
         return HalconCpp::HRegion(m_hObject);
     return HalconCpp::HRegion();
@@ -91,6 +99,7 @@ void DataObject::setHRegion(const HalconCpp::HRegion &region)
 
 HalconCpp::HXLDCont DataObject::getHXLDCont() const
 {
+    QMutexLocker locker(&m_mutex);
     if (m_hObject.IsInitialized())
         return HalconCpp::HXLDCont(m_hObject);
     return HalconCpp::HXLDCont();
@@ -104,6 +113,7 @@ void DataObject::setHXLDCont(const HalconCpp::HXLDCont &xld)
 
 MeasureResult DataObject::getMeasureResult() const
 {
+    QMutexLocker locker(&m_mutex);
     if (m_data.canConvert<MeasureResult>())
         return m_data.value<MeasureResult>();
     return MeasureResult();
@@ -111,12 +121,14 @@ MeasureResult DataObject::getMeasureResult() const
 
 void DataObject::setMeasureResult(const MeasureResult &r)
 {
+    QMutexLocker locker(&m_mutex);
     m_data = QVariant::fromValue(r);
     m_type = DataType::Measure;
 }
 
 DetectionResult DataObject::getDetectionResult() const
 {
+    QMutexLocker locker(&m_mutex);
     if (m_data.canConvert<DetectionResult>())
         return m_data.value<DetectionResult>();
     return DetectionResult();
@@ -124,23 +136,27 @@ DetectionResult DataObject::getDetectionResult() const
 
 void DataObject::setDetectionResult(const DetectionResult &r)
 {
+    QMutexLocker locker(&m_mutex);
     m_data = QVariant::fromValue(r);
     m_type = DataType::Detections;
 }
 
 QPointF DataObject::getPoint() const
 {
+    QMutexLocker locker(&m_mutex);
     return m_data.toPointF();
 }
 
 void DataObject::setPoint(const QPointF &p)
 {
+    QMutexLocker locker(&m_mutex);
     m_data = p;
     m_type = DataType::Point;
 }
 
 QString DataObject::getTypeString() const
 {
+    QMutexLocker locker(&m_mutex);
     switch (m_type) {
         case DataType::Image:
             return "Image";
@@ -171,10 +187,12 @@ QString DataObject::getTypeString() const
 
 QString DataObject::sourceInfo() const
 {
+    QMutexLocker locker(&m_mutex);
     return m_sourceInfo;
 }
 
 void DataObject::setSourceInfo(const QString &sourceInfo)
 {
+    QMutexLocker locker(&m_mutex);
     m_sourceInfo = sourceInfo;
 }

@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSaveFile>
 #include <QJsonDocument>
 #include <QStandardPaths>
 
@@ -72,7 +73,8 @@ bool NodeTemplateStore::save() const
     root.insert(QLatin1String(kFieldTemplates), m_templates);
 
     const QString path = storageFilePath();
-    QFile file(path);
+    // 原子写（QSaveFile）：模板库是全局单文件，半份写入会让模板全丢
+    QSaveFile file(path);
     // 目标目录可能还不存在（首次使用）——自己建，避免"保存失败但看不出原因"
     const QString dir = QFileInfo(path).absolutePath();
     if (!QDir().mkpath(dir)) {
@@ -82,8 +84,7 @@ bool NodeTemplateStore::save() const
         return false;
     }
     file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-    file.close();
-    return true;
+    return file.commit();
 }
 
 QStringList NodeTemplateStore::names() const

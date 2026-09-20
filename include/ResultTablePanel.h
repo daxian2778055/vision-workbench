@@ -22,6 +22,9 @@ public:
     /// 用某模块的一次执行结果更新表格；同一模块重复调用只原地更新，不新增行沿用旧值。
     void setModuleResult(int moduleId, const QString &moduleName, bool success,
                          qint64 elapsedMs, const QVariantMap &vars);
+    /// 标记某模块本轮被跳过（未激活分支 / 循环体调度）：状态列显示"跳过"（灰色），
+    /// 与"失败"区分——现场排查"哪个算子没跑"靠它，而不是从"失败"里猜。
+    void setModuleSkipped(int moduleId, const QString &moduleName);
     /// 清空全部结果
     void clearResults();
     /// 设置筛选关键字（按模块名/输出项/值模糊匹配；空串表示显示全部）

@@ -7,6 +7,7 @@
 #include "HalconWindow.h"
 #include <QImage>
 #include <halconcpp/HalconCpp.h>
+#include "ThreadSafeParams.h"
 
 using namespace HalconCpp;
 
@@ -82,9 +83,16 @@ signals:
 protected:
     HObject m_inputImage;
     HObject m_outputImage;
-    QMap<QString, QVariant> m_params;
+    /// 线程安全参数表（内部 QReadWriteLock）：界面线程与执行线程可并发访问。
+    /// 支持 m_params[k] = v（加锁写代理）/ value / contains / keys / insert / remove / clear；
+    /// 需要整体遍历时用 m_params.snapshot()（切勿遍历本对象）。
+    /// 新增代码建议统一走访问器（setParam / getParam / setParamDirect）。
+    ThreadSafeParams m_params;
     ParamSpecList m_paramSpecs; /// 参数描述（用于自动面板/序列化范围校验）
     QImage m_editMask;          /// 可选掩膜（白=保留，黑=忽略）
+
+    /// 加锁写入、不触发延迟预览（供子类写状态类参数）
+    void setParamDirect(const QString &name, const QVariant &value);
 
     // 实时预览相关
     bool m_autoPreviewEnabled = false;  /// 是否启用自动预览

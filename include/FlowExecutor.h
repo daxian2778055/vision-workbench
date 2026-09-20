@@ -56,6 +56,8 @@ public:
     void resumeExecution();
     /// 单步执行：进入步进模式并推进一个节点（未运行时从首个节点开始）
     void stepExecution();
+    /// 退出单步模式（点"开始执行/继续"或切换运行模式时调用；单步入口会重新置位）
+    void exitStepMode();
     void stopExecution();
     ExecutionState getState() const;
 
@@ -124,6 +126,9 @@ signals:
     void nodeExecutionTime(NodeBase *node, qint64 elapsedMs);
     /// 节点执行后的输出变量快照（供结果数据表；跨线程排队传递，UI 侧无需加锁读缓存）
     void nodeOutputsUpdated(NodeBase *node, bool success, qint64 elapsedMs, const QVariantMap &vars);
+    /// 节点被跳过（未激活分支 / 循环体由 LoopNode 调度）——三态可视化用，
+    /// 结果面板据此把该模块标为"跳过"（灰色），与"失败"区分开
+    void nodeSkipped(NodeBase *node, const QString &reason);
     /// 整体流程执行耗时信号
     void flowExecutionTime(qint64 totalMs);
 
@@ -149,8 +154,8 @@ private:
     /// 识别循环体节点（按缓存拓扑序）
     QList<NodeBase *> collectLoopBody(NodeBase *loopNode) const;
     void resetState();
-    /// 记录一个节点被跳过（未激活分支 / 循环体由外层调度）
-    void recordNodeSkipped(NodeBase *node);
+    /// 记录一个节点被跳过（未激活分支 / 循环体由外层调度），并对外发 nodeSkipped
+    void recordNodeSkipped(NodeBase *node, const QString &reason);
     /// 轮次结束：累计轮次统计，并按间隔采样进程资源 + 输出统计日志
     void recordRoundFinished(qint64 roundMs);
     void disconnectFromScene();

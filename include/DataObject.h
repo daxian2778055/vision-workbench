@@ -5,6 +5,7 @@
 #include <QPointF>
 #include <QVector>
 #include <QSharedPointer>
+#include <QMutex>
 #include <HalconCpp.h>
 
 /// 测量结果结构（供卡尺、距离、角度等测量算子输出）
@@ -102,6 +103,12 @@ public:
     QString getTypeString() const;
 
 private:
+    /// 内部读写锁：DataObject 发布到输出端口**之后**仍可能被写
+    /// （如 FlowExecutor::propagateData 打来源戳、节点复用输出对象），
+    /// 而界面线程同时在读（结果面板/变量面板/预览）——无锁即为数据竞争。
+    /// 用递归锁：setHRegion / setHXLDCont 内部复用 setHObject。
+    mutable QRecursiveMutex m_mutex;
+
     DataType m_type;
     QVariant m_data;
     HalconCpp::HImage m_hImage; // 专门存储HImage对象

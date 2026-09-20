@@ -1,4 +1,5 @@
 #include "RuntimeInterface.h"
+#include <QSaveFile>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonArray>
@@ -240,10 +241,11 @@ bool RuntimeInterface::fromJson(const QJsonObject &json)
 
 bool RuntimeInterface::saveToFile(const QString &fileName) const
 {
-    QFile f(fileName);
+    // 原子写（QSaveFile）：运行界面布局是全局单文件，写坏即"界面全空"
+    QSaveFile f(fileName);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) return false;
     f.write(QJsonDocument(toJson()).toJson(QJsonDocument::Indented));
-    return true;
+    return f.commit();
 }
 
 bool RuntimeInterface::loadFromFile(const QString &fileName)

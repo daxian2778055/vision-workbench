@@ -3,6 +3,7 @@
 #include <QtTest/QtTest>
 #include <QCoreApplication>
 #include <QFile>
+#include <QFileInfo>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QTemporaryDir>
@@ -15,6 +16,7 @@
 ///  3. 环境清理：剥离 PYTHONPATH/LD_PRELOAD 等可注入变量，保留 PATH
 ///  4. 审计日志：允许/拒绝动作写入结构化日志行
 ///  5. 总开关：disabled 时拦截一切执行
+///  6. 解释器路径：未配置时解析为绝对路径（解析不到返回空串 fail-closed），绝不回落裸名
 ///
 /// 注意：本测试只验证"策略决策逻辑"，不启动真实解释器，也不依赖 Python/Lua。
 class ScriptSecurityPolicyTest : public QObject
@@ -172,13 +174,17 @@ void ScriptSecurityPolicyTest::sandboxMode_persistsAcrossLoad()
 void ScriptSecurityPolicyTest::interpreterPath_persistsAndFallsBack()
 {
     // 解释器路径：现场常有多套 Python/venv，必须能显式指定并跨进程记住；
-    // 未配置时要回落到命令名（与历史行为一致，保证向后兼容）。
+    // 未配置时**按 PATH 解析为绝对路径**（解析不到返回空串，由调用方 fail-closed）。
+    // 安全不变量：绝不返回裸名/相对名——Windows 的 CreateProcess 搜索序会先看
+    // 应用目录与当前目录，同名 exe 可顶替"确认过的可信脚本"实际执行的解释器。
     ScriptSecurityPolicy &p = ScriptSecurityPolicy::instance();
     const QString original = p.interpreterPath(QStringLiteral("Python"));
 
-    // ① 未配置 → 回落命令名
+    // ① 未配置 → 绝对路径或空串（本测试不依赖机器上装了 Python）
     p.setInterpreterPath(QStringLiteral("Python"), QString());
-    QCOMPARE(p.interpreterPath(QStringLiteral("Python")), QStringLiteral("python"));
+    const QString fallback = p.interpreterPath(QStringLiteral("Python"));
+    QVERIFY2(fallback.isEmpty() || QFileInfo(fallback).isAbsolute(),
+             qPrintable(QStringLiteral("未配置时不得返回裸名/相对名，实际: %1").arg(fallback)));
 
     // ② 显式路径 → save/load 往返保持（跨进程生效）
     p.setInterpreterPath(QStringLiteral("Python"), QStringLiteral("C:/Python314/python.exe"));

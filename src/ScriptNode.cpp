@@ -43,7 +43,7 @@ void ScriptNode::init()
 void ScriptNode::run(bool /*autoSwitch*/)
 {
     m_params[QStringLiteral("lastOutput")] = QString();
-    m_params[QStringLiteral("moduleStatus")] = false;
+    setParamDirect(QStringLiteral("moduleStatus"), false);
     m_lastRunFailed = false;
 
     QString script = m_params.value(QStringLiteral("scriptContent")).toString();
@@ -98,7 +98,7 @@ void ScriptNode::run(bool /*autoSwitch*/)
 
     // 只有解释器正常执行完才算成功。此前 run() 从不置位 moduleStatus，
     // 导致本节点恒报失败，默认的“失败时停止”会把含脚本节点的流程误停（P1）
-    m_params[QStringLiteral("moduleStatus")] = !m_lastRunFailed;
+    setParamDirect(QStringLiteral("moduleStatus"), !m_lastRunFailed);
 }
 
 bool ScriptNode::waitCancellable(QProcess &process, int maxMs, QString &errOut)
@@ -145,6 +145,17 @@ QString ScriptNode::executePythonScript(const QString &script, const QStringList
 
     auto &policy = ScriptSecurityPolicy::instance();
 
+    // 解释器必须是可解析的**绝对路径**：解析不到直接 fail-closed。
+    // （历史实现把裸名 "python" 交给启动接口——Windows 搜索序先看应用目录/当前目录，
+    // 同目录放一个同名 exe 即可顶替解释器：确认过的可信脚本跑的是攻击者的程序。）
+    const QString interpreter = policy.interpreterPath(QStringLiteral("Python"));
+    if (interpreter.isEmpty()) {
+        policy.audit(QStringLiteral("Python"), script, false,
+                     QStringLiteral("解释器未解析到绝对路径（未配置全路径且 PATH 中找不到）"));
+        m_lastRunFailed = true;
+        return QStringLiteral("未找到 Python 解释器：请在「脚本安全」中配置 python.exe 全路径（已拒绝执行）");
+    }
+
     // 沙箱开启：以「受限令牌」启动解释器（去特权）。Qt 6.11 起 QProcess 无法
     // 施加令牌，故走 CreateProcessAsUserW 路径；建立失败即拒绝执行（fail-closed）。
     if (policy.isSandboxEnabled()) {
@@ -156,7 +167,7 @@ QString ScriptNode::executePythonScript(const QString &script, const QStringList
         QString runError;
         int exitCode = -1;
         const bool ok = policy.runWithRestrictedToken(
-            policy.interpreterPath(QStringLiteral("Python")), restrictedArgs, policy.maxExecutionMs(),
+            interpreter, restrictedArgs, policy.maxExecutionMs(),
             [this]() {
                 FlowExecutor *exec = ownerExecutor();
                 return exec && exec->getState() == ExecutionState::Stopped;
@@ -183,20 +194,19 @@ QString ScriptNode::executePythonScript(const QString &script, const QStringList
 
     process.setProcessEnvironment(policy.buildEnvironment());
     policy.applyProcessSandbox(&process);
-    process.start(policy.interpreterPath(QStringLiteral("Python")), processArgs);
+    process.start(interpreter, processArgs);
     if (!process.waitForStarted(5000)) {
         m_lastRunFailed = true;
-        return QStringLiteral("Python \u672A\u627E\u5230\u6216\u65E0\u6CD5\u542F\u52A0");
+        return QStringLiteral("Python 启动失败（解释器 %1 无法执行：检查权限/杀软拦截）").arg(interpreter);
     }
 
-    // 沙箱开启时，Job Object 建立/加入失败必须拒绝执行，否则脚本将以完整用户权限运行（P1）
-    if (policy.isSandboxEnabled() && !policy.attachJob(&process)) {
-        process.kill();
-        process.waitForFinished(2000);
-        policy.audit(QStringLiteral("Python"), script, false,
-                     QStringLiteral("进程沙箱不可用（Job Object 建立失败）"));
-        m_lastRunFailed = true;
-        return QStringLiteral("进程沙箱不可用，已拒绝执行脚本");
+    // 注意：本路径只在沙箱**关闭**时到达——沙箱开启时上面已在受限令牌路径 return
+    // （那条路径自身 fail-closed：令牌/Job 建立失败即拒绝执行）。历史上这里还留着
+    // 一段 "isSandboxEnabled() && !attachJob → 拒绝执行"，因条件恒假而是**死代码**，
+    // 却让审查者误以为 QProcess 路径也具备 fail-closed 语义。这里如实改为 best-effort：
+    // 附加 Job 约束成功是加分项，失败仅记录（沙箱本就关闭，脚本以当前用户权限运行）。
+    if (!policy.attachJob(&process)) {
+        qWarning() << "Job Object 附加失败（沙箱关闭，best-effort）：脚本以当前用户权限运行";
     }
 
     QString waitErr;
@@ -240,6 +250,15 @@ QString ScriptNode::executeLuaScript(const QString &script, const QStringList &a
 
     auto &policy = ScriptSecurityPolicy::instance();
 
+    // 解释器必须是可解析的**绝对路径**：解析不到直接 fail-closed（同 Python，见上方注释）
+    const QString interpreter = policy.interpreterPath(QStringLiteral("Lua"));
+    if (interpreter.isEmpty()) {
+        policy.audit(QStringLiteral("Lua"), script, false,
+                     QStringLiteral("解释器未解析到绝对路径（未配置全路径且 PATH 中找不到）"));
+        m_lastRunFailed = true;
+        return QStringLiteral("未找到 Lua 解释器：请在「脚本安全」中配置 lua.exe 全路径（已拒绝执行）");
+    }
+
     // 沙箱开启：同 Python，以「受限令牌」启动 Lua 解释器；失败即拒绝执行（fail-closed）
     if (policy.isSandboxEnabled()) {
         QStringList restrictedArgs = policy.interpreterFlags(QStringLiteral("Lua"));
@@ -250,7 +269,7 @@ QString ScriptNode::executeLuaScript(const QString &script, const QStringList &a
         QString runError;
         int exitCode = -1;
         const bool ok = policy.runWithRestrictedToken(
-            policy.interpreterPath(QStringLiteral("Lua")), restrictedArgs, policy.maxExecutionMs(),
+            interpreter, restrictedArgs, policy.maxExecutionMs(),
             [this]() {
                 FlowExecutor *exec = ownerExecutor();
                 return exec && exec->getState() == ExecutionState::Stopped;
@@ -276,20 +295,15 @@ QString ScriptNode::executeLuaScript(const QString &script, const QStringList &a
 
     process.setProcessEnvironment(policy.buildEnvironment());
     policy.applyProcessSandbox(&process);
-    process.start(policy.interpreterPath(QStringLiteral("Lua")), processArgs);
+    process.start(interpreter, processArgs);
     if (!process.waitForStarted(5000)) {
         m_lastRunFailed = true;
-        return QStringLiteral("Lua \u672A\u627E\u5230\u6216\u65E0\u6CD5\u542F\u52A8");
+        return QStringLiteral("Lua 启动失败（解释器 %1 无法执行：检查权限/杀软拦截）").arg(interpreter);
     }
 
-    // 沙箱开启时，Job Object 建立/加入失败必须拒绝执行，否则脚本将以完整用户权限运行（P1）
-    if (policy.isSandboxEnabled() && !policy.attachJob(&process)) {
-        process.kill();
-        process.waitForFinished(2000);
-        policy.audit(QStringLiteral("Lua"), script, false,
-                     QStringLiteral("进程沙箱不可用（Job Object 建立失败）"));
-        m_lastRunFailed = true;
-        return QStringLiteral("进程沙箱不可用，已拒绝执行脚本");
+    // 同 Python：本路径只在沙箱关闭时到达，Job 附加为 best-effort（详见上方注释）
+    if (!policy.attachJob(&process)) {
+        qWarning() << "Job Object 附加失败（沙箱关闭，best-effort）：脚本以当前用户权限运行";
     }
 
     QString waitErr;
@@ -406,7 +420,7 @@ QWidget *ScriptNode::createParamPanel()
     auto *interpRow = new QHBoxLayout();
     auto *interpEdit = new QLineEdit();
     interpEdit->setObjectName(QStringLiteral("scriptInterpreterPath"));
-    interpEdit->setPlaceholderText(QStringLiteral("留空 = 使用 PATH 中的 python"));
+    interpEdit->setPlaceholderText(QStringLiteral("留空 = 按 PATH 解析 python（解析不到将拒绝执行）"));
     interpEdit->setText(ScriptSecurityPolicy::instance().interpreterPath(QStringLiteral("Python")));
     interpEdit->setToolTip(QStringLiteral("解释器可执行文件全路径，例如 C:\\Python314\\python.exe。\n"
                                           "留空则按 PATH 解析 python。\n"

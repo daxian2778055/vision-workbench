@@ -4,6 +4,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QFile>
+#include <QSaveFile>
 #include <QDebug>
 #include "AppLog.h"
 
@@ -149,14 +150,23 @@ void GlobalVariableManager::fromJson(const QJsonObject &json)
 bool GlobalVariableManager::saveToFile(const QString &fileName) const
 {
     QJsonDocument doc(toJson());
-    QFile file(fileName);
+    // 原子写（QSaveFile）：全局变量表是跨方案共享的单文件，写坏即全部变量丢失
+    QSaveFile file(fileName);
     if (!file.open(QIODevice::WriteOnly)) {
         VFP_DEBUG << "Failed to open file" << fileName << "for writing";
         return false;
     }
 
-    file.write(doc.toJson());
-    file.close();
+    const QByteArray payload = doc.toJson();
+    if (file.write(payload) != payload.size()) {
+        file.cancelWriting();
+        VFP_DEBUG << "Failed to write global variables (incomplete)" << fileName;
+        return false;
+    }
+    if (!file.commit()) {
+        VFP_DEBUG << "Failed to commit global variables" << fileName;
+        return false;
+    }
     VFP_DEBUG << "Saved global variables to" << fileName;
     return true;
 }

@@ -183,7 +183,7 @@ void DnnDetectNode::run(bool /*autoSwitch*/)
 {
     m_params[QStringLiteral("detCount")] = 0;
     m_params[QStringLiteral("lastError")] = QString();
-    m_params[QStringLiteral("moduleStatus")] = false;
+    setParamDirect(QStringLiteral("moduleStatus"), false);
     try {
         const QString modelPath =
             m_params.value(QStringLiteral("modelPath"), QString()).toString().trimmed();
@@ -279,7 +279,7 @@ void DnnDetectNode::run(bool /*autoSwitch*/)
         setOutputData(3, imgObj);
 
         m_params[QStringLiteral("detCount")] = boxes.size();
-        m_params[QStringLiteral("moduleStatus")] = true;
+        setParamDirect(QStringLiteral("moduleStatus"), true);
         m_outputImage = m_inputImage;
     } catch (const std::exception &e) {
         VFP_DEBUG << "DnnDetectNode error:" << e.what();

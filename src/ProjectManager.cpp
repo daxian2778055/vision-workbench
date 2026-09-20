@@ -19,6 +19,10 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonParseError>
+#include <QSaveFile>
+#include <QFileDialog>
+#include <QMessageBox>
+#include <QWidget>
 
 namespace {
 /// 运行界面布局文件（与 RuntimeInterfaceDesigner::defaultLayoutPath 一致）
@@ -37,6 +41,37 @@ using MyConnection = MyProject::Connection;
 ProjectManager::ProjectManager(QObject *parent)
     : QObject(parent)
 {
+}
+
+bool ProjectManager::saveProjectInteractive(QWidget *parent, const QList<FlowScene *> &scenes,
+                                            QString *savedPath)
+{
+    // 方案扩展名 .vfp，与需求文档一致
+    QString fileName = QFileDialog::getSaveFileName(parent, tr("保存项目"), QString(),
+                                                    tr("方案文件 (*.vfp)"));
+    if (fileName.isEmpty())
+        return false;   // 用户取消
+    if (!fileName.endsWith(QStringLiteral(".vfp"), Qt::CaseInsensitive)) {
+        fileName += QStringLiteral(".vfp");
+    }
+    if (savedPath)
+        *savedPath = fileName;
+
+    const bool success = saveProject(fileName, scenes);
+    if (success) {
+        // FR3.3 保存确认：仅写日志不足以让操作员确认保存结果，需显式提示
+        QMessageBox::information(parent, tr("保存方案"), tr("方案已保存:\n%1").arg(fileName));
+    } else {
+        QMessageBox::warning(parent, tr("保存方案"),
+                             tr("方案保存失败，请确认目标路径可写后重试:\n%1").arg(fileName));
+    }
+    return success;
+}
+
+QString ProjectManager::askOpenProjectPath(QWidget *parent)
+{
+    return QFileDialog::getOpenFileName(parent, tr("加载项目"), QString(),
+                                        tr("方案文件 (*.vfp)"));
 }
 
 ProjectManager::~ProjectManager()
@@ -85,23 +120,25 @@ bool ProjectManager::saveProject(const QString &filePath, const QList<FlowScene 
     root[QStringLiteral("schemaVersion")] = kProjectSchemaVersion;
 
     QJsonDocument doc(root);
-    QFile file(filePath);
-
+    // 原子写（QSaveFile）：先写临时文件，commit 成功才改名到目标。
+    // 历史实现直写目标文件——写入中途崩溃/断电会留下被截断的方案（现场"方案打不开"）；
+    // 字节数校验保留，并保留写失败时不破坏旧文件的能力。
+    QSaveFile file(filePath);
     if (!file.open(QIODevice::WriteOnly)) {
         VFP_DEBUG << "方案保存失败：无法写入" << filePath << file.errorString();
         return false;
     }
 
-    // 校验写入字节数：原实现忽略 write 返回值，磁盘满/权限异常时仍报“保存成功”
     const QByteArray payload = doc.toJson();
     const qint64 written = file.write(payload);
-    const bool flushed = file.flush();
-    const QString writeError = file.errorString();
-    file.close();
-
-    if (written != payload.size() || !flushed) {
+    if (written != payload.size()) {
         VFP_DEBUG << "方案保存不完整:" << written << "/" << payload.size()
-                  << " error:" << writeError;
+                  << " error:" << file.errorString();
+        file.cancelWriting();
+        return false;
+    }
+    if (!file.commit()) {
+        VFP_DEBUG << "方案保存失败（commit）:" << filePath << file.errorString();
         return false;
     }
 
@@ -165,14 +202,21 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
     if (root.contains(QStringLiteral("calibrations")))
         CalibrationManager::instance()->fromJson(root[QStringLiteral("calibrations")].toObject());
 
-    // 恢复运行界面布局：写回布局文件，运行界面加载时自动生效
+    // 恢复运行界面布局：校验后原子写回布局文件，运行界面加载时自动生效
     if (root.contains(QStringLiteral("runtimeLayout"))) {
         const QString layout = root[QStringLiteral("runtimeLayout")].toString();
         if (!layout.isEmpty()) {
-            QFile layoutFile(runtimeLayoutPath());
-            if (layoutFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                layoutFile.write(layout.toUtf8());
-                layoutFile.close();
+            // 校验必须是合法 JSON 对象再落盘：损坏/伪造内容不得覆盖全局布局文件
+            // （历史实现不校验直写——坏数据会把运行界面变成空窗/乱版）
+            const QJsonDocument layoutDoc = QJsonDocument::fromJson(layout.toUtf8());
+            if (layoutDoc.isObject()) {
+                QSaveFile layoutFile(runtimeLayoutPath());
+                if (layoutFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                    layoutFile.write(layout.toUtf8());
+                    layoutFile.commit();
+                }
+            } else {
+                VFP_DEBUG << "方案内 runtimeLayout 不是合法 JSON 对象，已忽略（不覆盖现有布局）";
             }
         }
     }

@@ -99,9 +99,12 @@ public:
     /// 解释器隔离参数，例如 Python 返回 {"-I", "-E"}。
     QStringList interpreterFlags(const QString &language) const;
 
-    /// 解释器可执行文件路径（按语言）。默认空串 = 回落到命令名 "python"/"lua"（PATH 解析）。
-    /// 现场常有多套 Python（系统 / venv / 便携版）：显式指定可避免选错版本，
-    /// 也避免"当前目录优先"带来的隐患。
+    /// 解释器可执行文件路径（按语言）——**始终返回可解析的绝对路径**：
+    ///   - 配置了绝对路径 → 原样返回；
+    ///   - 否则按 PATH 解析（findExecutable，不搜当前目录）；再退 exe 同目录（便携部署）；
+    ///   - 全部失败 → 返回**空串**，调用方必须 fail-closed 拒绝执行并提示配置全路径。
+    /// 意义：绝不把裸名交给启动接口——Windows 的 CreateProcess 搜索序会先看应用目录与
+    /// 当前目录，攻击者放一个同名 python.exe 即可顶替"确认过的可信脚本"实际执行的解释器。
     /// 【重要】所有启动路径与容器授权必须取本函数返回值（同一来源）：
     /// 容器模式授权的是"哪个解释器"，启动的就必须是同一个，否则会以 0xC0000135 启动失败。
     QString interpreterPath(const QString &language) const;
