@@ -54,6 +54,9 @@ private:
     void setupReceiveEventTab(QTabWidget *tabs);
     void setupSendEventTab(QTabWidget *tabs);
     void setupHeartbeatTab(QTabWidget *tabs);
+    /// 合并式异步刷新设备表：deviceConnected/deviceDisconnected 只挂起一次重建，
+    /// 等当前调用栈展开后再执行（避免在 openDevice/closeDevice 栈内同步重建导致的悬空指针）
+    void scheduleDeviceTableRefresh();
 
     // Device tab
     QTableWidget *m_deviceTable;
@@ -72,4 +75,7 @@ private:
     QPushButton *m_addHeartbeatBtn, *m_removeHeartbeatBtn;
 
     QPushButton *m_closeBtn;
+
+    /// 设备表异步刷新挂起标志：把连续多个状态信号合并为一次重建
+    bool m_deviceTableRefreshPending = false;
 };

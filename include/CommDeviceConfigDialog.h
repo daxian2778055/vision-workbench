@@ -6,6 +6,7 @@
 class QComboBox;
 class QLineEdit;
 class QSpinBox;
+class QFormLayout;
 
 /// 通信设备配置对话框（单页表单，替代"连续弹窗"）：
 /// 支持 TCP（客户端/服务端）、串口、UDP 三类；
@@ -28,6 +29,8 @@ private:
     void buildTcpForm(const QJsonObject &initial);
     void buildSerialForm(const QJsonObject &initial);
     void buildUdpForm(const QJsonObject &initial);
+    /// 组帧两行（TCP/串口/UDP 通用）：治理粘包/半包；0/空 = 不启用
+    void addFrameRows(QFormLayout *form, const QJsonObject &initial);
 
     QString m_type;
     QJsonObject m_config;
@@ -38,8 +41,15 @@ private:
 
     QComboBox *m_serialPortCombo = nullptr;
     QComboBox *m_serialBaudCombo = nullptr;
+    QComboBox *m_dataBitsCombo = nullptr;
+    QComboBox *m_stopBitsCombo = nullptr;
+    QComboBox *m_parityCombo = nullptr;
 
     QSpinBox *m_udpLocalPortSpin = nullptr;
     QLineEdit *m_udpRemoteIpEdit = nullptr;
     QSpinBox *m_udpRemotePortSpin = nullptr;
+
+    // 组帧（三类通用）
+    QSpinBox *m_frameTimeoutSpin = nullptr;
+    QLineEdit *m_frameTermEdit = nullptr;
 };

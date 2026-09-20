@@ -63,7 +63,7 @@ bool PlcCommNode::openConnection()
 
     if (!m_modbus->connectDevice()) {
         m_connected = false;
-        m_params[QStringLiteral("connected")] = false;
+        setParamDirect(QStringLiteral("connected"), false);
         emit communicationError(QStringLiteral("PLC\u8FDE\u63A5\u5931\u8D25: %1").arg(m_modbus->errorString()));
         if (m_autoReconnect && m_reconnectTimer) {
             m_reconnectTimer->start(m_reconnectInterval);
@@ -72,7 +72,7 @@ bool PlcCommNode::openConnection()
     }
 
     m_connected = true;
-    m_params[QStringLiteral("connected")] = true;
+    setParamDirect(QStringLiteral("connected"), true);
     m_slaveAddress = m_params.value(QStringLiteral("slaveAddress"), 1).toInt();
     emit connectionOpened();
     startPolling();
@@ -91,7 +91,7 @@ void PlcCommNode::closeConnection()
         m_modbus = nullptr;
     }
     m_connected = false;
-    m_params[QStringLiteral("connected")] = false;
+    setParamDirect(QStringLiteral("connected"), false);
     emit connectionClosed();
 }
 
@@ -213,24 +213,31 @@ void PlcCommNode::onPollTimeout()
         pr.regIndex = idx;
 
         m_pendingQueue.append(pr);
-        readRegister(m_slaveAddress, reg.address, regCount);
+        if (!readRegister(m_slaveAddress, reg.address, regCount)) {
+            // 请求未能发出（离线/忙）：立刻回滚队列条目，避免 pendingQueue 永久非空
+            // 导致轮询入口直接 return（轮询冻结且无报警）
+            m_pendingQueue.removeLast();
+            VFP_DEBUG << "PLC read dispatch failed at address" << reg.address;
+        }
+        // 只推进一步（历史缺陷：函数末尾又无条件推进一次 → 偶数个寄存器时一半永不刷新）
         m_currentRegIdx = (idx + 1) % m_registers.size();
         break;
     }
-
-    m_currentRegIdx = (m_currentRegIdx + 1) % m_registers.size();
 }
 
-void PlcCommNode::readRegister(int slaveAddr, int regAddr, int count)
+bool PlcCommNode::readRegister(int slaveAddr, int regAddr, int count)
 {
-    if (!m_modbus) return;
+    if (!m_modbus) return false;
 
     QModbusDataUnit readUnit(QModbusDataUnit::HoldingRegisters, regAddr, count);
     QModbusReply *reply = m_modbus->sendReadRequest(readUnit, slaveAddr);
+    if (!reply) {
+        // 请求未发出（设备离线/忙）：返回失败，调用方回滚 pendingQueue 条目。
+        // 否则该条目永远无人消费 → 轮询入口 !isEmpty 检查让轮询永久冻结且无报警。
+        return false;
+    }
 
-    if (reply) {
-        if (!reply->isFinished()) {
-            connect(reply, &QModbusReply::finished, this, [this, reply, regAddr]() {
+    auto handler = [this, reply, regAddr]() {
                 int regIndex = -1;
                 for (int i = 0; i < m_pendingQueue.size(); ++i) {
                     if (m_pendingQueue[i].regAddr == regAddr) {
@@ -283,11 +290,12 @@ void PlcCommNode::readRegister(int slaveAddr, int regAddr, int count)
                     VFP_DEBUG << "PLC read error at address" << regAddr << ":" << reply->errorString();
                 }
                 reply->deleteLater();
-            });
-        } else {
-            reply->deleteLater();
-        }
-    }
+    };
+    if (reply->isFinished())
+        handler();   // 同步完成（罕见）：必须立即消费，否则 pendingQueue 条目永久滞留
+    else
+        connect(reply, &QModbusReply::finished, this, handler);
+    return true;
 }
 
 void PlcCommNode::onModbusStateChanged(int state)
@@ -295,7 +303,7 @@ void PlcCommNode::onModbusStateChanged(int state)
     if (state == QModbusDevice::ConnectedState) {
         if (!m_connected) {
             m_connected = true;
-            m_params[QStringLiteral("connected")] = true;
+            setParamDirect(QStringLiteral("connected"), true);
             emit connectionOpened();
             startPolling();
         }
@@ -303,7 +311,7 @@ void PlcCommNode::onModbusStateChanged(int state)
     } else if (state == QModbusDevice::UnconnectedState) {
         if (m_connected) {
             m_connected = false;
-            m_params[QStringLiteral("connected")] = false;
+            setParamDirect(QStringLiteral("connected"), false);
             emit connectionClosed();
             stopPolling();
         }

@@ -119,10 +119,19 @@ QString GlobalTriggerManager::flowForEventTrigger(const QString &eventId) const
 
 // ---- Trigger Execution ----
 
+/// 执行器忙（运行/暂停中）时触发应丢弃且**不计入触发计数**——
+/// 历史缺陷：计数照加、流程却没起来，事后统计完全看不出漏触发。
+/// （对标 VM 的排队/合并触发是后续项；本批先让"丢"可见、统计不再失真。）
+static bool executorBusy(FlowExecutor *ex)
+{
+    if (!ex)
+        return false;
+    const ExecutionState st = ex->getState();
+    return st == ExecutionState::Running || st == ExecutionState::Paused;
+}
+
 void GlobalTriggerManager::onDataReceived(const QString &deviceName, const QByteArray &data)
 {
-    Q_UNUSED(deviceName)
-
     QString text = QString::fromUtf8(data).trimmed();
 
     // 1. 字符串触发：锁内定位首个匹配并拷贝必要信息、累加计数，锁外再执行流程，避免长任务持锁
@@ -142,7 +151,8 @@ void GlobalTriggerManager::onDataReceived(const QString &deviceName, const QByte
                 flowName = entry.flowName;
                 matchedSource = entry.triggerSource;
                 executor = executorForFlowLocked(flowName);
-                if (executor) {
+                if (executor && !executorBusy(executor)) {
+                    // 只在"真的会起流程"时计数：忙时丢弃不得虚报触发次数
                     m_allTriggers[entry.id].triggerCount++;
                     m_stringTriggers[it.key()].triggerCount++;
                 }
@@ -152,6 +162,10 @@ void GlobalTriggerManager::onDataReceived(const QString &deviceName, const QByte
     }
 
     if (matched) {
+        if (executorBusy(executor)) {
+            VFP_DEBUG << "String trigger dropped (flow busy):" << matchedSource << "→" << flowName;
+            return;
+        }
         VFP_DEBUG << "String trigger matched:" << matchedSource << "→ flow:" << flowName;
         emit triggerFired(flowName, matchedSource);
 
@@ -169,6 +183,10 @@ void GlobalTriggerManager::onDataReceived(const QString &deviceName, const QByte
     for (const QString &evId : cm->receiveEventIds()) {
         ReceiveEvent *ev = cm->receiveEvent(evId);
         if (!ev || !ev->enabled()) continue;
+        // 必须按设备过滤：A 设备的数据不得触发绑定在 B 设备上的接收事件
+        // （历史缺陷：deviceName 被 Q_UNUSED 忽略，任何设备的一帧数据都会跑遍全部
+        // 接收事件；现场表现为"另一个设备的数据把无关流程拉起来"——安全事故级）
+        if (ev->deviceName() != deviceName) continue;
 
         QList<QVariant> fields;
         if (ev->parse(data, fields)) {
@@ -205,7 +223,8 @@ void GlobalTriggerManager::onEventTriggered(const QString &eventId, const QList<
                 flowName = entry.flowName;
                 matchedEventId = eventId;
                 executor = executorForFlowLocked(flowName);
-                if (executor) {
+                if (executor && !executorBusy(executor)) {
+                    // 只在"真的会起流程"时计数：忙时丢弃不得虚报触发次数
                     m_allTriggers[entry.id].triggerCount++;
                     m_eventTriggers[it.key()].triggerCount++;
                 }
@@ -215,6 +234,10 @@ void GlobalTriggerManager::onEventTriggered(const QString &eventId, const QList<
     }
 
     if (matched) {
+        if (executorBusy(executor)) {
+            VFP_DEBUG << "Event trigger dropped (flow busy):" << matchedEventId << "→" << flowName;
+            return;
+        }
         VFP_DEBUG << "Event trigger matched:" << matchedEventId << "→ flow:" << flowName;
         emit triggerFired(flowName, matchedEventId);
 

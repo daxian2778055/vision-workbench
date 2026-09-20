@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QMap>
+#include <QHash>
 #include <QString>
 #include <QList>
 #include <QJsonObject>
@@ -14,6 +15,7 @@ class SendEvent;
 class TextDirectSendEvent;
 class BytePackSendEvent;
 class CommunicationNodeBase;
+class QTimer;
 
 /// 通信设备描述
 struct CommDeviceInfo {
@@ -97,6 +99,17 @@ private:
     CommunicationManager &operator=(const CommunicationManager &) = delete;
 
     void createDeviceNode(const QString &name, const QString &type, const QJsonObject &config);
+
+    /// 帧组装（TCP/串口/UDP 的粘包/半包治理）：
+    /// 按设备节点的参数 frameTimeoutMs（静默即一帧）/ frameTerminator（结束符，支持 \r\n 等转义）
+    /// 切帧后再转发；两个参数都未配置时行为与历史完全一致（原样转发）。
+    void feedFrameAssembler(const QString &deviceName, const QByteArray &data);
+    /// "\r\n" → CRLF 字节（支持 \r \n \t \0 \\ \xHH）
+    static QByteArray decodeEscapes(const QString &text);
+
+    /// 帧组装缓冲（仅 UI 线程访问：数据从节点 dataReceived 信号进入）
+    QHash<QString, QByteArray> m_frameBuffers;
+    QHash<QString, QTimer *> m_frameTimers;
 
     QMap<QString, CommunicationNodeBase *> m_devices;
     QMap<QString, CommDeviceInfo> m_deviceInfos;

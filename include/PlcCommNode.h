@@ -56,7 +56,8 @@ private slots:
     void onModbusStateChanged(int state);
 
 private:
-    void readRegister(int slaveAddr, int regAddr, int count);
+    /// 发起读请求；返回 false 表示请求未发出（调用方需回滚 pendingQueue 条目）
+    bool readRegister(int slaveAddr, int regAddr, int count);
     double parseRawToValue(const QByteArray &raw, const QString &dataType, const QString &byteOrder) const;
 
     QModbusClient *m_modbus = nullptr;

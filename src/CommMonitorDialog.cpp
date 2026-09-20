@@ -13,6 +13,7 @@
 #include <QColor>
 #include <QBrush>
 #include <QFile>
+#include <QTimer>
 
 CommMonitorDialog::CommMonitorDialog(QWidget *parent)
     : QDialog(parent)
@@ -46,6 +47,21 @@ CommMonitorDialog::CommMonitorDialog(QWidget *parent)
         ensureDeviceRow(name);
     }
     m_deviceTable->selectRow(0);
+    updateStatus();
+
+    // 日志重绘节流：高频通讯时合并刷新（否则每帧全量重绘拖慢监视窗与主界面）
+    m_refreshThrottle = new QTimer(this);
+    m_refreshThrottle->setSingleShot(true);
+    m_refreshThrottle->setInterval(200);
+    connect(m_refreshThrottle, &QTimer::timeout, this, &CommMonitorDialog::flushRefresh);
+}
+
+void CommMonitorDialog::flushRefresh()
+{
+    if (!m_refreshDirty)
+        return;
+    m_refreshDirty = false;
+    refreshDetailView();
     updateStatus();
 }
 
@@ -253,8 +269,10 @@ void CommMonitorDialog::appendLog(const QString &deviceName, const QString &dire
     if (st.logLines.size() > kMaxLogLines) {
         st.logLines.removeFirst();
     }
-    refreshDetailView();
-    updateStatus();
+    // 节流：高频收发时合并重绘（200ms 一次），避免每帧全量重绘拖慢监视窗与主界面
+    m_refreshDirty = true;
+    if (m_refreshThrottle && !m_refreshThrottle->isActive())
+        m_refreshThrottle->start();
 }
 
 QString CommMonitorDialog::formatHex(const QByteArray &data) const

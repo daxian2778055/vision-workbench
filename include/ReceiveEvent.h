@@ -87,6 +87,10 @@ struct ByteMatchRule {
     bool useFallingEdge = false;/// 使用下降沿检测
     bool useEquals = true;      /// 使用等于比较
     double lastValue = 0;       /// 上一次的值（用于边沿检测）
+    /// 是否已采集过基线值：首个采样只建立基线、不判断边沿
+    /// （否则流程启动/设备重连后的第一帧就会被误判为"上升沿"，凭空触发一次）。
+    /// 不参与序列化。
+    bool hasLastValue = false;
 };
 
 class ByteMatchReceiveEvent : public ReceiveEvent

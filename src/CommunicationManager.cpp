@@ -2,6 +2,7 @@
 #include "CommunicationNodeBase.h"
 #include "SerialCommNode.h"
 #include "UdpCommNode.h"
+#include <QTimer>
 #include "TcpCommNode.h"
 #include "ModbusNode.h" // provides ModbusRegisterItem
 #include "PlcCommNode.h"
@@ -10,6 +11,7 @@
 #include "AppLog.h"
 #include <QJsonDocument>
 #include <QFile>
+#include <QSaveFile>
 #include <QJsonArray>
 #include <QDataStream>
 #include <QMutexLocker>
@@ -121,6 +123,13 @@ bool CommunicationManager::removeDevice(const QString &name)
         node->deleteLater();
     }
 
+    // 清理该设备的帧组装缓冲与定时器
+    if (QTimer *t = m_frameTimers.take(name)) {
+        t->stop();
+        t->deleteLater();
+    }
+    m_frameBuffers.remove(name);
+
     emit deviceRemoved(name);
     return true;
 }
@@ -138,6 +147,21 @@ void CommunicationManager::createDeviceNode(const QString &name, const QString &
             serial->setParam(QStringLiteral("portName"), config[QStringLiteral("portName")].toString());
         if (config.contains(QStringLiteral("baudRate")))
             serial->setParam(QStringLiteral("baudRate"), config[QStringLiteral("baudRate")].toInt());
+        // 数据位/停止位/校验/重连：此前不传，用户在配置里改了也不生效
+        if (config.contains(QStringLiteral("dataBits")))
+            serial->setParam(QStringLiteral("dataBits"), config[QStringLiteral("dataBits")].toInt());
+        if (config.contains(QStringLiteral("stopBits")))
+            serial->setParam(QStringLiteral("stopBits"), config[QStringLiteral("stopBits")].toInt());
+        if (config.contains(QStringLiteral("parity")))
+            serial->setParam(QStringLiteral("parity"), config[QStringLiteral("parity")].toString());
+        if (config.contains(QStringLiteral("autoReconnect")))
+            serial->setParam(QStringLiteral("autoReconnect"), config[QStringLiteral("autoReconnect")].toBool());
+        if (config.contains(QStringLiteral("reconnectInterval")))
+            serial->setParam(QStringLiteral("reconnectInterval"), config[QStringLiteral("reconnectInterval")].toInt());
+        if (config.contains(QStringLiteral("frameTimeoutMs")))
+            serial->setParam(QStringLiteral("frameTimeoutMs"), config[QStringLiteral("frameTimeoutMs")].toInt());
+        if (config.contains(QStringLiteral("frameTerminator")))
+            serial->setParam(QStringLiteral("frameTerminator"), config[QStringLiteral("frameTerminator")].toString());
         node = serial;
     } else if (type == QStringLiteral("TCP")) {
         TcpCommNode *tcp = new TcpCommNode(this);
@@ -148,6 +172,15 @@ void CommunicationManager::createDeviceNode(const QString &name, const QString &
             tcp->setParam(QStringLiteral("port"), config[QStringLiteral("port")].toInt());
         if (config.contains(QStringLiteral("mode")))
             tcp->setParam(QStringLiteral("mode"), config[QStringLiteral("mode")].toString());
+        // 重连参数：此前不传，配置里改的重连开关/间隔对新建连接无效
+        if (config.contains(QStringLiteral("autoReconnect")))
+            tcp->setParam(QStringLiteral("autoReconnect"), config[QStringLiteral("autoReconnect")].toBool());
+        if (config.contains(QStringLiteral("reconnectInterval")))
+            tcp->setParam(QStringLiteral("reconnectInterval"), config[QStringLiteral("reconnectInterval")].toInt());
+        if (config.contains(QStringLiteral("frameTimeoutMs")))
+            tcp->setParam(QStringLiteral("frameTimeoutMs"), config[QStringLiteral("frameTimeoutMs")].toInt());
+        if (config.contains(QStringLiteral("frameTerminator")))
+            tcp->setParam(QStringLiteral("frameTerminator"), config[QStringLiteral("frameTerminator")].toString());
         node = tcp;
     } else if (type == QStringLiteral("UDP")) {
         UdpCommNode *udp = new UdpCommNode(this);
@@ -158,6 +191,10 @@ void CommunicationManager::createDeviceNode(const QString &name, const QString &
             udp->setParam(QStringLiteral("remoteIp"), config[QStringLiteral("remoteIp")].toString());
         if (config.contains(QStringLiteral("remotePort")))
             udp->setParam(QStringLiteral("remotePort"), config[QStringLiteral("remotePort")].toInt());
+        if (config.contains(QStringLiteral("frameTimeoutMs")))
+            udp->setParam(QStringLiteral("frameTimeoutMs"), config[QStringLiteral("frameTimeoutMs")].toInt());
+        if (config.contains(QStringLiteral("frameTerminator")))
+            udp->setParam(QStringLiteral("frameTerminator"), config[QStringLiteral("frameTerminator")].toString());
         node = udp;
     } else if (type == QStringLiteral("Modbus")) {
         ModbusNode *modbus = new ModbusNode(this);
@@ -166,6 +203,11 @@ void CommunicationManager::createDeviceNode(const QString &name, const QString &
             modbus->setParam(QStringLiteral("role"), config[QStringLiteral("role")].toString());
         if (config.contains(QStringLiteral("connectionType")))
             modbus->setParam(QStringLiteral("connectionType"), config[QStringLiteral("connectionType")].toString());
+        // RTU 串口参数：不下发则 QModbusRtuSerialMaster 无参数可连（RTU 完全不可用）
+        if (config.contains(QStringLiteral("portName")))
+            modbus->setParam(QStringLiteral("portName"), config[QStringLiteral("portName")].toString());
+        if (config.contains(QStringLiteral("baudRate")))
+            modbus->setParam(QStringLiteral("baudRate"), config[QStringLiteral("baudRate")].toInt());
         if (config.contains(QStringLiteral("host")))
             modbus->setParam(QStringLiteral("host"), config[QStringLiteral("host")].toString());
         if (config.contains(QStringLiteral("port")))
@@ -249,9 +291,9 @@ void CommunicationManager::createDeviceNode(const QString &name, const QString &
     node->setDeviceName(name);
 
     {
-        // Forward data received signals
+        // Forward data received signals（经帧组装：配置了组帧则按帧转发，未配置则原样转发）
         connect(node, &CommunicationNodeBase::dataReceived, this, [this, name](const QByteArray &data) {
-            emit dataReceived(name, data);
+            feedFrameAssembler(name, data);
         });
 
         // 注意：这两个槽会在 openDevice/closeDevice（可能仍处于外层调用栈）中被同步触发，
@@ -273,9 +315,14 @@ void CommunicationManager::createDeviceNode(const QString &name, const QString &
                 QMutexLocker locker(&m_mutex);
                 auto it = m_deviceInfos.find(name);
                 if (it == m_deviceInfos.end())
-                    return;
+                    return;   // 设备已被 removeDevice 移除：清理由 removeDevice 负责
                 it->isConnected = false;
             }
+            // 断开即丢弃半帧缓冲并停表：否则"掉线 → 自动重连"后，新链路首帧会与
+            // 旧链路的残缺数据拼在一起（脏半帧污染真实报文，解析全错还不报错）
+            m_frameBuffers.remove(name);
+            if (QTimer *t = m_frameTimers.value(name, nullptr))
+                t->stop();
             emit deviceDisconnected(name);
         });
 
@@ -304,6 +351,93 @@ void CommunicationManager::createDeviceNode(const QString &name, const QString &
             });
         }
     }
+}
+
+QByteArray CommunicationManager::decodeEscapes(const QString &text)
+{
+    QByteArray out;
+    for (int i = 0; i < text.size(); ++i) {
+        const QChar c = text.at(i);
+        if (c != QLatin1Char('\\') || i + 1 >= text.size()) {
+            out.append(c.toLatin1());
+            continue;
+        }
+        const QChar n = text.at(++i);
+        if (n == QLatin1Char('r'))      out.append('\r');
+        else if (n == QLatin1Char('n')) out.append('\n');
+        else if (n == QLatin1Char('t')) out.append('\t');
+        else if (n == QLatin1Char('0')) out.append('\0');
+        else if (n == QLatin1Char('\\'))out.append('\\');
+        else if ((n == QLatin1Char('x') || n == QLatin1Char('X')) && i + 2 < text.size()) {
+            bool ok = false;
+            const int v = text.mid(i + 1, 2).toInt(&ok, 16);
+            if (ok) { out.append(static_cast<char>(v)); i += 2; }
+            else    { out.append('x'); }
+        } else {
+            out.append(n.toLatin1());
+        }
+    }
+    return out;
+}
+
+void CommunicationManager::feedFrameAssembler(const QString &deviceName, const QByteArray &data)
+{
+    // 数据帧率与原样转发路径一致：无组帧配置时零开销（不建缓冲、不加定时器）
+    CommunicationNodeBase *node = deviceNode(deviceName);
+    const int timeoutMs = node ? node->getParam(QStringLiteral("frameTimeoutMs")).toInt() : 0;
+    const QString termText =
+        node ? node->getParam(QStringLiteral("frameTerminator")).toString() : QString();
+
+    if (timeoutMs <= 0 && termText.isEmpty()) {
+        emit dataReceived(deviceName, data);   // 未启用组帧：原样转发（与历史行为一致）
+        return;
+    }
+
+    // 全程不持有 m_frameBuffers 的引用/迭代器跨 emit：下游槽可能 removeDevice/新增设备，
+    // 任何一次插入都会触发 QHash 重哈希 → 旧引用悬空（重入下写已释放内存）。
+    QByteArray buf = m_frameBuffers.value(deviceName);
+    buf.append(data);
+    if (buf.size() > 1024 * 1024) {   // 兜底：规则长期不匹配时防止无界增长
+        VFP_DEBUG << "Frame assembler overflow, drop buffer for device:" << deviceName;
+        m_frameBuffers.remove(deviceName);
+        return;
+    }
+
+    // ① 结束符切帧（保留结束符，便于解析与监视查看原始帧）——先在本地切好，最后统一发
+    QList<QByteArray> frames;
+    if (!termText.isEmpty()) {
+        const QByteArray term = decodeEscapes(termText);
+        if (!term.isEmpty()) {
+            int idx = -1;
+            while ((idx = buf.indexOf(term)) >= 0) {
+                const int end = idx + term.size();
+                frames.append(buf.left(end));
+                buf.remove(0, end);
+            }
+        }
+    }
+    m_frameBuffers[deviceName] = buf;   // 先落缓冲（此时状态已是最终态），后发帧
+
+    // ② 帧超时兜底：静默 timeoutMs 后把剩余数据整体当一帧（对端不发结束符时使用）
+    if (timeoutMs > 0) {
+        QTimer *t = m_frameTimers.value(deviceName, nullptr);
+        if (!t) {
+            t = new QTimer(this);
+            t->setSingleShot(true);
+            m_frameTimers.insert(deviceName, t);
+            connect(t, &QTimer::timeout, this, [this, deviceName]() {
+                const QByteArray frame = m_frameBuffers.value(deviceName);
+                if (frame.isEmpty())
+                    return;
+                m_frameBuffers.remove(deviceName);
+                emit dataReceived(deviceName, frame);
+            });
+        }
+        t->start(timeoutMs);   // 每来一块数据重置静默计时
+    }
+
+    for (const QByteArray &frame : frames)
+        emit dataReceived(deviceName, frame);
 }
 
 CommunicationNodeBase *CommunicationManager::deviceNode(const QString &name) const
@@ -526,6 +660,15 @@ void CommunicationManager::fromJson(const QJsonObject &json)
         n->deleteLater();
     }
 
+    // 设备已整体清空：同步丢弃帧组装缓冲与成帧定时器。
+    // 否则"切方案"后旧半帧/旧定时器残留，新方案同名设备的首帧会被旧数据污染。
+    m_frameBuffers.clear();
+    for (QTimer *t : m_frameTimers) {
+        t->stop();
+        t->deleteLater();
+    }
+    m_frameTimers.clear();
+
     // 加载设备：addDevice 每次自行加锁，避免嵌套死锁
     QJsonArray devicesArr = json[QStringLiteral("devices")].toArray();
     for (const auto &v : devicesArr) {
@@ -557,6 +700,30 @@ void CommunicationManager::fromJson(const QJsonObject &json)
             }
         }
     }
+
+    // 加载发送事件：此前 toJson 写了、fromJson 不读 → 保存/重启后
+    // PLC 回写配置（模板/字段表/启停）全部"消失"，只能重新手配
+    {
+        QMutexLocker locker(&m_mutex);
+        QJsonArray sendArr = json[QStringLiteral("sendEvents")].toArray();
+        for (const auto &v : sendArr) {
+            QJsonObject eObj = v.toObject();
+            const int type = eObj[QStringLiteral("type")].toInt();
+            const QString id = eObj[QStringLiteral("id")].toString();
+            const QString devName = eObj[QStringLiteral("deviceName")].toString();
+            if (id.isEmpty()) continue;
+
+            SendEvent *ev = nullptr;
+            if (type == int(SendEvent::BYTE_PACK))
+                ev = new BytePackSendEvent(id, devName, this);
+            else
+                ev = new TextDirectSendEvent(id, devName, this);
+            if (ev) {
+                ev->fromJson(eObj);
+                m_sendEvents[id] = ev;
+            }
+        }
+    }
 }
 
 bool CommunicationManager::loadFromFile(const QString &path)
@@ -572,9 +739,13 @@ bool CommunicationManager::loadFromFile(const QString &path)
 
 bool CommunicationManager::saveToFile(const QString &path)
 {
-    QFile file(path);
+    // 原子写（QSaveFile）：避免写入中途崩溃留下半份配置（重启后设备/事件全丢）
+    QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly)) return false;
-    file.write(QJsonDocument(toJson()).toJson());
-    file.close();
-    return true;
+    const QByteArray payload = QJsonDocument(toJson()).toJson();
+    if (file.write(payload) != payload.size()) {
+        file.cancelWriting();
+        return false;
+    }
+    return file.commit();
 }

@@ -2,6 +2,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QRegularExpression>
+#include <QtEndian>   // qFromBigEndian / qFromLittleEndian（字节匹配按配置的字节序解析）
 
 // ==================== ReceiveEvent Base ====================
 
@@ -116,36 +117,58 @@ void ByteMatchReceiveEvent::clearRules()
 
 double ByteMatchReceiveEvent::extractValue(const QByteArray &data, const ByteMatchRule &rule) const
 {
-    if (data.size() < rule.byteOffset + rule.byteLength) return 0;
+    if (rule.byteLength <= 0 || data.size() < rule.byteOffset + rule.byteLength) return 0;
 
     QByteArray chunk = data.mid(rule.byteOffset, rule.byteLength);
+    const QString bo = rule.byteOrder;
 
-    // Handle byte order
-    if (rule.byteOrder == QStringLiteral("CDAB") && chunk.size() >= 4) {
-        // Swap: CDAB → ABCD
-        char tmp = chunk[0]; chunk[0] = chunk[2]; chunk[2] = tmp;
-        tmp = chunk[1]; chunk[1] = chunk[3]; chunk[3] = tmp;
-    } else if (rule.byteOrder == QStringLiteral("DCBA") && chunk.size() >= 4) {
-        // Reverse
-        for (int i = 0; i < chunk.size() / 2; ++i) {
-            char tmp = chunk[i];
-            chunk[i] = chunk[chunk.size() - 1 - i];
-            chunk[chunk.size() - 1 - i] = tmp;
+    // 32 位值：先按"字序"把 chunk 规范到 ABCD（高字在前），再按大端解释。
+    // 16 位值：按首字母定字节序（A… = 高字节在前；B…/D… = 低字节在前）。
+    // 历史缺陷：只有 int16/int32/float 三个分支，且用 reinterpret_cast 按宿主序
+    // （小端）读取——uint16 直接落到 return 0（永远不触发），大小端也与配置相反。
+    if (chunk.size() >= 4 && (rule.dataType == QStringLiteral("int32")
+                              || rule.dataType == QStringLiteral("uint32")
+                              || rule.dataType == QStringLiteral("float"))) {
+        if (bo == QStringLiteral("CDAB")) {
+            char tmp = chunk[0]; chunk[0] = chunk[2]; chunk[2] = tmp;
+            tmp = chunk[1]; chunk[1] = chunk[3]; chunk[3] = tmp;
+        } else if (bo == QStringLiteral("DCBA")) {
+            for (int i = 0; i < chunk.size() / 2; ++i) {
+                const char tmp = chunk[i];
+                chunk[i] = chunk[chunk.size() - 1 - i];
+                chunk[chunk.size() - 1 - i] = tmp;
+            }
         }
+        const uchar *p = reinterpret_cast<const uchar *>(chunk.constData());
+        if (rule.dataType == QStringLiteral("int32"))
+            return static_cast<double>(static_cast<qint32>(qFromBigEndian<quint32>(p)));
+        if (rule.dataType == QStringLiteral("uint32"))
+            return static_cast<double>(qFromBigEndian<quint32>(p));
+        return static_cast<double>(qFromBigEndian<float>(p));
     }
 
-    if (rule.dataType == QStringLiteral("int16") && chunk.size() >= 2) {
-        return static_cast<double>(*reinterpret_cast<const qint16 *>(chunk.constData()));
-    } else if (rule.dataType == QStringLiteral("int32") && chunk.size() >= 4) {
-        return static_cast<double>(*reinterpret_cast<const qint32 *>(chunk.constData()));
-    } else if (rule.dataType == QStringLiteral("float") && chunk.size() >= 4) {
-        return static_cast<double>(*reinterpret_cast<const float *>(chunk.constData()));
-    }
+    const bool littleEndianByteOrder =
+        bo.startsWith(QLatin1Char('B')) || bo.startsWith(QLatin1Char('D'));
+    const uchar *p = reinterpret_cast<const uchar *>(chunk.constData());
+    if (rule.dataType == QStringLiteral("uint16") && chunk.size() >= 2)
+        return static_cast<double>(littleEndianByteOrder ? qFromLittleEndian<quint16>(p)
+                                                         : qFromBigEndian<quint16>(p));
+    if (rule.dataType == QStringLiteral("int16") && chunk.size() >= 2)
+        return static_cast<double>(littleEndianByteOrder ? qFromLittleEndian<qint16>(p)
+                                                         : qFromBigEndian<qint16>(p));
+    if (rule.dataType == QStringLiteral("uint8") && chunk.size() >= 1)
+        return static_cast<double>(*p);
+    if (rule.dataType == QStringLiteral("int8") && chunk.size() >= 1)
+        return static_cast<double>(*reinterpret_cast<const qint8 *>(p));
     return 0;
 }
 
 bool ByteMatchReceiveEvent::checkCondition(const ByteMatchRule &rule, double currentValue)
 {
+    // 首个采样只建立基线，不判断边沿：否则流程启动/设备重连后的第一帧
+    // 就会被误判为"上升沿"，凭空触发一次流程。
+    if (!rule.hasLastValue)
+        return false;
     if (rule.useRisingEdge) {
         return (rule.lastValue == 0 && currentValue != 0);
     }
@@ -153,7 +176,8 @@ bool ByteMatchReceiveEvent::checkCondition(const ByteMatchRule &rule, double cur
         return (rule.lastValue != 0 && currentValue == 0);
     }
     if (rule.useEquals) {
-        return qFuzzyCompare(currentValue, rule.compareValue);
+        // qFuzzyCompare 与 0 比较不可靠（(0,0) 恒 false）——历史缺陷：比较值填 0 永远不匹配
+        return qFuzzyIsNull(currentValue - rule.compareValue);
     }
     return false;
 }
@@ -163,35 +187,23 @@ bool ByteMatchReceiveEvent::parse(const QByteArray &data, QList<QVariant> &field
     if (!m_enabled || data.isEmpty() || m_rules.isEmpty()) return false;
 
     bool anyMatched = false;
-    QList<double> values;
 
     for (auto &rule : m_rules) {
-        double val = extractValue(data, rule);
-        values.append(val);
+        const double val = extractValue(data, rule);
 
         if (checkCondition(rule, val)) {
             anyMatched = true;
             fields.append(val);
-            // Update last value for edge detection
-            rule.lastValue = val;
-        } else {
-            // Still update last value for proper edge detection next time
-            rule.lastValue = val;
         }
+        // 更新基线（首帧只建基线，不触发边沿）：供下一次边沿判断
+        rule.lastValue = val;
+        rule.hasLastValue = true;
     }
 
     if (anyMatched) {
         emit eventGenerated(m_eventId, fields);
         return true;
     }
-
-    // Also update last values even when no match
-    for (int i = 0; i < m_rules.size(); ++i) {
-        if (i < values.size()) {
-            m_rules[i].lastValue = values[i];
-        }
-    }
-
     return false;
 }
 

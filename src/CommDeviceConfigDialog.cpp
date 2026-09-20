@@ -16,6 +16,10 @@ CommDeviceConfigDialog::CommDeviceConfigDialog(const QString &type, const QJsonO
                                                QWidget *parent)
     : QDialog(parent), m_type(type)
 {
+    // 播种现有配置：表单只覆盖它自己管理的键，其余键（autoReconnect / reconnectInterval /
+    // 组帧之外的扩展键）原样保留。历史缺陷：不播种 + onAccept 从零构造 → 热更新后这些键
+    // 被静默丢弃（存盘再打开"断线自动重连"就没了）。
+    m_config = initial;
     setWindowTitle(QStringLiteral("设备配置 — %1").arg(type));
     resize(420, 260);
     // 只阻塞父窗口（通信管理），不阻塞主界面
@@ -68,6 +72,26 @@ void CommDeviceConfigDialog::buildTcpForm(const QJsonObject &initial)
     hint->setWordWrap(true);
     hint->setStyleSheet("color: gray; font-size: 11px;");
     form->addRow(hint);
+
+    addFrameRows(form, initial);
+}
+
+void CommDeviceConfigDialog::addFrameRows(QFormLayout *form, const QJsonObject &initial)
+{
+    QWidget *host = form->parentWidget();
+    m_frameTimeoutSpin = new QSpinBox(host);
+    m_frameTimeoutSpin->setRange(0, 60000);
+    m_frameTimeoutSpin->setSingleStep(10);
+    m_frameTimeoutSpin->setValue(initial.value(QStringLiteral("frameTimeoutMs")).toInt(0));
+    m_frameTimeoutSpin->setToolTip(QStringLiteral(
+        "0 = 不启用。静默超过该毫秒数即认为一帧结束（治理粘包/半包：\n"
+        "对端连续发多帧或一帧被拆开时，保证按帧触发而不是按到达块触发）"));
+    m_frameTermEdit = new QLineEdit(host);
+    m_frameTermEdit->setText(initial.value(QStringLiteral("frameTerminator")).toString());
+    m_frameTermEdit->setPlaceholderText(QStringLiteral("如 \\r\\n（留空 = 不按结束符切帧）"));
+    m_frameTermEdit->setToolTip(QStringLiteral("帧结束符，支持转义：\\r \\n \\t \\xHH"));
+    form->addRow(QStringLiteral("组帧超时(ms)"), m_frameTimeoutSpin);
+    form->addRow(QStringLiteral("帧结束符"), m_frameTermEdit);
 }
 
 void CommDeviceConfigDialog::buildSerialForm(const QJsonObject &initial)
@@ -100,8 +124,42 @@ void CommDeviceConfigDialog::buildSerialForm(const QJsonObject &initial)
             m_serialBaudCombo->setCurrentText(QString::number(curBaud));
     }
 
+    m_dataBitsCombo = new QComboBox(group);
+    for (int b : { 5, 6, 7, 8 })
+        m_dataBitsCombo->addItem(QString::number(b), b);
+    {
+        const int idx = m_dataBitsCombo->findData(
+            initial.value(QStringLiteral("dataBits")).toInt(8));
+        m_dataBitsCombo->setCurrentIndex(idx >= 0 ? idx : 3);
+    }
+
+    m_stopBitsCombo = new QComboBox(group);
+    m_stopBitsCombo->addItem(QStringLiteral("1"), 1);
+    m_stopBitsCombo->addItem(QStringLiteral("2"), 2);
+    m_stopBitsCombo->addItem(QStringLiteral("1.5"), 3);
+    {
+        const int idx = m_stopBitsCombo->findData(
+            initial.value(QStringLiteral("stopBits")).toInt(1));
+        m_stopBitsCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+    }
+
+    m_parityCombo = new QComboBox(group);
+    m_parityCombo->addItem(QStringLiteral("\u65E0"), QStringLiteral("None"));
+    m_parityCombo->addItem(QStringLiteral("\u5076"), QStringLiteral("Even"));
+    m_parityCombo->addItem(QStringLiteral("\u5947"), QStringLiteral("Odd"));
+    {
+        const int idx = m_parityCombo->findData(
+            initial.value(QStringLiteral("parity")).toString(QStringLiteral("None")));
+        m_parityCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+    }
+
     form->addRow(QStringLiteral("串口号"), m_serialPortCombo);
     form->addRow(QStringLiteral("波特率"), m_serialBaudCombo);
+    form->addRow(QStringLiteral("\u6570\u636E\u4F4D"), m_dataBitsCombo);
+    form->addRow(QStringLiteral("\u505C\u6B62\u4F4D"), m_stopBitsCombo);
+    form->addRow(QStringLiteral("\u6821\u9A8C"), m_parityCombo);
+
+    addFrameRows(form, initial);
 }
 
 void CommDeviceConfigDialog::buildUdpForm(const QJsonObject &initial)
@@ -128,10 +186,13 @@ void CommDeviceConfigDialog::buildUdpForm(const QJsonObject &initial)
 
     auto *hint = new QLabel(QStringLiteral(
         "本地端口 0 = 由系统随机分配（仅发送场景可用）。\n"
-        "目标 IP 留空时只接收、不发送。"), group);
+        "目标 IP 留空时只接收、不发送。\n"
+        "目标 IP 填 255.255.255.255 即广播（已自动开启广播权限）。"), group);
     hint->setWordWrap(true);
     hint->setStyleSheet("color: gray; font-size: 11px;");
     form->addRow(hint);
+
+    addFrameRows(form, initial);
 }
 
 void CommDeviceConfigDialog::onAccept()
@@ -162,6 +223,15 @@ void CommDeviceConfigDialog::onAccept()
         bool ok = false;
         const int baud = m_serialBaudCombo->currentText().toInt(&ok);
         m_config[QStringLiteral("baudRate")] = ok ? baud : 9600;
+        m_config[QStringLiteral("dataBits")] = m_dataBitsCombo->currentData().toInt();
+        m_config[QStringLiteral("stopBits")] = m_stopBitsCombo->currentData().toInt();
+        m_config[QStringLiteral("parity")] = m_parityCombo->currentData().toString();
     }
+
+    // 组帧参数（三类通用）：0/空 = 不启用（行为与历史一致）
+    m_config[QStringLiteral("frameTimeoutMs")] =
+        m_frameTimeoutSpin ? m_frameTimeoutSpin->value() : 0;
+    m_config[QStringLiteral("frameTerminator")] =
+        m_frameTermEdit ? m_frameTermEdit->text() : QString();
     accept();
 }

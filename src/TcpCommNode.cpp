@@ -24,6 +24,9 @@ void TcpCommNode::init()
     m_params[QStringLiteral("mode")] = QStringLiteral("Client");
     m_params[QStringLiteral("autoReconnect")] = true;
     m_params[QStringLiteral("reconnectInterval")] = 3000;
+    // 帧组装（粘包/半包治理）：默认关闭，行为与历史一致；在设备配置里开启
+    m_params[QStringLiteral("frameTimeoutMs")] = 0;
+    m_params[QStringLiteral("frameTerminator")] = QString();
 
     // 断线自动重连定时器（对齐 Modbus/PLC 的做法）
     m_reconnectTimer = new QTimer(this);
@@ -78,7 +81,7 @@ bool TcpCommNode::openConnection()
         if (!m_server->listen(QHostAddress::Any, m_params.value(QStringLiteral("port"), 502).toInt())) {
             emit communicationError(QStringLiteral("\u670D\u52A1\u7AEF\u542F\u52A8\u5931\u8D25: %1").arg(m_server->errorString()));
             m_connected = false;
-            m_params[QStringLiteral("connected")] = false;
+            setParamDirect(QStringLiteral("connected"), false);
             return false;
         }
         connect(m_server, &QTcpServer::newConnection, this, [this]() {
@@ -93,7 +96,7 @@ bool TcpCommNode::openConnection()
             m_socket = client;
             hookSocket(client);
             m_connected = true;
-            m_params[QStringLiteral("connected")] = true;
+            setParamDirect(QStringLiteral("connected"), true);
             emit connectionOpened();
         });
     } else {
@@ -111,12 +114,12 @@ bool TcpCommNode::openConnection()
         if (!m_socket->waitForConnected(1500)) {   // 手动连接：短等待（局域网连接通常 <100ms）
             emit communicationError(QStringLiteral("\u8FDE\u63A5TCP\u670D\u52A1\u5668\u5931\u8D25: %1").arg(m_socket->errorString()));
             m_connected = false;
-            m_params[QStringLiteral("connected")] = false;
+            setParamDirect(QStringLiteral("connected"), false);
             scheduleReconnect();   // 首次连接失败也自动重试（现场上电顺序不定）
             return false;
         }
         m_connected = true;
-        m_params[QStringLiteral("connected")] = true;
+        setParamDirect(QStringLiteral("connected"), true);
         emit connectionOpened();
     }
     return true;
@@ -141,7 +144,7 @@ void TcpCommNode::hookSocket(QTcpSocket *socket)
         if (socket != m_socket) return;
         if (!m_connected) {
             m_connected = true;
-            m_params[QStringLiteral("connected")] = true;
+            setParamDirect(QStringLiteral("connected"), true);
             emit connectionOpened();
         }
         if (m_reconnectTimer) m_reconnectTimer->stop();   // 连上即停重连（防御）
@@ -162,14 +165,14 @@ void TcpCommNode::onReadyRead()
     QByteArray data = m_socket->readAll();
     if (!data.isEmpty()) {
         emit dataReceived(data);
-        m_params[QStringLiteral("lastReceived")] = QString::fromLatin1(data);
+        setParamDirect(QStringLiteral("lastReceived"), QString::fromLatin1(data));
     }
 }
 
 void TcpCommNode::onSocketDisconnected()
 {
     m_connected = false;
-    m_params[QStringLiteral("connected")] = false;
+    setParamDirect(QStringLiteral("connected"), false);
     emit communicationError(QStringLiteral("TCP\u8FDE\u63A5\u5DF2\u65AD\u5F00"));
     emit connectionClosed();
     scheduleReconnect();   // 断线自动重连（历史缺陷：只报警、永久失联）
@@ -179,13 +182,30 @@ void TcpCommNode::onSendRequested(const QByteArray &data)
 {
     if (!m_connected || !m_socket) return;
     if (m_socket->state() != QAbstractSocket::ConnectedState) return;
-    qint64 written = m_socket->write(data);
-    if (written < 0) {
+    const qint64 written = m_socket->write(data);
+    // 成败只看 write 是否吞下全部字节：flush() 返回 false 只说明"写缓冲已空"
+    // （数据早已交给内核），把它当失败会导致每次成功发送都误报通信错误（历史缺陷）。
+    if (written != data.size()) {
         emit communicationError(QStringLiteral("TCP\u53D1\u9001\u5931\u8D25: %1").arg(m_socket->errorString()));
+        // 写失败往往意味着连接已死（半开连接：对端异常断电时不发 FIN）——
+        // 安排重连自愈，而不是等用户发现"发不出去"后手动重连
+        // 半开自愈：必须先落"断开"状态再排重连——否则重连定时器检查 m_connected
+        // 仍为 true，根本不会动作（历史实现的"自愈"是空转，现场只能等用户手动重连）。
+        // 注意不走 closeConnection()：那会把 m_userClosed 置 true 反而禁掉自动重连。
+        QTcpSocket *dead = m_socket;
+        m_socket = nullptr;   // 先解除引用：旧 socket 的延迟信号会被归属校验忽略
+        if (dead) {
+            dead->disconnectFromHost();
+            dead->deleteLater();
+        }
+        m_connected = false;
+        setParamDirect(QStringLiteral("connected"), false);
+        emit connectionClosed();
+        scheduleReconnect();
         return;
     }
-    m_socket->flush();
-    m_params[QStringLiteral("lastSent")] = QString::fromLatin1(data);
+    m_socket->flush();   // best-effort：仅尽力把缓冲推给内核，不作为成败判定
+    setParamDirect(QStringLiteral("lastSent"), QString::fromLatin1(data));
 }
 
 void TcpCommNode::closeConnection()
@@ -204,7 +224,7 @@ void TcpCommNode::closeConnection()
         m_server = nullptr;
     }
     m_connected = false;
-    m_params[QStringLiteral("connected")] = false;
+    setParamDirect(QStringLiteral("connected"), false);
     emit connectionClosed();
 }
 

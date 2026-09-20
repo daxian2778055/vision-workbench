@@ -7,6 +7,9 @@
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QHostAddress>
+#ifdef Q_OS_WIN
+#include <winsock2.h>
+#endif
 
 UdpCommNode::UdpCommNode(QObject *parent) : CommunicationNodeBase(parent)
 {
@@ -21,7 +24,10 @@ void UdpCommNode::init()
     m_params[QStringLiteral("localPort")] = 8000;      /// 本地绑定端口
     m_params[QStringLiteral("remoteIp")] = QStringLiteral("127.0.0.1"); /// 发送目标（空=仅接收）
     m_params[QStringLiteral("remotePort")] = 8000;     /// 发送目标端口
-    m_params[QStringLiteral("connected")] = false;
+    setParamDirect(QStringLiteral("connected"), false);
+    // 帧组装（UDP 一般天然分包，保留配置项以统一行为）：默认关闭
+    m_params[QStringLiteral("frameTimeoutMs")] = 0;
+    m_params[QStringLiteral("frameTerminator")] = QString();
 }
 
 bool UdpCommNode::openConnection()
@@ -38,12 +44,23 @@ bool UdpCommNode::openConnection()
         m_socket->deleteLater();
         m_socket = nullptr;
         m_connected = false;
-        m_params[QStringLiteral("connected")] = false;
+        setParamDirect(QStringLiteral("connected"), false);
         return false;
     }
     connect(m_socket, &QUdpSocket::readyRead, this, &UdpCommNode::onReadyRead);
+#ifdef Q_OS_WIN
+    // 允许发送广播（现场常用 UDP 广播触发；Windows 下必须显式 SO_BROADCAST）
+    {
+        const qintptr fd = m_socket->socketDescriptor();
+        if (fd != -1) {
+            int on = 1;
+            ::setsockopt(SOCKET(fd), SOL_SOCKET, SO_BROADCAST,
+                         reinterpret_cast<const char *>(&on), sizeof(on));
+        }
+    }
+#endif
     m_connected = true;
-    m_params[QStringLiteral("connected")] = true;
+    setParamDirect(QStringLiteral("connected"), true);
     emit connectionOpened();
     return true;
 }
@@ -56,7 +73,7 @@ void UdpCommNode::closeConnection()
         m_socket = nullptr;
     }
     m_connected = false;
-    m_params[QStringLiteral("connected")] = false;
+    setParamDirect(QStringLiteral("connected"), false);
     emit connectionClosed();
 }
 
@@ -84,7 +101,7 @@ void UdpCommNode::onReadyRead()
         if (n < 0) continue;
         buf.resize(static_cast<int>(n));
         m_lastSender = QStringLiteral("%1:%2").arg(sender.toString()).arg(senderPort);
-        m_params[QStringLiteral("lastReceived")] = QString::fromLatin1(buf);
+        setParamDirect(QStringLiteral("lastReceived"), QString::fromLatin1(buf));
         m_params[QStringLiteral("lastSender")] = m_lastSender;
         emit dataReceived(buf);
     }
@@ -106,7 +123,7 @@ void UdpCommNode::onSendRequested(const QByteArray &data)
         emit communicationError(QStringLiteral("UDP 发送失败: %1").arg(m_socket->errorString()));
         return;
     }
-    m_params[QStringLiteral("lastSent")] = QString::fromLatin1(data);
+    setParamDirect(QStringLiteral("lastSent"), QString::fromLatin1(data));
 }
 
 QWidget *UdpCommNode::createParamPanel()

@@ -12,6 +12,7 @@
 #include <QMessageBox>
 #include <QInputDialog>
 #include <QTimer>
+#include <QSerialPortInfo>
 
 ModbusConfigDialog::ModbusConfigDialog(const QString &title,
                                        ModbusNode *node,
@@ -85,11 +86,32 @@ void ModbusConfigDialog::setupUI()
     m_host->setPlaceholderText(QStringLiteral("\u4F8B: 192.168.1.100"));
     formLayout->addRow(m_hostLabel, m_host);
 
-    m_portLabel = new QLabel(QStringLiteral("\u7AEF\u53E3:"));
+    m_portLabel = new QLabel(QStringLiteral("端口:"));
     m_port = new QSpinBox();
     m_port->setRange(1, 65535);
     m_port->setValue(502);
     formLayout->addRow(m_portLabel, m_port);
+
+    // RTU（RS485）串口参数：连接类型选 RTU 时必须能配串口——
+    // 历史缺陷：有 RTU 选项但没有任何串口字段，节点侧也漏设参数，选了 RTU 永远连不上
+    m_serialPortLabel = new QLabel(QStringLiteral("串口号:"));
+    m_serialPortName = new QComboBox();
+    m_serialPortName->setEditable(true);
+    for (const QSerialPortInfo &info : QSerialPortInfo::availablePorts())
+        m_serialPortName->addItem(info.portName());
+    formLayout->addRow(m_serialPortLabel, m_serialPortName);
+
+    m_serialBaudLabel = new QLabel(QStringLiteral("波特率:"));
+    m_serialBaudRate = new QComboBox();
+    m_serialBaudRate->setEditable(true);
+    for (int b : { 9600, 19200, 38400, 57600, 115200 })
+        m_serialBaudRate->addItem(QString::number(b));
+    m_serialBaudRate->setCurrentText(QStringLiteral("9600"));
+    formLayout->addRow(m_serialBaudLabel, m_serialBaudRate);
+
+    connect(m_connType, &QComboBox::currentTextChanged, this,
+            [this](const QString &) { refreshConnTypeUi(); });
+    refreshConnTypeUi();
 
     m_slaveAddress = new QSpinBox();
     m_slaveAddress->setRange(1, 247);
@@ -212,17 +234,33 @@ void ModbusConfigDialog::refreshRoleUi()
     bool isServer = (m_roleCombo->currentIndex() == 1);
 
     // 服务器模式隐藏主机地址，端口语义为"监听端口"
-    if (m_host) m_host->setVisible(!isServer);
-    if (m_hostLabel) m_hostLabel->setVisible(!isServer);
     if (m_portLabel) m_portLabel->setText(isServer
-        ? QStringLiteral("\u76D1\u542C\u7AEF\u53E3:")
-        : QStringLiteral("\u7AEF\u53E3:"));
+        ? QStringLiteral("监听端口:")
+        : QStringLiteral("端口:"));
+    // 主机/端口 vs 串口参数（RTU）的可见性统一由 refreshConnTypeUi 决定
+    refreshConnTypeUi();
     if (m_autoReconnect) m_autoReconnect->setEnabled(!isServer);
     if (m_reconnectInterval) m_reconnectInterval->setEnabled(!isServer);
     if (m_pollInterval) m_pollInterval->setEnabled(!isServer);
     if (m_pollInterval && m_pollInterval->toolTip().isEmpty()) {
         // no-op
     }
+}
+
+void ModbusConfigDialog::refreshConnTypeUi()
+{
+    const bool isRtu = (m_connType && m_connType->currentText() == QStringLiteral("RTU"));
+    const bool isServer = (m_roleCombo && m_roleCombo->currentIndex() == 1);
+
+    // TCP：主机地址（客户端）+ 端口；RTU：串口号 + 波特率
+    if (m_host) m_host->setVisible(!isRtu && !isServer);
+    if (m_hostLabel) m_hostLabel->setVisible(!isRtu && !isServer);
+    if (m_port) m_port->setVisible(!isRtu || isServer);       // 服务器固定 TCP 监听端口
+    if (m_portLabel) m_portLabel->setVisible(!isRtu || isServer);
+    if (m_serialPortLabel) m_serialPortLabel->setVisible(isRtu);
+    if (m_serialPortName) m_serialPortName->setVisible(isRtu);
+    if (m_serialBaudLabel) m_serialBaudLabel->setVisible(isRtu);
+    if (m_serialBaudRate) m_serialBaudRate->setVisible(isRtu);
 }
 
 void ModbusConfigDialog::refreshToggleSwitch()
@@ -318,6 +356,14 @@ void ModbusConfigDialog::loadConfigToForm(const QJsonObject &config)
         m_host->setText(config[QStringLiteral("host")].toString());
     if (config.contains(QStringLiteral("port")))
         m_port->setValue(config[QStringLiteral("port")].toInt());
+    if (config.contains(QStringLiteral("portName")) && m_serialPortName) {
+        const QString pn = config[QStringLiteral("portName")].toString();
+        if (!pn.isEmpty() && m_serialPortName->findText(pn) < 0)
+            m_serialPortName->addItem(pn);   // 当前机器上不存在的串口也允许显示（现场换机常见）
+        m_serialPortName->setCurrentText(pn);
+    }
+    if (config.contains(QStringLiteral("baudRate")) && m_serialBaudRate)
+        m_serialBaudRate->setCurrentText(QString::number(config[QStringLiteral("baudRate")].toInt()));
     if (config.contains(QStringLiteral("slaveAddress")))
         m_slaveAddress->setValue(config[QStringLiteral("slaveAddress")].toInt());
     if (config.contains(QStringLiteral("autoReconnect")))
@@ -396,6 +442,11 @@ QJsonObject ModbusConfigDialog::buildConfigFromForm() const
     cfg[QStringLiteral("connectionType")] = m_connType->currentText();
     cfg[QStringLiteral("host")] = m_host->text();
     cfg[QStringLiteral("port")] = m_port->value();
+    // RTU 串口参数（TCP 时为空/默认值，不影响既有配置）
+    cfg[QStringLiteral("portName")] =
+        m_serialPortName ? m_serialPortName->currentText().trimmed() : QString();
+    cfg[QStringLiteral("baudRate")] =
+        m_serialBaudRate ? m_serialBaudRate->currentText().toInt() : 9600;
     cfg[QStringLiteral("slaveAddress")] = m_slaveAddress->value();
     cfg[QStringLiteral("autoReconnect")] = m_autoReconnect->isChecked();
     cfg[QStringLiteral("reconnectInterval")] = m_reconnectInterval->value();

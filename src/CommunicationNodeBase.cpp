@@ -16,7 +16,7 @@ CommunicationNodeBase::CommunicationNodeBase(QObject *parent)
 void CommunicationNodeBase::init()
 {
     HalconNode::init();
-    m_params[QStringLiteral("connected")] = false;
+    setParamDirect(QStringLiteral("connected"), false);
 }
 
 void CommunicationNodeBase::run(bool /*autoSwitch*/)

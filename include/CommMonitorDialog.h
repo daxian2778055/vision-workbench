@@ -8,6 +8,8 @@
 #include <QLabel>
 #include <QHash>
 
+class QTimer;
+
 /// 通讯数据监视窗口 — 实时查看各设备的收发字节与数据流
 /// 对标 VM4.4 的"通讯监视"：设备列表 + 收发数据日志（十六进制/ASCII）
 class CommMonitorDialog : public QDialog
@@ -26,6 +28,9 @@ private slots:
     void onDeviceSelectionChanged();
     void onClearLog();
     void onClearStats();
+    /// 节流刷新：高频通讯时把日志重绘合并到 200ms 一次（历史实现每帧全量重绘，
+    /// Modbus 百毫秒轮询 + 高频收发会把监视窗和主界面一起拖卡）
+    void flushRefresh();
 
 private:
     void setupUI();
@@ -56,6 +61,9 @@ private:
     QLabel *m_statusLabel = nullptr;
     QPushButton *m_clearLogBtn = nullptr;
     QPushButton *m_clearStatsBtn = nullptr;
+
+    QTimer *m_refreshThrottle = nullptr;   ///< 日志重绘节流（200ms 合并）
+    bool m_refreshDirty = false;
 
     static constexpr int kMaxLogLines = 2000;
 };

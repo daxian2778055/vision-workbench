@@ -42,6 +42,8 @@ private:
     void connectToNodeLiveUpdates();
     /// 切换角色后刷新控件可见性（服务器模式隐藏主机地址）
     void refreshRoleUi();
+    /// 按连接类型（TCP/RTU）切换"主机地址/端口"与"串口参数"的可见性
+    void refreshConnTypeUi();
     /// 刷新连接切换开关文字/样式
     void refreshToggleSwitch();
 
@@ -51,6 +53,11 @@ private:
     QLabel *m_hostLabel = nullptr;
     QSpinBox *m_port = nullptr;
     QLabel *m_portLabel = nullptr;
+    // RTU（RS485）串口参数：连接类型选 RTU 时显示（历史缺陷：有 RTU 选项但无任何串口字段）
+    QComboBox *m_serialPortName = nullptr;
+    QLabel *m_serialPortLabel = nullptr;
+    QComboBox *m_serialBaudRate = nullptr;
+    QLabel *m_serialBaudLabel = nullptr;
     QSpinBox *m_slaveAddress = nullptr;
     QCheckBox *m_autoReconnect = nullptr;
     QSpinBox *m_reconnectInterval = nullptr;

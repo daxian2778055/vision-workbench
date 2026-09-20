@@ -39,7 +39,7 @@ void ModbusNode::init()
     m_params[QStringLiteral("autoReconnect")] = true;
     m_params[QStringLiteral("reconnectInterval")] = 3000;
     m_params[QStringLiteral("pollInterval")] = 100;
-    m_params[QStringLiteral("connected")] = false;
+    setParamDirect(QStringLiteral("connected"), false);
 
     // 自动重连定时器
     m_reconnectTimer = new QTimer(this);
@@ -124,7 +124,7 @@ bool ModbusNode::openConnection()
 
         if (!m_modbusServer->connectDevice()) {
             m_connected = false;
-            m_params[QStringLiteral("connected")] = false;
+            setParamDirect(QStringLiteral("connected"), false);
             emit communicationError(
                 QStringLiteral("Modbus\u670D\u52A1\u5668\u542F\u52A8\u5931\u8D25: %1")
                     .arg(m_modbusServer->errorString()));
@@ -132,7 +132,7 @@ bool ModbusNode::openConnection()
         }
 
         m_connected = true;
-        m_params[QStringLiteral("connected")] = true;
+        setParamDirect(QStringLiteral("connected"), true);
         emit connectionOpened();
         VFP_DEBUG << "Modbus server listening on port"
                   << m_params.value(QStringLiteral("port"), 502).toInt();
@@ -155,6 +155,26 @@ bool ModbusNode::openConnection()
                                           m_params.value(QStringLiteral("port"), 502).toInt());
         m_modbus->setConnectionParameter(QModbusDevice::NetworkAddressParameter,
                                           m_params.value(QStringLiteral("host")).toString());
+    } else {
+        // RTU（RS485）：必须先下发串口参数，否则 QModbusRtuSerialMaster 无从连接
+        // （历史缺陷：这里一个参数都不设，配了 RTU 只能无限重连循环，功能不可用）
+        m_modbus->setConnectionParameter(QModbusDevice::SerialPortNameParameter,
+                                          m_params.value(QStringLiteral("portName")).toString());
+        m_modbus->setConnectionParameter(QModbusDevice::SerialBaudRateParameter,
+                                          m_params.value(QStringLiteral("baudRate"), 9600).toInt());
+        m_modbus->setConnectionParameter(QModbusDevice::SerialDataBitsParameter,
+                                          m_params.value(QStringLiteral("dataBits"), 8).toInt());
+        m_modbus->setConnectionParameter(QModbusDevice::SerialStopBitsParameter,
+                                          m_params.value(QStringLiteral("stopBits"), 1).toInt());
+        // 校验：None / Even / Odd → QSerialPort::Parity 枚举值 0 / 2 / 3
+        const QString parity =
+            m_params.value(QStringLiteral("parity"), QStringLiteral("None")).toString().toLower();
+        int parityValue = 0;
+        if (parity == QStringLiteral("even") || parity == QStringLiteral("偶"))
+            parityValue = 2;
+        else if (parity == QStringLiteral("odd") || parity == QStringLiteral("奇"))
+            parityValue = 3;
+        m_modbus->setConnectionParameter(QModbusDevice::SerialParityParameter, parityValue);
     }
 
     // 状态变更信号
@@ -163,7 +183,7 @@ bool ModbusNode::openConnection()
 
     if (!m_modbus->connectDevice()) {
         m_connected = false;
-        m_params[QStringLiteral("connected")] = false;
+        setParamDirect(QStringLiteral("connected"), false);
         emit communicationError(QStringLiteral("Modbus\u8FDE\u63A5\u5931\u8D25"));
 
         // 自动重连
@@ -174,7 +194,7 @@ bool ModbusNode::openConnection()
     }
 
     m_connected = true;
-    m_params[QStringLiteral("connected")] = true;
+    setParamDirect(QStringLiteral("connected"), true);
     m_slaveAddress = m_params.value(QStringLiteral("slaveAddress"), 1).toInt();
     emit connectionOpened();
 
@@ -201,7 +221,7 @@ void ModbusNode::closeConnection()
         m_modbusServer = nullptr;
     }
     m_connected = false;
-    m_params[QStringLiteral("connected")] = false;
+    setParamDirect(QStringLiteral("connected"), false);
     emit connectionClosed();
 }
 
@@ -375,25 +395,32 @@ void ModbusNode::onPollTimeout()
         pr.regIndex = idx;
 
         m_pendingQueue.append(pr);
-        readRegister(m_slaveAddress, reg.address, regCount);
+        if (!readRegister(m_slaveAddress, reg.address, regCount)) {
+            // 请求未能发出（离线/忙）：立刻回滚队列条目——否则 pendingQueue 非空会让
+            // 后续每次轮询都在入口处直接 return（轮询永久冻结且无任何报警）
+            m_pendingQueue.removeLast();
+            VFP_DEBUG << "Modbus read dispatch failed at address" << reg.address;
+        }
+        // 只推进一步。历史缺陷：此处推进后函数末尾又无条件推进一次 → 偶数个寄存器时
+        // 每逢一个跳过一个，一半寄存器永久不刷新，界面/日志却"看起来正常"。
         m_currentRegIdx = (idx + 1) % m_registers.size();
         break;
     }
-
-    // 如果所有寄存器都轮询完一轮，重置
-    m_currentRegIdx = (m_currentRegIdx + 1) % m_registers.size();
 }
 
-void ModbusNode::readRegister(int slaveAddr, int regAddr, int count)
+bool ModbusNode::readRegister(int slaveAddr, int regAddr, int count)
 {
-    if (!m_modbus) return;
+    if (!m_modbus) return false;
 
     QModbusDataUnit readUnit(QModbusDataUnit::HoldingRegisters, regAddr, count);
     QModbusReply *reply = m_modbus->sendReadRequest(readUnit, slaveAddr);
+    if (!reply) {
+        // 请求未发出（设备离线/忙）：返回失败，调用方回滚 pendingQueue 条目。
+        // 否则该条目永远无人消费 → 轮询入口 !isEmpty 检查让轮询永久冻结且无报警。
+        return false;
+    }
 
-    if (reply) {
-        if (!reply->isFinished()) {
-            connect(reply, &QModbusReply::finished, this, [this, reply, regAddr]() {
+    auto handler = [this, reply, regAddr]() {
                 // 查找对应的待处理项
                 int regIndex = -1;
                 for (int i = 0; i < m_pendingQueue.size(); ++i) {
@@ -458,11 +485,12 @@ void ModbusNode::readRegister(int slaveAddr, int regAddr, int count)
                     VFP_DEBUG << "Modbus read error at address" << regAddr << ":" << reply->errorString();
                 }
                 reply->deleteLater();
-            });
-        } else {
-            reply->deleteLater();
-        }
-    }
+    };
+    if (reply->isFinished())
+        handler();   // 同步完成（罕见）：必须立即消费，否则 pendingQueue 条目永久滞留
+    else
+        connect(reply, &QModbusReply::finished, this, handler);
+    return true;
 }
 
 void ModbusNode::onModbusStateChanged(int state)
@@ -470,7 +498,7 @@ void ModbusNode::onModbusStateChanged(int state)
     if (state == QModbusDevice::ConnectedState) {
         if (!m_connected) {
             m_connected = true;
-            m_params[QStringLiteral("connected")] = true;
+            setParamDirect(QStringLiteral("connected"), true);
             emit connectionOpened();
             startPolling();
         }
@@ -478,7 +506,7 @@ void ModbusNode::onModbusStateChanged(int state)
     } else if (state == QModbusDevice::UnconnectedState) {
         if (m_connected) {
             m_connected = false;
-            m_params[QStringLiteral("connected")] = false;
+            setParamDirect(QStringLiteral("connected"), false);
             emit connectionClosed();
             stopPolling();
         }

@@ -23,6 +23,7 @@
 #include <QLabel>
 #include <QDateTime>
 #include <QColor>
+#include <QTimer>
 
 CommunicationManagerDialog::CommunicationManagerDialog(QWidget *parent)
     : QDialog(parent)
@@ -112,11 +113,28 @@ void CommunicationManagerDialog::setupDeviceTab(QTabWidget *tabs)
     connect(m_configBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onConfigDevice);
     connect(m_readBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onReadRegisters);
 
+    // 连接状态实时刷新：自动重连/对端断开/重连成功都会更新表格。
+    // 关键：必须**异步合并**刷新——openDevice/closeDevice 会同步 emit
+    // deviceConnected/deviceDisconnected，若在信号里同步重建表格，
+    // 发起操作的 onToggleConnection 栈上仍持有该行「连接开关」按钮裸指针，
+    // 表格重建销毁按钮后再访问即为 use-after-free（点"连接开关"即崩的根因）。
+    connect(CommunicationManager::instance(), &CommunicationManager::deviceConnected, this,
+            [this](const QString &) { scheduleDeviceTableRefresh(); });
+    connect(CommunicationManager::instance(), &CommunicationManager::deviceDisconnected, this,
+            [this](const QString &) { scheduleDeviceTableRefresh(); });
+
     tabs->addTab(tab, QStringLiteral("\u8BBE\u5907\u7BA1\u7406"));
 }
 
 void CommunicationManagerDialog::refreshDeviceTable()
 {
+    // 保留当前选中设备：连接状态实时刷新（自动重连/对端断开）时避免选中行跳动
+    QString selectedName;
+    {
+        const int selRow = m_deviceTable->currentRow();
+        if (selRow >= 0 && m_deviceTable->item(selRow, 0))
+            selectedName = m_deviceTable->item(selRow, 0)->text();
+    }
     m_deviceTable->setRowCount(0);
     auto *cm = CommunicationManager::instance();
 
@@ -189,9 +207,12 @@ void CommunicationManagerDialog::refreshDeviceTable()
         if (info.type == QStringLiteral("Modbus")) {
             auto *modbusNode = qobject_cast<ModbusNode *>(cm->deviceNode(name));
             if (modbusNode) {
-                // 连接实时寄存器值更新
+                // 连接实时寄存器值更新。
+                // context 必须是 regLabel（而不是 this）：表格重建会销毁行内 QLabel，
+                // 连接随接收者销毁自动断开；若挂在 this 上，每次刷新都会累积一条
+                // 指向已销毁 QLabel 的活跃连接（自动重连抖动下每 3s 刷新一次 → 悬空写必崩）
                 connect(modbusNode, &ModbusNode::registerCurrentValueChanged,
-                        this, [this, regLabel](int addr, double val, const QString &displayText) {
+                        regLabel, [regLabel](int addr, double val, const QString &displayText) {
                     Q_UNUSED(val)
                     QString current = regLabel->text();
                     if (current == QStringLiteral("--")) current.clear();
@@ -213,6 +234,28 @@ void CommunicationManagerDialog::refreshDeviceTable()
     // 保证连接开关列和寄存器列有合适宽度
     m_deviceTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     m_deviceTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
+
+    // 恢复选中设备
+    if (!selectedName.isEmpty()) {
+        for (int r = 0; r < m_deviceTable->rowCount(); ++r) {
+            if (m_deviceTable->item(r, 0) && m_deviceTable->item(r, 0)->text() == selectedName) {
+                m_deviceTable->setCurrentCell(r, 0);
+                break;
+            }
+        }
+    }
+}
+
+void CommunicationManagerDialog::scheduleDeviceTableRefresh()
+{
+    if (m_deviceTableRefreshPending) return;
+    m_deviceTableRefreshPending = true;
+    // 0ms 单发：推迟到当前调用栈展开后再重建，且把连续多个状态信号合并为一次刷新
+    // （context 为 this：对话框销毁后自动取消，不会打到已析构对象）
+    QTimer::singleShot(0, this, [this]() {
+        m_deviceTableRefreshPending = false;
+        refreshDeviceTable();
+    });
 }
 
 void CommunicationManagerDialog::onToggleConnection(int row)

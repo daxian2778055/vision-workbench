@@ -30,6 +30,8 @@
 #include "ReceiveEvent.h"
 #include "SendEvent.h"
 #include "CommunicationNodeBase.h"
+#include "CommunicationManagerDialog.h"
+#include "CommDeviceConfigDialog.h"
 
 namespace {
 
@@ -79,6 +81,16 @@ private slots:
     void testTextReceiveEventRegexParse();
     void testUdpRoundTrip();
     void testTcpAutoReconnect();
+    void testFrameAssemblerTerminatorAndTimeout();
+
+    // 通讯健壮性回归（点连接开关 UAF / 组帧重入 / 断线脏半帧 / 配置键保留 / 发送事件往返）
+    void testDialogToggleConnection();
+    void testFrameAssemblerReentrancy();
+    void testDisconnectClearsFrameBuffer();
+    void testConfigDialogPreservesUnmanagedKeys();
+    void testSendEventsSurviveSaveLoad();
+    // C 类回归：接收事件按设备过滤（A 设备数据不得触发 B 设备的事件）
+    void testReceiveEventFiltersByDevice();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -94,10 +106,19 @@ void CommWritebackTest::testSendDataReachesSimulatedPlc()
              "addDevice 失败");
     QVERIFY2(cm->openDevice(QStringLiteral("SIM_PLC")), "连接模拟 PLC 失败（同步 waitForConnected）");
 
+    // 成功发送不得误报错误：flush() 返回 false 只代表写缓冲已空（数据早已交给内核），
+    // 历史实现把它当失败 → 每次成功回写都刷一条"TCP发送失败"且 lastSent 不更新
+    auto *simNode = cm->deviceNode(QStringLiteral("SIM_PLC"));
+    QVERIFY(simNode != nullptr);
+    QSignalSpy errSpy(simNode, &CommunicationNodeBase::communicationError);
+
     // 投递是排队执行（sendRequested → onSendRequested），需要事件循环才会真正 write
     QVERIFY2(cm->sendData(QStringLiteral("SIM_PLC"), QByteArray("OK,1,3.14\r\n")), "sendData 投递失败");
     QTRY_VERIFY_WITH_TIMEOUT(received.contains("OK,1,3.14"), 3000);
     QCOMPARE(received, QByteArray("OK,1,3.14\r\n"));   // 原样字节，无额外包装
+    QCOMPARE(errSpy.count(), 0);   // 成功路径不得发通信错误
+    QCOMPARE(simNode->getParam(QStringLiteral("lastSent")).toString(),
+             QStringLiteral("OK,1,3.14\r\n"));   // 误判失败时这里不会更新
 
     QVERIFY(cm->closeDevice(QStringLiteral("SIM_PLC")));
     QVERIFY(cm->removeDevice(QStringLiteral("SIM_PLC")));
@@ -1031,6 +1052,296 @@ void CommWritebackTest::testTcpAutoReconnect()
 
     QVERIFY(cm->closeDevice(QStringLiteral("SIM_RC")));
     QVERIFY(cm->removeDevice(QStringLiteral("SIM_RC")));
+}
+
+void CommWritebackTest::testFrameAssemblerTerminatorAndTimeout()
+{
+    // 组帧治理（粘包/半包）：接收侧不再按"到达块"触发，而是按帧触发。
+    // 场景：对端（模拟 PLC）连续发两帧 / 一帧拆两次发 / 无结束符数据静默成帧。
+    QTcpServer plc;
+    QTcpSocket *peer = nullptr;
+    plc.listen(QHostAddress::LocalHost, 0);
+    QVERIFY2(plc.isListening(), qPrintable(plc.errorString()));
+    QObject::connect(&plc, &QTcpServer::newConnection, &plc,
+                     [&plc, &peer]() { peer = plc.nextPendingConnection(); });
+
+    auto *cm = CommunicationManager::instance();
+    QJsonObject cfg = tcpClientConfig(plc.serverPort());
+    cfg[QStringLiteral("frameTerminator")] = QStringLiteral("\\r\\n");   // 转义 → CRLF
+    cfg[QStringLiteral("frameTimeoutMs")] = 600;   // 放宽裕度：避免 80/150ms 级紧时序断言在负载下抖动
+    QVERIFY(cm->addDevice(QStringLiteral("SIM_FRAME"), QStringLiteral("TCP"), cfg));
+    QVERIFY(cm->openDevice(QStringLiteral("SIM_FRAME")));
+    QTRY_VERIFY_WITH_TIMEOUT(peer != nullptr, 3000);
+
+    QSignalSpy rxSpy(cm, &CommunicationManager::dataReceived);
+    QVERIFY(rxSpy.isValid());
+
+    // ① 粘包治理：一次写入两帧 → 应产出两个独立帧
+    peer->write("A,1\r\nB,2\r\n");
+    peer->flush();
+    QTRY_VERIFY_WITH_TIMEOUT(rxSpy.count() >= 2, 3000);
+    QStringList frames;
+    for (int i = 0; i < rxSpy.count(); ++i)
+        frames << QString::fromLatin1(rxSpy.at(i).at(1).toByteArray());
+    QVERIFY2(frames.contains(QStringLiteral("A,1\r\n")), qPrintable(frames.join(QLatin1Char('|'))));
+    QVERIFY2(frames.contains(QStringLiteral("B,2\r\n")), qPrintable(frames.join(QLatin1Char('|'))));
+
+    // ② 半包治理：一帧拆两次写 → 只有凑齐结束符才成帧（中途不得触发）
+    rxSpy.clear();
+    peer->write("C,");
+    peer->flush();
+    QTest::qWait(120);   // 远小于帧超时（600ms）
+    QCOMPARE(rxSpy.count(), 0);
+    peer->write("3\r\n");
+    peer->flush();
+    QTRY_VERIFY_WITH_TIMEOUT(rxSpy.count() >= 1, 3000);
+    QCOMPARE(rxSpy.at(0).at(1).toByteArray(), QByteArray("C,3\r\n"));
+
+    // ③ 超时兜底：对端不发结束符时，静默 600ms 后把剩余数据整体成帧
+    rxSpy.clear();
+    peer->write("NO-TERM");
+    peer->flush();
+    QTRY_VERIFY_WITH_TIMEOUT(rxSpy.count() >= 1, 3000);
+    QCOMPARE(rxSpy.at(0).at(1).toByteArray(), QByteArray("NO-TERM"));
+
+    QVERIFY(cm->closeDevice(QStringLiteral("SIM_FRAME")));
+    QVERIFY(cm->removeDevice(QStringLiteral("SIM_FRAME")));
+}
+
+void CommWritebackTest::testDialogToggleConnection()
+{
+    // A1 回归：连接开关走对话框真实路径。openDevice/closeDevice 会同步 emit
+    // deviceConnected/deviceDisconnected；历史上对话框在信号里**同步重建整张表**，
+    // 而 onToggleConnection 栈上仍在使用该行「连接开关」按钮 → use-after-free（点开关即崩）。
+    // 现已改为异步合并刷新：本用例保证"点开关 → 真的连上/断开"且全程不崩。
+    QTcpServer plc;
+    QByteArray received;
+    startSimulatedPlc(plc, received);
+    QVERIFY2(plc.isListening(), qPrintable(plc.errorString()));
+
+    auto *cm = CommunicationManager::instance();
+    QVERIFY(cm->addDevice(QStringLiteral("SIM_DLG"), QStringLiteral("TCP"),
+                          tcpClientConfig(plc.serverPort())));
+
+    {
+        CommunicationManagerDialog dlg;
+
+        QVERIFY2(QMetaObject::invokeMethod(&dlg, "onToggleConnection", Qt::DirectConnection,
+                                           Q_ARG(int, 0)),
+                 "onToggleConnection 应可通过元对象调用");
+        QTRY_VERIFY_WITH_TIMEOUT(cm->deviceInfo(QStringLiteral("SIM_DLG")).isConnected, 3000);
+        QVERIFY2(received.isEmpty(), "刚连上尚未发送任何数据");
+
+        // 再点一次：断开（同样不得在重建后使用旧按钮）
+        QVERIFY(QMetaObject::invokeMethod(&dlg, "onToggleConnection", Qt::DirectConnection,
+                                          Q_ARG(int, 0)));
+        QTRY_VERIFY_WITH_TIMEOUT(!cm->deviceInfo(QStringLiteral("SIM_DLG")).isConnected, 3000);
+    }
+
+    QVERIFY(cm->removeDevice(QStringLiteral("SIM_DLG")));
+}
+
+void CommWritebackTest::testFrameAssemblerReentrancy()
+{
+    // A3 回归：feedFrameAssembler 不得跨 emit 持有 m_frameBuffers 的引用——
+    // 槽里 addDevice/removeDevice 会让 QHash 重哈希，旧引用悬空 → 写已释放内存。
+    // 复现：每收到一帧就在槽里增删一个设备（直接命中"emit 期间容器被改"）。
+    QTcpServer plc;
+    QTcpSocket *peer = nullptr;
+    plc.listen(QHostAddress::LocalHost, 0);
+    QVERIFY2(plc.isListening(), qPrintable(plc.errorString()));
+    QObject::connect(&plc, &QTcpServer::newConnection, &plc,
+                     [&plc, &peer]() { peer = plc.nextPendingConnection(); });
+
+    auto *cm = CommunicationManager::instance();
+    QJsonObject cfg = tcpClientConfig(plc.serverPort());
+    cfg[QStringLiteral("frameTerminator")] = QStringLiteral("\\r\\n");
+    QVERIFY(cm->addDevice(QStringLiteral("SIM_REENT"), QStringLiteral("TCP"), cfg));
+    QVERIFY(cm->openDevice(QStringLiteral("SIM_REENT")));
+    QTRY_VERIFY_WITH_TIMEOUT(peer != nullptr, 3000);
+
+    QSignalSpy rxSpy(cm, &CommunicationManager::dataReceived);
+    // 重入演员：收到任意一帧就增删设备（迫使帧缓冲 QHash 重哈希）
+    const QMetaObject::Connection hook = QObject::connect(
+        cm, &CommunicationManager::dataReceived, cm, [cm](const QString &) {
+            cm->addDevice(QStringLiteral("SIM_REENT_EXTRA"), QStringLiteral("UDP"), QJsonObject());
+            cm->removeDevice(QStringLiteral("SIM_REENT_EXTRA"));
+        });
+
+    peer->write("X,1\r\nY,2\r\n");   // 一次写入两帧：切帧循环中途触发 emit → 重入
+    peer->flush();
+
+    QTRY_VERIFY_WITH_TIMEOUT(rxSpy.count() >= 2, 3000);
+    QStringList frames;
+    for (int i = 0; i < rxSpy.count(); ++i)
+        frames << QString::fromLatin1(rxSpy.at(i).at(1).toByteArray());
+    QVERIFY2(frames.contains(QStringLiteral("X,1\r\n")), qPrintable(frames.join(QLatin1Char('|'))));
+    QVERIFY2(frames.contains(QStringLiteral("Y,2\r\n")), qPrintable(frames.join(QLatin1Char('|'))));
+
+    QObject::disconnect(hook);
+    QVERIFY(cm->closeDevice(QStringLiteral("SIM_REENT")));
+    QVERIFY(cm->removeDevice(QStringLiteral("SIM_REENT")));
+}
+
+void CommWritebackTest::testDisconnectClearsFrameBuffer()
+{
+    // A4 回归：断线必须丢弃旧链路的半帧缓冲——否则重连后新链路首帧与旧残帧
+    // 拼在一起（"C," + "3\r\n" → 脏帧），解析全错却不报错。
+    QTcpServer plc;
+    QTcpSocket *peer = nullptr;
+    int connCount = 0;
+    plc.listen(QHostAddress::LocalHost, 0);
+    QVERIFY2(plc.isListening(), qPrintable(plc.errorString()));
+    QObject::connect(&plc, &QTcpServer::newConnection, &plc,
+                     [&plc, &peer, &connCount]() { ++connCount; peer = plc.nextPendingConnection(); });
+
+    auto *cm = CommunicationManager::instance();
+    QJsonObject cfg = tcpClientConfig(plc.serverPort());
+    cfg[QStringLiteral("frameTerminator")] = QStringLiteral("\\r\\n");
+    QVERIFY(cm->addDevice(QStringLiteral("SIM_CLEAN"), QStringLiteral("TCP"), cfg));
+    QVERIFY(cm->openDevice(QStringLiteral("SIM_CLEAN")));
+    QTRY_VERIFY_WITH_TIMEOUT(peer != nullptr, 3000);
+
+    QSignalSpy rxSpy(cm, &CommunicationManager::dataReceived);
+
+    // ① 只来半帧（无结束符）：绝不能成帧
+    peer->write("C,");
+    peer->flush();
+    QTest::qWait(100);
+    QCOMPARE(rxSpy.count(), 0);
+
+    // ② 断开 → 重连（模拟掉线自愈）
+    QVERIFY(cm->closeDevice(QStringLiteral("SIM_CLEAN")));
+    QVERIFY(cm->openDevice(QStringLiteral("SIM_CLEAN")));
+    QTRY_VERIFY_WITH_TIMEOUT(connCount >= 2, 3000);
+
+    // ③ 新链路首帧必须干净：只有 "3\r\n"，不得出现 "C,3\r\n"
+    rxSpy.clear();
+    peer->write("3\r\n");
+    peer->flush();
+    QTRY_VERIFY_WITH_TIMEOUT(rxSpy.count() >= 1, 3000);
+    QCOMPARE(rxSpy.at(0).at(1).toByteArray(), QByteArray("3\r\n"));
+
+    QVERIFY(cm->closeDevice(QStringLiteral("SIM_CLEAN")));
+    QVERIFY(cm->removeDevice(QStringLiteral("SIM_CLEAN")));
+}
+
+void CommWritebackTest::testConfigDialogPreservesUnmanagedKeys()
+{
+    // 警告级回归：热更新用 CommDeviceConfigDialog 时，不在表单上的键不得被丢弃。
+    // 历史缺陷：不播种 initial + onAccept 从零构造 → autoReconnect/reconnectInterval
+    // 等键在"配置→确定"后静默消失（存盘再打开，"断线自动重连"勾选就没了）。
+    QJsonObject initial = tcpClientConfig(15503);
+    initial[QStringLiteral("autoReconnect")] = true;
+    initial[QStringLiteral("reconnectInterval")] = 2500;
+    initial[QStringLiteral("frameTimeoutMs")] = 300;
+
+    CommDeviceConfigDialog dlg(QStringLiteral("TCP"), initial, nullptr);
+    const QJsonObject out = dlg.config();
+    QCOMPARE(out.value(QStringLiteral("autoReconnect")).toBool(), true);
+    QCOMPARE(out.value(QStringLiteral("reconnectInterval")).toInt(), 2500);
+    QCOMPARE(out.value(QStringLiteral("frameTimeoutMs")).toInt(), 300);
+    QCOMPARE(out.value(QStringLiteral("port")).toInt(), 15503);   // 表单管理的键原样在
+}
+
+void CommWritebackTest::testSendEventsSurviveSaveLoad()
+{
+    // C 类回归：发送事件必须随方案序列化往返。
+    // 历史缺陷：toJson 写了 sendEvents、fromJson 不读 → 保存/重启后
+    // PLC 回写配置（模板/字段表/启停）全部"消失"。
+    auto *cm = CommunicationManager::instance();
+
+    auto *ev = new TextDirectSendEvent(QStringLiteral("SE_RT"), QStringLiteral("DEV_X"), cm);
+    ev->setTemplate(QStringLiteral("RT-{}.END"));
+    ev->setSuffix(QStringLiteral("\r\n"));
+    QVERIFY(cm->addSendEvent(ev));
+
+    cm->fromJson(cm->toJson());   // 模拟"保存方案 → 重启加载"
+
+    auto *back = cm->sendEvent(QStringLiteral("SE_RT"));
+    QVERIFY2(back != nullptr, "文本发送事件未随方案往返（fromJson 漏读 sendEvents）");
+    QVERIFY(back->sendType() == SendEvent::TEXT_DIRECT);
+    QCOMPARE(back->toJson().value(QStringLiteral("template")).toString(),
+             QStringLiteral("RT-{}.END"));
+    QCOMPARE(back->toJson().value(QStringLiteral("suffix")).toString(),
+             QStringLiteral("\r\n"));
+
+    // 字节组包类型的子类也必须还原正确（否则重启后变文本事件）
+    auto *bin = new BytePackSendEvent(QStringLiteral("SE_RT_BIN"), QStringLiteral("DEV_X"), cm);
+    BytePackField f;
+    f.dataType = QStringLiteral("int16");
+    f.fixedValue = 7;
+    bin->addField(f);
+    QVERIFY(cm->addSendEvent(bin));
+
+    cm->fromJson(cm->toJson());
+
+    auto *binBack = cm->sendEvent(QStringLiteral("SE_RT_BIN"));
+    QVERIFY2(binBack != nullptr, "字节组包事件未随方案往返");
+    QVERIFY(binBack->sendType() == SendEvent::BYTE_PACK);
+    QCOMPARE(binBack->toJson().value(QStringLiteral("fields")).toArray().size(), 1);
+
+    cm->removeSendEvent(QStringLiteral("SE_RT"));
+    cm->removeSendEvent(QStringLiteral("SE_RT_BIN"));
+}
+
+void CommWritebackTest::testReceiveEventFiltersByDevice()
+{
+    // C 类回归：接收事件必须按**绑定设备**过滤。
+    // 历史缺陷：GlobalTriggerManager::onDataReceived 把 deviceName 直接忽略（Q_UNUSED），
+    // 任何设备的一帧数据都会跑遍全部接收事件——A 设备的数据能触发 B 设备的流程
+    // （安全事故级）。本用例：先给"别的设备"绑一个事件，发本设备数据必须不触发；
+    // 再把同一事件绑到本设备，发同样格式的数据必须触发（证明是过滤生效而非链路坏了）。
+    QTcpServer plc;
+    QTcpSocket *peer = nullptr;
+    plc.listen(QHostAddress::LocalHost, 0);
+    QVERIFY2(plc.isListening(), qPrintable(plc.errorString()));
+    QObject::connect(&plc, &QTcpServer::newConnection, &plc,
+                     [&plc, &peer]() { peer = plc.nextPendingConnection(); });
+
+    auto *cm = CommunicationManager::instance();
+    QVERIFY(cm->addDevice(QStringLiteral("SIM_FILTER"), QStringLiteral("TCP"),
+                          tcpClientConfig(plc.serverPort())));
+    QVERIFY(cm->openDevice(QStringLiteral("SIM_FILTER")));
+    QTRY_VERIFY_WITH_TIMEOUT(peer != nullptr, 3000);
+
+    auto *gtm = GlobalTriggerManager::instance();
+    QSignalSpy firedSpy(gtm, &GlobalTriggerManager::triggerFired);
+    QSignalSpy rxSpy(cm, &CommunicationManager::dataReceived);
+
+    // ① 事件绑定到 OTHER_DEV：本设备（SIM_FILTER）的数据不得触发它
+    auto *other = new TextProtocolReceiveEvent(QStringLiteral("EV_OTHER"),
+                                               QStringLiteral("OTHER_DEV"));
+    other->setDelimiter(QStringLiteral(","));
+    QVERIFY(cm->addReceiveEvent(other));
+    QVERIFY2(gtm->setEventTrigger(QStringLiteral("EV_OTHER"), QStringLiteral("FlowFilter")),
+             "配置事件触发失败");
+
+    peer->write("1,2\r\n");
+    peer->flush();
+    QTRY_VERIFY_WITH_TIMEOUT(rxSpy.count() >= 1, 3000);   // 数据确实到达平台
+    QTest::qWait(150);                                     // 给（不应发生的）触发留出时间窗口
+    QCOMPARE(firedSpy.count(), 0);                         // 但绝不能触发
+
+    // ② 对照：同一批数据，事件绑到本设备时必须触发
+    QVERIFY(gtm->removeEventTrigger(QStringLiteral("EV_OTHER")));
+    cm->removeReceiveEvent(QStringLiteral("EV_OTHER"));
+
+    auto *self = new TextProtocolReceiveEvent(QStringLiteral("EV_SELF"),
+                                              QStringLiteral("SIM_FILTER"));
+    self->setDelimiter(QStringLiteral(","));
+    QVERIFY(cm->addReceiveEvent(self));
+    QVERIFY(gtm->setEventTrigger(QStringLiteral("EV_SELF"), QStringLiteral("FlowFilter")));
+
+    peer->write("3,4\r\n");
+    peer->flush();
+    QTRY_VERIFY_WITH_TIMEOUT(firedSpy.count() >= 1, 3000);
+    QCOMPARE(firedSpy.at(0).at(0).toString(), QStringLiteral("FlowFilter"));
+
+    gtm->removeEventTrigger(QStringLiteral("EV_SELF"));
+    cm->removeReceiveEvent(QStringLiteral("EV_SELF"));
+    QVERIFY(cm->closeDevice(QStringLiteral("SIM_FILTER")));
+    QVERIFY(cm->removeDevice(QStringLiteral("SIM_FILTER")));
 }
 
 // 必须用 QTEST_MAIN：流程用例要创建 FlowScene（QGraphicsScene），仅 QCoreApplication 会崩；

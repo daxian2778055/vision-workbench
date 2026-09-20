@@ -65,9 +65,11 @@ void FormatNode::run(bool /*autoSwitch*/)
             // 替换 {name} 为对应的 JSON 字段值
             QRegularExpression re(QStringLiteral("\\{([^}]+)\\}"));
             QRegularExpressionMatchIterator it = re.globalMatch(output);
-            // 从后往前替换，保持偏移正确
-            QList<QPair<int, int>> replacements; // pos, len
-            QList<QString> values;
+            // 先收集全部替换（位置取自**原始** output），最后从后往前统一应用。
+            // 历史缺陷：边迭代边 replace 同一个字符串（注释还写着"从后往前"）——
+            // 前一个替换一旦改变长度，后面 match 的偏移全部错位 → 报文错位。
+            QList<QPair<int, int>> spans;   // capturedStart, capturedLength
+            QList<QString> repls;
             while (it.hasNext()) {
                 QRegularExpressionMatch match = it.next();
                 QString fieldName = match.captured(1).trimmed();
@@ -93,8 +95,11 @@ void FormatNode::run(bool /*autoSwitch*/)
                 } else {
                     replacement = QString();
                 }
-                output.replace(match.capturedStart(), match.capturedLength(), replacement);
+                spans.append({match.capturedStart(), match.capturedLength()});
+                repls.append(replacement);
             }
+            for (int i = spans.size() - 1; i >= 0; --i)
+                output.replace(spans[i].first, spans[i].second, repls[i]);
         }
     }
 
