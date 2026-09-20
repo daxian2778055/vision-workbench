@@ -232,6 +232,10 @@ bool ModbusNode::openConnection()
 
 void ModbusNode::closeConnection()
 {
+    // 状态守卫（N2 同款，此前漏改）：已处于关闭态直接返回，避免重复拆解设备 /
+    // 重复发 connectionClosed，以及与 deleteLater 延迟析构形成二次拆解。
+    if (!m_connected && !m_modbus && !m_modbusServer)
+        return;
     stopPolling();
     m_pendingQueue.clear();
 
@@ -317,24 +321,42 @@ void ModbusNode::onServerDataWritten(QModbusDataUnit::RegisterType table, int ad
 
     for (int i = 0; i < size; ++i) {
         const int regAddr = address + i;
+
+        // 高字折叠：本地址若是某个宽类型寄存器（int32/uint32/float）的"高字"
+        // （其基础地址 regAddr-1 配置为宽类型），该值已在基础地址那次迭代组装进同一笔
+        // 逻辑值——此处直接跳过，避免同一次写向事件链投两帧（旧实现会多投一帧错误高字）。
+        const int base = regAddr - 1;
+        bool isHighWordOfWide = false;
+        for (int k = 0; k < m_registers.size(); ++k) {
+            if (m_registers[k].address == base) {
+                const QString dt = m_registers[k].dataType;
+                if (dt == QStringLiteral("int32") || dt == QStringLiteral("uint32")
+                    || dt == QStringLiteral("float")) {
+                    isHighWordOfWide = true;
+                }
+                break;
+            }
+        }
+        if (isHighWordOfWide)
+            continue;
+
+        if (regAddr < 0 || regAddr > 65535)
+            continue;
+
         quint16 first = 0;
         if (!m_modbusServer->data(QModbusDataUnit::HoldingRegisters,
                                   static_cast<quint16>(regAddr), &first)) {
             continue;
         }
 
-        // 找寄存器行；没有就补一行（保持与轮询路径一致的可观测性）
+        // 只处理"已配置"的寄存器：服务器映射表（setMap 连续覆盖到 maxAddr）允许写入任意地址，
+        // 但监控表不应被外部客户端无限撑大——未配置地址直接忽略，不再无脑补行。
         int idx = -1;
         for (int k = 0; k < m_registers.size(); ++k) {
             if (m_registers[k].address == regAddr) { idx = k; break; }
         }
-        if (idx < 0) {
-            ModbusRegisterItem r;
-            r.address = regAddr;
-            r.accessMode = QStringLiteral("ReadWrite");
-            m_registers.append(r);
-            idx = m_registers.size() - 1;
-        }
+        if (idx < 0)
+            continue;
 
         // 32 位类型跨 2 个寄存器：按该行配置的字节序组装 4 字节；否则服务器模式下
         // int32/uint32/float 永远只有 2 字节 → 接收事件按长度不符丢弃（换了新死的半边）
@@ -346,10 +368,13 @@ void ModbusNode::onServerDataWritten(QModbusDataUnit::RegisterType table, int ad
         QVector<quint16> words;
         words.append(first);
         if (wide) {
-            quint16 second = 0;
-            if (m_modbusServer->data(QModbusDataUnit::HoldingRegisters,
-                                     static_cast<quint16>(regAddr + 1), &second)) {
-                words.append(second);
+            // 边界：基础地址已是 65535 时，高字地址 65536 会回绕到 0 读到错误值，必须截断
+            if (regAddr + 1 <= 65535) {
+                quint16 second = 0;
+                if (m_modbusServer->data(QModbusDataUnit::HoldingRegisters,
+                                         static_cast<quint16>(regAddr + 1), &second)) {
+                    words.append(second);
+                }
             }
         }
         const QByteArray rawBytes = assembleRegisterBytes(words, byteOrder);
@@ -576,20 +601,28 @@ double ModbusNode::parseRawToValue(const QByteArray &raw, const QString &dataTyp
         s.setByteOrder(order);
         s >> val;
         return static_cast<double>(val);
-    } else if (dataType == QStringLiteral("int32")) {
+    } else if (dataType == QStringLiteral("int32") || dataType == QStringLiteral("uint32")
+               || dataType == QStringLiteral("float")) {
+        // 32 位：assembleRegisterBytes 已按 byteOrder 把寄存器归一化为最终字节序列，
+        // 此处统一大端解释（与 ReceiveEvent::extractValue 规范一致）；强制大端可同时修掉
+        // BADC 双重交换与 DCBA 反向（旧实现按 order 小端再换一次 = S13 另一半）。
+        // uint32 此前无分支 → 恒返回 0.0（uint32 恒 0 漏洞）。
         if (raw.size() < 4) return 0.0;
-        qint32 val;
         QDataStream s(raw);
-        s.setByteOrder(order);
-        s >> val;
-        return static_cast<double>(val);
-    } else if (dataType == QStringLiteral("float")) {
-        if (raw.size() < 4) return 0.0;
-        float val;
-        QDataStream s(raw);
-        s.setByteOrder(order);
-        s >> val;
-        return static_cast<double>(val);
+        s.setByteOrder(QDataStream::BigEndian);
+        if (dataType == QStringLiteral("int32")) {
+            qint32 val;
+            s >> val;
+            return static_cast<double>(val);
+        } else if (dataType == QStringLiteral("uint32")) {
+            quint32 val;
+            s >> val;
+            return static_cast<double>(val);
+        } else {
+            float val;
+            s >> val;
+            return static_cast<double>(val);
+        }
     }
     return 0.0;
 }

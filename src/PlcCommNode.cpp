@@ -347,20 +347,27 @@ double PlcCommNode::parseRawToValue(const QByteArray &raw, const QString &dataTy
         s.setByteOrder(order);
         s >> val;
         return static_cast<double>(val);
-    } else if (dataType == QStringLiteral("int32")) {
+    } else if (dataType == QStringLiteral("int32") || dataType == QStringLiteral("uint32")
+               || dataType == QStringLiteral("float")) {
+        // 32 位：assembleRegisterBytes 已按 byteOrder 归一化为最终字节序列，此处统一大端解释
+        // （与 ReceiveEvent::extractValue 规范一致）；强制大端修掉 BADC 双重交换 / DCBA 反向，
+        // 并补 uint32 分支（此前无 → 恒返回 0.0）。
         if (raw.size() < 4) return 0.0;
-        qint32 val;
         QDataStream s(raw);
-        s.setByteOrder(order);
-        s >> val;
-        return static_cast<double>(val);
-    } else if (dataType == QStringLiteral("float")) {
-        if (raw.size() < 4) return 0.0;
-        float val;
-        QDataStream s(raw);
-        s.setByteOrder(order);
-        s >> val;
-        return static_cast<double>(val);
+        s.setByteOrder(QDataStream::BigEndian);
+        if (dataType == QStringLiteral("int32")) {
+            qint32 val;
+            s >> val;
+            return static_cast<double>(val);
+        } else if (dataType == QStringLiteral("uint32")) {
+            quint32 val;
+            s >> val;
+            return static_cast<double>(val);
+        } else {
+            float val;
+            s >> val;
+            return static_cast<double>(val);
+        }
     }
     return 0.0;
 }
