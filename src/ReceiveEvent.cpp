@@ -127,6 +127,13 @@ bool ByteMatchReceiveEvent::extractValue(const QByteArray &data, const ByteMatch
     QByteArray chunk = data.mid(rule.byteOffset, rule.byteLength);
     const QString bo = rule.byteOrder;
 
+    // ⚠ 约定（S3）：本函数收到的 data 约定为"已归一化"字节序列——Modbus/PLC 节点在
+    // registerValueChanged/plcRegisterChanged 之前，已按寄存器自身 byteOrder 归一化成 ABCD（大端）
+    // 形态（见 registerbyteorder.h 的 assembleRegisterBytes）。因此：
+    //   - 消费寄存器事件时，规则 byteOrder 应保持 ABCD；若照抄寄存器配置（如 BADC），
+    //     这里会二次交换 → 双重反转得到错值（往返不对称的隐藏来源）。
+    //   - byteOrder 仅对"未归一化的原始报文"（串口/TCP 原始字节流）有意义。
+
     // 32 位值：先按"字节序"把 chunk 规范到 ABCD（A=MSB 在前），再按大端解释。
     // 16 位值：按首字母定字节序（A… = 高字节在前；B…/D… = 低字节在前）。
     // 历史缺陷：只有 int16/int32/float 三个分支，且用 reinterpret_cast 按宿主序

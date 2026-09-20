@@ -7,6 +7,7 @@
 #include <QJsonDocument>
 #include <QFile>
 #include <QMutexLocker>
+#include <QDebug>   // qWarning（S2 同名覆盖告警）
 
 GlobalTriggerManager *GlobalTriggerManager::instance()
 {
@@ -274,12 +275,26 @@ GlobalTriggerManager::TriggerEntry GlobalTriggerManager::triggerEntry(const QStr
 
 void GlobalTriggerManager::registerFlow(const QString &name, FlowScene *scene, FlowExecutor *executor)
 {
-    QMutexLocker locker(&m_mutex);
+    bool existed = false;
+    {
+        QMutexLocker locker(&m_mutex);
+        existed = m_flowBindings.contains(name);
+        FlowBinding fb;
+        fb.scene = scene;
+        fb.executor = executor;
+        m_flowBindings[name] = fb;
+    }
+    if (existed) {
+        // S2：同名覆盖意味着触发路由可能被重定向到新流程（旧流程绑定被砸）。告警而非静默吞掉。
+        qWarning() << "GlobalTriggerManager: 流程名已存在，覆盖旧绑定（触发路由可能重定向）:" << name;
+        emit flowNameCollision(name);
+    }
+}
 
-    FlowBinding fb;
-    fb.scene = scene;
-    fb.executor = executor;
-    m_flowBindings[name] = fb;
+QStringList GlobalTriggerManager::registeredFlowNames() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_flowBindings.keys();
 }
 
 QString GlobalTriggerManager::allocFlowName() const

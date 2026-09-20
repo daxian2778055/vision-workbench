@@ -57,11 +57,12 @@ public:
     void setRegisters(const QList<ModbusRegisterItem> &regs);
     QList<ModbusRegisterItem> registers() const { return m_registers; }
 
-    /// 写入单个寄存器值（客户端模式：向外部设备写入）
-    bool writeRegister(int address, quint16 value);
+    /// 写入寄存器值（客户端模式：向外部设备写入）。按该地址配置的 dataType/byteOrder
+    /// 逆变换拆成 1~2 个寄存器字后写入，保证与读路径字节序往返对称（S3）。
+    bool writeRegister(int address, double value);
 
-    /// 服务器模式：更新本地寄存器表，客户端读请求将返回该值
-    bool setLocalRegisterValue(int address, quint16 value);
+    /// 服务器模式：更新本地寄存器表，客户端读请求将返回该值（同样按字节序拆字）。
+    bool setLocalRegisterValue(int address, double value);
 
     /// 获取寄存器当前解析后的值（供 UI 实时显示）
     double registerCurrentValue(int address) const;
@@ -115,6 +116,12 @@ private:
 
     // 寄存器表格
     QList<ModbusRegisterItem> m_registers;
+
+    // 连接状态判据（S1）：m_everReallyConnected 为"曾真正连上"的唯一判据，避免 connectDevice()
+    // 仅表示"异步发起"被误判为"曾连接" → 关闭从未建立的连接仍发假断开；m_userClosed 抑制用户
+    // 主动关闭后的自动重连"复活"（TcpCommNode 早有同款 m_userClosed）。
+    bool m_everReallyConnected = false;
+    bool m_userClosed = false;
 
     // 当前正在读取的索引
     int m_currentRegIdx = 0;

@@ -126,6 +126,11 @@ public:
     QStringList fixtureNames() const;
     QMap<QString, FlowFixture> fixtures() const { return m_fixtures; }
 
+    /// 流程名称：方案持久化 + 触发按名路由。持久化后改名/重排/删除再保存载入能保持身份，
+    /// 避免触发绑定按"页签序号重建名"被平移到别的流程（S2）。
+    QString flowName() const { return m_flowName; }
+    void setFlowName(const QString &name) { m_flowName = name; }
+
     QJsonObject extrasToJson() const;
     void extrasFromJson(const QJsonObject &json);
 
@@ -163,6 +168,7 @@ private:
     QList<CommentGraphicsItem *> m_comments;
     QMap<QString, FlowVariable> m_flowVariables;
     QMap<QString, FlowFixture> m_fixtures;
+    QString m_flowName;          /// 流程名称（方案持久化 + 触发按名路由，S2）
     bool m_editLocked = false;   /// 编辑锁定（连续模式运行时禁止布图操作）
 
     // ---- 撤销/重做状态 ----

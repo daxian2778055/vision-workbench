@@ -1,4 +1,5 @@
 #include "ModbusNode.h"
+#include "registerbyteorder.h"
 #include "AppLog.h"
 #include <QModbusDataUnit>
 #include <QModbusReply>
@@ -15,41 +16,9 @@
 #include <QJsonObject>
 #include <QDataStream>
 
-namespace {
-/// 把寄存器的 16 位字序列按配置的字节序组装成原始字节（轮询读取与服务器写入共用同一约定，
-/// 避免两处各写一份、改一处漏一处）：ABCD=原序；CDAB=交换两字；BADC=字内字节互换；其余=完全反转。
-QByteArray assembleRegisterBytes(const QVector<quint16> &values, const QString &byteOrder)
-{
-    QByteArray raw;
-    QDataStream stream(&raw, QIODevice::WriteOnly);
-    stream.setByteOrder(QDataStream::BigEndian);   // Modbus 是 Big Endian
-
-    // 归一化约定（与 32 位路径一致）：先把寄存器按 byteOrder 组装成最终字节序列，
-    // parseRawToValue 一律按大端解释。单寄存器（16 位）语义：
-    //   - ABCD / CDAB：只有 1 个字，无"换字"可言 → 原样（CDAB 单寄存器 = ABCD）；
-    //   - BADC / DCBA：字内字节互换（单寄存器 = 高低字节颠倒）。
-    // 旧实现用 `|| values.size() == 1` 强制走 ABCD，导致 BADC/DCBA 单寄存器未交换（16/32 位
-    // 逻辑不一致）；而 CDAB 单寄存器也未被交换（正确）。此处 CDAB 单寄存器显式走原样。
-    if (byteOrder == QStringLiteral("ABCD")) {
-        for (quint16 v : values)
-            stream << v;
-    } else if (byteOrder == QStringLiteral("CDAB")) {
-        if (values.size() >= 2)
-            stream << values[1] << values[0];           // 32 位：交换两字
-        else
-            for (quint16 v : values) stream << v;       // 16 位单寄存器无"换字"，CDAB=ABCD 原样
-    } else if (byteOrder == QStringLiteral("BADC")) {
-        for (quint16 v : values)
-            stream << quint16(((v & 0xFF) << 8) | ((v >> 8) & 0xFF));
-    } else {
-        for (int i = values.size() - 1; i >= 0; --i) {
-            const quint16 v = values[i];
-            stream << quint16(((v & 0xFF) << 8) | ((v >> 8) & 0xFF));
-        }
-    }
-    return raw;
-}
-}   // namespace
+// 字节序归一化工具统一放在 registerbyteorder.h（assembleRegisterBytes / disassembleValueToWords），
+// 读、写路径共用，保证往返对称。这里直接引入到当前翻译单元，原有调用点无需改动。
+using RegisterByteOrder::assembleRegisterBytes;
 
 ModbusNode::ModbusNode(QObject *parent)
     : CommunicationNodeBase(parent)
@@ -125,6 +94,8 @@ void ModbusNode::applyRoleParam(const QString &mode)
 bool ModbusNode::openConnection()
 {
     closeConnection();
+    m_userClosed = false;            // 本次是主动建立连接，允许后续断线自动重连（S1）
+    m_everReallyConnected = false;   // 以"真正连上"为唯一判据，避免异步发起被误判为曾连接（S1）
 
     // ===== 服务器模式：监听端口，对外提供寄存器 =====
     if (m_role == MODBUS_SERVER) {
@@ -168,6 +139,7 @@ bool ModbusNode::openConnection()
         }
 
         m_connected = true;
+        m_everReallyConnected = true;   // 服务器监听已起 = 真正可用（S1）
         setParamDirect(QStringLiteral("connected"), true);
         emit connectionOpened();
         VFP_DEBUG << "Modbus server listening on port"
@@ -229,23 +201,25 @@ bool ModbusNode::openConnection()
         return false;
     }
 
-    m_connected = true;
-    setParamDirect(QStringLiteral("connected"), true);
+    // 异步发起：真正连上由 onModbusStateChanged(ConnectedState) 负责置 m_connected + emit
+    // connectionOpened（S1）。这里只取从站地址并启动轮询（连上前读会失败，无碍）。
     m_slaveAddress = m_params.value(QStringLiteral("slaveAddress"), 1).toInt();
-    emit connectionOpened();
-
-    // 启动轮询
     startPolling();
     return true;
 }
 
 void ModbusNode::closeConnection()
 {
-    // 状态守卫（N2 同款）：以"曾连接"为唯一判据，与 TCP/串口/PLC 一致——照常拆解设备，
-    // 仅抑制 emit。旧实现按"对象全空"判据，而客户端连接失败后 m_modbus 残留非空（openConnection
-    // 失败分支不置空），于是每 3s 重连后仍发一次假 connectionClosed → CM 清帧缓冲+刷 UI
-    // （恰是 N2 要消灭的形态）。
-    const bool was = m_connected;
+    // S1：标记"用户主动关闭"→ 抑制 onModbusStateChanged(Unconnected) 的自动重连"复活"；
+    // 同时停止重连定时器，避免 disconnectDevice 触发的 Unconnected 信号又拉起重连。
+    m_userClosed = true;
+    // 状态守卫（N2 同款）：以"曾真正连上"为唯一判据，与 TCP/串口/PLC 一致——照常拆解设备，
+    // 仅抑制 emit。connectDevice() 仅表示"异步发起"，不能当作"曾连接"：关闭从未建立的连接
+    // 不得发假 connectionClosed（此前 m_connected 在发起时即置位，导致假断开）。
+    const bool was = m_everReallyConnected;
+    // S1：必须先落"未连接"状态再 disconnectDevice()——后者会同步触发
+    // onModbusStateChanged(Unconnected)，若此时 m_connected 仍为真会二次上报 connectionClosed。
+    m_connected = false;
     stopPolling();
     m_pendingQueue.clear();
 
@@ -261,7 +235,6 @@ void ModbusNode::closeConnection()
         m_modbusServer->deleteLater();
         m_modbusServer = nullptr;
     }
-    m_connected = false;
     setParamDirect(QStringLiteral("connected"), false);
     if (was)
         emit connectionClosed();
@@ -301,25 +274,38 @@ void ModbusNode::setRegisters(const QList<ModbusRegisterItem> &regs)
     }
 }
 
-bool ModbusNode::setLocalRegisterValue(int address, quint16 value)
+bool ModbusNode::setLocalRegisterValue(int address, double value)
 {
-    // 更新本地寄存器表
+    // 查该地址寄存器配置（dataType/byteOrder），按字节序逆变换拆字（与读路径对称，S3）。
+    QString dataType = QStringLiteral("int16");
+    QString byteOrder = QStringLiteral("ABCD");
+    for (const auto &r : m_registers) {
+        if (r.address == address) { dataType = r.dataType; byteOrder = r.byteOrder; break; }
+    }
+    QVector<quint16> words;
+    if (!RegisterByteOrder::disassembleValueToWords(value, dataType, byteOrder, words))
+        return false;
+
+    // 更新本地寄存器表（存解析值，供显示）
     for (auto &r : m_registers) {
         if (r.address == address) {
-            r.currentValue = static_cast<double>(value);
-            r.displayValue = QString::number(value);
+            r.currentValue = value;
+            r.displayValue = QString::number(value, 'f', dataType == QStringLiteral("float") ? 4 : 0);
             break;
         }
     }
 
     if (m_role == MODBUS_SERVER && m_modbusServer) {
-        bool ok = m_modbusServer->setData(
-            QModbusDataUnit::HoldingRegisters,
-            static_cast<quint16>(address), value);
-        if (ok) {
-            emit registerCurrentValueChanged(address, static_cast<double>(value),
-                                             QString::number(value));
+        bool ok = true;
+        for (int i = 0; i < words.size(); ++i) {
+            if (!m_modbusServer->setData(QModbusDataUnit::HoldingRegisters,
+                                         static_cast<quint16>(address + i), words[i]))
+                ok = false;
         }
+        if (ok)
+            emit registerCurrentValueChanged(address, value,
+                                             QString::number(value, 'f',
+                                                             dataType == QStringLiteral("float") ? 4 : 0));
         return ok;
     }
     // 客户端模式下作为写请求发送给外部设备
@@ -472,7 +458,8 @@ void ModbusNode::onPollTimeout()
         if (!reg.enabled) continue;
 
         int byteCount = 2;
-        if (reg.dataType == QStringLiteral("int32") || reg.dataType == QStringLiteral("float"))
+        if (reg.dataType == QStringLiteral("int32") || reg.dataType == QStringLiteral("uint32")
+            || reg.dataType == QStringLiteral("float"))
             byteCount = 4;
 
         int regCount = byteCount / 2; // 每个寄存器 2 字节
@@ -561,6 +548,7 @@ bool ModbusNode::readRegister(int slaveAddr, int regAddr, int count)
 void ModbusNode::onModbusStateChanged(int state)
 {
     if (state == QModbusDevice::ConnectedState) {
+        m_everReallyConnected = true;   // 真正连上（S1）
         if (!m_connected) {
             m_connected = true;
             setParamDirect(QStringLiteral("connected"), true);
@@ -576,8 +564,8 @@ void ModbusNode::onModbusStateChanged(int state)
             stopPolling();
         }
 
-        // 自动重连
-        if (m_autoReconnect && m_reconnectTimer) {
+        // 自动重连：用户主动关闭（m_userClosed）后不得"复活"（S1）；其余断线才自愈
+        if (m_autoReconnect && m_reconnectTimer && !m_userClosed) {
             m_reconnectTimer->start(m_reconnectInterval);
         }
     }
@@ -638,12 +626,23 @@ double ModbusNode::parseRawToValue(const QByteArray &raw, const QString &dataTyp
     return 0.0;
 }
 
-bool ModbusNode::writeRegister(int address, quint16 value)
+bool ModbusNode::writeRegister(int address, double value)
 {
+    // 查该地址寄存器配置（dataType/byteOrder），按字节序逆变换拆成 1~2 个寄存器字后写入，
+    // 保证与读路径归一化往返对称（S3）：修复 16 位 BADC/DCBA 写 100 读回 25600、32 位只写单寄存器截断。
+    QString dataType = QStringLiteral("int16");
+    QString byteOrder = QStringLiteral("ABCD");
+    for (const auto &r : m_registers) {
+        if (r.address == address) { dataType = r.dataType; byteOrder = r.byteOrder; break; }
+    }
+    QVector<quint16> words;
+    if (!RegisterByteOrder::disassembleValueToWords(value, dataType, byteOrder, words) || words.isEmpty())
+        return false;
     if (!m_connected || !m_modbus) return false;
 
-    QModbusDataUnit writeUnit(QModbusDataUnit::HoldingRegisters, address, 1);
-    writeUnit.setValue(0, value);
+    QModbusDataUnit writeUnit(QModbusDataUnit::HoldingRegisters, address, words.size());
+    for (int i = 0; i < words.size(); ++i)
+        writeUnit.setValue(i, words[i]);
 
     QModbusReply *reply = m_modbus->sendWriteRequest(writeUnit, m_slaveAddress);
     if (reply) {

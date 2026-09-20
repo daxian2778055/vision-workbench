@@ -436,8 +436,8 @@ void PlcConfigDialog::onWriteValueToRegister(int row)
         currentDisplay.toDouble(), -1e12, 1e12, dataType == QStringLiteral("float") ? 4 : 0, &ok);
     if (!ok) return;
 
-    quint16 regValue = static_cast<quint16>(static_cast<int>(input));
-    if (m_plcNode->writeRegister(address, regValue)) {
+    // 按该地址 dataType/byteOrder 由节点内部逆变换拆字写入（含 int32/float 拆两寄存器，S3）
+    if (m_plcNode->writeRegister(address, input)) {
         QTableWidgetItem *valueItem = m_registerTable->item(row, 4);
         if (valueItem) {
             valueItem->setText(QString::number(input, 'f', dataType == QStringLiteral("float") ? 4 : 0));

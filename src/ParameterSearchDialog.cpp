@@ -90,7 +90,9 @@ void ParameterSearchDialog::collectNodes()
     int flowIndex = 0;
     for (FlowScene *scene : m_flows) {
         if (!scene) { ++flowIndex; continue; }
-        QString flowName = QStringLiteral("\u6D41\u7A0B %1").arg(flowIndex + 1);
+        QString flowName = (!scene->flowName().isEmpty())
+                              ? scene->flowName()
+                              : QStringLiteral("\u6D41\u7A0B %1").arg(flowIndex + 1);
         for (NodeBase *node : scene->nodes()) {
             if (!node) continue;
             // 遍历该算子的参数描述，若无则尝试常见参数名

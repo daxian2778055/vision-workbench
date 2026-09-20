@@ -43,7 +43,11 @@ void CodeExportDialog::setupUI()
     m_flowCombo = new QComboBox();
     m_flowCombo->setMinimumWidth(180);
     for (int i = 0; i < m_flows.size(); ++i) {
-        m_flowCombo->addItem(QStringLiteral("\u6D41\u7A0B %1").arg(i + 1));
+        FlowScene *fs = m_flows[i];
+        const QString name = (fs && !fs->flowName().isEmpty())
+                                ? fs->flowName()
+                                : QStringLiteral("\u6D41\u7A0B %1").arg(i + 1);
+        m_flowCombo->addItem(name);
     }
     topLayout->addWidget(m_flowCombo);
 

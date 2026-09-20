@@ -105,6 +105,7 @@ private slots:
     void testModbusCloseConnectionNoSpuriousSignal();
     void testUnregisterExecutorByIdentity();
     void testModbusSingleRegisterByteOrder();
+    void testModbusWriteReadByteOrderRoundTrip();   // S3/S4：写入逆变换 + 宽类型拆寄存器往返
     void testAllocFlowNameAvoidsCollision();
 };
 
@@ -1600,9 +1601,10 @@ void CommWritebackTest::testSendWhileDisconnectedIsReported()
     }
 }
 
-// Modbus 客户端以"曾连接"为 connectionClosed 唯一判据（与 TCP/串口/PLC 对齐）。
-// 连不上（端口 1 无服务）时，重复 closeDevice 不得产生任何额外的假 connectionClosed
-// （旧实现按"对象全空"判据，连失败后 m_modbus 残留非空 → 每次重连都发一次假断开）。
+// Modbus 客户端以"曾真正连上"为 connectionClosed 唯一判据（与 TCP/串口/PLC 对齐）。
+// 连不上（端口 1 无服务）时，异步发起/异步失败/重复 closeDevice 全过程都不得产生任何
+// connectionClosed；这里断言"close 后恒 0"（而非"不增量"）：若异步失败落在首个等待窗口内，
+// 旧的 afterOpen=1 写法会以"不增量"意外通过，恰好掩盖同一个洞（S1）。
 void CommWritebackTest::testModbusCloseConnectionNoSpuriousSignal()
 {
     auto *cm = CommunicationManager::instance();
@@ -1620,13 +1622,15 @@ void CommWritebackTest::testModbusCloseConnectionNoSpuriousSignal()
     QVERIFY2(node != nullptr, "Modbus 节点类型不符");
 
     QSignalSpy closedSpy(node, &CommunicationNodeBase::connectionClosed);
+    QSignalSpy openedSpy(node, &CommunicationNodeBase::connectionOpened);
     cm->openDevice(QStringLiteral("MBJ_TCP"));     // 异步连接，端口 1 必失败
     QTest::qWait(300);                             // 让首轮连接尝试/重连落地
-    const int afterOpen = closedSpy.count();        // 0 或 1：取决于异步成败，本身不关心
     cm->closeDevice(QStringLiteral("MBJ_TCP"));
     cm->closeDevice(QStringLiteral("MBJ_TCP"));    // 已断再关
-    QTest::qWait(300);                             // 覆盖可能的重连窗口：守卫必须抑制
-    QCOMPARE(closedSpy.count(), afterOpen);        // 两次 close 不得新增任何 connectionClosed
+    QTest::qWait(1500);                            // 覆盖重连窗口：关闭后不得自行"复活"
+    QCOMPARE(closedSpy.count(), 0);                // 从未真正连上 → close 后恒 0
+    QCOMPARE(openedSpy.count(), 0);                // 且关闭后不得被重连"复活"发 connectionOpened
+    QVERIFY2(!node->isConnected(), "关闭后节点不得仍显示已连接");
 }
 
 // "载入后触发静默失效"复活路径的钉：unregisterExecutor 必须按执行器身份注销。
@@ -1731,6 +1735,103 @@ void CommWritebackTest::testModbusSingleRegisterByteOrder()
     QCOMPARE(rawByAddr.value(0), QByteArray::fromHex("3412"));  // BADC：字内字节互换
     QCOMPARE(rawByAddr.value(1), QByteArray::fromHex("3412"));  // DCBA：单字退化成字节互换
     QCOMPARE(rawByAddr.value(2), QByteArray::fromHex("1234"));  // CDAB：单寄存器原样（M1 回归点）
+}
+
+// S3/S4 回归：写入必须与读路径字节序/宽类型往返对称（旧缺陷：BADC 写 100 读回 25600；
+// int32/uint32 只写单寄存器被截断）。客户端与服务器配置同款 dataType/byteOrder（模拟同一台
+// 真实设备）：int16+BADC 写入须先做字内互换；int32/uint32 须拆两寄存器且轮询 byteCount 计 4。
+// 硬断言：客户端读回值 == 写入值。
+void CommWritebackTest::testModbusWriteReadByteOrderRoundTrip()
+{
+    const int port = 15505;
+    auto *cm = CommunicationManager::instance();
+    DeviceCleanup cleanup{ { QStringLiteral("RTT_SRV"), QStringLiteral("RTT_CLI") } };
+
+    QList<ModbusRegisterItem> regs;
+    auto mk = [&](int addr, const QString &dt, const QString &bo) {
+        ModbusRegisterItem r;
+        r.address = addr;
+        r.dataType = dt;
+        r.byteOrder = bo;
+        r.accessMode = QStringLiteral("ReadWrite");
+        r.enabled = true;
+        regs.append(r);
+    };
+    mk(0, QStringLiteral("int16"), QStringLiteral("BADC"));    // 16 位字内互换（占 addr 0）
+    mk(2, QStringLiteral("int32"), QStringLiteral("ABCD"));    // 32 位宽类型（拆两寄存器：2/3）
+    mk(4, QStringLiteral("uint32"), QStringLiteral("ABCD"));   // S4：uint32 轮询须计 4 字节（4/5）
+    mk(6, QStringLiteral("int16"), QStringLiteral("ABCD"));    // 撑开服务器数据区上限，覆盖 4/5
+
+    QJsonObject srvCfg;
+    srvCfg[QStringLiteral("role")] = QStringLiteral("服务器");
+    srvCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
+    srvCfg[QStringLiteral("port")] = port;
+    srvCfg[QStringLiteral("slaveAddress")] = 1;
+    QVERIFY2(cm->addDevice(QStringLiteral("RTT_SRV"), QStringLiteral("Modbus"), srvCfg),
+             "addDevice(服务器) 失败");
+    auto *srv = qobject_cast<ModbusNode *>(cm->deviceNode(QStringLiteral("RTT_SRV")));
+    QVERIFY2(srv != nullptr, "服务器节点类型不符");
+    srv->setRegisters(regs);
+    QVERIFY2(cm->openDevice(QStringLiteral("RTT_SRV")), "Modbus 服务器启动失败");
+    QTRY_VERIFY_WITH_TIMEOUT(srv->isServerListening(), 3000);
+
+    QJsonObject cliCfg;
+    cliCfg[QStringLiteral("role")] = QStringLiteral("客户端");
+    cliCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
+    cliCfg[QStringLiteral("host")] = QStringLiteral("127.0.0.1");
+    cliCfg[QStringLiteral("port")] = port;
+    cliCfg[QStringLiteral("slaveAddress")] = 1;
+    QVERIFY2(cm->addDevice(QStringLiteral("RTT_CLI"), QStringLiteral("Modbus"), cliCfg),
+             "addDevice(客户端) 失败");
+    auto *cli = qobject_cast<ModbusNode *>(cm->deviceNode(QStringLiteral("RTT_CLI")));
+    QVERIFY2(cli != nullptr, "客户端节点类型不符");
+    cli->setRegisters(regs);   // 写路径按客户端自身寄存器配置做逆变换
+
+    QSignalSpy srvChangedSpy(srv, &CommunicationNodeBase::registerValueChanged);
+    QSignalSpy cliValueSpy(cli, &ModbusNode::registerCurrentValueChanged);
+    QVERIFY2(cm->openDevice(QStringLiteral("RTT_CLI")), "Modbus 客户端连接失败");
+    QTest::qWait(200);   // 让轮询线程先跑一轮
+
+    const double writeInt16 = 100.0;        // 0x0064
+    const double writeInt32 = 100000.0;     // 0x000186A0
+    const double writeUint32 = 70000.0;     // 0x00011170
+    QList<QPair<int, double>> writes;
+    writes.append(qMakePair(0, writeInt16));
+    writes.append(qMakePair(2, writeInt32));
+    writes.append(qMakePair(4, writeUint32));
+    for (const auto &w : writes) {
+        bool wrote = false;
+        for (int i = 0; i < 50 && !wrote; ++i) {
+            wrote = cli->writeRegister(w.first, w.second);
+            if (!wrote) QTest::qWait(100);
+        }
+        QVERIFY2(wrote, qPrintable(QStringLiteral("写寄存器 %1 失败").arg(w.first)));
+    }
+
+    // 服务器收到的 addr0 原始字节：客户端逆变换后写入 0x6400，服务器 BADC 组装 → "0064"
+    // （服务器上报是异步的，必须等信号落地，不能写完立刻读 spy）
+    auto srvRawFor = [&](int addr) -> QByteArray {
+        QByteArray r;
+        for (int i = 0; i < srvChangedSpy.count(); ++i) {
+            if (srvChangedSpy.at(i).at(0).toInt() == addr)
+                r = srvChangedSpy.at(i).at(1).toByteArray();
+        }
+        return r;
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(srvRawFor(0) == QByteArray::fromHex("0064"), 5000);
+
+    // 硬断言：客户端读回值 == 写入值（取该地址最后一次读数）
+    auto lastReadValue = [&](int addr) -> double {
+        double v = -1.0e18;   // 哨兵：未读到
+        for (int i = 0; i < cliValueSpy.count(); ++i) {
+            if (cliValueSpy.at(i).at(0).toInt() == addr)
+                v = cliValueSpy.at(i).at(1).toDouble();
+        }
+        return v;
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(qAbs(lastReadValue(0) - writeInt16) < 1e-6, 8000);
+    QTRY_VERIFY_WITH_TIMEOUT(qAbs(lastReadValue(2) - writeInt32) < 1e-6, 8000);
+    QTRY_VERIFY_WITH_TIMEOUT(qAbs(lastReadValue(4) - writeUint32) < 1e-6, 8000);
 }
 
 // L2 回归：新建流程名必须全局唯一。扫描已注册绑定返回首个空闲"流程 N"，

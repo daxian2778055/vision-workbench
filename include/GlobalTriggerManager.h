@@ -8,6 +8,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QMutex>
+#include <QStringList>
 
 class FlowScene;
 class FlowExecutor;
@@ -72,10 +73,15 @@ public:
     QJsonObject toJson() const;
     void fromJson(const QJsonObject &json);
 
+    /// 当前已注册流程名列表（供对话框枚举真实流程名，避免按页签序号猜名，S5）。
+    QStringList registeredFlowNames() const;
+
 signals:
     void triggerFired(const QString &flowName, const QString &triggerSource);
     void triggerAdded(const QString &id);
     void triggerRemoved(const QString &id);
+    /// 流程名同名覆盖时告警（S2）：说明触发路由可能被重定向到新流程。
+    void flowNameCollision(const QString &name);
 
 private:
     GlobalTriggerManager(QObject *parent = nullptr);

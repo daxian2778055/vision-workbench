@@ -372,6 +372,7 @@ set(HEADERS
     include/ModbusConfigDialog.h
     include/PlcCommNode.h
     include/PlcConfigDialog.h
+    include/registerbyteorder.h
     # Phase 4: Advanced features
     include/UserLoginDialog.h
     include/UserManagementDialog.h

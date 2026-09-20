@@ -1,5 +1,6 @@
 #include "PlcCommNode.h"
 #include "ModbusNode.h"  // ModbusRegisterItem
+#include "registerbyteorder.h"
 #include "AppLog.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -71,28 +72,29 @@ bool PlcCommNode::openConnection()
         return false;
     }
 
-    m_connected = true;
-    setParamDirect(QStringLiteral("connected"), true);
+    // 异步发起：真正连上由 onModbusStateChanged(ConnectedState) 置 m_connected + emit（S1）。
     m_slaveAddress = m_params.value(QStringLiteral("slaveAddress"), 1).toInt();
-    emit connectionOpened();
     startPolling();
     return true;
 }
 
 void PlcCommNode::closeConnection()
 {
+    m_userClosed = true;   // S1：抑制自动重连"复活"
     stopPolling();
     m_pendingQueue.clear();
     if (m_reconnectTimer) m_reconnectTimer->stop();
 
     // 只在"确实连过"时上报断开：重复 close / removeDevice 不得发假"断开"（同 TCP/串口/UDP 的抖动修复）
     const bool wasConnected = m_connected;
+    // S1：必须先落"未连接"状态再 disconnectDevice()——后者会同步触发
+    // onModbusStateChanged(Unconnected)，若此时 m_connected 仍为真会二次上报 connectionClosed。
+    m_connected = false;
     if (m_modbus) {
         m_modbus->disconnectDevice();
         m_modbus->deleteLater();
         m_modbus = nullptr;
     }
-    m_connected = false;
     setParamDirect(QStringLiteral("connected"), false);   // 参数照旧写（不emit），保持界面数值真实
     if (!wasConnected)
         return;
@@ -135,12 +137,23 @@ void PlcCommNode::setRegisters(const QList<ModbusRegisterItem> &regs)
     m_currentRegIdx = 0;
 }
 
-bool PlcCommNode::writeRegister(int address, quint16 value)
+bool PlcCommNode::writeRegister(int address, double value)
 {
+    // 查该地址寄存器配置（dataType/byteOrder），按字节序逆变换拆成 1~2 个寄存器字后写入，
+    // 保证与读路径归一化往返对称（S3）。
+    QString dataType = QStringLiteral("int16");
+    QString byteOrder = QStringLiteral("ABCD");
+    for (const auto &r : m_registers) {
+        if (r.address == address) { dataType = r.dataType; byteOrder = r.byteOrder; break; }
+    }
+    QVector<quint16> words;
+    if (!RegisterByteOrder::disassembleValueToWords(value, dataType, byteOrder, words) || words.isEmpty())
+        return false;
     if (!m_connected || !m_modbus) return false;
 
-    QModbusDataUnit writeUnit(QModbusDataUnit::HoldingRegisters, address, 1);
-    writeUnit.setValue(0, value);
+    QModbusDataUnit writeUnit(QModbusDataUnit::HoldingRegisters, address, words.size());
+    for (int i = 0; i < words.size(); ++i)
+        writeUnit.setValue(i, words[i]);
 
     QModbusReply *reply = m_modbus->sendWriteRequest(writeUnit, m_slaveAddress);
     if (reply) {
@@ -205,7 +218,8 @@ void PlcCommNode::onPollTimeout()
         if (!reg.enabled) continue;
 
         int byteCount = 2;
-        if (reg.dataType == QStringLiteral("int32") || reg.dataType == QStringLiteral("float"))
+        if (reg.dataType == QStringLiteral("int32") || reg.dataType == QStringLiteral("uint32")
+            || reg.dataType == QStringLiteral("float"))
             byteCount = 4;
 
         int regCount = byteCount / 2;
@@ -258,30 +272,8 @@ bool PlcCommNode::readRegister(int slaveAddr, int regAddr, int count)
                     if (!values.isEmpty() && regIndex >= 0 && regIndex < m_registers.size()) {
                         auto &reg = m_registers[regIndex];
 
-                        QByteArray raw;
-                        QDataStream stream(&raw, QIODevice::WriteOnly);
-                        stream.setByteOrder(QDataStream::BigEndian);
-
-                        // 单寄存器字节序（与 Modbus 同款）：ABCD/CDAB 原样；BADC/DCBA 字内互换。
-                        // CDAB 单寄存器无"换字"→ 原样（修正：旧实现落入 else 做了字节互换）。
-                        if (reg.byteOrder == QStringLiteral("ABCD")) {
-                            for (quint16 v : values) stream << v;
-                        } else if (reg.byteOrder == QStringLiteral("CDAB")) {
-                            if (values.size() >= 2)
-                                stream << values[1] << values[0];
-                            else
-                                for (quint16 v : values) stream << v;
-                        } else if (reg.byteOrder == QStringLiteral("BADC")) {
-                            for (int i = 0; i < values.size(); ++i) {
-                                quint16 swapped = ((values[i] & 0xFF) << 8) | ((values[i] >> 8) & 0xFF);
-                                stream << swapped;
-                            }
-                        } else {
-                            for (int i = values.size() - 1; i >= 0; --i) {
-                                quint16 swapped = ((values[i] & 0xFF) << 8) | ((values[i] >> 8) & 0xFF);
-                                stream << swapped;
-                            }
-                        }
+                        // 用统一工具归一化（与写路径 disassemble 配对，往返对称，S3）
+                        QByteArray raw = RegisterByteOrder::assembleRegisterBytes(values, reg.byteOrder);
 
                         double parsed = parseRawToValue(raw, reg.dataType, reg.byteOrder);
                         reg.currentValue = parsed;
@@ -310,6 +302,7 @@ bool PlcCommNode::readRegister(int slaveAddr, int regAddr, int count)
 void PlcCommNode::onModbusStateChanged(int state)
 {
     if (state == QModbusDevice::ConnectedState) {
+        m_everReallyConnected = true;   // 真正连上（S1）
         if (!m_connected) {
             m_connected = true;
             setParamDirect(QStringLiteral("connected"), true);
@@ -324,7 +317,8 @@ void PlcCommNode::onModbusStateChanged(int state)
             emit connectionClosed();
             stopPolling();
         }
-        if (m_autoReconnect && m_reconnectTimer) {
+        // 自动重连：用户主动关闭（m_userClosed）后不得"复活"（S1）；其余断线才自愈
+        if (m_autoReconnect && m_reconnectTimer && !m_userClosed) {
             m_reconnectTimer->start(m_reconnectInterval);
         }
     }

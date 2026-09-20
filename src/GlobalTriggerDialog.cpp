@@ -9,6 +9,13 @@
 #include <QInputDialog>
 #include <QLabel>
 
+/// S5：默认目标流程名用"当前第一个真实流程名"，避免 L2 后按页签序号猜名（"流程 1" 可能不存在）。
+static QString defaultTargetFlowName()
+{
+    return GlobalTriggerManager::instance()->registeredFlowNames().value(0,
+                                                                       QStringLiteral("流程 1"));
+}
+
 GlobalTriggerDialog::GlobalTriggerDialog(QWidget *parent)
     : QDialog(parent)
 {
@@ -113,7 +120,7 @@ void GlobalTriggerDialog::onAddStringTrigger()
     QString flowName = QInputDialog::getText(this,
         QStringLiteral("\u76EE\u6807\u6D41\u7A0B"),
         QStringLiteral("\u76EE\u6807\u6D41\u7A0B\u540D\u79F0:"),
-        QLineEdit::Normal, QStringLiteral("\u6D41\u7A0B 1"), &ok);
+        QLineEdit::Normal, defaultTargetFlowName(), &ok);
     if (!ok || flowName.trimmed().isEmpty()) return;
 
     GlobalTriggerManager::instance()->setStringTrigger(triggerChar.trimmed(), flowName.trimmed());
@@ -135,7 +142,7 @@ void GlobalTriggerDialog::onAddEventTrigger()
         QString flowName = QInputDialog::getText(this,
             QStringLiteral("\u76EE\u6807\u6D41\u7A0B"),
             QStringLiteral("\u76EE\u6807\u6D41\u7A0B\u540D\u79F0:"),
-            QLineEdit::Normal, QStringLiteral("\u6D41\u7A0B 1"), &ok);
+            QLineEdit::Normal, defaultTargetFlowName(), &ok);
         if (!ok || flowName.trimmed().isEmpty()) return;
 
         GlobalTriggerManager::instance()->setEventTrigger(eventId.trimmed(), flowName.trimmed());
@@ -149,7 +156,7 @@ void GlobalTriggerDialog::onAddEventTrigger()
         QString flowName = QInputDialog::getText(this,
             QStringLiteral("\u76EE\u6807\u6D41\u7A0B"),
             QStringLiteral("\u76EE\u6807\u6D41\u7A0B\u540D\u79F0:"),
-            QLineEdit::Normal, QStringLiteral("\u6D41\u7A0B 1"), &ok);
+            QLineEdit::Normal, defaultTargetFlowName(), &ok);
         if (!ok || flowName.trimmed().isEmpty()) return;
 
         GlobalTriggerManager::instance()->setEventTrigger(eventId, flowName.trimmed());

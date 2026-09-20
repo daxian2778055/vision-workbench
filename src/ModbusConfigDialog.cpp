@@ -626,17 +626,15 @@ void ModbusConfigDialog::onWriteValueToRegister(int row)
         currentDisplay.toDouble(), -1e12, 1e12, dataType == QStringLiteral("float") ? 4 : 0, &ok);
     if (!ok) return;
 
-    // 将值转换为 Modbus 寄存器格式 (quint16)
-    // 简单实现：对于 int16 直接写；int32/float 拆成两个 register
-    quint16 regValue = static_cast<quint16>(static_cast<int>(input));
-
+    // 按该地址的 dataType/byteOrder 由节点内部逆变换拆字写入（含 int32/float 拆两寄存器），
+    // 与读路径字节序往返对称（S3）。
     bool isServer = (m_roleCombo && m_roleCombo->currentIndex() == 1);
     bool okWrite;
     if (isServer) {
         // 服务器模式：直接更新本地寄存器（客户端可读到新值）
-        okWrite = m_modbusNode->setLocalRegisterValue(address, regValue);
+        okWrite = m_modbusNode->setLocalRegisterValue(address, input);
     } else {
-        okWrite = m_modbusNode->writeRegister(address, regValue);
+        okWrite = m_modbusNode->writeRegister(address, input);
     }
 
     if (okWrite) {

@@ -131,6 +131,13 @@ MainWindow::MainWindow(QWidget *parent) :
         m_auxPanels = new AuxPanelManager(this, this);
         setupDockWidgets();
 
+        // S2：流程名同名覆盖告警 → 状态栏提示（避免触发路由被静默重定向）
+        connect(GlobalTriggerManager::instance(), &GlobalTriggerManager::flowNameCollision,
+                this, [this](const QString &name) {
+                    statusBar()->showMessage(
+                        tr("警告：流程名 \"%1\" 已存在，触发路由可能被重定向").arg(name), 8000);
+                });
+
         VFP_DEBUG << "setupUi completed";
         
         // 初始化图像视图
@@ -1009,6 +1016,7 @@ void MainWindow::createNewFlow()
         // 分配全局唯一流程名：扫描 GTM 已注册名，返回首个空闲"流程 N"。避免删除流程后
         // 用 m_flowScenes.size() 复用序号 → 同名覆盖仍存流程的触发路由（L2 存量）。
         const QString flowName = GlobalTriggerManager::instance()->allocFlowName();
+        scene->setFlowName(flowName);   // S2：写入场景，保存方案时随流程持久化（载入按名复原）
 
         if (ui && ui->flowTabs) {
             int index = ui->flowTabs->addTab(view, flowName);
@@ -1774,16 +1782,25 @@ void MainWindow::loadProjectFile(const QString &fileName)
     // 添加加载的场景到标签页，并逐个注册到全局触发管理器。
     // 修复：此前只有 createNewFlow 才做 flowName/registerFlow，载入方案的所有流程在 GTM 里
     // 无名无映射 → 硬触发/外部触发全灭（触发链路静默失效）。
+    m_flowModes.clear();   // S5：载入前清空旧流程模式映射，避免已删场景的 stale 条目被复用继承
+
     for (int i = 0; i < loadedScenes.size(); ++i) {
         FlowScene *scene = loadedScenes[i];
         m_flowScenes.append(scene);
+
+        // S2：优先用方案持久化的流程名（保持触发绑定身份），缺失时再按全局唯一名分配，
+        // 避免"按页签序号重建名"把触发绑定平移到别的流程（比空路由更危险的错触发）。
+        QString flowName = scene->flowName();
+        if (flowName.isEmpty())
+            flowName = GlobalTriggerManager::instance()->allocFlowName();
+        scene->setFlowName(flowName);   // 回写，保证重新保存时身份一致
 
         QGraphicsView *view = new QGraphicsView(scene);
         VisionWorkbenchStyle::applyGraphicsViewWorkbenchDefaults(view);
         view->setDragMode(QGraphicsView::RubberBandDrag);
         view->setRubberBandSelectionMode(Qt::IntersectsItemShape);
         view->setFocusPolicy(Qt::StrongFocus);
-        ui->flowTabs->addTab(view, tr("流程 %1").arg(i + 1));
+        ui->flowTabs->addTab(view, flowName);   // 显示名与路由名一致
 
         // 连接信号
         hookFlowScene(scene);
@@ -1793,7 +1810,6 @@ void MainWindow::loadProjectFile(const QString &fileName)
         FlowExecutor *flowEx = executorForScene(scene);
         if (flowEx) {
             flowEx->setFlowScene(scene);
-            const QString flowName = QStringLiteral("\u6D41\u7A0B %1").arg(i + 1);
             flowEx->setFlowName(flowName);
             GlobalTriggerManager::instance()->registerFlow(flowName, scene, flowEx);
         }

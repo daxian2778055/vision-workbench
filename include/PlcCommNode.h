@@ -34,7 +34,8 @@ public:
     // ---- 寄存器管理（复用 Modbus 寄存器项结构） ----
     void setRegisters(const QList<ModbusRegisterItem> &regs);
     QList<ModbusRegisterItem> registers() const { return m_registers; }
-    bool writeRegister(int address, quint16 value);
+    /// 写入寄存器值：按该地址配置的 dataType/byteOrder 逆变换拆成 1~2 个寄存器字后写入（S3）。
+    bool writeRegister(int address, double value);
 
     /// 获取寄存器当前解析后的值（供 UI 实时显示）
     double registerCurrentValue(int address) const;
@@ -74,6 +75,10 @@ private:
 
     // 寄存器表格
     QList<ModbusRegisterItem> m_registers;
+    // 连接状态判据（S1，同 ModbusNode）：m_everReallyConnected 为"曾真正连上"唯一判据；
+    // m_userClosed 抑制用户主动关闭后的自动重连"复活"。
+    bool m_everReallyConnected = false;
+    bool m_userClosed = false;
     int m_currentRegIdx = 0;
 
     struct PendingRead {
