@@ -18,6 +18,12 @@ GlobalTriggerManager *GlobalTriggerManager::instance()
 GlobalTriggerManager::GlobalTriggerManager(QObject *parent)
     : QObject(parent)
 {
+    // 全局转发连线（CM dataReceived → 本管理器 onDataReceived）在此建立**一次**。
+    // 此前它被塞进 FlowExecutor 构造的 static 局部，导致"只要没人建过执行器"链路就不存在——
+    // 单跑触发用例 / 载入方案后无执行器的触发路径整条失效（假阴性 + 负向断言恒真=假阳性）。
+    // GTM 是单例、构造只发生一次，故此处连接天然恰好一次；UniqueConnection 防重。
+    QObject::connect(CommunicationManager::instance(), &CommunicationManager::dataReceived,
+                    this, &GlobalTriggerManager::onDataReceived, Qt::UniqueConnection);
 }
 
 GlobalTriggerManager::~GlobalTriggerManager()

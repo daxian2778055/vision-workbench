@@ -28,16 +28,10 @@ FlowExecutor::FlowExecutor(QObject *parent)
 {
     s_currentInstance = this;
 
-    // 全局转发（CM 接收 → GTM 触发匹配）只需建立**一次**：它是全局单例间的固定连线，
-    // 与具体执行器无关。原实现放在每个执行器构造里，N 个执行器会重复 connect N 次，
-    // 导致 onDataReceived 被重复触发 N 次（重复处理），且把执行器构造强耦合到全局单例。
-    // 用函数局部 static 保证首次构造时恰好连一次（C++11 起线程安全）。
-    static const bool s_forwardConnected = []() {
-        QObject::connect(CommunicationManager::instance(), &CommunicationManager::dataReceived,
-                        GlobalTriggerManager::instance(), &GlobalTriggerManager::onDataReceived);
-        return true;
-    }();
-    Q_UNUSED(s_forwardConnected)
+    // 全局转发连线（CM dataReceived → GTM onDataReceived）已迁到 GlobalTriggerManager 构造里
+    // 建立**一次**，不再寄生在"有人建过执行器"上——此前单跑触发用例 / 载入方案后无执行器的
+    // 触发路径因链路未建立而整条失效（假阴性 + 负向断言假阳性）。见 GlobalTriggerManager 构造。
+    // 本执行器只接自己这一份 triggerFired（按 flowName 过滤，互不干扰）。
 
     // 本执行器专属：外部触发 → 启动（按 flowName 过滤，互不干扰）
     connect(GlobalTriggerManager::instance(), &GlobalTriggerManager::triggerFired,
@@ -1182,7 +1176,9 @@ void FlowExecutor::executeUpTo(NodeBase *endNode)
 {
     if (!endNode || !m_scene)
         return;
-    if (getState() == ExecutionState::Running)
+    // 暂停中不可再起同步执行：否则与仍在挂起的工作线程并发跑同一批节点（双跑写设备算子）。
+    const ExecutionState st = getState();
+    if (st == ExecutionState::Running || st == ExecutionState::Paused)
         return;
 
     QList<NodeBase *> nodes = m_scene->nodes();
@@ -1224,7 +1220,9 @@ void FlowExecutor::executeFrom(NodeBase *startNode)
 {
     if (!startNode || !m_scene)
         return;
-    if (getState() == ExecutionState::Running)
+    // 暂停中不可再起同步执行：否则与仍在挂起的工作线程并发跑同一批节点（双跑写设备算子）。
+    const ExecutionState st = getState();
+    if (st == ExecutionState::Running || st == ExecutionState::Paused)
         return;
 
     QList<NodeBase *> nodes = m_scene->nodes();

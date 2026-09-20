@@ -421,37 +421,10 @@ MainWindow::MainWindow(QWidget *parent) :
         m_execStatus->setControls(ui->actionStartExecution, ui->actionStopExecution, m_singleShotBtn);
         m_execStatus->setExecutorProvider([this]() { return m_executor; });
 
-        // 连接运行状态信号 → 状态栏（状态/耗时/触发计数）
-        connect(m_executor, &FlowExecutor::executionStarted, this, &MainWindow::onExecutionStarted);
-        connect(m_executor, &FlowExecutor::executionStopped, this, &MainWindow::onExecutionStopped);
-        connect(m_executor, &FlowExecutor::executionFinished, this, &MainWindow::onExecutionFinished);
-        connect(m_executor, &FlowExecutor::executionError, this, &MainWindow::onExecutionError);
-
-        // 跳过三态：未激活分支 / 循环体调度的节点 → 结果面板标"跳过"（灰色，不等同失败）
-        connect(m_executor, &FlowExecutor::nodeSkipped, this,
-                [this](NodeBase *node, const QString &reason) {
-            Q_UNUSED(reason)
-            auto *rt = m_auxPanels->resultTablePanel();
-            if (!node || !rt)
-                return;
-            rt->setModuleSkipped(node->moduleId(), node->fullName());
-        });
-
-        // 结果数据表 / 变量面板：节点执行后把该模块的输出推到面板（UI 线程排队接收）
-        connect(m_executor, &FlowExecutor::nodeOutputsUpdated, this,
-                [this](NodeBase *node, bool ok, qint64 elapsedMs, const QVariantMap &vars) {
-            if (!node)
-                return;
-            if (auto *rt = m_auxPanels->resultTablePanel()) {
-                rt->setModuleResult(node->moduleId(), node->fullName(), ok,
-                                    elapsedMs, vars);
-            }
-            // 供「变量引用」菜单构造引用列表（UI 线程缓存，不读执行线程内部状态）
-            m_lastModuleVars.insert(node->moduleId(), vars);
-            // 变量面板只列可引用的值：失败节点本轮没有可引用输出
-            if (auto *vp = m_auxPanels->variablePanel(); vp && ok)
-                vp->setModuleVars(node->moduleId(), node->fullName(), vars);
-        });
+        // 统一执行器信号连接（N3 富反馈统一）：首执行器不再直连（旧实现无门槛——后台跑首流程
+        // 会污染状态栏/结果表），与 executorForScene 新建的执行器走**同一套**连接（见
+        // connectExecutorSignals）：全局 UI 按 ex == m_executor 门槛，流程域反馈按执行器自身场景。
+        connectExecutorSignals(m_executor);
 
         // 「视图 → 变量 / 性能统计」：动作在代码中创建（避免改动 .ui）；打开逻辑统一走
         // openAuxPanel，与「关闭时记住显隐、启动时恢复」共用同一条创建路径。
@@ -475,146 +448,14 @@ MainWindow::MainWindow(QWidget *parent) :
                     &MainWindow::onOpenResultTable);
         }
 
-        // 连接imageReady信号
-        connect(m_executor, &FlowExecutor::imageReady, this, [this](NodeBase *node, const HalconCpp::HImage &image) {            // 运行界面图像控件转发（不受用户显示选择影响）
-            if (m_runtimeView) {
-                m_runtimeView->pushImage(node->fullName(), image);
-            }
-            // 如果用户已通过下拉框或画布选择了一个算子，imageReady 不覆盖
-            NodeBase *target = resolveDisplayNode();
-            if (target != node && target != nullptr) {
-                VFP_DEBUG << "用户已选择显示:" << target->fullName() << "，imageReady不覆盖";
-                return;
-            }
-            // 兜底：自动显示最后一个节点的图像（信号负载的图像 + 该节点的叠加图元）
-            m_imageDisplay->showImage(image, node->fullName(), node);
-        });
 
-        // 任意节点图像输出 → 运行界面按节点名推送（绑定中间节点图像控件可实时显示）
-        connect(m_executor, &FlowExecutor::imageAvailable, this,
-                [this](NodeBase *node, const HalconCpp::HImage &image) {
-            if (m_runtimeView) {
-                m_runtimeView->pushImage(node->fullName(), image);
-            }
-        });
-
-        // 连接nodeExecuted信号，更新参数面板和节点颜色
-        connect(m_executor, &FlowExecutor::nodeExecuted, this, [this](NodeBase *node, bool success) {
-            QString msg = QString("节点执行结果: %1").arg(success ? "成功" : "失败");
-            VFP_DEBUG << msg;
-            logMessage(msg);
             
-            // 更新节点的颜色渲染
-            int currentIndex = ui->flowTabs->currentIndex();
-            if (currentIndex >= 0 && currentIndex < m_flowScenes.size()) {
-                FlowScene *scene = m_flowScenes[currentIndex];
-                if (scene) {
-                    NodeGraphicsItem *item = scene->getGraphicsItemForNode(node);
-                    if (item) {
-                        item->update();
-                        VFP_DEBUG << "节点颜色渲染已更新";
-                    }
-                }
-            }
             
-            if (success) {
-                msg = "算子执行成功";
-                VFP_DEBUG << msg;
-                logMessage(msg);
-                
-                // 更新参数面板，显示最新的输出参数
-                if (m_selectedNode) {
-                    // 先检查参数面板是否存在
-                    QWidget *parameterPanel = ui->paramDockContents;
-                    if (parameterPanel) {
-                        // 查找参数面板中的所有子控件
-                        QList<QWidget*> childWidgets = parameterPanel->findChildren<QWidget*>();
-                        for (QWidget *childWidget : childWidgets) {
-                            // 检查是否是标签页控件
-                            QTabWidget *tabWidget = qobject_cast<QTabWidget*>(childWidget);
-                            if (tabWidget) {
-                                // 查找输出标签页
-                                QWidget *outputTab = tabWidget->findChild<QWidget*>("outputTab");
-                                if (outputTab) {
-                                    m_selectedNode->updateParamPanel(outputTab);
-                                    VFP_DEBUG << "输出参数面板已更新";
-                                }
-                                // 输入面板随运行刷新（图像源信息等）
-                                QWidget *inputTab = tabWidget->findChild<QWidget*>("inputTab");
-                                if (inputTab) {
-                                    m_selectedNode->updateParamPanel(inputTab);
-                                }
-                            }
-                        }
-                    } else {
-                        VFP_DEBUG << "错误：parameterPanel不存在";
-                    }
-                }
-                
-                // === 核心规则：下拉框选择 > 画布选中 > 当前执行节点 ===
-                NodeBase *targetDisplayNode = resolveDisplayNode(node);
-                VFP_DEBUG << "显示节点图像:" << (targetDisplayNode ? targetDisplayNode->fullName() : "null");
 
-                if (targetDisplayNode && m_imageView) {
-                    QSharedPointer<DataObject> outputData = targetDisplayNode->getOutputData(0);
-                    if (outputData) {
-                        HImage image = outputData->getHImage();
-                        if (image.IsInitialized()) {
-                            m_imageView->setImage(image, targetDisplayNode->fullName());
-                            if (m_imageSourceLabel) {
-                                m_imageSourceLabel->setText(QString("图像来源: %1").arg(targetDisplayNode->fullName()));
-                            }
-                            VFP_DEBUG << "图像已更新，来源:" << targetDisplayNode->fullName();
-                        } else {
-                            VFP_DEBUG << "目标节点的输出图像未初始化";
-                        }
-                    } else {
-                        VFP_DEBUG << "目标节点的输出数据为空";
-                    }
-                }
+                
 
-                // === 转发节点输出值到运行界面（数值显示 / 状态灯 / IO状态） ===
-                if (m_runtimeView) {
-                    // 全端口输出映射：端口0 走 updateNodeOutput（数值/状态灯）；
-                    // 全部端口按名走 updateNodePortMap（IO状态控件消费 成功/值/错误）
-                    QVariantMap portMap;
-                    const QList<Port *> outPorts = node->outputPorts();
-                    for (int pi = 0; pi < outPorts.size(); ++pi) {
-                        QSharedPointer<DataObject> out = node->getOutputData(pi);
-                        if (!out) continue;
-                        QVariant v;
-                        switch (out->getType()) {
-                        case DataObject::DataType::Number:
-                        case DataObject::DataType::String:
-                        case DataObject::DataType::Bool:
-                        case DataObject::DataType::Array:
-                            v = out->getData();
-                            break;
-                        case DataObject::DataType::Measure: {
-                            const MeasureResult mr = out->getMeasureResult();
-                            if (mr.valid) v = mr.value;
-                            break;
-                        }
-                        case DataObject::DataType::Point: {
-                            const QPointF p = out->getPoint();
-                            v = QStringLiteral("(%1, %2)").arg(p.x(), 0, 'f', 3).arg(p.y(), 0, 'f', 3);
-                            break;
-                        }
-                        default:
-                            break;
-                        }
-                        if (v.isValid()) {
-                            if (outPorts[pi])
-                                portMap.insert(outPorts[pi]->name(), v);
-                            if (pi == 0)
-                                m_runtimeView->updateNodeOutput(node->fullName(), v);
-                        }
-                    }
-                    if (!portMap.isEmpty())
-                        m_runtimeView->updateNodePortMap(node->fullName(), portMap);
-                }
-            }
-        });
+                
+
         
         // 初始化动作
         VFP_DEBUG << "Calling initActions";
@@ -779,10 +620,17 @@ void MainWindow::retireExecutor(FlowExecutor *ex)
     QObject::connect(ex, &QThread::finished, ex, &QObject::deleteLater);
 }
 
-// 多流程并发：非激活流程执行器的轻量信号连接（状态/日志/运行界面推送）
+// 多流程并发：**唯一**的执行器信号连接点（N3 富反馈统一）。首执行器（构造函数）与
+// executorForScene 新建执行器都走这里，规则完全一致：
+//  · 全局 UI（状态栏 / 结果表 / 变量面板 / 最近变量缓存 / 图像显示 / 运行界面 / 参数面板）
+//    只接受"当前激活执行器"（ex == m_executor）的推送——否则后台跑首流程会污染状态栏与结果表；
+//  · 流程域反馈（日志 + 节点着色）不设门槛，按执行器自身场景（ex->flowScene()）更新，
+//    保证后台流程也有逐节点反馈（旧实现后台执行器完全没有逐节点反馈）。
 void MainWindow::connectExecutorSignals(FlowExecutor *ex)
 {
     if (!ex) return;
+
+    // ── 全局 UI：运行状态 → 状态栏（状态/耗时/触发计数） ──
     connect(ex, &FlowExecutor::executionStarted, this, [this, ex]() {
         if (ex == m_executor) onExecutionStarted();
     });
@@ -796,9 +644,156 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
         if (ex == m_executor) onExecutionError(err);
         else logMessage(QStringLiteral("流程错误: %1").arg(err));
     });
+
+    // ── 全局 UI：跳过三态（未激活分支 / 循环体调度的节点标"跳过"） ──
+    connect(ex, &FlowExecutor::nodeSkipped, this,
+            [this, ex](NodeBase *node, const QString &reason) {
+        Q_UNUSED(reason)
+        if (ex != m_executor)
+            return;
+        auto *rt = m_auxPanels ? m_auxPanels->resultTablePanel() : nullptr;
+        if (!node || !rt)
+            return;
+        rt->setModuleSkipped(node->moduleId(), node->fullName());
+    });
+
+    // ── 全局 UI：结果数据表 / 变量面板（节点执行后把该模块输出推到面板） ──
+    connect(ex, &FlowExecutor::nodeOutputsUpdated, this,
+            [this, ex](NodeBase *node, bool ok, qint64 elapsedMs, const QVariantMap &vars) {
+        if (ex != m_executor || !node)
+            return;
+        if (auto *rt = m_auxPanels ? m_auxPanels->resultTablePanel() : nullptr) {
+            rt->setModuleResult(node->moduleId(), node->fullName(), ok, elapsedMs, vars);
+        }
+        // 供「变量引用」菜单构造引用列表（UI 线程缓存，不读执行线程内部状态）
+        m_lastModuleVars.insert(node->moduleId(), vars);
+        // 变量面板只列可引用的值：失败节点本轮没有可引用输出
+        if (auto *vp = m_auxPanels ? m_auxPanels->variablePanel() : nullptr) {
+            if (ok)
+                vp->setModuleVars(node->moduleId(), node->fullName(), vars);
+        }
+    });
+
+    // ── 全局 UI：末端图像 → 运行界面 + 图像显示 ──
     connect(ex, &FlowExecutor::imageReady, this,
-            [this](NodeBase *node, const HalconCpp::HImage &image) {
-        if (m_runtimeView) m_runtimeView->pushImage(node->fullName(), image);
+            [this, ex](NodeBase *node, const HalconCpp::HImage &image) {
+        if (ex != m_executor || !node)
+            return;
+        // 运行界面图像控件转发（不受用户显示选择影响）
+        if (m_runtimeView)
+            m_runtimeView->pushImage(node->fullName(), image);
+        // 如果用户已通过下拉框或画布选择了一个算子，imageReady 不覆盖
+        NodeBase *target = resolveDisplayNode();
+        if (target != node && target != nullptr) {
+            VFP_DEBUG << "用户已选择显示:" << target->fullName() << "，imageReady不覆盖";
+            return;
+        }
+        // 兜底：自动显示最后一个节点的图像（信号负载的图像 + 该节点的叠加图元）
+        if (m_imageDisplay)
+            m_imageDisplay->showImage(image, node->fullName(), node);
+    });
+
+    // ── 全局 UI：任意节点图像 → 运行界面按节点名推送（绑定中间节点控件可实时显示） ──
+    connect(ex, &FlowExecutor::imageAvailable, this,
+            [this, ex](NodeBase *node, const HalconCpp::HImage &image) {
+        if (ex != m_executor || !node)
+            return;
+        if (m_runtimeView)
+            m_runtimeView->pushImage(node->fullName(), image);
+    });
+
+    // ── 逐节点反馈 ──
+    connect(ex, &FlowExecutor::nodeExecuted, this, [this, ex](NodeBase *node, bool success) {
+        // 流程域：日志（后台流程同样输出）
+        logMessage(QStringLiteral("节点执行结果: %1").arg(success ? QStringLiteral("成功")
+                                                                 : QStringLiteral("失败")));
+        if (!node)
+            return;
+        // 流程域：节点着色按执行器自身场景（旧实现只看当前标签页场景 → 后台流程无反馈/串场景）
+        if (FlowScene *scene = ex->flowScene()) {
+            if (NodeGraphicsItem *item = scene->getGraphicsItemForNode(node))
+                item->update();
+        }
+
+        // 全局 UI 部分只在"失败为假 且 当前激活流程"时更新
+        if (!success || ex != m_executor)
+            return;
+
+        // 参数面板：显示最新输出参数（选中节点）
+        if (m_selectedNode) {
+            QWidget *parameterPanel = ui->paramDockContents;
+            if (parameterPanel) {
+                // 查找参数面板中的所有子控件（输出页 + 输入页随运行刷新）
+                const QList<QWidget*> childWidgets = parameterPanel->findChildren<QWidget*>();
+                for (QWidget *childWidget : childWidgets) {
+                    QTabWidget *tabWidget = qobject_cast<QTabWidget*>(childWidget);
+                    if (!tabWidget)
+                        continue;
+                    if (QWidget *outputTab = tabWidget->findChild<QWidget*>("outputTab"))
+                        m_selectedNode->updateParamPanel(outputTab);
+                    // 输入面板随运行刷新（图像源信息等）
+                    if (QWidget *inputTab = tabWidget->findChild<QWidget*>("inputTab"))
+                        m_selectedNode->updateParamPanel(inputTab);
+                }
+            }
+        }
+
+        // 图像显示：核心规则 = 下拉框选择 > 画布选中 > 当前执行节点
+        NodeBase *targetDisplayNode = resolveDisplayNode(node);
+        if (targetDisplayNode && m_imageView) {
+            QSharedPointer<DataObject> outputData = targetDisplayNode->getOutputData(0);
+            if (outputData) {
+                const HImage image = outputData->getHImage();
+                if (image.IsInitialized()) {
+                    m_imageView->setImage(image, targetDisplayNode->fullName());
+                    if (m_imageSourceLabel) {
+                        m_imageSourceLabel->setText(
+                            QStringLiteral("图像来源: %1").arg(targetDisplayNode->fullName()));
+                    }
+                }
+            }
+        }
+
+        // 运行界面：转发节点输出值（数值显示 / 状态灯 / IO状态）
+        if (m_runtimeView) {
+            // 全端口输出映射：端口0 走 updateNodeOutput（数值/状态灯）；
+            // 全部端口按名走 updateNodePortMap（IO状态控件消费 成功/值/错误）
+            QVariantMap portMap;
+            const QList<Port *> outPorts = node->outputPorts();
+            for (int pi = 0; pi < outPorts.size(); ++pi) {
+                QSharedPointer<DataObject> out = node->getOutputData(pi);
+                if (!out) continue;
+                QVariant v;
+                switch (out->getType()) {
+                case DataObject::DataType::Number:
+                case DataObject::DataType::String:
+                case DataObject::DataType::Bool:
+                case DataObject::DataType::Array:
+                    v = out->getData();
+                    break;
+                case DataObject::DataType::Measure: {
+                    const MeasureResult mr = out->getMeasureResult();
+                    if (mr.valid) v = mr.value;
+                    break;
+                }
+                case DataObject::DataType::Point: {
+                    const QPointF p = out->getPoint();
+                    v = QStringLiteral("(%1, %2)").arg(p.x(), 0, 'f', 3).arg(p.y(), 0, 'f', 3);
+                    break;
+                }
+                default:
+                    break;
+                }
+                if (v.isValid()) {
+                    if (outPorts[pi])
+                        portMap.insert(outPorts[pi]->name(), v);
+                    if (pi == 0)
+                        m_runtimeView->updateNodeOutput(node->fullName(), v);
+                }
+            }
+            if (!portMap.isEmpty())
+                m_runtimeView->updateNodePortMap(node->fullName(), portMap);
+        }
     });
 }
 
@@ -1515,6 +1510,8 @@ void MainWindow::onNewProject()
 
     // 先停掉并摘除全部执行器，再删除场景——否则运行中的执行线程会在节点被删除后
     // 继续访问（use-after-free），且 m_flowExecutors 会残留指向已删场景的悬垂键。
+    // 超时则中止本次新建（N1）：保留旧方案场景与执行器，不删场景、不回收执行器，
+    // 避免运行中的线程在场景被释放后访问（UAF）；旧流程被 stop 后会在算子返回自然退出。
     QList<FlowExecutor *> oldExecutors;
     for (FlowExecutor *ex : qAsConst(m_flowExecutors)) {
         if (ex && !oldExecutors.contains(ex))
@@ -1525,9 +1522,17 @@ void MainWindow::onNewProject()
 
     for (FlowExecutor *ex : oldExecutors)
         ex->stopExecution();
+    // 统一等待真正退出（15s，与 retireExecutor 阈值一致）：看结果，超时即中止。
+    QList<FlowExecutor *> stuckExecutors;
     for (FlowExecutor *ex : oldExecutors) {
-        if (ex->isRunning() && !ex->wait(6000))
-            VFP_DEBUG << "FlowExecutor 未能在 6s 内退出（可能在长耗时算子中）";
+        if (ex->isRunning() && !ex->wait(15000))
+            stuckExecutors.append(ex);
+    }
+    if (!stuckExecutors.isEmpty()) {
+        logMessage(tr("有流程执行线程超时未退出，已取消新建方案"));
+        QMessageBox::warning(this, tr("提示"),
+            tr("有流程仍在执行且未能在限定时间内退出，已取消新建方案以避免程序崩溃。"));
+        return;
     }
 
     FlowExecutor *spareExecutor = nullptr;
@@ -1546,6 +1551,18 @@ void MainWindow::onNewProject()
     m_executor = spareExecutor;
     if (spareExecutor)
         m_flowExecutors.insert(nullptr, spareExecutor);
+
+    // 清掉旧场景在图像显示控制器里的显式显示源键，避免悬垂指针（removeScene 漏 loadProjectFile 调用点）
+    for (FlowScene *scene : qAsConst(m_flowScenes))
+        m_imageDisplay->removeScene(scene);
+
+    // N11 陈旧 row：结果表 + 变量缓存属于"上一方案"的数据，切方案后必须清空，
+    // 否则一直显示旧流程的模块与输出、变量引用菜单给出已失效的 moduleId。
+    if (m_auxPanels) {
+        if (auto *rt = m_auxPanels->resultTablePanel())
+            rt->clearResults();
+    }
+    m_lastModuleVars.clear();
 
     // 清空现有的流程场景
     qDeleteAll(m_flowScenes);
@@ -1660,8 +1677,9 @@ void MainWindow::loadProjectFile(const QString &fileName)
         return;
     }
 
-    // 释放旧方案的执行器：停止线程并把场景指针从执行器上摘掉，
-    // 否则 m_flowExecutors 会残留指向已删除场景的悬垂键，后续按场景查找会踩已释放内存。
+    // 释放旧方案的执行器：先停全部并等待真正退出；超时则中止本次打开（N1）——保留旧方案
+    // 场景与执行器，不删场景、不回收执行器。运行中的线程若此刻删场景 = UAF，比崩溃更该避免的是
+    // 脏数据；这里直接中止切换，旧流程被 stop 后会在算子返回自然退出，方案保持原样可再用。
     QList<FlowExecutor *> oldExecutors;
     for (FlowExecutor *ex : m_flowExecutors) {
         if (ex && !oldExecutors.contains(ex))
@@ -1672,11 +1690,18 @@ void MainWindow::loadProjectFile(const QString &fileName)
 
     for (FlowExecutor *ex : oldExecutors)
         ex->stopExecution();
-    // 等待真正退出再动场景：1s 太短且不看结果——超时后旧场景会在执行线程仍在跑时被删除；
-    // 保留的占位执行器也会带着"仍在运行的线程"被复用（都是 use-after-free 隐患）。
+    // 统一等待真正退出（15s，与 retireExecutor 阈值一致）：看结果，超时即中止。
+    QList<FlowExecutor *> stuckExecutors;
     for (FlowExecutor *ex : oldExecutors) {
-        if (ex->isRunning() && !ex->wait(6000))
-            VFP_DEBUG << "FlowExecutor 未能在 6s 内退出（可能在长耗时算子中）";
+        if (ex->isRunning() && !ex->wait(15000))
+            stuckExecutors.append(ex);
+    }
+    if (!stuckExecutors.isEmpty()) {
+        // 超时分支联动中止：不删场景、不回收执行器，旧方案保持完整（含仍运行的线程，其场景未删）。
+        logMessage(tr("有流程执行线程超时未退出，已取消打开方案"));
+        QMessageBox::warning(this, tr("提示"),
+            tr("有流程仍在执行且未能在限定时间内退出，已取消打开方案以避免程序崩溃。"));
+        return;
     }
 
     FlowExecutor *spareExecutor = nullptr;
@@ -1697,6 +1722,18 @@ void MainWindow::loadProjectFile(const QString &fileName)
     if (spareExecutor)
         m_flowExecutors.insert(nullptr, spareExecutor);
 
+    // 清掉旧场景在图像显示控制器里的显式显示源键，避免悬垂指针（removeScene 漏 loadProjectFile 调用点）
+    for (FlowScene *scene : qAsConst(m_flowScenes))
+        m_imageDisplay->removeScene(scene);
+
+    // N11 陈旧 row：结果表 + 变量缓存属于"上一方案"的数据，切方案后必须清空，
+    // 否则一直显示旧流程的模块与输出、变量引用菜单给出已失效的 moduleId。
+    if (m_auxPanels) {
+        if (auto *rt = m_auxPanels->resultTablePanel())
+            rt->clearResults();
+    }
+    m_lastModuleVars.clear();
+
     // 清空现有的流程场景
     qDeleteAll(m_flowScenes);
     m_flowScenes.clear();
@@ -1711,7 +1748,9 @@ void MainWindow::loadProjectFile(const QString &fileName)
     logMessage(tr("项目加载成功"));
     m_recentFiles->add(fileName);
 
-    // 添加加载的场景到标签页
+    // 添加加载的场景到标签页，并逐个注册到全局触发管理器。
+    // 修复：此前只有 createNewFlow 才做 flowName/registerFlow，载入方案的所有流程在 GTM 里
+    // 无名无映射 → 硬触发/外部触发全灭（触发链路静默失效）。
     for (int i = 0; i < loadedScenes.size(); ++i) {
         FlowScene *scene = loadedScenes[i];
         m_flowScenes.append(scene);
@@ -1725,6 +1764,16 @@ void MainWindow::loadProjectFile(const QString &fileName)
 
         // 连接信号
         hookFlowScene(scene);
+
+        // 每个流程独立执行器 + 流程名注册（多流程并发：executorForScene 复用占位 spare 给首个
+        // 流程、其余各自新建；与 createNewFlow 同一套 setFlowName/registerFlow，保证触发按名路由）。
+        FlowExecutor *flowEx = executorForScene(scene);
+        if (flowEx) {
+            flowEx->setFlowScene(scene);
+            const QString flowName = QStringLiteral("\u6D41\u7A0B %1").arg(i + 1);
+            flowEx->setFlowName(flowName);
+            GlobalTriggerManager::instance()->registerFlow(flowName, scene, flowEx);
+        }
     }
 
     // 设置当前场景（多流程并发：切换到该流程的执行器）
