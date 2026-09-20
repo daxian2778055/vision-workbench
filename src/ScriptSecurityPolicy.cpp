@@ -119,14 +119,11 @@ QString ScriptSecurityPolicy::interpreterPath(const QString &language) const
         return byPath;
     }
 
-    // 3) PATH 中找不到：显式退回 exe 同目录（便携部署把解释器放在程序旁），留日志便于溯源
-    const QString beside = QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(candidate);
-    if (QFileInfo::exists(beside)) {
-        qWarning() << "解释器未在 PATH 中找到，改用程序目录内的解释器:" << beside;
-        return beside;
-    }
-
-    // 4) 解析失败：返回空串，调用方 fail-closed 拒绝执行并提示配置全路径
+    // 解析失败：**返回空串**，由调用方 fail-closed 拒绝执行并提示配置全路径。
+    // 刻意不退回 exe 同目录——应用目录/当前目录正是 CreateProcess 搜索序的优先位置，
+    // 攻击者把同名 python.exe 放在程序旁即可顶替"确认过的可信脚本"实际执行的解释器，
+    // 恰是本次要杜绝的顶替面；只接受「显式配置的绝对路径」与「PATH 解析出的绝对路径」两种可信来源。
+    qWarning() << "解释器未在 PATH 中找到（且未配置全路径），拒绝执行脚本，请配置解释器全路径";
     return QString();
 }
 
