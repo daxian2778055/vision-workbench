@@ -58,6 +58,16 @@ private:
     QLabel *m_serialPortLabel = nullptr;
     QComboBox *m_serialBaudRate = nullptr;
     QLabel *m_serialBaudLabel = nullptr;
+    // 数据位/停止位/校验：此前 UI 不产出、工厂不投递，节点虽读这几个键却永远吃默认 8/1/None，
+    // 8E1/8O1（大量 Modbus RTU 设备的出厂设置）永远连不上且查不出原因。
+    // 注意 stopBits 的取值直通 QSerialPort::StopBits 枚举（1=OneStop / 2=OneAndHalfStop / 3=TwoStop），
+    // 与 SerialCommNode 的 1/2/3 自定义约定不同——QModbus 直接把该值当枚举用。
+    QComboBox *m_serialDataBits = nullptr;
+    QLabel *m_serialDataBitsLabel = nullptr;
+    QComboBox *m_serialStopBits = nullptr;
+    QLabel *m_serialStopBitsLabel = nullptr;
+    QComboBox *m_serialParity = nullptr;
+    QLabel *m_serialParityLabel = nullptr;
     QSpinBox *m_slaveAddress = nullptr;
     QCheckBox *m_autoReconnect = nullptr;
     QSpinBox *m_reconnectInterval = nullptr;

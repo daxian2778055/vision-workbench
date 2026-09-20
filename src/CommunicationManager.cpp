@@ -208,6 +208,15 @@ void CommunicationManager::createDeviceNode(const QString &name, const QString &
             modbus->setParam(QStringLiteral("portName"), config[QStringLiteral("portName")].toString());
         if (config.contains(QStringLiteral("baudRate")))
             modbus->setParam(QStringLiteral("baudRate"), config[QStringLiteral("baudRate")].toInt());
+        // 数据位/停止位/校验：ModbusNode 的 RTU 分支会读这三个键（默认 8/1/None），
+        // 但工厂此前从不投递 → 对话框里配的校验位/数据位/停止位全部落空，
+        // 8E1/8O1 设备永远连不上（TCP 时这些键无意义，投递也无害）。
+        if (config.contains(QStringLiteral("dataBits")))
+            modbus->setParam(QStringLiteral("dataBits"), config[QStringLiteral("dataBits")].toInt());
+        if (config.contains(QStringLiteral("stopBits")))
+            modbus->setParam(QStringLiteral("stopBits"), config[QStringLiteral("stopBits")].toInt());
+        if (config.contains(QStringLiteral("parity")))
+            modbus->setParam(QStringLiteral("parity"), config[QStringLiteral("parity")].toString());
         if (config.contains(QStringLiteral("host")))
             modbus->setParam(QStringLiteral("host"), config[QStringLiteral("host")].toString());
         if (config.contains(QStringLiteral("port")))

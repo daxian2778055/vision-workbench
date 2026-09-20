@@ -113,7 +113,9 @@ public:
     void fromJson(const QJsonObject &json) override;
 
 private:
-    double extractValue(const QByteArray &data, const ByteMatchRule &rule) const;
+    /// 提取规则值；返回 false 表示该帧无法按此规则取值（负偏移 / 长度不符 / 未知类型），
+    /// 调用方必须跳过本次判断且**不得**更新基线——否则短帧/空帧的 0 会污染边沿判断。
+    bool extractValue(const QByteArray &data, const ByteMatchRule &rule, double &out) const;
     bool checkCondition(const ByteMatchRule &rule, double currentValue);
 
     int m_registerAddress = 0;

@@ -15,6 +15,33 @@
 #include <QJsonObject>
 #include <QDataStream>
 
+namespace {
+/// 把寄存器的 16 位字序列按配置的字节序组装成原始字节（轮询读取与服务器写入共用同一约定，
+/// 避免两处各写一份、改一处漏一处）：ABCD=原序；CDAB=交换两字；BADC=字内字节互换；其余=完全反转。
+QByteArray assembleRegisterBytes(const QVector<quint16> &values, const QString &byteOrder)
+{
+    QByteArray raw;
+    QDataStream stream(&raw, QIODevice::WriteOnly);
+    stream.setByteOrder(QDataStream::BigEndian);   // Modbus 是 Big Endian
+
+    if (byteOrder == QStringLiteral("ABCD") || values.size() == 1) {
+        for (quint16 v : values)
+            stream << v;
+    } else if (byteOrder == QStringLiteral("CDAB") && values.size() >= 2) {
+        stream << values[1] << values[0];
+    } else if (byteOrder == QStringLiteral("BADC") && values.size() >= 2) {
+        for (quint16 v : values)
+            stream << quint16(((v & 0xFF) << 8) | ((v >> 8) & 0xFF));
+    } else {
+        for (int i = values.size() - 1; i >= 0; --i) {
+            const quint16 v = values[i];
+            stream << quint16(((v & 0xFF) << 8) | ((v >> 8) & 0xFF));
+        }
+    }
+    return raw;
+}
+}   // namespace
+
 ModbusNode::ModbusNode(QObject *parent)
     : CommunicationNodeBase(parent)
 {
@@ -289,35 +316,61 @@ void ModbusNode::onServerDataWritten(QModbusDataUnit::RegisterType table, int ad
     if (table != QModbusDataUnit::HoldingRegisters || !m_modbusServer) return;
 
     for (int i = 0; i < size; ++i) {
-        int regAddr = address + i;
-        quint16 raw = 0;
+        const int regAddr = address + i;
+        quint16 first = 0;
         if (!m_modbusServer->data(QModbusDataUnit::HoldingRegisters,
-                                  static_cast<quint16>(regAddr), &raw)) {
+                                  static_cast<quint16>(regAddr), &first)) {
             continue;
         }
 
-        // 更新寄存器表中的当前值
-        bool found = false;
-        for (auto &r : m_registers) {
-            if (r.address == regAddr) {
-                r.currentValue = static_cast<double>(raw);
-                r.displayValue = QString::number(raw);
-                emit registerCurrentValueChanged(regAddr, r.currentValue, r.displayValue);
-                found = true;
-                break;
-            }
+        // 找寄存器行；没有就补一行（保持与轮询路径一致的可观测性）
+        int idx = -1;
+        for (int k = 0; k < m_registers.size(); ++k) {
+            if (m_registers[k].address == regAddr) { idx = k; break; }
         }
-        if (!found) {
+        if (idx < 0) {
             ModbusRegisterItem r;
             r.address = regAddr;
-            r.currentValue = static_cast<double>(raw);
-            r.displayValue = QString::number(raw);
             r.accessMode = QStringLiteral("ReadWrite");
             m_registers.append(r);
-            emit registerCurrentValueChanged(regAddr, r.currentValue, r.displayValue);
+            idx = m_registers.size() - 1;
         }
 
-        emit registerWrittenByClient(regAddr, raw);
+        // 32 位类型跨 2 个寄存器：按该行配置的字节序组装 4 字节；否则服务器模式下
+        // int32/uint32/float 永远只有 2 字节 → 接收事件按长度不符丢弃（换了新死的半边）
+        const QString dataType = m_registers[idx].dataType;
+        const QString byteOrder = m_registers[idx].byteOrder;
+        const bool wide = (dataType == QStringLiteral("int32")
+                           || dataType == QStringLiteral("uint32")
+                           || dataType == QStringLiteral("float"));
+        QVector<quint16> words;
+        words.append(first);
+        if (wide) {
+            quint16 second = 0;
+            if (m_modbusServer->data(QModbusDataUnit::HoldingRegisters,
+                                     static_cast<quint16>(regAddr + 1), &second)) {
+                words.append(second);
+            }
+        }
+        const QByteArray rawBytes = assembleRegisterBytes(words, byteOrder);
+
+        // 与轮询路径对齐：currentValue 存解析值（此前服务器模式存 16 位原始字，int32/float 行显示半个值）
+        m_registers[idx].currentValue = parseRawToValue(rawBytes, dataType, byteOrder);
+        m_registers[idx].displayValue = QString::number(
+            m_registers[idx].currentValue, 'f', dataType == QStringLiteral("float") ? 4 : 0);
+        emit registerCurrentValueChanged(regAddr, m_registers[idx].currentValue,
+                                        m_registers[idx].displayValue);
+        emit registerWrittenByClient(regAddr, first);
+
+        // 关键修复：服务器模式此前只发上面两个 UI 信号、**从不发 registerValueChanged** ——
+        // 接收事件/触发链路（CM 转发 → GlobalTriggerManager → 流程）对"客户端写服务器"
+        // 完全失聪，等于整条死。按与轮询路径同一「原始字节」约定补齐，
+        // 且只在值变化时发（与轮询一致，避免同值重复写反复触发）。
+        if (!m_registers[idx].hasLastValue || rawBytes != m_registers[idx].lastRaw) {
+            m_registers[idx].lastRaw = rawBytes;
+            m_registers[idx].hasLastValue = true;
+            emit registerValueChanged(regAddr, rawBytes, dataType);
+        }
     }
 }
 
@@ -438,32 +491,8 @@ bool ModbusNode::readRegister(int slaveAddr, int regAddr, int count)
                     if (!values.isEmpty() && regIndex >= 0 && regIndex < m_registers.size()) {
                         auto &reg = m_registers[regIndex];
 
-                        // 将 values 转为原始字节
-                        QByteArray raw;
-                        QDataStream stream(&raw, QIODevice::WriteOnly);
-                        stream.setByteOrder(QDataStream::BigEndian); // Modbus 是 Big Endian
-
-                        // 根据字节顺序重新排列
-                        if (reg.byteOrder == QStringLiteral("ABCD") || values.size() == 1) {
-                            for (quint16 v : values) {
-                                stream << v;
-                            }
-                        } else if (reg.byteOrder == QStringLiteral("CDAB") && values.size() >= 2) {
-                            // CDAB: 交换两个 word 的顺序
-                            stream << values[1] << values[0];
-                        } else if (reg.byteOrder == QStringLiteral("BADC") && values.size() >= 2) {
-                            // BADC: 每个 word 高/低字节互换
-                            for (int i = 0; i < values.size(); ++i) {
-                                quint16 swapped = ((values[i] & 0xFF) << 8) | ((values[i] >> 8) & 0xFF);
-                                stream << swapped;
-                            }
-                        } else {
-                            // DCBA: 完全反转
-                            for (int i = values.size() - 1; i >= 0; --i) {
-                                quint16 swapped = ((values[i] & 0xFF) << 8) | ((values[i] >> 8) & 0xFF);
-                                stream << swapped;
-                            }
-                        }
+                        // 将 values 转为原始字节（与服务器写入路径共用同一字节序约定）
+                        const QByteArray raw = assembleRegisterBytes(values, reg.byteOrder);
 
                         // 更新当前解析值
                         double parsed = parseRawToValue(raw, reg.dataType, reg.byteOrder);

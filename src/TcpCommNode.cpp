@@ -180,8 +180,17 @@ void TcpCommNode::onSocketDisconnected()
 
 void TcpCommNode::onSendRequested(const QByteArray &data)
 {
-    if (!m_connected || !m_socket) return;
-    if (m_socket->state() != QAbstractSocket::ConnectedState) return;
+    // 静默早退是历史缺陷：sendData() 在调用瞬间判过 isConnected() 并已返回 true，
+    // 到这里才真正 write——若中间链路已断（半开/被拔线），数据被静默丢弃，
+    // 调用方（「发送数据」算子/心跳）以为成功。必须显式报错让失败可见。
+    if (!m_connected || !m_socket) {
+        emit communicationError(QStringLiteral("TCP 发送失败: 未连接"));
+        return;
+    }
+    if (m_socket->state() != QAbstractSocket::ConnectedState) {
+        emit communicationError(QStringLiteral("TCP 发送失败: 套接字未处于已连接状态"));
+        return;
+    }
     const qint64 written = m_socket->write(data);
     // 成败只看 write 是否吞下全部字节：flush() 返回 false 只说明"写缓冲已空"
     // （数据早已交给内核），把它当失败会导致每次成功发送都误报通信错误（历史缺陷）。
@@ -212,6 +221,10 @@ void TcpCommNode::closeConnection()
 {
     m_userClosed = true;                              // 主动关闭：不触发自动重连
     if (m_reconnectTimer) m_reconnectTimer->stop();
+    // 只在"确实连过"时上报断开：否则 openConnection() 开头的清理、每次自动重连尝试、
+    // closeDevice/removeDevice 的无条件 close 都会各发一次假"连接已断开"，下游（心跳/
+    // 接收事件/界面状态）被反复的 closed/opened 抖动淹没。
+    const bool wasConnected = m_connected;
     QTcpSocket *old = m_socket;
     m_socket = nullptr;   // 先解除引用：旧 socket 的延迟信号会被归属校验忽略，不影响新连接
     if (old) {
@@ -224,7 +237,9 @@ void TcpCommNode::closeConnection()
         m_server = nullptr;
     }
     m_connected = false;
-    setParamDirect(QStringLiteral("connected"), false);
+    setParamDirect(QStringLiteral("connected"), false);   // 参数照旧写（不emit），保持界面数值真实
+    if (!wasConnected)
+        return;
     emit connectionClosed();
 }
 

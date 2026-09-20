@@ -159,13 +159,19 @@ void SerialCommNode::closeConnection()
 {
     m_userClosed = true;   // 主动关闭：不触发自动重连
     if (m_reconnectTimer) m_reconnectTimer->stop();
+    // 只在"确实连过"时上报断开：否则 openConnection() 开头的清理、每次自动重连尝试、
+    // closeDevice/removeDevice 的无条件 close 都会各发一次假"串口连接中断"，
+    // 下游（心跳/接收事件/界面状态）被反复的 closed/opened 抖动淹没。
+    const bool wasConnected = m_connected;
     if (m_serial) {
         m_serial->close();
         m_serial->deleteLater();
         m_serial = nullptr;
     }
     m_connected = false;
-    setParamDirect(QStringLiteral("connected"), false);
+    setParamDirect(QStringLiteral("connected"), false);   // 参数照旧写（不emit），保持界面数值真实
+    if (!wasConnected)
+        return;
     emit connectionClosed();
 }
 
@@ -194,7 +200,12 @@ void SerialCommNode::onDataReceived()
 
 void SerialCommNode::onSendRequested(const QByteArray &data)
 {
-    if (!m_connected || !m_serial) return;
+    // 静默早退是历史缺陷：sendData() 在调用瞬间判过 isConnected() 并已返回 true，
+    // 到这里才真正 write——若中间串口已断（USB 转串口掉线），数据被静默丢弃。
+    if (!m_connected || !m_serial) {
+        emit communicationError(QStringLiteral("串口发送失败: 未连接"));
+        return;
+    }
     const qint64 written = m_serial->write(data);
     if (written != data.size()) {   // 短写/失败都必须报错，不能静默丢弃
         emit communicationError(QStringLiteral("\u4E32\u53E3\u53D1\u9001\u5931\u8D25: %1").arg(m_serial->errorString()));

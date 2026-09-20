@@ -85,13 +85,17 @@ void PlcCommNode::closeConnection()
     m_pendingQueue.clear();
     if (m_reconnectTimer) m_reconnectTimer->stop();
 
+    // 只在"确实连过"时上报断开：重复 close / removeDevice 不得发假"断开"（同 TCP/串口/UDP 的抖动修复）
+    const bool wasConnected = m_connected;
     if (m_modbus) {
         m_modbus->disconnectDevice();
         m_modbus->deleteLater();
         m_modbus = nullptr;
     }
     m_connected = false;
-    setParamDirect(QStringLiteral("connected"), false);
+    setParamDirect(QStringLiteral("connected"), false);   // 参数照旧写（不emit），保持界面数值真实
+    if (!wasConnected)
+        return;
     emit connectionClosed();
 }
 

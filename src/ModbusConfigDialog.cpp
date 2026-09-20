@@ -109,6 +109,33 @@ void ModbusConfigDialog::setupUI()
     m_serialBaudRate->setCurrentText(QStringLiteral("9600"));
     formLayout->addRow(m_serialBaudLabel, m_serialBaudRate);
 
+    // 数据位/停止位/校验：ModbusNode 会读这三个键，但 UI 此前根本不产出 → 8E1/8O1 设备连不上。
+    // 停止位存 QSerialPort::StopBits 枚举值（1=1位 / 3=2位 / 2=1.5位），因为 QModbus
+    // 把 SerialStopBitsParameter 的值直接当该枚举使用（与 SerialCommNode 的约定不同）。
+    m_serialDataBitsLabel = new QLabel(QStringLiteral("数据位:"));
+    m_serialDataBits = new QComboBox();
+    for (int b : { 5, 6, 7, 8 })
+        m_serialDataBits->addItem(QString::number(b), b);
+    {
+        const int idx = m_serialDataBits->findData(8);
+        m_serialDataBits->setCurrentIndex(idx >= 0 ? idx : m_serialDataBits->count() - 1);
+    }
+    formLayout->addRow(m_serialDataBitsLabel, m_serialDataBits);
+
+    m_serialStopBitsLabel = new QLabel(QStringLiteral("停止位:"));
+    m_serialStopBits = new QComboBox();
+    m_serialStopBits->addItem(QStringLiteral("1"), 1);     // QSerialPort::OneStop
+    m_serialStopBits->addItem(QStringLiteral("2"), 3);     // QSerialPort::TwoStop
+    m_serialStopBits->addItem(QStringLiteral("1.5"), 2);   // QSerialPort::OneAndHalfStop
+    formLayout->addRow(m_serialStopBitsLabel, m_serialStopBits);
+
+    m_serialParityLabel = new QLabel(QStringLiteral("校验:"));
+    m_serialParity = new QComboBox();
+    m_serialParity->addItem(QStringLiteral("无"), QStringLiteral("None"));
+    m_serialParity->addItem(QStringLiteral("偶"), QStringLiteral("Even"));
+    m_serialParity->addItem(QStringLiteral("奇"), QStringLiteral("Odd"));
+    formLayout->addRow(m_serialParityLabel, m_serialParity);
+
     connect(m_connType, &QComboBox::currentTextChanged, this,
             [this](const QString &) { refreshConnTypeUi(); });
     refreshConnTypeUi();
@@ -261,6 +288,12 @@ void ModbusConfigDialog::refreshConnTypeUi()
     if (m_serialPortName) m_serialPortName->setVisible(isRtu);
     if (m_serialBaudLabel) m_serialBaudLabel->setVisible(isRtu);
     if (m_serialBaudRate) m_serialBaudRate->setVisible(isRtu);
+    if (m_serialDataBitsLabel) m_serialDataBitsLabel->setVisible(isRtu);
+    if (m_serialDataBits) m_serialDataBits->setVisible(isRtu);
+    if (m_serialStopBitsLabel) m_serialStopBitsLabel->setVisible(isRtu);
+    if (m_serialStopBits) m_serialStopBits->setVisible(isRtu);
+    if (m_serialParityLabel) m_serialParityLabel->setVisible(isRtu);
+    if (m_serialParity) m_serialParity->setVisible(isRtu);
 }
 
 void ModbusConfigDialog::refreshToggleSwitch()
@@ -364,6 +397,18 @@ void ModbusConfigDialog::loadConfigToForm(const QJsonObject &config)
     }
     if (config.contains(QStringLiteral("baudRate")) && m_serialBaudRate)
         m_serialBaudRate->setCurrentText(QString::number(config[QStringLiteral("baudRate")].toInt()));
+    if (config.contains(QStringLiteral("dataBits")) && m_serialDataBits) {
+        const int idx = m_serialDataBits->findData(config[QStringLiteral("dataBits")].toInt());
+        if (idx >= 0) m_serialDataBits->setCurrentIndex(idx);
+    }
+    if (config.contains(QStringLiteral("stopBits")) && m_serialStopBits) {
+        const int idx = m_serialStopBits->findData(config[QStringLiteral("stopBits")].toInt());
+        if (idx >= 0) m_serialStopBits->setCurrentIndex(idx);
+    }
+    if (config.contains(QStringLiteral("parity")) && m_serialParity) {
+        const int idx = m_serialParity->findData(config[QStringLiteral("parity")].toString());
+        if (idx >= 0) m_serialParity->setCurrentIndex(idx);
+    }
     if (config.contains(QStringLiteral("slaveAddress")))
         m_slaveAddress->setValue(config[QStringLiteral("slaveAddress")].toInt());
     if (config.contains(QStringLiteral("autoReconnect")))
@@ -447,6 +492,14 @@ QJsonObject ModbusConfigDialog::buildConfigFromForm() const
         m_serialPortName ? m_serialPortName->currentText().trimmed() : QString();
     cfg[QStringLiteral("baudRate")] =
         m_serialBaudRate ? m_serialBaudRate->currentText().toInt() : 9600;
+    // 数据位/停止位/校验必须随配置落盘并投递到节点，否则 RTU 只能吃节点默认 8/1/None
+    // （stopBits 存 QSerialPort::StopBits 枚举值：1=OneStop / 3=TwoStop / 2=OneAndHalfStop）
+    cfg[QStringLiteral("dataBits")] =
+        m_serialDataBits ? m_serialDataBits->currentData().toInt() : 8;
+    cfg[QStringLiteral("stopBits")] =
+        m_serialStopBits ? m_serialStopBits->currentData().toInt() : 1;
+    cfg[QStringLiteral("parity")] =
+        m_serialParity ? m_serialParity->currentData().toString() : QStringLiteral("None");
     cfg[QStringLiteral("slaveAddress")] = m_slaveAddress->value();
     cfg[QStringLiteral("autoReconnect")] = m_autoReconnect->isChecked();
     cfg[QStringLiteral("reconnectInterval")] = m_reconnectInterval->value();

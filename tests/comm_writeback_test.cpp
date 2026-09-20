@@ -93,6 +93,14 @@ private slots:
     void testSendEventsSurviveSaveLoad();
     // C 类回归：接收事件按设备过滤（A 设备数据不得触发 B 设备的事件）
     void testReceiveEventFiltersByDevice();
+
+    // 数据正确性回归：边沿阈值语义 / 无效帧不污染基线 / BADC 字节序 /
+    // 重复关闭不发假断开 / 断开时发送必须可见
+    void testByteMatchEdgeUsesCompareValue();
+    void testByteMatchInvalidFrameKeepsBaseline();
+    void testByteMatchBadcByteOrder();
+    void testCloseConnectionNoSpuriousSignal();
+    void testSendWhileDisconnectedIsReported();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -199,11 +207,31 @@ void CommWritebackTest::testWritebackFailureIsReported()
     QVERIFY2(!send->executionSuccess(), "设备不存在时回写必须报告失败，不能静默算成功");
 }
 
+namespace {
+/// 用例内设备清理守卫：断言失败会提前 return，若不清理则残留设备（监听端口/轮询客户端）
+/// 会串扰后续用例——已实测：本用例失败后 testDialogToggleConnection 会跟着失败。
+struct DeviceCleanup {
+    QStringList names;
+    ~DeviceCleanup()
+    {
+        auto *cm = CommunicationManager::instance();
+        for (const QString &n : names) {
+            if (cm->deviceNode(n)) {
+                cm->closeDevice(n);
+                cm->removeDevice(n);
+            }
+        }
+    }
+};
+}   // namespace
+
 void CommWritebackTest::testModbusRegisterWritebackAndRawSendGuard()
 {
     // 用项目自带的 Modbus 双角色在本进程内回环：服务器（从站）+ 客户端（主站）
     const int port = 15502;   // 高位端口，避开常见 Modbus 502
     auto *cm = CommunicationManager::instance();
+    // 断言失败提前 return 时也要清理，避免残留服务器/客户端串扰后续用例
+    DeviceCleanup cleanup{ { QStringLiteral("MB_SRV"), QStringLiteral("MB_CLI") } };
 
     QJsonObject srvCfg;
     srvCfg[QStringLiteral("role")] = QStringLiteral("服务器");
@@ -245,6 +273,11 @@ void CommWritebackTest::testModbusRegisterWritebackAndRawSendGuard()
     // 时就置位了——那只代表"连接请求已发出"，链路可能尚未建立（QModbus 是异步的）。
     // 因此这里不停留在标志位，而是重试到真的写成功为止。
     QSignalSpy writtenSpy(srv, &ModbusNode::registerWrittenByClient);
+    // 服务器模式接收事件链：客户端写服务器必须发出 registerValueChanged。
+    // 历史缺陷：onServerDataWritten 只发 UI 信号（registerCurrentValueChanged /
+    // registerWrittenByClient），从不发 registerValueChanged → 接收事件/触发链路
+    // 对"外部写服务器"完全失聪（客户端写成功但流程永不触发）。
+    QSignalSpy changedSpy(srv, &CommunicationNodeBase::registerValueChanged);
     bool wrote = false;
     for (int i = 0; i < 50 && !wrote; ++i) {   // 最多等约 5 秒
         wrote = cli->writeRegister(0, 42);
@@ -255,6 +288,12 @@ void CommWritebackTest::testModbusRegisterWritebackAndRawSendGuard()
     QTRY_COMPARE_WITH_TIMEOUT(writtenSpy.count(), 1, 5000);
     QCOMPARE(writtenSpy.at(0).at(0).toInt(), 0);
     QCOMPARE(writtenSpy.at(0).at(1).toUInt(), quint16(42));
+
+    // 原始字节必须是 Modbus 大端的 0x002A，类型取该行配置（uint16）
+    QTRY_COMPARE_WITH_TIMEOUT(changedSpy.count(), 1, 3000);
+    QCOMPARE(changedSpy.at(0).at(0).toInt(), 0);
+    QCOMPARE(changedSpy.at(0).at(1).toByteArray(), QByteArray::fromHex("002A"));
+    QCOMPARE(changedSpy.at(0).at(2).toString(), QStringLiteral("uint16"));
 
     // 本次修复点：对 Modbus 设备调 sendData 没有"裸字节"语义，必须**立即失败**，
     // 而不是像以前那样一路投递到基类空实现变成静默 no-op
@@ -1355,6 +1394,207 @@ void CommWritebackTest::testReceiveEventFiltersByDevice()
 // 必须用 QTEST_MAIN：流程用例要创建 FlowScene（QGraphicsScene），仅 QCoreApplication 会崩；
 // vfp_core 公开链接 Widgets，故这里会得到 QApplication，平台插件由 VFP_TESTS 的
 // QT_PLUGIN_PATH 注入（dist/VisionFlowPlatform）。
+
+// ==================== 数据正确性回归（边沿阈值 / 无效帧 / BADC / 抖动 / 静默丢包） ====================
+
+namespace {
+// 16 位大端帧
+QByteArray i16Frame(qint16 v)
+{
+    const quint16 raw = static_cast<quint16>(v);
+    QByteArray b;
+    b.append(static_cast<char>((raw >> 8) & 0xFF));
+    b.append(static_cast<char>(raw & 0xFF));
+    return b;
+}
+}   // namespace
+
+// 边沿检测必须以 compareValue 为阈值，而不是硬编码的 0↔非0
+void CommWritebackTest::testByteMatchEdgeUsesCompareValue()
+{
+    ByteMatchReceiveEvent ev(QStringLiteral("EDGE"), QStringLiteral("DEV"));
+    QSignalSpy spy(&ev, &ReceiveEvent::eventGenerated);
+
+    ByteMatchRule rule;
+    rule.byteOffset = 0;
+    rule.byteLength = 2;
+    rule.dataType = QStringLiteral("int16");
+    rule.byteOrder = QStringLiteral("ABCD");
+    rule.compareValue = 100;
+    rule.useRisingEdge = true;
+    rule.useEquals = false;
+    ev.addRule(rule);
+
+    QList<QVariant> fields;
+    QVERIFY(!ev.parse(i16Frame(50), fields));   // 首帧只建立基线
+    QCOMPARE(spy.count(), 0);
+    // 50 → 150 越过阈值 100：必须触发。旧实现按 0 判（lastValue=50 非 0 → 永不触发）
+    QVERIFY2(ev.parse(i16Frame(150), fields),
+             "边沿未使用 compareValue：50→150 越过阈值 100 却未触发");
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(fields.value(0).toDouble(), 150.0);
+    // 阈值上方继续增大：不得重复触发
+    QVERIFY(!ev.parse(i16Frame(160), fields));
+    QCOMPARE(spy.count(), 1);
+    // 100 == compareValue 不算"穿到阈值线下方"；99 已跌破但规则是上升沿
+    QVERIFY(!ev.parse(i16Frame(100), fields));
+    QVERIFY(!ev.parse(i16Frame(99), fields));
+    QCOMPARE(spy.count(), 1);
+
+    // 下降沿同样按阈值
+    ByteMatchRule down = rule;
+    down.useRisingEdge = false;
+    down.useFallingEdge = true;
+    ev.clearRules();
+    ev.addRule(down);
+    QVERIFY(!ev.parse(i16Frame(50), fields));   // 重建基线
+    QVERIFY(!ev.parse(i16Frame(150), fields));  // 上穿阈值：下降沿不触发
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(ev.parse(i16Frame(50), fields));    // 150 → 50 跌破阈值 100：触发
+    QCOMPARE(spy.count(), 2);
+}
+
+// 短帧/越界/负偏移取不到值时，不得把 0 当真实值写进基线（否则下一真帧被误判成上升沿）
+void CommWritebackTest::testByteMatchInvalidFrameKeepsBaseline()
+{
+    ByteMatchReceiveEvent ev(QStringLiteral("BADF"), QStringLiteral("DEV"));
+    QSignalSpy spy(&ev, &ReceiveEvent::eventGenerated);
+
+    ByteMatchRule rule;
+    rule.byteOffset = 0;
+    rule.byteLength = 2;
+    rule.dataType = QStringLiteral("int16");
+    rule.byteOrder = QStringLiteral("ABCD");
+    rule.compareValue = 0;
+    rule.useRisingEdge = true;
+    rule.useEquals = false;
+    ev.addRule(rule);
+
+    QList<QVariant> fields;
+    // 1 字节短帧（整帧非空，但按规则长度不足）：旧实现 return 0 并写进基线 →
+    // 紧随其后的真实 2 会被当成 0→2 上升沿凭空触发一次
+    QVERIFY(!ev.parse(QByteArray(1, '\0'), fields));
+    QVERIFY2(!ev.parse(i16Frame(2), fields),
+             "短帧污染了基线：真值 2 被当成 0→2 上升沿多触发了一次");
+    QCOMPARE(spy.count(), 0);
+
+    QVERIFY(!ev.parse(i16Frame(0), fields));    // 建立真实基线 0
+    QVERIFY(ev.parse(i16Frame(1), fields));     // 0 → 1：真上升沿
+    QCOMPARE(spy.count(), 1);
+
+    // 再次短帧：不得把基线清成 0
+    QVERIFY(!ev.parse(QByteArray(1, '\0'), fields));
+    QVERIFY(!ev.parse(i16Frame(1), fields));    // 基线仍是 1 → 1→1 不触发
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(!ev.parse(i16Frame(0), fields));    // 下降，规则是上升沿
+    QVERIFY(ev.parse(i16Frame(1), fields));     // 0 → 1 再次触发
+    QCOMPARE(spy.count(), 2);
+
+    // 负偏移：整体判无效，不崩溃、不触发、不污染基线
+    ByteMatchReceiveEvent ev2(QStringLiteral("NEGOFF"), QStringLiteral("DEV"));
+    QSignalSpy spy2(&ev2, &ReceiveEvent::eventGenerated);
+    ByteMatchRule bad;
+    bad.byteOffset = -4;
+    bad.byteLength = 2;
+    bad.dataType = QStringLiteral("int16");
+    bad.compareValue = 0;
+    bad.useEquals = true;
+    ev2.addRule(bad);
+    QVERIFY(!ev2.parse(i16Frame(7), fields));
+    QVERIFY(!ev2.parse(i16Frame(7), fields));
+    QCOMPARE(spy2.count(), 0);
+}
+
+// 32 位 BADC（字内字节互换）：旧实现没有该分支，会按 ABCD 算成错值
+void CommWritebackTest::testByteMatchBadcByteOrder()
+{
+    // 同一 4 字节：ABCD = 0x00000100 = 256；BADC = 0x00000001 = 1
+    const QByteArray raw = QByteArray::fromHex("00000100");
+    QList<QVariant> fields;
+
+    ByteMatchReceiveEvent evAbcd(QStringLiteral("ABCD"), QStringLiteral("DEV"));
+    ByteMatchRule r1;
+    r1.byteOffset = 0;
+    r1.byteLength = 4;
+    r1.dataType = QStringLiteral("int32");
+    r1.byteOrder = QStringLiteral("ABCD");
+    r1.compareValue = 256;
+    r1.useEquals = true;
+    evAbcd.addRule(r1);
+    QVERIFY(!evAbcd.parse(raw, fields));    // 首帧只建立基线
+    QVERIFY(evAbcd.parse(raw, fields));
+
+    ByteMatchReceiveEvent evBadc(QStringLiteral("BADC"), QStringLiteral("DEV"));
+    ByteMatchRule r2 = r1;
+    r2.byteOrder = QStringLiteral("BADC");
+    r2.compareValue = 1;
+    evBadc.addRule(r2);
+    QVERIFY(!evBadc.parse(raw, fields));
+    QVERIFY2(evBadc.parse(raw, fields),
+             "BADC 字内字节互换未生效（旧实现无该分支，按 ABCD 算成 256 ≠ 1）");
+}
+
+// 重复关闭不得反复发假"断开"（openConnection 开头清理/自动重连/removeDevice 都会 close）
+void CommWritebackTest::testCloseConnectionNoSpuriousSignal()
+{
+    auto *cm = CommunicationManager::instance();
+
+    // TCP：从未连接过就 close → 不得发 connectionClosed
+    QVERIFY(cm->addDevice(QStringLiteral("JIT_TCP"), QStringLiteral("TCP"), tcpClientConfig(1)));
+    auto *tcp = cm->deviceNode(QStringLiteral("JIT_TCP"));
+    QVERIFY(tcp != nullptr);
+    {
+        QSignalSpy closedSpy(tcp, &CommunicationNodeBase::connectionClosed);
+        QVERIFY(cm->closeDevice(QStringLiteral("JIT_TCP")));
+        QCOMPARE(closedSpy.count(), 0);
+    }
+    QVERIFY(cm->removeDevice(QStringLiteral("JIT_TCP")));
+
+    // UDP：绑定成功（已连接）后关闭恰好 1 次；已断开再关不得再报
+    QJsonObject udpCfg;
+    udpCfg[QStringLiteral("localPort")] = 0;   // 系统分配，避免与其它用例抢端口
+    QVERIFY(cm->addDevice(QStringLiteral("JIT_UDP"), QStringLiteral("UDP"), udpCfg));
+    auto *udp = cm->deviceNode(QStringLiteral("JIT_UDP"));
+    QVERIFY(udp != nullptr);
+    QVERIFY2(cm->openDevice(QStringLiteral("JIT_UDP")), "UDP 绑定失败");
+    QVERIFY(udp->isConnected());
+    {
+        QSignalSpy closedSpy(udp, &CommunicationNodeBase::connectionClosed);
+        QVERIFY(cm->closeDevice(QStringLiteral("JIT_UDP")));
+        QCOMPARE(closedSpy.count(), 1);
+        QVERIFY(cm->closeDevice(QStringLiteral("JIT_UDP")));   // 已断开再关
+        QCOMPARE(closedSpy.count(), 1);
+    }
+    QVERIFY(cm->removeDevice(QStringLiteral("JIT_UDP")));
+}
+
+// 断开状态下投递发送必须可见（旧实现静默 return，调用方以为成功）
+void CommWritebackTest::testSendWhileDisconnectedIsReported()
+{
+    auto *cm = CommunicationManager::instance();
+    const QStringList cases = { QStringLiteral("TCP"), QStringLiteral("UDP"), QStringLiteral("Serial") };
+    for (const QString &type : cases) {
+        const QString name = QStringLiteral("SILENT_%1").arg(type);
+        QJsonObject cfg;
+        if (type == QStringLiteral("Serial"))
+            cfg[QStringLiteral("portName")] = QStringLiteral("COM_DOES_NOT_EXIST");
+        QVERIFY2(cm->addDevice(name, type, cfg),
+                 qPrintable(QStringLiteral("addDevice 失败: %1").arg(type)));
+        auto *node = cm->deviceNode(name);
+        QVERIFY(node != nullptr);
+        QVERIFY(!node->isConnected());
+
+        QSignalSpy errSpy(node, &CommunicationNodeBase::communicationError);
+        // 模拟"调用瞬间 isConnected() 为真、投递到这里链路已断"：直接触发节点的发送槽
+        QVERIFY(QMetaObject::invokeMethod(node, "onSendRequested",
+                                          Q_ARG(QByteArray, QByteArray("X"))));
+        QCOMPARE(errSpy.count(), 1);
+        QVERIFY(!errSpy.at(0).at(0).toString().isEmpty());
+
+        QVERIFY(cm->removeDevice(name));
+    }
+}
+
 QTEST_MAIN(CommWritebackTest)
 
 // 源文件内定义 Q_OBJECT 类时，AUTOMOC 要求显式包含生成的 moc

@@ -67,13 +67,17 @@ bool UdpCommNode::openConnection()
 
 void UdpCommNode::closeConnection()
 {
+    // 只在"确实连过"时上报断开：重复 close / removeDevice 不得发假"断开"（同 TCP/串口的抖动修复）
+    const bool wasConnected = m_connected;
     if (m_socket) {
         m_socket->close();
         m_socket->deleteLater();
         m_socket = nullptr;
     }
     m_connected = false;
-    setParamDirect(QStringLiteral("connected"), false);
+    setParamDirect(QStringLiteral("connected"), false);   // 参数照旧写（不emit），保持界面数值真实
+    if (!wasConnected)
+        return;
     emit connectionClosed();
 }
 
@@ -109,7 +113,11 @@ void UdpCommNode::onReadyRead()
 
 void UdpCommNode::onSendRequested(const QByteArray &data)
 {
-    if (!m_connected || !m_socket) return;
+    // 静默早退是历史缺陷：调用方已在 sendData() 拿到 true，这里的丢弃会让"发送成功"是假的
+    if (!m_connected || !m_socket) {
+        emit communicationError(QStringLiteral("UDP 发送失败: 未连接"));
+        return;
+    }
     const QString ip = m_params.value(QStringLiteral("remoteIp")).toString().trimmed();
     if (ip.isEmpty()) {
         emit communicationError(QStringLiteral("UDP 未配置目标 IP（仅接收模式不可发送）"));
