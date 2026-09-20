@@ -193,10 +193,10 @@ set(SOURCES
     src/PortDataType.cpp
     src/PortConnectivity.cpp
     src/ProjectManager.cpp
-    src/FlowTabManager.cpp
+    src/AuxPanelManager.cpp
     src/ImageDisplayController.cpp
-    src/NodeExecutionController.cpp
-    src/DockLayoutManager.cpp
+    src/ExecutionStatusController.cpp
+    src/RecentFilesMenu.cpp
     src/GlobalVariableManager.cpp
     src/GlobalVariableDialog.cpp
     src/GlobalCameraManager.cpp
@@ -412,10 +412,10 @@ set(HEADERS
     include/PortDataType.h
     include/PortConnectivity.h
     include/ProjectManager.h
-    include/FlowTabManager.h
+    include/AuxPanelManager.h
     include/ImageDisplayController.h
-    include/NodeExecutionController.h
-    include/DockLayoutManager.h
+    include/ExecutionStatusController.h
+    include/RecentFilesMenu.h
     include/GlobalVariableManager.h
     include/GlobalVariableDialog.h
     include/GlobalCameraManager.h

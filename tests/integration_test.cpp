@@ -17,17 +17,29 @@
 #include "DelayNode.h"
 #include "FormulaNode.h"
 #include "ScriptSecurityPolicy.h"
+#include "ImageDisplayController.h"
+#include "ExecutionStatusController.h"
+#include "RecentFilesMenu.h"
 #include "RuntimeInterface.h"
 #include "Port.h"
 #include "Connection.h"
 #include "DataObject.h"
+#include "ThreadSafeParams.h"
+#include "GlobalTriggerManager.h"
 #include <QElapsedTimer>
 #include <QThread>
 #include <QCoreApplication>
 #include <QTemporaryDir>
 #include <QFile>
 #include <QDir>
+#include <QFileInfo>
 #include <QProcess>
+#include <QStatusBar>
+#include <QAction>
+#include <QToolButton>
+#include <thread>
+#include <vector>
+#include <atomic>
 
 class IntegrationTest : public QObject
 {
@@ -75,6 +87,17 @@ private slots:
     void testRuntimeInterfaceMultiPageRoundTrip();
     void testRuntimeInterfaceLegacyCompat();
     void testRuntimeControlTypeNames();
+
+    // 并发/锁纪律回归（把已修的锁用用例钉死）
+    void testThreadSafeParamsConcurrentAccess();
+    void testDataObjectConcurrentAccess();
+    void testStepModeExitRestoresNormalRun();
+    void testBusyTriggerNotCountedAndNotFired();
+    void testBusyOtherFlowDoesNotBlockTrigger();
+    void testScriptInterpreterResolvesToAbsolutePath();
+    void testImageDisplayResolvePriority();
+    void testExecutionStatusController();
+    void testRecentFilesMenu();
 
 private:
     FlowScene *m_scene = nullptr;
@@ -785,6 +808,14 @@ void IntegrationTest::testConditionalBranchSkipClearsStaleOutput()
             if (rounds >= 2) exec.stopExecution();
         }, Qt::DirectConnection);
 
+    // 三态可视化：TRUE 分支第二轮被跳过 → 必须发 nodeSkipped（结果面板据此标"跳过"）
+    int trueSkipped = 0;
+    const auto skipHandle = QObject::connect(
+        &exec, &FlowExecutor::nodeSkipped, &exec,
+        [&](NodeBase *n, const QString &reason) {
+            if (n == trueB && !reason.isEmpty()) ++trueSkipped;
+        }, Qt::DirectConnection);
+
     exec.setFlowScene(&scene);
     exec.setFlowMode(FlowMode::Continuous);
     exec.startExecution();
@@ -795,6 +826,8 @@ void IntegrationTest::testConditionalBranchSkipClearsStaleOutput()
     }
     QObject::disconnect(execHandle);
     QObject::disconnect(finishHandle);
+    QObject::disconnect(skipHandle);
+    QVERIFY2(trueSkipped >= 1, "未选中分支的节点必须发 nodeSkipped（结果面板据此标\"跳过\"）");
 
     const bool trueOutputAfter = (trueB->getOutputData(0) != nullptr);
     const bool falseOutputAfter = (falseB->getOutputData(0) != nullptr);
@@ -1516,6 +1549,355 @@ void IntegrationTest::testRuntimeControlTypeNames()
     QCOMPARE(runtimeControlTypeName(RuntimeControlType::ResultTable), QStringLiteral("结果表格"));
     QCOMPARE(runtimeControlTypeName(RuntimeControlType::IoStatus), QStringLiteral("IO状态"));
     QVERIFY(!runtimeControlTypeFromName(QStringLiteral("不存在"), t));
+}
+
+void IntegrationTest::testThreadSafeParamsConcurrentAccess()
+{
+    // 参数表并发压测：把"界面线程写 / 执行线程读"的锁纪律钉死。
+    // 旧实现是裸 QMap——并发 insert 会重排结构，读到脏值/崩溃在本强度下必现。
+    ThreadSafeParams params;
+    std::atomic<int> badReads{0};
+
+    std::vector<std::thread> threads;
+    for (int w = 0; w < 2; ++w) {
+        threads.emplace_back([&params, w]() {
+            for (int i = 0; i < 8000; ++i) {
+                params.insert(QStringLiteral("k%1").arg((i + w) % 64), i);
+                params[QStringLiteral("counter%1").arg(w)] = i;   // 写代理路径
+            }
+        });
+    }
+    for (int r = 0; r < 3; ++r) {
+        threads.emplace_back([&params, &badReads]() {
+            for (int i = 0; i < 8000; ++i) {
+                const QVariant v = params.value(QStringLiteral("k%1").arg(i % 64));
+                if (v.isValid() && v.toInt() < 0)
+                    ++badReads;   // 写入的值都 >= 0：出现负值即读到损坏数据
+                (void)params.contains(QStringLiteral("counter0"));
+            }
+        });
+    }
+    for (auto &t : threads)
+        t.join();
+
+    QCOMPARE(badReads.load(), 0);
+    QCOMPARE(params.size(), 66);   // 64 个 k* + 2 个 counter*
+    QCOMPARE(params.value(QStringLiteral("counter1")).toInt(), 7999);
+}
+
+void IntegrationTest::testDataObjectConcurrentAccess()
+{
+    // DataObject 内部锁压测：发布后写（执行线程 propagateData 打来源戳等）
+    // 与读（界面线程结果面板/预览）并发——旧实现无锁即为数据竞争。
+    DataObjectPtr obj = QSharedPointer<DataObject>::create();
+    std::thread writer([&obj]() {
+        for (int i = 0; i < 8000; ++i) {
+            MeasureResult r;
+            r.valid = true;
+            r.value = i;
+            obj->setMeasureResult(r);
+            obj->setData(QVariant(i));
+            obj->setSourceInfo(QStringLiteral("src %1").arg(i));
+        }
+    });
+    std::thread reader([&obj]() {
+        for (int i = 0; i < 8000; ++i) {
+            const MeasureResult r = obj->getMeasureResult();
+            (void)r;
+            (void)obj->sourceInfo();
+            (void)obj->getData();
+        }
+    });
+    writer.join();
+    reader.join();
+
+    // 终态一致、无损坏：最后一轮的写入值必须原样可读回
+    QCOMPARE(obj->getData().toInt(), 7999);
+    QCOMPARE(obj->sourceInfo(), QStringLiteral("src 7999"));
+}
+
+void IntegrationTest::testStepModeExitRestoresNormalRun()
+{
+    // 单步模式必须能退出：历史缺陷 m_stepMode 只在 stopExecution 里清 →
+    // 单步用过一次后，之后每次"开始执行/继续"仍在每个节点后暂停（模式粘住）。
+    FlowScene scene;
+    FlowExecutor exec;
+    exec.setFlowName(QStringLiteral("StepModeFlow"));
+    exec.setFlowMode(FlowMode::SoftwareTrigger);
+
+    // 两个互不连接的延时节点：拓扑序即 1→2，单步必在第 1 个节点后暂停
+    NodeBase *d1 = scene.createNode(NodeBase::LOGIC, QPointF(100, 100), QStringLiteral("Delay"));
+    NodeBase *d2 = scene.createNode(NodeBase::LOGIC, QPointF(300, 100), QStringLiteral("Delay"));
+    QVERIFY(d1 != nullptr && d2 != nullptr);
+    d1->setParam(QStringLiteral("delayMs"), 50);
+    d2->setParam(QStringLiteral("delayMs"), 50);
+    exec.setFlowScene(&scene);
+
+    exec.stepExecution();   // 进入单步：第 1 个节点后暂停
+    QTRY_VERIFY_WITH_TIMEOUT(exec.getState() == ExecutionState::Paused, 4000);
+
+    // 以"继续"语义退出单步：剩余节点跑完后必须到 Idle（旧代码会再次 Paused）
+    exec.exitStepMode();
+    exec.resumeExecution();
+    QTRY_VERIFY_WITH_TIMEOUT(exec.getState() == ExecutionState::Idle, 4000);
+
+    exec.stopExecution();
+    exec.wait(3000);
+    exec.setFlowScene(nullptr);
+}
+
+void IntegrationTest::testBusyTriggerNotCountedAndNotFired()
+{
+    // 忙时触发：不得触发、不得虚报计数（历史缺陷：计数照加、流程却没起来）；
+    // 空闲后同一份数据必须正常触发（对照组，证明不是触发链路整体失效）。
+    FlowScene scene;
+    FlowExecutor exec;
+    const QString flowName = QStringLiteral("BusyTriggerFlow");
+    exec.setFlowName(flowName);
+    exec.setFlowMode(FlowMode::SoftwareTrigger);
+
+    NodeBase *delay = scene.createNode(NodeBase::LOGIC, QPointF(100, 100), QStringLiteral("Delay"));
+    QVERIFY(delay != nullptr);
+    delay->setParam(QStringLiteral("delayMs"), 600);   // 留出稳定的"忙"窗口
+    exec.setFlowScene(&scene);
+
+    auto *gtm = GlobalTriggerManager::instance();
+    QVERIFY(gtm->setStringTrigger(QStringLiteral("GO_BUSY"), flowName));
+    gtm->registerFlow(flowName, &scene, &exec);
+
+    auto triggerCount = [gtm]() {
+        for (const auto &e : gtm->allTriggers()) {
+            if (e.triggerSource == QStringLiteral("GO_BUSY"))
+                return e.triggerCount;
+        }
+        return -1;
+    };
+    QCOMPARE(triggerCount(), 0);
+
+    QSignalSpy firedSpy(gtm, &GlobalTriggerManager::triggerFired);
+
+    exec.startExecution();
+    QTRY_VERIFY_WITH_TIMEOUT(exec.getState() == ExecutionState::Running, 3000);
+
+    gtm->onDataReceived(QStringLiteral("TEST_DEV"), QByteArray("GO_BUSY"));   // 忙时触发
+    QCOMPARE(firedSpy.count(), 0);      // 不得触发
+    QCOMPARE(triggerCount(), 0);        // 也不得虚报计数
+
+    // 空闲后同一份数据：正常触发、计数 +1
+    QTRY_VERIFY_WITH_TIMEOUT(exec.getState() != ExecutionState::Running, 5000);
+    gtm->onDataReceived(QStringLiteral("TEST_DEV"), QByteArray("GO_BUSY"));
+    QCOMPARE(firedSpy.count(), 1);
+    QCOMPARE(triggerCount(), 1);
+
+    exec.stopExecution();
+    exec.wait(3000);
+    gtm->removeStringTrigger(QStringLiteral("GO_BUSY"));
+    gtm->unregisterFlow(flowName);
+    exec.setFlowScene(nullptr);
+}
+
+void IntegrationTest::testBusyOtherFlowDoesNotBlockTrigger()
+{
+    // 需求语义：只有"目标流程自己忙"才丢弃触发；**其他流程忙不得影响**本流程被触发。
+    // 实现口径：busy 判定按目标流程的执行器查（每流程独立执行器），不查任何全局状态。
+    FlowScene sceneTarget;
+    FlowExecutor execTarget;
+    const QString targetFlow = QStringLiteral("IsolationTargetFlow");
+    execTarget.setFlowName(targetFlow);
+    execTarget.setFlowMode(FlowMode::SoftwareTrigger);
+    NodeBase *t = sceneTarget.createNode(NodeBase::LOGIC, QPointF(100, 100), QStringLiteral("Delay"));
+    QVERIFY(t != nullptr);
+    t->setParam(QStringLiteral("delayMs"), 0);   // 目标流程：秒完成
+    execTarget.setFlowScene(&sceneTarget);
+
+    FlowScene sceneOther;
+    FlowExecutor execOther;
+    const QString otherFlow = QStringLiteral("IsolationOtherFlow");
+    execOther.setFlowName(otherFlow);
+    execOther.setFlowMode(FlowMode::SoftwareTrigger);
+    NodeBase *o = sceneOther.createNode(NodeBase::LOGIC, QPointF(100, 100), QStringLiteral("Delay"));
+    QVERIFY(o != nullptr);
+    o->setParam(QStringLiteral("delayMs"), 600);   // 其他流程：长时间忙
+    execOther.setFlowScene(&sceneOther);
+
+    auto *gtm = GlobalTriggerManager::instance();
+    QVERIFY(gtm->setStringTrigger(QStringLiteral("GO_TGT"), targetFlow));
+    gtm->registerFlow(targetFlow, &sceneTarget, &execTarget);
+    gtm->registerFlow(otherFlow, &sceneOther, &execOther);
+
+    QSignalSpy firedSpy(gtm, &GlobalTriggerManager::triggerFired);
+    QSignalSpy targetStartedSpy(&execTarget, &FlowExecutor::executionStarted);
+
+    // 先让"其他流程"处于忙碌
+    execOther.startExecution();
+    QTRY_VERIFY_WITH_TIMEOUT(execOther.getState() == ExecutionState::Running, 3000);
+
+    // 触发目标流程：其他流程忙不影响它——必须触发、必须真的跑起来
+    gtm->onDataReceived(QStringLiteral("TEST_DEV"), QByteArray("GO_TGT"));
+    QCOMPARE(firedSpy.count(), 1);
+    QTRY_VERIFY_WITH_TIMEOUT(targetStartedSpy.count() >= 1, 3000);
+
+    int targetCount = -1;
+    for (const auto &e : gtm->allTriggers()) {
+        if (e.triggerSource == QStringLiteral("GO_TGT"))
+            targetCount = e.triggerCount;
+    }
+    QCOMPARE(targetCount, 1);   // 目标流程空闲：计数 +1（其他流程忙不参与判定）
+
+    execOther.stopExecution();
+    execOther.wait(3000);
+    execTarget.stopExecution();
+    execTarget.wait(3000);
+    gtm->removeStringTrigger(QStringLiteral("GO_TGT"));
+    gtm->unregisterFlow(targetFlow);
+    gtm->unregisterFlow(otherFlow);
+    execTarget.setFlowScene(nullptr);
+    execOther.setFlowScene(nullptr);
+}
+
+void IntegrationTest::testScriptInterpreterResolvesToAbsolutePath()
+{
+    // 沙箱洞回归：解释器必须解析成**绝对路径**（或返回空串走 fail-closed），
+    // 绝不能返回裸名 "python"——Windows 的 CreateProcess 搜索序会先看应用目录/当前目录，
+    // 攻击者放一个同名 exe 即可顶替"确认过的可信脚本"实际执行的解释器。
+    auto &policy = ScriptSecurityPolicy::instance();
+    const QString py = policy.interpreterPath(QStringLiteral("Python"));
+    QVERIFY2(!py.isEmpty(),
+             "PATH/程序目录中应有 Python（现有脚本执行用例依赖它可运行）");
+    QVERIFY2(QFileInfo(py).isAbsolute(),
+             qPrintable(QStringLiteral("解释器必须是绝对路径，实际返回: %1").arg(py)));
+    QVERIFY2(QFileInfo::exists(py),
+             qPrintable(QStringLiteral("解析出的解释器不存在: %1").arg(py)));
+}
+
+void IntegrationTest::testImageDisplayResolvePriority()
+{
+    // Step 2 回归：显示决策优先级 = 下拉框选择 > 画布选中 > 兜底；
+    // 且"显式显示源"按场景独立记忆（切换流程互不污染）。
+    FlowScene sceneA;
+    FlowScene sceneB;
+    NodeBase *n1 = sceneA.createNode(NodeBase::LOGIC, QPointF(100, 200), QStringLiteral("Formula"));
+    NodeBase *n2 = sceneA.createNode(NodeBase::LOGIC, QPointF(300, 200), QStringLiteral("Delay"));
+    QVERIFY2(n1 && n2, "无法创建测试节点");
+
+    // 无画布实例：只验证决策逻辑（provider 注入替代 MainWindow 的场景/选中节点）
+    ImageDisplayController ctrl(nullptr, nullptr, nullptr);
+    FlowScene *currentScene = &sceneA;
+    NodeBase *canvasSelected = nullptr;
+    ctrl.setSceneProvider([&currentScene]() { return currentScene; });
+    ctrl.setCanvasSelectionProvider([&canvasSelected]() { return canvasSelected; });
+
+    // ① 全空 → 兜底
+    QCOMPARE(ctrl.resolveDisplayNode(n1), n1);
+
+    // ② 画布选中 → 覆盖兜底
+    canvasSelected = n2;
+    QCOMPARE(ctrl.resolveDisplayNode(n1), n2);
+
+    // ③ 下拉框选择 → 最高优先级（覆盖画布选中）
+    ctrl.setSelectedOutputNode(&sceneA, n1);
+    QCOMPARE(ctrl.resolveDisplayNode(nullptr), n1);
+    QCOMPARE(ctrl.selectedOutputNode(&sceneA), n1);
+
+    // ④ 切到场景 B：A 的显式选择不污染 B（回落到画布选中）
+    currentScene = &sceneB;
+    QCOMPARE(ctrl.resolveDisplayNode(nullptr), n2);
+    QVERIFY(ctrl.selectedOutputNode(&sceneB) == nullptr);
+
+    // ⑤ 清空选择（对应「新建方案」）→ 回到画布选中/兜底
+    ctrl.clearSelection();
+    QVERIFY(ctrl.selectedOutputNode(&sceneA) == nullptr);
+    QCOMPARE(ctrl.resolveDisplayNode(nullptr), n2);
+    canvasSelected = nullptr;
+    QCOMPARE(ctrl.resolveDisplayNode(n1), n1);
+}
+
+void IntegrationTest::testExecutionStatusController()
+{
+    // Step 3 回归：执行状态机（状态文本/触发计数/耗时）与按钮态规则
+    // （软触发才可开始；运行中可停止；连续模式停止态下「开始」也不可用）。
+    QStatusBar bar;
+    ExecutionStatusController ctrl(&bar);
+
+    // 无控件/无执行器：只跑状态机，不得崩溃
+    ctrl.updateButtons(ExecutionState::Running);
+    ctrl.onStarted();
+    QCOMPARE(ctrl.stateText(), QStringLiteral("状态: 运行中"));
+    ctrl.onFinished();   // 无执行器 → 按非连续处理
+    QCOMPARE(ctrl.triggerCount(), 1);
+    QVERIFY(ctrl.lastRunMs() >= 0);
+    QCOMPARE(ctrl.stateText(), QStringLiteral("状态: 空闲"));
+    ctrl.onError(QStringLiteral("boom"));
+    QCOMPARE(ctrl.stateText(), QStringLiteral("状态: 错误"));
+    ctrl.onStopped();
+    QCOMPARE(ctrl.stateText(), QStringLiteral("状态: 已停止"));
+
+    // 按钮态：注入真实控件 + 执行器
+    QAction startAction;
+    QAction stopAction;
+    QToolButton singleShot;
+    FlowExecutor ex;
+    ctrl.setControls(&startAction, &stopAction, &singleShot);
+    ctrl.setExecutorProvider([&ex]() { return &ex; });
+
+    ex.setFlowMode(FlowMode::SoftwareTrigger);
+    ctrl.updateButtons(ExecutionState::Stopped);
+    QVERIFY(startAction.isEnabled() && singleShot.isEnabled() && !stopAction.isEnabled());
+
+    ctrl.updateButtons(ExecutionState::Running);
+    QVERIFY(!startAction.isEnabled() && !singleShot.isEnabled() && stopAction.isEnabled());
+
+    ex.setFlowMode(FlowMode::Continuous);
+    ctrl.updateButtons(ExecutionState::Stopped);
+    QVERIFY(!startAction.isEnabled() && !singleShot.isEnabled());
+    QVERIFY(!stopAction.isEnabled());
+}
+
+void IntegrationTest::testRecentFilesMenu()
+{
+    // Step 4 回归：最近打开列表 = 去重置顶 + 上限 8 条 + 清空 + 跨实例往返。
+    // 注入临时 ini，避免污染注册表（与原实现同键 "recentFiles" 的契约不变）。
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString ini = dir.filePath(QStringLiteral("recent.ini"));
+
+    QMenu menu;
+    QString opened;
+    RecentFilesMenu recent(&menu, [&opened](const QString &p) { opened = p; }, ini, nullptr);
+    QVERIFY(recent.files().isEmpty());
+
+    for (int i = 0; i < 10; ++i)
+        recent.add(QStringLiteral("C:/proj/p%1.vfp").arg(i));
+
+    QStringList files = recent.files();
+    QCOMPARE(files.size(), RecentFilesMenu::MaxEntries);          // 截断到 8 条
+    QCOMPARE(files.first(), QStringLiteral("C:/proj/p9.vfp"));    // 最新置顶
+    QVERIFY(!files.contains(QStringLiteral("C:/proj/p0.vfp")));   // 最旧被挤出
+
+    // 重复加入 → 去重并置顶，总数不增长
+    recent.add(QStringLiteral("C:/proj/p5.vfp"));
+    files = recent.files();
+    QCOMPARE(files.size(), RecentFilesMenu::MaxEntries);
+    QCOMPARE(files.first(), QStringLiteral("C:/proj/p5.vfp"));
+
+    // 菜单第一条即最新记录，触发后回调收到该路径（MainWindow 用它打开方案）
+    QVERIFY(recent.menu() != nullptr);
+    QVERIFY(!recent.menu()->actions().isEmpty());
+    recent.menu()->actions().first()->trigger();
+    QCOMPARE(opened, QStringLiteral("C:/proj/p5.vfp"));
+
+    // 清空后菜单回到"（无最近记录）"占位（禁用）
+    recent.clear();
+    QVERIFY(recent.files().isEmpty());
+    QVERIFY(!recent.menu()->actions().isEmpty());
+    QVERIFY(!recent.menu()->actions().first()->isEnabled());
+
+    // 跨实例往返（同一 ini）
+    RecentFilesMenu recent2(&menu, [](const QString &) {}, ini, nullptr);
+    QVERIFY(recent2.files().isEmpty());
+    recent2.add(QStringLiteral("C:/proj/x.vfp"));
+    RecentFilesMenu recent3(&menu, [](const QString &) {}, ini, nullptr);
+    QCOMPARE(recent3.files().first(), QStringLiteral("C:/proj/x.vfp"));
 }
 
 QTEST_MAIN(IntegrationTest)

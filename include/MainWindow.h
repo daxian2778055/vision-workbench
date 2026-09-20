@@ -27,11 +27,11 @@ class MainWindow;
 }
 
 class FlowScene;
-class FlowTabManager;
-class ImageDisplayController;
-class NodeExecutionController;
-class DockLayoutManager;
 class ProjectManager;
+class AuxPanelManager;
+class ImageDisplayController;
+class ExecutionStatusController;
+class RecentFilesMenu;
 class HalconWindow;
 class RuntimeInterfaceView;
 class PerformancePanel;
@@ -66,7 +66,6 @@ private slots:
     /// 打开「结果表」面板（视图菜单）
     void onOpenResultTable();
     void onNewProject();
-    void onOpenProject();
     void onSaveProject();
     void onLoadProject();
     void onAddFlowTab();
@@ -114,7 +113,6 @@ private:
     void setupSystemMenu();       // 设置系统菜单
     void updateLanguage();     // 更新界面语言
     void retranslateUi();      // 重新翻译UI
-    void updateExecutionButtons(ExecutionState state);
     void showNodeParameters(NodeBase *node);
     void openModuleEditor(NodeBase *node);
     void executeNodeOnce(NodeBase *node);
@@ -129,13 +127,11 @@ private:
     void saveAuxPanelVisibility() const;
     /// 恢复上次退出时打开的辅助面板（懒创建，仅恢复显隐不恢复几何）
     void restoreAuxPanelVisibility();
-    QWidget *createParameterWidget(const QString &name, const QVariant &value);
-    void updateNodeParameters(NodeBase *node);
     void setupFlowSceneDragDrop(FlowScene *scene);
     void hookFlowScene(FlowScene *scene);
     bool eventFilter(QObject *obj, QEvent *event) override;
     QList<NodeBase*> getUpstreamNodes(NodeBase *node, FlowScene *scene); // 获取上游节点（数据流正向）
-    /// 决定当前应该显示哪个算子的图像：下拉框选择 > 画布选中 > 兜底
+    /// 转发 ImageDisplayController::resolveDisplayNode（保持调用点稳定）
     NodeBase *resolveDisplayNode(NodeBase *fallbackNode = nullptr) const;
     /// 根据节点类型生成默认图标
     QIcon generateNodeIcon(NodeBase::NodeType category) const;
@@ -153,16 +149,12 @@ private:
     QStringList allNodeFullNames() const;
     /// 载入运行界面布局并刷新运行视图
     void loadRuntimeInterfaceLayout();
-    /// 收集节点输出的测量结果 → 图像叠加图元（供 HalconWindow 绘制）
+    /// 转发 ImageDisplayController::collectOverlayFromNode（保持调用点稳定）
     QVector<OverlayShape> collectOverlayFromNode(NodeBase *node) const;
     /// 进入画布 ROI 编辑模式（测量节点取点）
     void startRoiPick(NodeBase *node);
     /// ROI 绘制完成：写回节点参数
     void handleRoiEdited(const RoiShape &shape);
-    /// 记录最近打开/保存的方案路径并刷新菜单
-    void addRecentFile(const QString &filePath);
-    /// 重建"最近打开"菜单
-    void updateRecentMenu();
     /// 加载指定方案文件（打开/最近文件共用）
     void loadProjectFile(const QString &fileName);
     /// 打开使用手册查看对话框（F1 / 帮助菜单）
@@ -173,15 +165,12 @@ protected:
     void showEvent(QShowEvent *event) override;
 
     Ui::MainWindow *ui;
-    // Controller delegates (Phase 1 refactoring)
-    FlowTabManager *m_flowTabManager;
-    ImageDisplayController *m_imageDisplayCtrl;
-    NodeExecutionController *m_executionCtrl;
-    DockLayoutManager *m_dockLayoutMgr;
 
     ProjectManager *m_projectManager;
     QList<FlowScene *> m_flowScenes;
     HalconWindow *m_imageView;
+    /// 图像显示路由与画布交互（显示决策/叠加/ROI 取点；逻辑见 ImageDisplayController）
+    ImageDisplayController *m_imageDisplay = nullptr;
     FlowExecutor *m_executor;
     /// 多流程并发：每个流程场景独立执行器（m_executor 指向当前激活流程的执行器）
     QHash<FlowScene *, FlowExecutor *> m_flowExecutors;
@@ -189,12 +178,10 @@ protected:
     QToolButton *m_singleShotBtn;
     QToolButton *m_stepBtn;   /// 单步执行按钮 // 单次执行按钮
     NodeBase *m_selectedNode;
-    /// 画布 ROI 取点中的目标节点（nullptr = 未在取点）
-    NodeBase *m_roiPickNode = nullptr;
-    /// 测量节点 ROI 按钮信号连接（防重复连接）
+    /// 测量节点 ROI 按钮信号连接（防重复连接；取点状态在 ImageDisplayController）
     QMetaObject::Connection m_roiPickConn;
-    /// 最近打开方案菜单
-    QMenu *m_recentMenu = nullptr; // 当前选中的节点
+    /// 最近打开方案菜单（记录/去重/截断/重建见 RecentFilesMenu）
+    RecentFilesMenu *m_recentFiles = nullptr;
     QLabel *m_imageSourceLabel; // 图像来源标签
     
     // 自定义运行界面（对齐 VisionMaster 4.4 运行界面）
@@ -210,9 +197,6 @@ protected:
     QMap<QString, QString> m_translationsCN;
     QMap<QString, QString> m_translationsEN;
     
-    // 保存用户选择的输出算子
-    QMap<FlowScene *, NodeBase *> m_selectedOutputNodes;
-    
     // 保存每个流程各自的运行模式
     QMap<FlowScene *, FlowMode> m_flowModes;
     
@@ -220,15 +204,13 @@ protected:
     QMap<NodeBase *, QMap<QString, QVariant>> m_nodeParameters;
 
     // ---- 状态栏运行信息 ----
-    QLabel *m_statusStateLabel = nullptr;   // 运行状态
-    QLabel *m_statusTimeLabel = nullptr;    // 本次耗时
-    QLabel *m_statusTriggerLabel = nullptr; // 触发计数
-    QElapsedTimer m_runTimer;
-    qint64 m_lastRunMs = 0;
-    quint64 m_triggerCount = 0;
+    /// 执行状态显示与按钮态（状态/耗时/触发计数 + 开始停止按钮；见 ExecutionStatusController）
+    ExecutionStatusController *m_execStatus = nullptr;
     /// 「每轮结束自动上报发送事件」的合并标志：连续模式下 executionFinished 高频发出，
     /// 用它把同一 UI 事件循环周期内的多轮合并成一次上报（否则会淹没 UI 线程与设备）。
     bool m_sendEventFirePending = false;
+    /// 每轮结束后自动上报已启用的发送事件（含 {global.x}/{模块号.参数名} 数据注入）
+    void fireSendEventsForRound();
 
     /// 同步执行/重算的忙碌反馈 + 防重入（executeUpTo/executeFrom/executeNode 同步占用 UI 线程）：
     /// 先亮等待光标 + 状态栏提示并强制刷新，让用户看到"正在执行"而不是"界面卡死"；
@@ -240,17 +222,10 @@ protected:
     /// 主功能窗口一律非模态——打开任一窗口都不影响主界面及其它窗口的操作
     /// （历史行为是 exec() 模态，打开通讯管理后主界面完全不可用）。
     void showAuxDialog(const QString &key, const std::function<QDialog *()> &create);
-    QHash<QString, QDialog *> m_auxDialogs;
 
     // ---- 新增组件 ----
-    PerformancePanel *m_performancePanel = nullptr;      // 性能分析面板
-    QDockWidget *m_performanceDock = nullptr;
-    OutputDataViewer *m_outputDataViewer = nullptr;      // 输出数据查看器
-    QDockWidget *m_outputViewerDock = nullptr;
-    ResultTablePanel *m_resultTablePanel = nullptr;      // 结果数据表（整条流程的全部数值结果）
-    QDockWidget *m_resultTableDock = nullptr;
-    VariablePanel *m_variablePanel = nullptr;            // 变量面板（引用表达式，供表达式联动）
-    QDockWidget *m_variableDock = nullptr;
+    /// 辅助面板与辅助窗口（结果表/变量/性能/输出数据四类懒创建面板 + 非模态对话框统一入口）
+    AuxPanelManager *m_auxPanels = nullptr;
     /// 最近一次执行各模块的输出变量（UI 线程缓存，供「变量引用」菜单构造引用列表）
     QHash<int, QVariantMap> m_lastModuleVars;
     NodeSearchWidget *m_nodeSearchWidget = nullptr;      // 算子搜索控件

@@ -1,7 +1,10 @@
 #include "MainWindow.h"
 #include "ResultTablePanel.h"
 #include "VariablePanel.h"
-#include "PanelVisibilityStore.h"
+#include "AuxPanelManager.h"
+#include "ImageDisplayController.h"
+#include "ExecutionStatusController.h"
+#include "RecentFilesMenu.h"
 #include "ui_MainWindow.h"
 #include "FlowScene.h"
 #include "NodeBase.h"
@@ -18,10 +21,6 @@
 #include "ImageReadNode.h"
 #include "DataObject.h"
 #include "FlowExecutor.h"
-#include "FlowTabManager.h"
-#include "ImageDisplayController.h"
-#include "NodeExecutionController.h"
-#include "DockLayoutManager.h"
 #include "Port.h"
 #include "Connection.h"
 #include "NodeGraphicsItem.h"
@@ -128,13 +127,9 @@ MainWindow::MainWindow(QWidget *parent) :
 
         // === Dock widgets 布局设置 ===
         ui->flowTabs->setDocumentMode(true);
+        // 辅助面板管理器：必须在 setupDockWidgets 之前创建（其末尾按上次显隐恢复面板）
+        m_auxPanels = new AuxPanelManager(this, this);
         setupDockWidgets();
-
-        // === Initialize Controllers ===
-        m_flowTabManager = new FlowTabManager(ui->flowTabs, this);
-        m_imageDisplayCtrl = nullptr; // set after m_imageView creation
-        m_executionCtrl = nullptr; // set after m_executor + mode combo
-        m_dockLayoutMgr = new DockLayoutManager(this, this);
 
         VFP_DEBUG << "setupUi completed";
         
@@ -168,6 +163,15 @@ MainWindow::MainWindow(QWidget *parent) :
             m_imageSourceLabel->setStyleSheet(VisionWorkbenchStyle::imageSourceStripStylesheet());
             m_imageSourceLabel->setFixedHeight(22);
             layout->addWidget(m_imageSourceLabel);
+
+            // 图像显示路由与画布交互：显示决策（下拉框 > 画布选中 > 兜底）、叠加图元收集、
+            // ROI 取点状态集中到这里；场景与画布选中通过 provider 注入，控制器不反向依赖主窗口。
+            m_imageDisplay = new ImageDisplayController(m_imageView, m_imageSourceLabel, this);
+            m_imageDisplay->setSceneProvider([this]() -> FlowScene * {
+                const int idx = ui->flowTabs->currentIndex();
+                return (idx >= 0 && idx < m_flowScenes.size()) ? m_flowScenes[idx] : nullptr;
+            });
+            m_imageDisplay->setCanvasSelectionProvider([this]() { return m_selectedNode; });
 
             // ---- 图像显示工具栏：适应 / 100% / 放大 / 缩小 / 十字线 ----
             {
@@ -243,8 +247,8 @@ MainWindow::MainWindow(QWidget *parent) :
         }
         // 启动恢复阶段可能已按上次的显隐把性能面板打开（那时 m_executor 还不存在），
         // 这里补一次绑定，否则面板会一直是空表。
-        if (m_performancePanel) {
-            m_performancePanel->bindExecutor(m_executor);
+        if (auto *pp = m_auxPanels->performancePanel()) {
+            pp->bindExecutor(m_executor);
         }
 
         VFP_DEBUG << "FlowExecutor created";
@@ -413,21 +417,10 @@ MainWindow::MainWindow(QWidget *parent) :
         }
 
         // ---- 状态栏运行信息：运行状态 / 本次耗时 / 触发计数 ----
-        {
-            const QString statusStyle =
-                "QLabel {"
-                "  color: #c8c8c8; font-size: 12px;"
-                "  padding: 2px 10px; border-right: 1px solid #3a3a4a;"
-                "}";
-            auto makeStatusLabel = [&](const QString &text) {
-                auto *lbl = new QLabel(text, this);
-                lbl->setStyleSheet(statusStyle);
-                ui->statusBar->addPermanentWidget(lbl);
-                return lbl;
-            };
-            m_statusStateLabel = makeStatusLabel(QStringLiteral("状态: 空闲"));
-            m_statusTimeLabel = makeStatusLabel(QStringLiteral("耗时: --"));
-            m_statusTriggerLabel = makeStatusLabel(QStringLiteral("触发: 0"));        }
+        // 状态机、三项常驻标签与「开始/停止/单次执行」按钮态集中到 ExecutionStatusController
+        m_execStatus = new ExecutionStatusController(ui->statusBar, this);
+        m_execStatus->setControls(ui->actionStartExecution, ui->actionStopExecution, m_singleShotBtn);
+        m_execStatus->setExecutorProvider([this]() { return m_executor; });
 
         // 连接运行状态信号 → 状态栏（状态/耗时/触发计数）
         connect(m_executor, &FlowExecutor::executionStarted, this, &MainWindow::onExecutionStarted);
@@ -435,20 +428,30 @@ MainWindow::MainWindow(QWidget *parent) :
         connect(m_executor, &FlowExecutor::executionFinished, this, &MainWindow::onExecutionFinished);
         connect(m_executor, &FlowExecutor::executionError, this, &MainWindow::onExecutionError);
 
+        // 跳过三态：未激活分支 / 循环体调度的节点 → 结果面板标"跳过"（灰色，不等同失败）
+        connect(m_executor, &FlowExecutor::nodeSkipped, this,
+                [this](NodeBase *node, const QString &reason) {
+            Q_UNUSED(reason)
+            auto *rt = m_auxPanels->resultTablePanel();
+            if (!node || !rt)
+                return;
+            rt->setModuleSkipped(node->moduleId(), node->fullName());
+        });
+
         // 结果数据表 / 变量面板：节点执行后把该模块的输出推到面板（UI 线程排队接收）
         connect(m_executor, &FlowExecutor::nodeOutputsUpdated, this,
                 [this](NodeBase *node, bool ok, qint64 elapsedMs, const QVariantMap &vars) {
             if (!node)
                 return;
-            if (m_resultTablePanel) {
-                m_resultTablePanel->setModuleResult(node->moduleId(), node->fullName(), ok,
-                                                    elapsedMs, vars);
+            if (auto *rt = m_auxPanels->resultTablePanel()) {
+                rt->setModuleResult(node->moduleId(), node->fullName(), ok,
+                                    elapsedMs, vars);
             }
             // 供「变量引用」菜单构造引用列表（UI 线程缓存，不读执行线程内部状态）
             m_lastModuleVars.insert(node->moduleId(), vars);
             // 变量面板只列可引用的值：失败节点本轮没有可引用输出
-            if (m_variablePanel && ok)
-                m_variablePanel->setModuleVars(node->moduleId(), node->fullName(), vars);
+            if (auto *vp = m_auxPanels->variablePanel(); vp && ok)
+                vp->setModuleVars(node->moduleId(), node->fullName(), vars);
         });
 
         // 「视图 → 变量 / 性能统计」：动作在代码中创建（避免改动 .ui）；打开逻辑统一走
@@ -484,13 +487,8 @@ MainWindow::MainWindow(QWidget *parent) :
                 VFP_DEBUG << "用户已选择显示:" << target->fullName() << "，imageReady不覆盖";
                 return;
             }
-            // 兜底：自动显示最后一个节点的图像
-            if (m_imageView) {
-                m_imageView->setImage(image, node->fullName());
-                m_imageView->setOverlay(collectOverlayFromNode(node));                if (m_imageSourceLabel) {
-                    m_imageSourceLabel->setText(QString("图像来源: %1").arg(node->fullName()));
-                }
-            }
+            // 兜底：自动显示最后一个节点的图像（信号负载的图像 + 该节点的叠加图元）
+            m_imageDisplay->showImage(image, node->fullName(), node);
         });
 
         // 任意节点图像输出 → 运行界面按节点名推送（绑定中间节点图像控件可实时显示）
@@ -720,19 +718,26 @@ MainWindow::MainWindow(QWidget *parent) :
 
 MainWindow::~MainWindow()
 {
-    // 停止并释放所有流程执行器（多流程并发）
+    // 停止并释放**全部**流程执行器（含当前激活的 m_executor）。
+    // 顺序要求：必须在 qDeleteAll(m_flowScenes) 之前完成——历史缺陷：m_executor
+    // 在场景删除之后才被 delete，且非激活执行器只等 1 秒就删；等待超时后
+    // QThread 析构会 terminate() 强杀线程，而紧接的场景删除又会让仍在执行的
+    // 线程访问已释放节点（use-after-free + 强杀线程叠加）。
     for (FlowExecutor *ex : qAsConst(m_flowExecutors)) {
-        if (ex && ex != m_executor) {
-            ex->stopExecution();
-            ex->wait(1000);
-            delete ex;
+        if (!ex)
+            continue;
+        ex->stopExecution();
+        if (ex->isRunning() && !ex->wait(8000)) {
+            VFP_DEBUG << "FlowExecutor 未能在 8s 内退出（可能在长耗时算子中），继续关闭";
         }
+        delete ex;
     }
     m_flowExecutors.clear();
+    m_executor = nullptr;   // 已随列表删除，置空避免悬垂
     delete ui;
     qDeleteAll(m_flowScenes);
+    m_flowScenes.clear();
     delete m_imageView;
-    delete m_executor;
 }
 
 // 多流程并发：获取场景专属执行器（不存在则创建并连接轻量信号）
@@ -882,10 +887,11 @@ void MainWindow::initActions()
     connect(ui->actionStartExecution, &QAction::triggered, this, &MainWindow::onStartExecution);
     connect(ui->actionStopExecution, &QAction::triggered, this, &MainWindow::onStopExecution);
 
-    // 最近打开菜单（文件菜单下）
-    m_recentMenu = new QMenu(QStringLiteral("最近打开"), ui->menuFile);
-    ui->menuFile->addMenu(m_recentMenu);
-    updateRecentMenu();
+    // 最近打开菜单（文件菜单下）：记录/去重/截断/清空全部由 RecentFilesMenu 负责，
+    // 点击某条记录回调 loadProjectFile（与原实现一致）
+    m_recentFiles = new RecentFilesMenu(ui->menuFile,
+                                        [this](const QString &path) { loadProjectFile(path); },
+                                        QString(), this);
 
     // 帮助菜单（软件内查看操作手册）
     {
@@ -926,8 +932,8 @@ void MainWindow::hookFlowScene(FlowScene *scene)
     });
     connect(scene, &FlowScene::nodeOutputDataRequested, this, [this](NodeBase *node) {
         onOpenOutputViewer();
-        if (m_outputDataViewer)
-            m_outputDataViewer->setNode(node);
+        if (auto *ov = m_auxPanels->outputDataViewer())
+            ov->setNode(node);
     });
     // 右键「重算此算子及下游」：调试时只重跑这一段，不必整图重跑
     connect(scene, &FlowScene::recomputeFromRequested, this, [this](NodeBase *node) {
@@ -1054,19 +1060,7 @@ void MainWindow::onNodeSelected(NodeBase *node)
             // 选中算子即显示它的中间结果图（对标 VisionMaster 的操作性：点哪个模块就看哪个
             // 模块的图，而不用先去执行它）。数据直接取自节点输出端口，无需改执行引擎；
             // 尚未执行、没有可用图像时保持当前画面不动，避免把已有画面清空。
-            if (m_imageView) {
-                if (auto outputData = node->getOutputData(0)) {
-                    HImage image = outputData->getHImage();
-                    if (image.IsInitialized()) {
-                        m_imageView->setImage(image, node->fullName());
-                        m_imageView->setOverlay(collectOverlayFromNode(node));
-                        if (m_imageSourceLabel) {
-                            m_imageSourceLabel->setText(
-                                QStringLiteral("图像来源: %1").arg(node->fullName()));
-                        }
-                    }
-                }
-            }
+            m_imageDisplay->displayNodeOutput(node);
 
             // 测量节点画布取点：连接 ROI 按钮信号（断开旧连接防重复）
             if (m_roiPickConn) {
@@ -1092,18 +1086,15 @@ void MainWindow::onNodeSelected(NodeBase *node)
             // 显示图像前检查优先级规则：下拉框选择 > 画布选中
             if (m_imageView) {
                 QTimer::singleShot(100, this, [=]() {
-                    // resolveDisplayNode(nullptr) 只检查下拉框选择，不回退到 m_selectedNode
+                    // resolveDisplayNode(node) 只检查下拉框选择，不回退到 m_selectedNode
                     // 因为此处我们本身就是因画布选中触发的，如果下拉框无选择才显示本节点
                     NodeBase *target = resolveDisplayNode(node);
-                    QSharedPointer<DataObject> outputData = target->getOutputData(0);
-                    if (outputData) {
-                        HImage image = outputData->getHImage();
-                        if (image.IsInitialized()) {
-                            m_imageView->setImage(image, target->fullName());
-                            if (m_imageSourceLabel) {
-                                m_imageSourceLabel->setText(QString("图像来源: %1").arg(target->fullName()));
-                            }
-                        }
+                    if (!target)
+                        return;
+                    if (auto outputData = target->getOutputData(0)) {
+                        const HImage image = outputData->getHImage();
+                        // 与原实现一致：此路径只换图像与来源标签，不动叠加图元
+                        m_imageDisplay->showImage(image, target->fullName());
                     }
                 });
             }
@@ -1193,7 +1184,7 @@ void MainWindow::showNodeParameters(NodeBase *node)
     if (currentIndex >= 0 && currentIndex < m_flowScenes.size()) {
         FlowScene *scene = m_flowScenes[currentIndex];
         if (scene) {
-            savedSelectedNode = m_selectedOutputNodes.value(scene, nullptr);
+            savedSelectedNode = m_imageDisplay->selectedOutputNode(scene);
             for (NodeBase *up : getUpstreamNodes(node, scene)) {
                 if (up && up != node)
                     combo->addItem(up->fullName(), QVariant::fromValue(up));
@@ -1215,14 +1206,11 @@ void MainWindow::showNodeParameters(NodeBase *node)
             return;
         const int idx = ui->flowTabs->currentIndex();
         if (idx >= 0 && idx < m_flowScenes.size())
-            m_selectedOutputNodes[m_flowScenes[idx]] = selected;
+            m_imageDisplay->setSelectedOutputNode(m_flowScenes[idx], selected);
         if (auto outputData = selected->getOutputData(0)) {
-            HImage image = outputData->getHImage();
-            if (image.IsInitialized() && m_imageView) {
-                m_imageView->setImage(image, selected->fullName());
-                if (m_imageSourceLabel)
-                    m_imageSourceLabel->setText(QStringLiteral("图像来源: %1").arg(selected->fullName()));
-            }
+            const HImage image = outputData->getHImage();
+            // 与原实现一致：此路径只换图像与来源标签，不动叠加图元
+            m_imageDisplay->showImage(image, selected->fullName());
         }
     });
     box->addWidget(combo);
@@ -1283,6 +1271,8 @@ QStringList MainWindow::buildVariableReferences() const
 
 void MainWindow::openAuxPanel(const QString &key)
 {
+    // 创建/显示/刷新统一委托 AuxPanelManager；本函数保留"面板打开后的窗口级副作用"
+    // （日志提示等），并作为菜单/启动恢复的统一入口。
     if (key == QStringLiteral("resultTable")) {
         onOpenResultTable();
         return;
@@ -1296,21 +1286,7 @@ void MainWindow::openAuxPanel(const QString &key)
         return;
     }
     if (key == QStringLiteral("variable")) {
-        if (!m_variablePanel) {
-            m_variablePanel = new VariablePanel(this);
-            m_variableDock = new QDockWidget(QStringLiteral("变量"), this);
-            m_variableDock->setObjectName(QStringLiteral("variableDock"));
-            m_variableDock->setWidget(m_variablePanel);
-            m_variableDock->setFeatures(QDockWidget::DockWidgetClosable
-                                        | QDockWidget::DockWidgetMovable);
-            m_variableDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-            m_variableDock->setMinimumWidth(320);
-            addDockWidget(Qt::RightDockWidgetArea, m_variableDock);
-        }
-        m_variableDock->show();
-        m_variableDock->raise();
-        // 全局变量随时可能被运行时改写（计数器等），打开时重新读一遍
-        m_variablePanel->refreshGlobalVariables();
+        m_auxPanels->open(key);
         logMessage(QStringLiteral("变量面板已打开：双击某行即可复制引用表达式"));
         return;
     }
@@ -1318,28 +1294,15 @@ void MainWindow::openAuxPanel(const QString &key)
 
 void MainWindow::saveAuxPanelVisibility() const
 {
-    // 键名与读写规则集中在 PanelVisibilityStore（该类可单测；MainWindow 无法在 CI 中实例化）
-    PanelVisibilityStore store;
-    store.setVisible(QStringLiteral("resultTable"),
-                     m_resultTableDock && m_resultTableDock->isVisible());
-    store.setVisible(QStringLiteral("variable"),
-                     m_variableDock && m_variableDock->isVisible());
-    store.setVisible(QStringLiteral("performance"),
-                     m_performanceDock && m_performanceDock->isVisible());
-    store.setVisible(QStringLiteral("outputData"),
-                     m_outputViewerDock && m_outputViewerDock->isVisible());
+    // 显隐记录（QSettings 键名契约）由 AuxPanelManager 经 PanelVisibilityStore 完成
+    m_auxPanels->saveVisibility();
 }
 
 void MainWindow::restoreAuxPanelVisibility()
 {
-    // 只恢复「显隐」，不恢复几何：分辨率或显示器变化时几何恢复容易把窗口丢到屏幕外，
-    // 反而让用户以为面板"打不开"。
-    PanelVisibilityStore store;
-    const QStringList keys = PanelVisibilityStore::knownKeys();
-    for (const QString &key : keys) {
-        if (store.isVisible(key))
-            openAuxPanel(key);
-    }
+    // 只恢复「显隐」，不恢复几何（理由见 AuxPanelManager::restoreVisibility）。
+    // 启动恢复阶段执行器尚未创建，性能面板的 bindExecutor 由执行器创建处补做。
+    m_auxPanels->restoreVisibility();
 }
 
 bool MainWindow::runWithBusyFeedback(const QString &what, bool quiet,
@@ -1401,18 +1364,8 @@ void MainWindow::recomputeDownstream(NodeBase *node, bool quiet)
 
     // 与「执行此算子」保持一致：把结果刷到图像窗口，便于立刻核对
     NodeBase *target = resolveDisplayNode(node);
-    if (target && m_imageView) {
-        if (auto outputData = target->getOutputData(0)) {
-            HImage image = outputData->getHImage();
-            if (image.IsInitialized()) {
-                m_imageView->setImage(image, target->fullName());
-                m_imageView->setOverlay(collectOverlayFromNode(target));
-                if (m_imageSourceLabel) {
-                    m_imageSourceLabel->setText(QStringLiteral("图像来源: %1").arg(target->fullName()));
-                }
-            }
-        }
-    }
+    if (target && m_imageView)
+        m_imageDisplay->displayNodeOutput(target);
 }
 
 void MainWindow::executeNodeOnce(NodeBase *node)
@@ -1437,17 +1390,8 @@ void MainWindow::executeNodeOnce(NodeBase *node)
         return;
 
     NodeBase *target = resolveDisplayNode(node);
-    if (target && m_imageView) {
-        if (auto outputData = target->getOutputData(0)) {
-            HImage image = outputData->getHImage();
-            if (image.IsInitialized()) {
-                m_imageView->setImage(image, target->fullName());
-                m_imageView->setOverlay(collectOverlayFromNode(target));
-                if (m_imageSourceLabel)
-                    m_imageSourceLabel->setText(QStringLiteral("图像来源: %1").arg(target->fullName()));
-            }
-        }
-    }
+    if (target && m_imageView)
+        m_imageDisplay->displayNodeOutput(target);
     if (m_selectedNode == node)
         showNodeParameters(node);
     if (ModuleEditorDialog *dlg = m_moduleEditors.value(node, nullptr)) {
@@ -1548,7 +1492,40 @@ void MainWindow::onNewProject()
 {
     // 新建方案
     logMessage("新建方案");
-    
+
+    // 先停掉并摘除全部执行器，再删除场景——否则运行中的执行线程会在节点被删除后
+    // 继续访问（use-after-free），且 m_flowExecutors 会残留指向已删场景的悬垂键。
+    QList<FlowExecutor *> oldExecutors;
+    for (FlowExecutor *ex : qAsConst(m_flowExecutors)) {
+        if (ex && !oldExecutors.contains(ex))
+            oldExecutors.append(ex);
+    }
+    if (m_executor && !oldExecutors.contains(m_executor))
+        oldExecutors.append(m_executor);
+
+    for (FlowExecutor *ex : oldExecutors)
+        ex->stopExecution();
+    for (FlowExecutor *ex : oldExecutors) {
+        if (ex->isRunning() && !ex->wait(6000))
+            VFP_DEBUG << "FlowExecutor 未能在 6s 内退出（可能在长耗时算子中）";
+    }
+
+    FlowExecutor *spareExecutor = nullptr;
+    for (FlowExecutor *ex : oldExecutors) {
+        if (!ex)
+            continue;
+        GlobalTriggerManager::instance()->unregisterFlow(ex->flowName());
+        ex->setFlowScene(nullptr);
+        if (!spareExecutor)
+            spareExecutor = ex;   // 保留一个占位，供新方案首个流程复用
+        else
+            delete ex;
+    }
+    m_flowExecutors.clear();
+    m_executor = spareExecutor;
+    if (spareExecutor)
+        m_flowExecutors.insert(nullptr, spareExecutor);
+
     // 清空现有的流程场景
     qDeleteAll(m_flowScenes);
     m_flowScenes.clear();
@@ -1560,8 +1537,8 @@ void MainWindow::onNewProject()
         delete widget;
     }
     
-    // 清空用户选择的输出节点
-    m_selectedOutputNodes.clear();
+    // 清空用户选择的输出节点（显示决策状态在 ImageDisplayController）
+    m_imageDisplay->clearSelection();
     
     // 创建一个新的空流程
     createNewFlow();
@@ -1569,44 +1546,24 @@ void MainWindow::onNewProject()
     logMessage("新方案创建完成");
 }
 
-void MainWindow::onOpenProject()
-{
-    // 打开项目
-    QString fileName = QFileDialog::getOpenFileName(this, tr("打开项目"), "", tr("项目文件 (*.visionproj)"));
-    if (!fileName.isEmpty()) {
-        logMessage(tr("打开项目: %1").arg(fileName));
-        // 加载项目
-    }
-}
-
 void MainWindow::onSaveProject()
 {
-    // 保存项目（方案扩展名 .vfp，与需求文档一致）
-    QString fileName = QFileDialog::getSaveFileName(this, tr("保存项目"), QString(),
-                                                    tr("方案文件 (*.vfp)"));
-    if (!fileName.isEmpty()) {
-        if (!fileName.endsWith(QStringLiteral(".vfp"), Qt::CaseInsensitive)) {
-            fileName += QStringLiteral(".vfp");
-        }
-        logMessage(tr("保存项目: %1").arg(fileName));
-        
-        // 使用ProjectManager保存项目
-        if (!m_projectManager) {
-            m_projectManager = new ProjectManager(this);
-        }
-        
-        const bool success = m_projectManager->saveProject(fileName, m_flowScenes);
-        if (success) {
-            logMessage(tr("项目保存成功: %1").arg(fileName));
-            addRecentFile(fileName);
-            // FR3.3 保存确认：仅写日志不足以让操作员确认保存结果，需显式提示
-            QMessageBox::information(this, tr("保存方案"),
-                                     tr("方案已保存:\n%1").arg(fileName));
-        } else {
-            logMessage(tr("项目保存失败: %1").arg(fileName));
-            QMessageBox::warning(this, tr("保存方案"),
-                                 tr("方案保存失败，请确认目标路径可写后重试:\n%1").arg(fileName));
-        }
+    // 保存项目（方案扩展名 .vfp，与需求文档一致）：文件对话框与结果提示在 ProjectManager
+    if (!m_projectManager) {
+        m_projectManager = new ProjectManager(this);
+    }
+
+    QString fileName;
+    const bool success = m_projectManager->saveProjectInteractive(this, m_flowScenes, &fileName);
+    if (fileName.isEmpty())
+        return;   // 用户取消
+
+    logMessage(tr("保存项目: %1").arg(fileName));
+    if (success) {
+        logMessage(tr("项目保存成功: %1").arg(fileName));
+        m_recentFiles->add(fileName);
+    } else {
+        logMessage(tr("项目保存失败: %1").arg(fileName));
     }
 }
 
@@ -1632,6 +1589,9 @@ void MainWindow::onStartExecution()
 {
     // 仅软触发模式有效
     if (m_executor->getFlowMode() == FlowMode::SoftwareTrigger) {
+        // 明确点"开始执行"= 正常跑一遍，退出上次遗留的单步模式
+        // （历史缺陷：单步模式粘住，之后每次"开始执行"仍在每个节点后暂停）
+        m_executor->exitStepMode();
         m_executor->startExecution();
     }
 }
@@ -1652,9 +1612,8 @@ void MainWindow::onStopExecution()
 
 void MainWindow::onLoadProject()
 {
-    // 加载项目
-    QString fileName = QFileDialog::getOpenFileName(this, tr("加载项目"), QString(),
-                                                    tr("方案文件 (*.vfp)"));
+    // 加载项目：路径选择在 ProjectManager（取消返回空串）
+    const QString fileName = ProjectManager::askOpenProjectPath(this);
     if (!fileName.isEmpty()) {
         loadProjectFile(fileName);
     }
@@ -1692,9 +1651,11 @@ void MainWindow::loadProjectFile(const QString &fileName)
 
     for (FlowExecutor *ex : oldExecutors)
         ex->stopExecution();
+    // 等待真正退出再动场景：1s 太短且不看结果——超时后旧场景会在执行线程仍在跑时被删除；
+    // 保留的占位执行器也会带着"仍在运行的线程"被复用（都是 use-after-free 隐患）。
     for (FlowExecutor *ex : oldExecutors) {
-        if (ex->isRunning())
-            ex->wait(1000);
+        if (ex->isRunning() && !ex->wait(6000))
+            VFP_DEBUG << "FlowExecutor 未能在 6s 内退出（可能在长耗时算子中）";
     }
 
     FlowExecutor *spareExecutor = nullptr;
@@ -1726,7 +1687,7 @@ void MainWindow::loadProjectFile(const QString &fileName)
     }
 
     logMessage(tr("项目加载成功"));
-    addRecentFile(fileName);
+    m_recentFiles->add(fileName);
 
     // 添加加载的场景到标签页
     for (int i = 0; i < loadedScenes.size(); ++i) {
@@ -1801,47 +1762,6 @@ void MainWindow::runHalconEnvCheck()
     box.exec();
 }
 
-void MainWindow::addRecentFile(const QString &filePath)
-{
-    QSettings settings;
-    QStringList recent = settings.value(QStringLiteral("recentFiles")).toStringList();
-    recent.removeAll(filePath);
-    recent.prepend(filePath);
-    while (recent.size() > 8) {
-        recent.removeLast();
-    }
-    settings.setValue(QStringLiteral("recentFiles"), recent);
-    updateRecentMenu();
-}
-
-void MainWindow::updateRecentMenu()
-{
-    if (!m_recentMenu) {
-        return;
-    }
-    m_recentMenu->clear();
-    QSettings settings;
-    const QStringList recent = settings.value(QStringLiteral("recentFiles")).toStringList();
-    if (recent.isEmpty()) {
-        QAction *empty = m_recentMenu->addAction(QStringLiteral("（无最近记录）"));
-        empty->setEnabled(false);
-        return;
-    }
-    for (const QString &path : recent) {
-        QAction *act = m_recentMenu->addAction(path);
-        connect(act, &QAction::triggered, this, [this, path]() {
-            loadProjectFile(path);
-        });
-    }
-    m_recentMenu->addSeparator();
-    QAction *clearAct = m_recentMenu->addAction(QStringLiteral("清空记录"));
-    connect(clearAct, &QAction::triggered, this, [this]() {
-        QSettings settings;
-        settings.remove(QStringLiteral("recentFiles"));
-        updateRecentMenu();
-    });
-}
-
 void MainWindow::onAddFlowTab()
 {
     // 添加流程标签页
@@ -1858,11 +1778,16 @@ void MainWindow::onCloseFlowTab(int index)
     FlowScene *scene = m_flowScenes[index];
     m_flowModes.remove(scene);
 
-    // 如果执行器正运行此场景，先停止
+    // 如果执行器正运行此场景，先停止；未确认退出前不得继续（后面会删除场景，
+    // 执行线程仍在跑就是 use-after-free）。历史实现只等 1 秒且不检查返回值。
     FlowExecutor *sceneEx = executorForScene(scene);
     if (sceneEx) {
         sceneEx->stopExecution();
-        sceneEx->wait(1000);
+        if (sceneEx->isRunning() && !sceneEx->wait(6000)) {
+            VFP_DEBUG << "流程未能在 6s 内停止，暂不关闭该流程页";
+            ui->statusBar->showMessage(QStringLiteral("流程未能在 6 秒内停止，请稍后再关闭"), 5000);
+            return;
+        }
     }
 
     // 先从列表中移除场景（这样 removeTab 触发 currentChanged 时索引已同步）
@@ -1902,30 +1827,6 @@ void MainWindow::onSwitchLanguage()
 void MainWindow::logMessage(const QString &message)
 {
     ui->logTextEdit->appendPlainText(QString("[%1] %2").arg(QDateTime::currentDateTime().toString()).arg(message));
-}
-
-void MainWindow::updateExecutionButtons(ExecutionState state)
-{
-    switch (state) {
-    case ExecutionState::Stopped:
-        // 只有软触发模式才启用「开始执行」和「单次执行」
-        if (m_executor && m_executor->getFlowMode() == FlowMode::SoftwareTrigger) {
-            ui->actionStartExecution->setEnabled(true);
-            if (m_singleShotBtn) m_singleShotBtn->setEnabled(true);
-        } else {
-            ui->actionStartExecution->setEnabled(false);
-            if (m_singleShotBtn) m_singleShotBtn->setEnabled(false);
-        }
-        ui->actionStopExecution->setEnabled(false);
-        break;
-    case ExecutionState::Running:
-        ui->actionStartExecution->setEnabled(false);
-        if (m_singleShotBtn) m_singleShotBtn->setEnabled(false);
-        ui->actionStopExecution->setEnabled(true);
-        break;
-    default:
-        break;
-    }
 }
 
 void MainWindow::onNodeExecuted(NodeBase *executedNode, bool success)
@@ -1976,197 +1877,77 @@ void MainWindow::onNodeExecuted(NodeBase *executedNode, bool success)
 
 void MainWindow::onExecutionStarted()
 {
-    ui->statusBar->showMessage(tr("执行开始"));
-    m_runTimer.start();
-    if (m_statusStateLabel) m_statusStateLabel->setText(QStringLiteral("状态: 运行中"));
-    updateExecutionButtons(ExecutionState::Running);
+    m_execStatus->onStarted();   // 状态栏 + 计时开始 + 按钮态
     refreshAllMvsPixelFormats();
     updateEditLockForCurrentScene();
 }
 
 void MainWindow::onExecutionStopped()
 {
-    ui->statusBar->showMessage(tr("执行停止"));
-    if (m_statusStateLabel) m_statusStateLabel->setText(QStringLiteral("状态: 已停止"));
-    if (m_statusTimeLabel && m_runTimer.isValid()) {
-        m_lastRunMs = m_runTimer.elapsed();
-        m_statusTimeLabel->setText(QStringLiteral("耗时: %1 ms").arg(m_lastRunMs));
-    }
-    updateExecutionButtons(ExecutionState::Stopped);
+    m_execStatus->onStopped();   // 状态栏 + 耗时结算 + 按钮态
     refreshAllMvsPixelFormats();
     updateEditLockForCurrentScene();
 }
 
 void MainWindow::onExecutionFinished()
 {
-    // 连续模式下，执行完毕会自动继续循环，这里仅刷新UI
-    // 软触发/硬触发模式下执行结束
-    FlowMode currentMode = m_executor->getFlowMode();
-    if (currentMode == FlowMode::Continuous) {
-        ui->statusBar->showMessage(tr("连续运行中..."));
-    } else {
-        ui->statusBar->showMessage(tr("执行完成"));
-        if (m_statusStateLabel) m_statusStateLabel->setText(QStringLiteral("状态: 空闲"));
-        updateExecutionButtons(ExecutionState::Stopped);
-    }
-
-    // 每次流程完整执行一轮，触发计数 +1 并刷新耗时
-    ++m_triggerCount;
-    if (m_statusTriggerLabel)
-        m_statusTriggerLabel->setText(QStringLiteral("触发: %1").arg(m_triggerCount));
-    if (m_statusTimeLabel && m_runTimer.isValid()) {
-        m_lastRunMs = m_runTimer.elapsed();
-        m_statusTimeLabel->setText(QStringLiteral("耗时: %1 ms").arg(m_lastRunMs));
-    }
-
-    // 每轮结束 → 自动上报已启用的发送事件（未配置 / 被禁用 / 设备未连接都会静默跳过，
-    // 返回值即"真正发出的条数"，无需在这里判断）。连续模式下本槽会被高频调用，
-    // 故用一次性定时器把同一 UI 事件循环周期内的多轮合并为一次上报。
-    if (!m_sendEventFirePending) {
-        m_sendEventFirePending = true;
-        QTimer::singleShot(0, this, [this]() {
-            m_sendEventFirePending = false;
-            // 每轮上报数据注入：{global.变量名} + {模块号.参数名}（与"变量引用"语法一致），
-            // 发送事件的文本模板据此把本轮结果格式化进报文（对标 VM 的每轮结果上报）
-            QVariantMap payload;
-            const auto gvars = GlobalVariableManager::instance()->variables();
-            for (auto it = gvars.constBegin(); it != gvars.constEnd(); ++it)
-                payload.insert(QStringLiteral("global.%1").arg(it.key()), it.value().value);
-            for (auto it = m_lastModuleVars.constBegin(); it != m_lastModuleVars.constEnd(); ++it) {
-                const QVariantMap &vars = it.value();
-                for (auto jt = vars.constBegin(); jt != vars.constEnd(); ++jt)
-                    payload.insert(QStringLiteral("%1.%2").arg(it.key()).arg(jt.key()), jt.value());
-            }
-            CommunicationManager::instance()->fireEnabledSendEvents(payload);
-        });
-    }
-
+    m_execStatus->onFinished();   // 状态栏 + 触发计数 + 耗时 + 按钮态（连续/触发模式判定在控制器内）
+    fireSendEventsForRound();     // 每轮结束自动上报已启用的发送事件
     refreshAllMvsPixelFormats();
     updateEditLockForCurrentScene();
 }
 
+void MainWindow::fireSendEventsForRound()
+{
+    // 每轮结束 → 自动上报已启用的发送事件（未配置 / 被禁用 / 设备未连接都会静默跳过，
+    // 返回值即"真正发出的条数"，无需在这里判断）。连续模式下本函数会被高频调用，
+    // 故用一次性定时器把同一 UI 事件循环周期内的多轮合并为一次上报。
+    if (m_sendEventFirePending)
+        return;
+    m_sendEventFirePending = true;
+    QTimer::singleShot(0, this, [this]() {
+        m_sendEventFirePending = false;
+        // 每轮上报数据注入：{global.变量名} + {模块号.参数名}（与"变量引用"语法一致），
+        // 发送事件的文本模板据此把本轮结果格式化进报文（对标 VM 的每轮结果上报）
+        QVariantMap payload;
+        const auto gvars = GlobalVariableManager::instance()->variables();
+        for (auto it = gvars.constBegin(); it != gvars.constEnd(); ++it)
+            payload.insert(QStringLiteral("global.%1").arg(it.key()), it.value().value);
+        for (auto it = m_lastModuleVars.constBegin(); it != m_lastModuleVars.constEnd(); ++it) {
+            const QVariantMap &vars = it.value();
+            for (auto jt = vars.constBegin(); jt != vars.constEnd(); ++jt)
+                payload.insert(QStringLiteral("%1.%2").arg(it.key()).arg(jt.key()), jt.value());
+        }
+        CommunicationManager::instance()->fireEnabledSendEvents(payload);
+    });
+}
+
 void MainWindow::onExecutionError(const QString &error)
 {
-    if (m_statusStateLabel) m_statusStateLabel->setText(QStringLiteral("状态: 错误"));
-    ui->statusBar->showMessage(tr("执行错误: %1").arg(error));
-    QMessageBox::critical(this, "执行错误", error);
+    m_execStatus->onError(error);   // 状态栏留痕（不弹模态框，理由见控制器注释）
+    logMessage(QStringLiteral("执行错误: %1").arg(error));
 }
 
 QVector<OverlayShape> MainWindow::collectOverlayFromNode(NodeBase *node) const
 {
-    QVector<OverlayShape> overlay;
-    if (!node) return overlay;
-    for (int p = 1; p < node->outputPorts().size(); ++p) {
-        auto data = node->getOutputData(p);
-        if (!data || data->getType() != DataObject::DataType::Measure) continue;
-        MeasureResult mr = data->getMeasureResult();
-        if (!mr.valid) continue;
-
-        OverlayShape s;
-        s.color = QColor(0, 255, 0);
-        if (mr.type == QLatin1String("line")) {
-            s.type = OverlayShape::Type::Line;
-            s.p1 = mr.point1;
-            s.p2 = mr.point2;
-        } else if (mr.type == QLatin1String("circle")) {
-            s.type = OverlayShape::Type::Circle;
-            s.p1 = mr.point1;
-            s.radius = mr.value;
-            s.text = QStringLiteral("r=%1").arg(mr.value, 0, 'f', 2);
-        } else if (mr.type == QLatin1String("template")) {
-            if (mr.extraValues.size() >= 7 && mr.extraValues[5] > 1 && mr.extraValues[6] > 1) {
-                s.type = OverlayShape::Type::RotatedRect;
-                s.p1 = QPointF(mr.extraValues[1], mr.extraValues[0]);
-                s.angleDeg = mr.extraValues[3];
-                s.width = mr.extraValues[5];
-                s.height = mr.extraValues[6];
-                s.text = QStringLiteral("score=%1 a=%2°")
-                             .arg(mr.value, 0, 'f', 2)
-                             .arg(mr.extraValues[3], 0, 'f', 1);
-            } else {
-                s.type = OverlayShape::Type::Point;
-                s.p1 = mr.point1;
-                s.text = QStringLiteral("score=%1").arg(mr.value, 0, 'f', 2);
-            }
-        } else if (mr.type == QLatin1String("defect")) {
-            for (int i = 0; i + 3 < mr.extraValues.size(); i += 4) {
-                OverlayShape box;
-                box.type = OverlayShape::Type::RotatedRect;
-                box.width = mr.extraValues[i + 2];
-                box.height = mr.extraValues[i + 3];
-                box.p1 = QPointF(mr.extraValues[i] + box.width * 0.5,
-                                 mr.extraValues[i + 1] + box.height * 0.5);
-                box.angleDeg = 0;
-                box.color = QColor(255, 60, 60);
-                overlay.append(box);
-            }
-            s.type = OverlayShape::Type::Text;
-            s.p1 = mr.point1;
-            s.text = QStringLiteral("缺陷面积=%1").arg(mr.value, 0, 'f', 0);
-            s.color = QColor(255, 60, 60);
-        } else if (mr.type == QLatin1String("caliper")) {
-            s.type = OverlayShape::Type::Points;
-            for (int i = 0; i + 1 < mr.extraValues.size(); i += 2) {
-                s.points.append(QPointF(mr.extraValues[i], mr.extraValues[i + 1]));
-            }
-        } else {
-            s.type = OverlayShape::Type::Point;
-            s.p1 = mr.point1;
-            s.text = QStringLiteral("%1=%2").arg(mr.valueName).arg(mr.value, 0, 'f', 3);
-        }
-        overlay.append(s);
-    }
-    return overlay;
+    // 叠加规则（线/圆/模板/缺陷/卡尺 → OverlayShape）在 ImageDisplayController
+    return m_imageDisplay->collectOverlayFromNode(node);
 }
 
 void MainWindow::startRoiPick(NodeBase *node)
 {
-    if (!m_imageView || !node) {
+    // 取点状态与 ROI 编辑开关在 ImageDisplayController；这里只做窗口级提示
+    if (!m_imageDisplay->startRoiPick(node))
         return;
-    }
-    m_roiPickNode = node;
-    if (qobject_cast<FindCircleNode *>(node)) {
-        m_imageView->setRoiEditable(true, RoiType::Circle);
-    } else {
-        m_imageView->setRoiEditable(true, RoiType::Line);
-    }
     ui->statusBar->showMessage(tr("请在图像上拖拽绘制搜索区域（右键取消）"), 5000);
 }
 
 void MainWindow::handleRoiEdited(const RoiShape &shape)
 {
-    NodeBase *node = m_roiPickNode;
-    m_roiPickNode = nullptr;
-    if (m_imageView) {
-        m_imageView->setRoiEditable(false);
-    }
-    if (!node || shape.type == RoiType::None) {
+    // 参数写回（各测量节点的行列/半径）在 ImageDisplayController；这里做提示与面板刷新
+    NodeBase *node = m_imageDisplay->writeRoiToNode(shape);
+    if (!node)
         return;
-    }
-
-    const double r1 = shape.p1.y();
-    const double c1 = shape.p1.x();
-    if (auto *fl = qobject_cast<FindLineNode *>(node)) {
-        fl->setParam(QStringLiteral("row1"), r1);
-        fl->setParam(QStringLiteral("col1"), c1);
-        fl->setParam(QStringLiteral("row2"), shape.p2.y());
-        fl->setParam(QStringLiteral("col2"), shape.p2.x());
-    } else if (auto *cc = qobject_cast<CaliperMeasureNode *>(node)) {
-        cc->setParam(QStringLiteral("row1"), r1);
-        cc->setParam(QStringLiteral("col1"), c1);
-        cc->setParam(QStringLiteral("row2"), shape.p2.y());
-        cc->setParam(QStringLiteral("col2"), shape.p2.x());
-    } else if (auto *fc = qobject_cast<FindCircleNode *>(node)) {
-        fc->setParam(QStringLiteral("row"), r1);
-        fc->setParam(QStringLiteral("column"), c1);
-        const double rad = std::hypot(shape.p2.x() - c1, shape.p2.y() - r1);
-        if (rad > 1.0) {
-            fc->setParam(QStringLiteral("radius"), rad);
-        }
-    } else {
-        return;
-    }
-
     ui->statusBar->showMessage(tr("ROI 已写入 %1 参数").arg(node->name()), 3000);
     // 刷新参数面板显示
     showNodeParameters(m_selectedNode);
@@ -2234,6 +2015,22 @@ void MainWindow::onCurrentTabChanged(int index)
 {
     if (index < 0 || index >= m_flowScenes.size())
         return;
+
+    // 运行/暂停中禁止切换流程：执行器绑定的是正在执行的场景，重绑会让"本轮还在
+    // 遍历旧场景节点、下一轮就去执行新场景"（现场表现为"切一下 tab 流程乱跑"），
+    // 多流程并发下还可能让同一批节点被两个执行器同时执行。
+    if (m_executor) {
+        const ExecutionState st = m_executor->getState();
+        if (st == ExecutionState::Running || st == ExecutionState::Paused) {
+            ui->statusBar->showMessage(QStringLiteral("流程运行中，停止后才能切换流程"), 5000);
+            const int cur = m_flowScenes.indexOf(m_executor->flowScene());
+            if (cur >= 0 && cur != index) {
+                QSignalBlocker blocker(ui->flowTabs);   // 回退页签，屏蔽信号防递归
+                ui->flowTabs->setCurrentIndex(cur);
+            }
+            return;
+        }
+    }
 
     FlowScene *scene = m_flowScenes[index];
     m_executor->setFlowScene(scene);
@@ -2787,21 +2584,8 @@ void MainWindow::setupSchemeMenu()
 
 void MainWindow::showAuxDialog(const QString &key, const std::function<QDialog *()> &create)
 {
-    if (QDialog *existing = m_auxDialogs.value(key, nullptr)) {
-        existing->show();
-        existing->raise();
-        existing->activateWindow();
-        return;
-    }
-    QDialog *dlg = create();
-    if (!dlg)
-        return;
-    dlg->setAttribute(Qt::WA_DeleteOnClose);
-    m_auxDialogs.insert(key, dlg);
-    connect(dlg, &QObject::destroyed, this, [this, key]() { m_auxDialogs.remove(key); });
-    dlg->show();   // 非模态：不阻塞主界面与其它已开窗口
-    dlg->raise();
-    dlg->activateWindow();
+    // 统一委托 AuxPanelManager：同 key 复用、关闭即销毁（非模态，不阻塞主界面）
+    m_auxPanels->showDialog(key, create);
 }
 
 void MainWindow::setupCommunicationMenu()
@@ -3030,21 +2814,6 @@ void MainWindow::retranslateUi()
     }
 }
 
-QWidget *MainWindow::createParameterWidget(const QString &name, const QVariant &value)
-{
-    // 创建参数控件
-    // 这里应该添加参数控件创建的代码
-    VFP_DEBUG << "createParameterWidget called";
-    return nullptr;
-}
-
-void MainWindow::updateNodeParameters(NodeBase *node)
-{
-    // 更新节点参数
-    // 这里应该添加节点参数更新的代码
-    VFP_DEBUG << "updateNodeParameters called";
-}
-
 bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 {
     static QTreeWidgetItem *draggedItem = nullptr;
@@ -3134,24 +2903,10 @@ QList<NodeBase*> MainWindow::getUpstreamNodes(NodeBase *node, FlowScene *scene)
     return upstreamNodes;
 }
 
-/// 决定当前应该显示哪个算子的图像
-/// 优先级：下拉框选择 > 画布选中节点 > fallbackNode（兜底）
+/// 转发：显示决策（下拉框选择 > 画布选中节点 > 兜底）在 ImageDisplayController
 NodeBase *MainWindow::resolveDisplayNode(NodeBase *fallbackNode) const
 {
-    int currentIndex = ui->flowTabs->currentIndex();
-    if (currentIndex >= 0 && currentIndex < m_flowScenes.size()) {
-        FlowScene *scene = m_flowScenes[currentIndex];
-        // 最高优先级：下拉框选择
-        if (scene && m_selectedOutputNodes.contains(scene)) {
-            return m_selectedOutputNodes[scene];
-        }
-    }
-    // 次高优先级：画布选中节点
-    if (m_selectedNode) {
-        return m_selectedNode;
-    }
-    // 兜底
-    return fallbackNode;
+    return m_imageDisplay->resolveDisplayNode(fallbackNode);
 }
 
 void MainWindow::onOpenNodeSearch()
@@ -3172,59 +2927,34 @@ void MainWindow::onOpenNodeSearch()
 
 void MainWindow::onOpenPerformancePanel()
 {
-    // 打开性能面板
-    if (!m_performancePanel) {
-        m_performancePanel = new PerformancePanel(this);
-        m_performanceDock = new QDockWidget(QStringLiteral("性能统计"), this);
-        m_performanceDock->setWidget(m_performancePanel);
-        addDockWidget(Qt::RightDockWidgetArea, m_performanceDock);
-    }
-
-    m_performanceDock->show();
-    m_performanceDock->raise();
+    // 打开性能面板（创建/显示在 AuxPanelManager）
+    m_auxPanels->open(QStringLiteral("performance"));
 
     // 面板必须显式 bindExecutor() 才会收到耗时数据；此前无人调用，即使打开也是空表
     // （这是它长期不可达之外的**第二层**缺口）。
-    if (m_performancePanel && m_executor)
-        m_performancePanel->bindExecutor(m_executor);
+    if (auto *pp = m_auxPanels->performancePanel()) {
+        if (m_executor)
+            pp->bindExecutor(m_executor);
+    }
 }
 
 void MainWindow::onOpenResultTable()
 {
     // 打开结果数据表：一次运行后各模块的「输出项 / 数值 / 状态 / 耗时」
-    if (!m_resultTablePanel) {
-        m_resultTablePanel = new ResultTablePanel(this);
-        m_resultTableDock = new QDockWidget(QStringLiteral("结果表"), this);
-        m_resultTableDock->setObjectName(QStringLiteral("resultTableDock"));
-        m_resultTableDock->setWidget(m_resultTablePanel);
-        m_resultTableDock->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable);
-        m_resultTableDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
-        m_resultTableDock->setMinimumWidth(320);
-        addDockWidget(Qt::RightDockWidgetArea, m_resultTableDock);
-    }
-
-    m_resultTableDock->show();
-    m_resultTableDock->raise();
+    m_auxPanels->open(QStringLiteral("resultTable"));
     logMessage(QStringLiteral("结果表已打开：运行流程后显示各模块的数值结果，可导出 CSV"));
 }
 
 void MainWindow::onOpenOutputViewer()
 {
     // 打开输出数据查看器
-    if (!m_outputDataViewer) {
-        m_outputDataViewer = new OutputDataViewer(this);
-        m_outputViewerDock = new QDockWidget(QStringLiteral("输出数据"), this);
-        m_outputViewerDock->setWidget(m_outputDataViewer);
-        addDockWidget(Qt::RightDockWidgetArea, m_outputViewerDock);
-    }
+    m_auxPanels->open(QStringLiteral("outputData"));
 
     // 如果有选中的节点，显示其输出数据
     if (m_selectedNode) {
-        m_outputDataViewer->setNode(m_selectedNode);
+        if (auto *ov = m_auxPanels->outputDataViewer())
+            ov->setNode(m_selectedNode);
     }
-
-    m_outputViewerDock->show();
-    m_outputViewerDock->raise();
 }
 
 void MainWindow::applyDefaultDockSizes()
