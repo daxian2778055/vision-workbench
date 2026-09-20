@@ -2,14 +2,14 @@
 #include "Port.h"
 #include "DataObject.h"
 
-// 模块 ID 分配器：删除节点时回收，新建节点时从回收池取最小可用 ID
-#include <QSet>
-#include <algorithm>
+// 模块 ID 分配器：单调且**不回收**。
+// 回收复用会让"新节点"继承"旧节点"在执行器缓存里的输出变量表（S4：删 A 后新建 B 复用同号
+// → m_nodeOutputVars[号] 残留 → 结果错）。模块号是方案内 {模块号.参数名} 引用与配方键的
+// 稳定标识，不复用反而更稳。
 #include <QMutex>
 #include <QMutexLocker>
 // 分配器是进程级共享状态，而节点可能在流程线程（方案加载/复制）与 UI 线程并发
-// 创建/销毁。QSet 与计数器均非线程安全，必须加锁保护，否则会破坏容器结构。
-static QSet<int> s_recycledIds;
+// 创建/销毁，计数器非线程安全，必须加锁保护。
 static int s_nextId = 1;
 static QMutex s_idMutex;
 
@@ -163,20 +163,24 @@ QString NodeBase::fullName() const
 int NodeBase::allocateModuleId()
 {
     QMutexLocker locker(&s_idMutex);
-    if (!s_recycledIds.isEmpty()) {
-        int id = *std::min_element(s_recycledIds.begin(), s_recycledIds.end());
-        s_recycledIds.remove(id);
-        return id;
-    }
+    // 单调不回收：模块号是方案内 {模块号.参数名} 引用与配方键的稳定标识，
+    // 回收复用会让"新节点"继承"旧节点"在执行器缓存里的输出变量表（S4）。
     return s_nextId++;
 }
 
 void NodeBase::releaseModuleId(int id)
 {
-    if (id <= 0)
-        return;
+    // 不再回收（见 allocateModuleId）。保留为空实现，避免改动析构等调用点。
+    Q_UNUSED(id)
+}
+
+void NodeBase::reserveModuleId(int id)
+{
+    // 从方案文件恢复节点时，模块号可能是会话内最大已分配号；把全局计数器抬高到它之上，
+    // 否则随后新建节点会再次分配到同一号（新会话 s_nextId 从 1 重新计）。
     QMutexLocker locker(&s_idMutex);
-    s_recycledIds.insert(id);
+    if (id + 1 > s_nextId)
+        s_nextId = id + 1;
 }
 
 bool NodeBase::executionSuccess() const

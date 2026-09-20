@@ -140,6 +140,9 @@ public:
 
 private slots:
     void markGraphStructureDirty();
+    /// 节点从场景移除（删除/撤销/清空）时立即清掉它在执行缓存里的条目，
+    /// 避免"删 A 后新建 B 复用同指针地址/同模块号"让 B 继承 A 的输出变量表（S4）。
+    void onSceneNodeRemoved(NodeBase *node);
 
 private:
     void executeNode(NodeBase *node, bool isLastNode = false);

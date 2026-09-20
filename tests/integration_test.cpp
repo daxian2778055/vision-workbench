@@ -99,6 +99,9 @@ private slots:
     void testExecutionStatusController();
     void testRecentFilesMenu();
 
+    // S4 回归：模块号必须单调且不复用（删节点后新建节点不得拿到被删节点的号）
+    void testModuleIdNotRecycled();
+
 private:
     FlowScene *m_scene = nullptr;
     FlowExecutor *m_executor = nullptr;
@@ -1898,6 +1901,33 @@ void IntegrationTest::testRecentFilesMenu()
     recent2.add(QStringLiteral("C:/proj/x.vfp"));
     RecentFilesMenu recent3(&menu, [](const QString &) {}, ini, nullptr);
     QCOMPARE(recent3.files().first(), QStringLiteral("C:/proj/x.vfp"));
+}
+
+void IntegrationTest::testModuleIdNotRecycled()
+{
+    // S4：模块号必须单调且不复用。旧实现删除节点后回收其模块号，新建节点会复用 →
+    // "新节点"继承"旧节点"在执行器缓存里的输出变量表（m_nodeOutputVars）/输出数据/
+    // 有效标记，结果错，是工业平台最坏故障之一。
+    m_scene->clearScene();
+
+    NodeBase *a = m_scene->createNode(NodeBase::IMAGE_ACQUISITION, QPointF(0, 0), QStringLiteral("A"));
+    NodeBase *b = m_scene->createNode(NodeBase::IMAGE_ACQUISITION, QPointF(0, 0), QStringLiteral("B"));
+    QVERIFY(a && b);
+    const int idA = a->moduleId();
+    const int idB = b->moduleId();
+    QVERIFY2(idA != idB, "新建节点模块号重复");
+
+    m_scene->removeNode(a);   // 旧实现：idA 进回收池，下一个新建节点会拿到它
+
+    NodeBase *c = m_scene->createNode(NodeBase::IMAGE_ACQUISITION, QPointF(0, 0), QStringLiteral("C"));
+    QVERIFY(c != nullptr);
+    // 关键断言（判别项）：不复用时 c 的模块号必严格大于本测试内已分配的最大号 idB
+    // （模块号单调增长）。旧实现会回收 idA（或任意更早的回收号）→ c 的号 <= idA < idB
+    // → 此断言失败（S4 未修）。仅比 "!= idA" 不够稳健：更早的回收号更小也会落入此路径。
+    QVERIFY2(c->moduleId() > idB,
+             qPrintable(QStringLiteral("模块号被回收复用：删 A 后新建 C 拿到了 %1（<= 已分配的 %2），S4 未修")
+                        .arg(c->moduleId()).arg(idB)));
+    QVERIFY(c->moduleId() > idA);
 }
 
 QTEST_MAIN(IntegrationTest)

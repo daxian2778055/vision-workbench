@@ -124,9 +124,12 @@ public:
     void setOwnerExecutor(FlowExecutor *exec) { m_ownerExecutor = exec; }
     FlowExecutor *ownerExecutor() const { return m_ownerExecutor; }
 
-    // 模块ID分配/回收（删除节点时释放ID，新建节点时复用）
+    // 模块号分配：单调且**不回收**（见 NodeBase.cpp）。回收复用会让"新节点"继承"旧节点"
+    // 在执行器缓存里的输出变量表（S4）。
     static int allocateModuleId();
-    static void releaseModuleId(int id);
+    static void releaseModuleId(int id);   // 保留为空实现，避免改动析构等调用点
+    /// 从方案文件恢复节点时调用：把全局计数器抬高到 id 之上，防止随后新建节点复用同一号
+    static void reserveModuleId(int id);
 
 protected:
     FlowScene *m_flowSceneRef = nullptr;

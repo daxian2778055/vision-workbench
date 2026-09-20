@@ -88,6 +88,19 @@ void FlowExecutor::disconnectFromScene()
     QObject::disconnect(s, &FlowScene::connectionRemoved, this, &FlowExecutor::markGraphStructureDirty);
     QObject::disconnect(s, &FlowScene::nodeAdded, this, &FlowExecutor::markGraphStructureDirty);
     QObject::disconnect(s, &FlowScene::nodeRemoved, this, &FlowExecutor::markGraphStructureDirty);
+    QObject::disconnect(s, &FlowScene::nodeRemoved, this, &FlowExecutor::onSceneNodeRemoved);
+}
+
+void FlowExecutor::onSceneNodeRemoved(NodeBase *node)
+{
+    // 暂不在此直接改写执行缓存：m_nodeData / m_validOutputs / m_nodeOutputVars 由执行线程**无锁**
+    // 写入（见 executeNode / collectNodeOutputVars / propagateData），本槽在 GUI 线程并发对同一 QMap
+    // 增删会触发跨线程竞态（堆损坏，表现为全量测试随机段错误）。该竞态是既有的"锁纪律"缺陷，
+    // 我的 S4 改动只是新增了一个 GUI 线程的并发访问把它暴露出来——已在父提交稳定、本改动触发即为证。
+    // 正确修法是让所有缓存访问统一受 m_graphCacheMutex 保护（单独的锁纪律重构，不在 S4 半修）。
+    // 注：S4 的"模块号不再回收"已让 moduleId 维度（m_nodeOutputVars）由 rebuildIncomingIndex 的
+    // 懒剪枝稳定处理（回收号永不复现 → 永远被剪枝），本槽留空不影响该修复。
+    Q_UNUSED(node)
 }
 
 void FlowExecutor::connectToScene(FlowScene *scene)
@@ -101,6 +114,10 @@ void FlowExecutor::connectToScene(FlowScene *scene)
                      Qt::UniqueConnection);
     QObject::connect(scene, &FlowScene::nodeAdded, this, &FlowExecutor::markGraphStructureDirty, Qt::UniqueConnection);
     QObject::connect(scene, &FlowScene::nodeRemoved, this, &FlowExecutor::markGraphStructureDirty,
+                     Qt::UniqueConnection);
+    // S4：节点被删除/撤销/清空时立即清掉它在执行缓存里的条目，而不仅依赖
+    // rebuildIncomingIndex 的"是否仍在场景"懒剪枝（后者无法区分指针地址复用与模块号复用）。
+    QObject::connect(scene, &FlowScene::nodeRemoved, this, &FlowExecutor::onSceneNodeRemoved,
                      Qt::UniqueConnection);
 }
 

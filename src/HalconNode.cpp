@@ -289,7 +289,9 @@ void HalconNode::fromJson(const QJsonObject &json)
     if (json.contains("moduleId")) {
         int storedId = json["moduleId"].toInt();
         if (storedId != m_moduleId) {
-            NodeBase::releaseModuleId(m_moduleId);
+            // 抬升全局计数器到 storedId 之上：新会话 s_nextId 从 1 重计，否则随后新建节点
+            // 会再次分配到同一号（S4：模块号不复用是为了不让"新节点"继承旧节点的输出变量表）。
+            NodeBase::reserveModuleId(storedId);
             m_moduleId = storedId;
         }
     }
