@@ -262,7 +262,9 @@ bool PlcCommNode::readRegister(int slaveAddr, int regAddr, int count)
                         QDataStream stream(&raw, QIODevice::WriteOnly);
                         stream.setByteOrder(QDataStream::BigEndian);
 
-                        if (reg.byteOrder == QStringLiteral("ABCD") || values.size() == 1) {
+                        // 单寄存器（16 位）也按 byteOrder 变换（与 Modbus 同款修复）：
+                        // 此前用 `|| values.size() == 1` 强制 ABCD，BADC/DCBA 单寄存器未交换。
+                        if (reg.byteOrder == QStringLiteral("ABCD")) {
                             for (quint16 v : values) stream << v;
                         } else if (reg.byteOrder == QStringLiteral("CDAB") && values.size() >= 2) {
                             stream << values[1] << values[0];
@@ -329,22 +331,21 @@ double PlcCommNode::parseRawToValue(const QByteArray &raw, const QString &dataTy
 {
     if (raw.isEmpty()) return 0.0;
 
-    QDataStream::ByteOrder order = QDataStream::BigEndian;
-    if (byteOrder == QStringLiteral("DCBA") || byteOrder == QStringLiteral("BADC"))
-        order = QDataStream::LittleEndian;
-
     if (dataType == QStringLiteral("int16")) {
+        // 16 位：归一化（读值路径内联）已按 byteOrder 归一化为最终字节序列，此处统一大端解释
+        // （与 32 位路径一致）。强制大端对单寄存器行为中性：ABCD 不变，BADC/DCBA 与归一化已交换
+        // 配大端结果完全一致。
         if (raw.size() < 2) return 0.0;
         qint16 val;
         QDataStream s(raw);
-        s.setByteOrder(order);
+        s.setByteOrder(QDataStream::BigEndian);
         s >> val;
         return static_cast<double>(val);
     } else if (dataType == QStringLiteral("uint16")) {
         if (raw.size() < 2) return 0.0;
         quint16 val;
         QDataStream s(raw);
-        s.setByteOrder(order);
+        s.setByteOrder(QDataStream::BigEndian);
         s >> val;
         return static_cast<double>(val);
     } else if (dataType == QStringLiteral("int32") || dataType == QStringLiteral("uint32")

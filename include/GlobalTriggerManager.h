@@ -60,6 +60,9 @@ public:
     // ---- 流程注册 ----
     void registerFlow(const QString &name, FlowScene *scene, FlowExecutor *executor);
     void unregisterFlow(const QString &name);
+    /// 按执行器身份注销：仅当当前绑定确实指向该执行器时才移除，避免迟到析构（deleteLater /
+    /// 复用）误删新方案同名流程的注册（"载入后触发静默失效"复活路径）。
+    void unregisterExecutor(FlowExecutor *executor);
     FlowExecutor *executorForFlow(const QString &name) const;
 
     // ---- 序列化 ----

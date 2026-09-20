@@ -51,7 +51,7 @@ FlowExecutor::FlowExecutor(QObject *parent)
 
 FlowExecutor::~FlowExecutor()
 {
-    GlobalTriggerManager::instance()->unregisterFlow(m_flowName);
+    GlobalTriggerManager::instance()->unregisterExecutor(this);
     if (s_currentInstance.load() == this) {
         s_currentInstance.store(nullptr);
     }

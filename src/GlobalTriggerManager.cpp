@@ -288,6 +288,21 @@ void GlobalTriggerManager::unregisterFlow(const QString &name)
     m_flowBindings.remove(name);
 }
 
+void GlobalTriggerManager::unregisterExecutor(FlowExecutor *executor)
+{
+    if (!executor)
+        return;
+    QMutexLocker locker(&m_mutex);
+    // 按执行器身份注销：仅移除确实绑定到该执行器的条目。晚到的析构（deleteLater / 复用）
+    // 若此时同名流程已被新方案注册，旧执行器身份不匹配 → 跳过，绝不误删新注册。
+    for (auto it = m_flowBindings.begin(); it != m_flowBindings.end();) {
+        if (it.value().executor == executor)
+            it = m_flowBindings.erase(it);
+        else
+            ++it;
+    }
+}
+
 FlowExecutor *GlobalTriggerManager::executorForFlow(const QString &name) const
 {
     QMutexLocker locker(&m_mutex);

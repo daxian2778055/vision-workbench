@@ -401,18 +401,6 @@ MainWindow::MainWindow(QWidget *parent) :
                                                           : ExecutionState::Stopped);
                 updateEditLockForCurrentScene();
             });
-
-            connect(m_executor, &FlowExecutor::flowModeChanged, this,
-                    [this](int mode) {
-                for (FlowScene *scene : m_flowScenes) {
-                    for (NodeBase *node : scene->nodes()) {
-                        auto *mvs = qobject_cast<MvsImageSourceNode*>(node);
-                        if (mvs) {
-                            mvs->refreshPixelFormatEnabled();
-                        }
-                    }
-                }
-            });
         }
 
         // ---- 状态栏运行信息：运行状态 / 本次耗时 / 触发计数 ----
@@ -643,6 +631,21 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
     connect(ex, &FlowExecutor::executionError, this, [this, ex](const QString &err) {
         if (ex == m_executor) onExecutionError(err);
         else logMessage(QStringLiteral("流程错误: %1").arg(err));
+    });
+
+    // ── 全局 UI：运行模式变更 → 刷新所有场景 MVS 节点的像素格式可用性 ──
+    // （⑤a：旧实现在构造函数只内联连首执行器，新/后台流程的模式切换不刷新；
+    // 统一在此连接，按 ex == m_executor 门槛，保证仅当前激活流程刷新 UI。）
+    connect(ex, &FlowExecutor::flowModeChanged, this, [this, ex](int mode) {
+        Q_UNUSED(mode)
+        if (ex != m_executor)
+            return;
+        for (FlowScene *scene : m_flowScenes) {
+            for (NodeBase *node : scene->nodes()) {
+                if (auto *mvs = qobject_cast<MvsImageSourceNode *>(node))
+                    mvs->refreshPixelFormatEnabled();
+            }
+        }
     });
 
     // ── 全局 UI：跳过三态（未激活分支 / 循环体调度的节点标"跳过"） ──
@@ -1522,10 +1525,15 @@ void MainWindow::onNewProject()
 
     for (FlowExecutor *ex : oldExecutors)
         ex->stopExecution();
-    // 统一等待真正退出（15s，与 retireExecutor 阈值一致）：看结果，超时即中止。
+    // 统一等待真正退出：共享 15s 总预算（与 retireExecutor 阈值一致），避免 N 个执行器串行
+    // wait(15000) 致 UI 最坏冻结 15s×N。超时即中止。
+    const qint64 deadlineMs = QDateTime::currentMSecsSinceEpoch() + 15000;
     QList<FlowExecutor *> stuckExecutors;
     for (FlowExecutor *ex : oldExecutors) {
-        if (ex->isRunning() && !ex->wait(15000))
+        if (!ex->isRunning())
+            continue;
+        const qint64 left = qMax(qint64(0), deadlineMs - QDateTime::currentMSecsSinceEpoch());
+        if (left <= 0 || !ex->wait(left))
             stuckExecutors.append(ex);
     }
     if (!stuckExecutors.isEmpty()) {
@@ -1539,7 +1547,7 @@ void MainWindow::onNewProject()
     for (FlowExecutor *ex : oldExecutors) {
         if (!ex)
             continue;
-        GlobalTriggerManager::instance()->unregisterFlow(ex->flowName());
+        GlobalTriggerManager::instance()->unregisterExecutor(ex);
         ex->stopExecution();          // 停掉旧方案可能运行中的流程（新方案首个流程会复用 spare）
         ex->setFlowScene(nullptr);
         if (!spareExecutor)
@@ -1690,14 +1698,22 @@ void MainWindow::loadProjectFile(const QString &fileName)
 
     for (FlowExecutor *ex : oldExecutors)
         ex->stopExecution();
-    // 统一等待真正退出（15s，与 retireExecutor 阈值一致）：看结果，超时即中止。
+    // 统一等待真正退出：共享 15s 总预算（与 retireExecutor 阈值一致），避免 N 个执行器串行
+    // wait(15000) 致 UI 最坏冻结 15s×N。超时即中止。
+    const qint64 deadlineMs = QDateTime::currentMSecsSinceEpoch() + 15000;
     QList<FlowExecutor *> stuckExecutors;
     for (FlowExecutor *ex : oldExecutors) {
-        if (ex->isRunning() && !ex->wait(15000))
+        if (!ex->isRunning())
+            continue;
+        const qint64 left = qMax(qint64(0), deadlineMs - QDateTime::currentMSecsSinceEpoch());
+        if (left <= 0 || !ex->wait(left))
             stuckExecutors.append(ex);
     }
     if (!stuckExecutors.isEmpty()) {
         // 超时分支联动中止：不删场景、不回收执行器，旧方案保持完整（含仍运行的线程，其场景未删）。
+        // 顺手释放本次已加载但未启用的新场景（loadedScenes 仍持有它们），否则泄漏。
+        qDeleteAll(loadedScenes);
+        loadedScenes.clear();
         logMessage(tr("有流程执行线程超时未退出，已取消打开方案"));
         QMessageBox::warning(this, tr("提示"),
             tr("有流程仍在执行且未能在限定时间内退出，已取消打开方案以避免程序崩溃。"));
@@ -1708,7 +1724,7 @@ void MainWindow::loadProjectFile(const QString &fileName)
     for (FlowExecutor *ex : oldExecutors) {
         if (!ex)
             continue;
-        GlobalTriggerManager::instance()->unregisterFlow(ex->flowName());
+        GlobalTriggerManager::instance()->unregisterExecutor(ex);
         ex->stopExecution();
         ex->setFlowScene(nullptr);
         if (!spareExecutor) {
@@ -1871,7 +1887,7 @@ void MainWindow::onCloseFlowTab(int index)
     // 断开执行器与被删场景的关联，并释放场景专属执行器
     if (sceneEx) {
         sceneEx->setFlowScene(nullptr);
-        GlobalTriggerManager::instance()->unregisterFlow(sceneEx->flowName());
+        GlobalTriggerManager::instance()->unregisterExecutor(sceneEx);
         m_flowExecutors.remove(scene);
         if (m_flowScenes.isEmpty()) {
             // 最后一个流程：执行器放回占位，等待下次复用
@@ -1880,6 +1896,9 @@ void MainWindow::onCloseFlowTab(int index)
         } else if (sceneEx != m_executor) {
             retireExecutor(sceneEx);
         } else {
+            // 关闭的是当前激活流程：回收其专属执行器（已摘场景），再切到邻近流程的执行器；
+            // 旧实现漏回收 → 每关一次激活页泄漏一个执行器（存量）。
+            retireExecutor(sceneEx);
             m_executor = executorForScene(
                 m_flowScenes[qMin(index, m_flowScenes.size() - 1)]);
         }
@@ -2109,6 +2128,11 @@ void MainWindow::onCurrentTabChanged(int index)
     m_executor = executorForScene(scene);
     if (m_executor)
         m_executor->setFlowScene(scene);
+
+    // 性能面板跟随当前激活执行器重绑（⑤b）：此前只绑首个执行器、切 tab 不重绑，
+    // 后台跑首流程会 clearStats 清掉正在看的统计；切 tab 后让面板显示当前流程的耗时。
+    if (auto *pp = m_auxPanels ? m_auxPanels->performancePanel() : nullptr)
+        pp->bindExecutor(m_executor);
 
     // 恢复该流程存储的运行模式
     if (m_flowModeCombo) {

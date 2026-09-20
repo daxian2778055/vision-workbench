@@ -24,7 +24,10 @@ QByteArray assembleRegisterBytes(const QVector<quint16> &values, const QString &
     QDataStream stream(&raw, QIODevice::WriteOnly);
     stream.setByteOrder(QDataStream::BigEndian);   // Modbus 是 Big Endian
 
-    if (byteOrder == QStringLiteral("ABCD") || values.size() == 1) {
+    // 注意：单寄存器（16 位）也要按 byteOrder 变换——此前用 `|| values.size() == 1` 强制走
+    // ABCD 分支，导致 BADC/DCBA 的单寄存器值未经字节交换（仅靠 parseRawToValue 的 order 补一次，
+    // 看似正确但 16/32 位逻辑不一致）。此处统一归一化后，parseRawToValue 一律按大端解释。
+    if (byteOrder == QStringLiteral("ABCD")) {
         for (quint16 v : values)
             stream << v;
     } else if (byteOrder == QStringLiteral("CDAB") && values.size() >= 2) {
@@ -232,10 +235,11 @@ bool ModbusNode::openConnection()
 
 void ModbusNode::closeConnection()
 {
-    // 状态守卫（N2 同款，此前漏改）：已处于关闭态直接返回，避免重复拆解设备 /
-    // 重复发 connectionClosed，以及与 deleteLater 延迟析构形成二次拆解。
-    if (!m_connected && !m_modbus && !m_modbusServer)
-        return;
+    // 状态守卫（N2 同款）：以"曾连接"为唯一判据，与 TCP/串口/PLC 一致——照常拆解设备，
+    // 仅抑制 emit。旧实现按"对象全空"判据，而客户端连接失败后 m_modbus 残留非空（openConnection
+    // 失败分支不置空），于是每 3s 重连后仍发一次假 connectionClosed → CM 清帧缓冲+刷 UI
+    // （恰是 N2 要消灭的形态）。
+    const bool was = m_connected;
     stopPolling();
     m_pendingQueue.clear();
 
@@ -253,7 +257,8 @@ void ModbusNode::closeConnection()
     }
     m_connected = false;
     setParamDirect(QStringLiteral("connected"), false);
-    emit connectionClosed();
+    if (was)
+        emit connectionClosed();
 }
 
 bool ModbusNode::isConnected() const
@@ -583,22 +588,22 @@ double ModbusNode::parseRawToValue(const QByteArray &raw, const QString &dataTyp
 {
     if (raw.isEmpty()) return 0.0;
 
-    QDataStream::ByteOrder order = QDataStream::BigEndian;
-    if (byteOrder == QStringLiteral("DCBA") || byteOrder == QStringLiteral("BADC"))
-        order = QDataStream::LittleEndian;
-
     if (dataType == QStringLiteral("int16")) {
+        // 16 位：assembleRegisterBytes 已按 byteOrder 归一化为最终字节序列，此处统一大端解释
+        // （与 32 位路径一致；此前 16 位用 order 小端——单寄存器时与"归一化不交换"相互抵消看似
+        // 正确，但 16/32 位逻辑不统一）。强制大端对单寄存器行为中性：ABCD 不变，BADC/DCBA 与
+        // "归一化已交换"配大端结果完全一致。
         if (raw.size() < 2) return 0.0;
         qint16 val;
         QDataStream s(raw);
-        s.setByteOrder(order);
+        s.setByteOrder(QDataStream::BigEndian);
         s >> val;
         return static_cast<double>(val);
     } else if (dataType == QStringLiteral("uint16")) {
         if (raw.size() < 2) return 0.0;
         quint16 val;
         QDataStream s(raw);
-        s.setByteOrder(order);
+        s.setByteOrder(QDataStream::BigEndian);
         s >> val;
         return static_cast<double>(val);
     } else if (dataType == QStringLiteral("int32") || dataType == QStringLiteral("uint32")
