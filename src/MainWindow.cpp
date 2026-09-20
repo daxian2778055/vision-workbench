@@ -370,7 +370,11 @@ MainWindow::MainWindow(QWidget *parent) :
                     static const char *modeSuffix[] = { " [连续]", " [软触发]", " [硬触发]" };
                     int mi = static_cast<int>(mode);
                     const char *suffix = (mi >= 0 && mi < 3) ? modeSuffix[mi] : "";
-                    ui->flowTabs->setTabText(tabIdx, QStringLiteral("流程 %1%2").arg(tabIdx + 1).arg(suffix));
+                    // tab 标题用真实流程名（可能与 tab 序号不同，删除流程后更明显），避免显示与触发路由名不一致
+                    const QString base = (m_executor && !m_executor->flowName().isEmpty())
+                                            ? m_executor->flowName()
+                                            : QStringLiteral("流程 %1").arg(tabIdx + 1);
+                    ui->flowTabs->setTabText(tabIdx, base + suffix);
                 }
 
                 // 停止当前运行中的流程
@@ -1002,23 +1006,26 @@ void MainWindow::createNewFlow()
         QTimer::singleShot(0, this, [view]() {
             view->centerOn(0, 0);
         });
+        // 分配全局唯一流程名：扫描 GTM 已注册名，返回首个空闲"流程 N"。避免删除流程后
+        // 用 m_flowScenes.size() 复用序号 → 同名覆盖仍存流程的触发路由（L2 存量）。
+        const QString flowName = GlobalTriggerManager::instance()->allocFlowName();
+
         if (ui && ui->flowTabs) {
-            int index = ui->flowTabs->addTab(view, tr("流程 %1").arg(m_flowScenes.size()));
-            // 初始标签页标题带默认模式后缀
-            ui->flowTabs->setTabText(index, QStringLiteral("流程 %1 [软触发]").arg(m_flowScenes.size()));
+            int index = ui->flowTabs->addTab(view, flowName);
+            // 初始标签页标题带默认模式后缀（与 GTM 路由名一致）
+            ui->flowTabs->setTabText(index, flowName + QStringLiteral(" [软触发]"));
             ui->flowTabs->setCurrentIndex(index);
         } else {
             VFP_DEBUG << "ui or ui->flowTabs is null";
             delete view;
         }
-        
+
         // 设置执行器的流程场景（多流程并发：每个流程独立执行器）
         FlowExecutor *flowEx = executorForScene(scene);
         m_executor = flowEx;
         if (flowEx) {
             flowEx->setFlowScene(scene);
-            // 注册流程名到全局触发管理器
-            QString flowName = QStringLiteral("\u6D41\u7A0B %1").arg(m_flowScenes.size());
+            // 注册流程名到全局触发管理器（与 tab 标题同名，触发按名路由）
             flowEx->setFlowName(flowName);
             GlobalTriggerManager::instance()->registerFlow(flowName, scene, flowEx);
         }
@@ -2151,7 +2158,11 @@ void MainWindow::onCurrentTabChanged(int index)
         static const char *modeSuffix[] = { " [连续]", " [软触发]", " [硬触发]" };
         int mi = static_cast<int>(mode);
         const char *suffix = (mi >= 0 && mi < 3) ? modeSuffix[mi] : "";
-        ui->flowTabs->setTabText(index, QStringLiteral("流程 %1%2").arg(index + 1).arg(suffix));
+        // tab 标题用真实流程名，保持与触发路由名一致
+        const QString base = (m_executor && !m_executor->flowName().isEmpty())
+                                ? m_executor->flowName()
+                                : QStringLiteral("流程 %1").arg(index + 1);
+        ui->flowTabs->setTabText(index, base + suffix);
 
         // 状态栏提示
         static const char *modeNames[] = { "连续模式", "软触发模式", "硬触发模式" };

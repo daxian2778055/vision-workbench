@@ -282,6 +282,19 @@ void GlobalTriggerManager::registerFlow(const QString &name, FlowScene *scene, F
     m_flowBindings[name] = fb;
 }
 
+QString GlobalTriggerManager::allocFlowName() const
+{
+    QMutexLocker locker(&m_mutex);
+    // 扫描当前已注册绑定，返回首个空闲的"流程 N"。新建流程据此命名，避免删除流程后
+    // 用 size() 复用序号导致同名覆盖仍存流程的触发路由（L2 存量）。
+    int n = 1;
+    QString candidate;
+    do {
+        candidate = QStringLiteral("流程 %1").arg(n++);
+    } while (m_flowBindings.contains(candidate));
+    return candidate;
+}
+
 void GlobalTriggerManager::unregisterFlow(const QString &name)
 {
     QMutexLocker locker(&m_mutex);

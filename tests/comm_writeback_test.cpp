@@ -105,6 +105,7 @@ private slots:
     void testModbusCloseConnectionNoSpuriousSignal();
     void testUnregisterExecutorByIdentity();
     void testModbusSingleRegisterByteOrder();
+    void testAllocFlowNameAvoidsCollision();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -1730,6 +1731,32 @@ void CommWritebackTest::testModbusSingleRegisterByteOrder()
     QCOMPARE(rawByAddr.value(0), QByteArray::fromHex("3412"));  // BADC：字内字节互换
     QCOMPARE(rawByAddr.value(1), QByteArray::fromHex("3412"));  // DCBA：单字退化成字节互换
     QCOMPARE(rawByAddr.value(2), QByteArray::fromHex("1234"));  // CDAB：单寄存器原样（M1 回归点）
+}
+
+// L2 回归：新建流程名必须全局唯一。扫描已注册绑定返回首个空闲"流程 N"，
+// 验证顺序分配与"删除后回填空档"两种情形，避免 size() 复用序号导致同名覆盖。
+void CommWritebackTest::testAllocFlowNameAvoidsCollision()
+{
+    auto *gtm = GlobalTriggerManager::instance();
+    FlowScene s1, s2, s3, s4;
+    FlowExecutor e1, e2, e3, e4;
+
+    gtm->registerFlow(QStringLiteral("流程 1"), &s1, &e1);
+    QCOMPARE(gtm->allocFlowName(), QStringLiteral("流程 2"));
+    gtm->registerFlow(QStringLiteral("流程 2"), &s2, &e2);
+    gtm->registerFlow(QStringLiteral("流程 3"), &s3, &e3);
+    QCOMPARE(gtm->allocFlowName(), QStringLiteral("流程 4"));
+
+    // 模拟删除"流程 2"：退订后分配应回填空档，而非复用已占用序号
+    gtm->unregisterFlow(QStringLiteral("流程 2"));
+    QCOMPARE(gtm->allocFlowName(), QStringLiteral("流程 2"));
+    gtm->registerFlow(QStringLiteral("流程 2"), &s4, &e4);
+    QCOMPARE(gtm->allocFlowName(), QStringLiteral("流程 4"));   // 1/2/3 均占 → 下一个空闲为 4
+
+    // 清理
+    gtm->unregisterFlow(QStringLiteral("流程 1"));
+    gtm->unregisterFlow(QStringLiteral("流程 2"));
+    gtm->unregisterFlow(QStringLiteral("流程 3"));
 }
 
 QTEST_MAIN(CommWritebackTest)

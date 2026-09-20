@@ -60,6 +60,9 @@ public:
     // ---- 流程注册 ----
     void registerFlow(const QString &name, FlowScene *scene, FlowExecutor *executor);
     void unregisterFlow(const QString &name);
+    /// 分配一个全局唯一的"流程 N"名称（扫描当前已注册绑定，返回首个空闲序号）。
+    /// 用于新建流程命名，避免删除流程后 size() 复用导致同名覆盖仍存流程的触发路由（L2 存量）。
+    QString allocFlowName() const;
     /// 按执行器身份注销：仅当当前绑定确实指向该执行器时才移除，避免迟到析构（deleteLater /
     /// 复用）误删新方案同名流程的注册（"载入后触发静默失效"复活路径）。
     void unregisterExecutor(FlowExecutor *executor);
