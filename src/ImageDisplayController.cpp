@@ -150,6 +150,13 @@ void ImageDisplayController::clearSelection()
     m_selectedOutputNodes.clear();
 }
 
+void ImageDisplayController::removeScene(FlowScene *scene)
+{
+    if (!scene)
+        return;
+    m_selectedOutputNodes.remove(scene);
+}
+
 bool ImageDisplayController::startRoiPick(NodeBase *node)
 {
     if (!m_imageView || !node)

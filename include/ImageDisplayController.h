@@ -52,6 +52,8 @@ public:
     void setSelectedOutputNode(FlowScene *scene, NodeBase *node);
     NodeBase *selectedOutputNode(FlowScene *scene) const;
     void clearSelection();
+    /// 删除场景时清掉该场景的显式显示源键（否则场景对象已释放但键仍在 → 悬垂指针）
+    void removeScene(FlowScene *scene);
 
     /// 开始在画布上取点；返回 false = 无画布或无目标节点（调用方不应做提示）
     bool startRoiPick(NodeBase *node);

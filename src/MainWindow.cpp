@@ -381,25 +381,24 @@ MainWindow::MainWindow(QWidget *parent) :
 
                 switch (mode) {
                 case FlowMode::Continuous:
-                    ui->actionStartExecution->setEnabled(false);
-                    if (m_singleShotBtn) m_singleShotBtn->setEnabled(false);
                     logMessage(QStringLiteral("已切换为连续模式，流程自动循环执行..."));
                     m_executor->startExecution();
                     break;
                 case FlowMode::SoftwareTrigger:
-                    ui->actionStartExecution->setEnabled(true);
-                    if (m_singleShotBtn) m_singleShotBtn->setEnabled(true);
                     logMessage(QStringLiteral("已切换为软触发模式，点击「开始执行」运行一次流程"));
                     break;
                 case FlowMode::HardwareTrigger:
-                    ui->actionStartExecution->setEnabled(false);
-                    if (m_singleShotBtn) m_singleShotBtn->setEnabled(false);
                     logMessage(QStringLiteral("已切换为硬触发模式，等待相机触发源信号..."));
                     // 启动执行线程：循环中的 MVS 图像源会阻塞等待硬件触发帧，
                     // 每次触发源生效即执行一次流程
                     m_executor->startExecution();
                     break;
                 }
+                // 按钮态单一来源：开始/停止/单次执行可用性由 ExecutionStatusController 统一决定，
+                // 不再在此手动写 setEnabled（消除「软触发才可开始」规则的第三份副本）。
+                if (m_execStatus)
+                    m_execStatus->updateButtons(m_executor ? m_executor->getState()
+                                                          : ExecutionState::Stopped);
                 updateEditLockForCurrentScene();
             });
 
@@ -1777,7 +1776,7 @@ void MainWindow::onCloseFlowTab(int index)
     QWidget *tabWidget = ui->flowTabs->widget(index);
     FlowScene *scene = m_flowScenes[index];
     m_flowModes.remove(scene);
-
+    m_imageDisplay->removeScene(scene);   // 清掉已删场景的显式显示源键，避免悬垂指针
     // 如果执行器正运行此场景，先停止；未确认退出前不得继续（后面会删除场景，
     // 执行线程仍在跑就是 use-after-free）。历史实现只等 1 秒且不检查返回值。
     FlowExecutor *sceneEx = executorForScene(scene);
@@ -1833,16 +1832,15 @@ void MainWindow::onNodeExecuted(NodeBase *executedNode, bool success)
 {
     if (success) {
         ui->statusBar->showMessage(tr("节点 %1 执行成功").arg(executedNode->name()));
-        
+
         // Get output data from the node (use port index 0)
         QSharedPointer<DataObject> outputData = executedNode->getOutputData(0);
-        if (outputData) {
-            // If output is an image, display it
-            if (outputData->getType() == DataObject::DataType::Image) {
-                HImage image = outputData->getHImage();
-                if (image.IsInitialized()) {
-                    m_imageView->setImage(image, "");
-                }
+        if (outputData && outputData->getType() == DataObject::DataType::Image) {
+            const HImage image = outputData->getHImage();
+            if (image.IsInitialized()) {
+                // 经 ImageDisplayController 显示：刷新图像**并**叠加图元（连续运行下叠加必须
+                // 每节点更新，否则停留在上一个节点）。原内联实现只 setImage 不刷叠加，是半成品。
+                m_imageDisplay->showImage(image, QString(), executedNode);
             }
         }
     } else {
@@ -2033,7 +2031,12 @@ void MainWindow::onCurrentTabChanged(int index)
     }
 
     FlowScene *scene = m_flowScenes[index];
-    m_executor->setFlowScene(scene);
+    // 一场景一执行器：切 tab 直接切换到该场景专属执行器（executorForScene 保证存在/自动创建），
+    // 不再把同一个全局执行器重绑到新场景——这正是「两 tab 来回切 + 右键执行 → 两执行器并发
+    // 跑同批节点」的根因（executorForScene 拉取策略与全局重绑互相打架）。
+    m_executor = executorForScene(scene);
+    if (m_executor)
+        m_executor->setFlowScene(scene);
 
     // 恢复该流程存储的运行模式
     if (m_flowModeCombo) {
@@ -2044,7 +2047,9 @@ void MainWindow::onCurrentTabChanged(int index)
             m_flowModeCombo->setCurrentIndex(static_cast<int>(mode));
         }
         m_executor->setFlowMode(mode);
-        ui->actionStartExecution->setEnabled(mode == FlowMode::SoftwareTrigger);
+        // 按钮态单一来源：更新 开始/停止/单次执行 可用性（连续/硬件已 startExecution → Running）
+        if (m_execStatus)
+            m_execStatus->updateButtons(m_executor ? m_executor->getState() : ExecutionState::Stopped);
 
         // 更新标签页标题，显示模式后缀
         static const char *modeSuffix[] = { " [连续]", " [软触发]", " [硬触发]" };

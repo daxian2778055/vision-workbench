@@ -2,6 +2,8 @@
 // 再由流程里的「发送数据」算子把结果写回；并验证"设备不存在 / 未连接"时回写失败是**可见**的
 // （此前 process() 恒返回 true：PLC 什么都没收到，流程却显示成功、日志里也没有任何痕迹）。
 #include <QtTest>
+#include <QPushButton>
+#include <QTableWidget>
 #include <QSignalSpy>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -1110,10 +1112,10 @@ void CommWritebackTest::testFrameAssemblerTerminatorAndTimeout()
 
 void CommWritebackTest::testDialogToggleConnection()
 {
-    // A1 回归：连接开关走对话框真实路径。openDevice/closeDevice 会同步 emit
-    // deviceConnected/deviceDisconnected；历史上对话框在信号里**同步重建整张表**，
-    // 而 onToggleConnection 栈上仍在使用该行「连接开关」按钮 → use-after-free（点开关即崩）。
-    // 现已改为异步合并刷新：本用例保证"点开关 → 真的连上/断开"且全程不崩。
+    // A1 回归：用**真实鼠标点击**触发连接开关按钮的 clicked()（复现原 UAF——
+    // onToggleConnection 栈内同步重建整表销毁正被点击的按钮）。改异步合并刷新后，
+    // 真实点击不得崩溃且真的连上/断开。之前的实现用 invokeMethod(DirectConnection)
+    // 绕过真实点击，"PASS 恰恰证明钉不住"——这里改成 QTest::mouseClick。
     QTcpServer plc;
     QByteArray received;
     startSimulatedPlc(plc, received);
@@ -1123,21 +1125,27 @@ void CommWritebackTest::testDialogToggleConnection()
     QVERIFY(cm->addDevice(QStringLiteral("SIM_DLG"), QStringLiteral("TCP"),
                           tcpClientConfig(plc.serverPort())));
 
-    {
-        CommunicationManagerDialog dlg;
+    CommunicationManagerDialog dlg;
+    dlg.show();   // 真实点击需要可见窗口
 
-        QVERIFY2(QMetaObject::invokeMethod(&dlg, "onToggleConnection", Qt::DirectConnection,
-                                           Q_ARG(int, 0)),
-                 "onToggleConnection 应可通过元对象调用");
-        QTRY_VERIFY_WITH_TIMEOUT(cm->deviceInfo(QStringLiteral("SIM_DLG")).isConnected, 3000);
-        QVERIFY2(received.isEmpty(), "刚连上尚未发送任何数据");
+    auto *table = dlg.findChild<QTableWidget *>(QStringLiteral("deviceTable"));
+    QVERIFY2(table, "设备表格应可通过 objectName 定位");
 
-        // 再点一次：断开（同样不得在重建后使用旧按钮）
-        QVERIFY(QMetaObject::invokeMethod(&dlg, "onToggleConnection", Qt::DirectConnection,
-                                          Q_ARG(int, 0)));
-        QTRY_VERIFY_WITH_TIMEOUT(!cm->deviceInfo(QStringLiteral("SIM_DLG")).isConnected, 3000);
-    }
+    // 表格异步重建后会换掉第 0 行的按钮，每次点击都重新定位，避免悬垂指针
+    auto clickToggle = [&]() {
+        auto *btn = qobject_cast<QPushButton *>(table->cellWidget(0, 2));
+        QVERIFY2(btn, "第 0 行连接开关按钮应存在");
+        QTest::mouseClick(btn, Qt::LeftButton);
+    };
 
+    clickToggle();   // 真实点击 → 连上
+    QTRY_VERIFY_WITH_TIMEOUT(cm->deviceInfo(QStringLiteral("SIM_DLG")).isConnected, 3000);
+    QVERIFY2(received.isEmpty(), "刚连上尚未发送任何数据");
+
+    clickToggle();   // 再点 → 断开
+    QTRY_VERIFY_WITH_TIMEOUT(!cm->deviceInfo(QStringLiteral("SIM_DLG")).isConnected, 3000);
+
+    dlg.close();
     QVERIFY(cm->removeDevice(QStringLiteral("SIM_DLG")));
 }
 

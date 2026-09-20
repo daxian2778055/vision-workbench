@@ -80,6 +80,7 @@ void CommunicationManagerDialog::setupDeviceTab(QTabWidget *tabs)
 
     // 设备表格 — 5 列：名称 / 类型 / 连接开关 / 配置 / 寄存器实时值
     m_deviceTable = new QTableWidget();
+    m_deviceTable->setObjectName(QStringLiteral("deviceTable"));  // 供回归测试按名定位
     m_deviceTable->setColumnCount(5);
     m_deviceTable->setHorizontalHeaderLabels({
         QStringLiteral("\u8BBE\u5907\u540D\u79F0"),
@@ -318,7 +319,10 @@ void CommunicationManagerDialog::onToggleConnection(int row)
                 "QPushButton:checked { background-color: #4CAF50; }");
         }
     }
-    refreshDeviceTable();
+    // 关键修复（A1 半修收口）：**不得**在此 clicked() 栈内同步重建整张表——
+    // 表格重建会销毁正被点击的「连接开关」按钮，是其 clicked() 处理栈上的悬垂指针（UAF，点开关即崩）。
+    // 改为异步合并刷新（0ms 单发，上下文为 this：对话框析构后自动取消），与状态信号路径一致。
+    scheduleDeviceTableRefresh();
 }
 
 void CommunicationManagerDialog::onAddDevice()

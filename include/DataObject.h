@@ -6,6 +6,7 @@
 #include <QVector>
 #include <QSharedPointer>
 #include <QMutex>
+#include <QMutexLocker>
 #include <HalconCpp.h>
 
 /// 测量结果结构（供卡尺、距离、角度等测量算子输出）
@@ -63,11 +64,14 @@ public:
     DataType getType() const;
     QVariant getData() const;
     void setData(const QVariant &data);
-    void setType(DataType t) { m_type = t; }
-    
+    // 公开 setter 也必须走读写锁：执行线程算子（如 propagateData 打来源戳、节点复用输出对象）
+    // 会在发布后仍写 m_type/m_data，而界面线程同时在读——无锁即为数据竞争（S8 旁路）。
+    void setType(DataType t) { QMutexLocker lock(&m_mutex); m_type = t; }
+
     // 通用值设置方法（用于设置bool、int、double等简单类型）
     template<typename T>
     void setValue(const T &value) {
+        QMutexLocker lock(&m_mutex);
         m_data = QVariant::fromValue(value);
         m_type = DataType::Number;
     }
