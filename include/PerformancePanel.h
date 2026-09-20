@@ -10,6 +10,7 @@
 #include <QVector>
 #include <QPair>
 #include <QTimer>
+#include <QPointer>
 
 class NodeBase;
 class FlowExecutor;
@@ -73,5 +74,5 @@ private:
 
     QMap<NodeBase*, NodeStats> m_nodeStats;
     QVector<QPair<qint64, qint64>> m_flowTimes;  /// <开始时间, 耗时>
-    FlowExecutor *m_boundExecutor = nullptr;
+    QPointer<FlowExecutor> m_boundExecutor;
 };

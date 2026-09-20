@@ -101,6 +101,10 @@ private slots:
     void testByteMatchBadcByteOrder();
     void testCloseConnectionNoSpuriousSignal();
     void testSendWhileDisconnectedIsReported();
+    // N 轮评审补强：重复关闭不假断开 / 按身份注销 / 单寄存器字节序全矩阵（含 CDAB 回归）
+    void testModbusCloseConnectionNoSpuriousSignal();
+    void testUnregisterExecutorByIdentity();
+    void testModbusSingleRegisterByteOrder();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -1593,6 +1597,139 @@ void CommWritebackTest::testSendWhileDisconnectedIsReported()
 
         QVERIFY(cm->removeDevice(name));
     }
+}
+
+// Modbus 客户端以"曾连接"为 connectionClosed 唯一判据（与 TCP/串口/PLC 对齐）。
+// 连不上（端口 1 无服务）时，重复 closeDevice 不得产生任何额外的假 connectionClosed
+// （旧实现按"对象全空"判据，连失败后 m_modbus 残留非空 → 每次重连都发一次假断开）。
+void CommWritebackTest::testModbusCloseConnectionNoSpuriousSignal()
+{
+    auto *cm = CommunicationManager::instance();
+    DeviceCleanup cleanup{ { QStringLiteral("MBJ_TCP") } };
+
+    QJsonObject cliCfg;
+    cliCfg[QStringLiteral("role")] = QStringLiteral("客户端");
+    cliCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
+    cliCfg[QStringLiteral("host")] = QStringLiteral("127.0.0.1");
+    cliCfg[QStringLiteral("port")] = 1;          // 无服务，连接必失败
+    cliCfg[QStringLiteral("slaveAddress")] = 1;
+    QVERIFY2(cm->addDevice(QStringLiteral("MBJ_TCP"), QStringLiteral("Modbus"), cliCfg),
+             "addDevice(Modbus 客户端) 失败");
+    auto *node = qobject_cast<ModbusNode *>(cm->deviceNode(QStringLiteral("MBJ_TCP")));
+    QVERIFY2(node != nullptr, "Modbus 节点类型不符");
+
+    QSignalSpy closedSpy(node, &CommunicationNodeBase::connectionClosed);
+    cm->openDevice(QStringLiteral("MBJ_TCP"));     // 异步连接，端口 1 必失败
+    QTest::qWait(300);                             // 让首轮连接尝试/重连落地
+    const int afterOpen = closedSpy.count();        // 0 或 1：取决于异步成败，本身不关心
+    cm->closeDevice(QStringLiteral("MBJ_TCP"));
+    cm->closeDevice(QStringLiteral("MBJ_TCP"));    // 已断再关
+    QTest::qWait(300);                             // 覆盖可能的重连窗口：守卫必须抑制
+    QCOMPARE(closedSpy.count(), afterOpen);        // 两次 close 不得新增任何 connectionClosed
+}
+
+// "载入后触发静默失效"复活路径的钉：unregisterExecutor 必须按执行器身份注销。
+// 同名覆盖（registerFlow 同名静默覆盖）后，旧执行器的迟到析构不得误删新绑定的流程。
+void CommWritebackTest::testUnregisterExecutorByIdentity()
+{
+    auto *gtm = GlobalTriggerManager::instance();
+    const QString flow = QStringLiteral("IDENTITY_FLOW");
+
+    FlowScene scene1, scene2;
+    FlowExecutor exec1, exec2;
+    exec1.setFlowName(flow);
+    exec1.setFlowMode(FlowMode::SoftwareTrigger);
+    exec2.setFlowName(flow);
+    exec2.setFlowMode(FlowMode::SoftwareTrigger);
+
+    gtm->registerFlow(flow, &scene1, &exec1);
+    QCOMPARE(gtm->executorForFlow(flow), &exec1);
+
+    // 同名覆盖：新执行器接管同一流程名
+    gtm->registerFlow(flow, &scene2, &exec2);
+    QCOMPARE(gtm->executorForFlow(flow), &exec2);
+
+    // 旧执行器注销（模拟其迟到析构）：身份不匹配 → 不得移除当前绑定
+    gtm->unregisterExecutor(&exec1);
+    QCOMPARE(gtm->executorForFlow(flow), &exec2);
+
+    // 新执行器注销才真正解绑
+    gtm->unregisterExecutor(&exec2);
+    QCOMPARE(gtm->executorForFlow(flow), nullptr);
+}
+
+// 单寄存器字节序全矩阵（含 M1 回归探针）：服务器回环，客户端写同一值 0x1234 到三个单寄存器
+// （int16+BADC / uint16+DCBA / int16+CDAB），断言服务器收到的原始字节：
+//   - BADC 单寄存器：字内字节互换 → "3412"（本就有意修对）
+//   - DCBA 单寄存器：单字无换字概念、完全反转退化成字节互换 → "3412"（本就有意修对）
+//   - CDAB 单寄存器：单字无"换字"，必须原样 → "1234"（回归点：旧实现落入 else 做了字节互换）
+void CommWritebackTest::testModbusSingleRegisterByteOrder()
+{
+    const int port = 15504;
+    auto *cm = CommunicationManager::instance();
+    DeviceCleanup cleanup{ { QStringLiteral("CD_SRV"), QStringLiteral("CD_CLI") } };
+
+    QJsonObject srvCfg;
+    srvCfg[QStringLiteral("role")] = QStringLiteral("服务器");
+    srvCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
+    srvCfg[QStringLiteral("port")] = port;
+    srvCfg[QStringLiteral("slaveAddress")] = 1;
+    QVERIFY2(cm->addDevice(QStringLiteral("CD_SRV"), QStringLiteral("Modbus"), srvCfg),
+             "addDevice(服务器) 失败");
+    auto *srv = qobject_cast<ModbusNode *>(cm->deviceNode(QStringLiteral("CD_SRV")));
+    QVERIFY2(srv != nullptr, "服务器节点类型不符");
+
+    QList<ModbusRegisterItem> regs;
+    auto mk = [&](int addr, const QString &dt, const QString &bo) {
+        ModbusRegisterItem r;
+        r.address = addr;
+        r.dataType = dt;
+        r.byteOrder = bo;
+        r.accessMode = QStringLiteral("ReadWrite");
+        r.enabled = true;
+        regs.append(r);
+    };
+    mk(0, QStringLiteral("int16"), QStringLiteral("BADC"));
+    mk(1, QStringLiteral("uint16"), QStringLiteral("DCBA"));
+    mk(2, QStringLiteral("int16"), QStringLiteral("CDAB"));
+    srv->setRegisters(regs);
+
+    QVERIFY2(cm->openDevice(QStringLiteral("CD_SRV")), "Modbus 服务器启动失败");
+    QTRY_VERIFY_WITH_TIMEOUT(srv->isServerListening(), 3000);
+
+    QJsonObject cliCfg;
+    cliCfg[QStringLiteral("role")] = QStringLiteral("客户端");
+    cliCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
+    cliCfg[QStringLiteral("host")] = QStringLiteral("127.0.0.1");
+    cliCfg[QStringLiteral("port")] = port;
+    cliCfg[QStringLiteral("slaveAddress")] = 1;
+    QVERIFY2(cm->addDevice(QStringLiteral("CD_CLI"), QStringLiteral("Modbus"), cliCfg),
+             "addDevice(客户端) 失败");
+    QVERIFY2(cm->openDevice(QStringLiteral("CD_CLI")), "Modbus 客户端连接失败");
+    auto *cli = qobject_cast<ModbusNode *>(cm->deviceNode(QStringLiteral("CD_CLI")));
+    QVERIFY2(cli != nullptr, "客户端节点类型不符");
+
+    QSignalSpy changedSpy(srv, &CommunicationNodeBase::registerValueChanged);
+    const quint16 value = 0x1234;   // 4660，落在 int16 正区间
+    for (int addr = 0; addr < 3; ++addr) {
+        bool wrote = false;
+        for (int i = 0; i < 50 && !wrote; ++i) {
+            wrote = cli->writeRegister(addr, value);
+            if (!wrote) QTest::qWait(100);
+        }
+        QVERIFY2(wrote, qPrintable(QStringLiteral("写寄存器 %1 失败").arg(addr)));
+    }
+
+    QTRY_COMPARE_WITH_TIMEOUT(changedSpy.count(), 3, 5000);
+    QMap<int, QByteArray> rawByAddr;
+    for (int i = 0; i < changedSpy.count(); ++i) {
+        const int a = changedSpy.at(i).at(0).toInt();
+        const QByteArray r = changedSpy.at(i).at(1).toByteArray();
+        rawByAddr[a] = r;
+    }
+    QCOMPARE(rawByAddr.value(0), QByteArray::fromHex("3412"));  // BADC：字内字节互换
+    QCOMPARE(rawByAddr.value(1), QByteArray::fromHex("3412"));  // DCBA：单字退化成字节互换
+    QCOMPARE(rawByAddr.value(2), QByteArray::fromHex("1234"));  // CDAB：单寄存器原样（M1 回归点）
 }
 
 QTEST_MAIN(CommWritebackTest)

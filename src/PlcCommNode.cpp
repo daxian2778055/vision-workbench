@@ -262,13 +262,16 @@ bool PlcCommNode::readRegister(int slaveAddr, int regAddr, int count)
                         QDataStream stream(&raw, QIODevice::WriteOnly);
                         stream.setByteOrder(QDataStream::BigEndian);
 
-                        // 单寄存器（16 位）也按 byteOrder 变换（与 Modbus 同款修复）：
-                        // 此前用 `|| values.size() == 1` 强制 ABCD，BADC/DCBA 单寄存器未交换。
+                        // 单寄存器字节序（与 Modbus 同款）：ABCD/CDAB 原样；BADC/DCBA 字内互换。
+                        // CDAB 单寄存器无"换字"→ 原样（修正：旧实现落入 else 做了字节互换）。
                         if (reg.byteOrder == QStringLiteral("ABCD")) {
                             for (quint16 v : values) stream << v;
-                        } else if (reg.byteOrder == QStringLiteral("CDAB") && values.size() >= 2) {
-                            stream << values[1] << values[0];
-                        } else if (reg.byteOrder == QStringLiteral("BADC") && values.size() >= 2) {
+                        } else if (reg.byteOrder == QStringLiteral("CDAB")) {
+                            if (values.size() >= 2)
+                                stream << values[1] << values[0];
+                            else
+                                for (quint16 v : values) stream << v;
+                        } else if (reg.byteOrder == QStringLiteral("BADC")) {
                             for (int i = 0; i < values.size(); ++i) {
                                 quint16 swapped = ((values[i] & 0xFF) << 8) | ((values[i] >> 8) & 0xFF);
                                 stream << swapped;

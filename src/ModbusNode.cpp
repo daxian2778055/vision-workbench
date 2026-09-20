@@ -24,15 +24,21 @@ QByteArray assembleRegisterBytes(const QVector<quint16> &values, const QString &
     QDataStream stream(&raw, QIODevice::WriteOnly);
     stream.setByteOrder(QDataStream::BigEndian);   // Modbus 是 Big Endian
 
-    // 注意：单寄存器（16 位）也要按 byteOrder 变换——此前用 `|| values.size() == 1` 强制走
-    // ABCD 分支，导致 BADC/DCBA 的单寄存器值未经字节交换（仅靠 parseRawToValue 的 order 补一次，
-    // 看似正确但 16/32 位逻辑不一致）。此处统一归一化后，parseRawToValue 一律按大端解释。
+    // 归一化约定（与 32 位路径一致）：先把寄存器按 byteOrder 组装成最终字节序列，
+    // parseRawToValue 一律按大端解释。单寄存器（16 位）语义：
+    //   - ABCD / CDAB：只有 1 个字，无"换字"可言 → 原样（CDAB 单寄存器 = ABCD）；
+    //   - BADC / DCBA：字内字节互换（单寄存器 = 高低字节颠倒）。
+    // 旧实现用 `|| values.size() == 1` 强制走 ABCD，导致 BADC/DCBA 单寄存器未交换（16/32 位
+    // 逻辑不一致）；而 CDAB 单寄存器也未被交换（正确）。此处 CDAB 单寄存器显式走原样。
     if (byteOrder == QStringLiteral("ABCD")) {
         for (quint16 v : values)
             stream << v;
-    } else if (byteOrder == QStringLiteral("CDAB") && values.size() >= 2) {
-        stream << values[1] << values[0];
-    } else if (byteOrder == QStringLiteral("BADC") && values.size() >= 2) {
+    } else if (byteOrder == QStringLiteral("CDAB")) {
+        if (values.size() >= 2)
+            stream << values[1] << values[0];           // 32 位：交换两字
+        else
+            for (quint16 v : values) stream << v;       // 16 位单寄存器无"换字"，CDAB=ABCD 原样
+    } else if (byteOrder == QStringLiteral("BADC")) {
         for (quint16 v : values)
             stream << quint16(((v & 0xFF) << 8) | ((v >> 8) & 0xFF));
     } else {
