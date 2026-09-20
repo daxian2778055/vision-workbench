@@ -35,8 +35,18 @@ bool UdpCommNode::openConnection()
     if (m_socket) closeConnection();
 
     m_socket = new QUdpSocket(this);
-    const quint16 localPort =
-        static_cast<quint16>(m_params.value(QStringLiteral("localPort"), 8000).toInt());
+    // N4 判空：端口越界若直接 static_cast<quint16> 会静默回绕（如 99999→34463）绑定到意外端口，
+    // 收发"看似正常"却全错——显式拒绝非法配置。
+    const int rawLocalPort = m_params.value(QStringLiteral("localPort"), 8000).toInt();
+    if (rawLocalPort < 0 || rawLocalPort > 65535) {
+        emit communicationError(QStringLiteral("UDP 本地端口 %1 非法（应在 0~65535）").arg(rawLocalPort));
+        m_socket->deleteLater();
+        m_socket = nullptr;
+        m_connected = false;
+        setParamDirect(QStringLiteral("connected"), false);
+        return false;
+    }
+    const quint16 localPort = static_cast<quint16>(rawLocalPort);
     // 绑定任意本机地址（不限定 IP）；端口 0 表示由系统分配（仅发送场景可用）
     if (!m_socket->bind(QHostAddress::AnyIPv4, localPort)) {
         emit communicationError(QStringLiteral("UDP 绑定端口 %1 失败: %2")

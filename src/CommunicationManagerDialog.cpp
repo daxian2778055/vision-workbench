@@ -419,17 +419,19 @@ void CommunicationManagerDialog::onConfigDevice()
     const bool wasConnected = info.isConnected;   // TCP/串口/UDP 热更新后恢复连接用
 
     if (info.type == QStringLiteral("Modbus")) {
-        if (wasConnected) cm->closeDevice(name);   // 删重建前必须先断开
         auto *modbusNode = qobject_cast<ModbusNode *>(cm->deviceNode(name));
         ModbusConfigDialog dlg(QStringLiteral("Modbus\u914D\u7F6E - %1").arg(name),
                                modbusNode, this);
         dlg.setConfig(info.config);
         if (dlg.exec() == QDialog::Accepted) {
             QJsonObject newConfig = dlg.config();
-            // 更新设备配置
+            // N13：断开必须放在 Accepted 分支内——旧实现在弹窗之前就 closeDevice，
+            // 用户点"取消"也会白白掉线；且应用后需按原状态恢复，否则删重建后永久离线。
+            if (wasConnected) cm->closeDevice(name);
+            // 更新设备配置（移除旧的 + 重新创建设备节点）
             cm->removeDevice(name);
             cm->addDevice(name, info.type, newConfig);
-            // 移除旧的 + 重新创建设备节点
+            if (wasConnected) cm->openDevice(name);
         }
     } else if (info.type == QStringLiteral("TCP") || info.type == QStringLiteral("UDP")
                || info.type == QStringLiteral("\u4E32\u53E3") || info.type == QStringLiteral("Serial")) {
@@ -448,15 +450,17 @@ void CommunicationManagerDialog::onConfigDevice()
         if (wasConnected) node->openConnection();
         cm->updateDeviceConfig(name, newConfig);   // 方案保存时写的是新配置
     } else if (info.type == QStringLiteral("PLC")) {
-        if (wasConnected) cm->closeDevice(name);
         auto *plcNode = qobject_cast<PlcCommNode *>(cm->deviceNode(name));
         PlcConfigDialog dlg(QStringLiteral("PLC\u914D\u7F6E - %1").arg(name),
                             plcNode, this);
         dlg.setConfig(info.config);
         if (dlg.exec() == QDialog::Accepted) {
             QJsonObject newConfig = dlg.config();
+            // N13：同 Modbus——断开移入 Accepted 分支（取消不掉线），应用后按原状态恢复连接。
+            if (wasConnected) cm->closeDevice(name);
             cm->removeDevice(name);
             cm->addDevice(name, info.type, newConfig);
+            if (wasConnected) cm->openDevice(name);
         }
     } else {
         QMessageBox::information(this, QStringLiteral("\u63D0\u793A"),

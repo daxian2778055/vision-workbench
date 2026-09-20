@@ -97,7 +97,18 @@ bool SerialCommNode::openConnection()
     if (m_reconnectTimer) m_reconnectTimer->stop();
 
     m_serial = new QSerialPort(this);
-    m_serial->setPortName(m_params.value(QStringLiteral("portName")).toString());
+    // N4 判空：未配置串口号时 open("") 必然失败，且会被自动重连每 3s 刷屏——快速失败且不排重连
+    // （与下方"波特率不支持"同一策略：配置错误重试无意义）。
+    const QString portName = m_params.value(QStringLiteral("portName")).toString().trimmed();
+    if (portName.isEmpty()) {
+        emit communicationError(QStringLiteral("未配置串口号，串口未打开"));
+        m_serial->deleteLater();
+        m_serial = nullptr;
+        m_connected = false;
+        setParamDirect(QStringLiteral("connected"), false);
+        return false;
+    }
+    m_serial->setPortName(portName);
     const int baud = m_params.value(QStringLiteral("baudRate"), 9600).toInt();
     if (!m_serial->setBaudRate(baud)) {
         // 波特率不受支持时继续打开只会以错误速率"永远通不上"——明确失败并提示，
