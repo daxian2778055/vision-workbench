@@ -17,6 +17,7 @@
 #include "GlobalTriggerManager.h"
 #include "HeartbeatManager.h"
 #include "ModbusNode.h"
+#include "PlcCommNode.h"
 #include "NodeBase.h"
 #include "NodeTemplateStore.h"
 #include "RecipeManager.h"
@@ -103,9 +104,14 @@ private slots:
     void testSendWhileDisconnectedIsReported();
     // N 轮评审补强：重复关闭不假断开 / 按身份注销 / 单寄存器字节序全矩阵（含 CDAB 回归）
     void testModbusCloseConnectionNoSpuriousSignal();
+    void testPlcCloseConnectionNoSpuriousSignal();   // S-2：PLC 关闭守卫与 Modbus 同款（m_everReallyConnected 判据 + 不复活）
+    void testModbusCloseNoDoubleReportOnTransientDrop();   // L1：瞬断已报一次后主动 close 不得二次上报 connectionClosed
+    void testPlcCloseNoDoubleReportOnTransientDrop();      // L1（PLC 同款）：判别性覆盖 PlcCommNode 的 ever 标志复位
     void testUnregisterExecutorByIdentity();
     void testModbusSingleRegisterByteOrder();
     void testModbusWriteReadByteOrderRoundTrip();   // S3/S4：写入逆变换 + 宽类型拆寄存器往返
+    void testModbusUserCloseDoesNotResurrect();      // S-1：真连后用户关闭不复活 + 重开后自愈仍有效
+    void testPlcUserCloseDoesNotResurrect();         // S-1（PLC 同款）：并钉住 openConnection 两行复位
     void testAllocFlowNameAvoidsCollision();
 };
 
@@ -1633,6 +1639,245 @@ void CommWritebackTest::testModbusCloseConnectionNoSpuriousSignal()
     QVERIFY2(!node->isConnected(), "关闭后节点不得仍显示已连接");
 }
 
+// S-2：PLC 关闭守卫必须与 Modbus 同款——以 m_everReallyConnected（"曾真正连上"）为唯一判据，
+// 而非关闭时的瞬时 m_connected；且用户主动关闭后不得被自动重连"复活"。连不上（端口 1 无服务）时
+// open+重复 close 全过程都不得产生任何 connectionClosed / connectionOpened。
+void CommWritebackTest::testPlcCloseConnectionNoSpuriousSignal()
+{
+    auto *cm = CommunicationManager::instance();
+    DeviceCleanup cleanup{ { QStringLiteral("PLCJ_TCP") } };
+
+    QJsonObject cliCfg;
+    cliCfg[QStringLiteral("host")] = QStringLiteral("127.0.0.1");
+    cliCfg[QStringLiteral("port")] = 1;          // 无服务，连接必失败
+    cliCfg[QStringLiteral("slaveAddress")] = 1;
+    QVERIFY2(cm->addDevice(QStringLiteral("PLCJ_TCP"), QStringLiteral("PLC"), cliCfg),
+             "addDevice(PLC 客户端) 失败");
+    auto *node = qobject_cast<PlcCommNode *>(cm->deviceNode(QStringLiteral("PLCJ_TCP")));
+    QVERIFY2(node != nullptr, "PLC 节点类型不符");
+
+    QSignalSpy closedSpy(node, &CommunicationNodeBase::connectionClosed);
+    QSignalSpy openedSpy(node, &CommunicationNodeBase::connectionOpened);
+    cm->openDevice(QStringLiteral("PLCJ_TCP"));     // 异步连接，端口 1 必失败
+    QTest::qWait(300);                              // 让首轮连接尝试落地
+    cm->closeDevice(QStringLiteral("PLCJ_TCP"));
+    cm->closeDevice(QStringLiteral("PLCJ_TCP"));    // 已断再关
+    QTest::qWait(1500);                             // 覆盖重连窗口（默认 3000ms 未到）：关闭后不得自行"复活"
+    QCOMPARE(closedSpy.count(), 0);                 // 从未真正连上 → close 后恒 0（S-2 判据修正点）
+    QCOMPARE(openedSpy.count(), 0);                 // 且关闭后不得被重连"复活"发 connectionOpened
+    QVERIFY2(!node->isConnected(), "关闭后节点不得仍显示已连接");
+}
+
+// L1 回归：一次连接生命周期内 connectionClosed 至多上报一次。真连上后网络瞬断（关服务器）→
+// Unconnected 分支已报一次；此时用户再主动 close，判据 m_everReallyConnected 必须已在瞬断时复位，
+// 否则 was 仍为真 → 二次上报（修复前 count 会变 2）。客户端关掉 autoReconnect，避免重连的
+// openConnection 复位 ever 标志而掩盖该 bug。
+void CommWritebackTest::testModbusCloseNoDoubleReportOnTransientDrop()
+{
+    const int port = 15506;
+    auto *cm = CommunicationManager::instance();
+    DeviceCleanup cleanup{ { QStringLiteral("DR_SRV"), QStringLiteral("DR_CLI") } };
+
+    QJsonObject srvCfg;
+    srvCfg[QStringLiteral("role")] = QStringLiteral("服务器");
+    srvCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
+    srvCfg[QStringLiteral("port")] = port;
+    srvCfg[QStringLiteral("slaveAddress")] = 1;
+    QVERIFY2(cm->addDevice(QStringLiteral("DR_SRV"), QStringLiteral("Modbus"), srvCfg),
+             "addDevice(服务器) 失败");
+    auto *srv = qobject_cast<ModbusNode *>(cm->deviceNode(QStringLiteral("DR_SRV")));
+    QVERIFY2(srv != nullptr, "服务器节点类型不符");
+    QVERIFY2(cm->openDevice(QStringLiteral("DR_SRV")), "Modbus 服务器启动失败");
+    QTRY_VERIFY_WITH_TIMEOUT(srv->isServerListening(), 3000);
+
+    QJsonObject cliCfg;
+    cliCfg[QStringLiteral("role")] = QStringLiteral("客户端");
+    cliCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
+    cliCfg[QStringLiteral("host")] = QStringLiteral("127.0.0.1");
+    cliCfg[QStringLiteral("port")] = port;
+    cliCfg[QStringLiteral("slaveAddress")] = 1;
+    cliCfg[QStringLiteral("autoReconnect")] = false;   // 关键：关掉重连，ever 标志不被 openConnection 复位
+    QVERIFY2(cm->addDevice(QStringLiteral("DR_CLI"), QStringLiteral("Modbus"), cliCfg),
+             "addDevice(客户端) 失败");
+    auto *cli = qobject_cast<ModbusNode *>(cm->deviceNode(QStringLiteral("DR_CLI")));
+    QVERIFY2(cli != nullptr, "客户端节点类型不符");
+
+    QSignalSpy closedSpy(cli, &CommunicationNodeBase::connectionClosed);
+    QVERIFY2(cm->openDevice(QStringLiteral("DR_CLI")), "Modbus 客户端连接失败");
+    QTRY_VERIFY_WITH_TIMEOUT(cli->isConnected(), 3000);   // 真正连上 → m_everReallyConnected=true
+
+    // 关服务器 → 客户端瞬断 → Unconnected 分支上报恰好一次（并在 L1 修复里复位 ever 标志）
+    QVERIFY(cm->closeDevice(QStringLiteral("DR_SRV")));
+    QTRY_COMPARE_WITH_TIMEOUT(closedSpy.count(), 1, 3000);
+
+    // 主动关客户端：ever 标志已复位 → was=false → 不得二次上报
+    QVERIFY(cm->closeDevice(QStringLiteral("DR_CLI")));
+    QTest::qWait(300);
+    QCOMPARE(closedSpy.count(), 1);   // 整个生命周期恰好一次；修复前这里会是 2
+}
+
+// L1（PLC 同款）判别性回归：PlcCommNode 的 m_everReallyConnected 必须在瞬断时复位，否则主动 close
+// 会二次上报 connectionClosed。PLC 客户端（QModbusTcpClient）连到 Modbus 服务器（QModbusTcpServer），
+// 真连上后关服务器制造瞬断→PLC Unconnected 分支报一次；再主动 close PLC→总数仍须为 1（修复前为 2）。
+// autoReconnect 关掉，避免重连的 openConnection 复位 ever 标志而掩盖该 bug。
+void CommWritebackTest::testPlcCloseNoDoubleReportOnTransientDrop()
+{
+    const int port = 15507;
+    auto *cm = CommunicationManager::instance();
+    DeviceCleanup cleanup{ { QStringLiteral("PLCD_SRV"), QStringLiteral("PLCD_CLI") } };
+
+    QJsonObject srvCfg;
+    srvCfg[QStringLiteral("role")] = QStringLiteral("服务器");
+    srvCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
+    srvCfg[QStringLiteral("port")] = port;
+    srvCfg[QStringLiteral("slaveAddress")] = 1;
+    QVERIFY2(cm->addDevice(QStringLiteral("PLCD_SRV"), QStringLiteral("Modbus"), srvCfg),
+             "addDevice(Modbus 服务器) 失败");
+    auto *srv = qobject_cast<ModbusNode *>(cm->deviceNode(QStringLiteral("PLCD_SRV")));
+    QVERIFY2(srv != nullptr, "服务器节点类型不符");
+    QVERIFY2(cm->openDevice(QStringLiteral("PLCD_SRV")), "Modbus 服务器启动失败");
+    QTRY_VERIFY_WITH_TIMEOUT(srv->isServerListening(), 3000);
+
+    QJsonObject cliCfg;
+    cliCfg[QStringLiteral("host")] = QStringLiteral("127.0.0.1");
+    cliCfg[QStringLiteral("port")] = port;
+    cliCfg[QStringLiteral("slaveAddress")] = 1;
+    cliCfg[QStringLiteral("autoReconnect")] = false;   // 关键：关掉重连，ever 标志不被 openConnection 复位
+    QVERIFY2(cm->addDevice(QStringLiteral("PLCD_CLI"), QStringLiteral("PLC"), cliCfg),
+             "addDevice(PLC 客户端) 失败");
+    auto *cli = qobject_cast<PlcCommNode *>(cm->deviceNode(QStringLiteral("PLCD_CLI")));
+    QVERIFY2(cli != nullptr, "PLC 节点类型不符");
+
+    QSignalSpy closedSpy(cli, &CommunicationNodeBase::connectionClosed);
+    QVERIFY2(cm->openDevice(QStringLiteral("PLCD_CLI")), "PLC 客户端连接失败");
+    QTRY_VERIFY_WITH_TIMEOUT(cli->isConnected(), 3000);   // 真正连上 → m_everReallyConnected=true
+
+    // 关服务器 → PLC 瞬断 → Unconnected 分支上报恰好一次（并在 L1 修复里复位 ever 标志）
+    QVERIFY(cm->closeDevice(QStringLiteral("PLCD_SRV")));
+    QTRY_COMPARE_WITH_TIMEOUT(closedSpy.count(), 1, 3000);
+
+    // 主动关 PLC：ever 标志已复位 → wasConnected=false → 不得二次上报
+    QVERIFY(cm->closeDevice(QStringLiteral("PLCD_CLI")));
+    QTest::qWait(300);
+    QCOMPARE(closedSpy.count(), 1);   // 整个生命周期恰好一次；修复前这里会是 2
+}
+
+// S-1 确定性回归（真连、服务器保持在线，不靠杀服务制造时序赌博），分两段钉住"关闭不复活的守卫 + 复位"：
+//  (1) 用户主动 close 后不得被自动重连"复活"：connectionOpened 不新增、isConnected 为假；
+//  (2) 重开后断线自愈仍须有效（关服务器 → 立即重启 → 客户端应自行重连回来）。这一段同时钉住
+//      openConnection 里 m_userClosed/m_everReallyConnected 两行复位：若这两行缺失，m_userClosed 会
+//      从首次 open 起恒为 true，Unconnected 分支永不自愈（8f36746 的 PLC 版正是如此，本用例会红）。
+void CommWritebackTest::testModbusUserCloseDoesNotResurrect()
+{
+    const int port = 15508;
+    auto *cm = CommunicationManager::instance();
+    DeviceCleanup cleanup{ { QStringLiteral("RS_SRV"), QStringLiteral("RS_CLI") } };
+
+    QJsonObject srvCfg;
+    srvCfg[QStringLiteral("role")] = QStringLiteral("服务器");
+    srvCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
+    srvCfg[QStringLiteral("port")] = port;
+    srvCfg[QStringLiteral("slaveAddress")] = 1;
+    QVERIFY2(cm->addDevice(QStringLiteral("RS_SRV"), QStringLiteral("Modbus"), srvCfg),
+             "addDevice(服务器) 失败");
+    auto *srv = qobject_cast<ModbusNode *>(cm->deviceNode(QStringLiteral("RS_SRV")));
+    QVERIFY2(srv != nullptr, "服务器节点类型不符");
+    QVERIFY2(cm->openDevice(QStringLiteral("RS_SRV")), "Modbus 服务器启动失败");
+    QTRY_VERIFY_WITH_TIMEOUT(srv->isServerListening(), 3000);
+
+    QJsonObject cliCfg;
+    cliCfg[QStringLiteral("role")] = QStringLiteral("客户端");
+    cliCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
+    cliCfg[QStringLiteral("host")] = QStringLiteral("127.0.0.1");
+    cliCfg[QStringLiteral("port")] = port;
+    cliCfg[QStringLiteral("slaveAddress")] = 1;
+    cliCfg[QStringLiteral("autoReconnect")] = true;
+    cliCfg[QStringLiteral("reconnectInterval")] = 500;   // 最短间隔（setParam 下限 500）
+    QVERIFY2(cm->addDevice(QStringLiteral("RS_CLI"), QStringLiteral("Modbus"), cliCfg),
+             "addDevice(客户端) 失败");
+    auto *cli = qobject_cast<ModbusNode *>(cm->deviceNode(QStringLiteral("RS_CLI")));
+    QVERIFY2(cli != nullptr, "客户端节点类型不符");
+
+    QSignalSpy openedSpy(cli, &CommunicationNodeBase::connectionOpened);
+    QSignalSpy closedSpy(cli, &CommunicationNodeBase::connectionClosed);
+    QVERIFY2(cm->openDevice(QStringLiteral("RS_CLI")), "Modbus 客户端连接失败");
+    QTRY_VERIFY_WITH_TIMEOUT(cli->isConnected(), 3000);      // 真正连上
+    QCOMPARE(openedSpy.count(), 1);
+
+    // (1) 用户主动关闭 → 此后不得被自动重连"复活"。等待 4000ms：既覆盖 500ms 最短间隔，
+    //     也覆盖"配置未生效退回默认 3000ms"的情形，避免等待窗口小于重连周期造成假通过。
+    QVERIFY2(cm->closeDevice(QStringLiteral("RS_CLI")), "closeDevice 失败");
+    QCOMPARE(closedSpy.count(), 1);                          // 曾真正连上 → 恰好一次断开
+    QTest::qWait(4000);
+    QCOMPARE(openedSpy.count(), 1);                          // 复活会产生第 2 次 connectionOpened
+    QVERIFY2(!cli->isConnected(), "用户关闭后节点被自动重连复活");
+
+    // (2) 重开后断线自愈仍须有效：关服务器制造瞬断 → 立即重启服务器 → 客户端应自行重连回来
+    QVERIFY2(cm->openDevice(QStringLiteral("RS_CLI")), "重开失败");
+    QTRY_VERIFY_WITH_TIMEOUT(cli->isConnected(), 3000);
+    QVERIFY2(cm->closeDevice(QStringLiteral("RS_SRV")), "关服务器失败");
+    QTRY_VERIFY_WITH_TIMEOUT(!cli->isConnected(), 3000);     // 先确认真瞬断被感知，否则本段空转
+    QVERIFY2(cm->openDevice(QStringLiteral("RS_SRV")), "重启服务器失败");
+    QTRY_VERIFY_WITH_TIMEOUT(srv->isServerListening(), 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(cli->isConnected(), 8000);      // 自愈失效（复位缺失）在此变红
+    QVERIFY(cm->closeDevice(QStringLiteral("RS_CLI")));
+}
+
+// S-1（PLC 同款）：PLC 客户端对 Modbus 服务器真连 → 用户关闭不复活 → 重开后瞬断自愈仍有效。
+// 判别性：8f36746 的 PlcCommNode::openConnection 缺 m_userClosed/ever 两行复位，本用例第 (2) 段会红。
+void CommWritebackTest::testPlcUserCloseDoesNotResurrect()
+{
+    const int port = 15509;
+    auto *cm = CommunicationManager::instance();
+    DeviceCleanup cleanup{ { QStringLiteral("PRS_SRV"), QStringLiteral("PRS_CLI") } };
+
+    QJsonObject srvCfg;
+    srvCfg[QStringLiteral("role")] = QStringLiteral("服务器");
+    srvCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
+    srvCfg[QStringLiteral("port")] = port;
+    srvCfg[QStringLiteral("slaveAddress")] = 1;
+    QVERIFY2(cm->addDevice(QStringLiteral("PRS_SRV"), QStringLiteral("Modbus"), srvCfg),
+             "addDevice(Modbus 服务器) 失败");
+    auto *srv = qobject_cast<ModbusNode *>(cm->deviceNode(QStringLiteral("PRS_SRV")));
+    QVERIFY2(srv != nullptr, "服务器节点类型不符");
+    QVERIFY2(cm->openDevice(QStringLiteral("PRS_SRV")), "Modbus 服务器启动失败");
+    QTRY_VERIFY_WITH_TIMEOUT(srv->isServerListening(), 3000);
+
+    QJsonObject cliCfg;
+    cliCfg[QStringLiteral("host")] = QStringLiteral("127.0.0.1");
+    cliCfg[QStringLiteral("port")] = port;
+    cliCfg[QStringLiteral("slaveAddress")] = 1;
+    cliCfg[QStringLiteral("autoReconnect")] = true;
+    cliCfg[QStringLiteral("reconnectInterval")] = 500;
+    QVERIFY2(cm->addDevice(QStringLiteral("PRS_CLI"), QStringLiteral("PLC"), cliCfg),
+             "addDevice(PLC 客户端) 失败");
+    auto *cli = qobject_cast<PlcCommNode *>(cm->deviceNode(QStringLiteral("PRS_CLI")));
+    QVERIFY2(cli != nullptr, "PLC 节点类型不符");
+
+    QSignalSpy openedSpy(cli, &CommunicationNodeBase::connectionOpened);
+    QSignalSpy closedSpy(cli, &CommunicationNodeBase::connectionClosed);
+    QVERIFY2(cm->openDevice(QStringLiteral("PRS_CLI")), "PLC 客户端连接失败");
+    QTRY_VERIFY_WITH_TIMEOUT(cli->isConnected(), 3000);      // 真正连上
+    QCOMPARE(openedSpy.count(), 1);
+
+    // (1) 用户主动关闭 → 不得被自动重连"复活"
+    QVERIFY2(cm->closeDevice(QStringLiteral("PRS_CLI")), "closeDevice 失败");
+    QCOMPARE(closedSpy.count(), 1);
+    QTest::qWait(4000);
+    QCOMPARE(openedSpy.count(), 1);
+    QVERIFY2(!cli->isConnected(), "用户关闭后 PLC 节点被自动重连复活");
+
+    // (2) 重开后瞬断自愈仍须有效（钉住 openConnection 两行复位；缺失则 m_userClosed 恒 true）
+    QVERIFY2(cm->openDevice(QStringLiteral("PRS_CLI")), "重开失败");
+    QTRY_VERIFY_WITH_TIMEOUT(cli->isConnected(), 3000);
+    QVERIFY2(cm->closeDevice(QStringLiteral("PRS_SRV")), "关服务器失败");
+    QTRY_VERIFY_WITH_TIMEOUT(!cli->isConnected(), 3000);     // 先确认真瞬断被感知，否则本段空转
+    QVERIFY2(cm->openDevice(QStringLiteral("PRS_SRV")), "重启服务器失败");
+    QTRY_VERIFY_WITH_TIMEOUT(srv->isServerListening(), 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(cli->isConnected(), 8000);      // 自愈失效（复位缺失）在此变红
+    QVERIFY(cm->closeDevice(QStringLiteral("PRS_CLI")));
+}
+
 // "载入后触发静默失效"复活路径的钉：unregisterExecutor 必须按执行器身份注销。
 // 同名覆盖（registerFlow 同名静默覆盖）后，旧执行器的迟到析构不得误删新绑定的流程。
 void CommWritebackTest::testUnregisterExecutorByIdentity()
@@ -1841,6 +2086,11 @@ void CommWritebackTest::testAllocFlowNameAvoidsCollision()
     auto *gtm = GlobalTriggerManager::instance();
     FlowScene s1, s2, s3, s4;
     FlowExecutor e1, e2, e3, e4;
+
+    // L2：进入即自洁净——无条件退订 流程 1~4，消除对 GlobalTriggerManager 单例残留状态的顺序敏感，
+    // 保证首条 allocFlowName()=="流程 2" 从确定初态成立。
+    for (int n = 1; n <= 4; ++n)
+        gtm->unregisterFlow(QStringLiteral("流程 %1").arg(n));
 
     gtm->registerFlow(QStringLiteral("流程 1"), &s1, &e1);
     QCOMPARE(gtm->allocFlowName(), QStringLiteral("流程 2"));

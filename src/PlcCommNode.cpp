@@ -50,6 +50,8 @@ void PlcCommNode::init()
 bool PlcCommNode::openConnection()
 {
     closeConnection();
+    m_userClosed = false;            // 本次是主动建立连接，允许后续断线自动重连（S1，同 ModbusNode）
+    m_everReallyConnected = false;   // 以"真正连上"为唯一判据，避免异步发起被误判为曾连接（S1）
 
     m_modbus = new QModbusTcpClient(this);
     if (!m_modbus) return false;
@@ -66,7 +68,8 @@ bool PlcCommNode::openConnection()
         m_connected = false;
         setParamDirect(QStringLiteral("connected"), false);
         emit communicationError(QStringLiteral("PLC\u8FDE\u63A5\u5931\u8D25: %1").arg(m_modbus->errorString()));
-        if (m_autoReconnect && m_reconnectTimer) {
+        // 自动重连（与 Unconnected 分支一致：用户主动关闭后不得"复活"，S1 nit 对齐）
+        if (m_autoReconnect && m_reconnectTimer && !m_userClosed) {
             m_reconnectTimer->start(m_reconnectInterval);
         }
         return false;
@@ -85,8 +88,10 @@ void PlcCommNode::closeConnection()
     m_pendingQueue.clear();
     if (m_reconnectTimer) m_reconnectTimer->stop();
 
-    // 只在"确实连过"时上报断开：重复 close / removeDevice 不得发假"断开"（同 TCP/串口/UDP 的抖动修复）
-    const bool wasConnected = m_connected;
+    // 只在"确实连过"时上报断开（S-2：判据统一为 m_everReallyConnected，同 ModbusNode；
+    // connectDevice() 仅表示异步发起，不能当作"曾连接"）：重复 close / removeDevice 不得发假"断开"。
+    const bool wasConnected = m_everReallyConnected;
+    m_everReallyConnected = false;   // L1：立即复位"曾连上"，网络瞬断后再 close 或重复 close 均不二次上报
     // S1：必须先落"未连接"状态再 disconnectDevice()——后者会同步触发
     // onModbusStateChanged(Unconnected)，若此时 m_connected 仍为真会二次上报 connectionClosed。
     m_connected = false;
@@ -313,6 +318,7 @@ void PlcCommNode::onModbusStateChanged(int state)
     } else if (state == QModbusDevice::UnconnectedState) {
         if (m_connected) {
             m_connected = false;
+            m_everReallyConnected = false;   // L1：断线即复位"曾连上"，随后主动 close 不再二次上报
             setParamDirect(QStringLiteral("connected"), false);
             emit connectionClosed();
             stopPolling();

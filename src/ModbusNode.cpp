@@ -194,8 +194,8 @@ bool ModbusNode::openConnection()
         setParamDirect(QStringLiteral("connected"), false);
         emit communicationError(QStringLiteral("Modbus\u8FDE\u63A5\u5931\u8D25"));
 
-        // 自动重连
-        if (m_autoReconnect && m_reconnectTimer) {
+        // 自动重连（与 Unconnected 分支一致：用户主动关闭后不得"复活"，S1 nit 对齐）
+        if (m_autoReconnect && m_reconnectTimer && !m_userClosed) {
             m_reconnectTimer->start(m_reconnectInterval);
         }
         return false;
@@ -217,6 +217,7 @@ void ModbusNode::closeConnection()
     // 仅抑制 emit。connectDevice() 仅表示"异步发起"，不能当作"曾连接"：关闭从未建立的连接
     // 不得发假 connectionClosed（此前 m_connected 在发起时即置位，导致假断开）。
     const bool was = m_everReallyConnected;
+    m_everReallyConnected = false;   // L1：立即复位"曾连上"——网络瞬断（Unconnected 分支已报一次）后再 close，或重复 close，均不得二次上报 connectionClosed
     // S1：必须先落"未连接"状态再 disconnectDevice()——后者会同步触发
     // onModbusStateChanged(Unconnected)，若此时 m_connected 仍为真会二次上报 connectionClosed。
     m_connected = false;
@@ -559,6 +560,7 @@ void ModbusNode::onModbusStateChanged(int state)
     } else if (state == QModbusDevice::UnconnectedState) {
         if (m_connected) {
             m_connected = false;
+            m_everReallyConnected = false;   // L1：断线即复位"曾连上"，随后主动 close 不再二次上报
             setParamDirect(QStringLiteral("connected"), false);
             emit connectionClosed();
             stopPolling();
