@@ -110,6 +110,7 @@ private slots:
     void testUnregisterExecutorByIdentity();
     void testModbusSingleRegisterByteOrder();
     void testModbusWriteReadByteOrderRoundTrip();   // S3/S4：写入逆变换 + 宽类型拆寄存器往返
+    void testModbusServerWideRegisterInit();         // S7：服务器寄存器表初始化须按宽类型拆字
     void testModbusUserCloseDoesNotResurrect();      // S-1：真连后用户关闭不复活 + 重开后自愈仍有效
     void testPlcUserCloseDoesNotResurrect();         // S-1（PLC 同款）：并钉住 openConnection 两行复位
     void testAllocFlowNameAvoidsCollision();
@@ -2082,6 +2083,66 @@ void CommWritebackTest::testModbusWriteReadByteOrderRoundTrip()
     QTRY_VERIFY_WITH_TIMEOUT(qAbs(lastReadValue(0) - writeInt16) < 1e-6, 8000);
     QTRY_VERIFY_WITH_TIMEOUT(qAbs(lastReadValue(2) - writeInt32) < 1e-6, 8000);
     QTRY_VERIFY_WITH_TIMEOUT(qAbs(lastReadValue(4) - writeUint32) < 1e-6, 8000);
+}
+
+// S7 回归：服务器寄存器表初始化必须按宽类型拆字写入。旧实现只写单寄存器（4 字节值塞进一个"伪地址"）：
+// 高字丢失、值被截断，且数据区上限不覆盖 addr+1 → 客户端按宽类型读 2 个寄存器被服务器判非法地址。
+// 场景：服务器侧 int32 item 预置 currentValue=250000（0x0003D090，高字=0x0003 非零可判别），
+// 客户端不做任何写入、直接读回，必须等于预置值。
+void CommWritebackTest::testModbusServerWideRegisterInit()
+{
+    const int port = 15510;
+    auto *cm = CommunicationManager::instance();
+    DeviceCleanup cleanup{ { QStringLiteral("WI_SRV"), QStringLiteral("WI_CLI") } };
+
+    QList<ModbusRegisterItem> regs;
+    ModbusRegisterItem r32;
+    r32.address = 0;
+    r32.dataType = QStringLiteral("int32");
+    r32.byteOrder = QStringLiteral("ABCD");
+    r32.accessMode = QStringLiteral("ReadWrite");
+    r32.enabled = true;
+    r32.currentValue = 250000.0;      // 高字非零：单寄存器写法必然读不回该值
+    regs.append(r32);
+
+    QJsonObject srvCfg;
+    srvCfg[QStringLiteral("role")] = QStringLiteral("服务器");
+    srvCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
+    srvCfg[QStringLiteral("port")] = port;
+    srvCfg[QStringLiteral("slaveAddress")] = 1;
+    QVERIFY2(cm->addDevice(QStringLiteral("WI_SRV"), QStringLiteral("Modbus"), srvCfg),
+             "addDevice(服务器) 失败");
+    auto *srv = qobject_cast<ModbusNode *>(cm->deviceNode(QStringLiteral("WI_SRV")));
+    QVERIFY2(srv != nullptr, "服务器节点类型不符");
+    srv->setRegisters(regs);          // 触发 syncServerRegisters()
+    QVERIFY2(cm->openDevice(QStringLiteral("WI_SRV")), "Modbus 服务器启动失败");
+    QTRY_VERIFY_WITH_TIMEOUT(srv->isServerListening(), 3000);
+
+    QJsonObject cliCfg;
+    cliCfg[QStringLiteral("role")] = QStringLiteral("客户端");
+    cliCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
+    cliCfg[QStringLiteral("host")] = QStringLiteral("127.0.0.1");
+    cliCfg[QStringLiteral("port")] = port;
+    cliCfg[QStringLiteral("slaveAddress")] = 1;
+    QVERIFY2(cm->addDevice(QStringLiteral("WI_CLI"), QStringLiteral("Modbus"), cliCfg),
+             "addDevice(客户端) 失败");
+    auto *cli = qobject_cast<ModbusNode *>(cm->deviceNode(QStringLiteral("WI_CLI")));
+    QVERIFY2(cli != nullptr, "客户端节点类型不符");
+    cli->setRegisters(regs);          // 客户端按 int32 读 2 个寄存器
+
+    QSignalSpy cliValueSpy(cli, &ModbusNode::registerCurrentValueChanged);
+    QVERIFY2(cm->openDevice(QStringLiteral("WI_CLI")), "Modbus 客户端连接失败");
+
+    auto lastReadValue = [&](int addr) -> double {
+        double v = -1.0e18;   // 哨兵：未读到
+        for (int i = 0; i < cliValueSpy.count(); ++i) {
+            if (cliValueSpy.at(i).at(0).toInt() == addr)
+                v = cliValueSpy.at(i).at(1).toDouble();
+        }
+        return v;
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(qAbs(lastReadValue(0) - 250000.0) < 1e-6, 8000);
+    QVERIFY(cm->closeDevice(QStringLiteral("WI_CLI")));
 }
 
 // L2 回归：新建流程名必须全局唯一。扫描已注册绑定返回首个空闲"流程 N"，

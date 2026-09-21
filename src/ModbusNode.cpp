@@ -109,10 +109,17 @@ bool ModbusNode::openConnection()
         // 既不会改值、也不会触发 dataWritten（表现为"客户端写成功、服务器毫无反应"）。
         // 这里按寄存器表格把保持寄存器区映射出来，并至少保留一个可写寄存器。
         {
+            // S7：范围上限必须覆盖宽类型占用的第二个字（int32/uint32/float 占 addr 与 addr+1）。
+            // 旧实现只取 item 地址的 max → 宽类型项的第二字落在映射外，客户端按宽类型读 2 个寄存器
+            // 会被服务器判非法地址（读回 0/异常）。宽窄判定复用共享拆字工具，避免两处各写一份。
             int maxAddr = -1;
             for (const auto &r : m_registers) {
-                if (r.address >= 0 && r.address <= 65535)
-                    maxAddr = qMax(maxAddr, r.address);
+                if (r.address < 0 || r.address > 65535) continue;
+                QVector<quint16> words;
+                const int span = RegisterByteOrder::disassembleValueToWords(
+                                     r.currentValue, r.dataType, r.byteOrder, words)
+                                     ? qMax(1, words.size()) : 1;
+                maxAddr = qMax(maxAddr, qMin(65535, r.address + span - 1));
             }
             const quint16 count = static_cast<quint16>(maxAddr + 1 > 0 ? maxAddr + 1 : 1);
             QModbusDataUnitMap map;
@@ -256,13 +263,23 @@ void ModbusNode::syncServerRegisters()
 {
     if (!m_modbusServer) return;
 
-    // 将每个寄存器写入服务器数据单元（Hold 寄存器）
+    // 将每个寄存器写入服务器数据单元（Hold 寄存器）。
+    // S7：宽类型（int32/uint32/float）必须按 dataType/byteOrder 拆成 2 个字写两个连续地址。
+    // 旧实现只写单寄存器（4 字节值塞进一个"伪地址"）：高字丢失、值被截断，且数据区上限不覆盖
+    // addr+1，客户端按宽类型读 2 个寄存器会被服务器判非法地址（读回 0/异常）。
     for (const auto &r : m_registers) {
         if (r.address < 0 || r.address > 65535) continue;
-        m_modbusServer->setData(
-            QModbusDataUnit::HoldingRegisters,
-            static_cast<quint16>(r.address),
-            static_cast<quint16>(static_cast<int>(r.currentValue)));
+        QVector<quint16> words;
+        if (!RegisterByteOrder::disassembleValueToWords(r.currentValue, r.dataType, r.byteOrder, words)
+            || words.isEmpty()) {
+            continue;
+        }
+        for (int i = 0; i < words.size(); ++i) {
+            const int addr = r.address + i;
+            if (addr < 0 || addr > 65535) break;
+            m_modbusServer->setData(QModbusDataUnit::HoldingRegisters,
+                                    static_cast<quint16>(addr), words[i]);
+        }
     }
 }
 
