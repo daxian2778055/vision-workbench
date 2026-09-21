@@ -566,6 +566,9 @@ void FlowScene::clearScene()
         m_nodeItems.clear();
         m_connectionItems.clear();
     }
+    // 兜底：无存活快照时把墓碑一并析构。否则 clearScene（含 ~FlowScene 路径）会把这些
+    // 已摘除待删的对象漏掉，造成析构期泄漏。flushRetired() 内部自会检查存活句柄。
+    flushRetired();
 }
 
 void FlowScene::setEditLocked(bool locked)
