@@ -94,7 +94,7 @@ private slots:
     void testThreadSafeParamsConcurrentAccess();
     void testDataObjectConcurrentAccess();
     void testStepModeExitRestoresNormalRun();
-    void testBusyTriggerNotCountedAndNotFired();
+    void testBusyTriggerQueuedNotDropped();
     void testBusyOtherFlowDoesNotBlockTrigger();
     void testScriptInterpreterResolvesToAbsolutePath();
     void testImageDisplayResolvePriority();
@@ -1721,10 +1721,10 @@ void IntegrationTest::testStepModeExitRestoresNormalRun()
     exec.setFlowScene(nullptr);
 }
 
-void IntegrationTest::testBusyTriggerNotCountedAndNotFired()
+void IntegrationTest::testBusyTriggerQueuedNotDropped()
 {
-    // 忙时触发：不得触发、不得虚报计数（历史缺陷：计数照加、流程却没起来）；
-    // 空闲后同一份数据必须正常触发（对照组，证明不是触发链路整体失效）。
+    // S9：忙时触发**不再丢弃**，改为有界排队补跑（上限 3 轮）；超界才丢最旧一笔并计数。
+    // 旧策略（忙则丢弃且不计入触发计数）已被本用例替换：检测场景下漏检一件比晚检更糟。
     FlowScene scene;
     FlowExecutor exec;
     const QString flowName = QStringLiteral("BusyTriggerFlow");
@@ -1733,7 +1733,7 @@ void IntegrationTest::testBusyTriggerNotCountedAndNotFired()
 
     NodeBase *delay = scene.createNode(NodeBase::LOGIC, QPointF(100, 100), QStringLiteral("Delay"));
     QVERIFY(delay != nullptr);
-    delay->setParam(QStringLiteral("delayMs"), 600);   // 留出稳定的"忙"窗口
+    delay->setParam(QStringLiteral("delayMs"), 400);   // 留出稳定的"忙"窗口
     exec.setFlowScene(&scene);
 
     auto *gtm = GlobalTriggerManager::instance();
@@ -1750,19 +1750,30 @@ void IntegrationTest::testBusyTriggerNotCountedAndNotFired()
     QCOMPARE(triggerCount(), 0);
 
     QSignalSpy firedSpy(gtm, &GlobalTriggerManager::triggerFired);
+    QSignalSpy finishedSpy(&exec, &FlowExecutor::executionFinished);
 
     exec.startExecution();
     QTRY_VERIFY_WITH_TIMEOUT(exec.getState() == ExecutionState::Running, 3000);
+    QCOMPARE(exec.pendingExternalRounds(), 0);
 
-    gtm->onDataReceived(QStringLiteral("TEST_DEV"), QByteArray("GO_BUSY"));   // 忙时触发
-    QCOMPARE(firedSpy.count(), 0);      // 不得触发
-    QCOMPARE(triggerCount(), 0);        // 也不得虚报计数
+    // 忙时连发 4 笔：前 3 笔排队，第 4 笔超界丢弃（丢最旧，保留最新件）
+    for (int i = 0; i < 4; ++i)
+        gtm->onDataReceived(QStringLiteral("TEST_DEV"), QByteArray("GO_BUSY"));
 
-    // 空闲后同一份数据：正常触发、计数 +1
-    QTRY_VERIFY_WITH_TIMEOUT(exec.getState() != ExecutionState::Running, 5000);
+    QCOMPARE(exec.pendingExternalRounds(), 3);            // 有界队列已满
+    QCOMPARE(exec.droppedExternalRounds(), quint64(1));   // 第 4 笔被丢
+    QCOMPARE(firedSpy.count(), 3);                        // 仅"会被执行"的才通知
+    QCOMPARE(triggerCount(), 3);                          // 计数口径：排队也算（不虚报、不漏报）
+
+    // 每轮末消费一笔待补跑：1(首轮) + 3(补跑) = 4 轮
+    QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.count(), 4, 20000);
+    QCOMPARE(exec.pendingExternalRounds(), 0);
+
+    // 对照组：空闲时触发 → 立即起一轮（不经队列）
     gtm->onDataReceived(QStringLiteral("TEST_DEV"), QByteArray("GO_BUSY"));
-    QCOMPARE(firedSpy.count(), 1);
-    QCOMPARE(triggerCount(), 1);
+    QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.count(), 5, 8000);
+    QCOMPARE(exec.pendingExternalRounds(), 0);
+    QCOMPARE(triggerCount(), 4);
 
     exec.stopExecution();
     exec.wait(3000);

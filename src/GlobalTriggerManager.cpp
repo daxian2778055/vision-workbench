@@ -126,25 +126,22 @@ QString GlobalTriggerManager::flowForEventTrigger(const QString &eventId) const
 
 // ---- Trigger Execution ----
 
-/// 执行器忙（运行/暂停中）时触发应丢弃且**不计入触发计数**——
-/// 历史缺陷：计数照加、流程却没起来，事后统计完全看不出漏触发。
-/// （对标 VM 的排队/合并触发是后续项；本批先让"丢"可见、统计不再失真。）
-static bool executorBusy(FlowExecutor *ex)
-{
-    if (!ex)
-        return false;
-    const ExecutionState st = ex->getState();
-    return st == ExecutionState::Running || st == ExecutionState::Paused;
-}
+// S9 外部触发语义（本条为定稿口径）：
+//   忙（运行/暂停）时**不再丢弃**，改为在 FlowExecutor 内有界排队补跑（最多 3 轮）；
+//   超出上限才丢——丢"最旧"一笔（保留最新件、避免越跑越落后），并累计 droppedExternalRounds + 打警告。
+//   不做"合并"（N 次触发只跑 1 轮）：检测场景下那等于静默少检 N-1 件，比晚检更糟。
+//   触发计数移到"确认会被执行"之后（排队也算），既不虚报也不漏报。
 
 void GlobalTriggerManager::onDataReceived(const QString &deviceName, const QByteArray &data)
 {
     QString text = QString::fromUtf8(data).trimmed();
 
-    // 1. 字符串触发：锁内定位首个匹配并拷贝必要信息、累加计数，锁外再执行流程，避免长任务持锁
+    // 1. 字符串触发：锁内定位首个匹配并拷贝必要信息，锁外再受理/计数，避免长任务持锁
     bool matched = false;
     QString flowName;
     QString matchedSource;
+    QString matchedId;
+    QString matchedKey;
     FlowExecutor *executor = nullptr;
 
     {
@@ -157,30 +154,39 @@ void GlobalTriggerManager::onDataReceived(const QString &deviceName, const QByte
                 matched = true;
                 flowName = entry.flowName;
                 matchedSource = entry.triggerSource;
+                matchedId = entry.id;
+                matchedKey = it.key();
                 executor = executorForFlowLocked(flowName);
-                if (executor && !executorBusy(executor)) {
-                    // 只在"真的会起流程"时计数：忙时丢弃不得虚报触发次数
-                    m_allTriggers[entry.id].triggerCount++;
-                    m_stringTriggers[it.key()].triggerCount++;
-                }
                 break; // First match wins
             }
         }
     }
 
     if (matched) {
-        if (executorBusy(executor)) {
-            VFP_DEBUG << "String trigger dropped (flow busy):" << matchedSource << "→" << flowName;
-            return;
-        }
-        VFP_DEBUG << "String trigger matched:" << matchedSource << "→ flow:" << flowName;
-        emit triggerFired(flowName, matchedSource);
-
-        // 硬触发模式下禁止通讯/字符串触发
+        // S9：仅"超界丢弃"时不发 triggerFired；硬触发模式/无执行器仍按原语义"匹配即通知"
+        bool accepted = true;
         if (executor && !executor->canTriggerFromExternal()) {
             VFP_DEBUG << "Flow is in hardware-trigger mode, external trigger ignored:" << flowName;
-        } else if (executor) {
-            executor->startExecution();
+        } else if (!executor) {
+            VFP_DEBUG << "String trigger matched but executor missing:" << matchedSource
+                      << "→" << flowName;
+        } else {
+            // 忙则有界排队补跑；超界才丢（丢最旧）并计数
+            accepted = executor->requestExternalRound();
+            if (accepted) {
+                QMutexLocker locker(&m_mutex);
+                // 计数口径：排队也算"会被执行"（不虚报、不漏报）
+                m_allTriggers[matchedId].triggerCount++;
+                m_stringTriggers[matchedKey].triggerCount++;
+            } else {
+                VFP_DEBUG << "String trigger dropped (queue full):" << matchedSource
+                          << "→" << flowName;
+            }
+        }
+        if (accepted) {
+            VFP_DEBUG << "String trigger matched:" << matchedSource << "→ flow:" << flowName
+                      << "待补跑:" << (executor ? executor->pendingExternalRounds() : 0);
+            emit triggerFired(flowName, matchedSource);
         }
         return;
     }
@@ -217,6 +223,8 @@ void GlobalTriggerManager::onEventTriggered(const QString &eventId, const QList<
     bool matched = false;
     QString flowName;
     QString matchedEventId;
+    QString matchedId;
+    QString matchedKey;
     FlowExecutor *executor = nullptr;
 
     {
@@ -230,29 +238,38 @@ void GlobalTriggerManager::onEventTriggered(const QString &eventId, const QList<
                 flowName = entry.flowName;
                 matchedEventId = eventId;
                 executor = executorForFlowLocked(flowName);
-                if (executor && !executorBusy(executor)) {
-                    // 只在"真的会起流程"时计数：忙时丢弃不得虚报触发次数
-                    m_allTriggers[entry.id].triggerCount++;
-                    m_eventTriggers[it.key()].triggerCount++;
-                }
+                matchedId = entry.id;
+                matchedKey = it.key();
                 break; // First match wins
             }
         }
     }
 
     if (matched) {
-        if (executorBusy(executor)) {
-            VFP_DEBUG << "Event trigger dropped (flow busy):" << matchedEventId << "→" << flowName;
-            return;
-        }
-        VFP_DEBUG << "Event trigger matched:" << matchedEventId << "→ flow:" << flowName;
-        emit triggerFired(flowName, matchedEventId);
-
-        // 硬触发模式下禁止接收事件触发
+        // S9：仅"超界丢弃"时不发 triggerFired；硬触发模式/无执行器仍按原语义"匹配即通知"
+        bool accepted = true;
         if (executor && !executor->canTriggerFromExternal()) {
             VFP_DEBUG << "Flow is in hardware-trigger mode, event trigger ignored:" << flowName;
-        } else if (executor) {
-            executor->startExecution();
+        } else if (!executor) {
+            VFP_DEBUG << "Event trigger matched but executor missing:" << matchedEventId
+                      << "→" << flowName;
+        } else {
+            // 忙则有界排队补跑；超界才丢（丢最旧）并计数
+            accepted = executor->requestExternalRound();
+            if (accepted) {
+                QMutexLocker locker(&m_mutex);
+                // 计数口径：排队也算"会被执行"（不虚报、不漏报）
+                m_allTriggers[matchedId].triggerCount++;
+                m_eventTriggers[matchedKey].triggerCount++;
+            } else {
+                VFP_DEBUG << "Event trigger dropped (queue full):" << matchedEventId
+                          << "→" << flowName;
+            }
+        }
+        if (accepted) {
+            VFP_DEBUG << "Event trigger matched:" << matchedEventId << "→ flow:" << flowName
+                      << "待补跑:" << (executor ? executor->pendingExternalRounds() : 0);
+            emit triggerFired(flowName, matchedEventId);
         }
     }
 }

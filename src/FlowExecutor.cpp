@@ -205,7 +205,45 @@ void FlowExecutor::stopExecution()
     QMutexLocker locker(&m_mutex);
     m_state = ExecutionState::Stopped;
     m_stepMode = false;
+    m_pendingExternalRounds = 0;   // S9：停止即放弃待补跑，避免"停止后又自己跑起来"
     m_waitCondition.wakeAll();
+}
+
+bool FlowExecutor::requestExternalRound()
+{
+    {
+        QMutexLocker locker(&m_mutex);
+        if (m_state == ExecutionState::Running || m_state == ExecutionState::Paused) {
+            if (m_pendingExternalRounds < kMaxPendingExternalRounds) {
+                ++m_pendingExternalRounds;      // 排队补跑（FIFO 语义，按笔计数）
+                m_waitCondition.wakeAll();
+            } else {
+                // 超界：丢最旧一笔（等价于丢弃最早那笔触发），并让"丢"可见
+                ++m_droppedExternalRounds;
+                const quint64 dropped = m_droppedExternalRounds;
+                locker.unlock();
+                VFP_RUNTIME_INFO.noquote()
+                    << QStringLiteral("警告：外部触发超出排队上限(%1)，丢弃最旧一笔；累计丢弃=%2")
+                           .arg(kMaxPendingExternalRounds).arg(dropped);
+                return false;
+            }
+            return true;
+        }
+    }
+    startExecution();   // 空闲：语义同原 startExecution（立即起一轮）
+    return true;
+}
+
+int FlowExecutor::pendingExternalRounds() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_pendingExternalRounds;
+}
+
+quint64 FlowExecutor::droppedExternalRounds() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_droppedExternalRounds;
 }
 
 void FlowExecutor::exitStepMode()
@@ -451,6 +489,16 @@ void FlowExecutor::run()
                 QThread::msleep(static_cast<unsigned long>(m_loopIntervalMs));
             }
             continue;
+        }
+
+        // S9：软触发模式下的外部触发排队补跑——本轮结束后逐笔消费待补跑（有界，见 requestExternalRound）。
+        // 连续/硬触发模式本就在循环里跑，不需要补跑队列。
+        {
+            QMutexLocker ml(&m_mutex);
+            if (currentMode == FlowMode::SoftwareTrigger && m_pendingExternalRounds > 0) {
+                --m_pendingExternalRounds;
+                continue;
+            }
         }
         break;
     }

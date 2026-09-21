@@ -52,6 +52,16 @@ public:
 
     void setFlowScene(FlowScene *scene);
     void startExecution();
+
+    /// S9：外部触发受理。空闲→立即起一轮；忙（运行/暂停）→有界排队补跑（上限
+    /// kMaxPendingExternalRounds）；超界→丢最旧一笔并累计 droppedExternalRounds（"丢"可见，不再静默）。
+    /// 返回 true = 这一笔会被执行（已起或已排队）；false = 超界丢弃。
+    /// 说明：只用于"外部触发"（通讯事件/字符串/硬触发帧），界面按钮仍走 startExecution() 原语义。
+    bool requestExternalRound();
+    /// 待补跑轮数（界面/统计观测用）
+    int pendingExternalRounds() const;
+    /// 累计因超出排队上限而丢弃的触发数
+    quint64 droppedExternalRounds() const;
     void pauseExecution();
     void resumeExecution();
     /// 单步执行：进入步进模式并推进一个节点（未运行时从首个节点开始）
@@ -188,6 +198,11 @@ private:
     QElapsedTimer m_statsLogTimer;    /// 统计日志节流
     int m_statsLogIntervalMs = 60000; /// 统计日志间隔（ms），0=不输出
     bool m_roundHadFailure = false;   /// 本轮是否出现失败节点（仅执行线程访问）
+
+    // ---- S9 外部触发排队（有界 FIFO；忙时不再静默丢弃）----
+    static constexpr int kMaxPendingExternalRounds = 3;  /// 待补跑上限：有界，避免越跑越落后腿
+    int m_pendingExternalRounds = 0;      /// 待补跑轮数（m_mutex 保护）
+    quint64 m_droppedExternalRounds = 0;  /// 累计超界丢弃数（m_mutex 保护）
     QString m_flowName;            /// 流程名称
     mutable QMutex m_mutex;
     QWaitCondition m_waitCondition;
