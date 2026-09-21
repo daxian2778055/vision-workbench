@@ -45,3 +45,4 @@ tools/opencv-4.13.0-windows.exe
 
 # ===== CI 运行产物（tools/ci.ps1 生成）=====
 ci-*.log
+ci-*.txt
