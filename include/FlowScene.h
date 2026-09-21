@@ -7,6 +7,8 @@
 #include <QJsonObject>
 #include <QVariant>
 #include <QStringList>
+#include <QRecursiveMutex>
+#include <utility>
 #include "NodeBase.h"
 
 class QPainter;
@@ -68,6 +70,47 @@ public:
 
     QList<NodeBase *> nodes() const;
     QList<MyProject::Connection *> connections() const;
+
+    // ---- 执行期图快照（S1）----
+    /// 拓扑快照值类型：只含节点/连边裸指针，不含图元。
+    struct GraphSnapshot {
+        QList<NodeBase *> nodes;
+        QList<MyProject::Connection *> connections;
+    };
+    /// RAII 句柄：持有期间，从图中删除节点/连边只做"墓碑"（成员集立即摘除 + 延迟析构），
+    /// 保证执行线程手里那批裸指针在整轮结束前不会悬垂；析构（含提前 return / 异常 / break）即释放。
+    /// 生命周期规则：同一时刻只允许执行线程持有一个（执行器为单线程，UI 侧同步执行亦为单发）。
+    class GraphSnapshotGuard
+    {
+    public:
+        GraphSnapshotGuard() = default;
+        GraphSnapshotGuard(FlowScene *scene, GraphSnapshot snapshot)
+            : m_scene(scene), m_snapshot(std::move(snapshot)) {}
+        ~GraphSnapshotGuard() { if (m_scene) m_scene->releaseGraphSnapshot(); }
+        GraphSnapshotGuard(GraphSnapshotGuard &&o) noexcept
+            : m_scene(o.m_scene), m_snapshot(std::move(o.m_snapshot)) { o.m_scene = nullptr; }
+        GraphSnapshotGuard &operator=(GraphSnapshotGuard &&o) noexcept
+        {
+            if (this != &o) {
+                if (m_scene) m_scene->releaseGraphSnapshot();
+                m_scene = o.m_scene;
+                m_snapshot = std::move(o.m_snapshot);
+                o.m_scene = nullptr;
+            }
+            return *this;
+        }
+        GraphSnapshotGuard(const GraphSnapshotGuard &) = delete;
+        GraphSnapshotGuard &operator=(const GraphSnapshotGuard &) = delete;
+
+        bool isHeld() const { return m_scene != nullptr; }
+        const GraphSnapshot &snapshot() const { return m_snapshot; }
+
+    private:
+        FlowScene *m_scene = nullptr;
+        GraphSnapshot m_snapshot;
+    };
+    /// 捕获一次拓扑快照（持锁拷贝成员集）并登记一个存活句柄；未释放前删除一律走墓碑
+    GraphSnapshotGuard captureGraphSnapshot();
 
     NodeGraphicsItem *getGraphicsItemForNode(NodeBase *node) const;
     ConnectionGraphicsItem *getGraphicsItemForConnection(MyProject::Connection *connection) const;
@@ -165,6 +208,18 @@ private:
     ConnectionDragHelper *m_dragHelper = nullptr;
     QMap<NodeBase *, NodeGraphicsItem *> m_nodeItems;
     QMap<MyProject::Connection *, ConnectionGraphicsItem *> m_connectionItems;
+
+    // ---- S1 执行期隔离：成员集读写锁 + 墓碑延迟析构 ----
+    /// 保护 m_nodeItems / m_connectionItems / 墓碑队列（递归锁：removeNode→removeConnection 会嵌套）
+    mutable QRecursiveMutex m_graphMutex;
+    int m_liveSnapshotCount = 0;                    ///> 存活快照句柄数（>0 时删除只摘除不析构）
+    QList<NodeBase *> m_retiredNodes;               ///> 墓碑：待析构节点（存活句柄归零后 flush）
+    QList<MyProject::Connection *> m_retiredConnections;
+
+    /// 句柄析构回调：计数归零时把墓碑 flush 回场景线程执行（绝不从工作线程析构节点）
+    void releaseGraphSnapshot();
+    /// 真正析构墓碑（仅 m_liveSnapshotCount==0；必须在场景线程执行）
+    void flushRetired();
     QList<CommentGraphicsItem *> m_comments;
     QMap<QString, FlowVariable> m_flowVariables;
     QMap<QString, FlowFixture> m_fixtures;

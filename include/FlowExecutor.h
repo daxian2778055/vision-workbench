@@ -163,8 +163,10 @@ private:
     void recordRoundFinished(qint64 roundMs);
     void disconnectFromScene();
     void connectToScene(FlowScene *scene);
-    /// 从场景构建「目标节点 -> 入边」索引（配合跨 run 缓存，图未变则跳过）
-    void rebuildIncomingIndex(FlowScene *scene);
+    /// 从**图快照**构建「目标节点 -> 入边」索引（配合跨 run 缓存，图未变则跳过）。
+    /// S1：改为吃快照的活节点表与连边表，执行期不再访问 FlowScene 的容器。
+    void rebuildIncomingIndex(const QList<NodeBase *> &liveNodes,
+                              const QList<MyProject::Connection *> &connections);
     /// 执行成功后按分支激活下游节点（条件节点仅激活被选中分支）
     void activateDownstream(NodeBase *node);
     /// 在已持有 m_graphCacheMutex 时调用

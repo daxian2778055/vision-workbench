@@ -15,6 +15,8 @@
 #include <QMimeData>
 #include <QDrag>
 #include <QPainter>
+#include <QMutexLocker>
+#include <QThread>
 #include <cmath>
 #include <QGraphicsView>
 #include <QKeyEvent>
@@ -159,7 +161,10 @@ NodeBase *FlowScene::createNode(NodeBase::NodeType type, const QPointF &pos, con
         // Update ports to ensure they have correct positions
         item->updatePorts();
         
-        m_nodeItems[node] = item;
+        {
+            QMutexLocker locker(&m_graphMutex);
+            m_nodeItems[node] = item;
+        }
         emit nodeAdded(node);
         emit nodeGraphicsItemCreated(item);
     }
@@ -211,7 +216,10 @@ void FlowScene::adoptNode(NodeBase *node, const QPointF &pos)
     this->addItem(item);
     item->updatePorts();
 
-    m_nodeItems[node] = item;
+    {
+        QMutexLocker locker(&m_graphMutex);
+        m_nodeItems[node] = item;
+    }
     emit nodeAdded(node);
     emit nodeGraphicsItemCreated(item);
 }
@@ -292,16 +300,27 @@ void FlowScene::removeNode(NodeBase *node)
         }
     }
     
-    // Remove graphics item
-    NodeGraphicsItem *item = m_nodeItems.value(node, nullptr);
+    // 摘除成员集并判定是否走墓碑：有存活快照（执行线程正持有裸指针）时只摘除、延迟析构（S1）
+    NodeGraphicsItem *item = nullptr;
+    bool deferred = false;
+    {
+        QMutexLocker locker(&m_graphMutex);
+        item = m_nodeItems.value(node, nullptr);
+        m_nodeItems.remove(node);
+        deferred = (m_liveSnapshotCount > 0);
+        if (deferred) {
+            m_retiredNodes.append(node);
+        }
+    }
     if (item) {
         removeItem(item);
         delete item;
-        m_nodeItems.remove(node);
     }
 
     emit nodeRemoved(node);
-    delete node;
+    if (!deferred) {
+        delete node;
+    }
     --m_undoBatch;
 }
 
@@ -339,7 +358,10 @@ MyProject::Connection *FlowScene::createConnection(Port *source, Port *target, b
     ConnectionGraphicsItem *item = new ConnectionGraphicsItem(connection, nullptr);
     addItem(item);
     
-    m_connectionItems[connection] = item;
+    {
+        QMutexLocker locker(&m_graphMutex);
+        m_connectionItems[connection] = item;
+    }
     
     // Update connection path to ensure it's displayed correctly
     item->updatePath();
@@ -359,18 +381,29 @@ void FlowScene::removeConnection(MyProject::Connection *connection)
         recordUndo();   // 独立删除连线时记录（批量删除由 removeNode 统一记录）
     }
     
-    // Remove graphics item
-    ConnectionGraphicsItem *item = m_connectionItems.value(connection, nullptr);
+    // 摘除成员集并判定是否走墓碑（与 removeNode 同款，S1）
+    ConnectionGraphicsItem *item = nullptr;
+    bool deferred = false;
+    {
+        QMutexLocker locker(&m_graphMutex);
+        item = m_connectionItems.value(connection, nullptr);
+        m_connectionItems.remove(connection);
+        deferred = (m_liveSnapshotCount > 0);
+        if (deferred) {
+            m_retiredConnections.append(connection);
+        }
+    }
     if (item) {
         removeItem(item);
         delete item;
-        m_connectionItems.remove(connection);
     }
 
     // 先 emit 再 delete：槽函数收到的指针必须仍然有效
-    // （原实现先 delete 后 emit，信号携带的是悬垂指针）
+    // （原实现先 delete 后 emit，信号携带的是悬垂指针；墓碑路径下对象必然有效）
     emit connectionRemoved(connection);
-    delete connection;
+    if (!deferred) {
+        delete connection;
+    }
 }
 
 // ---- 撤销/重做（快照式） ----
@@ -435,30 +468,90 @@ bool FlowScene::redo()
 
 QList<NodeBase *> FlowScene::nodes() const
 {
+    QMutexLocker locker(&m_graphMutex);
     return m_nodeItems.keys();
 }
 
 QList<MyProject::Connection *> FlowScene::connections() const
 {
+    QMutexLocker locker(&m_graphMutex);
     return m_connectionItems.keys();
 }
 
 NodeGraphicsItem *FlowScene::getGraphicsItemForNode(NodeBase *node) const
 {
+    QMutexLocker locker(&m_graphMutex);
     return m_nodeItems.value(node, nullptr);
 }
 
 ConnectionGraphicsItem *FlowScene::getGraphicsItemForConnection(MyProject::Connection *connection) const
 {
+    QMutexLocker locker(&m_graphMutex);
     return m_connectionItems.value(connection, nullptr);
+}
+
+FlowScene::GraphSnapshotGuard FlowScene::captureGraphSnapshot()
+{
+    GraphSnapshot snap;
+    {
+        QMutexLocker locker(&m_graphMutex);
+        snap.nodes = m_nodeItems.keys();
+        snap.connections = m_connectionItems.keys();
+        ++m_liveSnapshotCount;
+    }
+    return GraphSnapshotGuard(this, std::move(snap));
+}
+
+void FlowScene::releaseGraphSnapshot()
+{
+    bool flushNow = false;
+    {
+        QMutexLocker locker(&m_graphMutex);
+        if (m_liveSnapshotCount > 0) {
+            --m_liveSnapshotCount;
+        }
+        flushNow = (m_liveSnapshotCount == 0);
+    }
+    if (!flushNow) {
+        return;
+    }
+    // 墓碑析构必须在场景线程执行：节点可能挂着 QTimer/QObject 子对象，跨线程析构不安全。
+    // 执行器线程释放快照时改为投递到场景线程（UI）执行。
+    if (QThread::currentThread() == thread()) {
+        flushRetired();
+    } else {
+        QMetaObject::invokeMethod(this, [this]() { flushRetired(); }, Qt::QueuedConnection);
+    }
+}
+
+void FlowScene::flushRetired()
+{
+    QList<NodeBase *> nodes;
+    QList<MyProject::Connection *> conns;
+    {
+        QMutexLocker locker(&m_graphMutex);
+        if (m_liveSnapshotCount > 0) {
+            return;   // 仍有存活快照：本轮不析构，等最后一次释放再 flush
+        }
+        nodes.swap(m_retiredNodes);
+        conns.swap(m_retiredConnections);
+    }
+    // 先删连边再删节点：连边持有两端端口指针，先释放更安全
+    for (MyProject::Connection *c : conns) {
+        delete c;
+    }
+    for (NodeBase *n : nodes) {
+        delete n;
+    }
 }
 
 void FlowScene::clearScene()
 {
-    for (MyProject::Connection *conn : m_connectionItems.keys()) {
+    // 用加锁读取的副本驱动删除（remove* 内部各自持锁；有存活快照时自动走墓碑延迟析构）
+    for (MyProject::Connection *conn : connections()) {
         removeConnection(conn);
     }
-    for (NodeBase *node : m_nodeItems.keys()) {
+    for (NodeBase *node : nodes()) {
         removeNode(node);
     }
     for (CommentGraphicsItem *c : m_comments) {
@@ -468,15 +561,23 @@ void FlowScene::clearScene()
         }
     }
     m_comments.clear();
-    m_nodeItems.clear();
-    m_connectionItems.clear();
+    {
+        QMutexLocker locker(&m_graphMutex);
+        m_nodeItems.clear();
+        m_connectionItems.clear();
+    }
 }
 
 void FlowScene::setEditLocked(bool locked)
 {
     m_editLocked = locked;
-    // 锁定/解锁所有节点图形的可移动性
-    for (NodeGraphicsItem *item : m_nodeItems) {
+    // 锁定/解锁所有节点图形的可移动性（加锁取副本再改，避免与执行线程读成员集并发）
+    QList<NodeGraphicsItem *> items;
+    {
+        QMutexLocker locker(&m_graphMutex);
+        items = m_nodeItems.values();
+    }
+    for (NodeGraphicsItem *item : items) {
         item->setFlag(QGraphicsItem::ItemIsMovable, !locked);
     }
     for (CommentGraphicsItem *c : m_comments) {
@@ -543,7 +644,12 @@ void FlowScene::mousePressEvent(QGraphicsSceneMouseEvent *event)
                 sel = n->node();
         }
     }
-    for (NodeGraphicsItem *n : m_nodeItems) {
+    QList<NodeGraphicsItem *> nodeItems;
+    {
+        QMutexLocker locker(&m_graphMutex);
+        nodeItems = m_nodeItems.values();
+    }
+    for (NodeGraphicsItem *n : nodeItems) {
         n->m_selected = n->isSelected();
         n->update();
     }

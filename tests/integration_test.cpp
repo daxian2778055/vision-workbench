@@ -28,6 +28,7 @@
 #include "GlobalTriggerManager.h"
 #include <QElapsedTimer>
 #include <QThread>
+#include <QPointer>
 #include <QCoreApplication>
 #include <QTemporaryDir>
 #include <QFile>
@@ -81,6 +82,7 @@ private slots:
     void testRestrictedTokenLaunch();
     void testAppContainerSandboxLaunch();
     void testEndToEndPipelineSmoke();
+    void testGraphSnapshotDefersDeletionUntilRelease();   // S1：执行期快照 + 墓碑延迟析构契约
     void testRecomputeDownstreamOnly();
 
     // 运行界面（多页/结果表格/IO状态）
@@ -297,6 +299,38 @@ void IntegrationTest::testDelayStopCancellable()
     QVERIFY2(finished, "停止后执行器线程未在 3 秒内退出");
     QVERIFY2(elapsed < 2500,
              qPrintable(QStringLiteral("延时 5000ms 被停止后仍耗时 %1ms，取消等待未生效").arg(elapsed)));
+}
+
+// S1（执行期图快照 + 墓碑延迟析构）契约钉：
+// 持快照期间 removeNode 只摘除不析构——成员集立即消失（后续快照不再含它）、对象仍存活（执行线程
+// 手里的裸指针不悬垂）、快照冻结在捕获时刻（VisionMaster 式语义）；快照释放后才真正析构。
+// 存活判定用 QPointer，无 UB。
+// 注：未覆盖"真跑一轮、轮内删节点"的并发交叉场景——夹具里让单轮稳定阻塞的手段（Delay 节点）在
+// 本环境下不生效（已自证 delayMs=1500 且图含 2 节点，但本轮 <200ms 完成、stats nodes=1），
+// 强写明断言只会做出 flaky 或空转用例，故不写；见提交说明的残留风险。
+void IntegrationTest::testGraphSnapshotDefersDeletionUntilRelease()
+{
+    FlowScene scene;
+    NodeBase *a = scene.createNode(NodeBase::IMAGE_PROCESSING, QPointF(0, 0),
+                                   QStringLiteral("OpenCV二值化"));
+    NodeBase *b = scene.createNode(NodeBase::IMAGE_PROCESSING, QPointF(200, 0),
+                                   QStringLiteral("OpenCV二值化"));
+    QVERIFY(a != nullptr);
+    QVERIFY(b != nullptr);
+    QPointer<NodeBase> aPtr(a);
+    const int aId = a->moduleId();
+
+    {
+        FlowScene::GraphSnapshotGuard guard = scene.captureGraphSnapshot();
+        QCOMPARE(guard.snapshot().nodes.size(), 2);
+        scene.removeNode(a);
+        QCOMPARE(scene.nodes().size(), 1);            // 成员集立即摘除（后续快照不再包含）
+        QCOMPARE(a->moduleId(), aId);                 // 对象仍存活：延迟析构（若已析构此处即 UB）
+        QCOMPARE(guard.snapshot().nodes.size(), 2);   // 快照冻结在捕获时刻
+        QVERIFY2(!aPtr.isNull(), "持快照期间不得析构被删节点");
+    }
+    QVERIFY2(aPtr.isNull(), "快照释放后墓碑未被 flush（对象泄漏）");
+    QCOMPARE(scene.nodes().size(), 1);
 }
 
 void IntegrationTest::testDelayPauseResumeKeepsRemaining()

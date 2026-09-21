@@ -282,7 +282,10 @@ void FlowExecutor::run()
             break;
         }
 
-        QList<NodeBase *> nodes = scene->nodes();
+        // S1：本轮捕获一次拓扑快照（RAII 句柄，随迭代结束 / break / continue 自动释放）。
+        // 持快照期间删除节点/连边只做墓碑延迟析构，整轮可安全使用这批裸指针；轮内不再访问场景容器。
+        FlowScene::GraphSnapshotGuard graphSnapshot = scene->captureGraphSnapshot();
+        const QList<NodeBase *> nodes = graphSnapshot.snapshot().nodes;
         if (nodes.isEmpty()) {
             emit executionStopped();   // 空场景同样需要终态信号（历史缺陷：静默退出，UI 卡"运行中"）
             break;
@@ -295,7 +298,7 @@ void FlowExecutor::run()
                 m_graphStructureDirty || m_cachedSortedNodes.isEmpty() || !cacheMatchesScene(nodes);
             if (needRebuild) {
                 QList<NodeBase *> topoOut;
-                rebuildIncomingIndex(scene);
+                rebuildIncomingIndex(nodes, graphSnapshot.snapshot().connections);
                 if (!topologicalSort(nodes, topoOut)) {
                     m_cachedSortedNodes.clear();
                     m_graphStructureDirty = true;
@@ -490,17 +493,14 @@ bool FlowExecutor::cacheMatchesScene(const QList<NodeBase *> &nodes) const
     return true;
 }
 
-void FlowExecutor::rebuildIncomingIndex(FlowScene *scene)
+void FlowExecutor::rebuildIncomingIndex(const QList<NodeBase *> &liveNodes,
+                                       const QList<MyProject::Connection *> &connections)
 {
     m_incoming.clear();
     m_outgoing.clear();
-    if (!scene) {
-        return;
-    }
-    const QList<MyProject::Connection *> all = scene->connections();
-    m_incoming.reserve(all.size());
-    m_outgoing.reserve(all.size());
-    for (MyProject::Connection *conn : all) {
+    m_incoming.reserve(connections.size());
+    m_outgoing.reserve(connections.size());
+    for (MyProject::Connection *conn : connections) {
         if (!conn) {
             continue;
         }
@@ -519,7 +519,6 @@ void FlowExecutor::rebuildIncomingIndex(FlowScene *scene)
     // 新节点被误判为"有缓存 / 输出有效"，把上一代节点的数据喂进算子
     // （表面正常、结果错误——工业平台最坏故障）。
     {
-        const QList<NodeBase *> liveNodes = scene->nodes();
         QSet<NodeBase *> liveSet;
         QSet<int> liveIds;
         for (NodeBase *n : liveNodes) {
@@ -552,7 +551,8 @@ void FlowExecutor::rebuildIncomingIndex(FlowScene *scene)
     // 注意：必须以当前场景的节点为准。本函数在拓扑排序前调用，m_cachedSortedNodes
     // 可能仍属于上一个场景（切换场景后），用它做种子会漏识别循环体并可能解引用悬垂指针
     m_loopBodyNodes.clear();
-    const QList<NodeBase *> bodySeed = scene->nodes();
+    // S1：循环体识别同样以本次快照的活节点表为准（不再回读场景容器）
+    const QList<NodeBase *> &bodySeed = liveNodes;
     for (NodeBase *n : bodySeed) {
         if (LoopNode *ln = qobject_cast<LoopNode *>(n)) {
             for (NodeBase *bn : collectLoopBody(ln)) {
@@ -1181,11 +1181,13 @@ void FlowExecutor::executeUpTo(NodeBase *endNode)
     if (st == ExecutionState::Running || st == ExecutionState::Paused)
         return;
 
-    QList<NodeBase *> nodes = m_scene->nodes();
+    // S1：同步执行同样走快照（UI 线程单发；持快照期间删除走墓碑，函数返回即释放）
+    FlowScene::GraphSnapshotGuard graphSnapshot = m_scene->captureGraphSnapshot();
+    const QList<NodeBase *> nodes = graphSnapshot.snapshot().nodes;
     QList<NodeBase *> sorted;
     {
         QMutexLocker cacheLock(&m_graphCacheMutex);
-        rebuildIncomingIndex(m_scene);
+        rebuildIncomingIndex(nodes, graphSnapshot.snapshot().connections);
         if (!topologicalSort(nodes, sorted))
             return;
         m_cachedSortedNodes = sorted;
@@ -1225,11 +1227,13 @@ void FlowExecutor::executeFrom(NodeBase *startNode)
     if (st == ExecutionState::Running || st == ExecutionState::Paused)
         return;
 
-    QList<NodeBase *> nodes = m_scene->nodes();
+    // S1：同步执行同样走快照（UI 线程单发；持快照期间删除走墓碑，函数返回即释放）
+    FlowScene::GraphSnapshotGuard graphSnapshot = m_scene->captureGraphSnapshot();
+    const QList<NodeBase *> nodes = graphSnapshot.snapshot().nodes;
     QList<NodeBase *> sorted;
     {
         QMutexLocker cacheLock(&m_graphCacheMutex);
-        rebuildIncomingIndex(m_scene);
+        rebuildIncomingIndex(nodes, graphSnapshot.snapshot().connections);
         if (!topologicalSort(nodes, sorted))
             return;
         m_cachedSortedNodes = sorted;
@@ -1290,6 +1294,9 @@ void FlowExecutor::invalidateDownstreamOf(NodeBase *startNode)
     // 沿出边做传递闭包，收集 startNode 自身及其全部下游。
     // m_outgoing 由 rebuildIncomingIndex() 构建，受 m_graphCacheMutex 保护。
     QSet<NodeBase *> affected;
+    // S1：本次索引重建 + 下游遍历期间持一份拓扑快照（函数返回即释放），
+    // 避免遍历 m_outgoing 时节点/连边被并发析构（删除会走墓碑延迟到快照释放）。
+    FlowScene::GraphSnapshotGuard graphSnapshot;
     {
         QMutexLocker graphLocker(&m_graphCacheMutex);
         // 图结构有变更（撤销/删除节点等）时 m_outgoing 可能仍指向已释放的连接/节点，
@@ -1301,10 +1308,11 @@ void FlowExecutor::invalidateDownstreamOf(NodeBase *startNode)
                 scene = m_scene;
             }
             if (scene) {
-                const QList<NodeBase *> nodes = scene->nodes();
-                rebuildIncomingIndex(scene);
+                graphSnapshot = scene->captureGraphSnapshot();
+                const QList<NodeBase *> &snapNodes = graphSnapshot.snapshot().nodes;
+                rebuildIncomingIndex(snapNodes, graphSnapshot.snapshot().connections);
                 QList<NodeBase *> sorted;
-                if (topologicalSort(nodes, sorted))
+                if (topologicalSort(snapNodes, sorted))
                     m_cachedSortedNodes = sorted;
                 m_graphStructureDirty = false;
             } else {
