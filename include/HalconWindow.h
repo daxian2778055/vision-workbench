@@ -102,6 +102,12 @@ public:
     void setImage(const HImage &image);
     void setImage(const HImage &image, const QString &caption);
 
+    /// S6：合并式推送——只保留"最新一帧"，在同一轮事件循环内合并同一控件的多次推送后再转换/显示。
+    /// 运行界面控件用它替代 setImage：高频轮次（尤其 imageAvailable 会按节点推送）下避免 UI 线程积压，
+    /// 积压会表现为"显示旧帧 + 界面卡"。语义不变：最终显示的仍是最后一帧（与逐帧推送的末帧一致），
+    /// 只是省掉被合并掉的中间帧的 HImage→QImage 深拷贝开销。
+    void requestImage(const HImage &image, const QString &caption);
+
     /// 设置结果叠加图元（替换式；图像坐标系）
     void setOverlay(const QVector<OverlayShape> &shapes);
     /// 清空叠加
@@ -182,6 +188,8 @@ private slots:
 private:
     // 内部方法
     QImage convertHImageToQImage(const HImage &image);
+    /// S6：兑现待显示帧（合并推送的落地动作，由 requestImage 排入事件队列）
+    void flushPendingImage();
     void updateScaleFactor(double delta, QPoint zoomCenter = QPoint(-1, -1));
     void fitToWindowSize();
     bool getImagePixelPos(const QPoint &widgetPos, int &imgX, int &imgY);
@@ -219,6 +227,10 @@ private:
     QLabel *m_pixelInfoLabel;
     QLabel *m_captionLabel;
     QLabel *m_zoomLabel;
+    // S6：合并推送的待显示帧（HImage 按值持有 = HALCON 引用计数保活；flush 后立即释放引用）
+    HImage m_pendingImage;
+    QString m_pendingCaption;
+    bool m_pendingValid = false;
     int m_imageOffsetX;
     int m_imageOffsetY;
     bool m_showCrosshair = false;   /// 是否显示中心十字线

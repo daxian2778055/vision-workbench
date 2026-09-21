@@ -502,7 +502,8 @@ void RuntimeInterfaceView::pushImage(const QString &nodeFullName, const HalconCp
     if (!image.IsInitialized()) return;
     for (int vi : it.value()) {
         if (vi < 0 || vi >= m_imageViews.size()) continue;
-        m_imageViews[vi]->setImage(image, nodeFullName);
+        // S6：合并式推送（latest wins）——高频轮次下避免 UI 线程逐帧深拷贝转换而积压
+        m_imageViews[vi]->requestImage(image, nodeFullName);
     }
 }
 

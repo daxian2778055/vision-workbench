@@ -245,6 +245,31 @@ QImage HalconWindow::convertHImageToQImage(const HImage &image)
     }
 }
 
+void HalconWindow::requestImage(const HImage &image, const QString &caption)
+{
+    if (!image.IsInitialized())
+        return;
+    const bool hadPending = m_pendingValid;
+    m_pendingImage = image;          // 覆盖旧帧：latest wins（被合并的中间帧不做转换，直接丢弃）
+    m_pendingCaption = caption;
+    m_pendingValid = true;
+    // 同一批只排一次兑现：已有待兑现时无需再排（多余的兑现调用会因 pendingValid=false 空转）
+    if (!hadPending)
+        QMetaObject::invokeMethod(this, &HalconWindow::flushPendingImage, Qt::QueuedConnection);
+}
+
+void HalconWindow::flushPendingImage()
+{
+    if (!m_pendingValid)
+        return;
+    const HImage image = m_pendingImage;
+    const QString caption = m_pendingCaption;
+    m_pendingValid = false;
+    m_pendingImage = HImage();       // 释放待显示引用，避免长久持有大图
+    m_pendingCaption.clear();
+    setImage(image, caption);
+}
+
 void HalconWindow::setImage(const HImage &image)
 {
     setImage(image, "");
