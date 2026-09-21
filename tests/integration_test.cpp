@@ -95,6 +95,7 @@ private slots:
     void testDataObjectConcurrentAccess();
     void testStepModeExitRestoresNormalRun();
     void testBusyTriggerQueuedNotDropped();
+    void testSnapshotGuardSurvivesSceneDestruction();   // N-2：场景先亡时句柄释放不得回调已亡场景
     void testBusyOtherFlowDoesNotBlockTrigger();
     void testScriptInterpreterResolvesToAbsolutePath();
     void testImageDisplayResolvePriority();
@@ -1689,6 +1690,28 @@ void IntegrationTest::testDataObjectConcurrentAccess()
     // 终态一致、无损坏：最后一轮的写入值必须原样可读回
     QCOMPARE(obj->getData().toInt(), 7999);
     QCOMPARE(obj->sourceInfo(), QStringLiteral("src 7999"));
+}
+
+// N-2：场景先于快照句柄析构时，句柄的释放必须安全跳过——旧实现持裸 FlowScene*，
+// 析构时会对已亡场景回调 releaseGraphSnapshot()（UAF + 墓碑对象永久泄漏）。
+// 现在句柄持 QPointer 弱引用：场景亡后 isHeld() 为假、释放为 no-op。
+void IntegrationTest::testSnapshotGuardSurvivesSceneDestruction()
+{
+    FlowScene::GraphSnapshotGuard guard;
+    {
+        FlowScene scene;
+        NodeBase *n = scene.createNode(NodeBase::IMAGE_PROCESSING, QPointF(0, 0),
+                                       QStringLiteral("OpenCV二值化"));
+        QVERIFY(n != nullptr);
+        guard = scene.captureGraphSnapshot();
+        QCOMPARE(guard.snapshot().nodes.size(), 1);
+        QVERIFY2(guard.isHeld(), "捕获后句柄应为持有态");
+        // 注意：场景在此作用域结束时析构，而 guard 仍存活且在快照寄存器里——调用方顺序错误，
+        // 场景侧会告警（Release 无断言），句柄侧必须能安全收尾。
+    }
+    QVERIFY2(!guard.isHeld(), "场景析构后弱引用应自动置空");
+    guard = FlowScene::GraphSnapshotGuard();   // 释放/移动赋值：场景已亡 → 必须 no-op，不得 UAF
+    QVERIFY(!guard.isHeld());
 }
 
 void IntegrationTest::testStepModeExitRestoresNormalRun()

@@ -8,6 +8,7 @@
 #include <QVariant>
 #include <QStringList>
 #include <QRecursiveMutex>
+#include <QPointer>
 #include <utility>
 #include "NodeBase.h"
 
@@ -84,15 +85,17 @@ public:
     {
     public:
         GraphSnapshotGuard() = default;
-        GraphSnapshotGuard(FlowScene *scene, GraphSnapshot snapshot)
+        /// 形参用 QObject* 而非 FlowScene*：嵌套类定义在 FlowScene 内部，此处 FlowScene 尚不完整，
+        /// 传给 QPointer<QObject> 的基类转换需要完整性；实际调用点 captureGraphSnapshot() 在 .cpp 传 this。
+        GraphSnapshotGuard(QObject *scene, GraphSnapshot snapshot)
             : m_scene(scene), m_snapshot(std::move(snapshot)) {}
-        ~GraphSnapshotGuard() { if (m_scene) m_scene->releaseGraphSnapshot(); }
+        ~GraphSnapshotGuard() { releaseHeld(); }
         GraphSnapshotGuard(GraphSnapshotGuard &&o) noexcept
             : m_scene(o.m_scene), m_snapshot(std::move(o.m_snapshot)) { o.m_scene = nullptr; }
         GraphSnapshotGuard &operator=(GraphSnapshotGuard &&o) noexcept
         {
             if (this != &o) {
-                if (m_scene) m_scene->releaseGraphSnapshot();
+                releaseHeld();
                 m_scene = o.m_scene;
                 m_snapshot = std::move(o.m_snapshot);
                 o.m_scene = nullptr;
@@ -102,11 +105,14 @@ public:
         GraphSnapshotGuard(const GraphSnapshotGuard &) = delete;
         GraphSnapshotGuard &operator=(const GraphSnapshotGuard &) = delete;
 
-        bool isHeld() const { return m_scene != nullptr; }
+        bool isHeld() const { return !m_scene.isNull(); }
         const GraphSnapshot &snapshot() const { return m_snapshot; }
 
     private:
-        FlowScene *m_scene = nullptr;
+        /// 释放句柄。N-2：改用弱引用——场景若已先析构（QPointer 自动置空）则直接跳过，
+        /// 绝不对已亡场景回调 releaseGraphSnapshot()（旧实现是裸指针 → 场景先亡即 UAF）。
+        void releaseHeld();
+        QPointer<QObject> m_scene;   /// 弱引用：只判"场景还在不在"，不延长其生命
         GraphSnapshot m_snapshot;
     };
     /// 捕获一次拓扑快照（持锁拷贝成员集）并登记一个存活句柄；未释放前删除一律走墓碑

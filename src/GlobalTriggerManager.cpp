@@ -175,9 +175,15 @@ void GlobalTriggerManager::onDataReceived(const QString &deviceName, const QByte
             accepted = executor->requestExternalRound();
             if (accepted) {
                 QMutexLocker locker(&m_mutex);
-                // 计数口径：排队也算"会被执行"（不虚报、不漏报）
-                m_allTriggers[matchedId].triggerCount++;
-                m_stringTriggers[matchedKey].triggerCount++;
+                // 计数口径：排队也算"会被执行"（不虚报、不漏报）。
+                // N-3：必须 find 判存在——匹配与计数之间该触发可能已被注销（载入工程/删流程），
+                // 用 operator[] 会插入 count=1、flowName 为空的幽灵项（统计多一条且永不触发）。
+                auto allIt = m_allTriggers.find(matchedId);
+                if (allIt != m_allTriggers.end())
+                    allIt->triggerCount++;
+                auto strIt = m_stringTriggers.find(matchedKey);
+                if (strIt != m_stringTriggers.end())
+                    strIt->triggerCount++;
             } else {
                 VFP_DEBUG << "String trigger dropped (queue full):" << matchedSource
                           << "→" << flowName;
@@ -258,9 +264,14 @@ void GlobalTriggerManager::onEventTriggered(const QString &eventId, const QList<
             accepted = executor->requestExternalRound();
             if (accepted) {
                 QMutexLocker locker(&m_mutex);
-                // 计数口径：排队也算"会被执行"（不虚报、不漏报）
-                m_allTriggers[matchedId].triggerCount++;
-                m_eventTriggers[matchedKey].triggerCount++;
+                // 计数口径：排队也算"会被执行"（不虚报、不漏报）。
+                // N-3：find 判存在，避免注销竞态插入幽灵统计项（同字符串触发）。
+                auto allIt = m_allTriggers.find(matchedId);
+                if (allIt != m_allTriggers.end())
+                    allIt->triggerCount++;
+                auto evIt = m_eventTriggers.find(matchedKey);
+                if (evIt != m_eventTriggers.end())
+                    evIt->triggerCount++;
             } else {
                 VFP_DEBUG << "Event trigger dropped (queue full):" << matchedEventId
                           << "→" << flowName;

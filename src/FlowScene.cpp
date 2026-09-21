@@ -120,6 +120,20 @@ void FlowScene::requestNodeEdit(NodeBase *node)
 
 FlowScene::~FlowScene()
 {
+    // N-2：仍有存活快照时销毁场景 = 调用方顺序错误（必须先停执行器 / setFlowScene(nullptr)）。
+    // 此时节点会随 QObject 父子机制一并析构，而执行线程仍持其指针 → 这里把"静默约定"变成可见错误：
+    // 告警 + 断言（Debug 构建暴露，Release 只留告警）。句柄侧已用弱引用兜住"场景先亡"的 UAF。
+    {
+        QMutexLocker locker(&m_graphMutex);
+        if (m_liveSnapshotCount > 0) {
+            const int live = m_liveSnapshotCount;
+            locker.unlock();
+            qWarning() << "FlowScene destroyed while" << live
+                       << "graph snapshot(s) alive — stop executors (setFlowScene(nullptr)) before "
+                          "destroying the scene, otherwise the executor may touch destroyed nodes.";
+            Q_ASSERT(live == 0);
+        }
+    }
     clearScene();
 }
 
@@ -500,6 +514,17 @@ FlowScene::GraphSnapshotGuard FlowScene::captureGraphSnapshot()
         ++m_liveSnapshotCount;
     }
     return GraphSnapshotGuard(this, std::move(snap));
+}
+
+void FlowScene::GraphSnapshotGuard::releaseHeld()
+{
+    if (m_scene.isNull()) {
+        return;   // 场景已析构：无事可做（N-2，避免对已亡场景回调）
+    }
+    if (auto *scene = qobject_cast<FlowScene *>(m_scene.data())) {
+        scene->releaseGraphSnapshot();
+    }
+    m_scene = nullptr;
 }
 
 void FlowScene::releaseGraphSnapshot()

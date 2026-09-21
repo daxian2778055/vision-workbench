@@ -492,13 +492,17 @@ void FlowExecutor::run()
         }
 
         // S9：软触发模式下的外部触发排队补跑——本轮结束后逐笔消费待补跑（有界，见 requestExternalRound）。
-        // 连续/硬触发模式本就在循环里跑，不需要补跑队列。
+        // N-1：消费检查与"退出置 Idle"必须同一临界区。否则触发恰落在两次独立加锁之间时
+        // （状态仍为 Running）requestExternalRound 会成功排队（GTM 已计数并 triggerFired），
+        // 而本线程已决定退出 → 该笔 pending 悬空，下次起轮（含界面手动"开始执行"）白多跑一轮。
         {
             QMutexLocker ml(&m_mutex);
-            if (currentMode == FlowMode::SoftwareTrigger && m_pendingExternalRounds > 0) {
+            if (currentMode == FlowMode::SoftwareTrigger && m_pendingExternalRounds > 0
+                && m_state == ExecutionState::Running) {
                 --m_pendingExternalRounds;
                 continue;
             }
+            m_state = ExecutionState::Idle;   // 与消费判定原子：此后到达的触发会走 startExecution 立即起轮
         }
         break;
     }

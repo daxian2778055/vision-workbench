@@ -121,7 +121,9 @@ bool ModbusNode::openConnection()
                                      ? qMax(1, words.size()) : 1;
                 maxAddr = qMax(maxAddr, qMin(65535, r.address + span - 1));
             }
-            const quint16 count = static_cast<quint16>(maxAddr + 1 > 0 ? maxAddr + 1 : 1);
+            // N-4：maxAddr=65535 时 maxAddr+1=65536，static_cast<quint16> 会回绕成 0 →
+            // 整个保持寄存器区不映射（症状正是"客户端写成功、服务器毫无反应"）。qMin 到 65535 防回绕。
+            const quint16 count = static_cast<quint16>(qBound(1, qMin(65535, maxAddr + 1), 65535));
             QModbusDataUnitMap map;
             map.insert(QModbusDataUnit::HoldingRegisters,
                        QModbusDataUnit(QModbusDataUnit::HoldingRegisters, 0, count));
