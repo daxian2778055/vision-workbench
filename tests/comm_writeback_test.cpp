@@ -1797,6 +1797,9 @@ void CommWritebackTest::testModbusUserCloseDoesNotResurrect()
              "addDevice(客户端) 失败");
     auto *cli = qobject_cast<ModbusNode *>(cm->deviceNode(QStringLiteral("RS_CLI")));
     QVERIFY2(cli != nullptr, "客户端节点类型不符");
+    // 断言"最短重连间隔"确实生效：下方等待窗口按 4× 间隔取（2000ms ≥ 4×500ms）。若配置未生效
+    // （退回默认 3000ms），本断言直接失败，避免"等待窗口 < 实际间隔"造成假通过。
+    QCOMPARE(cli->toJson().value(QStringLiteral("reconnectInterval")).toInt(), 500);
 
     QSignalSpy openedSpy(cli, &CommunicationNodeBase::connectionOpened);
     QSignalSpy closedSpy(cli, &CommunicationNodeBase::connectionClosed);
@@ -1804,11 +1807,11 @@ void CommWritebackTest::testModbusUserCloseDoesNotResurrect()
     QTRY_VERIFY_WITH_TIMEOUT(cli->isConnected(), 3000);      // 真正连上
     QCOMPARE(openedSpy.count(), 1);
 
-    // (1) 用户主动关闭 → 此后不得被自动重连"复活"。等待 4000ms：既覆盖 500ms 最短间隔，
-    //     也覆盖"配置未生效退回默认 3000ms"的情形，避免等待窗口小于重连周期造成假通过。
+    // (1) 用户主动关闭 → 此后不得被自动重连"复活"。等待 2000ms = 4× 已生效的最短间隔（上一段已断言
+    //     reconnectInterval==500）；若守卫缺失，500ms 后即复活 → 必被本窗口捕获。
     QVERIFY2(cm->closeDevice(QStringLiteral("RS_CLI")), "closeDevice 失败");
     QCOMPARE(closedSpy.count(), 1);                          // 曾真正连上 → 恰好一次断开
-    QTest::qWait(4000);
+    QTest::qWait(2000);
     QCOMPARE(openedSpy.count(), 1);                          // 复活会产生第 2 次 connectionOpened
     QVERIFY2(!cli->isConnected(), "用户关闭后节点被自动重连复活");
 
@@ -1853,6 +1856,8 @@ void CommWritebackTest::testPlcUserCloseDoesNotResurrect()
              "addDevice(PLC 客户端) 失败");
     auto *cli = qobject_cast<PlcCommNode *>(cm->deviceNode(QStringLiteral("PRS_CLI")));
     QVERIFY2(cli != nullptr, "PLC 节点类型不符");
+    // 断言"最短重连间隔"确实生效（同上：等待窗口按 4× 间隔取）
+    QCOMPARE(cli->toJson().value(QStringLiteral("reconnectInterval")).toInt(), 500);
 
     QSignalSpy openedSpy(cli, &CommunicationNodeBase::connectionOpened);
     QSignalSpy closedSpy(cli, &CommunicationNodeBase::connectionClosed);
@@ -1860,10 +1865,10 @@ void CommWritebackTest::testPlcUserCloseDoesNotResurrect()
     QTRY_VERIFY_WITH_TIMEOUT(cli->isConnected(), 3000);      // 真正连上
     QCOMPARE(openedSpy.count(), 1);
 
-    // (1) 用户主动关闭 → 不得被自动重连"复活"
+    // (1) 用户主动关闭 → 不得被自动重连"复活"（2000ms = 4× 已生效间隔）
     QVERIFY2(cm->closeDevice(QStringLiteral("PRS_CLI")), "closeDevice 失败");
     QCOMPARE(closedSpy.count(), 1);
-    QTest::qWait(4000);
+    QTest::qWait(2000);
     QCOMPARE(openedSpy.count(), 1);
     QVERIFY2(!cli->isConnected(), "用户关闭后 PLC 节点被自动重连复活");
 
