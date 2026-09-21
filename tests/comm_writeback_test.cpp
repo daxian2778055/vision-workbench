@@ -111,6 +111,7 @@ private slots:
     void testModbusSingleRegisterByteOrder();
     void testModbusWriteReadByteOrderRoundTrip();   // S3/S4：写入逆变换 + 宽类型拆寄存器往返
     void testModbusServerWideRegisterInit();         // S7：服务器寄存器表初始化须按宽类型拆字
+    void testPlcWriteReadByteOrderRoundTrip();       // S3（PLC 半边）：PLC 写入逆变换往返
     void testModbusUserCloseDoesNotResurrect();      // S-1：真连后用户关闭不复活 + 重开后自愈仍有效
     void testPlcUserCloseDoesNotResurrect();         // S-1（PLC 同款）：并钉住 openConnection 两行复位
     void testAllocFlowNameAvoidsCollision();
@@ -2143,6 +2144,71 @@ void CommWritebackTest::testModbusServerWideRegisterInit()
     };
     QTRY_VERIFY_WITH_TIMEOUT(qAbs(lastReadValue(0) - 250000.0) < 1e-6, 8000);
     QVERIFY(cm->closeDevice(QStringLiteral("WI_CLI")));
+}
+
+// S3（PLC 半边）：PlcCommNode::writeRegister 同样按该地址 dataType/byteOrder 逆变换拆字。
+// 场景：PLC 客户端把 32 位值写到 Modbus 服务器，客户端读回必须等于写入值（往返对称）。
+// 判别性：旧实现（quint16 单寄存器）会把 int32 截断成低 16 位 → 本用例必红。
+void CommWritebackTest::testPlcWriteReadByteOrderRoundTrip()
+{
+    const int port = 15511;
+    auto *cm = CommunicationManager::instance();
+    DeviceCleanup cleanup{ { QStringLiteral("PW_SRV"), QStringLiteral("PW_CLI") } };
+
+    QList<ModbusRegisterItem> regs;
+    ModbusRegisterItem r32;
+    r32.address = 0;
+    r32.dataType = QStringLiteral("int32");
+    r32.byteOrder = QStringLiteral("ABCD");
+    r32.accessMode = QStringLiteral("ReadWrite");
+    r32.enabled = true;
+    regs.append(r32);
+
+    QJsonObject srvCfg;
+    srvCfg[QStringLiteral("role")] = QStringLiteral("服务器");
+    srvCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
+    srvCfg[QStringLiteral("port")] = port;
+    srvCfg[QStringLiteral("slaveAddress")] = 1;
+    QVERIFY2(cm->addDevice(QStringLiteral("PW_SRV"), QStringLiteral("Modbus"), srvCfg),
+             "addDevice(服务器) 失败");
+    auto *srv = qobject_cast<ModbusNode *>(cm->deviceNode(QStringLiteral("PW_SRV")));
+    QVERIFY2(srv != nullptr, "服务器节点类型不符");
+    srv->setRegisters(regs);
+    QVERIFY2(cm->openDevice(QStringLiteral("PW_SRV")), "Modbus 服务器启动失败");
+    QTRY_VERIFY_WITH_TIMEOUT(srv->isServerListening(), 3000);
+
+    QJsonObject cliCfg;
+    cliCfg[QStringLiteral("host")] = QStringLiteral("127.0.0.1");
+    cliCfg[QStringLiteral("port")] = port;
+    cliCfg[QStringLiteral("slaveAddress")] = 1;
+    QVERIFY2(cm->addDevice(QStringLiteral("PW_CLI"), QStringLiteral("PLC"), cliCfg),
+             "addDevice(PLC 客户端) 失败");
+    auto *cli = qobject_cast<PlcCommNode *>(cm->deviceNode(QStringLiteral("PW_CLI")));
+    QVERIFY2(cli != nullptr, "PLC 节点类型不符");
+    cli->setRegisters(regs);      // 写路径按自身配置逆变换拆字；轮询按 int32 读 2 个字
+
+    QSignalSpy cliValueSpy(cli, &PlcCommNode::registerCurrentValueChanged);
+    QVERIFY2(cm->openDevice(QStringLiteral("PW_CLI")), "PLC 客户端连接失败");
+    QTRY_VERIFY_WITH_TIMEOUT(cli->isConnected(), 3000);
+
+    const double w = 250000.0;    // 0x0003D090：截断成低 16 位后必不相等，可判别
+    bool wrote = false;
+    for (int i = 0; i < 50 && !wrote; ++i) {
+        wrote = cli->writeRegister(0, w);
+        if (!wrote) QTest::qWait(100);
+    }
+    QVERIFY2(wrote, "PLC 写寄存器失败");
+
+    auto lastReadValue = [&](int addr) -> double {
+        double v = -1.0e18;   // 哨兵：未读到
+        for (int i = 0; i < cliValueSpy.count(); ++i) {
+            if (cliValueSpy.at(i).at(0).toInt() == addr)
+                v = cliValueSpy.at(i).at(1).toDouble();
+        }
+        return v;
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(qAbs(lastReadValue(0) - w) < 1e-6, 8000);
+    QVERIFY(cm->closeDevice(QStringLiteral("PW_CLI")));
 }
 
 // L2 回归：新建流程名必须全局唯一。扫描已注册绑定返回首个空闲"流程 N"，
