@@ -82,7 +82,7 @@ private slots:
     void testRestrictedTokenLaunch();
     void testAppContainerSandboxLaunch();
     void testEndToEndPipelineSmoke();
-    void testGraphSnapshotDefersDeletionUntilRelease();   // S1：执行期快照 + 墓碑延迟析构契约
+    void testGraphSnapshotDefersDeletionDuringRound();    // S1：快照/墓碑契约 + 真跑一轮内删节点
     void testRecomputeDownstreamOnly();
 
     // 运行界面（多页/结果表格/IO状态）
@@ -301,36 +301,74 @@ void IntegrationTest::testDelayStopCancellable()
              qPrintable(QStringLiteral("延时 5000ms 被停止后仍耗时 %1ms，取消等待未生效").arg(elapsed)));
 }
 
-// S1（执行期图快照 + 墓碑延迟析构）契约钉：
-// 持快照期间 removeNode 只摘除不析构——成员集立即消失（后续快照不再含它）、对象仍存活（执行线程
-// 手里的裸指针不悬垂）、快照冻结在捕获时刻（VisionMaster 式语义）；快照释放后才真正析构。
-// 存活判定用 QPointer，无 UB。
-// 注：未覆盖"真跑一轮、轮内删节点"的并发交叉场景——夹具里让单轮稳定阻塞的手段（Delay 节点）在
-// 本环境下不生效（已自证 delayMs=1500 且图含 2 节点，但本轮 <200ms 完成、stats nodes=1），
-// 强写明断言只会做出 flaky 或空转用例，故不写；见提交说明的残留风险。
-void IntegrationTest::testGraphSnapshotDefersDeletionUntilRelease()
+// S1（执行期图快照 + 墓碑延迟析构）：
+// (1) 白盒契约：持快照期间 removeNode 只摘除不析构——成员集立即消失（后续快照不再含它）、对象仍存活
+//     （执行线程手里的裸指针不悬垂）、快照冻结在捕获时刻（VisionMaster 式语义）；释放后才真正析构。
+//     存活判定用 QPointer，无 UB。
+// (2) 并发交叉（真场景）：真跑一轮，在该轮进行中（延时节点阻塞时）从 UI 线程删除**正在执行的**
+//     延时节点——旧实现是立即 delete，执行线程随后继续用该对象即 UAF；修复后必须活到轮末。
+//     前置断言"此刻本轮仍在进行"，避免延时失效时本段退化为空转假通过。
+void IntegrationTest::testGraphSnapshotDefersDeletionDuringRound()
 {
-    FlowScene scene;
-    NodeBase *a = scene.createNode(NodeBase::IMAGE_PROCESSING, QPointF(0, 0),
-                                   QStringLiteral("OpenCV二值化"));
-    NodeBase *b = scene.createNode(NodeBase::IMAGE_PROCESSING, QPointF(200, 0),
-                                   QStringLiteral("OpenCV二值化"));
-    QVERIFY(a != nullptr);
-    QVERIFY(b != nullptr);
-    QPointer<NodeBase> aPtr(a);
-    const int aId = a->moduleId();
-
+    // (1) 墓碑契约（确定性）
     {
-        FlowScene::GraphSnapshotGuard guard = scene.captureGraphSnapshot();
-        QCOMPARE(guard.snapshot().nodes.size(), 2);
-        scene.removeNode(a);
-        QCOMPARE(scene.nodes().size(), 1);            // 成员集立即摘除（后续快照不再包含）
-        QCOMPARE(a->moduleId(), aId);                 // 对象仍存活：延迟析构（若已析构此处即 UB）
-        QCOMPARE(guard.snapshot().nodes.size(), 2);   // 快照冻结在捕获时刻
-        QVERIFY2(!aPtr.isNull(), "持快照期间不得析构被删节点");
+        FlowScene scene;
+        NodeBase *a = scene.createNode(NodeBase::IMAGE_PROCESSING, QPointF(0, 0),
+                                       QStringLiteral("OpenCV二值化"));
+        NodeBase *b = scene.createNode(NodeBase::IMAGE_PROCESSING, QPointF(200, 0),
+                                       QStringLiteral("OpenCV二值化"));
+        QVERIFY(a != nullptr);
+        QVERIFY(b != nullptr);
+        QPointer<NodeBase> aPtr(a);
+        const int aId = a->moduleId();
+        {
+            FlowScene::GraphSnapshotGuard guard = scene.captureGraphSnapshot();
+            QCOMPARE(guard.snapshot().nodes.size(), 2);
+            scene.removeNode(a);
+            QCOMPARE(scene.nodes().size(), 1);            // 成员集立即摘除（后续快照不再包含）
+            QCOMPARE(a->moduleId(), aId);                 // 对象仍存活：延迟析构（若已析构此处即 UB）
+            QCOMPARE(guard.snapshot().nodes.size(), 2);   // 快照冻结在捕获时刻
+            QVERIFY2(!aPtr.isNull(), "持快照期间不得析构被删节点");
+        }
+        QVERIFY2(aPtr.isNull(), "快照释放后墓碑未被 flush（对象泄漏）");
+        QCOMPARE(scene.nodes().size(), 1);
     }
-    QVERIFY2(aPtr.isNull(), "快照释放后墓碑未被 flush（对象泄漏）");
-    QCOMPARE(scene.nodes().size(), 1);
+
+    // (2) 轮内删除正在执行的节点
+    {
+        FlowScene scene;
+        FlowExecutor exec;
+        exec.setFlowName(QStringLiteral("RegressionGraphSnapshot"));
+        exec.setFlowMode(FlowMode::SoftwareTrigger);
+
+        // 用与 testDelayStopCancellable 相同的建节点方式（该路径已证会真阻塞：slowest=延时[1](308ms)）
+        NodeBase *delayLong = scene.createNode(NodeBase::LOGIC, QPointF(0, 0), QStringLiteral("Delay"));
+        NodeBase *other = scene.createNode(NodeBase::LOGIC, QPointF(200, 0), QStringLiteral("Delay"));
+        QVERIFY(delayLong != nullptr);
+        QVERIFY(other != nullptr);
+        delayLong->setParam(QStringLiteral("delayMs"), 1500);   // 要删的节点：正在阻塞
+        other->setParam(QStringLiteral("delayMs"), 0);          // 陪跑节点：不失败、不阻塞
+        QPointer<NodeBase> delayPtr(delayLong);
+        QCOMPARE(scene.nodes().size(), 2);
+
+        exec.setFlowScene(&scene);
+        QSignalSpy finishedSpy(&exec, &FlowExecutor::executionFinished);
+
+        exec.startExecution();
+        QTest::qWait(200);
+        // 前置校验：此刻本轮必须仍在进行（延时失效时本段会假通过，必须变红）
+        QVERIFY2(finishedSpy.count() == 0, "延时未生效：本轮在删除前已结束（本段会空转）");
+        scene.removeNode(delayLong);        // 轮内删除"正在执行"的节点 → 必须走墓碑
+        QVERIFY2(!delayPtr.isNull(), "轮内删除被立即析构：执行线程随后使用即为 UAF");
+
+        QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.count(), 1, 8000);   // 本轮照常跑完、不崩
+
+        exec.stopExecution();
+        QVERIFY2(exec.wait(3000), "执行器线程未退出");
+        exec.setFlowScene(nullptr);
+        // 轮末释放快照 → 墓碑析构被投递回场景线程（本线程）执行
+        QTRY_VERIFY_WITH_TIMEOUT(delayPtr.isNull(), 3000);
+    }
 }
 
 void IntegrationTest::testDelayPauseResumeKeepsRemaining()
