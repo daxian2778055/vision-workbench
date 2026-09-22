@@ -95,6 +95,25 @@ void FlowExecutor::onSceneNodeRemoved(NodeBase *node)
     // 注：S4 的"模块号不再回收"已让 moduleId 维度（m_nodeOutputVars）由 rebuildIncomingIndex 的
     // 懒剪枝稳定处理（回收号永不复现 → 永远被剪枝），本槽留空不影响该修复。
     Q_UNUSED(node)
+
+    // ── S1 Phase B 主体的**前置条件清单**（本轮复核后的判定，供立项时一次做完）─────────────
+    // 判定：三类缓存**当前没有实际竞态** —— 只有执行线程在改它们，界面线程不存在并发访问者：
+    //   · 本槽：留空（在此增删缓存就是上面说的堆损坏）；
+    //   · invalidateDownstreamOf()：会改缓存，但有"运行中/暂停即拒绝"的守卫（只有 Idle/Stopped 才走到清理）；
+    //   · 其余全部触点都在执行线程：executeNode / collectNodeOutputVars / propagateData /
+    //     resolveParamRefs / 循环体跳过清理 / 轮首剪枝 / resetState。
+    // 所以它要修的不是现存缺陷，而是"让界面线程能安全改图"（Phase B）的**入口条件**：
+    //   1) 三类缓存的所有访问（现约 20 处）统一入 m_graphCacheMutex；
+    //   2) 锁序固定为 graphCacheMutex → m_mutex（setFlowScene / invalidateDownstreamOf 已是此序），
+    //      不得反向获取；
+    //   3) 注意**嵌套**：executeNode 会调用 propagateData / collectNodeOutputVars；若三者各自加锁，
+    //      需用 QRecursiveMutex（本仓 MvsImageSourceNode 已有先例）或把锁收口到最外层；
+    //   4) 界面侧新增"删节点即清缓存"后，需要新的并发用例（现有
+    //      testGraphSnapshotDefersDeletionDuringRound 与试点并发用例可作骨架，但它们只覆盖"删除不改
+    //      缓存"的现状）；
+    //   5) 窄窗口（本轮读代码时发现，Phase B 一并收口）：invalidateDownstreamOf 的"查状态 → 清缓存"
+    //      不是原子的——两者之间流程可能被启动。当前后果有限（轮首剪枝会清掉残留），故不单独修。
+    // 结论：**不做半改**（部分加锁 = 假安全 + 潜在死锁），等 Phase B 立项后按上面 5 条一次性完成。
 }
 
 void FlowExecutor::connectToScene(FlowScene *scene)
