@@ -80,6 +80,11 @@ void PlcConfigDialog::setupUI()
     m_autoReconnect = new QCheckBox(QStringLiteral("\u542F\u7528\u81EA\u52A8\u91CD\u8FDE"));
     reconnPollLayout->addWidget(m_autoReconnect);
 
+    // S4 回写三段确认：写→从站回执→回读同地址比对。此前只有节点参数、没有表单入口（"配了看不见"）
+    m_writeVerify = new QCheckBox(QStringLiteral("回写校验（写后回读比对）"));
+    m_writeVerify->setToolTip(QStringLiteral("开启后：每次写寄存器都回读同地址并比对，不一致才报警（默认关闭）"));
+    reconnPollLayout->addWidget(m_writeVerify);
+
     auto *rpForm = new QFormLayout();
     m_reconnectInterval = new QSpinBox();
     m_reconnectInterval->setRange(500, 60000);
@@ -258,6 +263,9 @@ void PlcConfigDialog::loadConfigToForm(const QJsonObject &config)
         m_slaveAddress->setValue(config[QStringLiteral("slaveAddress")].toInt());
     if (config.contains(QStringLiteral("autoReconnect")))
         m_autoReconnect->setChecked(config[QStringLiteral("autoReconnect")].toBool());
+    // S4 回写校验：缺键时保持默认（关闭），与节点侧 writeVerify 默认 false 一致
+    if (config.contains(QStringLiteral("writeVerify")))
+        m_writeVerify->setChecked(config[QStringLiteral("writeVerify")].toBool());
     if (config.contains(QStringLiteral("reconnectInterval")))
         m_reconnectInterval->setValue(config[QStringLiteral("reconnectInterval")].toInt());
     if (config.contains(QStringLiteral("pollInterval")))
@@ -319,6 +327,7 @@ QJsonObject PlcConfigDialog::buildConfigFromForm() const
     cfg[QStringLiteral("port")] = m_port->value();
     cfg[QStringLiteral("slaveAddress")] = m_slaveAddress->value();
     cfg[QStringLiteral("autoReconnect")] = m_autoReconnect->isChecked();
+    cfg[QStringLiteral("writeVerify")] = m_writeVerify->isChecked();   // S4 回写三段确认
     cfg[QStringLiteral("reconnectInterval")] = m_reconnectInterval->value();
     cfg[QStringLiteral("pollInterval")] = m_pollInterval->value();
 

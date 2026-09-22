@@ -47,6 +47,9 @@ private:
     QSpinBox *m_port = nullptr;
     QSpinBox *m_slaveAddress = nullptr;
     QCheckBox *m_autoReconnect = nullptr;
+    /// S4「回写三段确认」的开关（默认关闭）：①发出写 → ②从站回执 OK → ③**回读同地址比对**，
+    /// 不一致才经 communicationError 报警（与 ModbusConfigDialog 同款，见其头文件注释）。
+    QCheckBox *m_writeVerify = nullptr;
     QSpinBox *m_reconnectInterval = nullptr;
     QSpinBox *m_pollInterval = nullptr;
     QTableWidget *m_registerTable = nullptr;

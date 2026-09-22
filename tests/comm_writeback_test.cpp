@@ -35,6 +35,8 @@
 #include "CommunicationNodeBase.h"
 #include "CommunicationManagerDialog.h"
 #include "CommDeviceConfigDialog.h"
+#include "ModbusConfigDialog.h"
+#include "PlcConfigDialog.h"
 #include "registerbyteorder.h"   // S4：回写校验比对判定
 
 namespace {
@@ -1304,6 +1306,43 @@ void CommWritebackTest::testConfigDialogPreservesUnmanagedKeys()
     QCOMPARE(out.value(QStringLiteral("reconnectInterval")).toInt(), 2500);
     QCOMPARE(out.value(QStringLiteral("frameTimeoutMs")).toInt(), 300);
     QCOMPARE(out.value(QStringLiteral("port")).toInt(), 15503);   // 表单管理的键原样在
+
+    // ── 专用配置对话框（Modbus / PLC）：S4 的"回写校验"必须能设、也能读回 ──
+    // 此前 writeVerify 只有节点参数、没有任何表单入口（"配了看不见"）。这里钉住往返，
+    // 防止再出现"配置里写了却设不到 / 热更新后丢键"。
+    {
+        QJsonObject initialModbus;
+        initialModbus[QStringLiteral("writeVerify")] = true;
+        initialModbus[QStringLiteral("slaveAddress")] = 7;
+        initialModbus[QStringLiteral("pollInterval")] = 250;
+        ModbusConfigDialog modbusDlg(QStringLiteral("测试"), nullptr, nullptr);
+        modbusDlg.setConfig(initialModbus);
+        const QJsonObject produced = modbusDlg.config();
+        QVERIFY2(produced.value(QStringLiteral("writeVerify")).toBool(),
+                 "Modbus 配置对话框未把 writeVerify 播种到表单或未回写（改造前该键根本不存在）");
+        QCOMPARE(produced.value(QStringLiteral("slaveAddress")).toInt(), 7);
+        QCOMPARE(produced.value(QStringLiteral("pollInterval")).toInt(), 250);
+    }
+    {
+        QJsonObject initialPlc;
+        initialPlc[QStringLiteral("writeVerify")] = true;
+        initialPlc[QStringLiteral("slaveAddress")] = 7;
+        initialPlc[QStringLiteral("pollInterval")] = 250;
+        PlcConfigDialog plcDlg(QStringLiteral("测试"), nullptr, nullptr);
+        plcDlg.setConfig(initialPlc);
+        const QJsonObject produced = plcDlg.config();
+        QVERIFY2(produced.value(QStringLiteral("writeVerify")).toBool(),
+                 "PLC 配置对话框未把 writeVerify 播种到表单或未回写（改造前该键根本不存在）");
+        QCOMPARE(produced.value(QStringLiteral("slaveAddress")).toInt(), 7);
+        QCOMPARE(produced.value(QStringLiteral("pollInterval")).toInt(), 250);
+    }
+    // 缺键 ⇒ 默认关闭（与节点侧 writeVerify 默认 false 一致）
+    {
+        ModbusConfigDialog modbusDefault(QStringLiteral("测试"), nullptr, nullptr);
+        modbusDefault.setConfig(QJsonObject());
+        QVERIFY2(!modbusDefault.config().value(QStringLiteral("writeVerify")).toBool(),
+                 "配置里没有 writeVerify 时必须默认关闭");
+    }
 }
 
 void CommWritebackTest::testSendEventsSurviveSaveLoad()
