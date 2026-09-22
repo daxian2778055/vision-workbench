@@ -57,3 +57,5 @@ ci-activate-test.ps1
 .ci-cleanup.ps1
 .ci2.ps1
 Testing/
+ci-*
+diag-*
