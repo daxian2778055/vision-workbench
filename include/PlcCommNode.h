@@ -35,6 +35,9 @@ public:
     void setRegisters(const QList<ModbusRegisterItem> &regs);
     QList<ModbusRegisterItem> registers() const { return m_registers; }
     /// 写入寄存器值：按该地址配置的 dataType/byteOrder 逆变换拆成 1~2 个寄存器字后写入（S3）。
+    /// @return 只表示"请求是否已发出"：false = 未发出（宽度/字节序拆分失败、未连接、无设备句柄）；
+    ///         true = 已发出。**不表示写入成功**——写入结果（含 S4 回读校验失败）一律经
+    ///         communicationError 信号上报（与 ModbusNode::writeRegister 同口径）。
     bool writeRegister(int address, double value);
 
     /// S4 段③：回读同地址（宽类型读 2 字）并按同一 dataType/byteOrder 解析后比对。

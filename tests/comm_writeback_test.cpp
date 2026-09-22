@@ -2035,6 +2035,9 @@ void CommWritebackTest::testModbusWriteReadByteOrderRoundTrip()
     cliCfg[QStringLiteral("port")] = port;
     cliCfg[QStringLiteral("slaveAddress")] = 1;
     cliCfg[QStringLiteral("writeVerify")] = true;   // S4：显式开启回写三段确认（默认关闭）
+    // 统一透传回归：**未显式处理**的配置键必须原样到达节点（fail-open）。
+    // 改造前 createDeviceNode 是逐键白名单，本键会静默丢失 → 下面 getParam 断言会失败（判别性）。
+    cliCfg[QStringLiteral("unmanagedProbeKey")] = 4242;
     QVERIFY2(cm->addDevice(QStringLiteral("RTT_CLI"), QStringLiteral("Modbus"), cliCfg),
              "addDevice(客户端) 失败");
     auto *cli = qobject_cast<ModbusNode *>(cm->deviceNode(QStringLiteral("RTT_CLI")));
@@ -2042,6 +2045,8 @@ void CommWritebackTest::testModbusWriteReadByteOrderRoundTrip()
     cli->setRegisters(regs);   // 写路径按客户端自身寄存器配置做逆变换
     // S4：先证明选项真的到达节点——否则"无校验失败"会因校验根本没跑而空转通过
     QCOMPARE(cli->toJson().value(QStringLiteral("writeVerify")).toBool(), true);
+    // 统一透传（本轮）：**未显式处理**的键也必须到达节点；改造前它是逐键白名单，会被静默丢弃
+    QCOMPARE(cli->getParam(QStringLiteral("unmanagedProbeKey")).toInt(), 4242);
 
     QSignalSpy srvChangedSpy(srv, &CommunicationNodeBase::registerValueChanged);
     QSignalSpy cliValueSpy(cli, &ModbusNode::registerCurrentValueChanged);

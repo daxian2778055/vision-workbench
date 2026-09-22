@@ -293,6 +293,35 @@ void CommunicationManager::createDeviceNode(const QString &name, const QString &
     if (!node)
         return;
 
+    // 统一透传（根治"配了不生效"）：上面逐键下发的键保持"类型收敛"（如 baudRate 取 int），
+    // 其余**未显式处理**的键一律按原始类型透传。历史缺陷：这里是 fail-closed 白名单——新增配置键
+    // 若忘了在分支里补一行，用户在配置里改了却静默不生效（S4 的 writeVerify 正是这样漏掉的；源码里
+    // 还留着"数据位/停止位/校验/重连此前不传"等多处注释）。
+    // 现在默认 fail-open：未知键直接到节点（各节点 setParam 对不认识的键本就安全忽略）。
+    // 维护提示：将来在分支里新增"需要类型收敛"的键，请同步加入下表；加漏了也不会失效——
+    // 只是会被这里按原始类型（toVariant）再透传一遍。
+    {
+        static const char *const kExplicitlyHandled[] = {
+            "portName", "baudRate", "dataBits", "stopBits", "parity",
+            "autoReconnect", "reconnectInterval", "frameTimeoutMs", "frameTerminator",
+            "serverIp", "port", "mode",
+            "localPort", "remoteIp", "remotePort",
+            "role", "connectionType", "host", "slaveAddress", "pollInterval",
+            "writeVerify", "registers", "plcBrand"
+        };
+        for (auto it = config.constBegin(); it != config.constEnd(); ++it) {
+            bool explicitlyHandled = false;
+            for (const char *k : kExplicitlyHandled) {
+                if (it.key() == QLatin1String(k)) {
+                    explicitlyHandled = true;
+                    break;
+                }
+            }
+            if (!explicitlyHandled)
+                node->setParam(it.key(), it.value().toVariant());
+        }
+    }
+
     QMutexLocker locker(&m_mutex);
     if (m_devices.contains(name)) {
         // 同名设备已存在：原实现会把刚创建的节点直接丢弃（泄漏），此处显式回收
