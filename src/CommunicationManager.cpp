@@ -294,31 +294,40 @@ void CommunicationManager::createDeviceNode(const QString &name, const QString &
         return;
 
     // 统一透传（根治"配了不生效"）：上面逐键下发的键保持"类型收敛"（如 baudRate 取 int），
-    // 其余**未显式处理**的键一律按原始类型透传。历史缺陷：这里是 fail-closed 白名单——新增配置键
+    // 其余**未声明**的键一律按原始类型透传。历史缺陷：这里曾是 fail-closed 白名单——新增配置键
     // 若忘了在分支里补一行，用户在配置里改了却静默不生效（S4 的 writeVerify 正是这样漏掉的；源码里
     // 还留着"数据位/停止位/校验/重连此前不传"等多处注释）。
-    // 现在默认 fail-open：未知键直接到节点（各节点 setParam 对不认识的键本就安全忽略）。
-    // 维护提示：将来在分支里新增"需要类型收敛"的键，请同步加入下表；加漏了也不会失效——
-    // 只是会被这里按原始类型（toVariant）再透传一遍。
+    // 口径（评审指正后修正）：**未声明的键会存入参数表，但节点不会去读它**——不是"忽略"。
+    //   HalconNode::setParam 对未声明键就是原样入库（用例 getParam(unmanagedProbeKey)==4242 正是
+    //   以"存储"为判别基础）。即可被外部读取/回显，但不影响节点行为。
+    // 排除集用"节点已声明的参数名"动态判定，而不是手工清单：
+    //   · 分支里显式下发的键在 setParam 之后必然已存在于参数表 → 自动排除 → **不存在二次覆盖**
+    //     （手工清单漏一项就是类型回退：int 截断、qMax 下限这类键会被原始类型再写一遍）；
+    //   · 顺带挡住"配置里手写与节点内部运行参数重名的键"（connected / moduleStatus / lastReceived
+    //     等 init 已预置）——旧写法会在创建期把该值写进参数表、覆盖内部状态。
     {
-        static const char *const kExplicitlyHandled[] = {
-            "portName", "baudRate", "dataBits", "stopBits", "parity",
-            "autoReconnect", "reconnectInterval", "frameTimeoutMs", "frameTerminator",
-            "serverIp", "port", "mode",
-            "localPort", "remoteIp", "remotePort",
-            "role", "connectionType", "host", "slaveAddress", "pollInterval",
-            "writeVerify", "registers", "plcBrand"
+        const QList<QString> declared = node->getAllParamNames();
+        // 预留（内部派生/缓存）键：由节点自己写入——run() 的 moduleStatus、setParamDirect() 的
+        // connected、onDataReceived 的 lastData/lastInput/lastReceived——配置里手写同名键不得改写它们。
+        // 说明：这**不同于**上面的"已声明"排除集。comm 节点覆写 init() 时不调 HalconNode::init()，
+        // 因此像 moduleStatus 这类派生键并不在"已声明"集合里（本轮用例实测：不加这层它会被写进参数表）。
+        // 加新的内部状态键时请同步补进这里。
+        static const char *const kReservedInternal[] = {
+            "moduleStatus", "connected", "lastReceived", "lastInput", "lastData"
         };
         for (auto it = config.constBegin(); it != config.constEnd(); ++it) {
-            bool explicitlyHandled = false;
-            for (const char *k : kExplicitlyHandled) {
+            if (declared.contains(it.key()))
+                continue;   // 已由上面的分支按类型收敛下发，或属节点内部参数（init 预置）
+            bool reserved = false;
+            for (const char *k : kReservedInternal) {
                 if (it.key() == QLatin1String(k)) {
-                    explicitlyHandled = true;
+                    reserved = true;
                     break;
                 }
             }
-            if (!explicitlyHandled)
-                node->setParam(it.key(), it.value().toVariant());
+            if (reserved)
+                continue;
+            node->setParam(it.key(), it.value().toVariant());
         }
     }
 

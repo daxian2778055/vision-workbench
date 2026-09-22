@@ -2077,6 +2077,9 @@ void CommWritebackTest::testModbusWriteReadByteOrderRoundTrip()
     // 统一透传回归：**未显式处理**的配置键必须原样到达节点（fail-open）。
     // 改造前 createDeviceNode 是逐键白名单，本键会静默丢失 → 下面 getParam 断言会失败（判别性）。
     cliCfg[QStringLiteral("unmanagedProbeKey")] = 4242;
+    // 反向用例：与**节点内部参数**重名的配置键不得被写进参数表（init 已声明 ⇒ 透传排除）。
+    // 塞一个特征字符串，随后断言它没有出现在节点的任何参数上——不依赖具体内部键的取值语义。
+    cliCfg[QStringLiteral("moduleStatus")] = QStringLiteral("hijacked");
     QVERIFY2(cm->addDevice(QStringLiteral("RTT_CLI"), QStringLiteral("Modbus"), cliCfg),
              "addDevice(客户端) 失败");
     auto *cli = qobject_cast<ModbusNode *>(cm->deviceNode(QStringLiteral("RTT_CLI")));
@@ -2086,6 +2089,11 @@ void CommWritebackTest::testModbusWriteReadByteOrderRoundTrip()
     QCOMPARE(cli->toJson().value(QStringLiteral("writeVerify")).toBool(), true);
     // 统一透传（本轮）：**未显式处理**的键也必须到达节点；改造前它是逐键白名单，会被静默丢弃
     QCOMPARE(cli->getParam(QStringLiteral("unmanagedProbeKey")).toInt(), 4242);
+    // 反向：与节点内部参数重名的配置键不得改写内部状态（旧写法会把 "hijacked" 写进 moduleStatus）
+    for (const QString &k : cli->getAllParamNames()) {
+        QVERIFY2(cli->getParam(k).toString() != QStringLiteral("hijacked"),
+                 qPrintable(QStringLiteral("内部参数 %1 被配置里的同名键改写了").arg(k)));
+    }
 
     QSignalSpy srvChangedSpy(srv, &CommunicationNodeBase::registerValueChanged);
     QSignalSpy cliValueSpy(cli, &ModbusNode::registerCurrentValueChanged);
