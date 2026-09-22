@@ -18,8 +18,8 @@ void CounterNode::init()
     addInputPort(QStringLiteral("\u6761\u4EF6"), PortDataType::Number);
     addOutputPort(QStringLiteral("\u7D2F\u8BA1\u6B21\u6570"), PortDataType::Number);
 
-    m_params[QStringLiteral("conditionMode")] = m_conditionMode;
-    m_params[QStringLiteral("threshold")] = m_threshold;
+    m_params[QStringLiteral("conditionMode")] = QStringLiteral("bool");   // bool / number
+    m_params[QStringLiteral("threshold")] = 0.0;
 }
 
 bool CounterNode::process()
@@ -30,14 +30,18 @@ bool CounterNode::process()
 
 void CounterNode::run(bool /*autoSwitch*/)
 {
+    // 参数唯一来源：本轮取一次（局部快照）——避免逐次加锁，并保证同一轮内判据一致
+    const QString conditionMode = getParam(QStringLiteral("conditionMode")).toString();
+    const double threshold = getParam(QStringLiteral("threshold")).toDouble();
+
     bool condition = false;
     auto data = getInputData(0);
     if (data) {
         QVariant var = data->getData();
-        if (m_conditionMode == QStringLiteral("number")) {
+        if (conditionMode == QStringLiteral("number")) {
             bool ok = false;
             double v = var.toDouble(&ok);
-            condition = ok && (v >= m_threshold);
+            condition = ok && (v >= threshold);
         } else {
             // bool 模式：输入布尔或非零数值
             condition = var.toBool();
@@ -59,11 +63,7 @@ void CounterNode::run(bool /*autoSwitch*/)
 
 void CounterNode::setParam(const QString &name, const QVariant &value)
 {
-    if (name == QStringLiteral("conditionMode")) {
-        m_conditionMode = value.toString();
-    } else if (name == QStringLiteral("threshold")) {
-        m_threshold = value.toDouble();
-    }
+    // 只写参数表（基类加锁 + 校验），不再维护无锁成员镜像
     HalconNode::setParam(name, value);
 }
 
@@ -83,7 +83,7 @@ QWidget *CounterNode::createParamPanel()
     m_modeCombo->setObjectName(QStringLiteral("counterMode"));
     m_modeCombo->addItem(QStringLiteral("bool (\u8F93\u5165\u975E\u96F6\u5373\u8BA1\u6570)"), QStringLiteral("bool"));
     m_modeCombo->addItem(QStringLiteral("number (\u8F93\u5165\u2265\u9608\u503C\u5373\u8BA1\u6570)"), QStringLiteral("number"));
-    int idx = m_conditionMode == QStringLiteral("number") ? 1 : 0;
+    int idx = getParam(QStringLiteral("conditionMode")).toString() == QStringLiteral("number") ? 1 : 0;
     m_modeCombo->setCurrentIndex(idx);
     layout->addWidget(m_modeCombo);
 
@@ -92,12 +92,11 @@ QWidget *CounterNode::createParamPanel()
     m_thresholdSpin->setObjectName(QStringLiteral("counterThreshold"));
     m_thresholdSpin->setRange(-1e12, 1e12);
     m_thresholdSpin->setDecimals(6);
-    m_thresholdSpin->setValue(m_threshold);
+    m_thresholdSpin->setValue(getParam(QStringLiteral("threshold")).toDouble());
     layout->addWidget(m_thresholdSpin);
 
     connect(m_modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int i) {
-        m_conditionMode = m_modeCombo->itemData(i).toString();
-        setParam(QStringLiteral("conditionMode"), m_conditionMode);
+        setParam(QStringLiteral("conditionMode"), m_modeCombo->itemData(i).toString());
     });
     connect(m_thresholdSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double v) {
         setParam(QStringLiteral("threshold"), v);
@@ -112,27 +111,35 @@ void CounterNode::updateParamPanel(QWidget *panel)
     if (!panel) return;
     if (auto *combo = panel->findChild<QComboBox *>(QStringLiteral("counterMode"))) {
         QSignalBlocker b(combo);
-        combo->setCurrentIndex(m_conditionMode == QStringLiteral("number") ? 1 : 0);
+        combo->setCurrentIndex(
+            getParam(QStringLiteral("conditionMode")).toString() == QStringLiteral("number") ? 1 : 0);
     }
     if (auto *spin = panel->findChild<QDoubleSpinBox *>(QStringLiteral("counterThreshold"))) {
         QSignalBlocker b(spin);
-        spin->setValue(m_threshold);
+        spin->setValue(getParam(QStringLiteral("threshold")).toDouble());
     }
 }
 
 QJsonObject CounterNode::toJson() const
 {
     QJsonObject obj = HalconNode::toJson();
-    obj[QStringLiteral("conditionMode")] = m_conditionMode;
-    obj[QStringLiteral("threshold")] = m_threshold;
+    // 顶层键保留（老读取方兼容），值一律取自参数表（唯一来源）
+    obj[QStringLiteral("conditionMode")] =
+        QJsonValue::fromVariant(getParam(QStringLiteral("conditionMode")));
+    obj[QStringLiteral("threshold")] = QJsonValue::fromVariant(getParam(QStringLiteral("threshold")));
     return obj;
 }
 
 void CounterNode::fromJson(const QJsonObject &json)
 {
-    HalconNode::fromJson(json);
-    m_conditionMode = json[QStringLiteral("conditionMode")].toString(m_conditionMode);
-    m_threshold = json[QStringLiteral("threshold")].toDouble(m_threshold);
-    m_params[QStringLiteral("conditionMode")] = m_conditionMode;
-    m_params[QStringLiteral("threshold")] = m_threshold;
+    HalconNode::fromJson(json);   // conditionMode/threshold 由基类从 params 恢复（唯一来源）
+    // 兼容更早方案：这两个键曾只存在顶层（无 params 段）
+    if (!json.contains(QStringLiteral("params"))) {
+        if (json.contains(QStringLiteral("conditionMode")))
+            setParam(QStringLiteral("conditionMode"),
+                     json.value(QStringLiteral("conditionMode")).toVariant());
+        if (json.contains(QStringLiteral("threshold")))
+            setParam(QStringLiteral("threshold"),
+                     json.value(QStringLiteral("threshold")).toVariant());
+    }
 }

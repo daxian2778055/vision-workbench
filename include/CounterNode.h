@@ -25,9 +25,9 @@ public:
     int count() const { return m_count; }
 
 private:
-    int m_count = 0;              /// 累计次数
-    QString m_conditionMode = QStringLiteral("bool"); /// bool / number
-    double m_threshold = 0.0;     /// number 模式阈值
+    int m_count = 0;              /// 累计次数（运行期状态，非参数镜像）
+    // S1 残留收口：conditionMode / threshold 的唯一来源是参数表（默认值在 init() 写入），
+    // 不再保留无锁成员镜像——此前 setParam 写成员、run() 读成员，与界面线程写参数构成无保护竞态。
 
     QComboBox *m_modeCombo = nullptr;
     QDoubleSpinBox *m_thresholdSpin = nullptr;

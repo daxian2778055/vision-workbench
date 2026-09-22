@@ -17,6 +17,7 @@
 #include "DelayNode.h"
 #include "FilterNode.h"   // S1 残留试点：影子成员收口后的单源/并发回归
 #include "SortNode.h"
+#include "CounterNode.h"
 #include "FormulaNode.h"
 #include "ScriptSecurityPolicy.h"
 #include "ImageDisplayController.h"
@@ -2044,6 +2045,33 @@ void IntegrationTest::testShadowMemberSingleSourceAndConcurrentAccess()
     sorterLegacy.init();
     sorterLegacy.fromJson(legacySorter);
     QCOMPARE(sorterLegacy.getParam(QStringLiteral("order")).toString(), QStringLiteral("desc"));
+
+    // 同批第三类（CounterNode）：单源（setParam → getParam/toJson/fromJson）+ 旧格式兼容
+    CounterNode counter;
+    counter.init();
+    counter.setParam(QStringLiteral("conditionMode"), QStringLiteral("number"));
+    counter.setParam(QStringLiteral("threshold"), 12.5);
+    QCOMPARE(counter.getParam(QStringLiteral("conditionMode")).toString(), QStringLiteral("number"));
+    QCOMPARE(counter.getParam(QStringLiteral("threshold")).toDouble(), 12.5);
+
+    const QJsonObject counterJson = counter.toJson();
+    QCOMPARE(counterJson.value(QStringLiteral("conditionMode")).toString(), QStringLiteral("number"));
+    QCOMPARE(counterJson.value(QStringLiteral("threshold")).toDouble(), 12.5);
+
+    CounterNode counterRoundTrip;
+    counterRoundTrip.init();
+    counterRoundTrip.fromJson(counterJson);
+    QCOMPARE(counterRoundTrip.getParam(QStringLiteral("conditionMode")).toString(), QStringLiteral("number"));
+    QCOMPARE(counterRoundTrip.getParam(QStringLiteral("threshold")).toDouble(), 12.5);
+
+    QJsonObject legacyCounter;
+    legacyCounter[QStringLiteral("conditionMode")] = QStringLiteral("number");
+    legacyCounter[QStringLiteral("threshold")] = 33.0;
+    CounterNode counterLegacy;
+    counterLegacy.init();
+    counterLegacy.fromJson(legacyCounter);
+    QCOMPARE(counterLegacy.getParam(QStringLiteral("conditionMode")).toString(), QStringLiteral("number"));
+    QCOMPARE(counterLegacy.getParam(QStringLiteral("threshold")).toDouble(), 33.0);
 }
 
 void IntegrationTest::testFlowExtrasRoundTrip()
