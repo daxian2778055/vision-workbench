@@ -227,6 +227,17 @@ private:
     /// 参数改动会经 invalidateDownstreamOf 把相关节点移出该集合。
     QHash<NodeBase*, bool> m_validOutputs;
     QQueue<NodeBase*> m_executionQueue;
+    /// 执行器侧"图/执行缓存"的统一锁（S1 Stage 1：三类缓存的**全部**访问入锁）。
+    /// 纪律（定稿）：
+    ///  · 保护对象：m_nodeData / m_validOutputs / m_nodeOutputVars，以及图索引缓存
+    ///    （m_graphStructureDirty / m_cachedSortedNodes / m_incoming / m_outgoing）；
+    ///  · **锁序**：graphCacheMutex → m_mutex（setFlowScene / invalidateDownstreamOf 即此序），
+    ///    严禁反向获取；跨锁调用只允许"graph 锁内取 m_mutex"，不得反过来；
+    ///  · **粒度**：只在函数内开短临界区，**绝不跨越**"会再触碰上述缓存的调用"
+    ///    （executeNode → propagateData / collectNodeOutputVars 即此类，故各自在自己函数内加锁，
+    ///     不使用递归锁）；
+    ///  · 不在本锁范围：m_pendingResults（仅执行线程）、m_activeNodes / m_loopBodyNodes
+    ///    （轮次内执行线程私有；轮首构建时持本锁）、端口数据（节点自身的锁）。
     mutable QMutex m_graphCacheMutex;
     bool m_graphStructureDirty {true};
     QList<NodeBase *> m_cachedSortedNodes;

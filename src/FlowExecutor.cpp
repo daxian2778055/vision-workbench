@@ -806,26 +806,35 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
         // 同一份，不必各自再 getOutputData(0) 一次（每次都加锁 + 拷贝 QSharedPointer）。
         QSharedPointer<DataObject> nodeOut0;
         if (success) {
-            for (int i = 0; i < node->outputPorts().size(); i++) {
-                QSharedPointer<DataObject> outputData = node->getOutputData(i);
-                if (outputData) {
-                    outputData->setSourceInfo(QString("%1 的输出").arg(node->fullName()));
-                    m_nodeData[node][i] = outputData;
-                    if (i == 0) {
-                        nodeOut0 = outputData;
+            {
+                // S1 Stage 1：三类执行缓存统一受 m_graphCacheMutex 保护。
+                // 临界区只包缓存读写；getOutputData/setOutputData 走端口自身的锁（锁序 graph→port）。
+                QMutexLocker cacheLock(&m_graphCacheMutex);
+                for (int i = 0; i < node->outputPorts().size(); i++) {
+                    QSharedPointer<DataObject> outputData = node->getOutputData(i);
+                    if (outputData) {
+                        outputData->setSourceInfo(QString("%1 的输出").arg(node->fullName()));
+                        m_nodeData[node][i] = outputData;
+                        if (i == 0) {
+                            nodeOut0 = outputData;
+                        }
+                    } else {
+                        // 本轮该端口无输出：移除上一轮残留，否则下游会读到旧数据
+                        m_nodeData[node].remove(i);
                     }
-                } else {
-                    // 本轮该端口无输出：移除上一轮残留，否则下游会读到旧数据
-                    m_nodeData[node].remove(i);
                 }
+                // 标记"输出有效"：供局部执行的可复用判定（见 reusesCachedOutput）
+                m_validOutputs[node] = true;
             }
-            // 标记"输出有效"：供局部执行的可复用判定（见 reusesCachedOutput）
-            m_validOutputs[node] = true;
         } else {
             for (int p = 0; p < node->outputPorts().size(); ++p)
                 node->setOutputData(p, QSharedPointer<DataObject>());
-            m_nodeData[node].clear();
-            m_nodeOutputVars[node->moduleId()].clear();
+            {
+                // S1 Stage 1：失败/本轮无输出同样要清缓存（避免下游误用上一轮结果），同样入锁
+                QMutexLocker cacheLock(&m_graphCacheMutex);
+                m_nodeData[node].clear();
+                m_nodeOutputVars[node->moduleId()].clear();
+            }
         }
 
         // 计算节点执行耗时
@@ -967,7 +976,11 @@ void FlowExecutor::collectNodeOutputVars(NodeBase *node)
                 vars[QStringLiteral("value")] = out0->getData().toString();
         }
     }
-    m_nodeOutputVars[node->moduleId()] = vars;
+    {
+        // S1 Stage 1：输出变量表写入入锁（三类执行缓存统一受 m_graphCacheMutex 保护）
+        QMutexLocker cacheLock(&m_graphCacheMutex);
+        m_nodeOutputVars[node->moduleId()] = vars;
+    }
 }
 
 QString FlowExecutor::resolveParamRefs(const QString &raw) const
@@ -1007,6 +1020,8 @@ QString FlowExecutor::resolveParamRefs(const QString &raw) const
         const QString key = m.captured(2).isEmpty() ? QStringLiteral("value")
                                                     : m.captured(2);
         QString val;
+        // S1 Stage 1：输出变量表读取同样入锁（本函数在执行线程被调用；加锁后 GUI 侧将来读也安全）
+        QMutexLocker cacheLock(&m_graphCacheMutex);
         const auto mit = m_nodeOutputVars.constFind(modId);
         if (mit != m_nodeOutputVars.cend()) {
             const auto &vars = mit.value();
