@@ -22,7 +22,9 @@ public:
     void fromJson(const QJsonObject &json) override;
 
 private:
-    int m_delayMs = 100;
-
+    // S1 残留收口（第二批补漏）：delayMs 的唯一来源是参数表（默认值在 init() 写入），
+    // 不再保留无锁成员镜像——run() 在执行线程读它，界面线程会写。
+    // 注意本类的**钳制语义**：旧实现在 setParam 里把成员钳到 ≥0（参数表存原值），
+    // 故 toJson/面板/run 读到的都是"钳后值"；收口时把钳制放在**写侧**，语义逐字保持。
     QSpinBox *m_delaySpin = nullptr;
 };

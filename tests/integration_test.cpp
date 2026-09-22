@@ -2505,6 +2505,33 @@ void IntegrationTest::testShadowMemberSingleSourceAndConcurrentAccess()
     QCOMPARE(recorderLegacy.getParam(QStringLiteral("flowName")).toString(), QStringLiteral("keep-me"));
     QVERIFY2(!recorderLegacy.getParam(QStringLiteral("passed")).toBool(),
              "旧格式缺 passed 键时必须保留原值（旧实现带默认值，不是重置）");
+
+    // 同批第十一类（DelayNode）——**证据校验时发现的漏项**：第二批的检索式
+    // `m_\w+ = value\.to(Int|Double|Bool)\(\)` 被 `qMax(...)` 这类包裹写法骗过，
+    // 故 DelayNode / 通信四件套 / ColorConversionNode 当时没被列出（详见提交说明）。
+    // 本类单源 + "钳制在写侧"语义。
+    DelayNode delay;
+    delay.init();
+    QCOMPARE(delay.getParam(QStringLiteral("delayMs")).toInt(), 100);
+    delay.setParam(QStringLiteral("delayMs"), 250);
+    QCOMPARE(delay.getParam(QStringLiteral("delayMs")).toInt(), 250);
+    delay.setParam(QStringLiteral("delayMs"), -5);
+    // 判别性：负值必须在**写侧**被钳到 0（若改成"run 里钳、参数表存原值"，这条会红）
+    QCOMPARE(delay.getParam(QStringLiteral("delayMs")).toInt(), 0);
+    QCOMPARE(delay.toJson().value(QStringLiteral("delayMs")).toInt(), 0);
+
+    DelayNode delayRoundTrip;
+    delayRoundTrip.init();
+    delayRoundTrip.fromJson(delay.toJson());
+    QCOMPARE(delayRoundTrip.getParam(QStringLiteral("delayMs")).toInt(), 0);
+
+    // 旧格式（只有顶层键）：旧实现 `.toInt(m_delayMs)` ⇒ 缺键**保留原值**
+    QJsonObject legacyDelay;
+    DelayNode delayLegacy;
+    delayLegacy.init();
+    delayLegacy.setParam(QStringLiteral("delayMs"), 777);
+    delayLegacy.fromJson(legacyDelay);
+    QCOMPARE(delayLegacy.getParam(QStringLiteral("delayMs")).toInt(), 777);
 }
 
 void IntegrationTest::testFlowExtrasRoundTrip()
