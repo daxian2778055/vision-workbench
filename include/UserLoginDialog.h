@@ -19,6 +19,11 @@ public:
 private slots:
     void onLogin();
 
+protected:
+    /// 登录框必须"能被看见"：此时主窗口尚未 show()，若登录框落在其他窗口后面，用户看到的就是
+    /// "双击了但没反应"，任务管理器里却是进程活着、没有任何可关闭的窗口（现场案例）。
+    void showEvent(QShowEvent *event) override;
+
 private:
     void setupUI();
     /// 首次使用（空用户表）初始化管理员账号；返回是否成功

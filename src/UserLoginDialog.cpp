@@ -6,6 +6,7 @@
 #include <QFormLayout>
 #include <QMessageBox>
 #include <QKeyEvent>
+#include <QShowEvent>
 
 UserLoginDialog::UserLoginDialog(QWidget *parent)
     : QDialog(parent)
@@ -15,6 +16,17 @@ UserLoginDialog::UserLoginDialog(QWidget *parent)
 
 UserLoginDialog::~UserLoginDialog()
 {
+}
+
+void UserLoginDialog::showEvent(QShowEvent *event)
+{
+    QDialog::showEvent(event);
+    // 模态 ≠ 一定在最前面：刚启动时主窗口还没显示、也没有前台窗口，登录框可能被压在别的窗口下面，
+    // 用户就会以为"软件没打开"。这里主动抬到前台并抢焦点（应用刚启动时拥有前台权限，能生效）。
+    raise();
+    activateWindow();
+    if (m_usernameEdit && m_usernameEdit->text().isEmpty())
+        m_usernameEdit->setFocus();   // 焦点直接落在用户名，省一次点击
 }
 
 void UserLoginDialog::setupUI()

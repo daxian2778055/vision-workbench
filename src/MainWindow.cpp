@@ -846,6 +846,9 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
+    // 关闭路径留痕：现场反馈过"关了软件但进程还在"，日志里没有本条即说明根本没走到正常关闭
+    // （例如进程停在登录框/无窗口状态），据此可快速区分"没关掉"与"关掉后没退干净"。
+    VFP_DEBUG << "closeEvent: 关闭主窗口，保存面板显隐并清理相机…";
     // 记住辅助面板显隐，下次启动时恢复（避免每次重启都要重新打开结果表/变量面板）
     saveAuxPanelVisibility();
     cleanupCameras();
