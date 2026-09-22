@@ -46,3 +46,13 @@ tools/opencv-4.13.0-windows.exe
 # ===== CI 运行产物（tools/ci.ps1 生成）=====
 ci-*.log
 ci-*.txt
+
+# local verification temp artifacts (never commit)
+ci-tmp/
+ci-build-local.log
+ci-test-local.txt
+ci-run.err
+ci-run.out
+ci-activate-test.ps1
+.ci-cleanup.ps1
+.ci2.ps1
