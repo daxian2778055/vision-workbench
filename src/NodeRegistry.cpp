@@ -75,6 +75,7 @@
 #include "OpencvAdaptiveThresholdNode.h"
 #include "OpencvAngleNode.h"
 #include "DnnDetectNode.h"
+#include "DnnSegmentNode.h"
 #include "CameraIoNode.h"
 #include "OpencvCropNode.h"
 #include "OpencvImageArithNode.h"
@@ -223,6 +224,9 @@ void registerAllNodes()
             NodeBase::IMAGE_PROCESSING, "\u6DF1\u5EA6\u5B66\u4E60");
     // 🥈 目标检测：替代替换版环境下被禁用的 HALCON 区域检测（FR13.3 / G-P0-1）
     VFP_REG(DnnDetectNode,            "DnnDetectNode",            "ONNX目标检测", "ONNX DNN Detect",
+            NodeBase::IMAGE_PROCESSING, "\u6DF1\u5EA6\u5B66\u4E60");
+    // 🥇 分割：像素级缺陷区域输出（FR13.4 / G-P0-2），检测节点的下一环
+    VFP_REG(DnnSegmentNode,           "DnnSegmentNode",           "ONNX分割", "ONNX DNN Segment",
             NodeBase::IMAGE_PROCESSING, "\u6DF1\u5EA6\u5B66\u4E60");
     // 🥉 相机 IO 控制：对标 VM 4.4 IO 控制（FR16.12），收敛为"仅相机 IO"
     // （经 GlobalCameraManager 走海康 MVS GenICam LineSelector/LineMode/LineStatus）
@@ -407,6 +411,9 @@ void registerAllNodes()
                  {QStringLiteral("OpenCV角度测量"), QStringLiteral("OpenCV Angle Measure")});
     r.addAliases(QStringLiteral("DnnDetectNode"),
                  {QStringLiteral("OpenCV目标检测"), QStringLiteral("OpenCV YOLO"), QStringLiteral("ONNX检测")});
+    r.addAliases(QStringLiteral("DnnSegmentNode"),
+                 {QStringLiteral("OpenCV分割"), QStringLiteral("OpenCV YOLO-Seg"), QStringLiteral("ONNX分割"),
+                  QStringLiteral("UNet"), QStringLiteral("语义分割"), QStringLiteral("实例分割")});
     r.addAliases(QStringLiteral("CameraIoNode"),
                  {QStringLiteral("相机IO"), QStringLiteral("相机数字IO"), QStringLiteral("Camera IO"),
                   QStringLiteral("相机触发输出"), QStringLiteral("相机频闪")});

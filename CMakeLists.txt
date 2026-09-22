@@ -94,6 +94,7 @@ set(SOURCES
     src/OpencvClassifyNode.cpp
     src/DnnInferNode.cpp
     src/DnnDetectNode.cpp
+    src/DnnSegmentNode.cpp
     src/CameraIoNode.cpp
     src/DeepOcrNode.cpp
     src/OpencvTrackNode.cpp
@@ -290,6 +291,7 @@ set(HEADERS
     include/OpencvTrackNode.h
     include/DnnInferNode.h
     include/DnnDetectNode.h
+    include/DnnSegmentNode.h
     include/CameraIoNode.h
     include/OpencvCalibNode.h
     include/OpencvQrNode.h
@@ -733,6 +735,18 @@ if(MSVC)
     add_executable(dnn_detect_test tests/dnn_detect_test.cpp)
     target_link_libraries(dnn_detect_test PRIVATE vfp_core Qt6::Test)
     add_test(NAME DnnDetectTest COMMAND dnn_detect_test)
+endif()
+
+# ONNX 分割功能测试（🥇 G-P0-2：语义/实例输出解析 + 掩膜几何 + 连通域 + 降级 + 端到端）
+if(MSVC)
+    add_executable(dnn_segment_test tests/dnn_segment_test.cpp)
+    target_link_libraries(dnn_segment_test PRIVATE vfp_core Qt6::Test)
+    # 端到端用例用 tests/gen_min_seg_onnx.py 现生成最小模型（需要 python+onnx；
+    # 不可用时该用例自动 QSKIP，不把它变成环境相关的红灯）
+    file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}" VFP_TEST_SRC_DIR)
+    target_compile_definitions(dnn_segment_test PRIVATE
+        VFP_TEST_SOURCE_DIR="${VFP_TEST_SRC_DIR}")
+    add_test(NAME DnnSegmentTest COMMAND dnn_segment_test)
 endif()
 
 # 相机 IO 控制功能测试（🥉：MVS 数字 IO 逻辑 + 序列化 + 缺相机降级）
