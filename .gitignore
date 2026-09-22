@@ -59,3 +59,8 @@ ci-activate-test.ps1
 Testing/
 ci-*
 diag-*
+
+# 本地门禁/探针临时文件（点号前缀，不随仓流转）
+.ci*.ps1
+.probe*.ps1
+.git-commit-msg.txt
