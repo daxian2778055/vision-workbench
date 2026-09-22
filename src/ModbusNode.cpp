@@ -28,6 +28,13 @@ ModbusNode::ModbusNode(QObject *parent)
     m_type = OUTPUT;
 }
 
+namespace {
+/// P0-4 切片①：服务器模式映射的线圈数量（0..kServerCoilCount-1）。
+/// 固定值而非可配置：本切片的目标是"协议基础 + 端到端可用"，避免为线圈引入新的配置面；
+/// 若将来需要"部分线圈有效"的语义，再把它做成参数（届时同步补面板与用例）。
+constexpr quint16 kServerCoilCount = 1024;
+}   // namespace
+
 void ModbusNode::init()
 {
     // 不调用 HalconNode::init() / CommunicationNodeBase::init() — Modbus 不处理图像
@@ -131,6 +138,10 @@ bool ModbusNode::openConnection()
             QModbusDataUnitMap map;
             map.insert(QModbusDataUnit::HoldingRegisters,
                        QModbusDataUnit(QModbusDataUnit::HoldingRegisters, 0, count));
+            // P0-4 切片①：线圈区（数字 IO 的协议基础）——寄存器表格没有线圈配置项，故先固定映射
+            // 0..kServerCoilCount-1（1024 位 = 128 字节，代价可忽略）；需要"哪些线圈有效"时再做成可配置。
+            map.insert(QModbusDataUnit::Coils,
+                       QModbusDataUnit(QModbusDataUnit::Coils, 0, kServerCoilCount));
             m_modbusServer->setMap(map);
         }
 
@@ -337,9 +348,99 @@ bool ModbusNode::setLocalRegisterValue(int address, double value)
     return writeRegister(address, value);
 }
 
+// ---- P0-4 切片①：线圈（Coils）----
+
+bool ModbusNode::setLocalCoilValue(int address, bool on)
+{
+    if (address < 0 || address > 65535) return false;
+    if (m_role == MODBUS_SERVER && m_modbusServer) {
+        return m_modbusServer->setData(QModbusDataUnit::Coils,
+                                       static_cast<quint16>(address), on ? 1 : 0);
+    }
+    // 客户端模式：作为写请求发给外部设备（与 setLocalRegisterValue 同构想）
+    return writeCoil(address, on);
+}
+
+bool ModbusNode::writeCoil(int address, bool on)
+{
+    if (address < 0 || address > 65535) return false;
+    if (!m_connected || !m_modbus) return false;
+
+    QModbusDataUnit writeUnit(QModbusDataUnit::Coils, address, 1);
+    writeUnit.setValue(0, on ? 1 : 0);
+
+    // 从站号唯一来源：参数表（与 writeRegister 同口径）
+    QModbusReply *reply = m_modbus->sendWriteRequest(
+        writeUnit, getParam(QStringLiteral("slaveAddress")).toInt());
+    if (!reply) return false;
+
+    // 回执处理与 writeRegister 同款（K-2 同族）：错误必须上报 communicationError，
+    // 且同步完成 / 异步完成两条路径共用同一份处理，避免"写完就断"时静默丢弃。
+    const auto handleReply = [this, address](QModbusReply *r) {
+        if (r->error() != QModbusDevice::NoError) {
+            VFP_DEBUG << "Modbus coil write error at address" << address << ":" << r->errorString();
+            emit communicationError(QStringLiteral("Modbus写线圈失败(地址%1):%2")
+                                        .arg(address).arg(r->errorString()));
+        }
+        r->deleteLater();
+    };
+    if (reply->isFinished()) {
+        handleReply(reply);
+    } else {
+        connect(reply, &QModbusReply::finished, this, [reply, handleReply]() { handleReply(reply); });
+    }
+    return true;
+}
+
+bool ModbusNode::readCoil(int address)
+{
+    if (address < 0 || address > 65535) return false;
+    if (!m_connected || !m_modbus) return false;
+
+    QModbusDataUnit readUnit(QModbusDataUnit::Coils, address, 1);
+    QModbusReply *reply = m_modbus->sendReadRequest(
+        readUnit, getParam(QStringLiteral("slaveAddress")).toInt());
+    if (!reply) return false;
+
+    const auto handleReply = [this, address](QModbusReply *r) {
+        if (r->error() == QModbusDevice::NoError) {
+            const QModbusDataUnit du = r->result();
+            emit coilStateRead(address, du.valueCount() > 0 && du.value(0) != 0);
+        } else {
+            emit communicationError(QStringLiteral("Modbus读线圈失败(地址%1):%2")
+                                        .arg(address).arg(r->errorString()));
+        }
+        r->deleteLater();
+    };
+    if (reply->isFinished()) {
+        handleReply(reply);
+    } else {
+        connect(reply, &QModbusReply::finished, this, [reply, handleReply]() { handleReply(reply); });
+    }
+    return true;
+}
+
 void ModbusNode::onServerDataWritten(QModbusDataUnit::RegisterType table, int address, int size)
 {
-    if (table != QModbusDataUnit::HoldingRegisters || !m_modbusServer) return;
+    if (!m_modbusServer) return;
+
+    // P0-4 切片①：线圈被外部客户端写入 —— 上报给上层（IO 反馈 / 接收事件 / 用例观测）。
+    // 线圈不走寄存器表格，故不做"未配置地址忽略"的过滤（线圈区本身就是确定映射的连续区）。
+    if (table == QModbusDataUnit::Coils) {
+        for (int i = 0; i < size; ++i) {
+            const int coilAddr = address + i;
+            if (coilAddr < 0 || coilAddr > 65535) continue;
+            quint16 raw = 0;
+            if (!m_modbusServer->data(QModbusDataUnit::Coils,
+                                      static_cast<quint16>(coilAddr), &raw)) {
+                continue;
+            }
+            emit coilWrittenByClient(coilAddr, raw != 0);
+        }
+        return;
+    }
+
+    if (table != QModbusDataUnit::HoldingRegisters) return;
 
     for (int i = 0; i < size; ++i) {
         const int regAddr = address + i;

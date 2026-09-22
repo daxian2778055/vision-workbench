@@ -91,6 +91,7 @@ private slots:
     void testPipelineWritebackWithSuffix();
     void testWritebackFailureIsReported();
     void testModbusRegisterWritebackAndRawSendGuard();
+    void testModbusCoilWriteback();   // P0-4 切片①：线圈（数字 IO 协议基础）端到端回环
     void testPlcDataTriggersFlowAndWritesBack();
     void testHeartbeatActuallyGoesOnTheWire();
     void testSendEventsActuallySend();
@@ -1831,6 +1832,68 @@ void CommWritebackTest::testPlcCloseNoDoubleReportOnTransientDrop()
 //  (2) 重开后断线自愈仍须有效（关服务器 → 立即重启 → 客户端应自行重连回来）。这一段同时钉住
 //      openConnection 里 m_userClosed/m_everReallyConnected 两行复位：若这两行缺失，m_userClosed 会
 //      从首次 open 起恒为 true，Unconnected 分支永不自愈（8f36746 的 PLC 版正是如此，本用例会红）。
+void CommWritebackTest::testModbusCoilWriteback()
+{
+    // P0-4 切片①：线圈（Coils）端到端回环 —— 客户端写 → **服务器侧观测到同地址同状态**（"IO 真动作了"的判据），
+    // 再由客户端读回同值。本用例不依赖寄存器表格（线圈是独立数据区），这也顺带钉住"线圈区确实被映射"。
+    const quint16 port = pickFreePort();
+    QVERIFY2(port != 0, "无法取得空闲端口（pickFreePort）");
+    auto *cm = CommunicationManager::instance();
+    DeviceCleanup cleanup{ { QStringLiteral("COIL_SRV"), QStringLiteral("COIL_CLI") } };
+
+    QJsonObject srvCfg;
+    srvCfg[QStringLiteral("role")] = QStringLiteral("服务器");
+    srvCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
+    srvCfg[QStringLiteral("port")] = port;
+    srvCfg[QStringLiteral("slaveAddress")] = 1;
+    QVERIFY2(cm->addDevice(QStringLiteral("COIL_SRV"), QStringLiteral("Modbus"), srvCfg),
+             "addDevice(服务器) 失败");
+    auto *srv = qobject_cast<ModbusNode *>(cm->deviceNode(QStringLiteral("COIL_SRV")));
+    QVERIFY2(srv != nullptr, "服务器节点类型不符");
+    QVERIFY2(cm->openDevice(QStringLiteral("COIL_SRV")), "Modbus 服务器启动失败");
+    QTRY_VERIFY_WITH_TIMEOUT(srv->isServerListening(), 3000);
+
+    QJsonObject cliCfg;
+    cliCfg[QStringLiteral("role")] = QStringLiteral("客户端");
+    cliCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
+    cliCfg[QStringLiteral("host")] = QStringLiteral("127.0.0.1");
+    cliCfg[QStringLiteral("port")] = port;
+    cliCfg[QStringLiteral("slaveAddress")] = 1;
+    cliCfg[QStringLiteral("pollInterval")] = 100;
+    QVERIFY2(cm->addDevice(QStringLiteral("COIL_CLI"), QStringLiteral("Modbus"), cliCfg),
+             "addDevice(客户端) 失败");
+    auto *cli = qobject_cast<ModbusNode *>(cm->deviceNode(QStringLiteral("COIL_CLI")));
+    QVERIFY2(cli != nullptr, "客户端节点类型不符");
+    QVERIFY2(cm->openDevice(QStringLiteral("COIL_CLI")), "Modbus 客户端连接失败");
+    QTRY_VERIFY_WITH_TIMEOUT(cli->isConnected(), 3000);
+
+    QSignalSpy coilSpy(srv, &ModbusNode::coilWrittenByClient);
+
+    // ① 置位：服务器侧必须观测到 (地址 3, true)
+    QVERIFY2(cli->writeCoil(3, true), "写线圈请求未发出");
+    QTRY_VERIFY_WITH_TIMEOUT(coilSpy.count() >= 1, 3000);
+    QCOMPARE(coilSpy.at(0).at(0).toInt(), 3);
+    QCOMPARE(coilSpy.at(0).at(1).toBool(), true);
+
+    // ② 复位：同一个地址必须能改回 false（判别性：只写一次成功不算通）
+    const int before = coilSpy.count();
+    QVERIFY2(cli->writeCoil(3, false), "写线圈请求未发出");
+    QTRY_VERIFY_WITH_TIMEOUT(coilSpy.count() > before, 3000);
+    QCOMPARE(coilSpy.last().at(0).toInt(), 3);
+    QCOMPARE(coilSpy.last().at(1).toBool(), false);
+
+    // ③ 客户端读回：状态须与刚写入的一致（异步回执经 coilStateRead）
+    QSignalSpy readSpy(cli, &ModbusNode::coilStateRead);
+    QVERIFY2(cli->readCoil(3), "读线圈请求未发出");
+    QTRY_VERIFY_WITH_TIMEOUT(readSpy.count() >= 1, 3000);
+    QCOMPARE(readSpy.last().at(0).toInt(), 3);
+    QCOMPARE(readSpy.last().at(1).toBool(), false);
+
+    // ④ 越界地址必须被拒（不发请求、不崩）
+    QVERIFY2(!cli->writeCoil(-1, true), "越界线圈地址必须被拒绝");
+    QVERIFY2(!cli->readCoil(70000), "越界线圈地址必须被拒绝");
+}
+
 void CommWritebackTest::testModbusUserCloseDoesNotResurrect()
 {
     const quint16 port = pickFreePort();   // 临时端口（替代固定字面量，避免 TIME_WAIT 撞端口）

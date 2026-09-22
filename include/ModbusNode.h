@@ -67,6 +67,15 @@ public:
     /// 服务器模式：更新本地寄存器表，客户端读请求将返回该值（同样按字节序拆字）。
     bool setLocalRegisterValue(int address, double value);
 
+    // ---- P0-4 切片①：线圈（Coils）能力（数字 IO 的协议基础）----
+    /// 写单个线圈（客户端模式）。返回值只表示**请求是否发出**；失败经 communicationError 上报
+    ///（与 writeRegister 同口径）。
+    bool writeCoil(int address, bool on);
+    /// 读单个线圈（客户端模式，异步）：结果经 `coilStateRead` 上报；返回"请求是否已发出"。
+    bool readCoil(int address);
+    /// 服务器模式：更新本地线圈（外部客户端读请求将返回该值）；客户端模式下等价于 writeCoil。
+    bool setLocalCoilValue(int address, bool on);
+
     /// S4 段③：回读同地址（宽类型读 2 字）并按同一 dataType/byteOrder 解析后比对。
     /// 不一致 / 读回失败 → emit communicationError；仅当 writeVerify 开启时被 writeRegister 调用。
     void verifyWrittenValue(int address, double expected, const QString &dataType,
@@ -94,6 +103,12 @@ signals:
     void registerCurrentValueChanged(int address, double value, const QString &displayText);
     /// 服务器模式：外部客户端写入了寄存器
     void registerWrittenByClient(int address, quint16 value);
+
+    // ---- P0-4 切片①：线圈信号（供 IO 反馈 / 接收事件 / 用例观测）----
+    /// 服务器模式：外部客户端写入了线圈（地址 + 新状态）
+    void coilWrittenByClient(int address, bool on);
+    /// 客户端模式：`readCoil()` 的异步回执（地址 + 读到的状态）
+    void coilStateRead(int address, bool on);
 
 private slots:
     void onPollTimeout();
