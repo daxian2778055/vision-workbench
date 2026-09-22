@@ -16,7 +16,6 @@ public:
     void run(bool autoSwitch = true) override;
     bool process() override;
     void setParam(const QString &name, const QVariant &value) override;
-    QVariant getParam(const QString &name) const override;
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;
     QJsonObject toJson() const override;
@@ -28,7 +27,8 @@ public:
                          double &result);
 
 private:
-    QString m_expression = QStringLiteral("p0 + p1");
+    // S1 残留收口：expression 的唯一来源是参数表（默认值在 init() 写入），不再保留无锁成员镜像。
+    // 本类此前还重写 getParam 直接返回该成员——收口后该重写已无意义，一并删除（直接走基类）。
 
     QTextEdit *m_expressionEdit = nullptr;
 };

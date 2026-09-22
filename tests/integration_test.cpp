@@ -20,6 +20,7 @@
 #include "CounterNode.h"
 #include "FormatNode.h"
 #include "FormulaNode.h"
+#include "FormulaNode.h"
 #include "ScriptSecurityPolicy.h"
 #include "ImageDisplayController.h"
 #include "ExecutionStatusController.h"
@@ -2101,6 +2102,29 @@ void IntegrationTest::testShadowMemberSingleSourceAndConcurrentAccess()
     // 旧实现是无条件 `m_outputSuffix = json["outputSuffix"].toString()` → 键缺失时取空串（不追加后缀）。
     // 若哪天有人把兼容分支改成"缺失则保留默认值"，本断言会失败（这就是它存在的意义）。
     QCOMPARE(fmtLegacy.getParam(QStringLiteral("outputSuffix")).toString(), QString());
+
+    // 同批第五类（FormulaNode）：单源 + 旧格式兼容；本类还删掉了一处"重写 getParam 直接返回成员"的旁路
+    FormulaNode formula;
+    formula.init();
+    QCOMPARE(formula.getParam(QStringLiteral("expression")).toString(), QStringLiteral("p0 + p1"));
+    formula.setParam(QStringLiteral("expression"), QStringLiteral("(p0 + p1) * 2"));
+    QCOMPARE(formula.getParam(QStringLiteral("expression")).toString(), QStringLiteral("(p0 + p1) * 2"));
+    QCOMPARE(formula.toJson().value(QStringLiteral("expression")).toString(),
+             QStringLiteral("(p0 + p1) * 2"));
+
+    FormulaNode formulaRoundTrip;
+    formulaRoundTrip.init();
+    formulaRoundTrip.fromJson(formula.toJson());
+    QCOMPARE(formulaRoundTrip.getParam(QStringLiteral("expression")).toString(),
+             QStringLiteral("(p0 + p1) * 2"));
+
+    // 缺键语义与 FormatNode **相反**：旧代码 `toString(m_expression)` → 缺键保留原值（不是清空）
+    QJsonObject legacyFormula;
+    FormulaNode formulaLegacy;
+    formulaLegacy.init();
+    formulaLegacy.setParam(QStringLiteral("expression"), QStringLiteral("p2 * 3"));
+    formulaLegacy.fromJson(legacyFormula);
+    QCOMPARE(formulaLegacy.getParam(QStringLiteral("expression")).toString(), QStringLiteral("p2 * 3"));
 }
 
 void IntegrationTest::testFlowExtrasRoundTrip()

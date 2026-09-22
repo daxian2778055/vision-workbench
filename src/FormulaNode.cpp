@@ -223,7 +223,7 @@ void FormulaNode::init()
     addInputPort(QStringLiteral("p3"), PortDataType::Number);
     addOutputPort(QStringLiteral("\u8BA1\u7B97\u7ED3\u679C"), PortDataType::Number);
 
-    m_params[QStringLiteral("expression")] = m_expression;
+    m_params[QStringLiteral("expression")] = QStringLiteral("p0 + p1");
 }
 
 bool FormulaNode::process()
@@ -254,7 +254,7 @@ void FormulaNode::run(bool /*autoSwitch*/)
     }
 
     double result = 0.0;
-    if (evaluate(m_expression, vars, result)) {
+    if (evaluate(getParam(QStringLiteral("expression")).toString(), vars, result)) {
         auto obj = QSharedPointer<DataObject>::create(DataObject::DataType::Number, QVariant(result));
         setOutputData(0, obj);
     } else {
@@ -265,18 +265,8 @@ void FormulaNode::run(bool /*autoSwitch*/)
 
 void FormulaNode::setParam(const QString &name, const QVariant &value)
 {
-    if (name == QStringLiteral("expression")) {
-        m_expression = value.toString();
-    }
+    // 只写参数表（基类加锁 + 校验），不再维护无锁成员镜像
     HalconNode::setParam(name, value);
-}
-
-QVariant FormulaNode::getParam(const QString &name) const
-{
-    if (name == QStringLiteral("expression")) {
-        return m_expression;
-    }
-    return HalconNode::getParam(name);
 }
 
 QWidget *FormulaNode::createParamPanel()
@@ -296,13 +286,12 @@ QWidget *FormulaNode::createParamPanel()
     layout->addWidget(new QLabel(QStringLiteral("\u8868\u8FBE\u5F0F:")));
     m_expressionEdit = new QTextEdit();
     m_expressionEdit->setObjectName(QStringLiteral("formulaExpression"));
-    m_expressionEdit->setPlainText(m_expression);
+    m_expressionEdit->setPlainText(getParam(QStringLiteral("expression")).toString());
     m_expressionEdit->setMinimumHeight(70);
     layout->addWidget(m_expressionEdit);
 
     connect(m_expressionEdit, &QTextEdit::textChanged, this, [this]() {
-        m_expression = m_expressionEdit->toPlainText();
-        setParam(QStringLiteral("expression"), m_expression);
+        setParam(QStringLiteral("expression"), m_expressionEdit->toPlainText());
     });
 
     layout->addStretch();
@@ -314,20 +303,26 @@ void FormulaNode::updateParamPanel(QWidget *panel)
     if (!panel) return;
     if (auto *edit = panel->findChild<QTextEdit *>(QStringLiteral("formulaExpression"))) {
         QSignalBlocker b(edit);
-        edit->setPlainText(m_expression);
+        edit->setPlainText(getParam(QStringLiteral("expression")).toString());
     }
 }
 
 QJsonObject FormulaNode::toJson() const
 {
     QJsonObject obj = HalconNode::toJson();
-    obj[QStringLiteral("expression")] = m_expression;
+    // 顶层键保留（老读取方兼容），值取自参数表（唯一来源）
+    obj[QStringLiteral("expression")] = QJsonValue::fromVariant(getParam(QStringLiteral("expression")));
     return obj;
 }
 
 void FormulaNode::fromJson(const QJsonObject &json)
 {
-    HalconNode::fromJson(json);
-    m_expression = json[QStringLiteral("expression")].toString(m_expression);
-    m_params[QStringLiteral("expression")] = m_expression;
+    HalconNode::fromJson(json);   // expression 由基类从 params 恢复（唯一来源）
+    // 兼容更早方案：expression 曾只存在顶层（无 params 段）。
+    // 与旧实现逐字对齐：旧代码是 `m_expression = json["expression"].toString(m_expression)`，
+    // 即**缺键时保留原值**（不是清空）——故这里保留 contains 守卫。
+    if (!json.contains(QStringLiteral("params"))
+        && json.contains(QStringLiteral("expression"))) {
+        setParam(QStringLiteral("expression"), json.value(QStringLiteral("expression")).toVariant());
+    }
 }
