@@ -35,6 +35,7 @@
 #include "CommunicationNodeBase.h"
 #include "CommunicationManagerDialog.h"
 #include "CommDeviceConfigDialog.h"
+#include "registerbyteorder.h"   // S4：回写校验比对判定
 
 namespace {
 
@@ -2033,14 +2034,18 @@ void CommWritebackTest::testModbusWriteReadByteOrderRoundTrip()
     cliCfg[QStringLiteral("host")] = QStringLiteral("127.0.0.1");
     cliCfg[QStringLiteral("port")] = port;
     cliCfg[QStringLiteral("slaveAddress")] = 1;
+    cliCfg[QStringLiteral("writeVerify")] = true;   // S4：显式开启回写三段确认（默认关闭）
     QVERIFY2(cm->addDevice(QStringLiteral("RTT_CLI"), QStringLiteral("Modbus"), cliCfg),
              "addDevice(客户端) 失败");
     auto *cli = qobject_cast<ModbusNode *>(cm->deviceNode(QStringLiteral("RTT_CLI")));
     QVERIFY2(cli != nullptr, "客户端节点类型不符");
     cli->setRegisters(regs);   // 写路径按客户端自身寄存器配置做逆变换
+    // S4：先证明选项真的到达节点——否则"无校验失败"会因校验根本没跑而空转通过
+    QCOMPARE(cli->toJson().value(QStringLiteral("writeVerify")).toBool(), true);
 
     QSignalSpy srvChangedSpy(srv, &CommunicationNodeBase::registerValueChanged);
     QSignalSpy cliValueSpy(cli, &ModbusNode::registerCurrentValueChanged);
+    QSignalSpy cliErrSpy(cli, &CommunicationNodeBase::communicationError);   // S4：校验失败会上报到这里
     QVERIFY2(cm->openDevice(QStringLiteral("RTT_CLI")), "Modbus 客户端连接失败");
     QTest::qWait(200);   // 让轮询线程先跑一轮
 
@@ -2084,6 +2089,22 @@ void CommWritebackTest::testModbusWriteReadByteOrderRoundTrip()
     QTRY_VERIFY_WITH_TIMEOUT(qAbs(lastReadValue(0) - writeInt16) < 1e-6, 8000);
     QTRY_VERIFY_WITH_TIMEOUT(qAbs(lastReadValue(2) - writeInt32) < 1e-6, 8000);
     QTRY_VERIFY_WITH_TIMEOUT(qAbs(lastReadValue(4) - writeUint32) < 1e-6, 8000);
+
+    // S4：比对判定的语义（往返一致不得判错；float 必须容差，否则 100.1 经 float32 回转必假报警）
+    QVERIFY2(RegisterByteOrder::valueMatches(100.0, 100.0, QStringLiteral("int16")), "值一致应判匹配");
+    QVERIFY2(!RegisterByteOrder::valueMatches(100.0, 101.0, QStringLiteral("int16")), "值不一致应判不匹配");
+    const double fRound = static_cast<double>(100.1f);   // float32 精度回转后的值
+    QVERIFY2(RegisterByteOrder::valueMatches(100.1, fRound, QStringLiteral("float")),
+             "float 容差不得对 float32 精度回转假报警");
+    QVERIFY2(!RegisterByteOrder::valueMatches(100.1, 100.2, QStringLiteral("float")),
+             "float 明显不同应判不匹配");
+    // 开启 writeVerify 后，上面三次往返（BADC / int32 / uint32）不得产生任何"回写校验"报错
+    int verifyFailures = 0;
+    for (int i = 0; i < cliErrSpy.count(); ++i) {
+        if (cliErrSpy.at(i).at(0).toString().contains(QStringLiteral("回写校验")))
+            ++verifyFailures;
+    }
+    QCOMPARE(verifyFailures, 0);
 }
 
 // S7 回归：服务器寄存器表初始化必须按宽类型拆字写入。旧实现只写单寄存器（4 字节值塞进一个"伪地址"）：

@@ -95,4 +95,29 @@ inline bool disassembleValueToWords(double value, const QString &dataType, const
     return false;
 }
 
+/// 回写校验（S4 段③）判定：目标值与"回读后按同一约定解析出的值"是否视为一致。
+/// 整数按类型位宽截断后精确比较（写入侧本就按位宽截断，截断后相等即视为成功）；
+/// float 必须有容差——100.1 经 float32 精度回转必为 100.099998…，精确比较会天天假报警。
+inline bool valueMatches(double expected, double actual, const QString &dataType)
+{
+    if (dataType == QStringLiteral("float")) {
+        const double diff = std::fabs(expected - actual);
+        const double scale = qMax(1.0, qMax(std::fabs(expected), std::fabs(actual)));
+        return diff <= 1e-6 * scale;   // 相对容差 1e-6：覆盖 float32 的 ~7 位有效数字
+    }
+    if (dataType == QStringLiteral("int16") || dataType == QStringLiteral("uint16")) {
+        const auto wrap16 = [](double v) {
+            return static_cast<quint32>(static_cast<qint32>(qRound(v))) & 0xFFFFu;
+        };
+        return wrap16(expected) == wrap16(actual);
+    }
+    if (dataType == QStringLiteral("int32") || dataType == QStringLiteral("uint32")) {
+        const auto wrap32 = [](double v) {
+            return static_cast<quint32>(static_cast<qint64>(qRound(v)));
+        };
+        return wrap32(expected) == wrap32(actual);
+    }
+    return std::fabs(expected - actual) < 1e-9;
+}
+
 } // namespace RegisterByteOrder

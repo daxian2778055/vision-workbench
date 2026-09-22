@@ -37,6 +37,11 @@ public:
     /// 写入寄存器值：按该地址配置的 dataType/byteOrder 逆变换拆成 1~2 个寄存器字后写入（S3）。
     bool writeRegister(int address, double value);
 
+    /// S4 段③：回读同地址（宽类型读 2 字）并按同一 dataType/byteOrder 解析后比对。
+    /// 不一致 / 读回失败 → emit communicationError；仅当 writeVerify 开启时被 writeRegister 调用。
+    void verifyWrittenValue(int address, double expected, const QString &dataType,
+                            const QString &byteOrder);
+
     /// 获取寄存器当前解析后的值（供 UI 实时显示）
     double registerCurrentValue(int address) const;
     QString registerDisplayValue(int address) const;
@@ -79,6 +84,9 @@ private:
     // m_userClosed 抑制用户主动关闭后的自动重连"复活"。
     bool m_everReallyConnected = false;
     bool m_userClosed = false;
+    // S4：回写三段确认（默认关闭）——段①发出写、段②从站回执 OK、段③回读同地址比对，
+    // 不一致才上报。选项名 writeVerify，与 autoReconnect 同级（节点参数，不在表单上）。
+    bool m_writeVerify = false;
     int m_currentRegIdx = 0;
 
     struct PendingRead {

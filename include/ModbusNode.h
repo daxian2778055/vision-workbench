@@ -64,6 +64,11 @@ public:
     /// 服务器模式：更新本地寄存器表，客户端读请求将返回该值（同样按字节序拆字）。
     bool setLocalRegisterValue(int address, double value);
 
+    /// S4 段③：回读同地址（宽类型读 2 字）并按同一 dataType/byteOrder 解析后比对。
+    /// 不一致 / 读回失败 → emit communicationError；仅当 writeVerify 开启时被 writeRegister 调用。
+    void verifyWrittenValue(int address, double expected, const QString &dataType,
+                            const QString &byteOrder);
+
     /// 获取寄存器当前解析后的值（供 UI 实时显示）
     double registerCurrentValue(int address) const;
     QString registerDisplayValue(int address) const;
@@ -122,6 +127,9 @@ private:
     // 主动关闭后的自动重连"复活"（TcpCommNode 早有同款 m_userClosed）。
     bool m_everReallyConnected = false;
     bool m_userClosed = false;
+    // S4：回写三段确认（默认关闭）——段①发出写、段②从站回执 OK、段③回读同地址比对，
+    // 不一致才上报。选项名 writeVerify，与 autoReconnect 同级（均属节点参数，不在表单上）。
+    bool m_writeVerify = false;
 
     // 当前正在读取的索引
     int m_currentRegIdx = 0;

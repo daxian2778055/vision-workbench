@@ -30,6 +30,7 @@ void PlcCommNode::init()
     m_params[QStringLiteral("slaveAddress")] = 1;
     m_params[QStringLiteral("autoReconnect")] = true;
     m_params[QStringLiteral("reconnectInterval")] = 3000;
+    m_params[QStringLiteral("writeVerify")] = false;   // S4：回写三段确认（默认关闭）
     m_params[QStringLiteral("pollInterval")] = 100;
 
     // 自动重连定时器
@@ -122,6 +123,8 @@ void PlcCommNode::setParam(const QString &name, const QVariant &value)
         m_autoReconnect = value.toBool();
     } else if (name == QStringLiteral("reconnectInterval")) {
         m_reconnectInterval = qMax(500, value.toInt());
+    } else if (name == QStringLiteral("writeVerify")) {
+        m_writeVerify = value.toBool();   // S4
     } else if (name == QStringLiteral("pollInterval")) {
         m_pollInterval = qMax(10, value.toInt());
         if (m_pollTimer) m_pollTimer->setInterval(m_pollInterval);
@@ -163,12 +166,15 @@ bool PlcCommNode::writeRegister(int address, double value)
     QModbusReply *reply = m_modbus->sendWriteRequest(writeUnit, m_slaveAddress);
     if (reply) {
         if (!reply->isFinished()) {
-            connect(reply, &QModbusReply::finished, this, [this, reply, address]() {
+            connect(reply, &QModbusReply::finished, this, [this, reply, address, value, dataType, byteOrder]() {
                 if (reply->error() != QModbusDevice::NoError) {
                     VFP_DEBUG << "PLC write error at address" << address << ":" << reply->errorString();
                     emit communicationError(
                         QStringLiteral("PLC\u5199\u5BC4\u5B58\u5668\u5931\u8D25(\u5730\u5740%1):%2")
                             .arg(address).arg(reply->errorString()));
+                } else if (m_writeVerify) {
+                    // S4 段③：回读比对（段①②=已发出写 + 从站回执 OK；仅选项开启时执行）
+                    verifyWrittenValue(address, value, dataType, byteOrder);
                 }
                 reply->deleteLater();
             });
@@ -178,6 +184,37 @@ bool PlcCommNode::writeRegister(int address, double value)
         return true;
     }
     return false;
+}
+
+void PlcCommNode::verifyWrittenValue(int address, double expected, const QString &dataType,
+                                     const QString &byteOrder)
+{
+    if (!m_modbus) return;
+    const bool wide = (dataType == QStringLiteral("int32") || dataType == QStringLiteral("uint32")
+                       || dataType == QStringLiteral("float"));
+    QModbusDataUnit readUnit(QModbusDataUnit::HoldingRegisters, address, wide ? 2 : 1);
+    QModbusReply *r = m_modbus->sendReadRequest(readUnit, m_slaveAddress);
+    if (!r) return;
+    if (r->isFinished()) { r->deleteLater(); return; }
+    connect(r, &QModbusReply::finished, this, [this, r, address, expected, dataType, byteOrder]() {
+        if (r->error() == QModbusDevice::NoError) {
+            const QModbusDataUnit du = r->result();
+            QVector<quint16> words;
+            words.reserve(du.valueCount());
+            for (int i = 0; i < du.valueCount(); ++i)
+                words.append(du.value(i));
+            const double actual = parseRawToValue(
+                RegisterByteOrder::assembleRegisterBytes(words, byteOrder), dataType, byteOrder);
+            if (!RegisterByteOrder::valueMatches(expected, actual, dataType)) {
+                emit communicationError(QStringLiteral("PLC回写校验失败(地址%1):期望%2 实读%3")
+                                            .arg(address).arg(expected).arg(actual));
+            }
+        } else {
+            emit communicationError(QStringLiteral("PLC回写校验读回失败(地址%1):%2")
+                                        .arg(address).arg(r->errorString()));
+        }
+        r->deleteLater();
+    });
 }
 
 double PlcCommNode::registerCurrentValue(int address) const
@@ -384,6 +421,7 @@ QJsonObject PlcCommNode::toJson() const
     obj[QStringLiteral("port")] = m_params.value(QStringLiteral("port")).toInt();
     obj[QStringLiteral("slaveAddress")] = m_slaveAddress;
     obj[QStringLiteral("autoReconnect")] = m_autoReconnect;
+    obj[QStringLiteral("writeVerify")] = m_writeVerify;
     obj[QStringLiteral("reconnectInterval")] = m_reconnectInterval;
     obj[QStringLiteral("pollInterval")] = m_pollInterval;
 
@@ -412,6 +450,7 @@ void PlcCommNode::fromJson(const QJsonObject &json)
     if (json.contains(QStringLiteral("port")))
         m_params[QStringLiteral("port")] = json[QStringLiteral("port")].toInt();
     m_autoReconnect = json[QStringLiteral("autoReconnect")].toBool(true);
+    m_writeVerify = json[QStringLiteral("writeVerify")].toBool(false);   // S4（默认关闭）
     m_reconnectInterval = json[QStringLiteral("reconnectInterval")].toInt(3000);
     m_pollInterval = json[QStringLiteral("pollInterval")].toInt(100);
     m_slaveAddress = json[QStringLiteral("slaveAddress")].toInt(1);
@@ -431,6 +470,7 @@ void PlcCommNode::fromJson(const QJsonObject &json)
     }
 
     m_params[QStringLiteral("autoReconnect")] = m_autoReconnect;
+    m_params[QStringLiteral("writeVerify")] = m_writeVerify;
     m_params[QStringLiteral("reconnectInterval")] = m_reconnectInterval;
     m_params[QStringLiteral("pollInterval")] = m_pollInterval;
     m_params[QStringLiteral("slaveAddress")] = m_slaveAddress;

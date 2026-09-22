@@ -229,6 +229,9 @@ void CommunicationManager::createDeviceNode(const QString &name, const QString &
             modbus->setParam(QStringLiteral("reconnectInterval"), config[QStringLiteral("reconnectInterval")].toInt());
         if (config.contains(QStringLiteral("pollInterval")))
             modbus->setParam(QStringLiteral("pollInterval"), config[QStringLiteral("pollInterval")].toInt());
+        // S4：回写三段确认（默认关闭）——配置里开了但不下发就等于没开（与上面历次"参数未投递"同类）
+        if (config.contains(QStringLiteral("writeVerify")))
+            modbus->setParam(QStringLiteral("writeVerify"), config[QStringLiteral("writeVerify")].toBool());
         // 加载寄存器表格
         if (config.contains(QStringLiteral("registers"))) {
             QList<ModbusRegisterItem> regs;
@@ -264,6 +267,9 @@ void CommunicationManager::createDeviceNode(const QString &name, const QString &
             plc->setParam(QStringLiteral("reconnectInterval"), config[QStringLiteral("reconnectInterval")].toInt());
         if (config.contains(QStringLiteral("pollInterval")))
             plc->setParam(QStringLiteral("pollInterval"), config[QStringLiteral("pollInterval")].toInt());
+        // S4：回写三段确认（默认关闭）——同上，必须透传才生效
+        if (config.contains(QStringLiteral("writeVerify")))
+            plc->setParam(QStringLiteral("writeVerify"), config[QStringLiteral("writeVerify")].toBool());
         // 加载寄存器表格
         if (config.contains(QStringLiteral("registers"))) {
             QList<ModbusRegisterItem> regs;
