@@ -22,6 +22,7 @@
 #include "FormulaNode.h"
 #include "ClassifyNode.h"
 #include "ProtocolParseNode.h"
+#include "SendDataNode.h"
 #include "ScriptSecurityPolicy.h"
 #include "ImageDisplayController.h"
 #include "ExecutionStatusController.h"
@@ -2204,6 +2205,36 @@ void IntegrationTest::testShadowMemberSingleSourceAndConcurrentAccess()
     protoLegacy.fromJson(legacyProto);
     QCOMPARE(protoLegacy.getParam(QStringLiteral("delimiter")).toString(), QStringLiteral(","));
     QCOMPARE(protoLegacy.getParam(QStringLiteral("fieldDefs")).toList().size(), 1);
+
+    // 同批第八类（SendDataNode）：单源 + 旧格式兼容（本类两个键的"缺键语义"还不一样）
+    SendDataNode sender;
+    sender.init();
+    QCOMPARE(sender.getParam(QStringLiteral("deviceName")).toString(), QString());
+    QCOMPARE(sender.getParam(QStringLiteral("suffix")).toString(), QStringLiteral("\r\n"));
+    sender.setParam(QStringLiteral("deviceName"), QStringLiteral("PLC1"));
+    sender.setParam(QStringLiteral("suffix"), QStringLiteral("\n"));
+    QCOMPARE(sender.getParam(QStringLiteral("deviceName")).toString(), QStringLiteral("PLC1"));
+
+    const QJsonObject senderJson = sender.toJson();
+    QCOMPARE(senderJson.value(QStringLiteral("deviceName")).toString(), QStringLiteral("PLC1"));
+    QCOMPARE(senderJson.value(QStringLiteral("suffix")).toString(), QStringLiteral("\n"));
+
+    SendDataNode senderRoundTrip;
+    senderRoundTrip.init();
+    senderRoundTrip.fromJson(senderJson);
+    QCOMPARE(senderRoundTrip.getParam(QStringLiteral("deviceName")).toString(), QStringLiteral("PLC1"));
+    QCOMPARE(senderRoundTrip.getParam(QStringLiteral("suffix")).toString(), QStringLiteral("\n"));
+
+    // 旧格式（只有顶层键）：deviceName 缺失 ⇒ 清空（旧代码无默认值）；suffix 缺失 ⇒ 回 "\r\n"。
+    // 判别性：先设好值，载入空旧 JSON 后必须被**重置**（不是保留原值）。
+    QJsonObject legacySender;
+    SendDataNode senderLegacy;
+    senderLegacy.init();
+    senderLegacy.setParam(QStringLiteral("deviceName"), QStringLiteral("PLC9"));
+    senderLegacy.setParam(QStringLiteral("suffix"), QStringLiteral("X"));
+    senderLegacy.fromJson(legacySender);
+    QCOMPARE(senderLegacy.getParam(QStringLiteral("deviceName")).toString(), QString());
+    QCOMPARE(senderLegacy.getParam(QStringLiteral("suffix")).toString(), QStringLiteral("\r\n"));
 }
 
 void IntegrationTest::testFlowExtrasRoundTrip()

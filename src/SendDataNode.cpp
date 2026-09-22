@@ -23,7 +23,6 @@ void SendDataNode::init()
 
     m_params[QStringLiteral("deviceName")] = QString();
     m_params[QStringLiteral("suffix")] = QStringLiteral("\r\n");
-    m_suffix = QStringLiteral("\r\n");
 }
 
 bool SendDataNode::process()
@@ -42,7 +41,11 @@ void SendDataNode::run(bool /*autoSwitch*/)
 
 bool SendDataNode::doSend()
 {
-    if (m_deviceName.isEmpty()) {
+    // 参数唯一来源：本轮各取一次（局部快照）——避免逐次加锁，并保证同一次发送用同一份绑定/后缀
+    const QString deviceName = getParam(QStringLiteral("deviceName")).toString();
+    const QString suffix = getParam(QStringLiteral("suffix")).toString();
+
+    if (deviceName.isEmpty()) {
         qWarning() << QStringLiteral("SendDataNode: 未绑定通信设备，数据未发送");
         return false;
     }
@@ -68,18 +71,18 @@ bool SendDataNode::doSend()
     }
 
     // 追加后缀
-    dataStr += m_suffix;
+    dataStr += suffix;
 
     // 通过 CommunicationManager 发送
     auto *cm = CommunicationManager::instance();
-    if (!cm->hasDevice(m_deviceName)) {
+    if (!cm->hasDevice(deviceName)) {
         // 设备名写错 / 设备被删除：以前静默返回，现场表现为"流程全过、PLC 什么都没收到"
-        qWarning() << QStringLiteral("SendDataNode: 设备不存在，数据未发送：") << m_deviceName;
+        qWarning() << QStringLiteral("SendDataNode: 设备不存在，数据未发送：") << deviceName;
         return false;
     }
-    if (!cm->sendData(m_deviceName, dataStr.toUtf8())) {
+    if (!cm->sendData(deviceName, dataStr.toUtf8())) {
         // 设备存在但未连接或投递失败：以前返回值被丢弃，同样没有任何痕迹
-        qWarning() << QStringLiteral("SendDataNode: 发送失败（未连接或投递失败）：") << m_deviceName;
+        qWarning() << QStringLiteral("SendDataNode: 发送失败（未连接或投递失败）：") << deviceName;
         return false;
     }
     return true;
@@ -87,11 +90,7 @@ bool SendDataNode::doSend()
 
 void SendDataNode::setParam(const QString &name, const QVariant &value)
 {
-    if (name == QStringLiteral("deviceName")) {
-        m_deviceName = value.toString();
-    } else if (name == QStringLiteral("suffix")) {
-        m_suffix = value.toString();
-    }
+    // 只写参数表（基类加锁 + 校验），不再维护无锁成员镜像
     HalconNode::setParam(name, value);
 }
 
@@ -114,7 +113,7 @@ QWidget *SendDataNode::createParamPanel()
     layout->addWidget(new QLabel(QStringLiteral("\u884C\u5C3E\u7F13\u51B2:")));
     auto *suffixEdit = new QLineEdit();
     suffixEdit->setObjectName(QStringLiteral("sendDataSuffix"));
-    suffixEdit->setText(m_suffix);
+    suffixEdit->setText(getParam(QStringLiteral("suffix")).toString());
     suffixEdit->setToolTip(QStringLiteral("\u6BCF\u6B21\u53D1\u9001\u65F6\u81EA\u52A8\u8FFD\u52A0\u7684\u540E\u7F00\uFF0C\u9ED8\u8BA4 \r\n"));
     layout->addWidget(suffixEdit);
 
@@ -123,13 +122,11 @@ QWidget *SendDataNode::createParamPanel()
     layout->addStretch();
 
     connect(m_deviceCombo, &QComboBox::currentTextChanged, this, [this](const QString &text) {
-        m_deviceName = text;
         setParam(QStringLiteral("deviceName"), text);
     });
 
     connect(suffixEdit, &QLineEdit::editingFinished, this, [this, suffixEdit]() {
-        m_suffix = suffixEdit->text();
-        setParam(QStringLiteral("suffix"), m_suffix);
+        setParam(QStringLiteral("suffix"), suffixEdit->text());
     });
 
     return panel;
@@ -149,8 +146,8 @@ void SendDataNode::updateParamPanel(QWidget *panel)
         if (!current.isEmpty()) {
             int idx = combo->findText(current);
             if (idx >= 0) combo->setCurrentIndex(idx);
-        } else if (!m_deviceName.isEmpty()) {
-            int idx = combo->findText(m_deviceName);
+        } else if (!getParam(QStringLiteral("deviceName")).toString().isEmpty()) {
+            int idx = combo->findText(getParam(QStringLiteral("deviceName")).toString());
             if (idx >= 0) combo->setCurrentIndex(idx);
         }
     }
@@ -158,23 +155,30 @@ void SendDataNode::updateParamPanel(QWidget *panel)
     auto *suffixEdit = panel->findChild<QLineEdit *>(QStringLiteral("sendDataSuffix"));
     if (suffixEdit) {
         QSignalBlocker b(suffixEdit);
-        suffixEdit->setText(m_suffix);
+        suffixEdit->setText(getParam(QStringLiteral("suffix")).toString());
     }
 }
 
 QJsonObject SendDataNode::toJson() const
 {
     QJsonObject obj = HalconNode::toJson();
-    obj[QStringLiteral("deviceName")] = m_deviceName;
-    obj[QStringLiteral("suffix")] = m_suffix;
+    // 顶层键保留（老读取方兼容），值一律取自参数表（唯一来源）
+    obj[QStringLiteral("deviceName")] = QJsonValue::fromVariant(getParam(QStringLiteral("deviceName")));
+    obj[QStringLiteral("suffix")] = QJsonValue::fromVariant(getParam(QStringLiteral("suffix")));
     return obj;
 }
 
 void SendDataNode::fromJson(const QJsonObject &json)
 {
-    HalconNode::fromJson(json);
-    m_deviceName = json[QStringLiteral("deviceName")].toString();
-    m_suffix = json[QStringLiteral("suffix")].toString(QStringLiteral("\r\n"));
-    m_params[QStringLiteral("deviceName")] = m_deviceName;
-    m_params[QStringLiteral("suffix")] = m_suffix;
+    HalconNode::fromJson(json);   // deviceName/suffix 由基类从 params 恢复（唯一来源）
+    // 兼容更早方案：两个键曾只存在顶层（无 params 段）。与旧实现逐字对齐：
+    //  · deviceName：旧代码**无默认值** `toString()` → 键缺失/非字符串 ⇒ 空串（清掉绑定）
+    //  · suffix：旧代码 `.toString(QStringLiteral("\r\n"))` → 键缺失/非字符串 ⇒ "\r\n"
+    if (!json.contains(QStringLiteral("params"))) {
+        const QJsonValue dv = json.value(QStringLiteral("deviceName"));
+        setParam(QStringLiteral("deviceName"), dv.isString() ? dv.toString() : QString());
+        const QJsonValue sv = json.value(QStringLiteral("suffix"));
+        setParam(QStringLiteral("suffix"),
+                 sv.isString() ? sv.toString() : QStringLiteral("\r\n"));
+    }
 }
