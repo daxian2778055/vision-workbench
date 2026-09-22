@@ -307,25 +307,29 @@ void CommunicationManager::createDeviceNode(const QString &name, const QString &
     //     等 init 已预置）——旧写法会在创建期把该值写进参数表、覆盖内部状态。
     {
         const QList<QString> declared = node->getAllParamNames();
-        // 预留（内部派生/缓存）键：由节点自己写入——run() 的 moduleStatus、setParamDirect() 的
-        // connected、onDataReceived 的 lastData/lastInput/lastReceived——配置里手写同名键不得改写它们。
-        // 说明：这**不同于**上面的"已声明"排除集。comm 节点覆写 init() 时不调 HalconNode::init()，
-        // 因此像 moduleStatus 这类派生键并不在"已声明"集合里（本轮用例实测：不加这层它会被写进参数表）。
-        // 加新的内部状态键时请同步补进这里。
-        static const char *const kReservedInternal[] = {
-            "moduleStatus", "connected", "lastReceived", "lastInput", "lastData"
+        // 预留（内部状态/派生）键：由节点自己写入，配置里手写同名键不得改写它们。
+        // 这**不同于**上面的"已声明"排除集：comm 节点覆写 init() 时不调 HalconNode::init()，
+        // 故 moduleStatus 这类派生键并不在"已声明"集合里（实测：不加这层就会被写进参数表）。
+        // 判定方式力求**规则化**，避免再出现漏项（上一版按名字逐个点名，就漏了 lastSent / registers，
+        // 评审两轮指出）：
+        //  · 精确名：moduleStatus（run() 派生的模块状态）、connected（连接状态）、
+        //    registers（Modbus/PLC 的寄存器表走 setRegisters()、**不经 setParam** → 不在"已声明"集合，
+        //    不挡住就会把创建期的原始 QVariantList 塞进基类参数表）；
+        //  · 前缀规则：**所有 "last" 开头**的键 —— 该族全部由节点自己写入（本轮查全：
+        //    lastSent / lastReceived / lastSender（TCP/Serial/UDP）、lastOutput（ScriptNode）、
+        //    lastSavedPath（写文件类）、lastError（多个节点）、lastInput / lastData（流程节点））。
+        // 该规则的边界已核对：现有**配置键**里没有任何一个以 "last" 开头（键集见各设备对话框 build*Form），
+        // 因此不会误挡用户可配的项。
+        const auto isReservedInternal = [](const QString &key) {
+            if (key == QLatin1String("moduleStatus") || key == QLatin1String("connected")
+                || key == QLatin1String("registers"))
+                return true;
+            return key.startsWith(QLatin1String("last"));
         };
         for (auto it = config.constBegin(); it != config.constEnd(); ++it) {
             if (declared.contains(it.key()))
                 continue;   // 已由上面的分支按类型收敛下发，或属节点内部参数（init 预置）
-            bool reserved = false;
-            for (const char *k : kReservedInternal) {
-                if (it.key() == QLatin1String(k)) {
-                    reserved = true;
-                    break;
-                }
-            }
-            if (reserved)
+            if (isReservedInternal(it.key()))
                 continue;
             node->setParam(it.key(), it.value().toVariant());
         }

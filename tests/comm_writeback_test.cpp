@@ -2080,6 +2080,9 @@ void CommWritebackTest::testModbusWriteReadByteOrderRoundTrip()
     // 反向用例：与**节点内部参数**重名的配置键不得被写进参数表（init 已声明 ⇒ 透传排除）。
     // 塞一个特征字符串，随后断言它没有出现在节点的任何参数上——不依赖具体内部键的取值语义。
     cliCfg[QStringLiteral("moduleStatus")] = QStringLiteral("hijacked");
+    cliCfg[QStringLiteral("lastSent")] = QStringLiteral("hijacked");
+    cliCfg[QStringLiteral("lastError")] = QStringLiteral("hijacked");
+    cliCfg[QStringLiteral("registers")] = QStringLiteral("hijacked");
     QVERIFY2(cm->addDevice(QStringLiteral("RTT_CLI"), QStringLiteral("Modbus"), cliCfg),
              "addDevice(客户端) 失败");
     auto *cli = qobject_cast<ModbusNode *>(cm->deviceNode(QStringLiteral("RTT_CLI")));
