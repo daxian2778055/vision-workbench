@@ -639,6 +639,19 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
     connect(ex, &FlowExecutor::executionFinished, this, [this, ex]() {
         if (ex == m_executor) onExecutionFinished();
     });
+
+    // ── 图编辑锁（S1 / Phase B 小步）：按执行器自身场景更新，不按"当前激活流程"——
+    //    后台流程暂停停稳/恢复时若漏更新，就会出现"后台正在跑却可编辑"的漏洞。
+    //    · executionParked：worker 真停进等待点（当前节点已跑完）→ 解锁，可安全改图
+    //    · executionResumed：恢复执行 → 立即加锁（否则暂停中改完图点继续，运行中仍是可编辑）
+    connect(ex, &FlowExecutor::executionParked, this, [ex]() {
+        if (FlowScene *s = ex->flowScene())
+            s->setEditLocked(!ex->allowsGraphEditing());
+    });
+    connect(ex, &FlowExecutor::executionResumed, this, [ex]() {
+        if (FlowScene *s = ex->flowScene())
+            s->setEditLocked(!ex->allowsGraphEditing());
+    });
     connect(ex, &FlowExecutor::executionError, this, [this, ex](const QString &err) {
         if (ex == m_executor) onExecutionError(err);
         else logMessage(QStringLiteral("流程错误: %1").arg(err));
@@ -2115,12 +2128,10 @@ void MainWindow::updateEditLockForCurrentScene()
     if (tabIdx < 0 || tabIdx >= m_flowScenes.size()) return;
 
     FlowScene *scene = m_flowScenes[tabIdx];
-    auto it = m_flowModes.constFind(scene);
-    FlowMode mode = (it != m_flowModes.cend()) ? it.value() : FlowMode::SoftwareTrigger;
-
-    bool locked = (mode == FlowMode::Continuous) ||
-                  (m_executor && m_executor->getState() == ExecutionState::Running);
-    scene->setEditLocked(locked);
+    // S1 / Phase B 小步：改用执行器判据——"执行线程真在跑"或"暂停已受理但 worker 尚未停稳"才锁；
+    // Idle/Stopped 与"已停稳的暂停"都允许编辑。旧的"连续模式一律锁"是钝器：连续模式空闲（未开始/
+    // 已停止）时也编辑不了，而暂停恰恰是用户最想改图的时刻（恢复后新图下一轮生效）。
+    scene->setEditLocked(m_executor ? !m_executor->allowsGraphEditing() : false);
 }
 
 void MainWindow::onCurrentTabChanged(int index)

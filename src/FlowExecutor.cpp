@@ -169,8 +169,33 @@ void FlowExecutor::pauseExecution()
         m_state = ExecutionState::Paused;
         // 唤醒正在可取消等待中的阻塞节点（延时等），使其停止计时并等待恢复（P5）
         m_waitCondition.wakeAll();
+        // 注意：此处只表示"暂停请求已受理"（当前节点可能仍在跑），executionPaused 保持原有语义；
+        // "图已停稳"由 worker 在等待点发出的 executionParked 表达（改图判据用它，不能用本信号）。
         emit executionPaused();
     }
+}
+
+void FlowExecutor::parkWhilePausedLocked()
+{
+    // 须持 m_mutex 调用：先置位并上报"真停稳"，再阻塞等待恢复
+    if (!m_workerParked) {
+        m_workerParked = true;
+        emit executionParked();   // 跨线程 → 队列投递到 UI 线程
+    }
+    while (m_state == ExecutionState::Paused) {
+        m_waitCondition.wait(&m_mutex);
+    }
+    m_workerParked = false;       // 已恢复执行，不再处于"停稳可改图"状态
+}
+
+bool FlowExecutor::allowsGraphEditing() const
+{
+    QMutexLocker locker(&m_mutex);
+    if (m_state == ExecutionState::Running)
+        return false;                                   // 真在跑：禁止
+    if (m_state == ExecutionState::Paused && !m_workerParked)
+        return false;                                   // 暂停已受理但 worker 还在节点里：禁止（窗口期）
+    return true;                                        // Idle/Stopped/已停稳的 Paused：允许
 }
 
 void FlowExecutor::resumeExecution()
@@ -295,7 +320,7 @@ void FlowExecutor::run()
         }
         
         if (m_state == ExecutionState::Paused) {
-            m_waitCondition.wait(&m_mutex);
+            parkWhilePausedLocked();   // 真停稳才上报 executionParked
             continue;
         }
         
@@ -380,8 +405,8 @@ void FlowExecutor::run()
                 break;
             }
             
-            while (m_state == ExecutionState::Paused) {
-                m_waitCondition.wait(&m_mutex);
+            if (m_state == ExecutionState::Paused) {
+                parkWhilePausedLocked();   // 真停稳才上报 executionParked
             }
             
             if (m_state == ExecutionState::Stopped) {
@@ -1017,7 +1042,7 @@ void FlowExecutor::executeLoop(NodeBase *loopNode, int loopCount)
         {
             QMutexLocker l(&m_mutex);
             if (m_state == ExecutionState::Stopped) return;
-            while (m_state == ExecutionState::Paused) m_waitCondition.wait(&m_mutex);
+            if (m_state == ExecutionState::Paused) parkWhilePausedLocked();   // 真停稳才上报
             if (m_state == ExecutionState::Stopped) return;
         }
 
@@ -1026,7 +1051,7 @@ void FlowExecutor::executeLoop(NodeBase *loopNode, int loopCount)
             {
                 QMutexLocker l(&m_mutex);
                 if (m_state == ExecutionState::Stopped) return;
-                while (m_state == ExecutionState::Paused) m_waitCondition.wait(&m_mutex);
+                if (m_state == ExecutionState::Paused) parkWhilePausedLocked();   // 真停稳才上报
                 if (m_state == ExecutionState::Stopped) return;
             }
             // 内层循环的循环体由内层 LoopNode 调度，外层跳过（嵌套循环）

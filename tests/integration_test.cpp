@@ -1734,10 +1734,18 @@ void IntegrationTest::testStepModeExitRestoresNormalRun()
     exec.stepExecution();   // 进入单步：第 1 个节点后暂停
     QTRY_VERIFY_WITH_TIMEOUT(exec.getState() == ExecutionState::Paused, 4000);
 
+    // S1 / Phase B 小步：Paused 状态位只表示"暂停请求已受理"（当前节点可能仍在跑），因此
+    // 暂停瞬间未必可编辑——必须等 worker 真停进等待点（executionParked）才放行改图。
+    // 若某个等待点漏走收口助手 parkWhilePausedLocked()，本断言会超时失败（判别性）。
+    QTRY_VERIFY_WITH_TIMEOUT(exec.allowsGraphEditing(), 4000);
+
     // 以"继续"语义退出单步：剩余节点跑完后必须到 Idle（旧代码会再次 Paused）
     exec.exitStepMode();
     exec.resumeExecution();
+    QVERIFY2(!exec.allowsGraphEditing(),
+             "恢复执行后必须立刻禁止编辑（否则运行中改图会与执行线程竞争）");
     QTRY_VERIFY_WITH_TIMEOUT(exec.getState() == ExecutionState::Idle, 4000);
+    QVERIFY2(exec.allowsGraphEditing(), "空闲时必须允许编辑（连续模式空闲不再一刀切锁死）");
 
     exec.stopExecution();
     exec.wait(3000);

@@ -71,6 +71,10 @@ public:
     void stopExecution();
     ExecutionState getState() const;
 
+    /// 图当前是否允许编辑（S1 / Phase B 小步）：只有"执行线程真在跑"或"暂停请求已受理但 worker 尚未
+    /// 停进等待点"才禁止；Idle/Stopped 与"已停稳的 Paused"都允许（暂停中改图，恢复后下一轮生效）。
+    bool allowsGraphEditing() const;
+
     /// 流程运行模式
     void setFlowMode(FlowMode mode);
     FlowMode getFlowMode() const;
@@ -123,6 +127,9 @@ signals:
     void executionStarted();
     void executionPaused();
     void executionResumed();
+    /// 执行线程真正停进等待点（暂停请求已受理，且当前节点已跑完）——即"图已停稳、可安全改图"。
+    /// 与 executionPaused 的区别：后者在点暂停的瞬间即发（当前节点可能仍在跑），不能作为改图依据。
+    void executionParked();
     void executionStopped();
     void executionError(const QString &error);
     void nodeExecuted(NodeBase *node, bool success);
@@ -156,6 +163,9 @@ private slots:
 
 private:
     void executeNode(NodeBase *node, bool isLastNode = false);
+    /// 在等待点调用（须持 m_mutex）：置位并上报 executionParked 后阻塞等待恢复；恢复后清位。
+    /// 所有"可作为安全改图点"的等待点都必须走这里，否则 executionParked 会名不副实。
+    void parkWhilePausedLocked();
     /// 最近一次节点执行是否成功（供主循环失败中断判断）
     bool m_lastNodeSuccess = true;
     /// 收集节点输出变量（供后级参数引用 {模块号.参数名}）
@@ -206,6 +216,8 @@ private:
     QString m_flowName;            /// 流程名称
     mutable QMutex m_mutex;
     QWaitCondition m_waitCondition;
+    bool m_workerParked = false;   /// worker 是否真停进等待点（m_mutex 保护；executionParked 的信号源）
+
     QMap<NodeBase*, QMap<int, DataObjectPtr>> m_nodeData;
     /// 本轮待落库的检测结果（仅执行线程访问）：按轮缓冲，轮末用**单个事务**批量提交。
     /// 连续模式下"每节点一次自动提交"是主要固定开销（40 节点 = 40 次提交/轮）。
