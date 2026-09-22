@@ -109,6 +109,20 @@ private:
     QModbusTcpServer *m_modbusServer = nullptr; /// 服务器模式使用的监听器
     Role m_role = MODBUS_CLIENT;
 
+    // 关于"单源收口"（S1 残留专项）：以下 5 个参数（autoReconnect / reconnectInterval /
+    // pollInterval / slaveAddress / writeVerify）**刻意保留**成员式存储，不改为参数表唯一来源。
+    // 理由（已核实，非省略）：
+    //  · 它们全是 bool/int，且**从不被非主线程写**：写路径只有 createDeviceNode / 设备配置对话框 /
+    //    fromJson（均主线程）；执行线程唯一的参数写回路径（FlowExecutor 参数引用解析）只处理
+    //    **QString** 参数（`v.typeId() == QMetaType::QString`）→ 这些键根本不会被它命中，
+    //    因此不存在本项目要消灭的"无锁成员镜像跨线程读写"竞态；
+    //  · 即便发生撕裂，bool/int 也不会像 QString/容器那样破坏堆内存（代价量级不同）；
+    //  · 反向代价真实：本类 fromJson 目前**绕过 setParam 的钳制**（qMax(500,…)/qMax(10,…)）与
+    //    轮询定时器同步；改为走 setParam 会让"载入老方案"开始钳制数值并重设定时器 ——
+    //    属通信时序的行为变化，而没有对应的缺陷要修；
+    //  · 若将来出现执行线程写这些键的新路径，再按已收口的 11 类同样处理即可（改动很小）。
+    // 同理：m_role（enum 型参数镜像）也不收口——它的写路径带对象重建副作用（applyRoleParam），
+    // 同属主线程。
     // 自动重连
     QTimer *m_reconnectTimer = nullptr;
     bool m_autoReconnect = true;
