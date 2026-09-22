@@ -19,7 +19,7 @@ void SortNode::init()
     addInputPort(QStringLiteral("\u6570\u7EC4\u8F93\u5165"), PortDataType::Array);
     addOutputPort(QStringLiteral("\u6392\u5E8F\u7ED3\u679C"), PortDataType::Array);
 
-    m_params[QStringLiteral("order")] = m_order;
+    m_params[QStringLiteral("order")] = QStringLiteral("asc");   // asc / desc
 }
 
 bool SortNode::process()
@@ -49,8 +49,11 @@ void SortNode::run(bool /*autoSwitch*/)
         }
     }
 
+    // 参数唯一来源：本轮取一次（局部快照）
+    const QString order = getParam(QStringLiteral("order")).toString();
+
     std::sort(values.begin(), values.end());
-    if (m_order == QStringLiteral("desc")) {
+    if (order == QStringLiteral("desc")) {
         std::reverse(values.begin(), values.end());
     }
 
@@ -60,9 +63,7 @@ void SortNode::run(bool /*autoSwitch*/)
 
 void SortNode::setParam(const QString &name, const QVariant &value)
 {
-    if (name == QStringLiteral("order")) {
-        m_order = value.toString();
-    }
+    // 只写参数表（基类加锁 + 校验），不再维护无锁成员镜像
     HalconNode::setParam(name, value);
 }
 
@@ -83,12 +84,12 @@ QWidget *SortNode::createParamPanel()
     m_orderCombo->setObjectName(QStringLiteral("sortOrder"));
     m_orderCombo->addItem(QStringLiteral("\u5347\u5E8F"), QStringLiteral("asc"));
     m_orderCombo->addItem(QStringLiteral("\u964D\u5E8F"), QStringLiteral("desc"));
-    m_orderCombo->setCurrentIndex(m_order == QStringLiteral("desc") ? 1 : 0);
+    m_orderCombo->setCurrentIndex(
+        getParam(QStringLiteral("order")).toString() == QStringLiteral("desc") ? 1 : 0);
     layout->addWidget(m_orderCombo);
 
     connect(m_orderCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int i) {
-        m_order = m_orderCombo->itemData(i).toString();
-        setParam(QStringLiteral("order"), m_order);
+        setParam(QStringLiteral("order"), m_orderCombo->itemData(i).toString());
     });
 
     layout->addStretch();
@@ -100,20 +101,22 @@ void SortNode::updateParamPanel(QWidget *panel)
     if (!panel) return;
     if (auto *c = panel->findChild<QComboBox *>(QStringLiteral("sortOrder"))) {
         QSignalBlocker b(c);
-        c->setCurrentIndex(m_order == QStringLiteral("desc") ? 1 : 0);
+        c->setCurrentIndex(
+            getParam(QStringLiteral("order")).toString() == QStringLiteral("desc") ? 1 : 0);
     }
 }
 
 QJsonObject SortNode::toJson() const
 {
     QJsonObject obj = HalconNode::toJson();
-    obj[QStringLiteral("order")] = m_order;
+    obj[QStringLiteral("order")] = QJsonValue::fromVariant(getParam(QStringLiteral("order")));
     return obj;
 }
 
 void SortNode::fromJson(const QJsonObject &json)
 {
-    HalconNode::fromJson(json);
-    m_order = json[QStringLiteral("order")].toString(m_order);
-    m_params[QStringLiteral("order")] = m_order;
+    HalconNode::fromJson(json);   // order 由基类从 params 恢复（唯一来源）
+    // 兼容更早方案：该键曾只存在顶层（无 params 段）
+    if (!json.contains(QStringLiteral("params")) && json.contains(QStringLiteral("order")))
+        setParam(QStringLiteral("order"), json.value(QStringLiteral("order")).toVariant());
 }

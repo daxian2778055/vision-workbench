@@ -22,7 +22,6 @@ public:
     void fromJson(const QJsonObject &json) override;
 
 private:
-    QString m_order = QStringLiteral("asc"); /// asc / desc
-
+    // S1 残留收口：排序方式唯一来源是参数表（默认值在 init() 写入），不再保留无锁成员镜像
     QComboBox *m_orderCombo = nullptr;
 };

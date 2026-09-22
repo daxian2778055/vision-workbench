@@ -16,6 +16,7 @@
 #include "LoopNode.h"
 #include "DelayNode.h"
 #include "FilterNode.h"   // S1 残留试点：影子成员收口后的单源/并发回归
+#include "SortNode.h"
 #include "FormulaNode.h"
 #include "ScriptSecurityPolicy.h"
 #include "ImageDisplayController.h"
@@ -2024,6 +2025,25 @@ void IntegrationTest::testShadowMemberSingleSourceAndConcurrentAccess()
     // 终态自洽：最后一次写入必须可原样读回（无损坏、无丢写）
     filter.setParam(QStringLiteral("threshold"), 7.0);
     QCOMPARE(filter.getParam(QStringLiteral("threshold")).toDouble(), 7.0);
+
+    // 同批第二类（SortNode）：单源（setParam → getParam/toJson/fromJson）+ 旧格式兼容
+    SortNode sorter;
+    sorter.init();
+    sorter.setParam(QStringLiteral("order"), QStringLiteral("desc"));
+    QCOMPARE(sorter.getParam(QStringLiteral("order")).toString(), QStringLiteral("desc"));
+    QCOMPARE(sorter.toJson().value(QStringLiteral("order")).toString(), QStringLiteral("desc"));
+
+    SortNode sorterRoundTrip;
+    sorterRoundTrip.init();
+    sorterRoundTrip.fromJson(sorter.toJson());
+    QCOMPARE(sorterRoundTrip.getParam(QStringLiteral("order")).toString(), QStringLiteral("desc"));
+
+    QJsonObject legacySorter;
+    legacySorter[QStringLiteral("order")] = QStringLiteral("desc");
+    SortNode sorterLegacy;
+    sorterLegacy.init();
+    sorterLegacy.fromJson(legacySorter);
+    QCOMPARE(sorterLegacy.getParam(QStringLiteral("order")).toString(), QStringLiteral("desc"));
 }
 
 void IntegrationTest::testFlowExtrasRoundTrip()
