@@ -87,33 +87,53 @@ void FlowExecutor::disconnectFromScene()
 
 void FlowExecutor::onSceneNodeRemoved(NodeBase *node)
 {
-    // 暂不在此直接改写执行缓存：m_nodeData / m_validOutputs / m_nodeOutputVars 由执行线程**无锁**
-    // 写入（见 executeNode / collectNodeOutputVars / propagateData），本槽在 GUI 线程并发对同一 QMap
-    // 增删会触发跨线程竞态（堆损坏，表现为全量测试随机段错误）。该竞态是既有的"锁纪律"缺陷，
-    // 我的 S4 改动只是新增了一个 GUI 线程的并发访问把它暴露出来——已在父提交稳定、本改动触发即为证。
-    // 正确修法是让所有缓存访问统一受 m_graphCacheMutex 保护（单独的锁纪律重构，不在 S4 半修）。
-    // 注：S4 的"模块号不再回收"已让 moduleId 维度（m_nodeOutputVars）由 rebuildIncomingIndex 的
-    // 懒剪枝稳定处理（回收号永不复现 → 永远被剪枝），本槽留空不影响该修复。
-    Q_UNUSED(node)
+    // S1 Stage 1b 第 2 步定稿：本槽**只登记、不清理**。
+    // 历史（留档）：本槽曾长期留空——在 GUI 线程直接改三类缓存会与执行线程的无锁写并发（堆损坏）；
+    // 而"恢复立即清理"的首次尝试（Stage 1b 初版）又因 "GUI：场景锁 → 图锁" 与
+    // "执行：图锁 → 节点/场景锁" 成**环**而在 ctest 下挂起，整段撤销。
+    // 定稿方案 = 登记 + 执行线程安全点消费：
+    //   · GUI 侧只取叶子锁 m_purgeMutex（不取图锁、不触碰任何缓存）→ 环在结构上不存在（非靠时序运气）；
+    //   · 执行线程在轮首 / 同步执行入口调 applyPendingCachePurgesLocked() 统一清理。
+    // 覆盖率说明：登记在"删除/撤销/清空"三条路径都会走到（都经 FlowScene 发 nodeRemoved）。
+    requestNodeCachePurge(node);
+}
 
-    // ── S1 Phase B 主体的**前置条件清单**（本轮复核后的判定，供立项时一次做完）─────────────
-    // 判定：三类缓存**当前没有实际竞态** —— 只有执行线程在改它们，界面线程不存在并发访问者：
-    //   · 本槽：留空（在此增删缓存就是上面说的堆损坏）；
-    //   · invalidateDownstreamOf()：会改缓存，但有"运行中/暂停即拒绝"的守卫（只有 Idle/Stopped 才走到清理）；
-    //   · 其余全部触点都在执行线程：executeNode / collectNodeOutputVars / propagateData /
-    //     resolveParamRefs / 循环体跳过清理 / 轮首剪枝 / resetState。
-    // 所以它要修的不是现存缺陷，而是"让界面线程能安全改图"（Phase B）的**入口条件**：
-    //   1) 三类缓存的所有访问（现约 20 处）统一入 m_graphCacheMutex；
-    //   2) 锁序固定为 graphCacheMutex → m_mutex（setFlowScene / invalidateDownstreamOf 已是此序），
-    //      不得反向获取；
-    //   3) 注意**嵌套**：executeNode 会调用 propagateData / collectNodeOutputVars；若三者各自加锁，
-    //      需用 QRecursiveMutex（本仓 MvsImageSourceNode 已有先例）或把锁收口到最外层；
-    //   4) 界面侧新增"删节点即清缓存"后，需要新的并发用例（现有
-    //      testGraphSnapshotDefersDeletionDuringRound 与试点并发用例可作骨架，但它们只覆盖"删除不改
-    //      缓存"的现状）；
-    //   5) 窄窗口（本轮读代码时发现，Phase B 一并收口）：invalidateDownstreamOf 的"查状态 → 清缓存"
-    //      不是原子的——两者之间流程可能被启动。当前后果有限（轮首剪枝会清掉残留），故不单独修。
-    // 结论：**不做半改**（部分加锁 = 假安全 + 潜在死锁），等 Phase B 立项后按上面 5 条一次性完成。
+void FlowExecutor::requestNodeCachePurge(NodeBase *node)
+{
+    if (!node) {
+        return;
+    }
+
+    // 登记时必须"此刻"取好的两样东西：
+    //  · node 指针 —— 之后可能已被析构（FlowScene::removeNode 无存活快照时立即 delete），
+    //    故此后**只作 map 键**使用（键比较不触内存，不解除引用）；
+    //  · moduleId —— 之后无法再从对象上读（同因），而 m_nodeOutputVars 正是按模块号索引。
+    const QPair<NodeBase *, int> entry = qMakePair(node, node->moduleId());
+
+    QMutexLocker purgeLock(&m_purgeMutex);   // 叶子锁：持有时不得再取任何锁
+    m_pendingCachePurges.append(entry);
+}
+
+void FlowExecutor::applyPendingCachePurgesLocked()
+{
+    QList<QPair<NodeBase *, int>> pending;
+    {
+        // 只有"摘出列表"这一段持叶子锁（与 requestNodeCachePurge 对称），随后的 remove 在图锁内做。
+        // 两把锁不嵌套获取 → 既不改变"graph → m_mutex"锁序，也不产生新的环。
+        QMutexLocker purgeLock(&m_purgeMutex);
+        if (m_pendingCachePurges.isEmpty()) {
+            return;
+        }
+        pending.swap(m_pendingCachePurges);
+    }
+
+    for (const QPair<NodeBase *, int> &entry : pending) {
+        // 两个维度各清一遍（S4）：指针维度（m_nodeData / m_validOutputs）+ 模块号维度（m_nodeOutputVars）。
+        // 清不到的后果只是"下一次重新计算"（保守方向）；清多了同理——不会造成读到旧值。
+        m_nodeData.remove(entry.first);
+        m_validOutputs.remove(entry.first);
+        m_nodeOutputVars.remove(entry.second);
+    }
 }
 
 void FlowExecutor::connectToScene(FlowScene *scene)
@@ -128,11 +148,11 @@ void FlowExecutor::connectToScene(FlowScene *scene)
     QObject::connect(scene, &FlowScene::nodeAdded, this, &FlowExecutor::markGraphStructureDirty, Qt::UniqueConnection);
     QObject::connect(scene, &FlowScene::nodeRemoved, this, &FlowExecutor::markGraphStructureDirty,
                      Qt::UniqueConnection);
-    // 节点被删除/撤销/清空时通知执行器。**注意**：槽体当前留空（原因见其内注释）——本段注释原先
-    // 写"立即清掉它在执行缓存里的条目"，与实现不符，本轮随 Phase B 立项一并订正。
-    // 现状由两项兜住：① 每轮快照 + 墓碑保证本轮不踩悬垂指针；② rebuildIncomingIndex 的懒剪枝
-    // 会清掉"已不在场景"的条目。Phase B 的 Stage 1（锁纪律）完成后，槽体将恢复
-    // "立即清三类缓存 + m_validOutputs.remove"，届时本条连接的语义与注释一致。
+    // 节点被删除/撤销/清空时通知执行器：**登记**该节点的待清理缓存条目（S1 Stage 1b 第 2 步起生效）。
+    // 槽体不直接改执行缓存（那正是首次尝试挂起的原因）：GUI 侧只取叶子锁登记，
+    // 由执行线程在安全点（轮首 / 同步执行入口）统一清三类缓存 + m_validOutputs.remove。
+    // 另有兜底：① 每轮快照 + 墓碑保证本轮不踩悬垂指针；② rebuildIncomingIndex 的懒剪枝
+    // 会清掉"已不在场景"的条目（登记丢失也不会长期残留）。
     QObject::connect(scene, &FlowScene::nodeRemoved, this, &FlowExecutor::onSceneNodeRemoved,
                      Qt::UniqueConnection);
 }
@@ -391,6 +411,8 @@ void FlowExecutor::run()
         QList<NodeBase *> sortedNodes;
         {
             QMutexLocker cacheLock(&m_graphCacheMutex);
+            // S1 Stage 1b：轮首安全点消费"删节点待清理"登记（GUI 侧只登记、不取本锁）
+            applyPendingCachePurgesLocked();
             const bool needRebuild =
                 m_graphStructureDirty || m_cachedSortedNodes.isEmpty() || !cacheMatchesScene(nodes);
             if (needRebuild) {
@@ -812,10 +834,9 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
         QSharedPointer<DataObject> nodeOut0;
         if (success) {
             // S1 Stage 1（修整）：**临界区内不调用外部代码**——getOutputData()/setSourceInfo()/
-            // fullName() 会触及节点 / 数据对象（可能还有场景）的其它锁；而 GUI 侧
-            // onSceneNodeRemoved（Phase B 计划中要取同一把锁）是在 FlowScene::removeNode 内部同步调用的，
-            // 两者叠加可能构成"GUI：场景锁 → 图锁" vs "执行：图锁 → 节点/场景锁"的**环**。
-            // 故：先在锁外取数据与来源串，短临界区内只做缓存写入。
+            // fullName() 会触及节点 / 数据对象（可能还有场景）的其它锁。
+            // （原担心的"GUI 侧 onSceneNodeRemoved 取同一把锁 → 成环"已在 Stage 1b 第 2 步消除：
+            //   该槽改为 GUI 只登记、不取图锁；本条纪律仍保留——环没了，纪律仍然是好习惯。）
             for (int i = 0; i < node->outputPorts().size(); i++) {
                 QSharedPointer<DataObject> outputData = node->getOutputData(i);
                 if (outputData) {
@@ -1346,6 +1367,7 @@ void FlowExecutor::executeUpTo(NodeBase *endNode)
     QList<NodeBase *> sorted;
     {
         QMutexLocker cacheLock(&m_graphCacheMutex);
+        applyPendingCachePurgesLocked();   // S1 Stage 1b：同步执行入口同样消费待清理登记
         rebuildIncomingIndex(nodes, graphSnapshot.snapshot().connections);
         if (!topologicalSort(nodes, sorted))
             return;
@@ -1392,6 +1414,7 @@ void FlowExecutor::executeFrom(NodeBase *startNode)
     QList<NodeBase *> sorted;
     {
         QMutexLocker cacheLock(&m_graphCacheMutex);
+        applyPendingCachePurgesLocked();   // S1 Stage 1b：同步执行入口同样消费待清理登记
         rebuildIncomingIndex(nodes, graphSnapshot.snapshot().connections);
         if (!topologicalSort(nodes, sorted))
             return;
