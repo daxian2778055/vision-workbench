@@ -128,8 +128,11 @@ void FlowExecutor::connectToScene(FlowScene *scene)
     QObject::connect(scene, &FlowScene::nodeAdded, this, &FlowExecutor::markGraphStructureDirty, Qt::UniqueConnection);
     QObject::connect(scene, &FlowScene::nodeRemoved, this, &FlowExecutor::markGraphStructureDirty,
                      Qt::UniqueConnection);
-    // S4：节点被删除/撤销/清空时立即清掉它在执行缓存里的条目，而不仅依赖
-    // rebuildIncomingIndex 的"是否仍在场景"懒剪枝（后者无法区分指针地址复用与模块号复用）。
+    // 节点被删除/撤销/清空时通知执行器。**注意**：槽体当前留空（原因见其内注释）——本段注释原先
+    // 写"立即清掉它在执行缓存里的条目"，与实现不符，本轮随 Phase B 立项一并订正。
+    // 现状由两项兜住：① 每轮快照 + 墓碑保证本轮不踩悬垂指针；② rebuildIncomingIndex 的懒剪枝
+    // 会清掉"已不在场景"的条目。Phase B 的 Stage 1（锁纪律）完成后，槽体将恢复
+    // "立即清三类缓存 + m_validOutputs.remove"，届时本条连接的语义与注释一致。
     QObject::connect(scene, &FlowScene::nodeRemoved, this, &FlowExecutor::onSceneNodeRemoved,
                      Qt::UniqueConnection);
 }
