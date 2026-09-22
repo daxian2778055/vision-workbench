@@ -2677,6 +2677,50 @@ void IntegrationTest::testShadowMemberSingleSourceAndConcurrentAccess()
     QVERIFY2(plcLegacy.getParam(QStringLiteral("autoReconnect")).toBool(),
              "旧格式缺键时必须回落默认 true（旧实现是 .toBool(true)，不是保留原值）");
     QCOMPARE(plcLegacy.getParam(QStringLiteral("slaveAddress")).toInt(), 1);
+
+    // 同批第十六类（ModbusNode，通信四件套最后一个）：5 个真参数同款收口。
+    // 注意：本类头文件原有一份"刻意不收口"的记录，本轮已**修订**并写明修订理由（口径不一致问题）。
+    // ModbusNode.h 经 PlcCommNode.h 间接引入，此处不重复 include。
+    ModbusNode mb;
+    mb.init();
+    QCOMPARE(mb.getParam(QStringLiteral("autoReconnect")).toBool(), true);
+    QCOMPARE(mb.getParam(QStringLiteral("writeVerify")).toBool(), false);
+    QCOMPARE(mb.getParam(QStringLiteral("reconnectInterval")).toInt(), 3000);
+    QCOMPARE(mb.getParam(QStringLiteral("pollInterval")).toInt(), 100);
+    QCOMPARE(mb.getParam(QStringLiteral("slaveAddress")).toInt(), 1);
+    QCOMPARE(mb.getParam(QStringLiteral("role")).toString(), QStringLiteral("客户端"));
+
+    mb.setParam(QStringLiteral("autoReconnect"), false);
+    mb.setParam(QStringLiteral("writeVerify"), true);
+    mb.setParam(QStringLiteral("slaveAddress"), 5);
+    QCOMPARE(mb.getParam(QStringLiteral("autoReconnect")).toBool(), false);
+    QCOMPARE(mb.getParam(QStringLiteral("writeVerify")).toBool(), true);
+    QCOMPARE(mb.getParam(QStringLiteral("slaveAddress")).toInt(), 5);
+
+    // 判别性：两个下限必须被**写侧**钳制（reconnectInterval ≥500、pollInterval ≥10）
+    mb.setParam(QStringLiteral("reconnectInterval"), 1);
+    mb.setParam(QStringLiteral("pollInterval"), 2);
+    QCOMPARE(mb.getParam(QStringLiteral("reconnectInterval")).toInt(), 500);
+    QCOMPARE(mb.getParam(QStringLiteral("pollInterval")).toInt(), 10);
+
+    const QJsonObject mbJson = mb.toJson();
+    QCOMPARE(mbJson.value(QStringLiteral("reconnectInterval")).toInt(), 500);
+    QCOMPARE(mbJson.value(QStringLiteral("slaveAddress")).toInt(), 5);
+
+    ModbusNode mbRoundTrip;
+    mbRoundTrip.init();
+    mbRoundTrip.fromJson(mbJson);
+    QCOMPARE(mbRoundTrip.getParam(QStringLiteral("slaveAddress")).toInt(), 5);
+    QCOMPARE(mbRoundTrip.getParam(QStringLiteral("writeVerify")).toBool(), true);
+    QCOMPARE(mbRoundTrip.getParam(QStringLiteral("pollInterval")).toInt(), 10);
+
+    // 旧格式（只有顶层键）：**缺键回落默认值**（旧代码 `.toX(默认)`，不是保留原值）
+    QJsonObject legacyMb;
+    ModbusNode mbLegacy;
+    mbLegacy.init();
+    mbLegacy.setParam(QStringLiteral("slaveAddress"), 9);
+    mbLegacy.fromJson(legacyMb);
+    QCOMPARE(mbLegacy.getParam(QStringLiteral("slaveAddress")).toInt(), 1);
 }
 
 void IntegrationTest::testFlowExtrasRoundTrip()

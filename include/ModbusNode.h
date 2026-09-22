@@ -112,29 +112,28 @@ private:
     QModbusTcpServer *m_modbusServer = nullptr; /// 服务器模式使用的监听器
     Role m_role = MODBUS_CLIENT;
 
-    // 关于"单源收口"（S1 残留专项）：以下 5 个参数（autoReconnect / reconnectInterval /
-    // pollInterval / slaveAddress / writeVerify）**刻意保留**成员式存储，不改为参数表唯一来源。
-    // 理由（已核实，非省略）：
-    //  · 它们全是 bool/int，且**从不被非主线程写**：写路径只有 createDeviceNode / 设备配置对话框 /
-    //    fromJson（均主线程）；执行线程唯一的参数写回路径（FlowExecutor 参数引用解析）只处理
-    //    **QString** 参数（`v.typeId() == QMetaType::QString`）→ 这些键根本不会被它命中，
-    //    因此不存在本项目要消灭的"无锁成员镜像跨线程读写"竞态；
-    //  · 即便发生撕裂，bool/int 也不会像 QString/容器那样破坏堆内存（代价量级不同）；
-    //  · 反向代价真实：本类 fromJson 目前**绕过 setParam 的钳制**（qMax(500,…)/qMax(10,…)）与
-    //    轮询定时器同步；改为走 setParam 会让"载入老方案"开始钳制数值并重设定时器 ——
-    //    属通信时序的行为变化，而没有对应的缺陷要修；
-    //  · 若将来出现执行线程写这些键的新路径，再按已收口的 11 类同样处理即可（改动很小）。
-    // 同理：m_role（enum 型参数镜像）也不收口——它的写路径带对象重建副作用（applyRoleParam），
-    // 同属主线程。
+    // 关于"单源收口"（S1 残留专项）——**注：原注释记录的"5 个参数刻意不收口"已修订**。
+    // 5 个 bool/int 参数（autoReconnect / reconnectInterval / pollInterval / slaveAddress / writeVerify）
+    // 已按通信件套**同一口径**收口：唯一来源 = 参数表（默认值在 init() 写入），钳制放写侧。
+    // 修订理由（为何推翻当初"不收口"的结论）：
+    //  · 原注释称"没有对应的缺陷要修"——这一条不成立：旧实现下同一参数有**三个口径**
+    //    （成员 = 钳后值 / 参数表 = 原值 / 读取方各取一份），toJson 写成员（钳后）、
+    //    getParam 返回参数表（原值）⇒ 方案文件与运行期行为可能不一致。
+    //    TCP / Serial / PLC 三个兄弟类已按同一口径修完，本类保持一致（避免"同族不同规"）。
+    //  · 原注释中**仍然成立、本次照旧遵守**的部分：这些键**从不被非主线程写**
+    //    （写路径只有 createDeviceNode / 设备配置对话框 / fromJson，均主线程；执行线程的参数写回
+    //    只处理 QString 参数）⇒ 这里修的从来不是"竞态"，而是口径一致。
+    //  · **已知行为变化（提交说明中已明写）**：fromJson 兼容分支改为走 setParam ⇒
+    //    载入老方案时越界值会按 500ms/10ms 下限钳制（旧实现直接赋成员、不钳），
+    //    且 pollInterval 会同步一次轮询定时器。属"把已文档化的下限真正执行"，无回归风险面。
+    // **仍未收口（刻意保留）**：m_role —— 写路径带**对象重建副作用**
+    //（applyRoleParam 会 closeConnection + 重新 openConnection），且 role() 是公开运行期接口；
+    // 参数表里的 role 只是它的持久化表示。
     // 自动重连
     QTimer *m_reconnectTimer = nullptr;
-    bool m_autoReconnect = true;
-    int m_reconnectInterval = 3000; // ms
 
     // 轮询
     QTimer *m_pollTimer = nullptr;
-    int m_pollInterval = 100; // ms (默认 100ms)
-    int m_slaveAddress = 1;
 
     // 寄存器表格
     QList<ModbusRegisterItem> m_registers;

@@ -51,7 +51,9 @@ void ModbusNode::init()
     m_reconnectTimer = new QTimer(this);
     m_reconnectTimer->setSingleShot(true);
     connect(m_reconnectTimer, &QTimer::timeout, this, [this]() {
-        if (!m_connected && m_autoReconnect && m_role == MODBUS_CLIENT) {
+        // 参数唯一来源：参数表（角色判定仍读运行期 m_role，见头文件说明）
+        if (!m_connected && getParam(QStringLiteral("autoReconnect")).toBool()
+            && m_role == MODBUS_CLIENT) {
             VFP_DEBUG << "Modbus auto-reconnecting...";
             openConnection();
         }
@@ -101,7 +103,8 @@ bool ModbusNode::openConnection()
     // ===== 服务器模式：监听端口，对外提供寄存器 =====
     if (m_role == MODBUS_SERVER) {
         m_modbusServer = new QModbusTcpServer(this);
-        m_modbusServer->setServerAddress(static_cast<quint8>(m_slaveAddress));
+        m_modbusServer->setServerAddress(
+            static_cast<quint8>(getParam(QStringLiteral("slaveAddress")).toInt()));
         m_modbusServer->setConnectionParameter(
             QModbusDevice::NetworkPortParameter,
             m_params.value(QStringLiteral("port"), 502).toInt());
@@ -205,15 +208,16 @@ bool ModbusNode::openConnection()
         emit communicationError(QStringLiteral("Modbus\u8FDE\u63A5\u5931\u8D25"));
 
         // 自动重连（与 Unconnected 分支一致：用户主动关闭后不得"复活"，S1 nit 对齐）
-        if (m_autoReconnect && m_reconnectTimer && !m_userClosed) {
-            m_reconnectTimer->start(m_reconnectInterval);
+        // 参数唯一来源：参数表（原先读成员）
+        if (getParam(QStringLiteral("autoReconnect")).toBool() && m_reconnectTimer && !m_userClosed) {
+            m_reconnectTimer->start(getParam(QStringLiteral("reconnectInterval")).toInt());
         }
         return false;
     }
 
     // 异步发起：真正连上由 onModbusStateChanged(ConnectedState) 负责置 m_connected + emit
     // connectionOpened（S1）。这里只取从站地址并启动轮询（连上前读会失败，无碍）。
-    m_slaveAddress = m_params.value(QStringLiteral("slaveAddress"), 1).toInt();
+    // 注：原先这里把 slaveAddress 缓存进成员；收口后各使用点直接读参数表（唯一来源），故删除该缓存。
     startPolling();
     return true;
 }
@@ -428,19 +432,23 @@ void ModbusNode::onServerStateChanged(int state)
 
 void ModbusNode::setParam(const QString &name, const QVariant &value)
 {
+    // role：仍是运行期角色状态（写路径带连接重建副作用），参数表只是它的持久化表示 ⇒ 保留原处理。
     if (name == QStringLiteral("role")) {
         applyRoleParam(value.toString());
-    } else if (name == QStringLiteral("autoReconnect")) {
-        m_autoReconnect = value.toBool();
-    } else if (name == QStringLiteral("reconnectInterval")) {
-        m_reconnectInterval = qMax(500, value.toInt());
-    } else if (name == QStringLiteral("writeVerify")) {
-        m_writeVerify = value.toBool();   // S4
-    } else if (name == QStringLiteral("pollInterval")) {
-        m_pollInterval = qMax(10, value.toInt());
-        if (m_pollTimer) m_pollTimer->setInterval(m_pollInterval);
-    } else if (name == QStringLiteral("slaveAddress")) {
-        m_slaveAddress = value.toInt();
+        CommunicationNodeBase::setParam(name, value);
+        return;
+    }
+    // 其余 5 个真参数：只写参数表（基类加锁 + 校验 + 随方案序列化）。
+    // 两个带下限的把**钳制放写侧**（旧实现成员钳、参数表存原值 ⇒ 两个口径）。
+    if (name == QStringLiteral("reconnectInterval")) {
+        CommunicationNodeBase::setParam(name, qMax(500, value.toInt()));
+        return;
+    }
+    if (name == QStringLiteral("pollInterval")) {
+        const int v = qMax(10, value.toInt());
+        CommunicationNodeBase::setParam(name, v);
+        if (m_pollTimer) m_pollTimer->setInterval(v);   // 副作用保留（不写回参数表）
+        return;
     }
     CommunicationNodeBase::setParam(name, value);
 }
@@ -456,7 +464,7 @@ void ModbusNode::startPolling()
 {
     if (!m_pollTimer) return;
     m_currentRegIdx = 0;
-    m_pollTimer->setInterval(m_pollInterval);
+    m_pollTimer->setInterval(getParam(QStringLiteral("pollInterval")).toInt());   // 参数表唯一来源
     m_pollTimer->start();
 }
 
@@ -487,14 +495,17 @@ void ModbusNode::onPollTimeout()
 
         int regCount = byteCount / 2; // 每个寄存器 2 字节
 
+        // 从站号唯一来源：参数表（本轮取一次，保证同一批读用同一个从站号）
+        const int slaveAddress = getParam(QStringLiteral("slaveAddress")).toInt();
+
         PendingRead pr;
-        pr.slaveAddr = m_slaveAddress;
+        pr.slaveAddr = slaveAddress;
         pr.regAddr = reg.address;
         pr.count = regCount;
         pr.regIndex = idx;
 
         m_pendingQueue.append(pr);
-        if (!readRegister(m_slaveAddress, reg.address, regCount)) {
+        if (!readRegister(slaveAddress, reg.address, regCount)) {
             // 请求未能发出（离线/忙）：立刻回滚队列条目——否则 pendingQueue 非空会让
             // 后续每次轮询都在入口处直接 return（轮询永久冻结且无任何报警）
             m_pendingQueue.removeLast();
@@ -589,8 +600,9 @@ void ModbusNode::onModbusStateChanged(int state)
         }
 
         // 自动重连：用户主动关闭（m_userClosed）后不得"复活"（S1）；其余断线才自愈
-        if (m_autoReconnect && m_reconnectTimer && !m_userClosed) {
-            m_reconnectTimer->start(m_reconnectInterval);
+        // 参数唯一来源：参数表（原先读成员）
+        if (getParam(QStringLiteral("autoReconnect")).toBool() && m_reconnectTimer && !m_userClosed) {
+            m_reconnectTimer->start(getParam(QStringLiteral("reconnectInterval")).toInt());
         }
     }
 }
@@ -668,7 +680,9 @@ bool ModbusNode::writeRegister(int address, double value)
     for (int i = 0; i < words.size(); ++i)
         writeUnit.setValue(i, words[i]);
 
-    QModbusReply *reply = m_modbus->sendWriteRequest(writeUnit, m_slaveAddress);
+    // 从站号唯一来源：参数表
+    QModbusReply *reply = m_modbus->sendWriteRequest(
+        writeUnit, getParam(QStringLiteral("slaveAddress")).toInt());
     if (reply) {
         // 回执处理抽成一份（K-2 同族修复）：原来 `isFinished()` 为真时只 deleteLater ——
         // "写完就断"使 reply 同步完成时，**错误上报与 S4 回读校验都被静默丢掉**（且仍返回 true）。
@@ -676,7 +690,7 @@ bool ModbusNode::writeRegister(int address, double value)
             if (r2->error() == QModbusDevice::NoError) {
                 VFP_DEBUG << "Modbus write success at address" << address;
                 // S4 段③：回读比对（段①②=已发出写 + 从站回执 OK；仅选项开启时执行）
-                if (m_writeVerify)
+                if (getParam(QStringLiteral("writeVerify")).toBool())
                     verifyWrittenValue(address, value, dataType, byteOrder);
             } else {
                 VFP_DEBUG << "Modbus write error at address" << address << ":" << r2->errorString();
@@ -703,7 +717,8 @@ void ModbusNode::verifyWrittenValue(int address, double expected, const QString 
     if (!m_modbus) return;
     const int wordCount = RegisterByteOrder::wordCountForType(dataType);   // M-4：宽度判定单一来源
     QModbusDataUnit readUnit(QModbusDataUnit::HoldingRegisters, address, wordCount);
-    QModbusReply *r = m_modbus->sendReadRequest(readUnit, m_slaveAddress);
+    QModbusReply *r = m_modbus->sendReadRequest(
+        readUnit, getParam(QStringLiteral("slaveAddress")).toInt());
     if (!r) return;
     // 一份处理逻辑，同步/异步两条路径共用（K-2：同步完成且**成功**的 reply 不得被误判成"读回失败"）
     const auto handleVerifyReply = [this, address, expected, dataType, byteOrder](QModbusReply *reply) {
@@ -757,11 +772,12 @@ QJsonObject ModbusNode::toJson() const
     QJsonObject obj = CommunicationNodeBase::toJson();
     obj[QStringLiteral("role")] = (m_role == MODBUS_SERVER)
         ? QStringLiteral("\u670D\u52A1\u5668") : QStringLiteral("\u5BA2\u6237\u7AEF");
-    obj[QStringLiteral("autoReconnect")] = m_autoReconnect;
-    obj[QStringLiteral("writeVerify")] = m_writeVerify;
-    obj[QStringLiteral("reconnectInterval")] = m_reconnectInterval;
-    obj[QStringLiteral("pollInterval")] = m_pollInterval;
-    obj[QStringLiteral("slaveAddress")] = m_slaveAddress;
+    // 顶层键保留（老读取方兼容），5 个真参数的值一律取自参数表（唯一来源）
+    obj[QStringLiteral("autoReconnect")] = QJsonValue::fromVariant(getParam(QStringLiteral("autoReconnect")));
+    obj[QStringLiteral("writeVerify")] = QJsonValue::fromVariant(getParam(QStringLiteral("writeVerify")));
+    obj[QStringLiteral("reconnectInterval")] = QJsonValue::fromVariant(getParam(QStringLiteral("reconnectInterval")));
+    obj[QStringLiteral("pollInterval")] = QJsonValue::fromVariant(getParam(QStringLiteral("pollInterval")));
+    obj[QStringLiteral("slaveAddress")] = QJsonValue::fromVariant(getParam(QStringLiteral("slaveAddress")));
 
     QJsonArray regsArr;
     for (const auto &r : m_registers) {
@@ -786,11 +802,22 @@ void ModbusNode::fromJson(const QJsonObject &json)
         ? MODBUS_SERVER : MODBUS_CLIENT;
     m_params[QStringLiteral("role")] = (m_role == MODBUS_SERVER)
         ? QStringLiteral("\u670D\u52A1\u5668") : QStringLiteral("\u5BA2\u6237\u7AEF");
-    m_autoReconnect = json[QStringLiteral("autoReconnect")].toBool(true);
-    m_writeVerify = json[QStringLiteral("writeVerify")].toBool(false);   // S4（默认关闭）
-    m_reconnectInterval = json[QStringLiteral("reconnectInterval")].toInt(3000);
-    m_pollInterval = json[QStringLiteral("pollInterval")].toInt(100);
-    m_slaveAddress = json[QStringLiteral("slaveAddress")].toInt(1);
+    // 5 个真参数由基类从 params 恢复（唯一来源）。兼容更早方案：这些键曾只存在顶层（无 params 段）。
+    // 与旧实现逐字对齐：旧代码是 `.toX(默认)` = **缺键回落该默认值**（不是"保留原值"），
+    // 故这里同样用 toX(默认)；默认值与 init() 初值一致。
+    // 注：走 setParam 后，越界值会按写侧下限（500ms / 10ms）钳制——这是把已文档化的下限真正执行。
+    if (!json.contains(QStringLiteral("params"))) {
+        setParam(QStringLiteral("autoReconnect"),
+                 json.value(QStringLiteral("autoReconnect")).toBool(true));
+        setParam(QStringLiteral("writeVerify"),
+                 json.value(QStringLiteral("writeVerify")).toBool(false));   // S4（默认关闭）
+        setParam(QStringLiteral("reconnectInterval"),
+                 json.value(QStringLiteral("reconnectInterval")).toInt(3000));
+        setParam(QStringLiteral("pollInterval"),
+                 json.value(QStringLiteral("pollInterval")).toInt(100));
+        setParam(QStringLiteral("slaveAddress"),
+                 json.value(QStringLiteral("slaveAddress")).toInt(1));
+    }
 
     m_registers.clear();
     QJsonArray regsArr = json[QStringLiteral("registers")].toArray();
@@ -806,9 +833,6 @@ void ModbusNode::fromJson(const QJsonObject &json)
         m_registers.append(r);
     }
 
-    m_params[QStringLiteral("autoReconnect")] = m_autoReconnect;
-    m_params[QStringLiteral("writeVerify")] = m_writeVerify;
-    m_params[QStringLiteral("reconnectInterval")] = m_reconnectInterval;
-    m_params[QStringLiteral("pollInterval")] = m_pollInterval;
-    m_params[QStringLiteral("slaveAddress")] = m_slaveAddress;
+    // 收口说明：原先这里把 5 个成员"成套回写"进 m_params（"成员 = 唯一来源"的旧做法）；
+    // 现在参数表本身就是唯一来源、写侧即入库，故整段删除。
 }
