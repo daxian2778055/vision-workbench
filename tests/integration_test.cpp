@@ -18,6 +18,7 @@
 #include "ColorConversionNode.h"
 #include "TcpCommNode.h"
 #include "SerialCommNode.h"
+#include "PlcCommNode.h"
 #include "FilterNode.h"   // S1 残留试点：影子成员收口后的单源/并发回归
 #include "SortNode.h"
 #include "CounterNode.h"
@@ -2629,6 +2630,53 @@ void IntegrationTest::testShadowMemberSingleSourceAndConcurrentAccess()
     serialLegacy.setParam(QStringLiteral("reconnectInterval"), 900);
     serialLegacy.fromJson(legacySerial);
     QCOMPARE(serialLegacy.getParam(QStringLiteral("reconnectInterval")).toInt(), 900);
+
+    // 同批第十五类（PlcCommNode，通信四件套第 3 个）：5 个真参数（单源 + 两个下限写侧钳制）。
+    // 本类构造不建连/不启轮询（定时器在 openConnection/startPolling 才动），可直接实例化。
+    PlcCommNode plc;
+    plc.init();
+    QCOMPARE(plc.getParam(QStringLiteral("autoReconnect")).toBool(), true);
+    QCOMPARE(plc.getParam(QStringLiteral("writeVerify")).toBool(), false);
+    QCOMPARE(plc.getParam(QStringLiteral("reconnectInterval")).toInt(), 3000);
+    QCOMPARE(plc.getParam(QStringLiteral("pollInterval")).toInt(), 100);
+    QCOMPARE(plc.getParam(QStringLiteral("slaveAddress")).toInt(), 1);
+
+    plc.setParam(QStringLiteral("autoReconnect"), false);
+    plc.setParam(QStringLiteral("writeVerify"), true);
+    plc.setParam(QStringLiteral("slaveAddress"), 7);
+    QCOMPARE(plc.getParam(QStringLiteral("autoReconnect")).toBool(), false);
+    QCOMPARE(plc.getParam(QStringLiteral("writeVerify")).toBool(), true);
+    QCOMPARE(plc.getParam(QStringLiteral("slaveAddress")).toInt(), 7);
+
+    // 判别性：两个下限必须被**写侧**钳制（reconnectInterval ≥500、pollInterval ≥10）
+    plc.setParam(QStringLiteral("reconnectInterval"), 1);
+    plc.setParam(QStringLiteral("pollInterval"), 1);
+    QCOMPARE(plc.getParam(QStringLiteral("reconnectInterval")).toInt(), 500);
+    QCOMPARE(plc.getParam(QStringLiteral("pollInterval")).toInt(), 10);
+
+    const QJsonObject plcJson = plc.toJson();
+    QCOMPARE(plcJson.value(QStringLiteral("reconnectInterval")).toInt(), 500);
+    QCOMPARE(plcJson.value(QStringLiteral("pollInterval")).toInt(), 10);
+    QCOMPARE(plcJson.value(QStringLiteral("slaveAddress")).toInt(), 7);
+
+    PlcCommNode plcRoundTrip;
+    plcRoundTrip.init();
+    plcRoundTrip.fromJson(plcJson);
+    QCOMPARE(plcRoundTrip.getParam(QStringLiteral("slaveAddress")).toInt(), 7);
+    QCOMPARE(plcRoundTrip.getParam(QStringLiteral("writeVerify")).toBool(), true);
+    QCOMPARE(plcRoundTrip.getParam(QStringLiteral("pollInterval")).toInt(), 10);
+
+    // 旧格式（只有顶层键）：**缺键回落默认值**——旧代码是 `.toX(默认)`，不是保留原值
+    //（与上一类 SerialCommNode 的"缺键保留"相反，逐类对齐旧实现）
+    QJsonObject legacyPlc;
+    PlcCommNode plcLegacy;
+    plcLegacy.init();
+    plcLegacy.setParam(QStringLiteral("autoReconnect"), false);
+    plcLegacy.setParam(QStringLiteral("slaveAddress"), 9);
+    plcLegacy.fromJson(legacyPlc);
+    QVERIFY2(plcLegacy.getParam(QStringLiteral("autoReconnect")).toBool(),
+             "旧格式缺键时必须回落默认 true（旧实现是 .toBool(true)，不是保留原值）");
+    QCOMPARE(plcLegacy.getParam(QStringLiteral("slaveAddress")).toInt(), 1);
 }
 
 void IntegrationTest::testFlowExtrasRoundTrip()

@@ -72,14 +72,18 @@ private:
     QModbusClient *m_modbus = nullptr;
 
     // 自动重连
+    // S1 残留收口（通信类第 15 类）：autoReconnect / reconnectInterval / writeVerify /
+    // pollInterval / slaveAddress 这 5 个**真参数**的**唯一来源改为参数表**，
+    // 不再保留无锁成员镜像——原先 setParam 写成员、连接/轮询/写入路径读成员，
+    // 与界面线程写同为无保护竞态。
+    // 钳制放**写侧**（reconnectInterval ≥500ms、pollInterval ≥10ms，与原成员语义一致）。
+    // 以下成员**刻意保留**（非参数镜像）：m_reconnectTimer / m_pollTimer / m_modbus（运行期资源）、
+    // m_registers（寄存器表，随方案持久化）、m_everReallyConnected / m_userClosed（连接状态判据）、
+    // m_currentRegIdx / m_pendingQueue（轮询运行期状态）。
     QTimer *m_reconnectTimer = nullptr;
-    bool m_autoReconnect = true;
-    int m_reconnectInterval = 3000;
 
     // 轮询
     QTimer *m_pollTimer = nullptr;
-    int m_pollInterval = 100;
-    int m_slaveAddress = 1;
 
     // 寄存器表格
     QList<ModbusRegisterItem> m_registers;
