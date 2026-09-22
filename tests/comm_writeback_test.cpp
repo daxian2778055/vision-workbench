@@ -41,6 +41,25 @@
 
 namespace {
 
+/// 取一个"此刻可用"的临时端口：让 OS 分配（ephemeral）后立即释放，只把端口号带出去给
+/// Modbus / PLC 的**服务端节点**用（那几个节点必须收到一个具体端口号，不能像 QTcpServer 那样 listen(0)）。
+/// 为什么必须替掉原先的固定字面量（15502 / 15504–15511）：
+///   固定端口在"上一个用例刚用完、其连接处于 TIME_WAIT"时会 bind 失败——本仓曾因此在全量 ctest 里
+///   偶发红一次（CommWritebackTest::testModbusUserCloseDoesNotResurrect，报"Modbus 服务器启动失败"），
+///   而单跑该套件却是绿的（序列相关）。OS 分配的临时端口不会撞上这种残留状态。
+/// 说明：仍存在"取到端口 → 真正 listen"之间的微小窗口；因此各用例的"服务端已监听"断言都保留有界等待，
+///       失败时报错信息明确（不会静默空转）。
+quint16 pickFreePort()
+{
+    QTcpServer probe;
+    if (!probe.listen(QHostAddress::LocalHost, 0)) {
+        return 0;
+    }
+    const quint16 p = probe.serverPort();
+    probe.close();
+    return p;
+}
+
 /// 起一个只收不回的模拟 PLC；返回后可用 received 取回收到的字节
 void startSimulatedPlc(QTcpServer &plc, QByteArray &received)
 {
@@ -245,7 +264,8 @@ struct DeviceCleanup {
 void CommWritebackTest::testModbusRegisterWritebackAndRawSendGuard()
 {
     // 用项目自带的 Modbus 双角色在本进程内回环：服务器（从站）+ 客户端（主站）
-    const int port = 15502;   // 高位端口，避开常见 Modbus 502
+    const quint16 port = pickFreePort();   // 临时端口（替代固定字面量，避免 TIME_WAIT 撞端口）
+    QVERIFY2(port != 0, "无法取得空闲端口（pickFreePort）");
     auto *cm = CommunicationManager::instance();
     // 断言失败提前 return 时也要清理，避免残留服务器/客户端串扰后续用例
     DeviceCleanup cleanup{ { QStringLiteral("MB_SRV"), QStringLiteral("MB_CLI") } };
@@ -1716,7 +1736,8 @@ void CommWritebackTest::testPlcCloseConnectionNoSpuriousSignal()
 // openConnection 复位 ever 标志而掩盖该 bug。
 void CommWritebackTest::testModbusCloseNoDoubleReportOnTransientDrop()
 {
-    const int port = 15506;
+    const quint16 port = pickFreePort();   // 临时端口（替代固定字面量，避免 TIME_WAIT 撞端口）
+    QVERIFY2(port != 0, "无法取得空闲端口（pickFreePort）");
     auto *cm = CommunicationManager::instance();
     DeviceCleanup cleanup{ { QStringLiteral("DR_SRV"), QStringLiteral("DR_CLI") } };
 
@@ -1764,7 +1785,8 @@ void CommWritebackTest::testModbusCloseNoDoubleReportOnTransientDrop()
 // autoReconnect 关掉，避免重连的 openConnection 复位 ever 标志而掩盖该 bug。
 void CommWritebackTest::testPlcCloseNoDoubleReportOnTransientDrop()
 {
-    const int port = 15507;
+    const quint16 port = pickFreePort();   // 临时端口（替代固定字面量，避免 TIME_WAIT 撞端口）
+    QVERIFY2(port != 0, "无法取得空闲端口（pickFreePort）");
     auto *cm = CommunicationManager::instance();
     DeviceCleanup cleanup{ { QStringLiteral("PLCD_SRV"), QStringLiteral("PLCD_CLI") } };
 
@@ -1811,7 +1833,8 @@ void CommWritebackTest::testPlcCloseNoDoubleReportOnTransientDrop()
 //      从首次 open 起恒为 true，Unconnected 分支永不自愈（8f36746 的 PLC 版正是如此，本用例会红）。
 void CommWritebackTest::testModbusUserCloseDoesNotResurrect()
 {
-    const int port = 15508;
+    const quint16 port = pickFreePort();   // 临时端口（替代固定字面量，避免 TIME_WAIT 撞端口）
+    QVERIFY2(port != 0, "无法取得空闲端口（pickFreePort）");
     auto *cm = CommunicationManager::instance();
     DeviceCleanup cleanup{ { QStringLiteral("RS_SRV"), QStringLiteral("RS_CLI") } };
 
@@ -1872,7 +1895,8 @@ void CommWritebackTest::testModbusUserCloseDoesNotResurrect()
 // 判别性：8f36746 的 PlcCommNode::openConnection 缺 m_userClosed/ever 两行复位，本用例第 (2) 段会红。
 void CommWritebackTest::testPlcUserCloseDoesNotResurrect()
 {
-    const int port = 15509;
+    const quint16 port = pickFreePort();   // 临时端口（替代固定字面量，避免 TIME_WAIT 撞端口）
+    QVERIFY2(port != 0, "无法取得空闲端口（pickFreePort）");
     auto *cm = CommunicationManager::instance();
     DeviceCleanup cleanup{ { QStringLiteral("PRS_SRV"), QStringLiteral("PRS_CLI") } };
 
@@ -1962,7 +1986,8 @@ void CommWritebackTest::testUnregisterExecutorByIdentity()
 //   - CDAB 单寄存器：单字无"换字"，必须原样 → "1234"（回归点：旧实现落入 else 做了字节互换）
 void CommWritebackTest::testModbusSingleRegisterByteOrder()
 {
-    const int port = 15504;
+    const quint16 port = pickFreePort();   // 临时端口（替代固定字面量，避免 TIME_WAIT 撞端口）
+    QVERIFY2(port != 0, "无法取得空闲端口（pickFreePort）");
     auto *cm = CommunicationManager::instance();
     DeviceCleanup cleanup{ { QStringLiteral("CD_SRV"), QStringLiteral("CD_CLI") } };
 
@@ -2035,7 +2060,8 @@ void CommWritebackTest::testModbusSingleRegisterByteOrder()
 // 硬断言：客户端读回值 == 写入值。
 void CommWritebackTest::testModbusWriteReadByteOrderRoundTrip()
 {
-    const int port = 15505;
+    const quint16 port = pickFreePort();   // 临时端口（替代固定字面量，避免 TIME_WAIT 撞端口）
+    QVERIFY2(port != 0, "无法取得空闲端口（pickFreePort）");
     auto *cm = CommunicationManager::instance();
     DeviceCleanup cleanup{ { QStringLiteral("RTT_SRV"), QStringLiteral("RTT_CLI") } };
 
@@ -2168,7 +2194,8 @@ void CommWritebackTest::testModbusWriteReadByteOrderRoundTrip()
 // 客户端不做任何写入、直接读回，必须等于预置值。
 void CommWritebackTest::testModbusServerWideRegisterInit()
 {
-    const int port = 15510;
+    const quint16 port = pickFreePort();   // 临时端口（替代固定字面量，避免 TIME_WAIT 撞端口）
+    QVERIFY2(port != 0, "无法取得空闲端口（pickFreePort）");
     auto *cm = CommunicationManager::instance();
     DeviceCleanup cleanup{ { QStringLiteral("WI_SRV"), QStringLiteral("WI_CLI") } };
 
@@ -2227,7 +2254,8 @@ void CommWritebackTest::testModbusServerWideRegisterInit()
 // 判别性：旧实现（quint16 单寄存器）会把 int32 截断成低 16 位 → 本用例必红。
 void CommWritebackTest::testPlcWriteReadByteOrderRoundTrip()
 {
-    const int port = 15511;
+    const quint16 port = pickFreePort();   // 临时端口（替代固定字面量，避免 TIME_WAIT 撞端口）
+    QVERIFY2(port != 0, "无法取得空闲端口（pickFreePort）");
     auto *cm = CommunicationManager::instance();
     DeviceCleanup cleanup{ { QStringLiteral("PW_SRV"), QStringLiteral("PW_CLI") } };
 
