@@ -1884,6 +1884,30 @@ void MainWindow::loadProjectFile(const QString &fileName)
         }
     }
 
+    // 载入方案后按"每流程模式"自启动（现场选 B：无人值守产线要连续流程自动开跑）。
+    // 规则：只对**连续**模式自动开始；软触发/硬触发仍由操作员显式点「开始执行」
+    // （硬触发是"点开始进入等待"，自动进入等待会让流程在无人确认时等待触发，故不自动）。
+    // 延到事件循环下一拍执行：让载入/建标签页/注册执行器先收尾，避免在载入过程中就起线程跑图。
+    QMetaObject::invokeMethod(this, [this]() {
+        for (FlowScene *scene : m_flowScenes) {
+            if (!scene)
+                continue;
+            const auto it = m_flowModes.constFind(scene);
+            if (it == m_flowModes.cend() || it.value() != FlowMode::Continuous)
+                continue;
+            FlowExecutor *ex = executorForScene(scene);
+            if (!ex)
+                continue;
+            const ExecutionState st = ex->getState();
+            if (st == ExecutionState::Running || st == ExecutionState::Paused)
+                continue;   // 已在运行的流程不重复启动
+            ex->startExecution();
+            logMessage(QStringLiteral("载入方案：「%1」为连续模式，已自动开始运行（可用「暂停/停止」控制）")
+                           .arg(scene->flowName().isEmpty() ? QStringLiteral("未命名流程")
+                                                            : scene->flowName()));
+        }
+    }, Qt::QueuedConnection);
+
     // 设置当前场景（多流程并发：切换到该流程的执行器）
     if (!m_flowScenes.isEmpty()) {
         m_executor = executorForScene(m_flowScenes[0]);
