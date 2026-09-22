@@ -17,8 +17,9 @@ using namespace HalconCpp;
 
 ColorConversionNode::ColorConversionNode(QObject *parent)
     : HalconNode(parent)
-    , m_conversionType(RGB_TO_GRAY)
-{}
+{
+    // 原 m_conversionType(RGB_TO_GRAY) 的默认值已移入 init()（参数表 = 唯一来源）
+}
 
 ColorConversionNode::~ColorConversionNode()
 {}
@@ -33,6 +34,9 @@ void ColorConversionNode::init()
 
     // 添加输出端口 - 转换后的图像（一个红点代表所有输出参数）
     addOutputPort(QStringLiteral("输出图像"));
+
+    // S1：参数默认值（原为构造函数里的成员初值 RGB_TO_GRAY）
+    m_params[QStringLiteral("conversionType")] = static_cast<int>(RGB_TO_GRAY);
 
     // 初始化默认参数
     m_params["conversionType"] = static_cast<int>(RGB_TO_GRAY);
@@ -115,9 +119,13 @@ bool ColorConversionNode::process()
         CountChannels(inputImage, &channels);
         int channelCount = channels.I();
         
+        // 参数唯一来源：本轮取一次（局部快照）——避免逐次加锁，并保证同一轮用同一份转换类型
+        const ConversionType conversionType =
+            static_cast<ConversionType>(getParam(QStringLiteral("conversionType")).toInt());
+
         // 执行颜色转换
         HImage outputImage;
-        switch (m_conversionType) {
+        switch (conversionType) {
         case RGB_TO_GRAY: {
             VFP_DEBUG << "Performing RGB to Gray conversion";
             if (channelCount == 1) {
@@ -141,7 +149,7 @@ bool ColorConversionNode::process()
             cv::Mat src = OpencvUtil::himageToMat(inputImage);
             if (src.empty()) return false;
             cv::Mat out;
-            if (m_conversionType == RGB_TO_HSV)
+            if (conversionType == RGB_TO_HSV)
                 cv::cvtColor(src, out, cv::COLOR_BGR2HSV_FULL);
             else
                 cv::cvtColor(src, out, cv::COLOR_BGR2HLS_FULL);
@@ -166,7 +174,7 @@ bool ColorConversionNode::process()
             cv::Mat src = OpencvUtil::himageToMat(inputImage);
             if (src.empty()) return false;
             cv::Mat out;
-            if (m_conversionType == HSV_TO_RGB)
+            if (conversionType == HSV_TO_RGB)
                 cv::cvtColor(src, out, cv::COLOR_HSV2BGR_FULL);
             else
                 cv::cvtColor(src, out, cv::COLOR_HLS2BGR_FULL);
@@ -256,12 +264,11 @@ QWidget *ColorConversionNode::createParamPanel()
         QLabel *conversionTypeLabel = new QLabel("转换类型:");
         QComboBox *conversionTypeCombo = new QComboBox();
         conversionTypeCombo->addItems(getAvailableConversions());
-        conversionTypeCombo->setCurrentIndex(m_conversionType);
+        conversionTypeCombo->setCurrentIndex(getParam(QStringLiteral("conversionType")).toInt());
         
         // 连接信号
         connect(conversionTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), [=](int index) {
-            m_conversionType = static_cast<ConversionType>(index);
-            m_params["conversionType"] = index;
+            setParam(QStringLiteral("conversionType"), index);
         });
         
         // 连接输入图像选择信号
@@ -415,7 +422,7 @@ void ColorConversionNode::updateParamPanel(QWidget *panel)
     try {
         QComboBox *conversionTypeCombo = panel->findChild<QComboBox *>();
         if (conversionTypeCombo) {
-            conversionTypeCombo->setCurrentIndex(m_conversionType);
+            conversionTypeCombo->setCurrentIndex(getParam(QStringLiteral("conversionType")).toInt());
         }
     } catch (const std::exception &e) {
         VFP_DEBUG << "Exception in updateParamPanel:" << e.what();
@@ -460,34 +467,30 @@ NodeBase::NodeType ColorConversionNode::type() const
 
 void ColorConversionNode::setParam(const QString &name, const QVariant &value)
 {
-    if (name == "conversionType") {
-        m_conversionType = static_cast<ConversionType>(value.toInt());
-        m_params[name] = value;
-    }
+    // 只写参数表（基类加锁 + 校验）。
+    // 旧实现只处理 conversionType 且**不调基类** ⇒ 其它键的写入被静默丢弃（旁路，已纠正）。
+    HalconNode::setParam(name, value);
 }
 
-QVariant ColorConversionNode::getParam(const QString &name) const
-{
-    if (name == "conversionType") {
-        return static_cast<int>(m_conversionType);
-    }
-    return QVariant();
-}
+// 说明：原 getParam 重写已**整段删除**——它对 conversionType 返回成员（绕过参数表的旁路）、
+// 对其它键返回空 QVariant（**吞掉**基类结果）。删除后一律走基类 getParam（参数表 = 唯一来源）。
 
 QJsonObject ColorConversionNode::toJson() const
 {
     QJsonObject json = HalconNode::toJson();
-    json["conversionType"] = static_cast<int>(m_conversionType);
+    // 顶层键保留（老读取方兼容），值取自参数表（唯一来源）；executionSuccess 是执行结果，保持原样
+    json["conversionType"] = QJsonValue::fromVariant(getParam(QStringLiteral("conversionType")));
     json["executionSuccess"] = m_executionSuccess;
     return json;
 }
 
 void ColorConversionNode::fromJson(const QJsonObject &json)
 {
-    HalconNode::fromJson(json);
-    if (json.contains("conversionType")) {
-        m_conversionType = static_cast<ConversionType>(json["conversionType"].toInt());
-        m_params["conversionType"] = json["conversionType"];
+    HalconNode::fromJson(json);   // conversionType 由基类从 params 恢复（唯一来源）
+    // 兼容更早方案：该键曾只存在顶层（无 params 段）。旧实现是 contains 守卫 + 保留成员原值
+    // ⇒ 缺键**保留原值**，故保留 contains 守卫。
+    if (!json.contains(QStringLiteral("params")) && json.contains("conversionType")) {
+        setParam(QStringLiteral("conversionType"), json.value("conversionType").toVariant());
     }
     // 恢复执行状态
     if (json.contains("executionSuccess")) {

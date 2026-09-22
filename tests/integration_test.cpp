@@ -15,6 +15,7 @@
 #include "DisplaySinkNode.h"
 #include "LoopNode.h"
 #include "DelayNode.h"
+#include "ColorConversionNode.h"
 #include "FilterNode.h"   // S1 残留试点：影子成员收口后的单源/并发回归
 #include "SortNode.h"
 #include "CounterNode.h"
@@ -2532,6 +2533,35 @@ void IntegrationTest::testShadowMemberSingleSourceAndConcurrentAccess()
     delayLegacy.setParam(QStringLiteral("delayMs"), 777);
     delayLegacy.fromJson(legacyDelay);
     QCOMPARE(delayLegacy.getParam(QStringLiteral("delayMs")).toInt(), 777);
+
+    // 同批第十二类（ColorConversionNode）：单源 + **纠正两处旁路**
+    //  ① setParam 旧实现只处理 conversionType 且不调基类 ⇒ 其它键写入被静默丢弃；
+    //  ② getParam 旧实现对其它键返回空 QVariant ⇒ 吞掉基类结果。
+    // 用例同时钉住"旁路已消失"（否则这条断言会红）。
+    ColorConversionNode colorConv;
+    colorConv.init();
+    QCOMPARE(colorConv.getParam(QStringLiteral("conversionType")).toInt(), 0);   // 默认 RGB_TO_GRAY
+    colorConv.setParam(QStringLiteral("conversionType"), 2);                     // RGB_TO_HSL
+    QCOMPARE(colorConv.getParam(QStringLiteral("conversionType")).toInt(), 2);
+    QCOMPARE(colorConv.toJson().value(QStringLiteral("conversionType")).toInt(), 2);
+
+    // 判别性：写一个"非 conversionType"的键 ⇒ 必须进参数表且能读回（旧实现两处都会失效）
+    colorConv.setParam(QStringLiteral("moduleStatus"), true);
+    QVERIFY2(colorConv.getParam(QStringLiteral("moduleStatus")).toBool(),
+             "非 conversionType 的键必须走基类（旧 setParam 会丢弃、旧 getParam 会返回空）");
+
+    ColorConversionNode colorConvRoundTrip;
+    colorConvRoundTrip.init();
+    colorConvRoundTrip.fromJson(colorConv.toJson());
+    QCOMPARE(colorConvRoundTrip.getParam(QStringLiteral("conversionType")).toInt(), 2);
+
+    // 旧格式（只有顶层键）：旧实现是 contains 守卫 + 保留成员原值 ⇒ 缺键**保留原值**
+    QJsonObject legacyColorConv;
+    ColorConversionNode colorConvLegacy;
+    colorConvLegacy.init();
+    colorConvLegacy.setParam(QStringLiteral("conversionType"), 3);   // GRAY_TO_RGB
+    colorConvLegacy.fromJson(legacyColorConv);
+    QCOMPARE(colorConvLegacy.getParam(QStringLiteral("conversionType")).toInt(), 3);
 }
 
 void IntegrationTest::testFlowExtrasRoundTrip()
