@@ -16,6 +16,7 @@
 #include "LoopNode.h"
 #include "DelayNode.h"
 #include "ColorConversionNode.h"
+#include "TcpCommNode.h"
 #include "FilterNode.h"   // S1 残留试点：影子成员收口后的单源/并发回归
 #include "SortNode.h"
 #include "CounterNode.h"
@@ -2562,6 +2563,40 @@ void IntegrationTest::testShadowMemberSingleSourceAndConcurrentAccess()
     colorConvLegacy.setParam(QStringLiteral("conversionType"), 3);   // GRAY_TO_RGB
     colorConvLegacy.fromJson(legacyColorConv);
     QCOMPARE(colorConvLegacy.getParam(QStringLiteral("conversionType")).toInt(), 3);
+
+    // 同批第十三类（TcpCommNode，通信四件套第 1 个）：单源 + **写侧钳制**（interval 下限 500ms）。
+    // 本类构造不建连（socket/server 在 openConnection 才创建），故可直接实例化；
+    // 其连接/重连**行为**由既有 CommWritebackTest 套件覆盖，本用例只钉参数纪律。
+    TcpCommNode tcp;
+    tcp.init();
+    QCOMPARE(tcp.getParam(QStringLiteral("autoReconnect")).toBool(), true);
+    QCOMPARE(tcp.getParam(QStringLiteral("reconnectInterval")).toInt(), 3000);
+
+    tcp.setParam(QStringLiteral("autoReconnect"), false);
+    tcp.setParam(QStringLiteral("reconnectInterval"), 1000);
+    QCOMPARE(tcp.getParam(QStringLiteral("autoReconnect")).toBool(), false);
+    QCOMPARE(tcp.getParam(QStringLiteral("reconnectInterval")).toInt(), 1000);
+
+    // 判别性：低于下限必须被**写侧**钳到 500（若改成"读侧钳、参数表存原值"，这条会红）
+    tcp.setParam(QStringLiteral("reconnectInterval"), 10);
+    QCOMPARE(tcp.getParam(QStringLiteral("reconnectInterval")).toInt(), 500);
+    QCOMPARE(tcp.toJson().value(QStringLiteral("params")).toObject()
+                 .value(QStringLiteral("reconnectInterval")).toInt(), 500);
+
+    TcpCommNode tcpRoundTrip;
+    tcpRoundTrip.init();
+    tcpRoundTrip.fromJson(tcp.toJson());
+    QCOMPARE(tcpRoundTrip.getParam(QStringLiteral("autoReconnect")).toBool(), false);
+    QCOMPARE(tcpRoundTrip.getParam(QStringLiteral("reconnectInterval")).toInt(), 500);
+
+    // 旧格式（只有顶层键）：旧实现对缺失键不处理 ⇒ 缺键**保留原值**
+    QJsonObject legacyTcp;
+    TcpCommNode tcpLegacy;
+    tcpLegacy.init();
+    tcpLegacy.setParam(QStringLiteral("autoReconnect"), false);
+    tcpLegacy.fromJson(legacyTcp);
+    QVERIFY2(!tcpLegacy.getParam(QStringLiteral("autoReconnect")).toBool(),
+             "旧格式缺键时必须保留原值（旧实现只在 params 里回落，不覆盖）");
 }
 
 void IntegrationTest::testFlowExtrasRoundTrip()

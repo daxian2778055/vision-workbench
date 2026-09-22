@@ -32,7 +32,9 @@ void TcpCommNode::init()
     m_reconnectTimer = new QTimer(this);
     m_reconnectTimer->setSingleShot(true);
     connect(m_reconnectTimer, &QTimer::timeout, this, [this]() {
-        if (!m_connected && !m_isServer && m_autoReconnect && !m_userClosed) {
+        // 参数唯一来源：参数表（原先读成员，与界面线程写构成无保护竞态）
+        if (!m_connected && !m_isServer
+            && getParam(QStringLiteral("autoReconnect")).toBool() && !m_userClosed) {
             // 后台异步重连：connectToHost 立即返回，成功/失败由信号驱动。
             // 同步 waitForConnected 会让"设备离线"变成"UI 周期性卡死"。
             m_asyncConnect = true;
@@ -43,28 +45,41 @@ void TcpCommNode::init()
 
 void TcpCommNode::setParam(const QString &name, const QVariant &value)
 {
-    if (name == QStringLiteral("autoReconnect")) {
-        m_autoReconnect = value.toBool();
-    } else if (name == QStringLiteral("reconnectInterval")) {
-        m_reconnectInterval = qMax(500, value.toInt());
+    // 只写参数表（基类加锁 + 校验；随方案自动序列化）。
+    // 钳制放**写侧**：interval 下限 500ms。旧实现把成员钳到 ≥500、参数表存原值 ⇒ 三个口径
+    //（成员 / 参数表 / 面板各读一份），现在统一为"参数表存钳后值"，排程与面板共用。
+    if (name == QStringLiteral("reconnectInterval")) {
+        HalconNode::setParam(name, qMax(500, value.toInt()));
+        return;
     }
-    HalconNode::setParam(name, value);   // 写入 m_params → 随方案自动序列化
+    HalconNode::setParam(name, value);
 }
 
 void TcpCommNode::fromJson(const QJsonObject &json)
 {
-    HalconNode::fromJson(json);
-    // m_params 恢复后同步成员（否则存了 false 的"自动重连"重启后仍按默认 true 跑）
-    m_autoReconnect = m_params.value(QStringLiteral("autoReconnect"), true).toBool();
-    m_reconnectInterval =
-        qMax(500, m_params.value(QStringLiteral("reconnectInterval"), 3000).toInt());
+    HalconNode::fromJson(json);   // autoReconnect / reconnectInterval 由基类从 params 恢复（唯一来源）
+    // 兼容更早方案：这两个键若只存在顶层（无 params 段），按旧语义补写。
+    // 旧实现对**缺失键不做处理**（`m_params.value(key, 默认)` 只是回落到已有值）⇒ 缺键**保留原值**，
+    // 故用 contains 守卫，不覆盖。
+    if (!json.contains(QStringLiteral("params"))) {
+        if (json.contains(QStringLiteral("autoReconnect"))) {
+            setParam(QStringLiteral("autoReconnect"),
+                     json.value(QStringLiteral("autoReconnect")).toVariant());
+        }
+        if (json.contains(QStringLiteral("reconnectInterval"))) {
+            setParam(QStringLiteral("reconnectInterval"),
+                     json.value(QStringLiteral("reconnectInterval")).toVariant());
+        }
+    }
 }
 
 void TcpCommNode::scheduleReconnect()
 {
-    if (m_isServer || !m_autoReconnect || m_userClosed) return;
+    // 参数唯一来源：参数表（本轮各取一次；interval 已由写侧钳到 ≥500ms）
+    const bool autoReconnect = getParam(QStringLiteral("autoReconnect")).toBool();
+    if (m_isServer || !autoReconnect || m_userClosed) return;
     if (m_reconnectTimer && !m_reconnectTimer->isActive())
-        m_reconnectTimer->start(m_reconnectInterval);
+        m_reconnectTimer->start(getParam(QStringLiteral("reconnectInterval")).toInt());
 }
 
 bool TcpCommNode::openConnection()
@@ -294,7 +309,7 @@ QWidget *TcpCommNode::createParamPanel()
     // 自动重连（客户端模式生效）
     auto *reconnectCheck = new QCheckBox(QStringLiteral("断线自动重连"));
     reconnectCheck->setObjectName(QStringLiteral("tcpAutoReconnect"));
-    reconnectCheck->setChecked(m_autoReconnect);
+    reconnectCheck->setChecked(getParam(QStringLiteral("autoReconnect")).toBool());
     connect(reconnectCheck, &QCheckBox::toggled, this, [this](bool on) {
         setParam(QStringLiteral("autoReconnect"), on);
     });
@@ -304,7 +319,7 @@ QWidget *TcpCommNode::createParamPanel()
     intervalSpin->setObjectName(QStringLiteral("tcpReconnectInterval"));
     intervalSpin->setRange(500, 60000);
     intervalSpin->setSingleStep(500);
-    intervalSpin->setValue(m_reconnectInterval);
+    intervalSpin->setValue(getParam(QStringLiteral("reconnectInterval")).toInt());
     connect(intervalSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this](int v) {
         setParam(QStringLiteral("reconnectInterval"), v);
     });
@@ -351,11 +366,11 @@ void TcpCommNode::updateParamPanel(QWidget *panel)
     }
     if (auto *cb = panel->findChild<QCheckBox *>(QStringLiteral("tcpAutoReconnect"))) {
         QSignalBlocker b(cb);
-        cb->setChecked(m_autoReconnect);
+        cb->setChecked(getParam(QStringLiteral("autoReconnect")).toBool());
     }
     if (auto *sp = panel->findChild<QSpinBox *>(QStringLiteral("tcpReconnectInterval"))) {
         QSignalBlocker b(sp);
-        sp->setValue(m_reconnectInterval);
+        sp->setValue(getParam(QStringLiteral("reconnectInterval")).toInt());
     }
     if (auto *lb = panel->findChild<QLabel *>(QStringLiteral("tcpState"))) {
         lb->setText(m_connected ? QStringLiteral("状态: 已连接")
