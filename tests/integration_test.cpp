@@ -1701,6 +1701,9 @@ void IntegrationTest::testDataObjectConcurrentAccess()
 // 现在句柄持 QPointer 弱引用：场景亡后 isHeld() 为假、释放为 no-op。
 void IntegrationTest::testSnapshotGuardSurvivesSceneDestruction()
 {
+    // M-2：本用例刻意让"场景先于快照句柄析构"，需临时关闭场景析构断言——否则 Debug 构建必 abort
+    // （仓库只跑 Release 门禁，等于埋雷）。用例结束恢复默认，不影响其它用例与生产语义。
+    FlowScene::setDanglingSnapshotAssertEnabled(false);
     FlowScene::GraphSnapshotGuard guard;
     {
         FlowScene scene;
@@ -1716,6 +1719,7 @@ void IntegrationTest::testSnapshotGuardSurvivesSceneDestruction()
     QVERIFY2(!guard.isHeld(), "场景析构后弱引用应自动置空");
     guard = FlowScene::GraphSnapshotGuard();   // 释放/移动赋值：场景已亡 → 必须 no-op，不得 UAF
     QVERIFY(!guard.isHeld());
+    FlowScene::setDanglingSnapshotAssertEnabled(true);   // M-2：恢复默认（生产语义）
 }
 
 void IntegrationTest::testStepModeExitRestoresNormalRun()

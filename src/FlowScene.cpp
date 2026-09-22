@@ -118,6 +118,8 @@ void FlowScene::requestNodeEdit(NodeBase *node)
         emit nodeEditRequested(node);
 }
 
+bool FlowScene::s_danglingSnapshotAssertEnabled = true;   // M-2：默认开启（生产必须暴露顺序错误）
+
 FlowScene::~FlowScene()
 {
     // N-2：仍有存活快照时销毁场景 = 调用方顺序错误（必须先停执行器 / setFlowScene(nullptr)）。
@@ -131,7 +133,9 @@ FlowScene::~FlowScene()
             qWarning() << "FlowScene destroyed while" << live
                        << "graph snapshot(s) alive — stop executors (setFlowScene(nullptr)) before "
                           "destroying the scene, otherwise the executor may touch destroyed nodes.";
-            Q_ASSERT(live == 0);
+            // M-2：默认断言（Debug 暴露顺序错误）；仅"刻意制造场景先亡"的用例临时关闭
+            if (s_danglingSnapshotAssertEnabled)
+                Q_ASSERT(live == 0);
         }
     }
     clearScene();

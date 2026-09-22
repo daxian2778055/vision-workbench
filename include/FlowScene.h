@@ -53,6 +53,11 @@ public:
     FlowScene(QObject *parent = nullptr);
     ~FlowScene();
 
+    /// M-2：析构时"仍有存活快照"的断言开关（默认开启，生产路径永远保持开启）。
+    /// 仅 testSnapshotGuardSurvivesSceneDestruction 这类**刻意**制造"场景先亡"的用例在用例内临时关闭；
+    /// 否则 Debug 构建下该用例必然 abort（仓库目前只跑 Release，等于埋了个 Debug 必炸的雷）。
+    static void setDanglingSnapshotAssertEnabled(bool on) { s_danglingSnapshotAssertEnabled = on; }
+
     NodeBase *createNode(NodeBase::NodeType type, const QPointF &pos, const QString &nodeName = "");
     /// 复制算子（含参数），生成偏移的副本并加入场景；失败返回 nullptr
     NodeBase *duplicateNode(NodeBase *node);
@@ -225,6 +230,7 @@ private:
     /// 保护 m_nodeItems / m_connectionItems / 墓碑队列（递归锁：removeNode→removeConnection 会嵌套）
     mutable QRecursiveMutex m_graphMutex;
     int m_liveSnapshotCount = 0;                    ///> 存活快照句柄数（>0 时删除只摘除不析构）
+    static bool s_danglingSnapshotAssertEnabled;    ///> M-2：析构断言开关（默认 true）
     QList<NodeBase *> m_retiredNodes;               ///> 墓碑：待析构节点（存活句柄归零后 flush）
     QList<MyProject::Connection *> m_retiredConnections;
 
