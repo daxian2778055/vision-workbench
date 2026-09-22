@@ -85,6 +85,37 @@ void FlowExecutor::disconnectFromScene()
     QObject::disconnect(s, &FlowScene::nodeRemoved, this, &FlowExecutor::onSceneNodeRemoved);
 }
 
+namespace {
+/// 诊断阶段名（下标与 FlowExecutor::m_diagPhase 的写入点一致）
+const char *const kWorkerPhaseNames[] = {
+    "未设置",                 // 0
+    "轮首：取快照前",          // 1
+    "轮首：已取快照，进图锁前", // 2
+    "图锁：等锁或锁内",        // 3
+    "已排序：节点循环前",      // 4
+    "节点循环中（执行节点）",  // 5
+    "轮末：落库前",            // 6
+    "轮末：落库后/统计前",      // 7
+    "轮末：统计后/发信号前",    // 8
+    "轮末：信号后（节拍/回转）", // 9
+};
+} // namespace
+
+QString FlowExecutor::workerPhaseName() const
+{
+    const int p = m_diagPhase.load(std::memory_order_relaxed);
+    const int nid = m_diagNodeId.load(std::memory_order_relaxed);
+    const int count = int(sizeof(kWorkerPhaseNames) / sizeof(kWorkerPhaseNames[0]));
+    if (p < 0 || p >= count) {
+        return QStringLiteral("未设置");
+    }
+    QString s = QString::fromUtf8(kWorkerPhaseNames[p]);
+    if (nid >= 0) {
+        s += QStringLiteral("(节点模块 %1)").arg(nid);
+    }
+    return s;
+}
+
 void FlowExecutor::onSceneNodeRemoved(NodeBase *node)
 {
     // S1 Stage 1b 第 2 步定稿：本槽**只登记、不清理**。
@@ -401,7 +432,9 @@ void FlowExecutor::run()
 
         // S1：本轮捕获一次拓扑快照（RAII 句柄，随迭代结束 / break / continue 自动释放）。
         // 持快照期间删除节点/连边只做墓碑延迟析构，整轮可安全使用这批裸指针；轮内不再访问场景容器。
+        m_diagPhase.store(1, std::memory_order_relaxed);   // 诊断：轮首/取快照前
         FlowScene::GraphSnapshotGuard graphSnapshot = scene->captureGraphSnapshot();
+        m_diagPhase.store(2, std::memory_order_relaxed);   // 诊断：已取快照
         const QList<NodeBase *> nodes = graphSnapshot.snapshot().nodes;
         if (nodes.isEmpty()) {
             emit executionStopped();   // 空场景同样需要终态信号（历史缺陷：静默退出，UI 卡"运行中"）
@@ -410,6 +443,7 @@ void FlowExecutor::run()
 
         QList<NodeBase *> sortedNodes;
         {
+            m_diagPhase.store(3, std::memory_order_relaxed);   // 诊断：等图锁 / 图锁内
             QMutexLocker cacheLock(&m_graphCacheMutex);
             // S1 Stage 1b：轮首安全点消费"删节点待清理"登记（GUI 侧只登记、不取本锁）
             applyPendingCachePurgesLocked();
@@ -431,6 +465,7 @@ void FlowExecutor::run()
             }
             sortedNodes = m_cachedSortedNodes;
         }
+        m_diagPhase.store(4, std::memory_order_relaxed);   // 诊断：已出图锁/节点循环前
 
         VFP_EXEC_DEBUG << "Sorted nodes count:" << sortedNodes.size();
 
@@ -457,6 +492,11 @@ void FlowExecutor::run()
             VFP_EXEC_DEBUG << "Executing node:" << node->fullName();
             locker.relock();
             if (m_state == ExecutionState::Stopped) {
+                // 既有缺陷修复（由新压测段 + 阶段探针定位）：**必须先解锁再 break**。
+                // 旧实现在持有 m_mutex 时 break，随后轮末/循环尾的 `QMutexLocker ml(&m_mutex)`
+                // 会对同一把**非递归**锁再次加锁 → **自死锁**：worker 永不退出、停止/退出失效。
+                // 触发条件：停止请求落在"轮内"（阶段探针实测卡在"轮末·信号后"）。
+                locker.unlock();
                 emit executionStopped();
                 break;
             }
@@ -466,6 +506,7 @@ void FlowExecutor::run()
             }
             
             if (m_state == ExecutionState::Stopped) {
+                locker.unlock();   // 同上：持 m_mutex 时 break 会在轮末/循环尾再锁同一把锁 → 自死锁
                 emit executionStopped();
                 break;
             }
@@ -488,7 +529,10 @@ void FlowExecutor::run()
                 continue;
             }
             
+            m_diagPhase.store(5, std::memory_order_relaxed);   // 诊断：节点循环
+            m_diagNodeId.store(node->moduleId(), std::memory_order_relaxed);
             executeNode(node, i == sortedNodes.size() - 1);
+            m_diagNodeId.store(-1, std::memory_order_relaxed);
             // 执行后激活下游（条件节点仅激活被选中分支）
             activateDownstream(node);
 
@@ -524,6 +568,7 @@ void FlowExecutor::run()
             }
         }
         
+        m_diagPhase.store(6, std::memory_order_relaxed);   // 诊断：轮末·落库前
         // 轮末批量落库：整轮结果一个事务提交。放在统计之前，保证本轮记录已落库。
         // 未启用数据库（databasePath 为空）时只清缓冲，不做任何 IO。
         if (!m_pendingResults.isEmpty()) {
@@ -533,11 +578,14 @@ void FlowExecutor::run()
                 AppDatabase::instance()->saveInspectionResults(batch);
             }
         }
+        m_diagPhase.store(7, std::memory_order_relaxed);   // 诊断：轮末·落库后
 
         // 轮次统计 + 周期性进程资源采样/日志
         recordRoundFinished(roundTimer.elapsed());
+        m_diagPhase.store(8, std::memory_order_relaxed);   // 诊断：轮末·统计后
 
         emit executionFinished();
+        m_diagPhase.store(9, std::memory_order_relaxed);   // 诊断：轮末·信号后（接下来是节拍/回转）
 
         // 连续模式 / 硬触发模式：自动循环执行（硬触发模式由相机触发帧门控每次循环）
         FlowMode currentMode;

@@ -1,0 +1,73 @@
+适用于 .NET Framework MSBuild 版本 17.14.40+3e7442088
+
+  Automatic MOC and UIC for target vfp_core
+  FlowExecutor.cpp
+  vfp_core.vcxproj -> E:\halcon\2\xin1\build\vfp_core.dir\Release\vfp_core.lib
+  Automatic MOC and UIC for target calib_min_probe
+  Automatic MOC and UIC for target halcon_deepocr_probe
+  Automatic MOC and UIC for target dnn_infer_test
+  Automatic MOC and UIC for target VisionFlowPlatform
+  Automatic MOC and UIC for target dl_cls_probe
+  Automatic MOC and UIC for target classifier_train_test
+  Automatic MOC and UIC for target comm_writeback_test
+  Automatic MOC and UIC for target dnn_detect_test
+  dl_cls_probe.vcxproj -> E:\halcon\2\xin1\build\bin\Release\dl_cls_probe.exe
+  Automatic MOC and UIC for target halcon_defect_probe
+  halcon_deepocr_probe.vcxproj -> E:\halcon\2\xin1\build\bin\Release\halcon_deepocr_probe.exe
+  Automatic MOC and UIC for target database_test
+  dnn_infer_test.vcxproj -> E:\halcon\2\xin1\build\bin\Release\dnn_infer_test.exe
+  Automatic MOC and UIC for target camera_io_test
+  calib_min_probe.vcxproj -> E:\halcon\2\xin1\build\bin\Release\calib_min_probe.exe
+  classifier_train_test.vcxproj -> E:\halcon\2\xin1\build\bin\Release\classifier_train_test.exe
+  Automatic MOC and UIC for target halcon_dl_probe
+  Automatic MOC and UIC for target halcon_envcheck_demo
+  halcon_defect_probe.vcxproj -> E:\halcon\2\xin1\build\bin\Release\halcon_defect_probe.exe
+  Automatic MOC and UIC for target halcon_extra_probe
+  halcon_dl_probe.vcxproj -> E:\halcon\2\xin1\build\bin\Release\halcon_dl_probe.exe
+  halcon_envcheck_demo.vcxproj -> E:\halcon\2\xin1\build\bin\Release\halcon_envcheck_demo.exe
+  Automatic MOC and UIC for target halcon_measure_smoke
+  Automatic MOC and UIC for target halcon_function_probe
+  halcon_extra_probe.vcxproj -> E:\halcon\2\xin1\build\bin\Release\halcon_extra_probe.exe
+  Automatic MOC and UIC for target halcon_node_probe
+  halcon_measure_smoke.vcxproj -> E:\halcon\2\xin1\build\bin\Release\halcon_measure_smoke.exe
+  Automatic MOC and UIC for target halcon_node_verify
+  halcon_function_probe.vcxproj -> E:\halcon\2\xin1\build\bin\Release\halcon_function_probe.exe
+  Automatic MOC and UIC for target halcon_ocr_barcode_probe
+  comm_writeback_test.vcxproj -> E:\halcon\2\xin1\build\bin\Release\comm_writeback_test.exe
+  Automatic MOC and UIC for target halcon_pixel_probe
+  dnn_detect_test.vcxproj -> E:\halcon\2\xin1\build\bin\Release\dnn_detect_test.exe
+  VisionFlowPlatform.vcxproj -> E:\halcon\2\xin1\build\bin\Release\VisionFlowPlatform.exe
+  Automatic MOC and UIC for target hde_train_probe
+  halcon_ocr_barcode_probe.vcxproj -> E:\halcon\2\xin1\build\bin\Release\halcon_ocr_barcode_probe.exe
+  halcon_node_verify.vcxproj -> E:\halcon\2\xin1\build\bin\Release\halcon_node_verify.exe
+  Automatic MOC and UIC for target integration_test
+  halcon_node_probe.vcxproj -> E:\halcon\2\xin1\build\bin\Release\halcon_node_probe.exe
+  Automatic MOC and UIC for target module_editor_test
+  database_test.vcxproj -> E:\halcon\2\xin1\build\bin\Release\database_test.exe
+  halcon_pixel_probe.vcxproj -> E:\halcon\2\xin1\build\bin\Release\halcon_pixel_probe.exe
+  Automatic MOC and UIC for target node_core_test
+  Automatic MOC and UIC for target opencv_angle_area_test
+  camera_io_test.vcxproj -> E:\halcon\2\xin1\build\bin\Release\camera_io_test.exe
+  Automatic MOC and UIC for target opencv_nodes_test
+  Automatic MOC and UIC for target panel_visibility_test
+  Automatic MOC and UIC for target opencv_serialization_test
+  hde_train_probe.vcxproj -> E:\halcon\2\xin1\build\bin\Release\hde_train_probe.exe
+  Automatic MOC and UIC for target perf_test
+  opencv_nodes_test.vcxproj -> E:\halcon\2\xin1\build\bin\Release\opencv_nodes_test.exe
+  Automatic MOC and UIC for target restricted_token_probe
+  module_editor_test.vcxproj -> E:\halcon\2\xin1\build\bin\Release\module_editor_test.exe
+  opencv_angle_area_test.vcxproj -> E:\halcon\2\xin1\build\bin\Release\opencv_angle_area_test.exe
+  restricted_token_probe.vcxproj -> E:\halcon\2\xin1\build\bin\Release\restricted_token_probe.exe
+  Automatic MOC and UIC for target result_table_test
+  Automatic MOC and UIC for target script_security_test
+  Automatic MOC and UIC for target tracker_test
+  integration_test.vcxproj -> E:\halcon\2\xin1\build\bin\Release\integration_test.exe
+  Automatic MOC and UIC for target variable_panel_test
+  panel_visibility_test.vcxproj -> E:\halcon\2\xin1\build\bin\Release\panel_visibility_test.exe
+  node_core_test.vcxproj -> E:\halcon\2\xin1\build\bin\Release\node_core_test.exe
+  perf_test.vcxproj -> E:\halcon\2\xin1\build\bin\Release\perf_test.exe
+  opencv_serialization_test.vcxproj -> E:\halcon\2\xin1\build\bin\Release\opencv_serialization_test.exe
+  tracker_test.vcxproj -> E:\halcon\2\xin1\build\bin\Release\tracker_test.exe
+  variable_panel_test.vcxproj -> E:\halcon\2\xin1\build\bin\Release\variable_panel_test.exe
+  script_security_test.vcxproj -> E:\halcon\2\xin1\build\bin\Release\script_security_test.exe
+  result_table_test.vcxproj -> E:\halcon\2\xin1\build\bin\Release\result_table_test.exe

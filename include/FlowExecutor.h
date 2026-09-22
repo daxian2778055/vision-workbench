@@ -109,6 +109,9 @@ public:
     // ---- 运行期统计（现场长跑诊断：轮次/耗时/失败/句柄/内存）----
     /// 取统计快照（线程安全；返回前会采样一次进程句柄数/内存，故资源字段为查询时刻值）
     FlowRuntimeStats runtimeStats() const;
+    /// **诊断**：执行线程当前所处阶段（含正在执行的节点模块号），供定位"worker 不退出"类挂起。
+    /// 由执行线程在关键点写入两个原子变量、任意线程可读；不参与任何业务逻辑，故可在挂起时安全轮询。
+    QString workerPhaseName() const;
     /// 清零统计（例如开始长跑观测前调用）
     void resetRuntimeStats();
     /// 统计日志间隔（ms），0=不输出；默认 60000（首轮立即输出一条便于确认埋点生效）
@@ -221,6 +224,10 @@ private:
     QElapsedTimer m_statsLogTimer;    /// 统计日志节流
     int m_statsLogIntervalMs = 60000; /// 统计日志间隔（ms），0=不输出
     bool m_roundHadFailure = false;   /// 本轮是否出现失败节点（仅执行线程访问）
+
+    // ---- 临时诊断（定位"worker 不退出"挂起用；问题定位后随修复一并决定去留）----
+    std::atomic<int> m_diagPhase {-1};    /// 当前阶段编号（见 kWorkerPhaseNames）
+    std::atomic<int> m_diagNodeId {-1};   /// 正在执行的节点模块号（无则 -1）
 
     // ---- S9 外部触发排队（有界 FIFO；忙时不再静默丢弃）----
     static constexpr int kMaxPendingExternalRounds = 3;  /// 待补跑上限：有界，避免越跑越落后腿

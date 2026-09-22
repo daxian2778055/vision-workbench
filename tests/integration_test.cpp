@@ -397,17 +397,12 @@ void IntegrationTest::testGraphSnapshotDefersDeletionDuringRound()
 // 说明二：所有等待都有界（最长 5s），避免把"卡住"变成测试挂死。
 void IntegrationTest::testNodeChurnDuringContinuousRun()
 {
-    // ── 默认跳过（显式开关才跑）────────────────────────────────────────────────────────────
-    // 本用例暴露的"压测后 worker 不退出"挂起，经 **A/B 对照**确认**不是本批改动引入**：
-    //   · B = 含本批改动：挂起，且 3-6s 内 CPU 增量 0s（=阻塞，非空转）；
-    //   · A = 基线（仅 stash 本批 src/include，保留本用例）：**同样挂起**。
-    // 结论：这是"运行期反复增删节点"路径上的**既有缺陷**，属 Phase B 待修项。
-    // 故默认 QSKIP，避免把一个"定位尚未完成"的缺陷变成门禁长期红灯；需要时用开关跑：
-    //   set VFP_RUN_NODE_CHURN_STRESS=1
-    if (qEnvironmentVariableIsEmpty("VFP_RUN_NODE_CHURN_STRESS")) {
-        QSKIP("运行期增删节点压测默认跳过：暴露的挂起为既有缺陷（基线同样复现），"
-              "待 Phase B 定位修复；显式开关 VFP_RUN_NODE_CHURN_STRESS=1 可复现");
-    }
+    // 历史（留档）：本用例最初默认 QSKIP——它暴露的"压测后 worker 不退出"挂起曾是**既有缺陷**：
+    //   · A/B 对照：B = 含当时改动：挂起（3-6s CPU 增量 0s = 阻塞，非空转）；
+    //     A = 基线（仅 stash 本批 src/include，保留本用例）：**同样挂起** ⇒ 与那批改动无关；
+    //   · 阶段探针连续 12 次采样全部停在同一处（"轮末：信号后"）⇒ 定位到 run() 循环尾**自死锁**：
+    //     节点循环里 Stopped 的两处 break 持 m_mutex 跳出，轮末/循环尾又锁同一把**非递归**锁。
+    // 该自死锁已随本批修复（见 commit）⇒ 本用例**恢复默认运行**，作为该缺陷的回归钉子。
 
     FlowScene scene;
     FlowExecutor exec;
@@ -455,7 +450,18 @@ void IntegrationTest::testNodeChurnDuringContinuousRun()
 
     // (1) 关键回归断言：压测后必须能停、线程必须能退出
     exec.stopExecution();
-    QVERIFY2(exec.wait(5000), "压测后执行器线程未退出（Stage 1b 首次尝试的挂起症状）");
+    if (!exec.wait(5000)) {
+        // 定位用：连续采样阶段探针 3 秒——阶段若在变=仍在推进；若始终不动=卡在该阶段
+        QStringList samples;
+        for (int i = 0; i < 12; ++i) {
+            samples << QStringLiteral("%1:%2").arg(i).arg(exec.workerPhaseName());
+            QTest::qWait(250);
+        }
+        QVERIFY2(false,
+                 qPrintable(QStringLiteral("压测后执行器线程未退出（Stage 1b 首次尝试的挂起症状）；"
+                                           "阶段采样：%1")
+                                .arg(samples.join(QStringLiteral(" | ")))));
+    }
     exec.setFlowScene(nullptr);
     QCoreApplication::processEvents();
 
