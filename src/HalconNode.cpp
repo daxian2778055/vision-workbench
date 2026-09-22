@@ -201,19 +201,35 @@ QJsonObject HalconNode::toJson() const
     }
     json["params"] = params;
 
-    if (!m_editMask.isNull()) {
-        QByteArray bytes;
-        QBuffer buf(&bytes);
-        buf.open(QIODevice::WriteOnly);
-        m_editMask.save(&buf, "PNG");
-        json[QStringLiteral("editMaskPng")] = QString::fromLatin1(bytes.toBase64());
+    {
+        QMutexLocker maskLocker(&m_maskMutex);   // 运行中存盘也不得与 UI 侧写掩膜竞争
+        if (!m_editMask.isNull()) {
+            QByteArray bytes;
+            QBuffer buf(&bytes);
+            buf.open(QIODevice::WriteOnly);
+            m_editMask.save(&buf, "PNG");
+            json[QStringLiteral("editMaskPng")] = QString::fromLatin1(bytes.toBase64());
+        }
     }
 
     return json;
 }
 
+QImage HalconNode::editMask() const
+{
+    QMutexLocker locker(&m_maskMutex);
+    return m_editMask;   // 持锁拷贝（隐式共享浅引用，不把内部状态暴露给调用方）
+}
+
+bool HalconNode::hasEditMask() const
+{
+    QMutexLocker locker(&m_maskMutex);
+    return !m_editMask.isNull();
+}
+
 void HalconNode::setEditMask(const QImage &mask)
 {
+    QMutexLocker locker(&m_maskMutex);
     if (mask.isNull()) {
         m_editMask = QImage();
         return;
@@ -223,6 +239,7 @@ void HalconNode::setEditMask(const QImage &mask)
 
 void HalconNode::clearEditMask()
 {
+    QMutexLocker locker(&m_maskMutex);
     m_editMask = QImage();
 }
 
@@ -324,13 +341,16 @@ void HalconNode::fromJson(const QJsonObject &json)
         }
     }
 
-    m_editMask = QImage();
-    const QString maskB64 = json.value(QStringLiteral("editMaskPng")).toString();
-    if (!maskB64.isEmpty()) {
-        const QByteArray bytes = QByteArray::fromBase64(maskB64.toLatin1());
-        m_editMask.loadFromData(bytes, "PNG");
-        if (!m_editMask.isNull())
-            m_editMask = m_editMask.convertToFormat(QImage::Format_Grayscale8);
+    {
+        QMutexLocker maskLocker(&m_maskMutex);
+        m_editMask = QImage();
+        const QString maskB64 = json.value(QStringLiteral("editMaskPng")).toString();
+        if (!maskB64.isEmpty()) {
+            const QByteArray bytes = QByteArray::fromBase64(maskB64.toLatin1());
+            m_editMask.loadFromData(bytes, "PNG");
+            if (!m_editMask.isNull())
+                m_editMask = m_editMask.convertToFormat(QImage::Format_Grayscale8);
+        }
     }
 }
 

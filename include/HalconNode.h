@@ -1,5 +1,8 @@
 #pragma once
 
+#include <QMutex>
+#include <QMutexLocker>
+
 // HImage 图容器基类；日常算法由派生类用 OpenCV 实现，HALCON 算法仅 DeepOCR。见 VisionIntegrationPolicy.h
 #include "VisionIntegrationPolicy.h"
 #include "NodeBase.h"
@@ -69,10 +72,11 @@ public:
     /// 是否支持掩膜涂抹（阈值/Blob 等）
     virtual bool supportsMaskEdit() const { return false; }
 
-    QImage editMask() const { return m_editMask; }
+    /// 掩膜读取：加锁并返回**拷贝**（QImage 隐式共享，跨线程直接读裸成员会与 UI 侧写形成竞态）
+    QImage editMask() const;
     void setEditMask(const QImage &mask);
     void clearEditMask();
-    bool hasEditMask() const { return !m_editMask.isNull(); }
+    bool hasEditMask() const;
 
 signals:
     /// 参数修改后自动预览完成信号
@@ -90,6 +94,9 @@ protected:
     ThreadSafeParams m_params;
     ParamSpecList m_paramSpecs; /// 参数描述（用于自动面板/序列化范围校验）
     QImage m_editMask;          /// 可选掩膜（白=保留，黑=忽略）
+    /// S1 残留专项：掩膜由 UI 线程写（ModuleEditorDialog → setEditMask）、执行线程读
+    /// （OpencvBlob/Threshold/Defect 经 editMask()）——统一由这把锁保护，读写都不碰裸成员。
+    mutable QMutex m_maskMutex;
 
     /// 加锁写入、不触发延迟预览（供子类写状态类参数）
     void setParamDirect(const QString &name, const QVariant &value);
