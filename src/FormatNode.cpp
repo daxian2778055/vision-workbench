@@ -25,8 +25,6 @@ void FormatNode::init()
 
     m_params[QStringLiteral("template")] = QStringLiteral("OK\r\n");
     m_params[QStringLiteral("outputSuffix")] = QString();
-    m_template = QStringLiteral("OK\r\n");
-    m_outputSuffix = QString();
 }
 
 bool FormatNode::process()
@@ -37,6 +35,10 @@ bool FormatNode::process()
 
 void FormatNode::run(bool /*autoSwitch*/)
 {
+    // 参数唯一来源：本轮取一次（局部快照）——避免逐次加锁，并保证同一轮内模板/后缀一致
+    const QString tmpl = getParam(QStringLiteral("template")).toString();
+    const QString outputSuffix = getParam(QStringLiteral("outputSuffix")).toString();
+
     // 获取输入数据
     QString inputStr;
     auto inputData = getInputData(0);
@@ -45,7 +47,7 @@ void FormatNode::run(bool /*autoSwitch*/)
         inputStr = var.toString();
     }
 
-    if (m_template.isEmpty()) {
+    if (tmpl.isEmpty()) {
         // 无模板时直接透传
         if (!inputStr.isEmpty()) {
             auto obj = QSharedPointer<DataObject>::create();
@@ -55,7 +57,7 @@ void FormatNode::run(bool /*autoSwitch*/)
         return;
     }
 
-    QString output = m_template;
+    QString output = tmpl;
 
     // 如果输入是 JSON，尝试替换 {fieldName} 占位符
     if (!inputStr.isEmpty()) {
@@ -103,7 +105,7 @@ void FormatNode::run(bool /*autoSwitch*/)
         }
     }
 
-    output += m_outputSuffix;
+    output += outputSuffix;
 
     auto obj = QSharedPointer<DataObject>::create();
     obj->setData(QVariant(output));
@@ -112,11 +114,7 @@ void FormatNode::run(bool /*autoSwitch*/)
 
 void FormatNode::setParam(const QString &name, const QVariant &value)
 {
-    if (name == QStringLiteral("template")) {
-        m_template = value.toString();
-    } else if (name == QStringLiteral("outputSuffix")) {
-        m_outputSuffix = value.toString();
-    }
+    // 只写参数表（基类加锁 + 校验），不再维护无锁成员镜像
     HalconNode::setParam(name, value);
 }
 
@@ -143,26 +141,24 @@ QWidget *FormatNode::createParamPanel()
     layout->addWidget(new QLabel(QStringLiteral("\u683C\u5F0F\u6A21\u677F:")));
     m_templateEdit = new QTextEdit();
     m_templateEdit->setObjectName(QStringLiteral("formatTemplate"));
-    m_templateEdit->setPlainText(m_template);
+    m_templateEdit->setPlainText(getParam(QStringLiteral("template")).toString());
     m_templateEdit->setMinimumHeight(80);
     m_templateEdit->setPlaceholderText(QStringLiteral("\u4F8B: OK,{X},{Y},{str}\\r\\n"));
     layout->addWidget(m_templateEdit);
 
     connect(m_templateEdit, &QTextEdit::textChanged, this, [this]() {
-        m_template = m_templateEdit->toPlainText();
-        setParam(QStringLiteral("template"), m_template);
+        setParam(QStringLiteral("template"), m_templateEdit->toPlainText());
     });
 
     layout->addWidget(new QLabel(QStringLiteral("\u8F93\u51FA\u540E\u7F00:")));
     auto *suffixEdit = new QLineEdit();
     suffixEdit->setObjectName(QStringLiteral("formatSuffix"));
-    suffixEdit->setText(m_outputSuffix);
+    suffixEdit->setText(getParam(QStringLiteral("outputSuffix")).toString());
     suffixEdit->setPlaceholderText(QStringLiteral("\u7A7A\u5219\u4E0D\u8FFD\u52A0"));
     layout->addWidget(suffixEdit);
 
     connect(suffixEdit, &QLineEdit::editingFinished, this, [this, suffixEdit]() {
-        m_outputSuffix = suffixEdit->text();
-        setParam(QStringLiteral("outputSuffix"), m_outputSuffix);
+        setParam(QStringLiteral("outputSuffix"), suffixEdit->text());
     });
 
     layout->addStretch();
@@ -174,27 +170,32 @@ void FormatNode::updateParamPanel(QWidget *panel)
     if (!panel) return;
     if (auto *edit = panel->findChild<QTextEdit *>(QStringLiteral("formatTemplate"))) {
         QSignalBlocker b(edit);
-        edit->setPlainText(m_template);
+        edit->setPlainText(getParam(QStringLiteral("template")).toString());
     }
     if (auto *suffix = panel->findChild<QLineEdit *>(QStringLiteral("formatSuffix"))) {
         QSignalBlocker b(suffix);
-        suffix->setText(m_outputSuffix);
+        suffix->setText(getParam(QStringLiteral("outputSuffix")).toString());
     }
 }
 
 QJsonObject FormatNode::toJson() const
 {
     QJsonObject obj = HalconNode::toJson();
-    obj[QStringLiteral("template")] = m_template;
-    obj[QStringLiteral("outputSuffix")] = m_outputSuffix;
+    // 顶层键保留（老读取方兼容），值一律取自参数表（唯一来源）
+    obj[QStringLiteral("template")] = QJsonValue::fromVariant(getParam(QStringLiteral("template")));
+    obj[QStringLiteral("outputSuffix")] =
+        QJsonValue::fromVariant(getParam(QStringLiteral("outputSuffix")));
     return obj;
 }
 
 void FormatNode::fromJson(const QJsonObject &json)
 {
-    HalconNode::fromJson(json);
-    m_template = json[QStringLiteral("template")].toString();
-    m_outputSuffix = json[QStringLiteral("outputSuffix")].toString();
-    m_params[QStringLiteral("template")] = m_template;
-    m_params[QStringLiteral("outputSuffix")] = m_outputSuffix;
+    HalconNode::fromJson(json);   // template/outputSuffix 由基类从 params 恢复（唯一来源）
+    // 兼容更早方案：这两个键曾只存在顶层（无 params 段）。
+    // 注意与旧实现逐字对齐：旧代码是无条件 `m_x = json["x"].toString()`，
+    // 故"键缺失"时取值是空串（template 空 ⇒ 透传模式），这里也必须无条件赋值，不能改成"缺失则保留默认"。
+    if (!json.contains(QStringLiteral("params"))) {
+        setParam(QStringLiteral("template"), json.value(QStringLiteral("template")).toString());
+        setParam(QStringLiteral("outputSuffix"), json.value(QStringLiteral("outputSuffix")).toString());
+    }
 }

@@ -18,6 +18,7 @@
 #include "FilterNode.h"   // S1 残留试点：影子成员收口后的单源/并发回归
 #include "SortNode.h"
 #include "CounterNode.h"
+#include "FormatNode.h"
 #include "FormulaNode.h"
 #include "ScriptSecurityPolicy.h"
 #include "ImageDisplayController.h"
@@ -2072,6 +2073,34 @@ void IntegrationTest::testShadowMemberSingleSourceAndConcurrentAccess()
     counterLegacy.fromJson(legacyCounter);
     QCOMPARE(counterLegacy.getParam(QStringLiteral("conditionMode")).toString(), QStringLiteral("number"));
     QCOMPARE(counterLegacy.getParam(QStringLiteral("threshold")).toDouble(), 33.0);
+
+    // 同批第四类（FormatNode）：单源 + 旧格式兼容，且"键缺失"语义必须与旧实现逐字一致
+    FormatNode fmt;
+    fmt.init();
+    fmt.setParam(QStringLiteral("template"), QStringLiteral("{X},{Y}"));
+    fmt.setParam(QStringLiteral("outputSuffix"), QStringLiteral("\r\n"));
+    QCOMPARE(fmt.getParam(QStringLiteral("template")).toString(), QStringLiteral("{X},{Y}"));
+    QCOMPARE(fmt.getParam(QStringLiteral("outputSuffix")).toString(), QStringLiteral("\r\n"));
+
+    const QJsonObject fmtJson = fmt.toJson();
+    QCOMPARE(fmtJson.value(QStringLiteral("template")).toString(), QStringLiteral("{X},{Y}"));
+    QCOMPARE(fmtJson.value(QStringLiteral("outputSuffix")).toString(), QStringLiteral("\r\n"));
+
+    FormatNode fmtRoundTrip;
+    fmtRoundTrip.init();
+    fmtRoundTrip.fromJson(fmtJson);
+    QCOMPARE(fmtRoundTrip.getParam(QStringLiteral("template")).toString(), QStringLiteral("{X},{Y}"));
+    QCOMPARE(fmtRoundTrip.getParam(QStringLiteral("outputSuffix")).toString(), QStringLiteral("\r\n"));
+
+    QJsonObject legacyFormat;
+    legacyFormat[QStringLiteral("template")] = QStringLiteral("A={A}");
+    FormatNode fmtLegacy;
+    fmtLegacy.init();
+    fmtLegacy.fromJson(legacyFormat);
+    QCOMPARE(fmtLegacy.getParam(QStringLiteral("template")).toString(), QStringLiteral("A={A}"));
+    // 旧实现是无条件 `m_outputSuffix = json["outputSuffix"].toString()` → 键缺失时取空串（不追加后缀）。
+    // 若哪天有人把兼容分支改成"缺失则保留默认值"，本断言会失败（这就是它存在的意义）。
+    QCOMPARE(fmtLegacy.getParam(QStringLiteral("outputSuffix")).toString(), QString());
 }
 
 void IntegrationTest::testFlowExtrasRoundTrip()

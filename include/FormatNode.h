@@ -23,8 +23,8 @@ public:
     void fromJson(const QJsonObject &json) override;
 
 private:
-    QString m_template;      /// 格式模板，如 "OK,{x:.2f},{y:.2f},{z}\r\n"
-    QString m_outputSuffix;  /// 输出后缀（默认 \r\n）
+    // S1 残留收口：template / outputSuffix 的唯一来源是参数表（默认值在 init() 写入），
+    // 不再保留无锁成员镜像——此前 setParam 写成员、run() 读成员，与界面线程写参数构成无保护竞态。
 
     QTextEdit *m_templateEdit = nullptr;
 };
