@@ -16,7 +16,8 @@ class QToolButton;
 ///
 /// 职责：
 ///   - 状态栏三项常驻信息：运行状态 / 本次耗时 / 触发计数，及其全部更新规则；
-///   - 「开始执行 / 停止执行 / 单次执行」按钮可用态（软触发才可开始；运行中可停止）；
+///   - 「开始执行 / 暂停·继续 / 停止执行 / 单次执行」按钮可用态（运行控制与流程模式解耦，
+///     对齐 VisionMaster：任何模式都能开始；暂停中可继续或停止）；
 ///   - 与 FlowExecutor 四个状态信号一一对应的状态机（onStarted/Stopped/Finished/Error）。
 ///
 /// 执行器与控件通过注入获得（setExecutorProvider / setControls），不反向依赖 MainWindow；
@@ -27,8 +28,9 @@ class ExecutionStatusController : public QObject
 public:
     explicit ExecutionStatusController(QStatusBar *statusBar, QObject *parent = nullptr);
 
-    /// 注入受控控件（允许为空：无界面环境下只跑状态机）
-    void setControls(QAction *startAction, QAction *stopAction, QToolButton *singleShotBtn);
+    /// 注入受控控件（允许为空：无界面环境下只跑状态机）。pauseBtn 为「暂停/继续」切换按钮。
+    void setControls(QAction *startAction, QAction *stopAction, QToolButton *singleShotBtn,
+                     QToolButton *pauseBtn = nullptr);
     /// 注入"当前激活执行器"取值函数（按钮态与连续模式判定用）
     void setExecutorProvider(std::function<FlowExecutor *()> provider)
     { m_executorProvider = std::move(provider); }
@@ -41,6 +43,11 @@ public:
     void onStopped();
     void onFinished();
     void onError(const QString &error);
+    /// 暂停请求已受理（当前节点可能仍在跑）/ 真停稳 / 已继续
+    /// —— 与 FlowExecutor 的 executionPaused / executionParked / executionResumed 一一对应
+    void onPaused();
+    void onParked();
+    void onResumed();
 
     // 供诊断/测试
     QString stateText() const;
@@ -55,6 +62,7 @@ private:
     QAction *m_startAction = nullptr;
     QAction *m_stopAction = nullptr;
     QToolButton *m_singleShotBtn = nullptr;
+    QToolButton *m_pauseBtn = nullptr;
     std::function<FlowExecutor *()> m_executorProvider;
     QElapsedTimer m_runTimer;
     qint64 m_lastRunMs = 0;

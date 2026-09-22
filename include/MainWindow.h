@@ -72,7 +72,8 @@ private slots:
     void onCloseFlowTab(int index);
     void onNodeSelected(NodeBase *node);
     void onSwitchLanguage();  // 切换语言
-    void onStartExecution();   // 开始执行（仅软触发模式有效）
+    void onStartExecution();   // 开始执行（任何模式；暂停中按=继续）
+    void onPauseResumeExecution();  // 暂停/继续（连续模式下即"启动后的暂停切换"）
     void onStopExecution();    // 停止执行
     void onSingleShotExecution(); // 单次执行（不改变流程模式）
     void onExecutionStarted();
@@ -180,6 +181,7 @@ protected:
     QComboBox *m_flowModeCombo;   // 流程模式下拉框
     QToolButton *m_singleShotBtn;
     QToolButton *m_stepBtn;   /// 单步执行按钮 // 单次执行按钮
+    QToolButton *m_pauseBtn = nullptr;  /// 暂停/继续按钮（运行控制与模式解耦后新增）
     NodeBase *m_selectedNode;
     /// 测量节点 ROI 按钮信号连接（防重复连接；取点状态在 ImageDisplayController）
     QMetaObject::Connection m_roiPickConn;

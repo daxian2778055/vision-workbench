@@ -325,6 +325,15 @@ MainWindow::MainWindow(QWidget *parent) :
                 if (m_executor) m_executor->stepExecution();
             });
 
+            // 暂停/继续按钮：运行中→暂停；暂停中→继续（连续模式下的"启动后暂停切换"就靠它）
+            m_pauseBtn = new QToolButton();
+            m_pauseBtn->setObjectName("pauseBtn");
+            m_pauseBtn->setText(QStringLiteral("暂停"));
+            m_pauseBtn->setToolTip(QStringLiteral("暂停当前流程（不清输入缓存）；再按继续"));
+            m_pauseBtn->setStyleSheet(m_stepBtn->styleSheet());
+            mainToolBar->addWidget(m_pauseBtn);
+            connect(m_pauseBtn, &QToolButton::clicked, this, &MainWindow::onPauseResumeExecution);
+
             // 分隔
             mainToolBar->addSeparator();
 
@@ -390,19 +399,18 @@ MainWindow::MainWindow(QWidget *parent) :
                     m_executor->wait(500);
                 }
 
+                // 运行控制与模式选择解耦（对齐 VisionMaster）：切模式只决定"怎么跑"，不再自动开跑，
+                // 一律由「开始执行」启动。此前连续/硬触发模式一切过去就自动 start：用户既找不到"启动"
+                // 入口，也不理解为什么停止后起不来（开始按钮还被"仅软触发可用"规则禁用）。
                 switch (mode) {
                 case FlowMode::Continuous:
-                    logMessage(QStringLiteral("已切换为连续模式，流程自动循环执行..."));
-                    m_executor->startExecution();
+                    logMessage(QStringLiteral("已切换为连续模式：点「开始执行」开始循环运行，运行中可用「暂停」"));
                     break;
                 case FlowMode::SoftwareTrigger:
-                    logMessage(QStringLiteral("已切换为软触发模式，点击「开始执行」运行一次流程"));
+                    logMessage(QStringLiteral("已切换为软触发模式：点「开始执行」运行一次流程"));
                     break;
                 case FlowMode::HardwareTrigger:
-                    logMessage(QStringLiteral("已切换为硬触发模式，等待相机触发源信号..."));
-                    // 启动执行线程：循环中的 MVS 图像源会阻塞等待硬件触发帧，
-                    // 每次触发源生效即执行一次流程
-                    m_executor->startExecution();
+                    logMessage(QStringLiteral("已切换为硬触发模式：点「开始执行」进入等待，相机每来一帧执行一次"));
                     break;
                 }
                 // 按钮态单一来源：开始/停止/单次执行可用性由 ExecutionStatusController 统一决定，
@@ -417,7 +425,8 @@ MainWindow::MainWindow(QWidget *parent) :
         // ---- 状态栏运行信息：运行状态 / 本次耗时 / 触发计数 ----
         // 状态机、三项常驻标签与「开始/停止/单次执行」按钮态集中到 ExecutionStatusController
         m_execStatus = new ExecutionStatusController(ui->statusBar, this);
-        m_execStatus->setControls(ui->actionStartExecution, ui->actionStopExecution, m_singleShotBtn);
+        m_execStatus->setControls(ui->actionStartExecution, ui->actionStopExecution, m_singleShotBtn,
+                                  m_pauseBtn);
         m_execStatus->setExecutorProvider([this]() { return m_executor; });
 
         // 统一执行器信号连接（N3 富反馈统一）：首执行器不再直连（旧实现无门槛——后台跑首流程
@@ -651,6 +660,17 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
     connect(ex, &FlowExecutor::executionResumed, this, [ex]() {
         if (FlowScene *s = ex->flowScene())
             s->setEditLocked(!ex->allowsGraphEditing());
+    });
+    // 运行控制的状态反馈：暂停请求已受理 / 真停稳 / 已继续（ex == m_executor 门槛，避免后台流程
+    // 污染当前状态栏与按钮态）
+    connect(ex, &FlowExecutor::executionPaused, this, [this, ex]() {
+        if (ex == m_executor && m_execStatus) m_execStatus->onPaused();
+    });
+    connect(ex, &FlowExecutor::executionParked, this, [this, ex]() {
+        if (ex == m_executor && m_execStatus) m_execStatus->onParked();
+    });
+    connect(ex, &FlowExecutor::executionResumed, this, [this, ex]() {
+        if (ex == m_executor && m_execStatus) m_execStatus->onResumed();
     });
     connect(ex, &FlowExecutor::executionError, this, [this, ex](const QString &err) {
         if (ex == m_executor) onExecutionError(err);
@@ -1661,13 +1681,32 @@ void MainWindow::onManageGlobalCameras()
 
 void MainWindow::onStartExecution()
 {
-    // 仅软触发模式有效
-    if (m_executor->getFlowMode() == FlowMode::SoftwareTrigger) {
-        // 明确点"开始执行"= 正常跑一遍，退出上次遗留的单步模式
-        // （历史缺陷：单步模式粘住，之后每次"开始执行"仍在每个节点后暂停）
-        m_executor->exitStepMode();
-        m_executor->startExecution();
+    if (!m_executor)
+        return;
+    // 运行控制与流程模式解耦（对齐 VisionMaster 的操作逻辑）：任何模式下都能"开始"，暂停中按=继续。
+    // 旧实现写死"仅软触发有效"，连续/硬触发模式下点它毫无反应（静默忽略、无任何提示），而这两种模式
+    // 此前又靠"切模式自动开跑" → 用户停止后既找不到启动入口、点开始也没反应（现场反馈"点了没用"）。
+    const ExecutionState st = m_executor->getState();
+    if (st == ExecutionState::Running || st == ExecutionState::Paused) {
+        m_executor->resumeExecution();   // 已在跑/暂停：按"开始"视为继续，不留"点了没反应"的死按钮
+        return;
     }
+    // 明确点"开始执行"= 正常跑一遍，退出上次遗留的单步模式
+    // （历史缺陷：单步模式粘住，之后每次"开始执行"仍在每个节点后暂停）
+    m_executor->exitStepMode();
+    m_executor->startExecution();
+}
+
+void MainWindow::onPauseResumeExecution()
+{
+    if (!m_executor)
+        return;
+    const ExecutionState st = m_executor->getState();
+    if (st == ExecutionState::Running)
+        m_executor->pauseExecution();
+    else if (st == ExecutionState::Paused)
+        m_executor->resumeExecution();
+    // 其余状态按钮为禁用态，不会到达这里
 }
 
 void MainWindow::onSingleShotExecution()

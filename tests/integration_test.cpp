@@ -1931,8 +1931,14 @@ void IntegrationTest::testImageDisplayResolvePriority()
 
 void IntegrationTest::testExecutionStatusController()
 {
-    // Step 3 回归：执行状态机（状态文本/触发计数/耗时）与按钮态规则
-    // （软触发才可开始；运行中可停止；连续模式停止态下「开始」也不可用）。
+    // Step 3 回归：执行状态机（状态文本/触发计数/耗时）与按钮态规则。
+    // 按钮态规则（运行控制与流程模式解耦，对齐 VisionMaster 的操作逻辑）：
+    //   开始执行——任何模式下只要没在跑就可点（暂停中语义=继续）；
+    //   暂停/继续——运行中显示「暂停」，暂停中显示「继续」；
+    //   停止执行——运行中与暂停中都可点；
+    //   单次执行——仅软触发且未运行时可用。
+    // 历史缺陷（现场反馈"连续模式点开始没用"）：旧规则"仅软触发才启用开始"，且 Idle/Paused 落在
+    // default 分支不刷新按钮态 → 连续模式下停止后「开始」永久禁用、点了也没反应。
     QStatusBar bar;
     ExecutionStatusController ctrl(&bar);
 
@@ -1949,25 +1955,56 @@ void IntegrationTest::testExecutionStatusController()
     ctrl.onStopped();
     QCOMPARE(ctrl.stateText(), QStringLiteral("状态: 已停止"));
 
+    // 暂停/继续的状态反馈（与执行器 executionPaused/Parked/Resumed 三信号一一对应）
+    ctrl.onPaused();
+    QCOMPARE(ctrl.stateText(), QStringLiteral("状态: 暂停中…"));
+    ctrl.onParked();
+    QCOMPARE(ctrl.stateText(), QStringLiteral("状态: 已暂停"));
+    ctrl.onResumed();
+    QCOMPARE(ctrl.stateText(), QStringLiteral("状态: 运行中"));
+
     // 按钮态：注入真实控件 + 执行器
     QAction startAction;
     QAction stopAction;
     QToolButton singleShot;
+    QToolButton pauseBtn;
     FlowExecutor ex;
-    ctrl.setControls(&startAction, &stopAction, &singleShot);
+    ctrl.setControls(&startAction, &stopAction, &singleShot, &pauseBtn);
     ctrl.setExecutorProvider([&ex]() { return &ex; });
 
+    // 软触发 + 停止：可开始、可单次；不可停止；暂停按钮禁用
     ex.setFlowMode(FlowMode::SoftwareTrigger);
     ctrl.updateButtons(ExecutionState::Stopped);
-    QVERIFY(startAction.isEnabled() && singleShot.isEnabled() && !stopAction.isEnabled());
+    QVERIFY(startAction.isEnabled() && singleShot.isEnabled());
+    QVERIFY(!stopAction.isEnabled() && !pauseBtn.isEnabled());
 
+    // 运行中：可停止、可暂停（文字「暂停」）；开始/单次禁用
     ctrl.updateButtons(ExecutionState::Running);
-    QVERIFY(!startAction.isEnabled() && !singleShot.isEnabled() && stopAction.isEnabled());
+    QVERIFY(!startAction.isEnabled() && !singleShot.isEnabled());
+    QVERIFY(stopAction.isEnabled() && pauseBtn.isEnabled());
+    QCOMPARE(pauseBtn.text(), QStringLiteral("暂停"));
 
+    // 暂停中：开始（=继续）与停止都必须可用，暂停按钮变「继续」
+    ctrl.updateButtons(ExecutionState::Paused);
+    QVERIFY2(startAction.isEnabled(), "暂停中「开始执行」必须可用（语义=继续），不得是死按钮");
+    QVERIFY2(stopAction.isEnabled(), "暂停中必须能停止");
+    QVERIFY(pauseBtn.isEnabled());
+    QCOMPARE(pauseBtn.text(), QStringLiteral("继续"));
+    QVERIFY(!singleShot.isEnabled());
+
+    // 连续模式 + 停止：开始必须可用（旧规则在此永久禁用 → 现场"连续模式点开始没用"）
     ex.setFlowMode(FlowMode::Continuous);
     ctrl.updateButtons(ExecutionState::Stopped);
-    QVERIFY(!startAction.isEnabled() && !singleShot.isEnabled());
-    QVERIFY(!stopAction.isEnabled());
+    QVERIFY2(startAction.isEnabled(), "连续模式下停止后「开始执行」必须可用（现场回归点）");
+    QVERIFY2(!stopAction.isEnabled(), "未运行时不得可停止");
+    QVERIFY(!singleShot.isEnabled());   // 单次执行保持"以软触发跑一次"的语义
+    QVERIFY(!pauseBtn.isEnabled());
+
+    // 硬触发 + 空闲（Idle）：同样可开始（进入等待触发）
+    ex.setFlowMode(FlowMode::HardwareTrigger);
+    ctrl.updateButtons(ExecutionState::Idle);
+    QVERIFY2(startAction.isEnabled(), "硬触发/空闲下「开始执行」必须可用（进入等待触发）");
+    QVERIFY(!stopAction.isEnabled() && !pauseBtn.isEnabled());
 }
 
 void IntegrationTest::testRecentFilesMenu()
