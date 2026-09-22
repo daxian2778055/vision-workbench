@@ -455,8 +455,13 @@ void FlowExecutor::run()
                 for (int p = 0; p < node->outputPorts().size(); ++p) {
                     node->setOutputData(p, QSharedPointer<DataObject>());
                 }
-                m_nodeData[node].clear();   // 清空缓存，避免下游误用上一轮数据（E2）
-                m_nodeOutputVars[node->moduleId()].clear();  // 清空变量缓存，避免引用上一轮数值（P2）
+                {
+                    // S1 Stage 1b：三类执行缓存统一受 m_graphCacheMutex 保护
+                    //（锁内只有容器操作与 moduleId() 内联取值，无任何会再取锁的调用）
+                    QMutexLocker cacheLock(&m_graphCacheMutex);
+                    m_nodeData[node].clear();   // 清空缓存，避免下游误用上一轮数据（E2）
+                    m_nodeOutputVars[node->moduleId()].clear();  // 清空变量缓存，避免引用上一轮数值（P2）
+                }
                 recordNodeSkipped(node, QStringLiteral("分支未激活"));
                 continue;
             }
@@ -1071,7 +1076,11 @@ void FlowExecutor::executeLoop(NodeBase *loopNode, int loopCount)
         // 迭代变量
         // （循环体内节点可经 {循环模块号.iteration} 引用当前次数）
         loopNode->setParam(QStringLiteral("iteration"), iter);
-        m_nodeOutputVars[loopNode->moduleId()][QStringLiteral("iteration")] = iter;
+        {
+            // S1 Stage 1b：迭代变量写入入锁（后级 {循环模块号.iteration} 由 resolveParamRefs 读取）
+            QMutexLocker cacheLock(&m_graphCacheMutex);
+            m_nodeOutputVars[loopNode->moduleId()][QStringLiteral("iteration")] = iter;
+        }
 
         // 重新评估循环体激活集合：尊重条件分支，每轮重算（E5/P3）
         for (NodeBase *bn : body) m_activeNodes.remove(bn);
@@ -1120,8 +1129,12 @@ void FlowExecutor::executeLoop(NodeBase *loopNode, int loopCount)
                 // 跳过未激活分支：清空输出与缓存，避免下游误用旧数据（E2/E5/P2）
                 for (int p = 0; p < bn->outputPorts().size(); ++p)
                     bn->setOutputData(p, QSharedPointer<DataObject>());
-                m_nodeData[bn].clear();
-                m_nodeOutputVars[bn->moduleId()].clear();
+                {
+                    // S1 Stage 1b：循环体内跳过分支的清理同样入锁
+                    QMutexLocker cacheLock(&m_graphCacheMutex);
+                    m_nodeData[bn].clear();
+                    m_nodeOutputVars[bn->moduleId()].clear();
+                }
                 recordNodeSkipped(bn, QStringLiteral("分支未激活"));
                 continue;
             }
@@ -1203,9 +1216,14 @@ void FlowExecutor::propagateData(NodeBase *node)
         const int destPort = conn->getDestinationPort();
 
         DataObjectPtr data;
-        if (m_nodeData.contains(sourceNode) && m_nodeData[sourceNode].contains(sourcePort)) {
-            data = m_nodeData[sourceNode][sourcePort];
-        } else {
+        {
+            // S1 Stage 1b：读上游缓存入锁（端口回退取值走端口自身的锁，放在图锁之外）
+            QMutexLocker cacheLock(&m_graphCacheMutex);
+            if (m_nodeData.contains(sourceNode) && m_nodeData[sourceNode].contains(sourcePort)) {
+                data = m_nodeData[sourceNode][sourcePort];
+            }
+        }
+        if (!data) {
             data = sourceNode->getOutputData(sourcePort);
         }
 
@@ -1213,15 +1231,23 @@ void FlowExecutor::propagateData(NodeBase *node)
             data->setSourceInfo(QString("%1 的输出").arg(sourceNode->fullName()));
         }
         // 显式传播（含空值）：每轮覆盖下游旧输入，避免上一轮数据进入本轮检测（E2）
-        m_nodeData[node][destPort] = data;
+        {
+            // S1 Stage 1b：写下游缓存入锁（setInputData 走端口自身的锁，放在图锁之外）
+            QMutexLocker cacheLock(&m_graphCacheMutex);
+            m_nodeData[node][destPort] = data;
+        }
         node->setInputData(destPort, data);
     }
 }
 
 void FlowExecutor::resetState()
 {
-    m_nodeData.clear();
-    m_nodeOutputVars.clear();   // 重新启动清空变量缓存，避免引用上一轮数值（P2）
+    {
+        // S1 Stage 1b：重启清空缓存入锁（m_validOutputs 不在清除之列——与旧行为一致，由轮首剪枝处理）
+        QMutexLocker cacheLock(&m_graphCacheMutex);
+        m_nodeData.clear();
+        m_nodeOutputVars.clear();   // 重新启动清空变量缓存，避免引用上一轮数值（P2）
+    }
     m_executionQueue.clear();
 }
 
