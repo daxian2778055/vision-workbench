@@ -23,6 +23,7 @@
 #include "ClassifyNode.h"
 #include "ProtocolParseNode.h"
 #include "SendDataNode.h"
+#include "RecordNode.h"
 #include "ReceiveDataNode.h"
 #include <QDir>
 #include <QFile>
@@ -2367,6 +2368,48 @@ void IntegrationTest::testShadowMemberSingleSourceAndConcurrentAccess()
                         probeDir.filePath(QStringLiteral("does_not_exist.bmp")));
     QVERIFY2(cacheProbe.reusesCachedOutput(), "路径不存在 ⇒ 0 个文件，仍按可复用处理");
     probeDir.removeRecursively();
+
+    // 第二批第 1 类（RecordNode）：3 个参数（2 QString + 1 bool）单源 + 旧格式兼容
+    RecordNode recorder;
+    recorder.init();
+    QVERIFY2(!recorder.getParam(QStringLiteral("flowName")).toString().isEmpty(),
+             "init 必须写入 flowName 默认值（唯一来源）");
+    QVERIFY2(!recorder.getParam(QStringLiteral("nodeName")).toString().isEmpty(),
+             "init 必须写入 nodeName 默认值（唯一来源）");
+    QCOMPARE(recorder.getParam(QStringLiteral("passed")).toBool(), true);
+
+    recorder.setParam(QStringLiteral("flowName"), QStringLiteral("flow-A"));
+    recorder.setParam(QStringLiteral("nodeName"), QStringLiteral("node-1"));
+    recorder.setParam(QStringLiteral("passed"), false);
+    QCOMPARE(recorder.getParam(QStringLiteral("flowName")).toString(), QStringLiteral("flow-A"));
+    QCOMPARE(recorder.getParam(QStringLiteral("nodeName")).toString(), QStringLiteral("node-1"));
+    QCOMPARE(recorder.getParam(QStringLiteral("passed")).toBool(), false);
+
+    const QJsonObject recorderJson = recorder.toJson();
+    QCOMPARE(recorderJson.value(QStringLiteral("flowName")).toString(), QStringLiteral("flow-A"));
+    QCOMPARE(recorderJson.value(QStringLiteral("nodeName")).toString(), QStringLiteral("node-1"));
+    QCOMPARE(recorderJson.value(QStringLiteral("passed")).toBool(), false);
+
+    RecordNode recorderRoundTrip;
+    recorderRoundTrip.init();
+    recorderRoundTrip.fromJson(recorderJson);
+    QCOMPARE(recorderRoundTrip.getParam(QStringLiteral("flowName")).toString(), QStringLiteral("flow-A"));
+    QCOMPARE(recorderRoundTrip.getParam(QStringLiteral("nodeName")).toString(), QStringLiteral("node-1"));
+    QCOMPARE(recorderRoundTrip.getParam(QStringLiteral("passed")).toBool(), false);
+
+    // 旧格式（只有顶层键）：三键旧实现都带默认值 ⇒ 缺键**保留原值**
+    //（与上一类 ImageRead 的 filePath"无条件重置"相反——逐类对齐）
+    QJsonObject legacyRecorder;
+    legacyRecorder[QStringLiteral("nodeName")] = QStringLiteral("legacy-node");
+    RecordNode recorderLegacy;
+    recorderLegacy.init();
+    recorderLegacy.setParam(QStringLiteral("flowName"), QStringLiteral("keep-me"));
+    recorderLegacy.setParam(QStringLiteral("passed"), false);
+    recorderLegacy.fromJson(legacyRecorder);
+    QCOMPARE(recorderLegacy.getParam(QStringLiteral("nodeName")).toString(), QStringLiteral("legacy-node"));
+    QCOMPARE(recorderLegacy.getParam(QStringLiteral("flowName")).toString(), QStringLiteral("keep-me"));
+    QVERIFY2(!recorderLegacy.getParam(QStringLiteral("passed")).toBool(),
+             "旧格式缺 passed 键时必须保留原值（旧实现带默认值，不是重置）");
 }
 
 void IntegrationTest::testFlowExtrasRoundTrip()

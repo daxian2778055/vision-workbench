@@ -23,9 +23,10 @@ public:
     void fromJson(const QJsonObject &json) override;
 
 private:
-    QString m_flowName = QStringLiteral("流程 1");
-    QString m_nodeName = QStringLiteral("数据记录");
-    bool m_passed = true;
+    // S1 残留收口（第二批）：flowName / nodeName / passed 的唯一来源是参数表（默认值在 init() 写入），
+    // 不再保留无锁成员镜像——run() 在执行线程读它们，界面线程会写。
+    // 注：passed 是"要记录成什么结果"的**输入型参数**（界面复选框设置），不是执行产出的结果，
+    // 故与 imageWidth 那类"结果回读"不同，属本批收口范围。
 
     QLineEdit *m_flowNameEdit = nullptr;
     QLineEdit *m_nodeNameEdit = nullptr;
