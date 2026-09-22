@@ -100,6 +100,7 @@ private slots:
     void testScriptInterpreterResolvesToAbsolutePath();
     void testImageDisplayResolvePriority();
     void testExecutionStatusController();
+    void testFlowExtrasRoundTrip();   // 每流程身份（流程名 + 运行模式）随方案持久化
     void testRecentFilesMenu();
 
     // S4 回归：模块号必须单调且不复用（删节点后新建节点不得拿到被删节点的号）
@@ -1927,6 +1928,31 @@ void IntegrationTest::testImageDisplayResolvePriority()
     QCOMPARE(ctrl.resolveDisplayNode(nullptr), n2);
     canvasSelected = nullptr;
     QCOMPARE(ctrl.resolveDisplayNode(n1), n1);
+}
+
+void IntegrationTest::testFlowExtrasRoundTrip()
+{
+    // 每流程身份必须随方案持久化：
+    //  · flowName —— 触发按名路由的键（重排/删除流程后不得漂移）；
+    //  · flowMode —— 现场要求"不是所有流程都要连续"，所以模式必须跟着流程走、能存能读。
+    FlowScene scene;
+    scene.setFlowName(QStringLiteral("F1"));
+    scene.setFlowMode(0);   // 0=连续
+    const QJsonObject json = scene.extrasToJson();
+    QCOMPARE(json.value(QStringLiteral("flowName")).toString(), QStringLiteral("F1"));
+    QCOMPARE(json.value(QStringLiteral("flowMode")).toInt(), 0);
+
+    FlowScene restored;
+    restored.extrasFromJson(json);
+    QCOMPARE(restored.flowName(), QStringLiteral("F1"));
+    QCOMPARE(restored.flowMode(), 0);
+
+    // 旧方案（无 flowMode 字段）：模式必须回落"软触发"(1)，绝不能把"连续"当默认——
+    // 否则老方案一载入就自动循环跑，风险远大于收益。
+    FlowScene legacy;
+    legacy.extrasFromJson(QJsonObject());
+    QVERIFY(legacy.flowName().isEmpty());
+    QCOMPARE(legacy.flowMode(), 1);
 }
 
 void IntegrationTest::testExecutionStatusController()

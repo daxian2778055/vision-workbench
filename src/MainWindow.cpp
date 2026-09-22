@@ -383,6 +383,7 @@ MainWindow::MainWindow(QWidget *parent) :
                 int tabIdx = ui->flowTabs->currentIndex();
                 if (tabIdx >= 0 && tabIdx < m_flowScenes.size()) {
                     m_flowModes[m_flowScenes[tabIdx]] = mode;
+                    m_flowScenes[tabIdx]->setFlowMode(static_cast<int>(mode));   // 每流程模式写回场景，随方案保存
                     static const char *modeSuffix[] = { " [连续]", " [软触发]", " [硬触发]" };
                     int mi = static_cast<int>(mode);
                     const char *suffix = (mi >= 0 && mi < 3) ? modeSuffix[mi] : "";
@@ -1850,12 +1851,24 @@ void MainWindow::loadProjectFile(const QString &fileName)
             flowName = GlobalTriggerManager::instance()->allocFlowName();
         scene->setFlowName(flowName);   // 回写，保证重新保存时身份一致
 
+        // 每流程运行模式：优先用方案里存的（不是所有流程都要连续），缺失/越界再回落软触发；
+        // 同时写回 m_flowModes（组合框/按钮态都读它）并同步给该流程的执行器。
+        const int persistedMode = scene->flowMode();
+        const FlowMode flowMode = (persistedMode >= 0 && persistedMode <= 2)
+                                      ? static_cast<FlowMode>(persistedMode)
+                                      : FlowMode::SoftwareTrigger;
+        m_flowModes[scene] = flowMode;
+        const QString modeSuffix = (persistedMode == 0)
+                                       ? QStringLiteral(" [连续]")
+                                       : (persistedMode == 2) ? QStringLiteral(" [硬触发]")
+                                                              : QStringLiteral(" [软触发]");
+
         QGraphicsView *view = new QGraphicsView(scene);
         VisionWorkbenchStyle::applyGraphicsViewWorkbenchDefaults(view);
         view->setDragMode(QGraphicsView::RubberBandDrag);
         view->setRubberBandSelectionMode(Qt::IntersectsItemShape);
         view->setFocusPolicy(Qt::StrongFocus);
-        ui->flowTabs->addTab(view, flowName);   // 显示名与路由名一致
+        ui->flowTabs->addTab(view, flowName + modeSuffix);   // 显示名与路由名一致，并标出该流程模式
 
         // 连接信号
         hookFlowScene(scene);
@@ -1866,6 +1879,7 @@ void MainWindow::loadProjectFile(const QString &fileName)
         if (flowEx) {
             flowEx->setFlowScene(scene);
             flowEx->setFlowName(flowName);
+            flowEx->setFlowMode(flowMode);   // 载入即按方案里的模式（连续/软触发/硬触发）生效
             GlobalTriggerManager::instance()->registerFlow(flowName, scene, flowEx);
         }
     }

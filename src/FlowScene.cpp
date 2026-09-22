@@ -851,6 +851,7 @@ QJsonObject FlowScene::extrasToJson() const
     }
     o[QStringLiteral("comments")] = comments;
     o[QStringLiteral("flowName")] = m_flowName;   // S2：流程名随方案持久化，触发按名路由保持身份
+    o[QStringLiteral("flowMode")] = m_flowMode;   // 每流程运行模式随方案持久化（不是所有流程都要连续）
 
     QJsonObject vars;
     for (auto it = m_flowVariables.constBegin(); it != m_flowVariables.constEnd(); ++it) {
@@ -886,6 +887,7 @@ void FlowScene::extrasFromJson(const QJsonObject &json)
     m_flowVariables.clear();
     m_fixtures.clear();
     m_flowName = json.value(QStringLiteral("flowName")).toString();   // S2：恢复流程名
+    m_flowMode = json.value(QStringLiteral("flowMode")).toInt(1);     // 恢复每流程运行模式（默认软触发）
 
     const QJsonObject vars = json.value(QStringLiteral("flowVariables")).toObject();
     for (auto it = vars.constBegin(); it != vars.constEnd(); ++it) {

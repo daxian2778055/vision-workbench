@@ -180,6 +180,12 @@ public:
     QString flowName() const { return m_flowName; }
     void setFlowName(const QString &name) { m_flowName = name; }
 
+    /// 运行模式（每流程一份，随方案持久化）：0=连续 / 1=软触发 / 2=硬触发。
+    /// 存 int 以免 FlowScene 依赖 FlowExecutor 的枚举；取值与 FlowMode 的顺序一致。
+    /// 现场要求"不是所有流程都要连续"——所以模式必须跟着流程走并落盘，而不是全局一份。
+    int flowMode() const { return m_flowMode; }
+    void setFlowMode(int mode) { m_flowMode = mode; }
+
     QJsonObject extrasToJson() const;
     void extrasFromJson(const QJsonObject &json);
 
@@ -230,6 +236,7 @@ private:
     QMap<QString, FlowVariable> m_flowVariables;
     QMap<QString, FlowFixture> m_fixtures;
     QString m_flowName;          /// 流程名称（方案持久化 + 触发按名路由，S2）
+    int m_flowMode = 1;          /// 运行模式（0=连续 1=软触发 2=硬触发；默认软触发，随方案持久化）
     bool m_editLocked = false;   /// 编辑锁定（连续模式运行时禁止布图操作）
 
     // ---- 撤销/重做状态 ----
