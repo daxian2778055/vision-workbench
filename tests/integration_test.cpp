@@ -17,6 +17,7 @@
 #include "DelayNode.h"
 #include "ColorConversionNode.h"
 #include "TcpCommNode.h"
+#include "SerialCommNode.h"
 #include "FilterNode.h"   // S1 残留试点：影子成员收口后的单源/并发回归
 #include "SortNode.h"
 #include "CounterNode.h"
@@ -2597,6 +2598,37 @@ void IntegrationTest::testShadowMemberSingleSourceAndConcurrentAccess()
     tcpLegacy.fromJson(legacyTcp);
     QVERIFY2(!tcpLegacy.getParam(QStringLiteral("autoReconnect")).toBool(),
              "旧格式缺键时必须保留原值（旧实现只在 params 里回落，不覆盖）");
+
+    // 同批第十四类（SerialCommNode，通信四件套第 2 个）：与 TCP 同款两参数（单源 + 写侧钳制）。
+    // 本类构造不打开串口（m_serial 在 openConnection 才创建），故可直接实例化；
+    // 其串口行为由既有 CommWritebackTest 覆盖。
+    SerialCommNode serial;
+    serial.init();
+    QCOMPARE(serial.getParam(QStringLiteral("autoReconnect")).toBool(), true);
+    QCOMPARE(serial.getParam(QStringLiteral("reconnectInterval")).toInt(), 3000);
+
+    serial.setParam(QStringLiteral("autoReconnect"), false);
+    serial.setParam(QStringLiteral("reconnectInterval"), 600);
+    QCOMPARE(serial.getParam(QStringLiteral("autoReconnect")).toBool(), false);
+    QCOMPARE(serial.getParam(QStringLiteral("reconnectInterval")).toInt(), 600);
+
+    // 判别性：低于下限必须被**写侧**钳到 500（若改成"读侧钳、参数表存原值"，这条会红）
+    serial.setParam(QStringLiteral("reconnectInterval"), 1);
+    QCOMPARE(serial.getParam(QStringLiteral("reconnectInterval")).toInt(), 500);
+
+    SerialCommNode serialRoundTrip;
+    serialRoundTrip.init();
+    serialRoundTrip.fromJson(serial.toJson());
+    QCOMPARE(serialRoundTrip.getParam(QStringLiteral("autoReconnect")).toBool(), false);
+    QCOMPARE(serialRoundTrip.getParam(QStringLiteral("reconnectInterval")).toInt(), 500);
+
+    // 旧格式（只有顶层键）：缺键**保留原值**（旧实现对缺失键不处理）
+    QJsonObject legacySerial;
+    SerialCommNode serialLegacy;
+    serialLegacy.init();
+    serialLegacy.setParam(QStringLiteral("reconnectInterval"), 900);
+    serialLegacy.fromJson(legacySerial);
+    QCOMPARE(serialLegacy.getParam(QStringLiteral("reconnectInterval")).toInt(), 900);
 }
 
 void IntegrationTest::testFlowExtrasRoundTrip()

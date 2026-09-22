@@ -34,34 +34,47 @@ void SerialCommNode::init()
     m_reconnectTimer = new QTimer(this);
     m_reconnectTimer->setSingleShot(true);
     connect(m_reconnectTimer, &QTimer::timeout, this, [this]() {
-        if (!m_connected && m_autoReconnect && !m_userClosed)
+        // 参数唯一来源：参数表（原先读成员，与界面线程写构成无保护竞态）
+        if (!m_connected && getParam(QStringLiteral("autoReconnect")).toBool() && !m_userClosed)
             openConnection();
     });
 }
 
 void SerialCommNode::setParam(const QString &name, const QVariant &value)
 {
-    if (name == QStringLiteral("autoReconnect")) {
-        m_autoReconnect = value.toBool();
-    } else if (name == QStringLiteral("reconnectInterval")) {
-        m_reconnectInterval = qMax(500, value.toInt());
+    // 只写参数表（基类加锁 + 校验）。钳制放**写侧**（interval 下限 500ms），
+    // 让重连排程与面板共用同一份值（旧实现：成员=钳后、参数表=原值、面板=读成员）。
+    if (name == QStringLiteral("reconnectInterval")) {
+        HalconNode::setParam(name, qMax(500, value.toInt()));
+        return;
     }
     HalconNode::setParam(name, value);
 }
 
 void SerialCommNode::fromJson(const QJsonObject &json)
 {
-    HalconNode::fromJson(json);
-    m_autoReconnect = m_params.value(QStringLiteral("autoReconnect"), true).toBool();
-    m_reconnectInterval =
-        qMax(500, m_params.value(QStringLiteral("reconnectInterval"), 3000).toInt());
+    HalconNode::fromJson(json);   // autoReconnect / reconnectInterval 由基类从 params 恢复（唯一来源）
+    // 兼容更早方案：这两个键若只存在顶层（无 params 段）则补写；
+    // 旧实现对缺失键不做处理 ⇒ **缺键保留原值**，故用 contains 守卫。
+    if (!json.contains(QStringLiteral("params"))) {
+        if (json.contains(QStringLiteral("autoReconnect"))) {
+            setParam(QStringLiteral("autoReconnect"),
+                     json.value(QStringLiteral("autoReconnect")).toVariant());
+        }
+        if (json.contains(QStringLiteral("reconnectInterval"))) {
+            setParam(QStringLiteral("reconnectInterval"),
+                     json.value(QStringLiteral("reconnectInterval")).toVariant());
+        }
+    }
 }
 
 void SerialCommNode::scheduleReconnect()
 {
-    if (!m_autoReconnect || m_userClosed) return;
+    // 参数唯一来源：参数表（本轮各取一次；interval 已由写侧钳到 ≥500ms）
+    const bool autoReconnect = getParam(QStringLiteral("autoReconnect")).toBool();
+    if (!autoReconnect || m_userClosed) return;
     if (m_reconnectTimer && !m_reconnectTimer->isActive())
-        m_reconnectTimer->start(m_reconnectInterval);
+        m_reconnectTimer->start(getParam(QStringLiteral("reconnectInterval")).toInt());
 }
 
 void SerialCommNode::applyPortSettings()
@@ -308,7 +321,7 @@ QWidget *SerialCommNode::createParamPanel()
     // 断线自动重连（USB 转串口掉线自愈）
     auto *reconnectCheck = new QCheckBox(QStringLiteral("\u65AD\u7EBF\u81EA\u52A8\u91CD\u8FDE"));
     reconnectCheck->setObjectName(QStringLiteral("serialAutoReconnect"));
-    reconnectCheck->setChecked(m_autoReconnect);
+    reconnectCheck->setChecked(getParam(QStringLiteral("autoReconnect")).toBool());
     connect(reconnectCheck, &QCheckBox::toggled, this, [this](bool on) {
         setParam(QStringLiteral("autoReconnect"), on);
     });
@@ -318,7 +331,7 @@ QWidget *SerialCommNode::createParamPanel()
     intervalSpin->setObjectName(QStringLiteral("serialReconnectInterval"));
     intervalSpin->setRange(500, 60000);
     intervalSpin->setSingleStep(500);
-    intervalSpin->setValue(m_reconnectInterval);
+    intervalSpin->setValue(getParam(QStringLiteral("reconnectInterval")).toInt());
     connect(intervalSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this](int v) {
         setParam(QStringLiteral("reconnectInterval"), v);
     });
@@ -375,11 +388,11 @@ void SerialCommNode::updateParamPanel(QWidget *panel)
     }
     if (auto *ck = panel->findChild<QCheckBox *>(QStringLiteral("serialAutoReconnect"))) {
         QSignalBlocker b(ck);
-        ck->setChecked(m_autoReconnect);
+        ck->setChecked(getParam(QStringLiteral("autoReconnect")).toBool());
     }
     if (auto *sp = panel->findChild<QSpinBox *>(QStringLiteral("serialReconnectInterval"))) {
         QSignalBlocker b(sp);
-        sp->setValue(m_reconnectInterval);
+        sp->setValue(getParam(QStringLiteral("reconnectInterval")).toInt());
     }
     if (auto *btn = panel->findChild<QPushButton *>(QStringLiteral("serialConnect"))) {
         btn->setText(m_connected ? QStringLiteral("\u65AD\u5F00\u8FDE\u63A5") : QStringLiteral("\u6253\u5F00\u8FDE\u63A5"));

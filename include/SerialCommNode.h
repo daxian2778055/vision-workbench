@@ -36,8 +36,13 @@ private:
     QSerialPort *m_serial = nullptr;
 
     // 断线自动重连（USB 转串口松动/掉线时自愈并报警）
+    // S1 残留收口（通信类第 14 类）：autoReconnect / reconnectInterval 的**唯一来源改为参数表**，
+    // 不再保留无锁成员镜像——原先 setParam 写成员、重连定时器与 scheduleReconnect 读成员，
+    // 与界面线程写同为无保护竞态。
+    // 钳制放**写侧**（interval 下限 500ms）：旧实现是成员钳、参数表存原值（成员/参数表/面板三个口径），
+    // 现在参数表直接存钳后值，重连排程与面板共用同一份。
+    // 以下成员**刻意保留**（非参数镜像）：m_serial / m_reconnectTimer（运行期资源）、
+    // m_userClosed（用户主动关闭标志，运行期流程状态）。
     QTimer *m_reconnectTimer = nullptr;
-    bool m_autoReconnect = true;
-    int m_reconnectInterval = 3000;
     bool m_userClosed = false;
 };
