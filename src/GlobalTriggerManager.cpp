@@ -185,8 +185,11 @@ void GlobalTriggerManager::onDataReceived(const QString &deviceName, const QByte
                 if (strIt != m_stringTriggers.end())
                     strIt->triggerCount++;
             } else {
-                VFP_DEBUG << "String trigger dropped (queue full):" << matchedSource
-                          << "→" << flowName;
+                // K-1：requestExternalRound()==false 有**两种**原因——① 非软触发模式（未受理，
+                // FlowExecutor 内部已单独打印 mode 原因）；② 软触发忙且待补跑队列已满（丢最旧）。
+                // 原来只写 "queue full" 会把①误导成②，现场排查会往"队列太小"方向查。
+                VFP_DEBUG << "String trigger not accepted (flow not in software-trigger mode, or pending queue full):"
+                          << matchedSource << "→" << flowName;
             }
         }
         if (accepted) {
@@ -273,8 +276,9 @@ void GlobalTriggerManager::onEventTriggered(const QString &eventId, const QList<
                 if (evIt != m_eventTriggers.end())
                     evIt->triggerCount++;
             } else {
-                VFP_DEBUG << "Event trigger dropped (queue full):" << matchedEventId
-                          << "→" << flowName;
+                // K-1：同字符串触发——false 可能是"非软触发模式未受理"，也可能是"队列满丢最旧"
+                VFP_DEBUG << "Event trigger not accepted (flow not in software-trigger mode, or pending queue full):"
+                          << matchedEventId << "→" << flowName;
             }
         }
         if (accepted) {

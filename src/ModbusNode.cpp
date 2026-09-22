@@ -670,23 +670,27 @@ bool ModbusNode::writeRegister(int address, double value)
 
     QModbusReply *reply = m_modbus->sendWriteRequest(writeUnit, m_slaveAddress);
     if (reply) {
-        if (!reply->isFinished()) {
-            connect(reply, &QModbusReply::finished, this, [this, reply, address, value, dataType, byteOrder]() {
-                if (reply->error() == QModbusDevice::NoError) {
-                    VFP_DEBUG << "Modbus write success at address" << address;
-                    // S4 段③：回读比对（段①②=已发出写 + 从站回执 OK；仅选项开启时执行）
-                    if (m_writeVerify)
-                        verifyWrittenValue(address, value, dataType, byteOrder);
-                } else {
-                    VFP_DEBUG << "Modbus write error at address" << address << ":" << reply->errorString();
-                    emit communicationError(
-                        QStringLiteral("Modbus写寄存器失败(地址%1):%2")
-                            .arg(address).arg(reply->errorString()));
-                }
-                reply->deleteLater();
-            });
+        // 回执处理抽成一份（K-2 同族修复）：原来 `isFinished()` 为真时只 deleteLater ——
+        // "写完就断"使 reply 同步完成时，**错误上报与 S4 回读校验都被静默丢掉**（且仍返回 true）。
+        const auto handleWriteReply = [this, address, value, dataType, byteOrder](QModbusReply *r2) {
+            if (r2->error() == QModbusDevice::NoError) {
+                VFP_DEBUG << "Modbus write success at address" << address;
+                // S4 段③：回读比对（段①②=已发出写 + 从站回执 OK；仅选项开启时执行）
+                if (m_writeVerify)
+                    verifyWrittenValue(address, value, dataType, byteOrder);
+            } else {
+                VFP_DEBUG << "Modbus write error at address" << address << ":" << r2->errorString();
+                emit communicationError(
+                    QStringLiteral("Modbus写寄存器失败(地址%1):%2")
+                        .arg(address).arg(r2->errorString()));
+            }
+            r2->deleteLater();
+        };
+        if (reply->isFinished()) {
+            handleWriteReply(reply);
         } else {
-            reply->deleteLater();
+            connect(reply, &QModbusReply::finished, this,
+                    [handleWriteReply, reply]() { handleWriteReply(reply); });
         }
         return true;
     }
@@ -701,17 +705,10 @@ void ModbusNode::verifyWrittenValue(int address, double expected, const QString 
     QModbusDataUnit readUnit(QModbusDataUnit::HoldingRegisters, address, wordCount);
     QModbusReply *r = m_modbus->sendReadRequest(readUnit, m_slaveAddress);
     if (!r) return;
-    if (r->isFinished()) {
-        // M-3：设备恰好断开时 sendReadRequest 可能返回"已完成且带错误"的 reply。此处必须照常上报——
-        // 否则回写校验恰恰在最需要报警的场景（写完就断）静默通过。
-        emit communicationError(QStringLiteral("Modbus回写校验读回失败(地址%1):%2")
-                                    .arg(address).arg(r->errorString()));
-        r->deleteLater();
-        return;
-    }
-    connect(r, &QModbusReply::finished, this, [this, r, address, expected, dataType, byteOrder]() {
-        if (r->error() == QModbusDevice::NoError) {
-            const QModbusDataUnit du = r->result();
+    // 一份处理逻辑，同步/异步两条路径共用（K-2：同步完成且**成功**的 reply 不得被误判成"读回失败"）
+    const auto handleVerifyReply = [this, address, expected, dataType, byteOrder](QModbusReply *reply) {
+        if (reply->error() == QModbusDevice::NoError) {
+            const QModbusDataUnit du = reply->result();
             QVector<quint16> words;
             words.reserve(du.valueCount());
             for (int i = 0; i < du.valueCount(); ++i)
@@ -724,10 +721,19 @@ void ModbusNode::verifyWrittenValue(int address, double expected, const QString 
             }
         } else {
             emit communicationError(QStringLiteral("Modbus回写校验读回失败(地址%1):%2")
-                                        .arg(address).arg(r->errorString()));
+                                        .arg(address).arg(reply->errorString()));
         }
-        r->deleteLater();
-    });
+        reply->deleteLater();
+    };
+    if (r->isFinished()) {
+        // M-3：设备恰好断开时 sendReadRequest 可能返回"已完成且带错误"的 reply。此处必须照常上报——
+        // 否则回写校验恰恰在最需要报警的场景（写完就断）静默通过。
+        // K-2（本轮）：但"同步完成**且成功**"的 reply 不能报失败（QModbus 现状几乎不可能，纯防御）——
+        // 故与异步路径共用 handleVerifyReply：成功则照常解析比对，只有真出错才报"读回失败"。
+        handleVerifyReply(r);
+        return;
+    }
+    connect(r, &QModbusReply::finished, this, [handleVerifyReply, r]() { handleVerifyReply(r); });
 }
 
 double ModbusNode::registerCurrentValue(int address) const
