@@ -217,11 +217,18 @@ int main(int argc, char *argv[])
     const QString lockPath =
         QDir::temp().filePath(QStringLiteral("VisionFlowPlatform.lock"));
     QLockFile instanceLock(lockPath);
-    instanceLock.setStaleLockTime(0);
+    // 残留锁必须能自愈：此前 setStaleLockTime(0) = 永不视为过期，而锁文件放在 %TEMP% 不会随进程退出
+    // 自动清除——任何一次崩溃/强杀/重启之后，之后每次启动都会走"已在运行"分支（且该分支自己会崩，
+    // 见下），现场表现就是"软件再也打不开"。改用 QLockFile 默认的 30s：它只在"锁文件超时 **且**
+    // 持有者进程已不存在"时才回收，故不会误抢正在运行实例的锁。
     if (!instanceLock.tryLock(100)) {
-        // 已有一个实例在运行：提示后退出
-        QMessageBox::warning(nullptr, QStringLiteral("VisionFlowPlatform"),
-                             QStringLiteral("程序已在运行，请勿重复启动。"));
+        // 已有一个实例在运行：提示后退出。
+        // ⚠ 此处必须先于 QApplication（要在最早期就挡住多开），因此**不能用 QMessageBox**：
+        // 在 QApplication 之前构造任何 QWidget 都会触发 Qt fail-fast（0xC0000409，进程直接消失，
+        // 用户看到的就是"双击没反应/打不开"）。改用 Win32 原生消息框 + 标准错误，二者都不依赖 Qt Widgets。
+        MessageBoxW(nullptr, L"程序已在运行，请勿重复启动。", L"VisionFlowPlatform",
+                    MB_OK | MB_ICONWARNING);
+        qWarning("VisionFlowPlatform is already running; exiting.");
         return 1;
     }
 
