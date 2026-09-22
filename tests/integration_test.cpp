@@ -20,7 +20,7 @@
 #include "CounterNode.h"
 #include "FormatNode.h"
 #include "FormulaNode.h"
-#include "FormulaNode.h"
+#include "ClassifyNode.h"
 #include "ScriptSecurityPolicy.h"
 #include "ImageDisplayController.h"
 #include "ExecutionStatusController.h"
@@ -2125,6 +2125,37 @@ void IntegrationTest::testShadowMemberSingleSourceAndConcurrentAccess()
     formulaLegacy.setParam(QStringLiteral("expression"), QStringLiteral("p2 * 3"));
     formulaLegacy.fromJson(legacyFormula);
     QCOMPARE(formulaLegacy.getParam(QStringLiteral("expression")).toString(), QStringLiteral("p2 * 3"));
+
+    // 同批第六类（ClassifyNode）：5 个参数（2 double + 3 QString）单源 + 旧格式兼容
+    ClassifyNode classify;
+    classify.init();
+    QCOMPARE(classify.getParam(QStringLiteral("thresholdLow")).toDouble(), 0.0);
+    QCOMPARE(classify.getParam(QStringLiteral("thresholdHigh")).toDouble(), 100.0);
+    classify.setParam(QStringLiteral("thresholdLow"), 10.0);
+    classify.setParam(QStringLiteral("thresholdHigh"), 90.0);
+    classify.setParam(QStringLiteral("nameMid"), QStringLiteral("MID"));
+    QCOMPARE(classify.getParam(QStringLiteral("thresholdLow")).toDouble(), 10.0);
+    QCOMPARE(classify.getParam(QStringLiteral("nameMid")).toString(), QStringLiteral("MID"));
+
+    const QJsonObject classifyJson = classify.toJson();
+    QCOMPARE(classifyJson.value(QStringLiteral("thresholdHigh")).toDouble(), 90.0);
+    QCOMPARE(classifyJson.value(QStringLiteral("nameMid")).toString(), QStringLiteral("MID"));
+
+    ClassifyNode classifyRoundTrip;
+    classifyRoundTrip.init();
+    classifyRoundTrip.fromJson(classifyJson);
+    QCOMPARE(classifyRoundTrip.getParam(QStringLiteral("thresholdLow")).toDouble(), 10.0);
+    QCOMPARE(classifyRoundTrip.getParam(QStringLiteral("nameMid")).toString(), QStringLiteral("MID"));
+
+    // 缺键保留原值（本类旧实现 5 个参数全带默认值）：先设 7.0，再载入**不含该键**的旧 JSON，必须仍是 7.0
+    QJsonObject legacyClassify;
+    legacyClassify[QStringLiteral("nameHigh")] = QStringLiteral("HIGH");
+    ClassifyNode classifyLegacy;
+    classifyLegacy.init();
+    classifyLegacy.setParam(QStringLiteral("thresholdLow"), 7.0);
+    classifyLegacy.fromJson(legacyClassify);
+    QCOMPARE(classifyLegacy.getParam(QStringLiteral("nameHigh")).toString(), QStringLiteral("HIGH"));
+    QCOMPARE(classifyLegacy.getParam(QStringLiteral("thresholdLow")).toDouble(), 7.0);
 }
 
 void IntegrationTest::testFlowExtrasRoundTrip()

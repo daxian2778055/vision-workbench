@@ -23,11 +23,9 @@ public:
     void fromJson(const QJsonObject &json) override;
 
 private:
-    double m_thresholdLow = 0.0;    /// 低于此值 → 低
-    double m_thresholdHigh = 100.0; /// 高于此值 → 高
-    QString m_nameLow = QStringLiteral("低");
-    QString m_nameMid = QStringLiteral("中");
-    QString m_nameHigh = QStringLiteral("高");
+    // S1 残留收口：5 个参数（thresholdLow/High、nameLow/Mid/High）的唯一来源是参数表，
+    // 默认值在 init() 写入；不再保留无锁成员镜像（原先 setParam 写成员、run() 读成员 = 无保护竞态）。
+    // 本类 getParam() 是纯转发（直接调基类），不存在 FormulaNode 那种"返回成员"的旁路，故保留不动。
 
     QDoubleSpinBox *m_lowSpin = nullptr;
     QDoubleSpinBox *m_highSpin = nullptr;
