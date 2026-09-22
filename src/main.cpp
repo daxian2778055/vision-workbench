@@ -10,6 +10,7 @@
 #include <QFile>
 #include <QTextStream>
 #include <QMutex>
+#include <QAbstractNativeEventFilter>
 #include <QLockFile>
 #include <QMessageBox>
 #include <QPushButton>
@@ -209,6 +210,50 @@ LONG WINAPI sehHandler(EXCEPTION_POINTERS *ep)
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
+/// 重复启动时把已运行实例"叫到前台"：第二实例广播注册消息，运行中的实例收到后把当前活动窗口
+/// （可能是登录对话框等模态框，其次才是主窗口）抬到前台。它自身不持有单实例锁、随后即退出。
+class ActivateRequestFilter : public QAbstractNativeEventFilter
+{
+public:
+    explicit ActivateRequestFilter(MainWindow *window) : m_window(window) {}
+
+    static void setActivateMessage(UINT id) { ms_activateMsg = id; }
+
+    bool nativeEventFilter(const QByteArray &eventType, void *message, qintptr *result) override
+    {
+        Q_UNUSED(eventType);
+        Q_UNUSED(result);
+        if (!ms_activateMsg)
+            return false;
+        auto *msg = static_cast<MSG *>(message);
+        if (!msg || msg->message != ms_activateMsg)
+            return false;
+
+        QWidget *target = QApplication::activeWindow();   // 优先抬当前活动窗口（模态框也能被抬起来）
+        if (!target)
+            target = m_window;
+        if (target) {
+            if (target->isMinimized())
+                target->showNormal();
+            else
+                target->show();
+            target->raise();
+            target->activateWindow();
+            // Qt 的 activateWindow() 在 Windows 前台锁下不保证成功，补一次原生调用
+            if (HWND hwnd = reinterpret_cast<HWND>(target->winId()))
+                SetForegroundWindow(hwnd);
+            qWarning("VisionFlowPlatform: activation request received, window brought to front.");
+        }
+        return false;
+    }
+
+private:
+    MainWindow *m_window;
+    static UINT ms_activateMsg;
+};
+
+UINT ActivateRequestFilter::ms_activateMsg = 0;
+
 } // namespace
 
 int main(int argc, char *argv[])
@@ -221,14 +266,24 @@ int main(int argc, char *argv[])
     // 自动清除——任何一次崩溃/强杀/重启之后，之后每次启动都会走"已在运行"分支（且该分支自己会崩，
     // 见下），现场表现就是"软件再也打不开"。改用 QLockFile 默认的 30s：它只在"锁文件超时 **且**
     // 持有者进程已不存在"时才回收，故不会误抢正在运行实例的锁。
+    // 已运行实例的"激活"通道：注册一条进程间消息，第二实例广播它，运行中的实例收到后把窗口提到前台。
+    // 用注册消息（RegisterWindowMessage）而非窗口标题/类名匹配——标题随方案名变化，靠不住。
+    const UINT activateMsg = RegisterWindowMessageW(L"VisionFlowPlatform.Activate");
+    ActivateRequestFilter::setActivateMessage(activateMsg);
+
     if (!instanceLock.tryLock(100)) {
-        // 已有一个实例在运行：提示后退出。
-        // ⚠ 此处必须先于 QApplication（要在最早期就挡住多开），因此**不能用 QMessageBox**：
-        // 在 QApplication 之前构造任何 QWidget 都会触发 Qt fail-fast（0xC0000409，进程直接消失，
-        // 用户看到的就是"双击没反应/打不开"）。改用 Win32 原生消息框 + 标准错误，二者都不依赖 Qt Widgets。
-        MessageBoxW(nullptr, L"程序已在运行，请勿重复启动。", L"VisionFlowPlatform",
-                    MB_OK | MB_ICONWARNING);
-        qWarning("VisionFlowPlatform is already running; exiting.");
+        // 已有一个实例在运行：把它的窗口提到前台，然后自己退出（不再弹需要点确认的框）。
+        // ⚠ 该分支必须先于 QApplication（要在最早期挡住多开），因此**不能用 QMessageBox**：在
+        // QApplication 之前构造任何 QWidget 都会触发 Qt fail-fast（0xC0000409 静默崩溃，
+        // 用户看到的就是"双击打不开"）。
+        AllowSetForegroundWindow(ASFW_ANY);   // 授权对端抢前台（否则对端受前台锁限制抬不起来）
+        const BOOL posted = activateMsg ? PostMessageW(HWND_BROADCAST, activateMsg, 0, 0) : FALSE;
+        qWarning("VisionFlowPlatform is already running; asked it to come to the foreground.");
+        if (!posted) {
+            // 广播失败（极少见）：退回原生提示，至少让用户知道原因（仍不依赖 Qt Widgets）
+            MessageBoxW(nullptr, L"程序已在运行，请查看任务栏或其他窗口。", L"VisionFlowPlatform",
+                        MB_OK | MB_ICONINFORMATION);
+        }
         return 1;
     }
 
@@ -285,9 +340,13 @@ int main(int argc, char *argv[])
         qRegisterMetaType<QVector<double>>("QVector<double>");
 
         MainWindow w;
+        // 重复启动 → 把本实例窗口（或当前活动对话框）提到前台：由第二实例广播的注册消息驱动
+        ActivateRequestFilter activateFilter(&w);
+        a.installNativeEventFilter(&activateFilter);
         w.show();
 
         int result = a.exec();
+        a.removeNativeEventFilter(&activateFilter);
 #ifndef QT_NO_DEBUG
         VFP_DEBUG << "Event loop exited with result:" << result;
 #endif
