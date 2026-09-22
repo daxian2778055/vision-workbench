@@ -36,8 +36,11 @@ private:
     void refreshFieldTable();
     void rebuildFieldsFromTable();
 
-    QString m_delimiter = QStringLiteral(",");
-    QList<ParseFieldDef> m_fields;
+    // S1 残留收口：delimiter 与字段定义列表（fieldDefs）的唯一来源都是参数表，不再保留无锁成员镜像。
+    // 此前界面线程点"应用"会 clear()/append() 这个列表，而执行线程正在迭代它 —— 属"容器迭代中被改"
+    // 的崩溃面（比标量撕裂更硬）。列表在参数表里以 QVariantList<QVariantMap{name,type,index}> 存放
+    // （本仓首个列表型参数；基类 setParam 对未声明范围的键原样入库，JSON 往返原生支持该类型），
+    // 读取侧拿到的是值拷贝，天然免疫就地修改。
 
     QLineEdit *m_delimiterEdit = nullptr;
     QTableWidget *m_fieldTable = nullptr;

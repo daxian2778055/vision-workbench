@@ -21,6 +21,7 @@
 #include "FormatNode.h"
 #include "FormulaNode.h"
 #include "ClassifyNode.h"
+#include "ProtocolParseNode.h"
 #include "ScriptSecurityPolicy.h"
 #include "ImageDisplayController.h"
 #include "ExecutionStatusController.h"
@@ -2156,6 +2157,53 @@ void IntegrationTest::testShadowMemberSingleSourceAndConcurrentAccess()
     classifyLegacy.fromJson(legacyClassify);
     QCOMPARE(classifyLegacy.getParam(QStringLiteral("nameHigh")).toString(), QStringLiteral("HIGH"));
     QCOMPARE(classifyLegacy.getParam(QStringLiteral("thresholdLow")).toDouble(), 7.0);
+
+    // 同批第七类（ProtocolParseNode）：标量 + **列表型**参数（fieldDefs = QVariantList<QVariantMap>）单源
+    ProtocolParseNode proto;
+    proto.init();
+    QCOMPARE(proto.getParam(QStringLiteral("delimiter")).toString(), QStringLiteral(","));
+    const QVariantList defFields = proto.getParam(QStringLiteral("fieldDefs")).toList();
+    QCOMPARE(defFields.size(), 1);
+    QCOMPARE(defFields.first().toMap().value(QStringLiteral("name")).toString(),
+             QStringLiteral("Field_0"));
+
+    QVariantList twoFields;
+    twoFields.append(QVariantMap{{QStringLiteral("name"), QStringLiteral("X")},
+                                 {QStringLiteral("type"), QStringLiteral("int")},
+                                 {QStringLiteral("index"), 0}});
+    twoFields.append(QVariantMap{{QStringLiteral("name"), QStringLiteral("Y")},
+                                 {QStringLiteral("type"), QStringLiteral("float")},
+                                 {QStringLiteral("index"), 1}});
+    proto.setParam(QStringLiteral("delimiter"), QStringLiteral(";"));
+    proto.setParam(QStringLiteral("fieldDefs"), twoFields);
+    QCOMPARE(proto.getParam(QStringLiteral("delimiter")).toString(), QStringLiteral(";"));
+    QCOMPARE(proto.getParam(QStringLiteral("fieldDefs")).toList().size(), 2);
+
+    // toJson 顶层键值与参数表一致（列表参数经 QJsonValue::fromVariant 落成 JSON 数组），且 params 内也带同一份
+    const QJsonObject protoJson = proto.toJson();
+    QCOMPARE(protoJson.value(QStringLiteral("delimiter")).toString(), QStringLiteral(";"));
+    const QJsonArray protoFields = protoJson.value(QStringLiteral("fieldDefs")).toArray();
+    QCOMPARE(protoFields.size(), 2);
+    QCOMPARE(protoFields.at(1).toObject().value(QStringLiteral("name")).toString(), QStringLiteral("Y"));
+    QCOMPARE(protoJson.value(QStringLiteral("params")).toObject()
+                 .value(QStringLiteral("fieldDefs")).toArray().size(), 2);
+
+    ProtocolParseNode protoRoundTrip;
+    protoRoundTrip.init();
+    protoRoundTrip.fromJson(protoJson);
+    QCOMPARE(protoRoundTrip.getParam(QStringLiteral("delimiter")).toString(), QStringLiteral(";"));
+    QCOMPARE(protoRoundTrip.getParam(QStringLiteral("fieldDefs")).toList().size(), 2);
+
+    // 旧格式（只有顶层键）语义与旧实现逐字对齐：delimiter 缺失 ⇒ ","；fieldDefs 缺失 ⇒ 重置为默认单字段
+    //（与上一类 ClassifyNode 的"缺键保留原值"**相反** —— 每类都必须按自己的旧语义实现）
+    QJsonObject legacyProto;
+    ProtocolParseNode protoLegacy;
+    protoLegacy.init();
+    protoLegacy.setParam(QStringLiteral("delimiter"), QStringLiteral("|"));
+    protoLegacy.setParam(QStringLiteral("fieldDefs"), twoFields);
+    protoLegacy.fromJson(legacyProto);
+    QCOMPARE(protoLegacy.getParam(QStringLiteral("delimiter")).toString(), QStringLiteral(","));
+    QCOMPARE(protoLegacy.getParam(QStringLiteral("fieldDefs")).toList().size(), 1);
 }
 
 void IntegrationTest::testFlowExtrasRoundTrip()

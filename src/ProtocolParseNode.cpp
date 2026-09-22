@@ -12,6 +12,55 @@
 #include <QJsonArray>
 #include <QJsonObject>
 
+namespace {
+
+/// 字段定义列表在参数表里的存放形态：QVariantList<QVariantMap{name,type,index}>。
+/// 下面两个转换是它与 QList<ParseFieldDef> 之间的唯一桥（读写两侧都走这里，格式只有一个来源）。
+QVariantList fieldsToVariantList(const QList<ParseFieldDef> &fields)
+{
+    QVariantList list;
+    list.reserve(fields.size());
+    for (const ParseFieldDef &f : fields) {
+        QVariantMap m;
+        m.insert(QStringLiteral("name"), f.name);
+        m.insert(QStringLiteral("type"), f.type);
+        m.insert(QStringLiteral("index"), f.index);
+        list.append(m);
+    }
+    return list;
+}
+
+QList<ParseFieldDef> variantListToFields(const QVariantList &list)
+{
+    QList<ParseFieldDef> fields;
+    fields.reserve(list.size());
+    for (const QVariant &v : list) {
+        const QVariantMap m = v.toMap();
+        ParseFieldDef f;
+        f.name = m.value(QStringLiteral("name")).toString();
+        // 注意：QVariant::toString() 无默认值重载（QJsonValue 才有）。
+        // 用 isValid 判定与旧的 `QJsonValue::toString("string")` 语义一致：
+        // 键缺失/非字符串 ⇒ "string"；键存在且显式为空串 ⇒ 保持空串。
+        const QVariant typeVar = m.value(QStringLiteral("type"));
+        f.type = typeVar.isValid() ? typeVar.toString() : QStringLiteral("string");
+        f.index = m.value(QStringLiteral("index")).toInt();
+        fields.append(f);
+    }
+    return fields;
+}
+
+/// 默认字段定义（与旧 init() 的初值一致）
+QVariantList defaultFieldDefs()
+{
+    ParseFieldDef d;
+    d.name = QStringLiteral("Field_0");
+    d.type = QStringLiteral("string");
+    d.index = 0;
+    return fieldsToVariantList({d});
+}
+
+} // namespace
+
 ProtocolParseNode::ProtocolParseNode(QObject *parent)
     : HalconNode(parent)
 {
@@ -25,13 +74,7 @@ void ProtocolParseNode::init()
     addOutputPort(QStringLiteral("\u89E3\u6790\u7ED3\u679C"), PortDataType::String);
 
     m_params[QStringLiteral("delimiter")] = QStringLiteral(",");
-
-    // 默认字段
-    ParseFieldDef def;
-    def.name = QStringLiteral("Field_0");
-    def.type = QStringLiteral("string");
-    def.index = 0;
-    m_fields.append(def);
+    m_params[QStringLiteral("fieldDefs")] = defaultFieldDefs();   // 默认一个字段（与旧 init 一致）
 }
 
 bool ProtocolParseNode::process()
@@ -42,6 +85,12 @@ bool ProtocolParseNode::process()
 
 void ProtocolParseNode::run(bool /*autoSwitch*/)
 {
+    // 参数唯一来源：本轮各取一次（局部快照）。列表读到的是 QVariant 值拷贝，
+    // 界面线程重建字段表只会替换参数值、不会就地改这个快照 —— 不存在"迭代中被 clear"的崩溃面。
+    const QString delimiter = getParam(QStringLiteral("delimiter")).toString();
+    const QList<ParseFieldDef> fields =
+        variantListToFields(getParam(QStringLiteral("fieldDefs")).toList());
+
     QString inputStr;
     auto inputData = getInputData(0);
     if (inputData) {
@@ -54,11 +103,11 @@ void ProtocolParseNode::run(bool /*autoSwitch*/)
     if (inputStr.isEmpty()) return;
 
     // 按分隔符拆分
-    QStringList parts = inputStr.split(m_delimiter, Qt::SkipEmptyParts);
+    QStringList parts = inputStr.split(delimiter, Qt::SkipEmptyParts);
 
     // 构建 JSON 输出
     QJsonObject jsonOut;
-    for (const auto &field : m_fields) {
+    for (const auto &field : fields) {
         if (field.index < 0 || field.index >= parts.size()) {
             // 默认值
             if (field.type == QStringLiteral("int")) jsonOut[field.name] = 0;
@@ -90,11 +139,7 @@ void ProtocolParseNode::run(bool /*autoSwitch*/)
 
 void ProtocolParseNode::setParam(const QString &name, const QVariant &value)
 {
-    if (name == QStringLiteral("delimiter")) {
-        m_delimiter = value.toString();
-    } else if (name == QStringLiteral("lastInput")) {
-        // just store
-    }
+    // 只写参数表（基类加锁 + 校验）。原 "lastInput" 分支是空操作（基类本就会存），一并去掉。
     HalconNode::setParam(name, value);
 }
 
@@ -122,14 +167,14 @@ QWidget *ProtocolParseNode::createParamPanel()
     layout->addWidget(new QLabel(QStringLiteral("\u5206\u9694\u7B26:")));
     m_delimiterEdit = new QLineEdit();
     m_delimiterEdit->setObjectName(QStringLiteral("parseDelimiter"));
-    m_delimiterEdit->setText(m_delimiter);
+    m_delimiterEdit->setText(getParam(QStringLiteral("delimiter")).toString());
     m_delimiterEdit->setPlaceholderText(QStringLiteral("\u9ED8\u8BA4\u9017\u53F7 ,"));
     layout->addWidget(m_delimiterEdit);
 
     connect(m_delimiterEdit, &QLineEdit::editingFinished, this, [this]() {
-        m_delimiter = m_delimiterEdit->text();
-        if (m_delimiter.isEmpty()) m_delimiter = QStringLiteral(",");
-        setParam(QStringLiteral("delimiter"), m_delimiter);
+        QString d = m_delimiterEdit->text();
+        if (d.isEmpty()) d = QStringLiteral(",");
+        setParam(QStringLiteral("delimiter"), d);
     });
 
     // 字段定义表
@@ -193,7 +238,9 @@ void ProtocolParseNode::refreshFieldTable()
 {
     if (!m_fieldTable) return;
     m_fieldTable->setRowCount(0);
-    for (const auto &f : m_fields) {
+    const QList<ParseFieldDef> fields =
+        variantListToFields(getParam(QStringLiteral("fieldDefs")).toList());
+    for (const auto &f : fields) {
         int row = m_fieldTable->rowCount();
         m_fieldTable->insertRow(row);
         m_fieldTable->setItem(row, 0, new QTableWidgetItem(f.name));
@@ -210,27 +257,30 @@ void ProtocolParseNode::refreshFieldTable()
 
 void ProtocolParseNode::rebuildFieldsFromTable()
 {
-    m_fields.clear();
-    if (!m_fieldTable) return;
-
-    for (int row = 0; row < m_fieldTable->rowCount(); ++row) {
-        ParseFieldDef f;
-        auto *nameItem = m_fieldTable->item(row, 0);
-        f.name = nameItem ? nameItem->text() : QStringLiteral("Field_%1").arg(row);
-        auto *typeCombo = qobject_cast<QComboBox *>(m_fieldTable->cellWidget(row, 1));
-        f.type = typeCombo ? typeCombo->currentText() : QStringLiteral("string");
-        auto *idxItem = m_fieldTable->item(row, 2);
-        f.index = idxItem ? idxItem->text().toInt() : row;
-        m_fields.append(f);
+    QList<ParseFieldDef> fields;
+    if (m_fieldTable) {
+        for (int row = 0; row < m_fieldTable->rowCount(); ++row) {
+            ParseFieldDef f;
+            auto *nameItem = m_fieldTable->item(row, 0);
+            f.name = nameItem ? nameItem->text() : QStringLiteral("Field_%1").arg(row);
+            auto *typeCombo = qobject_cast<QComboBox *>(m_fieldTable->cellWidget(row, 1));
+            f.type = typeCombo ? typeCombo->currentText() : QStringLiteral("string");
+            auto *idxItem = m_fieldTable->item(row, 2);
+            f.index = idxItem ? idxItem->text().toInt() : row;
+            fields.append(f);
+        }
     }
 
-    if (m_fields.isEmpty()) {
+    if (fields.isEmpty()) {
         ParseFieldDef d;
         d.name = QStringLiteral("Field_0");
         d.type = QStringLiteral("string");
         d.index = 0;
-        m_fields.append(d);
+        fields.append(d);
     }
+
+    // 写回参数表（唯一来源）——执行线程读到的是值拷贝，看不到这里的中间状态
+    setParam(QStringLiteral("fieldDefs"), fieldsToVariantList(fields));
 }
 
 void ProtocolParseNode::updateParamPanel(QWidget *panel)
@@ -238,46 +288,44 @@ void ProtocolParseNode::updateParamPanel(QWidget *panel)
     if (!panel) return;
     if (auto *edit = panel->findChild<QLineEdit *>(QStringLiteral("parseDelimiter"))) {
         QSignalBlocker b(edit);
-        edit->setText(m_delimiter);
+        edit->setText(getParam(QStringLiteral("delimiter")).toString());
     }
 }
 
 QJsonObject ProtocolParseNode::toJson() const
 {
     QJsonObject obj = HalconNode::toJson();
-    obj[QStringLiteral("delimiter")] = m_delimiter;
-    QJsonArray fieldsArr;
-    for (const auto &f : m_fields) {
-        QJsonObject fo;
-        fo[QStringLiteral("name")] = f.name;
-        fo[QStringLiteral("type")] = f.type;
-        fo[QStringLiteral("index")] = f.index;
-        fieldsArr.append(fo);
-    }
-    obj[QStringLiteral("fieldDefs")] = fieldsArr;
+    // 顶层键保留（老读取方兼容），值一律取自参数表（唯一来源）；
+    // 列表参数在参数表里就是 QVariantList<QVariantMap>，fromVariant 直接给出同形的 JSON 数组。
+    obj[QStringLiteral("delimiter")] = QJsonValue::fromVariant(getParam(QStringLiteral("delimiter")));
+    obj[QStringLiteral("fieldDefs")] = QJsonValue::fromVariant(getParam(QStringLiteral("fieldDefs")));
     return obj;
 }
 
 void ProtocolParseNode::fromJson(const QJsonObject &json)
 {
-    HalconNode::fromJson(json);
-    m_delimiter = json[QStringLiteral("delimiter")].toString(QStringLiteral(","));
-    m_fields.clear();
-    QJsonArray fieldsArr = json[QStringLiteral("fieldDefs")].toArray();
-    for (const auto &v : fieldsArr) {
-        QJsonObject fo = v.toObject();
-        ParseFieldDef f;
-        f.name = fo[QStringLiteral("name")].toString();
-        f.type = fo[QStringLiteral("type")].toString(QStringLiteral("string"));
-        f.index = fo[QStringLiteral("index")].toInt();
-        m_fields.append(f);
+    HalconNode::fromJson(json);   // delimiter/fieldDefs 由基类从 params 恢复（唯一来源）
+    // 兼容更早方案：两个键曾只存在顶层（无 params 段）。语义与旧实现逐字对齐：
+    //  · delimiter：旧代码 `.toString(QStringLiteral(","))` → 键缺失或非字符串 ⇒ ","
+    //    （用 isString 判定，以保住"键存在且显式为空串"这一情况的原语义）
+    //  · fieldDefs：旧代码无条件"清空后重建" → 缺失或空数组 ⇒ 重置为默认单字段（不是保留原值）
+    if (!json.contains(QStringLiteral("params"))) {
+        const QJsonValue dv = json.value(QStringLiteral("delimiter"));
+        setParam(QStringLiteral("delimiter"), dv.isString() ? dv.toString() : QStringLiteral(","));
+
+        QVariantList list;
+        const QJsonArray fieldsArr = json.value(QStringLiteral("fieldDefs")).toArray();
+        for (const auto &v : fieldsArr) {
+            const QJsonObject fo = v.toObject();
+            QVariantMap m;
+            m.insert(QStringLiteral("name"), fo[QStringLiteral("name")].toString());
+            m.insert(QStringLiteral("type"),
+                     fo[QStringLiteral("type")].toString(QStringLiteral("string")));
+            m.insert(QStringLiteral("index"), fo[QStringLiteral("index")].toInt());
+            list.append(m);
+        }
+        if (list.isEmpty())
+            list = defaultFieldDefs();
+        setParam(QStringLiteral("fieldDefs"), list);
     }
-    if (m_fields.isEmpty()) {
-        ParseFieldDef d;
-        d.name = QStringLiteral("Field_0");
-        d.type = QStringLiteral("string");
-        d.index = 0;
-        m_fields.append(d);
-    }
-    m_params[QStringLiteral("delimiter")] = m_delimiter;
 }
