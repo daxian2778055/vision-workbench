@@ -94,6 +94,15 @@ signals:
     void paramsApplyFailed(const QString &reason);
 
 private:
+    // 关于"单源收口"（S1 残留专项）：本节点**刻意不做**参数表单源化，理由已核实（非省略）：
+    //  · 全部成员由本类的 QRecursiveMutex m_mutex 保护——setParam/getParam/toJson/fromJson 及内部
+    //    方法一律先加锁（本文件 34 处锁操作；同族 HalconImageSourceNode 23 处）→ 不存在已收口的
+    //    11 类"无锁成员镜像"那种跨线程竞态，本次专项要消灭的隐患在这里本来就不存在；
+    //  · 这些成员同时是**硬件寄存器缓存**：readCameraParams() 把设备实际值写回 exposure/gain/
+    //    frameRate/pixelFormat，applyCameraParamsInThread() 又据此写设备，openCameraInThread()/
+    //    applyTriggerConfig()/grabImage() 直接读成员。改成"参数表唯一来源"等于重写相机 SDK
+    //    交互路径，而 CI 无相机、无法验证 → 收益为负、风险不可测；
+    //  · 若确需统一，应作为独立立项（要求硬件在环测试），不要顺手改。
     // 图像源参数
     SourceType m_sourceType;
     QString m_filePath;
