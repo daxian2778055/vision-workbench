@@ -53,11 +53,7 @@ void ReceiveDataNode::run(bool /*autoSwitch*/)
 
 void ReceiveDataNode::setParam(const QString &name, const QVariant &value)
 {
-    if (name == QStringLiteral("deviceName")) {
-        m_deviceName = value.toString();
-    } else if (name == QStringLiteral("filterPattern")) {
-        m_filterPattern = value.toString();
-    }
+    // 只写参数表（基类加锁 + 校验），不再维护无锁成员镜像
     HalconNode::setParam(name, value);
 }
 
@@ -68,18 +64,26 @@ QVariant ReceiveDataNode::getParam(const QString &name) const
 
 void ReceiveDataNode::onDataReceived(const QString &deviceName, const QByteArray &data)
 {
-    if (deviceName != m_deviceName) return;
+    // 参数唯一来源：本次回调开始各取一次（局部快照）。
+    // 本函数由 CommunicationManager 的 dataReceived 信号驱动（主线程），而参数可能被执行线程写
+    // （如参数引用写回 setParam），原先直接读成员是无保护跨线程读；参数表自带锁。
+    // 另外 filterPattern 被用于"判前缀 + 按长度剥离"两处，必须取自同一份快照，
+    // 否则中途被改会出现"按新前缀判过、却按旧前缀长度剥离"的错位。
+    const QString boundDevice = getParam(QStringLiteral("deviceName")).toString();
+    const QString filterPattern = getParam(QStringLiteral("filterPattern")).toString();
+
+    if (deviceName != boundDevice) return;
 
     QString text = QString::fromUtf8(data).trimmed();
     if (text.isEmpty()) return;
 
     // 过滤前缀
-    if (!m_filterPattern.isEmpty() && !text.startsWith(m_filterPattern)) return;
+    if (!filterPattern.isEmpty() && !text.startsWith(filterPattern)) return;
 
     // 如果设置了过滤前缀，剥去前缀部分
     QString outputData = text;
-    if (!m_filterPattern.isEmpty()) {
-        outputData = text.mid(m_filterPattern.length()).trimmed();
+    if (!filterPattern.isEmpty()) {
+        outputData = text.mid(filterPattern.length()).trimmed();
     }
 
     m_params[QStringLiteral("lastData")] = outputData;
@@ -100,7 +104,7 @@ QWidget *ReceiveDataNode::createParamPanel()
     auto *filterEdit = new QLineEdit();
     filterEdit->setObjectName(QStringLiteral("receiveDataFilter"));
     filterEdit->setPlaceholderText(QStringLiteral("\u7A7A\u5219\u63A5\u6536\u5168\u90E8\u6570\u636E"));
-    filterEdit->setText(m_filterPattern);
+    filterEdit->setText(getParam(QStringLiteral("filterPattern")).toString());
     layout->addWidget(filterEdit);
 
     layout->addWidget(new QLabel(QStringLiteral("\u8BF4\u660E: \u63A5\u6536\u5230\u7ED1\u5B9A\u8BBE\u5907\u7684\u6570\u636E\u540E\uFF0C"
@@ -108,13 +112,11 @@ QWidget *ReceiveDataNode::createParamPanel()
     layout->addStretch();
 
     connect(m_deviceCombo, &QComboBox::currentTextChanged, this, [this](const QString &text) {
-        m_deviceName = text;
         setParam(QStringLiteral("deviceName"), text);
     });
 
     connect(filterEdit, &QLineEdit::editingFinished, this, [this, filterEdit]() {
-        m_filterPattern = filterEdit->text();
-        setParam(QStringLiteral("filterPattern"), m_filterPattern);
+        setParam(QStringLiteral("filterPattern"), filterEdit->text());
     });
 
     return panel;
@@ -134,8 +136,8 @@ void ReceiveDataNode::updateParamPanel(QWidget *panel)
         if (!current.isEmpty()) {
             int idx = combo->findText(current);
             if (idx >= 0) combo->setCurrentIndex(idx);
-        } else if (!m_deviceName.isEmpty()) {
-            int idx = combo->findText(m_deviceName);
+        } else if (!getParam(QStringLiteral("deviceName")).toString().isEmpty()) {
+            int idx = combo->findText(getParam(QStringLiteral("deviceName")).toString());
             if (idx >= 0) combo->setCurrentIndex(idx);
         }
     }
@@ -143,23 +145,29 @@ void ReceiveDataNode::updateParamPanel(QWidget *panel)
     auto *filterEdit = panel->findChild<QLineEdit *>(QStringLiteral("receiveDataFilter"));
     if (filterEdit) {
         QSignalBlocker b(filterEdit);
-        filterEdit->setText(m_filterPattern);
+        filterEdit->setText(getParam(QStringLiteral("filterPattern")).toString());
     }
 }
 
 QJsonObject ReceiveDataNode::toJson() const
 {
     QJsonObject obj = HalconNode::toJson();
-    obj[QStringLiteral("deviceName")] = m_deviceName;
-    obj[QStringLiteral("filterPattern")] = m_filterPattern;
+    // 顶层键保留（老读取方兼容），值一律取自参数表（唯一来源）
+    obj[QStringLiteral("deviceName")] = QJsonValue::fromVariant(getParam(QStringLiteral("deviceName")));
+    obj[QStringLiteral("filterPattern")] =
+        QJsonValue::fromVariant(getParam(QStringLiteral("filterPattern")));
     return obj;
 }
 
 void ReceiveDataNode::fromJson(const QJsonObject &json)
 {
-    HalconNode::fromJson(json);
-    m_deviceName = json[QStringLiteral("deviceName")].toString();
-    m_filterPattern = json[QStringLiteral("filterPattern")].toString();
-    m_params[QStringLiteral("deviceName")] = m_deviceName;
-    m_params[QStringLiteral("filterPattern")] = m_filterPattern;
+    HalconNode::fromJson(json);   // deviceName/filterPattern 由基类从 params 恢复（唯一来源）
+    // 兼容更早方案：两个键曾只存在顶层（无 params 段）。旧实现均为**无默认值**的 toString()
+    // → 键缺失/非字符串 ⇒ 空串（清掉绑定/前缀），故此处同样无条件重置（isString 保住"显式空串"语义）。
+    if (!json.contains(QStringLiteral("params"))) {
+        const QJsonValue dv = json.value(QStringLiteral("deviceName"));
+        setParam(QStringLiteral("deviceName"), dv.isString() ? dv.toString() : QString());
+        const QJsonValue fv = json.value(QStringLiteral("filterPattern"));
+        setParam(QStringLiteral("filterPattern"), fv.isString() ? fv.toString() : QString());
+    }
 }

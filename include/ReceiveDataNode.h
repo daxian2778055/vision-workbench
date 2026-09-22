@@ -24,10 +24,10 @@ private slots:
     void onDataReceived(const QString &deviceName, const QByteArray &data);
 
 private:
-    QString m_deviceName;     /// 绑定的通信设备名
-    QString m_filterPattern;  /// 可选过滤前缀（空则不过滤）
-    bool m_connected = false;
-
+    // S1 残留收口：deviceName / filterPattern 的唯一来源是参数表（默认值在 init() 写入），
+    // 不再保留无锁成员镜像——onDataReceived 在主线程读它们，而参数可能被执行线程写
+    // （参数引用写回 setParam），原先属无保护跨线程读；参数表自带锁。
+    // 顺带删除两个死成员：m_connected（cpp 中 0 处使用，本节点不缓存连接态）与
+    // m_deviceSelect（全仓仅此一处声明，注释所称的"alias"从未落地）。
     QComboBox *m_deviceCombo = nullptr;
-    QComboBox *m_deviceSelect = nullptr; // alias for m_deviceCombo in param panel
 };

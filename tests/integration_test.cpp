@@ -23,6 +23,7 @@
 #include "ClassifyNode.h"
 #include "ProtocolParseNode.h"
 #include "SendDataNode.h"
+#include "ReceiveDataNode.h"
 #include "ScriptSecurityPolicy.h"
 #include "ImageDisplayController.h"
 #include "ExecutionStatusController.h"
@@ -2235,6 +2236,58 @@ void IntegrationTest::testShadowMemberSingleSourceAndConcurrentAccess()
     senderLegacy.fromJson(legacySender);
     QCOMPARE(senderLegacy.getParam(QStringLiteral("deviceName")).toString(), QString());
     QCOMPARE(senderLegacy.getParam(QStringLiteral("suffix")).toString(), QStringLiteral("\r\n"));
+
+    // 同批第九类（ReceiveDataNode）：单源 + 旧格式兼容（两键都是"缺键清空"）
+    ReceiveDataNode receiver;
+    receiver.init();
+    QCOMPARE(receiver.getParam(QStringLiteral("deviceName")).toString(), QString());
+    QCOMPARE(receiver.getParam(QStringLiteral("filterPattern")).toString(), QString());
+    receiver.setParam(QStringLiteral("deviceName"), QStringLiteral("TCP1"));
+    receiver.setParam(QStringLiteral("filterPattern"), QStringLiteral("PFX"));
+    QCOMPARE(receiver.getParam(QStringLiteral("deviceName")).toString(), QStringLiteral("TCP1"));
+    QCOMPARE(receiver.getParam(QStringLiteral("filterPattern")).toString(), QStringLiteral("PFX"));
+
+    const QJsonObject receiverJson = receiver.toJson();
+    QCOMPARE(receiverJson.value(QStringLiteral("deviceName")).toString(), QStringLiteral("TCP1"));
+    QCOMPARE(receiverJson.value(QStringLiteral("filterPattern")).toString(), QStringLiteral("PFX"));
+
+    ReceiveDataNode receiverRoundTrip;
+    receiverRoundTrip.init();
+    receiverRoundTrip.fromJson(receiverJson);
+    QCOMPARE(receiverRoundTrip.getParam(QStringLiteral("deviceName")).toString(), QStringLiteral("TCP1"));
+    QCOMPARE(receiverRoundTrip.getParam(QStringLiteral("filterPattern")).toString(), QStringLiteral("PFX"));
+
+    // 旧格式（只有顶层键）：两键缺键语义都是"重置为空"（旧代码均无默认值）
+    QJsonObject legacyReceiver;
+    ReceiveDataNode receiverLegacy;
+    receiverLegacy.init();
+    receiverLegacy.setParam(QStringLiteral("deviceName"), QStringLiteral("TCP9"));
+    receiverLegacy.setParam(QStringLiteral("filterPattern"), QStringLiteral("OLD"));
+    receiverLegacy.fromJson(legacyReceiver);
+    QCOMPARE(receiverLegacy.getParam(QStringLiteral("deviceName")).toString(), QString());
+    QCOMPARE(receiverLegacy.getParam(QStringLiteral("filterPattern")).toString(), QString());
+
+    // 行为级断言（不只字段搬运）：直接派发接收回调，验证"绑定匹配 + 前缀剥离"确实按参数表工作
+    ReceiveDataNode live;
+    live.init();
+    live.setParam(QStringLiteral("deviceName"), QStringLiteral("TCP1"));
+    live.setParam(QStringLiteral("filterPattern"), QStringLiteral("PFX"));
+    QMetaObject::invokeMethod(&live, "onDataReceived", Qt::DirectConnection,
+                              Q_ARG(QString, QStringLiteral("TCP2")),
+                              Q_ARG(QByteArray, QByteArray("PFXhello")));
+    QVERIFY2(live.getParam(QStringLiteral("lastData")).toString().isEmpty(),
+             "绑定设备不匹配时不得缓存数据");
+    QMetaObject::invokeMethod(&live, "onDataReceived", Qt::DirectConnection,
+                              Q_ARG(QString, QStringLiteral("TCP1")),
+                              Q_ARG(QByteArray, QByteArray("PFXhello")));
+    QCOMPARE(live.getParam(QStringLiteral("lastData")).toString(), QStringLiteral("hello"));
+    // 判别性：把前缀改掉后再收一条只匹配**新**前缀的报文 ⇒ 必须按新前缀剥离。
+    // 若回调仍读旧快照/成员（PFX），这条报文会被拒收、lastData 仍为 "hello"，断言即失败。
+    live.setParam(QStringLiteral("filterPattern"), QStringLiteral("OTHER"));
+    QMetaObject::invokeMethod(&live, "onDataReceived", Qt::DirectConnection,
+                              Q_ARG(QString, QStringLiteral("TCP1")),
+                              Q_ARG(QByteArray, QByteArray("OTHERworld")));
+    QCOMPARE(live.getParam(QStringLiteral("lastData")).toString(), QStringLiteral("world"));
 }
 
 void IntegrationTest::testFlowExtrasRoundTrip()
