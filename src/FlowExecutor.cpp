@@ -806,24 +806,31 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
         // 同一份，不必各自再 getOutputData(0) 一次（每次都加锁 + 拷贝 QSharedPointer）。
         QSharedPointer<DataObject> nodeOut0;
         if (success) {
-            {
-                // S1 Stage 1：三类执行缓存统一受 m_graphCacheMutex 保护。
-                // 临界区只包缓存读写；getOutputData/setOutputData 走端口自身的锁（锁序 graph→port）。
-                QMutexLocker cacheLock(&m_graphCacheMutex);
-                for (int i = 0; i < node->outputPorts().size(); i++) {
-                    QSharedPointer<DataObject> outputData = node->getOutputData(i);
-                    if (outputData) {
-                        outputData->setSourceInfo(QString("%1 的输出").arg(node->fullName()));
+            // S1 Stage 1（修整）：**临界区内不调用外部代码**——getOutputData()/setSourceInfo()/
+            // fullName() 会触及节点 / 数据对象（可能还有场景）的其它锁；而 GUI 侧
+            // onSceneNodeRemoved（Phase B 计划中要取同一把锁）是在 FlowScene::removeNode 内部同步调用的，
+            // 两者叠加可能构成"GUI：场景锁 → 图锁" vs "执行：图锁 → 节点/场景锁"的**环**。
+            // 故：先在锁外取数据与来源串，短临界区内只做缓存写入。
+            for (int i = 0; i < node->outputPorts().size(); i++) {
+                QSharedPointer<DataObject> outputData = node->getOutputData(i);
+                if (outputData) {
+                    outputData->setSourceInfo(QString("%1 的输出").arg(node->fullName()));
+                    {
+                        QMutexLocker cacheLock(&m_graphCacheMutex);
                         m_nodeData[node][i] = outputData;
-                        if (i == 0) {
-                            nodeOut0 = outputData;
-                        }
-                    } else {
-                        // 本轮该端口无输出：移除上一轮残留，否则下游会读到旧数据
-                        m_nodeData[node].remove(i);
                     }
+                    if (i == 0) {
+                        nodeOut0 = outputData;
+                    }
+                } else {
+                    // 本轮该端口无输出：移除上一轮残留，否则下游会读到旧数据
+                    QMutexLocker cacheLock(&m_graphCacheMutex);
+                    m_nodeData[node].remove(i);
                 }
+            }
+            {
                 // 标记"输出有效"：供局部执行的可复用判定（见 reusesCachedOutput）
+                QMutexLocker cacheLock(&m_graphCacheMutex);
                 m_validOutputs[node] = true;
             }
         } else {
