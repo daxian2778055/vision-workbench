@@ -17,6 +17,37 @@
 
 ---
 
+### 0.1 现状对账（2026-09-22，代码核查回填）
+
+> 本节**只记核对过的项**，每条给出可复核证据（类 / 套件 / 提交）；不改动本文其它章节的原始措辞与结论。
+
+**已交付（本文发布后落地）**
+
+| 本文条目 | 现状 | 证据 |
+|---|---|---|
+| §0.0 执行引擎正确性（E1/E2/E5、E3 流程隔离、E4 安全停止、E6 节拍） | ✅ 已修复并补了**真实集成测试**；另有 S1 系列加固：执行期图快照/墓碑、三类执行缓存统一加锁、删节点清理（GUI 只登记 → 执行线程安全点消费）、并修复一条**既有自死锁**（停止请求落在轮内 ⇒ worker 永不退出） | 代码内 E1/E2/E4/E6 标注；用例 `testContinuousSecondRoundClearsStaleData`、`testDelayStopCancellable`、`testGraphSnapshotDefersDeletionDuringRound`、`testNodeChurnDuringContinuousRun`（自死锁回归钉子）；提交 `7f6c386` `bc20d07` `2b47551` `8382b4f` `8888eb2` |
+| G-P0-1 深度学习无目标检测 | ✅ **已交付** | `include/DnnDetectNode.h`、`src/DnnDetectNode.cpp`、`tests/dnn_detect_test.cpp`、CTest 套件 `DnnDetectTest` |
+| G-P0-6 OpenCV 补齐角度/面积测量（本文 🥇 建议） | ✅ **已交付** OpenCV 版拟合/面积链路 | `OpencvFitLineNode` / `OpencvFitCircleNode` / `OpencvBlobNode` + `tests/opencv_angle_area_test.cpp`（套件 `OpencvAngleAreaTest`） |
+
+**仍未落地（本轮核查过、确认为"零命中"）**
+
+| 本文条目 | 核查方式 | 结论 |
+|---|---|---|
+| G-P0-3 OPC UA ／ G-P1-4 原生 S7 | 全仓大小写敏感检索 `open62541｜Snap7｜OpcUa` → **0 命中** | 仍缺 |
+| G-P0-4 数字 IO ／ G-P0-5 光源控制器 | 全仓大小写敏感检索 `IoDevice｜LightController` → **0 命中** | 仍缺 |
+
+> 其余 P0/P1/P2 条目（分割、异常检测、训练工具、标准件比对、国际化、子流程、SDK、插件、加密、报表、MES 等）**本轮未逐项核查**，若要排期请先按同样方式核一遍——避免再次出现"文档说缺、代码其实已有"（本节已修正 3 条这类情况）。
+
+**本轮推荐（按 影响面 × 复用度 × 风险 排序，供拍板）**
+
+1. **G-P0-4 数字 IO（先做 Modbus 线圈映射版）** —— P0（竞标直接失分项）；可**完全复用**刚收口过的通信基建（`ModbusNode` 寄存器/线圈、`CommunicationManager` 设备管理、设备配置对话框、`comm_writeback_test` 行为回归），**不引入新第三方依赖**；建议第一步只做"线圈读写节点 + 面板 + 序列化 + 用例"，保持单轮可交付。
+2. **G-P0-5 光源控制器（串口协议）** —— 与 ① 同型（`SerialCommNode` 链路已加固），可紧随其后，共用一套"外设控制"抽象。
+3. **G-P0-2 分割 `DnnSegmentNode`** —— 价值高、且有 `DnnDetectNode` 现成先例（注册/测试流程可抄）；但需引入分割模型与后处理，单轮交付难度高于 ①。
+
+**建议先做 ①**：P0 + 复用度最高 + 顺着刚完成的通信件套单源收口继续走（评审成本最低）。
+
+---
+
 ## 1. 总览：能力对照雷达
 
 | 能力域 | VisionMaster 4.4 | 本平台现状 | 差距 | 权重 |
@@ -57,12 +88,12 @@
 
 | 编号 | 缺口 | 对应需求 | 说明 | 建议方案 | 预估工作量 |
 |------|------|---------|------|---------|-----------|
-| G-P0-1 | 深度学习无目标检测 | FR13.3 | VM 4.4 有完整检测模块，工业缺陷定位刚需 | OpenCV DNN 支持 ONNX YOLO 系列，新增 `DnnDetectNode`（输出框+类别+置信度） | 8–12 人日 |
+| G-P0-1 | 深度学习无目标检测 | FR13.3 | VM 4.4 有完整检测模块，工业缺陷定位刚需 | OpenCV DNN 支持 ONNX YOLO 系列，新增 `DnnDetectNode`（输出框+类别+置信度） | 8–12 人日 —— ✅ **已交付，见 §0.1** |
 | G-P0-2 | 深度学习无分割 | FR13.4 | 像素级缺陷区域输出 | 引入 ONNX 分割模型（UNet/YOLO-Seg），新增 `DnnSegmentNode` | 10–15 人日 |
 | G-P0-3 | 无 OPC UA | FR16.10 | 工业 4.0 / 汽车 / 半导体客户常见硬性要求 | 集成 open62541 或 Qt OPC UA 模块 | 15–20 人日 |
 | G-P0-4 | 无数字 IO 控制 | FR16.12 | 触发光源、气缸、剔除机构的基础能力 | 抽象 `IoDevice` 接口，先支持常见 IO 卡 + Modbus 线圈映射 | 10–15 人日 |
 | G-P0-5 | 无光源控制器 | FR16.13 | VM 4.4 明确提供"光源调节" | 抽象 `LightController`，先支持串口协议光源 + 触发同步 | 8–12 人日 |
-| G-P0-6 | 30 个算子被禁用（含 HALCON 区域/测量/形状匹配/定位） | FR6 | 算法链路缩水 | **按 `VisionIntegrationPolicy.h`：禁用的 HALCON 区域/测量/形状匹配算子不得重新挂回工具库**；应改用 OpenCV 实现补齐（OpencvBlobNode 面积端口、OpencvFitLine/FitCircle、OpencvTemplateMatch 已可用），验证精度后注册 | 评估 5 人日 + 实施 |
+| G-P0-6 | 30 个算子被禁用（含 HALCON 区域/测量/形状匹配/定位） | FR6 | 算法链路缩水 | **按 `VisionIntegrationPolicy.h`：禁用的 HALCON 区域/测量/形状匹配算子不得重新挂回工具库**；应改用 OpenCV 实现补齐（OpencvBlobNode 面积端口、OpencvFitLine/FitCircle、OpencvTemplateMatch 已可用），验证精度后注册 | 评估 5 人日 + 实施 —— ✅ **OpenCV 角度/面积链路已交付，见 §0.1** |
 
 ### P1 — 影响"好不好用 / 竞标分数"
 
