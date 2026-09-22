@@ -120,4 +120,15 @@ inline bool valueMatches(double expected, double actual, const QString &dataType
     return std::fabs(expected - actual) < 1e-9;
 }
 
+/// 单个值占用的寄存器字数（16 位 1 字；32 位 2 字）。
+/// M-4：宽度判定只能有这一处实现——此前"回读字数"在 Modbus/PLC 各写一份 wide 判定，
+/// 与 disassembleValueToWords 内部的分支共三份，日后支持 double 必漏改。
+inline int wordCountForType(const QString &dataType)
+{
+    if (dataType == QStringLiteral("int32") || dataType == QStringLiteral("uint32")
+        || dataType == QStringLiteral("float"))
+        return 2;
+    return 1;
+}
+
 } // namespace RegisterByteOrder

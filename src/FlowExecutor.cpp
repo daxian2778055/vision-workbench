@@ -238,6 +238,18 @@ bool FlowExecutor::requestExternalRound()
 {
     {
         QMutexLocker locker(&m_mutex);
+        // M-1/F-1：只有软触发模式会在轮末消费补跑（run() 的轮末分支），其余模式排队等于"永远不执行"：
+        //  · 硬触发：本就不该受理（canTriggerFromExternal 已挡，这里兜底）；
+        //  · 连续：一直在跑，外部触发无实际意义，但排队会让 GTM 计数与 triggerFired 虚高——
+        //    现场已按 B 方案"载入即自动连续跑"，若不收口就是全天候幻影计数（统计失真）。
+        // 返回 false = "未受理" → GTM 不计数、不发 triggerFired（与"超界丢弃"同一口径，
+        // 也与本函数"会不会真的多跑一轮"的语义严格一致）。
+        if (m_flowMode != FlowMode::SoftwareTrigger) {
+            const FlowMode mode = m_flowMode;
+            locker.unlock();
+            VFP_DEBUG << "External round ignored: flow mode is not software-trigger:" << static_cast<int>(mode);
+            return false;
+        }
         if (m_state == ExecutionState::Running || m_state == ExecutionState::Paused) {
             if (m_pendingExternalRounds < kMaxPendingExternalRounds) {
                 ++m_pendingExternalRounds;      // 排队补跑（FIFO 语义，按笔计数）

@@ -697,12 +697,18 @@ void ModbusNode::verifyWrittenValue(int address, double expected, const QString 
                                     const QString &byteOrder)
 {
     if (!m_modbus) return;
-    const bool wide = (dataType == QStringLiteral("int32") || dataType == QStringLiteral("uint32")
-                       || dataType == QStringLiteral("float"));
-    QModbusDataUnit readUnit(QModbusDataUnit::HoldingRegisters, address, wide ? 2 : 1);
+    const int wordCount = RegisterByteOrder::wordCountForType(dataType);   // M-4：宽度判定单一来源
+    QModbusDataUnit readUnit(QModbusDataUnit::HoldingRegisters, address, wordCount);
     QModbusReply *r = m_modbus->sendReadRequest(readUnit, m_slaveAddress);
     if (!r) return;
-    if (r->isFinished()) { r->deleteLater(); return; }
+    if (r->isFinished()) {
+        // M-3：设备恰好断开时 sendReadRequest 可能返回"已完成且带错误"的 reply。此处必须照常上报——
+        // 否则回写校验恰恰在最需要报警的场景（写完就断）静默通过。
+        emit communicationError(QStringLiteral("Modbus回写校验读回失败(地址%1):%2")
+                                    .arg(address).arg(r->errorString()));
+        r->deleteLater();
+        return;
+    }
     connect(r, &QModbusReply::finished, this, [this, r, address, expected, dataType, byteOrder]() {
         if (r->error() == QModbusDevice::NoError) {
             const QModbusDataUnit du = r->result();

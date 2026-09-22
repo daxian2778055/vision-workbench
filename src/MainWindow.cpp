@@ -96,6 +96,30 @@ using namespace HalconCpp;
 #include <QSizePolicy>
 #include "AppLog.h"
 
+namespace {
+
+/// 流程模式 → 标签页后缀（F-3：此前组合框/载入/切页签各写一份，且越界行为不一致，统一到此处）
+QString flowModeSuffix(FlowMode mode)
+{
+    switch (mode) {
+    case FlowMode::Continuous:
+        return QStringLiteral(" [连续]");
+    case FlowMode::HardwareTrigger:
+        return QStringLiteral(" [硬触发]");
+    case FlowMode::SoftwareTrigger:
+    default:
+        return QStringLiteral(" [软触发]");
+    }
+}
+
+// 枚举顺序 = 组合框索引 = scene->flowMode 的持久化取值，三者必须同步，改动即在此报错
+static_assert(static_cast<int>(FlowMode::Continuous) == 0
+                  && static_cast<int>(FlowMode::SoftwareTrigger) == 1
+                  && static_cast<int>(FlowMode::HardwareTrigger) == 2,
+              "FlowMode 顺序变更必须同步：组合框顺序 / scene->flowMode 持久化取值 / flowModeSuffix");
+
+}   // namespace
+
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent),
     ui(nullptr),
@@ -384,9 +408,7 @@ MainWindow::MainWindow(QWidget *parent) :
                 if (tabIdx >= 0 && tabIdx < m_flowScenes.size()) {
                     m_flowModes[m_flowScenes[tabIdx]] = mode;
                     m_flowScenes[tabIdx]->setFlowMode(static_cast<int>(mode));   // 每流程模式写回场景，随方案保存
-                    static const char *modeSuffix[] = { " [连续]", " [软触发]", " [硬触发]" };
-                    int mi = static_cast<int>(mode);
-                    const char *suffix = (mi >= 0 && mi < 3) ? modeSuffix[mi] : "";
+                    const QString suffix = flowModeSuffix(mode);   // F-3：后缀映射单一来源
                     // tab 标题用真实流程名（可能与 tab 序号不同，删除流程后更明显），避免显示与触发路由名不一致
                     const QString base = (m_executor && !m_executor->flowName().isEmpty())
                                             ? m_executor->flowName()
@@ -1858,10 +1880,9 @@ void MainWindow::loadProjectFile(const QString &fileName)
                                       ? static_cast<FlowMode>(persistedMode)
                                       : FlowMode::SoftwareTrigger;
         m_flowModes[scene] = flowMode;
-        const QString modeSuffix = (persistedMode == 0)
-                                       ? QStringLiteral(" [连续]")
-                                       : (persistedMode == 2) ? QStringLiteral(" [硬触发]")
-                                                              : QStringLiteral(" [软触发]");
+        scene->setFlowMode(static_cast<int>(flowMode));   // F-2：越界脏值（如手工改文件写入 7）在此规范化为 0/1/2，
+                                                           // 否则下次保存会把脏值原样写回、永远靠下游兜底
+        const QString modeSuffix = flowModeSuffix(flowMode);   // F-3：后缀映射单一来源（越界行为已统一）
 
         QGraphicsView *view = new QGraphicsView(scene);
         VisionWorkbenchStyle::applyGraphicsViewWorkbenchDefaults(view);
@@ -2262,9 +2283,8 @@ void MainWindow::onCurrentTabChanged(int index)
             m_execStatus->updateButtons(m_executor ? m_executor->getState() : ExecutionState::Stopped);
 
         // 更新标签页标题，显示模式后缀
-        static const char *modeSuffix[] = { " [连续]", " [软触发]", " [硬触发]" };
-        int mi = static_cast<int>(mode);
-        const char *suffix = (mi >= 0 && mi < 3) ? modeSuffix[mi] : "";
+        const int mi = static_cast<int>(mode);
+        const QString suffix = flowModeSuffix(mode);   // F-3：后缀映射单一来源
         // tab 标题用真实流程名，保持与触发路由名一致
         const QString base = (m_executor && !m_executor->flowName().isEmpty())
                                 ? m_executor->flowName()
