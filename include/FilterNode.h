@@ -23,8 +23,9 @@ public:
     void fromJson(const QJsonObject &json) override;
 
 private:
-    QString m_operator = QStringLiteral(">="); /// >= <= == > < !=
-    double m_threshold = 0.0;
+    // S1 残留试点（影子成员收口）：比较符/阈值的**唯一来源是参数表 m_params**（ThreadSafeParams 加锁），
+    // 不再保留无锁成员镜像——此前 setParam 写成员、run() 读成员，与界面线程写参数形成无保护竞态
+    // （QString 影子还可能破坏堆结构）。默认值在 init() 写入参数表。
 
     QComboBox *m_opCombo = nullptr;
     QDoubleSpinBox *m_thresholdSpin = nullptr;

@@ -15,6 +15,7 @@
 #include "DisplaySinkNode.h"
 #include "LoopNode.h"
 #include "DelayNode.h"
+#include "FilterNode.h"   // S1 残留试点：影子成员收口后的单源/并发回归
 #include "FormulaNode.h"
 #include "ScriptSecurityPolicy.h"
 #include "ImageDisplayController.h"
@@ -101,6 +102,7 @@ private slots:
     void testImageDisplayResolvePriority();
     void testExecutionStatusController();
     void testFlowExtrasRoundTrip();   // 每流程身份（流程名 + 运行模式）随方案持久化
+    void testShadowMemberSingleSourceAndConcurrentAccess();   // S1 残留试点：参数唯一来源 + 并发读写
     void testExternalTriggerAcceptedOnlyInSoftwareMode();   // F-1：非软触发模式不得受理外部触发
     void testRecentFilesMenu();
 
@@ -1967,6 +1969,61 @@ void IntegrationTest::testExternalTriggerAcceptedOnlyInSoftwareMode()
     exec.stopExecution();
     QVERIFY(exec.wait(3000));
     exec.setFlowScene(nullptr);
+}
+
+void IntegrationTest::testShadowMemberSingleSourceAndConcurrentAccess()
+{
+    // S1 残留试点（FilterNode 影子成员收口）：参数表成为唯一来源。
+    // ① 单源：setParam → getParam / toJson / fromJson 必须处处一致（旧实现另有成员镜像，两者可不同步
+    //    → 表现是"面板改了、算子还按旧值跑"）；
+    // ② 旧方案兼容：只有顶层键、没有 params 段的早期文件仍必须能载入；
+    // ③ 并发：执行线程反复 run() × 界面线程反复 setParam —— 收口前这是影子成员（QString/double）上的
+    //    无保护竞态，QString 堆引用计数竞争可随机崩溃；收口后由 ThreadSafeParams 串行化。
+    FilterNode filter;
+    filter.init();
+
+    filter.setParam(QStringLiteral("threshold"), 250.0);
+    filter.setParam(QStringLiteral("operator"), QStringLiteral("<"));
+    QCOMPARE(filter.getParam(QStringLiteral("threshold")).toDouble(), 250.0);
+    QCOMPARE(filter.getParam(QStringLiteral("operator")).toString(), QStringLiteral("<"));
+
+    const QJsonObject json = filter.toJson();
+    QCOMPARE(json.value(QStringLiteral("threshold")).toDouble(), 250.0);
+    QCOMPARE(json.value(QStringLiteral("operator")).toString(), QStringLiteral("<"));
+
+    FilterNode restored;
+    restored.init();
+    restored.fromJson(json);
+    QCOMPARE(restored.getParam(QStringLiteral("threshold")).toDouble(), 250.0);
+    QCOMPARE(restored.getParam(QStringLiteral("operator")).toString(), QStringLiteral("<"));
+
+    // 旧格式：顶层键、无 params 段（兼容分支）
+    QJsonObject legacy;
+    legacy[QStringLiteral("operator")] = QStringLiteral(">=");
+    legacy[QStringLiteral("threshold")] = 42.0;
+    FilterNode legacyLoaded;
+    legacyLoaded.init();
+    legacyLoaded.fromJson(legacy);
+    QCOMPARE(legacyLoaded.getParam(QStringLiteral("threshold")).toDouble(), 42.0);
+    QCOMPARE(legacyLoaded.getParam(QStringLiteral("operator")).toString(), QStringLiteral(">="));
+
+    // 并发压测：写侧模拟界面线程，读侧模拟执行线程（run 内先取参数快照）
+    QAtomicInt stop(0);
+    std::thread uiWriter([&filter, &stop]() {
+        for (int i = 0; i < 20000; ++i) {
+            filter.setParam(QStringLiteral("threshold"), double(i % 1000));
+            filter.setParam(QStringLiteral("operator"),
+                            (i % 2) ? QStringLiteral(">=") : QStringLiteral("<="));
+        }
+        stop.storeRelease(1);
+    });
+    while (!stop.loadAcquire())
+        filter.run(false);
+    uiWriter.join();
+
+    // 终态自洽：最后一次写入必须可原样读回（无损坏、无丢写）
+    filter.setParam(QStringLiteral("threshold"), 7.0);
+    QCOMPARE(filter.getParam(QStringLiteral("threshold")).toDouble(), 7.0);
 }
 
 void IntegrationTest::testFlowExtrasRoundTrip()
