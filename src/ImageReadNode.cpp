@@ -25,13 +25,10 @@ ImageReadNode::ImageReadNode(QObject *parent)
 {
     m_type = IMAGE_ACQUISITION;
     m_name = "Image Read";
-    m_filePath = "";
+    // filePath / mono8Mode / autoSwitch / mode 的默认值已移入 init()（参数表）
     m_isDirectory = false;
     m_currentImageIndex = -1;
     m_displayImageIndex = -1;
-    m_mono8Mode = false;
-    m_autoSwitch = false;
-    m_mode = Mode::SingleImage;
     m_imageWidth = 0;
     m_imageHeight = 0;
     m_pixelFormat = "";
@@ -51,16 +48,27 @@ void ImageReadNode::init()
     
     // 初始化默认参数
     m_params["moduleStatus"] = false; // 模块状态（bool量）
+    // S1：4 个真参数的默认值（原先写在构造函数里）
+    m_params[QStringLiteral("filePath")] = QString();
+    m_params[QStringLiteral("mono8Mode")] = false;
+    m_params[QStringLiteral("autoSwitch")] = false;
+    m_params[QStringLiteral("mode")] = static_cast<int>(Mode::SingleImage);
 }
 
 void ImageReadNode::run(bool autoSwitch)
 {
+    // 参数唯一来源：本轮开始各取一次（局部快照）——避免逐次加锁，并保证同一轮用同一份配置
+    const QString filePath = getParam(QStringLiteral("filePath")).toString();
+    const Mode mode = static_cast<Mode>(getParam(QStringLiteral("mode")).toInt());
+    const bool autoSwitchEnabled = getParam(QStringLiteral("autoSwitch")).toBool();
+    const bool mono8Mode = getParam(QStringLiteral("mono8Mode")).toBool();
+
     VFP_DEBUG << "ImageReadNode::run() called";
-    VFP_DEBUG << "File path:" << m_filePath;
+    VFP_DEBUG << "File path:" << filePath;
     VFP_DEBUG << "Image files size:" << m_imageFiles.size();
-    VFP_DEBUG << "Mono8 mode:" << m_mono8Mode;
-    VFP_DEBUG << "Mode:" << static_cast<int>(m_mode);
-    VFP_DEBUG << "Auto switch:" << m_autoSwitch;
+    VFP_DEBUG << "Mono8 mode:" << mono8Mode;
+    VFP_DEBUG << "Mode:" << static_cast<int>(mode);
+    VFP_DEBUG << "Auto switch:" << autoSwitchEnabled;
     VFP_DEBUG << "Auto switch parameter:" << autoSwitch;
     VFP_DEBUG << "Current image index:" << m_currentImageIndex;
     
@@ -69,7 +77,7 @@ void ImageReadNode::run(bool autoSwitch)
             QString currentImagePath;
             int displayIndex = m_currentImageIndex;
             
-            if (m_mode == Mode::MultiImage) {
+            if (mode == Mode::MultiImage) {
                 // Multi-image mode
                 // 如果没有图像被选中，自动选中第一张图像
                 if (m_currentImageIndex < 0 || m_currentImageIndex >= m_imageFiles.size()) {
@@ -81,7 +89,7 @@ void ImageReadNode::run(bool autoSwitch)
                 }
                 
                 if (m_isDirectory) {
-                    QDir dir(m_filePath);
+                    QDir dir(filePath);
                     currentImagePath = dir.absoluteFilePath(m_imageFiles[displayIndex]);
                 } else {
                     currentImagePath = m_imageFiles[displayIndex];
@@ -94,7 +102,7 @@ void ImageReadNode::run(bool autoSwitch)
                 emit thumbnailUpdated();
                 
                 // 执行完成后，如果启用了自动切换，切换到下一张图像，用于下一次执行
-                if (m_autoSwitch && autoSwitch) {
+                if (autoSwitchEnabled && autoSwitch) {
                     int nextIndex = (m_currentImageIndex + 1) % m_imageFiles.size();
                     m_currentImageIndex = nextIndex;
                     VFP_DEBUG << "Auto switched to next image index:" << m_currentImageIndex;
@@ -102,10 +110,10 @@ void ImageReadNode::run(bool autoSwitch)
             } else {
                 // Single image mode
                 if (m_isDirectory && !m_imageFiles.isEmpty()) {
-                    QDir dir(m_filePath);
+                    QDir dir(filePath);
                     currentImagePath = dir.absoluteFilePath(m_imageFiles[0]);
                 } else {
-                    currentImagePath = m_filePath;
+                    currentImagePath = filePath;
                 }
             }
             
@@ -145,7 +153,7 @@ void ImageReadNode::run(bool autoSwitch)
                 VFP_DEBUG << "Image name:" << m_imageName;
                 
                 // Apply mono8 mode if enabled
-                if (m_mono8Mode) {
+                if (mono8Mode) {
                     HTuple channels;
                     CountChannels(m_outputImage, &channels);
                     if (channels.I() > 1) {
@@ -211,7 +219,9 @@ void ImageReadNode::selectMultipleFiles()
         m_isDirectory = false;
         m_currentImageIndex = -1; // 初始化为 -1，表示没有图像被选中
         if (!m_imageFiles.isEmpty()) {
-            m_filePath = m_imageFiles[0];
+            // 参数表是唯一来源：写 filePath。此处 setParam 的副作用不会误重建缓存
+            //（多图模式下 mode != SingleImage 且 m_isDirectory 刚置 false），调用方随后会显式 updateImageFiles()
+            setParam(QStringLiteral("filePath"), m_imageFiles[0]);
         }
     }
 }
@@ -221,7 +231,9 @@ void ImageReadNode::updateImageFiles()
     m_imageFiles.clear();
     m_currentImageIndex = -1; // 初始化为 -1，表示没有图像被选中
     
-    QDir dir(m_filePath);
+    // 参数唯一来源：filePath 从参数表读（本函数由 setParam 触发，也可能在界面线程被直接调用）
+    const QString filePath = getParam(QStringLiteral("filePath")).toString();
+    QDir dir(filePath);
     if (dir.exists()) {
         m_isDirectory = true;
         QStringList filters;
@@ -230,32 +242,29 @@ void ImageReadNode::updateImageFiles()
     } else {
         m_isDirectory = false;
         // Check if the file exists
-        QFileInfo fileInfo(m_filePath);
+        QFileInfo fileInfo(filePath);
         if (fileInfo.exists()) {
-            m_imageFiles << m_filePath;
+            m_imageFiles << filePath;
         }
     }
 }
 
 void ImageReadNode::setParam(const QString &name, const QVariant &value)
 {
-    HalconNode::setParam(name, value);
+    HalconNode::setParam(name, value);   // 参数表是唯一来源（加锁 + 校验）
+    // 这里只保留"参数变化引起的副作用"：重建 filePath 的派生缓存。
+    // 模式一律从参数表读**当前值**（上面已先写入），取值与旧实现一致；不再维护成员镜像。
     if (name == "filePath") {
-        m_filePath = value.toString();
         // 只有在单图模式或当前是目录模式时才更新图像文件列表
         // 避免在多图模式下选择多个文件后被清空
-        if (m_mode == Mode::SingleImage || m_isDirectory) {
+        const Mode mode = static_cast<Mode>(getParam(QStringLiteral("mode")).toInt());
+        if (mode == Mode::SingleImage || m_isDirectory) {
             updateImageFiles();
         }
         // 不再自动执行，需要用户点击"执行算子"按钮
-    } else if (name == "mono8Mode") {
-        m_mono8Mode = value.toBool();
-    } else if (name == "autoSwitch") {
-        m_autoSwitch = value.toBool();
     } else if (name == "mode") {
-        m_mode = static_cast<Mode>(value.toInt());
         // 当切换到单图模式时，更新图像文件列表
-        if (m_mode == Mode::SingleImage) {
+        if (static_cast<Mode>(value.toInt()) == Mode::SingleImage) {
             updateImageFiles();
         }
     }
@@ -263,15 +272,10 @@ void ImageReadNode::setParam(const QString &name, const QVariant &value)
 
 QVariant ImageReadNode::getParam(const QString &name) const
 {
-    if (name == "filePath") {
-        return m_filePath;
-    } else if (name == "mono8Mode") {
-        return m_mono8Mode;
-    } else if (name == "autoSwitch") {
-        return m_autoSwitch;
-    } else if (name == "mode") {
-        return static_cast<int>(m_mode);
-    } else if (name == "imageWidth") {
+    // filePath / mono8Mode / autoSwitch / mode 走基类（参数表 = 唯一来源），与写侧对称。
+    // 以下均为**合成回读**（每轮执行产出的结果，本来就不在参数表里），行为保持原样；
+    // 其中 imagePath 是 filePath 的历史别名，必须继续可用。
+    if (name == "imageWidth") {
         return m_imageWidth;
     } else if (name == "imageHeight") {
         return m_imageHeight;
@@ -280,7 +284,7 @@ QVariant ImageReadNode::getParam(const QString &name) const
     } else if (name == "imageName") {
         return m_imageName;
     } else if (name == "imagePath") {
-        return m_filePath;
+        return HalconNode::getParam(QStringLiteral("filePath"));
     }
     return HalconNode::getParam(name);
 }
@@ -288,10 +292,11 @@ QVariant ImageReadNode::getParam(const QString &name) const
 QJsonObject ImageReadNode::toJson() const
 {
     QJsonObject json = HalconNode::toJson();
-    json["filePath"] = m_filePath;
-    json["mono8Mode"] = m_mono8Mode;
-    json["autoSwitch"] = m_autoSwitch;
-    json["mode"] = static_cast<int>(m_mode);
+    // 顶层键保留（老读取方兼容），4 个真参数的值取自参数表（唯一来源）
+    json["filePath"] = QJsonValue::fromVariant(getParam(QStringLiteral("filePath")));
+    json["mono8Mode"] = QJsonValue::fromVariant(getParam(QStringLiteral("mono8Mode")));
+    json["autoSwitch"] = QJsonValue::fromVariant(getParam(QStringLiteral("autoSwitch")));
+    json["mode"] = QJsonValue::fromVariant(getParam(QStringLiteral("mode")));
     json["imageWidth"] = m_imageWidth;
     json["imageHeight"] = m_imageHeight;
     json["pixelFormat"] = m_pixelFormat;
@@ -303,15 +308,18 @@ QJsonObject ImageReadNode::toJson() const
 void ImageReadNode::fromJson(const QJsonObject &json)
 {
     HalconNode::fromJson(json);
-    m_filePath = json["filePath"].toString();
+    // 4 个真参数：与旧实现逐字对齐 —— filePath 无条件重置（旧代码无默认值，缺键即空串），
+    // 其余三个用 contains 守卫（缺键保留原值）。它们现在都写入参数表；基类已先按 params 段恢复，
+    // 此处再按顶层键覆盖（toJson 两处同源，取值一致），行为与旧版相同。
+    setParam(QStringLiteral("filePath"), json["filePath"].toString());
     if (json.contains("mono8Mode")) {
-        m_mono8Mode = json["mono8Mode"].toBool();
+        setParam(QStringLiteral("mono8Mode"), json["mono8Mode"].toBool());
     }
     if (json.contains("autoSwitch")) {
-        m_autoSwitch = json["autoSwitch"].toBool();
+        setParam(QStringLiteral("autoSwitch"), json["autoSwitch"].toBool());
     }
     if (json.contains("mode")) {
-        m_mode = static_cast<Mode>(json["mode"].toInt());
+        setParam(QStringLiteral("mode"), json["mode"].toInt());
     }
     if (json.contains("imageWidth")) {
         m_imageWidth = json["imageWidth"].toInt();
@@ -365,7 +373,7 @@ QWidget *ImageReadNode::createParamPanel()
     layout->addLayout(modeLayout);
     
     // 设置默认模式
-    if (m_mode == Mode::SingleImage) {
+    if (static_cast<Mode>(getParam(QStringLiteral("mode")).toInt()) == Mode::SingleImage) {
         singleImageRadio->setChecked(true);
     } else {
         multiImageRadio->setChecked(true);
@@ -376,7 +384,7 @@ QWidget *ImageReadNode::createParamPanel()
     layout->addWidget(filePathLabel);
     
     QHBoxLayout *filePathLayout = new QHBoxLayout();
-    QLineEdit *filePathEdit = new QLineEdit(m_filePath);
+    QLineEdit *filePathEdit = new QLineEdit(getParam(QStringLiteral("filePath")).toString());
     filePathEdit->setObjectName("filePathEdit");
     filePathLayout->addWidget(filePathEdit);
     
@@ -394,7 +402,7 @@ QWidget *ImageReadNode::createParamPanel()
     QHBoxLayout *autoSwitchLayout = new QHBoxLayout();
     QLabel *autoSwitchLabel = new QLabel("自动切换:");
     QCheckBox *autoSwitchCheckBox = new QCheckBox();
-    autoSwitchCheckBox->setChecked(m_autoSwitch);
+    autoSwitchCheckBox->setChecked(getParam(QStringLiteral("autoSwitch")).toBool());
     autoSwitchLayout->addWidget(autoSwitchLabel);
     autoSwitchLayout->addWidget(autoSwitchCheckBox);
     autoSwitchLayout->addStretch();
@@ -402,7 +410,7 @@ QWidget *ImageReadNode::createParamPanel()
     
     // 添加mono8模式复选框
     QCheckBox *mono8CheckBox = new QCheckBox("Mono8 Mode");
-    mono8CheckBox->setChecked(m_mono8Mode);
+    mono8CheckBox->setChecked(getParam(QStringLiteral("mono8Mode")).toBool());
     layout->addWidget(mono8CheckBox);
     
     // 添加图像缩略图显示（仅在多图模式下显示）
@@ -468,8 +476,8 @@ QWidget *ImageReadNode::createParamPanel()
         m_currentImageIndex = -1; // 重置为 -1，表示没有图像被选中
         m_displayImageIndex = -1; // 重置显示索引
         selectMultipleFiles();
-        if (!m_filePath.isEmpty()) {
-            filePathEdit->setText(m_filePath);
+        if (!getParam(QStringLiteral("filePath")).toString().isEmpty()) {
+            filePathEdit->setText(getParam(QStringLiteral("filePath")).toString());
         }
         m_isDirectory = false;
         updateImageFiles();
@@ -493,7 +501,7 @@ QWidget *ImageReadNode::createParamPanel()
     });
     
     // 初始更新缩略图
-    if (m_mode == Mode::MultiImage) {
+    if (static_cast<Mode>(getParam(QStringLiteral("mode")).toInt()) == Mode::MultiImage) {
         updateThumbnails(thumbnailLayout);
     } else {
         autoSwitchLayout->setEnabled(false);
@@ -535,7 +543,7 @@ void ImageReadNode::updateParamPanel(QWidget *panel)
     
     QLineEdit *filePathEdit = panel->findChild<QLineEdit*>("filePathEdit");
     if (filePathEdit) {
-        filePathEdit->setText(m_filePath);
+        filePathEdit->setText(getParam(QStringLiteral("filePath")).toString());
     }
     
     // 查找并更新所有复选框
@@ -543,7 +551,7 @@ void ImageReadNode::updateParamPanel(QWidget *panel)
     for (QCheckBox *checkBox : checkBoxes) {
         // 检查复选框的文本或属性来确定它是哪个复选框
         if (checkBox->text() == "Mono8 Mode") {
-            checkBox->setChecked(m_mono8Mode);
+            checkBox->setChecked(getParam(QStringLiteral("mono8Mode")).toBool());
         }
         // 不再假设其他复选框是自动切换，避免覆盖用户的设置
     }
@@ -551,10 +559,11 @@ void ImageReadNode::updateParamPanel(QWidget *panel)
     // 查找并更新模式选择单选按钮
     QList<QRadioButton*> radioButtons = panel->findChildren<QRadioButton*>();
     for (QRadioButton *radio : radioButtons) {
+        const Mode mode = static_cast<Mode>(getParam(QStringLiteral("mode")).toInt());
         if (radio->text() == "单图模式") {
-            radio->setChecked(m_mode == Mode::SingleImage);
+            radio->setChecked(mode == Mode::SingleImage);
         } else if (radio->text() == "多图模式") {
-            radio->setChecked(m_mode == Mode::MultiImage);
+            radio->setChecked(mode == Mode::MultiImage);
         }
     }
     
@@ -576,8 +585,8 @@ void ImageReadNode::updateParamPanel(QWidget *panel)
     
     QLineEdit *pathEdit = panel->findChild<QLineEdit*>("pathEdit");
     if (pathEdit) {
-        pathEdit->setText(m_filePath);
-        pathEdit->setToolTip(m_filePath);
+        pathEdit->setText(getParam(QStringLiteral("filePath")).toString());
+        pathEdit->setToolTip(getParam(QStringLiteral("filePath")).toString());
     }
     
     QLineEdit *nameEdit = panel->findChild<QLineEdit*>("nameEdit");
@@ -620,7 +629,8 @@ void ImageReadNode::updateThumbnails(QHBoxLayout *thumbnailLayout)
     for (int i = 0; i < m_imageFiles.size(); ++i) {
         QString imagePath;
         if (m_isDirectory) {
-            QDir dir(m_filePath);
+            // 参数表唯一来源（缩略图数量 = 文件数，量级很小，不必额外快照）
+            QDir dir(getParam(QStringLiteral("filePath")).toString());
             imagePath = dir.absoluteFilePath(m_imageFiles[i]);
         } else {
             imagePath = m_imageFiles[i];

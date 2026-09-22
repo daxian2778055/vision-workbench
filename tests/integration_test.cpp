@@ -24,6 +24,8 @@
 #include "ProtocolParseNode.h"
 #include "SendDataNode.h"
 #include "ReceiveDataNode.h"
+#include <QDir>
+#include <QFile>
 #include "ScriptSecurityPolicy.h"
 #include "ImageDisplayController.h"
 #include "ExecutionStatusController.h"
@@ -2288,6 +2290,83 @@ void IntegrationTest::testShadowMemberSingleSourceAndConcurrentAccess()
                               Q_ARG(QString, QStringLiteral("TCP1")),
                               Q_ARG(QByteArray, QByteArray("OTHERworld")));
     QCOMPARE(live.getParam(QStringLiteral("lastData")).toString(), QStringLiteral("world"));
+
+    // 同批第十类（ImageReadNode，最后一个 QString 类）：只收口 4 个真参数；
+    // 断言分两层：① 参数单源；② 派生缓存（imageFiles/isDirectory）仍随参数变化重建。
+    ImageReadNode reader;
+    reader.init();
+    QCOMPARE(reader.getParam(QStringLiteral("filePath")).toString(), QString());
+    QCOMPARE(reader.getParam(QStringLiteral("mono8Mode")).toBool(), false);
+    QCOMPARE(reader.getParam(QStringLiteral("autoSwitch")).toBool(), false);
+    QCOMPARE(reader.getParam(QStringLiteral("mode")).toInt(),
+             static_cast<int>(ImageReadNode::Mode::SingleImage));
+    // imagePath 是 filePath 的历史别名，必须继续可用
+    QCOMPARE(reader.getParam(QStringLiteral("imagePath")).toString(), QString());
+
+    reader.setParam(QStringLiteral("filePath"), QStringLiteral("C:/tmp/one.bmp"));
+    reader.setParam(QStringLiteral("mono8Mode"), true);
+    reader.setParam(QStringLiteral("autoSwitch"), true);
+    reader.setParam(QStringLiteral("mode"), static_cast<int>(ImageReadNode::Mode::MultiImage));
+    QCOMPARE(reader.getParam(QStringLiteral("filePath")).toString(), QStringLiteral("C:/tmp/one.bmp"));
+    QCOMPARE(reader.getParam(QStringLiteral("imagePath")).toString(), QStringLiteral("C:/tmp/one.bmp"));
+    QCOMPARE(reader.getParam(QStringLiteral("mono8Mode")).toBool(), true);
+    QCOMPARE(reader.getParam(QStringLiteral("autoSwitch")).toBool(), true);
+
+    const QJsonObject readerJson = reader.toJson();
+    QCOMPARE(readerJson.value(QStringLiteral("filePath")).toString(), QStringLiteral("C:/tmp/one.bmp"));
+    QCOMPARE(readerJson.value(QStringLiteral("mono8Mode")).toBool(), true);
+    QCOMPARE(readerJson.value(QStringLiteral("autoSwitch")).toBool(), true);
+    QCOMPARE(readerJson.value(QStringLiteral("mode")).toInt(),
+             static_cast<int>(ImageReadNode::Mode::MultiImage));
+
+    ImageReadNode readerRoundTrip;
+    readerRoundTrip.init();
+    readerRoundTrip.fromJson(readerJson);
+    QCOMPARE(readerRoundTrip.getParam(QStringLiteral("filePath")).toString(),
+             QStringLiteral("C:/tmp/one.bmp"));
+    QCOMPARE(readerRoundTrip.getParam(QStringLiteral("mono8Mode")).toBool(), true);
+    QCOMPARE(readerRoundTrip.getParam(QStringLiteral("autoSwitch")).toBool(), true);
+    QCOMPARE(readerRoundTrip.getParam(QStringLiteral("mode")).toInt(),
+             static_cast<int>(ImageReadNode::Mode::MultiImage));
+
+    // 旧格式（只有顶层键）：filePath 无条件重置（缺键 ⇒ 空），其余三个 contains 守卫（缺键 ⇒ 保留）
+    QJsonObject legacyReader;
+    legacyReader[QStringLiteral("mono8Mode")] = true;
+    ImageReadNode readerLegacy;
+    readerLegacy.init();
+    readerLegacy.setParam(QStringLiteral("filePath"), QStringLiteral("C:/tmp/old.bmp"));
+    readerLegacy.setParam(QStringLiteral("autoSwitch"), true);
+    readerLegacy.fromJson(legacyReader);
+    QCOMPARE(readerLegacy.getParam(QStringLiteral("filePath")).toString(), QString());
+    QCOMPARE(readerLegacy.getParam(QStringLiteral("mono8Mode")).toBool(), true);
+    QVERIFY2(readerLegacy.getParam(QStringLiteral("autoSwitch")).toBool(),
+             "旧格式缺 autoSwitch 键时必须保留原值（旧实现是 contains 守卫，不是无条件重置）");
+
+    // 行为级：派生缓存必须仍随 filePath 变化重建（证明 setParam 的副作用没被收口改坏）
+    QDir probeDir(QDir::tempPath() + QStringLiteral("/vfp_imageread_probe"));
+    probeDir.removeRecursively();
+    QVERIFY2(probeDir.mkpath(QStringLiteral(".")), "临时目录创建失败");
+    QFile probeA(probeDir.filePath(QStringLiteral("a.bmp")));
+    QFile probeB(probeDir.filePath(QStringLiteral("b.png")));
+    QVERIFY(probeA.open(QIODevice::WriteOnly));
+    probeA.write("x");
+    probeA.close();
+    QVERIFY(probeB.open(QIODevice::WriteOnly));
+    probeB.write("y");
+    probeB.close();
+
+    ImageReadNode cacheProbe;
+    cacheProbe.init();
+    cacheProbe.setParam(QStringLiteral("mode"), static_cast<int>(ImageReadNode::Mode::SingleImage));
+    cacheProbe.setParam(QStringLiteral("filePath"), probeDir.absolutePath());
+    QVERIFY2(!cacheProbe.reusesCachedOutput(),
+             "目录内 2 个文件 ⇒ 会随轮次取不同图，必须判定为不可复用缓存（派生缓存未重建则此处失败）");
+    cacheProbe.setParam(QStringLiteral("filePath"), probeDir.filePath(QStringLiteral("a.bmp")));
+    QVERIFY2(cacheProbe.reusesCachedOutput(), "单文件 ⇒ 输出是路径的确定性函数，必须判定为可复用");
+    cacheProbe.setParam(QStringLiteral("filePath"),
+                        probeDir.filePath(QStringLiteral("does_not_exist.bmp")));
+    QVERIFY2(cacheProbe.reusesCachedOutput(), "路径不存在 ⇒ 0 个文件，仍按可复用处理");
+    probeDir.removeRecursively();
 }
 
 void IntegrationTest::testFlowExtrasRoundTrip()
