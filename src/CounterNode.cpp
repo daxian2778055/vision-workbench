@@ -54,10 +54,10 @@ void CounterNode::run(bool /*autoSwitch*/)
     }
 
     if (condition) {
-        ++m_count;
+        m_count.fetchAndAddRelaxed(1);   // 运行期状态：原子自增（口径见头文件）
     }
 
-    auto obj = QSharedPointer<DataObject>::create(DataObject::DataType::Number, QVariant(m_count));
+    auto obj = QSharedPointer<DataObject>::create(DataObject::DataType::Number, QVariant(count()));
     setOutputData(0, obj);
 }
 

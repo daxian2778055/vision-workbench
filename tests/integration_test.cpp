@@ -2180,6 +2180,44 @@ void IntegrationTest::testShadowMemberSingleSourceAndConcurrentAccess()
     QCOMPARE(counterLegacy.getParam(QStringLiteral("conditionMode")).toString(), QStringLiteral("number"));
     QCOMPARE(counterLegacy.getParam(QStringLiteral("threshold")).toDouble(), 33.0);
 
+    // 运行期状态字段专项（CounterNode::m_count）：它是**运行期状态**（执行线程自增、访问器任意线程可读），
+    // 不是参数镜像 ⇒ 用 QAtomicInt，且**不入参数表**（否则会被 toJson 持久化，重开方案后"接着上次计数"）。
+    CounterNode counterRun;
+    counterRun.init();
+    QCOMPARE(counterRun.count(), 0);
+    counterRun.run();                        // 无输入 ⇒ 条件为假 ⇒ 不计数
+    QCOMPARE(counterRun.count(), 0);
+
+    counterRun.setInputData(0, QSharedPointer<DataObject>::create(
+                                   DataObject::DataType::Bool, QVariant(true)));
+    counterRun.run();
+    QCOMPARE(counterRun.count(), 1);
+    counterRun.run();
+    QCOMPARE(counterRun.count(), 2);
+
+    // 并发读：执行线程连续自增的同时另一线程持续读 —— 断言最终值正确、并发读不越界。
+    //（int 裸读写没有"可断言的撕裂"，故这条钉的是"计数语义在原子实现下未被改坏"+ 读写不崩）
+    CounterNode counterConcurrent;
+    counterConcurrent.init();
+    counterConcurrent.setInputData(0, QSharedPointer<DataObject>::create(
+                                        DataObject::DataType::Bool, QVariant(true)));
+    std::atomic<bool> stopRead{false};
+    std::atomic<int> observedMax{0};
+    std::thread counterReader([&]() {   // 注意变量名：本函数里已有 `reader`（ImageReadNode）
+        while (!stopRead.load(std::memory_order_relaxed)) {
+            const int v = counterConcurrent.count();
+            if (v > observedMax.load(std::memory_order_relaxed))
+                observedMax.store(v, std::memory_order_relaxed);
+        }
+    });
+    for (int i = 0; i < 2000; ++i) {
+        counterConcurrent.run();
+    }
+    stopRead.store(true, std::memory_order_relaxed);
+    counterReader.join();
+    QCOMPARE(counterConcurrent.count(), 2000);
+    QVERIFY2(observedMax.load() <= 2000, "并发读读到了超出最终值的计数");
+
     // 同批第四类（FormatNode）：单源 + 旧格式兼容，且"键缺失"语义必须与旧实现逐字一致
     FormatNode fmt;
     fmt.init();
