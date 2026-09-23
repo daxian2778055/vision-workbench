@@ -174,6 +174,14 @@ void NodeBase::releaseModuleId(int id)
     Q_UNUSED(id)
 }
 
+void NodeBase::setModuleId(int id)
+{
+    if (id <= 0 || id == m_moduleId)
+        return;
+    reserveModuleId(id);   // 先抬高计数器，避免后续新建的算子被分到同一个号
+    m_moduleId = id;
+}
+
 void NodeBase::reserveModuleId(int id)
 {
     // 从方案文件恢复节点时，模块号可能是会话内最大已分配号；把全局计数器抬高到它之上，

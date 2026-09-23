@@ -8,6 +8,7 @@
 #include "ui_MainWindow.h"
 #include "FlowScene.h"
 #include "NodeBase.h"
+#include "NodeGroupItem.h"
 #include "HalconEnvCheck.h"
 #include "HalconNode.h"
 #include "HelpDialog.h"
@@ -994,6 +995,23 @@ void MainWindow::initActions()
         if (FlowScene *s = currentScene()) s->deleteSelectedItems();
     });
 
+    // 算子分组（FR1.9）：Ctrl+G 创建 / Ctrl+Shift+G 解散。
+    // 入口同时进「编辑」菜单：只在右键菜单里放，会重蹈"Add Flow 藏在英文菜单里没人发现"的覆辙。
+    m_actionCreateGroup = new QAction(QStringLiteral("创建分组"), this);
+    m_actionCreateGroup->setShortcut(QKeySequence(QStringLiteral("Ctrl+G")));
+    m_actionCreateGroup->setStatusTip(QStringLiteral("把当前选中的算子框成一组（纯视觉容器，不影响执行）"));
+    m_actionDissolveGroup = new QAction(QStringLiteral("解散分组"), this);
+    m_actionDissolveGroup->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+G")));
+    m_actionDissolveGroup->setStatusTip(QStringLiteral("删除选中的分组框，组内算子保留"));
+    if (ui->menuEdit) {
+        QAction *before = ui->actionDeleteFlow;
+        ui->menuEdit->insertAction(before, m_actionCreateGroup);
+        ui->menuEdit->insertAction(before, m_actionDissolveGroup);
+        ui->menuEdit->insertSeparator(before);
+    }
+    connect(m_actionCreateGroup, &QAction::triggered, this, &MainWindow::onCreateGroup);
+    connect(m_actionDissolveGroup, &QAction::triggered, this, &MainWindow::onDissolveGroup);
+
     // 执行控制
     connect(ui->actionStartExecution, &QAction::triggered, this, &MainWindow::onStartExecution);
     connect(ui->actionStopExecution, &QAction::triggered, this, &MainWindow::onStopExecution);
@@ -1741,6 +1759,49 @@ void MainWindow::markProjectSaved()
         return;
     m_recovery.markSaved(m_projectManager->buildProjectJson(m_flowScenes));
     m_recovery.clearRecovery();
+}
+
+// ---- 算子分组（FR1.9）----
+
+FlowScene *MainWindow::currentFlowScene() const
+{
+    const int idx = ui && ui->flowTabs ? ui->flowTabs->currentIndex() : -1;
+    if (idx >= 0 && idx < m_flowScenes.size())
+        return m_flowScenes[idx];
+    return nullptr;
+}
+
+void MainWindow::onCreateGroup()
+{
+    FlowScene *scene = currentFlowScene();
+    if (!scene)
+        return;
+    if (NodeGroupItem *group = scene->createGroupFromSelection()) {
+        ui->statusBar->showMessage(tr("已创建分组「%1」（%2 个算子）")
+                                       .arg(group->title())
+                                       .arg(group->memberCount()),
+                                   4000);
+        logMessage(tr("创建分组：%1（%2 个算子）")
+                       .arg(group->title())
+                       .arg(group->memberCount()));
+    } else {
+        // 明确告诉用户为什么没反应（而不是静默什么都不发生）
+        ui->statusBar->showMessage(tr("请先在画布上选中至少 2 个算子，再创建分组"), 4000);
+    }
+}
+
+void MainWindow::onDissolveGroup()
+{
+    FlowScene *scene = currentFlowScene();
+    if (!scene)
+        return;
+    const int count = scene->dissolveSelectedGroups();
+    if (count > 0) {
+        ui->statusBar->showMessage(tr("已解散 %1 个分组（组内算子已保留）").arg(count), 4000);
+        logMessage(tr("解散分组：%1 个").arg(count));
+    } else {
+        ui->statusBar->showMessage(tr("请先选中要解散的分组框（点分组标题栏）"), 4000);
+    }
 }
 
 void MainWindow::initCrashRecovery()
@@ -3245,6 +3306,8 @@ void MainWindow::retranslateUi()
         
         ui->actionAddFlow->setText("添加流程");
         ui->actionDeleteFlow->setText("删除流程");
+        if (m_actionCreateGroup) m_actionCreateGroup->setText("创建分组");
+        if (m_actionDissolveGroup) m_actionDissolveGroup->setText("解散分组");
         
         ui->actionSaveScheme->setText("保存方案");
         ui->actionOpenScheme->setText("打开方案");
@@ -3281,6 +3344,8 @@ void MainWindow::retranslateUi()
         
         ui->actionAddFlow->setText("Add Flow");
         ui->actionDeleteFlow->setText("Delete Flow");
+        if (m_actionCreateGroup) m_actionCreateGroup->setText("Create Group");
+        if (m_actionDissolveGroup) m_actionDissolveGroup->setText("Dissolve Group");
         
         ui->actionSaveScheme->setText("Save Scheme");
         ui->actionOpenScheme->setText("Open Scheme");

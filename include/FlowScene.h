@@ -24,6 +24,7 @@ class NodeGraphicsItem;
 class ConnectionGraphicsItem;
 class ConnectionDragHelper;
 class CommentGraphicsItem;
+class NodeGroupItem;
 
 /// 流程级变量（随 .vfp 流程走，不是进程单例）
 struct FlowVariable {
@@ -166,6 +167,21 @@ public:
     void removeComment(CommentGraphicsItem *item);
     QList<CommentGraphicsItem *> comments() const { return m_comments; }
 
+    // ---- 算子分组（Group，FR1.9）----
+    /// 用当前选中的算子建立分组（少于 2 个算子返回 nullptr）。
+    /// 分组是**纯视觉容器**：不改节点/连线、不发 nodeAdded / connection* 信号，因此执行器
+    /// 完全看不到它（执行不受影响）。数据随方案保存（extras 的 nodeGroups），也随撤销快照走。
+    NodeGroupItem *createGroupFromSelection(const QString &title = QString());
+    /// 解散分组：只删框，组内算子原样保留（记撤销）
+    void removeGroup(NodeGroupItem *group);
+    /// 解散当前**选中**的分组，返回解散个数（Delete 键与菜单入口共用）
+    int dissolveSelectedGroups();
+    QList<NodeGroupItem *> groups() const { return m_groups; }
+    /// 算子所属分组（不在任何分组则返回 nullptr）
+    NodeGroupItem *groupOfNode(NodeBase *node) const;
+    /// 按模块号查算子（分组成员定位用）
+    NodeBase *nodeByModuleId(int moduleId) const;
+
     void setFlowVariable(const QString &name, int type, const QVariant &value,
                          const QString &description = QString());
     bool removeFlowVariable(const QString &name);
@@ -238,7 +254,10 @@ private:
     void releaseGraphSnapshot();
     /// 真正析构墓碑（仅 m_liveSnapshotCount==0；必须在场景线程执行）
     void flushRetired();
+    /// 删除分组图元（**不记撤销**：由调用方决定何时记录，避免把"改动后"的状态塞进撤销栈）
+    void deleteGroupItem(NodeGroupItem *group);
     QList<CommentGraphicsItem *> m_comments;
+    QList<NodeGroupItem *> m_groups;   /// 算子分组框（FR1.9；纯视觉容器，随方案与撤销快照持久化）
     QMap<QString, FlowVariable> m_flowVariables;
     QMap<QString, FlowFixture> m_fixtures;
     QString m_flowName;          /// 流程名称（方案持久化 + 触发按名路由，S2）

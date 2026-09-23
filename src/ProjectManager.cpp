@@ -20,6 +20,7 @@
 #include <QJsonArray>
 #include <QJsonParseError>
 #include <QSaveFile>
+#include <QSet>
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QWidget>
@@ -338,6 +339,7 @@ void ProjectManager::sceneFromJson(const QJsonObject &json, FlowScene *scene)
     // Load nodes
     QJsonArray nodesArray = json["nodes"].toArray();
     QMap<int, NodeBase *> nodeMap;
+    QSet<int> usedModuleIds;   ///< 已占用的模块号（防"同一个号两个算子"的脏文件）
     
     for (int i = 0; i < nodesArray.size(); ++i) {
         QJsonObject nodeJson = nodesArray[i].toObject();
@@ -366,6 +368,32 @@ void ProjectManager::sceneFromJson(const QJsonObject &json, FlowScene *scene)
             }
 
             node->fromJson(nodeJson);
+
+            // 恢复模块号（节点身份）：{模块号.参数名} 引用、结果表键、配方键都按模块号索引，
+            // 若加载后按"当前发号顺序"重发，旧方案里的引用会静默指向**另一个**算子。
+            // 历史实现从不恢复模块号 ⇒ 号按文件里节点的出现顺序重发，而该顺序来自
+            // FlowScene::nodes()（按指针地址排序），与创建顺序不保证一致（删过节点/地址复用即错位），
+            // 于是跨模块引用会整体错位——表面正常、结果错误。
+            // 防御：文件里出现重复/非法模块号时保留新发的号（宁可该引用失效，也不能一号两算子）。
+            const int savedModuleId = nodeJson[QStringLiteral("moduleId")].toInt(0);
+            if (savedModuleId > 0 && !usedModuleIds.contains(savedModuleId)) {
+                node->setModuleId(savedModuleId);
+            } else if (savedModuleId > 0) {
+                VFP_DEBUG << "警告：方案中出现重复模块号，保留本算子的新号:" << savedModuleId
+                          << nodeName;
+            }
+            // 双向唯一性：上面的"跳过恢复"只保证不重复占用**文件里**的号，但这个算子当前拿到的
+            // 新号本身可能已被前面某个算子**恢复**成同一个值（实测踩到：两节点都成了 32）。
+            // 模块号是执行器缓存与 {模块号.参数名} 引用的索引键，"一号两算子"会互相污染，
+            // 故这里必须再确认一次，撞了就重新发号（宁可该引用失效，也不能一号两算子）。
+            if (usedModuleIds.contains(node->moduleId())) {
+                const int fresh = NodeBase::allocateModuleId();
+                VFP_DEBUG << "警告：模块号冲突（可能来自重复号的文件），已重新发号:"
+                          << node->moduleId() << "->" << fresh << nodeName;
+                node->setModuleId(fresh);
+            }
+            usedModuleIds.insert(node->moduleId());
+
             int nodeId = nodeJson["id"].toInt();
             nodeMap[nodeId] = node;
             

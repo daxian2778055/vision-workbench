@@ -131,6 +131,11 @@ public:
     /// 从方案文件恢复节点时调用：把全局计数器抬高到 id 之上，防止随后新建节点复用同一号
     static void reserveModuleId(int id);
 
+    /// 仅供"从方案文件恢复节点身份"使用（执行期严禁修改；只应由 ProjectManager::sceneFromJson 调用）。
+    /// 模块号是 {模块号.参数名} 引用、结果表键、配方键的稳定标识：加载后必须与该方案原值一致，
+    /// 否则这些引用会静默指向**另一个**算子（结果错但不报错）。内部先把全局计数器抬到 id 之上。
+    void setModuleId(int id);
+
 protected:
     FlowScene *m_flowSceneRef = nullptr;
     /// 所属执行器（多流程隔离：节点查询运行状态应走 owner，而非全局 current()）

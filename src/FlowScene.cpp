@@ -11,6 +11,7 @@
 #include "ConnectionDragHelper.h"
 #include "ProjectManager.h"
 #include "CommentGraphicsItem.h"
+#include "NodeGroupItem.h"
 #include "AppLog.h"
 #include <QMimeData>
 #include <QDrag>
@@ -306,6 +307,14 @@ void FlowScene::removeNode(NodeBase *node)
     recordUndo();          // 批量记录一次（内部连线删除由 m_undoBatch 抑制）
     ++m_undoBatch;
 
+    // 分组维护：算子没了就不能再留在分组里；成员删光的分组自动解散（否则留下一个空框）。
+    // 这里**不**记录撤销：外层已记录（或已批量抑制），见 deleteGroupItem 注释。
+    const int removedModuleId = node->moduleId();
+    for (NodeGroupItem *g : QList<NodeGroupItem *>(m_groups)) {
+        if (g && g->removeMember(removedModuleId) && g->isEmpty())
+            deleteGroupItem(g);
+    }
+
     // Remove all connections
     for (Port *port : node->inputPorts()) {
         for (MyProject::Connection *conn : port->connections()) {
@@ -590,6 +599,15 @@ void FlowScene::clearScene()
         }
     }
     m_comments.clear();
+    // 分组框同样必须显式清理：QGraphicsScene::clear() 是禁用的（见头文件），
+    // 而上面逐个 removeNode 时成员删光的分组已自动解散，这里收尾剩下的。
+    for (NodeGroupItem *g : m_groups) {
+        if (g) {
+            removeItem(g);
+            delete g;
+        }
+    }
+    m_groups.clear();
     {
         QMutexLocker locker(&m_graphMutex);
         m_nodeItems.clear();
@@ -615,6 +633,10 @@ void FlowScene::setEditLocked(bool locked)
     for (CommentGraphicsItem *c : m_comments) {
         if (c)
             c->setFlag(QGraphicsItem::ItemIsMovable, !locked);
+    }
+    for (NodeGroupItem *g : m_groups) {
+        if (g)
+            g->setFlag(QGraphicsItem::ItemIsMovable, !locked);
     }
 }
 
@@ -708,9 +730,17 @@ void FlowScene::contextMenuEvent(QGraphicsSceneContextMenuEvent *event)
     QMenu menu;
     QAction *addCommentAct = menu.addAction(QStringLiteral("添加注释"));
     addCommentAct->setEnabled(!m_editLocked);
+    // FR1.9：把选中的算子框成一组（纯视觉容器，不影响执行）
+    const int selCount = selectedNodes().size();
+    QAction *groupAct = menu.addAction(selCount >= 2
+                                           ? QStringLiteral("创建分组（%1 个算子）").arg(selCount)
+                                           : QStringLiteral("创建分组（请先选中 ≥2 个算子）"));
+    groupAct->setEnabled(!m_editLocked && selCount >= 2);
     QAction *chosen = menu.exec(event->screenPos());
     if (chosen == addCommentAct && !m_editLocked)
         addComment(event->scenePos(), QStringLiteral("注释"));
+    else if (chosen == groupAct && !m_editLocked)
+        createGroupFromSelection();
 }
 
 QList<NodeBase *> FlowScene::selectedNodes() const
@@ -729,11 +759,14 @@ void FlowScene::deleteSelectedItems()
         return;
     const auto nodes = selectedNodes();
     QList<CommentGraphicsItem *> comments;
+    QList<NodeGroupItem *> groups;
     for (QGraphicsItem *it : selectedItems()) {
         if (auto *c = dynamic_cast<CommentGraphicsItem *>(it))
             comments.append(c);
+        else if (auto *g = dynamic_cast<NodeGroupItem *>(it))
+            groups.append(g);
     }
-    if (nodes.isEmpty() && comments.isEmpty())
+    if (nodes.isEmpty() && comments.isEmpty() && groups.isEmpty())
         return;
     recordUndo();
     ++m_undoBatch;
@@ -741,6 +774,12 @@ void FlowScene::deleteSelectedItems()
         removeNode(n);
     for (CommentGraphicsItem *c : comments)
         removeComment(c);
+    // 选中分组按 Delete = 解散（只删框，组内算子保留）；上面删节点可能已把某个分组连带解散，
+    // 故先确认它还在容器里再删（避免对已析构对象二次操作）。
+    for (NodeGroupItem *g : groups) {
+        if (m_groups.contains(g))
+            deleteGroupItem(g);
+    }
     --m_undoBatch;
 }
 
@@ -777,6 +816,98 @@ void FlowScene::removeComment(CommentGraphicsItem *item)
     m_comments.removeAll(item);
     removeItem(item);
     delete item;
+}
+
+// ---- 算子分组（Group，FR1.9）----
+// 分组是纯视觉容器：不参与执行（不发 nodeAdded / connection* 信号），只随方案与撤销快照持久化。
+
+void FlowScene::deleteGroupItem(NodeGroupItem *group)
+{
+    if (!group)
+        return;
+    // 注意：本函数**不记撤销**。记录时机由调用方掌握（结构变化前记 / 批量内只记一次），
+    // 否则会把"改动之后"的状态塞进撤销栈，导致第一次撤销看起来没反应。
+    m_groups.removeAll(group);
+    removeItem(group);
+    delete group;
+}
+
+NodeGroupItem *FlowScene::createGroupFromSelection(const QString &title)
+{
+    if (m_editLocked)
+        return nullptr;
+    const QList<NodeBase *> sel = selectedNodes();
+    if (sel.size() < 2)
+        return nullptr;   // 单个算子的"分组"没有意义（框只会贴住它自己）
+
+    recordUndo();   // 结构变化前记录（分组会进方案文件、也会被撤销快照带上）
+
+    QList<int> ids;
+    for (NodeBase *n : sel) {
+        if (n)
+            ids.append(n->moduleId());
+    }
+
+    auto *group = new NodeGroupItem(
+        title.isEmpty() ? QStringLiteral("分组 %1").arg(m_groups.size() + 1) : title);
+    group->setMembers(ids);
+    addItem(group);
+    group->fitToMembers();
+    m_groups.append(group);
+    update();
+    return group;
+}
+
+void FlowScene::removeGroup(NodeGroupItem *group)
+{
+    if (!group)
+        return;
+    if (!m_restoring && m_undoBatch == 0)
+        recordUndo();
+    deleteGroupItem(group);
+}
+
+int FlowScene::dissolveSelectedGroups()
+{
+    if (m_editLocked)
+        return 0;
+    QList<NodeGroupItem *> selected;
+    for (QGraphicsItem *it : selectedItems()) {
+        if (auto *g = dynamic_cast<NodeGroupItem *>(it))
+            selected.append(g);
+    }
+    if (selected.isEmpty())
+        return 0;
+
+    recordUndo();
+    ++m_undoBatch;
+    for (NodeGroupItem *g : selected)
+        deleteGroupItem(g);
+    --m_undoBatch;
+    update();
+    return selected.size();
+}
+
+NodeGroupItem *FlowScene::groupOfNode(NodeBase *node) const
+{
+    if (!node)
+        return nullptr;
+    const int id = node->moduleId();
+    for (NodeGroupItem *g : m_groups) {
+        if (g && g->hasMember(id))
+            return g;
+    }
+    return nullptr;
+}
+
+NodeBase *FlowScene::nodeByModuleId(int moduleId) const
+{
+    // nodes() 内部持图锁取副本，避免与执行线程并发读写成员集
+    for (NodeBase *n : nodes()) {
+        if (n && n->moduleId() == moduleId)
+            return n;
+    }
+    return nullptr;
 }
 
 void FlowScene::setFlowVariable(const QString &name, int type, const QVariant &value,
@@ -854,6 +985,14 @@ QJsonObject FlowScene::extrasToJson() const
             comments.append(c->toJson());
     }
     o[QStringLiteral("comments")] = comments;
+
+    // FR1.9 分组：成员用模块号（跨会话稳定），随方案保存/加载并被撤销快照带上
+    QJsonArray groups;
+    for (NodeGroupItem *g : m_groups) {
+        if (g)
+            groups.append(g->toJson());
+    }
+    o[QStringLiteral("nodeGroups")] = groups;
     o[QStringLiteral("flowName")] = m_flowName;   // S2：流程名随方案持久化，触发按名路由保持身份
     o[QStringLiteral("flowMode")] = m_flowMode;   // 每流程运行模式随方案持久化（不是所有流程都要连续）
 
@@ -926,5 +1065,18 @@ void FlowScene::extrasFromJson(const QJsonObject &json)
         item->setFlag(QGraphicsItem::ItemIsMovable, !m_editLocked);
         addItem(item);
         m_comments.append(item);
+    }
+
+    // FR1.9 分组：本函数由 ProjectManager::sceneFromJson 在**节点与连线都建好之后**调用，
+    // 所以这里能按模块号把成员解析回算子（setMembers 会丢掉已不存在的成员）。
+    const QJsonArray groups = json.value(QStringLiteral("nodeGroups")).toArray();
+    for (const QJsonValue &gv : groups) {
+        NodeGroupItem *group = NodeGroupItem::fromJson(gv.toObject());
+        if (!group)
+            continue;
+        group->setFlag(QGraphicsItem::ItemIsMovable, !m_editLocked);
+        addItem(group);
+        group->setMembers(group->memberIds());   // 挂进场景后再过滤一次
+        m_groups.append(group);
     }
 }

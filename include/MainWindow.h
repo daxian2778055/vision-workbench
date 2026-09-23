@@ -16,6 +16,7 @@
 class QDockWidget;
 class QDialog;
 class QTimer;
+class QAction;
 
 #include <halconcpp/HalconCpp.h>
 #include "HalconWindow.h"
@@ -161,6 +162,13 @@ private:
     void startRoiPick(NodeBase *node);
     /// ROI 绘制完成：写回节点参数
     void handleRoiEdited(const RoiShape &shape);
+    /// 当前流程标签页对应的场景（无则 nullptr）。分组等画布操作按"当前流程"作用。
+    FlowScene *currentFlowScene() const;
+    /// 创建分组（FR1.9；Ctrl+G）：把当前流程里选中的算子框成一组
+    void onCreateGroup();
+    /// 解散选中的分组框（Ctrl+Shift+G）；只删框，组内算子保留
+    void onDissolveGroup();
+
     /// 加载指定方案文件（打开/最近文件/崩溃恢复共用）。
     /// recoveryRestore=true（来自崩溃恢复）：不记入最近文件、不把内容标为"已落盘"——
     /// 恢复出来的内容还没写回原方案文件，关闭时仍须提示保存。
@@ -215,6 +223,9 @@ protected:
     RecoveryStore m_recovery;
     /// 自动保存定时器（间隔/开关见 QSettings recovery/autoSaveIntervalSec）
     QTimer *m_autoSaveTimer = nullptr;
+    /// 算子分组菜单项（FR1.9；文案在 retranslateUi 里随语言切换）
+    QAction *m_actionCreateGroup = nullptr;
+    QAction *m_actionDissolveGroup = nullptr;
     QLabel *m_imageSourceLabel; // 图像来源标签
     
     // 自定义运行界面（对齐 VisionMaster 4.4 运行界面）

@@ -3,6 +3,7 @@
 #include "Port.h"
 #include "PortGraphicsItem.h"
 #include "FlowScene.h"
+#include "NodeGroupItem.h"
 #include "NodeTemplateStore.h"
 #include "Connection.h"
 #include <QPainter>
@@ -214,6 +215,9 @@ void NodeGraphicsItem::mouseReleaseEvent(QGraphicsSceneMouseEvent *event)
     if ((pos() - m_pressPos).manhattanLength() > 1.0) {
         if (FlowScene *scene = dynamic_cast<FlowScene *>(this->scene())) {
             scene->recordUndo();
+            // 该算子若属于某个分组：框体要跟着收拢/长大，否则拖完算子后组框与成员就对不上了
+            if (NodeGroupItem *group = scene->groupOfNode(m_node))
+                group->fitToMembers();
         }
     }
 }
