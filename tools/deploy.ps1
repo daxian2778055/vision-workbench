@@ -19,7 +19,8 @@
 
 param(
     [string]$SourceExe = "",
-    [string]$OutDir = ""
+    [string]$OutDir = "",
+    [switch]$SkipVerify      # 跳过部署后自检（默认执行：离线可用性校验）
 )
 
 $ErrorActionPreference = "Stop"
@@ -165,6 +166,38 @@ if (Test-Path $TessdataSrc) {
 }
 
 # ============================================================
+# Step 5.8: MSVC 运行时（CRT）
+# ============================================================
+# 为什么必须拷：主程序导入 VCRUNTIME140.dll / VCRUNTIME140_1.dll / MSVCP140.dll，
+# 干净目标机（未安装 VC++ 2015-2022 x64 可再发行包）会直接"缺少 DLL"打不开。
+# windeployqt 只有在设置了 VCINSTALLDIR（装了 Visual Studio）时才会自动处理，否则它会跳过
+# 并以非零码返回（本机实测即如此），所以这里显式兜一层。
+Step "拷贝 MSVC 运行时 (CRT)"
+$crtNames = @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'msvcp140_1.dll',
+              'msvcp140_2.dll', 'concrt140.dll', 'vccorlib140.dll')
+$crtSrcDirs = @()
+foreach ($root in @('C:\Program Files\Microsoft Visual Studio', 'C:\Program Files (x86)\Microsoft Visual Studio')) {
+    $found = Get-ChildItem (Join-Path $root '*\VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT') -Directory -ErrorAction SilentlyContinue |
+             Select-Object -ExpandProperty FullName
+    if ($found) { $crtSrcDirs += $found }
+}
+$crtSrcDirs += 'C:\Windows\System32'   # 兜底：本机已安装的运行时（VS 未安装时唯一的本地来源）
+$script:crtMissing = @()
+$crtCopied = 0
+foreach ($n in $crtNames) {
+    $copied = $false
+    foreach ($dir in $crtSrcDirs) {
+        $src = Join-Path $dir $n
+        if (Test-Path $src) { Copy-Item $src -Destination $OutDir -Force; $crtCopied++; $copied = $true; break }
+    }
+    if (-not $copied) { $script:crtMissing += $n }
+}
+Write-Host "  -> 已拷贝 $crtCopied 个 CRT DLL" -ForegroundColor Green
+if ($script:crtMissing.Count -gt 0) {
+    Write-Warning ("本机找不到这些 CRT（目标机需安装 VC++ 2015-2022 x64 可再发行包）: " + ($script:crtMissing -join ', '))
+}
+
+# ============================================================
 # Step 6: 拷贝 docs（软件内 F1 查看的操作手册）
 # ============================================================
 Step "拷贝使用手册"
@@ -224,9 +257,99 @@ Set-Content -Path (Join-Path $OutDir "部署说明.txt") -Value $readme -Encodin
 Write-Host "  -> 部署说明.txt" -ForegroundColor Green
 
 # ============================================================
+# Step 9: 部署自检（离线可用性）
+# ============================================================
+# 目的：把"包能不能在目标机离线跑起来"变成可执行校验，而不是靠人工双击碰运气。
+# 判据三项：关键文件齐 → 主程序导入的 CRT 都在包里 → 从**部署目录本体**跑节点自检 0 失败。
+$problems = @()
+if (-not $SkipVerify) {
+    Step "部署自检（离线可用性）"
+
+    # 9.1 关键文件
+    $mustHave = @('VisionFlowPlatform.exe', 'platforms\qwindows.dll', 'sqldrivers\qsqlite.dll',
+                  'Qt6Core.dll', 'Qt6Sql.dll', 'Qt6Widgets.dll', 'opencv_world4130.dll',
+                  'halconcpp.dll', 'MvCameraControl.dll', 'vcruntime140.dll', 'msvcp140.dll',
+                  'tessdata', 'license', 'data', 'logs', 'schemes')
+    foreach ($n in $mustHave) {
+        if (-not (Test-Path (Join-Path $OutDir $n))) { $problems += "缺文件: $n" }
+    }
+    Write-Host ("  关键文件检查: {0}/{1} 就位" -f ($mustHave.Count - $problems.Count), $mustHave.Count)
+
+    # 9.2 CRT 完备性：按"二进制里是否引用了该 DLL"判断，避免"看起来拷了、其实少一个"
+    $scanTargets = @((Join-Path $OutDir 'VisionFlowPlatform.exe'))
+    $scanTargets += (Get-ChildItem (Join-Path $OutDir '*.dll') -ErrorAction SilentlyContinue |
+                     Where-Object { $_.Length -lt 25MB } | Select-Object -ExpandProperty FullName)
+    $referenced = @{}
+    foreach ($f in $scanTargets) {
+        try {
+            # 注意：PE 导入表里的名字大小写不固定（实测是 VCRUNTIME140.dll），Contains 区分大小写，
+            # 故统一转小写比较——否则会得到"0 个被引用"这种看着通过、其实没检查的假绿。
+            $txt = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($f)).ToLowerInvariant()
+        } catch { continue }
+        foreach ($n in $crtNames) {
+            if ($txt.Contains($n)) { $referenced[$n] = $true }
+        }
+    }
+    $missCrt = @()
+    foreach ($n in $referenced.Keys) {
+        if (-not (Test-Path (Join-Path $OutDir $n))) { $missCrt += $n }
+    }
+    if ($missCrt.Count -gt 0) {
+        $problems += ("被引用但缺 CRT: " + ($missCrt -join ', '))
+    } else {
+        Write-Host ("  CRT 检查: 被引用的 {0} 个 CRT 全部在包内" -f $referenced.Count)
+    }
+
+    # 9.3 从部署目录本体跑节点自检（不设 QT_PLUGIN_PATH，模拟目标机双击）
+    # 用 ProcessStartInfo 而不是 Start-Process -PassThru：后者实测取回 ExitCode 为空值，
+    # 会把"自检通过"误报成失败（$null -ne 0 恒真）。
+    $savedPluginPath = $env:QT_PLUGIN_PATH
+    $env:QT_PLUGIN_PATH = $null
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = Join-Path $OutDir 'VisionFlowPlatform.exe'
+    $psi.Arguments = '--selftest-nodes'
+    $psi.WorkingDirectory = $OutDir
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardError = $true
+    $psi.RedirectStandardOutput = $true
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $errTask = $p.StandardError.ReadToEndAsync()
+    $outTask = $p.StandardOutput.ReadToEndAsync()
+    if (-not $p.WaitForExit(300000)) {
+        $p.Kill()
+        $problems += '节点自检超时（>5 分钟）'
+    } else {
+        Write-Host ("  自检退出码: " + $p.ExitCode)
+        if ($p.ExitCode -ne 0) { $problems += "节点自检未通过（退出码 $($p.ExitCode)）" }
+    }
+    $errText = $errTask.Result
+    if ($errText -match 'QSQLITE') {
+        # 部署目录内应能加载 Qt SQL 插件（数据库落库功能的前提）
+        $problems += 'Qt SQL 驱动未加载（stderr 出现 QSQLITE 告警 -> 数据库功能不可用）'
+    }
+    $env:QT_PLUGIN_PATH = $savedPluginPath
+    $rep = Join-Path $OutDir 'selftest_nodes_report.txt'
+    if (Test-Path $rep) {
+        $sumLine = (Get-Content $rep -Encoding UTF8 | Select-String -Pattern '汇总' | Select-Object -Last 1)
+        Write-Host ("  " + ($sumLine.Line))
+        if ($sumLine.Line -notmatch '0 FAIL') { $problems += '节点自检存在失败项' }
+    } else {
+        $problems += '未生成自检报告'
+    }
+}
+
+# ============================================================
 # 完成
 # ============================================================
 Write-Host ""
+if ($problems.Count -gt 0) {
+    Write-Host "========================================" -ForegroundColor Red
+    Write-Host "  部署完成，但自检发现问题（离线可用性存疑）:" -ForegroundColor Red
+    foreach ($p in $problems) { Write-Host ("   - " + $p) -ForegroundColor Red }
+    Write-Host "  输出目录: $OutDir" -ForegroundColor Red
+    Write-Host "========================================" -ForegroundColor Red
+    exit 1
+}
 Write-Host "========================================" -ForegroundColor Green
 Write-Host "  部署完成!" -ForegroundColor Green
 Write-Host "  输出目录: $OutDir" -ForegroundColor Green
