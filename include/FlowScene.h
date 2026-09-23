@@ -60,6 +60,12 @@ public:
     static void setDanglingSnapshotAssertEnabled(bool on) { s_danglingSnapshotAssertEnabled = on; }
 
     NodeBase *createNode(NodeBase::NodeType type, const QPointF &pos, const QString &nodeName = "");
+
+    /// 按注册表 typeId（优先）或类型枚举（兜底）新建一个**已初始化**的算子（不接入场景）。
+    /// **必须走这里**：端口是在各算子的 init() 里建的，而 `NodeRegistry::createById` /
+    /// `NodeFactory::createNode` 都不会替你调它——漏掉的表现是"插入/复制出来的算子没有端口、
+    /// 连不上线"，可流程照样能跑（最隐蔽的一类）。调用方随后 fromJson() 覆盖参数、再接入场景。
+    NodeBase *createNodeByTypeIdOrName(const QString &typeId, int typeValue, const QString &name);
     /// 复制算子（含参数），生成偏移的副本并加入场景；失败返回 nullptr
     NodeBase *duplicateNode(NodeBase *node);
     /// 把已在场景外构造好的算子接入场景（建图形项、登记、发信号）。
@@ -150,6 +156,11 @@ public:
     // ---- 撤销/重做（快照式，覆盖节点增删/连线增删/节点移动） ----
     /// 记录当前场景状态到撤销栈（结构变化前调用）
     void recordUndo();
+    /// 批量编辑：期间内的 createConnection / removeNode 等不再各自记录撤销
+    /// （由调用方在批量开始前记录一次）⇒ "一次操作 = 一步撤销"（片段粘贴这类多步动作必用）。
+    /// 必须成对调用；FlowSnippet::insert 内部已按对使用。
+    void beginUndoBatch();
+    void endUndoBatch();
     /// 撤销一步；成功返回 true
     bool undo();
     /// 重做一步；成功返回 true
@@ -181,6 +192,14 @@ public:
     NodeGroupItem *groupOfNode(NodeBase *node) const;
     /// 按模块号查算子（分组成员定位用）
     NodeBase *nodeByModuleId(int moduleId) const;
+
+    /// 生成场景内不重名的算子名（base → base_2 → base_3…；exclude 为刚插入的算子自身，可空）。
+    /// 变量引用按算子名定位，撞名会让"引用指向哪个算子"变得不确定——凡插入新算子（模板/片段）
+    /// 都要过这一关，故做成单一实现，避免多处规则漂移。
+    QString makeUniqueNodeName(const QString &base, NodeBase *exclude = nullptr) const;
+    /// 接管一个"从方案/片段载入"的分组框：挂进场景 + 归属容器 + 按给定尺寸设框
+    /// （尺寸随文件存过，不该再按成员位置去猜），并跟随编辑锁定状态。
+    void registerLoadedGroup(NodeGroupItem *group, qreal width, qreal height);
 
     void setFlowVariable(const QString &name, int type, const QVariant &value,
                          const QString &description = QString());
@@ -229,6 +248,11 @@ signals:
     void undoAvailable(bool available);
     void redoAvailable(bool available);
     void nodeGraphicsItemCreated(NodeGraphicsItem *item);
+    /// 画布聚焦时按下 Ctrl+C / Ctrl+V：请求"复制选中子图 / 粘贴片段"。
+    /// 不在场景里直接做：粘贴位置需要视图（窗口侧知道当前视图中心）；这样做也让参数框、日志等
+    /// 文本框里的 Ctrl+C 保持原生复制——那些控件不经过本场景。
+    void copySelectionRequested();
+    void pasteRequested();
     void nodeHelpRequested(NodeBase *node);
     void nodeOutputDataRequested(NodeBase *node);
     void executeToHereRequested(NodeBase *node);

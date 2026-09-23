@@ -191,6 +191,22 @@ NodeBase *FlowScene::createNode(NodeBase::NodeType type, const QPointF &pos, con
     return node;
 }
 
+NodeBase *FlowScene::createNodeByTypeIdOrName(const QString &typeId, int typeValue,
+                                              const QString &name)
+{
+    NodeBase *node = nullptr;
+    if (!typeId.isEmpty())
+        node = NodeRegistry::instance().createById(typeId, this);
+    if (!node && typeValue >= 0)
+        node = NodeFactory::createNode(this, static_cast<NodeBase::NodeType>(typeValue), name);
+    if (!node)
+        return nullptr;
+    // 端口在这里建（见各算子的 init()）。历史上 duplicateNode / createNodeFromTemplate 都漏了这一步，
+    // 于是"复制/模板插入出来的算子没有端口、连不上线"——流程还照样能跑，极难发现。
+    node->init();
+    return node;
+}
+
 NodeBase *FlowScene::duplicateNode(NodeBase *node)
 {
     if (!node || m_editLocked) return nullptr;
@@ -201,15 +217,10 @@ NodeBase *FlowScene::duplicateNode(NodeBase *node)
     json.remove(QStringLiteral("moduleId"));
     json.remove(QStringLiteral("position"));
 
-    // 优先按注册表 ID 克隆（保留具体算子类型），否则按名称回退
-    NodeBase *clone = nullptr;
-    const QString typeId = node->property("vfpNodeTypeId").toString();
-    if (!typeId.isEmpty()) {
-        clone = NodeRegistry::instance().createById(typeId, this);
-    }
-    if (!clone) {
-        clone = NodeFactory::createNode(this, node->type(), node->name());
-    }
+    // 优先按注册表 ID 克隆（保留具体算子类型），否则按名称回退。
+    // 走统一入口：它负责 init()（建端口）——旧实现直接用 createById，副本没有端口、连不上线。
+    NodeBase *clone = createNodeByTypeIdOrName(node->property("vfpNodeTypeId").toString(),
+                                               int(node->type()), node->name());
     if (!clone) return nullptr;
 
     clone->fromJson(json);
@@ -254,45 +265,20 @@ NodeBase *FlowScene::createNodeFromTemplate(const QString &templateName, const Q
     recordUndo();
 
     // 优先按注册表 ID 克隆（保留具体算子类型），否则按类型枚举 + 名称回退
-    // ——与 duplicateNode 完全同一条路径，模板因此对新增算子自动可用。
-    NodeBase *node = nullptr;
-    const QString typeId = store.typeIdOf(templateName);
-    if (!typeId.isEmpty()) {
-        node = NodeRegistry::instance().createById(typeId, this);
-    }
-    if (!node) {
-        node = NodeFactory::createNode(
-            this, static_cast<NodeBase::NodeType>(store.typeValueOf(templateName)),
-            store.nodeNameOf(templateName));
-    }
+    // ——与 duplicateNode 完全同一条路径（含 init() 建端口），模板因此对新增算子自动可用。
+    NodeBase *node = createNodeByTypeIdOrName(store.typeIdOf(templateName),
+                                              store.typeValueOf(templateName),
+                                              store.nodeNameOf(templateName));
     if (!node) return nullptr;
 
     node->fromJson(nodeJson);
 
     // 重名就加后缀：变量引用按算子名定位，撞名会让"引用指向哪个算子"变得不确定。
-    QString base = node->name();
-    if (base.isEmpty()) {
-        base = templateName;
-    }
-    QString candidate = base;
-    int suffix = 2;
-    bool renamed = false;
-    for (;;) {
-        bool taken = false;
-        const QList<NodeBase *> existing = nodes();
-        for (NodeBase *other : existing) {
-            if (other && other != node && other->name() == candidate) {
-                taken = true;
-                break;
-            }
-        }
-        if (!taken) break;
-        renamed = true;
-        candidate = base + QStringLiteral("_%1").arg(suffix++);
-    }
-    if (renamed) {
-        node->setName(candidate);
-    }
+    // 与片段插入共用 makeUniqueNodeName（单一实现，避免两处规则漂移）。
+    const QString base = node->name().isEmpty() ? templateName : node->name();
+    const QString unique = makeUniqueNodeName(base, node);
+    if (!unique.isEmpty() && unique != node->name())
+        node->setName(unique);
 
     adoptNode(node, pos);
     return node;
@@ -448,6 +434,17 @@ void FlowScene::recordUndo()
     m_redoStack.clear();
     emit undoAvailable(true);
     emit redoAvailable(false);
+}
+
+void FlowScene::beginUndoBatch()
+{
+    ++m_undoBatch;
+}
+
+void FlowScene::endUndoBatch()
+{
+    if (m_undoBatch > 0)
+        --m_undoBatch;
 }
 
 void FlowScene::restoreSnapshot(const QJsonObject &snapshot)
@@ -717,6 +714,18 @@ void FlowScene::keyPressEvent(QKeyEvent *event)
         event->accept();
         return;
     }
+    // 画布聚焦时的 Ctrl+C / Ctrl+V：转成请求交给窗口（粘贴位置要用视图中心），
+    // 这样参数框/日志里的 Ctrl+C 仍是原生文本复制（那些控件不经过本场景）。
+    if (event->matches(QKeySequence::Copy)) {
+        emit copySelectionRequested();
+        event->accept();
+        return;
+    }
+    if (event->matches(QKeySequence::Paste)) {
+        emit pasteRequested();
+        event->accept();
+        return;
+    }
     QGraphicsScene::keyPressEvent(event);
 }
 
@@ -900,6 +909,40 @@ NodeGroupItem *FlowScene::groupOfNode(NodeBase *node) const
     return nullptr;
 }
 
+QString FlowScene::makeUniqueNodeName(const QString &base, NodeBase *exclude) const
+{
+    const QString trimmed = base.trimmed();
+    if (trimmed.isEmpty())
+        return trimmed;
+
+    // nodes() 内部持图锁取副本，避免与执行线程并发读写成员集
+    const QList<NodeBase *> existing = nodes();
+    QString candidate = trimmed;
+    int suffix = 2;
+    for (;;) {
+        bool taken = false;
+        for (NodeBase *other : existing) {
+            if (other && other != exclude && other->name() == candidate) {
+                taken = true;
+                break;
+            }
+        }
+        if (!taken)
+            return candidate;
+        candidate = trimmed + QStringLiteral("_%1").arg(suffix++);
+    }
+}
+
+void FlowScene::registerLoadedGroup(NodeGroupItem *group, qreal width, qreal height)
+{
+    if (!group)
+        return;
+    group->setFlag(QGraphicsItem::ItemIsMovable, !m_editLocked);
+    group->setFrameSize(width, height);
+    addItem(group);
+    m_groups.append(group);
+}
+
 NodeBase *FlowScene::nodeByModuleId(int moduleId) const
 {
     // nodes() 内部持图锁取副本，避免与执行线程并发读写成员集
@@ -1074,9 +1117,9 @@ void FlowScene::extrasFromJson(const QJsonObject &json)
         NodeGroupItem *group = NodeGroupItem::fromJson(gv.toObject());
         if (!group)
             continue;
-        group->setFlag(QGraphicsItem::ItemIsMovable, !m_editLocked);
-        addItem(group);
+        const QJsonObject groupJson = gv.toObject();
+        registerLoadedGroup(group, groupJson.value(QStringLiteral("w")).toDouble(),
+                            groupJson.value(QStringLiteral("h")).toDouble());
         group->setMembers(group->memberIds());   // 挂进场景后再过滤一次
-        m_groups.append(group);
     }
 }

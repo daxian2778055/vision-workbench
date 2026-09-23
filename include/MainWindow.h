@@ -11,6 +11,7 @@
 #include <QVector>
 #include <QHash>
 #include <QShowEvent>
+#include <QJsonObject>
 #include <functional>
 
 class QDockWidget;
@@ -169,6 +170,20 @@ private:
     /// 解散选中的分组框（Ctrl+Shift+G）；只删框，组内算子保留
     void onDissolveGroup();
 
+    // ---- 子图复用：复制/粘贴选中子图（含连线）+ 片段文件导入导出（FR15.10 的设计期复用半步）----
+    /// 视图中心（场景坐标）：粘贴/导入时把片段放在用户正在看的位置；无视图时给一个稳妥兜底
+    QPointF viewCenterInScene(FlowScene *scene) const;
+    /// 复制当前流程里选中的算子为片段文本（写剪贴板）
+    void copySelectionToClipboard(FlowScene *scene);
+    /// 粘贴剪贴板里的片段（画布 Ctrl+V 与菜单共用）
+    void pasteSnippetIntoScene(FlowScene *scene);
+    /// 把片段插到场景并选中新算子（记一次撤销 + 状态栏/日志反馈）；失败时 error 说明原因
+    bool insertSnippetIntoScene(FlowScene *scene, const QJsonObject &snippet, QString *error);
+    /// 导出选中的算子为片段文件（.vfseg）
+    void onExportSnippet();
+    /// 从片段文件导入到当前流程
+    void onImportSnippet();
+
     /// 加载指定方案文件（打开/最近文件/崩溃恢复共用）。
     /// recoveryRestore=true（来自崩溃恢复）：不记入最近文件、不把内容标为"已落盘"——
     /// 恢复出来的内容还没写回原方案文件，关闭时仍须提示保存。
@@ -226,6 +241,11 @@ protected:
     /// 算子分组菜单项（FR1.9；文案在 retranslateUi 里随语言切换）
     QAction *m_actionCreateGroup = nullptr;
     QAction *m_actionDissolveGroup = nullptr;
+    /// 子图复用菜单项（FR15.10 设计期半步：复制/粘贴/导出片段/导入片段）
+    QAction *m_actionCopySnippet = nullptr;
+    QAction *m_actionPasteSnippet = nullptr;
+    QAction *m_actionExportSnippet = nullptr;
+    QAction *m_actionImportSnippet = nullptr;
     QLabel *m_imageSourceLabel; // 图像来源标签
     
     // 自定义运行界面（对齐 VisionMaster 4.4 运行界面）

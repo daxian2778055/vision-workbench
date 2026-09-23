@@ -255,6 +255,7 @@ set(SOURCES
     src/PanelVisibilityStore.cpp
     src/RecoveryStore.cpp
     src/NodeGroupItem.cpp
+    src/FlowSnippet.cpp
     src/NodeSearchWidget.cpp
     src/ConnectionDragHelper.cpp
     src/HelpViewer.cpp
@@ -427,6 +428,7 @@ set(HEADERS
     include/RecentFilesMenu.h
     include/RecoveryStore.h
     include/NodeGroupItem.h
+    include/FlowSnippet.h
     include/GlobalVariableManager.h
     include/GlobalVariableDialog.h
     include/GlobalCameraManager.h
@@ -860,6 +862,14 @@ if(MSVC)
     target_link_libraries(node_group_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
     add_test(NAME NodeGroupTest COMMAND node_group_test)
     vfp_configure_gui_test(NodeGroupTest)
+endif()
+
+# 子图片段（FR15.10 设计期复用）：拓扑往返 / 重新发号与去重 / 原子性 / 一步撤销 / 粘完能跑
+if(MSVC)
+    add_executable(flow_snippet_test tests/flow_snippet_test.cpp)
+    target_link_libraries(flow_snippet_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    add_test(NAME FlowSnippetTest COMMAND flow_snippet_test)
+    vfp_configure_gui_test(FlowSnippetTest)
 endif()
 
 # 数据库跨线程访问测试（QSqlDatabase 线程亲和性 / 每线程独立连接）

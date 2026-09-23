@@ -49,6 +49,10 @@ public:
     /// 按成员当前位置重算框体（左上角随成员外接矩形走，含标题栏）；无有效成员返回 false
     bool fitToMembers();
 
+    /// 直接指定框体尺寸（仅用于"从方案/片段载入"：尺寸已随文件存好，不该再按成员位置猜）；
+    /// 位置用 setPos() 设置。过小（<20）忽略，避免手工改坏的文件造出无法点选的框。
+    void setFrameSize(qreal width, qreal height);
+
     /// 整体移动：框体与全部成员各移动 delta（撤销由调用方在移动前记录）
     void moveGroupBy(const QPointF &delta);
     /// 只移动成员（框体由基类拖动时用）

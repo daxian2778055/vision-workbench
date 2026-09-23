@@ -9,6 +9,8 @@
 #include "FlowScene.h"
 #include "NodeBase.h"
 #include "NodeGroupItem.h"
+#include "FlowSnippet.h"
+#include <QClipboard>
 #include "HalconEnvCheck.h"
 #include "HalconNode.h"
 #include "HelpDialog.h"
@@ -64,6 +66,7 @@
 #include <QFileDialog>
 #include <QDir>
 #include <QFile>
+#include <QFileDialog>
 #include <QMessageBox>
 #include <QThreadPool>
 #include <QTimer>
@@ -1003,6 +1006,34 @@ void MainWindow::initActions()
     m_actionDissolveGroup = new QAction(QStringLiteral("解散分组"), this);
     m_actionDissolveGroup->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+G")));
     m_actionDissolveGroup->setStatusTip(QStringLiteral("删除选中的分组框，组内算子保留"));
+
+    // 子图复用（FR15.10 的设计期半步）：复制/粘贴选中子图 + 片段文件导入导出。
+    // 快捷键用 WidgetShortcut（**只在主窗口自身有焦点时**生效）：Ctrl+C/V 不抢文本框的复制粘贴
+    // ——画布上的 Ctrl+C/V 由 FlowScene 的按键处理发出请求（见 hookFlowScene）。
+    m_actionCopySnippet = new QAction(QStringLiteral("复制所选算子"), this);
+    m_actionCopySnippet->setShortcut(QKeySequence::Copy);
+    m_actionCopySnippet->setShortcutContext(Qt::WidgetShortcut);
+    m_actionPasteSnippet = new QAction(QStringLiteral("粘贴"), this);
+    m_actionPasteSnippet->setShortcut(QKeySequence::Paste);
+    m_actionPasteSnippet->setShortcutContext(Qt::WidgetShortcut);
+    m_actionExportSnippet = new QAction(QStringLiteral("导出片段…"), this);
+    m_actionExportSnippet->setStatusTip(QStringLiteral("把选中的算子（含内部连线）导出为片段文件，供别的方案插入"));
+    m_actionImportSnippet = new QAction(QStringLiteral("导入片段…"), this);
+    m_actionImportSnippet->setStatusTip(QStringLiteral("把片段文件插入到当前流程（放在当前视图中心）"));
+    if (ui->menuEdit) {
+        QAction *beforeSnippet = ui->actionDeleteFlow;
+        ui->menuEdit->insertAction(beforeSnippet, m_actionCopySnippet);
+        ui->menuEdit->insertAction(beforeSnippet, m_actionPasteSnippet);
+        ui->menuEdit->insertAction(beforeSnippet, m_actionExportSnippet);
+        ui->menuEdit->insertAction(beforeSnippet, m_actionImportSnippet);
+        ui->menuEdit->insertSeparator(beforeSnippet);
+    }
+    connect(m_actionCopySnippet, &QAction::triggered, this,
+            [this]() { copySelectionToClipboard(currentFlowScene()); });
+    connect(m_actionPasteSnippet, &QAction::triggered, this,
+            [this]() { pasteSnippetIntoScene(currentFlowScene()); });
+    connect(m_actionExportSnippet, &QAction::triggered, this, &MainWindow::onExportSnippet);
+    connect(m_actionImportSnippet, &QAction::triggered, this, &MainWindow::onImportSnippet);
     if (ui->menuEdit) {
         QAction *before = ui->actionDeleteFlow;
         ui->menuEdit->insertAction(before, m_actionCreateGroup);
@@ -1050,6 +1081,14 @@ void MainWindow::hookFlowScene(FlowScene *scene)
     }
     connect(scene, &FlowScene::nodeSelected, this, &MainWindow::onNodeSelected);
     connect(scene, &FlowScene::nodeAdded, this, &MainWindow::onNodeAdded);
+    // 画布聚焦时的 Ctrl+C / Ctrl+V：场景只发请求，剪贴板与粘贴位置都归窗口管
+    // （参数框/日志里的 Ctrl+C 因此仍是原生文本复制——那些控件不经过场景）
+    connect(scene, &FlowScene::copySelectionRequested, this, [this, scene]() {
+        copySelectionToClipboard(scene);
+    });
+    connect(scene, &FlowScene::pasteRequested, this, [this, scene]() {
+        pasteSnippetIntoScene(scene);
+    });
     connect(scene, &FlowScene::connectionRejected, this, [this](const QString &reason) {
         logMessage(reason);
     });
@@ -1802,6 +1841,179 @@ void MainWindow::onDissolveGroup()
     } else {
         ui->statusBar->showMessage(tr("请先选中要解散的分组框（点分组标题栏）"), 4000);
     }
+}
+
+// ---- 子图复用：复制/粘贴（含内部连线）+ 片段文件导入导出 ----
+// 边界说明：这是 FR15.10 的**设计期**半步（拷一份出来，跨流程/跨方案/跨会话搬运）；
+// 运行期"把一段流程当算子调用"（子流程复用）未做，接口草案见 docs/子流程复用设计草案.md。
+
+QPointF MainWindow::viewCenterInScene(FlowScene *scene) const
+{
+    if (scene && ui && ui->flowTabs) {
+        for (int i = 0; i < ui->flowTabs->count(); ++i) {
+            if (auto *view = qobject_cast<QGraphicsView *>(ui->flowTabs->widget(i))) {
+                if (view->scene() == scene)
+                    return view->mapToScene(view->viewport()->rect().center());
+            }
+        }
+    }
+    // 兜底（理论上只在没有视图的测试路径）：给一个稳妥点，别把片段粘到坐标原点外面
+    return QPointF(80, 80);
+}
+
+void MainWindow::copySelectionToClipboard(FlowScene *scene)
+{
+    if (!scene)
+        return;
+    const QList<NodeBase *> selected = scene->selectedNodes();
+    if (selected.isEmpty()) {
+        ui->statusBar->showMessage(tr("请先选中要复制的算子"), 3000);
+        return;
+    }
+
+    int droppedConnections = 0;
+    const QJsonObject snippet = FlowSnippet::capture(scene, selected, &droppedConnections);
+    if (snippet.isEmpty()) {
+        ui->statusBar->showMessage(tr("复制失败：没有可复制的算子"), 3000);
+        return;
+    }
+    QApplication::clipboard()->setText(FlowSnippet::toText(snippet));
+
+    QString msg = tr("已复制 %1 个算子").arg(selected.size());
+    if (droppedConnections > 0) {
+        // 如实告知：跨选中边界的连线不会被带走（对端不在片段里）
+        msg += tr("（%1 条跨边界的连线未包含）").arg(droppedConnections);
+    }
+    ui->statusBar->showMessage(msg, 5000);
+    logMessage(msg);
+}
+
+void MainWindow::pasteSnippetIntoScene(FlowScene *scene)
+{
+    if (!scene)
+        return;
+    QString error;
+    const QJsonObject snippet = FlowSnippet::fromText(QApplication::clipboard()->text(), &error);
+    if (snippet.isEmpty()) {
+        ui->statusBar->showMessage(tr("粘贴失败：%1").arg(error), 6000);
+        return;
+    }
+    insertSnippetIntoScene(scene, snippet, &error);
+}
+
+bool MainWindow::insertSnippetIntoScene(FlowScene *scene, const QJsonObject &snippet, QString *error)
+{
+    if (!scene) {
+        if (error)
+            *error = tr("当前没有流程");
+        return false;
+    }
+    if (scene->isEditLocked()) {
+        if (error)
+            *error = tr("流程处于编辑锁定状态（运行中），无法插入片段");
+        ui->statusBar->showMessage(error ? *error : QString(), 5000);
+        return false;
+    }
+
+    scene->recordUndo();   // 一次插入 = 一步撤销（内部批量抑制分步记录）
+    const QPointF at = FlowSnippet::suggestedInsertTopLeft(snippet, viewCenterInScene(scene));
+    const QList<NodeBase *> created = FlowSnippet::insert(scene, snippet, at, error);
+    if (created.isEmpty()) {
+        if (error)
+            ui->statusBar->showMessage(tr("插入片段失败：%1").arg(*error), 6000);
+        if (error)
+            logMessage(tr("插入片段失败：%1").arg(*error));
+        return false;
+    }
+
+    // 选中刚插入的算子：用户能立刻拖走/继续连线，不用自己一个个点
+    scene->clearSelection();
+    for (NodeBase *n : created) {
+        if (NodeGraphicsItem *item = scene->getGraphicsItemForNode(n))
+            item->setSelected(true);
+    }
+    const QString msg = tr("已插入 %1 个算子").arg(created.size());
+    ui->statusBar->showMessage(msg, 5000);
+    logMessage(msg);
+    return true;
+}
+
+void MainWindow::onExportSnippet()
+{
+    FlowScene *scene = currentFlowScene();
+    if (!scene)
+        return;
+    const QList<NodeBase *> selected = scene->selectedNodes();
+    if (selected.isEmpty()) {
+        ui->statusBar->showMessage(tr("请先选中要导出的算子"), 4000);
+        return;
+    }
+
+    int droppedConnections = 0;
+    const QJsonObject snippet = FlowSnippet::capture(scene, selected, &droppedConnections);
+    if (snippet.isEmpty()) {
+        ui->statusBar->showMessage(tr("导出失败：没有可导出的算子"), 4000);
+        return;
+    }
+
+    QString path = QFileDialog::getSaveFileName(
+        this, tr("导出方案片段"), QString(),
+        tr("方案片段 (*%1)").arg(FlowSnippet::fileExtension()));
+    if (path.isEmpty())
+        return;   // 用户取消
+    if (!path.endsWith(FlowSnippet::fileExtension(), Qt::CaseInsensitive))
+        path += FlowSnippet::fileExtension();
+
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) {
+        QMessageBox::warning(this, tr("导出方案片段"),
+                             tr("无法写入文件：\n%1\n%2").arg(path, file.errorString()));
+        return;
+    }
+    const QByteArray payload = FlowSnippet::toText(snippet).toUtf8();
+    const qint64 written = file.write(payload);
+    file.close();
+    if (written != payload.size()) {
+        QMessageBox::warning(this, tr("导出方案片段"), tr("写入不完整：\n%1").arg(path));
+        return;
+    }
+
+    QString msg = tr("已导出片段：%1（%2 个算子）").arg(path).arg(selected.size());
+    if (droppedConnections > 0)
+        msg += tr("；%1 条跨边界连线未包含").arg(droppedConnections);
+    ui->statusBar->showMessage(msg, 6000);
+    logMessage(msg);
+}
+
+void MainWindow::onImportSnippet()
+{
+    FlowScene *scene = currentFlowScene();
+    if (!scene)
+        return;
+    const QString path = QFileDialog::getOpenFileName(
+        this, tr("导入方案片段"), QString(),
+        tr("方案片段 (*%1)").arg(FlowSnippet::fileExtension()));
+    if (path.isEmpty())
+        return;   // 用户取消
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        QMessageBox::warning(this, tr("导入方案片段"),
+                             tr("无法读取文件：\n%1\n%2").arg(path, file.errorString()));
+        return;
+    }
+    const QByteArray raw = file.readAll();
+    file.close();
+
+    QString error;
+    const QJsonObject snippet = FlowSnippet::fromText(QString::fromUtf8(raw), &error);
+    if (snippet.isEmpty()) {
+        QMessageBox::warning(this, tr("导入方案片段"), error);
+        return;
+    }
+    logMessage(tr("导入片段：%1").arg(path));
+    if (!insertSnippetIntoScene(scene, snippet, &error))
+        QMessageBox::warning(this, tr("导入方案片段"), error);
 }
 
 void MainWindow::initCrashRecovery()
@@ -3308,6 +3520,10 @@ void MainWindow::retranslateUi()
         ui->actionDeleteFlow->setText("删除流程");
         if (m_actionCreateGroup) m_actionCreateGroup->setText("创建分组");
         if (m_actionDissolveGroup) m_actionDissolveGroup->setText("解散分组");
+        if (m_actionCopySnippet) m_actionCopySnippet->setText("复制所选算子");
+        if (m_actionPasteSnippet) m_actionPasteSnippet->setText("粘贴");
+        if (m_actionExportSnippet) m_actionExportSnippet->setText("导出片段…");
+        if (m_actionImportSnippet) m_actionImportSnippet->setText("导入片段…");
         
         ui->actionSaveScheme->setText("保存方案");
         ui->actionOpenScheme->setText("打开方案");
@@ -3346,6 +3562,10 @@ void MainWindow::retranslateUi()
         ui->actionDeleteFlow->setText("Delete Flow");
         if (m_actionCreateGroup) m_actionCreateGroup->setText("Create Group");
         if (m_actionDissolveGroup) m_actionDissolveGroup->setText("Dissolve Group");
+        if (m_actionCopySnippet) m_actionCopySnippet->setText("Copy Selected Nodes");
+        if (m_actionPasteSnippet) m_actionPasteSnippet->setText("Paste");
+        if (m_actionExportSnippet) m_actionExportSnippet->setText("Export Snippet…");
+        if (m_actionImportSnippet) m_actionImportSnippet->setText("Import Snippet…");
         
         ui->actionSaveScheme->setText("Save Scheme");
         ui->actionOpenScheme->setText("Open Scheme");

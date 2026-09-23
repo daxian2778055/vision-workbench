@@ -109,6 +109,15 @@ bool NodeGroupItem::fitToMembers()
     return true;
 }
 
+void NodeGroupItem::setFrameSize(qreal width, qreal height)
+{
+    if (width < 20.0 || height < 20.0)
+        return;
+    prepareGeometryChange();
+    m_rect = QRectF(0, 0, width, height);
+    update();
+}
+
 void NodeGroupItem::moveMembersBy(const QPointF &delta)
 {
     if (delta.isNull())
