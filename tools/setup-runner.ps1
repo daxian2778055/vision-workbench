@@ -1,4 +1,4 @@
-<#
+﻿<#
     VisionFlowPlatform: install and register a self-hosted GitHub Actions runner on Windows.
 
     Usage (elevated PowerShell if you plan to install it as a service):

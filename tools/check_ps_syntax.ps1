@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # PowerShell syntax check for a single .ps1 file (Windows / PowerShell)
 # ------------------------------------------------------------
 # Why a separate script: parsing **several** files inside one process gave inconsistent results
@@ -24,6 +24,17 @@ if (-not (Test-Path -LiteralPath $Path)) {
 }
 
 $full = (Resolve-Path -LiteralPath $Path).Path
+
+# UTF-8 BOM is mandatory for .ps1 in this repo: PowerShell 5.1 decodes .ps1 as ANSI when no BOM is
+# present, which mangles non-ASCII string literals - that silently made 4 scripts in tools/ unusable
+# (they could not even be parsed). Keep the rule enforced, not documented.
+$bytes = [System.IO.File]::ReadAllBytes($full)
+$hasBom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
+if (-not $hasBom) {
+    Write-Host ("FAIL {0}: missing UTF-8 BOM (PowerShell 5.1 would read this file as ANSI)" -f (Split-Path -Leaf $full))
+    exit 1
+}
+
 $tokens = $null
 $errs = $null
 [void][System.Management.Automation.Language.Parser]::ParseFile($full, [ref]$tokens, [ref]$errs)

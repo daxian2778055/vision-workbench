@@ -1,4 +1,4 @@
-<#
+﻿<#
     VisionFlowPlatform: make the self-hosted runner start automatically at logon.
 
     Why a logon task instead of a Windows service:

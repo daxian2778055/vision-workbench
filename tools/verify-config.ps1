@@ -1,4 +1,4 @@
-# VisionFlowPlatform 配置验证脚本
+﻿# VisionFlowPlatform 配置验证脚本
 # 使用方法：在项目根目录运行此脚本
 
 param(
@@ -73,6 +73,8 @@ if (Test-Path $vsWhere) {
 # 3. 检查 Qt
 Write-Host "[3/15] 检查 Qt..." -ForegroundColor Yellow
 $qtPaths = @(
+    "D:\Qt\6.11.0\msvc2022_64",          # 本仓实际使用的版本（与 CMakeLists/部署脚本一致）
+    "C:\Qt\6.11.0\msvc2022_64",
     "C:\Qt\6.10.0\msvc2019_64",
     "C:\Qt\6.9.0\msvc2019_64",
     "C:\Qt\6.8.0\msvc2019_64",
@@ -88,8 +90,28 @@ foreach ($qtPath in $qtPaths) {
     }
 }
 
+# 兜底：按“任意盘符 / 任意 6.x / 任意工具链”扫一遍。
+# 为什么必须兜底：上面是硬编码路径清单，Qt 一升级（本机是 D:\Qt\6.11.0\msvc2022_64）就会
+# 误报"未找到 Qt 6.x"——一个会说谎的检查脚本比没有检查更糟。
 if (-not $qtFound) {
-    Add-Check "Qt" "FAIL" "未找到 Qt 6.x" "安装 Qt 6.10.0 或设置 CMAKE_PREFIX_PATH"
+    foreach ($drive in @('C:\', 'D:\', 'E:\')) {
+        $qtRoot = Join-Path $drive 'Qt'
+        if (-not (Test-Path $qtRoot)) { continue }
+        $hit = Get-ChildItem $qtRoot -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like '6.*' } |
+            ForEach-Object { Get-ChildItem $_.FullName -Directory -ErrorAction SilentlyContinue } |
+            Where-Object { Test-Path (Join-Path $_.FullName 'bin\qmake.exe') } |
+            Select-Object -First 1
+        if ($hit) {
+            Add-Check "Qt" "PASS" ("Qt {0} at {1}" -f $hit.Parent.Name, $hit.FullName)
+            $qtFound = $true
+            break
+        }
+    }
+}
+
+if (-not $qtFound) {
+    Add-Check "Qt" "FAIL" "未找到 Qt 6.x" "安装 Qt 6.x 或设置 CMAKE_PREFIX_PATH"
 }
 
 # 4. 检查 HALCON
@@ -141,8 +163,12 @@ if (Test-Path $mvsRoot) {
 # 7. 检查 CMake
 Write-Host "[7/15] 检查 CMake..." -ForegroundColor Yellow
 if (Test-Command "cmake") {
-    $cmakeVersion = (cmake --version) -replace '.*version ' -replace '\..*'
-    if ([int]$cmakeVersion -ge 3) {
+    # 注意：cmake --version 是多行输出，直接 -replace 会得到数组，[int] 转换会抛
+    # ConvertToFinalInvalidCastException（本脚本此前每跑必抛）。故先取第一行再正则取主版本号。
+    $cmakeMajor = 0
+    $cmakeFirstLine = (cmake --version | Select-Object -First 1)
+    if ("$cmakeFirstLine" -match 'version\s+(\d+)') { $cmakeMajor = [int]$Matches[1] }
+    if ($cmakeMajor -ge 3) {
         Add-Check "CMake" "PASS" "CMake $(cmake --version | Select-String -Pattern '\d+\.\d+\.\d+')"
     } else {
         Add-Check "CMake" "FAIL" "CMake 版本过低" "安装 CMake 3.16 或更高版本"
@@ -305,8 +331,10 @@ if ($failed -eq 0) {
     }
 }
 
-# 保存报告
-$reportPath = Join-Path $PSScriptRoot "..\config-check-report.txt"
+# 保存报告（写到 logs\ 下：那是运行期产物目录，已随 .gitignore 忽略，不污染仓库根）
+$logDir = Join-Path $PSScriptRoot "..\logs"
+if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+$reportPath = Join-Path $logDir "config-check-report.txt"
 $report = @"
 VisionFlowPlatform 配置验证报告
 生成时间: $(Get-Date)

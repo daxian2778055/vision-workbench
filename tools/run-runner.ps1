@@ -1,4 +1,4 @@
-<#
+﻿<#
     VisionFlowPlatform: start the self-hosted GitHub Actions runner with a sanitized PATH.
 
     Why this wrapper exists:

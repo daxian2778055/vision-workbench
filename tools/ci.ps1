@@ -1,4 +1,4 @@
-<#
+﻿<#
     VisionFlowPlatform CI: configure (if needed) -> build -> run CTest -> verify results.
 
     Usage:

@@ -1,4 +1,4 @@
-# VisionFlowPlatform 项目状态检查脚本
+﻿# VisionFlowPlatform 项目状态检查脚本
 # 快速检查项目配置和健康状态
 
 param(

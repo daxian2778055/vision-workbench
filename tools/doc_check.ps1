@@ -1,4 +1,4 @@
-# ============================================================
+﻿# ============================================================
 # Documentation reconciliation check (Windows / PowerShell)
 # ------------------------------------------------------------
 # Why: this repo's roadmap had **4** cases of "doc says missing, code already has it"

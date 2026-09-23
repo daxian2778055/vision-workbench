@@ -1,4 +1,4 @@
-# VisionFlowPlatform 项目健康检查工具
+﻿# VisionFlowPlatform 项目健康检查工具
 # 使用方法：在项目根目录运行此脚本
 
 param(

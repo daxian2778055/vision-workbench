@@ -1,4 +1,4 @@
-# 批量给 6 个 Halcon 形态学节点加 iterations 参数
+﻿# 批量给 6 个 Halcon 形态学节点加 iterations 参数
 $ErrorActionPreference = "Stop"
 $ops = @{
   "ErodeNode"       = "GrayErosionRect"

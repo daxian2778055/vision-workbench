@@ -1,4 +1,4 @@
-# VisionFlowPlatform 开发工具安装脚本
+﻿# VisionFlowPlatform 开发工具安装脚本
 # 使用方法：以管理员身份运行 PowerShell，执行此脚本
 
 Write-Host "========================================" -ForegroundColor Cyan
