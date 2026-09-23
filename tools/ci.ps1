@@ -108,6 +108,59 @@ if ($buildCode -ne 0) {
 }
 Write-Ok "build succeeded in $([int]$buildTimer.Elapsed.TotalSeconds)s"
 
+# ------------------------------------------------- 4b. artifact freshness gate
+# Why: an incremental MSBuild can report exit 0 while having (wrongly) skipped
+# compiling a project whose sources were edited afterwards ("cached green").
+# A stale/absent test executable then makes ctest either skip the test (Not Run)
+# or silently run last build's binary. This gate is pure cost-free insurance:
+#   1) every executable registered via add_test(...) must exist in bin/$Config;
+#   2) every test executable must be at least as new as the newest source file
+#      (a real build relinks on any source change; an older binary proves it didn't).
+Write-Step "Artifact freshness"
+
+$binDir = Join-Path $BuildDir "bin\$Config"
+$registered = @()
+$addTestRe = [regex]'add_test\s*\(\s*NAME\s+\S+\s+COMMAND\s+([A-Za-z0-9_\-\.]+)'
+$cmakeText = Get-Content 'CMakeLists.txt' -Raw
+foreach ($m in $addTestRe.Matches($cmakeText)) { $registered += $m.Groups[1].Value }
+if ($registered.Count -eq 0) {
+    Write-Err 'no add_test(...) targets parsed from CMakeLists.txt - freshness gate cannot run'
+    Pop-Location
+    exit 1
+}
+
+$missing = @()
+foreach ($t in ($registered | Select-Object -Unique)) {
+    if (-not (Test-Path (Join-Path $binDir "$t.exe"))) { $missing += "$t.exe" }
+}
+if ($missing.Count -gt 0) {
+    foreach ($x in $missing) { Write-Err "registered test executable missing: bin/$Config/$x" }
+    Pop-Location
+    exit 1
+}
+
+# Newest source modification (all test binaries link vfp_core, which compiles src/*;
+# headers/tests/CMakeLists changes must relink too).
+$newestSrc = @((Get-ChildItem -Recurse -Include '*.cpp','*.h','*.hpp' `
+    -Path 'src','include','tests' -ErrorAction SilentlyContinue)) +
+    @(Get-Item 'CMakeLists.txt' -ErrorAction SilentlyContinue) |
+    Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+$stale = @()
+if ($newestSrc) {
+    foreach ($t in ($registered | Select-Object -Unique)) {
+        $exe = Get-Item (Join-Path $binDir "$t.exe")
+        if ($exe.LastWriteTimeUtc -lt $newestSrc.LastWriteTimeUtc) {
+            $stale += "$($exe.Name) ($($exe.LastWriteTimeUtc.ToString('yyyy-MM-dd HH:mm')) < newest source $($newestSrc.Name) $($newestSrc.LastWriteTimeUtc.ToString('yyyy-MM-dd HH:mm')))"
+        }
+    }
+}
+if ($stale.Count -gt 0) {
+    foreach ($s in $stale) { Write-Err "stale test binary (older than sources, build skipped it?): $s" }
+    Pop-Location
+    exit 1
+}
+Write-Ok "$($registered.Count) registered executables present and fresh (newest source: $(if ($newestSrc) { $newestSrc.Name } else { 'n/a' }))"
+
 if ($SkipTests) {
     Write-Step 'Summary'
     Write-Ok 'build only (-SkipTests)'

@@ -2128,9 +2128,11 @@ void MainWindow::reportAutoExportTick()
     // 否则"界面看到 98%、机器导出来 96%"这种事现场无法解释。
     const QDateTime to = QDateTime::currentDateTime();
     const QDateTime from = to.addSecs(-3600LL * cfg.rangeHours);
-    // 上限保护：高频产线 24h 可能有上百万条记录，一次全查会把 UI 线程拖住；
-    // 触顶时如实提示"报表可能不完整"（queryResults 是"按时间倒序取最近的 N 条"）。
-    constexpr int kQueryLimit = 500000;
+    // 上限保护：本拍在 GUI 线程同步查询并逐行构造记录，行数直接换算成窗口冻结时长
+    //（评审 P3：高频产线"每天一次、没人看着"的时刻最忌讳卡窗）。保守钉 5 万（原 50 万的
+    // 1/10，具体耗时待真机标定）——queryResults 按时间倒序取最近 N 条，
+    // 触顶时报表只覆盖"最近 5 万条"，状态栏如实提示。
+    constexpr int kQueryLimit = 50000;
     const QList<InspectionRecord> records =
         AppDatabase::instance()->queryResults(from, to, kQueryLimit);
     const bool truncated = (records.size() >= kQueryLimit);
@@ -2156,7 +2158,7 @@ void MainWindow::reportAutoExportTick()
     if (removed > 0)
         msg += tr("（清理旧报告 %1 个）").arg(removed);
     if (truncated)
-        msg += tr(" ⚠ 记录数触顶，报表可能不完整（建议调小统计小时数）");
+        msg += tr(" ⚠ 记录数触顶（仅覆盖最近 %1 条），报表可能不完整（建议调小统计小时数）").arg(kQueryLimit);
     logMessage(msg);
     ui->statusBar->showMessage(msg, 12000);
     if (!error.isEmpty())
