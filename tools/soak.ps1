@@ -1,29 +1,31 @@
 # ============================================================
-# VisionFlowPlatform 长稳（soak）长跑脚本 (Windows / PowerShell)
+# VisionFlowPlatform soak (long-run stability) script - Windows / PowerShell
 # ------------------------------------------------------------
-# 用途：在目标机/测试机上跑 N 小时连续运行，观察
-#       ① 轮次是否持续增长（节拍不漂移、不停摆）
-#       ② 有没有失败轮次
-#       ③ 进程句柄数 / 工作集是否持续增长（泄漏信号）
+# What it does: runs the soak test for N hours and watches
+#   1) rounds keep growing (no stalling / no beat drift)
+#   2) no failed rounds
+#   3) process handle count / working set do NOT keep growing (leak signal)
 #
-# 实测基线（本仓 25 秒短跑，640×480 读图→形态学→Blob→公式→计数 链路）：
-#   2313 轮 / 92.5 轮每秒 / 0 失败轮次 / 句柄 Δ1 / 工作集 Δ0 MB
-#   —— 短跑只能证明"当前无泄漏"，72h 长跑才能覆盖"长时间后是否劣化"。
+# Measured baseline (this repo, 25 s short run; read -> morphology -> blob -> formula -> counter):
+#   2313 rounds / 92.5 rounds per second / 0 failed rounds / handles delta 1 / working set delta 0 MB
+#   The short run only proves "no leak right now"; the 72h run covers long-term degradation.
 #
-# 用法：
-#   powershell -ExecutionPolicy Bypass -File tools\soak.ps1                 # 默认 72 小时
-#   powershell -ExecutionPolicy Bypass -File tools\soak.ps1 -Hours 0.5     # 半小时试跑
-#   powershell -ExecutionPolicy Bypass -File tools\soak.ps1 -Hours 72 -IntervalMs 0
+# Usage:
+#   powershell -ExecutionPolicy Bypass -File tools\soak.ps1                # default 72 hours
+#   powershell -ExecutionPolicy Bypass -File tools\soak.ps1 -Hours 0.5    # half an hour
 #
-# 长跑期间可另开一个终端观察进度：
+# Watch progress from another terminal while it runs:
 #   Get-Content logs\soak_progress.txt -Wait
+#
+# NOTE: this file is intentionally **pure ASCII**. PowerShell 5.1 reads .ps1 as ANSI unless a BOM
+# is present, so non-ASCII string literals can be mangled into parser errors (hit twice already).
 # ============================================================
 
 param(
-    [double]$Hours = 72,             # 长跑时长（小时），支持小数
-    [string]$ProgressPath = "",      # 进度文件（默认 logs\soak_progress.txt，逐秒追加）
-    [string]$ReportPath = "",        # 报告文件（默认 logs\soak_report_<时间戳>.txt）
-    [string]$TestExe = ""            # 测试可执行文件（默认 build\bin\Release\soak_test.exe）
+    [double]$Hours = 72,             # run length in hours (fractions allowed)
+    [string]$ProgressPath = "",      # progress file (default logs\soak_progress.txt, appended per second)
+    [string]$ReportPath = "",        # report file (default logs\soak_report_<timestamp>.txt)
+    [string]$TestExe = ""            # test executable (default build\bin\Release\soak_test.exe)
 )
 
 $ErrorActionPreference = "Continue"
@@ -34,7 +36,7 @@ if (-not $TestExe) {
     $TestExe = Join-Path $RepoRoot "build\bin\Release\soak_test.exe"
 }
 if (-not (Test-Path $TestExe)) {
-    Write-Error "找不到长稳测试程序: $TestExe`n请先编译 soak_test 目标（cmake --build build --config Release --target soak_test）。"
+    Write-Error ("soak test executable not found: {0}`nBuild it first: cmake --build build --config Release --target soak_test" -f $TestExe)
     exit 1
 }
 
@@ -48,52 +50,64 @@ $seconds = [int][math]::Round($Hours * 3600)
 if ($seconds -lt 5) { $seconds = 5 }
 
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  长稳运行" -ForegroundColor Cyan
-Write-Host "  时长   : $Hours 小时（$seconds 秒）"
-Write-Host "  进度   : $ProgressPath"
-Write-Host "  报告   : $ReportPath"
-Write-Host "  观察   : Get-Content '$ProgressPath' -Wait"
+Write-Host "  Soak run" -ForegroundColor Cyan
+Write-Host ("  duration : {0} h ({1} s)" -f $Hours, $seconds)
+Write-Host ("  progress : {0}" -f $ProgressPath)
+Write-Host ("  report   : {0}" -f $ReportPath)
+Write-Host ("  watch    : Get-Content '{0}' -Wait" -f $ProgressPath)
 Write-Host "========================================" -ForegroundColor Cyan
 
-# 每行带时间戳，便于长跑后定位"哪个时间点开始劣化"
-"[$(Get-Date -Format 'HH:mm:ss')] soak start: ${Hours}h" | Out-File -FilePath $ProgressPath -Encoding UTF8 -Append
+("[{0}] soak start: {1}h" -f (Get-Date -Format 'HH:mm:ss'), $Hours) |
+    Out-File -FilePath $ProgressPath -Encoding UTF8 -Append
 
 $env:VFP_SOAK_SECONDS  = "$seconds"
 $env:VFP_SOAK_PROGRESS = $ProgressPath
 $env:VFP_SOAK_REPORT   = $ReportPath
-# 与目标机一致地找 Qt 插件（避免"从构建目录直跑"时的 QSQLITE 假告警）
+# The test binary needs Qt + HALCON + OpenCV DLLs. Point PATH at the deployed folder (which carries all
+# of them) exactly like the CMake test environment does - otherwise the process dies with 0xC0000135
+# (STATUS_DLL_NOT_FOUND) and the report is never produced (hit for real in the first version).
 $deployDir = Join-Path $RepoRoot "dist\VisionFlowPlatform"
-if (Test-Path $deployDir) { $env:QT_PLUGIN_PATH = $deployDir }
+if (Test-Path $deployDir) {
+    $env:PATH = $deployDir + ';' + $env:PATH
+    $env:QT_PLUGIN_PATH = $deployDir
+} else {
+    Write-Host ("WARNING: deployed folder not found ({0}); relying on system PATH for Qt/HALCON DLLs" -f $deployDir) -ForegroundColor Yellow
+}
+$qtBin = "D:\Qt\6.11.0\msvc2022_64\bin"
+if (Test-Path $qtBin) { $env:PATH = $qtBin + ';' + $env:PATH }
 
+$testLog = Join-Path $logDir "soak_test_$stamp.txt"
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName = $TestExe
-$psi.Arguments = "-o `"$(Join-Path $logDir "soak_test_$stamp.txt"),txt`""
+$psi.Arguments = "-o `"$testLog`,txt`""
 $psi.WorkingDirectory = $RepoRoot
 $psi.UseShellExecute = $false
 $p = [System.Diagnostics.Process]::Start($psi)
 
-$timeoutMs = ($seconds + 1800) * 1000     # 结束余量 30 分钟（收尾/落报告）
+$timeoutMs = [int][math]::Min(($seconds + 1800) * 1000, [int]::MaxValue)   # +30 min tail allowance
 $sw = [Diagnostics.Stopwatch]::StartNew()
-$ok = $p.WaitForExit([int][math]::Min($timeoutMs, [int]::MaxValue))
+$ok = $p.WaitForExit($timeoutMs)
 $sw.Stop()
 
 if (-not $ok) {
     $p.Kill()
-    Write-Host "长稳超时未退出（超过 $Hours 小时 + 30 分钟余量），已强制结束" -ForegroundColor Red
+    Write-Host ("soak did not exit within {0} h + 30 min allowance - killed" -f $Hours) -ForegroundColor Red
     exit 2
 }
 
-Write-Host ("运行结束：退出码 {0}，耗时 {1} 分钟" -f $p.ExitCode, [math]::Round($sw.Elapsed.TotalMinutes, 1))
+Write-Host ("finished: exit code {0}, elapsed {1} min" -f $p.ExitCode, [math]::Round($sw.Elapsed.TotalMinutes, 1))
 
 if (Test-Path $ReportPath) {
     Write-Host "----------------------------------------" -ForegroundColor Cyan
     Get-Content $ReportPath -Encoding UTF8 | Select-Object -First 3 | ForEach-Object { Write-Host $_ }
-    Get-Content $ReportPath -Encoding UTF8 | Select-String -Pattern '逐节点' -Context 0,20 |
+    # per-node section header in the report is Chinese; match via \u escapes to keep this file ASCII
+    # (\u9010\u8282\u70B9 = "per node")
+    Get-Content $ReportPath -Encoding UTF8 | Select-String -Pattern '\u9010\u8282\u70B9' -Context 0,20 |
         ForEach-Object { $_.Line; $_.Context.PostContext } | ForEach-Object { Write-Host $_ }
     Write-Host "----------------------------------------" -ForegroundColor Cyan
-    Write-Host "完整报告: $ReportPath" -ForegroundColor Green
+    Write-Host ("full report: {0}" -f $ReportPath) -ForegroundColor Green
 } else {
-    Write-Host "未生成报告文件（$ReportPath）" -ForegroundColor Yellow
+    Write-Host ("report file not produced: {0}" -f $ReportPath) -ForegroundColor Yellow
 }
 
 exit $p.ExitCode

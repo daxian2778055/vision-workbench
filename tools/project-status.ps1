@@ -45,7 +45,8 @@ function Write-Status {
         }
     }
     
-    Write-Host "$icon $Name: $Message" -ForegroundColor $color
+    # ${Name}: must use braces - "$Name:" is parsed as a drive-qualified variable and fails to parse
+    Write-Host "$icon ${Name}: $Message" -ForegroundColor $color
 }
 
 Write-Host "========================================" -ForegroundColor $Cyan
