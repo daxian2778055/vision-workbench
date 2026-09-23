@@ -15,10 +15,12 @@
 
 class QDockWidget;
 class QDialog;
+class QTimer;
 
 #include <halconcpp/HalconCpp.h>
 #include "HalconWindow.h"
 #include "NodeBase.h"
+#include "RecoveryStore.h"   // 自动保存/崩溃恢复（值成员，需要完整类型）
 
 using namespace HalconCpp;
 
@@ -159,8 +161,30 @@ private:
     void startRoiPick(NodeBase *node);
     /// ROI 绘制完成：写回节点参数
     void handleRoiEdited(const RoiShape &shape);
-    /// 加载指定方案文件（打开/最近文件共用）
-    void loadProjectFile(const QString &fileName);
+    /// 加载指定方案文件（打开/最近文件/崩溃恢复共用）。
+    /// recoveryRestore=true（来自崩溃恢复）：不记入最近文件、不把内容标为"已落盘"——
+    /// 恢复出来的内容还没写回原方案文件，关闭时仍须提示保存。
+    void loadProjectFile(const QString &fileName, bool recoveryRestore = false);
+    /// 取得（必要时创建）方案序列化器：保存/加载/自动保存共用同一实例
+    ProjectManager *projectManager();
+    /// 交互式保存方案（文件对话框 + 结果提示）；返回是否真的保存成功
+    bool saveProjectInteractively();
+    /// 记录"当前内容已落盘"基线并清除恢复现场（保存/加载成功后调用）
+    void markProjectSaved();
+
+    // ---- 自动保存 / 崩溃恢复（落盘逻辑见 RecoveryStore；本处只做策略与界面）----
+    /// 创建自动保存定时器（间隔与开关取自 QSettings recovery/*）
+    void initCrashRecovery();
+    /// 自动保存一拍：与已落盘内容一致、或与恢复文件一致时跳过，不做无意义写盘
+    void autoSaveTick();
+    /// 启动后检查上次异常退出留下的恢复文件，询问是否恢复
+    void checkRecoveryOnStartup();
+    /// 关闭前确认：有未保存改动时询问（保存并退出 / 不保存退出 / 取消）
+    /// 返回 false 表示用户取消，调用方应忽略本次关闭
+    bool confirmCloseWithUnsavedChanges();
+    /// 打开/新建方案前确认：有未保存改动时询问（保存并继续 / 不保存继续 / 取消）
+    /// action 用于提示文案（如"打开方案"/"新建方案"）；返回 false 表示用户取消，调用方应放弃本次操作
+    bool confirmDiscardUnsavedChanges(const QString &action);
     /// 打开使用手册查看对话框（F1 / 帮助菜单）
     void openManualDialog();
 
@@ -187,6 +211,10 @@ protected:
     QMetaObject::Connection m_roiPickConn;
     /// 最近打开方案菜单（记录/去重/截断/重建见 RecentFilesMenu）
     RecentFilesMenu *m_recentFiles = nullptr;
+    /// 自动保存/崩溃恢复的落盘逻辑（无 GUI 依赖，其本身由 recovery_store_test 覆盖）
+    RecoveryStore m_recovery;
+    /// 自动保存定时器（间隔/开关见 QSettings recovery/autoSaveIntervalSec）
+    QTimer *m_autoSaveTimer = nullptr;
     QLabel *m_imageSourceLabel; // 图像来源标签
     
     // 自定义运行界面（对齐 VisionMaster 4.4 运行界面）

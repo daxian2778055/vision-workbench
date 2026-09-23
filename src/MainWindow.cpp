@@ -61,6 +61,7 @@
 #include "ModuleEditorDialog.h"
 #include <HalconCpp.h>
 #include <QFileDialog>
+#include <QDir>
 #include <QFile>
 #include <QMessageBox>
 #include <QThreadPool>
@@ -553,6 +554,11 @@ MainWindow::MainWindow(QWidget *parent) :
         VFP_DEBUG << "Setting default language";
         createNewFlow();
         VFP_DEBUG << "createNewFlow completed";
+
+        // 自动保存/崩溃恢复：须在 createNewFlow 之后（首个流程已存在，序列化才有意义）。
+        // 恢复询问延到窗口显示之后（见 showEvent → checkRecoveryOnStartup），
+        // 否则构造期的模态框会挡住登录框。
+        initCrashRecovery();
         
         // Phase 4: 弹出登录对话框
         VFP_DEBUG << "Showing login dialog";
@@ -879,6 +885,13 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
+    // 未保存确认必须最先做：取消关闭时不得已经产生副作用（清恢复现场/停相机/落面板配置）
+    if (!confirmCloseWithUnsavedChanges()) {
+        VFP_DEBUG << "closeEvent: 用户在\"未保存修改\"确认中选择取消，本次关闭被忽略";
+        event->ignore();
+        return;
+    }
+
     // 关闭路径留痕：现场反馈过"关了软件但进程还在"，日志里没有本条即说明根本没走到正常关闭
     // （例如进程停在登录框/无窗口状态），据此可快速区分"没关掉"与"关掉后没退干净"。
     VFP_DEBUG << "closeEvent: 关闭主窗口，保存面板显隐并清理相机…";
@@ -1592,6 +1605,11 @@ void MainWindow::onImageRead(const HalconCpp::HImage &image)
 
 void MainWindow::onNewProject()
 {
+    // 新建会丢弃当前方案：有未保存改动时先确认（与关窗/打开方案同一机制，
+    // 否则只保护了"退出"这一条路，新建/打开仍是静默丢弃）
+    if (!confirmDiscardUnsavedChanges(tr("新建方案")))
+        return;
+
     // 新建方案
     logMessage("新建方案");
 
@@ -1672,29 +1690,239 @@ void MainWindow::onNewProject()
     
     // 创建一个新的空流程
     createNewFlow();
+
+    // 新建后是"干净的空白方案"：重置未保存基线。否则会拿上一方案的内容当基线，
+    // 空白新方案被当成"有未保存修改"（关窗时无谓提示，自动保存还会写一份空恢复文件）。
+    markProjectSaved();
     
     logMessage("新方案创建完成");
 }
 
 void MainWindow::onSaveProject()
 {
-    // 保存项目（方案扩展名 .vfp，与需求文档一致）：文件对话框与结果提示在 ProjectManager
-    if (!m_projectManager) {
-        m_projectManager = new ProjectManager(this);
-    }
+    saveProjectInteractively();
+}
 
+// 保存相关逻辑集中在这里：关窗前的"保存并退出"与菜单/工具栏的保存必须走同一条路径，
+// 否则很容易出现"手动保存会清恢复现场、关窗保存不会"这类隐性分叉。
+ProjectManager *MainWindow::projectManager()
+{
+    // 懒创建集中到一处：原先两个入口各自 if(!m_projectManager) new，易漏且一旦漏就是两份实例
+    // （各自的 lastFilePath 互不相同 → 自动保存/恢复拿到的是错的方案路径）。
+    if (!m_projectManager)
+        m_projectManager = new ProjectManager(this);
+    return m_projectManager;
+}
+
+bool MainWindow::saveProjectInteractively()
+{
+    // 保存项目（方案扩展名 .vfp，与需求文档一致）：文件对话框与结果提示在 ProjectManager
+    ProjectManager *pm = projectManager();
     QString fileName;
-    const bool success = m_projectManager->saveProjectInteractive(this, m_flowScenes, &fileName);
+    const bool success = pm->saveProjectInteractive(this, m_flowScenes, &fileName);
     if (fileName.isEmpty())
-        return;   // 用户取消
+        return false;   // 用户取消
 
     logMessage(tr("保存项目: %1").arg(fileName));
     if (success) {
         logMessage(tr("项目保存成功: %1").arg(fileName));
         m_recentFiles->add(fileName);
+        // 内容已落盘：刷新"未保存判定"基线，并清掉恢复现场（干净退出语义）
+        markProjectSaved();
     } else {
         logMessage(tr("项目保存失败: %1").arg(fileName));
     }
+    return success;
+}
+
+void MainWindow::markProjectSaved()
+{
+    if (!m_projectManager)
+        return;
+    m_recovery.markSaved(m_projectManager->buildProjectJson(m_flowScenes));
+    m_recovery.clearRecovery();
+}
+
+void MainWindow::initCrashRecovery()
+{
+    // 间隔可配：现场无人值守机想省 I/O 就调大，置 0 则关掉自动保存
+    // （关掉后仍保留"未保存改动"的关窗确认，不会变成静默丢弃）。
+    QSettings settings;
+    const int intervalSec =
+        settings.value(QStringLiteral("recovery/autoSaveIntervalSec"), 60).toInt();
+    if (intervalSec <= 0) {
+        VFP_DEBUG << "自动保存已按配置关闭（recovery/autoSaveIntervalSec <= 0）";
+        return;
+    }
+
+    if (!m_autoSaveTimer) {
+        m_autoSaveTimer = new QTimer(this);
+        connect(m_autoSaveTimer, &QTimer::timeout, this, &MainWindow::autoSaveTick);
+    }
+    m_autoSaveTimer->start(intervalSec * 1000);
+    VFP_DEBUG << "自动保存已启用：间隔" << intervalSec << "秒，目录" << m_recovery.dirPath();
+}
+
+void MainWindow::autoSaveTick()
+{
+    // 同步执行/重算独占 UI 线程：此刻序列化既慢又没意义，跳过一拍即可
+    if (m_busyExecuting)
+        return;
+
+    ProjectManager *pm = projectManager();
+    const QJsonObject json = pm->buildProjectJson(m_flowScenes);
+
+    // 与"已落盘内容"一致（例如此前刚保存过）：不写恢复文件。
+    // 否则干净退出后还会留下一个"可恢复"的假现场——下次启动弹一个恢复框而内容其实没变。
+    if (!m_recovery.hasUnsavedChanges(json))
+        return;
+    // 同一份内容已写过（用户改了又停手）：不重复写盘，避免每分钟一次无意义 I/O 与状态栏刷屏
+    if (m_recovery.recoveryUpToDate(json))
+        return;
+
+    if (m_recovery.saveRecovery(json, pm->lastFilePath()))
+        ui->statusBar->showMessage(tr("已自动保存（异常退出后可恢复）"), 3000);
+}
+
+void MainWindow::checkRecoveryOnStartup()
+{
+    const RecoveryStore::Info info = m_recovery.info();
+    if (!info.exists)
+        return;
+
+    const QString filePath =
+        QDir(m_recovery.dirPath()).filePath(RecoveryStore::recoveryFileName());
+
+    if (!info.readable) {
+        // 损坏的恢复文件：明说并清掉，否则每次启动都弹同一个无法处理的框
+        VFP_DEBUG << "恢复文件损坏，已清除：" << filePath;
+        m_recovery.clearRecovery();
+        logMessage(tr("上次异常退出留下的恢复文件已损坏，无法恢复，已清除"));
+        return;
+    }
+
+    QSettings settings;
+    if (!settings.value(QStringLiteral("recovery/promptOnStartup"), true).toBool())
+        return;   // 现场可关掉启动询问；此时保留文件，不静默丢弃内容
+
+    const QString when = info.savedAt.isValid()
+                             ? info.savedAt.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"))
+                             : tr("时间未知");
+    const QString origin = info.originalPath.isEmpty()
+                               ? tr("未命名方案（从未保存过）")
+                               : info.originalPath;
+
+    QMessageBox box(this);
+    box.setWindowTitle(tr("崩溃恢复"));
+    box.setIcon(QMessageBox::Warning);
+    box.setText(tr("检测到上次运行未正常退出，存在自动保存的内容："));
+    box.setInformativeText(tr("原方案：%1\n自动保存时间：%2\n\n是否恢复到界面？\n"
+                             "（选择「丢弃」将删除该恢复文件）")
+                               .arg(origin, when));
+    QPushButton *restoreBtn = box.addButton(tr("恢复"), QMessageBox::AcceptRole);
+    box.addButton(tr("丢弃"), QMessageBox::DestructiveRole);
+    box.setDefaultButton(restoreBtn);
+    box.exec();
+
+    if (box.clickedButton() != restoreBtn) {
+        m_recovery.clearRecovery();
+        logMessage(tr("已丢弃上次异常退出留下的自动保存内容"));
+        return;
+    }
+
+    QString restorePath;
+    if (!m_recovery.exportForLoad(&restorePath)) {
+        QMessageBox::warning(this, tr("崩溃恢复"),
+                             tr("恢复失败：无法读取恢复文件。\n%1").arg(filePath));
+        return;
+    }
+
+    // 复用唯一的"接管方案"路径：停旧执行器、建标签页、注册触发、边界收尾都在 loadProjectFile 内。
+    // 临时导出文件删掉即可（内容已在场景里）；恢复出来的方案不属于该临时文件，
+    // 故把 lastFilePath 写回原方案路径（空 = 从未保存过的新方案）。
+    loadProjectFile(restorePath, /*recoveryRestore=*/true);
+    QFile::remove(restorePath);
+    projectManager()->setLastFilePath(info.originalPath);
+
+    logMessage(tr("已从自动保存内容恢复（原方案：%1；自动保存时间：%2）。"
+                  "请确认后用「保存」写回方案文件")
+                   .arg(origin, when));
+}
+
+bool MainWindow::confirmDiscardUnsavedChanges(const QString &action)
+{
+    QSettings settings;
+    // 与关窗提示同一个开关：无人值守现场可整体关掉"未保存"询问
+    if (!settings.value(QStringLiteral("recovery/promptOnClose"), true).toBool())
+        return true;
+
+    ProjectManager *pm = projectManager();
+    const QJsonObject json = pm->buildProjectJson(m_flowScenes);
+    if (!m_recovery.hasUnsavedChanges(json))
+        return true;
+
+    QMessageBox box(this);
+    box.setWindowTitle(tr("未保存的修改"));
+    box.setIcon(QMessageBox::Warning);
+    box.setText(tr("%1 前，当前方案有未保存的修改：").arg(action));
+    box.setInformativeText(
+        tr("方案：%1\n\n「保存并继续」写回方案文件；「不保存继续」将丢弃这些修改。")
+            .arg(pm->lastFilePath().isEmpty() ? tr("未命名方案（从未保存过）")
+                                              : pm->lastFilePath()));
+    QPushButton *saveBtn = box.addButton(tr("保存并继续"), QMessageBox::AcceptRole);
+    QPushButton *discardBtn = box.addButton(tr("不保存继续"), QMessageBox::DestructiveRole);
+    QPushButton *cancelBtn = box.addButton(tr("取消"), QMessageBox::RejectRole);
+    box.setDefaultButton(saveBtn);
+    box.exec();
+
+    if (box.clickedButton() == cancelBtn)
+        return false;
+    if (box.clickedButton() == discardBtn) {
+        // 当前方案即将被替换/丢弃：恢复现场随之作废（不留一份"已被用户放弃"的方案）
+        m_recovery.clearRecovery();
+        return true;
+    }
+    return saveProjectInteractively();   // 保存失败或用户在保存对话框取消 → 不继续
+}
+
+bool MainWindow::confirmCloseWithUnsavedChanges()
+{
+    QSettings settings;
+    if (!settings.value(QStringLiteral("recovery/promptOnClose"), true).toBool())
+        return true;   // 不询问：保留恢复文件，交给下次启动询问（不在这里静默丢弃用户改动）
+
+    ProjectManager *pm = projectManager();
+    const QJsonObject json = pm->buildProjectJson(m_flowScenes);
+    if (!m_recovery.hasUnsavedChanges(json)) {
+        m_recovery.clearRecovery();   // 干净退出：不留恢复现场
+        return true;
+    }
+
+    QMessageBox box(this);
+    box.setWindowTitle(tr("退出前确认"));
+    box.setIcon(QMessageBox::Warning);
+    box.setText(tr("方案有未保存的修改："));
+    box.setInformativeText(
+        tr("方案：%1\n\n「保存并退出」写回方案文件；「不保存退出」将丢弃这些修改，"
+           "自动保存内容也会一并清除。")
+            .arg(pm->lastFilePath().isEmpty() ? tr("未命名方案（从未保存过）")
+                                              : pm->lastFilePath()));
+    QPushButton *saveBtn = box.addButton(tr("保存并退出"), QMessageBox::AcceptRole);
+    QPushButton *discardBtn = box.addButton(tr("不保存退出"), QMessageBox::DestructiveRole);
+    QPushButton *cancelBtn = box.addButton(tr("取消"), QMessageBox::RejectRole);
+    box.setDefaultButton(saveBtn);
+    box.exec();
+
+    if (box.clickedButton() == cancelBtn)
+        return false;
+    if (box.clickedButton() == discardBtn) {
+        VFP_DEBUG << "用户选择不保存退出，清除恢复现场";
+        m_recovery.clearRecovery();
+        return true;
+    }
+
+    // 保存并退出：保存失败或用户在保存对话框里取消都不关窗（否则等于悄悄丢修改）
+    return saveProjectInteractively();
 }
 
 void MainWindow::onExit()
@@ -1768,19 +1996,24 @@ void MainWindow::onLoadProject()
     }
 }
 
-void MainWindow::loadProjectFile(const QString &fileName)
+void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
 {
-    logMessage(tr("加载项目: %1").arg(fileName));
+    // 崩溃恢复也走这条路径（复用唯一的"接管方案"实现），但它不算一次"打开方案"：
+    // 不写"加载项目"日志、不记入最近文件、不把内容标为已落盘（详见函数末尾）。
+    if (!recoveryRestore) {
+        // 打开方案会替换当前方案：有未保存改动时先确认（该检查覆盖"最近打开"等所有入口）
+        if (!confirmDiscardUnsavedChanges(tr("打开方案")))
+            return;
+        logMessage(tr("加载项目: %1").arg(fileName));
+    }
 
     // 使用ProjectManager加载项目
-    if (!m_projectManager) {
-        m_projectManager = new ProjectManager(this);
-    }
+    ProjectManager *pm = projectManager();
 
     // 先加载到临时列表：只有加载成功才销毁当前方案。
     // 原实现是先 qDeleteAll 再加载，文件损坏时旧方案已丢、新方案为空，且仍报“加载成功”。
     QList<FlowScene*> loadedScenes;
-    const bool success = m_projectManager->loadProject(fileName, loadedScenes);
+    const bool success = pm->loadProject(fileName, loadedScenes);
 
     if (!success) {
         qDeleteAll(loadedScenes);
@@ -1865,7 +2098,8 @@ void MainWindow::loadProjectFile(const QString &fileName)
     }
 
     logMessage(tr("项目加载成功"));
-    m_recentFiles->add(fileName);
+    if (!recoveryRestore)
+        m_recentFiles->add(fileName);
 
     // 添加加载的场景到标签页，并逐个注册到全局触发管理器。
     // 修复：此前只有 createNewFlow 才做 flowName/registerFlow，载入方案的所有流程在 GTM 里
@@ -1945,6 +2179,12 @@ void MainWindow::loadProjectFile(const QString &fileName)
         ui->flowTabs->setCurrentIndex(0);
     }
     checkHalconNodesHint();
+
+    // 记录"当前内容已落盘"基线（内容此时与刚读入的文件一致）。
+    // 崩溃恢复例外：恢复出来的内容还没写回原方案文件，必须保持"未保存"状态，
+    // 否则关窗时不会提示保存，用户会以为已经存好了——丢工作的经典路径。
+    if (!recoveryRestore)
+        markProjectSaved();
 }
 
 void MainWindow::checkHalconNodesHint()
@@ -3248,7 +3488,11 @@ void MainWindow::showEvent(QShowEvent *event)
     static bool s_firstShow = true;
     if (s_firstShow) {
         s_firstShow = false;
-        QTimer::singleShot(0, this, &MainWindow::applyDefaultDockSizes);
+        QTimer::singleShot(0, this, [this]() {
+            applyDefaultDockSizes();
+            // 崩溃恢复询问放在界面搭好之后：模态框不在 showEvent 里直接弹，避免挡住首帧
+            checkRecoveryOnStartup();
+        });
     }
 }
 

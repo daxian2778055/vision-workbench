@@ -88,36 +88,10 @@ QString ProjectManager::annotationDir() const
 bool ProjectManager::saveProject(const QString &filePath, const QList<FlowScene *> &scenes)
 {
     m_lastFilePath = filePath;
-    QJsonObject root;
-    QJsonArray sceneArray;
-    
-    for (FlowScene *scene : scenes) {
-        QJsonObject sceneJson = sceneToJson(scene);
-        sceneArray.append(sceneJson);
-    }
-    
-    root["scenes"] = sceneArray;
 
-    // 全局配置随项目文件一起保存（保证保存/重开不丢失）
-    root["globalVariables"] = GlobalVariableManager::instance()->toJson();
-    root["cameras"] = GlobalCameraManager::instance()->toJson();
-    root["communication"] = CommunicationManager::instance()->toJson();
-    root["globalTriggers"] = GlobalTriggerManager::instance()->toJson();
-    root["heartbeat"] = HeartbeatManager::instance()->toJson();
-    root["calibrations"] = CalibrationManager::instance()->toJson();
-    if (!m_lastFilePath.isEmpty())
-        root["projectPath"] = m_lastFilePath;
-
-    // 运行界面布局随方案保存（独立文件换机丢失/换方案串用的问题）
-    {
-        QFile layoutFile(runtimeLayoutPath());
-        if (layoutFile.exists() && layoutFile.open(QIODevice::ReadOnly)) {
-            root["runtimeLayout"] = QString::fromUtf8(layoutFile.readAll());
-            layoutFile.close();
-        }
-    }
-
-    root[QStringLiteral("schemaVersion")] = kProjectSchemaVersion;
+    // 序列化与自动保存共用同一实现（buildProjectJson）：两套实现一旦分叉，表现是
+    // "崩溃恢复出来的方案缺东西 / 与手动保存不一致"——极难发现，故此处不留第二份拷贝。
+    const QJsonObject root = buildProjectJson(scenes);
 
     QJsonDocument doc(root);
     // 原子写（QSaveFile）：先写临时文件，commit 成功才改名到目标。
@@ -145,6 +119,40 @@ bool ProjectManager::saveProject(const QString &filePath, const QList<FlowScene 
     return true;
 }
 
+QJsonObject ProjectManager::buildProjectJson(const QList<FlowScene *> &scenes) const
+{
+    QJsonObject root;
+    QJsonArray sceneArray;
+    for (FlowScene *scene : scenes) {
+        if (!scene)
+            continue;   // 防御：调用方列表里可能短暂含空指针（加载/恢复中途失败的残留）
+        sceneArray.append(sceneToJson(scene));
+    }
+    root[QStringLiteral("scenes")] = sceneArray;
+
+    // 全局配置随项目文件一起保存（保证保存/重开不丢失）
+    root[QStringLiteral("globalVariables")] = GlobalVariableManager::instance()->toJson();
+    root[QStringLiteral("cameras")] = GlobalCameraManager::instance()->toJson();
+    root[QStringLiteral("communication")] = CommunicationManager::instance()->toJson();
+    root[QStringLiteral("globalTriggers")] = GlobalTriggerManager::instance()->toJson();
+    root[QStringLiteral("heartbeat")] = HeartbeatManager::instance()->toJson();
+    root[QStringLiteral("calibrations")] = CalibrationManager::instance()->toJson();
+    if (!m_lastFilePath.isEmpty())
+        root[QStringLiteral("projectPath")] = m_lastFilePath;
+
+    // 运行界面布局随方案保存（独立文件换机丢失/换方案串用的问题）
+    {
+        QFile layoutFile(runtimeLayoutPath());
+        if (layoutFile.exists() && layoutFile.open(QIODevice::ReadOnly)) {
+            root[QStringLiteral("runtimeLayout")] = QString::fromUtf8(layoutFile.readAll());
+            layoutFile.close();
+        }
+    }
+
+    root[QStringLiteral("schemaVersion")] = kProjectSchemaVersion;
+    return root;
+}
+
 bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &scenes)
 {
     QFile file(filePath);
@@ -167,15 +175,19 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
     }
 
     m_lastFilePath = filePath;
-    QJsonObject root = doc.object();
+    // 应用方案内容（与崩溃恢复共用 applyProjectJson：场景 + 全局配置 + 运行界面布局）
+    return applyProjectJson(doc.object(), scenes);
+}
 
+bool ProjectManager::applyProjectJson(const QJsonObject &root, QList<FlowScene *> &scenes)
+{
     const int schemaVersion = root.value(QStringLiteral("schemaVersion")).toInt(1);
     if (schemaVersion > kProjectSchemaVersion) {
         VFP_DEBUG << "警告：方案文件版本" << schemaVersion << "高于本程序支持的版本"
                   << kProjectSchemaVersion << "，可能存在无法识别的算子，请勿直接覆盖保存";
     }
 
-    QJsonArray sceneArray = root["scenes"].toArray();
+    QJsonArray sceneArray = root[QStringLiteral("scenes")].toArray();
     if (sceneArray.isEmpty()) {
         VFP_DEBUG << "方案加载失败：文件中没有任何流程";
         return false;

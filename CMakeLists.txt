@@ -253,6 +253,7 @@ set(SOURCES
     src/ResultTablePanel.cpp
     src/VariablePanel.cpp
     src/PanelVisibilityStore.cpp
+    src/RecoveryStore.cpp
     src/NodeSearchWidget.cpp
     src/ConnectionDragHelper.cpp
     src/HelpViewer.cpp
@@ -423,6 +424,7 @@ set(HEADERS
     include/ImageDisplayController.h
     include/ExecutionStatusController.h
     include/RecentFilesMenu.h
+    include/RecoveryStore.h
     include/GlobalVariableManager.h
     include/GlobalVariableDialog.h
     include/GlobalCameraManager.h
@@ -840,6 +842,14 @@ if(MSVC)
     target_link_libraries(panel_visibility_test PRIVATE vfp_core Qt6::Test)
     add_test(NAME PanelVisibilityTest COMMAND panel_visibility_test)
     vfp_configure_gui_test(PanelVisibilityTest)
+endif()
+
+# 崩溃恢复 / 自动保存：往返一致 / 真加载器可打开 / 坏文件拒收 / 未保存判定 / 干净退出清理
+if(MSVC)
+    add_executable(recovery_store_test tests/recovery_store_test.cpp)
+    target_link_libraries(recovery_store_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    add_test(NAME RecoveryStoreTest COMMAND recovery_store_test)
+    vfp_configure_gui_test(RecoveryStoreTest)
 endif()
 
 # 数据库跨线程访问测试（QSqlDatabase 线程亲和性 / 每线程独立连接）
