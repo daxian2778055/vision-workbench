@@ -23,7 +23,7 @@ set(CMAKE_AUTOUIC_SEARCH_PATHS ${CMAKE_CURRENT_SOURCE_DIR}/ui)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # Qt6
-find_package(Qt6 REQUIRED COMPONENTS Widgets Core Gui Sql SerialPort Network SerialBus Concurrent Test)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Core Gui Sql SerialPort Network SerialBus Concurrent Test Charts)
 
 # OpenCV（替换版环境下替代 HALCON 区域链路的节点族；可用 -DOpenCV_DIR=... 覆盖）
 # 4.13.0 官方包为 vc16（VS2019）构建，与 VS2022 链接在微软 C++ ABI 兼容保证范围内；
@@ -71,6 +71,8 @@ set(MVS_LIBRARIES ${MVS_ROOT}/Development/Libraries/win64/MvCameraControl.lib)
 set(SOURCES
     src/AppLog.cpp
     src/FlowRuntimeStats.cpp
+    src/StatisticsReport.cpp
+    src/StatisticsReportDialog.cpp
     src/AppDatabase.cpp
     src/HalconEnvCheck.cpp
     src/HelpDialog.cpp
@@ -263,6 +265,8 @@ set(SOURCES
 set(HEADERS
     include/AppLog.h
     include/FlowRuntimeStats.h
+    include/StatisticsReport.h
+    include/StatisticsReportDialog.h
     include/AppDatabase.h
     include/InspectionRecord.h
     include/HalconEnvCheck.h
@@ -512,6 +516,7 @@ target_link_libraries(vfp_core PUBLIC
     Qt6::Widgets
     Qt6::Core
     Qt6::Gui
+    Qt6::Charts
     Qt6::Sql
     Qt6::SerialPort
     Qt6::Network
@@ -756,6 +761,13 @@ if(MSVC)
     add_test(NAME OpencvDefectAlignTest COMMAND opencv_defect_align_test)
 endif()
 
+# 统计报表（P1-11）纯计算与导出测试
+if(MSVC)
+    add_executable(statistics_report_test tests/statistics_report_test.cpp)
+    target_link_libraries(statistics_report_test PRIVATE vfp_core Qt6::Test)
+    add_test(NAME StatisticsReportTest COMMAND statistics_report_test)
+endif()
+
 # 长稳（soak）测试：连续模式长时间跑真实链路，看轮次/失败/句柄/内存的增长趋势（NFR2.4）
 # 时长由 VFP_SOAK_SECONDS 控制（CI 用 20 秒；现场 72h 长跑用 tools/soak.ps1）
 if(MSVC)
@@ -876,7 +888,7 @@ if(MSVC)
     set(VFP_DEPLOY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/dist/VisionFlowPlatform")
     set(VFP_TESTS NodeCoreTest OpencvSerializationTest IntegrationTest DatabaseTest PerfTest
                   ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest CameraIoTest
-                  DnnSegmentTest OpencvDefectAlignTest SoakTest)
+                  DnnSegmentTest OpencvDefectAlignTest SoakTest StatisticsReportTest)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
         # path_list_prepend 由 CMake 负责插入并处理平台路径分隔符，避免在
         # ENVIRONMENT 值里嵌套分号导致列表被错误拆分

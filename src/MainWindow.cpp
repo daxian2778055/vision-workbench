@@ -54,6 +54,7 @@
 #include "GlobalCameraDialog.h"
 #include "HalconWindow.h"
 #include "PerformancePanel.h"
+#include "StatisticsReportDialog.h"
 #include "OutputDataViewer.h"
 #include "NodeSearchWidget.h"
 #include "HelpViewer.h"
@@ -471,6 +472,15 @@ MainWindow::MainWindow(QWidget *parent) :
             perfAction->setObjectName(QStringLiteral("actionPerformancePanel"));
             connect(perfAction, &QAction::triggered, this,
                     [this]() { openAuxPanel(QStringLiteral("performance")); });
+
+            // 统计报表（P1-11）：良率 / 按天趋势 / NG 按节点分布，可导出 CSV / HTML / 图表 PNG。
+            // 做成对话框而非停靠面板：报表是"按需看一眼"的入口，无需参与面板显隐持久化。
+            QAction *reportAction = ui->menuView->addAction(QStringLiteral("统计报表"));
+            reportAction->setObjectName(QStringLiteral("actionStatisticsReport"));
+            connect(reportAction, &QAction::triggered, this, [this]() {
+                StatisticsReportDialog dlg(this);
+                dlg.exec();
+            });
         }
 
         // 「视图 → 结果表」菜单项（动作定义在 .ui 中，接线方式与其它视图项一致）

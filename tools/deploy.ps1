@@ -266,8 +266,9 @@ if (-not $SkipVerify) {
     Step "部署自检（离线可用性）"
 
     # 9.1 关键文件
+    # Qt6Charts.dll: 统计报表（P1-11）用 Qt Charts 画趋势/分布图，缺它则报表打不开
     $mustHave = @('VisionFlowPlatform.exe', 'platforms\qwindows.dll', 'sqldrivers\qsqlite.dll',
-                  'Qt6Core.dll', 'Qt6Sql.dll', 'Qt6Widgets.dll', 'opencv_world4130.dll',
+                  'Qt6Core.dll', 'Qt6Sql.dll', 'Qt6Widgets.dll', 'Qt6Charts.dll', 'opencv_world4130.dll',
                   'halconcpp.dll', 'MvCameraControl.dll', 'vcruntime140.dll', 'msvcp140.dll',
                   'tessdata', 'license', 'data', 'logs', 'schemes')
     foreach ($n in $mustHave) {

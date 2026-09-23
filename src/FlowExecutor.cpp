@@ -569,6 +569,16 @@ void FlowExecutor::run()
         }
         
         m_diagPhase.store(6, std::memory_order_relaxed);   // 诊断：轮末·落库前
+        // P1-11 报表：轮末追加一条「整轮汇总」记录（见 InspectionRecord.h 的 kRoundSummaryNodeName）。
+        // 为什么在这里做：记录是"每节点一条"且无轮次标识，报表据此只能算节点执行通过率、算不出良率；
+        // 本行让"良率/趋势"有可靠口径。此刻 m_roundHadFailure 还没被 recordRoundFinished 复位，取值有效。
+        m_pendingResults.append(InspectionRecord{
+            0,
+            m_flowName.isEmpty() ? QStringLiteral("(未命名流程)") : m_flowName,
+            kRoundSummaryNodeName,
+            !m_roundHadFailure,
+            m_roundHadFailure ? QStringLiteral("NG") : QStringLiteral("OK"),
+            QDateTime() });
         // 轮末批量落库：整轮结果一个事务提交。放在统计之前，保证本轮记录已落库。
         // 未启用数据库（databasePath 为空）时只清缓冲，不做任何 IO。
         if (!m_pendingResults.isEmpty()) {
