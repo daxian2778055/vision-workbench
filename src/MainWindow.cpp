@@ -12,6 +12,7 @@
 #include "FlowSnippet.h"
 #include "YieldMonitor.h"
 #include "InspectionRecord.h"
+#include "ReportAutoExport.h"
 #include <QClipboard>
 #include <algorithm>
 #include "HalconEnvCheck.h"
@@ -566,6 +567,7 @@ MainWindow::MainWindow(QWidget *parent) :
         // 恢复询问延到窗口显示之后（见 showEvent → checkRecoveryOnStartup），
         // 否则构造期的模态框会挡住登录框。
         initCrashRecovery();
+        initReportAutoExport();
         
         // Phase 4: 弹出登录对话框
         VFP_DEBUG << "Showing login dialog";
@@ -2090,6 +2092,75 @@ void MainWindow::autoSaveTick()
 
     if (m_recovery.saveRecovery(json, pm->lastFilePath()))
         ui->statusBar->showMessage(tr("已自动保存（异常退出后可恢复）"), 3000);
+}
+
+void MainWindow::initReportAutoExport()
+{
+    // 定时导出（P1-11 收尾）：策略与落盘在 ReportAutoExport（无 GUI、可单测），
+    // 这里只负责"每分钟看一眼"与取数。定时器**总是启动**：用户可能在报表窗口里随时开启，
+    // 若只在"启动时已启用"才启定时器，就会出现"勾了开关却不生效、要重启"的怪事。
+    if (!m_reportTimer) {
+        m_reportTimer = new QTimer(this);
+        connect(m_reportTimer, &QTimer::timeout, this, &MainWindow::reportAutoExportTick);
+    }
+    m_reportTimer->start(60 * 1000);
+
+    const ReportAutoExport::Config cfg = ReportAutoExport::loadConfig();
+    if (cfg.enabled && cfg.isValid()) {
+        VFP_DEBUG << "定时导出已启用：每" << cfg.intervalMinutes << "分钟，统计最近"
+                  << cfg.rangeHours << "小时，目录" << cfg.effectiveDir();
+    } else {
+        VFP_DEBUG << "定时导出未启用（可在「视图 → 统计报表」里开启）";
+    }
+}
+
+void MainWindow::reportAutoExportTick()
+{
+    ReportAutoExport::Config cfg = ReportAutoExport::loadConfig();
+    if (!cfg.enabled || !cfg.isValid())
+        return;   // 未启用：静默（不打扰；开关在报表窗口里）
+
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (!ReportAutoExport::shouldExport(cfg, now, ReportAutoExport::lastExportMs()))
+        return;
+
+    // 取数：与报表窗口**同一个查询接口、同一套计算**。口径必须一致，
+    // 否则"界面看到 98%、机器导出来 96%"这种事现场无法解释。
+    const QDateTime to = QDateTime::currentDateTime();
+    const QDateTime from = to.addSecs(-3600LL * cfg.rangeHours);
+    // 上限保护：高频产线 24h 可能有上百万条记录，一次全查会把 UI 线程拖住；
+    // 触顶时如实提示"报表可能不完整"（queryResults 是"按时间倒序取最近的 N 条"）。
+    constexpr int kQueryLimit = 500000;
+    const QList<InspectionRecord> records =
+        AppDatabase::instance()->queryResults(from, to, kQueryLimit);
+    const bool truncated = (records.size() >= kQueryLimit);
+
+    const StatisticsReport::Summary summary =
+        StatisticsReport::compute(records, QString(), StatisticsReport::Granularity::ByHour);
+    const double target =
+        QSettings().value(QStringLiteral("reporting/yieldTargetPercent"), 0.0).toDouble();
+
+    QStringList written;
+    QString error;
+    if (!ReportAutoExport::exportNow(cfg, summary, QString(), target, to, &written, &error)) {
+        // 失败**不更新** lastExportMs：下一分钟自动重试（目录临时不可写这类问题能自愈）
+        logMessage(tr("定时导出失败：%1").arg(error));
+        ui->statusBar->showMessage(tr("定时导出失败：%1").arg(error), 15000);
+        return;
+    }
+
+    ReportAutoExport::setLastExportMs(now);
+    const int removed = ReportAutoExport::pruneOldFiles(cfg.effectiveDir(), cfg.keepFiles);
+
+    QString msg = tr("已定时导出 %1 个文件到 %2").arg(written.size()).arg(cfg.effectiveDir());
+    if (removed > 0)
+        msg += tr("（清理旧报告 %1 个）").arg(removed);
+    if (truncated)
+        msg += tr(" ⚠ 记录数触顶，报表可能不完整（建议调小统计小时数）");
+    logMessage(msg);
+    ui->statusBar->showMessage(msg, 12000);
+    if (!error.isEmpty())
+        logMessage(tr("定时导出部分失败：%1").arg(error));
 }
 
 void MainWindow::checkRecoveryOnStartup()

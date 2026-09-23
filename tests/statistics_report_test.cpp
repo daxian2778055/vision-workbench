@@ -29,6 +29,7 @@ private slots:
     void testCsvExport();
     void testHtmlExportOfflineSelfContained();
     void testTargetLineInExports();
+    void testHourlyGranularity();
 };
 
 namespace {
@@ -76,11 +77,11 @@ void StatisticsReportTest::testYieldFromRoundSummary()
     QCOMPARE(s.totalRecords, 6);
     QCOMPARE(s.ngRecords, 2);
 
-    QCOMPARE(s.days.size(), 1);
-    QCOMPARE(s.days.first().date, QDate(2026, 9, 10));
-    QCOMPARE(s.days.first().okRounds, 2);
-    QCOMPARE(s.days.first().ngRounds, 1);
-    QCOMPARE(s.days.first().totalRecords, 6);
+    QCOMPARE(s.buckets.size(), 1);
+    QCOMPARE(s.buckets.first().begin.date(), QDate(2026, 9, 10));
+    QCOMPARE(s.buckets.first().okRounds, 2);
+    QCOMPARE(s.buckets.first().ngRounds, 1);
+    QCOMPARE(s.buckets.first().totalRecords, 6);
 }
 
 void StatisticsReportTest::testNoRoundsDataIsNotZeroYield()
@@ -169,8 +170,8 @@ void StatisticsReportTest::testInvalidTimestampHandling()
     QCOMPARE(s.totalRecords, 3);          // 无效时间戳仍计入总数
     QVERIFY(s.hasRounds);
     QCOMPARE(s.totalRounds, 1);           // 本 fixture 只有 1 条整轮记录（另一条是普通节点记录）
-    QCOMPARE(s.days.size(), 1);           // 只有一条落进日桶，不造 1970 假数据点
-    QCOMPARE(s.days.first().date, QDate(2026, 9, 14));
+    QCOMPARE(s.buckets.size(), 1);        // 只有一条落进日桶，不造 1970 假数据点
+    QCOMPARE(s.buckets.first().begin.date(), QDate(2026, 9, 14));
     QVERIFY(s.firstSeen.isValid());
     QCOMPARE(s.firstSeen.date(), QDate(2026, 9, 14));
 }
@@ -255,6 +256,61 @@ void StatisticsReportTest::testTargetLineInExports()
     const QString csvNoRounds = StatisticsReport::toCsv(noRounds, QDateTime::currentDateTime(), 98.0);
     QVERIFY2(csvNoRounds.contains(QStringLiteral("无轮次数据")),
              "无轮次数据时 CSV 未如实标注");
+}
+
+void StatisticsReportTest::testHourlyGranularity()
+{
+    // 同一天内 3 个不同小时：按天 1 个桶 / 按小时 3 个桶。
+    // 换粒度只是**重新分桶**，汇总口径必须完全不变（否则"换个粒度良率就变"，没人敢用）。
+    QList<InspectionRecord> records;
+    records << roundRec(QStringLiteral("流程A"), true, at(23, 8, 15));
+    records << roundRec(QStringLiteral("流程A"), false, at(23, 8, 45));
+    records << roundRec(QStringLiteral("流程A"), true, at(23, 9, 5));
+    records << roundRec(QStringLiteral("流程A"), false, at(23, 11, 30));
+
+    const StatisticsReport::Summary byDay =
+        StatisticsReport::compute(records, QString(), StatisticsReport::Granularity::ByDay);
+    QCOMPARE(byDay.buckets.size(), 1);
+    QCOMPARE(byDay.buckets.first().okRounds, 2);
+    QCOMPARE(byDay.buckets.first().ngRounds, 2);
+    QCOMPARE(byDay.granularityName(), QStringLiteral("天"));
+
+    const StatisticsReport::Summary byHour =
+        StatisticsReport::compute(records, QString(), StatisticsReport::Granularity::ByHour);
+    QCOMPARE(byHour.buckets.size(), 3);   // 08 / 09 / 11 三个小时（10 点没有轮次就不占桶）
+    // 注：桶起点 begin 是 QDateTime，时分须经 time() 取（QDateTime 没有 hour()/minute() 成员）
+    QCOMPARE(byHour.buckets.at(0).begin.time().hour(), 8);
+    QCOMPARE(byHour.buckets.at(0).begin.time().minute(), 0);   // 桶起点对齐到整点
+    QCOMPARE(byHour.buckets.at(0).okRounds, 1);
+    QCOMPARE(byHour.buckets.at(0).ngRounds, 1);
+    QCOMPARE(byHour.buckets.at(1).begin.time().hour(), 9);
+    QCOMPARE(byHour.buckets.at(2).begin.time().hour(), 11);
+    QCOMPARE(byHour.granularityName(), QStringLiteral("小时"));
+
+    // 汇总口径与粒度无关
+    QCOMPARE(byHour.totalRounds, byDay.totalRounds);
+    QCOMPARE(byHour.okRounds, byDay.okRounds);
+    QCOMPARE(byHour.ngRounds, byDay.ngRounds);
+    QCOMPARE(byHour.yieldPercent, byDay.yieldPercent);
+
+    // 标签：按小时完整标签 "yyyy-MM-dd HH:00"、短标签 "HH:00"（图表轴用短标签）
+    QCOMPARE(byHour.labelOf(byHour.buckets.first(), false), QStringLiteral("2026-09-23 08:00"));
+    QCOMPARE(byHour.labelOf(byHour.buckets.first(), true), QStringLiteral("08:00"));
+    QCOMPARE(byDay.labelOf(byDay.buckets.first(), false), QStringLiteral("2026-09-23"));
+    QCOMPARE(byDay.labelOf(byDay.buckets.first(), true), QStringLiteral("09-23"));
+
+    // 导出分段名/列名随粒度变化：拿到 CSV 的人必须能判断 "09:00" 是一个小时还是一天
+    const QString csvHour = StatisticsReport::toCsv(byHour);
+    QVERIFY2(csvHour.contains(QStringLiteral("按小时序列")), "按小时导出缺少对应段名");
+    QVERIFY2(csvHour.contains(QStringLiteral("2026-09-23 08:00")), "按小时导出缺少整点时间戳");
+    QVERIFY2(!csvHour.contains(QStringLiteral("按天序列")), "按小时导出里不应出现按天段名");
+    const QString csvDay = StatisticsReport::toCsv(byDay);
+    QVERIFY2(csvDay.contains(QStringLiteral("按天序列")), "按天导出缺少对应段名");
+    QVERIFY2(!csvDay.contains(QStringLiteral("按小时序列")), "按天导出里不应出现按小时段名");
+
+    const QString htmlHour = StatisticsReport::toHtml(byHour);
+    QVERIFY2(htmlHour.contains(QStringLiteral("按小时趋势")), "HTML 趋势段未随粒度变化");
+    QVERIFY2(!htmlHour.contains(QStringLiteral("http")), "HTML 必须仍然自包含");
 }
 
 QTEST_MAIN(StatisticsReportTest)

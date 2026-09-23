@@ -1,6 +1,7 @@
 #include "StatisticsReport.h"
 
 #include <QStringList>
+#include <QTime>
 #include <algorithm>
 
 namespace {
@@ -66,11 +67,30 @@ QList<QPair<QString, int>> sortedDesc(const QMap<QString, int> &m)
 
 } // namespace
 
+QString StatisticsReport::Summary::labelOf(const Bucket &b, bool shortForm) const
+{
+    if (!b.begin.isValid())
+        return QString();
+    if (granularity == Granularity::ByHour) {
+        return shortForm ? b.begin.toString(QStringLiteral("HH:00"))
+                         : b.begin.toString(QStringLiteral("yyyy-MM-dd HH:00"));
+    }
+    return shortForm ? b.begin.toString(QStringLiteral("MM-dd"))
+                     : b.begin.toString(QStringLiteral("yyyy-MM-dd"));
+}
+
+QString StatisticsReport::Summary::granularityName() const
+{
+    return granularity == Granularity::ByHour ? QStringLiteral("小时") : QStringLiteral("天");
+}
+
 StatisticsReport::Summary StatisticsReport::compute(const QList<InspectionRecord> &records,
-                                                    const QString &flowFilter)
+                                                    const QString &flowFilter,
+                                                    Granularity granularity)
 {
     Summary s;
-    QMap<QDate, DayBucket> dayMap;
+    s.granularity = granularity;
+    QMap<QDateTime, Bucket> bucketMap;
     QMap<QString, int> ngByNode;
     QMap<QString, int> recordsByFlow;
     bool haveTime = false;
@@ -85,15 +105,21 @@ StatisticsReport::Summary StatisticsReport::compute(const QList<InspectionRecord
         recordsByFlow[r.flowName] += 1;
 
         const QDateTime ts = r.timestamp;
-        DayBucket *bucket = nullptr;
+        Bucket *bucket = nullptr;
         if (ts.isValid()) {
             if (!haveTime || ts < s.firstSeen)
                 s.firstSeen = ts;
             if (!haveTime || ts > s.lastSeen)
                 s.lastSeen = ts;
             haveTime = true;
-            bucket = &dayMap[ts.date()];
-            bucket->date = ts.date();
+            // 桶起点：按天=当日 00:00；按小时=该小时 00 分（本地时间，与记录时间戳同一时区）。
+            // 注：QDateTime 没有 hour() 成员（编译错误 C2039 的根源），小时须经 ts.time().hour() 取。
+            const QDateTime dayStart = ts.date().startOfDay();
+            const QDateTime key = (granularity == Granularity::ByHour)
+                                      ? dayStart.addSecs(3600 * ts.time().hour())
+                                      : dayStart;
+            bucket = &bucketMap[key];
+            bucket->begin = key;
             bucket->totalRecords += 1;
             if (!r.passed)
                 bucket->ngRecords += 1;
@@ -119,8 +145,8 @@ StatisticsReport::Summary StatisticsReport::compute(const QList<InspectionRecord
 
     s.yieldPercent = (s.totalRounds > 0) ? (100.0 * double(s.okRounds) / double(s.totalRounds)) : 0.0;
 
-    for (auto it = dayMap.cbegin(); it != dayMap.cend(); ++it)
-        s.days.append(it.value());       // QMap 按 key(QDate) 升序 → 天然按日期升序
+    for (auto it = bucketMap.cbegin(); it != bucketMap.cend(); ++it)
+        s.buckets.append(it.value());    // QMap 按 key(QDateTime) 升序 → 天然按时间升序
     s.ngByNode = sortedDesc(ngByNode);
     s.recordsByFlow = sortedDesc(recordsByFlow);
     return s;
@@ -168,13 +194,17 @@ QString StatisticsReport::toCsv(const Summary &s, const QDateTime &generatedAt, 
                                           : QStringLiteral("-") });
     out += csvLine({ QString() });
 
-    out += csvLine({ QStringLiteral("按天序列") });
-    out += csvLine({ QStringLiteral("日期"), QStringLiteral("OK 轮次"), QStringLiteral("NG 轮次"),
+    // 段落名与列名随粒度变化（按天："按天序列/日期"，按小时："按小时序列/时间"）：
+    // 导出文件要能自解释，否则拿到 CSV 的人无法判断"09:00"是某天的一个小时还是别的
+    const bool byHour = (s.granularity == Granularity::ByHour);
+    out += csvLine({ QStringLiteral("按%1序列").arg(s.granularityName()) });
+    out += csvLine({ byHour ? QStringLiteral("时间") : QStringLiteral("日期"),
+                     QStringLiteral("OK 轮次"), QStringLiteral("NG 轮次"),
                      QStringLiteral("记录数"), QStringLiteral("NG 记录数") });
-    for (const DayBucket &d : s.days) {
-        out += csvLine({ d.date.toString(QStringLiteral("yyyy-MM-dd")), QString::number(d.okRounds),
-                         QString::number(d.ngRounds), QString::number(d.totalRecords),
-                         QString::number(d.ngRecords) });
+    for (const Bucket &b : s.buckets) {
+        out += csvLine({ s.labelOf(b, false), QString::number(b.okRounds),
+                         QString::number(b.ngRounds), QString::number(b.totalRecords),
+                         QString::number(b.ngRecords) });
     }
     out += csvLine({ QString() });
 
@@ -238,25 +268,26 @@ QString StatisticsReport::toHtml(const Summary &s, const QString &title, const Q
     }
     html += QStringLiteral("</div>");
 
-    if (!s.days.isEmpty()) {
-        int maxOk = 1;
+    if (!s.buckets.isEmpty()) {
+        const bool byHour = (s.granularity == Granularity::ByHour);
         int maxNg = 1;
-        for (const DayBucket &d : s.days) {
-            maxOk = std::max(maxOk, d.okRounds);
-            maxNg = std::max(maxNg, d.ngRounds);
-        }
-        html += QStringLiteral("<h2>按天趋势（OK 轮次 / NG 轮次）</h2><table>");
-        html += QStringLiteral("<tr><th>日期</th><th>OK 轮次</th><th>NG 轮次</th>"
-                               "<th>记录数</th><th>NG 记录</th></tr>");
-        for (const DayBucket &d : s.days) {
+        for (const Bucket &b : s.buckets)
+            maxNg = std::max(maxNg, b.ngRounds);
+
+        html += QStringLiteral("<h2>按%1趋势（OK 轮次 / NG 轮次）</h2><table>")
+                    .arg(s.granularityName());
+        html += QStringLiteral("<tr><th>%1</th><th>OK 轮次</th><th>NG 轮次</th>"
+                               "<th>记录数</th><th>NG 记录</th></tr>")
+                    .arg(byHour ? QStringLiteral("时间") : QStringLiteral("日期"));
+        for (const Bucket &b : s.buckets) {
             html += QStringLiteral("<tr><td>%1</td><td class=\"num\">%2</td><td class=\"num\">%3</td>"
                                    "<td class=\"num\">%4</td><td class=\"num\">%5</td></tr>")
-                        .arg(d.date.toString(QStringLiteral("yyyy-MM-dd")))
-                        .arg(d.okRounds).arg(d.ngRounds).arg(d.totalRecords).arg(d.ngRecords);
+                        .arg(htmlEsc(s.labelOf(b, false)))
+                        .arg(b.okRounds).arg(b.ngRounds).arg(b.totalRecords).arg(b.ngRecords);
         }
         html += QStringLiteral("</table><table>");
-        for (const DayBucket &d : s.days)
-            html += barRow(d.date.toString(QStringLiteral("MM-dd")), d.ngRounds, maxNg);
+        for (const Bucket &b : s.buckets)
+            html += barRow(s.labelOf(b, true), b.ngRounds, maxNg);
         html += QStringLiteral("</table>");
     }
 

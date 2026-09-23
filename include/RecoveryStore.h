@@ -53,6 +53,10 @@ public:
     static QString metaKey();
     /// 默认存储目录：优先 `<应用目录>/data/recovery`，不可写则回落用户数据目录
     static QString defaultDirPath();
+    /// 运行时数据的默认根目录：优先 `<应用目录>/data`（**写探针实测**可写），只读安装目录回落用户数据目录。
+    /// 所有"运行时数据随安装目录走"的功能（恢复文件、定时导出报告…）都从它派生，
+    /// 避免各写一套路径与可写性判断——判错了的表现是"目标机上功能静默失效"。
+    static QString runtimeDataRoot();
 
     /// 写入恢复文件（QSaveFile 原子写）。originalPath 用于元信息，可为空（从未保存过的新方案）。
     bool saveRecovery(const QJsonObject &projectJson, const QString &originalPath,

@@ -211,6 +211,12 @@ private:
     void autoSaveTick();
     /// 启动后检查上次异常退出留下的恢复文件，询问是否恢复
     void checkRecoveryOnStartup();
+    // ---- 定时导出（P1-11 收尾：策略与落盘在 ReportAutoExport，本处只做定时与取数）----
+    /// 创建报表定时器（每分钟看一眼：配置可在报表窗口随时改，启用后无需重启）
+    void initReportAutoExport();
+    /// 定时导出一拍：到点则取最近 N 小时记录、按小时分桶、导出 CSV/HTML 并按保留策略清理
+    void reportAutoExportTick();
+
     /// 关闭前确认：有未保存改动时询问（保存并退出 / 不保存退出 / 取消）
     /// 返回 false 表示用户取消，调用方应忽略本次关闭
     bool confirmCloseWithUnsavedChanges();
@@ -247,6 +253,8 @@ protected:
     RecoveryStore m_recovery;
     /// 自动保存定时器（间隔/开关见 QSettings recovery/autoSaveIntervalSec）
     QTimer *m_autoSaveTimer = nullptr;
+    /// 报表定时导出定时器（每分钟检查一次；是否导出见 reporting/autoExport*）
+    QTimer *m_reportTimer = nullptr;
     /// 算子分组菜单项（FR1.9；文案在 retranslateUi 里随语言切换）
     QAction *m_actionCreateGroup = nullptr;
     QAction *m_actionDissolveGroup = nullptr;

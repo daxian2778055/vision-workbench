@@ -41,11 +41,10 @@ QString RecoveryStore::metaKey()
     return kMetaKey;
 }
 
-QString RecoveryStore::defaultDirPath()
+QString RecoveryStore::runtimeDataRoot()
 {
     // 与应用数据库（exe/data/visionflow.db）同一惯例：运行时数据随安装目录走。
-    const QString preferred =
-        QCoreApplication::applicationDirPath() + QStringLiteral("/data/recovery");
+    const QString preferred = QCoreApplication::applicationDirPath() + QStringLiteral("/data");
     if (QDir().mkpath(preferred)) {
         // 只读安装目录（Program Files 等）必须能退让：用写探针实测，不靠猜路径是否存在。
         QFile probe(preferred + QStringLiteral("/.write-probe"));
@@ -58,7 +57,14 @@ QString RecoveryStore::defaultDirPath()
     QString fallback = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     if (fallback.isEmpty())
         fallback = QDir::tempPath() + QStringLiteral("/VisionFlowPlatform");
-    return fallback + QStringLiteral("/recovery");
+    return fallback;
+}
+
+QString RecoveryStore::defaultDirPath()
+{
+    const QString dir = runtimeDataRoot() + QStringLiteral("/recovery");
+    QDir().mkpath(dir);   // 调用方（saveRecovery / info）假定目录已存在，这里保证
+    return dir;
 }
 
 QByteArray RecoveryStore::compact(const QJsonObject &json)

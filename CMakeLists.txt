@@ -254,6 +254,7 @@ set(SOURCES
     src/VariablePanel.cpp
     src/PanelVisibilityStore.cpp
     src/RecoveryStore.cpp
+    src/ReportAutoExport.cpp
     src/NodeGroupItem.cpp
     src/FlowSnippet.cpp
     src/YieldMonitor.cpp
@@ -428,6 +429,7 @@ set(HEADERS
     include/ExecutionStatusController.h
     include/RecentFilesMenu.h
     include/RecoveryStore.h
+    include/ReportAutoExport.h
     include/NodeGroupItem.h
     include/FlowSnippet.h
     include/YieldMonitor.h
@@ -880,6 +882,14 @@ if(MSVC)
     target_link_libraries(yield_monitor_test PRIVATE vfp_core Qt6::Test)
     add_test(NAME YieldMonitorTest COMMAND yield_monitor_test)
     vfp_configure_gui_test(YieldMonitorTest)
+endif()
+
+# 定时导出（P1-11 收尾）：到点判定 / 原子落盘 / 保留清理 / 配置往返（不污染用户配置）
+if(MSVC)
+    add_executable(report_auto_export_test tests/report_auto_export_test.cpp)
+    target_link_libraries(report_auto_export_test PRIVATE vfp_core Qt6::Test)
+    add_test(NAME ReportAutoExportTest COMMAND report_auto_export_test)
+    vfp_configure_gui_test(ReportAutoExportTest)
 endif()
 
 # 数据库跨线程访问测试（QSqlDatabase 线程亲和性 / 每线程独立连接）
