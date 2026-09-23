@@ -756,6 +756,15 @@ if(MSVC)
     add_test(NAME OpencvDefectAlignTest COMMAND opencv_defect_align_test)
 endif()
 
+# 长稳（soak）测试：连续模式长时间跑真实链路，看轮次/失败/句柄/内存的增长趋势（NFR2.4）
+# 时长由 VFP_SOAK_SECONDS 控制（CI 用 20 秒；现场 72h 长跑用 tools/soak.ps1）
+if(MSVC)
+    add_executable(soak_test tests/soak_test.cpp)
+    target_link_libraries(soak_test PRIVATE vfp_core Qt6::Test)
+    add_test(NAME SoakTest COMMAND soak_test)
+    set_tests_properties(SoakTest PROPERTIES ENVIRONMENT "VFP_SOAK_SECONDS=20")
+endif()
+
 # 相机 IO 控制功能测试（🥉：MVS 数字 IO 逻辑 + 序列化 + 缺相机降级）
 if(MSVC)
     add_executable(camera_io_test tests/camera_io_test.cpp)
@@ -866,7 +875,8 @@ endif()
 if(MSVC)
     set(VFP_DEPLOY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/dist/VisionFlowPlatform")
     set(VFP_TESTS NodeCoreTest OpencvSerializationTest IntegrationTest DatabaseTest PerfTest
-                  ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest CameraIoTest)
+                  ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest CameraIoTest
+                  DnnSegmentTest OpencvDefectAlignTest SoakTest)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
         # path_list_prepend 由 CMake 负责插入并处理平台路径分隔符，避免在
         # ENVIRONMENT 值里嵌套分号导致列表被错误拆分

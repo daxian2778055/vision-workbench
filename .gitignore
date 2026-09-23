@@ -64,3 +64,5 @@ diag-*
 .ci*.ps1
 .probe*.ps1
 .git-commit-msg.txt
+logs/
+data/
