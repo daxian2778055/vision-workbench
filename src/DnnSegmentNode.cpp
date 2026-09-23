@@ -18,8 +18,13 @@ namespace {
 /// 把"网络输入空间"的掩膜逆映射回原图尺寸。
 /// keepRatio（letterbox）时必须**先裁掉灰边**再缩放：预处理把原图按 s = min(W/w, H/h) 缩放后
 /// 居中贴在 (W-nw)/2, (H-nh)/2，此处严格按同一公式反算，否则掩膜会整体错位。
+///
+/// padTrim（仅 letterbox 生效，单位＝网络输入空间像素）：灰边会被模型当成前景，而卷积会把这份
+/// 前景**向有效区内扩 1 个感受野宽度**——裁边只能去掉灰边本身，去不掉这条贯通污染带。
+/// 实测（96×64 图片 + 3×3 卷积模型）：不清理时掩膜外接框变成整幅 (0,0,96,64)、面积 866（应≈484）。
+/// 故这里把"紧邻灰边"的 padTrim 行/列清零（只在真有灰边的方向做）；感受野更大的网络调大 padTrim 即可。
 cv::Mat unletterboxMask(const cv::Mat &maskIn, int inputW, int inputH,
-                        const cv::Size &orig, bool keepRatio)
+                        const cv::Size &orig, bool keepRatio, int padTrim)
 {
     if (maskIn.empty() || orig.width <= 0 || orig.height <= 0)
         return cv::Mat();
@@ -39,6 +44,20 @@ cv::Mat unletterboxMask(const cv::Mat &maskIn, int inputW, int inputH,
         if (r.empty())
             return cv::Mat();
         cropped = full(r).clone();
+
+        const int trim = std::max(0, padTrim);
+        if (trim > 0) {
+            if (nh < inputH) {   // 上下有灰边：清掉紧邻灰边的行
+                const int t = std::min(trim, cropped.rows);
+                cropped.rowRange(0, t).setTo(0);
+                cropped.rowRange(cropped.rows - t, cropped.rows).setTo(0);
+            }
+            if (nw < inputW) {   // 左右有灰边：清掉紧邻灰边的列
+                const int t = std::min(trim, cropped.cols);
+                cropped.colRange(0, t).setTo(0);
+                cropped.colRange(cropped.cols - t, cropped.cols).setTo(0);
+            }
+        }
     }
     cv::Mat out;
     cv::resize(cropped, out, orig, 0, 0, cv::INTER_NEAREST);
@@ -389,8 +408,12 @@ void DnnSegmentNode::init()
                      QStringLiteral("输入宽"), QStringLiteral("px")),
         makeIntParam(QStringLiteral("inputHeight"), 640, 32, 4096,
                      QStringLiteral("输入高"), QStringLiteral("px")),
-        makeBoolParam(QStringLiteral("keepRatio"), true,
-                      QStringLiteral("保持长宽比（letterbox，关则拉伸）")),
+        makeBoolParam(QStringLiteral("keepRatio"), false,
+                      QStringLiteral("保持长宽比（letterbox；关=拉伸。灰边会被模型当内容看，见 padTrim）")),
+        makeIntParam(QStringLiteral("paddingValue"), 114, 0, 255,
+                     QStringLiteral("letterbox 灰边灰度（应与你训练/导出时的填充值一致）")),
+        makeIntParam(QStringLiteral("padTrim"), 1, 0, 64,
+                     QStringLiteral("清理紧邻灰边的掩膜污染带宽度（网络输入空间像素；深网络调大）")),
         makeIntParam(QStringLiteral("classIndex"), 1, 0, 255,
                      QStringLiteral("前景类索引（语义多类：argmax 等于它即前景）")),
         makeDoubleParam(QStringLiteral("binaryThresh"), 0.5, 0.0, 1.0,
@@ -469,7 +492,10 @@ void DnnSegmentNode::run(bool /*autoSwitch*/)
 
         const int inputW = std::max(32, m_params.value(QStringLiteral("inputWidth"), 640).toInt());
         const int inputH = std::max(32, m_params.value(QStringLiteral("inputHeight"), 640).toInt());
-        const bool keepRatio = m_params.value(QStringLiteral("keepRatio"), true).toBool();
+        const bool keepRatio = m_params.value(QStringLiteral("keepRatio"), false).toBool();
+        const int padTrim = m_params.value(QStringLiteral("padTrim"), 1).toInt();
+        const int padValue = std::max(0, std::min(255,
+            m_params.value(QStringLiteral("paddingValue"), 114).toInt()));
         const double scale = m_params.value(QStringLiteral("scale"), 1.0 / 255.0).toDouble();
         const bool swapRB = m_params.value(QStringLiteral("swapRB"), true).toBool();
         cv::Scalar mean(0, 0, 0);
@@ -486,7 +512,8 @@ void DnnSegmentNode::run(bool /*autoSwitch*/)
             const int nh = std::max(1, cvRound(img.rows * s));
             cv::Mat resized;
             cv::resize(img, resized, cv::Size(nw, nh));
-            cv::Mat letter(inputH, inputW, CV_8UC3, cv::Scalar(114, 114, 114));
+            cv::Mat letter(inputH, inputW, CV_8UC3,
+                           cv::Scalar(padValue, padValue, padValue));
             resized.copyTo(letter(cv::Rect((inputW - nw) / 2, (inputH - nh) / 2, nw, nh)));
             blobSrc = letter;
         } else {
@@ -559,7 +586,7 @@ void DnnSegmentNode::run(bool /*autoSwitch*/)
 
         // 逆映射回原图（先裁灰边再缩放，与预处理同一几何）→ minArea 清理
         cv::Mat maskOrig = unletterboxMask(maskInput, inputW, inputH,
-                                           cv::Size(img.cols, img.rows), keepRatio);
+                                           cv::Size(img.cols, img.rows), keepRatio, padTrim);
         if (maskOrig.empty()) {
             fail(QStringLiteral("掩膜逆映射失败"));
             return;

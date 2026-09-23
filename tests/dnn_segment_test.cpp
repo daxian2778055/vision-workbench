@@ -33,7 +33,9 @@ private slots:
     void testSigmoidAutoAndForced();        // sigmoid 三态 + 钉住"二次 sigmoid"实测缺陷
     void testSerialization();
     void testMissingAndBadModel();         // 缺模型 / 坏模型路径：降级且无残留输出
-    void testEndToEndOnnxSemantic();       // 最小 ONNX 模型端到端（需 python + onnx）
+    void testEndToEndOnnxSemantic();       // 最小 ONNX 模型端到端（语义路径，需 python + onnx）
+    void testEndToEndLetterboxNonSquare(); // 端到端：非等比方图，钉住 letterbox 逆映射（裁灰边 + 缩放）
+    void testEndToEndOnnxInstance();       // 端到端：YOLO-Seg 双输出，实例路径 + 按框裁剪
 };
 
 // 4D 张量寻址：部分 OpenCV 版本不再提供 4 下标 at 重载，统一用 ptr(两下标) + 线性下标
@@ -324,45 +326,66 @@ void DnnSegmentTest::testMissingAndBadModel()
     QVERIFY(!n2.getOutputData(1));
 }
 
-// 端到端：生成最小 ONNX 分割模型（Conv3x3 均值 + Sigmoid）→ 跑整条算子链 →
-// 掩膜应等于"输入亮方块外扩 1 像素"（严格依赖 sigmoid + 阈值 ⟺ conv > 0 的等价关系）
+// 生成/定位端到端用例所需的 ONNX 模型：
+//   · 环境变量给了现成模型（VFP_SEG_TEST_MODEL / VFP_SEG_TEST_INST_MODEL）→ 直接用（便于换真模型试跑）；
+//   · 否则用 python 现生成（脚本从编译期给出的源码目录、或 exe 上溯的仓库根寻找）；
+//   · 环境不具备时把原因写入 g_modelGenReason 并返回空串（调用方 QSKIP，不制造环境相关红灯）。
+static QString g_modelGenReason;
+
+static QString ensureTestModel(const QString &scriptName, const QString &envVar)
+{
+    g_modelGenReason.clear();
+    const QByteArray env = qgetenv(envVar.toLatin1().constData());
+    if (!env.isEmpty() && QFileInfo::exists(QString::fromLocal8Bit(env))) {
+        return QString::fromLocal8Bit(env);
+    }
+
+    QStringList candidates;
+#ifdef VFP_TEST_SOURCE_DIR
+    candidates << QStringLiteral(VFP_TEST_SOURCE_DIR "/tests/") + scriptName;
+#endif
+    // 兜底：从可执行文件向上找仓库根（build/bin/Release → 上三级）
+    candidates << QCoreApplication::applicationDirPath() + QStringLiteral("/../../../tests/") + scriptName;
+    QString script;
+    for (const QString &c : candidates) {
+        if (QFileInfo::exists(c)) {
+            script = c;
+            break;
+        }
+    }
+    if (script.isEmpty()) {
+        g_modelGenReason = QStringLiteral("未找到 tests/%1，跳过端到端用例").arg(scriptName);
+        return QString();
+    }
+
+    static QTemporaryDir tmp;   // 进程内保持到测试结束；同一脚本多次调用共享同一模型
+    if (!tmp.isValid()) {
+        g_modelGenReason = QStringLiteral("无法创建临时目录，跳过端到端用例");
+        return QString();
+    }
+    const QString modelPath = tmp.filePath(scriptName + QStringLiteral(".onnx"));
+    if (QFileInfo::exists(modelPath)) {
+        return modelPath;
+    }
+    QProcess py;
+    py.setProcessChannelMode(QProcess::MergedChannels);
+    py.start(QStringLiteral("python"), {script, modelPath});
+    if (!py.waitForFinished(60000) || py.exitCode() != 0 || !QFileInfo::exists(modelPath)) {
+        g_modelGenReason = QStringLiteral("python/onnx 生成失败，跳过端到端用例：%1")
+                               .arg(QString::fromLocal8Bit(py.readAll()).trimmed());
+        return QString();
+    }
+    return modelPath;
+}
+
+// 端到端（语义路径）：Conv3x3 均值 + Sigmoid 的最小模型 → 跑整条算子链 →
+// 掩膜应等于"输入亮方块外扩 1 像素"（依赖 sigmoid + 阈值 ⟺ conv > 0 的等价关系）
 void DnnSegmentTest::testEndToEndOnnxSemantic()
 {
-    QStringList candidates;
-    const QByteArray envModel = qgetenv("VFP_SEG_TEST_MODEL");
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-
-    QString modelPath;
-    if (!envModel.isEmpty() && QFileInfo::exists(QString::fromLocal8Bit(envModel))) {
-        modelPath = QString::fromLocal8Bit(envModel);
-    } else {
-#ifdef VFP_TEST_SOURCE_DIR
-        candidates << QStringLiteral(VFP_TEST_SOURCE_DIR "/tests/gen_min_seg_onnx.py");
-#endif
-        // 兜底：从可执行文件向上找仓库根（build/bin/Release → 上三级）
-        const QString appDir = QCoreApplication::applicationDirPath();
-        candidates << appDir + QStringLiteral("/../../../tests/gen_min_seg_onnx.py");
-
-        QString script;
-        for (const QString &c : candidates) {
-            if (QFileInfo::exists(c)) {
-                script = c;
-                break;
-            }
-        }
-        if (script.isEmpty()) {
-            QSKIP("未找到 tests/gen_min_seg_onnx.py，跳过端到端用例");
-        }
-        modelPath = tmp.filePath(QStringLiteral("min_seg.onnx"));
-        QProcess py;
-        py.setProcessChannelMode(QProcess::MergedChannels);
-        py.start(QStringLiteral("python"), {script, modelPath});
-        if (!py.waitForFinished(60000) || py.exitCode() != 0
-            || !QFileInfo::exists(modelPath)) {
-            QSKIP(qPrintable(QStringLiteral("python/onnx 不可用，跳过端到端用例：%1")
-                                 .arg(QString::fromLocal8Bit(py.readAll()).trimmed())));
-        }
+    const QString modelPath = ensureTestModel(QStringLiteral("gen_min_seg_onnx.py"),
+                                              QStringLiteral("VFP_SEG_TEST_MODEL"));
+    if (modelPath.isEmpty()) {
+        QSKIP(qPrintable(g_modelGenReason));
     }
 
     // 64×64 黑底 + 20×20 白方块（10,10)-(29,29)：等比方图 → letterbox 不缩放不错位
@@ -461,6 +484,157 @@ void DnnSegmentTest::testEndToEndOnnxSemantic()
     auto vis = node.getOutputData(4);
     QVERIFY(vis);
     // 注意：图像必须走 getHImage()——setHImage 只写 m_hImage，getHObject() 是另一份（Region/XLD 用）
+    const cv::Mat visMat = OpencvUtil::himageToMat(vis->getHImage());
+    QVERIFY(!visMat.empty());
+    QCOMPARE(visMat.size(), img.size());
+}
+
+// 端到端（letterbox 逆映射）：**非等比方图** —— 这一条专钉"先裁灰边再缩放"那段几何。
+// 为什么需要它：等比方图（96×96 或 64×64 → 64×64）时 letterbox 是空转，灰边裁剪代码从未被执行，
+// 一旦逆映射的裁剪/缩放写错，等比方图用例照样全绿——真模型上非等比方图（绝大多数相机画面）就会整体错位。
+void DnnSegmentTest::testEndToEndLetterboxNonSquare()
+{
+    const QString modelPath = ensureTestModel(QStringLiteral("gen_min_seg_onnx.py"),
+                                              QStringLiteral("VFP_SEG_TEST_MODEL"));
+    if (modelPath.isEmpty()) {
+        QSKIP(qPrintable(g_modelGenReason));
+    }
+
+    // 96×64（宽>高，比例 3:2）黑底 + 20×20 白方块（行 10..29、列 10..29）
+    // 预处理：s = min(64/96, 64/64) = 2/3 → 缩放为 64×43，上边距 (64-43)/2 = 10 px
+    cv::Mat img(64, 96, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::rectangle(img, cv::Rect(10, 10, 20, 20), cv::Scalar(255, 255, 255), cv::FILLED);
+
+    DnnSegmentNode node;
+    node.init();
+    node.setParam(QStringLiteral("modelPath"), modelPath);
+    node.setParam(QStringLiteral("inputWidth"), 64);
+    node.setParam(QStringLiteral("inputHeight"), 64);
+    node.setParam(QStringLiteral("keepRatio"), true);
+    node.setInputImage(OpencvUtil::matToHimage(img));
+
+    // 三种配置各跑一次，先把数据都拿到手：任一配置出错时，断言消息里能同时看到对照值
+    struct Probe {
+        cv::Mat mask;
+        int area = 0;
+        int firstRow = 0;    // 掩膜第 0 行的前景像素数（灰边污染带的可观测特征）
+        cv::Rect bbox;
+        double cx = 0.0, cy = 0.0;
+        bool ok = false;
+    };
+    auto runOnce = [&](bool keepRatio, int padTrim) {
+        node.setParam(QStringLiteral("keepRatio"), keepRatio);
+        node.setParam(QStringLiteral("padTrim"), padTrim);
+        node.run();
+        Probe p;
+        p.ok = node.getParam(QStringLiteral("moduleStatus")).toBool();
+        p.mask = OpencvUtil::himageToMat(HImage(node.getOutputImage()));
+        p.area = node.getParam(QStringLiteral("maskArea")).toInt();
+        if (!p.mask.empty()) {
+            const cv::Moments mm = cv::moments(p.mask, true);
+            if (mm.m00 > 0) {
+                p.cx = mm.m10 / mm.m00;
+                p.cy = mm.m01 / mm.m00;
+                p.bbox = cv::boundingRect(p.mask);
+            }
+            p.firstRow = cv::countNonZero(p.mask.row(0));
+        }
+        return p;
+    };
+    auto describe = [](const QString &tag, const Probe &p) {
+        return QStringLiteral("%1{ok=%2 面积=%3 框=(%4,%5,%6,%7) 首行=%8 重心=(%9,%10)}")
+            .arg(tag).arg(p.ok ? 1 : 0).arg(p.area)
+            .arg(p.bbox.x).arg(p.bbox.y).arg(p.bbox.width).arg(p.bbox.height)
+            .arg(p.firstRow).arg(p.cx, 0, 'f', 1).arg(p.cy, 0, 'f', 1);
+    };
+
+    const Probe dirty = runOnce(true, 0);    // letterbox + 不清理：应复现"灰边污染带"
+    const Probe lb = runOnce(true, 2);       // letterbox + 清理 2 像素
+    const Probe st = runOnce(false, 1);      // 默认姿势：拉伸（无灰边）
+    const QString info = describe(QStringLiteral("letterbox/padTrim=0"), dirty)
+                         + QStringLiteral(" | ") + describe(QStringLiteral("letterbox/padTrim=2"), lb)
+                         + QStringLiteral(" | ") + describe(QStringLiteral("拉伸"), st);
+
+    // ① 先钉住这个坑真实存在（本用例存在的理由）：灰边被判成前景后，污染带贯通整幅 →
+    //    首行即前景、外接框吞掉整幅图。若哪天这条不再成立，说明模型/预处理已换，需重新评估 padTrim。
+    QVERIFY2(dirty.ok && dirty.firstRow > 50
+                 && dirty.bbox == cv::Rect(0, 0, img.cols, img.rows),
+             qPrintable(QStringLiteral("未能复现灰边污染带（padTrim=0）：%1").arg(info)));
+
+    // ② letterbox + padTrim=2：污染带被清掉，几何正确
+    QVERIFY2(lb.ok && !lb.mask.empty(), qPrintable(QStringLiteral("letterbox 未成功：%1").arg(info)));
+    QCOMPARE(lb.mask.size(), img.size());
+    QVERIFY2(lb.firstRow == 0, qPrintable(QStringLiteral("污染带未清干净：%1").arg(info)));
+    QVERIFY2(qAbs(lb.cx - 20.0) <= 3.0 && qAbs(lb.cy - 20.0) <= 3.0,
+             qPrintable(QStringLiteral("letterbox 重心偏差：%1").arg(info)));
+    QVERIFY2(lb.area > 350 && lb.area < 700,
+             qPrintable(QStringLiteral("letterbox 面积异常：%1").arg(info)));
+    QVERIFY2(cv::countNonZero(lb.mask(cv::Rect(0, 0, 5, 5))) == 0
+                 && cv::countNonZero(lb.mask(cv::Rect(88, 56, 8, 8))) == 0,
+             qPrintable(QStringLiteral("letterbox 边角残留前景：%1").arg(info)));
+
+    // ③ 默认姿势（拉伸，无灰边）：几何"拉伸 → 反拉伸"，重心同样应回到 (20,20)
+    QVERIFY2(st.ok, qPrintable(QStringLiteral("拉伸模式未成功：%1").arg(info)));
+    QVERIFY2(qAbs(st.cx - 20.0) <= 3.0 && qAbs(st.cy - 20.0) <= 3.0,
+             qPrintable(QStringLiteral("拉伸模式重心偏差：%1").arg(info)));
+    QVERIFY2(st.area > 350 && st.area < 700,
+             qPrintable(QStringLiteral("拉伸模式面积异常：%1").arg(info)));
+}
+
+// 端到端（实例路径）：YOLO-Seg 双输出形态（框+类分数+掩膜系数 / 掩膜原型）→
+// 钉住"模式自动识别 + 系数·原型掩膜 + 按框裁剪贴回 + 类别/置信度随框输出"整条链路
+void DnnSegmentTest::testEndToEndOnnxInstance()
+{
+    const QString modelPath = ensureTestModel(QStringLiteral("gen_min_seg_inst_onnx.py"),
+                                              QStringLiteral("VFP_SEG_TEST_INST_MODEL"));
+    if (modelPath.isEmpty()) {
+        QSKIP(qPrintable(g_modelGenReason));
+    }
+
+    // 64×64 黑底 + 白方块 10..29；模型原型通道 0 = 3×3 均值 → 亮区外扩 1 像素 = 9..30
+    cv::Mat img(64, 64, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::rectangle(img, cv::Rect(10, 10, 20, 20), cv::Scalar(255, 255, 255), cv::FILLED);
+
+    DnnSegmentNode node;
+    node.init();
+    node.setParam(QStringLiteral("modelPath"), modelPath);
+    node.setParam(QStringLiteral("inputWidth"), 64);
+    node.setParam(QStringLiteral("inputHeight"), 64);
+    node.setParam(QStringLiteral("segMode"), 0);      // 自动：应为实例分割（4D 原型 + 3D 系数）
+    node.setInputImage(OpencvUtil::matToHimage(img));
+    node.run();
+    QVERIFY2(node.getParam(QStringLiteral("moduleStatus")).toBool(),
+             qPrintable(node.getParam(QStringLiteral("lastError")).toString()));
+
+    // 掩膜 = 亮区(9..30) ∩ 框(24..39) = 24..30 → 7×7 ≈ 49 像素（留少量浮点边界余量）
+    const int area = node.getParam(QStringLiteral("maskArea")).toInt();
+    QVERIFY2(area >= 45 && area <= 60,
+             qPrintable(QStringLiteral("实例掩膜面积异常：%1（应≈49）").arg(area)));
+    QCOMPARE(node.getParam(QStringLiteral("segmentCount")).toInt(), 1);   // 低置信滤掉 + 重叠框 NMS 合并
+
+    const cv::Mat mask = OpencvUtil::himageToMat(node.getOutputImage());
+    QVERIFY(!mask.empty());
+    QCOMPARE(cv::countNonZero(mask), area);
+    QCOMPARE(int(mask.at<uchar>(27, 27)), 255);   // 框内 ∩ 亮区
+    QCOMPARE(int(mask.at<uchar>(12, 12)), 0);     // 亮区但**框外** → 必须被裁掉（钉住按框裁剪）
+    QCOMPARE(int(mask.at<uchar>(2, 2)), 0);       // 远处背景
+
+    // 目标框：类别与置信度来自 out0（实例模式），几何由框裁剪后的交集决定
+    auto arr = node.getOutputData(3);
+    QVERIFY(arr);
+    const DetectionResult dr = arr->getDetectionResult();
+    QCOMPARE(dr.boxes.size(), 1);
+    QCOMPARE(dr.boxes[0].classId, 0);
+    QVERIFY2(qAbs(dr.boxes[0].confidence - 0.90) < 1e-5,
+             qPrintable(QStringLiteral("置信度异常：%1").arg(dr.boxes[0].confidence)));
+    QCOMPARE(dr.boxes[0].x, 24.0);
+    QCOMPARE(dr.boxes[0].y, 24.0);
+    QCOMPARE(dr.boxes[0].w, 16.0);
+    QCOMPARE(dr.boxes[0].h, 16.0);
+
+    // 叠加图必须真的有内容（8UC3、原图尺寸）
+    auto vis = node.getOutputData(4);
+    QVERIFY(vis);
     const cv::Mat visMat = OpencvUtil::himageToMat(vis->getHImage());
     QVERIFY(!visMat.empty());
     QCOMPARE(visMat.size(), img.size());
