@@ -198,6 +198,51 @@ if ($script:crtMissing.Count -gt 0) {
 }
 
 # ============================================================
+# Step 5.9: 补齐 Qt 运行时 DLL（按主程序导入名扫描）
+# ============================================================
+# 为什么需要：windeployqt 会漏掉部分 Qt 模块 DLL —— 实测主程序已链接 QtCharts（统计报表依赖
+# Qt6Charts.dll），但 windeployqt 没有拷贝它，部署自检直接报"缺文件: Qt6Charts.dll"，
+# 到目标机就是"报表打不开"。这里按 exe 二进制里**实际引用**的 Qt6*.dll 名字逐个补，
+# 未来新增 Qt 模块也不会再漏。
+Step "补齐 Qt 运行时 DLL"
+$qtBinDir = ""
+foreach ($cand in @('D:\Qt\6.11.0\msvc2022_64\bin', 'C:\Qt\6.11.0\msvc2022_64\bin')) {
+    if (Test-Path $cand) { $qtBinDir = $cand; break }
+}
+if (-not $qtBinDir) {
+    foreach ($drive in @('C:\', 'D:\', 'E:\')) {
+        $root = Join-Path $drive 'Qt'
+        if (-not (Test-Path $root)) { continue }
+        $hit = Get-ChildItem $root -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like '6.*' } |
+            ForEach-Object { Get-ChildItem $_.FullName -Directory -ErrorAction SilentlyContinue } |
+            Where-Object { Test-Path (Join-Path $_.FullName 'bin\Qt6Core.dll') } |
+            Select-Object -First 1
+        if ($hit) { $qtBinDir = Join-Path $hit.FullName 'bin'; break }
+    }
+}
+$qtDllAdded = 0
+if ($qtBinDir) {
+    $exeText = [System.Text.Encoding]::ASCII.GetString(
+        [System.IO.File]::ReadAllBytes((Join-Path $OutDir 'VisionFlowPlatform.exe')))
+    foreach ($m in [regex]::Matches($exeText, 'Qt6[A-Za-z0-9_]+\.dll')) {
+        $name = $m.Value
+        if (Test-Path (Join-Path $OutDir $name)) { continue }
+        $src = Join-Path $qtBinDir $name
+        if (Test-Path $src) {
+            Copy-Item $src -Destination $OutDir -Force
+            $qtDllAdded++
+            Write-Host ("  补: " + $name) -ForegroundColor Yellow
+        } else {
+            Write-Warning ("主程序引用了 $name，但在 $qtBinDir 中找不到")
+        }
+    }
+    Write-Host "  -> 补齐 $qtDllAdded 个 Qt DLL" -ForegroundColor Green
+} else {
+    Write-Warning "未找到 Qt bin 目录，跳过 Qt DLL 补齐（部署自检会报出缺失项）"
+}
+
+# ============================================================
 # Step 6: 拷贝 docs（软件内 F1 查看的操作手册）
 # ============================================================
 Step "拷贝使用手册"
