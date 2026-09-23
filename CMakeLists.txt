@@ -749,6 +749,13 @@ if(MSVC)
     add_test(NAME DnnSegmentTest COMMAND dnn_segment_test)
 endif()
 
+# OpenCV 缺陷检测（标准件/黄金模板比对）功能测试（P1-1：基础差影 + 对齐归一化 + 边缘抑制）
+if(MSVC)
+    add_executable(opencv_defect_align_test tests/opencv_defect_align_test.cpp)
+    target_link_libraries(opencv_defect_align_test PRIVATE vfp_core Qt6::Test)
+    add_test(NAME OpencvDefectAlignTest COMMAND opencv_defect_align_test)
+endif()
+
 # 相机 IO 控制功能测试（🥉：MVS 数字 IO 逻辑 + 序列化 + 缺相机降级）
 if(MSVC)
     add_executable(camera_io_test tests/camera_io_test.cpp)
