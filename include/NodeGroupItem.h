@@ -53,6 +53,18 @@ public:
     /// 位置用 setPos() 设置。过小（<20）忽略，避免手工改坏的文件造出无法点选的框。
     void setFrameSize(qreal width, qreal height);
 
+    /// 折叠/展开（FR1.9 的"Group 折叠"）：折叠后**只隐藏图元**（组内算子与其相关连线），
+    /// 框体缩成一条标题栏；**不碰模型**，执行完全不受影响（用例真跑流程验证）。
+    /// 可见性由 FlowScene::refreshGroupVisibility 统一重算——多个折叠分组叠加、连线一端在
+    /// 另一折叠组里的情况才不会算错。
+    bool isCollapsed() const { return m_collapsed; }
+    void setCollapsed(bool collapsed);
+    /// 按当前折叠状态重新应用（从方案/片段载入后调用：那时分组才刚挂进场景）
+    void applyCollapsedState();
+    /// 仅供"解散分组"这类正在做结构变更的调用方：只清掉折叠状态（**不记撤销、不刷新可见性**），
+    /// 让被藏起来的成员重新可见——否则"解散分组"后算子会凭空消失（数据还在，但看不到也点不到）。
+    void clearCollapsedForRemoval();
+
     /// 整体移动：框体与全部成员各移动 delta（撤销由调用方在移动前记录）
     void moveGroupBy(const QPointF &delta);
     /// 只移动成员（框体由基类拖动时用）
@@ -79,6 +91,8 @@ private:
 
     QString m_title;
     QRectF m_rect {0, 0, 240, 140};   ///< 本图元坐标（左上 0,0）
+    QRectF m_expandedRect;            ///< 展开时的框体尺寸（折叠后展开原样恢复，不按成员重算）
     QList<int> m_members;             ///< 成员模块号
+    bool m_collapsed = false;         ///< 是否折叠（纯显示状态，随方案持久化）
     bool m_undoRecorded = false;      ///< 本次拖动是否已记录撤销
 };

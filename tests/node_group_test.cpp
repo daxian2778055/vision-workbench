@@ -13,6 +13,9 @@
 #include "NodeGroupItem.h"
 #include "ProjectManager.h"
 #include "NodeRegistry.h"
+#include "Connection.h"
+#include "ConnectionGraphicsItem.h"
+#include "Port.h"
 
 // 算子分组（FR1.9，Group）契约测试。
 //
@@ -42,6 +45,12 @@ private slots:
     void testEditLockedBlocksGroupEdits();
     void testUndoRedoRestoresGroups();
     void testExecutionUnaffectedByGroup();
+    void testCollapseHidesMembersAndExpandRestores();
+    void testCollapseDoesNotAffectExecution();
+    void testCollapseSurvivesSaveLoad();
+    void testDissolveCollapsedGroupRestoresVisibility();
+    void testCollapsedGroupMoveMovesMembers();
+    void testMultipleCollapsedGroupsVisibility();
     void testModuleIdRestoredOnLoad();
     void testNodeMoveUndoConvention();
 };
@@ -487,6 +496,231 @@ void NodeGroupTest::testNodeMoveUndoConvention()
     NodeBase *afterSecondUndo = scene.nodeByModuleId(testedId);
     QVERIFY(afterSecondUndo);
     QCOMPARE(afterSecondUndo->position(), origin);             // 第二次才回到原位
+}
+
+void NodeGroupTest::testCollapseHidesMembersAndExpandRestores()
+{
+    FlowScene scene;
+    NodeBase *a = addNode(&scene, QStringLiteral("Delay"), QPointF(100, 100));
+    NodeBase *b = addNode(&scene, QStringLiteral("Delay"), QPointF(420, 300));
+    QVERIFY(a && b);
+    QVERIFY(scene.createConnection(a->outputPorts().first(), b->inputPorts().first(), true));
+    MyProject::Connection *conn = scene.connections().first();
+    selectOnly(&scene, {a, b});
+    NodeGroupItem *group = scene.createGroupFromSelection(QStringLiteral("折叠分组"));
+    QVERIFY(group);
+    const QRectF expanded = group->mapRectToScene(group->boundingRect());
+
+    group->setCollapsed(true);
+    QVERIFY(group->isCollapsed());
+    // 成员与其相关连线都不可见（连线一端在组内就跟着藏，否则会出现"悬空的线"）
+    QVERIFY2(!scene.getGraphicsItemForNode(a)->isVisible(), "折叠后成员仍可见");
+    QVERIFY2(!scene.getGraphicsItemForNode(b)->isVisible(), "折叠后成员仍可见");
+    QVERIFY2(!scene.getGraphicsItemForConnection(conn)->isVisible(), "折叠后连线仍可见");
+
+    // 框体缩成一条标题栏：高度≈标题栏、宽度与位置不变（宽度留作"这段有多宽"的视觉线索）
+    const QRectF collapsed = group->mapRectToScene(group->boundingRect());
+    QVERIFY2(qAbs(collapsed.height() - NodeGroupItem::titleBarHeight()) < 6.0,
+             qPrintable(QStringLiteral("折叠后高度=%1（应≈标题栏 %2）")
+                            .arg(collapsed.height()).arg(NodeGroupItem::titleBarHeight())));
+    QVERIFY2(qAbs(collapsed.width() - expanded.width()) < 1.0, "折叠不应改变框体宽度");
+    QVERIFY2(qAbs(collapsed.top() - expanded.top()) < 1.0, "折叠不应移动框体");
+
+    // 展开：可见性与尺寸原样恢复
+    group->setCollapsed(false);
+    QVERIFY(!group->isCollapsed());
+    QVERIFY(scene.getGraphicsItemForNode(a)->isVisible());
+    QVERIFY(scene.getGraphicsItemForNode(b)->isVisible());
+    QVERIFY(scene.getGraphicsItemForConnection(conn)->isVisible());
+    QCOMPARE(group->mapRectToScene(group->boundingRect()), expanded);
+}
+
+void NodeGroupTest::testCollapseDoesNotAffectExecution()
+{
+    // 折叠是纯显示：成员图元被隐藏，但模型（节点/连线/参数）一点没动，流程必须照跑
+    FlowScene scene;
+    FlowExecutor exec;
+    exec.setFlowName(QStringLiteral("GroupCollapseExecution"));
+    NodeBase *first = scene.createNode(NodeBase::LOGIC, QPointF(200, 200), QStringLiteral("Delay"));
+    NodeBase *second = scene.createNode(NodeBase::LOGIC, QPointF(420, 200), QStringLiteral("Delay"));
+    QVERIFY(first && second);
+    first->setParam(QStringLiteral("delayMs"), 5);
+    second->setParam(QStringLiteral("delayMs"), 5);
+    QVERIFY(scene.createConnection(first->outputPorts().first(), second->inputPorts().first(), true));
+
+    selectOnly(&scene, {first, second});
+    NodeGroupItem *group = scene.createGroupFromSelection();
+    QVERIFY(group);
+    group->setCollapsed(true);
+    QVERIFY(!scene.getGraphicsItemForNode(first)->isVisible());
+
+    int okRuns = 0;
+    const auto conn = QObject::connect(
+        &exec, &FlowExecutor::nodeExecuted, &exec,
+        [&okRuns](NodeBase *, bool ok) {
+            if (ok)
+                ++okRuns;
+        },
+        Qt::DirectConnection);
+
+    exec.setFlowScene(&scene);
+    exec.setFlowMode(FlowMode::SoftwareTrigger);
+    exec.startExecution();
+    bool finished = exec.wait(10000);
+    if (!finished) {
+        exec.stopExecution();
+        finished = exec.wait(3000);
+    }
+    exec.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+    QObject::disconnect(conn);
+
+    QVERIFY2(finished, "折叠后流程未能在 10 秒内跑完");
+    QCOMPARE(okRuns, 2);   // 两个被折叠隐藏的算子照常各执行一次
+}
+
+void NodeGroupTest::testCollapseSurvivesSaveLoad()
+{
+    FlowScene scene;
+    NodeBase *a = addNode(&scene, QStringLiteral("Delay"), QPointF(100, 100));
+    NodeBase *b = addNode(&scene, QStringLiteral("Delay"), QPointF(420, 300));
+    QVERIFY(a && b);
+    QVERIFY(scene.createConnection(a->outputPorts().first(), b->inputPorts().first(), true));
+    selectOnly(&scene, {a, b});
+    NodeGroupItem *group = scene.createGroupFromSelection(QStringLiteral("折叠往返"));
+    QVERIFY(group);
+    group->setCollapsed(true);
+
+    ProjectManager pm;
+    const QJsonObject json = pm.sceneToJson(&scene);
+    FlowScene restored;
+    pm.sceneFromJson(json, &restored);
+
+    QCOMPARE(restored.groups().size(), 1);
+    NodeGroupItem *loaded = restored.groups().first();
+    QVERIFY2(loaded->isCollapsed(), "折叠状态没有随方案保存");
+    // 不只是存了个标志位：载入后成员图元确实不可见（否则"折叠"在重开方案后就失效了）
+    QCOMPARE(restored.nodes().size(), 2);
+    for (NodeBase *n : restored.nodes()) {
+        QVERIFY2(!restored.getGraphicsItemForNode(n)->isVisible(),
+                 "载入折叠方案后成员仍是可见的（折叠未生效）");
+    }
+}
+
+void NodeGroupTest::testDissolveCollapsedGroupRestoresVisibility()
+{
+    // 关键安全点：分组没了，被它藏起来的成员必须重新可见——否则"解散分组"后算子凭空消失
+    // （数据还在、但看不到也点不到，等同丢工作）。两条解散路径都要验。
+    // ① 右键/菜单路径：removeGroup
+    {
+        FlowScene scene;
+        NodeBase *a = addNode(&scene, QStringLiteral("Delay"), QPointF(100, 100));
+        NodeBase *b = addNode(&scene, QStringLiteral("Delay"), QPointF(420, 300));
+        QVERIFY(a && b);
+        QVERIFY(scene.createConnection(a->outputPorts().first(), b->inputPorts().first(), true));
+        MyProject::Connection *conn = scene.connections().first();
+        selectOnly(&scene, {a, b});
+        NodeGroupItem *group = scene.createGroupFromSelection();
+        QVERIFY(group);
+        group->setCollapsed(true);
+        QVERIFY(!scene.getGraphicsItemForNode(a)->isVisible());
+
+        scene.removeGroup(group);
+        QVERIFY(scene.groups().isEmpty());
+        QVERIFY2(scene.getGraphicsItemForNode(a)->isVisible(), "解散折叠分组后成员未恢复可见");
+        QVERIFY2(scene.getGraphicsItemForNode(b)->isVisible(), "解散折叠分组后成员未恢复可见");
+        QVERIFY2(scene.getGraphicsItemForConnection(conn)->isVisible(), "解散折叠分组后连线未恢复可见");
+        QCOMPARE(scene.nodes().size(), 2);
+    }
+    // ② Delete 键路径：deleteSelectedItems（选中折叠的分组框按 Delete = 解散）
+    {
+        FlowScene scene;
+        NodeBase *a = addNode(&scene, QStringLiteral("Delay"), QPointF(100, 100));
+        NodeBase *b = addNode(&scene, QStringLiteral("Delay"), QPointF(420, 300));
+        QVERIFY(a && b);
+        selectOnly(&scene, {a, b});
+        NodeGroupItem *group = scene.createGroupFromSelection();
+        QVERIFY(group);
+        group->setCollapsed(true);
+        scene.clearSelection();
+        group->setSelected(true);
+        scene.deleteSelectedItems();
+        QVERIFY(scene.groups().isEmpty());
+        QVERIFY2(scene.getGraphicsItemForNode(a)->isVisible(), "Delete 解散后成员未恢复可见");
+        QVERIFY2(scene.getGraphicsItemForNode(b)->isVisible(), "Delete 解散后成员未恢复可见");
+    }
+}
+
+void NodeGroupTest::testCollapsedGroupMoveMovesMembers()
+{
+    FlowScene scene;
+    NodeBase *a = addNode(&scene, QStringLiteral("Delay"), QPointF(100, 100));
+    NodeBase *b = addNode(&scene, QStringLiteral("Delay"), QPointF(420, 300));
+    QVERIFY(a && b);
+    selectOnly(&scene, {a, b});
+    NodeGroupItem *group = scene.createGroupFromSelection();
+    QVERIFY(group);
+    group->setCollapsed(true);
+
+    const QPointF beforeA = a->position();
+    const QPointF beforeB = b->position();
+    const QPointF delta(-80, 40);
+    scene.recordUndo();
+    group->moveGroupBy(delta);
+
+    // 成员虽然不可见，仍必须跟着框体走——否则展开后成员会散在原地（"框跑了、算子没跑"）
+    QCOMPARE(a->position(), beforeA + delta);
+    QCOMPARE(b->position(), beforeB + delta);
+}
+
+void NodeGroupTest::testMultipleCollapsedGroupsVisibility()
+{
+    // 可见性必须由"全部折叠分组"统一算：连线两端分属不同分组时，展开一个不能让另一个的
+    // 成员或那条跨组连线露出来（逐个分组 setVisible 必然算错）
+    FlowScene scene;
+    NodeBase *a = addNode(&scene, QStringLiteral("Delay"), QPointF(0, 0));
+    NodeBase *b = addNode(&scene, QStringLiteral("Delay"), QPointF(200, 0));
+    NodeBase *c = addNode(&scene, QStringLiteral("Delay"), QPointF(400, 0));
+    NodeBase *d = addNode(&scene, QStringLiteral("Delay"), QPointF(600, 0));
+    QVERIFY(a && b && c && d);
+    QVERIFY(scene.createConnection(a->outputPorts().first(), b->inputPorts().first(), true));
+    QVERIFY(scene.createConnection(b->outputPorts().first(), c->inputPorts().first(), true));   // 跨组
+    QVERIFY(scene.createConnection(c->outputPorts().first(), d->inputPorts().first(), true));
+    MyProject::Connection *crossConn = nullptr;
+    for (MyProject::Connection *conn : scene.connections()) {
+        if (conn->sourcePort() && conn->targetPort()
+            && conn->sourcePort()->node() == b && conn->targetPort()->node() == c) {
+            crossConn = conn;
+        }
+    }
+    QVERIFY(crossConn);
+
+    selectOnly(&scene, {a, b});
+    NodeGroupItem *groupA = scene.createGroupFromSelection(QStringLiteral("A组"));
+    QVERIFY(groupA);
+    selectOnly(&scene, {c, d});
+    NodeGroupItem *groupB = scene.createGroupFromSelection(QStringLiteral("B组"));
+    QVERIFY(groupB);
+
+    groupA->setCollapsed(true);
+    groupB->setCollapsed(true);
+    QVERIFY(!scene.getGraphicsItemForNode(a)->isVisible());
+    QVERIFY(!scene.getGraphicsItemForNode(c)->isVisible());
+    QVERIFY(!scene.getGraphicsItemForConnection(crossConn)->isVisible());
+
+    // 只展开 B：B 的成员可见，A 的成员与那条跨组连线**仍不可见**（b 还在 A 里被藏着）
+    groupB->setCollapsed(false);
+    QVERIFY2(scene.getGraphicsItemForNode(c)->isVisible(), "B 展开后成员仍不可见");
+    QVERIFY2(scene.getGraphicsItemForNode(d)->isVisible(), "B 展开后成员仍不可见");
+    QVERIFY2(!scene.getGraphicsItemForNode(a)->isVisible(), "A 仍折叠，其成员却露出来了");
+    QVERIFY2(!scene.getGraphicsItemForNode(b)->isVisible(), "A 仍折叠，其成员却露出来了");
+    QVERIFY2(!scene.getGraphicsItemForConnection(crossConn)->isVisible(),
+             "跨组连线的一端仍被折叠隐藏，连线却露出来了");
+
+    // 再展开 A：一切恢复
+    groupA->setCollapsed(false);
+    QVERIFY(scene.getGraphicsItemForNode(a)->isVisible());
+    QVERIFY(scene.getGraphicsItemForConnection(crossConn)->isVisible());
 }
 
 QTEST_MAIN(NodeGroupTest)

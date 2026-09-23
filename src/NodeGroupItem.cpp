@@ -84,6 +84,9 @@ bool NodeGroupItem::fitToMembers()
     FlowScene *s = flowScene();
     if (!s)
         return false;
+    // 折叠时保持"一条标题栏"的形态，不按成员位置重算——否则成员一动框体就弹回展开尺寸
+    if (m_collapsed)
+        return true;
 
     QRectF box;
     bool any = false;
@@ -116,6 +119,43 @@ void NodeGroupItem::setFrameSize(qreal width, qreal height)
     prepareGeometryChange();
     m_rect = QRectF(0, 0, width, height);
     update();
+}
+
+void NodeGroupItem::setCollapsed(bool collapsed)
+{
+    if (m_collapsed == collapsed)
+        return;
+    if (collapsed)
+        m_expandedRect = m_rect;   // 记住展开尺寸：展开时原样恢复（用户可能特意调过大小）
+
+    m_collapsed = collapsed;
+    prepareGeometryChange();
+    m_rect = collapsed ? QRectF(0, 0, m_rect.width(), titleBarHeight()) : m_expandedRect;
+
+    // 撤销：折叠是可撤销的显示状态（与重命名同理）。锁定编辑时不记录（但折叠本身仍允许，
+    // 它是查看动作，不改变图结构）。
+    if (FlowScene *s = flowScene()) {
+        if (!s->isEditLocked())
+            s->recordUndo();
+        s->refreshGroupVisibility();   // 可见性统一重算（多组叠加/连线一端在别组时才不会算错）
+    } else {
+        applyCollapsedState();
+    }
+    update();
+}
+
+void NodeGroupItem::applyCollapsedState()
+{
+    // 折叠状态只影响图元可见性；连"隐藏成员仍被选中"这种细节也一并收口（见 refreshGroupVisibility）
+    if (FlowScene *s = flowScene())
+        s->refreshGroupVisibility();
+}
+
+void NodeGroupItem::clearCollapsedForRemoval()
+{
+    m_collapsed = false;
+    if (!m_expandedRect.isNull())
+        m_rect = m_expandedRect;
 }
 
 void NodeGroupItem::moveMembersBy(const QPointF &delta)
@@ -164,6 +204,8 @@ QJsonObject NodeGroupItem::toJson() const
     for (int id : m_members)
         members.append(id);
     o[QStringLiteral("members")] = members;   // 模块号（跨会话稳定；见头文件"设计契约"）
+    if (m_collapsed)
+        o[QStringLiteral("collapsed")] = true;   // 只在折叠时写：老方案/未折叠方案的 JSON 不变
     return o;
 }
 
@@ -184,6 +226,7 @@ NodeGroupItem *NodeGroupItem::fromJson(const QJsonObject &json)
             members.append(id);
     }
     item->m_members = members;
+    item->m_collapsed = json.value(QStringLiteral("collapsed")).toBool(false);
     return item;
 }
 
@@ -209,11 +252,17 @@ void NodeGroupItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *opt
     font.setBold(true);
     painter->setFont(font);
     painter->setPen(kTextColor);
-    const QString label = m_members.isEmpty()
-                              ? m_title
-                              : QStringLiteral("%1  ·  %2 个算子")
-                                    .arg(m_title)
-                                    .arg(m_members.size());
+    // 折叠指示符：▾=展开中 / ▸=已折叠（与树控件一致，用户一眼能看出哪段被收起来了）
+    const QString caret = m_collapsed ? QStringLiteral("▸") : QStringLiteral("▾");
+    const QString label = m_collapsed
+                              ? QStringLiteral("%1 %2  %3 个算子（已折叠）")
+                                    .arg(caret, m_title)
+                                    .arg(m_members.size())
+                              : (m_members.isEmpty()
+                                     ? QStringLiteral("%1 %2").arg(caret, m_title)
+                                     : QStringLiteral("%1 %2  ·  %3 个算子")
+                                           .arg(caret, m_title)
+                                           .arg(m_members.size()));
     painter->drawText(bar.adjusted(8, 0, -8, 0), Qt::AlignLeft | Qt::AlignVCenter, label);
 
     if (option && (option->state & QStyle::State_Selected)) {
@@ -272,7 +321,9 @@ void NodeGroupItem::mouseDoubleClickEvent(QGraphicsSceneMouseEvent *event)
         return;
     }
     QGraphicsItem::mouseDoubleClickEvent(event);
-    renameInteractively();
+    // 双击标题栏 = 折叠/展开（改名在右键菜单里）。**不检查编辑锁定**：折叠是查看动作，
+    // 不改变图结构与参数，运行中（锁定）也该允许——与"画布还能缩放/平移"同一道理。
+    setCollapsed(!m_collapsed);
 }
 
 void NodeGroupItem::renameInteractively()
@@ -298,6 +349,7 @@ void NodeGroupItem::contextMenuEvent(QGraphicsSceneContextMenuEvent *event)
     const bool locked = s->isEditLocked();
 
     QMenu menu;
+    QAction *toggle = menu.addAction(m_collapsed ? QStringLiteral("展开分组") : QStringLiteral("折叠分组"));
     QAction *rename = menu.addAction(QStringLiteral("重命名分组…"));
     QAction *dissolve = menu.addAction(QStringLiteral("解散分组（保留算子）"));
     QAction *selectMembers = menu.addAction(QStringLiteral("选中组内算子"));
@@ -305,11 +357,16 @@ void NodeGroupItem::contextMenuEvent(QGraphicsSceneContextMenuEvent *event)
     dissolve->setEnabled(!locked);
 
     QAction *chosen = menu.exec(event->screenPos());
-    if (chosen == rename) {
+    if (chosen == toggle) {
+        setCollapsed(!m_collapsed);
+    } else if (chosen == rename) {
         renameInteractively();
     } else if (chosen == dissolve) {
-        s->removeGroup(this);   // 内部记录撤销；只删框，不动算子
+        s->removeGroup(this);   // 内部记录撤销；只删框，不动算子（并复原成员可见性）
     } else if (chosen == selectMembers) {
+        // 折叠状态下成员是不可见的：先展开再选，否则用户会"选中了一堆看不见的算子"
+        if (m_collapsed)
+            setCollapsed(false);
         for (int id : m_members) {
             if (NodeBase *n = s->nodeByModuleId(id)) {
                 if (NodeGraphicsItem *item = s->getGraphicsItemForNode(n))

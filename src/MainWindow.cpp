@@ -1006,6 +1006,10 @@ void MainWindow::initActions()
     m_actionDissolveGroup = new QAction(QStringLiteral("解散分组"), this);
     m_actionDissolveGroup->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+G")));
     m_actionDissolveGroup->setStatusTip(QStringLiteral("删除选中的分组框，组内算子保留"));
+    // 折叠/展开（FR1.9 的"Group 折叠"）：纯显示动作，不改变执行；双击分组标题栏是同一效果。
+    // 不给快捷键：折叠没有公认的通用键位，硬塞一个反而抢键。
+    m_actionToggleGroup = new QAction(QStringLiteral("折叠/展开分组"), this);
+    m_actionToggleGroup->setStatusTip(QStringLiteral("把选中的分组折叠成一条标题栏（纯显示，不影响执行）"));
 
     // 子图复用（FR15.10 的设计期半步）：复制/粘贴选中子图 + 片段文件导入导出。
     // 快捷键用 WidgetShortcut（**只在主窗口自身有焦点时**生效）：Ctrl+C/V 不抢文本框的复制粘贴
@@ -1038,10 +1042,12 @@ void MainWindow::initActions()
         QAction *before = ui->actionDeleteFlow;
         ui->menuEdit->insertAction(before, m_actionCreateGroup);
         ui->menuEdit->insertAction(before, m_actionDissolveGroup);
+        ui->menuEdit->insertAction(before, m_actionToggleGroup);
         ui->menuEdit->insertSeparator(before);
     }
     connect(m_actionCreateGroup, &QAction::triggered, this, &MainWindow::onCreateGroup);
     connect(m_actionDissolveGroup, &QAction::triggered, this, &MainWindow::onDissolveGroup);
+    connect(m_actionToggleGroup, &QAction::triggered, this, &MainWindow::onToggleGroupCollapse);
 
     // 执行控制
     connect(ui->actionStartExecution, &QAction::triggered, this, &MainWindow::onStartExecution);
@@ -1841,6 +1847,27 @@ void MainWindow::onDissolveGroup()
     } else {
         ui->statusBar->showMessage(tr("请先选中要解散的分组框（点分组标题栏）"), 4000);
     }
+}
+
+void MainWindow::onToggleGroupCollapse()
+{
+    FlowScene *scene = currentFlowScene();
+    if (!scene)
+        return;
+
+    QList<NodeGroupItem *> groups;
+    for (QGraphicsItem *item : scene->selectedItems()) {
+        if (auto *group = dynamic_cast<NodeGroupItem *>(item))
+            groups.append(group);
+    }
+    if (groups.isEmpty()) {
+        ui->statusBar->showMessage(tr("请先选中要折叠/展开的分组框（点分组标题栏）"), 4000);
+        return;
+    }
+    for (NodeGroupItem *group : groups)
+        group->setCollapsed(!group->isCollapsed());
+    ui->statusBar->showMessage(tr("已折叠/展开 %1 个分组").arg(groups.size()), 3000);
+    logMessage(tr("折叠/展开分组：%1 个").arg(groups.size()));
 }
 
 // ---- 子图复用：复制/粘贴（含内部连线）+ 片段文件导入导出 ----
@@ -3520,6 +3547,7 @@ void MainWindow::retranslateUi()
         ui->actionDeleteFlow->setText("删除流程");
         if (m_actionCreateGroup) m_actionCreateGroup->setText("创建分组");
         if (m_actionDissolveGroup) m_actionDissolveGroup->setText("解散分组");
+        if (m_actionToggleGroup) m_actionToggleGroup->setText("折叠/展开分组");
         if (m_actionCopySnippet) m_actionCopySnippet->setText("复制所选算子");
         if (m_actionPasteSnippet) m_actionPasteSnippet->setText("粘贴");
         if (m_actionExportSnippet) m_actionExportSnippet->setText("导出片段…");
@@ -3562,6 +3590,7 @@ void MainWindow::retranslateUi()
         ui->actionDeleteFlow->setText("Delete Flow");
         if (m_actionCreateGroup) m_actionCreateGroup->setText("Create Group");
         if (m_actionDissolveGroup) m_actionDissolveGroup->setText("Dissolve Group");
+        if (m_actionToggleGroup) m_actionToggleGroup->setText("Collapse/Expand Group");
         if (m_actionCopySnippet) m_actionCopySnippet->setText("Copy Selected Nodes");
         if (m_actionPasteSnippet) m_actionPasteSnippet->setText("Paste");
         if (m_actionExportSnippet) m_actionExportSnippet->setText("Export Snippet…");

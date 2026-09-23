@@ -169,6 +169,8 @@ private:
     void onCreateGroup();
     /// 解散选中的分组框（Ctrl+Shift+G）；只删框，组内算子保留
     void onDissolveGroup();
+    /// 折叠/展开选中的分组框（FR1.9 的 Group 折叠；纯显示，不影响执行）
+    void onToggleGroupCollapse();
 
     // ---- 子图复用：复制/粘贴选中子图（含连线）+ 片段文件导入导出（FR15.10 的设计期复用半步）----
     /// 视图中心（场景坐标）：粘贴/导入时把片段放在用户正在看的位置；无视图时给一个稳妥兜底
@@ -241,6 +243,7 @@ protected:
     /// 算子分组菜单项（FR1.9；文案在 retranslateUi 里随语言切换）
     QAction *m_actionCreateGroup = nullptr;
     QAction *m_actionDissolveGroup = nullptr;
+    QAction *m_actionToggleGroup = nullptr;
     /// 子图复用菜单项（FR15.10 设计期半步：复制/粘贴/导出片段/导入片段）
     QAction *m_actionCopySnippet = nullptr;
     QAction *m_actionPasteSnippet = nullptr;

@@ -198,8 +198,14 @@ public:
     /// 都要过这一关，故做成单一实现，避免多处规则漂移。
     QString makeUniqueNodeName(const QString &base, NodeBase *exclude = nullptr) const;
     /// 接管一个"从方案/片段载入"的分组框：挂进场景 + 归属容器 + 按给定尺寸设框
-    /// （尺寸随文件存过，不该再按成员位置去猜），并跟随编辑锁定状态。
+    /// （尺寸随文件存过，不该再按成员位置去猜），并跟随编辑锁定状态与折叠状态。
     void registerLoadedGroup(NodeGroupItem *group, qreal width, qreal height);
+
+    /// 按**全部**折叠分组的当前状态，统一重算"算子/连线图元是否可见"。
+    /// 做成单一来源的原因：折叠会隐藏成员与其相关连线，而连线两端可能分属不同分组、
+    /// 算子也可能同时属于多个分组——逐个分组去 setVisible 必然算错（展开一个组却让
+    /// 另一个折叠组的成员露出来）。隐藏的成员会被取消选中，避免"删除了看不见的算子"。
+    void refreshGroupVisibility();
 
     void setFlowVariable(const QString &name, int type, const QVariant &value,
                          const QString &description = QString());

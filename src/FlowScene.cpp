@@ -830,6 +830,48 @@ void FlowScene::removeComment(CommentGraphicsItem *item)
 // ---- 算子分组（Group，FR1.9）----
 // 分组是纯视觉容器：不参与执行（不发 nodeAdded / connection* 信号），只随方案与撤销快照持久化。
 
+void FlowScene::refreshGroupVisibility()
+{
+    // 被任一折叠分组藏起来的成员（模块号集合）
+    QSet<int> hiddenIds;
+    for (NodeGroupItem *group : m_groups) {
+        if (group && group->isCollapsed()) {
+            for (int moduleId : group->memberIds())
+                hiddenIds.insert(moduleId);
+        }
+    }
+
+    for (NodeBase *node : nodes()) {
+        if (!node)
+            continue;
+        NodeGraphicsItem *item = getGraphicsItemForNode(node);
+        if (!item)
+            continue;
+        const bool visible = !hiddenIds.contains(node->moduleId());
+        item->setVisible(visible);
+        // 隐藏的算子必须取消选中：否则 Delete 会删掉"用户看不见的算子"
+        if (!visible && item->isSelected())
+            item->setSelected(false);
+    }
+
+    for (MyProject::Connection *conn : connections()) {
+        if (!conn)
+            continue;
+        ConnectionGraphicsItem *item = getGraphicsItemForConnection(conn);
+        if (!item)
+            continue;
+        Port *sourcePort = conn->sourcePort();
+        Port *targetPort = conn->targetPort();
+        const bool endHidden =
+            (sourcePort && sourcePort->node() && hiddenIds.contains(sourcePort->node()->moduleId()))
+            || (targetPort && targetPort->node()
+                && hiddenIds.contains(targetPort->node()->moduleId()));
+        // 连线只要有一端被藏起来就一起藏：否则会出现"悬空的线"，看着像坏了
+        item->setVisible(!endHidden);
+    }
+    update();
+}
+
 void FlowScene::deleteGroupItem(NodeGroupItem *group)
 {
     if (!group)
@@ -837,8 +879,13 @@ void FlowScene::deleteGroupItem(NodeGroupItem *group)
     // 注意：本函数**不记撤销**。记录时机由调用方掌握（结构变化前记 / 批量内只记一次），
     // 否则会把"改动之后"的状态塞进撤销栈，导致第一次撤销看起来没反应。
     m_groups.removeAll(group);
+    // 关键安全点：分组没了，被它藏起来的成员必须重新可见——否则"解散分组"后算子凭空消失
+    // （数据还在，但看不到也点不到，等同丢工作）。这里只清状态，可见性由末尾统一重算。
+    if (group->isCollapsed())
+        group->clearCollapsedForRemoval();
     removeItem(group);
     delete group;
+    refreshGroupVisibility();
 }
 
 NodeGroupItem *FlowScene::createGroupFromSelection(const QString &title)
@@ -941,6 +988,8 @@ void FlowScene::registerLoadedGroup(NodeGroupItem *group, qreal width, qreal hei
     group->setFrameSize(width, height);
     addItem(group);
     m_groups.append(group);
+    // 折叠状态随文件存过：挂进场景后立即生效（否则折叠的方案载入后成员全露出来）
+    group->applyCollapsedState();
 }
 
 NodeBase *FlowScene::nodeByModuleId(int moduleId) const
@@ -1122,4 +1171,6 @@ void FlowScene::extrasFromJson(const QJsonObject &json)
                             groupJson.value(QStringLiteral("h")).toDouble());
         group->setMembers(group->memberIds());   // 挂进场景后再过滤一次
     }
+    // 全部载完后统一重算一次：多分组叠加折叠的场景下，逐个载入时算不准
+    refreshGroupVisibility();
 }
