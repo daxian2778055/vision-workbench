@@ -48,12 +48,21 @@ public:
     static Summary compute(const QList<InspectionRecord> &records,
                            const QString &flowFilter = QString());
 
-    /// CSV 导出（**带 UTF-8 BOM**，Excel 双击即可正确显示中文；含汇总/按天/按节点/按流程四段）
-    static QString toCsv(const Summary &s, const QDateTime &generatedAt = QDateTime::currentDateTime());
+    /// 良率是否达标（P1-11 的"目标线"）：**等于目标算达标**。
+    /// targetPercent ≤ 0 或 > 100（未设目标）、或没有轮次数据时返回 false——
+    /// "没有数据"不等于"不达标"，调用方需要区分时请自行先看 hasRounds。
+    static bool meetsTarget(const Summary &s, double targetPercent);
 
-    /// 自包含 HTML 报告：**无任何外部资源**（离线可看），含简易条形图与三段明细
+    /// CSV 导出（**带 UTF-8 BOM**，Excel 双击即可正确显示中文；含汇总/按天/按节点/按流程四段）。
+    /// targetPercent > 0 时额外汇出"良率目标/达标"两行；默认 0 = 不加（保持既有输出不变）。
+    static QString toCsv(const Summary &s, const QDateTime &generatedAt = QDateTime::currentDateTime(),
+                         double targetPercent = 0.0);
+
+    /// 自包含 HTML 报告：**无任何外部资源**（离线可看），含简易条形图与三段明细。
+    /// targetPercent > 0 时在 KPI 区显示目标与达标结论（未达标标红）。
     static QString toHtml(const Summary &s, const QString &title = QString(),
-                          const QDateTime &generatedAt = QDateTime::currentDateTime());
+                          const QDateTime &generatedAt = QDateTime::currentDateTime(),
+                          double targetPercent = 0.0);
 
     /// 建议文件名（不含目录），如 report_20260923_1030.csv
     static QString suggestedFileName(const QString &ext,

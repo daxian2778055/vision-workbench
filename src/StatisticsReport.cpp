@@ -126,7 +126,14 @@ StatisticsReport::Summary StatisticsReport::compute(const QList<InspectionRecord
     return s;
 }
 
-QString StatisticsReport::toCsv(const Summary &s, const QDateTime &generatedAt)
+bool StatisticsReport::meetsTarget(const Summary &s, double targetPercent)
+{
+    if (targetPercent <= 0.0 || targetPercent > 100.0 || !s.hasRounds)
+        return false;
+    return s.yieldPercent >= targetPercent;   // 等于目标算达标
+}
+
+QString StatisticsReport::toCsv(const Summary &s, const QDateTime &generatedAt, double targetPercent)
 {
     QString out;
     out.reserve(2048);
@@ -146,6 +153,13 @@ QString StatisticsReport::toCsv(const Summary &s, const QDateTime &generatedAt)
     out += csvLine({ QStringLiteral("NG 轮次"), QString::number(s.ngRounds) });
     out += csvLine({ QStringLiteral("良率(%)"),
                      s.hasRounds ? QString::number(s.yieldPercent, 'f', 2) : QStringLiteral("无轮次数据") });
+    if (targetPercent > 0.0 && targetPercent <= 100.0) {
+        out += csvLine({ QStringLiteral("良率目标(%)"), QString::number(targetPercent, 'f', 2) });
+        out += csvLine({ QStringLiteral("达标"),
+                         !s.hasRounds ? QStringLiteral("无轮次数据")
+                                      : (meetsTarget(s, targetPercent) ? QStringLiteral("是")
+                                                                       : QStringLiteral("否")) });
+    }
     out += csvLine({ QStringLiteral("最早记录"),
                      s.firstSeen.isValid() ? s.firstSeen.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"))
                                            : QStringLiteral("-") });
@@ -178,7 +192,8 @@ QString StatisticsReport::toCsv(const Summary &s, const QDateTime &generatedAt)
     return out;
 }
 
-QString StatisticsReport::toHtml(const Summary &s, const QString &title, const QDateTime &generatedAt)
+QString StatisticsReport::toHtml(const Summary &s, const QString &title, const QDateTime &generatedAt,
+                                 double targetPercent)
 {
     const QString t = title.isEmpty() ? QStringLiteral("VisionFlowPlatform 统计报表") : title;
     QString html;
@@ -193,6 +208,7 @@ QString StatisticsReport::toHtml(const Summary &s, const QString &title, const Q
                 "th{background:#f5f5f5}"
                 ".kpi{display:inline-block;margin-right:18px;font-size:13px}"
                 ".kpi b{font-size:18px;color:#2b7}"
+                ".okTxt{color:#2b7;font-weight:bold}.badTxt{color:#c33;font-weight:bold}"
                 "td.bar{width:260px;padding:0}td.bar div{height:14px;background:#2b7}"
                 "td.lbl{max-width:260px}td.num{text-align:right}"
                 "</style></head><body>"
@@ -209,6 +225,13 @@ QString StatisticsReport::toHtml(const Summary &s, const QString &title, const Q
                     .arg(s.okRounds).arg(s.ngRounds);
         html += QStringLiteral("<span class=\"kpi\">良率 <b>%1%</b></span>")
                     .arg(s.yieldPercent, 0, 'f', 2);
+        if (targetPercent > 0.0 && targetPercent <= 100.0) {
+            const bool targetOk = meetsTarget(s, targetPercent);
+            html += QStringLiteral("<span class=\"kpi\">目标 <b>%1%</b> <span class=\"%2\">%3</span></span>")
+                        .arg(targetPercent, 0, 'f', 2)
+                        .arg(targetOk ? QStringLiteral("okTxt") : QStringLiteral("badTxt"),
+                             targetOk ? QStringLiteral("达标") : QStringLiteral("未达标"));
+        }
     } else {
         html += QStringLiteral("<span class=\"kpi\">良率 <b>无轮次数据</b>"
                                "（未产生「整轮汇总」记录）</span>");

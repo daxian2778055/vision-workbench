@@ -28,6 +28,7 @@ private slots:
     void testInvalidTimestampHandling();
     void testCsvExport();
     void testHtmlExportOfflineSelfContained();
+    void testTargetLineInExports();
 };
 
 namespace {
@@ -210,6 +211,50 @@ void StatisticsReportTest::testHtmlExportOfflineSelfContained()
     QVERIFY2(!html.contains(QStringLiteral("<script>")), "流程名中的标签未转义（会破坏报表结构）");
     QVERIFY2(html.contains(QStringLiteral("0.00%")), "应显示 0.00% 良率（1 个 NG 轮）");
     QVERIFY2(html.contains(QStringLiteral("按天趋势")), "缺少按天趋势段");
+}
+
+void StatisticsReportTest::testTargetLineInExports()
+{
+    // 良率 50%（1 OK 轮 + 1 NG 轮）
+    QList<InspectionRecord> records;
+    records << roundRec(QStringLiteral("流程A"), true, at(10, 9, 0));
+    records << roundRec(QStringLiteral("流程A"), false, at(10, 10, 0));
+    const StatisticsReport::Summary s = StatisticsReport::compute(records);
+    QVERIFY(s.hasRounds);
+    QCOMPARE(s.yieldPercent, 50.0);
+
+    // 达标判定：**等于目标算达标**；未设目标（≤0）/越界/无轮次数据一律 false
+    QVERIFY(StatisticsReport::meetsTarget(s, 50.0));
+    QVERIFY(!StatisticsReport::meetsTarget(s, 50.1));
+    QVERIFY(!StatisticsReport::meetsTarget(s, 0.0));
+    QVERIFY(!StatisticsReport::meetsTarget(s, 150.0));
+
+    // 不传目标 = 输出与既有报表完全一致（不出现目标字样）——老调用方零影响
+    const QString plain = StatisticsReport::toCsv(s);
+    QVERIFY(!plain.contains(QStringLiteral("良率目标")));
+
+    // 传目标：CSV 带上目标与达标结论
+    const QString withTarget = StatisticsReport::toCsv(s, QDateTime::currentDateTime(), 98.0);
+    QVERIFY2(withTarget.contains(QStringLiteral("良率目标")), "CSV 未输出良率目标");
+    QVERIFY2(withTarget.contains(QStringLiteral("98.00")), "CSV 未输出目标数值");
+    QVERIFY2(withTarget.contains(QStringLiteral("否")), "50% 低于 98% 应判为未达标");
+
+    // HTML：含目标与"未达标"，且仍然自包含（不许出现任何 http 引用）
+    const QString html =
+        StatisticsReport::toHtml(s, QStringLiteral("测试报表"), QDateTime::currentDateTime(), 98.0);
+    QVERIFY(html.contains(QStringLiteral("目标")));
+    QVERIFY2(html.contains(QStringLiteral("未达标")), "HTML 未标出未达标");
+    QVERIFY2(!html.contains(QStringLiteral("http")), "HTML 不再是自包含的");
+
+    // 无轮次数据：不得把"没数据"说成"未达标"（报表口径的一致性要求）
+    QList<InspectionRecord> nodesOnly;
+    nodesOnly << nodeRec(QStringLiteral("流程A"), QStringLiteral("找边"), false, at(10, 9, 0));
+    const StatisticsReport::Summary noRounds = StatisticsReport::compute(nodesOnly);
+    QVERIFY(!noRounds.hasRounds);
+    QVERIFY(!StatisticsReport::meetsTarget(noRounds, 98.0));
+    const QString csvNoRounds = StatisticsReport::toCsv(noRounds, QDateTime::currentDateTime(), 98.0);
+    QVERIFY2(csvNoRounds.contains(QStringLiteral("无轮次数据")),
+             "无轮次数据时 CSV 未如实标注");
 }
 
 QTEST_MAIN(StatisticsReportTest)

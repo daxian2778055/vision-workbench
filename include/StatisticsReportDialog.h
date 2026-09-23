@@ -11,6 +11,7 @@ class QComboBox;
 class QLabel;
 class QChartView;
 class QChart;
+class QDoubleSpinBox;
 
 /// 统计报表对话框（P1-11）：**良率 / 按天趋势 / NG 按节点分布**，支持导出 CSV / HTML / 图表 PNG。
 ///
@@ -34,14 +35,21 @@ private slots:
 
 private:
     void updateCharts();
+    /// KPI 与提示文案（与取数分离：改目标值时只需重画这两处，不必重新查库）
+    void updateKpiAndHint();
     QDateTime rangeStart() const;
     QString currentFlowFilter() const;      ///< 空 = 全部流程
+    /// 目标良率（0 = 未设目标）；运行期报警监控读的是同一个配置键（reporting/yieldTargetPercent）
+    double targetPercent() const;
+    void saveTargetSetting();
 
     QComboBox *m_rangeCombo = nullptr;
     QComboBox *m_flowCombo = nullptr;
+    QDoubleSpinBox *m_targetSpin = nullptr;
     QLabel *m_kpiLabel = nullptr;
     QLabel *m_hintLabel = nullptr;
     QChartView *m_trendView = nullptr;
+    QChartView *m_yieldView = nullptr;      ///< 按天良率(%) + 目标线
     QChartView *m_ngView = nullptr;
 
     QList<InspectionRecord> m_records;      ///< 当前范围内的全部记录（导出时按过滤重算）

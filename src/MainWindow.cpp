@@ -10,7 +10,10 @@
 #include "NodeBase.h"
 #include "NodeGroupItem.h"
 #include "FlowSnippet.h"
+#include "YieldMonitor.h"
+#include "InspectionRecord.h"
 #include <QClipboard>
+#include <algorithm>
 #include "HalconEnvCheck.h"
 #include "HalconNode.h"
 #include "HelpDialog.h"
@@ -690,6 +693,11 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
     });
     connect(ex, &FlowExecutor::executionFinished, this, [this, ex]() {
         if (ex == m_executor) onExecutionFinished();
+    });
+    // 良率目标报警：**不按"当前激活流程"过滤**——后台流程的轮次同样要参与判定，
+    // 否则多流程并发时报警会漏（哪条流程超差都得报）。节流在 checkYieldTarget 内部。
+    connect(ex, &FlowExecutor::executionFinished, this, [this, ex]() {
+        checkYieldTarget(ex);
     });
 
     // ── 图编辑锁（S1 / Phase B 小步）：按执行器自身场景更新，不按"当前激活流程"——
@@ -2671,6 +2679,68 @@ void MainWindow::onExecutionFinished()
     fireSendEventsForRound();     // 每轮结束自动上报已启用的发送事件
     refreshAllMvsPixelFormats();
     updateEditLockForCurrentScene();
+}
+
+void MainWindow::checkYieldTarget(FlowExecutor *executor)
+{
+    if (!executor)
+        return;
+
+    // 目标与窗口来自配置（报表窗口里的"良率目标"写的就是这个键；0 = 未设目标 = 关闭）
+    QSettings settings;
+    YieldMonitor::Config config;
+    config.targetPercent = settings.value(QStringLiteral("reporting/yieldTargetPercent"), 0.0).toDouble();
+    config.windowRounds = settings.value(QStringLiteral("reporting/yieldWindowRounds"), 50).toInt();
+    if (!config.isValid())
+        return;
+
+    // 节流：连续模式每秒可能几十轮，每轮都查库会拖住 UI 线程；报警不需要秒级实时
+    constexpr qint64 kThrottleMs = 5000;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (m_yieldLastEvalMs > 0 && now - m_yieldLastEvalMs < kThrottleMs)
+        return;
+    m_yieldLastEvalMs = now;
+
+    const QString flowName = executor->flowName();
+    YieldMonitor &monitor = m_yieldMonitors[flowName];
+    monitor.setConfig(config);   // 目标改了立即生效（并重置闭锁，见 YieldMonitor::setConfig）
+
+    // 取最近 24h 的记录，与报表同一个查询接口；limit 截断时是"最近的若干条"，够窗口用
+    AppDatabase *db = AppDatabase::instance();
+    const QList<InspectionRecord> records =
+        db->queryResults(QDateTime::currentDateTime().addSecs(-24 * 3600), QDateTime::currentDateTime(),
+                         5000);
+
+    QList<InspectionRecord> rounds;
+    for (const InspectionRecord &r : records) {
+        if (r.nodeName == kRoundSummaryNodeName && r.flowName == flowName)
+            rounds.append(r);
+    }
+    // 不假定 SQL 的返回顺序：自己按时间升序排（窗口取"最近 N 轮"，顺序错就会取到老数据）
+    std::sort(rounds.begin(), rounds.end(), [](const InspectionRecord &a, const InspectionRecord &b) {
+        return a.timestamp < b.timestamp;
+    });
+    QList<bool> okFlags;
+    okFlags.reserve(rounds.size());
+    for (const InspectionRecord &r : rounds)
+        okFlags.append(r.passed);
+
+    const YieldMonitor::Result result = monitor.evaluate(okFlags);
+    if (!result.evaluated)
+        return;   // 样本不足 / 已关闭：不打扰
+
+    if (result.alarmRaised) {
+        const QString msg = result.text();
+        logMessage(QStringLiteral("⚠ %1：%2").arg(flowName, msg));
+        ui->statusBar->showMessage(QStringLiteral("⚠ %1：%2").arg(flowName, msg), 15000);
+        // 报警联动：写报警历史（可在「系统 → 报警历史」查看/追溯）
+        db->addAlarm(flowName, QStringLiteral("Warning"), msg);
+    } else if (result.alarmCleared) {
+        const QString msg = result.text();
+        logMessage(QStringLiteral("%1：%2").arg(flowName, msg));
+        ui->statusBar->showMessage(QStringLiteral("%1：%2").arg(flowName, msg), 8000);
+        db->addAlarm(flowName, QStringLiteral("Info"), msg);
+    }
 }
 
 void MainWindow::fireSendEventsForRound()

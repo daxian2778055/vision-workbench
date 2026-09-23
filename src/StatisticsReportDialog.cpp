@@ -15,6 +15,8 @@
 #include <QSet>
 #include <QPainter>
 #include <QPixmap>
+#include <QDoubleSpinBox>
+#include <QSettings>
 
 #include <QtCharts/QChart>
 #include <QtCharts/QChartView>
@@ -22,6 +24,8 @@
 #include <QtCharts/QBarSet>
 #include <QtCharts/QHorizontalBarSeries>
 #include <QtCharts/QBarCategoryAxis>
+#include <QtCharts/QCategoryAxis>
+#include <QtCharts/QLineSeries>
 #include <QtCharts/QValueAxis>
 
 namespace {
@@ -63,6 +67,20 @@ StatisticsReportDialog::StatisticsReportDialog(QWidget *parent)
     m_flowCombo->setMinimumWidth(180);
     top->addWidget(m_flowCombo);
 
+    // 良率目标（P1-11）：0 = 未设目标（不画目标线、不判定达标、运行期也不报警）。
+    // 与"运行期报警联动"共用同一个配置键，改了立刻对两边生效。
+    top->addSpacing(12);
+    top->addWidget(new QLabel(QStringLiteral("良率目标(%):"), this));
+    m_targetSpin = new QDoubleSpinBox(this);
+    m_targetSpin->setRange(0.0, 100.0);
+    m_targetSpin->setDecimals(1);
+    m_targetSpin->setSingleStep(0.5);
+    m_targetSpin->setSpecialValueText(QStringLiteral("未设目标"));   // 取最小值(0)时显示为文字
+    m_targetSpin->setToolTip(QStringLiteral("设为 0 表示不设目标：不画目标线、不判定达标，运行期也不报警。\n"
+                                            "该值同时用于运行期报警（连续 N 轮良率低于目标时报警）"));
+    m_targetSpin->setValue(QSettings().value(QStringLiteral("reporting/yieldTargetPercent"), 0.0).toDouble());
+    top->addWidget(m_targetSpin);
+
     top->addStretch(1);
     auto *refreshBtn = new QPushButton(QStringLiteral("刷新"), this);
     top->addWidget(refreshBtn);
@@ -85,6 +103,12 @@ StatisticsReportDialog::StatisticsReportDialog(QWidget *parent)
     m_trendView = makeChartView(trendChart);
     root->addWidget(m_trendView, 1);
 
+    // 良率趋势单独一张图：上面那张是"轮次计数"，百分比目标线画在计数轴上没有意义
+    root->addWidget(new QLabel(QStringLiteral("按天良率（%）与目标线"), this));
+    auto *yieldChart = new QChart();
+    m_yieldView = makeChartView(yieldChart);
+    root->addWidget(m_yieldView, 1);
+
     root->addWidget(new QLabel(QStringLiteral("NG 按节点分布（Top 10）"), this));
     auto *ngChart = new QChart();
     m_ngView = makeChartView(ngChart);
@@ -106,6 +130,12 @@ StatisticsReportDialog::StatisticsReportDialog(QWidget *parent)
     connect(refreshBtn, &QPushButton::clicked, this, &StatisticsReportDialog::reload);
     connect(m_rangeCombo, &QComboBox::currentTextChanged, this, &StatisticsReportDialog::reload);
     connect(m_flowCombo, &QComboBox::currentTextChanged, this, &StatisticsReportDialog::reload);
+    // 改目标只影响目标线/达标结论，不需要重新查库（30 天数据可能几十万条，能省就省）
+    connect(m_targetSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double) {
+        saveTargetSetting();
+        updateCharts();
+        updateKpiAndHint();
+    });
     connect(csvBtn, &QPushButton::clicked, this, &StatisticsReportDialog::exportCsv);
     connect(htmlBtn, &QPushButton::clicked, this, &StatisticsReportDialog::exportHtml);
     connect(pngBtn, &QPushButton::clicked, this, &StatisticsReportDialog::exportChartPng);
@@ -169,17 +199,46 @@ void StatisticsReportDialog::reload()
 
     m_summary = StatisticsReport::compute(m_records, currentFlowFilter());
     updateCharts();
+    updateKpiAndHint();
+}
+
+double StatisticsReportDialog::targetPercent() const
+{
+    if (!m_targetSpin)
+        return 0.0;
+    const double v = m_targetSpin->value();
+    return (v > 0.0 && v <= 100.0) ? v : 0.0;   // 0 = 未设目标
+}
+
+void StatisticsReportDialog::saveTargetSetting()
+{
+    QSettings().setValue(QStringLiteral("reporting/yieldTargetPercent"), targetPercent());
+}
+
+void StatisticsReportDialog::updateKpiAndHint()
+{
+    const double target = targetPercent();
 
     QString kpi = QStringLiteral("<b>总记录</b> %1 &nbsp; <b>NG 记录</b> %2 &nbsp; ")
                       .arg(m_summary.totalRecords)
                       .arg(m_summary.ngRecords);
     if (m_summary.hasRounds) {
+        const bool meets = StatisticsReport::meetsTarget(m_summary, target);
+        // 未达标标红：现场扫一眼就要能看出结果，而不是自己去和目标做心算
+        const QString color = (target > 0.0 && !meets) ? QStringLiteral("#c33") : QStringLiteral("#2b7");
         kpi += QStringLiteral("<b>总轮次</b> %1 &nbsp; <b>OK/NG 轮次</b> %2 / %3 &nbsp; "
-                              "<b>良率</b> <span style=\"color:#2b7;font-size:15px\">%4%</span>")
+                              "<b>良率</b> <span style=\"color:%4;font-size:15px\">%5%</span>")
                    .arg(m_summary.totalRounds)
                    .arg(m_summary.okRounds)
                    .arg(m_summary.ngRounds)
+                   .arg(color)
                    .arg(m_summary.yieldPercent, 0, 'f', 2);
+        if (target > 0.0) {
+            kpi += QStringLiteral(" &nbsp; <b>目标</b> %1% <span style=\"color:%2\"><b>%3</b></span>")
+                       .arg(target, 0, 'f', 1)
+                       .arg(color)
+                       .arg(meets ? QStringLiteral("达标") : QStringLiteral("未达标"));
+        }
     } else {
         kpi += QStringLiteral("<b>总轮次</b> 0 &nbsp; <b>良率</b> <span style=\"color:#a60\">无轮次数据</span>");
     }
@@ -191,11 +250,18 @@ void StatisticsReportDialog::reload()
     m_kpiLabel->setText(kpi);
 
     QString hint;
-    if (!m_lastError.isEmpty())
+    if (!m_lastError.isEmpty()) {
         hint = QStringLiteral("⚠ ") + m_lastError;
-    else if (!m_summary.hasRounds)
+    } else if (!m_summary.hasRounds) {
         hint = QStringLiteral("本范围内没有「整轮汇总」记录，因此**无法计算良率**（显示为无轮次数据）。"
                               "该记录由执行器在轮末写入，升级后的新数据才会有；节点 NG 分布仍可用。");
+    } else if (target > 0.0 && !StatisticsReport::meetsTarget(m_summary, target)) {
+        hint = QStringLiteral("⚠ 当前良率未达目标 %1%：运行期会在**最近 N 轮**良率低于目标时报警"
+                              "（窗口与开关见下方说明；报警记录可在「系统 → 报警历史」查看）。")
+                   .arg(target, 0, 'f', 1);
+    } else if (target > 0.0) {
+        hint = QStringLiteral("良率达标（目标 %1%）。").arg(target, 0, 'f', 1);
+    }
     m_hintLabel->setText(hint);
 }
 
@@ -246,6 +312,74 @@ void StatisticsReportDialog::updateCharts()
             axisY->setLabelFormat(QStringLiteral("%d"));
             chart->addAxis(axisY, Qt::AlignLeft);
             series->attachAxis(axisY);
+        }
+        chart->legend()->setVisible(true);
+    }
+
+    // ── 按天良率（%）+ 目标线 ──
+    // 单独一张图：上面那张是"轮次计数"，百分比目标线画在计数轴上没有意义。
+    {
+        auto *chart = m_yieldView->chart();
+        chart->removeAllSeries();
+        for (QAbstractAxis *ax : chart->axes())
+            chart->removeAxis(ax);
+
+        const double target = targetPercent();
+        const int total = m_summary.days.size();
+        const int begin = qMax(0, total - 31);
+
+        auto *yieldSeries = new QLineSeries();
+        yieldSeries->setName(QStringLiteral("良率(%)"));
+        yieldSeries->setColor(QColor(0x2b, 0x7f, 0xd0));
+
+        int plotted = 0;
+        const int labelStep = qMax(1, (total - begin) / 12);   // 最多约 12 个标签，别挤成一团
+        auto *axisX = new QCategoryAxis();
+        QStringList pendingLabels;
+        for (int i = begin; i < total; ++i) {
+            const StatisticsReport::DayBucket &d = m_summary.days.at(i);
+            const int rounds = d.okRounds + d.ngRounds;
+            if (rounds <= 0)
+                continue;   // 该天没有轮次：不画点（不把"无数据"画成 0%）
+            const double y = 100.0 * double(d.okRounds) / double(rounds);
+            yieldSeries->append(plotted + 0.5, y);
+            if (plotted % labelStep == 0)
+                axisX->append(d.date.toString(QStringLiteral("MM-dd")), plotted + 1.0);
+            ++plotted;
+        }
+
+        if (plotted == 0) {
+            chart->setTitle(QStringLiteral("（范围内没有可计算良率的天：需要「整轮汇总」记录）"));
+        } else {
+            chart->addSeries(yieldSeries);
+            axisX->setRange(0, double(plotted));
+            chart->addAxis(axisX, Qt::AlignBottom);
+            yieldSeries->attachAxis(axisX);
+
+            auto *axisY = new QValueAxis();
+            axisY->setRange(0, 100);   // 良率天然 0..100：固定量程，跨报表可比
+            axisY->setLabelFormat(QStringLiteral("%d"));
+            axisY->setTitleText(QStringLiteral("良率 %"));
+            chart->addAxis(axisY, Qt::AlignLeft);
+            yieldSeries->attachAxis(axisY);
+
+            if (target > 0.0) {
+                auto *targetSeries = new QLineSeries();
+                targetSeries->setName(QStringLiteral("目标 %1%").arg(target, 0, 'f', 1));
+                targetSeries->append(0.0, target);
+                targetSeries->append(double(plotted), target);
+                QPen pen(QColor(0xd9, 0x53, 0x4f));
+                pen.setStyle(Qt::DashLine);
+                pen.setWidthF(1.5);
+                targetSeries->setPen(pen);
+                chart->addSeries(targetSeries);
+                targetSeries->attachAxis(axisX);
+                targetSeries->attachAxis(axisY);
+            }
+            chart->setTitle(QStringLiteral("按天良率（最近 %1 天；目标线：%2）")
+                                .arg(plotted)
+                                .arg(target > 0.0 ? QStringLiteral("%1%").arg(target, 0, 'f', 1)
+                                                  : QStringLiteral("未设目标")));
         }
         chart->legend()->setVisible(true);
     }
@@ -308,7 +442,7 @@ void StatisticsReportDialog::exportCsv()
     }
     QTextStream ts(&f);
     ts.setEncoding(QStringConverter::Utf8);
-    ts << StatisticsReport::toCsv(m_summary);
+    ts << StatisticsReport::toCsv(m_summary, QDateTime::currentDateTime(), targetPercent());
     ts.flush();
     QMessageBox::information(this, QStringLiteral("导出完成"), QStringLiteral("已导出：\n%1").arg(path));
 }
@@ -331,7 +465,7 @@ void StatisticsReportDialog::exportHtml()
     const QString title = currentFlowFilter().isEmpty()
                               ? QStringLiteral("VisionFlowPlatform 统计报表")
                               : QStringLiteral("VisionFlowPlatform 统计报表 - %1").arg(currentFlowFilter());
-    ts << StatisticsReport::toHtml(m_summary, title);
+    ts << StatisticsReport::toHtml(m_summary, title, QDateTime::currentDateTime(), targetPercent());
     ts.flush();
     QMessageBox::information(this, QStringLiteral("导出完成"),
                              QStringLiteral("已导出（自包含 HTML，离线可看）：\n%1").arg(path));
@@ -344,15 +478,18 @@ void StatisticsReportDialog::exportChartPng()
         StatisticsReport::suggestedFileName(QStringLiteral("png")), QStringLiteral("PNG (*.png)"));
     if (path.isEmpty())
         return;
-    // 两张图上下拼一张，便于直接贴进报告
+    // 三张图上下拼一张，便于直接贴进报告
     const QPixmap top = m_trendView->grab();
+    const QPixmap middle = m_yieldView->grab();
     const QPixmap bottom = m_ngView->grab();
-    QPixmap combined(top.width(), top.height() + bottom.height());
+    QPixmap combined(qMax(top.width(), qMax(middle.width(), bottom.width())),
+                     top.height() + middle.height() + bottom.height());
     combined.fill(Qt::white);
     {
         QPainter p(&combined);
         p.drawPixmap(0, 0, top);
-        p.drawPixmap(0, top.height(), bottom);
+        p.drawPixmap(0, top.height(), middle);
+        p.drawPixmap(0, top.height() + middle.height(), bottom);
     }
     if (!combined.save(path, "PNG")) {
         QMessageBox::warning(this, QStringLiteral("导出失败"), QStringLiteral("无法写入 %1").arg(path));

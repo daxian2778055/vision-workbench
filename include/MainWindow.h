@@ -23,6 +23,7 @@ class QAction;
 #include "HalconWindow.h"
 #include "NodeBase.h"
 #include "RecoveryStore.h"   // 自动保存/崩溃恢复（值成员，需要完整类型）
+#include "YieldMonitor.h"    // 良率目标监控（QHash 值类型，需要完整类型）
 
 using namespace HalconCpp;
 
@@ -172,6 +173,12 @@ private:
     /// 折叠/展开选中的分组框（FR1.9 的 Group 折叠；纯显示，不影响执行）
     void onToggleGroupCollapse();
 
+    // ---- 良率目标与报警联动（P1-11 剩余差距）----
+    /// 每轮结束调用（**每个执行器都要接**，不能只接当前激活流程，否则后台流程的轮次不参与判定）。
+    /// 数据源与统计报表**完全一致**（同一个库、同一批「整轮汇总」记录），避免"报表正常但报警乱响"。
+    /// 内部按 5 秒节流：连续模式每秒可能几十轮，每轮都查库会把 UI 线程拖住。
+    void checkYieldTarget(FlowExecutor *executor);
+
     // ---- 子图复用：复制/粘贴选中子图（含连线）+ 片段文件导入导出（FR15.10 的设计期复用半步）----
     /// 视图中心（场景坐标）：粘贴/导入时把片段放在用户正在看的位置；无视图时给一个稳妥兜底
     QPointF viewCenterInScene(FlowScene *scene) const;
@@ -249,6 +256,9 @@ protected:
     QAction *m_actionPasteSnippet = nullptr;
     QAction *m_actionExportSnippet = nullptr;
     QAction *m_actionImportSnippet = nullptr;
+    /// 良率目标监控：**按流程**各一份（报警要指明是哪条流程），键为流程名
+    QHash<QString, YieldMonitor> m_yieldMonitors;
+    qint64 m_yieldLastEvalMs = 0;   ///< 上次评估时刻（节流用；0 = 尚未评估）
     QLabel *m_imageSourceLabel; // 图像来源标签
     
     // 自定义运行界面（对齐 VisionMaster 4.4 运行界面）

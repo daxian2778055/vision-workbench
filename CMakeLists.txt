@@ -256,6 +256,7 @@ set(SOURCES
     src/RecoveryStore.cpp
     src/NodeGroupItem.cpp
     src/FlowSnippet.cpp
+    src/YieldMonitor.cpp
     src/NodeSearchWidget.cpp
     src/ConnectionDragHelper.cpp
     src/HelpViewer.cpp
@@ -429,6 +430,7 @@ set(HEADERS
     include/RecoveryStore.h
     include/NodeGroupItem.h
     include/FlowSnippet.h
+    include/YieldMonitor.h
     include/GlobalVariableManager.h
     include/GlobalVariableDialog.h
     include/GlobalCameraManager.h
@@ -870,6 +872,14 @@ if(MSVC)
     target_link_libraries(flow_snippet_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
     add_test(NAME FlowSnippetTest COMMAND flow_snippet_test)
     vfp_configure_gui_test(FlowSnippetTest)
+endif()
+
+# 良率目标监控（P1-11）：闭锁只报一次 / 恢复重置 / 滚动窗口 / 最小样本 / 配置变更重置
+if(MSVC)
+    add_executable(yield_monitor_test tests/yield_monitor_test.cpp)
+    target_link_libraries(yield_monitor_test PRIVATE vfp_core Qt6::Test)
+    add_test(NAME YieldMonitorTest COMMAND yield_monitor_test)
+    vfp_configure_gui_test(YieldMonitorTest)
 endif()
 
 # 数据库跨线程访问测试（QSqlDatabase 线程亲和性 / 每线程独立连接）
