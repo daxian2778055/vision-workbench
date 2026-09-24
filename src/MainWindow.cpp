@@ -34,6 +34,7 @@
 #include <QCheckBox>
 #include <QInputDialog>
 #include <QDialogButtonBox>
+#include <QProcess>
 #include "Port.h"
 #include "Connection.h"
 #include "NodeGraphicsItem.h"
@@ -205,7 +206,7 @@ MainWindow::MainWindow(QWidget *parent) :
             
             // 添加图像来源提示
             m_imageSourceLabel = new QLabel(this);
-            m_imageSourceLabel->setText(QStringLiteral("图像来源: 无"));
+            m_imageSourceLabel->setText(tr("图像来源: 无"));
             m_imageSourceLabel->setAlignment(Qt::AlignCenter);
             m_imageSourceLabel->setStyleSheet(VisionWorkbenchStyle::imageSourceStripStylesheet());
             m_imageSourceLabel->setFixedHeight(22);
@@ -302,7 +303,7 @@ MainWindow::MainWindow(QWidget *parent) :
 
         // ── 流程运行模式组合框（放在顶部主工具栏，确保用户一眼看到）──
         {
-            QToolBar *mainToolBar = addToolBar(QStringLiteral("流程控制"));
+            QToolBar *mainToolBar = addToolBar(tr("流程控制"));
             mainToolBar->setObjectName("mainToolBar");
             mainToolBar->setMovable(false);
             mainToolBar->setIconSize(QSize(20, 20));
@@ -330,8 +331,8 @@ MainWindow::MainWindow(QWidget *parent) :
             // 单次执行按钮：软触发模式下运行一次，不影响流程模式设置
             m_singleShotBtn = new QToolButton();
             m_singleShotBtn->setObjectName("singleShotBtn");
-            m_singleShotBtn->setText(QStringLiteral("单次执行"));
-            m_singleShotBtn->setToolTip(QStringLiteral("以软触发方式运行当前流程一次"));
+            m_singleShotBtn->setText(tr("单次执行"));
+            m_singleShotBtn->setToolTip(tr("以软触发方式运行当前流程一次"));
             m_singleShotBtn->setStyleSheet(
                 "QToolButton {"
                 "  background-color: #2b2b3d; color: #e0e0e0;"
@@ -348,8 +349,8 @@ MainWindow::MainWindow(QWidget *parent) :
             // 单步执行按钮：每执行一个节点后暂停（步进模式）
             m_stepBtn = new QToolButton();
             m_stepBtn->setObjectName("stepBtn");
-            m_stepBtn->setText(QStringLiteral("单步"));
-            m_stepBtn->setToolTip(QStringLiteral("逐节点执行：每运行一个算子后暂停（可配合单次执行排查流程）"));
+            m_stepBtn->setText(tr("单步"));
+            m_stepBtn->setToolTip(tr("逐节点执行：每运行一个算子后暂停（可配合单次执行排查流程）"));
             m_stepBtn->setStyleSheet(
                 "QToolButton {"
                 "  background-color: #2b2b3d; color: #e0e0e0;"
@@ -368,8 +369,8 @@ MainWindow::MainWindow(QWidget *parent) :
             // 暂停/继续按钮：运行中→暂停；暂停中→继续（连续模式下的"启动后暂停切换"就靠它）
             m_pauseBtn = new QToolButton();
             m_pauseBtn->setObjectName("pauseBtn");
-            m_pauseBtn->setText(QStringLiteral("暂停"));
-            m_pauseBtn->setToolTip(QStringLiteral("暂停当前流程（不清输入缓存）；再按继续"));
+            m_pauseBtn->setText(tr("暂停"));
+            m_pauseBtn->setToolTip(tr("暂停当前流程（不清输入缓存）；再按继续"));
             m_pauseBtn->setStyleSheet(m_stepBtn->styleSheet());
             mainToolBar->addWidget(m_pauseBtn);
             connect(m_pauseBtn, &QToolButton::clicked, this, &MainWindow::onPauseResumeExecution);
@@ -385,9 +386,9 @@ MainWindow::MainWindow(QWidget *parent) :
             // 下拉框
             m_flowModeCombo = new QComboBox();
             m_flowModeCombo->setObjectName("flowModeCombo");
-            m_flowModeCombo->addItem(QStringLiteral("连续模式"),    static_cast<int>(FlowMode::Continuous));
-            m_flowModeCombo->addItem(QStringLiteral("软触发模式"),  static_cast<int>(FlowMode::SoftwareTrigger));
-            m_flowModeCombo->addItem(QStringLiteral("硬触发模式"),  static_cast<int>(FlowMode::HardwareTrigger));
+            m_flowModeCombo->addItem(tr("连续模式"),    static_cast<int>(FlowMode::Continuous));
+            m_flowModeCombo->addItem(tr("软触发模式"),  static_cast<int>(FlowMode::SoftwareTrigger));
+            m_flowModeCombo->addItem(tr("硬触发模式"),  static_cast<int>(FlowMode::HardwareTrigger));
             m_flowModeCombo->setCurrentIndex(1); // 默认软触发模式
             m_flowModeCombo->setMinimumWidth(130);
             m_flowModeCombo->setToolTip(QStringLiteral(
@@ -477,20 +478,20 @@ MainWindow::MainWindow(QWidget *parent) :
         // openAuxPanel，与「关闭时记住显隐、启动时恢复」共用同一条创建路径。
         if (ui->menuView) {
             ui->menuView->addSeparator();
-            QAction *varAction = ui->menuView->addAction(QStringLiteral("变量"));
+            QAction *varAction = ui->menuView->addAction(tr("变量"));
             varAction->setObjectName(QStringLiteral("actionVariablePanel"));
             connect(varAction, &QAction::triggered, this,
                     [this]() { openAuxPanel(QStringLiteral("variable")); });
 
             // 性能面板（PerformancePanel）早已实现却没有任何入口（不可达代码），这里补上接线
-            QAction *perfAction = ui->menuView->addAction(QStringLiteral("性能统计"));
+            QAction *perfAction = ui->menuView->addAction(tr("性能统计"));
             perfAction->setObjectName(QStringLiteral("actionPerformancePanel"));
             connect(perfAction, &QAction::triggered, this,
                     [this]() { openAuxPanel(QStringLiteral("performance")); });
 
             // 统计报表（P1-11）：良率 / 按天趋势 / NG 按节点分布，可导出 CSV / HTML / 图表 PNG。
             // 做成对话框而非停靠面板：报表是"按需看一眼"的入口，无需参与面板显隐持久化。
-            QAction *reportAction = ui->menuView->addAction(QStringLiteral("统计报表"));
+            QAction *reportAction = ui->menuView->addAction(tr("统计报表"));
             reportAction->setObjectName(QStringLiteral("actionStatisticsReport"));
             connect(reportAction, &QAction::triggered, this, [this]() {
                 StatisticsReportDialog dlg(this);
@@ -1016,30 +1017,30 @@ void MainWindow::initActions()
 
     // 算子分组（FR1.9）：Ctrl+G 创建 / Ctrl+Shift+G 解散。
     // 入口同时进「编辑」菜单：只在右键菜单里放，会重蹈"Add Flow 藏在英文菜单里没人发现"的覆辙。
-    m_actionCreateGroup = new QAction(QStringLiteral("创建分组"), this);
+    m_actionCreateGroup = new QAction(tr("创建分组"), this);
     m_actionCreateGroup->setShortcut(QKeySequence(QStringLiteral("Ctrl+G")));
-    m_actionCreateGroup->setStatusTip(QStringLiteral("把当前选中的算子框成一组（纯视觉容器，不影响执行）"));
-    m_actionDissolveGroup = new QAction(QStringLiteral("解散分组"), this);
+    m_actionCreateGroup->setStatusTip(tr("把当前选中的算子框成一组（纯视觉容器，不影响执行）"));
+    m_actionDissolveGroup = new QAction(tr("解散分组"), this);
     m_actionDissolveGroup->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+G")));
-    m_actionDissolveGroup->setStatusTip(QStringLiteral("删除选中的分组框，组内算子保留"));
+    m_actionDissolveGroup->setStatusTip(tr("删除选中的分组框，组内算子保留"));
     // 折叠/展开（FR1.9 的"Group 折叠"）：纯显示动作，不改变执行；双击分组标题栏是同一效果。
     // 不给快捷键：折叠没有公认的通用键位，硬塞一个反而抢键。
-    m_actionToggleGroup = new QAction(QStringLiteral("折叠/展开分组"), this);
-    m_actionToggleGroup->setStatusTip(QStringLiteral("把选中的分组折叠成一条标题栏（纯显示，不影响执行）"));
+    m_actionToggleGroup = new QAction(tr("折叠/展开分组"), this);
+    m_actionToggleGroup->setStatusTip(tr("把选中的分组折叠成一条标题栏（纯显示，不影响执行）"));
 
     // 子图复用（FR15.10 的设计期半步）：复制/粘贴选中子图 + 片段文件导入导出。
     // 快捷键用 WidgetShortcut（**只在主窗口自身有焦点时**生效）：Ctrl+C/V 不抢文本框的复制粘贴
     // ——画布上的 Ctrl+C/V 由 FlowScene 的按键处理发出请求（见 hookFlowScene）。
-    m_actionCopySnippet = new QAction(QStringLiteral("复制所选算子"), this);
+    m_actionCopySnippet = new QAction(tr("复制所选算子"), this);
     m_actionCopySnippet->setShortcut(QKeySequence::Copy);
     m_actionCopySnippet->setShortcutContext(Qt::WidgetShortcut);
-    m_actionPasteSnippet = new QAction(QStringLiteral("粘贴"), this);
+    m_actionPasteSnippet = new QAction(tr("粘贴"), this);
     m_actionPasteSnippet->setShortcut(QKeySequence::Paste);
     m_actionPasteSnippet->setShortcutContext(Qt::WidgetShortcut);
-    m_actionExportSnippet = new QAction(QStringLiteral("导出片段…"), this);
-    m_actionExportSnippet->setStatusTip(QStringLiteral("把选中的算子（含内部连线）导出为片段文件，供别的方案插入"));
-    m_actionImportSnippet = new QAction(QStringLiteral("导入片段…"), this);
-    m_actionImportSnippet->setStatusTip(QStringLiteral("把片段文件插入到当前流程（放在当前视图中心）"));
+    m_actionExportSnippet = new QAction(tr("导出片段…"), this);
+    m_actionExportSnippet->setStatusTip(tr("把选中的算子（含内部连线）导出为片段文件，供别的方案插入"));
+    m_actionImportSnippet = new QAction(tr("导入片段…"), this);
+    m_actionImportSnippet->setStatusTip(tr("把片段文件插入到当前流程（放在当前视图中心）"));
     if (ui->menuEdit) {
         QAction *beforeSnippet = ui->actionDeleteFlow;
         ui->menuEdit->insertAction(beforeSnippet, m_actionCopySnippet);
@@ -1057,7 +1058,7 @@ void MainWindow::initActions()
 
     // 加密 / 只读方案导出（G-P1-10）：文件菜单下追加入口（此段在 m_recentFiles 之前执行，
     // 故动作落在"最近文件"子菜单之前，顺序合理）
-    m_actionExportEncrypted = new QAction(QStringLiteral("导出加密/只读方案…"), this);
+    m_actionExportEncrypted = new QAction(tr("导出加密/只读方案…"), this);
     m_actionExportEncrypted->setStatusTip(QStringLiteral(
         "把当前方案加密并可选只读打包，分发后现场无法反编译/覆盖保存"));
     if (ui->menuFile)
@@ -1075,6 +1076,24 @@ void MainWindow::initActions()
     connect(m_actionDissolveGroup, &QAction::triggered, this, &MainWindow::onDissolveGroup);
     connect(m_actionToggleGroup, &QAction::triggered, this, &MainWindow::onToggleGroupCollapse);
 
+    // 语言切换（G-P1-5 国际化）：菜单项本身也用 tr()，重启后随当前语言翻译
+    {
+        QMenu *langMenu = new QMenu(tr("语言"), this);
+        QAction *actZh = langMenu->addAction(tr("简体中文"));
+        QAction *actEn = langMenu->addAction(tr("English"));
+        actZh->setCheckable(true);
+        actEn->setCheckable(true);
+        const I18n::Language cur = I18n::currentLanguage();
+        actZh->setChecked(cur == I18n::Language::Chinese);
+        actEn->setChecked(cur == I18n::Language::English);
+        connect(actZh, &QAction::triggered, this,
+                [this] { switchLanguage(I18n::Language::Chinese); });
+        connect(actEn, &QAction::triggered, this,
+                [this] { switchLanguage(I18n::Language::English); });
+        if (ui->menuBar)
+            ui->menuBar->addMenu(langMenu);
+    }
+
     // 执行控制
     connect(ui->actionStartExecution, &QAction::triggered, this, &MainWindow::onStartExecution);
     connect(ui->actionStopExecution, &QAction::triggered, this, &MainWindow::onStopExecution);
@@ -1087,17 +1106,17 @@ void MainWindow::initActions()
 
     // 帮助菜单（软件内查看操作手册）
     {
-        QMenu *helpMenu = new QMenu(QStringLiteral("帮助(&H)"), this);
+        QMenu *helpMenu = new QMenu(tr("帮助(&H)"), this);
         ui->menuBar->addMenu(helpMenu);
-        QAction *manualAct = helpMenu->addAction(QStringLiteral("使用手册(&M)"));
+        QAction *manualAct = helpMenu->addAction(tr("使用手册(&M)"));
         manualAct->setShortcut(QKeySequence(Qt::Key_F1));
         connect(manualAct, &QAction::triggered, this, [this]() { openManualDialog(); });
         QAction *envCheckAct = helpMenu->addAction(QStringLiteral("HALCON 图像层自检"));
         connect(envCheckAct, &QAction::triggered, this, [this]() { runHalconEnvCheck(); });
         helpMenu->addSeparator();
-        QAction *aboutAct = helpMenu->addAction(QStringLiteral("关于"));
+        QAction *aboutAct = helpMenu->addAction(tr("关于"));
         connect(aboutAct, &QAction::triggered, this, [this]() {
-            QMessageBox::about(this, QStringLiteral("关于 VisionFlowPlatform"),
+            QMessageBox::about(this, tr("关于 VisionFlowPlatform"),
                                QStringLiteral("VisionFlowPlatform 1.0\n"
                                               "对标 VisionMaster 4.4 的视觉流程开发平台\n"
                                               "算法：OpenCV\n"
@@ -2057,6 +2076,22 @@ void MainWindow::applyReadonlyUI()
         ui->statusBar->showMessage(tr("只读方案：禁止覆盖保存（可另存为新方案）"), 0);
     else
         ui->statusBar->clearMessage();
+}
+
+void MainWindow::switchLanguage(I18n::Language lang)
+{
+    if (lang == I18n::currentLanguage())
+        return; // 与当前一致，无需重启
+    I18n::setLanguage(lang);
+    QMessageBox::information(this, tr("语言"), tr("语言设置将在重启后生效。"));
+    // Qt Widgets 大多在构造期取翻译文本，动态切换需逐个处理 LanguageChange；
+    // 对工业软件最稳妥的做法是保存后重启应用，确保整棵 UI 树统一翻译。
+    const QString path = QApplication::applicationFilePath();
+    QStringList args = QApplication::arguments();
+    if (!args.isEmpty())
+        args.removeFirst(); // 去掉程序自身路径
+    QProcess::startDetached(path, args);
+    QApplication::quit();
 }
 
 void MainWindow::onExportEncryptedProject()

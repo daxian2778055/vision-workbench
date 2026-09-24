@@ -24,6 +24,7 @@ class QAction;
 #include "NodeBase.h"
 #include "RecoveryStore.h"   // 自动保存/崩溃恢复（值成员，需要完整类型）
 #include "YieldMonitor.h"    // 良率目标监控（QHash 值类型，需要完整类型）
+#include "I18n.h"            // 国际化（G-P1-5）
 
 using namespace HalconCpp;
 
@@ -207,6 +208,8 @@ private:
     void markProjectSaved();
     /// 根据当前方案只读态刷新界面（禁用覆盖保存、状态栏提示），与角色权限叠加
     void applyReadonlyUI();
+    /// 切换语言（G-P1-5）：写设置并重启应用以应用新语言
+    void switchLanguage(I18n::Language lang);
 
     // ---- 自动保存 / 崩溃恢复（落盘逻辑见 RecoveryStore；本处只做策略与界面）----
     /// 创建自动保存定时器（间隔与开关取自 QSettings recovery/*）

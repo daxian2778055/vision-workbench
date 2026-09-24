@@ -1,6 +1,8 @@
 # ===== 构建产物 =====
 build/
 dist/
+# lrelease 由 .ts 编译产出，勿入库（.ts 为翻译源，随仓流转）
+translations/*.qm
 
 # ===== 第三方依赖（vendored 开源库：opencv/tesseract/zxing/leptonica）=====
 # 默认不入库，保持仓库轻量；如需"克隆即可构建"可移除此段。

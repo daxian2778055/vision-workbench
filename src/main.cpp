@@ -3,6 +3,7 @@
 #include "DataObject.h"
 #include "AppLog.h"
 #include "NodeSelfTest.h"
+#include "I18n.h"
 #include <QApplication>
 #include <QDebug>
 #include <QDir>
@@ -302,6 +303,9 @@ int main(int argc, char *argv[])
         SymInitialize(GetCurrentProcess(), nullptr, TRUE);
 
         QApplication a(argc, argv);
+
+        // 国际化（G-P1-5）：在 MainWindow 构造前安装翻译，使 UI 在构建期即取翻译文本。
+        I18n::installTranslators(a);
 
         // 节点自检模式：遍历全部注册节点实例化+init+空输入运行，输出报告后退出
         if (a.arguments().contains(QStringLiteral("--selftest-nodes"))) {

@@ -268,6 +268,8 @@ set(SOURCES
     # 方案加密 / 只读导出（G-P1-10）
     src/SchemeCrypto.cpp
     src/SchemePackage.cpp
+    # 国际化（G-P1-5）
+    src/I18n.cpp
 )
 
 set(HEADERS
@@ -475,6 +477,7 @@ set(HEADERS
     # 方案加密 / 只读导出（G-P1-10）
     include/SchemeCrypto.h
     include/SchemePackage.h
+    include/I18n.h
 )
 
 set(UI_FILES
@@ -572,6 +575,43 @@ if(WIN32)
     set_target_properties(VisionFlowPlatform PROPERTIES
         WIN32_EXECUTABLE ON
     )
+endif()
+
+# ---------------------------------------------------------------
+# 国际化（G-P1-5）：把仓库内的 .ts 编译为 .qm 并部署到运行/分发目录。
+# 更新翻译源：源码改动后执行 `lupdate src ui -ts translations/visionflow_en.ts`，
+# 再用 translations/apply_en_translations.py 填入英文，最后重跑本段生成 .qm。
+# 直接用 lrelease 可执行文件（避免依赖可能未随 Qt6 主包发布的 LinguistTools CMake 组件）。
+# ---------------------------------------------------------------
+set(VFP_TS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/translations")
+set(VFP_TS "${VFP_TS_DIR}/visionflow_en.ts")
+set(VFP_QM "${VFP_TS_DIR}/visionflow_en.qm")
+# 从 Qt6Core 的安装前缀推导 bin 目录（<prefix>/lib/cmake/Qt6Core -> <prefix>/bin）
+get_filename_component(_VFP_QT_PREFIX "${Qt6Core_DIR}/../../.." ABSOLUTE)
+find_program(VFP_LRELEASE_EXECUTABLE
+    NAMES lrelease lrelease-qt6
+    HINTS "${_VFP_QT_PREFIX}/bin" "${Qt6_DIR}/../../../bin")
+if(VFP_LRELEASE_EXECUTABLE AND EXISTS "${VFP_TS}")
+    add_custom_command(
+        OUTPUT "${VFP_QM}"
+        COMMAND "${VFP_LRELEASE_EXECUTABLE}" "${VFP_TS}" -qm "${VFP_QM}"
+        DEPENDS "${VFP_TS}"
+        COMMENT "编译英文翻译 visionflow_en.qm")
+    add_custom_target(vfp_translations DEPENDS "${VFP_QM}")
+    add_dependencies(VisionFlowPlatform vfp_translations)
+
+    # 部署到构建输出目录（build/bin/<config>/translations），供本地运行与测试加载
+    add_custom_command(TARGET VisionFlowPlatform POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:VisionFlowPlatform>/translations"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${VFP_QM}"
+                "$<TARGET_FILE_DIR:VisionFlowPlatform>/translations/")
+    # 同步部署到分发目录（dist/VisionFlowPlatform/translations），供现场运行加载
+    add_custom_command(TARGET VisionFlowPlatform POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+                "${CMAKE_CURRENT_SOURCE_DIR}/dist/VisionFlowPlatform/translations"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${VFP_QM}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/dist/VisionFlowPlatform/translations/")
 endif()
 
 # 可选：HALCON 冒烟测试（验证测量链路算子参数与官方签名一致）
@@ -905,6 +945,15 @@ if(MSVC)
     add_test(NAME SchemePackageTest COMMAND scheme_package_test)
 endif()
 
+# 国际化（G-P1-5）：验证 visionflow_en.qm 加载并翻译关键源文（tr → .ts → .qm 闭环）
+if(MSVC)
+    add_executable(i18n_test tests/i18n_test.cpp)
+    target_link_libraries(i18n_test PRIVATE vfp_core Qt6::Test)
+    # 确保 .qm 已生成并部署到运行目录（Qt6::Test 已带入 Qt6::Core）
+    add_dependencies(i18n_test VisionFlowPlatform)
+    add_test(NAME I18nTest COMMAND i18n_test)
+endif()
+
 # 数据库跨线程访问测试（QSqlDatabase 线程亲和性 / 每线程独立连接）
 if(MSVC)
     add_executable(database_test tests/database_test.cpp)
@@ -951,7 +1000,8 @@ if(MSVC)
     set(VFP_DEPLOY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/dist/VisionFlowPlatform")
     set(VFP_TESTS NodeCoreTest OpencvSerializationTest IntegrationTest DatabaseTest PerfTest
                   ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest CameraIoTest
-                  DnnSegmentTest OpencvDefectAlignTest SoakTest StatisticsReportTest)
+                  DnnSegmentTest OpencvDefectAlignTest SoakTest StatisticsReportTest SchemePackageTest
+                  I18nTest)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
         # path_list_prepend 由 CMake 负责插入并处理平台路径分隔符，避免在
         # ENVIRONMENT 值里嵌套分号导致列表被错误拆分
