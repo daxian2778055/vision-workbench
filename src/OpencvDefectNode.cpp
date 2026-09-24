@@ -12,43 +12,6 @@
 
 namespace {
 
-/// 旋转估计（P1-1 补完）：**多角度试探 + 平移相关响应择优**，返回"当前图相对黄金模板"的旋转角（度），
-/// 正负沿用 cv::getRotationMatrix2D 的约定（正值 = 逆时针），符号由用例钉住。
-///
-/// 为什么不用"对数极坐标 + 相位相关"：cv::warpPolar/warpLogPolar 的角度轴约定极易搞错，
-/// 而且**错了不报错、只是静默返回≈0 的估计值**（实测把 2° 旋转估成 0.07°，表面看"没报错"）。
-/// 改用本方案后只用已经钉住符号约定的 phaseCorrelate，且天然带置信度（响应值可喂给同一套闸门）。
-///
-/// 性能：在长边 ≤512 的缩略图上按 0.5° 步长搜索（旋转估计对分辨率不敏感，对耗时极敏感——
-/// 2448×2048 原图做 FFT 相关是几十~上百毫秒量级，缩略后整轮搜索只要几十毫秒）。
-/// 代价：不做尺度归一化（本节点不处理缩放）。
-double estimateRotationSearch(const cv::Mat &goldF, const cv::Mat &curF, double rangeDeg)
-{
-    const int longSide = std::max(goldF.cols, goldF.rows);
-    const double s = (longSide > 512) ? (512.0 / longSide) : 1.0;
-    cv::Mat g, c;
-    cv::resize(goldF, g, cv::Size(), s, s, cv::INTER_AREA);
-    cv::resize(curF, c, cv::Size(), s, s, cv::INTER_AREA);
-    if (g.empty() || c.empty() || g.size() != c.size())
-        return 0.0;
-    const cv::Point2d center(g.cols / 2.0, g.rows / 2.0);
-
-    double bestAngle = 0.0, bestResp = -1.0;
-    const double step = 0.5;
-    for (double a = -rangeDeg; a <= rangeDeg + 1e-9; a += step) {
-        const cv::Mat R = cv::getRotationMatrix2D(center, -a, 1.0);   // 试：按 -a 把当前图转回
-        cv::Mat t;
-        cv::warpAffine(c, t, R, c.size(), cv::INTER_LINEAR, cv::BORDER_REPLICATE);
-        double resp = 0.0;
-        cv::phaseCorrelate(g, t, cv::noArray(), &resp);
-        if (resp > bestResp) {
-            bestResp = resp;
-            bestAngle = a;
-        }
-    }
-    return bestAngle;
-}
-
 /// 边缘抑制（P1-1 补完）：**黄金模板**的强边缘 ±guard 像素内不判缺陷。
 /// 为什么必要：即使做了对齐，亚像素残差也会让硬边缘两侧差出细线，而"一条细线"的连通域
 /// 面积不大，minArea 往往拦不住；现场表现就是"工件轮廓一圈假缺陷"。
@@ -70,14 +33,6 @@ void applyEdgeGuard(const cv::Mat &goldenGray, cv::Mat &bin, int guard, int sobe
     cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(k, k));
     cv::dilate(edge, edge, kernel);
     bin.setTo(0, edge);
-}
-
-/// 8 位灰度图转 32F（phaseCorrelate 要求浮点）
-cv::Mat toFloatGray(const cv::Mat &m)
-{
-    cv::Mat f;
-    m.convertTo(f, CV_32F);
-    return f;
 }
 
 } // namespace
@@ -198,63 +153,21 @@ void OpencvDefectNode::run(bool)
 
         // ── 对齐归一化（P1-1 补完）──────────────────────────────────────────────────
         // 为什么必须做：黄金差影对位置极敏感——工件在新图里偏 1 像素，整圈轮廓就会被判成缺陷，
-        // 这是"标准件比对"在现场最常翻车的地方。做法：phaseCorrelate 求亚像素平移（可选先由
-        // 对数极坐标估旋转），再把"当前图"仿射回黄金模板位置，之后照常差影。
-        // 两道闸门防止"低纹理图乱移"：置信度 alignMinResponse、偏移上限 alignMaxShift。
+        // 这是"标准件比对"在现场最常翻车的地方。实现已抽到 OpencvUtil::alignToReference
+        // （异常检测 G-P1-2 共用同一套估计与闸门），这里只负责取参数与写回回显值。
         const int alignMode = m_params.value(QStringLiteral("alignMode"), 1).toInt();
-        double alignDx = 0.0, alignDy = 0.0, alignAngle = 0.0, alignResp = 0.0;
-        bool alignApplied = false;
-        if (alignMode > 0 && !golden.empty() && golden.size() == inspect.size()) {
-            const cv::Mat goldF = toFloatGray(golden);
-            const cv::Mat inspF = toFloatGray(inspect);
-            const cv::Point2d center(inspect.cols / 2.0, inspect.rows / 2.0);
-
-            // ① 旋转（仅"平移+旋转"模式）：绕图像中心估，旋转会带动内容，故平移必须在其后重估
-            double angleEst = 0.0;
-            if (alignMode >= 2) {
-                const double rangeDeg =
-                    m_params.value(QStringLiteral("alignAngleRange"), 5).toInt();
-                angleEst = estimateRotationSearch(goldF, inspF, rangeDeg);
-            }
-
-            // ② 先按估计角把当前图转回，再求残余平移（亚像素）
-            cv::Mat deRotated = inspF;
-            if (std::abs(angleEst) > 1e-6) {
-                const cv::Mat R = cv::getRotationMatrix2D(center, -angleEst, 1.0);
-                cv::warpAffine(inspF, deRotated, R, inspF.size(), cv::INTER_LINEAR,
-                               cv::BORDER_REPLICATE);
-            }
-            double resp = 0.0;
-            const cv::Point2d shift = cv::phaseCorrelate(goldF, deRotated, cv::noArray(), &resp);
-
-            // 注意 phaseCorrelate 是**循环相关**：位移超过图像边长一半会折回（例如 80 px ≡ -48 px），
-            // 因此 alignMaxShift 只能拦住 (maxShift, 边长/2] 区间的估计值；把上限设成"工件可能的最大位移"
-            // 即可（折回区间通常已在物理上不可能）。另外折回后的对齐“碰巧”正确也无害。
-            const int maxShift = m_params.value(QStringLiteral("alignMaxShift"), 50).toInt();
-            const double minResp =
-                m_params.value(QStringLiteral("alignMinResponse"), 0.05).toDouble();
-            alignResp = resp;
-            if (resp >= minResp && std::abs(shift.x) <= maxShift && std::abs(shift.y) <= maxShift) {
-                // ③ 旋转 + 平移合成一次仿射，避免二次插值损失
-                cv::Mat M = cv::getRotationMatrix2D(center, -angleEst, 1.0);
-                M.at<double>(0, 2) -= shift.x;
-                M.at<double>(1, 2) -= shift.y;
-                cv::Mat alignedF;
-                cv::warpAffine(inspF, alignedF, M, inspF.size(), cv::INTER_LINEAR,
-                               cv::BORDER_REPLICATE);
-                alignedF.convertTo(inspect, inspect.type());
-                alignDx = shift.x;
-                alignDy = shift.y;
-                alignAngle = angleEst;
-                alignApplied = true;
-            }
-            // 与黄金模板对比时会用到灰度，故对齐结果回写 inspect 后继续走原流程
-        }
-        m_params[QStringLiteral("alignApplied")] = alignApplied;
-        m_params[QStringLiteral("alignDx")] = alignDx;
-        m_params[QStringLiteral("alignDy")] = alignDy;
-        m_params[QStringLiteral("alignAngle")] = alignAngle;
-        m_params[QStringLiteral("alignResponse")] = alignResp;
+        cv::Mat aligned;
+        const OpencvUtil::AlignInfo align = OpencvUtil::alignToReference(
+            golden, inspect, alignMode,
+            m_params.value(QStringLiteral("alignMaxShift"), 50).toInt(),
+            m_params.value(QStringLiteral("alignMinResponse"), 0.05).toDouble(),
+            m_params.value(QStringLiteral("alignAngleRange"), 5).toInt(), aligned);
+        inspect = aligned;
+        m_params[QStringLiteral("alignApplied")] = align.applied;
+        m_params[QStringLiteral("alignDx")] = align.dx;
+        m_params[QStringLiteral("alignDy")] = align.dy;
+        m_params[QStringLiteral("alignAngle")] = align.angle;
+        m_params[QStringLiteral("alignResponse")] = align.response;
 
         cv::Mat diff;
         cv::absdiff(inspect, golden, diff);

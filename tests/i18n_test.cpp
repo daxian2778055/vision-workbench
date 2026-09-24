@@ -49,6 +49,13 @@ void I18nTest::englishQmLoadsAndTranslates()
     QCOMPARE(QCoreApplication::translate("MainWindow", "关于"),
              QStringLiteral("About"));
 
+    // FR15.10 运行期子流程的菜单文本（本轮补抽取：上一批交付漏跑 lupdate，
+    // 这 14 条当时根本没进 .ts，英文模式下这些菜单只会是中文）
+    QCOMPARE(QCoreApplication::translate("MainWindow", "定义为子流程…"),
+             QStringLiteral("Define as Subflow..."));
+    QCOMPARE(QCoreApplication::translate("MainWindow", "删除子流程定义…"),
+             QStringLiteral("Delete Subflow Definition..."));
+
     // 未翻译的源文（如本测试未抽取到的字符串）应保持源文，不影响中文模式
     QCOMPARE(QCoreApplication::translate("MainWindow", "未抽取的占位文本123"),
              QStringLiteral("未抽取的占位文本123"));

@@ -89,6 +89,7 @@
 #include "OpencvFitCircleNode.h"
 #include "OpencvTemplateMatchNode.h"
 #include "OpencvDefectNode.h"
+#include "AnomalyDetectNode.h"
 #include "OpencvCaliperNode.h"
 #include "OpencvTrainClassifierNode.h"
 #include "OpencvClassifyNode.h"
@@ -211,6 +212,8 @@ void registerAllNodes()
     VFP_REG(OpencvTemplateMatchNode,"OpencvTemplateMatchNode", "模板匹配", "Template Match",
             NodeBase::SHAPE_ANALYSIS, "\u7279\u5F81\u5B9A\u4F4D");
     VFP_REG(OpencvDefectNode,     "OpencvDefectNode",     "缺陷检测", "Defect",
+            NodeBase::SHAPE_ANALYSIS, "\u7279\u5F81\u5B9A\u4F4D");
+    VFP_REG(AnomalyDetectNode,    "AnomalyDetectNode",    "异常检测", "Anomaly Detect",
             NodeBase::SHAPE_ANALYSIS, "\u7279\u5F81\u5B9A\u4F4D");
     VFP_REG(OpencvCaliperNode,    "OpencvCaliperNode",    "卡尺测量", "Caliper",
             NodeBase::SHAPE_ANALYSIS, "\u51E0\u4F55\u6D4B\u91CF");

@@ -91,6 +91,8 @@ set(SOURCES
     src/OpencvFitCircleNode.cpp
     src/OpencvTemplateMatchNode.cpp
     src/OpencvDefectNode.cpp
+    src/AnomalyBaseline.cpp
+    src/AnomalyDetectNode.cpp
     src/OpencvCaliperNode.cpp
     src/OpencvTrainClassifierNode.cpp
     src/OpencvClassifyNode.cpp
@@ -297,6 +299,8 @@ set(HEADERS
     include/OpencvFitCircleNode.h
     include/OpencvTemplateMatchNode.h
     include/OpencvDefectNode.h
+    include/AnomalyBaseline.h
+    include/AnomalyDetectNode.h
     include/OpencvCaliperNode.h
     include/ClassifierTrainer.h
     include/OpencvTrainClassifierNode.h
@@ -820,6 +824,13 @@ if(MSVC)
     add_test(NAME OpencvDefectAlignTest COMMAND opencv_defect_align_test)
 endif()
 
+# 异常检测（G-P1-2 后端 A：OK 样本逐像素统计基线）功能测试
+if(MSVC)
+    add_executable(anomaly_detect_test tests/anomaly_detect_test.cpp)
+    target_link_libraries(anomaly_detect_test PRIVATE vfp_core Qt6::Test)
+    add_test(NAME AnomalyDetectTest COMMAND anomaly_detect_test)
+endif()
+
 # 统计报表（P1-11）纯计算与导出测试
 if(MSVC)
     add_executable(statistics_report_test tests/statistics_report_test.cpp)
@@ -1012,7 +1023,7 @@ if(MSVC)
     set(VFP_TESTS NodeCoreTest OpencvSerializationTest IntegrationTest DatabaseTest PerfTest
                   ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest CameraIoTest
                   DnnSegmentTest OpencvDefectAlignTest SoakTest StatisticsReportTest SchemePackageTest
-                  I18nTest SubFlowTest)
+                  I18nTest SubFlowTest AnomalyDetectTest)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
         # path_list_prepend 由 CMake 负责插入并处理平台路径分隔符，避免在
         # ENVIRONMENT 值里嵌套分号导致列表被错误拆分
