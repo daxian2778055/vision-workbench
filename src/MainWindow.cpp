@@ -2137,8 +2137,13 @@ void MainWindow::reportAutoExportTick()
         AppDatabase::instance()->queryResults(from, to, kQueryLimit);
     const bool truncated = (records.size() >= kQueryLimit);
 
+    // 粒度与报表窗口"自动"模式保持一致：统计窗口 ≤ 2 天（48 小时）按小时，更长按天。
+    // 否则会出现"界面看的是按天、机器定时导出的是按小时"这类口径不一致，现场无法解释。
+    const StatisticsReport::Granularity gran =
+        (cfg.rangeHours <= 48) ? StatisticsReport::Granularity::ByHour
+                               : StatisticsReport::Granularity::ByDay;
     const StatisticsReport::Summary summary =
-        StatisticsReport::compute(records, QString(), StatisticsReport::Granularity::ByHour);
+        StatisticsReport::compute(records, QString(), gran);
     const double target =
         QSettings().value(QStringLiteral("reporting/yieldTargetPercent"), 0.0).toDouble();
 
