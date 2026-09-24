@@ -17,7 +17,21 @@ public:
     ~ProjectManager();
 
     bool saveProject(const QString &filePath, const QList<FlowScene *> &scenes);
-    bool loadProject(const QString &filePath, QList<FlowScene *> &scenes);
+    bool loadProject(const QString &filePath, QList<FlowScene *> &scenes,
+                     const QString &passphrase = QString());
+
+    /// 导出加密 / 只读方案（G-P1-10）。
+    /// passphrase 非空时加密（AES-256-CTR + PBKDF2-HMAC-SHA256）；readonly 置只读标志。
+    /// 返回是否成功落盘；成功时同步记录 m_lastFilePath 与只读状态。
+    bool exportEncryptedProject(const QString &filePath, const QList<FlowScene *> &scenes,
+                                const QString &passphrase, bool readonly);
+
+    /// 最近一次 loadProject 是否以只读形态加载（加密只读包 / 非加密只读包）。
+    bool isReadonlyLoaded() const { return m_loadedReadonly; }
+    void resetReadonlyFlag() { m_loadedReadonly = false; }
+
+    /// 文件是否为需口令的加密信封（供 UI 在打开前决定是否弹入口令框）。
+    static bool fileNeedsPassphrase(const QString &filePath);
 
     /// 组装整个方案（场景 + 全局配置 + 运行界面布局）为 JSON 根对象。
     /// 手动保存与自动保存**必须共用它**：两套序列化会分叉，而分叉的表现是"崩溃恢复出来的
@@ -45,4 +59,5 @@ public:
 
 private:
     QString m_lastFilePath;
+    bool m_loadedReadonly = false;
 };

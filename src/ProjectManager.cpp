@@ -1,4 +1,5 @@
 #include "ProjectManager.h"
+#include "SchemePackage.h"
 #include "FlowScene.h"
 #include "NodeBase.h"
 #include "Connection.h"
@@ -55,6 +56,18 @@ bool ProjectManager::saveProjectInteractive(QWidget *parent, const QList<FlowSce
     if (!fileName.endsWith(QStringLiteral(".vfp"), Qt::CaseInsensitive)) {
         fileName += QStringLiteral(".vfp");
     }
+
+    // 只读方案：禁止覆盖原分发文件（G-P1-10）。允许另选路径另存为新方案（写后自动解除只读）。
+    if (m_loadedReadonly && !m_lastFilePath.isEmpty() &&
+        QFileInfo(fileName).absoluteFilePath().compare(
+            QFileInfo(m_lastFilePath).absoluteFilePath(), Qt::CaseInsensitive) == 0) {
+        QMessageBox::warning(parent, tr("只读方案"),
+            tr("当前方案为只读，禁止覆盖原文件。如需修改，请另选路径保存为新方案。"));
+        if (savedPath)
+            *savedPath = QString();
+        return false;
+    }
+
     if (savedPath)
         *savedPath = fileName;
 
@@ -89,6 +102,7 @@ QString ProjectManager::annotationDir() const
 bool ProjectManager::saveProject(const QString &filePath, const QList<FlowScene *> &scenes)
 {
     m_lastFilePath = filePath;
+    m_loadedReadonly = false; // 明文保存即为可编辑方案
 
     // 序列化与自动保存共用同一实现（buildProjectJson）：两套实现一旦分叉，表现是
     // "崩溃恢复出来的方案缺东西 / 与手动保存不一致"——极难发现，故此处不留第二份拷贝。
@@ -154,7 +168,8 @@ QJsonObject ProjectManager::buildProjectJson(const QList<FlowScene *> &scenes) c
     return root;
 }
 
-bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &scenes)
+bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &scenes,
+                                 const QString &passphrase)
 {
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly)) {
@@ -164,6 +179,27 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
 
     const QByteArray raw = file.readAll();
     file.close();
+
+    m_lastFilePath = filePath;
+    m_loadedReadonly = false;
+
+    // 信封方案（加密 / 只读打包）：解密 → 解析 JSON → 应用；老明文 .vfp 走原路径。
+    if (SchemePackage::isEnvelope(raw)) {
+        bool readonly = false, ok = false;
+        const QByteArray json = SchemePackage::importScheme(raw, passphrase, &readonly, &ok);
+        if (!ok) {
+            VFP_DEBUG << "方案加载失败：信封解析/解密失败（口令错误或文件损坏）" << filePath;
+            return false; // 不改动 scenes，调用方可以保留当前方案
+        }
+        QJsonParseError parseError{};
+        QJsonDocument doc = QJsonDocument::fromJson(json, &parseError);
+        if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+            VFP_DEBUG << "方案加载失败：信封内 JSON 非法，偏移" << parseError.offset;
+            return false;
+        }
+        m_loadedReadonly = readonly;
+        return applyProjectJson(doc.object(), scenes);
+    }
 
     // 原实现未校验解析结果：文件损坏时 doc.object() 为空、循环不执行，
     // 仍返回 true 报“加载成功”，而调用方已销毁原方案 → 数据静默丢失。
@@ -175,9 +211,45 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
         return false; // 不改动 scenes，调用方可以保留当前方案
     }
 
-    m_lastFilePath = filePath;
     // 应用方案内容（与崩溃恢复共用 applyProjectJson：场景 + 全局配置 + 运行界面布局）
     return applyProjectJson(doc.object(), scenes);
+}
+
+bool ProjectManager::exportEncryptedProject(const QString &filePath,
+                                           const QList<FlowScene *> &scenes,
+                                           const QString &passphrase, bool readonly)
+{
+    m_lastFilePath = filePath;
+
+    const QJsonObject root = buildProjectJson(scenes);
+    const QByteArray json = QJsonDocument(root).toJson();
+    const QByteArray envelope = SchemePackage::exportScheme(json, passphrase, readonly);
+
+    QSaveFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly)) {
+        VFP_DEBUG << "加密方案导出失败：无法写入" << filePath << file.errorString();
+        return false;
+    }
+    if (file.write(envelope) != envelope.size()) {
+        file.cancelWriting();
+        VFP_DEBUG << "加密方案导出不完整" << filePath;
+        return false;
+    }
+    if (!file.commit()) {
+        VFP_DEBUG << "加密方案导出失败（commit）" << filePath << file.errorString();
+        return false;
+    }
+    return true;
+}
+
+bool ProjectManager::fileNeedsPassphrase(const QString &filePath)
+{
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly))
+        return false;
+    const QByteArray head = file.read(64); // 足够容纳 magic(4)+version(1)+flags(1)
+    file.close();
+    return SchemePackage::isEncryptedEnvelope(head);
 }
 
 bool ProjectManager::applyProjectJson(const QJsonObject &root, QList<FlowScene *> &scenes)

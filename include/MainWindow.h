@@ -192,6 +192,8 @@ private:
     void onExportSnippet();
     /// 从片段文件导入到当前流程
     void onImportSnippet();
+    /// 导出加密 / 只读方案（G-P1-10）：弹出口令与只读选项，落盘为信封文件
+    void onExportEncryptedProject();
 
     /// 加载指定方案文件（打开/最近文件/崩溃恢复共用）。
     /// recoveryRestore=true（来自崩溃恢复）：不记入最近文件、不把内容标为"已落盘"——
@@ -203,6 +205,8 @@ private:
     bool saveProjectInteractively();
     /// 记录"当前内容已落盘"基线并清除恢复现场（保存/加载成功后调用）
     void markProjectSaved();
+    /// 根据当前方案只读态刷新界面（禁用覆盖保存、状态栏提示），与角色权限叠加
+    void applyReadonlyUI();
 
     // ---- 自动保存 / 崩溃恢复（落盘逻辑见 RecoveryStore；本处只做策略与界面）----
     /// 创建自动保存定时器（间隔与开关取自 QSettings recovery/*）
@@ -263,6 +267,7 @@ protected:
     QAction *m_actionCopySnippet = nullptr;
     QAction *m_actionPasteSnippet = nullptr;
     QAction *m_actionExportSnippet = nullptr;
+    QAction *m_actionExportEncrypted = nullptr;
     QAction *m_actionImportSnippet = nullptr;
     /// 良率目标监控：**按流程**各一份（报警要指明是哪条流程），键为流程名
     QHash<QString, YieldMonitor> m_yieldMonitors;

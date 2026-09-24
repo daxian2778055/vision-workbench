@@ -28,6 +28,12 @@
 #include "ImageReadNode.h"
 #include "DataObject.h"
 #include "FlowExecutor.h"
+#include <QDialog>
+#include <QFormLayout>
+#include <QLineEdit>
+#include <QCheckBox>
+#include <QInputDialog>
+#include <QDialogButtonBox>
 #include "Port.h"
 #include "Connection.h"
 #include "NodeGraphicsItem.h"
@@ -1048,6 +1054,16 @@ void MainWindow::initActions()
             [this]() { pasteSnippetIntoScene(currentFlowScene()); });
     connect(m_actionExportSnippet, &QAction::triggered, this, &MainWindow::onExportSnippet);
     connect(m_actionImportSnippet, &QAction::triggered, this, &MainWindow::onImportSnippet);
+
+    // 加密 / 只读方案导出（G-P1-10）：文件菜单下追加入口（此段在 m_recentFiles 之前执行，
+    // 故动作落在"最近文件"子菜单之前，顺序合理）
+    m_actionExportEncrypted = new QAction(QStringLiteral("导出加密/只读方案…"), this);
+    m_actionExportEncrypted->setStatusTip(QStringLiteral(
+        "把当前方案加密并可选只读打包，分发后现场无法反编译/覆盖保存"));
+    if (ui->menuFile)
+        ui->menuFile->addAction(m_actionExportEncrypted);
+    connect(m_actionExportEncrypted, &QAction::triggered,
+            this, &MainWindow::onExportEncryptedProject);
     if (ui->menuEdit) {
         QAction *before = ui->actionDeleteFlow;
         ui->menuEdit->insertAction(before, m_actionCreateGroup);
@@ -1767,7 +1783,11 @@ void MainWindow::onNewProject()
     // 新建后是"干净的空白方案"：重置未保存基线。否则会拿上一方案的内容当基线，
     // 空白新方案被当成"有未保存修改"（关窗时无谓提示，自动保存还会写一份空恢复文件）。
     markProjectSaved();
-    
+
+    // 新建清空只读态（上一个只读分发方案已丢弃）
+    projectManager()->resetReadonlyFlag();
+    applyReadonlyUI();
+
     logMessage("新方案创建完成");
 }
 
@@ -2020,6 +2040,92 @@ void MainWindow::onExportSnippet()
         msg += tr("；%1 条跨边界连线未包含").arg(droppedConnections);
     ui->statusBar->showMessage(msg, 6000);
     logMessage(msg);
+}
+
+void MainWindow::applyReadonlyUI()
+{
+    auto *session = SessionManager::instance();
+    // 未登录时沿用动作默认可用态；已登录则以角色权限为准
+    const bool roleAllowsEdit = !session->isLoggedIn() || session->canEditScheme();
+    const bool readonly = projectManager()->isReadonlyLoaded();
+    const bool saveEnabled = roleAllowsEdit && !readonly;
+    if (ui->actionSave)
+        ui->actionSave->setEnabled(saveEnabled);
+    if (ui->actionSaveScheme)
+        ui->actionSaveScheme->setEnabled(saveEnabled);
+    if (readonly)
+        ui->statusBar->showMessage(tr("只读方案：禁止覆盖保存（可另存为新方案）"), 0);
+    else
+        ui->statusBar->clearMessage();
+}
+
+void MainWindow::onExportEncryptedProject()
+{
+    if (m_flowScenes.isEmpty()) {
+        QMessageBox::information(this, tr("导出加密/只读方案"),
+                                 tr("当前没有可导出的方案。"));
+        return;
+    }
+
+    // 小对话框：加密开关 + 口令 + 确认口令 + 只读开关
+    QDialog dlg(this);
+    dlg.setWindowTitle(tr("导出加密/只读方案"));
+    auto *form = new QFormLayout(&dlg);
+    auto *cbEncrypt = new QCheckBox(tr("加密（打开时需口令）"));
+    cbEncrypt->setChecked(true);
+    auto *lePass = new QLineEdit(&dlg);
+    lePass->setEchoMode(QLineEdit::Password);
+    auto *leConfirm = new QLineEdit(&dlg);
+    leConfirm->setEchoMode(QLineEdit::Password);
+    auto *cbReadonly = new QCheckBox(tr("只读（分发后禁止覆盖保存）"));
+    form->addRow(tr("加密："), cbEncrypt);
+    form->addRow(tr("口令："), lePass);
+    form->addRow(tr("确认口令："), leConfirm);
+    form->addRow(tr("只读："), cbReadonly);
+    auto *box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    form->addRow(box);
+    connect(box, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(box, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+
+    const QString pass = lePass->text();
+    const bool encrypt = cbEncrypt->isChecked();
+    if (encrypt) {
+        if (pass.isEmpty()) {
+            QMessageBox::warning(this, tr("导出加密/只读方案"), tr("加密必须设置口令。"));
+            return;
+        }
+        if (pass != leConfirm->text()) {
+            QMessageBox::warning(this, tr("导出加密/只读方案"), tr("两次输入的口令不一致。"));
+            return;
+        }
+    }
+    const bool readonly = cbReadonly->isChecked();
+
+    QString path = QFileDialog::getSaveFileName(
+        this, tr("导出加密/只读方案"), QString(),
+        tr("加密方案 (*.vfpe);;方案文件 (*.vfp)"));
+    if (path.isEmpty())
+        return; // 用户取消
+    if (!path.endsWith(QStringLiteral(".vfpe"), Qt::CaseInsensitive) &&
+        !path.endsWith(QStringLiteral(".vfp"), Qt::CaseInsensitive))
+        path += QStringLiteral(".vfpe");
+
+    ProjectManager *pm = projectManager();
+    const bool ok = pm->exportEncryptedProject(path, m_flowScenes,
+                                              encrypt ? pass : QString(), readonly);
+    if (ok) {
+        const QString tag = (encrypt ? tr("加密") : tr("未加密")) +
+                            (readonly ? tr("+只读") : QString());
+        const QString msg = tr("已导出%1方案：%2").arg(tag, path);
+        ui->statusBar->showMessage(msg, 8000);
+        logMessage(msg);
+    } else {
+        QMessageBox::warning(this, tr("导出加密/只读方案"),
+                             tr("导出失败：\n%1").arg(path));
+    }
 }
 
 void MainWindow::onImportSnippet()
@@ -2396,16 +2502,30 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
     // 使用ProjectManager加载项目
     ProjectManager *pm = projectManager();
 
+    // 加密信封：打开前若需口令则弹窗索取；取消则放弃本次打开（保持当前方案）。
+    QString passphrase;
+    if (ProjectManager::fileNeedsPassphrase(fileName)) {
+        bool ok = false;
+        passphrase = QInputDialog::getText(this, tr("打开加密方案"),
+            tr("该方案已加密，请输入口令："), QLineEdit::Password, QString(), &ok);
+        if (!ok)
+            return; // 用户取消
+    }
+
     // 先加载到临时列表：只有加载成功才销毁当前方案。
     // 原实现是先 qDeleteAll 再加载，文件损坏时旧方案已丢、新方案为空，且仍报“加载成功”。
     QList<FlowScene*> loadedScenes;
-    const bool success = pm->loadProject(fileName, loadedScenes);
+    const bool success = pm->loadProject(fileName, loadedScenes, passphrase);
 
     if (!success) {
         qDeleteAll(loadedScenes);
-        logMessage(tr("项目加载失败：文件不存在、格式损坏或内容为空（当前方案保持不变）"));
+        if (ProjectManager::fileNeedsPassphrase(fileName))
+            logMessage(tr("项目加载失败：口令错误或文件损坏（当前方案保持不变）"));
+        else
+            logMessage(tr("项目加载失败：文件不存在、格式损坏或内容为空（当前方案保持不变）"));
         return;
     }
+    applyReadonlyUI();
 
     // 释放旧方案的执行器：先停全部并等待真正退出；超时则中止本次打开（N1）——保留旧方案
     // 场景与执行器，不删场景、不回收执行器。运行中的线程若此刻删场景 = UAF，比崩溃更该避免的是
@@ -3662,6 +3782,8 @@ void MainWindow::applyPermissionRestrictions()
     if (ui->menuEdit) {
         ui->menuEdit->setEnabled(session->canEditScheme());
     }
+    // 角色变化后同步只读管控（只读态优先于角色权限禁用覆盖保存）
+    applyReadonlyUI();
 }
 
 void MainWindow::updateLanguage()

@@ -265,6 +265,9 @@ set(SOURCES
     src/CommentGraphicsItem.cpp
     src/FlowVariableDialog.cpp
     src/AnnotationDialog.cpp
+    # 方案加密 / 只读导出（G-P1-10）
+    src/SchemeCrypto.cpp
+    src/SchemePackage.cpp
 )
 
 set(HEADERS
@@ -469,6 +472,9 @@ set(HEADERS
     include/CommentGraphicsItem.h
     include/FlowVariableDialog.h
     include/AnnotationDialog.h
+    # 方案加密 / 只读导出（G-P1-10）
+    include/SchemeCrypto.h
+    include/SchemePackage.h
 )
 
 set(UI_FILES
@@ -890,6 +896,13 @@ if(MSVC)
     target_link_libraries(report_auto_export_test PRIVATE vfp_core Qt6::Test)
     add_test(NAME ReportAutoExportTest COMMAND report_auto_export_test)
     vfp_configure_gui_test(ReportAutoExportTest)
+endif()
+
+# 方案加密 / 只读导出（G-P1-10）：AES-256-CTR KAT + 信封 round-trip / 错误口令拒绝 / 篡改拒绝
+if(MSVC)
+    add_executable(scheme_package_test tests/scheme_package_test.cpp)
+    target_link_libraries(scheme_package_test PRIVATE vfp_core Qt6::Test)
+    add_test(NAME SchemePackageTest COMMAND scheme_package_test)
 endif()
 
 # 数据库跨线程访问测试（QSqlDatabase 线程亲和性 / 每线程独立连接）
