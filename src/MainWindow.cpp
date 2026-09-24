@@ -1071,7 +1071,20 @@ void MainWindow::initActions()
         ui->menuEdit->insertAction(before, m_actionDissolveGroup);
         ui->menuEdit->insertAction(before, m_actionToggleGroup);
         ui->menuEdit->insertSeparator(before);
+        // FR15.10 运行期子流程：定义/删除入口（与分组动作相邻，语义同属"画布组织"）
+        m_actionDefineSubFlow = new QAction(tr("定义为子流程…"), this);
+        m_actionDefineSubFlow->setStatusTip(tr(
+            "把选中的算子（≥2，单进单出、不与成员外连线）定义为命名子流程，"
+            "供「子流程」算子按名调用；一处修改、所有引用同步生效"));
+        m_actionRemoveSubFlow = new QAction(tr("删除子流程定义…"), this);
+        m_actionRemoveSubFlow->setStatusTip(tr(
+            "删除一个子流程定义；画布算子原样保留，引用它的「子流程」算子执行时将报「未定义」"));
+        ui->menuEdit->insertAction(before, m_actionDefineSubFlow);
+        ui->menuEdit->insertAction(before, m_actionRemoveSubFlow);
+        ui->menuEdit->insertSeparator(before);
     }
+    connect(m_actionDefineSubFlow, &QAction::triggered, this, &MainWindow::onDefineSubFlow);
+    connect(m_actionRemoveSubFlow, &QAction::triggered, this, &MainWindow::onRemoveSubFlow);
     connect(m_actionCreateGroup, &QAction::triggered, this, &MainWindow::onCreateGroup);
     connect(m_actionDissolveGroup, &QAction::triggered, this, &MainWindow::onDissolveGroup);
     connect(m_actionToggleGroup, &QAction::triggered, this, &MainWindow::onToggleGroupCollapse);
@@ -1881,6 +1894,59 @@ void MainWindow::onCreateGroup()
     } else {
         // 明确告诉用户为什么没反应（而不是静默什么都不发生）
         ui->statusBar->showMessage(tr("请先在画布上选中至少 2 个算子，再创建分组"), 4000);
+    }
+}
+
+// ---- 运行期子流程（FR15.10）----
+
+void MainWindow::onDefineSubFlow()
+{
+    FlowScene *scene = currentFlowScene();
+    if (!scene)
+        return;
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, tr("定义为子流程"),
+                                               tr("子流程名称："), QLineEdit::Normal,
+                                               QString(), &ok);
+    if (!ok)
+        return;
+    QString error;
+    if (scene->defineSubFlowFromSelection(name, &error)) {
+        ui->statusBar->showMessage(tr("已定义子流程「%1」（%2 个算子）。"
+                                      "用「子流程」算子按此名称调用。")
+                                       .arg(name.trimmed())
+                                       .arg(scene->subFlowByName(name.trimmed()).members.size()),
+                                   6000);
+        logMessage(tr("定义子流程：%1").arg(name.trimmed()));
+    } else {
+        ui->statusBar->showMessage(error, 6000);
+        logMessage(tr("定义子流程失败：%1").arg(error));
+    }
+}
+
+void MainWindow::onRemoveSubFlow()
+{
+    FlowScene *scene = currentFlowScene();
+    if (!scene)
+        return;
+    const QList<SubFlowDef> defs = scene->subFlows();
+    if (defs.isEmpty()) {
+        ui->statusBar->showMessage(tr("当前流程没有子流程定义"), 4000);
+        return;
+    }
+    QStringList names;
+    for (const SubFlowDef &d : defs)
+        names << d.name;
+    bool ok = false;
+    const QString name = QInputDialog::getItem(this, tr("删除子流程定义"),
+                                               tr("选择要删除的子流程（画布算子会保留）："),
+                                               names,
+                                               0, false, &ok);
+    if (!ok)
+        return;
+    if (scene->removeSubFlow(name)) {
+        ui->statusBar->showMessage(tr("已删除子流程定义「%1」").arg(name), 4000);
+        logMessage(tr("删除子流程定义：%1").arg(name));
     }
 }
 

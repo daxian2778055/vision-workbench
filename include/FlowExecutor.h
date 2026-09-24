@@ -21,6 +21,7 @@
 class FlowScene;
 class NodeBase;
 class DataObject;
+class SubFlowNode;
 
 namespace MyProject {
 class Connection;
@@ -166,6 +167,12 @@ protected:
 public:
     void propagateData(NodeBase *node);
 
+    /// FR15.10 运行期子流程：同线程内联执行 caller 引用的子流程定义
+    /// （由 SubFlowNode::process 在执行线程调用）。入口吃 caller 的输入数据、
+    /// 出口结果回写 caller 的输出端口 0；成员失败/定义缺失/递归返回 false，
+    /// 并 emit executionError 带具体原因（哪个子节点失败/递归链/未定义）。
+    bool executeSubFlow(SubFlowNode *caller);
+
 private slots:
     void markGraphStructureDirty();
     /// 节点从场景移除（删除/撤销/清空）时**登记**它在执行缓存里的待清理条目，
@@ -192,6 +199,9 @@ private:
     void executeLoop(NodeBase *loopNode, int loopCount);
     /// 识别循环体节点（按缓存拓扑序）
     QList<NodeBase *> collectLoopBody(NodeBase *loopNode) const;
+    /// FR15.10 子流程：轮首收集"被引用子流程定义"的成员/边界（同循环体 P3 模式；
+    /// worker 线程私有，仅执行线程访问。须在 m_loopBodyNodes 填充之后调用）
+    void collectSubFlowBodies(FlowScene *scene, const QList<NodeBase *> &liveNodes);
     void resetState();
     /// 记录一个节点被跳过（未激活分支 / 循环体由外层调度），并对外发 nodeSkipped
     void recordNodeSkipped(NodeBase *node, const QString &reason);
@@ -269,6 +279,12 @@ private:
     QHash<int, QHash<QString, QVariant>> m_nodeOutputVars;
     /// 循环体节点集合（由 LoopNode 统一调度，主遍历跳过，P3）
     QSet<NodeBase *> m_loopBodyNodes;
+    // ---- FR15.10 运行期子流程（worker 线程私有，语义同 m_loopBodyNodes）----
+    QSet<NodeBase *> m_subFlowBodyNodes;                          /// 全部被引用定义的成员（主遍历跳过）
+    QHash<QString, QList<NodeBase *>> m_subFlowMembers;           /// 定义名 → 拓扑序成员
+    QHash<QString, QPair<NodeBase *, NodeBase *>> m_subFlowIOs;   /// 定义名 → 入口/出口
+    QList<QString> m_subFlowCallStack;                            /// 执行中的定义名（递归保护）
+    static constexpr int kMaxSubFlowDepth = 8;                    /// 嵌套深度上限
     /// 待清理的执行缓存条目（S1 Stage 1b 第 2 步）：QPair<节点指针, 登记时的模块号>。
     /// 指针**只作 map 键**（登记后节点可能已被立即析构，故绝不解除引用；模块号在登记时取好）。
     /// m_purgeMutex 是**叶子锁**：只允许"graph 锁 → purge 锁"方向，持有它时不得再取任何锁。

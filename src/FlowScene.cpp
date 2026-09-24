@@ -1002,6 +1002,131 @@ NodeBase *FlowScene::nodeByModuleId(int moduleId) const
     return nullptr;
 }
 
+// ---- 运行期子流程（FR15.10，方案 B）----
+
+bool FlowScene::defineSubFlowFromSelection(const QString &name, QString *error)
+{
+    auto fail = [error](const QString &msg) {
+        if (error)
+            *error = msg;
+        return false;
+    };
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty())
+        return fail(QStringLiteral("子流程名称不能为空"));
+
+    QMutexLocker locker(&m_graphMutex);
+    const QList<NodeBase *> sel = selectedNodes();
+    if (sel.size() < 2)
+        return fail(QStringLiteral("请先选中至少 2 个算子，再定义为子流程"));
+
+    // 名称唯一
+    for (const SubFlowDef &d : m_subFlows) {
+        if (d.name == trimmed)
+            return fail(QStringLiteral("子流程「%1」已存在").arg(trimmed));
+    }
+    // 成员不得已属于其它子流程（一个算子只属于一个定义，否则调度语义不明）
+    for (const SubFlowDef &d : m_subFlows) {
+        for (NodeBase *n : sel) {
+            if (n && d.members.contains(n->moduleId()))
+                return fail(QStringLiteral("算子「%1」已属于子流程「%2」").arg(n->fullName(), d.name));
+        }
+    }
+
+    QSet<NodeBase *> memberSet(sel.cbegin(), sel.cend());
+    const QList<MyProject::Connection *> conns = m_connectionItems.keys();
+
+    // 边界校验：成员与成员之外的算子之间不允许连线（数据一律经调用点进出）
+    for (MyProject::Connection *c : conns) {
+        if (!c)
+            continue;
+        NodeBase *s = c->getSourceNode();
+        NodeBase *t = c->getDestinationNode();
+        if (!s || !t)
+            continue;
+        const bool sIn = memberSet.contains(s);
+        const bool tIn = memberSet.contains(t);
+        if (sIn != tIn) {
+            return fail(QStringLiteral(
+                            "子流程边界不允许连线：请先断开「%1」与成员之外的连线（数据经调用点进出）")
+                            .arg((sIn ? s : t)->fullName()));
+        }
+    }
+
+    // 入口 = 成员中唯一"无来自成员内部入边"的算子；出口 = 唯一"无去向成员内部出边"的算子
+    NodeBase *input = nullptr;
+    NodeBase *output = nullptr;
+    int inCnt = 0, outCnt = 0;
+    for (NodeBase *n : sel) {
+        if (!n)
+            continue;
+        bool hasIn = false, hasOut = false;
+        for (MyProject::Connection *c : conns) {
+            if (!c)
+                continue;
+            if (c->getDestinationNode() == n && memberSet.contains(c->getSourceNode()))
+                hasIn = true;
+            if (c->getSourceNode() == n && memberSet.contains(c->getDestinationNode()))
+                hasOut = true;
+        }
+        if (!hasIn) {
+            input = n;
+            ++inCnt;
+        }
+        if (!hasOut) {
+            output = n;
+            ++outCnt;
+        }
+    }
+    if (inCnt != 1)
+        return fail(QStringLiteral("子流程入口不唯一（找到 %1 个无内部输入的算子）：请把成员连成单进单出的链路")
+                        .arg(inCnt));
+    if (outCnt != 1)
+        return fail(QStringLiteral("子流程出口不唯一（找到 %1 个无内部输出的算子）：请把成员连成单进单出的链路")
+                        .arg(outCnt));
+
+    recordUndo();
+    SubFlowDef def;
+    def.name = trimmed;
+    for (NodeBase *n : sel) {
+        if (n)
+            def.members.append(n->moduleId());
+    }
+    def.input = input->moduleId();
+    def.output = output->moduleId();
+    m_subFlows.append(def);
+    return true;
+}
+
+bool FlowScene::removeSubFlow(const QString &name)
+{
+    QMutexLocker locker(&m_graphMutex);
+    for (int i = 0; i < m_subFlows.size(); ++i) {
+        if (m_subFlows[i].name == name) {
+            recordUndo();
+            m_subFlows.removeAt(i);
+            return true;
+        }
+    }
+    return false;
+}
+
+QList<SubFlowDef> FlowScene::subFlows() const
+{
+    QMutexLocker locker(&m_graphMutex);
+    return m_subFlows;
+}
+
+SubFlowDef FlowScene::subFlowByName(const QString &name) const
+{
+    QMutexLocker locker(&m_graphMutex);
+    for (const SubFlowDef &d : m_subFlows) {
+        if (d.name == name)
+            return d;
+    }
+    return SubFlowDef();
+}
+
 void FlowScene::setFlowVariable(const QString &name, int type, const QVariant &value,
                                const QString &description)
 {
@@ -1085,6 +1210,12 @@ QJsonObject FlowScene::extrasToJson() const
             groups.append(g->toJson());
     }
     o[QStringLiteral("nodeGroups")] = groups;
+
+    // FR15.10 运行期子流程：定义（成员=模块号）随方案保存/加载并被撤销快照带上
+    QJsonArray subFlows;
+    for (const SubFlowDef &d : m_subFlows)
+        subFlows.append(d.toJson());
+    o[QStringLiteral("subFlows")] = subFlows;
     o[QStringLiteral("flowName")] = m_flowName;   // S2：流程名随方案持久化，触发按名路由保持身份
     o[QStringLiteral("flowMode")] = m_flowMode;   // 每流程运行模式随方案持久化（不是所有流程都要连续）
 
@@ -1121,6 +1252,7 @@ void FlowScene::extrasFromJson(const QJsonObject &json)
 {
     m_flowVariables.clear();
     m_fixtures.clear();
+    m_subFlows.clear();
     m_flowName = json.value(QStringLiteral("flowName")).toString();   // S2：恢复流程名
     m_flowMode = json.value(QStringLiteral("flowMode")).toInt(1);     // 恢复每流程运行模式（默认软触发）
 
@@ -1170,6 +1302,14 @@ void FlowScene::extrasFromJson(const QJsonObject &json)
         registerLoadedGroup(group, groupJson.value(QStringLiteral("w")).toDouble(),
                             groupJson.value(QStringLiteral("h")).toDouble());
         group->setMembers(group->memberIds());   // 挂进场景后再过滤一次
+    }
+
+    // FR15.10 子流程：载入时不按模块号解析节点（成员缺失留给执行时可见报错，
+    // 避免载入顺序依赖——本函数虽在节点建好后调用，但成员校验与执行期同一套口径更稳）
+    for (const QJsonValue &sv : json.value(QStringLiteral("subFlows")).toArray()) {
+        SubFlowDef d = SubFlowDef::fromJson(sv.toObject());
+        if (d.isValid())
+            m_subFlows.append(d);
     }
     // 全部载完后统一重算一次：多分组叠加折叠的场景下，逐个载入时算不准
     refreshGroupVisibility();

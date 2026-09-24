@@ -173,6 +173,10 @@ private:
     void onDissolveGroup();
     /// 折叠/展开选中的分组框（FR1.9 的 Group 折叠；纯显示，不影响执行）
     void onToggleGroupCollapse();
+    /// 把当前流程里选中的算子定义为命名子流程（FR15.10；入口/出口自动推导）
+    void onDefineSubFlow();
+    /// 删除一个子流程定义（画布算子原样保留）
+    void onRemoveSubFlow();
 
     // ---- 良率目标与报警联动（P1-11 剩余差距）----
     /// 每轮结束调用（**每个执行器都要接**，不能只接当前激活流程，否则后台流程的轮次不参与判定）。
@@ -272,6 +276,8 @@ protected:
     QAction *m_actionExportSnippet = nullptr;
     QAction *m_actionExportEncrypted = nullptr;
     QAction *m_actionImportSnippet = nullptr;
+    QAction *m_actionDefineSubFlow = nullptr;   ///< FR15.10：把选中算子定义为命名子流程
+    QAction *m_actionRemoveSubFlow = nullptr;   ///< FR15.10：删除子流程定义
     /// 良率目标监控：**按流程**各一份（报警要指明是哪条流程），键为流程名
     QHash<QString, YieldMonitor> m_yieldMonitors;
     qint64 m_yieldLastEvalMs = 0;   ///< 上次评估时刻（节流用；0 = 尚未评估）

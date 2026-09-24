@@ -4,6 +4,7 @@
 #include "HalconNode.h"
 #include "ConditionalNode.h"
 #include "LoopNode.h"
+#include "SubFlowNode.h"   // FR15.10 运行期子流程调用点
 #include "DataObject.h"
 #include "Connection.h"
 #include "AppLog.h"
@@ -211,6 +212,11 @@ void FlowExecutor::setFlowScene(FlowScene *scene)
         m_incoming.clear();
         m_outgoing.clear();
         m_loopBodyNodes.clear();
+        // FR15.10：子流程的轮首收集物同样随场景切换清空（成员指针属于旧场景，悬垂风险同循环体）
+        m_subFlowBodyNodes.clear();
+        m_subFlowMembers.clear();
+        m_subFlowIOs.clear();
+        m_subFlowCallStack.clear();
     }
     connectToScene(scene);
     // 多流程并发：最近激活的流程执行器作为 current()（供节点查询运行状态）
@@ -481,12 +487,22 @@ void FlowExecutor::run()
             }
         }
 
+        // FR15.10 子流程：轮首收集被引用定义的成员/边界（同循环体 P3 模式，worker 线程私有）。
+        // 必须在 m_loopBodyNodes 填充之后：与循环体交叉的成员让位给循环体（v1 限制）。
+        collectSubFlowBodies(scene, nodes);
+
         for (int i = 0; i < sortedNodes.size(); i++) {
             NodeBase *node = sortedNodes[i];
             // 循环体节点由所属 LoopNode 统一调度执行，主遍历不再重复执行（P3）
             if (m_loopBodyNodes.contains(node)) {
                 VFP_EXEC_DEBUG << "Node skipped (loop body, scheduled by LoopNode):" << node->fullName();
                 recordNodeSkipped(node, QStringLiteral("循环体由循环节点统一调度"));
+                continue;
+            }
+            // 子流程体节点由调用点（SubFlowNode）内联调度执行，主遍历不再重复执行（FR15.10）
+            if (m_subFlowBodyNodes.contains(node)) {
+                VFP_EXEC_DEBUG << "Node skipped (subflow body, scheduled by SubFlowNode):" << node->fullName();
+                recordNodeSkipped(node, QStringLiteral("子流程体由调用点统一调度"));
                 continue;
             }
             VFP_EXEC_DEBUG << "Executing node:" << node->fullName();
@@ -1272,6 +1288,180 @@ QList<NodeBase *> FlowExecutor::collectLoopBody(NodeBase *loopNode) const
     return body;
 }
 
+// ---- FR15.10 运行期子流程 ----
+
+void FlowExecutor::collectSubFlowBodies(FlowScene *scene, const QList<NodeBase *> &liveNodes)
+{
+    // worker 线程私有（与 m_loopBodyNodes 同语义）：每轮重收，不做跨轮缓存——
+    // 子流程定义可在两次运行之间被增删/改名（不触发图结构脏标记），按轮重收天然一致。
+    m_subFlowBodyNodes.clear();
+    m_subFlowMembers.clear();
+    m_subFlowIOs.clear();
+    if (!scene || liveNodes.isEmpty())
+        return;
+
+    // 只登记"本轮确实被调用点引用"的定义：调用点写了不存在的名字 → 执行时显式报"未定义"
+    QSet<QString> referenced;
+    for (NodeBase *n : liveNodes) {
+        if (qobject_cast<SubFlowNode *>(n)) {
+            const QString name =
+                n->getParam(QStringLiteral("subFlowName")).toString().trimmed();
+            if (!name.isEmpty())
+                referenced.insert(name);
+        }
+    }
+    if (referenced.isEmpty())
+        return;
+
+    const QList<SubFlowDef> defs = scene->subFlows();   // 场景图锁短临界区取副本
+    for (const SubFlowDef &def : defs) {
+        if (!referenced.contains(def.name))
+            continue;
+
+        QList<NodeBase *> members;
+        NodeBase *inputNode = nullptr;
+        NodeBase *outputNode = nullptr;
+        bool broken = false;
+        for (int id : def.members) {
+            if (NodeBase *m = scene->nodeByModuleId(id))
+                members.append(m);
+            else {
+                broken = true;   // 成员已被删除：登记为"损坏"，执行时可见报错（不静默跑旧逻辑）
+                break;
+            }
+        }
+        if (!broken)
+            inputNode = def.input >= 0 ? scene->nodeByModuleId(def.input) : nullptr;
+        if (!broken)
+            outputNode = def.output >= 0 ? scene->nodeByModuleId(def.output) : nullptr;
+
+        if (broken || !inputNode || !outputNode) {
+            m_subFlowMembers.insert(def.name, {});
+            m_subFlowIOs.insert(def.name, qMakePair(nullptr, nullptr));
+            continue;
+        }
+
+        // 与循环体交叉的成员让位给循环体（v1 限制：子流程成员不得同时是循环体）；
+        // 若因此丢掉了入口/出口，执行时会以"定义损坏"显式报错。
+        QList<NodeBase *> usable;
+        for (NodeBase *m : members) {
+            if (!m_loopBodyNodes.contains(m))
+                usable.append(m);
+        }
+        m_subFlowMembers.insert(def.name, usable);
+        m_subFlowIOs.insert(def.name, qMakePair(inputNode, outputNode));
+        for (NodeBase *m : usable)
+            m_subFlowBodyNodes.insert(m);
+    }
+}
+
+bool FlowExecutor::executeSubFlow(SubFlowNode *caller)
+{
+    auto failWith = [this](const QString &msg) {
+        emit executionError(msg);
+        return false;
+    };
+
+    if (!caller)
+        return false;
+    const QString name = caller->getParam(QStringLiteral("subFlowName")).toString().trimmed();
+    if (name.isEmpty())
+        return failWith(QStringLiteral("子流程算子「%1」未设置要调用的子流程名称")
+                            .arg(caller->fullName()));
+
+    const auto memIt = m_subFlowMembers.constFind(name);
+    const auto ioIt = m_subFlowIOs.constFind(name);
+    if (memIt == m_subFlowMembers.cend() || ioIt == m_subFlowIOs.cend()) {
+        return failWith(QStringLiteral("子流程「%1」未定义（可能已被删除或改名，或名字写错）。调用点：%2")
+                            .arg(name, caller->fullName()));
+    }
+    if (memIt->isEmpty() || !ioIt->first || !ioIt->second) {
+        return failWith(QStringLiteral("子流程「%1」定义损坏（成员已被删除，或与循环节点体交叉）。调用点：%2")
+                            .arg(name, caller->fullName()));
+    }
+
+    // 递归保护：调用链上再次出现同名定义 = 环；深度上限兜底（A→B→A / 自调 / 超深嵌套）
+    if (m_subFlowCallStack.contains(name)) {
+        return failWith(QStringLiteral("检测到子流程递归调用：%1→「%2」，已拒绝。调用点：%3")
+                            .arg(m_subFlowCallStack.join(QStringLiteral("→")), name,
+                                 caller->fullName()));
+    }
+    if (m_subFlowCallStack.size() >= kMaxSubFlowDepth) {
+        return failWith(QStringLiteral("子流程嵌套深度超过上限（%1）：%2→「%3」。调用点：%4")
+                            .arg(kMaxSubFlowDepth)
+                            .arg(m_subFlowCallStack.join(QStringLiteral("→")), name,
+                                 caller->fullName()));
+    }
+
+    NodeBase *inputNode = ioIt->first;
+    NodeBase *outputNode = ioIt->second;
+
+    // 入口喂数据：调用点的输入在 executeNode(caller) 的 propagateData 阶段已备好；
+    // 入口成员无来自成员外部的入边（定义时校验），内联执行它的 propagateData 不会覆盖这里的写入。
+    const QSharedPointer<DataObject> in = caller->getInputData(0);
+    {
+        QMutexLocker cacheLock(&m_graphCacheMutex);
+        if (in)
+            m_nodeData[inputNode][0] = in;
+        else
+            m_nodeData[inputNode].remove(0);
+    }
+    inputNode->setInputData(0, in);
+
+    m_subFlowCallStack.append(name);
+    bool aborted = false;
+    for (NodeBase *bn : memIt.value()) {
+        // 成员边界处理暂停/停止（P5 同循环体；真停稳才上报 executionParked）
+        {
+            QMutexLocker l(&m_mutex);
+            if (m_state == ExecutionState::Stopped) {
+                aborted = true;
+                break;
+            }
+            if (m_state == ExecutionState::Paused)
+                parkWhilePausedLocked();
+            if (m_state == ExecutionState::Stopped) {
+                aborted = true;
+                break;
+            }
+        }
+        // isLastNode=false：子图末节点不得误发 imageReady（图像预览只属于主图末端，同循环体先例）
+        executeNode(bn, false);
+        activateDownstream(bn);
+        // 成员内的循环节点：其循环体由内层自行调度（嵌套语义同 executeLoop）
+        if (LoopNode *inner = qobject_cast<LoopNode *>(bn)) {
+            executeLoop(inner, qMax(1, bn->getParam(QStringLiteral("loopCount")).toInt()));
+        }
+        {
+            QMutexLocker l(&m_mutex);
+            if (m_state == ExecutionState::Stopped) {
+                aborted = true;
+                break;
+            }
+        }
+        if (!m_lastNodeSuccess && m_stopOnFailure) {
+            m_subFlowCallStack.removeLast();
+            return failWith(QStringLiteral("子流程「%1」的算子「%2」执行失败。调用点：%3")
+                                .arg(name, bn->fullName(), caller->fullName()));
+        }
+    }
+    m_subFlowCallStack.removeLast();
+    if (aborted)
+        return false;
+
+    // 出口结果 → 调用点输出端口 0。executeNode(caller) 在 execute() 返回后统一
+    // 读取输出端口写缓存/发信号，下游由此拿到数据（与普通算子同一出口，无特殊路径）。
+    QSharedPointer<DataObject> out;
+    {
+        QMutexLocker cacheLock(&m_graphCacheMutex);
+        out = m_nodeData.value(outputNode).value(0);
+    }
+    if (!out)
+        out = outputNode->getOutputData(0);
+    caller->setOutputData(0, out);
+    return true;
+}
+
 void FlowExecutor::propagateData(NodeBase *node)
 {
     if (!node) {
@@ -1560,6 +1750,9 @@ void FlowExecutor::invalidateDownstreamOf(NodeBase *startNode)
                 m_outgoing.clear();
                 m_cachedSortedNodes.clear();
                 m_loopBodyNodes.clear();
+                m_subFlowBodyNodes.clear();
+                m_subFlowMembers.clear();
+                m_subFlowIOs.clear();
                 m_graphStructureDirty = false;
             }
         }

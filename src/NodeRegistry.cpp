@@ -66,6 +66,7 @@
 #include "FormatNode.h"
 #include "FormulaNode.h"
 #include "DelayNode.h"
+#include "SubFlowNode.h"
 #include "CounterNode.h"
 #include "RecordNode.h"
 #include "FilterNode.h"
@@ -360,6 +361,9 @@ void registerAllNodes()
     VFP_REG(FormulaNode,          "FormulaNode",          "\u516C\u5F0F\u8BA1\u7B97", "Formula",
             NodeBase::LOGIC, "\u903B\u8F91\u4E0E\u63A7\u5236");
     VFP_REG(DelayNode,            "DelayNode",            "\u5EF6\u65F6", "Delay",
+            NodeBase::LOGIC, "\u903B\u8F91\u4E0E\u63A7\u5236");
+    // FR15.10 运行期子流程：调用点算子（引用方案内命名子图，执行器内联调度）
+    VFP_REG(SubFlowNode,          "SubFlowNode",          "\u5B50\u6D41\u7A0B", "SubFlow",
             NodeBase::LOGIC, "\u903B\u8F91\u4E0E\u63A7\u5236");
     VFP_REG(CounterNode,          "CounterNode",          "\u6761\u4EF6\u8BA1\u6570", "Counter",
             NodeBase::LOGIC, "\u903B\u8F91\u4E0E\u63A7\u5236");

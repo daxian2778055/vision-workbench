@@ -11,6 +11,7 @@
 #include <QPointer>
 #include <utility>
 #include "NodeBase.h"
+#include "SubFlowDefs.h"   // FR15.10 运行期子流程定义（值类型，随方案与撤销快照持久化）
 
 class QPainter;
 class QKeyEvent;
@@ -201,6 +202,18 @@ public:
     /// （尺寸随文件存过，不该再按成员位置去猜），并跟随编辑锁定状态与折叠状态。
     void registerLoadedGroup(NodeGroupItem *group, qreal width, qreal height);
 
+    // ---- 运行期子流程（FR15.10，方案 B：方案内命名子图）----
+    /// 用当前选中的算子定义一个命名子流程。失败（<2 个算子 / 重名 / 成员已属于其它子流程 /
+    /// 成员与成员外有连线 / 入口或出口不唯一）返回 false 并把原因写入 *error（非空时）。
+    /// 成员用模块号标识（与分组同约定）；定义随方案保存（extras 的 subFlows）与撤销快照走。
+    bool defineSubFlowFromSelection(const QString &name, QString *error = nullptr);
+    /// 删除命名子流程定义（画布算子原样保留；记撤销）。返回 false = 名字不存在。
+    bool removeSubFlow(const QString &name);
+    /// 全部子流程定义（执行线程轮首读取；内部走图锁短临界区）
+    QList<SubFlowDef> subFlows() const;
+    /// 按名查定义（找不到返回 isValid()==false 的默认值）
+    SubFlowDef subFlowByName(const QString &name) const;
+
     /// 按**全部**折叠分组的当前状态，统一重算"算子/连线图元是否可见"。
     /// 做成单一来源的原因：折叠会隐藏成员与其相关连线，而连线两端可能分属不同分组、
     /// 算子也可能同时属于多个分组——逐个分组去 setVisible 必然算错（展开一个组却让
@@ -288,6 +301,7 @@ private:
     void deleteGroupItem(NodeGroupItem *group);
     QList<CommentGraphicsItem *> m_comments;
     QList<NodeGroupItem *> m_groups;   /// 算子分组框（FR1.9；纯视觉容器，随方案与撤销快照持久化）
+    QList<SubFlowDef> m_subFlows;      /// 运行期子流程定义（FR15.10；成员=模块号，随方案与撤销快照持久化）
     QMap<QString, FlowVariable> m_flowVariables;
     QMap<QString, FlowFixture> m_fixtures;
     QString m_flowName;          /// 流程名称（方案持久化 + 触发按名路由，S2）

@@ -222,6 +222,7 @@ set(SOURCES
     # 逻辑与数据：Phase5
     src/FormulaNode.cpp
     src/DelayNode.cpp
+    src/SubFlowNode.cpp
     src/CounterNode.cpp
     src/FilterNode.cpp
     src/ClassifyNode.cpp
@@ -407,6 +408,8 @@ set(HEADERS
     # 逻辑与数据：Phase5
     include/FormulaNode.h
     include/DelayNode.h
+    include/SubFlowNode.h
+    include/SubFlowDefs.h
     include/CounterNode.h
     include/FilterNode.h
     include/ClassifyNode.h
@@ -922,6 +925,14 @@ if(MSVC)
     vfp_configure_gui_test(FlowSnippetTest)
 endif()
 
+# 运行期子流程（FR15.10）：定义校验 / extras 往返 / 内联执行次数 / 双调用点隔离 / 递归与未定义拒绝
+if(MSVC)
+    add_executable(subflow_test tests/subflow_test.cpp)
+    target_link_libraries(subflow_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    add_test(NAME SubFlowTest COMMAND subflow_test)
+    vfp_configure_gui_test(SubFlowTest)
+endif()
+
 # 良率目标监控（P1-11）：闭锁只报一次 / 恢复重置 / 滚动窗口 / 最小样本 / 配置变更重置
 if(MSVC)
     add_executable(yield_monitor_test tests/yield_monitor_test.cpp)
@@ -1001,7 +1012,7 @@ if(MSVC)
     set(VFP_TESTS NodeCoreTest OpencvSerializationTest IntegrationTest DatabaseTest PerfTest
                   ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest CameraIoTest
                   DnnSegmentTest OpencvDefectAlignTest SoakTest StatisticsReportTest SchemePackageTest
-                  I18nTest)
+                  I18nTest SubFlowTest)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
         # path_list_prepend 由 CMake 负责插入并处理平台路径分隔符，避免在
         # ENVIRONMENT 值里嵌套分号导致列表被错误拆分
