@@ -11,6 +11,8 @@ public:
     explicit ConditionalNode(QObject *parent = nullptr);
 
     void init() override;
+    /// 判定不消费图像（继承来的"输入图像"端口只为兼容旧项目），空输入不得判失败
+    bool requiresInputImage() const override { return false; }
     void run(bool autoSwitch = true) override;
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;

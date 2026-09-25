@@ -31,6 +31,10 @@ public:
     virtual QVariant getParam(const QString &name) const override;
     virtual QList<QString> getAllParamNames() const override { return m_params.keys(); }
     bool hasParam(const QString &name) const;
+    /// 图像对本节点是否为必需输入：本轮没有可用输入图像时，process() 据此判失败而非静默成功。
+    /// 默认按"是否声明了 Image 类型输入端口"判定；图像只是可选旁路（条件判断、脚本执行等）
+    /// 的节点覆写返回 false。
+    virtual bool requiresInputImage() const;
     virtual void drawResult() override;
     virtual QJsonObject toJson() const override;
     virtual void fromJson(const QJsonObject &json) override;

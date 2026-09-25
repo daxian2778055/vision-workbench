@@ -59,6 +59,16 @@ void HalconNode::init()
     setParamDirect(QStringLiteral("moduleStatus"), false); // 模块状态（bool量）
 }
 
+bool HalconNode::requiresInputImage() const
+{
+    // 判据取端口类型而非注册分类：分类由拖放/注册路径决定，端口类型才是节点自身的声明。
+    for (Port *p : m_inputPorts) {
+        if (p && p->dataType() == PortDataType::Image)
+            return true;
+    }
+    return false;
+}
+
 void HalconNode::run(bool autoSwitch)
 {
     // Default implementation - just pass through the image
@@ -385,6 +395,20 @@ bool HalconNode::process()
             }
         }
 
+        // 声明"必须有输入图像"的节点，本轮没有可用图像 ⇒ 必须显式失败（P0-1 的另一半）。
+        // 否则"成功默认值"会让 run() 里 `if (!initialized) return;` 的节点在空输入下显示绿灯。
+        if (requiresInputImage() && !m_inputImage.IsInitialized()) {
+            m_params[QStringLiteral("moduleStatus")] = false;
+            for (int p = 0; p < outputPorts().size(); ++p)
+                setOutputData(p, QSharedPointer<DataObject>());
+            return false;
+        }
+
+        // 成功默认值（P0-1）：本族多数 run() 只在 catch 分支写 moduleStatus=false、成功路径
+        // 从不写位，而 init() 把它初值化为 false ⇒ 这些算子被拖进流程即恒判失败。契约改为
+        // "本轮 run() 未显式声明失败即视为成功"：每轮先预置 true，失败必须由 run() 显式写 false。
+        m_params[QStringLiteral("moduleStatus")] = true;
+
         run();
 
         // 失败状态传播：子类 run() 在 catch 中设置 moduleStatus=false 时，
@@ -407,7 +431,6 @@ bool HalconNode::process()
             setOutputData(0, QSharedPointer<DataObject>());
         }
 
-        m_params["moduleStatus"] = true;
         return true;
     } catch (...) {
         m_params["moduleStatus"] = false;

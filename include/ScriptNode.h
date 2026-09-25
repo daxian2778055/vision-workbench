@@ -13,6 +13,8 @@ public:
     explicit ScriptNode(QObject *parent = nullptr);
 
     void init() override;
+    /// 图像对脚本是可选输入（纯计算脚本无图也应执行），空输入不得判失败
+    bool requiresInputImage() const override { return false; }
     void run(bool autoSwitch) override;
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;
