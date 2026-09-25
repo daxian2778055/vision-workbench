@@ -776,33 +776,49 @@ if(MSVC)
     target_compile_options(tracker_test PRIVATE /utf-8)
 endif()
 
+# QtTest 用例统一经 tools/run_qtest.cmake 转发结果（W-A）：链接 vfp_core 的测试 exe 会把自己的
+# stdout 整个丢掉，直接 add_test(COMMAND exe) 时 ctest 收不到任何 PASS/FAIL 明细，门禁变红却
+# 无从定位。包装后用 cmake.exe 的 stdout 这条正常通道把结果文件内容打给 ctest。
+function(vfp_add_qtest)
+    cmake_parse_arguments(QTEST "" "NAME;TARGET" "ARGS" ${ARGN})
+    if(NOT QTEST_NAME OR NOT QTEST_TARGET)
+        message(FATAL_ERROR "vfp_add_qtest 需要 NAME 与 TARGET")
+    endif()
+    add_test(NAME ${QTEST_NAME}
+        COMMAND ${CMAKE_COMMAND}
+                "-DVFP_EXE=$<TARGET_FILE:${QTEST_TARGET}>"
+                "-DVFP_LOG=${CMAKE_CURRENT_BINARY_DIR}/Testing/${QTEST_NAME}.txt"
+                "-DVFP_ARGS=${QTEST_ARGS}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/run_qtest.cmake")
+endfunction()
+
 # 节点核心功能单元测试（参数管理、序列化、端口、公式求值）
 # 链接 vfp_core 即可获得全部算子实现、AUTOMOC 生成物与依赖库
 if(MSVC)
     add_executable(node_core_test tests/node_core_test.cpp)
     target_link_libraries(node_core_test PRIVATE vfp_core Qt6::Test)
-    add_test(NAME NodeCoreTest COMMAND node_core_test)
+    vfp_add_qtest(NAME NodeCoreTest TARGET node_core_test)
 endif()
 
 # OpenCV 节点序列化测试（toJson/fromJson 完整性验证）
 if(MSVC)
     add_executable(opencv_serialization_test tests/opencv_serialization_test.cpp)
     target_link_libraries(opencv_serialization_test PRIVATE vfp_core Qt6::Test)
-    add_test(NAME OpencvSerializationTest COMMAND opencv_serialization_test)
+    vfp_add_qtest(NAME OpencvSerializationTest TARGET opencv_serialization_test)
 endif()
 
 # OpenCV 角度/面积测量功能测试（🥇：角度几何计算 + Blob 面积端口）
 if(MSVC)
     add_executable(opencv_angle_area_test tests/opencv_angle_area_test.cpp)
     target_link_libraries(opencv_angle_area_test PRIVATE vfp_core Qt6::Test)
-    add_test(NAME OpencvAngleAreaTest COMMAND opencv_angle_area_test)
+    vfp_add_qtest(NAME OpencvAngleAreaTest TARGET opencv_angle_area_test)
 endif()
 
 # ONNX 目标检测功能测试（🥈：YOLO 输出解析/NMS/坐标映射 + 序列化 + 缺模型降级）
 if(MSVC)
     add_executable(dnn_detect_test tests/dnn_detect_test.cpp)
     target_link_libraries(dnn_detect_test PRIVATE vfp_core Qt6::Test)
-    add_test(NAME DnnDetectTest COMMAND dnn_detect_test)
+    vfp_add_qtest(NAME DnnDetectTest TARGET dnn_detect_test)
 endif()
 
 # ONNX 分割功能测试（🥇 G-P0-2：语义/实例输出解析 + 掩膜几何 + 连通域 + 降级 + 端到端）
@@ -814,35 +830,35 @@ if(MSVC)
     file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}" VFP_TEST_SRC_DIR)
     target_compile_definitions(dnn_segment_test PRIVATE
         VFP_TEST_SOURCE_DIR="${VFP_TEST_SRC_DIR}")
-    add_test(NAME DnnSegmentTest COMMAND dnn_segment_test)
+    vfp_add_qtest(NAME DnnSegmentTest TARGET dnn_segment_test)
 endif()
 
 # OpenCV 缺陷检测（标准件/黄金模板比对）功能测试（P1-1：基础差影 + 对齐归一化 + 边缘抑制）
 if(MSVC)
     add_executable(opencv_defect_align_test tests/opencv_defect_align_test.cpp)
     target_link_libraries(opencv_defect_align_test PRIVATE vfp_core Qt6::Test)
-    add_test(NAME OpencvDefectAlignTest COMMAND opencv_defect_align_test)
+    vfp_add_qtest(NAME OpencvDefectAlignTest TARGET opencv_defect_align_test)
 endif()
 
 # 异常检测（G-P1-2 后端 A：OK 样本逐像素统计基线）功能测试
 if(MSVC)
     add_executable(anomaly_detect_test tests/anomaly_detect_test.cpp)
     target_link_libraries(anomaly_detect_test PRIVATE vfp_core Qt6::Test)
-    add_test(NAME AnomalyDetectTest COMMAND anomaly_detect_test)
+    vfp_add_qtest(NAME AnomalyDetectTest TARGET anomaly_detect_test)
 endif()
 
 # 全节点 execute() 冒烟门禁（P0-1 回归锁）：遍历注册表，默认参数 + 合成图必须成功
 if(MSVC)
     add_executable(node_execute_smoke_test tests/node_execute_smoke_test.cpp)
     target_link_libraries(node_execute_smoke_test PRIVATE vfp_core Qt6::Test)
-    add_test(NAME NodeExecuteSmokeTest COMMAND node_execute_smoke_test)
+    vfp_add_qtest(NAME NodeExecuteSmokeTest TARGET node_execute_smoke_test)
 endif()
 
 # 统计报表（P1-11）纯计算与导出测试
 if(MSVC)
     add_executable(statistics_report_test tests/statistics_report_test.cpp)
     target_link_libraries(statistics_report_test PRIVATE vfp_core Qt6::Test)
-    add_test(NAME StatisticsReportTest COMMAND statistics_report_test)
+    vfp_add_qtest(NAME StatisticsReportTest TARGET statistics_report_test)
 endif()
 
 # 长稳（soak）测试：连续模式长时间跑真实链路，看轮次/失败/句柄/内存的增长趋势（NFR2.4）
@@ -850,7 +866,7 @@ endif()
 if(MSVC)
     add_executable(soak_test tests/soak_test.cpp)
     target_link_libraries(soak_test PRIVATE vfp_core Qt6::Test)
-    add_test(NAME SoakTest COMMAND soak_test)
+    vfp_add_qtest(NAME SoakTest TARGET soak_test)
     set_tests_properties(SoakTest PROPERTIES ENVIRONMENT "VFP_SOAK_SECONDS=20")
 endif()
 
@@ -858,14 +874,14 @@ endif()
 if(MSVC)
     add_executable(camera_io_test tests/camera_io_test.cpp)
     target_link_libraries(camera_io_test PRIVATE vfp_core Qt6::Test)
-    add_test(NAME CameraIoTest COMMAND camera_io_test)
+    vfp_add_qtest(NAME CameraIoTest TARGET camera_io_test)
 endif()
 
 # 集成测试 - 测试多算子组合的流程执行
 if(MSVC)
     add_executable(integration_test tests/integration_test.cpp)
     target_link_libraries(integration_test PRIVATE vfp_core Qt6::Test)
-    add_test(NAME IntegrationTest COMMAND integration_test)
+    vfp_add_qtest(NAME IntegrationTest TARGET integration_test)
 endif()
 
 # GUI 用例公共环境：注入 Qt 平台插件与运行时 DLL 目录，不依赖调用方 shell 的 PATH；
@@ -890,7 +906,7 @@ endfunction()
 if(MSVC)
     add_executable(module_editor_test tests/module_editor_test.cpp)
     target_link_libraries(module_editor_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
-    add_test(NAME ModuleEditorTest COMMAND module_editor_test)
+    vfp_add_qtest(NAME ModuleEditorTest TARGET module_editor_test)
     vfp_configure_gui_test(ModuleEditorTest)
 endif()
 
@@ -898,7 +914,7 @@ endif()
 if(MSVC)
     add_executable(result_table_test tests/result_table_test.cpp)
     target_link_libraries(result_table_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
-    add_test(NAME ResultTableTest COMMAND result_table_test)
+    vfp_add_qtest(NAME ResultTableTest TARGET result_table_test)
     vfp_configure_gui_test(ResultTableTest)
 endif()
 
@@ -906,7 +922,7 @@ endif()
 if(MSVC)
     add_executable(variable_panel_test tests/variable_panel_test.cpp)
     target_link_libraries(variable_panel_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
-    add_test(NAME VariablePanelTest COMMAND variable_panel_test)
+    vfp_add_qtest(NAME VariablePanelTest TARGET variable_panel_test)
     vfp_configure_gui_test(VariablePanelTest)
 endif()
 
@@ -915,7 +931,7 @@ endif()
 if(MSVC)
     add_executable(panel_visibility_test tests/panel_visibility_test.cpp)
     target_link_libraries(panel_visibility_test PRIVATE vfp_core Qt6::Test)
-    add_test(NAME PanelVisibilityTest COMMAND panel_visibility_test)
+    vfp_add_qtest(NAME PanelVisibilityTest TARGET panel_visibility_test)
     vfp_configure_gui_test(PanelVisibilityTest)
 endif()
 
@@ -923,7 +939,7 @@ endif()
 if(MSVC)
     add_executable(recovery_store_test tests/recovery_store_test.cpp)
     target_link_libraries(recovery_store_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
-    add_test(NAME RecoveryStoreTest COMMAND recovery_store_test)
+    vfp_add_qtest(NAME RecoveryStoreTest TARGET recovery_store_test)
     vfp_configure_gui_test(RecoveryStoreTest)
 endif()
 
@@ -931,7 +947,7 @@ endif()
 if(MSVC)
     add_executable(node_group_test tests/node_group_test.cpp)
     target_link_libraries(node_group_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
-    add_test(NAME NodeGroupTest COMMAND node_group_test)
+    vfp_add_qtest(NAME NodeGroupTest TARGET node_group_test)
     vfp_configure_gui_test(NodeGroupTest)
 endif()
 
@@ -939,7 +955,7 @@ endif()
 if(MSVC)
     add_executable(flow_snippet_test tests/flow_snippet_test.cpp)
     target_link_libraries(flow_snippet_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
-    add_test(NAME FlowSnippetTest COMMAND flow_snippet_test)
+    vfp_add_qtest(NAME FlowSnippetTest TARGET flow_snippet_test)
     vfp_configure_gui_test(FlowSnippetTest)
 endif()
 
@@ -947,7 +963,7 @@ endif()
 if(MSVC)
     add_executable(subflow_test tests/subflow_test.cpp)
     target_link_libraries(subflow_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
-    add_test(NAME SubFlowTest COMMAND subflow_test)
+    vfp_add_qtest(NAME SubFlowTest TARGET subflow_test)
     vfp_configure_gui_test(SubFlowTest)
 endif()
 
@@ -955,7 +971,7 @@ endif()
 if(MSVC)
     add_executable(yield_monitor_test tests/yield_monitor_test.cpp)
     target_link_libraries(yield_monitor_test PRIVATE vfp_core Qt6::Test)
-    add_test(NAME YieldMonitorTest COMMAND yield_monitor_test)
+    vfp_add_qtest(NAME YieldMonitorTest TARGET yield_monitor_test)
     vfp_configure_gui_test(YieldMonitorTest)
 endif()
 
@@ -963,7 +979,7 @@ endif()
 if(MSVC)
     add_executable(report_auto_export_test tests/report_auto_export_test.cpp)
     target_link_libraries(report_auto_export_test PRIVATE vfp_core Qt6::Test)
-    add_test(NAME ReportAutoExportTest COMMAND report_auto_export_test)
+    vfp_add_qtest(NAME ReportAutoExportTest TARGET report_auto_export_test)
     vfp_configure_gui_test(ReportAutoExportTest)
 endif()
 
@@ -971,7 +987,7 @@ endif()
 if(MSVC)
     add_executable(scheme_package_test tests/scheme_package_test.cpp)
     target_link_libraries(scheme_package_test PRIVATE vfp_core Qt6::Test)
-    add_test(NAME SchemePackageTest COMMAND scheme_package_test)
+    vfp_add_qtest(NAME SchemePackageTest TARGET scheme_package_test)
 endif()
 
 # 国际化（G-P1-5）：验证 visionflow_en.qm 加载并翻译关键源文（tr → .ts → .qm 闭环）
@@ -980,28 +996,28 @@ if(MSVC)
     target_link_libraries(i18n_test PRIVATE vfp_core Qt6::Test)
     # 确保 .qm 已生成并部署到运行目录（Qt6::Test 已带入 Qt6::Core）
     add_dependencies(i18n_test VisionFlowPlatform)
-    add_test(NAME I18nTest COMMAND i18n_test)
+    vfp_add_qtest(NAME I18nTest TARGET i18n_test)
 endif()
 
 # 数据库跨线程访问测试（QSqlDatabase 线程亲和性 / 每线程独立连接）
 if(MSVC)
     add_executable(database_test tests/database_test.cpp)
     target_link_libraries(database_test PRIVATE vfp_core Qt6::Test)
-    add_test(NAME DatabaseTest COMMAND database_test)
+    vfp_add_qtest(NAME DatabaseTest TARGET database_test)
 endif()
 
 # 场景编辑性能测试（NFR1.1：撤销快照 / 连线创建 随规模变化）
 if(MSVC)
     add_executable(perf_test tests/perf_test.cpp)
     target_link_libraries(perf_test PRIVATE vfp_core Qt6::Test)
-    add_test(NAME PerfTest COMMAND perf_test)
+    vfp_add_qtest(NAME PerfTest TARGET perf_test)
 endif()
 
 # 脚本执行安全策略单元测试（语言白名单 / 解释器隔离 / 环境清理 / 审计 / 总开关）
 if(MSVC)
     add_executable(script_security_test tests/script_security_test.cpp)
     target_link_libraries(script_security_test PRIVATE vfp_core Qt6::Test)
-    add_test(NAME ScriptSecurityPolicyTest COMMAND script_security_test)
+    vfp_add_qtest(NAME ScriptSecurityPolicyTest TARGET script_security_test)
 endif()
 
 # 受限令牌组合探针（诊断用，非测试用例）：把 {去特权} × {管理员SID deny-only} × {低完整性}
@@ -1016,7 +1032,7 @@ endif()
 if(MSVC)
     add_executable(comm_writeback_test tests/comm_writeback_test.cpp)
     target_link_libraries(comm_writeback_test PRIVATE vfp_core Qt6::Test)
-    add_test(NAME CommWritebackTest COMMAND comm_writeback_test)
+    vfp_add_qtest(NAME CommWritebackTest TARGET comm_writeback_test)
 endif()
 
 # ---------------------------------------------------------------
