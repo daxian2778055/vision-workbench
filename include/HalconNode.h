@@ -35,6 +35,11 @@ public:
     /// 默认按"是否声明了 Image 类型输入端口"判定；图像只是可选旁路（条件判断、脚本执行等）
     /// 的节点覆写返回 false。
     virtual bool requiresInputImage() const;
+    /// 本节点"成功"是否必须产出一张图像：用于 process() 的产出守卫。run() 里只
+    /// `m_outputImage.Clear(); return;` 而不写 moduleStatus=false 的分支会被契约翻转
+    /// 判成绿灯，故凡"既要求输入图像、0 号输出端口又对外承诺图像"的节点必须真有产出。
+    /// 确实只产测量值/区域而不透传图像的节点覆写返回 false。
+    virtual bool requiresImageOutput() const;
     virtual void drawResult() override;
     virtual QJsonObject toJson() const override;
     virtual void fromJson(const QJsonObject &json) override;

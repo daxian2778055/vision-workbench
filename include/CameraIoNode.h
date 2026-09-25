@@ -15,6 +15,9 @@ public:
     ~CameraIoNode() override;
 
     void init() override;
+    /// 继承来的"输入图像"端口只是 HalconNode::init() 的副产品：IO 控制读的是"值/执行"两个
+    /// 数据端口，不消费图像 ⇒ 不能被空输入守卫/产出守卫按图像处理节点要求。
+    bool requiresInputImage() const override { return false; }
     void run(bool autoSwitch = true) override;
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;

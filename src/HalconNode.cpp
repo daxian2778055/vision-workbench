@@ -69,6 +69,17 @@ bool HalconNode::requiresInputImage() const
     return false;
 }
 
+bool HalconNode::requiresImageOutput() const
+{
+    // 与 requiresInputImage() 对称：只有"吃图并且对外承诺吐图"的节点才必须有产出。
+    if (!requiresInputImage())
+        return false;
+    if (m_outputPorts.isEmpty())
+        return false;
+    Port *p0 = m_outputPorts.first();
+    return p0 && p0->dataType() == PortDataType::Image;
+}
+
 void HalconNode::run(bool autoSwitch)
 {
     // Default implementation - just pass through the image
@@ -423,6 +434,19 @@ bool HalconNode::process()
         }
 
         HalconCpp::HImage output(m_outputImage);
+
+        // 成功必须有产出（S-1）：本族大量 run() 的失败/异常分支只做 `m_outputImage.Clear();
+        // return;`，从不写 moduleStatus=false，而 catch(const std::exception&) 同样不清位
+        // ⇒ 契约翻转后这些路径一律判成功，末端节点拿到空图而整条流程显示绿灯，中间节点则把
+        // 红灯甩给下一个图像消费者（报"缺输入图像"，与真实原因不符）。凡承诺吐图的节点，
+        // 没有产出就是失败，不能靠逐个节点补写位。
+        if (requiresImageOutput() && !output.IsInitialized()) {
+            m_params[QStringLiteral("moduleStatus")] = false;
+            for (int p = 0; p < outputPorts().size(); ++p)
+                setOutputData(p, QSharedPointer<DataObject>());
+            return false;
+        }
+
         if (output.IsInitialized()) {
             auto outObj = QSharedPointer<DataObject>::create();
             outObj->setHImage(output);

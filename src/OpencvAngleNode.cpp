@@ -54,6 +54,9 @@ void OpencvAngleNode::run(bool /*autoSwitch*/)
         deg = std::acos(cosA) * 180.0 / kPi;        // 两条（无向）线段夹角 ∈ [0,180)
         m_params[QStringLiteral("angle")] = deg;
         m_params[QStringLiteral("moduleStatus")] = true;
+        // 本节点经 HalconNode::init() 对外承诺了 0 号"输出图像"端口，成功就必须吐图，
+        // 否则下游"显示/写文件"会报"缺输入图像"而掩盖真因（测量值在端口1/2）。透传原图。
+        m_outputImage = m_inputImage;
     } else {
         m_params[QStringLiteral("angle")] = 0.0;
         m_params[QStringLiteral("moduleStatus")] = false;
