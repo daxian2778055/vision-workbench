@@ -776,14 +776,18 @@ if(MSVC)
     target_compile_options(tracker_test PRIVATE /utf-8)
 endif()
 
-# QtTest 用例统一经 tools/run_qtest.cmake 转发结果（W-A）：链接 vfp_core 的测试 exe 会把自己的
-# stdout 整个丢掉，直接 add_test(COMMAND exe) 时 ctest 收不到任何 PASS/FAIL 明细，门禁变红却
-# 无从定位。包装后用 cmake.exe 的 stdout 这条正常通道把结果文件内容打给 ctest。
+# QtTest 用例统一经 tools/run_qtest.cmake 转发结果（W-A）：QtTest 的 plain-text 日志通道在
+# stdout 被重定向时（ctest 的管道即是）一条都不写，故直接 add_test(COMMAND exe) 收不到任何
+# PASS/FAIL 明细，门禁变红却无从定位。包装用 cmake.exe 的 stdout 把结果文件内容打给 ctest，
+# 并加"无 Totals / 有 failed / 0 passed 即判红"三道闸。根因与实测对照见该文件头。
 function(vfp_add_qtest)
     cmake_parse_arguments(QTEST "" "NAME;TARGET" "ARGS" ${ARGN})
     if(NOT QTEST_NAME OR NOT QTEST_TARGET)
         message(FATAL_ERROR "vfp_add_qtest 需要 NAME 与 TARGET")
     endif()
+    # ARGS 作为分号列表整体传给 -DVFP_ARGS，由 run_qtest.cmake 按列表展开。实测两种写法
+    # （单个 -DVFP_ARGS=a;b;c 与逐条 -DVFP_ARGn）都能完整到达子进程，含空格的单个 argv
+    # 也保得住；真正会出错的是脚本里按空格 separate_arguments，那会把 "a b" 拆成两个。
     add_test(NAME ${QTEST_NAME}
         COMMAND ${CMAKE_COMMAND}
                 "-DVFP_EXE=$<TARGET_FILE:${QTEST_TARGET}>"
