@@ -80,6 +80,8 @@ void HandEyeCalibNode::init()
         makeStringParam(QStringLiteral("saveName"), QStringLiteral("handeye1"),
                         QStringLiteral("保存名称（供坐标系换算复用）")),
     });
+    // 结果字段（不进参数面板）：判红时输出端口会被 process() 清空，原因只能留在这里
+    m_params[QStringLiteral("calibNote")] = QString();
 }
 
 void HandEyeCalibNode::run(bool)
@@ -95,6 +97,8 @@ void HandEyeCalibNode::run(bool)
             strObj->setType(DataObject::DataType::String);
             strObj->setData(QStringLiteral("标定点对数不足（至少 2 对）"));
             setOutputData(2, strObj);
+            m_params[QStringLiteral("calibNote")] = QStringLiteral("标定点对数不足（至少 2 对）");
+            m_params["moduleStatus"] = false;
             m_outputImage = m_inputImage;
             return;
         }
@@ -121,6 +125,8 @@ void HandEyeCalibNode::run(bool)
         strObj->setData(desc);
         setOutputData(2, strObj);
 
+        m_params[QStringLiteral("calibNote")] = QString();
+        m_params["moduleStatus"] = true;
         m_outputImage = m_inputImage;
     } catch (const std::exception &e) {
         m_outputImage.Clear();
@@ -129,5 +135,8 @@ void HandEyeCalibNode::run(bool)
         strObj->setType(DataObject::DataType::String);
         strObj->setData(QStringLiteral("标定失败: %1").arg(QString::fromUtf8(e.what())));
         setOutputData(2, strObj);
+        m_params[QStringLiteral("calibNote")] = QStringLiteral("标定失败: %1")
+                                                     .arg(QString::fromUtf8(e.what()));
+        m_params["moduleStatus"] = false;
     }
 }

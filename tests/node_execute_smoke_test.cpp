@@ -71,6 +71,11 @@ const QHash<QString, QString> kFailsWithoutResource = {
     {QStringLiteral("DnnDetectNode"), QStringLiteral("无 ONNX 模型")},
     {QStringLiteral("DnnSegmentNode"), QStringLiteral("无 ONNX 模型")},
     {QStringLiteral("OpencvCalibNode"), QStringLiteral("无标定数据")},
+    // 2D 换算标定族：默认参数下 pointsText 为空 ⇒ 点对不足。这两条失败路径原先只往 String 端口
+    // 写一句人话就 return（不写 moduleStatus=false），冒烟会把"什么都没标定"当成功跑；
+    // 归类依据见推进计划 §3.2 结论 D，数值与改坏自证见 CalibChainTest。
+    {QStringLiteral("NPointCalibNode"), QStringLiteral("默认参数无点对 ⇒ 标定无输入（结论 D 修复后入表）")},
+    {QStringLiteral("HandEyeCalibNode"), QStringLiteral("默认参数无点对 ⇒ 标定无输入（结论 D 修复后入表）")},
     {QStringLiteral("OpencvQrNode"), QStringLiteral("合成图内无二维码 ⇒ 无结果是失败")},
     {QStringLiteral("ZxingBarcodeNode"), QStringLiteral("合成图内无条形码 ⇒ 无结果是失败")},
     {QStringLiteral("TesseractOcrNode"), QStringLiteral("语言数据目录不存在 ⇒ 引擎初始化失败（路径已在 kParamTweaks 里钉死）")},

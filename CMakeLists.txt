@@ -855,6 +855,14 @@ if(MSVC)
     vfp_add_qtest(NAME FeatureMatchTest TARGET feature_match_test)
 endif()
 
+# 标定链路（阶段 C 的 C2）：已知内参 K 投影的合成帧驱动 OpencvCalibNode（①②）+ N 点/手眼矩阵对真值
+# （④⑤）+ CalibrationManager 与坐标换算消费端（⑥）+ 失败路径判红回归锁（⑦，§3.2 结论 D）
+if(MSVC)
+    add_executable(calib_chain_test tests/calib_chain_test.cpp)
+    target_link_libraries(calib_chain_test PRIVATE vfp_core Qt6::Test)
+    vfp_add_qtest(NAME CalibChainTest TARGET calib_chain_test)
+endif()
+
 # 异常检测（G-P1-2 后端 A：OK 样本逐像素统计基线）功能测试
 if(MSVC)
     add_executable(anomaly_detect_test tests/anomaly_detect_test.cpp)
@@ -1069,7 +1077,7 @@ if(MSVC)
                   ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest CameraIoTest
                   DnnSegmentTest OpencvDefectAlignTest SoakTest StatisticsReportTest SchemePackageTest
                   I18nTest SubFlowTest AnomalyDetectTest NodeExecuteSmokeTest
-                  FactoryPasswordGuardTest FeatureMatchTest)
+                  FactoryPasswordGuardTest FeatureMatchTest CalibChainTest)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
         # path_list_prepend 由 CMake 负责插入并处理平台路径分隔符，避免在
         # ENVIRONMENT 值里嵌套分号导致列表被错误拆分

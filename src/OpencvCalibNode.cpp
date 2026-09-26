@@ -196,7 +196,7 @@ bool OpencvCalibNode::performCalibration(QString *detail)
     setOutputData(2, matObj);
 
     if (detail)
-        *detail = QStringLiteral("重投影误差 %.3f px，fx=%.2f fy=%.2f cx=%.1f cy=%.1f")
+        *detail = QStringLiteral("重投影误差 %1 px，fx=%2 fy=%3 cx=%4 cy=%5")
                       .arg(rms, 0, 'f', 3)
                       .arg(fx, 0, 'f', 2)
                       .arg(fy, 0, 'f', 2)
