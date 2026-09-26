@@ -17,12 +17,18 @@ mistake cannot come back unnoticed:
   5. self-hosted + PR guard  - the self-hosted runner executes the workspace, so a
                               pull_request trigger without a same-repo guard would let fork
                               PRs run arbitrary code on the build machine.
-  6. tools/ci.ps1 stays ASCII- Windows PowerShell 5.1 reads BOM-less .ps1 as ANSI, which
-                              garbles non-ASCII text and can corrupt script logic.
+  6. .ps1 encoding boundary  - Windows PowerShell 5.1 reads a BOM-less .ps1 as ANSI (local
+                              code page). So: non-ASCII content REQUIRES a UTF-8 BOM, and a
+                              pure-ASCII script must NOT carry one (repository convention,
+                              same as .cpp/.h). The two forbidden combinations are
+                              "non-ASCII without BOM" (would be misread) and
+                              "BOM on an all-ASCII file" (redundant, and it is what the old
+                              rule reported as tools/ci.ps1:1 '\ufeff').
   7. .gitignore invariants   - build/, thirdparty/, dist/ and ci-*.log must stay ignored.
 
 Messages are ASCII-only so they render correctly in any console.
 """
+import codecs
 import glob
 import os
 import re
@@ -128,17 +134,35 @@ def check_workflows():
                     % path)
 
 
-def check_ascii_scripts():
-    for path in ("tools/ci.ps1",):
-        text = read_text(path)
-        if not text:
+def check_ps1_encoding(files):
+    """PowerShell encoding boundary (see module docstring rule 6)."""
+    for path in sorted(p for p in files if p.endswith(".ps1")):
+        try:
+            with open(path, "rb") as handle:
+                raw = handle.read()
+        except OSError:
             continue
-        for number, line in enumerate(text.splitlines(), 1):
-            bad = [ch for ch in line if ord(ch) > 127]
-            if bad:
+        has_bom = raw.startswith(codecs.BOM_UTF8)
+        body = raw[len(codecs.BOM_UTF8):] if has_bom else raw
+        non_ascii = sum(1 for byte in body if byte > 127)
+
+        if non_ascii and not has_bom:
+            FAILURES.append(
+                "ps1-encoding: %s has %d non-ASCII byte(s) but no UTF-8 BOM; PowerShell 5.1 "
+                "reads BOM-less .ps1 as ANSI and would misread them" % (path, non_ascii))
+            continue
+        if non_ascii:
+            try:
+                body.decode("utf-8")
+            except UnicodeDecodeError as exc:
                 FAILURES.append(
-                    "ascii: %s:%d contains non-ASCII %r (Windows PowerShell 5.1 would misread it)"
-                    % (path, number, "".join(bad[:5])))
+                    "ps1-encoding: %s carries a BOM but its body is not valid UTF-8 (%s)"
+                    % (path, exc))
+            continue
+        if has_bom:
+            FAILURES.append(
+                "ps1-encoding: %s carries a UTF-8 BOM while its content is pure ASCII; "
+                "drop the BOM (ASCII needs no BOM in any PowerShell version)" % path)
 
 
 def check_gitignore():
@@ -157,7 +181,7 @@ def main():
     check_secrets(files)
     check_large_files(files)
     check_workflows()
-    check_ascii_scripts()
+    check_ps1_encoding(files)
     check_gitignore()
 
     print("checked %d tracked files, %d workflow(s)" % (len(files), len(workflow_files())))

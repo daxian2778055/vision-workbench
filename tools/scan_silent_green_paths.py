@@ -18,6 +18,13 @@ Definitions (scope: src/*.cpp):
   N   union              files matching P1 or P2.
   NOSTATUS               union files that never assign `moduleStatus = false` anywhere,
                          i.e. every failure path in them is invisible to the contract.
+  SELFOWNED              NOSTATUS files that define their own `bool X::process(`, i.e. they
+                         really do bypass HalconNode::process() (which writes moduleStatus
+                         centrally, see src/HalconNode.cpp). The complement only overrides
+                         run(), so the base contract already covers them.
+                         This split is what closed the 2026-09-26 A5 item: "write
+                         moduleStatus=false into every NOSTATUS file" is a no-op unless the
+                         file owns its process(), so the claim has an executable source too.
 
 P1 and P2 are different sets that happen to have the same size -- the overlap is printed
 so nobody reads "44 files" twice as "88 places in 44 files".
@@ -36,6 +43,7 @@ CLEAR_RETURN = re.compile(
 )
 CLEARED_INSIDE = re.compile(r"m_outputImage[^;]*\.\s*Clear\s*\(")
 WRITES_FALSE = re.compile(r"moduleStatus[^=\n]*=\s*false")
+OWNS_PROCESS = re.compile(r"^bool\s+\w+::process\s*\(", re.MULTILINE)
 CATCH_HEAD = re.compile(r"catch\s*\([^{]*\)\s*\{")
 
 
@@ -82,6 +90,9 @@ def main():
     no_status = [p for p in union
                  if not WRITES_FALSE.search(io.open(p, encoding="utf-8",
                                                     errors="replace").read())]
+    self_owned = [p for p in no_status
+                  if OWNS_PROCESS.search(io.open(p, encoding="utf-8",
+                                                 errors="replace").read())]
 
     def line(label, value, extra=""):
         print("%-34s %4d %s" % (label, value, extra))
@@ -91,11 +102,17 @@ def main():
     line("P1 and P2 overlap", len(overlap))
     line("union files (P1 or P2)", len(union))
     line("union w/o moduleStatus=false", len(no_status))
+    line("  of those: own ::process()", len(self_owned))
 
     if show_files:
         print("\n-- union without any explicit failure write --")
         for path in no_status:
             print("  %s" % os.path.relpath(path, root).replace("\\", "/"))
+        print("\n-- of those, files that own their process() (base contract does NOT cover them) --")
+        for path in self_owned:
+            print("  %s" % os.path.relpath(path, root).replace("\\", "/"))
+        print("-- the other %d override only run(): HalconNode::process() writes the bit for them --"
+              % (len(no_status) - len(self_owned)))
 
 
 if __name__ == "__main__":

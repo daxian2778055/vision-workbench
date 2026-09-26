@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 # VisionFlowPlatform soak (long-run stability) script - Windows / PowerShell
 # ------------------------------------------------------------
 # What it does: runs the soak test for N hours and watches

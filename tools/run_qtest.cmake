@@ -32,6 +32,9 @@
 #   - 三道闸：结果里没有 `Totals:` 行 ⇒ 失败；Totals 里 `N failed` > 0 ⇒ 失败；
 #     `0 passed` ⇒ 失败。后两道防的是"进程崩溃/整套件被 skip 也显示成一条安静的 PASS"
 #     （正是本轮刚犯过的同类错误）。
+#   - 判红之前把结果文件另存成 `<套件>.failed-<UTC时间戳>.txt`（见下方 vfp_preserve_failure）：
+#     ${VFP_LOG} 每次运行开头就被 file(REMOVE) 覆盖，偶发失败"红一次、重跑就绿"时证据当场消失，
+#     观察项（A6 的 IntegrationTest）因此永远无法结案。另存文件只增不删，留在 build/Testing/ 里。
 #
 # 调用方式见 CMakeLists.txt 的 vfp_add_qtest()。
 if(NOT DEFINED VFP_EXE OR VFP_EXE STREQUAL "")
@@ -69,19 +72,37 @@ else()
     set(vfpContent "")
 endif()
 
+# 判红之前先把结果文件另存一份：${VFP_LOG} 每次运行开头就被 file(REMOVE) 覆盖，
+# 而"偶发失败"往往正是红一次、重跑就绿——不另存则证据当场消失，观察项永远无法结案
+# （A6 的 IntegrationTest 就是这一形态）。时间戳命名，多次判红互不覆盖。
+function(vfp_preserve_failure reason)
+    if(NOT EXISTS "${VFP_LOG}")
+        return()
+    endif()
+    string(TIMESTAMP vfpStamp "%Y%m%dT%H%M%SZ" UTC)
+    get_filename_component(vfpBase "${VFP_LOG}" NAME_WE)
+    set(vfpKept "${vfpLogDir}/${vfpBase}.failed-${vfpStamp}.txt")
+    configure_file("${VFP_LOG}" "${vfpKept}" COPYONLY)
+    message("保留失败明细：${vfpKept}（${reason}）")
+endfunction()
+
 if(NOT vfpContent MATCHES "Totals:")
+    vfp_preserve_failure("无 Totals 行")
     message(FATAL_ERROR "退出码 ${vfpRc}，但结果文件里没有 \"Totals:\" 行 ⇒ 用例没跑完"
                         "（启动即崩 / 被杀 / QTest 未接管输出），不记作通过：${VFP_LOG}")
 endif()
 if(NOT vfpRc EQUAL 0)
+    vfp_preserve_failure("QtTest 退出码非 0")
     message(FATAL_ERROR "QtTest 退出码 ${vfpRc}（明细见上，或 ${VFP_LOG}）")
 endif()
 # QTest 在个别情况下崩溃后退出码仍为 0，故同时以 Totals 行的两个计数为准：
 # 有失败判红，一条用例都没通过（全 skip / 全没跑）同样判红。
 string(REGEX MATCH "Totals: [^\r\n]*" vfpTotals "${vfpContent}")
 if(vfpTotals MATCHES ", [1-9][0-9]* failed")
+    vfp_preserve_failure("${vfpTotals}")
     message(FATAL_ERROR "结果里仍有失败计数：${vfpTotals}（明细见上，或 ${VFP_LOG}）")
 endif()
 if(vfpTotals MATCHES "^Totals: 0 passed")
+    vfp_preserve_failure("0 passed")
     message(FATAL_ERROR "没有任何用例通过（多半是整套件被 skip 或用例名失配）：${vfpTotals}")
 endif()
