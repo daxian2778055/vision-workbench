@@ -1,6 +1,7 @@
 #include "UserManagementDialog.h"
 #include "AppDatabase.h"
 #include "AppLog.h"
+#include "SessionManager.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -95,7 +96,11 @@ void UserManagementDialog::onAddUser()
                          QStringLiteral("\u6DFB\u52A0\u7528\u6237: %1, \u89D2\u8272: %2").arg(username).arg(role));
         QMessageBox::information(this, QStringLiteral("\u6210\u529F"), QStringLiteral("\u7528\u6237\u6DFB\u52A0\u6210\u529F"));
     } else {
-        QMessageBox::warning(this, QStringLiteral("\u5931\u8D25"), QStringLiteral("\u7528\u6237\u540D\u5DF2\u5B58\u5728"));
+        // 闸拒绝与"用户名已存在"是两件事：一律报后者就是在给出一句假话（W-1）
+        const QString refusal = SessionManager::instance()->writeGateRefusal();
+        QMessageBox::warning(this, QStringLiteral("\u5931\u8D25"),
+                             refusal.isEmpty() ? QStringLiteral("\u7528\u6237\u540D\u5DF2\u5B58\u5728")
+                                               : refusal);
     }
 }
 
@@ -117,7 +122,14 @@ void UserManagementDialog::onRemoveUser()
                               QStringLiteral("\u786E\u5B9A\u8981\u5220\u9664\u7528\u6237 %1 \u5417\uFF1F").arg(username))
         == QMessageBox::Yes) {
         auto *db = AppDatabase::instance();
-        db->removeUser(username);
+        if (!db->removeUser(username)) {
+            // 旧写法把返回值丢掉：删没删都刷表、都记一条"删除用户"日志（W-1）
+            const QString refusal = SessionManager::instance()->writeGateRefusal();
+            QMessageBox::warning(this, QStringLiteral("\u63D0\u793A"),
+                                 refusal.isEmpty() ? QStringLiteral("\u5220\u9664\u7528\u6237\u5931\u8D25")
+                                                   : refusal);
+            return;
+        }
         refreshUserTable();
         db->logOperation(QStringLiteral("Admin"), QStringLiteral("\u5220\u9664\u7528\u6237"),
                          QStringLiteral("\u5220\u9664\u7528\u6237: %1").arg(username));

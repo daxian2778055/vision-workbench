@@ -285,16 +285,21 @@ QProcessEnvironment ScriptSecurityPolicy::buildEnvironment() const
         QStringLiteral("DYLD_LIBRARY_PATH"),
         QStringLiteral("BASH_ENV"),
         QStringLiteral("ENV"),
-        QStringLiteral("PYTHONPATH_EXTRA"),
-        QStringLiteral("LUA_INIT"),
-        QStringLiteral("LUA_INIT_5_4"),
-        QStringLiteral("LUA_PATH"),
-        QStringLiteral("LUA_PATH_5_4"),
-        QStringLiteral("LUA_CPATH"),
-        QStringLiteral("LUA_CPATH_5_4")
+        QStringLiteral("PYTHONPATH_EXTRA")
     };
     for (const QString &key : dangerous) {
         env.remove(key);
+    }
+    // Lua 侧按前缀整体剥除，不逐条枚举（S-4）：版本专有变量（LUA_INIT_5_1 … LUA_CPATH_5_4）
+    // 的优先级高于同名无版本变量，而"哪一个才真正生效"取决于现场装的是哪个解释器——本机没有
+    // lua.exe，绑定版本无法实测。逐条写死的结果就是原先那样只覆盖 5_4，剩下三个版本留成注入口。
+    // Lua 只认 LUA_INIT / LUA_PATH / LUA_CPATH 这三个名字（含任意版本后缀），LUA_* 里没有
+    // 运行必需的变量，所以整族剥除不伤功能。
+    const QStringList envKeys = env.keys();
+    for (const QString &key : envKeys) {
+        if (key.startsWith(QStringLiteral("LUA_"), Qt::CaseInsensitive)) {
+            env.remove(key);
+        }
     }
     return env;
 }

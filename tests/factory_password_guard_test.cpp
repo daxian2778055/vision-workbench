@@ -4,8 +4,12 @@
 // 修改口令的接口（用户管理只能增删），那条告警在现场根本无法执行——等于出厂口令永久有效。
 // 现在收口为：出厂口令仍在用 ⇒ 配置写入类权限一律为假 + 方案落盘被持久化层拒绝，
 // 直到 admin 的口令被真正改掉。本套件锁住两件事：
-//   1) 闸的覆盖面（Admin 也拦、运行不拦）与 fail-closed 方向；
+//   1) 闸的覆盖面（Admin 也拦、运行不拦）与 fail-closed 方向——三条写入路径都要有直接
+//      断言：saveProject、exportEncryptedProject、用户表 addUser/removeUser（W-1① 补）；
 //   2) 解锁路径确实有效：改密成功后出厂口令判定消失、方案能落盘。
+// 未覆盖（如实写明）：ProjectManager::saveProjectInteractive() 的拒绝路径先弹
+// QMessageBox（模态），无头环境跑不动 ⇒ 不断言它；改为锁住它内部调用的同一条判据
+// （writeGateRefusal_isTheSinglePredicate），弹框与顺序由代码走查保证。
 #include <QtTest/QtTest>
 #include <QTemporaryDir>
 #include <QFileInfo>
@@ -27,8 +31,12 @@ private slots:
     void retire_refusesWhenFactoryPasswordWrong();
     void retire_rejectsWeakOrMismatchedNewPassword();
     void saveProject_refusedWhileWritesBlocked();
+    void exportEncryptedProject_refusedWhileWritesBlocked();
+    void writeGateRefusal_isTheSinglePredicate();
+    void userTableWrites_refusedWhileWritesBlocked();
     void retire_unlocksWritesOnSuccess();
     void saveProject_allowedAfterRetire();
+    void userTableWrites_allowedAfterRetire();
     void changePassword_failsForUnknownUser();
 
 private:
@@ -123,6 +131,64 @@ void FactoryPasswordGuardTest::saveProject_refusedWhileWritesBlocked()
     QVERIFY2(!QFileInfo::exists(path), "拒绝后不得留下（哪怕是空的）方案文件");
 }
 
+// S-3：三条方案/账户写入路径各是独立的一处代码，只测一处等于另外两处可以被人删掉而全绿。
+void FactoryPasswordGuardTest::exportEncryptedProject_refusedWhileWritesBlocked()
+{
+    QVERIFY(FactoryPasswordGuard::refreshWritesLock());
+    SessionManager::instance()->setWritesBlocked(true);
+
+    const QString path = m_tempDir.filePath(QStringLiteral("blocked.vfps"));
+    ProjectManager pm;
+    QVERIFY2(!pm.exportEncryptedProject(path, {}, QStringLiteral("P@ssphrase-1"), false),
+             "闸开启时加密方案仍能导出：持久化层未收口");
+    QVERIFY2(!QFileInfo::exists(path), "拒绝后不得留下（哪怕是空的）导出包");
+}
+
+// W-1：所有写入路径与菜单可用态必须取同一个理由串。判据一旦各写一份，
+// "文案说禁了、代码没禁"就会重演（本用例把这条锁住）。
+void FactoryPasswordGuardTest::writeGateRefusal_isTheSinglePredicate()
+{
+    auto *s = SessionManager::instance();
+
+    s->setWritesBlocked(false);
+    QVERIFY2(s->writeGateRefusal().isEmpty(), "闸关闭时判据必须放行（返回非空即拒绝一切写入）");
+
+    s->setWritesBlocked(true);
+    const QString refusal = s->writeGateRefusal();
+    QVERIFY2(!refusal.isEmpty(), "闸开启时判据必须给出拒绝理由");
+    QVERIFY2(refusal.contains(QStringLiteral("admin/admin")),
+             "理由要点明是哪把口令没换，否则用户不知道该做什么");
+
+    s->login(QStringLiteral("root"), QStringLiteral("Admin"));
+    QVERIFY(!s->canEditScheme());
+    QVERIFY(!s->canManageUsers());
+    QVERIFY2(!s->canConfigCommunications(),
+             "W-1②：该谓词已接进 MainWindow 的通信菜单，判据不得再退化成死码");
+    s->setWritesBlocked(false);
+}
+
+// W-1①：闸此前只管方案文件；用户管理只灰菜单，而改密弹框一直宣称"用户管理已被禁止"
+void FactoryPasswordGuardTest::userTableWrites_refusedWhileWritesBlocked()
+{
+    QVERIFY(FactoryPasswordGuard::refreshWritesLock());
+    SessionManager::instance()->setWritesBlocked(true);
+
+    QVERIFY2(!AppDatabase::instance()->addUser(QStringLiteral("gate_probe_blocked"),
+                                               QStringLiteral("Xy7#mKp2q"), QStringLiteral("Admin")),
+             "闸开启时仍能建用户：拿到出厂口令就能开后门账户");
+    QVERIFY2(!AppDatabase::instance()->removeUser(QStringLiteral("admin")),
+             "闸开启时仍能删用户");
+
+    QStringList names;
+    for (const UserRecord &u : AppDatabase::instance()->queryUsers()) {
+        names << u.name;
+    }
+    QVERIFY2(!names.contains(QStringLiteral("gate_probe_blocked")), "拒绝后用户表里不得出现该账户");
+    QVERIFY2(names.contains(QStringLiteral("admin")), "拒绝删用户后 admin 必须还在表里");
+
+    SessionManager::instance()->setWritesBlocked(false);
+}
+
 void FactoryPasswordGuardTest::retire_unlocksWritesOnSuccess()
 {
     QVERIFY(FactoryPasswordGuard::refreshWritesLock());
@@ -152,6 +218,15 @@ void FactoryPasswordGuardTest::saveProject_allowedAfterRetire()
     ProjectManager pm;
     QVERIFY2(pm.saveProject(path, {}), "解锁后方案保存仍失败：上一用例的拒绝没有说服力");
     QVERIFY2(QFileInfo::exists(path), "方案文件应已生成");
+}
+
+// 反向对照：解锁后同一条用户表写路径必须能成功，证明上一条的"拒绝"不是 addUser 本身坏掉
+void FactoryPasswordGuardTest::userTableWrites_allowedAfterRetire()
+{
+    QVERIFY2(AppDatabase::instance()->addUser(QStringLiteral("gate_probe_ok"),
+                                              QStringLiteral("Xy7#mKp2q"), QStringLiteral("Operator")),
+             "解锁后仍拒绝建用户：上一条用例的拒绝没有说服力");
+    QVERIFY(AppDatabase::instance()->removeUser(QStringLiteral("gate_probe_ok")));
 }
 
 void FactoryPasswordGuardTest::changePassword_failsForUnknownUser()

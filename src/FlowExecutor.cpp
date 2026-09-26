@@ -84,6 +84,19 @@ FlowExecutor::~FlowExecutor()
         qFatal("%s", why.toUtf8().constData());
     }
     disconnectFromScene();
+    // S-1（第五轮审核）：本对象一出去，节点里存的归属指针必然是野指针——
+    // setFlowScene(nullptr) 刻意不清（见 setFlowScene 里那段注释：节点可能转由别的执行器
+    // 接管，清成空反而退回 current() 兜底），但那条理由在"执行器正在销毁"时不成立。
+    // 读侧有四处（DelayNode / ScriptNode / SubFlowNode / MvsImageSourceNode），而场景通常
+    // 比执行器活得久 ⇒ 这段窗口真实存在。与上面 s_currentInstance 的析构置空同一处理。
+    if (FlowScene *s = flowScene()) {
+        const QList<NodeBase *> liveNodes = s->nodes();
+        for (NodeBase *n : liveNodes) {
+            if (n && n->ownerExecutor() == this) {
+                n->setOwnerExecutor(nullptr);
+            }
+        }
+    }
 }
 
 FlowExecutor *FlowExecutor::current()

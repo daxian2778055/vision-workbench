@@ -85,10 +85,19 @@ void ScriptSecurityPolicyTest::buildEnvironment_stripsDangerousVars()
         QStringLiteral("LD_PRELOAD"),
         QStringLiteral("DYLD_INSERT_LIBRARIES"),
         QStringLiteral("LUA_INIT"),
+        QStringLiteral("LUA_INIT_5_1"),
+        QStringLiteral("LUA_INIT_5_2"),
+        QStringLiteral("LUA_INIT_5_3"),
         QStringLiteral("LUA_INIT_5_4"),
         QStringLiteral("LUA_PATH"),
+        QStringLiteral("LUA_PATH_5_1"),
+        QStringLiteral("LUA_PATH_5_3"),
         QStringLiteral("LUA_PATH_5_4"),
+        // 一个当前任何发行版都不会读的尾巴：用来锁"按 LUA_ 前缀整族剥"而不是按版本白名单剥
+        // （写成具体版本清单的教训见 S-4：原表只有 *_5_4，另外三个版本一直是注入口）
+        QStringLiteral("LUA_PATH_5_5"),
         QStringLiteral("LUA_CPATH"),
+        QStringLiteral("LUA_CPATH_5_2"),
         QStringLiteral("LUA_CPATH_5_4")
     };
     QStringList restored;
@@ -110,6 +119,7 @@ void ScriptSecurityPolicyTest::buildEnvironment_stripsDangerousVars()
     p.setStripEnvironment(false);
     QProcessEnvironment unstripped = p.buildEnvironment();
     QVERIFY(unstripped.contains(QStringLiteral("LUA_INIT")));
+    QVERIFY(unstripped.contains(QStringLiteral("LUA_PATH_5_3")));
     QVERIFY(unstripped.contains(QStringLiteral("PYTHONPATH")));
     p.setStripEnvironment(true);
 

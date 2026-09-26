@@ -1,5 +1,6 @@
 #include "AppDatabase.h"
 #include "AppLog.h"
+#include "SessionManager.h"
 #include <QSqlQuery>
 #include <QSqlError>
 #include <QCoreApplication>
@@ -364,6 +365,13 @@ QList<InspectionRecord> AppDatabase::queryResults(const QDateTime &from, const Q
 bool AppDatabase::addUser(const QString &name, const QString &password, const QString &role)
 {
     QMutexLocker locker(&s_dbMutex);
+    // W-1①：闸必须落在这里。此前"用户管理需 Admin"只在菜单置灰上体现，而
+    // enforceFactoryPasswordPolicy() 的文案宣称用户管理已被禁止——拿到出厂口令的人
+    // 仍能建一个 Admin 账户当后门。落库层拒绝才是 fail-closed。
+    if (const QString refusal = SessionManager::instance()->writeGateRefusal(); !refusal.isEmpty()) {
+        VFP_DEBUG << "用户新增被写操作闸拒绝:" << name << refusal;
+        return false;
+    }
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
     q.prepare(QStringLiteral("INSERT INTO users (name, password_hash, role) VALUES (?, ?, ?)"));
@@ -456,6 +464,10 @@ QList<UserRecord> AppDatabase::queryUsers() const
 bool AppDatabase::removeUser(const QString &name)
 {
     QMutexLocker locker(&s_dbMutex);
+    if (const QString refusal = SessionManager::instance()->writeGateRefusal(); !refusal.isEmpty()) {
+        VFP_DEBUG << "用户删除被写操作闸拒绝:" << name << refusal;
+        return false;
+    }
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
     q.prepare(QStringLiteral("DELETE FROM users WHERE name = ?"));

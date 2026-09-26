@@ -37,6 +37,9 @@ public:
     /// 默认 false：数据库不可用/未装配的单测环境不受影响（闸只在显式置位时生效）。
     void setWritesBlocked(bool blocked);
     bool writesBlocked() const { return m_writesBlocked; }
+    /// 写操作闸的拒绝理由；返回空串表示放行。判据与文案**只有这一处定义**：方案落盘
+    /// （ProjectManager）、用户表写入（AppDatabase）与菜单可用态都取它，避免各写一份而彼此漂移。
+    QString writeGateRefusal() const;
 
 signals:
     void sessionChanged(const QString &user, const QString &role);

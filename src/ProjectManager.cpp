@@ -42,13 +42,11 @@ const QString kTypeIdKey = QStringLiteral("typeId");
 /// 返回非空即为拒绝理由（可直接展示给用户）；返回空串表示放行。
 /// 为什么落在持久化层而不是只做菜单灰化：灰化只是"提示不能点"，快捷键、
 /// 后续新增的调用点、脚本入口都能绕开它；写在真正落盘的那一处才是 fail-closed。
+/// 判据与文案本身不在这儿定义（W-1）：用户表写入与菜单可用态要讲同一个理由，
+/// 所以唯一出处是 SessionManager::writeGateRefusal()，这里只留一层薄封装。
 QString writeGateRefusal()
 {
-    if (!SessionManager::instance()->writesBlocked()) {
-        return QString();
-    }
-    return QStringLiteral(
-        "出厂默认口令（admin/admin）仍在使用，方案写入已被禁止；请先修改管理员口令。");
+    return SessionManager::instance()->writeGateRefusal();
 }
 }
 

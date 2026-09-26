@@ -3891,6 +3891,24 @@ void MainWindow::applyPermissionRestrictions()
     if (ui->menuEdit) {
         ui->menuEdit->setEnabled(session->canEditScheme());
     }
+    // W-1②：把 canConfigCommunications() 接进来。该谓词自 A1-① 起只有定义、没有任何生产
+    // 调用点（A2/A7 点名的正是"写了不接等于没写"），而改密弹框一直写着"通信配置被禁止"。
+    // 通信配置本身只随方案文件落盘（那一条 ProjectManager 已挡），但在闸开启期间仍能改
+    // 活着的连接配置——这既没被声明过，也不是必要的，故与文案对齐：入口随闸灰掉。
+    const bool canConfigComm = session->canConfigCommunications();
+    if (ui->menuCommunication) {
+        ui->menuCommunication->setEnabled(canConfigComm);
+    }
+    for (QAction *act : { ui->actionCommDevice, ui->actionCommReceiveEvent,
+                          ui->actionCommSendEvent, ui->actionCommHeartbeat }) {
+        if (act) {
+            act->setEnabled(canConfigComm);
+        }
+    }
+    // 边界（有意为之）：actionCommMonitor 是只读监视视图，不写任何配置 ⇒ 不因闸禁用
+    if (ui->actionCommMonitor) {
+        ui->actionCommMonitor->setEnabled(session->isLoggedIn());
+    }
     // 角色变化后同步只读管控（只读态优先于角色权限禁用覆盖保存）
     applyReadonlyUI();
 }
@@ -3910,7 +3928,8 @@ void MainWindow::enforceFactoryPasswordPolicy()
         QDialog dlg(this);
         dlg.setWindowTitle(tr("修改管理员口令"));
         auto *info = new QLabel(tr("管理员账户 admin 仍在使用出厂默认口令，任何人都能免授权登录并修改方案。\n"
-                                   "在改掉口令之前，保存/导出方案、通信配置与用户管理均被禁止（流程运行不受影响）。"),
+                                   "在改掉口令之前，保存/导出方案、用户增删与通信配置入口均被禁止"
+                                   "（用户增删在落库层拒绝，不只是菜单置灰；流程运行不受影响）。"),
                                 &dlg);
         info->setWordWrap(true);
         auto *oldEdit = new QLineEdit(&dlg);

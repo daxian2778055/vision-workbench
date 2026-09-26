@@ -1,6 +1,7 @@
 #include "HalconNode.h"
 #include <QBuffer>
 #include <QByteArray>
+#include <QStringList>
 #include <QIODevice>
 #include <QWidget>
 #include <QVBoxLayout>
@@ -511,6 +512,15 @@ bool HalconNode::processDataOutputs()
         clearAllOutputs();
         return false;
     };
+    // S-2（第五轮审核）：本函数修掉的是"静默成功"，但三条失败路径在日志里长得一模一样
+    // 就等于留下"静默失败"——现场只能靠猜。每条各留一行带节点名与原因的诊断。
+    const auto portLabel = [this](int idx) -> QString {
+        const QList<Port *> ports = inputPorts();
+        if (idx < 0 || idx >= ports.size() || !ports.at(idx)) {
+            return QStringLiteral("port#%1").arg(idx);
+        }
+        return QStringLiteral("%1(port#%2)").arg(ports.at(idx)->name()).arg(idx);
+    };
 
     try {
         // 本族节点不产图：先清掉图像与上一轮输出，"本轮没有产出"必须表现为端口为空，
@@ -521,9 +531,16 @@ bool HalconNode::processDataOutputs()
         // 空载守卫：必填数据端口没有可用值 ⇒ 不得成功。
         // 少了这一条，"分类恒为'中'、筛选恒为 false、格式化恒为模板"都会以绿灯传给下游。
         const QSet<int> required = requiredInputDataPorts();
+        QStringList missingPorts;
         for (int idx : required) {
-            if (!inputDataPresent(idx))
-                return failRound();
+            if (!inputDataPresent(idx)) {
+                missingPorts << portLabel(idx);
+            }
+        }
+        if (!missingPorts.isEmpty()) {
+            missingPorts.sort();
+            VFP_DEBUG << "数据型节点失败[必填端口无值]" << name() << missingPorts.join(QStringLiteral(", "));
+            return failRound();
         }
 
         // 成功默认值（P0-1 同一条契约）：本族 run() 从不写 moduleStatus，失败只能靠
@@ -532,8 +549,10 @@ bool HalconNode::processDataOutputs()
 
         run();
 
-        if (!m_params[QStringLiteral("moduleStatus")].toBool())
+        if (!m_params[QStringLiteral("moduleStatus")].toBool()) {
+            VFP_DEBUG << "数据型节点失败[run() 显式置否]" << name();
             return failRound();
+        }
 
         // 产出守卫（S-1 的数据侧孪生）：承诺出数据的节点，本轮全部输出端口为空就是失败
         if (requiresDataOutput()) {
@@ -545,12 +564,15 @@ bool HalconNode::processDataOutputs()
                     break;
                 }
             }
-            if (!produced)
+            if (!produced) {
+                VFP_DEBUG << "数据型节点失败[承诺出数据但全部输出端口为空]" << name();
                 return failRound();
+            }
         }
 
         return true;
     } catch (...) {
+        VFP_DEBUG << "数据型节点失败[抛出异常]" << name();
         m_params[QStringLiteral("moduleStatus")] = false;
         m_outputImage.Clear();
         clearAllOutputs();

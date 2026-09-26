@@ -118,6 +118,7 @@ private slots:
     void testParamRefRestoredWhenNodeThrowsBeforeSignals();// E1：还原点之前抛异常也必须还原表达式
     void testSkippedAndFailedNodesLoseReusableMark();      // E2：清空输出必须同步撤销"可复用"标记
     void testOwnerExecutorEstablishedAtGraphBuild();       // E3：归属在建图/入队时建立，不等首轮
+    void testOwnerExecutorClearedWhenExecutorDestroyed();  // S-1：执行器析构后不得留悬垂归属
     void testRoundRateNotClampedByFixedInterval();         // E6：默认节拍下两轮间隔不再被 50ms 拉住
     void testRuntimeStatsCounters();
     void testRestrictedTokenLaunch();
@@ -1509,6 +1510,31 @@ void IntegrationTest::testOwnerExecutorEstablishedAtGraphBuild()
     execB.wait(5000);
     execB.setFlowScene(nullptr);
     execA.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+}
+
+void IntegrationTest::testOwnerExecutorClearedWhenExecutorDestroyed()
+{
+    // S-1（第五轮审核）：setFlowScene(nullptr) 刻意不清归属（节点可能转由别的执行器接管），
+    // 但 ~FlowExecutor 也不清 ⇒ "执行器已销毁、场景还活着"这段时间里 ownerExecutor() 是野指针。
+    // 读侧有四处（DelayNode / ScriptNode / SubFlowNode / MvsImageSourceNode），其中相机节点
+    // 的两条 UI 路径正是 E3 那条链的原始症状点。
+    FlowScene scene;
+    NodeBase *node = scene.createNode(NodeBase::LOGIC, QPointF(100, 200), QStringLiteral("Formula"));
+    QVERIFY(node != nullptr);
+    node->setParam(QStringLiteral("expression"), QStringLiteral("1 + 1"));
+
+    {
+        FlowExecutor exec;
+        exec.setFlowScene(&scene);
+        QCOMPARE(node->ownerExecutor(), &exec);   // 前置：归属确实建立过（否则下面的断言是空断言）
+        QVERIFY2(exec.joinForDestroy(5000),
+                 qPrintable(QStringLiteral("销毁前未真正退出线程（本用例的前提是『析构成功完成』）")));
+    }   // exec 在此析构，scene 与 node 都还活着
+
+    QVERIFY2(node->ownerExecutor() == nullptr,
+             "执行器析构后节点仍指向它：这条指针已被释放（S-1）");
+    QVERIFY2(scene.nodes().contains(node), "清理归属时把节点从场景里带走了（越界改动）");
     QCoreApplication::processEvents();
 }
 

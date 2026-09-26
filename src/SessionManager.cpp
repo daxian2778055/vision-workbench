@@ -47,6 +47,16 @@ void SessionManager::setWritesBlocked(bool blocked)
     emit writesLockChanged(blocked);
 }
 
+QString SessionManager::writeGateRefusal() const
+{
+    if (!m_writesBlocked) {
+        return QString();
+    }
+    return QStringLiteral(
+        "出厂默认口令（admin/admin）仍在使用，配置写入（方案保存/导出、用户管理）已被禁止；"
+        "请先修改管理员口令。");
+}
+
 bool SessionManager::canManageUsers() const
 {
     return !writesBlocked() && hasRoleLevel(QStringLiteral("Admin"));
