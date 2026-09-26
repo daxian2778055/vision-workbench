@@ -90,6 +90,7 @@ set(SOURCES
     src/OpencvFitLineNode.cpp
     src/OpencvFitCircleNode.cpp
     src/OpencvTemplateMatchNode.cpp
+    src/OpencvFeatureMatchNode.cpp
     src/OpencvDefectNode.cpp
     src/AnomalyBaseline.cpp
     src/AnomalyDetectNode.cpp
@@ -299,6 +300,7 @@ set(HEADERS
     include/OpencvFitLineNode.h
     include/OpencvFitCircleNode.h
     include/OpencvTemplateMatchNode.h
+    include/OpencvFeatureMatchNode.h
     include/OpencvDefectNode.h
     include/AnomalyBaseline.h
     include/AnomalyDetectNode.h
@@ -845,6 +847,14 @@ if(MSVC)
     vfp_add_qtest(NAME OpencvDefectAlignTest TARGET opencv_defect_align_test)
 endif()
 
+# 特征匹配（阶段 C 的 C1）：合成图上的旋转/尺度定位（角度/尺度/中心有真值）+ 三条失败面
+# + FLANN 不适用时的改路留痕 + 冒烟合成件"无特征可教学"归类；序列化用例在 OpencvSerializationTest
+if(MSVC)
+    add_executable(feature_match_test tests/feature_match_test.cpp)
+    target_link_libraries(feature_match_test PRIVATE vfp_core Qt6::Test)
+    vfp_add_qtest(NAME FeatureMatchTest TARGET feature_match_test)
+endif()
+
 # 异常检测（G-P1-2 后端 A：OK 样本逐像素统计基线）功能测试
 if(MSVC)
     add_executable(anomaly_detect_test tests/anomaly_detect_test.cpp)
@@ -1059,7 +1069,7 @@ if(MSVC)
                   ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest CameraIoTest
                   DnnSegmentTest OpencvDefectAlignTest SoakTest StatisticsReportTest SchemePackageTest
                   I18nTest SubFlowTest AnomalyDetectTest NodeExecuteSmokeTest
-                  FactoryPasswordGuardTest)
+                  FactoryPasswordGuardTest FeatureMatchTest)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
         # path_list_prepend 由 CMake 负责插入并处理平台路径分隔符，避免在
         # ENVIRONMENT 值里嵌套分号导致列表被错误拆分

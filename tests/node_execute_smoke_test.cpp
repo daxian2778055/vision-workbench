@@ -74,6 +74,10 @@ const QHash<QString, QString> kFailsWithoutResource = {
     {QStringLiteral("OpencvQrNode"), QStringLiteral("合成图内无二维码 ⇒ 无结果是失败")},
     {QStringLiteral("ZxingBarcodeNode"), QStringLiteral("合成图内无条形码 ⇒ 无结果是失败")},
     {QStringLiteral("TesseractOcrNode"), QStringLiteral("语言数据目录不存在 ⇒ 引擎初始化失败（路径已在 kParamTweaks 里钉死）")},
+    // 特征定位族：本合成件**没有可教学的纹理**（实测 ORB 整图 0 点 / 中心教学窗 0 点；
+    // SIFT 整图 6 点 / 教学窗 0 点 ⇒ 换默认检测器也拿不到点）。判失败是诚实结果，
+    // 让它"成功"的唯一办法是把零对应点判成命中 = 静默绿灯。归类专测见 FeatureMatchTest。
+    {QStringLiteral("OpencvFeatureMatchNode"), QStringLiteral("图内无特征可教学 ⇒ 无结果是失败")},
 };
 
 // W-2 的专测清单：这八个节点的 process() 走 HalconNode::processDataOutputs() 且**受两道判据约束**。

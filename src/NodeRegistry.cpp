@@ -88,6 +88,7 @@
 #include "OpencvFitLineNode.h"
 #include "OpencvFitCircleNode.h"
 #include "OpencvTemplateMatchNode.h"
+#include "OpencvFeatureMatchNode.h"
 #include "OpencvDefectNode.h"
 #include "AnomalyDetectNode.h"
 #include "OpencvCaliperNode.h"
@@ -210,6 +211,8 @@ void registerAllNodes()
     VFP_REG(OpencvFitCircleNode,  "OpencvFitCircleNode",  "圆拟合", "Fit Circle",
             NodeBase::SHAPE_ANALYSIS, "\u51E0\u4F55\u6D4B\u91CF");
     VFP_REG(OpencvTemplateMatchNode,"OpencvTemplateMatchNode", "模板匹配", "Template Match",
+            NodeBase::SHAPE_ANALYSIS, "\u7279\u5F81\u5B9A\u4F4D");
+    VFP_REG(OpencvFeatureMatchNode, "OpencvFeatureMatchNode", "特征匹配", "Feature Match",
             NodeBase::SHAPE_ANALYSIS, "\u7279\u5F81\u5B9A\u4F4D");
     VFP_REG(OpencvDefectNode,     "OpencvDefectNode",     "缺陷检测", "Defect",
             NodeBase::SHAPE_ANALYSIS, "\u7279\u5F81\u5B9A\u4F4D");
@@ -410,6 +413,8 @@ void registerAllNodes()
                  {QStringLiteral("OpenCV圆拟合"), QStringLiteral("OpenCV Fit Circle")});
     r.addAliases(QStringLiteral("OpencvTemplateMatchNode"),
                  {QStringLiteral("OpenCV模板匹配"), QStringLiteral("OpenCV Template Match")});
+    r.addAliases(QStringLiteral("OpencvFeatureMatchNode"),
+                 {QStringLiteral("OpenCV特征匹配"), QStringLiteral("OpenCV Feature Match")});
     r.addAliases(QStringLiteral("OpencvDefectNode"),
                  {QStringLiteral("OpenCV缺陷检测"), QStringLiteral("OpenCV Defect")});
     r.addAliases(QStringLiteral("OpencvCaliperNode"),

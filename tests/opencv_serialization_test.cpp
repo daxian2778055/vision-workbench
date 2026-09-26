@@ -20,6 +20,7 @@
 #include "OpencvCaliperNode.h"
 #include "OpencvAngleNode.h"
 #include "OpencvTemplateMatchNode.h"
+#include "OpencvFeatureMatchNode.h"
 #include "OpencvCalibNode.h"
 #include "OpencvQrNode.h"
 #include "OpencvClassifyNode.h"
@@ -65,6 +66,7 @@ private slots:
 
     // OpenCV 模板匹配节点序列化测试
     void testTemplateMatchSerialization();
+    void testFeatureMatchSerialization();
 
     // OpenCV 标定节点序列化测试
     void testCalibSerialization();
@@ -303,6 +305,43 @@ void OpencvSerializationTest::testTemplateMatchSerialization()
     params["matchThreshold"] = 0.8;
     params["maxMatches"] = 5;
     verifySerialization<OpencvTemplateMatchNode>("OpenCV模板匹配", params);
+}
+
+// ==================== OpenCV 特征匹配节点 ====================
+
+void OpencvSerializationTest::testFeatureMatchSerialization()
+{
+    // 注册表闸（改坏自证 B5 挣来的）：toJson 存的是整张 m_params ⇒ 漏注册照样能存能取，
+    // round-trip 断言照不到。这里只核本节点的 16 个控制参数；不做全量：实测另有 18 个既有
+    // 节点的测试参数走手写 createParamPanel 而不进声明式注册表，全量加闸会把另一种写法当缺陷。
+    OpencvFeatureMatchNode probe;
+    probe.init();
+    static const char *const kMustRegister[] = {
+        "templatePath", "trainFromImage", "detector", "matcher", "nFeatures",
+        "ratioThreshold", "minMatches", "minInliers", "minScore", "ransacThreshold",
+        "roiCenterCol", "roiCenterRow", "roiWidth", "roiHeight", "roiAngle",
+        "writeFixtureName"};
+    for (const char *const key : kMustRegister) {
+        const QString name = QString::fromLatin1(key);
+        bool found = false;
+        for (const ParamSpec &spec : probe.paramSpecs()) {
+            if (spec.name == name) {
+                found = true;
+                break;
+            }
+        }
+        QVERIFY2(found, qPrintable(QStringLiteral("OpenCV特征匹配: 参数 %1 未注册"
+                                                   "（面板取不到默认值/范围/标签）").arg(name)));
+    }
+
+    QVariantMap params;
+    params["detector"] = 1;              // SIFT
+    params["matcher"] = 1;               // FLANN
+    params["nFeatures"] = 3000;
+    params["ratioThreshold"] = 0.8;
+    params["minInliers"] = 9;
+    params["writeFixtureName"] = QStringLiteral("feat_fix");
+    verifySerialization<OpencvFeatureMatchNode>("OpenCV特征匹配", params);
 }
 
 // ==================== OpenCV 标定节点 ====================

@@ -84,7 +84,7 @@ QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *n
             s.p1 = mr.point1;
             s.radius = mr.value;
             s.text = QStringLiteral("r=%1").arg(mr.value, 0, 'f', 2);
-        } else if (mr.type == QLatin1String("template")) {
+        } else if (mr.type == QLatin1String("template") || mr.type == QLatin1String("feature")) {
             if (mr.extraValues.size() >= 7 && mr.extraValues[5] > 1 && mr.extraValues[6] > 1) {
                 s.type = OverlayShape::Type::RotatedRect;
                 s.p1 = QPointF(mr.extraValues[1], mr.extraValues[0]);
