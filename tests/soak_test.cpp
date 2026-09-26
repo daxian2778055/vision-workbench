@@ -11,6 +11,9 @@
 //
 // 时长与产物由环境变量控制（默认值面向 CI；现场 72h 长跑见 tools/soak.ps1）：
 //   VFP_SOAK_SECONDS   运行秒数（默认 20）
+//   VFP_SOAK_INTERVAL_MS 循环节拍（默认 0＝与出厂默认一致，不额外限速）。开放项 O-1 的
+//                      多档基线（0/50/100ms 的轮/秒与 CPU 占用）由 tools/measure_loop_cadence.py
+//                      逐档设置该变量后得出。
 //   VFP_SOAK_PROGRESS  进度文件路径（逐秒追加一行，便于 tail -f 观察长跑；可空）
 //   VFP_SOAK_REPORT    结果报告文件路径（结尾写入汇总与逐节点统计；可空）
 //
@@ -26,6 +29,10 @@
 #include <QTemporaryDir>
 #include <QElapsedTimer>
 #include <QSignalSpy>
+
+#if defined(Q_OS_WIN)
+#  include <windows.h>   // GetProcessTimes：进程累计 CPU 时间（O-1 节拍基线用）
+#endif
 
 #include "FlowScene.h"
 #include "FlowExecutor.h"
@@ -54,12 +61,38 @@ qint64 envSeconds()
     return (ok && v > 0) ? v : 20;
 }
 
+/// 循环节拍档位（O-1 基线用）。未设置或非法 ⇒ 0，即与出厂默认完全一致。
+qint64 envIntervalMs()
+{
+    bool ok = false;
+    const qint64 v = qEnvironmentVariable("VFP_SOAK_INTERVAL_MS").toLongLong(&ok);
+    return (ok && v >= 0) ? v : 0;
+}
+
+/// 进程累计 CPU 时间（所有线程，user + kernel），单位 ms；取不到返回 -1。
+/// 口径：进程级，含测试主线程的事件循环 ⇒ 数值是"这个进程烧了多少 CPU"，
+/// 不是"执行线程单独烧了多少"。O-1 问的正是前者（满负荷空转的功耗上界）。
+qint64 processCpuMs()
+{
+#if defined(Q_OS_WIN)
+    FILETIME creation{}, exitTime{}, kernel{}, user{};
+    if (!GetProcessTimes(GetCurrentProcess(), &creation, &exitTime, &kernel, &user))
+        return -1;
+    const quint64 k = (quint64(kernel.dwHighDateTime) << 32) | kernel.dwLowDateTime;
+    const quint64 u = (quint64(user.dwHighDateTime) << 32) | user.dwLowDateTime;
+    return qint64((k + u) / 10000ULL);   // 100ns 刻度 → ms
+#else
+    return -1;
+#endif
+}
+
 struct Sample {
     int sec = 0;
     quint64 rounds = 0;
     quint64 handles = 0;
     quint64 workingSet = 0;
     quint64 failedRounds = 0;
+    qint64 cpuMs = 0;
 };
 
 struct FlowStep {
@@ -93,7 +126,8 @@ void SoakTest::testContinuousSoak()
     FlowExecutor exec;
     exec.setFlowName(QStringLiteral("SoakContinuous"));
     exec.setFlowMode(FlowMode::Continuous);
-    exec.setLoopIntervalMs(0);          // 满速跑，压力最大
+    const qint64 intervalMs = envIntervalMs();
+    exec.setLoopIntervalMs(int(intervalMs));  // 默认 0＝满速跑（与出厂默认一致）；非 0 用于 O-1 多档基线
     exec.setStatsLogIntervalMs(0);      // 关掉执行器自有日志，本轮由测试自己采样
 
     const QList<FlowStep> steps = {
@@ -150,6 +184,7 @@ void SoakTest::testContinuousSoak()
     QList<Sample> samples;
     QElapsedTimer timer;
     timer.start();
+    const qint64 cpuAtStart = processCpuMs();
     int nextSampleSec = 1;
     while (timer.elapsed() < qint64(seconds) * 1000) {
         QTest::qWait(200);
@@ -163,6 +198,7 @@ void SoakTest::testContinuousSoak()
         smp.handles = s.processHandleCount;
         smp.workingSet = s.processWorkingSetBytes;
         smp.failedRounds = s.failedRounds;
+        smp.cpuMs = processCpuMs();
         samples.append(smp);
 
         const QString line =
@@ -181,6 +217,8 @@ void SoakTest::testContinuousSoak()
     }
 
     // ── 4. 停：长跑后必须能干净退出（线程回收也是长稳的一部分）──
+    const qint64 windowMs = timer.elapsed();
+    const qint64 cpuAtEnd = processCpuMs();
     exec.stopExecution();
     QVERIFY2(exec.wait(8000), "长跑后执行器线程未退出");
     const FlowRuntimeStats finalStats = exec.runtimeStats();
@@ -217,11 +255,53 @@ void SoakTest::testContinuousSoak()
             .arg(base.workingSet / (1024 * 1024)).arg(last.workingSet / (1024 * 1024)).arg(wsGrowthMB);
     qInfo().noquote() << summary;
 
+    // ── 5b. 节拍/CPU 基线读数（开放项 O-1 的备料；口径见 tools/measure_loop_cadence.py）──
+    const qint64 cpuUsedMs = (cpuAtStart >= 0 && cpuAtEnd >= 0) ? (cpuAtEnd - cpuAtStart) : -1;
+    const double roundsPerS = double(finalStats.rounds) * 1000.0 / double(qMax<qint64>(1, windowMs));
+    const double msPerRound = double(windowMs) / double(qMax<quint64>(1, finalStats.rounds));
+    const double cpuMsPerRound = (cpuUsedMs >= 0)
+                                     ? double(cpuUsedMs) / double(qMax<quint64>(1, finalStats.rounds))
+                                     : -1.0;
+    const double cpuCorePct = (cpuUsedMs >= 0)
+                                  ? 100.0 * double(cpuUsedMs) / double(qMax<qint64>(1, windowMs))
+                                  : -1.0;
+    // 整行 ASCII：让测量脚本不必依赖控制台编码就能取到读数。
+    qInfo().noquote()
+        << QStringLiteral("CADENCE-BASELINE interval_ms=%1 window_ms=%2 rounds=%3 rounds_per_s=%4"
+                          " ms_per_round=%5 cpu_ms=%6 cpu_ms_per_round=%7 cpu_core_pct=%8")
+               .arg(intervalMs)
+               .arg(windowMs)
+               .arg(finalStats.rounds)
+               .arg(roundsPerS, 0, 'f', 2)
+               .arg(msPerRound, 0, 'f', 2)
+               .arg(cpuUsedMs)
+               .arg(cpuMsPerRound, 0, 'f', 3)
+               .arg(cpuCorePct, 0, 'f', 1);
+
+    QVERIFY2(cpuUsedMs > 0,
+             qPrintable(QStringLiteral("进程 CPU 采样未推进（cpuAtStart=%1 cpuAtEnd=%2）"
+                                        "⇒ GetProcessTimes 失效，读数不可用")
+                            .arg(cpuAtStart).arg(cpuAtEnd)));
+    QVERIFY2(!(finalStats.rounds > 0 && cpuMsPerRound <= 0.0),
+             "有轮次但每轮 CPU 成本为 0 ⇒ 读数形同空转，不记作有效基线");
+    if (intervalMs > 0) {
+        // 档位生效判据取 8 成：一轮里除 msleep 外还有节拍外的耗时，但反过来"每轮间隔远小于
+        // 设定档位"只能是节流没生效——这正是 O-1 关心的那一半（限速是否真的管得住空转）。
+        QVERIFY2(msPerRound >= 0.8 * double(intervalMs),
+                 qPrintable(QStringLiteral("设定节拍 %1ms 但实测每轮仅 %2ms ⇒ 节流未生效")
+                                .arg(intervalMs).arg(msPerRound, 0, 'f', 2)));
+    }
+
     if (!reportPath.isEmpty()) {
         QFile report(reportPath);
         if (report.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
             QTextStream rs(&report);
             rs << QStringLiteral("VisionFlowPlatform 长稳测试报告\n") << summary << '\n';
+            rs << QStringLiteral("CADENCE-BASELINE interval_ms=%1 window_ms=%2 rounds=%3 rounds_per_s=%4"
+                                 " ms_per_round=%5 cpu_ms=%6 cpu_ms_per_round=%7 cpu_core_pct=%8\n")
+                      .arg(intervalMs).arg(windowMs).arg(finalStats.rounds)
+                      .arg(roundsPerS, 0, 'f', 2).arg(msPerRound, 0, 'f', 2)
+                      .arg(cpuUsedMs).arg(cpuMsPerRound, 0, 'f', 3).arg(cpuCorePct, 0, 'f', 1);
             // 逐秒序列：判断"预热一次性分配"还是"持续线性增长"全靠它（长跑复盘也用同一份数据）
             rs << QStringLiteral("逐秒序列（秒/轮次/句柄/工作集MB/失败轮次）:\n");
             for (const Sample &s : samples) {
