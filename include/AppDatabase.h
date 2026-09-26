@@ -69,6 +69,14 @@ public:
     QList<UserRecord> queryUsers() const;
     bool removeUser(const QString &name);
 
+    /// 覆盖指定用户的口令（加盐迭代哈希后写回）。
+    /// 返回 false：数据库写入失败**或该用户不存在**（影响 0 行）——调用方必须把失败显示出来。
+    bool changeUserPassword(const QString &name, const QString &newPassword);
+
+    /// 出厂默认口令是否仍在使用：admin 账户的当前哈希能匹配上口令 "admin" 即为 true。
+    /// 口令字面量只出现在这一处，避免各处调用 authenticateUser("admin","admin")。
+    bool isFactoryAdminPasswordInUse() const;
+
     // ---- \u64CD\u4F5C\u65E5\u5FD7 ----
     void logOperation(const QString &user, const QString &action, const QString &detail);
     QList<OperationLogRecord> queryOperationLogs(const QDateTime &from, const QDateTime &to,

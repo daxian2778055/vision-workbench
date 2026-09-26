@@ -14,6 +14,13 @@ public:
     void init() override;
     void run(bool autoSwitch = true) override;
     bool process() override;
+    /// W-2 的**豁免**节点：延时的职责是时间门控（循环体、暂停、节拍），`数据输入` 只是可选透传。
+    /// 与 LoopNode「透传即视为成功（E5）」同族——若把必填数据当成契约，`Loop → 循环体(Delay)`
+    /// 与"单独一个延时节点跑节拍"这两类合法流程会全判失败：未豁免时全量门禁实测 4 个套件 /
+    /// 14 个测试函数变红（SoakTest 1、NodeGroupTest 2、FlowSnippetTest 1、IntegrationTest 的 Loop/延时系列 10）。
+    /// 空载时它不产出任何"参数派生的假结果"（`run()` 明确清空输出），故豁免不掩盖静默绿灯。
+    QSet<int> requiredInputDataPorts() const override { return {}; }
+    bool requiresDataOutput() const override { return false; }
     void setParam(const QString &name, const QVariant &value) override;
     QVariant getParam(const QString &name) const override;
     QWidget *createParamPanel() override;

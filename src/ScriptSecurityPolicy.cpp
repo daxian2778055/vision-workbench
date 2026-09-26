@@ -268,6 +268,10 @@ QProcessEnvironment ScriptSecurityPolicy::buildEnvironment() const
         return env;
     }
     // 剥离可用于向解释器注入代码的危险环境变量；保留 PATH 以便定位解释器本体。
+    // LUA_INIT* 在 lua 执行脚本前就会被当作代码运行；LUA_PATH*/LUA_CPATH* 重定向模块搜索路径。
+    // 版本专有（*_5_4）的变量优先级更高，故必须一并剥离，否则留着它就等于留着注入口。
+    // 这里是两条 Lua 执行路径的唯一收口点：沙箱分支经 runWithRestrictedToken() 内部
+    // 同样调用 buildEnvironment()，所以不必再给解释器加 `-E`。
     const QStringList dangerous = {
         QStringLiteral("PYTHONPATH"),
         QStringLiteral("PYTHONHOME"),
@@ -281,7 +285,13 @@ QProcessEnvironment ScriptSecurityPolicy::buildEnvironment() const
         QStringLiteral("DYLD_LIBRARY_PATH"),
         QStringLiteral("BASH_ENV"),
         QStringLiteral("ENV"),
-        QStringLiteral("PYTHONPATH_EXTRA")
+        QStringLiteral("PYTHONPATH_EXTRA"),
+        QStringLiteral("LUA_INIT"),
+        QStringLiteral("LUA_INIT_5_4"),
+        QStringLiteral("LUA_PATH"),
+        QStringLiteral("LUA_PATH_5_4"),
+        QStringLiteral("LUA_CPATH"),
+        QStringLiteral("LUA_CPATH_5_4")
     };
     for (const QString &key : dangerous) {
         env.remove(key);

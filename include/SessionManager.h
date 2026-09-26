@@ -29,8 +29,19 @@ public:
     bool canRunFlow() const;        ///< 所有角色
     bool canConfigCommunications() const; ///< Admin / Engineer
 
+    // ---- 写操作闸（A1-①）----
+    /// 出厂默认口令仍在使用时置位：禁止**配置写入类**操作——方案覆盖保存/导出、
+    /// 通信配置落盘、用户管理（否则拿到 admin/admin 就等于拿到全部权限，闸也就白设）。
+    /// 不影响 canRunFlow 与运行期结果落库：产线正在跑的活不因未改口令而中断，
+    /// 这是"拦住未鉴权的配置变更"而非"拒绝服务"。
+    /// 默认 false：数据库不可用/未装配的单测环境不受影响（闸只在显式置位时生效）。
+    void setWritesBlocked(bool blocked);
+    bool writesBlocked() const { return m_writesBlocked; }
+
 signals:
     void sessionChanged(const QString &user, const QString &role);
+    /// 闸状态变化（UI 据此重算菜单/动作可用态）
+    void writesLockChanged(bool blocked);
 
 private:
     SessionManager(QObject *parent = nullptr);
@@ -40,4 +51,5 @@ private:
 
     QString m_user;
     QString m_role;
+    bool m_writesBlocked = false;
 };

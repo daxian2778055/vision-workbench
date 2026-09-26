@@ -12,6 +12,7 @@
 #include "HeartbeatManager.h"
 #include "CalibrationManager.h"
 #include "AppLog.h"
+#include "SessionManager.h"
 #include <QFile>
 #include <QDir>
 #include <QFileInfo>
@@ -36,6 +37,19 @@ QString runtimeLayoutPath()
 /// 方案文件结构版本。1 = 早期无 typeId 的版本；2 = 写入节点注册表 typeId（可自描述）。
 constexpr int kProjectSchemaVersion = 2;
 const QString kTypeIdKey = QStringLiteral("typeId");
+
+/// 写操作闸（A1-①）：出厂默认口令仍在使用时，方案落盘一律拒绝。
+/// 返回非空即为拒绝理由（可直接展示给用户）；返回空串表示放行。
+/// 为什么落在持久化层而不是只做菜单灰化：灰化只是"提示不能点"，快捷键、
+/// 后续新增的调用点、脚本入口都能绕开它；写在真正落盘的那一处才是 fail-closed。
+QString writeGateRefusal()
+{
+    if (!SessionManager::instance()->writesBlocked()) {
+        return QString();
+    }
+    return QStringLiteral(
+        "出厂默认口令（admin/admin）仍在使用，方案写入已被禁止；请先修改管理员口令。");
+}
 }
 
 using MyConnection = MyProject::Connection;
@@ -48,6 +62,14 @@ ProjectManager::ProjectManager(QObject *parent)
 bool ProjectManager::saveProjectInteractive(QWidget *parent, const QList<FlowScene *> &scenes,
                                             QString *savedPath)
 {
+    // 写操作闸：先挡再弹框——让用户选完路径才发现写不了，等于把拒绝藏在最后一步
+    if (const QString refusal = writeGateRefusal(); !refusal.isEmpty()) {
+        QMessageBox::warning(parent, tr("写操作已被禁止"), refusal);
+        if (savedPath)
+            *savedPath = QString();
+        return false;
+    }
+
     // 方案扩展名 .vfp，与需求文档一致
     QString fileName = QFileDialog::getSaveFileName(parent, tr("保存项目"), QString(),
                                                     tr("方案文件 (*.vfp)"));
@@ -101,6 +123,12 @@ QString ProjectManager::annotationDir() const
 
 bool ProjectManager::saveProject(const QString &filePath, const QList<FlowScene *> &scenes)
 {
+    // 闸必须在改状态之前：否则会出现"lastFilePath 已更新、只读标志已清除，但文件根本没写"
+    if (const QString refusal = writeGateRefusal(); !refusal.isEmpty()) {
+        VFP_DEBUG << "方案保存被写操作闸拒绝:" << filePath << refusal;
+        return false;
+    }
+
     m_lastFilePath = filePath;
     m_loadedReadonly = false; // 明文保存即为可编辑方案
 
@@ -219,6 +247,11 @@ bool ProjectManager::exportEncryptedProject(const QString &filePath,
                                            const QList<FlowScene *> &scenes,
                                            const QString &passphrase, bool readonly)
 {
+    if (const QString refusal = writeGateRefusal(); !refusal.isEmpty()) {
+        VFP_DEBUG << "方案导出被写操作闸拒绝:" << filePath << refusal;
+        return false;
+    }
+
     m_lastFilePath = filePath;
 
     const QJsonObject root = buildProjectJson(scenes);

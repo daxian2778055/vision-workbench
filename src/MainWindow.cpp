@@ -34,6 +34,7 @@
 #include <QCheckBox>
 #include <QInputDialog>
 #include <QDialogButtonBox>
+#include <QVBoxLayout>
 #include <QProcess>
 #include "Port.h"
 #include "Connection.h"
@@ -56,6 +57,7 @@
 #include "GlobalTriggerManager.h"
 #include "GlobalTriggerDialog.h"
 #include "SessionManager.h"
+#include "FactoryPasswordGuard.h"
 #include "OperationLogDialog.h"
 #include "ParameterSearchDialog.h"
 #include "CodeExportDialog.h"
@@ -580,29 +582,24 @@ MainWindow::MainWindow(QWidget *parent) :
         VFP_DEBUG << "Showing login dialog";
         {
             UserLoginDialog loginDialog(this);
-            if (loginDialog.exec() == QDialog::Accepted) {
-                QString user = loginDialog.loggedInUser();
-                QString role = loginDialog.loggedInRole();
-                SessionManager::instance()->login(user, role);
-                VFP_DEBUG << "User logged in:" << user << "Role:" << role;
-                setWindowTitle(QStringLiteral("视觉方案工作台 - %1 [%2]").arg(user, role));
-                applyPermissionRestrictions();
-
-                // 安全提示：出厂默认口令 admin/admin 若未修改，等于系统无鉴权。
-                // 用一次校验代替直接读哈希（AppDatabase 不对外暴露 password_hash），
-                // 校验通过即说明口令仍是默认值。此处只告警不阻断，避免影响现场既有流程。
-                if (AppDatabase::instance()->authenticateUser(QStringLiteral("admin"),
-                                                             QStringLiteral("admin"))) {
-                    QMessageBox::warning(
-                        this, tr("安全提示"),
-                        tr("管理员账户 admin 仍在使用出厂默认口令，任何人都可登录并修改方案。\n\n"
-                           "请通过「系统 → 用户管理」立即修改密码。"));
-                }
-            } else {
-                // 取消登录则默认以 Operator 身份进入
-                SessionManager::instance()->login(QStringLiteral("guest"), QStringLiteral("Operator"));
-                applyPermissionRestrictions();
+            if (loginDialog.exec() != QDialog::Accepted) {
+                // A1-②：取消登录不再"默认以 Operator 身份进入"。
+                // 旧实现等于发一张免鉴权的通行牌：能跑流程、能往库里写检测结果，
+                // 但操作日志里全是 guest，事后查不到是谁干的。取消就是取消——
+                // 不建会话、不进主界面，由 main() 看到 loginAccepted()==false 直接退出。
+                VFP_DEBUG << "Login cancelled: no session created, main window stays hidden";
+                return;
             }
+            m_loginAccepted = true;
+            const QString user = loginDialog.loggedInUser();
+            const QString role = loginDialog.loggedInRole();
+            SessionManager::instance()->login(user, role);
+            VFP_DEBUG << "User logged in:" << user << "Role:" << role;
+            setWindowTitle(QStringLiteral("视觉方案工作台 - %1 [%2]").arg(user, role));
+            applyPermissionRestrictions();
+
+            // 出厂默认口令仍在使用 ⇒ 上写操作闸并强制改密（取代历史的"弹一次告警就放行"）
+            enforceFactoryPasswordPolicy();
         }
         VFP_DEBUG << "Login dialog completed";
         
@@ -669,8 +666,8 @@ void MainWindow::retireExecutor(FlowExecutor *ex)
     // 先从注册表摘除：避免析构遍历二次处理，也清掉指向即将失效场景的悬垂键。
     m_flowExecutors.remove(m_flowExecutors.key(ex));
     // 置 Stopped + wakeAll，run() 在中断点（interruptibleSleep / 节点边界）自然退出。
-    ex->stopExecution();
-    if (!ex->isRunning() || ex->wait(15000)) {
+    // joinForDestroy 是"停止 + 有界等待退出"的唯一实现（析构走同一函数，两路口径不会分叉）。
+    if (ex->joinForDestroy(15000)) {
         delete ex;
         return;
     }
@@ -3808,6 +3805,17 @@ void MainWindow::setupSystemMenu()
         });
     }
 
+    if (ui->menuSystem) {
+        QAction *retireAct = ui->menuSystem->addAction(
+            QStringLiteral("修改管理员口令（解除写操作禁止）…"));
+        // 该项刻意不受角色/写闸限制：它就是解除闸的唯一入口；
+        // 而改密前必须填对当前出厂口令，非持有者点了也改不动任何东西。
+        retireAct->setEnabled(true);
+        connect(retireAct, &QAction::triggered, this, [this]() {
+            enforceFactoryPasswordPolicy();
+        });
+    }
+
     connect(ui->actionCameraConfig, &QAction::triggered, this, &MainWindow::onManageGlobalCameras);
 
     connect(ui->actionUserManagement, &QAction::triggered, this, [this]() {
@@ -3885,6 +3893,67 @@ void MainWindow::applyPermissionRestrictions()
     }
     // 角色变化后同步只读管控（只读态优先于角色权限禁用覆盖保存）
     applyReadonlyUI();
+}
+
+void MainWindow::enforceFactoryPasswordPolicy()
+{
+    auto *session = SessionManager::instance();
+    if (!FactoryPasswordGuard::refreshWritesLock()) {
+        applyPermissionRestrictions();
+        return;
+    }
+
+    // 走到这里说明 admin/admin 仍然能用：先把闸拉上（菜单随即灰掉），再要求当场改密
+    applyPermissionRestrictions();
+
+    while (session->writesBlocked()) {
+        QDialog dlg(this);
+        dlg.setWindowTitle(tr("修改管理员口令"));
+        auto *info = new QLabel(tr("管理员账户 admin 仍在使用出厂默认口令，任何人都能免授权登录并修改方案。\n"
+                                   "在改掉口令之前，保存/导出方案、通信配置与用户管理均被禁止（流程运行不受影响）。"),
+                                &dlg);
+        info->setWordWrap(true);
+        auto *oldEdit = new QLineEdit(&dlg);
+        auto *newEdit = new QLineEdit(&dlg);
+        auto *confirmEdit = new QLineEdit(&dlg);
+        for (QLineEdit *edit : { oldEdit, newEdit, confirmEdit }) {
+            edit->setEchoMode(QLineEdit::Password);
+        }
+        auto *form = new QFormLayout();
+        form->addRow(tr("当前出厂口令"), oldEdit);
+        form->addRow(tr("新口令（至少 6 位）"), newEdit);
+        form->addRow(tr("确认新口令"), confirmEdit);
+        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+        connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+        auto *layout = new QVBoxLayout(&dlg);
+        layout->addWidget(info);
+        layout->addLayout(form);
+        layout->addWidget(buttons);
+
+        if (dlg.exec() != QDialog::Accepted) {
+            break;   // 放弃改密：闸保持，下面挂常驻提示，之后可从「系统」菜单再来一次
+        }
+
+        QString error;
+        if (FactoryPasswordGuard::retireFactoryPassword(oldEdit->text(), newEdit->text(),
+                                                       confirmEdit->text(), &error)) {
+            applyPermissionRestrictions();
+            ui->statusBar->clearMessage();
+            QMessageBox::information(this, tr("修改管理员口令"), tr("出厂口令已停用，写操作已恢复。"));
+            break;
+        }
+        QMessageBox::warning(this, tr("修改管理员口令"), error);
+        // 失败不退出循环：闸还在，继续要求改密
+    }
+
+    if (session->writesBlocked()) {
+        // 常驻（timeout=0）：灰掉菜单不等于安全，真正的拒绝发生在 ProjectManager 落盘处，
+        // 必须一直有个看得见的原因说明"为什么保存没反应"。
+        ui->statusBar->showMessage(
+            tr("写操作已被禁止：出厂默认口令仍在使用（「系统 → 修改管理员口令」可解除）"), 0);
+        logMessage(tr("出厂默认口令仍在使用：写操作已禁止，直到管理员口令被修改"));
+    }
 }
 
 void MainWindow::updateLanguage()

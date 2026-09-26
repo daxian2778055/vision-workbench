@@ -24,8 +24,8 @@ void CounterNode::init()
 
 bool CounterNode::process()
 {
-    run();
-    return true;
+    // W-2：空载不得绿灯——结果必须由「条件」端口算出，统一走基类数据端口契约
+    return processDataOutputs();
 }
 
 void CounterNode::run(bool /*autoSwitch*/)

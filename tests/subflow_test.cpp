@@ -32,6 +32,7 @@ private slots:
     void testTwoCallersIsolation();
     void testRecursionRejected();
     void testUndefinedRejected();
+    void testUnfedSubFlowCallerStaysGreenAndEmpty();
 };
 
 namespace {
@@ -342,6 +343,41 @@ void SubFlowTest::testUndefinedRejected()
         if (e.contains(QStringLiteral("未定义")))
             hasUndefinedError = true;
     QVERIFY(hasUndefinedError);
+}
+
+// A5 口径（有执行器侧）：子流程没有喂入时，调用点允许绿灯，但**不得凭空造数据**。
+// 与 DelayNode 的空载豁免同族（时间门控/透传：没有可传的东西 ⇒ 空就是诚实结果）。
+// 这条同时挡两个方向：把豁免改成"空载必红"会在这里变红；把空输出填成上一轮残留值也会变红。
+void SubFlowTest::testUnfedSubFlowCallerStaysGreenAndEmpty()
+{
+    FlowScene scene;
+    // 调用点故意**不接上游**：唯一能让它"成功却零产出"的就是这条无喂入路径
+    NodeBase *caller = addCaller(&scene, QStringLiteral("空转段"), QPointF(0, 0));
+    NodeBase *m1 = addDelay(&scene, QPointF(0, 220));
+    NodeBase *m2 = addDelay(&scene, QPointF(220, 220));
+    QVERIFY(caller && m1 && m2);
+    QVERIFY(scene.createConnection(m1->outputPorts().first(), m2->inputPorts().first(), true));
+
+    selectOnly(&scene, { m1, m2 });
+    QString err;
+    QVERIFY2(scene.defineSubFlowFromSelection(QStringLiteral("空转段"), &err), qPrintable(err));
+
+    FlowExecutor exec;
+    const RoundResult r = runOneRound(exec, &scene);
+
+    qDebug().noquote()
+        << QStringLiteral("A5-SUBFLOW caller=%1 member1=%2 member2=%3 outputEmpty=%4 errors=%5")
+               .arg(r.lastByNode.value(caller->fullName()) ? QStringLiteral("green") : QStringLiteral("red"))
+               .arg(r.lastByNode.value(m1->fullName()) ? QStringLiteral("green") : QStringLiteral("red"))
+               .arg(r.lastByNode.value(m2->fullName()) ? QStringLiteral("green") : QStringLiteral("red"))
+               .arg(caller->getOutputData(0).isNull() ? QStringLiteral("true") : QStringLiteral("false"))
+               .arg(r.errors.size());
+
+    QVERIFY2(r.errors.isEmpty(), qPrintable(r.errors.join(QStringLiteral(" | "))));
+    QVERIFY2(r.lastByNode.value(caller->fullName()),
+             "无喂入的子流程调用点被判失败：豁免被改坏了（延时段空转是合法用法）");
+    QVERIFY2(caller->getOutputData(0).isNull(),
+             "无喂入的子流程调用点吐出了数据对象（凭空结果 / 上一轮残留）");
 }
 
 QTEST_MAIN(SubFlowTest)

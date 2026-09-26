@@ -63,6 +63,10 @@ public:
     MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
 
+    /// 构造函数内会弹登录框：取消/关闭登录即为 false。
+    /// main() 据此决定是显示窗口还是直接退出——默认 false，只有登录成功路径会置位（fail-closed）。
+    bool loginAccepted() const { return m_loginAccepted; }
+
     /// 方案含 DeepOCR / Halcon图像源时提示需要 HALCON 运行时
     void checkHalconNodesHint();
     /// 帮助菜单：检测 HALCON 图像层（读图/显示）
@@ -153,6 +157,8 @@ private:
     void cleanupCameras();
     /// 根据当前用户角色启用/禁用受权限控制的菜单项
     void applyPermissionRestrictions();
+    /// 出厂口令仍在用时：拉起写操作闸并弹强制改密框；改密成功即自动解锁（A1-①）
+    void enforceFactoryPasswordPolicy();
     /// 打开运行界面设计器
     void openRuntimeInterfaceDesigner();
     /// 收集全部流程中的所有算子完整名（供运行界面绑定节点输出）
@@ -283,6 +289,9 @@ protected:
     qint64 m_yieldLastEvalMs = 0;   ///< 上次评估时刻（节流用；0 = 尚未评估）
     QLabel *m_imageSourceLabel; // 图像来源标签
     
+    // 登录会话（A1-②）：默认 false —— 只有登录框 Accepted 的路径会置位
+    bool m_loginAccepted = false;
+
     // 自定义运行界面（对齐 VisionMaster 4.4 运行界面）
     RuntimeInterfaceView *m_runtimeView = nullptr;
     QDockWidget *m_runtimeViewDock = nullptr;

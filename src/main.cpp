@@ -344,6 +344,11 @@ int main(int argc, char *argv[])
         qRegisterMetaType<QVector<double>>("QVector<double>");
 
         MainWindow w;
+        // 取消登录（A1-②）：MainWindow 构造期弹的登录框被取消/关闭 ⇒ 不建立会话，
+        // 也就不该有主界面。历史实现会给一个 guest/Operator 免鉴权会话然后照常显示窗口。
+        if (!w.loginAccepted()) {
+            return 0;
+        }
         // 重复启动 → 把本实例窗口（或当前活动对话框）提到前台：由第二实例广播的注册消息驱动
         ActivateRequestFilter activateFilter(&w);
         a.installNativeEventFilter(&activateFilter);

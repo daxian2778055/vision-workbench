@@ -241,6 +241,7 @@ set(SOURCES
     src/GlobalTriggerDialog.cpp
     # Phase 6: 系统级
     src/SessionManager.cpp
+    src/FactoryPasswordGuard.cpp
     src/OperationLogDialog.cpp
     src/ParameterSearchDialog.cpp
     src/CodeExportDialog.cpp
@@ -1024,6 +1025,13 @@ if(MSVC)
     vfp_add_qtest(NAME ScriptSecurityPolicyTest TARGET script_security_test)
 endif()
 
+# 出厂默认口令 → 写操作闸（A1-①）：权限收口、改密解锁、方案落盘拒绝
+if(MSVC)
+    add_executable(factory_password_guard_test tests/factory_password_guard_test.cpp)
+    target_link_libraries(factory_password_guard_test PRIVATE vfp_core Qt6::Test)
+    vfp_add_qtest(NAME FactoryPasswordGuardTest TARGET factory_password_guard_test)
+endif()
+
 # 受限令牌组合探针（诊断用，非测试用例）：把 {去特权} × {管理员SID deny-only} × {低完整性}
 # × {受限SID列表} 的组合跑成矩阵，用于定位 STATUS_DLL_INIT_FAILED(0xC0000142) 的成因。
 # 纯 Win32、不链接 Qt/vfp_core（避免被测沙箱之外的因素干扰），也不注册为 ctest 用例。
@@ -1050,7 +1058,8 @@ if(MSVC)
     set(VFP_TESTS NodeCoreTest OpencvSerializationTest IntegrationTest DatabaseTest PerfTest
                   ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest CameraIoTest
                   DnnSegmentTest OpencvDefectAlignTest SoakTest StatisticsReportTest SchemePackageTest
-                  I18nTest SubFlowTest AnomalyDetectTest NodeExecuteSmokeTest)
+                  I18nTest SubFlowTest AnomalyDetectTest NodeExecuteSmokeTest
+                  FactoryPasswordGuardTest)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
         # path_list_prepend 由 CMake 负责插入并处理平台路径分隔符，避免在
         # ENVIRONMENT 值里嵌套分号导致列表被错误拆分

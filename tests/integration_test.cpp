@@ -8,6 +8,7 @@
 #include "FlowScene.h"
 #include "FlowExecutor.h"
 #include "NodeBase.h"
+#include "HalconNode.h"   // E1 探针节点 ThrowBeforeRestoreProbeNode 的基类
 #include "OpencvThresholdNode.h"
 #include "OpencvMorphNode.h"
 #include "OpencvBlobNode.h"
@@ -57,6 +58,23 @@
 #include <vector>
 #include <atomic>
 
+/// A1-④ 超时分支取证专用：run() 完全不看停止标志，只等测试放行。
+/// 这样 joinForDestroy(timeout) 必然走到"线程到点没退出"那条分支——
+/// 已有的 testDestroyWhileRunningIsSafe 走的是"节点被唤醒、快路径退出"，覆盖不到它。
+class StuckExecutor : public FlowExecutor
+{
+public:
+    std::atomic_bool released{ false };
+
+protected:
+    void run() override
+    {
+        while (!released.load(std::memory_order_relaxed)) {
+            QThread::msleep(10);
+        }
+    }
+};
+
 class IntegrationTest : public QObject
 {
     Q_OBJECT
@@ -84,6 +102,7 @@ private slots:
     void testDelayPauseResumeKeepsRemaining();
     void testContinuousSecondRoundClearsStaleData();
     void testDestroyWhileRunningIsSafe();
+    void testJoinForDestroyTimeoutRefusesDestroy();   // A1-④：超时分支不得批准销毁
     void testTwoExecutorsIsolation();
     void testScriptNodeStopCancellable();
     void testExecutorReuseAcrossScenesWithLoop();
@@ -93,6 +112,13 @@ private slots:
     void testConditionalBranchSkipClearsStaleOutput();
     void testNestedLoopIterations();
     void testParamRefResolvesEachRound();   // E1：参数引用跨轮必须重新解析上游最新值
+    // ---- A4（2026-09-25）：E1/E2/E3/E6 残留收口 ----
+    void testParamRefRestoredBeforeNodeSignals();          // E1 残留①：信号窗口内不得看到解析值
+    void testNonStdExceptionInBroadcastIsContained();      // E1 残留②：广播里抛非标准异常不得逃出
+    void testParamRefRestoredWhenNodeThrowsBeforeSignals();// E1：还原点之前抛异常也必须还原表达式
+    void testSkippedAndFailedNodesLoseReusableMark();      // E2：清空输出必须同步撤销"可复用"标记
+    void testOwnerExecutorEstablishedAtGraphBuild();       // E3：归属在建图/入队时建立，不等首轮
+    void testRoundRateNotClampedByFixedInterval();         // E6：默认节拍下两轮间隔不再被 50ms 拉住
     void testRuntimeStatsCounters();
     void testRestrictedTokenLaunch();
     void testAppContainerSandboxLaunch();
@@ -519,6 +545,9 @@ void IntegrationTest::testContinuousSecondRoundClearsStaleData()
     FlowScene scene;
     FlowExecutor exec;
     exec.setFlowName(QStringLiteral("RegressionStaleRound"));
+    // W-2 之后"上游本轮无产出"是**真失败**（此前公式节点空产出仍判成功）⇒ 默认 stopOnFailure
+    // 会在第一轮后就中断流程，本条要看第二轮就再也走不到。清空检查与"失败是否中断"无关，故关掉。
+    exec.setStopOnFailure(false);
 
     NodeBase *formula = scene.createNode(NodeBase::LOGIC, QPointF(120, 200), QStringLiteral("Formula"));
     NodeBase *sink = scene.createNode(NodeBase::LOGIC, QPointF(340, 200), QStringLiteral("Delay"));
@@ -536,19 +565,22 @@ void IntegrationTest::testContinuousSecondRoundClearsStaleData()
     const auto connHandle = QObject::connect(
         &exec, &FlowExecutor::nodeExecuted, &exec,
         [&](NodeBase *n, bool ok) {
+            if (n == sink) {
+                // 不看 ok：W-2 后第二轮上下游都是失败轮，而本条要取的正是失败轮端口上的数据状态
+                sinkInputPresent.append(sink->getInputData(0) != nullptr);
+                // 节点自身输出也必须是本轮结果：DelayNode 无输入时应清空输出（P1）
+                sinkOutputPresent.append(sink->getOutputData(0) != nullptr);
+                if (sinkInputPresent.size() >= 2) {
+                    exec.stopExecution();   // 观察满两轮后结束
+                }
+                return;
+            }
             if (!ok) return;
             if (n == formula) {
                 ++formulaRounds;
                 if (formulaRounds == 1) {
                     // 第二轮改为引用未连接的 p0 → 求值失败，不再产生输出
                     formula->setParam(QStringLiteral("expression"), QStringLiteral("p0 + 1"));
-                }
-            } else if (n == sink) {
-                sinkInputPresent.append(sink->getInputData(0) != nullptr);
-                // 节点自身输出也必须是本轮结果：DelayNode 无输入时应清空输出（P1）
-                sinkOutputPresent.append(sink->getOutputData(0) != nullptr);
-                if (sinkInputPresent.size() >= 2) {
-                    exec.stopExecution();   // 观察满两轮后结束
                 }
             }
         }, Qt::DirectConnection);
@@ -604,6 +636,33 @@ void IntegrationTest::testDestroyWhileRunningIsSafe()
 
     QVERIFY2(elapsed < 2500,
              qPrintable(QStringLiteral("运行中销毁执行器耗时 %1ms，阻塞节点未被唤醒").arg(elapsed)));
+}
+
+// A1-④：析构/销毁协议里的"线程不退出"分支。
+// 这里只断言 joinForDestroy 的判定（它是析构与 retireExecutor 共用的唯一实现）：
+// 线程没退出 ⇒ 返回 false ⇒ 调用方必须放弃销毁。析构自身的 qFatal 兜底会中止进程，
+// 无法在本进程内自动断言，故不在此覆盖（见 FlowExecutor.cpp 析构注释）。
+void IntegrationTest::testJoinForDestroyTimeoutRefusesDestroy()
+{
+    auto *exec = new StuckExecutor();
+    exec->setFlowName(QStringLiteral("RegressionStuckJoin"));
+    exec->start();                 // 不经 startExecution：只验证线程回收判定，不依赖场景/节点
+    QTest::qWait(100);
+    QVERIFY2(exec->isRunning(), "卡住的线程没起来，本用例失去前提");
+
+    QElapsedTimer t;
+    t.start();
+    QVERIFY2(!exec->joinForDestroy(300),
+             "线程明明不退出，joinForDestroy 却批准销毁（析构据此会继续拆场景 → use-after-free）");
+    const qint64 waited = t.elapsed();
+    QVERIFY2(waited >= 250,
+             qPrintable(QStringLiteral("joinForDestroy 只等了 %1ms 就判超时：它并没有真的等线程").arg(waited)));
+    QVERIFY2(exec->isRunning(), "超时返回后线程应仍在运行——这正是调用方不得 delete 的理由");
+
+    // 放行后再判定：同一条路径必须能回收，否则"超时"就成了永久误判
+    exec->released.store(true);
+    QVERIFY2(exec->joinForDestroy(5000), "线程已退出却仍判不可销毁");
+    delete exec;                   // 此时析构内的兜底 wait 不会触发
 }
 
 void IntegrationTest::testTwoExecutorsIsolation()
@@ -1083,6 +1142,424 @@ void IntegrationTest::testParamRefResolvesEachRound()
     QCOMPARE(consumerValues.at(0), 8.0);    // 第一轮：7 + 1
     QCOMPARE(consumerValues.at(1), 10.0);   // 第二轮：9 + 1（重新解析，不是沿用 8）
     QVERIFY2(exprPreserved, "参数引用表达式被写回成常量（E1：应保留 {模块号} 引用）");
+}
+
+namespace {
+
+/// E1 残留②取证用：**刻意不派生自 std::exception**——`FlowExecutor::executeNode` 的 try
+/// 原来只捕 `const std::exception &`，这个类型才能走到"逃出 try"那条真实路径。
+struct NonStdProbeException {};
+
+/// 还原点之前抛异常的探针：`getAllParamNames()` 在 executeNode 里被调两次——
+/// 第 1 次是参数引用解析（备份已建立），第 2 次是 `collectNodeOutputVars`（还原点之前）。
+/// 只覆写这一个函数（const ⇒ 计数器 mutable），其余全走 HalconNode 默认实现。
+class ThrowBeforeRestoreProbeNode : public HalconNode
+{
+public:
+    explicit ThrowBeforeRestoreProbeNode(QObject *parent = nullptr) : HalconNode(parent) {}
+
+    // 本探针不接图像：两道图像判据按"只产数据"的节点口径让开（与门禁里的 MeasureOnlyNode 同法）
+    bool requiresInputImage() const override { return false; }
+    bool requiresImageOutput() const override { return false; }
+
+    QList<QString> getAllParamNames() const override
+    {
+        if (armed.load(std::memory_order_relaxed)
+            && ++scanCount == 2) {
+            throw NonStdProbeException {};
+        }
+        return HalconNode::getAllParamNames();
+    }
+
+    std::atomic_bool armed { false };
+    mutable std::atomic_int scanCount { 0 };
+};
+
+} // namespace
+
+void IntegrationTest::testParamRefRestoredBeforeNodeSignals()
+{
+    // E1 残留①：三条节点级广播（nodeExecuted / nodeExecutionTime / nodeOutputsUpdated）
+    // 原本发生在"参数仍是本轮解析值"的窗口内。窗口内取参数的人（各界面面板、结果表、
+    // 以及任何在槽里存盘/快照的代码）拿到的就是常量 ⇒ 存盘会把 {模块号} 引用落成常量。
+    FlowScene scene;
+    FlowExecutor exec;
+    exec.setFlowName(QStringLiteral("RegressionE1SignalWindow"));
+
+    NodeBase *source = scene.createNode(NodeBase::LOGIC, QPointF(120, 200), QStringLiteral("Formula"));
+    NodeBase *consumer = scene.createNode(NodeBase::LOGIC, QPointF(340, 200), QStringLiteral("Formula"));
+    QVERIFY(source != nullptr);
+    QVERIFY(consumer != nullptr);
+    source->setParam(QStringLiteral("expression"), QStringLiteral("7"));
+    const QString refExpr = QStringLiteral("{%1} + 1").arg(source->moduleId());
+    consumer->setParam(QStringLiteral("expression"), refExpr);
+    QVERIFY2(scene.createConnection(source->outputPorts().first(),
+                                    consumer->inputPorts().first(), true) != nullptr,
+             "无法建立 源->下游 连线");
+
+    QStringList seenAtSignal;      // "<信号名>=<该信号触发时consumer参数的样子>"
+    double valueAtOutputs = -1.0;
+    const auto snapshot = [&](const char *tag) {
+        seenAtSignal << QStringLiteral("%1=%2").arg(QLatin1String(tag),
+                                                    consumer->getParam(QStringLiteral("expression")).toString());
+    };
+    const auto h1 = QObject::connect(&exec, &FlowExecutor::nodeExecuted, &exec,
+                                     [&](NodeBase *n, bool) { if (n == consumer) snapshot("nodeExecuted"); },
+                                     Qt::DirectConnection);
+    const auto h2 = QObject::connect(&exec, &FlowExecutor::nodeExecutionTime, &exec,
+                                     [&](NodeBase *n, qint64) { if (n == consumer) snapshot("nodeExecutionTime"); },
+                                     Qt::DirectConnection);
+    const auto h3 = QObject::connect(&exec, &FlowExecutor::nodeOutputsUpdated, &exec,
+                                     [&](NodeBase *n, bool, qint64, const QVariantMap &vars) {
+                                         if (n != consumer) return;
+                                         snapshot("nodeOutputsUpdated");
+                                         valueAtOutputs = vars.value(QStringLiteral("value")).toDouble();
+                                     },
+                                     Qt::DirectConnection);
+
+    exec.setFlowScene(&scene);
+    exec.executeUpTo(consumer);   // 同步执行：单线程、无节拍干扰，广播时序完全确定
+    exec.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+    QObject::disconnect(h1);
+    QObject::disconnect(h2);
+    QObject::disconnect(h3);
+
+    // 先确认真的解析过（否则"从来没替换成常量"也能让下面的断言全绿 ⇒ 空断言）
+    QCOMPARE(valueAtOutputs, 8.0);
+    // 三条广播都必须在这条链上出现过（缺一条就是没测到）
+    for (const char *tag : { "nodeExecuted", "nodeExecutionTime", "nodeOutputsUpdated" }) {
+        bool seen = false;
+        for (const QString &s : seenAtSignal)
+            seen = seen || s.startsWith(QLatin1String(tag));
+        QVERIFY2(seen, qPrintable(QStringLiteral("未观察到 %1 广播（用例是空断言）").arg(QLatin1String(tag))));
+    }
+    QStringList leaked;
+    for (const QString &s : seenAtSignal)
+        if (!s.contains(QLatin1Char('{')))
+            leaked << s;
+    QVERIFY2(leaked.isEmpty(),
+             qPrintable(QStringLiteral("广播时参数仍是解析值（E1 窗口未关闭）：") + leaked.join(QStringLiteral("; "))
+                       + QStringLiteral("；应始终为 ") + refExpr));
+}
+
+void IntegrationTest::testNonStdExceptionInBroadcastIsContained()
+{
+    // E1 残留②：广播就在那个 try 内，直连槽抛出的**非标准**异常此前会一路逃出 executeNode，
+    // 而 run() 里没有 catch ⇒ std::terminate；参数也永久停在解析出的常量上。
+    FlowScene scene;
+    FlowExecutor exec;
+    exec.setFlowName(QStringLiteral("RegressionE1NonStdThrow"));
+
+    NodeBase *source = scene.createNode(NodeBase::LOGIC, QPointF(120, 200), QStringLiteral("Formula"));
+    NodeBase *consumer = scene.createNode(NodeBase::LOGIC, QPointF(340, 200), QStringLiteral("Formula"));
+    QVERIFY(source != nullptr);
+    QVERIFY(consumer != nullptr);
+    source->setParam(QStringLiteral("expression"), QStringLiteral("7"));
+    consumer->setParam(QStringLiteral("expression"),
+                       QStringLiteral("{%1} + 1").arg(source->moduleId()));
+    QVERIFY(scene.createConnection(source->outputPorts().first(),
+                                   consumer->inputPorts().first(), true) != nullptr);
+
+    bool armed = true;
+    int outputsSeen = 0;
+    int errorReports = 0;
+    QList<bool> consumerResults;
+    const auto h1 = QObject::connect(&exec, &FlowExecutor::nodeOutputsUpdated, &exec,
+                                     [&](NodeBase *n, bool, qint64, const QVariantMap &) {
+                                         if (n != consumer) return;
+                                         ++outputsSeen;
+                                         if (armed) {
+                                             armed = false;      // 一次性：只炸第一声广播
+                                             throw NonStdProbeException {};
+                                         }
+                                     },
+                                     Qt::DirectConnection);
+    const auto h2 = QObject::connect(&exec, &FlowExecutor::executionError, &exec,
+                                     [&](const QString &) { ++errorReports; }, Qt::DirectConnection);
+    const auto h3 = QObject::connect(&exec, &FlowExecutor::nodeExecuted, &exec,
+                                     [&](NodeBase *n, bool ok) { if (n == consumer) consumerResults.append(ok); },
+                                     Qt::DirectConnection);
+
+    exec.setFlowScene(&scene);
+    exec.executeUpTo(consumer);
+
+    // 走到这一行本身就是断言：非标准异常被 executeNode 兜住，没有沿调用栈逃出去。
+    // （改坏自证实测：删掉 `catch (...)` 后本用例以 QtTest 自己的 "Caught unhandled exception"
+    //   判红（失败位置在 qtestcase.cpp:2000），即**这条直调路径**由 QtTest 兜住；而工作线程 `run()`
+    //   那条路径上没有 catch，"逃出即 std::terminate"是按 C++ 语义推定的，本轮未真机取证。）
+    QVERIFY2(outputsSeen >= 1, "nodeOutputsUpdated 从未发出（用例是空断言）");
+    QVERIFY2(errorReports >= 1, "非标准异常未被兜住上报：executionError 一次都没发");
+    // 抛点在 `nodeExecuted(node, true)` **之后**（是 nodeOutputsUpdated 的直连槽炸的）⇒ 本轮该节点
+    // 会先收到 success=true、再收到 catch 里补发的 success=false。这是 handler 的既有形态（改动前
+    // 的 `const std::exception &` 分支同样如此），本轮未改；要点是**最后一条必须按失败收口**，
+    // 否则就是"报了 executionError 却不拦停"。两条信号不代表节点跑了两次。
+    QVERIFY2(!consumerResults.isEmpty(), "未观察到 nodeExecuted（用例是空断言）");
+    QVERIFY2(consumerResults.last() == false,
+             "抛出本轮未按失败收口：最后一条 nodeExecuted 仍是 success=true");
+    QVERIFY2(consumer->getParam(QStringLiteral("expression")).toString().contains(QLatin1Char('{')),
+             "非标准异常路径下参数引用没被还原（停在解析出的常量上）");
+
+    // 兜住之后执行器仍可正常使用：解除抛异常再同步跑一轮，结果照常
+    exec.executeUpTo(consumer);
+    exec.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+    QObject::disconnect(h1);
+    QObject::disconnect(h2);
+    QObject::disconnect(h3);
+    QCOMPARE(consumerResults.last(), true);
+    const QSharedPointer<DataObject> out = consumer->getOutputData(0);
+    QVERIFY2(out && qFuzzyCompare(out->getData().toDouble(), 8.0),
+             "抛异常被兜住后下一轮没能正常算出 8（执行器状态已被污染）");
+}
+
+void IntegrationTest::testParamRefRestoredWhenNodeThrowsBeforeSignals()
+{
+    // E1 的 RAII 还原器兜的是"**还原点之前**就抛出"的路径：探针在 collectNodeOutputVars
+    // 里（参数已解析、尚未还原）抛非标准异常，此刻只有析构/处理器里的还原能救回表达式。
+    FlowScene scene;
+    FlowExecutor exec;
+    exec.setFlowName(QStringLiteral("RegressionE1RestoreOnThrow"));
+
+    NodeBase *source = scene.createNode(NodeBase::LOGIC, QPointF(120, 200), QStringLiteral("Formula"));
+    auto *probe = new ThrowBeforeRestoreProbeNode();
+    probe->setName(QStringLiteral("ThrowProbe"));
+    probe->init();
+    scene.adoptNode(probe, QPointF(340, 200));
+    QVERIFY(source != nullptr);
+    source->setParam(QStringLiteral("expression"), QStringLiteral("7"));
+    probe->setParam(QStringLiteral("expression"),
+                    QStringLiteral("{%1} + 1").arg(source->moduleId()));
+    QVERIFY(scene.createConnection(source->outputPorts().first(),
+                                   probe->inputPorts().first(), true) != nullptr);
+
+    int errorReports = 0;
+    QList<bool> probeResults;
+    const auto h1 = QObject::connect(&exec, &FlowExecutor::executionError, &exec,
+                                     [&](const QString &) { ++errorReports; }, Qt::DirectConnection);
+    const auto h2 = QObject::connect(&exec, &FlowExecutor::nodeExecuted, &exec,
+                                     [&](NodeBase *n, bool ok) { if (n == probe) probeResults.append(ok); },
+                                     Qt::DirectConnection);
+
+    probe->armed.store(true);
+    exec.setFlowScene(&scene);
+    exec.executeUpTo(probe);
+    exec.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+    QObject::disconnect(h1);
+    QObject::disconnect(h2);
+
+    QCOMPARE(probe->scanCount.load(), 2);      // 确实是在还原点之前抛的（第 2 次扫描 = collectNodeOutputVars）
+    QVERIFY2(errorReports >= 1, "还原点之前抛出的非标准异常没有上报");
+    QVERIFY2(!probeResults.isEmpty() && !probeResults.first(),
+             "抛出本轮必须按失败收口（nodeExecuted 的 success 必须为 false）");
+    QVERIFY2(probe->getParam(QStringLiteral("expression")).toString().contains(QLatin1Char('{')),
+             "还原点之前抛出 ⇒ 参数引用没被还原（RAII 还原器失效）");
+}
+
+void IntegrationTest::testSkippedAndFailedNodesLoseReusableMark()
+{
+    // E2：m_validOutputs 的"输出可复用"位此前只写不清。今天没有读者（增量复用分支已回退）
+    // ⇒ 属**潜伏**缺口，只能靠 isOutputMarkedValid() 这个只读视图钉住"清空输出即撤销标记"。
+    FlowScene scene;
+    FlowExecutor exec;
+    exec.setFlowName(QStringLiteral("RegressionE2ReusableMark"));
+
+    NodeBase *cond = scene.createNode(NodeBase::LOGIC, QPointF(100, 200), QStringLiteral("If-Else"));
+    NodeBase *trueB = scene.createNode(NodeBase::LOGIC, QPointF(340, 120), QStringLiteral("Formula"));
+    NodeBase *falseB = scene.createNode(NodeBase::LOGIC, QPointF(340, 300), QStringLiteral("Formula"));
+    NodeBase *lone = scene.createNode(NodeBase::LOGIC, QPointF(100, 420), QStringLiteral("Formula"));
+    QVERIFY(cond && trueB && falseB && lone);
+    cond->setParam(QStringLiteral("condition"), true);
+    trueB->setParam(QStringLiteral("expression"), QStringLiteral("1 + 2"));
+    falseB->setParam(QStringLiteral("expression"), QStringLiteral("2 + 3"));
+    lone->setParam(QStringLiteral("expression"), QStringLiteral("2 * 3"));
+    QVERIFY(scene.createConnection(cond->outputPorts().value(1), trueB->inputPorts().first(), true) != nullptr);
+    QVERIFY(scene.createConnection(cond->outputPorts().value(2), falseB->inputPorts().first(), true) != nullptr);
+
+    exec.setFlowScene(&scene);
+
+    // ① 正向：本轮成功产出的节点必须被标记为可复用——没有这一步，后面全是"本来就空"的假绿
+    exec.executeUpTo(trueB);
+    QVERIFY2(exec.isOutputMarkedValid(trueB), "成功产出的节点没被标记可复用（正向锚点失效，后续断言无意义）");
+    QVERIFY2(!exec.isOutputMarkedValid(falseB), "未执行的分支不该带可复用标记");
+
+    // ② 失败清空：把一个已成功标记的节点改成"引用 p0 却没接线"（W-2 口径下必失败），标记必须撤销
+    lone->setParam(QStringLiteral("expression"), QStringLiteral("2 * 3"));
+    exec.executeUpTo(lone);
+    QVERIFY2(exec.isOutputMarkedValid(lone), "② 的前置：改坏之前 lone 必须先被标记为可复用");
+    lone->setParam(QStringLiteral("expression"), QStringLiteral("p0 + 1"));
+    exec.executeUpTo(lone);
+    QVERIFY2(exec.isOutputMarkedValid(lone) == false,
+             "节点失败、输出已清空，却仍被标记为可复用（E2：复用一恢复就会喂旧数据）");
+    lone->setParam(QStringLiteral("expression"), QStringLiteral("2 * 3"));  // ③ 要连跑两轮，留个必成功的它
+
+    // ③ 跳过清空：连续模式跑两轮，第二轮翻分支 ⇒ 上一轮成功过的 trueB 本轮被跳过，标记必须撤销
+    int rounds = 0;
+    const auto hExec = QObject::connect(
+        &exec, &FlowExecutor::nodeExecuted, &exec,
+        [&](NodeBase *n, bool) {
+            if (n != cond) return;
+            ++rounds;
+            if (rounds == 1)
+                cond->setParam(QStringLiteral("condition"), false);
+        }, Qt::DirectConnection);
+    const auto hFinish = QObject::connect(
+        &exec, &FlowExecutor::executionFinished, &exec,
+        [&]() { if (rounds >= 2) exec.stopExecution(); }, Qt::DirectConnection);
+    exec.setFlowMode(FlowMode::Continuous);
+    exec.startExecution();
+    bool finished = exec.wait(5000);
+    if (!finished) {
+        exec.stopExecution();
+        finished = exec.wait(2000);
+    }
+    QObject::disconnect(hExec);
+    QObject::disconnect(hFinish);
+    QVERIFY2(finished, "两轮分支流程未在 5 秒内结束");
+    QVERIFY2(rounds >= 2, qPrintable(QStringLiteral("只跑到第 %1 轮（用例是空断言）").arg(rounds)));
+    QVERIFY2(exec.isOutputMarkedValid(trueB) == false,
+             "被跳过（输出已清空）的节点仍带可复用标记（E2 的原始症状：汇合节点读回上一件产品数据）");
+    QVERIFY2(exec.isOutputMarkedValid(falseB), "本轮真正执行成功的分支必须重新标记为可复用");
+
+    // ④ 重启清空：resetState 整表清空 m_nodeData ⇒ 整表撤销标记必须在同一处发生。
+    //    必须用**同一个执行器**重启：m_validOutputs 是执行器自己的表，换个新执行器读到的天然是空，
+    //    那种"通过"是假的。观察点选 executionStarted：resetState() 在 startExecution() 里、
+    //    线程起来之前就跑完，而 run() 第一行才发 executionStarted ⇒ 此刻本轮还一个节点都没执行。
+    QVERIFY2(exec.isOutputMarkedValid(falseB), "④ 的前置：重启前该执行器里必须仍有标记（否则本段是空断言）");
+    bool checkedAtStart = false;
+    bool markAtStart = true;
+    const auto hStart = QObject::connect(
+        &exec, &FlowExecutor::executionStarted, &exec,
+        [&]() {
+            checkedAtStart = true;
+            markAtStart = exec.isOutputMarkedValid(falseB);
+            exec.stopExecution();   // run() 回到 while 顶部即因 Stopped 退出，本轮不会再跑节点
+        }, Qt::DirectConnection);
+    exec.setFlowMode(FlowMode::SoftwareTrigger);
+    exec.startExecution();
+    exec.wait(5000);
+    QObject::disconnect(hStart);
+    QVERIFY2(checkedAtStart, "未在 executionStarted 处取到样本（④ 的观察点失效）");
+    QVERIFY2(!markAtStart, "重启后仍保留上一轮的可复用标记（resetState 只清了 m_nodeData）");
+
+    exec.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+}
+
+void IntegrationTest::testOwnerExecutorEstablishedAtGraphBuild()
+{
+    // E3 残留：setOwnerExecutor() 此前全仓只有 executeNode 一处调用 ⇒ 归属只在"该节点被跑过一轮"
+    // 之后才有，而 MvsImageSourceNode 的两条 UI 路径（applyParams 是否写像素格式、refreshPixelFormatEnabled
+    // 下拉框启用/置灰）在归属为空时只能回落 FlowExecutor::current()＝"最后启动的那条流程"。
+    FlowScene sceneA;
+    FlowExecutor execA;
+    execA.setFlowName(QStringLiteral("RegressionE3OwnerA"));
+
+    NodeBase *cond = sceneA.createNode(NodeBase::LOGIC, QPointF(100, 200), QStringLiteral("If-Else"));
+    NodeBase *trueB = sceneA.createNode(NodeBase::LOGIC, QPointF(340, 120), QStringLiteral("Formula"));
+    QVERIFY(cond && trueB);
+    cond->setParam(QStringLiteral("condition"), true);
+    trueB->setParam(QStringLiteral("expression"), QStringLiteral("1 + 2"));
+    QVERIFY(sceneA.createConnection(cond->outputPorts().value(1), trueB->inputPorts().first(), true) != nullptr);
+
+    QVERIFY2(cond->ownerExecutor() == nullptr,
+             "前置失效：接入执行器之前节点就已带归属（下面的断言将无从分辨是谁建立的）");
+
+    // ① 挂上场景即建立归属，一次都不跑
+    execA.setFlowScene(&sceneA);
+    QCOMPARE(cond->ownerExecutor(), &execA);
+
+    // ② 接入**之后**新增的节点：整轮都被跳过（永不执行）⇒ 只有"建图时建立归属"能救它
+    NodeBase *falseB = sceneA.createNode(NodeBase::LOGIC, QPointF(340, 300), QStringLiteral("Formula"));
+    QVERIFY(falseB != nullptr);
+    falseB->setParam(QStringLiteral("expression"), QStringLiteral("2 + 3"));
+    QVERIFY(sceneA.createConnection(cond->outputPorts().value(2), falseB->inputPorts().first(), true) != nullptr);
+    int rounds = 0;
+    const auto hExec = QObject::connect(
+        &execA, &FlowExecutor::nodeExecuted, &execA,
+        [&](NodeBase *n) { if (n == cond && ++rounds >= 1) execA.stopExecution(); }, Qt::DirectConnection);
+    execA.setFlowMode(FlowMode::Continuous);
+    execA.startExecution();
+    bool finished = execA.wait(5000);
+    if (!finished) {
+        execA.stopExecution();
+        finished = execA.wait(2000);
+    }
+    QObject::disconnect(hExec);
+    QVERIFY2(finished, "② 的流程未在 5 秒内结束");
+    QVERIFY2(rounds >= 1, "② 没跑到一轮（空断言）");
+    QCOMPARE(falseB->ownerExecutor(), &execA);   // FALSE 分支全程被跳过：从没进过 executeNode
+
+    // ③ 双流程并发：B 在跑（current()==B），A 的节点归属仍是 A ⇒ UI 路径不会回落到 current()
+    FlowScene sceneB;
+    FlowExecutor execB;
+    execB.setFlowName(QStringLiteral("RegressionE3OwnerB"));
+    NodeBase *bNode = sceneB.createNode(NodeBase::LOGIC, QPointF(100, 200), QStringLiteral("Formula"));
+    QVERIFY(bNode != nullptr);
+    bNode->setParam(QStringLiteral("expression"), QStringLiteral("4 + 4"));
+    execB.setFlowScene(&sceneB);
+    execB.setFlowMode(FlowMode::Continuous);
+    execB.startExecution();
+    QTRY_VERIFY_WITH_TIMEOUT(FlowExecutor::current() == &execB, 3000);   // 前提：current() 确实已被 B 抢走
+    QCOMPARE(cond->ownerExecutor(), &execA);
+    QCOMPARE(falseB->ownerExecutor(), &execA);
+    QCOMPARE(bNode->ownerExecutor(), &execB);
+    execB.stopExecution();
+    execB.wait(5000);
+    execB.setFlowScene(nullptr);
+    execA.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+}
+
+void IntegrationTest::testRoundRateNotClampedByFixedInterval()
+{
+    // E6 的"用例侧未钉住"那半：原症状是"每轮固定 msleep(50) ⇒ 算法再快也被限到约 20 轮/秒"。
+    // 代码早已改成 m_loopIntervalMs 默认 0（不额外限速），但全仓没有任何用例钉住它——
+    // 谁把默认值改回 50，今天的门禁一行都不会红。**注意本用例不调 setLoopIntervalMs**，
+    // 测的就是出厂默认节拍；默认策略本身要不要限速属开放项 O-1，本轮不在此拍板。
+    FlowScene scene;
+    FlowExecutor exec;
+    exec.setFlowName(QStringLiteral("RegressionE6Cadence"));
+    NodeBase *node = scene.createNode(NodeBase::LOGIC, QPointF(120, 200), QStringLiteral("Formula"));
+    QVERIFY(node != nullptr);
+    node->setParam(QStringLiteral("expression"), QStringLiteral("2 * 3"));
+    exec.setFlowScene(&scene);
+
+    constexpr int kRounds = 10;
+    QElapsedTimer clock;
+    QList<qint64> stamps;
+    const auto h = QObject::connect(
+        &exec, &FlowExecutor::nodeExecuted, &exec,
+        [&](NodeBase *n, bool) {
+            if (n != node) return;
+            stamps.append(clock.elapsed());
+            if (stamps.size() >= kRounds)
+                exec.stopExecution();
+        }, Qt::DirectConnection);
+    clock.start();
+    exec.setFlowMode(FlowMode::Continuous);
+    exec.startExecution();
+    bool finished = exec.wait(10000);
+    if (!finished) {
+        exec.stopExecution();
+        finished = exec.wait(3000);
+    }
+    QObject::disconnect(h);
+    exec.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+
+    QVERIFY2(finished, "节拍用例未能在 10 秒内收尾");
+    QVERIFY2(stamps.size() >= kRounds,
+             qPrintable(QStringLiteral("只跑到 %1 轮（%2 轮的前置没满足，用例是空断言）")
+                            .arg(stamps.size()).arg(kRounds)));
+    const qint64 span = stamps.at(kRounds - 1) - stamps.at(0);
+    const double perRoundMs = double(span) / (kRounds - 1);
+    // 口径：固定 50ms 节拍下 9 个间隔必然 ≥450ms；这里要求平均**不到一半**（25ms/轮），
+    // 既足以判定"没被 50ms 拉住"，又给慢机器留了一倍余量（本轮实测见文档）。
+    QVERIFY2(perRoundMs < 25.0,
+             qPrintable(QStringLiteral("两轮间隔被固定节拍拉住：平均 %1ms/轮（阈值 25ms，旧缺陷为固定 50ms）")
+                            .arg(perRoundMs, 0, 'f', 2)));
 }
 
 void IntegrationTest::testNestedLoopIterations()

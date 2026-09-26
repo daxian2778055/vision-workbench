@@ -50,16 +50,38 @@ FlowExecutor::FlowExecutor(QObject *parent)
     });
 }
 
+/// 析构内的有界等待（毫秒）。与 retireExecutor 的 15s 相比更短：走到析构说明调用方
+/// 已经判定线程可回收，这里只是最后一道兜底。
+constexpr int kDtorJoinTimeoutMs = 5000;
+
+bool FlowExecutor::joinForDestroy(int timeoutMs)
+{
+    stopExecution();
+    if (!isRunning()) {
+        return true;
+    }
+    return wait(timeoutMs);
+}
+
 FlowExecutor::~FlowExecutor()
 {
     GlobalTriggerManager::instance()->unregisterExecutor(this);
     if (s_currentInstance.load() == this) {
         s_currentInstance.store(nullptr);
     }
-    stopExecution();
-    // 带超时等待，防止流程线程死循环/等待外部事件时析构永久阻塞
-    if (!wait(5000)) {
-        VFP_DEBUG << "FlowExecutor thread did not exit within 5000ms; state=" << int(m_state);
+    // A1-④：线程没真正退出，就绝不继续往下拆。
+    // 旧实现在 wait(5000) 失败后只打一行日志，然后照常 disconnectFromScene() 并返回——
+    // 而"返回"就意味着本对象内存被释放，还在跑的 run() 从下一行起访问的就是野指针。
+    // 这种时序问题的表现是偶发的错误检测结果或随机崩溃，比一次明确的中止坏得多。
+    // 正常销毁路径应在 delete 之前先 joinForDestroy()（见 MainWindow::retireExecutor 的泄漏保护）；
+    // 在这里超时说明该协议被绕过，宁可带着卡点阶段名当场中止，也不留一个会算错数的进程。
+    if (!joinForDestroy(kDtorJoinTimeoutMs)) {
+        qCritical() << "FlowExecutor 析构超时：线程仍卡在" << workerPhaseName()
+                    << " state=" << int(m_state);
+        const QString why = QStringLiteral(
+            "FlowExecutor 工作线程未在 %1ms 内退出：继续析构必然是 use-after-free，主动中止进程。"
+            "销毁执行器请先调用 joinForDestroy()（参见 MainWindow::retireExecutor）。").arg(kDtorJoinTimeoutMs);
+        qFatal("%s", why.toUtf8().constData());
     }
     disconnectFromScene();
 }
@@ -115,6 +137,15 @@ QString FlowExecutor::workerPhaseName() const
         s += QStringLiteral("(节点模块 %1)").arg(nid);
     }
     return s;
+}
+
+/// 「输出可复用」标记的只读视图（E2 回归用）。
+/// 该标记自增量复用分支回退后**没有任何读者**，故 E2 的不变量（清空输出即撤销标记）
+/// 无法从外部行为观察到——没有本 accessor 就只能"改了但钉不住"。不参与任何执行决策。
+bool FlowExecutor::isOutputMarkedValid(NodeBase *node) const
+{
+    QMutexLocker locker(&m_graphCacheMutex);
+    return m_validOutputs.value(node, false);
 }
 
 void FlowExecutor::onSceneNodeRemoved(NodeBase *node)
@@ -219,9 +250,20 @@ void FlowExecutor::setFlowScene(FlowScene *scene)
         m_subFlowCallStack.clear();
     }
     connectToScene(scene);
-    // 多流程并发：最近激活的流程执行器作为 current()（供节点查询运行状态）
-    if (scene)
+    // E3：挂上场景即建立归属——rebuildIncomingIndex 要等"有人驱动一轮/一次改图"才跑，
+    // 而"流程从没启动过就去开相机参数面板"正是 E3 残留的原始场景。
+    // setOwnerExecutor 是裸指针赋值（不取锁，见 NodeBase.h），与 executeNode 里的既有写法同口径；
+    // 解绑（scene == nullptr）**不清**归属：节点可能已转由别的执行器接管，清成空反而退回 current() 兜底。
+    if (scene) {
+        const QList<NodeBase *> liveNodes = scene->nodes();
+        for (NodeBase *n : liveNodes) {
+            if (n) {
+                n->setOwnerExecutor(this);
+            }
+        }
+        // 多流程并发：最近激活的流程执行器作为 current()（供节点查询运行状态）
         s_currentInstance = this;
+    }
 }
 
 void FlowExecutor::startExecution()
@@ -540,6 +582,7 @@ void FlowExecutor::run()
                     QMutexLocker cacheLock(&m_graphCacheMutex);
                     m_nodeData[node].clear();   // 清空缓存，避免下游误用上一轮数据（E2）
                     m_nodeOutputVars[node->moduleId()].clear();  // 清空变量缓存，避免引用上一轮数值（P2）
+                    m_validOutputs.remove(node);   // E2：输出已清空，"可复用"标记必须同步撤销（口径见 executeNode 内注释）
                 }
                 recordNodeSkipped(node, QStringLiteral("分支未激活"));
                 continue;
@@ -726,6 +769,17 @@ void FlowExecutor::rebuildIncomingIndex(const QList<NodeBase *> &liveNodes,
         }
     }
 
+    // E3（2026-09-25 收口）：建图即建立归属，不再等"该节点被跑过一轮"。
+    // 此前 setOwnerExecutor() 全仓只有 executeNode() 一处调用 ⇒ 从未执行过的节点 ownerExecutor() 恒空，
+    // MvsImageSourceNode 的两条 UI 触发路径（applyParams 决定要不要写像素格式、refreshPixelFormatEnabled
+    // 决定下拉框启用/置灰）只能回落 FlowExecutor::current()＝"最后启动的那条流程"，
+    // 双流程下 A 的相机参数面板会按 B 的运行状态被锁或被放行。
+    for (NodeBase *n : liveNodes) {
+        if (n) {
+            n->setOwnerExecutor(this);
+        }
+    }
+
     // 图结构已变化：清掉指向"已不在当前场景中"的节点缓存条目。
     // 撤销 / 删除节点后，旧指针地址与 moduleId 都可能被新节点复用，残留键会让
     // 新节点被误判为"有缓存 / 输出有效"，把上一代节点的数据喂进算子
@@ -849,6 +903,42 @@ bool FlowExecutor::visit(NodeBase *node, QSet<NodeBase*> &visited, QSet<NodeBase
     return true;
 }
 
+namespace {
+
+/// E1：参数引用表达式的还原器，**析构即还原**。
+/// 原实现把还原循环写在 `try/catch` 之后，只有两条退出路径能走到它（正常返回、`const std::exception &`）；
+/// 其余任何逃出 `try` 的异常都会把整段还原跳过，参数从此永久停在解析出的常量上——存盘即把引用存成常量。
+/// `restore()` 可显式提前调用（信号必须看到已还原的表达式），之后析构时列表已空，不会重复写。
+class ParamRefRestorer
+{
+public:
+    ParamRefRestorer(NodeBase *node, QList<QPair<QString, QString>> *backups)
+        : m_node(node), m_backups(backups)
+    {
+    }
+    ParamRefRestorer(const ParamRefRestorer &) = delete;
+    ParamRefRestorer &operator=(const ParamRefRestorer &) = delete;
+
+    void restore()
+    {
+        if (!m_node || !m_backups) {
+            return;
+        }
+        for (const auto &b : *m_backups) {
+            m_node->setParam(b.first, b.second);
+        }
+        m_backups->clear();
+    }
+
+    ~ParamRefRestorer() { restore(); }
+
+private:
+    NodeBase *m_node;
+    QList<QPair<QString, QString>> *m_backups;
+};
+
+} // namespace
+
 void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
 {
     if (!node) {
@@ -864,6 +954,7 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
 
     // 参数引用解析备份：仅本轮临时替换为解析值，执行后还原表达式，避免永久写回（E1）
     QList<QPair<QString, QString>> paramRefBackups;
+    ParamRefRestorer paramRefs(node, &paramRefBackups);
 
     try {
         // 执行当前选中的算子
@@ -938,9 +1029,16 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
                 node->setOutputData(p, QSharedPointer<DataObject>());
             {
                 // S1 Stage 1：失败/本轮无输出同样要清缓存（避免下游误用上一轮结果），同样入锁
+                //
+                // E2（2026-09-25 收口）：清空的同一处必须撤销 m_validOutputs。不变量（本轮起由
+                // IntegrationTest::testSkippedAndFailedNodesLoseReusableMark 钉住）：
+                // **凡整体清空某节点的输出端口 / 其 m_nodeData 条目，且本轮不再重跑该节点 ⇒ 同步撤销该位**。
+                // 今天无人读它（增量复用分支已回退，见 executeNode 内【待办·增量执行复用】那段注释），故属**潜伏**；
+                // 复用一恢复，陈旧"已有效"位就会让汇合节点原样读回上一件产品的数据。
                 QMutexLocker cacheLock(&m_graphCacheMutex);
                 m_nodeData[node].clear();
                 m_nodeOutputVars[node->moduleId()].clear();
+                m_validOutputs.remove(node);
             }
         }
 
@@ -955,6 +1053,13 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
         if (!success) {
             m_roundHadFailure = true;
         }
+
+        // E1 残留①（2026-09-25 收口）：还原必须**先于任何对外广播**。
+        // 下面这五条 emit（nodeExecuted / nodeExecutionTime / nodeOutputsUpdated / imageAvailable /
+        // imageReady）原先全部落在"参数仍是本轮解析值"的窗口里，而它们是直连槽（各界面面板、
+        // 结果表、以及任何在槽里存盘/快照的代码）读节点参数的时刻——窗口内取到的就是常量。
+        // 现在显式还原放在第一条 emit 之前；ParamRefRestorer 的析构继续兜"在这一点之前抛异常"的路径。
+        paramRefs.restore();
 
         // 发出nodeExecuted信号，通知UI更新
         emit nodeExecuted(node, success);
@@ -973,7 +1078,7 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
             emit nodeOutputsUpdated(node, success, nodeElapsed, vars);
         }
 
-        // Phase 4: \u4FDD\u5B58\u68C0\u6D4B\u7ED3\u679C\u5230\u6570\u636E\u5E93
+        // Phase 4: 保存检测结果到数据库
         if (!AppDatabase::instance()->databasePath().isEmpty()) {
             // \u6570\u636E\u5E93\u5DF2\u521D\u59CB\u5316
             // 报表「流程」列必须是可读且跨会话稳定的流程名：此前写的是场景指针的十进制数字
@@ -1046,17 +1151,23 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
             }
         }
     } catch (const std::exception &e) {
-        QString error = tr("Error executing node %1: %2").arg(node->name()).arg(e.what());
-        emit executionError(error);
+        paramRefs.restore();   // 幂等：正常路径已在第一条 emit 前还原，这里兜"还原之前抛出"的路径
+        success = false;        // 见函数尾注释：异常一律按失败收口，不再被 m_lastNodeSuccess 覆盖回 true
+        emit executionError(tr("Error executing node %1: %2").arg(node->name()).arg(e.what()));
         emit nodeExecuted(node, false);
-        m_lastNodeSuccess = false;
+    } catch (...) {
+        // E1 残留②：这个 `try` 原来只捕 `const std::exception &`。逃出它的异常会一路离开 executeNode
+        // （run() 里没有 catch ⇒ std::terminate），而参数就永久停在解析出的常量上。
+        // 触发点不止算子本身：NodeBase::execute() 已经吞掉 process() 的所有异常，真正能逃到这里的是
+        // propagateData / 缓存写入 / 落库 / 全局变量，以及**直连槽**——emit 就在这个 try 内。
+        paramRefs.restore();
+        success = false;
+        emit executionError(tr("算子 %1 执行期间抛出非标准异常（类型未知），本轮按失败处理").arg(node->name()));
+        emit nodeExecuted(node, false);
     }
 
-    // 还原参数表达式，确保下一轮重新解析上游最新值（E1）
-    for (const auto &b : paramRefBackups) {
-        node->setParam(b.first, b.second);
-    }
-
+    // 异常路径已在上面把 success 置假 ⇒ 失败一定拦停（旧写法在 handler 里写 m_lastNodeSuccess=false，
+    // 却被这一行的 `success`（异常前可能已是 true）覆盖，等于"报了 executionError 却不拦停"）
     m_lastNodeSuccess = success;
 }
 
@@ -1229,6 +1340,7 @@ void FlowExecutor::executeLoop(NodeBase *loopNode, int loopCount)
                     QMutexLocker cacheLock(&m_graphCacheMutex);
                     m_nodeData[bn].clear();
                     m_nodeOutputVars[bn->moduleId()].clear();
+                    m_validOutputs.remove(bn);   // E2：同上，清空输出即撤销"可复用"标记
                 }
                 recordNodeSkipped(bn, QStringLiteral("分支未激活"));
                 continue;
@@ -1403,8 +1515,10 @@ bool FlowExecutor::executeSubFlow(SubFlowNode *caller)
         QMutexLocker cacheLock(&m_graphCacheMutex);
         if (in)
             m_nodeData[inputNode][0] = in;
-        else
+        else {
             m_nodeData[inputNode].remove(0);
+            m_validOutputs.remove(inputNode);   // E2：本轮无喂入 ⇒ 撤销"可复用"标记
+        }
     }
     inputNode->setInputData(0, in);
 
@@ -1512,9 +1626,14 @@ void FlowExecutor::propagateData(NodeBase *node)
 void FlowExecutor::resetState()
 {
     {
-        // S1 Stage 1b：重启清空缓存入锁（m_validOutputs 不在清除之列——与旧行为一致，由轮首剪枝处理）
+        // S1 Stage 1b：重启清空缓存入锁
+        //
+        // E2（2026-09-25 更正）：原注释写"m_validOutputs 不在清除之列——由轮首剪枝处理"，该说法不成立：
+        // rebuildIncomingIndex 的剪枝只摘除"**已不在场景**"的节点条目，仍活着的节点会带着上一轮的
+        // "输出有效"位跨过这次重启，而它的 m_nodeData 刚刚被整表清空。整表清空 ⇒ 整表撤销。
         QMutexLocker cacheLock(&m_graphCacheMutex);
         m_nodeData.clear();
+        m_validOutputs.clear();
         m_nodeOutputVars.clear();   // 重新启动清空变量缓存，避免引用上一轮数值（P2）
     }
     m_executionQueue.clear();

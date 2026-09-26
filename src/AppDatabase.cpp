@@ -400,6 +400,41 @@ bool AppDatabase::authenticateUser(const QString &name, const QString &password)
     return true;
 }
 
+bool AppDatabase::changeUserPassword(const QString &name, const QString &newPassword)
+{
+    QMutexLocker locker(&s_dbMutex);
+    const QSqlDatabase db = threadDatabase();
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral("UPDATE users SET password_hash = ? WHERE name = ?"));
+    q.addBindValue(createPasswordHash(newPassword));
+    q.addBindValue(name);
+    if (!q.exec()) {
+        VFP_DEBUG << "Failed to change password for" << name << ":" << q.lastError().text();
+        return false;
+    }
+    // 影响 0 行 = 该用户不存在：必须报失败，否则调用方会以为口令已被改掉（出厂口令仍在用却解锁）
+    if (q.numRowsAffected() <= 0) {
+        VFP_DEBUG << "changeUserPassword: user not found:" << name;
+        return false;
+    }
+    return true;
+}
+
+bool AppDatabase::isFactoryAdminPasswordInUse() const
+{
+    // 不能复用 authenticateUser()：它自己锁 s_dbMutex，而 QMutex 不可重入，这里再锁一次即自锁。
+    // 只做读+校验，不做旧版哈希迁移（那是登录路径的事）。
+    QMutexLocker locker(&s_dbMutex);
+    const QSqlDatabase db = threadDatabase();
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral("SELECT password_hash FROM users WHERE name = ?"));
+    q.addBindValue(QStringLiteral("admin"));
+    if (!q.exec() || !q.next()) {
+        return false;   // 没有 admin 账户 ⇒ 出厂口令不可能在使用中
+    }
+    return verifyPassword(QStringLiteral("admin"), q.value(0).toString());
+}
+
 QList<UserRecord> AppDatabase::queryUsers() const
 {
     QMutexLocker locker(&s_dbMutex);

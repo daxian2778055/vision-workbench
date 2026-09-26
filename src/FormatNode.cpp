@@ -29,8 +29,8 @@ void FormatNode::init()
 
 bool FormatNode::process()
 {
-    run();
-    return true;
+    // W-2：空载不得绿灯——结果必须由「输入数据」端口算出，统一走基类数据端口契约
+    return processDataOutputs();
 }
 
 void FormatNode::run(bool /*autoSwitch*/)

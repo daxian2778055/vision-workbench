@@ -15,6 +15,10 @@ public:
     void init() override;
     void run(bool autoSwitch = true) override;
     bool process() override;
+    /// 必填数据端口 = 表达式**实际引用到**的 pN（W-2 的唯一"按配置逐端口判定"覆写）。
+    /// p0~p3 是可选操作数：`2 * 3` 不接输入也合法；`p0 + 1` 没接 p0 就必须判失败，
+    /// 而不是拿 getInputData 缺失时的 0.0 算出一个看起来正常的数。
+    QSet<int> requiredInputDataPorts() const override;
     void setParam(const QString &name, const QVariant &value) override;
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;

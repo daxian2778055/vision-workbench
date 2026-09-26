@@ -80,6 +80,40 @@ bool HalconNode::requiresImageOutput() const
     return p0 && p0->dataType() == PortDataType::Image;
 }
 
+QSet<int> HalconNode::requiredInputDataPorts() const
+{
+    // 判据同样取端口类型：非 Image 输入端口即视为必填数据输入。
+    // 该默认值只对**走 processDataOutputs() 的节点**生效（图像算子不经过这里），
+    // 所以不必担心"某图像算子有个数值旁路输入"被误判成必填。
+    QSet<int> required;
+    for (int i = 0; i < m_inputPorts.size(); ++i) {
+        Port *p = m_inputPorts.value(i);
+        if (p && p->dataType() != PortDataType::Image)
+            required.insert(i);
+    }
+    return required;
+}
+
+bool HalconNode::requiresDataOutput() const
+{
+    for (Port *p : m_outputPorts) {
+        if (p && p->dataType() != PortDataType::Image)
+            return true;
+    }
+    return false;
+}
+
+bool HalconNode::inputDataPresent(int portIndex) const
+{
+    const QSharedPointer<DataObject> data = getInputData(portIndex);
+    if (!data)
+        return false;
+    // 只认"带值"的对象：setHImage() 不写 m_data（见 DataObject.cpp 的注释），
+    // 所以误接到数据端口上的图像对象在这里就是无值 ⇒ 不算有效输入。
+    const QVariant var = data->getData();
+    return var.isValid() && !var.isNull();
+}
+
 void HalconNode::run(bool autoSwitch)
 {
     // Default implementation - just pass through the image
@@ -462,6 +496,64 @@ bool HalconNode::process()
         // 异常失败清空全部输出（P2）
         for (int p = 0; p < outputPorts().size(); ++p)
             setOutputData(p, QSharedPointer<DataObject>());
+        return false;
+    }
+}
+
+bool HalconNode::processDataOutputs()
+{
+    const auto clearAllOutputs = [this] {
+        for (int p = 0; p < m_outputPorts.size(); ++p)
+            setOutputData(p, QSharedPointer<DataObject>());
+    };
+    const auto failRound = [this, &clearAllOutputs] {
+        m_params[QStringLiteral("moduleStatus")] = false;
+        clearAllOutputs();
+        return false;
+    };
+
+    try {
+        // 本族节点不产图：先清掉图像与上一轮输出，"本轮没有产出"必须表现为端口为空，
+        // 而不是残留上一轮的值（process() 里 P1/P2 两条注释的数据侧对应）
+        m_outputImage.Clear();
+        clearAllOutputs();
+
+        // 空载守卫：必填数据端口没有可用值 ⇒ 不得成功。
+        // 少了这一条，"分类恒为'中'、筛选恒为 false、格式化恒为模板"都会以绿灯传给下游。
+        const QSet<int> required = requiredInputDataPorts();
+        for (int idx : required) {
+            if (!inputDataPresent(idx))
+                return failRound();
+        }
+
+        // 成功默认值（P0-1 同一条契约）：本族 run() 从不写 moduleStatus，失败只能靠
+        // 显式写位或下面的产出守卫，所以每轮先预置 true。
+        m_params[QStringLiteral("moduleStatus")] = true;
+
+        run();
+
+        if (!m_params[QStringLiteral("moduleStatus")].toBool())
+            return failRound();
+
+        // 产出守卫（S-1 的数据侧孪生）：承诺出数据的节点，本轮全部输出端口为空就是失败
+        if (requiresDataOutput()) {
+            bool produced = false;
+            for (int p = 0; p < m_outputPorts.size(); ++p) {
+                const QSharedPointer<DataObject> out = getOutputData(p);
+                if (out) {
+                    produced = true;
+                    break;
+                }
+            }
+            if (!produced)
+                return failRound();
+        }
+
+        return true;
+    } catch (...) {
+        m_params[QStringLiteral("moduleStatus")] = false;
+        m_outputImage.Clear();
+        clearAllOutputs();
         return false;
     }
 }

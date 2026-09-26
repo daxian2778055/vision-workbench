@@ -25,8 +25,9 @@ void DelayNode::init()
 
 bool DelayNode::process()
 {
-    run();
-    return true;
+    // W-2 的豁免节点（两条判据在 DelayNode.h 里都显式让开）：延时是时间门控，空载合法；
+    // 仍走同一个 helper，是为了统一拿到"每轮预置 moduleStatus + 失败清空输出"这两条
+    return processDataOutputs();
 }
 
 void DelayNode::run(bool /*autoSwitch*/)

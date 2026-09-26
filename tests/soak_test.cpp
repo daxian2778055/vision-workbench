@@ -112,6 +112,10 @@ void SoakTest::testContinuousSoak()
     }
     nodes[0]->setParam(QStringLiteral("filePath"), imgPath);
     nodes[5]->setParam(QStringLiteral("delayMs"), 0);
+    // W-2：公式计算的必填集 = 表达式引用到的 pN。默认表达式 "p0 + p1" 需要两路操作数，
+    // 而下面的连线循环每对节点只建一条线 ⇒ p1 空载会（正确地）判失败并中断长跑。
+    // 长稳压的是图像链路与内存，不是公式语义 ⇒ 改成单操作数表达式。
+    nodes[3]->setParam(QStringLiteral("expression"), QStringLiteral("p0 * 2"));
 
     for (int i = 0; i + 1 < nodes.size(); ++i) {
         bool linked = false;

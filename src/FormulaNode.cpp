@@ -228,8 +228,20 @@ void FormulaNode::init()
 
 bool FormulaNode::process()
 {
-    run();
-    return true;
+    // W-2：必填集 = 表达式引用到的 pN（见 requiredInputDataPorts()），其余判据走基类数据端口契约
+    return processDataOutputs();
+}
+
+QSet<int> FormulaNode::requiredInputDataPorts() const
+{
+    // 口径 = 表达式里作为独立标识符出现的 p0~p3；词边界让函数名（pow 等）不会被误判成引用。
+    QSet<int> required;
+    const QString expr = getParam(QStringLiteral("expression")).toString();
+    static const QRegularExpression refRe(QStringLiteral("\\bp([0-3])\\b"));
+    QRegularExpressionMatchIterator it = refRe.globalMatch(expr);
+    while (it.hasNext())
+        required.insert(it.next().captured(1).toInt());
+    return required;
 }
 
 bool FormulaNode::evaluate(const QString &expression,

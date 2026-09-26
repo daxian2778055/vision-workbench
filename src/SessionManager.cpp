@@ -38,14 +38,23 @@ bool SessionManager::hasRoleLevel(const QString &requiredRole) const
     return roleLevel(m_role) >= roleLevel(requiredRole);
 }
 
+void SessionManager::setWritesBlocked(bool blocked)
+{
+    if (m_writesBlocked == blocked) {
+        return;
+    }
+    m_writesBlocked = blocked;
+    emit writesLockChanged(blocked);
+}
+
 bool SessionManager::canManageUsers() const
 {
-    return hasRoleLevel(QStringLiteral("Admin"));
+    return !writesBlocked() && hasRoleLevel(QStringLiteral("Admin"));
 }
 
 bool SessionManager::canEditScheme() const
 {
-    return hasRoleLevel(QStringLiteral("Engineer"));
+    return !writesBlocked() && hasRoleLevel(QStringLiteral("Engineer"));
 }
 
 bool SessionManager::canRunFlow() const
@@ -55,5 +64,5 @@ bool SessionManager::canRunFlow() const
 
 bool SessionManager::canConfigCommunications() const
 {
-    return hasRoleLevel(QStringLiteral("Engineer"));
+    return !writesBlocked() && hasRoleLevel(QStringLiteral("Engineer"));
 }

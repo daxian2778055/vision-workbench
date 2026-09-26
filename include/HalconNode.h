@@ -40,6 +40,16 @@ public:
     /// 判成绿灯，故凡"既要求输入图像、0 号输出端口又对外承诺图像"的节点必须真有产出。
     /// 确实只产测量值/区域而不透传图像的节点覆写返回 false。
     virtual bool requiresImageOutput() const;
+    /// ---- 以下两条是上面两条图像判据的**数据侧孪生**（W-2），由 processDataOutputs() 执行 ----
+    /// 本轮"成功"所必填的数据输入端口索引。默认 = 本节点声明的全部非 Image 输入端口：
+    /// 数据变换类算子的输出必须由输入数据算出来，输入空着仍吐"参数派生的常量"就是静默绿灯
+    /// （分类空载出"中"、筛选空载出 false、格式化空载出模板）。
+    /// 只有端口本身是**可选操作数**的节点才覆写：FormulaNode 的必填集 = 表达式实际引用到的 pN。
+    virtual QSet<int> requiredInputDataPorts() const;
+    /// 本节点"成功"是否必须产出至少一路数据输出。用于抓 run() 里 `if (...) return;`
+    /// 却不写 moduleStatus=false 的分支（FormatNode 空模板 / ProtocolParseNode 空串 / FormulaNode 求值失败）。
+    /// 确实只写副作用（落库/发送）而不承诺数据的节点覆写返回 false。
+    virtual bool requiresDataOutput() const;
     virtual void drawResult() override;
     virtual QJsonObject toJson() const override;
     virtual void fromJson(const QJsonObject &json) override;
@@ -94,6 +104,15 @@ signals:
     void executionTimeMeasured(NodeBase *node, qint64 elapsedMs);
 
 protected:
+    /// 数据型节点的 process() 契约实现（W-2）：把 `bool process() { run(); return true; }`
+    /// 换成 `return processDataOutputs();`。四步与 process() 对图像侧做的事一一对应：
+    /// 空载守卫 → 预置成功位 → run() + 失败传播 → 产出守卫；并每轮先清空输出，
+    /// 使 run() 里"提前 return 不写输出"的分支不会把上一轮结果当本轮结果。
+    bool processDataOutputs();
+    /// 端口本轮是否有可用数据：DataObject 存在且 getData() 是有效值。
+    /// **不吃图像**——把图像连线接到 Number/String 端口上不算有效输入。
+    bool inputDataPresent(int portIndex) const;
+
     HObject m_inputImage;
     HObject m_outputImage;
     /// 线程安全参数表（内部 QReadWriteLock）：界面线程与执行线程可并发访问。

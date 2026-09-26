@@ -71,6 +71,11 @@ public:
     /// 退出单步模式（点"开始执行/继续"或切换运行模式时调用；单步入口会重新置位）
     void exitStepMode();
     void stopExecution();
+    /// 停止并**在 timeoutMs 内等待工作线程真正退出**（析构与调用方销毁共用的唯一实现）。
+    /// 返回 true = 线程已退出，可以安全销毁本对象；
+    /// 返回 false = 线程还在跑，此时销毁本对象会让 run() 访问已释放内存（UB），
+    /// 调用方必须改走"放弃销毁 / 挂 finished 自删"的泄漏保护路径（见 MainWindow::retireExecutor）。
+    bool joinForDestroy(int timeoutMs);
     ExecutionState getState() const;
 
     /// 图当前是否允许编辑（S1 / Phase B 小步）：只有"执行线程真在跑"或"暂停请求已受理但 worker 尚未
@@ -113,6 +118,9 @@ public:
     /// **诊断**：执行线程当前所处阶段（含正在执行的节点模块号），供定位"worker 不退出"类挂起。
     /// 由执行线程在关键点写入两个原子变量、任意线程可读；不参与任何业务逻辑，故可在挂起时安全轮询。
     QString workerPhaseName() const;
+    /// 只读查询：该节点当前是否带「输出可复用」标记（`m_validOutputs`）。
+    /// 复用分支回退后该位无读者，E2 的不变量（清空输出即撤销标记）只能经此视图钉住。
+    bool isOutputMarkedValid(NodeBase *node) const;
     /// 清零统计（例如开始长跑观测前调用）
     void resetRuntimeStats();
     /// 统计日志间隔（ms），0=不输出；默认 60000（首轮立即输出一条便于确认埋点生效）

@@ -78,13 +78,49 @@ void ScriptSecurityPolicyTest::buildEnvironment_stripsDangerousVars()
     ScriptSecurityPolicy &p = ScriptSecurityPolicy::instance();
     p.setStripEnvironment(true);
 
+    // 先把变量真实写进父进程环境：否则"子环境里没有它"可能只是因为父进程也没有（空断言）。
+    const QStringList injected = {
+        QStringLiteral("PYTHONPATH"),
+        QStringLiteral("PYTHONHOME"),
+        QStringLiteral("LD_PRELOAD"),
+        QStringLiteral("DYLD_INSERT_LIBRARIES"),
+        QStringLiteral("LUA_INIT"),
+        QStringLiteral("LUA_INIT_5_4"),
+        QStringLiteral("LUA_PATH"),
+        QStringLiteral("LUA_PATH_5_4"),
+        QStringLiteral("LUA_CPATH"),
+        QStringLiteral("LUA_CPATH_5_4")
+    };
+    QStringList restored;
+    for (const QString &key : injected) {
+        restored << QString::fromLocal8Bit(qgetenv(key.toLatin1().constData()));
+        qputenv(key.toLatin1().constData(), "injected-by-test");
+    }
+
     QProcessEnvironment env = p.buildEnvironment();
 
-    // 可注入解释器行为的变量必须被剥离
-    QVERIFY(!env.contains(QStringLiteral("PYTHONPATH")));
-    QVERIFY(!env.contains(QStringLiteral("PYTHONHOME")));
-    QVERIFY(!env.contains(QStringLiteral("LD_PRELOAD")));
-    QVERIFY(!env.contains(QStringLiteral("DYLD_INSERT_LIBRARIES")));
+    // 可注入解释器行为的变量必须被剥离（含 Lua：LUA_INIT* 在脚本执行前就当代码跑）
+    // 断言信息用 ASCII：QtTest 的 txt logger 在 Windows 上按本地代码页落盘，中文会变 GBK 字节
+    for (const QString &key : injected) {
+        QVERIFY2(!env.contains(key),
+                 qPrintable(QStringLiteral("%1 leaked into child env").arg(key)));
+    }
+
+    // 反向对照：关闭剥离时同一个变量必须透传，证明上面的断言不是空断言
+    p.setStripEnvironment(false);
+    QProcessEnvironment unstripped = p.buildEnvironment();
+    QVERIFY(unstripped.contains(QStringLiteral("LUA_INIT")));
+    QVERIFY(unstripped.contains(QStringLiteral("PYTHONPATH")));
+    p.setStripEnvironment(true);
+
+    for (int i = 0; i < injected.size(); ++i) {
+        const QByteArray value = restored.at(i).toLatin1();
+        if (value.isEmpty()) {
+            qunsetenv(injected.at(i).toLatin1().constData());
+        } else {
+            qputenv(injected.at(i).toLatin1().constData(), value);
+        }
+    }
 
     // PATH 必须保留，否则无法定位 python/lua 解释器本体
     QVERIFY(env.contains(QStringLiteral("PATH")));
