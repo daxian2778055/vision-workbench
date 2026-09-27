@@ -683,22 +683,6 @@ if(VFP_BUILD_TESTS)
     if(MSVC)
         target_compile_options(halcon_pixel_probe PRIVATE /utf-8)
     endif()
-    # OpenCV 桥接与节点算法验证
-    add_executable(opencv_nodes_test tests/opencv_nodes_test.cpp src/OpencvUtil.cpp)
-    target_include_directories(opencv_nodes_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${HALCON_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
-    # 同 halcon_node_probe：OpencvUtil.h 依赖 QImage，需要 Qt6::Gui 的头文件路径
-    target_link_libraries(opencv_nodes_test PRIVATE ${HALCON_LIBRARIES} ${OpenCV_LIBS} Qt6::Gui)
-    if(TARGET ZXing::ZXing)
-        target_link_libraries(opencv_nodes_test PRIVATE ZXing::ZXing)
-    endif()
-    if(TARGET Tesseract::libtesseract)
-        target_link_libraries(opencv_nodes_test PRIVATE Tesseract::libtesseract)
-        target_include_directories(opencv_nodes_test PRIVATE
-            "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/tesseract/include")
-    endif()
-    if(MSVC)
-        target_compile_options(opencv_nodes_test PRIVATE /utf-8)
-    endif()
     # 独立最小实验：棋盘检测
     add_executable(calib_min_probe tests/calib_min_probe.cpp)
     target_include_directories(calib_min_probe PRIVATE ${OpenCV_INCLUDE_DIRS})
@@ -1067,6 +1051,36 @@ if(MSVC)
     vfp_add_qtest(NAME CommWritebackTest TARGET comm_writeback_test)
 endif()
 
+# OpenCV 桥接与节点算法验证（24 条 CHECK：HImage↔cv::Mat 双向 + 阈值/Blob/形态学/边缘/拟合/
+# 模板匹配/卡尺/标定/条码/OCR/运算/旋转/统计）。原先只挂在 if(VFP_BUILD_TESTS) 里——该选项默认
+# OFF 且 tools/ci.ps1 的配置命令不传 -D，故默认配置下连目标都不进解决方案（见推进计划 §3.2 结论 E）。
+if(MSVC)
+    add_executable(opencv_nodes_test tests/opencv_nodes_test.cpp src/OpencvUtil.cpp)
+    target_include_directories(opencv_nodes_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${HALCON_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
+    # 同 halcon_node_probe：OpencvUtil.h 依赖 QImage，需要 Qt6::Gui 的头文件路径
+    target_link_libraries(opencv_nodes_test PRIVATE ${HALCON_LIBRARIES} ${OpenCV_LIBS} Qt6::Gui)
+    if(TARGET ZXing::ZXing)
+        target_link_libraries(opencv_nodes_test PRIVATE ZXing::ZXing)
+    endif()
+    if(TARGET Tesseract::libtesseract)
+        target_link_libraries(opencv_nodes_test PRIVATE Tesseract::libtesseract)
+        target_include_directories(opencv_nodes_test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/tesseract/include")
+    endif()
+    if(MSVC)
+        target_compile_options(opencv_nodes_test PRIVATE /utf-8)
+    endif()
+    # 不套 vfp_add_qtest：它是裸 main() + std::printf，不是 QtTest 形态，run_qtest.cmake 的
+    # "无 Totals / 有 failed / 0 passed 即判红"三道闸读的是 QtTest 落盘口径，对它不适用。
+    # 两把闸各自都能单独变红（实测四态见推进计划 §3.5）：退出码 —— 摘掉下面的正则后
+    # exit=1 即 ***Failed；正则 —— 设了它 ctest 就以匹配为准（exit=1 但仍打印 ALL PASSED 会判
+    # Passed），它补的是"exit=0 而汇总行缺失"这条退出码抓不到的静默形态。汇总行与退出码
+    # 同源于 g_fail，两者不会互相矛盾。
+    add_test(NAME OpencvNodesTest COMMAND opencv_nodes_test)
+    set_tests_properties(OpencvNodesTest PROPERTIES
+        PASS_REGULAR_EXPRESSION "ALL PASSED")
+endif()
+
 # ---------------------------------------------------------------
 # 测试运行环境
 # ---------------------------------------------------------------
@@ -1079,7 +1093,7 @@ if(MSVC)
                   ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest CameraIoTest
                   DnnSegmentTest OpencvDefectAlignTest SoakTest StatisticsReportTest SchemePackageTest
                   I18nTest SubFlowTest AnomalyDetectTest NodeExecuteSmokeTest
-                  FactoryPasswordGuardTest FeatureMatchTest CalibChainTest)
+                  FactoryPasswordGuardTest FeatureMatchTest CalibChainTest OpencvNodesTest)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
         # path_list_prepend 由 CMake 负责插入并处理平台路径分隔符，避免在
         # ENVIRONMENT 值里嵌套分号导致列表被错误拆分
