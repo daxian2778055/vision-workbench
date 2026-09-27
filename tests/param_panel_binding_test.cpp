@@ -12,9 +12,13 @@
 //      updateAutoParamPanel 查找口径（控件名 ＋ 控件类型）去面板里找，找不到即红
 //      （名字拼错／控件根本没建／类型对不上都从这里出）。
 //      T7 另用四个合成夹具钉住"闸会报警"本身与产品代码里 0 目标的那条复合控件（Point／Rect）口径。
-// ⚠️ 边界（推进计划 §3.10 的 C4b ⇒ 登记为 U-7）：那份 (名字,类型) 清单是本文件里**手抄的镜像**，
-//      不产品代码读。改坏"建控件"侧的命名可检（C1／C2 实测红），只改"刷新"侧的查找名检不出——
-//      要闭上这条，需要刷新后回读控件值（那是另一轮）。
+// ✅ 边界更新（推进计划 §3.13，U-7 收口；原登记见 §3.10 的 C4b）：那份 (名字,类型) 清单以前是
+//      本文件里手抄的镜像、产品代码不读它 ⇒ 改坏建控件侧的命名可检（C1／C2 实测红），
+//      只改刷新侧 updateAutoParamPanel 的查找名检不出。
+//      T8 现在按同一份镜像认控件，再走真实刷新（改参数表 → updateParamPanel）回读同一批控件
+//      实例的显示值 ⇒ 刷新侧的查找名／控件类型／写入值三处改坏都当场红（§3.13 表 2 的 A1～A7）。
+//      仍未覆盖：48 个真算子的值级扫描（＝U-7 的路线②，另算一轮）与不走自动面板的手写面板
+//      （契约见 §3.7 表 1，无 paramSpecs 的那 25 个算子见 §3.10 表 3／U-8）。
 #include <QtTest>
 #include <QApplication>
 #include <QSignalSpy>
@@ -27,6 +31,8 @@
 #include <QCheckBox>
 #include <QPlainTextEdit>
 #include <QWidget>
+#include <QPointF>
+#include <QRectF>
 
 #include "ColorConversionNode.h"
 #include "HalconImageSourceNode.h"
@@ -153,6 +159,8 @@ private slots:
     void testEveryParamSpecHasControlTheRefresherLooksFor();
     void testNoDuplicateParamDeclarations();
     void testU4GateHasTeethOnSyntheticProbes();
+    // U-7：刷新侧自身的查找名／控件类型／写入值（值级回读，不再只靠手抄镜像）
+    void testRefreshSideWritesIntoMirrorNamedControl();
 };
 
 // ── T1 最小复现：把 F-2 的悬空前提变成实测 ──
@@ -661,6 +669,218 @@ void ParamPanelBindingTest::testU4GateHasTeethOnSyntheticProbes()
         QCOMPARE(r.misses.size(), 0);
         QCOMPARE(r.namedWrongClass, 0);
     }
+}
+
+// ── T8（U-7）：刷新侧本身变成被检对象 ──
+// §3.10 的 C4b／C4 实测过：只坏 updateAutoParamPanel 的查找名或写入值，T5～T7 全绿——因为那份
+// (名字,类型) 清单是"闸单方面抄写"的。本条把抄写关系变成自检：仍只按同一份镜像清单
+// controlsTheRefresherLooksFor 认出控件，然后走真实刷新路径（改参数表 → updateParamPanel）
+// 回读**同一批控件实例**的显示值 ⇒ 刷新侧改查找名／换控件类型／写错值都当场红。
+// 边界（不越界声明）：九臂是**合成夹具**、一次一个参数，不进 48 个真算子 ⇒ U-7 的②
+// （真算子值级扫描）与手写面板仍归 §3.10 的 U-8／§3.7 表 1 那条路。
+namespace {
+
+enum U7Arm { ArmInt, ArmDouble, ArmBool, ArmString, ArmFilePath, ArmMultiLine,
+             ArmEnum, ArmPoint, ArmRect };
+
+const char *u7ArmTag(U7Arm arm)
+{
+    switch (arm) {
+    case ArmInt: return "Int";
+    case ArmDouble: return "Double";
+    case ArmBool: return "Bool";
+    case ArmString: return "String";
+    case ArmFilePath: return "FilePath";
+    case ArmMultiLine: return "MultiLine";
+    case ArmEnum: return "Enum";
+    case ArmPoint: return "Point";
+    case ArmRect: return "Rect";
+    }
+    return "?";
+}
+
+QString u7BeforeText() { return QStringLiteral("u7before"); }
+QString u7AfterText()  { return QStringLiteral("u7after"); }
+
+ParamSpec u7Spec(const QString &name, ParamType type, const QVariant &def)
+{
+    ParamSpec s;
+    s.name = name; s.type = type; s.defaultValue = def;
+    s.label = QStringLiteral("U7");
+    return s;
+}
+
+// 只认控件"显示的是什么"，按镜像清单点名的类各取一次
+QString u7DisplayOf(QWidget *w)
+{
+    if (auto *x = qobject_cast<QSpinBox *>(w)) return QString::number(x->value());
+    if (auto *x = qobject_cast<QDoubleSpinBox *>(w)) return QString::number(x->value(), 'f', 4);
+    if (auto *x = qobject_cast<QCheckBox *>(w)) return x->isChecked() ? QStringLiteral("1") : QStringLiteral("0");
+    if (auto *x = qobject_cast<QLineEdit *>(w)) return x->text();
+    if (auto *x = qobject_cast<QPlainTextEdit *>(w)) return x->toPlainText();
+    if (auto *x = qobject_cast<QComboBox *>(w)) return QString::number(x->currentIndex());
+    return QStringLiteral("<unhandled class>");
+}
+
+// 一个臂＝一种 ParamType，只声明一个参数，控件全部由产品的自动面板建出来
+class U7TypeFixture : public HalconNode
+{
+public:
+    explicit U7TypeFixture(U7Arm arm) : m_arm(arm) {}
+
+    void init() override
+    {
+        HalconNode::init();
+        const QString name = QStringLiteral("alpha");
+        switch (m_arm) {
+        case ArmInt:
+            registerParams({makeIntParam(name, 10, 0, 100, QStringLiteral("U7"))});
+            break;
+        case ArmDouble:
+            registerParams({makeDoubleParam(name, 1.5, 0.0, 100.0, QStringLiteral("U7"))});
+            break;
+        case ArmBool:
+            registerParams({makeBoolParam(name, false, QStringLiteral("U7"))});
+            break;
+        case ArmString:
+            registerParams({makeStringParam(name, u7BeforeText(), QStringLiteral("U7"))});
+            break;
+        case ArmFilePath:
+            registerParams({makeFilePathParam(name, u7BeforeText(), QStringLiteral("U7"))});
+            break;
+        case ArmMultiLine:
+            registerParams({u7Spec(name, ParamType::MultiLine, u7BeforeText())});
+            break;
+        case ArmEnum:
+            registerParams({makeEnumParam(name, 0,
+                                          {QStringLiteral("e0"), QStringLiteral("e1"),
+                                           QStringLiteral("e2")}, QStringLiteral("U7"))});
+            break;
+        case ArmPoint:
+            registerParams({u7Spec(name, ParamType::Point, QPointF(1.0, 2.0))});
+            break;
+        case ArmRect:
+            registerParams({u7Spec(name, ParamType::Rect, QRectF(1.0, 2.0, 3.0, 4.0))});
+            break;
+        }
+    }
+
+    // 面板建好后只改参数表（不碰任何控件），制造"面板已存在、参数随后变了"的常规场景
+    void applyAfterValues()
+    {
+        const QString name = QStringLiteral("alpha");
+        switch (m_arm) {
+        case ArmInt: setParam(name, 20); break;
+        case ArmDouble: setParam(name, 2.5); break;
+        case ArmBool: setParam(name, true); break;
+        case ArmString: case ArmFilePath: case ArmMultiLine:
+            setParam(name, u7AfterText()); break;
+        case ArmEnum: setParam(name, 2); break;
+        case ArmPoint: setParam(name, QPointF(5.0, 6.0)); break;
+        case ArmRect: setParam(name, QRectF(7.0, 8.0, 9.0, 10.0)); break;
+        }
+    }
+
+    QStringList beforeDisplays() const
+    {
+        switch (m_arm) {
+        case ArmInt: return {QStringLiteral("10")};
+        case ArmDouble: return {QStringLiteral("1.5000")};
+        case ArmBool: return {QStringLiteral("0")};
+        case ArmString: case ArmFilePath: case ArmMultiLine: return {u7BeforeText()};
+        case ArmEnum: return {QStringLiteral("0")};
+        case ArmPoint: return {QStringLiteral("1.0000"), QStringLiteral("2.0000")};
+        case ArmRect: return {QStringLiteral("1.0000"), QStringLiteral("2.0000"),
+                              QStringLiteral("3.0000"), QStringLiteral("4.0000")};
+        }
+        return {};
+    }
+
+    QStringList afterDisplays() const
+    {
+        switch (m_arm) {
+        case ArmInt: return {QStringLiteral("20")};
+        case ArmDouble: return {QStringLiteral("2.5000")};
+        case ArmBool: return {QStringLiteral("1")};
+        case ArmString: case ArmFilePath: case ArmMultiLine: return {u7AfterText()};
+        case ArmEnum: return {QStringLiteral("2")};
+        case ArmPoint: return {QStringLiteral("5.0000"), QStringLiteral("6.0000")};
+        case ArmRect: return {QStringLiteral("7.0000"), QStringLiteral("8.0000"),
+                              QStringLiteral("9.0000"), QStringLiteral("10.0000")};
+        }
+        return {};
+    }
+
+private:
+    U7Arm m_arm;
+};
+
+} // namespace
+
+void ParamPanelBindingTest::testRefreshSideWritesIntoMirrorNamedControl()
+{
+    const QList<U7Arm> arms = {ArmInt, ArmDouble, ArmBool, ArmString, ArmFilePath,
+                               ArmMultiLine, ArmEnum, ArmPoint, ArmRect};
+    QStringList problems;
+    int lookups = 0;
+    for (U7Arm arm : arms) {
+        const QString tag = QString::fromLatin1(u7ArmTag(arm));
+        U7TypeFixture node(arm);
+        node.init();
+        QWidget *panel = node.createParamPanel();
+        if (!panel) {
+            problems << QStringLiteral("%1 :: createParamPanel returned null").arg(tag);
+            continue;
+        }
+
+        const QStringList before = node.beforeDisplays();
+        const QStringList after = node.afterDisplays();
+        QList<QWidget *> mirrorControls;
+        for (const ParamSpec &s : node.paramSpecs()) {
+            for (const NamedControl &c : controlsTheRefresherLooksFor(s)) {
+                ++lookups;
+                QWidget *w = findChildByNameAndClass(panel, c.cls, c.name);
+                if (!w) {
+                    problems << QStringLiteral("%1 :: mirror control objectName=\"%2\" class=%3 not found")
+                                    .arg(tag, c.name, QString::fromLatin1(c.cls));
+                    continue;
+                }
+                mirrorControls << w;
+            }
+        }
+        if (mirrorControls.size() != before.size()) {
+            problems << QStringLiteral("%1 :: found %2 controls, expected %3")
+                            .arg(tag).arg(mirrorControls.size()).arg(before.size());
+            delete panel;
+            continue;
+        }
+
+        // 识别前置：创建期读数必须等于该参数的当前值 ⇒ 认错控件先红在这里，
+        // 不会把"闸点错了控件"伪装成"刷新没生效"。
+        for (int i = 0; i < mirrorControls.size(); ++i) {
+            const QString got = u7DisplayOf(mirrorControls.at(i));
+            if (got != before.at(i))
+                problems << QStringLiteral("%1 :: at-creation readback #%2 = \"%3\", expected \"%4\"")
+                                .arg(tag).arg(i).arg(got, before.at(i));
+        }
+
+        node.applyAfterValues();
+        node.updateParamPanel(panel);
+
+        for (int i = 0; i < mirrorControls.size(); ++i) {
+            const QString got = u7DisplayOf(mirrorControls.at(i));
+            if (got != after.at(i))
+                problems << QStringLiteral("%1 :: after-refresh readback #%2 = \"%3\", expected \"%4\""
+                                           " (updateAutoParamPanel did not write this control)")
+                                .arg(tag).arg(i).arg(got, after.at(i));
+        }
+        delete panel;
+    }
+    // 九臂应产生 13 次查找（Point 2／Rect 4／其余各 1）⇒ 摘掉任一臂当场红
+    QCOMPARE(lookups, 13);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("U7-REFRESH: 刷新侧有 %1 处没写到镜像清单点名的控件（明细见上）\n%2")
+                            .arg(problems.size()).arg(problems.join(QStringLiteral("\n")))));
 }
 
 QTEST_MAIN(ParamPanelBindingTest)
