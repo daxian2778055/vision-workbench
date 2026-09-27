@@ -178,7 +178,7 @@
 | 几何测量 | PointLineDistanceNode | 功能简单 |
 | 几何测量 | PointCircleDistanceNode | 功能简单 |
 | 几何测量 | DistanceMeasureNode | 功能简单 |
-| 几何测量 | PositionCorrectNode | 功能简单 |
+| 几何测量 | PositionCorrectNode | 功能简单<br>⚠️ **2026-09-27 就地更正（原判词照抄保留）**：**该行已失效**——本节点现有 **6 条节点级用例**，全在 `tests/calib_chain_test.cpp` 的 `CalibChainTest`（ctest 第 8 项）：三条判红（`…JudgeRedWithoutMatrix`／`…JudgeRedOnShortMatrix`／`…JudgeRedWhenFixtureHasNoMatrix`，钉「声明了夹具名却取不到 6 元矩阵必须判红、原因分得开三种成因、且绝不回退手填」）、`…ManualParamsStayGreen`（手填通路**反向闸**）、`…PrefersSceneFixture`（场景夹具优先于同名单例键＋成功轮必须清原因）、`…FixturePoseSourcePointWithMatrix`（**口径锁定**：有矩阵时手填 `angle/scale/offset` 与位姿自带角／缩放一起作废）。依据与 12 臂改坏自证见推进计划 **§3.15**。 |
 | 几何测量 | CoordinateTransformNode | 功能简单<br>⚠️ **2026-09-27 就地更正（原判词照抄保留）**：**该行已失效**——本节点现有 **7 条节点级用例**，全在 `tests/calib_chain_test.cpp` 的 `CalibChainTest`（ctest 第 8 项）：§3.3 补 2 条正向（`coordinateTransformConsumesStoredMatrix` 等，钉"有矩阵时会取"），同日 R-2 结案再补 5 条（`…PrefersSceneFixture`／`…ManualMatrixStaysGreen`／`…JudgeRedWithoutMatrix`／`…JudgeRedOnShortMatrix`／`…JudgeRedWhenFixtureHasNoMatrix`，钉"取不到矩阵必须判红且原因可分辨"）。依据与改坏自证见推进计划 §3.9。 |
 | 几何测量 | DistanceNode | 功能简单 |
 | 几何测量 | NPointCalibNode | 功能简单<br>⚠️ **2026-09-27 就地更正（原判词照抄保留）**：**该行同样失效**（属 §3.3 那轮的**漏改**——它当时补了用例却没回写本报告）。现值 **3 条**：`nPointRecoversKnownAffine`／`nPointInsufficientPairsJudgeRed`／`nPointDegeneratePairsJudgeRed`（`tests/calib_chain_test.cpp:416`／`:455`／`:482`）⇒ 见推进计划 §3.3 表 2。 |
@@ -199,7 +199,7 @@
 | 结果输出 | RecordNode | 功能简单 |
 | 特征定位 | CornerNode | 功能简单 |
 
-> **2026-09-27 本表口径提醒（R-2 收口轮加）**：这张"未覆盖的算子"表**不是生成一次就长期成立**——它已有三行被后续轮次的用例补齐作废（`CoordinateTransformNode`／`NPointCalibNode`／`HandEyeCalibNode`，已在各行内就地标注且原判词照抄保留）。⇒ 引用本表判断"某算子有没有测试"之前，先跑 `cd build && ctest.exe -C Release -N` 看套件清单，再用 `grep -n "<NodeName>" tests/*.cpp` 核实用例是否存在。**本表其余各行本轮未逐行复核**；只有 `PositionCorrectNode` 那一行本轮**逐行核过、仍成立**（`tests/` 内唯一命中是 `tests/halcon_node_verify.cpp:369` 的 HALCON 原子算子数值验证，不驱动该节点）。
+> **2026-09-27 本表口径提醒（R-2 收口轮加）**：这张"未覆盖的算子"表**不是生成一次就长期成立**——它已有三行被后续轮次的用例补齐作废（`CoordinateTransformNode`／`NPointCalibNode`／`HandEyeCalibNode`，已在各行内就地标注且原判词照抄保留）。⇒ 引用本表判断"某算子有没有测试"之前，先跑 `cd build && ctest.exe -C Release -N` 看套件清单，再用 `grep -n "<NodeName>" tests/*.cpp` 核实用例是否存在。**本表其余各行本轮未逐行复核**；只有 `PositionCorrectNode` 那一行本轮**逐行核过、仍成立**（`tests/` 内唯一命中是 `tests/halcon_node_verify.cpp:369` 的 HALCON 原子算子数值验证，不驱动该节点）。<br>⚠️ **2026-09-27 就地更正（上面那句照抄保留）**：那句"只有 `PositionCorrectNode` 那一行本轮**逐行核过、仍成立**"到 **§3.15** 那轮作废——该节点现已有 **6 条**节点级用例（见上表该行同一格）。⇒ 本表现值**四行**已失效（`CoordinateTransformNode`／`NPointCalibNode`／`HandEyeCalibNode`／`PositionCorrectNode`），其余各行**仍未逐行复核** ⇒ 引用前照上面那条口径先跑 `ctest.exe -C Release -N` 再 `grep`。
 
 ---
 

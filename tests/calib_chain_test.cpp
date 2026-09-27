@@ -27,6 +27,7 @@
 #include "NPointCalibNode.h"
 #include "HandEyeCalibNode.h"
 #include "CoordinateTransformNode.h"
+#include "PositionCorrectNode.h"
 #include "FlowScene.h"
 #include "CalibrationManager.h"
 #include "DataObject.h"
@@ -73,6 +74,14 @@ private slots:
     void coordinateTransformJudgeRedWithoutMatrix(); // ⑥ R-2 判红：声明夹具却取不到矩阵
     void coordinateTransformJudgeRedOnShortMatrix(); // ⑥ R-2 判红：项数不足且原因带实际项数
     void coordinateTransformJudgeRedWhenFixtureHasNoMatrix(); // ⑥ R-2 判红：夹具在场景里但没有矩阵
+
+    // ⑥ R-6：PositionCorrectNode 与 ⑥ 同形态（声明夹具名却取不到矩阵时静默沿用手填）
+    void positionCorrectPrefersSceneFixture();        // 正向：场景夹具优先于同名单例键 + 成功轮清原因
+    void positionCorrectManualParamsStayGreen();      // 反向闸：空夹具名＝手填通路不得被一起判红
+    void positionCorrectJudgeRedWithoutMatrix();      // 判红：两边都给不出矩阵
+    void positionCorrectJudgeRedOnShortMatrix();      // 判红：单例键项数不足且原因带实际项数
+    void positionCorrectJudgeRedWhenFixtureHasNoMatrix(); // 判红：夹具只有位姿没矩阵
+    void positionCorrectFixturePoseSourcePointWithMatrix(); // 口径：有矩阵时源点取位姿、手填仿射与位姿角/缩放被顶掉
 
 private:
     QJsonObject m_managerSnapshot;
@@ -123,6 +132,14 @@ QString transformNoteOf(NodeBase &node)
     return node.getParam(QStringLiteral("transformNote")).toString();
 }
 
+/// ⑥ R-6：位置修正的失败原因栏（同上）。⚠️ 取证口径：改前的 `PositionCorrectNode` **没有**这个
+/// 键，`getParam` 取回无效 QVariant ⇒ 下面的 `correctNoteOf()` 在改前源上恒为空串，
+/// "原因没点出夹具名"那类断言必然红，这正是表 0 要的观察，不是测试写错了。
+QString correctNoteOf(NodeBase &node)
+{
+    return node.getParam(QStringLiteral("correctNote")).toString();
+}
+
 /// 结果端口（1）的点载荷；端口为空时 *present=false（判红轮必须是 false）
 QPointF resultPointOf(NodeBase &node, bool *present)
 {
@@ -166,6 +183,24 @@ void feedImage(NodeBase &node, const HalconCpp::HImage &himg)
     auto d = QSharedPointer<DataObject>::create();
     d->setHImage(himg);
     node.setInputData(0, d);
+}
+
+/// ⑥ R-6：位置修正节点的建仓（`init()` 之后一次设好七个参数，再喂空白输入图）
+/// 参数名取自 `PositionCorrectNode::init()`：fixtureName / srcX / srcY / angle / scale / offsetX / offsetY
+/// （⚠️ 不是 x／y——那是 ⑥ 坐标系变换的叫法，两个节点同族但不同名）
+void setupCorrectNode(PositionCorrectNode &node, const QString &fixtureName,
+                      double srcX, double srcY, double angleDeg, double scale,
+                      double offsetX, double offsetY)
+{
+    node.init();
+    node.setParam(QStringLiteral("fixtureName"), fixtureName);
+    node.setParam(QStringLiteral("srcX"), srcX);
+    node.setParam(QStringLiteral("srcY"), srcY);
+    node.setParam(QStringLiteral("angle"), angleDeg);
+    node.setParam(QStringLiteral("scale"), scale);
+    node.setParam(QStringLiteral("offsetX"), offsetX);
+    node.setParam(QStringLiteral("offsetY"), offsetY);
+    feedImage(node, blankImage(640, 480));
 }
 
 // ---------------- ①② 已知内参的合成棋盘格帧 ----------------
@@ -941,6 +976,199 @@ void CalibChainTest::coordinateTransformJudgeRedWhenFixtureHasNoMatrix()
         problems << QStringLiteral("场景里确有该夹具，却报成「没有该夹具」：") + note;
     CalibrationManager::instance()->remove(name);
     QVERIFY2(problems.isEmpty(), qPrintable(problems.join(QStringLiteral(" | "))));
+}
+
+// ==================== ⑥ R-6：位置修正（PositionCorrectNode）====================
+// 与上面 ⑥ R-2 完全同形态：`if (hom.size() >= 6) {…}` 没有 else ⇒ 声明了夹具名却取不到矩阵时，
+// 静默沿用手填 srcX/srcY/angle/scale/offsetX/offsetY 并判绿。
+// 六条里前四条（prefers 的第 1 轮 + 三条判红）在**改前源**上应为红＝表 0 的缺陷正证；
+// 后两条（手填反向闸 / 位姿源点口径）改前改后都必须绿——它们是防"修复顺手做过头"的反向闸。
+
+// 正向：同名夹具**场景优先**于标定单例；且成功轮必须清掉原因栏。
+// 单例里故意放**另一份**矩阵 ⇒ 只有真取到场景那份，结果才对得上（取错会得 125,117）。
+void CalibChainTest::positionCorrectPrefersSceneFixture()
+{
+    const QString name = QStringLiteral("r6_scene_priority");
+    CalibrationManager::instance()->remove(name);
+
+    FlowScene scene;
+    FlowFixture fx;
+    fx.name = name;
+    scene.setFixture(fx);
+
+    PositionCorrectNode node;
+    node.setFlowSceneRef(&scene);
+    setupCorrectNode(node, name, 100.0, 50.0, 0.0, 1.0, 0.0, 0.0);
+
+    // 第 1 轮：场景与单例都给不出矩阵 ⇒ 判红，且原因栏要有内容（给下一轮的"必须清干净"提供对照）
+    QStringList problems;
+    if (node.execute())
+        problems << QStringLiteral("夹具无矩阵的一轮不该判绿（correctNote 还是空＝没有原因栏）");
+    if (correctNoteOf(node).isEmpty())
+        problems << QStringLiteral("判红轮却没留下 correctNote");
+
+    // 第 2 轮：场景补上矩阵，同时把单例同名键写成另一份
+    CalibrationManager::instance()->setHomography(name, QVector<double>{0.2, 0.0, 105.0, 0.0, 0.2, 107.0});
+    const QVector<double> sceneHom{0.1, 0.0, 5.0, 0.0, 0.1, 7.0};
+    scene.setFixtureHomography(name, sceneHom);
+    const bool ok2 = node.execute();
+    if (!ok2)
+        problems << QStringLiteral("场景夹具带矩阵时不该判红，correctNote=") + correctNoteOf(node);
+
+    bool present = false;
+    const QPointF q = resultPointOf(node, &present);
+    if (!present)
+        problems << QStringLiteral("成功轮结果端口却无产出");
+    if (std::abs(q.x() - 15.0) > 1e-9 || std::abs(q.y() - 12.0) > 1e-9)
+        problems << QStringLiteral("换算结果 %1,%2 未取场景夹具矩阵（应为 15,12；取到单例那份会是 125,117）")
+                        .arg(q.x()).arg(q.y());
+    if (!correctNoteOf(node).isEmpty())
+        problems << QStringLiteral("成功轮没有清掉 correctNote：") + correctNoteOf(node);
+
+    CalibrationManager::instance()->remove(name);
+    QVERIFY2(problems.isEmpty(), qPrintable(problems.join(QStringLiteral(" | "))));
+}
+
+// 反向闸：fixtureName 为空＝手填参数，是本节点文档化的合法用法
+// （参数标签本身写着「Fixture 名（空=手填参数）」）。补判红时不得把这条通路一起判红，
+// 也不得让手填的缩放/偏移被默认值（scale=1、offset=0）顶掉——那会给出 200,150。
+void CalibChainTest::positionCorrectManualParamsStayGreen()
+{
+    PositionCorrectNode node;
+    setupCorrectNode(node, QString(), 200.0, 150.0, 0.0, 2.0, 5.0, 7.0);
+    QVERIFY2(node.execute(), qPrintable(QStringLiteral("手填参数通路被判红：") + correctNoteOf(node)));
+
+    bool present = false;
+    const QPointF q = resultPointOf(node, &present);
+    QVERIFY2(present, "成功轮结果端口却无产出");
+    QVERIFY2(std::abs(q.x() - 405.0) < 1e-9 && std::abs(q.y() - 307.0) < 1e-9,
+             qPrintable(QStringLiteral("手填缩放/偏移没生效（得 %1,%2，应为 405,307；被默认值顶掉则是 200,150）")
+                            .arg(q.x()).arg(q.y())));
+}
+
+// 判红①：声明了夹具、场景与单例两边都取不到矩阵 ⇒ 不得静默沿用手填值。
+// 手填留成"什么都不做"（angle=0/scale=1/offset=0）：改前这一轮会输出 200,150 且判绿，
+// 看上去像"算对了"，其实是把像素值原样吐给下游。
+void CalibChainTest::positionCorrectJudgeRedWithoutMatrix()
+{
+    const QString name = QStringLiteral("r6_no_such_fixture");
+    CalibrationManager::instance()->remove(name);
+
+    PositionCorrectNode node;
+    setupCorrectNode(node, name, 200.0, 150.0, 0.0, 1.0, 0.0, 0.0);
+    const bool ok = node.execute();
+    const QString note = correctNoteOf(node);
+    bool present = true;
+    const QPointF q = resultPointOf(node, &present);
+
+    QStringList problems;
+    if (ok || node.getParam(QStringLiteral("moduleStatus")).toBool())
+        problems << QStringLiteral("判绿（execute=%1，输出 %2,%3），静默沿用手填仍在").arg(ok).arg(q.x()).arg(q.y());
+    if (present)
+        problems << QStringLiteral("判红了却还有结果端口产出：%1,%2").arg(q.x()).arg(q.y());
+    if (!note.contains(name))
+        problems << QStringLiteral("原因没点出夹具名：") + note;
+    if (!note.contains(QStringLiteral("节点未挂到场景")))
+        problems << QStringLiteral("原因没说明场景侧：") + note;
+    if (!note.contains(QStringLiteral("标定单例里没有这个键")))
+        problems << QStringLiteral("原因没说明单例侧：") + note;
+    if (note.contains(QStringLiteral("项")))
+        problems << QStringLiteral("键不存在却报了项数，两种原因不可分辨：") + note;
+    CalibrationManager::instance()->remove(name);
+    QVERIFY2(problems.isEmpty(), qPrintable(problems.join(QStringLiteral(" | "))));
+}
+
+// 判红②：单例里有这个键但只有 2 项 ⇒ 判红，且原因必须带实际项数，并与"键不存在"分辨得开
+void CalibChainTest::positionCorrectJudgeRedOnShortMatrix()
+{
+    const QString name = QStringLiteral("r6_short_matrix");
+    CalibrationManager::instance()->setHomography(name, QVector<double>{1.0, 2.0});
+
+    PositionCorrectNode node;
+    setupCorrectNode(node, name, 200.0, 150.0, 0.0, 1.0, 0.0, 0.0);
+    const bool ok = node.execute();
+    const QString note = correctNoteOf(node);
+    bool present = true;
+    const QPointF q = resultPointOf(node, &present);
+
+    QStringList problems;
+    if (ok || node.getParam(QStringLiteral("moduleStatus")).toBool())
+        problems << QStringLiteral("2 项矩阵被判绿（execute=%1，输出 %2,%3）").arg(ok).arg(q.x()).arg(q.y());
+    if (present)
+        problems << QStringLiteral("判红了却还有结果端口产出：%1,%2").arg(q.x()).arg(q.y());
+    if (!note.contains(QStringLiteral("2 项")))
+        problems << QStringLiteral("原因没带实际项数：") + note;
+    if (note.contains(QStringLiteral("没有这个键")))
+        problems << QStringLiteral("键确实存在却报「没有这个键」，与另一种原因混了：") + note;
+    CalibrationManager::instance()->remove(name);
+    QVERIFY2(problems.isEmpty(), qPrintable(problems.join(QStringLiteral(" | "))));
+}
+
+// 判红③：夹具**在场景里**（只有位姿、没有矩阵）且单例也没有 ⇒ 判红，
+// 且原因要说清"夹具找到了、缺的是矩阵"，与"场景里根本没这个夹具"分辨得开。
+// ⚠️ 这条同时是本节点唯一的行为收紧：以往"取夹具位姿 + 手填角/缩放/偏移"的混用会静默按像素空间跑完。
+void CalibChainTest::positionCorrectJudgeRedWhenFixtureHasNoMatrix()
+{
+    const QString name = QStringLiteral("r6_pose_only_fixture");
+    CalibrationManager::instance()->remove(name);
+
+    FlowScene scene;
+    FlowFixture fx;
+    fx.name = name;
+    scene.setFixture(fx);
+    scene.setFixturePose(name, 34.0, 12.0, 15.0, 2.0);   // row=34 col=12 angle=15° scale=2
+
+    PositionCorrectNode node;
+    node.setFlowSceneRef(&scene);
+    setupCorrectNode(node, name, 200.0, 150.0, 0.0, 1.0, 0.0, 0.0);
+    const bool ok = node.execute();
+    const QString note = correctNoteOf(node);
+    bool present = true;
+    const QPointF q = resultPointOf(node, &present);
+
+    QStringList problems;
+    if (ok || node.getParam(QStringLiteral("moduleStatus")).toBool())
+        problems << QStringLiteral("夹具只有位姿没矩阵时被判绿（execute=%1，输出 %2,%3）")
+                        .arg(ok).arg(q.x()).arg(q.y());
+    if (present)
+        problems << QStringLiteral("判红了却还有结果端口产出：%1,%2").arg(q.x()).arg(q.y());
+    if (!note.contains(QStringLiteral("该夹具没有矩阵")))
+        problems << QStringLiteral("原因没说清「夹具找到了但缺矩阵」：") + note;
+    if (note.contains(QStringLiteral("场景里没有该夹具")))
+        problems << QStringLiteral("场景里确有该夹具，却报成「没有该夹具」：") + note;
+    CalibrationManager::instance()->remove(name);
+    QVERIFY2(problems.isEmpty(), qPrintable(problems.join(QStringLiteral(" | "))));
+}
+
+// 口径锁定（不是"正确性判定"）：夹具同时有位姿与矩阵时，源点取位姿的 col/row，
+// 而手填的 angle/scale/offset **和位姿自带的 angle/scale 都不参与**（改前即如此，改后照旧）。
+// 手填故意给成 scale=3/offset=100,100/angle=45 ⇒ 一旦被叠上，结果必然偏离 6.2,10.4。
+void CalibChainTest::positionCorrectFixturePoseSourcePointWithMatrix()
+{
+    const QString name = QStringLiteral("r6_pose_and_matrix");
+    CalibrationManager::instance()->remove(name);
+
+    FlowScene scene;
+    FlowFixture fx;
+    fx.name = name;
+    scene.setFixture(fx);
+    scene.setFixturePose(name, 34.0, 12.0, 15.0, 2.0);   // row=34 col=12 angle=15° scale=2
+    const QVector<double> hom{0.1, 0.0, 5.0, 0.0, 0.1, 7.0};
+    scene.setFixtureHomography(name, hom);
+
+    PositionCorrectNode node;
+    node.setFlowSceneRef(&scene);
+    setupCorrectNode(node, name, 200.0, 150.0, 45.0, 3.0, 100.0, 100.0);
+    QVERIFY2(node.execute(), qPrintable(QStringLiteral("夹具齐备却判红：") + correctNoteOf(node)));
+
+    bool present = false;
+    const QPointF q = resultPointOf(node, &present);
+    QVERIFY2(present, "成功轮结果端口却无产出");
+    const QPointF want = CalibrationManager::applyHomography(hom, 12.0, 34.0);   // 6.2, 10.4
+    QVERIFY2(std::abs(q.x() - want.x()) < 1e-9 && std::abs(q.y() - want.y()) < 1e-9,
+             qPrintable(QStringLiteral("结果 %1,%2 不等于「矩阵 作用在 夹具位姿源点」%3,%4")
+                            .arg(q.x()).arg(q.y()).arg(want.x()).arg(want.y())
+                        + QStringLiteral("（源点若仍取手填 srcX/srcY 会是 25,22）")));
 }
 
 // ==================== ③ 畸变校正（内参消费端）====================

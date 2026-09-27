@@ -26,6 +26,8 @@ void PositionCorrectNode::init()
         makeDoubleParam(QStringLiteral("offsetX"), 0.0, -100000.0, 100000.0, QStringLiteral("偏移X"), QStringLiteral("px")),
         makeDoubleParam(QStringLiteral("offsetY"), 0.0, -100000.0, 100000.0, QStringLiteral("偏移Y"), QStringLiteral("px")),
     });
+    // 结果字段（不进参数面板）：判红时输出端口会被 process() 清空，原因只能留在这里
+    m_params[QStringLiteral("correctNote")] = QString();
 }
 
 void PositionCorrectNode::run(bool)
@@ -42,27 +44,54 @@ void PositionCorrectNode::run(bool)
 
         const QString fixtureName =
             m_params.value(QStringLiteral("fixtureName")).toString().trimmed();
+        m_params[QStringLiteral("correctNote")] = QString();
         if (!fixtureName.isEmpty()) {
-            FlowFixture fx;
-            if (FlowScene *fs = flowSceneRef())
-                fx = fs->fixture(fixtureName);
+            FlowScene *fs = flowSceneRef();
+            const FlowFixture fx = fs ? fs->fixture(fixtureName) : FlowFixture();
             if (fx.hasPose) {
                 sx = fx.poseCol;
                 sy = fx.poseRow;
                 angleDeg = fx.poseAngle;
                 scale = fx.poseScale;
             }
-            QVector<double> hom = fx.hasHom ? fx.hom
+            const QVector<double> hom = fx.hasHom ? fx.hom
                                             : CalibrationManager::instance()->homography(fixtureName);
-            if (hom.size() >= 6) {
-                const QPointF w = CalibrationManager::applyHomography(hom, sx, sy);
-                sx = w.x();
-                sy = w.y();
-                ox = 0;
-                oy = 0;
-                angleDeg = 0;
-                scale = 1;
+            if (hom.size() < 6) {
+                // 手填的 srcX/srcY/angle/scale/offset 与 R-2 那边的默认单位阵不同，它不是恒等；
+                // 但同样是「该有而没有时不报」：声明了要用夹具却没有矩阵，继续跑就是把像素值
+                // （或夹具位姿自带的角／缩放）当成已修正的物理坐标吐给下游且判绿。⇒ 判红，绝不回退手填。
+                QString sceneWhy;
+                if (!fx.hasHom) {
+                    if (!fs)
+                        sceneWhy = QStringLiteral("节点未挂到场景");
+                    else if (fx.name.isEmpty())
+                        sceneWhy = QStringLiteral("场景里没有该夹具");
+                    else
+                        sceneWhy = QStringLiteral("该夹具没有矩阵（只有位姿）");
+                }
+                QString mgrWhy;
+                if (fx.hasHom)
+                    mgrWhy = QStringLiteral("场景夹具的矩阵只有 %1 项").arg(hom.size());
+                else if (CalibrationManager::instance()->hasHomography(fixtureName))
+                    mgrWhy = QStringLiteral("标定单例里该键只有 %1 项").arg(hom.size());
+                else
+                    mgrWhy = QStringLiteral("标定单例里没有这个键");
+                const QString why = sceneWhy.isEmpty()
+                    ? QStringLiteral("位置修正取不到 6 元矩阵：夹具 \"%1\"——%2，不回退手填 srcX/srcY/angle/scale/offset")
+                          .arg(fixtureName, mgrWhy)
+                    : QStringLiteral("位置修正取不到 6 元矩阵：夹具 \"%1\"——%2；%3，不回退手填 srcX/srcY/angle/scale/offset")
+                          .arg(fixtureName, sceneWhy, mgrWhy);
+                m_params[QStringLiteral("correctNote")] = why;
+                m_params["moduleStatus"] = false;
+                return;
             }
+            const QPointF w = CalibrationManager::applyHomography(hom, sx, sy);
+            sx = w.x();
+            sy = w.y();
+            ox = 0;
+            oy = 0;
+            angleDeg = 0;
+            scale = 1;
         }
         const double angle = angleDeg * 3.14159265358979323846 / 180.0;
 
