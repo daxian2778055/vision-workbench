@@ -11,6 +11,7 @@
 #include <QComboBox>
 #include <QLineEdit>
 #include <QTimer>
+#include <QSignalBlocker>
 #include "AppLog.h"
 
 using namespace HalconCpp;
@@ -263,6 +264,8 @@ QWidget *ColorConversionNode::createParamPanel()
         // 颜色转换类型选择
         QLabel *conversionTypeLabel = new QLabel("转换类型:");
         QComboBox *conversionTypeCombo = new QComboBox();
+        // objectName = 参数名：updateParamPanel 按名字具名查找（无名 findChild 会恒命中第一个下拉框）
+        conversionTypeCombo->setObjectName(QStringLiteral("conversionType"));
         conversionTypeCombo->addItems(getAvailableConversions());
         conversionTypeCombo->setCurrentIndex(getParam(QStringLiteral("conversionType")).toInt());
         
@@ -420,8 +423,9 @@ void ColorConversionNode::updateParamPanel(QWidget *panel)
     if (!panel) return;
     
     try {
-        QComboBox *conversionTypeCombo = panel->findChild<QComboBox *>();
+        QComboBox *conversionTypeCombo = panel->findChild<QComboBox *>(QStringLiteral("conversionType"));
         if (conversionTypeCombo) {
+            QSignalBlocker blocker(conversionTypeCombo);
             conversionTypeCombo->setCurrentIndex(getParam(QStringLiteral("conversionType")).toInt());
         }
     } catch (const std::exception &e) {

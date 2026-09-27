@@ -935,6 +935,15 @@ if(MSVC)
     vfp_configure_gui_test(VariablePanelTest)
 endif()
 
+# 参数面板控件绑定：updateParamPanel 必须把每个参数写回它自己的控件（F-2/U-1 取证 + 契约）
+# 需要 Qt6::Widgets（构造真实节点面板），且不 show() 窗口，可在 CI 稳定运行
+if(MSVC)
+    add_executable(param_panel_binding_test tests/param_panel_binding_test.cpp)
+    target_link_libraries(param_panel_binding_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    vfp_add_qtest(NAME ParamPanelBindingTest TARGET param_panel_binding_test)
+    vfp_configure_gui_test(ParamPanelBindingTest)
+endif()
+
 # 辅助面板显隐持久化：键定义 + 跨重启往返（用例本身不需要 GUI，但同样链接 vfp_core，
 # 因此仍需注入运行时 DLL 目录：干净环境下否则会在启动阶段以 0xc0000135 失败）
 if(MSVC)

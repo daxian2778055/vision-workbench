@@ -13,6 +13,7 @@
 #include <QFileDialog>
 #include <QThreadPool>
 #include <QPointer>
+#include <QSignalBlocker>
 #include <HalconCpp.h>
 #include "AppLog.h"
 #include "VisionWorkbenchStyle.h"
@@ -969,6 +970,8 @@ QWidget *HalconImageSourceNode::createParamPanel()
     // 图像源类型选择
     QLabel *sourceTypeLabel = new QLabel("图像源类型:");
     QComboBox *sourceTypeCombo = new QComboBox();
+    // 以下控件 objectName = 对应参数名，供 updateParamPanel 具名查找（无名 findChild 会串写同一控件）
+    sourceTypeCombo->setObjectName("sourceType");
     sourceTypeCombo->addItem("本地文件", 0);
     sourceTypeCombo->addItem("相机", 1);
     sourceTypeCombo->setCurrentIndex(getParam("sourceType").toInt());
@@ -978,6 +981,7 @@ QWidget *HalconImageSourceNode::createParamPanel()
     // 本地文件路径
     QLabel *filePathLabel = new QLabel("文件路径:");
     QLineEdit *filePathEdit = new QLineEdit(getParam("filePath").toString());
+    filePathEdit->setObjectName("filePath");
     QPushButton *browseButton = new QPushButton("浏览");
     QHBoxLayout *fileLayout = new QHBoxLayout();
     fileLayout->addWidget(filePathEdit);
@@ -988,6 +992,7 @@ QWidget *HalconImageSourceNode::createParamPanel()
     // 本地文件模式选择
     QLabel *fileModeLabel = new QLabel("模式:");
     QComboBox *fileModeCombo = new QComboBox();
+    fileModeCombo->setObjectName("isDirectory");   // 模式下拉框对应的参数名是 isDirectory
     fileModeCombo->addItem("单文件", false);
     fileModeCombo->addItem("多文件(目录)", true);
     fileModeCombo->setCurrentIndex(fileModeCombo->findData(getParam("isDirectory").toBool()));
@@ -1013,6 +1018,7 @@ QWidget *HalconImageSourceNode::createParamPanel()
     // 触发模式
     QLabel *triggerModeLabel = new QLabel("触发模式:");
     QComboBox *triggerModeCombo = new QComboBox();
+    triggerModeCombo->setObjectName("triggerMode");
     triggerModeCombo->addItem("软件触发", 0);
     triggerModeCombo->addItem("硬件触发", 1);
     triggerModeCombo->addItem("自由运行", 2);
@@ -1023,24 +1029,28 @@ QWidget *HalconImageSourceNode::createParamPanel()
     // 曝光时间
     QLabel *exposureLabel = new QLabel("曝光时间 (μs):");
     QLineEdit *exposureEdit = new QLineEdit(QString::number(getParam("exposureTime").toDouble()));
+    exposureEdit->setObjectName("exposureTime");
     layout->addWidget(exposureLabel);
     layout->addWidget(exposureEdit);
     
     // 增益
     QLabel *gainLabel = new QLabel("增益:");
     QLineEdit *gainEdit = new QLineEdit(QString::number(getParam("gain").toDouble()));
+    gainEdit->setObjectName("gain");
     layout->addWidget(gainLabel);
     layout->addWidget(gainEdit);
     
     // 帧率
     QLabel *frameRateLabel = new QLabel("帧率:");
     QLineEdit *frameRateEdit = new QLineEdit(QString::number(getParam("frameRate").toDouble()));
+    frameRateEdit->setObjectName("frameRate");
     layout->addWidget(frameRateLabel);
     layout->addWidget(frameRateEdit);
     
     // 像素格式
     QLabel *pixelFormatLabel = new QLabel("像素格式:");
     QComboBox *pixelFormatCombo = new QComboBox();
+    pixelFormatCombo->setObjectName("pixelFormat");
     pixelFormatCombo->addItem("默认");
     pixelFormatCombo->addItem("Mono8");
     pixelFormatCombo->addItem("RGB8");
@@ -1183,44 +1193,53 @@ void HalconImageSourceNode::updateParamPanel(QWidget *panel)
 {
     // 更新参数面板
     if (!panel) return;
-    
-    QComboBox *sourceTypeCombo = panel->findChild<QComboBox *>();
+
+    // 具名查找 + QSignalBlocker：无名 findChild 会把各字段串写到同一控件并经变更信号回写污染参数（契约见 tests/param_panel_binding_test.cpp）
+    QComboBox *sourceTypeCombo = panel->findChild<QComboBox *>("sourceType");
     if (sourceTypeCombo) {
+        QSignalBlocker blocker(sourceTypeCombo);
         sourceTypeCombo->setCurrentIndex(getParam("sourceType").toInt());
     }
-    
-    QLineEdit *filePathEdit = panel->findChild<QLineEdit *>();
+
+    QLineEdit *filePathEdit = panel->findChild<QLineEdit *>("filePath");
     if (filePathEdit) {
+        QSignalBlocker blocker(filePathEdit);
         filePathEdit->setText(getParam("filePath").toString());
     }
-    
-    QComboBox *fileModeCombo = panel->findChild<QComboBox *>();
+
+    QComboBox *fileModeCombo = panel->findChild<QComboBox *>("isDirectory");
     if (fileModeCombo) {
+        QSignalBlocker blocker(fileModeCombo);
         fileModeCombo->setCurrentIndex(fileModeCombo->findData(getParam("isDirectory").toBool()));
     }
-    
-    QComboBox *triggerModeCombo = panel->findChild<QComboBox *>();
+
+    QComboBox *triggerModeCombo = panel->findChild<QComboBox *>("triggerMode");
     if (triggerModeCombo) {
+        QSignalBlocker blocker(triggerModeCombo);
         triggerModeCombo->setCurrentIndex(getParam("triggerMode").toInt());
     }
-    
-    QLineEdit *exposureEdit = panel->findChild<QLineEdit *>();
+
+    QLineEdit *exposureEdit = panel->findChild<QLineEdit *>("exposureTime");
     if (exposureEdit) {
+        QSignalBlocker blocker(exposureEdit);
         exposureEdit->setText(QString::number(getParam("exposureTime").toDouble()));
     }
-    
-    QLineEdit *gainEdit = panel->findChild<QLineEdit *>();
+
+    QLineEdit *gainEdit = panel->findChild<QLineEdit *>("gain");
     if (gainEdit) {
+        QSignalBlocker blocker(gainEdit);
         gainEdit->setText(QString::number(getParam("gain").toDouble()));
     }
-    
-    QLineEdit *frameRateEdit = panel->findChild<QLineEdit *>();
+
+    QLineEdit *frameRateEdit = panel->findChild<QLineEdit *>("frameRate");
     if (frameRateEdit) {
+        QSignalBlocker blocker(frameRateEdit);
         frameRateEdit->setText(QString::number(getParam("frameRate").toDouble()));
     }
-    
-    QComboBox *pixelFormatCombo = panel->findChild<QComboBox *>();
+
+    QComboBox *pixelFormatCombo = panel->findChild<QComboBox *>("pixelFormat");
     if (pixelFormatCombo) {
+        QSignalBlocker blocker(pixelFormatCombo);
         pixelFormatCombo->setCurrentText(getParam("pixelFormat").toString());
     }
 }
