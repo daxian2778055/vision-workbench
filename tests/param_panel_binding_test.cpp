@@ -17,6 +17,11 @@
 //      只改刷新侧 updateAutoParamPanel 的查找名检不出。
 //      T8 现在按同一份镜像认控件，再走真实刷新（改参数表 → updateParamPanel）回读同一批控件
 //      实例的显示值 ⇒ 刷新侧的查找名／控件类型／写入值三处改坏都当场红（§3.13 表 2 的 A1～A7）。
+// ✅ 边界更新（推进计划 §3.14，U-15 收口；原登记见 §3.13 的「登记未修」）：文件头第 3 行那条
+//      契约的另一半（刷新**不得发**控件变更信号）以前没人守——撤掉 updateAutoParamPanel 的
+//      QSignalBlocker 后 T5～T8 仍全绿。T9 按 createAutoParamPanel 的接线逐类挂 QSignalSpy，
+//      要求一次真实刷新里 13 个控件零发射、预览防抖定时器没被重新点起、参数表没被反灌，
+//      并用「直接写同一个控件必须发信号」排除 spy 挂错对象的假绿 ⇒ 12 处 blocker 撤任意一处都红。
 //      仍未覆盖：48 个真算子的值级扫描（＝U-7 的路线②，另算一轮）与不走自动面板的手写面板
 //      （契约见 §3.7 表 1，无 paramSpecs 的那 25 个算子见 §3.10 表 3／U-8）。
 #include <QtTest>
@@ -160,6 +165,7 @@ private slots:
     void testNoDuplicateParamDeclarations();
     void testU4GateHasTeethOnSyntheticProbes();
     // U-7：刷新侧自身的查找名／控件类型／写入值（值级回读，不再只靠手抄镜像）
+    void testRefreshSideEmitsNoWriteBackSignal();
     void testRefreshSideWritesIntoMirrorNamedControl();
 };
 
@@ -722,6 +728,41 @@ QString u7DisplayOf(QWidget *w)
     return QStringLiteral("<unhandled class>");
 }
 
+// T9（U-15）用两件小工具，口径逐条抄自 src/HalconNode.cpp 的 createAutoParamPanel：
+//   u9SpyOf   ＝「产品把这个控件的哪条信号接回 setParam」（§3.14 表 0 的 13 条写回线）
+//   u9ProbeWrite＝直接写同一个控件一次，用来证明 spy 确实挂在"那个对象的那条信号"上
+QSignalSpy *u9SpyOf(QWidget *w)
+{
+    if (auto *x = qobject_cast<QSpinBox *>(w))
+        return new QSignalSpy(x, qOverload<int>(&QSpinBox::valueChanged));
+    if (auto *x = qobject_cast<QDoubleSpinBox *>(w))
+        return new QSignalSpy(x, qOverload<double>(&QDoubleSpinBox::valueChanged));
+    if (auto *x = qobject_cast<QCheckBox *>(w))
+        return new QSignalSpy(x, &QCheckBox::toggled);
+    if (auto *x = qobject_cast<QPlainTextEdit *>(w))
+        return new QSignalSpy(x, &QPlainTextEdit::textChanged);
+    if (auto *x = qobject_cast<QLineEdit *>(w))
+        return new QSignalSpy(x, &QLineEdit::textChanged);
+    if (auto *x = qobject_cast<QComboBox *>(w))
+        return new QSignalSpy(x, qOverload<int>(&QComboBox::currentIndexChanged));
+    return nullptr;
+}
+
+bool u9ProbeWrite(QWidget *w)
+{
+    if (auto *x = qobject_cast<QSpinBox *>(w)) { x->setValue(x->value() + 7); return true; }
+    if (auto *x = qobject_cast<QDoubleSpinBox *>(w)) { x->setValue(x->value() + 7.0); return true; }
+    if (auto *x = qobject_cast<QCheckBox *>(w)) { x->toggle(); return true; }
+    if (auto *x = qobject_cast<QPlainTextEdit *>(w)) { x->setPlainText(QStringLiteral("u9probe")); return true; }
+    if (auto *x = qobject_cast<QLineEdit *>(w)) { x->setText(QStringLiteral("u9probe")); return true; }
+    if (auto *x = qobject_cast<QComboBox *>(w)) {
+        x->setCurrentIndex((x->currentIndex() + 1) % qMax(1, x->count()));
+        return true;
+    }
+    return false;
+}
+
+
 // 一个臂＝一种 ParamType，只声明一个参数，控件全部由产品的自动面板建出来
 class U7TypeFixture : public HalconNode
 {
@@ -811,6 +852,17 @@ public:
         return {};
     }
 
+    // T9（U-15）用：把"刷新一旦发写回信号会造成什么"变成可观察量。
+    // m_autoPreviewEnabled 默认 false（include/HalconNode.h:133），预览防抖定时器在构造函数里
+    // 建好并设成 300ms 单次触发（src/HalconNode.cpp:39），所以"刷新有没有回头踩 setParam"
+    // 就看这一步之后定时器是否又被点起来。
+    bool previewTimerActive() const { return m_previewTimer && m_previewTimer->isActive(); }
+    void stopPreviewTimer()
+    {
+        if (m_previewTimer)
+            m_previewTimer->stop();
+    }
+
 private:
     U7Arm m_arm;
 };
@@ -882,6 +934,134 @@ void ParamPanelBindingTest::testRefreshSideWritesIntoMirrorNamedControl()
              qPrintable(QStringLiteral("U7-REFRESH: 刷新侧有 %1 处没写到镜像清单点名的控件（明细见上）\n%2")
                             .arg(problems.size()).arg(problems.join(QStringLiteral("\n")))));
 }
+
+// T9（推进计划 §3.14，U-15 收口）：刷新侧不得让"镜像清单点名的控件"发出**写回信号**。
+// 为什么这是契约不是风格：createAutoParamPanel 把每个控件的变更信号都接回 setParam
+// （§3.14 表 0 逐条核到 13 条线），所以刷新一旦发信号，就是"面板回填 → 反写参数表 →
+// 重启预览防抖"的回路；宿主侧本来就承认这条契约——src/ModuleEditorDialog.cpp 在三处
+// updateParamPanel 前后挂了 m_paramHookBusy，onParamWidgetEdited（:407）靠它早退，注释写着
+// "程序化回填参数不应触发自动重算（否则会与用户操作形成回路）"。⇒ 产品里有第二层防呆，
+//   但节点侧的 QSignalBlocker 撤掉后没有任何测试会红（§3.14 表 0 的三条负对照实测）。
+// 每臂四步：① 创建期回读＝该参数当前值（认错控件先红在这里，不会伪装成"没发信号"）；
+//          ② 只改参数表 → updateParamPanel → **回读显示**，证明刷新确实写过（否则第③步的
+//             "零发射"是空转）；③ 13 个 spy 一条信号都不许收到，且预览防抖定时器没被重新点起来、
+//             参数表没被写回信号反灌（③c 只在 Point／Rect 撤单个子件时才会红，另两腿逐臂都红）；
+//          ④ 逐个直接写同一个控件（不包 blocker），spy 必须收到 ⇒ 排除"spy 挂错对象／信号"的假绿。
+// 与 T8 的分工：T8 管"写没写到、写对没有"（值），T9 管"写的过程中有没有对外发声"（信号）。
+void ParamPanelBindingTest::testRefreshSideEmitsNoWriteBackSignal()
+{
+    const QList<U7Arm> arms = {ArmInt, ArmDouble, ArmBool, ArmString, ArmFilePath,
+                               ArmMultiLine, ArmEnum, ArmPoint, ArmRect};
+    QStringList problems;
+    int spies = 0;
+    for (U7Arm arm : arms) {
+        const QString tag = QString::fromLatin1(u7ArmTag(arm));
+        U7TypeFixture node(arm);
+        node.init();
+        node.setAutoPreviewEnabled(true);   // 让"刷新→反写参数表"留下可观察痕迹
+        QWidget *panel = node.createParamPanel();
+        if (!panel) {
+            problems << QStringLiteral("%1 :: createParamPanel returned null").arg(tag);
+            continue;
+        }
+
+        const QStringList before = node.beforeDisplays();
+        const QStringList after = node.afterDisplays();
+        QList<QWidget *> controls;
+        QList<QSignalSpy *> live;
+        for (const ParamSpec &s : node.paramSpecs()) {
+            for (const NamedControl &c : controlsTheRefresherLooksFor(s)) {
+                QWidget *w = findChildByNameAndClass(panel, c.cls, c.name);
+                if (!w) {
+                    problems << QStringLiteral("%1 :: mirror control objectName=\"%2\" class=%3 not found")
+                                    .arg(tag, c.name, QString::fromLatin1(c.cls));
+                    continue;
+                }
+                QSignalSpy *spy = u9SpyOf(w);
+                if (!spy) {
+                    problems << QStringLiteral("%1 :: class=%2 has no write-back signal defined in u9SpyOf")
+                                    .arg(tag, QString::fromLatin1(c.cls));
+                    continue;
+                }
+                ++spies;
+                controls << w;
+                live << spy;
+            }
+        }
+
+        if (controls.size() != before.size()) {
+            problems << QStringLiteral("%1 :: found %2 controls, expected %3")
+                            .arg(tag).arg(controls.size()).arg(before.size());
+        } else {
+            for (int i = 0; i < controls.size(); ++i) {
+                const QString got = u7DisplayOf(controls.at(i));
+                if (got != before.at(i))
+                    problems << QStringLiteral("%1 :: at-creation readback #%2 = \"%3\", expected \"%4\"")
+                                    .arg(tag).arg(i).arg(got, before.at(i));
+            }
+
+            node.applyAfterValues();     // 用户侧改参数（合法地会重启防抖定时器）
+            node.stopPreviewTimer();     // 归零，令"定时器又跑起来"只能由刷新这一步造成
+            const QString pname = node.paramSpecs().constFirst().name;
+            const QVariant target = node.getParam(pname);   // 刷新期间参数表不该再变
+            for (QSignalSpy *sp : live)
+                sp->clear();
+
+            node.updateParamPanel(panel);
+
+            // ② 刷新必须真的写过值，否则下面的"零发射"毫无意义
+            for (int i = 0; i < controls.size(); ++i) {
+                const QString got = u7DisplayOf(controls.at(i));
+                if (got != after.at(i))
+                    problems << QStringLiteral("%1 :: after-refresh readback #%2 = \"%3\", expected \"%4\""
+                                               " (刷新没写值 ⇒ 发射断言是空转)")
+                                    .arg(tag).arg(i).arg(got, after.at(i));
+            }
+            // ③ 发射计数 ＋ 预览防抖定时器
+            for (int i = 0; i < live.size(); ++i) {
+                if (live.at(i)->count() != 0)
+                    problems << QStringLiteral("%1 :: control #%2 (objectName=\"%3\") emitted its"
+                                               " write-back signal %4 times during refresh")
+                                    .arg(tag).arg(i)
+                                    .arg(controls.at(i)->objectName())
+                                    .arg(live.at(i)->count());
+            }
+            if (node.previewTimerActive())
+                problems << QStringLiteral("%1 :: refresh restarted the preview debounce timer"
+                                           "（刷新经写回信号反改了参数表）").arg(tag);
+            // ③c 参数表不得被写回信号反改（Point／Rect 只撤一个子件 blocker 时会留下"半刷新"值）
+            const QVariant now = node.getParam(pname);
+            if (now != target) {
+                QString from, to;
+                QDebug(&from) << target;
+                QDebug(&to) << now;
+                problems << QStringLiteral("%1 :: param table changed during refresh: %2 -> %3"
+                                           "（控件写回信号把面板值反灌进参数表）")
+                                .arg(tag, from, to);
+            }
+            // ④ spy 自己得是活的：直接写同一个控件必须发信号
+            for (int i = 0; i < live.size(); ++i) {
+                const int before_count = live.at(i)->count();
+                if (!u9ProbeWrite(controls.at(i))) {
+                    problems << QStringLiteral("%1 :: control #%2 has no probe write defined")
+                                    .arg(tag).arg(i);
+                } else if (live.at(i)->count() == before_count) {
+                    problems << QStringLiteral("%1 :: control #%2 (objectName=\"%3\") stayed silent"
+                                               " on a direct write ⇒ spy 挂错了对象或信号")
+                                    .arg(tag).arg(i).arg(controls.at(i)->objectName());
+                }
+            }
+        }
+        qDeleteAll(live);
+        delete panel;
+    }
+    // 九臂应产生 13 个 spy（Point 2／Rect 4／其余各 1）⇒ 摘掉任一臂当场红
+    QCOMPARE(spies, 13);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("U9-SILENCE: 刷新侧有 %1 处越界（明细逐条随附）\n%2")
+                            .arg(problems.size()).arg(problems.join(QStringLiteral("\n")))));
+}
+
 
 QTEST_MAIN(ParamPanelBindingTest)
 
