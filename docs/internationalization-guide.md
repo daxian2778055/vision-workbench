@@ -4,6 +4,20 @@
 
 本指南描述了 VisionFlowPlatform 项目的国际化（i18n）和本地化（l10n）支持，帮助开发者添加多语言支持。
 
+> ⚠️ **现状声明（2026-09-27 新增，请先读这一段再往下翻）**：下面通篇是**通用 Qt 国际化教程**，**不是本仓现状**——它连文件名都和本仓不一样。逐条对账（每条都给复现命令）：
+>
+> | 本文写法 | 仓内实况 | 复现命令 |
+> |---|---|---|
+> | `visionflow_zh_CN.ts/.qm`、`visionflow_en_US.ts/.qm`（§1.2 项目结构、§3.1、§7.3 等，共 **27 行**） | `translations/` 实际只有 **`visionflow_en.ts`／`visionflow_en.qm`／`apply_en_translations.py`** 三份；**没有中文 `.ts/.qm`**——源文本身就是简体中文（`include/I18n.h:2`）。注意 `src/I18n.cpp:31` 确实还留着 `"visionflow_zh_CN"` 这个串，但它是**死值**：`installTranslators` 在 `:43`～`:45` 对中文档直接 `return true`，从不去 load ⇒ 教程那两套中文文件名在本仓**从来没有对应的加载路径** | `ls translations`／读 `src/I18n.cpp:40` |
+> | 语言代码 `en_US`、以及 `ja_JP`／`ko_KR`／`de_DE`／`fr_FR`（§4.2、§4.3、§9.1「计划支持的语言」） | 仓内只有 **`"zh_CN"` 与 `"en"`** 两个取值（`src/I18n.cpp:15`／`:24`），英文 `.qm` 基名 `visionflow_en`（`src/I18n.cpp:30`）；`I18n::displayName` 也只返回「English／简体中文」（`:34`～`:36`），语言菜单同样只挂两项（`src/MainWindow.cpp:1097`～`:1102`）⇒ §9.1 那张表**从未成立过**（日／韩／德／法只是教程里的占位示例） | `grep -n zh_CN src/I18n.cpp` |
+> | `find_package(Qt6 ... LinguistTools)` ＋ `qt_add_translations(...)`（§3.1） | 仓里**没用** `qt_add_translations`；实际是直接调 `lrelease` 可执行文件的手写块，`CMakeLists.txt:596` 那句注释写明了原因：「避免依赖可能未随 Qt6 主包发布的 LinguistTools CMake 组件」 | `grep -n qt_add_translations CMakeLists.txt`（**0 命中**）／看 `CMakeLists.txt:593`～`:628` |
+> | 切换语言即时生效（§4.2 的 `emit languageChanged(locale)`） | **重启生效**：`src/MainWindow.cpp:2149`「语言设置将在重启后生效」，同处注释说明 Qt Widgets 大多在构造期取译文。装载点是 `src/I18n.cpp:40 installTranslators`，由 `src/main.cpp:308` 在 `MainWindow` 构造前调用 | 读那两个行号 |
+> | 通篇假设「包了 `tr()` 就翻译了」 | 已包 **219 处**（只集中在 **6 份**文件，`src/MainWindow.cpp` 一份占 179）；仓内**裸中文字面量 2325 条**（作用域 403 份文件，且是**下界**——另 **4127 处 `\uXXXX` 转义中文**对扫描器和 `lupdate` 都是 ASCII）⇒ 英文档下大部分界面仍是中文 | `python tools/scan_i18n_surface.py` |
+>
+> **并且：英文界面交付已于 2026-09-27 由需求方拍板「不推进」**（O-9 取 (a) 维持现状，指示原文「英文界面不用推进了」；决策与量化依据见 `docs/对标差距推进计划.md` §3.8 与 §6 的 O-9 行）。⇒ 本文 §8「最佳实践」～§11「检查清单」里的"添加新语言/多语言覆盖"那些章**不作为交付目标**，保留作日后改主意时的操作参考。既有 v1 管道（语言开关／230 条译文／`.qm` 随构建部署）**原样保留不拆**；「英文模式下参数面板、运行日志、算子中文名仍是中文」从此是**明示的长期限制**，不是待补的缺口。
+>
+> **不受该拍板影响的一半**：`englishName`／`aliases` 参与算子搜索（SRS FR1.7／FR18.4）是**搜索能力**，中文界面下同样有用 ⇒ 仍是待办，别把它跟"英文界面"一起结案。
+
 ---
 
 ## 1. 国际化架构
@@ -35,6 +49,8 @@ VisionFlowPlatform/
 │   └── ...                         # 使用 tr() 包装字符串
 └── CMakeLists.txt                  # 构建配置
 ```
+
+> ⚠️ **就地提醒（2026-09-27）**：上面这棵树是**通用写法**，那四个文件名（`visionflow_zh_CN.ts/.qm`、`visionflow_en_US.ts/.qm`）**本仓都不存在**。`ls translations` 的实际结果是三份：`visionflow_en.ts`／`visionflow_en.qm`／`apply_en_translations.py`。详见文首「现状声明」。
 
 ---
 
@@ -572,6 +588,8 @@ QString text = tr("Close", "Close a window");
 | 韩语 | ko_KR | 计划支持 |
 | 德语 | de_DE | 计划支持 |
 | 法语 | fr_FR | 计划支持 |
+
+> ⚠️ **就地提醒（2026-09-27）**：这张表**从未反映过仓内实况**——`src/I18n.cpp` 只认 `"zh_CN"` 与 `"en"` 两个代码，日／韩／德／法四行既没有 `.ts/.qm` 也没有菜单项（语言菜单只有「简体中文／English」两项，`src/MainWindow.cpp:1097`～`:1102`）。而且 2026-09-27 需求方已拍板**不推进英文界面交付**（O-9 取 (a)）⇒ 本表按"历史设想"留档，**不作为待办**；下面 §9.2「添加新语言」那套步骤同理。
 
 ### 9.2 添加新语言
 
