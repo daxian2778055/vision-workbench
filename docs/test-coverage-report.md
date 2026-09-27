@@ -179,12 +179,12 @@
 | 几何测量 | PointCircleDistanceNode | 功能简单 |
 | 几何测量 | DistanceMeasureNode | 功能简单 |
 | 几何测量 | PositionCorrectNode | 功能简单 |
-| 几何测量 | CoordinateTransformNode | 功能简单 |
+| 几何测量 | CoordinateTransformNode | 功能简单<br>⚠️ **2026-09-27 就地更正（原判词照抄保留）**：**该行已失效**——本节点现有 **7 条节点级用例**，全在 `tests/calib_chain_test.cpp` 的 `CalibChainTest`（ctest 第 8 项）：§3.3 补 2 条正向（`coordinateTransformConsumesStoredMatrix` 等，钉"有矩阵时会取"），同日 R-2 结案再补 5 条（`…PrefersSceneFixture`／`…ManualMatrixStaysGreen`／`…JudgeRedWithoutMatrix`／`…JudgeRedOnShortMatrix`／`…JudgeRedWhenFixtureHasNoMatrix`，钉"取不到矩阵必须判红且原因可分辨"）。依据与改坏自证见推进计划 §3.9。 |
 | 几何测量 | DistanceNode | 功能简单 |
-| 几何测量 | NPointCalibNode | 功能简单 |
+| 几何测量 | NPointCalibNode | 功能简单<br>⚠️ **2026-09-27 就地更正（原判词照抄保留）**：**该行同样失效**（属 §3.3 那轮的**漏改**——它当时补了用例却没回写本报告）。现值 **3 条**：`nPointRecoversKnownAffine`／`nPointInsufficientPairsJudgeRed`／`nPointDegeneratePairsJudgeRed`（`tests/calib_chain_test.cpp:416`／`:455`／`:482`）⇒ 见推进计划 §3.3 表 2。 |
 | 识别 | ZxingBarcodeNode | 已覆盖 |
 | 识别 | DeepOcrNode | 需要 HALCON DeepOCR |
-| 识别 | HandEyeCalibNode | 功能复杂 |
+| 识别 | HandEyeCalibNode | 功能复杂<br>⚠️ **2026-09-27 就地更正（原判词照抄保留）**：**该行同样失效**（同上，§3.3 漏改）。现值 **3 条**：`handEyeRecoversKnownRigid`／`handEyeIsRigidNotScaled`／`handEyeInsufficientPairsJudgeRed`（`:515`／`:545`／`:584`）。⚠️ 但**"功能复杂"这句的另一半仍然成立**：本仓的"手眼标定"实为 **2D 刚体**、不是 AX=ZB（推进计划 §3.2 结论 C），**真机实测 0 条**。 |
 | 逻辑控制 | ConditionalNode | 功能简单 |
 | 逻辑控制 | LoopNode | 功能简单 |
 | 逻辑控制 | FilterNode | 功能简单 |
@@ -198,6 +198,8 @@
 | 结果输出 | FormatNode | 功能简单 |
 | 结果输出 | RecordNode | 功能简单 |
 | 特征定位 | CornerNode | 功能简单 |
+
+> **2026-09-27 本表口径提醒（R-2 收口轮加）**：这张"未覆盖的算子"表**不是生成一次就长期成立**——它已有三行被后续轮次的用例补齐作废（`CoordinateTransformNode`／`NPointCalibNode`／`HandEyeCalibNode`，已在各行内就地标注且原判词照抄保留）。⇒ 引用本表判断"某算子有没有测试"之前，先跑 `cd build && ctest.exe -C Release -N` 看套件清单，再用 `grep -n "<NodeName>" tests/*.cpp` 核实用例是否存在。**本表其余各行本轮未逐行复核**；只有 `PositionCorrectNode` 那一行本轮**逐行核过、仍成立**（`tests/` 内唯一命中是 `tests/halcon_node_verify.cpp:369` 的 HALCON 原子算子数值验证，不驱动该节点）。
 
 ---
 
