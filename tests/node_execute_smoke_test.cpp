@@ -76,6 +76,10 @@ const QHash<QString, QString> kFailsWithoutResource = {
     // 归类依据见推进计划 §3.2 结论 D，数值与改坏自证见 CalibChainTest。
     {QStringLiteral("NPointCalibNode"), QStringLiteral("默认参数无点对 ⇒ 标定无输入（结论 D 修复后入表）")},
     {QStringLiteral("HandEyeCalibNode"), QStringLiteral("默认参数无点对 ⇒ 标定无输入（结论 D 修复后入表）")},
+    // ③ 畸变校正（内参消费端）：默认从单例键 cam_params 读 9 元内参，本进程没跑过标定 ⇒ 无内参。
+    // 让它"成功"的唯一办法是回退到手填默认值（fx=0）= 静默绿灯，所以这里判失败是诚实结果。
+    // 键缺失/项数不足/非有限值的判红回归锁在 CalibChainTest 的 ③ 组用例里逐条钉。
+    {QStringLiteral("OpencvUndistortNode"), QStringLiteral("单例无 cam_params ⇒ 无内参可用")},
     {QStringLiteral("OpencvQrNode"), QStringLiteral("合成图内无二维码 ⇒ 无结果是失败")},
     {QStringLiteral("ZxingBarcodeNode"), QStringLiteral("合成图内无条形码 ⇒ 无结果是失败")},
     {QStringLiteral("TesseractOcrNode"), QStringLiteral("语言数据目录不存在 ⇒ 引擎初始化失败（路径已在 kParamTweaks 里钉死）")},

@@ -22,6 +22,7 @@
 #include "OpencvTemplateMatchNode.h"
 #include "OpencvFeatureMatchNode.h"
 #include "OpencvCalibNode.h"
+#include "OpencvUndistortNode.h"
 #include "OpencvQrNode.h"
 #include "OpencvClassifyNode.h"
 #include "OpencvTrainClassifierNode.h"
@@ -70,6 +71,9 @@ private slots:
 
     // OpenCV 标定节点序列化测试
     void testCalibSerialization();
+
+    // 畸变校正（③ 内参消费端）序列化测试
+    void testUndistortSerialization();
 
     // OpenCV 识别节点序列化测试
     void testQrSerialization();
@@ -353,6 +357,43 @@ void OpencvSerializationTest::testCalibSerialization()
     params["boardHeight"] = 6;
     params["squareSize"] = 25.0;
     verifySerialization<OpencvCalibNode>("OpenCV相机标定", params);
+}
+
+// ==================== 畸变校正节点（③ 内参消费端）====================
+
+void OpencvSerializationTest::testUndistortSerialization()
+{
+    // 注册表闸（与 testFeatureMatchSerialization 同口径）：toJson 存的是整张 m_params，
+    // 漏注册照样能存能取 ⇒ round-trip 断言照不到"面板取不到默认值/范围/标签"这一面。
+    OpencvUndistortNode probe;
+    probe.init();
+    static const char *const kMustRegister[] = {
+        "intrinsicSource", "calibKey", "fx", "fy", "cx", "cy", "k1", "k2", "p1", "p2"};
+    for (const char *const key : kMustRegister) {
+        const QString name = QString::fromLatin1(key);
+        bool found = false;
+        for (const ParamSpec &spec : probe.paramSpecs()) {
+            if (spec.name == name) {
+                found = true;
+                break;
+            }
+        }
+        QVERIFY2(found, qPrintable(QStringLiteral("畸变校正: 参数 %1 未注册"
+                                                   "（面板取不到默认值/范围/标签）").arg(name)));
+    }
+
+    QVariantMap params;
+    params["intrinsicSource"] = 1;   // 手填内参
+    params["calibKey"] = QStringLiteral("my_cam");
+    params["fx"] = 520.5;
+    params["fy"] = 518.25;
+    params["cx"] = 320.0;
+    params["cy"] = 240.0;
+    params["k1"] = -0.28;
+    params["k2"] = 0.09;
+    params["p1"] = 0.0013;
+    params["p2"] = -0.0009;
+    verifySerialization<OpencvUndistortNode>("畸变校正", params);
 }
 
 // ==================== OpenCV 识别节点 ====================

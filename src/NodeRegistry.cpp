@@ -98,6 +98,7 @@
 #include "DeepOcrNode.h"
 #include "OpencvTrackNode.h"
 #include "OpencvCalibNode.h"
+#include "OpencvUndistortNode.h"
 #include "OpencvQrNode.h"
 #include "ZxingBarcodeNode.h"
 #include "TesseractOcrNode.h"
@@ -241,6 +242,9 @@ void registerAllNodes()
             NodeBase::OUTPUT, "\u76F8\u673A IO");
     VFP_REG(OpencvCalibNode,      "OpencvCalibNode",      "相机标定", "Camera Calibration",
             NodeBase::SHAPE_ANALYSIS, "\u6807\u5B9A");
+    // ③ 畸变校正 = ② 写侧（单例键 cam_params 的 9 元内参）的读侧；见推进计划 §3.2 结论 A
+    VFP_REG(OpencvUndistortNode,  "OpencvUndistortNode",  "畸变校正", "Lens Undistort",
+            NodeBase::IMAGE_PROCESSING, "\u6807\u5B9A");
     VFP_REG(OpencvQrNode,         "OpencvQrNode",         "二维码解码", "QR Decode",
             NodeBase::SHAPE_ANALYSIS, "\u8BC6\u522B");
     VFP_REG(ZxingBarcodeNode,     "ZxingBarcodeNode",     "ZXing条码解码", "ZXing Barcode",

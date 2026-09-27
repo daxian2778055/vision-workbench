@@ -104,6 +104,7 @@ set(SOURCES
     src/DeepOcrNode.cpp
     src/OpencvTrackNode.cpp
     src/OpencvCalibNode.cpp
+    src/OpencvUndistortNode.cpp
     src/OpencvQrNode.cpp
     src/ZxingBarcodeNode.cpp
     src/TesseractOcrNode.cpp
@@ -316,6 +317,7 @@ set(HEADERS
     include/DnnSegmentNode.h
     include/CameraIoNode.h
     include/OpencvCalibNode.h
+    include/OpencvUndistortNode.h
     include/OpencvQrNode.h
     include/ZxingBarcodeNode.h
     include/TesseractOcrNode.h
