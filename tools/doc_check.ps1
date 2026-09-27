@@ -17,6 +17,7 @@
 # Checks (mechanical only, no semantic guessing):
 #   A) node classes claimed as delivered/existing in docs must be registered with VFP_REG in the
 #      registry file; lines carrying a negative marker are skipped (so "removed" is not a finding).
+#      A VFP_REG line that is commented out does NOT count as a registration (U-9, see below).
 #   B) repo-relative paths written inside backticks in docs must exist.
 #
 # Usage:  powershell -ExecutionPolicy Bypass -File tools\doc_check.ps1
@@ -45,6 +46,15 @@ if (Test-Path $Registry) {
     $Problems += "registry file not found: $Registry"
 }
 
+# U-9 (2026-09-27): a commented-out VFP_REG is **not** a registration. Matching the raw file text made
+# this gate blind to exactly the class it exists to catch -- "removed from the palette, the VFP_REG line
+# left in place as a comment for reference" still satisfied a "delivered" claim (measured: 30 such lines,
+# and 1 live doc claim riding on one of them). Strip whole-line `//` comments before matching.
+# Block comments are not stripped because the registry has none (measured: 0 hits for '/*', '*/', '**'),
+# and trailing comments on a live line must stay live -- only a line whose first non-blank chars are
+# '//' is dropped.
+$registryLive = (($registryText -split "`n") | Where-Object { $_ -notmatch '^\s*//' }) -join "`n"
+
 $positiveRe = '\u5DF2\u4EA4\u4ED8|\u5DF2\u5B58\u5728|\u5DF2\u5B9E\u73B0|\u5DF2\u5B8C\u6210|\u2705'
 $negativeRe = '\u79FB\u9664|\u7981\u7528|\u5220\u9664|\u5173\u95ED|\u4E0B\u7EBF|\u4E0D\u505A|\u672A\u505A|\u5F85|\u274C|\u7F3A'
 $nodeRe = '\b([A-Z][A-Za-z0-9_]*Node)\b'
@@ -72,7 +82,7 @@ foreach ($f in $docFiles) {
             $token = $m.Groups[1].Value
             if ($nodeSkip.ContainsKey($token)) { continue }
             $claimsChecked++
-            if ($registryText -notmatch ("VFP_REG\(\s*" + [regex]::Escape($token) + "\s*,")) {
+            if ($registryLive -notmatch ("VFP_REG\(\s*" + [regex]::Escape($token) + "\s*,")) {
                 $Problems += ("[{0}:{1}] claim says delivered but no VFP_REG for {2} in {3}" -f `
                               $f.Name, ($i + 1), $token, $Registry)
             }
