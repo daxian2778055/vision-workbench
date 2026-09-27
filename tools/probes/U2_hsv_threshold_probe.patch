@@ -1,0 +1,189 @@
+diff --git a/tests/node_core_test.cpp b/tests/node_core_test.cpp
+index 12d6984..a3a1483 100644
+--- a/tests/node_core_test.cpp
++++ b/tests/node_core_test.cpp
+@@ -12,10 +12,17 @@
+ #include "OpencvMorphNode.h"
+ #include "OpencvEdgeNode.h"
+ #include "OpencvBlobNode.h"
++#include "OpencvAdaptiveThresholdNode.h"
+ #include "FormulaNode.h"
+ #include "DataObject.h"
+ #include "Port.h"
+ #include "PortConnectivity.h"
++// --- TEMP PROBE (U-2) includes, removed on rollback ---
++#include "ColorConversionNode.h"
++#include "OpencvUtil.h"
++#include <opencv2/core.hpp>
++#include <opencv2/imgproc.hpp>
++#include <vector>
+ 
+ class NodeCoreTest : public QObject
+ {
+@@ -43,6 +50,7 @@ private slots:
+     void testCropBasic();
+     void testImageArithDivByZero();
+     void testFormulaEvaluation();
++    void testU2HsvIntoThresholdProbe();
+ 
+ private:
+     void compareParams(HalconNode *node1, HalconNode *node2, const QStringList &excludeKeys = {});
+@@ -287,5 +295,158 @@ void NodeCoreTest::testFormulaEvaluation()
+     QCOMPARE(result, 20.0);
+ }
+ 
++// ==================== TEMP PROBE: U-2 取证（本轮结束后整段回滚） ====================
++// 目的：把"HSV 图喂进 OpencvThresholdNode"这条链路的运行期数字取出来。
++// 产线代码零改动；只调用节点的公开入口（process / run / getParam / getOutputData）。
++void NodeCoreTest::testU2HsvIntoThresholdProbe()
++{
++    const int W = 400;
++    const int H = 400;
++    const int P = 100;
++    struct Patch { const char *name; int row; int col; uchar b, g, r; };
++    const Patch patches[6] = {
++        { "red",     0,   0,   0,   0, 255 },
++        { "green",   0, 300,   0, 255,   0 },
++        { "blue",  150,   0, 255,   0,   0 },
++        { "cyan",  150, 300, 255, 255,   0 },
++        { "darkred", 300,   0,   0,   0, 128 },
++        { "white", 300, 300, 255, 255, 255 },
++    };
++    // 三平面缓冲留在本作用域直到用例结束：无论 HALCON GenImage1 是共享还是拷贝，夹具都成立。
++    std::vector<uchar> bufR((size_t)W * H, 0), bufG((size_t)W * H, 0), bufB((size_t)W * H, 0);
++    for (const Patch &p : patches) {
++        for (int y = p.row; y < p.row + P; ++y) {
++            uchar *pr = bufR.data() + (size_t)y * W;
++            uchar *pg = bufG.data() + (size_t)y * W;
++            uchar *pb = bufB.data() + (size_t)y * W;
++            for (int x = p.col; x < p.col + P; ++x) {
++                pr[x] = p.r;
++                pg[x] = p.g;
++                pb[x] = p.b;
++            }
++        }
++    }
++    HObject oR, oG, oB, oRgb;
++    GenImage1(&oR, "byte", W, H, reinterpret_cast<Hlong>(bufR.data()));
++    GenImage1(&oG, "byte", W, H, reinterpret_cast<Hlong>(bufG.data()));
++    GenImage1(&oB, "byte", W, H, reinterpret_cast<Hlong>(bufB.data()));
++    Compose3(oR, oG, oB, &oRgb);
++    const HImage srcImg(oRgb);
++
++    // ---- [U2-FIX] 夹具自证：平面顺序 / 通道数 / 回读像素 ----
++    HTuple nch;
++    CountChannels(srcImg, &nch);
++    const cv::Mat check = OpencvUtil::himageToMat(srcImg);
++    QVERIFY(check.type() == CV_8UC3);
++    const cv::Vec3b f0 = check.at<cv::Vec3b>(50, 50);
++    const cv::Vec3b f1 = check.at<cv::Vec3b>(350, 350);
++    qWarning().noquote() << "[U2-FIX] halconChannels=" << nch.I()
++                         << "matChannels=" << check.channels()
++                         << "patchRed(BGR)=" << (int)f0[0] << (int)f0[1] << (int)f0[2]
++                         << "patchWhite(BGR)=" << (int)f1[0] << (int)f1[1] << (int)f1[2];
++
++    // ---- [U2-CONV] 真节点：ColorConversionNode RGB->HSV ----
++    ColorConversionNode conv;
++    conv.init();
++    conv.setParam(QStringLiteral("conversionType"), 1);   // 1 = RGB_TO_HSV
++    auto inObj = QSharedPointer<DataObject>::create();
++    inObj->setHImage(srcImg);
++    conv.setInputData(0, inObj);
++    const bool convOk = conv.process();
++    QVERIFY(convOk);
++    QSharedPointer<DataObject> hsvObj = conv.getOutputData(0);
++    QVERIFY(!hsvObj.isNull());
++    const HImage hsvImg = hsvObj->getHImage();
++    const cv::Mat hsv = OpencvUtil::himageToMat(hsvImg);
++    QVERIFY(hsv.type() == CV_8UC3);
++    HTuple tSrc, tHsv;
++    GetImageType(srcImg, &tSrc);
++    GetImageType(hsvImg, &tHsv);
++    qWarning().noquote() << "[U2-CONV] processOk=" << (convOk ? 1 : 0)
++                         << "moduleStatus=" << conv.getParam(QStringLiteral("moduleStatus")).toBool()
++                         << "outChannels=" << hsv.channels()
++                         << "halconTypeSrc=" << tSrc.S() << "halconTypeHsv=" << tHsv.S();
++    for (const Patch &p : patches) {
++        const cv::Vec3b v = hsv.at<cv::Vec3b>(p.row + P / 2, p.col + P / 2);
++        qWarning().noquote() << "[U2-CONV] patch=" << p.name
++                             << "ch0=" << (int)v[0] << "ch1=" << (int)v[1] << "ch2=" << (int)v[2];
++    }
++
++    // ---- [U2-REF] 夹具侧算的灰度，只为解释上面的数；**不是节点输出** ----
++    cv::Mat grayRef;
++    cv::cvtColor(hsv, grayRef, cv::COLOR_BGR2GRAY);
++    for (const Patch &p : patches) {
++        qWarning().noquote() << "[U2-REF] patch=" << p.name
++                             << "harnessCvtColor=" << (int)grayRef.at<uchar>(p.row + P / 2, p.col + P / 2);
++    }
++    cv::Mat redBand;
++    cv::inRange(hsv, cv::Scalar(0, 200, 200), cv::Scalar(8, 255, 255), redBand);
++    qWarning().noquote() << "[U2-REF] inRangeH0-8S200V200 px=" << cv::countNonZero(redBand)
++                         << "expectedRedPatchPx=" << (P * P);
++
++    // ---- [U2-TH] 真节点：OpencvThresholdNode 逐档实测 ----
++    auto measure = [&](const HImage &img, const char *tag, int minVal) {
++        OpencvThresholdNode th;
++        th.init();
++        th.setInputImage(img);
++        th.setParam(QStringLiteral("mode"), 0);
++        th.setParam(QStringLiteral("minVal"), minVal);
++        th.run();
++        const bool st = th.getParam(QStringLiteral("moduleStatus")).toBool();
++        const int fg = th.getParam(QStringLiteral("foregroundPixels")).toInt();
++        cv::Mat bin;
++        QSharedPointer<DataObject> binObj = th.getOutputData(1);
++        if (!binObj.isNull()) bin = OpencvUtil::himageToMat(binObj->getHImage());
++        qWarning().noquote() << "[U2-TH " << tag << "] minVal=" << minVal
++                             << "moduleStatus=" << (st ? 1 : 0)
++                             << "foregroundPixels=" << fg
++                             << "binChannels=" << bin.channels();
++        for (const Patch &p : patches) {
++            const int n = bin.empty() ? -1 : cv::countNonZero(bin(cv::Rect(p.col, p.row, P, P)));
++            qWarning().noquote() << "[U2-TH " << tag << "] minVal=" << minVal
++                                 << "patch=" << p.name << "=" << n << "/" << (P * P);
++        }
++    };
++    measure(hsvImg, "HSV", 128);
++    measure(hsvImg, "HSV", 210);
++    measure(hsvImg, "HSV", 220);
++    // ---- 对照臂：同一张图、同三档、唯一变量是"有没有先过色彩转换" ----
++    measure(srcImg, "BGR", 128);
++    measure(srcImg, "BGR", 210);
++    measure(srcImg, "BGR", 220);
++
++    // ---- 表 1 第 3 行把三个节点并列：另两个也必须实测，不能只测阈值节点就外推 ----
++    auto measureAdaptive = [&](const HImage &img, const char *tag) {
++        OpencvAdaptiveThresholdNode th;
++        th.init();
++        th.setInputImage(img);
++        th.run();
++        const bool st = th.getParam(QStringLiteral("moduleStatus")).toBool();
++        const int fg = th.getParam(QStringLiteral("foregroundPixels")).toInt();
++        cv::Mat bin;
++        QSharedPointer<DataObject> o = th.getOutputData(1);
++        if (!o.isNull()) bin = OpencvUtil::himageToMat(o->getHImage());
++        qWarning().noquote() << "[U2-ADAPT " << tag << "] defaultParams moduleStatus=" << (st ? 1 : 0)
++                             << "foregroundPixels=" << fg << "binChannels=" << bin.channels();
++    };
++    measureAdaptive(hsvImg, "HSV ");
++    measureAdaptive(srcImg, "BGR ");
++
++    auto measureBlob = [&](const HImage &img, const char *tag) {
++        OpencvBlobNode blb;
++        blb.init();
++        blb.setInputImage(img);
++        blb.run();
++        const bool st = blb.getParam(QStringLiteral("moduleStatus")).toBool();
++        qWarning().noquote() << "[U2-BLOB " << tag << "] defaultParams moduleStatus=" << (st ? 1 : 0)
++                             << "blobCount=" << blb.getParam(QStringLiteral("blobCount")).toInt()
++                             << "maxBlobArea=" << (int)blb.getParam(QStringLiteral("maxBlobArea")).toDouble()
++                             << "centroidRow=" << (int)blb.getParam(QStringLiteral("maxBlobCentroidRow")).toDouble()
++                             << " centroidCol=" << (int)blb.getParam(QStringLiteral("maxBlobCentroidCol")).toDouble();
++    };
++    measureBlob(hsvImg, "HSV ");
++    measureBlob(srcImg, "BGR ");
++}
++
+ QTEST_MAIN(NodeCoreTest)
+ #include "node_core_test.moc"
