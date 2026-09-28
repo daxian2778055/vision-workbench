@@ -12,6 +12,7 @@
 #include <QClipboard>
 #include <QLineEdit>
 #include <QTextEdit>
+#include <QPlainTextEdit>
 #include <QBrush>
 #include <QColor>
 #include <QFont>
@@ -99,22 +100,40 @@ QString VariablePanel::globalRefText(const QString &name)
     return QStringLiteral("{global.%1}").arg(name);
 }
 
+/// 返回值必须与「引用串真的落进了刚写过的那个编辑件」一致：QSpinBox 族内嵌的 qt_spinbox_lineedit
+/// 会被自己的校验器当场回退，照原样 return true 就是「已插入引用」的假成功（台账 U-21）。
+/// 回读只认刚写过的那一个控件——全扫子控件会被同容器里别处的陈旧串骗成 true。
+static bool referenceLanded(const QString &before, const QString &after, const QString &ref)
+{
+    return after != before && after.contains(ref);
+}
+
 bool VariablePanel::insertReferenceInto(QWidget *target, const QString &ref)
 {
     if (!target || ref.isEmpty())
         return false;
     if (auto *edit = qobject_cast<QLineEdit *>(target)) {
+        const QString before = edit->text();
         edit->insert(ref);   // 光标处插入，用户可继续编辑
-        return true;
+        return referenceLanded(before, edit->text(), ref);
     }
     if (auto *text = qobject_cast<QTextEdit *>(target)) {
+        const QString before = text->toPlainText();
         text->insertPlainText(ref);
-        return true;
+        return referenceLanded(before, text->toPlainText(), ref);
+    }
+    if (auto *plain = qobject_cast<QPlainTextEdit *>(target)) {
+        // 自动面板的 MultiLine 就是这个类（src/HalconNode.cpp 的 makeParamEditor），
+        // 上面那条 QTextEdit 腿对它不命中——以前 MultiLine 参数点「引用」是静默 false。
+        const QString before = plain->toPlainText();
+        plain->insertPlainText(ref);
+        return referenceLanded(before, plain->toPlainText(), ref);
     }
     // 复合控件（如 QSpinBox/QComboBox）内嵌的编辑框
     if (auto *inner = target->findChild<QLineEdit *>()) {
+        const QString before = inner->text();
         inner->insert(ref);
-        return true;
+        return referenceLanded(before, inner->text(), ref);
     }
     return false;
 }

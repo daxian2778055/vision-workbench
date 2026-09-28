@@ -4,8 +4,10 @@
 #include <QtTest>
 #include <QScrollArea>
 #include <QSpinBox>
+#include <QDoubleSpinBox>
 #include <QCheckBox>
 #include <QLineEdit>
+#include <QLabel>
 #include <QMenu>
 #include <QAction>
 #include <QFocusEvent>
@@ -91,6 +93,12 @@ void ModuleEditorTest::testVariableReferenceInsert()
     if (insertedWithoutTarget)
         QFAIL("没有任何参数编辑框被编辑过时不应报告插入成功");
 
+    // 拒绝必须在现场说得出原因：提示标签由 objectName 定位（不靠布局顺序），
+    // 「没有目标」和「有目标但那个控件不吃引用」是两句话，混成一句等于没告诉用户下一步做什么。
+    auto *hint = dlg.findChild<QLabel *>(QStringLiteral("paramHintLabel"));
+    QVERIFY2(hint != nullptr, "未找到参数提示标签（objectName=paramHintLabel）");
+    QCOMPARE(hint->text(), QStringLiteral("请先点一下要插入的参数输入框，再选择变量引用"));
+
     // 模拟该编辑框获得焦点（不 show 窗口也能派发焦点事件）
     QFocusEvent focusIn(QEvent::FocusIn);
     QApplication::sendEvent(edit, &focusIn);
@@ -112,6 +120,29 @@ void ModuleEditorTest::testVariableReferenceInsert()
     dlg.setVariableReferenceProvider([]() { return QStringList(); });
     QCOMPARE(menu->actions().size(), 1);
     QVERIFY2(!menu->actions().at(0)->isEnabled(), "空列表提示项应不可点击");
+
+    // ── U-21：数值型参数（QDoubleSpinBox）拿到引用时，调用方要走「有目标但被拒」那一句话 ──
+    // 它内嵌的 qt_spinbox_lineedit 会把自己的校验器先跑一遍，引用串当场被回退，
+    // 所以 insertReferenceInto 必须返回 false；若这里还报 true，用户看到的就是假成功。
+    auto *spin = new QDoubleSpinBox(panel);
+    spin->setRange(0, 1000);
+    dlg.refreshParamHooks();
+    QFocusEvent focusInSpin(QEvent::FocusIn);
+    QApplication::sendEvent(spin, &focusInSpin);
+
+    const QString numericRef = QStringLiteral("{9.numeric}");
+    const bool insertedIntoNumeric = dlg.insertReference(numericRef);
+    if (insertedIntoNumeric)
+        QFAIL("数值型参数不接受引用串，调用方不应报告插入成功");
+    QCOMPARE(hint->text(), QStringLiteral("该参数不接受变量引用（只有文本框／多行文本可以插入）"));
+
+    // 对照腿：同一个窗口里换成真能落字的编辑框，必须报成功、且提示里带着刚插入的那个引用。
+    // 只断言「含引用串」而不是整句措辞——措辞可以改，「报成功的当次必须把落下去的引用回显出来」才是不变量。
+    QFocusEvent focusInEdit(QEvent::FocusIn);
+    QApplication::sendEvent(edit, &focusInEdit);
+    QVERIFY2(dlg.insertReference(QStringLiteral("{9.text}")), "文本框应接受变量引用");
+    QVERIFY2(hint->text().contains(QStringLiteral("{9.text}")),
+             qPrintable(QStringLiteral("成功提示里没有回显被插入的引用：[%1]").arg(hint->text())));
 }
 
 QTEST_MAIN(ModuleEditorTest)

@@ -50,6 +50,7 @@
 #include <QDoubleSpinBox>
 #include <QCheckBox>
 #include <QPlainTextEdit>
+#include <QTextEdit>
 #include <QWidget>
 #include <QFormLayout>
 #include <QVBoxLayout>
@@ -204,6 +205,8 @@ private slots:
     // U-20 T16：悬空的 QTimer::singleShot（无上下文对象）在面板／节点销毁后照样跑吗（机制＋分腿＋全表面名单）
     void testPendingSingleShotIsNotDetonatedByNextEventLoop();
     void testUnnamedFindChildSitesAreSingleCandidate();
+    // U-21 T17：insertReferenceInto 的返回值必须与「引用串真的落进了被写过的那个控件」一致
+    void testReferenceInsertReturnsTrueOnlyWhenTheTextLanded();
 };
 
 // ── T1 最小复现：把 F-2 的悬空前提变成实测 ──
@@ -2455,6 +2458,13 @@ void ParamPanelBindingTest::testUnnamedFindChildSitesAreSingleCandidate()
     // 期望表钉的是**现状**不是**应然**：数值／复合形态下 inserted==true 而参数表没变，等于"已插入引用"
     // 的假成功（本轮登记 U-20）；Point／Rect 容器里候选数是 2／4 ⇒ 无名那次取第一个（本轮登记 U-21）。
     // 谁将来修这两条，本闸会红——那是要求他把这段期望表一起改，不是让他回退。
+    // ⚠️ 就地更正（2026-09-29，U-21 结案轮 · 上面四行原文照抄保留）：
+    //   ① 编号写反了。台账的实际编号是 U-20＝悬空 singleShot（§3.25 顺带登记、§3.26 结案）、
+    //      **U-21＝插引用假成功**、**U-22＝Point/Rect 容器多候选 2／4**（见 §3.25「登记未修」三条）。
+    //   ② 上面那句"谁将来修这两条，本闸会红"已经兑现：U-21 本轮修掉 ⇒ Int／Double／Point／Rect
+    //      四格的期望从 inserted=true 改成 false（改在下面的 expInserted 处）。这张表不是被口头翻绿的：
+    //      同一文件里的 **T17** 独立量「返回值 ⇔ 串真的落在被写过的那个控件里」，它不看这张期望表，
+    //      两者必须同时绿才算数——只改这张表会让 T17 红，只改产线代码会让这张表红。
     const QList<U7Arm> arms = {ArmInt, ArmDouble, ArmBool, ArmString, ArmFilePath,
                                ArmMultiLine, ArmEnum, ArmPoint, ArmRect};
     const QString marker = QStringLiteral("{9.t15}");
@@ -2493,7 +2503,15 @@ void ParamPanelBindingTest::testUnnamedFindChildSitesAreSingleCandidate()
         int expHits = 0;
         bool expChanged = false;
         if (arm == ArmString || arm == ArmFilePath) { expInserted = true; expHits = 1; expChanged = true; }
-        else if (arm == ArmInt || arm == ArmDouble || arm == ArmPoint || arm == ArmRect) { expInserted = true; }
+        else if (arm == ArmMultiLine) {
+            // 本轮才接通：自动面板的 MultiLine 造的是 QPlainTextEdit，而本函数以前只认 QTextEdit ⇒ 静默 false。
+            // hits 这里**照旧是 0**——它量的是面板里的 QLineEdit 子控件，MultiLine 不是 QLineEdit；
+            // 「串到底落没落」这一格由 T17 的 landedIn 判据直接读那个控件本身。
+            expInserted = true;
+            expChanged = true;
+        }
+        // 数值型与容器型（Int／Double／Point／Rect）：落不住就返回 false
+        //（期望表为什么可以从 inserted=true 翻成 false，见上面「丙」段首那段 U-21 就地更正）
 
         armReadings << QStringLiteral("%1 field=%2 focusPolicy=%3 candidates=%4 "
                                       "inserted=%5 hits=%6 valueBefore=[%7] valueAfter=[%8]")
@@ -2667,6 +2685,201 @@ void ParamPanelBindingTest::testPendingSingleShotIsNotDetonatedByNextEventLoop()
     qWarning().noquote() << "[U20-T16-S] sweep panels deleted, spinning 200ms";
     QTest::qWait(200);
     qWarning().noquote() << "[U20-T16-S] survived - no pending singleShot detonated";
+}
+
+// ── T17（U-21）：把「返回值 ⇔ 引用串真的落进了被写过的那个控件」立成闸 ──
+// 上一轮（§3.25）量到的现状是：Int／Double／Point／Rect 四臂 inserted=1、hits=0、参数表不变——
+// 操作员点「{} 插入参数引用」，界面按"已插入引用"给提示，实际一个字符都没落进去。
+// 本轮修法把返回值改成与落点一致（src/VariablePanel.cpp 的 referenceLanded）。这道闸**不看**
+// T15 那张期望表（那张表本轮也跟着改了，两张表同时绿才算数；那段就地更正用内容锚定位——在本文件
+// 里搜「就地更正（2026-09-29，U-21 结案轮」，不写行号：行号会随该文件上方的注释增删而漂移），
+// 它自己量的是一条不变量：
+//     inserted == （该控件的文本载体确实变了） 且 （变完之后确实含有这串）
+// 四腿：甲 九种 ParamType（产品自动面板真建出来的控件）；乙 合成正路径（证明回读没把真能用的
+// 腿误杀成 false）；丙 前置态（面板里事先不许有该串，否则"含有"是脏读数）；
+// 丁 机制臂（只读 QLineEdit 里**事先就有**该串 ⇒ 文本没变 ⇒ 必须 false，专打"只看 contains"
+// 那种半截修法）。
+namespace {
+
+/// target 自己内部的文本载体快照：它自己的 QLineEdit 后代（含 QSpinBox 族内嵌的
+/// qt_spinbox_lineedit）＋ 它自己若是 QTextEdit／QPlainTextEdit 时的整段文本。
+/// target **之外**的一律不算——把整个面板扫一遍正是那种会被 丁 打红的写法。
+QStringList t17Carriers(QWidget *target)
+{
+    QStringList out;
+    if (!target) return out;
+    if (auto *edit = qobject_cast<QLineEdit *>(target)) {
+        out << edit->text();
+        return out;
+    }
+    if (auto *text = qobject_cast<QTextEdit *>(target)) {
+        out << text->toPlainText();
+        return out;
+    }
+    if (auto *plain = qobject_cast<QPlainTextEdit *>(target)) {
+        out << plain->toPlainText();
+        return out;
+    }
+    const QList<QLineEdit *> kids = target->findChildren<QLineEdit *>();
+    for (QLineEdit *e : kids) out << e->text();
+    if (auto *box = qobject_cast<QComboBox *>(target))
+        out << box->currentText();   // 非可编辑时这格永远不变，量出来是给读数用
+    return out;
+}
+
+bool t17Holds(const QStringList &carriers, const QString &ref)
+{
+    for (const QString &c : carriers) {
+        if (c.contains(ref)) return true;
+    }
+    return false;
+}
+
+} // namespace
+
+void ParamPanelBindingTest::testReferenceInsertReturnsTrueOnlyWhenTheTextLanded()
+{
+    const QString marker = QStringLiteral("{7.t17}");
+    QStringList readings;
+    QStringList bad;
+
+    // ── 甲：九种 ParamType，走产品自动面板建出来的真控件 ──
+    const QList<U7Arm> arms = {ArmInt, ArmDouble, ArmBool, ArmString, ArmFilePath,
+                               ArmMultiLine, ArmEnum, ArmPoint, ArmRect};
+    QStringList landedArms;
+    for (U7Arm arm : arms) {
+        const QString tag = QString::fromLatin1(u7ArmTag(arm));
+        U7TypeFixture node(arm);
+        node.init();
+        QWidget *panel = node.createParamPanel();
+        if (!panel) { bad << QStringLiteral("%1:PANEL-NULL").arg(tag); continue; }
+        const ParamSpec spec = node.paramSpecs().constFirst();
+        QWidget *named = nullptr;
+        for (const NamedControl &c : controlsTheRefresherLooksFor(spec)) {
+            named = findChildByNameAndClass(panel, c.cls, c.name);
+            if (named) break;
+        }
+        QWidget *field = named ? fieldOfWidget(named) : nullptr;
+        if (!field) { bad << QStringLiteral("%1:NO-FIELD").arg(tag); delete panel; continue; }
+
+        // 丙：前置态——本面板里任何文本载体都不许事先含有该串
+        QStringList preCarriers = t17Carriers(field);
+        const QList<QLineEdit *> panelEdits = panel->findChildren<QLineEdit *>();
+        bool panelPreHolds = false;
+        for (QLineEdit *e : panelEdits) {
+            if (e->text().contains(marker)) panelPreHolds = true;
+        }
+        if (t17Holds(preCarriers, marker) || panelPreHolds) {
+            bad << QStringLiteral("%1:PRE-MARKER-POLLUTED").arg(tag);
+            delete panel;
+            continue;
+        }
+
+        const QString valueBefore = node.getParam(spec.name).toString();
+        const bool inserted = VariablePanel::insertReferenceInto(field, marker);
+        const QStringList postCarriers = t17Carriers(field);
+        const QString valueAfter = node.getParam(spec.name).toString();
+
+        const bool changed = postCarriers != preCarriers;
+        const bool holds = t17Holds(postCarriers, marker);
+        const bool paramChanged = valueAfter != valueBefore;
+
+        readings << QStringLiteral("arm=%1 field=%2 carriers=%3 inserted=%4 changed=%5 holds=%6 "
+                                   "paramChanged=%7 paramAfter=[%8]")
+                        .arg(tag)
+                        .arg(QString::fromLatin1(field->metaObject()->className()))
+                        .arg(preCarriers.size())
+                        .arg(inserted ? 1 : 0)
+                        .arg(changed ? 1 : 0)
+                        .arg(holds ? 1 : 0)
+                        .arg(paramChanged ? 1 : 0)
+                        .arg(valueAfter);
+
+        if (inserted != (changed && holds)) {
+            bad << QStringLiteral("%1: inserted=%2 但 (changed=%3 && holds=%4)=%5")
+                       .arg(tag).arg(inserted ? 1 : 0).arg(changed ? 1 : 0).arg(holds ? 1 : 0)
+                       .arg((changed && holds) ? 1 : 0);
+        }
+        if (inserted) landedArms << tag;
+
+        // 文本型参数那一格的成功必须连**参数表**一起落地，否则假成功只是换了个地方
+        if (inserted && (arm == ArmString || arm == ArmFilePath || arm == ArmMultiLine)) {
+            if (!paramChanged || !valueAfter.contains(marker)) {
+                bad << QStringLiteral("%1: 控件落了但参数表没跟上（paramAfter=[%2]）")
+                           .arg(tag).arg(valueAfter);
+            }
+        }
+        delete panel;
+    }
+
+    // ── 乙：合成正路径——真能收引用的三类控件必须仍然是 true（回读不得误杀）──
+    QStringList synthBad;
+    {
+        QLineEdit bare;
+        bare.setText(QStringLiteral("abc"));
+        bare.setCursorPosition(0);
+        const bool okBare = VariablePanel::insertReferenceInto(&bare, marker);
+        const bool landedBare = bare.text().contains(marker) && bare.text().contains(QStringLiteral("abc"));
+        if (okBare != landedBare) synthBad << QStringLiteral("bareLineEdit ok=%1 landed=%2").arg(okBare).arg(landedBare);
+
+        QTextEdit rich;
+        const bool okRich = VariablePanel::insertReferenceInto(&rich, marker);
+        if (okRich != rich.toPlainText().contains(marker)) {
+            synthBad << QStringLiteral("textEdit ok=%1 holds=%2").arg(okRich)
+                            .arg(rich.toPlainText().contains(marker) ? 1 : 0);
+        }
+
+        QPlainTextEdit plain;
+        plain.setPlainText(QStringLiteral("line1"));
+        const bool okPlain = VariablePanel::insertReferenceInto(&plain, marker);
+        if (okPlain != plain.toPlainText().contains(marker)) {
+            synthBad << QStringLiteral("plainTextEdit ok=%1 holds=%2").arg(okPlain)
+                            .arg(plain.toPlainText().contains(marker) ? 1 : 0);
+        }
+        readings << QStringLiteral("synth bare=%1 rich=%2 plain=%3")
+                        .arg(okBare ? 1 : 0).arg(okRich ? 1 : 0).arg(okPlain ? 1 : 0);
+        // 这三条腿本来就应当是 true（它们是引用该落进去的地方）
+        if (!okBare || !okRich || !okPlain) synthBad << QStringLiteral("positive-path-lost");
+    }
+    bad << synthBad;
+
+    // ── 丁：机制臂——串**事先就在**、这次插入一个字符都没改进去 ⇒ 必须 false ──
+    // 第一版这里用 setReadOnly(true)，实测**前提不成立**：只读只挡用户输入，不挡程序侧的
+    // QLineEdit::insert（改前读数＝readonly inserted=1 changed=1 holds=1，红在臂自己不是红在产线）。
+    // 换成 max-length 截断：文本已经等于该串、长度已到上限 ⇒ 这次 insert 是真正的空操作。
+    {
+        QLineEdit capped;
+        capped.setText(marker);
+        capped.setMaxLength(marker.length());
+        const bool okCapped = VariablePanel::insertReferenceInto(&capped, marker);
+        const bool changedCapped = capped.text() != marker;
+        const bool holdsCapped = capped.text().contains(marker);
+        readings << QStringLiteral("capped inserted=%1 changed=%2 holds=%3 text=[%4]")
+                        .arg(okCapped ? 1 : 0).arg(changedCapped ? 1 : 0)
+                        .arg(holdsCapped ? 1 : 0).arg(capped.text());
+        if (okCapped) {
+            bad << QStringLiteral("capped: 什么都没改进去（changed=0）而串本来就在（holds=1），"
+                                  "却返回 true（＝只看 contains 的那半截修法）");
+        }
+        if (changedCapped || !holdsCapped) {
+            bad << QStringLiteral("capped 臂的前置没造出来：changed=%1 holds=%2（期望 0／1）")
+                       .arg(changedCapped ? 1 : 0).arg(holdsCapped ? 1 : 0);
+        }
+    }
+
+    qWarning().noquote() << QStringLiteral("[U21-T17] arms=%1 landed=%2 bad=%3")
+                                .arg(arms.size()).arg(landedArms.size()).arg(bad.size());
+    for (const QString &line : readings) qWarning().noquote() << "  T17 " << line;
+    for (const QString &line : bad) qWarning().noquote() << "  T17BAD " << line;
+
+    QVERIFY2(landedArms == QStringList({QStringLiteral("String"), QStringLiteral("FilePath"),
+                                         QStringLiteral("MultiLine")}),
+             qPrintable(QStringLiteral("U21-LANDINGSET: 插得进去的 ParamType 从「String／FilePath／MultiLine」"
+                                       "变成 %1 ⇒ 修法的作用域变了（明细见上方 [U21-T17]）")
+                            .arg(landedArms.join(QStringLiteral(",")))));
+    QVERIFY2(bad.isEmpty(),
+             qPrintable(QStringLiteral("U21-INSERTHONESTY: %1 条读数违反「返回值 ⇔ 串真的落进被写过的控件」\n%2")
+                            .arg(bad.size()).arg(bad.join(QStringLiteral("\n")))));
 }
 
 QTEST_MAIN(ParamPanelBindingTest)

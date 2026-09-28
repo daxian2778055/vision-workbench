@@ -105,6 +105,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     root->addLayout(toolbar);
 
     m_hintLabel = new QLabel();
+    m_hintLabel->setObjectName(QStringLiteral("paramHintLabel"));
     m_hintLabel->setWordWrap(true);
     m_hintLabel->setStyleSheet(QStringLiteral("color:#666;"));
     root->addWidget(m_hintLabel);
@@ -388,8 +389,11 @@ bool ModuleEditorDialog::insertReference(const QString &ref)
             m_hintLabel->setText(QStringLiteral("已插入引用 %1（执行时按上游当前值解析）").arg(ref));
         return true;
     }
-    if (m_hintLabel)
-        m_hintLabel->setText(QStringLiteral("请先点一下要插入的参数输入框，再选择变量引用"));
+    if (m_hintLabel) {
+        m_hintLabel->setText(target
+            ? QStringLiteral("该参数不接受变量引用（只有文本框／多行文本可以插入）")
+            : QStringLiteral("请先点一下要插入的参数输入框，再选择变量引用"));
+    }
     return false;
 }
 
