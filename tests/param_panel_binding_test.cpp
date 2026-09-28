@@ -52,17 +52,20 @@
 #include <QPlainTextEdit>
 #include <QWidget>
 #include <QFormLayout>
+#include <QVBoxLayout>
 #include <QSet>
 #include <QPointF>
 #include <QRectF>
 #include <QTimer>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QPushButton>
 
 #include "ColorConversionNode.h"
 #include "HalconImageSourceNode.h"
 #include "HalconNode.h"
 #include "NodeRegistry.h"
+#include "VariablePanel.h"
 
 namespace {
 
@@ -196,6 +199,8 @@ private slots:
     void testLoadPathClampsOutOfRangeSpecValues();
     // U-8：把「哪些算子一个参数声明都不发」立成显式名单闸（见 §3.22）
     void testOperatorsWithoutParamSpecsAreExactlyThisRoster();
+    // U-5 T15：两处无名 findChild（FilePath 浏览按钮／变量引用内嵌腿）的「单候选」运行期读数
+    void testUnnamedFindChildSitesAreSingleCandidate();
 };
 
 // ── T1 最小复现：把 F-2 的悬空前提变成实测 ──
@@ -2260,6 +2265,281 @@ void ParamPanelBindingTest::testOperatorsWithoutParamSpecsAreExactlyThisRoster()
              qPrintable(QStringLiteral("denominator mismatch: noSpec=%1 withSpecs=%2 registry=%3")
                             .arg(actual.size()).arg(withSpecs).arg(registry)));
 }
+
+// ── T15（U-5）：两处无名 findChild 命中的到底是不是「唯一候选」——从读盘推断升级成运行期读数 ──
+// 站点 1：src/HalconNode.cpp:1148 `editor->findChild<QPushButton *>()`（FilePath 浏览按钮，无名）
+// 站点 2：src/VariablePanel.cpp:115  `target->findChild<QLineEdit *>()`（变量引用的内嵌腿，无名）
+// §3.7 表 3 把这两处的「单候选」记成**读盘**级（人眼看代码"这里只建了一颗"）⇒ 本闸把它变成每次门禁
+// 都重跑的读数：甲＝全注册表逐字段槽位的同类型候选数；乙＝每条 FilePath 声明逐条（无名那次命中必须
+// 就是带 `_fileParamName`==参数名的那颗，且容器里只有一颗）；丙＝9 种 ParamType 合成夹具直接喂进
+// 站点 2 那条腿，量返回值／文本落点／参数表回读。
+// 默认路径**不开窗口、不起事件循环**：产品里有两处 `QTimer::singleShot(100, [=](){ 立刻解引用捕获的
+// 行编辑 })`（src/ColorConversionNode.cpp:297 / src/HalconNode.cpp:642）在面板析构之后仍会触发（本轮
+// 新登记 U-19）。实测：全注册表扫面之后只要再转一次事件循环就段错误（RC=139，见 §3.25 表 4），所以
+// "谁真能成为 focusWidget"这条窗口态可达性只放在 VFP_U5_WINDOW_PROBE=1 的取证腿里跑，不进默认门禁。
+void ParamPanelBindingTest::testUnnamedFindChildSitesAreSingleCandidate()
+{
+    registerAllNodes();
+
+    // ── 丁（取证腿，默认不跑）：真显示窗口，量 NoFocus 容器能不能成为 QApplication::focusWidget ──
+    if (qEnvironmentVariableIsSet("VFP_U5_WINDOW_PROBE")) {
+        const QList<U7Arm> wArms = {ArmInt, ArmDouble, ArmBool, ArmString, ArmFilePath,
+                                    ArmMultiLine, ArmEnum, ArmPoint, ArmRect};
+        const QString wMarker = QStringLiteral("{9.probe}");
+        QStringList wReadings;
+        int wNotExposed = 0;
+        for (U7Arm arm : wArms) {
+            const QString tag = QString::fromLatin1(u7ArmTag(arm));
+            U7TypeFixture node(arm);
+            node.init();
+            QWidget *panel = node.createParamPanel();
+            QVERIFY2(panel, qPrintable(tag + QStringLiteral(":PANEL-NULL")));
+            QWidget *window = new QWidget();
+            auto *lay = new QVBoxLayout(window);
+            lay->setContentsMargins(0, 0, 0, 0);
+            lay->addWidget(panel);
+            window->show();
+            const bool exposed = QTest::qWaitForWindowExposed(window);
+            if (!exposed) ++wNotExposed;
+            window->activateWindow();
+            QTest::qWait(30);
+
+            const ParamSpec s = node.paramSpecs().constFirst();
+            QWidget *named = nullptr;
+            for (const NamedControl &c : controlsTheRefresherLooksFor(s)) {
+                named = findChildByNameAndClass(window, c.cls, c.name);
+                if (named) break;
+            }
+            QWidget *field = named ? fieldOfWidget(named) : nullptr;
+            QVERIFY2(field, qPrintable(tag + QStringLiteral(":NO-FIELD")));
+
+            // 沿**真实 Tab 键事件**走焦点链：Tab 要发给当前 focusWidget（Qt 的 focusNextPrevChild 在
+            // 被聚焦控件的 keyPressEvent 里触发，发给顶层容器不走这条路；该函数本身是 protected）。
+            QStringList chain;
+            QSet<QWidget *> seen;
+            field->setFocus();
+            QWidget *cursor = QApplication::focusWidget();
+            const QString seededFocus = cursor ? QString::fromLatin1(cursor->metaObject()->className())
+                                               : QStringLiteral("(null)");
+            for (int i = 0; i < 10 && cursor; ++i) {
+                seen.insert(cursor);
+                chain << QStringLiteral("%1#%2/edits=%3")
+                             .arg(QString::fromLatin1(cursor->metaObject()->className()),
+                                  cursor->objectName().isEmpty() ? QStringLiteral("<anon>") : cursor->objectName())
+                             .arg(cursor->findChildren<QLineEdit *>().size());
+                QTest::keyClick(cursor, Qt::Key_Tab);
+                QWidget *next = QApplication::focusWidget();
+                if (!next || next == cursor || seen.contains(next)) break;
+                cursor = next;
+            }
+            const bool wInserted = VariablePanel::insertReferenceInto(field, wMarker);
+            int wHits = 0;
+            for (QLineEdit *e : window->findChildren<QLineEdit *>()) {
+                if (e->text().contains(wMarker)) ++wHits;
+            }
+            const QString wValueAfter = node.getParam(s.name).toString();
+            wReadings << QStringLiteral("ARM %1 exposed=%2 field=%3 fieldFocus=%4 "
+                                        "setFocus->focusWidget=%5 tabChain=%6 "
+                                        "| inserted=%7 hits=%8 valueAfter=%9")
+                             .arg(tag)
+                             .arg(exposed)
+                             .arg(QString::fromLatin1(field->metaObject()->className()))
+                             .arg(static_cast<int>(field->focusPolicy()))
+                             .arg(seededFocus)
+                             .arg(chain.isEmpty() ? QStringLiteral("(empty)") : chain.join(QStringLiteral(" > ")))
+                             .arg(wInserted)
+                             .arg(wHits)
+                             .arg(wValueAfter);
+            delete window;
+        }
+        qWarning().noquote() << "[U5-T15-D] window leg ONLY (VFP_U5_WINDOW_PROBE=1) - not part of the default gate";
+        for (const QString &line : wReadings) qWarning().noquote() << "  " << line;
+        QVERIFY2(wNotExposed == 0, "窗口未暴露，本腿读数无效");
+        // 本腿实测钉住的一条前提：Qt::NoFocus 的容器字段（String／FilePath／Point／Rect）也能成为
+        // QApplication::focusWidget ⇒ 站点 2 那条"target 不是行编辑"的兜底腿在生产里真的可达。
+        return;
+    }
+
+    const QList<NodeRegistration> regs = NodeRegistry::instance().all();
+
+    // ── 甲／乙：全注册表逐字段槽位 ──
+    QStringList badSlots;      // 判红项：同一字段槽位里 QLineEdit／QPushButton 候选数 >1
+    QStringList fpReadings;    // 每条 FilePath 声明的无名命中读数
+    QStringList fpBad;         // 判红项：无名命中不是那颗带 _fileParamName 的按钮／容器里不止一颗
+    QStringList panelFails;
+    int panelsBuilt = 0;
+    int fieldSlots = 0;
+    for (const NodeRegistration &reg : regs) {
+        HalconNode *node = qobject_cast<HalconNode *>(
+            NodeRegistry::instance().createById(reg.id, this));
+        if (!node) { panelFails << reg.id + ":create-null"; continue; }
+        node->init();
+        QWidget *panel = node->createParamPanel();
+        if (!panel) { panelFails << reg.id + ":panel-null"; delete node; continue; }
+        ++panelsBuilt;
+        for (QWidget *w : panel->findChildren<QWidget *>()) {
+            // 字段槽位＝在这个 QFormLayout 的 field 列上（Qt 6.11 没有 isField()，用公开的
+            // labelForField() 反查：有配对标签的那个控件才是字段，标签自己不算进来，否则分母翻倍）。
+            QWidget *host = w->parentWidget();
+            QFormLayout *fl = host ? qobject_cast<QFormLayout *>(host->layout()) : nullptr;
+            if (!fl || !fl->labelForField(w)) continue;
+            ++fieldSlots;
+            const int edits = w->findChildren<QLineEdit *>().size();
+            const int btns = w->findChildren<QPushButton *>().size();
+            if (edits > 1 || btns > 1) {
+                badSlots << QStringLiteral("%1 obj=%2 cls=%3 lineEdits=%4 buttons=%5")
+                                .arg(reg.id,
+                                     w->objectName().isEmpty() ? QStringLiteral("<anon>") : w->objectName())
+                                .arg(QString::fromLatin1(w->metaObject()->className()))
+                                .arg(edits).arg(btns);
+            }
+        }
+        for (const ParamSpec &spec : node->paramSpecs()) {
+            if (spec.type != ParamType::FilePath) continue;
+            QLineEdit *ed = panel->findChild<QLineEdit *>(spec.name);
+            QWidget *editor = ed ? fieldOfWidget(ed) : nullptr;
+            if (!editor) {
+                fpBad << QStringLiteral("%1/%2 EDITOR-NOT-FOUND").arg(reg.id, spec.name);
+                continue;
+            }
+            const int btnCount = editor->findChildren<QPushButton *>().size();
+            QPushButton *unnamed = editor->findChild<QPushButton *>();
+            const QString owner = unnamed ? unnamed->property("_fileParamName").toString()
+                                          : QStringLiteral("(no-hit)");
+            fpReadings << QStringLiteral("%1/%2 buttons=%3 owner=%4").arg(reg.id, spec.name)
+                                                                .arg(btnCount).arg(owner);
+            if (!unnamed) {
+                fpBad << QStringLiteral("%1/%2 UNNAMED-NOT-HIT").arg(reg.id, spec.name);
+            } else if (btnCount != 1) {
+                fpBad << QStringLiteral("%1/%2 buttons=%3（无名 findChild 只会取第一个）").arg(reg.id, spec.name).arg(btnCount);
+            } else if (owner != spec.name) {
+                fpBad << QStringLiteral("%1/%2 owner=%3（无名命中的按钮挂在别的参数名上）").arg(reg.id, spec.name, owner);
+            }
+        }
+        delete panel;
+        delete node;
+    }
+
+    qWarning().noquote() << QStringLiteral("[U5-T15-AB] registry=%1 panelsBuilt=%2 fieldSlots=%3 "
+                                           "multiCandidateSlots=%4 filePathSites=%5")
+                                .arg(regs.size()).arg(panelsBuilt).arg(fieldSlots)
+                                .arg(badSlots.size()).arg(fpReadings.size());
+    for (const QString &line : fpReadings) qWarning().noquote() << "  FP      " << line;
+    for (const QString &line : badSlots)   qWarning().noquote() << "  BADSLOT " << line;
+    for (const QString &line : fpBad)      qWarning().noquote() << "  FPBAD   " << line;
+    for (const QString &line : panelFails) qWarning().noquote() << "  PANELFAIL " << line;
+
+    QVERIFY2(regs.size() > 60,
+             qPrintable(QStringLiteral("注册表只枚举到 %1 个算子 ⇒ 分母已失效").arg(regs.size())));
+    QVERIFY2(panelFails.isEmpty() && panelsBuilt == regs.size(),
+             qPrintable(QStringLiteral("甲 的扫描不完整：panelsBuilt=%1 registry=%2，另有 %3 个建面板失败")
+                            .arg(panelsBuilt).arg(regs.size()).arg(panelFails.size())));
+    QVERIFY2(fieldSlots == 249,
+             qPrintable(QStringLiteral("字段槽位分母从 249 变成 %1 ⇒ 本闸口径已漂移，"
+                                        "先核对面板改动再把基准一起改").arg(fieldSlots)));
+    QVERIFY2(badSlots.isEmpty(),
+             qPrintable(QStringLiteral("U5-MULTI: %1 个字段槽位里同类型候选不止一个 ⇒ 站点 1 的无名 "
+                                        "findChild 会取到错控件（明细见上方 [U5-T15-AB]）\n%2")
+                            .arg(badSlots.size()).arg(badSlots.join(QStringLiteral("\n")))));
+    QVERIFY2(fpReadings.size() == 13,
+             qPrintable(QStringLiteral("FilePath 声明从 13 条变成 %1 条 ⇒ 乙 的分母已漂移").arg(fpReadings.size())));
+    QVERIFY2(fpBad.isEmpty(),
+             qPrintable(QStringLiteral("U5-FPSITE: %1 条 FilePath 站点的无名 findChild 命中的不是该参数"
+                                        "自己的浏览按钮（明细见上方 [U5-T15-AB]）\n%2")
+                            .arg(fpBad.size()).arg(fpBad.join(QStringLiteral("\n")))));
+
+    // ── 丙：9 种 ParamType 直接喂进站点 2 那条无名腿 ──
+    // 期望表钉的是**现状**不是**应然**：数值／复合形态下 inserted==true 而参数表没变，等于"已插入引用"
+    // 的假成功（本轮登记 U-20）；Point／Rect 容器里候选数是 2／4 ⇒ 无名那次取第一个（本轮登记 U-21）。
+    // 谁将来修这两条，本闸会红——那是要求他把这段期望表一起改，不是让他回退。
+    const QList<U7Arm> arms = {ArmInt, ArmDouble, ArmBool, ArmString, ArmFilePath,
+                               ArmMultiLine, ArmEnum, ArmPoint, ArmRect};
+    const QString marker = QStringLiteral("{9.t15}");
+    QStringList armReadings;
+    QStringList armBad;
+    QStringList multiCandidateArms;
+    for (U7Arm arm : arms) {
+        const QString tag = QString::fromLatin1(u7ArmTag(arm));
+        U7TypeFixture node(arm);
+        node.init();
+        QWidget *panel = node.createParamPanel();
+        if (!panel) { armBad << tag + QStringLiteral(":PANEL-NULL"); continue; }
+        const ParamSpec s = node.paramSpecs().constFirst();
+        QWidget *named = nullptr;
+        for (const NamedControl &c : controlsTheRefresherLooksFor(s)) {
+            named = findChildByNameAndClass(panel, c.cls, c.name);
+            if (named) break;
+        }
+        QWidget *field = named ? fieldOfWidget(named) : nullptr;
+        if (!field) { armBad << tag + QStringLiteral(":NO-FIELD"); delete panel; continue; }
+
+        const int candidates = field->findChildren<QLineEdit *>().size();
+        if (candidates > 1) multiCandidateArms << QStringLiteral("%1 candidates=%2").arg(tag).arg(candidates);
+        for (QLineEdit *e : panel->findChildren<QLineEdit *>()) e->clear();
+        const QString valueBefore = node.getParam(s.name).toString();
+
+        const bool inserted = VariablePanel::insertReferenceInto(field, marker);
+
+        int hits = 0;
+        for (QLineEdit *e : panel->findChildren<QLineEdit *>()) {
+            if (e->text().contains(marker)) ++hits;
+        }
+        const QString valueAfter = node.getParam(s.name).toString();
+
+        bool expInserted = false;
+        int expHits = 0;
+        bool expChanged = false;
+        if (arm == ArmString || arm == ArmFilePath) { expInserted = true; expHits = 1; expChanged = true; }
+        else if (arm == ArmInt || arm == ArmDouble || arm == ArmPoint || arm == ArmRect) { expInserted = true; }
+
+        armReadings << QStringLiteral("%1 field=%2 focusPolicy=%3 candidates=%4 "
+                                      "inserted=%5 hits=%6 valueBefore=[%7] valueAfter=[%8]")
+                           .arg(tag)
+                           .arg(QString::fromLatin1(field->metaObject()->className()))
+                           .arg(static_cast<int>(field->focusPolicy()))
+                           .arg(candidates)
+                           .arg(inserted)
+                           .arg(hits)
+                           .arg(valueBefore, valueAfter);
+        if (inserted != expInserted) {
+            armBad << QStringLiteral("%1 inserted=%2（期望 %3）").arg(tag).arg(inserted).arg(expInserted);
+        }
+        if (hits != expHits) armBad << QStringLiteral("%1 hits=%2（期望 %3）").arg(tag).arg(hits).arg(expHits);
+        const bool changed = valueAfter != valueBefore;
+        if (changed != expChanged) {
+            armBad << QStringLiteral("%1 参数表 changed=%2（期望 %3）").arg(tag).arg(changed).arg(expChanged);
+        }
+        delete panel;
+    }
+
+    qWarning().noquote() << QStringLiteral("[U5-T15-C] arms=%1 multiCandidate=%2 bad=%3")
+                                .arg(armReadings.size()).arg(multiCandidateArms.size())
+                                .arg(armBad.size());
+    for (const QString &line : armReadings) qWarning().noquote() << "  ARM " << line;
+    for (const QString &line : armBad) qWarning().noquote() << "  ARMBAD " << line;
+
+    QVERIFY2(armReadings.size() == 9,
+             qPrintable(QStringLiteral("丙 只跑成 %1 条臂（应 9 条）⇒ 分母已失效").arg(armReadings.size())));
+    QVERIFY2(multiCandidateArms.size() == 2
+                 && multiCandidateArms.join(QStringLiteral(",")) == QStringLiteral("Point candidates=2,Rect candidates=4"),
+             qPrintable(QStringLiteral("候选数 >1 的臂从「Point(2)／Rect(4)」变成 %1 ⇒ U-21 的登记面变了"
+                                        "（明细见上方 [U5-T15-C]）")
+                            .arg(multiCandidateArms.join(QStringLiteral(",")))));
+    QVERIFY2(armBad.isEmpty(),
+             qPrintable(QStringLiteral("U5-INSERTLEG: %1 条臂的运行期读数与期望表不符（明细见上方 [U5-T15-C]）\n%2")
+                            .arg(armBad.size()).arg(armBad.join(QStringLiteral("\n")))));
+
+    // U-20 复现腿（只有 env VFP_U20_PROBE=1 才跑，默认门禁不含它）：上面的甲已把 73 个面板
+    // delete 掉，而两处 createParamPanel 各自挂了 QTimer::singleShot(100, [=]{…})（没有上下文对象，
+    // 站点见 src/ColorConversionNode.cpp:297 与 src/HalconNode.cpp:642）。此后只要跑一次事件循环，
+    // 那条延迟 lambda 就会解引用已经释放的控件。
+    if (qEnvironmentVariableIsSet("VFP_U20_PROBE")) {
+        qWarning().noquote() << "[U20-PROBE] sweep panels already deleted; spinning the event loop once";
+        QTest::qWait(200);
+        qWarning().noquote() << "[U20-PROBE] survived - no pending singleShot detonated";
+    }
+}
+
 
 QTEST_MAIN(ParamPanelBindingTest)
 
