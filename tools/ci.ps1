@@ -15,6 +15,7 @@
       5 = QtTest result-wrapper self-test failed (tools/selftest_run_qtest_gates.py)
       6 = documentation check failed (tools/doc_check.ps1)
       7 = documentation anchor citations drifted (tools/doc_anchors.py)
+      8 = dangling-timer site found (tools/single_shot_inventory.py)
 
     Note: this script is intentionally ASCII-only, and therefore carries no UTF-8 BOM
     (PowerShell 5.1 only needs a BOM when a .ps1 contains non-ASCII text). The two-sided
@@ -182,6 +183,30 @@ if ($anchorCode -ne 0) {
     exit 7
 }
 Write-Ok "documentation anchors OK ($hygieneExe)"
+
+# ------------------------------------------------- 1f. dangling-timer site inventory
+# Why it runs here: U-20 measured what a QTimer::singleShot(msec, functor) does once the widget it
+# captured is deleted - the functor still fires on the next event loop and the process dies with
+# SIGSEGV (rc 139). The runtime legs added in the same round (ParamPanelBindingTest T16) only catch
+# a site that some test actually instantiates a panel for; a newly added context-less call site in a
+# node nobody builds would stay invisible until a operator hit it in the field. This step keeps the
+# mechanical rule (second argument starting with '[' = no context object) as a build-time stop.
+# Must never be a silent skip: any context-less site = exit 8.
+Write-Step "Dangling-timer site inventory"
+$timerLog = Join-Path $RepoRoot 'ci-single-shot.log'
+$timerArgs = $hygienePre + @('tools/single_shot_inventory.py')
+& $hygieneExe @timerArgs 2>&1 | Tee-Object -FilePath $timerLog | Out-Null
+$timerCode = $LASTEXITCODE
+
+$timerLines = @(Get-Content $timerLog -ErrorAction SilentlyContinue)
+if ($timerLines.Count -eq 0) { Write-Host '  (single_shot_inventory.py produced no output)' }
+foreach ($line in $timerLines) { Write-Host "  $line" }
+if ($timerCode -ne 0) {
+    Write-Err "dangling-timer site found (exit $timerCode) via '$hygieneExe'; see $timerLog"
+    Pop-Location
+    exit 8
+}
+Write-Ok "dangling-timer site inventory OK ($hygieneExe)"
 
 # ------------------------------------------------------------------ 2. clean
 if ($Clean -and (Test-Path $BuildDir)) {
