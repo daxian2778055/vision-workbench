@@ -122,10 +122,13 @@ void CalibrationNode::run(bool /*autoSwitch*/)
         m_outputImage = m_inputImage;
     } catch (const HException &e) {
         m_outputImage.Clear();
+        const QString why = QStringLiteral("标定失败: %1")
+                                    .arg(QString::fromStdString(e.ErrorMessage().Text()));
         auto strObj = QSharedPointer<DataObject>::create();
         strObj->setType(DataObject::DataType::String);
-        strObj->setData(QStringLiteral("标定失败: %1").arg(QString::fromStdString(e.ErrorMessage().Text())));
+        strObj->setData(why);
         setOutputData(1, strObj);
+        m_params[QStringLiteral("calibNote")] = why;  // 判红会清空端口，原因另存结果字段（§3.4 口径）
         m_params[QStringLiteral("calibrated")] = false;
         m_params["moduleStatus"] = false;
     }

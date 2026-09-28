@@ -21,11 +21,17 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QRegularExpression>
+#include <QFile>
+#include <QFileInfo>
+#include <QDir>
+#include <QCoreApplication>
 
 #include "OpencvCalibNode.h"
 #include "OpencvUndistortNode.h"
 #include "NPointCalibNode.h"
 #include "HandEyeCalibNode.h"
+#include "CalibrationNode.h"
+#include "CalibrationBoardNode.h"
 #include "CoordinateTransformNode.h"
 #include "PositionCorrectNode.h"
 #include "FlowScene.h"
@@ -92,6 +98,10 @@ private slots:
     void r5OpencvCalibRefusesEvictedCamParamsKey();   // ② 写侧：cam_params 被 6 元占住时不得绿灯
     void r5HandEyeRefusesEvictedCamParamsKey();       // ⑤ 写侧：同上，手眼侧
     void r5HalconCamParamsPayloadShape();             // HALCON 写侧的实测长度/布局
+    // ②／⑤′ HALCON 两个写站点（R-5 §3.19 登记的 B14／B15 无覆盖残留）
+    void r5HalconCalibSolveFailureVisible();          // CalibrationNode：解算抛异常 ⇒ 判红且原因留痕
+    void r5HalconBoardSolveFailureVisible();          // CalibrationBoardNode：同一形态（改前判红全靠基类兜、原因不可见）
+    void r5HalconWriteSitesKeepRefusalGuard();        // 两处拒收分支的形态闸（解算成功那一半本机取不到）
 
     // ⑤ R-1：手眼退化输入闸（取证阶段先量"改前这些输入各自落到哪条路"）
     void handEyeCoincidentPixelsJudgeRed();       // 像素侧全重合 ⇒ 旋转无解
@@ -1976,6 +1986,239 @@ void CalibChainTest::r5HalconCamParamsPayloadShape()
     QVERIFY2(!anyRead,
              qPrintable(QStringLiteral("[R-5 ⑤ HALCON 写侧现在有读数了，请把台账的「取证未命中」改成实测]\n")
                         + report));
+}
+
+// ---------------- ②／⑤′ HALCON 两个写站点的失败面（§3.19 登记的 B14／B15 残留）----------------
+
+/// 一次"解算失败"跑完之后对外可见的面，分两层取：
+/// **A 层**走 `execute()`（= `HalconNode::process()`），红轮的端口一律被清空，所以判红"是谁做的"看不出来；
+/// **B 层**把 `moduleStatus` 预置回 true（与 process() 每轮预置同形）后**直跑 `run()`**，
+/// 只有这一层能分辨"站点自己写没写失败位"——A 层可能全靠基类的产出守卫（S-1，`src/HalconNode.cpp:478`～`:483`）兜住。
+struct HalconSolveFailure
+{
+    bool execute = false;
+    bool moduleStatus = false;
+    QString note;       // calibNote（A 层）
+    QString portText;   // 端口 1（标定结果，红轮恒空）
+    QVector<double> stored;
+    bool siteBit = true;    // B 层：直跑 run() 后的 moduleStatus（预置 true ⇒ 期望站点写 false）
+    QString siteNote;       // B 层：直跑 run() 后的 calibNote
+    QString rawText;        // B 层：直跑 run() 后端口 1 的失败原文（没被清空 ⇒ HALCON 的报错在这里）
+};
+
+QString halconSolveFailureProblems(const HalconSolveFailure &r, const QString &who,
+                                   const QVector<double> &seed)
+{
+    QStringList problems;
+    if (r.execute || r.moduleStatus)
+        problems << QStringLiteral("%1：HALCON 解算没成功却判绿（端口 1=「%2」，状态位 true）")
+                        .arg(who, r.portText.left(160));
+    if (r.note.isEmpty())
+        problems << QStringLiteral("%1：原因没留在 calibNote 里 ⇒ 判红时端口被清空，现场查不到为什么").arg(who);
+    else if (!r.note.contains(QStringLiteral("标定失败")))
+        problems << QStringLiteral("%1：calibNote 没点出这是解算失败：「%2」").arg(who, r.note);
+    if (vecDeviation(r.stored, seed, 1e-12) != QString())
+        problems << QStringLiteral("%1：解算没成功却改了单例键（现在项数 %2）").arg(who).arg(r.stored.size());
+    if (r.siteBit)
+        problems << QStringLiteral("%1：站点自己没写 moduleStatus=false ⇒ 判红全靠基类 S-1 产出守卫兜，"
+                                   "哪天这个算子不再承诺吐图就变回静默绿灯").arg(who);
+    if (!r.siteNote.contains(QStringLiteral("标定失败")))
+        problems << QStringLiteral("%1：直跑 run() 后 calibNote 里仍没有失败原因：「%2」").arg(who, r.siteNote);
+    return problems.join(QStringLiteral(" | "));
+}
+
+/// 两个站点共用的播种：cam_params 上放一份**合法 6 元仿射**当哨兵——它既让"拒收分支"有前提
+/// （项数不同），又能测出"解算失败的那一轮有没有偷偷改键"。
+const QVector<double> kSixTupleSentinel() { return {0.1, 0.0, 5.0, 0.0, 0.1, -3.0}; }
+
+/// HALCON 自带标定板模型（$HALCONROOT/calib 在运行时搜索路径里；tests/halcon_node_probe.cpp:287
+/// 早就这么取）。本机没有标定板实拍图 ⇒ 喂空白图，解算链路必失败。
+/// ⚠️ 这两个类在本环境**未注册**（`src/NodeRegistry.cpp:282`／`:329` 的 `// VFP_REG(` 注释行），
+/// 但测试可以直接构造类本身——注册的缺失不影响站点代码是否守得住。
+const char *const kHalconPlateDescr = "calib/caltab_30mm.descr";
+
+void CalibChainTest::r5HalconCalibSolveFailureVisible()
+{
+    const QString key = QStringLiteral("cam_params");
+    CalibrationManager *cm = CalibrationManager::instance();
+    cm->remove(key);
+    const QVector<double> six = kSixTupleSentinel();
+    QVERIFY2(cm->setHomography(key, six), "播种 6 元哨兵载荷失败，本条前提不成立");
+
+    CalibrationNode node;
+    node.init();
+    node.setParam(QStringLiteral("descrPath"), QString::fromLatin1(kHalconPlateDescr));
+    feedImage(node, blankImage());
+    const bool ok = node.execute();
+
+    HalconSolveFailure r;
+    r.execute = ok;
+    r.moduleStatus = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    r.note = noteOf(node);
+    const bool calibrated = node.getParam(QStringLiteral("calibrated")).toBool();
+    auto d = node.getOutputData(1);
+    r.portText = d ? d->getData().toString() : QString();
+    r.stored = cm->homography(key);
+
+    qInfo().noquote() << QStringLiteral(
+                              "[R-5 HALCON ② A 层实测] execute=%1 moduleStatus=%2 calibrated=%3 calibNote=「%4」 端口1=「%5」 键项数=%6")
+                             .arg(ok).arg(r.moduleStatus).arg(calibrated)
+                             .arg(r.note, r.portText.left(200)).arg(r.stored.size());
+
+    // B 层：绕开 process() 的产出守卫，只看站点自己写了什么
+    node.setParam(QStringLiteral("moduleStatus"), true);
+    node.run();
+    r.siteBit = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    r.siteNote = noteOf(node);
+    auto d2 = node.getOutputData(1);
+    r.rawText = d2 ? d2->getData().toString() : QString();
+    qInfo().noquote() << QStringLiteral(
+                              "[R-5 HALCON ② B 层实测（直跑 run()）] moduleStatus=%1 calibNote=「%2」 端口1=「%3」")
+                             .arg(r.siteBit).arg(r.siteNote, r.rawText.left(200));
+
+    QString problems = halconSolveFailureProblems(r, QStringLiteral("CalibrationNode"), six);
+    if (calibrated)
+        problems += QStringLiteral(" | 解算失败却标记 calibrated");
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[R-5 HALCON ② 解算失败面实测不符] ") + problems));
+    cm->remove(key);
+}
+
+void CalibChainTest::r5HalconBoardSolveFailureVisible()
+{
+    const QString key = QStringLiteral("cam_params");
+    CalibrationManager *cm = CalibrationManager::instance();
+    cm->remove(key);
+    const QVector<double> six = kSixTupleSentinel();
+    QVERIFY2(cm->setHomography(key, six), "播种 6 元哨兵载荷失败，本条前提不成立");
+
+    CalibrationBoardNode node;
+    node.init();
+    node.setParam(QStringLiteral("descrPath"), QString::fromLatin1(kHalconPlateDescr));
+    feedImage(node, blankImage());
+    const bool ok = node.execute();
+
+    HalconSolveFailure r;
+    r.execute = ok;
+    r.moduleStatus = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    r.note = noteOf(node);
+    auto d = node.getOutputData(1);
+    r.portText = d ? d->getData().toString() : QString();
+    r.stored = cm->homography(key);
+
+    qInfo().noquote() << QStringLiteral(
+                              "[R-5 HALCON ⑤′ A 层实测] execute=%1 moduleStatus=%2 calibNote=「%3」 端口1=「%4」 键项数=%5")
+                             .arg(ok).arg(r.moduleStatus).arg(r.note, r.portText.left(200))
+                             .arg(r.stored.size());
+
+    // B 层：绕开 process() 的产出守卫，只看站点自己写了什么
+    node.setParam(QStringLiteral("moduleStatus"), true);
+    node.run();
+    r.siteBit = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    r.siteNote = noteOf(node);
+    auto d2 = node.getOutputData(1);
+    r.rawText = d2 ? d2->getData().toString() : QString();
+    qInfo().noquote() << QStringLiteral(
+                              "[R-5 HALCON ⑤′ B 层实测（直跑 run()）] moduleStatus=%1 calibNote=「%2」 端口1=「%3」")
+                             .arg(r.siteBit).arg(r.siteNote, r.rawText.left(200));
+
+    const QString problems = halconSolveFailureProblems(r, QStringLiteral("CalibrationBoardNode"), six);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[R-5 HALCON ⑤′ 解算失败面实测不符] ") + problems));
+    cm->remove(key);
+}
+
+// ---------------- ②／⑤′ 拒收分支的形态闸（B14／B15 里"解算成功但键被占"那一半）----------------
+
+/// 从测试 exe 回溯到仓库根（ctest 跑的产物在 `build/bin/Release` ⇒ 上溯三级）。
+/// ⚠️ 这条腿**故意不静默**：读不到文件就是红，并且把查过的绝对路径写进消息 ⇒
+/// "扫描器根本没看到被扫的东西"这种死闸形态（§3.16 表 3 那一族）在本用例里当场暴露。
+QString repoRootOrEmpty()
+{
+    const QString guess = QDir::cleanPath(QCoreApplication::applicationDirPath()
+                                          + QStringLiteral("/../../.."));
+    return QFileInfo::exists(guess + QStringLiteral("/src/CalibrationNode.cpp")) ? guess : QString();
+}
+
+QString readSrcText(const QString &root, const QString &rel)
+{
+    QFile f(root + QLatin1Char('/') + rel);
+    if (!f.open(QIODevice::ReadOnly))
+        return QString();
+    return QString::fromUtf8(f.readAll());
+}
+
+/// 取 `cam_params` 那次写入所在的 `if (!...) { … }` 分支体（含首尾花括号）。
+/// 找不到分支头（＝写侧不判返回值，R-5 之前的形态）时返回空。
+/// ⚠️ 花括号是朴素计数：这两处分支体里没有字符串大括号、注释里也没有（改坏时若引入要一并看）。
+QString refusalBranchOf(const QString &text)
+{
+    static const QString head = QStringLiteral("if (!CalibrationManager::instance()->setHomography(QStringLiteral(\"cam_params\")");
+    const int at = text.indexOf(head);
+    if (at < 0)
+        return QString();
+    const int open = text.indexOf(QLatin1Char('{'), at);
+    if (open < 0)
+        return QString();
+    int depth = 0;
+    for (int i = open; i < text.size(); ++i) {
+        if (text[i] == QLatin1Char('{'))
+            ++depth;
+        else if (text[i] == QLatin1Char('}')) {
+            if (--depth == 0)
+                return text.mid(open, i - open + 1);
+        }
+    }
+    return QString();
+}
+
+void CalibChainTest::r5HalconWriteSitesKeepRefusalGuard()
+{
+    const QString root = repoRootOrEmpty();
+    QVERIFY2(!root.isEmpty(),
+             qPrintable(QStringLiteral("[R-5 拒收分支形态闸] 从 exe 目录回溯不到仓库根（查过：")
+                        + QCoreApplication::applicationDirPath() + QStringLiteral("/../../..）")));
+
+    const QStringList sites{QStringLiteral("src/CalibrationNode.cpp"),
+                            QStringLiteral("src/CalibrationBoardNode.cpp")};
+    QStringList problems;
+    QStringList readouts;
+    for (const QString &site : sites) {
+        const QString text = readSrcText(root, site);
+        if (text.isEmpty()) {
+            problems << QStringLiteral("%1 读不到（绝对路径=%2）").arg(site, root + QLatin1Char('/') + site);
+            continue;
+        }
+        const QString branch = refusalBranchOf(text);
+        if (branch.isEmpty()) {
+            problems << QStringLiteral("%1：写侧没有 `if (!…setHomography(QStringLiteral(\"cam_params\")…)` 分支"
+                                       "⇒ 单例拒收内参顶掉时无人判红").arg(site);
+            continue;
+        }
+        // 分支体三条必备：判红位、原因留痕、中止（不得继续走成功路径）
+        if (!branch.contains(QStringLiteral("moduleStatus")))
+            problems << QStringLiteral("%1：拒收分支里没写 moduleStatus=false").arg(site);
+        if (!branch.contains(QStringLiteral("calibNote")))
+            problems << QStringLiteral("%1：拒收分支里没留 calibNote ⇒ 端口被清空后现场查不到原因").arg(site);
+        if (!branch.contains(QStringLiteral("return")))
+            problems << QStringLiteral("%1：拒收分支没有 return ⇒ 判红后还会掉进\"标定成功\"文案").arg(site);
+        // 原因文案的两个占位必须各有 arg 供数（本轮实测到的历史形态：QString::arg 认不得 printf 占位符）
+        const int holders = branch.count(QStringLiteral("%1")) + branch.count(QStringLiteral("%2"));
+        const int args = branch.count(QStringLiteral(".arg("));
+        if (!branch.contains(QStringLiteral("%1")) || !branch.contains(QStringLiteral("%2")) || args < 2)
+            problems << QStringLiteral("%1：拒收文案的占位与供数不匹配（两处项数占位命中=%2、.arg( 命中=%3）")
+                            .arg(site).arg(holders).arg(args);
+        readouts << QStringLiteral("%1：分支 %2 行、含 return=%3、占位=%4、arg=%5")
+                        .arg(site)
+                        .arg(branch.count(QLatin1Char('\n')) + 1)
+                        .arg(branch.contains(QStringLiteral("return")))
+                        .arg(holders).arg(args);
+    }
+
+    qInfo().noquote() << QStringLiteral("[R-5 HALCON 拒收分支形态闸读数]\n  ") + readouts.join(QLatin1Char('\n'));
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[R-5 两个 HALCON 写站点的拒收分支不再是无人守的形态] ")
+                        + problems.join(QStringLiteral(" | "))));
 }
 
 // ---------------- ⑤ R-1：手眼退化输入闸 ----------------
