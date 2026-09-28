@@ -770,7 +770,11 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
             rt->setModuleResult(node->moduleId(), node->fullName(), ok, elapsedMs, vars);
         }
         // 供「变量引用」菜单构造引用列表（UI 线程缓存，不读执行线程内部状态）
-        m_lastModuleVars.insert(node->moduleId(), vars);
+        // U-18：判红轮的快照现在带"原因"字段，那是给人看的出口内容（结果面板／CSV／报告），
+        // 不是可引用变量。这张缓存喂「变量引用」菜单（buildVariableReferences）与发送事件
+        // payload（fireEnabledSendEvents）两个**对外报文面** ⇒ 维持原口径：失败轮插空表。
+        // "要不要把原因做成可引用变量／进上报报文"属产品决策，本轮不顺手动。
+        m_lastModuleVars.insert(node->moduleId(), ok ? vars : QVariantMap());
         // 变量面板只列可引用的值：失败节点本轮没有可引用输出
         if (auto *vp = m_auxPanels ? m_auxPanels->variablePanel() : nullptr) {
             if (ok)

@@ -27,7 +27,24 @@
 #include "FlowScene.h"
 #include "AppLog.h"
 #include "GlobalVariableManager.h"
+#include "NodeResultFields.h"   // U-18：原因字段的口径（作废侧与 FlowExecutor 发布侧同一个谓词）
 #include <QMenu>
+
+namespace {
+
+/// U-18：把上一轮留下的原因字段作废（写成空 QVariant ⇒ 既不会被发布，也不会被当成输出项）。
+/// 原因字段属于「本轮的结果」：本轮没人写它，它就是空的；留着上一轮的文本，面板会把
+/// 旧原因当本轮原因显示（实测形态：相机断连导致缺输入图像那一轮，仍报"标定点对数不足"）。
+void invalidateReasonFields(ThreadSafeParams &params)
+{
+    const QStringList names = params.keys();
+    for (const QString &k : names) {
+        if (isNodeReasonKey(k))
+            params.insert(k, QVariant());
+    }
+}
+
+} // namespace
 
 HalconNode::HalconNode(QObject *parent)
     : NodeBase(parent)
@@ -431,6 +448,9 @@ bool HalconNode::process()
         // 每轮重新计算结果：先清空上一轮输出图像，避免本轮无有效结果时
         // 仍把上一轮图像作为输出发布给下游（P1）
         m_outputImage.Clear();
+        // U-18：同一处作废上一轮的原因字段——图像侧有 P1/P2 的清场，原因字段原来没人清，
+        // 于是「本轮判红但没人写原因」时面板显示的还是上一轮的原因（闸 B 实测到这一形态）。
+        invalidateReasonFields(m_params);
 
         // 与 FlowExecutor::propagateData 对齐：连线上的图像进入 m_inputData，此处同步到 Halcon HObject
         if (!m_inputPorts.isEmpty()) {
@@ -527,6 +547,7 @@ bool HalconNode::processDataOutputs()
         // 而不是残留上一轮的值（process() 里 P1/P2 两条注释的数据侧对应）
         m_outputImage.Clear();
         clearAllOutputs();
+        invalidateReasonFields(m_params);   // U-18：原因字段同属"本轮结果"，与端口一起作废
 
         // 空载守卫：必填数据端口没有可用值 ⇒ 不得成功。
         // 少了这一条，"分类恒为'中'、筛选恒为 false、格式化恒为模板"都会以绿灯传给下游。

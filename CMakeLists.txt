@@ -280,6 +280,7 @@ set(SOURCES
 
 set(HEADERS
     include/AppLog.h
+    include/NodeResultFields.h   # U-18：判红原因字段的唯一口径（发布侧/作废侧共用谓词）
     include/FlowRuntimeStats.h
     include/StatisticsReport.h
     include/StatisticsReportDialog.h

@@ -1,5 +1,5 @@
-// 结果数据表验证：同一模块重复执行只原地更新（不新增行、不残留旧值）、失败模块可见、
-// CSV 导出包含模块/输出项/值/状态/耗时。不 show() 窗口，可在无桌面的 CI 上稳定运行。
+// 结果数据表验证：同一模块重复执行只原地更新（不新增行、不残留旧值）、失败模块可见、失败行显示
+// 算子留下的原因（U-18）、CSV 导出包含模块/输出项/值/状态/耗时。不 show() 窗口，可在无桌面的 CI 上稳定运行。
 #include <QtTest>
 #include <QTemporaryDir>
 #include <QFile>
@@ -15,6 +15,7 @@ private slots:
     void testInPlaceUpdateAndCsv();
     void testSortingAndFilter();
     void testReportText();
+    void testFailureRowShowsReason();   // U-18：失败行必须显示算子留下的原因
 };
 
 void ResultTableTest::testInPlaceUpdateAndCsv()
@@ -121,6 +122,88 @@ void ResultTableTest::testReportText()
     QVERIFY2(report.contains(QStringLiteral("foregroundPixels = 3600")), "报告缺少测量值明细");
     QVERIFY2(report.contains(QStringLiteral("找边")), "报告缺少失败模块");
     QVERIFY2(report.contains(QStringLiteral("失败")), "报告未标注失败状态");
+}
+
+void ResultTableTest::testFailureRowShowsReason()
+{
+    // U-18：判红轮面板不能只剩"(执行失败，无输出)"。算子把原因写进结果字段
+    // （lastError / *Note），执行器失败轮把它随快照推过来 ⇒ 面板必须显示原文。
+    ResultTablePanel panel;
+    auto *tree = panel.findChild<QTreeWidget *>();
+    QVERIFY2(tree != nullptr, "未找到结果树");
+
+    auto rowOf = [tree](const QString &name) -> QTreeWidgetItem * {
+        for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+            if (tree->topLevelItem(i)->text(0) == name)
+                return tree->topLevelItem(i);
+        }
+        return nullptr;
+    };
+    auto childDump = [](const QTreeWidgetItem *row) {
+        QString joined;
+        for (int c = 0; c < row->childCount(); ++c) {
+            const QTreeWidgetItem *child = row->child(c);
+            joined += child->text(0);
+            if (!child->text(1).isEmpty())
+                joined += QStringLiteral(" = ") + child->text(1);
+            joined += QLatin1Char('|');
+        }
+        return joined;
+    };
+
+    // 1) 有原因：原文进子项（字段名 + 值），状态列仍是"失败"
+    QVariantMap reason;
+    reason.insert(QStringLiteral("lastError"), QStringLiteral("标定失败: #8403 描述文件不存在"));
+    panel.setModuleResult(3, QStringLiteral("标定板"), false, 6, reason);
+    QTreeWidgetItem *withReason = rowOf(QStringLiteral("标定板"));
+    QVERIFY2(withReason != nullptr, "失败模块未进入表格");
+    QCOMPARE(withReason->text(2), QStringLiteral("失败"));
+    QVERIFY2(childDump(withReason).contains(QStringLiteral("#8403")),
+             qPrintable(QStringLiteral("失败行没显示原因原文：%1").arg(childDump(withReason))));
+    QVERIFY2(childDump(withReason).contains(QStringLiteral("lastError")),
+             qPrintable(QStringLiteral("失败行只显示原因文本、没带字段名（现场无法对上参数）：%1")
+                        .arg(childDump(withReason))));
+    QVERIFY2(!childDump(withReason).contains(QStringLiteral("执行失败，无输出")),
+             qPrintable(QStringLiteral("已有原因却仍显示占位：%1").arg(childDump(withReason))));
+
+    // 2) 无原因：保留占位（不得凭空造原因，也不得留空白行）
+    panel.setModuleResult(4, QStringLiteral("无原因算子"), false, 5, QVariantMap());
+    QTreeWidgetItem *noReason = rowOf(QStringLiteral("无原因算子"));
+    QVERIFY2(noReason != nullptr, "失败模块未进入表格");
+    QCOMPARE(noReason->childCount(), 1);
+    QCOMPARE(noReason->child(0)->text(0), QStringLiteral("(执行失败，无输出)"));
+
+    // 3) 同一模块换一轮：新原因替换旧原因，不得残留
+    QVariantMap reason2;
+    reason2.insert(QStringLiteral("calibNote"), QStringLiteral("标定点对数不足（至少 2 对）"));
+    panel.setModuleResult(3, QStringLiteral("标定板"), false, 4, reason2);
+    withReason = rowOf(QStringLiteral("标定板"));
+    QVERIFY2(childDump(withReason).contains(QStringLiteral("点对数不足")),
+             qPrintable(QStringLiteral("新一轮原因未显示：%1").arg(childDump(withReason))));
+    QCOMPARE(withReason->child(0)->text(0), QStringLiteral("calibNote"));
+    QVERIFY2(!childDump(withReason).contains(QStringLiteral("#8403")),
+             qPrintable(QStringLiteral("上一轮原因残留：%1").arg(childDump(withReason))));
+
+    // 4) CSV 与报告同样带原因（现场留档的是面板内容）
+    QTemporaryDir dir;
+    QVERIFY2(dir.isValid(), "无法创建临时目录");
+    const QString csvPath = dir.filePath(QStringLiteral("reason.csv"));
+    QString err;
+    QVERIFY2(panel.exportCsv(csvPath, &err), qPrintable(err));
+    QFile csv(csvPath);
+    QVERIFY(csv.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QString csvText = QString::fromUtf8(csv.readAll());
+    csv.close();
+    QVERIFY2(csvText.contains(QStringLiteral("点对数不足")),
+             qPrintable(QStringLiteral("CSV 未包含失败原因：%1").arg(csvText)));
+    QVERIFY2(csvText.contains(QStringLiteral("calibNote")),
+             qPrintable(QStringLiteral("CSV 的原因行没有字段名（对不上是哪个参数）：%1").arg(csvText)));
+
+    const QString report = panel.toReportText(QStringLiteral("U18Flow"));
+    QVERIFY2(report.contains(QStringLiteral("点对数不足")),
+             qPrintable(QStringLiteral("报告未包含失败原因：%1").arg(report)));
+    QVERIFY2(report.contains(QStringLiteral("calibNote")),
+             qPrintable(QStringLiteral("报告的原因行没有字段名：%1").arg(report)));
 }
 
 QTEST_MAIN(ResultTableTest)

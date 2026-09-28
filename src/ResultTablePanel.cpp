@@ -160,23 +160,26 @@ void ResultTablePanel::setModuleResult(int moduleId, const QString &moduleName, 
     const QList<QTreeWidgetItem *> old = row->takeChildren();
     qDeleteAll(old);
 
-    if (success) {
-        QStringList keys = vars.keys();
-        keys.sort();   // 名称排序，便于多轮之间对照
-        for (const QString &k : keys) {
-            const QVariant v = vars.value(k);
-            QString text;
-            if (v.typeId() == QMetaType::Bool)
-                text = v.toBool() ? QStringLiteral("true") : QStringLiteral("false");
-            else if (v.metaType().id() == QMetaType::Double || v.metaType().id() == QMetaType::Float)
-                text = QString::number(v.toDouble(), 'g', 10);
-            else
-                text = v.toString();
-            auto *child = new QTreeWidgetItem(row);
-            child->setText(kColName, k);
-            child->setText(kColValue, text);
-        }
-    } else {
+    // U-18：子项构建不再只在成功分支执行——判红轮执行器会把算子本轮写下的「原因」字段
+    // （口径见 include/NodeResultFields.h）随快照推出，必须渲染出来；
+    // 口径以外的字段仍为空，故下面按同一套格式化泛型遍历。
+    QStringList keys = vars.keys();
+    keys.sort();   // 名称排序，便于多轮之间对照
+    for (const QString &k : keys) {
+        const QVariant v = vars.value(k);
+        QString text;
+        if (v.typeId() == QMetaType::Bool)
+            text = v.toBool() ? QStringLiteral("true") : QStringLiteral("false");
+        else if (v.metaType().id() == QMetaType::Double || v.metaType().id() == QMetaType::Float)
+            text = QString::number(v.toDouble(), 'g', 10);
+        else
+            text = v.toString();
+        auto *child = new QTreeWidgetItem(row);
+        child->setText(kColName, k);
+        child->setText(kColValue, text);
+    }
+    if (!success && keys.isEmpty()) {
+        // 本轮没人写下原因（基类守卫那几条不写）⇒ 保留占位，现场至少知道这行判红了且无原因可读
         auto *child = new QTreeWidgetItem(row);
         child->setText(kColName, QStringLiteral("(执行失败，无输出)"));
     }

@@ -27,6 +27,7 @@
 #include "FormulaNode.h"
 #include "ClassifyNode.h"
 #include "ProtocolParseNode.h"
+#include "HandEyeCalibNode.h"   // U-18：判红原因出口用真算子（手眼标定）作站点
 #include "SendDataNode.h"
 #include "RecordNode.h"
 #include "ReceiveDataNode.h"
@@ -150,6 +151,10 @@ private slots:
 
     // S4 回归：模块号必须单调且不复用（删节点后新建节点不得拿到被删节点的号）
     void testModuleIdNotRecycled();
+
+    // U-18：判红轮的「原因」在现场必须可读（执行器 → 结果面板这条出口）
+    void testJudgeRedRoundBroadcastsReasonField();       // 闸 A：原因必须随快照推出
+    void testReasonNotReplayedOnLaterRedRound();         // 闸 B：上一轮的原因不得陈旧复读
 
 private:
     FlowScene *m_scene = nullptr;
@@ -3439,6 +3444,180 @@ void IntegrationTest::testModuleIdNotRecycled()
              qPrintable(QStringLiteral("模块号被回收复用：删 A 后新建 C 拿到了 %1（<= 已分配的 %2），S4 未修")
                         .arg(c->moduleId()).arg(idB)));
     QVERIFY(c->moduleId() > idA);
+}
+
+namespace {
+
+/// U-18 用例夹具：真实算子链「读取图像 → 手眼标定」，逐轮收集手眼节点的执行后快照。
+/// 拆成两条用例（闸 A／闸 B）共用的搭建函数，避免同一套 30 行场景写两遍。
+struct ReasonFlow
+{
+    QTemporaryDir tmp;
+    QString imagePath;
+    FlowScene scene;
+    FlowExecutor exec;
+    NodeBase *reader = nullptr;
+    NodeBase *calib = nullptr;
+    struct Snapshot {
+        bool ok = false;
+        int emits = 0;                 // 本轮该节点发出 nodeOutputsUpdated 的次数
+        QVariantMap vars;
+    };
+    QList<Snapshot> rounds;            // 下标 = 轮次-1
+    QString setupError;                // 非空 ⇒ 搭建失败，用例必须判红而不是静默跳过
+
+    bool build(const QString &caseName)
+    {
+        if (!tmp.isValid()) {
+            setupError = QStringLiteral("无法创建临时目录");
+            return false;
+        }
+        imagePath = tmp.filePath(QStringLiteral("u18_input.png"));
+        {
+            HObject blank;
+            GenImageConst(&blank, "byte", 64, 64);
+            WriteImage(blank, "png", 0, imagePath.toStdString().c_str());
+        }
+        if (!QFile::exists(imagePath)) {
+            setupError = QStringLiteral("测试图像未生成");
+            return false;
+        }
+
+        exec.setFlowName(caseName);
+        exec.setStopOnFailure(false);   // 上游读图失败时本节点仍要执行（闸 B 走的就是这条）
+        reader = scene.createNode(NodeBase::IMAGE_ACQUISITION, QPointF(120, 200),
+                                  QStringLiteral("读取图像"));
+        calib = scene.createNode(NodeBase::SHAPE_ANALYSIS, QPointF(340, 200),
+                                 QStringLiteral("手眼标定"));
+        if (!reader || !calib) {
+            setupError = QStringLiteral("场景未建出节点");
+            return false;
+        }
+        if (!qobject_cast<HandEyeCalibNode *>(calib)) {
+            // createNode 走名字匹配；这里若退化成通用 HalconNode，用例就没有判红站点，是空断言
+            setupError = QStringLiteral("createNode 未构造出手眼标定真算子");
+            return false;
+        }
+        reader->setParam(QStringLiteral("filePath"), imagePath);
+        // 站点自证的判红路径：只给 1 对点 ⇒ judgeRed("标定点对数不足（至少 2 对）")，与图像内容无关
+        calib->setParam(QStringLiteral("pointsText"), QStringLiteral("10,10 1.0,2.0"));
+        calib->setParam(QStringLiteral("saveName"), QStringLiteral("u18_probe"));
+        if (!scene.createConnection(reader->outputPorts().first(),
+                                    calib->inputPorts().first(), true)) {
+            setupError = QStringLiteral("无法建立 读取图像->手眼标定 连线");
+            return false;
+        }
+        QObject::connect(&exec, &FlowExecutor::nodeOutputsUpdated, &exec,
+                         [this](NodeBase *n, bool ok, qint64, const QVariantMap &vars) {
+                             if (n != calib) return;
+                             if (rounds.isEmpty())
+                                 rounds.append(Snapshot{});
+                             rounds.last().emits += 1;
+                             rounds.last().ok = ok;
+                             rounds.last().vars = vars;
+                         },
+                         Qt::DirectConnection);
+        exec.setFlowScene(&scene);
+        exec.setFlowMode(FlowMode::SoftwareTrigger);
+        return true;
+    }
+
+    /// 手眼节点本轮的结果字段原文（站点写下的原因）
+    QString calibNote() const { return calib->getParam(QStringLiteral("calibNote")).toString(); }
+
+    /// 跑一轮；返回 false 表示超时（用例据此判红）
+    bool runRound()
+    {
+        rounds.append(Snapshot{});
+        exec.startExecution();
+        bool finished = exec.wait(10000);
+        if (!finished) {
+            exec.stopExecution();
+            finished = exec.wait(3000);
+        }
+        return finished;
+    }
+
+    void teardown()
+    {
+        exec.setFlowScene(nullptr);
+        QCoreApplication::processEvents();
+    }
+};
+
+} // namespace
+
+void IntegrationTest::testJudgeRedRoundBroadcastsReasonField()
+{
+    // U-18 闸 A：算子在判红轮留下的「原因」（结果字段 lastError / *Note）必须随
+    // nodeOutputsUpdated 推给结果面板。
+    // 改前取证：判红会清空全部输出端口（HalconNode::process 的失败分支），执行器失败轮推的是
+    // 空快照（`if (success)`），面板失败行只写固定占位 ⇒ 84 处站点写下的原因没有任何读取者。
+    ReasonFlow f;
+    QVERIFY2(f.build(QStringLiteral("RegressionU18ReasonBroadcast")),
+             qPrintable(f.setupError));
+    QVERIFY2(f.runRound(), "第一轮未在 10 秒内结束");
+    const QString siteNote = f.calibNote();
+    const bool port2HasPayload = (f.calib->getOutputData(2) != nullptr);
+    f.teardown();
+
+    // 前提（破了说明用例失去判别力，不是产线问题）
+    QVERIFY2(f.rounds.size() == 1 && f.rounds.at(0).emits == 1,
+             qPrintable(QStringLiteral("第一轮未恰好推一次快照：emits=%1")
+                            .arg(f.rounds.isEmpty() ? -1 : f.rounds.at(0).emits)));
+    QCOMPARE(f.rounds.at(0).ok, false);
+    QVERIFY2(!siteNote.isEmpty(),
+             "站点本轮没写下原因 ⇒ 手眼标定的判红形态变了，本用例前提失效");
+    // 取证读数：算子也把原因写进输出端口 2，但基类判红会清空全部端口 ⇒ 唯一载体是结果字段
+    QVERIFY2(!port2HasPayload,
+             "端口 2 在判红轮仍有载荷：原因的载体不止结果字段，本轮口径要重评");
+
+    // 闸 A
+    const QVariantMap &vars = f.rounds.at(0).vars;
+    QVERIFY2(vars.contains(QStringLiteral("calibNote")),
+             qPrintable(QStringLiteral("判红轮快照没带原因字段，面板只能显示\"(执行失败，无输出)\"；keys=%1")
+                            .arg(QStringList(vars.keys()).join(QLatin1Char(',')))));
+    QCOMPARE(vars.value(QStringLiteral("calibNote")).toString(), siteNote);
+
+    // 负控制：配置项与内部状态位不得冒充原因（口径只认 lastError 与 *Note 族）
+    QVERIFY2(!vars.contains(QStringLiteral("pointsText")),
+             "判红轮把配置项 pointsText 当成原因推给了面板");
+    QVERIFY2(!vars.contains(QStringLiteral("saveName")),
+             "判红轮把配置项 saveName 当成原因推给了面板");
+    QVERIFY2(!vars.contains(QStringLiteral("moduleStatus")),
+             "判红轮把内部状态位 moduleStatus 当成原因推给了面板");
+}
+
+void IntegrationTest::testReasonNotReplayedOnLaterRedRound()
+{
+    // U-18 闸 B：原因只属于"写下它的那一轮"。第二轮从**不写原因**的路径判红（读图文件消失 ⇒
+    // 手眼节点缺输入图像，基类守卫直接判红，run() 根本没执行）⇒ 上一轮的原因不得陈旧复读。
+    // 现场形态：相机断连导致缺输入图像，面板却报"点对数不足"，把操作工往错的方向带。
+    ReasonFlow f;
+    QVERIFY2(f.build(QStringLiteral("RegressionU18ReasonFreshness")),
+             qPrintable(f.setupError));
+    QVERIFY2(f.runRound(), "第一轮未在 10 秒内结束");
+    const QString noteRound1 = f.calibNote();
+    QVERIFY2(!noteRound1.isEmpty(), "第一轮站点未写下原因 ⇒ 闸 B 没有可陈旧的对象，前提失效");
+
+    QVERIFY2(QFile::remove(f.imagePath), "测试图像未能删除");
+    QVERIFY2(f.runRound(), "第二轮未在 10 秒内结束");
+    const QString noteRound2 = f.calibNote();
+    const bool statusRound2 = f.calib->getParam(QStringLiteral("moduleStatus")).toBool();
+    f.teardown();
+
+    // 前提：第二轮确实判红、且走的不是站点写原因那条路（emits 恰一次）
+    QVERIFY2(f.rounds.size() == 2 && f.rounds.at(1).emits == 1,
+             qPrintable(QStringLiteral("第二轮未恰好推一次快照：rounds=%1").arg(f.rounds.size())));
+    QCOMPARE(f.rounds.at(1).ok, false);
+    QCOMPARE(statusRound2, false);
+
+    // 闸 B：本轮无人写原因 ⇒ 结果字段必须已被本轮开始时的作废动作清掉，不得留着上一轮文本
+    QVERIFY2(noteRound2.isEmpty(),
+             qPrintable(QStringLiteral("本轮没有原因，结果字段还留着上一轮的旧原因：%1").arg(noteRound2)));
+    QVERIFY2(f.rounds.at(1).vars.value(QStringLiteral("calibNote")).toString().isEmpty(),
+             qPrintable(QStringLiteral("判红轮把上一轮的陈旧原因推给了面板：%1")
+                            .arg(f.rounds.at(1).vars.value(QStringLiteral("calibNote")).toString())));
 }
 
 QTEST_MAIN(IntegrationTest)

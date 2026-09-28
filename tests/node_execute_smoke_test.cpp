@@ -304,6 +304,25 @@ public:
     void run(bool /*autoSwitch*/) override {}
 };
 
+// U-18 闸 C 的写入方探针：本轮判红时把一句原因写进参数表的口径键（lastError），
+// 仍不产出数据 ⇒ 交给 processDataOutputs() 的产出守卫判红（与 DataSilentNode 同一红法）。
+// ⚠️ 为什么写入方只能由测试扮演：站点清点实测本仓**没有任何数据族算子自写原因字段**
+// （ClassifyNode／CounterNode／DelayNode／FilterNode／FormatNode／FormulaNode／
+//  ProtocolParseNode／RecordNode／SortNode 九个 .cpp 内 "Note" 与 "lastError" 各 0 处）。
+// 这条闸检的是 **"上一轮的口径键不得跨轮存活"**，与谁写无关 ⇒ 将来真有数据族算子开始写原因，它照旧成立。
+class DataReasonNode : public DataProbeBase
+{
+public:
+    static QString reasonText() { return QStringLiteral("数值输入无值（上一轮原因）"); }
+
+    void run(bool /*autoSwitch*/) override
+    {
+        if (m_writeReason)
+            setParam(QStringLiteral("lastError"), reasonText());
+    }
+    bool m_writeReason = true;
+};
+
 } // namespace
 
 class NodeExecuteSmokeTest : public QObject
@@ -461,6 +480,30 @@ private slots:
             QVERIFY2(!m.execute(),
                      "豁免的是产出判据，不是必填判据：空载仍须失败");
         }
+    }
+
+    // U-18 闸 C：数据族侧「上一轮的原因不得跨轮存活」——processDataOutputs() 每轮开始作废
+    void dataReasonFieldDoesNotReplayAcrossRounds()
+    {
+        DataReasonNode n;
+        n.init();
+        n.feedNumberInput();
+
+        // 前提：第一轮写下原因 ⇒ 判红后必须读得到。少了这条，下面的"作废"断言会在空集上假绿
+        QVERIFY2(!n.execute(), "探针本轮零产出 ⇒ 必须判红");
+        QVERIFY2(n.getParam(QStringLiteral("lastError")).toString() == DataReasonNode::reasonText(),
+                 qPrintable(QStringLiteral("前提破坏：本轮写下的原因没有留在参数表，读到=\"")
+                            + n.getParam(QStringLiteral("lastError")).toString()
+                            + QStringLiteral("\"")));
+
+        // 闸：第二轮不再写原因（基类守卫那几条就是这种形态）⇒ 上一轮的原因必须已经作废，
+        // 不能被当成"本轮原因"发布给结果表
+        n.m_writeReason = false;
+        QVERIFY2(!n.execute(), "第二轮同样零产出 ⇒ 仍须判红");
+        QVERIFY2(n.getParam(QStringLiteral("lastError")).toString().isEmpty(),
+                 qPrintable(QStringLiteral("上一轮原因跨轮存活，会被当成本轮原因发布：\"")
+                            + n.getParam(QStringLiteral("lastError")).toString()
+                            + QStringLiteral("\"")));
     }
 
     // W-3：跳过清单一旦因算子改名/注销而失配，该节点会静默退出覆盖面而不是变红

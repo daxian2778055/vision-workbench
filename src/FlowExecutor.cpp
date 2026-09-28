@@ -5,6 +5,7 @@
 #include "ConditionalNode.h"
 #include "LoopNode.h"
 #include "SubFlowNode.h"   // FR15.10 运行期子流程调用点
+#include "NodeResultFields.h"   // U-18：判红原因字段的唯一口径（发布侧，作废侧在 HalconNode.cpp 同一个谓词）
 #include "DataObject.h"
 #include "Connection.h"
 #include "AppLog.h"
@@ -1080,13 +1081,27 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
         // 发出节点执行耗时信号
         emit nodeExecutionTime(node, nodeElapsed);
 
-        // 输出变量快照 → 结果数据表（成功时带本轮各输出项；失败时为空，由面板标注失败）
+        // 输出变量快照 → 结果数据表（成功时带本轮各输出项；失败时带算子本轮写下的「原因」字段）
         {
             QVariantMap vars;
             if (success) {
                 const QHash<QString, QVariant> collected = m_nodeOutputVars.value(node->moduleId());
                 for (auto it = collected.cbegin(); it != collected.cend(); ++it)
                     vars.insert(it.key(), it.value());
+            } else {
+                // U-18：判红轮把算子本轮写下的原因一起推出；只认口径键（include/NodeResultFields.h），
+                // 配置项与内部状态位不得冒充原因。现读节点而不读 m_nodeOutputVars：
+                // 上面失败分支已清空该表，读它只会拿到空。
+                const QList<QString> names = node->getAllParamNames();
+                for (const QString &k : names) {
+                    if (!isNodeReasonKey(k))
+                        continue;
+                    const QVariant v = node->getParam(k);
+                    // 本轮没人写原因（基类守卫那几条不写）⇒ 不推，面板保留占位
+                    if (v.toString().isEmpty())
+                        continue;
+                    vars.insert(k, v);
+                }
             }
             emit nodeOutputsUpdated(node, success, nodeElapsed, vars);
         }
