@@ -85,7 +85,21 @@ void CalibrationNode::run(bool /*autoSwitch*/)
         QVector<double> paramsVec;
         for (int i = 0; i < finalParams.Length(); ++i)
             paramsVec.append(finalParams[i].D());
-        CalibrationManager::instance()->setHomography(QStringLiteral("cam_params"), paramsVec);
+        if (!CalibrationManager::instance()->setHomography(QStringLiteral("cam_params"), paramsVec)) {
+            // R-5：键 cam_params 上已有另一种项数的载荷 ⇒ 单例拒绝整条顶掉。此时不得报"标定成功"。
+            const auto held = CalibrationManager::instance()->homography(QStringLiteral("cam_params")).size();
+            const QString why = QStringLiteral("标定结果无法存入：键 cam_params 上已有 %1 项的另一种载荷，本次 HALCON 内参是 %2 项")
+                                    .arg(held).arg(paramsVec.size());
+            auto failObj = QSharedPointer<DataObject>::create();
+            failObj->setType(DataObject::DataType::String);
+            failObj->setData(why);
+            setOutputData(1, failObj);
+            m_params[QStringLiteral("calibNote")] = why;  // 判红会清空端口，原因另存结果字段（§3.4 口径）
+            m_params[QStringLiteral("calibrated")] = false;
+            m_params["moduleStatus"] = false;
+            m_outputImage.Clear();
+            return;
+        }
 
         QStringList parts;
         for (int i = 0; i < finalParams.Length(); ++i)

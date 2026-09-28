@@ -21,10 +21,13 @@ bool readStoredIntrinsics(const QString &key, QVector<double> *out, QString *why
             *why = QStringLiteral("标定键 \"%1\" 不存在或没有内参（不回退手填参数）").arg(key);
         return false;
     }
-    if (v.size() < 9) {
+    if (v.size() != 9) {
         if (why)
-            *why = QStringLiteral("标定键 \"%1\" 只有 %2 项，内参需要 9 元（fx fy cx cy k1 k2 p1 p2 rms）")
-                       .arg(key).arg(v.size());
+            *why = v.size() < 9
+                       ? QStringLiteral("标定键 \"%1\" 只有 %2 项，内参需要 9 元（fx fy cx cy k1 k2 p1 p2 rms）")
+                             .arg(key).arg(v.size())
+                       : QStringLiteral("标定键 \"%1\" 有 %2 项，不是 9 元内参载荷（fx fy cx cy k1 k2 p1 p2 rms）")
+                             .arg(key).arg(v.size());
         return false;
     }
     for (int i = 0; i < 9; ++i) {

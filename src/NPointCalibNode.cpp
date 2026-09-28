@@ -102,7 +102,22 @@ void NPointCalibNode::run(bool)
                << H.at<double>(1, 0) << H.at<double>(1, 1) << H.at<double>(1, 2);
 
         if (!saveName.isEmpty()) {
-            CalibrationManager::instance()->setHomography(saveName, homVec);
+            if (!CalibrationManager::instance()->setHomography(saveName, homVec)) {
+                // R-5：该键上已经住着另一种载荷（项数不同，例如 9 元 OpenCV 内参），单例拒绝写入。
+                // 这时矩阵算出来了却没存下 ⇒ 必须判红，静默判绿就是"自己绿、下游拿不到"（§3.15 同形态）。
+                const auto held = CalibrationManager::instance()->homography(saveName).size();
+                const QString why = QStringLiteral("N点标定结果无法存入：键 \"%1\" 上已有 %2 项的另一种载荷，本次矩阵是 6 项")
+                                        .arg(saveName).arg(held);
+                setOutputData(1, QSharedPointer<DataObject>());
+                auto strObj = QSharedPointer<DataObject>::create();
+                strObj->setType(DataObject::DataType::String);
+                strObj->setData(why);
+                setOutputData(2, strObj);
+                m_params[QStringLiteral("calibNote")] = why;
+                m_params["moduleStatus"] = false;
+                m_outputImage = m_inputImage;
+                return;
+            }
             if (FlowScene *fs = flowSceneRef())
                 fs->setFixtureHomography(saveName, homVec);
         }

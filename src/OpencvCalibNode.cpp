@@ -33,6 +33,8 @@ void OpencvCalibNode::init()
     m_params[QStringLiteral("collectedFrames")] = 0;
     m_params[QStringLiteral("calibrated")] = false;
     m_params[QStringLiteral("reprojectionError")] = 0.0;
+    // 结果字段（不进参数面板）：判红时输出端口会被 process() 清空，原因只能留在这里
+    m_params[QStringLiteral("calibNote")] = QString();
 }
 
 void OpencvCalibNode::run(bool /*autoSwitch*/)
@@ -96,8 +98,11 @@ void OpencvCalibNode::run(bool /*autoSwitch*/)
                     status = QStringLiteral("标定完成。%1").arg(detail);
                     m_params[QStringLiteral("calibrated")] = true;
                     m_params["moduleStatus"] = true;
+                    m_params[QStringLiteral("calibNote")] = QString();
                 } else {
                     status = QStringLiteral("标定失败: %1").arg(detail);
+                    // 判红会清空全部输出端口，原因同步留进 calibNote 供现场查（R-5）
+                    m_params[QStringLiteral("calibNote")] = status;
                     // 失败：清空已采集帧，允许重新采集
                     m_cornerSets.clear();
                     m_objectPoints.clear();
@@ -182,7 +187,15 @@ bool OpencvCalibNode::performCalibration(QString *detail)
     const double p2 = distCoeffs.at<double>(3);
 
     QVector<double> params = {fx, fy, cx, cy, k1, k2, p1, p2, rms};
-    CalibrationManager::instance()->setHomography(QStringLiteral("cam_params"), params);
+    if (!CalibrationManager::instance()->setHomography(QStringLiteral("cam_params"), params)) {
+        // R-5：键 cam_params 上已有另一种项数的载荷（例如操作员把 N 点/手眼的 6 元矩阵存成了
+        // "cam_params"）⇒ 单例拒绝整条顶掉内参。此时不得继续报"标定成功"。
+        const auto held = CalibrationManager::instance()->homography(QStringLiteral("cam_params")).size();
+        if (detail)
+            *detail = QStringLiteral("标定结果无法存入：键 cam_params 上已有 %1 项的另一种载荷，本次内参是 9 项")
+                          .arg(held);
+        return false;
+    }
 
     m_params[QStringLiteral("reprojectionError")] = rms;
     m_params[QStringLiteral("calibFx")] = fx;

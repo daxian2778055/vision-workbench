@@ -64,6 +64,7 @@ private slots:
     void undistortZeroDistortionKeepsImage();    // ③ D=0 ⇒ 不重采样
     void undistortJudgeRedWithoutCamParams();    // ③ 判红：键不存在
     void undistortJudgeRedOnShortTuple();        // ③ 判红：项数不足 9
+    void undistortJudgeRedOnOverlongTuple();     // ③ 判红：项数多于 9（R-5 上界方向）
     void undistortJudgeRedOnNonFiniteTuple();    // ③ 判红：含非有限值
     void undistortNeverFallsBackToManual();      // ③ 判红：键缺失不得回退手填（R-2 形态）
     void undistortJudgeRedOnInvalidManualFx();   // ③ 判红：手填 fx/fy 非正
@@ -82,6 +83,15 @@ private slots:
     void positionCorrectJudgeRedOnShortMatrix();      // 判红：单例键项数不足且原因带实际项数
     void positionCorrectJudgeRedWhenFixtureHasNoMatrix(); // 判红：夹具只有位姿没矩阵
     void positionCorrectFixturePoseSourcePointWithMatrix(); // 口径：有矩阵时源点取位姿、手填仿射与位姿角/缩放被顶掉
+
+    // ⑥／③ R-5：同一单例键空间里 9 元内参与 6 元仿射互相混读（取证阶段，先量现状）
+    void r5CamParamsNineTupleNotValidAffine();        // 9 元内参被 ⑥ 读侧当前 6 元用
+    void r5CamParamsNineTupleNotValidInPositionCorrect(); // 同上，位置修正侧
+    void r5SceneFixtureRejectsNineTuplePayload();     // 场景夹具侧 mid(0,6) 静默截断
+    void r5SixTupleMustNotEvictCamParams();           // 6 元仿射写同名键把内参载荷顶掉
+    void r5OpencvCalibRefusesEvictedCamParamsKey();   // ② 写侧：cam_params 被 6 元占住时不得绿灯
+    void r5HandEyeRefusesEvictedCamParamsKey();       // ⑤ 写侧：同上，手眼侧
+    void r5HalconCamParamsPayloadShape();             // HALCON 写侧的实测长度/布局
 
 private:
     QJsonObject m_managerSnapshot;
@@ -751,9 +761,16 @@ void CalibChainTest::calibrationManagerRoundTripAndApply()
     QVERIFY(cm->names().contains(name));
 
     const QVector<double> overrideVec{1.0, 0.0, 2.0, 0.0, 1.0, 3.0};
-    cm->setHomography(name, overrideVec);                      // 同名覆盖
+    QVERIFY(cm->setHomography(name, overrideVec));              // 同名同项数＝正常覆盖
     QVERIFY(vecDeviation(cm->homography(name), overrideVec, 1e-12).isEmpty());
     cm->setHomography(name, hom);
+
+    // R-5：项数就是载荷种类标识（6＝仿射，9＝OpenCV 内参）。同名不同项数必须拒收，
+    // 且原载荷一项都不能动——否则"够 6"的 9 元会被下游当仿射读（§3.19）。
+    const QVector<double> nine{520.0, 518.0, 320.0, 240.0, -0.45, 0.12, 0.0015, -0.0010, 0.0034};
+    QVERIFY2(!cm->setHomography(name, nine), "6 元键被 9 元载荷整条顶掉（写侧项数口径失效）");
+    QVERIFY2(vecDeviation(cm->homography(name), hom, 1e-12).isEmpty(),
+             "拒绝写入却改动了原载荷");
 
     cm->setHomography(QString(), hom);                          // 空名必须被丢弃
     QVERIFY(!cm->hasHomography(QString()));
@@ -780,6 +797,12 @@ void CalibChainTest::calibrationManagerRoundTripAndApply()
     // 矩阵不足 6 元时是恒等透传（下游拿不到矩阵时的兜底口径，必须留痕）
     const QPointF id = CalibrationManager::applyHomography(QVector<double>{1.0, 2.0}, 7.0, 9.0);
     QVERIFY(id == QPointF(7.0, 9.0));
+    // R-5：多于 6 项同样不作用于点——修复前只卡下限，9 元内参的前 6 项 fx fy cx cy k1 k2
+    // 会被当仿射算下去（实测输出 78220.000,23977.620 那一条）。
+    const QPointF idLong = CalibrationManager::applyHomography(nine, 7.0, 9.0);
+    QVERIFY2(idLong == QPointF(7.0, 9.0),
+             qPrintable(QStringLiteral("9 元载荷被当 6 元仿射用：输出 %1,%2")
+                            .arg(idLong.x(), 0, 'f', 3).arg(idLong.y(), 0, 'f', 3)));
 
     cm->clear();
     QVERIFY(cm->names().isEmpty());
@@ -1472,10 +1495,32 @@ void CalibChainTest::undistortJudgeRedOnShortTuple()
     CalibrationManager::instance()->remove(key);
 }
 
+// ③ 判红②·对称面（R-5）：同键里存的是**多于 9 项**的载荷（例如 9 元内参后面多了一项，
+// 或 HALCON 写侧那种长度未证到的 tuple）⇒ 不能"取前 9 项当内参"。
+// 下界方向（不足 9 项）已由上面的短元组用例覆盖，这条补上界方向。
+void CalibChainTest::undistortJudgeRedOnOverlongTuple()
+{
+    const QString key = QStringLiteral("cam_params");
+    CalibrationManager::instance()->remove(key);   // 本条判红时 QVERIFY2 当场中止，清理不会跑 ⇒ 进来先清键
+    CalibrationManager::instance()->setHomography(
+        key, {kTrueFx, kTrueFy, kTrueCx, kTrueCy, kDistK1, kDistK2, kDistP1, kDistP2, 0.0034, 1.0});
+
+    OpencvUndistortNode node;
+    node.init();
+    feedImage(node, blankImage());
+    QVERIFY2(!node.execute(), "10 元载荷被取前 9 项当内参仍判绿");
+    const QString note = undistortNote(node);
+    QVERIFY2(note.contains(QStringLiteral("10 项")),
+             qPrintable(QStringLiteral("判红原因没有报出实际项数 10：") + note));
+
+    CalibrationManager::instance()->remove(key);
+}
+
 // ③ 判红③：9 元组里第 5 项（k1）是 NaN ⇒ 含非有限值的标定记录不可用，必须判红并指出下标。
 void CalibChainTest::undistortJudgeRedOnNonFiniteTuple()
 {
     const QString key = QStringLiteral("cam_params");
+    CalibrationManager::instance()->remove(key);   // 进来先清键：上一条判红中止时不会执行它的清理
     CalibrationManager::instance()->setHomography(
         key, {kTrueFx, kTrueFy, kTrueCx, kTrueCy,
               std::numeric_limits<double>::quiet_NaN(), kDistK2, kDistP1, kDistP2, 0.1});
@@ -1524,6 +1569,403 @@ void CalibChainTest::undistortJudgeRedOnInvalidManualFx()
     const QString note = undistortNote(node);
     QVERIFY2(note.contains(QStringLiteral("fx")),
              qPrintable(QStringLiteral("判红原因没点出 fx/fy：") + note));
+}
+
+// ==================== ⑥／③ R-5：同一单例键空间里的载荷长度混读（取证）====================
+// 现状（读盘，逐处对得上行号）：`CalibrationManager` 只有一张 `QMap<QString, QVector<double>>`
+// （include/CalibrationManager.h:33），里面同时住着两种载荷——
+//   · 9 元内参 {fx fy cx cy k1 k2 p1 p2 rms}：src/OpencvCalibNode.cpp:184-185 写 `cam_params`
+//   · 6 元仿射 {m11 m12 m13 m21 m22 m23}：src/NPointCalibNode.cpp:100-107、src/HandEyeCalibNode.cpp:109 写操作员起的名字
+// 而 ⑥ 两个读侧的闸是 `hom.size() < 6`（src/CoordinateTransformNode.cpp:58、src/PositionCorrectNode.cpp:59），
+// 只卡下限不卡上限 ⇒ 9 元"够 6"，前 6 项 fx/fy/cx/cy/k1/k2 被当仿射矩阵算下去；
+// 场景侧 src/FlowScene.cpp:1160-1169 的 `hom.mid(0, 6)` 更是直接把 9 元截成 6 元、无任何留痕。
+// 下面几条先把现状量出来（断言写成"应有的口径"，改前应红；红出来的消息里带实测数值）。
+
+namespace {
+
+/// OpenCV 侧内参载荷：字面量顺序取自 src/OpencvCalibNode.cpp:184
+QVector<double> r5Intrinsics()
+{
+    return {kTrueFx, kTrueFy, kTrueCx, kTrueCy, kDistK1, kDistK2, kDistP1, kDistP2, 0.0034};
+}
+
+/// 把"改前实测"拼进失败消息，让红出来的那一行自己带证据
+QString r5Measured(const QString &label, bool ok, bool moduleStatus, bool portPresent,
+                   const QPointF &q, const QString &note)
+{
+    return QStringLiteral("[%1 实测 execute=%2 moduleStatus=%3 结果端口有产出=%4 输出=%5,%6 原因栏=「%7」] ")
+        .arg(label)
+        .arg(ok)
+        .arg(moduleStatus)
+        .arg(portPresent)
+        .arg(q.x(), 0, 'f', 3)
+        .arg(q.y(), 0, 'f', 3)
+        .arg(note);
+}
+
+} // namespace
+
+// ⑥ 读侧（坐标系变换）：fixtureName 填的是标定内参键 ⇒ 9 元内参被当前 6 元仿射用，必须判红。
+// 这条不是"操作员手滑"的假想路径：`cam_params` 就是内参节点的默认键，而两个读侧的 fixtureName
+// 是自由文本参数（src/CoordinateTransformNode.cpp:19 的 makeStringParam）；单例的 names() 在生产
+// 代码里 0 处使用（grep ->names() 仅命中测试），操作员那边没有下拉列表可依赖。
+void CalibChainTest::r5CamParamsNineTupleNotValidAffine()
+{
+    const QString key = QStringLiteral("cam_params");
+    CalibrationManager *cm = CalibrationManager::instance();
+    cm->remove(key);
+    const QVector<double> intr = r5Intrinsics();
+    cm->setHomography(key, intr);                       // 与 src/OpencvCalibNode.cpp:185 同一调用
+    QVERIFY2(cm->homography(key).size() == 9, "播种的 9 元内参没进单例，本条前提不成立");
+
+    CoordinateTransformNode node;
+    node.init();
+    node.setParam(QStringLiteral("fixtureName"), key);
+    node.setParam(QStringLiteral("x"), 100.0);
+    node.setParam(QStringLiteral("y"), 50.0);
+    feedImage(node, blankImage(640, 480));
+    const bool ok = node.execute();
+    const bool ms = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    bool present = false;
+    const QPointF q = resultPointOf(node, &present);
+    const QString note = transformNoteOf(node);
+
+    // 「前 6 项当仿射」的算术值：输出与它吻合就证明混读真的发生，不是读盘推断
+    const double affX = intr[0] * 100.0 + intr[1] * 50.0 + intr[2];
+    const double affY = intr[3] * 100.0 + intr[4] * 50.0 + intr[5];
+    const bool isAffineOfNine = std::abs(q.x() - affX) < 1e-9 && std::abs(q.y() - affY) < 1e-9;
+
+    QStringList problems;
+    if (ok || ms)
+        problems << QStringLiteral("9 元内参被当 6 元仿射仍判绿");
+    if (present)
+        problems << QStringLiteral("判红了结果端口仍有产出");
+    if (isAffineOfNine)
+        problems << QStringLiteral("输出恰好等于前 6 项的仿射值 %1,%2 ⇒ 混读实证").arg(affX, 0, 'f', 3).arg(affY, 0, 'f', 3);
+    if (!note.contains(QStringLiteral("9 项")))
+        problems << QStringLiteral("原因栏没报出实际项数 9");
+
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(r5Measured(QStringLiteral("R-5 ⑥/9元当6元"), ok, ms, present, q, note)
+                        + problems.join(QStringLiteral(" | "))));
+    cm->remove(key);
+}
+
+// ⑥ 读侧（位置修正）：同一形态的第二处。`src/PositionCorrectNode.cpp:88` 走的是
+// `CalibrationManager::applyHomography(hom, sx, sy)`，而后者（src/CalibrationManager.cpp:42-48）
+// 只读 hom[0..5]、对多出来的尾项不设防。
+void CalibChainTest::r5CamParamsNineTupleNotValidInPositionCorrect()
+{
+    const QString key = QStringLiteral("cam_params");
+    CalibrationManager *cm = CalibrationManager::instance();
+    cm->remove(key);
+    const QVector<double> intr = r5Intrinsics();
+    cm->setHomography(key, intr);
+
+    PositionCorrectNode node;
+    setupCorrectNode(node, key, 100.0, 50.0, 0.0, 1.0, 0.0, 0.0);
+    const bool ok = node.execute();
+    const bool ms = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    bool present = false;
+    const QPointF q = resultPointOf(node, &present);
+    const QString note = correctNoteOf(node);
+
+    const double affX = intr[0] * 100.0 + intr[1] * 50.0 + intr[2];
+    const double affY = intr[3] * 100.0 + intr[4] * 50.0 + intr[5];
+    const bool isAffineOfNine = std::abs(q.x() - affX) < 1e-9 && std::abs(q.y() - affY) < 1e-9;
+
+    QStringList problems;
+    if (ok || ms)
+        problems << QStringLiteral("9 元内参被当 6 元仿射仍判绿");
+    if (present)
+        problems << QStringLiteral("判红了结果端口仍有产出");
+    if (isAffineOfNine)
+        problems << QStringLiteral("输出恰好等于前 6 项的仿射值 %1,%2 ⇒ 混读实证").arg(affX, 0, 'f', 3).arg(affY, 0, 'f', 3);
+    if (!note.contains(QStringLiteral("9 项")))
+        problems << QStringLiteral("原因栏没报出实际项数 9");
+
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(r5Measured(QStringLiteral("R-5 ⑥位置修正/9元当6元"), ok, ms, present, q, note)
+                        + problems.join(QStringLiteral(" | "))));
+    cm->remove(key);
+}
+
+// 场景夹具侧：`FlowScene::setFixtureHomography` 的 `hom.mid(0, 6)`（src/FlowScene.cpp:1166）是**静默截断**
+// ——返回 void、不留痕，9 元进去、6 元存下，下游再也分辨不出来。应有的口径：拒绝写入
+// （夹具保持"没有矩阵"，读侧按 §3.15 的形态判红并留痕）。
+void CalibChainTest::r5SceneFixtureRejectsNineTuplePayload()
+{
+    const QString name = QStringLiteral("r5_scene_trunc");
+    CalibrationManager::instance()->remove(name);
+
+    FlowScene scene;
+    FlowFixture seed;
+    seed.name = name;
+    scene.setFixture(seed);
+
+    const QVector<double> intr = r5Intrinsics();
+    scene.setFixtureHomography(name, intr);
+    const FlowFixture got = scene.fixture(name);
+    const bool truncated = got.hasHom && got.hom.size() == 6
+                           && vecDeviation(got.hom, intr.mid(0, 6), 1e-12).isEmpty();
+
+    CoordinateTransformNode node;
+    node.setFlowSceneRef(&scene);
+    node.init();
+    node.setParam(QStringLiteral("fixtureName"), name);
+    node.setParam(QStringLiteral("x"), 100.0);
+    node.setParam(QStringLiteral("y"), 50.0);
+    feedImage(node, blankImage(640, 480));
+    const bool ok = node.execute();
+    const bool ms = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    bool present = false;
+    const QPointF q = resultPointOf(node, &present);
+    const QString note = transformNoteOf(node);
+
+    QStringList problems;
+    if (truncated)
+        problems << QStringLiteral("9 元载荷被 mid(0,6) 静默截成 6 元（存进去的正是 fx fy cx cy k1 k2）");
+    if (got.hasHom)
+        problems << QStringLiteral("夹具仍持有矩阵载荷（项数 %1）⇒ setFixtureHomography 没拒绝非 6 元写入").arg(got.hom.size());
+    if (ok || ms)
+        problems << QStringLiteral("截断后的夹具矩阵仍被 ⑥ 判绿使用");
+    if (!got.hasHom && !ok && note.isEmpty())
+        problems << QStringLiteral("拒绝写入是对的，但没留下任何可查的原因");
+
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[R-5 场景侧实测 夹具hom项数=%1 hasHom=%2 execute=%3 输出=%4,%5 原因栏=「%6」] ")
+                            .arg(got.hom.size())
+                            .arg(got.hasHom)
+                            .arg(ok)
+                            .arg(q.x(), 0, 'f', 3)
+                            .arg(q.y(), 0, 'f', 3)
+                            .arg(note)
+                        + problems.join(QStringLiteral(" | "))));
+    CalibrationManager::instance()->remove(name);
+}
+
+// 反方向的销毁：6 元仿射写同名键会把 9 元内参整条顶掉（`m_homographies[name] = hom` 没有长度/类型
+// 校验，也没有"已存在另一种载荷"的提示，src/CalibrationManager.cpp:11-15）。
+// 走真节点：N 点的 saveName 是操作员填的自由文本（src/NPointCalibNode.cpp:104-107）。
+void CalibChainTest::r5SixTupleMustNotEvictCamParams()
+{
+    const QString key = QStringLiteral("cam_params");
+    CalibrationManager *cm = CalibrationManager::instance();
+    cm->remove(key);
+    const QVector<double> intr = r5Intrinsics();
+    cm->setHomography(key, intr);
+
+    const AffineTruth truth{0.05, 0.0, 12.5, 0.0, 0.05, -7.25};
+    const QVector<QPointF> pixels = {QPointF(100, 80), QPointF(320, 90), QPointF(410, 260),
+                                     QPointF(150, 300), QPointF(250, 180)};
+    QVector<QPointF> worlds;
+    for (const QPointF &p : pixels)
+        worlds << applyTruth(truth, p.x(), p.y());
+
+    NPointCalibNode node;
+    node.init();
+    node.setParam(QStringLiteral("pointsText"), pairsText(pixels, worlds));
+    node.setParam(QStringLiteral("saveName"), key);   // 操作员把 N 点结果存成 "cam_params"
+    feedImage(node, blankImage());
+    const bool nPointOk = node.execute();
+
+    const QVector<double> after = cm->homography(key);
+    const bool evicted = (after.size() == 6) && (vecDeviation(after, intr, 1e-12) != QString());
+    const QString note = noteOf(node);
+
+    // 下游后果：③ 内参消费端此刻还能不能拿到内参
+    OpencvUndistortNode und;
+    und.init();
+    feedImage(und, blankImage());
+    const bool undOk = und.execute();
+    const QString undNote = undistortNote(und);
+
+    QStringList problems;
+    if (evicted)
+        problems << QStringLiteral("内参载荷（9 项）被 6 元仿射整条顶掉：单例里现在只剩 [%1]").arg(csvOf(after));
+    if (evicted && nPointOk)
+        problems << QStringLiteral("顶掉内参的那一轮 N 点自己判绿（execute=%1），操作员看不见这条数据被销毁了").arg(nPointOk);
+    if (nPointOk)
+        problems << QStringLiteral("本次 6 元矩阵写不进去（键上住着 9 项载荷），N 点却判绿");
+    if (note.isEmpty())
+        problems << QStringLiteral("判红了但 calibNote 为空 ⇒ 现场查不到原因（端口会被清空）");
+    else if (!note.contains(QStringLiteral("9 项")))
+        problems << QStringLiteral("原因栏没报出占位载荷的项数 9：「%1」").arg(note);
+
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[R-5 顶掉实测 N点execute=%1 cam_params项数=%2 ③execute=%3 ③原因=「%4」] ")
+                            .arg(nPointOk)
+                            .arg(after.size())
+                            .arg(undOk)
+                            .arg(undNote)
+                        + problems.join(QStringLiteral(" | "))));
+    cm->remove(key);
+}
+
+// ② 写侧（OpencvCalibNode）：操作员先把 N 点/手眼的 6 元矩阵存成了 "cam_params"（② 的键是硬编码的，
+// 名字撞不上也没法改），随后跑相机标定 ⇒ 9 元内参写不进去。修复前 `setHomography` 无返回值、
+// 站点也无条件继续报"标定完成"，所以这里必须验三件事：判红、原 6 元载荷逐项不动、原因留痕。
+void CalibChainTest::r5OpencvCalibRefusesEvictedCamParamsKey()
+{
+    const QString key = QStringLiteral("cam_params");
+    CalibrationManager *cm = CalibrationManager::instance();
+    cm->remove(key);
+    const QVector<double> six = {0.1, 0.0, 5.0, 0.0, 0.1, -3.0};   // 合法 6 元仿射（占位载荷）
+    QVERIFY2(cm->setHomography(key, six), "播种 6 元占位载荷失败，本条前提不成立");
+
+    const std::vector<cv::Mat> frames = makeCalibFrames();
+    OpencvCalibNode node;
+    node.init();
+    node.setParam(QStringLiteral("patternW"), kPatternW);
+    node.setParam(QStringLiteral("patternH"), kPatternH);
+    node.setParam(QStringLiteral("squareSize"), kSquare);
+    node.setParam(QStringLiteral("requiredFrames"), int(frames.size()));
+
+    bool ok = false;
+    for (const cv::Mat &f : frames) {
+        feedImage(node, OpencvUtil::matToHimage(f));
+        ok = node.execute();                      // 只有最后一帧会触发解算
+    }
+    const bool ms = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    const bool calibrated = node.getParam(QStringLiteral("calibrated")).toBool();
+    const QString note = noteOf(node);
+    const QVector<double> stored = cm->homography(key);
+
+    QStringList problems;
+    if (ok || ms)
+        problems << QStringLiteral("内参没存进单例（键被 6 元占住）却判绿");
+    if (calibrated)
+        problems << QStringLiteral("写入被拒绝却标记 calibrated");
+    if (vecDeviation(stored, six, 1e-12) != QString())
+        problems << QStringLiteral("占位的 6 元被 9 元内参顶掉：单例现在是 [%1]（项数 %2）").arg(csvOf(stored)).arg(stored.size());
+    if (note.isEmpty())
+        problems << QStringLiteral("判红了但 calibNote 为空 ⇒ 现场查不到原因（端口会被清空）");
+    else if (!note.contains(QStringLiteral("6 项")))
+        problems << QStringLiteral("原因栏没报出占位载荷的项数 6：「%1」").arg(note);
+
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[R-5 ②写侧实测 execute=%1 moduleStatus=%2 calibrated=%3 键项数=%4 原因栏=「%5」] ")
+                            .arg(ok).arg(ms).arg(calibrated).arg(stored.size()).arg(note)
+                        + problems.join(QStringLiteral(" | "))));
+    cm->remove(key);
+}
+
+// ⑤ 写侧（HandEyeCalibNode）：同一形态的第二处，saveName 是操作员自由文本。
+// 修复前站点写完矩阵就继续报成功；此处刚体矩阵算得出来、却存不下去。
+void CalibChainTest::r5HandEyeRefusesEvictedCamParamsKey()
+{
+    const QString key = QStringLiteral("cam_params");
+    CalibrationManager *cm = CalibrationManager::instance();
+    cm->remove(key);
+    const QVector<double> intr = r5Intrinsics();
+    QVERIFY2(cm->setHomography(key, intr), "播种 9 元内参失败，本条前提不成立");
+
+    const double deg = 20.0, th = deg * CV_PI / 180.0;
+    const double c = std::cos(th), sn = std::sin(th);
+    const QVector<QPointF> pixels = {QPointF(120, 90), QPointF(330, 110), QPointF(210, 300),
+                                     QPointF(420, 260), QPointF(80, 220)};
+    QVector<QPointF> robots;
+    for (const QPointF &p : pixels)
+        robots << QPointF(c * p.x() - sn * p.y() + 30.0, sn * p.x() + c * p.y() - 12.0);
+
+    HandEyeCalibNode node;
+    node.init();
+    node.setParam(QStringLiteral("pointsText"), pairsText(pixels, robots));
+    node.setParam(QStringLiteral("saveName"), key);   // 手眼结果存成 "cam_params"
+    feedImage(node, blankImage());
+    const bool ok = node.execute();
+    const bool ms = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    const QString note = noteOf(node);
+    const QVector<double> stored = cm->homography(key);
+
+    QStringList problems;
+    if (ok || ms)
+        problems << QStringLiteral("刚体矩阵没存进单例（键被 9 元占住）却判绿");
+    if (vecDeviation(stored, intr, 1e-12) != QString())
+        problems << QStringLiteral("内参载荷被 6 元刚体矩阵顶掉：单例现在是 [%1]（项数 %2）").arg(csvOf(stored)).arg(stored.size());
+    if (note.isEmpty())
+        problems << QStringLiteral("判红了但 calibNote 为空 ⇒ 现场查不到原因（端口会被清空）");
+    else if (!note.contains(QStringLiteral("9 项")))
+        problems << QStringLiteral("原因栏没报出占位载荷的项数 9：「%1」").arg(note);
+
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[R-5 ⑤写侧实测 execute=%1 moduleStatus=%2 键项数=%3 原因栏=「%4」] ")
+                            .arg(ok).arg(ms).arg(stored.size()).arg(note)
+                        + problems.join(QStringLiteral(" | "))));
+    cm->remove(key);
+}
+
+// HALCON 写侧的载荷到底是什么形状：src/CalibrationNode.cpp:81-88 与 src/CalibrationBoardNode.cpp:69-76
+// 把 `GetCalibData(calibID, "camera", 0, "params")` 的**整个 tuple 原样**写进同一个 `cam_params` 键，
+// 长度由 HALCON 决定（不是 9 元字面量）。
+// 本轮实测：只设了相机参数、没跑 CalibrateCameras 时，`"params"` 取不到——
+// HALCON error #8451「Model not optimized yet - no results can be queried」。
+// 因此这里逐个候选 GenParamName 探测，把"到底能取到什么"量出来并由 qInfo 打进套件日志；
+// 三个都取不到＝**取证未命中**（不拿文档值冒充实测）。**这一条是前提探针，不是口径闸。**
+void CalibChainTest::r5HalconCamParamsPayloadShape()
+{
+    QString report;
+    bool anyRead = false;
+    QStringList candidates{QStringLiteral("params"), QStringLiteral("cam_param"),
+                           QStringLiteral("cam_param_names")};
+    try {
+        HTuple calibID;
+        CreateCalibData("calibration_object", 1, 1, &calibID);
+        HTuple camParams;                    // 逐项对应 src/CalibrationNode.cpp:64-71 的默认值
+        camParams.Append(16.0);              // focus
+        camParams.Append(0.0);               // kappa
+        camParams.Append(0.000005);          // sx
+        camParams.Append(0.000005);          // sy
+        camParams.Append(640.0);             // cx
+        camParams.Append(512.0);             // cy
+        camParams.Append(1280);              // imgWidth
+        camParams.Append(1024);              // imgHeight
+        SetCalibDataCamParam(calibID, 0, "area_scan_division", camParams);
+
+        for (const QString &name : candidates) {
+            try {
+                HTuple v;
+                GetCalibData(calibID, "camera", 0, name.toStdString().c_str(), &v);
+                QStringList parts;
+                for (int i = 0; i < v.Length(); ++i) {
+                    // 数值 tuple 上 S() 会抛，文本 tuple 上 D() 会抛 —— 两种候选都可能碰到，先数值后文本
+                    QString one;
+                    try {
+                        one = QString::number(v[i].D(), 'g', 10);
+                    } catch (const HException &) {
+                        try {
+                            one = QString::fromUtf8(v[i].S().Text());
+                        } catch (const HException &) {
+                            one = QStringLiteral("?");
+                        }
+                    }
+                    parts << one;
+                }
+                report += QStringLiteral("  [%1] 长度=%2 值=[%3]\n")
+                              .arg(name).arg(v.Length()).arg(parts.join(QStringLiteral(", ")));
+                if (v.Length() > 0)
+                    anyRead = true;
+            } catch (const HException &e) {
+                report += QStringLiteral("  [%1] 抛异常：%2\n")
+                              .arg(name)
+                              .arg(QString::fromLocal8Bit(e.ErrorMessage().Text()));
+            }
+        }
+        ClearCalibData(calibID);
+    } catch (const HException &e) {
+        report += QStringLiteral("  建标定数据即抛异常：%1\n")
+                      .arg(QString::fromLocal8Bit(e.ErrorMessage().Text()));
+    }
+
+    qInfo().noquote() << QStringLiteral("R-5 ⑤ HALCON 写侧候选实测：\n%1").arg(report);
+
+    // 本轮实测：三个候选名都取不到读数 ⇒ HALCON 写侧的载荷长度**取证未命中**（不等于"不存在"）。
+    // 这条断言把"取不到"钉成探针：哪天能取到了（HALCON 版本/接口变化），它变红并把读数带在消息里，
+    // 提醒把 §3.19 的"未证到"登记改成实测。修复方案不采用"只按长度精确匹配"这一条，正是被这个
+    // 未量到的面推出来的——写侧长度口径不明时，读侧只能靠键分域而不是猜长度。
+    QVERIFY2(!anyRead,
+             qPrintable(QStringLiteral("[R-5 ⑤ HALCON 写侧现在有读数了，请把台账的「取证未命中」改成实测]\n")
+                        + report));
 }
 
 QTEST_MAIN(CalibChainTest)

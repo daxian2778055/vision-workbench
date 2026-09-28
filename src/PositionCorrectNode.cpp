@@ -56,10 +56,12 @@ void PositionCorrectNode::run(bool)
             }
             const QVector<double> hom = fx.hasHom ? fx.hom
                                             : CalibrationManager::instance()->homography(fixtureName);
-            if (hom.size() < 6) {
+            if (hom.size() != 6) {
                 // 手填的 srcX/srcY/angle/scale/offset 与 R-2 那边的默认单位阵不同，它不是恒等；
-                // 但同样是「该有而没有时不报」：声明了要用夹具却没有矩阵，继续跑就是把像素值
+                // 但同样是「该有而没有时不报」：声明了要用夹具却没有 6 元矩阵，继续跑就是把像素值
                 // （或夹具位姿自带的角／缩放）当成已修正的物理坐标吐给下游且判绿。⇒ 判红，绝不回退手填。
+                // R-5：`< 6` 只卡下限 ⇒ 同键的 9 元 OpenCV 内参"够 6"就被当前 6 元仿射用
+                // （applyHomography 取 hom[0..5]），实测输出 78220.000,23977.620 且判绿。⇒ 要求恰好 6 项。
                 QString sceneWhy;
                 if (!fx.hasHom) {
                     if (!fs)
@@ -69,11 +71,15 @@ void PositionCorrectNode::run(bool)
                     else
                         sceneWhy = QStringLiteral("该夹具没有矩阵（只有位姿）");
                 }
+                const QString sizeWhy =
+                    hom.size() < 6
+                        ? QStringLiteral("只有 %1 项").arg(hom.size())
+                        : QStringLiteral("有 %1 项（不是 6 元仿射，疑似另一种载荷：9 元内参）").arg(hom.size());
                 QString mgrWhy;
                 if (fx.hasHom)
-                    mgrWhy = QStringLiteral("场景夹具的矩阵只有 %1 项").arg(hom.size());
+                    mgrWhy = QStringLiteral("场景夹具的矩阵%1").arg(sizeWhy);
                 else if (CalibrationManager::instance()->hasHomography(fixtureName))
-                    mgrWhy = QStringLiteral("标定单例里该键只有 %1 项").arg(hom.size());
+                    mgrWhy = QStringLiteral("标定单例里该键%1").arg(sizeWhy);
                 else
                     mgrWhy = QStringLiteral("标定单例里没有这个键");
                 const QString why = sceneWhy.isEmpty()

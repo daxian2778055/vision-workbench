@@ -1159,11 +1159,14 @@ void FlowScene::setFixture(const FlowFixture &fixture)
 
 void FlowScene::setFixtureHomography(const QString &name, const QVector<double> &hom)
 {
-    if (name.trimmed().isEmpty() || hom.size() < 6)
+    // R-5：过去是 `size() < 6` 才拒、其余一律 `hom.mid(0, 6)` 存下 ⇒ 9 元 OpenCV 内参进来会被
+    // **静默截断**成 fx/fy/cx/cy/k1/k2 当仿射用（void 返回、不留痕）。夹具矩阵槽位只接受恰好 6 项；
+    // 不合要求的载荷一律不写，夹具保持"没有矩阵"，下游读侧按既有形态判红并报出实际项数。
+    if (name.trimmed().isEmpty() || hom.size() != 6)
         return;
     FlowFixture f = m_fixtures.value(name.trimmed());
     f.name = name.trimmed();
-    f.hom = hom.mid(0, 6);
+    f.hom = hom;
     f.hasHom = true;
     m_fixtures[f.name] = f;
 }

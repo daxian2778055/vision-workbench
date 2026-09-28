@@ -8,10 +8,15 @@ CalibrationManager *CalibrationManager::instance()
     return &s_instance;
 }
 
-void CalibrationManager::setHomography(const QString &name, const QVector<double> &hom)
+bool CalibrationManager::setHomography(const QString &name, const QVector<double> &hom)
 {
-    if (!name.isEmpty())
-        m_homographies[name] = hom;
+    if (name.isEmpty())
+        return false;
+    const auto it = m_homographies.constFind(name);
+    if (it != m_homographies.constEnd() && it.value().size() != hom.size())
+        return false;           // 项数不同＝另一种载荷，不许把已有的那一条整条顶掉（R-5）
+    m_homographies[name] = hom;
+    return true;
 }
 
 QVector<double> CalibrationManager::homography(const QString &name) const
@@ -41,8 +46,8 @@ void CalibrationManager::clear()
 
 QPointF CalibrationManager::applyHomography(const QVector<double> &hom, double x, double y)
 {
-    if (hom.size() < 6)
-        return QPointF(x, y);
+    if (hom.size() != 6)
+        return QPointF(x, y);     // 过短取不到矩阵、过长是另一种载荷（9 元内参）——都不许当 6 元用
     return QPointF(hom[0] * x + hom[1] * y + hom[2],
                    hom[3] * x + hom[4] * y + hom[5]);
 }
