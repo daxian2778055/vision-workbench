@@ -194,6 +194,8 @@ private slots:
     void testRealOperatorsValueLevelPanelSweep();
     // U-17：把「载入侧（fromJson）对声明过区间的参数做钳制／回退」立成闸（见 §3.21）
     void testLoadPathClampsOutOfRangeSpecValues();
+    // U-8：把「哪些算子一个参数声明都不发」立成显式名单闸（见 §3.22）
+    void testOperatorsWithoutParamSpecsAreExactlyThisRoster();
 };
 
 // ── T1 最小复现：把 F-2 的悬空前提变成实测 ──
@@ -1809,6 +1811,8 @@ void ParamPanelBindingTest::testRealOperatorsValueLevelPanelSweep()
 // ①～③ 与 ⑤ 的期望值一律由该参数自己的 minValue／maxValue／defaultValue 现算，不调用产线的判定路径。
 void ParamPanelBindingTest::testLoadPathClampsOutOfRangeSpecValues()
 {
+    registerAllNodes();   // 本函数自己填注册表：把函数名当 exe 参数单跑时不依赖更早的 T5／T6
+
     QStringList problems;
 
     const QString probeKey = QStringLiteral("u17UndeclaredProbeKey");
@@ -2090,6 +2094,171 @@ void ParamPanelBindingTest::testLoadPathClampsOutOfRangeSpecValues()
              qPrintable(QStringLiteral("腿⑤写侧下界只执行了 %1 条 ⇒ setParam 钳制那条腿已空转").arg(writeLowLeg)));
     QVERIFY2(writeHighLeg > 150,
              qPrintable(QStringLiteral("腿⑤写侧上界只执行了 %1 条 ⇒ setParam 钳制那条腿已空转").arg(writeHighLeg)));
+}
+
+// ── T14（U-8 本轮，推进计划 §3.22）：把「哪些算子一个参数声明都不发」立成显式名单闸 ──
+// 契约：注册表里每个 HalconNode 走完 init() 之后 paramSpecs() 为空的**集合**，必须与下面这份
+//      25 条名单**集合相等**（比的是集合，不比注册顺序）：
+//   ① 名单外新冒出来的不发声明算子（＝新增算子忘了 registerParams，或故意只发一条都算没有）⇒ extra ⇒ 红；
+//   ② 名单里的算子开始发声明了（口径变了 ⇒ 名单该由人改，不该由红悄悄吞掉）⇒ missing ⇒ 红；
+//   ③ 名单自己写错／写漏被 ①② 双向覆盖，不另设第三判。
+// 名单来源：本轮实跑 [U4-SWEEP T5] 与 [T6] 的 NOSPECS 行（两份逐位一致，读数在 build/u8_probe/），
+//          不是读盘推断。⇒ 本闸只钉"这份名单不变"，不评价"这 25 个该不该有声明"（那是 U-17a／U-8 的后半）。
+namespace {
+
+// actual ＼ expected 与 expected ＼ actual，各自去重排序。
+// 单独成函数是为了让"判定自己被改坏"能由下面的合成牙腿喂出来，不必动产品代码（同 T7 的口径）。
+void rosterDiff(const QStringList &actual, const QStringList &expected,
+                QStringList &extra, QStringList &missing)
+{
+    extra.clear();
+    missing.clear();
+    QSet<QString> actualSet;
+    for (const QString &id : actual) actualSet.insert(id);
+    QSet<QString> expectedSet;
+    for (const QString &id : expected) expectedSet.insert(id);
+    for (const QString &id : actualSet) {
+        if (!expectedSet.contains(id)) extra << id;
+    }
+    for (const QString &id : expectedSet) {
+        if (!actualSet.contains(id)) missing << id;
+    }
+    extra.sort();
+    missing.sort();
+}
+
+} // namespace
+
+void ParamPanelBindingTest::testOperatorsWithoutParamSpecsAreExactlyThisRoster()
+{
+    registerAllNodes();   // 注册表由这个调用填（不是静态自注册）⇒ 单跑本函数时必须自己填一次
+
+    static const QStringList expected = {
+        QStringLiteral("BlurNode"), QStringLiteral("ClassifyNode"),
+        QStringLiteral("ColorConversionNode"), QStringLiteral("ContrastStretchNode"),
+        QStringLiteral("CounterNode"), QStringLiteral("DelayNode"),
+        QStringLiteral("DistanceNode"), QStringLiteral("FilterNode"),
+        QStringLiteral("FormatNode"), QStringLiteral("FormulaNode"),
+        QStringLiteral("GrayStretchNode"), QStringLiteral("HalconImageSourceNode"),
+        QStringLiteral("HistogramEqualizeNode"), QStringLiteral("ImageInvertNode"),
+        QStringLiteral("ImageReadNode"), QStringLiteral("MvsImageSourceNode"),
+        QStringLiteral("OpencvPixelStatsNode"), QStringLiteral("ProtocolParseNode"),
+        QStringLiteral("ReceiveDataNode"), QStringLiteral("RecordNode"),
+        QStringLiteral("ScriptNode"), QStringLiteral("SendDataNode"),
+        QStringLiteral("SortNode"), QStringLiteral("SubFlowNode"),
+        QStringLiteral("WriteFileNode"),
+    };
+
+    // 牙腿（先跑）：钉住"判定本身"有牙——名单一个字没改、判定被拆坏时也要红。
+    // 输入是下面这份**合成小表**，刻意不用 `expected`：本轮实测过，一旦拿 `expected` 造合成输入，
+    // "名单自己少一条／改一个字符"这类坏法会把两侧同时变成同一份 ⇒ 红在牙腿、且真名单腿连一行读数都没有
+    // （改坏自证 F1／F4 的第一版就是这样，见 §3.22 表 2 末）。
+    // 明细一律 ASCII：QtTest 的日志通道在 cp936 控制台下会把中文打成乱码（§3.9 表 3 同源）。
+    {
+        const QStringList base = { QStringLiteral("AlphaNode"), QStringLiteral("BetaNode"),
+                                   QStringLiteral("GammaNode") };
+        QStringList dropped = base;
+        dropped.removeOne(QStringLiteral("BetaNode"));
+
+        QStringList extra;
+        QStringList missing;
+
+        rosterDiff(base, dropped, extra, missing);
+        QVERIFY2(extra.size() == 1 && missing.isEmpty(),
+                 qPrintable(QStringLiteral("U8 TEETH-L1 (drop one from expected side): want extra=1(BetaNode)/missing=0, got extra=%1%2 missing=%3%4")
+                                .arg(extra.size()).arg(extra.join(QLatin1Char(',')))
+                                .arg(missing.size()).arg(missing.join(QLatin1Char(',')))));
+
+        rosterDiff(dropped, base, extra, missing);
+        QVERIFY2(extra.isEmpty() && missing.size() == 1,
+                 qPrintable(QStringLiteral("U8 TEETH-L2 (drop one from actual side): want extra=0/missing=1(BetaNode), got extra=%1 missing=%2%3")
+                                .arg(extra.size()).arg(missing.size())
+                                .arg(missing.join(QLatin1Char(',')))));
+
+        // 顺序不参与判定：转一位再比，两侧差异都必须是 0
+        QStringList rotated = base;
+        rotated.push_back(rotated.takeFirst());
+        rosterDiff(rotated, base, extra, missing);
+        QVERIFY2(extra.isEmpty() && missing.isEmpty(),
+                 qPrintable(QStringLiteral("U8 TEETH-L3 (rotation only): want 0/0, got extra=%1 missing=%2")
+                                .arg(extra.size()).arg(missing.size())));
+
+        // 只差大小写都不许混过去（防止名单被"就近改成一个像的名字"顶掉，也防止比较被改成大小写不敏感）
+        QStringList renamed = base;
+        renamed.replace(renamed.indexOf(QStringLiteral("BetaNode")),
+                        QStringLiteral("bETANode"));
+        rosterDiff(renamed, base, extra, missing);
+        QVERIFY2(extra.size() == 1 && missing.size() == 1,
+                 qPrintable(QStringLiteral("U8 TEETH-L4 (case-only difference): want extra=1/missing=1, got extra=%1 missing=%2")
+                                .arg(extra.size()).arg(missing.size())));
+
+        // 去重口径：actual 侧重复出现同一个 id 不算多一条
+        QStringList duplicated = base;
+        duplicated << base;
+        rosterDiff(duplicated, base, extra, missing);
+        QVERIFY2(extra.isEmpty() && missing.isEmpty(),
+                 qPrintable(QStringLiteral("U8 TEETH-L5 (duplicated ids on actual side): want 0/0, got extra=%1 missing=%2")
+                                .arg(extra.size()).arg(missing.size())));
+    }
+
+    QStringList actual;
+    QStringList badCreate;
+    int registry = 0;
+    int withSpecs = 0;
+
+    const QList<NodeRegistration> regs = NodeRegistry::instance().all();
+    for (const NodeRegistration &reg : regs) {
+        ++registry;
+        HalconNode *node = qobject_cast<HalconNode *>(
+            NodeRegistry::instance().createById(reg.id, this));
+        if (!node) {
+            badCreate << QStringLiteral("%1 :: createById null or not a HalconNode").arg(reg.id);
+            continue;
+        }
+        node->init();   // 参数在 init() 里注册，与四条载入路径同序（§3.21 表 0）
+        if (node->paramSpecs().isEmpty()) actual << reg.id;
+        else ++withSpecs;
+        delete node;
+    }
+
+    QStringList extra;
+    QStringList missing;
+    rosterDiff(actual, expected, extra, missing);
+
+    qWarning().noquote() << QStringLiteral(
+        "[U8-ROSTER] registry=%1 withSpecs=%2 noSpecActual=%3 expected=%4 extra=%5 missing=%6 badCreate=%7")
+        .arg(registry).arg(withSpecs).arg(actual.size()).arg(expected.size())
+        .arg(extra.size()).arg(missing.size()).arg(badCreate.size());
+    if (!extra.isEmpty())
+        qWarning().noquote() << QStringLiteral("  EXTRA %1").arg(extra.join(QStringLiteral(",")));
+    if (!missing.isEmpty())
+        qWarning().noquote() << QStringLiteral("  MISSING %1").arg(missing.join(QStringLiteral(",")));
+    if (!badCreate.isEmpty())
+        qWarning().noquote() << QStringLiteral("  BADCREATE %1").arg(badCreate.join(QStringLiteral(" | ")));
+
+    // 判词在前、空转闸在后（次序口径同 §3.21：改坏时要先看到"哪几条进出名单"）
+    QVERIFY2(badCreate.isEmpty(),
+             qPrintable(QStringLiteral("U8: %1 operator(s) could not be created as HalconNode")
+                            .arg(badCreate.size())));
+    QVERIFY2(extra.isEmpty(),
+             qPrintable(QStringLiteral("U8: %1 operator(s) emit no paramSpecs but are not on the roster"
+                                       " (see EXTRA line above)").arg(extra.size())));
+    QVERIFY2(missing.isEmpty(),
+             qPrintable(QStringLiteral("U8: %1 roster operator(s) now emit paramSpecs"
+                                       " (see MISSING line above)").arg(missing.size())));
+
+    // 空转闸：名单本身与分母都得对得上，否则"没红"不等于"拦得住"
+    QVERIFY2(expected.size() == 25,
+             qPrintable(QStringLiteral("名单字面量自己变成 %1 条 ⇒ 本闸的基准已失效").arg(expected.size())));
+    QVERIFY2(registry > 60,
+             qPrintable(QStringLiteral("注册表只枚举到 %1 个算子 ⇒ 分母已失效").arg(registry)));
+    QVERIFY2(withSpecs > 40,
+             qPrintable(QStringLiteral("只扫到 %1 个发声明的算子 ⇒ 分母已失效").arg(withSpecs)));
+    QVERIFY2(!actual.isEmpty(),
+             qPrintable(QStringLiteral("实跑名单为空 ⇒ 本闸无从比较")));
+    QVERIFY2(actual.size() + withSpecs == registry,
+             qPrintable(QStringLiteral("denominator mismatch: noSpec=%1 withSpecs=%2 registry=%3")
+                            .arg(actual.size()).arg(withSpecs).arg(registry)));
 }
 
 QTEST_MAIN(ParamPanelBindingTest)
