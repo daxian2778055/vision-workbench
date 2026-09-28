@@ -93,6 +93,16 @@ private slots:
     void r5HandEyeRefusesEvictedCamParamsKey();       // ⑤ 写侧：同上，手眼侧
     void r5HalconCamParamsPayloadShape();             // HALCON 写侧的实测长度/布局
 
+    // ⑤ R-1：手眼退化输入闸（取证阶段先量"改前这些输入各自落到哪条路"）
+    void handEyeCoincidentPixelsJudgeRed();       // 像素侧全重合 ⇒ 旋转无解
+    void handEyeCoincidentRobotsJudgeRed();       // 机器人侧全重合 ⇒ 旋转无解
+    void handEyeUndefinedRotationJudgeRed();      // 两侧都有散布但叉积和/点积和同时为 0
+    void handEyeUnparsableLineJudgeRed();         // 非有限坐标 + 解析不出 4 数的行（静默吞行面）
+    void handEyeContradictoryDuplicateJudgeRed(); // 同一像素映射到两个不同机器人位置
+    void handEyeExactDuplicateStaysGreen();       // 负对照：整行精确重复不得被一起判红
+    void handEyeResidualReadoutMatchesFit();      // 残差读数必须等于按报回矩阵自算的值
+    void handEyeStaleReadoutClearedOnRed();       // 两轮连跑：判红轮必须顶掉上一轮的原因与残差
+
 private:
     QJsonObject m_managerSnapshot;
 };
@@ -1966,6 +1976,329 @@ void CalibChainTest::r5HalconCamParamsPayloadShape()
     QVERIFY2(!anyRead,
              qPrintable(QStringLiteral("[R-5 ⑤ HALCON 写侧现在有读数了，请把台账的「取证未命中」改成实测]\n")
                         + report));
+}
+
+// ---------------- ⑤ R-1：手眼退化输入闸 ----------------
+
+/// 把 ⑤ 跑到"一条点对文本 + 一个存名"的最小形态，一次取回全部对外可见面。
+/// ⚠️ 判红时 `src/HalconNode.cpp:462`～`:467` 会清空所有输出端口 ⇒ `desc`/`matrix` 在红轮恒为空，
+/// 原因只能看 `note`（calibNote），这条口径与 ⑥ R-2／R-6 一致。
+struct HandEyeRun
+{
+    bool execute = false;
+    bool moduleStatus = false;
+    bool green = false;
+    QString note;
+    QString desc;
+    QVector<double> matrix;
+    QVector<double> stored;
+    bool hasMaxResidual = false;
+    double maxResidual = 0.0;
+};
+
+HandEyeRun runHandEye(const QString &text, const QString &saveName)
+{
+    HandEyeCalibNode node;
+    node.init();
+    node.setParam(QStringLiteral("pointsText"), text);
+    node.setParam(QStringLiteral("saveName"), saveName);
+    feedImage(node, blankImage());
+
+    HandEyeRun r;
+    r.execute = node.execute();
+    r.moduleStatus = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    r.green = r.execute || r.moduleStatus;
+    r.note = noteOf(node);
+    if (auto d = node.getOutputData(2))
+        r.desc = d->getData().toString();
+    r.matrix = matrixFromPort(node, 1);
+    r.stored = CalibrationManager::instance()->homography(saveName);
+    r.maxResidual = node.getParam(QStringLiteral("calibMaxResidualPx")).toDouble(&r.hasMaxResidual);
+    return r;
+}
+
+/// 退化输入的通用红判据：判绿／原因栏空／留下非有限载荷／存进了单例，四种都算没拦住
+QStringList degeneracyProblems(const HandEyeRun &r)
+{
+    QStringList problems;
+    if (r.green)
+        problems << QStringLiteral("退化输入被判成功（execute=%1 moduleStatus=%2）").arg(r.execute).arg(r.moduleStatus);
+    if (r.note.isEmpty())
+        problems << QStringLiteral("原因栏为空 ⇒ 现场查不到是哪一类退化");
+    for (double v : r.matrix)
+        if (!std::isfinite(v)) { problems << QStringLiteral("端口 1 矩阵含非有限值"); break; }
+    for (double v : r.stored)
+        if (!std::isfinite(v)) { problems << QStringLiteral("单例载荷含非有限值"); break; }
+    if (CalibrationManager::instance()->hasHomography(QStringLiteral("c2test_handeye_degen")))
+        problems << QStringLiteral("退化输入却把矩阵存进了单例");
+    return problems;
+}
+
+void CalibChainTest::handEyeCoincidentPixelsJudgeRed()
+{
+    const QString key = QStringLiteral("c2test_handeye_degen");
+    CalibrationManager::instance()->remove(key);
+
+    const QVector<QPointF> pixels = {QPointF(200, 200), QPointF(200, 200), QPointF(200, 200),
+                                     QPointF(200, 200), QPointF(200, 200)};
+    const QVector<QPointF> robots = {QPointF(1, 7), QPointF(9, 2), QPointF(4, 4),
+                                     QPointF(12, 11), QPointF(0, 6)};
+    const HandEyeRun r = runHandEye(pairsText(pixels, robots), key);
+
+    QStringList problems = degeneracyProblems(r);
+    if (!r.note.isEmpty() && !r.note.contains(QStringLiteral("像素")))
+        problems << QStringLiteral("原因没点出是像素侧重合：「%1」").arg(r.note);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[R-1 ⑤像素侧全重合实测 green=%1 单例项数=%2 残差栏有读数=%3 原因栏=「%4」矩阵=[%5]] ")
+                            .arg(r.green).arg(r.stored.size()).arg(r.hasMaxResidual).arg(r.note).arg(csvOf(r.matrix))
+                        + problems.join(QStringLiteral(" | "))));
+    qInfo().noquote() << QStringLiteral("R-1 ⑤改后实测［像素侧全重合］原因栏=「%1」端口项数=%2 单例项数=%3")
+                             .arg(r.note).arg(r.matrix.size()).arg(r.stored.size());
+    CalibrationManager::instance()->remove(key);
+}
+
+void CalibChainTest::handEyeCoincidentRobotsJudgeRed()
+{
+    const QString key = QStringLiteral("c2test_handeye_degen");
+    CalibrationManager::instance()->remove(key);
+
+    const QVector<QPointF> pixels = {QPointF(120, 90), QPointF(330, 110), QPointF(210, 300),
+                                     QPointF(420, 260), QPointF(80, 220)};
+    const QVector<QPointF> robots(5, QPointF(50, 50));
+    const HandEyeRun r = runHandEye(pairsText(pixels, robots), key);
+
+    QStringList problems = degeneracyProblems(r);
+    if (!r.note.isEmpty() && !r.note.contains(QStringLiteral("机器人")))
+        problems << QStringLiteral("原因没点出是机器人侧重合：「%1」").arg(r.note);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[R-1 ⑤机器人侧全重合实测 green=%1 单例项数=%2 原因栏=「%3」矩阵=[%4]] ")
+                            .arg(r.green).arg(r.stored.size()).arg(r.note).arg(csvOf(r.matrix))
+                        + problems.join(QStringLiteral(" | "))));
+    qInfo().noquote() << QStringLiteral("R-1 ⑤改后实测［机器人侧全重合］原因栏=「%1」端口项数=%2 单例项数=%3")
+                             .arg(r.note).arg(r.matrix.size()).arg(r.stored.size());
+    CalibrationManager::instance()->remove(key);
+}
+
+// 两侧各有散布（重合闸拦不住），但叉积和与点积和同时为 0 ⇒ atan2(0,0) 把旋转角定成 0，
+// 而这份点对其实是**镜像**（(x,y)→(y,x)），任何旋转都拟合不了 ⇒ 角度无解，只能判红。
+void CalibChainTest::handEyeUndefinedRotationJudgeRed()
+{
+    const QString key = QStringLiteral("c2test_handeye_degen");
+    CalibrationManager::instance()->remove(key);
+
+    const QVector<QPointF> pixels = {QPointF(1, 0), QPointF(0, 1), QPointF(-1, 0), QPointF(0, -1)};
+    const QVector<QPointF> robots = {QPointF(0, 1), QPointF(1, 0), QPointF(0, -1), QPointF(-1, 0)};
+    const HandEyeRun r = runHandEye(pairsText(pixels, robots), key);
+
+    QStringList problems = degeneracyProblems(r);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[R-1 ⑤旋转角无定义实测 green=%1 单例项数=%2 原因栏=「%3」矩阵=[%4] 结果串=「%5」] ")
+                            .arg(r.green).arg(r.stored.size()).arg(r.note).arg(csvOf(r.matrix)).arg(r.desc)
+                        + problems.join(QStringLiteral(" | "))));
+    qInfo().noquote() << QStringLiteral("R-1 ⑤改后实测［旋转角无定义］原因栏=「%1」端口项数=%2 单例项数=%3")
+                             .arg(r.note).arg(r.matrix.size()).arg(r.stored.size());
+    CalibrationManager::instance()->remove(key);
+}
+
+// 逐 token 量"改前这一行到底被怎么用"：被解析成非有限数？还是被 `if (parts.size() < 4) continue;`
+// 与 `if (ok1 && ok2 && ok3 && ok4)` 静默丢掉（丢掉=2 对以上就照样绿灯，操作员数不出少了几行）。
+// 三条真值对 + 一条坏行：坏行必须让整轮判红，且不得产出/存下非有限值。
+void CalibChainTest::handEyeUnparsableLineJudgeRed()
+{
+    const QString key = QStringLiteral("c2test_handeye_degen");
+    CalibrationManager::instance()->remove(key);
+
+    const QString good = QStringLiteral("100.000000,100.000000 10.000000,10.000000\n"
+                                        "300.000000,120.000000 30.000000,12.000000\n"
+                                        "200.000000,320.000000 20.000000,32.000000\n");
+    const QStringList badLines = {
+        QStringLiteral("150.000000,150.000000 nan,15.000000"),
+        QStringLiteral("150.000000,150.000000 -nan,15.000000"),
+        QStringLiteral("150.000000,150.000000 inf,15.000000"),
+        QStringLiteral("150.000000,150.000000 -inf,15.000000"),
+        QStringLiteral("150.000000,150.000000 1e999,15.000000"),
+        QStringLiteral("150.000000,150.000000 15.000000,x"),
+        QStringLiteral("150,150 15"),
+        QStringLiteral("像素150,150 机器人15,15"),
+    };
+
+    QStringList all;
+    QStringList problems;
+    for (const QString &bad : badLines) {
+        const QString text = good + bad + QStringLiteral("\n# 注释行应当被放过\n");
+        const HandEyeRun r = runHandEye(text, key);
+        const QStringList tokenProblems = degeneracyProblems(r);
+        all << QStringLiteral("「%1」⇒ green=%2 用了几对=%3 单例项数=%4 原因栏=「%5」")
+                   .arg(bad).arg(r.green)
+                   .arg(r.desc.contains(QStringLiteral("对点"))
+                            ? r.desc.section(QStringLiteral("（"), 1).section(QStringLiteral(" 对"), 0, 0)
+                            : QStringLiteral("?"))
+                   .arg(r.stored.size()).arg(r.note);
+        for (const QString &p : tokenProblems)
+            problems << QStringLiteral("「%1」%2").arg(bad).arg(p);
+    }
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[R-1 ⑤坏行逐 token 实测]\n")
+                        + all.join(QStringLiteral("\n"))
+                        + QStringLiteral("\n问题：") + problems.join(QStringLiteral(" | "))));
+    qInfo().noquote() << QStringLiteral("R-1 ⑤改后实测［坏行逐 token］\n%1").arg(all.join(QStringLiteral("\n")));
+    CalibrationManager::instance()->remove(key);
+}
+
+// 同一个像素位置报了两遍、却指向两个不同的机器人位置 ⇒ 数据自相矛盾，任何刚体都满足不了。
+// 这条与"整行精确重复"必须分开：后者是无害的重复录入（见下一条负对照）。
+void CalibChainTest::handEyeContradictoryDuplicateJudgeRed()
+{
+    const QString key = QStringLiteral("c2test_handeye_degen");
+    CalibrationManager::instance()->remove(key);
+
+    const double deg = 20.0, th = deg * CV_PI / 180.0;
+    const double c = std::cos(th), sn = std::sin(th);
+    QVector<QPointF> pixels = {QPointF(100, 100), QPointF(300, 120), QPointF(200, 320)};
+    QVector<QPointF> robots;
+    for (const QPointF &p : pixels)
+        robots << QPointF(c * p.x() - sn * p.y() + 30.0, sn * p.x() + c * p.y() - 12.0);
+    pixels.append(QPointF(100, 100));            // 与第 1 对同像素
+    robots.append(QPointF(44, 26));              // 却给了另一个机器人位置（真值约 40,20）
+    const HandEyeRun r = runHandEye(pairsText(pixels, robots), key);
+
+    const QStringList problems = degeneracyProblems(r);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[R-1 ⑤同像素两个机器人位实测 green=%1 单例项数=%2 最大残差=%3 原因栏=「%4」矩阵=[%5]] ")
+                            .arg(r.green).arg(r.stored.size()).arg(r.maxResidual).arg(r.note).arg(csvOf(r.matrix))
+                        + problems.join(QStringLiteral(" | "))));
+    qInfo().noquote() << QStringLiteral("R-1 ⑤改后实测［同像素两个机器人位］原因栏=「%1」端口项数=%2 单例项数=%3")
+                             .arg(r.note).arg(r.matrix.size()).arg(r.stored.size());
+    CalibrationManager::instance()->remove(key);
+}
+
+// 负对照：闸不能过劲。整行精确重复（像素与机器人位都相同）是无害的重复录入，
+// 去重后仍有 ≥2 个不同点 ⇒ 必须照旧判绿、矩阵照旧对上真值。
+void CalibChainTest::handEyeExactDuplicateStaysGreen()
+{
+    const QString key = QStringLiteral("c2test_handeye_dup");
+    CalibrationManager::instance()->remove(key);
+
+    const double deg = 20.0, th = deg * CV_PI / 180.0;
+    const double c = std::cos(th), sn = std::sin(th), tx = 30.0, ty = -12.0;
+    const QVector<QPointF> base = {QPointF(120, 90), QPointF(330, 110), QPointF(210, 300),
+                                   QPointF(420, 260)};
+    QVector<QPointF> pixels, robots;
+    for (const QPointF &p : base) {
+        pixels << p;
+        robots << QPointF(c * p.x() - sn * p.y() + tx, sn * p.x() + c * p.y() + ty);
+    }
+    const QPointF dupPixel = pixels[1];                     // 整行重复：像素与机器人位都一致
+    const QPointF dupRobot = robots[1];
+    pixels << dupPixel;
+    robots << dupRobot;
+
+    const HandEyeRun r = runHandEye(pairsText(pixels, robots), key);
+    QStringList problems;
+    if (!r.green)
+        problems << QStringLiteral("精确重复行被一起判红（原因栏=「%1」）").arg(r.note);
+    const QString dev = vecDeviation(r.matrix, {c, -sn, tx, sn, c, ty}, 1e-6);
+    if (!dev.isEmpty())
+        problems << QStringLiteral("去重后矩阵偏离真值：") + dev;
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[R-1 ⑤精确重复行实测 green=%1 原因栏=「%2」矩阵=[%3] 最大残差=%4] ")
+                            .arg(r.green).arg(r.note).arg(csvOf(r.matrix)).arg(r.maxResidual)
+                        + problems.join(QStringLiteral(" | "))));
+    CalibrationManager::instance()->remove(key);
+}
+
+// 残差"可见"这一半：节点报回的数必须等于**按节点自己报回的矩阵**逐对算出来的最大残差。
+// 只钉可见性，不钉阈值——阈值要多大算退化得真机数据才能定（R-1b，与 O-1 同性质）。
+void CalibChainTest::handEyeResidualReadoutMatchesFit()
+{
+    struct Set { const char *name; double scale; };
+    const Set sets[] = {{"刚体真值", 1.0}, {"带 2x 缩放", 2.0}};
+
+    QStringList problems;
+    for (const Set &s : sets) {
+        const QString key = QStringLiteral("c2test_handeye_res");
+        CalibrationManager::instance()->remove(key);
+        const double deg = 15.0, th = deg * CV_PI / 180.0;
+        const double c = std::cos(th), sn = std::sin(th);
+        const QVector<QPointF> pixels = {QPointF(100, 100), QPointF(300, 120), QPointF(200, 320),
+                                         QPointF(410, 260)};
+        QVector<QPointF> robots;
+        for (const QPointF &p : pixels)
+            robots << QPointF(s.scale * (c * p.x() - sn * p.y()), s.scale * (sn * p.x() + c * p.y()));
+
+        const HandEyeRun r = runHandEye(pairsText(pixels, robots), key);
+        if (!r.green) {
+            problems << QStringLiteral("%1：正常点对被判红（原因栏=「%2」）").arg(s.name).arg(r.note);
+            continue;
+        }
+        if (!r.hasMaxResidual)
+            problems << QStringLiteral("%1：calibMaxResidualPx 没有读数 ⇒ 残差不对外可见").arg(s.name);
+        // ⚠️ 自算必须用**节点真正拿去拟合的那份数**：pairsText 按 'f',6 写文本，解析回来的坐标
+        // 已取整，直接拿未取整的 QPointF 会比出另一个数（实测 5.88336e-07 vs 2.20616e-07）。
+        auto round6 = [](double d) { return QString::number(d, 'f', 6).toDouble(); };
+        double want = 0.0;
+        for (int i = 0; i < pixels.size(); ++i) {
+            const double px = round6(pixels[i].x()), py = round6(pixels[i].y());
+            const double rx = round6(robots[i].x()), ry = round6(robots[i].y());
+            const QPointF fit(r.matrix[0] * px + r.matrix[1] * py + r.matrix[2],
+                              r.matrix[3] * px + r.matrix[4] * py + r.matrix[5]);
+            want = std::max(want, std::hypot(fit.x() - rx, fit.y() - ry));
+        }
+        if (r.hasMaxResidual && std::abs(r.maxResidual - want) > 1e-9)
+            problems << QStringLiteral("%1：报回残差 %2 vs 按报回矩阵自算 %3").arg(s.name).arg(r.maxResidual).arg(want);
+        if (!r.desc.contains(QStringLiteral("残差")))
+            problems << QStringLiteral("%1：结果串里没有残差一项，操作员在面板上看不到拟合质量：「%2」").arg(s.name).arg(r.desc);
+        qInfo().noquote() << QStringLiteral("R-1 ⑤改后实测［残差读数·%1］报回=%2 自算=%3 结果串末行=「%4」")
+                                 .arg(s.name).arg(r.maxResidual).arg(want)
+                                 .arg(r.desc.section(QChar('\n'), -1));
+        CalibrationManager::instance()->remove(key);
+    }
+    QVERIFY2(problems.isEmpty(), qPrintable(QStringLiteral("R-1 ⑤ 残差读数不符：") + problems.join(QStringLiteral(" | "))));
+}
+
+// 同一个节点连跑两轮：第一轮好点对判绿、残差有读数；第二轮换成退化点对。
+// 判红分支必须把**上一轮**的原因栏与残差读数一起顶掉——留着旧数就是"红轮显示绿轮的残差"。
+void CalibChainTest::handEyeStaleReadoutClearedOnRed()
+{
+    const QString key = QStringLiteral("c2test_handeye_stale");
+    CalibrationManager::instance()->remove(key);
+
+    const double deg = 20.0, th = deg * CV_PI / 180.0;
+    const double c = std::cos(th), sn = std::sin(th);
+    const QVector<QPointF> goodPixels = {QPointF(120, 90), QPointF(330, 110), QPointF(210, 300)};
+    QVector<QPointF> goodRobots;
+    for (const QPointF &p : goodPixels)
+        goodRobots << QPointF(c * p.x() - sn * p.y() + 30.0, sn * p.x() + c * p.y() - 12.0);
+
+    HandEyeCalibNode node;
+    node.init();
+    node.setParam(QStringLiteral("pointsText"), pairsText(goodPixels, goodRobots));
+    node.setParam(QStringLiteral("saveName"), key);
+    feedImage(node, blankImage());
+    QVERIFY2(node.execute(), qPrintable(QStringLiteral("第一轮（好点对）应判绿，calibNote=") + noteOf(node)));
+    const double firstResidual = node.getParam(QStringLiteral("calibMaxResidualPx")).toDouble();
+    QVERIFY2(firstResidual >= 0.0,
+             qPrintable(QStringLiteral("第一轮判绿却没写残差读数（读到 %1）⇒ 第二轮无从判断有没有被顶掉").arg(firstResidual)));
+
+    // 第二轮：机器人侧 3 对全重合 ⇒ 退化判红
+    node.setParam(QStringLiteral("pointsText"), pairsText(goodPixels, QVector<QPointF>(3, QPointF(50, 50))));
+    const bool secondOk = node.execute();
+    const bool secondMs = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    const QString secondNote = noteOf(node);
+    const double secondResidual = node.getParam(QStringLiteral("calibMaxResidualPx")).toDouble();
+
+    QStringList problems;
+    if (secondOk || secondMs)
+        problems << QStringLiteral("第二轮退化输入仍判绿");
+    if (secondNote.isEmpty())
+        problems << QStringLiteral("第二轮原因栏空（上一轮的绿轮本来就该是空，说明这条没被写进 calibNote）");
+    if (secondResidual >= 0.0)
+        problems << QStringLiteral("第二轮还留着上一轮的残差读数 %1 ⇒ 判红轮没复位成无读数").arg(secondResidual);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[R-1 ⑤两轮实测 第一轮残差=%2 第二轮 execute=%3 moduleStatus=%4 残差=%5 原因栏=「%6」] ")
+                            .arg(firstResidual).arg(secondOk).arg(secondMs).arg(secondResidual).arg(secondNote)
+                        + problems.join(QStringLiteral(" | "))));
+    CalibrationManager::instance()->remove(key);
 }
 
 QTEST_MAIN(CalibChainTest)
