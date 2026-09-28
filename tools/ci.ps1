@@ -283,14 +283,17 @@ $qtestRe = [regex]'vfp_add_qtest\s*\(\s*NAME\s+(\S+)\s+TARGET\s+([A-Za-z0-9_\-\.
 $addTestRe = [regex]'add_test\s*\(\s*NAME\s+(\S+)\s+COMMAND\s+([A-Za-z0-9_\-\.]+)'
 $cmakeText = Get-Content 'CMakeLists.txt' -Raw
 $exeOf = @{}
+$targetOf = @{}
 $ownSrcOf = @{}
 foreach ($m in $qtestRe.Matches($cmakeText)) {
     $exeOf[$m.Groups[1].Value] = "$($m.Groups[2].Value).exe"
+    $targetOf[$m.Groups[1].Value] = $m.Groups[2].Value
     $ownSrcOf[$m.Groups[1].Value] = "tests/$($m.Groups[2].Value).cpp"
 }
 foreach ($m in $addTestRe.Matches($cmakeText)) {
     if (-not $exeOf.ContainsKey($m.Groups[1].Value)) {
         $exeOf[$m.Groups[1].Value] = "$($m.Groups[2].Value).exe"
+        $targetOf[$m.Groups[1].Value] = $m.Groups[2].Value
     }
 }
 
@@ -314,30 +317,137 @@ if ($missing.Count -gt 0) {
     exit 1
 }
 
-# Baseline: everything that goes into vfp_core, which every test binary links
-# (src/, include/, headers, CMakeLists). A test's own tests/<target>.cpp is compared
-# per executable - a single suite's source must not mark the other 28 binaries stale.
-$newestGlobal = @(Get-ChildItem -Recurse -Include '*.cpp','*.h','*.hpp' `
+# Three baseline faces, all derived from CMakeLists.txt (the single source of truth for links):
+#   newestGlobal - every src/include source and header, plus CMakeLists.txt. Correct for a
+#                  product that links vfp_core: a change anywhere in that library relinks it.
+#   newestShared - headers and CMakeLists.txt only, i.e. the global face minus the .cpp files.
+#                  Used for a product that does NOT link vfp_core: a .cpp outside its own
+#                  add_executable() list is compiled into a library it never links, so it cannot
+#                  make that binary stale. Only a fallback here - see the closure below.
+#   closure      - for a product that does not link vfp_core, the transitive quoted #includes of
+#                  the sources its own add_executable() lists, plus CMakeLists.txt. A .h outside
+#                  that closure is recompiled into other products but NOT into this one, so MSBuild
+#                  correctly leaves this binary alone - and the header-only face would then call a
+#                  perfectly-built product stale.
+# The previous version applied the global face to every product on the premise that "every test
+# binary links vfp_core". Measured false: 1 of 33 registered tests does not (opencv_nodes_test),
+# and it was killed by src/ImageReadNode.cpp - a file that product never links or compiles.
+# Dropping to "all headers" then hit the same class of bug on the second axis, measured with a
+# REAL incremental build: touching include/AlarmHistoryDialog.h relinked all 32 vfp_core products
+# (00:51 UTC) but correctly left opencv_nodes_test.exe at 00:04, and the gate called that stale.
+# A target whose add_executable() face this parser cannot find keeps the FULL face, and a target
+# with a quoted include this scanner cannot resolve keeps the FULL header face; both are reported.
+# An unparsable face must never turn into an exemption.
+$cmakeBody = ((Get-Content 'CMakeLists.txt') | ForEach-Object { $_ -replace '^\s*#.*', '' }) -join ' '
+$faceOf = @{}
+$coreOf = @{}
+foreach ($m in [regex]::Matches($cmakeBody, 'add_executable\s*\(\s*([A-Za-z0-9_\-.]+)([^)]*)\)')) {
+    $faceOf[$m.Groups[1].Value] = @($m.Groups[2].Value -split '\s+' |
+        Where-Object { $_ -match '\.(cpp|c|cc)$' })
+}
+foreach ($m in [regex]::Matches($cmakeBody, 'target_link_libraries\s*\(\s*([A-Za-z0-9_\-.]+)([^)]*)\)')) {
+    if ($m.Groups[2].Value -match '(^|\s)vfp_core(\s|$)') { $coreOf[$m.Groups[1].Value] = $true }
+}
+
+# Transitive closure of quoted #includes reachable from a target's own sources. Returns the files
+# visited plus the tokens it could not locate: the caller must widen back to the full header face
+# on a non-empty 'missing', because an include this scanner cannot resolve is a hole in the
+# closure, not a licence to ignore that header. Commented-out includes are not followed (^# only).
+function Get-VfpIncludeClosure {
+    param([string[]]$Sources)
+    $seen = @{}
+    $missing = @()
+    $queue = New-Object System.Collections.Generic.Queue[string]
+    foreach ($s in $Sources) { if (Test-Path -LiteralPath $s) { $queue.Enqueue((Resolve-Path -LiteralPath $s).Path) } }
+    while ($queue.Count -gt 0) {
+        $cur = $queue.Dequeue()
+        if ($seen.ContainsKey($cur)) { continue }
+        if ($seen.Count -ge 200) { $missing += "$cur (closure cap reached)" ; continue }
+        $seen[$cur] = $true
+        $body = Get-Content -Raw -LiteralPath $cur -ErrorAction SilentlyContinue
+        if (-not $body) { continue }
+        $dir = Split-Path -Parent $cur
+        foreach ($m in [regex]::Matches($body, '(?m)^\s*#\s*include\s+"([^"]+)"')) {
+            $tok = $m.Groups[1].Value
+            $hit = $null
+            foreach ($c in @((Join-Path $dir $tok), (Join-Path 'src' $tok), (Join-Path 'include' $tok))) {
+                if (Test-Path -LiteralPath $c) { $hit = (Resolve-Path -LiteralPath $c).Path; break }
+            }
+            if ($hit) { $queue.Enqueue($hit) } else { $missing += "$cur -> `"$tok`"" }
+        }
+    }
+    @{ files = @($seen.Keys); missing = @($missing) }
+}
+
+$allFace = @(Get-ChildItem -Recurse -Include '*.cpp','*.h','*.hpp' `
     -Path 'src','include' -ErrorAction SilentlyContinue) +
-    @(Get-Item 'CMakeLists.txt' -ErrorAction SilentlyContinue) |
-    Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+    @(Get-Item 'CMakeLists.txt' -ErrorAction SilentlyContinue)
+$sharedFace = @(Get-ChildItem -Recurse -Include '*.h','*.hpp' `
+    -Path 'src','include' -ErrorAction SilentlyContinue) +
+    @(Get-Item 'CMakeLists.txt' -ErrorAction SilentlyContinue)
+$baseGlobal = @( $allFace | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1 )
+$baseShared = @( $sharedFace | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1 )
+if ($baseGlobal.Count -gt 0) { $baseGlobal = $baseGlobal[0] } else { $baseGlobal = $null }
+if ($baseShared.Count -gt 0) { $baseShared = $baseShared[0] } else { $baseShared = $null }
+Write-Host "  face: $($allFace.Count) files on the vfp_core baseline, $($sharedFace.Count) on the header-only baseline" -ForegroundColor DarkGray
+
 $stale = @()
+$narrow = @()
+$faceUnknown = @()
+$closureFallback = @()
+$closureSizes = @()
 foreach ($t in $listed) {
-    $ref = $newestGlobal
-    $own = if ($ownSrcOf.ContainsKey($t)) { Get-Item $ownSrcOf[$t] -ErrorAction SilentlyContinue } else { $null }
-    if ($own -and (-not $ref -or $own.LastWriteTimeUtc -gt $ref.LastWriteTimeUtc)) { $ref = $own }
+    $target = if ($targetOf.ContainsKey($t)) { $targetOf[$t] } else { $null }
+    $faceKnown = ($target -and $faceOf.ContainsKey($target))
+    $own = @()
+    if ($faceKnown) {
+        $own = @(foreach ($s in $faceOf[$target]) { Get-Item $s -ErrorAction SilentlyContinue })
+    } else {
+        if ($target) { $faceUnknown += "$t ($target)" }
+        # Unresolved face: keep the suite's own tests/<target>.cpp as an extra source to check,
+        # exactly as this step did before the per-target face existed.
+        $ownSrc = if ($ownSrcOf.ContainsKey($t)) { Get-Item $ownSrcOf[$t] -ErrorAction SilentlyContinue } else { $null }
+        if ($ownSrc) { $own = @($ownSrc) }
+    }
+    $newestOwn = @($own | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1)
+    if ($newestOwn.Count -gt 0) { $newestOwn = $newestOwn[0] } else { $newestOwn = $null }
+
+    $narrowed = ($faceKnown -and -not $coreOf.ContainsKey($target))
+    $ref = $baseGlobal
+    if ($narrowed) {
+        $narrow += $t
+        $cl = Get-VfpIncludeClosure -Sources @($faceOf[$target])
+        if (@($cl.missing).Count -gt 0) {
+            $closureFallback += ($target + ' - ' + ((@($cl.missing)) -join '; '))
+            $ref = $baseShared
+        } else {
+            $closureFace = @(foreach ($f in @($cl.files)) { Get-Item -LiteralPath $f -ErrorAction SilentlyContinue }) +
+                @(Get-Item 'CMakeLists.txt' -ErrorAction SilentlyContinue)
+            $newest = @($closureFace | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1)
+            $ref = if ($newest.Count -gt 0) { $newest[0] } else { $baseShared }
+            $closureSizes += "$target -> $(@($cl.files).Count) file(s), baseline $(if ($newest.Count -gt 0) { $newest[0].Name } else { '(none)' })"
+        }
+    }
+    if ($newestOwn -and (-not $ref -or $newestOwn.LastWriteTimeUtc -gt $ref.LastWriteTimeUtc)) { $ref = $newestOwn }
     if (-not $ref) { continue }
     $exe = Get-Item (Join-Path $binDir $exeOf[$t])
     if ($exe.LastWriteTimeUtc -lt $ref.LastWriteTimeUtc) {
         $stale += "$($exe.Name) (built $(($exe.LastWriteTimeUtc.ToString('yyyy-MM-dd HH:mm:ss')) + ' UTC') < $($ref.Name) $(($ref.LastWriteTimeUtc.ToString('yyyy-MM-dd HH:mm:ss')) + ' UTC'))"
     }
 }
+foreach ($u in $faceUnknown) {
+    Write-Warn "no add_executable() face parsed for $u - kept on the full vfp_core baseline (an unparsable face is never an exemption)"
+}
+foreach ($c in $closureSizes) { Write-Host "  closure: $c" -ForegroundColor DarkGray }
+foreach ($c in $closureFallback) {
+    Write-Warn "include closure incomplete for $c - kept on the full header baseline (an unresolved include is never an exemption)"
+}
 if ($stale.Count -gt 0) {
     foreach ($s in $stale) { Write-Err "stale test binary (older than its sources, build skipped it?): $s" }
     Pop-Location
     exit 1
 }
-Write-Ok "$($listed.Count) registered tests, executables present and fresh"
+Write-Ok "$($listed.Count) registered tests, executables present and fresh ($($narrow.Count) judged on their own include closure)"
 
 if ($SkipTests) {
     Write-Step 'Summary'
