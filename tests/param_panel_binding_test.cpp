@@ -24,6 +24,11 @@
 //      并用「直接写同一个控件必须发信号」排除 spy 挂错对象的假绿 ⇒ 12 处 blocker 撤任意一处都红。
 //      仍未覆盖：48 个真算子的值级扫描（＝U-7 的路线②，另算一轮）与不走自动面板的手写面板
 //      （契约见 §3.7 表 1，无 paramSpecs 的那 25 个算子见 §3.10 表 3／U-8）。
+// ✅ U-16 本轮（推进计划 §3.16；原登记见 §3.14「登记未修」）：上面那句「仍未覆盖」里指的**建控件侧**
+//      那 13 处 QSignalBlocker（createAutoParamPanel 播种段 :964～:1020）撤掉后没有任何测试会红。
+//      T10 把「建面板这一步本身不得有对外写回痕迹」立成闸，跑两个场景（表值==默认值／表值≠默认值），
+//      并用「直写同一个控件必须改参数表」排除零痕迹是空转；T11 把 §3.14 表 3 那条**静态推导**
+//      （播种落在哪条腿／哪件控件，含 :982～:984 那条不可达腿）跑成运行期读数。
 #include <QtTest>
 #include <QApplication>
 #include <QSignalSpy>
@@ -36,6 +41,8 @@
 #include <QCheckBox>
 #include <QPlainTextEdit>
 #include <QWidget>
+#include <QFormLayout>
+#include <QSet>
 #include <QPointF>
 #include <QRectF>
 
@@ -167,6 +174,9 @@ private slots:
     // U-7：刷新侧自身的查找名／控件类型／写入值（值级回读，不再只靠手抄镜像）
     void testRefreshSideEmitsNoWriteBackSignal();
     void testRefreshSideWritesIntoMirrorNamedControl();
+    // U-16：建面板这一步本身（createAutoParamPanel 的播种段）受检
+    void testCreationPhaseLeavesNoWriteBackTrace();     // T10：创建期不得有对外写回痕迹
+    void testCreationSeedLandingLegIsPinned();          // T11：播种落在哪条腿／哪件控件的运行期读数
 };
 
 // ── T1 最小复现：把 F-2 的悬空前提变成实测 ──
@@ -762,6 +772,66 @@ bool u9ProbeWrite(QWidget *w)
     return false;
 }
 
+// T10（U-16）用：把控件"当前显示的值"原样再写一次（不包 blocker）。覆盖的类与 u9SpyOf 一一对应。
+// 这条不是推断：§3.14 把"播的初值等于表里的当前值 ⇒ 看不出来"当**前提**写着，本轮把它跑成读数
+// （同值写回到底发不发射、发射了会不会改表／点定时器），逐臂记进 u16 的 dump 行。
+bool u10SameValueWrite(QWidget *w)
+{
+    if (auto *x = qobject_cast<QSpinBox *>(w)) { x->setValue(x->value()); return true; }
+    if (auto *x = qobject_cast<QDoubleSpinBox *>(w)) { x->setValue(x->value()); return true; }
+    if (auto *x = qobject_cast<QCheckBox *>(w)) { x->setChecked(x->isChecked()); return true; }
+    if (auto *x = qobject_cast<QPlainTextEdit *>(w)) { x->setPlainText(x->toPlainText()); return true; }
+    if (auto *x = qobject_cast<QLineEdit *>(w)) { x->setText(x->text()); return true; }
+    if (auto *x = qobject_cast<QComboBox *>(w)) { x->setCurrentIndex(x->currentIndex()); return true; }
+    return false;
+}
+
+// 两份参数表快照的差异 → 一行可读文字（失败消息里必须看得见"哪个键从什么变成什么"）
+QString u10TableDiffText(const QMap<QString, QVariant> &before, const QMap<QString, QVariant> &after)
+{
+    QStringList out;
+    const QStringList keys = QMap<QString, QVariant>(before).keys() + QMap<QString, QVariant>(after).keys();
+    QSet<QString> seen;
+    for (const QString &k : keys) {
+        if (seen.contains(k)) continue;
+        seen.insert(k);
+        const QVariant b = before.value(k), a = after.value(k);
+        if (b == a && before.contains(k) == after.contains(k)) continue;
+        QString bs, as;
+        QDebug(&bs) << b;
+        QDebug(&as) << a;
+        out << QStringLiteral("%1: %2 -> %3").arg(k, bs, as);
+    }
+    return out.join(QStringLiteral(" ; "));
+}
+
+// T11 用：往上一路爬到「父件挂着 QFormLayout」的那一层 ⇒ 这一层的 widget 就是 form 的 field 槽位上
+// 的东西，也正是 createAutoParamPanel 里的局部变量 editor。用它就能实测「:982 的
+// qobject_cast<QLineEdit *>(editor) 到底能不能成立」，而不是靠读盘推。
+QWidget *fieldOfWidget(QWidget *w)
+{
+    QWidget *cur = w;
+    while (cur && cur->parentWidget()) {
+        if (qobject_cast<QFormLayout *>(cur->parentWidget()->layout()))
+            return cur;
+        cur = cur->parentWidget();
+    }
+    return nullptr;
+}
+
+// T11 用：**不限类**按 objectName 找后代里第一个叫这个名字的 widget。
+// findChildByNameAndClass 问的是"有没有该类且具名的控件"，这里问的是"面板里到底存不存在
+// 一个叫参数名本身的对象"——两把尺子合起来才能把 :950（单值类型具名覆盖）与 :946～:948
+// （复合／容器类型不覆盖）这两条口径分别钉住。
+QWidget *widgetNamedAnywhere(QWidget *root, const QString &name)
+{
+    const QList<QWidget *> all = root->findChildren<QWidget *>();
+    for (QWidget *w : all) {
+        if (w->objectName() == name) return w;
+    }
+    return nullptr;
+}
+
 
 // 一个臂＝一种 ParamType，只声明一个参数，控件全部由产品的自动面板建出来
 class U7TypeFixture : public HalconNode
@@ -861,6 +931,32 @@ public:
     {
         if (m_previewTimer)
             m_previewTimer->stop();
+    }
+
+    // T10（U-16）用：建面板期间「有没有人写回参数表」＝比较这两次快照
+    QMap<QString, QVariant> tableSnapshot() const { return m_params.snapshot(); }
+    // T11 用：绕开 setParam 的范围钳制直写表，造"表里本来就存着越界值"的现场
+    //（生产上这条路真实存在：m_params 可被直接写下发／旧方案载入的值不会被 spec 夹住）
+    void writeTableDirect(const QVariant &v) { setParamDirect(QStringLiteral("alpha"), v); }
+    // 该臂能否做"越界读数"：给不出（无效 QVariant）的臂跳过这一条腿
+    QVariant outOfRangeValue() const
+    {
+        switch (m_arm) {
+        case ArmInt: return 300;            // spec 声明 0..100
+        case ArmDouble: return 1234.5;      // spec 声明 0.0..100.0
+        case ArmEnum: return 7;             // 只有 e0／e1／e2 三项
+        default: return QVariant();
+        }
+    }
+    // 越界表值在面板上会被夹成什么（运行期回读要等于它；参数表侧仍应留着越界值）
+    QString outOfRangeDisplay() const
+    {
+        switch (m_arm) {
+        case ArmInt: return QStringLiteral("100");
+        case ArmDouble: return QStringLiteral("100.0000");
+        case ArmEnum: return QStringLiteral("2");
+        default: return QString();
+        }
     }
 
 private:
@@ -1059,6 +1155,285 @@ void ParamPanelBindingTest::testRefreshSideEmitsNoWriteBackSignal()
     QCOMPARE(spies, 13);
     QVERIFY2(problems.isEmpty(),
              qPrintable(QStringLiteral("U9-SILENCE: 刷新侧有 %1 处越界（明细逐条随附）\n%2")
+                            .arg(problems.size()).arg(problems.join(QStringLiteral("\n")))));
+}
+
+
+// ── T10（U-16）：建面板这一步本身受检 ──
+// §3.14 实测过：撤掉 createAutoParamPanel 播种段那 13 处 QSignalBlocker（:964～:1020）没有任何测试会红，
+// 并把原因写成三条**前提**（spy 挂在建面板之后／创建时自动预览还没开／播的初值等于表值）。本条不复制
+// T9 的口径（T9 管刷新），而是把「建面板期间不得留下对外写回痕迹」立成闸，两个场景各跑一遍：
+//   S0 表值 == 控件默认值（新建节点，播种是"同值赋值"）
+//   S1 表值 ≠ 控件默认值（先改参数表再开面板＝载入方案后操作工打开面板的真实顺序 ⇒ 播种是一次真值变化）
+// 只有 S1 才有资格说"这里如果连着线就会出事"，所以两场景都要跑；空转由 ④ 的两条探针排除。
+// 边界（不越界声明）：九臂是合成夹具、一次一个参数，走的仍是产品的 createAutoParamPanel；真算子与
+//                    手写面板那两面照旧归 U-14／U-8。
+void ParamPanelBindingTest::testCreationPhaseLeavesNoWriteBackTrace()
+{
+    const QList<U7Arm> arms = {ArmInt, ArmDouble, ArmBool, ArmString, ArmFilePath,
+                               ArmMultiLine, ArmEnum, ArmPoint, ArmRect};
+    QStringList problems;
+    int readbacks = 0;      // 创建期回读次数（应 13 控件 × 2 场景 = 26）
+    int sameWrites = 0;     // 同值写回探针次数（每臂每场景一次 = 18）
+    int diffWrites = 0;     // 异值直写探针次数（同上 = 18）
+
+    for (int scenario = 0; scenario < 2; ++scenario) {
+        const QString stag = scenario == 0 ? QStringLiteral("S0") : QStringLiteral("S1");
+        for (U7Arm arm : arms) {
+            const QString tag = QStringLiteral("%1/%2").arg(stag, QString::fromLatin1(u7ArmTag(arm)));
+            U7TypeFixture node(arm);
+            node.init();
+            node.setAutoPreviewEnabled(true);   // 让任何一次经 setParam 的写回都留下定时器痕迹
+            const QStringList expected = scenario == 0 ? node.beforeDisplays() : node.afterDisplays();
+            if (scenario == 1) {
+                node.applyAfterValues();        // 合法改表（本身会点定时器）
+                node.stopPreviewTimer();        // 归零 ⇒ 之后定时器再起来只能由建面板造成
+            }
+            if (node.previewTimerActive())
+                problems << QStringLiteral("%1 :: 建面板之前定时器就没归零，计时器腿无从判定").arg(tag);
+
+            const QMap<QString, QVariant> table0 = node.tableSnapshot();
+            QWidget *panel = node.createParamPanel();
+            if (!panel) {
+                problems << QStringLiteral("%1 :: createParamPanel 返回空").arg(tag);
+                continue;
+            }
+
+            // ① 先钉住"播种落到了镜像清单点名的那批控件上"——认错控件必须在这里红，
+            //     不能伪装成下面②③的"零痕迹"
+            QList<QWidget *> controls;
+            for (const ParamSpec &s : node.paramSpecs()) {
+                for (const NamedControl &c : controlsTheRefresherLooksFor(s)) {
+                    QWidget *w = findChildByNameAndClass(panel, c.cls, c.name);
+                    if (!w) {
+                        problems << QStringLiteral("%1 :: 镜像清单点名的控件 objectName=\"%2\" class=%3 没建出来")
+                                        .arg(tag, c.name, QString::fromLatin1(c.cls));
+                        continue;
+                    }
+                    controls << w;
+                }
+            }
+            if (controls.size() != expected.size()) {
+                problems << QStringLiteral("%1 :: 找到 %2 个控件，应为 %3 个")
+                                .arg(tag).arg(controls.size()).arg(expected.size());
+            } else {
+                for (int i = 0; i < controls.size(); ++i) {
+                    const QString got = u7DisplayOf(controls.at(i));
+                    if (got != expected.at(i))
+                        problems << QStringLiteral("%1 :: 创建期回读 #%2 = \"%3\"，应为 \"%4\""
+                                                   "（播种没落到这里 ⇒ ②③的零痕迹是空转）")
+                                        .arg(tag).arg(i).arg(got, expected.at(i));
+                    ++readbacks;
+                }
+            }
+
+            // ② 建面板期间参数表逐键不得变
+            const QString diff = u10TableDiffText(table0, node.tableSnapshot());
+            if (!diff.isEmpty())
+                problems << QStringLiteral("%1 :: 建面板期间参数表被改写：%2").arg(tag, diff);
+
+            // ③ 建面板期间预览防抖定时器不得被点起来
+            const bool timerAfter = node.previewTimerActive();
+            if (timerAfter)
+                problems << QStringLiteral("%1 :: 建面板期间预览防抖定时器被点起（创建期写回留下了痕迹）").arg(tag);
+
+            qDebug().noquote() << QStringLiteral("u16|t10 arm=%1 scenario=%2 controls=%3"
+                                                 " table_diff_empty=%4 timer_after_create=%5")
+                                    .arg(QString::fromLatin1(u7ArmTag(arm)), stag)
+                                    .arg(controls.size())
+                                    .arg(diff.isEmpty() ? 1 : 0)
+                                    .arg(timerAfter ? 1 : 0);
+
+            if (controls.isEmpty()) {
+                problems << QStringLiteral("%1 :: 一个控件都没找到，两条探针无从执行").arg(tag);
+                delete panel;
+                continue;
+            }
+            QWidget *w = controls.first();
+
+            // ④a 同值写回的运行期语义（§3.14 把它当前提，这里跑成读数）：不改表是硬要求；
+            //      定时器起没起按臂记录，不预设结论
+            {
+                const QMap<QString, QVariant> base = node.tableSnapshot();
+                if (!u10SameValueWrite(w)) {
+                    problems << QStringLiteral("%1 :: 同值写回探针没有覆盖该类控件").arg(tag);
+                } else {
+                    ++sameWrites;
+                    const QString d = u10TableDiffText(base, node.tableSnapshot());
+                    const bool t = node.previewTimerActive();
+                    node.stopPreviewTimer();
+                    qDebug().noquote() << QStringLiteral("u16|t10-same arm=%1 scenario=%2"
+                                                         " changed_table=%3 started_timer=%4")
+                                            .arg(QString::fromLatin1(u7ArmTag(arm)), stag)
+                                            .arg(d.isEmpty() ? 0 : 1).arg(t ? 1 : 0);
+                    if (!d.isEmpty())
+                        problems << QStringLiteral("%1 :: 同值写回竟然改了参数表：%2").arg(tag, d);
+                }
+            }
+
+            // ④b 异值直写必须留痕：否则 ②③ 的"零痕迹"是空转（写回线压根没接上）
+            {
+                const QMap<QString, QVariant> base = node.tableSnapshot();
+                if (!u9ProbeWrite(w)) {
+                    problems << QStringLiteral("%1 :: 异值直写探针没有覆盖该类控件").arg(tag);
+                } else {
+                    ++diffWrites;
+                    const QString d = u10TableDiffText(base, node.tableSnapshot());
+                    const bool t = node.previewTimerActive();
+                    node.stopPreviewTimer();
+                    qDebug().noquote() << QStringLiteral("u16|t10-probe arm=%1 scenario=%2"
+                                                        " changed_table=%3 started_timer=%4")
+                                            .arg(QString::fromLatin1(u7ArmTag(arm)), stag)
+                                            .arg(d.isEmpty() ? 0 : 1).arg(t ? 1 : 0);
+                    if (d.isEmpty())
+                        problems << QStringLiteral("%1 :: 直写控件没改参数表 ⇒ ② 是空转"
+                                                   "（写回线没接到 setParam）").arg(tag);
+                    if (!t)
+                        problems << QStringLiteral("%1 :: 直写控件没点起预览定时器 ⇒ ③ 是空转").arg(tag);
+                }
+            }
+            delete panel;
+        }
+    }
+    // 九臂 × 两场景：回读 26 次、两条探针各 18 次 ⇒ 少一臂或整个场景被跳过，当场红
+    QCOMPARE(readbacks, 26);
+    QCOMPARE(sameWrites, 18);
+    QCOMPARE(diffWrites, 18);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("U16-CREATION: 创建期有 %1 处越界或空转（明细逐条随附）\n%2")
+                            .arg(problems.size()).arg(problems.join(QStringLiteral("\n")))));
+}
+
+// ── T11（U-16 路线②）：播种到底落在哪条腿／哪个对象 ──
+// §3.14 表 3 里"createAutoParamPanel 对 String／FilePath 走的是 else 分支（:987 findChild），
+// :982～:984 那条腿连同它的 blocker 不可达"是**读盘推导**。本条把它换成运行期读数：
+// 行内控件（QFormLayout 的 field）到底是不是 QLineEdit、参数名到底挂在容器还是子件上、
+// Point／Rect 的"参数名"对象是否存在。外加越界表值的夹取读数（只夹显示、不回写、不报警）。
+void ParamPanelBindingTest::testCreationSeedLandingLegIsPinned()
+{
+    const QList<U7Arm> arms = {ArmInt, ArmDouble, ArmBool, ArmString, ArmFilePath,
+                               ArmMultiLine, ArmEnum, ArmPoint, ArmRect};
+    QStringList problems;
+    int legReadings = 0;
+    int rangeReadings = 0;
+
+    for (U7Arm arm : arms) {
+        const QString tag = QString::fromLatin1(u7ArmTag(arm));
+        U7TypeFixture node(arm);
+        node.init();
+        QWidget *panel = node.createParamPanel();
+        if (!panel) {
+            problems << QStringLiteral("%1 :: createParamPanel 返回空").arg(tag);
+            continue;
+        }
+        const QString pname = node.paramSpecs().constFirst().name;
+        QWidget *namedQLine = findChildByNameAndClass(panel, "QLineEdit", pname);   // :987 那条 findChild 的落点
+        QWidget *namedAny = widgetNamedAnywhere(panel, pname);                       // :950 具名覆盖的落点
+        const bool hasNamedLineEdit = namedQLine != nullptr;
+        const bool hasNamedAny = namedAny != nullptr;
+
+        // 播种落点的三类形态（逐类抄自 createAutoParamPanel 的 :946～:951 与 :961～:1023）：
+        //  单值类型（Int/Double/Bool/MultiLine/Enum）：editor 自身被覆盖成参数名 ⇒ 直接命中该类的 editor
+        //  String／FilePath：editor 是容器（不覆盖 objectName），参数名挂在**子件** QLineEdit 上
+        //  Point／Rect：子件叫 "<名>_x" 等 ⇒ 叫"参数名"本身的对象根本不存在
+        QList<QWidget *> controls;
+        for (const ParamSpec &s : node.paramSpecs()) {
+            for (const NamedControl &c : controlsTheRefresherLooksFor(s)) {
+                QWidget *w = findChildByNameAndClass(panel, c.cls, c.name);
+                if (!w) {
+                    problems << QStringLiteral("%1 :: 镜像清单点名的控件 objectName=\"%2\" class=%3 没建出来")
+                                    .arg(tag, c.name, QString::fromLatin1(c.cls));
+                    continue;
+                }
+                controls << w;
+            }
+        }
+        if (controls.isEmpty()) {
+            problems << QStringLiteral("%1 :: 一个控件都没找到").arg(tag);
+            delete panel;
+            continue;
+        }
+
+        const bool composite = (arm == ArmPoint || arm == ArmRect);
+        const bool lineFamily = (arm == ArmString || arm == ArmFilePath);
+        QWidget *first = controls.first();
+        QWidget *field = fieldOfWidget(first);
+        if (!field) {
+            problems << QStringLiteral("%1 :: 爬不到挂 QFormLayout 的那一层，落点无从判定").arg(tag);
+            delete panel;
+            continue;
+        }
+        const bool fieldEqualsControl = (field == first);
+        const bool fieldIsLineEdit = (qobject_cast<QLineEdit *>(field) != nullptr);
+
+        // 口径：单值类型的 field 就是控件本身（:950 把 editor 的 objectName 覆盖成参数名）；
+        //       String／FilePath 与 Point／Rect 的 field 是容器 ⇒ 具名对象只能是容器里的子件
+        if (!lineFamily && !composite) {
+            if (!fieldEqualsControl)
+                problems << QStringLiteral("%1 :: 单值类型的 field 竟然不是被点名的控件本身（field class=%2）")
+                                .arg(tag, QString::fromLatin1(field->metaObject()->className()));
+            if (!hasNamedAny)
+                problems << QStringLiteral("%1 :: 没有任何对象的 objectName 等于参数名 ⇒ :950 的具名覆盖变了").arg(tag);
+        }
+        if (lineFamily) {
+            // 这一条就是 :982～:984 那条腿不可达的运行期依据：field（＝产品代码里的 editor）
+            // 不是 QLineEdit ⇒ 那个 qobject_cast 恒假 ⇒ 真正执行的是 :987 的 findChild 分支
+            if (fieldIsLineEdit)
+                problems << QStringLiteral("%1 :: field 本身就是 QLineEdit ⇒ :982 那条腿变成活腿"
+                                           "（:983 的 blocker 不再是死代码）").arg(tag);
+            if (!hasNamedLineEdit)
+                problems << QStringLiteral("%1 :: 子件没挂上参数名 ⇒ :987 那条分支的落点变了").arg(tag);
+        }
+        if (composite) {
+            if (fieldEqualsControl)
+                problems << QStringLiteral("%1 :: 复合参数的 field 竟然直接就是被点名的子件").arg(tag);
+            if (hasNamedAny)
+                problems << QStringLiteral("%1 :: 复合参数不该存在一个叫参数名本身的对象（口径：只有带后缀的子件）").arg(tag);
+        }
+        ++legReadings;
+        qDebug().noquote() << QStringLiteral("u16|t11 arm=%1 controls=%2 named_lineedit=%3 named_any=%4"
+                                             " field_class=%5 field_equals_control=%6 field_is_lineedit=%7")
+                                .arg(tag).arg(controls.size())
+                                .arg(hasNamedLineEdit ? 1 : 0)
+                                .arg(hasNamedAny ? 1 : 0)
+                                .arg(QString::fromLatin1(field->metaObject()->className()))
+                                .arg(fieldEqualsControl ? 1 : 0)
+                                .arg(fieldIsLineEdit ? 1 : 0);
+
+        // 越界表值读数：只夹显示，参数表原值不动（也没有任何人报警）
+        const QVariant oor = node.outOfRangeValue();
+        if (oor.isValid()) {
+            node.writeTableDirect(oor);
+            QWidget *panel2 = node.createParamPanel();
+            if (!panel2) {
+                problems << QStringLiteral("%1 :: 越界臂 createParamPanel 返回空").arg(tag);
+            } else {
+                QWidget *w2 = findChildByNameAndClass(panel2, controlsTheRefresherLooksFor(
+                                          node.paramSpecs().constFirst()).constFirst().cls,
+                                      pname);
+                const QString shown = w2 ? u7DisplayOf(w2) : QStringLiteral("<not found>");
+                const QVariant kept = node.getParam(pname);
+                const QString want = node.outOfRangeDisplay();
+                qDebug().noquote() << QStringLiteral("u16|t11-range arm=%1 table_value=%2"
+                                                     " displayed=%3 expected_display=%4")
+                                        .arg(tag).arg(kept.toString(), shown, want);
+                if (shown != want)
+                    problems << QStringLiteral("%1 :: 越界表值 %2 的显示夹取读数 = \"%3\"，应为 \"%4\"")
+                                    .arg(tag).arg(oor.toString(), shown, want);
+                if (kept != oor)
+                    problems << QStringLiteral("%1 :: 创建期把越界值夹好后回写进了参数表（%2 -> %3）"
+                                               "——与本用例钉住的口径相反")
+                                    .arg(tag).arg(oor.toString(), kept.toString());
+                ++rangeReadings;
+                delete panel2;
+            }
+        }
+        delete panel;
+    }
+    QCOMPARE(legReadings, 9);
+    QCOMPARE(rangeReadings, 3);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("U16-LEGS: 播种落点有 %1 处与口径不符（明细逐条随附）\n%2")
                             .arg(problems.size()).arg(problems.join(QStringLiteral("\n")))));
 }
 
