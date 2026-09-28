@@ -3,6 +3,7 @@
 #include <QByteArray>
 #include <QStringList>
 #include <QIODevice>
+#include <QPointer>
 #include <QWidget>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -639,7 +640,12 @@ QWidget *HalconNode::createParamPanel()
         layout->addWidget(label);
         
         // 延迟初始化输入图像下拉菜单，确保能获取到场景
-        QTimer::singleShot(100, [=]() {
+        // 上下文对象=inputImageCombo：面板销毁时这条待定定时器必须一起取消（推进计划 §3.26 U-20）
+        QPointer<HalconNode> selfGuard(this);   // 节点可先于面板销毁（FlowScene::removeNode），U-20
+        QTimer::singleShot(100, inputImageCombo, [=]() {
+            if (!selfGuard) {
+                return;              // 节点已亡：这次延迟初始化不再有意义
+            }
             // 保存当前选择
             int currentIndex = inputImageCombo->currentIndex();
             QVariant currentData = inputImageCombo->itemData(currentIndex);

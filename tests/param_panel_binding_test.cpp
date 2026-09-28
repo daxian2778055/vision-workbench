@@ -64,6 +64,7 @@
 #include "ColorConversionNode.h"
 #include "HalconImageSourceNode.h"
 #include "HalconNode.h"
+#include "ImageReadNode.h"
 #include "NodeRegistry.h"
 #include "VariablePanel.h"
 
@@ -200,6 +201,8 @@ private slots:
     // U-8：把「哪些算子一个参数声明都不发」立成显式名单闸（见 §3.22）
     void testOperatorsWithoutParamSpecsAreExactlyThisRoster();
     // U-5 T15：两处无名 findChild（FilePath 浏览按钮／变量引用内嵌腿）的「单候选」运行期读数
+    // U-20 T16：悬空的 QTimer::singleShot（无上下文对象）在面板／节点销毁后照样跑吗（机制＋分腿＋全表面名单）
+    void testPendingSingleShotIsNotDetonatedByNextEventLoop();
     void testUnnamedFindChildSitesAreSingleCandidate();
 };
 
@@ -2529,17 +2532,142 @@ void ParamPanelBindingTest::testUnnamedFindChildSitesAreSingleCandidate()
              qPrintable(QStringLiteral("U5-INSERTLEG: %1 条臂的运行期读数与期望表不符（明细见上方 [U5-T15-C]）\n%2")
                             .arg(armBad.size()).arg(armBad.join(QStringLiteral("\n")))));
 
-    // U-20 复现腿（只有 env VFP_U20_PROBE=1 才跑，默认门禁不含它）：上面的甲已把 73 个面板
-    // delete 掉，而两处 createParamPanel 各自挂了 QTimer::singleShot(100, [=]{…})（没有上下文对象，
-    // 站点见 src/ColorConversionNode.cpp:297 与 src/HalconNode.cpp:642）。此后只要跑一次事件循环，
-    // 那条延迟 lambda 就会解引用已经释放的控件。
-    if (qEnvironmentVariableIsSet("VFP_U20_PROBE")) {
-        qWarning().noquote() << "[U20-PROBE] sweep panels already deleted; spinning the event loop once";
-        QTest::qWait(200);
-        qWarning().noquote() << "[U20-PROBE] survived - no pending singleShot detonated";
-    }
 }
 
+
+// ── T16（U-20）：把「面板／节点已销毁，它挂出去的延迟 lambda 还在事件循环里等」变成默认门禁 ──
+// 七条腿，顺序是设计过的（进程一崩后面包不住，所以顺序与标记就是归因手段）：
+//   M  机制对照——不碰产线代码，只钉 Qt 那条「带上下文对象的 singleShot 会随接收者销毁而取消」成不成立；
+//   ccPanel / ccNode     站点 src/ColorConversionNode.cpp:297 的两种销毁先后；
+//   basePanel / baseNode 站点 src/HalconNode.cpp:642（四个走基类面板的算子）的两种销毁先后；
+//   imgStaleConnect      站点 src/ImageReadNode.cpp:515/:524：面板先死、信号后发（连接没断就会拿着已释放的布局）；
+//   sweep                全注册表面读数：哪些面板真排了这条定时器（名单闸）＋ 删完之后转一次事件循环。
+// 「先删谁」是两条独立的腿：删面板留节点＝生产里 ModuleEditorDialog 的生命周期；删节点留面板＝
+// FlowScene::removeNode 在编辑窗开着时删掉该节点。两处站点各自都实测到过崩，所以各自都立一条腿。
+void ParamPanelBindingTest::testPendingSingleShotIsNotDetonatedByNextEventLoop()
+{
+    registerAllNodes();
+    const QList<NodeRegistration> regs = NodeRegistry::instance().all();
+    QVERIFY2(regs.size() > 60,
+             qPrintable(QStringLiteral("注册表只枚举到 %1 个算子 ⇒ 分母已失效").arg(regs.size())));
+
+    QStringList legProblems;
+    auto buildOne = [&](const QString &id) -> QPair<HalconNode *, QWidget *> {
+        HalconNode *node = qobject_cast<HalconNode *>(NodeRegistry::instance().createById(id, this));
+        if (!node) { legProblems << QStringLiteral("%1:create-null").arg(id); return {}; }
+        node->init();
+        QWidget *panel = node->createParamPanel();
+        if (!panel) { legProblems << QStringLiteral("%1:panel-null").arg(id); delete node; return {}; }
+        return qMakePair(node, panel);
+    };
+    // 一条腿：建 ids 里的面板 → 只杀一侧 → 转 200 ms 事件循环 → 活着回来；崩在这里就停在标记之间
+    auto runLeg = [&](const char *leg, const QStringList &ids, bool killPanel, bool emitAfterPanelDeath) {
+        QList<QPair<HalconNode *, QWidget *>> alive;
+        for (const QString &id : ids) {
+            const auto np = buildOne(id);
+            if (np.first) alive.append(np);
+        }
+        qWarning().noquote() << QStringLiteral("[U20-T16-L] leg=%1 built=%2 killing=%3 emitAfter=%4 spinning")
+                                    .arg(QString::fromLatin1(leg))
+                                    .arg(alive.size())
+                                    .arg(killPanel ? QStringLiteral("PANEL(node kept)") : QStringLiteral("NODE(panel kept)"))
+                                    .arg(emitAfterPanelDeath);
+        if (killPanel) {
+            for (const auto &p : alive) delete p.second;
+            if (emitAfterPanelDeath) {
+                for (const auto &p : alive) {
+                    ImageReadNode *ir = qobject_cast<ImageReadNode *>(p.first);
+                    if (!ir) { legProblems << QStringLiteral("%1:not-ImageReadNode").arg(p.first->name()); continue; }
+                    ir->thumbnailUpdated();   // 生产里的 emit 站点：src/ImageReadNode.cpp:102/:192/:352
+                }
+            }
+            QTest::qWait(200);
+            qWarning().noquote() << QStringLiteral("[U20-T16-L] leg=%1 survived").arg(QString::fromLatin1(leg));
+            for (const auto &p : alive) delete p.first;
+        } else {
+            for (const auto &p : alive) delete p.first;
+            QTest::qWait(200);
+            qWarning().noquote() << QStringLiteral("[U20-T16-L] leg=%1 survived").arg(QString::fromLatin1(leg));
+            for (const auto &p : alive) delete p.second;   // 定时器已在上面那次转循环里跑过，这里收掉不留跨腿污染
+        }
+    };
+
+    // ── M 机制对照：两条各咬一侧，都不碰产线代码 ──
+    {
+        bool firedWithCtx = false;
+        QWidget *ctx = new QWidget();
+        QTimer::singleShot(30, ctx, [&firedWithCtx]() { firedWithCtx = true; });
+        delete ctx;                       // 接收者先死
+        QTest::qWait(150);
+        QVERIFY2(!firedWithCtx,
+                 "M1：带上下文对象的 singleShot 在接收者销毁后仍然触发 ⇒ 本轮修法所依赖的机制本身不成立");
+        // M2 是 M1 的负对照：同一尺寸／同一等待时长，只是**不传**上下文对象 ⇒ 必须照跑。
+        // 这条不随修复翻转（它量的就是缺陷来源），所以它红的时候 M1 那条绿也一起失去解释力。
+        bool firedNoCtx = false;
+        QTimer::singleShot(30, [&firedNoCtx]() { firedNoCtx = true; });
+        QTest::qWait(150);
+        QVERIFY2(firedNoCtx,
+                 "M2：不带上下文对象的定时器竟然没触发 ⇒ 对照的前提变了，M1 的绿不再算证据");
+        qWarning().noquote() << "[U20-T16-M] M1 cancelled-with-receiver=1 M2 fired-without-context=1";
+    }
+
+    const QStringList ccIds = {QStringLiteral("ColorConversionNode")};
+    const QStringList baseIds = {QStringLiteral("HistogramEqualizeNode"),
+                                 QStringLiteral("ContrastStretchNode"),
+                                 QStringLiteral("GrayStretchNode"),
+                                 QStringLiteral("ImageInvertNode")};
+    runLeg("ccPanel", ccIds, true, false);
+    runLeg("ccNode", ccIds, false, false);
+    runLeg("basePanel", baseIds, true, false);
+    runLeg("baseNode", baseIds, false, false);
+    runLeg("imgStaleConnect", {QStringLiteral("ImageReadNode")}, true, true);
+
+    // ── sweep 面读数：哪些面板里真有那颗 inputImageCombo（＝真排了这条 100 ms 定时器）──
+    // 判据用 objectName：全仓只有两处站点 setObjectName("inputImageCombo")（src/HalconNode.cpp:618、
+    // src/ColorConversionNode.cpp:262，U-1 具名化那轮的产物），所以"有这颗下拉"＝"走了这两处站点之一"。
+    // ⚠️ 预测口径不能只用「有没有 paramSpecs」：本轮实跑 no-spec 的算子有 25 个，而真排这条定时器的只有
+    //    5 个——另外 20 个自己写了面板（不走基类那份）。名单因此钉成运行期读数＋显式名单，两向都要相等。
+    QStringList scheduled;
+    QStringList panelFails;
+    int panelsBuilt = 0;
+    for (const NodeRegistration &reg : regs) {
+        const auto np = buildOne(reg.id);
+        if (!np.first) { panelFails << reg.id; continue; }
+        ++panelsBuilt;
+        if (np.second->findChild<QComboBox *>(QStringLiteral("inputImageCombo")) != nullptr)
+            scheduled << QStringLiteral("%1/%2").arg(reg.id,
+                                                     QString::fromLatin1(np.first->metaObject()->className()));
+        delete np.second;
+        delete np.first;
+    }
+    QStringList expected = {QStringLiteral("ColorConversionNode/ColorConversionNode"),
+                            QStringLiteral("ContrastStretchNode/ContrastStretchNode"),
+                            QStringLiteral("GrayStretchNode/GrayStretchNode"),
+                            QStringLiteral("HistogramEqualizeNode/HistogramEqualizeNode"),
+                            QStringLiteral("ImageInvertNode/ImageInvertNode")};
+    QStringList sortedActual = scheduled, sortedExpected = expected;
+    sortedActual.sort();
+    sortedExpected.sort();
+    qWarning().noquote() << QStringLiteral("[U20-T16-S] registry=%1 panelsBuilt=%2 scheduled=%3 panelFails=%4")
+                                .arg(regs.size()).arg(panelsBuilt).arg(scheduled.size()).arg(panelFails.size());
+    for (const QString &l : sortedActual) qWarning().noquote() << "  SCHED " << l;
+    if (!panelFails.isEmpty()) qWarning().noquote() << "  PANELFAIL " << panelFails.join(QStringLiteral(","));
+
+    QVERIFY2(legProblems.isEmpty() && panelFails.isEmpty() && panelsBuilt == regs.size(),
+             qPrintable(QStringLiteral("sweep 不完整：panelsBuilt=%1 registry=%2，问题：%3 / %4")
+                            .arg(panelsBuilt).arg(regs.size())
+                            .arg(legProblems.join(QStringLiteral(",")), panelFails.join(QStringLiteral(",")))));
+    QVERIFY2(sortedActual == sortedExpected,
+             qPrintable(QStringLiteral("U20-ROSTER: 排了这条定时器的面板名单与本文件里钉的名单不符"
+                                        "（实际 %1 个）\n实际：%2\n期望：%3")
+                            .arg(scheduled.size())
+                            .arg(sortedActual.join(QStringLiteral(",")), sortedExpected.join(QStringLiteral(",")))));
+
+    // 末次转一次事件循环：sweep 刚把全表面板删完 ⇒ 这就是上一轮 env VFP_U20_PROBE 那条复现腿的默认版。
+    qWarning().noquote() << "[U20-T16-S] sweep panels deleted, spinning 200ms";
+    QTest::qWait(200);
+    qWarning().noquote() << "[U20-T16-S] survived - no pending singleShot detonated";
+}
 
 QTEST_MAIN(ParamPanelBindingTest)
 

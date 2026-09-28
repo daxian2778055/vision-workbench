@@ -509,19 +509,20 @@ QWidget *ImageReadNode::createParamPanel()
         scrollArea->setEnabled(false);
     }
     
-    // 连接缩略图更新信号
-    connect(this, &ImageReadNode::thumbnailUpdated, [this, thumbnailLayout]() {
+    // 连接缩略图更新信号（接收者上下文=thumbnailLayout：面板销毁即断开，不能再拿着已释放的布局）
+    connect(this, &ImageReadNode::thumbnailUpdated, thumbnailLayout, [this, thumbnailLayout]() {
         // 延迟更新缩略图，避免在事件处理中修改UI
-        QTimer::singleShot(0, [this, thumbnailLayout]() {
+        // 上下文对象=thumbnailLayout：面板销毁后这条定时器不该再解引用它（推进计划 §3.26 U-20）
+        QTimer::singleShot(0, thumbnailLayout, [this, thumbnailLayout]() {
             updateThumbnails(thumbnailLayout);
         });
     });
     
-    // 连接参数面板显示信号，确保参数面板显示时能正确更新缩略图
-    connect(this, &ImageReadNode::thumbnailUpdated, [this, thumbnailLayout]() {
+    // 连接参数面板显示信号，确保参数面板显示时能正确更新缩略图（接收者上下文=thumbnailLayout，同上 U-20）
+    connect(this, &ImageReadNode::thumbnailUpdated, thumbnailLayout, [this, thumbnailLayout]() {
         // 确保在参数面板显示时能正确更新缩略图
         if (thumbnailLayout) {
-            QTimer::singleShot(0, [this, thumbnailLayout]() {
+            QTimer::singleShot(0, thumbnailLayout, [this, thumbnailLayout]() {
                 updateThumbnails(thumbnailLayout);
             });
         }

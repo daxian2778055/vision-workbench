@@ -10,6 +10,7 @@
 #include <QLabel>
 #include <QComboBox>
 #include <QLineEdit>
+#include <QPointer>
 #include <QTimer>
 #include <QSignalBlocker>
 #include "AppLog.h"
@@ -294,7 +295,12 @@ QWidget *ColorConversionNode::createParamPanel()
         layout->addWidget(conversionTypeCombo);
         
         // 延迟初始化输入图像下拉菜单，确保能获取到场景
-        QTimer::singleShot(100, [=]() {
+        // 上下文对象=inputImageCombo：面板销毁时这条待定定时器必须一起取消（推进计划 §3.26 U-20）
+        QPointer<ColorConversionNode> selfGuard(this);   // 节点可先于面板销毁（FlowScene::removeNode），U-20
+        QTimer::singleShot(100, inputImageCombo, [=]() {
+            if (!selfGuard) {
+                return;              // 节点已亡：这次延迟初始化不再有意义
+            }
             // 从参数中获取当前选择
             QVariant currentSelection;
             if (m_params.contains("inputImageSource")) {
