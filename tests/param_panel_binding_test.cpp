@@ -35,6 +35,10 @@
 //      分桶不靠手抄名单：按自动面板（名字+类型）取得到控件的走强断言，取不到的判为手写面板、退成
 //      「两轮显示必须不同」的弱断言，一个控件都认不到的如实计 noObservable、不当通过。
 //      仍不覆盖：不发 paramSpecs 的那 25 个算子（＝U-8，本闸没有分母）。
+// ✅ U-17 本轮（推进计划 §3.21；原登记见 §3.16 的「新发现 U-17」）：T13 把**载入侧**（fromJson）的
+//      钳制／回退立成闸——越界值夹回区间端点、解析不出数回退 defaultValue、Enum 界外回退 defaultValue
+//      界内照抄 index、没有 spec 的键原样直写。分母同样是 paramSpecs，所以那 25 个算子（U-8）在本闸
+//      里依旧只报数、不判定。
 #include <QtTest>
 #include <QApplication>
 #include <QSignalSpy>
@@ -52,6 +56,8 @@
 #include <QPointF>
 #include <QRectF>
 #include <QTimer>
+#include <QJsonObject>
+#include <QJsonValue>
 
 #include "ColorConversionNode.h"
 #include "HalconImageSourceNode.h"
@@ -186,6 +192,8 @@ private slots:
     void testCreationSeedLandingLegIsPinned();          // T11：播种落在哪条腿／哪件控件的运行期读数
     // U-14：把「48 个真算子的值级扫描」从路线②变成闸（四腿，见 §3.17）
     void testRealOperatorsValueLevelPanelSweep();
+    // U-17：把「载入侧（fromJson）对声明过区间的参数做钳制／回退」立成闸（见 §3.21）
+    void testLoadPathClampsOutOfRangeSpecValues();
 };
 
 // ── T1 最小复现：把 F-2 的悬空前提变成实测 ──
@@ -1787,6 +1795,301 @@ void ParamPanelBindingTest::testRealOperatorsValueLevelPanelSweep()
     QVERIFY2(problems.isEmpty(),
              qPrintable(QStringLiteral("U14: 真算子面板值级扫描有 %1 处不符（明细逐条随附）\n%2")
                             .arg(problems.size()).arg(problems.join(QStringLiteral("\n")))));
+}
+
+// ── T13（U-17 本轮，推进计划 §3.21）：载入侧（fromJson）的钳制／回退立成闸 ──
+// 契约（四条载入路径 src/FlowScene.cpp:206→:226／:206→:274、src/ProjectManager.cpp:460→:476、
+//      src/FlowSnippet.cpp:41→:46 都先 init() 再 fromJson()，所以 fromJson 里 m_paramSpecs 已填充）：
+//   ① 声明了区间的 Int／Double 参数：越界值必须被夹回**区间端点**；
+//   ② 数值参数被塞进解析不出数的值：必须回退 **defaultValue**；
+//   ③ Enum 的 index 越界：必须回退 **defaultValue**；界内：照抄 index；
+//   ④ 没有任何 spec 的键（含那 25 个不发 paramSpecs 的算子的全部键）：原样直写，不夹也不回退；
+//   ⑤ 写侧（程序化 setParam）越界：表值必须同样夹到 minValue／maxValue（与①同宽度，但是**另一段实现**）。
+// 读数⑥（不判红）：写侧对解析不出的值**不**回退 defaultValue ⇒ 与载入侧②口径不一致，只报条数。
+// ①～③ 与 ⑤ 的期望值一律由该参数自己的 minValue／maxValue／defaultValue 现算，不调用产线的判定路径。
+void ParamPanelBindingTest::testLoadPathClampsOutOfRangeSpecValues()
+{
+    QStringList problems;
+
+    const QString probeKey = QStringLiteral("u17UndeclaredProbeKey");
+    const double probeNumber = 12345.0;
+
+    int specNodes = 0;       // 有 paramSpecs 的算子数（腿①～③的分母）
+    int noSpecNodes = 0;     // 不发 paramSpecs 的算子数（本闸对它没有分母 ⇒ 只报数）
+    int lowLeg = 0;          // 腿①下界：夹回 minValue 的参数条数
+    int highLeg = 0;         // 腿①上界：夹回 maxValue 的参数条数
+    int junkLeg = 0;         // 腿②：解析失败回退 defaultValue 的参数条数
+    int enumBadLeg = 0;      // 腿③界外：回退 defaultValue 的 Enum 条数
+    int enumGoodLeg = 0;     // 腿③界内：照抄 index 的 Enum 条数
+    int rawLeg = 0;          // 腿④：未声明键原样直写的算子数
+    int noSpecRaw = 0;       // 腿④在无 paramSpecs 桶里的那一半（＝越界键原样留在表里）
+    int writeLowLeg = 0;     // 腿⑤写侧下界：setParam 越下界 ⇒ 表值 == minValue
+    int writeHighLeg = 0;    // 腿⑤写侧上界：setParam 越上界 ⇒ 表值 == maxValue
+    int writeJunkRaw = 0;    // 读数⑥（不判红）：写侧对解析不出的值**不**回退 defaultValue 的条数
+    int skippedRange = 0;    // 端点造不出可信越界值（JSON 数字一律走 double）
+    int threw = 0;           // fromJson 抛异常的算子数（如实登记，不算通过）
+    QStringList shadowIds;   // 键进了参数表、但 getParam 读不回来的算子（影子存储，如实报数）
+
+    const QList<NodeRegistration> regs = NodeRegistry::instance().all();
+    for (const NodeRegistration &reg : regs) {
+        HalconNode *node = qobject_cast<HalconNode *>(
+            NodeRegistry::instance().createById(reg.id, this));
+        if (!node) {
+            problems << QStringLiteral("%1 :: createById null or not a HalconNode").arg(reg.id);
+            continue;
+        }
+        node->init();   // 与四条载入路径同序：init() 里的 registerParams 先填 m_paramSpecs
+
+        const ParamSpecList list = node->paramSpecs();
+        if (list.isEmpty()) ++noSpecNodes;
+        else ++specNodes;
+
+        // 底 JSON 用算子自己的 toJson()，只改 params 里要探针的那几个键：
+        // 38 个 fromJson override 里有一批还会读顶层兼容键并无条件 setParam
+        // （如 src/ScriptNode.cpp:513～:519 的 language／scriptContent／scriptArgs），
+        // 喂裸 JSON 会被它们把探针值再覆盖一次，读数就不再是"载入钳制"这一件事。
+        auto loadWith = [&](const QJsonObject &overrides) -> bool {
+            QJsonObject json = node->toJson();
+            QJsonObject params = json.value(QStringLiteral("params")).toObject();
+            for (auto it = overrides.constBegin(); it != overrides.constEnd(); ++it)
+                params.insert(it.key(), it.value());
+            json.insert(QStringLiteral("params"), params);
+            try {
+                node->fromJson(json);
+            } catch (...) {
+                ++threw;
+                problems << QStringLiteral("%1 :: fromJson threw").arg(reg.id);
+                return false;
+            }
+            return true;
+        };
+
+        auto tableText = [](const QVariant &v) {
+            return v.isValid() ? v.toString() : QStringLiteral("<unset>");
+        };
+
+        // ── 腿①／②的分母：声明了区间、且端点能造出可信越界值的 Int／Double ──
+        QVector<ParamSpec> ranged;
+        QVector<double> lowFed, highFed, lowWant, highWant;
+        for (const ParamSpec &s : list) {
+            if (!s.hasRange || (s.type != ParamType::Int && s.type != ParamType::Double))
+                continue;
+            const double mn = s.minValue.toDouble();
+            const double mx = s.maxValue.toDouble();
+            if (!qIsFinite(mn) || !qIsFinite(mx)) {
+                ++skippedRange;
+                continue;
+            }
+            const double lo = mn - 1.0;
+            const double hi = mx + 1.0;
+            // JSON 的数字一律走 double，端点顶到 2^53 之外就造不出可信的越界值 ⇒ 如实跳过并计数
+            if (!(lo < mn) || !(hi > mx) || qAbs(lo) > 9.0e15 || qAbs(hi) > 9.0e15) {
+                ++skippedRange;
+                continue;
+            }
+            ranged << s;
+            lowFed << lo;
+            highFed << hi;
+            lowWant << mn;
+            highWant << mx;
+        }
+
+        // ── 腿①（下界）＋腿④：越下界 ⇒ 表值必须等于 minValue；未声明键 ⇒ 原样 ──
+        QJsonObject lowJson;
+        for (int i = 0; i < ranged.size(); ++i)
+            lowJson.insert(ranged.at(i).name, QJsonValue(lowFed.at(i)));
+        lowJson.insert(probeKey, QJsonValue(probeNumber));
+        if (loadWith(lowJson)) {
+            for (int i = 0; i < ranged.size(); ++i) {
+                bool okNum = false;
+                const QVariant got = node->getParam(ranged.at(i).name);
+                const double d = got.toDouble(&okNum);
+                if (!okNum || d != lowWant.at(i))
+                    problems << QStringLiteral("%1 :: [%2] 载入越下界 %3 ⇒ 表里是 %4，期望 minValue=%5")
+                                    .arg(reg.id, ranged.at(i).name)
+                                    .arg(lowFed.at(i)).arg(tableText(got)).arg(lowWant.at(i));
+                else
+                    ++lowLeg;
+            }
+            // 观察点用表级的 getAllParamNames()（基类实现＝m_params.keys()，src/HalconNode.h:32）：
+            // MvsImageSourceNode 这类算子把配置存在成员里、getParam 不回读参数表
+            // （src/MvsImageSourceNode.cpp:215～:242 只认 11 个自己的键，末尾 return QVariant()），
+            // 拿 getParam 观察这次直写就会把它误判成"没写进表"。读不回来的如实进 shadowIds、不判红。
+            if (!node->getAllParamNames().contains(probeKey))
+                problems << QStringLiteral("%1 :: 未声明键 %2 没进参数表 ⇒ 基类 :396 的原样直写这条腿失效")
+                                .arg(reg.id, probeKey);
+            else {
+                ++rawLeg;
+                if (list.isEmpty()) ++noSpecRaw;
+                bool okProbe = false;
+                const QVariant probeGot = node->getParam(probeKey);
+                const double probeD = probeGot.toDouble(&okProbe);
+                if (!okProbe || probeD != probeNumber)
+                    shadowIds << QStringLiteral("%1(表里有该键/getParam 回读=%2)")
+                                     .arg(reg.id, probeGot.isValid() ? probeGot.toString()
+                                                                    : QStringLiteral("<空 QVariant>"));
+            }
+        }
+
+        // ── 腿①（上界）：越上界 ⇒ 表值必须等于 maxValue ──
+        if (!ranged.isEmpty()) {
+            QJsonObject highJson;
+            for (int i = 0; i < ranged.size(); ++i)
+                highJson.insert(ranged.at(i).name, QJsonValue(highFed.at(i)));
+            if (loadWith(highJson)) {
+                for (int i = 0; i < ranged.size(); ++i) {
+                    bool okNum = false;
+                    const QVariant got = node->getParam(ranged.at(i).name);
+                    const double d = got.toDouble(&okNum);
+                    if (!okNum || d != highWant.at(i))
+                        problems << QStringLiteral("%1 :: [%2] 载入越上界 %3 ⇒ 表里是 %4，期望 maxValue=%5")
+                                        .arg(reg.id, ranged.at(i).name)
+                                        .arg(highFed.at(i)).arg(tableText(got)).arg(highWant.at(i));
+                    else
+                        ++highLeg;
+                }
+            }
+        }
+
+        // ── 腿②：数值参数被塞进解析不出数的字符串 ⇒ 回退 defaultValue ──
+        if (!ranged.isEmpty()) {
+            QJsonObject junkJson;
+            for (const ParamSpec &s : ranged)
+                junkJson.insert(s.name, QJsonValue(QStringLiteral("u17-not-a-number")));
+            if (loadWith(junkJson)) {
+                for (const ParamSpec &s : ranged) {
+                    bool okNum = false;
+                    const QVariant got = node->getParam(s.name);
+                    const double d = got.toDouble(&okNum);
+                    if (!okNum || d != s.defaultValue.toDouble())
+                        problems << QStringLiteral("%1 :: [%2] 载入解析不出的值 ⇒ 表里是 %3，期望 defaultValue=%4")
+                                        .arg(reg.id, s.name, tableText(got))
+                                        .arg(s.defaultValue.toString());
+                    else
+                        ++junkLeg;
+                }
+            }
+        }
+
+        // ── 腿③：Enum 界外回退 defaultValue、界内照抄 index ──
+        QJsonObject enumBadJson;
+        QVector<ParamSpec> enumAll, enumOut;    // enumOut＝候选数 >=2，界内那条才有对象
+        for (const ParamSpec &s : list) {
+            if (s.type != ParamType::Enum)
+                continue;
+            enumAll << s;
+            enumBadJson.insert(s.name, QJsonValue(double(s.enumValues.size())));
+            if (s.enumValues.size() >= 2)
+                enumOut << s;
+        }
+        if (!enumAll.isEmpty() && loadWith(enumBadJson)) {
+            for (const ParamSpec &s : enumAll) {
+                bool okNum = false;
+                const QVariant got = node->getParam(s.name);
+                const double d = got.toDouble(&okNum);
+                if (!okNum || d != s.defaultValue.toDouble())
+                    problems << QStringLiteral("%1 :: Enum [%2] 载入界外 index=%3 ⇒ 表里是 %4，期望 defaultValue=%5")
+                                    .arg(reg.id, s.name)
+                                    .arg(s.enumValues.size()).arg(tableText(got)).arg(s.defaultValue.toString());
+                else
+                    ++enumBadLeg;
+            }
+        }
+        if (!enumOut.isEmpty()) {
+            QJsonObject enumGoodJson;
+            for (const ParamSpec &s : enumOut)
+                enumGoodJson.insert(s.name, QJsonValue(1.0));
+            if (loadWith(enumGoodJson)) {
+                for (const ParamSpec &s : enumOut) {
+                    bool okNum = false;
+                    const QVariant got = node->getParam(s.name);
+                    const double d = got.toDouble(&okNum);
+                    if (!okNum || d != 1.0)
+                        problems << QStringLiteral("%1 :: Enum [%2] 载入界内 index=1 ⇒ 表里是 %3，期望照抄 1")
+                                        .arg(reg.id, s.name, tableText(got));
+                    else
+                        ++enumGoodLeg;
+                }
+            }
+        }
+
+        // ── 腿⑤：写侧 setParam 的区间钳制（src/HalconNode.cpp:132～:147）──
+        // 它和载入侧的 validateParamValue 是**两段各自独立的实现**（§3.21 表 1）：
+        // 本轮之前这条只有 OpencvThresholdNode.minVal 一个松断言，此处钉成与腿①同宽度的闸。
+        for (int i = 0; i < ranged.size(); ++i) {
+            node->setParam(ranged.at(i).name, QVariant(lowFed.at(i)));
+            bool okNum = false;
+            const QVariant got = node->getParam(ranged.at(i).name);
+            const double d = got.toDouble(&okNum);
+            if (!okNum || d != lowWant.at(i))
+                problems << QStringLiteral("%1 :: [%2] 写侧 setParam 越下界 %3 ⇒ 表里是 %4，期望 minValue=%5")
+                                .arg(reg.id, ranged.at(i).name)
+                                .arg(lowFed.at(i)).arg(tableText(got)).arg(lowWant.at(i));
+            else
+                ++writeLowLeg;
+
+            node->setParam(ranged.at(i).name, QVariant(highFed.at(i)));
+            bool okNum2 = false;
+            const QVariant got2 = node->getParam(ranged.at(i).name);
+            const double d2 = got2.toDouble(&okNum2);
+            if (!okNum2 || d2 != highWant.at(i))
+                problems << QStringLiteral("%1 :: [%2] 写侧 setParam 越上界 %3 ⇒ 表里是 %4，期望 maxValue=%5")
+                                .arg(reg.id, ranged.at(i).name)
+                                .arg(highFed.at(i)).arg(tableText(got2)).arg(highWant.at(i));
+            else
+                ++writeHighLeg;
+        }
+
+        // ── 读数⑥（不判红）：写侧对"解析不出的值"不回退 defaultValue ──
+        // 载入侧腿② 回退（src/HalconNode.cpp:309／:318），写侧 :138／:143 是 `if (ok)` 才钳、
+        // 不钳就原样写表 ⇒ 两段实现口径不一致。这里只把不一致的条数报出来：
+        // 改成回退会动到所有程序化写参的现值语义（产品决策，同 §3.16 那格 U-17）。
+        for (const ParamSpec &s : ranged) {
+            node->setParam(s.name, QVariant(QStringLiteral("u17-not-a-number")));
+            const QVariant got = node->getParam(s.name);
+            if (got != s.defaultValue)
+                ++writeJunkRaw;
+        }
+
+        delete node;
+    }
+
+    qWarning().noquote() << QStringLiteral(
+        "[U17-LOAD] specNodes=%1 noSpecNodes=%2 lowLeg=%3 highLeg=%4 junkLeg=%5 enumBadLeg=%6 "
+        "enumGoodLeg=%7 rawLeg=%8 noSpecRaw=%9 skippedRange=%10 threw=%11 shadowCount=%12 "
+        "writeLowLeg=%13 writeHighLeg=%14 writeJunkRaw=%15")
+        .arg(specNodes).arg(noSpecNodes).arg(lowLeg).arg(highLeg).arg(junkLeg).arg(enumBadLeg)
+        .arg(enumGoodLeg).arg(rawLeg).arg(noSpecRaw).arg(skippedRange).arg(threw).arg(shadowIds.size())
+        .arg(writeLowLeg).arg(writeHighLeg).arg(writeJunkRaw);
+    if (!shadowIds.isEmpty())
+        qWarning().noquote() << QStringLiteral("[U17-SHADOW] %1").arg(shadowIds.join(QStringLiteral(" | ")));
+
+    // 判词在前、空转闸在后：改坏一条腿时先看到"哪几条参数没钳住"，
+    // 而不是被下面的下限抢红（本轮 A1～A7 七臂实测过这个次序问题）。
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("U17: 钳制口径有 %1 处不符（明细逐条随附）\n%2")
+                            .arg(problems.size()).arg(problems.join(QStringLiteral("\n")))));
+
+    // 空转闸：每条腿都得真扫到东西，否则"没红"不等于"拦得住"。
+    // 下限取本轮实测（见上面 [U17-LOAD]）之下一档，不是随手数。
+    QVERIFY2(specNodes > 40,
+             qPrintable(QStringLiteral("本闸只扫到 %1 个带参数声明的算子，口径已失效").arg(specNodes)));
+    QVERIFY2(lowLeg > 150,
+             qPrintable(QStringLiteral("腿①下界只执行了 %1 条 ⇒ 区间参数口径已失效").arg(lowLeg)));
+    QVERIFY2(highLeg > 150,
+             qPrintable(QStringLiteral("腿①上界只执行了 %1 条 ⇒ 区间参数口径已失效").arg(highLeg)));
+    QVERIFY2(junkLeg > 150,
+             qPrintable(QStringLiteral("腿②只执行了 %1 条 ⇒ 解析回退口径已失效").arg(junkLeg)));
+    QVERIFY2(enumBadLeg > 15,
+             qPrintable(QStringLiteral("腿③界外只执行了 %1 条 ⇒ Enum 口径已失效").arg(enumBadLeg)));
+    QVERIFY2(enumGoodLeg > 15,
+             qPrintable(QStringLiteral("腿③界内只执行了 %1 条 ⇒ Enum 口径已失效").arg(enumGoodLeg)));
+    QVERIFY2(rawLeg > 60,
+             qPrintable(QStringLiteral("腿④只执行了 %1 条 ⇒ 未声明键那条腿已空转").arg(rawLeg)));
+    QVERIFY2(writeLowLeg > 150,
+             qPrintable(QStringLiteral("腿⑤写侧下界只执行了 %1 条 ⇒ setParam 钳制那条腿已空转").arg(writeLowLeg)));
+    QVERIFY2(writeHighLeg > 150,
+             qPrintable(QStringLiteral("腿⑤写侧上界只执行了 %1 条 ⇒ setParam 钳制那条腿已空转").arg(writeHighLeg)));
 }
 
 QTEST_MAIN(ParamPanelBindingTest)
