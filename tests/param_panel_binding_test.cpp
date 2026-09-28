@@ -29,6 +29,12 @@
 //      T10 把「建面板这一步本身不得有对外写回痕迹」立成闸，跑两个场景（表值==默认值／表值≠默认值），
 //      并用「直写同一个控件必须改参数表」排除零痕迹是空转；T11 把 §3.14 表 3 那条**静态推导**
 //      （播种落在哪条腿／哪件控件，含 :982～:984 那条不可达腿）跑成运行期读数。
+// ✅ U-14 本轮（推进计划 §3.17；原登记见 §3.13「登记未修」的 U-14）：上面那句「仍未覆盖：48 个
+//      真算子的值级扫描」本轮落成 T12——按注册表逐个**真算子**建面板，只改参数表 → updateParamPanel
+//      → 回读控件显示，四腿一起跑（创建期无痕／值级回读／刷新不发写回信号／刷新不改参数表）。
+//      分桶不靠手抄名单：按自动面板（名字+类型）取得到控件的走强断言，取不到的判为手写面板、退成
+//      「两轮显示必须不同」的弱断言，一个控件都认不到的如实计 noObservable、不当通过。
+//      仍不覆盖：不发 paramSpecs 的那 25 个算子（＝U-8，本闸没有分母）。
 #include <QtTest>
 #include <QApplication>
 #include <QSignalSpy>
@@ -45,6 +51,7 @@
 #include <QSet>
 #include <QPointF>
 #include <QRectF>
+#include <QTimer>
 
 #include "ColorConversionNode.h"
 #include "HalconImageSourceNode.h"
@@ -177,6 +184,8 @@ private slots:
     // U-16：建面板这一步本身（createAutoParamPanel 的播种段）受检
     void testCreationPhaseLeavesNoWriteBackTrace();     // T10：创建期不得有对外写回痕迹
     void testCreationSeedLandingLegIsPinned();          // T11：播种落在哪条腿／哪件控件的运行期读数
+    // U-14：把「48 个真算子的值级扫描」从路线②变成闸（四腿，见 §3.17）
+    void testRealOperatorsValueLevelPanelSweep();
 };
 
 // ── T1 最小复现：把 F-2 的悬空前提变成实测 ──
@@ -1437,6 +1446,348 @@ void ParamPanelBindingTest::testCreationSeedLandingLegIsPinned()
                             .arg(problems.size()).arg(problems.join(QStringLiteral("\n")))));
 }
 
+
+// ── T12（U-14）：把九臂合成夹具换成 48 个真算子的值级扫描 ──
+// T8／T9／T10 各自钉住的是**一种 ParamType 的分支本身**（合成夹具一次一个参数），文件头那两行
+// 「仍未覆盖：48 个真算子的值级扫描」就是本条。四腿：
+//   ① 创建期无痕（建面板不改参数表、不点预览定时器）＝T10 的口径搬到真算子；
+//   ② 值级回读：只改参数表 → 真刷新（updateParamPanel）→ 回读控件显示，必须等于**表里的现值**
+//      按自动面板口径显示出来的样子＝T8 的口径搬到真算子；
+//   ③ 刷新不得发写回信号＝T9 搬到真算子；
+//   ④ 刷新不得改参数表（＝§3.7 表 1 契约③的全表版，此前只护两个手写面板）。
+// 分桶口径（不靠手抄名单）：一条参数按自动面板的（名字+类型）取不到控件 ⇒ 它走的是**手写面板**，
+// ②只能退成"两轮显示必须不同"这条弱断言（显示不跟着变＝操作员看着旧数干活，仍判红）；
+// 取到控件 ⇒ 必须过②的强断言。两桶条数之和必须等于总条数 ⇒ 谁从可核桶掉进"没归类"当场红。
+// 造值口径：只用该参数**自己声明的范围之内**的两个不同值，免得把 setParam 的钳制（§3.16 的 U-17）
+// 混进本条判词；范围不足两条的（枚举只有一项／区间退化成一点）如实计 nonDistinct，不当通过。
+namespace {
+
+struct U14Values {
+    QVariant a;
+    QVariant b;
+    bool distinct = false;
+};
+
+U14Values u14Values(const ParamSpec &s)
+{
+    U14Values v;
+    switch (s.type) {
+    case ParamType::Int: {
+        int lo = 0, hi = 99;                       // 未声明 hasRange 时 QSpinBox 的缺省区间
+        if (s.hasRange) { lo = s.minValue.toInt(); hi = s.maxValue.toInt(); }
+        if (hi - lo >= 1) { v.a = lo; v.b = lo + 1; v.distinct = true; }
+        else { v.a = lo; v.b = lo; }
+        break;
+    }
+    case ParamType::Double: {
+        double lo = 0.0, hi = 99.0;
+        if (s.hasRange) { lo = s.minValue.toDouble(); hi = s.maxValue.toDouble(); }
+        double b = lo + 1.0;
+        if (b > hi) b = hi;                        // 区间不足 1.0 ⇒ 退到上界，只要不等于下界就还能用
+        if (b != lo) { v.a = lo; v.b = b; v.distinct = true; }
+        else { v.a = lo; v.b = lo; }
+        break;
+    }
+    case ParamType::Bool:
+        v.a = false; v.b = true; v.distinct = true;
+        break;
+    case ParamType::String:
+    case ParamType::FilePath:
+    case ParamType::MultiLine:
+        v.a = QStringLiteral("u14a"); v.b = QStringLiteral("u14b"); v.distinct = true;
+        break;
+    case ParamType::Enum:
+        v.a = 0;
+        if (s.enumValues.size() >= 2) { v.b = 1; v.distinct = true; }
+        else { v.b = 0; }
+        break;
+    case ParamType::Point:
+        v.a = QPointF(1.5, 2.5); v.b = QPointF(3.5, 4.5); v.distinct = true;
+        break;
+    case ParamType::Rect:
+        v.a = QRectF(1.5, 2.5, 3.5, 4.5); v.b = QRectF(5.5, 6.5, 7.5, 8.5); v.distinct = true;
+        break;
+    }
+    return v;
+}
+
+// 表里的现值 eff 按自动面板口径**应该**显示成什么样（idx＝复合参数的第几个子控件，单值为 0）
+QString u14ExpectedDisplay(const ParamSpec &s, const QVariant &eff, int idx)
+{
+    switch (s.type) {
+    case ParamType::Int:    return QString::number(eff.toInt());
+    case ParamType::Double: return QString::number(eff.toDouble(), 'f', 4);
+    case ParamType::Bool:   return eff.toBool() ? QStringLiteral("1") : QStringLiteral("0");
+    case ParamType::Enum:   return QString::number(eff.toInt());
+    case ParamType::String:
+    case ParamType::FilePath:
+    case ParamType::MultiLine: return eff.toString();
+    case ParamType::Point: {
+        const QPointF p = eff.toPointF();
+        return QString::number(idx == 0 ? p.x() : p.y(), 'f', 4);
+    }
+    case ParamType::Rect: {
+        const QRectF r = eff.toRectF();
+        const double comp[4] = { r.x(), r.y(), r.width(), r.height() };
+        return QString::number(comp[idx], 'f', 4);
+    }
+    }
+    return QString();
+}
+
+// 真算子没有 protected 成员可用 ⇒ 走公开访问器取整表快照（getAllParamNames 是 m_params.keys()）
+QMap<QString, QVariant> u14Table(HalconNode *node)
+{
+    QMap<QString, QVariant> snap;
+    const QList<QString> keys = node->getAllParamNames();
+    for (const QString &k : keys)
+        snap.insert(k, node->getParam(k));
+    return snap;
+}
+
+// 预览防抖定时器的运行期识别：构造函数里它是"单次 + PREVIEW_DELAY_MS(300)"（src/HalconNode.cpp:37～:42）
+// 恰好一把才认；多把或零把就明说"这一腿在本算子上无从判定"，不拿别的定时器冒充。
+QList<QTimer *> u14PreviewTimers(QObject *node)
+{
+    QList<QTimer *> hits;
+    const QList<QTimer *> all = node->findChildren<QTimer *>();
+    for (QTimer *t : all) {
+        if (t->isSingleShot() && t->interval() == 300)
+            hits << t;
+    }
+    return hits;
+}
+
+} // namespace
+
+void ParamPanelBindingTest::testRealOperatorsValueLevelPanelSweep()
+{
+    registerAllNodes();
+    QStringList problems;
+
+    int nodes = 0;                 // 带参数声明的真算子数（分母）
+    int specs = 0;                 // 参数声明条数
+    int autoBucketSpecs = 0;       // 按自动面板（名字+类型）取得到控件的条数 ⇒ 走②的强断言
+    int handBucketSpecs = 0;       // 取不到 ⇒ 判为手写面板，只走②的弱断言
+    int nonDistinctSpecs = 0;      // 造不出两个不同合法值的条数（只核等值，核不了变化）
+    int clampedWrites = 0;         // setParam 没把我们写的值原样存进表的次数（＝U-17 那一族的入口读数）
+    int readbacks = 0;             // 控件显示回读次数
+    int spyChecks = 0;             // ③的 spy 计数次数
+    int timerLegNodes = 0;         // ①的定时器腿真正执行的算子数
+    int noObservableSpecs = 0;     // 手写面板桶里连一个可认控件都没有 ⇒ 本闸对它无可观察量（如实计数）
+    QStringList timerSkipIds;      // 定时器不是恰好一把的算子 id（如实登记，不算通过）
+    int multiSpecNodes = 0;        // 参数条数>=2 的算子数：「只刷第一条」这类错位只有在这里才有对象
+    int sameClassPairs = 0;        // 同一算子内按控件类两两配对的条数：无名 findChild 会撞在一起的面
+
+    const QList<NodeRegistration> regs = NodeRegistry::instance().all();
+    for (const NodeRegistration &reg : regs) {
+        HalconNode *node = qobject_cast<HalconNode *>(
+            NodeRegistry::instance().createById(reg.id, this));
+        if (!node) {
+            problems << QStringLiteral("%1 :: createById null or not a HalconNode").arg(reg.id);
+            continue;
+        }
+        node->init();
+        const ParamSpecList list = node->paramSpecs();
+        if (list.isEmpty()) {          // 25 个无 paramSpecs 的算子：本闸无从判定，归 U-8 那条
+            delete node;
+            continue;
+        }
+        ++nodes;
+        specs += list.size();
+        if (list.size() >= 2) ++multiSpecNodes;
+        QMap<QString, int> perClass;
+        for (const ParamSpec &s : list) {
+            const QList<NamedControl> wants = controlsTheRefresherLooksFor(s);
+            for (const NamedControl &c : wants)
+                perClass.insert(c.cls, perClass.value(c.cls) + 1);
+        }
+        for (auto it = perClass.constBegin(); it != perClass.constEnd(); ++it)
+            sameClassPairs += it.value() * (it.value() - 1) / 2;
+        const QString tag = reg.id;
+
+        node->setAutoPreviewEnabled(true);   // 让任何一次经 setParam 的写回都留下定时器痕迹
+
+        // ── 腿①：创建期无痕 ──
+        const QMap<QString, QVariant> t0 = u14Table(node);
+        QWidget *panel = nullptr;
+        try {
+            panel = node->createParamPanel();
+        } catch (...) {
+            problems << QStringLiteral("%1 :: createParamPanel threw").arg(tag);
+            delete node;
+            continue;
+        }
+        if (!panel) {
+            problems << QStringLiteral("%1 :: createParamPanel returned nullptr").arg(tag);
+            delete node;
+            continue;
+        }
+        const QString creationDiff = u10TableDiffText(t0, u14Table(node));
+        if (!creationDiff.isEmpty())
+            problems << QStringLiteral("%1 :: createParamPanel wrote back into the table: %2")
+                            .arg(tag, creationDiff);
+        const QList<QTimer *> timers = u14PreviewTimers(node);
+        if (timers.size() == 1) {
+            ++timerLegNodes;
+            if (timers.first()->isActive())
+                problems << QStringLiteral(
+                    "%1 :: preview timer was started by createParamPanel (write-back trace)").arg(tag);
+        } else {
+            timerSkipIds << QStringLiteral("%1(%2)").arg(tag).arg(timers.size());
+        }
+        for (QTimer *t : timers) t->stop();
+
+        // ── 认控件：按自动面板的（名字+类型）口径，取不到的判为手写面板 ──
+        QList<QList<QWidget *>> ctrls;
+        QList<bool> isAuto;
+        for (const ParamSpec &s : list) {
+            QList<QWidget *> got;
+            const QList<NamedControl> wants = controlsTheRefresherLooksFor(s);
+            bool all = true;
+            for (const NamedControl &c : wants) {
+                QWidget *w = findChildByNameAndClass(panel, c.cls, c.name);
+                if (!w) { all = false; break; }
+                got << w;
+            }
+            ctrls << (all ? got : QList<QWidget *>());
+            isAuto << all;
+            if (all) ++autoBucketSpecs; else ++handBucketSpecs;
+        }
+
+        // ── 腿②③④：两轮"只改表 → 真刷新 → 回读" ──
+        QList<U14Values> vals;
+        for (const ParamSpec &s : list) {
+            vals << u14Values(s);
+            if (!vals.last().distinct) ++nonDistinctSpecs;
+        }
+        QList<QStringList> shownA, shownB;
+
+        for (int round = 0; round < 2; ++round) {
+            for (int i = 0; i < list.size(); ++i) {
+                const ParamSpec &s = list.at(i);
+                node->setParam(s.name, round == 0 ? vals.at(i).a : vals.at(i).b);
+                const QVariant want = round == 0 ? vals.at(i).a : vals.at(i).b;
+                if (node->getParam(s.name) != want) ++clampedWrites;
+            }
+            for (QTimer *t : timers) t->stop();
+
+            QList<QSignalSpy *> live;
+            for (int i = 0; i < ctrls.size(); ++i) {
+                for (QWidget *w : ctrls.at(i)) {
+                    QSignalSpy *spy = u9SpyOf(w);
+                    if (!spy)
+                        problems << QStringLiteral("%1 :: param=%2 control %3 has no known write-back signal")
+                                        .arg(tag, list.at(i).name,
+                                             QString::fromLatin1(w->metaObject()->className()));
+                    else
+                        live << spy;
+                }
+            }
+
+            const QMap<QString, QVariant> beforeRefresh = u14Table(node);
+            try {
+                node->updateParamPanel(panel);
+            } catch (...) {
+                problems << QStringLiteral("%1 :: updateParamPanel threw").arg(tag);
+            }
+            const QString refreshDiff = u10TableDiffText(beforeRefresh, u14Table(node));
+            if (!refreshDiff.isEmpty())
+                problems << QStringLiteral("%1 :: updateParamPanel changed the table: %2")
+                                .arg(tag, refreshDiff);
+
+            QList<QStringList> disp;
+            for (int i = 0; i < ctrls.size(); ++i) {
+                const ParamSpec &s = list.at(i);
+                const QList<QWidget *> &ws = ctrls.at(i);
+                QStringList per;
+                for (int k = 0; k < ws.size(); ++k) {
+                    const QString got = u7DisplayOf(ws.at(k));
+                    per << got;
+                    ++readbacks;
+                    const QString want = u14ExpectedDisplay(s, node->getParam(s.name), k);
+                    if (isAuto.at(i) && got != want)
+                        problems << QStringLiteral(
+                            "%1 :: param=%2 round=%3 control#%4 shows \"%5\" but the table value wants \"%6\"")
+                                        .arg(tag, s.name).arg(round).arg(k).arg(got, want);
+                }
+                disp << per;
+            }
+            for (QSignalSpy *spy : live) {
+                ++spyChecks;
+                if (spy->count() > 0)
+                    problems << QStringLiteral("%1 :: updateParamPanel emitted %2 write-back signal(s)")
+                                    .arg(tag).arg(spy->count());
+                delete spy;
+            }
+            if (round == 0) shownA = disp; else shownB = disp;
+        }
+
+        // 手写面板桶的弱断言：认得到控件的那些条，两轮显示必须不同（且只在该参数能造出两个不同
+        // 合法值时才成立）；一个控件都认不到的如实计 noObservableSpecs ⇒ 本闸对它没有可观察量。
+        for (int i = 0; i < list.size(); ++i) {
+            if (isAuto.at(i)) continue;
+            if (ctrls.at(i).isEmpty()) { ++noObservableSpecs; continue; }
+            if (!vals.at(i).distinct) continue;
+            bool changed = false;
+            for (int k = 0; k < ctrls.at(i).size(); ++k) {
+                if (shownA.at(i).at(k) != shownB.at(i).at(k)) { changed = true; break; }
+            }
+            if (!changed)
+                problems << QStringLiteral("%1 :: param=%2 is refreshed by a hand-written panel and its "
+                                           "display did not change between two different table values")
+                                .arg(tag, list.at(i).name);
+        }
+
+        delete panel;
+        delete node;
+    }
+
+    qWarning().noquote() << QStringLiteral(
+        "[U14-SWEEP] nodes=%1 specs=%2 autoSpecs=%3 handSpecs=%4 noObservable=%5 readbacks=%6 spies=%7 "
+        "nonDistinct=%8 clampedWrites=%9 timerLegNodes=%10 multiSpecNodes=%11 sameClassPairs=%12 "
+        "timerSkip=%13")
+        .arg(nodes).arg(specs).arg(autoBucketSpecs).arg(handBucketSpecs).arg(noObservableSpecs)
+        .arg(readbacks).arg(spyChecks).arg(nonDistinctSpecs).arg(clampedWrites).arg(timerLegNodes)
+        .arg(multiSpecNodes).arg(sameClassPairs)
+        .arg(timerSkipIds.join(QStringLiteral(",")));
+
+    // 判词太长会被 QtTest 截断打印（本轮实测：335 条只落盘 41 行）=> 每条腿另计一次数，
+    // 计数口径＝上面各条判词的原文本子，不另立一套名字（needle 改一个字这里就少计一条）。
+    auto legCount = [&problems](const QString &needle) {
+        int n = 0;
+        for (const QString &p : problems)
+            if (p.contains(needle)) ++n;
+        return n;
+    };
+    qWarning().noquote() << QStringLiteral(
+        "[U14-LEGS] createNull=%1 createThrew=%2 createNullPanel=%3 leg1_table=%4 leg1_timer=%5 "
+        "spyNoSignal=%6 refreshThrew=%7 leg4_table=%8 leg2_display=%9 leg3_emit=%10 hand_weak=%11")
+        .arg(legCount(QStringLiteral("createById null")))
+        .arg(legCount(QStringLiteral("createParamPanel threw")))
+        .arg(legCount(QStringLiteral("createParamPanel returned nullptr")))
+        .arg(legCount(QStringLiteral("wrote back into the table")))
+        .arg(legCount(QStringLiteral("preview timer was started")))
+        .arg(legCount(QStringLiteral("has no known write-back signal")))
+        .arg(legCount(QStringLiteral("updateParamPanel threw")))
+        .arg(legCount(QStringLiteral("changed the table")))
+        .arg(legCount(QStringLiteral("but the table value wants")))
+        .arg(legCount(QStringLiteral("write-back signal(s)")))
+        .arg(legCount(QStringLiteral("did not change between two different table values")));
+
+    // 空转闸：扫到东西才算扫（口径照 T5）
+    QVERIFY2(nodes > 40,
+             qPrintable(QStringLiteral("本闸只扫到 %1 个带参数声明的算子，口径已失效").arg(nodes)));
+    QVERIFY2(specs > 200,
+             qPrintable(QStringLiteral("本闸只扫到 %1 条参数声明，口径已失效").arg(specs)));
+    // 分桶必须穷尽：每条参数要么走强断言要么走弱断言，掉出两桶当场红
+    QCOMPARE(autoBucketSpecs + handBucketSpecs, specs);
+    QVERIFY2(timerLegNodes > 0, "创建期定时器腿一次都没执行 ⇒ 腿①是空转");
+
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("U14: 真算子面板值级扫描有 %1 处不符（明细逐条随附）\n%2")
+                            .arg(problems.size()).arg(problems.join(QStringLiteral("\n")))));
+}
 
 QTEST_MAIN(ParamPanelBindingTest)
 
