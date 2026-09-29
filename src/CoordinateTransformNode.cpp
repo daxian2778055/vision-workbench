@@ -70,10 +70,15 @@ void CoordinateTransformNode::run(bool)
                     else
                         sceneWhy = QStringLiteral("该夹具没有矩阵（只有位姿）");
                 }
-                const QString sizeWhy =
-                    hom.size() < 6
-                        ? QStringLiteral("只有 %1 项").arg(hom.size())
-                        : QStringLiteral("有 %1 项（不是 6 元仿射，疑似另一种载荷：9 元内参）").arg(hom.size());
+                QString sizeWhy;
+                if (hom.size() == 9)
+                    sizeWhy = QStringLiteral("有 9 项（9 元内参载荷，不是 6 元仿射）");
+                else if (hom.size() < 6)
+                    sizeWhy = QStringLiteral("只有 %1 项").arg(hom.size());
+                else
+                    // U-27：既不是 6 也不是 9 时不猜它是什么（HALCON 写侧长度本机未证到）。
+                    // 旧文案一律写"疑似 9 元内参"，7/8/10/20 项也照这句，现场会查错方向。
+                    sizeWhy = QStringLiteral("有 %1 项（不是 6 元仿射）").arg(hom.size());
                 QString mgrWhy;
                 if (fx.hasHom)
                     mgrWhy = QStringLiteral("场景夹具的矩阵%1").arg(sizeWhy);

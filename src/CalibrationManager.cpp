@@ -2,6 +2,8 @@
 #include <QJsonArray>
 #include <QJsonObject>
 
+#include <cmath>
+
 CalibrationManager *CalibrationManager::instance()
 {
     static CalibrationManager s_instance;
@@ -64,14 +66,41 @@ QJsonObject CalibrationManager::toJson() const
     return o;
 }
 
-void CalibrationManager::fromJson(const QJsonObject &json)
+void CalibrationManager::fromJson(const QJsonObject &json, QStringList *rejected)
 {
     m_homographies.clear();
     for (auto it = json.constBegin(); it != json.constEnd(); ++it) {
+        const QJsonValue value = it.value();
         QVector<double> hom;
-        for (const QJsonValue &v : it.value().toArray())
-            hom.append(v.toDouble());
-        if (hom.size() >= 6)
-            m_homographies[it.key()] = hom;
+        QString why;
+        if (it.key().isEmpty())
+            why = QStringLiteral("键名为空");
+        else if (!value.isArray())
+            why = QStringLiteral("值不是数组");
+        else {
+            const QJsonArray arr = value.toArray();
+            for (int i = 0; i < arr.size(); ++i) {
+                const QJsonValue &v = arr.at(i);
+                // 不查类型直接 toDouble()：字符串/null/bool 一律给 0.0，坏载荷会变成"整条全 0"，
+                // 而不是"只有读不出来的那一项为 0"（NaN/Inf 序列化出来本来就是 null，同一族）。
+                if (!v.isDouble()) {
+                    why = QStringLiteral("第 %1 项不是数值").arg(i + 1);
+                    break;
+                }
+                if (!std::isfinite(v.toDouble())) {
+                    why = QStringLiteral("第 %1 项不是有限值").arg(i + 1);
+                    break;
+                }
+                hom.append(v.toDouble());
+            }
+        }
+        if (why.isEmpty() && hom.size() < 6)
+            why = QStringLiteral("只有 %1 项（少于 6）").arg(hom.size());
+        if (!why.isEmpty()) {
+            if (rejected)
+                rejected->append(QStringLiteral("%1 :: %2").arg(it.key(), why));
+            continue;
+        }
+        m_homographies[it.key()] = hom;
     }
 }

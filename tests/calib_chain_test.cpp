@@ -20,6 +20,7 @@
 #include <QVector>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QJsonDocument>
 #include <QRegularExpression>
 #include <QFile>
 #include <QFileInfo>
@@ -35,6 +36,7 @@
 #include "CoordinateTransformNode.h"
 #include "PositionCorrectNode.h"
 #include "FlowScene.h"
+#include "ProjectManager.h"
 #include "CalibrationManager.h"
 #include "DataObject.h"
 #include "OpencvUtil.h"
@@ -112,6 +114,17 @@ private slots:
     void handEyeExactDuplicateStaysGreen();       // 负对照：整行精确重复不得被一起判红
     void handEyeResidualReadoutMatchesFit();      // 残差读数必须等于按报回矩阵自算的值
     void handEyeStaleReadoutClearedOnRed();       // 两轮连跑：判红轮必须顶掉上一轮的原因与残差
+
+    // U-27：载入侧（fromJson）的元素类型／有限性口径 ＋ 6 元消费端的原因文案
+    //   后三条是判据闸，在**未改动的产线源**上可编译、可跑红（改前红读数见 §3.32）；
+    //   第一条不判产线行为，只钉住修法依赖的 Qt JSON 事实（NaN/Inf 出得去、回不来），改前改后同形。
+    void u27NonFiniteEncodingProbe();                 // 读数腿：非有限值在方案文件里的编码形态
+    void u27LoadSideRejectsNonNumericPayload();       // 元素不是数值／不是有限 ⇒ 整条不进表
+    void u27SchemeLoadEntryAppliesRejection();        // 同一口径要在真加载入口（applyProjectJson）生效
+    void u27SixTupleConsumerReasonNamesActualSize();  // 6 元消费端：原因说清"到底几项"，不把 7 项说成 9 元内参
+    // ⚠️ 这条要 `fromJson(json, &rejected)` 的新签名，**改前不编译** ⇒ 它没有"改前红"那一半，
+    // 只有 §3.32 的改坏自证臂（撤掉 rejected 填充／合并原因／空键那条绕过写侧口径）覆盖。
+    void u27LoadSideRejectListRecordsReason();        // 被拒条目要逐条给出「键 :: 原因」，且四类原因分得开
 
 private:
     QJsonObject m_managerSnapshot;
@@ -2542,6 +2555,370 @@ void CalibChainTest::handEyeStaleReadoutClearedOnRed()
                             .arg(firstResidual).arg(secondOk).arg(secondMs).arg(secondResidual).arg(secondNote)
                         + problems.join(QStringLiteral(" | "))));
     CalibrationManager::instance()->remove(key);
+}
+
+// ============================ U-27 载入侧：元素类型／有限性口径 ============================
+// 取证读数（§3.32，未改动源 · build/u27_probe/probe2.txt）：
+//   载入侧 `fromJson` 只做两件事——值不是数组就丢、项数 <6 就丢，元素一律 `v.toDouble()` 且不看类型；
+//   ⇒ 9 个字符串的内参条目进表后每位都是 0.00，`[520,null,320,…,true]` 进表成 [520,0,320,240,…]。
+//   写侧 `setHomography` 在空表上对 0/3/5/…/20 项**一律返回 true** ⇒ 不存在一道"项数闸"可复刻；
+//   它那道"同键项数不同即拒"是**覆盖冲突闸**，而 fromJson 先 clear 整表 ⇒ 该闸在载入路径上结构性不可能触发。
+// 下面四条腿把上述现状改写成判据：坏载荷不得进表，好载荷（含 7/8/10/20 项）一位都不能丢。
+
+/// 读数腿（不判产线行为，改前改后同形）：非有限值在方案文件里到底以什么形态存在。
+/// 钉住三件事实，它们决定 fromJson 那道 isfinite 检查是给谁写的：
+///   ① 写侧存进单例的 NaN/Inf 序列化出来是 `null`（Qt 不报错）；
+///   ② 该 `null` 再解析回来 `isDouble()=false`、`toDouble()=0.0` ⇒ 静默降级成"数值 0"；
+///   ③ 文本里手写的 nan／NaN／Infinity／-Infinity／1e999 会让**整份方案**解析失败，走不到 fromJson；
+///      而 `"1.5"`（字符串）与 `null` 解析正常，②把它们统一降级成 0.0。
+/// ⇒ 载入侧"非有限"这一维来自内存载荷与 null 降级，不来自解析器认得的字面量。
+void CalibChainTest::u27NonFiniteEncodingProbe()
+{
+    CalibrationManager *cm = CalibrationManager::instance();
+    const double inf = std::numeric_limits<double>::infinity();
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+
+    cm->clear();
+    QVERIFY2(cm->setHomography(QStringLiteral("u27f_nan6"),
+                               QVector<double>{0.1, 0.2, 300.0, 0.3, 0.4, nan}),
+             "写侧存不进含 NaN 的 6 元，本条前提不成立");
+    QVERIFY2(cm->setHomography(QStringLiteral("u27f_inf6"),
+                               QVector<double>{0.1, 0.2, 300.0, 0.3, 0.4, inf}),
+             "写侧存不进含 Inf 的 6 元，本条前提不成立");
+
+    const QByteArray text = QJsonDocument(cm->toJson()).toJson(QJsonDocument::Compact);
+    QVERIFY2(text.contains("null"),
+             qPrintable(QStringLiteral("写侧的 NaN/Inf 没被编码成 null，①这条口径要重取：")
+                        + QString::fromUtf8(text)));
+
+    QJsonParseError pe{};
+    const QJsonDocument reparsed = QJsonDocument::fromJson(text, &pe);
+    QVERIFY2(reparsed.isObject(),
+             qPrintable(QStringLiteral("toJson 文本再解析失败：") + pe.errorString()));
+    QStringList shapes;
+    const char *keys[] = {"u27f_nan6", "u27f_inf6"};
+    for (const char *k : keys) {
+        const QJsonArray arr = reparsed.object().value(QString::fromLatin1(k)).toArray();
+        QCOMPARE(arr.size(), 6);
+        const QJsonValue last = arr.at(5);
+        shapes << QStringLiteral("  %1 末项: isDouble=%2 toDouble=%3")
+                      .arg(QString::fromLatin1(k)).arg(last.isDouble())
+                      .arg(last.toDouble(), 0, 'f', 2);
+        QVERIFY2(!last.isDouble(),
+                 qPrintable(QStringLiteral("非有限值再解析回来仍是 isDouble，②这条事实不成立：")
+                            + shapes.join(QLatin1Char('\n'))));
+        QCOMPARE(last.toDouble(), 0.0);
+    }
+
+    struct Raw { const char *arr; bool parses; };
+    const Raw raws[] = {{"[nan]", false},      {"[NaN]", false},     {"[Infinity]", false},
+                        {"[-Infinity]", false}, {"[1e999]", false},  {"[\"1.5\"]", true},
+                        {"[null]", true}};
+    for (const Raw &r : raws) {
+        QJsonParseError e2{};
+        QJsonDocument::fromJson(QByteArray("{\"k\":") + QByteArray(r.arr) + QByteArray("}"), &e2);
+        const bool okParse = (e2.error == QJsonParseError::NoError);
+        QVERIFY2(okParse == r.parses,
+                 qPrintable(QStringLiteral("文本 %1 的可解析性与口径不符（期望=%2 实=%3 error=「%4」）")
+                                .arg(QString::fromLatin1(r.arr)).arg(r.parses).arg(okParse)
+                                .arg(e2.errorString())));
+    }
+
+    cm->clear();
+    cm->fromJson(m_managerSnapshot);
+    qInfo().noquote()
+        << QStringLiteral("U-27 非有限编码读数（写侧 NaN/Inf → 文件 null → 读回 0.0）：\n%1")
+               .arg(shapes.join(QLatin1Char('\n')));
+}
+
+/// 载入侧元素类型／有限性闸：非数值元素与非有限元素都必须让**整条条目**不进表；
+/// 同时钉住两条不得被顺手加严的口径——项数仍是"≥6"（不猜长度、不设 {6,9} 白名单，见 §3.19 拍定），
+/// 以及合法数值载荷逐位不变。
+/// 改前实测（同形状载荷）：strings9 进表 9 项全 0.00、nullbool9 进表成 [520,0,320,240,…]、
+/// nan6 进表（第 6 项是 NaN）、scalar 与 short5 被丢。⇒ 前三条改前红。
+void CalibChainTest::u27LoadSideRejectsNonNumericPayload()
+{
+    CalibrationManager *cm = CalibrationManager::instance();
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+
+    auto numArr = [](int n) {
+        QJsonArray a;
+        for (int i = 0; i < n; ++i)
+            a.append(1.0 + i);
+        return a;
+    };
+    QJsonArray strings9;
+    const char *tokens[] = {"fx", "fy", "cx", "cy", "k1", "k2", "p1", "p2", "rms"};
+    for (const char *t : tokens)
+        strings9 << QJsonValue(QString::fromLatin1(t));
+
+    QJsonArray nullbool9;
+    nullbool9 << 520.0 << QJsonValue(QJsonValue::Null) << 320.0 << 240.0
+              << 0.0 << 0.0 << 0.0 << 0.0 << true;
+
+    QJsonArray nan6;
+    nan6 << 0.1 << 0.2 << 300.0 << 0.3 << 0.4 << QJsonValue(nan);
+
+    QJsonObject o;
+    o[QStringLiteral("u27b_ok6")] = numArr(6);
+    o[QStringLiteral("u27b_ok9")] = numArr(9);
+    o[QStringLiteral("u27b_seven")] = numArr(7);     // 项数口径保持"≥6"：不是 6/9 也不丢
+    o[QStringLiteral("u27b_wide")] = numArr(20);     // 同上（HALCON 写侧长度未证到，不猜）
+    o[QStringLiteral("u27b_short5")] = numArr(5);    // 下界方向照旧丢（既有口径）
+    o[QStringLiteral("u27b_strings9")] = strings9;
+    o[QStringLiteral("u27b_nullbool9")] = nullbool9;
+    o[QStringLiteral("u27b_nan6")] = nan6;
+    o[QStringLiteral("u27b_scalar")] = 6.0;          // 值根本不是数组
+    cm->fromJson(o);
+
+    // ① 好载荷一位不许丢、一位不许变
+    const QVector<double> want6 = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
+    const QVector<double> want9 = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0};
+    QVERIFY2(cm->hasHomography(QStringLiteral("u27b_ok6")), "合法 6 元仿射没进表");
+    QVERIFY2(vecDeviation(cm->homography(QStringLiteral("u27b_ok6")), want6, 1e-12).isEmpty(),
+             qPrintable(QStringLiteral("合法 6 元被改写：")
+                        + csvOf(cm->homography(QStringLiteral("u27b_ok6")))));
+    QVERIFY2(cm->hasHomography(QStringLiteral("u27b_ok9")), "合法 9 元内参没进表");
+    QVERIFY2(vecDeviation(cm->homography(QStringLiteral("u27b_ok9")), want9, 1e-12).isEmpty(),
+             qPrintable(QStringLiteral("合法 9 元被改写：")
+                        + csvOf(cm->homography(QStringLiteral("u27b_ok9")))));
+    // ② 项数口径＝≥6，不得顺手改成"只认 6/9"
+    QVERIFY2(cm->homography(QStringLiteral("u27b_seven")).size() == 7,
+             qPrintable(QStringLiteral("7 项数值载荷被丢掉或改写（表内=")
+                        + csvOf(cm->homography(QStringLiteral("u27b_seven")))
+                        + QStringLiteral("）——载入侧不猜长度这条口径被动了")));
+    QVERIFY2(cm->homography(QStringLiteral("u27b_wide")).size() == 20,
+             qPrintable(QStringLiteral("20 项数值载荷被丢掉或改写（表内=")
+                        + csvOf(cm->homography(QStringLiteral("u27b_wide")))
+                        + QStringLiteral("）——载入侧不猜长度这条口径被动了")));
+    QVERIFY2(!cm->hasHomography(QStringLiteral("u27b_short5")),
+             "5 项短载荷进了表（既有口径是 <6 即丢）");
+
+    // ③ 坏载荷不得进表
+    QStringList got;
+    const char *badKeys[] = {"u27b_strings9", "u27b_nullbool9", "u27b_nan6", "u27b_scalar"};
+    for (const char *k : badKeys) {
+        const QString key = QString::fromLatin1(k);
+        if (cm->hasHomography(key))
+            got << QStringLiteral("%1 进表 %2 项=[%3]")
+                       .arg(key).arg(cm->homography(key).size()).arg(csvOf(cm->homography(key)));
+    }
+    QVERIFY2(got.isEmpty(),
+             qPrintable(QStringLiteral("载入侧只看项数、不看元素类型 => 坏载荷进了表：")
+                        + got.join(QStringLiteral(" ; "))
+                        + QStringLiteral("（改前实测：字符串数组读回全 0.00，null/bool 静默降为 0，NaN 原样进表）")));
+    // 前四位仍按"能解析出来"的形状留在表里 ⇒ 才是"整条丢弃"而不是"部分接受"
+    QVERIFY2(!cm->hasHomography(QStringLiteral("u27b_nullbool9")),
+             "含 null/bool 的条目被部分接受（只留下能转成数的那几项）");
+
+    cm->clear();
+    cm->fromJson(m_managerSnapshot);
+}
+
+/// 同一口径必须在**真加载入口**上生效：`applyProjectJson` 是手动打开与崩溃恢复共用的入口
+/// （include/ProjectManager.h 的约定：不留第二份实现），它只是直调 fromJson，
+/// 所以元素类型闸若不写在 fromJson 里，打开方案这条路就没人拦。
+/// 改前实测：同一条字符串载荷经 applyProjectJson 进了单例（9 项全 0.00）⇒ 本条改前红。
+void CalibChainTest::u27SchemeLoadEntryAppliesRejection()
+{
+    CalibrationManager *cm = CalibrationManager::instance();
+
+    // 合成根对象只带 scenes + calibrations 两段：不去动其余五个全局单例，
+    // 也不带 runtimeLayout（applyProjectJson 会把它原子写回运行界面布局文件）。
+    QJsonObject root;
+    QJsonArray sceneArray;
+    sceneArray.append(QJsonObject());   // 一条空流程即可越过"方案里没有任何流程"的早退（src/ProjectManager.cpp:294-298）
+    root[QStringLiteral("scenes")] = sceneArray;
+
+    QJsonObject cals;
+    const QVector<double> six = {0.1, 0.0, 5.0, 0.0, 0.1, -3.0};   // 合法 6 元仿射（占位载荷）
+    QJsonArray sixArr;
+    for (double d : six)
+        sixArr.append(d);
+    cals[QStringLiteral("u27c_ok6")] = sixArr;
+
+    QJsonArray strings9;
+    const char *tokens[] = {"fx", "fy", "cx", "cy", "k1", "k2", "p1", "p2", "rms"};
+    for (const char *t : tokens)
+        strings9 << QJsonValue(QString::fromLatin1(t));
+    cals[QStringLiteral("u27c_strings9")] = strings9;
+    root[QStringLiteral("calibrations")] = cals;
+
+    cm->clear();   // 从空表出发：条目"在表里"只可能是载入路径给的
+    QList<FlowScene *> restored;
+    ProjectManager loader;
+    QVERIFY2(loader.applyProjectJson(root, restored),
+             "带一条空流程的方案在加载入口被判失败（本条前提不成立）");
+    QCOMPARE(restored.size(), 1);
+
+    QStringList problems;
+    if (!cm->hasHomography(QStringLiteral("u27c_ok6")))
+        problems << QStringLiteral("方案里合法的 6 元没被装回来（闸把好东西也丢了）");
+    else {
+        const QString dev = vecDeviation(cm->homography(QStringLiteral("u27c_ok6")), six, 1e-12);
+        if (!dev.isEmpty())
+            problems << QStringLiteral("合法 6 元装载后不符：") + dev;
+    }
+    if (cm->hasHomography(QStringLiteral("u27c_strings9")))
+        problems << QStringLiteral("9 个字符串的内参条目经真加载入口进了单例（项数=%1 值=[%2]，每位 0.00）")
+                        .arg(cm->homography(QStringLiteral("u27c_strings9")).size())
+                        .arg(csvOf(cm->homography(QStringLiteral("u27c_strings9"))));
+
+    qDeleteAll(restored);
+    cm->clear();
+    cm->fromJson(m_managerSnapshot);
+    QVERIFY2(problems.isEmpty(), qPrintable(QStringLiteral("[U-27 加载入口] ") + problems.join(QStringLiteral("；"))));
+}
+
+/// 6 元消费端（坐标系变换／位置修正）的原因文案：项数要报**实际值**，且不得把非 9 项的载荷
+/// 说成"9 元内参"。改前实测（7 项载荷）：两处原因都写「有 7 项（不是 6 元仿射，疑似另一种载荷：9 元内参）」
+/// ——判红本身是对的，但现场照这句话去查"内参被当仿射用"会查错方向（HALCON 长度未证到的载荷也走这句）。
+/// 9 项那一半仍须点出"9 元内参"，作为改文案的负对照（不是把这句话整条删掉）。
+void CalibChainTest::u27SixTupleConsumerReasonNamesActualSize()
+{
+    CalibrationManager *cm = CalibrationManager::instance();
+    auto numArr = [](int n) {
+        QJsonArray a;
+        for (int i = 0; i < n; ++i)
+            a.append(1.0 + i);
+        return a;
+    };
+    QJsonObject o;
+    o[QStringLiteral("u27d_seven")] = numArr(7);
+    o[QStringLiteral("u27d_nine")] = numArr(9);
+    cm->clear();
+    cm->fromJson(o);
+
+    QStringList problems;
+    auto judgeSeven = [&](const QString &tag, bool ok, const QString &note) {
+        const QString head = QStringLiteral("%1（7 项载荷）：").arg(tag);
+        if (ok)
+            problems << head + QStringLiteral("被判绿");
+        else if (note.isEmpty())
+            problems << head + QStringLiteral("判红却没留原因");
+        else {
+            if (!note.contains(QStringLiteral("7 项")))
+                problems << head + QStringLiteral("原因没点出实际项数，原文=「%1」").arg(note);
+            if (note.contains(QStringLiteral("9 元内参")))
+                problems << head + QStringLiteral("原因把 7 项说成 9 元内参，原文=「%1」").arg(note);
+        }
+    };
+
+    CoordinateTransformNode ct;
+    ct.init();
+    ct.setParam(QStringLiteral("fixtureName"), QStringLiteral("u27d_seven"));
+    ct.setParam(QStringLiteral("x"), 200.0);
+    ct.setParam(QStringLiteral("y"), 150.0);
+    feedImage(ct, blankImage(640, 480));
+    const bool ctOk = ct.execute();
+    judgeSeven(QStringLiteral("坐标系变换"), ctOk, transformNoteOf(ct));
+
+    PositionCorrectNode pc;
+    setupCorrectNode(pc, QStringLiteral("u27d_seven"), 200.0, 150.0, 0.0, 1.0, 0.0, 0.0);
+    const bool pcOk = pc.execute();
+    judgeSeven(QStringLiteral("位置修正"), pcOk, correctNoteOf(pc));
+
+    // 负对照：真是 9 项时，坐标系变换侧仍须点出"9 元内参"
+    // （位置修正侧的 9 项形态已由 r5CamParamsNineTupleNotValidInPositionCorrect 钉住，不在此重复）
+    CoordinateTransformNode node9;
+    node9.init();
+    node9.setParam(QStringLiteral("fixtureName"), QStringLiteral("u27d_nine"));
+    node9.setParam(QStringLiteral("x"), 200.0);
+    node9.setParam(QStringLiteral("y"), 150.0);
+    feedImage(node9, blankImage(640, 480));
+    const bool ok9 = node9.execute();
+    const QString note9 = transformNoteOf(node9);
+    if (ok9)
+        problems << QStringLiteral("9 元内参被当 6 元仿射仍判绿");
+    else if (!note9.contains(QStringLiteral("9 项")) || !note9.contains(QStringLiteral("9 元内参")))
+        problems << QStringLiteral("9 项那一半没点出「9 元内参」（文案被整条删掉了），原文=「%1」").arg(note9);
+
+    cm->clear();
+    cm->fromJson(m_managerSnapshot);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[U-27 消费端原因] ") + problems.join(QStringLiteral("；"))));
+}
+
+/// `rejected` 出参的判据：被拒条目逐条给「键 :: 原因」，四类原因分得开（键名为空／值不是数组／
+/// 第 i 项不是数值／第 i 项不是有限值／项数不足），且**只有**被拒的键进列表、进了表的键一个都不进。
+/// 空键名那条钉的是"载入侧不得绕过写侧口径"：`setHomography` 对空名直接返回 false，
+/// 旧 fromJson 会把 `"": [6 项]` 装进表——表里多一条谁都叫不出名字的载荷，remove() 也点不到它。
+void CalibChainTest::u27LoadSideRejectListRecordsReason()
+{
+    CalibrationManager *cm = CalibrationManager::instance();
+
+    auto numArr = [](int n) {
+        QJsonArray a;
+        for (int i = 0; i < n; ++i)
+            a.append(1.0 + i);
+        return a;
+    };
+    QJsonArray strings9;
+    const char *tokens[] = {"fx", "fy", "cx", "cy", "k1", "k2", "p1", "p2", "rms"};
+    for (const char *t : tokens)
+        strings9 << QJsonValue(QString::fromLatin1(t));
+    QJsonArray nullbool9;
+    nullbool9 << 520.0 << QJsonValue(QJsonValue::Null) << 320.0 << 240.0
+              << 0.0 << 0.0 << 0.0 << 0.0 << true;
+    QJsonArray nan6;
+    nan6 << 0.1 << 0.2 << 300.0 << 0.3 << 0.4 << QJsonValue(std::numeric_limits<double>::quiet_NaN());
+
+    QJsonObject o;
+    o[QStringLiteral("u27e_ok6")] = numArr(6);
+    o[QStringLiteral("u27e_seven")] = numArr(7);     // 合法（项数口径＝≥6）
+    o[QStringLiteral("u27e_short5")] = numArr(5);
+    o[QStringLiteral("u27e_strings9")] = strings9;
+    o[QStringLiteral("u27e_nullbool9")] = nullbool9;
+    o[QStringLiteral("u27e_nan6")] = nan6;
+    o[QStringLiteral("u27e_scalar")] = 6.0;
+    o.insert(QString(), numArr(6));                  // 空键名
+
+    QStringList rejected;
+    cm->fromJson(o, &rejected);
+
+    QStringList problems;
+    // ① 被拒的六条一个不少、原因分得开
+    struct Want { QString key; QString needle; };
+    const Want wants[] = {{QString(), QStringLiteral("键名为空")},
+                          {QStringLiteral("u27e_scalar"), QStringLiteral("值不是数组")},
+                          {QStringLiteral("u27e_short5"), QStringLiteral("少于 6")},
+                          {QStringLiteral("u27e_strings9"), QStringLiteral("不是数值")},
+                          {QStringLiteral("u27e_nullbool9"), QStringLiteral("不是数值")},
+                          {QStringLiteral("u27e_nan6"), QStringLiteral("不是有限值")}};
+    for (const Want &w : wants) {
+        const QString key = w.key;
+        QStringList hits;
+        for (const QString &r : rejected)
+            if (r.startsWith(key + QStringLiteral(" :: ")))
+                hits << r;
+        if (hits.size() != 1)
+            problems << QStringLiteral("键 \"%1\" 的拒绝记录数=%2（期望 1 条），列表=%3")
+                            .arg(key).arg(hits.size()).arg(hits.join(QStringLiteral(" | ")));
+        else if (!hits.first().contains(w.needle))
+            problems << QStringLiteral("键 \"%1\" 的原因没点出「%2」，原文=「%3」")
+                            .arg(key).arg(w.needle).arg(hits.first());
+    }
+    if (rejected.size() != 6)
+        problems << QStringLiteral("rejected 共 %1 条（期望 6 条）：").arg(rejected.size())
+                 + rejected.join(QStringLiteral(" | "));
+
+    // ② 表里只留合法条目，且与 rejected 列表互斥
+    if (cm->homography(QStringLiteral("u27e_ok6")).size() != 6)
+        problems << QStringLiteral("合法 6 元没进表");
+    if (cm->homography(QStringLiteral("u27e_seven")).size() != 7)
+        problems << QStringLiteral("7 项数值载荷没进表（项数口径≥6 被动了）");
+    for (const QString &name : cm->names()) {
+        for (const QString &r : rejected)
+            if (r.startsWith(name + QStringLiteral(" :: ")))
+                problems << QStringLiteral("被拒的键 \"%1\" 却同时在表里").arg(name);
+    }
+    if (cm->hasHomography(QString()))
+        problems << QStringLiteral("空键名载荷进了表（写侧对空名是返回 false 的，载入侧不得绕过）");
+
+    cm->clear();
+    cm->fromJson(m_managerSnapshot);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[U-27 拒绝记录] ") + problems.join(QStringLiteral("；"))));
 }
 
 QTEST_MAIN(CalibChainTest)

@@ -315,8 +315,15 @@ bool ProjectManager::applyProjectJson(const QJsonObject &root, QList<FlowScene *
         GlobalTriggerManager::instance()->fromJson(root[QStringLiteral("globalTriggers")].toObject());
     if (root.contains(QStringLiteral("heartbeat")))
         HeartbeatManager::instance()->fromJson(root[QStringLiteral("heartbeat")].toObject());
-    if (root.contains(QStringLiteral("calibrations")))
-        CalibrationManager::instance()->fromJson(root[QStringLiteral("calibrations")].toObject());
+    if (root.contains(QStringLiteral("calibrations"))) {
+        // 被拒条目（键名空／值不是数组／元素不是有限数值／项数不足）不进表，但必须留痕：
+        // 静默丢弃的表现是"方案打开后标定结果不见了"，现场无从下手（U-27）。
+        QStringList rejected;
+        CalibrationManager::instance()->fromJson(root[QStringLiteral("calibrations")].toObject(),
+                                                 &rejected);
+        for (const QString &r : rejected)
+            VFP_DEBUG << "方案加载：标定条目未装进表" << r;
+    }
 
     // 恢复运行界面布局：校验后原子写回布局文件，运行界面加载时自动生效
     if (root.contains(QStringLiteral("runtimeLayout"))) {
