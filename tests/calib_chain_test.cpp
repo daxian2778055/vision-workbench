@@ -146,6 +146,13 @@ private slots:
     // 只是把 (0, 0) 当成输入点（矩阵的平移项直接成了输出）。下面这条量的是这一面。
     void u31LoadedPoseStringFieldsSilentlyUsed();
 
+    // §3.35「登记未修」第 3 条：四个位姿键里只有 poseScale 允许缺键（回落 1.0），另外三个缺即拒；
+    // 而"给了但不是数值"四键一律拒。那条不对称当时**没有腿钉**（表 2 的 L5 两形态只测了前三键）。
+    // 下面一条测三形：缺 poseScale／poseScale 是字符串／poseScale 是数值（与第二形只差一个 JSON 类型），
+    // 三形各配一条撤闸臂（K1 把 poseScale 也设成必填／K2 只对必填键查元素类型／K3 把回落值 1.0 改成 0.0）。
+    // ⚠️ 产线字节本轮一个字没动，所以这三形是**改后新腿**、没有"改前红"那一半；它们的强度来自那三条臂。
+    void u31PoseScaleAsymmetryStaysPinned();
+
 private:
     QJsonObject m_managerSnapshot;
 };
@@ -3452,6 +3459,125 @@ void CalibChainTest::u31LoadedPoseStringFieldsSilentlyUsed()
     cm->fromJson(m_managerSnapshot);
     QVERIFY2(problems.isEmpty(),
              qPrintable(QStringLiteral("[U-31 位姿静默错点] ") + problems.join(QStringLiteral("；"))));
+}
+
+// ============================ U-31 未修第 3 条：poseScale 那条不对称 ============================
+// 该不对称写在 src/FlowScene.cpp 夹具段的注释里（poseScale 保留「缺键回落 1.0」，给了就必须是数值）。
+// 上一轮只测了 poseRow／poseCol／poseAngle 三个必填键（§3.35 表 2 的 L5），这一条补在第四个键上。
+
+/// 一个形态跑一遍：矩阵恒为合法 6 元，手填 x/y＝200,150，位姿 row=11 col=22 angle=3。
+/// wantPose／wantScale 是本形期望的载入结果，wantReason 非空时留痕必须恰好一条且含该句。
+void CalibChainTest::u31PoseScaleAsymmetryStaysPinned()
+{
+    CalibrationManager *cm = CalibrationManager::instance();
+    QStringList problems;
+    QStringList readings;
+    const QVector<double> kHom = {2, 0, 30, 0, 2, 40};
+
+    auto runForm = [&](const QString &form, const QString &key, const QByteArray &poseTail,
+                       bool wantPose, double wantScale, const QString &wantReason) {
+        QJsonParseError err;
+        const QByteArray schemeJson = QByteArrayLiteral("{\"flowName\":\"u31\",\"flowMode\":1,\"fixtures\":{\"")
+            + key.toUtf8()
+            + QByteArrayLiteral("\":{\"hom\":[2,0,30,0,2,40],")
+            + poseTail
+            + QByteArrayLiteral("\"hasHom\":true,\"hasPose\":true}}}");
+        const QJsonObject json = QJsonDocument::fromJson(schemeJson, &err).object();
+        if (err.error != QJsonParseError::NoError || json.isEmpty()) {
+            // 上一轮踩过这条：载荷少一个收尾花括号时整跑是"为错误的理由变红"。先在脚本侧验 parse。
+            problems << QStringLiteral("[U-32 %1] 方案 JSON 没 parse 出对象（%2），本形无从判起")
+                            .arg(form, err.errorString());
+            readings << QStringLiteral("  %1 :: parse 失败（%2）").arg(form, err.errorString());
+            return;
+        }
+
+        QStringList rejected;
+        FlowScene scene;
+        scene.extrasFromJson(json, &rejected);
+        const FlowFixture fx = scene.fixture(key);
+
+        QStringList why;
+        if (fx.hasPose != wantPose)
+            why << QStringLiteral("hasPose=%1（期望=%2）").arg(fx.hasPose).arg(wantPose);
+        if (wantPose && fx.poseScale != wantScale)
+            why << QStringLiteral("poseScale=%1（期望=%2）")
+                       .arg(fx.poseScale, 0, 'f', 3).arg(wantScale, 0, 'f', 3);
+        if (wantPose && (fx.poseRow != 11.0 || fx.poseCol != 22.0 || fx.poseAngle != 3.0))
+            why << QStringLiteral("位姿另三键被连累（row=%1 col=%2 ang=%3）")
+                       .arg(fx.poseRow).arg(fx.poseCol).arg(fx.poseAngle);
+        if (!fx.hasHom || fx.hom != kHom)
+            why << QStringLiteral("矩阵本形合法，必须原样在表里（hasHom=%1 表内=[%2]）")
+                       .arg(fx.hasHom).arg(csvOf(fx.hom));
+
+        if (wantReason.isEmpty()) {
+            if (!rejected.isEmpty())
+                why << QStringLiteral("本形不该留痕，实报 %1 条：「%2」")
+                           .arg(rejected.size()).arg(rejected.join(QStringLiteral("｜")));
+        } else {
+            if (rejected.size() != 1)
+                why << QStringLiteral("留痕应恰好一条，实=%1 条：「%2」")
+                           .arg(rejected.size()).arg(rejected.join(QStringLiteral("｜")));
+            else if (!rejected.at(0).contains(wantReason))
+                why << QStringLiteral("留痕文案没带出「%1」，实=「%2」").arg(wantReason, rejected.at(0));
+        }
+
+        // 现场面：位姿在不在表里，消费端的输入点就换不换（矩阵合法 ⇒ 两种都判绿）。
+        CoordinateTransformNode ct;
+        ct.setFlowSceneRef(&scene);
+        ct.init();
+        ct.setParam(QStringLiteral("fixtureName"), key);
+        ct.setParam(QStringLiteral("x"), 200.0);
+        ct.setParam(QStringLiteral("y"), 150.0);
+        feedImage(ct, blankImage(640, 480));
+        const bool ok = ct.execute();
+        bool present = false;
+        const QPointF q = resultPointOf(ct, &present);
+        const QPointF truth = wantPose ? CalibrationManager::applyHomography(kHom, 22.0, 11.0)
+                                       : CalibrationManager::applyHomography(kHom, 200.0, 150.0);
+        if (!ok)
+            why << QStringLiteral("矩阵合法却判红（原因栏=「%1」）").arg(transformNoteOf(ct));
+        else if (!present || q != truth) {
+            const QString poseWant = wantPose ? QStringLiteral("仍有效、取 poseCol/poseRow")
+                                              : QStringLiteral("已作废、落回手填 x/y");
+            why << QStringLiteral("产出点实读 (%1, %2)，位姿%3应为 (%4, %5)")
+                       .arg(q.x(), 0, 'f', 2).arg(q.y(), 0, 'f', 2).arg(poseWant)
+                       .arg(truth.x(), 0, 'f', 2).arg(truth.y(), 0, 'f', 2);
+        }
+
+        readings << QStringLiteral("  %1 :: hasPose=%2 poseScale=%3 留痕=%4 产出=(%5, %6) execute=%7")
+                        .arg(form)
+                        .arg(fx.hasPose)
+                        .arg(fx.poseScale, 0, 'f', 3)
+                        .arg(rejected.isEmpty() ? QStringLiteral("无")
+                                                : QStringLiteral("「%1」").arg(rejected.at(0)))
+                        .arg(q.x(), 0, 'f', 2)
+                        .arg(q.y(), 0, 'f', 2)
+                        .arg(ok);
+        if (!why.isEmpty())
+            problems << QStringLiteral("[U-32 %1] %2").arg(form, why.join(QStringLiteral("；")));
+    };
+
+    // 形 1：只缺 poseScale（另三键齐且是数值）⇒ 位姿仍有效，缩放回落 1.0
+    runForm(QStringLiteral("P1 缺 poseScale"), QStringLiteral("u32ps_absent"),
+            QByteArrayLiteral("\"poseRow\":11,\"poseCol\":22,\"poseAngle\":3,"),
+            true, 1.0, QString());
+
+    // 形 2：poseScale 写成字符串 ⇒ 位姿整条作废，且报出「位姿 poseScale 不是数值」
+    //       （与形 3 只差一个 JSON 类型："2" 对 2.0）
+    runForm(QStringLiteral("P2 poseScale 是字符串"), QStringLiteral("u32ps_str"),
+            QByteArrayLiteral("\"poseRow\":11,\"poseCol\":22,\"poseAngle\":3,\"poseScale\":\"2\","),
+            false, 1.0, QStringLiteral("位姿 poseScale 不是数值"));
+
+    // 形 3：poseScale 是数值 ⇒ 该用载荷给的那个值，不许回落成 1.0
+    runForm(QStringLiteral("P3 poseScale 是数值"), QStringLiteral("u32ps_two"),
+            QByteArrayLiteral("\"poseRow\":11,\"poseCol\":22,\"poseAngle\":3,\"poseScale\":2,"),
+            true, 2.0, QString());
+
+    cm->clear();
+    cm->fromJson(m_managerSnapshot);
+    qInfo().noquote() << QStringLiteral("U-32 poseScale 不对称三形读数：\n%1").arg(readings.join(QLatin1Char('\n')));
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[U-32 poseScale 不对称] ") + problems.join(QStringLiteral(" ｜ "))));
 }
 
 QTEST_MAIN(CalibChainTest)
