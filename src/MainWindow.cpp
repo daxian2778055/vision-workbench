@@ -40,6 +40,7 @@
 #include "Connection.h"
 #include "NodeGraphicsItem.h"
 #include "ProjectManager.h"
+#include "ProjectLoadNotes.h"   // U-34：载入留痕接可见面
 #include "AppDatabase.h"
 #include "BrandHeader.h"
 #include "GlobalVariableManager.h"
@@ -1835,8 +1836,13 @@ ProjectManager *MainWindow::projectManager()
 {
     // 懒创建集中到一处：原先两个入口各自 if(!m_projectManager) new，易漏且一旦漏就是两份实例
     // （各自的 lastFilePath 互不相同 → 自动保存/恢复拿到的是错的方案路径）。
-    if (!m_projectManager)
+    if (!m_projectManager) {
         m_projectManager = new ProjectManager(this);
+        // U-34：载入期降级／被拒的留痕必须出现在气窗日志面板里（现场那句"标定结果不见了"
+        // 得有下一句）。接线只在 ProjectLoadNotes::attachTo 那一份里写，这里只负责把出口给它。
+        ProjectLoadNotes::attachTo(m_projectManager,
+                                   [this](const QString &note) { logMessage(note); });
+    }
     return m_projectManager;
 }
 

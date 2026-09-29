@@ -283,12 +283,21 @@ bool ProjectManager::fileNeedsPassphrase(const QString &filePath)
     return SchemePackage::isEncryptedEnvelope(head);
 }
 
+void ProjectManager::reportLoadNote(const QString &text)
+{
+    // 两条面共用这一份文案。日志文件那半不撤：crashLogHandler 对 QtDebugMsg 只写文件、
+    // 连 stderr 都不转发（src/main.cpp:96），所以它单独存在时现场看不见——那正是 A9 那一格；
+    // 但既有取证口径（"日志里有那一句"）也不该被本轮悄悄拿走。
+    VFP_DEBUG << text;
+    emit loadNote(text);
+}
+
 bool ProjectManager::applyProjectJson(const QJsonObject &root, QList<FlowScene *> &scenes)
 {
     const int schemaVersion = root.value(QStringLiteral("schemaVersion")).toInt(1);
     if (schemaVersion > kProjectSchemaVersion) {
-        VFP_DEBUG << "警告：方案文件版本" << schemaVersion << "高于本程序支持的版本"
-                  << kProjectSchemaVersion << "，可能存在无法识别的算子，请勿直接覆盖保存";
+        reportLoadNote(QStringLiteral("警告：方案文件版本 %1 高于本程序支持的版本 %2，可能存在无法识别的算子，请勿直接覆盖保存")
+                       .arg(schemaVersion).arg(kProjectSchemaVersion));
     }
 
     QJsonArray sceneArray = root[QStringLiteral("scenes")].toArray();
@@ -322,7 +331,7 @@ bool ProjectManager::applyProjectJson(const QJsonObject &root, QList<FlowScene *
         CalibrationManager::instance()->fromJson(root[QStringLiteral("calibrations")].toObject(),
                                                  &rejected);
         for (const QString &r : rejected)
-            VFP_DEBUG << "方案加载：标定条目未装进表" << r;
+            reportLoadNote(QStringLiteral("方案加载：标定条目未装进表 %1").arg(r));
     }
 
     // 恢复运行界面布局：校验后原子写回布局文件，运行界面加载时自动生效
@@ -339,7 +348,7 @@ bool ProjectManager::applyProjectJson(const QJsonObject &root, QList<FlowScene *
                     layoutFile.commit();
                 }
             } else {
-                VFP_DEBUG << "方案内 runtimeLayout 不是合法 JSON 对象，已忽略（不覆盖现有布局）";
+                reportLoadNote(QStringLiteral("方案内 runtimeLayout 不是合法 JSON 对象，已忽略（不覆盖现有布局）"));
             }
         }
     }
@@ -468,13 +477,13 @@ void ProjectManager::sceneFromJson(const QJsonObject &json, FlowScene *scene)
             const QString wantTypeId = nodeJson[kTypeIdKey].toString();
             const QString gotTypeId = node->property("vfpNodeTypeId").toString();
             if (gotTypeId.isEmpty()) {
-                VFP_DEBUG << "警告：方案中的算子未注册，已降级为通用算子（算法已丢失）:" << nodeName
-                          << " 期望类型:"
-                          << (wantTypeId.isEmpty() ? QStringLiteral("(旧版本方案未记录)") : wantTypeId);
+                reportLoadNote(QStringLiteral("警告：方案中的算子未注册，已降级为通用算子（算法已丢失）: %1 期望类型: %2")
+                               .arg(nodeName,
+                                    wantTypeId.isEmpty() ? QStringLiteral("(旧版本方案未记录)")
+                                                         : wantTypeId));
             } else if (!wantTypeId.isEmpty() && gotTypeId != wantTypeId) {
-                VFP_DEBUG << "警告：方案算子类型不匹配，已按当前实现加载:" << nodeName
-                          << " 期望:" << wantTypeId << " 实际:" << gotTypeId
-                          << "（参数可能不兼容，请核对该算子配置）";
+                reportLoadNote(QStringLiteral("警告：方案算子类型不匹配，已按当前实现加载: %1 期望: %2 实际: %3（参数可能不兼容，请核对该算子配置）")
+                               .arg(nodeName, wantTypeId, gotTypeId));
             }
 
             node->fromJson(nodeJson);
@@ -489,8 +498,8 @@ void ProjectManager::sceneFromJson(const QJsonObject &json, FlowScene *scene)
             if (savedModuleId > 0 && !usedModuleIds.contains(savedModuleId)) {
                 node->setModuleId(savedModuleId);
             } else if (savedModuleId > 0) {
-                VFP_DEBUG << "警告：方案中出现重复模块号，保留本算子的新号:" << savedModuleId
-                          << nodeName;
+                reportLoadNote(QStringLiteral("警告：方案中出现重复模块号，保留本算子的新号: %1 %2")
+                               .arg(savedModuleId).arg(nodeName));
             }
             // 双向唯一性：上面的"跳过恢复"只保证不重复占用**文件里**的号，但这个算子当前拿到的
             // 新号本身可能已被前面某个算子**恢复**成同一个值（实测踩到：两节点都成了 32）。
@@ -498,8 +507,8 @@ void ProjectManager::sceneFromJson(const QJsonObject &json, FlowScene *scene)
             // 故这里必须再确认一次，撞了就重新发号（宁可该引用失效，也不能一号两算子）。
             if (usedModuleIds.contains(node->moduleId())) {
                 const int fresh = NodeBase::allocateModuleId();
-                VFP_DEBUG << "警告：模块号冲突（可能来自重复号的文件），已重新发号:"
-                          << node->moduleId() << "->" << fresh << nodeName;
+                reportLoadNote(QStringLiteral("警告：模块号冲突（可能来自重复号的文件），已重新发号: %1->%2 %3")
+                               .arg(node->moduleId()).arg(fresh).arg(nodeName));
                 node->setModuleId(fresh);
             }
             usedModuleIds.insert(node->moduleId());
@@ -541,5 +550,5 @@ void ProjectManager::sceneFromJson(const QJsonObject &json, FlowScene *scene)
     // U-31：夹具条目在载入侧被降级（矩阵项数／元素不合形，或位姿读不出来）时必须留痕——
     // 静默丢弃的表现是"方案打开后夹具的矩阵不见了"，而算子那边只是按既有形态判红。
     for (const QString &n : fixtureNotes)
-        VFP_DEBUG << "方案加载：夹具条目降级" << n;
+        reportLoadNote(QStringLiteral("方案加载：夹具条目降级 %1").arg(n));
 }

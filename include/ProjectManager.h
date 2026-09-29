@@ -57,7 +57,18 @@ public:
     QString lastFilePath() const { return m_lastFilePath; }
     QString annotationDir() const;
 
+
+signals:
+    /// U-34（推进计划 §3.32 登记未修第 2 条那一格的可见面）：载入期每发生一条
+    /// 「降级／被拒／按现状加载」留痕就发一句人话。产线侧唯一的接线在 ProjectLoadNotes.h，
+    /// 由 MainWindow 把每一句写进气窗日志面板；本类同时保留 VFP_DEBUG 那一份（崩溃日志文件），
+    /// 两条面共用同一份文案，不各写一遍。
+    void loadNote(const QString &note);
 private:
+    /// 一句载入期留痕走两条面：崩溃日志文件（VFP_DEBUG，改前唯一那条）与可见面信号 loadNote。
+    /// 文案在这里拼一遍，载入期八个站点都调它。
+    void reportLoadNote(const QString &text);
+
     QString m_lastFilePath;
     bool m_loadedReadonly = false;
 };

@@ -3,6 +3,9 @@
 #include <QtTest/QtTest>
 #include <QObject>
 #include <QSignalSpy>
+#include <QMetaMethod>
+#include "CalibrationManager.h"   // U-34 取证：标定表快照/还原
+#include "ProjectLoadNotes.h"   // U-34：可见面接线的唯一定义
 
 // 节点头文件
 #include "FlowScene.h"
@@ -159,6 +162,11 @@ private slots:
     // U-33：真加载入口（applyProjectJson）→ 写侧（buildProjectJson）→ 再经真加载器重开，
     // 把「打开即降级、再保存是否把那条载荷留在文件里」从读盘级推论升级成运行期读数。
     void testFixtureOpenSaveReopenRoundTrip();
+    // U-34（A9 那一格）：载入期降级／被拒留痕必须到可见面，且两条面逐句同形。
+    // 改前形状只有一条取证腿量过（ownSignals=0，留痕只在调试通道），这里换成两条真腿：
+    // 一条钉「接线在 ⇒ 撤了就红」，一条负对照钉「不该报的也不报」。
+    void testLoadDegradationReachesVisibleFace();
+    void testCleanProjectLoadEmitsNoVisibleNotes();
     void testShadowMemberSingleSourceAndConcurrentAccess();   // S1 残留试点：参数唯一来源 + 并发读写
     void testExternalTriggerAcceptedOnlyInSoftwareMode();   // F-1：非软触发模式不得受理外部触发
     void testRecentFilesMenu();
@@ -4253,6 +4261,232 @@ void IntegrationTest::testFixtureOpenSaveReopenRoundTrip()
     qDeleteAll(ctlReopened);
     QVERIFY2(problems.isEmpty(),
              qPrintable(QStringLiteral("[U-33 打开→保存→重开] ") + problems.join(QStringLiteral("；"))));
+}
+
+// U-34：载入期降级／被拒留痕到可见面的两条腿（撤接线就红的形状）。
+//
+// 改前形状（本腿在未改动产线源上跑出来的读数 [U34-PRE] loaded=yes ownSignals=0 debugLines=2
+// hits=2，日志 build/u34_probe/pre_probe_run.txt）：ProjectManager 一个自有信号都没有，那两句
+// 留痕只进 VFP_DEBUG ⇒ 现场只剩"方案打开后标定结果／夹具的矩阵不见了"。
+// 交出形状：那两句同时到调试通道（崩溃日志文件）与可见面信号，接线只有 ProjectLoadNotes::attachTo
+// 那一份定义——产线（MainWindow）与本腿调的是同一个函数，撤掉 connect 本腿立刻红。
+
+static QStringList *g_u34DebugSink = nullptr;
+static QtMessageHandler g_u34PreviousHandler = nullptr;
+
+static void u34CaptureMessage(QtMsgType type, const QMessageLogContext &ctx, const QString &msg)
+{
+    if (type == QtDebugMsg && g_u34DebugSink)
+        g_u34DebugSink->append(msg);
+    if (g_u34PreviousHandler)
+        g_u34PreviousHandler(type, ctx, msg);
+}
+
+/// 调试通道收到的那一行要过这里才跟可见面可比：Qt6 的 QDebug 对 QString 实参自动加引号
+/// （`VFP_DEBUG << text` 收到的是 "text"），那是通道格式不是文案。不剥这一步，交出后的
+/// 第一跑读数是 [U34] … debugTrace=0（build/u34_probe/post_probe_run.txt），负对照那半
+/// 也会恒读 0 条＝假绿。
+static QString u34DebugFaceText(const QString &line)
+{
+    if (line.startsWith(QLatin1Char('"')) && line.endsWith(QLatin1Char('"')) && line.size() >= 2)
+        return line.mid(1, line.size() - 2);
+    return line;
+}
+
+static QStringList u34LoadTraces(const QStringList &debugLines)
+{
+    QStringList out;
+    for (const QString &line : debugLines) {
+        const QString text = u34DebugFaceText(line);
+        if (text.startsWith(QStringLiteral("方案加载：")))
+            out << text;
+    }
+    return out;
+}
+
+/// 一份「必然降级」的方案：夹具的矩阵写成 6 个字符串（载入侧矩阵作废），标定条目第 1 项是
+/// 字符串（整条不进表）⇒ 两段留痕都该发生。载荷形状取自 u33 那一族，只换键名。
+struct U34Payload
+{
+    QJsonObject root;
+    QJsonObject calibBefore;
+};
+
+static U34Payload u34DegradedPayload()
+{
+    QStringList strSix;
+    strSix << QStringLiteral("p1") << QStringLiteral("q2") << QStringLiteral("r3")
+           << QStringLiteral("s4") << QStringLiteral("t5") << QStringLiteral("u6");
+    QJsonObject fixtures;
+    fixtures[QStringLiteral("u34_str6")] = u33::entryJson(u33::strs(strSix), true, QJsonObject());
+
+    QJsonArray calibBad;
+    calibBad.append(QStringLiteral("1"));
+    calibBad.append(2.0);
+    calibBad.append(3.0);
+    calibBad.append(4.0);
+    calibBad.append(5.0);
+    calibBad.append(6.0);
+    QJsonObject calibs;
+    calibs[QStringLiteral("u34_badCalib")] = calibBad;
+
+    U34Payload p;
+    QJsonArray arr;
+    arr.append(u33::sceneWith(fixtures));
+    p.root[QStringLiteral("scenes")] = arr;
+    p.root[QStringLiteral("calibrations")] = calibs;
+    // 标定表与夹具表都是全局单例：喂 calibrations 段会改写它，取数前快照、末尾原样装回，
+    // 不把状态漏给后续腿（u33 那条腿因此只回灌 scenes 段，见其注释）。
+    p.calibBefore = CalibrationManager::instance()->toJson();
+    return p;
+}
+
+void IntegrationTest::testLoadDegradationReachesVisibleFace()
+{
+    auto signalCount = [](const QMetaObject *mo) {
+        int n = 0;
+        for (int i = 0; i < mo->methodCount(); ++i) {
+            if (mo->method(i).methodType() == QMetaMethod::Signal)
+                ++n;
+        }
+        return n;
+    };
+    const int ownSignals = signalCount(&ProjectManager::staticMetaObject)
+                           - signalCount(&QObject::staticMetaObject);
+
+    U34Payload pay = u34DegradedPayload();
+
+    QStringList visibleNotes;
+    ProjectManager pm;
+    const QMetaObject::Connection wired =
+        ProjectLoadNotes::attachTo(&pm, [&visibleNotes](const QString &note) {
+            visibleNotes.append(note);
+        });
+
+    QStringList debugLines;
+    g_u34DebugSink = &debugLines;
+    g_u34PreviousHandler = qInstallMessageHandler(u34CaptureMessage);
+    QList<FlowScene *> opened;
+    const bool loaded = pm.applyProjectJson(pay.root, opened);
+    qInstallMessageHandler(g_u34PreviousHandler);
+    g_u34PreviousHandler = nullptr;
+    g_u34DebugSink = nullptr;
+
+    const QStringList debugLoadTrace = u34LoadTraces(debugLines);
+    qInfo().noquote() << QStringLiteral("[U34] wired=%1 ownSignals=%2 visible=%3 debugTrace=%4")
+                             .arg(wired ? QStringLiteral("yes") : QStringLiteral("no"))
+                             .arg(ownSignals)
+                             .arg(int(visibleNotes.size()))
+                             .arg(int(debugLoadTrace.size()));
+    for (const QString &n : visibleNotes)
+        qInfo().noquote() << QStringLiteral("[U34-VISIBLE] %1").arg(n);
+
+    QStringList problems;
+    if (!wired)
+        problems << QStringLiteral("ProjectLoadNotes::attachTo 返回无效连接（接线本身没接上）");
+    // 判据①：可见面必须收到那两句，且每句都带「是谁、降了哪一半、为什么」
+    bool sawFixture = false;
+    bool sawCalib = false;
+    for (const QString &n : visibleNotes) {
+        if (n.contains(QStringLiteral("夹具条目降级")) && n.contains(QStringLiteral("u34_str6"))
+            && n.contains(QStringLiteral("矩阵作废")))
+            sawFixture = true;
+        if (n.contains(QStringLiteral("标定条目未装进表")) && n.contains(QStringLiteral("u34_badCalib"))
+            && n.contains(QStringLiteral("第 1 项不是数值")))
+            sawCalib = true;
+    }
+    if (!sawFixture)
+        problems << QStringLiteral("可见面没收到夹具降级那句（缺 夹具条目降级/u34_str6/矩阵作废 之一）");
+    if (!sawCalib)
+        problems << QStringLiteral("可见面没收到标定条目被拒那句");
+
+    // 判据②：两条面逐句同形——可见面收到的那一串必须与调试通道里同一串逐字符相等，
+    // 顺序也一致（撤掉 emit 或撤掉 VFP_DEBUG 那半，这里各红一次；各写一份文案迟早分叉）。
+    if (visibleNotes != debugLoadTrace)
+        problems << QStringLiteral("两条面不同形：可见 %1 条 vs 调试 %2 条（%3 vs %4）")
+                        .arg(int(visibleNotes.size()))
+                        .arg(int(debugLoadTrace.size()))
+                        .arg(visibleNotes.join(QStringLiteral("｜")),
+                             debugLoadTrace.join(QStringLiteral("｜")));
+
+    // 判据③：接线不得改产线语义——加载仍成功、条目仍在表里（降级不删条，§3.37 表 0 那条契约）
+    if (!loaded)
+        problems << QStringLiteral("带降级夹具与坏标定条目的方案在真加载入口被判失败");
+    else if (opened.size() != 1)
+        problems << QStringLiteral("场景数=%1（应为 1）").arg(opened.size());
+    else if (!opened.first()->fixtureNames().contains(QStringLiteral("u34_str6")))
+        problems << QStringLiteral("夹具条目被删条了（应只降载荷）");
+
+    qDeleteAll(opened);
+    CalibrationManager::instance()->fromJson(pay.calibBefore);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[U-34 载入留痕接可见面] ") + problems.join(QStringLiteral("；"))));
+}
+
+/// 负对照（只差「载荷合不合形」这一处）：全合法方案一条留痕都不许有——两条面都得是空。
+/// 这条是「接线会不会变成每轮无条件播报」的牙：把 reportLoadNote 改成对每条夹具都发一次，
+/// 只有这条红（判据①②用的都是必降载荷，区分不了"该报的报了"与"不该报的也报"）。
+void IntegrationTest::testCleanProjectLoadEmitsNoVisibleNotes()
+{
+    QJsonObject fixtures;
+    fixtures[QStringLiteral("u34_ctl_ok")] = u33::entryJson(
+        u33::nums(QVector<double>{1, 0, 5, 0, 1, 7}), true, u33::poseAll(1, 2, 3, 4));
+    fixtures[QStringLiteral("u34_ctl_nopose")] = u33::entryJson(
+        u33::nums(QVector<double>{3, 0, 0, 0, 3, 0}), false, QJsonObject());
+    QJsonArray calibGood;
+    calibGood.append(1.0); calibGood.append(0.0); calibGood.append(50.0);
+    calibGood.append(0.0); calibGood.append(1.0); calibGood.append(60.0);
+    QJsonObject calibs;
+    calibs[QStringLiteral("u34_ctl_calib")] = calibGood;
+
+    const QJsonObject calibBefore = CalibrationManager::instance()->toJson();
+    QJsonObject root;
+    QJsonArray arr;
+    arr.append(u33::sceneWith(fixtures));
+    root[QStringLiteral("scenes")] = arr;
+    root[QStringLiteral("calibrations")] = calibs;
+
+    QStringList visibleNotes;
+    ProjectManager pm;
+    QVERIFY(ProjectLoadNotes::attachTo(&pm, [&visibleNotes](const QString &note) {
+        visibleNotes.append(note);
+    }));
+
+    QStringList debugLines;
+    g_u34DebugSink = &debugLines;
+    g_u34PreviousHandler = qInstallMessageHandler(u34CaptureMessage);
+    QList<FlowScene *> opened;
+    const bool loaded = pm.applyProjectJson(root, opened);
+    qInstallMessageHandler(g_u34PreviousHandler);
+    g_u34PreviousHandler = nullptr;
+    g_u34DebugSink = nullptr;
+
+    const int debugTrace = int(u34LoadTraces(debugLines).size());
+    qInfo().noquote() << QStringLiteral("[U34-CTRL] loaded=%1 visible=%2 debugTrace=%3 calibNames=%4")
+                             .arg(loaded ? QStringLiteral("yes") : QStringLiteral("no"))
+                             .arg(int(visibleNotes.size()))
+                             .arg(debugTrace)
+                             .arg(CalibrationManager::instance()->names().join(QStringLiteral(",")));
+
+    QStringList problems;
+    if (!loaded || opened.size() != 1)
+        problems << QStringLiteral("前提：全合法方案应加载成功（loaded=%1 scenes=%2）")
+                        .arg(loaded ? QStringLiteral("yes") : QStringLiteral("no"))
+                        .arg(opened.size());
+    if (!visibleNotes.isEmpty())
+        problems << QStringLiteral("全合法方案出现可见面留痕 %1 条（%2）")
+                        .arg(int(visibleNotes.size()))
+                        .arg(visibleNotes.join(QStringLiteral("｜")));
+    if (debugTrace != 0)
+        problems << QStringLiteral("全合法方案出现调试通道留痕 %1 条").arg(debugTrace);
+    // 合法标定条目必须进了表（否则「没留痕」只是因为整条没装，负对照就没有对照）
+    if (!CalibrationManager::instance()->hasHomography(QStringLiteral("u34_ctl_calib")))
+        problems << QStringLiteral("负对照的合法标定条目没进表，读数失去对照意义");
+
+    qDeleteAll(opened);
+    CalibrationManager::instance()->fromJson(calibBefore);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[U-34 负对照] ") + problems.join(QStringLiteral("；"))));
 }
 
 QTEST_MAIN(IntegrationTest)
