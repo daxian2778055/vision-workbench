@@ -5,15 +5,21 @@
 //       + 冒烟门禁那块合成件"无特征可教学 ⇒ 判失败"的归类
 //       + 显示层 parity（type="feature" 必须画成与模板匹配同款旋转矩形）。
 //
-// 约定与 opencv_defect_align_test 一致：所有成功用例都走"模板落盘再加载"，
-// 因为默认 trainFromImage=true 会用**当前图自己**教学，拿它测什么都测不出来。
+// 约定与 opencv_defect_align_test 一致：所有成功用例都走"模板落盘再加载"。
+// U-30（推进计划 §3.31）把三处节点的 trainFromImage 默认从 true 翻成 false（运行期常态＝匹配
+// 模式），教学变成一次性动作：ROI 落位仍置 true，模板落盘成功后节点自己翻回 false。本文件里
+// 显式 setParam(true/false) 的老用例不依赖默认值；teach() 那句"设回 false"从本轮起是冗余的，
+// 留着是为了让"翻回"这件事同时有测试断言（见 teachingPersistsOnceAndStopsOverwriting）。
 #include <QtTest/QtTest>
 #include <QObject>
 #include <QString>
 #include <QTemporaryDir>
 #include <QFileInfo>
+#include <QFile>
 
 #include "OpencvFeatureMatchNode.h"
+#include "OpencvTemplateMatchNode.h"
+#include "TemplateMatchNode.h"
 #include "OpencvUtil.h"
 #include "DataObject.h"
 #include "ImageDisplayController.h"   // OverlayShape + collectOverlayFromNode
@@ -36,6 +42,11 @@ private slots:
     void testFlatSceneReportsNoFeatures();  // 失败面②：平坦图没有特征 ⇒ 显式失败并给出原因
     void testFlannOnBinaryRecordsFallback();// 失败面③的对照：二进制描述子上 FLANN 不适用 ⇒ 必须留痕
     void testOverlayDrawsFeatureLikeTemplate(); // 显示层：type="feature" 必须走 template 那条旋转矩形分支
+    // ---- U-30：模板教学不得每轮覆写（推进计划 §3.31）----
+    void teachingDefaultsAreMatchMode();            // 三处节点的 trainFromImage 默认必须是 false
+    void teachingPersistsOnceAndStopsOverwriting();  // 教学落盘后自动翻回 ＋ 第二轮不覆写模板文件
+    void teachingWithoutFileKeepsTraining();         // 边界：没有文件路径时不翻回（否则下一轮平白判红）
+    void matchModeWithoutFileFailsAcrossFamily();    // 默认参数＋没模板：三处都判红并给原因
 };
 
 namespace {
@@ -150,6 +161,37 @@ QString teach(OpencvFeatureMatchNode &node, const cv::Mat &sceneWithPatchAtCentr
     return QString();
 }
 
+/// 按字节读回文件内容（用于"第二轮有没有覆写模板文件"这种逐字节判据）。
+QByteArray fileBytes(const QString &path)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly))
+        return QByteArray();
+    return f.readAll();
+}
+
+Outcome runOpenCVTemplate(OpencvTemplateMatchNode &node, const cv::Mat &img)
+{
+    node.setInputImage(OpencvUtil::matToHimage(img));
+    node.setParam(QStringLiteral("moduleStatus"), true);
+    node.run();
+    Outcome o;
+    o.status = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    o.trainStatus = node.getParam(QStringLiteral("trainStatus")).toString();
+    return o;
+}
+
+Outcome runHalconTemplate(TemplateMatchNode &node, const cv::Mat &img)
+{
+    node.setInputImage(OpencvUtil::matToHimage(img));
+    node.setParam(QStringLiteral("moduleStatus"), true);
+    node.run();
+    Outcome o;
+    o.status = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    o.trainStatus = node.getParam(QStringLiteral("trainStatus")).toString();
+    return o;
+}
+
 } // namespace
 
 // 冒烟门禁（NodeExecuteSmokeTest::defaultParamsWithImageSucceed）用的 64×64 合成件对
@@ -157,6 +199,9 @@ QString teach(OpencvFeatureMatchNode &node, const cv::Mat &sceneWithPatchAtCentr
 // 实测（本机 OpenCV 4.13，逐次一致）：ORB 整图 0 点 / 中心 32×32 教学窗 0 点；
 // SIFT 整图 6 点 / 教学窗 0 点 ⇒ 换默认检测器也救不回来（教学窗拿不到点）。
 // 唯一能让它"成功"的办法是把"零对应点"也判成命中，那正是本项目禁止的静默绿灯。
+// ⚠️ U-30（§3.31）之后本条分两段：默认参数已经走不到特征提取了（trainFromImage 默认 false
+//   ⇒ 停在"匹配模式没有模板文件"那道闸），"无特征可教学"这层前提只有显式教学态才量得到。
+//   两段都要红，但红在两级闸上——冒烟表里那条归类理由对应第一段，本条第二段继续钉住第二层。
 void FeatureMatchTest::smokeGatePartHasNoFeaturesByDesign()
 {
     cv::Mat img(64, 64, CV_8UC1, cv::Scalar(40));
@@ -164,11 +209,23 @@ void FeatureMatchTest::smokeGatePartHasNoFeaturesByDesign()
     cv::circle(img, cv::Point(46, 20), 8, cv::Scalar(130), cv::FILLED);
     cv::line(img, cv::Point(6, 52), cv::Point(58, 46), cv::Scalar(235), 2);
 
+    // 段一：一个参数都不改 —— 与冒烟门禁同一条件，红在"匹配模式没有模板文件"
+    OpencvFeatureMatchNode asShipped;
+    asShipped.init();
+    const Outcome dflt = runNode(asShipped, img);
+    QVERIFY2(!dflt.status,
+             "默认参数 + 冒烟合成件判了成功 ⇒ 要查是不是把\"没配模板\"也判成命中");
+    QVERIFY2(dflt.note.contains(QStringLiteral("匹配模式需要设置模板文件路径")),
+             qPrintable(QStringLiteral("默认参数的失败点不再是\"没有模板文件\" ⇒ 冒烟归类理由已漂移：")
+                        + dflt.note));
+
+    // 段二：显式回到翻转前的旧默认（每轮现教），才真正走到教学窗与特征提取
     OpencvFeatureMatchNode node;
-    node.init();                       // 一个参数都不改：与冒烟门禁同一条件
+    node.init();
+    node.setParam(QStringLiteral("trainFromImage"), true);
     const Outcome o = runNode(node, img);
     QVERIFY2(!o.status,
-             "默认参数 + 冒烟合成件判了成功 ⇒ 要查是不是把\"零对应点\"也判成命中");
+             "教学态 + 冒烟合成件判了成功 ⇒ 要查是不是把\"零对应点\"也判成命中");
     QVERIFY2(o.note.contains(QStringLiteral("特征点不足")),
              qPrintable(QStringLiteral("失败原因不是\"无特征可教学\"，归类已失效：") + o.note));
     QVERIFY2(o.candidates == 0 && o.inliers == 0,
@@ -398,6 +455,185 @@ void FeatureMatchTest::testOverlayDrawsFeatureLikeTemplate()
              qPrintable(QStringLiteral("叠加缺少得分文本：") + rect.text));
     QVERIFY2(std::abs(o.col - cx) <= 2.0 && std::abs(o.row - cy) <= 2.0,
              qPrintable(QStringLiteral("中心偏离真值：(%1,%2) vs (%3,%4)").arg(o.col).arg(o.row).arg(cx).arg(cy)));
+}
+
+// ==================== U-30：模板教学不得每轮覆写（推进计划 §3.31）====================
+
+// 三处模板族节点的默认必须是"匹配模式"。理由不是口味：默认 true 时，流水线上任何一帧
+// （坏件、遮挡、位置歪了）都会重新教一遍模板并覆盖模板文件，之后所有判定都在拿脏模板比，
+// 而面板上看着一切正常。这条腿只读默认值，不跑图 ⇒ 改动三处 registerParams 是否漏了一处，
+// 这里当场报出漏的那一处（bad 里带类名）。
+void FeatureMatchTest::teachingDefaultsAreMatchMode()
+{
+    QStringList bad;
+    OpencvFeatureMatchNode feature;
+    feature.init();
+    if (feature.getParam(QStringLiteral("trainFromImage")).toBool())
+        bad << QStringLiteral("OpencvFeatureMatchNode");
+    OpencvTemplateMatchNode tmpl;
+    tmpl.init();
+    if (tmpl.getParam(QStringLiteral("trainFromImage")).toBool())
+        bad << QStringLiteral("OpencvTemplateMatchNode");
+    TemplateMatchNode halconTmpl;
+    halconTmpl.init();
+    if (halconTmpl.getParam(QStringLiteral("trainFromImage")).toBool())
+        bad << QStringLiteral("TemplateMatchNode");
+    QVERIFY2(bad.isEmpty(),
+             qPrintable(QStringLiteral("trainFromImage 默认仍是 true（每轮重教并覆写模板）：")
+                        + bad.join(QStringLiteral(", "))));
+}
+
+// 教学＝一次性动作：落盘成功后节点自己翻回匹配模式，第二轮不再覆写那个文件。
+// 判据取**文件字节**而不是状态位：状态位能靠"这轮恰好没写"糊过去，逐字节比对糊不过去。
+void FeatureMatchTest::teachingPersistsOnceAndStopsOverwriting()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString tpl = dir.filePath(QStringLiteral("teach_once.png"));
+
+    const cv::Mat patch = makePatch();
+    OpencvFeatureMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("detector"), 0);
+    node.setParam(QStringLiteral("matcher"), 0);
+    node.setParam(QStringLiteral("trainFromImage"), true);   // 用户这一轮显式要教学
+    node.setParam(QStringLiteral("templatePath"), tpl);
+    node.setParam(QStringLiteral("roiCenterCol"), kCanvasSize / 2.0);
+    node.setParam(QStringLiteral("roiCenterRow"), kCanvasSize / 2.0);
+    node.setParam(QStringLiteral("roiWidth"), kTemplateSize);
+    node.setParam(QStringLiteral("roiHeight"), kTemplateSize);
+    node.setParam(QStringLiteral("roiAngle"), 0.0);
+
+    const Outcome warm = runNode(node, makeScene(patch, 0.0, 1.0, kCanvasSize / 2.0, kCanvasSize / 2.0));
+    QVERIFY2(warm.status, qPrintable(QStringLiteral("教学跑本身判红了，后面的断言无从谈起：")
+                                     + (warm.note.isEmpty() ? warm.trainStatus : warm.note)));
+    QVERIFY2(QFileInfo::exists(tpl), "教学跑没有写出模板文件");
+    QVERIFY2(!node.getParam(QStringLiteral("trainFromImage")).toBool(),
+             "教学落盘成功后没有翻回匹配模式 ⇒ 第二轮还会重教并覆写模板文件");
+
+    const QByteArray first = fileBytes(tpl);
+    QVERIFY2(!first.isEmpty(), "模板文件读不回字节");
+
+    // 第二轮：贴片挪到画面右上角，模板框仍留在画面中心 ⇒ 框里只剩背景。
+    const double cx = 330.0, cy = 80.0;
+    const cv::Mat second = makeScene(patch, 0.0, 1.0, cx, cy);
+    {   // 前提自证（控制变量）：框内区域确实只有背景，否则"文件没变"就可能是"框里本来就一样"
+        const cv::Mat win = second(cv::Rect(kCanvasSize / 2 - kTemplateSize / 2,
+                                            kCanvasSize / 2 - kTemplateSize / 2,
+                                            kTemplateSize, kTemplateSize));
+        const double meanVal = cv::mean(win)[0];
+        QVERIFY2(meanVal < kCanvasBackground + 8.0,
+                 qPrintable(QStringLiteral("第二轮的模板框里不是纯背景（均值 %1）⇒ 本条前提失效").arg(meanVal)));
+    }
+
+    const Outcome again = runNode(node, second);
+    const QByteArray after = fileBytes(tpl);
+    QVERIFY2(after == first,
+             qPrintable(QStringLiteral("第二轮覆写了模板文件（%1 字节 → %2 字节）⇒ 脏模板会污染之后所有判定")
+                        .arg(first.size()).arg(after.size())));
+    QVERIFY2(again.status,
+             qPrintable(QStringLiteral("第二轮读的是第一轮那份模板，贴片仍在场景里就该定位成功；实际：")
+                        + (again.note.isEmpty() ? again.trainStatus : again.note)));
+
+    // 同一条判据在第二个站点上再走一遍：翻转逻辑在生产侧是**三处同形**（特征匹配／OpenCV 模板
+    // 匹配／HALCON 模板匹配），只钉一处就等于放行"另两处忘了改"。这里量的是 OpencvTemplateMatchNode。
+    // 第三处（TemplateMatchNode）不在本条射程：它已注销册（src/NodeRegistry.cpp 明确写着替换版环境
+    // CreateShapeModel 异常 ⇒ 替代者是 OpenCV 版），且训练分支在本机实测抛 HALCON 异常，
+    // 无法在门禁里跑出"教学成功"这一轮 ⇒ 只作读盘同形核对，不冒充实测。
+    const QString tpl2 = dir.filePath(QStringLiteral("teach_once_tmpl.png"));
+    OpencvTemplateMatchNode tmplNode;
+    tmplNode.init();
+    tmplNode.setParam(QStringLiteral("trainFromImage"), true);
+    tmplNode.setParam(QStringLiteral("templatePath"), tpl2);
+    tmplNode.setParam(QStringLiteral("roiCenterCol"), kCanvasSize / 2.0);
+    tmplNode.setParam(QStringLiteral("roiCenterRow"), kCanvasSize / 2.0);
+    tmplNode.setParam(QStringLiteral("roiWidth"), kTemplateSize);
+    tmplNode.setParam(QStringLiteral("roiHeight"), kTemplateSize);
+    tmplNode.setParam(QStringLiteral("angleMin"), 0.0);
+    tmplNode.setParam(QStringLiteral("angleMax"), 0.0);
+    const Outcome tmplWarm = runOpenCVTemplate(
+        tmplNode, makeScene(patch, 0.0, 1.0, kCanvasSize / 2.0, kCanvasSize / 2.0));
+    QVERIFY2(tmplWarm.status,
+             qPrintable(QStringLiteral("模板匹配的教学跑本身判红：") + tmplWarm.trainStatus));
+    QVERIFY2(QFileInfo::exists(tpl2), "模板匹配的教学跑没有写出模板文件");
+    QVERIFY2(!tmplNode.getParam(QStringLiteral("trainFromImage")).toBool(),
+             "模板匹配落盘成功后没有翻回匹配模式 ⇒ 第二轮还会重教并覆写模板文件");
+    const QByteArray tmplFirst = fileBytes(tpl2);
+    const Outcome tmplSecond = runOpenCVTemplate(tmplNode, second);
+    const QByteArray tmplAfter = fileBytes(tpl2);
+    QVERIFY2(tmplAfter == tmplFirst,
+             qPrintable(QStringLiteral("模板匹配第二轮覆写了模板文件（%1 字节 → %2 字节）")
+                        .arg(tmplFirst.size()).arg(tmplAfter.size())));
+    QVERIFY2(tmplSecond.status,
+             qPrintable(QStringLiteral("模板匹配第二轮读第一轮那份模板，贴片仍在场景里就该匹配成功；实际：")
+                        + tmplSecond.trainStatus));
+}
+
+// 边界（负对照）：没填模板文件路径时**不**翻回匹配模式——那时磁盘上没有可加载的模板，
+// 翻回去等于让一个正在正常工作的节点下一轮平白判红。这条在改前改后都该是绿的，
+// 它买的是"修法没有顺手把无文件的现取现匹配也改掉"这一格。
+void FeatureMatchTest::teachingWithoutFileKeepsTraining()
+{
+    const cv::Mat patch = makePatch();
+    OpencvFeatureMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("detector"), 0);
+    node.setParam(QStringLiteral("trainFromImage"), true);
+    node.setParam(QStringLiteral("templatePath"), QString());   // 故意不给文件路径
+    node.setParam(QStringLiteral("roiCenterCol"), kCanvasSize / 2.0);
+    node.setParam(QStringLiteral("roiCenterRow"), kCanvasSize / 2.0);
+    node.setParam(QStringLiteral("roiWidth"), kTemplateSize);
+    node.setParam(QStringLiteral("roiHeight"), kTemplateSize);
+    const Outcome o = runNode(node, makeScene(patch, 0.0, 1.0, kCanvasSize / 2.0, kCanvasSize / 2.0));
+    QVERIFY2(o.status, qPrintable(QStringLiteral("无文件教学跑本应成功：")
+                                  + (o.note.isEmpty() ? o.trainStatus : o.note)));
+    QVERIFY2(node.getParam(QStringLiteral("trainFromImage")).toBool(),
+             "没有模板文件却翻回匹配模式 ⇒ 下一轮会因「找不到文件路径」平白判红");
+    QVERIFY2(o.trainStatus.contains(QStringLiteral("未保存")),
+             qPrintable(QStringLiteral("无文件教学的状态文本应留痕「未保存」，实际：") + o.trainStatus));
+}
+
+// 默认参数（＝匹配模式）＋没有模板文件：三处都必须判红，并且给一句人话原因。
+// 这条腿同时是冒烟归类改动的动作证：TemplateMatchNode／OpencvTemplateMatchNode 从"默认参数
+// 判成功"翻成"默认参数判失败"，NodeExecuteSmokeTest 的 kFailsWithoutResource 必须同步收录它们。
+void FeatureMatchTest::matchModeWithoutFileFailsAcrossFamily()
+{
+    const cv::Mat scene = makeScene(makePatch(), 0.0, 1.0, kCanvasSize / 2.0, kCanvasSize / 2.0);
+    const QString needle = QStringLiteral("匹配模式需要设置模板文件路径");
+
+    QStringList wronglyGreen;
+    QStringList noReason;
+
+    {
+        OpencvTemplateMatchNode node;
+        node.init();
+        const Outcome o = runOpenCVTemplate(node, scene);
+        if (o.status) wronglyGreen << QStringLiteral("OpencvTemplateMatchNode");
+        else if (!o.trainStatus.contains(needle)) noReason << QStringLiteral("OpencvTemplateMatchNode");
+    }
+    {
+        TemplateMatchNode node;
+        node.init();
+        const Outcome o = runHalconTemplate(node, scene);
+        if (o.status) wronglyGreen << QStringLiteral("TemplateMatchNode");
+        else if (!o.trainStatus.contains(needle)) noReason << QStringLiteral("TemplateMatchNode");
+    }
+    {
+        OpencvFeatureMatchNode node;
+        node.init();
+        const Outcome o = runNode(node, scene);
+        if (o.status) wronglyGreen << QStringLiteral("OpencvFeatureMatchNode");
+        else if (!o.note.contains(needle)) noReason << QStringLiteral("OpencvFeatureMatchNode");
+    }
+
+    QVERIFY2(wronglyGreen.isEmpty(),
+             qPrintable(QStringLiteral("匹配模式没有模板却判了成功（静默绿灯）：")
+                        + wronglyGreen.join(QStringLiteral(", "))));
+    QVERIFY2(noReason.isEmpty(),
+             qPrintable(QStringLiteral("判红但现场读不到原因（未写 "
+                                        "匹配模式需要设置模板文件路径"
+                                        "）：")
+                        + noReason.join(QStringLiteral(", "))));
 }
 
 QTEST_MAIN(FeatureMatchTest)

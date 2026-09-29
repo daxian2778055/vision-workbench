@@ -82,7 +82,7 @@ void OpencvFeatureMatchNode::init()
     registerParams({
         makeFilePathParam(QStringLiteral("templatePath"), QString(),
                           QStringLiteral("模板图像文件 (png/bmp/jpg)")),
-        makeBoolParam(QStringLiteral("trainFromImage"), true,
+        makeBoolParam(QStringLiteral("trainFromImage"), false,
                       QStringLiteral("从图像 ROI 教学特征模板")),
         makeEnumParam(QStringLiteral("detector"), 0,
                       {QStringLiteral("ORB（二进制/快）"), QStringLiteral("SIFT（尺度不变）")},
@@ -204,7 +204,7 @@ void OpencvFeatureMatchNode::run(bool /*autoSwitch*/)
 
         const QString templatePath =
             m_params.value(QStringLiteral("templatePath"), QString()).toString().trimmed();
-        const bool train = m_params.value(QStringLiteral("trainFromImage"), true).toBool();
+        const bool train = m_params.value(QStringLiteral("trainFromImage"), false).toBool();
 
         cv::Mat tmpl;
         if (train) {
@@ -220,10 +220,14 @@ void OpencvFeatureMatchNode::run(bool /*autoSwitch*/)
                 QFileInfo fi(templatePath);
                 if (!fi.dir().exists())
                     QDir().mkpath(fi.absolutePath());
+                const bool saved = cv::imwrite(templatePath.toStdString(), tmpl);
                 m_params[QStringLiteral("trainStatus")] =
-                    cv::imwrite(templatePath.toStdString(), tmpl)
-                        ? QStringLiteral("已教学并保存: %1").arg(templatePath)
-                        : QStringLiteral("模板保存失败: %1").arg(templatePath);
+                    saved ? QStringLiteral("已教学并保存: %1").arg(templatePath)
+                          : QStringLiteral("模板保存失败: %1").arg(templatePath);
+                // 教学是一次性动作：落盘成功后回到匹配模式，此后每轮读文件而不是重教覆写。
+                // 走 setParamDirect：run() 里调 setParam 会重启预览定时器，形成自激。
+                if (saved)
+                    setParamDirect(QStringLiteral("trainFromImage"), false);
             } else {
                 m_params[QStringLiteral("trainStatus")] = QStringLiteral("已教学（未保存文件）");
             }

@@ -83,10 +83,17 @@ const QHash<QString, QString> kFailsWithoutResource = {
     {QStringLiteral("OpencvQrNode"), QStringLiteral("合成图内无二维码 ⇒ 无结果是失败")},
     {QStringLiteral("ZxingBarcodeNode"), QStringLiteral("合成图内无条形码 ⇒ 无结果是失败")},
     {QStringLiteral("TesseractOcrNode"), QStringLiteral("语言数据目录不存在 ⇒ 引擎初始化失败（路径已在 kParamTweaks 里钉死）")},
-    // 特征定位族：本合成件**没有可教学的纹理**（实测 ORB 整图 0 点 / 中心教学窗 0 点；
-    // SIFT 整图 6 点 / 教学窗 0 点 ⇒ 换默认检测器也拿不到点）。判失败是诚实结果，
-    // 让它"成功"的唯一办法是把零对应点判成命中 = 静默绿灯。归类专测见 FeatureMatchTest。
-    {QStringLiteral("OpencvFeatureMatchNode"), QStringLiteral("图内无特征可教学 ⇒ 无结果是失败")},
+    // 特征定位族：默认参数下 templatePath 为空 ⇒ 匹配模式直接判红（原因「匹配模式需要设置模板文件路径」）。
+    // ⚠️ 就地更正（U-30／§3.31）：本条归类理由原先写的是"图内无特征可教学 ⇒ 无结果"，那是
+    //   trainFromImage 默认 true 时代的口径——每轮从当前图现教，实测 ORB 整图 0 点／中心教学窗 0 点
+    //   （SIFT 整图 6 点／教学窗 0 点）⇒ 零对应点判红。默认翻成匹配模式后失败点前移到"没有模板文件"，
+    //   判红这件事没变，变的是它停在哪一道。让它"成功"的唯一办法仍是把零结果判成命中 = 静默绿灯。
+    //   归类专测见 FeatureMatchTest。
+    {QStringLiteral("OpencvFeatureMatchNode"), QStringLiteral("匹配模式无模板文件路径 ⇒ 无结果是失败")},
+    // 模板匹配（OpenCV 版）：同一族同一前提。U-30 之前它默认走训练模式、从 ROI 现教现存，
+    // 在冒烟里是"喂图就跑成功"的那一类，因此不在本表；默认改成匹配模式后它与上面那条
+    // 停在同一道闸上 ⇒ 入本表，反向守卫（unconfiguredResourceNodesFail）继续判它必须红。
+    {QStringLiteral("OpencvTemplateMatchNode"), QStringLiteral("匹配模式无模板文件路径 ⇒ 无结果是失败")},
 };
 
 // W-2 的专测清单：这八个节点的 process() 走 HalconNode::processDataOutputs() 且**受两道判据约束**。

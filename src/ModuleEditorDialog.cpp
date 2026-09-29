@@ -549,12 +549,14 @@ void ModuleEditorDialog::onSaveTemplate()
         if (!fi.dir().exists())
             QDir().mkpath(fi.absolutePath());
     }
-    cv::imwrite(path.toStdString(), crop);
-    tmplNode->setParam(QStringLiteral("trainFromImage"), true);
+    const bool saved = cv::imwrite(path.toStdString(), crop);
+    // 教学已经在这里落盘：成功就留在匹配模式，下一轮不必重教覆写；写失败才保留教学态重试
+    tmplNode->setParam(QStringLiteral("trainFromImage"), !saved);
     refreshTemplatePreview();
     if (QWidget *panel = m_paramHost->widget())
         tmplNode->updateParamPanel(panel);
-    m_hintLabel->setText(QStringLiteral("模板已保存：%1").arg(path));
+    m_hintLabel->setText(saved ? QStringLiteral("模板已保存：%1").arg(path)
+                               : QStringLiteral("模板保存失败：%1").arg(path));
 }
 
 void ModuleEditorDialog::refreshTemplatePreview()

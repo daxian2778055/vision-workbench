@@ -12,10 +12,20 @@
 #include <QAction>
 #include <QFocusEvent>
 #include <QApplication>
+#include <QPushButton>
+#include <QTemporaryDir>
+#include <QFile>
+#include <QFileInfo>
 
 #include "ModuleEditorDialog.h"
 #include "FlowScene.h"
 #include "NodeBase.h"
+#include "OpencvTemplateMatchNode.h"
+#include "OpencvUtil.h"
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <cmath>
 
 class ModuleEditorTest : public QObject
 {
@@ -24,6 +34,7 @@ class ModuleEditorTest : public QObject
 private slots:
     void testParamEditTriggersDebouncedRecompute();
     void testVariableReferenceInsert();
+    void testTeachingButtonLeavesMatchMode();
 };
 
 void ModuleEditorTest::testParamEditTriggersDebouncedRecompute()
@@ -143,6 +154,83 @@ void ModuleEditorTest::testVariableReferenceInsert()
     QVERIFY2(dlg.insertReference(QStringLiteral("{9.text}")), "文本框应接受变量引用");
     QVERIFY2(hint->text().contains(QStringLiteral("{9.text}")),
              qPrintable(QStringLiteral("成功提示里没有回显被插入的引用：[%1]").arg(hint->text())));
+}
+
+// U-30（推进计划 §3.31）：编辑窗的「保存模板图像」按钮是教学的另一半——它自己写盘，
+// 所以「写完留在匹配模式」这条口径在这个站点上必须单独钉一次：节点 execute 里的翻转
+// 由 FeatureMatchTest 的落盘腿管，这里管的是用户真正会点的那个按钮。
+// 用非空 templatePath 走免对话框分支 ⇒ 无桌面 CI 也能跑。
+void ModuleEditorTest::testTeachingButtonLeavesMatchMode()
+{
+    QTemporaryDir dir;
+    QVERIFY2(dir.isValid(), "临时目录建不出来，后面的断言无从谈起");
+
+    cv::Mat canvas(400, 400, CV_8UC1, cv::Scalar(18));
+    for (int i = 0; i < 128; i += 8) {
+        cv::line(canvas, cv::Point(136, 136 + i), cv::Point(263, 136 + i), cv::Scalar(220), 2);
+        cv::line(canvas, cv::Point(136 + i, 136), cv::Point(136 + i, 263), cv::Scalar(30), 2);
+    }
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+    node.setParam(QStringLiteral("roiCenterCol"), 200.0);
+    node.setParam(QStringLiteral("roiCenterRow"), 200.0);
+    node.setParam(QStringLiteral("roiWidth"), 128.0);
+    node.setParam(QStringLiteral("roiHeight"), 128.0);
+    node.setParam(QStringLiteral("roiAngle"), 0.0);
+    node.setParam(QStringLiteral("trainFromImage"), true);   // 用户这一轮要教学
+
+    ModuleEditorDialog dlg(&node);
+    QPushButton *saveBtn = nullptr;
+    for (QPushButton *b : dlg.findChildren<QPushButton *>()) {
+        if (b->text() == QStringLiteral("保存模板图像")) {
+            saveBtn = b;
+            break;
+        }
+    }
+    QVERIFY2(saveBtn != nullptr, "未找到「保存模板图像」按钮 ⇒ 本条腿的前提（那个按钮还在）已失效");
+    QLabel *hint = dlg.findChild<QLabel *>(QStringLiteral("paramHintLabel"));
+    QVERIFY2(hint != nullptr, "未找到提示标签（objectName=paramHintLabel）");
+
+    const QString tpl = dir.filePath(QStringLiteral("tpl_button.png"));
+    node.setParam(QStringLiteral("templatePath"), tpl);
+    saveBtn->click();
+
+    QVERIFY2(QFileInfo::exists(tpl), qPrintable(QStringLiteral("点按钮没有写出模板文件：") + tpl));
+    const cv::Mat written = cv::imread(tpl.toStdString(), cv::IMREAD_GRAYSCALE);
+    QVERIFY2(!written.empty(), "模板文件读不回像素");
+    // 落盘的必须是 ROI 那块，而不是「随手存了张图」：尺寸对上，均值也得上。
+    QVERIFY2(written.rows == 128 && written.cols == 128,
+             qPrintable(QStringLiteral("模板尺寸不是 ROI 的 128×128：实际 %1×%2")
+                        .arg(written.cols).arg(written.rows)));
+    const double roiMean = cv::mean(canvas(cv::Rect(136, 136, 128, 128)))[0];
+    QVERIFY2(std::abs(cv::mean(written)[0] - roiMean) <= 8.0,
+             qPrintable(QStringLiteral("模板内容与 ROI 区域不符：均值 %1 vs %2")
+                        .arg(cv::mean(written)[0]).arg(roiMean)));
+    QVERIFY2(!node.getParam(QStringLiteral("trainFromImage")).toBool(),
+             "按钮落盘成功后节点仍停在教学态 ⇒ 下一轮 execute 会重教并覆掉刚存的模板");
+    QVERIFY2(hint->text().contains(tpl),
+             qPrintable(QStringLiteral("成功提示没有回显落盘路径（现场无从确认存到哪）：") + hint->text()));
+
+    // ── 负对照：写盘失败时不得翻回匹配模式（那时磁盘上没有可用模板，翻回去等于让节点下一轮平白判红）──
+    // 让 imwrite 必然失败：把模板路径挂在一个「普通文件」下面，父目录建不出来。
+    const QString blocker = dir.filePath(QStringLiteral("blocker.bin"));
+    {
+        QFile f(blocker);
+        QVERIFY2(f.open(QIODevice::WriteOnly), "写失败腿的 blocker 文件建不出来");
+        f.write("x");
+    }
+    const QString badPath = blocker + QStringLiteral("/tpl_bad.png");
+    node.setParam(QStringLiteral("trainFromImage"), true);
+    node.setParam(QStringLiteral("templatePath"), badPath);
+    saveBtn->click();
+
+    QVERIFY2(!QFileInfo::exists(badPath), qPrintable(QStringLiteral("本该写失败的模板竟然落盘了：") + badPath));
+    QVERIFY2(node.getParam(QStringLiteral("trainFromImage")).toBool(),
+             "模板写失败却翻回匹配模式 ⇒ 下一轮因找不到文件平白判红，真实原因（保存失败）被掩盖");
+    QVERIFY2(hint->text().contains(QStringLiteral("失败")),
+             qPrintable(QStringLiteral("写失败时现场提示应说「失败」，实际：") + hint->text()));
 }
 
 QTEST_MAIN(ModuleEditorTest)

@@ -37,7 +37,7 @@ void TemplateMatchNode::init()
                         QStringLiteral("终止角度"), QStringLiteral("°")),
         makeFilePathParam(QStringLiteral("templatePath"), QString(),
                           QStringLiteral("模板文件(.shm)")),
-        makeBoolParam(QStringLiteral("trainFromImage"), true,
+        makeBoolParam(QStringLiteral("trainFromImage"), false,
                       QStringLiteral("运行时从图像训练（勾选时忽略已存模板，自动重建并保存）")),
         makeIntParam(QStringLiteral("pyramidLevel"), 4, 0, 10,
                      QStringLiteral("金字塔层数")),
@@ -81,7 +81,7 @@ void TemplateMatchNode::run(bool /*autoSwitch*/)
         const QString templatePath =
             m_params.value(QStringLiteral("templatePath"), QString()).toString().trimmed();
         const bool trainFromImage =
-            m_params.value(QStringLiteral("trainFromImage"), true).toBool();
+            m_params.value(QStringLiteral("trainFromImage"), false).toBool();
 
         const double angleStart = m_params.value(QStringLiteral("angleStart"), 0.0).toDouble();
         const double angleEnd = m_params.value(QStringLiteral("angleEnd"), 360.0).toDouble();
@@ -137,6 +137,9 @@ void TemplateMatchNode::run(bool /*autoSwitch*/)
                     WriteShapeModel(m_modelId, templatePath.toStdString().c_str());
                     m_params[QStringLiteral("trainStatus")] =
                         QStringLiteral("已训练并保存: %1").arg(templatePath);
+                    // 教学是一次性动作：落盘成功后回到匹配模式，不再每轮重建并覆写 .shm
+                    // （走 setParamDirect：run() 里调 setParam 会重启预览定时器，形成自激）
+                    setParamDirect(QStringLiteral("trainFromImage"), false);
                 } catch (const HException &e) {
                     m_params[QStringLiteral("trainStatus")] =
                         QStringLiteral("模板保存失败: %1").arg(QString::fromLocal8Bit(e.ErrorMessage().TextA()));
@@ -149,6 +152,7 @@ void TemplateMatchNode::run(bool /*autoSwitch*/)
             if (templatePath.isEmpty()) {
                 m_params[QStringLiteral("trainStatus")] =
                     QStringLiteral("匹配模式需要设置模板文件路径");
+                m_params["moduleStatus"] = false;
                 m_outputImage = gray;
                 setMatchOutput(gray, 0.0, 0.0, 0.0, 0, false);
                 return;
@@ -167,6 +171,7 @@ void TemplateMatchNode::run(bool /*autoSwitch*/)
                 } catch (const HException &e) {
                     m_params[QStringLiteral("trainStatus")] =
                         QStringLiteral("模板加载失败: %1").arg(QString::fromLocal8Bit(e.ErrorMessage().TextA()));
+                    m_params["moduleStatus"] = false;
                     m_outputImage = gray;
                     setMatchOutput(gray, 0.0, 0.0, 0.0, 0, false);
                     return;
@@ -176,6 +181,7 @@ void TemplateMatchNode::run(bool /*autoSwitch*/)
         }
 
         if (!modelReady) {
+            m_params["moduleStatus"] = false;
             m_outputImage = gray;
             setMatchOutput(gray, 0.0, 0.0, 0.0, 0, false);
             return;

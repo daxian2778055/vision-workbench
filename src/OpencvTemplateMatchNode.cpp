@@ -71,7 +71,7 @@ void OpencvTemplateMatchNode::init()
     registerParams({
         makeFilePathParam(QStringLiteral("templatePath"), QString(),
                           QStringLiteral("模板图像文件 (png/bmp/jpg)")),
-        makeBoolParam(QStringLiteral("trainFromImage"), true,
+        makeBoolParam(QStringLiteral("trainFromImage"), false,
                       QStringLiteral("从图像 ROI 训练并保存模板")),
         makeIntParam(QStringLiteral("method"), 1, 0, 1,
                      QStringLiteral("匹配方法：0=归一化平方差，1=归一化相关系数")),
@@ -161,7 +161,7 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
 
         const QString templatePath =
             m_params.value(QStringLiteral("templatePath"), QString()).toString().trimmed();
-        const bool train = m_params.value(QStringLiteral("trainFromImage"), true).toBool();
+        const bool train = m_params.value(QStringLiteral("trainFromImage"), false).toBool();
         const int methodIdx = m_params.value(QStringLiteral("method"), 1).toInt();
         const double minScore = m_params.value(QStringLiteral("minScore"), 0.6).toDouble();
         const int method = (methodIdx == 0) ? cv::TM_SQDIFF_NORMED : cv::TM_CCOEFF_NORMED;
@@ -184,6 +184,9 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
                     if (cv::imwrite(templatePath.toStdString(), tmpl)) {
                         m_params[QStringLiteral("trainStatus")] =
                             QStringLiteral("已训练并保存: %1").arg(templatePath);
+                        // 教学是一次性动作：落盘成功后回到匹配模式，此后每轮读文件而不是重教覆写。
+                        // 走 setParamDirect：run() 里调 setParam 会重启预览定时器，形成自激。
+                        setParamDirect(QStringLiteral("trainFromImage"), false);
                     } else {
                         m_params[QStringLiteral("trainStatus")] =
                             QStringLiteral("模板保存失败: %1").arg(templatePath);
