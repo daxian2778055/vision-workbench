@@ -68,3 +68,6 @@ diag-*
 .git-commit-msg.txt
 logs/
 data/
+# ===== Python 字节码缓存（import tools/*.py 时生成，不随仓流转）=====
+__pycache__/
+*.pyc

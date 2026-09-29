@@ -12,14 +12,24 @@ else (`this`, a widget pointer, `&a`) is treated as a context object. A `SLOT(..
 argument would be a false negative for that rule, so the script also prints every accepted site for
 eyeball verification.
 
+The call text is gathered by balancing parentheses **forward from the '(' across lines** (W-1). A
+one-line-only read was the bug: `singleShot(` at the end of a line yields no second argument, and
+`"".startswith("[")` is false, so a genuinely dangling timer was classified as having a context --
+the gate went green on exactly the shape that crashes. So a site is never defaulted to "has a
+context object": when the parentheses do not balance before end of file, or fewer than two
+arguments can be read, the site is reported as UNRES and judged red, which is the fail-closed side.
+String literals and comments are not tokenized (same limitation as before); a stray unbalanced paren
+inside them can only produce an UNRES, i.e. a red the reviewer then eyeballs.
+
 Second inventory: which registered node classes reach `HalconNode::createParamPanel()`'s hand-written
 body at all. That function returns early via `createAutoParamPanel()` when `m_paramSpecs` is not empty,
-so the dangling timer at HalconNode.cpp:642 is only scheduled for operators that declare no ParamSpec.
+so the dangling timer at HalconNode.cpp:645 is only scheduled for operators that declare no ParamSpec.
 
 Reproduce:
     python tools/single_shot_inventory.py
-Exit codes: 0 = zero sites without a context object;
-            1 = at least one such site remains (the U-20 fix is incomplete or has regressed).
+Exit codes: 0 = zero sites without a context object and zero unresolved sites;
+            1 = at least one site lacks a context object, or at least one site could not be
+              classified (unbalanced parentheses / fewer than two arguments) -- fail closed.
 Output is ASCII-only on purpose (the console code page is not guaranteed UTF-8).
 """
 
@@ -33,19 +43,26 @@ SRC = os.path.join(REPO_ROOT, "src")
 
 CALL_RE = re.compile(r"QTimer::singleShot\s*\(")
 CLASS_NAME_RE = re.compile(r"VFP_REG\s*\(\s*([A-Za-z][A-Za-z0-9_]*Node)\b")
+OPEN = "(["
+CLOSE = ")]}"
 
 
 def top_level_args(text):
-    """Arguments of a call whose text starts at its opening '(' (paren balanced, ignores nesting)."""
+    """Arguments of a call whose text starts at its opening '('.
+
+    Parentheses, brackets and braces share one depth counter, so a comma inside a lambda capture
+    list (`[this, w]`) or inside a lambda body is not an argument separator. Counting only
+    parentheses made an argument count depend on how the source was wrapped (W-1).
+    """
     depth = 0
     args = []
     cur = []
     for ch in text:
-        if ch == "(":
+        if ch in OPEN:
             depth += 1
             if depth == 1:
                 continue
-        elif ch == ")":
+        elif ch in CLOSE:
             depth -= 1
             if depth == 0:
                 break
@@ -59,18 +76,63 @@ def top_level_args(text):
     return args
 
 
+def preview(arg):
+    """How an argument is printed: same text whether the source put the call on one line or ten.
+
+    Whitespace runs collapse, and anything past the start of an argument body is dropped -- the
+    classifier reads the raw argument, the preview only needs the introducer (`[=]() {`).
+    """
+    flat = " ".join(arg.split())
+    cut = flat.find("{")
+    if cut >= 0:
+        flat = flat[:cut + 1]
+    return flat[:26]
+
+
+def call_text_from(lines, index, col):
+    """Text of the call whose '(' is at lines[index][col], balanced forward across lines.
+
+    Returns (text, balanced). ``balanced`` is False when the file ends before the call closes --
+    the caller must treat that as "unknown", never as "has a context object".
+    """
+    depth = 0
+    out = []
+    for k in range(index, len(lines)):
+        for ch in (lines[k][col:] if k == index else lines[k]):
+            if ch in OPEN:
+                depth += 1
+            elif ch in CLOSE:
+                depth -= 1
+                if depth == 0:
+                    out.append(ch)
+                    return "".join(out), True
+            out.append(ch)
+    return "".join(out), False
+
+
 def scan_single_shot():
+    """One record per singleShot call: (file, line, argc, second_arg, no_context, unresolved)."""
     sites = []
     for name in sorted(os.listdir(SRC)):
         if not name.endswith((".cpp", ".h")):
             continue
-        lines = io.open(os.path.join(SRC, name), encoding="utf-8", errors="replace").read().split("\n")
-        for i, line in enumerate(lines):
-            for m in CALL_RE.finditer(line):
-                args = top_level_args(line[m.end() - 1:])
-                second = args[1] if len(args) > 1 else ""
-                no_context = second.startswith("[")
-                sites.append((name, i + 1, len(args), second[:26], no_context))
+        text = io.open(os.path.join(SRC, name), encoding="utf-8", errors="replace").read()
+        lines = text.split("\n")
+        # Match over the whole file, not line by line: '\s*' in CALL_RE can then span the newline of
+        # a "singleShot\n(" wrap, which a per-line scan silently would not see at all (W-1).
+        for m in CALL_RE.finditer(text):
+            open_at = m.end() - 1
+            line_no = text.count("\n", 0, m.start()) + 1
+            paren_line = text.count("\n", 0, open_at)
+            call_text, balanced = call_text_from(lines, paren_line,
+                                                 open_at - (text.rfind("\n", 0, open_at) + 1))
+            args = top_level_args(call_text) if balanced else []
+            if not balanced or len(args) < 2:
+                # Fail closed: an unreadable second argument is reported, not assumed safe.
+                sites.append((name, line_no, len(args), "", False, True))
+                continue
+            second = args[1]
+            sites.append((name, line_no, len(args), preview(second), second.startswith("["), False))
     return sites
 
 
@@ -106,9 +168,14 @@ def parent_of(cls):
 def main():
     sites = scan_single_shot()
     no_ctx = [s for s in sites if s[4]]
-    print("SINGLESHOT total=%d with_context=%d no_context=%d" % (len(sites), len(sites) - len(no_ctx), len(no_ctx)))
-    for name, ln, argc, second, is_no_ctx in sites:
-        print("  %-6s %s:%d argc=%d second=%r" % ("NOCTX" if is_no_ctx else "CTX", name, ln, argc, second))
+    unresolved = [s for s in sites if s[5]]
+    print("SINGLESHOT total=%d with_context=%d no_context=%d"
+          % (len(sites), len(sites) - len(no_ctx) - len(unresolved), len(no_ctx)))
+    if unresolved:
+        print("SINGLESHOT-UNRESOLVED k=%d" % len(unresolved))
+    for name, ln, argc, second, is_no_ctx, is_unresolved in sites:
+        label = "UNRES" if is_unresolved else ("NOCTX" if is_no_ctx else "CTX")
+        print("  %-6s %s:%d argc=%d second=%r" % (label, name, ln, argc, second))
 
     classes = live_registry_classes()
     defined = classes_overriding_panel()
@@ -120,6 +187,10 @@ def main():
 
     if no_ctx:
         print("FAIL: %d singleShot site(s) still lack a context object" % len(no_ctx))
+    if unresolved:
+        print("FAIL: %d singleShot site(s) could not be classified "
+              "(parentheses unbalanced by EOF or fewer than 2 arguments)" % len(unresolved))
+    if no_ctx or unresolved:
         return 1
     print("OK: every singleShot call site is bound to a context object")
     return 0
