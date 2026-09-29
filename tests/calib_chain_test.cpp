@@ -130,6 +130,10 @@ private slots:
     void u29StoredZeroFxJudgeRed();                   // 判红：键侧 fx=fy=0 ⇒ 不得全黑产出配绿灯
     void u29StoredNegativeFyJudgeRed();               // 判红：键侧 fy<0 ⇒ fx 合法也拦不住
     void u29SmallPositiveFxStaysGreen();              // 负对照：正但荒谬的 fx 仍判绿（本轮不做量级闸）
+    // U-28：两个消费端（坐标系换算／位置修正）对同一份载荷的原因必须**只差算子名与手填参数名**，
+    // 且中段（判据与文案）逐字等于期望值。抽出前那是各抄一份的 25 行判据，
+    // 而改前没有任何一条腿同时看两侧（推进计划 §3.34 的 P1／P2 实测：只改一份 ⇒ 两个互不相交的红集）。
+    void affineMissReasonIdenticalAcrossConsumers();
 
 private:
     QJsonObject m_managerSnapshot;
@@ -3050,6 +3054,120 @@ void CalibChainTest::u29SmallPositiveFxStaysGreen()
     qInfo("%s", qPrintable(QStringLiteral("③ U-29 负对照实测：fx=fy=0.5（正、荒谬）判绿，产出=%1").arg(stats)));
 
     CalibrationManager::instance()->remove(key);
+}
+
+// U-28：两个消费端对**同一份载荷**必须给出只差「哪个算子／不许回退成哪组手填参数」的原因。
+// 抽出前这两段是各抄一份的 25 行判据（§3.30 立案、§3.32 让债变重），而当时**没有任何一条腿同时看两侧**：
+// §3.34 的改前实测＝只改 CT 那一份 ⇒ 红 2 条、只改 PC 那一份 ⇒ 红 1 条，两个红集不相交 ⇒ 一处漂移只被一半看到。
+// 这条把"只改一份就漂"变成会红的东西；中段还要求逐字等于期望值，所以"两份一起漂"同样跑不掉。
+//
+// 四种形态把 sceneWhy 的三个分支与 mgrWhy 的三个分支全走一遍（抽出前「场景夹具的矩阵…」「标定单例里该键…」
+// 各 0 处断言；「不回退手填 …」尾巴在 §3.34 的 P3 臂实测为全绿盲区）。
+// 形态 A 的"夹具带 9 项矩阵"是可达的：src/FlowScene.cpp 的夹具反序列化只把 hasHom/hom 原样装回、
+// 不查项数（区别于 src/FlowScene.cpp 的 setFixtureHomography——那道拒非 6 项），所以方案文件里就能进来。
+void CalibChainTest::affineMissReasonIdenticalAcrossConsumers()
+{
+    CalibrationManager *cm = CalibrationManager::instance();
+    // 中段＝"取不到 6 元矩阵：" 与 "，不回退手填 " 之间那一段，两侧判据与文案都落在这里
+    auto midOf = [](const QString &note) {
+        const QString head = QStringLiteral("取不到 6 元矩阵：");
+        const QString foot = QStringLiteral("，不回退手填 ");
+        const int a = note.indexOf(head);
+        const int b = note.indexOf(foot);
+        if (a < 0 || b <= a)
+            return QString();
+        return note.mid(a + head.size(), b - a - head.size());
+    };
+
+    const QVector<double> nine{600.0, 600.0, 320.0, 240.0, 0.1, 0.01, 0.0, 0.0, 1.0};
+
+    struct Shape {
+        QString key;             // 夹具名＝单例键名（两种载荷同名正是 R-5 的形状）
+        bool attachScene;        // 节点是否挂到场景
+        int sceneMode;           // 0=不建夹具 1=建 9 项矩阵夹具 2=建只有位姿的夹具
+        bool keyInManager;       // 标定单例里放不放 9 项载荷
+        QString wantMid;         // 抽掉算子名／手填参数名后必须逐字读到的中段
+    };
+    const QVector<Shape> shapes = {
+        // A：场景夹具带 9 项矩阵 ⇒ mgrWhy 走"场景夹具的矩阵…"，且整句只有"——"没有"；"
+        {QStringLiteral("u28a_scene_hom9"), true, 1, false,
+         QStringLiteral("夹具 \"u28a_scene_hom9\"——场景夹具的矩阵有 9 项（9 元内参载荷，不是 6 元仿射）")},
+        // B：节点没挂场景、单例里有同名 9 项 ⇒ sceneWhy="节点未挂到场景" + mgrWhy="标定单例里该键…"
+        {QStringLiteral("u28b_mgr_hom9"), false, 0, true,
+         QStringLiteral("夹具 \"u28b_mgr_hom9\"——节点未挂到场景；标定单例里该键有 9 项（9 元内参载荷，不是 6 元仿射）")},
+        // C：挂了场景但场景里没这个夹具、单例里也没有 ⇒ 两个"没有"分得开
+        {QStringLiteral("u28c_ghost"), true, 0, false,
+         QStringLiteral("夹具 \"u28c_ghost\"——场景里没有该夹具；标定单例里没有这个键")},
+        // D：场景里有该夹具、只有位姿没矩阵，单例里也没有 ⇒ "该夹具没有矩阵（只有位姿）"
+        {QStringLiteral("u28d_pose_only"), true, 2, false,
+         QStringLiteral("夹具 \"u28d_pose_only\"——该夹具没有矩阵（只有位姿）；标定单例里没有这个键")},
+    };
+
+    QStringList problems;
+    FlowScene scene;                       // 节点每轮建在 scene 之后、析构在它之前
+    for (const Shape &s : shapes) {
+        cm->remove(s.key);
+        if (s.keyInManager)
+            cm->setHomography(s.key, nine);
+        if (s.sceneMode != 0) {
+            FlowFixture fx;
+            fx.name = s.key;
+            if (s.sceneMode == 1) {
+                fx.hom = nine;
+                fx.hasHom = true;          // 绕开 setFixtureHomography 的 6 项闸＝方案载入那条路径
+            } else {
+                fx.hasPose = true;
+                fx.poseRow = 12.0;
+                fx.poseCol = 34.0;
+            }
+            scene.setFixture(fx);
+        }
+
+        CoordinateTransformNode ct;
+        if (s.attachScene)
+            ct.setFlowSceneRef(&scene);
+        ct.init();
+        ct.setParam(QStringLiteral("fixtureName"), s.key);
+        ct.setParam(QStringLiteral("x"), 200.0);
+        ct.setParam(QStringLiteral("y"), 150.0);
+        feedImage(ct, blankImage(640, 480));
+        const bool ctOk = ct.execute();
+        const QString ctNote = transformNoteOf(ct);
+
+        PositionCorrectNode pc;
+        if (s.attachScene)
+            pc.setFlowSceneRef(&scene);
+        setupCorrectNode(pc, s.key, 200.0, 150.0, 0.0, 1.0, 0.0, 0.0);
+        const bool pcOk = pc.execute();
+        const QString pcNote = correctNoteOf(pc);
+
+        const QString tag = QStringLiteral("「%1」：").arg(s.key);
+        if (ctOk || pcOk)
+            problems << tag + QStringLiteral("有一侧没判红（ct=%1 pc=%2）").arg(ctOk).arg(pcOk);
+        if (ctNote.isEmpty() || pcNote.isEmpty())
+            problems << tag + QStringLiteral("判红却没留原因（ct=「%1」pc=「%2」）").arg(ctNote, pcNote);
+        const QString ctMid = midOf(ctNote);
+        const QString pcMid = midOf(pcNote);
+        if (ctMid.isEmpty() || pcMid.isEmpty())
+            problems << tag + QStringLiteral("有一侧的原因读不出中段（ct=「%1」pc=「%2」）").arg(ctNote, pcNote);
+        if (ctMid != pcMid)
+            problems << tag + QStringLiteral("两侧中段不同形＝判据又变成各抄一份（ct=「%1」pc=「%2」）").arg(ctMid, pcMid);
+        if (!ctMid.isEmpty() && ctMid != s.wantMid)
+            problems << tag + QStringLiteral("CT 中段与期望逐字不符\n    期望=「%1」\n    实读=「%2」").arg(s.wantMid, ctMid);
+        if (!pcMid.isEmpty() && pcMid != s.wantMid)
+            problems << tag + QStringLiteral("PC 中段与期望逐字不符\n    期望=「%1」\n    实读=「%2」").arg(s.wantMid, pcMid);
+        if (!ctNote.contains(QStringLiteral("坐标系换算")) || !pcNote.contains(QStringLiteral("位置修正")))
+            problems << tag + QStringLiteral("原因没点出是哪个算子");
+        if (!ctNote.contains(QStringLiteral("不回退手填 M11..M23"))
+            || !pcNote.contains(QStringLiteral("不回退手填 srcX/srcY/angle/scale/offset")))
+            problems << tag + QStringLiteral("那句「不回退手填 …」丢了（抽出前 0 处断言＝§3.34 的 P3 盲区）");
+        cm->remove(s.key);
+    }
+
+    cm->clear();
+    cm->fromJson(m_managerSnapshot);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[U-28 两侧同形] ") + problems.join(QStringLiteral("；"))));
 }
 
 QTEST_MAIN(CalibChainTest)

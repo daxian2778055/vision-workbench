@@ -36,6 +36,13 @@ public:
     /// 6 元齐次作用于点；项数不是 6（过短或过长）一律不作用于点，原样透传
     static QPointF applyHomography(const QVector<double> &hom, double x, double y);
 
+    /// U-28：两个消费端（坐标系换算／位置修正）**共用**这一份"取不到 6 元仿射"的原因拼装。
+    /// 只有 what（哪个算子）与 tail（不许回退成哪组手填参数）是节点侧的，判据与其余文案只写这一遍。
+    /// 改前是两处各抄一份（推进计划 §3.34 登记的取证：只改一份时，红只落在读那一侧的腿上半边）。
+    static QString affineLookupMissReason(const QString &what, const QString &tail,
+                                          const QString &fixtureName, bool hasScene,
+                                          bool fixtureNamed, bool fixtureHasHom, int homSize);
+
 private:
     CalibrationManager() = default;
     QMap<QString, QVector<double>> m_homographies;

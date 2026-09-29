@@ -61,37 +61,10 @@ void CoordinateTransformNode::run(bool)
                 // R-5：过去只卡 `< 6`，而同一张标定表里还住着 9 元 OpenCV 内参
                 // （fx fy cx cy k1 k2 p1 p2 rms）⇒ "够 6"就把 fx/fy/cx/cy/k1/k2 当仿射算，
                 // 实测输出 78220.000,23977.620 且判绿。要求**恰好 6 项**才是仿射。
-                QString sceneWhy;
-                if (!fx.hasHom) {
-                    if (!fs)
-                        sceneWhy = QStringLiteral("节点未挂到场景");
-                    else if (fx.name.isEmpty())
-                        sceneWhy = QStringLiteral("场景里没有该夹具");
-                    else
-                        sceneWhy = QStringLiteral("该夹具没有矩阵（只有位姿）");
-                }
-                QString sizeWhy;
-                if (hom.size() == 9)
-                    sizeWhy = QStringLiteral("有 9 项（9 元内参载荷，不是 6 元仿射）");
-                else if (hom.size() < 6)
-                    sizeWhy = QStringLiteral("只有 %1 项").arg(hom.size());
-                else
-                    // U-27：既不是 6 也不是 9 时不猜它是什么（HALCON 写侧长度本机未证到）。
-                    // 旧文案一律写"疑似 9 元内参"，7/8/10/20 项也照这句，现场会查错方向。
-                    sizeWhy = QStringLiteral("有 %1 项（不是 6 元仿射）").arg(hom.size());
-                QString mgrWhy;
-                if (fx.hasHom)
-                    mgrWhy = QStringLiteral("场景夹具的矩阵%1").arg(sizeWhy);
-                else if (CalibrationManager::instance()->hasHomography(fixtureName))
-                    mgrWhy = QStringLiteral("标定单例里该键%1").arg(sizeWhy);
-                else
-                    mgrWhy = QStringLiteral("标定单例里没有这个键");
-                const QString why = sceneWhy.isEmpty()
-                    ? QStringLiteral("坐标系换算取不到 6 元矩阵：夹具 \"%1\"——%2，不回退手填 M11..M23")
-                          .arg(fixtureName, mgrWhy)
-                    : QStringLiteral("坐标系换算取不到 6 元矩阵：夹具 \"%1\"——%2；%3，不回退手填 M11..M23")
-                          .arg(fixtureName, sceneWhy, mgrWhy);
-                m_params[QStringLiteral("transformNote")] = why;
+                // U-28：判据与文案只有一份（CalibrationManager::affineLookupMissReason），别再抄第二份。
+                m_params[QStringLiteral("transformNote")] = CalibrationManager::affineLookupMissReason(
+                    QStringLiteral("坐标系换算"), QStringLiteral("M11..M23"), fixtureName,
+                    fs != nullptr, !fx.name.isEmpty(), fx.hasHom, hom.size());
                 m_params["moduleStatus"] = false;
                 return;
             }

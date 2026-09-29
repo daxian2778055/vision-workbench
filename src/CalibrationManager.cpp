@@ -104,3 +104,41 @@ void CalibrationManager::fromJson(const QJsonObject &json, QStringList *rejected
         m_homographies[it.key()] = hom;
     }
 }
+
+/// U-28：sceneWhy／sizeWhy／mgrWhy／整句的四段判据，两个消费端共用这一份。
+/// 文案与抽出前逐字相同（推进计划 §3.34 表 1 钉的就是"抽出前后现场读到的原因串一字不变"）。
+QString CalibrationManager::affineLookupMissReason(const QString &what, const QString &tail,
+                                                   const QString &fixtureName, bool hasScene,
+                                                   bool fixtureNamed, bool fixtureHasHom, int homSize)
+{
+    QString sceneWhy;
+    if (!fixtureHasHom) {
+        if (!hasScene)
+            sceneWhy = QStringLiteral("节点未挂到场景");
+        else if (!fixtureNamed)
+            sceneWhy = QStringLiteral("场景里没有该夹具");
+        else
+            sceneWhy = QStringLiteral("该夹具没有矩阵（只有位姿）");
+    }
+    QString sizeWhy;
+    if (homSize == 9)
+        sizeWhy = QStringLiteral("有 9 项（9 元内参载荷，不是 6 元仿射）");
+    else if (homSize < 6)
+        sizeWhy = QStringLiteral("只有 %1 项").arg(homSize);
+    else
+        // U-27：既不是 6 也不是 9 时不猜它是什么（HALCON 写侧长度本机未证到）。
+        // 旧文案一律写"疑似 9 元内参"，7/8/10/20 项也照这句，现场会查错方向。
+        sizeWhy = QStringLiteral("有 %1 项（不是 6 元仿射）").arg(homSize);
+    QString mgrWhy;
+    if (fixtureHasHom)
+        mgrWhy = QStringLiteral("场景夹具的矩阵%1").arg(sizeWhy);
+    else if (instance()->hasHomography(fixtureName))
+        mgrWhy = QStringLiteral("标定单例里该键%1").arg(sizeWhy);
+    else
+        mgrWhy = QStringLiteral("标定单例里没有这个键");
+    return sceneWhy.isEmpty()
+        ? QStringLiteral("%1取不到 6 元矩阵：夹具 \"%2\"——%3，不回退手填 %4")
+              .arg(what, fixtureName, mgrWhy, tail)
+        : QStringLiteral("%1取不到 6 元矩阵：夹具 \"%2\"——%3；%4，不回退手填 %5")
+              .arg(what, fixtureName, sceneWhy, mgrWhy, tail);
+}
