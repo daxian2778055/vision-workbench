@@ -126,6 +126,11 @@ private slots:
     // 只有 §3.32 的改坏自证臂（撤掉 rejected 填充／合并原因／空键那条绕过写侧口径）覆盖。
     void u27LoadSideRejectListRecordsReason();        // 被拒条目要逐条给出「键 :: 原因」，且四类原因分得开
 
+    // U-29：畸变校正**键侧**的 fx/fy 正性（§3.30 表 3 的 S-3：正性只有手填侧有，键侧没有）
+    void u29StoredZeroFxJudgeRed();                   // 判红：键侧 fx=fy=0 ⇒ 不得全黑产出配绿灯
+    void u29StoredNegativeFyJudgeRed();               // 判红：键侧 fy<0 ⇒ fx 合法也拦不住
+    void u29SmallPositiveFxStaysGreen();              // 负对照：正但荒谬的 fx 仍判绿（本轮不做量级闸）
+
 private:
     QJsonObject m_managerSnapshot;
 };
@@ -226,6 +231,28 @@ void feedImage(NodeBase &node, const HalconCpp::HImage &himg)
     auto d = QSharedPointer<DataObject>::create();
     d->setHImage(himg);
     node.setInputData(0, d);
+}
+
+/// 上下两带（上 20／下 200）的帧：用来量"判绿那一轮的产出到底和输入分不分得开"。
+/// ⚠️ 本意是拿它量 fy<0 的"上下颠倒"，实测**没有颠倒**（产出上半 20.0／下半 199.9，与输入同序）
+/// ⇒ 负号在归一化（y=(v-cy)/fy）与再投影（v'=fy*y'+cy）两次抵消。这张图的价值因此是反的：
+/// 它量出"操作员在现场看不出这份内参是负的"，而 blankImage 恒定灰度更是什么都量不出。
+HalconCpp::HImage bandImage(int w = kImgW, int h = kImgH)
+{
+    cv::Mat img(h, w, CV_8UC1, cv::Scalar(20));
+    img.rowRange(h / 2, h).setTo(200);
+    return OpencvUtil::matToHimage(img);
+}
+
+/// 产出图的上下两带均值（输入是上 20／下 200 ⇒ 两个数对调即"被上下颠倒"）
+QString bandsOf(const cv::Mat &m)
+{
+    if (m.empty())
+        return QStringLiteral("无图像产出");
+    const int half = m.rows / 2;
+    return QStringLiteral("上半均值 %1，下半均值 %2")
+               .arg(cv::mean(m.rowRange(0, half))[0], 0, 'f', 1)
+               .arg(cv::mean(m.rowRange(half, m.rows))[0], 0, 'f', 1);
 }
 
 /// ⑥ R-6：位置修正节点的建仓（`init()` 之后一次设好七个参数，再喂空白输入图）
@@ -469,6 +496,19 @@ cv::Mat grayFromOutputPort(NodeBase &node, int port)
 QString undistortNote(HalconNode &node)
 {
     return node.getParam(QStringLiteral("calibNote")).toString();
+}
+
+/// 一张灰度图"黑不黑"的读数（U-29 取证口径：非零像素数 + 最大灰度）。
+/// 判红轮端口被基类清空 ⇒ 返回"无图像产出"，与"有产出但全黑"是两种不同的红相。
+QString blacknessOf(const cv::Mat &m)
+{
+    if (m.empty())
+        return QStringLiteral("无图像产出");
+    double mn = 0.0, mx = 0.0;
+    cv::minMaxIdx(m, &mn, &mx);
+    return QStringLiteral("非零像素 %1/%2，最大灰度 %3，最小灰度 %4")
+               .arg(cv::countNonZero(m)).arg(m.total() * m.channels())
+               .arg(mx, 0, 'f', 1).arg(mn, 0, 'f', 1);
 }
 
 } // namespace
@@ -2919,6 +2959,97 @@ void CalibChainTest::u27LoadSideRejectListRecordsReason()
     cm->fromJson(m_managerSnapshot);
     QVERIFY2(problems.isEmpty(),
              qPrintable(QStringLiteral("[U-27 拒绝记录] ") + problems.join(QStringLiteral("；"))));
+}
+
+// ============================ U-29 畸变校正：键侧 fx/fy 正性 ============================
+// §3.30 表 3 的 S-3 那笔账：src/OpencvUndistortNode.cpp 两条取内参通路的校验集合不对称——
+// 键侧（readStoredIntrinsics）查「空／项数 != 9／逐项 isfinite」，手填侧查「allFinite ＋ fx/fy 必须为正」
+// ⇒ **fx/fy>0 这一维只有手填侧有**。后果在 §3.32 表 1 的⑤c 已量成运行期读数：键侧一份 fx=fy=0 的九元组
+// ⇒ execute=1、moduleStatus=1、非零像素 0/307200、原因栏空 ⇒ 全黑产出配绿灯。
+// 本轮把这一维做成**两条通路共用的一道闸**（写在 if/else 之后、共用 origin 那个变量），所以下面三条腿
+// 里前两条走键侧（fx=0 / fy<0），第三条是负对照（正但量级荒谬 ⇒ 仍判绿，本轮不做量级闸）。
+
+// ③ 判红⑥（U-29）：键侧九元组 fx=fy=0，其余项全部合法 ⇒ 必须判红，且原因里带出真正读到的 fx/fy。
+// 改前实测（同一形状载荷）见 §3.32 表 1 的⑤c ⇒ 本条改前红。
+void CalibChainTest::u29StoredZeroFxJudgeRed()
+{
+    const QString key = QStringLiteral("cam_params");
+    CalibrationManager::instance()->remove(key);   // 判红轮中止时不跑末尾清理 ⇒ 进来先清键
+    CalibrationManager::instance()->setHomography(
+        key, {0.0, 0.0, kTrueCx, kTrueCy, kDistK1, kDistK2, kDistP1, kDistP2, 0.01});
+
+    OpencvUndistortNode node;
+    node.init();                                   // 全默认：来源=标定单例、键=cam_params
+    feedImage(node, blankImage());
+    const bool ok = node.execute();
+    const bool ms = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    const QString note = undistortNote(node);
+    QVERIFY2(!ok, qPrintable(QStringLiteral("[U-29 键侧 fx=fy=0 判绿] execute=%1 moduleStatus=%2 产出=%3 原因栏=「%4」")
+                                 .arg(ok).arg(ms).arg(blacknessOf(grayFromOutputPort(node, 0))).arg(note)));
+    QVERIFY2(!ms, qPrintable(QStringLiteral("[U-29 键侧 fx=fy=0 判红但 moduleStatus 仍为真] 原因栏=「") + note + QStringLiteral("」")));
+    QVERIFY2(!node.getOutputData(0) && !node.getOutputData(1),
+             qPrintable(QStringLiteral("[U-29 键侧 fx=fy=0 判红后输出端口没被清空] 原因栏=「") + note + QStringLiteral("」")));
+    QVERIFY2(note.contains(QStringLiteral("cam_params")),
+             qPrintable(QStringLiteral("判红原因里没有标定键名：") + note));
+    QVERIFY2(note.contains(QStringLiteral("fx=0.00")) && note.contains(QStringLiteral("fy=0.00")),
+             qPrintable(QStringLiteral("判红原因没带出实际读到的 fx/fy：") + note));
+
+    CalibrationManager::instance()->remove(key);
+}
+
+// ③ 判红⑦（U-29）：fx 完全合法、只有 fy 是负的 ⇒ 正性闸必须**两个都查**（只查 fx 的写法在这条上漏）。
+// 改前实测（两带帧，输入上 20／下 200）：execute=1、moduleStatus=1、产出上半 20.0／下半 199.9、原因栏空
+// ⇒ OpenCV 不报错，图也**不颠倒**（负号在归一化与再投影里抵消），现场看着完全正常 —— 静默的程度比全黑那条更高。
+void CalibChainTest::u29StoredNegativeFyJudgeRed()
+{
+    const QString key = QStringLiteral("cam_params");
+    CalibrationManager::instance()->remove(key);
+    CalibrationManager::instance()->setHomography(
+        key, {kTrueFx, -kTrueFy, kTrueCx, kTrueCy, kDistK1, kDistK2, kDistP1, kDistP2, 0.01});
+
+    OpencvUndistortNode node;
+    node.init();
+    feedImage(node, bandImage());            // 上下两带（20/200）⇒ "颠倒"量得出来（blankImage 恒定灰度，翻转后逐像素相同）
+    const bool ok = node.execute();
+    const bool ms = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    const QString note = undistortNote(node);
+    QVERIFY2(!ok, qPrintable(QStringLiteral("[U-29 键侧 fy=-%1 判绿] execute=%2 moduleStatus=%3 输入=上半 20.0/下半 200.0，产出=%4 原因栏=「%5」")
+                                 .arg(kTrueFy).arg(ok).arg(ms)
+                                 .arg(bandsOf(grayFromOutputPort(node, 0))).arg(note)));
+    QVERIFY2(!ms, qPrintable(QStringLiteral("[U-29 键侧 fy<0 判红但 moduleStatus 仍为真] 原因栏=「") + note + QStringLiteral("」")));
+    QVERIFY2(note.contains(QStringLiteral("fx=520.00")),
+             qPrintable(QStringLiteral("原因里没写出合法的那一项 fx：") + note));
+    QVERIFY2(note.contains(QStringLiteral("fy=-518.00")),
+             qPrintable(QStringLiteral("原因里没写出负的那一项 fy：") + note));
+
+    CalibrationManager::instance()->remove(key);
+}
+
+// ③ 负对照（U-29 的口径边界）：fx=fy=0.5 是**正数**（量级荒谬）⇒ 本轮闸只管"非正"，这条必须仍判绿。
+// 拿它当"顺手加严成正性＋量级"的探针：那种写法会把这条顶红，而量级门限定多少（1？50？500？）没有依据。
+void CalibChainTest::u29SmallPositiveFxStaysGreen()
+{
+    const QString key = QStringLiteral("cam_params");
+    CalibrationManager::instance()->remove(key);
+    CalibrationManager::instance()->setHomography(
+        key, {0.5, 0.5, kTrueCx, kTrueCy, 0.0, 0.0, 0.0, 0.0, 0.01});   // D 全 0 ⇒ 映射是恒等
+
+    OpencvUndistortNode node;
+    node.init();
+    feedImage(node, blankImage());
+    const bool ok = node.execute();
+    const QString note = undistortNote(node);
+    QVERIFY2(ok, qPrintable(QStringLiteral("[U-29 负对照被一起判红] 正但荒谬的 fx/fy 不该拦：") + note));
+    QVERIFY2(node.getParam(QStringLiteral("moduleStatus")).toBool(),
+             "负对照判绿但 moduleStatus 不是真");
+    const cv::Mat out = grayFromOutputPort(node, 0);
+    QVERIFY2(!out.empty(), "负对照判绿却没有图像产出");
+    const QString stats = blacknessOf(out);
+    QVERIFY2(cv::countNonZero(out) > 0,
+             qPrintable(QStringLiteral("[U-29 口径边界] 恒等映射下仍全黑：") + stats));
+    qInfo("%s", qPrintable(QStringLiteral("③ U-29 负对照实测：fx=fy=0.5（正、荒谬）判绿，产出=%1").arg(stats)));
+
+    CalibrationManager::instance()->remove(key);
 }
 
 QTEST_MAIN(CalibChainTest)

@@ -13,6 +13,7 @@ namespace {
 /// 9 元组读侧口径：写侧见 OpencvCalibNode.cpp 的 {fx, fy, cx, cy, k1, k2, p1, p2, rms}。
 /// 项数不足或含非有限值都不能"凑合用"——拿半份内参去畸变更糟于不校正，
 /// 且这里绝不回退到手填默认值（静默回退正是推进计划 §3.3 记的 R-2 那种缺陷形态）。
+/// ⚠️ fx/fy 的正性**不在这里查**：两条通路共用 run() 里那一道（U-29），别再抄第二份。
 bool readStoredIntrinsics(const QString &key, QVector<double> *out, QString *why)
 {
     const QVector<double> v = CalibrationManager::instance()->homography(key);
@@ -125,12 +126,16 @@ void OpencvUndistortNode::run(bool)
                 fail(QStringLiteral("手填内参含非有限值"));
                 return;
             }
-            if (fx <= 0.0 || fy <= 0.0) {
-                fail(QStringLiteral("手填内参无效：fx/fy 必须为正（当前 fx=%1 fy=%2）")
-                         .arg(fx, 0, 'f', 2).arg(fy, 0, 'f', 2));
-                return;
-            }
             origin = QStringLiteral("手填内参");
+        }
+
+        // 两条通路**共用**这一道正性闸（U-29：改前只有手填侧有，键侧没有）。
+        // fx/fy<=0 时 OpenCV 不报错、图也不颠倒（负号在归一化与再投影里抵消），
+        // 于是"全黑产出"或"看着正常但用错了内参"都配着绿灯（推进计划 §3.32 表 1 的⑤c、§3.33 键侧实测）。
+        if (fx <= 0.0 || fy <= 0.0) {
+            fail(QStringLiteral("%1：fx/fy 必须为正（当前 fx=%2 fy=%3）")
+                     .arg(origin).arg(fx, 0, 'f', 2).arg(fy, 0, 'f', 2));
+            return;
         }
 
         const cv::Mat src = OpencvUtil::himageToMat(m_inputImage);
