@@ -536,5 +536,10 @@ void ProjectManager::sceneFromJson(const QJsonObject &json, FlowScene *scene)
         }
     }
 
-    scene->extrasFromJson(json);
+    QStringList fixtureNotes;
+    scene->extrasFromJson(json, &fixtureNotes);
+    // U-31：夹具条目在载入侧被降级（矩阵项数／元素不合形，或位姿读不出来）时必须留痕——
+    // 静默丢弃的表现是"方案打开后夹具的矩阵不见了"，而算子那边只是按既有形态判红。
+    for (const QString &n : fixtureNotes)
+        VFP_DEBUG << "方案加载：夹具条目降级" << n;
 }

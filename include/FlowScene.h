@@ -246,7 +246,9 @@ public:
     void setFlowMode(int mode) { m_flowMode = mode; }
 
     QJsonObject extrasToJson() const;
-    void extrasFromJson(const QJsonObject &json);
+    /// U-31：夹具条目在载入侧要过与写侧同一套形（名称非空／矩阵恰好 6 项且逐项有限数值／位姿逐项是数值）。
+    /// 不合形的部分降级成「没有矩阵／没有位姿」，降级以「夹具名 :: 原因」追加进 rejected（可空，同 U-27 口径）。
+    void extrasFromJson(const QJsonObject &json, QStringList *rejected = nullptr);
 
 protected:
     void drawBackground(QPainter *painter, const QRectF &rect) override;

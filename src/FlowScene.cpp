@@ -1251,7 +1251,7 @@ QJsonObject FlowScene::extrasToJson() const
     return o;
 }
 
-void FlowScene::extrasFromJson(const QJsonObject &json)
+void FlowScene::extrasFromJson(const QJsonObject &json, QStringList *rejected)
 {
     m_flowVariables.clear();
     m_fixtures.clear();
@@ -1272,16 +1272,81 @@ void FlowScene::extrasFromJson(const QJsonObject &json)
     const QJsonObject fixtures = json.value(QStringLiteral("fixtures")).toObject();
     for (auto it = fixtures.constBegin(); it != fixtures.constEnd(); ++it) {
         const QJsonObject f = it.value().toObject();
+        // U-31：这一段原来是 `m_fixtures[ff.name] = ff;` 直接写表，绕开了同文件里写侧的两道闸
+        // （setFixture 拒空名、setFixtureHomography 拒非「恰好 6 项」）。元素读取用的又是
+        // QJsonValue::toDouble()——字符串与缺键一律给 0.0 ⇒ 六个字符串会装成"长度合法的零矩阵"
+        // 并被标上 hasHom=true，下游 ⑥ 消费端只查长度（CoordinateTransformNode.cpp:58）⇒ 判绿且输出恒零。
+        // 现在载入侧与写侧同一套形，不合形的部分**降级**（而不是整条丢弃：位姿坏了一个键不该连累矩阵），
+        // 并把降级原因报出去（静默丢弃的表现是"方案打开后夹具的矩阵不见了"，现场无从下手——同 U-27）。
+        const QString name = it.key().trimmed();
+        if (name.isEmpty()) {
+            if (rejected)
+                rejected->append(QStringLiteral("%1 :: 夹具名为空，整条跳过（写侧 setFixture 同样拒收）")
+                                     .arg(name));
+            continue;
+        }
+
         FlowFixture ff;
-        ff.name = it.key();
-        for (const QJsonValue &x : f.value(QStringLiteral("hom")).toArray())
-            ff.hom.append(x.toDouble());
-        ff.poseRow = f.value(QStringLiteral("poseRow")).toDouble();
-        ff.poseCol = f.value(QStringLiteral("poseCol")).toDouble();
-        ff.poseAngle = f.value(QStringLiteral("poseAngle")).toDouble();
-        ff.poseScale = f.value(QStringLiteral("poseScale")).toDouble(1.0);
-        ff.hasHom = f.value(QStringLiteral("hasHom")).toBool();
-        ff.hasPose = f.value(QStringLiteral("hasPose")).toBool();
+        ff.name = name;
+
+        if (f.value(QStringLiteral("hasHom")).toBool()) {
+            QString why;
+            QVector<double> hom;
+            const QJsonArray arr = f.value(QStringLiteral("hom")).toArray();
+            if (arr.size() != 6)
+                why = QStringLiteral("矩阵有 %1 项（夹具矩阵槽位只接受恰好 6 项）").arg(arr.size());
+            else {
+                for (int i = 0; i < arr.size(); ++i) {
+                    const QJsonValue &v = arr.at(i);
+                    if (!v.isDouble()) {
+                        why = QStringLiteral("第 %1 项不是数值").arg(i + 1);
+                        break;
+                    }
+                    if (!std::isfinite(v.toDouble())) {
+                        why = QStringLiteral("第 %1 项不是有限值").arg(i + 1);
+                        break;
+                    }
+                    hom.append(v.toDouble());
+                }
+            }
+            if (why.isEmpty()) {
+                ff.hom = hom;
+                ff.hasHom = true;
+            } else if (rejected) {
+                rejected->append(QStringLiteral("%1 :: 矩阵作废（%2），夹具保持没有矩阵").arg(name, why));
+            }
+        }
+
+        if (f.value(QStringLiteral("hasPose")).toBool()) {
+            QString why;
+            // poseScale 保留「缺键回落 1.0」的既有默认（extrasToJson 一直写全四键，回落只为兼容手写方案）；
+            // 给了就必须是数值——否则和矩阵侧一样会读成 0.0，把位姿缩放悄悄变成"没有缩放"。
+            const char *keys[] = {"poseRow", "poseCol", "poseAngle", "poseScale"};
+            bool required[] = {true, true, true, false};
+            for (int i = 0; i < 4 && why.isEmpty(); ++i) {
+                const QString key = QString::fromLatin1(keys[i]);
+                const QJsonValue v = f.value(key);
+                if (!f.contains(key)) {
+                    if (required[i])
+                        why = QStringLiteral("位姿缺 %1").arg(key);
+                    continue;
+                }
+                if (!v.isDouble())
+                    why = QStringLiteral("位姿 %1 不是数值").arg(key);
+                else if (!std::isfinite(v.toDouble()))
+                    why = QStringLiteral("位姿 %1 不是有限值").arg(key);
+            }
+            if (why.isEmpty()) {
+                ff.poseRow = f.value(QStringLiteral("poseRow")).toDouble();
+                ff.poseCol = f.value(QStringLiteral("poseCol")).toDouble();
+                ff.poseAngle = f.value(QStringLiteral("poseAngle")).toDouble();
+                ff.poseScale = f.value(QStringLiteral("poseScale")).toDouble(1.0);
+                ff.hasPose = true;
+            } else if (rejected) {
+                rejected->append(QStringLiteral("%1 :: 位姿作废（%2），夹具保持没有位姿").arg(name, why));
+            }
+        }
+
         m_fixtures[ff.name] = ff;
     }
     const QJsonArray comments = json.value(QStringLiteral("comments")).toArray();

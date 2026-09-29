@@ -145,6 +145,16 @@ private slots:
     void testImageDisplayResolvePriority();
     void testExecutionStatusController();
     void testFlowExtrasRoundTrip();   // 每流程身份（流程名 + 运行模式）随方案持久化
+    // U-31：方案文件里的 "fixtures" 段是 FlowScene::extrasFromJson 直接装表的，既不走 setFixture
+    // （那里拒空名）也不走 setFixtureHomography（R-5 的"恰好 6 项"闸在那里）⇒ 三条口径各一条腿。
+    void testFixtureLoadRejectsWrongItemCount();
+    void testFixtureLoadRejectsNonNumericElements();
+    void testFixtureLoadRejectsUnnamedEntry();
+    void testFixtureRoundTripThroughExtrasKeepsAllFields();   // 覆盖腿：合法载荷不得被拒
+
+    // U-31 留痕腿（改后新腿）：rejected 出参在改前不存在 ⇒「夹具名 :: 原因」这套文案
+    // **无从取改前红**，它钉的是修法新增的那一面：降级必须报得出是谁、降级在哪一部分、为什么。
+    void testFixtureLoadRejectionListRecordsReason();
     void testShadowMemberSingleSourceAndConcurrentAccess();   // S1 残留试点：参数唯一来源 + 并发读写
     void testExternalTriggerAcceptedOnlyInSoftwareMode();   // F-1：非软触发模式不得受理外部触发
     void testRecentFilesMenu();
@@ -3618,6 +3628,257 @@ void IntegrationTest::testReasonNotReplayedOnLaterRedRound()
     QVERIFY2(f.rounds.at(1).vars.value(QStringLiteral("calibNote")).toString().isEmpty(),
              qPrintable(QStringLiteral("判红轮把上一轮的陈旧原因推给了面板：%1")
                             .arg(f.rounds.at(1).vars.value(QStringLiteral("calibNote")).toString())));
+}
+
+// ===== U-31：夹具载入侧的三条口径（本文件这四条腿跑在**未改动**的 src/FlowScene.cpp 上，改前 T1～T3 全红）=====
+
+namespace u31 {
+
+/// 造一份只含一个夹具的方案外挂 JSON。homRaw 里的元素原样进数组（QString 就是字符串元素）。
+inline QJsonObject extrasWith(const QString &key, const QJsonArray &homRaw, bool hasHom)
+{
+    QJsonObject f;
+    f[QStringLiteral("hom")] = homRaw;
+    f[QStringLiteral("hasHom")] = hasHom;
+    f[QStringLiteral("hasPose")] = false;
+    QJsonObject fixtures;
+    fixtures.insert(key, f);
+    QJsonObject extras;
+    extras[QStringLiteral("fixtures")] = fixtures;
+    return extras;
+}
+
+inline QJsonArray homOf(const QVector<double> &v)
+{
+    QJsonArray a;
+    for (double d : v)
+        a.append(d);
+    return a;
+}
+
+}   // namespace u31
+
+// T1：夹具矩阵槽位只接受**恰好 6 项**——这条口径 R-5 已经写进 setFixtureHomography（:1160～:1172，
+// 注释里连"9 元内参被静默截断成 fx/fy/cx/cy/k1/k2"的后果都记了），但载入侧没走那个函数。
+void IntegrationTest::testFixtureLoadRejectsWrongItemCount()
+{
+    const QVector<QVector<double>> bad = {
+        QVector<double>{1, 0, 100, 0, 1, 200, 0, 0, 1},   // 9 元 OpenCV 内参
+        QVector<double>{1, 0},                             // 2 项
+        QVector<double>{1, 0, 100, 0, 1},                  // 5 项（少一个平移）
+    };
+    QStringList problems;
+    for (const QVector<double> &hom : bad) {
+        FlowScene scene;
+        scene.extrasFromJson(u31::extrasWith(QStringLiteral("u31_itemcount"), u31::homOf(hom), true));
+        const FlowFixture fx = scene.fixture(QStringLiteral("u31_itemcount"));
+        if (fx.hasHom)
+            problems << QStringLiteral("%1 项载荷载入后仍标着 hasHom=true").arg(hom.size());
+        if (!fx.hom.isEmpty())
+            problems << QStringLiteral("%1 项载荷的数组没清空（还剩 %2 项）").arg(hom.size()).arg(fx.hom.size());
+    }
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[U-31 载入项数] ") + problems.join(QStringLiteral("；"))));
+
+    // 反向闸（覆盖腿的同一条断言，放在红之后：红臂不许顺手把好载荷也拒了）
+    FlowScene ok;
+    ok.extrasFromJson(u31::extrasWith(QStringLiteral("u31_itemcount"),
+                                       u31::homOf(QVector<double>{1, 0, 100, 0, 1, 200}), true));
+    const FlowFixture good = ok.fixture(QStringLiteral("u31_itemcount"));
+    QVERIFY2(good.hasHom && good.hom.size() == 6 && good.hom.at(2) == 100.0 && good.hom.at(5) == 200.0,
+             qPrintable(QStringLiteral("[U-31 载入项数·反向] 合法 6 元矩阵被拒或装错 hasHom=%1 size=%2")
+                        .arg(good.hasHom).arg(good.hom.size())));
+}
+
+// T2：元素类型。QJsonValue::toDouble() 对**字符串**一律给 0.0（不解析），所以方案里写成
+// "hom":["1","0","100","0","1","200"] 的六个字符串，载入结果是**六项全 0.0 且 hasHom=true**
+// ⇒ 项数闸门看得见摸不着（长度恰好 6），下游拿它当"标定过的仿射"乘，输出恒为 (0, 0) 且判绿。
+// U-27 给标定单例的 fromJson 补过这道逐元素闸（同款后果记在推进计划 §3.32），夹具这条通路没补。
+void IntegrationTest::testFixtureLoadRejectsNonNumericElements()
+{
+    auto strArray = [](const QStringList &raw) {
+        QJsonArray a;
+        for (const QString &s : raw)
+            a.append(QJsonValue(s));
+        return a;
+    };
+    const QVector<QStringList> bad = {
+        {QStringLiteral("1"), QStringLiteral("0"), QStringLiteral("100"),
+         QStringLiteral("0"), QStringLiteral("1"), QStringLiteral("200")},   // 整组都是字符串
+        {QStringLiteral("1"), QStringLiteral("0"), QStringLiteral("100"),
+         QStringLiteral("0"), QStringLiteral("1"), QStringLiteral("nan")},   // 混一个非数串
+    };
+    QStringList problems;
+    for (const QStringList &raw : bad) {
+        FlowScene scene;
+        scene.extrasFromJson(u31::extrasWith(QStringLiteral("u31_numeric"), strArray(raw), true));
+        const FlowFixture fx = scene.fixture(QStringLiteral("u31_numeric"));
+        if (fx.hasHom || !fx.hom.isEmpty()) {
+            QStringList got;
+            for (double d : fx.hom)
+                got << QString::number(d, 'g', 17);
+            problems << QStringLiteral("字符串数组（%1 个元素）被装成可用矩阵：hasHom=%2 hom=[%3]")
+                            .arg(raw.size()).arg(fx.hasHom).arg(got.join(QStringLiteral(",")));
+        }
+    }
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[U-31 载入元素类型] ") + problems.join(QStringLiteral("；"))));
+}
+
+// T3：名称。setFixture（:1153～:1158）拒空名，载入侧是 m_fixtures[ff.name] = ff 直接写表。
+void IntegrationTest::testFixtureLoadRejectsUnnamedEntry()
+{
+    FlowScene scene;
+    scene.extrasFromJson(u31::extrasWith(QString(),
+                                         u31::homOf(QVector<double>{1, 0, 100, 0, 1, 200}), true));
+    QStringList problems;
+    if (scene.fixtureNames().contains(QString()))
+        problems << QStringLiteral("空名夹具条目进了表（fixtureNames 含 ""，共 %1 条）")
+                        .arg(scene.fixtureNames().size());
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[U-31 载入名称] ") + problems.join(QStringLiteral("；"))));
+}
+
+// T4：覆盖腿（不是红腿）——合法夹具必须**逐字段**过一遍往返。这条在改动前就该绿，
+// 它的用处是把"载入侧加闸"的爆炸半径钉住：只准拒坏的，不准动好的。
+void IntegrationTest::testFixtureRoundTripThroughExtrasKeepsAllFields()
+{
+    FlowScene scene;
+    scene.setFixtureHomography(QStringLiteral("u31_rt"),
+                               QVector<double>{2, 0, 30, 0, 2, 40});
+    scene.setFixturePose(QStringLiteral("u31_rt"), 11.0, 22.0, 3.0, 1.5);
+    scene.setFixtureHomography(QStringLiteral("u31_rt_second"),
+                               QVector<double>{1, 0, 0, 0, 1, 0});
+
+    FlowScene restored;
+    restored.extrasFromJson(scene.extrasToJson());
+
+    const FlowFixture a = restored.fixture(QStringLiteral("u31_rt"));
+    // 大括号初始化里的逗号会被宏参切分（MSVC C2187/C3329）⇒ 期望值先落成局部量
+    QVector<double> wantHom;
+    wantHom << 2 << 0 << 30 << 0 << 2 << 40;   // 六项逐一给出，不走大括号初始化
+    QVERIFY2(a.hasHom && a.hom == wantHom,
+             qPrintable(QStringLiteral("[U-31 往返] 矩阵没逐位回来 hasHom=%1 size=%2")
+                        .arg(a.hasHom).arg(a.hom.size())));
+    QVERIFY2(a.hasPose && a.poseRow == 11.0 && a.poseCol == 22.0
+             && a.poseAngle == 3.0 && a.poseScale == 1.5,
+             qPrintable(QStringLiteral("[U-31 往返] 位姿没逐位回来 hasPose=%1 row=%2 col=%3 ang=%4 scale=%5")
+                        .arg(a.hasPose).arg(a.poseRow).arg(a.poseCol).arg(a.poseAngle).arg(a.poseScale)));
+    QVERIFY2(restored.fixtureNames().size() == 2,
+             qPrintable(QStringLiteral("[U-31 往返] 条数不对：%1").arg(restored.fixtureNames().size())));
+}
+
+// U-31 留痕腿（改后新腿）：降级不许是静默的。
+// ⚠️ 如实登记：`extrasFromJson(json, &rejected)` 这个签名在改前不存在，所以这条腿**没有改前红可取**——
+// 它验证的是修法新增的那一面（谁被降级／降级了哪一部分／为什么），取证强度低于前面五条红腿。
+void IntegrationTest::testFixtureLoadRejectionListRecordsReason()
+{
+    auto entry = [](const QJsonArray &hom, bool hasHom, const QJsonObject &pose) {
+        QJsonObject f;
+        f[QStringLiteral("hom")] = hom;
+        f[QStringLiteral("hasHom")] = hasHom;
+        for (auto it = pose.constBegin(); it != pose.constEnd(); ++it)
+            f[it.key()] = it.value();
+        f[QStringLiteral("hasPose")] = !pose.isEmpty();
+        return f;
+    };
+    auto nums = [](const QVector<double> &v) {
+        QJsonArray a;
+        for (double d : v)
+            a.append(d);
+        return a;
+    };
+    auto strs = [](const QStringList &v) {
+        QJsonArray a;
+        for (const QString &s : v)
+            a.append(QJsonValue(s));
+        return a;
+    };
+    QJsonObject poseGood;
+    poseGood[QStringLiteral("poseRow")] = 11.0;
+    poseGood[QStringLiteral("poseCol")] = 22.0;
+    poseGood[QStringLiteral("poseAngle")] = 3.0;
+    poseGood[QStringLiteral("poseScale")] = 1.0;
+    QJsonObject poseNoRow;
+    poseNoRow[QStringLiteral("poseCol")] = 22.0;
+    poseNoRow[QStringLiteral("poseAngle")] = 3.0;
+    poseNoRow[QStringLiteral("poseScale")] = 1.0;
+
+    QJsonObject fixtures;
+    fixtures[QStringLiteral("u31n_hom9")] = entry(
+        nums(QVector<double>{600, 600, 320, 240, 0.1, 0.01, 0.0, 0.0, 1.0}), true, QJsonObject());
+    fixtures[QStringLiteral("u31n_str")] = entry(
+        strs(QStringList() << QStringLiteral("2") << QStringLiteral("0") << QStringLiteral("30")
+                           << QStringLiteral("0") << QStringLiteral("2") << QStringLiteral("40")),
+        true, QJsonObject());
+    fixtures[QStringLiteral("u31n_pose")] = entry(
+        nums(QVector<double>{2, 0, 30, 0, 2, 40}), true, poseNoRow);
+    fixtures[QStringLiteral("u31n_good")] = entry(
+        nums(QVector<double>{2, 0, 30, 0, 2, 40}), true, poseGood);
+    fixtures[QString()] = entry(nums(QVector<double>{1, 0, 100, 0, 1, 200}), true, QJsonObject());
+
+    QJsonObject json;
+    json[QStringLiteral("fixtures")] = fixtures;
+
+    QStringList notes;
+    FlowScene scene;
+    scene.extrasFromJson(json, &notes);
+
+    QStringList problems;
+    // 五条条目里四条不合形（9 项／整组字符串／位姿缺键／空名），合法那条不许产生留痕 ⇒ 共 4 条
+    if (notes.size() != 4) {
+        problems << QStringLiteral("留痕条数=%1（应为 4：9 项／整组字符串／位姿缺键／空名，合法那条不该出现）\n%2")
+                        .arg(notes.size()).arg(notes.join(QStringLiteral("\n")));
+    }
+    struct Want { QString key; QString frag; };
+    const QVector<Want> wants = {
+        {QStringLiteral("u31n_hom9"), QStringLiteral("矩阵有 9 项")},
+        {QStringLiteral("u31n_str"), QStringLiteral("第 1 项不是数值")},
+        {QStringLiteral("u31n_pose"), QStringLiteral("位姿缺 poseRow")},
+        {QString(), QStringLiteral("夹具名为空")},
+    };
+    for (const Want &w : wants) {
+        bool hit = false;
+        for (const QString &n : notes) {
+            if (n.startsWith(w.key + QStringLiteral(" ::")) && n.contains(w.frag)) {
+                hit = true;
+                break;
+            }
+        }
+        if (!hit)
+            problems << QStringLiteral("没有「%1 :: …%2…」这条留痕").arg(w.key, w.frag);
+    }
+    for (const QString &n : notes) {
+        if (n.contains(QStringLiteral("u31n_good"))) {
+            problems << QStringLiteral("合法条目却产生了留痕：") + n;
+            break;
+        }
+    }
+    // 降级只降该降的那一部分：u31n_pose 的矩阵合形，必须照常装进来
+    const FlowFixture poseDown = scene.fixture(QStringLiteral("u31n_pose"));
+    if (!poseDown.hasHom || poseDown.hom.size() != 6 || poseDown.hasPose)
+        problems << QStringLiteral("u31n_pose 该只降位姿（hasHom=%1 size=%2 hasPose=%3）")
+                        .arg(poseDown.hasHom).arg(poseDown.hom.size()).arg(poseDown.hasPose);
+    const QStringList names = scene.fixtureNames();
+    if (names.size() != 4 || names.contains(QString()))
+        problems << QStringLiteral("夹具表条数=%1 且含空名=%2（应为 4 条、不含空名）")
+                        .arg(names.size()).arg(names.contains(QString()));
+
+    // 负对照：只有合法条目时留痕必须为空（闸不许无病呻吟）
+    QJsonObject onlyGood;
+    QJsonObject goodFix;
+    goodFix[QStringLiteral("u31n_good")] = entry(
+        nums(QVector<double>{2, 0, 30, 0, 2, 40}), true, poseGood);
+    onlyGood[QStringLiteral("fixtures")] = goodFix;
+    QStringList cleanNotes;
+    FlowScene clean;
+    clean.extrasFromJson(onlyGood, &cleanNotes);
+    if (!cleanNotes.isEmpty())
+        problems << QStringLiteral("合法载荷不该有留痕，实有 %1 条：%2")
+                        .arg(cleanNotes.size()).arg(cleanNotes.join(QStringLiteral("；")));
+
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[U-31 载入留痕] ") + problems.join(QStringLiteral("；"))));
 }
 
 QTEST_MAIN(IntegrationTest)

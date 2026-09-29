@@ -135,6 +135,17 @@ private slots:
     // 而改前没有任何一条腿同时看两侧（推进计划 §3.34 的 P1／P2 实测：只改一份 ⇒ 两个互不相交的红集）。
     void affineMissReasonIdenticalAcrossConsumers();
 
+    // U-31：夹具载入侧（src/FlowScene.cpp 的 extrasFromJson）直接把条目写进 m_fixtures，
+    // 既不过 setFixture 的空名闸，也不过 setFixtureHomography 的「恰好 6 项」闸；元素读取用
+    // QJsonValue::toDouble()，对字符串给 0.0 ⇒ 长度恰好 6 的**字符串数组**装成六个 0.0 照样过消费端闸。
+    // 下面这条量的是操作员看得见的那一面（绿灯 + 恒零／丢平移的产出），不是载入侧的内部布尔位。
+    void u31LoadedStringArrayHomJudgesRed();
+
+    // U-31 位姿侧：extrasFromJson 读位姿用的同样是 QJsonValue::toDouble()，对字符串给 0.0、
+    // 对缺键也给 0.0，而 hasPose 是载荷里独立的一路 ⇒ 「矩阵合法、位姿读不出来」时消费端仍判绿，
+    // 只是把 (0, 0) 当成输入点（矩阵的平移项直接成了输出）。下面这条量的是这一面。
+    void u31LoadedPoseStringFieldsSilentlyUsed();
+
 private:
     QJsonObject m_managerSnapshot;
 };
@@ -3065,6 +3076,9 @@ void CalibChainTest::u29SmallPositiveFxStaysGreen()
 // 各 0 处断言；「不回退手填 …」尾巴在 §3.34 的 P3 臂实测为全绿盲区）。
 // 形态 A 的"夹具带 9 项矩阵"是可达的：src/FlowScene.cpp 的夹具反序列化只把 hasHom/hom 原样装回、
 // 不查项数（区别于 src/FlowScene.cpp 的 setFixtureHomography——那道拒非 6 项），所以方案文件里就能进来。
+// 【§3.35 就地更正（2026-09-29）】上面那句「所以方案文件里就能进来」自本轮起作废：夹具载入侧装了同款形闸
+// （项数／元素类型／名称），方案文件里的九元载荷已经进不了夹具表。这条腿不受影响——形态 A 是直接给
+// affineLookupMissReason 传 hom 项数＝9 的入参，走的是判据函数而不是 JSON 那条路。
 void CalibChainTest::affineMissReasonIdenticalAcrossConsumers()
 {
     CalibrationManager *cm = CalibrationManager::instance();
@@ -3168,6 +3182,276 @@ void CalibChainTest::affineMissReasonIdenticalAcrossConsumers()
     cm->fromJson(m_managerSnapshot);
     QVERIFY2(problems.isEmpty(),
              qPrintable(QStringLiteral("[U-28 两侧同形] ") + problems.join(QStringLiteral("；"))));
+}
+
+// ============================ U-31 后果腿：夹具载荷的静默绿灯 ============================
+// 站点：src/FlowScene.cpp 的 extrasFromJson 里那段夹具恢复（改前 :1272～:1286）——
+//   `m_fixtures[ff.name] = ff;` 直接写表，绕开了同文件里两道既有闸：
+//     · setFixture（改前 :1153～:1158）拒空名；
+//     · setFixtureHomography（改前 :1160～:1172，R-5 立的）拒非「恰好 6 项」。
+//   元素读取是 `ff.hom.append(x.toDouble())`，而 QJsonValue::toDouble() 对**字符串**返回默认 0.0
+//   （不做数字解析）⇒ "hom":["2","0","30","0","2","40"] 载入后是 hom=[0,0,0,0,0,0] 且 hasHom=true。
+// 后果：消费端只看长度（src/CoordinateTransformNode.cpp:58 的 `hom.size() != 6`）⇒ 六项零矩阵过闸、
+//   m11..m23 全取 0 ⇒ 无论输入像素是多少，输出恒为 (0.00, 0.00) 且**判绿**。
+// U-27 给标定单例的 fromJson 补过同款逐元素闸（推进计划 §3.32），夹具这条通路没补。
+void CalibChainTest::u31LoadedStringArrayHomJudgesRed()
+{
+    CalibrationManager *cm = CalibrationManager::instance();
+    QStringList problems;
+
+    // checkConsumer=false 用于「空名条目」那类只在夹具表这一侧成立的形态：
+    // 空 fixtureName 走的是手填矩阵（src/CoordinateTransformNode.cpp:50～:53 的既有口径），
+    // 拿它断言"必须判红"是假命题，只有"空名不该进表"是真命题。
+    auto oneShot = [&problems, cm](const QString &key, const QByteArray &schemeJson,
+                                   bool checkConsumer) {
+        QJsonParseError err;
+        const QJsonObject json = QJsonDocument::fromJson(schemeJson, &err).object();
+        if (err.error != QJsonParseError::NoError || json.isEmpty()) {
+            problems << QStringLiteral("「%1」方案载荷没 parse 出对象（%2），这条臂无从判起")
+                            .arg(key, err.errorString());
+            return;
+        }
+
+        FlowScene scene;
+        scene.extrasFromJson(json);
+
+        const FlowFixture fx = scene.fixture(key);
+        QStringList homGot;
+        for (double d : fx.hom)
+            homGot << QString::number(d, 'g', 17);
+        const QString tag = QStringLiteral("「%1」").arg(key);
+
+        // 夹具表自己就不该收下不合形的载荷（载入侧闸）
+        if (fx.hasHom || !fx.hom.isEmpty())
+            problems << tag + QStringLiteral("不合形的载荷仍被当成可用矩阵装进夹具"
+                                             "（hasHom=%1 hom=[%2]）")
+                            .arg(fx.hasHom).arg(homGot.join(QLatin1Char(',')));
+        if (checkConsumer) {
+            CoordinateTransformNode ct;
+            ct.setFlowSceneRef(&scene);
+            ct.init();
+            ct.setParam(QStringLiteral("fixtureName"), key);
+            ct.setParam(QStringLiteral("x"), 200.0);
+            ct.setParam(QStringLiteral("y"), 150.0);
+            feedImage(ct, blankImage(640, 480));
+            const bool ok = ct.execute();
+            const QString note = transformNoteOf(ct);
+            bool present = false;
+            const QPointF q = resultPointOf(ct, &present);
+
+            // 现场看得见的那一面：不许判绿、不许留产出
+            if (ok)
+                problems << tag + QStringLiteral("判绿了（execute=true），输出点 (%1, %2)，原因栏=「%3」")
+                                .arg(q.x(), 0, 'f', 2).arg(q.y(), 0, 'f', 2).arg(note);
+            if (present)
+                problems << tag + QStringLiteral("结果端口仍有产出 (%1, %2)，判红轮必须清空")
+                                .arg(q.x(), 0, 'f', 2).arg(q.y(), 0, 'f', 2);
+            if (!ok && note.isEmpty())
+                problems << tag + QStringLiteral("判红了却没留原因（transformNote 空）");
+        }
+        cm->remove(key);
+    };
+
+    // 形态 1：整组写成字符串 ⇒ 六个 0.0 的「合法长度」零矩阵 ⇒ 输出恒为 (0.00, 0.00) 且判绿
+    oneShot(QStringLiteral("u31_all_zero"), QByteArrayLiteral(
+        "{\"flowName\":\"u31\",\"flowMode\":1,\"fixtures\":{"
+        "\"u31_all_zero\":{\"hom\":[\"2\",\"0\",\"30\",\"0\",\"2\",\"40\"],"
+        "\"poseRow\":0,\"poseCol\":0,\"poseAngle\":0,\"poseScale\":1,"
+        "\"hasHom\":true,\"hasPose\":false}}}"), true);
+
+    // 形态 2：只有 m23 是字符串 ⇒ 前五项照旧、第六项静默变 0 ⇒ 输出 (430.00, 300.00)，
+    // 而真值是 (430.00, 340.00)：数字看着完全正常，现场比形态 1 更看不出来
+    oneShot(QStringLiteral("u31_m23_string"), QByteArrayLiteral(
+        "{\"flowName\":\"u31\",\"flowMode\":1,\"fixtures\":{"
+        "\"u31_m23_string\":{\"hom\":[2,0,30,0,2,\"40\"],"
+        "\"poseRow\":0,\"poseCol\":0,\"poseAngle\":0,\"poseScale\":1,"
+        "\"hasHom\":true,\"hasPose\":false}}}"), true);
+
+    // 形态 3：9 元内参塞进夹具的 hom 键（R-5 的同款载荷，只是从方案文件进来而不是从单例）
+    // ⇒ 消费端靠「恰好 6 项」已经判红，但载入侧仍然带着 hasHom=true 和 9 项进表
+    oneShot(QStringLiteral("u31_hom9"), QByteArrayLiteral(
+        "{\"flowName\":\"u31\",\"flowMode\":1,\"fixtures\":{"
+        "\"u31_hom9\":{\"hom\":[600,600,320,240,0.1,0.01,0.0,0.0,1.0],"
+        "\"poseRow\":0,\"poseCol\":0,\"poseAngle\":0,\"poseScale\":1,"
+        "\"hasHom\":true,\"hasPose\":false}}}"), true);
+
+    // 形态 4：空名条目 ⇒ setFixture 拒（改前 :1153～:1158），载入侧直接写表收下
+    oneShot(QString(), QByteArrayLiteral(
+        "{\"flowName\":\"u31\",\"flowMode\":1,\"fixtures\":{"
+        "\"\":{\"hom\":[2,0,30,0,2,40],"
+        "\"poseRow\":0,\"poseCol\":0,\"poseAngle\":0,\"poseScale\":1,"
+        "\"hasHom\":true,\"hasPose\":false}}}"), false);
+    {
+        FlowScene scene;
+        scene.extrasFromJson(QJsonDocument::fromJson(QByteArrayLiteral(
+            "{\"flowName\":\"u31\",\"flowMode\":1,\"fixtures\":{"
+            "\"\":{\"hom\":[2,0,30,0,2,40],"
+            "\"poseRow\":0,\"poseCol\":0,\"poseAngle\":0,\"poseScale\":1,"
+            "\"hasHom\":true,\"hasPose\":false}}}")).object());
+        const QStringList names = scene.fixtureNames();
+        if (names.contains(QString()))
+            problems << QStringLiteral("空名条目进了夹具表（fixtureNames 含 \"\"，共 %1 条，"
+                                       "其中一条的内容就是那份 6 元矩阵）").arg(names.size());
+    }
+
+    // 负对照：合法 6 元数值载荷必须照旧判绿、且逐位换算出真值（载入侧加闸不许顺手把好载荷一起拒了）
+    {
+        QJsonParseError err;
+        const QJsonObject json = QJsonDocument::fromJson(QByteArrayLiteral(
+            "{\"flowName\":\"u31\",\"flowMode\":1,\"fixtures\":{"
+            "\"u31_good_hom\":{\"hom\":[2,0,30,0,2,40],"
+            "\"poseRow\":0,\"poseCol\":0,\"poseAngle\":0,\"poseScale\":1,"
+            "\"hasHom\":true,\"hasPose\":false}}}"), &err).object();
+        FlowScene scene;
+        scene.extrasFromJson(json);
+
+        const FlowFixture fx = scene.fixture(QStringLiteral("u31_good_hom"));
+        QVector<double> want;
+        want << 2 << 0 << 30 << 0 << 2 << 40;   // 期望值先落成局部量：宏参里的大括号初始化会被切逗号
+        QStringList homGot;
+        for (double d : fx.hom)
+            homGot << QString::number(d, 'g', 17);
+        if (!fx.hasHom || fx.hom != want)
+            problems << QStringLiteral("负对照被拒：合法 6 元矩阵没逐位装回（hasHom=%1 hom=[%2]）")
+                            .arg(fx.hasHom).arg(homGot.join(QLatin1Char(',')));
+
+        CoordinateTransformNode ct;
+        ct.setFlowSceneRef(&scene);
+        ct.init();
+        ct.setParam(QStringLiteral("fixtureName"), QStringLiteral("u31_good_hom"));
+        ct.setParam(QStringLiteral("x"), 200.0);
+        ct.setParam(QStringLiteral("y"), 150.0);
+        feedImage(ct, blankImage(640, 480));
+        const bool ok = ct.execute();
+        bool present = false;
+        const QPointF q = resultPointOf(ct, &present);
+        const QPointF truth = CalibrationManager::applyHomography(want, 200.0, 150.0);
+        if (!ok)
+            problems << QStringLiteral("负对照被判红：合法夹具载荷不该拦（原因栏=「%1」）")
+                            .arg(transformNoteOf(ct));
+        else if (!present || q != truth)
+            problems << QStringLiteral("负对照产出不对：应为 (%1, %2) 实读 (%3, %4)")
+                            .arg(truth.x(), 0, 'f', 2).arg(truth.y(), 0, 'f', 2)
+                            .arg(q.x(), 0, 'f', 2).arg(q.y(), 0, 'f', 2);
+        cm->remove(QStringLiteral("u31_good_hom"));
+    }
+
+    cm->clear();
+    cm->fromJson(m_managerSnapshot);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[U-31 夹具静默绿灯] ") + problems.join(QStringLiteral("；"))));
+}
+
+// ============================ U-31 位姿侧：读不到位姿时不许当输入点 ============================
+// 与矩阵侧同一个缺陷的两半：src/FlowScene.cpp 的 extrasFromJson 里
+//   ff.poseRow = f.value("poseRow").toDouble();   // 字符串 ⇒ 0.0，缺键 ⇒ 0.0
+//   ff.hasPose = f.value("hasPose").toBool();     // 这一路只看载荷自己标的布尔位
+// ⇒ 「位姿读不出来」和「位姿是 (0,0)」在表里长得一模一样。
+// 后果（src/CoordinateTransformNode.cpp:74～:77：useFixturePose 且 hasPose ⇒ x=poseCol、y=poseRow）：
+// 矩阵合法时依然判绿，但输入点被换成 (0, 0) ⇒ 输出就是矩阵的平移项 (m13, m23)，与真值差一整个位姿。
+// ⚠️ 这条腿**不要求判红**：矩阵合法、只是位姿不合形 ⇒ 降级后有手填 x/y 兜着，判绿是对的。
+//    它钉的是两件事：不合形的位姿不许标着 hasPose=true；读不到位姿时不许把 (0, 0) 当输入点。
+void CalibChainTest::u31LoadedPoseStringFieldsSilentlyUsed()
+{
+    CalibrationManager *cm = CalibrationManager::instance();
+    QStringList problems;
+
+    auto oneShot = [&problems, cm](const QString &key, const QByteArray &schemeJson) {
+        QJsonParseError err;
+        const QJsonObject json = QJsonDocument::fromJson(schemeJson, &err).object();
+        if (err.error != QJsonParseError::NoError || json.isEmpty()) {
+            problems << QStringLiteral("「%1」方案载荷没 parse 出对象（%2），这条臂无从判起")
+                            .arg(key, err.errorString());
+            return;
+        }
+
+        FlowScene scene;
+        scene.extrasFromJson(json);
+        const FlowFixture fx = scene.fixture(key);
+        const QString tag = QStringLiteral("「%1」").arg(key);
+
+        if (fx.hasPose)
+            problems << tag + QStringLiteral("位姿读不出来（字符串／缺键）却仍标着 hasPose=true，"
+                                             "实际 poseRow=%1 poseCol=%2 poseAngle=%3 poseScale=%4")
+                            .arg(fx.poseRow).arg(fx.poseCol).arg(fx.poseAngle).arg(fx.poseScale);
+
+        CoordinateTransformNode ct;
+        ct.setFlowSceneRef(&scene);
+        ct.init();
+        ct.setParam(QStringLiteral("fixtureName"), key);
+        ct.setParam(QStringLiteral("x"), 200.0);
+        ct.setParam(QStringLiteral("y"), 150.0);
+        feedImage(ct, blankImage(640, 480));
+        const bool ok = ct.execute();
+        bool present = false;
+        const QPointF q = resultPointOf(ct, &present);
+
+        QVector<double> want;
+        want << 2 << 0 << 30 << 0 << 2 << 40;
+        const QPointF truth = CalibrationManager::applyHomography(want, 200.0, 150.0);
+        if (!ok)
+            problems << tag + QStringLiteral("矩阵是合法 6 元，这一轮不该判红（原因栏=「%1」）")
+                            .arg(transformNoteOf(ct));
+        else if (!present || q != truth)
+            problems << tag + QStringLiteral("判绿但输入点被换成了读不到位姿的 (0, 0)："
+                                             "实读 (%1, %2)，应为手填 x/y 换算出的 (%3, %4)")
+                            .arg(q.x(), 0, 'f', 2).arg(q.y(), 0, 'f', 2)
+                            .arg(truth.x(), 0, 'f', 2).arg(truth.y(), 0, 'f', 2);
+        cm->remove(key);
+    };
+
+    // 形态 1：位姿三项写成字符串（poseScale 照旧合法）
+    oneShot(QStringLiteral("u31_pose_str"), QByteArrayLiteral(
+        "{\"flowName\":\"u31\",\"flowMode\":1,\"fixtures\":{"
+        "\"u31_pose_str\":{\"hom\":[2,0,30,0,2,40],"
+        "\"poseRow\":\"11\",\"poseCol\":\"22\",\"poseAngle\":\"3\",\"poseScale\":1,"
+        "\"hasHom\":true,\"hasPose\":true}}}"));
+
+    // 形态 2：hasPose=true 但四个位姿键一个都没有 ⇒ 读出来全是默认 0.0
+    oneShot(QStringLiteral("u31_pose_absent"), QByteArrayLiteral(
+        "{\"flowName\":\"u31\",\"flowMode\":1,\"fixtures\":{"
+        "\"u31_pose_absent\":{\"hom\":[2,0,30,0,2,40],"
+        "\"hasHom\":true,\"hasPose\":true}}}"));
+
+    // 负对照：位姿四键齐且是数值 ⇒ hasPose 必须为真，且消费端必须真用它当输入点
+    {
+        QJsonParseError err;
+        const QJsonObject json = QJsonDocument::fromJson(QByteArrayLiteral(
+            "{\"flowName\":\"u31\",\"flowMode\":1,\"fixtures\":{"
+            "\"u31_pose_good\":{\"hom\":[2,0,30,0,2,40],"
+            "\"poseRow\":11,\"poseCol\":22,\"poseAngle\":3,\"poseScale\":1,"
+            "\"hasHom\":true,\"hasPose\":true}}}"), &err).object();
+        FlowScene scene;
+        scene.extrasFromJson(json);
+        const FlowFixture fx = scene.fixture(QStringLiteral("u31_pose_good"));
+        if (!fx.hasPose || fx.poseRow != 11.0 || fx.poseCol != 22.0)
+            problems << QStringLiteral("负对照被拒：合法位姿没装回（hasPose=%1 poseRow=%2 poseCol=%3）")
+                            .arg(fx.hasPose).arg(fx.poseRow).arg(fx.poseCol);
+
+        CoordinateTransformNode ct;
+        ct.setFlowSceneRef(&scene);
+        ct.init();
+        ct.setParam(QStringLiteral("fixtureName"), QStringLiteral("u31_pose_good"));
+        ct.setParam(QStringLiteral("x"), 200.0);     // 会被位姿覆盖成 poseCol
+        ct.setParam(QStringLiteral("y"), 150.0);     // 会被位姿覆盖成 poseRow
+        feedImage(ct, blankImage(640, 480));
+        const bool ok = ct.execute();
+        bool present = false;
+        const QPointF q = resultPointOf(ct, &present);
+        QVector<double> want;
+        want << 2 << 0 << 30 << 0 << 2 << 40;
+        const QPointF truth = CalibrationManager::applyHomography(want, 22.0, 11.0);
+        if (!ok || !present || q != truth)
+            problems << QStringLiteral("负对照产出不对：合法位姿应换算出 (%1, %2)，实读 (%3, %4)（原因栏=「%5」）")
+                            .arg(truth.x(), 0, 'f', 2).arg(truth.y(), 0, 'f', 2)
+                            .arg(q.x(), 0, 'f', 2).arg(q.y(), 0, 'f', 2).arg(transformNoteOf(ct));
+        cm->remove(QStringLiteral("u31_pose_good"));
+    }
+
+    cm->clear();
+    cm->fromJson(m_managerSnapshot);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[U-31 位姿静默错点] ") + problems.join(QStringLiteral("；"))));
 }
 
 QTEST_MAIN(CalibChainTest)
