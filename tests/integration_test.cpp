@@ -33,6 +33,7 @@
 #include "ReceiveDataNode.h"
 #include <QDir>
 #include <QFile>
+#include "ProjectManager.h"   // U-33：往返要同时走真加载入口（applyProjectJson）与写侧（buildProjectJson）
 #include "ScriptSecurityPolicy.h"
 #include "ImageDisplayController.h"
 #include "ExecutionStatusController.h"
@@ -155,6 +156,9 @@ private slots:
     // U-31 留痕腿（改后新腿）：rejected 出参在改前不存在 ⇒「夹具名 :: 原因」这套文案
     // **无从取改前红**，它钉的是修法新增的那一面：降级必须报得出是谁、降级在哪一部分、为什么。
     void testFixtureLoadRejectionListRecordsReason();
+    // U-33：真加载入口（applyProjectJson）→ 写侧（buildProjectJson）→ 再经真加载器重开，
+    // 把「打开即降级、再保存是否把那条载荷留在文件里」从读盘级推论升级成运行期读数。
+    void testFixtureOpenSaveReopenRoundTrip();
     void testShadowMemberSingleSourceAndConcurrentAccess();   // S1 残留试点：参数唯一来源 + 并发读写
     void testExternalTriggerAcceptedOnlyInSoftwareMode();   // F-1：非软触发模式不得受理外部触发
     void testRecentFilesMenu();
@@ -3879,6 +3883,376 @@ void IntegrationTest::testFixtureLoadRejectionListRecordsReason()
 
     QVERIFY2(problems.isEmpty(),
              qPrintable(QStringLiteral("[U-31 载入留痕] ") + problems.join(QStringLiteral("；"))));
+}
+
+// ===== U-33：「打开→保存→重开」全往返 =====
+// §3.32 登记未修第 3 条与 §3.33 第 4 条都写着「打开即降级、再保存就落盘删条」，并标注为**读盘级推论**
+// （两条已实测事实的合成，没跑过往返）。本腿跑真通路：applyProjectJson（→sceneFromJson→extrasFromJson）
+// → buildProjectJson → 落盘 → loadProject，再重复一轮。
+// ⚠️ 实测把那句推论**证否了一半**：条目没被删（键名与条数三轮都是 4 条），被删的是**载荷本身**——
+// 降级后的空形状（hom=[]、hasHom=false）写回文件，原始那 9 个数／那 6 个字符串不再保留。
+// 现状读数（build/u33_probe/roundtrip_run1.txt）留在台账里，断言只钉"安全的那一半"：
+// 不删条、好数据逐位回来、只降该降的那一半、降级条目不得带着 hasHom=true 落盘、重开不再新增降级。
+namespace u33 {
+
+struct Snap {
+    int count = -1;
+    QStringList names;
+    QStringList notes;                          // 该轮入侧 JSON 直调 extrasFromJson 拿到的降级清单
+    QJsonObject fixtures;                       // 该轮对应的 fixtures 段（入侧＝文件里的，出侧＝写侧给的）
+    QMap<QString, FlowFixture> table;           // 表内最终形状（拷贝，不留场景指针）
+};
+
+inline QJsonObject entryJson(const QJsonArray &hom, bool hasHom, const QJsonObject &pose)
+{
+    QJsonObject f;
+    f[QStringLiteral("hom")] = hom;
+    f[QStringLiteral("hasHom")] = hasHom;
+    for (auto it = pose.constBegin(); it != pose.constEnd(); ++it)
+        f[it.key()] = it.value();
+    f[QStringLiteral("hasPose")] = !pose.isEmpty();
+    return f;
+}
+
+inline QJsonArray nums(const QVector<double> &v)
+{
+    QJsonArray a;
+    for (double d : v)
+        a.append(d);
+    return a;
+}
+
+inline QJsonArray strs(const QStringList &v)
+{
+    QJsonArray a;
+    for (const QString &s : v)
+        a.append(QJsonValue(s));
+    return a;
+}
+
+inline QJsonObject poseAll(double row, double col, double ang, double scale)
+{
+    QJsonObject p;
+    p[QStringLiteral("poseRow")] = row;
+    p[QStringLiteral("poseCol")] = col;
+    p[QStringLiteral("poseAngle")] = ang;
+    p[QStringLiteral("poseScale")] = scale;
+    return p;
+}
+
+inline QJsonObject sceneWith(const QJsonObject &fixtures)
+{
+    QJsonObject sceneJson;
+    sceneJson[QStringLiteral("fixtures")] = fixtures;
+    return sceneJson;
+}
+
+inline QJsonObject fixturesOfFirstScene(const QJsonObject &root)
+{
+    return root.value(QStringLiteral("scenes")).toArray().at(0).toObject()
+               .value(QStringLiteral("fixtures")).toObject();
+}
+
+/// 只回灌 scenes 段：其余五段是全局单例，喂回去会让本套件后续腿读到被 fromJson 改写过的单例状态
+inline QJsonObject scenesOnly(const QJsonObject &saved)
+{
+    QJsonObject r;
+    r[QStringLiteral("scenes")] = saved.value(QStringLiteral("scenes")).toArray();
+    return r;
+}
+
+inline bool writeJson(const QString &path, const QJsonObject &obj)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return false;
+    const QByteArray bytes = QJsonDocument(obj).toJson();
+    const bool ok = f.write(bytes) == bytes.size();
+    f.close();
+    return ok;
+}
+
+/// 一步读数：表内形状 ＋ 该步那份 fixtures 段的降级清单（真入口只把清单送进 VFP_DEBUG，
+/// 所以清单只能对同一份 JSON 直调 extrasFromJson 取——这个不对称本身就是 A9 那一格的读数）
+inline Snap capture(FlowScene *scene, const QJsonObject &fixtures)
+{
+    Snap st;
+    st.fixtures = fixtures;
+    st.names = scene->fixtureNames();
+    st.count = int(st.names.size());
+    for (const QString &n : st.names)
+        st.table.insert(n, scene->fixture(n));
+    const QJsonObject sceneJson = sceneWith(fixtures);
+    FlowScene probe;
+    probe.extrasFromJson(sceneJson, &st.notes);
+    return st;
+}
+
+inline QString csvOf(const QVector<double> &v)
+{
+    QStringList parts;
+    for (double d : v)
+        parts << QString::number(d, 'g', 10);
+    return parts.join(QStringLiteral(" "));
+}
+
+}   // namespace u33
+
+void IntegrationTest::testFixtureOpenSaveReopenRoundTrip()
+{
+    QTemporaryDir tmp;
+    QVERIFY2(tmp.isValid(), "前提：临时目录建不起来，往返无处落盘");
+
+    QJsonObject poseNoRow;   // 少 poseRow ⇒ 应"只降位姿、矩阵保留"
+    poseNoRow[QStringLiteral("poseCol")] = 22.0;
+    poseNoRow[QStringLiteral("poseAngle")] = 3.0;
+    poseNoRow[QStringLiteral("poseScale")] = 1.5;
+    QStringList strSix;
+    strSix << QStringLiteral("a1") << QStringLiteral("b2") << QStringLiteral("c3")
+            << QStringLiteral("d4") << QStringLiteral("e5") << QStringLiteral("f6");
+
+    QJsonObject fixtures;
+    fixtures[QStringLiteral("u33_ok6")] = u33::entryJson(
+        u33::nums(QVector<double>{2, 0, 30, 0, 2, 40}), true, u33::poseAll(11, 22, 3, 1.5));
+    fixtures[QStringLiteral("u33_nine9")] = u33::entryJson(
+        u33::nums(QVector<double>{1, 0, 100, 0, 1, 200, 0, 0, 1}), true, QJsonObject());
+    fixtures[QStringLiteral("u33_str6")] = u33::entryJson(
+        u33::strs(strSix), true, QJsonObject());
+    fixtures[QStringLiteral("u33_poseNoRow")] = u33::entryJson(
+        u33::nums(QVector<double>{2, 0, 30, 0, 2, 40}), true, poseNoRow);
+
+    QStringList problems;
+    QVector<u33::Snap> rounds;
+    QList<FlowScene *> alive;
+
+    // —— 第 1 步：打开（真加载入口）
+    QJsonObject inRoot;
+    {
+        QJsonArray arr;
+        arr.append(u33::sceneWith(fixtures));
+        inRoot[QStringLiteral("scenes")] = arr;
+    }
+    ProjectManager pm;
+    QList<FlowScene *> opened;
+    QVERIFY2(pm.applyProjectJson(inRoot, opened),
+             "前提：带一条空流程的方案在真加载入口被判失败");
+    QCOMPARE(opened.size(), 1);
+    alive.append(opened);
+    rounds.append(u33::capture(opened.first(), fixtures));
+
+    // —— 第 2 步：保存（写侧真实现）→ 落盘 → 第 3 步：重开（真加载器读盘）
+    const QJsonObject saved1 = pm.buildProjectJson(opened);
+    const QJsonObject saved1Fixtures = u33::fixturesOfFirstScene(saved1);
+    const QString path1 = QDir(tmp.path()).filePath(QStringLiteral("reopen1.vfp"));
+    QVERIFY2(u33::writeJson(path1, u33::scenesOnly(saved1)), "落盘 reopen1.vfp 失败");
+
+    // 环境读数：真保存通路在本套件里放不放行。放行时追加一格锁——它落盘的 fixtures 段必须与
+    // buildProjectJson 那份逐字符相同（否则本腿只走了半个写侧）；不放行只留读数，
+    // 因为拒绝来自出厂口令写闸这一环境态，不该由这条腿判红。
+    const QString path2 = QDir(tmp.path()).filePath(QStringLiteral("real-save.vfp"));
+    const bool realSaveOk = pm.saveProject(path2, opened);
+    qInfo().noquote() << QStringLiteral("[U33-REALSET] saveProject=%1 exists=%2")
+                             .arg(realSaveOk ? QStringLiteral("ok") : QStringLiteral("refused"))
+                             .arg(QFileInfo::exists(path2) ? QStringLiteral("yes") : QStringLiteral("no"));
+    bool realSetCompared = false;
+    if (realSaveOk && QFileInfo::exists(path2)) {
+        QFile rf(path2);
+        if (rf.open(QIODevice::ReadOnly)) {
+            const QJsonDocument rdoc = QJsonDocument::fromJson(rf.readAll());
+            rf.close();
+            if (rdoc.isObject()) {
+                realSetCompared = true;
+                const QString want = QString::fromUtf8(
+                    QJsonDocument(saved1Fixtures).toJson(QJsonDocument::Compact));
+                const QString got = QString::fromUtf8(
+                    QJsonDocument(u33::fixturesOfFirstScene(rdoc.object())).toJson(QJsonDocument::Compact));
+                if (want != got)
+                    problems << QStringLiteral("真 saveProject 落盘的 fixtures 段与 buildProjectJson 不同源（want=%1 got=%2）")
+                                    .arg(want, got);
+            }
+        }
+    }
+    qInfo().noquote() << QStringLiteral("[U33-REALSET2] compared=%1")
+                             .arg(realSetCompared ? QStringLiteral("yes") : QStringLiteral("no"));
+
+    QList<FlowScene *> reopened;
+    ProjectManager loader;
+    QVERIFY2(loader.loadProject(path1, reopened), "重开失败：保存出来的文件真加载器打不开");
+    QCOMPARE(reopened.size(), 1);
+    alive.append(reopened);
+    rounds.append(u33::capture(reopened.first(), saved1Fixtures));
+
+    // —— 第 4 步：再保存 → 第 5 步：再重开（看降级会不会继续吃好东西）
+    const QJsonObject saved2 = loader.buildProjectJson(reopened);
+    const QJsonObject saved2Fixtures = u33::fixturesOfFirstScene(saved2);
+    const QString path2b = QDir(tmp.path()).filePath(QStringLiteral("reopen3.vfp"));
+    QVERIFY2(u33::writeJson(path2b, u33::scenesOnly(saved2)), "落盘 reopen3.vfp 失败");
+    QList<FlowScene *> reopened2;
+    ProjectManager loader2;
+    QVERIFY2(loader2.loadProject(path2b, reopened2), "第二次重开失败");
+    QCOMPARE(reopened2.size(), 1);
+    alive.append(reopened2);
+    rounds.append(u33::capture(reopened2.first(), saved2Fixtures));
+
+    // 台账要引的读数：三轮的表内形状与两份写侧 JSON
+    for (int i = 0; i < rounds.size(); ++i) {
+        const u33::Snap &st = rounds.at(i);
+        qInfo().noquote() << QStringLiteral("[U33-ROUND %1] count=%2 notes=%3 names=%4")
+                                 .arg(i + 1).arg(st.count).arg(int(st.notes.size()))
+                                 .arg(st.names.join(QStringLiteral(",")));
+        for (const QString &n : st.names) {
+            const FlowFixture f = st.table.value(n);
+            qInfo().noquote() << QStringLiteral("[U33-ROUND %1] %2 hasHom=%3 size=%4 hom=[%5] "
+                                                "hasPose=%6 row=%7 col=%8 ang=%9 scale=%10")
+                                     .arg(i + 1).arg(n).arg(f.hasHom).arg(int(f.hom.size()))
+                                     .arg(u33::csvOf(f.hom)).arg(f.hasPose)
+                                     .arg(f.poseRow).arg(f.poseCol).arg(f.poseAngle).arg(f.poseScale);
+        }
+        for (auto it = st.fixtures.constBegin(); it != st.fixtures.constEnd(); ++it)
+            qInfo().noquote() << QStringLiteral("[U33-ROUND %1 JSON] %2 :: %3")
+                                     .arg(i + 1).arg(it.key())
+                                     .arg(QString::fromUtf8(QJsonDocument(it.value().toObject())
+                                                .toJson(QJsonDocument::Compact)));
+    }
+
+    // —— 判据①：降级不等于删条（三轮条数与键名都必须还是那四条）
+    const QStringList wantNames = QStringList() << QStringLiteral("u33_nine9")
+                                                << QStringLiteral("u33_ok6")
+                                                << QStringLiteral("u33_poseNoRow")
+                                                << QStringLiteral("u33_str6");
+    for (int i = 0; i < rounds.size(); ++i) {
+        if (rounds.at(i).count != 4)
+            problems << QStringLiteral("第%1轮夹具表条数=%2（应为 4；降级不得删条）").arg(i + 1).arg(rounds.at(i).count);
+        else if (rounds.at(i).names != wantNames)
+            problems << QStringLiteral("第%1轮键名集合变了：%2").arg(i + 1).arg(rounds.at(i).names.join(QStringLiteral(",")));
+    }
+
+    // —— 判据②：合法条目三轮逐位回来（写侧丢位／载入侧误拒都在这条红）
+    QVector<double> goodHom;
+    goodHom << 2 << 0 << 30 << 0 << 2 << 40;
+    for (int i = 0; i < rounds.size(); ++i) {
+        const FlowFixture f = rounds.at(i).table.value(QStringLiteral("u33_ok6"));
+        if (!f.hasHom || f.hom != goodHom)
+            problems << QStringLiteral("第%1轮合法 6 元没逐位回来（hasHom=%2 hom=[%3]）")
+                            .arg(i + 1).arg(f.hasHom).arg(u33::csvOf(f.hom));
+        if (!f.hasPose || f.poseRow != 11.0 || f.poseCol != 22.0
+            || f.poseAngle != 3.0 || f.poseScale != 1.5)
+            problems << QStringLiteral("第%1轮合法位姿没逐位回来（hasPose=%2 row=%3 col=%4 ang=%5 scale=%6）")
+                            .arg(i + 1).arg(f.hasPose).arg(f.poseRow).arg(f.poseCol)
+                            .arg(f.poseAngle).arg(f.poseScale);
+    }
+
+    // —— 判据③：降级条目在表内三轮都必须是"没有矩阵"，且**写侧落盘的那两份**不得把入侧的 hasHom=true 抄回来
+    //（改前的静默形态就是"载荷自己标 hasHom 就真有矩阵"——空数组配 true 一旦重新进文件，
+    //  下游 ⑥ 消费端只查长度，判绿且输出恒零）
+    // ⚠️ 第 1 轮的 fixtures 是入侧文件原样（九项／六个字符串照抄），对它判红是断错对象：
+    //    入侧带什么就是什么，闸的作用体现在**表内**（已降）与**写侧输出**（空形状）这两处。
+    for (int i = 0; i < rounds.size(); ++i) {
+        const QStringList degraded = {QStringLiteral("u33_nine9"), QStringLiteral("u33_str6")};
+        for (const QString &key : degraded) {
+            const FlowFixture f = rounds.at(i).table.value(key);
+            if (f.hasHom || !f.hom.isEmpty())
+                problems << QStringLiteral("第%1轮 %2 降级后仍带矩阵（hasHom=%3 hom=[%4]）")
+                                .arg(i + 1).arg(key).arg(f.hasHom).arg(u33::csvOf(f.hom));
+            if (i == 0)
+                continue;   // 入侧原样那份不参与写侧判据（见上）
+            const QJsonObject j = rounds.at(i).fixtures.value(key).toObject();
+            if (j.value(QStringLiteral("hasHom")).toBool())
+                problems << QStringLiteral("第%1轮 %2 在写侧 fixtures 段里仍标 hasHom=true（把入侧文件的 true 抄回来了）")
+                                .arg(i + 1).arg(key);
+            if (!j.value(QStringLiteral("hom")).toArray().isEmpty())
+                problems << QStringLiteral("第%1轮 %2 的写侧 hom 段没清空（%3）")
+                                .arg(i + 1).arg(key)
+                                .arg(QString::fromUtf8(QJsonDocument(j).toJson(QJsonDocument::Compact)));
+        }
+    }
+
+    // 现状读数（登记不锁死）：降级条目"保条目、丢载荷"——入侧那九项／六个字符串不落进写侧文件
+    qInfo().noquote() << QStringLiteral("[U33-LOSS] u33_nine9 入侧 hom %1 项 → 写侧 %2 项；"
+                                        "u33_str6 入侧 hom %3 项 → 写侧 %4 项（键名三轮均未消失）")
+                             .arg(rounds.at(0).fixtures.value(QStringLiteral("u33_nine9")).toObject()
+                                      .value(QStringLiteral("hom")).toArray().size())
+                             .arg(rounds.at(1).fixtures.value(QStringLiteral("u33_nine9")).toObject()
+                                      .value(QStringLiteral("hom")).toArray().size())
+                             .arg(rounds.at(0).fixtures.value(QStringLiteral("u33_str6")).toObject()
+                                      .value(QStringLiteral("hom")).toArray().size())
+                             .arg(rounds.at(1).fixtures.value(QStringLiteral("u33_str6")).toObject()
+                                      .value(QStringLiteral("hom")).toArray().size());
+
+    // —— 判据④：位姿缺一个键只作废位姿，不得连累那份合法矩阵（真通路上同一半）
+    for (int i = 0; i < rounds.size(); ++i) {
+        const FlowFixture f = rounds.at(i).table.value(QStringLiteral("u33_poseNoRow"));
+        if (!f.hasHom || f.hom != goodHom)
+            problems << QStringLiteral("第%1轮 u33_poseNoRow 的合法矩阵被位姿连累（hasHom=%2 hom=[%3]）")
+                            .arg(i + 1).arg(f.hasHom).arg(u33::csvOf(f.hom));
+        if (f.hasPose)
+            problems << QStringLiteral("第%1轮 u33_poseNoRow 缺 poseRow 却仍标 hasPose=true").arg(i + 1);
+    }
+
+    // —— 判据⑤：第一轮报出的三条降级必须在重开之后归零（降级是稳定终点，不是每轮再吃一次）
+    QStringList firstNotes;
+    for (const QString &n : rounds.at(0).notes)
+        firstNotes << n.section(QStringLiteral(" ::"), 0, 0);
+    if (firstNotes.size() != 3)
+        problems << QStringLiteral("第一轮降级条数=%1（应为 3：%2）")
+                        .arg(int(firstNotes.size())).arg(firstNotes.join(QStringLiteral("；")));
+    for (int i = 1; i < rounds.size(); ++i) {
+        if (!rounds.at(i).notes.isEmpty())
+            problems << QStringLiteral("第%1轮重开后新增降级 %2 条（写侧给出的空形状又被判不合形＝往返不闭合）：%3")
+                            .arg(i + 1).arg(int(rounds.at(i).notes.size()))
+                            .arg(rounds.at(i).notes.join(QStringLiteral("；")));
+    }
+
+    // —— 负对照（只差"载荷合不合形"这一处）：全合法方案三轮都不得有任何降级
+    QJsonObject goodFixtures;
+    goodFixtures[QStringLiteral("u33_ctl_ok")] = u33::entryJson(
+        u33::nums(QVector<double>{1, 0, 5, 0, 1, 7}), true, u33::poseAll(1, 2, 3, 4));
+    goodFixtures[QStringLiteral("u33_ctl_nopose")] = u33::entryJson(
+        u33::nums(QVector<double>{3, 0, 0, 0, 3, 0}), false, QJsonObject());
+    QJsonObject ctlRoot;
+    {
+        QJsonArray arr;
+        arr.append(u33::sceneWith(goodFixtures));
+        ctlRoot[QStringLiteral("scenes")] = arr;
+    }
+    ProjectManager ctl;
+    QList<FlowScene *> ctlScenes;
+    QVERIFY2(ctl.applyProjectJson(ctlRoot, ctlScenes), "负对照前提：全合法方案被判加载失败");
+    const QString ctlPath = QDir(tmp.path()).filePath(QStringLiteral("ctl.vfp"));
+    const QJsonObject ctlSaved = ctl.buildProjectJson(ctlScenes);
+    QVERIFY2(u33::writeJson(ctlPath, u33::scenesOnly(ctlSaved)), "负对照落盘失败");
+    QList<FlowScene *> ctlReopened;
+    ProjectManager ctlLoader;
+    QVERIFY2(ctlLoader.loadProject(ctlPath, ctlReopened), "负对照重开失败");
+    QCOMPARE(ctlReopened.size(), 1);
+    const u33::Snap ctlOpen = u33::capture(ctlScenes.first(), goodFixtures);
+    const u33::Snap ctlReopen = u33::capture(ctlReopened.first(), u33::fixturesOfFirstScene(ctlSaved));
+    qInfo().noquote() << QStringLiteral("[U33-CTRL] openCount=%1 openNotes=%2 reopenCount=%3 reopenNotes=%4")
+                             .arg(ctlOpen.count).arg(int(ctlOpen.notes.size()))
+                             .arg(ctlReopen.count).arg(int(ctlReopen.notes.size()));
+    if (!ctlOpen.notes.isEmpty() || !ctlReopen.notes.isEmpty())
+        problems << QStringLiteral("负对照（全合法载荷）出现降级留痕：开=%1 重开=%2")
+                        .arg(ctlOpen.notes.join(QStringLiteral("；")),
+                             ctlReopen.notes.join(QStringLiteral("；")));
+    QVector<double> ctlHom;
+    ctlHom << 1 << 0 << 5 << 0 << 1 << 7;
+    const FlowFixture ctlFx = ctlReopen.table.value(QStringLiteral("u33_ctl_ok"));
+    if (!ctlFx.hasHom || ctlFx.hom != ctlHom || !ctlFx.hasPose
+        || ctlFx.poseRow != 1.0 || ctlFx.poseScale != 4.0)
+        problems << QStringLiteral("负对照往返后 u33_ctl_ok 变形（hasHom=%1 hom=[%2] hasPose=%3 scale=%4）")
+                        .arg(ctlFx.hasHom).arg(u33::csvOf(ctlFx.hom))
+                        .arg(ctlFx.hasPose).arg(ctlFx.poseScale);
+    // hasHom=false 的合法条目：往返后仍必须是"没有矩阵"，不得被写成有
+    const FlowFixture ctlNoHom = ctlReopen.table.value(QStringLiteral("u33_ctl_nopose"));
+    if (ctlNoHom.hasHom)
+        problems << QStringLiteral("负对照里 hasHom=false 的条目重开后变成有矩阵（hom=[%1]）")
+                        .arg(u33::csvOf(ctlNoHom.hom));
+
+    qDeleteAll(alive);
+    qDeleteAll(ctlScenes);
+    qDeleteAll(ctlReopened);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[U-33 打开→保存→重开] ") + problems.join(QStringLiteral("；"))));
 }
 
 QTEST_MAIN(IntegrationTest)
