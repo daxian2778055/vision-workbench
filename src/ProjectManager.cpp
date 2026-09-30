@@ -295,6 +295,10 @@ void ProjectManager::reportLoadNote(const QString &text)
 bool ProjectManager::applyProjectJson(const QJsonObject &root, QList<FlowScene *> &scenes)
 {
     m_loadRawLossCount = 0;   // 一次载入一个数：手动打开与崩溃恢复共用本入口，不得串上一次的降级
+    // U-38：算子侧那两个必须与上面这行同处复位——分两条通道是为了让现场看出损失出在哪一侧，
+    // 不是为了让第二轮带着上一轮的数复读（第二轮无新损失时就该一句都不发）。
+    m_loadNodeTypeLossCount = 0;
+    m_loadEdgeLossCount = 0;
     const int schemaVersion = root.value(QStringLiteral("schemaVersion")).toInt(1);
     if (schemaVersion > kProjectSchemaVersion) {
         reportLoadNote(QStringLiteral("警告：方案文件版本 %1 高于本程序支持的版本 %2，可能存在无法识别的算子，请勿直接覆盖保存")
@@ -366,6 +370,21 @@ bool ProjectManager::applyProjectJson(const QJsonObject &root, QList<FlowScene *
             "把被降级夹具条目的矩阵写成空（键名保留）、把键名为空的夹具条目整条不再写回；"
             "需要保留原始文件请先复制一份备份")
                            .arg(m_loadRawLossCount));
+    }
+
+    // U-38（第三轮复核意见 S-2）：算子侧那两类同样改写落盘内容，过去一句都没说——降级留痕只说
+    // "这条没装进来"，连线那条更是全静默。这里补第二句，不与上面那句合并：两条通道的载荷来自方案
+    // 文件的不同段（标定／夹具 vs 算子／连线），合成一句现场就只能知道"共几项"而分不清丢的是哪一侧。
+    // 数字必须等于"重存出来的文件比进来的文件少几项"，这一口径由
+    // tests/integration_test.cpp 的 testUnregisteredOperatorLossIsCountedAsSaveLoss 逐字钉住：
+    // 以后产线再漏一类会吃载荷的损失，只要差值比这里报的数大，那条腿先红，不靠人记得同步改测试。
+    const int nodeSideLossCount = m_loadNodeTypeLossCount + m_loadEdgeLossCount;
+    if (nodeSideLossCount > 0) {
+        reportLoadNote(QStringLiteral(
+            "方案加载：本次共 %1 项算子侧载荷未进入内存（类型号 %2 处、连线 %3 条），下一次保存会把降级算子"
+            "的类型号从方案文件中去掉或换成当前实现、把未接回的连线整条不再写回，降级算子的端口清单也会被"
+            "改写成通用算子的那一份；需要保留原始文件请先复制一份备份")
+                           .arg(nodeSideLossCount).arg(m_loadNodeTypeLossCount).arg(m_loadEdgeLossCount));
     }
 
     return true;
@@ -496,9 +515,17 @@ void ProjectManager::sceneFromJson(const QJsonObject &json, FlowScene *scene)
                                .arg(nodeName,
                                     wantTypeId.isEmpty() ? QStringLiteral("(旧版本方案未记录)")
                                                          : wantTypeId));
+                // U-38：这一句过去只到"没装进来"为止，没说它同样改写落盘内容——通用算子不带
+                // vfpNodeTypeId，于是下一次保存把文件里那一键整条去掉。只数「文件里本来带着类型号」的那些：
+                // wantTypeId 为空的老方案本来就不带类型号，无从"丢失"，计进去就是虚报。
+                if (!wantTypeId.isEmpty())
+                    ++m_loadNodeTypeLossCount;
             } else if (!wantTypeId.isEmpty() && gotTypeId != wantTypeId) {
                 reportLoadNote(QStringLiteral("警告：方案算子类型不匹配，已按当前实现加载: %1 期望: %2 实际: %3（参数可能不兼容，请核对该算子配置）")
                                .arg(nodeName, wantTypeId, gotTypeId));
+                // U-38：键还在、但值被换成当前实现的类型号 ⇒ 下一次保存写出的不再是文件里那一个，
+                // 与整键去掉同属"类型号这一类落盘损失"，共用一个计数器（合计句里同一句都说清）。
+                ++m_loadNodeTypeLossCount;
             }
 
             node->fromJson(nodeJson);
@@ -556,7 +583,23 @@ void ProjectManager::sceneFromJson(const QJsonObject &json, FlowScene *scene)
                 Port *targetPort = targetNode->inputPorts()[targetPortIndex];
                 
                 scene->createConnection(sourcePort, targetPort, true);
+            } else {
+                // U-38：原实现这里静默跳过 ⇒ 文件里那条线在下一次保存整条不再写回，而现场读不出任何迹象。
+                // 最常见的原因是源算子被降级：它的端口清单被改写成通用算子的那一份（1 出 1 入），
+                // 指向第 2 个及以后出端口的线于是越界。
+                reportLoadNote(QStringLiteral("警告：方案中的连线未接回: %1[%2]->%3[%4]（两端现有出/入端口数 %5/%6）")
+                                   .arg(sourceNode->name()).arg(sourcePortIndex)
+                                   .arg(targetNode->name()).arg(targetPortIndex)
+                                   .arg(int(sourceNode->outputPorts().size()))
+                                   .arg(int(targetNode->inputPorts().size())));
+                ++m_loadEdgeLossCount;
             }
+        } else {
+            // U-38：端点算子整条没进表（建不出来或模块号非法）时，挂在它下面的线同样落不回文件。
+            reportLoadNote(QStringLiteral("警告：方案中的连线未接回: 端点算子缺失（源 %1 目标 %2，端口 %3/%4）")
+                               .arg(sourceNodeId).arg(targetNodeId)
+                               .arg(sourcePortIndex).arg(targetPortIndex));
+            ++m_loadEdgeLossCount;
         }
     }
 

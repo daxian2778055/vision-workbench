@@ -11,6 +11,8 @@
 #include "FlowScene.h"
 #include "FlowExecutor.h"
 #include "NodeBase.h"
+#include "NodeRegistry.h"   // U-38：从在册算子表里挑一个多出端口的算子作样本
+#include <QSet>              // U-38：连线换算成模块号四元组后比集合
 #include "HalconNode.h"   // E1 探针节点 ThrowBeforeRestoreProbeNode 的基类
 #include "OpencvThresholdNode.h"
 #include "OpencvMorphNode.h"
@@ -167,6 +169,7 @@ private slots:
     // 一条钉「接线在 ⇒ 撤了就红」，一条负对照钉「不该报的也不报」。
     void testLoadDegradationReachesVisibleFace();
     void testCleanProjectLoadEmitsNoVisibleNotes();
+    void testUnregisteredOperatorLossIsCountedAsSaveLoss();
     void testShadowMemberSingleSourceAndConcurrentAccess();   // S1 残留试点：参数唯一来源 + 并发读写
     void testExternalTriggerAcceptedOnlyInSoftwareMode();   // F-1：非软触发模式不得受理外部触发
     void testRecentFilesMenu();
@@ -4575,6 +4578,592 @@ void IntegrationTest::testCleanProjectLoadEmitsNoVisibleNotes()
     CalibrationManager::instance()->fromJson(calibBefore);
     QVERIFY2(problems.isEmpty(),
              qPrintable(QStringLiteral("[U-34 负对照] ") + problems.join(QStringLiteral("；"))));
+}
+
+/// U-38（第三轮复核意见 S-2 的处置）：算子侧的落盘损失按「载荷」判族，不按留痕前缀判族。
+///
+/// 换口径的理由（取证读数：build/u38_probe/u38_run1_utf8.txt、u38_run2_utf8.txt）：
+/// src/ProjectManager.cpp 那句「警告：方案中的算子未注册，已降级为通用算子（算法已丢失）」既不计进
+/// m_loadRawLossCount，也不在任何合计句里——而它恰恰是改写落盘内容的那一类：只把在册算子的显示名换成
+/// 注册表里没有的名字（其余逐字符不动），下一次保存就有 typeId 整键消失、指向越界端口的连线整条消失，
+/// 出端口清单从 N 个被改写成通用算子的 1 个。既有那条按前缀数留痕的判据⑤看不见它（「警告：方案中的算子
+/// 未注册」不在那三条前缀里），产线的计数器同样漏了它。
+/// 所以这里的族定义取自「重存出来的文件比进来的文件少了几项」，不取自文案：以后产线再漏一类会吃载荷的
+/// 损失，只要差值比留痕里报的数大，本腿先红，不需要同步改测试——这正是 S-2 要的那一格，只是把单点从
+/// 「产线给留痕打标记」换成了「载荷差值自己就是标记」：后者不依赖产线的分类，才能同时当产线分类的独立对照。
+///
+/// 计数口径（与产线必须逐字对齐，多一项少一项都红）：
+///   typeIdLost——文件里带类型号、重存后该键整条没有了；
+///   typeIdChanged——该键还在但值被换成当前实现的类型号（算法被换成另一套实现，同样是改写落盘内容）；
+///   edgesLost——文件里的一条连线在重存后的文件里找不到了（按模块号四元组比，不按节点 id，因为写侧的 id
+///     每次按 scene 内部顺序重发，用 id 比会把正常的重编号当成丢失）；
+///   不计进数值、但须在合计句里点名的：出端口清单被改写——它是同一次降级的一部分后果，单列成一项会把
+///     一次损失数两遍。portsOutIn/portsOutSaved 只描述「被标记类型号损失的那个算子」（否则这个读数会随
+///     FlowScene::nodes() 的指针地址顺序漂，同一份载荷两次跑出 3/1 与 3/3）；portsShrunk 记「出端口清单
+///     被改写的算子数」，只在在册负对照那里要求它为 0。
+/// 本腿未覆盖、一旦发生就判红而不是静默通过的损失形态：参数键消失（paramsLost）。
+///
+/// 判据按载荷族排，每条各钉住产线一个计数站点（撤掉那个站点的累加，对应判据即红）：
+///   ①「算子已下线 ⇒ 类型号整键消失＋连线越界」——钉 sceneFromJson 里未注册分支的累加；
+///   ② 在册负对照（只差一个名字）——钉"不该计的没计"；
+///   ③「换成同组另一实现 ⇒ 类型号被换掉」——钉类型不匹配分支的累加；
+///   ④「端点算子整条不在表里 ⇒ 连线丢弃」——钉连线恢复那里第二个 else 的累加；
+///   ⑤ 第二轮不滚雪球、不复读——钉 applyProjectJson 开头那两处复位与 wantTypeId 非空那个条件；
+///   ⑥ 同一个实例连装两次，第二轮一条合计句都不许有——钉那两处复位本身（⑤ 用新实例，撤复位读不出差别）。
+void IntegrationTest::testUnregisteredOperatorLossIsCountedAsSaveLoss()
+{
+    registerAllNodes();
+
+    struct Delta {
+        int typeIdLost = 0;
+        int typeIdChanged = 0;
+        int edgesLost = 0;
+        int paramsLost = 0;
+        int portsOutIn = 0;
+        int portsOutSaved = 0;
+        int portsShrunk = 0;   // 出端口清单被改写的算子数（只用于对照与点名，不计数）
+        QString typeId;
+    };
+
+    // 模块号才是算子身份（写侧恢复/重发它），节点 id 只是这一份文件内的临时下标。
+    auto moduleById = [](const QJsonArray &nodes) {
+        QMap<int, int> m;
+        for (const QJsonValue &v : nodes) {
+            const QJsonObject o = v.toObject();
+            m.insert(o.value(QStringLiteral("id")).toInt(), o.value(QStringLiteral("moduleId")).toInt());
+        }
+        return m;
+    };
+    auto edgeKeys = [&moduleById](const QJsonObject &scene) {
+        QSet<QString> keys;
+        const QMap<int, int> ids = moduleById(scene.value(QStringLiteral("nodes")).toArray());
+        const QJsonArray conns = scene.value(QStringLiteral("connections")).toArray();
+        for (const QJsonValue &v : conns) {
+            const QJsonObject c = v.toObject();
+            keys.insert(QStringLiteral("%1|%2|%3|%4")
+                            .arg(ids.value(c.value(QStringLiteral("sourceNode")).toInt(), -1))
+                            .arg(c.value(QStringLiteral("sourcePortIndex")).toInt())
+                            .arg(ids.value(c.value(QStringLiteral("targetNode")).toInt(), -1))
+                            .arg(c.value(QStringLiteral("targetPortIndex")).toInt()));
+        }
+        return keys;
+    };
+    // 只比「带类型号的那个算子」与「连线集合」：其余算子两份文件逐字符相同，比了也读不出新信息。
+    auto deltaOf = [&edgeKeys](const QJsonObject &inScene, const QJsonObject &outScene) {
+        Delta d;
+        const QJsonArray inNodes = inScene.value(QStringLiteral("nodes")).toArray();
+        const QJsonArray outNodes = outScene.value(QStringLiteral("nodes")).toArray();
+        for (const QJsonValue &v : inNodes) {
+            const QJsonObject x = v.toObject();
+            const QString typeId = x.value(QStringLiteral("typeId")).toString();
+            if (typeId.isEmpty())
+                continue;   // 文件里本来不带类型号的算子无从「丢失」
+            d.typeId = typeId;
+            for (const QJsonValue &w : outNodes) {
+                const QJsonObject y = w.toObject();
+                if (y.value(QStringLiteral("moduleId")).toInt() != x.value(QStringLiteral("moduleId")).toInt())
+                    continue;
+                const int inOutPorts = x.value(QStringLiteral("outputPorts")).toArray().size();
+                const int savedOutPorts = y.value(QStringLiteral("outputPorts")).toArray().size();
+                if (savedOutPorts != inOutPorts)
+                    ++d.portsShrunk;   // 端口清单被改写：同一次降级的另一半后果，计进数值会把一次损失数两遍
+                if (!y.contains(QStringLiteral("typeId"))) {
+                    ++d.typeIdLost;
+                    d.portsOutIn = inOutPorts;
+                    d.portsOutSaved = savedOutPorts;
+                } else if (y.value(QStringLiteral("typeId")).toString() != typeId) {
+                    ++d.typeIdChanged;
+                    d.portsOutIn = inOutPorts;
+                    d.portsOutSaved = savedOutPorts;
+                }
+                const QJsonObject px = x.value(QStringLiteral("params")).toObject();
+                const QJsonObject py = y.value(QStringLiteral("params")).toObject();
+                for (auto it = px.constBegin(); it != px.constEnd(); ++it)
+                    if (!py.contains(it.key()))
+                        ++d.paramsLost;
+            }
+        }
+        const QSet<QString> before = edgeKeys(inScene);
+        const QSet<QString> after = edgeKeys(outScene);
+        for (const QString &k : before)
+            if (!after.contains(k))
+                ++d.edgesLost;
+        return d;
+    };
+
+    QStringList problems;
+    // 注意：QVERIFY2 里那个 return 只退出这个 lambda，所以每个前提站点后面都要自己 return。
+    auto bail = [&problems]() {
+        QVERIFY2(problems.isEmpty(),
+                 qPrintable(QStringLiteral("[U-38 算子侧落盘损失] ") + problems.join(QStringLiteral("；"))));
+    };
+
+    // —— 样本取自注册表本身：挑第一个「至少 1 入、且出端口多于 1」的在册算子。
+    //    写死算子名会让下次改名变成假红；多出端口是「越界丢弃」这条路径的前提——只有第 2 个及以后的
+    //    出端口，连线才可能在算子下线后越界。
+    QString pickId, pickName;
+    int pickCat = -1, pickOut = 0;
+    const QList<NodeRegistration> regs = NodeRegistry::instance().all();
+    for (const NodeRegistration &r : regs) {
+        NodeBase *t = NodeRegistry::instance().createById(r.id, nullptr);
+        if (!t)
+            continue;
+        t->init();
+        const bool usable = t->inputPorts().size() >= 1 && t->outputPorts().size() >= 2;
+        const int outN = t->outputPorts().size();
+        delete t;
+        if (!usable)
+            continue;
+        pickId = r.id;
+        pickName = r.displayName;
+        pickCat = int(r.category);
+        pickOut = outN;
+        break;
+    }
+    if (pickId.isEmpty()) {
+        problems << QStringLiteral("前提：注册表里没有 1 入 2 出以上的算子，越界丢弃这条路没有对照面（regs=%1）")
+                        .arg(int(regs.size()));
+        bail();
+        return;
+    }
+
+    // —— 基线（控制变量）：两个在册算子连一条线（源端取最后一个出端口），按真写侧组装出那份文件
+    FlowScene sc;
+    NodeBase *src = sc.createNode(NodeBase::NodeType(pickCat), QPointF(10, 10), pickName);
+    NodeBase *dst = sc.createNode(NodeBase::NodeType(pickCat), QPointF(300, 10), pickName);
+    if (!src || !dst || src->outputPorts().size() < 2 || dst->inputPorts().isEmpty()) {
+        problems << QStringLiteral("前提：基线建不出来或端口不合用（src=%1 dst=%2 出=%3 入=%4）")
+                        .arg(src ? QStringLiteral("yes") : QStringLiteral("no"))
+                        .arg(dst ? QStringLiteral("yes") : QStringLiteral("no"))
+                        .arg(src ? int(src->outputPorts().size()) : -1)
+                        .arg(dst ? int(dst->inputPorts().size()) : -1);
+        bail();
+        return;
+    }
+    auto *edge = sc.createConnection(src->outputPorts().last(), dst->inputPorts().first(), true);
+    const QString realTypeId = src->property("vfpNodeTypeId").toString();
+    const int srcModule = src->moduleId();
+    const int dstModule = dst->moduleId();
+    qInfo().noquote() << QStringLiteral("[U38-BASE] pickId=%1 pickName=%2 cat=%3 typeId=%4 "
+                             "ports=%5/%6 edge=%7 srcModule=%8 dstModule=%9")
+                             .arg(pickId, pickName)
+                             .arg(pickCat).arg(realTypeId)
+                             .arg(int(src->inputPorts().size())).arg(int(src->outputPorts().size()))
+                             .arg(edge ? QStringLiteral("yes") : QStringLiteral("no"))
+                             .arg(srcModule).arg(dstModule);
+
+    ProjectManager pm;
+    QList<FlowScene *> mine;
+    mine.append(&sc);
+    const QJsonObject real = pm.buildProjectJson(mine);
+    const QJsonObject realScene = real.value(QStringLiteral("scenes")).toArray().at(0).toObject();
+    const QJsonArray realNodes = realScene.value(QStringLiteral("nodes")).toArray();
+    int srcIdx = -1;
+    for (int i = 0; i < realNodes.size(); ++i) {
+        if (realNodes.at(i).toObject().value(QStringLiteral("moduleId")).toInt() == srcModule) {
+            srcIdx = i;
+            break;
+        }
+    }
+    const int realConns = realScene.value(QStringLiteral("connections")).toArray().size();
+    if (!edge || realTypeId.isEmpty() || srcIdx < 0 || realConns != 1) {
+        problems << QStringLiteral("前提：基线不合用（edge=%1 typeId 空=%2 写侧找不到该算子=%3 连线=%4）")
+                        .arg(edge ? QStringLiteral("yes") : QStringLiteral("no"))
+                        .arg(realTypeId.isEmpty() ? QStringLiteral("yes") : QStringLiteral("no"))
+                        .arg(srcIdx < 0 ? QStringLiteral("yes") : QStringLiteral("no"))
+                        .arg(realConns);
+        bail();
+        return;
+    }
+    const QJsonObject realSrc = realNodes.at(srcIdx).toObject();
+    if (realSrc.value(QStringLiteral("typeId")).toString() != realTypeId
+        || realSrc.value(QStringLiteral("outputPorts")).toArray().size() != pickOut) {
+        problems << QStringLiteral("前提：写侧那份文件与内存不符（文件 typeId=%1 出端口=%2，"
+                                "内存 typeId=%3 注册表出端口=%4）")
+                        .arg(realSrc.value(QStringLiteral("typeId")).toString())
+                        .arg(realSrc.value(QStringLiteral("outputPorts")).toArray().size())
+                        .arg(realTypeId).arg(pickOut);
+        bail();
+        return;
+    }
+
+    // —— 只改一处：把那个算子的显示名换成注册表里没有的名字（＝算子下线），其余逐字符不动
+    QJsonObject offSrc = realSrc;
+    const QString offName = realSrc.value(QStringLiteral("nodeName")).toString()
+                            + QStringLiteral("-已下线");
+    offSrc[QStringLiteral("nodeName")] = offName;
+    QJsonArray offNodes = realNodes;
+    offNodes.removeAt(srcIdx);
+    offNodes.insert(srcIdx, offSrc);
+    QJsonObject offScene = realScene;
+    offScene[QStringLiteral("nodes")] = offNodes;
+
+    // —— 第一轮：装进真加载入口（名字已下线）→ 按真写侧重存 → 量文件里少了几项
+    QStringList notes;
+    ProjectManager loader;
+    const QMetaObject::Connection wired =
+        ProjectLoadNotes::attachTo(&loader, [&notes](const QString &n) { notes.append(n); });
+    QJsonObject inRoot;
+    {
+        QJsonArray arr;
+        arr.append(offScene);
+        inRoot[QStringLiteral("scenes")] = arr;
+    }
+    QList<FlowScene *> opened;
+    const bool loaded = loader.applyProjectJson(inRoot, opened);
+    if (!wired || !loaded || opened.size() != 1) {
+        problems << QStringLiteral("前提：下线方案没装回去（wired=%1 loaded=%2 scenes=%3）")
+                        .arg(wired ? QStringLiteral("yes") : QStringLiteral("no"))
+                        .arg(loaded ? QStringLiteral("yes") : QStringLiteral("no"))
+                        .arg(int(opened.size()));
+        qDeleteAll(opened);
+        bail();
+        return;
+    }
+    const QJsonObject saved = loader.buildProjectJson(opened);
+    const QJsonObject savedScene = saved.value(QStringLiteral("scenes")).toArray().at(0).toObject();
+    const Delta d = deltaOf(offScene, savedScene);
+    QStringList lossNotes;
+    for (const QString &n : notes)
+        if (n.contains(QStringLiteral("下一次保存")))
+            lossNotes << n;
+    const int measured = d.typeIdLost + d.typeIdChanged + d.edgesLost;
+    qInfo().noquote() << QStringLiteral("[U38-A] notes=%1 lossNotes=%2 typeIdLost=%3 typeIdChanged=%4 "
+                             "edgesLost=%5 measured=%6 ports=%7/%8 paramsLost=%9 offName=%10")
+                             .arg(int(notes.size())).arg(int(lossNotes.size()))
+                             .arg(d.typeIdLost).arg(d.typeIdChanged).arg(d.edgesLost).arg(measured)
+                             .arg(d.portsOutIn).arg(d.portsOutSaved).arg(d.paramsLost).arg(offName);
+    for (const QString &n : notes)
+        qInfo().noquote() << QStringLiteral("[U38-A-NOTE] %1").arg(n);
+
+    // 判据①（载荷口径）：文件里真少了几项，合计句就得报几项——多报少报都红。
+    if (measured == 0)
+        problems << QStringLiteral("前提：下线方案重存后什么都没少（typeId 与连线都在），本腿失去对照意义");
+    else if (lossNotes.size() != 1)
+        problems << QStringLiteral("文件少了 %1 项载荷，含「下一次保存」的合计句却有 %2 条")
+                        .arg(measured).arg(int(lossNotes.size()));
+    else {
+        const QString sentence = lossNotes.first();
+        if (!sentence.contains(QStringLiteral("共 %1 项").arg(measured)))
+            problems << QStringLiteral("合计句报的数与实测差值不符（实测少 %1 项，句子里没有「共 %1 项」）：%2")
+                            .arg(measured).arg(sentence);
+        if ((d.typeIdLost > 0 || d.typeIdChanged > 0) && !sentence.contains(QStringLiteral("类型号")))
+            problems << QStringLiteral("类型号被去掉或被换掉（%1+%2 处）却没在合计句里点名：%3")
+                            .arg(d.typeIdLost).arg(d.typeIdChanged).arg(sentence);
+        if (d.edgesLost > 0 && !sentence.contains(QStringLiteral("连线")))
+            problems << QStringLiteral("连线整条消失（%1 条）却没在合计句里点名：%2")
+                            .arg(d.edgesLost).arg(sentence);
+        if (d.paramsLost > 0)
+            problems << QStringLiteral("参数键也消失了 %1 个——本腿未覆盖这一类，先判红再登记，不许静默通过")
+                            .arg(d.paramsLost);
+    }
+
+    // 判据②（在册负对照，只差一个名字）：名字换回在册的那个、其余逐字符不动 ⇒ 不许有丢失，也不许有合计句。
+    QStringList ctrlNotes;
+    ProjectManager ctrl;
+    ProjectLoadNotes::attachTo(&ctrl, [&ctrlNotes](const QString &n) { ctrlNotes.append(n); });
+    QJsonObject ctrlRoot;
+    {
+        QJsonArray arr;
+        arr.append(realScene);
+        ctrlRoot[QStringLiteral("scenes")] = arr;
+    }
+    QList<FlowScene *> ctrlOpened;
+    const bool ctrlLoaded = ctrl.applyProjectJson(ctrlRoot, ctrlOpened);
+    if (!ctrlLoaded || ctrlOpened.size() != 1) {
+        problems << QStringLiteral("前提：在册方案装不回去（loaded=%1 scenes=%2）")
+                        .arg(ctrlLoaded ? QStringLiteral("yes") : QStringLiteral("no"))
+                        .arg(int(ctrlOpened.size()));
+    } else {
+        const QJsonObject ctrlSaved = ctrl.buildProjectJson(ctrlOpened);
+        const QJsonObject ctrlScene = ctrlSaved.value(QStringLiteral("scenes")).toArray().at(0).toObject();
+        const Delta cd = deltaOf(realScene, ctrlScene);
+        QStringList ctrlLossNotes;
+        for (const QString &n : ctrlNotes)
+            if (n.contains(QStringLiteral("下一次保存")))
+                ctrlLossNotes << n;
+        qInfo().noquote() << QStringLiteral("[U38-B-CTRL] notes=%1 lossNotes=%2 typeIdLost=%3 "
+                                 "typeIdChanged=%4 edgesLost=%5 ports=%6/%7 portsShrunk=%8")
+                                 .arg(int(ctrlNotes.size())).arg(int(ctrlLossNotes.size()))
+                                 .arg(cd.typeIdLost).arg(cd.typeIdChanged).arg(cd.edgesLost)
+                                 .arg(cd.portsOutIn).arg(cd.portsOutSaved).arg(cd.portsShrunk);
+        for (const QString &n : ctrlNotes)
+            qInfo().noquote() << QStringLiteral("[U38-B-NOTE] %1").arg(n);
+        if (cd.typeIdLost != 0 || cd.typeIdChanged != 0 || cd.edgesLost != 0 || cd.paramsLost != 0
+            || cd.portsShrunk != 0) {
+            problems << QStringLiteral("在册算子也丢载荷（typeId=%1/%2 连线=%3 参数=%4 端口改写=%5）"
+                                           "——差异不只在名字上，对照失效")
+                            .arg(cd.typeIdLost).arg(cd.typeIdChanged).arg(cd.edgesLost)
+                            .arg(cd.paramsLost).arg(cd.portsShrunk);
+        }
+        if (!ctrlLossNotes.isEmpty())
+            problems << QStringLiteral("在册方案一条载荷都没丢，却报了 %1 条保存后果合计句：%2")
+                            .arg(int(ctrlLossNotes.size()))
+                            .arg(ctrlLossNotes.join(QStringLiteral("｜")));
+    }
+    qDeleteAll(ctrlOpened);
+
+    // 判据③（typeIdChanged 那一路的实证面）：只把显示名换成同组里另一个在册算子，文件里的 typeId 不动
+    // ⇒ 载入侧走「方案算子类型不匹配，已按当前实现加载」那条留痕，内存里装的是另一套实现，下一次保存
+    // 写出的类型号就不再是文件里那一个。它与「整键去掉」共用一个计数器，所以这一路必须实测，不能只在
+    // 注释里说一句——过去它同样没有任何合计句。
+    QString otherName, otherTypeId;
+    for (const NodeRegistration &r : regs) {
+        if (int(r.category) != pickCat || r.id == pickId)
+            continue;
+        NodeBase *t = NodeRegistry::instance().createById(r.id, nullptr);
+        if (!t)
+            continue;
+        t->init();
+        const bool usableOther = !t->inputPorts().isEmpty() && !t->outputPorts().isEmpty();
+        const QString tid = t->property("vfpNodeTypeId").toString();
+        delete t;
+        if (usableOther && !tid.isEmpty() && tid != realTypeId) {
+            otherName = r.displayName;
+            otherTypeId = tid;
+            break;
+        }
+    }
+    if (otherName.isEmpty()) {
+        problems << QStringLiteral("前提：同组（cat=%1）里找不到另一个在册算子，typeIdChanged 这一路没有对照面")
+                        .arg(pickCat);
+    } else {
+        QJsonObject mixSrc = realSrc;
+        mixSrc[QStringLiteral("nodeName")] = otherName;
+        QJsonArray mixNodes = realNodes;
+        mixNodes.removeAt(srcIdx);
+        mixNodes.insert(srcIdx, mixSrc);
+        QJsonObject mixScene = realScene;
+        mixScene[QStringLiteral("nodes")] = mixNodes;
+
+        QStringList mixNotes;
+        ProjectManager mix;
+        ProjectLoadNotes::attachTo(&mix, [&mixNotes](const QString &n) { mixNotes.append(n); });
+        QJsonObject mixRoot;
+        {
+            QJsonArray arr;
+            arr.append(mixScene);
+            mixRoot[QStringLiteral("scenes")] = arr;
+        }
+        QList<FlowScene *> mixOpened;
+        const bool mixLoaded = mix.applyProjectJson(mixRoot, mixOpened);
+        if (!mixLoaded || mixOpened.size() != 1) {
+            problems << QStringLiteral("前提：换名方案装不回去（loaded=%1 scenes=%2）")
+                            .arg(mixLoaded ? QStringLiteral("yes") : QStringLiteral("no"))
+                            .arg(int(mixOpened.size()));
+        } else {
+            const QJsonObject mixSavedScene = mix.buildProjectJson(mixOpened)
+                                                  .value(QStringLiteral("scenes")).toArray().at(0).toObject();
+            const Delta md = deltaOf(mixScene, mixSavedScene);
+            QStringList mixLossNotes;
+            for (const QString &n : mixNotes)
+                if (n.contains(QStringLiteral("下一次保存")))
+                    mixLossNotes << n;
+            const int measuredMix = md.typeIdLost + md.typeIdChanged + md.edgesLost;
+            qInfo().noquote() << QStringLiteral("[U38-D] otherName=%1 otherTypeId=%2 notes=%3 lossNotes=%4 "
+                                     "typeIdLost=%5 typeIdChanged=%6 edgesLost=%7 measured=%8 ports=%9/%10")
+                                     .arg(otherName, otherTypeId)
+                                     .arg(int(mixNotes.size())).arg(int(mixLossNotes.size()))
+                                     .arg(md.typeIdLost).arg(md.typeIdChanged).arg(md.edgesLost)
+                                     .arg(measuredMix).arg(md.portsOutIn).arg(md.portsOutSaved);
+            for (const QString &n : mixNotes)
+                qInfo().noquote() << QStringLiteral("[U38-D-NOTE] %1").arg(n);
+            if (md.typeIdLost == 0 && md.typeIdChanged == 0)
+                problems << QStringLiteral("前提：换成同组另一个在册算子后类型号没被改写（lost=%1 changed=%2）"
+                                       "——这一路没有损失，判据③落空")
+                                .arg(md.typeIdLost).arg(md.typeIdChanged);
+            else if (mixLossNotes.size() != 1)
+                problems << QStringLiteral("换名方案：类型号改写 %1 处、连线丢 %2 条，含「下一次保存」的合计句却有 %3 条")
+                                .arg(md.typeIdLost + md.typeIdChanged).arg(md.edgesLost)
+                                .arg(int(mixLossNotes.size()));
+            else if (!mixLossNotes.first().contains(QStringLiteral("共 %1 项").arg(measuredMix)))
+                problems << QStringLiteral("换名方案：合计句报的数与实测差值不符（实测少 %1 项）：%2")
+                                .arg(measuredMix).arg(mixLossNotes.first());
+            else if (!mixLossNotes.first().contains(QStringLiteral("类型号")))
+                problems << QStringLiteral("换名方案：类型号被换掉却没在合计句里点名：%1")
+                                .arg(mixLossNotes.first());
+            if (md.paramsLost > 0)
+                problems << QStringLiteral("换名方案：参数键也消失了 %1 个——本腿未覆盖这一类，先判红再登记")
+                                .arg(md.paramsLost);
+        }
+        qDeleteAll(mixOpened);
+    }
+
+    // 判据④（端点算子缺失那一路）：把目标算子整条从节点表里去掉、连线仍指向它 ⇒ 载入侧走「端点算子缺失」
+    // 那条留痕，下一次保存那条线整组不再写回。它与①的区别是这一路不经过降级：源算子仍在册、类型号完好，
+    // 少的只有连线一项。所以这里的合计句必须只报实测那一项——不能被①那份读数替它说话。
+    int dstIdx = -1;
+    for (int i = 0; i < realNodes.size(); ++i) {
+        if (realNodes.at(i).toObject().value(QStringLiteral("moduleId")).toInt() == dstModule) {
+            dstIdx = i;
+            break;
+        }
+    }
+    if (dstIdx < 0) {
+        problems << QStringLiteral("前提：写侧那份文件里找不到目标算子（moduleId=%1），端点缺失这一路没有对照面")
+                        .arg(dstModule);
+    } else {
+        QJsonArray gapNodes = realNodes;
+        gapNodes.removeAt(dstIdx);
+        QJsonObject gapScene = realScene;
+        gapScene[QStringLiteral("nodes")] = gapNodes;
+
+        QStringList gapNotes;
+        ProjectManager gap;
+        ProjectLoadNotes::attachTo(&gap, [&gapNotes](const QString &n) { gapNotes.append(n); });
+        QJsonObject gapRoot;
+        {
+            QJsonArray arr;
+            arr.append(gapScene);
+            gapRoot[QStringLiteral("scenes")] = arr;
+        }
+        QList<FlowScene *> gapOpened;
+        const bool gapLoaded = gap.applyProjectJson(gapRoot, gapOpened);
+        if (!gapLoaded || gapOpened.size() != 1) {
+            problems << QStringLiteral("前提：端点缺失方案装不回去（loaded=%1 scenes=%2）")
+                            .arg(gapLoaded ? QStringLiteral("yes") : QStringLiteral("no"))
+                            .arg(int(gapOpened.size()));
+        } else {
+            const QJsonObject gapSavedScene = gap.buildProjectJson(gapOpened)
+                                                  .value(QStringLiteral("scenes")).toArray().at(0).toObject();
+            const Delta gd = deltaOf(gapScene, gapSavedScene);
+            QStringList gapLossNotes;
+            for (const QString &n : gapNotes)
+                if (n.contains(QStringLiteral("下一次保存")))
+                    gapLossNotes << n;
+            const int measuredGap = gd.typeIdLost + gd.typeIdChanged + gd.edgesLost;
+            qInfo().noquote() << QStringLiteral("[U38-E] gapModule=%1 notes=%2 lossNotes=%3 typeIdLost=%4 "
+                                     "typeIdChanged=%5 edgesLost=%6 measured=%7")
+                                     .arg(dstModule).arg(int(gapNotes.size())).arg(int(gapLossNotes.size()))
+                                     .arg(gd.typeIdLost).arg(gd.typeIdChanged).arg(gd.edgesLost)
+                                     .arg(measuredGap);
+            for (const QString &n : gapNotes)
+                qInfo().noquote() << QStringLiteral("[U38-E-NOTE] %1").arg(n);
+            if (gd.edgesLost == 0)
+                problems << QStringLiteral("前提：端点缺失那条线重存后仍在文件里，这一路没有损失，判据④落空");
+            else if (gd.typeIdLost != 0 || gd.typeIdChanged != 0)
+                problems << QStringLiteral("端点缺失方案里源算子仍在册，类型号却少了或被换了（%1/%2）"
+                                           "——差异不只在缺的那一端，对照失效")
+                                .arg(gd.typeIdLost).arg(gd.typeIdChanged);
+            else if (gapLossNotes.size() != 1)
+                problems << QStringLiteral("端点缺失方案：连线丢 %1 条，含「下一次保存」的合计句却有 %2 条")
+                                .arg(gd.edgesLost).arg(int(gapLossNotes.size()));
+            else if (!gapLossNotes.first().contains(QStringLiteral("共 %1 项").arg(measuredGap)))
+                problems << QStringLiteral("端点缺失方案：合计句报的数与实测差值不符（实测少 %1 项）：%2")
+                                .arg(measuredGap).arg(gapLossNotes.first());
+            else if (!gapLossNotes.first().contains(QStringLiteral("连线")))
+                problems << QStringLiteral("端点缺失方案：连线没接回却没在合计句里点名：%1")
+                                .arg(gapLossNotes.first());
+            if (gd.paramsLost > 0)
+                problems << QStringLiteral("端点缺失方案：参数键也消失了 %1 个——本腿未覆盖这一类，先判红再登记")
+                                .arg(gd.paramsLost);
+        }
+        qDeleteAll(gapOpened);
+    }
+
+    // 判据⑤（第二轮不滚雪球）：把第一轮存出来的那份再装回去再存——typeId 已经没了就不再消失，
+    // 连线已经没了就不再丢弃，合计句也不再复读。
+    QStringList notes2;
+    ProjectManager again;
+    ProjectLoadNotes::attachTo(&again, [&notes2](const QString &n) { notes2.append(n); });
+    QJsonObject root2;
+    {
+        QJsonArray arr;
+        arr.append(savedScene);
+        root2[QStringLiteral("scenes")] = arr;
+    }
+    QList<FlowScene *> opened2;
+    const bool reloaded = again.applyProjectJson(root2, opened2);
+    if (!reloaded || opened2.size() != 1) {
+        problems << QStringLiteral("前提：第一轮存出来的那份装不回去（loaded=%1 scenes=%2）")
+                        .arg(reloaded ? QStringLiteral("yes") : QStringLiteral("no"))
+                        .arg(int(opened2.size()));
+    } else {
+        const QJsonObject saved2 = again.buildProjectJson(opened2);
+        const QJsonObject savedScene2 = saved2.value(QStringLiteral("scenes")).toArray().at(0).toObject();
+        const Delta d2 = deltaOf(savedScene, savedScene2);
+        QStringList lossNotes2;
+        for (const QString &n : notes2)
+            if (n.contains(QStringLiteral("下一次保存")))
+                lossNotes2 << n;
+        qInfo().noquote() << QStringLiteral("[U38-C] notes=%1 lossNotes=%2 typeIdLost=%3 typeIdChanged=%4 "
+                                 "edgesLost=%5 ports=%6/%7")
+                                 .arg(int(notes2.size())).arg(int(lossNotes2.size()))
+                                 .arg(d2.typeIdLost).arg(d2.typeIdChanged).arg(d2.edgesLost)
+                                 .arg(d2.portsOutIn).arg(d2.portsOutSaved);
+        for (const QString &n : notes2)
+            qInfo().noquote() << QStringLiteral("[U38-C-NOTE] %1").arg(n);
+        if (d2.typeIdLost != 0 || d2.typeIdChanged != 0 || d2.edgesLost != 0)
+            problems << QStringLiteral("第二轮继续吃载荷（typeId=%1/%2 连线=%3）——往返不闭合")
+                            .arg(d2.typeIdLost).arg(d2.typeIdChanged).arg(d2.edgesLost);
+        if (!lossNotes2.isEmpty())
+            problems << QStringLiteral("第二轮没有新损失却复读保存后果合计句 %1 条：%2")
+                            .arg(int(lossNotes2.size()))
+                            .arg(lossNotes2.join(QStringLiteral("｜")));
+    }
+    // 判据⑥（同一个 ProjectManager 连装两次）：算子侧那两个计数器每轮载入开头必须复位——
+    // ⑤ 用的是新实例，撤掉复位也读不出差别。这里故意复用同一个实例：第二轮那一份文件已经没有新损失，
+    // 合计句必须不再出现；若复位被删，第二轮会原样复读第一轮的「共 2 项」。
+    QStringList reuseNotes1;
+    QStringList reuseNotes2;
+    int reuseRound = 0;
+    ProjectManager reuse;
+    ProjectLoadNotes::attachTo(&reuse, [&reuseNotes1, &reuseNotes2, &reuseRound](const QString &n) {
+        if (reuseRound == 0)
+            reuseNotes1.append(n);
+        else
+            reuseNotes2.append(n);
+    });
+    QList<FlowScene *> reuse1;
+    const bool reuseLoaded1 = reuse.applyProjectJson(inRoot, reuse1);
+    reuseRound = 1;
+    QList<FlowScene *> reuse2;
+    const bool reuseLoaded2 = reuse.applyProjectJson(root2, reuse2);
+    if (!reuseLoaded1 || !reuseLoaded2 || reuse1.size() != 1 || reuse2.size() != 1) {
+        problems << QStringLiteral("前提：同一实例连装两次没成功（第1轮=%1/%2 第2轮=%3/%4）")
+                        .arg(reuseLoaded1 ? QStringLiteral("yes") : QStringLiteral("no")).arg(int(reuse1.size()))
+                        .arg(reuseLoaded2 ? QStringLiteral("yes") : QStringLiteral("no")).arg(int(reuse2.size()));
+    } else {
+        const Delta rd = deltaOf(savedScene, reuse.buildProjectJson(reuse2)
+                                       .value(QStringLiteral("scenes")).toArray().at(0).toObject());
+        QStringList reuseLoss1;
+        QStringList reuseLoss2;
+        for (const QString &n : reuseNotes1)
+            if (n.contains(QStringLiteral("下一次保存")))
+                reuseLoss1 << n;
+        for (const QString &n : reuseNotes2)
+            if (n.contains(QStringLiteral("下一次保存")))
+                reuseLoss2 << n;
+        qInfo().noquote() << QStringLiteral("[U38-F] round1Notes=%1 round1Sentences=%2 round2Notes=%3 "
+                                 "round2Sentences=%4 round2Delta=%5/%6/%7 firstRound=%8")
+                                 .arg(int(reuseNotes1.size())).arg(int(reuseLoss1.size()))
+                                 .arg(int(reuseNotes2.size())).arg(int(reuseLoss2.size()))
+                                 .arg(rd.typeIdLost).arg(rd.typeIdChanged).arg(rd.edgesLost).arg(measured);
+        for (const QString &n : reuseNotes1)
+            qInfo().noquote() << QStringLiteral("[U38-F1-NOTE] %1").arg(n);
+        for (const QString &n : reuseNotes2)
+            qInfo().noquote() << QStringLiteral("[U38-F2-NOTE] %1").arg(n);
+        // 第一轮那句必须正好一条（带第一轮实测那个数），第二轮一条都不许有。
+        if (reuseLoss1.size() != 1)
+            problems << QStringLiteral("同一实例第一轮该有的一条合计句（共 %1 项）读到 %2 条").arg(measured)
+                            .arg(int(reuseLoss1.size()));
+        else if (!reuseLoss1.first().contains(QStringLiteral("共 %1 项").arg(measured)))
+            problems << QStringLiteral("同一实例第一轮的合计句与单实例读数的数不符（实测 %1 项）：%2")
+                            .arg(measured).arg(reuseLoss1.first());
+        if (!reuseLoss2.isEmpty())
+            problems << QStringLiteral("同一实例第二轮没有新损失（实测差值=%1/%2/%3）却出现合计句 %4 条——"
+                                       "上一轮的计数没有复位：%5")
+                            .arg(rd.typeIdLost).arg(rd.typeIdChanged).arg(rd.edgesLost)
+                            .arg(int(reuseLoss2.size())).arg(reuseLoss2.join(QStringLiteral("｜")));
+        if (rd.typeIdLost != 0 || rd.typeIdChanged != 0 || rd.edgesLost != 0)
+            problems << QStringLiteral("同一实例第二轮继续吃载荷（typeId=%1/%2 连线=%3）——往返不闭合")
+                            .arg(rd.typeIdLost).arg(rd.typeIdChanged).arg(rd.edgesLost);
+    }
+    qDeleteAll(reuse2);
+    qDeleteAll(reuse1);
+    qDeleteAll(opened2);
+    qDeleteAll(opened);
+    bail();
 }
 
 QTEST_MAIN(IntegrationTest)
