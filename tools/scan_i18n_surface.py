@@ -287,21 +287,41 @@ def target_key(text, start):
     return "(no target)"
 
 
-def scan_file(path):
-    """Return (wrapped_count, [(key, line_no, preview), ...] of bare literals,
-    raw_string_count, raw_cjk_lines, escaped_cjk_count)."""
-    cleaned, raws = strip_comments(
-        io.open(path, "r", encoding="utf-8", errors="replace").read())
-    text = cleaned
+ESCAPE_MAP = {"n": "\n", "r": "\r", "t": "\t", '"': '"', "'": "'", "\\": "\\"}
+ANY_ESCAPE = re.compile(r"\\u([0-9A-Fa-f]{4})|\\([nrt\"'\\])")
+
+
+def decode_escapes(body):
+    """The text a literal actually carries, with \\uXXXX and the ordinary escapes decoded.
+
+    The `literal` rule keys on code points, so an escaped 「\\u89d2」 is not a literal here --
+    but the compiler turns it into that character all the same. Any rule that compares two
+    literals *as text* has to decode first, or the escaped and the direct spelling of one
+    sentence read as two different sentences.
+    """
+    def one(m):
+        if m.group(1):
+            return chr(int(m.group(1), 16))
+        return ESCAPE_MAP[m.group(2)]
+    return ANY_ESCAPE.sub(one, body)
+
+
+Literal = collections.namedtuple("Literal", "line raw decoded key tier wrapped")
+
+
+def iter_literals(text):
+    """Every string literal in already comment-stripped / raw-masked source text.
+
+    One tokenizer for two consumers (U-35): scan_file() derives the wrapped/bare buckets this
+    file measures, tools/dup_cn_literal_gate.py derives the duplicated-sentence baseline. A
+    second copy of this walk would be the thing the gate exists to stop.
+
+    Yields Literal(line, raw, decoded, key, tier, wrapped) for **every** literal, CJK or not:
+    which subset counts as Chinese text is the caller's rule, not the tokenizer's. `key`/`tier`
+    follow the definitions at the top of this file.
+    """
     newl = [m.start() for m in re.finditer("\n", text)]
-    raw_cjk_lines = sum(1 for body in raws for ln in body.split("\n") if CJK.search(ln))
-    # Chinese carried as an escape is invisible to the literal rule above but is real text
-    # on screen, so it is reported as a blind spot (see the escaped_cjk definition).
-    escaped_cjk = sum(1 for m in ESCAPED_HEX.finditer(text)
-                      if 0x4E00 <= int(m.group(1), 16) <= 0x9FFF)
     stack = []
-    wrapped = 0
-    bare = []
     i = 0
     n = len(text)
     while i < n:
@@ -325,19 +345,38 @@ def scan_file(path):
                 if text[j] == '"':
                     break
                 j += 1
-            body = text[i + 1:j]
-            if CJK.search(body):
-                if any(s in ("tr", "translate") for s in stack):
-                    wrapped += 1
-                else:
-                    line_no = bisect.bisect_left(newl, i) + 1
-                    key = nearest_key(stack)
-                    if key == "(no call)":
-                        key = target_key(text, i)
-                    bare.append((key, line_no, body[:24]))
+            raw = text[i + 1:j]
+            key = nearest_key(stack)
+            if key == "(no call)":
+                key = target_key(text, i)
+            yield Literal(bisect.bisect_left(newl, i) + 1, raw, decode_escapes(raw),
+                          key, tier_of(key),
+                          any(s in ("tr", "translate") for s in stack))
             i = j + 1
             continue
         i += 1
+
+
+def scan_file(path):
+    """Return (wrapped_count, [(key, line_no, preview), ...] of bare literals,
+    raw_string_count, raw_cjk_lines, escaped_cjk_count)."""
+    cleaned, raws = strip_comments(
+        io.open(path, "r", encoding="utf-8", errors="replace").read())
+    text = cleaned
+    raw_cjk_lines = sum(1 for body in raws for ln in body.split("\n") if CJK.search(ln))
+    # Chinese carried as an escape is invisible to the literal rule above but is real text
+    # on screen, so it is reported as a blind spot (see the escaped_cjk definition).
+    escaped_cjk = sum(1 for m in ESCAPED_HEX.finditer(text)
+                      if 0x4E00 <= int(m.group(1), 16) <= 0x9FFF)
+    wrapped = 0
+    bare = []
+    for lit in iter_literals(text):
+        if not CJK.search(lit.raw):
+            continue
+        if lit.wrapped:
+            wrapped += 1
+        else:
+            bare.append((lit.key, lit.line, lit.raw[:24]))
     return wrapped, bare, len(raws), raw_cjk_lines, escaped_cjk
 
 

@@ -16,6 +16,7 @@
       6 = documentation check failed (tools/doc_check.ps1)
       7 = documentation anchor citations drifted (tools/doc_anchors.py)
       8 = dangling-timer site found (tools/single_shot_inventory.py)
+      9 = duplicated Chinese sentence drifted against its baseline (tools/dup_cn_literal_gate.py)
 
     Note: this script is intentionally ASCII-only, and therefore carries no UTF-8 BOM
     (PowerShell 5.1 only needs a BOM when a .ps1 contains non-ASCII text). The two-sided
@@ -207,6 +208,32 @@ if ($timerCode -ne 0) {
     exit 8
 }
 Write-Ok "dangling-timer site inventory OK ($hygieneExe)"
+
+# ------------------------------------------- 1g. duplicated Chinese sentence baseline
+# Why it runs here: candidate G-4 carried "same Chinese literal twice = red" for four rounds with
+# no rule anyone could run. U-35 measured that wording literally: 537 findings, most of them
+# one-word labels - a gate like that gets switched off rather than satisfied. The
+# rule was then narrowed with the sweep in the ledger (cross-file only, >= 8 non-whitespace
+# characters) and today's 58 remaining duplicates were pinned as a baseline set. This step keeps
+# that set from moving: a sentence copied into one more file, or a baseline entry quietly dropped,
+# stops the build here instead of becoming prose in the next review.
+# Must never be a silent skip: any drift = exit 9 (a broken classifier reports as exit 2 from the
+# script itself and fails here too, so it cannot read as clean).
+Write-Step "Duplicated Chinese sentence baseline"
+$dupLog = Join-Path $RepoRoot 'ci-dup-cn.log'
+$dupArgs = $hygienePre + @('tools/dup_cn_literal_gate.py')
+& $hygieneExe @dupArgs 2>&1 | Tee-Object -FilePath $dupLog | Out-Null
+$dupCode = $LASTEXITCODE
+
+$dupLines = @(Get-Content $dupLog -ErrorAction SilentlyContinue)
+if ($dupLines.Count -eq 0) { Write-Host '  (dup_cn_literal_gate.py produced no output)' }
+foreach ($line in $dupLines) { Write-Host "  $line" }
+if ($dupCode -ne 0) {
+    Write-Err "duplicated Chinese sentence drift (exit $dupCode) via '$hygieneExe'; see $dupLog"
+    Pop-Location
+    exit 9
+}
+Write-Ok "duplicated Chinese sentence baseline OK ($hygieneExe)"
 
 # ------------------------------------------------------------------ 2. clean
 if ($Clean -and (Test-Path $BuildDir)) {
