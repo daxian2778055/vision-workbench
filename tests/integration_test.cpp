@@ -4319,6 +4319,12 @@ static U34Payload u34DegradedPayload()
            << QStringLiteral("s4") << QStringLiteral("t5") << QStringLiteral("u6");
     QJsonObject fixtures;
     fixtures[QStringLiteral("u34_str6")] = u33::entryJson(u33::strs(strSix), true, QJsonObject());
+    // U-37（复核意见 S-1）：第三类损失——键名为空的夹具条目在载入侧整条跳过（src/FlowScene.cpp :1283
+    // 把原因 append 进同一条出参，于是 src/ProjectManager.cpp :566 一并计数）。它不进表、也没有键名
+    // 可保留，所以下一次保存的后果是「整条不再写回」，不是「矩阵写成空」。矩阵本身刻意做成合法 6 元
+    // 数值：唯一缺陷是键名为空，其余变量全部控制住的对照样本。
+    fixtures[QStringLiteral("")] =
+        u33::entryJson(u33::nums(QVector<double>{1, 0, 100, 0, 1, 200}), true, QJsonObject());
 
     QJsonArray calibBad;
     calibBad.append(QStringLiteral("1"));
@@ -4417,11 +4423,14 @@ void IntegrationTest::testLoadDegradationReachesVisibleFace()
     else if (!opened.first()->fixtureNames().contains(QStringLiteral("u34_str6")))
         problems << QStringLiteral("夹具条目被删条了（应只降载荷）");
 
-    // 判据④（U-36 · 复核意见 S-1′）：逐条留痕之后必须再来一句「下一次保存会怎样」。
-    // 复核人的原话是"操作员看到提示后顺手按保存，原始值就没了，且事前无从预期"——那两句逐条
+    // 判据④（U-36 · 复核意见 S-1′；U-37 按复核意见 S-1 补第三类）：逐条留痕之后必须再来一句「下一次保存会怎样」。
+    // 复核人的原话是"操作员看到提示后顺手按保存，原始值就没了，且事前无从预期"——那几句逐条
     // 留痕说的是"这条没装进来"，没说要保存才出事，所以这一句是这一步唯一的事前出口。
-    // 句里的条数按两类逐条留痕现算，撤掉 applyProjectJson 末尾那个 if 本判据即红，
-    // 少累加任何一类也红（数目对不上）。
+    // 条数按两条逐条留痕通道现算（标定 rejected／夹具 notes），但夹具那条通道里装着两类不同后果
+    // （降级仍留键名、空名整条跳过），所以那句合计必须把三种落盘后果分开点名——只说前两种时，
+    // 第三种（空名整条不再写回）在合计句里是不存在的，而它确实计入条数。
+    // 撤掉 applyProjectJson 末尾那个 if 本判据即红，少累加任何一类也红（数目对不上），
+    // 少写其中一种后果的措辞同样红（下面三枚子串各钉一种）。
     int rawLossNotes = 0;
     for (const QString &n : visibleNotes) {
         if (n.startsWith(QStringLiteral("方案加载：夹具条目降级"))
@@ -4431,39 +4440,70 @@ void IntegrationTest::testLoadDegradationReachesVisibleFace()
     bool sawSaveConsequence = false;
     for (const QString &n : visibleNotes) {
         if (n.contains(QStringLiteral("下一次保存")) && n.contains(QStringLiteral("复制一份备份"))
-            && n.contains(QStringLiteral("共 %1 条").arg(rawLossNotes)))
+            && n.contains(QStringLiteral("共 %1 条").arg(rawLossNotes))
+            && n.contains(QStringLiteral("去掉")) && n.contains(QStringLiteral("写成空"))
+            && n.contains(QStringLiteral("不再写回")))
             sawSaveConsequence = true;
     }
+    // 第三类那句「不再写回」不能只是措辞：它对应的逐条留痕必须真的发出来（那条 append 在
+    // src/FlowScene.cpp :1283，撤掉它 rawLossNotes 与合计里的 N 会一起少 1、本判据抓不到，
+    // 所以这里按内容单独钉一次）。
+    bool sawEmptyNameNote = false;
+    for (const QString &n : visibleNotes) {
+        if (n.startsWith(QStringLiteral("方案加载：夹具条目降级"))
+            && n.contains(QStringLiteral("夹具名为空")))
+            sawEmptyNameNote = true;
+    }
     if (rawLossNotes == 0)
-        problems << QStringLiteral("两类逐条降级留痕一条都没收到，判据④失去对照（先查产线留痕站点）");
+        problems << QStringLiteral("两条通道的逐条降级留痕一条都没收到，判据④失去对照（先查产线留痕站点）");
     else if (!sawSaveConsequence)
-        problems << QStringLiteral("可见面没收到保存后果那句（需同时含 下一次保存／复制一份备份／共 %1 条）")
+        problems << QStringLiteral("可见面没收到保存后果那句（需同时含 下一次保存／复制一份备份／共 %1 条，"
+                                   "并分点名到 去掉／写成空／不再写回 三种后果）")
                         .arg(rawLossNotes);
+    else if (!sawEmptyNameNote)
+        problems << QStringLiteral("合计句写了「整条不再写回」，但可见面没有那条「夹具名为空，整条跳过」的逐条留痕"
+                                   "（第三类损失无对照，措辞成了空头话）");
 
-    // 判据⑤（U-36）：第二次载入不得串上一次的数。走法取操作员那条真路径——先按写侧把当前
-    // 内存态组装一遍、再从同一个加载器实例装回去（等价于"看完提示顺手按保存、再打开那份保存的"）。
+    // 判据⑤（U-36；U-37 按复核意见 S-3 收窄判空对象）：第二次载入不得串上一次的数。
+    // 走法取操作员那条真路径——先按写侧把当前内存态组装一遍、再从同一个加载器实例装回去
+    // （等价于"看完提示顺手按保存、再打开那份保存的"）。
     // 降级过的载荷在第一次就已经被改写成空矩阵／整条不进表，第二次读到的根里已不含坏载荷，
-    // 所以第二次必须一条留痕都不发。applyProjectJson 开头那句复位是唯一撑住这一点的代码：
-    // 撤掉它，计数器带着上一轮的 2 进第二轮，于是白报一句「本次共 2 条载荷未进入内存」——本判据即红。
+    // 所以第二次不该再出现任何「保存后果族」留痕（两条逐条前缀＋那句含「下一次保存」的合计）。
+    // applyProjectJson 开头那句复位是唯一撑住这一点的代码：撤掉它，计数器带着上一轮的 3 进第二轮，
+    // 于是白报一句「本次共 3 条载荷未进入内存」——本判据即红（臂 D 量的就是这一下）。
+    // 为什么不写"第二条留痕都不许发"：那样这条腿会对一切载入期留痕过敏，将来加一句与保存后果无关的
+    // 每轮提示（例如版本弃用提醒）它就先红，而红因与被测对象无关（臂 K 实测过这一步：注入一句无关
+    // 提示，旧口径红、本口径绿）。无关留痕照旧逐条打印，只是不参与判空。
     // runtimeLayout 从根里摘掉再应用：那个键会被原子写回全局布局文件，腿不该碰产线目录。
+    auto isRawLossFamily = [](const QString &n) {
+        return n.startsWith(QStringLiteral("方案加载：夹具条目降级"))
+            || n.startsWith(QStringLiteral("方案加载：标定条目未装进表"))
+            || n.contains(QStringLiteral("下一次保存"));
+    };
     const int notesBeforeSecondRound = int(visibleNotes.size());
     QJsonObject asSaved = pm.buildProjectJson(opened);
     asSaved.remove(QStringLiteral("runtimeLayout"));
     QList<FlowScene *> reopened;
     const bool reloaded = pm.applyProjectJson(asSaved, reopened);
     const QStringList secondRoundNotes = visibleNotes.mid(notesBeforeSecondRound);
-    qInfo().noquote() << QStringLiteral("[U34-ROUND2] reloaded=%1 secondNotes=%2")
+    QStringList secondRoundLossNotes;
+    for (const QString &n : secondRoundNotes) {
+        if (isRawLossFamily(n))
+            secondRoundLossNotes << n;
+    }
+    qInfo().noquote() << QStringLiteral("[U34-ROUND2] reloaded=%1 secondNotes=%2 lossFamily=%3")
                              .arg(reloaded ? QStringLiteral("yes") : QStringLiteral("no"))
-                             .arg(int(secondRoundNotes.size()));
+                             .arg(int(secondRoundNotes.size()))
+                             .arg(int(secondRoundLossNotes.size()));
     for (const QString &n : secondRoundNotes)
         qInfo().noquote() << QStringLiteral("[U34-ROUND2-VISIBLE] %1").arg(n);
     qDeleteAll(reopened);
     if (!reloaded)
         problems << QStringLiteral("前提：把当前内存态按写侧组装再装回去被判失败（判据⑤失去对照）");
-    else if (!secondRoundNotes.isEmpty())
-        problems << QStringLiteral("第二次载入仍发 %1 条留痕（%2）——计数串了上一次，保存后果那句会在每次载入后复读")
-                        .arg(int(secondRoundNotes.size()))
-                        .arg(secondRoundNotes.join(QStringLiteral("｜")));
+    else if (!secondRoundLossNotes.isEmpty())
+        problems << QStringLiteral("第二次载入仍发 %1 条保存后果族留痕（%2）——计数串了上一次，保存后果那句会在每次载入后复读")
+                        .arg(int(secondRoundLossNotes.size()))
+                        .arg(secondRoundLossNotes.join(QStringLiteral("｜")));
 
     qDeleteAll(opened);
     CalibrationManager::instance()->fromJson(pay.calibBefore);
