@@ -294,6 +294,7 @@ void ProjectManager::reportLoadNote(const QString &text)
 
 bool ProjectManager::applyProjectJson(const QJsonObject &root, QList<FlowScene *> &scenes)
 {
+    m_loadRawLossCount = 0;   // 一次载入一个数：手动打开与崩溃恢复共用本入口，不得串上一次的降级
     const int schemaVersion = root.value(QStringLiteral("schemaVersion")).toInt(1);
     if (schemaVersion > kProjectSchemaVersion) {
         reportLoadNote(QStringLiteral("警告：方案文件版本 %1 高于本程序支持的版本 %2，可能存在无法识别的算子，请勿直接覆盖保存")
@@ -332,6 +333,7 @@ bool ProjectManager::applyProjectJson(const QJsonObject &root, QList<FlowScene *
                                                  &rejected);
         for (const QString &r : rejected)
             reportLoadNote(QStringLiteral("方案加载：标定条目未装进表 %1").arg(r));
+        m_loadRawLossCount += rejected.size();   // 整条不进表 ⇒ 下一次保存这个键会从文件里消失
     }
 
     // 恢复运行界面布局：校验后原子写回布局文件，运行界面加载时自动生效
@@ -351,6 +353,16 @@ bool ProjectManager::applyProjectJson(const QJsonObject &root, QList<FlowScene *
                 reportLoadNote(QStringLiteral("方案内 runtimeLayout 不是合法 JSON 对象，已忽略（不覆盖现有布局）"));
             }
         }
+    }
+
+    // U-36（复核意见 S-1′）：逐条留痕只说了"这条没装进来"，没说"下一次保存会把它从文件里抹掉"。
+    // 操作员看到提示后顺手按保存是常态，而那时原始载荷已经不在内存里了——事前无从预期这一步，
+    // 只能在这里补一句。计数只含两类（标定整条被拒／夹具矩阵或位姿作废），其余载入留痕不改写落盘内容。
+    if (m_loadRawLossCount > 0) {
+        reportLoadNote(QStringLiteral(
+            "方案加载：本次共 %1 条载荷未进入内存，下一次保存会把这些标定条目从方案文件中去掉、"
+            "并把被降级夹具条目的矩阵写成空（键名保留）；需要保留原始文件请先复制一份备份")
+                           .arg(m_loadRawLossCount));
     }
 
     return true;
@@ -551,4 +563,5 @@ void ProjectManager::sceneFromJson(const QJsonObject &json, FlowScene *scene)
     // 静默丢弃的表现是"方案打开后夹具的矩阵不见了"，而算子那边只是按既有形态判红。
     for (const QString &n : fixtureNotes)
         reportLoadNote(QStringLiteral("方案加载：夹具条目降级 %1").arg(n));
+    m_loadRawLossCount += fixtureNotes.size();   // 键名留着、矩阵被写成空——同一次保存的后果
 }

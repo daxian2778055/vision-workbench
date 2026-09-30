@@ -83,7 +83,7 @@ void OpencvFeatureMatchNode::init()
         makeFilePathParam(QStringLiteral("templatePath"), QString(),
                           QStringLiteral("模板图像文件 (png/bmp/jpg)")),
         makeBoolParam(QStringLiteral("trainFromImage"), false,
-                      QStringLiteral("从图像 ROI 教学特征模板")),
+                      QStringLiteral("从图像 ROI 教学特征模板（教学落盘后自动取消勾选）")),
         makeEnumParam(QStringLiteral("detector"), 0,
                       {QStringLiteral("ORB（二进制/快）"), QStringLiteral("SIFT（尺度不变）")},
                       QStringLiteral("特征检测器")),

@@ -58,12 +58,11 @@ void DnnDetectTest::testParseYoloBasic()
 
 void DnnDetectTest::testParseYoloV5Layout()
 {
-    // v5：[1, N, C]，N=100（仅前 3 行有效）
+    // v5：[1, N, C]，N=100（前 3 行写入，其余行必须为 0）
+    // 全表零初始化：解析会遍历全部 100 行，未初始化行落在阈值之上就会多出一个框，
+    // 这条腿就会随堆内存内容飘（本仓两次门禁读数分别读到 3／2 个框）。
     int sz[] = {1, 100, 6};
-    cv::Mat out(3, sz, CV_32F);
-    for (int n = 0; n < 3; ++n)
-        for (int c = 0; c < 6; ++c)
-            out.at<float>(0, n, c) = 0.f;
+    cv::Mat out = cv::Mat::zeros(3, sz, CV_32F);
     out.at<float>(0, 0, 0) = 320; out.at<float>(0, 0, 1) = 320;
     out.at<float>(0, 0, 2) = 100; out.at<float>(0, 0, 3) = 100;
     out.at<float>(0, 0, 4) = 0.9f; out.at<float>(0, 0, 5) = 0.1f;

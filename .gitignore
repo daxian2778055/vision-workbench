@@ -1,5 +1,6 @@
 # ===== 构建产物 =====
 build/
+build_r3probe/
 dist/
 # lrelease 由 .ts 编译产出，勿入库（.ts 为翻译源，随仓流转）
 translations/*.qm

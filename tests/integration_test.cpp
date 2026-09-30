@@ -4417,6 +4417,54 @@ void IntegrationTest::testLoadDegradationReachesVisibleFace()
     else if (!opened.first()->fixtureNames().contains(QStringLiteral("u34_str6")))
         problems << QStringLiteral("夹具条目被删条了（应只降载荷）");
 
+    // 判据④（U-36 · 复核意见 S-1′）：逐条留痕之后必须再来一句「下一次保存会怎样」。
+    // 复核人的原话是"操作员看到提示后顺手按保存，原始值就没了，且事前无从预期"——那两句逐条
+    // 留痕说的是"这条没装进来"，没说要保存才出事，所以这一句是这一步唯一的事前出口。
+    // 句里的条数按两类逐条留痕现算，撤掉 applyProjectJson 末尾那个 if 本判据即红，
+    // 少累加任何一类也红（数目对不上）。
+    int rawLossNotes = 0;
+    for (const QString &n : visibleNotes) {
+        if (n.startsWith(QStringLiteral("方案加载：夹具条目降级"))
+            || n.startsWith(QStringLiteral("方案加载：标定条目未装进表")))
+            ++rawLossNotes;
+    }
+    bool sawSaveConsequence = false;
+    for (const QString &n : visibleNotes) {
+        if (n.contains(QStringLiteral("下一次保存")) && n.contains(QStringLiteral("复制一份备份"))
+            && n.contains(QStringLiteral("共 %1 条").arg(rawLossNotes)))
+            sawSaveConsequence = true;
+    }
+    if (rawLossNotes == 0)
+        problems << QStringLiteral("两类逐条降级留痕一条都没收到，判据④失去对照（先查产线留痕站点）");
+    else if (!sawSaveConsequence)
+        problems << QStringLiteral("可见面没收到保存后果那句（需同时含 下一次保存／复制一份备份／共 %1 条）")
+                        .arg(rawLossNotes);
+
+    // 判据⑤（U-36）：第二次载入不得串上一次的数。走法取操作员那条真路径——先按写侧把当前
+    // 内存态组装一遍、再从同一个加载器实例装回去（等价于"看完提示顺手按保存、再打开那份保存的"）。
+    // 降级过的载荷在第一次就已经被改写成空矩阵／整条不进表，第二次读到的根里已不含坏载荷，
+    // 所以第二次必须一条留痕都不发。applyProjectJson 开头那句复位是唯一撑住这一点的代码：
+    // 撤掉它，计数器带着上一轮的 2 进第二轮，于是白报一句「本次共 2 条载荷未进入内存」——本判据即红。
+    // runtimeLayout 从根里摘掉再应用：那个键会被原子写回全局布局文件，腿不该碰产线目录。
+    const int notesBeforeSecondRound = int(visibleNotes.size());
+    QJsonObject asSaved = pm.buildProjectJson(opened);
+    asSaved.remove(QStringLiteral("runtimeLayout"));
+    QList<FlowScene *> reopened;
+    const bool reloaded = pm.applyProjectJson(asSaved, reopened);
+    const QStringList secondRoundNotes = visibleNotes.mid(notesBeforeSecondRound);
+    qInfo().noquote() << QStringLiteral("[U34-ROUND2] reloaded=%1 secondNotes=%2")
+                             .arg(reloaded ? QStringLiteral("yes") : QStringLiteral("no"))
+                             .arg(int(secondRoundNotes.size()));
+    for (const QString &n : secondRoundNotes)
+        qInfo().noquote() << QStringLiteral("[U34-ROUND2-VISIBLE] %1").arg(n);
+    qDeleteAll(reopened);
+    if (!reloaded)
+        problems << QStringLiteral("前提：把当前内存态按写侧组装再装回去被判失败（判据⑤失去对照）");
+    else if (!secondRoundNotes.isEmpty())
+        problems << QStringLiteral("第二次载入仍发 %1 条留痕（%2）——计数串了上一次，保存后果那句会在每次载入后复读")
+                        .arg(int(secondRoundNotes.size()))
+                        .arg(secondRoundNotes.join(QStringLiteral("｜")));
+
     qDeleteAll(opened);
     CalibrationManager::instance()->fromJson(pay.calibBefore);
     QVERIFY2(problems.isEmpty(),

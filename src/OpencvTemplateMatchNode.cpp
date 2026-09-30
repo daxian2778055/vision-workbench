@@ -72,7 +72,7 @@ void OpencvTemplateMatchNode::init()
         makeFilePathParam(QStringLiteral("templatePath"), QString(),
                           QStringLiteral("模板图像文件 (png/bmp/jpg)")),
         makeBoolParam(QStringLiteral("trainFromImage"), false,
-                      QStringLiteral("从图像 ROI 训练并保存模板")),
+                      QStringLiteral("从图像 ROI 训练并保存模板（训练落盘后自动取消勾选）")),
         makeIntParam(QStringLiteral("method"), 1, 0, 1,
                      QStringLiteral("匹配方法：0=归一化平方差，1=归一化相关系数")),
         makeDoubleParam(QStringLiteral("minScore"), 0.6, 0.0, 1.0,

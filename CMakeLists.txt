@@ -1085,8 +1085,9 @@ if(MSVC)
     # "无 Totals / 有 failed / 0 passed 即判红"三道闸读的是 QtTest 落盘口径，对它不适用。
     # 两把闸各自都能单独变红（实测四态见推进计划 §3.5）：退出码 —— 摘掉下面的正则后
     # exit=1 即 ***Failed；正则 —— 设了它 ctest 就以匹配为准（exit=1 但仍打印 ALL PASSED 会判
-    # Passed），它补的是"exit=0 而汇总行缺失"这条退出码抓不到的静默形态。汇总行与退出码
-    # 同源于 g_fail，两者不会互相矛盾。
+    # Passed），它补的是"exit=0 而汇总行缺失"这条退出码抓不到的静默形态。
+    # 覆盖数下限（§3.40）：exe 里 g_checked==0 时汇总行改印 NO CHECKS RUN 并 return 1 ——
+    # 正因为上一句"以匹配为准"，那一路上面这个正则必须不匹配，否则 0 项检查仍是 Passed。
     add_test(NAME OpencvNodesTest COMMAND opencv_nodes_test)
     set_tests_properties(OpencvNodesTest PROPERTIES
         PASS_REGULAR_EXPRESSION "ALL PASSED")

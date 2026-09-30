@@ -16,10 +16,12 @@
 using namespace HalconCpp;
 
 static int g_fail = 0;
+static int g_checked = 0;   // 真正跑过的检查项数（PASS/FAIL 都算）：0 项不得判绿，见文件末尾的汇总
 static bool g_summary = false;
 static FILE *g_detail = nullptr;
 #define CHECK(cond, name, detail)                                           \
     do {                                                                    \
+        ++g_checked;                                                        \
         if (cond) {                                                         \
             if (g_summary) {                                                \
                 if (g_detail) std::fprintf(g_detail, "PASS: %s (%s)\n", name, detail); \
@@ -528,7 +530,18 @@ int main(int argc, char **argv)
         CHECK(ok, "OpencvPixelStats 灰度统计", buf);
     }
 
-    std::printf("\n==== 汇总: %s ====\n", g_fail == 0 ? "ALL PASSED" : "HAS FAILURES");
+    // 覆盖数下限（复核意见 S-4′）：本套件的判据只有"退出码 + ctest 的 PASS_REGULAR_EXPRESSION"，
+    // 两者都读 g_fail ⇒ 整段检查被 [skip] 掉时会以"0 项检查、ALL PASSED、exit 0"静默判绿，
+    // 而其余 32 个套件有"0 passed 即红"那一腿。0 项这一路不能再打印含 ALL PASSED 的汇总行：
+    // 按 §3.5 的实测，设了正则后 ctest 以匹配为准，那样退出码 1 也救不回来。
+    const bool noChecksRan = (g_checked == 0);
+    std::printf("\n==== 汇总: %s (%d 项检查) ====\n",
+                noChecksRan ? "NO CHECKS RUN" : (g_fail == 0 ? "ALL PASSED" : "HAS FAILURES"),
+                g_checked);
     if (g_detail) std::fclose(g_detail);
+    if (noChecksRan) {
+        std::printf("一项检查都没跑：0 项不得判绿\n");
+        return 1;
+    }
     return g_fail == 0 ? 0 : 1;
 }

@@ -71,4 +71,7 @@ private:
 
     QString m_lastFilePath;
     bool m_loadedReadonly = false;
+    /// U-36：本次载入有多少条「原始载荷没进内存表」——只数标定整条被拒与夹具矩阵／位姿作废这两类，
+    /// 因为只有这两类的载荷会在下一次保存时从方案文件里消失（其余留痕不改写落盘内容）。
+    int m_loadRawLossCount = 0;
 };

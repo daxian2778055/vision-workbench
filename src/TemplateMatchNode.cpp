@@ -38,7 +38,7 @@ void TemplateMatchNode::init()
         makeFilePathParam(QStringLiteral("templatePath"), QString(),
                           QStringLiteral("模板文件(.shm)")),
         makeBoolParam(QStringLiteral("trainFromImage"), false,
-                      QStringLiteral("运行时从图像训练（勾选时忽略已存模板，自动重建并保存）")),
+                      QStringLiteral("运行时从图像训练（勾选时忽略已存模板，自动重建并保存，落盘后自动取消勾选）")),
         makeIntParam(QStringLiteral("pyramidLevel"), 4, 0, 10,
                      QStringLiteral("金字塔层数")),
         makeDoubleParam(QStringLiteral("greediness"), 0.9, 0.0, 1.0,
