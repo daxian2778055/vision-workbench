@@ -8,6 +8,17 @@ assert, the population has to be measured: how many citations exist, where they 
 whether the file is still there, and whether the identifier named in the prose actually
 shows up on the cited line or only a few lines away.
 
+Three citation styles are present and only the first one was in the denominator, which is
+what the fourth-round review (S-1) asked to be listed as a pre-condition of step 2:
+  1) tight   "src/Foo.cpp:495", range "src/Foo.cpp:12-14"  -> CITE, printed as INV total
+  2) spaced  "src/Foo.cpp :495" (a space before the colon)  -> SPACED, printed as INV spaced_*
+  3) bare ":NNN" continuation on a line that already carries a path, e.g.
+     "src/Foo.cpp:297 / :300 / :301" -> ANY_COLON_NUM, printed as INV continuation_like
+Style 3 carries no path of its own, so no path-anchored regex can locate it; it is counted,
+never resolved. Styles 2 and 3 are measured with the SAME window definition as style 1
+(window_hits below is the only place a "window hit" is defined) and printed as their own
+denominators rather than silently merged into INV total - merging is step 2's decision.
+
 This script therefore NEVER goes red. Exit code is 0 for any finding; a non-zero exit
 means the script itself failed (unreadable input, crash). That is deliberate, matching
 how step 1g (tools/dup_cn_literal_gate.py) started life as a measurement before it
@@ -36,13 +47,16 @@ CITE = re.compile(
     r"(?P<path>(?:src|include|tests|tools)/[A-Za-z0-9_.\-/]+\.(?:cpp|cc|h|hpp|py|ps1|cmake|txt|md))"
     r":(?P<start>\d{1,5})(?:\s*[-\u2013]\s*(?P<end>\d{1,5}))?"
 )
-# Blind spot of CITE: the same citation written with a space before the colon
-# ("src/ProjectManager.cpp :336"). Step 2 has to merge these in first, so the count is
-# printed instead of being left to a session-side calculation.
+# Second extraction style, invisible to CITE: the same citation written with a space
+# before the colon ("src/ProjectManager.cpp :336"). Step 2 has to decide how to merge
+# these, so they are extracted and measured as their own denominator here.
 SPACED = re.compile(
-    r"(?:src|include|tests|tools)/[A-Za-z0-9_.\-/]+\.(?:cpp|cc|h|hpp|py|ps1|cmake|txt|md)"
-    r"\s+:\s*\d{1,5}"
+    r"(?P<path>(?:src|include|tests|tools)/[A-Za-z0-9_.\-/]+\.(?:cpp|cc|h|hpp|py|ps1|cmake|txt|md))"
+    r"\s+:\s*(?P<start>\d{1,5})"
 )
+# Third style, unattachable by any path-anchored regex: a bare ":NNN" written after an
+# already-anchored citation on the same line (":297 / :300 / :301"). Only counted, not located.
+ANY_COLON_NUM = re.compile(r"[:\uFF1A]\d{1,5}")
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]{3,}")
 BACKTICK = re.compile(r"`([^`\n]+)`")
 WINDOWS = (0, 1, 3, 5)
@@ -107,6 +121,19 @@ def doc_candidates(doc_line, cite_text):
     return ticked, bare
 
 
+def window_hits(lines, start, hi, cands):
+    """Does an identifier named in the prose appear within +/- w of the cited line?
+
+    Shared by both extraction styles so 'window hit' has exactly one definition here.
+    """
+    return {w: bool(cands & token_set(lines, start - w, hi + w)) for w in WINDOWS}
+
+
+def flag_text(hits, has_cands):
+    return " ".join("win%d=%s" % (w, "hit" if hits[w] else ("miss" if has_cands else "-"))
+                    for w in WINDOWS)
+
+
 def main():
     full = "--full" in sys.argv[1:]
     if not os.path.isdir(DOC_DIR):
@@ -116,25 +143,42 @@ def main():
     doc_names = sorted(n for n in os.listdir(DOC_DIR) if n.endswith(".md"))
     doc_id = {}
     rows = []
+    srows = []
     src_cache = {}
-    spaced = 0
+    continuation = 0
+    noise_colons = 0
+
+    def cache_for(path):
+        if path not in src_cache:
+            abs_path = os.path.join(ROOT, path.replace("/", os.sep))
+            src_cache[path] = split_lines(read_text(abs_path)) if os.path.isfile(abs_path) else None
+        return src_cache[path]
 
     for name in doc_names:
         doc_id[name] = "D%02d" % (len(doc_id) + 1)
         lines = split_lines(read_text(os.path.join(DOC_DIR, name)))
         for no, line in enumerate(lines, start=1):
-            spaced += len(SPACED.findall(line))
-            for m in CITE.finditer(line):
+            tight_hits = list(CITE.finditer(line))
+            spaced_hits = list(SPACED.finditer(line))
+            for m in tight_hits:
                 path = m.group("path")
-                if path not in src_cache:
-                    abs_path = os.path.join(ROOT, path.replace("/", os.sep))
-                    if os.path.isfile(abs_path):
-                        src_cache[path] = split_lines(read_text(abs_path))
-                    else:
-                        src_cache[path] = None
+                cache_for(path)
                 rows.append((doc_id[name], name, no, m.group(0), path,
                              int(m.group("start")),
                              int(m.group("end")) if m.group("end") else 0, line))
+            for m in spaced_hits:
+                path = m.group("path")
+                cache_for(path)
+                srows.append((doc_id[name], name, no, m.group(0), path, int(m.group("start")), line))
+            # bare ":NNN" that no path-anchored regex can attribute to a file
+            if tight_hits or spaced_hits:
+                anchored = [(cm.start("start") - 1) for cm in tight_hits]
+                anchored += [(sm.start("start") - 1) for sm in spaced_hits]
+                for m in ANY_COLON_NUM.finditer(line):
+                    if m.start() not in anchored:
+                        continuation += 1
+            else:
+                noise_colons += len(ANY_COLON_NUM.findall(line))
 
     print("== doc id map ==")
     for name in doc_names:
@@ -164,17 +208,11 @@ def main():
         cands = ticked | bare
         if not cands:
             no_candidate += 1
-        flags = []
-        any_hit = {w: False for w in WINDOWS}
-        for w in WINDOWS:
-            window = token_set(lines, start - w, hi + w)
-            hit = bool(cands & window)
-            any_hit[w] = hit
-            flags.append("win%d=%s" % (w, "hit" if hit else ("-" if not cands else "miss")))
+        hits = window_hits(lines, start, hi, cands)
         if cands:
             checked += 1
             for w in WINDOWS:
-                if any_hit[w]:
+                if hits[w]:
                     stats[w] += 1
         detail = ""
         if full and in_range:
@@ -182,12 +220,46 @@ def main():
         if ticked:
             tick_checked[0] += 1
             for w in WINDOWS:
-                if any_hit[w] and (ticked & token_set(lines, start - w, hi + w)):
+                if hits[w] and (ticked & token_set(lines, start - w, hi + w)):
                     tick_stats[w] += 1
+        # sorted() before the slice: set order of strings is salted per process, so an
+        # unsorted sample would make replayers see different rows on the same bytes.
         print("ROW doc=%s line=%d cite=%s file_lines=%d in_range=%s cands=%d(%s) %s%s"
               % (did, dno, ascii_only(cite_text), len(lines), "yes" if in_range else "NO",
-                 len(cands), ",".join(sorted(list(ticked)[:3])) or "none",
-                 " ".join(flags), detail))
+                 len(cands), ",".join(sorted(ticked)[:3]) or "none",
+                 flag_text(hits, bool(cands)), detail))
+
+    print("== spaced citations (path<space>:NNN - outside the INV total denominator) ==")
+    s_stats = {w: 0 for w in WINDOWS}
+    s_checked = 0
+    s_no_candidate = 0
+    s_missing_file = 0
+    s_out_of_range = 0
+    s_files = set()
+    for did, name, dno, cite_text, path, start, raw_line in srows:
+        s_files.add(path)
+        lines = src_cache[path]
+        if lines is None:
+            s_missing_file += 1
+            print("SPACEDROW doc=%s line=%d cite=%s file=ABSENT" % (did, dno, ascii_only(cite_text)))
+            continue
+        in_range = 1 <= start <= len(lines)
+        if not in_range:
+            s_out_of_range += 1
+        ticked, bare = doc_candidates(raw_line, cite_text)
+        cands = ticked | bare
+        hits = window_hits(lines, start, start, cands)
+        if not cands:
+            s_no_candidate += 1
+        else:
+            s_checked += 1
+            for w in WINDOWS:
+                if hits[w]:
+                    s_stats[w] += 1
+        print("SPACEDROW doc=%s line=%d cite=%s file_lines=%d in_range=%s cands=%d(%s) %s"
+              % (did, dno, ascii_only(cite_text), len(lines), "yes" if in_range else "NO",
+                 len(cands), ",".join(sorted(ticked)[:3]) or "none",
+                 flag_text(hits, bool(cands))))
 
     print("== summary ==")
     print("INV total=%d docs=%d cited_files=%d" % (len(rows), len(doc_names), len(files)))
@@ -203,8 +275,22 @@ def main():
     print("INV win0_miss_first_hit w1=%d w3=%d w5=%d never=%d"
           % (stats[1] - stats[0], stats[3] - stats[1], stats[5] - stats[3], never))
     print("INV win0_miss_hit_by_w5=%d" % (win0_miss - never))
+    spaced = len(srows)
     print("INV spaced_style_not_in_denominator=%d (path<space>:NNN, CITE cannot extract these)"
           % spaced)
+    print("INV spaced_total=%d spaced_files=%d spaced_missing_file=%d spaced_out_of_range=%d"
+          % (spaced, len(s_files), s_missing_file, s_out_of_range))
+    print("INV spaced_with_candidates=%d spaced_no_candidates=%d" % (s_checked, s_no_candidate))
+    for w in WINDOWS:
+        print("INV spaced_window%d_hits=%d/%d" % (w, s_stats[w], s_checked))
+    print("INV spaced_win0_miss=%d" % (s_checked - s_stats[0]))
+    # Style 3: bare ":NNN" on a line that already carries a path - no path-anchored regex
+    # can attribute it to a file, so step 2 must either reject this style or rewrite it.
+    print("INV continuation_like=%d (bare :NNN on an already-cited line, unattachable)"
+          % continuation)
+    print("INV noise_colons=%d (upper bound: :NNN on lines with no path at all)" % noise_colons)
+    print("INV citation_like_total=%d (tight %d + spaced %d + continuation %d)"
+          % (len(rows) + spaced + continuation, len(rows), spaced, continuation))
     print("INV (identifier source = backticked spans only)")
     for w in WINDOWS:
         print("INV tickwindow%d_hits=%d/%d" % (w, tick_stats[w], tick_checked[0]))

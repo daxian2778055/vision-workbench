@@ -4847,10 +4847,10 @@ void IntegrationTest::testUnregisteredOperatorLossIsCountedAsSaveLoss()
         if (!sentence.contains(QStringLiteral("共 %1 项").arg(measured)))
             problems << QStringLiteral("合计句报的数与实测差值不符（实测少 %1 项，句子里没有「共 %1 项」）：%2")
                             .arg(measured).arg(sentence);
-        if ((d.typeIdLost > 0 || d.typeIdChanged > 0) && !sentence.contains(QStringLiteral("类型号")))
+        if ((d.typeIdLost > 0 || d.typeIdChanged > 0) && !sentence.contains(QStringLiteral("类型号")))    // 人工点：新增一类落盘损失时这里的点名词要同步——机器只核合计句的数等于载荷差值，管不到这条点名
             problems << QStringLiteral("类型号被去掉或被换掉（%1+%2 处）却没在合计句里点名：%3")
                             .arg(d.typeIdLost).arg(d.typeIdChanged).arg(sentence);
-        if (d.edgesLost > 0 && !sentence.contains(QStringLiteral("连线")))
+        if (d.edgesLost > 0 && !sentence.contains(QStringLiteral("连线")))    // 人工点：同上，这里是第二处硬编码点名；没被点名的新类别目前只有下面 paramsLost 那条判红会兜住
             problems << QStringLiteral("连线整条消失（%1 条）却没在合计句里点名：%2")
                             .arg(d.edgesLost).arg(sentence);
         if (d.paramsLost > 0)
