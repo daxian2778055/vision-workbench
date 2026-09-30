@@ -94,8 +94,17 @@ void CalibrationManager::fromJson(const QJsonObject &json, QStringList *rejected
                 hom.append(v.toDouble());
             }
         }
-        if (why.isEmpty() && hom.size() < 6)
-            why = QStringLiteral("只有 %1 项（少于 6）").arg(hom.size());
+        if (why.isEmpty()) {
+            if (hom.size() < 6)
+                why = QStringLiteral("只有 %1 项（少于 6）").arg(hom.size());
+            else if (hom.size() != 6 && hom.size() != 9) {
+                // U-40：项数判据收窄成只认 {6,9}。实测这张表的消费端只吃两种形状——6 元仿射两个
+                // （坐标系换算／位置修正，都要恰好 6 项）、9 元内参一个（畸变校正键侧，要恰好 9 项）；
+                // 其它项数进表谁都取不到，还占住那个键让写侧的覆盖冲突闸挡住同名重标定
+                // （推进计划 §3.44 表 1 的改前实测）。收窄只动读侧：写侧在空表上仍不设长度闸。
+                why = QStringLiteral("有 %1 项（既不是 6 元仿射，也不是 9 元内参）").arg(hom.size());
+            }
+        }
         if (!why.isEmpty()) {
             if (rejected)
                 rejected->append(QStringLiteral("%1 :: %2").arg(it.key(), why));
@@ -128,6 +137,7 @@ QString CalibrationManager::affineLookupMissReason(const QString &what, const QS
     else
         // U-27：既不是 6 也不是 9 时不猜它是什么（HALCON 写侧长度本机未证到）。
         // 旧文案一律写"疑似 9 元内参"，7/8/10/20 项也照这句，现场会查错方向。
+        // U-40 后载入侧不再让这种载荷进表 ⇒ 这一支今后只可能来自写侧（HALCON 两个站点直写）。
         sizeWhy = QStringLiteral("有 %1 项（不是 6 元仿射）").arg(homSize);
     QString mgrWhy;
     if (fixtureHasHom)

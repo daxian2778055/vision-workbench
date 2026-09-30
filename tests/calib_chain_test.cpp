@@ -119,12 +119,17 @@ private slots:
     //   后三条是判据闸，在**未改动的产线源**上可编译、可跑红（改前红读数见 §3.32）；
     //   第一条不判产线行为，只钉住修法依赖的 Qt JSON 事实（NaN/Inf 出得去、回不来），改前改后同形。
     void u27NonFiniteEncodingProbe();                 // 读数腿：非有限值在方案文件里的编码形态
-    void u27LoadSideRejectsNonNumericPayload();       // 元素不是数值／不是有限 ⇒ 整条不进表
+    void u27LoadSideRejectsNonNumericPayload();       // 元素不是数值／不是有限 ⇒ 整条不进表（项数口径 U-40 起＝只认 {6,9}）
     void u27SchemeLoadEntryAppliesRejection();        // 同一口径要在真加载入口（applyProjectJson）生效
     void u27SixTupleConsumerReasonNamesActualSize();  // 6 元消费端：原因说清"到底几项"，不把 7 项说成 9 元内参
     // ⚠️ 这条要 `fromJson(json, &rejected)` 的新签名，**改前不编译** ⇒ 它没有"改前红"那一半，
     // 只有 §3.32 的改坏自证臂（撤掉 rejected 填充／合并原因／空键那条绕过写侧口径）覆盖。
     void u27LoadSideRejectListRecordsReason();        // 被拒条目要逐条给出「键 :: 原因」，且四类原因分得开
+
+    // U-40：载入侧的项数判据从"≥6"收窄成只认 {6,9}。依据不是猜长度，是消费面实测：
+    // 6 元仿射有两个读取者（坐标系换算／位置修正，都要恰好 6 项）、9 元内参只有一个（畸变校正键侧），
+    // 其它项数进表就是"谁都取不到、还占住那个键挡住同名重标定"的死长度。
+    void u40DeadLengthEntryDoesNotBlockRecalibration();  // 7 项条目不进表＋同键 6 元写侧照常落表
 
     // U-29：畸变校正**键侧**的 fx/fy 正性（§3.30 表 3 的 S-3：正性只有手填侧有，键侧没有）
     void u29StoredZeroFxJudgeRed();                   // 判红：键侧 fx=fy=0 ⇒ 不得全黑产出配绿灯
@@ -2626,6 +2631,11 @@ void CalibChainTest::handEyeStaleReadoutClearedOnRed()
 //   写侧 `setHomography` 在空表上对 0/3/5/…/20 项**一律返回 true** ⇒ 不存在一道"项数闸"可复刻；
 //   它那道"同键项数不同即拒"是**覆盖冲突闸**，而 fromJson 先 clear 整表 ⇒ 该闸在载入路径上结构性不可能触发。
 // 下面四条腿把上述现状改写成判据：坏载荷不得进表，好载荷（含 7/8/10/20 项）一位都不能丢。
+// ⚠️ U-40 就地更正（上一句原文照抄保留）：末句那半「好载荷（含 7/8/10/20 项）一位都不能丢」本轮作废——
+// 项数口径从"≥6"收窄成只认 {6,9}，7／8／10／20 项归为**死长度**（消费面实测：6 元仿射有两个读取者
+// （坐标系换算／位置修正）、9 元内参只有一个（畸变校正键侧），其余项数谁都取不到，进表只会占住键并挡住同名重标定；
+// 依据与读数见推进计划 §3.44 表 1）。
+// 四条腿里 B／E 两条的项数断言随之翻转，D 腿改成从写侧播种（它测的是消费端文案，判定对象没变）。
 
 /// 读数腿（不判产线行为，改前改后同形）：非有限值在方案文件里到底以什么形态存在。
 /// 钉住三件事实，它们决定 fromJson 那道 isfinite 检查是给谁写的：
@@ -2694,10 +2704,12 @@ void CalibChainTest::u27NonFiniteEncodingProbe()
 }
 
 /// 载入侧元素类型／有限性闸：非数值元素与非有限元素都必须让**整条条目**不进表；
-/// 同时钉住两条不得被顺手加严的口径——项数仍是"≥6"（不猜长度、不设 {6,9} 白名单，见 §3.19 拍定），
-/// 以及合法数值载荷逐位不变。
+/// 同时钉住项数口径＝只认 {6,9}（U-40 收窄；旧口径「≥6、不设 {6,9} 白名单」由 §3.19 拍定，
+/// 被 §3.44 表 1 的消费面实测取代，原文照抄保留在那一节），两个方向都不许再动：
+/// 再窄成"只认 6"会让合法 9 元内参进不了表（① 拦它），放回"≥6"会让死长度进表（② 拦它）。
 /// 改前实测（同形状载荷）：strings9 进表 9 项全 0.00、nullbool9 进表成 [520,0,320,240,…]、
 /// nan6 进表（第 6 项是 NaN）、scalar 与 short5 被丢。⇒ 前三条改前红。
+/// U-40 改前实测（未改动产线源）：② 那格红在 u27b_seven 进表 7 项=[1..7] ; u27b_wide 进表 20 项=[1..20]。
 void CalibChainTest::u27LoadSideRejectsNonNumericPayload()
 {
     CalibrationManager *cm = CalibrationManager::instance();
@@ -2724,8 +2736,8 @@ void CalibChainTest::u27LoadSideRejectsNonNumericPayload()
     QJsonObject o;
     o[QStringLiteral("u27b_ok6")] = numArr(6);
     o[QStringLiteral("u27b_ok9")] = numArr(9);
-    o[QStringLiteral("u27b_seven")] = numArr(7);     // 项数口径保持"≥6"：不是 6/9 也不丢
-    o[QStringLiteral("u27b_wide")] = numArr(20);     // 同上（HALCON 写侧长度未证到，不猜）
+    o[QStringLiteral("u27b_seven")] = numArr(7);     // 死长度（U-40 起不进表）：6/9 之外的项数谁都取不到
+    o[QStringLiteral("u27b_wide")] = numArr(20);     // 同上，另一档死长度（HALCON 写侧长度仍未证到，由 §3.19 那条前提探针继续钉着）
     o[QStringLiteral("u27b_short5")] = numArr(5);    // 下界方向照旧丢（既有口径）
     o[QStringLiteral("u27b_strings9")] = strings9;
     o[QStringLiteral("u27b_nullbool9")] = nullbool9;
@@ -2744,15 +2756,18 @@ void CalibChainTest::u27LoadSideRejectsNonNumericPayload()
     QVERIFY2(vecDeviation(cm->homography(QStringLiteral("u27b_ok9")), want9, 1e-12).isEmpty(),
              qPrintable(QStringLiteral("合法 9 元被改写：")
                         + csvOf(cm->homography(QStringLiteral("u27b_ok9")))));
-    // ② 项数口径＝≥6，不得顺手改成"只认 6/9"
-    QVERIFY2(cm->homography(QStringLiteral("u27b_seven")).size() == 7,
-             qPrintable(QStringLiteral("7 项数值载荷被丢掉或改写（表内=")
-                        + csvOf(cm->homography(QStringLiteral("u27b_seven")))
-                        + QStringLiteral("）——载入侧不猜长度这条口径被动了")));
-    QVERIFY2(cm->homography(QStringLiteral("u27b_wide")).size() == 20,
-             qPrintable(QStringLiteral("20 项数值载荷被丢掉或改写（表内=")
-                        + csvOf(cm->homography(QStringLiteral("u27b_wide")))
-                        + QStringLiteral("）——载入侧不猜长度这条口径被动了")));
+    // ② 项数口径＝只认 {6,9}（U-40 收窄；旧口径"≥6、不得只认 6/9"见 §3.19 与 §3.44 就地更正）
+    QStringList deadInTable;
+    const char *deadKeys[] = {"u27b_seven", "u27b_wide"};
+    for (const char *k : deadKeys) {
+        const QString key = QString::fromLatin1(k);
+        if (cm->hasHomography(key))
+            deadInTable << QStringLiteral("%1 进表 %2 项=[%3]")
+                               .arg(key).arg(cm->homography(key).size()).arg(csvOf(cm->homography(key)));
+    }
+    QVERIFY2(deadInTable.isEmpty(),
+             qPrintable(QStringLiteral("死长度载荷进了表（6/9 之外的项数谁都取不到，还会占住那个键挡住同名重标定）：")
+                        + deadInTable.join(QStringLiteral(" ; "))));
     QVERIFY2(!cm->hasHomography(QStringLiteral("u27b_short5")),
              "5 项短载荷进了表（既有口径是 <6 即丢）");
 
@@ -2836,20 +2851,23 @@ void CalibChainTest::u27SchemeLoadEntryAppliesRejection()
 /// 说成"9 元内参"。改前实测（7 项载荷）：两处原因都写「有 7 项（不是 6 元仿射，疑似另一种载荷：9 元内参）」
 /// ——判红本身是对的，但现场照这句话去查"内参被当仿射用"会查错方向（HALCON 长度未证到的载荷也走这句）。
 /// 9 项那一半仍须点出"9 元内参"，作为改文案的负对照（不是把这句话整条删掉）。
+/// U-40 就地更正（上面那段原文照抄保留）：播种原来走 `fromJson`，本轮读侧收窄成只认 {6,9} 之后 7 项载荷
+/// 到不了那里 ⇒ 改成从**写侧**播种（`setHomography` 在空表上仍不设长度闸，本节横幅那条取证就是这句）。
+/// 判定对象不变：消费端那句原因今后唯一的来路就是写侧那支未知长度载荷（HALCON 的两个站点直写）。
 void CalibChainTest::u27SixTupleConsumerReasonNamesActualSize()
 {
     CalibrationManager *cm = CalibrationManager::instance();
-    auto numArr = [](int n) {
-        QJsonArray a;
+    auto numVec = [](int n) {
+        QVector<double> v;
         for (int i = 0; i < n; ++i)
-            a.append(1.0 + i);
-        return a;
+            v << 1.0 + i;
+        return v;
     };
-    QJsonObject o;
-    o[QStringLiteral("u27d_seven")] = numArr(7);
-    o[QStringLiteral("u27d_nine")] = numArr(9);
     cm->clear();
-    cm->fromJson(o);
+    QVERIFY2(cm->setHomography(QStringLiteral("u27d_seven"), numVec(7)),
+             "前提不成立：写侧 7 项播种失败，本条测的正是消费端对死长度的文案");
+    QVERIFY2(cm->setHomography(QStringLiteral("u27d_nine"), numVec(9)),
+             "前提不成立：写侧 9 项播种失败");
 
     QStringList problems;
     auto judgeSeven = [&](const QString &tag, bool ok, const QString &note) {
@@ -2903,6 +2921,8 @@ void CalibChainTest::u27SixTupleConsumerReasonNamesActualSize()
 
 /// `rejected` 出参的判据：被拒条目逐条给「键 :: 原因」，四类原因分得开（键名为空／值不是数组／
 /// 第 i 项不是数值／第 i 项不是有限值／项数不足），且**只有**被拒的键进列表、进了表的键一个都不进。
+/// U-40 就地更正（上面那句原文照抄保留）：最后那档「项数不足」从一句分成两句——「少于 6」照旧，
+/// 另加 6/9 之外的死长度一句（收窄新增，见 §3.44 表 1）⇒ 本套件断言的原因句合计六句，逐句都得单独认得出。
 /// 空键名那条钉的是"载入侧不得绕过写侧口径"：`setHomography` 对空名直接返回 false，
 /// 旧 fromJson 会把 `"": [6 项]` 装进表——表里多一条谁都叫不出名字的载荷，remove() 也点不到它。
 void CalibChainTest::u27LoadSideRejectListRecordsReason()
@@ -2927,7 +2947,7 @@ void CalibChainTest::u27LoadSideRejectListRecordsReason()
 
     QJsonObject o;
     o[QStringLiteral("u27e_ok6")] = numArr(6);
-    o[QStringLiteral("u27e_seven")] = numArr(7);     // 合法（项数口径＝≥6）
+    o[QStringLiteral("u27e_seven")] = numArr(7);     // 死长度（U-40 起进拒绝列表，不再算合法）
     o[QStringLiteral("u27e_short5")] = numArr(5);
     o[QStringLiteral("u27e_strings9")] = strings9;
     o[QStringLiteral("u27e_nullbool9")] = nullbool9;
@@ -2939,11 +2959,12 @@ void CalibChainTest::u27LoadSideRejectListRecordsReason()
     cm->fromJson(o, &rejected);
 
     QStringList problems;
-    // ① 被拒的六条一个不少、原因分得开
+    // ① 被拒的七条一个不少、原因分得开
     struct Want { QString key; QString needle; };
     const Want wants[] = {{QString(), QStringLiteral("键名为空")},
                           {QStringLiteral("u27e_scalar"), QStringLiteral("值不是数组")},
                           {QStringLiteral("u27e_short5"), QStringLiteral("少于 6")},
+                          {QStringLiteral("u27e_seven"), QStringLiteral("既不是 6")},
                           {QStringLiteral("u27e_strings9"), QStringLiteral("不是数值")},
                           {QStringLiteral("u27e_nullbool9"), QStringLiteral("不是数值")},
                           {QStringLiteral("u27e_nan6"), QStringLiteral("不是有限值")}};
@@ -2960,15 +2981,16 @@ void CalibChainTest::u27LoadSideRejectListRecordsReason()
             problems << QStringLiteral("键 \"%1\" 的原因没点出「%2」，原文=「%3」")
                             .arg(key).arg(w.needle).arg(hits.first());
     }
-    if (rejected.size() != 6)
-        problems << QStringLiteral("rejected 共 %1 条（期望 6 条）：").arg(rejected.size())
+    if (rejected.size() != 7)
+        problems << QStringLiteral("rejected 共 %1 条（期望 7 条）：").arg(rejected.size())
                  + rejected.join(QStringLiteral(" | "));
 
     // ② 表里只留合法条目，且与 rejected 列表互斥
     if (cm->homography(QStringLiteral("u27e_ok6")).size() != 6)
         problems << QStringLiteral("合法 6 元没进表");
-    if (cm->homography(QStringLiteral("u27e_seven")).size() != 7)
-        problems << QStringLiteral("7 项数值载荷没进表（项数口径≥6 被动了）");
+    if (cm->hasHomography(QStringLiteral("u27e_seven")))
+        problems << QStringLiteral("7 项死长度进了表（U-40 收窄后的项数口径被动了，值=%1）")
+                        .arg(csvOf(cm->homography(QStringLiteral("u27e_seven"))));
     for (const QString &name : cm->names()) {
         for (const QString &r : rejected)
             if (r.startsWith(name + QStringLiteral(" :: ")))
@@ -2981,6 +3003,70 @@ void CalibChainTest::u27LoadSideRejectListRecordsReason()
     cm->fromJson(m_managerSnapshot);
     QVERIFY2(problems.isEmpty(),
              qPrintable(QStringLiteral("[U-27 拒绝记录] ") + problems.join(QStringLiteral("；"))));
+}
+
+// ============================ U-40 载入侧：项数判据收窄成 {6,9} ============================
+// 依据不是"猜长度"，是消费面实测：这张表只有两种读取形状——6 元仿射有两个读取者
+// （`CoordinateTransformNode`／`PositionCorrectNode`，都要求恰好 6 项；夹具表是另一张表，它的"恰好 6 项"闸由 §3.35 钉住），
+// 9 元内参只有一个（`OpencvUndistortNode` 键侧要求恰好 9 项），而 `applyHomography` 自己对 !=6 原样透传。
+// ⇒ 表里任何其它项数的条目**谁都取不到**。但"取不到"不等于"没害"：它进表就占住那个键，
+// R-5 那道「同键项数不同即拒」随即挡住同名重标定（`setHomography(6 项)` 返回 false，节点判红
+// 「已有 7 项的另一种载荷」），现场只能手改方案文件才能重新标定。这条腿量的是那三格连起来的面。
+void CalibChainTest::u40DeadLengthEntryDoesNotBlockRecalibration()
+{
+    CalibrationManager *cm = CalibrationManager::instance();
+    auto numVec = [](int n) {
+        QVector<double> v;
+        for (int i = 0; i < n; ++i)
+            v << 1.0 + i;
+        return v;
+    };
+
+    const QString key = QStringLiteral("u40_key");
+    QJsonObject o;
+    QJsonArray seven;
+    for (double d : numVec(7))
+        seven.append(d);
+    o[key] = seven;
+    QStringList rejected;
+    cm->fromJson(o, &rejected);        // fromJson 先 clear 整表 ⇒ 表里"有东西"只可能是这一趟载入给的
+
+    QStringList problems;
+    // ① 死长度条目不进表
+    if (cm->hasHomography(key))
+        problems << QStringLiteral("7 项死长度进了表（项数=%1 值=[%2]）")
+                        .arg(cm->homography(key).size()).arg(csvOf(cm->homography(key)));
+    // ② 进拒绝列表，且原因既点出实际项数、也说清认的是哪两种形状
+    int hits = 0;
+    for (const QString &r : rejected) {
+        if (!r.startsWith(key + QStringLiteral(" :: ")))
+            continue;
+        ++hits;
+        if (!r.contains(QStringLiteral("7 项")))
+            problems << QStringLiteral("拒绝原因没点出实际项数，原文=「%1」").arg(r);
+        if (!r.contains(QStringLiteral("9 元内参")))
+            problems << QStringLiteral("拒绝原因没说清它认的两种形状，原文=「%1」").arg(r);
+    }
+    if (hits != 1)
+        problems << QStringLiteral("该键的拒绝记录数=%1（期望 1 条），列表=%2")
+                        .arg(hits).arg(rejected.join(QStringLiteral(" | ")));
+    // ③ 害处本体：键空出来以后，同名 6 元重标定必须写得进去（改前实测＝返回 false）
+    if (!cm->setHomography(key, numVec(6)))
+        problems << QStringLiteral("同键写 6 元返回 false ⇒ 那条死长度载荷还占着键，重标定要手改方案文件");
+    else {
+        const QString dev = vecDeviation(cm->homography(key), numVec(6), 1e-12);
+        if (!dev.isEmpty())
+            problems << QStringLiteral("同键写回的 6 元逐项不符：%1").arg(dev);
+    }
+    // ④ 负对照：本轮只收窄读侧，R-5 那道覆盖冲突闸不许跟着拆——6 元键仍拒绝被 9 元整条顶掉
+    if (cm->setHomography(key, numVec(9)))
+        problems << QStringLiteral("6 元键被 9 元载荷整条顶掉（写侧 R-5 闸失效，收窄不该动它）");
+
+    cm->remove(key);
+    cm->clear();
+    cm->fromJson(m_managerSnapshot);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[U-40 死长度条目] ") + problems.join(QStringLiteral("；"))));
 }
 
 // ============================ U-29 畸变校正：键侧 fx/fy 正性 ============================
