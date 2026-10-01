@@ -41,6 +41,26 @@ non-zero only if the script itself fails (git unreadable, crash). Turning "the l
 must contain no altered rewrite outside its declared section" into a red gate is a
 separate decision; the numbers printed here are what that decision should be made on.
 
+Sixth-round review S-1 asked that this decision be scoped by file category instead of
+applied to every changed file, because "any altered pair is red" would have gone red on
+its very first run - on two production files whose comments legitimately changed together
+with the behaviour they describe. The script now buckets every changed file
+(ledger / other_doc / test / tool / code / other) and prints the altered_or_replaced pair
+count per bucket plus the would-be verdict of both scopings, so the choice is measured:
+
+  - scoped to all files        -> red this round (code comments),
+  - scoped to every .md file   -> red on the U-40 hand-off: docs/用户操作手册.md line 152
+                                  was rewritten in place (sub=altered, removed=2,
+                                  added=38), and that is the manual being updated to match
+                                  shipped behaviour, not a ledger convention violation,
+  - scoped to the LEDGER only  -> green on both, because "keep the old wording verbatim
+                                  and append the correction" is a ledger convention and
+                                  only the ledger lives under it.
+
+The third scoping is the criterion printed as the would-be verdict. The ledger's own line
+growth is printed next to it together with the recorded split-the-file trigger (more than
++88 lines in one round), so that trigger is computed rather than eyeballed.
+
 Reproduce (two immutable commits - worktree-independent, this is the anchor to cite):
     python tools/inline_rewrite_check.py --base 46b1559 --head ff7b8b0
 Reproduce (base commit vs the bytes about to be delivered - moves with the worktree):
@@ -63,6 +83,28 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Only these suffixes are line-diffed; anything else is reported as skipped-binary-like.
 TEXT_SUFFIX = (".md", ".cpp", ".cc", ".h", ".hpp", ".py", ".ps1", ".txt", ".cmake",
                ".json", ".qml", ".js", ".bat")
+
+# The gap plan is the one file under the ledger convention ("keep the old wording
+# verbatim, append the correction"), so it is the only file a red gate may judge.
+LEDGER_REL = u"docs/\u5bf9\u6807\u5dee\u8ddd\u63a8\u8fdb\u8ba1\u5212.md"
+# Recorded trigger (ledger section 3.42 table row "观察"): a round that adds MORE than
+# this many lines to the ledger must open the split-the-file project first.
+SPLIT_TRIGGER_DELTA = 88
+BUCKETS = ("ledger", "other_doc", "test", "tool", "code", "other")
+
+
+def bucket_of(path):
+    if path == LEDGER_REL:
+        return "ledger"
+    if path.endswith(".md"):
+        return "other_doc"
+    if path.startswith("tests/"):
+        return "test"
+    if path.startswith("tools/"):
+        return "tool"
+    if path.startswith(("src/", "include/")):
+        return "code"
+    return "other"
 
 
 def git(args, stdin_bytes=None):
@@ -200,6 +242,8 @@ def main():
     subs = dict(pure_insert_tail=0, pure_insert_mid=0, altered=0, replaced=0,
                 empty_side=0)
     per_file = {}
+    by_bucket = {b: dict(files=0, rewrite=0, altered_or_replaced=0) for b in BUCKETS}
+    growth = {}
 
     print("== file id map (base=%s head=%s) ==" % (base_sha, head_sha))
     for p in listed:
@@ -264,11 +308,20 @@ def main():
                 print("HUNK file=%s kind=%s base_line=%d cur_line=%d old_lines=%d new_lines=%d"
                       % (fid[p], kind, bi + 1, ci + 1, n_old, n_new))
         per_file[p] = counts
+        b = bucket_of(p)
+        by_bucket[b]["files"] += 1
+        by_bucket[b]["rewrite"] += counts["rewrite_1x1"] + counts["rewrite_nxn"]
+        by_bucket[b]["altered_or_replaced"] += altered_here
+        if p == LEDGER_REL:
+            growth[p] = (base_data.count(b"\n"), cur_data.count(b"\n"))
         print("FILE file=%s path=%s base_lines=%d cur_lines=%d base_cr=%d cur_cr=%d "
               "rewrite=%d altered_or_replaced=%d"
               % (fid[p], esc(p), len(b_lines), len(c_lines),
                  count_eol(base_data, "crlf"), count_eol(cur_data, "crlf"),
                  counts["rewrite_1x1"] + counts["rewrite_nxn"], altered_here))
+        # its own line on purpose: the FILE line's format is quoted verbatim in the ledger,
+        # so extending it here would make those registered readings unreplayable
+        print("BUCKET file=%s bucket=%s" % (fid[p], b))
 
     rewrite_total = totals["rewrite_1x1"] + totals["rewrite_nxn"]
     print("== summary ==")
@@ -283,6 +336,33 @@ def main():
     print("INV kept_verbatim=%d edited_existing_text=%d"
           % (subs["pure_insert_tail"] + subs["pure_insert_mid"],
              subs["altered"] + subs["replaced"]))
+    # Sixth-round review S-1: which population a red gate may judge is a per-category
+    # decision, so print the buckets and the would-be verdict of every candidate scoping.
+    print("== buckets (would-be verdicts; nothing here changes the exit code) ==")
+    for name in BUCKETS:
+        v = by_bucket[name]
+        print("INV bucket=%s files=%d rewrite=%d altered_or_replaced=%d"
+              % (name, v["files"], v["rewrite"], v["altered_or_replaced"]))
+    md_altered = (by_bucket["ledger"]["altered_or_replaced"]
+                  + by_bucket["other_doc"]["altered_or_replaced"])
+    all_altered = sum(by_bucket[n]["altered_or_replaced"] for n in BUCKETS)
+    ledger_altered = by_bucket["ledger"]["altered_or_replaced"]
+    print("INV scoping=all_files altered_or_replaced=%d verdict_if_enabled=%s"
+          % (all_altered, "RED" if all_altered else "GREEN"))
+    print("INV scoping=all_md altered_or_replaced=%d verdict_if_enabled=%s"
+          % (md_altered, "RED" if md_altered else "GREEN"))
+    print("INV scoping=ledger_only altered_or_replaced=%d verdict_if_enabled=%s"
+          % (ledger_altered, "RED" if ledger_altered else "GREEN"))
+    if growth:
+        g_base, g_cur = growth[LEDGER_REL]
+        delta = g_cur - g_base
+        print("INV LEDGER_GROWTH base_nl=%d cur_nl=%d delta=%d trigger_more_than=%d "
+              "split_project_due=%s (nl = newline count of the bytes; the FILE lines above "
+              "print the split count, which is nl + 1)"
+              % (g_base, g_cur, delta, SPLIT_TRIGGER_DELTA,
+                 "YES" if delta > SPLIT_TRIGGER_DELTA else "NO"))
+    else:
+        print("INV LEDGER_GROWTH not_measured (ledger file not in this diff; delta unknown)")
     print("INV note=rewrite_1x1 is what the whole-block prefix gate cannot see; "
           "sizing gate reads (file_lines, not line_numbers) stay unchanged by it")
     print("INV verdict=REPORT_ONLY exit=0 (no assertion made here)")

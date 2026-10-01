@@ -1,4 +1,4 @@
-"""Report-only inventory of the `src/file.cpp:NNN` citations scattered through docs/.
+"""Inventory of the `src/file.cpp:NNN` citations scattered through docs/, with one assertion.
 
 Why this exists (U-38 / third-round review comment S-1 step 1): the gap plan quotes
 production source lines by number. Source lines drift (measured: 3 lines, :566 -> :569),
@@ -26,21 +26,52 @@ weak check (cited number within the cited file's length) plus a printed roster, 
 per row and INV nocand_rows / nocand_out_of_range as the totals. Step 2 inherits that as a
 pre-condition instead of discovering a hole in the denominator after the gate exists.
 
-This script therefore NEVER goes red. Exit code is 0 for any finding; a non-zero exit
-means the script itself failed (unreadable input, crash). That is deliberate, matching
-how step 1g (tools/dup_cn_literal_gate.py) started life as a measurement before it
-became a gate. Step 2 - window size and where the identifier is taken from - is still
-open, and the printed per-window hit rates (win0/win1/win3/win5) are the data that
-decision should be made on. The three win0_miss* lines below them are that decision's
-distribution table (the gap plan's S-1 row cites them by name), so they stay in the output.
+Sixth-round review S-2 asked for that printed roster to be frozen as a baseline, the way
+1g froze its 58 duplicate sentences (set equality), so that a NEW citation whose prose names
+no identifier shows up as ADDED instead of just moving a total. That baseline is
+NOCAND_BASELINE below and the comparison is a multiset equality on the key
+
+    (kind, path, start, hi)          # kind = "tight" | "spaced"
+
+deliberately WITHOUT the doc id and the doc line number: both of those move when unrelated
+text is inserted above (doc ids are assigned by sorted filename, doc lines by insertion), so
+keying on them would report drift as an added row. hi is the end of a cited range, or start
+when the citation names one line. The key is a function of the doc text plus one thing the
+doc cannot control: rows whose cited file is ABSENT never reach the roster (they are counted
+by missing_file and printed as file=ABSENT), so renaming or deleting a cited source file
+shows up here as REMOVED.
+
+Multiset, not set: measured on the current docs, 31 rows share 30 distinct keys, because
+"src/ProjectManager.cpp :336" is cited with no identifier in the prose from two different
+doc lines. A set would let one of those two be deleted unnoticed.
+
+Judgement is asymmetric on purpose, following this round's other review point ("a gate that
+goes red once gets switched off"): only ADDED is red (exit 1). A REMOVED row is printed and
+counted but does not fail the run, because a row can leave the roster by the prose being
+improved - naming the identifier the citation rests on - and punishing that would make the
+gate something people want to disable. Shrinking the baseline stays a visible, named number
+that a round has to account for, it just is not a red condition.
+
+Everything else here is still measurement: no window/denominator assertion is made, step 2
+(window size, and where the identifier is taken from) is still open, and the printed
+per-window hit rates (win0/win1/win3/win5) are the data that decision should be made on. The
+three win0_miss* lines below them are that decision's distribution table (the gap plan's S-1
+row cites them by name), so they stay in the output.
+
+Exit codes: 0 = no ADDED row, 1 = the roster has a row that is not in NOCAND_BASELINE,
+2 = unreadable input (no docs), 3 = the script itself crashed.
 
 Reproduce:
     python tools/src_anchor_inventory.py            # table + summary
     python tools/src_anchor_inventory.py --full     # also print the cited source line
+    python tools/src_anchor_inventory.py --docs-root DIR   # read docs from DIR instead of
+                                             # docs/ - input only, nothing is ever written
+                                             # (used to feed the gate synthetic rosters)
 Output is ASCII-only (the console code page is not guaranteed UTF-8); Chinese doc file
 names are printed as stable D-index ids, which the DOCID lines at the top decode.
 """
 
+import collections
 import io
 import os
 import re
@@ -67,6 +98,51 @@ ANY_COLON_NUM = re.compile(r"[:\uFF1A]\d{1,5}")
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]{3,}")
 BACKTICK = re.compile(r"`([^`\n]+)`")
 WINDOWS = (0, 1, 3, 5)
+
+# Frozen NOCANDROW roster (sixth-round review S-2), recorded with
+#     python tools/src_anchor_inventory.py
+# on the commit this baseline landed on: 31 rows over 30 distinct keys, counts shown for
+# keys a set would have collapsed. Regenerate with --emit-nocand-baseline and review the
+# block before pasting it here; a row may only be added to it together with the prose that
+# named no identifier being fixed or the citation being re-anchored.
+NOCAND_BASELINE = (
+    ("spaced", "include/ProjectManager.h", 74, 74, 1),
+    ("spaced", "include/ProjectManager.h", 77, 77, 1),
+    ("spaced", "src/CalibrationManager.cpp", 97, 97, 1),
+    ("spaced", "src/OpencvFeatureMatchNode.cpp", 86, 86, 1),
+    ("spaced", "src/OpencvTemplateMatchNode.cpp", 75, 75, 1),
+    ("spaced", "src/ProjectManager.cpp", 297, 297, 1),
+    ("spaced", "src/ProjectManager.cpp", 336, 336, 2),
+    ("spaced", "src/ProjectManager.cpp", 361, 361, 1),
+    ("spaced", "src/ProjectManager.cpp", 363, 363, 1),
+    ("spaced", "src/ProjectManager.cpp", 522, 522, 1),
+    ("spaced", "src/ProjectManager.cpp", 566, 566, 1),
+    ("spaced", "src/TemplateMatchNode.cpp", 41, 41, 1),
+    ("spaced", "tests/integration_test.cpp", 4420, 4420, 1),
+    ("spaced", "tests/integration_test.cpp", 4426, 4426, 1),
+    ("spaced", "tests/integration_test.cpp", 4613, 4613, 1),
+    ("tight", "src/HelpViewer.cpp", 139, 139, 1),
+    ("tight", "src/ModuleEditorDialog.cpp", 392, 392, 1),
+    ("tight", "src/OpencvTemplateMatchNode.cpp", 74, 74, 1),
+    ("tight", "src/ProjectManager.cpp", 334, 334, 1),
+    ("tight", "src/ProjectManager.cpp", 480, 480, 1),
+    ("tight", "src/ProjectManager.cpp", 485, 485, 1),
+    ("tight", "src/ProjectManager.cpp", 501, 501, 1),
+    ("tight", "src/ProjectManager.cpp", 510, 510, 1),
+    ("tight", "src/ProjectManager.cpp", 553, 553, 1),
+    ("tight", "src/VariablePanel.cpp", 115, 115, 1),
+    ("tight", "tests/integration_test.cpp", 4344, 4344, 1),
+    ("tight", "tests/param_panel_binding_test.cpp", 205, 205, 1),
+    ("tight", "tests/param_panel_binding_test.cpp", 2117, 2117, 1),
+    ("tight", "tests/param_panel_binding_test.cpp", 2136, 2136, 1),
+    ("tight", "tests/param_panel_binding_test.cpp", 2166, 2166, 1),
+)
+
+
+def nocand_key_counts(nocand):
+    """Multiset of the roster keys, from the (kind, did, line, path, start, hi, ...) rows."""
+    return collections.Counter((row[0], row[3], row[4], row[5]) for row in nocand)
+
 
 # Words that look like identifiers but say nothing about the cited line.
 STOP = {
@@ -142,12 +218,18 @@ def flag_text(hits, has_cands):
 
 
 def main():
-    full = "--full" in sys.argv[1:]
-    if not os.path.isdir(DOC_DIR):
-        print("ERROR docs directory not found:", DOC_DIR)
+    argv = sys.argv[1:]
+    full = "--full" in argv
+    emit_baseline = "--emit-nocand-baseline" in argv
+    docs_dir = DOC_DIR
+    if "--docs-root" in argv:
+        i = argv.index("--docs-root") + 1
+        docs_dir = argv[i] if i < len(argv) else ""
+    if not os.path.isdir(docs_dir):
+        print("ERROR docs directory not found: %s" % ascii_only(docs_dir))
         return 2
 
-    doc_names = sorted(n for n in os.listdir(DOC_DIR) if n.endswith(".md"))
+    doc_names = sorted(n for n in os.listdir(docs_dir) if n.endswith(".md"))
     doc_id = {}
     rows = []
     srows = []
@@ -163,7 +245,7 @@ def main():
 
     for name in doc_names:
         doc_id[name] = "D%02d" % (len(doc_id) + 1)
-        lines = split_lines(read_text(os.path.join(DOC_DIR, name)))
+        lines = split_lines(read_text(os.path.join(docs_dir, name)))
         for no, line in enumerate(lines, start=1):
             tight_hits = list(CITE.finditer(line))
             spaced_hits = list(SPACED.finditer(line))
@@ -287,6 +369,35 @@ def main():
     print("INV nocand_rows=%d (tight %d + spaced %d) nocand_out_of_range=%d"
           % (len(nocand_sorted), no_candidate, s_no_candidate, nocand_out_of_range))
 
+    print("== nocand baseline (set equality; ADDED is the only red condition) ==")
+    # Sixth-round review S-2: the roster above is now frozen as NOCAND_BASELINE, so a new
+    # "cited a source line, prose named no identifier" writing shows up as ADDED instead of
+    # only moving nocand_rows. Comparison is on counts per key, because two doc rows can
+    # share one key (measured: 31 rows / 30 keys).
+    observed = nocand_key_counts(nocand_sorted)
+    expected = collections.Counter()
+    for kind, path, start, hi, n in NOCAND_BASELINE:
+        expected[(kind, path, start, hi)] = n
+    added = sorted((k, observed[k] - expected.get(k, 0)) for k in observed
+                   if observed[k] > expected.get(k, 0))
+    removed = sorted((k, expected[k] - observed.get(k, 0)) for k in expected
+                     if expected[k] > observed.get(k, 0))
+    for (kind, path, start, hi), n in added:
+        print("NOCANDELTA dir=ADDED rows=%d kind=%s cite=%s:%d-%d" % (n, kind, path, start, hi))
+    for (kind, path, start, hi), n in removed:
+        print("NOCANDELTA dir=REMOVED rows=%d kind=%s cite=%s:%d-%d"
+              % (n, kind, path, start, hi))
+    print("INV nocand_baseline_rows=%d keys=%d | observed_rows=%d keys=%d"
+          % (sum(expected.values()), len(expected), sum(observed.values()), len(observed)))
+    print("INV nocand_added=%d nocand_removed=%d (added=%d removed=%d rows)"
+          % (len(added), len(removed),
+             sum(n for _, n in added), sum(n for _, n in removed)))
+    if emit_baseline:
+        print("== fresh NOCAND_BASELINE block (review before pasting) ==")
+        for key in sorted(observed):
+            kind, path, start, hi = key
+            print('    ("%s", "%s", %d, %d, %d),' % (kind, path, start, hi, observed[key]))
+
     print("== summary ==")
     print("INV total=%d docs=%d cited_files=%d" % (len(rows), len(doc_names), len(files)))
     print("INV missing_file=%d out_of_range=%d" % (missing_file, out_of_range))
@@ -320,8 +431,14 @@ def main():
     print("INV (identifier source = backticked spans only)")
     for w in WINDOWS:
         print("INV tickwindow%d_hits=%d/%d" % (w, tick_stats[w], tick_checked[0]))
-    print("INV verdict=REPORT_ONLY exit=0 (no assertion made here; step 2 is the gate)")
-    return 0
+    print("INV docs_root=%s" % ascii_only(os.path.relpath(docs_dir, ROOT).replace(os.sep, "/")))
+    if emit_baseline:
+        print("INV verdict=EMIT exit=0 (fresh block printed above; no judgement made)")
+        return 0
+    print("INV verdict=%s exit=%d (the only assertion is nocand ADDED vs NOCAND_BASELINE; "
+          "window rates and the other denominators stay report-only)"
+          % ("RED" if added else "GREEN", 1 if added else 0))
+    return 1 if added else 0
 
 
 if __name__ == "__main__":
