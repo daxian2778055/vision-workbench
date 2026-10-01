@@ -47,7 +47,15 @@ Arms:
                             exit 12 AND the failure line reads "script exit 2" (the host test is
                             -ne 0, it does not special-case 1). Reverted right after.
   H3  restored              injections removed -> both scripts rc=0 in the copy and their summary
-                            lines byte-identical to G0/L0's
+                            lines byte-identical to CB's readings for THIS copy, not to G0/L0's:
+                            those read the main worktree, whose growth baseline moves every time a
+                            round lands, so a copy-vs-main comparison is a cross-tree check, not a
+                            control. Its reading line counts matched lines over all nine compared
+                            keys (a yes/no derived from one tool only once printed "identical=yes"
+                            on the same line as three red lines from the other tool).
+  CB  copy baseline         (not an arm) the copy's own two tool readings, taken after make_copy's
+                            sync and before the first injection; H3 and the copy's git status both
+                            anchor on it.
   Z0  snapshots             main worktree: md5 + porcelain of the watched files, re-checked last. Copy:
                             its footprint md5s AND its git status must both equal the baselines taken
                             right after the sync, before any injection. Not "git status is clean" -- the
@@ -108,9 +116,14 @@ STEP_1J_HEADING = u'Write-Step "Ledger growth split trigger"'
 STEP_1H_STOP = u"    exit 10\n"
 
 FAILURES = []
-# Filled by the two baseline legs, compared against by H3 after every injection is undone.
+# The main-tree readings, filled by the two baseline legs G0 / L0 (those legs judge the delivered bytes).
 BASELINE_G0 = {}
 BASELINE_L0 = {}
+# The COPY's own readings, taken right after make_copy's sync and before the first injection. H3 is the
+# undo-everything control, so it must compare the copy against the copy: G0/L0 read the main tree, whose
+# ledger growth is measured against a different HEAD as soon as a round lands.
+BASELINE_G0_COPY = {}
+BASELINE_L0_COPY = {}
 # Taken before the first injection; Z0 re-checks them last.
 MAIN_BEFORE = {}
 STATUS_BEFORE = b""
@@ -482,8 +495,35 @@ def make_copy():
         # A copy left behind by a crashed run can still carry an injection. Undo tracked-file edits in
         # this probe-owned tree first, so "the copy's bytes" means HEAD's bytes plus this round's sync.
         sh(["git", "checkout", "--", "."], cwd=WT)
-    for p in (CI_PS1, os.path.join("tools", "ci_exit_code_check.py"),
-              os.path.join("tools", "ledger_size_gate.py"), LEDGER_REL.replace("/", os.sep)):
+    # The copy must sit on the SAME commit the main tree is on. A worktree created in an earlier round
+    # stays detached at that round's HEAD, so its "growth since HEAD" reading silently measures against
+    # an outdated baseline once new rounds land -- and a baseline that moves under the arms is exactly
+    # what this probe keeps failing for elsewhere (see leg_h3's own baseline).
+    head_main = decode(sh(["git", "rev-parse", "HEAD"], cwd=ROOT).stdout).strip()
+    head_copy = decode(sh(["git", "rev-parse", "HEAD"], cwd=WT).stdout).strip()
+    if head_main and head_copy != head_main:
+        # git refuses a checkout that would overwrite an UNTRACKED file with the target commit's
+        # tracked one. A previous round's sync wrote exactly that shape: this round's two new tools did
+        # not exist at the old HEAD, so in the copy they sat untracked while the new HEAD tracks them.
+        # What may be dropped is therefore bounded to this probe's own sync targets that the copy does
+        # not track -- every one of them is rewritten from the main tree a few lines below, so the
+        # removal loses no state and no file the copy itself ever owned.
+        untracked = set(decode(sh(["git", "-c", "core.quotePath=false", "ls-files", "--others",
+                                   "--exclude-standard"], cwd=WT).stdout).split("\n"))
+        dropped = []
+        for p in watched_copy_files():
+            if p.replace(os.sep, "/") in untracked and os.path.isfile(rel(p)):
+                os.remove(rel(p))
+                dropped.append(p.replace(os.sep, "/"))
+        if dropped:
+            print("[U44-INFO] dropped untracked sync targets from the copy: %s" % ", ".join(dropped))
+        proc = sh(["git", "checkout", "--quiet", "--detach", head_main], cwd=WT)
+        if proc.returncode != 0:
+            raise SystemExit("copy cannot follow main HEAD %s (copy at %s): %s"
+                             % (head_main[:9], head_copy[:9],
+                                decode(proc.stdout + proc.stderr)[:200]))
+        print("[U44-INFO] copy advanced %s -> %s (main HEAD)" % (head_copy[:9], head_main[:9]))
+    for p in watched_copy_files():
         main_bytes = read_bytes(os.path.join(ROOT, p))
         checked_out = read_bytes_or_none(rel(p))
         if checked_out is None or md5(checked_out) != md5(main_bytes):
@@ -498,6 +538,35 @@ def make_copy():
 def watched_copy_files():
     return [CI_PS1, os.path.join("tools", "ci_exit_code_check.py"),
             os.path.join("tools", "ledger_size_gate.py"), LEDGER_REL.replace("/", os.sep)]
+
+
+def copy_baseline():
+    """Take the COPY's own pre-injection readings, once, right after make_copy's sync.
+
+    H3 is the undo-everything control, so its baseline must be the state the arms started from in THIS
+    tree. G0/L0 read the main worktree: as soon as a round lands, that tree's growth is measured
+    against the new HEAD while a copy created an earlier round was still on the old one -- so
+    "restored == G0/L0" was a cross-tree comparison, not a control (and it went red on the first
+    replay after the round landed). Not an arm: nothing about the delivered files is judged here, only
+    the nothing-left-behind baseline is captured. A copy that is not green before the first injection
+    is still reported, because every H3 comparison after it would then be meaningless.
+    """
+    rc_g, out_g = run_geom(rel(CI_PS1))
+    rc_s, out_s = run_gate(cwd=WT)
+    check(rc_g == 0, "CB: geometry tool not green in the copy before injection, rc=%s" % rc_g)
+    check(rc_s == 0, "CB: split gate not green in the copy before injection, rc=%s" % rc_s)
+    geom = inv_lines(out_g)
+    split = inv_lines(out_s)
+    BASELINE_G0_COPY.clear()
+    BASELINE_G0_COPY.update(dict((k, geom.get(k)) for k in
+                                 ("header_codes", "executable_stops", "findings", "step_count")))
+    BASELINE_L0_COPY.clear()
+    BASELINE_L0_COPY.update(dict((k, split.get(k)) for k in
+                                 ("head", "rounds_counted", "history_only_last3", "ceiling",
+                                  "verdict")))
+    print("[U44-INFO] copy baseline: geom=%s split=%s | %s | %s"
+          % (geom.get("verdict"), split.get("verdict"), split.get("head"),
+             split.get("history_only_last3")))
 
 
 def host_marker_present(text, marker):
@@ -605,7 +674,7 @@ def leg_m2():
 
 def leg_h3(copy_before):
     """Undo-everything control: with the injections gone, both tools are green in the copy and their
-    summary lines are byte-identical to the delivered-byte readings taken before any injection."""
+    summary lines are byte-identical to the readings THIS copy printed before the first injection."""
     since = arm_open()
     for p, digest in copy_before.items():
         now = md5(read_bytes(rel(p)))
@@ -617,17 +686,22 @@ def leg_h3(copy_before):
     check(rc_s == 0, "H3: split gate in the copy rc=%s" % rc_s)
     geom_inv = inv_lines(out_g)
     split_inv = inv_lines(out_s)
-    for key in ("header_codes", "executable_stops", "findings", "step_count"):
-        check(geom_inv.get(key) == BASELINE_G0.get(key),
-              "H3: geometry %s differs from the pre-injection reading: %r vs %r"
-              % (key, geom_inv.get(key), BASELINE_G0.get(key)))
-    for key in ("head", "rounds_counted", "history_only_last3", "ceiling", "verdict"):
-        check(split_inv.get(key) == BASELINE_L0.get(key),
-              "H3: split gate %s differs from the pre-injection reading: %r vs %r"
-              % (key, split_inv.get(key), BASELINE_L0.get(key)))
-    reading(since, "H3 geom_rc=%d split_rc=%d echo identical to baseline=%s"
-            % (rc_g, rc_s, yn(all(geom_inv.get(k) == BASELINE_G0.get(k) for k in
-                                  ("header_codes", "executable_stops", "findings")))))
+    pairs = (("geometry", geom_inv, BASELINE_G0_COPY,
+              ("header_codes", "executable_stops", "findings", "step_count")),
+             ("split gate", split_inv, BASELINE_L0_COPY,
+              ("head", "rounds_counted", "history_only_last3", "ceiling", "verdict")))
+    total = sum(len(keys) for _l, _i, _b, keys in pairs)
+    diffs = []
+    for label, inv, base, keys in pairs:
+        for key in keys:
+            if inv.get(key) != base.get(key):
+                diffs.append("%s %s: %r vs %r" % (label, key, inv.get(key), base.get(key)))
+    for d in diffs:
+        check(False, "H3: restored reading differs from this copy's pre-injection reading -- " + d)
+    # The reading line counts BOTH tools: run8's version derived its yes/no from the geometry keys
+    # only, so it printed "identical=yes" on the same line the three red split-gate keys were named.
+    reading(since, "H3 geom_rc=%s split_rc=%s restored lines=%d/%d identical to the copy baseline"
+            % (rc_g, rc_s, total - len(diffs), total))
 
 
 def leg_z0(copy_before):
@@ -682,6 +756,7 @@ def main():
     print("[U44-INFO] copy footprint: " + " ".join(
         "%s=%s" % (os.path.basename(p), md5(read_bytes(rel(p)))[:8]) for p in watched_copy_files()))
     COPY_STATUS_BEFORE = sh(["git", "status", "--porcelain"], cwd=WT).stdout
+    copy_baseline()
 
     legs_g()
     leg_l0()
