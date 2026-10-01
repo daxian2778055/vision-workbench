@@ -107,9 +107,9 @@ SPLIT_OK = "ledger split trigger not due"
 CONFIGURE_MARKER = "=== Configure"
 
 # Pinned from the delivered bytes (G0 asserts them, so a drift in the file cannot pass here).
-EXPECTED_COUNTS = "0:2 1:6 2:1 3:2 4:1 5:1 6:1 7:1 8:1 9:1 10:1 11:1 12:1"
-EXPECTED_HEADER = "0 1 2 3 4 5 6 7 8 9 10 11 12"
-EXPECTED_STEPS = "13"
+EXPECTED_COUNTS = "0:2 1:6 2:1 3:2 4:1 5:1 6:1 7:1 8:1 9:1 10:1 11:1 12:1 13:1"
+EXPECTED_HEADER = "0 1 2 3 4 5 6 7 8 9 10 11 12 13"
+EXPECTED_STEPS = "14"
 # NOT pinned as an absolute value: the gate's history_only_last3 takes the last three commits that
 # touched the ledger, so the window moves one commit forward with every commit that lands -- an
 # absolute pin here would go red for a reviewer replaying this probe at the delivered commit for a
@@ -307,8 +307,8 @@ def leg_g(leg, old, new, expect_letters, expect_substrings):
 def legs_g():
     leg_g0()
     leg_g("GA", HEADER_ROW_11, u"", ("A",), ("A stop code 11 fires 1 time(s) but has no header row",))
-    leg_g("GB", HEADER_ROW_11, HEADER_ROW_11 + u"      13 = reserved for a gate that is not wired\n",
-          ("B",), ("B header row 13 has no executable stop",))
+    leg_g("GB", HEADER_ROW_11, HEADER_ROW_11 + u"      14 = reserved for a gate that is not wired\n",
+          ("B",), ("B header row 14 has no executable stop",))
     leg_g("GC", STEP_1J_HEADING, STEP_1J_HEADING + u"\n    exit 11",
           ("C", "E"), ("C gate code 11 fires 2 time(s), frozen 1", "also fires inside"))
     leg_g("GD", STEP_1I_HEADING, u'Write-Step "Host exit-code geometry self-check RENAMED"',

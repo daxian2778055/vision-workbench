@@ -26,6 +26,9 @@
       12 = ledger growth makes the split-the-file project due
            (tools/ledger_size_gate.py -- the script's own code is echoed: due 1,
            unreadable 2, crash 3)
+      13 = a log the gap plan cites cannot be opened on this machine and is not in the frozen
+           baseline (tools/log_citation_gate.py -- the script's own code is echoed: ADDED 1,
+           unreadable 2, crash 3)
 
     Note: this script is intentionally ASCII-only, and therefore carries no UTF-8 BOM
     (PowerShell 5.1 only needs a BOM when a .ps1 contains non-ASCII text). The two-sided
@@ -339,6 +342,38 @@ if ($splitCode -ne 0) {
     exit 12
 }
 Write-Ok "ledger split trigger not due ($hygieneExe)"
+
+# ------------------------------------------ 1k. cited-log presence check
+# Why it runs here: every row of the gap plan that says "(log X.txt)" promises the reviewer a file
+# they can open. Two such promises were broken by this project's own hand in the ninth round, when
+# U44_probe_run2.txt and U44_probe_run3.txt were renamed mid-round, and the only thing keeping the
+# citations honest was somebody remembering. Tenth-round review item 3 asked for a machine gate for
+# that convention; tools/log_citation_gate.py is it: it reads every citation out of the ledger,
+# resolves each one on this machine, and compares the unresolved set against its frozen baseline
+# (only the ADDED direction is red; REMOVED is report-only, so fixing an old citation can never be
+# blocked by the gate that measures it). Its declared skip for a clone without the git-ignored
+# scratch trees prints a CITE-SKIP line that this step echoes, so a skip is visible, never silent.
+# Must never be a silent skip: any non-zero from the script = exit 13 (its own code is echoed).
+Write-Step "Cited-log presence check"
+$citeLog = Join-Path $RepoRoot 'ci-citation-gate.log'
+$citeArgs = $hygienePre + @('tools/log_citation_gate.py')
+& $hygieneExe @citeArgs 2>&1 | Tee-Object -FilePath $citeLog | Out-Null
+$citeCode = $LASTEXITCODE
+
+$citeAll = @(Get-Content $citeLog -ErrorAction SilentlyContinue)
+if ($citeAll.Count -eq 0) { Write-Host '  (log_citation_gate.py produced no output)' }
+$citeShown = @($citeAll | Where-Object { $_ -match '^(CITE|ERROR|INV citation_baseline|INV verdict)' })
+foreach ($line in $citeShown) { Write-Host "  $line" }
+if ($citeShown.Count -eq 0 -and $citeAll.Count -gt 0) {
+    Write-Host "  (no CITE/INV verdict line in $($citeAll.Count) log line(s) - the script did not reach its summary)"
+}
+Write-Host "  full citation reading: $citeLog ($($citeAll.Count) line(s))"
+if ($citeCode -ne 0) {
+    Write-Err "cited-log presence check failed (script exit $citeCode) via '$hygieneExe'; see $citeLog"
+    Pop-Location
+    exit 13
+}
+Write-Ok "cited logs all present or in the frozen baseline ($hygieneExe)"
 
 # ------------------------------------------------------------------ 2. clean
 if ($Clean -and (Test-Path $BuildDir)) {
