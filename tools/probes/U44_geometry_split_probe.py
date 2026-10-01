@@ -55,7 +55,9 @@ Arms:
                             on the same line as three red lines from the other tool).
   CB  copy baseline         (not an arm) the copy's own two tool readings, taken after make_copy's
                             sync and before the first injection; H3 and the copy's git status both
-                            anchor on it.
+                            anchor on it. A copy that is not green at that point raises SystemExit
+                            instead of recording a failure -- with no baseline to restore to, every
+                            arm below would measure against readings that were never taken.
   Z0  snapshots             main worktree: md5 + porcelain of the watched files, re-checked last. Copy:
                             its footprint md5s AND its git status must both equal the baselines taken
                             right after the sync, before any injection. Not "git status is clean" -- the
@@ -116,8 +118,10 @@ STEP_1J_HEADING = u'Write-Step "Ledger growth split trigger"'
 STEP_1H_STOP = u"    exit 10\n"
 
 FAILURES = []
-# The main-tree readings, filled by the two baseline legs G0 / L0 (those legs judge the delivered bytes).
-BASELINE_G0 = {}
+# L0's reading of the MAIN tree, consumed by leg_l1's cross-check (both judge the delivered bytes).
+# There used to be a BASELINE_G0 next to it: the only reader was H3, and H3 now compares against the
+# copy's own pre-injection readings below, so a write-only baseline global is one reader short of the
+# cross-tree comparison this probe keeps failing for elsewhere.
 BASELINE_L0 = {}
 # The COPY's own readings, taken right after make_copy's sync and before the first injection. H3 is the
 # undo-everything control, so it must compare the copy against the copy: G0/L0 read the main tree, whose
@@ -234,9 +238,6 @@ def leg_g0():
     since = arm_open()
     rc, text = run_geom(os.path.join(ROOT, CI_PS1))
     inv = inv_lines(text)
-    BASELINE_G0.clear()
-    BASELINE_G0.update(dict((k, inv.get(k)) for k in
-                            ("header_codes", "executable_stops", "findings", "step_count")))
     check(rc == 0, "G0: delivered ci.ps1 not green, rc=%s" % rc)
     check(inv.get("findings", "").endswith("0"), "G0: findings line: %r" % inv.get("findings"))
     check(inv.get("header_codes", "") == "INV header_codes=" + EXPECTED_HEADER,
@@ -490,11 +491,29 @@ def make_copy():
         print("[U44-INFO] copy at %s (detached %s)"
               % (WT, decode(sh(["git", "rev-parse", "HEAD"], cwd=WT).stdout).strip()))
     else:
-        print("[U44-INFO] reusing existing copy at %s (detached %s)"
-              % (WT, decode(sh(["git", "rev-parse", "HEAD"], cwd=WT).stdout).strip()))
+        head_proc = sh(["git", "rev-parse", "HEAD"], cwd=WT)
+        if head_proc.returncode != 0:
+            raise SystemExit("copy at %s has no HEAD, so it is not a git worktree any more: %s"
+                             % (WT, decode(head_proc.stdout + head_proc.stderr)[:200]))
+        head_at_entry = decode(head_proc.stdout).strip()
+        print("[U44-INFO] reusing existing copy at %s (detached %s)" % (WT, head_at_entry))
         # A copy left behind by a crashed run can still carry an injection. Undo tracked-file edits in
         # this probe-owned tree first, so "the copy's bytes" means HEAD's bytes plus this round's sync.
-        sh(["git", "checkout", "--", "."], cwd=WT)
+        proc = sh(["git", "checkout", "--", "."], cwd=WT)
+        if proc.returncode != 0:
+            raise SystemExit("copy cannot be reset to its own HEAD %s, so every arm below would measure "
+                             "polluted bytes: %s" % (head_at_entry[:9],
+                                                     decode(proc.stdout + proc.stderr)[:200]))
+        # Both copy baselines (H3's footprint md5s and Z0's status snapshot) are taken AFTER the sync
+        # below, which means anything already sitting in this tree when the run starts is absorbed into
+        # the baseline and can never show up later as a leftover. Name it instead of hiding it: after a
+        # successful reset the tracked side should be empty, so what this line lists is untracked --
+        # either one of this probe's own sync targets or something this probe did not write.
+        left = decode(sh(["git", "-c", "core.quotePath=false", "status", "--porcelain",
+                          "--untracked-files=all"], cwd=WT).stdout).splitlines()
+        print("[U44-INFO] copy after reset: %d status line(s)%s"
+              % (len(left), "" if not left else
+                 " absorbed into this run's baseline: " + " | ".join(left[:6])))
     # The copy must sit on the SAME commit the main tree is on. A worktree created in an earlier round
     # stays detached at that round's HEAD, so its "growth since HEAD" reading silently measures against
     # an outdated baseline once new rounds land -- and a baseline that moves under the arms is exactly
@@ -509,7 +528,7 @@ def make_copy():
         # not track -- every one of them is rewritten from the main tree a few lines below, so the
         # removal loses no state and no file the copy itself ever owned.
         untracked = set(decode(sh(["git", "-c", "core.quotePath=false", "ls-files", "--others",
-                                   "--exclude-standard"], cwd=WT).stdout).split("\n"))
+                                   "--exclude-standard"], cwd=WT).stdout).splitlines())
         dropped = []
         for p in watched_copy_files():
             if p.replace(os.sep, "/") in untracked and os.path.isfile(rel(p)):
@@ -549,12 +568,15 @@ def copy_baseline():
     "restored == G0/L0" was a cross-tree comparison, not a control (and it went red on the first
     replay after the round landed). Not an arm: nothing about the delivered files is judged here, only
     the nothing-left-behind baseline is captured. A copy that is not green before the first injection
-    is still reported, because every H3 comparison after it would then be meaningless.
+    aborts the run instead: there is then no baseline to restore to, and every H3 comparison after it
+    would be measuring against None while its reading line kept printing a match count.
     """
     rc_g, out_g = run_geom(rel(CI_PS1))
     rc_s, out_s = run_gate(cwd=WT)
-    check(rc_g == 0, "CB: geometry tool not green in the copy before injection, rc=%s" % rc_g)
-    check(rc_s == 0, "CB: split gate not green in the copy before injection, rc=%s" % rc_s)
+    if rc_g != 0:
+        raise SystemExit("CB: geometry tool not green in the copy before injection, rc=%s" % rc_g)
+    if rc_s != 0:
+        raise SystemExit("CB: split gate not green in the copy before injection, rc=%s" % rc_s)
     geom = inv_lines(out_g)
     split = inv_lines(out_s)
     BASELINE_G0_COPY.clear()
@@ -691,6 +713,11 @@ def leg_h3(copy_before):
              ("split gate", split_inv, BASELINE_L0_COPY,
               ("head", "rounds_counted", "history_only_last3", "ceiling", "verdict")))
     total = sum(len(keys) for _l, _i, _b, keys in pairs)
+    # The denominator of the reading line is itself part of what this arm judges: without this check a
+    # key added to or dropped from the two tuples above would quietly move "restored lines=N/M" instead
+    # of reddening the arm.
+    check(total == 9, "H3: comparison surface drifted, expected 9 keys (4 geometry + 5 split), got %d"
+          % total)
     diffs = []
     for label, inv, base, keys in pairs:
         for key in keys:
