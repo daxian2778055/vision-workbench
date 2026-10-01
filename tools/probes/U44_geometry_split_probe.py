@@ -90,6 +90,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 LOGDIR = os.path.join(ROOT, "build", "u44_probe")
 WT = os.path.join(LOGDIR, "wt")
 LEGS = os.path.join(LOGDIR, "legs")
+# --keep is read once, at module scope, because both exits need it: the normal tail and abort().
+KEEP = "--keep" in sys.argv[1:]
 POWERSHELL = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
 
 CI_PS1 = os.path.join("tools", "ci.ps1")
@@ -162,6 +164,33 @@ def reading(since, text):
     """The reading line tells on itself: an arm that already appended a failure must not print OK."""
     ARMS.append(text.split(" ")[0])
     print("[%s] %s" % ("U44-OK" if len(FAILURES) == since else "U44-FAIL", text))
+
+
+def sweep_legs():
+    """Drop the injected leg scripts. The tail has always done this unless --keep; the fast-abort
+    paths used to skip it, which left the previous run's injections sitting next to the copy."""
+    if KEEP or not os.path.isdir(LEGS):
+        return
+    shutil.rmtree(LEGS, ignore_errors=True)
+    if os.path.isdir(LEGS):
+        print("[U44-LEGS] left in place, rmtree did not remove %s" % LEGS)
+
+
+def abort(reason):
+    """Leave the run because a precondition broke and every arm below would measure wrong bytes.
+
+    A bare `raise SystemExit` jumps past main()'s tail, where the LEGS cleanup and the [U44-SUMMARY]
+    block live -- so a failure already collected by an EARLIER arm went unreported (ninth-round
+    review W-4). The abort stays fast and keeps exit code 1, but it says who is leaving, why, and
+    what was already red before it leaves.
+    """
+    print("[U44-ABORT] %s" % reason)
+    print("[U44-ABORT] arms opened so far=%d, failures left unsummarised=%d"
+          % (len(ARMS), len(FAILURES)))
+    for f in FAILURES:
+        print("[U44-ABORT]   pending failure: " + f)
+    sweep_legs()
+    raise SystemExit(reason)
 
 
 def md5(data):
@@ -487,23 +516,23 @@ def make_copy():
         os.makedirs(os.path.dirname(WT), exist_ok=True)
         proc = sh(["git", "worktree", "add", "--detach", WT, "HEAD"], cwd=ROOT)
         if proc.returncode != 0:
-            raise SystemExit("cannot create worktree copy: " + decode(proc.stdout + proc.stderr))
+            abort("cannot create worktree copy: " + decode(proc.stdout + proc.stderr))
         print("[U44-INFO] copy at %s (detached %s)"
               % (WT, decode(sh(["git", "rev-parse", "HEAD"], cwd=WT).stdout).strip()))
     else:
         head_proc = sh(["git", "rev-parse", "HEAD"], cwd=WT)
         if head_proc.returncode != 0:
-            raise SystemExit("copy at %s has no HEAD, so it is not a git worktree any more: %s"
-                             % (WT, decode(head_proc.stdout + head_proc.stderr)[:200]))
+            abort("copy at %s has no HEAD, so it is not a git worktree any more: %s"
+                  % (WT, decode(head_proc.stdout + head_proc.stderr)[:200]))
         head_at_entry = decode(head_proc.stdout).strip()
         print("[U44-INFO] reusing existing copy at %s (detached %s)" % (WT, head_at_entry))
         # A copy left behind by a crashed run can still carry an injection. Undo tracked-file edits in
         # this probe-owned tree first, so "the copy's bytes" means HEAD's bytes plus this round's sync.
         proc = sh(["git", "checkout", "--", "."], cwd=WT)
         if proc.returncode != 0:
-            raise SystemExit("copy cannot be reset to its own HEAD %s, so every arm below would measure "
-                             "polluted bytes: %s" % (head_at_entry[:9],
-                                                     decode(proc.stdout + proc.stderr)[:200]))
+            abort("copy cannot be reset to its own HEAD %s, so every arm below would measure "
+                  "polluted bytes: %s" % (head_at_entry[:9],
+                                          decode(proc.stdout + proc.stderr)[:200]))
         # Both copy baselines (H3's footprint md5s and Z0's status snapshot) are taken AFTER the sync
         # below, which means anything already sitting in this tree when the run starts is absorbed into
         # the baseline and can never show up later as a leftover. Name it instead of hiding it: after a
@@ -538,9 +567,9 @@ def make_copy():
             print("[U44-INFO] dropped untracked sync targets from the copy: %s" % ", ".join(dropped))
         proc = sh(["git", "checkout", "--quiet", "--detach", head_main], cwd=WT)
         if proc.returncode != 0:
-            raise SystemExit("copy cannot follow main HEAD %s (copy at %s): %s"
-                             % (head_main[:9], head_copy[:9],
-                                decode(proc.stdout + proc.stderr)[:200]))
+            abort("copy cannot follow main HEAD %s (copy at %s): %s"
+                  % (head_main[:9], head_copy[:9],
+                     decode(proc.stdout + proc.stderr)[:200]))
         print("[U44-INFO] copy advanced %s -> %s (main HEAD)" % (head_copy[:9], head_main[:9]))
     for p in watched_copy_files():
         main_bytes = read_bytes(os.path.join(ROOT, p))
@@ -574,9 +603,9 @@ def copy_baseline():
     rc_g, out_g = run_geom(rel(CI_PS1))
     rc_s, out_s = run_gate(cwd=WT)
     if rc_g != 0:
-        raise SystemExit("CB: geometry tool not green in the copy before injection, rc=%s" % rc_g)
+        abort("CB: geometry tool not green in the copy before injection, rc=%s" % rc_g)
     if rc_s != 0:
-        raise SystemExit("CB: split gate not green in the copy before injection, rc=%s" % rc_s)
+        abort("CB: split gate not green in the copy before injection, rc=%s" % rc_s)
     geom = inv_lines(out_g)
     split = inv_lines(out_s)
     BASELINE_G0_COPY.clear()
@@ -771,7 +800,6 @@ def main():
         pass
     if not os.path.isdir(LOGDIR):
         os.makedirs(LOGDIR)
-    keep = "--keep" in sys.argv[1:]
 
     MAIN_BEFORE.update(dict((p, md5(read_bytes(os.path.join(ROOT, p))))
                             for p in watched_copy_files()))
@@ -797,10 +825,7 @@ def main():
     leg_h3(copy_before)
     leg_z0(copy_before)
 
-    if not keep:
-        for path in (LEGS,):
-            if os.path.isdir(path):
-                shutil.rmtree(path, ignore_errors=True)
+    sweep_legs()
     print("\n[U44-SUMMARY] arms=%d (%s) failures=%d"
           % (len(ARMS), ",".join(ARMS), len(FAILURES)))
     for f in FAILURES:
