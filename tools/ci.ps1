@@ -20,6 +20,12 @@
       10 = source-line citation roster gained a row outside its frozen baseline
            (tools/src_anchor_inventory.py -- that script's own 1 = ADDED, 2 = unreadable docs,
            3 = script crash; the code it returned is echoed in the failure line)
+      11 = host exit-code geometry drifted against its frozen registration
+           (tools/ci_exit_code_check.py -- the script's own code is echoed: drifted 1,
+           unreadable 2, crash 3)
+      12 = ledger growth makes the split-the-file project due
+           (tools/ledger_size_gate.py -- the script's own code is echoed: due 1,
+           unreadable 2, crash 3)
 
     Note: this script is intentionally ASCII-only, and therefore carries no UTF-8 BOM
     (PowerShell 5.1 only needs a BOM when a .ps1 contains non-ASCII text). The two-sided
@@ -271,6 +277,68 @@ if ($nocandCode -ne 0) {
     exit 10
 }
 Write-Ok "source-line citation roster baseline OK ($hygieneExe)"
+
+# ------------------------------------ 1i. host exit-code geometry self-check
+# Why it runs here: every step above turns one script's red into one host code, and step 1h's mapping
+# was proved only by a hand-run probe (tools/probes/U43_nocand_host_exit_probe.py) that CI never
+# calls. Seventh-round review S-1 named the hole: nothing checks the wiring itself, so a later edit
+# could turn "exit 10" into a printed warning that keeps walking and no gate would say so. The static
+# half of that arm is now this second-level script, pinned to the bytes of this file: header rows and
+# executable stops must agree, each gate step must own its own code, and the gate-code counts are
+# frozen so no step can quietly take over another step's number.
+# The injected half (a red script really producing that code, end to end) stays a hand-run leg at
+# close-out, which is what the probe's heavier arms are for.
+# Must never be a silent skip: any non-zero from the script = exit 11 (its own code is echoed, so a
+# broken input is never read as a geometry finding and neither is read as clean).
+Write-Step "Host exit-code geometry self-check"
+$geomLog = Join-Path $RepoRoot 'ci-exit-code-geometry.log'
+$geomArgs = $hygienePre + @('tools/ci_exit_code_check.py')
+& $hygieneExe @geomArgs 2>&1 | Tee-Object -FilePath $geomLog | Out-Null
+$geomCode = $LASTEXITCODE
+
+$geomAll = @(Get-Content $geomLog -ErrorAction SilentlyContinue)
+if ($geomAll.Count -eq 0) { Write-Host '  (ci_exit_code_check.py produced no output)' }
+$geomShown = @($geomAll | Where-Object { $_ -match '^(GEOMETRY|ERROR|INV findings|INV verdict)' })
+foreach ($line in $geomShown) { Write-Host "  $line" }
+if ($geomShown.Count -eq 0 -and $geomAll.Count -gt 0) {
+    Write-Host "  (no GEOMETRY/INV verdict line in $($geomAll.Count) log line(s) - the script did not reach its summary)"
+}
+Write-Host "  full geometry reading: $geomLog ($($geomAll.Count) line(s))"
+if ($geomCode -ne 0) {
+    Write-Err "host exit-code geometry check failed (script exit $geomCode) via '$hygieneExe'; see $geomLog"
+    Pop-Location
+    exit 11
+}
+Write-Ok "host exit-code geometry OK ($hygieneExe)"
+
+# ----------------------------------------- 1j. ledger growth split trigger
+# Why it runs here: the gap plan has carried the trigger "a round that grows this file by more than
+# 88 lines opens the split-the-file project first" since U-42, where it was only a printed reading
+# inside tools/inline_rewrite_check.py, whose published contract is REPORT_ONLY exit=0. Seventh-round
+# review S-2 asked for that reading to be able to stop a run, and S-3 for a second condition, because
+# per-round deltas of 80/86/50/68 all pass under 88 while the file keeps growing. The script judges
+# three conditions (burst, 3-round rate, absolute size) and prints every number it used.
+# Must never be a silent skip: any non-zero from the script = exit 12 (its own code is echoed).
+Write-Step "Ledger growth split trigger"
+$splitLog = Join-Path $RepoRoot 'ci-ledger-split-gate.log'
+$splitArgs = $hygienePre + @('tools/ledger_size_gate.py')
+& $hygieneExe @splitArgs 2>&1 | Tee-Object -FilePath $splitLog | Out-Null
+$splitCode = $LASTEXITCODE
+
+$splitAll = @(Get-Content $splitLog -ErrorAction SilentlyContinue)
+if ($splitAll.Count -eq 0) { Write-Host '  (ledger_size_gate.py produced no output)' }
+$splitShown = @($splitAll | Where-Object { $_ -match '^(SPLITDUE|ERROR|INV split_project_due|INV verdict)' })
+foreach ($line in $splitShown) { Write-Host "  $line" }
+if ($splitShown.Count -eq 0 -and $splitAll.Count -gt 0) {
+    Write-Host "  (no SPLITDUE/INV verdict line in $($splitAll.Count) log line(s) - the script did not reach its summary)"
+}
+Write-Host "  full growth reading: $splitLog ($($splitAll.Count) line(s))"
+if ($splitCode -ne 0) {
+    Write-Err "ledger split trigger fired (script exit $splitCode) via '$hygieneExe'; see $splitLog"
+    Pop-Location
+    exit 12
+}
+Write-Ok "ledger split trigger not due ($hygieneExe)"
 
 # ------------------------------------------------------------------ 2. clean
 if ($Clean -and (Test-Path $BuildDir)) {

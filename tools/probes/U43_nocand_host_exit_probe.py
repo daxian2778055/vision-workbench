@@ -10,9 +10,11 @@ mentions), so that red could only ever be seen by whoever ran the script by hand
 Arms (all defects injected inside a one-shot `git worktree add --detach` copy under build/, which the
 probe deletes again; the main worktree's tracked files are never written to):
 
-  C1  code occupancy   HEAD's ci.ps1 has 0 executable `exit 10`; the delivered one has exactly 1,
-                       step 1h's Write-Step line and the header code-table row are both present,
-                       and the per-code counts of 3..9 are unmoved (no other step's code repurposed)
+  C1  code occupancy   the pinned pre-1h revision's ci.ps1 (BASE_REVISION, the parent of the
+                       commit that added step 1h) has 0 executable `exit 10`; the delivered one
+                       has exactly 1, step 1h's Write-Step line and the header code-table row are
+                       both present, and the per-code counts of 3..9 are unmoved (no other step's
+                       code repurposed)
   B0  copy baseline    delivered tool on the copy's own docs -> rc=0, added=0
   H1  tight style      one more row on a key the baseline already counts once -> tool rc=1
                        AND ci.ps1 exit 10, echo stops at step 1h (no === Configure)
@@ -59,6 +61,13 @@ POWERSHELL = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
 CI_PS1 = os.path.join("tools", "ci.ps1")
 TOOL = os.path.join("tools", "src_anchor_inventory.py")
 
+# Seventh-round review W-1: C1's premise is "the code was FREE before step 1h took it", so its
+# baseline must be the revision that does NOT yet carry the step -- pinned here, not HEAD. Read
+# from HEAD the arm was true for exactly one session: 5ce4449 landed the step, so every replay
+# after that commit went red on a premise about the future, for a reason that has nothing to do
+# with the wiring being bad. 43bff83e82... is the parent of the commit that added step 1h.
+BASE_REVISION = "43bff83e82d7606041f7016e574c9881685e8973"
+
 # Two different forms of the same step, and the arms must not confuse them: ci.ps1's own bytes
 # carry the Write-Step call, the host's console carries the "=== ... ===" that function prints.
 STEP_HEADING = "=== Source-line citation roster baseline ==="
@@ -92,6 +101,19 @@ def check(cond, text):
 
 def yn(cond):
     return "yes" if cond else "NO"
+
+
+def arm_open():
+    """Snapshot the failure count before an arm runs, so its reading line can tell whether
+    THIS arm went red."""
+    return len(FAILURES)
+
+
+def reading(since, text):
+    """W-1: the reading line used to be tagged [U43-OK] unconditionally, so an arm that had
+    already appended a failure still printed an OK next to its own numbers -- a reader who
+    scanned the OK lines missed the red and only found it in the summary."""
+    print("[%s] %s" % ("U43-OK" if len(FAILURES) == since else "U43-FAIL", text))
 
 
 def md5(data):
@@ -173,49 +195,54 @@ def did_of(text, doc_name):
 # ------------------------------------------------------------------ arms
 
 def arm_c1_code_occupancy():
-    """The new host code must be free at HEAD and used by exactly one thing now."""
-    head_proc = sh(["git", "show", "HEAD:" + CI_PS1.replace(os.sep, "/")], cwd=ROOT)
-    check(head_proc.returncode == 0, "C1: cannot read HEAD's ci.ps1")
-    head_txt = decode(head_proc.stdout)
+    """The new host code must be free at the pinned pre-1h revision and used by exactly one thing now."""
+    since = arm_open()
+    base_proc = sh(["git", "show", "%s:%s" % (BASE_REVISION, CI_PS1.replace(os.sep, "/"))], cwd=ROOT)
+    check(base_proc.returncode == 0,
+          "C1: cannot read the pinned baseline revision %s's ci.ps1" % BASE_REVISION[:12])
+    base_txt = decode(base_proc.stdout)
     delivered_txt = decode(read_bytes(os.path.join(ROOT, CI_PS1)))
 
     def exec_exits(text):
         return [m.group(1) for m in re.finditer(r"(?m)^\s*exit\s+(\d+)\s*$", text)]
 
-    head_codes = exec_exits(head_txt)
+    base_codes = exec_exits(base_txt)
     now_codes = exec_exits(delivered_txt)
-    check(head_codes.count("10") == 0,
-          "C1: HEAD already had an executable `exit 10` (%d) -- the code would not be free"
-          % head_codes.count("10"))
+    check(base_codes.count("10") == 0,
+          "C1: baseline revision %s already had an executable exit 10 (%d) -- the code would not "
+          "have been free" % (BASE_REVISION[:12], base_codes.count("10")))
     check(now_codes.count("10") == 1,
           "C1: delivered ci.ps1 has %d executable `exit 10`, expected exactly 1" % now_codes.count("10"))
     for code in ("3", "4", "5", "6", "7", "8", "9"):
-        check(now_codes.count(code) == head_codes.count(code),
+        check(now_codes.count(code) == base_codes.count(code),
               "C1: code %s count moved (%d -> %d); this step must not repurpose another step's code"
-              % (code, head_codes.count(code), now_codes.count(code)))
+              % (code, base_codes.count(code), now_codes.count(code)))
     step_write = check(STEP_WRITE in delivered_txt,
                        "C1: step 1h's Write-Step line missing from the delivered file")
     header_table = check("10 = source-line citation roster" in delivered_txt,
                          "C1: the header exit-code table was not updated (A2's lesson: a host code "
                          "that is not in the table is a code nobody can look up)")
-    print("[U43-OK] C1 head_exit10=%d delivered_exit10=%d codes_3_to_9=%s step_write=%s header_table=%s"
-          % (head_codes.count("10"), now_codes.count("10"),
-             " ".join("%s:%d" % (c, now_codes.count(c)) for c in "3456789"),
-             yn(step_write), yn(header_table)))
+    reading(since, "C1 base=%s exit10=%d delivered_exit10=%d codes_3_to_9=%s step_write=%s "
+                   "header_table=%s"
+            % (BASE_REVISION[:7], base_codes.count("10"), now_codes.count("10"),
+               " ".join("%s:%d" % (c, now_codes.count(c)) for c in "3456789"),
+               yn(step_write), yn(header_table)))
 
 
 def arm_b0_baseline():
+    since = arm_open()
     rc, text = run_tool()
     lines = echoed(text)
     check(rc == 0, "B0: delivered tool on the copy's own docs rc=%s, expected 0" % rc)
     check(any(ln.startswith("INV nocand_added=0 nocand_removed=0") for ln in lines),
           "B0: baseline copy is not already clean: %r" % lines)
-    print("[U43-OK] B0 copy baseline rc=%d | %s" % (rc, " / ".join(lines)))
+    reading(since, "B0 copy baseline rc=%d | %s" % (rc, " / ".join(lines)))
     return lines
 
 
 def arm_host_red(tag, path, doc_name, expect_delta, pre_echo):
     """Inject -> tool red -> host exit 10 -> restore, checking every step of that chain."""
+    since = arm_open()
     rc_tool, text_tool = run_tool()
     check(rc_tool == 1, "%s: tool rc=%s after injection, expected 1" % (tag, rc_tool))
     added = delta_lines(text_tool, "ADDED")
@@ -251,14 +278,15 @@ def arm_host_red(tag, path, doc_name, expect_delta, pre_echo):
     check(back_clean,
           "%s: after restore tool rc=%s echo_moved=%s" % (tag, rc_back,
                                                           echoed(text_back) != pre_echo))
-    print("[U43-OK] %s tool rc=%d added=%d | ci rc=%d step_reached=%s configure_reached=%s "
-          "echoed_ADDED=%d | restore rc=%d echo_identical=%s"
-          % (tag, rc_tool, len(added), rc_ci, yn(step_reached), yn(not stopped_early),
-             len(shown), rc_back, yn(back_clean)))
+    reading(since, "%s tool rc=%d added=%d | ci rc=%d step_reached=%s configure_reached=%s "
+                   "echoed_ADDED=%d | restore rc=%d echo_identical=%s"
+            % (tag, rc_tool, len(added), rc_ci, yn(step_reached), yn(not stopped_early),
+               len(shown), rc_back, yn(back_clean)))
 
 
 def arm_n1_negative():
     """A citation whose prose names an identifier is not a roster row: the red is the roster, not the raw count."""
+    since = arm_open()
     body = (u"# U-43 \u6ce8\u5165\u6837\u672c\uff08N1 \u8d1f\u5bf9\u7167\uff09\n\n"
             u"\u5bf9\u7167\u8bf4\u660e\uff1a" + TIGHT_CITE +
             u" \u5904\u7684 `loadProjectForU43Control` \u624d\u6709\u53ef\u70b9\u540d\u7684\u6807\u8bc6\u7b26\n")
@@ -284,18 +312,19 @@ def arm_n1_negative():
         nocand = [ln for ln in text.split("\n")
                   if ln.startswith("NOCANDROW ") and (" doc=%s " % did) in ln]
         check(not nocand, "N1: the named-identifier row landed in the roster anyway: %r" % nocand)
-        print("[U43-OK] N1 tool rc=%d no_added_delta=%s nocandrow_for_injected_doc=%d | %s"
-              % (rc, yn(not delta_lines(text, "ADDED")), len(nocand), row[:150]))
+        reading(since, "N1 tool rc=%d no_added_delta=%s nocandrow_for_injected_doc=%d | %s"
+                % (rc, yn(not delta_lines(text, "ADDED")), len(nocand), row[:150]))
     finally:
         drop(path)
 
 
 def arm_m1_script_code2():
+    since = arm_open()
     rc, text = run_tool(["--docs-root", MISSING_DOCS], cwd=WT)
     check(rc == 2, "M1: tool with an unreadable docs root rc=%s, expected 2" % rc)
     check("ERROR docs directory not found" in text,
           "M1: rc=2 did not come with the input-error line: %r" % text[:200])
-    print("[U43-OK] M1 script rc=%d input_error_echoed=yes" % rc)
+    reading(since, "M1 script rc=%d input_error_echoed=yes" % rc)
 
 
 def arm_m2_host_maps_code2():
@@ -305,6 +334,7 @@ def arm_m2_host_maps_code2():
     (unreadable input) must still stop the build, and must still be labelled as code 2 in the echo so
     a broken input is never read as a roster finding. The edit is reverted in the same arm.
     """
+    since = arm_open()
     ci_path = rel(CI_PS1)
     original = read_bytes(ci_path)
     needle = b"$nocandArgs = $hygienePre + @('tools/src_anchor_inventory.py')"
@@ -324,8 +354,8 @@ def arm_m2_host_maps_code2():
                          % [ln for ln in text_ci.split("\n") if "roster check failed" in ln])
         stopped = check("=== Configure" not in text_ci,
                         "M2: host walked past an input error into configure")
-        print("[U43-OK] M2 ci rc=%d echo_labels_code2=%s configure_reached=%s"
-              % (rc_ci, yn(labelled), yn(not stopped)))
+        reading(since, "M2 ci rc=%d echo_labels_code2=%s configure_reached=%s"
+                % (rc_ci, yn(labelled), yn(not stopped)))
     finally:
         with io.open(ci_path, "wb") as handle:
             handle.write(original)
@@ -407,27 +437,29 @@ def main():
         arm_m1_script_code2()
         arm_m2_host_maps_code2()
 
+        since_z0_copy = arm_open()
         post = porcelain(WT)
         footprint_ok = check(post == dirty,
                              "Z0: copy footprint not back to its sync set: %r != %r" % (post, dirty))
         left = [n for n in os.listdir(rel("docs")) if n.startswith("U43_")]
         check(not left, "Z0: injected files left in the copy: %r" % left)
-        print("[U43-OK] Z0 copy footprint unchanged=%s (lines=%d) injected_left=%d"
-              % (yn(footprint_ok), len(post), len(left)))
+        reading(since_z0_copy, "Z0 copy footprint unchanged=%s (lines=%d) injected_left=%d"
+                % (yn(footprint_ok), len(post), len(left)))
     finally:
         if keep:
             print("[U43-INFO] --keep: copy left at %s, logs in %s" % (WT, LOGDIR))
         else:
             remove_copy()
 
+    since_z0_main = arm_open()
     md5_ok = 0
     for p, digest in main_md5.items():
         if check(md5(read_bytes(os.path.join(ROOT, p))) == digest,
                  "Z0: main worktree %s changed" % p):
             md5_ok += 1
     porcelain_ok = check(porcelain(ROOT) == main_pre, "Z0: main worktree porcelain moved during the run")
-    print("[U43-OK] Z0 main worktree md5_matched=%d/%d porcelain_unchanged=%s"
-          % (md5_ok, len(main_md5), yn(porcelain_ok)))
+    reading(since_z0_main, "Z0 main worktree md5_matched=%d/%d porcelain_unchanged=%s"
+            % (md5_ok, len(main_md5), yn(porcelain_ok)))
 
     print("[U43-SUMMARY] legs=9 (C1 B0 H1 H2 N1 N2 M1 M2 Z0; N2 is the restore check that runs "
           "inside each host arm) | failures=%d" % len(FAILURES))
