@@ -17,6 +17,9 @@
       7 = documentation anchor citations drifted (tools/doc_anchors.py)
       8 = dangling-timer site found (tools/single_shot_inventory.py)
       9 = duplicated Chinese sentence drifted against its baseline (tools/dup_cn_literal_gate.py)
+      10 = source-line citation roster gained a row outside its frozen baseline
+           (tools/src_anchor_inventory.py -- that script's own 1 = ADDED, 2 = unreadable docs,
+           3 = script crash; the code it returned is echoed in the failure line)
 
     Note: this script is intentionally ASCII-only, and therefore carries no UTF-8 BOM
     (PowerShell 5.1 only needs a BOM when a .ps1 contains non-ASCII text). The two-sided
@@ -234,6 +237,40 @@ if ($dupCode -ne 0) {
     exit 9
 }
 Write-Ok "duplicated Chinese sentence baseline OK ($hygieneExe)"
+
+# -------------------------------------- 1h. source-line citation roster baseline
+# Why it runs here: the gap plan cites production source lines by number. U-38 turned that
+# population into a printed inventory, U-39 added the second citation style to the denominators,
+# and the sixth-round review (S-2) asked for the rows that cannot be window-checked at all --
+# citations whose prose names no identifier -- to be frozen as a baseline the way 1g froze its 58
+# duplicate sentences. tools/src_anchor_inventory.py carries that baseline (31 rows over 30 keys)
+# and returns 1 when the roster gains a row. Until now nothing called it, which is G-1/G-2's named
+# failure shape: a gate that can go red but is wired to nothing.
+# Judgement stays asymmetric on purpose: only ADDED is red; a REMOVED row is printed and counted,
+# because naming the identifier the citation rests on is a fix, not a violation.
+# Must never be a silent skip: any non-zero from the script = exit 10. Its own code (1 = ADDED,
+# 2 = unreadable docs, 3 = crash) is echoed, so a broken input is never read as a roster finding
+# and neither is read as clean.
+Write-Step "Source-line citation roster baseline"
+$nocandLog = Join-Path $RepoRoot 'ci-nocand-baseline.log'
+$nocandArgs = $hygienePre + @('tools/src_anchor_inventory.py')
+& $hygieneExe @nocandArgs 2>&1 | Tee-Object -FilePath $nocandLog | Out-Null
+$nocandCode = $LASTEXITCODE
+
+$nocandAll = @(Get-Content $nocandLog -ErrorAction SilentlyContinue)
+if ($nocandAll.Count -eq 0) { Write-Host '  (src_anchor_inventory.py produced no output)' }
+$nocandShown = @($nocandAll | Where-Object { $_ -match '^(NOCANDELTA|ERROR|INV nocand|INV verdict)' })
+foreach ($line in $nocandShown) { Write-Host "  $line" }
+if ($nocandShown.Count -eq 0 -and $nocandAll.Count -gt 0) {
+    Write-Host "  (no NOCANDELTA/INV nocand line in $($nocandAll.Count) log line(s) - the script did not reach its summary)"
+}
+Write-Host "  full citation table: $nocandLog ($($nocandAll.Count) line(s))"
+if ($nocandCode -ne 0) {
+    Write-Err "source-line citation roster check failed (script exit $nocandCode) via '$hygieneExe'; see $nocandLog"
+    Pop-Location
+    exit 10
+}
+Write-Ok "source-line citation roster baseline OK ($hygieneExe)"
 
 # ------------------------------------------------------------------ 2. clean
 if ($Clean -and (Test-Path $BuildDir)) {
