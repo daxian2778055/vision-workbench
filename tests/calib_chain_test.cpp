@@ -131,6 +131,10 @@ private slots:
     // 其它项数进表就是"谁都取不到、还占住那个键挡住同名重标定"的死长度。
     void u40DeadLengthEntryDoesNotBlockRecalibration();  // 7 项条目不进表＋同键 6 元写侧照常落表
 
+    // U-41 S-1：写侧那道覆盖冲突闸的拒收条件从「项数不同」收窄成「项数不同且**旧条目是取得到的载荷**」。
+    // §3.44 只关上了读侧那半扇门；死长度经写侧直接进表时，"占住键挡住同名重标定"这一格原样还在。
+    void u41GoodWriteReplacesDeadLengthEntry();          // 死长度不占键：6 与 9 都能覆盖它；旧条目是 6/9 时仍拒
+
     // U-29：畸变校正**键侧**的 fx/fy 正性（§3.30 表 3 的 S-3：正性只有手填侧有，键侧没有）
     void u29StoredZeroFxJudgeRed();                   // 判红：键侧 fx=fy=0 ⇒ 不得全黑产出配绿灯
     void u29StoredNegativeFyJudgeRed();               // 判红：键侧 fy<0 ⇒ fx 合法也拦不住
@@ -3067,6 +3071,83 @@ void CalibChainTest::u40DeadLengthEntryDoesNotBlockRecalibration()
     cm->fromJson(m_managerSnapshot);
     QVERIFY2(problems.isEmpty(),
              qPrintable(QStringLiteral("[U-40 死长度条目] ") + problems.join(QStringLiteral("；"))));
+}
+
+// U-41 S-1：§3.44 把死长度挡在表外，但只挡了**读侧**那扇门（当时的边界写在 §3.44「写侧没动」那格）。
+// 同一类害处在另一条路上原样还在：写侧对项数不设闸 ⇒ `setHomography(键, 7 项)` 在空键上返回 true，
+// 那条取不到的载荷照样占住键，随后同名的合法重标定被「项数不同」拒掉——与 §3.44 表 1 第三格同形，换了入口。
+// 修法把拒收条件从「项数不同」改成「项数不同 **且旧条目是取得到的载荷**」：
+//   旧条目是 6 或 9 ⇒ 它有消费端，不许被另一种项数整条顶掉（R-5 那道闸的全部意义，④⑤ 两格守着）；
+//   旧条目在 {6,9} 之外 ⇒ §3.44 表 2 已实测"谁都取不到"，它不拥有那个键，好形状应当盖掉它（②③ 两格）。
+// ⚠️ 复核建议的原文是"新写入 ∈ {6,9} 就无论旧条目是几项都允许覆盖"——照抄会把已入库的
+// r5SixTupleMustNotEvictCamParams 判红（那一腿要的正是"9 元内参不许被合法 6 元顶掉"），
+// 所以本轮按**旧条目**的形状判，不采纳那句措辞；这一格差异登记在推进计划 §3.45。
+// ⑥ 是把这两种判据分开的牙：若实现写成"新项数白名单"，死覆盖死（7 → 8）就会返回 false。
+void CalibChainTest::u41GoodWriteReplacesDeadLengthEntry()
+{
+    CalibrationManager *cm = CalibrationManager::instance();
+    auto numVec = [](int n) {
+        QVector<double> v;
+        for (int i = 0; i < n; ++i)
+            v << 1.0 + i;
+        return v;
+    };
+    const QString key = QStringLiteral("u41_key");
+    QStringList problems;
+
+    // ① 前提：写侧对项数不设闸，死长度能从这条路进表（此格若为假，下面几格判词就无从归因）
+    cm->remove(key);
+    if (!cm->setHomography(key, numVec(7)))
+        problems << QStringLiteral("前提不成立：空键写 7 项返回 false ⇒ 写侧另有长度闸，本腿测的不是这条路径");
+    else if (cm->homography(key).size() != 7)
+        problems << QStringLiteral("前提不成立：播种的 7 项落成 %1 项").arg(cm->homography(key).size());
+
+    // ② 正对腿：同键写 6 元必须写得进去且逐项相符（改前实测＝返回 false）
+    if (!cm->setHomography(key, numVec(6)))
+        problems << QStringLiteral("死长度键上写 6 元返回 false ⇒ 谁都取不到的载荷占着键，重标定要手改方案文件");
+    else {
+        const QString dev = vecDeviation(cm->homography(key), numVec(6), 1e-12);
+        if (!dev.isEmpty())
+            problems << QStringLiteral("6 元覆盖之后读回逐项不符：%1").arg(dev);
+    }
+
+    // ③ 9 元这一半同样要能覆盖死长度（重新播种，走另一种好形状）
+    cm->remove(key);
+    if (cm->setHomography(key, numVec(7)) && !cm->setHomography(key, numVec(9)))
+        problems << QStringLiteral("死长度键上写 9 元返回 false ⇒ 只放行了 6 元那一半");
+    else if (cm->homography(key).size() == 9) {
+        const QString dev = vecDeviation(cm->homography(key), numVec(9), 1e-12);
+        if (!dev.isEmpty())
+            problems << QStringLiteral("9 元覆盖之后读回逐项不符：%1").arg(dev);
+    }
+
+    // ④ 负对照：旧条目是合法 6 元 ⇒ 9 元仍拒，且被拒之后原载荷一字不动（R-5 不许跟着拆）
+    cm->remove(key);
+    QVERIFY2(cm->setHomography(key, numVec(6)), "④ 前提：播种合法 6 元失败，本格测不到 R-5");
+    if (cm->setHomography(key, numVec(9)))
+        problems << QStringLiteral("合法 6 元键被 9 元整条顶掉（R-5 覆盖冲突闸失效，S-1 不该动这一格）");
+    else {
+        const QString dev = vecDeviation(cm->homography(key), numVec(6), 1e-12);
+        if (!dev.isEmpty())
+            problems << QStringLiteral("拒收之后原 6 元载荷仍被改动：%1").arg(dev);
+    }
+
+    // ⑤ 负对照反方向：旧条目是合法 9 元内参 ⇒ 6 元仍拒（这一格就是那句建议原文会撞开的地方）
+    cm->remove(key);
+    QVERIFY2(cm->setHomography(key, numVec(9)), "⑤ 前提：播种合法 9 元失败，本格测不到 R-5");
+    if (cm->setHomography(key, numVec(6)))
+        problems << QStringLiteral("合法 9 元内参载荷被 6 元整条顶掉（照抄「新写入是 6/9 就放行」会落到这一格）");
+
+    // ⑥ 判据钉在旧条目形状上：死覆盖死也放行；若实现是"新项数白名单"，这格返回 false
+    cm->remove(key);
+    if (cm->setHomography(key, numVec(7)) && !cm->setHomography(key, numVec(8)))
+        problems << QStringLiteral("死长度键上写 8 项返回 false ⇒ 拒收判据取的是新项数白名单，不是旧条目能不能取到");
+    cm->remove(key);
+
+    cm->clear();
+    cm->fromJson(m_managerSnapshot);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("[U-41 写侧覆盖死长度] ") + problems.join(QStringLiteral("；"))));
 }
 
 // ============================ U-29 畸变校正：键侧 fx/fy 正性 ============================

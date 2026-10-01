@@ -15,8 +15,8 @@ bool CalibrationManager::setHomography(const QString &name, const QVector<double
     if (name.isEmpty())
         return false;
     const auto it = m_homographies.constFind(name);
-    if (it != m_homographies.constEnd() && it.value().size() != hom.size())
-        return false;           // 项数不同＝另一种载荷，不许把已有的那一条整条顶掉（R-5）
+    const auto oldSize = (it == m_homographies.constEnd()) ? hom.size() : it.value().size();
+    if (oldSize != hom.size() && (oldSize == 6 || oldSize == 9)) return false;   // 项数不同且**旧条目是取得到的载荷**才拒（R-5 各腿锁的就是这一支）；旧条目在 {6,9} 之外＝谁都取不到的死长度，不拒——拒它等于让取不到的数据占住那个键，同名重标定只能手改方案文件（U-41 S-1）。
     m_homographies[name] = hom;
     return true;
 }

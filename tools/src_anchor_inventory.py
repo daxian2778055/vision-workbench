@@ -19,6 +19,13 @@ never resolved. Styles 2 and 3 are measured with the SAME window definition as s
 (window_hits below is the only place a "window hit" is defined) and printed as their own
 denominators rather than silently merged into INV total - merging is step 2's decision.
 
+Fifth-round review S-2 asked what happens to rows that cannot be window-checked at all, i.e.
+citations whose prose names no identifier (cands=0; measured: 15 tight + 16 spaced). Their
+fallback is defined HERE rather than left for step 2 to invent: no window judgement, only the
+weak check (cited number within the cited file's length) plus a printed roster, one NOCANDROW
+per row and INV nocand_rows / nocand_out_of_range as the totals. Step 2 inherits that as a
+pre-condition instead of discovering a hole in the denominator after the gate exists.
+
 This script therefore NEVER goes red. Exit code is 0 for any finding; a non-zero exit
 means the script itself failed (unreadable input, crash). That is deliberate, matching
 how step 1g (tools/dup_cn_literal_gate.py) started life as a measurement before it
@@ -190,6 +197,7 @@ def main():
     tick_checked = [0]
     checked = 0
     no_candidate = 0
+    nocand = []
     missing_file = 0
     out_of_range = 0
     files = set()
@@ -208,6 +216,7 @@ def main():
         cands = ticked | bare
         if not cands:
             no_candidate += 1
+            nocand.append(("tight", did, dno, path, start, hi, len(lines), in_range))
         hits = window_hits(lines, start, hi, cands)
         if cands:
             checked += 1
@@ -251,6 +260,7 @@ def main():
         hits = window_hits(lines, start, start, cands)
         if not cands:
             s_no_candidate += 1
+            nocand.append(("spaced", did, dno, path, start, start, len(lines), in_range))
         else:
             s_checked += 1
             for w in WINDOWS:
@@ -260,6 +270,22 @@ def main():
               % (did, dno, ascii_only(cite_text), len(lines), "yes" if in_range else "NO",
                  len(cands), ",".join(sorted(ticked)[:3]) or "none",
                  flag_text(hits, bool(cands))))
+
+    print("== no-candidate rows (prose names no matchable identifier -> weak check only) ==")
+    # Fifth-round review S-2: rows whose prose carries no identifier to match cannot be
+    # window-checked at all, so the fallback for them is the weak check only -- the cited
+    # number must not exceed the cited file's length -- plus this printed roster. Rows whose
+    # file is ABSENT are not here (they are counted by missing_file and printed as file=ABSENT).
+    nocand_sorted = sorted(nocand, key=lambda r: (r[0], r[1], r[2], r[3], r[4]))
+    nocand_out_of_range = 0
+    for kind, did, dno, path, start, hi, file_lines, in_range in nocand_sorted:
+        if not in_range:
+            nocand_out_of_range += 1
+        print("NOCANDROW kind=%s doc=%s line=%d cite=%s file_lines=%d in_range=%s"
+              % (kind, did, dno, ascii_only("%s:%d-%d" % (path, start, hi)),
+                 file_lines, "yes" if in_range else "NO"))
+    print("INV nocand_rows=%d (tight %d + spaced %d) nocand_out_of_range=%d"
+          % (len(nocand_sorted), no_candidate, s_no_candidate, nocand_out_of_range))
 
     print("== summary ==")
     print("INV total=%d docs=%d cited_files=%d" % (len(rows), len(doc_names), len(files)))
