@@ -587,15 +587,32 @@ def make_copy():
         if checked_out is None or md5(checked_out) != md5(main_bytes):
             with open(rel(p), "wb") as handle:
                 handle.write(main_bytes)
-            print("[U44-INFO] synced %s into the copy (%s -> %s)"
+            print("[U44-INFO] synced %s into the copy (%s -> %s)%s"
                   % (p, md5(checked_out)[:8] if checked_out is not None else "absent",
-                     md5(main_bytes)[:8]))
+                     md5(main_bytes)[:8], eol_verdict(checked_out, main_bytes)))
     return {p: md5(read_bytes(rel(p))) for p in watched_copy_files()}
 
 
 def watched_copy_files():
     return [CI_PS1, os.path.join("tools", "ci_exit_code_check.py"),
             os.path.join("tools", "ledger_size_gate.py"), LEDGER_REL.replace("/", os.sep)]
+
+
+def eol_verdict(before, after):
+    """Label for the hash pair make_copy prints when it re-syncs a file into the copy.
+
+    core.autocrlf=true keeps text blobs LF in the index and writes them CRLF into a worktree, so a
+    copy freshly reset to main HEAD can carry the SAME committed content under a different per-line
+    terminator than the main worktree does. The md5 pair then changes every round with no content
+    having changed, and reads as a drift to whoever meets it first. This says which of the two it
+    was, measured on the two buffers the sync already holds. It judges nothing -- neither the sync
+    above nor the run's exit code consults it; it only stops an honest hash from being misread.
+    """
+    if before is None:
+        return " [no previous bytes: the copy did not have this file]"
+    if before.replace(b"\r\n", b"\n") == after.replace(b"\r\n", b"\n"):
+        return " [same modulo EOL -- line-ending decode of the same content, not a content drift]"
+    return " [different BEYOND line endings -- a real content sync]"
 
 
 def copy_baseline():

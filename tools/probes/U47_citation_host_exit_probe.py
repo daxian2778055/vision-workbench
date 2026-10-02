@@ -34,12 +34,12 @@ is ever written to):
                       four drivers of the same scratch held none). Every present driver of
                       build/u44_probe's copy worktree / legs directory must take the lock, and the
                       tracked drivers of it are pinned to a named set -- which this probe belongs to,
-                      because this leg itself enumerates that directory and drops one inert file into
-                      it (the first run measured that, so the earlier "the tracked probe is the one
-                      such driver" is withdrawn). Both the delivered lock code and this leg's must
-                      name exactly one and the same scratch.lock; and one inert negative sample
-                      dropped into git-ignored scratch must turn the judgement red by itself, then
-                      back to green.
+                      because this leg itself enumerates that directory and drops two inert files into
+                      it, one at a time (the first run measured that, so the earlier "the tracked
+                      probe is the one such driver" is withdrawn). Both the delivered lock code and
+                      this leg's must name exactly one and the same scratch.lock; and each inert
+                      negative sample dropped into git-ignored scratch must turn the judgement red by
+                      itself, then back to green.
                       Measured hazard, first run of this leg: it reported unlocked=0 for a script that
                       held no lock, because the probe's own marker strings were the same literals the
                       scan looks for. The markers below are therefore built by concatenation, so a
@@ -54,6 +54,16 @@ is ever written to):
                       are therefore made on parsed call nodes (a Name or an attribute being called),
                       never on substrings; a file that will not parse is fail-closed -- counted as a
                       driver and NOT as locked, so the leg goes red instead of dropping it.
+                      Third measured hazard, twelfth-round review suggestion 1: the parsed call node
+                      was right, the NAME SET it matched was not. It carried the acquire helper
+                      alongside the bare OS locking call, which is what BOTH halves of a lock cycle
+                      parse to -- a driver that only ever released a lock read as covered. The
+                      delivered set is now the acquire name alone (measured on this round's bytes:
+                      every driver the leg enumerates calls that helper, so the narrowing costs no
+                      coverage), and the bare name survives only in the wide face used to score a
+                      second inert negative sample -- an unlock-only driver. That sample is the
+                      counterfactual: the narrow face turns it red, the
+                      wide face lets it green, and both verdicts print on the leg's own reading line.
                       With no build/u44_probe tree (fresh clone) the scratch half prints [U47-SKIP]
                       and is not counted as a pass.
   S1  declared skip   gate in the copy, which has no build/*_probe tree -> CITE-SKIP printed,
@@ -76,9 +86,10 @@ count is the copy's own dirt -- what is pinned there is the +1 the injected cita
 Run:  python tools/probes/U47_citation_host_exit_probe.py        (C1 G1 G2 G3 G4 M1 LK S1 H1 M2 Z0)
       python tools/probes/U47_citation_host_exit_probe.py --keep (leave the copy + logs for reading)
 Exit: 0 = every arm behaved as pinned; 1 = at least one arm diverged; 4 = the shared
-      build/u44_probe scratch is held by another run (the LK leg both enumerates it and drops one
-      file into it, so this probe takes that lock for its whole run -- ONE AT A TIME, and a second
-      start measures the first one's teardown instead of the coverage, which reads as a false OPEN).
+      build/u44_probe scratch is held by another run (the LK leg both enumerates it and drops two
+      inert negative samples into it, one at a time, so this probe takes that lock for its whole run
+      -- ONE AT A TIME, and a second start measures the first one's teardown instead of the coverage,
+      which reads as a false OPEN).
       Output is ASCII-only.
 """
 import ast
@@ -611,13 +622,30 @@ SCRATCH_LOCK = os.path.join(SHARED_SCRATCH, SCRATCH_LOCK_NAME)
 # Built by concatenation ON PURPOSE, the discipline from the first run -- the scanning file must
 # not contain a full literal the scan could find in its own definitions.
 DRIVER_NAMES = tuple(a + b for a, b in (("make_", "copy"), ("copy_", "baseline"), ("leg_", "h3")))
-LOCK_NAMES = ("require_scratch_" + "lock", "lock" + "ing")
+# The ACQUIRE name only (twelfth-round review suggestion 1). This used to carry the bare OS locking
+# name too, and that name is what both halves of a lock cycle parse to -- a file that only ever
+# RELEASED the lock was counted as covered. The wide face is kept below so the leg can still show
+# what the old name set would have said about the unlock-only sample, but nothing judges on it.
+LOCK_NAMES = ("require_scratch_" + "lock",)
+LOCK_NAMES_WIDE = ("require_scratch_" + "lock", "lock" + "ing")
 LK_NEGATIVE = "u47_lk_negative_unlocked.py"
 LK_NEGATIVE_BODY = ("# negative sample written by arm_lk_coverage; never executed, deleted below\n"
                     "def drive():\n"
                     "    return make_copy()\n"
                     "def require_scratch_lock(name):\n"
                     "    return None\n")
+LK_NEGATIVE_UNLOCK = "u47_lk_negative_unlock_only.py"
+# A driver that CALLS the OS unlock and never acquires: under the delivered name set it is not
+# locked (the leg goes red on it), under the old wide set it reads as locked. That difference is the
+# hole, and the leg prints both verdicts so the hole is measured, not described.
+LK_NEGATIVE_UNLOCK_BODY = (
+    "# unlock-only negative sample written by arm_lk_coverage; never executed, deleted below\n"
+    "import msvcrt\n"
+    "def drive():\n"
+    "    return make_copy()\n"
+    "def release(fd):\n"
+    "    return msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)\n")
+LK_NEGATIVES = ((LK_NEGATIVE, LK_NEGATIVE_BODY), (LK_NEGATIVE_UNLOCK, LK_NEGATIVE_UNLOCK_BODY))
 U44_PROBE_REL = os.path.join("tools", "probes", "U44_geometry_split_probe.py")
 U47_PROBE_REL = os.path.join("tools", "probes", "U47_citation_host_exit_probe.py")
 LOCK_HELPER_REL = os.path.join("build", "u44_probe", "u46_scratch_clean.py")
@@ -683,15 +711,23 @@ def _drives(text):
     return bool(names & set(DRIVER_NAMES))
 
 
-def _takes_lock(text):
+def _takes_lock(text, names=None):
     """True when the file CALLS the lock. A line that only defines it does not count -- the negative
     sample in LK_NEGATIVE_BODY is exactly a def with no call, so this refinement is measured, not
     assumed (a script that carried the lock code but never ran it would otherwise read as covered).
-    Definition, prose and comment all fail the same way: only a call node votes."""
-    names = _call_names(text)
+    An unlock-only file does not count either -- LK_NEGATIVE_UNLOCK_BODY calls the OS release and
+    nothing else, which is the case the delivered name set used to miss. Passing LOCK_NAMES_WIDE
+    scores the same file on the face this leg no longer judges with; that is only ever done inside
+    the counterfactual reading. The default is resolved at CALL time (not bound in the signature)
+    so a mutation test can widen LOCK_NAMES on an imported copy of this module and watch the leg go
+    red -- an arm whose name set is frozen into its own defaults cannot be shown to bite. Definition,
+    prose and comment all fail the same way: only a call node votes."""
     if names is None:
+        names = LOCK_NAMES
+    names_found = _call_names(text)
+    if names_found is None:
         return False
-    return bool(names & set(LOCK_NAMES))
+    return bool(names_found & set(names))
 
 
 def scratch_drivers():
@@ -744,27 +780,43 @@ def arm_lk_coverage():
               % (LOCK_HELPER_REL, SCRATCH_LOCK_NAME, _lock_literal_count(helper_text)))
 
     neg_red = neg_restored = None
+    unlock_red = unlock_wide_green = None
     if helper_text is None:
         print("[U47-SKIP] LK: no build/u44_probe scratch on this machine (fresh clone) -- the %d "
               "tracked driver(s) above were judged, the scratch side was NOT. DECLARED SKIP, "
               "not a pass." % len(tracked))
     else:
-        path = os.path.join(SHARED_SCRATCH, LK_NEGATIVE)
-        check(not os.path.exists(path),
-              "LK: a leftover negative sample is still in the scratch: %s" % LK_NEGATIVE)
         before = set(rel for rel, _ in drivers)
-        with io.open(path, "wb") as handle:
-            handle.write(LK_NEGATIVE_BODY.encode("ascii"))
-        try:
-            with_sample = scratch_drivers()
-            added = sorted(rel for rel, _ in with_sample if rel not in before)
-            red_now = sorted(rel for rel, locks in with_sample if not locks)
-            neg_red = (added == [os.path.join("build", "u44_probe", LK_NEGATIVE)]
-                       and red_now == [os.path.join("build", "u44_probe", LK_NEGATIVE)])
-            check(neg_red, "LK: the judgement did not bite on ONE unlocked new driver: added=%r "
-                           "unlocked=%r" % (added, red_now))
-        finally:
-            os.remove(path)
+        for name, body in LK_NEGATIVES:
+            path = os.path.join(SHARED_SCRATCH, name)
+            rel_sample = os.path.join("build", "u44_probe", name)
+            check(not os.path.exists(path),
+                  "LK: a leftover negative sample is still in the scratch: %s" % name)
+            with io.open(path, "wb") as handle:
+                handle.write(body.encode("ascii"))
+            try:
+                with_sample = scratch_drivers()
+                added = sorted(rel for rel, _ in with_sample if rel not in before)
+                red_now = sorted(rel for rel, locks in with_sample if not locks)
+                bites = (added == [rel_sample] and red_now == [rel_sample])
+                if name == LK_NEGATIVE:
+                    neg_red = bites
+                    check(neg_red, "LK: the judgement did not bite on ONE unlocked new driver: "
+                                   "added=%r unlocked=%r" % (added, red_now))
+                else:
+                    unlock_red = bites
+                    check(bites, "LK: the judgement did not bite on an unlock-only driver: "
+                                 "added=%r unlocked=%r" % (added, red_now))
+                    # The counterfactual on the SAME bytes: what the wide name set this leg dropped
+                    # would have ruled. It has to read as locked -- if it goes red on both faces,
+                    # this sample says nothing about the narrowing, and the arm says that out loud
+                    # instead of passing quietly.
+                    unlock_wide_green = _takes_lock(decode(read_bytes(path)), LOCK_NAMES_WIDE)
+                    check(unlock_wide_green,
+                          "LK: the unlock-only sample is red on the wide name set as well, so the "
+                          "narrowing is not what makes it bite: sample=%s proves nothing" % name)
+            finally:
+                os.remove(path)
         neg_restored = set(rel for rel, _ in scratch_drivers()) == before
         check(neg_restored, "LK: removing the negative sample did not put the driver set back")
 
@@ -776,9 +828,10 @@ def arm_lk_coverage():
         helper_text is None or _lock_literal_count(helper_text) == 1)
     tracked_locked = all(locks for rel, locks in drivers if rel.startswith("tools"))
     reading(since, "LK drivers=%d unlocked=%d tracked=%d(%d) tracked_locked=%s lock_literal_one=%s "
-            "negative_bites=%s restored=%s"
+            "negative_bites=%s restored=%s unlock_only_bites=%s wide_face_lets_unlock=%s"
             % (len(drivers), len(unlocked), len(tracked), len(TRACKED_SCRATCH_DRIVERS),
-               yn(tracked_locked), yn(literal_one), yn(neg_red), yn(neg_restored)))
+               yn(tracked_locked), yn(literal_one), yn(neg_red), yn(neg_restored),
+               yn(unlock_red), yn(unlock_wide_green)))
 
 
 def main():
