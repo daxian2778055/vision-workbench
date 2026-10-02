@@ -64,6 +64,46 @@ is ever written to):
                       second inert negative sample -- an unlock-only driver. That sample is the
                       counterfactual: the narrow face turns it red, the
                       wide face lets it green, and both verdicts print on the leg's own reading line.
+                      Fourth measured hazard, sixteenth round: the scope this row
+                      claimed was wider than the set it judged. The claim is one sentence in
+                      build/u44_probe/u47_lock_teeth.py -- "every script that writes into
+                      build/u44_probe calls before it touches anything" (verbatim but for that file's
+                      own line wrap). Whether the tracked ledger makes the same
+                      claim is a grep, not a memory: build/u44_probe/u52_ledger_claim_grep.py counts
+                      the candidate wordings on the ledger AT A PINNED REVISION (git show
+                      6886e92:docs/对标差距推进计划.md -- pinned because the count must not include the
+                      text this round is correcting) and prints a window around every hit; its output
+                      is build/u44_probe/U52_ledger_claim_grep_1.txt. On those bytes the five quantifier
+                      wordings are unhit, and the hits that are not zero are visibly not this claim:
+                      凡写 (3) is about counts and line numbers in prose, 全部上锁 (1) is §3.51 W-2's
+                      cell saying the four independent DRIVER entry points got locked, and
+                      require_scratch_lock (5) names scripts one at a time. So within that grep's reach
+                      the ledger never carried this scope sentence, and what is being corrected here is
+                      this leg's own words plus that script's header. The leg
+                      prints both faces -- the writer
+                      census (writers_here / writers_drivers on its reading line, the names on the
+                      report-only inventory line) against the driver judgement above -- and on this
+                      round's bytes they are not the same set: scripts write into build/u44_probe that
+                      no judgement here reads, and none of them takes the lock (the ledger writers
+                      among them). Widening the judgement to every writer is not available either --
+                      the frozen scratch scripts re-run by the ledger are exactly what would then be
+                      red forever, and their bytes may not change. So the scope is split in two: the
+                      ONE script whose deliverable is the tracked ledger is judged by name (below), and
+                      every other writer is only counted, from those same call nodes. The wording
+                      everywhere now says what is measured, and no count is pinned here, because the
+                      ignored scratch grows every round while this header would not.
+                      Ledger publisher (§3.55 表 3 第六条
+                      「写入器落台账是一次性整份覆盖写，没有原子发布也没有锁」): the deliverable lands
+                      through
+                      `io.open(path, "wb").write(payload)`, which truncates at OPEN -- a run stopped
+                      inside that window leaves a half file at the ledger's own path, and this round
+                      measured it (build/u44_probe/U52_publish_teeth_1.txt caught the target at zero
+                      bytes in 4 of 5 real runs). The publisher is therefore pinned by name to CALL the
+                      shared scratch lock, publish through exactly ONE os.replace, and call os.fsync at
+                      least once; three negative samples, each the delivered bytes with one call site
+                      renamed, show that each of those three judgements bites by itself while the
+                      other two keep reading as delivered. Until that script exists the whole
+                      publisher half prints [U47-SKIP] and is not counted as a pass.
                       With no build/u44_probe tree (fresh clone) the scratch half prints [U47-SKIP]
                       and is not counted as a pass.
   S1  declared skip   gate in the copy, which has no build/*_probe tree -> CITE-SKIP printed,
@@ -668,6 +708,132 @@ LK_INERT_BODY = (
     "A = 'build/' + " + SCRATCH_DIR_TOKEN + "\n"
     "B = 'tools/probes saw ' + " + SCRATCH_DIR_TOKEN + " + ' in a comment'\n")
 
+# The one script whose DELIVERABLE IS the tracked ledger. The hazard is the boundary §3.55 registers
+# in its remaining-boundary table: 「写入器落台账是一次性整份覆盖写，没有原子发布也没有锁」. Judged by
+# pinned name, the way TRACKED_SCRATCH_DRIVERS is: sweeping write_section_*.py instead would judge
+# every frozen writer from past rounds, whose bytes cited evidence is read from. A round that renames
+# its writer has to edit this line on purpose. Concatenated ON PURPOSE, the discipline above.
+LEDGER_PUBLISHER_REL = os.path.join("build", "u44_" + "probe", "write_section_" + "356.py")
+# The two calls an atomic publish is made of: stage the bytes, put them on disk, then swap the name.
+# os.<attr> calls on the module NAME os -- a str.replace or a Path.fsync must not satisfy this.
+PUBLISH_CALLS = ("os." + "replace", "os." + "fsync")
+# (label, exact call-site text in the publisher, replacement, field that must flip). Each mutation
+# changes ONE call in the publisher's own bytes; the arm also requires the other two fields to stay
+# exactly as the delivered file has them, so a bite is about that one call and nothing else.
+PUBLISHER_NEGATIVES = (
+    ("no-lock", "clean.require_scratch_" + "lock(", "clean.not_a_" + "lock(", "locks"),
+    ("no-replace", "os." + "replace(", "os.not_a_" + "replace(", "replace"),
+    ("no-fsync", "os." + "fsync(", "os.not_a_" + "fsync(", "fsync"))
+PUBLISHER_SAMPLE = "u47_publisher_negative_sample.txt"  # deliberately not a .py: out of every sweep
+
+
+def _os_module_calls(text, wanted):
+    """{bare name: number of calls} for calls written as os.<name>(). None when the file will not
+    parse -- fail-closed, the same rule _call_names uses, so unreadable syntax cannot pass."""
+    hits = dict((w.split(".")[1], 0) for w in wanted)
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return None
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr in hits and isinstance(node.func.value, ast.Name) \
+                and node.func.value.id == "os":
+            hits[node.func.attr] += 1
+    return hits
+
+
+def _publisher_facts(text):
+    """(locks, os.replace calls, os.fsync calls) -- the three mechanism facts the sixteenth round
+    pins about the script that publishes the ledger."""
+    calls = _os_module_calls(text, PUBLISH_CALLS)
+    if calls is None:
+        return (False, 0, 0)
+    return (_takes_lock(text), calls["replace"], calls["fsync"])
+
+
+def _scratch_write_calls(text):
+    """(write calls aimed at the shared scratch, write calls whose target does not resolve).
+
+    A call counts as a write in three shapes only: open() with a literal write/append/exclusive mode,
+    a file operation called on os or shutil (or as a bare name), and Path.write_text/write_bytes.
+    Module-level single-name assignments are expanded one level, which is the whole trick: the common
+    `OUT = os.path.join(HERE, ...)` indirection must not read as unresolved. A target that resolves
+    nowhere is counted separately and NEVER guessed -- the working directory at run time is not a fact
+    about the file. REPORT-ONLY by design (see the leg's reading line): the count moves when a round
+    drops another throwaway script into the ignored scratch, and that is not a finding -- it is the
+    number that makes this leg's scope sentence checkable instead of rhetorical.
+    """
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return (0, 0)
+    consts = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            try:
+                consts[node.targets[0].id] = ast.unparse(node.value)
+            except Exception:
+                continue
+    here = unresolved = 0
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+        receiver = None if isinstance(func, ast.Name) else (
+            func.value.id if isinstance(func.value, ast.Name) else None)
+        if name in ("write_text", "write_bytes"):
+            mode_writes = True
+            target = func.value
+        else:
+            target = node.args[0] if node.args else None
+            if name in ("remove", "unlink", "makedirs", "mkdir", "replace", "rename", "rmtree",
+                        "copy", "copyfile", "copy2", "move"):
+                # An attribute call must be on a module that actually moves files: measured this
+                # round, `out.replace(b"\r\n", b"\n")` parsed as a write and inflated this count.
+                mode_writes = bool(node.args) and (
+                    isinstance(func, ast.Name) or receiver in ("os", "shutil"))
+            elif name == "open" and node.args:
+                mode = node.args[1].value if len(node.args) >= 2 and isinstance(
+                    node.args[1], ast.Constant) else None
+                for kw in node.keywords:
+                    if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
+                        mode = kw.value.value
+                mode_writes = isinstance(mode, str) and any(c in mode for c in "wax")
+            else:
+                continue
+        if not mode_writes:
+            continue
+        if target is None:
+            continue
+        try:
+            src = ast.unparse(target)
+        except Exception:
+            continue
+        for _ in range(4):
+            grown = src
+            for cname, cval in sorted(consts.items(), key=lambda kv: -len(kv[0])):
+                grown = re.sub(r"\b%s\b" % re.escape(cname), "(%s)" % cval, grown)
+            if grown == src:
+                break
+            src = grown
+        # \bHERE\b is accepted as this directory because this face only ever enumerates
+        # build/u44_probe -- for a script sitting in that directory, HERE IS the scratch. Same
+        # matcher on a different directory would have to say so differently.
+        if SCRATCH_DIR_TOKEN.strip('"') in src or re.search(r"\bHERE\b", src):
+            here += 1
+        # 'docs\\<ledger>' and 'docs/' both miss a path built as os.path.join(ROOT, "docs",
+        # "<ledger filename>") -- write_section_348.py:21 is exactly that shape, and before the
+        # basename face existed this rule counted its known ledger write as unresolved (the census's
+        # SC-AGREE line is what measured the discrepancy).
+        elif LEDGER_REL in src or "docs/" in src or os.path.basename(LEDGER_REL) in src:
+            pass   # a ledger-targeted write is the publisher's own business, judged above
+        else:
+            unresolved += 1
+    return (here, unresolved)
+
 
 def require_scratch_lock(name):
     """Take the shared scratch lock, or refuse to start (exit 4). Same lock file as
@@ -687,9 +853,11 @@ def require_scratch_lock(name):
         msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
     except OSError as exc:
         os.close(fd)
-        print("[LOCK-BUSY] %s: another run holds %s (%s). The self-proof scripts and both tracked "
-              "probes share this one scratch, so a second one started now would measure the first "
-              "one's teardown and print a false OPEN. Run them one at a time. (exit code 4 is this "
+        print("[LOCK-BUSY] %s: another run holds %s (%s). Every driver the U47 probe's LK leg names "
+              "takes this one lock, so a second such run started now would measure the first one's "
+              "teardown and print a false OPEN -- run them one at a time. Scripts that write into "
+              "build/u44_probe WITHOUT this lock do exist (the LK leg counts them, report-only), so "
+              "this line serialises that named set, not the whole directory. (exit code 4 is this "
               "lock; no judgement was made and no scratch was touched)" % (name, SCRATCH_LOCK, exc))
         raise SystemExit(4)
     os.write(fd, ("owner=%s pid=%d\n" % (name, os.getpid())).encode("ascii", "replace"))
@@ -804,6 +972,12 @@ def arm_lk_coverage():
     neg_red = neg_restored = None
     unlock_red = unlock_wide_green = None
     inert_hits = inert_token_face = inert_call_face = None
+    delivered_facts = (False, 0, 0)
+    neg_biting = {}
+    writers_here = writers_unresolved = 0
+    drivers_among = 0
+    writer_names = []
+    publisher_present = False
     if helper_text is None:
         print("[U47-SKIP] LK: no build/u44_probe scratch on this machine (fresh clone) -- the %d "
               "tracked driver(s) above were judged, the scratch side was NOT. DECLARED SKIP, "
@@ -869,6 +1043,79 @@ def arm_lk_coverage():
         finally:
             os.remove(inert_path)
 
+        # ---- the ledger publisher: the one script in this scratch whose DELIVERABLE is the tracked
+        # ledger. §3.55 表 3 第六条 registered what the delivered form does, and this round measured it:
+        # sampling a real run of it caught the target at ZERO bytes in 4 of 5 runs (build/u44_probe/
+        # U52_publish_teeth_1.txt, [U52-M-PRE]), because `io.open(path, "wb")` truncates at OPEN --
+        # before a single new byte exists. The judgement below is about the mechanism that closes that
+        # window, checked call by call so prose about it cannot satisfy the leg.
+        sample_path = os.path.join(SHARED_SCRATCH, PUBLISHER_SAMPLE)
+        publisher_path = os.path.join(ROOT, LEDGER_PUBLISHER_REL)
+        publisher_present = os.path.isfile(publisher_path)
+        if not publisher_present:
+            print("[U47-SKIP] LK: the pinned ledger publisher %s is not on this machine -- the "
+                  "publish half of this leg is DECLARED SKIP, not a pass" % LEDGER_PUBLISHER_REL)
+            check(not os.path.exists(sample_path),
+                  "LK: a leftover publisher negative sample sits in the scratch with no publisher to "
+                  "mutate: %s" % PUBLISHER_SAMPLE)
+        else:
+            ptext = decode(read_bytes(publisher_path))
+            delivered_facts = _publisher_facts(ptext)
+            check(delivered_facts[0],
+                  "LK: the ledger publisher %s does not CALL the shared scratch lock, so two writers "
+                  "can publish the ledger at once and the later one silently wins"
+                  % LEDGER_PUBLISHER_REL)
+            check(delivered_facts[1] == 1,
+                  "LK: %s must publish through exactly one os.replace (calls=%d). Zero means the "
+                  "direct-write form is back: the open alone truncates the ledger, and a stop inside "
+                  "that window leaves a half file at the deliverable path. More than one means this "
+                  "leg no longer knows which swap is the publish."
+                  % (LEDGER_PUBLISHER_REL, delivered_facts[1]))
+            check(delivered_facts[2] >= 1,
+                  "LK: %s stages bytes but never calls os.fsync (calls=%d) -- os.replace can then "
+                  "swap a name whose contents are still in the OS cache"
+                  % (LEDGER_PUBLISHER_REL, delivered_facts[2]))
+            check(not os.path.exists(sample_path),
+                  "LK: a leftover publisher negative sample is still in the scratch: %s"
+                  % PUBLISHER_SAMPLE)
+            for label, needle, fake, field in PUBLISHER_NEGATIVES:
+                check(needle in ptext,
+                      "LK: %s no longer contains the call site the %s negative mutates (%s), so that "
+                      "negative would prove nothing about this file" % (LEDGER_PUBLISHER_REL, label,
+                                                                        needle))
+                io.open(sample_path, "wb").write(ptext.replace(needle, fake, 1).encode("utf-8"))
+                got = _publisher_facts(decode(read_bytes(sample_path)))
+                os.remove(sample_path)
+                index = {"locks": 0, "replace": 1, "fsync": 2}[field]
+                others = tuple(n for n in (0, 1, 2) if n != index)
+                bites = got[index] != delivered_facts[index] and all(got[n] == delivered_facts[n]
+                                                                     for n in others)
+                neg_biting[label] = bites
+                check(bites,
+                      "LK: the %s negative did not isolate one call site: delivered=%r mutated=%r"
+                      % (label, delivered_facts, got))
+
+        # The census behind the fourth measured hazard in the LK row: who writes into this directory at
+        # all. Report-only -- the number moves when a round drops another throwaway script, and a
+        # comment cannot move it the way a call node can, so nothing judges on it. It is printed
+        # because the scope sentence that was over-wide lives in build/u44_probe/u47_lock_teeth.py and
+        # in this probe's own [LOCK-BUSY] text, and a ledger grep says the tracked ledger does not make
+        # that claim (build/u44_probe/u52_ledger_claim_grep.py on the pinned 6886e92 blob, output in
+        # build/u44_probe/U52_ledger_claim_grep_1.txt -- within that grep's reach, 0 of the five
+        # quantifier wordings hit), while a claim about a set has to come with the set. It runs on
+        # every machine that has the scratch, independently of whether the publisher above is there yet.
+        for fname in sorted(os.listdir(SHARED_SCRATCH)):
+            if not fname.endswith(".py"):
+                continue
+            ftext = decode(read_bytes(os.path.join(SHARED_SCRATCH, fname)))
+            here, unresolved = _scratch_write_calls(ftext)
+            writers_unresolved += unresolved
+            if here:
+                writers_here += 1
+                is_driver = _drives(ftext)
+                drivers_among += 1 if is_driver else 0
+                writer_names.append("%s%s" % (fname, "" if is_driver else "(not-a-driver)"))
+
     # The judgement's input, printed: without this the leg reports counts only, and a ledger sentence
     # naming the drivers would then cite a hand list no command reproduces.
     print("[U47-INFO] LK inventory: " + " ".join(
@@ -878,19 +1125,32 @@ def arm_lk_coverage():
           % (SCRATCH_DIR_TOKEN,
              " ".join("%s=%d" % (os.path.basename(rel), token_hits[rel])
                       for rel in sorted(token_hits))))
+    # The scope this leg actually judges, next to the scope a ledger sentence would claim (see #260).
+    print("[U47-INFO] LK scratch-writer face (REPORT-ONLY, call nodes): scripts writing into "
+          "build/u44_probe=%d of_which_LK_drivers=%d not_counted=%d write_sites_unresolved=%d -> %s"
+          % (writers_here, drivers_among, writers_here - drivers_among, writers_unresolved,
+             " ".join(writer_names) if writer_names else "(none measured: no scratch)"))
     literal_one = all(count == 1 for count in lock_counts.values()) and (
         helper_text is None or _lock_literal_count(helper_text) == 1)
     tracked_locked = all(locks for rel, locks in drivers if rel.startswith("tools"))
     reading(since, "LK drivers=%d unlocked=%d tracked=%d(%d) tracked_locked=%s lock_literal_one=%s "
             "negative_bites=%s restored=%s unlock_only_bites=%s wide_face_lets_unlock=%s "
-            "token_hits=%s inert_token_hits=%s inert_token_face=%s inert_call_face=%s"
+            "token_hits=%s inert_token_hits=%s inert_token_face=%s inert_call_face=%s "
+            "publisher_present=%s publisher_locks=%s publisher_replace=%d publisher_fsync=%d "
+            "publisher_neg_biting=%s writers_here=%d writers_drivers=%d writers_unresolved=%d"
             % (len(drivers), len(unlocked), len(tracked), len(TRACKED_SCRATCH_DRIVERS),
                yn(tracked_locked), yn(literal_one), yn(neg_red), yn(neg_restored),
                yn(unlock_red), yn(unlock_wide_green),
                ",".join("%s=%d" % (os.path.basename(rel), token_hits[rel])
                         for rel in sorted(token_hits)),
                "none" if inert_hits is None else inert_hits,
-               yn(inert_token_face), yn(inert_call_face)))
+               yn(inert_token_face), yn(inert_call_face),
+               yn(publisher_present), yn(delivered_facts[0]), delivered_facts[1],
+               delivered_facts[2],
+               "none" if not neg_biting else " ".join(
+                   "%s=%s" % (label, yn(neg_biting.get(label)))
+                   for label, _, _, _ in PUBLISHER_NEGATIVES),
+               writers_here, drivers_among, writers_unresolved))
 
 
 def main():
