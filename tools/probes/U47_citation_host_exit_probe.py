@@ -653,6 +653,20 @@ LOCK_HELPER_REL = os.path.join("build", "u44_probe", "u46_scratch_clean.py")
 # two stopping naming the scratch, must be a deliberate edit here rather than something a probe
 # quietly stops measuring.
 TRACKED_SCRATCH_DRIVERS = (U44_PROBE_REL, U47_PROBE_REL)
+# The tools/probes half of the sweep is a SUBSTRING rule (see scratch_drivers), not a call-node rule:
+# a tracked probe joins the covered set by naming the scratch directory as a quoted string, whether
+# or not it calls anything. Concatenated ON PURPOSE, the discipline above -- the counter and the
+# sweep read this one definition, so a hand-typed second copy cannot drift away from the rule.
+SCRATCH_DIR_TOKEN = '"u44_' + 'probe"'
+# A sample that carries the token twice and CALLS nothing: the two faces disagree on identical bytes
+# (the substring face says sweep me, the call-node face says I drive nothing). Membership is boolean,
+# so the per-file hit count below is REPORT-ONLY -- pinning a count would go red when a comment
+# moves, which is not a finding. The sample is what shows the count is read from file bytes.
+LK_INERT = "u47_lk_inert_token.py"
+LK_INERT_BODY = (
+    "# inert sample written by arm_lk_coverage; never executed, deleted below\n"
+    "A = 'build/' + " + SCRATCH_DIR_TOKEN + "\n"
+    "B = 'tools/probes saw ' + " + SCRATCH_DIR_TOKEN + " + ' in a comment'\n")
 
 
 def require_scratch_lock(name):
@@ -745,7 +759,9 @@ def scratch_drivers():
         if not name.endswith(".py"):
             continue
         text = decode(read_bytes(os.path.join(probe_dir, name)))
-        if '"u44_probe"' in text:
+        # Substring sweep on this face (one definition, SCRATCH_DIR_TOKEN); call nodes on the
+        # scratch face above. The leg prints both so the asymmetry is measured, not described.
+        if SCRATCH_DIR_TOKEN in text:
             out.append((os.path.join("tools", "probes", name), _takes_lock(text)))
     return out
 
@@ -773,6 +789,12 @@ def arm_lk_coverage():
               "LK: %s must name %s exactly once, found %d"
               % (rel, SCRATCH_LOCK_NAME, lock_counts[rel]))
     helper_text = None
+    # The sweep's input for the tracked half, counted from each file's bytes. Report-only: membership
+    # is boolean, so the count is a reading about the rule's surface, not a judgement to pin.
+    token_hits = {}
+    for rel in TRACKED_SCRATCH_DRIVERS:
+        text = decode(read_bytes(os.path.join(ROOT, rel)))
+        token_hits[rel] = text.count(SCRATCH_DIR_TOKEN)
     if os.path.isfile(os.path.join(ROOT, LOCK_HELPER_REL)):
         helper_text = decode(read_bytes(os.path.join(ROOT, LOCK_HELPER_REL)))
         check(_lock_literal_count(helper_text) == 1,
@@ -781,6 +803,7 @@ def arm_lk_coverage():
 
     neg_red = neg_restored = None
     unlock_red = unlock_wide_green = None
+    inert_hits = inert_token_face = inert_call_face = None
     if helper_text is None:
         print("[U47-SKIP] LK: no build/u44_probe scratch on this machine (fresh clone) -- the %d "
               "tracked driver(s) above were judged, the scratch side was NOT. DECLARED SKIP, "
@@ -820,18 +843,54 @@ def arm_lk_coverage():
         neg_restored = set(rel for rel, _ in scratch_drivers()) == before
         check(neg_restored, "LK: removing the negative sample did not put the driver set back")
 
+        # The token count's own negative sample: one file, its bytes carry the token twice, it calls
+        # nothing. Dropped into the scratch so both faces rule on the SAME bytes -- the substring face
+        # would sweep it, the call-node face does not, and neither by hand: the numbers are re-read
+        # from the file the leg just wrote.
+        inert_path = os.path.join(SHARED_SCRATCH, LK_INERT)
+        check(not os.path.exists(inert_path),
+              "LK: a leftover inert token sample is still in the scratch: %s" % LK_INERT)
+        with io.open(inert_path, "wb") as handle:
+            handle.write(LK_INERT_BODY.encode("ascii"))
+        try:
+            body = decode(read_bytes(inert_path))
+            inert_hits = body.count(SCRATCH_DIR_TOKEN)
+            inert_token_face = SCRATCH_DIR_TOKEN in body
+            inert_call_face = _drives(body)
+            check(inert_hits == LK_INERT_BODY.count(SCRATCH_DIR_TOKEN) and inert_hits == 2,
+                  "LK: the inert sample did not carry the token twice on its own bytes: hits=%d"
+                  % inert_hits)
+            check(inert_token_face and not inert_call_face,
+                  "LK: the two faces did not disagree on the inert bytes as designed: "
+                  "token_face=%s call_face=%s" % (inert_token_face, inert_call_face))
+            joined = sorted(rel for rel, _ in scratch_drivers() if rel not in before)
+            check(not joined,
+                  "LK: a token-only file with no driver call joined the covered set: %r" % (joined,))
+        finally:
+            os.remove(inert_path)
+
     # The judgement's input, printed: without this the leg reports counts only, and a ledger sentence
     # naming the drivers would then cite a hand list no command reproduces.
     print("[U47-INFO] LK inventory: " + " ".join(
         "%s%s" % (rel, "" if locks else "(NO-LOCK)") for rel, locks in drivers))
+    # The sweep's own surface, per file, counted from bytes (report-only -- see the constants).
+    print("[U47-INFO] LK token hits (substring %r; REPORT-ONLY, a comment can move it): %s"
+          % (SCRATCH_DIR_TOKEN,
+             " ".join("%s=%d" % (os.path.basename(rel), token_hits[rel])
+                      for rel in sorted(token_hits))))
     literal_one = all(count == 1 for count in lock_counts.values()) and (
         helper_text is None or _lock_literal_count(helper_text) == 1)
     tracked_locked = all(locks for rel, locks in drivers if rel.startswith("tools"))
     reading(since, "LK drivers=%d unlocked=%d tracked=%d(%d) tracked_locked=%s lock_literal_one=%s "
-            "negative_bites=%s restored=%s unlock_only_bites=%s wide_face_lets_unlock=%s"
+            "negative_bites=%s restored=%s unlock_only_bites=%s wide_face_lets_unlock=%s "
+            "token_hits=%s inert_token_hits=%s inert_token_face=%s inert_call_face=%s"
             % (len(drivers), len(unlocked), len(tracked), len(TRACKED_SCRATCH_DRIVERS),
                yn(tracked_locked), yn(literal_one), yn(neg_red), yn(neg_restored),
-               yn(unlock_red), yn(unlock_wide_green)))
+               yn(unlock_red), yn(unlock_wide_green),
+               ",".join("%s=%d" % (os.path.basename(rel), token_hits[rel])
+                        for rel in sorted(token_hits)),
+               "none" if inert_hits is None else inert_hits,
+               yn(inert_token_face), yn(inert_call_face)))
 
 
 def main():
