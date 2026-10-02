@@ -29,6 +29,33 @@ is ever written to):
                       blocked by the gate that measures it
   M1  script code 2   gate with an unreadable --ledger -> rc=2 + the input-error line (2 is not a
                       finding)
+  LK  lock coverage   measured per file, not counted by hand (eleventh-round review W-1: the ledger
+                      said five scripts held the lock; one of them only ever locked a subprocess, and
+                      four drivers of the same scratch held none). Every present driver of
+                      build/u44_probe's copy worktree / legs directory must take the lock, and the
+                      tracked drivers of it are pinned to a named set -- which this probe belongs to,
+                      because this leg itself enumerates that directory and drops one inert file into
+                      it (the first run measured that, so the earlier "the tracked probe is the one
+                      such driver" is withdrawn). Both the delivered lock code and this leg's must
+                      name exactly one and the same scratch.lock; and one inert negative sample
+                      dropped into git-ignored scratch must turn the judgement red by itself, then
+                      back to green.
+                      Measured hazard, first run of this leg: it reported unlocked=0 for a script that
+                      held no lock, because the probe's own marker strings were the same literals the
+                      scan looks for. The markers below are therefore built by concatenation, so a
+                      match needs a real call site -- an arm that can be satisfied by the measuring
+                      file's own definitions measures nothing.
+                      Second measured hazard, on this round's delivered bytes: a substring is not a
+                      call. The leg went red on build/u44_probe/write_section_352.py, which never
+                      touches the copy worktree but QUOTES the driver function's name inside the
+                      ledger text it writes (drivers 8 -> 9, and the negative-sample arm then could
+                      not bite on exactly one unlocked driver). The same face reads green the other
+                      way: prose naming the lock call would mark a driver covered. Both judgements
+                      are therefore made on parsed call nodes (a Name or an attribute being called),
+                      never on substrings; a file that will not parse is fail-closed -- counted as a
+                      driver and NOT as locked, so the leg goes red instead of dropping it.
+                      With no build/u44_probe tree (fresh clone) the scratch half prints [U47-SKIP]
+                      and is not counted as a pass.
   S1  declared skip   gate in the copy, which has no build/*_probe tree -> CITE-SKIP printed,
                       verdict=SKIP, rc=0 (a fresh clone is not stopped, and is not silently passed)
   H1  host red        copy: step 1k pointed at the injected ledger -> gate rc=1 with added=baseline+1
@@ -46,12 +73,18 @@ not carry; that leg is taken from this round's end-to-end close-out run on the m
 the copy cannot have the machine-local scratch the gate resolves against, so H1's absolute `added`
 count is the copy's own dirt -- what is pinned there is the +1 the injected citation causes.
 
-Run:  python tools/probes/U47_citation_host_exit_probe.py        (C1 G1 G2 G3 G4 M1 S1 H1 M2 Z0)
+Run:  python tools/probes/U47_citation_host_exit_probe.py        (C1 G1 G2 G3 G4 M1 LK S1 H1 M2 Z0)
       python tools/probes/U47_citation_host_exit_probe.py --keep (leave the copy + logs for reading)
-Exit: 0 = every arm behaved as pinned; 1 = at least one arm diverged. Output is ASCII-only.
+Exit: 0 = every arm behaved as pinned; 1 = at least one arm diverged; 4 = the shared
+      build/u44_probe scratch is held by another run (the LK leg both enumerates it and drops one
+      file into it, so this probe takes that lock for its whole run -- ONE AT A TIME, and a second
+      start measures the first one's teardown instead of the coverage, which reads as a false OPEN).
+      Output is ASCII-only.
 """
+import ast
 import hashlib
 import io
+import msvcrt
 import os
 import re
 import shutil
@@ -567,8 +600,191 @@ def arm_m2_host_maps_code2():
         check(md5(read_bytes(ci_path)) == md5(original), "M2: revert is not byte-for-byte")
 
 
+# --- LK: the lock's coverage is measured per file, not counted by hand (11th-round review W-1) ----
+SHARED_SCRATCH = os.path.join(ROOT, "build", "u44_probe")
+SCRATCH_LOCK_NAME = "scratch.lock"
+SCRATCH_LOCK = os.path.join(SHARED_SCRATCH, SCRATCH_LOCK_NAME)
+# A driver is a script that WRITES the shared copy worktree or legs directory. These are the
+# functions that do it -- make_copy/copy_baseline build it, leg_h3 edits files inside it. Compared
+# against PARSED CALL NODES only (see _call_names): a substring match counted a script that merely
+# quotes one of these names inside a string, which is how this leg went red on its own round.
+# Built by concatenation ON PURPOSE, the discipline from the first run -- the scanning file must
+# not contain a full literal the scan could find in its own definitions.
+DRIVER_NAMES = tuple(a + b for a, b in (("make_", "copy"), ("copy_", "baseline"), ("leg_", "h3")))
+LOCK_NAMES = ("require_scratch_" + "lock", "lock" + "ing")
+LK_NEGATIVE = "u47_lk_negative_unlocked.py"
+LK_NEGATIVE_BODY = ("# negative sample written by arm_lk_coverage; never executed, deleted below\n"
+                    "def drive():\n"
+                    "    return make_copy()\n"
+                    "def require_scratch_lock(name):\n"
+                    "    return None\n")
+U44_PROBE_REL = os.path.join("tools", "probes", "U44_geometry_split_probe.py")
+U47_PROBE_REL = os.path.join("tools", "probes", "U47_citation_host_exit_probe.py")
+LOCK_HELPER_REL = os.path.join("build", "u44_probe", "u46_scratch_clean.py")
+# The tracked scripts that drive this scratch, pinned as a set: a new one appearing, or one of these
+# two stopping naming the scratch, must be a deliberate edit here rather than something a probe
+# quietly stops measuring.
+TRACKED_SCRATCH_DRIVERS = (U44_PROBE_REL, U47_PROBE_REL)
+
+
+def require_scratch_lock(name):
+    """Take the shared scratch lock, or refuse to start (exit 4). Same lock file as
+    build/u44_probe/u46_scratch_clean.py, written out again here because that helper lives inside the
+    scratch it guards -- on a fresh clone there is nothing to import. LK checks that both files name
+    exactly one and the same scratch.lock, so the two cannot drift onto two different locks.
+
+    No child of this probe needs the lock (the legs spawn ci.ps1 and the gate tool, never the U44
+    probe or a scratch script), so it is held for the whole run and the kernel drops it at exit.
+    """
+    if not os.path.isdir(SHARED_SCRATCH):
+        print("[U47-LOCK] no shared scratch tree at %s -- nothing to hold, the LK leg declares SKIP"
+              % SHARED_SCRATCH)
+        return None
+    fd = os.open(SCRATCH_LOCK, os.O_CREAT | os.O_RDWR)
+    try:
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+    except OSError as exc:
+        os.close(fd)
+        print("[LOCK-BUSY] %s: another run holds %s (%s). The self-proof scripts and both tracked "
+              "probes share this one scratch, so a second one started now would measure the first "
+              "one's teardown and print a false OPEN. Run them one at a time. (exit code 4 is this "
+              "lock; no judgement was made and no scratch was touched)" % (name, SCRATCH_LOCK, exc))
+        raise SystemExit(4)
+    os.write(fd, ("owner=%s pid=%d\n" % (name, os.getpid())).encode("ascii", "replace"))
+    # No pid on this line: the two-pass replay must be byte-identical, and a pid differs by
+    # construction (measured: U48_citation_probe_2/3.txt differed on exactly this number).
+    print("[U47-LOCK] acquired=%s owner=%s" % (SCRATCH_LOCK, name))
+    return fd
+
+
+def _call_names(text):
+    """Every name this file CALLS (a bare call or an attribute call), or None when it will not
+    parse. None is fail-closed: the caller counts such a file as a driver that holds no lock, so a
+    syntax this Python cannot read goes red instead of quietly leaving the covered set."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return None
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name):
+                names.add(func.id)
+            elif isinstance(func, ast.Attribute):
+                names.add(func.attr)
+    return names
+
+
+def _drives(text):
+    names = _call_names(text)
+    if names is None:
+        return True
+    return bool(names & set(DRIVER_NAMES))
+
+
+def _takes_lock(text):
+    """True when the file CALLS the lock. A line that only defines it does not count -- the negative
+    sample in LK_NEGATIVE_BODY is exactly a def with no call, so this refinement is measured, not
+    assumed (a script that carried the lock code but never ran it would otherwise read as covered).
+    Definition, prose and comment all fail the same way: only a call node votes."""
+    names = _call_names(text)
+    if names is None:
+        return False
+    return bool(names & set(LOCK_NAMES))
+
+
+def scratch_drivers():
+    """[(relpath, takes_lock)] for every present script that drives the shared u44 scratch."""
+    out = []
+    if os.path.isdir(SHARED_SCRATCH):
+        for name in sorted(os.listdir(SHARED_SCRATCH)):
+            if not name.endswith(".py"):
+                continue
+            text = decode(read_bytes(os.path.join(SHARED_SCRATCH, name)))
+            if _drives(text):
+                out.append((os.path.join("build", "u44_probe", name), _takes_lock(text)))
+    probe_dir = os.path.join(ROOT, "tools", "probes")
+    for name in sorted(os.listdir(probe_dir)):
+        if not name.endswith(".py"):
+            continue
+        text = decode(read_bytes(os.path.join(probe_dir, name)))
+        if '"u44_probe"' in text:
+            out.append((os.path.join("tools", "probes", name), _takes_lock(text)))
+    return out
+
+
+def _lock_literal_count(text):
+    return text.count('"%s"' % SCRATCH_LOCK_NAME)
+
+
+def arm_lk_coverage():
+    since = arm_open()
+    drivers = scratch_drivers()
+    tracked = sorted(rel for rel, _ in drivers if rel.startswith("tools"))
+    unlocked = [rel for rel, locks in drivers if not locks]
+    check(tracked == sorted(TRACKED_SCRATCH_DRIVERS),
+          "LK: the tracked drivers of the shared scratch moved: got %r, pinned %r"
+          % (tracked, sorted(TRACKED_SCRATCH_DRIVERS)))
+    check(not unlocked, "LK: driver(s) of build/u44_probe that take no lock: %r" % (unlocked,))
+    # Every implementation must point at ONE lock file; two names would split the coverage while
+    # every script still printed [LOCK-BUSY].
+    lock_counts = {}
+    for rel in TRACKED_SCRATCH_DRIVERS:
+        text = decode(read_bytes(os.path.join(ROOT, rel)))
+        lock_counts[rel] = _lock_literal_count(text)
+        check(lock_counts[rel] == 1,
+              "LK: %s must name %s exactly once, found %d"
+              % (rel, SCRATCH_LOCK_NAME, lock_counts[rel]))
+    helper_text = None
+    if os.path.isfile(os.path.join(ROOT, LOCK_HELPER_REL)):
+        helper_text = decode(read_bytes(os.path.join(ROOT, LOCK_HELPER_REL)))
+        check(_lock_literal_count(helper_text) == 1,
+              "LK: %s must name %s exactly once, found %d"
+              % (LOCK_HELPER_REL, SCRATCH_LOCK_NAME, _lock_literal_count(helper_text)))
+
+    neg_red = neg_restored = None
+    if helper_text is None:
+        print("[U47-SKIP] LK: no build/u44_probe scratch on this machine (fresh clone) -- the %d "
+              "tracked driver(s) above were judged, the scratch side was NOT. DECLARED SKIP, "
+              "not a pass." % len(tracked))
+    else:
+        path = os.path.join(SHARED_SCRATCH, LK_NEGATIVE)
+        check(not os.path.exists(path),
+              "LK: a leftover negative sample is still in the scratch: %s" % LK_NEGATIVE)
+        before = set(rel for rel, _ in drivers)
+        with io.open(path, "wb") as handle:
+            handle.write(LK_NEGATIVE_BODY.encode("ascii"))
+        try:
+            with_sample = scratch_drivers()
+            added = sorted(rel for rel, _ in with_sample if rel not in before)
+            red_now = sorted(rel for rel, locks in with_sample if not locks)
+            neg_red = (added == [os.path.join("build", "u44_probe", LK_NEGATIVE)]
+                       and red_now == [os.path.join("build", "u44_probe", LK_NEGATIVE)])
+            check(neg_red, "LK: the judgement did not bite on ONE unlocked new driver: added=%r "
+                           "unlocked=%r" % (added, red_now))
+        finally:
+            os.remove(path)
+        neg_restored = set(rel for rel, _ in scratch_drivers()) == before
+        check(neg_restored, "LK: removing the negative sample did not put the driver set back")
+
+    # The judgement's input, printed: without this the leg reports counts only, and a ledger sentence
+    # naming the drivers would then cite a hand list no command reproduces.
+    print("[U47-INFO] LK inventory: " + " ".join(
+        "%s%s" % (rel, "" if locks else "(NO-LOCK)") for rel, locks in drivers))
+    literal_one = all(count == 1 for count in lock_counts.values()) and (
+        helper_text is None or _lock_literal_count(helper_text) == 1)
+    tracked_locked = all(locks for rel, locks in drivers if rel.startswith("tools"))
+    reading(since, "LK drivers=%d unlocked=%d tracked=%d(%d) tracked_locked=%s lock_literal_one=%s "
+            "negative_bites=%s restored=%s"
+            % (len(drivers), len(unlocked), len(tracked), len(TRACKED_SCRATCH_DRIVERS),
+               yn(tracked_locked), yn(literal_one), yn(neg_red), yn(neg_restored)))
+
+
 def main():
     keep = "--keep" in sys.argv[1:]
+    # Before any read: a refused start must not have measured half a teardown (see the LK row above).
+    require_scratch_lock("U47_citation_host_exit_probe")
     if not os.path.isdir(LOGDIR):
         os.makedirs(LOGDIR, exist_ok=True)
 
@@ -581,6 +797,7 @@ def main():
     arm_g2_g3(g1_counts)
     arm_g4_removed_report_only()
     arm_m1_script_code2()
+    arm_lk_coverage()
 
     dirty = make_copy()
     try:
@@ -613,7 +830,7 @@ def main():
     reading(since_main, "Z0 main worktree md5_matched=%d/%d porcelain_unchanged=%s"
             % (md5_ok, len(main_md5), yn(porcelain(ROOT) == main_pre)))
 
-    print("[U47-SUMMARY] legs=10 (C1 G1 G2 G3 G4 M1 S1 H1 M2 Z0; G3 runs inside the G2 arm, Z0 has "
+    print("[U47-SUMMARY] legs=11 (C1 G1 G2 G3 G4 M1 LK S1 H1 M2 Z0; G3 runs inside the G2 arm, Z0 has "
           "a copy half and a main-worktree half) | failures=%d" % len(FAILURES))
     if FAILURES:
         print("U-47 probe: %d problem(s)" % len(FAILURES))

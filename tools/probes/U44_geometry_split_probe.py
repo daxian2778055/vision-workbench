@@ -75,9 +75,15 @@ echo_lines() strips it before matching; matching raw lines reads a real red as a
 
 Run:  python tools/probes/U44_geometry_split_probe.py         (all arms)
       python tools/probes/U44_geometry_split_probe.py --keep  (leave the copy + logs for reading)
-Exit: 0 = every arm behaved as pinned; 1 = at least one arm diverged. Output is ASCII-only.
+      ONE AT A TIME: this probe, u45_abort_check.py, u45_pin_check.py and u46_sweep_legs_arm.py all
+      write the same build/u44_probe copy worktree and legs directory, so main() takes that shared
+      scratch lock before it touches anything (eleventh-round review W-1 -- before this round the
+      probe was one of the unlocked entrances).
+Exit: 0 = every arm behaved as pinned; 1 = at least one arm diverged; 4 = another run holds the
+      shared scratch ([LOCK-BUSY] printed, no judgement made, no scratch touched). ASCII-only.
 """
 import hashlib
+import msvcrt
 import os
 import re
 import shutil
@@ -90,6 +96,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 LOGDIR = os.path.join(ROOT, "build", "u44_probe")
 WT = os.path.join(LOGDIR, "wt")
 LEGS = os.path.join(LOGDIR, "legs")
+# Same file the git-ignored helper locks (build/u44_probe/u46_scratch_clean.py LOCK_FILE); this probe
+# cannot import that helper -- a fresh clone has no build/u44_probe tree at all -- so the acquisition
+# is carried twice on purpose, and the U47 probe's LK arm pins the two names onto one literal.
+SCRATCH_LOCK = os.path.join(LOGDIR, "scratch.lock")
 # --keep is read once, at module scope, because both exits need it: the normal tail and abort().
 KEEP = "--keep" in sys.argv[1:]
 POWERSHELL = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -789,6 +799,31 @@ def leg_z0(copy_before):
                len([ln for ln in decode(COPY_STATUS_BEFORE).split("\n") if ln])))
 
 
+def require_scratch_lock(name):
+    """Refuse to start while another run holds the shared scratch (build/u44_probe: one copy
+    worktree, one legs directory). msvcrt advisory locks belong to a process and the kernel drops
+    them when it dies, which is why this is not a pid-in-a-file check -- measured on this box,
+    os.kill(dead_pid, 0) raises nothing, so a liveness test would treat every crashed run as still
+    holding the scratch and wedge the probe. Called from main(), never at import: the self-proof
+    scripts load this file as a module while they hold the lock themselves."""
+    fd = os.open(SCRATCH_LOCK, os.O_CREAT | os.O_RDWR)
+    try:
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+    except OSError as exc:
+        os.close(fd)
+        print("[LOCK-BUSY] %s: another run holds %s (%s). The self-proof scripts and this probe "
+              "share one copy worktree and one legs directory, so a second one started now would "
+              "measure the first one's teardown and print a false OPEN. Run them one at a time. "
+              "(exit code 4 is this lock; no judgement was made and no scratch was touched)"
+              % (name, SCRATCH_LOCK, exc))
+        raise SystemExit(4)
+    os.write(fd, ("owner=%s pid=%d\n" % (name, os.getpid())).encode("ascii", "replace"))
+    # No pid on this line: the replay convention is byte-identical output from the same command run
+    # twice, and a pid differs by construction. The lock file itself still records owner+pid.
+    print("[U44-LOCK] acquired=%s owner=%s" % (SCRATCH_LOCK, name))
+    return fd
+
+
 def main():
     global STATUS_BEFORE, COPY_STATUS_BEFORE
     try:
@@ -800,6 +835,7 @@ def main():
         pass
     if not os.path.isdir(LOGDIR):
         os.makedirs(LOGDIR)
+    require_scratch_lock("U44_geometry_split_probe")
 
     MAIN_BEFORE.update(dict((p, md5(read_bytes(os.path.join(ROOT, p))))
                             for p in watched_copy_files()))
