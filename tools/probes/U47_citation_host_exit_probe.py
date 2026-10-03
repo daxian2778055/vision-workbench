@@ -764,11 +764,13 @@ def _publisher_facts(text):
     return (_takes_lock(text), calls["replace"], calls["fsync"])
 
 
-def _scratch_write_calls(text):
+def _scratch_write_calls(text, filename="<scratch face>"):
     """(write calls aimed at the shared scratch, write calls whose target does not resolve).
 
     A call counts as a write in three shapes only: open() with a literal write/append/exclusive mode,
-    a file operation called on os or shutil (or as a bare name), and Path.write_text/write_bytes.
+    a file operation called on os or shutil (or as a bare name), and write_text/write_bytes -- on a
+    receiver expression (Path.write_bytes) or bare, which is a script's own write_bytes(path, payload)
+    helper and is judged on its first argument.
     Module-level single-name assignments are expanded one level, which is the whole trick: the common
     `OUT = os.path.join(HERE, ...)` indirection must not read as unresolved. A target that resolves
     nowhere is counted separately and NEVER guessed -- the working directory at run time is not a fact
@@ -777,7 +779,7 @@ def _scratch_write_calls(text):
     number that makes this leg's scope sentence checkable instead of rhetorical.
     """
     try:
-        tree = ast.parse(text)
+        tree = ast.parse(text, filename=filename)
     except SyntaxError:
         return (0, 0)
     consts = {}
@@ -797,7 +799,19 @@ def _scratch_write_calls(text):
             func.value.id if isinstance(func.value, ast.Name) else None)
         if name in ("write_text", "write_bytes"):
             mode_writes = True
-            target = func.value
+            # Attribute call: the receiver is the path (Path.write_bytes). Bare call: a script that
+            # defines its own write_bytes(path, payload) helper hands the path as the first argument
+            # -- measured this round, build/u44_probe/u55_host_code_arms.py has 8 of those and the
+            # bare case used to raise AttributeError here and take the whole LK leg down with it.
+            # Which of the two stops fires first on that file, isolated rather than assumed: as the
+            # bytes stand the old code dies at the UTF8_BOM escape below (PatternError, since the
+            # walk reaches that constant before the first bare call), and only with that constant
+            # stubbed out does it reach this AttributeError -- two stops, either enough to take the
+            # leg down, both fixed (reading in U55_u47_old_order_1.txt).
+            # A bare call with no positional argument -- everything passed by keyword -- has no path
+            # to read, so it is skipped: this count can miss that shape, it cannot invent a write.
+            target = func.value if isinstance(func, ast.Attribute) else (
+                node.args[0] if node.args else None)
         else:
             target = node.args[0] if node.args else None
             if name in ("remove", "unlink", "makedirs", "mkdir", "replace", "rename", "rmtree",
@@ -826,7 +840,13 @@ def _scratch_write_calls(text):
         for _ in range(4):
             grown = src
             for cname, cval in sorted(consts.items(), key=lambda kv: -len(kv[0])):
-                grown = re.sub(r"\b%s\b" % re.escape(cname), "(%s)" % cval, grown)
+                # A callable, not a template string: as a template, re parses the backslash escapes in
+                # the constant's own source text -- measured this round on the scratch, that raises
+                # PatternError on `UTF8_BOM = b"\xef\xbb\xbf"` (build/u44_probe/u55_host_code_arms.py:117)
+                # and silently collapses `\\` to `\` in everything else, so the face a path constant
+                # presents to the matchers below depended on how its author spelled it.
+                grown = re.sub(r"\b%s\b" % re.escape(cname),
+                               lambda _m, _v=cval: "(%s)" % _v, grown)
             if grown == src:
                 break
             src = grown
@@ -1119,7 +1139,7 @@ def arm_lk_coverage():
             if not fname.endswith(".py"):
                 continue
             ftext = decode(read_bytes(os.path.join(SHARED_SCRATCH, fname)))
-            here, unresolved = _scratch_write_calls(ftext)
+            here, unresolved = _scratch_write_calls(ftext, os.path.join(SHARED_SCRATCH, fname))
             writers_unresolved += unresolved
             if here:
                 writers_here += 1

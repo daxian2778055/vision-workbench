@@ -31,10 +31,21 @@ bytes, but left the rule as a convention ("only write an rc for a log when the l
 line") with no machine behind it, and said plainly that a next round piping the host would hit nothing.
 This is that machine.
 
-  4 HOST-SHAPED is judged from the file's own bytes, not from prose: a line matching
-    ^\s*\[OK\]\s+tests:\s*\d+/\d+\s+passed\s*$   (tools/ci.ps1:677) or
-    ^\s*\[FAIL\]\s+tests failed \(                (tools/ci.ps1:659)
-    -- the host's two verdict banners, so a log is host evidence because the host wrote into it.
+  4 HOST-SHAPED is judged from the file's own bytes, not from prose, under either of two readings:
+      narrow -- a line matching
+        ^\s*\[OK\]\s+tests:\s*\d+/\d+\s+passed\s*$   (tools/ci.ps1:677) or
+        ^\s*\[FAIL\]\s+tests failed \(                (tools/ci.ps1:659)
+      wide (U-55) -- a line matching ^\s*\[FAIL\]\s+ whose rest starts with a static step's own
+        verdict sentence, read out of tools/ci.ps1 at run time (WRITE_ERR_RX up to the first '$',
+        plus Preflight's $hardMissing strings). A host that stopped at step 1b..1k never prints a
+        tests banner, so without this second reading its log is not evidence to this gate at all --
+        which is how a piped static-red run could be cited without ever being asked for its code.
+    Either way a log is host evidence because the host wrote into it, not because prose says so.
+    The CITEHOSTDEF line carries two readings of that definition so a rewording in ci.ps1 cannot
+    hide inside it: wide_markers= (how many step sentences were read) and marker_digest= (sha256 of
+    those literals sorted and joined by LF, first 12 hex). The count alone cannot see one literal
+    swapped for another; the digest can. It is printed for the replay, not judged -- see the comment
+    at CI_PS1_REL for the exact boundary of that promise.
   5 SELF-CODED is one line matching [HOST-RC] inner=<path> ci_exit_code=N wrapper_exit_code=N, the
     wrapper's contract line. A host-shaped citation that is not self-coded is a CITEHOSTADD finding.
     Only the token is asked for, not a location: a log may hold many host runs, and requiring the
@@ -79,6 +90,7 @@ Exit: 0 = green or declared skip | 1 = ADDED citations (CITEADD) or host-shaped 
 contract line (CITEHOSTADD) | 2 = ledger unreadable | 3 = script crash. Output is ASCII-only (cp936
 console); paths go through esc.
 """
+import hashlib
 import os
 import re
 import sys
@@ -113,6 +125,31 @@ HOST_BANNERS = (
     re.compile(r"^\s*\[OK\]\s+tests:\s*\d+/\d+\s+passed\s*$"),
     re.compile(r"^\s*\[FAIL\]\s+tests failed \("),
 )
+# Rule 5's wide side (U-55): the two banners above only describe a host that reached the tests step.
+# A host that went red at a STATIC step prints that step's own Write-Err sentence instead, and its
+# wrapper line then reads verdict_line=NO -- under the narrow rule such a log is not host evidence at
+# all, so its exit code is never asked for. The eleven arms of §3.59 are exactly that shape.
+# The sentences are READ FROM tools/ci.ps1 rather than transcribed here, in the same direction as
+# that file's own docstring: a transcription would be a second copy that can drift, and a drifted copy
+# silently un-shapes a log (the weak direction).
+# What live reading actually buys, stated at the strength it holds (the first wording here claimed
+# more -- "the only way to escape by wording is to delete the Write-Err" -- and a review measured the
+# hole: a one-for-one REWORDING does escape, for every log already on disk). Two halves:
+#   future  -- a log written after a rewording is host-shaped under whatever wording ci.ps1 carries
+#              when that log is read, so no evidence going missing from here on;
+#   past    -- a log written under the OLD wording stops matching the moment ci.ps1 is reworded, and
+#              wide_markers= below does NOT move, because a rewording swaps one literal for another
+#              and the size of the set is unchanged.
+# marker_digest= is the reading that closes that blind spot: sha256 over the sorted literals joined
+# by LF, first 12 hex, printed on every run, so an add, a drop or a rewording changes a number the
+# same replay already prints. It is a reading, not a judgement -- a moved digest does not turn this
+# gate red; what remains report-only is which already-written logs stopped being shaped (the
+# CITEHOSTREMOVED line, and shaped_wide_only= going down). Deleting a step's Write-Err moves both
+# readings, and ci_exit_code_check.py (step 1i) pins the step roster on top of that.
+CI_PS1_REL = os.path.join("tools", "ci.ps1")
+WRITE_ERR_RX = re.compile(r"""Write-Err\s+(["'])(.*?)\1""")
+HARDMISSING_RX = re.compile(r"\$hardMissing\s*\+=\s*'([^']+)'")
+FAIL_PREFIX_RX = re.compile(r"^\s*\[FAIL\]\s+")
 # Rule 5: the one line tools/ci_host_run.ps1 writes next to the child's own output.
 HOST_RC_LINE = re.compile(r"\[HOST-RC\] inner=\S+ ci_exit_code=-?\d+ wrapper_exit_code=-?\d+")
 
@@ -120,10 +157,16 @@ HOST_RC_LINE = re.compile(r"\[HOST-RC\] inner=\S+ ci_exit_code=-?\d+ wrapper_exi
 # --emit-baseline run on the ledger delivered as bdeea2d (output in build/u44_probe/
 # U54_cite_gate_prebaseline_2.txt: host_shaped=12 coded=1 uncoded=11, and the same three numbers from
 # an independent reader -- build/u44_probe/u54_host_evidence_census.py, U54_host_evidence_census_3.txt).
-# Replace only by re-running that command; the direction judged is ADDED, so this list can only shrink.
+# Re-emitted the same way in U-55 after the wide reading above was added, on the ledger delivered as
+# dc4a17e (build/u44_probe/U55_cite_gate_wide_1.txt): 11 -> 14, the three additions being host runs
+# that went red at a STATIC step before tools/ci_host_run.ps1 existed, so their code was never written.
+# Replace only by re-running that command; the direction judged is ADDED, so every replacement after
+# this one can only shrink the list. It has grown exactly once -- the 11 -> 14 re-emission above.
 HOSTRC_BASELINE = (
+    "build/g2_probe/probe_A1_inventory_red.txt",
     "build/g3_probe/ci_e2e_328.txt",
     "build/g3_probe/ci_e2e_final_328.txt",
+    "build/g3_probe/res_ci_red.txt",
     "build/u21_probe/ci_final.txt",
     "build/u28_probe/ci_run1.log",
     "build/u29_ci_run2.log",
@@ -132,6 +175,7 @@ HOSTRC_BASELINE = (
     "build/u35_probe/ci_run1.log",
     "build/u35_probe/ci_run2.log",
     "build/w1_probe/ci_final.txt",
+    "ci_e2e.txt",
     "ci_e2e_green.txt",
 )
 
@@ -178,15 +222,57 @@ def resolve_paths(token, by_name):
     return sorted(set(paths))
 
 
-def host_state(path):
-    """(banner_hits, rc_line_hits) for one resolved file, read once. Undecodable bytes go through
-    errors=replace: a log that cannot be decoded is not evidence of anything, and making it
-    unclassifiable would let a corrupt file dodge the rule by being unreadable."""
+def step_marker_literals(path=None):
+    """The host's own static-step verdict sentences, read from tools/ci.ps1 bytes.
+
+    Each is the part of a Write-Err string before its first '$' (the exit code and the log path are
+    interpolated after it), plus the literal lines Preflight collects into $hardMissing. Returns
+    (literals, error_string): a ci.ps1 that cannot be read is reported, not swallowed -- callers that
+    keep judging narrow banners must say they did.
+    """
+    try:
+        with open(path or os.path.join(ROOT, CI_PS1_REL), encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+    except OSError as exc:
+        return set(), "ci.ps1 not readable: %s" % str(exc)
+    literals = set()
+    for match in WRITE_ERR_RX.finditer(text):
+        literals.add(match.group(2).split("$", 1)[0].rstrip())
+    for match in HARDMISSING_RX.finditer(text):
+        literals.add(match.group(1))
+    literals.discard("")
+    return literals, None
+
+
+def marker_digest(markers):
+    """One number for the whole marker set: sha256 over the sorted literals joined by LF, 12 hex.
+
+    Why a digest and not the count: a rewording swaps one literal for another, so wide_markers= is
+    unchanged by it and the drift is invisible in the count alone (sixteenth-round review W-1, the
+    hole the old comment claimed not to have). An add, a drop or a rewording all move this. It is
+    printed, not judged -- see the block comment at CI_PS1_REL for what it does and does not catch.
+    """
+    return hashlib.sha256("\n".join(sorted(markers)).encode("utf-8")).hexdigest()[:12]
+
+
+def host_state(path, markers=frozenset()):
+    """(narrow_banner_hits, wide_marker_hits, rc_line_hits) for one resolved file, read once.
+
+    Undecodable bytes go through errors=replace: a log that cannot be decoded is not evidence of
+    anything, and making it unclassifiable would let a corrupt file dodge the rule by being
+    unreadable. The two shapes are counted apart, never merged into one number, because the ledger
+    has to show which definition made a citation host evidence.
+    """
     with open(path, "rb") as handle:
         text = handle.read().decode("utf-8", errors="replace")
     lines = text.split("\n")
-    banners = sum(1 for ln in lines for pat in HOST_BANNERS if pat.match(ln))
-    return banners, sum(1 for ln in lines if HOST_RC_LINE.search(ln))
+    narrow = sum(1 for ln in lines for pat in HOST_BANNERS if pat.match(ln))
+    wide = 0
+    for ln in lines:
+        hit = FAIL_PREFIX_RX.match(ln)
+        if hit and any(ln[hit.end():].startswith(literal) for literal in markers):
+            wide += 1
+    return narrow, wide, sum(1 for ln in lines if HOST_RC_LINE.search(ln))
 
 
 def classify(text, names):
@@ -259,31 +345,48 @@ def main(argv):
 
     # Rule 5: of the citations that resolve, which ones the host itself wrote into -- and do they
     # carry the wrapper's contract line. Keyed by the token as the ledger wrote it, same as rule 3.
+    # "Host wrote into it" is read two ways (see HOST_BANNERS / step_marker_literals): the tests
+    # banners, and any static step's own verdict sentence as ci.ps1 spells it today.
+    markers, marker_error = step_marker_literals()
+    if marker_error:
+        print("CITEHOSTDEF %s -- the wide side cannot be read, so ONLY the two narrow banners are "
+              "judged this run. DECLARED, not silent: the narrow rule still fires, and every citation "
+              "that is host-shaped just by a static marker would go unjudged." % esc(marker_error))
+    print("CITEHOSTDEF ci_ps1=%s narrow_patterns=%d wide_markers=%d readable=%s marker_digest=%s"
+          % (esc(CI_PS1_REL.replace("\\", "/")), len(HOST_BANNERS), len(markers),
+             "no" if marker_error else "yes",
+             "none" if marker_error else marker_digest(markers)))
     host_shaped, coded, uncoded, ambiguous = set(), set(), set(), set()
+    narrow_shaped, wide_only_shaped = set(), set()
     for token in sorted(exact | scratch):
         paths = resolve_paths(token, by_name)
         if len(paths) > 1:
             ambiguous.add(os.path.basename(token.replace("\\", "/")))
-        banners = rc_lines = 0
+        narrow = wide = rc_lines = 0
         for path in paths:
-            hits, coded_hits = host_state(path)
-            banners += hits
+            hits_n, hits_w, coded_hits = host_state(path, markers)
+            narrow += hits_n
+            wide += hits_w
             rc_lines += coded_hits
-        if banners:
+        if narrow:
+            narrow_shaped.add(token)
+        if wide and not narrow:
+            wide_only_shaped.add(token)
+        if narrow or wide:
             host_shaped.add(token)
             (coded if rc_lines else uncoded).add(token)
     host_baseline = set(HOSTRC_BASELINE)
     host_added = sorted(uncoded - host_baseline)
     host_removed = sorted(host_baseline - uncoded)
     for token in host_added:
-        print("CITEHOSTADD dir=ADDED cite=%s (host verdict banner(s) in the file, [HOST-RC] contract "
-              "line absent)" % esc(token))
+        print("CITEHOSTADD dir=ADDED cite=%s (a host verdict sentence is in the file -- tests banner "
+              "or a static step's own marker -- and the [HOST-RC] contract line is absent)" % esc(token))
     for token in host_removed:
         print("CITEHOSTREMOVED dir=REMOVED cite=%s (report only)" % esc(token))
     print("CITEHOST host_shaped=%d coded=%d uncoded=%d host_baseline=%d host_added=%d host_removed=%d "
-          "ambiguous_basenames=%d"
+          "ambiguous_basenames=%d shaped_narrow=%d shaped_wide_only=%d"
           % (len(host_shaped), len(coded), len(uncoded), len(host_baseline), len(host_added),
-             len(host_removed), len(ambiguous)))
+             len(host_removed), len(ambiguous), len(narrow_shaped), len(wide_only_shaped)))
 
     if emit_baseline:
         print("== fresh MISSING_BASELINE block (review before pasting) ==")
