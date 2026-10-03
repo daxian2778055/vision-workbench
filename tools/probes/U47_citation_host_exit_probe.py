@@ -81,11 +81,22 @@ is ever written to):
                       the ledger never carried this scope sentence, and what is being corrected here is
                       this leg's own words plus that script's header. The leg
                       prints both faces -- the writer
-                      census (writers_here / writers_drivers on its reading line, the names on the
-                      report-only inventory line) against the driver judgement above -- and on this
-                      round's bytes they are not the same set: scripts write into build/u44_probe that
-                      no judgement here reads, and none of them takes the lock (the ledger writers
-                      among them). Widening the judgement to every writer is not available either --
+                      census (writers_here / writers_drivers / writers_lock_acquirers on its reading
+                      line, the names on the report-only census line) against the driver judgement
+                      above -- and on this round's bytes they are not the same set: scripts write
+                      into build/u44_probe that no judgement here reads. Whether those writers take
+                      the lock is measured too, not asserted: every census name without a
+                      require_scratch_lock CALL node is tagged (no-lock) and the reading line prints
+                      writers_lock_acquirers next to writers_here. These header words used to say
+                      that NONE of them takes the lock, and that sentence was never measured: it
+                      contradicts this round's split, whose census line tags names one by one: of the
+                      write_section_*.py publishers it names, those with a section number of 356 or
+                      later carry no (no-lock) tag while 354 and 355 still do, publishing having
+                      become atomic in §3.56's round -- and it contradicts the ledger row written in
+                      that same round, whose bdeea2d bytes count 9 of 10 non-driver writers without a
+                      lock call, which is a sentence about 1 that has one. Which face moved first is
+                      not measured here and is not claimed.
+                      Widening the judgement to every writer is not available either --
                       the frozen scratch scripts re-run by the ledger are exactly what would then be
                       red forever, and their bytes may not change. So the scope is split in two: the
                       ONE script whose deliverable is the tracked ledger is judged by name (below), and
@@ -713,7 +724,7 @@ LK_INERT_BODY = (
 # pinned name, the way TRACKED_SCRATCH_DRIVERS is: sweeping write_section_*.py instead would judge
 # every frozen writer from past rounds, whose bytes cited evidence is read from. A round that renames
 # its writer has to edit this line on purpose. Concatenated ON PURPOSE, the discipline above.
-LEDGER_PUBLISHER_REL = os.path.join("build", "u44_" + "probe", "write_section_" + "357.py")
+LEDGER_PUBLISHER_REL = os.path.join("build", "u44_" + "probe", "write_section_" + "358.py")
 # The two calls an atomic publish is made of: stage the bytes, put them on disk, then swap the name.
 # os.<attr> calls on the module NAME os -- a str.replace or a Path.fsync must not satisfy this.
 PUBLISH_CALLS = ("os." + "replace", "os." + "fsync")
@@ -974,7 +985,7 @@ def arm_lk_coverage():
     inert_hits = inert_token_face = inert_call_face = None
     delivered_facts = (False, 0, 0)
     neg_biting = {}
-    writers_here = writers_unresolved = 0
+    writers_here = writers_unresolved = writers_locked = 0
     drivers_among = 0
     writer_names = []
     publisher_present = False
@@ -1114,7 +1125,10 @@ def arm_lk_coverage():
                 writers_here += 1
                 is_driver = _drives(ftext)
                 drivers_among += 1 if is_driver else 0
-                writer_names.append("%s%s" % (fname, "" if is_driver else "(not-a-driver)"))
+                takes = _takes_lock(ftext)
+                writers_locked += 1 if takes else 0
+                writer_names.append("%s%s%s" % (fname, "" if is_driver else "(not-a-driver)",
+                                                "" if takes else "(no-lock)"))
 
     # The judgement's input, printed: without this the leg reports counts only, and a ledger sentence
     # naming the drivers would then cite a hand list no command reproduces.
@@ -1137,7 +1151,8 @@ def arm_lk_coverage():
             "negative_bites=%s restored=%s unlock_only_bites=%s wide_face_lets_unlock=%s "
             "token_hits=%s inert_token_hits=%s inert_token_face=%s inert_call_face=%s "
             "publisher_present=%s publisher_locks=%s publisher_replace=%d publisher_fsync=%d "
-            "publisher_neg_biting=%s writers_here=%d writers_drivers=%d writers_unresolved=%d"
+            "publisher_neg_biting=%s writers_here=%d writers_drivers=%d writers_unresolved=%d "
+            "writers_lock_acquirers=%d"
             % (len(drivers), len(unlocked), len(tracked), len(TRACKED_SCRATCH_DRIVERS),
                yn(tracked_locked), yn(literal_one), yn(neg_red), yn(neg_restored),
                yn(unlock_red), yn(unlock_wide_green),
@@ -1150,7 +1165,7 @@ def arm_lk_coverage():
                "none" if not neg_biting else " ".join(
                    "%s=%s" % (label, yn(neg_biting.get(label)))
                    for label, _, _, _ in PUBLISHER_NEGATIVES),
-               writers_here, drivers_among, writers_unresolved))
+               writers_here, drivers_among, writers_unresolved, writers_locked))
 
 
 def main():
