@@ -13,6 +13,9 @@ What it proves (advance plan 3.48):
        with exit 12 before configure. From U-60 that trigger is judged on the ledger FAMILY -- the plan
        plus the cumulative register that moved out of it in the first cut of the split-the-file project
        -- and L5 is the leg that keeps the family sum honest rather than a way to halve a reading.
+       The family sum cannot see a member that LOST lines while another gained more, which is what the
+       U-60 review's W-2 named; L6 judges the per-member shrink refusal added for it, on exit 2 -- the
+       same channel M2 proves maps to host code 12, so no new host code and no ci.ps1 byte moved.
   S-3  the same script carries the rate condition (3 rounds > 200 lines) and the absolute size
        ceiling; their arithmetic is driven through rate_window() with synthetic round sequences (L3),
        because a real repository only offers the rounds it actually has.
@@ -48,6 +51,16 @@ Arms:
                             same run prints, and --no-register drops exactly the register's own count
                             while naming itself on overrides_used -- the leg that turns "the rows moved
                             to a sibling file" into a reading instead of an escape hatch
+  L6  shrink refusal        per-member line loss against each member's OWN HEAD blob, refused on exit
+                            2 (W-2: the family sum cannot see a member that lost lines while another
+                            gained more). A6 truncate the copy's register only -> rc=2, one ERROR line
+                            naming the member and its numbers, and no INV/verdict/SPLITDUE printed;
+                            A6b same truncation + --allow-shrink=<reason> -> rc=0, due=DECLARED, the
+                            reason on overrides_used; A6c is W-2 exactly -- ledger +1 AND register -1 so
+                            the family nets zero and all three growth conditions stay not due, yet the
+                            refusal still fires on the member. All three run against the COPY with
+                            --register pointing at it: blob_nl resolves a path against HEAD, so a temp
+                            file off HEAD reads as "new" and could never fire the leg.
   H1  host maps 11          copy-only defect (delete the header row for 11, same shape as G-A, so the
                             geometry step is the FIRST step that sees it) -> ci.ps1 exit 11, echo shows
                             the GEOMETRY finding, no "=== Configure"
@@ -62,7 +75,7 @@ Arms:
                             lines byte-identical to CB's readings for THIS copy, not to G0/L0's:
                             those read the main worktree, whose growth baseline moves every time a
                             round lands, so a copy-vs-main comparison is a cross-tree check, not a
-                            control. Its reading line counts matched lines over all nine compared
+                            control. Its reading line counts matched lines over all ten compared
                             keys (a yes/no derived from one tool only once printed "identical=yes"
                             on the same line as three red lines from the other tool).
   CB  copy baseline         (not an arm) the copy's own two tool readings, taken after make_copy's
@@ -79,7 +92,11 @@ Arms:
 Not proven here, and said so: the host GREEN path through 1i and 1j (a green host run needs
 configure+build+ctest, which the copy does not carry) is taken from this round's end-to-end close-out
 run on the main worktree, exactly as U-43 表 3 末行 states for step 1h. The checker's own exit 3 is the
-wrapper's except branch (code shape only); no leg manufactures a crash.
+wrapper's except branch (code shape only); no leg manufactures a crash. L6 is refused on a LINE count,
+so a rewrite that deletes a whole row while adding one row's worth of prose is invisible to it by
+construction -- no leg manufactures that either, because nothing can tell it apart from an ordinary
+round. And L6 never runs the host: the shrink path maps to exit 12 only through M2's proof that any
+non-zero from step 1j's script becomes host code 12, not through a host run that actually shrinks.
 
 One host shape the H legs have to account for: ci.ps1 prints every script finding line through
 Write-Host "  $line", so on the console "GEOMETRY ..." and "SPLITDUE ..." carry a two-space indent.
@@ -554,6 +571,13 @@ def leg_l4():
                   "L4 size=6001 fired line: %r" % inv.get("split_project_due"))
         check("INV ledger=%s" % rel_path in text,
               "L4 size=%d: the judged file must be printed: %r" % (size, inv.get("ledger")))
+        # The refusal leg's one exception, on the synthetic member this leg already carries: a file git
+        # has no HEAD blob for is a creation, and a creation has nothing to lose -- so it must print as
+        # new, never as a shrink. Without this the L6 arms would be the only evidence that the gate can
+        # tell "no base yet" apart from "base unreadable".
+        check("shrink=ledger:new " in inv.get("shrink", ""),
+              "L4 size=%d: an untracked member must read as new, not as a shrink: %r"
+              % (size, inv.get("shrink")))
         reading(since, "L4 size=%d rc=%d | %s" % (size, rc, inv.get("split_project_due")))
 
 
@@ -624,6 +648,148 @@ def leg_l5(l0_text):
             % (ledger_nl, register_nl, family_nl,
                int(cur2.group(1)) if cur2 else -1, rc2,
                inv2.get("verdict", "").rsplit("=", 1)[-1]))
+
+
+def drop_last_line(data):
+    """The bytes of the same file with its LAST line taken away (one fewer newline, nothing else moved).
+
+    Written as a byte cut rather than a line count on purpose: the leg under test compares a member's
+    worktree line count against its OWN HEAD blob, so the injection has to be a real deletion from the
+    delivered bytes -- not a shorter synthetic file, which would also change the content the round
+    claims to have kept.
+    """
+    if not data.endswith(b"\n"):
+        return None
+    cut = data[:-1].rfind(b"\n")
+    if cut < 0:
+        return None
+    return data[:cut + 1]
+
+
+SHRINK_REASON = "u61-w2-declared-cut"
+
+
+def leg_l6():
+    """W-2's half: the family sum can hide a member that LOST lines, so the loss is refused by itself.
+
+    L5 judges the sum, which is what stops a move from voting. A deletion is the other vote, and the
+    sum is blind to it: one row out of the register plus two rows into the ledger nets positive on the
+    family while the register shrank -- and the plan's own rule is that old rows stay on the page with
+    an in-place note, so a shrinking row count is the shape a rewrite that broke that rule leaves
+    behind. The gate answers it per member, on the exit 2 channel M2 already proves maps to host code
+    12, which is why nothing here touches ci.ps1.
+
+    Three arms, all against the COPY with the copy's own HEAD (blob_nl resolves a path against HEAD, so
+    a synthetic temp file reads as "new" and can never fire):
+      A6   register minus its last line -> rc=2, ONE ERROR line naming register and its own two counts
+           with delta=-1, and neither an INV reading nor a verdict printed (a refusal is not a result).
+      A6b  the same bytes + --allow-shrink=<reason> -> rc=0, due=DECLARED, the reason echoed on
+           overrides_used -- the declaration is the only way through and it cannot be silent.
+      A6c  W-2 exactly: ledger +1 line AND register -1 line, so the family delta is 0 and burst, rate
+           and size are all not due. The refusal still fires, and the DECLARED run prints all three
+           growth flags NO in the same stdout -- the evidence that the growth channel could not have
+           said a word about this round.
+    Nothing absolute is pinned: every count compared comes from this copy's own pre-injection run.
+    """
+    since = arm_open()
+    ledger = rel(LEDGER_REL.replace("/", os.sep))
+    register = rel(REGISTER_REL.replace("/", os.sep))
+    led_before = read_bytes(ledger)
+    reg_before = read_bytes(register)
+    try:
+        rc0, text0 = run_gate(cwd=WT)
+        inv0 = inv_lines(text0)
+        rows0 = dict((m.group(1), m.group(2)) for m in MEMBER_RE.finditer(text0))
+        if not check(rc0 == 0 and "ledger:+0,register:+0" in inv0.get("shrink", ""),
+                     "L6: the copy is not on a zero-shrink baseline, rc=%s shrink=%r"
+                     % (rc0, inv0.get("shrink"))):
+            reading(since, "L6: copy shrink baseline unreadable, no arm measured")
+            return
+        if not check(sorted(rows0) == ["ledger", "register"]
+                     and rows0["ledger"] not in ("none", None)
+                     and rows0["register"] not in ("none", None),
+                     "L6: no member counts to inject against: %r" % (rows0,)):
+            reading(since, "L6: member counts unreadable, no arm measured")
+            return
+        reg_nl = int(rows0["register"])
+        led_nl = int(rows0["ledger"])
+
+        cut_reg = drop_last_line(reg_before)
+        if not check(cut_reg is not None and cut_reg.count(b"\n") == reg_nl - 1,
+                     "L6: cannot take exactly one line off the register (HEAD blob has %d newline(s), "
+                     "the cut has %s)" % (reg_nl, cut_reg.count(b"\n") if cut_reg else "unreadable")):
+            reading(since, "L6: injection shape not available, no arm measured")
+            return
+        with open(register, "wb") as handle:
+            handle.write(cut_reg)
+        expect = "register base_nl=%d cur_nl=%d delta=-1" % (reg_nl, reg_nl - 1)
+        rc, text = run_gate(cwd=WT)
+        err = [ln for ln in text.split("\n") if ln.startswith("ERROR")]
+        check(rc == 2, "A6: undeclared shrink must refuse on rc=2, got %s | %s" % (rc, tail(text)))
+        check(len(err) == 1, "A6: expected exactly one ERROR line, got %r" % err)
+        check(any("undeclared family shrink" in ln for ln in err),
+              "A6: the ERROR line must name the refusal: %r" % err)
+        check(any(expect in ln for ln in err),
+              "A6: the ERROR line must carry the member's own numbers %r: %r" % (expect, err))
+        check("INV" not in text, "A6: a refusal must print no reading at all: %r" % text[:200])
+        # verdict=/split_project_due= as PRINTED keys, not the bare word: the refusal's own wording says
+        # "no verdict was printed", so a match on "verdict" would red a run that behaved correctly.
+        check("verdict=" not in text and "split_project_due=" not in text,
+              "A6: a refusal must print neither its due reading nor a verdict: %r" % text[:200])
+        check("SPLITDUE" not in text, "A6: a refusal is not a growth finding: %r" % text[:200])
+
+        rc_b, text_b = run_gate(["--allow-shrink", SHRINK_REASON], cwd=WT)
+        inv_b = inv_lines(text_b)
+        check(rc_b == 0, "A6b: the declared cut must be allowed through, got %s | %s"
+              % (rc_b, tail(text_b)))
+        check("due=DECLARED" in inv_b.get("shrink", ""),
+              "A6b: the declared run must say the loss was declared: %r" % inv_b.get("shrink"))
+        check("register:-1" in inv_b.get("shrink", ""),
+              "A6b: the per-member reading must still show the loss: %r" % inv_b.get("shrink"))
+        check("declared=%s" % SHRINK_REASON in inv_b.get("shrink", ""),
+              "A6b: the reason belongs on the shrink line: %r" % inv_b.get("shrink"))
+        check(SHRINK_REASON in inv_b.get("overrides_used", ""),
+              "A6b: a bypass has to be printed on overrides_used: %r" % inv_b.get("overrides_used"))
+
+        # A6c -- the shape the sum cannot see: the ledger gains a line as the register loses one.
+        filler = (u"- 探针注入占位行（不含引用、不含路径、不含结论标记）\n").encode("utf-8")
+        check(led_before.endswith(b"\n"), "A6c: the ledger does not end with a newline")
+        with open(ledger, "wb") as handle:
+            handle.write(led_before + filler)
+        rc_c, text_c = run_gate(cwd=WT)
+        err_c = [ln for ln in text_c.split("\n") if ln.startswith("ERROR")]
+        check(rc_c == 2, "A6c: family net 0 with a shrinking member must still refuse, got %s | %s"
+              % (rc_c, tail(text_c)))
+        check(any(expect in ln for ln in err_c),
+              "A6c: the refusal must name the member that lost lines, not the family sum: %r" % err_c)
+
+        rc_d, text_d = run_gate(["--allow-shrink", SHRINK_REASON], cwd=WT)
+        inv_d = inv_lines(text_d)
+        check(rc_d == 0, "A6c: the declared run must reach a verdict, got %s | %s"
+              % (rc_d, tail(text_d)))
+        check(inv_d.get("verdict", "").endswith("GREEN"),
+              "A6c: the declared run's verdict: %r" % inv_d.get("verdict"))
+        check("shrink=ledger:+1,register:-1 member_net=+0" in inv_d.get("shrink", ""),
+              "A6c: the per-member line must show the offsetting pair: %r" % inv_d.get("shrink"))
+        head = inv_d.get("head", "")
+        check("delta=0" in head and "cur_nl=%d" % (led_nl + reg_nl) in head,
+              "A6c: the family sum reads no growth at all here: %r" % head)
+        for key, want in (("head", "burst_due=NO"), ("rounds_counted", "rate_due=NO"),
+                          ("ceiling", "size_due=NO")):
+            check(want in inv_d.get(key, ""),
+                  "A6c: all three growth conditions must be silent in the same run, %s missing: %r"
+                  % (want, inv_d.get(key)))
+        reading(since, "L6 refuse rc=%d/%d declared rc=%d/%d | %s | %s | growth_all_NO=%s"
+                % (rc, rc_c, rc_b, rc_d,
+                   inv_b.get("shrink", "?"), inv_d.get("shrink", "?"),
+                   yn(all(w in inv_d.get(k, "") for k, w in
+                          (("head", "burst_due=NO"), ("rounds_counted", "rate_due=NO"),
+                           ("ceiling", "size_due=NO"))))))
+    finally:
+        with open(ledger, "wb") as handle:
+            handle.write(led_before)
+        with open(register, "wb") as handle:
+            handle.write(reg_before)
 
 
 # ---------------------------------------------------------------- H legs: the host maps them
@@ -757,7 +923,7 @@ def copy_baseline():
     BASELINE_L0_COPY.clear()
     BASELINE_L0_COPY.update(dict((k, split.get(k)) for k in
                                  ("head", "rounds_counted", "history_only_last3", "ceiling",
-                                  "verdict")))
+                                  "shrink", "verdict")))
     print("[U44-INFO] copy baseline: geom=%s split=%s | %s | %s"
           % (geom.get("verdict"), split.get("verdict"), split.get("head"),
              split.get("history_only_last3")))
@@ -883,12 +1049,12 @@ def leg_h3(copy_before):
     pairs = (("geometry", geom_inv, BASELINE_G0_COPY,
               ("header_codes", "executable_stops", "findings", "step_count")),
              ("split gate", split_inv, BASELINE_L0_COPY,
-              ("head", "rounds_counted", "history_only_last3", "ceiling", "verdict")))
+              ("head", "rounds_counted", "history_only_last3", "ceiling", "shrink", "verdict")))
     total = sum(len(keys) for _l, _i, _b, keys in pairs)
     # The denominator of the reading line is itself part of what this arm judges: without this check a
     # key added to or dropped from the two tuples above would quietly move "restored lines=N/M" instead
     # of reddening the arm.
-    check(total == 9, "H3: comparison surface drifted, expected 9 keys (4 geometry + 5 split), got %d"
+    check(total == 10, "H3: comparison surface drifted, expected 10 keys (4 geometry + 6 split), got %d"
           % total)
     diffs = []
     for label, inv, base, keys in pairs:
@@ -998,6 +1164,7 @@ def main():
     leg_l4()
     leg_lm()
     leg_l5(l0_text)
+    leg_l6()
     leg_h1()
     leg_h2()
     leg_m2()

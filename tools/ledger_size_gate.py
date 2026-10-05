@@ -54,16 +54,39 @@ old rationale stays visible rather than being traded away. --no-register runs a 
 single-member family (the boundary arms of tools/probes/U44_geometry_split_probe.py use it) and
 says so on INV overrides_used=.
 
+Why there is a FOURTH judgement, and why it is a refusal rather than a fourth SPLITDUE. The U-60
+review's W-2 measured what the family sum does NOT close: summing the members makes "move d rows from
+one file into the other" vote nothing, but nothing ever looked at a round that DELETES rows. Before
+this leg the only deletion-shaped answer was the vanished-member refusal in main() ("a member is only
+ever left out by name"), and the tool that does count deletions -- tools/inline_rewrite_check.py's
+delete= reading -- publishes REPORT_ONLY exit=0 and the ledger quotes its lines verbatim, so it has no
+red switch either. A family net of +2 built from ledger +5 and register -3 therefore passed every
+condition while quietly dropping registered rows. So now: any judged member whose worktree line count
+is BELOW its own HEAD blob is refused (exit 2, one ERROR line, no INV reading and no verdict printed)
+unless the run declares the cut with --allow-shrink=<reason>, echoed on INV overrides_used= like every
+other override. Per member and not on the family sum is the whole point -- a member-level floor is
+exactly what the family sum cannot see. A member with no base blob (the round that creates it) has
+nothing to lose: it is printed as new and can never read as a shrink.
+
+Why the refusal channel instead of the growth one: a shrink is not "the split is due", and exit 2
+already means "this gate declines to judge" for an unreadable ledger and for a vanished member. It is
+also why nothing in tools/ci.ps1 was touched -- step 1j maps ANY non-zero from this script onto host
+exit 12 and echoes the script's own code, U44's M2 arm already proves that mapping for code 2, and
+editing that step's comment would move CITEHOSTDEF's marker_digest, which twelve ledger rows quote
+verbatim (measured before choosing: 12 hits for b57315efc59f in the ledger).
+
 Reproduce:
     python tools/ledger_size_gate.py
     python tools/ledger_size_gate.py --ledger <path>        (judge a copy as the ledger member)
     python tools/ledger_size_gate.py --register <path>      (judge a copy as the register member)
     python tools/ledger_size_gate.py --no-register          (declared single-member family)
     python tools/ledger_size_gate.py --base-lines <n>       (what the probe injects: the family base)
+    python tools/ledger_size_gate.py --allow-shrink <text>  (declare a deliberate family cut)
 Overrides are printed on the line INV overrides_used=, so a bypass can never be silent.
 
 Exit: 0 = not due | 1 = due (each fired condition printed as SPLITDUE) | 2 = git or the ledger
-unreadable | 3 = script crash. Output is ASCII-only (cp936 console); paths go through esc().
+unreadable, a tracked member missing, or a judged member that lost lines against HEAD without a
+declaration | 3 = script crash. Output is ASCII-only (cp936 console); paths go through esc().
 """
 import io
 import os
@@ -201,17 +224,23 @@ def main():
 
     argv = sys.argv[1:]
     ledger_arg, register_arg, base_lines_arg = None, None, None
+    allow_shrink = None
     drop_register = False
     overrides = []
     i = 0
     while i < len(argv):
         a = argv[i]
-        if a in ("--ledger", "--register", "--base-lines") and i + 1 < len(argv):
+        if a in ("--ledger", "--register", "--base-lines", "--allow-shrink") and i + 1 < len(argv):
             value = argv[i + 1]
             if a == "--ledger":
                 ledger_arg = value
             elif a == "--register":
                 register_arg = value
+            elif a == "--allow-shrink":
+                if not value.strip():
+                    print("ERROR --allow-shrink wants a non-empty reason")
+                    return 2
+                allow_shrink = value
             else:
                 try:
                     base_lines_arg = int(value)
@@ -268,13 +297,18 @@ def main():
         return 2
     head_sha = out.decode("ascii").strip()[:12]
 
+    # Every judged member's own base, read whether or not the family base below is injected: the
+    # shrink leg has to answer for the bytes in front of it, and an injected family base must not be
+    # able to hide a member that lost lines.
+    base_by_label = dict((label, blob_nl("HEAD", rel)) for label, rel, _c, _s in member_read)
+
     if base_lines_arg is not None:
         base_total = base_lines_arg
         base_mode = "injected"
     else:
         base_total, base_mode = 0, "measured"
         for label, rel, _cur, _state in member_read:
-            nl = blob_nl("HEAD", rel)
+            nl = base_by_label[label]
             if nl is None:
                 # a family member that does not exist at HEAD yet is a creation, not a read failure
                 continue
@@ -282,6 +316,32 @@ def main():
 
     delta = cur_total - base_total
     burst_due = delta > SPLIT_TRIGGER_DELTA
+
+    # The fourth judgement: a judged member that lost lines against its own HEAD blob. Per member, on
+    # purpose -- see the docstring: the family sum is what a move hides behind, and it hides a deletion
+    # just as well when another member grew more than the deletion took away.
+    shrink_parts, shrunk, member_net = [], [], 0
+    for label, rel, cur, state in member_read:
+        if state == "absent":
+            shrink_parts.append("%s:absent" % label)
+            continue
+        base_nl = base_by_label[label]
+        if base_nl is None:
+            shrink_parts.append("%s:new" % label)
+            continue
+        shrink_parts.append("%s:%+d" % (label, cur - base_nl))
+        member_net += cur - base_nl
+        if cur < base_nl:
+            shrunk.append((label, base_nl, cur))
+    if shrunk and not allow_shrink:
+        print("ERROR undeclared family shrink: %s -- a judged member holds fewer lines than its own "
+              "HEAD blob. The family sum cannot see this on its own (another member can have grown "
+              "more), and the plan's own rule is that old rows stay on the page with an in-place note, "
+              "so a cut has to be declared with --allow-shrink=<reason>, which prints on "
+              "overrides_used=. Nothing was judged here and no verdict was printed."
+              % esc(" ; ".join("%s base_nl=%d cur_nl=%d delta=%+d"
+                               % (l, b0, c0, c0 - b0) for l, b0, c0 in shrunk)))
+        return 2
 
     # Condition 2: the newest rounds, counting the round in progress first, from the pinned anchor on.
     rel_bytes = [rel.encode("utf-8") for _label, rel, _c, _s in member_read]
@@ -311,6 +371,10 @@ def main():
     for label, rel, nl, state in member_read:
         print("INV member=%s path=%s cur_nl=%s state=%s"
               % (label, esc(rel), "none" if nl is None else nl, state))
+    print("INV shrink=%s member_net=%+d due=%s declared=%s"
+          % (",".join(shrink_parts) or "none", member_net,
+             "DECLARED" if shrunk else "NO",
+             esc(allow_shrink) if allow_shrink else "none"))
     print("INV head=%s base_nl=%d cur_nl=%d delta=%d base_mode=%s burst_limit=%d burst_due=%s"
           % (head_sha, base_total, cur_total, delta, base_mode, SPLIT_TRIGGER_DELTA,
              "YES" if burst_due else "NO"))
