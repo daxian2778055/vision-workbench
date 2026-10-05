@@ -39,10 +39,27 @@ Sizes are newline counts of the bytes (nl), matching inline_rewrite_check's LEDG
 is one less than the split-count line numbers the FILE lines print, and the difference is stated here
 rather than in the ledger.
 
+Why all three conditions read the FAMILY from U-60 on (the split-the-file project's first cut).
+U-60 stopped re-carrying the cumulative register into every new ledger block and moved it to
+docs/对标差距推进计划-登记附表.md. Measured before that cut (build/u44_probe/u60_split_census.py,
+log U60_split_census_2.txt): the last four blocks held 13/18/23/31 register rows, and the newest
+edge re-emitted 21 of them byte-identically while rewriting 2 in place -- so a block's size was
+mostly a copy of the previous block's copy. If the gate kept judging one path, moving those rows
+to a sibling file would have halved every reading without writing one line less. So burst, rate and
+size all read the sum over the family, which is the only quantity a cut cannot vote on: +d on one
+member and -d on the other leave the family sum, and therefore this judgement, exactly as hard as
+before. LINES_CEILING still means "the whole plan is too big", now measured on the family total,
+and each member's own line count is printed on its INV member= line so the per-file half of the
+old rationale stays visible rather than being traded away. --no-register runs a declared
+single-member family (the boundary arms of tools/probes/U44_geometry_split_probe.py use it) and
+says so on INV overrides_used=.
+
 Reproduce:
     python tools/ledger_size_gate.py
-    python tools/ledger_size_gate.py --ledger <path>        (judge a copy)
-    python tools/ledger_size_gate.py --base-lines <n>       (what the probe injects)
+    python tools/ledger_size_gate.py --ledger <path>        (judge a copy as the ledger member)
+    python tools/ledger_size_gate.py --register <path>      (judge a copy as the register member)
+    python tools/ledger_size_gate.py --no-register          (declared single-member family)
+    python tools/ledger_size_gate.py --base-lines <n>       (what the probe injects: the family base)
 Overrides are printed on the line INV overrides_used=, so a bypass can never be silent.
 
 Exit: 0 = not due | 1 = due (each fired condition printed as SPLITDUE) | 2 = git or the ledger
@@ -55,7 +72,7 @@ import sys
 
 # Keep the constants in one place: this gate and the report-only inventory must never drift apart.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from inline_rewrite_check import LEDGER_REL, SPLIT_TRIGGER_DELTA  # noqa: E402
+from inline_rewrite_check import LEDGER_REL, REGISTER_REL, SPLIT_TRIGGER_DELTA  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -114,7 +131,21 @@ def blob_nl(rev, rel_path):
 
 
 def rounds_touching(rel_bytes, rev_range=None):
-    """[(sha7, net_lines)], newest first, for commits that changed this path.
+    """[(sha7, net_lines)], newest first, for commits that changed this path."""
+    return _rounds({rel_bytes}, rev_range)
+
+
+def family_rounds(rel_bytes_list, rev_range=None):
+    """Same list, but each commit's net is the SUM over every family member it changed.
+
+    This is what the split trigger is judged on: a round that moves rows out of one member into
+    another nets the same on the family, so no cut can vote on the window by itself.
+    """
+    return _rounds(set(rel_bytes_list), rev_range)
+
+
+def _rounds(rel_set, rev_range=None):
+    """[(sha7, net_lines)] over rel_set, newest first, from git's own commit order.
 
     The revision range travels as an ASCII argv; the Chinese path is never put on the command line,
     it is matched here after unquoting git's own numstat output.
@@ -126,22 +157,26 @@ def rounds_touching(rel_bytes, rev_range=None):
     rc, out, _err = git(args)
     if rc != 0:
         return None
-    sha, rows = None, []
+    order, acc, touched, sha = [], {}, set(), None
     for raw in out.split(b"\n"):
         if raw.startswith(b"COMMIT "):
             sha = raw[7:].strip().decode("ascii", "replace")
+            if sha not in acc:
+                acc[sha] = 0
+                order.append(sha)
             continue
-        if b"\t" not in raw:
+        if b"\t" not in raw or sha is None:
             continue
         parts = raw.split(b"\t")
-        if len(parts) < 3 or unquote(parts[2]) != rel_bytes:
+        if len(parts) < 3 or unquote(parts[2]) not in rel_set:
             continue
         try:
             added, deleted = int(parts[0]), int(parts[1])
         except ValueError:
             continue  # a binary diff prints "-" for both counts
-        rows.append((sha, added - deleted))
-    return rows
+        acc[sha] += added - deleted
+        touched.add(sha)
+    return [(s, acc[s]) for s in order if s in touched]
 
 
 def rate_window(delta, head_sha, after_anchor):
@@ -165,15 +200,18 @@ def main():
         pass
 
     argv = sys.argv[1:]
-    ledger_arg, base_lines_arg = None, None
+    ledger_arg, register_arg, base_lines_arg = None, None, None
+    drop_register = False
     overrides = []
     i = 0
     while i < len(argv):
         a = argv[i]
-        if a in ("--ledger", "--base-lines") and i + 1 < len(argv):
+        if a in ("--ledger", "--register", "--base-lines") and i + 1 < len(argv):
             value = argv[i + 1]
             if a == "--ledger":
                 ledger_arg = value
+            elif a == "--register":
+                register_arg = value
             else:
                 try:
                     base_lines_arg = int(value)
@@ -182,18 +220,47 @@ def main():
                     return 2
             overrides.append("%s=%s" % (a[2:], value))
             i += 2
+        elif a == "--no-register":
+            drop_register = True
+            overrides.append("no_register=declared")
+            i += 1
         else:
             print("ERROR unknown or incomplete option: %s" % esc(a))
             return 2
 
-    # The judged file. --ledger is the read side of the same switch: without it a probe copy could
-    # inject a break that the gate never looks at.
-    abs_path = os.path.join(ROOT, (ledger_arg or LEDGER_REL).replace("/", os.sep))
-    if not os.path.isfile(abs_path):
-        print("ERROR ledger not readable: %s" % esc(abs_path))
-        return 2
-    with io.open(abs_path, "rb") as handle:
-        cur_nl = handle.read().count(b"\n")
+    # The judged family. --ledger and --register are the read sides of the same switches: without
+    # them a probe copy could inject a break the gate never looks at. --no-register is DECLARED,
+    # printed on the overrides line, and is how a single-member family is run on purpose.
+    members = [("ledger", ledger_arg or LEDGER_REL)]
+    if not drop_register:
+        members.append(("register", register_arg or REGISTER_REL))
+
+    cur_total = 0
+    member_read = []
+    for label, rel in members:
+        abs_path = os.path.join(ROOT, rel.replace("/", os.sep))
+        if not os.path.isfile(abs_path):
+            if label == "ledger":
+                print("ERROR ledger not readable: %s" % esc(abs_path))
+                return 2
+            # The one absence a member may still have before the round that creates it lands: not on
+            # disk AND not in HEAD, so there was nothing yet to sum and nobody can have taken it.
+            # Once HEAD carries it, absence on disk is a deletion -- the run would then sum one file
+            # while still printing family_members_judged=2 and go GREEN, which is exactly the escape
+            # the family sum exists to close, and unlike --no-register nothing declared it. Refuse;
+            # --no-register stays the only way to judge a smaller family on purpose.
+            if blob_nl("HEAD", rel) is not None:
+                print("ERROR family member not readable although HEAD tracks it: label=%s path=%s "
+                      "(a member is only ever left out by name, on --no-register)"
+                      % (label, esc(rel)))
+                return 2
+            cur_total += 0
+            member_read.append((label, rel, None, "absent"))
+            continue
+        with io.open(abs_path, "rb") as handle:
+            nl = handle.read().count(b"\n")
+        cur_total += nl
+        member_read.append((label, rel, nl, "present"))
 
     rc, out, _err = git(["git", "rev-parse", "--verify", "HEAD^{commit}"])
     if rc != 0:
@@ -202,27 +269,31 @@ def main():
     head_sha = out.decode("ascii").strip()[:12]
 
     if base_lines_arg is not None:
-        base_nl = base_lines_arg
+        base_total = base_lines_arg
+        base_mode = "injected"
     else:
-        base_nl = blob_nl("HEAD", ledger_arg or LEDGER_REL)
-        if base_nl is None:
-            print("ERROR ledger not readable at HEAD: %s" % esc(ledger_arg or LEDGER_REL))
-            return 2
+        base_total, base_mode = 0, "measured"
+        for label, rel, _cur, _state in member_read:
+            nl = blob_nl("HEAD", rel)
+            if nl is None:
+                # a family member that does not exist at HEAD yet is a creation, not a read failure
+                continue
+            base_total += nl
 
-    delta = cur_nl - base_nl
+    delta = cur_total - base_total
     burst_due = delta > SPLIT_TRIGGER_DELTA
 
     # Condition 2: the newest rounds, counting the round in progress first, from the pinned anchor on.
-    rel_bytes = (ledger_arg or LEDGER_REL).encode("utf-8")
-    after_anchor = rounds_touching(rel_bytes, "%s..HEAD" % REGISTERED_ANCHOR)
-    committed = rounds_touching(rel_bytes)
+    rel_bytes = [rel.encode("utf-8") for _label, rel, _c, _s in member_read]
+    after_anchor = family_rounds(rel_bytes, "%s..HEAD" % REGISTERED_ANCHOR)
+    committed = family_rounds(rel_bytes)
     if after_anchor is None or committed is None:
         print("ERROR git log --numstat unreadable (anchor=%s)" % REGISTERED_ANCHOR)
         return 2
     window, rate_sum, rate_due = rate_window(delta, head_sha, after_anchor)
 
     history3 = sum(net for _s, net in committed[:RATE_WINDOW_ROUNDS])
-    size_due = cur_nl > LINES_CEILING
+    size_due = cur_total > LINES_CEILING
 
     fired = []
     if burst_due:
@@ -232,9 +303,17 @@ def main():
     if size_due:
         fired.append("size")
 
-    print("INV ledger=%s" % esc(rel_bytes.decode("utf-8")))
-    print("INV head=%s base_nl=%d cur_nl=%d delta=%d burst_limit=%d burst_due=%s"
-          % (head_sha, base_nl, cur_nl, delta, SPLIT_TRIGGER_DELTA, "YES" if burst_due else "NO"))
+    print("INV ledger=%s" % esc(ledger_arg or LEDGER_REL))
+    print("INV register=%s family_members_judged=%d%s"
+          % (esc(register_arg or REGISTER_REL),
+             len(member_read), " (--no-register: the register member was DECLARED out)"
+             if drop_register else ""))
+    for label, rel, nl, state in member_read:
+        print("INV member=%s path=%s cur_nl=%s state=%s"
+              % (label, esc(rel), "none" if nl is None else nl, state))
+    print("INV head=%s base_nl=%d cur_nl=%d delta=%d base_mode=%s burst_limit=%d burst_due=%s"
+          % (head_sha, base_total, cur_total, delta, base_mode, SPLIT_TRIGGER_DELTA,
+             "YES" if burst_due else "NO"))
     print("INV rounds_counted=%d window=%s sum=%d rate_limit=%d rate_due=%s"
           % (len(window), esc(",".join("%s:%+d" % (s, n) for s, n in window) or "none"),
              rate_sum, RATE_LIMIT_LINES, "YES" if rate_due else "NO"))
@@ -243,14 +322,14 @@ def main():
     print("INV history_only_last3=%d rate_limit=%d (INFORMATIONAL, not judged: that growth predates "
           "this gate -- see the docstring)" % (history3, RATE_LIMIT_LINES))
     print("INV ceiling=%d size_due=%s headroom=%d"
-          % (LINES_CEILING, "YES" if size_due else "NO", LINES_CEILING - cur_nl))
+          % (LINES_CEILING, "YES" if size_due else "NO", LINES_CEILING - cur_total))
     if overrides:
         print("INV overrides_used=%s" % esc(" ".join(overrides)))
     else:
         print("INV overrides_used=none")
     for name in fired:
         print("SPLITDUE condition=%s -- the split-the-file project is due; per the recorded trigger "
-              "it must open before another round appends to this ledger" % name)
+              "it must open before another round appends to this ledger family" % name)
     print("INV split_project_due=%s fired=%s"
           % ("YES" if fired else "NO", esc(",".join(fired) or "none")))
     print("INV verdict=%s" % ("RED" if fired else "GREEN"))

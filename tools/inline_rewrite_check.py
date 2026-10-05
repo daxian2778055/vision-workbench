@@ -61,6 +61,16 @@ The third scoping is the criterion printed as the would-be verdict. The ledger's
 growth is printed next to it together with the recorded split-the-file trigger (more than
 +88 lines in one round), so that trigger is computed rather than eyeballed.
 
+From U-60 the "ledger" bucket is a FAMILY of two members, not one path: the plan itself and
+the companion register file that its first cut moved the cumulative "not proven" table into.
+Both live under the same convention (append new rows, annotate carried rows in place, never
+delete), so both belong in the same judged population - and the family's SUM is what the
+split trigger is judged on, because a cut that moves rows from one member to the other has
+to leave the judgement as hard as it was. The single-file LEDGER_GROWTH line is still printed
+in its old format (the ledger quotes it verbatim, so reformatting it would make registered
+readings unreplayable); FAMILY_GROWTH is printed next to it, with the source of each member's
+number labelled.
+
 Reproduce (two immutable commits - worktree-independent, this is the anchor to cite):
     python tools/inline_rewrite_check.py --base 46b1559 --head ff7b8b0
 Reproduce (base commit vs the bytes about to be delivered - moves with the worktree):
@@ -87,6 +97,15 @@ TEXT_SUFFIX = (".md", ".cpp", ".cc", ".h", ".hpp", ".py", ".ps1", ".txt", ".cmak
 # The gap plan is the one file under the ledger convention ("keep the old wording
 # verbatim, append the correction"), so it is the only file a red gate may judge.
 LEDGER_REL = u"docs/\u5bf9\u6807\u5dee\u8ddd\u63a8\u8fdb\u8ba1\u5212.md"
+# U-60 opened the split-the-file project with its first cut: from section 3.64 on, the
+# cumulative register ("the half not proven") is appended to this companion file instead of
+# being re-carried into every new ledger block. It is under the SAME convention (append new
+# rows, annotate carried rows in place, never delete), so it is in the same judged population
+# as the ledger -- and it is in the same measured FAMILY, because moving rows out of one
+# member must not lower the family's total growth (see tools/ledger_size_gate.py).
+REGISTER_REL = (u"docs/\u5bf9\u6807\u5dee\u8ddd\u63a8\u8fdb\u8ba1\u5212"
+                u"-\u767b\u8bb0\u9644\u8868.md")
+LEDGER_FAMILY = (LEDGER_REL, REGISTER_REL)
 # Recorded trigger (ledger section 3.42 table row "观察"): a round that adds MORE than
 # this many lines to the ledger must open the split-the-file project first.
 SPLIT_TRIGGER_DELTA = 88
@@ -94,7 +113,7 @@ BUCKETS = ("ledger", "other_doc", "test", "tool", "code", "other")
 
 
 def bucket_of(path):
-    if path == LEDGER_REL:
+    if path in LEDGER_FAMILY:
         return "ledger"
     if path.endswith(".md"):
         return "other_doc"
@@ -244,6 +263,9 @@ def main():
     per_file = {}
     by_bucket = {b: dict(files=0, rewrite=0, altered_or_replaced=0) for b in BUCKETS}
     growth = {}
+    # Where each family member's number came from. "not-in-diff" is the only honest label for a
+    # member this diff does not touch at all; the other four are set while walking the listing.
+    member_state = dict((m, "not-in-diff") for m in LEDGER_FAMILY)
 
     print("== file id map (base=%s head=%s) ==" % (base_sha, head_sha))
     for p in listed:
@@ -256,16 +278,25 @@ def main():
         if head is None:
             cur_data = read_worktree(p)
             if cur_data is None:
+                if p in LEDGER_FAMILY:
+                    member_state[p] = "listed-but-absent-in-worktree"
                 print("SKIP file=%s path=%s reason=absent-in-worktree" % (fid[p], esc(p)))
                 continue
         else:
             cur_data, why = blob_of(head, p)
             if cur_data is None:
+                if p in LEDGER_FAMILY:
+                    member_state[p] = "listed-but-absent-in-head"
                 print("SKIP file=%s path=%s reason=%s" % (fid[p], esc(p), why))
                 continue
         base_data, why = blob_of(base, p)
         if base_data is None:
             # A newly added file: every line is an insertion, no in-place rewrite possible.
+            if p in LEDGER_FAMILY:
+                # Its base is 0 because git says the blob does not exist at base, not because this
+                # script guessed; the whole file counts as growth of the family.
+                growth[p] = (0, cur_data.count(b"\n"))
+                member_state[p] = "created"
             print("NEWFILE file=%s path=%s base_state=%s cur_lines=%d"
                   % (fid[p], esc(p), why, len(to_lines(cur_data))))
             continue
@@ -312,8 +343,9 @@ def main():
         by_bucket[b]["files"] += 1
         by_bucket[b]["rewrite"] += counts["rewrite_1x1"] + counts["rewrite_nxn"]
         by_bucket[b]["altered_or_replaced"] += altered_here
-        if p == LEDGER_REL:
+        if p in LEDGER_FAMILY:
             growth[p] = (base_data.count(b"\n"), cur_data.count(b"\n"))
+            member_state[p] = "measured"
         print("FILE file=%s path=%s base_lines=%d cur_lines=%d base_cr=%d cur_cr=%d "
               "rewrite=%d altered_or_replaced=%d"
               % (fid[p], esc(p), len(b_lines), len(c_lines),
@@ -353,7 +385,7 @@ def main():
           % (md_altered, "RED" if md_altered else "GREEN"))
     print("INV scoping=ledger_only altered_or_replaced=%d verdict_if_enabled=%s"
           % (ledger_altered, "RED" if ledger_altered else "GREEN"))
-    if growth:
+    if LEDGER_REL in growth:
         g_base, g_cur = growth[LEDGER_REL]
         delta = g_cur - g_base
         print("INV LEDGER_GROWTH base_nl=%d cur_nl=%d delta=%d trigger_more_than=%d "
@@ -363,6 +395,20 @@ def main():
                  "YES" if delta > SPLIT_TRIGGER_DELTA else "NO"))
     else:
         print("INV LEDGER_GROWTH not_measured (ledger file not in this diff; delta unknown)")
+    # The family line is what the split trigger is judged on (tools/ledger_size_gate.py): moving
+    # rows from one member to the other moves +d on one side and -d on the other, so the SUM is
+    # the only reading a cut cannot vote on. Every member prints with the source of its number.
+    parts, fam = [], 0
+    for member in LEDGER_FAMILY:
+        d = (growth[member][1] - growth[member][0]) if member in growth else 0
+        fam += d
+        parts.append("%s=%+d[%s]" % (esc(member), d, member_state[member]))
+    print("INV FAMILY_GROWTH %s sum_delta=%d trigger_more_than=%d split_project_due_if_family=%s "
+          "(brackets say where each number came from: measured=two readable blobs, created=no base "
+          "blob at all so the whole file counts, not-in-diff=0 by definition, listed-but-absent=the "
+          "diff names it but one side has no bytes and this script does not invent a count for it)"
+          % (" ".join(parts), fam, SPLIT_TRIGGER_DELTA,
+             "YES" if fam > SPLIT_TRIGGER_DELTA else "NO"))
     print("INV note=rewrite_1x1 is what the whole-block prefix gate cannot see; "
           "sizing gate reads (file_lines, not line_numbers) stay unchanged by it")
     print("INV verdict=REPORT_ONLY exit=0 (no assertion made here)")

@@ -10,7 +10,9 @@ What it proves (advance plan 3.48):
        and asserting the finding names the expected leg), and it checks the mapping end to end (H1).
   S-2  step 1j calls tools/ledger_size_gate.py, which judges the recorded split trigger instead of
        only printing it. H2 grows the copy's ledger past the burst limit and expects the host to stop
-       with exit 12 before configure.
+       with exit 12 before configure. From U-60 that trigger is judged on the ledger FAMILY -- the plan
+       plus the cumulative register that moved out of it in the first cut of the split-the-file project
+       -- and L5 is the leg that keeps the family sum honest rather than a way to halve a reading.
   S-3  the same script carries the rate condition (3 rounds > 200 lines) and the absolute size
        ceiling; their arithmetic is driven through rate_window() with synthetic round sequences (L3),
        because a real repository only offers the rounds it actually has.
@@ -30,18 +32,28 @@ Arms:
                             and not clean)
   L0  gate baseline         delivered bytes -> rc=0, and its history_only_last3 reading equals the
                             sum this probe computes independently with one git diff --numstat range
+                            that names BOTH family members and adds every row git prints
   L1  burst boundary        --base-lines derived from the gate's own cur_nl (delta 88 / delta 89):
                             burst off at 88, on at 89; fired list, SPLITDUE lines and exit code must
-                            all follow from the three condition flags of that same run
+                            all follow from the three condition flags of that same run, and that run
+                            must still be judging two members
   L3  rate arithmetic       rate_window() on synthetic sequences: one round not judged, 190 green,
-                            200 green (strict >), 210 red, a 4th round drops out of the window
-  L4  size ceiling          synthetic 6000-line file -> rc=0; synthetic 6001-line file -> rc=1 size only
+                            200 green (strict >), 210 red, a 4th round drops out of the window -- plus
+                            the probe's two family paths pinned onto the gate's own constants
+  L4  size ceiling          synthetic 6000-line file -> rc=0; synthetic 6001-line file -> rc=1 size
+                            only, each as a DECLARED single-member family (--no-register) so the real
+                            register's line count cannot sit inside the boundary being measured
   L-M unreadable ledger     --ledger <missing> -> rc=2
+  L5  family sum            the delivered run's judged cur_nl equals the two INV member= lines that
+                            same run prints, and --no-register drops exactly the register's own count
+                            while naming itself on overrides_used -- the leg that turns "the rows moved
+                            to a sibling file" into a reading instead of an escape hatch
   H1  host maps 11          copy-only defect (delete the header row for 11, same shape as G-A, so the
                             geometry step is the FIRST step that sees it) -> ci.ps1 exit 11, echo shows
                             the GEOMETRY finding, no "=== Configure"
   H2  host maps 12          copy-only growth (89 citation-free filler lines appended to the copy's
-                            ledger, so no earlier step judges it) -> ci.ps1 exit 12, step 1i's OK line
+                            ledger, so no earlier step judges it -- one member's growth, which the
+                            family sum must still read as a burst) -> ci.ps1 exit 12, step 1i's OK line
                             is present (proof the stop came from 1j), no "=== Configure"
   M2  host maps 2           copy-only temporary edit: step 1j passes --ledger <missing> -> ci.ps1 still
                             exit 12 AND the failure line reads "script exit 2" (the host test is
@@ -109,6 +121,12 @@ GEOM_TOOL = "tools/ci_exit_code_check.py"
 SPLIT_TOOL = "tools/ledger_size_gate.py"
 # The gap plan, spelled the way the tools spell it (the console here is cp936).
 LEDGER_REL = u"docs/\u5bf9\u6807\u5dee\u8ddd\u63a8\u8fdb\u8ba1\u5212.md"
+# From U-60 on the gate judges a FAMILY of two: the ledger plus the cumulative register that moved out
+# of it. This probe has to spell the second path itself because it loads the gate as a module in one
+# leg only; the two spellings are pinned against the gate's own constants in leg_l3, and leg_l5 reads
+# the member lines the delivered gate prints.
+REGISTER_REL = (u"docs/\u5bf9\u6807\u5dee\u8ddd\u63a8\u8fdb\u8ba1\u5212"
+                u"-\u767b\u8bb0\u9644\u8868.md")
 
 GEOM_STEP = "=== Host exit-code geometry self-check ==="
 SPLIT_STEP = "=== Ledger growth split trigger ==="
@@ -363,20 +381,23 @@ def leg_l0():
           "L0: a plain run must use no override: %r" % inv.get("overrides_used"))
     # Cross-check the gate's own history reading with ONE git command that does the arithmetic
     # itself, instead of re-running the per-commit parser: the range numstat of the last three
-    # commits must equal the sum of their individual nets.
-    # Standing assumption: the gate sums the last three commits that TOUCHED the ledger, HEAD~3..HEAD
-    # takes the last three commits full stop. They can only be expected to agree while every recent
-    # commit updates the ledger (true for this repo's close-out flow). If a commit ever lands that
-    # does not touch the ledger, this leg prints the gap as a failure -- it does not adjudicate
-    # which of the two definitions is right.
-    proc = sh(["git", "diff", "--numstat", "HEAD~3", "HEAD", "--", LEDGER_REL])
-    line = decode(proc.stdout).strip()
-    m = re.match(r"^(\d+)\t(\d+)\t", line)
-    if not check(proc.returncode == 0 and m is not None,
-                 "L0: cross-check git diff unreadable: rc=%s %r" % (proc.returncode, line[:120])):
+    # commits must equal the sum of their individual nets. From U-60 on the gate nets each of those
+    # commits over the family, so the range names BOTH members and EVERY row git prints for them is
+    # added -- reading only the ledger row would compare the gate's sum against half of it.
+    # Standing assumption: the gate sums the last three commits that TOUCHED either member,
+    # HEAD~3..HEAD takes the last three commits full stop. They can only be expected to agree while
+    # every recent commit updates the ledger (true for this repo's close-out flow). If a commit ever
+    # lands that does not touch the ledger, this leg prints the gap as a failure -- it does not
+    # adjudicate which of the two definitions is right.
+    proc = sh(["git", "diff", "--numstat", "HEAD~3", "HEAD", "--", LEDGER_REL, REGISTER_REL])
+    rows = [ln for ln in decode(proc.stdout).split("\n") if ln.strip()]
+    pairs = [re.match(r"^(\d+)\t(\d+)\t", ln) for ln in rows]
+    if not check(proc.returncode == 0 and bool(rows) and all(pairs),
+                 "L0: cross-check git diff unreadable: rc=%s rows=%d %r"
+                 % (proc.returncode, len(rows), rows[:3])):
         reading(since, "L0: cross-check unavailable")
         return text
-    cross = int(m.group(1)) - int(m.group(2))
+    cross = sum(int(m.group(1)) - int(m.group(2)) for m in pairs)
     printed = re.search(r"history_only_last3=(\d+)", text)
     check(printed is not None, "L0: gate printed no history_only_last3 reading")
     # The two algorithms agreeing is the assertion; the value itself is not pinned -- see the note
@@ -385,17 +406,18 @@ def leg_l0():
     check(scanned is not None and int(scanned.group(1)) >= 3,
           "L0: history window has fewer than 3 commits to sum: %r" % inv.get("anchor"))
     check(printed is not None and int(printed.group(1)) == cross,
-          "L0: gate reads %s but git diff HEAD~3..HEAD reads %d"
-          % (printed.group(1) if printed else "?", cross))
-    reading(since, "L0 rc=%d history3=%s cross_check=%d ceiling=%s"
-            % (rc, printed.group(1) if printed else "?", cross, inv.get("ceiling")))
+          "L0: gate reads %s but git diff HEAD~3..HEAD reads %d over %d family row(s)"
+          % (printed.group(1) if printed else "?", cross, len(rows)))
+    reading(since, "L0 rc=%d history3=%s family_cross=%d rows=%d ceiling=%s"
+            % (rc, printed.group(1) if printed else "?", cross, len(rows), inv.get("ceiling")))
     return text
 
 
 def leg_l1():
     """The burst condition's boundary: delta 88 leaves burst off, delta 89 turns it on (the recorded
-    trigger is strictly greater). Both bases come from the gate's own cur_nl reading, so the two runs
-    differ in exactly one injected number whatever the ledger measures today.
+    trigger is strictly greater). Both bases come from the gate's own cur_nl reading -- which from
+    U-60 is the FAMILY sum of both members, so what --base-lines injects here is a family base; the
+    two runs still differ in exactly one injected number whatever the family measures today.
 
     The exit code is NOT hard-coded here. Condition 2 counts the rounds that really landed after the
     pinned anchor, so a replay two rounds from can legitimately fire rate as well -- pinning "delta 88
@@ -440,6 +462,11 @@ def leg_l1():
         check(rc == (1 if want else 0), "L1 delta=%s: rc=%s with fired=%s" % (delta, rc, fired.group(1)))
         check("base-lines=%s" % base_lines in inv.get("overrides_used", ""),
               "L1 %s: the override must be printed: %r" % (delta, inv.get("overrides_used")))
+        # The base goes in as a FAMILY base, so the run that answers for the boundary must still be
+        # judging both members -- a one-member run would read the same delta off different bytes.
+        check("family_members_judged=2" in inv.get("register", ""),
+              "L1 delta=%s: the burst boundary must be judged on the whole family: %r"
+              % (delta, inv.get("register")))
         reading(since, "L1 delta=%s base=%s rc=%d | %s | rate_due=%s size_due=%s"
                 % (delta, base_lines, rc, due,
                    "YES" if rate_on else "NO", "YES" if size_on else "NO"))
@@ -455,6 +482,14 @@ def leg_l3():
     check(gate.RATE_WINDOW_ROUNDS == 3 and gate.RATE_LIMIT_LINES == 200,
           "L3: the rule under test is no longer 3 rounds over 200 lines: %s / %s"
           % (gate.RATE_WINDOW_ROUNDS, gate.RATE_LIMIT_LINES))
+    # The legs that pass --ledger/--register an explicit path, and the ones that read the member lines
+    # back, are only meaningful while the probe and the gate name the same two files. This is the leg
+    # that already has the module imported, so the check lives here rather than duplicating an import.
+    paths_agree = gate.LEDGER_REL == LEDGER_REL and gate.REGISTER_REL == REGISTER_REL
+    check(paths_agree,
+          "L3: probe and gate no longer name the same family: probe=(%s, %s) gate=(%s, %s)"
+          % tuple([s.encode("unicode_escape").decode("ascii")
+                   for s in (LEDGER_REL, REGISTER_REL, gate.LEDGER_REL, gate.REGISTER_REL)]))
 
     rounds = [("r%d" % i, net) for i, net in enumerate((70, 60, 50, 40), start=1)]
     cases = [
@@ -475,8 +510,8 @@ def leg_l3():
     check([s for s, _n in window] == ["HEAD", "r1", "r2"],
           "L3 window order: %r" % ([s for s, _n in window],))
     check(total == 1 + 70 + 60, "L3 window sum: %d" % total)
-    reading(since, "L3 cases=%d boundary=%s window=%s sum=%d"
-            % (len(cases), "200/201", ",".join(s for s, _n in window), total))
+    reading(since, "L3 cases=%d boundary=%s window=%s sum=%d family_paths_agree=%s"
+            % (len(cases), "200/201", ",".join(s for s, _n in window), total, yn(paths_agree)))
 
 
 def synthetic_ledger(name, lines):
@@ -490,16 +525,28 @@ def synthetic_ledger(name, lines):
 
 def leg_l4():
     """Condition 3: the absolute size ceiling, one line either side of it, with the burst condition
-    neutralised by --base-lines so only size can answer."""
+    neutralised by --base-lines so only size can answer.
+
+    These two arms are why --no-register exists: the ceiling is judged on the family sum, so a synthetic
+    file would otherwise be measured with the real register's line count added to it and the 6000/6001
+    boundary would land on a different pair of files every round. Dropping a member is DECLARED, and
+    the leg below requires the gate to print that declaration -- a bypass nobody can see is the shape
+    this whole probe exists to catch."""
     for size, want_rc in ((6000, 0), (6001, 1)):
         since = arm_open()
         path = synthetic_ledger("synthetic_%d.md" % size, size)
         rel_path = os.path.relpath(path, ROOT).replace(os.sep, "/")
-        rc, text = run_gate(["--ledger", rel_path, "--base-lines", str(size)])
+        rc, text = run_gate(["--ledger", rel_path, "--base-lines", str(size), "--no-register"])
         inv = inv_lines(text)
         check(rc == want_rc, "L4 size=%d: rc=%s expected %s | %s" % (size, rc, want_rc, text[-160:]))
         check("cur_nl=%d" % size in inv.get("head", ""), "L4 size=%d head line: %r"
               % (size, inv.get("head")))
+        check("family_members_judged=1" in inv.get("register", ""),
+              "L4 size=%d: the synthetic file must be the only member judged: %r"
+              % (size, inv.get("register")))
+        check("no_register=declared" in inv.get("overrides_used", ""),
+              "L4 size=%d: a one-member family must say so: %r"
+              % (size, inv.get("overrides_used")))
         check(("size_due=YES" if want_rc else "size_due=NO") in inv.get("ceiling", ""),
               "L4 size=%d ceiling line: %r" % (size, inv.get("ceiling")))
         if want_rc:
@@ -518,6 +565,65 @@ def leg_lm():
     check("SPLITDUE" not in text and "verdict=GREEN" not in text,
           "L-M: a broken input must not read as a finding or as clean: %r" % text[:160])
     reading(since, "L-M rc=%d | %s" % (rc, text.split("\n")[0]))
+
+
+MEMBER_RE = re.compile(r"^INV member=(\w+) path=\S+ cur_nl=(\d+|none) state=(\w+)", re.M)
+
+
+def leg_l5(l0_text):
+    """The family half of the split-the-file promise, measured on the delivered bytes.
+
+    U-60 moved the re-carried cumulative register out of the ledger into a file of its own, and the
+    gate sums burst, rate and size over BOTH. This arm judges the one property that makes that cut an
+    honest one instead of an escape hatch: the number the trigger is read off must be the sum of the
+    members the very same run prints -- a gate that lists two files and adds up one of them goes red
+    here. Nothing absolute is pinned: both runs' numbers come from readings taken in this arm, so a
+    reviewer replaying it two rounds from now measures the same relation (see the note above the
+    EXPECTED constants).
+
+    The second half is the DECLARATION. --no-register has to show up on overrides_used and has to drop
+    exactly the register member's own line count, so a single-member family can only ever be run on
+    purpose -- which is what leg_l4 needs for its synthetic boundary. This arm does not pin the
+    declared run's verdict: dropping a member is precisely the move that can legitimately change a rate
+    reading, and what is under test here is whether anyone can see it happen.
+    """
+    since = arm_open()
+    inv = inv_lines(l0_text)
+    rows = dict((m.group(1), (m.group(2), m.group(3))) for m in MEMBER_RE.finditer(l0_text))
+    if not check(sorted(rows) == ["ledger", "register"],
+                 "L5: the bare run printed member lines %s, want ledger+register" % sorted(rows)):
+        reading(since, "L5: family membership unreadable: %r" % (rows,))
+        return
+    if not check(rows["ledger"][1] == "present" and rows["register"][1] == "present",
+                 "L5: a close-out that points at a companion file must land it: %r" % (rows,)):
+        reading(since, "L5: a family member is absent: %r" % (rows,))
+        return
+    check("family_members_judged=2" in inv.get("register", ""),
+          "L5: the bare run must judge both members: %r" % inv.get("register"))
+    ledger_nl, register_nl = int(rows["ledger"][0]), int(rows["register"][0])
+    printed = re.search(r"cur_nl=(\d+)", inv.get("head", ""))
+    check(printed is not None and int(printed.group(1)) == ledger_nl + register_nl,
+          "L5: judged cur_nl %s is not the sum of the members the same run prints (%d+%d=%d)"
+          % (printed.group(1) if printed else "?", ledger_nl, register_nl, ledger_nl + register_nl))
+    family_nl = int(printed.group(1)) if printed else -1
+    rc2, text2 = run_gate(["--no-register"])
+    inv2 = inv_lines(text2)
+    rows2 = [m.group(1) for m in MEMBER_RE.finditer(text2)]
+    check(rows2 == ["ledger"], "L5: --no-register still printed members %s, want the ledger alone"
+          % rows2)
+    check("family_members_judged=1" in inv2.get("register", ""),
+          "L5: the declared run must report one member: %r" % inv2.get("register"))
+    check("no_register=declared" in inv2.get("overrides_used", ""),
+          "L5: dropping a member must be printed, never silent: %r" % inv2.get("overrides_used"))
+    cur2 = re.search(r"cur_nl=(\d+)", inv2.get("head", ""))
+    check(cur2 is not None and int(cur2.group(1)) == ledger_nl,
+          "L5: the declared run reads cur_nl %s, want the ledger member's own %d (it dropped %s)"
+          % (cur2.group(1) if cur2 else "?", ledger_nl,
+             "nothing" if cur2 is None else ledger_nl + register_nl - int(cur2.group(1))))
+    reading(since, "L5 family=%d+%d=%d declared_out=%d judged=2->1 rc2=%d verdict2=%s"
+            % (ledger_nl, register_nl, family_nl,
+               int(cur2.group(1)) if cur2 else -1, rc2,
+               inv2.get("verdict", "").rsplit("=", 1)[-1]))
 
 
 # ---------------------------------------------------------------- H legs: the host maps them
@@ -594,8 +700,18 @@ def make_copy():
 
 
 def watched_copy_files():
+    # The appendix is in this list because the gate the copy runs judges the FAMILY: a copy that kept
+    # yesterday's companion file (or none at all, before the first close-out commits it) would read a
+    # different cur_nl from the main tree, and CB/H3 would then be comparing two different sums.
+    # inline_rewrite_check.py is in it one level down for the same reason: the gate imports
+    # LEDGER_REL, REGISTER_REL and SPLIT_TRIGGER_DELTA from that module, and the copy is checked out
+    # at HEAD -- before this round's commit that checkout still holds yesterday's module, so the gate
+    # would die on an ImportError in copy_baseline instead of judging anything.
     return [CI_PS1, os.path.join("tools", "ci_exit_code_check.py"),
-            os.path.join("tools", "ledger_size_gate.py"), LEDGER_REL.replace("/", os.sep)]
+            os.path.join("tools", "ledger_size_gate.py"),
+            os.path.join("tools", "inline_rewrite_check.py"),
+            LEDGER_REL.replace("/", os.sep),
+            REGISTER_REL.replace("/", os.sep)]
 
 
 def eol_verdict(before, after):
@@ -854,6 +970,15 @@ def main():
         os.makedirs(LOGDIR)
     require_scratch_lock("U44_geometry_split_probe")
 
+    # Every watched file gets snapshotted below and re-read in Z0, and read_bytes() has no answer for a
+    # path that is not there -- so a missing family member is named and exits here rather than as a
+    # traceback that never reaches the [U44-SUMMARY] block.
+    missing = [p for p in (LEDGER_REL, REGISTER_REL)
+               if not os.path.isfile(os.path.join(ROOT, p.replace("/", os.sep)))]
+    if missing:
+        abort("a watched family member is not on disk, so no baseline can be taken: "
+              + ", ".join(m.encode("unicode_escape").decode("ascii") for m in missing))
+
     MAIN_BEFORE.update(dict((p, md5(read_bytes(os.path.join(ROOT, p))))
                             for p in watched_copy_files()))
     STATUS_BEFORE = sh(["git", "status", "--porcelain"], cwd=ROOT).stdout
@@ -867,11 +992,12 @@ def main():
     copy_baseline()
 
     legs_g()
-    leg_l0()
+    l0_text = leg_l0()
     leg_l1()
     leg_l3()
     leg_l4()
     leg_lm()
+    leg_l5(l0_text)
     leg_h1()
     leg_h2()
     leg_m2()
