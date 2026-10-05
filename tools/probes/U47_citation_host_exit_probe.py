@@ -724,7 +724,7 @@ LK_INERT_BODY = (
 # pinned name, the way TRACKED_SCRATCH_DRIVERS is: sweeping write_section_*.py instead would judge
 # every frozen writer from past rounds, whose bytes cited evidence is read from. A round that renames
 # its writer has to edit this line on purpose. Concatenated ON PURPOSE, the discipline above.
-LEDGER_PUBLISHER_REL = os.path.join("build", "u44_" + "probe", "write_section_" + "361.py")
+LEDGER_PUBLISHER_REL = os.path.join("build", "u44_" + "probe", "write_section_" + "362.py")
 # The two calls an atomic publish is made of: stage the bytes, put them on disk, then swap the name.
 # os.<attr> calls on the module NAME os -- a str.replace or a Path.fsync must not satisfy this.
 PUBLISH_CALLS = ("os." + "replace", "os." + "fsync")
