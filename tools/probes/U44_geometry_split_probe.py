@@ -33,9 +33,11 @@ Arms:
   G-F code repurposed       step 1h's exit 10 changed to exit 11 -> legs B/C/E all fire on one defect
   G-M unreadable file       --path <missing> -> rc=2, no GEOMETRY line (a broken input is not drift
                             and not clean)
-  L0  gate baseline         delivered bytes -> rc=0, and its history_only_last3 reading equals the
-                            sum this probe computes independently with one git diff --numstat range
-                            that names BOTH family members and adds every row git prints
+  L0  gate baseline         delivered bytes -> rc=0, and its history_only_last3 reading agrees with the
+                            SAME window git selects itself (the newest rounds that touched either
+                            member, inside the gate's own scan bound) -- triangular over three
+                            arithmetic paths: the gate's printed reading, one range numstat naming BOTH
+                            members over that span, and the sum of each selected round's own numstat
   L1  burst boundary        --base-lines derived from the gate's own cur_nl (delta 88 / delta 89):
                             burst off at 88, on at 89; fired list, SPLITDUE lines and exit code must
                             all follow from the three condition flags of that same run, and that run
@@ -97,6 +99,9 @@ so a rewrite that deletes a whole row while adding one row's worth of prose is i
 construction -- no leg manufactures that either, because nothing can tell it apart from an ordinary
 round. And L6 never runs the host: the shrink path maps to exit 12 only through M2's proof that any
 non-zero from step 1j's script becomes host code 12, not through a host run that actually shrinks.
+L0's cross-check has no synthetic negative arm either -- the only proof it bites is the red it printed
+on the post-landing replay of the retired HEAD~3..HEAD form, which was a real divergence between two
+window definitions rather than a manufactured one.
 
 One host shape the H legs have to account for: ci.ps1 prints every script finding line through
 Write-Host "  $line", so on the console "GEOMETRY ..." and "SPLITDUE ..." carry a two-space indent.
@@ -396,17 +401,36 @@ def leg_l0():
     check("size_due=NO" in inv.get("ceiling", ""), "L0: size: %r" % inv.get("ceiling"))
     check("overrides_used=none" in inv.get("overrides_used", ""),
           "L0: a plain run must use no override: %r" % inv.get("overrides_used"))
-    # Cross-check the gate's own history reading with ONE git command that does the arithmetic
-    # itself, instead of re-running the per-commit parser: the range numstat of the last three
-    # commits must equal the sum of their individual nets. From U-60 on the gate nets each of those
-    # commits over the family, so the range names BOTH members and EVERY row git prints for them is
-    # added -- reading only the ledger row would compare the gate's sum against half of it.
-    # Standing assumption: the gate sums the last three commits that TOUCHED either member,
-    # HEAD~3..HEAD takes the last three commits full stop. They can only be expected to agree while
-    # every recent commit updates the ledger (true for this repo's close-out flow). If a commit ever
-    # lands that does not touch the ledger, this leg prints the gap as a failure -- it does not
-    # adjudicate which of the two definitions is right.
-    proc = sh(["git", "diff", "--numstat", "HEAD~3", "HEAD", "--", LEDGER_REL, REGISTER_REL])
+    # Cross-check the gate's own history reading with git doing the arithmetic, on the SAME window
+    # definition: history_only_last3 sums the newest RATE_WINDOW_ROUNDS commits that TOUCH either
+    # family member, inside the gate's own SCAN_COMMITS scan. So the control selects those commits with
+    # git's own pathspec and then nets the whole span with one range numstat naming BOTH members --
+    # reading only the ledger row would compare the gate's sum against half of it.
+    # Why this was re-cut in U-61: the previous form compared against HEAD~3..HEAD (the last three
+    # commits full stop) and stood on the assumption that every recent commit updates the family. That
+    # assumption was load-bearing and it broke one commit later -- the tools-only commit that landed W-2
+    # touched neither member, and the post-landing replay read "gate reads 134 but git diff
+    # HEAD~3..HEAD reads 65", where BOTH numbers were correct about two different windows. A leg that
+    # reds on a healthy repository is a leg people route around, so the control moved to the gate's
+    # definition instead of the repository bending to the leg.
+    # What is no longer assumed: that recent commits touch either member. What still is: a linear
+    # history. git rev-list's path simplification and the gate's per-commit numstat parse can disagree
+    # across a merge, so the merge count inside the scan is printed on both the reading line and the
+    # failure line -- the leg still reds on the numbers rather than adjudicating which selection git
+    # meant.
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import ledger_size_gate as gate  # (constants only: the window size and the scan bound)
+    sel = sh(["git", "rev-list", "-%d" % gate.RATE_WINDOW_ROUNDS,
+              "HEAD~%d..HEAD" % gate.SCAN_COMMITS, "--", LEDGER_REL, REGISTER_REL])
+    rounds = [s for s in decode(sel.stdout).split("\n") if s.strip()]
+    if not check(sel.returncode == 0 and len(rounds) == gate.RATE_WINDOW_ROUNDS,
+                 "L0: cannot select the gate's %d-round window from git: rc=%s got=%d %r"
+                 % (gate.RATE_WINDOW_ROUNDS, sel.returncode, len(rounds),
+                    [s[:7] for s in rounds])):
+        reading(since, "L0: window not selectable, no cross-check measured")
+        return text
+    proc = sh(["git", "diff", "--numstat", "%s^" % rounds[-1], rounds[0], "--",
+               LEDGER_REL, REGISTER_REL])
     rows = [ln for ln in decode(proc.stdout).split("\n") if ln.strip()]
     pairs = [re.match(r"^(\d+)\t(\d+)\t", ln) for ln in rows]
     if not check(proc.returncode == 0 and bool(rows) and all(pairs),
@@ -415,18 +439,44 @@ def leg_l0():
         reading(since, "L0: cross-check unavailable")
         return text
     cross = sum(int(m.group(1)) - int(m.group(2)) for m in pairs)
+    # A third, independent arithmetic path: each selected round's OWN numstat. The range net telescopes
+    # only if the history between the endpoints is what git's selection said it was, so requiring
+    # range == per-round sum == the gate's printed reading makes the agreement triangular instead of a
+    # two-way coincidence. There is deliberately no "at least one round must be non-zero" guard here:
+    # three consecutive in-place-only rounds is a legitimate repository shape (72b287c itself nets 0 on
+    # the family), and demanding growth is exactly the fragility this re-cut retired. The per-round nets
+    # therefore go on the reading line, so a thin agreement is at least visible to a reviewer.
+    nets = []
+    for sha in rounds:
+        one = sh(["git", "diff", "--numstat", "%s^" % sha, sha, "--", LEDGER_REL, REGISTER_REL])
+        ones = [re.match(r"^(\d+)\t(\d+)\t", ln) for ln in decode(one.stdout).split("\n") if ln.strip()]
+        if not check(one.returncode == 0 and all(ones),
+                     "L0: round %s's own numstat is unreadable: rc=%s %r"
+                     % (sha[:7], one.returncode, decode(one.stdout)[:120])):
+            reading(since, "L0: per-round leg unavailable, no cross-check measured")
+            return text
+        nets.append((sha[:7], sum(int(m.group(1)) - int(m.group(2)) for m in ones)))
+    check(sum(n for _s, n in nets) == cross,
+          "L0: the range net %d is not the sum of the selected rounds' own nets %s"
+          % (cross, ",".join("%s:%+d" % n for n in nets)))
     printed = re.search(r"history_only_last3=(\d+)", text)
     check(printed is not None, "L0: gate printed no history_only_last3 reading")
     # The two algorithms agreeing is the assertion; the value itself is not pinned -- see the note
     # above EXPECTED constants. Guard against a vacuous agreement (an empty window reads 0 on both sides).
     scanned = re.search(r"scanned_commits=(\d+)", inv.get("anchor", ""))
-    check(scanned is not None and int(scanned.group(1)) >= 3,
-          "L0: history window has fewer than 3 commits to sum: %r" % inv.get("anchor"))
+    check(scanned is not None and int(scanned.group(1)) >= gate.RATE_WINDOW_ROUNDS,
+          "L0: history window has fewer than %d commits to sum: %r"
+          % (gate.RATE_WINDOW_ROUNDS, inv.get("anchor")))
+    merges = len([s for s in decode(sh(["git", "rev-list", "--merges",
+                                        "-%d" % gate.SCAN_COMMITS, "HEAD"]).stdout).split("\n")
+                  if s.strip()])
     check(printed is not None and int(printed.group(1)) == cross,
-          "L0: gate reads %s but git diff HEAD~3..HEAD reads %d over %d family row(s)"
-          % (printed.group(1) if printed else "?", cross, len(rows)))
-    reading(since, "L0 rc=%d history3=%s family_cross=%d rows=%d ceiling=%s"
-            % (rc, printed.group(1) if printed else "?", cross, len(rows), inv.get("ceiling")))
+          "L0: gate reads %s but git rev-list/diff over the same %d selected round(s) reads %d across "
+          "%d family row(s), merges_in_scan=%d"
+          % (printed.group(1) if printed else "?", len(rounds), cross, len(rows), merges))
+    reading(since, "L0 rc=%d history3=%s family_cross=%d rows=%d window=%s merges_in_scan=%d ceiling=%s"
+            % (rc, printed.group(1) if printed else "?", cross, len(rows),
+               ",".join("%s:%+d" % p for p in nets), merges, inv.get("ceiling")))
     return text
 
 
