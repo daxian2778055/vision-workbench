@@ -273,9 +273,12 @@ def read_bytes_or_none(path):
 def head_bytes(rel_posix):
     """HEAD's blob for one tracked path in the copy, or None if it has none.
 
-    The gate resolves its own base exactly this way -- git show HEAD:<path> inside the ROOT it is
-    started from -- so this is the same number the refusal will be compared against, not a second
-    opinion about what the base is.
+    This leg spells it git show HEAD:<path>. The gate's own base goes through two commands instead:
+    blob_nl pipes the same rev:path spec into git cat-file --batch-check, then fetches the object it
+    names with git cat-file blob, both with cwd the gate's own ROOT. U-62 measured the two faces
+    byte-identical for both family members (build/u44_probe/U62R_review_check_1.txt, the RV-BASE
+    lines read show_md5=catfile_md5=disk_md5), so this is still the same number the refusal will be
+    compared against, not a second opinion about what the base is.
     """
     p = sh(["git", "show", "HEAD:%s" % rel_posix], cwd=WT)
     if p.returncode != 0:
