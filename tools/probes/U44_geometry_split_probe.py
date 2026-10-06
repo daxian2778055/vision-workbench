@@ -270,6 +270,19 @@ def read_bytes_or_none(path):
     return read_bytes(path)
 
 
+def head_bytes(rel_posix):
+    """HEAD's blob for one tracked path in the copy, or None if it has none.
+
+    The gate resolves its own base exactly this way -- git show HEAD:<path> inside the ROOT it is
+    started from -- so this is the same number the refusal will be compared against, not a second
+    opinion about what the base is.
+    """
+    p = sh(["git", "show", "HEAD:%s" % rel_posix], cwd=WT)
+    if p.returncode != 0:
+        return None
+    return p.stdout
+
+
 def inv_lines(text):
     """{key: whole line} for the script's own INV readings, plus the GEOMETRY findings."""
     out = {}
@@ -740,13 +753,30 @@ def leg_l6():
            growth flags NO in the same stdout -- the evidence that the growth channel could not have
            said a word about this round.
     Nothing absolute is pinned: every count compared comes from this copy's own pre-injection run.
+
+    Baseline: the two members are reset to this copy's own HEAD blobs before the first run, and the
+    bytes the probe synced out of main's worktree are put back in the finally below. A6's delta=-1
+    only means anything with the member sitting AT its base, and the probe syncs main into the copy
+    first -- so an uncommitted family edit in main used to arrive here as register:+3 and red the leg
+    before any arm ran, which is a leg that only worked when the round happened to be committed.
     """
     since = arm_open()
     ledger = rel(LEDGER_REL.replace("/", os.sep))
     register = rel(REGISTER_REL.replace("/", os.sep))
+    # Restoration bytes: what the probe synced out of main, returned to in the finally below.
     led_before = read_bytes(ledger)
     reg_before = read_bytes(register)
+    led_head = head_bytes(LEDGER_REL)
+    reg_head = head_bytes(REGISTER_REL)
+    if not check(led_head is not None and reg_head is not None,
+                 "L6: the copy's HEAD blobs are unreadable"):
+        reading(since, "L6: HEAD baseline unreadable, no arm measured")
+        return
     try:
+        with open(ledger, "wb") as handle:
+            handle.write(led_head)
+        with open(register, "wb") as handle:
+            handle.write(reg_head)
         rc0, text0 = run_gate(cwd=WT)
         inv0 = inv_lines(text0)
         rows0 = dict((m.group(1), m.group(2)) for m in MEMBER_RE.finditer(text0))
@@ -764,7 +794,7 @@ def leg_l6():
         reg_nl = int(rows0["register"])
         led_nl = int(rows0["ledger"])
 
-        cut_reg = drop_last_line(reg_before)
+        cut_reg = drop_last_line(reg_head)
         if not check(cut_reg is not None and cut_reg.count(b"\n") == reg_nl - 1,
                      "L6: cannot take exactly one line off the register (HEAD blob has %d newline(s), "
                      "the cut has %s)" % (reg_nl, cut_reg.count(b"\n") if cut_reg else "unreadable")):
@@ -801,11 +831,28 @@ def leg_l6():
         check(SHRINK_REASON in inv_b.get("overrides_used", ""),
               "A6b: a bypass has to be printed on overrides_used: %r" % inv_b.get("overrides_used"))
 
+        # The second spelling, and the one the delivered ledger block prints: --allow-shrink=<reason>.
+        # U-62 caught this parser rejecting that spelling with exit 2 while both arms here (and the
+        # archive the ledger block quotes) used the space form -- so a run proving the feature proved
+        # nothing about the command a reader was actually handed. Same bytes, same reason: both
+        # spellings have to reach the same two lines. The reading line below is deliberately not
+        # extended; the ledger quotes its prefix verbatim.
+        rc_eq, text_eq = run_gate(["--allow-shrink=%s" % SHRINK_REASON], cwd=WT)
+        inv_eq = inv_lines(text_eq)
+        check(rc_eq == 0,
+              "A6b: the --allow-shrink=<reason> spelling must parse too, got %s | %s"
+              % (rc_eq, tail(text_eq)))
+        check(inv_eq.get("overrides_used", "") == inv_b.get("overrides_used", "")
+              and inv_eq.get("shrink", "") == inv_b.get("shrink", ""),
+              "A6b: the two spellings must print the same readings: %r/%r vs %r/%r"
+              % (inv_eq.get("overrides_used"), inv_eq.get("shrink"),
+                 inv_b.get("overrides_used"), inv_b.get("shrink")))
+
         # A6c -- the shape the sum cannot see: the ledger gains a line as the register loses one.
         filler = (u"- 探针注入占位行（不含引用、不含路径、不含结论标记）\n").encode("utf-8")
-        check(led_before.endswith(b"\n"), "A6c: the ledger does not end with a newline")
+        check(led_head.endswith(b"\n"), "A6c: the ledger does not end with a newline")
         with open(ledger, "wb") as handle:
-            handle.write(led_before + filler)
+            handle.write(led_head + filler)
         rc_c, text_c = run_gate(cwd=WT)
         err_c = [ln for ln in text_c.split("\n") if ln.startswith("ERROR")]
         check(rc_c == 2, "A6c: family net 0 with a shrinking member must still refuse, got %s | %s"

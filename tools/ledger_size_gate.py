@@ -71,9 +71,24 @@ nothing to lose: it is printed as new and can never read as a shrink.
 Why the refusal channel instead of the growth one: a shrink is not "the split is due", and exit 2
 already means "this gate declines to judge" for an unreadable ledger and for a vanished member. It is
 also why nothing in tools/ci.ps1 was touched -- step 1j maps ANY non-zero from this script onto host
-exit 12 and echoes the script's own code, U44's M2 arm already proves that mapping for code 2, and
-editing that step's comment would move CITEHOSTDEF's marker_digest, which twelve ledger rows quote
-verbatim (measured before choosing: 12 hits for b57315efc59f in the ledger).
+exit 12 and echoes the script's own code, and U44's M2 arm already proves that mapping for code 2.
+
+The reason for leaving tools/ci.ps1 alone used to be written down wrong here, so the wrong version is
+being replaced rather than quietly dropped. It claimed that editing that step's comment would move
+CITEHOSTDEF's marker_digest, which twelve ledger rows quote verbatim. The twelve hits are real
+(measured again: 12 occurrences of b57315efc59f in the ledger); the cause is not. That digest is
+sha256 over the literals step_marker_literals() pulls out of Write-Err strings and $hardMissing lines,
+and no '#' comment line feeds it. Measured three ways in build/u44_probe/U62_marker_digest_1.txt
+(rc=0): as delivered, with every '#' line in tools/ci.ps1 removed, and with the 12= exit-code comment
+reworded -- all three read markers=20 digest=b57315efc59f, and ci_exit_code_check.py reads
+verdict=GREEN on the reworded copy, so the edit would be safe and the stated obstacle was invented.
+
+What actually keeps that comment unchanged is recorded here so the next round does not rediscover it:
+it is documentation only, changing it costs one more tracked file in a round's surface plus a geometry,
+two-probe and host re-run, and the reading it makes stale is printed, not judged. That stale reading
+is stated instead of hidden -- the exit-code block still describes this script's code 2 as "unreadable"
+alone, while code 2 has three shapes today: git or the ledger unreadable, a tracked member missing
+(U-60), and an undeclared member shrink (here).
 
 Reproduce:
     python tools/ledger_size_gate.py
@@ -81,8 +96,10 @@ Reproduce:
     python tools/ledger_size_gate.py --register <path>      (judge a copy as the register member)
     python tools/ledger_size_gate.py --no-register          (declared single-member family)
     python tools/ledger_size_gate.py --base-lines <n>       (what the probe injects: the family base)
-    python tools/ledger_size_gate.py --allow-shrink <text>  (declare a deliberate family cut)
-Overrides are printed on the line INV overrides_used=, so a bypass can never be silent.
+    python tools/ledger_size_gate.py --allow-shrink=<text>  (declare a deliberate family cut)
+Overrides are printed on the line INV overrides_used=, so a bypass can never be silent. --opt=value and
+"--opt value" are the same switch here, never a second spelling to reject: a command printed in a
+delivered document has to be a command this parser accepts.
 
 Exit: 0 = not due | 1 = due (each fired condition printed as SPLITDUE) | 2 = git or the ledger
 unreadable, a tracked member missing, or a judged member that lost lines against HEAD without a
@@ -230,13 +247,23 @@ def main():
     i = 0
     while i < len(argv):
         a = argv[i]
-        if a in ("--ledger", "--register", "--base-lines", "--allow-shrink") and i + 1 < len(argv):
-            value = argv[i + 1]
-            if a == "--ledger":
+        # --opt=value is this same switch, not a second spelling to turn away. Both spellings already
+        # existed in one file -- the docstring and this tool's own ERROR text say --allow-shrink=<reason>
+        # while the Reproduce block and the probe spelled it with a space -- and the ledger block quotes
+        # this gate with the equals sign. U-62 measured that delivered reproduce line exiting 2 on
+        # "unknown or incomplete option" while the archive it cites was made with the space form: a
+        # command printed in a document nobody can run is a defect in the command, not in the reader.
+        # INV overrides_used= is keyed on the bare option name, so both spellings print the same line.
+        name, sep, inline = a.partition("=") if a.startswith("--") else (a, "", "")
+        joined = bool(sep) and name in ("--ledger", "--register", "--base-lines", "--allow-shrink")
+        if name in ("--ledger", "--register", "--base-lines", "--allow-shrink") and \
+                (joined or i + 1 < len(argv)):
+            value = inline if joined else argv[i + 1]
+            if name == "--ledger":
                 ledger_arg = value
-            elif a == "--register":
+            elif name == "--register":
                 register_arg = value
-            elif a == "--allow-shrink":
+            elif name == "--allow-shrink":
                 if not value.strip():
                     print("ERROR --allow-shrink wants a non-empty reason")
                     return 2
@@ -247,8 +274,8 @@ def main():
                 except ValueError:
                     print("ERROR --base-lines wants a number, got: %s" % esc(value))
                     return 2
-            overrides.append("%s=%s" % (a[2:], value))
-            i += 2
+            overrides.append("%s=%s" % (name[2:], value))
+            i += 1 if joined else 2
         elif a == "--no-register":
             drop_register = True
             overrides.append("no_register=declared")
