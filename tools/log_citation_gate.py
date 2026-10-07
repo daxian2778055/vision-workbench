@@ -33,11 +33,11 @@ This is that machine.
 
   4 HOST-SHAPED is judged from the file's own bytes, not from prose, under either of two readings:
       narrow -- a line matching
-        ^\s*\[OK\]\s+tests:\s*\d+/\d+\s+passed\s*$   (tools/ci.ps1:677) or
-        ^\s*\[FAIL\]\s+tests failed \(                (tools/ci.ps1:659)
+        ^\s*\[OK\]\s+tests:\s*\d+/\d+\s+passed\s*$   (tools/ci.ps1:715, :677 before U-67's step 1l) or
+        ^\s*\[FAIL\]\s+tests failed \(                (tools/ci.ps1:697, :659 before the same step)
       wide (U-55) -- a line matching ^\s*\[FAIL\]\s+ whose rest starts with a static step's own
         verdict sentence, read out of tools/ci.ps1 at run time (WRITE_ERR_RX up to the first '$',
-        plus Preflight's $hardMissing strings). A host that stopped at step 1b..1k never prints a
+        plus Preflight's $hardMissing strings). A host that stopped at step 1b..1l never prints a
         tests banner, so without this second reading its log is not evidence to this gate at all --
         which is how a piped static-red run could be cited without ever being asked for its code.
     Either way a log is host evidence because the host wrote into it, not because prose says so.
@@ -158,9 +158,10 @@ MISSING_BASELINE = (
 # with nothing to excuse it. Re-emitted by --emit-baseline, which prints both blocks.
 REGISTER_MISSING_BASELINE = ()
 
-# Rule 4's patterns, transcribed from the host's own Write-Ok / Write-Err call sites (tools/ci.ps1:677
-# and :659). A log is host evidence because the host wrote its verdict into it, so the judgement does
-# not depend on any sentence around the citation.
+# Rule 4's patterns, transcribed from the host's own Write-Ok / Write-Err call sites (tools/ci.ps1:715
+# and :697 after U-67's step 1l; :677 and :659 in the bytes that round replaced). A log is host
+# evidence because the host wrote its verdict into it, so the judgement does not depend on any
+# sentence around the citation.
 HOST_BANNERS = (
     re.compile(r"^\s*\[OK\]\s+tests:\s*\d+/\d+\s+passed\s*$"),
     re.compile(r"^\s*\[FAIL\]\s+tests failed \("),

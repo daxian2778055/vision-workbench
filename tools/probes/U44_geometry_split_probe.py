@@ -157,9 +157,12 @@ SPLIT_OK = "ledger split trigger not due"
 CONFIGURE_MARKER = "=== Configure"
 
 # Pinned from the delivered bytes (G0 asserts them, so a drift in the file cannot pass here).
-EXPECTED_COUNTS = "0:2 1:6 2:1 3:2 4:1 5:1 6:1 7:1 8:1 9:1 10:1 11:1 12:1 13:1"
-EXPECTED_HEADER = "0 1 2 3 4 5 6 7 8 9 10 11 12 13"
-EXPECTED_STEPS = "14"
+# Moved by U-67's step 1l wiring (tools/register_shape_gate.py -> host exit 14): header +14,
+# counts +14:1, steps 14 -> 15. The pre-U-67 values (header 0..13, no 14:1, steps 14) are the ones
+# the earlier round rows in the ledger quote, so G0 only holds against ci.ps1 bytes from U-67 on.
+EXPECTED_COUNTS = "0:2 1:6 2:1 3:2 4:1 5:1 6:1 7:1 8:1 9:1 10:1 11:1 12:1 13:1 14:1"
+EXPECTED_HEADER = "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14"
+EXPECTED_STEPS = "15"
 # NOT pinned as an absolute value: the gate's history_only_last3 takes the last three commits that
 # touched the ledger, so the window moves one commit forward with every commit that lands -- an
 # absolute pin here would go red for a reviewer replaying this probe at the delivered commit for a
@@ -371,10 +374,18 @@ def leg_g(leg, old, new, expect_letters, expect_substrings):
 
 
 def legs_g():
-    leg_g0()
+    g0_text = leg_g0()
+    # GB needs a code that has a header row but no executable stop. Hardcoding 14 here collided in
+    # U-67: that round wired step 1l to host exit 14, so the injected "not wired" row described a
+    # code that IS wired and the arm read rc=0. The value now comes from the header line G0 printed
+    # in this same pass -- max+1 has no stop by construction, whatever gets wired later.
+    codes = [int(c) for c in
+             inv_lines(g0_text).get("header_codes", "").split("=", 1)[-1].split()]
+    free_code = str(max(codes) + 1) if codes else "99"
     leg_g("GA", HEADER_ROW_11, u"", ("A",), ("A stop code 11 fires 1 time(s) but has no header row",))
-    leg_g("GB", HEADER_ROW_11, HEADER_ROW_11 + u"      14 = reserved for a gate that is not wired\n",
-          ("B",), ("B header row 14 has no executable stop",))
+    leg_g("GB", HEADER_ROW_11,
+          HEADER_ROW_11 + u"      %s = reserved for a gate that is not wired\n" % free_code,
+          ("B",), ("B header row %s has no executable stop" % free_code,))
     leg_g("GC", STEP_1J_HEADING, STEP_1J_HEADING + u"\n    exit 11",
           ("C", "E"), ("C gate code 11 fires 2 time(s), frozen 1", "also fires inside"))
     leg_g("GD", STEP_1I_HEADING, u'Write-Step "Host exit-code geometry self-check RENAMED"',

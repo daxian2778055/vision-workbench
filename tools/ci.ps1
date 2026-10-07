@@ -29,6 +29,10 @@
       13 = a log the gap plan cites cannot be opened on this machine and is not in the frozen
            baseline (tools/log_citation_gate.py -- the script's own code is echoed: ADDED 1,
            unreadable 2, crash 3)
+      14 = the register appendix broke its append-only promise: a row it had already published was
+           altered or dropped, or an in-cell append changed that row's shape
+           (tools/register_shape_gate.py -- the script's own code is echoed: RED 1,
+           unreadable or no rounds judged 2, crash 3)
 
     Note: this script is intentionally ASCII-only, and therefore carries no UTF-8 BOM
     (PowerShell 5.1 only needs a BOM when a .ps1 contains non-ASCII text). The two-sided
@@ -374,6 +378,40 @@ if ($citeCode -ne 0) {
     exit 13
 }
 Write-Ok "cited logs all present or in the frozen baseline ($hygieneExe)"
+
+# ---------------------------------------- 1l. register appendix append-only check
+# Why it runs here: the second ledger face (docs/<gap-plan>-<register-appendix>.md, the numbered
+# table split out of the gap plan) publishes one row per round, and promises that a published row is
+# never rewritten underneath the citations that point at it. tools/register_shape_gate.py turned
+# that promise into a red-capable reading in the previous round, but nothing in the host called it,
+# so the promise lived in prose again -- the same dead-gate shape as G-1/G-2, and the reason steps
+# 1h..1k exist. The step runs the tool's whole-history mode: the committed face is what a reviewer
+# replays, and an uncommitted rewrite of an old row is judged by the same pass (the tool prints its
+# own pending-worktree pair). Cost, measured not assumed: on this machine, history mode (13 commits
+# touching, 12 pairs) took 6.3 s against 0.48 s for one pair, ratio 13 -- both printed by
+# build/u44_probe/U67_step_cost_1.txt. A face whose only commit has no parent
+# is a NO_ROUNDS exit 2, so a shallow clone cannot read as a silent green.
+# Must never be a silent skip: any non-zero from the script = exit 14 (its own code is echoed).
+Write-Step "Register appendix append-only check"
+$regLog = Join-Path $RepoRoot 'ci-register-shape.log'
+$regArgs = $hygienePre + @('tools/register_shape_gate.py')
+& $hygieneExe @regArgs 2>&1 | Tee-Object -FilePath $regLog | Out-Null
+$regCode = $LASTEXITCODE
+
+$regAll = @(Get-Content $regLog -ErrorAction SilentlyContinue)
+if ($regAll.Count -eq 0) { Write-Host '  (register_shape_gate.py produced no output)' }
+$regShown = @($regAll | Where-Object { $_ -match '^(\[RG\] face=|\[RG-INV\]|\[RG-FIND\]|\[RG-VERDICT\]|\[RG-ABORT\]|ERROR)' })
+foreach ($line in $regShown) { Write-Host "  $line" }
+if ($regShown.Count -eq 0 -and $regAll.Count -gt 0) {
+    Write-Host "  (no RG-INV/RG-VERDICT line in $($regAll.Count) log line(s) - the script did not reach its summary)"
+}
+Write-Host "  full register-face reading: $regLog ($($regAll.Count) line(s))"
+if ($regCode -ne 0) {
+    Write-Err "register appendix append-only check failed (script exit $regCode) via '$hygieneExe'; see $regLog"
+    Pop-Location
+    exit 14
+}
+Write-Ok "register appendix rows preserved, appends shaped as registered ($hygieneExe)"
 
 # ------------------------------------------------------------------ 2. clean
 if ($Clean -and (Test-Path $BuildDir)) {

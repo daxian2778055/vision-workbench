@@ -43,8 +43,9 @@ STOP_RX = re.compile(r"^[ \t]*exit[ \t]+(\d+)[ \t]*$")
 STEP_RX = re.compile(r'Write-Step "([^"]+)"')
 
 # The Write-Step headings of ci.ps1, in file order, frozen from the bytes this round delivers: the
-# thirteen that fc12294 already had plus the one this round wires in (1k =
-# tools/log_citation_gate.py). Leg D compares against exactly this list.
+# thirteen that fc12294 already had, plus the two wired in after it -- 1k =
+# tools/log_citation_gate.py (tenth round) and 1l = tools/register_shape_gate.py (U-67).
+# Leg D compares against exactly this list.
 EXPECTED_STEPS = [
     "Preflight",
     "Repository hygiene",
@@ -57,6 +58,7 @@ EXPECTED_STEPS = [
     "Host exit-code geometry self-check",
     "Ledger growth split trigger",
     "Cited-log presence check",
+    "Register appendix append-only check",
     "Build ($Config)",
     "Artifact freshness",
     "Tests (CTest / $Config)",
@@ -75,6 +77,7 @@ GATE_CODE_OF_STEP = [
     ("Host exit-code geometry self-check", "11"),
     ("Ledger growth split trigger", "12"),
     ("Cited-log presence check", "13"),
+    ("Register appendix append-only check", "14"),
 ]
 
 # Frozen executable-stop counts of the gate codes. 3 reads 2 because the interpreter is required
@@ -82,6 +85,7 @@ GATE_CODE_OF_STEP = [
 # code fires from exactly one place.
 FROZEN_GATE_COUNTS = {
     "3": 2, "4": 1, "5": 1, "6": 1, "7": 1, "8": 1, "9": 1, "10": 1, "11": 1, "12": 1, "13": 1,
+    "14": 1,
 }
 SHARED_CODES = ("0", "1", "2", "3")
 
