@@ -117,6 +117,9 @@ Reproduce:
     python tools/log_citation_gate.py --register <path>   (same, for the appendix face)
     python tools/log_citation_gate.py --face register     (one face, that face's own baselines)
     python tools/log_citation_gate.py --emit-baseline     (print both fresh paste blocks; still judges)
+    python tools/log_citation_gate.py --ledger=<path>     (the same switch, spelled with the equals sign)
+"--opt value" and "--opt=value" are one switch here, never a second spelling to turn away, and a value
+slot that would receive a token starting with "--" stops the run instead of becoming the value.
 
 Exit: 0 = green or declared skip | 1 = ADDED citations (CITEADD) or host-shaped citations without the
 contract line (CITEHOSTADD) | 2 = ledger unreadable | 3 = script crash. Output is ASCII-only (cp936
@@ -479,24 +482,40 @@ def main(argv):
     register_arg = None
     face_arg = None
     emit_baseline = False
+    # The three value-taking switches, both spellings. --opt=value and "--opt value" are the same switch:
+    # a command printed in a delivered document has to be a command this parser accepts, and the ledger
+    # block quotes this gate's sibling with the equals sign. And a value slot that would receive a token
+    # starting with "--" is refused HERE: before U-73 the three slots differed only in whether a
+    # downstream reader happened to choke on switch text, so a swallowed switch could narrow the judged
+    # population and the run still printed its green verdict.
+    value_opts = ("--ledger", "--register", "--face")
     i = 1
     while i < len(argv):
         a = argv[i]
         if a == "--emit-baseline":
             emit_baseline = True
-        elif a == "--ledger" and i + 1 < len(argv):
-            ledger_arg = argv[i + 1]
             i += 1
-        elif a == "--register" and i + 1 < len(argv):
-            register_arg = argv[i + 1]
-            i += 1
-        elif a == "--face" and i + 1 < len(argv):
-            face_arg = argv[i + 1]
-            i += 1
+            continue
+        name, sep, inline = a.partition("=") if a.startswith("--") else (a, "", "")
+        if name in value_opts:
+            value = inline if sep else (argv[i + 1] if i + 1 < len(argv) else None)
+            if not value:
+                print("ERROR unknown or incomplete option: %s" % esc(a))
+                return 2
+            if value.startswith("--"):
+                print("ERROR %s wants a value, its slot holds a switch: %s"
+                      % (esc(name), esc(value)))
+                return 2
+            if name == "--ledger":
+                ledger_arg = value
+            elif name == "--register":
+                register_arg = value
+            else:
+                face_arg = value
+            i += 1 if sep else 2
         else:
             print("ERROR unknown or incomplete option: %s" % esc(a))
             return 2
-        i += 1
 
     # Which faces this run judges: no option = the whole family, in ledger-then-appendix order; --face
     # = one of them. Bare --ledger keeps its pre-split meaning (a copy judged with the LEDGER's two

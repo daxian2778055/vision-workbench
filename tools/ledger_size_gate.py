@@ -99,7 +99,8 @@ Reproduce:
     python tools/ledger_size_gate.py --allow-shrink=<text>  (declare a deliberate family cut)
 Overrides are printed on the line INV overrides_used=, so a bypass can never be silent. --opt=value and
 "--opt value" are the same switch here, never a second spelling to reject: a command printed in a
-delivered document has to be a command this parser accepts.
+delivered document has to be a command this parser accepts. A value slot that would receive a token
+starting with "--" is refused here, at the parser, so a switch can never become an option's value.
 
 Exit: 0 = not due | 1 = due (each fired condition printed as SPLITDUE) | 2 = git or the ledger
 unreadable, a tracked member missing, or a judged member that lost lines against HEAD without a
@@ -259,6 +260,16 @@ def main():
         if name in ("--ledger", "--register", "--base-lines", "--allow-shrink") and \
                 (joined or i + 1 < len(argv)):
             value = inline if joined else argv[i + 1]
+            # A switch text is not a value. Until U-73 the four slots above differed only in whether a
+            # DOWNSTREAM validator happened to choke on "--no-register": --allow-shrink wants a non-empty
+            # string and --register has no validator at all, so both took the switch as their own value
+            # and the run still printed INV verdict=GREEN -- measured, not asserted, on unmodified bytes
+            # in build/u44_probe/U73_swallow_pre_claims_1.txt, which reads green_swallow_count=3 and
+            # lists the three arms under switch_in_value_green=. This parser now decides in
+            # definition whether the mistake stops the run -- not whatever reads the value next.
+            if value.startswith("--"):
+                print("ERROR %s wants a value, its slot holds a switch: %s" % (esc(name), esc(value)))
+                return 2
             if name == "--ledger":
                 ledger_arg = value
             elif name == "--register":
