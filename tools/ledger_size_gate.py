@@ -87,8 +87,9 @@ What actually keeps that comment unchanged is recorded here so the next round do
 it is documentation only, changing it costs one more tracked file in a round's surface plus a geometry,
 two-probe and host re-run, and the reading it makes stale is printed, not judged. That stale reading
 is stated instead of hidden -- the exit-code block still describes this script's code 2 as "unreadable"
-alone, while code 2 has three shapes today: git or the ledger unreadable, a tracked member missing
-(U-60), and an undeclared member shrink (here).
+alone, while code 2 has four shapes today: git or the ledger unreadable, a tracked member missing
+(U-60), an undeclared member shrink (here), and a register copy named on the command line whose path is
+not a file (U-75, the second half of the value-slot change below).
 
 Reproduce:
     python tools/ledger_size_gate.py
@@ -99,12 +100,18 @@ Reproduce:
     python tools/ledger_size_gate.py --allow-shrink=<text>  (declare a deliberate family cut)
 Overrides are printed on the line INV overrides_used=, so a bypass can never be silent. --opt=value and
 "--opt value" are the same switch here, never a second spelling to reject: a command printed in a
-delivered document has to be a command this parser accepts. A value slot that would receive a token
-starting with "--" is refused here, at the parser, so a switch can never become an option's value.
+delivered document has to be a command this parser accepts. Only the SPACE spelling refuses a token
+starting with "--" -- there the next token was meant for the option parser, and before U-73 a swallowed
+switch could narrow the judged population and the run still print its green verdict. The equals spelling
+keeps it as the value, because inside one token no switch can be hidden (第八十一行 registered the
+blanket refusal as OPEN). Because a dash-leading value can now reach the member list, a register copy
+NAMED on the command line has to exist: the "absent before its creating round" allowance is only ever a
+property of the default path.
 
 Exit: 0 = not due | 1 = due (each fired condition printed as SPLITDUE) | 2 = git or the ledger
-unreadable, a tracked member missing, or a judged member that lost lines against HEAD without a
-declaration | 3 = script crash. Output is ASCII-only (cp936 console); paths go through esc().
+unreadable, a tracked member missing, a judged member that lost lines against HEAD without a
+declaration, or a named register copy that is not a file | 3 = script crash. Output is ASCII-only
+(cp936 console); paths go through esc().
 """
 import io
 import os
@@ -267,7 +274,12 @@ def main():
             # in build/u44_probe/U73_swallow_pre_claims_1.txt, which reads green_swallow_count=3 and
             # lists the three arms under switch_in_value_green=. This parser now decides in
             # definition whether the mistake stops the run -- not whatever reads the value next.
-            if value.startswith("--"):
+            # U-75 修法2 narrows that to the spelling that can swallow: "--opt value" took a token meant
+            # for the option parser, so it still refuses; "--opt=value" sits inside one token and cannot
+            # hide a switch, so a leading "--" there is the value. Refusing both is what 第八十一行
+            # registered as OPEN (a path beginning with two dashes could not be named at all), and arms
+            # B1/B2 of build/u44_probe/u75_cite_line_teeth.py hold the two spellings apart.
+            if not joined and value.startswith("--"):
                 print("ERROR %s wants a value, its slot holds a switch: %s" % (esc(name), esc(value)))
                 return 2
             if name == "--ledger":
@@ -310,8 +322,22 @@ def main():
             if label == "ledger":
                 print("ERROR ledger not readable: %s" % esc(abs_path))
                 return 2
+            # U-75 修法2's second half. 修法2 lets a "--"-prefixed value through the slot, so
+            # "--register=--no-register"-shaped mistakes now reach THIS loop instead of dying in the
+            # parser. An explicitly NAMED register path is a statement that this file is the one to
+            # judge, so its absence is an error, not a pre-creation state: without this the run would
+            # sum one file while printing family_members_judged=2 and go GREEN -- the same silent
+            # narrowing the block below exists to close, reached by a command line instead of by a
+            # deletion. build/u44_probe/U75_cite_line_teeth_1.txt measures that shape on the pre face
+            # (arm B4 reads member_absent_lines=1 family_judged2_lines=1 verdict_lines=1 with rc=0).
+            if register_arg is not None:
+                print("ERROR register member named on the command line is not readable: label=register "
+                      "path=%s (a named copy has to exist; the pre-creation allowance below is only "
+                      "ever for the default path)" % esc(rel))
+                return 2
             # The one absence a member may still have before the round that creates it lands: not on
-            # disk AND not in HEAD, so there was nothing yet to sum and nobody can have taken it.
+            # disk AND not in HEAD, so there was nothing yet to sum and nobody can have taken it. This
+            # is a property of the DEFAULT path only -- see the named-copy refusal just above.
             # Once HEAD carries it, absence on disk is a deletion -- the run would then sum one file
             # while still printing family_members_judged=2 and go GREEN, which is exactly the escape
             # the family sum exists to close, and unlike --no-register nothing declared it. Refuse;

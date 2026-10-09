@@ -104,7 +104,12 @@ judges), CITEFACE (one face's path and its own two baseline sizes), CITEFIND (th
 count), plus the INV faces= aggregate before INV findings=. Unchanged, deliberately: every per-face
 line keeps its old prefix and wording, because the host filter and
 tools/probes/U47_citation_host_exit_probe.py read those lines by regex and the ledger registers them
-as exact numbers. Two consequences a reviewer should not have to guess: the INV citation_baseline=
+as exact numbers. The one exception is the path line, which U-75 moved off the frozen literal: it used
+to print `CITE ledger=<absolute path>` for BOTH faces, so a single-face appendix archive named itself a
+file that was not judged, and no reader pinned that literal (both readers match the CITE prefix, which
+arm A6 of build/u44_probe/u75_cite_line_teeth.py reads out of tools/ci.ps1's own bytes). It now prints
+`CITE face=<label> path=<rel> bytes=N`. Two consequences a reviewer should not have to guess: the
+INV citation_baseline=
 line now appears once per face (the U47 probe reads the first, which is the ledger's, since FACES is
 in ledger-then-appendix order), and CITEHOSTDEF is printed once per run rather than once per face,
 because that reading comes from tools/ci.ps1 and is the same for both. One ordering change comes with
@@ -118,8 +123,11 @@ Reproduce:
     python tools/log_citation_gate.py --face register     (one face, that face's own baselines)
     python tools/log_citation_gate.py --emit-baseline     (print both fresh paste blocks; still judges)
     python tools/log_citation_gate.py --ledger=<path>     (the same switch, spelled with the equals sign)
-"--opt value" and "--opt=value" are one switch here, never a second spelling to turn away, and a value
-slot that would receive a token starting with "--" stops the run instead of becoming the value.
+"--opt value" and "--opt=value" are one switch here, never a second spelling to turn away. Only the
+space spelling refuses a token starting with "--" (that token was meant for the option parser, so the
+slot holds a switch); the equals spelling keeps it as the value, because inside one token no switch can
+be swallowed -- U-75 split those two, and B1/B2 of build/u44_probe/u75_cite_line_teeth.py hold them
+apart.
 
 Exit: 0 = green or declared skip | 1 = ADDED citations (CITEADD) or host-shaped citations without the
 contract line (CITEHOSTADD) | 2 = ledger unreadable | 3 = script crash. Output is ASCII-only (cp936
@@ -394,11 +402,13 @@ def judge_face(face, text, state, emit_baseline, print_host_def, multi, markers,
     purpose: tools/ci.ps1 step 1k shows only lines starting with CITE / ERROR / INV citation_baseline /
     INV verdict, and tools/probes/U47_citation_host_exit_probe.py reads INV citation_baseline= and
     CITE scratch_trees= out of that same text by regex, and the ledger registers those readings as
-    exact numbers. So the per-face lines keep their shape -- including the CITE ledger= path line,
-    which is why a face's own name does not go there -- and the name rides on the two lines the family
-    split added (CITEFACE / CITEFIND), which start with CITE so the host displays them as well. Since
-    U-74 CITEFACE prints for every run, single-face included; CITEFIND still waits for more than one
-    face, because with one face its counts duplicate the INV lines below.
+    exact numbers. The one line that does not keep its old literal is the path line, which U-75
+    relabelled: the host filter and the probe match the CITE *prefix*, so no reader pins that line's
+    wording, and its old literal actively mislabelled the face (see the U-75 comment below). A face's
+    name also rides on the two lines the family split added (CITEFACE / CITEFIND), which start with
+    CITE so the host displays them as well. Since U-74 CITEFACE prints for every run, single-face
+    included; CITEFIND still waits for more than one face, because with one face its counts duplicate
+    the INV lines below.
     """
     label, rel, missing_baseline, hostrc_baseline = face
     names, trees, by_name = state
@@ -410,7 +420,15 @@ def judge_face(face, text, state, emit_baseline, print_host_def, multi, markers,
     print("CITEFACE face=%s rel=%s missing_baseline=%d hostrc_baseline=%d"
           % (esc(label), esc(rel.replace("\\", "/")), len(missing_baseline),
              len(hostrc_baseline)))
-    print("CITE ledger=%s bytes=%d" % (esc(face_abs_path(rel)), len(text.encode("utf-8"))))
+    # U-75 修法1: this line names the face it measures. It used to print `CITE ledger=<abs>` for every
+    # face, which is what made a `--face=register` archive read as if it had judged the ledger
+    # (第八十一行 registered that as OPEN, and the two claims under it -- "the literal says ledger for
+    # both faces" and "the value is an absolute path" -- are what arms A1/A2/A3 measure). Nothing in
+    # this repository parses the old literal: tools/ci.ps1 step 1k and
+    # tools/probes/U47_citation_host_exit_probe.py both match the CITE *prefix*, and the path is now
+    # repo-relative, which is what makes the line readable from a clean clone.
+    print("CITE face=%s path=%s bytes=%d"
+          % (esc(label), esc(rel.replace("\\", "/")), len(text.encode("utf-8"))))
 
     exact, scratch, missing = classify(text, names)
     citations = exact | scratch | missing
@@ -494,6 +512,12 @@ def main(argv):
     # starting with "--" is refused HERE: before U-73 the three slots differed only in whether a
     # downstream reader happened to choke on switch text, so a swallowed switch could narrow the judged
     # population and the run still printed its green verdict.
+    # U-75 修法2 narrows that refusal to the spelling that can actually swallow: with "--opt value" the
+    # next token was meant for the option parser, while with "--opt=value" the value sits inside one
+    # token and no switch can be hidden in it -- so that spelling takes a leading "--" as the value.
+    # Refusing both is what 第八十一行 registered as OPEN (a path legitimately beginning with two dashes
+    # could not be named at all), and B1/B2 of build/u44_probe/u75_cite_line_teeth.py are the two arms
+    # that hold the two spellings apart.
     value_opts = ("--ledger", "--register", "--face")
     i = 1
     while i < len(argv):
@@ -508,7 +532,7 @@ def main(argv):
             if not value:
                 print("ERROR unknown or incomplete option: %s" % esc(a))
                 return 2
-            if value.startswith("--"):
+            if not sep and value.startswith("--"):
                 print("ERROR %s wants a value, its slot holds a switch: %s"
                       % (esc(name), esc(value)))
                 return 2
