@@ -115,6 +115,17 @@ rather than once per face, because that reading comes from tools/ci.ps1 and is t
 ordering change comes with judging more than one file: every face is opened before the scratch
 decision, so an unreadable face is still exit 2 even on a machine with no scratch trees.
 
+U-79 (this round) changed WHAT THAT COUNTING LINE MEASURES. It used to print `scratch_trees=NN
+scratch_files=NNNN` -- the size of the live scratch universe -- and that is what made this gate's own
+output archives unreplayable by construction: writing an archive adds a file to the very universe the
+next run counts, so delivered and replay could never be byte-equal (U-75, U-77 and U-78 each read that
+one moving cell in their own not_reproducing list). The line now carries two numbers that are bounded
+by the citations the judged face actually names -- `scratch_roots_named` (how many distinct scratch
+roots those citations live in) and `scratch_paths_named` (how many paths they resolve to, which exceeds
+the roster count only when one bare name exists under two roots) -- and the four judgement counts keep
+their old labels and old values. The live universe is still available, but only on request:
+`--live-scratch-counts` prints it on a separate `CITELIVE` line, off by default.
+
 Reproduce:
     python tools/log_citation_gate.py
     python tools/log_citation_gate.py --ledger <path>     (judge a copy, ledger's baselines as before)
@@ -122,6 +133,7 @@ Reproduce:
     python tools/log_citation_gate.py --face register     (one face, that face's own baselines)
     python tools/log_citation_gate.py --emit-baseline     (print both fresh paste blocks; still judges)
     python tools/log_citation_gate.py --ledger=<path>     (the same switch, spelled with the equals sign)
+    python tools/log_citation_gate.py --live-scratch-counts  (add the CITELIVE universe line; off default)
 "--opt value" and "--opt=value" are one switch here, never a second spelling to turn away. Only the
 space spelling refuses a token starting with "--" (that token was meant for the option parser, so the
 slot holds a switch); the equals spelling keeps it as the value, because inside one token no switch can
@@ -288,6 +300,28 @@ def resolve_paths(token, by_name):
     return sorted(set(paths))
 
 
+def scratch_roster_face(scratch_tokens, by_name):
+    """The two counts the CITE line prints, taken off the roster rather than off the directory (U-79).
+
+    classify already decided which citations resolve inside a scratch tree; for each of those, by_name
+    lists every path the bare name could mean, so an ambiguous name contributes both and the reported
+    universe can only come out larger than the roster, never smaller. Because both numbers are keyed by
+    the citations the judged face names, writing an unrelated archive no longer moves them -- which is
+    exactly what made this gate's own output archives unreplayable while the line carried the live
+    directory total.
+    """
+    roots, paths = set(), set()
+    for token in scratch_tokens:
+        base = os.path.basename(token.replace("\\", "/"))
+        for path in by_name.get(base, []):
+            rel = os.path.relpath(path, ROOT).replace("\\", "/")
+            parts = [part for part in rel.split("/") if part]
+            if len(parts) >= 3:
+                roots.add("/".join(parts[:2]))
+            paths.add(rel)
+    return len(roots), len(paths)
+
+
 def step_marker_literals(path=None):
     """The host's own static-step verdict sentences, read from tools/ci.ps1 bytes.
 
@@ -394,20 +428,22 @@ def print_host_def_lines(marker_error, markers):
              "none" if marker_error else marker_digest(markers)))
 
 
-def judge_face(face, text, state, emit_baseline, print_host_def, multi, markers, marker_error):
+def judge_face(face, text, state, emit_baseline, print_host_def, multi, markers, marker_error,
+               live_counts=False):
     """Judge ONE face against ITS OWN two frozen sets and return its finding count.
 
     Every line prefix and sentence below keeps the wording this gate had before the family split, on
     purpose: tools/ci.ps1 step 1k shows only lines starting with CITE / ERROR / INV citation_baseline /
-    INV verdict, and tools/probes/U47_citation_host_exit_probe.py reads INV citation_baseline= and
-    CITE scratch_trees= out of that same text by regex, and the ledger registers those readings as
-    exact numbers. The one line that does not keep its old literal is the path line, which U-75
-    relabelled: the host filter and the probe match the CITE *prefix*, so no reader pins that line's
-    wording, and its old literal actively mislabelled the face (see the U-75 comment below). A face's
-    name also rides on the two lines the family split added (CITEFACE / CITEFIND), which start with
-    CITE so the host displays them as well. Since U-74 CITEFACE prints for every run, single-face
-    included; CITEFIND still waits for more than one face, because with one face its counts duplicate
-    the INV lines below.
+    INV verdict, and tools/probes/U47_citation_host_exit_probe.py reads INV citation_baseline= and the
+    counting line out of that same text by regex (since U-79 it locates that line by
+    `CITE scratch_roots_named=`, before the label change it located it by `CITE scratch_trees=`), and the
+    ledger registers those readings as exact numbers. The one line that does not keep its old literal is
+    the path line, which U-75 relabelled, and -- U-79 -- the two count cells that used to carry the live
+    scratch directory total; the four judgement counts on that line keep their labels and values, and
+    nothing outside the probe parses the two cells that changed. A face's name also rides on the two
+    lines the family split added (CITEFACE / CITEFIND), which start with CITE so the host displays them
+    as well. Since U-74 CITEFACE prints for every run, single-face included; CITEFIND still waits for
+    more than one face, because with one face its counts duplicate the INV lines below.
     """
     label, rel, missing_baseline, hostrc_baseline = face
     names, trees, by_name = state
@@ -431,9 +467,18 @@ def judge_face(face, text, state, emit_baseline, print_host_def, multi, markers,
 
     exact, scratch, missing = classify(text, names)
     citations = exact | scratch | missing
-    print("CITE scratch_trees=%d scratch_files=%d citations_distinct=%d present_exact=%d "
+    roots_named, paths_named = scratch_roster_face(scratch, by_name)
+    # U-79: these two cells used to be `scratch_trees=%d scratch_files=%d` -- the live size of the
+    # directory this gate walks. That number goes up every time any archive is written, including the
+    # archive of the run that printed it, so no output of this gate could ever replay to itself. Both
+    # cells now come out of the roster classify already used; the universe is still readable, but only
+    # from the CITELIVE line below, which no judgement depends on and which is off by default.
+    print("CITE scratch_roots_named=%d scratch_paths_named=%d citations_distinct=%d present_exact=%d "
           "present_scratch=%d missing=%d"
-          % (trees, len(names), len(citations), len(exact), len(scratch), len(missing)))
+          % (roots_named, paths_named, len(citations), len(exact), len(scratch), len(missing)))
+    if live_counts:
+        print("CITELIVE scratch_trees=%d scratch_files=%d scope=live_universe "
+              "note=no_judgement_reads_this_line" % (trees, len(names)))
 
     baseline = set(missing_baseline)
     added = sorted(missing - baseline)
@@ -505,6 +550,7 @@ def main(argv):
     register_arg = None
     face_arg = None
     emit_baseline = False
+    live_counts = False
     # The three value-taking switches, both spellings. --opt=value and "--opt value" are the same switch:
     # a command printed in a delivered document has to be a command this parser accepts, and the ledger
     # block quotes this gate's sibling with the equals sign. And a value slot that would receive a token
@@ -523,6 +569,10 @@ def main(argv):
         a = argv[i]
         if a == "--emit-baseline":
             emit_baseline = True
+            i += 1
+            continue
+        if a == "--live-scratch-counts":
+            live_counts = True
             i += 1
             continue
         name, sep, inline = a.partition("=") if a.startswith("--") else (a, "", "")
@@ -608,7 +658,7 @@ def main(argv):
     per_face = []
     for face, text in zip(faces, texts):
         findings = judge_face(face, text, state, emit_baseline, not multi, multi, markers,
-                              marker_error)
+                              marker_error, live_counts)
         per_face.append((face[0], findings))
 
     total = sum(count for _, count in per_face)

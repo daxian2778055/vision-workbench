@@ -275,8 +275,13 @@ def added_counts(text):
 
 
 def citation_counts(text):
+    # U-79 relabelled the gate's counting line: it used to begin `CITE scratch_trees=`, and those two
+    # cells carried the live scratch directory total, which is what made the gate's own archives
+    # unreplayable. The line now begins `CITE scratch_roots_named=`; the four numbers this helper pulls
+    # out of it (citations_distinct / present_exact / present_scratch / missing) did not change name or
+    # meaning. Matching the old prefix would return None here, which is a visible abort, not a silence.
     for ln in text.split("\n"):
-        if ln.startswith("CITE scratch_trees="):
+        if ln.startswith("CITE scratch_roots_named="):
             m = CITE_LINE_RX.search(ln)
             if m:
                 return [int(x) for x in m.groups()]
