@@ -83,6 +83,18 @@ and no '#' comment line feeds it. Measured three ways in build/u44_probe/U62_mar
 reworded -- all three read markers=20 digest=b57315efc59f, and ci_exit_code_check.py reads
 verdict=GREEN on the reworded copy, so the edit would be safe and the stated obstacle was invented.
 
+Those three numbers are that 2026-10-06 pass's own face, and the pair has moved since: the live line
+reads CITEHOSTDEF ... wide_markers=21 marker_digest=a53a7e135a05 after U-67's step 1l. Both faces are
+taken out of archived runs here (build/u44_probe/U75_cite_gate_single_3.txt and its default-face
+sibling, printed by build/u44_probe/u76_hostdef_face.py) rather than by running the citation gate
+again, because that gate prints a live scratch census in the same output and would make this note's
+own evidence non-replayable. The sentence above about twelve ledger rows is therefore still true as
+words on the page -- that same script counts old_digest_occurrences=12 over 12 ledger lines today --
+while its referent moved: those twelve quote the PREVIOUS digest, and the current one is quoted zero
+times in the ledger and twice in this table. 附页第七十四行 registered that shift when it happened
+(ledger_verbatim_digest_quotes=12 register_verbatim_digest_quotes=4 before, both reading 0 after);
+this table now carries 6 occurrences over 3 rows because later rows quote the old digest as history.
+
 What actually keeps that comment unchanged is recorded here so the next round does not rediscover it:
 it is documentation only, changing it costs one more tracked file in a round's surface plus a geometry,
 two-probe and host re-run, and the reading it makes stale is printed, not judged. That stale reading

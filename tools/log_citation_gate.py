@@ -109,12 +109,11 @@ to print `CITE ledger=<absolute path>` for BOTH faces, so a single-face appendix
 file that was not judged, and no reader pinned that literal (both readers match the CITE prefix, which
 arm A6 of build/u44_probe/u75_cite_line_teeth.py reads out of tools/ci.ps1's own bytes). It now prints
 `CITE face=<label> path=<rel> bytes=N`. Two consequences a reviewer should not have to guess: the
-INV citation_baseline=
-line now appears once per face (the U47 probe reads the first, which is the ledger's, since FACES is
-in ledger-then-appendix order), and CITEHOSTDEF is printed once per run rather than once per face,
-because that reading comes from tools/ci.ps1 and is the same for both. One ordering change comes with
-judging more than one file: every face is opened before the scratch decision, so an unreadable face is
-still exit 2 even on a machine with no scratch trees.
+`INV citation_baseline=` line now appears once per face (the U47 probe reads the first, which is the
+ledger's, since FACES is in ledger-then-appendix order), and CITEHOSTDEF is printed once per run
+rather than once per face, because that reading comes from tools/ci.ps1 and is the same for both. One
+ordering change comes with judging more than one file: every face is opened before the scratch
+decision, so an unreadable face is still exit 2 even on a machine with no scratch trees.
 
 Reproduce:
     python tools/log_citation_gate.py

@@ -132,7 +132,7 @@ def first_cell(line):
     return line.split(" | ")[0]
 
 
-def pair_and_classify(old_lines, new_lines, by_position, st, offset):
+def pair_and_classify(old_lines, new_lines, by_position, st, offset, new_offset):
     """Pair old->new lines inside one changed block and run the ruler's predicate on each pair.
 
     by_position reproduces the ruler's rule (offset against offset, legal only at equal sizes).
@@ -140,7 +140,11 @@ def pair_and_classify(old_lines, new_lines, by_position, st, offset):
     annotated row plus several new rows; a positional pairing would call the annotated row a
     replacement and report a destroyed old line that is still on disk.
 
-    offset shifts the block-relative positions up to file positions, which is what a reviewer greps.
+    offset and new_offset shift the block-relative positions up to file positions, which is what a
+    reviewer greps. They are two arguments because a block has two different bases: the old half
+    starts at i0 and the new half at j0, and any earlier inserted line makes j0 > i0. Sharing one
+    base would print a new-side coordinate pointing at a different line than the one reported --
+    harmless for every counter here, fatal for the person told to go look at that line.
     """
     pairs = []
     if by_position and len(old_lines) == len(new_lines):
@@ -171,16 +175,16 @@ def pair_and_classify(old_lines, new_lines, by_position, st, offset):
                 continue
             if new_lines[ni].count("|") != old_lines[oi].count("|"):
                 st["row_pipe_changed"] += 1
-                st["pipe_rows"].append((oi + offset, ni + offset))
+                st["pipe_rows"].append((oi + offset, ni + new_offset))
             if first_cell(new_lines[ni]) != first_cell(old_lines[oi]):
                 st["row_label_changed"] += 1
-                st["label_rows"].append((oi + offset, ni + offset))
+                st["label_rows"].append((oi + offset, ni + new_offset))
         elif sub == "empty_side":
             st["empty_side"] += 1
-            st["empty_pairs"].append((oi + offset, ni + offset))
+            st["empty_pairs"].append((oi + offset, ni + new_offset))
         else:
             st["old_lost"] += 1
-            st["destroyed"].append((oi + offset, ni + offset, sub))
+            st["destroyed"].append((oi + offset, ni + new_offset, sub))
     matched_old = set(oi for oi, _ni in pairs)
     matched_new = set(ni for _oi, ni in pairs)
     for oi in range(len(old_lines)):
@@ -223,7 +227,7 @@ def judge(old_text, new_text):
             for oi in range(i0, i1):
                 st["destroyed"].append((oi, None, "delete"))
         else:
-            pair_and_classify(old_lines[i0:i1], new_lines[j0:j1], (i1 - i0) == (j1 - j0), st, i0)
+            pair_and_classify(old_lines[i0:i1], new_lines[j0:j1], (i1 - i0) == (j1 - j0), st, i0, j0)
     last_content = -1
     for idx, line in enumerate(old_lines):
         if line:
