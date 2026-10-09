@@ -9,6 +9,7 @@
 #include "InspectionRecord.h"   // 瘦头文件：不让 QtSql 依赖扩散到执行器侧
 
 class QThread;
+class QSqlQuery;
 
 /// \u62A5\u8B66\u8BB0\u5F55
 struct AlarmRecord {
@@ -85,6 +86,19 @@ public:
     /// \u83B7\u53D6\u6570\u636E\u5E93\u8DEF\u5F84
     QString databasePath() const { return m_dbPath; }
 
+    /// 最近一次数据库失败的诊断文本（初始化 / 建表 / 写入失败时写入；成功路径不清空，
+    /// 因为「上一轮写失败」正是下一轮排查要看的现场信息）。
+    /// 为什么需要它：写侧原先只看 exec() 的返回值，prepare() 的返回值一处都没查。
+    /// 本轮撤闸自证实测到的形态：把 prepare 的检查撤掉后，同一条批量写在 exec() 报出的是
+    /// driver=Parameter count mismatch（一条没准备好的语句有 0 个占位符，却配了 4 个绑定值），
+    /// 真因（no such table / 连接没打开）整个被这句冒名顶替——现场只能对着它猜。
+    /// 本串把「操作名 + 阶段 + 连接名 + 是否已打开 + 库路径 + 驱动原文」拼在一起，
+    /// 调用方拿到 false 之后必须把它显示出来（判红原因、状态栏、日志），不能只当布尔用。
+    /// 口径：串里记的是**主失败**（调用方据以返回 false 的那一步）；回滚/收尾这类二次动作
+    /// 的失败只进调试日志，不覆盖它，否则现场看到的原因是副作用而不是丢数据的那一步。
+    /// 可依赖的契约：写库函数凡返回 false，本串都已先写好——调用方直接显示即可，不必判空。
+    QString lastDatabaseError() const;
+
     /// \u6E05\u7406\u8FC7\u671F\u6570\u636E\uFF1A\u5220\u9664\u6309\u65E5\u671F\u8FC7\u4E8E\u4FDD\u7559\u5929\u6570\u7684\u62A5\u8B66/\u68C0\u6D4C\u7ED3\u679C/\u64CD\u4F5C\u65E5\u5FD7\u8BB0\u5F55
     /// \u9ED8\u8BA4\u4FDD\u7559 30 \u5929\uFF0C\u8FD4\u56DE\u88AB\u5220\u9664\u7684\u8BB0\u5F55\u603B\u6570\u3002\u53EF\u5728\u8FDE\u7EED\u8FD0\u884C\u4E0B\u5B9A\u671F\u8C03\u7528\u4EE5\u63A7\u5236\u6570\u636E\u5E93\u589E\u957F\u3002
     int purgeOldRecords(int retainDays = 30);
@@ -109,6 +123,25 @@ private:
     /// 并可能直接崩溃。检测流程在工作线程写库，因此必须按线程取连接。
     QSqlDatabase threadDatabase() const;
 
+    /// 拼一条失败诊断：操作名 / 阶段 / 连接名 / 是否已打开 / 库路径 / 驱动原文。
+    /// const 且写 mutable 成员：写侧既有 const 方法（authenticateUser 的旧版哈希迁移）。
+    QString failureText(const QString &op, const QString &stage,
+                        const QSqlDatabase &db, const QString &driverReason) const;
+
+    /// 记录一次数据库失败到 m_lastDatabaseError，并同步写调试日志。
+    /// **调用方必须已持有 s_dbMutex**（本函数不加锁：QMutex 不可重入，加锁即自锁）。
+    /// stage 默认 "exec"（多数站点就是执行失败）；open / transaction / commit / rollback 另传。
+    void noteFailure(const QString &op, const QSqlDatabase &db,
+                     const QString &driverReason,
+                     const QString &stage = QStringLiteral("exec")) const;
+
+    /// 带失败记录的 prepare()。返回值必须查：prepare 失败一旦放过，后面的 exec()
+    /// 会拿 0 个占位符去配 N 个绑定值，报出的是与真因无关的 "Parameter count mismatch"。
+    /// **调用方必须已持有 s_dbMutex。**
+    bool prepareWrite(QSqlQuery &q, const QSqlDatabase &db,
+                      const QString &sql, const QString &op) const;
+
+    mutable QString m_lastDatabaseError;   ///< 最近一次失败诊断（由 s_dbMutex 保护的调用方写）
     QString m_dbPath;
     QSqlDatabase m_db;          ///< 初始化线程（主线程）持有的连接
     QThread *m_ownerThread = nullptr;  ///< 创建 m_db 的线程

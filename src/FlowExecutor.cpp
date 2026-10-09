@@ -658,7 +658,17 @@ void FlowExecutor::run()
             const QList<InspectionRecord> batch = m_pendingResults;
             m_pendingResults.clear();
             if (!AppDatabase::instance()->databasePath().isEmpty()) {
-                AppDatabase::instance()->saveInspectionResults(batch);
+                // P1：这条返回值原来直接丢掉。连续模式下一旦写库失败（连接没开、表缺失、
+                // 库被占用…），每轮的全部检测结果连同「整轮汇总」都会静默消失——
+                // 报表与追溯凭空少一段，而界面一切正常。
+                // 失败必须让操作员当场看见；但不据此停止流程：记录失败不该挡住检测本身。
+                if (!AppDatabase::instance()->saveInspectionResults(batch)) {
+                    const QString detail = AppDatabase::instance()->lastDatabaseError();
+                    VFP_EXEC_DEBUG << "Round results not saved:" << batch.size() << detail;
+                    emit executionError(QStringLiteral("本轮 %1 条检测结果未能写入数据库（报表/追溯会缺这一段）：%2")
+                                            .arg(batch.size())
+                                            .arg(detail));
+                }
             }
         }
         m_diagPhase.store(7, std::memory_order_relaxed);   // 诊断：轮末·落库后

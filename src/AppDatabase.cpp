@@ -19,6 +19,19 @@ constexpr int kHashIterations = 12000;
 // 每个账户独立盐的字节数
 constexpr int kSaltBytes = 16;
 
+/// 每条连接建立后必须执行的 PRAGMA（WAL / 外键 / 忙等超时）。
+/// 抽成一份的原因：initialize() 与 threadDatabase() 两条建连接路径都要设一遍，
+/// 各写一份就会走偏（历史上每线程那条连返回值都没接）。
+const QStringList &dbPragmas()
+{
+    static const QStringList kValues = {
+        QStringLiteral("PRAGMA journal_mode=WAL"),
+        QStringLiteral("PRAGMA foreign_keys=ON"),
+        QStringLiteral("PRAGMA busy_timeout=5000"),   // 多连接并发时避免立即返回 SQLITE_BUSY
+    };
+    return kValues;
+}
+
 // 加盐迭代哈希（密码拉伸），抵抗暴力破解与彩虹表
 QByteArray stretchHash(const QByteArray &salt, const QString &password)
 {
@@ -34,6 +47,47 @@ AppDatabase *AppDatabase::instance()
 {
     static AppDatabase *inst = new AppDatabase();
     return inst;
+}
+
+QString AppDatabase::failureText(const QString &op, const QString &stage,
+                                 const QSqlDatabase &db, const QString &driverReason) const
+{
+    // label=value 片段拼接而非模板 + arg()：诊断串里要放库路径与驱动原文，
+    // 它们一旦含 "%N" 就会被后续 arg 吃掉（先代入的值成了后一个占位符的替换源）。
+    const QStringList fields = {
+        QStringLiteral("op=") + op,
+        QStringLiteral("stage=") + stage,
+        QStringLiteral("conn=") + db.connectionName(),
+        db.isOpen() ? QStringLiteral("open=yes") : QStringLiteral("open=no"),
+        m_dbPath.isEmpty() ? QStringLiteral("db=(空：initialize 未成功)")
+                           : QStringLiteral("db=") + m_dbPath,
+        driverReason.isEmpty() ? QStringLiteral("driver=(驱动未给出原因)")
+                               : QStringLiteral("driver=") + driverReason,
+    };
+    return QStringLiteral("AppDatabase 数据库失败 ") + fields.join(QLatin1Char(' '));
+}
+
+void AppDatabase::noteFailure(const QString &op, const QSqlDatabase &db,
+                              const QString &driverReason, const QString &stage) const
+{
+    m_lastDatabaseError = failureText(op, stage, db, driverReason);
+    VFP_DEBUG << m_lastDatabaseError;
+}
+
+bool AppDatabase::prepareWrite(QSqlQuery &q, const QSqlDatabase &db,
+                               const QString &sql, const QString &op) const
+{
+    if (q.prepare(sql)) {
+        return true;
+    }
+    noteFailure(op, db, q.lastError().text(), QStringLiteral("prepare"));
+    return false;
+}
+
+QString AppDatabase::lastDatabaseError() const
+{
+    QMutexLocker locker(&s_dbMutex);
+    return m_lastDatabaseError;
 }
 
 AppDatabase::AppDatabase(QObject *parent)
@@ -95,19 +149,25 @@ bool AppDatabase::initialize(const QString &dbPath)
     m_ownerThread = QThread::currentThread();   // 记录主连接归属的线程
 
     if (!m_db.open()) {
-        VFP_DEBUG << "Failed to open database:" << m_db.lastError().text();
+        noteFailure(QStringLiteral("initialize"), m_db, m_db.lastError().text(), QStringLiteral("open"));
         return false;
     }
 
     // Enable WAL mode for better concurrent performance
-    QSqlQuery pragma(m_db);
-    pragma.exec(QStringLiteral("PRAGMA journal_mode=WAL"));
-    pragma.exec(QStringLiteral("PRAGMA foreign_keys=ON"));
-    pragma.exec(QStringLiteral("PRAGMA busy_timeout=5000"));   // 多连接并发时避免立即返回 SQLITE_BUSY
+    // 三条 PRAGMA 逐条查返回值：历史上连返回值都没接，busy_timeout 没生效时现场只会
+    // 以"随机 database is locked"的形式在别处冒出来，日志里查不到根。
+    // 但**不因此判初始化失败**：WAL 在网络共享盘等场景可能开不起来，那是降级（并发性能变差），
+    // 中止初始化会把整个检测记录功能停掉，后果更重。失败留痕 + 继续。
+    const QStringList &pragmas = dbPragmas();
+    for (const QString &sql : pragmas) {
+        QSqlQuery pragma(m_db);
+        if (!pragma.exec(sql)) {
+            noteFailure(QStringLiteral("initialize"), m_db, pragma.lastError().text(), sql);
+        }
+    }
 
     if (!createTables()) {
-        VFP_DEBUG << "Failed to create database tables";
-        return false;
+        return false;   // 具体哪条语句失败已由 createTables 逐条记录
     }
 
     VFP_DEBUG << "AppDatabase initialized at:" << m_dbPath;
@@ -129,14 +189,19 @@ QSqlDatabase AppDatabase::threadDatabase() const
     QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), name);
     db.setDatabaseName(m_dbPath);
     if (!db.open()) {
-        VFP_DEBUG << "Failed to open per-thread database connection" << name
-                  << ":" << db.lastError().text();
+        // 仍返回这条未打开的连接：调用方每次都按线程取连接，此处直接返回空句柄等于
+        // "本线程永远写不了库"；把失败记进诊断串后，写侧文本会带上 open=no 与驱动原文。
+        noteFailure(QStringLiteral("threadDatabase"), db, db.lastError().text(),
+                    QStringLiteral("open %1").arg(name));
         return db;
     }
-    QSqlQuery pragma(db);
-    pragma.exec(QStringLiteral("PRAGMA journal_mode=WAL"));
-    pragma.exec(QStringLiteral("PRAGMA foreign_keys=ON"));
-    pragma.exec(QStringLiteral("PRAGMA busy_timeout=5000"));
+    const QStringList &pragmas = dbPragmas();
+    for (const QString &sql : pragmas) {
+        QSqlQuery pragma(db);
+        if (!pragma.exec(sql)) {
+            noteFailure(QStringLiteral("threadDatabase"), db, pragma.lastError().text(), sql);
+        }
+    }
     return db;
 }
 
@@ -155,7 +220,7 @@ bool AppDatabase::createTables()
         ")"
     );
     if (!q.exec(createAlarms)) {
-        VFP_DEBUG << "Failed to create alarms table:" << q.lastError().text();
+        noteFailure(QStringLiteral("createTables/alarms"), db, q.lastError().text());
         return false;
     }
 
@@ -170,7 +235,7 @@ bool AppDatabase::createTables()
         ")"
     );
     if (!q.exec(createResults)) {
-        VFP_DEBUG << "Failed to create inspection_results table:" << q.lastError().text();
+        noteFailure(QStringLiteral("createTables/inspection_results"), db, q.lastError().text());
         return false;
     }
 
@@ -184,7 +249,7 @@ bool AppDatabase::createTables()
         ")"
     );
     if (!q.exec(createUsers)) {
-        VFP_DEBUG << "Failed to create users table:" << q.lastError().text();
+        noteFailure(QStringLiteral("createTables/users"), db, q.lastError().text());
         return false;
     }
 
@@ -198,26 +263,46 @@ bool AppDatabase::createTables()
         ")"
     );
     if (!q.exec(createLogs)) {
-        VFP_DEBUG << "Failed to create operation_logs table:" << q.lastError().text();
+        noteFailure(QStringLiteral("createTables/operation_logs"), db, q.lastError().text());
         return false;
     }
 
     // 高频查询/清理索引（时间倒序查询）
-    q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_alarms_ts ON alarms(timestamp)"));
-    q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_results_ts ON inspection_results(timestamp)"));
-    q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS idx_operlogs_ts ON operation_logs(timestamp)"));
+    // 失败只留痕、不判建表失败：索引缺失只让查询变慢，不影响数据完整性，
+    // 但一句都不打的话，"清理/查询越来越慢"在现场就查不到根。
+    const QStringList indexes = {
+        QStringLiteral("CREATE INDEX IF NOT EXISTS idx_alarms_ts ON alarms(timestamp)"),
+        QStringLiteral("CREATE INDEX IF NOT EXISTS idx_results_ts ON inspection_results(timestamp)"),
+        QStringLiteral("CREATE INDEX IF NOT EXISTS idx_operlogs_ts ON operation_logs(timestamp)"),
+    };
+    for (const QString &sql : indexes) {
+        QSqlQuery iq(db);
+        if (!iq.exec(sql)) {
+            noteFailure(QStringLiteral("createTables/index"), db, iq.lastError().text(), sql);
+        }
+    }
 
     // Insert default admin user if none exists
     QSqlQuery countQ(db);
-    countQ.exec(QStringLiteral("SELECT COUNT(*) FROM users"));
+    if (!countQ.exec(QStringLiteral("SELECT COUNT(*) FROM users"))) {
+        noteFailure(QStringLiteral("createTables/countUsers"), db, countQ.lastError().text());
+        return false;
+    }
     if (countQ.next() && countQ.value(0).toInt() == 0) {
         QSqlQuery ins(db);
-        ins.prepare(QStringLiteral("INSERT INTO users (name, password_hash, role) VALUES (?, ?, ?)"));
+        // 播种默认账户是出厂口令守卫的地基：这里静默失败 = users 表为空 =
+        // 「默认口令仍在使用」的判定与写操作闸全都落空，所以必须留痕。
+        if (!prepareWrite(ins, db,
+                          QStringLiteral("INSERT INTO users (name, password_hash, role) VALUES (?, ?, ?)"),
+                          QStringLiteral("createTables/seedAdmin"))) {
+            return false;
+        }
         ins.addBindValue(QStringLiteral("admin"));
         ins.addBindValue(createPasswordHash(QStringLiteral("admin")));
         ins.addBindValue(QStringLiteral("Admin"));
         if (!ins.exec()) {
-            VFP_DEBUG << "Failed to insert default admin user:" << ins.lastError().text();
+            noteFailure(QStringLiteral("createTables/seedAdmin"), db, ins.lastError().text());
+            return false;
         }
     }
 
@@ -231,12 +316,16 @@ int AppDatabase::addAlarm(const QString &module, const QString &level, const QSt
     QMutexLocker locker(&s_dbMutex);
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
-    q.prepare(QStringLiteral("INSERT INTO alarms (module, level, message) VALUES (?, ?, ?)"));
+    if (!prepareWrite(q, db,
+                      QStringLiteral("INSERT INTO alarms (module, level, message) VALUES (?, ?, ?)"),
+                      QStringLiteral("addAlarm"))) {
+        return -1;
+    }
     q.addBindValue(module);
     q.addBindValue(level);
     q.addBindValue(message);
     if (!q.exec()) {
-        VFP_DEBUG << "Failed to add alarm:" << q.lastError().text();
+        noteFailure(QStringLiteral("addAlarm"), db, q.lastError().text());
         return -1;
     }
     return q.lastInsertId().toInt();
@@ -279,34 +368,51 @@ bool AppDatabase::saveInspectionResults(const QList<InspectionRecord> &records)
     QMutexLocker locker(&s_dbMutex);
     // 注意：不能用 const —— QSqlDatabase::transaction/commit/rollback 都是非 const 成员
     QSqlDatabase db = threadDatabase();
+    const QString op = QStringLiteral("saveInspectionResults(%1)").arg(records.size());
     if (!db.transaction()) {
-        VFP_DEBUG << "Failed to begin transaction for inspection results:"
-                  << db.lastError().text();
+        noteFailure(op, db, db.lastError().text(), QStringLiteral("transaction"));
         return false;
     }
     QSqlQuery q(db);
-    q.prepare(QStringLiteral(
-        "INSERT INTO inspection_results (flow_name, node_name, passed, value) VALUES (?, ?, ?, ?)"
-    ));
+    // prepare 的返回值必须查：整批用同一条语句，prepare 一旦失败而放过，后面每条 exec()
+    // 都是「0 个占位符配 4 个绑定值」，报出来的是与真因无关的 "Parameter count mismatch"，
+    // 连续模式下每轮的全部检测结果就这样丢掉而查不到根。
+    if (!prepareWrite(q, db,
+                      QStringLiteral("INSERT INTO inspection_results (flow_name, node_name, passed, value) VALUES (?, ?, ?, ?)"),
+                      op)) {
+        // 回滚是二次动作：只进调试日志，不覆盖上面那条主原因（见 lastDatabaseError 的注释）
+        if (!db.rollback()) {
+            VFP_DEBUG << "Rollback after prepare failure failed:" << db.lastError().text();
+        }
+        return false;
+    }
     bool ok = true;
-    for (const InspectionRecord &r : records) {
+    for (int i = 0; i < records.size(); ++i) {
+        const InspectionRecord &r = records.at(i);
         q.addBindValue(r.flowName);
         q.addBindValue(r.nodeName);
         q.addBindValue(r.passed ? 1 : 0);
         q.addBindValue(r.value);
         if (!q.exec()) {
-            VFP_DEBUG << "Failed to save inspection result (batch):" << q.lastError().text();
+            noteFailure(op, db, q.lastError().text(),
+                        QStringLiteral("exec record %1/%2 node=%3").arg(i + 1).arg(records.size()).arg(r.nodeName));
             ok = false;
             break;
         }
     }
     if (!ok) {
-        db.rollback();   // 整批原子：任一条失败则全部回滚，避免"半轮结果"
+        // 整批原子：任一条失败则全部回滚，避免"半轮结果"。回滚失败只进调试日志——
+        // 覆盖掉上面那条"第几条写不进去"的主原因，现场就只能看到副作用。
+        if (!db.rollback()) {
+            VFP_DEBUG << "Rollback after batch failure failed:" << db.lastError().text();
+        }
         return false;
     }
     if (!db.commit()) {
-        VFP_DEBUG << "Failed to commit inspection results:" << db.lastError().text();
-        db.rollback();
+        noteFailure(op, db, db.lastError().text(), QStringLiteral("commit"));
+        if (!db.rollback()) {
+            VFP_DEBUG << "Rollback after commit failure failed:" << db.lastError().text();
+        }
         return false;
     }
     return true;
@@ -318,15 +424,18 @@ bool AppDatabase::saveInspectionResult(const QString &flowName, const QString &n
     QMutexLocker locker(&s_dbMutex);
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
-    q.prepare(QStringLiteral(
-        "INSERT INTO inspection_results (flow_name, node_name, passed, value) VALUES (?, ?, ?, ?)"
-    ));
+    if (!prepareWrite(q, db,
+                      QStringLiteral("INSERT INTO inspection_results (flow_name, node_name, passed, value) VALUES (?, ?, ?, ?)"),
+                      QStringLiteral("saveInspectionResult"))) {
+        return false;
+    }
     q.addBindValue(flowName);
     q.addBindValue(nodeName);
     q.addBindValue(passed ? 1 : 0);
     q.addBindValue(value);
     if (!q.exec()) {
-        VFP_DEBUG << "Failed to save inspection result:" << q.lastError().text();
+        noteFailure(QStringLiteral("saveInspectionResult %1/%2").arg(flowName, nodeName),
+                    db, q.lastError().text());
         return false;
     }
     return true;
@@ -374,12 +483,16 @@ bool AppDatabase::addUser(const QString &name, const QString &password, const QS
     }
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
-    q.prepare(QStringLiteral("INSERT INTO users (name, password_hash, role) VALUES (?, ?, ?)"));
+    if (!prepareWrite(q, db,
+                      QStringLiteral("INSERT INTO users (name, password_hash, role) VALUES (?, ?, ?)"),
+                      QStringLiteral("addUser"))) {
+        return false;
+    }
     q.addBindValue(name);
     q.addBindValue(createPasswordHash(password));
     q.addBindValue(role);
     if (!q.exec()) {
-        VFP_DEBUG << "Failed to add user:" << q.lastError().text();
+        noteFailure(QStringLiteral("addUser %1").arg(name), db, q.lastError().text());
         return false;
     }
     return true;
@@ -400,10 +513,21 @@ bool AppDatabase::authenticateUser(const QString &name, const QString &password)
     // 兼容旧版：无盐 SHA-256 校验通过后自动迁移为加盐迭代哈希
     if (!stored.contains(QLatin1Char(':'))) {
         QSqlQuery up(db);
-        up.prepare(QStringLiteral("UPDATE users SET password_hash = ? WHERE id = ?"));
-        up.addBindValue(createPasswordHash(password));
-        up.addBindValue(q.value(0).toInt());
-        up.exec();
+        // 迁移失败**不改变登录结果**（口令已验证通过），但必须留痕：静默失败意味着
+        // 这条账户一直是无盐哈希，而界面上没人看得出来（原实现 prepare/exec 返回值都没查）。
+        if (prepareWrite(up, db,
+                         QStringLiteral("UPDATE users SET password_hash = ? WHERE id = ?"),
+                         QStringLiteral("authenticateUser/migrateHash"))) {
+            up.addBindValue(createPasswordHash(password));
+            up.addBindValue(q.value(0).toInt());
+            if (!up.exec()) {
+                noteFailure(QStringLiteral("authenticateUser/migrateHash"), db, up.lastError().text());
+            } else if (up.numRowsAffected() <= 0) {
+                noteFailure(QStringLiteral("authenticateUser/migrateHash"), db,
+                            QStringLiteral("UPDATE 影响 0 行（刚查到的 id 不见了）"),
+                            QStringLiteral("affected"));
+            }
+        }
     }
     return true;
 }
@@ -413,16 +537,21 @@ bool AppDatabase::changeUserPassword(const QString &name, const QString &newPass
     QMutexLocker locker(&s_dbMutex);
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
-    q.prepare(QStringLiteral("UPDATE users SET password_hash = ? WHERE name = ?"));
+    if (!prepareWrite(q, db,
+                      QStringLiteral("UPDATE users SET password_hash = ? WHERE name = ?"),
+                      QStringLiteral("changeUserPassword"))) {
+        return false;
+    }
     q.addBindValue(createPasswordHash(newPassword));
     q.addBindValue(name);
     if (!q.exec()) {
-        VFP_DEBUG << "Failed to change password for" << name << ":" << q.lastError().text();
+        noteFailure(QStringLiteral("changeUserPassword %1").arg(name), db, q.lastError().text());
         return false;
     }
     // 影响 0 行 = 该用户不存在：必须报失败，否则调用方会以为口令已被改掉（出厂口令仍在用却解锁）
     if (q.numRowsAffected() <= 0) {
-        VFP_DEBUG << "changeUserPassword: user not found:" << name;
+        noteFailure(QStringLiteral("changeUserPassword %1").arg(name), db,
+                    QStringLiteral("UPDATE 影响 0 行（账户不存在）"), QStringLiteral("affected"));
         return false;
     }
     return true;
@@ -470,10 +599,20 @@ bool AppDatabase::removeUser(const QString &name)
     }
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
-    q.prepare(QStringLiteral("DELETE FROM users WHERE name = ?"));
+    if (!prepareWrite(q, db,
+                      QStringLiteral("DELETE FROM users WHERE name = ?"),
+                      QStringLiteral("removeUser"))) {
+        return false;
+    }
     q.addBindValue(name);
     if (!q.exec()) {
-        VFP_DEBUG << "Failed to remove user:" << q.lastError().text();
+        noteFailure(QStringLiteral("removeUser %1").arg(name), db, q.lastError().text());
+        return false;
+    }
+    // 与 changeUserPassword 同口径：影响 0 行 = 该账户本来就不存在，调用方不该收到"已删除"
+    if (q.numRowsAffected() <= 0) {
+        noteFailure(QStringLiteral("removeUser %1").arg(name), db,
+                    QStringLiteral("DELETE 影响 0 行（账户不存在）"), QStringLiteral("affected"));
         return false;
     }
     return true;
@@ -486,12 +625,18 @@ void AppDatabase::logOperation(const QString &user, const QString &action, const
     QMutexLocker locker(&s_dbMutex);
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
-    q.prepare(QStringLiteral("INSERT INTO operation_logs (user, action, detail) VALUES (?, ?, ?)"));
+    // 返回 void：操作日志写不进去不该挡住业务动作，但失败必须留痕（原实现 prepare 没查，
+    // 现场表现为"审计记录凭空少了一段"而日志里一个字都没有）
+    if (!prepareWrite(q, db,
+                      QStringLiteral("INSERT INTO operation_logs (user, action, detail) VALUES (?, ?, ?)"),
+                      QStringLiteral("logOperation"))) {
+        return;
+    }
     q.addBindValue(user);
     q.addBindValue(action);
     q.addBindValue(detail);
     if (!q.exec()) {
-        VFP_DEBUG << "Failed to log operation:" << q.lastError().text();
+        noteFailure(QStringLiteral("logOperation %1").arg(action), db, q.lastError().text());
     }
 }
 
@@ -541,18 +686,26 @@ int AppDatabase::purgeOldRecords(int retainDays)
     };
     for (const QString &table : tables) {
         QSqlQuery q(db);
-        q.prepare(QStringLiteral("DELETE FROM %1 WHERE timestamp < ?").arg(table));
+        const QString op = QStringLiteral("purgeOldRecords %1").arg(table);
+        if (!prepareWrite(q, db,
+                          QStringLiteral("DELETE FROM %1 WHERE timestamp < ?").arg(table),
+                          op)) {
+            continue;   // 这条表本轮清不动，计数不含它
+        }
         q.addBindValue(cutoff);
         if (q.exec()) {
             total += q.numRowsAffected();
         } else {
-            VFP_DEBUG << "Failed to purge table:" << table << q.lastError().text();
+            noteFailure(op, db, q.lastError().text());
         }
     }
 
     if (total > 0) {
         QSqlQuery vq(db);
-        vq.exec(QStringLiteral("VACUUM"));
+        if (!vq.exec(QStringLiteral("VACUUM"))) {
+            // 记录已删但库文件没收缩：现场问"为什么还在涨"时这条是唯一线索
+            noteFailure(QStringLiteral("purgeOldRecords/VACUUM"), db, vq.lastError().text());
+        }
         VFP_DEBUG << "AppDatabase::purgeOldRecords removed" << total
                   << "records older than" << retainDays << "days";
     }

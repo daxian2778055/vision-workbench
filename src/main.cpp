@@ -309,11 +309,30 @@ int main(int argc, char *argv[])
 
         // 节点自检模式：遍历全部注册节点实例化+init+空输入运行，输出报告后退出
         if (a.arguments().contains(QStringLiteral("--selftest-nodes"))) {
+            // P1：自检会实例化并 run 全部算子，其中「数据记录」算子要写库。原先这个分支
+            // 在下面的 initialize() 之前就 return，于是每次自检都有一条检测结果写在
+            // **从未初始化**的连接上（现场日志里的 "Parameter count mismatch" 就是这条路径）。
+            // 现在自检前先初始化，但用一条**自检专用库**：生产库 data/visionflow.db
+            // 不能被自检记录污染——那会往良率与追溯里插假数据。
+            const QString selftestDb = QDir(QCoreApplication::applicationDirPath())
+                                           .filePath(QStringLiteral("selftest_nodes.db"));
+            if (!AppDatabase::instance()->initialize(selftestDb)) {
+                VFP_DEBUG << "Selftest database init failed:"
+                          << AppDatabase::instance()->lastDatabaseError();
+            }
             return runNodeSelfTest();
         }
 
         // Initialize application database
-        AppDatabase::instance()->initialize();
+        // P1：返回值原先丢掉。数据库打不开或建表失败时界面照常可用，只是从此每一条
+        // 检测记录都写不出去，而现场看不到任何提示（写侧的失败又被静默吞掉，见下）。
+        // 这里**不据此终止启动**：检测本身还能跑，因记录功能故障而停机代价更大；
+        // 改成留一行带诊断的启动日志，之后的每次写失败都会显式报出来
+        // （数据记录算子判红 / 执行器轮末 executionError，见 RecordNode 与 FlowExecutor）。
+        if (!AppDatabase::instance()->initialize()) {
+            VFP_DEBUG << "AppDatabase initialize failed, 检测记录将无法落库:"
+                      << AppDatabase::instance()->lastDatabaseError();
+        }
 
         // 启动不做 HALCON 区域/测量自检。帮助菜单可检测图像层；
         // 仅当方案含 DeepOCR / Halcon图像源时提示需要 HALCON 运行时。

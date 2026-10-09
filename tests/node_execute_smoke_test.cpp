@@ -31,6 +31,10 @@
 #include "Port.h"
 #include "DataObject.h"
 #include "OpencvUtil.h"
+#include "AppDatabase.h"     // P1：「数据记录」算子真写库，本套件得给它一条可用的连接
+#include "RecordNode.h"
+#include <QDateTime>
+#include <QTemporaryDir>
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
@@ -340,6 +344,16 @@ private slots:
     void initTestCase()
     {
         registerAllNodes();   // 独立测试进程不经过 MainWindow/NodeFactory，注册表需自行填充
+
+        // P1：反向守卫 dataNodesSucceedWithTypedInput 会把「数据记录」算子真跑一轮，它要写库。
+        // 本进程不经过 main() 的 initialize()，那条写会落在**从未初始化**的连接上
+        // （即 2026-10-09 现场日志里 "Parameter count mismatch" 的成因），修完之后它会判红。
+        // 所以这里给一条临时库：既让"写成功"是真的，也与生产 data/visionflow.db 隔离。
+        QVERIFY2(m_dbDir.isValid(), "无法创建冒烟测试的数据库临时目录");
+        QVERIFY2(AppDatabase::instance()->initialize(
+                     m_dbDir.filePath(QStringLiteral("smoke.db"))),
+                 qPrintable(QStringLiteral("冒烟测试数据库初始化失败: %1")
+                            .arg(AppDatabase::instance()->lastDatabaseError())));
     }
 
     void registryIsNotEmpty()
@@ -700,6 +714,35 @@ private slots:
                  qPrintable(QStringLiteral("数据型节点成功却零产出：") + noOutput.join(QStringLiteral(", "))));
     }
 
+    // P1 的正向半边：「数据记录」的绿灯必须等于"这一行真的进了库"。
+    // 上面三条守卫都抓不到反方向的问题——若有人把写库整段删掉，空载仍红、有输入仍绿、
+    // 输出仍有值，检测结果却一条都不落库。本条用 queryResults 回读把"绿"钉在库上。
+    void recordNodeGreenMeansRowActuallyStored()
+    {
+        const QString flow = QStringLiteral("smokeRecordFlow");
+        RecordNode node;
+        node.init();
+        node.setParam(QStringLiteral("flowName"), flow);
+        node.setParam(QStringLiteral("nodeName"), QStringLiteral("smokeRecordNode"));
+        node.setInputData(0, QSharedPointer<DataObject>::create(DataObject::DataType::String,
+                                                                QVariant(QStringLiteral("12,34,56"))));
+        QVERIFY2(node.execute(), "「数据记录」算子在可用库上应当成功");
+
+        // 宽窗口查询，与 DatabaseTest 同一口径（避免时区/格式造成的边界抖动）
+        const QList<InspectionRecord> rows = AppDatabase::instance()->queryResults(
+            QDateTime::currentDateTime().addYears(-1),
+            QDateTime::currentDateTime().addDays(1),
+            500);
+        int found = 0;
+        for (const InspectionRecord &r : rows) {
+            if (r.flowName == flow) {
+                ++found;
+            }
+        }
+        qDebug().noquote() << QStringLiteral("P1-RECORD-STORED flow=%1 rows=%2").arg(flow).arg(found);
+        QCOMPARE(found, 1);
+    }
+
     // FormulaNode 的必填集 = 表达式引用到的 pN：这是"逐端口必填/可选"的唯一非默认实现，
     // 也是"旧项目里常量公式仍可用"的兼容出口。
     //
@@ -880,6 +923,11 @@ private slots:
                  qPrintable(QStringLiteral("缺外部资源却判成功（会把\"没配模型\"显示成良品）：")
                             + wronglySucceeded.join(QStringLiteral(", "))));
     }
+
+private:
+    /// 「数据记录」算子落库用的临时库目录（与生产 data/visionflow.db 隔离）。
+    /// 注：进程结束时这条连接仍未关，临时目录可能删不掉——与 DatabaseTest 的 m_tempDir 同现状。
+    QTemporaryDir m_dbDir;
 };
 
 QTEST_MAIN(NodeExecuteSmokeTest)

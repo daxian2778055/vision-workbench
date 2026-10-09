@@ -47,7 +47,17 @@ void RecordNode::run(bool /*autoSwitch*/)
     }
 
     // 写入数据库
-    AppDatabase::instance()->saveInspectionResult(flowName, nodeName, passed, valueStr);
+    // P1：这条返回值原来直接丢掉，落库失败时节点照样输出「通过状态」并绿灯——
+    // 检测结果就静默消失了（现场只能靠翻 crash.log 发现少了记录）。
+    // 现在按本仓判红契约处理：moduleStatus=false + lastError 原因，由基类作废输出、
+    // 执行器把原因推给结果面板/CSV（见 include/NodeResultFields.h 的 U-18 口径）。
+    if (!AppDatabase::instance()->saveInspectionResult(flowName, nodeName, passed, valueStr)) {
+        m_params[QStringLiteral("moduleStatus")] = false;
+        m_params[QStringLiteral("lastError")] =
+            QStringLiteral("检测结果未写入数据库(%1/%2): %3")
+                .arg(flowName, nodeName, AppDatabase::instance()->lastDatabaseError());
+        return;
+    }
 
     auto obj = QSharedPointer<DataObject>::create(DataObject::DataType::Bool, QVariant(passed));
     setOutputData(0, obj);
