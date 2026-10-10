@@ -955,6 +955,14 @@ if(MSVC)
     vfp_configure_gui_test(PanelVisibilityTest)
 endif()
 
+# 算子搜索口径（FR1.7）：中文名/英文名/别名一处定义，画布 Ctrl+F 走真控件核对
+if(MSVC)
+    add_executable(node_search_test tests/node_search_test.cpp)
+    target_link_libraries(node_search_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    vfp_add_qtest(NAME NodeSearchTest TARGET node_search_test)
+    vfp_configure_gui_test(NodeSearchTest)
+endif()
+
 # 崩溃恢复 / 自动保存：往返一致 / 真加载器可打开 / 坏文件拒收 / 未保存判定 / 干净退出清理
 if(MSVC)
     add_executable(recovery_store_test tests/recovery_store_test.cpp)

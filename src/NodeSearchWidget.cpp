@@ -1,6 +1,7 @@
 #include "NodeSearchWidget.h"
 #include "FlowScene.h"
 #include "NodeBase.h"
+#include "NodeRegistry.h"
 #include <QKeyEvent>
 #include <QApplication>
 
@@ -88,7 +89,8 @@ void NodeSearchWidget::setupUi()
     // 搜索框
     auto *searchLayout = new QHBoxLayout();
     m_searchEdit = new QLineEdit();
-    m_searchEdit->setPlaceholderText(QStringLiteral("搜索算子名称... (Ctrl+F)"));
+    m_searchEdit->setObjectName(QStringLiteral("nodeSearchEdit"));
+    m_searchEdit->setPlaceholderText(QStringLiteral("搜索算子名称 / 英文名 / 别名... (Ctrl+F)"));
     m_searchEdit->setClearButtonEnabled(true);
     connect(m_searchEdit, &QLineEdit::textChanged, this, [this](const QString &text) {
         m_searchTimer->start();
@@ -108,11 +110,13 @@ void NodeSearchWidget::setupUi()
 
     // 结果计数
     m_countLabel = new QLabel();
+    m_countLabel->setObjectName(QStringLiteral("nodeSearchCount"));
     m_countLabel->setStyleSheet(QStringLiteral("font-size: 11px; color: #666;"));
     layout->addWidget(m_countLabel);
 
     // 搜索结果列表
     m_resultList = new QListWidget();
+    m_resultList->setObjectName(QStringLiteral("nodeSearchResults"));
     m_resultList->setAlternatingRowColors(true);
     m_resultList->setSelectionMode(QListWidget::SingleSelection);
     connect(m_resultList, &QListWidget::currentRowChanged, this, &NodeSearchWidget::onSearchResultClicked);
@@ -151,10 +155,15 @@ void NodeSearchWidget::performSearch(const QString &keyword)
         // 搜索算子名称（不区分大小写）
         QString nodeName = node->name();
         QString fullName = node->fullName();
+        // 中文名/英文名/别名的口径在 NodeRegistry::matchesSearchKeyword（唯一出处）；
+        // 老方案里丢了 vfpNodeTypeId 属性的节点查不到注册项，只是退回"按名字与模块号搜"，不会被整条跳过。
+        const NodeRegistration *reg =
+            NodeRegistry::instance().findById(node->property("vfpNodeTypeId").toString());
 
         if (nodeName.contains(keyword, Qt::CaseInsensitive) ||
             fullName.contains(keyword, Qt::CaseInsensitive) ||
-            QString::number(node->moduleId()).contains(keyword)) {
+            QString::number(node->moduleId()).contains(keyword) ||
+            (reg && NodeRegistry::matchesSearchKeyword(*reg, keyword))) {
             matchedNodes.append(node);
         }
     }

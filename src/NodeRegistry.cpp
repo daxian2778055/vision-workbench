@@ -536,6 +536,18 @@ const NodeRegistration *NodeRegistry::findByName(const QString &name) const
     return nullptr;
 }
 
+bool NodeRegistry::matchesSearchKeyword(const NodeRegistration &reg, const QString &keyword)
+{
+    const QString q = keyword.trimmed();
+    if (q.isEmpty()) return false;       // 「空即全显」留在调用点，不混进口径里
+    if (reg.displayName.contains(q, Qt::CaseInsensitive)) return true;
+    if (reg.englishName.contains(q, Qt::CaseInsensitive)) return true;
+    for (const QString &alias : reg.aliases) {
+        if (alias.contains(q, Qt::CaseInsensitive)) return true;
+    }
+    return false;
+}
+
 QStringList NodeRegistry::groups() const
 {
     QStringList groups;

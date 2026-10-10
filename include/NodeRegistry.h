@@ -40,6 +40,11 @@ public:
     const NodeRegistration *findById(const QString &id) const;
     const NodeRegistration *findByName(const QString &name) const;
 
+    /// 搜索口径的唯一出处：中文名 / 英文名 / 别名任一含关键字（大小写不敏感）。
+    /// 不含类型 id 与模块号——那两条两处规则不同（工具箱要求关键字 >=2 字符，Ctrl+F 判的是节点自带的
+    /// 模块号），留在各自调用点。空关键字返回 false：「空即全显」由调用方自己判，不混进这里。
+    static bool matchesSearchKeyword(const NodeRegistration &reg, const QString &keyword);
+
     const QList<NodeRegistration> &all() const { return m_regs; }
     /// 有序工具库分组
     QStringList groups() const;

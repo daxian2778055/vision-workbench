@@ -3297,8 +3297,13 @@ void MainWindow::setupToolLibrary()
             int visible = 0;
             for (int ci = 0; ci < group->childCount(); ++ci) {
                 QTreeWidgetItem *child = group->child(ci);
+                // 中文名/英文名/别名走 NodeRegistry::matchesSearchKeyword 那一枚唯一口径；
+                // 类型 id 那条"关键字至少两个字符"的规矩留在本处，Ctrl+F 那一侧不需要它。
+                const NodeRegistration *reg =
+                    NodeRegistry::instance().findById(child->data(0, Qt::UserRole).toString());
                 const bool match = q.isEmpty()
                                    || child->text(0).contains(q, Qt::CaseInsensitive)
+                                   || (reg && NodeRegistry::matchesSearchKeyword(*reg, q))
                                    || (q.size() >= 2 && child->data(0, Qt::UserRole).toString().contains(q, Qt::CaseInsensitive));
                 child->setHidden(!match);
                 if (match) ++visible;
