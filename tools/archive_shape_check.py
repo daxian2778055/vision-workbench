@@ -13,10 +13,13 @@ register_shape_gate 判附页行形状），**留档件自己的形状没有**�
 文件自身读出来，不需要外部真值：
 
   R1 header        第一个非空行必须是 "CMD: <命令>"——没有它，整份档说不出是谁产出的
-  R2 dangling      一个 "CMD:" 行后面不能再紧跟一个 "CMD:" 行或直接到尾：那是追加动作被打断
+  R2 dangling      只判实现真做得到的那一半：一枚 "CMD:" 行是文件里最后一条非空行——那意味着追加动作被打断，
+                   或那次运行什么都没产出而档里已写着"我跑过"。"CMD:" 后面紧跟另一枚 "CMD:" 是合法形状
+                   （附页第三十八条立的占位惯例：先建一枚只有 CMD 行的占位、跑完再把 stdout 追加进去），不判。
   R3 manifest      --expect-cmd 给出的每条命令必须在档里恰好出现一次（多出来就是被追加了两遍）
   R4 terminal      --terminal 给出的终态行正则至多命中 --terminal-max 次（默认 1）
-  R5 bytes         无 CR、无 BOM、无 NUL、可按 UTF-8 解码；末行必须以换行收尾
+  R5 bytes         无 CRLF、无孤立 CR、无 BOM、无 NUL、可按 UTF-8 解码；末行必须以换行收尾。两格分开报
+                   （crlf= 与 lone_cr=），不合并成一个数——把 \r\n 与 \r 各数一遍再相加会把每行 CRLF 算两遍
   R6 rc accounting "rc=" 行的条数等于 --rc-equals（给了这个开关才判）
   R7 orphan runs    "rc=" 行的条数多于 "CMD:" 行的条数。不依赖调用方声明任何东西：本仓每枚
      留档 runner 都在每回输出末尾自己写一行 rc=，所以"跑过几回"文件自己记着。这一条正是为
@@ -31,6 +34,7 @@ R3/R4/R6 是"这次留档跑了什么"的自证：跑几件事，就应当有几
 Reproduce:
     python tools/archive_shape_check.py --archive <path> [--expect-cmd 'CMD: ...']...
         [--terminal '^\\[HOST-RC\\]' --terminal-max 1] [--rc-equals 10]
+    --archive 只能给一枚：第二枚不是覆盖第一枚，而是当场 rc=2 拒收（静默换输入会把"没判的那枚"变成绿）。
 
 Exit: 0 = GREEN | 1 = RED (findings printed) | 2 = unreadable input or misuse (never a green).
 Output is ASCII-only (cp936 console); paths and reasons go through esc().
@@ -73,6 +77,10 @@ def main(argv):
     while i < len(args):
         a = args[i]
         if a == "--archive" and i + 1 < len(args):
+            if archive is not None:
+                print("ERROR --archive may be named once per run (first=%s second=%s); a second one "
+                      "would leave the first judged by nobody" % (esc(archive), esc(args[i + 1])))
+                return 2
             archive = args[i + 1]
             i += 2
             continue
@@ -125,9 +133,10 @@ def main(argv):
         findings.append("R5 bytes bom=yes")
     if b"\x00" in data:
         findings.append("R5 bytes nul=%d" % data.count(b"\x00"))
-    cr = data.count(b"\r\n") + data.count(b"\r")
-    if cr:
-        findings.append("R5 bytes cr=%d" % cr)
+    crlf = data.count(b"\r\n")
+    lone_cr = data.count(b"\r") - crlf
+    if crlf or lone_cr:
+        findings.append("R5 bytes crlf=%d lone_cr=%d" % (crlf, lone_cr))
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError as exc:
