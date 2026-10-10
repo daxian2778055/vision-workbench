@@ -84,6 +84,16 @@ bool AppDatabase::prepareWrite(QSqlQuery &q, const QSqlDatabase &db,
     return false;
 }
 
+// 读侧与写侧共用同一份判据（见头注释）。U-97 补读族六处时量到的形状是：
+// 读侧原来"prepare 根本不查、exec 查了也只是 return records"，而 lastDatabaseError 的
+// 成功路径不清空，于是"空表"与"上一笔写失败留下的旧原因"会一起被送到界面上。
+// 读侧不改变失败时返回什么，只让失败开口。
+bool AppDatabase::prepareRead(QSqlQuery &q, const QSqlDatabase &db,
+                              const QString &sql, const QString &op) const
+{
+    return prepareWrite(q, db, sql, op);
+}
+
 QString AppDatabase::lastDatabaseError() const
 {
     QMutexLocker locker(&s_dbMutex);
@@ -337,10 +347,12 @@ QList<AlarmRecord> AppDatabase::queryAlarms(const QDateTime &from, const QDateTi
     QList<AlarmRecord> records;
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
-    q.prepare(QStringLiteral(
-        "SELECT id, module, level, message, timestamp FROM alarms "
-        "WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp DESC LIMIT ?"
-    ));
+    if (!prepareRead(q, db, QStringLiteral(
+                           "SELECT id, module, level, message, timestamp FROM alarms "
+                           "WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp DESC LIMIT ?"),
+                     QStringLiteral("queryAlarms"))) {
+        return records;
+    }
     q.addBindValue(from);
     q.addBindValue(to);
     q.addBindValue(limit);
@@ -447,10 +459,12 @@ QList<InspectionRecord> AppDatabase::queryResults(const QDateTime &from, const Q
     QList<InspectionRecord> records;
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
-    q.prepare(QStringLiteral(
-        "SELECT id, flow_name, node_name, passed, value, timestamp FROM inspection_results "
-        "WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp DESC LIMIT ?"
-    ));
+    if (!prepareRead(q, db, QStringLiteral(
+                           "SELECT id, flow_name, node_name, passed, value, timestamp FROM inspection_results "
+                           "WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp DESC LIMIT ?"),
+                     QStringLiteral("queryResults"))) {
+        return records;
+    }
     q.addBindValue(from);
     q.addBindValue(to);
     q.addBindValue(limit);
@@ -503,7 +517,10 @@ bool AppDatabase::authenticateUser(const QString &name, const QString &password)
     QMutexLocker locker(&s_dbMutex);
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
-    q.prepare(QStringLiteral("SELECT id, password_hash FROM users WHERE name = ?"));
+    if (!prepareRead(q, db, QStringLiteral("SELECT id, password_hash FROM users WHERE name = ?"),
+                     QStringLiteral("authenticateUser"))) {
+        return false;
+    }
     q.addBindValue(name);
     if (!q.exec() || !q.next()) return false;
 
@@ -564,7 +581,10 @@ bool AppDatabase::isFactoryAdminPasswordInUse() const
     QMutexLocker locker(&s_dbMutex);
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
-    q.prepare(QStringLiteral("SELECT password_hash FROM users WHERE name = ?"));
+    if (!prepareRead(q, db, QStringLiteral("SELECT password_hash FROM users WHERE name = ?"),
+                     QStringLiteral("isFactoryAdminPasswordInUse"))) {
+        return false;
+    }
     q.addBindValue(QStringLiteral("admin"));
     if (!q.exec() || !q.next()) {
         return false;   // 没有 admin 账户 ⇒ 出厂口令不可能在使用中
@@ -578,7 +598,11 @@ QList<UserRecord> AppDatabase::queryUsers() const
     QList<UserRecord> records;
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
-    q.exec(QStringLiteral("SELECT id, name, role, created_at FROM users ORDER BY id"));
+    // 这条没有占位符，失败只可能出在 exec；但它原来连 exec 的返回值都不接。
+    if (!q.exec(QStringLiteral("SELECT id, name, role, created_at FROM users ORDER BY id"))) {
+        noteFailure(QStringLiteral("queryUsers"), db, q.lastError().text());
+        return records;
+    }
     while (q.next()) {
         UserRecord r;
         r.id = q.value(0).toInt();
@@ -647,10 +671,12 @@ QList<OperationLogRecord> AppDatabase::queryOperationLogs(const QDateTime &from,
     QList<OperationLogRecord> records;
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
-    q.prepare(QStringLiteral(
-        "SELECT id, user, action, detail, timestamp FROM operation_logs "
-        "WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp DESC LIMIT ?"
-    ));
+    if (!prepareRead(q, db, QStringLiteral(
+                           "SELECT id, user, action, detail, timestamp FROM operation_logs "
+                           "WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp DESC LIMIT ?"),
+                     QStringLiteral("queryOperationLogs"))) {
+        return records;
+    }
     q.addBindValue(from);
     q.addBindValue(to);
     q.addBindValue(limit);

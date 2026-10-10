@@ -86,7 +86,7 @@ public:
     /// \u83B7\u53D6\u6570\u636E\u5E93\u8DEF\u5F84
     QString databasePath() const { return m_dbPath; }
 
-    /// 最近一次数据库失败的诊断文本（初始化 / 建表 / 写入失败时写入；成功路径不清空，
+    /// 最近一次数据库失败的诊断文本（初始化 / 建表 / 写入与读取失败时写入；成功路径不清空，
     /// 因为「上一轮写失败」正是下一轮排查要看的现场信息）。
     /// 为什么需要它：写侧原先只看 exec() 的返回值，prepare() 的返回值一处都没查。
     /// 本轮撤闸自证实测到的形态：把 prepare 的检查撤掉后，同一条批量写在 exec() 报出的是
@@ -115,12 +115,19 @@ private:
     AppDatabase(const AppDatabase &) = delete;
     AppDatabase &operator=(const AppDatabase &) = delete;
 
+    /// 建表。**调用方必须已持有 s_dbMutex**：本函数自己不取锁，今天唯一的调用方是
+    /// initialize()（它持锁）。函数体内有 7 处 noteFailure 与 1 处 prepareWrite，
+    /// 全都按这个前提写。这条前提原来只写在 noteFailure / prepareWrite 的注释上，
+    /// 这两个中间节点自己是空档——下一个从无锁路径调它们的人不会收到任何信号。
     bool createTables();
 
     /// 返回当前线程可用的数据库连接。
     /// QSqlDatabase 具有线程亲和性：一个连接只能在创建它的线程使用，
     /// 跨线程复用会报 "requested database does not belong to the calling thread"
     /// 并可能直接崩溃。检测流程在工作线程写库，因此必须按线程取连接。
+    /// **调用方必须已持有 s_dbMutex**：本函数自己不取锁，体内 2 处 noteFailure 按这个前提写。
+    /// 今天的不变式靠调用方纪律维持：initialize() 持锁、11 个读/写方法各自持锁。
+    /// 与 createTables() 同一条：这两个中间节点的契约原来没人写。
     QSqlDatabase threadDatabase() const;
 
     /// 拼一条失败诊断：操作名 / 阶段 / 连接名 / 是否已打开 / 库路径 / 驱动原文。
@@ -140,6 +147,15 @@ private:
     /// **调用方必须已持有 s_dbMutex。**
     bool prepareWrite(QSqlQuery &q, const QSqlDatabase &db,
                       const QString &sql, const QString &op) const;
+
+    /// 读侧同一个 prepare 判据，另起一个名字只为让调用点读得懂。读失败不改返回值
+    /// （空表 / 登录失败），但必须留痕：lastDatabaseError() 的头注释明写"成功路径不清空"，
+    /// 所以读侧一旦无声，queryResults 返回空表时调用方去问 lastDatabaseError()，
+    /// 读到的是上一笔写失败留下的旧串——把上一轮的错当成这次的错显示给现场。
+    /// 实现就是 prepareWrite：判据只有一份，不会出现"修了一处忘了另一处"。
+    /// **调用方必须已持有 s_dbMutex。**
+    bool prepareRead(QSqlQuery &q, const QSqlDatabase &db,
+                     const QString &sql, const QString &op) const;
 
     mutable QString m_lastDatabaseError;   ///< 最近一次失败诊断（由 s_dbMutex 保护的调用方写）
     QString m_dbPath;

@@ -92,6 +92,10 @@ private slots:
     void testPasswordHashRoundTrip();
     void testBatchInspectionResults();
     void testZeroRowWritesAreFailures();
+    // U-97：读族六处 prepare/exec 返回值原先整份丢掉，读失败返回空表而无声。
+    // 必须排在 testWriteFailureIsVisibleAndNotMisleading 之前——那一腿要 DROP
+    // inspection_results，本腿 DROP users 之后要把它建回来，两张表互不相干。
+    void testReadFailureIsAlsoVisible();
     // ⚠️ 必须排在最后：本腿会 DROP 掉 inspection_results 来复现"表不在"的写失败路径
     void testWriteFailureIsVisibleAndNotMisleading();
 
@@ -236,6 +240,100 @@ void DatabaseTest::testZeroRowWritesAreFailures()
 //   ① 写必须判失败；② 原因必须是 prepare 阶段的真错，而不是被 exec 冒名顶替的
 //   "Parameter count mismatch"；③「数据记录」算子不得因此绿灯，且要把原因写进 lastError。
 // 历史实现三处都缺：prepare 返回值没人查、RecordNode 把 bool 丢掉、main() 把 initialize() 丢掉。
+// U-97：读侧原来"prepare 根本不查、exec 查了也只是 return records"，而
+// lastDatabaseError() 的成功路径不清空，所以空表 + 旧原因会一起送到界面上。
+// 本腿钉住：① 健康库上读照旧成功（否则就退化成"读永远失败"）；② users 表删掉后
+// 读失败要留痕，op= 是读自己的名字；③ 那一条不是上一笔写失败留下的旧串。
+void DatabaseTest::testReadFailureIsAlsoVisible()
+{
+    AppDatabase *db = AppDatabase::instance();
+
+    // 反向守栏：健康库上读必须照旧有结果，否则本腿什么都没测
+    const QList<InspectionRecord> okRows = db->queryResults(
+        QDateTime::currentDateTime().addYears(-1),
+        QDateTime::currentDateTime().addDays(1), 500);
+    const QList<UserRecord> okUsers = db->queryUsers();
+    QVERIFY2(!okRows.isEmpty(), "健康库上 queryResults 读不到行，反向守栏先红");
+    QVERIFY2(!okUsers.isEmpty(), "健康库上 queryUsers 读不到账户（seedAdmin 没生效）");
+    const QList<AlarmRecord> okAlarms = db->queryAlarms(
+        QDateTime::currentDateTime().addYears(-1),
+        QDateTime::currentDateTime().addDays(1), 500);
+    const QList<OperationLogRecord> okLogs = db->queryOperationLogs(
+        QDateTime::currentDateTime().addYears(-1),
+        QDateTime::currentDateTime().addDays(1), 500);
+    qDebug().noquote() << QStringLiteral("P1-READ-CONTROL alarms=%1 logs=%2")
+                          .arg(okAlarms.size()).arg(okLogs.size());
+
+    // 先制造一笔写失败的旧串，后面要证明读失败不会拿它冒充自己
+    QVERIFY2(!db->changeUserPassword(QStringLiteral("p1_read_ghost"), QStringLiteral("x")),
+             "删表前改一个不存在的账户口令却报成功");
+    const QString writeWhy = db->lastDatabaseError();
+    QVERIFY2(writeWhy.contains(QStringLiteral("op=changeUserPassword")), qPrintable(writeWhy));
+
+    {
+        QSqlDatabase probe = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                      QStringLiteral("p1_probe_read"));
+        probe.setDatabaseName(db->databasePath());
+        QVERIFY2(probe.open(), qPrintable(probe.lastError().text()));
+        QSqlQuery drop(probe);
+        QVERIFY2(drop.exec(QStringLiteral("DROP TABLE users")), qPrintable(drop.lastError().text()));
+        probe.close();
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("p1_probe_read"));
+
+    // ① 读失败：返回值照旧是空/假（本轮不改返回值，只让它开口）
+    // ② 留痕：串记的是"最近一次"，所以每次调用之后各取一次、各断一条，
+    //    不能攒着——第二枚读的 op= 盖掉第一枚的那枚正是头注释写明的契约。
+    QCOMPARE(db->queryUsers().size(), 0);
+    const QString usersWhy = db->lastDatabaseError();
+    qDebug().noquote() << QStringLiteral("P1-READ-FAILURE queryUsers:") << usersWhy;
+    QVERIFY2(usersWhy.contains(QStringLiteral("op=queryUsers")), qPrintable(usersWhy));
+    QVERIFY2(usersWhy.contains(QStringLiteral("no such table: users")), qPrintable(usersWhy));
+
+    QVERIFY2(!db->isFactoryAdminPasswordInUse(),
+             "users 表已删除，isFactoryAdminPasswordInUse 却报 true");
+    const QString factoryWhy = db->lastDatabaseError();
+    qDebug().noquote() << QStringLiteral("P1-READ-FAILURE isFactoryAdmin:") << factoryWhy;
+    QVERIFY2(factoryWhy.contains(QStringLiteral("op=isFactoryAdminPasswordInUse")),
+             qPrintable(factoryWhy));
+    QVERIFY2(factoryWhy.contains(QStringLiteral("no such table: users")), qPrintable(factoryWhy));
+
+    // ③ 两枚都不是上一笔写失败那条旧串（U-97 修的就是这个）
+    QVERIFY2(usersWhy != writeWhy && factoryWhy != writeWhy,
+             "读失败把上一笔写失败的旧串原样交了出来——调用方会把上一轮的错当这次的错");
+    QVERIFY2(!usersWhy.contains(QStringLiteral("op=changeUserPassword"))
+             && !factoryWhy.contains(QStringLiteral("op=changeUserPassword")),
+             qPrintable(usersWhy + QStringLiteral(" / ") + factoryWhy));
+
+    // 把 users 表建回来（DDL 与 AppDatabase::createTables 同一份），
+    // 并用一次能读回自己的写证明读路径在活表上照旧工作
+    {
+        QSqlDatabase probe = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                      QStringLiteral("p1_probe_restore"));
+        probe.setDatabaseName(db->databasePath());
+        QVERIFY2(probe.open(), qPrintable(probe.lastError().text()));
+        QSqlQuery make(probe);
+        QVERIFY2(make.exec(QStringLiteral(
+            "CREATE TABLE users ("
+            "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  name TEXT UNIQUE NOT NULL,"
+            "  password_hash TEXT NOT NULL,"
+            "  role TEXT NOT NULL DEFAULT 'Operator',"
+            "  created_at DATETIME DEFAULT CURRENT_TIMESTAMP)")),
+                 qPrintable(make.lastError().text()));
+        probe.close();
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("p1_probe_restore"));
+    QVERIFY2(db->addUser(QStringLiteral("p1_after_restore"), QStringLiteral("pw"),
+                          QStringLiteral("Operator")),
+             "users 表建回来之后 addUser 却失败");
+    const QList<UserRecord> back = db->queryUsers();
+    QCOMPARE(back.size(), 1);
+    QVERIFY2(db->removeUser(QStringLiteral("p1_after_restore")),
+             "读路径恢复之后 removeUser 却失败");
+    QCOMPARE(db->queryUsers().size(), 0);
+}
+
 void DatabaseTest::testWriteFailureIsVisibleAndNotMisleading()
 {
     AppDatabase *db = AppDatabase::instance();
