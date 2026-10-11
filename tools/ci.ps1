@@ -584,6 +584,48 @@ function Get-VfpIncludeClosure {
     @{ files = @($seen.Keys); missing = @($missing) }
 }
 
+# Does CMakeLists.txt count as a dependency for ONE target's binary? (U-109)
+#
+# This step used to put the whole CMakeLists.txt into every face on the premise that "a change
+# anywhere in the link file can relink any product". Measured false at 22269a3: ba28be1 added a
+# brand-new add_executable(node_search_test ...) block and touched nothing else, and the gate then
+# called opencv_nodes_test.exe (built 2026-09-30) stale against CMakeLists.txt's new mtime. A full
+# cmake --build leaves that binary alone, because the new block does not name it -- so the red was
+# permanent and unbuildable, and it blocked every ci.ps1 run on main.
+#
+# Three questions decide it, all answerable locally:
+#   1 is the worktree dirty?      worktree != HEAD            -> counts (changed, maybe unbuilt)
+#   2 is the binary older than the last commit that touched CMakeLists.txt?
+#                               newer -> does NOT count (content has not moved since the build)
+#   3 did that commit touch THIS target's own registration lines?  yes -> counts; no -> not
+# Every step that cannot be answered falls closed: CMakeLists counts. An unreadable answer must
+# never turn into an exemption, which is the same rule the include closure above already follows.
+function Get-CmakeCountsForTarget {
+    param([string]$Target, [datetime]$ExeUtc)
+    if (-not $Target) { return @{ counts = $true; why = 'target name unknown - fail closed' } }
+    # 1 is the worktree dirty?
+    & git diff --quiet HEAD -- CMakeLists.txt 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        return @{ counts = $true; why = 'worktree CMakeLists.txt differs from HEAD' } }
+    $lastRev = (& git log -1 --format=%H -- CMakeLists.txt 2>$null)
+    if (-not $lastRev) { return @{ counts = $true; why = 'no git history for CMakeLists.txt - fail closed' } }
+    $lastTs = [int](& git log -1 --format=%ct -- CMakeLists.txt 2>$null)
+    if ($lastTs -le 0) { return @{ counts = $true; why = 'commit date unreadable - fail closed' } }
+    $lastUtc = [datetimeoffset]::FromUnixTimeSeconds($lastTs).UtcDateTime
+    # 2 is the binary OLDER than the last commit that touched CMakeLists.txt? if NEWER than skip:
+    if ($ExeUtc -ge $lastUtc) { return @{ counts = $false; why = 'binary is newer than the last CMakeLists commit' } }
+    # 3 did that commit touch THIS target's own registration lines?
+    & git diff --unified=0 "$lastRev^" "$lastRev" -- CMakeLists.txt 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        return @{ counts = $true; why = 'cannot diff the last CMakeLists commit - fail closed' } }
+    $diff = (& git diff --unified=0 "$lastRev^" "$lastRev" -- CMakeLists.txt 2>$null)
+    $changed = @($diff | Where-Object { $_ -match '^[+-]' -and $_ -notmatch '^(\+\+\+|---)' })
+    if (@($changed).Count -eq 0) { return @{ counts = $false; why = 'last CMakeLists commit shows no changed line' } }
+    $hits = @($changed | Where-Object { $_ -match [regex]::Escape($Target) })
+    if (@($hits).Count -gt 0) {
+        return @{ counts = $true; why = "last CMakeLists commit touches this target" } }
+    return @{ counts = $false; why = ("last CMakeLists commit " + $lastRev.Substring(0, 7) + " does not name this target") }
+}
 $allFace = @(Get-ChildItem -Recurse -Include '*.cpp','*.h','*.hpp' `
     -Path 'src','include' -ErrorAction SilentlyContinue) +
     @(Get-Item 'CMakeLists.txt' -ErrorAction SilentlyContinue)
@@ -594,6 +636,13 @@ $baseGlobal = @( $allFace | Sort-Object LastWriteTimeUtc -Descending | Select-Ob
 $baseShared = @( $sharedFace | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1 )
 if ($baseGlobal.Count -gt 0) { $baseGlobal = $baseGlobal[0] } else { $baseGlobal = $null }
 if ($baseShared.Count -gt 0) { $baseShared = $baseShared[0] } else { $baseShared = $null }
+# U-109: the same two baselines with CMakeLists.txt taken out, for the targets whose
+# Get-CmakeCountsForTarget answer is "does not count". The counts stay on one line so a
+# reviewer can see how many targets were judged on each side.
+$baseGlobalNoCmake = @( $allFace | Where-Object { $_.Name -ne 'CMakeLists.txt' } | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1 )
+if ($baseGlobalNoCmake.Count -gt 0) { $baseGlobalNoCmake = $baseGlobalNoCmake[0] } else { $baseGlobalNoCmake = $null }
+$baseSharedNoCmake = @( $sharedFace | Where-Object { $_.Name -ne 'CMakeLists.txt' } | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1 )
+if ($baseSharedNoCmake.Count -gt 0) { $baseSharedNoCmake = $baseSharedNoCmake[0] } else { $baseSharedNoCmake = $null }
 Write-Host "  face: $($allFace.Count) files on the vfp_core baseline, $($sharedFace.Count) on the header-only baseline" -ForegroundColor DarkGray
 
 $stale = @()
@@ -601,8 +650,14 @@ $narrow = @()
 $faceUnknown = @()
 $closureFallback = @()
 $closureSizes = @()
+$cmakeNotes = @()
 foreach ($t in $listed) {
     $target = if ($targetOf.ContainsKey($t)) { $targetOf[$t] } else { $null }
+    # U-109: decide whether CMakeLists.txt is this binary's dependency at all, before any
+    # face is built. The exe is present (checked above) so its mtime is readable here.
+    $exe = Get-Item (Join-Path $binDir $exeOf[$t])
+    $cmakeRef = Get-CmakeCountsForTarget -Target $target -ExeUtc $exe.LastWriteTimeUtc
+    $cmakeNotes += ("{0} -> counts={1} ({2})" -f $t, $cmakeRef.counts, $cmakeRef.why)
     $faceKnown = ($target -and $faceOf.ContainsKey($target))
     $own = @()
     if ($faceKnown) {
@@ -618,16 +673,16 @@ foreach ($t in $listed) {
     if ($newestOwn.Count -gt 0) { $newestOwn = $newestOwn[0] } else { $newestOwn = $null }
 
     $narrowed = ($faceKnown -and -not $coreOf.ContainsKey($target))
-    $ref = $baseGlobal
+    $ref = if ($cmakeRef.counts) { $baseGlobal } else { $baseGlobalNoCmake }
     if ($narrowed) {
         $narrow += $t
         $cl = Get-VfpIncludeClosure -Sources @($faceOf[$target])
         if (@($cl.missing).Count -gt 0) {
             $closureFallback += ($target + ' - ' + ((@($cl.missing)) -join '; '))
-            $ref = $baseShared
+            $ref = if ($cmakeRef.counts) { $baseShared } else { $baseSharedNoCmake }
         } else {
             $closureFace = @(foreach ($f in @($cl.files)) { Get-Item -LiteralPath $f -ErrorAction SilentlyContinue }) +
-                @(Get-Item 'CMakeLists.txt' -ErrorAction SilentlyContinue)
+                @(if ($cmakeRef.counts) { Get-Item 'CMakeLists.txt' -ErrorAction SilentlyContinue })
             $newest = @($closureFace | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1)
             $ref = if ($newest.Count -gt 0) { $newest[0] } else { $baseShared }
             $closureSizes += "$target -> $(@($cl.files).Count) file(s), baseline $(if ($newest.Count -gt 0) { $newest[0].Name } else { '(none)' })"
@@ -635,7 +690,6 @@ foreach ($t in $listed) {
     }
     if ($newestOwn -and (-not $ref -or $newestOwn.LastWriteTimeUtc -gt $ref.LastWriteTimeUtc)) { $ref = $newestOwn }
     if (-not $ref) { continue }
-    $exe = Get-Item (Join-Path $binDir $exeOf[$t])
     if ($exe.LastWriteTimeUtc -lt $ref.LastWriteTimeUtc) {
         $stale += "$($exe.Name) (built $(($exe.LastWriteTimeUtc.ToString('yyyy-MM-dd HH:mm:ss')) + ' UTC') < $($ref.Name) $(($ref.LastWriteTimeUtc.ToString('yyyy-MM-dd HH:mm:ss')) + ' UTC'))"
     }
@@ -644,6 +698,11 @@ foreach ($u in $faceUnknown) {
     Write-Warn "no add_executable() face parsed for $u - kept on the full vfp_core baseline (an unparsable face is never an exemption)"
 }
 foreach ($c in $closureSizes) { Write-Host "  closure: $c" -ForegroundColor DarkGray }
+# U-109: one line per target saying whether CMakeLists.txt counted for it and why. Printed
+# because a rule that silently drops a dependency is exactly the shape this gate exists for.
+$cmakeCounted = @($cmakeNotes | Where-Object { $_ -match 'counts=True' }).Count
+Write-Host "  CMakeLists.txt counted for $cmakeCounted of $($cmakeNotes.Count) target(s); the rest are judged on their own faces only" -ForegroundColor DarkGray
+foreach ($c in $cmakeNotes) { Write-Host "  cmake: $c" -ForegroundColor DarkGray }
 foreach ($c in $closureFallback) {
     Write-Warn "include closure incomplete for $c - kept on the full header baseline (an unresolved include is never an exemption)"
 }

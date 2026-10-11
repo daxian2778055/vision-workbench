@@ -37,6 +37,10 @@ private slots:
     void testCtrlFFindsRenamedNodeByAlias();
     void testCtrlFStillFindsByNodeNameAndModuleNumber();
     void testCtrlFWithEmptyKeywordShowsNothing();
+    // U-109: the negative half. The legs above all assert "the token is found", and the
+    // scene holds exactly one node, so a count()==1 cannot tell "matched" from "matched
+    // everything". This leg pins the other direction.
+    void testCtrlFRejectsUnknownKeyword();
 
 private:
     void makeSearchWithThresholdNode(FlowScene *scene, NodeSearchWidget **searchOut,
@@ -235,6 +239,46 @@ void NodeSearchTest::testCtrlFWithEmptyKeywordShowsNothing()
     QTRY_COMPARE(results->count(), 1);
     edit->setText(QString());                           // 清空 = 撤销定位，不是"全显"
     QTRY_COMPARE(results->count(), 0);
+    delete search;
+}
+
+/// 反向半边：一个哪都不挨的词必须一条都不中。
+/// U-108 那枚改坏自证臂（把谓词从站点摘掉）判红靠的是夹具把节点改名成「我的阈值」、
+/// 同时掐断了其余三条匹配路径，不是靠"胡说八道读 0"判红的——所以那一臂证明的是
+/// "接线被摘掉会红"，没证明"全显会被抓"。本腿补后一半：提前返回被改成全显、或谓词被
+/// 改成常真，这一条必须红。
+void NodeSearchTest::testCtrlFRejectsUnknownKeyword()
+{
+    FlowScene scene;
+    NodeBase *node = nullptr;
+    NodeSearchWidget *search = nullptr;
+    makeSearchWithThresholdNode(&scene, &search, &node);
+
+    auto *edit = search->findChild<QLineEdit *>(QStringLiteral("nodeSearchEdit"));
+    auto *results = search->findChild<QListWidget *>(QStringLiteral("nodeSearchResults"));
+    auto *count = search->findChild<QLabel *>(QStringLiteral("nodeSearchCount"));
+    QVERIFY2(edit && results && count,
+             "Ctrl+F widgets must stay named or this leg silently stops measuring");
+
+    // 先证明"这一个字确实能中"（含小写形）——否则下面那几个 0 分不清是没匹配上，
+    // 还是控件整个没接上；那等于用一枚死的腿去证明另一枚腿活着。
+    edit->setText(kEnglishName);
+    QTRY_COMPARE(results->count(), 1);
+    edit->setText(kEnglishName.toLower());
+    QTRY_COMPARE(results->count(), 1);
+
+    // 反向：换几个哪都不挨的词，必须归零，而不是"留着力气全显"。
+    // 这三个都刻意避开任何可能的中英文子串——连 "threshol" 这种少一字母的都不用，
+    // 它本来就是 "Threshold" 的子串，放进来会变成一枚永远绿的腿。
+    const QStringList unknowns = {
+        QStringLiteral("zzqx-not-a-term"),
+        QStringLiteral("qzxwv"),
+        QStringLiteral("不存在的东西"),
+    };
+    for (const QString &kw : unknowns) {
+        edit->setText(kw);
+        QTRY_COMPARE(results->count(), 0);
+    }
     delete search;
 }
 
