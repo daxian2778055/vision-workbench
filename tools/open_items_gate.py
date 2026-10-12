@@ -89,7 +89,16 @@ class Item(object):
                 return "state=local needs file"
             if not self.argv:
                 return "state=local needs an argv to run once the file is there"
+            if self.needle is not None:
+                # N3 (U-113): a needle on a non-enforced item is dead config. It reads like the item is
+                # checked against something; it is never consulted, because only enforced items consult
+                # their needle. Someone who meant to enforce it typed the wrong state, or pasted a row
+                # and forgot to move it -- either way the honest thing is to refuse the row, not to
+                # carry a needle that looks armed and is not.
+                return "state=local with a needle: nothing reads it; enforce it or drop the needle"
             return None
+        if self.state == "open" and self.needle is not None:
+            return "state=open with a needle: nothing reads it; enforce it or drop the needle"
         if not self.argv:
             return "argv is empty"
         if not isinstance(self.want_rc, int):
@@ -259,6 +268,8 @@ def main(argv):
 
     findings = 0
     seen = set()
+    enforced_outputs = []
+    enforced_argvs = {}
     n_enforced = n_open = n_local = 0
     for it in items:
         if it.id in seen:
@@ -307,11 +318,42 @@ def main(argv):
                 print("           want rc=%d needle=%r" % (it.want_rc, it.needle))
                 print("           first output line: %s" % reading)
                 findings += 1
+            else:
+                enforced_outputs.append((it.id, it.needle, out))
+            enforced_argvs.setdefault(tuple(it.argv), []).append(it.id)
         else:
             if it.state == "open":
                 n_open += 1
             print("[OIG] id=%-32s state=%-12s rc=%d reading=%s"
                   % (it.id, it.state, rc, reading))
+
+    # ---- N2 (U-113): two enforced items must not run the same command ----
+    # A copy-pasted row measures the same thing twice under two handles, and the second one looks like
+    # coverage. Nothing else in this file notices: each row judges fine on its own.
+    for argv_key, owners in sorted(enforced_argvs.items(), key=lambda kv: kv[1][0]):
+        if len(owners) > 1:
+            print("[OIG-FIND] two enforced items run the same command: %s" % ",".join(owners))
+            print("           argv=%s" % " ".join(argv_key[1:]))
+            print("           one of them measures nothing of its own; split it or drop it")
+            findings += 1
+
+    # ---- N1 (U-113): an enforced needle must belong to its own run and no other ----
+    # If the needle also shows up in a sibling's output, this row can read CLOSED because of what the
+    # sibling printed, while measuring nothing about its own subject -- and it would keep reading CLOSED
+    # after its own subject broke, which is the exact failure this gate exists to prevent. Checked only
+    # over rows that matched their own needle: a row that already regressed has said so once, and
+    # repeating it here would bury the one line that names the subject.
+    for id_, needle, out in enforced_outputs:
+        if needle is None:
+            continue
+        owners = [oid for oid, _n, o in enforced_outputs if needle in o]
+        if owners != [id_]:
+            print("[OIG-FIND] needle of %s is not unique to its own run: seen in %s"
+                  % (id_, ",".join(owners) if owners else "none"))
+            print("           needle=%r -- a row that can be satisfied by a sibling's output is not"
+                  % needle)
+            print("           measuring its own subject; give it a needle only its own run prints")
+            findings += 1
 
     print("[OIG-VERDICT] items=%d enforced=%d open=%d local=%d findings=%d verdict=%s"
           % (len(items), n_enforced, n_open, n_local, findings,
