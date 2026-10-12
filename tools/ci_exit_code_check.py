@@ -44,8 +44,10 @@ STEP_RX = re.compile(r'Write-Step "([^"]+)"')
 
 # The Write-Step headings of ci.ps1, in file order, frozen from the bytes this round delivers: the
 # thirteen that fc12294 already had, plus the two wired in after it -- 1k =
-# tools/log_citation_gate.py (tenth round) and 1l = tools/register_shape_gate.py (U-67).
-# Leg D compares against exactly this list.
+# tools/log_citation_gate.py (tenth round) and 1l = tools/register_shape_gate.py (U-67) -- plus one more
+# wired in U-112, tools/open_items_gate.py, which re-measures the appendix's "still open" list on every
+# host run. "Clean build directory" and "Configure" carry no Write-Step of their own (they report
+# through Write-Ok), so they are not in this list. Leg D compares against exactly this list.
 EXPECTED_STEPS = [
     "Preflight",
     "Repository hygiene",
@@ -59,6 +61,7 @@ EXPECTED_STEPS = [
     "Ledger growth split trigger",
     "Cited-log presence check",
     "Register appendix append-only check",
+    "Registered open-item re-measurement",
     "Build ($Config)",
     "Artifact freshness",
     "Tests (CTest / $Config)",
@@ -78,6 +81,7 @@ GATE_CODE_OF_STEP = [
     ("Ledger growth split trigger", "12"),
     ("Cited-log presence check", "13"),
     ("Register appendix append-only check", "14"),
+    ("Registered open-item re-measurement", "15"),
 ]
 
 # Frozen executable-stop counts of the gate codes. 3 reads 2 because the interpreter is required
@@ -85,7 +89,7 @@ GATE_CODE_OF_STEP = [
 # code fires from exactly one place.
 FROZEN_GATE_COUNTS = {
     "3": 2, "4": 1, "5": 1, "6": 1, "7": 1, "8": 1, "9": 1, "10": 1, "11": 1, "12": 1, "13": 1,
-    "14": 1,
+    "14": 1, "15": 1,
 }
 SHARED_CODES = ("0", "1", "2", "3")
 

@@ -33,6 +33,8 @@
            altered or dropped, or an in-cell append changed that row's shape
            (tools/register_shape_gate.py -- the script's own code is echoed: RED 1,
            unreadable or no rounds judged 2, crash 3)
+      15 = a registered "still open" item that was measured closed has regressed, or the registry
+           itself is malformed (tools/open_items_gate.py -- findings 1, gate could not run 2)
 
     Note: this script is intentionally ASCII-only, and therefore carries no UTF-8 BOM
     (PowerShell 5.1 only needs a BOM when a .ps1 contains non-ASCII text). The two-sided
@@ -412,6 +414,37 @@ if ($regCode -ne 0) {
     exit 14
 }
 Write-Ok "register appendix rows preserved, appends shaped as registered ($hygieneExe)"
+
+# ------------------------------------------------------------------ 1l
+# Why it runs here: the appendix carries a "still open" list in prose, and prose does not change on its
+# own. U-111 measured every item on it and found 8 of 11 measurably closed, 1 with no object to measure,
+# and one that had been open for about thirty rounds describing a tool that has no such option -- so the
+# list had rotted without anybody noticing, because re-measuring it depended on somebody remembering.
+# This step is that re-measurement, on every host run. Items measured closed are ENFORCED: they are
+# re-measured and any mismatch is exit 15, which is what stops a closure from rotting back the way the
+# list did. Items still open are printed with a current reading and never move the verdict -- a
+# known-red item inside the host is exactly the shape that left the host permanently red in U-109.
+# Items whose measurement needs a git-ignored file are printed as unmeasurable_here rather than read as
+# green. Must never be a silent skip: any non-zero from the script = exit 15.
+Write-Step "Registered open-item re-measurement"
+$oigLog = Join-Path $RepoRoot 'ci-open-items.log'
+$oigArgs = $hygienePre + @('tools/open_items_gate.py')
+& $hygieneExe @oigArgs 2>&1 | Tee-Object -FilePath $oigLog | Out-Null
+$oigCode = $LASTEXITCODE
+
+$oigAll = @(Get-Content $oigLog -ErrorAction SilentlyContinue)
+$oigShown = @($oigAll | Where-Object { $_ -match '^\[OIG' })
+foreach ($line in $oigShown) { Write-Host "  $line" }
+if ($oigShown.Count -eq 0 -and $oigAll.Count -gt 0) {
+    Write-Host "  (no OIG line in $($oigAll.Count) log line(s) - the script did not reach its summary)"
+}
+Write-Host "  full open-item reading: $oigLog ($($oigAll.Count) line(s))"
+if ($oigCode -ne 0) {
+    Write-Err "registered open-item re-measurement failed (script exit $oigCode) via '$hygieneExe'; see $oigLog"
+    Pop-Location
+    exit 15
+}
+Write-Ok "enforced open items re-measured as closed ($hygieneExe)"
 
 # ------------------------------------------------------------------ 2. clean
 if ($Clean -and (Test-Path $BuildDir)) {

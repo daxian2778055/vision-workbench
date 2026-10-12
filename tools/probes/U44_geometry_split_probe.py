@@ -22,7 +22,7 @@ What it proves (advance plan 3.48):
 
 Arms:
 
-  G0  checker baseline      delivered ci.ps1 -> rc=0, findings=0, header codes 0..12, and the frozen
+  G0  checker baseline      delivered ci.ps1 -> rc=0, findings=0, header codes 0..15, and the frozen
                             per-code counts printed exactly as pinned here
   G-A stop without a row    delete the header row for 11 -> exactly one finding, and it is leg A
   G-B row without a stop    add a header row for a code nothing returns -> exactly one finding, leg B
@@ -160,9 +160,13 @@ CONFIGURE_MARKER = "=== Configure"
 # Moved by U-67's step 1l wiring (tools/register_shape_gate.py -> host exit 14): header +14,
 # counts +14:1, steps 14 -> 15. The pre-U-67 values (header 0..13, no 14:1, steps 14) are the ones
 # the earlier round rows in the ledger quote, so G0 only holds against ci.ps1 bytes from U-67 on.
-EXPECTED_COUNTS = "0:2 1:6 2:1 3:2 4:1 5:1 6:1 7:1 8:1 9:1 10:1 11:1 12:1 13:1 14:1"
-EXPECTED_HEADER = "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14"
-EXPECTED_STEPS = "15"
+# Moved again by U-112's step 1l wiring (tools/open_items_gate.py -> host exit 15): header +15,
+# counts +15:1, steps 15 -> 16. This arm is what made that wiring visible here instead of silently
+# drifting: G0 read RED the first time the new step went in, which is the whole reason these three
+# constants are pinned rather than computed.
+EXPECTED_COUNTS = "0:2 1:6 2:1 3:2 4:1 5:1 6:1 7:1 8:1 9:1 10:1 11:1 12:1 13:1 14:1 15:1"
+EXPECTED_HEADER = "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15"
+EXPECTED_STEPS = "16"
 # NOT pinned as an absolute value: the gate's history_only_last3 takes the last three commits that
 # touched the ledger, so the window moves one commit forward with every commit that lands -- an
 # absolute pin here would go red for a reviewer replaying this probe at the delivered commit for a
