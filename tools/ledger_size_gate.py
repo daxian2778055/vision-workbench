@@ -461,8 +461,11 @@ def main():
           % (REGISTERED_ANCHOR, len(after_anchor), len(committed)))
     print("INV history_only_last3=%d rate_limit=%d (INFORMATIONAL, not judged: that growth predates "
           "this gate -- see the docstring)" % (history3, RATE_LIMIT_LINES))
-    print("INV ceiling=%d size_due=%s headroom=%d"
-          % (LINES_CEILING, "YES" if size_due else "NO", LINES_CEILING - cur_total))
+    headroom = LINES_CEILING - cur_total
+    rows_until_zero = max(headroom, 0)
+    rows_until_due = max(headroom + 1, 0)
+    print("INV ceiling=%d size_due=%s headroom=%d rows_until_zero=%d rows_until_due=%d"
+          % (LINES_CEILING, "YES" if size_due else "NO", headroom, rows_until_zero, rows_until_due))
     if overrides:
         print("INV overrides_used=%s" % esc(" ".join(overrides)))
     else:

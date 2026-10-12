@@ -200,6 +200,20 @@ ITEMS = [
          "build/u44_probe/u111_appendix_row118.py",
          "the lint judges the row writers, which live under git-ignored build/. A fresh clone has "
          "none, so this cannot be a host step until there is a tracked object for it to judge."),
+    Item("anchor_says_its_own_hit_count", "local",
+         [PY, "-X", "utf8", "build/u44_probe/u115_dead_anchor_census.py"], 0, None,
+         "build/u44_probe/u115_dead_anchor_census.py",
+         "teeth that rewrite a mother line can only see a dead anchor if they print how many needles "
+         "landed; the census names the planting ones that do not. Both the tool and its population "
+         "live under git-ignored build/, so this is local by the same reason the lint row is.",
+         read=r"^\[U115-DA-ACCOUNTING\]"),
+    Item("docstring_teeth_confined_stale", "open",
+         [PY, "-X", "utf8", "build/u44_probe/u63_docstring_teeth.py"], 1, None, None,
+         "the piece that judged 'this round only touched docstrings' reads a pinned base revision "
+         "against the work tree, so its RED is a reading about one diff, not a defect with a fixed "
+         "end state -- enforced would go green the moment that commit stops being the base. Open, so "
+         "the host step re-measures it every round and prints the verdict line.",
+         read=r"^\[U63-DT-VERDICT\]"),
     Item("u63_face_option", "local",
          [PY, "-X", "utf8", "build/u44_probe/u63_cited_pointer_check.py",
           "--face", "docs/" + u"\u5bf9\u6807\u5dee\u8ddd\u63a8\u8fdb\u8ba1\u5212"
