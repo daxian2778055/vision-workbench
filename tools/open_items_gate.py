@@ -42,6 +42,7 @@ Usage:
 Exit codes: 0 = every enforced item re-measured as closed; 1 = a finding; 2 = the gate itself could
 not run.
 """
+import inspect
 import os
 import re
 import subprocess
@@ -52,6 +53,8 @@ ROOT = os.path.dirname(HERE)
 PY = sys.executable
 
 STATES = ("enforced", "open", "local")
+PATH_LITERAL_RX = re.compile(r"[\"']((?:tools|src|include|tests|docs)/[A-Za-z0-9_./\-]+\.[A-Za-z0-9]+)[\"']")
+IDENT_RX = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
 
 
 class Item(object):
@@ -66,7 +69,7 @@ class Item(object):
     note     one line, ASCII, saying what the reading means
     """
 
-    def __init__(self, id, state, argv, want_rc, needle, file, note, read=None):
+    def __init__(self, id, state, argv, want_rc, needle, file, note, read=None, subjects=()):
         self.id = id
         self.state = state
         self.argv = argv
@@ -78,6 +81,16 @@ class Item(object):
         # reading is whichever line came last, which for the size gate is its own "verdict=GREEN" --
         # true, and says nothing about the number the item is about.
         self.read = read
+        # N4 (U-114): the tracked files this row claims to guard. An enforced row must declare at
+        # least one and the gate checks that its measurement actually reads each one. This is the only
+        # thing that catches "the needle is perfectly its own, and the row still measures the wrong
+        # subject" -- which is the one failure N1 is blind to by construction.
+        #
+        # Declared as a field rather than mined out of `note` on purpose. An earlier attempt read the
+        # note and compared: it reported zero mismatches on the whole table, and the reason was that
+        # no note names a tracked file at all -- the check was vacuously green, i.e. it could not have
+        # caught anything. Prose is for readers; a declaration is the machine contract.
+        self.subjects = tuple(subjects)
 
     def validate(self):
         if self.state not in STATES:
@@ -105,6 +118,17 @@ class Item(object):
             return "want_rc is not an int"
         if self.state == "enforced" and self.needle is None and self.want_rc == 0:
             return "enforced with want_rc=0 and no needle would pass on any output at all"
+        if self.state == "enforced" and not self.subjects:
+            # N4: an enforced row with no declared subject cannot be checked for measuring the wrong
+            # one at all. That is exactly the row N1 cannot catch, so refusing it is the whole point.
+            return ("enforced with no declared subject: nothing can check that this row measures "
+                    "what it claims to guard")
+        for s in self.subjects:
+            if not isinstance(s, str) or not s:
+                return "subject %r is not a non-empty string" % (s,)
+            if s.startswith("build/"):
+                return ("subject %r is under build/ (git-ignored): an enforced row must guard a "
+                        "tracked file, or a fresh clone has nothing to guard" % s)
         return None
 
 
@@ -123,40 +147,53 @@ ITEMS = [
          [PY, "-X", "utf8", GATE, "--face=--no-register"], 2,
          "its slot holds switch-shaped text", None,
          "closed in U-111: the equals spelling says what actually happened instead of looking the "
-         "token up in the face list. The ERROR unknown face: prefix is byte-identical and pinned."),
+         "token up in the face list. The ERROR unknown face: prefix is byte-identical and pinned.",
+         subjects=("tools/log_citation_gate.py",)),
     Item("wording_space_form_untouched", "enforced",
          [PY, "-X", "utf8", GATE, "--face", "--no-register"], 2,
          "wants a value, its slot holds a switch", None,
-         "closed before U-111 and must stay: the space form is the one that has always said it."),
+         "closed before U-111 and must stay: the space form is the one that has always said it.",
+         subjects=("tools/log_citation_gate.py",)),
     Item("emit_baseline_face_named", "enforced",
          [PY, "-X", "utf8", GATE, "--emit-baseline", "--face", "register"], 0,
          "fresh MISSING_BASELINE block for face=register", None,
-         "closed in U-111: the block header carries the face on the single-face run too."),
+         "closed in U-111: the block header carries the face on the single-face run too.",
+         subjects=("tools/log_citation_gate.py",)),
     Item("appendix_faces_in_host", "enforced",
          [PY, "-X", "utf8", "tools/open_items_gate.py", "--probe-host"], 0,
          "host_gates=4", None,
-         "the appendix is not named by ci.ps1 itself; four gates judge it and this holds them there."),
+         "the appendix is not named by ci.ps1 itself; four gates judge it and this holds them there. "
+         "Its subject is ci.ps1 and its measurement reaches it through --probe-host, not through the "
+         "argv -- which is the case N4 has to resolve rather than skip.",
+         subjects=("tools/ci.ps1",)),
     Item("ci_fail_closed_paths", "enforced",
          [PY, "-X", "utf8", "tools/open_items_gate.py", "--probe-failclosed"], 0,
          "fail_closed_returns=4", None,
          "U-109 added fail-closed exits in the freshness helper (unreadable worktree, unreadable git "
          "log, unreadable commit date, a diff that will not run). They still have no fixture; this "
          "holds that the four returns stay. 附页 row 116 called them three; there are four, and the "
-         "fourth (an unknown target name) is counted here rather than argued about."),
+         "fourth (an unknown target name) is counted here rather than argued about.",
+         subjects=("tools/ci.ps1",)),
     Item("family_headroom", "open",
          [PY, "-X", "utf8", "tools/ledger_size_gate.py"], 0, None, None,
          "ceiling 6000 lines over the two faces; one appendix row costs one line. This is a dated "
-         "number, not a defect: size_due goes YES on the row that takes headroom to zero.",
-         r"^INV ceiling="),
+         "number, not a defect: size_due goes YES on the row that takes headroom to zero. Its real "
+         "subjects are the two documents the size gate opens, which this gate cannot see from here; "
+         "the script is what is declared, because the script is what is run.",
+         read=r"^INV ceiling=",
+         subjects=("tools/ledger_size_gate.py",)),
     Item("merge_first_parent", "open",
          [PY, "-X", "utf8", "tools/open_items_gate.py", "--probe-merges"], 0,
          None, None,
          "the rule compares against the first parent only; this repo has no merge commit, so the "
          "uncovered path has no object here. Printed, never judged: forcing merges to stay at zero "
-         "would constrain the repository, not the rule."),
+         "would constrain the repository, not the rule. This row declares no subject on purpose -- its "
+         "subject is the commit graph, which is not a tracked file, and an enforced row in that "
+         "position would have to be refused. It is open, so no declaration is required of it."),
     Item("scratch_roster_exposure", "open",
          [PY, "-X", "utf8", "tools/repo_hygiene.py"], 0, None, None,
-         "measured as the hygiene gate's own verdict plus its tracked-file count."),
+         "measured as the hygiene gate's own verdict plus its tracked-file count.",
+         subjects=("tools/repo_hygiene.py",)),
     Item("row_text_lint_in_tools", "local",
          [PY, "-X", "utf8", "build/u44_probe/u110_row_text_lint.py",
           "--line-endings", "build/u44_probe/u111_appendix_row118.py"], 0, None,
@@ -170,13 +207,6 @@ ITEMS = [
          "build/u44_probe/u63_cited_pointer_check.py",
          "the --face switch is wired and both spellings run; the file that carries it is ignored."),
 ]
-
-PROBES = {
-    "--probe-host": lambda: _probe_host(),
-    "--probe-failclosed": lambda: _probe_failclosed(),
-    "--probe-merges": lambda: _probe_merges(),
-}
-
 
 def _read(path):
     with open(os.path.join(ROOT, path), "r", encoding="utf-8", errors="replace") as fh:
@@ -218,6 +248,57 @@ def _probe_merges():
                            stdout=subprocess.PIPE).stdout.decode("ascii", "replace").strip()
     print("[OIG-PROBE] merges=%d commits=%s" % (len(merges), total))
     return 0
+
+
+# U-114: PROBES maps a flag to the function object itself, not to a lambda wrapping it. It used to map
+# to `lambda: _probe_host()` and sat ABOVE the definitions, so inspect.getsource on the lambda returned
+# the PROBES dict literal rather than the probe body -- and N4 then reported that two enforced rows
+# "never read" the file their probe plainly reads. The finding was right about the resolution and wrong
+# about the rows. Mapping to the function, after the definitions, is what makes the read set mean what
+# it says; the alternative (unwrapping a lambda at inspection time) would have been cleverer and
+# harder to read.
+PROBES = {
+    "--probe-host": _probe_host,
+    "--probe-failclosed": _probe_failclosed,
+    "--probe-merges": _probe_merges,
+}
+
+
+def _probe_reads(func):
+    """Tracked files a probe function reaches: literals in its own source, plus module-level string
+    constants it names (the probe reads CI, which is a constant, not a literal inside the function)."""
+    src = inspect.getsource(func)
+    out = set(m.group(1) for m in PATH_LITERAL_RX.finditer(src))
+    for name in set(IDENT_RX.findall(src)):
+        val = globals().get(name)
+        if isinstance(val, str):
+            norm = val.replace("\\", "/")
+            if norm:
+                out.add(norm)
+    return out
+
+
+def reads_of(item):
+    """Everything this row's measurement actually reads, as repo-relative strings.
+
+    Two sources, and only two, because those are the only ones the gate can see: paths passed on the
+    command line, and the body of a probe the command line names. What the measured *process* opens
+    internally is invisible from here -- a row may legitimately guard a script whose real subject is a
+    document that script opens, and the script is then the subject, not the document.
+    """
+    out = set()
+    for a in item.argv:
+        s = str(a).replace("\\", "/")
+        out.add(s)
+        if s.startswith("--probe-") and s in PROBES:
+            out |= _probe_reads(PROBES[s])
+    return out
+
+
+def subject_is_tracked(path):
+    proc = subprocess.run(["git", "ls-files", "--error-unmatch", "--", path], cwd=ROOT,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return proc.returncode == 0
 
 
 def run(argv):
@@ -354,6 +435,31 @@ def main(argv):
                   % needle)
             print("           measuring its own subject; give it a needle only its own run prints")
             findings += 1
+
+    # ---- N4 (U-114): a declared subject must be a tracked file the measurement actually reads ----
+    # N1 checks that the needle belongs to this row's own run. It cannot see the other failure: a row
+    # whose needle is entirely its own while its measurement reads something else. That row guards
+    # nothing and stays green forever. Each row therefore declares what it guards, and this checks the
+    # declaration against the command -- including the case where the subject is reached through a
+    # probe the command names rather than through the command line itself.
+    for it in items:
+        if it.state != "enforced" or not it.subjects:
+            continue
+        reads = reads_of(it)
+        for s in it.subjects:
+            if s not in reads:
+                print("[OIG-FIND] %s declares subject %s but its measurement never reads it"
+                      % (it.id, s))
+                print("           argv=%s" % " ".join(str(a) for a in it.argv))
+                print("           reads=%s" % ",".join(sorted(reads)) or "(nothing)")
+                print("           a row that measures the wrong thing keeps reading CLOSED forever;")
+                print("           either fix the command or declare what it really guards")
+                findings += 1
+            elif not subject_is_tracked(s):
+                print("[OIG-FIND] %s declares subject %s which git does not track"
+                      % (it.id, s))
+                print("           a fresh clone would have nothing to guard")
+                findings += 1
 
     print("[OIG-VERDICT] items=%d enforced=%d open=%d local=%d findings=%d verdict=%s"
           % (len(items), n_enforced, n_open, n_local, findings,
