@@ -530,7 +530,12 @@ def judge_face(face, text, state, emit_baseline, print_host_def, multi, markers,
              len(host_removed), len(ambiguous), len(narrow_shaped), len(wide_only_shaped)))
 
     if emit_baseline:
-        tag = " for face=%s" % esc(label) if multi else ""
+        # U-111: the face name belongs on every block. It used to be written only when the
+        # run judged two faces (multi), so the single-face run --emit-baseline --face X
+        # emitted two "fresh ... block" headers with no face on them, and a reviewer pasting
+        # one could not tell which face it came from. 附页 registered this half as open from
+        # row 93 on. label is known on every call, so there is no case that wants it empty.
+        tag = " for face=%s" % esc(label)
         print("== fresh MISSING_BASELINE block%s (review before pasting) ==" % tag)
         for token in sorted(missing):
             print('    "%s",' % token)
@@ -604,8 +609,18 @@ def main(argv):
     if face_arg is not None:
         faces = [f for f in FACES if f[0] == face_arg]
         if not faces:
-            print("ERROR unknown face: %s (known: %s)"
-                  % (esc(face_arg), esc(", ".join(f[0] for f in FACES))))
+            # U-111 (#368 half one): the equals spelling "--face=--switch" deliberately keeps
+            # taking switch-shaped text AS the value -- U-75 fix 2, see the comment above
+            # value_opts: refusing both spellings would make a path that legitimately starts
+            # with two dashes unnameable (registered OPEN in 附页第八十一行). So the judgement
+            # stays; only the sentence changes, to name what actually happened instead of
+            # looking the token up in the face list and reporting it as an unknown face.
+            # The "ERROR unknown face: " prefix is pinned by two live teeth and is byte-identical.
+            why = ""
+            if face_arg.startswith("-"):
+                why = " (its slot holds switch-shaped text, and no face is named that)"
+            print("ERROR unknown face: %s%s (known: %s)"
+                  % (esc(face_arg), why, esc(", ".join(f[0] for f in FACES))))
             return 2
 
     # One path override per face. A teeth run has to be able to put a doctored copy in place of one
