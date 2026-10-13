@@ -278,8 +278,16 @@ ITEMS = [
          "the --face switch is wired and both spellings run; the file that carries it is ignored.",
          # U-124 measured kind B1: the command cannot even start on a clone. Measured as B1, not B2: the piece writes a scratch face under build/, so even after relocating it still reaches into the ignored tree. An earlier draft of this note said B2 on the strength of argument; the reading disagreed and the reading won.
          clone_expect="no"),
+    # U-125: the third kind of blind, measured this round and unlike the other two.
+    Item("eol_shape_is_host_only", "open",
+         [PY, "-X", "utf8", "build/u44_probe/u125_eol_census.py",
+          "build/u44_probe/U125_eol_census_1.txt"], 0, None,
+         "build/u44_probe/U125_eol_census_1.txt",
+         "a row that reads bytes is host-only by construction, and the census says how many files that is: 142 of 558 tracked files sit on disk as LF while core.autocrlf=true and there is no .gitattributes, so a fresh checkout of any of them hands the reader CRLF. U-125 measured the consequence rather than asserting it: the piece docstring_teeth_confined_stale carries was copied verbatim into tools/ of a HEAD worktree, ROOT line and nothing else, and there it dies with a ValueError and prints no verdict line at all -- it looks for a byte anchor def head_bytes(rel_posix): -- a byte anchor it finds after splitting the file on newlines, and that anchor sits on the LF copy only. So moving the piece into the repo does NOT make this family comparable, which is the premise the previous round deferred on. This kind cannot be fixed by relocating anything; it is fixed either by not reading bytes or by knowing the worktree shape differs from the clone shape.",
+         read=r"^tracked files=",
+         # U-124 kind, and this one is its own kind: not the tool declaring a skip, and not a closure wider than one file. Locating the file changes nothing.
+         clone_expect="no"),
 ]
-
 def _read(path):
     with open(os.path.join(ROOT, path), "r", encoding="utf-8", errors="replace") as fh:
         return fh.read()
