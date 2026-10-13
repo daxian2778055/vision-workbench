@@ -370,10 +370,24 @@ def main():
         rcg, textg = run_inventory()
         check(rcg == 0, "%s: inventory after restore rc=%s" % (label, rcg))
 
-    # ---- A2: the copy is clean again after both injections
+    # ---- A2: nothing beyond the synced files is dirty in the copy
+    # U-128 rewrote this from an equality into an inclusion. The claim the section is making is
+    # "the copy carries dirt only where this probe put dirt", and an equality is a stronger thing
+    # than that claim, one that only holds while the synced file happens to look dirty to git.
+    # git status normalises end-of-line before comparing, so on a fresh checkout -- where every
+    # tracked file is CRLF -- the LF file this probe copied in is not a change at all to git, and
+    # the equality read "copy dirty beyond the synced ci.ps1: expected=('M tools/ci.ps1',)
+    # got=()". Both trees answered correctly; the assertion was asking a question whose answer
+    # depends on which machine answered it.
     copy_dirt = porcelain_entries(WT, ["src", "tools", "docs"])
-    check(copy_dirt == expect_dirty,
-          "A2: copy dirty beyond the synced ci.ps1: expected=%r got=%r" % (expect_dirty, copy_dirt))
+    beyond = tuple(e for e in copy_dirt if e not in expect_dirty)
+    check(not beyond,
+          "A2: copy carries dirt beyond the synced files: beyond=%r synced=%r all=%r"
+          % (beyond, expect_dirty, copy_dirt))
+    for rel in SYNC_FROM_MAIN:
+        check(md5(read_bytes(rel_path(rel))) == md5(read_bytes(os.path.join(ROOT, rel))),
+              "A2: synced %s in the copy is not byte-identical to the main worktree" % rel)
+    note("[G2-INFO] A2 dirt=%r synced=%r (an empty synced list is correct on a checkout where end-of-line is normalised)" % (copy_dirt, expect_dirty))
     rc2, text2 = run_inventory()
     for problem in verify_inventory_green(rc2, text2):
         fail("A2: " + problem)
