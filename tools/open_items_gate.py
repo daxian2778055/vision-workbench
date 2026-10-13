@@ -69,7 +69,8 @@ class Item(object):
     note     one line, ASCII, saying what the reading means
     """
 
-    def __init__(self, id, state, argv, want_rc, needle, file, note, read=None, subjects=()):
+    def __init__(self, id, state, argv, want_rc, needle, file, note, read=None, subjects=(),
+                 clone_expect=None):
         self.id = id
         self.state = state
         self.argv = argv
@@ -91,8 +92,24 @@ class Item(object):
         # no note names a tracked file at all -- the check was vacuously green, i.e. it could not have
         # caught anything. Prose is for readers; a declaration is the machine contract.
         self.subjects = tuple(subjects)
+        # U-124: does this row expect to be measurable on a clean clone? None means "not
+        # declared", and an undeclared row that turns out unmeasurable is a FINDING -- which is
+        # the whole point. U-122 found a permanently-red enforced row by hand, because nothing
+        # recorded that an enforced row must be measurable on a clone at all. This field is what
+        # turns that from a discovery into a reading.
+        self.clone_expect = clone_expect
 
     def validate(self):
+
+        # U-124, and this check sits BEFORE the state branches on purpose: the first version put it
+        # after the `local` early return, so a local row with a bogus clone_expect was never judged
+        # at all -- the E4 teeth arm caught that, because the arm reported GREEN on a value the
+        # contract does not allow.
+        if self.clone_expect not in (None, "yes", "no"):
+            return ("clone_expect %r must be yes, no, or absent" % (self.clone_expect,))
+        if self.state == "enforced" and self.clone_expect == "no":
+            return ("enforced with clone_expect=no: an enforced row must be measurable on a "
+                    "clean clone; if it cannot be, it is local, not enforced")
         if self.state not in STATES:
             return "unknown state %r (want one of %s)" % (self.state, ",".join(STATES))
         if not re.match(r"^[a-z0-9_]+$", self.id or ""):
@@ -152,6 +169,7 @@ ITEMS = [
          "wants a value, its slot holds a switch", None,
          "closed before U-111 and must stay: the space form is the one that has always said it.",
          subjects=("tools/log_citation_gate.py",)),
+    # emit_baseline_face_named
     Item("emit_baseline_face_named", "local",
          [PY, "-X", "utf8", GATE, "--emit-baseline", "--face", "register"], 0,
          "fresh MISSING_BASELINE block for face=register", "build/u44_probe/u111_appendix_row118.py",
@@ -160,7 +178,9 @@ ITEMS = [
          "docstring says that is neither a pass nor a silence. So on a clean clone this item is not "
          "verified at all, and the honest state is local, not enforced: U-122's clone probe reads it "
          "UNMEASURABLE_IN_CLONE, and that is a finding for an enforced row.",
-         subjects=("tools/log_citation_gate.py",)),
+         subjects=("tools/log_citation_gate.py",),
+         # U-124 measured kind A: first stage ran it in a HEAD worktree and it printed CITE-SKIP and verdict=SKIP: the citation gate declares its own skip when the git-ignored scratch tree is absent. Moving any file cannot change that, because what it measures on a clone IS the skip.
+         clone_expect="no"),
     Item("enforced_survives_a_clone", "enforced",
          [PY, "-X", "utf8", "tools/open_items_gate.py", "--probe-clone"], 0,
          "all_survive=yes", None,
@@ -217,19 +237,26 @@ ITEMS = [
          [PY, "-X", "utf8", "tools/repo_hygiene.py"], 0, None, None,
          "measured as the hygiene gate's own verdict plus its tracked-file count.",
          subjects=("tools/repo_hygiene.py",)),
+    # row_text_lint_in_tools
     Item("row_text_lint_in_tools", "local",
          [PY, "-X", "utf8", "build/u44_probe/u110_row_text_lint.py",
           "--line-endings", "build/u44_probe/u111_appendix_row118.py"], 0, None,
          "build/u44_probe/u111_appendix_row118.py",
          "the lint judges the row writers, which live under git-ignored build/. A fresh clone has "
-         "none, so this cannot be a host step until there is a tracked object for it to judge."),
+         "none, so this cannot be a host step until there is a tracked object for it to judge.",
+         # U-124 measured kind B1: the command cannot even start on a clone. Its closure reaches past one file: the lint itself lives under build/ and its argv names the per-round row writers, so relocating the lint leaves the population where it was.
+         clone_expect="no"),
+    # anchor_says_its_own_hit_count
     Item("anchor_says_its_own_hit_count", "local",
          [PY, "-X", "utf8", "build/u44_probe/u115_dead_anchor_census.py"], 0, None,
          "build/u44_probe/u115_dead_anchor_census.py",
          "teeth that rewrite a mother line can only see a dead anchor if they print how many needles "
          "landed; the census names the planting ones that do not. Both the tool and its population "
          "live under git-ignored build/, so this is local by the same reason the lint row is.",
-         read=r"^\[U115-DA-ACCOUNTING\]"),
+         read=r"^\[U115-DA-ACCOUNTING\]",
+         # U-124 measured kind B1: the command cannot even start on a clone, and the census scans the tree rather than one file: its population IS the git-ignored tree, so there is nothing to relocate.
+         clone_expect="no"),
+    # docstring_teeth_confined_stale
     Item("docstring_teeth_confined_stale", "open",
          [PY, "-X", "utf8", "build/u44_probe/u63_docstring_teeth.py"], 1, None,
          "build/u44_probe/u63_docstring_teeth.py",
@@ -239,13 +266,18 @@ ITEMS = [
          "the host step re-measures it every round and prints the verdict line. It names its file "
          "because the piece is git-ignored: on a clean clone the honest reading is unmeasurable_here, "
          "not 'can't open file' (U-122 measured the latter and it says the measurement broke).",
-         read=r"^\[U63-DT-VERDICT\]"),
+         read=r"^\[U63-DT-VERDICT\]",
+         # U-124 measured kind B2: the command cannot even start on a clone, and this is the one of the five whose closure is a single file: no build/ literal, no tree scan, nothing else to bring along. Moving it would work, and this round still decided not to, because it buys one row out of five against 71 old references plus a permanent drift guard.
+         clone_expect="no"),
+    # u63_face_option
     Item("u63_face_option", "local",
          [PY, "-X", "utf8", "build/u44_probe/u63_cited_pointer_check.py",
           "--face", "docs/" + u"\u5bf9\u6807\u5dee\u8ddd\u63a8\u8fdb\u8ba1\u5212"
                     u"-\u767b\u8bb0\u9644\u8868.md"], 0, None,
          "build/u44_probe/u63_cited_pointer_check.py",
-         "the --face switch is wired and both spellings run; the file that carries it is ignored."),
+         "the --face switch is wired and both spellings run; the file that carries it is ignored.",
+         # U-124 measured kind B1: the command cannot even start on a clone. Measured as B1, not B2: the piece writes a scratch face under build/, so even after relocating it still reaches into the ignored tree. An earlier draft of this note said B2 on the strength of argument; the reading disagreed and the reading won.
+         clone_expect="no"),
 ]
 
 def _read(path):
@@ -519,6 +551,7 @@ def _probe_clone_readings():
         return 2
 
     comparable = agree = disagree = unmeas = 0
+    undeclared = []
     # A digest, not the verdict text. The first version printed each side's verdict line, and a verdict
     # line is where the needles live -- so this probe's own output contained every other row's needle,
     # and N1 reported five rows whose needle was no longer unique to its own run. That finding was
@@ -531,8 +564,17 @@ def _probe_clone_readings():
             continue
         if it.file and not os.path.exists(os.path.join(wt, it.file.replace("/", os.sep))) \
                 and it.state in ("local", "open"):
-            unmeas += 1
-            print("[OIG-PROBE]   %-32s UNMEASURABLE_IN_CLONE (needs %s)" % (it.id, it.file))
+            if it.clone_expect is None:
+                # A row nobody declared is a finding. Counting it inside a number and moving on
+                # is exactly how the U-122 permanently-red row sat in the register for seven
+                # rounds with nothing measuring it.
+                undeclared.append(it.id)
+                print("[OIG-PROBE]   %-32s CLONE-BLIND-UNDECLARED (needs %s)"
+                      % (it.id, it.file))
+            else:
+                unmeas += 1
+                print("[OIG-PROBE]   %-32s UNMEASURABLE_IN_CLONE (declared no; needs %s)"
+                      % (it.id, it.file))
             continue
         rc_h, out_h = run(it.argv, cwd=ROOT)
         rc_c, out_c = run(it.argv, cwd=wt)
@@ -550,8 +592,13 @@ def _probe_clone_readings():
 
     all_agree = "yes" if (comparable and disagree == 0) else "no"
     print("[OIG-PROBE] clone_readings_comparable=%d agree=%d disagree=%d unmeasurable=%d "
-          "all_agree=%s" % (comparable, agree, disagree, unmeas, all_agree))
+          "undeclared_blind=%d all_agree=%s"
+          % (comparable, agree, disagree, unmeas, len(undeclared), all_agree))
+    for rid in undeclared:
+        print("[OIG-PROBE] clone-blind-undeclared %s -- declare clone_expect or fix it" % rid)
     print("[OIG-PROBE] worktree cleanup: %s" % _drop_clone())
+    if undeclared:
+        return 1
     return 0 if all_agree == "yes" else 1
 
 
