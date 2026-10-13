@@ -70,7 +70,7 @@ class Item(object):
     """
 
     def __init__(self, id, state, argv, want_rc, needle, file, note, read=None, subjects=(),
-                 clone_expect=None):
+                 clone_expect=None, compare=None):
         self.id = id
         self.state = state
         self.argv = argv
@@ -92,6 +92,12 @@ class Item(object):
         # no note names a tracked file at all -- the check was vacuously green, i.e. it could not have
         # caught anything. Prose is for readers; a declaration is the machine contract.
         self.subjects = tuple(subjects)
+        # U-126: `read` is what the host prints as this row's reading; `compare` is the line the
+        # clone probe compares. They differ when the reading moves on purpose -- a headroom count
+        # drops by one on every appended row, and comparing it across two trees that are one row
+        # apart reports a difference that says only that one of them was written later. Absent, the
+        # comparison falls back to `read`, so declaring nothing here keeps the old behaviour.
+        self.compare = compare
         # U-124: does this row expect to be measurable on a clean clone? None means "not
         # declared", and an undeclared row that turns out unmeasurable is a FINDING -- which is
         # the whole point. U-122 found a permanently-red enforced row by hand, because nothing
@@ -224,6 +230,10 @@ ITEMS = [
          "subjects are the two documents the size gate opens, which this gate cannot see from here; "
          "the script is what is declared, because the script is what is run.",
          read=r"^INV ceiling=",
+         # U-126: this line is printed because the register wants the number, and it drops by one on
+         # every row appended -- so it cannot also be what two trees are compared on. The comparison
+         # uses the ledger gate's own verdict, which is the part that is about the code.
+         compare=r"^INV verdict=",
          subjects=("tools/ledger_size_gate.py",)),
     Item("merge_first_parent", "open",
          [PY, "-X", "utf8", "tools/open_items_gate.py", "--probe-merges"], 0,
@@ -236,7 +246,12 @@ ITEMS = [
     Item("scratch_roster_exposure", "open",
          [PY, "-X", "utf8", "tools/repo_hygiene.py"], 0, None, None,
          "measured as the hygiene gate's own verdict plus its tracked-file count.",
-         subjects=("tools/repo_hygiene.py",)),
+         subjects=("tools/repo_hygiene.py",),
+         # U-126: pinned because this is the one comparable row that declared nothing, and the
+         # readings probe used to pick its line by heuristic -- landing on "checked N tracked
+         # files", which moves with the tree, so staging one file made this row DISAGREE about
+         # nothing. The line below is what the row actually reads and does not move.
+         read=r"^repo hygiene: OK$"),
     # row_text_lint_in_tools
     Item("row_text_lint_in_tools", "local",
          [PY, "-X", "utf8", "build/u44_probe/u110_row_text_lint.py",
@@ -287,7 +302,19 @@ ITEMS = [
          read=r"^tracked files=",
          # U-124 kind, and this one is its own kind: not the tool declaring a skip, and not a closure wider than one file. Locating the file changes nothing.
          clone_expect="no"),
+    # U-126: the limit accepted, with the number that carries it frozen so it cannot rot.
+    Item("eol_shape_frozen_count", "open",
+         [PY, "-X", "utf8", "tools/eol_shape_gate.py",
+          "build/u44_probe/U126_eol_shape_gate_1.txt"], 0, None,
+         "build/u44_probe/U126_eol_shape_gate_1.txt",
+         "U-126 measured the blast radius before choosing, and that is what chose: every registered row was re-run in a worktree of HEAD, and the count of enforced rows that break is zero and the count of rows that break without declaring themselves is zero. The six that break are open or local and U-124 already declared them clone-blind, so the class has no victim today and normalising the 142 would repair nothing -- while the checkout that would normalise them also rewrites the register page to CRLF, the one page whose byte shape is checked on every row. So the limit is accepted and given a number: 142 frozen, and a tool that writes one more tracked file with LF, or a normalise that drops the count, is now said out loud instead of being found by hand years later. The file it points at is an archive, not the tool, on purpose: naming the tracked tool would make this row measurable on a clone, where the count reads 0 and the two readings would disagree over the shape of a tree rather than the shape of any code.",
+         read=r"^\[EOL-SHAPE\] tracked=",
+         # U-124 kind, its own kind again: this one reads the working tree, and a working tree is
+         # exactly what a clone does not have.
+         clone_expect="no"),
 ]
+
+
 def _read(path):
     with open(os.path.join(ROOT, path), "r", encoding="utf-8", errors="replace") as fh:
         return fh.read()
@@ -537,6 +564,40 @@ def _verdict_line(out):
     return "(no output)"
 
 
+def reading_of(item, out):
+    """The line this row's reading is: what the row declared, and only then the heuristic.
+
+    U-126 added this, in this order, because the order is the point. A row that says what it reads is
+    the authority on what it reads; a row that pins a needle has named a token that must be in its
+    output, and the line holding that token is a better guess than the first line of the file. Only
+    a row that declared neither falls through, and then the heuristic may pick the wrong line --
+    U-126 watched that happen: scratch_roster_exposure declared nothing, the heuristic returned
+    "checked N tracked files", and staging one new tracked file made the row DISAGREE about nothing.
+
+    `compare` comes before `read` on purpose. A row can display something that moves and compare
+    something that does not, and family_headroom is exactly that case: the headroom count is the
+    number the register wants printed, and it drops by one on every row that gets appended, so
+    pinning it as the identity of the reading makes the row disagree with any tree that is one row
+    behind -- which is the state this repo is in between landing a row and committing it. Its
+    compare line is the ledger gate's own verdict, which is what the row is actually about.
+
+    Declared and absent is reported as such instead of falling back, because silently comparing some
+    other line is how a missing reading becomes agreement with a neighbour.
+    """
+    for pattern in (getattr(item, "compare", None), getattr(item, "read", None)):
+        if pattern:
+            for line in out.split("\n"):
+                if re.search(pattern, line):
+                    return line.strip()[:120]
+            return "(declared reading absent: %s)" % pattern
+    if getattr(item, "needle", None):
+        for line in out.split("\n"):
+            if item.needle in line:
+                return line.strip()[:120]
+        return "(declared needle absent: %s)" % item.needle
+    return _verdict_line(out)
+
+
 def _probe_clone_readings():
     """Same-string agreement: for every row measurable on both sides, the clone's reading must equal
     this machine's.
@@ -587,8 +648,17 @@ def _probe_clone_readings():
         rc_h, out_h = run(it.argv, cwd=ROOT)
         rc_c, out_c = run(it.argv, cwd=wt)
         comparable += 1
-        d_h = hashlib.sha256(_verdict_line(out_h).encode("utf-8")).hexdigest()[:12]
-        d_c = hashlib.sha256(_verdict_line(out_c).encode("utf-8")).hexdigest()[:12]
+        # The row's own declared reading, when it has one. U-126 found this the hard way: this probe
+        # used to pick the verdict line by its own heuristic, and for a row whose tool prints no
+        # verdict token the heuristic fell through to the first non-empty line. For
+        # scratch_roster_exposure that line is "checked N tracked files", a count that moves with the
+        # tree -- so staging one new tracked file made this row DISAGREE about nothing, a red whose
+        # message was about a working tree and not about any code. A row that says what it reads is
+        # the authority on what it reads; the heuristic is only for the rows that did not say.
+        line_h = reading_of(it, out_h)
+        line_c = reading_of(it, out_c)
+        d_h = hashlib.sha256(line_h.encode("utf-8")).hexdigest()[:12]
+        d_c = hashlib.sha256(line_c.encode("utf-8")).hexdigest()[:12]
         same = rc_h == rc_c and d_h == d_c
         if same:
             agree += 1
