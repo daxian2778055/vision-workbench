@@ -172,6 +172,16 @@ ITEMS = [
          "item nobody measures on a clone is not closed on a clone. Its subject is this module itself:",
          "the probe reads the registry out of it, and the registry is what decides which rows it runs.",
          subjects=("tools/open_items_gate.py",)),
+    Item("clone_readings_match_host", "enforced",
+         [PY, "-X", "utf8", "tools/open_items_gate.py", "--probe-clone-readings"], 0,
+         "all_agree=yes", None,
+         "the second half of the U-122 item: not whether a row can be measured on a clone, but whether "
+         "it reads the same there. A row that measures something machine-local would agree nowhere "
+         "else, and before this row nothing compared the two readings. Rows that cannot be measured on "
+         "the clone report unmeasurable and are excluded from the comparison rather than counted as "
+         "agreeing -- reading a row nobody measured as agreeing is the fail-open this module refuses. "
+         "Its subject is this module for the same reason the row above it is.",
+         subjects=("tools/open_items_gate.py",)),
     Item("appendix_faces_in_host", "enforced",
          [PY, "-X", "utf8", "tools/open_items_gate.py", "--probe-host"], 0,
          "host_gates=4", None,
@@ -351,6 +361,8 @@ def run(argv, cwd=None):
 # a git-ignored file named as its `file`, and that is what this rule pushes the author into.
 CLONE_MARKER = "build/u44_probe"
 CLONE_DIR = None
+CLONE_SEQ = [0]
+CLONE_PROBE_FLAGS = ("--probe-clone", "--probe-clone-readings")
 # The ref a clone worktree is taken from. HEAD by default; the environment variable is a legitimate
 # configuration point (a reviewer may want the clone taken from a tag or a branch tip), and it is what
 # the teeth use to drive a REAL git failure into the fail-closed leg -- a ref that does not exist makes
@@ -360,7 +372,14 @@ CLONE_DIR = None
 def _make_clone():
     """A detached worktree of HEAD. Fail-closed: a clone we cannot make is a finding, never a pass."""
     global CLONE_DIR
-    tmp = os.path.join(os.environ.get("TEMP", "/tmp"), "oig_clone_wt")
+    CLONE_SEQ[0] += 1
+    # A path unique to this call, not one fixed path. The first version used one fixed path, so the
+    # two clone probes nested inside each other (the readings probe runs every enforced row, and one of
+    # them runs the clone probe) and the inner one's cleanup removed the directory the outer one was
+    # still using -- the outer's remove then failed with 128, leaving the worktree behind and reading
+    # REGRESSED for a reason that had nothing to do with any item.
+    tmp = os.path.join(os.environ.get("TEMP", "/tmp"),
+                       "oig_clone_wt_%d_%d" % (os.getpid(), CLONE_SEQ[0]))
     if os.path.isdir(tmp):
         subprocess.run(["git", "worktree", "remove", "--force", tmp], cwd=ROOT,
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -414,11 +433,12 @@ def _probe_clone():
     for it in ACTIVE_ITEMS:
         if it.state != "enforced":
             continue
-        if "--probe-clone" in [str(a) for a in it.argv]:
-            # Self-reference: running this probe inside its own clone probe would recurse, and the
-            # nested copy would report whatever the outer one reports -- a reading that cannot move.
-            # Excluded here, and by name, so adding a second self-referential row is visible rather
-            # than silently skipped by the same guard.
+        if _is_self_probe(it):
+            # Self-reference: running a probe of this gate inside its own clone probe recurses, and
+            # the nested copy would report whatever the outer one reports -- a reading that cannot
+            # move. Judged by shape (argv names this module and a --probe- flag), not by a list of
+            # names: the first version listed --probe-clone by hand, so the readings probe added in
+            # U-123 was not skipped and nested one level deep.
             print("[OIG-PROBE]   %-32s SKIPPED (self-referential: this probe runs itself)"
                   % it.id)
             continue
@@ -450,11 +470,97 @@ def _probe_clone():
 # PROBES sits here, after every probe function it names -- including _probe_clone, which is what the
 # U-122 shipping criterion runs. Putting it above them means a probe added later is referenced before
 # it exists, which is a NameError at import time rather than at the step that would have caught it.
+def _is_self_probe(item):
+    """True when this row measures THIS module's clone machinery: its argv names it and passes one of
+    the two clone flags.
+
+    Such a row is the gate examining itself, and it must never run inside the other clone probe: the
+    nested copy would report whatever the outer one reports, a reading that cannot move. The first
+    version asked for any --probe- flag, which also matched --probe-host and --probe-failclosed --
+    two rows that are ordinary measurements, so the clone probe silently measured two fewer rows than
+    it claimed to. R5 caught it by printing the skip list. Narrowed to the exact set that must not
+    nest.
+    """
+    argv = [str(a) for a in item.argv]
+    if "tools/open_items_gate.py" not in argv:
+        return False
+    return any(flag.startswith(arg.strip("=")[:len(flag)]) or arg.startswith(flag)
+               for arg in argv for flag in CLONE_PROBE_FLAGS)
+
+def _verdict_line(out):
+    for l in out.split("\n"):
+        if "VERDICT" in l or "verdict=" in l:
+            return l.strip()[:120]
+    for l in out.split("\n"):
+        if l.strip():
+            return l.strip()[:120]
+    return "(no output)"
+
+
+def _probe_clone_readings():
+    """Same-string agreement: for every row measurable on both sides, the clone's reading must equal
+    this machine's.
+
+    U-122's clone probe asks the first question -- can this row be measured in a clone at all. This one
+    asks the second, which is what "replayable" actually means: the row a reviewer replays must read
+    the same thing it reads here. A row that measures something machine-local (a build path, an
+    on-disk artefact, a clock) would agree nowhere else, and before this probe nothing measured that.
+
+    What it deliberately does not do: compare rows that cannot be measured on the clone. Those report
+    unmeasurable and move neither the count nor the verdict -- the honest reading for them is "not
+    measured here", and pretending they agree would be the fail-open this module keeps refusing.
+    """
+    wt, err = _make_clone()
+    if wt is None:
+        print("[OIG-PROBE] clone_readings_comparable=0 agree=0 disagree=0 unmeasurable=0 agree=no")
+        print("[OIG-PROBE] could not make a clone worktree: %s" % err.replace("\n", " ")[:200])
+        print("[OIG-PROBE] worktree cleanup: %s" % _drop_clone())
+        print("[OIG-PROBE] verdict=INCOMPLETE exit=2")
+        return 2
+
+    comparable = agree = disagree = unmeas = 0
+    # A digest, not the verdict text. The first version printed each side's verdict line, and a verdict
+    # line is where the needles live -- so this probe's own output contained every other row's needle,
+    # and N1 reported five rows whose needle was no longer unique to its own run. That finding was
+    # right: a probe that quotes the population verbatim makes the population un-comparable. Printing
+    # a digest keeps the equality check (same text -> same digest) without reproducing anybody's text.
+    import hashlib
+    for it in ACTIVE_ITEMS:
+        if _is_self_probe(it):
+            print("[OIG-PROBE]   %-32s SKIPPED (self-referential)" % it.id)
+            continue
+        if it.file and not os.path.exists(os.path.join(wt, it.file.replace("/", os.sep))) \
+                and it.state in ("local", "open"):
+            unmeas += 1
+            print("[OIG-PROBE]   %-32s UNMEASURABLE_IN_CLONE (needs %s)" % (it.id, it.file))
+            continue
+        rc_h, out_h = run(it.argv, cwd=ROOT)
+        rc_c, out_c = run(it.argv, cwd=wt)
+        comparable += 1
+        d_h = hashlib.sha256(_verdict_line(out_h).encode("utf-8")).hexdigest()[:12]
+        d_c = hashlib.sha256(_verdict_line(out_c).encode("utf-8")).hexdigest()[:12]
+        same = rc_h == rc_c and d_h == d_c
+        if same:
+            agree += 1
+            print("[OIG-PROBE]   %-32s AGREE rc=%d digest=%s" % (it.id, rc_h, d_h))
+        else:
+            disagree += 1
+            print("[OIG-PROBE]   %-32s DISAGREE rc=%d/%d digest_host=%s digest_clone=%s"
+                  % (it.id, rc_h, rc_c, d_h, d_c))
+
+    all_agree = "yes" if (comparable and disagree == 0) else "no"
+    print("[OIG-PROBE] clone_readings_comparable=%d agree=%d disagree=%d unmeasurable=%d "
+          "all_agree=%s" % (comparable, agree, disagree, unmeas, all_agree))
+    print("[OIG-PROBE] worktree cleanup: %s" % _drop_clone())
+    return 0 if all_agree == "yes" else 1
+
+
 PROBES = {
     "--probe-host": _probe_host,
     "--probe-failclosed": _probe_failclosed,
     "--probe-merges": _probe_merges,
     "--probe-clone": _probe_clone,
+    "--probe-clone-readings": _probe_clone_readings,
 }
 
 
