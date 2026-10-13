@@ -102,14 +102,12 @@ class Item(object):
                 return "state=local needs file"
             if not self.argv:
                 return "state=local needs an argv to run once the file is there"
-            if self.needle is not None:
-                # N3 (U-113): a needle on a non-enforced item is dead config. It reads like the item is
-                # checked against something; it is never consulted, because only enforced items consult
-                # their needle. Someone who meant to enforce it typed the wrong state, or pasted a row
-                # and forgot to move it -- either way the honest thing is to refuse the row, not to
-                # carry a needle that looks armed and is not.
-                return "state=local with a needle: nothing reads it; enforce it or drop the needle"
             return None
+        # N3 (U-113) used to refuse a needle on a local row as well. U-122 showed that rule was too
+        # strong: a local row that IS measurable on this machine has something to measure, and its
+        # needle is what says whether it still reads closed here. The main loop consults it and prints
+        # CLOSED_LOCAL / REGRESSED_LOCAL -- a reading, never a verdict, because a fresh clone cannot
+        # measure the row at all and a verdict that moves with the machine is the U-109 shape again.
         if self.state == "open" and self.needle is not None:
             return "state=open with a needle: nothing reads it; enforce it or drop the needle"
         if not self.argv:
@@ -154,11 +152,26 @@ ITEMS = [
          "wants a value, its slot holds a switch", None,
          "closed before U-111 and must stay: the space form is the one that has always said it.",
          subjects=("tools/log_citation_gate.py",)),
-    Item("emit_baseline_face_named", "enforced",
+    Item("emit_baseline_face_named", "local",
          [PY, "-X", "utf8", GATE, "--emit-baseline", "--face", "register"], 0,
-         "fresh MISSING_BASELINE block for face=register", None,
-         "closed in U-111: the block header carries the face on the single-face run too.",
+         "fresh MISSING_BASELINE block for face=register", "build/u44_probe/u111_appendix_row118.py",
+         "closed in U-111 and stayed closed on the machine that closed it -- but the citation gate "
+         "declares CITE-SKIP ... verdict=SKIP when the git-ignored scratch tree is absent, and its own "
+         "docstring says that is neither a pass nor a silence. So on a clean clone this item is not "
+         "verified at all, and the honest state is local, not enforced: U-122's clone probe reads it "
+         "UNMEASURABLE_IN_CLONE, and that is a finding for an enforced row.",
          subjects=("tools/log_citation_gate.py",)),
+    Item("enforced_survives_a_clone", "enforced",
+         [PY, "-X", "utf8", "tools/open_items_gate.py", "--probe-clone"], 0,
+         "all_survive=yes", None,
+         "the shipping criterion, measured instead of found by hand: every enforced row must still "
+         "read CLOSED in a worktree of HEAD with nothing git-ignored present. U-122 found this by "
+         "review -- an enforced item went RED on a clean clone, which would have put step 1l on exit 15 "
+         "for anyone who cloned the repo (the same class as U-109's permanently-red host). A declared "
+         "skip from the measured tool counts as UNMEASURABLE_IN_CLONE and is a finding, because an "
+         "item nobody measures on a clone is not closed on a clone. Its subject is this module itself:",
+         "the probe reads the registry out of it, and the registry is what decides which rows it runs.",
+         subjects=("tools/open_items_gate.py",)),
     Item("appendix_faces_in_host", "enforced",
          [PY, "-X", "utf8", "tools/open_items_gate.py", "--probe-host"], 0,
          "host_gates=4", None,
@@ -208,11 +221,14 @@ ITEMS = [
          "live under git-ignored build/, so this is local by the same reason the lint row is.",
          read=r"^\[U115-DA-ACCOUNTING\]"),
     Item("docstring_teeth_confined_stale", "open",
-         [PY, "-X", "utf8", "build/u44_probe/u63_docstring_teeth.py"], 1, None, None,
+         [PY, "-X", "utf8", "build/u44_probe/u63_docstring_teeth.py"], 1, None,
+         "build/u44_probe/u63_docstring_teeth.py",
          "the piece that judged 'this round only touched docstrings' reads a pinned base revision "
          "against the work tree, so its RED is a reading about one diff, not a defect with a fixed "
          "end state -- enforced would go green the moment that commit stops being the base. Open, so "
-         "the host step re-measures it every round and prints the verdict line.",
+         "the host step re-measures it every round and prints the verdict line. It names its file "
+         "because the piece is git-ignored: on a clean clone the honest reading is unmeasurable_here, "
+         "not 'can't open file' (U-122 measured the latter and it says the measurement broke).",
          read=r"^\[U63-DT-VERDICT\]"),
     Item("u63_face_option", "local",
          [PY, "-X", "utf8", "build/u44_probe/u63_cited_pointer_check.py",
@@ -315,14 +331,159 @@ def subject_is_tracked(path):
     return proc.returncode == 0
 
 
-def run(argv):
-    proc = subprocess.run(argv, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+def run(argv, cwd=None):
+    proc = subprocess.run([str(a) for a in argv], cwd=cwd or ROOT,
+                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     return proc.returncode, proc.stdout.decode("utf-8", "replace").replace("\r\n", "\n")
+
+
+# ---- the clone probe (U-122) ----
+# Reading: an enforced item must still read CLOSED in a worktree of HEAD -- no build/, no ci-*.log,
+# nothing git-ignored. This is the shipping criterion, and before U-122 it was not measured at all: it
+# was found by hand in a review round, and what it found was an enforced item that goes RED on a clean
+# clone, which would have put ci.ps1's step 1l on exit 15 for anyone who cloned the repo. That is the
+# same class as the permanently-red host of U-109's P1, brought in when these items were registered.
+#
+# A declared skip is not an excuse. tools/log_citation_gate.py prints CITE-SKIP ... verdict=SKIP when
+# the git-ignored scratch tree is absent, and its own docstring says that is "not a pass and not a
+# silence". An item whose measurement skips on a clean clone is not verified there, so it is reported as
+# UNMEASURABLE_IN_CLONE and it IS a finding: the honest classification for such an item is local, with
+# a git-ignored file named as its `file`, and that is what this rule pushes the author into.
+CLONE_MARKER = "build/u44_probe"
+CLONE_DIR = None
+# The ref a clone worktree is taken from. HEAD by default; the environment variable is a legitimate
+# configuration point (a reviewer may want the clone taken from a tag or a branch tip), and it is what
+# the teeth use to drive a REAL git failure into the fail-closed leg -- a ref that does not exist makes
+# `git worktree add` fail for the ordinary reason, rather than the gate being patched to pretend to.
+
+
+def _make_clone():
+    """A detached worktree of HEAD. Fail-closed: a clone we cannot make is a finding, never a pass."""
+    global CLONE_DIR
+    tmp = os.path.join(os.environ.get("TEMP", "/tmp"), "oig_clone_wt")
+    if os.path.isdir(tmp):
+        subprocess.run(["git", "worktree", "remove", "--force", tmp], cwd=ROOT,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    elif os.path.exists(tmp):
+        # A plain file left at that path would make every future probe fail with "already exists, but
+        # is not a directory" -- which reads as a broken gate rather than as leftover state. Removing
+        # it is what keeps one interrupted run from turning into a permanent red.
+        try:
+            os.remove(tmp)
+        except OSError as exc:
+            return None, "cannot clear %s: %s" % (tmp, exc)
+    proc = subprocess.run(["git", "worktree", "add", "--detach", "--force", tmp,
+                           os.environ.get("OIG_CLONE_REF", "HEAD")], cwd=ROOT,
+                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    if proc.returncode != 0 or not os.path.isdir(tmp):
+        return None, proc.stdout.decode("utf-8", "replace")[-400:]
+    CLONE_DIR = tmp
+    return tmp, None
+
+
+def _drop_clone():
+    global CLONE_DIR
+    if not CLONE_DIR:
+        return "no worktree was made"
+    proc = subprocess.run(["git", "worktree", "remove", "--force", CLONE_DIR], cwd=ROOT,
+                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    left = os.path.isdir(CLONE_DIR)
+    CLONE_DIR = None
+    return "removed rc=%d left=%s" % (proc.returncode, left)
+
+
+SKIP_NEEDLES = ("CITE-SKIP", "verdict=SKIP")
+
+
+def _probe_clone():
+    wt, err = _make_clone()
+    if wt is None:
+        print("[OIG-PROBE] could not make a clone worktree: %s" % err.replace("\n", " ")[:220])
+        print("[OIG-PROBE] clone_measured=0 clone_survivable=0 unmeasurable=0 regressed=0 "
+              "all_survive=no")
+        print("[OIG-PROBE] worktree cleanup: %s" % _drop_clone())
+        # Code 2, not 1: "a finding" and "this probe could not run at all" are different claims, and
+        # collapsing them is how a broken gate starts reading as a measured one. The module's own
+        # contract says 2 = the gate itself could not run.
+        print("[OIG-PROBE] verdict=INCOMPLETE exit=2")
+        return 2
+    print("[OIG-PROBE] clone_worktree=%s" % wt)
+    survivable = 0
+    unmeasurable = []
+    regressed = []
+    for it in ACTIVE_ITEMS:
+        if it.state != "enforced":
+            continue
+        if "--probe-clone" in [str(a) for a in it.argv]:
+            # Self-reference: running this probe inside its own clone probe would recurse, and the
+            # nested copy would report whatever the outer one reports -- a reading that cannot move.
+            # Excluded here, and by name, so adding a second self-referential row is visible rather
+            # than silently skipped by the same guard.
+            print("[OIG-PROBE]   %-32s SKIPPED (self-referential: this probe runs itself)"
+                  % it.id)
+            continue
+        rc, out = run(it.argv, cwd=wt)
+        needle_ok = it.needle is None or it.needle in out
+        skipped = any(s in out for s in SKIP_NEEDLES)
+        if rc == it.want_rc and needle_ok:
+            survivable += 1
+            print("[OIG-PROBE]   %-32s CLOSED_IN_CLONE" % it.id)
+        elif skipped:
+            unmeasurable.append(it.id)
+            print("[OIG-PROBE]   %-32s UNMEASURABLE_IN_CLONE (the tool declares a skip)"
+                  % it.id)
+            print("[OIG-PROBE]   %s" % [l for l in out.split("\n") if l.strip()][-1][:110])
+        else:
+            regressed.append(it.id)
+            print("[OIG-PROBE]   %-32s REGRESSED_IN_CLONE" % it.id)
+            print("[OIG-PROBE]   %s" % [l for l in out.split("\n") if l.strip()][-1][:110])
+    drop = _drop_clone()
+    measured = survivable + len(unmeasurable) + len(regressed)
+    all_survive = "yes" if (measured and survivable == measured) else "no"
+    print("[OIG-PROBE] clone_measured=%d clone_survivable=%d unmeasurable=%d regressed=%d "
+          "all_survive=%s"
+          % (measured, survivable, len(unmeasurable), len(regressed), all_survive))
+    print("[OIG-PROBE] worktree cleanup: %s" % drop)
+    return 0 if all_survive == "yes" else 1
+
+
+# PROBES sits here, after every probe function it names -- including _probe_clone, which is what the
+# U-122 shipping criterion runs. Putting it above them means a probe added later is referenced before
+# it exists, which is a NameError at import time rather than at the step that would have caught it.
+PROBES = {
+    "--probe-host": _probe_host,
+    "--probe-failclosed": _probe_failclosed,
+    "--probe-merges": _probe_merges,
+    "--probe-clone": _probe_clone,
+}
+
+
+ACTIVE_ITEMS = ITEMS
+
+
+def _resolve_registry(argv):
+    """The registry a probe must judge: the shipped one, or the copy --registry names.
+
+    The probes used to iterate the module-level ITEMS, so --registry had no effect on them -- a teeth
+    arm that pointed --registry at a copy was quietly measuring the delivered table instead of the
+    fixture it had just built, and it read GREEN for the wrong reason. U-122's first C1 arm is where
+    that surfaced. Resolving before dispatch is the whole fix.
+    """
+    global ACTIVE_ITEMS
+    if "--registry" in argv:
+        try:
+            ACTIVE_ITEMS = load_registry(argv[argv.index("--registry") + 1])
+        except Exception as exc:
+            print("[OIG-FIND] registry unreadable: %s %s" % (type(exc).__name__, str(exc)[:120]))
+            ACTIVE_ITEMS = []
+            return False
+    else:
+        ACTIVE_ITEMS = ITEMS
+    return True
 
 
 def load_registry(path):
     """ITEMS from this module, or from a copy the caller points at.
-
     The teeth copy this file and edit one line of the table. A copied RULE is not the shipped rule, so
     the teeth point --registry at a copy of the registry and keep running THIS module's code -- the
     same arrangement the row-text lint's --skip uses.
@@ -347,8 +508,15 @@ def main(argv):
                  sum(1 for i in ITEMS if i.state == "local")))
         return 0
 
-    if argv and argv[0] in PROBES:
-        return PROBES[argv[0]]()
+    # A probe flag is dispatched wherever it appears. Gating on argv[0] meant the teeth' own
+    # "--registry <copy> --probe-clone" never reached the probe at all: it fell through to the full-gate
+    # path, measured the copy LOCALLY (which is green for the very row the arm is about), and the arm
+    # read GREEN for a reason that had nothing to do with the clone. U-122's C1 is where that surfaced.
+    probe = next((k for k in PROBES if k in argv), None)
+    if probe:
+        if not _resolve_registry(argv):
+            return 2
+        return PROBES[probe]()
 
     registry = None
     if "--registry" in argv:
@@ -367,6 +535,17 @@ def main(argv):
     enforced_argvs = {}
     n_enforced = n_open = n_local = 0
     for it in items:
+        # Counted exactly once per item, here, before any branch. The U-122 version counted an open
+        # row with a `file` twice -- once in the unmeasurable branch that also serves local rows, once
+        # again at the bottom -- so the run read open=5 against --list's open=4 on the same bytes, and
+        # the teeth arm that compares the two caught it. Counting in one place is what makes that arm
+        # mean something: it still tests that the loop visits every row exactly once.
+        if it.state == "enforced":
+            n_enforced += 1
+        elif it.state == "open":
+            n_open += 1
+        else:
+            n_local += 1
         if it.id in seen:
             print("[OIG-FIND] duplicate id %s -- a second entry for one handle judges it twice and"
                   % it.id)
@@ -380,12 +559,18 @@ def main(argv):
             findings += 1
             continue
 
-        if it.state == "local":
-            n_local += 1
+        # An item that names a git-ignored file it needs is reported as unmeasurable when that file is
+        # absent, whatever its state. U-122: a `open` row whose command needs build/u44_probe used to
+        # print "can't open file" on a clean clone -- a reading that says the measurement broke, when
+        # the truth is there is nothing to measure. Distinguishing those two is the whole point.
+        if it.state in ("local", "open") and it.file:
             if not os.path.exists(os.path.join(ROOT, it.file.replace("/", os.sep))):
-                print("[OIG] id=%-32s state=local        reading=unmeasurable_here file=%s"
-                      % (it.id, it.file))
+                print("[OIG] id=%-32s state=%-12s reading=unmeasurable_here file=%s"
+                      % (it.id, it.state, it.file))
                 continue
+
+        if it.state == "local":
+            pass  # already counted in the unmeasurable / measurable branch above
 
         rc, out = run(it.argv)
         last = ""
@@ -402,7 +587,6 @@ def main(argv):
         reading = (picked or last)[:150]
 
         if it.state == "enforced":
-            n_enforced += 1
             needle_ok = it.needle is None or it.needle in out
             ok = rc == it.want_rc and needle_ok
             print("[OIG] id=%-32s state=enforced     rc=%d want_rc=%d needle=%s verdict=%s"
@@ -417,10 +601,17 @@ def main(argv):
                 enforced_outputs.append((it.id, it.needle, out))
             enforced_argvs.setdefault(tuple(it.argv), []).append(it.id)
         else:
-            if it.state == "open":
-                n_open += 1
             print("[OIG] id=%-32s state=%-12s rc=%d reading=%s"
                   % (it.id, it.state, rc, reading))
+            # A local row that CAN be measured here reports whether it still holds, so the reading is
+            # more than a line of stdout. It never moves the verdict: a fresh clone cannot measure the
+            # row at all, and a verdict that follows the machine is the shape U-109 spent a round
+            # digging out of the host.
+            if it.state == "local" and it.needle is not None:
+                ok_local = rc == it.want_rc and it.needle in out
+                print("[OIG]   -> %s reads %s here (rc=%d want_rc=%d needle=%s)"
+                      % (it.id, "CLOSED_LOCAL" if ok_local else "REGRESSED_LOCAL",
+                         rc, it.want_rc, "yes" if it.needle in out else "NO"))
 
     # ---- N2 (U-113): two enforced items must not run the same command ----
     # A copy-pasted row measures the same thing twice under two handles, and the second one looks like
