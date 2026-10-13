@@ -113,6 +113,8 @@ class Item(object):
         # contract does not allow.
         if self.clone_expect not in (None, "yes", "no"):
             return ("clone_expect %r must be yes, no, or absent" % (self.clone_expect,))
+        if self.state == "open" and self.want_rc != 0:
+            return ("open row expects rc=%d: an open row is re-measured every host round and printed, so expecting a non-zero makes it a standing complaint rather than a measurement. enforced rows may expect non-zero -- that is how a closed row speaks -- but an open row is still looking for something to be true." % self.want_rc)
         if self.state == "enforced" and self.clone_expect == "no":
             return ("enforced with clone_expect=no: an enforced row must be measurable on a "
                     "clean clone; if it cannot be, it is local, not enforced")
@@ -270,19 +272,6 @@ ITEMS = [
          "live under git-ignored build/, so this is local by the same reason the lint row is.",
          read=r"^\[U115-DA-ACCOUNTING\]",
          # U-124 measured kind B1: the command cannot even start on a clone, and the census scans the tree rather than one file: its population IS the git-ignored tree, so there is nothing to relocate.
-         clone_expect="no"),
-    # docstring_teeth_confined_stale
-    Item("docstring_teeth_confined_stale", "open",
-         [PY, "-X", "utf8", "build/u44_probe/u63_docstring_teeth.py"], 1, None,
-         "build/u44_probe/u63_docstring_teeth.py",
-         "the piece that judged 'this round only touched docstrings' reads a pinned base revision "
-         "against the work tree, so its RED is a reading about one diff, not a defect with a fixed "
-         "end state -- enforced would go green the moment that commit stops being the base. Open, so "
-         "the host step re-measures it every round and prints the verdict line. It names its file "
-         "because the piece is git-ignored: on a clean clone the honest reading is unmeasurable_here, "
-         "not 'can't open file' (U-122 measured the latter and it says the measurement broke).",
-         read=r"^\[U63-DT-VERDICT\]",
-         # U-124 measured kind B2: the command cannot even start on a clone, and this is the one of the five whose closure is a single file: no build/ literal, no tree scan, nothing else to bring along. Moving it would work, and this round still decided not to, because it buys one row out of five against 71 old references plus a permanent drift guard.
          clone_expect="no"),
     # u63_face_option
     Item("u63_face_option", "local",
