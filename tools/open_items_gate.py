@@ -135,6 +135,15 @@ class Item(object):
         # measure the row at all and a verdict that moves with the machine is the U-109 shape again.
         if self.state == "open" and self.needle is not None:
             return "state=open with a needle: nothing reads it; enforce it or drop the needle"
+        # U-132: an open row that names no file is measured on both sides of the readings probe, and
+        # reading_of falls through to a guessed line when the row declares neither read nor compare.
+        # U-126 watched that guess land on a line that moves with the tree, which reads as a row
+        # disagreeing with itself. Rows with a file are unmeasurable on a clone, so their displayed
+        # reading may still come from the last line -- this rule is about the comparison, hence no file.
+        if self.state == "open" and not self.file and self.read is None and self.compare is None:
+            return ("open row without a file: the readings probe measures it on both sides, so it "
+                    "must declare read= (or compare=) -- the line that is its reading; without a "
+                    "declaration the probe falls back to a guessed line")
         if not self.argv:
             return "argv is empty"
         if not isinstance(self.want_rc, int):
@@ -244,7 +253,11 @@ ITEMS = [
          "uncovered path has no object here. Printed, never judged: forcing merges to stay at zero "
          "would constrain the repository, not the rule. This row declares no subject on purpose -- its "
          "subject is the commit graph, which is not a tracked file, and an enforced row in that "
-         "position would have to be refused. It is open, so no declaration is required of it."),
+         "position would have to be refused. It is open, so no subject is required of it. It is "
+         "measured on both sides of the readings probe, so it also declares the line it reads.",
+         # U-132: without this line the probe's reading_of fell through to a guessed line -- the same
+         # string today, another line the moment the output grows one.
+         read=r"^\[OIG-PROBE\] merges="),
     Item("scratch_roster_exposure", "open",
          [PY, "-X", "utf8", "tools/repo_hygiene.py"], 0, None, None,
          "measured as the hygiene gate's own verdict plus its tracked-file count.",
@@ -261,6 +274,9 @@ ITEMS = [
          "build/u44_probe/u111_appendix_row118.py",
          "the lint judges the row writers, which live under git-ignored build/. A fresh clone has "
          "none, so this cannot be a host step until there is a tracked object for it to judge.",
+         # U-132: the line this row reads. A clone cannot measure the row at all, so the declaration
+         # serves the display's reading= cell, which otherwise took whichever line printed last.
+         read=r"^\[ROW-LINT-VERDICT\] ",
          # U-124 measured kind B1: the command cannot even start on a clone. Its closure reaches past one file: the lint itself lives under build/ and its argv names the per-round row writers, so relocating the lint leaves the population where it was.
          clone_expect="no"),
     # anchor_says_its_own_hit_count
@@ -280,6 +296,9 @@ ITEMS = [
                     u"-\u767b\u8bb0\u9644\u8868.md"], 0, None,
          "build/u44_probe/u63_cited_pointer_check.py",
          "the --face switch is wired and both spellings run; the file that carries it is ignored.",
+         # U-132: same shape as the lint row: the reading is declared even though only the display
+         # takes it here, so the cell does not drift to whatever prints last.
+         read=r"^\[U63-CP-VERDICT\] ",
          # U-124 measured kind B1: the command cannot even start on a clone. Measured as B1, not B2: the piece writes a scratch face under build/, so even after relocating it still reaches into the ignored tree. An earlier draft of this note said B2 on the strength of argument; the reading disagreed and the reading won.
          clone_expect="no"),
     # U-125: the third kind of blind, measured this round and unlike the other two.
