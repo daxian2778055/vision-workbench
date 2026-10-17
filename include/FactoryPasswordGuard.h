@@ -2,6 +2,8 @@
 
 #include <QString>
 
+#include "AppDatabase.h"   // AdminPasswordState：判定函数的返回类型，口径只有一处定义
+
 /// 出厂默认口令治理（A1-①「强制首装改密 + 写操作闸」）。
 ///
 /// 背景：AppDatabase 建表时会自动插入 admin/admin（老库升级兼容路径），于是"出厂口令仍在使用"
@@ -11,16 +13,19 @@
 /// 这样闸的语义可以脱离 GUI 单测（QtTest 无头跑）。
 namespace FactoryPasswordGuard {
 
-/// 出厂口令当前是否仍在使用（admin 账户的哈希仍能匹配出厂口令）。
-bool factoryPasswordInUse();
+/// 出厂口令当前状态（三态）。Unreadable 不是「已改掉」——它说的是这条判定今天做不出来。
+AdminPasswordState adminPasswordState();
 
-/// 按数据库实际状态刷新 SessionManager 的写操作闸，返回刷新后闸是否开启。
+/// 按数据库实际状态刷新 SessionManager 的写操作闸，返回刷新后的判定。
+/// 闸的口径：只有 Retired 才放开；InUse 与 Unreadable 都保持禁止——放开这条闸的唯一入口
+/// 就是本函数，让一次读失败顺手解开它，等于这道闸只在数据库健康时才生效。
 /// 冷启动必须在登录成功后调用一次；改密成功后再调用一次即可自动解锁。
-bool refreshWritesLock();
+AdminPasswordState refreshWritesLock();
 
 /// 用新口令替换出厂口令：先校验调用方确实持有出厂口令，再校验新口令，最后落库并复检。
 /// 全部通过才解锁写操作闸并返回 true；任何一步失败都返回 false、闸保持开启，
 /// 并把原因写进 error（error 可为 nullptr）。
+/// 读不到用户表也算失败一步：本函数是解除写操作闸的唯一通道，不能靠「判不出」放行。
 bool retireFactoryPassword(const QString &factoryPasswordInput,
                            const QString &newPassword,
                            const QString &confirmPassword,

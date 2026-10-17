@@ -94,6 +94,17 @@ bool AppDatabase::prepareRead(QSqlQuery &q, const QSqlDatabase &db,
     return prepareWrite(q, db, sql, op);
 }
 
+// 读侧 exec 判据只留一份。原先五处写的是 `if (!q.exec()) return records;`——返回值接了，
+// 原因一个字都不留：调用方拿着空表去问 lastDatabaseError()，读到的是上一笔写失败留下的旧串。
+bool AppDatabase::execRead(QSqlQuery &q, const QSqlDatabase &db, const QString &op) const
+{
+    if (q.exec()) {
+        return true;
+    }
+    noteFailure(op, db, q.lastError().text());
+    return false;
+}
+
 QString AppDatabase::lastDatabaseError() const
 {
     QMutexLocker locker(&s_dbMutex);
@@ -356,7 +367,7 @@ QList<AlarmRecord> AppDatabase::queryAlarms(const QDateTime &from, const QDateTi
     q.addBindValue(from);
     q.addBindValue(to);
     q.addBindValue(limit);
-    if (!q.exec()) return records;
+    if (!execRead(q, db, QStringLiteral("queryAlarms"))) return records;
 
     while (q.next()) {
         AlarmRecord r;
@@ -468,7 +479,7 @@ QList<InspectionRecord> AppDatabase::queryResults(const QDateTime &from, const Q
     q.addBindValue(from);
     q.addBindValue(to);
     q.addBindValue(limit);
-    if (!q.exec()) return records;
+    if (!execRead(q, db, QStringLiteral("queryResults"))) return records;
 
     while (q.next()) {
         InspectionRecord r;
@@ -512,17 +523,29 @@ bool AppDatabase::addUser(const QString &name, const QString &password, const QS
     return true;
 }
 
-bool AppDatabase::authenticateUser(const QString &name, const QString &password) const
+bool AppDatabase::authenticateUser(const QString &name, const QString &password,
+                                   bool *readFailed) const
 {
+    // 出参在入口就写成「判定做得出来」：原先只有两条失败出口写 true，三条成功路径一个字节
+    // 都不写，调用方拿到的是它自己那个初值——本遍的反向对照腿就是这么把它抓红的。
+    if (readFailed) {
+        *readFailed = false;
+    }
     QMutexLocker locker(&s_dbMutex);
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
     if (!prepareRead(q, db, QStringLiteral("SELECT id, password_hash FROM users WHERE name = ?"),
                      QStringLiteral("authenticateUser"))) {
+        if (readFailed) { *readFailed = true; }
         return false;
     }
     q.addBindValue(name);
-    if (!q.exec() || !q.next()) return false;
+    if (!execRead(q, db, QStringLiteral("authenticateUser"))) {
+        if (readFailed) { *readFailed = true; }
+        return false;
+    }
+    // 语句跑通了而没有这一行：那是「没有这个账户」，判定做得出来，不算读失败。
+    if (!q.next()) return false;
 
     const QString stored = q.value(1).toString();
     if (!verifyPassword(password, stored)) return false;
@@ -574,7 +597,7 @@ bool AppDatabase::changeUserPassword(const QString &name, const QString &newPass
     return true;
 }
 
-bool AppDatabase::isFactoryAdminPasswordInUse() const
+AdminPasswordState AppDatabase::adminPasswordState() const
 {
     // 不能复用 authenticateUser()：它自己锁 s_dbMutex，而 QMutex 不可重入，这里再锁一次即自锁。
     // 只做读+校验，不做旧版哈希迁移（那是登录路径的事）。
@@ -582,14 +605,39 @@ bool AppDatabase::isFactoryAdminPasswordInUse() const
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
     if (!prepareRead(q, db, QStringLiteral("SELECT password_hash FROM users WHERE name = ?"),
-                     QStringLiteral("isFactoryAdminPasswordInUse"))) {
-        return false;
+                     QStringLiteral("adminPasswordState"))) {
+        return AdminPasswordState::Unreadable;
     }
     q.addBindValue(QStringLiteral("admin"));
-    if (!q.exec() || !q.next()) {
-        return false;   // 没有 admin 账户 ⇒ 出厂口令不可能在使用中
+    if (!execRead(q, db, QStringLiteral("adminPasswordState"))) {
+        return AdminPasswordState::Unreadable;
     }
-    return verifyPassword(QStringLiteral("admin"), q.value(0).toString());
+    if (!q.next()) {
+        // 读通了而没有这一行 = 没有 admin 账户 ⇒ 出厂口令不可能在使用中；这是做出来的判定。
+        return AdminPasswordState::Retired;
+    }
+    return verifyPassword(QStringLiteral("admin"), q.value(0).toString())
+        ? AdminPasswordState::InUse : AdminPasswordState::Retired;
+}
+
+AccountSurface AppDatabase::accountSurface() const
+{
+    QMutexLocker locker(&s_dbMutex);
+    const QSqlDatabase db = threadDatabase();
+    QSqlQuery q(db);
+    if (!prepareRead(q, db, QStringLiteral("SELECT COUNT(*) FROM users"),
+                     QStringLiteral("accountSurface"))) {
+        return AccountSurface::Unreadable;
+    }
+    if (!execRead(q, db, QStringLiteral("accountSurface"))) {
+        return AccountSurface::Unreadable;
+    }
+    if (!q.next()) {
+        // COUNT(*) 必然回一行。走到这里说明语句被动过或驱动异常——按「读不出来」交，
+        // 不得按「没有账户」交：后者在登录页那边是一条创建 Admin 的路。
+        return AccountSurface::Unreadable;
+    }
+    return q.value(0).toInt() > 0 ? AccountSurface::HasAccounts : AccountSurface::NoneYet;
 }
 
 QList<UserRecord> AppDatabase::queryUsers() const
@@ -680,7 +728,7 @@ QList<OperationLogRecord> AppDatabase::queryOperationLogs(const QDateTime &from,
     q.addBindValue(from);
     q.addBindValue(to);
     q.addBindValue(limit);
-    if (!q.exec()) return records;
+    if (!execRead(q, db, QStringLiteral("queryOperationLogs"))) return records;
 
     while (q.next()) {
         OperationLogRecord r;

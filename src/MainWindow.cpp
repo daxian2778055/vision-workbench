@@ -3931,13 +3931,29 @@ void MainWindow::applyPermissionRestrictions()
 void MainWindow::enforceFactoryPasswordPolicy()
 {
     auto *session = SessionManager::instance();
-    if (!FactoryPasswordGuard::refreshWritesLock()) {
+    const AdminPasswordState state = FactoryPasswordGuard::refreshWritesLock();
+    if (state == AdminPasswordState::Retired) {
         applyPermissionRestrictions();
         return;
     }
 
-    // 走到这里说明 admin/admin 仍然能用：先把闸拉上（菜单随即灰掉），再要求当场改密
+    // 走到这里说明闸必须保持禁止：要么 admin/admin 仍然能用，要么这条判定今天做不出来。
     applyPermissionRestrictions();
+
+    if (state == AdminPasswordState::Unreadable) {
+        // 读不到用户表不等于出厂口令已改掉，所以闸不开。也不进下面的改密循环——那条路要求
+        // 填写当前出厂口令，而此刻连「当前是什么」都判不出来；但原因必须当场给操作员看：
+        // 一个静默的禁止会被当成程序故障绕过去，而绕过去的人正是这道闸要拦的那类。
+        QMessageBox::warning(this, tr("无法判定出厂口令"),
+                             tr("当前读不到用户表，无法确认管理员是否仍在使用出厂默认口令，"
+                                "保存/导出方案、用户增删与通信配置入口保持禁止。\n"
+                                "请先确认数据库可读写，再走「系统 → 修改管理员口令」。\n\n%1")
+                                 .arg(AppDatabase::instance()->lastDatabaseError()));
+        ui->statusBar->showMessage(
+            tr("写操作已被禁止：读不到用户表，无法确认出厂默认口令是否仍在用"), 0);
+        logMessage(tr("出厂口令判定做不出来（用户表读不到）：写操作保持禁止"));
+        return;
+    }
 
     while (session->writesBlocked()) {
         QDialog dlg(this);

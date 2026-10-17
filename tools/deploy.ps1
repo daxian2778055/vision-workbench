@@ -57,17 +57,23 @@ if (-not (Test-Path $SourceExe)) {
 }
 
 # ---------- 2. 输出目录 ----------
-if (-not $OutDir) {
+$OutDirRequested = -not [string]::IsNullOrWhiteSpace($OutDir)
+if (-not $OutDirRequested) {
     $OutDir = Join-Path $RepoRoot "dist\VisionFlowPlatform"
 }
-$OutDir = (Resolve-Path -LiteralPath $OutDir -ErrorAction SilentlyContinue).Path
-if (-not $OutDir) {
-    $OutDir = Join-Path $RepoRoot "dist\VisionFlowPlatform"
-}
+# 原来这里是 $OutDir = (Resolve-Path ...).Path：目录还不存在时 Resolve-Path 返回 Nothing，
+# .Path 就是空，紧跟的那句回落于是把调用方指定的落点整个丢掉，包永远落回默认目录（#522，
+# 上一次发版就是这么覆盖到旧包上的）。现在存在就取规范化结果，不存在就保留原样给 New-Item 建。
+$resolvedOutDir = Resolve-Path -LiteralPath $OutDir -ErrorAction SilentlyContinue
+if ($resolvedOutDir) { $OutDir = $resolvedOutDir.Path }
+$outDirPreExisted = Test-Path -LiteralPath $OutDir
 New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
 
 Write-Host "源程序 : $SourceExe" -ForegroundColor Green
 Write-Host "输出目录: $OutDir" -ForegroundColor Green
+$outDirSourceWord = if ($OutDirRequested) { "调用方指定" } else { "脚本缺省" }
+$outDirExistWord = if ($outDirPreExisted) { "是（本次是往已有包里覆盖写入）" } else { "否（本次新建）" }
+Write-Host ("落点来源: {0}   目录本来已存在: {1}" -f $outDirSourceWord, $outDirExistWord) -ForegroundColor Green
 
 # ---------- 3. Qt 路径 ----------
 $QtDir = "D:\Qt\6.11.0\msvc2022_64"
@@ -102,6 +108,25 @@ Step "部署 Qt 运行时 (windeployqt)"
     --dir $OutDir (Join-Path $OutDir "VisionFlowPlatform.exe")
 if ($LASTEXITCODE -ne 0) {
     Write-Warning "windeployqt 返回非零退出码 $LASTEXITCODE（继续处理其它步骤）"
+}
+
+# ---------- 2b. 本仓自己的翻译（windeployqt 那句 --no-translations 只管 Qt 自带的） ----------
+# 为什么必须有一步：src/I18n.cpp 里 .qm 缺失的设计是"降级为源文（中文），不阻断启动"，
+# 也就是说包里没有翻译文件时界面不会报错，英文现场只会安静地看到中文。
+# 上一遍这个文件是人工补进包里的——凡靠人记住的修法都会在下一次回潮，所以落到脚本。
+Step "拷贝本仓翻译 (*.qm)"
+$QmSrcDir = Join-Path (Split-Path -Parent $SourceExe) "translations"
+if (Test-Path -LiteralPath $QmSrcDir) {
+    $dstQm = Join-Path $OutDir "translations"
+    New-Item -ItemType Directory -Path $dstQm -Force | Out-Null
+    Copy-Item -Path (Join-Path $QmSrcDir "*.qm") -Destination $dstQm -Force -ErrorAction SilentlyContinue
+    $qmCount = @(Get-ChildItem -Path $dstQm -Filter *.qm -ErrorAction SilentlyContinue).Count
+    Write-Host "  -> translations/ 里现有 $qmCount 枚 .qm" -ForegroundColor Green
+    if ($qmCount -eq 0) {
+        Write-Warning "$QmSrcDir 存在但里面没有 .qm —— 界面会静默退化成中文源文（先跑翻译构建）"
+    }
+} else {
+    Write-Warning "找不到 $QmSrcDir —— 包内没有翻译，英文界面会静默显示中文（I18n 是降级不是报错）"
 }
 
 # ============================================================
@@ -396,6 +421,44 @@ if ($problems.Count -gt 0) {
     Write-Host "========================================" -ForegroundColor Red
     exit 1
 }
+# ---------- 包内自识别：这份包对应哪一枚提交、哪份 exe ----------
+Step "写 版本说明.txt（提交 / exe 指纹 / 工作树状态）"
+$exeInDst = Join-Path $OutDir "VisionFlowPlatform.exe"
+$gitRev = "unknown"; $gitTag = "none"; $gitBranch = "unknown"; $worktreeDirty = "unknown"
+if (Get-Command git -ErrorAction SilentlyContinue) {
+    $gitRev = ((& git -C $RepoRoot rev-parse HEAD 2>$null) | Select-Object -First 1)
+    $gitBranch = ((& git -C $RepoRoot rev-parse --abbrev-ref HEAD 2>$null) | Select-Object -First 1)
+    $gitTag = ((& git -C $RepoRoot describe --tags --exact-match $gitRev 2>$null) | Select-Object -First 1)
+    $dirtyLines = @(& git -C $RepoRoot status --porcelain 2>$null)
+    $worktreeDirty = $dirtyLines.Count
+    if (-not $gitTag) { $gitTag = "none" }
+    if ($worktreeDirty -gt 0) {
+        Write-Warning ("工作树有 {0} 处未提交改动 —— 这份包不对应任何一枚提交" -f $worktreeDirty)
+    }
+} else {
+    Write-Warning "本机找不到 git —— 包内无法记录提交号，只能靠人记（这是发版最易丢的一格）"
+}
+$exeHash = (Get-FileHash -LiteralPath $exeInDst -Algorithm MD5).Hash.ToLower()
+$exeBytes = (Get-Item -LiteralPath $exeInDst).Length
+$manifestLines = @(
+    "VisionFlowPlatform 包内自识别（本文件由 tools/deploy.ps1 生成，请勿手改）",
+    ("打包时间     : {0}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss")),
+    ("提交         : {0}" -f $gitRev),
+    ("分支         : {0}" -f $gitBranch),
+    ("该提交上的标签: {0}" -f $gitTag),
+    ("工作树未提交改动条数: {0}" -f $worktreeDirty),
+    ("VisionFlowPlatform.exe md5 : {0}" -f $exeHash),
+    ("VisionFlowPlatform.exe 字节 : {0}" -f $exeBytes),
+    "",
+    "读法：工作树未提交改动条数为 0 时，这份 exe 就是上面那枚提交编出来的；",
+    "      非 0 表示打包时源码有未提交改动，这份包不对应任何一枚提交，不要当发版件用。",
+    "      要核对包里的 exe 就是刚测过的那份，比对上面这行 md5 与门禁面记录的那行。"
+)
+[System.IO.File]::WriteAllText((Join-Path $OutDir "版本说明.txt"), `
+    ($manifestLines -join [Environment]::NewLine), (New-Object System.Text.UTF8Encoding($true)))
+Write-Host ("  -> 提交 {0}  标签 {1}  exe_md5 {2}  工作树未提交 {3}" -f `
+    $gitRev, $gitTag, $exeHash, $worktreeDirty) -ForegroundColor Green
+
 Write-Host "========================================" -ForegroundColor Green
 Write-Host "  部署完成!" -ForegroundColor Green
 Write-Host "  输出目录: $OutDir" -ForegroundColor Green

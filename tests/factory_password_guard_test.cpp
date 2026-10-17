@@ -13,6 +13,9 @@
 #include <QtTest/QtTest>
 #include <QTemporaryDir>
 #include <QFileInfo>
+#include <QSqlDatabase>
+#include <QSqlQuery>
+#include <QSqlError>   // probeExec 要把驱动原文当断言消息交出去
 
 #include "AppDatabase.h"
 #include "SessionManager.h"
@@ -38,6 +41,9 @@ private slots:
     void saveProject_allowedAfterRetire();
     void userTableWrites_allowedAfterRetire();
     void changePassword_failsForUnknownUser();
+    // 第九轮复核 P1-1：读不到用户表时闸必须保持禁止，解锁通道也走不通（本腿排最后，
+    // 它要 DROP users 表，前面每条腿的前提都是「这张表读得出来」）。
+    void stateUnreadable_keepsWritesBlockedAndRefusesRetire();
 
 private:
     QTemporaryDir m_tempDir;
@@ -49,8 +55,9 @@ void FactoryPasswordGuardTest::initTestCase()
     // 独立临时库：AppDatabase 建表时会自动插入 admin/admin，正是本套件要验证的默认态
     QVERIFY2(AppDatabase::instance()->initialize(m_tempDir.filePath(QStringLiteral("guard.db"))),
              "数据库初始化失败");
-    QVERIFY2(AppDatabase::instance()->isFactoryAdminPasswordInUse(),
-             "新建库应处于出厂口令状态（否则本套件的断言全部失去前提）");
+    // 三态之后这句才真正是「前提」：读不通的话本套件的断言全部失去夹具，必须当场停在这里。
+    QVERIFY2(AppDatabase::instance()->adminPasswordState() == AdminPasswordState::InUse,
+             "新建库应读得出出厂口令在用（否则本套件的断言全部失去前提）");
 }
 
 void FactoryPasswordGuardTest::writesLock_disablesConfigPermissionsEvenForAdmin()
@@ -83,7 +90,7 @@ void FactoryPasswordGuardTest::writesLock_doesNotDisableRunFlow()
 
 void FactoryPasswordGuardTest::retire_refusesWhenFactoryPasswordWrong()
 {
-    QVERIFY2(FactoryPasswordGuard::refreshWritesLock(),
+    QVERIFY2(FactoryPasswordGuard::refreshWritesLock() == AdminPasswordState::InUse,
              "本用例前提：出厂口令仍在使用，闸应处于开启态");
 
     QString error;
@@ -94,12 +101,12 @@ void FactoryPasswordGuardTest::retire_refusesWhenFactoryPasswordWrong()
     QVERIFY2(!ok, "出厂口令填错却改密成功：任何人都能替 admin 改口令");
     QVERIFY2(!error.isEmpty(), "失败必须给出原因，不能静默");
     QVERIFY2(SessionManager::instance()->writesBlocked(), "改密失败后闸必须仍然开启");
-    QVERIFY(AppDatabase::instance()->isFactoryAdminPasswordInUse());
+    QVERIFY(AppDatabase::instance()->adminPasswordState() == AdminPasswordState::InUse);
 }
 
 void FactoryPasswordGuardTest::retire_rejectsWeakOrMismatchedNewPassword()
 {
-    QVERIFY(FactoryPasswordGuard::refreshWritesLock());
+    QVERIFY(FactoryPasswordGuard::refreshWritesLock() == AdminPasswordState::InUse);
 
     QString error;
     // 过短
@@ -115,14 +122,14 @@ void FactoryPasswordGuardTest::retire_rejectsWeakOrMismatchedNewPassword()
         QStringLiteral("admin"), QStringLiteral("admin"), QStringLiteral("admin"), &error));
     QVERIFY(!error.isEmpty());
 
-    QVERIFY2(AppDatabase::instance()->isFactoryAdminPasswordInUse(),
+    QVERIFY2(AppDatabase::instance()->adminPasswordState() == AdminPasswordState::InUse,
              "三次非法输入后口令不应被改动");
     QVERIFY2(SessionManager::instance()->writesBlocked(), "失败路径不得解锁");
 }
 
 void FactoryPasswordGuardTest::saveProject_refusedWhileWritesBlocked()
 {
-    QVERIFY(FactoryPasswordGuard::refreshWritesLock());
+    QVERIFY(FactoryPasswordGuard::refreshWritesLock() == AdminPasswordState::InUse);
     SessionManager::instance()->setWritesBlocked(true);
 
     const QString path = m_tempDir.filePath(QStringLiteral("blocked.vfp"));
@@ -134,7 +141,7 @@ void FactoryPasswordGuardTest::saveProject_refusedWhileWritesBlocked()
 // S-3：三条方案/账户写入路径各是独立的一处代码，只测一处等于另外两处可以被人删掉而全绿。
 void FactoryPasswordGuardTest::exportEncryptedProject_refusedWhileWritesBlocked()
 {
-    QVERIFY(FactoryPasswordGuard::refreshWritesLock());
+    QVERIFY(FactoryPasswordGuard::refreshWritesLock() == AdminPasswordState::InUse);
     SessionManager::instance()->setWritesBlocked(true);
 
     const QString path = m_tempDir.filePath(QStringLiteral("blocked.vfps"));
@@ -170,7 +177,7 @@ void FactoryPasswordGuardTest::writeGateRefusal_isTheSinglePredicate()
 // W-1①：闸此前只管方案文件；用户管理只灰菜单，而改密弹框一直宣称"用户管理已被禁止"
 void FactoryPasswordGuardTest::userTableWrites_refusedWhileWritesBlocked()
 {
-    QVERIFY(FactoryPasswordGuard::refreshWritesLock());
+    QVERIFY(FactoryPasswordGuard::refreshWritesLock() == AdminPasswordState::InUse);
     SessionManager::instance()->setWritesBlocked(true);
 
     QVERIFY2(!AppDatabase::instance()->addUser(QStringLiteral("gate_probe_blocked"),
@@ -191,7 +198,7 @@ void FactoryPasswordGuardTest::userTableWrites_refusedWhileWritesBlocked()
 
 void FactoryPasswordGuardTest::retire_unlocksWritesOnSuccess()
 {
-    QVERIFY(FactoryPasswordGuard::refreshWritesLock());
+    QVERIFY(FactoryPasswordGuard::refreshWritesLock() == AdminPasswordState::InUse);
 
     QString error;
     const bool ok = FactoryPasswordGuard::retireFactoryPassword(
@@ -200,7 +207,10 @@ void FactoryPasswordGuardTest::retire_unlocksWritesOnSuccess()
 
     QVERIFY2(ok, qPrintable(error.isEmpty() ? QStringLiteral("改密失败且未给出原因") : error));
     QVERIFY2(!SessionManager::instance()->writesBlocked(), "改密成功后写操作闸应自动解除");
-    QVERIFY2(!AppDatabase::instance()->isFactoryAdminPasswordInUse(), "出厂口令判定应消失");
+    // 「消失」必须是被读出来的 Retired：判不出（Unreadable）在这一格同样会把闸留着不放，
+    // 那说明改密其实没落地，本腿的结论就不能算成立。
+    QVERIFY2(AppDatabase::instance()->adminPasswordState() == AdminPasswordState::Retired,
+             "出厂口令判定应读得出 Retired（而不是判不出）");
     QVERIFY(AppDatabase::instance()->authenticateUser(QStringLiteral("admin"),
                                                      QStringLiteral("N3wStrongPass")));
     QVERIFY2(!AppDatabase::instance()->authenticateUser(QStringLiteral("admin"),
@@ -211,7 +221,7 @@ void FactoryPasswordGuardTest::retire_unlocksWritesOnSuccess()
 // 反向对照：上一用例的"拒绝"不是环境造成的假象——解锁后同一条写路径必须能成功
 void FactoryPasswordGuardTest::saveProject_allowedAfterRetire()
 {
-    QVERIFY2(!FactoryPasswordGuard::refreshWritesLock(),
+    QVERIFY2(FactoryPasswordGuard::refreshWritesLock() == AdminPasswordState::Retired,
              "前提：出厂口令已被改掉（依赖 retire_unlocksWritesOnSuccess 先跑）");
 
     const QString path = m_tempDir.filePath(QStringLiteral("allowed.vfp"));
@@ -235,6 +245,78 @@ void FactoryPasswordGuardTest::changePassword_failsForUnknownUser()
     QVERIFY2(!AppDatabase::instance()->changeUserPassword(
                  QStringLiteral("no_such_user"), QStringLiteral("Whatever123")),
              "给不存在的用户改口令返回了成功");
+}
+
+// 第九轮复核 P1-1：读不到用户表不等于出厂口令已改掉。
+// 这条腿要推的是两处 fail-open 出口——refreshWritesLock 放开闸、retireFactoryPassword 报成功；
+// 旧口径里这两处都只认 bool 的 false，一次 database is locked 就能把闸解开。
+void FactoryPasswordGuardTest::stateUnreadable_keepsWritesBlockedAndRefusesRetire()
+{
+    AppDatabase *db = AppDatabase::instance();
+    QVERIFY2(db->adminPasswordState() == AdminPasswordState::Retired,
+             "前提：前面的用例已把出厂口令改掉，本腿要看的是它翻成 Unreadable");
+
+    QSqlDatabase probe = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                  QStringLiteral("guard_probe_unreadable"));
+    probe.setDatabaseName(db->databasePath());
+    QVERIFY2(probe.open(), qPrintable(probe.lastError().text()));
+    {
+        QSqlQuery drop(probe);
+        QVERIFY2(drop.exec(QStringLiteral("DROP TABLE users")), qPrintable(drop.lastError().text()));
+    }
+    probe.close();
+    QSqlDatabase::removeDatabase(QStringLiteral("guard_probe_unreadable"));
+
+    QVERIFY2(db->adminPasswordState() == AdminPasswordState::Unreadable,
+             "表已不在，判定却交出了一个实答案");
+    const AdminPasswordState afterRefresh = FactoryPasswordGuard::refreshWritesLock();
+    qDebug().noquote() << QStringLiteral("[U133-GATE-UNREADABLE] state=%1 writes_blocked=%2")
+                              .arg(afterRefresh == AdminPasswordState::Unreadable ?
+                                       "unreadable" : "other")
+                              .arg(SessionManager::instance()->writesBlocked() ? "yes" : "no");
+    QVERIFY2(afterRefresh == AdminPasswordState::Unreadable, qPrintable(db->lastDatabaseError()));
+    QVERIFY2(SessionManager::instance()->writesBlocked(),
+             "读不到用户表却把写操作闸放开：拿到出厂口令的人从此能改方案、能建账户");
+
+    // 解锁通道也得走不通——它是放开这条闸的唯一入口
+    QString error;
+    QVERIFY2(!FactoryPasswordGuard::retireFactoryPassword(QStringLiteral("admin"),
+                 QStringLiteral("N3wStrongPass"), QStringLiteral("N3wStrongPass"), &error),
+             "读不到用户表却能「改密成功」：那是从判不出这个口子把闸解开");
+    QVERIFY2(!error.isEmpty(), "拒绝必须给出原因，不能静默");
+    QVERIFY2(error.contains(QStringLiteral("读不到用户表")), qPrintable(error));
+    QVERIFY2(SessionManager::instance()->writesBlocked(), "改密被拒后闸仍须保持禁止");
+
+    // 恢复对照：表建回来、判定重新做得出来，同一条通道才重新走得通。
+    // 没有这一格，上面的拒绝只是「retireFactoryPassword 坏掉了」而不是这条判据在起作用。
+    QSqlDatabase back = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                 QStringLiteral("guard_probe_restore"));
+    back.setDatabaseName(db->databasePath());
+    QVERIFY2(back.open(), qPrintable(back.lastError().text()));
+    {
+        QSqlQuery make(back);
+        QVERIFY2(make.exec(QStringLiteral(
+            "CREATE TABLE users ("
+            "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  name TEXT UNIQUE NOT NULL,"
+            "  password_hash TEXT NOT NULL,"
+            "  role TEXT NOT NULL DEFAULT 'Operator',"
+            "  created_at DATETIME DEFAULT CURRENT_TIMESTAMP)")),
+                 qPrintable(make.lastError().text()));
+        QSqlQuery seed(back);
+        QVERIFY2(seed.exec(QStringLiteral(
+            "INSERT INTO users (name, password_hash, role) VALUES ('admin', '%1', 'Admin')")
+            .arg(AppDatabase::createPasswordHash(QStringLiteral("N3wStrongPass")))),
+             qPrintable(seed.lastError().text()));
+    }
+    back.close();
+    QSqlDatabase::removeDatabase(QStringLiteral("guard_probe_restore"));
+
+    QVERIFY2(FactoryPasswordGuard::refreshWritesLock() == AdminPasswordState::Retired,
+             "表建回来后判定应重新读得出 Retired");
+    QVERIFY2(!SessionManager::instance()->writesBlocked(),
+             "判定恢复后闸应自动放开（否则前一条的拒绝就不是因为读不到）");
+    SessionManager::instance()->setWritesBlocked(false);
 }
 
 QTEST_GUILESS_MAIN(FactoryPasswordGuardTest)

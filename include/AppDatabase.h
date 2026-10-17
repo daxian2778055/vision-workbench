@@ -11,6 +11,13 @@
 class QThread;
 class QSqlQuery;
 
+// 读侧判定的返回类型：把「今天做不出这条判定」保留成第三种可能。
+// 为什么不能是 bool：false 同时说得出「出厂口令已改掉」与「用户表读不到」，
+// 而这两个方向一个该放开写操作闸、一个该把它钉死。空表同理，既能说「还没有账户」
+// 又能说「读不到账户」，后一次判定若走首装分支就是凭空建一个 Admin 并当场登录进去。
+enum class AdminPasswordState { InUse, Retired, Unreadable };
+enum class AccountSurface { HasAccounts, NoneYet, Unreadable };
+
 /// \u62A5\u8B66\u8BB0\u5F55
 struct AlarmRecord {
     int id = 0;
@@ -66,17 +73,29 @@ public:
 
     // ---- \u7528\u6237\u7BA1\u7406 ----
     bool addUser(const QString &name, const QString &password, const QString &role);
-    bool authenticateUser(const QString &name, const QString &password) const;
+    /// 校验口令。readFailed 非空时告知道调用方「这次判定没能做出来」：
+    /// 库读不到与「用户名或口令错」是两件事，前者不得显示成后者——原实现只有 false 一种结果，
+    /// 于是一次 database is locked 报成「密码错误」，还被当作失败登录写进操作日志。
+    bool authenticateUser(const QString &name, const QString &password,
+                          bool *readFailed = nullptr) const;
     QList<UserRecord> queryUsers() const;
+
+    /// 账户面三态：有账户 / 确实一个都没有 / 今天读不出来。登录页据此决定走
+    /// 「首次使用初始化管理员」还是走认证。为什么不能就地用 queryUsers().isEmpty()：
+    /// 读失败交回来的同样是空表，而那条分支的动作是创建一个 Admin 并直接给它 Admin 会话。
+    AccountSurface accountSurface() const;
     bool removeUser(const QString &name);
 
     /// 覆盖指定用户的口令（加盐迭代哈希后写回）。
     /// 返回 false：数据库写入失败**或该用户不存在**（影响 0 行）——调用方必须把失败显示出来。
     bool changeUserPassword(const QString &name, const QString &newPassword);
 
-    /// 出厂默认口令是否仍在使用：admin 账户的当前哈希能匹配上口令 "admin" 即为 true。
+    /// 出厂默认口令判定：InUse = admin 账户的哈希仍能匹配口令 "admin"；
+    /// Retired = 已改掉、或读通了而根本没有 admin 账户；Unreadable = 这条判定今天做不出来。
     /// 口令字面量只出现在这一处，避免各处调用 authenticateUser("admin","admin")。
-    bool isFactoryAdminPasswordInUse() const;
+    /// 为什么原来是 bool：false 既说「已改掉」也说「读不到」，而调用方拿到 false 就把写操作闸放开
+    /// ——这道闸存在的唯一目的就是拦住出厂口令，被一次读失败解开等于没有这道闸。
+    AdminPasswordState adminPasswordState() const;
 
     // ---- \u64CD\u4F5C\u65E5\u5FD7 ----
     void logOperation(const QString &user, const QString &action, const QString &detail);
@@ -96,7 +115,10 @@ public:
     /// 调用方拿到 false 之后必须把它显示出来（判红原因、状态栏、日志），不能只当布尔用。
     /// 口径：串里记的是**主失败**（调用方据以返回 false 的那一步）；回滚/收尾这类二次动作
     /// 的失败只进调试日志，不覆盖它，否则现场看到的原因是副作用而不是丢数据的那一步。
-    /// 可依赖的契约：写库函数凡返回 false，本串都已先写好——调用方直接显示即可，不必判空。
+    /// 可依赖的契约：写库函数凡返回 false、读侧凡 prepare 或 exec 失败，本串都已先写好
+    /// ——调用方直接显示即可，不必判空。
+    /// 读族的 exec 那一半此前是断的：六处里只有 queryUsers 接了 exec 留痕，另五处仍是
+    /// `if (!q.exec()) return ...;`，于是「空表」与「上一笔写失败留下的旧原因」能一起到界面。
     QString lastDatabaseError() const;
 
     /// \u6E05\u7406\u8FC7\u671F\u6570\u636E\uFF1A\u5220\u9664\u6309\u65E5\u671F\u8FC7\u4E8E\u4FDD\u7559\u5929\u6570\u7684\u62A5\u8B66/\u68C0\u6D4C\u7ED3\u679C/\u64CD\u4F5C\u65E5\u5FD7\u8BB0\u5F55
@@ -156,6 +178,11 @@ private:
     /// **调用方必须已持有 s_dbMutex。**
     bool prepareRead(QSqlQuery &q, const QSqlDatabase &db,
                      const QString &sql, const QString &op) const;
+
+    /// 读侧同一个 exec 判据：失败先留痕再交回 false，返回值语义不变（空表 / 登录失败）。
+    /// 抽成一处的理由与 prepareRead 同一条：判据只有一份，不会出现「修了一处忘了另一处」。
+    /// **调用方必须已持有 s_dbMutex。**
+    bool execRead(QSqlQuery &q, const QSqlDatabase &db, const QString &op) const;
 
     mutable QString m_lastDatabaseError;   ///< 最近一次失败诊断（由 s_dbMutex 保护的调用方写）
     QString m_dbPath;

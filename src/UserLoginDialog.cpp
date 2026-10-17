@@ -100,9 +100,11 @@ void UserLoginDialog::setupUI()
     });
     connect(m_confirmPasswordEdit, &QLineEdit::returnPressed, this, &UserLoginDialog::onLogin);
 
-    // 首次使用（空用户表）：进入管理员初始化模式
+    // 首次使用（读通了而确实一个账户都没有）：进入管理员初始化模式。
+    // 判据走 accountSurface()：读失败交回的也是空表，而这条分支摆出来的是
+    // 「创建管理员并当场登录」——那一次判定的方向是凭空得到一个 Admin 会话。
     auto *db = AppDatabase::instance();
-    if (!db->databasePath().isEmpty() && db->queryUsers().isEmpty()) {
+    if (!db->databasePath().isEmpty() && db->accountSurface() == AccountSurface::NoneYet) {
         m_confirmPasswordEdit->show();
         m_loginButton->setText(QStringLiteral("\u521B\u5EFA\u7BA1\u7406\u5458\u5E76\u767B\u5F55"));
         m_statusLabel->setText(QStringLiteral("\u9996\u6B21\u4F7F\u7528\uFF1A\u8BF7\u8BBE\u7F6E\u521D\u59CB\u7BA1\u7406\u5458\u8D26\u53F7\uFF08\u5BC6\u7801\u81F3\u5C11 6 \u4F4D\uFF09"));
@@ -138,16 +140,28 @@ void UserLoginDialog::onLogin()
         return;
     }
 
-    // 首次使用：空用户表 → 创建初始管理员
-    if (db->queryUsers().isEmpty()) {
+    // 首次使用：读通了而确实没有账户 → 创建初始管理员
+    const AccountSurface surface = db->accountSurface();
+    if (surface == AccountSurface::NoneYet) {
         if (initFirstAdmin(username, password)) {
             accept();
         }
         return;
     }
+    if (surface == AccountSurface::Unreadable) {
+        // 读不到用户表时既不能走首装（那是凭空建 Admin 的一条路），也不能当口令错。
+        m_statusLabel->setText(QStringLiteral("读不到用户表，无法登录，也无法确认是否首次使用。")
+                               + QStringLiteral("\n") + db->lastDatabaseError());
+        m_statusLabel->setStyleSheet("color: red;");
+        m_statusLabel->show();
+        db->logOperation(username, QStringLiteral("登录受阻"),
+                         QStringLiteral("用户表读不到：") + db->lastDatabaseError());
+        return;
+    }
 
-    // 正常认证
-    if (db->authenticateUser(username, password)) {
+    // 正常认证。readFailed 把「库读不到」与「口令错」分开——原先 false 只有一种显示。
+    bool readFailed = false;
+    if (db->authenticateUser(username, password, &readFailed)) {
         m_loggedInUser = username;
         auto users = db->queryUsers();
         for (const auto &u : users) {
@@ -162,6 +176,17 @@ void UserLoginDialog::onLogin()
         return;
     }
 
+    if (readFailed) {
+        // 判定没做出来不等于口令错：报「密码错误」会把一次数据库故障变成操作员反复试错，
+        // 还在审计里留下一条根本不成立的失败登录。
+        m_statusLabel->setText(QStringLiteral("数据库读不到，无法校验口令：")
+                               + db->lastDatabaseError());
+        m_statusLabel->setStyleSheet("color: red;");
+        m_statusLabel->show();
+        db->logOperation(username, QStringLiteral("登录受阻"),
+                         QStringLiteral("口令校验读不到数据库：") + db->lastDatabaseError());
+        return;
+    }
     m_statusLabel->setText(QStringLiteral("\u7528\u6237\u540D\u6216\u5BC6\u7801\u9519\u8BEF"));
     m_statusLabel->setStyleSheet("color: red;");
     m_statusLabel->show();
@@ -185,8 +210,9 @@ bool UserLoginDialog::initFirstAdmin(const QString &username, const QString &pas
     }
 
     auto *db = AppDatabase::instance();
-    // 竞态保护：仅在确实没有用户时创建
-    if (!db->queryUsers().isEmpty()) {
+    // 竞态保护：仅在确实没有用户时创建。判据同样是三态——读不出来时一律不建账户，
+    // 因为「读不出来」在界面这边长得和「还没有用户」一模一样。
+    if (db->accountSurface() != AccountSurface::NoneYet) {
         m_statusLabel->setText(QStringLiteral("\u7528\u6237\u5DF2\u521B\u5EFA\uFF0C\u8BF7\u76F4\u63A5\u767B\u5F55"));
         m_statusLabel->setStyleSheet("color: red;");
         m_statusLabel->show();

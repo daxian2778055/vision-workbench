@@ -96,6 +96,12 @@ private slots:
     // 必须排在 testWriteFailureIsVisibleAndNotMisleading 之前——那一腿要 DROP
     // inspection_results，本腿 DROP users 之后要把它建回来，两张表互不相干。
     void testReadFailureIsAlsoVisible();
+    // 第九轮复核 P1-1/P1-2/P1-3：读侧的三态判定与 exec 留痕。
+    // 排在 testReadFailureIsAlsoVisible 之后、testWriteFailureIsVisibleAndNotMisleading 之前：
+    // 这三条只动 users 表，自己造夹具也自己建回来，与 inspection_results 那条互不相干。
+    void testAdminPasswordStateIsThreeValued();
+    void testAccountSurfaceSeparatesEmptyFromUnreadable();
+    void testReadFailureIsNotMistakenForWrongPassword();
     // ⚠️ 必须排在最后：本腿会 DROP 掉 inspection_results 来复现"表不在"的写失败路径
     void testWriteFailureIsVisibleAndNotMisleading();
 
@@ -109,6 +115,28 @@ void DatabaseTest::initTestCase()
     // 指向临时库文件，避免污染真实 data/visionflow.db
     QVERIFY2(AppDatabase::instance()->initialize(m_tempDir.filePath(QStringLiteral("test.db"))),
              "数据库初始化失败");
+}
+
+namespace {
+/// users 表的 DDL：与 AppDatabase::createTables 里那一份逐字节同一句。
+/// 三条新腿都要「把表建回来」，抄三份就会走偏，所以留一处。
+const QString kUsersDdl = QStringLiteral(
+    "CREATE TABLE users ("
+    "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "  name TEXT UNIQUE NOT NULL,"
+    "  password_hash TEXT NOT NULL,"
+    "  role TEXT NOT NULL DEFAULT 'Operator',"
+    "  created_at DATETIME DEFAULT CURRENT_TIMESTAMP)");
+
+/// 在探针连接上跑一条语句：成功回空串，失败回驱动原文（当断言消息用）。
+QString probeExec(QSqlDatabase &probe, const QString &sql)
+{
+    QSqlQuery q(probe);
+    if (q.exec(sql)) {
+        return QString();
+    }
+    return q.lastError().text();
+}
 }
 
 void DatabaseTest::testMainThreadWriteRead()
@@ -290,11 +318,13 @@ void DatabaseTest::testReadFailureIsAlsoVisible()
     QVERIFY2(usersWhy.contains(QStringLiteral("op=queryUsers")), qPrintable(usersWhy));
     QVERIFY2(usersWhy.contains(QStringLiteral("no such table: users")), qPrintable(usersWhy));
 
-    QVERIFY2(!db->isFactoryAdminPasswordInUse(),
-             "users 表已删除，isFactoryAdminPasswordInUse 却报 true");
+    // U-97 那时这条只能断言「不是 true」——因为 false 同时说得出「已改掉」和「读不到」。
+    // 判据换成三态后必须点名 Unreadable，否则那两种意思又一次共用一个答案。
+    QVERIFY2(db->adminPasswordState() == AdminPasswordState::Unreadable,
+             "users 表已删除，adminPasswordState 却交出了 InUse/Retired 这种实答案");
     const QString factoryWhy = db->lastDatabaseError();
-    qDebug().noquote() << QStringLiteral("P1-READ-FAILURE isFactoryAdmin:") << factoryWhy;
-    QVERIFY2(factoryWhy.contains(QStringLiteral("op=isFactoryAdminPasswordInUse")),
+    qDebug().noquote() << QStringLiteral("P1-READ-FAILURE adminPasswordState:") << factoryWhy;
+    QVERIFY2(factoryWhy.contains(QStringLiteral("op=adminPasswordState")),
              qPrintable(factoryWhy));
     QVERIFY2(factoryWhy.contains(QStringLiteral("no such table: users")), qPrintable(factoryWhy));
 
@@ -332,6 +362,155 @@ void DatabaseTest::testReadFailureIsAlsoVisible()
     QVERIFY2(db->removeUser(QStringLiteral("p1_after_restore")),
              "读路径恢复之后 removeUser 却失败");
     QCOMPARE(db->queryUsers().size(), 0);
+}
+
+// 出厂口令判定的三形各自要有一条能推动它的断言。这条判据是写操作闸的唯一入口，
+// 旧口径里 false 一次说出「已改掉」和「读不到」两种意思，后者会把闸放开。
+void DatabaseTest::testAdminPasswordStateIsThreeValued()
+{
+    AppDatabase *db = AppDatabase::instance();
+    QSqlDatabase probe = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                  QStringLiteral("p13_probe_state"));
+    probe.setDatabaseName(db->databasePath());
+    QVERIFY2(probe.open(), qPrintable(probe.lastError().text()));
+
+    QVERIFY(probeExec(probe, QStringLiteral("DROP TABLE IF EXISTS users")).isEmpty());
+    QVERIFY(probeExec(probe, kUsersDdl).isEmpty());
+    // ① 读到了，确实在用：出厂哈希由 createPasswordHash 现做，不靠上一腿留下的行
+    QVERIFY(probeExec(probe, QStringLiteral(
+        "INSERT INTO users (name, password_hash, role) VALUES ('admin', '%1', 'Admin')")
+        .arg(AppDatabase::createPasswordHash(QStringLiteral("admin")))).isEmpty());
+    const bool inUse = db->adminPasswordState() == AdminPasswordState::InUse;
+    QVERIFY2(inUse, "刚播种成 admin/admin 却读不出「出厂口令在用」");
+
+    // ② 读到了，确实没在用：把口令改掉，判定必须跟着翻面
+    QVERIFY2(db->changeUserPassword(QStringLiteral("admin"), QStringLiteral("Rk7!retiredOnce")),
+             "改口令失败，本腿的第二个形状就没有夹具");
+    const bool retired = db->adminPasswordState() == AdminPasswordState::Retired;
+    QVERIFY2(retired, "口令已改掉却读不出 Retired（那 InUse 这一格也无从信）");
+
+    // ③ 判定做不出来：表整个不在。
+    // DROP 之前先把此刻那条串抄下来：lastDatabaseError() 的成功路径不清空，而本套件前面已有
+    // 一条腿写过 op=adminPasswordState —— 只断言 contains(op=) 会被上一格留下的旧串满足（A1 那臂
+    // 摘掉 exec 留痕时这条腿就是不红的）。要求新串与旧串不同，这一格才说的是「这次」。
+    const QString staleBeforeMissing = db->lastDatabaseError();
+    QVERIFY(probeExec(probe, QStringLiteral("DROP TABLE users")).isEmpty());
+    const AdminPasswordState unreadable = db->adminPasswordState();
+    const QString whyUnreadable = db->lastDatabaseError();
+    qDebug().noquote() << QStringLiteral("P13-ADMIN-STATE")
+                       << QStringLiteral("in_use=%1 retired=%2 unreadable=%3")
+                              .arg(inUse ? "yes" : "no")
+                              .arg(retired ? "yes" : "no")
+                              .arg(unreadable == AdminPasswordState::Unreadable ? "yes" : "no")
+                              << whyUnreadable;
+    QVERIFY2(unreadable == AdminPasswordState::Unreadable,
+             "users 表已不存在，判定却交出了一个实答案（闸会照那个答案放开）");
+    QVERIFY2(whyUnreadable.contains(QStringLiteral("op=adminPasswordState")),
+             qPrintable(whyUnreadable));
+    QVERIFY2(whyUnreadable != staleBeforeMissing,
+             "读不到时交回的还是上一格那条旧串——本轮接上的正是这一格的留痕");
+
+    // ④ 恢复对照：表建回来判定重新做得出来——没有这一格，③ 只是「永远判不出」
+    QVERIFY(probeExec(probe, kUsersDdl).isEmpty());
+    QVERIFY2(db->adminPasswordState() == AdminPasswordState::Retired,
+             "表建回来（空表）应读得出 Retired，本腿前面对 ③ 的判定才不是环境假象");
+
+    probe.close();
+    QSqlDatabase::removeDatabase(QStringLiteral("p13_probe_state"));
+}
+
+// 登录页那条「首次使用」分支的判据。空表与读不到都必须能被区分开：
+// 走错方向的后果是凭空建一个 Admin 账户并当场给它 Admin 会话。
+void DatabaseTest::testAccountSurfaceSeparatesEmptyFromUnreadable()
+{
+    AppDatabase *db = AppDatabase::instance();
+    QSqlDatabase probe = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                  QStringLiteral("p13_probe_surface"));
+    probe.setDatabaseName(db->databasePath());
+    QVERIFY2(probe.open(), qPrintable(probe.lastError().text()));
+
+    QVERIFY(probeExec(probe, QStringLiteral("DROP TABLE IF EXISTS users")).isEmpty());
+    QVERIFY(probeExec(probe, kUsersDdl).isEmpty());
+    const bool emptyIsNone = db->accountSurface() == AccountSurface::NoneYet;
+    QVERIFY2(emptyIsNone, "空 users 表读不出 NoneYet：首装分支从此永远进不去（那也是另一种错）");
+
+    // 有账户：同一张表里插一行，判据必须翻面（与上一格只差「表里有没有行」）
+    QVERIFY(probeExec(probe, QStringLiteral(
+        "INSERT INTO users (name, password_hash, role) VALUES ('surface', 'x', 'Operator')")).isEmpty());
+    const bool hasOne = db->accountSurface() == AccountSurface::HasAccounts;
+    QVERIFY2(hasOne, "表里有一行却读不出 HasAccounts");
+
+    // 读不出来：整张表不在。同上一条腿：先抄下此刻的旧串，再要求新串与它不同。
+    const QString staleBeforeSurface = db->lastDatabaseError();
+    QVERIFY(probeExec(probe, QStringLiteral("DROP TABLE users")).isEmpty());
+    const AccountSurface unreadable = db->accountSurface();
+    const QString why = db->lastDatabaseError();
+    qDebug().noquote() << QStringLiteral("P13-ACCOUNT-SURFACE")
+                       << QStringLiteral("empty_none=%1 one_has=%2 missing_unreadable=%3")
+                              .arg(emptyIsNone ? "yes" : "no")
+                              .arg(hasOne ? "yes" : "no")
+                              .arg(unreadable == AccountSurface::Unreadable ? "yes" : "no")
+                              << why;
+    QVERIFY2(unreadable == AccountSurface::Unreadable,
+             "users 表已不存在，accountSurface 却与「一个账户都没有」共用一个答案");
+    QVERIFY2(why.contains(QStringLiteral("op=accountSurface")), qPrintable(why));
+    QVERIFY2(why != staleBeforeSurface,
+             "读不出来的那一格交回的是上一格的旧串，不是这次的判定");
+
+    // 恢复对照
+    QVERIFY(probeExec(probe, kUsersDdl).isEmpty());
+    QVERIFY2(db->accountSurface() == AccountSurface::NoneYet,
+             "表建回来应重新读得出 NoneYet");
+
+    probe.close();
+    QSqlDatabase::removeDatabase(QStringLiteral("p13_probe_surface"));
+}
+
+// authenticateUser 的 false 有两种来历，界面只能显示其中一种。
+// 反向对照只差「库能不能读」这一处：健康库上的错口令必须仍然报 readFailed=no。
+void DatabaseTest::testReadFailureIsNotMistakenForWrongPassword()
+{
+    AppDatabase *db = AppDatabase::instance();
+    QSqlDatabase probe = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                  QStringLiteral("p13_probe_auth"));
+    probe.setDatabaseName(db->databasePath());
+    QVERIFY2(probe.open(), qPrintable(probe.lastError().text()));
+
+    QVERIFY(probeExec(probe, QStringLiteral("DROP TABLE IF EXISTS users")).isEmpty());
+    bool readFailedBad = false;
+    const bool rejectedNoDb = !db->authenticateUser(QStringLiteral("admin"),
+                                                   QStringLiteral("whatever"), &readFailedBad);
+    QVERIFY2(rejectedNoDb, "库读不到却登录成功");
+    QVERIFY2(readFailedBad,
+             "读不到用户表被报成「口令错」：现场会把一次数据库故障当成操作员打错字");
+
+    // 反向对照：表在、账户在、口令打错 —— 这时 readFailed 必须为假
+    QVERIFY(probeExec(probe, kUsersDdl).isEmpty());
+    QVERIFY(probeExec(probe, QStringLiteral(
+        "INSERT INTO users (name, password_hash, role) VALUES ('admin', '%1', 'Admin')")
+        .arg(AppDatabase::createPasswordHash(QStringLiteral("S3cret!NotFactory")))).isEmpty());
+    bool readFailedWrong = true;
+    const bool rejectedWrongPw = !db->authenticateUser(QStringLiteral("admin"),
+                                                      QStringLiteral("wrong-password"),
+                                                      &readFailedWrong);
+    bool readFailedOk = true;
+    const bool accepted = db->authenticateUser(QStringLiteral("admin"),
+                                              QStringLiteral("S3cret!NotFactory"),
+                                              &readFailedOk);
+    qDebug().noquote() << QStringLiteral("P13-AUTH-OUTLET")
+                       << QStringLiteral("nodb_readfailed=%1 wrongpw_readfailed=%2 "
+                                         "wrongpw_rejected=%3 good_accepted=%4 good_readfailed=%5")
+                              .arg(readFailedBad ? "yes" : "no")
+                              .arg(readFailedWrong ? "yes" : "no")
+                              .arg(rejectedWrongPw ? "yes" : "no")
+                              .arg(accepted ? "yes" : "no")
+                              .arg(readFailedOk ? "yes" : "no");
+    QVERIFY2(rejectedWrongPw && !readFailedWrong,
+             "口令打错却被报成读不到（那是把另一个方向折了，同样是不分三态）");
+    QVERIFY2(accepted && !readFailedOk, "健康库上的正确口令应登录成功且不带读失败");
+
+    probe.close();
+    QSqlDatabase::removeDatabase(QStringLiteral("p13_probe_auth"));
 }
 
 void DatabaseTest::testWriteFailureIsVisibleAndNotMisleading()
