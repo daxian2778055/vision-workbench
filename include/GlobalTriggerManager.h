@@ -71,7 +71,10 @@ public:
 
     // ---- 序列化 ----
     QJsonObject toJson() const;
-    void fromJson(const QJsonObject &json);
+    /// 加载面与配置面同一枚前缀歧义闸（U-154）：空串源（万用前缀）与互为前缀的字符串条目
+    /// 整条不进，逐条拒因走 rejected 留痕给调用方（同 CalibrationManager 的对账形状）；
+    /// 同源覆盖照旧语义（换流程、旧表项携 id 一并撤下）。事件触发不走前缀匹配，不经此闸。
+    void fromJson(const QJsonObject &json, QStringList *rejected = nullptr);
 
     /// 当前已注册流程名列表（供对话框枚举真实流程名，避免按页签序号猜名，S5）。
     QStringList registeredFlowNames() const;

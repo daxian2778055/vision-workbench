@@ -412,7 +412,7 @@ QJsonObject GlobalTriggerManager::toJson() const
     return root;
 }
 
-void GlobalTriggerManager::fromJson(const QJsonObject &json)
+void GlobalTriggerManager::fromJson(const QJsonObject &json, QStringList *rejected)
 {
     QMutexLocker locker(&m_mutex);
 
@@ -421,6 +421,7 @@ void GlobalTriggerManager::fromJson(const QJsonObject &json)
     m_eventTriggers.clear();
 
     QJsonArray arr = json[QStringLiteral("triggers")].toArray();
+    int orderedIndex = 0;
     for (const auto &v : arr) {
         QJsonObject obj = v.toObject();
         TriggerEntry e;
@@ -430,6 +431,7 @@ void GlobalTriggerManager::fromJson(const QJsonObject &json)
         e.flowName = obj[QStringLiteral("flowName")].toString();
         e.enabled = obj[QStringLiteral("enabled")].toBool(true);
         e.triggerCount = obj[QStringLiteral("triggerCount")].toInt();
+        ++orderedIndex;
 
         if (e.id.isEmpty()) {
             e.id = QStringLiteral("trg_") + QString::number(m_nextId++);
@@ -439,11 +441,44 @@ void GlobalTriggerManager::fromJson(const QJsonObject &json)
             if (num >= m_nextId) m_nextId = num + 1;
         }
 
-        m_allTriggers[e.id] = e;
         if (e.type == STRING_TRIGGER) {
+            // 加载面走与配置面（setStringTrigger 的前缀歧义闸，U-154）同一枚门。
+            // 空串源是万用前缀——startsWith("") 对任何输入都成立，等于给这枚流程挂上
+            // 「来任何数据都起」的线；旧账直接进表，此格当场拒收。
+            if (e.triggerSource.isEmpty()) {
+                if (rejected) {
+                    rejected->append(QStringLiteral("%1 字符串触发源为空（空串前缀匹配任何输入）未装")
+                                         .arg(orderedIndex));
+                }
+                continue;
+            }
+            // 互为前缀的两源命中谁由散列序定——批量输入按序逐条对表，冲突者整条不进
+            // （连同 id 从 allTriggers 撤下），拒因留痕，静默少装的现场对应物是
+            // 「方案打开后触发表短了一截」（同 U-27 标定条的痕迹形状）。
+            bool collide = false;
+            for (auto pit = m_stringTriggers.constBegin(); pit != m_stringTriggers.constEnd(); ++pit) {
+                const QString &installed = pit.key();
+                if (installed == e.triggerSource) {
+                    // 同源覆盖照旧语义（换流程），旧表项携 id 一并撤下，不留幽灵条目
+                    m_allTriggers.remove(pit.value().id);
+                    m_stringTriggers.erase(pit);
+                    break;
+                }
+                if (installed.startsWith(e.triggerSource) || e.triggerSource.startsWith(installed)) {
+                    collide = true;
+                    if (rejected) {
+                        rejected->append(QStringLiteral("%1 触发源「%2」与已装源「%3」互为前缀未装")
+                                             .arg(orderedIndex).arg(e.triggerSource, installed));
+                    }
+                    break;
+                }
+            }
+            if (collide)
+                continue;
             m_stringTriggers[e.triggerSource] = e;
         } else {
             m_eventTriggers[e.triggerSource] = e;
         }
+        m_allTriggers[e.id] = e;
     }
 }

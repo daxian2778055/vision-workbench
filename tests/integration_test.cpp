@@ -149,6 +149,9 @@ private slots:
     void testBusyOtherFlowDoesNotBlockTrigger();
     // 前缀歧义闸：互为前缀的两条触发源在进门处拒绝（命中谁本由散列序决定），精确重设不误伤
     void testStringTriggerPrefixAmbiguityRejected();
+    // fromJson 走配置面同一枚门：空串源（万用前缀）与前缀冲突条目整条不进、逐条留痕；
+    // 同源覆盖照旧语义（旧 id 撤下不留幽灵），事件触发不经前缀闸
+    void testTriggerFromJsonGatesApply();
     void testScriptInterpreterResolvesToAbsolutePath();
     void testImageDisplayResolvePriority();
     void testExecutionStatusController();
@@ -2496,6 +2499,70 @@ void IntegrationTest::testStringTriggerPrefixAmbiguityRejected()
     QCOMPARE(firedSpy.count(), 1);
 
     gtm->removeStringTrigger(QStringLiteral("ShortSeed"));
+}
+
+// 加载面与配置面同一枚门：fromJson 里空串源（万用前缀）与前缀冲突条目整条不进、逐条留痕；
+// 同源覆盖照旧语义且旧 id 连同被拒条目一起不进 allTriggers；事件触发不走前缀闸照常进表。
+// 红臂形状：把 fromJson 的前缀冲突臂摘到（条件恒假）重编，拒因计数与幽灵断言连红。
+void IntegrationTest::testTriggerFromJsonGatesApply()
+{
+    auto *gtm = GlobalTriggerManager::instance();
+    gtm->removeStringTrigger(QStringLiteral("JSeed"));
+    gtm->removeStringTrigger(QStringLiteral("JSort2"));
+
+    QJsonArray arr;
+    auto addEntry = [&arr](const QString &id, int type, const QString &src, const QString &flow) {
+        QJsonObject o;
+        o.insert(QStringLiteral("id"), id);
+        o.insert(QStringLiteral("type"), type);
+        o.insert(QStringLiteral("triggerSource"), src);
+        o.insert(QStringLiteral("flowName"), flow);
+        o.insert(QStringLiteral("enabled"), true);
+        o.insert(QStringLiteral("triggerCount"), 0);
+        arr.append(o);
+    };
+    addEntry(QStringLiteral("trg_j1"), 0, QStringLiteral("JSeed"), QStringLiteral("F1"));   // 入表
+    addEntry(QStringLiteral("trg_j2"), 0, QStringLiteral("J"), QStringLiteral("F2"));       // 前缀冲突：拒
+    addEntry(QStringLiteral("trg_j3"), 0, QStringLiteral("JSort2"), QStringLiteral("F3"));  // 无冲突：入表
+    addEntry(QStringLiteral("trg_j4"), 0, QString(), QStringLiteral("F4"));                 // 空源：拒
+    addEntry(QStringLiteral("trg_j5"), 0, QStringLiteral("JSeed"), QStringLiteral("F1b"));  // 同源覆盖：F1→F1b
+    addEntry(QStringLiteral("trg_ev1"), 1, QStringLiteral("EVT_A"), QStringLiteral("F5"));  // 事件触发不经前缀闸
+
+    QJsonObject json;
+    json.insert(QStringLiteral("triggers"), arr);
+    QStringList rejected;
+    gtm->fromJson(json, &rejected);
+    QCOMPARE(rejected.size(), 2);
+    const QString joined = rejected.join(QLatin1Char(';'));
+    QVERIFY2(joined.contains(QStringLiteral("「J」")), "前缀冲突拒因须双方点名源");
+    QVERIFY2(joined.contains(QStringLiteral("为空")), "空源拒因须点名万发面");
+
+    int seedCount = 0;
+    int sortCount = 0;
+    int evtCount = 0;
+    bool sawGhost = false;
+    QString seedFlow;
+    for (const auto &e : gtm->allTriggers()) {
+        if (e.triggerSource == QStringLiteral("JSeed")) {
+            ++seedCount;
+            seedFlow = e.flowName;
+        }
+        if (e.triggerSource == QStringLiteral("JSort2"))
+            ++sortCount;
+        if (e.triggerSource == QStringLiteral("EVT_A"))
+            ++evtCount;
+        if (e.id == QStringLiteral("trg_j1") || e.id == QStringLiteral("trg_j2")
+            || e.id == QStringLiteral("trg_j4"))
+            sawGhost = true;
+    }
+    QCOMPARE(seedFlow, QStringLiteral("F1b"));
+    QCOMPARE(seedCount, 1);
+    QCOMPARE(sortCount, 1);
+    QCOMPARE(evtCount, 1);
+    QVERIFY2(!sawGhost, "被拒条目与被覆盖的旧条目连 id 都不进 allTriggers");
+
+    gtm->removeStringTrigger(QStringLiteral("JSeed"));
+    gtm->removeStringTrigger(QStringLiteral("JSort2"));
 }
 
 void IntegrationTest::testBusyOtherFlowDoesNotBlockTrigger()

@@ -325,8 +325,17 @@ bool ProjectManager::applyProjectJson(const QJsonObject &root, QList<FlowScene *
         GlobalCameraManager::instance()->fromJson(root[QStringLiteral("cameras")].toObject());
     if (root.contains(QStringLiteral("communication")))
         CommunicationManager::instance()->fromJson(root[QStringLiteral("communication")].toObject());
-    if (root.contains(QStringLiteral("globalTriggers")))
-        GlobalTriggerManager::instance()->fromJson(root[QStringLiteral("globalTriggers")].toObject());
+    if (root.contains(QStringLiteral("globalTriggers"))) {
+        // 同上条标定的痕迹形状（U-27）：加载面与配置面同一枚前缀歧义闸（U-154）——空串源
+        // 与互为前缀的字符串条目在批量输入里整条不进，留痕给现场。静默少装的读数表现是
+        // “方案打开后触发表短了一截”，且下一次保存这些条目会从文件里消失。
+        QStringList triggerRejected;
+        GlobalTriggerManager::instance()->fromJson(root[QStringLiteral("globalTriggers")].toObject(),
+                                                   &triggerRejected);
+        for (const QString &r : triggerRejected)
+            reportLoadNote(QStringLiteral("方案加载：触发条目未装进表 %1").arg(r));
+        m_loadRawLossCount += triggerRejected.size();
+    }
     if (root.contains(QStringLiteral("heartbeat")))
         HeartbeatManager::instance()->fromJson(root[QStringLiteral("heartbeat")].toObject());
     if (root.contains(QStringLiteral("calibrations"))) {
