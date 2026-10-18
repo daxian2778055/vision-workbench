@@ -39,6 +39,20 @@ bool GlobalTriggerManager::setStringTrigger(const QString &triggerChar, const QS
 
     QMutexLocker locker(&m_mutex);
 
+    // 前缀歧义闸：匹配侧（onDataReceived）的语义是「全串等值或前缀命中、首个匹配赢」。
+    // 两条触发源互为前缀时，赢谁取决于散列序——同一输入今天起这条流程、明天起那条，
+    // 而且配置面板上看不出有任何不对。这种配置在进门处拒收，非冲突集零行为变化；
+    // 同键重设（覆盖旧流程）从这条闸旁路走，不误伤。
+    for (auto it = m_stringTriggers.constBegin(); it != m_stringTriggers.constEnd(); ++it) {
+        const QString &other = it.key();
+        if (other == triggerChar) continue;
+        if (other.startsWith(triggerChar) || triggerChar.startsWith(other)) {
+            VFP_DEBUG << "String trigger rejected for prefix ambiguity:"
+                      << triggerChar << "collides with" << other;
+            return false;
+        }
+    }
+
     TriggerEntry entry;
     entry.id = QStringLiteral("str_") + QString::number(m_nextId++);
     entry.type = STRING_TRIGGER;

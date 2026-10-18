@@ -147,6 +147,8 @@ private slots:
     void testBusyTriggerQueuedNotDropped();
     void testSnapshotGuardSurvivesSceneDestruction();   // N-2：场景先亡时句柄释放不得回调已亡场景
     void testBusyOtherFlowDoesNotBlockTrigger();
+    // 前缀歧义闸：互为前缀的两条触发源在进门处拒绝（命中谁本由散列序决定），精确重设不误伤
+    void testStringTriggerPrefixAmbiguityRejected();
     void testScriptInterpreterResolvesToAbsolutePath();
     void testImageDisplayResolvePriority();
     void testExecutionStatusController();
@@ -2463,6 +2465,37 @@ void IntegrationTest::testBusyTriggerQueuedNotDropped()
     gtm->removeStringTrigger(QStringLiteral("GO_BUSY"));
     gtm->unregisterFlow(flowName);
     exec.setFlowScene(nullptr);
+}
+
+// 前缀歧义闸：同一输入「起哪条流程」不再交给散列序。互为前缀的两条触发源在配置门拒绝；
+// 精确重设（同源换流程）与无冲突新源照常放行，放行源的全串等值匹配语义原样。
+// 红臂形状：把进门处那枚-o遍历冲突闸拿掉重编，第二枚起四枚断言连红。
+void IntegrationTest::testStringTriggerPrefixAmbiguityRejected()
+{
+    auto *gtm = GlobalTriggerManager::instance();
+    // 进入即自洁净：消除对单例残留状态的顺序敏感
+    gtm->removeStringTrigger(QStringLiteral("Short"));
+    gtm->removeStringTrigger(QStringLiteral("ShortSeed"));
+    gtm->removeStringTrigger(QStringLiteral("ShortSeedX"));
+    gtm->removeStringTrigger(QStringLiteral("ShortSeedXX"));
+
+    QVERIFY2(gtm->setStringTrigger(QStringLiteral("ShortSeed"), QStringLiteral("PrefixSeedFlow")),
+             "无冲突新源应当放行");
+    QVERIFY2(!gtm->setStringTrigger(QStringLiteral("Short"), QStringLiteral("PrefixSeedFlow")),
+             "新源是既有源的前缀，应被拒");
+    QVERIFY2(!gtm->setStringTrigger(QStringLiteral("ShortSeedX"), QStringLiteral("PrefixSeedFlow")),
+             "既有源是新源的前缀，同样被拒");
+    QVERIFY2(!gtm->setStringTrigger(QStringLiteral("ShortSeedXX"), QStringLiteral("PrefixSeedFlow")),
+             "另一向的前缀同样被拒");
+    QVERIFY2(gtm->setStringTrigger(QStringLiteral("ShortSeed"), QStringLiteral("PrefixSeedFlowRe")),
+             "同键重设走闸旁路（换流程），应放行");
+
+    // 放行源的匹配语义不变：全串等值照常命中（无执行器路径按「匹配即通知」发信号）
+    QSignalSpy firedSpy(gtm, &GlobalTriggerManager::triggerFired);
+    gtm->onDataReceived(QStringLiteral("TEST_DEV"), QByteArray("ShortSeed"));
+    QCOMPARE(firedSpy.count(), 1);
+
+    gtm->removeStringTrigger(QStringLiteral("ShortSeed"));
 }
 
 void IntegrationTest::testBusyOtherFlowDoesNotBlockTrigger()

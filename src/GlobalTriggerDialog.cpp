@@ -123,7 +123,13 @@ void GlobalTriggerDialog::onAddStringTrigger()
         QLineEdit::Normal, defaultTargetFlowName(), &ok);
     if (!ok || flowName.trimmed().isEmpty()) return;
 
-    GlobalTriggerManager::instance()->setStringTrigger(triggerChar.trimmed(), flowName.trimmed());
+    // 返回假只可能是前缀冲突（空参已在前门拦住）：把冲突讲给配置的人，否则消失得无声
+    if (!GlobalTriggerManager::instance()->setStringTrigger(triggerChar.trimmed(), flowName.trimmed())) {
+        QMessageBox::warning(this, QStringLiteral("触发器未添加"),
+                             QStringLiteral("触发源「%1」与既有触发源互为前缀——前缀匹配下命中谁是未定序的，"
+                                            "两个岗位会随机轮换。请先取消关联的既有触发源再配。")
+                                 .arg(triggerChar.trimmed()));
+    }
     refreshTriggerTable();
 }
 
