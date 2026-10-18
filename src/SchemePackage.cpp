@@ -90,11 +90,12 @@ QByteArray SchemePackage::importScheme(const QByteArray &envelope,
         const QByteArray salt = envelope.mid(off, 16); off += 16;
         quint32 iterations = 0;
         getUint32BE(envelope.constData() + off, iterations); off += 4;
-        // 进口限幅（见 SchemePackage.h 注）：夹回 [Min, Max] 再派生。
-        // 派生用的值与写信封时用的值不同 ⇒ 下方 HMAC 必失配，超幅文件被拒收，
-        // 攻击者指定的算力上限被封死；且此判断无例外路径，fail-closed。
-        const quint32 boundedIterations =
-            qBound(kIterationsMin, iterations, kIterationsMax);
+        // 进口先值检后派生（见 SchemePackage.h 注）：本版格式只发 kIterations 一个值，
+        // 其它值（无论超限还是限内 foreign 值）一律在此 O(1) 拒收，一次派生都不付；
+        // 旧的"限幅后派生"仍会把上限额度约 10s 付给恶意文件，这是把那笔尾款退掉。
+        // 判定在 MAC 之前且无例外分支，fail-closed 不受信封任何其它字节影响。
+        if (iterations != kIterationsValid)
+            return QByteArray();
         const QByteArray iv = envelope.mid(off, 16); off += 16;
 
         const int macOffset = envelope.size() - 32;
@@ -105,7 +106,7 @@ QByteArray SchemePackage::importScheme(const QByteArray &envelope,
 
         // 校验口令需在信封里（否则不能解密）；先派生 MAC 密钥验证完整性。
         QByteArray encKey, macKey;
-        SchemeCrypto::deriveKeys(passphrase.toUtf8(), salt, static_cast<int>(boundedIterations), encKey, macKey);
+        SchemeCrypto::deriveKeys(passphrase.toUtf8(), salt, kIterations, encKey, macKey);
 
         QByteArray bodyForMac = envelope.left(macOffset);
         if (SchemeCrypto::hmacSha256(macKey, bodyForMac) != mac)

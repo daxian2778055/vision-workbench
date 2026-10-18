@@ -1,5 +1,12 @@
 # CI/CD 配置和使用指南
 
+> ⚠️ 2026-10-18 就地更正（正文原文照抄保留）：本文是一份"从零搭建"的蓝图，正文描述的作业——
+> 覆盖率（OpenCppCoverage/Codecov）、安全扫描（CodeQL）、性能测试、部署、通知（Slack/Email）、
+> 分支保护里的 static-analysis/code-quality/security-scan 状态检查——在本仓库从未装配过；文中
+> 的 ci-cd.yml 也已随提交 27dcf86 删除。现仓库实际存在的只有两份工作流：`.github/workflows/ci.yml`
+> （构建 + ctest，自托管 runner，fork PR 跳过）与 `.github/workflows/repo-hygiene.yml`（仓库卫生
+> 检查）。请把本文当作建议稿阅读，装配与否属拍板项。
+
 ## 概述
 
 本文档描述了 VisionFlowPlatform 项目的 CI/CD（持续集成/持续部署）配置和使用方法。

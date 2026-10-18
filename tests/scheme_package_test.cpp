@@ -24,6 +24,7 @@ private slots:
     void legacyJsonIsNotEnvelope();
     void oversizedIterationsRejectedAndBounded();
     void iterationsSensitiveToInnerDelta();
+    void foreignInRangeValueRejectedFast();
 };
 
 void SchemePackageTest::aes256EcbKnownAnswer() {
@@ -148,9 +149,9 @@ void SchemePackageTest::legacyJsonIsNotEnvelope() {
 }
 
 // 篡改的不是密文而是 PBKDF2 代数字段：一个恶意加密信封可把它写成 0x7FFFFFFF，
-// 进口先派生后验 MAC，若不限幅会给 GUI 线程套上小时级的 PBKDF2（打开方案的
-// 口令框当场僵死）。限幅后派生密钥与信封 MAC 必然失配 ⇒ 拒收，且拒收耗时
-// 被上限额度封顶。偏移 22 = 4 魔数 + 1 版本 + 1 标志 + 16 盐。
+// 进口先派生后验 MAC，若不做值检会给 GUI 线程套上小时级的 PBKDF2（打开方案的
+// 口令框当场僵死）。同一版格式的写侧只发 kIterations 一个值，进口对其它值在读出
+// 后立即拒收——一次派生都不付。偏移 22 = 4 魔数 + 1 版本 + 1 标志 + 16 盐。
 void SchemePackageTest::oversizedIterationsRejectedAndBounded() {
     const int iterOff = 4 + 1 + 1 + 16;
     const QByteArray json = R"({"fits":1})";
@@ -172,16 +173,16 @@ void SchemePackageTest::oversizedIterationsRejectedAndBounded() {
     bool readonly = false, ok = true;
     const QByteArray out = SchemePackage::importScheme(env, QStringLiteral("pw"), &readonly, &ok);
     const qint64 ms = clock.elapsed();
-    QVERIFY(!ok); // 限幅后派生的密钥与按 0x7FFFFFFF 派生的 MAC 失配
+    QVERIFY(!ok); // 先值检：0x7FFFFFFF 不是本版格式承认的行情
     QVERIFY(out.isEmpty());
-    // 限幅把代价封顶在上限额度量级（本机实测 1M 迭代 ≈ 9.85s，10µs/代）；若哪天
-    // 限幅被拆，这一腿会先撞 ctest 超时再谈别的。阈值给 1.5 倍实测余量。
-    QVERIFY2(ms < 15000,
-             qPrintable(QStringLiteral("oversized iterations import took %1 ms, bound is 15000").arg(ms)));
+    // 早拒收应在毫秒级付完；任何先派生的退回形状在本机都要付约一秒（派生恒用
+    // 写侧值），700ms 的界当场读红，在场的毫秒级给它百倍余量。
+    QVERIFY2(ms < 700,
+             qPrintable(QStringLiteral("oversized iterations import took %1 ms, early-reject bound is 700").arg(ms)));
 }
 
-// 同形的小步对照：只把 000186A0 抬成 000186A1（+1 代），密钥变化，MAC 失配。
-// 钉的是"代数被 MAC 绑定"这一件事本身，顺带证明接受/拒绝只差在原值与 MAC。
+// 同形的小步对照：只把 000186A0 抬成 000186A1（+1 代）。值检下它也是 foreign 值、
+// 与 0x7FFFFFFF 走同一条早拒收；钉的是"接受与否只取决于该字段是否等于写侧行情"。
 void SchemePackageTest::iterationsSensitiveToInnerDelta() {
     const int iterOff = 4 + 1 + 1 + 16;
     const QByteArray json = R"({"delta":1})";
@@ -193,6 +194,30 @@ void SchemePackageTest::iterationsSensitiveToInnerDelta() {
     const QByteArray out = SchemePackage::importScheme(env, QStringLiteral("pw"), &readonly, &ok);
     QVERIFY(!ok);
     QVERIFY(out.isEmpty());
+}
+
+// 值检的 fast-path 钉：限内的 foreign 值（往上限走一眼看不出差别的 500000）同样
+// 必须在读出后立即拒收。若哪天有人把值检退回成任何先派生的形状，本机口径下
+// 一次派生恒约一秒，700ms 的界当场读红；值检在场的读数是毫秒级，余量百倍。
+void SchemePackageTest::foreignInRangeValueRejectedFast() {
+    const int iterOff = 4 + 1 + 1 + 16;
+    const QByteArray json = R"({"cap":1})";
+    QByteArray env = SchemePackage::exportScheme(json, QStringLiteral("pw"), false);
+    // 000186A0 → 0007A120（500000）：大端低三字节各动一次。
+    QCOMPARE(static_cast<quint8>(env[iterOff+1]), quint8(0x01));
+    env[iterOff+1] = static_cast<char>(0x07);
+    env[iterOff+2] = static_cast<char>(0xA1);
+    env[iterOff+3] = static_cast<char>(0x20);
+
+    QElapsedTimer clock;
+    clock.start();
+    bool readonly = false, ok = true;
+    const QByteArray out = SchemePackage::importScheme(env, QStringLiteral("pw"), &readonly, &ok);
+    const qint64 ms = clock.elapsed();
+    QVERIFY(!ok);
+    QVERIFY(out.isEmpty());
+    QVERIFY2(ms < 700,
+             qPrintable(QStringLiteral("in-range foreign value took %1 ms, no-derive bound is 700").arg(ms)));
 }
 
 QTEST_MAIN(SchemePackageTest)

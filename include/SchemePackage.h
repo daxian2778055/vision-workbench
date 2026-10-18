@@ -34,13 +34,15 @@ public:
 
 private:
     static constexpr int kIterations = 100000;
-    // 进口限幅：信封头的 iterations 只是数据，不是"写多少就给你多少算力"。
+    // 进口值检：信封头的 iterations 只是数据，不是"写多少就给你多少算力"。
     // 恶意文件可把它写成 0x7FFFFFFF，而进口先派生密钥后验 MAC（派生在验之前），
     // 一个 2^31 次迭代的 PBKDF2 会把 GUI 线程冻住小时级 = 打开方案的口令框点是僵死。
-    // 限幅 [Min, Max] 后派生的密钥与原文件 MAC（按原值派生）不同 ⇒ 超幅文件
-    // 在支付 1 次上限额度的代价后被原样拒收；writer 恒写 100000，幅内行情不变。
-    static constexpr quint32 kIterationsMin = 1;
-    static constexpr quint32 kIterationsMax = 1000000; // 写侧 10 倍，留未来上调余量
+    // 本版格式的写侧只发过 kIterations 这一个值：进口对任何其它值（含限幅内的任何
+    // 非本值）一律在读出后立即拒收，一行派生都不付——限幅后派生的旧修法仍会把
+    // 上限额度（≈10s）付给恶意文件，先值检把这条 G 路上最后一笔代价也退掉。
+    // 前向余地：未来若抬写侧默认，须同批改 kIterations 与 kFormatVersion（旧读者
+    // 按值检拒收新文件是显式拆版本，不是静默错解）。
+    static constexpr quint32 kIterationsValid = static_cast<quint32>(kIterations);
     static constexpr quint8 kFlagEncrypted = 0x01;
     static constexpr quint8 kFlagReadonly  = 0x02;
 
