@@ -18,10 +18,12 @@
 #include <QThread>
 #include <QTemporaryDir>
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QList>
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QSqlError>   // lastError().text()：只含前两个头时 QSqlError 只有前向声明
+#include <QCryptographicHash>
 
 #include "AppDatabase.h"
 #include "RecordNode.h"
@@ -102,6 +104,10 @@ private slots:
     void testAdminPasswordStateIsThreeValued();
     void testAccountSurfaceSeparatesEmptyFromUnreadable();
     void testReadFailureIsNotMistakenForWrongPassword();
+    // 账户口令 KDF 的旧格式走通腿：无盐 SHA-256（最早的形态）与「盐hex:摘要hex」（2026-10
+    // 之前的加盐自制迭代链）都要能登进来，且登录成功那一刻被换写成 PBKDF2 token。
+    // 只动 users 表、自己造夹具也自己收，排在最后一腿（DROP inspection_results 那条）之前。
+    void testLegacyHashesAuthenticateAndUpgrade();
     // ⚠️ 必须排在最后：本腿会 DROP 掉 inspection_results 来复现"表不在"的写失败路径
     void testWriteFailureIsVisibleAndNotMisleading();
 
@@ -193,9 +199,24 @@ void DatabaseTest::testConcurrentWriters()
 void DatabaseTest::testPasswordHashRoundTrip()
 {
     const QString hash = AppDatabase::createPasswordHash(QStringLiteral("p@ssw0rd"));
-    QVERIFY(hash.contains(QLatin1Char(':')));
+    // token 形：pbkdf2$<轮数>$<盐hex>$<摘要hex>——旧形里那个冒号分隔不再出现在新 token 中
+    QVERIFY2(hash.startsWith(QStringLiteral("pbkdf2$")), qPrintable(hash));
+    QVERIFY2(hash.count(QLatin1Char('$')) == 3, qPrintable(hash));
     QVERIFY(AppDatabase::verifyPassword(QStringLiteral("p@ssw0rd"), hash));
     QVERIFY(!AppDatabase::verifyPassword(QStringLiteral("wrong"), hash));
+
+    // token 里的轮数是数据不是报价：封顶外的一概不进派生（与方案信封进口的先值检同一叙事）。
+    // 钉「任何先派生的退回形状」：把上限拧掉重编，这枚腿读红（封顶外 token 全额付派生）。
+    const QStringList parts = hash.split(QLatin1Char('$'));
+    const QString oversized = QStringLiteral("pbkdf2$999999999$%1$%2").arg(parts[2], parts[3]);
+    QElapsedTimer clock;
+    clock.start();
+    const bool accepted = AppDatabase::verifyPassword(QStringLiteral("p@ssw0rd"), oversized);
+    const qint64 elapsed = clock.elapsed();
+    QVERIFY2(!accepted, "封顶外的轮数 token 不该通过校验");
+    QVERIFY2(elapsed < 700,
+             qPrintable(QStringLiteral("封顶外 token 耗时 %1 ms，先值检后派生的界是 700 ms")
+                            .arg(elapsed)));
 }
 
 // 一轮执行的检测结果应当整批落到**一个事务**里（连续模式下每节点一次自动提交是主要固定开销）
@@ -511,6 +532,113 @@ void DatabaseTest::testReadFailureIsNotMistakenForWrongPassword()
 
     probe.close();
     QSqlDatabase::removeDatabase(QStringLiteral("p13_probe_auth"));
+}
+
+void DatabaseTest::testLegacyHashesAuthenticateAndUpgrade()
+{
+    AppDatabase *db = AppDatabase::instance();
+    const QString path = db->databasePath();
+    QVERIFY2(!path.isEmpty(), "databasePath 为空，本腿无从定位库文件");
+
+    // 遗留格式二：无盐单轮 SHA-256（最早的形态）
+    const QString legacy0 = QString::fromLatin1(
+        QCryptographicHash::hash(QStringLiteral("Legacy0!pw").toUtf8(),
+                                 QCryptographicHash::Sha256).toHex());
+    // 遗留格式一：盐 + 12000 轮自制迭代链。测试侧按历史算法复算同一串，
+    // 复算步数与 AppDatabase.cpp 里 stretchHashLegacy 的常量同值：抬那格要同批抬这里。
+    const QByteArray salt =
+        QByteArray::fromHex(QByteArrayLiteral("a1b2c3d4e5f60718293a4b5c6d7e8f90"));
+    QByteArray chain = QCryptographicHash::hash(salt + QStringLiteral("Legacy1!pw").toUtf8(),
+                                                QCryptographicHash::Sha256);
+    for (int i = 1; i < 12000; ++i) {
+        chain = QCryptographicHash::hash(chain + QStringLiteral("Legacy1!pw").toUtf8(),
+                                         QCryptographicHash::Sha256);
+    }
+    const QString legacy1 = QString::fromLatin1(salt.toHex()) + QLatin1Char(':')
+                          + QString::fromLatin1(chain.toHex());
+
+    {
+        QSqlDatabase probe = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                       QStringLiteral("p13_probe_kdf"));
+        probe.setDatabaseName(path);
+        QVERIFY2(probe.open(), qPrintable(probe.lastError().text()));
+        const QString dropErr = probeExec(probe, QStringLiteral("DROP TABLE IF EXISTS users"));
+        QVERIFY2(dropErr.isEmpty(), qPrintable(dropErr));
+        const QString ddlErr = probeExec(probe, kUsersDdl);
+        QVERIFY2(ddlErr.isEmpty(), qPrintable(ddlErr));
+        const QString ins0Err = probeExec(probe, QStringLiteral(
+            "INSERT INTO users (name, password_hash, role) VALUES ('legacy0', '%1', 'Admin')")
+            .arg(legacy0));
+        QVERIFY2(ins0Err.isEmpty(), qPrintable(ins0Err));
+        const QString ins1Err = probeExec(probe, QStringLiteral(
+            "INSERT INTO users (name, password_hash, role) VALUES ('legacy1', '%1', 'Admin')")
+            .arg(legacy1));
+        QVERIFY2(ins1Err.isEmpty(), qPrintable(ins1Err));
+        probe.close();
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("p13_probe_kdf"));
+
+    // 两种旧格式都要能登进来：KDF 换构造不许把现场已存的账户锁在门外
+    bool readFailedL0 = true;
+    const bool okL0 = db->authenticateUser(QStringLiteral("legacy0"),
+                                           QStringLiteral("Legacy0!pw"), &readFailedL0);
+    QVERIFY2(okL0 && !readFailedL0, "旧无盐哈希登不进（KDF 换构造必须带走旧账）");
+    bool readFailedL1 = true;
+    const bool okL1 = db->authenticateUser(QStringLiteral("legacy1"),
+                                           QStringLiteral("Legacy1!pw"), &readFailedL1);
+    QVERIFY2(okL1 && !readFailedL1, "旧自制迭代链哈希登不进（KDF 换构造必须带走旧账）");
+
+    // 登录成功那一刻两行都被换写成 PBKDF2 token
+    {
+        QSqlDatabase probe = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                       QStringLiteral("p13_probe_kdf2"));
+        probe.setDatabaseName(path);
+        QVERIFY2(probe.open(), qPrintable(probe.lastError().text()));
+        QSqlQuery check(probe);
+        QVERIFY2(check.exec(QStringLiteral(
+                     "SELECT name, password_hash FROM users ORDER BY name")),
+                 qPrintable(check.lastError().text()));
+        int seen = 0;
+        bool sawL0 = false;
+        bool sawL1 = false;
+        while (check.next()) {
+            const QString token = check.value(1).toString();
+            const QString name = check.value(0).toString();
+            QVERIFY2(token.startsWith(QStringLiteral("pbkdf2$")),
+                     qPrintable(QStringLiteral("%1 未被换写成 PBKDF2 token：%2")
+                                    .arg(name, token)));
+            if (name == QStringLiteral("legacy0")) sawL0 = true;
+            if (name == QStringLiteral("legacy1")) sawL1 = true;
+            ++seen;
+        }
+        QCOMPARE(seen, 2);
+        QVERIFY2(sawL0 && sawL1, "换写后两行旧账缺行");
+        probe.close();
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("p13_probe_kdf2"));
+
+    // 换写后的第二遍登录走新 token：同一口令原样登进
+    bool readFailedAgain = true;
+    QVERIFY2(db->authenticateUser(QStringLiteral("legacy0"), QStringLiteral("Legacy0!pw"),
+                                  &readFailedAgain) && !readFailedAgain,
+             "换写成 PBKDF2 token 后登不进");
+    QVERIFY2(db->authenticateUser(QStringLiteral("legacy1"), QStringLiteral("Legacy1!pw"),
+                                  &readFailedAgain) && !readFailedAgain,
+             "换写成 PBKDF2 token 后登不进");
+
+    // 收自己：users 表退回空表形状（与邻腿约定的状态）
+    {
+        QSqlDatabase probe = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                       QStringLiteral("p13_probe_kdf3"));
+        probe.setDatabaseName(path);
+        QVERIFY2(probe.open(), qPrintable(probe.lastError().text()));
+        const QString dropErr = probeExec(probe, QStringLiteral("DROP TABLE IF EXISTS users"));
+        QVERIFY2(dropErr.isEmpty(), qPrintable(dropErr));
+        const QString ddlErr = probeExec(probe, kUsersDdl);
+        QVERIFY2(ddlErr.isEmpty(), qPrintable(ddlErr));
+        probe.close();
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("p13_probe_kdf3"));
 }
 
 void DatabaseTest::testWriteFailureIsVisibleAndNotMisleading()

@@ -25,6 +25,9 @@ private slots:
     void oversizedIterationsRejectedAndBounded();
     void iterationsSensitiveToInnerDelta();
     void foreignInRangeValueRejectedFast();
+    // 恒时比较的行为面：等值/单字节差/长度差/双空——四个方向的读数都有据。
+    // 差异位置不进耗时这半条不是墙钟能钉的（见 SchemeCrypto.h 侧注），行为面照钉。
+    void constTimeEqualsBasics();
 };
 
 void SchemePackageTest::aes256EcbKnownAnswer() {
@@ -218,6 +221,25 @@ void SchemePackageTest::foreignInRangeValueRejectedFast() {
     QVERIFY(out.isEmpty());
     QVERIFY2(ms < 700,
              qPrintable(QStringLiteral("in-range foreign value took %1 ms, no-derive bound is 700").arg(ms)));
+}
+
+// 恒时比较的行为面。信封 MAC 校验已从「早退 !=」换成 SchemeCrypto::constTimeEquals；
+// 这里钉四向读数：等值真、单字节差假、长度差假（公共前缀再长也假）、双空真。
+// 时序安全本身是代码评审性质（任何逐字节累计实现都成立），墙钟把它钉不住——
+// 接线的证据走改坏自证面：把 constTimeEquals 短路成恒真重编，篡改/错口令两腿同批读红。
+void SchemePackageTest::constTimeEqualsBasics() {
+    const QByteArray digest = SchemeCrypto::hmacSha256(QByteArrayLiteral("k"), QByteArrayLiteral("m"));
+
+    QVERIFY(SchemeCrypto::constTimeEquals(digest, digest));
+    QByteArray oneByteOff = digest;
+    oneByteOff[17] = static_cast<char>(oneByteOff[17] ^ 0x01);
+    QVERIFY(!SchemeCrypto::constTimeEquals(digest, oneByteOff));
+
+    const QByteArray withPrefix = digest + QByteArrayLiteral("tail");
+    QVERIFY(!SchemeCrypto::constTimeEquals(digest, withPrefix));
+
+    QVERIFY(SchemeCrypto::constTimeEquals(QByteArray(), QByteArray()));
+    QVERIFY(!SchemeCrypto::constTimeEquals(QByteArrayLiteral("a"), QByteArrayLiteral("ab")));
 }
 
 QTEST_MAIN(SchemePackageTest)

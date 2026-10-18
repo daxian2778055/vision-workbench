@@ -1,5 +1,6 @@
 #include "AppDatabase.h"
 #include "AppLog.h"
+#include "SchemeCrypto.h"
 #include "SessionManager.h"
 #include <QSqlQuery>
 #include <QSqlError>
@@ -14,8 +15,18 @@
 static QMutex s_dbMutex;
 
 namespace {
-// 密码拉伸迭代次数：折中安全性与登录耗时（约 10~30ms）
+// 账户口令 KDF：PBKDF2-HMAC-SHA256（SchemeCrypto 里那份实现，与方案信封共源）。
+// 先前的形状是「加盐 12000 轮裸 SHA-256 自制迭代链」——升级的是构造不是成本线，轮数沿用
+// 12000：创建或校验一次仍在几十毫秒量级，登录手感不变。
 constexpr int kHashIterations = 12000;
+// 读侧封顶：token 里的轮数是数据不是报价——0 轮与上限外的 token 一概不进派生（与方案信封
+// 进口的先值检同一叙事，见 SchemePackage.h 的头注）。
+constexpr quint32 kHashIterationsMax = 1000000;
+// token 形：pbkdf2$<轮数>$<盐hex>$<摘要hex>——轮数写进 token 本身，未来抬默认不破旧账
+// （旧 token 按它自报的轮数照常校验；盖在登录路径上的自动迁移把成功登录的旧格式换写成它）。
+const char kKdfTokenPrefix[] = "pbkdf2$";
+// 遗留格式一（2026-10 之前唯一的加盐形态）的轮数，只为旧账校验保留
+constexpr int kHashIterationsLegacy = 12000;
 // 每个账户独立盐的字节数
 constexpr int kSaltBytes = 16;
 
@@ -32,11 +43,12 @@ const QStringList &dbPragmas()
     return kValues;
 }
 
-// 加盐迭代哈希（密码拉伸），抵抗暴力破解与彩虹表
-QByteArray stretchHash(const QByteArray &salt, const QString &password)
+// 遗留格式一的哈希：「加盐 12000 轮裸 SHA-256 自制迭代链」。现写户一律走 PBKDF2（见
+// createPasswordHash），这函数只为已存旧串的登录比对保留，谁也别再拿它造新串。
+QByteArray stretchHashLegacy(const QByteArray &salt, const QString &password)
 {
     QByteArray digest = QCryptographicHash::hash(salt + password.toUtf8(), QCryptographicHash::Sha256);
-    for (int i = 1; i < kHashIterations; ++i) {
+    for (int i = 1; i < kHashIterationsLegacy; ++i) {
         digest = QCryptographicHash::hash(digest + password.toUtf8(), QCryptographicHash::Sha256);
     }
     return digest;
@@ -125,24 +137,44 @@ AppDatabase::~AppDatabase()
 
 QString AppDatabase::createPasswordHash(const QString &password)
 {
-    // 每个账户使用随机盐，保证相同密码哈希不同
+    // 每个账户使用随机盐，保证相同密码哈希不同；token 自报轮数，读侧按 token 走同一份 PBKDF2
     QByteArray salt(kSaltBytes, '\0');
     for (int i = 0; i < salt.size(); ++i) {
         salt[i] = static_cast<char>(QRandomGenerator::global()->bounded(256));
     }
-    return QString::fromLatin1(salt.toHex() + ':' + stretchHash(salt, password).toHex());
+    const QByteArray dk = SchemeCrypto::pbkdf2HmacSha256(password.toUtf8(), salt,
+                                                         kHashIterations, 32);
+    return QString::fromLatin1(kKdfTokenPrefix)
+         + QString::number(kHashIterations)
+         + QStringLiteral("$") + QString::fromLatin1(salt.toHex())
+         + QStringLiteral("$") + QString::fromLatin1(dk.toHex());
 }
 
 bool AppDatabase::verifyPassword(const QString &password, const QString &stored)
 {
+    if (stored.startsWith(QLatin1String(kKdfTokenPrefix))) {
+        // pbkdf2$<轮数>$<盐hex>$<摘要hex>：轮数是 token 的一部分，读侧封顶后进派生
+        const QStringList parts = stored.split(QLatin1Char('$'));
+        if (parts.size() != 4) return false;
+        bool itersOk = false;
+        const quint64 iters = parts[1].toULongLong(&itersOk);
+        if (!itersOk || iters < 1 || iters > quint64(kHashIterationsMax)) return false;
+        const QByteArray salt = QByteArray::fromHex(parts[2].toLatin1());
+        const QByteArray expected = QByteArray::fromHex(parts[3].toLatin1());
+        const QByteArray dk = SchemeCrypto::pbkdf2HmacSha256(
+            password.toUtf8(), salt, static_cast<int>(iters), 32);
+        // 恒时比较（见 SchemeCrypto.h 侧注）：摘要本身不保密，差异位置不该进耗时
+        return SchemeCrypto::constTimeEquals(dk, expected);
+    }
     const int colon = stored.indexOf(QLatin1Char(':'));
     if (colon < 0) {
-        // 兼容旧版无盐 SHA-256 格式（登录成功后由调用方迁移）
+        // 遗留格式二（最早的形态）：无盐 SHA-256（登录成功后由调用方迁移）
         const QByteArray legacy = QCryptographicHash::hash(password.toUtf8(), QCryptographicHash::Sha256);
         return QString::fromLatin1(legacy.toHex()) == stored;
     }
+    // 遗留格式一：盐hex:摘要hex（自制迭代链，登录成功后由调用方迁移）
     const QByteArray salt = QByteArray::fromHex(stored.left(colon).toLatin1());
-    return QString::fromLatin1(stretchHash(salt, password).toHex()) == stored.mid(colon + 1);
+    return QString::fromLatin1(stretchHashLegacy(salt, password).toHex()) == stored.mid(colon + 1);
 }
 
 bool AppDatabase::initialize(const QString &dbPath)
@@ -550,8 +582,8 @@ bool AppDatabase::authenticateUser(const QString &name, const QString &password,
     const QString stored = q.value(1).toString();
     if (!verifyPassword(password, stored)) return false;
 
-    // 兼容旧版：无盐 SHA-256 校验通过后自动迁移为加盐迭代哈希
-    if (!stored.contains(QLatin1Char(':'))) {
+    // 兼容旧版（无盐 SHA-256 或旧的自制迭代链）：登录已验证通过即换写成 PBKDF2 token
+    if (!stored.startsWith(QLatin1String(kKdfTokenPrefix))) {
         QSqlQuery up(db);
         // 迁移失败**不改变登录结果**（口令已验证通过），但必须留痕：静默失败意味着
         // 这条账户一直是无盐哈希，而界面上没人看得出来（原实现 prepare/exec 返回值都没查）。

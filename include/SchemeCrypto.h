@@ -27,6 +27,10 @@ QByteArray hmacSha256(const QByteArray &key, const QByteArray &message);
 QByteArray pbkdf2HmacSha256(const QByteArray &password, const QByteArray &salt,
                             int iterations, int dkLen = 64);
 
+// 恒时等值比较：按较长侧长度定轮数，逐字节异或累计后一次判读，差异位置不进耗时。
+// 用在 MAC/密钥摘要两件"不该把差异位置泄露给耗时"的场合；长度本身不参与保密。
+bool constTimeEquals(const QByteArray &a, const QByteArray &b);
+
 // 便捷：从口令派生 (encKey32, macKey32)。
 void deriveKeys(const QByteArray &password, const QByteArray &salt,
                 int iterations, QByteArray &encKey, QByteArray &macKey);

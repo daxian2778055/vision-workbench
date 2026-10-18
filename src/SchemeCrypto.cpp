@@ -218,6 +218,18 @@ QByteArray hmacSha256(const QByteArray &key, const QByteArray &message) {
     return QCryptographicHash::hash(okey + inner, QCryptographicHash::Sha256);
 }
 
+bool constTimeEquals(const QByteArray &a, const QByteArray &b) {
+    // 轮数取较长侧：两侧任何位置先异都不提前返回，差异逐位折进一并只读一次。
+    const int n = qMax(a.size(), b.size());
+    quint8 diff = 0;
+    for (int i = 0; i < n; ++i) {
+        const quint8 x = i < a.size() ? static_cast<quint8>(a[i]) : quint8(0);
+        const quint8 y = i < b.size() ? static_cast<quint8>(b[i]) : quint8(0);
+        diff = static_cast<quint8>(diff | static_cast<quint8>(x ^ y));
+    }
+    return diff == 0;
+}
+
 QByteArray pbkdf2HmacSha256(const QByteArray &password, const QByteArray &salt,
                             int iterations, int dkLen) {
     const int hLen = 32; // SHA-256

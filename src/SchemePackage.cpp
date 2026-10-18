@@ -105,11 +105,13 @@ QByteArray SchemePackage::importScheme(const QByteArray &envelope,
         const QByteArray mac = envelope.mid(macOffset, 32);
 
         // 校验口令需在信封里（否则不能解密）；先派生 MAC 密钥验证完整性。
+        // 恒时比较（见 SchemeCrypto.h 侧注）：信封摘要 32 字节公开，差异位置不该进耗时。
         QByteArray encKey, macKey;
         SchemeCrypto::deriveKeys(passphrase.toUtf8(), salt, kIterations, encKey, macKey);
 
         QByteArray bodyForMac = envelope.left(macOffset);
-        if (SchemeCrypto::hmacSha256(macKey, bodyForMac) != mac)
+        // 恒时比较（见 SchemeCrypto.h 侧注）：信封摘要 32 字节公开，差异位置不该进耗时。
+        if (!SchemeCrypto::constTimeEquals(SchemeCrypto::hmacSha256(macKey, bodyForMac), mac))
             return QByteArray(); // 口令错误或文件被篡改
 
         QByteArray plain;
