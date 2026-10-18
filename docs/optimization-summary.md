@@ -164,6 +164,8 @@
 #### 5.1 GitHub Actions 配置
 **文件**：`.github/workflows/ci-cd.yml`
 
+> ⚠️ 2026-10-18 就地更正（文中原路名照抄保留）：ci-cd.yml 已于提交 27dcf86 删除，该配置当前不存在；现存工作流为 `.github/workflows/ci.yml` 与 `.github/workflows/repo-hygiene.yml`。文末"配置文件"清单中第 10 条同此口径。
+
 **作业**：
 - 静态分析
 - 代码质量检查

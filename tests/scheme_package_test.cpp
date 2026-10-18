@@ -1,5 +1,6 @@
 #include <QtTest>
 #include <QByteArray>
+#include <QElapsedTimer>
 
 #include "SchemeCrypto.h"
 #include "SchemePackage.h"
@@ -21,6 +22,8 @@ private slots:
     void wrongPassphraseRejected();
     void tamperedCipherRejected();
     void legacyJsonIsNotEnvelope();
+    void oversizedIterationsRejectedAndBounded();
+    void iterationsSensitiveToInnerDelta();
 };
 
 void SchemePackageTest::aes256EcbKnownAnswer() {
@@ -142,6 +145,54 @@ void SchemePackageTest::legacyJsonIsNotEnvelope() {
     const QByteArray json = R"({"scenes":[],"schemaVersion":1})";
     QVERIFY(!SchemePackage::isEnvelope(json));
     QVERIFY(!SchemePackage::peekReadonly(json));
+}
+
+// 篡改的不是密文而是 PBKDF2 代数字段：一个恶意加密信封可把它写成 0x7FFFFFFF，
+// 进口先派生后验 MAC，若不限幅会给 GUI 线程套上小时级的 PBKDF2（打开方案的
+// 口令框当场僵死）。限幅后派生密钥与信封 MAC 必然失配 ⇒ 拒收，且拒收耗时
+// 被上限额度封顶。偏移 22 = 4 魔数 + 1 版本 + 1 标志 + 16 盐。
+void SchemePackageTest::oversizedIterationsRejectedAndBounded() {
+    const int iterOff = 4 + 1 + 1 + 16;
+    const QByteArray json = R"({"fits":1})";
+    QByteArray env = SchemePackage::exportScheme(json, QStringLiteral("pw"), false);
+
+    // 先钉布局：写侧恒把该字段写成 100000（0x000186A0），偏移就位才谈篡改。
+    QCOMPARE(static_cast<quint8>(env[iterOff]),   quint8(0x00));
+    QCOMPARE(static_cast<quint8>(env[iterOff+1]), quint8(0x01));
+    QCOMPARE(static_cast<quint8>(env[iterOff+2]), quint8(0x86));
+    QCOMPARE(static_cast<quint8>(env[iterOff+3]), quint8(0xA0));
+
+    env[iterOff]   = static_cast<char>(0x7f);
+    env[iterOff+1] = static_cast<char>(0xff);
+    env[iterOff+2] = static_cast<char>(0xff);
+    env[iterOff+3] = static_cast<char>(0xff);
+
+    QElapsedTimer clock;
+    clock.start();
+    bool readonly = false, ok = true;
+    const QByteArray out = SchemePackage::importScheme(env, QStringLiteral("pw"), &readonly, &ok);
+    const qint64 ms = clock.elapsed();
+    QVERIFY(!ok); // 限幅后派生的密钥与按 0x7FFFFFFF 派生的 MAC 失配
+    QVERIFY(out.isEmpty());
+    // 限幅把代价封顶在上限额度量级（本机实测 1M 迭代 ≈ 9.85s，10µs/代）；若哪天
+    // 限幅被拆，这一腿会先撞 ctest 超时再谈别的。阈值给 1.5 倍实测余量。
+    QVERIFY2(ms < 15000,
+             qPrintable(QStringLiteral("oversized iterations import took %1 ms, bound is 15000").arg(ms)));
+}
+
+// 同形的小步对照：只把 000186A0 抬成 000186A1（+1 代），密钥变化，MAC 失配。
+// 钉的是"代数被 MAC 绑定"这一件事本身，顺带证明接受/拒绝只差在原值与 MAC。
+void SchemePackageTest::iterationsSensitiveToInnerDelta() {
+    const int iterOff = 4 + 1 + 1 + 16;
+    const QByteArray json = R"({"delta":1})";
+    QByteArray env = SchemePackage::exportScheme(json, QStringLiteral("pw"), false);
+    QCOMPARE(static_cast<quint8>(env[iterOff+3]), quint8(0xA0));
+
+    env[iterOff+3] = static_cast<char>(0xA1);
+    bool readonly = false, ok = true;
+    const QByteArray out = SchemePackage::importScheme(env, QStringLiteral("pw"), &readonly, &ok);
+    QVERIFY(!ok);
+    QVERIFY(out.isEmpty());
 }
 
 QTEST_MAIN(SchemePackageTest)

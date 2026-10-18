@@ -93,7 +93,8 @@
 
 | 配置 | 路径 | 说明 |
 |------|------|------|
-| **GitHub Actions 工作流** | `.github/workflows/ci-cd.yml` | 自动化构建、测试、部署 |
+| **GitHub Actions 工作流（构建/测试）** | `.github/workflows/ci.yml` | 构建 + ctest；自托管 runner，fork PR 跳过 |
+| **GitHub Actions 工作流（仓库卫生）** | `.github/workflows/repo-hygiene.yml` | 仓库卫生检查 |
 
 ---
 
@@ -133,7 +134,7 @@ clang-tidy -p build src/*.cpp
 规则目录:   .cursor\rules/
 SKILLS目录: .cursor\skills\
 MCP配置:   .cursor\mcp.json
-CI/CD配置: .github\workflows\ci-cd.yml
+CI/CD配置: .github\workflows\ci.yml 与 .github\workflows\repo-hygiene.yml
 ```
 
 ---

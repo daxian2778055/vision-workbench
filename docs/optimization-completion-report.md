@@ -70,6 +70,8 @@
 |------|------|------|
 | GitHub Actions 工作流 | `.github/workflows/ci-cd.yml` | 自动化构建、测试、部署 |
 
+> ⚠️ 2026-10-18 就地更正（上表原文照抄保留）：本报告撰写时的 ci-cd.yml 已于提交 27dcf86 删除，现仓库实际存在的工作流是 `.github/workflows/ci.yml`（构建 + ctest，自托管 runner）与 `.github/workflows/repo-hygiene.yml`（仓库卫生检查）。下方"项目结构"一节中的同名文件条目同理不再存在。
+
 ---
 
 ## 项目结构

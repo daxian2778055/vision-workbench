@@ -265,6 +265,9 @@ exit 0
 ```
 
 #### CI/CD 集成
+
+> ⚠️ 2026-10-18 就地更正：下文的 static-analysis.yml 只是一份接入建议，仓库中从未存在该文件，本节描述的独立静态分析工作流尚未落地；现存工作流仅 ci.yml 与 repo-hygiene.yml。建议稿本身保留原文。
+
 创建 `.github/workflows/static-analysis.yml`：
 
 ```yaml
