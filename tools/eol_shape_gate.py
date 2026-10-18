@@ -26,8 +26,10 @@ import subprocess
 import sys
 
 # Frozen at U-126 on the delivered tree: 142 of the tracked files are on disk as LF. Named so a
-# reviewer can see what it froze from without opening that round's archive.
-EXPECTED_TOOL_WRITTEN = 142
+# reviewer can see what it froze from without opening that round's archive. Re-frozen at U-156
+# after the pre-launch cleanup deleted the stale project-audit-report template bundle (initial
+# commit artifact): the live delta of that deletion was exactly 2 frozen-LF files, so 140.
+EXPECTED_TOOL_WRITTEN = 140
 TAG = "EOL"
 
 

@@ -53,7 +53,8 @@ QString SessionManager::writeGateRefusal() const
         return QString();
     }
     return QStringLiteral(
-        "出厂默认口令（admin/admin）仍在使用，配置写入（方案保存/导出、用户管理）已被禁止；"
+        "出厂默认口令（admin/admin）仍在使用，画布与模块编辑、配置写入"
+        "（方案保存/导出、用户管理）已被禁止；"
         "请先修改管理员口令。");
 }
 

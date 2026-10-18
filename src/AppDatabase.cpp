@@ -16,9 +16,10 @@ static QMutex s_dbMutex;
 
 namespace {
 // 账户口令 KDF：PBKDF2-HMAC-SHA256（SchemeCrypto 里那份实现，与方案信封共源）。
-// 先前的形状是「加盐 12000 轮裸 SHA-256 自制迭代链」——升级的是构造不是成本线，轮数沿用
-// 12000：创建或校验一次仍在几十毫秒量级，登录手感不变。
-constexpr int kHashIterations = 12000;
+// 先前的形状是「加盐 12000 轮裸 SHA-256 自制迭代链」——升级的是构造不是成本线（152 行）。
+// 167 行拍板把轮数抬到 60000（仍在本机一次派生 ≈0.6s 量级，与方案信封 100000 轮那条
+// ~1s 的派生成本同档，登录是低频操作）；旧 token 自报轮数照常校验，不破旧账。
+constexpr int kHashIterations = 60000;
 // 读侧封顶：token 里的轮数是数据不是报价——0 轮与上限外的 token 一概不进派生（与方案信封
 // 进口的先值检同一叙事，见 SchemePackage.h 的头注）。
 constexpr quint32 kHashIterationsMax = 1000000;

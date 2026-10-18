@@ -165,6 +165,12 @@ void FactoryPasswordGuardTest::writeGateRefusal_isTheSinglePredicate()
     QVERIFY2(!refusal.isEmpty(), "闸开启时判据必须给出拒绝理由");
     QVERIFY2(refusal.contains(QStringLiteral("admin/admin")),
              "理由要点明是哪把口令没换，否则用户不知道该做什么");
+    QVERIFY2(refusal.contains(QStringLiteral("画布")),
+             "P0：理由须点名画布与模块编辑这格新禁面——内存里改完脚本/参数立刻跑，落库闸拦不住");
+    QVERIFY2(s->canvasEditShouldBeLocked(false),
+             "P0 组合判据：闸开启应锁画布编辑——即便流程没在跑");
+    QVERIFY2(s->canvasEditShouldBeLocked(true),
+             "P0 组合判据：运行态锁图与写闸取或，任一开启都得锁");
 
     s->login(QStringLiteral("root"), QStringLiteral("Admin"));
     QVERIFY(!s->canEditScheme());
@@ -172,6 +178,10 @@ void FactoryPasswordGuardTest::writeGateRefusal_isTheSinglePredicate()
     QVERIFY2(!s->canConfigCommunications(),
              "W-1②：该谓词已接进 MainWindow 的通信菜单，判据不得再退化成死码");
     s->setWritesBlocked(false);
+    QVERIFY2(!s->canvasEditShouldBeLocked(false),
+             "P0 组合判据：闸解除且流程未跑，画布照常可编辑");
+    QVERIFY2(s->canvasEditShouldBeLocked(true),
+             "P0 组合判据：闸解除但流程在跑，仍按运行态锁图");
 }
 
 // W-1①：闸此前只管方案文件；用户管理只灰菜单，而改密弹框一直宣称"用户管理已被禁止"

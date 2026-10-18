@@ -713,11 +713,13 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
     //    · executionResumed：恢复执行 → 立即加锁（否则暂停中改完图点继续，运行中仍是可编辑）
     connect(ex, &FlowExecutor::executionParked, this, [ex]() {
         if (FlowScene *s = ex->flowScene())
-            s->setEditLocked(!ex->allowsGraphEditing());
+            s->setEditLocked(SessionManager::instance()->canvasEditShouldBeLocked(
+                !ex->allowsGraphEditing()));
     });
     connect(ex, &FlowExecutor::executionResumed, this, [ex]() {
         if (FlowScene *s = ex->flowScene())
-            s->setEditLocked(!ex->allowsGraphEditing());
+            s->setEditLocked(SessionManager::instance()->canvasEditShouldBeLocked(
+                !ex->allowsGraphEditing()));
     });
     // 运行控制的状态反馈：暂停请求已受理 / 真停稳 / 已继续（ex == m_executor 门槛，避免后台流程
     // 污染当前状态栏与按钮态）
@@ -1459,6 +1461,16 @@ void MainWindow::openModuleEditor(NodeBase *node)
 {
     if (!node)
         return;
+    // P0：写闸开启期间模块编辑面同禁。落库闸只拦「保存」，而「内存里改完参数/脚本立刻跑」
+    // 这条路在重启前一直有效——闸要拦的正是这一格。已开着的编辑器一并收掉（锁不能从编辑器
+    // 背后关上），拒因取写闸的单一判据串，不另写一份。
+    const QString gateRefusal = SessionManager::instance()->writeGateRefusal();
+    if (!gateRefusal.isEmpty()) {
+        if (ModuleEditorDialog *existing = m_moduleEditors.value(node, nullptr))
+            existing->close();
+        QMessageBox::warning(this, tr("模块编辑被禁止"), gateRefusal);
+        return;
+    }
     if (ModuleEditorDialog *existing = m_moduleEditors.value(node, nullptr)) {
         existing->reloadFromNode();
         existing->raise();
@@ -3158,7 +3170,8 @@ void MainWindow::updateEditLockForCurrentScene()
     // S1 / Phase B 小步：改用执行器判据——"执行线程真在跑"或"暂停已受理但 worker 尚未停稳"才锁；
     // Idle/Stopped 与"已停稳的暂停"都允许编辑。旧的"连续模式一律锁"是钝器：连续模式空闲（未开始/
     // 已停止）时也编辑不了，而暂停恰恰是用户最想改图的时刻（恢复后新图下一轮生效）。
-    scene->setEditLocked(m_executor ? !m_executor->allowsGraphEditing() : false);
+    scene->setEditLocked(SessionManager::instance()->canvasEditShouldBeLocked(
+        m_executor ? !m_executor->allowsGraphEditing() : false));
 }
 
 void MainWindow::onCurrentTabChanged(int index)
@@ -3924,6 +3937,15 @@ void MainWindow::applyPermissionRestrictions()
     if (ui->actionCommMonitor) {
         ui->actionCommMonitor->setEnabled(session->isLoggedIn());
     }
+    // P0：闸/解除之后画布编辑锁随闸重算——运行态锁分量按各场景自己的执行器取，组合判据
+    // 收在 SessionManager::canvasEditShouldBeLocked（与 716/720 的运行态接线同一枚决策件）。
+    for (auto it = m_flowExecutors.constBegin(); it != m_flowExecutors.constEnd(); ++it) {
+        if (FlowScene *scene = it.key()) {
+            FlowExecutor *sceneEx = it.value();
+            scene->setEditLocked(SessionManager::instance()->canvasEditShouldBeLocked(
+                sceneEx ? !sceneEx->allowsGraphEditing() : false));
+        }
+    }
     // 角色变化后同步只读管控（只读态优先于角色权限禁用覆盖保存）
     applyReadonlyUI();
 }
@@ -3946,7 +3968,7 @@ void MainWindow::enforceFactoryPasswordPolicy()
         // 一个静默的禁止会被当成程序故障绕过去，而绕过去的人正是这道闸要拦的那类。
         QMessageBox::warning(this, tr("无法判定出厂口令"),
                              tr("当前读不到用户表，无法确认管理员是否仍在使用出厂默认口令，"
-                                "保存/导出方案、用户增删与通信配置入口保持禁止。\n"
+                                "画布与模块编辑、保存/导出方案、用户增删与通信配置入口保持禁止。\n"
                                 "请先确认数据库可读写，再走「系统 → 修改管理员口令」。\n\n%1")
                                  .arg(AppDatabase::instance()->lastDatabaseError()));
         ui->statusBar->showMessage(
@@ -3959,7 +3981,7 @@ void MainWindow::enforceFactoryPasswordPolicy()
         QDialog dlg(this);
         dlg.setWindowTitle(tr("修改管理员口令"));
         auto *info = new QLabel(tr("管理员账户 admin 仍在使用出厂默认口令，任何人都能免授权登录并修改方案。\n"
-                                   "在改掉口令之前，保存/导出方案、用户增删与通信配置入口均被禁止"
+                                   "在改掉口令之前，画布与模块编辑、保存/导出方案、用户增删与通信配置入口均被禁止"
                                    "（用户增删在落库层拒绝，不只是菜单置灰；流程运行不受影响）。"),
                                 &dlg);
         info->setWordWrap(true);

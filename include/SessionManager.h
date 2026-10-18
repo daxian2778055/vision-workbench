@@ -40,6 +40,13 @@ public:
     /// 写操作闸的拒绝理由；返回空串表示放行。判据与文案**只有这一处定义**：方案落盘
     /// （ProjectManager）、用户表写入（AppDatabase）与菜单可用态都取它，避免各写一份而彼此漂移。
     QString writeGateRefusal() const;
+    /// 画布编辑锁的组合判据（P0）：运行态锁图（产线语义，运行中场景不可改）与写闸
+    /// （出厂口令在用 ⇒ 画布与模块编辑一并禁止，否则"改完就跑"绕过落库闸）取或。
+    /// 决策收在 SessionManager 这一处，MainWindow 的各处接线只是分发它（可单测）。
+    bool canvasEditShouldBeLocked(bool runnerLockedGraph) const
+    {
+        return runnerLockedGraph || m_writesBlocked;
+    }
 
 signals:
     void sessionChanged(const QString &user, const QString &role);
