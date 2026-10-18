@@ -568,6 +568,11 @@ if(TARGET Tesseract::libtesseract)
     target_link_libraries(vfp_core PUBLIC Tesseract::libtesseract)
 endif()
 
+# Windows CNG（迁移态，与 SchemeCrypto 头注同源）：AES 单块原语与 PBKDF2 派生走 BCrypt
+if(WIN32)
+    target_link_libraries(vfp_core PUBLIC bcrypt)
+endif()
+
 # Windows 平台：彻底解决 UTF-8 警告与 PDB 并发写冲突
 if(WIN32 AND MSVC)
     target_compile_options(vfp_core PUBLIC

@@ -29,6 +29,12 @@ private slots:
     // 差异位置不进耗时这半条不是墙钟能钉的（见 SchemeCrypto.h 侧注），行为面照钉。
     void constTimeEqualsBasics();
     void envelopeEmbedsFreshRandomness();
+
+    // 迁移态（172 行）：两只后端逐位对照——显式点名 CNG 的三枚检定先 assert 成功，
+    // 再与自实现（*_Handwritten）同输入比输出逐位；公共入口再与显式 CNG 比一次为接线读数。
+    void ecbCngMatchesHandwritten();
+    void ctrCngMatchesHandwritten();
+    void pbkdf2CngMatchesHandwritten();
 };
 
 void SchemePackageTest::aes256EcbKnownAnswer() {
@@ -258,6 +264,85 @@ void SchemePackageTest::envelopeEmbedsFreshRandomness() {
     const QByteArray a = SchemePackage::exportScheme(json, QStringLiteral("pw"), false);
     const QByteArray b = SchemePackage::exportScheme(json, QStringLiteral("pw"), false);
     QVERIFY2(a != b, "同口令同方案的两枚信封不该逐字节同串（盐/IV 随机位失效）");
+}
+
+namespace {
+// 确定性伪随机场（LCG）：同种子两处跑出逐位相同字节，腿的判据不依赖平台随机数。
+QByteArray brewBytes(int n, quint32 seed) {
+    QByteArray out(n, char(0));
+    for (int i = 0; i < n; ++i) {
+        seed = seed * 1664525u + 1013904223u;
+        out[i] = static_cast<char>((seed >> 17) & 0xff);
+    }
+    return out;
+}
+}
+
+void SchemePackageTest::ecbCngMatchesHandwritten() {
+    // 三侧九组：全零、全一、伪随机各一组。
+    const QList<QByteArray> keySet = {QByteArray(32, char(0x00)), QByteArray(32, char(0xff)),
+                                      brewBytes(32, 7)};
+    const QList<QByteArray> blockSet = {QByteArray(16, char(0x00)), QByteArray(16, char(0xff)),
+                                        brewBytes(16, 13)};
+    for (const QByteArray &key : keySet) {
+        for (const QByteArray &block : blockSet) {
+            QByteArray viaCng, viaHand;
+            QVERIFY2(SchemeCrypto::aes256EcbBlockCng(key, block, viaCng),
+                     "显式点名与公共入口两处 CNG：单块 ECB 加密在对照腿里先要可用");
+            SchemeCrypto::aes256EcbBlockHandwritten(key, block, viaHand);
+            QCOMPARE(viaCng.toHex(), viaHand.toHex());
+            QByteArray viaPublic;
+            SchemeCrypto::aes256EcbBlock(key, block, viaPublic);
+            QCOMPARE(viaPublic.toHex(), viaCng.toHex());
+        }
+    }
+}
+
+void SchemePackageTest::ctrCngMatchesHandwritten() {
+    // 八档长度：空、1、15（半块内）、16、31、41（越块）、1000、16385（越千块）。
+    static const int lens[] = {0, 1, 15, 16, 31, 41, 1000, 16385};
+    const QByteArray key = brewBytes(32, 3);
+    const QByteArray iv = brewBytes(16, 5);
+    for (int len : lens) {
+        const QByteArray plain = brewBytes(len, 11);
+        QByteArray viaCng, viaHand;
+        QVERIFY2(SchemeCrypto::aes256CtrCng(key, iv, plain, viaCng),
+                 "显式点名与公共入口两处 CNG：CTR 面在对照腿里先要可用");
+        SchemeCrypto::aes256CtrHandwritten(key, iv, plain, viaHand);
+        QCOMPARE(viaCng.toHex(), viaHand.toHex());
+        QByteArray viaPublic;
+        SchemeCrypto::aes256Ctr(key, iv, plain, viaPublic);
+        QCOMPARE(viaPublic.toHex(), viaCng.toHex());
+        // 往返对称：同后端加密再解密还原（对 CNG 显式与自实现各验一次）。
+        QByteArray back;
+        SchemeCrypto::aes256CtrHandwritten(key, iv, viaCng, back);
+        QCOMPARE(back, plain);
+        QByteArray backHand;
+        SchemeCrypto::aes256CtrHandwritten(key, iv, viaHand, backHand);
+        QCOMPARE(backHand, plain);
+    }
+}
+
+void SchemePackageTest::pbkdf2CngMatchesHandwritten() {
+    // 六参数组：空口令、空盐、超长口令（HMAC 键 >64 的哈希分支）、dkLen 1（截断面）、
+    // 千轮、60000 轮（与 167 行账户默认同参数）——六格定点。
+    struct Case { QByteArray pass; QByteArray salt; int iters; int dkLen; };
+    const QList<Case> cases = {
+        {QByteArrayLiteral("pass"), QByteArray(), 1, 32},
+        {QByteArray(), QByteArray(), 1, 64},
+        {brewBytes(200, 21), brewBytes(16, 22), 2, 64},
+        {brewBytes(33, 31), brewBytes(24, 32), 3, 1},
+        {brewBytes(10, 41), brewBytes(8, 42), 1000, 32},
+        {QByteArrayLiteral("s3cret"), QByteArrayLiteral("NaCl"), 60000, 64},
+    };
+    for (const Case &c : cases) {
+        QByteArray viaCng, viaHand;
+        QVERIFY2(SchemeCrypto::pbkdf2HmacSha256Cng(c.pass, c.salt, c.iters, c.dkLen, viaCng),
+                 "显式点名 CNG 派生在对照腿里必须可用");
+        viaHand = SchemeCrypto::pbkdf2HmacSha256Handwritten(c.pass, c.salt, c.iters, c.dkLen);
+        QCOMPARE(viaCng.toHex(), viaHand.toHex());
+        QCOMPARE(viaCng.size(), c.dkLen);
+    }
 }
 
 QTEST_MAIN(SchemePackageTest)

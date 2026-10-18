@@ -1,8 +1,14 @@
 #include "SchemeCrypto.h"
 
+#include <QDebug>
 #include <QCryptographicHash>
 #include <array>
 #include <cstdint>
+
+#if defined(Q_OS_WIN)
+#include <windows.h>
+#include <bcrypt.h>
+#endif
 
 namespace SchemeCrypto {
 namespace {
@@ -160,13 +166,9 @@ void incrementCounter(uint8_t ctr[16]) {
     }
 }
 
-} // namespace
-
-void aes256EcbBlock(const QByteArray &key, const QByteArray &block,
-                    QByteArray &out) {
-    out.clear();
-    if (key.size() != 32 || block.size() != 16)
-        return;
+// —— 自实现面（原公共三枚的本体原样搬家）——
+// 照旧供三处使用：*_Handwritten 公共声名（对照腿）、公共三枚在 CNG 不可用时的同字节兜底。
+void handEcbBlock16(const QByteArray &key, const QByteArray &block, QByteArray &out) {
     uint8_t w[kNb * (kNr + 1) * 4];
     keyExpansion(reinterpret_cast<const uint8_t *>(key.constData()), w);
     uint8_t in[16], ek[16];
@@ -175,11 +177,8 @@ void aes256EcbBlock(const QByteArray &key, const QByteArray &block,
     out = QByteArray(reinterpret_cast<const char *>(ek), 16);
 }
 
-void aes256Ctr(const QByteArray &key, const QByteArray &iv,
-               const QByteArray &in, QByteArray &out) {
-    out.clear();
-    if (key.size() != 32 || iv.size() != 16)
-        return;
+void handCtr(const QByteArray &key, const QByteArray &iv,
+             const QByteArray &in, QByteArray &out) {
     uint8_t w[kNb * (kNr + 1) * 4];
     keyExpansion(reinterpret_cast<const uint8_t *>(key.constData()), w);
 
@@ -193,11 +192,230 @@ void aes256Ctr(const QByteArray &key, const QByteArray &iv,
         encryptBlock(ctr, w, ek);
         const int len = qMin(16, n - off);
         for (int i = 0; i < len; ++i)
-            result[off + i] = static_cast<char>(in[off + i] ^
-                                                ek[i]);
+            result[off + i] = static_cast<char>(in[off + i] ^ ek[i]);
         incrementCounter(ctr);
     }
     out = result;
+}
+
+QByteArray handPbkdf2HmacSha256(const QByteArray &password, const QByteArray &salt,
+                                int iterations, int dkLen) {
+    const int hLen = 32; // SHA-256
+    const int l = (dkLen + hLen - 1) / hLen;
+    QByteArray dk;
+    dk.reserve(dkLen);
+    QByteArray saltBlock = salt;
+    for (int i = 1; i <= l; ++i) {
+        // salt || INT_32_BE(i)
+        QByteArray u = hmacSha256(password, saltBlock + QByteArray(1, static_cast<char>((i >> 24) & 0xff))
+                                                     + QByteArray(1, static_cast<char>((i >> 16) & 0xff))
+                                                     + QByteArray(1, static_cast<char>((i >> 8) & 0xff))
+                                                     + QByteArray(1, static_cast<char>(i & 0xff)));
+        QByteArray t = u;
+        for (int j = 1; j < iterations; ++j) {
+            u = hmacSha256(password, u);
+            for (int k = 0; k < hLen; ++k)
+                t[k] = static_cast<char>(t[k] ^ u[k]);
+        }
+        dk.append(t);
+    }
+    return dk.left(dkLen);
+}
+
+#if defined(Q_OS_WIN)
+// —— Windows CNG 后端（迁移态，172 行）——
+// CNG 公开面不提供 AES-CTR 链模式：这里只担两枚原语——单块 ECB 加密与 PBKDF2 派生；
+// CTR 的计数循环留在本侧，与自实现失败路径同形。
+class CngAesSession {
+public:
+    CngAesSession() = default;
+    ~CngAesSession() {
+        if (m_key)
+            ::BCryptDestroyKey(m_key);
+        if (m_alg)
+            ::BCryptCloseAlgorithmProvider(m_alg, 0);
+    }
+    CngAesSession(const CngAesSession &) = delete;
+    CngAesSession &operator=(const CngAesSession &) = delete;
+
+    // 开算法句柄 + 钉 ECB 链模式 + 从 32 字节装出对称密钥，三步一次到位。
+    bool init(const QByteArray &key) {
+        NTSTATUS st = ::BCryptOpenAlgorithmProvider(&m_alg, BCRYPT_AES_ALGORITHM, nullptr, 0);
+        if (!BCRYPT_SUCCESS(st))
+            return false;
+        wchar_t modeEcb[] = BCRYPT_CHAIN_MODE_ECB;
+        st = ::BCryptSetProperty(m_alg, BCRYPT_CHAINING_MODE,
+                                 (PUCHAR)modeEcb, sizeof(modeEcb), 0);
+        if (!BCRYPT_SUCCESS(st))
+            return false;
+        st = ::BCryptGenerateSymmetricKey(m_alg, &m_key, nullptr, 0,
+                                          (PUCHAR)key.constData(), ULONG(key.size()), 0);
+        if (!BCRYPT_SUCCESS(st)) {
+            m_key = nullptr; // 生成失败句柄无效，防析构误销
+            return false;
+        }
+        return true;
+    }
+
+    // 单块 ECB 加密（无填充；入块 16 字节、出块 16 字节）。
+    bool encryptBlock(const QByteArray &block, QByteArray &out) const {
+        if (block.size() != out.size())
+            return false;
+        ULONG done = 0;
+        NTSTATUS st = ::BCryptEncrypt(m_key, (PUCHAR)block.constData(), ULONG(block.size()),
+                                      nullptr, nullptr, 0, (PUCHAR)out.data(),
+                                      ULONG(out.size()), &done, 0);
+        return BCRYPT_SUCCESS(st) && done == ULONG(out.size());
+    }
+
+private:
+    BCRYPT_ALG_HANDLE m_alg = nullptr;
+    BCRYPT_KEY_HANDLE m_key = nullptr;
+};
+
+// 兜底告警的去重旗：竞态无害（同时到位顶多各警告一枚）。它是在日志里认得出
+// “这台机器退了自实现”的唯一线索——两只后端逐位一致（对照腿钉死），别无行为差。
+void warnCngFallbackOnce() {
+    static bool warned = false;
+    if (warned)
+        return;
+    warned = true;
+    qWarning("SchemeCrypto: CNG backend unavailable, falling back to self-contained crypto "
+             "(bit-exact twin legs in scheme_package_test pin both)");
+}
+
+bool cngEcbBlock(const QByteArray &key, const QByteArray &block, QByteArray &out) {
+    CngAesSession session;
+    if (!session.init(key))
+        return false;
+    out.assign(16, char(0));
+    return session.encryptBlock(block, out);
+}
+
+bool cngCtr(const QByteArray &key, const QByteArray &iv,
+            const QByteArray &in, QByteArray &out) {
+    CngAesSession session;
+    if (!session.init(key))
+        return false;
+    QByteArray result(in.size(), char(0));
+    QByteArray keystream(16, char(0));
+    uint8_t ctr[16];
+    memcpy(ctr, iv.constData(), 16);
+    const int n = in.size();
+    for (int off = 0; off < n; off += 16) {
+        const QByteArray counter(reinterpret_cast<const char *>(ctr), 16);
+        if (!session.encryptBlock(counter, keystream))
+            return false;
+        const int len = qMin(16, n - off);
+        for (int i = 0; i < len; ++i)
+            result[off + i] = static_cast<char>(in[off + i] ^ keystream[i]);
+        incrementCounter(ctr);
+    }
+    out = result;
+    return true;
+}
+
+bool cngPbkdf2HmacSha256(const QByteArray &password, const QByteArray &salt,
+                         int iterations, int dkLen, QByteArray &dk) {
+    // PBKDF2 在 CNG 里走 HMAC 域：算法句柄必须带 BCRYPT_ALG_HANDLE_HMAC_FLAG 开出——
+    // SHA-256 伪句柄没这枚旗，直接拿会 STATUS_INVALID_HANDLE（首轮绿面踩过这坑）。
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    NTSTATUS st = ::BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr,
+                                                BCRYPT_ALG_HANDLE_HMAC_FLAG);
+    if (!BCRYPT_SUCCESS(st))
+        return false;
+    // 开销可以忽略：一次派生的主体是派生本身（万轮计），开句柄是微秒档。
+    dk.resize(dkLen);
+    st = ::BCryptDeriveKeyPBKDF2(
+        alg,
+        (PUCHAR)password.constData(), ULONG(password.size()),
+        (PUCHAR)salt.constData(), ULONG(salt.size()),
+        quint64(iterations),
+        (PUCHAR)dk.data(), ULONG(dkLen), 0);
+    ::BCryptCloseAlgorithmProvider(alg, 0);
+    return BCRYPT_SUCCESS(st);
+}
+#else
+// 非 Windows 面（本仓实际不构建到此）：显式 CNG 体一律失败，公共三枚直落自实现。
+void warnCngFallbackOnce() {}
+bool cngEcbBlock(const QByteArray &, const QByteArray &, QByteArray &) { return false; }
+bool cngCtr(const QByteArray &, const QByteArray &, const QByteArray &, QByteArray &) { return false; }
+bool cngPbkdf2HmacSha256(const QByteArray &, const QByteArray &, int, int, QByteArray &) { return false; }
+#endif
+
+} // namespace
+
+// —— 对照腿显式点名声：成功返回 true，生产路径不直接调（公共三枚负责回退与尺寸口径）——
+bool aes256EcbBlockCng(const QByteArray &key, const QByteArray &block, QByteArray &out) {
+    out.clear();
+    if (key.size() != 32 || block.size() != 16)
+        return false;
+    return cngEcbBlock(key, block, out);
+}
+
+bool aes256CtrCng(const QByteArray &key, const QByteArray &iv,
+                  const QByteArray &in, QByteArray &out) {
+    out.clear();
+    if (key.size() != 32 || iv.size() != 16)
+        return false;
+    return cngCtr(key, iv, in, out);
+}
+
+bool pbkdf2HmacSha256Cng(const QByteArray &password, const QByteArray &salt,
+                         int iterations, int dkLen, QByteArray &dk) {
+    if (dkLen <= 0 || iterations <= 0)
+        return false;
+    return cngPbkdf2HmacSha256(password, salt, iterations, dkLen, dk);
+}
+
+void aes256EcbBlockHandwritten(const QByteArray &key, const QByteArray &block,
+                               QByteArray &out) {
+    out.clear();
+    if (key.size() != 32 || block.size() != 16)
+        return;
+    handEcbBlock16(key, block, out);
+}
+
+void aes256CtrHandwritten(const QByteArray &key, const QByteArray &iv,
+                          const QByteArray &in, QByteArray &out) {
+    out.clear();
+    if (key.size() != 32 || iv.size() != 16)
+        return;
+    handCtr(key, iv, in, out);
+}
+
+QByteArray pbkdf2HmacSha256Handwritten(const QByteArray &password, const QByteArray &salt,
+                                       int iterations, int dkLen) {
+    return handPbkdf2HmacSha256(password, salt, iterations, dkLen);
+}
+
+void aes256EcbBlock(const QByteArray &key, const QByteArray &block,
+                    QByteArray &out) {
+    out.clear();
+    if (key.size() != 32 || block.size() != 16)
+        return;                                     // 尺寸口径与自实现一致：空出
+#if defined(Q_OS_WIN)
+    QByteArray viaCng;
+    if (cngEcbBlock(key, block, viaCng)) {
+        out = viaCng;
+        return;
+    }
+    warnCngFallbackOnce();
+#endif
+    handEcbBlock16(key, block, out);
+}
+
+void aes256Ctr(const QByteArray &key, const QByteArray &iv,
+               const QByteArray &in, QByteArray &out) {
+    out.clear();
+    if (key.size() != 32 || iv.size() != 16)
+        return;
+#if defined(Q_OS_WIN)
+    if (cngCtr(key, iv, in, out))
+        return;
+    warnCngFallbackOnce();
+#endif
+    handCtr(key, iv, in, out);
 }
 
 QByteArray hmacSha256(const QByteArray &key, const QByteArray &message) {
@@ -233,26 +451,16 @@ bool constTimeEquals(const QByteArray &a, const QByteArray &b) {
 
 QByteArray pbkdf2HmacSha256(const QByteArray &password, const QByteArray &salt,
                             int iterations, int dkLen) {
-    const int hLen = 32; // SHA-256
-    const int l = (dkLen + hLen - 1) / hLen;
-    QByteArray dk;
-    dk.reserve(dkLen);
-    QByteArray saltBlock = salt;
-    for (int i = 1; i <= l; ++i) {
-        // salt || INT_32_BE(i)
-        QByteArray u = hmacSha256(password, saltBlock + QByteArray(1, static_cast<char>((i >> 24) & 0xff))
-                                                     + QByteArray(1, static_cast<char>((i >> 16) & 0xff))
-                                                     + QByteArray(1, static_cast<char>((i >> 8) & 0xff))
-                                                     + QByteArray(1, static_cast<char>(i & 0xff)));
-        QByteArray t = u;
-        for (int j = 1; j < iterations; ++j) {
-            u = hmacSha256(password, u);
-            for (int k = 0; k < hLen; ++k)
-                t[k] = static_cast<char>(t[k] ^ u[k]);
-        }
-        dk.append(t);
+#if defined(Q_OS_WIN)
+    // 轮数 ≤0 与 dkLen ≤0 的怪形仍交给自实现（语义同现状），CNG 只接合法区间的活。
+    if (dkLen > 0 && iterations > 0) {
+        QByteArray viaCng;
+        if (cngPbkdf2HmacSha256(password, salt, iterations, dkLen, viaCng))
+            return viaCng;
+        warnCngFallbackOnce();
     }
-    return dk.left(dkLen);
+#endif
+    return handPbkdf2HmacSha256(password, salt, iterations, dkLen);
 }
 
 void deriveKeys(const QByteArray &password, const QByteArray &salt,
