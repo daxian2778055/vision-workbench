@@ -28,6 +28,7 @@ private slots:
     // 恒时比较的行为面：等值/单字节差/长度差/双空——四个方向的读数都有据。
     // 差异位置不进耗时这半条不是墙钟能钉的（见 SchemeCrypto.h 侧注），行为面照钉。
     void constTimeEqualsBasics();
+    void envelopeEmbedsFreshRandomness();
 };
 
 void SchemePackageTest::aes256EcbKnownAnswer() {
@@ -224,9 +225,11 @@ void SchemePackageTest::foreignInRangeValueRejectedFast() {
 }
 
 // 恒时比较的行为面。信封 MAC 校验已从「早退 !=」换成 SchemeCrypto::constTimeEquals；
-// 这里钉四向读数：等值真、单字节差假、长度差假（公共前缀再长也假）、双空真。
-// 时序安全本身是代码评审性质（任何逐字节累计实现都成立），墙钟把它钉不住——
-// 接线的证据走改坏自证面：把 constTimeEquals 短路成恒真重编，篡改/错口令两腿同批读红。
+// 这里钉五向读数：等值真、单字节差假、长度差假（公共前缀再长也假）、双空真、
+// 短串加零尾巴假（N3：长度差折进累计，短侧不补零——补零会把「ab」与「ab\0\0\0\0」读成等值）。
+// 时序安全本身不是墙钟能钉的（见 SchemeCrypto.h 侧注），行为面照钉；
+// 接线的证据走改坏自证面：把 constTimeEquals 短路成恒真重编，篡改腿同批读红；
+// 把长度折入摘掉重编（退回纯补零形状），零尾巴两枚同批读红。
 void SchemePackageTest::constTimeEqualsBasics() {
     const QByteArray digest = SchemeCrypto::hmacSha256(QByteArrayLiteral("k"), QByteArrayLiteral("m"));
 
@@ -240,6 +243,21 @@ void SchemePackageTest::constTimeEqualsBasics() {
 
     QVERIFY(SchemeCrypto::constTimeEquals(QByteArray(), QByteArray()));
     QVERIFY(!SchemeCrypto::constTimeEquals(QByteArrayLiteral("a"), QByteArrayLiteral("ab")));
+
+    // N3：短侧不判空补齐的钉
+    const QByteArray zeroTail = QByteArrayLiteral("ab") + QByteArray(4, '\0');
+    QVERIFY(!SchemeCrypto::constTimeEquals(QByteArrayLiteral("ab"), zeroTail));
+    QVERIFY(SchemeCrypto::constTimeEquals(zeroTail, QByteArrayLiteral("ab") + QByteArray(4, '\0')));
+}
+
+// 信封盐与 IV 是随行随机量：同口令连打两枚，密文层不该出重件。
+// 折在 envelope 本体上（盐 16 + 迭代 4 + IV 16 + 密文 + MAC），两枚全同即随机位失效——
+// 把 randomBytes 换成定值填充的红臂形状，本腿当场红。
+void SchemePackageTest::envelopeEmbedsFreshRandomness() {
+    const QByteArray json = R"({"cap":1})";
+    const QByteArray a = SchemePackage::exportScheme(json, QStringLiteral("pw"), false);
+    const QByteArray b = SchemePackage::exportScheme(json, QStringLiteral("pw"), false);
+    QVERIFY2(a != b, "同口令同方案的两枚信封不该逐字节同串（盐/IV 随机位失效）");
 }
 
 QTEST_MAIN(SchemePackageTest)

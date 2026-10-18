@@ -205,6 +205,11 @@ void DatabaseTest::testPasswordHashRoundTrip()
     QVERIFY(AppDatabase::verifyPassword(QStringLiteral("p@ssw0rd"), hash));
     QVERIFY(!AppDatabase::verifyPassword(QStringLiteral("wrong"), hash));
 
+    // 每串独立盐：同口令两枚 token 不重串（定值盐的破坏形状当场红），盐 hex 占 16 字节 32 位
+    const QString again = AppDatabase::createPasswordHash(QStringLiteral("p@ssw0rd"));
+    QVERIFY2(hash != again, "同一口令的两枚 token 不该同串（盐位失效）");
+    QCOMPARE(again.split(QLatin1Char('$')).at(2).size(), 32);
+
     // token 里的轮数是数据不是报价：封顶外的一概不进派生（与方案信封进口的先值检同一叙事）。
     // 钉「任何先派生的退回形状」：把上限拧掉重编，这枚腿读红（封顶外 token 全额付派生）。
     const QStringList parts = hash.split(QLatin1Char('$'));
@@ -587,6 +592,10 @@ void DatabaseTest::testLegacyHashesAuthenticateAndUpgrade()
     const bool okL1 = db->authenticateUser(QStringLiteral("legacy1"),
                                            QStringLiteral("Legacy1!pw"), &readFailedL1);
     QVERIFY2(okL1 && !readFailedL1, "旧自制迭代链哈希登不进（KDF 换构造必须带走旧账）");
+
+    // 旧格式的错口令也要拒：两条旧分支的摘要比对同走恒时（恒真红臂红的就是这两枚钉）
+    QVERIFY(!AppDatabase::verifyPassword(QStringLiteral("NotThe!Legacy0"), legacy0));
+    QVERIFY(!AppDatabase::verifyPassword(QStringLiteral("NotThe!Legacy1"), legacy1));
 
     // 登录成功那一刻两行都被换写成 PBKDF2 token
     {

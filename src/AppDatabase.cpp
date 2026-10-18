@@ -137,10 +137,20 @@ AppDatabase::~AppDatabase()
 
 QString AppDatabase::createPasswordHash(const QString &password)
 {
-    // 每个账户使用随机盐，保证相同密码哈希不同；token 自报轮数，读侧按 token 走同一份 PBKDF2
+    // 每个账户使用随机盐，保证相同密码哈希不同；token 自报轮数，读侧按 token 走同一份 PBKDF2。
+    // 盐是密钥材料：直接走 OS 的 CSPRNG 流（QRandomGenerator::system()，Qt 文档注明其
+    // 输出可用于生成密码学凭据）；global() 的 MT 流只适合 Monte-Carlo，不再用于盐。
     QByteArray salt(kSaltBytes, '\0');
+    quint32 word = 0;
+    quint32 left = 0;
     for (int i = 0; i < salt.size(); ++i) {
-        salt[i] = static_cast<char>(QRandomGenerator::global()->bounded(256));
+        if (left == 0) {
+            word = QRandomGenerator::system()->generate();
+            left = 4;
+        }
+        salt[i] = static_cast<char>(word & 0xFFu);
+        word >>= 8;
+        --left;
     }
     const QByteArray dk = SchemeCrypto::pbkdf2HmacSha256(password.toUtf8(), salt,
                                                          kHashIterations, 32);
@@ -168,13 +178,15 @@ bool AppDatabase::verifyPassword(const QString &password, const QString &stored)
     }
     const int colon = stored.indexOf(QLatin1Char(':'));
     if (colon < 0) {
-        // 遗留格式二（最早的形态）：无盐 SHA-256（登录成功后由调用方迁移）
+        // 遗留格式二（最早的形态）：无盐 SHA-256（登录成功后由调用方迁移）。
+        // 摘要比对同走恒时——旧格式不能比新格式多出一条时序侧道。
         const QByteArray legacy = QCryptographicHash::hash(password.toUtf8(), QCryptographicHash::Sha256);
-        return QString::fromLatin1(legacy.toHex()) == stored;
+        return SchemeCrypto::constTimeEquals(legacy, QByteArray::fromHex(stored.toLatin1()));
     }
     // 遗留格式一：盐hex:摘要hex（自制迭代链，登录成功后由调用方迁移）
     const QByteArray salt = QByteArray::fromHex(stored.left(colon).toLatin1());
-    return QString::fromLatin1(stretchHashLegacy(salt, password).toHex()) == stored.mid(colon + 1);
+    return SchemeCrypto::constTimeEquals(stretchHashLegacy(salt, password),
+                                         QByteArray::fromHex(stored.mid(colon + 1).toLatin1()));
 }
 
 bool AppDatabase::initialize(const QString &dbPath)

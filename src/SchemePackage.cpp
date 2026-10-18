@@ -21,10 +21,21 @@ bool SchemePackage::getUint32BE(const char *p, quint32 &v) {
 }
 
 QByteArray randomBytes(int n) {
+    // 盐与 IV 是密钥材料：直接走 OS 的 CSPRNG 流（QRandomGenerator::system()，Qt 文档
+    // 注明其输出可用于生成密码学凭据）。原先那两个构造（global() 的 MT 流与
+    // securelySeeded()——种子来自安全源但后续序列仍是同一族）都只适合 Monte-Carlo。
     QByteArray r(n, char(0));
-    QRandomGenerator rng = QRandomGenerator::securelySeeded();
-    for (int i = 0; i < n; ++i)
-        r[i] = static_cast<char>(rng.generate() & 0xff);
+    quint32 buf = 0;
+    quint32 left = 0;
+    for (int i = 0; i < n; ++i) {
+        if (left == 0) {
+            buf = QRandomGenerator::system()->generate();
+            left = 4;
+        }
+        r[i] = static_cast<char>(buf & 0xff);
+        buf >>= 8;
+        --left;
+    }
     return r;
 }
 
