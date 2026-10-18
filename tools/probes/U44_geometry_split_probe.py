@@ -490,7 +490,11 @@ def leg_l0():
     check(sum(n for _s, n in nets) == cross,
           "L0: the range net %d is not the sum of the selected rounds' own nets %s"
           % (cross, ",".join("%s:%+d" % n for n in nets)))
-    printed = re.search(r"history_only_last3=(\d+)", text)
+    # U-135: the round that moved 68 rows out of the family nets MINUS 68 on it, so this cell is
+    # legitimately negative from now on. With no sign in the class the leg read "gate printed no
+    # history_only_last3 reading" on a healthy repository -- a false red on the probe side, which is
+    # why it changes in the same round as the gate it parses.
+    printed = re.search(r"history_only_last3=(-?\d+)", text)
     check(printed is not None, "L0: gate printed no history_only_last3 reading")
     # The two algorithms agreeing is the assertion; the value itself is not pinned -- see the note
     # above EXPECTED constants. Guard against a vacuous agreement (an empty window reads 0 on both sides).
