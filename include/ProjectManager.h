@@ -30,6 +30,11 @@ public:
     bool isReadonlyLoaded() const { return m_loadedReadonly; }
     void resetReadonlyFlag() { m_loadedReadonly = false; }
 
+    /// 最近一次 loadProject 成功载入文件的旧格式注记（176 行）：
+    /// v1 明文打包无完整性校验位 / 裸 JSON 无信封——非空时 UI 载入侧加注一句；
+    /// 加密信封与 v2 明文打包（带 HMAC 位）载入后为空。
+    QString lastIntegrityNote() const { return m_lastIntegrityNote; }
+
     /// 文件是否为需口令的加密信封（供 UI 在打开前决定是否弹入口令框）。
     static bool fileNeedsPassphrase(const QString &filePath);
 
@@ -70,6 +75,7 @@ private:
     void reportLoadNote(const QString &text);
 
     QString m_lastFilePath;
+    QString m_lastIntegrityNote;
     bool m_loadedReadonly = false;
     /// U-36：本次载入有多少条「原始载荷没进内存表」——按两条通道数（标定整条被拒／夹具侧降级），
     /// 其中夹具那条通道装着两类不同后果：矩阵或位姿作废（键名保留、载荷写成空）与键名为空整条跳过

@@ -2681,6 +2681,14 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
     }
     applyReadonlyUI();
 
+    // 176 行（旧格式加注）：v1 明文打包与裸 JSON 成功载入后提示一次，不阻断、不逐项唠叨。
+    if (!recoveryRestore) {
+        const QString integrityNote = pm->lastIntegrityNote();
+        if (!integrityNote.isEmpty())
+            logMessage(tr("提示：该方案为%1（无完整性校验位），建议用「另存为」重新导出一次获得校验位")
+                           .arg(integrityNote));
+    }
+
     // 释放旧方案的执行器：先停全部并等待真正退出；超时则中止本次打开（N1）——保留旧方案
     // 场景与执行器，不删场景、不回收执行器。运行中的线程若此刻删场景 = UAF，比崩溃更该避免的是
     // 脏数据；这里直接中止切换，旧流程被 stop 后会在算子返回自然退出，方案保持原样可再用。

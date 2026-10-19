@@ -208,15 +208,19 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
 
     m_lastFilePath = filePath;
     m_loadedReadonly = false;
+    m_lastIntegrityNote.clear();
 
     // 信封方案（加密 / 只读打包）：解密 → 解析 JSON → 应用；老明文 .vfp 走原路径。
     if (SchemePackage::isEnvelope(raw)) {
-        bool readonly = false, ok = false;
-        const QByteArray json = SchemePackage::importScheme(raw, passphrase, &readonly, &ok);
+        bool readonly = false, ok = false, integrityMissing = false;
+        const QByteArray json =
+            SchemePackage::importScheme(raw, passphrase, &readonly, &ok, &integrityMissing);
         if (!ok) {
             VFP_DEBUG << "方案加载失败：信封解析/解密失败（口令错误或文件损坏）" << filePath;
             return false; // 不改动 scenes，调用方可以保留当前方案
         }
+        if (integrityMissing)
+            m_lastIntegrityNote = QStringLiteral("旧明文打包格式");
         QJsonParseError parseError{};
         QJsonDocument doc = QJsonDocument::fromJson(json, &parseError);
         if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
@@ -238,6 +242,7 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
     }
 
     // 应用方案内容（与崩溃恢复共用 applyProjectJson：场景 + 全局配置 + 运行界面布局）
+    m_lastIntegrityNote = QStringLiteral("旧明文 JSON 格式");
     return applyProjectJson(doc.object(), scenes);
 }
 

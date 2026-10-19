@@ -19,6 +19,11 @@ private slots:
     void envelopeRoundTripEncryptedReadonly();
     void envelopeRoundTripEncryptedPlain();
     void envelopeRoundTripNoEncryptionReadonly();
+    // 176 行：明文打包 v2（盐 + HMAC）与旧 v1 明文打包（无位，读侧加注）两代同面。
+    void plaintextV2RoundTripCarriesMac();
+    void plaintextV2TamperRejected();
+    void plaintextV2RejectsEncryptedFlag();
+    void plaintextV1LegacyImportStillWorksWithNote();
     void wrongPassphraseRejected();
     void tamperedCipherRejected();
     void legacyJsonIsNotEnvelope();
@@ -121,11 +126,85 @@ void SchemePackageTest::envelopeRoundTripNoEncryptionReadonly() {
     const QByteArray env = SchemePackage::exportScheme(json, QString(), true);
     QVERIFY(SchemePackage::isEnvelope(env));
     QVERIFY(SchemePackage::peekReadonly(env));
+    // 176 行起：无口令打包写侧只发 v2（盐 + HMAC 位）。
+    QCOMPARE(static_cast<quint8>(env[4]), quint8(2));
 
     bool readonly = false, ok = false;
     const QByteArray out = SchemePackage::importScheme(env, QString(), &readonly, &ok);
     QVERIFY(ok);
     QVERIFY(readonly);
+    QCOMPARE(out, json);
+}
+
+// 明文打包 v2 的往返与随机性：无口令导出（日常保存路径）也带完整性位，
+// 同方案两枚导出因随机盐逐位不同；读侧 integrityMissing 恒 false（位在场）。
+void SchemePackageTest::plaintextV2RoundTripCarriesMac() {
+    const QByteArray json = R"({"plain":1,"中文":"测试"})";
+    const QByteArray env = SchemePackage::exportScheme(json, QString(), false);
+    QVERIFY(SchemePackage::isEnvelope(env));
+    QCOMPARE(static_cast<quint8>(env[4]), quint8(2));
+    QVERIFY(!SchemePackage::isEncryptedEnvelope(env));
+
+    const QByteArray other = SchemePackage::exportScheme(json, QString(), false);
+    QVERIFY2(env != other, "同方案两枚 v2 导出不该逐字节同串（盐随机位失效）");
+
+    bool readonly = true, ok = false, integrityMissing = true;
+    const QByteArray out = SchemePackage::importScheme(env, QString(), &readonly, &ok,
+                                                       &integrityMissing);
+    QVERIFY(ok);
+    QVERIFY(!readonly);
+    QVERIFY(!integrityMissing);
+    QCOMPARE(out, json);
+}
+
+// 篡改两处读红：尾 32 字节 MAC 区与压缩 payload 首字节（偏移 6+16=22）各翻一枚，
+// 位覆盖头+盐+payload 全体，两处都必须落到"完整性校验失败"拒收。
+void SchemePackageTest::plaintextV2TamperRejected() {
+    const QByteArray json = R"({"tamper":1})";
+    QByteArray env = SchemePackage::exportScheme(json, QString(), false);
+    env[env.size() - 1] = static_cast<char>(env[env.size() - 1] ^ 0xff);
+    bool readonly = false, ok = true, missing = false;
+    SchemePackage::importScheme(env, QString(), &readonly, &ok, &missing);
+    QVERIFY(!ok);
+
+    const QByteArray env2 = SchemePackage::exportScheme(json, QString(), false);
+    QByteArray body = env2;
+    body[22] = static_cast<char>(body[22] ^ 0x01);
+    ok = true;
+    SchemePackage::importScheme(body, QString(), &readonly, &ok, &missing);
+    QVERIFY(!ok);
+}
+
+// v2 只承载明文打包：手工把加密标志位（0x01）放进 v2 旗位，读侧显式拒收
+// （该形状不属于任何写侧产出，出现即伪造/损坏，fail-closed）。
+void SchemePackageTest::plaintextV2RejectsEncryptedFlag() {
+    const QByteArray json = R"({"fake":1})";
+    QByteArray env = SchemePackage::exportScheme(json, QString(), false);
+    QCOMPARE(static_cast<quint8>(env[4]), quint8(2));
+    env[5] = static_cast<char>(static_cast<quint8>(env[5]) | 0x01);
+
+    bool readonly = false, ok = true, missing = false;
+    SchemePackage::importScheme(env, QString(), &readonly, &ok, &missing);
+    QVERIFY(!ok);
+}
+
+// 旧 v1 明文打包（176 行前的历史格式，写侧不再产出）：手拼 magic + v1 + 只读标志 +
+// 无位压缩 payload，读侧照常收下且置缺位注记（加载侧据此加注）。
+void SchemePackageTest::plaintextV1LegacyImportStillWorksWithNote() {
+    const QByteArray json = R"({"legacy":1})";
+    QByteArray legacyEnv;
+    legacyEnv.append("VFPE", 4);
+    legacyEnv.append(static_cast<char>(1));  // v1
+    legacyEnv.append(static_cast<char>(0x02)); // 只读标志
+    legacyEnv.append(qCompress(json));
+    QVERIFY(SchemePackage::isEnvelope(legacyEnv));
+
+    bool readonly = false, ok = false, missing = false;
+    const QByteArray out = SchemePackage::importScheme(legacyEnv, QString(), &readonly, &ok,
+                                                       &missing);
+    QVERIFY(ok);
+    QVERIFY(readonly);
+    QVERIFY(missing);
     QCOMPARE(out, json);
 }
 
