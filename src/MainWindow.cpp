@@ -1596,6 +1596,13 @@ void MainWindow::recomputeDownstream(NodeBase *node, bool quiet)
 {
     if (!node)
         return;
+    // 175 行拍板（P0-1①收口的完整义）：右键「重算此算子及下游」与模块编辑器重算/自动重算
+    // 共用此漏斗，executeFrom 是一次真实的新发起，随闸收；quiet 面静默回退不扰自动重算。
+    if (!SessionManager::instance()->canRunFlow()) {
+        if (!quiet)
+            logMessage(tr("写闸开启期间不受理重算下游：出厂默认口令仍在使用（改密后恢复）"));
+        return;
+    }
 
     const int idx = ui->flowTabs->currentIndex();
     if (idx < 0 || idx >= m_flowScenes.size())
@@ -1632,6 +1639,12 @@ void MainWindow::executeNodeOnce(NodeBase *node)
 {
     if (!node)
         return;
+    // 175 行拍板（P0-1①收口）：参数坞「执行算子」钮与模块编辑器「执行」钮共用此漏斗，
+    // 单算子执行属新一次运行发起，随闸收（与运行入口七点同判据 canRunFlow）。
+    if (!SessionManager::instance()->canRunFlow()) {
+        logMessage(tr("写闸开启期间不受理单算子执行：出厂默认口令仍在使用（改密后恢复）"));
+        return;
+    }
     bool success = false;
     if (!runWithBusyFeedback(QStringLiteral("正在执行 %1…").arg(node->fullName()), false,
                              [this, node, &success]() {
