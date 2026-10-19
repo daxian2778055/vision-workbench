@@ -2,6 +2,7 @@
 #include "OpencvUtil.h"
 #include "DataObject.h"
 #include "AppLog.h"
+#include "ProjectPaths.h"   // 179 行：文件路径参数执行侧锚定方案目录
 
 #include <opencv2/imgproc.hpp>
 #include <QWidget>
@@ -121,7 +122,7 @@ void AnomalyDetectNode::run(bool)
         }
         cv::Mat inspect = gray(roi).clone();
 
-        const QString path = m_params.value(QStringLiteral("baselinePath")).toString().trimmed();
+        const QString path = ProjectPaths::resolveExecutionPath(m_params.value(QStringLiteral("baselinePath")).toString()).trimmed();
         const int trainMode = m_params.value(QStringLiteral("trainMode"), 0).toInt();
         const int backend = m_params.value(QStringLiteral("backend"), 0).toInt();
         QString status;

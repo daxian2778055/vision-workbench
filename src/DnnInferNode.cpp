@@ -2,6 +2,7 @@
 #include "OpencvUtil.h"
 #include "DataObject.h"
 #include "AppLog.h"
+#include "ProjectPaths.h"   // 179 行：文件路径参数执行侧锚定方案目录
 #include <QWidget>
 #include <QFile>
 #include <QFileInfo>
@@ -91,8 +92,8 @@ void DnnInferNode::run(bool /*autoSwitch*/)
             m_outputImage.Clear();
             return;
         }
-        const QString modelPath =
-            m_params.value(QStringLiteral("modelPath"), QString()).toString().trimmed();
+        const QString modelPath = ProjectPaths::resolveExecutionPath(
+            m_params.value(QStringLiteral("modelPath"), QString()).toString()).trimmed();
         if (modelPath.isEmpty()) {
             m_params[QStringLiteral("lastError")] = QStringLiteral("请设置 ONNX 模型路径");
             m_params["moduleStatus"] = false;
@@ -159,7 +160,7 @@ void DnnInferNode::run(bool /*autoSwitch*/)
                           idx.end(), [&](int a, int b) { return prob[a] > prob[b]; });
 
         QStringList classNames;
-        QString clsPath = m_params.value(QStringLiteral("classNamesPath")).toString().trimmed();
+        QString clsPath = ProjectPaths::resolveExecutionPath(m_params.value(QStringLiteral("classNamesPath")).toString()).trimmed();
         if (clsPath.isEmpty())
             clsPath = QFileInfo(modelPath).absolutePath() + QStringLiteral("/classes.txt");
         QFile clsFile(clsPath);

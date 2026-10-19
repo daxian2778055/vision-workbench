@@ -1,6 +1,7 @@
 #include "TemplateMatchNode.h"
 #include "DataObject.h"
 #include "AppLog.h"
+#include "ProjectPaths.h"   // 179 行：文件路径参数执行侧锚定方案目录
 #include <QVBoxLayout>
 #include <QLabel>
 #include <QDoubleSpinBox>
@@ -78,8 +79,8 @@ void TemplateMatchNode::run(bool /*autoSwitch*/)
             gray = input;
         }
 
-        const QString templatePath =
-            m_params.value(QStringLiteral("templatePath"), QString()).toString().trimmed();
+        const QString templatePath = ProjectPaths::resolveExecutionPath(
+            m_params.value(QStringLiteral("templatePath"), QString()).toString()).trimmed();
         const bool trainFromImage =
             m_params.value(QStringLiteral("trainFromImage"), false).toBool();
 

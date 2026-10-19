@@ -2,6 +2,7 @@
 #include "OpencvUtil.h"
 #include "DataObject.h"
 #include "AppLog.h"
+#include "ProjectPaths.h"   // 179 行：文件路径参数执行侧锚定方案目录
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <QWidget>
@@ -119,8 +120,8 @@ void OpencvDefectNode::run(bool)
         }
         cv::Mat inspect = gray(roi).clone();
 
-        const QString goldenPath =
-            m_params.value(QStringLiteral("goldenPath")).toString().trimmed();
+        const QString goldenPath = ProjectPaths::resolveExecutionPath(
+            m_params.value(QStringLiteral("goldenPath")).toString()).trimmed();
         const bool train = m_params.value(QStringLiteral("trainGolden"), true).toBool();
         cv::Mat golden;
         if (train) {

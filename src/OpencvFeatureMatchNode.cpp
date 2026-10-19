@@ -4,6 +4,7 @@
 #include "DataObject.h"
 #include "AppLog.h"
 #include "FlowScene.h"
+#include "ProjectPaths.h"   // 179 行：文件路径参数执行侧锚定方案目录
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/features2d.hpp>
@@ -202,8 +203,8 @@ void OpencvFeatureMatchNode::run(bool /*autoSwitch*/)
         if (gray.channels() == 3)
             cv::cvtColor(gray, gray, cv::COLOR_BGR2GRAY);
 
-        const QString templatePath =
-            m_params.value(QStringLiteral("templatePath"), QString()).toString().trimmed();
+        const QString templatePath = ProjectPaths::resolveExecutionPath(
+            m_params.value(QStringLiteral("templatePath"), QString()).toString()).trimmed();
         const bool train = m_params.value(QStringLiteral("trainFromImage"), false).toBool();
 
         cv::Mat tmpl;

@@ -13,6 +13,7 @@
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QVBoxLayout>
+#include "ProjectPaths.h"   // 179 行：拾取与执行两侧的方案目录锚定
 
 using namespace HalconCpp;
 
@@ -245,7 +246,8 @@ void ToolboxOperatorNode::run(bool /*autoSwitch*/)
                 QStringLiteral("画布与执行器负责执行；本节点输出与输入同源灰度图占位。");
             break;
         case ToolboxBuiltin::WriteFile: {
-            const QString path = m_params.value(QStringLiteral("filePath")).toString();
+            const QString path = ProjectPaths::resolveExecutionPath(
+                m_params.value(QStringLiteral("filePath")).toString());
             WriteImage(gray, HalconCpp::HTuple("png"), HalconCpp::HTuple(0),
                        HalconCpp::HTuple(path.toLocal8Bit().constData()));
             m_outputImage = gray;
@@ -461,6 +463,9 @@ QWidget *ToolboxOperatorNode::createParamPanel()
                                                      le->text(),
                                                      QStringLiteral("PNG (*.png);;所有文件 (*)"));
             if (!p.isEmpty()) {
+                /// 179 行：方案目录内拾取换相对形态（执行时按方案目录锚定解析）
+                p = ProjectPaths::makeSchemeRelativeIfInside(
+                    ProjectPaths::currentSchemeFilePath(), p);
                 le->setText(p);
                 setParam(QStringLiteral("filePath"), p);
             }

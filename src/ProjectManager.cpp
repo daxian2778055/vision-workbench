@@ -127,9 +127,8 @@ bool ProjectManager::saveProject(const QString &filePath, const QList<FlowScene 
         return false;
     }
 
-    m_lastFilePath = filePath;
+    setLastFilePath(filePath);
     m_loadedReadonly = false; // 明文保存即为可编辑方案
-
     // 序列化与自动保存共用同一实现（buildProjectJson）：两套实现一旦分叉，表现是
     // "崩溃恢复出来的方案缺东西 / 与手动保存不一致"——极难发现，故此处不留第二份拷贝。
     const QJsonObject root = buildProjectJson(scenes);
@@ -206,10 +205,9 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
     const QByteArray raw = file.readAll();
     file.close();
 
-    m_lastFilePath = filePath;
+    setLastFilePath(filePath);
     m_loadedReadonly = false;
     m_lastIntegrityNote.clear();
-
     // 信封方案（加密 / 只读打包）：解密 → 解析 JSON → 应用；老明文 .vfp 走原路径。
     if (SchemePackage::isEnvelope(raw)) {
         bool readonly = false, ok = false, integrityMissing = false;
@@ -228,7 +226,17 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
             return false;
         }
         m_loadedReadonly = readonly;
-        return applyProjectJson(doc.object(), scenes);
+        bool applied = applyProjectJson(doc.object(), scenes);
+        if (applied) {
+            /// 179 行：载入后路径审查（非阻断提示确认面）。清单进 loadNote 一句，
+            /// 旧方案目录外绝对路径数与节点在案（P1-1② 拍板：硬限位不做，提示做）。
+            const ProjectPaths::PathReview review =
+                ProjectPaths::reviewScenes(scenes, filePath);
+            const QString summary = ProjectPaths::pathReviewSummary(review);
+            if (!summary.isEmpty())
+                reportLoadNote(QStringLiteral("路径审查：本方案含%1").arg(summary));
+        }
+        return applied;
     }
 
     // 原实现未校验解析结果：文件损坏时 doc.object() 为空、循环不执行，
@@ -243,7 +251,15 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
 
     // 应用方案内容（与崩溃恢复共用 applyProjectJson：场景 + 全局配置 + 运行界面布局）
     m_lastIntegrityNote = QStringLiteral("旧明文 JSON 格式");
-    return applyProjectJson(doc.object(), scenes);
+    bool ok = applyProjectJson(doc.object(), scenes);
+    if (ok) {
+        const ProjectPaths::PathReview review =
+            ProjectPaths::reviewScenes(scenes, filePath);
+        const QString summary = ProjectPaths::pathReviewSummary(review);
+        if (!summary.isEmpty())
+            reportLoadNote(QStringLiteral("路径审查：本方案含%1").arg(summary));
+    }
+    return ok;
 }
 
 bool ProjectManager::exportEncryptedProject(const QString &filePath,
@@ -255,7 +271,7 @@ bool ProjectManager::exportEncryptedProject(const QString &filePath,
         return false;
     }
 
-    m_lastFilePath = filePath;
+    setLastFilePath(filePath);
 
     const QJsonObject root = buildProjectJson(scenes);
     const QByteArray json = QJsonDocument(root).toJson();
@@ -286,6 +302,19 @@ bool ProjectManager::fileNeedsPassphrase(const QString &filePath)
     const QByteArray head = file.read(64); // 足够容纳 magic(4)+version(1)+flags(1)
     file.close();
     return SchemePackage::isEncryptedEnvelope(head);
+}
+
+/// 179 行：文件路径基目录记录点的唯一漏斗——除保存成员外同步喂数 ProjectPaths
+/// 进程级快照位（节点执行线程经它把相对路径锚到方案目录）。
+void ProjectManager::setLastFilePath(const QString &path)
+{
+    m_lastFilePath = path;
+    ProjectPaths::setCurrentSchemeFilePath(path);
+}
+
+QString ProjectManager::lastFilePath() const
+{
+    return m_lastFilePath;
 }
 
 void ProjectManager::reportLoadNote(const QString &text)

@@ -19,7 +19,7 @@
 #include <QFont>
 #include <QTimer>
 #include "AppLog.h"
-
+#include "ProjectPaths.h"   // 179 行：拾取与执行两侧的方案目录锚定
 ImageReadNode::ImageReadNode(QObject *parent)
     : HalconNode(parent)
 {
@@ -58,7 +58,7 @@ void ImageReadNode::init()
 void ImageReadNode::run(bool autoSwitch)
 {
     // 参数唯一来源：本轮开始各取一次（局部快照）——避免逐次加锁，并保证同一轮用同一份配置
-    const QString filePath = getParam(QStringLiteral("filePath")).toString();
+    const QString filePath = ProjectPaths::resolveExecutionPath(getParam(QStringLiteral("filePath")).toString());
     const Mode mode = static_cast<Mode>(getParam(QStringLiteral("mode")).toInt());
     const bool autoSwitchEnabled = getParam(QStringLiteral("autoSwitch")).toBool();
     const bool mono8Mode = getParam(QStringLiteral("mono8Mode")).toBool();
@@ -221,7 +221,9 @@ void ImageReadNode::selectMultipleFiles()
         if (!m_imageFiles.isEmpty()) {
             // 参数表是唯一来源：写 filePath。此处 setParam 的副作用不会误重建缓存
             //（多图模式下 mode != SingleImage 且 m_isDirectory 刚置 false），调用方随后会显式 updateImageFiles()
-            setParam(QStringLiteral("filePath"), m_imageFiles[0]);
+            setParam(QStringLiteral("filePath"),
+                     ProjectPaths::makeSchemeRelativeIfInside(ProjectPaths::currentSchemeFilePath(),
+                                                              m_imageFiles[0]));
         }
     }
 }
@@ -232,7 +234,7 @@ void ImageReadNode::updateImageFiles()
     m_currentImageIndex = -1; // 初始化为 -1，表示没有图像被选中
     
     // 参数唯一来源：filePath 从参数表读（本函数由 setParam 触发，也可能在界面线程被直接调用）
-    const QString filePath = getParam(QStringLiteral("filePath")).toString();
+    const QString filePath = ProjectPaths::resolveExecutionPath(getParam(QStringLiteral("filePath")).toString());
     QDir dir(filePath);
     if (dir.exists()) {
         m_isDirectory = true;
@@ -453,6 +455,9 @@ QWidget *ImageReadNode::createParamPanel()
     connect(browseButton, &QPushButton::clicked, [this, filePathEdit, thumbnailLayout]() {
         QString fileName = QFileDialog::getOpenFileName(nullptr, "Select Image File", ".", "Image Files (*.bmp *.jpg *.jpeg *.png *.tif *.tiff)");
         if (!fileName.isEmpty()) {
+            /// 179 行：方案目录内拾取换相对形态（执行时按方案目录锚定解析）
+            fileName = ProjectPaths::makeSchemeRelativeIfInside(
+                ProjectPaths::currentSchemeFilePath(), fileName);
             filePathEdit->setText(fileName);
             setParam("filePath", fileName);
             updateThumbnails(thumbnailLayout);
@@ -465,6 +470,9 @@ QWidget *ImageReadNode::createParamPanel()
             m_currentImageIndex = -1; // 重置为 -1，表示没有图像被选中
             m_displayImageIndex = -1; // 重置显示索引
             m_isDirectory = true;
+            /// 179 行：方案目录内拾取换相对形态（执行时按方案目录锚定解析）
+            dirName = ProjectPaths::makeSchemeRelativeIfInside(
+                ProjectPaths::currentSchemeFilePath(), dirName);
             filePathEdit->setText(dirName);
             setParam("filePath", dirName);
             updateImageFiles();

@@ -3,6 +3,7 @@
 #include "DataObject.h"
 #include "AppLog.h"
 #include "AnnotationDialog.h"
+#include "ProjectPaths.h"   // 179 行：文件路径参数执行侧锚定方案目录
 #include <QWidget>
 #include <QDir>
 #include <QFileInfo>
@@ -44,10 +45,10 @@ void OpencvTrainClassifierNode::run(bool /*autoSwitch*/)
     m_params[QStringLiteral("trainStatus")] = QString();
     m_params[QStringLiteral("lastError")] = QString();
     try {
-        const QString trainDir =
-            m_params.value(QStringLiteral("trainDir"), QString()).toString().trimmed();
-        const QString savePath =
-            m_params.value(QStringLiteral("saveModelPath"), QString()).toString().trimmed();
+        const QString trainDir = ProjectPaths::resolveExecutionPath(
+            m_params.value(QStringLiteral("trainDir"), QString()).toString()).trimmed();
+        const QString savePath = ProjectPaths::resolveExecutionPath(
+            m_params.value(QStringLiteral("saveModelPath"), QString()).toString()).trimmed();
         const int featureMode = m_params.value(QStringLiteral("featureMode"), 0).toInt();
         const int hidden = m_params.value(QStringLiteral("hiddenNeurons"), 32).toInt();
         const int maxIter = m_params.value(QStringLiteral("maxIterations"), 800).toInt();
@@ -105,7 +106,7 @@ QWidget *OpencvTrainClassifierNode::createParamPanel()
         auto *btn = new QPushButton(QStringLiteral("打开标注窗…"));
         lay->addWidget(btn);
         QObject::connect(btn, &QPushButton::clicked, panel, [this, panel]() {
-            QString dir = m_params.value(QStringLiteral("trainDir")).toString().trimmed();
+            QString dir = ProjectPaths::resolveExecutionPath(m_params.value(QStringLiteral("trainDir")).toString()).trimmed();
             if (dir.isEmpty())
                 dir = QDir::currentPath() + QStringLiteral("/annotations");
             AnnotationDialog dlg(this, dir, panel);

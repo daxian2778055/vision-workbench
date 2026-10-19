@@ -2,6 +2,7 @@
 #include "DataObject.h"
 #include "GlobalCameraManager.h"
 #include "GlobalCameraDialog.h"
+#include "ProjectPaths.h"   // 179 行：目录快照位执行锚定方案目录
 #include <QDebug>
 #include <QDir>
 #include <QThread>
@@ -275,6 +276,10 @@ void MvsImageSourceNode::fromJson(const QJsonObject &json)
     m_filePath = json["filePath"].toString("");
     m_imageWidth = json["imageWidth"].toInt(0);
     m_imageHeight = json["imageHeight"].toInt(0);
+    /// 179 行：目录/相机形态随 sourceType 还原，随后刷新快照列表——
+    /// 相对目录形态在此经 ProjectPaths 按方案目录解析（updateImageFiles 内）。
+    m_isDirectory = (m_sourceType != CAMERA);
+    updateImageFiles();
 
     // 如果加载的全局相机名非空，标记占用
     if (!m_globalCameraName.isEmpty()) {
@@ -560,7 +565,9 @@ bool MvsImageSourceNode::loadImageFromFile()
 void MvsImageSourceNode::updateImageFiles()
 {
     if (m_isDirectory && !m_filePath.isEmpty()) {
-        QDir dir(m_filePath);
+        /// 179 行：相对目录形态执行锚定方案目录（目录内拾取本就换相对形态存参）
+        QString resolved = ProjectPaths::resolveExecutionPath(m_filePath);
+        QDir dir(resolved);
         m_imageFiles = dir.entryList({"*.bmp", "*.jpg", "*.png", "*.tif", "*.tiff"}, QDir::Files, QDir::Name);
         for (int i = 0; i < m_imageFiles.size(); i++) {
             m_imageFiles[i] = dir.absoluteFilePath(m_imageFiles[i]);
@@ -1449,6 +1456,8 @@ QWidget *MvsImageSourceNode::createParamPanel()
         QString path = QFileDialog::getExistingDirectory(panel,
             QStringLiteral("\u9009\u62E9\u56FE\u50CF\u6587\u4EF6\u5939"));
         if (!path.isEmpty()) {
+            /// 179 行：方案目录内拾取换相对形态（列表刷新按执行锚定解析）
+            path = ProjectPaths::makeSchemeRelativeIfInside(ProjectPaths::currentSchemeFilePath(), path);
             fileEdit->setText(path);
             setFilePath(path);
         }

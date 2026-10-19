@@ -29,6 +29,7 @@
 #include "AppLog.h"
 #include "GlobalVariableManager.h"
 #include "NodeResultFields.h"   // U-18：原因字段的口径（作废侧与 FlowExecutor 发布侧同一个谓词）
+#include "ProjectPaths.h"   // 179 行：拾取落参把方案目录内的绝对拾取换相对形态
 #include <QMenu>
 
 namespace {
@@ -1161,6 +1162,10 @@ QWidget *HalconNode::createAutoParamPanel()
                         QString path = QFileDialog::getOpenFileName(
                             nullptr, spec.label, ed ? ed->text() : QString());
                         if (!path.isEmpty()) {
+                            /// 179 行：新方案默认方案内相对——方案目录内的拾取换相对形态，
+                            /// 目录外原样（存量方案的绝对路径照旧携带，既有现场不动）。
+                            path = ProjectPaths::makeSchemeRelativeIfInside(
+                                ProjectPaths::currentSchemeFilePath(), path);
                             if (ed) ed->setText(path);
                             setParam(spec.name, path);
                         }

@@ -200,6 +200,7 @@ set(SOURCES
     src/PortDataType.cpp
     src/PortConnectivity.cpp
     src/ProjectManager.cpp
+    src/ProjectPaths.cpp
     src/AuxPanelManager.cpp
     src/ImageDisplayController.cpp
     src/ExecutionStatusController.cpp
@@ -1081,6 +1082,12 @@ add_executable(comm_bind_test tests/comm_bind_test.cpp)
 target_link_libraries(comm_bind_test PRIVATE vfp_core Qt6::Test)
 vfp_add_qtest(NAME CommBindTest TARGET comm_bind_test)
 
+# 方案内文件路径面（179 行，客户报告 P1-1②）：纯解析/分类/审查面——不碰文件内容，
+# 只判形态，相对路径与目录内外判定可在真空座上打钉
+add_executable(project_paths_test tests/project_paths_test.cpp)
+target_link_libraries(project_paths_test PRIVATE vfp_core Qt6::Test)
+vfp_add_qtest(NAME ProjectPathsTest TARGET project_paths_test)
+
 # OpenCV 桥接与节点算法验证（24 条 CHECK：HImage↔cv::Mat 双向 + 阈值/Blob/形态学/边缘/拟合/
 # 模板匹配/卡尺/标定/条码/OCR/运算/旋转/统计）。原先只挂在 if(VFP_BUILD_TESTS) 里——该选项默认
 # OFF 且 tools/ci.ps1 的配置命令不传 -D，故默认配置下连目标都不进解决方案（见推进计划 §3.2 结论 E）。
@@ -1124,7 +1131,8 @@ if(MSVC)
                   ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest CameraIoTest
                   DnnSegmentTest OpencvDefectAlignTest SoakTest StatisticsReportTest SchemePackageTest
                   I18nTest SubFlowTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
-                  FactoryPasswordGuardTest FeatureMatchTest CalibChainTest OpencvNodesTest)
+                  FactoryPasswordGuardTest FeatureMatchTest CalibChainTest OpencvNodesTest
+                  ProjectPathsTest)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
         # path_list_prepend 由 CMake 负责插入并处理平台路径分隔符，避免在
         # ENVIRONMENT 值里嵌套分号导致列表被错误拆分

@@ -1,6 +1,7 @@
 #include "WriteFileNode.h"
 #include "DataObject.h"
 #include "OpencvUtil.h"
+#include "ProjectPaths.h"   // 179 行：拾取与执行两侧的方案目录锚定
 #include <opencv2/imgcodecs.hpp>
 #include <QVBoxLayout>
 #include <QLabel>
@@ -33,7 +34,8 @@ void WriteFileNode::run(bool /*autoSwitch*/)
             m_outputImage.Clear();
             return;
         }
-        const QString path = m_params.value(QStringLiteral("filePath")).toString();
+        const QString path = ProjectPaths::resolveExecutionPath(
+            m_params.value(QStringLiteral("filePath")).toString());
         if (!cv::imwrite(path.toLocal8Bit().constData(), src)) {
             m_outputImage.Clear();
             return;
@@ -69,6 +71,8 @@ QWidget *WriteFileNode::createParamPanel()
             le->text(),
             QStringLiteral("PNG (*.png);;\u6240\u6709\u6587\u4EF6 (*)"));
         if (!p.isEmpty()) {
+            /// 179 行：方案目录内拾取换相对形态（执行时按方案目录锚定解析）
+            p = ProjectPaths::makeSchemeRelativeIfInside(ProjectPaths::currentSchemeFilePath(), p);
             le->setText(p);
             setParam(QStringLiteral("filePath"), p);
         }

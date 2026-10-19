@@ -1,6 +1,7 @@
 #include "DnnDetectNode.h"
 #include "OpencvUtil.h"
 #include "AppLog.h"
+#include "ProjectPaths.h"   // 179 行：文件路径参数执行侧锚定方案目录
 #include <QWidget>
 #include <QFile>
 #include <QFileInfo>
@@ -185,8 +186,8 @@ void DnnDetectNode::run(bool /*autoSwitch*/)
     m_params[QStringLiteral("lastError")] = QString();
     setParamDirect(QStringLiteral("moduleStatus"), false);
     try {
-        const QString modelPath =
-            m_params.value(QStringLiteral("modelPath"), QString()).toString().trimmed();
+        const QString modelPath = ProjectPaths::resolveExecutionPath(
+            m_params.value(QStringLiteral("modelPath"), QString()).toString()).trimmed();
         if (modelPath.isEmpty()) {
             m_params[QStringLiteral("lastError")] = QStringLiteral("请设置 ONNX 模型路径");
             return;
@@ -240,8 +241,8 @@ void DnnDetectNode::run(bool /*autoSwitch*/)
             return;
         }
 
-        const QString clsPath =
-            m_params.value(QStringLiteral("classNamesPath")).toString().trimmed();
+        const QString clsPath = ProjectPaths::resolveExecutionPath(
+            m_params.value(QStringLiteral("classNamesPath")).toString()).trimmed();
         const QStringList classNames = loadClassNames(modelPath, clsPath);
         for (auto &b : boxes)
             if (b.classId >= 0 && b.classId < classNames.size())

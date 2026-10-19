@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ProjectPaths.h"
 #include <QObject>
 #include <QString>
 #include <QJsonObject>
@@ -58,8 +59,11 @@ public:
     /// 从 JSON 恢复单场景（清空并重建节点/连线）
     void sceneFromJson(const QJsonObject &json, FlowScene *scene);
 
-    void setLastFilePath(const QString &path) { m_lastFilePath = path; }
-    QString lastFilePath() const { return m_lastFilePath; }
+    /// 最近一次 loadProject/saveProject/reset 手动打开赋予的方案文件路径。
+    /// 同时喂数 ProjectPaths 进程级基目录快照位（179 行）：节点执行线程经它解析相对路径，
+    /// 故走有界互斥而非裸成员读写。
+    void setLastFilePath(const QString &path);
+    QString lastFilePath() const;
     QString annotationDir() const;
 
 

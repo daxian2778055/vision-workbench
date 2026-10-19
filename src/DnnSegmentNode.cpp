@@ -1,6 +1,7 @@
 #include "DnnSegmentNode.h"
 #include "OpencvUtil.h"
 #include "AppLog.h"
+#include "ProjectPaths.h"   // 179 行：文件路径参数执行侧锚定方案目录
 #include <QWidget>
 #include <QFile>
 #include <QFileInfo>
@@ -460,8 +461,8 @@ void DnnSegmentNode::run(bool /*autoSwitch*/)
     setParamDirect(QStringLiteral("moduleStatus"), false);
 
     try {
-        const QString modelPath =
-            m_params.value(QStringLiteral("modelPath"), QString()).toString().trimmed();
+        const QString modelPath = ProjectPaths::resolveExecutionPath(
+            m_params.value(QStringLiteral("modelPath"), QString()).toString()).trimmed();
         if (modelPath.isEmpty()) {
             fail(QStringLiteral("请设置 ONNX 模型路径"));
             return;
@@ -600,8 +601,8 @@ void DnnSegmentNode::run(bool /*autoSwitch*/)
         int outCount = compCount;
         if (useInstance) {
             // 实例模式：框数组用实例框（携带类别/置信度），面积门槛按"框内掩膜像素数"过滤
-            const QString clsPath =
-                m_params.value(QStringLiteral("classNamesPath")).toString().trimmed();
+            const QString clsPath = ProjectPaths::resolveExecutionPath(
+                m_params.value(QStringLiteral("classNamesPath")).toString()).trimmed();
             const QStringList classNames = loadClassNames(modelPath, clsPath);
             QVector<DetectionBox> keptInst;
             const cv::Rect imgRect(0, 0, img.cols, img.rows);

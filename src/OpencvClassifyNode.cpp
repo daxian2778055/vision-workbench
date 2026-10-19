@@ -3,6 +3,7 @@
 #include "OpencvUtil.h"
 #include "DataObject.h"
 #include "AppLog.h"
+#include "ProjectPaths.h"   // 179 行：文件路径参数执行侧锚定方案目录
 #include <QWidget>
 #include <opencv2/imgproc.hpp>
 
@@ -38,8 +39,8 @@ void OpencvClassifyNode::run(bool /*autoSwitch*/)
             m_outputImage.Clear();
             return;
         }
-        const QString modelPath =
-            m_params.value(QStringLiteral("modelPath"), QString()).toString().trimmed();
+        const QString modelPath = ProjectPaths::resolveExecutionPath(
+            m_params.value(QStringLiteral("modelPath"), QString()).toString()).trimmed();
         if (modelPath.isEmpty()) {
             m_params[QStringLiteral("lastError")] = QStringLiteral("请设置模型文件路径");
             m_params["moduleStatus"] = false;

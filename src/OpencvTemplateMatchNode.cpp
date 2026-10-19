@@ -3,6 +3,7 @@
 #include "DataObject.h"
 #include "AppLog.h"
 #include "FlowScene.h"
+#include "ProjectPaths.h"   // 179 行：文件路径参数执行侧锚定方案目录
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <QWidget>
@@ -159,8 +160,8 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
             cv::cvtColor(gray, gray, cv::COLOR_BGR2GRAY);
         }
 
-        const QString templatePath =
-            m_params.value(QStringLiteral("templatePath"), QString()).toString().trimmed();
+        const QString templatePath = ProjectPaths::resolveExecutionPath(
+            m_params.value(QStringLiteral("templatePath"), QString()).toString()).trimmed();
         const bool train = m_params.value(QStringLiteral("trainFromImage"), false).toBool();
         const int methodIdx = m_params.value(QStringLiteral("method"), 1).toInt();
         const double minScore = m_params.value(QStringLiteral("minScore"), 0.6).toDouble();
