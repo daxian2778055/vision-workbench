@@ -22,6 +22,7 @@ void TcpCommNode::init()
     m_params[QStringLiteral("serverIp")] = QStringLiteral("127.0.0.1");
     m_params[QStringLiteral("port")] = 502;
     m_params[QStringLiteral("mode")] = QStringLiteral("Client");
+    m_params[QStringLiteral("bindAddress")] = QString(); // 177 行：留空=全网卡默认
     m_params[QStringLiteral("autoReconnect")] = true;
     m_params[QStringLiteral("reconnectInterval")] = 3000;
     // 帧组装（粘包/半包治理）：默认关闭，行为与历史一致；在设备配置里开启
@@ -93,12 +94,28 @@ bool TcpCommNode::openConnection()
 
     if (m_isServer) {
         m_server = new QTcpServer(this);
-        if (!m_server->listen(QHostAddress::Any, m_params.value(QStringLiteral("port"), 502).toInt())) {
+        // 177 行：监听地址从节点参数 bindAddress 解析（CommBind 见基类头注）。
+        // 默认面 = 全网卡（0.0.0.0 历史语义保持）；显式 = 该地址；无效 = 拒启动不回落。
+        const CommBind::BindChoice bind = CommBind::resolveListenAddress(
+            m_params.value(QStringLiteral("bindAddress")).toString());
+        if (bind.kind == CommBind::BindKind::Invalid) {
+            emit communicationError(QStringLiteral(
+                "\u76D1\u542C\u5730\u5740\u914D\u7F6E\u65E0\u6548\uFF08\u5E94\u586B IP \u5B57\u9762\u91CF\uFF0C\u7559\u7A7A\u4E3A\u5168\u7F51\u5361 0.0.0.0\uFF09"));
+            m_connected = false;
+            setParamDirect(QStringLiteral("connected"), false);
+            return false;
+        }
+        const QHostAddress bindAddr = (bind.kind == CommBind::BindKind::Explicit)
+                                          ? bind.address
+                                          : QHostAddress::Any;
+        if (!m_server->listen(bindAddr, m_params.value(QStringLiteral("port"), 502).toInt())) {
             emit communicationError(QStringLiteral("\u670D\u52A1\u7AEF\u542F\u52A8\u5931\u8D25: %1").arg(m_server->errorString()));
             m_connected = false;
             setParamDirect(QStringLiteral("connected"), false);
             return false;
         }
+        VFP_DEBUG << "TCP server listening on" << bindAddr.toString()
+                  << "port" << m_params.value(QStringLiteral("port"), 502).toInt();
         connect(m_server, &QTcpServer::newConnection, this, [this]() {
             // 释放旧连接（同一节点只维护一个活动客户端）
             if (m_socket) {
@@ -306,6 +323,18 @@ QWidget *TcpCommNode::createParamPanel()
     layout->addWidget(new QLabel(QStringLiteral("\u7AEF\u53E3:")));
     layout->addWidget(portEdit);
 
+    // 监听地址（177 行拍板）：仅服务端模式生效。留空 = 全网卡默认（0.0.0.0 历史语义
+    // 保持，无静默性质）；填 IP 字面量 = 显式绑定；无效值启动时拒绝（不静默回落）。
+    auto *bindEdit = new QLineEdit();
+    bindEdit->setObjectName(QStringLiteral("tcpBindAddress"));
+    bindEdit->setPlaceholderText(QStringLiteral("留空=全网卡(0.0.0.0)"));
+    bindEdit->setText(m_params.value(QStringLiteral("bindAddress")).toString());
+    connect(bindEdit, &QLineEdit::editingFinished, this, [this, bindEdit]() {
+        setParam(QStringLiteral("bindAddress"), bindEdit->text().trimmed());
+    });
+    layout->addWidget(new QLabel(QStringLiteral("监听地址:")));
+    layout->addWidget(bindEdit);
+
     // 自动重连（客户端模式生效）
     auto *reconnectCheck = new QCheckBox(QStringLiteral("断线自动重连"));
     reconnectCheck->setObjectName(QStringLiteral("tcpAutoReconnect"));
@@ -363,6 +392,10 @@ void TcpCommNode::updateParamPanel(QWidget *panel)
     if (auto *w = panel->findChild<QLineEdit *>(QStringLiteral("tcpPort"))) {
         QSignalBlocker b(w);
         w->setText(QString::number(m_params.value(QStringLiteral("port"), 502).toInt()));
+    }
+    if (auto *w = panel->findChild<QLineEdit *>(QStringLiteral("tcpBindAddress"))) {
+        QSignalBlocker b(w);
+        w->setText(m_params.value(QStringLiteral("bindAddress")).toString());
     }
     if (auto *cb = panel->findChild<QCheckBox *>(QStringLiteral("tcpAutoReconnect"))) {
         QSignalBlocker b(cb);

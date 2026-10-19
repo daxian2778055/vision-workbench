@@ -1075,6 +1075,12 @@ if(MSVC)
     vfp_add_qtest(NAME CommWritebackTest TARGET comm_writeback_test)
 endif()
 
+# 通信监听地址解析（177 行）：纯解析器行为面（不碰网络）——空参=默认全网卡、
+# 显式 IP 字面量直通、非法配置拒绝（不静默回落）、主机名不解析
+add_executable(comm_bind_test tests/comm_bind_test.cpp)
+target_link_libraries(comm_bind_test PRIVATE vfp_core Qt6::Test)
+vfp_add_qtest(NAME CommBindTest TARGET comm_bind_test)
+
 # OpenCV 桥接与节点算法验证（24 条 CHECK：HImage↔cv::Mat 双向 + 阈值/Blob/形态学/边缘/拟合/
 # 模板匹配/卡尺/标定/条码/OCR/运算/旋转/统计）。原先只挂在 if(VFP_BUILD_TESTS) 里——该选项默认
 # OFF 且 tools/ci.ps1 的配置命令不传 -D，故默认配置下连目标都不进解决方案（见推进计划 §3.2 结论 E）。
@@ -1117,7 +1123,7 @@ if(MSVC)
     set(VFP_TESTS NodeCoreTest OpencvSerializationTest IntegrationTest DatabaseTest PerfTest
                   ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest CameraIoTest
                   DnnSegmentTest OpencvDefectAlignTest SoakTest StatisticsReportTest SchemePackageTest
-                  I18nTest SubFlowTest AnomalyDetectTest NodeExecuteSmokeTest
+                  I18nTest SubFlowTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
                   FactoryPasswordGuardTest FeatureMatchTest CalibChainTest OpencvNodesTest)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
         # path_list_prepend 由 CMake 负责插入并处理平台路径分隔符，避免在

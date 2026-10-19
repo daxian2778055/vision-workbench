@@ -24,6 +24,7 @@ void UdpCommNode::init()
     m_params[QStringLiteral("localPort")] = 8000;      /// 本地绑定端口
     m_params[QStringLiteral("remoteIp")] = QStringLiteral("127.0.0.1"); /// 发送目标（空=仅接收）
     m_params[QStringLiteral("remotePort")] = 8000;     /// 发送目标端口
+    m_params[QStringLiteral("bindAddress")] = QString(); /// 177 行：留空=本机全部网卡默认
     setParamDirect(QStringLiteral("connected"), false);
     // 帧组装（UDP 一般天然分包，保留配置项以统一行为）：默认关闭
     m_params[QStringLiteral("frameTimeoutMs")] = 0;
@@ -47,8 +48,24 @@ bool UdpCommNode::openConnection()
         return false;
     }
     const quint16 localPort = static_cast<quint16>(rawLocalPort);
-    // 绑定任意本机地址（不限定 IP）；端口 0 表示由系统分配（仅发送场景可用）
-    if (!m_socket->bind(QHostAddress::AnyIPv4, localPort)) {
+    // 绑定地址（177 行）：解析见表 CommunicationNodeBase.h——留空 = AnyIPv4 产品默认
+    // （历史语义保持）；显式 IP 字面量 = 只绑该网卡；无效 = 拒绑定不静默回落。
+    const CommBind::BindChoice bind = CommBind::resolveListenAddress(
+        m_params.value(QStringLiteral("bindAddress")).toString());
+    if (bind.kind == CommBind::BindKind::Invalid) {
+        emit communicationError(QStringLiteral(
+            "\u672C\u5730\u5730\u5740\u914D\u7F6E\u65E0\u6548\uFF08\u5E94\u586B IP \u5B57\u9762\u91CF\uFF0C\u7559\u7A7A\u4E3A\u672C\u673A\u5168\u90E8\u7F51\u5361\uFF09"));
+        m_socket->deleteLater();
+        m_socket = nullptr;
+        m_connected = false;
+        setParamDirect(QStringLiteral("connected"), false);
+        return false;
+    }
+    const QHostAddress localAddr = (bind.kind == CommBind::BindKind::Explicit)
+                                       ? bind.address
+                                       : QHostAddress::AnyIPv4;
+    // 端口 0 表示由系统分配（仅发送场景可用）
+    if (!m_socket->bind(localAddr, localPort)) {
         emit communicationError(QStringLiteral("UDP 绑定端口 %1 失败: %2")
                                     .arg(localPort).arg(m_socket->errorString()));
         m_socket->deleteLater();
@@ -57,6 +74,8 @@ bool UdpCommNode::openConnection()
         setParamDirect(QStringLiteral("connected"), false);
         return false;
     }
+    VFP_DEBUG << "UDP socket bound on" << localAddr.toString()
+              << "port" << localPort;
     connect(m_socket, &QUdpSocket::readyRead, this, &UdpCommNode::onReadyRead);
 #ifdef Q_OS_WIN
     // 允许发送广播（现场常用 UDP 广播触发；Windows 下必须显式 SO_BROADCAST）
@@ -166,6 +185,18 @@ QWidget *UdpCommNode::createParamPanel()
     layout->addWidget(new QLabel(QStringLiteral("本地端口:")));
     layout->addWidget(localSpin);
 
+    // 本地约束地址（177 行）：留空 = 本机全部网卡（产品默认面）；填 IP 字面量 = 只绑该网卡；
+    // 无效值启动时拒绝（不静默回落）。仅接收面生效。
+    auto *bindEdit = new QLineEdit();
+    bindEdit->setObjectName(QStringLiteral("udpBindAddress"));
+    bindEdit->setPlaceholderText(QStringLiteral("留空=本机全部网卡"));
+    bindEdit->setText(m_params.value(QStringLiteral("bindAddress")).toString());
+    connect(bindEdit, &QLineEdit::editingFinished, this, [this, bindEdit]() {
+        setParam(QStringLiteral("bindAddress"), bindEdit->text().trimmed());
+    });
+    layout->addWidget(new QLabel(QStringLiteral("绑定地址:")));
+    layout->addWidget(bindEdit);
+
     auto *ipEdit = new QLineEdit(m_params.value(QStringLiteral("remoteIp")).toString());
     ipEdit->setObjectName(QStringLiteral("udpRemoteIp"));
     ipEdit->setPlaceholderText(QStringLiteral("如 192.168.1.10（留空=仅接收）"));
@@ -208,6 +239,10 @@ void UdpCommNode::updateParamPanel(QWidget *panel)
     if (auto *sp = panel->findChild<QSpinBox *>(QStringLiteral("udpLocalPort"))) {
         QSignalBlocker b(sp);
         sp->setValue(m_params.value(QStringLiteral("localPort"), 8000).toInt());
+    }
+    if (auto *ed = panel->findChild<QLineEdit *>(QStringLiteral("udpBindAddress"))) {
+        QSignalBlocker b(ed);
+        ed->setText(m_params.value(QStringLiteral("bindAddress")).toString());
     }
     if (auto *ed = panel->findChild<QLineEdit *>(QStringLiteral("udpRemoteIp"))) {
         QSignalBlocker b(ed);

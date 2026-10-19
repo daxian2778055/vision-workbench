@@ -92,6 +92,13 @@ void ModbusConfigDialog::setupUI()
     m_port->setValue(502);
     formLayout->addRow(m_portLabel, m_port);
 
+    // 从站监听地址（177 行）：从站监听面。留空 = 全网卡默认（历史语义保持）；
+    // 显式 IP 字面量 = 只绑该网卡；无效值由节点侧拒启动（不静默回落）。
+    m_bindAddressLabel = new QLabel(QStringLiteral("从站监听地址:"));
+    m_bindAddress = new QLineEdit();
+    m_bindAddress->setPlaceholderText(QStringLiteral("留空=从站全网卡默认"));
+    formLayout->addRow(m_bindAddressLabel, m_bindAddress);
+
     // RTU（RS485）串口参数：连接类型选 RTU 时必须能配串口——
     // 历史缺陷：有 RTU 选项但没有任何串口字段，节点侧也漏设参数，选了 RTU 永远连不上
     m_serialPortLabel = new QLabel(QStringLiteral("串口号:"));
@@ -396,6 +403,8 @@ void ModbusConfigDialog::loadConfigToForm(const QJsonObject &config)
         m_host->setText(config[QStringLiteral("host")].toString());
     if (config.contains(QStringLiteral("port")))
         m_port->setValue(config[QStringLiteral("port")].toInt());
+    if (config.contains(QStringLiteral("bindAddress")) && m_bindAddress)
+        m_bindAddress->setText(config[QStringLiteral("bindAddress")].toString());
     if (config.contains(QStringLiteral("portName")) && m_serialPortName) {
         const QString pn = config[QStringLiteral("portName")].toString();
         if (!pn.isEmpty() && m_serialPortName->findText(pn) < 0)
@@ -497,6 +506,8 @@ QJsonObject ModbusConfigDialog::buildConfigFromForm() const
     cfg[QStringLiteral("connectionType")] = m_connType->currentText();
     cfg[QStringLiteral("host")] = m_host->text();
     cfg[QStringLiteral("port")] = m_port->value();
+    cfg[QStringLiteral("bindAddress")] =
+        m_bindAddress ? m_bindAddress->text().trimmed() : QString(); // 177 行
     // RTU 串口参数（TCP 时为空/默认值，不影响既有配置）
     cfg[QStringLiteral("portName")] =
         m_serialPortName ? m_serialPortName->currentText().trimmed() : QString();

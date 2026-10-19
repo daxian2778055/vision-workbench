@@ -52,6 +52,7 @@ void ModbusNode::init()
     m_params[QStringLiteral("reconnectInterval")] = 3000;
     m_params[QStringLiteral("writeVerify")] = false;   // S4：回写三段确认（默认关闭）
     m_params[QStringLiteral("pollInterval")] = 100;
+    m_params[QStringLiteral("bindAddress")] = QString(); // 177 行：留空=全网卡默认（Modbus 从站）
     setParamDirect(QStringLiteral("connected"), false);
 
     // 自动重连定时器
@@ -109,12 +110,28 @@ bool ModbusNode::openConnection()
 
     // ===== 服务器模式：监听端口，对外提供寄存器 =====
     if (m_role == MODBUS_SERVER) {
+        // 177 行：从站监听地址解析（CommBind 见基类头注）。默认面 = Any 产品语义保持
+        // （Qt Modbus 服务器未设 NetworkAddressParameter 即全网卡）；显式 = 该地址；
+        // 无效 = 拒启动不静默回落（N4 同形）。
+        const CommBind::BindChoice bind = CommBind::resolveListenAddress(
+            m_params.value(QStringLiteral("bindAddress")).toString());
+        if (bind.kind == CommBind::BindKind::Invalid) {
+            emit communicationError(QStringLiteral(
+                "\u4ECE\u7AD9\u76D1\u542C\u5730\u5740\u914D\u7F6E\u65E0\u6548\uFF08\u5E94\u586B IP \u5B57\u9762\u91CF\uFF0C\u7559\u7A7A\u4E3A\u5168\u7F51\u5361 0.0.0.0\uFF09"));
+            m_connected = false;
+            setParamDirect(QStringLiteral("connected"), false);
+            return false;
+        }
         m_modbusServer = new QModbusTcpServer(this);
         m_modbusServer->setServerAddress(
             static_cast<quint8>(getParam(QStringLiteral("slaveAddress")).toInt()));
         m_modbusServer->setConnectionParameter(
             QModbusDevice::NetworkPortParameter,
             m_params.value(QStringLiteral("port"), 502).toInt());
+        if (bind.kind == CommBind::BindKind::Explicit) {
+            m_modbusServer->setConnectionParameter(
+                QModbusDevice::NetworkAddressParameter, bind.address.toString());
+        }
 
         // 必须先 setMap：QModbusServer 默认寄存器表为空，未映射地址的写入会被直接拒绝——
         // 既不会改值、也不会触发 dataWritten（表现为"客户端写成功、服务器毫无反应"）。
@@ -166,8 +183,10 @@ bool ModbusNode::openConnection()
         m_everReallyConnected = true;   // 服务器监听已起 = 真正可用（S1）
         setParamDirect(QStringLiteral("connected"), true);
         emit connectionOpened();
-        VFP_DEBUG << "Modbus server listening on port"
-                  << m_params.value(QStringLiteral("port"), 502).toInt();
+        VFP_DEBUG << "Modbus server listening on"
+                  << (bind.kind == CommBind::BindKind::Explicit
+                          ? bind.address.toString() : QStringLiteral("0.0.0.0"))
+                  << "port" << m_params.value(QStringLiteral("port"), 502).toInt();
         return true;
     }
 
