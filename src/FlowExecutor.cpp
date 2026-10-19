@@ -1,5 +1,6 @@
 #include "FlowExecutor.h"
 #include "FlowScene.h"
+#include "SessionManager.h"   // 173 行：闸开不发新跑的外部触发 idle 位判定
 #include "NodeBase.h"
 #include "HalconNode.h"
 #include "ConditionalNode.h"
@@ -44,6 +45,13 @@ FlowExecutor::FlowExecutor(QObject *parent)
             if (!canTriggerFromExternal()) {
                 VFP_DEBUG << "Flow" << m_flowName
                           << "in hardware-trigger mode, external trigger ignored";
+                return;
+            }
+            // 173 行拍板：闸开不发新跑——GTM 直触在空闲位起跑也是新一次发起，随闸收。
+            // 引擎侧只判写闸本体不判会话（与 requestExternalRound 同口径，173 行登记）。
+            if (SessionManager::instance()->writesBlocked()) {
+                VFP_RUNTIME_INFO.noquote()
+                    << QStringLiteral("写闸开启期间不受理外部触发的新运行（出厂口令未改，改密后恢复）");
                 return;
             }
             startExecution();
@@ -401,6 +409,15 @@ bool FlowExecutor::requestExternalRound()
             }
             return true;
         }
+    }
+    // 173 行拍板：闸开不发新跑——外部触发在空闲位起的这一轮也属「新的运行」（软触发的
+    // idleness→running 转移）。跑着的照跑不受影响：运行中的排队补跑仍是轮末消费（上面分支）。
+    // 引擎侧只判写闸本体（writesBlocked）不判会话：外触引擎发生在任何会话之前也必须有意义，
+    // 出厂态的安全由闸本身与 UI 侧的 canRunFlow 分层承担（173 行登记）。
+    if (SessionManager::instance()->writesBlocked()) {
+        VFP_RUNTIME_INFO.noquote()
+            << QStringLiteral("写闸开启期间不受理外部触发的新运行（出厂口令未改，改密后恢复）");
+        return false;
     }
     startExecution();   // 空闲：语义同原 startExecution（立即起一轮）
     return true;

@@ -4,6 +4,7 @@
 #include <QStringList>
 #include <QProcessEnvironment>
 #include <QMutex>
+#include <QSet>
 #include <functional>
 
 class QProcess;
@@ -19,7 +20,9 @@ class QProcess;
 ///   - 执行超时（maxExecutionMs）：防止脚本挂死（沿用既有 30s 上限）
 ///   - 管理员降权提示（blockWhenElevated）：以管理员身份运行时拒绝执行（默认仅告警）
 ///   - 审计日志（auditLogEnabled）：记录每次执行的脚本哈希、语言、允许/拒绝原因，便于溯源
-///   - 交互确认（requireConfirmation）：执行前向用户弹窗确认（默认关闭，可由配置开启）
+///   - 交互确认（requireConfirmation）：执行前向用户弹窗确认（174 行拍板默认开启——
+///     会话内同「语言+内容」的脚本首次执行前确认一次，同意后不再每轮重复，内容一变重新确认；
+///     无 QApplication 的环境（如测试/无头）不弹直接放行；可由配置关闭）
 ///
 /// 配置通过 QSettings（分组 "scriptSecurity"）持久化；首次运行使用下方安全默认值。
 class ScriptSecurityPolicy
@@ -38,6 +41,12 @@ public:
 
     bool requireConfirmation() const { return m_requireConfirmation; }
     void setRequireConfirmation(bool v) { m_requireConfirmation = v; }
+
+    /// 174 行拍板：会话级一次同意缓存。默认翻转成「开」之后，确认弹窗若逐轮重复会把
+    /// 连续/硬触发产线卡死——所以同意按 (语言, 内容哈希) 记账：首次必问、同意一次本会话
+    /// 内不再问、内容一变重新问。两枚为纯内存判定（无弹窗、无 QApplication 依赖），腿直接钉。
+    bool scriptApproved(const QString &language, const QString &script) const;
+    void approveScript(const QString &language, const QString &script) const;
 
     int maxExecutionMs() const { return m_maxExecutionMs; }
     void setMaxExecutionMs(int v) { m_maxExecutionMs = v; }
@@ -178,7 +187,12 @@ private:
 
     bool m_enabled = true;
     QStringList m_allowedLanguages = { QStringLiteral("Python"), QStringLiteral("Lua") };
-    bool m_requireConfirmation = false;
+    /// 174 行拍板：确认默认开启（原 false 属 146 行登记的取舍，本次按同粒度翻面配腿）。
+    bool m_requireConfirmation = true;
+    /// 同意缓存（thread-safe：ScriptNode::run 在执行线程进，弹窗经 BlockingQueuedConnection
+    /// 切主线程——缓存读写两侧都可能从执行线程来，必须带锁；mutable 是判定方法的 const 面）。
+    mutable QMutex m_approvalMutex;
+    mutable QSet<QString> m_approvedScripts;
     int m_maxExecutionMs = 30000;
     bool m_isolatedPython = true;
     bool m_stripEnvironment = true;

@@ -366,7 +366,17 @@ MainWindow::MainWindow(QWidget *parent) :
             );
             mainToolBar->addWidget(m_stepBtn);
             connect(m_stepBtn, &QToolButton::clicked, this, [this]() {
-                if (m_executor) m_executor->stepExecution();
+                if (!m_executor)
+                    return;
+                // 173 行拍板：闸开不发新跑——空闲/停止态的步进会从首个节点新起一轮，随闸收；
+                // 运行中/暂停下的步进是运行态控制（标记节点断点、继续），不在闸内。
+                const ExecutionState estate = m_executor->getState();
+                if ((estate == ExecutionState::Idle || estate == ExecutionState::Stopped)
+                    && !SessionManager::instance()->canRunFlow()) {
+                    logMessage(tr("写闸开启期间不受理步进起跑：出厂默认口令仍在使用（改密后恢复）"));
+                    return;
+                }
+                m_executor->stepExecution();
             });
 
             // 暂停/继续按钮：运行中→暂停；暂停中→继续（连续模式下的"启动后暂停切换"就靠它）
@@ -2567,6 +2577,12 @@ void MainWindow::onStartExecution()
         m_executor->resumeExecution();   // 已在跑/暂停：按"开始"视为继续，不留"点了没反应"的死按钮
         return;
     }
+    // 173 行拍板：闸开不发新跑——运行态的继续走上面分支，新一次发起在这里收闸。
+    if (!SessionManager::instance()->canRunFlow()) {
+        logMessage(tr("写闸开启期间不受理新的运行：出厂默认口令仍在使用"
+                      "（正在跑的流程不受影响，改密后恢复）"));
+        return;
+    }
     // 明确点"开始执行"= 正常跑一遍，退出上次遗留的单步模式
     // （历史缺陷：单步模式粘住，之后每次"开始执行"仍在每个节点后暂停）
     m_executor->exitStepMode();
@@ -2590,6 +2606,11 @@ void MainWindow::onSingleShotExecution()
     // 单次执行：仅在软触发模式可用（按钮在连续/硬触发模式下已禁用），运行一次当前流程
     if (m_executor->getState() == ExecutionState::Running) return;
     if (m_executor->getFlowMode() != FlowMode::SoftwareTrigger) return;
+    // 173 行拍板：闸开不发新跑（单次执行也是一次新发起）
+    if (!SessionManager::instance()->canRunFlow()) {
+        logMessage(tr("写闸开启期间不受理单次执行：出厂默认口令仍在使用（改密后恢复）"));
+        return;
+    }
     m_executor->startExecution();
 }
 
@@ -2792,6 +2813,15 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
             const ExecutionState st = ex->getState();
             if (st == ExecutionState::Running || st == ExecutionState::Paused)
                 continue;   // 已在运行的流程不重复启动
+            // 173 行拍板：闸开不发新跑——载入自动连续跑属新一次发起，随闸收；
+            // 改密解除后从这里（或「开始执行」）即可恢复自动运行。
+            if (!SessionManager::instance()->canRunFlow()) {
+                logMessage(tr("写闸开启期间不自动开始运行：「%1」为连续模式但出厂口令未改"
+                              "（改密后可从「开始执行」恢复）")
+                               .arg(scene->flowName().isEmpty() ? QStringLiteral("未命名流程")
+                                                                : scene->flowName()));
+                continue;
+            }
             ex->startExecution();
             logMessage(QStringLiteral("载入方案：「%1」为连续模式，已自动开始运行（可用「暂停/停止」控制）")
                            .arg(scene->flowName().isEmpty() ? QStringLiteral("未命名流程")
@@ -3519,6 +3549,12 @@ void MainWindow::setupDockWidgets()
         // 运行视图按钮动作 → 流程控制
         connect(m_runtimeView, &RuntimeInterfaceView::actionTriggered, this,
                 [this](const QString &actionId) {
+            // 173 行拍板：闸开不发新跑——start/single/trigger 三枚起跑动作随闸收，stop 照常可用。
+            if (actionId != QStringLiteral("stop")
+                && !SessionManager::instance()->canRunFlow()) {
+                logMessage(tr("写闸开启期间不受理新的运行：出厂默认口令仍在使用（改密后恢复）"));
+                return;
+            }
             if (actionId == QStringLiteral("start")) {
                 if (m_executor->getFlowMode() == FlowMode::SoftwareTrigger)
                     m_executor->startExecution();
@@ -3981,8 +4017,9 @@ void MainWindow::enforceFactoryPasswordPolicy()
         QDialog dlg(this);
         dlg.setWindowTitle(tr("修改管理员口令"));
         auto *info = new QLabel(tr("管理员账户 admin 仍在使用出厂默认口令，任何人都能免授权登录并修改方案。\n"
-                                   "在改掉口令之前，画布与模块编辑、保存/导出方案、用户增删与通信配置入口均被禁止"
-                                   "（用户增删在落库层拒绝，不只是菜单置灰；流程运行不受影响）。"),
+                                   "在改掉口令之前，画布与模块编辑、保存/导出方案、用户增删与通信配置入口均被禁止，"
+                                   "新的流程运行也不受理"
+                                   "（用户增删在落库层拒绝，不只是菜单置灰；正在跑的流程不受影响）。"),
                                 &dlg);
         info->setWordWrap(true);
         auto *oldEdit = new QLineEdit(&dlg);
@@ -4004,7 +4041,15 @@ void MainWindow::enforceFactoryPasswordPolicy()
         layout->addWidget(buttons);
 
         if (dlg.exec() != QDialog::Accepted) {
-            break;   // 放弃改密：闸保持，下面挂常驻提示，之后可从「系统」菜单再来一次
+            // 173 行拍板（P0 余量：取消改密后会话仍在）：放弃即退登——闸保持，会话不留。
+            // 回程现成：登录判据不变（重登或重启后再进），改密弹框每次登录都会再弹直到改掉；
+            // 「系统 → 修改管理员口令」刻意不受会话约束（setupSystemMenu 处 setEnabled(true)），
+            // 退登后也能直接把闸解掉，不存在把用户锁死在无法解锁位置的问题。
+            session->logout();
+            setWindowTitle(QStringLiteral("视觉方案工作台"));
+            applyPermissionRestrictions();
+            logMessage(tr("放弃修改出厂口令：本次会话已结束，写闸保持禁止（重新登录后继续）"));
+            break;
         }
 
         QString error;

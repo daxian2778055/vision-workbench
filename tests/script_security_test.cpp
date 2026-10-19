@@ -6,6 +6,7 @@
 #include <QFileInfo>
 #include <QProcess>
 #include <QProcessEnvironment>
+#include <QSettings>
 #include <QTemporaryDir>
 
 /// ScriptSecurityPolicy 行为验证
@@ -33,6 +34,10 @@ private slots:
     void sandbox_disabled_isNoOp();
     void sandboxMode_persistsAcrossLoad();
     void interpreterPath_persistsAndFallsBack();
+    // 174 行（146 行预留的同粒度拍板兑现）：确认默认翻转 + 会话级一次同意缓存。
+    // 放在套件末尾：defaults 腿要 load() 重灌全局状态，重灌面只对来到它后面的腿负责。
+    void requireConfirmation_defaultsOn();
+    void approvalProof_sessionOncePerContent();
 };
 
 void ScriptSecurityPolicyTest::initTestCase()
@@ -246,6 +251,44 @@ void ScriptSecurityPolicyTest::interpreterPath_persistsAndFallsBack()
     // 恢复现场（值 + 落盘）
     p.setInterpreterPath(QStringLiteral("Python"), original);
     p.save();
+}
+
+void ScriptSecurityPolicyTest::requireConfirmation_defaultsOn()
+{
+    // 174 行按拍板粒度配腿（146 行 EDGE 的「同粒度」要求）：默认值以成员初始化器为源，
+    // 本腿先把本测试作用域的持久键卸掉再 load()——机上旧配置不进判定（QSettings 缓存
+    // 经 load() 内 sync() 强制重读，与既有 save→load 往返同语义）。
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("scriptSecurity"));
+    settings.remove(QStringLiteral("requireConfirmation"));
+    settings.endGroup();
+    settings.sync();   // QSettings 析构才落盘：不 sync() 这一下 remove 赶在 load() 的读之前没有效
+    ScriptSecurityPolicy &p = ScriptSecurityPolicy::instance();
+    p.load();
+    QVERIFY2(p.requireConfirmation(),
+             "脚本执行确认须默认开启：出厂/未配置设备不得静默执行任意脚本");
+}
+
+void ScriptSecurityPolicyTest::approvalProof_sessionOncePerContent()
+{
+    // 174 行两向腿：同意缓存按 (语言, 内容哈希) 记账——同内容首问必问、同意一次本会话
+    // 不再问（否则连续模式逐轮弹窗卡死产线）；内容一变即换键，改过的脚本必须重新走确认。
+    // 纯内存判定，不弹窗、无 QApplication 依赖。
+    ScriptSecurityPolicy &p = ScriptSecurityPolicy::instance();
+    const bool savedConfirm = p.requireConfirmation();
+    p.setRequireConfirmation(true);   // 缓存只在确认开启时被消费，腿与默认同态
+
+    QVERIFY2(!p.scriptApproved(QStringLiteral("Python"), QStringLiteral("print(1)")),
+             "未同意过的脚本不得自带「已确认」身份");
+    p.approveScript(QStringLiteral("Python"), QStringLiteral("print(1)"));
+    QVERIFY2(p.scriptApproved(QStringLiteral("Python"), QStringLiteral("print(1)")),
+             "同意一次后本会话内不再重复确认");
+    QVERIFY2(!p.scriptApproved(QStringLiteral("Python"), QStringLiteral("print(2)\r\nprint(3)")),
+             "内容一变就换键：改过的脚本必须重新走一次确认");
+    QVERIFY2(!p.scriptApproved(QStringLiteral("Lua"), QStringLiteral("print(1)")),
+             "语言进了键：换语言不沿用同意");
+
+    p.setRequireConfirmation(savedConfirm);
 }
 
 QTEST_GUILESS_MAIN(ScriptSecurityPolicyTest)

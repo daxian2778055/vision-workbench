@@ -155,6 +155,15 @@ bool ScriptSecurityPolicy::evaluate(const QString &language, const QString & /*s
 }
 
 namespace {
+
+// (语言, 内容) 的会话级同意键：内容取 SHA-256 十六进制楔入键，脚本内容本身可能与
+// 分隔符同形，拼原文会把「A|B」与它们的前缀截断读成同键。
+QString approvalCacheKey(const QString &language, const QString &script)
+{
+    const QByteArray digest = QCryptographicHash::hash(script.toUtf8(), QCryptographicHash::Sha256);
+    return language + QStringLiteral(":") + QString::fromLatin1(digest.toHex());
+}
+
 /// 展示"脚本执行确认"窗口——**必须在 GUI 线程调用**（QWidget 归属约束）。
 /// 完整展示脚本（只读、可滚动、不截断），默认按钮为"取消"（回车不会误确认）。
 bool showScriptConfirmationOnGuiThread(const QString &language, const QString &script)
@@ -201,9 +210,26 @@ bool showScriptConfirmationOnGuiThread(const QString &language, const QString &s
 }
 }   // namespace
 
+bool ScriptSecurityPolicy::scriptApproved(const QString &language, const QString &script) const
+{
+    QMutexLocker locker(&m_approvalMutex);
+    return m_approvedScripts.contains(approvalCacheKey(language, script));
+}
+
+void ScriptSecurityPolicy::approveScript(const QString &language, const QString &script) const
+{
+    QMutexLocker locker(&m_approvalMutex);
+    m_approvedScripts.insert(approvalCacheKey(language, script));
+}
+
 bool ScriptSecurityPolicy::requestConfirmation(const QString &language, const QString &script) const
 {
     if (!m_requireConfirmation) {
+        return true;
+    }
+    // 174 行式：会话内同内容已经用户同意 → 直接放行（连续/硬触发模式若逐轮弹窗会把
+    // 无人陪护的产线卡死，那不可用也不安全——安全该来自「改脚本必然换内容 ⇒ 换键 ⇒ 重问」）。
+    if (scriptApproved(language, script)) {
         return true;
     }
 
@@ -214,14 +240,18 @@ bool ScriptSecurityPolicy::requestConfirmation(const QString &language, const QS
 
     // 本函数会从执行线程调用（ScriptNode::run），而 QWidget 必须在其所属 GUI 线程创建：
     // 非 GUI 线程时阻塞式切回主线程弹窗并取回结果（默认拒绝语义不变）。
+    bool accepted = false;
     if (QThread::currentThread() != app->thread()) {
-        bool accepted = false;
         QMetaObject::invokeMethod(app, [&accepted, &language, &script]() {
             accepted = showScriptConfirmationOnGuiThread(language, script);
         }, Qt::BlockingQueuedConnection);
-        return accepted;
+    } else {
+        accepted = showScriptConfirmationOnGuiThread(language, script);
     }
-    return showScriptConfirmationOnGuiThread(language, script);
+    if (accepted) {
+        approveScript(language, script);   // 只有真实的人工同意才进缓存（无头放行不记账）
+    }
+    return accepted;
 }
 
 void ScriptSecurityPolicy::audit(const QString &language, const QString &script,

@@ -26,14 +26,16 @@ public:
     /// 常用权限判断
     bool canManageUsers() const;    ///< Admin
     bool canEditScheme() const;     ///< Admin / Engineer
+    /// 173 行拍板：登录且写闸未开（「闸开不发新跑」）。正在跑的流程不受此判定影响
+    /// （产线不停线原义保留在运行态那半边），改密成功闸解除后自动恢复。
     bool canRunFlow() const;        ///< 所有角色
     bool canConfigCommunications() const; ///< Admin / Engineer
 
     // ---- 写操作闸（A1-①）----
     /// 出厂默认口令仍在使用时置位：禁止**配置写入类**操作——方案覆盖保存/导出、
     /// 通信配置落盘、用户管理（否则拿到 admin/admin 就等于拿到全部权限，闸也就白设）。
-    /// 不影响 canRunFlow 与运行期结果落库：产线正在跑的活不因未改口令而中断，
-    /// 这是"拦住未鉴权的配置变更"而非"拒绝服务"。
+    /// 不影响运行期结果落库；canRunFlow 于 173 行拍板随闸收拢（闸开不发新跑，跑着的照跑），
+    /// 「产线正在跑的活不因未改口令而中断」仍是边界（这是拦未鉴权态的发跑与配置变更，不是拒绝服务）。
     /// 默认 false：数据库不可用/未装配的单测环境不受影响（闸只在显式置位时生效）。
     void setWritesBlocked(bool blocked);
     bool writesBlocked() const { return m_writesBlocked; }

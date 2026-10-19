@@ -30,7 +30,7 @@ private slots:
     void initTestCase();
 
     void writesLock_disablesConfigPermissionsEvenForAdmin();
-    void writesLock_doesNotDisableRunFlow();
+    void flowStartGate_refusesWhileWritesBlocked();
     void retire_refusesWhenFactoryPasswordWrong();
     void retire_rejectsWeakOrMismatchedNewPassword();
     void saveProject_refusedWhileWritesBlocked();
@@ -78,14 +78,22 @@ void FactoryPasswordGuardTest::writesLock_disablesConfigPermissionsEvenForAdmin(
     s->setWritesBlocked(false);
 }
 
-// 闸的边界（有意为之，不是漏）：产线正在跑的活不因未改口令而中断
-void FactoryPasswordGuardTest::writesLock_doesNotDisableRunFlow()
+// 173 行拍板：闸开不发新跑——canRunFlow 从「只看登录」翻成「登录且闸未开」。
+// A1 的产线不停线原义保持在运行态那半边（正在跑的流程不被打断），这里判的是新一次发起；
+// 原先那条「有意不加闸」的单向钉腿就地翻成三向（基线放行/闸开拒/解除恢复）。
+void FactoryPasswordGuardTest::flowStartGate_refusesWhileWritesBlocked()
 {
     auto *s = SessionManager::instance();
     s->login(QStringLiteral("operator"), QStringLiteral("Operator"));
+
+    QVERIFY2(s->canRunFlow(), "闸未开时登录即可运行：基线不得错杀正常操作");
+
     s->setWritesBlocked(true);
-    QVERIFY2(s->canRunFlow(), "写操作闸不应阻断流程运行（它只拦配置写入）");
+    QVERIFY2(!s->canRunFlow(),
+             "闸开启须拦新跑：出厂口令未改的会话不得再发起一轮脚本/流程运行");
+
     s->setWritesBlocked(false);
+    QVERIFY2(s->canRunFlow(), "闸解除后运行恢复（改密成功即恢复发跑，无需重登）");
 }
 
 void FactoryPasswordGuardTest::retire_refusesWhenFactoryPasswordWrong()
