@@ -11,13 +11,14 @@
 #include <QSharedPointer>
 #include <QSet>
 #include <QList>
-#include <QPair>   // m_pendingCachePurges 的元素类型（不依赖其它头间接引入）
+#include <QPair>   // m_subFlowIOs 的元素类型（不依赖其它头间接引入）
 #include <QElapsedTimer>
 #include <atomic>
 #include <functional>
 #include <algorithm>
 #include <halconcpp/HalconCpp.h>
 #include "FlowRuntimeStats.h"
+#include "FlowCachePurgeLedger.h"   // 缓存清理登记账（切片 A 抽出：账叶锁与登记列随账走）
 
 class FlowScene;
 class NodeBase;
@@ -149,10 +150,8 @@ public:
     void invalidateDownstreamOf(NodeBase *node);
 
     /// S1 Stage 1b 第 2 步：删节点时**只登记**待清理的执行缓存条目，**不取图锁**。
-    /// 为什么不在 GUI 侧直接清：该槽由 FlowScene::removeNode 同步发出，若在槽内取 m_graphCacheMutex，
-    /// 会与执行线程"图锁内再触碰节点/场景"的既有路径构成**锁环**（Stage 1b 首次尝试即因此挂起）。
-    /// 改为"登记 + 执行线程安全点消费"后，GUI 侧只取叶子锁 m_purgeMutex，环从结构上不存在。
-    /// 注意：登记的裸指针**只作 map 键使用**（节点可能已被立即析构，键比较不触内存，不得解除引用）。
+    /// 登记账（叶子锁与登记列表）自切片 A 迁入 FlowCachePurgeLedger，锁纪律钉在该头注释；
+    /// 此处仍担 moduleId 的"此刻"取值责任（入账动作归账簿）。
     void requestNodeCachePurge(NodeBase *node);
 
 signals:
@@ -200,8 +199,8 @@ private slots:
     /// S1 Stage 1b 第 2 步：本槽**不取图锁**（只取叶子锁登记），实际清理由执行线程安全点消费
     /// （见 requestNodeCachePurge / applyPendingCachePurgesLocked）。
     void onSceneNodeRemoved(NodeBase *node);
-    /// 消费待清理条目（**须在已持 m_graphCacheMutex 时调用**）：先短取叶子锁 m_purgeMutex 摘出列表，
-    /// 再在图锁内 remove；两把锁不嵌套，故不改变既有"graph → m_mutex"锁序。
+    /// 消费待清理条目（**须在已持 m_graphCacheMutex 时调用**）：摘账走 FlowCachePurgeLedger::
+    /// takePending（自带叶子锁短窗），随后 remove 三族在图锁内做。
     void applyPendingCachePurgesLocked();
 
 private:
@@ -307,11 +306,9 @@ private:
     QHash<QString, QPair<NodeBase *, NodeBase *>> m_subFlowIOs;   /// 定义名 → 入口/出口
     QList<QString> m_subFlowCallStack;                            /// 执行中的定义名（递归保护）
     static constexpr int kMaxSubFlowDepth = 8;                    /// 嵌套深度上限
-    /// 待清理的执行缓存条目（S1 Stage 1b 第 2 步）：QPair<节点指针, 登记时的模块号>。
-    /// 指针**只作 map 键**（登记后节点可能已被立即析构，故绝不解除引用；模块号在登记时取好）。
-    /// m_purgeMutex 是**叶子锁**：只允许"graph 锁 → purge 锁"方向，持有它时不得再取任何锁。
-    QMutex m_purgeMutex;
-    QList<QPair<NodeBase *, int>> m_pendingCachePurges;
+    /// 缓存清理登记账与账长相随成员迁入 FlowCachePurgeLedger（切片 A）；
+    /// 纪律条款（叶子无后沿、界侧不进图锁、键用即止）钉在账簿头注释。
+    FlowCachePurgeLedger m_purgeLedger;
 
     /// current() 可能被运行线程/界面线程并发读取，用原子变量避免数据竞争
     static std::atomic<FlowExecutor *> s_currentInstance;

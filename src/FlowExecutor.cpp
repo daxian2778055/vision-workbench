@@ -207,7 +207,7 @@ void FlowExecutor::onSceneNodeRemoved(NodeBase *node)
     // 而"恢复立即清理"的首次尝试（Stage 1b 初版）又因 "GUI：场景锁 → 图锁" 与
     // "执行：图锁 → 节点/场景锁" 成**环**而在 ctest 下挂起，整段撤销。
     // 定稿方案 = 登记 + 执行线程安全点消费：
-    //   · GUI 侧只取叶子锁 m_purgeMutex（不取图锁、不触碰任何缓存）→ 环在结构上不存在（非靠时序运气）；
+    //   · GUI 侧只向登记账记账（账簿内短取叶子锁，不取图锁、不触碰任何缓存）→ 环无结构位；
     //   · 执行线程在轮首 / 同步执行入口调 applyPendingCachePurgesLocked() 统一清理。
     // 覆盖率说明：登记在"删除/撤销/清空"三条路径都会走到（都经 FlowScene 发 nodeRemoved）。
     requestNodeCachePurge(node);
@@ -221,25 +221,18 @@ void FlowExecutor::requestNodeCachePurge(NodeBase *node)
 
     // 登记时必须"此刻"取好的两样东西：
     //  · node 指针 —— 之后可能已被析构（FlowScene::removeNode 无存活快照时立即 delete），
-    //    故此后**只作 map 键**使用（键比较不触内存，不解除引用）；
+    //    故此后按键口径入账（键比较不触内存，不解除引用）；
     //  · moduleId —— 之后无法再从对象上读（同因），而 m_nodeOutputVars 正是按模块号索引。
-    const QPair<NodeBase *, int> entry = qMakePair(node, node->moduleId());
-
-    QMutexLocker purgeLock(&m_purgeMutex);   // 叶子锁：持有时不得再取任何锁
-    m_pendingCachePurges.append(entry);
+    const int moduleId = node->moduleId();
+    m_purgeLedger.enqueuePurge(node, moduleId);
 }
 
 void FlowExecutor::applyPendingCachePurgesLocked()
 {
-    QList<QPair<NodeBase *, int>> pending;
-    {
-        // 只有"摘出列表"这一段持叶子锁（与 requestNodeCachePurge 对称），随后的 remove 在图锁内做。
-        // 两把锁不嵌套获取 → 既不改变"graph → m_mutex"锁序，也不产生新的环。
-        QMutexLocker purgeLock(&m_purgeMutex);
-        if (m_pendingCachePurges.isEmpty()) {
-            return;
-        }
-        pending.swap(m_pendingCachePurges);
+    // 摘账走账簿（叶子锁短窗：账内 swap 摘净），remove 三族在图锁内做（调用方已持本锁）。
+    const QList<QPair<NodeBase *, int>> pending = m_purgeLedger.takePending();
+    if (pending.isEmpty()) {
+        return;
     }
 
     for (const QPair<NodeBase *, int> &entry : pending) {
