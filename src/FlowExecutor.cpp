@@ -59,9 +59,23 @@ FlowExecutor::FlowExecutor(QObject *parent)
     });
 }
 
-/// 析构内的有界等待（毫秒）。与 retireExecutor 的 15s 相比更短：走到析构说明调用方
-/// 已经判定线程可回收，这里只是最后一道兜底。
-constexpr int kDtorJoinTimeoutMs = 5000;
+/// 析构内两段有界等待（毫秒），常量本体在 FlowExecutor.h（腿座钉值可达）。
+/// 一段 5s 兜底照旧；二段 15s 与 retireExecutor 的前置等待同量级——走到析构说明
+/// 调用方已经判定线程可回收，这里只是两级兜底，不是常规出口。
+
+std::function<void(const QString &)> FlowExecutor::s_orderlyStopHook = nullptr;
+
+void FlowExecutor::setOrderlyStopHook(std::function<void(const QString &)> hook)
+{
+    s_orderlyStopHook = std::move(hook);
+}
+
+void FlowExecutor::invokeOrderlyStopHook(const QString &why)
+{
+    if (s_orderlyStopHook) {
+        s_orderlyStopHook(why);
+    }
+}
 
 bool FlowExecutor::joinForDestroy(int timeoutMs)
 {
@@ -84,13 +98,29 @@ FlowExecutor::~FlowExecutor()
     // 这种时序问题的表现是偶发的错误检测结果或随机崩溃，比一次明确的中止坏得多。
     // 正常销毁路径应在 delete 之前先 joinForDestroy()（见 MainWindow::retireExecutor 的泄漏保护）；
     // 在这里超时说明该协议被绕过，宁可带着卡点阶段名当场中止，也不留一个会算错数的进程。
-    if (!joinForDestroy(kDtorJoinTimeoutMs)) {
-        qCritical() << "FlowExecutor 析构超时：线程仍卡在" << workerPhaseName()
-                    << " state=" << int(m_state);
-        const QString why = QStringLiteral(
-            "FlowExecutor 工作线程未在 %1ms 内退出：继续析构必然是 use-after-free，主动中止进程。"
-            "销毁执行器请先调用 joinForDestroy()（参见 MainWindow::retireExecutor）。").arg(kDtorJoinTimeoutMs);
-        qFatal("%s", why.toUtf8().constData());
+    //
+    // 178 行软化（两段升格 + 收尾钩子，终局中止保持）：一段 5s 失败不再立刻终局——
+    // 重停一轮（joinForDestroy 内含 stopExecution + wakeAll，幂等）再给 15s，与
+    // retireExecutor 的前置等待同量级；网络超时类阻塞节点在这个窗口里走得完就不再
+    // 陪葬。两段皆尽才进终局：先过应用层收尾钩子（把方案/日志收好的一格，默认空），
+    // 返回后 qFatal 中止——终局形状不动：调用方绕过 joinForDestroy 直接 delete 时，
+    // 工作线程仍会读 this，内存已在释放流程中，任何"继续析构"都是 use-after-free；
+    // 全砍中止需全核 shared_ptr 化重设计，属 P2-6 词条。
+    if (!joinForDestroy(kDtorJoinStage1Ms)) {
+        VFP_RUNTIME_INFO.noquote() << QStringLiteral("FlowExecutor 析构一段等待超时，二段升格重停一轮");
+        if (!joinForDestroy(kDtorJoinStage2Ms)) {
+            qCritical() << "FlowExecutor 析构超时（两段皆尽）：线程仍卡在" << workerPhaseName()
+                        << " state=" << int(m_state);
+            const QString why = QStringLiteral(
+                "FlowExecutor 工作线程未在两段有界等待（%1ms + %2ms）内退出：继续析构必然是"
+                " use-after-free，主动中止进程。销毁执行器请先调用 joinForDestroy()"
+                "（参见 MainWindow::retireExecutor）。")
+                            .arg(kDtorJoinStage1Ms)
+                            .arg(kDtorJoinStage2Ms);
+            invokeOrderlyStopHook(why);
+            qFatal("%s", why.toUtf8().constData());
+        }
+        VFP_RUNTIME_INFO.noquote() << QStringLiteral("FlowExecutor 析构二段升格等到线程退出，按常态继续销毁");
     }
     disconnectFromScene();
     // S-1（第五轮审核）：本对象一出去，节点里存的归属指针必然是野指针——

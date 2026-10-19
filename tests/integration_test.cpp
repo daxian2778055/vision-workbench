@@ -82,6 +82,29 @@ protected:
     }
 };
 
+/// （178 行 legs）二段窗口腿座：自起点跑满 releaseAfterMs 后自然退出。
+/// 析构一段 5s 必然失败（此刻线程还剩约 1s），二段 15s 在 6.5s 处等到——
+/// 本腿专摸析构的"二段达成交替按常态继续销毁"分支；旧实现只有一段，
+/// 走进本腿的进程会直接凭 qFatal 死亡（红臂破坏位缩小二段窗口正取此形）。
+class StuckUntilExecutor : public FlowExecutor
+{
+public:
+    explicit StuckUntilExecutor(int releaseAfterMs) : m_releaseAfterMs(releaseAfterMs) {}
+
+protected:
+    void run() override
+    {
+        QElapsedTimer t;
+        t.start();
+        while (t.elapsed() < m_releaseAfterMs) {
+            QThread::msleep(10);
+        }
+    }
+
+private:
+    int m_releaseAfterMs;
+};
+
 class IntegrationTest : public QObject
 {
     Q_OBJECT
@@ -110,6 +133,8 @@ private slots:
     void testContinuousSecondRoundClearsStaleData();
     void testDestroyWhileRunningIsSafe();
     void testJoinForDestroyTimeoutRefusesDestroy();   // A1-④：超时分支不得批准销毁
+    void testDtorStuckStageTimeoutsPinned();          // 178 行：两段有界等待常量钉值
+    void testOrderlyStopHookMachinery();              // 178 行：收尾钩子机械（默认空透传卸载）
     void testTwoExecutorsIsolation();
     void testScriptNodeStopCancellable();
     void testExecutorReuseAcrossScenesWithLoop();
@@ -185,6 +210,10 @@ private slots:
     // U-18：判红轮的「原因」在现场必须可读（执行器 → 结果面板这条出口）
     void testJudgeRedRoundBroadcastsReasonField();       // 闸 A：原因必须随快照推出
     void testReasonNotReplayedOnLaterRedRound();         // 闸 B：上一轮的原因不得陈旧复读
+
+    // （178 行）二段窗口腿放套件最尾：红臂把二段窗口改短时本腿属"进程死亡"形态，
+    // 死亡点之后的腿再不运行——尾位使殃及面不扩大到既有腿。
+    void testStuckStage2OrderlyRecovery();
 
 private:
     FlowScene *m_scene = nullptr;
@@ -699,6 +728,33 @@ void IntegrationTest::testJoinForDestroyTimeoutRefusesDestroy()
     exec->released.store(true);
     QVERIFY2(exec->joinForDestroy(5000), "线程已退出却仍判不可销毁");
     delete exec;                   // 此时析构内的兜底 wait 不会触发
+}
+
+// （178 行）两段有界等待常量钉值：一段同旧实现 5000；二段与 retireExecutor 的 15s 同量级。
+// 红臂破坏位 = 二段改短（100ms）——钉腿当场断言红，二段窗口腿当场死为进程（如实两枚判据）。
+void IntegrationTest::testDtorStuckStageTimeoutsPinned()
+{
+    QCOMPARE(FlowExecutor::kDtorJoinStage1Ms, 5000);
+    QCOMPARE(FlowExecutor::kDtorJoinStage2Ms, 15000);
+}
+
+// （178 行）收尾钩子机械腿：默认空钩不炸；安装后 payload 原样透传；卸载后回到无钩状态。
+// 析构终局里的钩子调用点在本进程不可达（qFatal 前一格，按下即不得返回），机械可用性
+// 在可达面单独钉——调用点与 qFatal 的先后次序由析构 census 段点名。
+void IntegrationTest::testOrderlyStopHookMachinery()
+{
+    FlowExecutor::invokeOrderlyStopHook(QStringLiteral("默认空钩不炸"));
+    QStringList received;
+    FlowExecutor::setOrderlyStopHook([&received](const QString &why) {
+        received.append(why);
+    });
+    FlowExecutor::invokeOrderlyStopHook(QStringLiteral("payload 与两段超时同批"));
+    FlowExecutor::invokeOrderlyStopHook(QStringLiteral("第二次触发"));
+    QCOMPARE(received.size(), 2);
+    QCOMPARE(received.at(0), QStringLiteral("payload 与两段超时同批"));
+    FlowExecutor::setOrderlyStopHook(nullptr);
+    FlowExecutor::invokeOrderlyStopHook(QStringLiteral("卸载后无钩"));
+    QCOMPARE(received.size(), 2);
 }
 
 void IntegrationTest::testTwoExecutorsIsolation()
@@ -5264,6 +5320,26 @@ void IntegrationTest::testUnregisteredOperatorLossIsCountedAsSaveLoss()
     qDeleteAll(opened2);
     qDeleteAll(opened);
     bail();
+}
+
+// （178 行）二段窗口腿：析构一段 5s 失败后，二段 15s 在 6.5s 处等到线程——按常态
+// 继续销毁，进程不死。耗时落在两段量级带内：超过 5.5s = 二段确实接手（不是只等一段），
+// 小于 15s = 线程到点自然退出、wait 不空耗。红臂把二段改短 100ms 时本腿直接凭 qFatal 死亡。
+void IntegrationTest::testStuckStage2OrderlyRecovery()
+{
+    StuckUntilExecutor *exec = new StuckUntilExecutor(6500);
+    exec->start();
+    QTest::qWait(150);
+    QVERIFY2(exec->isRunning(), "线性自退线程没起来，本用例失去前提");
+
+    QElapsedTimer t;
+    t.start();
+    delete exec;   // 析构路径：一段 5s 失败（此刻线程约 6.3s 界前），二段在 6.5s 处等到
+    const qint64 elapsed = t.elapsed();
+    QVERIFY2(elapsed >= 5500,
+             qPrintable(QStringLiteral("析构 %1ms 就返回——二段升格形同虚设或线程提前退出").arg(elapsed)));
+    QVERIFY2(elapsed < 15000,
+             qPrintable(QStringLiteral("析构 %1ms 才返回，超出两段有界等待的量级").arg(elapsed)));
 }
 
 QTEST_MAIN(IntegrationTest)

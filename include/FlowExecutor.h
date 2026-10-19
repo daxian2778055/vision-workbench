@@ -14,6 +14,7 @@
 #include <QPair>   // m_pendingCachePurges 的元素类型（不依赖其它头间接引入）
 #include <QElapsedTimer>
 #include <atomic>
+#include <functional>
 #include <algorithm>
 #include <halconcpp/HalconCpp.h>
 #include "FlowRuntimeStats.h"
@@ -77,6 +78,17 @@ public:
     /// 调用方必须改走"放弃销毁 / 挂 finished 自删"的泄漏保护路径（见 MainWindow::retireExecutor）。
     bool joinForDestroy(int timeoutMs);
     ExecutionState getState() const;
+
+    /// 析构两段有界等待（178 行软化拍板）：一段 5s 与旧实现同值；二段 15s 与
+    /// retireExecutor 的前置等待同量级——网络超时类阻塞节点在二段窗口里走得完就
+    /// 走得完，不再让整套进程陪葬。终局中止本身保持（析构时序不可逆是边界不是裁量）。
+    static constexpr int kDtorJoinStage1Ms = 5000;
+    static constexpr int kDtorJoinStage2Ms = 15000;
+
+    /// 应用层秩序收尾钩子（178 行软化）：终局中止前给 app 一格收好方案/冲日志，
+    /// 默认空 = 无操作。payload 是终局原因串（含两段超时与现场提示）。
+    static void setOrderlyStopHook(std::function<void(const QString &)> hook);
+    static void invokeOrderlyStopHook(const QString &why);
 
     /// 图当前是否允许编辑（S1 / Phase B 小步）：只有"执行线程真在跑"或"暂停请求已受理但 worker 尚未
     /// 停进等待点"才禁止；Idle/Stopped 与"已停稳的 Paused"都允许（暂停中改图，恢复后下一轮生效）。
@@ -194,6 +206,8 @@ private slots:
 
 private:
     void executeNode(NodeBase *node, bool isLastNode = false);
+    /// （178 行）应用层收尾钩子的存放位（终局中止前的送别窗，见公共区注）
+    static std::function<void(const QString &)> s_orderlyStopHook;
     /// 在等待点调用（须持 m_mutex）：置位并上报 executionParked 后阻塞等待恢复；恢复后清位。
     /// 所有"可作为安全改图点"的等待点都必须走这里，否则 executionParked 会名不副实。
     void parkWhilePausedLocked();
