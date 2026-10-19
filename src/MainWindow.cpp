@@ -560,6 +560,13 @@ MainWindow::MainWindow(QWidget *parent) :
         setupSchemeMenu();
         VFP_DEBUG << "setupSchemeMenu completed";
 
+        // 菜单对话框路由面（词条切片 B 第二抽）：展示钩子即 showAuxDialog 的转发
+        // （AuxPanelManager 同键复用/关闭即销毁/非模态语义不动，契约见该类头件与普查面段三）。
+        m_menuRouter.setShow([this](const QString &key,
+                                    const AuxDialogMenuRouter::DialogFactory &factory) {
+            showAuxDialog(key, factory);
+        });
+
         VFP_DEBUG << "Calling setupCommunicationMenu";
         setupCommunicationMenu();
         VFP_DEBUG << "setupCommunicationMenu completed";
@@ -3851,31 +3858,20 @@ void MainWindow::setupCommunicationMenu()
 
     if (!ui->menuCommunication) return;
 
-    // 非模态：打开通讯管理/监视后主界面仍可正常操作；重复点击前置已有窗口而不是再开一个
-    connect(ui->actionCommDevice, &QAction::triggered, this, [this]() {
-        showAuxDialog(QStringLiteral("commManager"),
-                      [this]() -> QDialog * { return new CommunicationManagerDialog(this); });
-    });
-
-    connect(ui->actionCommReceiveEvent, &QAction::triggered, this, [this]() {
-        showAuxDialog(QStringLiteral("commManager"),
-                      [this]() -> QDialog * { return new CommunicationManagerDialog(this); });
-    });
-
-    connect(ui->actionCommSendEvent, &QAction::triggered, this, [this]() {
-        showAuxDialog(QStringLiteral("commManager"),
-                      [this]() -> QDialog * { return new CommunicationManagerDialog(this); });
-    });
-
-    connect(ui->actionCommHeartbeat, &QAction::triggered, this, [this]() {
-        showAuxDialog(QStringLiteral("commManager"),
-                      [this]() -> QDialog * { return new CommunicationManagerDialog(this); });
-    });
-
-    connect(ui->actionCommMonitor, &QAction::triggered, this, [this]() {
-        showAuxDialog(QStringLiteral("commMonitor"),
-                      [this]() -> QDialog * { return new CommMonitorDialog(this); });
-    });
+    // 非模态：打开通讯管理/监视后主界面仍可正常操作；重复点击前置已有窗口而不是再开一个。
+    // 动作 → 对话框键的路由经 AuxDialogMenuRouter（词条切片 B 第二抽）：四枚设备/事件
+    // 动作同键 commManager（共用一个管理器现窗），只读监视另键 commMonitor。
+    auto showCommManager = [this]() -> QDialog * { return new CommunicationManagerDialog(this); };
+    m_menuRouter.toDialog(ui->actionCommDevice, this, QStringLiteral("commManager"),
+                          showCommManager);
+    m_menuRouter.toDialog(ui->actionCommReceiveEvent, this, QStringLiteral("commManager"),
+                          showCommManager);
+    m_menuRouter.toDialog(ui->actionCommSendEvent, this, QStringLiteral("commManager"),
+                          showCommManager);
+    m_menuRouter.toDialog(ui->actionCommHeartbeat, this, QStringLiteral("commManager"),
+                          showCommManager);
+    m_menuRouter.toDialog(ui->actionCommMonitor, this, QStringLiteral("commMonitor"),
+                          [this]() -> QDialog * { return new CommMonitorDialog(this); });
 }
 
 void MainWindow::setupSystemMenu()
@@ -3884,27 +3880,23 @@ void MainWindow::setupSystemMenu()
 
     if (!ui->menuSystem) return;
 
-    connect(ui->actionGlobalTrigger, &QAction::triggered, this, [this]() {
-        showAuxDialog(QStringLiteral("globalTrigger"),
-                      [this]() -> QDialog * { return new GlobalTriggerDialog(this); });
-    });
+    // 动作 → 对话框键的路由经 AuxDialogMenuRouter（词条切片 B 第二抽）：固定键直走过
+    // toDialog；场景依赖两条（流程变量 / 配方）经 toFlowSceneDialog——场景在触发当下
+    // 经 currentFlowScene() 现取（与原内联两行同形：idx 越界两向，ui 空卫为严格安全超集）；
+    // 多场景两条（参数搜索 / 代码导出）经 toScenesDialog——列表触发当下快照。
+    m_menuRouter.toDialog(ui->actionGlobalTrigger, this, QStringLiteral("globalTrigger"),
+                          [this]() -> QDialog * { return new GlobalTriggerDialog(this); });
 
-    connect(ui->actionGlobalVariables, &QAction::triggered, this, [this]() {
-        showAuxDialog(QStringLiteral("globalVariables"),
-                      [this]() -> QDialog * { return new GlobalVariableDialog(this); });
-    });
+    m_menuRouter.toDialog(ui->actionGlobalVariables, this, QStringLiteral("globalVariables"),
+                          [this]() -> QDialog * { return new GlobalVariableDialog(this); });
 
     if (ui->menuSystem) {
         QAction *flowVarAct = ui->menuSystem->addAction(QStringLiteral("流程变量 / Fixture…"));
-        connect(flowVarAct, &QAction::triggered, this, [this]() {
-            const int idx = ui->flowTabs->currentIndex();
-            FlowScene *scene = (idx >= 0 && idx < m_flowScenes.size()) ? m_flowScenes[idx] : nullptr;
-            if (!scene)
-                return;
-            showAuxDialog(QStringLiteral("flowVariable"), [this, scene]() -> QDialog * {
-                return new FlowVariableDialog(scene, this);
-            });
-        });
+        // 缺场景原体静默早退（无声无提示）：onMissing 给空操作，语义原样入路由面
+        m_menuRouter.toFlowSceneDialog(
+            flowVarAct, this, QStringLiteral("flowVariable"),
+            [this]() { return currentFlowScene(); }, [] {},
+            [this](FlowScene *scene) -> QDialog * { return new FlowVariableDialog(scene, this); });
     }
 
     if (ui->menuSystem) {
@@ -3913,65 +3905,57 @@ void MainWindow::setupSystemMenu()
         // 该项刻意不受角色/写闸限制：它就是解除闸的唯一入口；
         // 而改密前必须填对当前出厂口令，非持有者点了也改不动任何东西。
         retireAct->setEnabled(true);
-        connect(retireAct, &QAction::triggered, this, [this]() {
-            enforceFactoryPasswordPolicy();
-        });
+        m_menuRouter.direct(retireAct, this, [this]() { enforceFactoryPasswordPolicy(); });
     }
 
-    connect(ui->actionCameraConfig, &QAction::triggered, this, &MainWindow::onManageGlobalCameras);
+    m_menuRouter.direct(ui->actionCameraConfig, this,
+                        [this]() { onManageGlobalCameras(); });
 
-    connect(ui->actionUserManagement, &QAction::triggered, this, [this]() {
-        showAuxDialog(QStringLiteral("userManagement"),
-                      [this]() -> QDialog * { return new UserManagementDialog(this); });
-    });
+    m_menuRouter.toDialog(ui->actionUserManagement, this, QStringLiteral("userManagement"),
+                          [this]() -> QDialog * { return new UserManagementDialog(this); });
 
-    connect(ui->actionRecipeManager, &QAction::triggered, this, [this]() {
-        // 取当前流程的场景（与「流程变量」同一取法）：配方保存/加载都要靠它。
-        // 必须把场景交进去——否则「新建配方」无从抓取参数（RecipeManager 收到 nullptr
-        // 会立刻返回 false）、「加载配方」也无从写回，两处都会静默失败。
-        const int idx = ui->flowTabs->currentIndex();
-        FlowScene *scene = (idx >= 0 && idx < m_flowScenes.size()) ? m_flowScenes[idx] : nullptr;
-        if (!scene) {
+    // 取当前流程的场景（与「流程变量」同一取法）：配方保存/加载都要靠它。
+    // 必须把场景交进去——否则「新建配方」无从抓取参数（RecipeManager 收到 nullptr
+    // 会立刻返回 false）、「加载配方」也无从写回，两处都会静默失败。
+    // 缺场景的提示框留在窗侧（onMissing 回调；GUI 不进路由面）。
+    m_menuRouter.toFlowSceneDialog(
+        ui->actionRecipeManager, this, QStringLiteral("recipe"),
+        [this]() { return currentFlowScene(); },
+        [this]() {
             QMessageBox::information(this, QStringLiteral("提示"),
                                      QStringLiteral("请先打开一个流程，再使用配方管理。"));
-            return;
-        }
-        showAuxDialog(QStringLiteral("recipe"), [this, scene]() -> QDialog * {
+        },
+        [this](FlowScene *scene) -> QDialog * {
             auto *dlg = new RecipeDialog(this);
             dlg->setFlowScene(scene);
             return dlg;
         });
-    });
 
-    connect(ui->actionAlarmHistory, &QAction::triggered, this, [this]() {
-        showAuxDialog(QStringLiteral("alarmHistory"),
-                      [this]() -> QDialog * { return new AlarmHistoryDialog(this); });
-    });
+    m_menuRouter.toDialog(ui->actionAlarmHistory, this, QStringLiteral("alarmHistory"),
+                          [this]() -> QDialog * { return new AlarmHistoryDialog(this); });
 
-    connect(ui->actionInspectionResults, &QAction::triggered, this, [this]() {
-        showAuxDialog(QStringLiteral("inspectionResults"),
-                      [this]() -> QDialog * { return new InspectionResultDialog(this); });
-    });
+    m_menuRouter.toDialog(ui->actionInspectionResults, this, QStringLiteral("inspectionResults"),
+                          [this]() -> QDialog * { return new InspectionResultDialog(this); });
 
-    connect(ui->actionParameterSearch, &QAction::triggered, this, [this]() {
-        showAuxDialog(QStringLiteral("paramSearch"),
-                      [this]() -> QDialog * { return new ParameterSearchDialog(m_flowScenes, this); });
-    });
+    m_menuRouter.toScenesDialog(
+        ui->actionParameterSearch, this, QStringLiteral("paramSearch"),
+        [this]() { return m_flowScenes; },
+        [this](const QList<FlowScene *> &scenes) -> QDialog * {
+            return new ParameterSearchDialog(scenes, this);
+        });
 
-    connect(ui->actionCodeExport, &QAction::triggered, this, [this]() {
-        showAuxDialog(QStringLiteral("codeExport"),
-                      [this]() -> QDialog * { return new CodeExportDialog(m_flowScenes, this); });
-    });
+    m_menuRouter.toScenesDialog(
+        ui->actionCodeExport, this, QStringLiteral("codeExport"),
+        [this]() { return m_flowScenes; },
+        [this](const QList<FlowScene *> &scenes) -> QDialog * {
+            return new CodeExportDialog(scenes, this);
+        });
 
-    connect(ui->actionOperationLog, &QAction::triggered, this, [this]() {
-        showAuxDialog(QStringLiteral("operationLog"),
-                      [this]() -> QDialog * { return new OperationLogDialog(this); });
-    });
+    m_menuRouter.toDialog(ui->actionOperationLog, this, QStringLiteral("operationLog"),
+                          [this]() -> QDialog * { return new OperationLogDialog(this); });
 
-    connect(ui->actionReport, &QAction::triggered, this, [this]() {
-        showAuxDialog(QStringLiteral("report"),
-                      [this]() -> QDialog * { return new ReportDialog(this); });
-    });
+    m_menuRouter.toDialog(ui->actionReport, this, QStringLiteral("report"),
+                          [this]() -> QDialog * { return new ReportDialog(this); });
 }
 
 void MainWindow::applyPermissionRestrictions()

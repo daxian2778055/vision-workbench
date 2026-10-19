@@ -25,6 +25,7 @@ class QAction;
 #include "RecoveryStore.h"   // 自动保存/崩溃恢复（值成员，需要完整类型）
 #include "YieldMonitor.h"    // 良率目标监控（QHash 值类型，需要完整类型）
 #include "I18n.h"            // 国际化（G-P1-5）
+#include "AuxDialogMenuRouter.h"   // 菜单对话框路由面（值成员，需要完整类型）
 
 using namespace HalconCpp;
 
@@ -334,6 +335,8 @@ protected:
     // ---- 新增组件 ----
     /// 辅助面板与辅助窗口（结果表/变量/性能/输出数据四类懒创建面板 + 非模态对话框统一入口）
     AuxPanelManager *m_auxPanels = nullptr;
+    /// 菜单对话框路由面（通讯/系统菜单的展示接线经它落位；展示钩子即 showAuxDialog 转发）
+    AuxDialogMenuRouter m_menuRouter;
     /// 最近一次执行各模块的输出变量（UI 线程缓存，供「变量引用」菜单构造引用列表）
     QHash<int, QVariantMap> m_lastModuleVars;
     NodeSearchWidget *m_nodeSearchWidget = nullptr;      // 算子搜索控件
