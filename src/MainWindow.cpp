@@ -28,6 +28,7 @@
 #include "ImageReadNode.h"
 #include "DataObject.h"
 #include "FlowExecutor.h"
+#include "ExecutionControlPolicy.h"   // 切片 B 首抽：四控制槽的判定核（判据见头件）
 #include <QDialog>
 #include <QFormLayout>
 #include <QLineEdit>
@@ -2585,16 +2586,20 @@ void MainWindow::onStartExecution()
     // 运行控制与流程模式解耦（对齐 VisionMaster 的操作逻辑）：任何模式下都能"开始"，暂停中按=继续。
     // 旧实现写死"仅软触发有效"，连续/硬触发模式下点它毫无反应（静默忽略、无任何提示），而这两种模式
     // 此前又靠"切模式自动开跑" → 用户停止后既找不到启动入口、点开始也没反应（现场反馈"点了没用"）。
-    const ExecutionState st = m_executor->getState();
-    if (st == ExecutionState::Running || st == ExecutionState::Paused) {
+    // 判定核在 ExecutionControlPolicy（切片 B 首抽）：这里是表现位——执行器调用与文案全留窗侧。
+    switch (ExecutionControlPolicy::startIntent(m_executor->getState(),
+                                                SessionManager::instance()->canRunFlow())) {
+    case ExecutionControlPolicy::Intent::Resume:
         m_executor->resumeExecution();   // 已在跑/暂停：按"开始"视为继续，不留"点了没反应"的死按钮
         return;
-    }
-    // 173 行拍板：闸开不发新跑——运行态的继续走上面分支，新一次发起在这里收闸。
-    if (!SessionManager::instance()->canRunFlow()) {
+    case ExecutionControlPolicy::Intent::GateClosedRefuse:
+        // 173 行拍板：闸开不发新跑——运行态的继续走上面分支，新一次发起在这里收闸。
         logMessage(tr("写闸开启期间不受理新的运行：出厂默认口令仍在使用"
                       "（正在跑的流程不受影响，改密后恢复）"));
         return;
+    case ExecutionControlPolicy::Intent::StartNewRun:
+    default:
+        break;
     }
     // 明确点"开始执行"= 正常跑一遍，退出上次遗留的单步模式
     // （历史缺陷：单步模式粘住，之后每次"开始执行"仍在每个节点后暂停）
@@ -2606,25 +2611,37 @@ void MainWindow::onPauseResumeExecution()
 {
     if (!m_executor)
         return;
-    const ExecutionState st = m_executor->getState();
-    if (st == ExecutionState::Running)
+    switch (ExecutionControlPolicy::pauseResumeIntent(m_executor->getState())) {
+    case ExecutionControlPolicy::Intent::Pause:
         m_executor->pauseExecution();
-    else if (st == ExecutionState::Paused)
+        return;
+    case ExecutionControlPolicy::Intent::Resume:
         m_executor->resumeExecution();
-    // 其余状态按钮为禁用态，不会到达这里
+        return;
+    default:
+        break;   // 其余状态按钮为禁用态，不会到达这里
+    }
 }
 
 void MainWindow::onSingleShotExecution()
 {
-    // 单次执行：仅在软触发模式可用（按钮在连续/硬触发模式下已禁用），运行一次当前流程
-    if (m_executor->getState() == ExecutionState::Running) return;
-    if (m_executor->getFlowMode() != FlowMode::SoftwareTrigger) return;
-    // 173 行拍板：闸开不发新跑（单次执行也是一次新发起）
-    if (!SessionManager::instance()->canRunFlow()) {
+    // 单次执行：仅在软触发模式可用（按钮在连续/硬触发模式下已禁用），运行一次当前流程。
+    // 判定序与原槽直落序同向（Running → 非软触发 → 闸位），求值序取逐位局部量先落。
+    const ExecutionState st = m_executor->getState();
+    const FlowMode mode = m_executor->getFlowMode();
+    const bool canRun = SessionManager::instance()->canRunFlow();
+    switch (ExecutionControlPolicy::singleShotIntent(st, mode, canRun)) {
+    case ExecutionControlPolicy::Intent::GateClosedRefuse:
+        // 173 行拍板：闸开不发新跑（单次执行也是一次新发起）
         logMessage(tr("写闸开启期间不受理单次执行：出厂默认口令仍在使用（改密后恢复）"));
         return;
+    case ExecutionControlPolicy::Intent::StartOnce:
+        m_executor->startExecution();
+        return;
+    case ExecutionControlPolicy::Intent::None:
+    default:
+        return;
     }
-    m_executor->startExecution();
 }
 
 void MainWindow::onStopExecution()

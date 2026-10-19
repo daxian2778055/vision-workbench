@@ -191,6 +191,7 @@ set(SOURCES
     src/NodeTemplateStore.cpp
     src/FlowExecutor.cpp
     src/FlowCachePurgeLedger.cpp
+    src/ExecutionControlPolicy.cpp
     src/HalconWindow.cpp
     src/Connection.cpp
     src/ConnectionGraphicsItem.cpp
@@ -1095,6 +1096,12 @@ add_executable(flow_cache_purge_ledger_test tests/flow_cache_purge_ledger_test.c
 target_link_libraries(flow_cache_purge_ledger_test PRIVATE vfp_core Qt6::Test)
 vfp_add_qtest(NAME FlowCachePurgeLedgerTest TARGET flow_cache_purge_ledger_test)
 
+# 执行控制判定策略（180 行词条切片 B 首抽从 MainWindow 四控制槽抽出的判定核）：
+# 纯判定面——Intent 六值三判定位，无控件无执行器（表现留在既有位）
+add_executable(execution_control_policy_test tests/execution_control_policy_test.cpp)
+target_link_libraries(execution_control_policy_test PRIVATE vfp_core Qt6::Test)
+vfp_add_qtest(NAME ExecutionControlPolicyTest TARGET execution_control_policy_test)
+
 # OpenCV 桥接与节点算法验证（24 条 CHECK：HImage↔cv::Mat 双向 + 阈值/Blob/形态学/边缘/拟合/
 # 模板匹配/卡尺/标定/条码/OCR/运算/旋转/统计）。原先只挂在 if(VFP_BUILD_TESTS) 里——该选项默认
 # OFF 且 tools/ci.ps1 的配置命令不传 -D，故默认配置下连目标都不进解决方案（见推进计划 §3.2 结论 E）。
@@ -1139,7 +1146,7 @@ if(MSVC)
                   DnnSegmentTest OpencvDefectAlignTest SoakTest StatisticsReportTest SchemePackageTest
                   I18nTest SubFlowTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
                   FactoryPasswordGuardTest FeatureMatchTest CalibChainTest OpencvNodesTest
-                  ProjectPathsTest FlowCachePurgeLedgerTest)
+                  ProjectPathsTest FlowCachePurgeLedgerTest ExecutionControlPolicyTest)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
         # path_list_prepend 由 CMake 负责插入并处理平台路径分隔符，避免在
         # ENVIRONMENT 值里嵌套分号导致列表被错误拆分
