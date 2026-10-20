@@ -76,3 +76,22 @@ YieldMonitor::Result YieldMonitor::evaluate(const QList<bool> &rounds)
     }
     return result;
 }
+
+QList<bool> YieldMonitor::collectRoundFlags(const QList<InspectionRecord> &records,
+                                            const QString &flowName)
+{
+    QList<InspectionRecord> rounds;
+    for (const InspectionRecord &r : records) {
+        if (r.nodeName == kRoundSummaryNodeName && r.flowName == flowName)
+            rounds.append(r);
+    }
+    // 不假定来源（库查询）的返回顺序：按时间升序排（窗口取"最近 N 轮"，顺序错就会取到老数据）
+    std::sort(rounds.begin(), rounds.end(), [](const InspectionRecord &a, const InspectionRecord &b) {
+        return a.timestamp < b.timestamp;
+    });
+    QList<bool> okFlags;
+    okFlags.reserve(rounds.size());
+    for (const InspectionRecord &r : rounds)
+        okFlags.append(r.passed);
+    return okFlags;
+}

@@ -3,6 +3,7 @@
 #include <QString>
 
 #include "YieldMonitor.h"
+#include "InspectionRecord.h"
 
 // 良率目标监控（P1-11 的"目标线 + 报警联动"判定部分）契约测试。
 //
@@ -26,6 +27,9 @@ private slots:
     void testConfigChangeResetsLatch();
     void testInvalidConfigIgnored();
     void testTextMentionsNumbers();
+    void testCollectFiltersBothKeys();      // U-172：双键过滤（汇总名 且 指定流程，缺一不可）
+    void testCollectSortsByTimeAscending(); // U-172：不假定来源序，升序重排后投影（红臂靶腿）
+    void testCollectEmptyOnNoMatch();       // U-172：无命中/空来源 → 空旗序列
 };
 
 namespace {
@@ -47,6 +51,17 @@ QList<bool> makeRounds(int ok, int ng)
     for (int i = 0; i < ng; ++i)
         out.append(false);
     return out;
+}
+
+/// 造一条检出记录（U-172 装配腿位专用）
+InspectionRecord makeRecord(const QDateTime &ts, const QString &flow, const QString &node, bool passed)
+{
+    InspectionRecord rec;
+    rec.timestamp = ts;
+    rec.flowName = flow;
+    rec.nodeName = node;
+    rec.passed = passed;
+    return rec;
 }
 }   // namespace
 
@@ -186,6 +201,57 @@ void YieldMonitorTest::testTextMentionsNumbers()
     QVERIFY2(text.contains(QStringLiteral("60.0")), qPrintable(text));
     QVERIFY2(text.contains(QStringLiteral("98.0")), qPrintable(text));
     QVERIFY2(text.contains(QStringLiteral("低于目标")), qPrintable(text));
+}
+
+void YieldMonitorTest::testCollectFiltersBothKeys()
+{
+    // 双键过滤：节点名 = 整轮汇总名 **且** 流程名 = 指定流程，二者缺一不可。
+    // 腿内定形时间戳按升序给定（升序语义另有专腿；红臂下本腿须原样绿）。
+    const QString flow = QStringLiteral("流程甲");
+    QList<InspectionRecord> records;
+    records.append(makeRecord(QDateTime(QDate(2026, 1, 1), QTime(0, 0, 0)), flow,
+                              kRoundSummaryNodeName, false));
+    records.append(makeRecord(QDateTime(QDate(2026, 1, 2), QTime(0, 0, 0)), flow,
+                              QStringLiteral("定位"), true));                        // 非汇总节点：滤掉
+    records.append(makeRecord(QDateTime(QDate(2026, 1, 3), QTime(0, 0, 0)), QStringLiteral("流程乙"),
+                              kRoundSummaryNodeName, true));                         // 异流程：滤掉
+    records.append(makeRecord(QDateTime(QDate(2026, 1, 4), QTime(0, 0, 0)), flow,
+                              kRoundSummaryNodeName, true));
+
+    const QList<bool> flags = YieldMonitor::collectRoundFlags(records, flow);
+    QCOMPARE(flags, QList<bool>({ false, true }));   // 甲流程汇总两枚，升序，旗投影
+}
+
+void YieldMonitorTest::testCollectSortsByTimeAscending()
+{
+    // 不假定来源（库查询）返回顺序：输入混序时也要按时间升序重排再投影。
+    // 红臂靶腿：升序重排收空时旗序列退化为来源序（[F,T,F,T,F] ≠ 期望 [F,T,T,F,F]）。
+    const QString flow = QStringLiteral("流程甲");
+    QList<InspectionRecord> records;
+    records.append(makeRecord(QDateTime(QDate(2026, 1, 5), QTime(0, 0, 0)), flow,
+                              kRoundSummaryNodeName, false));
+    records.append(makeRecord(QDateTime(QDate(2026, 1, 2), QTime(0, 0, 0)), flow,
+                              kRoundSummaryNodeName, true));
+    records.append(makeRecord(QDateTime(QDate(2026, 1, 8), QTime(0, 0, 0)), flow,
+                              kRoundSummaryNodeName, false));
+    records.append(makeRecord(QDateTime(QDate(2026, 1, 3), QTime(0, 0, 0)), flow,
+                              kRoundSummaryNodeName, true));
+    records.append(makeRecord(QDateTime(QDate(2026, 1, 1), QTime(0, 0, 0)), flow,
+                              kRoundSummaryNodeName, false));
+
+    const QList<bool> flags = YieldMonitor::collectRoundFlags(records, flow);
+    QCOMPARE(flags, QList<bool>({ false, true, true, false, false }));
+}
+
+void YieldMonitorTest::testCollectEmptyOnNoMatch()
+{
+    const QString flow = QStringLiteral("流程甲");
+    QList<InspectionRecord> records;
+    records.append(makeRecord(QDateTime(QDate(2026, 1, 1), QTime(0, 0, 0)), flow,
+                              kRoundSummaryNodeName, false));
+
+    QVERIFY(YieldMonitor::collectRoundFlags(records, QStringLiteral("流程乙")).isEmpty());  // 无命中
+    QVERIFY(YieldMonitor::collectRoundFlags(QList<InspectionRecord>(), flow).isEmpty());    // 空来源
 }
 
 QTEST_MAIN(YieldMonitorTest)

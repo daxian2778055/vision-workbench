@@ -3113,19 +3113,8 @@ void MainWindow::checkYieldTarget(FlowExecutor *executor)
         db->queryResults(QDateTime::currentDateTime().addSecs(-24 * 3600), QDateTime::currentDateTime(),
                          5000);
 
-    QList<InspectionRecord> rounds;
-    for (const InspectionRecord &r : records) {
-        if (r.nodeName == kRoundSummaryNodeName && r.flowName == flowName)
-            rounds.append(r);
-    }
-    // 不假定 SQL 的返回顺序：自己按时间升序排（窗口取"最近 N 轮"，顺序错就会取到老数据）
-    std::sort(rounds.begin(), rounds.end(), [](const InspectionRecord &a, const InspectionRecord &b) {
-        return a.timestamp < b.timestamp;
-    });
-    QList<bool> okFlags;
-    okFlags.reserve(rounds.size());
-    for (const InspectionRecord &r : rounds)
-        okFlags.append(r.passed);
+    // 轮清单装配（双键过滤 + 时间升序重排 + 轮旗投影）在 YieldMonitor（U-172 微核入已面）
+    const QList<bool> okFlags = YieldMonitor::collectRoundFlags(records, flowName);
 
     const YieldMonitor::Result result = monitor.evaluate(okFlags);
     if (!result.evaluated)

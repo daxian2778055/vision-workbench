@@ -3,6 +3,8 @@
 #include <QList>
 #include <QString>
 
+#include "InspectionRecord.h"
+
 /// 良率目标监控（P1-11 的"目标线 + 报警联动"里的**判定部分**：纯逻辑、可单测、不碰界面与数据库）。
 ///
 /// 现场口径（勿凭直觉改，改了要在用例里同步）：
@@ -57,6 +59,14 @@ public:
 
     /// 判定一次。rounds 按时间升序，true=OK；内部只取最后 windowRounds 个。
     Result evaluate(const QList<bool> &rounds);
+
+    /// 轮清单装配（U-172 微核收位，原 MainWindow::checkYieldTarget 中段）：调用方从库面
+    /// 取回的检出记录仍是"每节点一条"的混集，先双键过滤（节点名 = 整轮汇总名 **且**
+    /// 流程名指定，二者缺一不可），再按时间升序重排（**不假定**查询返回顺序），最后
+    /// 投影成 ok 旗序列（true=OK）。纯变换不取数：库面仍由调用方持、本静态不碰库，
+    /// 与"本类只做判定、不做取数"口径一致（InspectionRecord 为有意瘦头，无 QtSql 依赖）。
+    static QList<bool> collectRoundFlags(const QList<InspectionRecord> &records,
+                                         const QString &flowName);
 
 private:
     Config m_config;
