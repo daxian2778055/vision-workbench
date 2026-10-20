@@ -1484,20 +1484,26 @@ void MainWindow::openModuleEditor(NodeBase *node)
     // 背后关上），拒因取写闸的单一判据串，不另写一份。
     const QString gateRefusal = SessionManager::instance()->writeGateRefusal();
     if (!gateRefusal.isEmpty()) {
-        if (ModuleEditorDialog *existing = m_moduleEditors.value(node, nullptr))
-            existing->close();
+        m_editors.closeIfPresent(node);   // 收窗顺带摘位（WA_DeleteOnClose 关窗即销毁走摘位连接）
         QMessageBox::warning(this, tr("模块编辑被禁止"), gateRefusal);
         return;
     }
-    if (ModuleEditorDialog *existing = m_moduleEditors.value(node, nullptr)) {
-        existing->reloadFromNode();
-        existing->raise();
-        existing->activateWindow();
+    // 「一算子一窗」簿位在 ModuleEditorRegistry（词条切片 B 对话框族首抽）：命中经回调
+    // 复原窗（reloadFromNode + 前置），缺失经工厂建窗入簿；三类信号连接与变量引用注入、
+    // 加窗前置留窗侧（连接/展示序与原体一致——摘除连接先于窗侧连接发生）。
+    ModuleEditorDialog *dlg =
+        qobject_cast<ModuleEditorDialog *>(m_editors.editorFor(
+            node,
+            [this, node]() -> QDialog * { return new ModuleEditorDialog(node, this); },
+            [](QWidget *window) {
+                if (auto *editor = qobject_cast<ModuleEditorDialog *>(window)) {
+                    editor->reloadFromNode();
+                    editor->raise();
+                    editor->activateWindow();
+                }
+            }));
+    if (!dlg)
         return;
-    }
-    auto *dlg = new ModuleEditorDialog(node, this);
-    m_moduleEditors.insert(node, dlg);
-    connect(dlg, &QObject::destroyed, this, [this, node]() { m_moduleEditors.remove(node); });
     connect(dlg, &ModuleEditorDialog::executeRequested, this, [this, node]() {
         executeNodeOnce(node);
     });
@@ -1675,9 +1681,11 @@ void MainWindow::executeNodeOnce(NodeBase *node)
         m_imageDisplay->displayNodeOutput(target);
     if (m_selectedNode == node)
         showNodeParameters(node);
-    if (ModuleEditorDialog *dlg = m_moduleEditors.value(node, nullptr)) {
-        dlg->reloadFromNode();
-        dlg->setResultOverlay(collectOverlayFromNode(node));
+    if (QWidget *editorWidget = m_editors.lookup(node)) {
+        if (auto *dlg = qobject_cast<ModuleEditorDialog *>(editorWidget)) {
+            dlg->reloadFromNode();
+            dlg->setResultOverlay(collectOverlayFromNode(node));
+        }
     }
 }
 

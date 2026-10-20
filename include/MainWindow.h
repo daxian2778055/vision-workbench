@@ -26,6 +26,7 @@ class QAction;
 #include "YieldMonitor.h"    // 良率目标监控（QHash 值类型，需要完整类型）
 #include "I18n.h"            // 国际化（G-P1-5）
 #include "AuxDialogMenuRouter.h"   // 菜单对话框路由面（值成员，需要完整类型）
+#include "ModuleEditorRegistry.h"   // 模块编辑器登记簿（值成员，需要完整类型）
 
 using namespace HalconCpp;
 
@@ -341,5 +342,6 @@ protected:
     QHash<int, QVariantMap> m_lastModuleVars;
     NodeSearchWidget *m_nodeSearchWidget = nullptr;      // 算子搜索控件
     HelpViewer *m_helpViewer = nullptr;                  // 算子帮助文档查看器
-    QHash<NodeBase *, class ModuleEditorDialog *> m_moduleEditors;
+    /// 模块编辑器登记簿（「一算子一窗」；词条切片 B 对话框族首抽——命中刷新/缺失建窗/摘除归簿）
+    ModuleEditorRegistry m_editors;
 };
