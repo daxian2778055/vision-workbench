@@ -11,6 +11,7 @@
 #include <QPointer>
 #include <utility>
 #include "NodeBase.h"
+#include "FlowFixture.h"   // 命名夹具值类型（切片 B 夹具族首抽自此头拆出）
 #include "SubFlowDefs.h"   // FR15.10 运行期子流程定义（值类型，随方案与撤销快照持久化）
 
 class QPainter;
@@ -33,18 +34,6 @@ struct FlowVariable {
     int type = 2; /// 0=Int 1=Bool 2=Float 3=String
     QVariant value;
     QString description;
-};
-
-/// 命名夹具：6 元齐次 + 可选匹配位姿
-struct FlowFixture {
-    QString name;
-    QVector<double> hom; /// m11 m12 m13 m21 m22 m23
-    double poseRow = 0.0;
-    double poseCol = 0.0;
-    double poseAngle = 0.0;
-    double poseScale = 1.0;
-    bool hasHom = false;
-    bool hasPose = false;
 };
 
 class FlowScene : public QGraphicsScene

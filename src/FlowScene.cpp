@@ -1,4 +1,5 @@
 #include "FlowScene.h"
+#include "FixtureValidation.h"   // 切片 B 夹具族首抽：夹具校验与降级的唯一口径（判据见头件）
 #include "NodeTemplateStore.h"
 #include "NodeFactory.h"
 #include "NodeRegistry.h"
@@ -1152,7 +1153,8 @@ QVariant FlowScene::flowVariable(const QString &name) const
 
 void FlowScene::setFixture(const FlowFixture &fixture)
 {
-    if (fixture.name.trimmed().isEmpty())
+    // 名字闸与载入侧同口径（切片 B 夹具族首抽：闸收进夹具校验面）
+    if (!FixtureValidation::isNameAccepted(fixture.name))
         return;
     m_fixtures[fixture.name.trimmed()] = fixture;
 }
@@ -1162,7 +1164,9 @@ void FlowScene::setFixtureHomography(const QString &name, const QVector<double> 
     // R-5：过去是 `size() < 6` 才拒、其余一律 `hom.mid(0, 6)` 存下 ⇒ 9 元 OpenCV 内参进来会被
     // **静默截断**成 fx/fy/cx/cy/k1/k2 当仿射用（void 返回、不留痕）。夹具矩阵槽位只接受恰好 6 项；
     // 不合要求的载荷一律不写，夹具保持"没有矩阵"，下游读侧按既有形态判红并报出实际项数。
-    if (name.trimmed().isEmpty() || hom.size() != 6)
+    // 两道闸（名字与项数）与载入侧同口径（收在夹具校验面，切片 B 夹具族首抽）
+    if (!FixtureValidation::isNameAccepted(name)
+        || !FixtureValidation::isHomographyCountAccepted(hom.size()))
         return;
     FlowFixture f = m_fixtures.value(name.trimmed());
     f.name = name.trimmed();
@@ -1174,7 +1178,7 @@ void FlowScene::setFixtureHomography(const QString &name, const QVector<double> 
 void FlowScene::setFixturePose(const QString &name, double row, double col,
                               double angleDeg, double scale)
 {
-    if (name.trimmed().isEmpty())
+    if (!FixtureValidation::isNameAccepted(name))
         return;
     FlowFixture f = m_fixtures.value(name.trimmed());
     f.name = name.trimmed();
@@ -1278,75 +1282,10 @@ void FlowScene::extrasFromJson(const QJsonObject &json, QStringList *rejected)
         // 并被标上 hasHom=true，下游 ⑥ 消费端只查长度（CoordinateTransformNode.cpp:58）⇒ 判绿且输出恒零。
         // 现在载入侧与写侧同一套形，不合形的部分**降级**（而不是整条丢弃：位姿坏了一个键不该连累矩阵），
         // 并把降级原因报出去（静默丢弃的表现是"方案打开后夹具的矩阵不见了"，现场无从下手——同 U-27）。
-        const QString name = it.key().trimmed();
-        if (name.isEmpty()) {
-            if (rejected)
-                rejected->append(QStringLiteral("%1 :: 夹具名为空，整条跳过（写侧 setFixture 同样拒收）")
-                                     .arg(name));
-            continue;
-        }
-
+        // 载入侧校验与降级已收进夹具校验面（切片 B 夹具族首抽）：名字闸与矩阵闸与位姿闸同一口径。
         FlowFixture ff;
-        ff.name = name;
-
-        if (f.value(QStringLiteral("hasHom")).toBool()) {
-            QString why;
-            QVector<double> hom;
-            const QJsonArray arr = f.value(QStringLiteral("hom")).toArray();
-            if (arr.size() != 6)
-                why = QStringLiteral("矩阵有 %1 项（夹具矩阵槽位只接受恰好 6 项）").arg(arr.size());
-            else {
-                for (int i = 0; i < arr.size(); ++i) {
-                    const QJsonValue &v = arr.at(i);
-                    if (!v.isDouble()) {
-                        why = QStringLiteral("第 %1 项不是数值").arg(i + 1);
-                        break;
-                    }
-                    if (!std::isfinite(v.toDouble())) {
-                        why = QStringLiteral("第 %1 项不是有限值").arg(i + 1);
-                        break;
-                    }
-                    hom.append(v.toDouble());
-                }
-            }
-            if (why.isEmpty()) {
-                ff.hom = hom;
-                ff.hasHom = true;
-            } else if (rejected) {
-                rejected->append(QStringLiteral("%1 :: 矩阵作废（%2），夹具保持没有矩阵").arg(name, why));
-            }
-        }
-
-        if (f.value(QStringLiteral("hasPose")).toBool()) {
-            QString why;
-            // poseScale 保留「缺键回落 1.0」的既有默认（extrasToJson 一直写全四键，回落只为兼容手写方案）；
-            // 给了就必须是数值——否则和矩阵侧一样会读成 0.0，把位姿缩放悄悄变成"没有缩放"。
-            const char *keys[] = {"poseRow", "poseCol", "poseAngle", "poseScale"};
-            bool required[] = {true, true, true, false};
-            for (int i = 0; i < 4 && why.isEmpty(); ++i) {
-                const QString key = QString::fromLatin1(keys[i]);
-                const QJsonValue v = f.value(key);
-                if (!f.contains(key)) {
-                    if (required[i])
-                        why = QStringLiteral("位姿缺 %1").arg(key);
-                    continue;
-                }
-                if (!v.isDouble())
-                    why = QStringLiteral("位姿 %1 不是数值").arg(key);
-                else if (!std::isfinite(v.toDouble()))
-                    why = QStringLiteral("位姿 %1 不是有限值").arg(key);
-            }
-            if (why.isEmpty()) {
-                ff.poseRow = f.value(QStringLiteral("poseRow")).toDouble();
-                ff.poseCol = f.value(QStringLiteral("poseCol")).toDouble();
-                ff.poseAngle = f.value(QStringLiteral("poseAngle")).toDouble();
-                ff.poseScale = f.value(QStringLiteral("poseScale")).toDouble(1.0);
-                ff.hasPose = true;
-            } else if (rejected) {
-                rejected->append(QStringLiteral("%1 :: 位姿作废（%2），夹具保持没有位姿").arg(name, why));
-            }
-        }
-
+        if (!FixtureValidation::loadFixture(it.key(), f, &ff, rejected))
+            continue;
         m_fixtures[ff.name] = ff;
     }
     const QJsonArray comments = json.value(QStringLiteral("comments")).toArray();
