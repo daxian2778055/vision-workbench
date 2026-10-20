@@ -18,6 +18,7 @@
 #include "HalconEnvCheck.h"
 #include "HalconNode.h"
 #include "HelpDialog.h"
+#include "ManualPathResolver.h"   // 切片 B 手册解析族首抽：手册候选链与首读者胜出（判据见头件）
 #include "FindLineNode.h"
 #include "FindCircleNode.h"
 #include "CaliperMeasureNode.h"
@@ -3202,22 +3203,10 @@ void MainWindow::handleRoiEdited(const RoiShape &shape)
 
 void MainWindow::openManualDialog()
 {
-    // 手册路径优先级：exe 同目录 docs/（现场可替换）> 仓库 docs/ > 嵌入资源（qrc 兜底）
-    QStringList candidates;
-    const QString exeDir = QCoreApplication::applicationDirPath();
-    candidates << exeDir + QStringLiteral("/docs/用户操作手册.md")
-               << QStringLiteral("docs/用户操作手册.md")
-               << exeDir + QStringLiteral("/用户操作手册.md")
-               << QStringLiteral(":/用户操作手册.md");
-
-    QString markdown;
-    for (const QString &path : candidates) {
-        QFile f(path);
-        if (f.exists() && f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            markdown = QString::fromUtf8(f.readAll());
-            break;
-        }
-    }
+    // 手册路径优先级：exe 同目录 docs/（现场可替换）> 仓库 docs/ > 嵌入资源（qrc 兜底）——
+    // 候选链与首读者胜出语义在 ManualPathResolver（词条切片 B 帮族首抽，行为零变更钉）
+    const QString markdown = ManualPathResolver::resolveMarkdown(
+        ManualPathResolver::candidatePaths(QCoreApplication::applicationDirPath()));
 
     if (markdown.isEmpty()) {
         QMessageBox::warning(this, QStringLiteral("使用手册"),
