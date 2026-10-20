@@ -1,4 +1,5 @@
 #include "HalconWindow.h"
+#include "RoiGeometry.h"   // 切片 B 图元族首抽：ROI 手柄命中与拖拽判定（判据见头件）
 #include "halconcpp/HalconCpp.h"
 #include <QResizeEvent>
 #include <QDebug>
@@ -1035,8 +1036,8 @@ void HalconWindow::drawMaskOverlay(QPainter &painter)
 
 QPoint HalconWindow::widgetPosFromImage(const QPointF &imgPos) const
 {
-    return QPoint(static_cast<int>(m_imageOffsetX + imgPos.x() * m_scaleFactor),
-                  static_cast<int>(m_imageOffsetY + imgPos.y() * m_scaleFactor));
+    // 图像坐标 → 控件坐标已收进 ROI 交互判定面（切片 B 图元族首抽）：偏移加缩放取整语义原样。
+    return RoiGeometry::widgetPosFromImage(imgPos, m_scaleFactor, m_imageOffsetX, m_imageOffsetY);
 }
 
 bool HalconWindow::imagePosFromWidget(const QPoint &widgetPos, QPointF &imgPos)
@@ -1201,182 +1202,19 @@ void HalconWindow::drawRoiHandles(QPainter &painter, const RoiShape &shape)
 
 QPointF HalconWindow::handleImagePos(const RoiShape &shape, RoiHandle h) const
 {
-    if (shape.type == RoiType::Rect) {
-        const QRectF r = roiAxisAlignedBounds(shape);
-        if (h == RoiHandle::C0) return r.topLeft();
-        if (h == RoiHandle::C1) return r.topRight();
-        if (h == RoiHandle::C2) return r.bottomRight();
-        if (h == RoiHandle::C3) return r.bottomLeft();
-        if (h == RoiHandle::Move) return r.center();
-    } else if (shape.type == RoiType::RotatedRect) {
-        const auto c = rotatedRectCorners(shape);
-        if (c.size() == 4) {
-            if (h == RoiHandle::C0) return c[0];
-            if (h == RoiHandle::C1) return c[1];
-            if (h == RoiHandle::C2) return c[2];
-            if (h == RoiHandle::C3) return c[3];
-        }
-        if (h == RoiHandle::Move) return shape.p1;
-        if (h == RoiHandle::Rotate) {
-            const double a = qDegreesToRadians(shape.angleDeg);
-            const double lift = shape.height * 0.5 + 28.0;
-            return QPointF(shape.p1.x() + std::sin(a) * lift,
-                           shape.p1.y() - std::cos(a) * lift);
-        }
-    } else if (shape.type == RoiType::Line) {
-        if (h == RoiHandle::End1) return shape.p1;
-        if (h == RoiHandle::End2) return shape.p2;
-        if (h == RoiHandle::Move) return (shape.p1 + shape.p2) * 0.5;
-    } else if (shape.type == RoiType::Circle) {
-        if (h == RoiHandle::Move) return shape.p1;
-        if (h == RoiHandle::C0) return shape.p2;
-    } else if (shape.type == RoiType::Point) {
-        if (h == RoiHandle::Move || h == RoiHandle::C0) return shape.p1;
-    }
-    return QPointF();
+    // 手柄图像坐标已收进 ROI 交互判定面（切片 B 图元族首抽）：纯几何，与原体同帧同序。
+    return RoiGeometry::handleImagePos(shape, h);
 }
 
-HalconWindow::RoiHandle HalconWindow::hitTestRoiHandle(const QPoint &widgetPos) const
+RoiHandle HalconWindow::hitTestRoiHandle(const QPoint &widgetPos) const
 {
-    if (m_roiShape.type == RoiType::None)
-        return RoiHandle::None;
-
-    QVector<RoiHandle> hs;
-    switch (m_roiShape.type) {
-    case RoiType::Rect:
-        hs = {RoiHandle::C0, RoiHandle::C1, RoiHandle::C2, RoiHandle::C3};
-        break;
-    case RoiType::RotatedRect:
-        hs = {RoiHandle::Rotate, RoiHandle::C0, RoiHandle::C1, RoiHandle::C2, RoiHandle::C3};
-        break;
-    case RoiType::Line:
-        hs = {RoiHandle::End1, RoiHandle::End2};
-        break;
-    case RoiType::Circle:
-        hs = {RoiHandle::C0};
-        break;
-    case RoiType::Point:
-        hs = {RoiHandle::C0};
-        break;
-    default:
-        break;
-    }
-
-    const double thresh2 = 8.0 * 8.0;
-    for (RoiHandle h : hs) {
-        const QPoint w = widgetPosFromImage(handleImagePos(m_roiShape, h));
-        const double dx = double(w.x() - widgetPos.x());
-        const double dy = double(w.y() - widgetPos.y());
-        if (dx * dx + dy * dy <= thresh2)
-            return h;
-    }
-
-    if (!m_qImage || m_scaleFactor <= 1e-9)
-        return RoiHandle::None;
-    const QPointF img((widgetPos.x() - m_imageOffsetX) / m_scaleFactor,
-                      (widgetPos.y() - m_imageOffsetY) / m_scaleFactor);
-
-    if (m_roiShape.type == RoiType::Rect) {
-        if (roiAxisAlignedBounds(m_roiShape).contains(img))
-            return RoiHandle::Move;
-    } else if (m_roiShape.type == RoiType::RotatedRect && m_roiShape.width > 1 && m_roiShape.height > 1) {
-        const double a = qDegreesToRadians(m_roiShape.angleDeg);
-        const double c = std::cos(a);
-        const double sn = std::sin(a);
-        const double dx = img.x() - m_roiShape.p1.x();
-        const double dy = img.y() - m_roiShape.p1.y();
-        const double lx = c * dx + sn * dy;
-        const double ly = -sn * dx + c * dy;
-        if (std::abs(lx) <= m_roiShape.width * 0.5 && std::abs(ly) <= m_roiShape.height * 0.5)
-            return RoiHandle::Move;
-    } else if (m_roiShape.type == RoiType::Line) {
-        const QPoint a = widgetPosFromImage(m_roiShape.p1);
-        const QPoint b = widgetPosFromImage(m_roiShape.p2);
-        const QPointF ab(b.x() - a.x(), b.y() - a.y());
-        const double len2 = ab.x() * ab.x() + ab.y() * ab.y();
-        if (len2 > 1.0) {
-            const QPointF ap(widgetPos.x() - a.x(), widgetPos.y() - a.y());
-            const double t = qBound(0.0, (ap.x() * ab.x() + ap.y() * ab.y()) / len2, 1.0);
-            const QPointF proj(a.x() + ab.x() * t, a.y() + ab.y() * t);
-            if (QLineF(QPointF(widgetPos), proj).length() <= 8.0)
-                return RoiHandle::Move;
-        }
-    } else if (m_roiShape.type == RoiType::Circle) {
-        const double r = QLineF(m_roiShape.p1, m_roiShape.p2).length();
-        if (QLineF(m_roiShape.p1, img).length() <= r)
-            return RoiHandle::Move;
-    }
-    return RoiHandle::None;
+    // 手柄命中判定已收进 ROI 交互判定面（切片 B 图元族首抽）：纯几何，与原体同帧同序。
+    return RoiGeometry::hitTest(m_roiShape, widgetPos, m_scaleFactor, m_imageOffsetX,
+                                 m_imageOffsetY, m_qImage != nullptr);
 }
 
 void HalconWindow::applyHandleDrag(const QPointF &imgPos)
 {
-    const QPointF delta = imgPos - m_handleStartImg;
-    RoiShape s = m_handleStartShape;
-    const RoiHandle h = m_activeHandle;
-
-    if (s.type == RoiType::Rect) {
-        QPointF tl(qMin(s.p1.x(), s.p2.x()), qMin(s.p1.y(), s.p2.y()));
-        QPointF br(qMax(s.p1.x(), s.p2.x()), qMax(s.p1.y(), s.p2.y()));
-        if (h == RoiHandle::Move) {
-            tl += delta;
-            br += delta;
-        } else if (h == RoiHandle::C0) {
-            tl = imgPos;
-        } else if (h == RoiHandle::C1) {
-            tl.setY(imgPos.y());
-            br.setX(imgPos.x());
-        } else if (h == RoiHandle::C2) {
-            br = imgPos;
-        } else if (h == RoiHandle::C3) {
-            tl.setX(imgPos.x());
-            br.setY(imgPos.y());
-        }
-        if (br.x() < tl.x() + 2.0)
-            br.setX(tl.x() + 2.0);
-        if (br.y() < tl.y() + 2.0)
-            br.setY(tl.y() + 2.0);
-        s.p1 = tl;
-        s.p2 = br;
-    } else if (s.type == RoiType::RotatedRect) {
-        if (h == RoiHandle::Move) {
-            s.p1 += delta;
-        } else if (h == RoiHandle::Rotate) {
-            s.angleDeg = qRadiansToDegrees(std::atan2(imgPos.x() - s.p1.x(),
-                                                      s.p1.y() - imgPos.y()));
-        } else if (h == RoiHandle::C0 || h == RoiHandle::C1
-                   || h == RoiHandle::C2 || h == RoiHandle::C3) {
-            const int i = int(h) - int(RoiHandle::C0);
-            const auto corners = rotatedRectCorners(s);
-            if (corners.size() == 4) {
-                const QPointF opp = corners[(i + 2) % 4];
-                const double a = qDegreesToRadians(s.angleDeg);
-                const double c = std::cos(a);
-                const double sn = std::sin(a);
-                const QPointF vec = imgPos - opp;
-                s.width = qMax(2.0, std::abs(c * vec.x() + sn * vec.y()));
-                s.height = qMax(2.0, std::abs(-sn * vec.x() + c * vec.y()));
-                s.p1 = (opp + imgPos) * 0.5;
-            }
-        }
-    } else if (s.type == RoiType::Line) {
-        if (h == RoiHandle::End1)
-            s.p1 = imgPos;
-        else if (h == RoiHandle::End2)
-            s.p2 = imgPos;
-        else if (h == RoiHandle::Move) {
-            s.p1 += delta;
-            s.p2 += delta;
-        }
-    } else if (s.type == RoiType::Circle) {
-        if (h == RoiHandle::Move) {
-            s.p1 += delta;
-            s.p2 += delta;
-        } else if (h == RoiHandle::C0) {
-            s.p2 = imgPos;
-        }
-    } else if (s.type == RoiType::Point) {
-        s.p1 = imgPos;
-    }
-    m_roiShape = s;
+    // 手柄拖拽映射已收进 ROI 交互判定面（切片 B 图元族首抽）：纯几何，与原体同帧同序。
+    m_roiShape = RoiGeometry::dragShape(m_handleStartShape, m_activeHandle, imgPos, m_handleStartImg);
 }
