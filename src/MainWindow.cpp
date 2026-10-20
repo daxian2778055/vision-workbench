@@ -19,6 +19,7 @@
 #include "HalconNode.h"
 #include "HelpDialog.h"
 #include "ManualPathResolver.h"   // 切片 B 手册解析族首抽：手册候选链与首读者胜出（判据见头件）
+#include "RoundVariableFeed.h"    // 切片 B 变量族首抽：变量域两出口装配（判据见头件）
 #include "FindLineNode.h"
 #include "FindCircleNode.h"
 #include "CaliperMeasureNode.h"
@@ -1523,25 +1524,9 @@ void MainWindow::openModuleEditor(NodeBase *node)
 
 QStringList MainWindow::buildVariableReferences() const
 {
-    QStringList refs;
-
-    // 模块输出 {模块号.参数名}
-    const QList<int> ids = m_lastModuleVars.keys();
-    for (int id : ids) {
-        const QStringList keys = m_lastModuleVars.value(id).keys();
-        for (const QString &k : keys)
-            refs << VariablePanel::moduleRefText(id, k);
-    }
-
-    // 全局变量 {global.名称}
-    const QMap<QString, GlobalVariableManager::Variable> vars =
-        GlobalVariableManager::instance()->variables();
-    for (auto it = vars.cbegin(); it != vars.cend(); ++it)
-        refs << VariablePanel::globalRefText(it.key());
-
-    // 统一排序，保证菜单顺序稳定（便于按位置快速选择）
-    refs.sort();
-    return refs;
+    // 变量域两出口之二：引用菜单在 RoundVariableFeed（文本经 VariablePanel 双静态，终排序兜序）
+    return RoundVariableFeed::roundReferenceTexts(
+        GlobalVariableManager::instance()->variables(), m_lastModuleVars);
 }
 
 void MainWindow::openAuxPanel(const QString &key)
@@ -3146,16 +3131,10 @@ void MainWindow::fireSendEventsForRound()
         m_sendEventFirePending = false;
         // 每轮上报数据注入：{global.变量名} + {模块号.参数名}（与"变量引用"语法一致），
         // 发送事件的文本模板据此把本轮结果格式化进报文（对标 VM 的每轮结果上报）
-        QVariantMap payload;
-        const auto gvars = GlobalVariableManager::instance()->variables();
-        for (auto it = gvars.constBegin(); it != gvars.constEnd(); ++it)
-            payload.insert(QStringLiteral("global.%1").arg(it.key()), it.value().value);
-        for (auto it = m_lastModuleVars.constBegin(); it != m_lastModuleVars.constEnd(); ++it) {
-            const QVariantMap &vars = it.value();
-            for (auto jt = vars.constBegin(); jt != vars.constEnd(); ++jt)
-                payload.insert(QStringLiteral("%1.%2").arg(it.key()).arg(jt.key()), jt.value());
-        }
-        CommunicationManager::instance()->fireEnabledSendEvents(payload);
+        // 变量域两出口之一：上报 payload 在 RoundVariableFeed（{global.变量名} + {模块号.参数名}，
+        // 与"变量引用"语法一致——发送事件的文本模板据此把本轮结果格式化进报文）
+        CommunicationManager::instance()->fireEnabledSendEvents(RoundVariableFeed::roundPayload(
+            GlobalVariableManager::instance()->variables(), m_lastModuleVars));
     });
 }
 
