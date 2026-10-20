@@ -20,6 +20,7 @@
 #include "HelpDialog.h"
 #include "ManualPathResolver.h"   // 切片 B 手册解析族首抽：手册候选链与首读者胜出（判据见头件）
 #include "RoundVariableFeed.h"    // 切片 B 变量族首抽：变量域两出口装配（判据见头件）
+#include "NodeIconPalette.h"      // 切片 B 图标族首抽：类别色语义表与圆标合成（判据见头件）
 #include "FindLineNode.h"
 #include "FindCircleNode.h"
 #include "CaliperMeasureNode.h"
@@ -3335,7 +3336,7 @@ void MainWindow::setupToolLibrary()
                 }
             } else {
                 // 根据节点类型生成默认图标
-                QIcon icon = generateNodeIcon(reg->category);
+                QIcon icon = NodeIconPalette::categoryIcon(reg->category);
                 item->setIcon(0, icon);
             }
         }
@@ -3381,52 +3382,6 @@ void MainWindow::setupToolLibrary()
     ui->toolLibrary->viewport()->installEventFilter(this);
 }
 
-QIcon MainWindow::generateNodeIcon(NodeBase::NodeType category) const
-{
-    // 根据节点类型生成不同颜色的图标
-    QPixmap pixmap(16, 16);
-    pixmap.fill(Qt::transparent);
-
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-
-    QColor color;
-    switch (category) {
-    case NodeBase::IMAGE_ACQUISITION:
-        color = QColor(0x18, 0x90, 0xff);  // 蓝色 - 图像采集
-        break;
-    case NodeBase::IMAGE_PROCESSING:
-        color = QColor(0x52, 0xc4, 0x1a);  // 绿色 - 图像处理
-        break;
-    case NodeBase::SHAPE_ANALYSIS:
-        color = QColor(0xfa, 0xad, 0x14);  // 黄色 - 形状分析
-        break;
-    case NodeBase::MEASUREMENT:
-        color = QColor(0xff, 0x4d, 0x4f);  // 红色 - 测量
-        break;
-    case NodeBase::LOGIC:
-        color = QColor(0x72, 0x2e, 0xd1);  // 紫色 - 逻辑控制
-        break;
-    case NodeBase::OUTPUT:
-        color = QColor(0xff, 0x76, 0x32);  // 橙色 - 输出
-        break;
-    default:
-        color = QColor(0x8c, 0x8c, 0x8c);  // 灰色
-        break;
-    }
-
-    // 绘制圆形图标
-    painter.setBrush(color);
-    painter.setPen(Qt::NoPen);
-    painter.drawEllipse(2, 2, 12, 12);
-
-    // 绘制白色边框
-    painter.setPen(QPen(Qt::white, 1));
-    painter.setBrush(Qt::NoBrush);
-    painter.drawEllipse(2, 2, 12, 12);
-
-    return QIcon(pixmap);
-}
 
 void MainWindow::setupFlowEditor()
 {

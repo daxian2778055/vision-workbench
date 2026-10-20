@@ -212,6 +212,7 @@ set(SOURCES
     src/UITranslator.cpp
     src/ManualPathResolver.cpp
     src/RoundVariableFeed.cpp
+    src/NodeIconPalette.cpp
     src/GlobalVariableManager.cpp
     src/GlobalVariableDialog.cpp
     src/GlobalCameraManager.cpp
@@ -1137,6 +1138,15 @@ add_executable(round_variable_feed_test tests/round_variable_feed_test.cpp)
 target_link_libraries(round_variable_feed_test PRIVATE vfp_core Qt6::Test)
 vfp_add_qtest(NAME RoundVariableFeedTest TARGET round_variable_feed_test)
 
+# 算子图标调色板面（词条切片 B 图标族首抽，从 MainWindow 抽出）：
+# 类别色语义表与圆标合成（像素级真渲染腿座，需 Qt6::Widgets；QTEST_MAIN 据此建 QApplication）
+if(MSVC)
+    add_executable(node_icon_palette_test tests/node_icon_palette_test.cpp)
+    target_link_libraries(node_icon_palette_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    vfp_add_qtest(NAME NodeIconPaletteTest TARGET node_icon_palette_test)
+    vfp_configure_gui_test(NodeIconPaletteTest)
+endif()
+
 # OpenCV 桥接与节点算法验证（24 条 CHECK：HImage↔cv::Mat 双向 + 阈值/Blob/形态学/边缘/拟合/
 # 模板匹配/卡尺/标定/条码/OCR/运算/旋转/统计）。原先只挂在 if(VFP_BUILD_TESTS) 里——该选项默认
 # OFF 且 tools/ci.ps1 的配置命令不传 -D，故默认配置下连目标都不进解决方案（见推进计划 §3.2 结论 E）。
@@ -1183,7 +1193,7 @@ if(MSVC)
                   FactoryPasswordGuardTest FeatureMatchTest CalibChainTest OpencvNodesTest
                   ProjectPathsTest FlowCachePurgeLedgerTest ExecutionControlPolicyTest
                   AuxDialogMenuRouterTest ModuleEditorRegistryTest UITranslatorTest
-                  ManualPathResolverTest RoundVariableFeedTest)
+                  ManualPathResolverTest RoundVariableFeedTest NodeIconPaletteTest)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
         # path_list_prepend 由 CMake 负责插入并处理平台路径分隔符，避免在
         # ENVIRONMENT 值里嵌套分号导致列表被错误拆分
