@@ -13,9 +13,12 @@
 // fixture：真 FlowScene + 真节点（场景自建节点）+ 真执行器（不启动工作线程——本座只验所有权面）。
 // 红臂破坏位 = 析构内的归属指针后置清空段（移除即「已死执行器仍在节点上留指向」）。
 #include <QtTest>
+#include <QCoreApplication>
 #include <QPointF>
 #include <QString>
+#include <QThread>
 
+#include "CommunicationManager.h"
 #include "FlowExecutor.h"
 #include "FlowScene.h"
 #include "GlobalTriggerManager.h"
@@ -30,6 +33,7 @@ private slots:
     void testOwnerPointerClearedOnDestruction();  // ② 析构后置清空活节点归属指针
     void testUnbindKeepsOwnership();        // ③ 解绑不清归属
     void testTriggerBindingUnregisteredOnDestruction();  // ④ 触发面按执行器身份配对注销
+    void testTriggerRoutingRunsOnAppThread();  // ⑤ 触发路由与执行器析构同线程（线程前提）
 };
 
 void FlowExecutorOwnershipTest::testCurrentSingletonLifecycle()
@@ -89,6 +93,43 @@ void FlowExecutorOwnershipTest::testTriggerBindingUnregisteredOnDestruction()
     }
     // 执行器析构内按身份注销：绑定不再指向已死执行器
     QVERIFY(GlobalTriggerManager::instance()->executorForFlow(flowName) == nullptr);
+}
+
+void FlowExecutorOwnershipTest::testTriggerRoutingRunsOnAppThread()
+{
+    // 线程前提：触发管理器单例的归属线程 = 首次创建它的线程（现状＝界面线程，
+    // 因为首个调用发生在界面线程构造执行器时）。触发路由在该线程执行，故它与执行器
+    // 析构同线程——路由里「出锁后解引用执行器指针」的那一小段窗口不会与析构并发
+    // （析构的注销动作也要取触发管理器这把锁）。
+    QThread *appThread = QCoreApplication::instance()->thread();
+    QCOMPARE(GlobalTriggerManager::instance()->thread(), appThread);
+
+    FlowScene scene;
+    FlowExecutor executor;
+    // 硬触发模式：路由匹配即通知，但不受理外部触发、不起工作线程（观测线程用）
+    executor.setFlowMode(FlowMode::HardwareTrigger);
+
+    const QString flowName = QStringLiteral("ownership_route_probe");
+    const QString trigger = QStringLiteral("PROBE_TRIGGER");
+    GlobalTriggerManager::instance()->registerFlow(flowName, &scene, &executor);
+    QVERIFY(GlobalTriggerManager::instance()->setStringTrigger(trigger, flowName));
+
+    QThread *observed = nullptr;
+    QObject::connect(GlobalTriggerManager::instance(), &GlobalTriggerManager::triggerFired,
+                     &executor,
+                     [&observed](const QString &, const QString &) {
+                         observed = QThread::currentThread();
+                     },
+                     Qt::DirectConnection);
+
+    // 走生产路径：通信数据到达 → 触发管理器路由（不直接调槽，以保留真实连接语义）
+    emit CommunicationManager::instance()->dataReceived(QStringLiteral("probe_device"),
+                                                        trigger.toUtf8());
+    QTRY_VERIFY(observed != nullptr);
+    QCOMPARE(observed, appThread);
+
+    GlobalTriggerManager::instance()->removeStringTrigger(trigger);
+    GlobalTriggerManager::instance()->unregisterFlow(flowName);
 }
 
 QTEST_MAIN(FlowExecutorOwnershipTest)

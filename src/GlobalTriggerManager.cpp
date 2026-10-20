@@ -12,6 +12,12 @@
 GlobalTriggerManager *GlobalTriggerManager::instance()
 {
     // 静态局部变量初始化在 C++11 后线程安全，且指针常驻避免析构顺序问题
+    //
+    // 线程前提（座腿钉住，见 tests/flow_executor_ownership_test.cpp）：本单例的归属线程
+    // = 首次创建它的线程；现状首次创建发生在界面线程构造执行器时，故触发路由与执行器
+    // 析构同在界面线程——路由里「出锁后解引用执行器指针」的那一小段窗口因此不会与析构
+    // 并发（析构的注销动作也要取本管理器这把锁）。若将来把首次创建挪到工作线程，
+    // 该窗口即被激活：路由在别的线程解引用一个正被析构的执行器。
     static GlobalTriggerManager *inst = new GlobalTriggerManager();
     return inst;
 }
