@@ -147,7 +147,6 @@ private:
     void setupFlowSceneDragDrop(FlowScene *scene);
     void hookFlowScene(FlowScene *scene);
     bool eventFilter(QObject *obj, QEvent *event) override;
-    QList<NodeBase*> getUpstreamNodes(NodeBase *node, FlowScene *scene); // 获取上游节点（数据流正向）
     /// 转发 ImageDisplayController::resolveDisplayNode（保持调用点稳定）
     NodeBase *resolveDisplayNode(NodeBase *fallbackNode = nullptr) const;
     /// 刷新所有 MVS 图像源的像素格式控件可用状态

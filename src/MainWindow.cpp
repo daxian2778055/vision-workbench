@@ -21,6 +21,7 @@
 #include "ManualPathResolver.h"   // 切片 B 手册解析族首抽：手册候选链与首读者胜出（判据见头件）
 #include "RoundVariableFeed.h"    // 切片 B 变量族首抽：变量域两出口装配（判据见头件）
 #include "NodeIconPalette.h"      // 切片 B 图标族首抽：类别色语义表与圆标合成（判据见头件）
+#include "UpstreamWalk.h"         // 切片 B 图谱族首抽：输入端口上游闭包游走（判据见头件）
 #include "FindLineNode.h"
 #include "FindCircleNode.h"
 #include "CaliperMeasureNode.h"
@@ -1446,7 +1447,7 @@ void MainWindow::showNodeParameters(NodeBase *node)
         FlowScene *scene = m_flowScenes[currentIndex];
         if (scene) {
             savedSelectedNode = m_imageDisplay->selectedOutputNode(scene);
-            for (NodeBase *up : getUpstreamNodes(node, scene)) {
+            for (NodeBase *up : UpstreamWalk::upstreamOf(node)) {
                 if (up && up != node)
                     combo->addItem(up->fullName(), QVariant::fromValue(up));
             }
@@ -4162,36 +4163,6 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
     }
     
     return QMainWindow::eventFilter(obj, event);
-}
-
-QList<NodeBase*> MainWindow::getUpstreamNodes(NodeBase *node, FlowScene *scene)
-{
-    QList<NodeBase*> upstreamNodes;
-    if (!node || !scene) {
-        return upstreamNodes;
-    }
-    
-    // 获取当前节点的所有输入端口
-    QList<Port*> inputPorts = node->inputPorts();
-    for (Port *port : inputPorts) {
-        // 获取连接到该输入端口的所有连接
-        QList<MyProject::Connection*> connections = port->connections();
-        for (MyProject::Connection *conn : connections) {
-            // 获取连接的源端口（输出端口）
-            Port *sourcePort = conn->sourcePort();
-            if (sourcePort) {
-                // 获取源端口所属的节点
-                NodeBase *sourceNode = sourcePort->node();
-                if (sourceNode && !upstreamNodes.contains(sourceNode)) {
-                    upstreamNodes.append(sourceNode);
-                    // 递归获取更上游的节点
-                    upstreamNodes.append(getUpstreamNodes(sourceNode, scene));
-                }
-            }
-        }
-    }
-    
-    return upstreamNodes;
 }
 
 /// 转发：显示决策（下拉框选择 > 画布选中节点 > 兜底）在 ImageDisplayController
