@@ -4112,95 +4112,84 @@ void MainWindow::updateLanguage()
 
 void MainWindow::retranslateUi()
 {
-    // 重新翻译UI
+    // 重新翻译UI（词条切片 B 就地链首抽：双语文本对全入 UITranslator，语言分派一跳）
+    // 序偶性钉：条目序 = 原中文/英文两分支逐行序；设文回调内目标指针应用时才 deref（同瞬）
     VFP_DEBUG << "retranslateUi called";
-    
-    if (m_currentLanguage == Language::Chinese) {
-        setWindowTitle(QStringLiteral("视觉方案工作台"));
-        // 中文翻译
-        ui->menuFile->setTitle("文件");
-        ui->menuEdit->setTitle("编辑");
-        ui->menuView->setTitle("视图");
-        ui->menuCommunication->setTitle("通讯");
-        ui->menuSystem->setTitle("系统");
-        ui->menuLanguage->setTitle("语言");
-        
-        ui->actionNew->setText("新建方案");
-        ui->actionSave->setText("保存方案");
-        ui->actionLoad->setText("打开方案");
-        ui->actionExit->setText("退出");
-        
-        ui->actionAddFlow->setText("添加流程");
-        ui->actionDeleteFlow->setText("删除流程");
-        if (m_actionCreateGroup) m_actionCreateGroup->setText("创建分组");
-        if (m_actionDissolveGroup) m_actionDissolveGroup->setText("解散分组");
-        if (m_actionToggleGroup) m_actionToggleGroup->setText("折叠/展开分组");
-        if (m_actionCopySnippet) m_actionCopySnippet->setText("复制所选算子");
-        if (m_actionPasteSnippet) m_actionPasteSnippet->setText("粘贴");
-        if (m_actionExportSnippet) m_actionExportSnippet->setText("导出片段…");
-        if (m_actionImportSnippet) m_actionImportSnippet->setText("导入片段…");
-        
-        ui->actionSaveScheme->setText("保存方案");
-        ui->actionOpenScheme->setText("打开方案");
-        
-        ui->actionChinese->setText("中文");
-        ui->actionEnglish->setText("英文");
-        
-        ui->actionStartExecution->setText("开始执行");
-        ui->actionStopExecution->setText("停止执行");
-        ui->actionRuntimeDesigner->setText("运行界面设计");
-        if (m_runtimeViewDock) m_runtimeViewDock->setWindowTitle(QStringLiteral("运行界面"));
-        
-        ui->imageDock->setWindowTitle(QStringLiteral("图像显示"));
-        ui->paramDock->setWindowTitle(QStringLiteral("算法参数"));
-        
-        // 更新参数面板标签页名称
-        if (m_selectedNode) {
-            showNodeParameters(m_selectedNode);
-        }
-    } else {
-        setWindowTitle(QStringLiteral("Vision Inspection Workbench"));
-        // 英文翻译
-        ui->menuFile->setTitle("File");
-        ui->menuEdit->setTitle("Edit");
-        ui->menuView->setTitle("View");
-        ui->menuCommunication->setTitle("Communication");
-        ui->menuSystem->setTitle("System");
-        ui->menuLanguage->setTitle("Language");
-        
-        ui->actionNew->setText("New Scheme");
-        ui->actionSave->setText("Save Scheme");
-        ui->actionLoad->setText("Open Scheme");
-        ui->actionExit->setText("Exit");
-        
-        ui->actionAddFlow->setText("Add Flow");
-        ui->actionDeleteFlow->setText("Delete Flow");
-        if (m_actionCreateGroup) m_actionCreateGroup->setText("Create Group");
-        if (m_actionDissolveGroup) m_actionDissolveGroup->setText("Dissolve Group");
-        if (m_actionToggleGroup) m_actionToggleGroup->setText("Collapse/Expand Group");
-        if (m_actionCopySnippet) m_actionCopySnippet->setText("Copy Selected Nodes");
-        if (m_actionPasteSnippet) m_actionPasteSnippet->setText("Paste");
-        if (m_actionExportSnippet) m_actionExportSnippet->setText("Export Snippet…");
-        if (m_actionImportSnippet) m_actionImportSnippet->setText("Import Snippet…");
-        
-        ui->actionSaveScheme->setText("Save Scheme");
-        ui->actionOpenScheme->setText("Open Scheme");
-        
-        ui->actionChinese->setText("Chinese");
-        ui->actionEnglish->setText("English");
-        
-        ui->actionStartExecution->setText("Start");
-        ui->actionStopExecution->setText("Stop");
-        ui->actionRuntimeDesigner->setText("Runtime UI Designer");
-        if (m_runtimeViewDock) m_runtimeViewDock->setWindowTitle(QStringLiteral("Runtime UI"));
-        
-        ui->imageDock->setWindowTitle(QStringLiteral("Image Display"));
-        ui->paramDock->setWindowTitle(QStringLiteral("Tool Parameters"));
-        
-        // 更新参数面板标签页名称
-        if (m_selectedNode) {
-            showNodeParameters(m_selectedNode);
-        }
+
+    m_texts.clear();
+    m_texts.add([this](const QString &s) { setWindowTitle(s); },
+                QStringLiteral("视觉方案工作台"), QStringLiteral("Vision Inspection Workbench"));
+    m_texts.add([this](const QString &s) { ui->menuFile->setTitle(s); },
+                QStringLiteral("文件"), QStringLiteral("File"));
+    m_texts.add([this](const QString &s) { ui->menuEdit->setTitle(s); },
+                QStringLiteral("编辑"), QStringLiteral("Edit"));
+    m_texts.add([this](const QString &s) { ui->menuView->setTitle(s); },
+                QStringLiteral("视图"), QStringLiteral("View"));
+    m_texts.add([this](const QString &s) { ui->menuCommunication->setTitle(s); },
+                QStringLiteral("通讯"), QStringLiteral("Communication"));
+    m_texts.add([this](const QString &s) { ui->menuSystem->setTitle(s); },
+                QStringLiteral("系统"), QStringLiteral("System"));
+    m_texts.add([this](const QString &s) { ui->menuLanguage->setTitle(s); },
+                QStringLiteral("语言"), QStringLiteral("Language"));
+
+    m_texts.add([this](const QString &s) { ui->actionNew->setText(s); },
+                QStringLiteral("新建方案"), QStringLiteral("New Scheme"));
+    m_texts.add([this](const QString &s) { ui->actionSave->setText(s); },
+                QStringLiteral("保存方案"), QStringLiteral("Save Scheme"));
+    m_texts.add([this](const QString &s) { ui->actionLoad->setText(s); },
+                QStringLiteral("打开方案"), QStringLiteral("Open Scheme"));
+    m_texts.add([this](const QString &s) { ui->actionExit->setText(s); },
+                QStringLiteral("退出"), QStringLiteral("Exit"));
+
+    m_texts.add([this](const QString &s) { ui->actionAddFlow->setText(s); },
+                QStringLiteral("添加流程"), QStringLiteral("Add Flow"));
+    m_texts.add([this](const QString &s) { ui->actionDeleteFlow->setText(s); },
+                QStringLiteral("删除流程"), QStringLiteral("Delete Flow"));
+    m_texts.add([this](const QString &s) { if (m_actionCreateGroup) m_actionCreateGroup->setText(s); },
+                QStringLiteral("创建分组"), QStringLiteral("Create Group"));
+    m_texts.add([this](const QString &s) { if (m_actionDissolveGroup) m_actionDissolveGroup->setText(s); },
+                QStringLiteral("解散分组"), QStringLiteral("Dissolve Group"));
+    m_texts.add([this](const QString &s) { if (m_actionToggleGroup) m_actionToggleGroup->setText(s); },
+                QStringLiteral("折叠/展开分组"), QStringLiteral("Collapse/Expand Group"));
+    m_texts.add([this](const QString &s) { if (m_actionCopySnippet) m_actionCopySnippet->setText(s); },
+                QStringLiteral("复制所选算子"), QStringLiteral("Copy Selected Nodes"));
+    m_texts.add([this](const QString &s) { if (m_actionPasteSnippet) m_actionPasteSnippet->setText(s); },
+                QStringLiteral("粘贴"), QStringLiteral("Paste"));
+    m_texts.add([this](const QString &s) { if (m_actionExportSnippet) m_actionExportSnippet->setText(s); },
+                QStringLiteral("导出片段…"), QStringLiteral("Export Snippet…"));
+    m_texts.add([this](const QString &s) { if (m_actionImportSnippet) m_actionImportSnippet->setText(s); },
+                QStringLiteral("导入片段…"), QStringLiteral("Import Snippet…"));
+
+    m_texts.add([this](const QString &s) { ui->actionSaveScheme->setText(s); },
+                QStringLiteral("保存方案"), QStringLiteral("Save Scheme"));
+    m_texts.add([this](const QString &s) { ui->actionOpenScheme->setText(s); },
+                QStringLiteral("打开方案"), QStringLiteral("Open Scheme"));
+
+    m_texts.add([this](const QString &s) { ui->actionChinese->setText(s); },
+                QStringLiteral("中文"), QStringLiteral("Chinese"));
+    m_texts.add([this](const QString &s) { ui->actionEnglish->setText(s); },
+                QStringLiteral("英文"), QStringLiteral("English"));
+
+    m_texts.add([this](const QString &s) { ui->actionStartExecution->setText(s); },
+                QStringLiteral("开始执行"), QStringLiteral("Start"));
+    m_texts.add([this](const QString &s) { ui->actionStopExecution->setText(s); },
+                QStringLiteral("停止执行"), QStringLiteral("Stop"));
+    m_texts.add([this](const QString &s) { ui->actionRuntimeDesigner->setText(s); },
+                QStringLiteral("运行界面设计"), QStringLiteral("Runtime UI Designer"));
+    m_texts.add([this](const QString &s) { if (m_runtimeViewDock) m_runtimeViewDock->setWindowTitle(s); },
+                QStringLiteral("运行界面"), QStringLiteral("Runtime UI"));
+
+    m_texts.add([this](const QString &s) { ui->imageDock->setWindowTitle(s); },
+                QStringLiteral("图像显示"), QStringLiteral("Image Display"));
+    m_texts.add([this](const QString &s) { ui->paramDock->setWindowTitle(s); },
+                QStringLiteral("算法参数"), QStringLiteral("Tool Parameters"));
+
+    m_texts.apply(m_currentLanguage == Language::Chinese ? UITranslator::Lang::Zh
+                                                         : UITranslator::Lang::En);
+
+    // 更新参数面板标签页名称（原两分支末位同形，落表外同位）
+    if (m_selectedNode) {
+        showNodeParameters(m_selectedNode);
     }
 }
 

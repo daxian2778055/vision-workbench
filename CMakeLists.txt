@@ -209,6 +209,7 @@ set(SOURCES
     src/RecentFilesMenu.cpp
     src/AuxDialogMenuRouter.cpp
     src/ModuleEditorRegistry.cpp
+    src/UITranslator.cpp
     src/GlobalVariableManager.cpp
     src/GlobalVariableDialog.cpp
     src/GlobalCameraManager.cpp
@@ -1116,6 +1117,12 @@ add_executable(module_editor_registry_test tests/module_editor_registry_test.cpp
 target_link_libraries(module_editor_registry_test PRIVATE vfp_core Qt6::Test)
 vfp_add_qtest(NAME ModuleEditorRegistryTest TARGET module_editor_registry_test)
 
+# UI 文本表应用器（词条切片 B 就地链首抽从 MainWindow retranslateUi 抽出）：
+# 双语文本对注册与语言一跳分派，应用序=注册序（真空座，目标用裸窗件）
+add_executable(ui_translator_test tests/ui_translator_test.cpp)
+target_link_libraries(ui_translator_test PRIVATE vfp_core Qt6::Test)
+vfp_add_qtest(NAME UITranslatorTest TARGET ui_translator_test)
+
 # OpenCV 桥接与节点算法验证（24 条 CHECK：HImage↔cv::Mat 双向 + 阈值/Blob/形态学/边缘/拟合/
 # 模板匹配/卡尺/标定/条码/OCR/运算/旋转/统计）。原先只挂在 if(VFP_BUILD_TESTS) 里——该选项默认
 # OFF 且 tools/ci.ps1 的配置命令不传 -D，故默认配置下连目标都不进解决方案（见推进计划 §3.2 结论 E）。
@@ -1161,7 +1168,7 @@ if(MSVC)
                   I18nTest SubFlowTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
                   FactoryPasswordGuardTest FeatureMatchTest CalibChainTest OpencvNodesTest
                   ProjectPathsTest FlowCachePurgeLedgerTest ExecutionControlPolicyTest
-                  AuxDialogMenuRouterTest ModuleEditorRegistryTest)
+                  AuxDialogMenuRouterTest ModuleEditorRegistryTest UITranslatorTest)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
         # path_list_prepend 由 CMake 负责插入并处理平台路径分隔符，避免在
         # ENVIRONMENT 值里嵌套分号导致列表被错误拆分

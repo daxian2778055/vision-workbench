@@ -27,6 +27,7 @@ class QAction;
 #include "I18n.h"            // 国际化（G-P1-5）
 #include "AuxDialogMenuRouter.h"   // 菜单对话框路由面（值成员，需要完整类型）
 #include "ModuleEditorRegistry.h"   // 模块编辑器登记簿（值成员，需要完整类型）
+#include "UITranslator.h"   // UI 文本表应用器（值成员，需要完整类型）
 
 using namespace HalconCpp;
 
@@ -306,6 +307,8 @@ protected:
     Language m_currentLanguage = Language::Chinese;
     QMap<QString, QString> m_translationsCN;
     QMap<QString, QString> m_translationsEN;
+    /// UI 文本表应用器（retranslateUi 的双语文本对全入此表；词条切片 B 就地链首抽）
+    UITranslator m_texts;
     
     // 保存每个流程各自的运行模式
     QMap<FlowScene *, FlowMode> m_flowModes;
