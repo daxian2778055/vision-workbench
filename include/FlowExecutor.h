@@ -16,8 +16,10 @@
 #include <atomic>
 #include <functional>
 #include <algorithm>
+#include <memory>
 #include <halconcpp/HalconCpp.h>
 #include "FlowExecutionEnums.h"   // 执行状态与运行模式（切片 C 立项书 P2a 期：自此头拆出的轻头件）
+#include "FlowRunContext.h"       // 运行上下文块（切片 C 立项书 P2a 期新增件，P2b 期起承载状态与模式）
 #include "FlowRuntimeStats.h"
 #include "FlowCachePurgeLedger.h"   // 缓存清理登记账（切片 A 抽出：账叶锁与登记列随账走）
 
@@ -97,7 +99,8 @@ public:
     /// 硬触发模式下仅允许相机硬件触发帧门控执行，禁止外部触发
     bool canTriggerFromExternal() const
     {
-        return m_flowMode != FlowMode::HardwareTrigger;
+        // 运行模式在块内（原子读；块是共享件，读侧不取主体锁）
+        return m_runContext->flowMode() != FlowMode::HardwareTrigger;
     }
 
     /// 返回当前绑定的流程场景
@@ -196,6 +199,8 @@ private:
     /// 在等待点调用（须持 m_mutex）：置位并上报 executionParked 后阻塞等待恢复；恢复后清位。
     /// 所有"可作为安全改图点"的等待点都必须走这里，否则 executionParked 会名不副实。
     void parkWhilePausedLocked();
+    /// 写运行态（写块）并唤醒等待者（执行器侧的等待点与块内取消等待都走这一条路径）
+    void setRunState(ExecutionState state);
     /// 最近一次节点执行是否成功（供主循环失败中断判断）
     bool m_lastNodeSuccess = true;
     /// 收集节点输出变量（供后级参数引用 {模块号.参数名}）
@@ -230,8 +235,9 @@ private:
 
 private:
     FlowScene *m_scene;
-    ExecutionState m_state;
-    FlowMode m_flowMode;           /// 当前流程运行模式
+    /// 运行上下文块（切片 C 立项书 P2b 期：运行态与运行模式已改走此块）。
+    /// 块是**非对象**的共享件（不持任何裸指针、其互斥量为叶子）；算子读面在 P2c 期改持它。
+    std::shared_ptr<FlowRunContext> m_runContext;
     bool m_stopOnFailure = true;   /// 节点失败时停止流程（对标 VisionMaster 默认行为）
     bool m_stepMode = false;       /// 单步执行模式（每执行一个节点后暂停）
     int m_loopIntervalMs = 0;      /// 连续/硬触发循环节拍间隔（ms），0=无额外限速（E6）

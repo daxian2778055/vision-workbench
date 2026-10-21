@@ -34,6 +34,7 @@ private slots:
     void testUnbindKeepsOwnership();        // ③ 解绑不清归属
     void testTriggerBindingUnregisteredOnDestruction();  // ④ 触发面按执行器身份配对注销
     void testTriggerRoutingRunsOnAppThread();  // ⑤ 触发路由与执行器析构同线程（线程前提）
+    void testExecutorSleepStopsWithExecutor();  // ⑥ 执行器停后其可取消等待立即返回未完成（P2b 接线）
 };
 
 void FlowExecutorOwnershipTest::testCurrentSingletonLifecycle()
@@ -130,6 +131,16 @@ void FlowExecutorOwnershipTest::testTriggerRoutingRunsOnAppThread()
 
     GlobalTriggerManager::instance()->removeStringTrigger(trigger);
     GlobalTriggerManager::instance()->unregisterFlow(flowName);
+}
+
+void FlowExecutorOwnershipTest::testExecutorSleepStopsWithExecutor()
+{
+    // P2b 接线：执行器的可取消等待已委给运行上下文块（状态与取消信号在块内）。
+    // 停后等待必须立即返回「未完成」——块被停在状态上时同形。
+    FlowExecutor executor;
+    executor.stopExecution();
+    QCOMPARE(executor.getState(), ExecutionState::Stopped);
+    QVERIFY(!executor.interruptibleSleep(50));
 }
 
 QTEST_MAIN(FlowExecutorOwnershipTest)

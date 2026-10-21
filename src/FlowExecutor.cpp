@@ -26,8 +26,7 @@ std::atomic<FlowExecutor *> FlowExecutor::s_currentInstance{nullptr};
 FlowExecutor::FlowExecutor(QObject *parent)
     : QThread(parent)
     , m_scene(nullptr)
-    , m_state(ExecutionState::Idle)
-    , m_flowMode(FlowMode::SoftwareTrigger)
+    , m_runContext(std::make_shared<FlowRunContext>())
 {
     s_currentInstance = this;
 
@@ -40,7 +39,7 @@ FlowExecutor::FlowExecutor(QObject *parent)
     connect(GlobalTriggerManager::instance(), &GlobalTriggerManager::triggerFired,
             this, [this](const QString &flowName, const QString &triggerSource) {
         Q_UNUSED(triggerSource)
-        if (m_flowName == flowName && m_state == ExecutionState::Idle) {
+        if (m_flowName == flowName && m_runContext->state() == ExecutionState::Idle) {
             // 硬触发模式禁止外部触发启动
             if (!canTriggerFromExternal()) {
                 VFP_DEBUG << "Flow" << m_flowName
@@ -110,7 +109,7 @@ FlowExecutor::~FlowExecutor()
         VFP_RUNTIME_INFO.noquote() << QStringLiteral("FlowExecutor 析构一段等待超时，二段升格重停一轮");
         if (!joinForDestroy(kDtorJoinStage2Ms)) {
             qCritical() << "FlowExecutor 析构超时（两段皆尽）：线程仍卡在" << workerPhaseName()
-                        << " state=" << int(m_state);
+                        << " state=" << int(m_runContext->state());
             const QString why = QStringLiteral(
                 "FlowExecutor 工作线程未在两段有界等待（%1ms + %2ms）内退出：继续析构必然是"
                 " use-after-free，主动中止进程。销毁执行器请先调用 joinForDestroy()"
@@ -314,11 +313,11 @@ void FlowExecutor::setFlowScene(FlowScene *scene)
 void FlowExecutor::startExecution()
 {
     QMutexLocker locker(&m_mutex);
-    if (m_state == ExecutionState::Running) {
+    if (m_runContext->state() == ExecutionState::Running) {
         return;
     }
     
-    m_state = ExecutionState::Running;
+    setRunState(ExecutionState::Running);
     resetState();
     
     if (!isRunning()) {
@@ -331,8 +330,8 @@ void FlowExecutor::startExecution()
 void FlowExecutor::pauseExecution()
 {
     QMutexLocker locker(&m_mutex);
-    if (m_state == ExecutionState::Running) {
-        m_state = ExecutionState::Paused;
+    if (m_runContext->state() == ExecutionState::Running) {
+        setRunState(ExecutionState::Paused);
         // 唤醒正在可取消等待中的阻塞节点（延时等），使其停止计时并等待恢复（P5）
         m_waitCondition.wakeAll();
         // 注意：此处只表示"暂停请求已受理"（当前节点可能仍在跑），executionPaused 保持原有语义；
@@ -348,7 +347,7 @@ void FlowExecutor::parkWhilePausedLocked()
         m_workerParked = true;
         emit executionParked();   // 跨线程 → 队列投递到 UI 线程
     }
-    while (m_state == ExecutionState::Paused) {
+    while (m_runContext->state() == ExecutionState::Paused) {
         m_waitCondition.wait(&m_mutex);
     }
     m_workerParked = false;       // 已恢复执行，不再处于"停稳可改图"状态
@@ -357,9 +356,9 @@ void FlowExecutor::parkWhilePausedLocked()
 bool FlowExecutor::allowsGraphEditing() const
 {
     QMutexLocker locker(&m_mutex);
-    if (m_state == ExecutionState::Running)
+    if (m_runContext->state() == ExecutionState::Running)
         return false;                                   // 真在跑：禁止
-    if (m_state == ExecutionState::Paused && !m_workerParked)
+    if (m_runContext->state() == ExecutionState::Paused && !m_workerParked)
         return false;                                   // 暂停已受理但 worker 还在节点里：禁止（窗口期）
     return true;                                        // Idle/Stopped/已停稳的 Paused：允许
 }
@@ -367,9 +366,9 @@ bool FlowExecutor::allowsGraphEditing() const
 void FlowExecutor::resumeExecution()
 {
     QMutexLocker locker(&m_mutex);
-    if (m_state == ExecutionState::Paused) {
+    if (m_runContext->state() == ExecutionState::Paused) {
         m_stepMode = false;   // 显式"继续"= 退出单步模式，回到正常连续运行
-        m_state = ExecutionState::Running;
+        setRunState(ExecutionState::Running);
         m_waitCondition.wakeAll();
         emit executionResumed();
     }
@@ -379,11 +378,11 @@ void FlowExecutor::stepExecution()
 {
     QMutexLocker locker(&m_mutex);
     m_stepMode = true;
-    if (m_state == ExecutionState::Paused) {
-        m_state = ExecutionState::Running;
+    if (m_runContext->state() == ExecutionState::Paused) {
+        setRunState(ExecutionState::Running);
         m_waitCondition.wakeAll();
         emit executionResumed();
-    } else if (m_state == ExecutionState::Idle || m_state == ExecutionState::Stopped) {
+    } else if (m_runContext->state() == ExecutionState::Idle || m_runContext->state() == ExecutionState::Stopped) {
         // 未运行时：从首个节点开始步进
         m_stepMode = true;
         locker.unlock();
@@ -394,7 +393,7 @@ void FlowExecutor::stepExecution()
 void FlowExecutor::stopExecution()
 {
     QMutexLocker locker(&m_mutex);
-    m_state = ExecutionState::Stopped;
+    setRunState(ExecutionState::Stopped);
     m_stepMode = false;
     m_pendingExternalRounds = 0;   // S9：停止即放弃待补跑，避免"停止后又自己跑起来"
     m_waitCondition.wakeAll();
@@ -410,13 +409,13 @@ bool FlowExecutor::requestExternalRound()
         //    现场已按 B 方案"载入即自动连续跑"，若不收口就是全天候幻影计数（统计失真）。
         // 返回 false = "未受理" → GTM 不计数、不发 triggerFired（与"超界丢弃"同一口径，
         // 也与本函数"会不会真的多跑一轮"的语义严格一致）。
-        if (m_flowMode != FlowMode::SoftwareTrigger) {
-            const FlowMode mode = m_flowMode;
+        if (m_runContext->flowMode() != FlowMode::SoftwareTrigger) {
+            const FlowMode mode = m_runContext->flowMode();
             locker.unlock();
             VFP_DEBUG << "External round ignored: flow mode is not software-trigger:" << static_cast<int>(mode);
             return false;
         }
-        if (m_state == ExecutionState::Running || m_state == ExecutionState::Paused) {
+        if (m_runContext->state() == ExecutionState::Running || m_runContext->state() == ExecutionState::Paused) {
             if (m_pendingExternalRounds < kMaxPendingExternalRounds) {
                 ++m_pendingExternalRounds;      // 排队补跑（FIFO 语义，按笔计数）
                 m_waitCondition.wakeAll();
@@ -466,10 +465,18 @@ void FlowExecutor::exitStepMode()
     m_stepMode = false;
 }
 
+void FlowExecutor::setRunState(ExecutionState state)
+{
+    // 写块（块内原子写并唤醒块内等待者）＋唤醒执行器侧等待点（park 等恢复信号）。
+    // 与原来的「在主体锁内写状态再 wakeAll」同序同义：状态先落，再唤醒。
+    m_runContext->setState(state);
+    m_waitCondition.wakeAll();
+}
+
 ExecutionState FlowExecutor::getState() const
 {
-    QMutexLocker locker(&m_mutex);
-    return m_state;
+    // 运行态在块内（原子读；块是共享件，故读侧无需再取主体锁）
+    return m_runContext->state();
 }
 
 void FlowExecutor::setFlowMode(FlowMode mode)
@@ -477,8 +484,8 @@ void FlowExecutor::setFlowMode(FlowMode mode)
     bool changed = false;
     {
         QMutexLocker locker(&m_mutex);
-        if (m_flowMode != mode) {
-            m_flowMode = mode;
+        if (m_runContext->flowMode() != mode) {
+            m_runContext->setFlowMode(mode);
             m_stepMode = false;   // 切换运行模式 = 明确要正常跑，退出单步模式
             changed = true;
         }
@@ -490,8 +497,8 @@ void FlowExecutor::setFlowMode(FlowMode mode)
 
 FlowMode FlowExecutor::getFlowMode() const
 {
-    QMutexLocker locker(&m_mutex);
-    return m_flowMode;
+    // 运行模式同样在块内（原子读）
+    return m_runContext->flowMode();
 }
 
 void FlowExecutor::run()
@@ -501,17 +508,17 @@ void FlowExecutor::run()
     while (true) {
         QMutexLocker locker(&m_mutex);
         
-        if (m_state == ExecutionState::Stopped) {
+        if (m_runContext->state() == ExecutionState::Stopped) {
             emit executionStopped();
             break;
         }
         
-        if (m_state == ExecutionState::Paused) {
+        if (m_runContext->state() == ExecutionState::Paused) {
             parkWhilePausedLocked();   // 真停稳才上报 executionParked
             continue;
         }
         
-        if (m_state != ExecutionState::Running) {
+        if (m_runContext->state() != ExecutionState::Running) {
             break;
         }
         
@@ -603,7 +610,7 @@ void FlowExecutor::run()
             }
             VFP_EXEC_DEBUG << "Executing node:" << node->fullName();
             locker.relock();
-            if (m_state == ExecutionState::Stopped) {
+            if (m_runContext->state() == ExecutionState::Stopped) {
                 // 既有缺陷修复（由新压测段 + 阶段探针定位）：**必须先解锁再 break**。
                 // 旧实现在持有 m_mutex 时 break，随后轮末/循环尾的 `QMutexLocker ml(&m_mutex)`
                 // 会对同一把**非递归**锁再次加锁 → **自死锁**：worker 永不退出、停止/退出失效。
@@ -613,11 +620,11 @@ void FlowExecutor::run()
                 break;
             }
             
-            if (m_state == ExecutionState::Paused) {
+            if (m_runContext->state() == ExecutionState::Paused) {
                 parkWhilePausedLocked();   // 真停稳才上报 executionParked
             }
             
-            if (m_state == ExecutionState::Stopped) {
+            if (m_runContext->state() == ExecutionState::Stopped) {
                 locker.unlock();   // 同上：持 m_mutex 时 break 会在轮末/循环尾再锁同一把锁 → 自死锁
                 emit executionStopped();
                 break;
@@ -655,7 +662,7 @@ void FlowExecutor::run()
                 executeLoop(loopNode, cnt);
                 if (!m_lastNodeSuccess && m_stopOnFailure) {
                     QMutexLocker fl(&m_mutex);
-                    m_state = ExecutionState::Stopped;
+                    setRunState(ExecutionState::Stopped);
                     break;
                 }
             }
@@ -664,7 +671,7 @@ void FlowExecutor::run()
             if (!m_lastNodeSuccess && m_stopOnFailure) {
                 {
                     QMutexLocker failLocker(&m_mutex);
-                    m_state = ExecutionState::Stopped;
+                    setRunState(ExecutionState::Stopped);
                 }
                 emit executionError(QStringLiteral("节点 %1 执行失败，流程已停止（可在系统菜单关闭\"失败时停止\"）")
                                         .arg(node->fullName()));
@@ -674,8 +681,8 @@ void FlowExecutor::run()
             // 单步模式：每执行完一个节点后暂停，等待下一步命令
             {
                 QMutexLocker stepLocker(&m_mutex);
-                if (m_stepMode && m_state == ExecutionState::Running) {
-                    m_state = ExecutionState::Paused;
+                if (m_stepMode && m_runContext->state() == ExecutionState::Running) {
+                    setRunState(ExecutionState::Paused);
                     emit executionPaused();
                 }
             }
@@ -724,13 +731,13 @@ void FlowExecutor::run()
         FlowMode currentMode;
         {
             QMutexLocker ml(&m_mutex);
-            currentMode = m_flowMode;
+            currentMode = m_runContext->flowMode();
         }
         if (currentMode == FlowMode::Continuous || currentMode == FlowMode::HardwareTrigger) {
             // 检查是否已被手动停止
             {
                 QMutexLocker ml(&m_mutex);
-                if (m_state != ExecutionState::Running) {
+                if (m_runContext->state() != ExecutionState::Running) {
                     break;
                 }
             }
@@ -765,17 +772,17 @@ void FlowExecutor::run()
         {
             QMutexLocker ml(&m_mutex);
             if (currentMode == FlowMode::SoftwareTrigger && m_pendingExternalRounds > 0
-                && m_state == ExecutionState::Running) {
+                && m_runContext->state() == ExecutionState::Running) {
                 --m_pendingExternalRounds;
                 continue;
             }
-            m_state = ExecutionState::Idle;   // 与消费判定原子：此后到达的触发会走 startExecution 立即起轮
+            setRunState(ExecutionState::Idle);   // 与消费判定原子：此后到达的触发会走 startExecution 立即起轮
         }
         break;
     }
     
     QMutexLocker locker(&m_mutex);
-    m_state = ExecutionState::Idle;
+    setRunState(ExecutionState::Idle);
 }
 
 bool FlowExecutor::topologicalSort(const QList<NodeBase *> &nodes, QList<NodeBase *> &outSorted)
@@ -1390,18 +1397,18 @@ void FlowExecutor::executeLoop(NodeBase *loopNode, int loopCount)
         // 迭代开始：暂停 / 停止检查（P5 取消语义）
         {
             QMutexLocker l(&m_mutex);
-            if (m_state == ExecutionState::Stopped) return;
-            if (m_state == ExecutionState::Paused) parkWhilePausedLocked();   // 真停稳才上报
-            if (m_state == ExecutionState::Stopped) return;
+            if (m_runContext->state() == ExecutionState::Stopped) return;
+            if (m_runContext->state() == ExecutionState::Paused) parkWhilePausedLocked();   // 真停稳才上报
+            if (m_runContext->state() == ExecutionState::Stopped) return;
         }
 
         for (NodeBase *bn : body) {
             // 每个循环体节点边界处理暂停（P5）
             {
                 QMutexLocker l(&m_mutex);
-                if (m_state == ExecutionState::Stopped) return;
-                if (m_state == ExecutionState::Paused) parkWhilePausedLocked();   // 真停稳才上报
-                if (m_state == ExecutionState::Stopped) return;
+                if (m_runContext->state() == ExecutionState::Stopped) return;
+                if (m_runContext->state() == ExecutionState::Paused) parkWhilePausedLocked();   // 真停稳才上报
+                if (m_runContext->state() == ExecutionState::Stopped) return;
             }
             // 内层循环的循环体由内层 LoopNode 调度，外层跳过（嵌套循环）
             if (nestedBodyNodes.contains(bn)) {
@@ -1431,12 +1438,12 @@ void FlowExecutor::executeLoop(NodeBase *loopNode, int loopCount)
             }
             {
                 QMutexLocker l(&m_mutex);
-                if (m_state == ExecutionState::Stopped) return;
+                if (m_runContext->state() == ExecutionState::Stopped) return;
             }
             if (!m_lastNodeSuccess && m_stopOnFailure) {
                 {
                     QMutexLocker failLocker(&m_mutex);
-                    m_state = ExecutionState::Stopped;
+                    setRunState(ExecutionState::Stopped);
                 }
                 emit executionError(QStringLiteral("循环体节点 %1 执行失败，流程已停止")
                                         .arg(bn->fullName()));
@@ -1606,13 +1613,13 @@ bool FlowExecutor::executeSubFlow(SubFlowNode *caller)
         // 成员边界处理暂停/停止（P5 同循环体；真停稳才上报 executionParked）
         {
             QMutexLocker l(&m_mutex);
-            if (m_state == ExecutionState::Stopped) {
+            if (m_runContext->state() == ExecutionState::Stopped) {
                 aborted = true;
                 break;
             }
-            if (m_state == ExecutionState::Paused)
+            if (m_runContext->state() == ExecutionState::Paused)
                 parkWhilePausedLocked();
-            if (m_state == ExecutionState::Stopped) {
+            if (m_runContext->state() == ExecutionState::Stopped) {
                 aborted = true;
                 break;
             }
@@ -1626,7 +1633,7 @@ bool FlowExecutor::executeSubFlow(SubFlowNode *caller)
         }
         {
             QMutexLocker l(&m_mutex);
-            if (m_state == ExecutionState::Stopped) {
+            if (m_runContext->state() == ExecutionState::Stopped) {
                 aborted = true;
                 break;
             }
@@ -1778,23 +1785,9 @@ void FlowExecutor::recordRoundFinished(qint64 roundMs)
 
 bool FlowExecutor::interruptibleSleep(int ms)
 {
-    if (ms <= 0) return true;
-    QMutexLocker locker(&m_mutex);
-    if (m_state == ExecutionState::Stopped) return false;
-    // 可取消等待：维护剩余时间，暂停期间不消耗延时预算，避免恢复时提前结束（E4/P5）
-    qint64 remaining = ms;
-    while (remaining > 0) {
-        if (m_state == ExecutionState::Stopped) return false;
-        if (m_state == ExecutionState::Paused) {
-            m_waitCondition.wait(&m_mutex);  // 暂停时一直等待，直到恢复唤醒
-            continue;                        // 不扣减 remaining（暂停时间不计入延时）
-        }
-        QElapsedTimer t;
-        t.start();
-        m_waitCondition.wait(&m_mutex, remaining);
-        remaining -= t.elapsed();            // 仅扣减实际等待时间
-    }
-    return true;
+    // 可取消等待已收进运行上下文块（P2b 期）：状态与取消信号在块内（块的互斥量是叶子），
+    // 语义与原来那段逐式同形——停止即醒并返回未完成；暂停期间不扣延时预算；恢复后继续扣。
+    return m_runContext->interruptibleSleep(ms);
 }
 
 void FlowExecutor::executeUpTo(NodeBase *endNode)
@@ -1912,7 +1905,7 @@ void FlowExecutor::invalidateDownstreamOf(NodeBase *startNode)
     // 是安全的：下次 startExecution 的 resetState 会整体清缓存。
     {
         QMutexLocker stateLock(&m_mutex);
-        if (m_state == ExecutionState::Running || m_state == ExecutionState::Paused) {
+        if (m_runContext->state() == ExecutionState::Running || m_runContext->state() == ExecutionState::Paused) {
             VFP_DEBUG << "invalidateDownstreamOf ignored: flow is running/paused";
             return;
         }
