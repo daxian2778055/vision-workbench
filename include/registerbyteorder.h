@@ -90,8 +90,14 @@ inline double parseRawToValue(const QByteArray &raw, const QString &dataType, co
             s >> val;
             return static_cast<double>(val);
         } else {
-            float val;
-            s >> val;
+            // float：按**四字节**大端位模式读出（与接收事件的原始报文取值口径一致）。
+            // U-187 行为变更轮修正：原实现用 QDataStream 的浮点读取，而该读取按八字节取，
+            // 四字节载荷读不满即留零——致 float 寄存器读值恒为零（写侧按位模式下发、读侧读不回，
+            // 回写校验随之判失败）。此处改为先按四字节大端读出位模式再按位重解释为 float。
+            quint32 bits = 0;
+            s >> bits;               // 四字节大端位模式
+            float val = 0.0f;
+            std::memcpy(&val, &bits, sizeof(val));
             return static_cast<double>(val);
         }
     }

@@ -71,15 +71,16 @@ void RegisterValueParseTest::testUint32Unsigned()
 
 void RegisterValueParseTest::testFloat32()
 {
-    // 实测口径（原体同码同行为，如实钉住不改）：浮点读取按**八字节**取——四字节载荷读不满即留零，
-    // 八字节载荷按双精度解释后再截为单精度。故 float 寄存器读值在原体恒为零（读侧缺陷），
-    // 本轮行为零变更不动，只作登记（待拍板）。
+    // 1.5 的 float32 位模式 0x3FC00000，按大端**四字节**读出
+    // （U-187 行为变更轮：原实现用 QDataStream 的浮点读取，而该读取按八字节取，
+    //   四字节载荷读不满即留零——故 float 寄存器读值恒零，本腿即该缺陷的自证位）
     QCOMPARE(RegisterByteOrder::parseRawToValue(bytes({0x3F, 0xC0, 0x00, 0x00}),
                                                  QStringLiteral("float"),
-                                                 QStringLiteral("ABCD")), 0.0);
-    QCOMPARE(RegisterByteOrder::parseRawToValue(bytes({0x3F, 0xC0, 0x00, 0x00, 0, 0, 0, 0}),
+                                                 QStringLiteral("ABCD")), 1.5);
+    // 负值：-1.5 的 float32 位模式 0xBFC00000
+    QCOMPARE(RegisterByteOrder::parseRawToValue(bytes({0xBF, 0xC0, 0x00, 0x00}),
                                                  QStringLiteral("float"),
-                                                 QStringLiteral("ABCD")), 0.125);
+                                                 QStringLiteral("ABCD")), -1.5);
 }
 
 void RegisterValueParseTest::testLengthGuards()
