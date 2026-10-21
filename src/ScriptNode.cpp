@@ -116,8 +116,8 @@ bool ScriptNode::waitCancellable(QProcess &process, int maxMs, QString &errOut)
             errOut = QStringLiteral("脚本执行超时");
             return false;
         }
-        FlowExecutor *exec = ownerExecutor();
-        if (exec && exec->getState() == ExecutionState::Stopped) {
+        auto ctx = ownerContext();
+        if (ctx && ctx->state() == ExecutionState::Stopped) {
             process.kill();
             ScriptSecurityPolicy::instance().closeJob(&process);
             errOut = QStringLiteral("脚本执行被取消");
@@ -169,8 +169,8 @@ QString ScriptNode::executePythonScript(const QString &script, const QStringList
         const bool ok = policy.runWithRestrictedToken(
             interpreter, restrictedArgs, policy.maxExecutionMs(),
             [this]() {
-                FlowExecutor *exec = ownerExecutor();
-                return exec && exec->getState() == ExecutionState::Stopped;
+                auto ctx = ownerContext();
+                return ctx && ctx->state() == ExecutionState::Stopped;
             },
             stdOut, stdErr, runError, &exitCode);
         if (!ok) {
@@ -271,8 +271,8 @@ QString ScriptNode::executeLuaScript(const QString &script, const QStringList &a
         const bool ok = policy.runWithRestrictedToken(
             interpreter, restrictedArgs, policy.maxExecutionMs(),
             [this]() {
-                FlowExecutor *exec = ownerExecutor();
-                return exec && exec->getState() == ExecutionState::Stopped;
+                auto ctx = ownerContext();
+                return ctx && ctx->state() == ExecutionState::Stopped;
             },
             stdOut, stdErr, runError, &exitCode);
         if (!ok) {

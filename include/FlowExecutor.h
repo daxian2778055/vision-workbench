@@ -108,6 +108,9 @@ public:
 
     /// 返回全局唯一 FlowExecutor 实例（供各算子检查运行状态）
     static FlowExecutor *current();
+    /// 返回全局「最近一个执行器」的运行上下文块（切片 C 立项书 P2c 期：算子侧兜底读面走块，
+    /// 不再经执行器裸指针）——返回**一份强引用**（调用期间块必存活，读侧无悬垂）。
+    static std::shared_ptr<FlowRunContext> currentContext();
 
     /// 可取消等待：等待 ms 毫秒，但若流程被停止/暂停会立即唤醒返回（供延时节点等阻塞算子取消等待，E4）
     bool interruptibleSleep(int ms);
@@ -304,4 +307,9 @@ private:
 
     /// current() 可能被运行线程/界面线程并发读取，用原子变量避免数据竞争
     static std::atomic<FlowExecutor *> s_currentInstance;
+    /// 「最近一个执行器」的运行上下文块（P2c 期）：与 s_currentInstance 同样的两个置位点
+    /// （构造与挂场景），读侧拿**强引用**（调用期间块必存活）；写读用一把互斥量串起来
+    /// （块是共享引用计数对象，其引用计数增减不可与写并发）。
+    static QMutex s_currentContextMutex;
+    static std::shared_ptr<FlowRunContext> s_currentContext;
 };

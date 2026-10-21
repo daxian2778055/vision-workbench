@@ -22,6 +22,8 @@
 using namespace MyProject;
 
 std::atomic<FlowExecutor *> FlowExecutor::s_currentInstance{nullptr};
+QMutex FlowExecutor::s_currentContextMutex;
+std::shared_ptr<FlowRunContext> FlowExecutor::s_currentContext;
 
 FlowExecutor::FlowExecutor(QObject *parent)
     : QThread(parent)
@@ -29,6 +31,11 @@ FlowExecutor::FlowExecutor(QObject *parent)
     , m_runContext(std::make_shared<FlowRunContext>())
 {
     s_currentInstance = this;
+    {
+        // 「最近一个执行器」的上下文块：与 s_currentInstance 同样的置位点（构造即置）
+        QMutexLocker locker(&s_currentContextMutex);
+        s_currentContext = m_runContext;
+    }
 
     // 全局转发连线（CM dataReceived → GTM onDataReceived）已迁到 GlobalTriggerManager 构造里
     // 建立**一次**，不再寄生在"有人建过执行器"上——此前单跑触发用例 / 载入方案后无执行器的
@@ -132,6 +139,7 @@ FlowExecutor::~FlowExecutor()
         for (NodeBase *n : liveNodes) {
             if (n && n->ownerExecutor() == this) {
                 n->setOwnerExecutor(nullptr);
+                n->setOwnerContext(nullptr);
             }
         }
     }
@@ -140,6 +148,14 @@ FlowExecutor::~FlowExecutor()
 FlowExecutor *FlowExecutor::current()
 {
     return s_currentInstance;
+}
+
+std::shared_ptr<FlowRunContext> FlowExecutor::currentContext()
+{
+    // 读侧拿**强引用**（调用期间块必存活，读侧无悬垂）；写读用同一把互斥量串起来
+    // （块是共享引用计数对象，其引用计数增减不可与写并发）。
+    QMutexLocker locker(&s_currentContextMutex);
+    return s_currentContext;
 }
 
 void FlowExecutor::disconnectFromScene()
@@ -296,17 +312,23 @@ void FlowExecutor::setFlowScene(FlowScene *scene)
     connectToScene(scene);
     // E3：挂上场景即建立归属——rebuildIncomingIndex 要等"有人驱动一轮/一次改图"才跑，
     // 而"流程从没启动过就去开相机参数面板"正是 E3 残留的原始场景。
-    // setOwnerExecutor 是裸指针赋值（不取锁，见 NodeBase.h），与 executeNode 里的既有写法同口径；
-    // 解绑（scene == nullptr）**不清**归属：节点可能已转由别的执行器接管，清成空反而退回 current() 兜底。
+    // 归属槽存的是运行上下文块（P2c 期：算子侧改持块，不持执行器裸指针），赋值不取锁
+    // （见 NodeBase.h），与 executeNode 里的既有写法同口径；
+    // 解绑（scene == nullptr）**不清**归属：节点可能已转由别的执行器接管，清成空反而退回兜底块。
     if (scene) {
         const QList<NodeBase *> liveNodes = scene->nodes();
         for (NodeBase *n : liveNodes) {
             if (n) {
-                n->setOwnerExecutor(this);
+                n->setOwnerContext(m_runContext);
+                n->setOwnerExecutor(this);   // 残余面：仅子流程节点的执行调用需要（见 NodeBase 注释）
             }
         }
         // 多流程并发：最近激活的流程执行器作为 current()（供节点查询运行状态）
         s_currentInstance = this;
+        {
+            QMutexLocker locker(&s_currentContextMutex);
+            s_currentContext = m_runContext;
+        }
     }
 }
 
@@ -847,7 +869,8 @@ void FlowExecutor::rebuildIncomingIndex(const QList<NodeBase *> &liveNodes,
     // 双流程下 A 的相机参数面板会按 B 的运行状态被锁或被放行。
     for (NodeBase *n : liveNodes) {
         if (n) {
-            n->setOwnerExecutor(this);
+            n->setOwnerContext(m_runContext);
+            n->setOwnerExecutor(this);   // 残余面：仅子流程节点的执行调用需要（见 NodeBase 注释）
         }
     }
 
@@ -1016,8 +1039,9 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
         return;
     }
 
-    // 多流程隔离：把所属执行器上下文交给节点，供其查询运行状态（E3）
-    node->setOwnerExecutor(this);
+    // 多流程隔离：把所属执行器的运行上下文块交给节点，供其查询运行状态（E3，P2c 期：节点持块不持执行器）
+    node->setOwnerContext(m_runContext);
+    node->setOwnerExecutor(this);   // 残余面：仅子流程节点的执行调用需要（见 NodeBase 注释）
 
     bool success = false;
     QElapsedTimer nodeTimer;

@@ -25,8 +25,9 @@ void SubFlowNode::init()
 
 bool SubFlowNode::invoke()
 {
-    FlowExecutor *exec = ownerExecutor();
-    if (!exec) {
+    auto ctx = ownerContext();
+    FlowExecutor *exec = ownerExecutor();   // 残余面：执行子流程这一处是方法调用（见 NodeBase 注释）
+    if (!ctx) {
         // 设计期 / 节点自检（runNodeSelfTest 只调 run 且无执行器上下文）：
         // 空转成功并清输出，不留上一轮残留（P1）
         setOutputData(0, QSharedPointer<DataObject>());

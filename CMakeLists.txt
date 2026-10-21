@@ -1184,6 +1184,12 @@ add_executable(flow_run_context_test tests/flow_run_context_test.cpp)
 target_link_libraries(flow_run_context_test PRIVATE vfp_core Qt6::Test)
 vfp_add_qtest(NAME FlowRunContextTest TARGET flow_run_context_test)
 
+# 算子侧归属接线座（词条切片 C P2c 期）：节点上下文与执行器同源、析构后清空、未接管空槽、单例兜底
+add_executable(node_run_context_test tests/node_run_context_test.cpp)
+target_link_libraries(node_run_context_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+vfp_add_qtest(NAME NodeRunContextTest TARGET node_run_context_test)
+vfp_configure_gui_test(NodeRunContextTest)
+
 # 寄存器值换算口径座（词条切片 B 寄存器族首抽）：两节点类各一份的逐行同码私有实现并入
 # 寄存器字节序面（口径只此一处）；本座直接钉换算表与长度守卫与未知类型处置
 add_executable(register_value_parse_test tests/register_value_parse_test.cpp)
@@ -1238,7 +1244,7 @@ if(MSVC)
                   AuxDialogMenuRouterTest ModuleEditorRegistryTest UITranslatorTest
                   ManualPathResolverTest RoundVariableFeedTest NodeIconPaletteTest UpstreamWalkTest
                   FlowExecutorOwnershipTest RoiGeometryTest FixtureValidationTest
-                  FlowRunContextTest RegisterValueParseTest)
+                  FlowRunContextTest NodeRunContextTest RegisterValueParseTest)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
         # path_list_prepend 由 CMake 负责插入并处理平台路径分隔符，避免在
         # ENVIRONMENT 值里嵌套分号导致列表被错误拆分

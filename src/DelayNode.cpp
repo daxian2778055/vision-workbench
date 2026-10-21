@@ -36,8 +36,8 @@ void DelayNode::run(bool /*autoSwitch*/)
     const int delayMs = getParam(QStringLiteral("delayMs")).toInt();
     if (delayMs > 0) {
         // 可取消等待：若所属执行器已停止/暂停，立即唤醒返回（E4）
-        if (FlowExecutor *exec = ownerExecutor()) {
-            exec->interruptibleSleep(delayMs);
+        if (auto ctx = ownerContext()) {
+            ctx->interruptibleSleep(delayMs);
         } else {
             QThread::msleep(static_cast<unsigned long>(delayMs));
         }

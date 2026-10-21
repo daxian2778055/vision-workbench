@@ -11,8 +11,10 @@
 #include <QWidget>
 #include <QVBoxLayout>
 #include <QMutex>
+#include <memory>
 
 #include "PortDataType.h"
+#include "FlowRunContext.h"   // 归属上下文块（切片 C 立项书 P2c 期：算子侧改持它）
 
 #include <QSet>
 
@@ -121,6 +123,11 @@ public:
     FlowScene *flowSceneRef() const { return m_flowSceneRef; }
 
     /// 所属执行器（多流程隔离：节点查询运行状态应走 owner，而非全局 current()）
+    void setOwnerContext(std::shared_ptr<FlowRunContext> ctx) { m_ownerContext = std::move(ctx); }
+    std::shared_ptr<FlowRunContext> ownerContext() const { return m_ownerContext; }
+    /// 残余面（P2c 后仍需执行器本体）：只有子流程节点的「执行子流程」这一处是**方法调用**
+    /// （其余三类读侧都已改读块）。故此处保留执行器裸指针，语义与 P2c 之前完全相同
+    /// （执行器析构时随归属一并清空，见 FlowExecutor 析构段）——P3 收口销毁权时再除。
     void setOwnerExecutor(FlowExecutor *exec) { m_ownerExecutor = exec; }
     FlowExecutor *ownerExecutor() const { return m_ownerExecutor; }
 
@@ -139,5 +146,8 @@ public:
 protected:
     FlowScene *m_flowSceneRef = nullptr;
     /// 所属执行器（多流程隔离：节点查询运行状态应走 owner，而非全局 current()）
+    /// 归属上下文（切片 C 立项书 P2c 期：算子侧改持运行上下文块，不再持执行器裸指针）
+    std::shared_ptr<FlowRunContext> m_ownerContext;
+    /// 残余面：仅子流程节点的执行调用仍需执行器本体（P3 收口）；语义与 P2c 之前相同
     FlowExecutor *m_ownerExecutor = nullptr;
 };
