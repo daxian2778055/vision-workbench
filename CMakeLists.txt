@@ -216,6 +216,7 @@ set(SOURCES
     src/UpstreamWalk.cpp
     src/RoiGeometry.cpp
     src/FixtureValidation.cpp
+    src/FlowRunContext.cpp
     src/GlobalVariableManager.cpp
     src/GlobalVariableDialog.cpp
     src/GlobalCameraManager.cpp
@@ -1177,6 +1178,12 @@ add_executable(fixture_validation_test tests/fixture_validation_test.cpp)
 target_link_libraries(fixture_validation_test PRIVATE vfp_core Qt6::Test)
 vfp_add_qtest(NAME FixtureValidationTest TARGET fixture_validation_test)
 
+# 运行上下文块（词条切片 C 立项书 P2a 期：块与承载）：状态与模式与上下文存在性与取消信号四项，
+# 互斥量为叶子；本座钉取消等待的三条语义（停则醒、暂停不扣预算、正常耗时返回真）
+add_executable(flow_run_context_test tests/flow_run_context_test.cpp)
+target_link_libraries(flow_run_context_test PRIVATE vfp_core Qt6::Test)
+vfp_add_qtest(NAME FlowRunContextTest TARGET flow_run_context_test)
+
 # 寄存器值换算口径座（词条切片 B 寄存器族首抽）：两节点类各一份的逐行同码私有实现并入
 # 寄存器字节序面（口径只此一处）；本座直接钉换算表与长度守卫与未知类型处置
 add_executable(register_value_parse_test tests/register_value_parse_test.cpp)
@@ -1231,7 +1238,7 @@ if(MSVC)
                   AuxDialogMenuRouterTest ModuleEditorRegistryTest UITranslatorTest
                   ManualPathResolverTest RoundVariableFeedTest NodeIconPaletteTest UpstreamWalkTest
                   FlowExecutorOwnershipTest RoiGeometryTest FixtureValidationTest
-                  RegisterValueParseTest)
+                  FlowRunContextTest RegisterValueParseTest)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
         # path_list_prepend 由 CMake 负责插入并处理平台路径分隔符，避免在
         # ENVIRONMENT 值里嵌套分号导致列表被错误拆分

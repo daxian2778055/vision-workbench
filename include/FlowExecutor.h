@@ -17,6 +17,7 @@
 #include <functional>
 #include <algorithm>
 #include <halconcpp/HalconCpp.h>
+#include "FlowExecutionEnums.h"   // 执行状态与运行模式（切片 C 立项书 P2a 期：自此头拆出的轻头件）
 #include "FlowRuntimeStats.h"
 #include "FlowCachePurgeLedger.h"   // 缓存清理登记账（切片 A 抽出：账叶锁与登记列随账走）
 
@@ -30,21 +31,6 @@ class Connection;
 }
 
 using DataObjectPtr = QSharedPointer<DataObject>;
-
-enum class ExecutionState {
-    Idle,
-    Running,
-    Paused,
-    Stopped,
-    Error
-};
-
-/// 流程运行模式
-enum class FlowMode {
-    Continuous      = 0,  /// 连续模式：自动周期循环执行
-    SoftwareTrigger = 1,  /// 软触发模式：需手动/通讯触发执行一次
-    HardwareTrigger = 2   /// 硬触发模式：仅相机触发源生效时执行一次
-};
 
 class FlowExecutor : public QThread
 {
