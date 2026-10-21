@@ -15,6 +15,7 @@
 
 #include "PortDataType.h"
 #include "FlowRunContext.h"   // 归属上下文块（切片 C 立项书 P2c 期：算子侧改持它）
+#include "FlowExecutorToken.h"   // 生命周期令牌（切片 C P3c 期：残余面改持它的弱引用）
 
 #include <QSet>
 
@@ -125,11 +126,20 @@ public:
     /// 所属执行器（多流程隔离：节点查询运行状态应走 owner，而非全局 current()）
     void setOwnerContext(std::shared_ptr<FlowRunContext> ctx) { m_ownerContext = std::move(ctx); }
     std::shared_ptr<FlowRunContext> ownerContext() const { return m_ownerContext; }
-    /// 残余面（P2c 后仍需执行器本体）：只有子流程节点的「执行子流程」这一处是**方法调用**
-    /// （其余三类读侧都已改读块）。故此处保留执行器裸指针，语义与 P2c 之前完全相同
-    /// （执行器析构时随归属一并清空，见 FlowExecutor 析构段）——P3 收口销毁权时再除。
-    void setOwnerExecutor(FlowExecutor *exec) { m_ownerExecutor = exec; }
-    FlowExecutor *ownerExecutor() const { return m_ownerExecutor; }
+    /// 生命周期令牌（词条切片 C P3c 期：残余面收口）——节点持**弱令牌**而不是执行器裸指针：
+    /// 借本体前先 lock（拿到的强引用在调用期间保证本体存活），令牌已收则借不到 ⇒ 不可能摸到
+    /// 已死的本体。为什么不是强令牌（实测依据）：场景拥有节点，而界面侧的释放点之后才删场景；
+    /// 节点若强持令牌，最后一个释放就推迟到**场景析构**，那时执行器析构里的
+    /// 「flowScene()->nodes() 清归属」正要回调一个正在拆的场景 ⇒ 真实的悬垂窗口。
+    /// 弱令牌同时保住 P3b 的「释放即同步收尾」语义（强持有只留在拥有本体的界面侧）。
+    void setOwnerToken(const std::shared_ptr<FlowExecutorToken> &token) { m_ownerToken = token; }
+    std::shared_ptr<FlowExecutorToken> ownerToken() const { return m_ownerToken.lock(); }
+    /// 借出本体（令牌已收或无令牌 ⇒ 返回空；调用方用完即放）。
+    FlowExecutor *ownerExecutor() const
+    {
+        const std::shared_ptr<FlowExecutorToken> token = m_ownerToken.lock();
+        return token ? token->executor() : nullptr;
+    }
 
     // 模块号分配：单调且**不回收**（见 NodeBase.cpp）。回收复用会让"新节点"继承"旧节点"
     // 在执行器缓存里的输出变量表（S4）。
@@ -148,6 +158,7 @@ protected:
     /// 所属执行器（多流程隔离：节点查询运行状态应走 owner，而非全局 current()）
     /// 归属上下文（切片 C 立项书 P2c 期：算子侧改持运行上下文块，不再持执行器裸指针）
     std::shared_ptr<FlowRunContext> m_ownerContext;
-    /// 残余面：仅子流程节点的执行调用仍需执行器本体（P3 收口）；语义与 P2c 之前相同
-    FlowExecutor *m_ownerExecutor = nullptr;
+    /// 残余面（切片 C P3c 期）：改持生命周期令牌的**弱**引用（理由见上：强持有会把执行器
+    /// 的收尾推迟到场景析构，而收尾要回调场景清归属 ⇒ 悬垂）。
+    std::weak_ptr<FlowExecutorToken> m_ownerToken;
 };

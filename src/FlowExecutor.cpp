@@ -138,8 +138,14 @@ FlowExecutor::~FlowExecutor()
     if (FlowScene *s = flowScene()) {
         const QList<NodeBase *> liveNodes = s->nodes();
         for (NodeBase *n : liveNodes) {
-            if (n && n->ownerExecutor() == this) {
-                n->setOwnerExecutor(nullptr);
+            if (!n) {
+                continue;
+            }
+            // P3c：节点侧改持**弱**令牌 ⇒ 令牌正在收尾时 lock 不到本体，不能再用
+            //「ownerExecutor() == this」认身份。改用**归属块**：块是每执行器独有的共享件、
+            // 节点强持，令牌收尾期间不会失效；已被别的执行器接管的节点持的是别的块，不会误清。
+            if (m_runContext && n->ownerContext() == m_runContext) {
+                n->setOwnerToken(nullptr);
                 n->setOwnerContext(nullptr);
             }
         }
@@ -287,6 +293,12 @@ void FlowExecutor::markGraphStructureDirty()
     m_graphStructureDirty = true;
 }
 
+void FlowExecutor::setLifetimeToken(const std::shared_ptr<FlowExecutorToken> &token)
+{
+    // 词条切片 C P3c 期：只存弱引用（本体↔令牌互持会成环，析构永不到）。
+    m_lifetimeToken = token;
+}
+
 void FlowExecutor::setFlowScene(FlowScene *scene)
 {
     disconnectFromScene();
@@ -321,7 +333,7 @@ void FlowExecutor::setFlowScene(FlowScene *scene)
         for (NodeBase *n : liveNodes) {
             if (n) {
                 n->setOwnerContext(m_runContext);
-                n->setOwnerExecutor(this);   // 残余面：仅子流程节点的执行调用需要（见 NodeBase 注释）
+                n->setOwnerToken(m_lifetimeToken.lock());   // 残余面：仅子流程节点的执行调用需要（见 NodeBase 注释）
             }
         }
         // 多流程并发：最近激活的流程执行器作为 current()（供节点查询运行状态）
@@ -871,7 +883,7 @@ void FlowExecutor::rebuildIncomingIndex(const QList<NodeBase *> &liveNodes,
     for (NodeBase *n : liveNodes) {
         if (n) {
             n->setOwnerContext(m_runContext);
-            n->setOwnerExecutor(this);   // 残余面：仅子流程节点的执行调用需要（见 NodeBase 注释）
+            n->setOwnerToken(m_lifetimeToken.lock());   // 残余面：仅子流程节点的执行调用需要（见 NodeBase 注释）
         }
     }
 
@@ -1042,7 +1054,7 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
 
     // 多流程隔离：把所属执行器的运行上下文块交给节点，供其查询运行状态（E3，P2c 期：节点持块不持执行器）
     node->setOwnerContext(m_runContext);
-    node->setOwnerExecutor(this);   // 残余面：仅子流程节点的执行调用需要（见 NodeBase 注释）
+    node->setOwnerToken(m_lifetimeToken.lock());   // 残余面：仅子流程节点的执行调用需要（见 NodeBase 注释）
 
     bool success = false;
     QElapsedTimer nodeTimer;

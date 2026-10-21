@@ -43,6 +43,10 @@ public:
     ~FlowExecutor();
 
     void setFlowScene(FlowScene *scene);
+    /// 词条切片 C P3c 期（持有面迁移）：登记本体的**生命周期令牌**。
+    /// 只存**弱引用**——令牌拥有本体，令牌若被强持在执行器里就是环（本体↔令牌互等，析构永不到）
+    /// ⇒ 执行器借令牌时用 lock()，令牌没了就借不到（此时本执行器已无持有者，是正常的收尾态）。
+    void setLifetimeToken(const std::shared_ptr<class FlowExecutorToken> &token);
     void startExecution();
 
     /// S9：外部触发受理。空闲→立即起一轮；忙（运行/暂停）→有界排队补跑（上限
@@ -241,6 +245,10 @@ private:
     /// 运行上下文块（切片 C 立项书 P2b 期：运行态与运行模式已改走此块）。
     /// 块是**非对象**的共享件（不持任何裸指针、其互斥量为叶子）；算子读面在 P2c 期改持它。
     std::shared_ptr<FlowRunContext> m_runContext;
+    /// 词条切片 C P3c 期：本体的生命周期令牌（**弱引用**，避免本体↔令牌互持成环）。
+    /// 持有面（触发面绑定、节点残余面）同样只持弱引用；取用方先 lock 出**强**副本再调方法
+    /// ⇒ 调用期间本体必存活，而收尾点仍落在界面侧释放最后一个强令牌处。
+    std::weak_ptr<class FlowExecutorToken> m_lifetimeToken;
     bool m_stopOnFailure = true;   /// 节点失败时停止流程（对标 VisionMaster 默认行为）
     bool m_stepMode = false;       /// 单步执行模式（每执行一个节点后暂停）
     int m_loopIntervalMs = 0;      /// 连续/硬触发循环节拍间隔（ms），0=无额外限速（E6）

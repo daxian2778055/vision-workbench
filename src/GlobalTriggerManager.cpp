@@ -1,6 +1,7 @@
 #include "GlobalTriggerManager.h"
 #include "FlowScene.h"
 #include "FlowExecutor.h"
+#include "FlowExecutorToken.h"
 #include "CommunicationManager.h"
 #include "ReceiveEvent.h"
 #include "AppLog.h"
@@ -163,6 +164,8 @@ void GlobalTriggerManager::onDataReceived(const QString &deviceName, const QByte
     QString matchedId;
     QString matchedKey;
     FlowExecutor *executor = nullptr;
+    // P3c：令牌强引用副本——锁内取出、出锁后持它调用（路由期间本体不会被收尾）。
+    std::shared_ptr<FlowExecutorToken> routeToken;
 
     {
         QMutexLocker locker(&m_mutex);
@@ -176,7 +179,8 @@ void GlobalTriggerManager::onDataReceived(const QString &deviceName, const QByte
                 matchedSource = entry.triggerSource;
                 matchedId = entry.id;
                 matchedKey = it.key();
-                executor = executorForFlowLocked(flowName);
+                routeToken = tokenForFlowLocked(flowName);
+                executor = routeToken ? routeToken->executor() : nullptr;
                 break; // First match wins
             }
         }
@@ -255,6 +259,8 @@ void GlobalTriggerManager::onEventTriggered(const QString &eventId, const QList<
     QString matchedId;
     QString matchedKey;
     FlowExecutor *executor = nullptr;
+    // P3c：令牌强引用副本（同 onDataReceived：出锁后调用，副本保证本体存活）。
+    std::shared_ptr<FlowExecutorToken> routeToken;
 
     {
         QMutexLocker locker(&m_mutex);
@@ -266,7 +272,8 @@ void GlobalTriggerManager::onEventTriggered(const QString &eventId, const QList<
                 matched = true;
                 flowName = entry.flowName;
                 matchedEventId = eventId;
-                executor = executorForFlowLocked(flowName);
+                routeToken = tokenForFlowLocked(flowName);
+                executor = routeToken ? routeToken->executor() : nullptr;
                 matchedId = entry.id;
                 matchedKey = it.key();
                 break; // First match wins
@@ -325,15 +332,20 @@ GlobalTriggerManager::TriggerEntry GlobalTriggerManager::triggerEntry(const QStr
 
 // ---- Flow Registration ----
 
-void GlobalTriggerManager::registerFlow(const QString &name, FlowScene *scene, FlowExecutor *executor)
+void GlobalTriggerManager::registerFlow(const QString &name, FlowScene *scene,
+                                       const std::shared_ptr<FlowExecutorToken> &token)
 {
+    if (!token) {
+        return;   // 无令牌即无取用面：登记进去也只是一条永不路由的条目
+    }
     bool existed = false;
     {
         QMutexLocker locker(&m_mutex);
         existed = m_flowBindings.contains(name);
         FlowBinding fb;
         fb.scene = scene;
-        fb.executor = executor;
+        fb.executor = token->executor();   // 身份键：只做比对（unregisterExecutor）
+        fb.token = token;                  // 取用面：弱引用，不延长本体寿命
         m_flowBindings[name] = fb;
     }
     if (existed) {
@@ -385,13 +397,20 @@ void GlobalTriggerManager::unregisterExecutor(FlowExecutor *executor)
 
 FlowExecutor *GlobalTriggerManager::executorForFlow(const QString &name) const
 {
-    QMutexLocker locker(&m_mutex);
-    return m_flowBindings.value(name).executor;
+    const std::shared_ptr<FlowExecutorToken> token = tokenForFlow(name);
+    return token ? token->executor() : nullptr;
 }
 
-FlowExecutor *GlobalTriggerManager::executorForFlowLocked(const QString &name) const
+std::shared_ptr<FlowExecutorToken> GlobalTriggerManager::tokenForFlow(const QString &name) const
 {
-    return m_flowBindings.value(name).executor;
+    QMutexLocker locker(&m_mutex);
+    return tokenForFlowLocked(name);
+}
+
+std::shared_ptr<FlowExecutorToken> GlobalTriggerManager::tokenForFlowLocked(const QString &name) const
+{
+    // 弱引用过期 ⇒ 本体已被收尾（P3c：绑定不延长寿命）⇒ 路由拿不到目标，安全空转
+    return m_flowBindings.value(name).token.lock();
 }
 
 // ---- Serialization ----

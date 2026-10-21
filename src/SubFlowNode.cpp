@@ -27,9 +27,11 @@ bool SubFlowNode::invoke()
 {
     auto ctx = ownerContext();
     FlowExecutor *exec = ownerExecutor();   // 残余面：执行子流程这一处是方法调用（见 NodeBase 注释）
-    if (!ctx) {
+    if (!ctx || !exec) {
         // 设计期 / 节点自检（runNodeSelfTest 只调 run 且无执行器上下文）：
-        // 空转成功并清输出，不留上一轮残留（P1）
+        // 空转成功并清输出，不留上一轮残留（P1）。
+        // P3c：无令牌的本体（栈上/测试用）同样借不到执行器 ⇒ 与"无上下文"同口径空转，
+        // 不把空指针送进 executeSubFlow。生产路径上令牌由界面侧强持 ⇒ 走到这里必不为空。
         setOutputData(0, QSharedPointer<DataObject>());
         return true;
     }

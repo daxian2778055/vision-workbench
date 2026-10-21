@@ -296,7 +296,7 @@ MainWindow::MainWindow(QWidget *parent) :
         VFP_DEBUG << "Creating FlowExecutor";
         // 词条切片 C P3b 期（销毁权归一）：新建即建令牌——令牌接管本体的所有权（并解除父子），
         // 本体的删除只有令牌件这一处；界面侧此后只借出裸指针（token->executor()）。
-        m_flowExecutors.insert(nullptr, std::make_shared<FlowExecutorToken>(new FlowExecutor(this)));
+        m_flowExecutors.insert(nullptr, FlowExecutorToken::create(new FlowExecutor(this)));
         m_executor = m_flowExecutors.value(nullptr)->executor();  // 占位：首个流程创建时复用
         // 应用失败中断策略（setupDockWidgets 早于此处调用，故在此真正生效）
         {
@@ -681,9 +681,9 @@ FlowExecutor *MainWindow::executorForScene(FlowScene *scene)
         m_flowExecutors.insert(scene, reuse);
         return reuse->executor();
     }
-    // 词条切片 C P3b 期：新建即建令牌（令牌接管本体的所有权，删除权归令牌）
-    std::shared_ptr<FlowExecutorToken> token =
-        std::make_shared<FlowExecutorToken>(new FlowExecutor(this));
+    // 词条切片 C P3b 期：新建即建令牌（令牌接管本体的所有权，删除权归令牌）；
+    // P3c 期起经 create 建——它同时把弱引用挂到本体（节点归属与触发路由据此取用）。
+    std::shared_ptr<FlowExecutorToken> token = FlowExecutorToken::create(new FlowExecutor(this));
     FlowExecutor *ex = token->executor();
     connectExecutorSignals(ex);
     m_flowExecutors.insert(scene, token);
@@ -1261,7 +1261,9 @@ void MainWindow::createNewFlow()
             flowEx->setFlowScene(scene);
             // 注册流程名到全局触发管理器（与 tab 标题同名，触发按名路由）
             flowEx->setFlowName(flowName);
-            GlobalTriggerManager::instance()->registerFlow(flowName, scene, flowEx);
+            // P3c：绑定持令牌（弱引用）——executorForScene 已把令牌落在场景键上
+            GlobalTriggerManager::instance()->registerFlow(flowName, scene,
+                                                           m_flowExecutors.value(scene));
         }
     } catch (const std::exception &e) {
         VFP_DEBUG << "Exception in createNewFlow:" << e.what();
@@ -2833,7 +2835,8 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
             flowEx->setFlowScene(scene);
             flowEx->setFlowName(flowName);
             flowEx->setFlowMode(flowMode);   // 载入即按方案里的模式（连续/软触发/硬触发）生效
-            GlobalTriggerManager::instance()->registerFlow(flowName, scene, flowEx);
+            GlobalTriggerManager::instance()->registerFlow(flowName, scene,
+                                                           m_flowExecutors.value(scene));
         }
     }
 

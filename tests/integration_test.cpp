@@ -10,6 +10,7 @@
 // 节点头文件
 #include "FlowScene.h"
 #include "FlowExecutor.h"
+#include "FlowExecutorToken.h"
 #include "NodeBase.h"
 #include "NodeRegistry.h"   // U-38：从在册算子表里挑一个多出端口的算子作样本
 #include <QSet>              // U-38：连线换算成模块号四元组后比集合
@@ -1545,8 +1546,10 @@ void IntegrationTest::testOwnerExecutorEstablishedAtGraphBuild()
     // 之后才有，而 MvsImageSourceNode 的两条 UI 路径（applyParams 是否写像素格式、refreshPixelFormatEnabled
     // 下拉框启用/置灰）在归属为空时只能回落 FlowExecutor::current()＝"最后启动的那条流程"。
     FlowScene sceneA;
-    FlowExecutor execA;
-    execA.setFlowName(QStringLiteral("RegressionE3OwnerA"));
+    // P3c：节点归属改持令牌 ⇒ 本体由令牌拥有（栈上本体无令牌，节点借不到本体）
+    auto tokenA = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor *execA = tokenA->executor();
+    execA->setFlowName(QStringLiteral("RegressionE3OwnerA"));
 
     NodeBase *cond = sceneA.createNode(NodeBase::LOGIC, QPointF(100, 200), QStringLiteral("If-Else"));
     NodeBase *trueB = sceneA.createNode(NodeBase::LOGIC, QPointF(340, 120), QStringLiteral("Formula"));
@@ -1559,8 +1562,8 @@ void IntegrationTest::testOwnerExecutorEstablishedAtGraphBuild()
              "前置失效：接入执行器之前节点就已带归属（下面的断言将无从分辨是谁建立的）");
 
     // ① 挂上场景即建立归属，一次都不跑
-    execA.setFlowScene(&sceneA);
-    QCOMPARE(cond->ownerExecutor(), &execA);
+    execA->setFlowScene(&sceneA);
+    QCOMPARE(cond->ownerExecutor(), execA);
 
     // ② 接入**之后**新增的节点：整轮都被跳过（永不执行）⇒ 只有"建图时建立归属"能救它
     NodeBase *falseB = sceneA.createNode(NodeBase::LOGIC, QPointF(340, 300), QStringLiteral("Formula"));
@@ -1569,38 +1572,39 @@ void IntegrationTest::testOwnerExecutorEstablishedAtGraphBuild()
     QVERIFY(sceneA.createConnection(cond->outputPorts().value(2), falseB->inputPorts().first(), true) != nullptr);
     int rounds = 0;
     const auto hExec = QObject::connect(
-        &execA, &FlowExecutor::nodeExecuted, &execA,
-        [&](NodeBase *n) { if (n == cond && ++rounds >= 1) execA.stopExecution(); }, Qt::DirectConnection);
-    execA.setFlowMode(FlowMode::Continuous);
-    execA.startExecution();
-    bool finished = execA.wait(5000);
+        execA, &FlowExecutor::nodeExecuted, execA,
+        [&](NodeBase *n) { if (n == cond && ++rounds >= 1) execA->stopExecution(); }, Qt::DirectConnection);
+    execA->setFlowMode(FlowMode::Continuous);
+    execA->startExecution();
+    bool finished = execA->wait(5000);
     if (!finished) {
-        execA.stopExecution();
-        finished = execA.wait(2000);
+        execA->stopExecution();
+        finished = execA->wait(2000);
     }
     QObject::disconnect(hExec);
     QVERIFY2(finished, "② 的流程未在 5 秒内结束");
     QVERIFY2(rounds >= 1, "② 没跑到一轮（空断言）");
-    QCOMPARE(falseB->ownerExecutor(), &execA);   // FALSE 分支全程被跳过：从没进过 executeNode
+    QCOMPARE(falseB->ownerExecutor(), execA);   // FALSE 分支全程被跳过：从没进过 executeNode
 
     // ③ 双流程并发：B 在跑（current()==B），A 的节点归属仍是 A ⇒ UI 路径不会回落到 current()
     FlowScene sceneB;
-    FlowExecutor execB;
-    execB.setFlowName(QStringLiteral("RegressionE3OwnerB"));
+    auto tokenB = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor *execB = tokenB->executor();
+    execB->setFlowName(QStringLiteral("RegressionE3OwnerB"));
     NodeBase *bNode = sceneB.createNode(NodeBase::LOGIC, QPointF(100, 200), QStringLiteral("Formula"));
     QVERIFY(bNode != nullptr);
     bNode->setParam(QStringLiteral("expression"), QStringLiteral("4 + 4"));
-    execB.setFlowScene(&sceneB);
-    execB.setFlowMode(FlowMode::Continuous);
-    execB.startExecution();
-    QTRY_VERIFY_WITH_TIMEOUT(FlowExecutor::current() == &execB, 3000);   // 前提：current() 确实已被 B 抢走
-    QCOMPARE(cond->ownerExecutor(), &execA);
-    QCOMPARE(falseB->ownerExecutor(), &execA);
-    QCOMPARE(bNode->ownerExecutor(), &execB);
-    execB.stopExecution();
-    execB.wait(5000);
-    execB.setFlowScene(nullptr);
-    execA.setFlowScene(nullptr);
+    execB->setFlowScene(&sceneB);
+    execB->setFlowMode(FlowMode::Continuous);
+    execB->startExecution();
+    QTRY_VERIFY_WITH_TIMEOUT(FlowExecutor::current() == execB, 3000);   // 前提：current() 确实已被 B 抢走
+    QCOMPARE(cond->ownerExecutor(), execA);
+    QCOMPARE(falseB->ownerExecutor(), execA);
+    QCOMPARE(bNode->ownerExecutor(), execB);
+    execB->stopExecution();
+    execB->wait(5000);
+    execB->setFlowScene(nullptr);
+    execA->setFlowScene(nullptr);
     QCoreApplication::processEvents();
 }
 
@@ -1616,12 +1620,14 @@ void IntegrationTest::testOwnerExecutorClearedWhenExecutorDestroyed()
     node->setParam(QStringLiteral("expression"), QStringLiteral("1 + 1"));
 
     {
-        FlowExecutor exec;
-        exec.setFlowScene(&scene);
-        QCOMPARE(node->ownerExecutor(), &exec);   // 前置：归属确实建立过（否则下面的断言是空断言）
-        QVERIFY2(exec.joinForDestroy(5000),
+        auto token = FlowExecutorToken::create(new FlowExecutor());
+        FlowExecutor *exec = token->executor();
+        exec->setFlowScene(&scene);
+        QCOMPARE(node->ownerExecutor(), exec);   // 前置：归属确实建立过（否则下面的断言是空断言）
+        QVERIFY2(exec->joinForDestroy(5000),
                  qPrintable(QStringLiteral("销毁前未真正退出线程（本用例的前提是『析构成功完成』）")));
-    }   // exec 在此析构，scene 与 node 都还活着
+        token.reset();   // 令牌收尾 ⇒ 本体析构（scene 与 node 都还活着）
+    }
 
     QVERIFY2(node->ownerExecutor() == nullptr,
              "执行器析构后节点仍指向它：这条指针已被释放（S-1）");
@@ -2470,19 +2476,21 @@ void IntegrationTest::testBusyTriggerQueuedNotDropped()
     // S9：忙时触发**不再丢弃**，改为有界排队补跑（上限 3 轮）；超界才丢最旧一笔并计数。
     // 旧策略（忙则丢弃且不计入触发计数）已被本用例替换：检测场景下漏检一件比晚检更糟。
     FlowScene scene;
-    FlowExecutor exec;
+    // P3c：触发绑定与节点归属都持令牌 ⇒ 本体须由令牌拥有
+    auto token = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor *exec = token->executor();
     const QString flowName = QStringLiteral("BusyTriggerFlow");
-    exec.setFlowName(flowName);
-    exec.setFlowMode(FlowMode::SoftwareTrigger);
+    exec->setFlowName(flowName);
+    exec->setFlowMode(FlowMode::SoftwareTrigger);
 
     NodeBase *delay = scene.createNode(NodeBase::LOGIC, QPointF(100, 100), QStringLiteral("Delay"));
     QVERIFY(delay != nullptr);
     delay->setParam(QStringLiteral("delayMs"), 400);   // 留出稳定的"忙"窗口
-    exec.setFlowScene(&scene);
+    exec->setFlowScene(&scene);
 
     auto *gtm = GlobalTriggerManager::instance();
     QVERIFY(gtm->setStringTrigger(QStringLiteral("GO_BUSY"), flowName));
-    gtm->registerFlow(flowName, &scene, &exec);
+    gtm->registerFlow(flowName, &scene, token);
 
     auto triggerCount = [gtm]() {
         for (const auto &e : gtm->allTriggers()) {
@@ -2494,36 +2502,36 @@ void IntegrationTest::testBusyTriggerQueuedNotDropped()
     QCOMPARE(triggerCount(), 0);
 
     QSignalSpy firedSpy(gtm, &GlobalTriggerManager::triggerFired);
-    QSignalSpy finishedSpy(&exec, &FlowExecutor::executionFinished);
+    QSignalSpy finishedSpy(exec, &FlowExecutor::executionFinished);
 
-    exec.startExecution();
-    QTRY_VERIFY_WITH_TIMEOUT(exec.getState() == ExecutionState::Running, 3000);
-    QCOMPARE(exec.pendingExternalRounds(), 0);
+    exec->startExecution();
+    QTRY_VERIFY_WITH_TIMEOUT(exec->getState() == ExecutionState::Running, 3000);
+    QCOMPARE(exec->pendingExternalRounds(), 0);
 
     // 忙时连发 4 笔：前 3 笔排队，第 4 笔超界丢弃（丢最旧，保留最新件）
     for (int i = 0; i < 4; ++i)
         gtm->onDataReceived(QStringLiteral("TEST_DEV"), QByteArray("GO_BUSY"));
 
-    QCOMPARE(exec.pendingExternalRounds(), 3);            // 有界队列已满
-    QCOMPARE(exec.droppedExternalRounds(), quint64(1));   // 第 4 笔被丢
+    QCOMPARE(exec->pendingExternalRounds(), 3);            // 有界队列已满
+    QCOMPARE(exec->droppedExternalRounds(), quint64(1));   // 第 4 笔被丢
     QCOMPARE(firedSpy.count(), 3);                        // 仅"会被执行"的才通知
     QCOMPARE(triggerCount(), 3);                          // 计数口径：排队也算（不虚报、不漏报）
 
     // 每轮末消费一笔待补跑：1(首轮) + 3(补跑) = 4 轮
     QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.count(), 4, 20000);
-    QCOMPARE(exec.pendingExternalRounds(), 0);
+    QCOMPARE(exec->pendingExternalRounds(), 0);
 
     // 对照组：空闲时触发 → 立即起一轮（不经队列）
     gtm->onDataReceived(QStringLiteral("TEST_DEV"), QByteArray("GO_BUSY"));
     QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.count(), 5, 8000);
-    QCOMPARE(exec.pendingExternalRounds(), 0);
+    QCOMPARE(exec->pendingExternalRounds(), 0);
     QCOMPARE(triggerCount(), 4);
 
-    exec.stopExecution();
-    exec.wait(3000);
+    exec->stopExecution();
+    exec->wait(3000);
     gtm->removeStringTrigger(QStringLiteral("GO_BUSY"));
     gtm->unregisterFlow(flowName);
-    exec.setFlowScene(nullptr);
+    exec->setFlowScene(nullptr);
 }
 
 // 前缀歧义闸：同一输入「起哪条流程」不再交给散列序。互为前缀的两条触发源在配置门拒绝；
@@ -2626,36 +2634,39 @@ void IntegrationTest::testBusyOtherFlowDoesNotBlockTrigger()
     // 需求语义：只有"目标流程自己忙"才丢弃触发；**其他流程忙不得影响**本流程被触发。
     // 实现口径：busy 判定按目标流程的执行器查（每流程独立执行器），不查任何全局状态。
     FlowScene sceneTarget;
-    FlowExecutor execTarget;
+    // P3c：两个执行器都由令牌拥有（触发绑定经令牌取用）
+    auto tokenTarget = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor *execTarget = tokenTarget->executor();
     const QString targetFlow = QStringLiteral("IsolationTargetFlow");
-    execTarget.setFlowName(targetFlow);
-    execTarget.setFlowMode(FlowMode::SoftwareTrigger);
+    execTarget->setFlowName(targetFlow);
+    execTarget->setFlowMode(FlowMode::SoftwareTrigger);
     NodeBase *t = sceneTarget.createNode(NodeBase::LOGIC, QPointF(100, 100), QStringLiteral("Delay"));
     QVERIFY(t != nullptr);
     t->setParam(QStringLiteral("delayMs"), 0);   // 目标流程：秒完成
-    execTarget.setFlowScene(&sceneTarget);
+    execTarget->setFlowScene(&sceneTarget);
 
     FlowScene sceneOther;
-    FlowExecutor execOther;
+    auto tokenOther = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor *execOther = tokenOther->executor();
     const QString otherFlow = QStringLiteral("IsolationOtherFlow");
-    execOther.setFlowName(otherFlow);
-    execOther.setFlowMode(FlowMode::SoftwareTrigger);
+    execOther->setFlowName(otherFlow);
+    execOther->setFlowMode(FlowMode::SoftwareTrigger);
     NodeBase *o = sceneOther.createNode(NodeBase::LOGIC, QPointF(100, 100), QStringLiteral("Delay"));
     QVERIFY(o != nullptr);
     o->setParam(QStringLiteral("delayMs"), 600);   // 其他流程：长时间忙
-    execOther.setFlowScene(&sceneOther);
+    execOther->setFlowScene(&sceneOther);
 
     auto *gtm = GlobalTriggerManager::instance();
     QVERIFY(gtm->setStringTrigger(QStringLiteral("GO_TGT"), targetFlow));
-    gtm->registerFlow(targetFlow, &sceneTarget, &execTarget);
-    gtm->registerFlow(otherFlow, &sceneOther, &execOther);
+    gtm->registerFlow(targetFlow, &sceneTarget, tokenTarget);
+    gtm->registerFlow(otherFlow, &sceneOther, tokenOther);
 
     QSignalSpy firedSpy(gtm, &GlobalTriggerManager::triggerFired);
-    QSignalSpy targetStartedSpy(&execTarget, &FlowExecutor::executionStarted);
+    QSignalSpy targetStartedSpy(execTarget, &FlowExecutor::executionStarted);
 
     // 先让"其他流程"处于忙碌
-    execOther.startExecution();
-    QTRY_VERIFY_WITH_TIMEOUT(execOther.getState() == ExecutionState::Running, 3000);
+    execOther->startExecution();
+    QTRY_VERIFY_WITH_TIMEOUT(execOther->getState() == ExecutionState::Running, 3000);
 
     // 触发目标流程：其他流程忙不影响它——必须触发、必须真的跑起来
     gtm->onDataReceived(QStringLiteral("TEST_DEV"), QByteArray("GO_TGT"));
@@ -2669,15 +2680,15 @@ void IntegrationTest::testBusyOtherFlowDoesNotBlockTrigger()
     }
     QCOMPARE(targetCount, 1);   // 目标流程空闲：计数 +1（其他流程忙不参与判定）
 
-    execOther.stopExecution();
-    execOther.wait(3000);
-    execTarget.stopExecution();
-    execTarget.wait(3000);
+    execOther->stopExecution();
+    execOther->wait(3000);
+    execTarget->stopExecution();
+    execTarget->wait(3000);
     gtm->removeStringTrigger(QStringLiteral("GO_TGT"));
     gtm->unregisterFlow(targetFlow);
     gtm->unregisterFlow(otherFlow);
-    execTarget.setFlowScene(nullptr);
-    execOther.setFlowScene(nullptr);
+    execTarget->setFlowScene(nullptr);
+    execOther->setFlowScene(nullptr);
 }
 
 void IntegrationTest::testScriptInterpreterResolvesToAbsolutePath()

@@ -9,9 +9,11 @@
 #include <QJsonArray>
 #include <QMutex>
 #include <QStringList>
+#include <memory>
 
 class FlowScene;
 class FlowExecutor;
+class FlowExecutorToken;
 
 /// 全局触发管理器 — 将外部触发信号映射到流程执行
 /// 注意：onDataReceived / onEventTriggered 由通信线程同步调用，而 set*/remove*/fromJson
@@ -59,7 +61,11 @@ public:
     TriggerEntry triggerEntry(const QString &id) const;
 
     // ---- 流程注册 ----
-    void registerFlow(const QString &name, FlowScene *scene, FlowExecutor *executor);
+    /// 注册流程绑定（P3c 期：绑定改持令牌）。绑定只持令牌的**弱**引用：路由取用时先 lock，
+    /// 拿到强引用副本再调方法（调用期间本体不会被收）——绑定因此**不延长**本体寿命，
+    /// 界面侧放掉最后一个强令牌即收尾，绑定随之失联（绝不指向已死本体）。
+    void registerFlow(const QString &name, FlowScene *scene,
+                      const std::shared_ptr<FlowExecutorToken> &token);
     void unregisterFlow(const QString &name);
     /// 分配一个全局唯一的"流程 N"名称（扫描当前已注册绑定，返回首个空闲序号）。
     /// 用于新建流程命名，避免删除流程后 size() 复用导致同名覆盖仍存流程的触发路由（L2 存量）。
@@ -67,7 +73,10 @@ public:
     /// 按执行器身份注销：仅当当前绑定确实指向该执行器时才移除，避免迟到析构（deleteLater /
     /// 复用）误删新方案同名流程的注册（"载入后触发静默失效"复活路径）。
     void unregisterExecutor(FlowExecutor *executor);
+    /// 经令牌借出本体（令牌已收 ⇒ 返回空）。
     FlowExecutor *executorForFlow(const QString &name) const;
+    /// 取令牌（触发路由用：出锁后持它调用，见 onDataReceived/onEventTriggered）。
+    std::shared_ptr<FlowExecutorToken> tokenForFlow(const QString &name) const;
 
     // ---- 序列化 ----
     QJsonObject toJson() const;
@@ -93,17 +102,20 @@ private:
     GlobalTriggerManager &operator=(const GlobalTriggerManager &) = delete;
 
     /// 调用者必须已持有 m_mutex（供 onDataReceived/onEventTriggered 在持锁并发起查找时复用，避免嵌套加锁）
-    FlowExecutor *executorForFlowLocked(const QString &name) const;
+    std::shared_ptr<FlowExecutorToken> tokenForFlowLocked(const QString &name) const;
 
     int m_nextId = 1;
     QMap<QString, TriggerEntry> m_stringTriggers;
     QMap<QString, TriggerEntry> m_eventTriggers;
     QMap<QString, TriggerEntry> m_allTriggers;
 
-    // 流程名 → {场景, 执行器}
+    // 流程名 → {场景, 身份键, 令牌}
     struct FlowBinding {
         FlowScene *scene = nullptr;
+        /// 身份键：只做**比对**，不解引用、不借出（unregisterExecutor 的配对判据）。
         FlowExecutor *executor = nullptr;
+        /// 取用面：触发路由经它借本体（弱引用 ⇒ 绑定不延长本体寿命）。
+        std::weak_ptr<FlowExecutorToken> token;
     };
     QMap<QString, FlowBinding> m_flowBindings;
 

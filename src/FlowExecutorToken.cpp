@@ -19,16 +19,27 @@ FlowExecutorToken::FlowExecutorToken(FlowExecutor *executor)
     }
 }
 
+std::shared_ptr<FlowExecutorToken> FlowExecutorToken::create(FlowExecutor *executor)
+{
+    std::shared_ptr<FlowExecutorToken> token = std::make_shared<FlowExecutorToken>(executor);
+    if (executor) {
+        executor->setLifetimeToken(token);   // 本体只存弱引用（强持会成环）
+    }
+    return token;
+}
+
 FlowExecutorToken::~FlowExecutorToken()
 {
     if (!m_owner) {
         return;
     }
     FlowExecutor *ex = m_owner;
-    m_owner = nullptr;
     // joinForDestroy 是「停止 ＋ 有界等待退出」的唯一实现（析构走同一函数，两路口径不分叉）。
     if (ex->joinForDestroy(15000)) {
+        // 顺序要点：**先回收再置空**。本体析构里要按归属块把节点的归属槽清空（P3c），
+        // 那一段发生在 delete 之内；令牌若提前置空，令牌面在本体收尾期间就借不到本体了。
         delete ex;
+        m_owner = nullptr;
         return;
     }
     // 超时仍未退出：绝不 delete（线程析构会硬杀，比一个随进程退出被回收的线程更危险）。
@@ -36,4 +47,5 @@ FlowExecutorToken::~FlowExecutorToken()
     VFP_DEBUG << "FlowExecutorToken: 执行器超时未退出，放弃强杀，转 finished 自删";
     ex->disconnect();
     QObject::connect(ex, &QThread::finished, ex, &QObject::deleteLater);
+    m_owner = nullptr;   // 所有权交给自删路径：令牌此后不得再借出本体
 }

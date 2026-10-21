@@ -20,6 +20,7 @@
 
 #include "CommunicationManager.h"
 #include "FlowExecutor.h"
+#include "FlowExecutorToken.h"
 #include "FlowScene.h"
 #include "GlobalTriggerManager.h"
 #include "NodeBase.h"
@@ -57,14 +58,18 @@ void FlowExecutorOwnershipTest::testOwnerPointerClearedOnDestruction()
     QVERIFY(node != nullptr);
 
     {
-        FlowExecutor executor;
-        executor.setFlowScene(&scene);
+        // P3c：节点面改持令牌 ⇒ 本体由令牌拥有（栈上本体没有令牌，节点借不到本体）
+        auto token = FlowExecutorToken::create(new FlowExecutor());
+        FlowExecutor *executor = token->executor();
+        executor->setFlowScene(&scene);
         // 挂上场景即建立归属
-        QCOMPARE(node->ownerExecutor(), static_cast<FlowExecutor *>(&executor));
-    }
+        QCOMPARE(node->ownerExecutor(), executor);
+        QVERIFY(node->ownerToken() == token);
+    }   // 最后一个令牌释放 ⇒ 收尾（本体析构）
 
-    // 执行器已析构：节点的归属指针必须被清空（红臂破坏位就在这一位）
+    // 执行器已析构：节点的归属必须已失联（令牌过期后借不到本体；红臂破坏位就在这一位）
     QVERIFY(node->ownerExecutor() == nullptr);
+    QVERIFY(node->ownerToken() == nullptr);
 }
 
 void FlowExecutorOwnershipTest::testUnbindKeepsOwnership()
@@ -73,26 +78,27 @@ void FlowExecutorOwnershipTest::testUnbindKeepsOwnership()
     NodeBase *node = scene.createNode(NodeBase::LOGIC, QPointF(0, 0), QStringLiteral("own_node"));
     QVERIFY(node != nullptr);
 
-    FlowExecutor executor;
-    executor.setFlowScene(&scene);
-    QCOMPARE(node->ownerExecutor(), static_cast<FlowExecutor *>(&executor));
+    auto token = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor *executor = token->executor();
+    executor->setFlowScene(&scene);
+    QCOMPARE(node->ownerExecutor(), executor);
 
     // 解绑（置空场景）刻意不清归属：节点可能已转由别的执行器接管，清成空反而退回全局单例兜底
-    executor.setFlowScene(nullptr);
-    QCOMPARE(node->ownerExecutor(), static_cast<FlowExecutor *>(&executor));
+    executor->setFlowScene(nullptr);
+    QCOMPARE(node->ownerExecutor(), executor);
 }
 
 void FlowExecutorOwnershipTest::testTriggerBindingUnregisteredOnDestruction()
 {
     FlowScene scene;
     const QString flowName = QStringLiteral("ownership_probe_flow");
-    {
-        FlowExecutor executor;
-        GlobalTriggerManager::instance()->registerFlow(flowName, &scene, &executor);
-        QCOMPARE(GlobalTriggerManager::instance()->executorForFlow(flowName),
-                 static_cast<FlowExecutor *>(&executor));
-    }
-    // 执行器析构内按身份注销：绑定不再指向已死执行器
+    auto token = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor *executor = token->executor();
+    GlobalTriggerManager::instance()->registerFlow(flowName, &scene, token);
+    QCOMPARE(GlobalTriggerManager::instance()->executorForFlow(flowName), executor);
+
+    // P3c：绑定只持令牌的弱引用 ⇒ 释放最后一个强令牌即收尾，本体析构内按身份注销
+    token.reset();
     QVERIFY(GlobalTriggerManager::instance()->executorForFlow(flowName) == nullptr);
 }
 
@@ -106,18 +112,19 @@ void FlowExecutorOwnershipTest::testTriggerRoutingRunsOnAppThread()
     QCOMPARE(GlobalTriggerManager::instance()->thread(), appThread);
 
     FlowScene scene;
-    FlowExecutor executor;
+    auto token = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor *executor = token->executor();
     // 硬触发模式：路由匹配即通知，但不受理外部触发、不起工作线程（观测线程用）
-    executor.setFlowMode(FlowMode::HardwareTrigger);
+    executor->setFlowMode(FlowMode::HardwareTrigger);
 
     const QString flowName = QStringLiteral("ownership_route_probe");
     const QString trigger = QStringLiteral("PROBE_TRIGGER");
-    GlobalTriggerManager::instance()->registerFlow(flowName, &scene, &executor);
+    GlobalTriggerManager::instance()->registerFlow(flowName, &scene, token);
     QVERIFY(GlobalTriggerManager::instance()->setStringTrigger(trigger, flowName));
 
     QThread *observed = nullptr;
     QObject::connect(GlobalTriggerManager::instance(), &GlobalTriggerManager::triggerFired,
-                     &executor,
+                     executor,
                      [&observed](const QString &, const QString &) {
                          observed = QThread::currentThread();
                      },

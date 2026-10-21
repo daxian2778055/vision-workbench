@@ -13,6 +13,7 @@
 
 #include "CommunicationManager.h"
 #include "FlowExecutor.h"
+#include "FlowExecutorToken.h"
 #include "FlowScene.h"
 #include "GlobalTriggerManager.h"
 #include "HeartbeatManager.h"
@@ -398,21 +399,23 @@ void CommWritebackTest::testPlcDataTriggersFlowAndWritesBack()
 
     // 目标流程：单个「发送数据」算子，回写 ACK（流程是否执行，用"PLC 有没有收到 ACK"来证明）
     FlowScene scene;
-    FlowExecutor exec;                       // 其构造函数把通讯数据源接到 GlobalTriggerManager
+    // 其构造函数把通讯数据源接到 GlobalTriggerManager；P3c 起本体由令牌拥有（绑定持令牌）
+    auto token = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor *exec = token->executor();
     const QString flowName = QStringLiteral("CommTriggerFlow");
-    exec.setFlowName(flowName);
-    exec.setFlowMode(FlowMode::SoftwareTrigger);
+    exec->setFlowName(flowName);
+    exec->setFlowMode(FlowMode::SoftwareTrigger);
     NodeBase *send = scene.createNode(NodeBase::OUTPUT, QPointF(120, 120),
                                       QStringLiteral("发送数据"));
     QVERIFY2(send != nullptr, "无法创建「发送数据」算子");
     send->setParam(QStringLiteral("deviceName"), QStringLiteral("SIM_TRIG"));
     send->setParam(QStringLiteral("suffix"), QString());
     send->setParam(QStringLiteral("sendText"), QStringLiteral("ACK"));
-    exec.setFlowScene(&scene);
+    exec->setFlowScene(&scene);
 
     auto *gtm = GlobalTriggerManager::instance();
     QVERIFY2(gtm->setEventTrigger(QStringLiteral("EV_OK"), flowName), "配置事件触发失败");
-    gtm->registerFlow(flowName, &scene, &exec);
+    gtm->registerFlow(flowName, &scene, token);
     QSignalSpy firedSpy(gtm, &GlobalTriggerManager::triggerFired);
 
     // 模拟 PLC 主动下发
@@ -430,7 +433,7 @@ void CommWritebackTest::testPlcDataTriggersFlowAndWritesBack()
     gtm->removeEventTrigger(QStringLiteral("EV_OK"));
     gtm->unregisterFlow(flowName);
     cm->removeReceiveEvent(QStringLiteral("EV_OK"));
-    exec.setFlowScene(nullptr);
+    exec->setFlowScene(nullptr);
     QVERIFY(cm->closeDevice(QStringLiteral("SIM_TRIG")));
     QVERIFY(cm->removeDevice(QStringLiteral("SIM_TRIG")));
 }
@@ -594,21 +597,23 @@ void CommWritebackTest::testStringTriggerStartsFlow()
     QVERIFY(cm->openDevice(QStringLiteral("SIM_STR")));
 
     FlowScene scene;
-    FlowExecutor exec;
+    // P3c：本体由令牌拥有（触发绑定与节点归属都经令牌）
+    auto token = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor *exec = token->executor();
     const QString flowName = QStringLiteral("CommStringTriggerFlow");
-    exec.setFlowName(flowName);
-    exec.setFlowMode(FlowMode::SoftwareTrigger);
+    exec->setFlowName(flowName);
+    exec->setFlowMode(FlowMode::SoftwareTrigger);
     NodeBase *send = scene.createNode(NodeBase::OUTPUT, QPointF(120, 120),
                                       QStringLiteral("发送数据"));
     QVERIFY2(send != nullptr, "无法创建「发送数据」算子");
     send->setParam(QStringLiteral("deviceName"), QStringLiteral("SIM_STR"));
     send->setParam(QStringLiteral("suffix"), QString());
     send->setParam(QStringLiteral("sendText"), QStringLiteral("TRIGGERED"));
-    exec.setFlowScene(&scene);
+    exec->setFlowScene(&scene);
 
     auto *gtm = GlobalTriggerManager::instance();
     QVERIFY2(gtm->setStringTrigger(QStringLiteral("GO"), flowName), "配置字符串触发失败");
-    gtm->registerFlow(flowName, &scene, &exec);
+    gtm->registerFlow(flowName, &scene, token);
     QSignalSpy firedSpy(gtm, &GlobalTriggerManager::triggerFired);
 
     QTRY_VERIFY_WITH_TIMEOUT(peer != nullptr, 3000);
@@ -622,7 +627,7 @@ void CommWritebackTest::testStringTriggerStartsFlow()
 
     gtm->removeStringTrigger(QStringLiteral("GO"));
     gtm->unregisterFlow(flowName);
-    exec.setFlowScene(nullptr);
+    exec->setFlowScene(nullptr);
     QVERIFY(cm->closeDevice(QStringLiteral("SIM_STR")));
     QVERIFY(cm->removeDevice(QStringLiteral("SIM_STR")));
 }
@@ -2020,25 +2025,29 @@ void CommWritebackTest::testUnregisterExecutorByIdentity()
     const QString flow = QStringLiteral("IDENTITY_FLOW");
 
     FlowScene scene1, scene2;
-    FlowExecutor exec1, exec2;
-    exec1.setFlowName(flow);
-    exec1.setFlowMode(FlowMode::SoftwareTrigger);
-    exec2.setFlowName(flow);
-    exec2.setFlowMode(FlowMode::SoftwareTrigger);
+    // P3c：绑定持令牌（弱引用），身份注销仍按本体指针比对
+    auto token1 = FlowExecutorToken::create(new FlowExecutor());
+    auto token2 = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor *exec1 = token1->executor();
+    FlowExecutor *exec2 = token2->executor();
+    exec1->setFlowName(flow);
+    exec1->setFlowMode(FlowMode::SoftwareTrigger);
+    exec2->setFlowName(flow);
+    exec2->setFlowMode(FlowMode::SoftwareTrigger);
 
-    gtm->registerFlow(flow, &scene1, &exec1);
-    QCOMPARE(gtm->executorForFlow(flow), &exec1);
+    gtm->registerFlow(flow, &scene1, token1);
+    QCOMPARE(gtm->executorForFlow(flow), exec1);
 
     // 同名覆盖：新执行器接管同一流程名
-    gtm->registerFlow(flow, &scene2, &exec2);
-    QCOMPARE(gtm->executorForFlow(flow), &exec2);
+    gtm->registerFlow(flow, &scene2, token2);
+    QCOMPARE(gtm->executorForFlow(flow), exec2);
 
     // 旧执行器注销（模拟其迟到析构）：身份不匹配 → 不得移除当前绑定
-    gtm->unregisterExecutor(&exec1);
-    QCOMPARE(gtm->executorForFlow(flow), &exec2);
+    gtm->unregisterExecutor(exec1);
+    QCOMPARE(gtm->executorForFlow(flow), exec2);
 
     // 新执行器注销才真正解绑
-    gtm->unregisterExecutor(&exec2);
+    gtm->unregisterExecutor(exec2);
     QCOMPARE(gtm->executorForFlow(flow), nullptr);
 }
 
@@ -2384,23 +2393,27 @@ void CommWritebackTest::testAllocFlowNameAvoidsCollision()
 {
     auto *gtm = GlobalTriggerManager::instance();
     FlowScene s1, s2, s3, s4;
-    FlowExecutor e1, e2, e3, e4;
+    // P3c：registerFlow 收令牌（弱绑定）；本用例只验名字分配，令牌活到函数末
+    auto t1 = FlowExecutorToken::create(new FlowExecutor());
+    auto t2 = FlowExecutorToken::create(new FlowExecutor());
+    auto t3 = FlowExecutorToken::create(new FlowExecutor());
+    auto t4 = FlowExecutorToken::create(new FlowExecutor());
 
     // L2：进入即自洁净——无条件退订 流程 1~4，消除对 GlobalTriggerManager 单例残留状态的顺序敏感，
     // 保证首条 allocFlowName()=="流程 2" 从确定初态成立。
     for (int n = 1; n <= 4; ++n)
         gtm->unregisterFlow(QStringLiteral("流程 %1").arg(n));
 
-    gtm->registerFlow(QStringLiteral("流程 1"), &s1, &e1);
+    gtm->registerFlow(QStringLiteral("流程 1"), &s1, t1);
     QCOMPARE(gtm->allocFlowName(), QStringLiteral("流程 2"));
-    gtm->registerFlow(QStringLiteral("流程 2"), &s2, &e2);
-    gtm->registerFlow(QStringLiteral("流程 3"), &s3, &e3);
+    gtm->registerFlow(QStringLiteral("流程 2"), &s2, t2);
+    gtm->registerFlow(QStringLiteral("流程 3"), &s3, t3);
     QCOMPARE(gtm->allocFlowName(), QStringLiteral("流程 4"));
 
     // 模拟删除"流程 2"：退订后分配应回填空档，而非复用已占用序号
     gtm->unregisterFlow(QStringLiteral("流程 2"));
     QCOMPARE(gtm->allocFlowName(), QStringLiteral("流程 2"));
-    gtm->registerFlow(QStringLiteral("流程 2"), &s4, &e4);
+    gtm->registerFlow(QStringLiteral("流程 2"), &s4, t4);
     QCOMPARE(gtm->allocFlowName(), QStringLiteral("流程 4"));   // 1/2/3 均占 → 下一个空闲为 4
 
     // 清理

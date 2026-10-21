@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+
 class FlowExecutor;
 
 /// 执行器生命周期令牌（词条切片 C P3a 期：令牌与持有面）。
@@ -27,6 +29,11 @@ public:
     /// 接管一个执行器本体的所有权（解除其父子关系）。
     explicit FlowExecutorToken(FlowExecutor *executor);
     ~FlowExecutorToken();
+
+    /// 建令牌，并把它的**弱引用**挂到本体上（P3c 期：本体建立节点归属时据此借令牌）。
+    /// 为什么由工厂而不由构造函数挂：构造函数里拿不到指向自身的 shared_ptr；
+    /// 漏挂的后果是节点侧归属恒空（子流程调用拿不到执行器），故统一从这里建。
+    static std::shared_ptr<FlowExecutorToken> create(FlowExecutor *executor);
 
     FlowExecutorToken(const FlowExecutorToken &) = delete;
     FlowExecutorToken &operator=(const FlowExecutorToken &) = delete;

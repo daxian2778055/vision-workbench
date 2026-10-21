@@ -9,6 +9,7 @@
 //  ⑤ 递归被拒绝且给出清晰原因；未定义名字可见报错（不静默跑旧逻辑）。
 #include "FlowScene.h"
 #include "FlowExecutor.h"
+#include "FlowExecutorToken.h"
 #include "NodeBase.h"
 #include "NodeRegistry.h"
 #include "NodeGraphicsItem.h"
@@ -92,10 +93,14 @@ struct RoundResult {
     QStringList errors;
 };
 
-RoundResult runOneRound(FlowExecutor &exec, FlowScene *scene)
+RoundResult runOneRound(FlowScene *scene)
 {
     RoundResult r;
-    const auto c1 = QObject::connect(&exec, &FlowExecutor::nodeExecuted, &exec,
+    // P3c：节点归属改持令牌（弱引用）⇒ 执行器本体必须由令牌拥有，节点才借得到。
+    // 栈上本体没有令牌 ⇒ ownerExecutor() 恒空 ⇒ 子流程调用会走"无执行器"空转。
+    auto token = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor *exec = token->executor();
+    const auto c1 = QObject::connect(exec, &FlowExecutor::nodeExecuted, exec,
                                      [&](NodeBase *n, bool ok) {
                                          if (!n)
                                              return;
@@ -104,19 +109,19 @@ RoundResult runOneRound(FlowExecutor &exec, FlowScene *scene)
                                              ++r.okRuns;
                                      },
                                      Qt::DirectConnection);
-    const auto c2 = QObject::connect(&exec, &FlowExecutor::executionError, &exec,
+    const auto c2 = QObject::connect(exec, &FlowExecutor::executionError, exec,
                                      [&](const QString &msg) { r.errors << msg; },
                                      Qt::DirectConnection);
-    exec.setFlowName(QStringLiteral("SubFlowTest"));
-    exec.setFlowMode(FlowMode::SoftwareTrigger);
-    exec.setFlowScene(scene);
-    exec.startExecution();
-    bool finished = exec.wait(15000);
+    exec->setFlowName(QStringLiteral("SubFlowTest"));
+    exec->setFlowMode(FlowMode::SoftwareTrigger);
+    exec->setFlowScene(scene);
+    exec->startExecution();
+    bool finished = exec->wait(15000);
     if (!finished) {
-        exec.stopExecution();
-        exec.wait(3000);
+        exec->stopExecution();
+        exec->wait(3000);
     }
-    exec.setFlowScene(nullptr);
+    exec->setFlowScene(nullptr);
     QCoreApplication::processEvents();
     QObject::disconnect(c1);
     QObject::disconnect(c2);
@@ -243,8 +248,7 @@ void SubFlowTest::testExecutionEndToEnd()
     QString err;
     QVERIFY2(scene.defineSubFlowFromSelection(QStringLiteral("预处理"), &err), qPrintable(err));
 
-    FlowExecutor exec;
-    const RoundResult r = runOneRound(exec, &scene);
+    const RoundResult r = runOneRound(&scene);
 
     // 成员被主遍历跳过、由调用点内联各执行恰一遍；主图 3 + 成员 2 = 5 次成功执行
     // （若成员被主遍历重复执行，okRuns 会多出 2 —— 调度互斥的硬指标）
@@ -280,8 +284,7 @@ void SubFlowTest::testTwoCallersIsolation()
     QString err;
     QVERIFY2(scene.defineSubFlowFromSelection(QStringLiteral("共享段"), &err), qPrintable(err));
 
-    FlowExecutor exec;
-    const RoundResult r = runOneRound(exec, &scene);
+    const RoundResult r = runOneRound(&scene);
 
     // 主图 6 次执行 + 成员被两个调用点各内联一遍（2×2）= 10
     QCOMPARE(r.okRuns, 10);
@@ -314,8 +317,7 @@ void SubFlowTest::testRecursionRejected()
     selectOnly(&scene, { innerBA, mB });
     QVERIFY2(scene.defineSubFlowFromSelection(QStringLiteral("B"), &err), qPrintable(err));
 
-    FlowExecutor exec;
-    const RoundResult r = runOneRound(exec, &scene);
+    const RoundResult r = runOneRound(&scene);
 
     // 递归被拒绝：调用点失败，错误链里明确写"递归"
     QVERIFY(!r.lastByNode.value(callerA->fullName()));
@@ -334,8 +336,7 @@ void SubFlowTest::testUndefinedRejected()
     QVERIFY(gen && caller);
     connectNodes(&scene, gen, caller);
 
-    FlowExecutor exec;
-    const RoundResult r = runOneRound(exec, &scene);
+    const RoundResult r = runOneRound(&scene);
 
     QVERIFY(!r.lastByNode.value(caller->fullName()));
     bool hasUndefinedError = false;
@@ -362,8 +363,7 @@ void SubFlowTest::testUnfedSubFlowCallerStaysGreenAndEmpty()
     QString err;
     QVERIFY2(scene.defineSubFlowFromSelection(QStringLiteral("空转段"), &err), qPrintable(err));
 
-    FlowExecutor exec;
-    const RoundResult r = runOneRound(exec, &scene);
+    const RoundResult r = runOneRound(&scene);
 
     qDebug().noquote()
         << QStringLiteral("A5-SUBFLOW caller=%1 member1=%2 member2=%3 outputEmpty=%4 errors=%5")
