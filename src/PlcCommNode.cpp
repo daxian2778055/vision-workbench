@@ -211,7 +211,7 @@ void PlcCommNode::verifyWrittenValue(int address, double expected, const QString
             words.reserve(du.valueCount());
             for (int i = 0; i < du.valueCount(); ++i)
                 words.append(du.value(i));
-            const double actual = parseRawToValue(
+            const double actual = RegisterByteOrder::parseRawToValue(
                 RegisterByteOrder::assembleRegisterBytes(words, byteOrder), dataType, byteOrder);
             if (!RegisterByteOrder::valueMatches(expected, actual, dataType)) {
                 emit communicationError(QStringLiteral("PLC回写校验失败(地址%1):期望%2 实读%3")
@@ -336,7 +336,7 @@ bool PlcCommNode::readRegister(int slaveAddr, int regAddr, int count)
                         // 用统一工具归一化（与写路径 disassemble 配对，往返对称，S3）
                         QByteArray raw = RegisterByteOrder::assembleRegisterBytes(values, reg.byteOrder);
 
-                        double parsed = parseRawToValue(raw, reg.dataType, reg.byteOrder);
+                        double parsed = RegisterByteOrder::parseRawToValue(raw, reg.dataType, reg.byteOrder);
                         reg.currentValue = parsed;
                         reg.displayValue = QString::number(parsed, 'f',
                             reg.dataType == QStringLiteral("float") ? 4 : 0);
@@ -385,52 +385,6 @@ void PlcCommNode::onModbusStateChanged(int state)
             m_reconnectTimer->start(getParam(QStringLiteral("reconnectInterval")).toInt());
         }
     }
-}
-
-double PlcCommNode::parseRawToValue(const QByteArray &raw, const QString &dataType, const QString &byteOrder) const
-{
-    if (raw.isEmpty()) return 0.0;
-
-    if (dataType == QStringLiteral("int16")) {
-        // 16 位：归一化（读值路径内联）已按 byteOrder 归一化为最终字节序列，此处统一大端解释
-        // （与 32 位路径一致）。强制大端对单寄存器行为中性：ABCD 不变，BADC/DCBA 与归一化已交换
-        // 配大端结果完全一致。
-        if (raw.size() < 2) return 0.0;
-        qint16 val;
-        QDataStream s(raw);
-        s.setByteOrder(QDataStream::BigEndian);
-        s >> val;
-        return static_cast<double>(val);
-    } else if (dataType == QStringLiteral("uint16")) {
-        if (raw.size() < 2) return 0.0;
-        quint16 val;
-        QDataStream s(raw);
-        s.setByteOrder(QDataStream::BigEndian);
-        s >> val;
-        return static_cast<double>(val);
-    } else if (dataType == QStringLiteral("int32") || dataType == QStringLiteral("uint32")
-               || dataType == QStringLiteral("float")) {
-        // 32 位：assembleRegisterBytes 已按 byteOrder 归一化为最终字节序列，此处统一大端解释
-        // （与 ReceiveEvent::extractValue 规范一致）；强制大端修掉 BADC 双重交换 / DCBA 反向，
-        // 并补 uint32 分支（此前无 → 恒返回 0.0）。
-        if (raw.size() < 4) return 0.0;
-        QDataStream s(raw);
-        s.setByteOrder(QDataStream::BigEndian);
-        if (dataType == QStringLiteral("int32")) {
-            qint32 val;
-            s >> val;
-            return static_cast<double>(val);
-        } else if (dataType == QStringLiteral("uint32")) {
-            quint32 val;
-            s >> val;
-            return static_cast<double>(val);
-        } else {
-            float val;
-            s >> val;
-            return static_cast<double>(val);
-        }
-    }
-    return 0.0;
 }
 
 QJsonObject PlcCommNode::toJson() const

@@ -522,7 +522,7 @@ void ModbusNode::onServerDataWritten(QModbusDataUnit::RegisterType table, int ad
         const QByteArray rawBytes = assembleRegisterBytes(words, byteOrder);
 
         // 与轮询路径对齐：currentValue 存解析值（此前服务器模式存 16 位原始字，int32/float 行显示半个值）
-        m_registers[idx].currentValue = parseRawToValue(rawBytes, dataType, byteOrder);
+        m_registers[idx].currentValue = RegisterByteOrder::parseRawToValue(rawBytes, dataType, byteOrder);
         m_registers[idx].displayValue = QString::number(
             m_registers[idx].currentValue, 'f', dataType == QStringLiteral("float") ? 4 : 0);
         emit registerCurrentValueChanged(regAddr, m_registers[idx].currentValue,
@@ -672,7 +672,7 @@ bool ModbusNode::readRegister(int slaveAddr, int regAddr, int count)
                         const QByteArray raw = assembleRegisterBytes(values, reg.byteOrder);
 
                         // 更新当前解析值
-                        double parsed = parseRawToValue(raw, reg.dataType, reg.byteOrder);
+                        double parsed = RegisterByteOrder::parseRawToValue(raw, reg.dataType, reg.byteOrder);
                         reg.currentValue = parsed;
                         reg.displayValue = QString::number(parsed, 'f',
                             reg.dataType == QStringLiteral("float") ? 4 : 0);
@@ -732,54 +732,6 @@ void ModbusNode::run(bool /*autoSwitch*/)
     // Modbus 运行时不执行图像处理
     // 轮询数据在 onPollTimeout 中异步完成
     // 输出会通过 registerValueChanged 信号 + receiveEvent 系统路由
-}
-
-double ModbusNode::parseRawToValue(const QByteArray &raw, const QString &dataType, const QString &byteOrder) const
-{
-    if (raw.isEmpty()) return 0.0;
-
-    if (dataType == QStringLiteral("int16")) {
-        // 16 位：assembleRegisterBytes 已按 byteOrder 归一化为最终字节序列，此处统一大端解释
-        // （与 32 位路径一致；此前 16 位用 order 小端——单寄存器时与"归一化不交换"相互抵消看似
-        // 正确，但 16/32 位逻辑不统一）。强制大端对单寄存器行为中性：ABCD 不变，BADC/DCBA 与
-        // "归一化已交换"配大端结果完全一致。
-        if (raw.size() < 2) return 0.0;
-        qint16 val;
-        QDataStream s(raw);
-        s.setByteOrder(QDataStream::BigEndian);
-        s >> val;
-        return static_cast<double>(val);
-    } else if (dataType == QStringLiteral("uint16")) {
-        if (raw.size() < 2) return 0.0;
-        quint16 val;
-        QDataStream s(raw);
-        s.setByteOrder(QDataStream::BigEndian);
-        s >> val;
-        return static_cast<double>(val);
-    } else if (dataType == QStringLiteral("int32") || dataType == QStringLiteral("uint32")
-               || dataType == QStringLiteral("float")) {
-        // 32 位：assembleRegisterBytes 已按 byteOrder 把寄存器归一化为最终字节序列，
-        // 此处统一大端解释（与 ReceiveEvent::extractValue 规范一致）；强制大端可同时修掉
-        // BADC 双重交换与 DCBA 反向（旧实现按 order 小端再换一次 = S13 另一半）。
-        // uint32 此前无分支 → 恒返回 0.0（uint32 恒 0 漏洞）。
-        if (raw.size() < 4) return 0.0;
-        QDataStream s(raw);
-        s.setByteOrder(QDataStream::BigEndian);
-        if (dataType == QStringLiteral("int32")) {
-            qint32 val;
-            s >> val;
-            return static_cast<double>(val);
-        } else if (dataType == QStringLiteral("uint32")) {
-            quint32 val;
-            s >> val;
-            return static_cast<double>(val);
-        } else {
-            float val;
-            s >> val;
-            return static_cast<double>(val);
-        }
-    }
-    return 0.0;
 }
 
 bool ModbusNode::writeRegister(int address, double value)
@@ -848,7 +800,7 @@ void ModbusNode::verifyWrittenValue(int address, double expected, const QString 
             words.reserve(du.valueCount());
             for (int i = 0; i < du.valueCount(); ++i)
                 words.append(du.value(i));
-            const double actual = parseRawToValue(
+            const double actual = RegisterByteOrder::parseRawToValue(
                 RegisterByteOrder::assembleRegisterBytes(words, byteOrder), dataType, byteOrder);
             if (!RegisterByteOrder::valueMatches(expected, actual, dataType)) {
                 emit communicationError(QStringLiteral("Modbus回写校验失败(地址%1):期望%2 实读%3")
