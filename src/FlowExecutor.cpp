@@ -66,7 +66,7 @@ FlowExecutor::FlowExecutor(QObject *parent)
 }
 
 /// 析构内两段有界等待（毫秒），常量本体在 FlowExecutor.h（腿座钉值可达）。
-/// 一段 5s 兜底照旧；二段 15s 与 retireExecutor 的前置等待同量级——走到析构说明
+/// 一段 5s 兜底照旧；二段 15s 与令牌收尾的前置等待同量级——走到析构说明
 /// 调用方已经判定线程可回收，这里只是两级兜底，不是常规出口。
 
 std::function<void(const QString &)> FlowExecutor::s_orderlyStopHook = nullptr;
@@ -102,12 +102,13 @@ FlowExecutor::~FlowExecutor()
     // 旧实现在 wait(5000) 失败后只打一行日志，然后照常 disconnectFromScene() 并返回——
     // 而"返回"就意味着本对象内存被释放，还在跑的 run() 从下一行起访问的就是野指针。
     // 这种时序问题的表现是偶发的错误检测结果或随机崩溃，比一次明确的中止坏得多。
-    // 正常销毁路径应在 delete 之前先 joinForDestroy()（见 MainWindow::retireExecutor 的泄漏保护）；
+    // 正常销毁路径应在 delete 之前先 joinForDestroy()（见 FlowExecutorToken 的收尾：等待成功即
+    // 回收本体，等待超时绝不 terminate 而转 finished 自删）；
     // 在这里超时说明该协议被绕过，宁可带着卡点阶段名当场中止，也不留一个会算错数的进程。
     //
     // 178 行软化（两段升格 + 收尾钩子，终局中止保持）：一段 5s 失败不再立刻终局——
     // 重停一轮（joinForDestroy 内含 stopExecution + wakeAll，幂等）再给 15s，与
-    // retireExecutor 的前置等待同量级；网络超时类阻塞节点在这个窗口里走得完就不再
+    // 令牌收尾的前置等待同量级；网络超时类阻塞节点在这个窗口里走得完就不再
     // 陪葬。两段皆尽才进终局：先过应用层收尾钩子（把方案/日志收好的一格，默认空），
     // 返回后 qFatal 中止——终局形状不动：调用方绕过 joinForDestroy 直接 delete 时，
     // 工作线程仍会读 this，内存已在释放流程中，任何"继续析构"都是 use-after-free；
@@ -120,7 +121,7 @@ FlowExecutor::~FlowExecutor()
             const QString why = QStringLiteral(
                 "FlowExecutor 工作线程未在两段有界等待（%1ms + %2ms）内退出：继续析构必然是"
                 " use-after-free，主动中止进程。销毁执行器请先调用 joinForDestroy()"
-                "（参见 MainWindow::retireExecutor）。")
+                "（参见 FlowExecutorToken 的收尾）。")
                             .arg(kDtorJoinStage1Ms)
                             .arg(kDtorJoinStage2Ms);
             invokeOrderlyStopHook(why);

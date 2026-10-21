@@ -13,6 +13,7 @@
 #include <QShowEvent>
 #include <QJsonObject>
 #include <functional>
+#include <memory>
 
 class QDockWidget;
 class QDialog;
@@ -36,6 +37,7 @@ class MainWindow;
 }
 
 class FlowScene;
+class FlowExecutorToken;
 class ProjectManager;
 class AuxPanelManager;
 class ImageDisplayController;
@@ -112,9 +114,12 @@ private:
     void addNode(const QString &nodeType);
     /// 多流程并发：获取场景专属执行器（不存在则创建并连接信号）
     FlowExecutor *executorForScene(FlowScene *scene);
-    /// 安全回收执行器：stopExecution + 有限等待；超时也**不** terminate（可能卡在 HALCON /
-    /// SQLite / 锁上，硬杀比随进程退出回收的线程更危险），改挂 finished→deleteLater 自删。
-    void retireExecutor(FlowExecutor *ex);
+    /// 词条切片 C P3b 期（销毁权归一）：执行器本体的**唯一拥有者**是令牌，令牌析构时执行收尾
+    /// （停止 ＋ 有界等待 ＋ 回收；等待超时绝不 terminate——线程析构会硬杀，比随进程退出被回收
+    /// 更危险，改挂 finished→deleteLater 自删）。界面侧只负责「把令牌放掉」，不再自己 delete
+    /// 执行器 ⇒ 本体的删除只有一处（令牌件），两路口径不会分叉。
+    /// 用法：把令牌按引用交给本件——本件直接放掉调用方那份引用 ⇒ 最后一个令牌释放时立即收尾。
+    void releaseExecutorToken(std::shared_ptr<FlowExecutorToken> &token);
     /// 连接执行器信号到主窗口（状态栏/运行界面/参数面板）
     void connectExecutorSignals(FlowExecutor *ex);
     void setupToolLibrary();
@@ -255,8 +260,10 @@ protected:
     /// 图像显示路由与画布交互（显示决策/叠加/ROI 取点；逻辑见 ImageDisplayController）
     ImageDisplayController *m_imageDisplay = nullptr;
     FlowExecutor *m_executor;
-    /// 多流程并发：每个流程场景独立执行器（m_executor 指向当前激活流程的执行器）
-    QHash<FlowScene *, FlowExecutor *> m_flowExecutors;
+    /// 多流程并发：每个流程场景独立执行器（m_executor 指向当前激活流程的执行器）。
+    /// 词条切片 C P3b 期：表里存的是**令牌**（执行器本体的唯一拥有者），裸指针一律经令牌
+    /// 借出（token->executor()）⇒ 本体的删除只有一处（令牌件）。
+    QHash<FlowScene *, std::shared_ptr<FlowExecutorToken>> m_flowExecutors;
     QComboBox *m_flowModeCombo;   // 流程模式下拉框
     QToolButton *m_singleShotBtn;
     QToolButton *m_stepBtn;   /// 单步执行按钮 // 单次执行按钮

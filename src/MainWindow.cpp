@@ -7,6 +7,7 @@
 #include "RecentFilesMenu.h"
 #include "ui_MainWindow.h"
 #include "FlowScene.h"
+#include "FlowExecutorToken.h"   // 词条切片 C P3b 期：执行器本体的唯一拥有者（令牌）
 #include "NodeBase.h"
 #include "NodeGroupItem.h"
 #include "FlowSnippet.h"
@@ -293,8 +294,10 @@ MainWindow::MainWindow(QWidget *parent) :
 
         // 初始化执行器
         VFP_DEBUG << "Creating FlowExecutor";
-        m_executor = new FlowExecutor(this);
-        m_flowExecutors.insert(nullptr, m_executor);  // 占位：首个流程创建时复用
+        // 词条切片 C P3b 期（销毁权归一）：新建即建令牌——令牌接管本体的所有权（并解除父子），
+        // 本体的删除只有令牌件这一处；界面侧此后只借出裸指针（token->executor()）。
+        m_flowExecutors.insert(nullptr, std::make_shared<FlowExecutorToken>(new FlowExecutor(this)));
+        m_executor = m_flowExecutors.value(nullptr)->executor();  // 占位：首个流程创建时复用
         // 应用失败中断策略（setupDockWidgets 早于此处调用，故在此真正生效）
         {
             QSettings settings;
@@ -646,17 +649,19 @@ MainWindow::~MainWindow()
     // 在场景删除之后才被 delete，且非激活执行器只等 1 秒就删；等待超时后
     // QThread 析构会 terminate() 强杀线程，而紧接的场景删除又会让仍在执行的
     // 线程访问已释放节点（use-after-free + 强杀线程叠加）。
-    // 安全回收**全部**流程执行器（含当前激活的 m_executor）：先快照再逐个 retireExecutor，
+    // 安全回收**全部**流程执行器（含当前激活的 m_executor）：先快照再逐个释放令牌，
     // 杜绝等待超时后 terminate() 硬杀线程（可能卡在 HALCON/SQLite/锁上，叠加场景析构=UAF）。
-    QList<FlowExecutor *> allExecutors;
+    // 词条切片 C P3b 期：执行器本体的所有权在令牌里 ⇒ 释放令牌即收尾（停止 ＋ 有界等待 ＋
+    // 回收；超时绝不 terminate，转 finished 自删），与原回收件同口径、同顺序。
+    QList<std::shared_ptr<FlowExecutorToken>> allTokens;
     for (auto it = m_flowExecutors.constBegin(); it != m_flowExecutors.constEnd(); ++it) {
         if (it.value())
-            allExecutors.append(it.value());
+            allTokens.append(it.value());
     }
     m_flowExecutors.clear();
     m_executor = nullptr;   // 已随列表摘除，置空避免悬垂
-    for (FlowExecutor *ex : qAsConst(allExecutors))
-        retireExecutor(ex);
+    for (auto &token : allTokens)
+        token.reset();      // 最后一个令牌释放 ⇒ 令牌执行收尾
     delete ui;
     qDeleteAll(m_flowScenes);
     m_flowScenes.clear();
@@ -668,39 +673,30 @@ FlowExecutor *MainWindow::executorForScene(FlowScene *scene)
 {
     auto it = m_flowExecutors.constFind(scene);
     if (it != m_flowExecutors.cend())
-        return it.value();
+        return it.value()->executor();
     // 首个流程复用初始执行器（其完整信号已在构造函数连接）
-    FlowExecutor *reuse = m_flowExecutors.value(nullptr);
-    if (reuse && reuse->flowScene() == nullptr) {
+    std::shared_ptr<FlowExecutorToken> reuse = m_flowExecutors.value(nullptr);
+    if (reuse && reuse->executor()->flowScene() == nullptr) {
         m_flowExecutors.remove(nullptr);
         m_flowExecutors.insert(scene, reuse);
-        return reuse;
+        return reuse->executor();
     }
-    FlowExecutor *ex = new FlowExecutor(this);
+    // 词条切片 C P3b 期：新建即建令牌（令牌接管本体的所有权，删除权归令牌）
+    std::shared_ptr<FlowExecutorToken> token =
+        std::make_shared<FlowExecutorToken>(new FlowExecutor(this));
+    FlowExecutor *ex = token->executor();
     connectExecutorSignals(ex);
-    m_flowExecutors.insert(scene, ex);
+    m_flowExecutors.insert(scene, token);
     return ex;
 }
 
-void MainWindow::retireExecutor(FlowExecutor *ex)
+void MainWindow::releaseExecutorToken(std::shared_ptr<FlowExecutorToken> &token)
 {
-    if (!ex)
+    if (!token)
         return;
-    // 先从注册表摘除：避免析构遍历二次处理，也清掉指向即将失效场景的悬垂键。
-    m_flowExecutors.remove(m_flowExecutors.key(ex));
-    // 置 Stopped + wakeAll，run() 在中断点（interruptibleSleep / 节点边界）自然退出。
-    // joinForDestroy 是"停止 + 有界等待退出"的唯一实现（析构走同一函数，两路口径不会分叉）。
-    if (ex->joinForDestroy(15000)) {
-        delete ex;
-        return;
-    }
-    // 超时仍未退出：绝不 delete（QThread 析构会 terminate() 硬杀，可能卡在 HALCON 上下文 /
-    // SQLite 线程连接 / 持有锁，比一个随进程退出被 OS 回收的线程更危险）。
-    // 解除父子 + 断所有信号（避免执行器回调 MainWindow 已失效槽），挂 finished→deleteLater 自删。
-    VFP_DEBUG << "retireExecutor: 执行器超时未退出，放弃强杀，转 finished 自删";
-    ex->disconnect();
-    ex->setParent(nullptr);
-    QObject::connect(ex, &QThread::finished, ex, &QObject::deleteLater);
+    // 收尾的唯一实现住在令牌件里（等待成功即回收本体；等待超时绝不强杀，转 finished 自删）——
+    // 界面侧只负责「把令牌放掉」，不再自己 delete 执行器 ⇒ 本体的删除只有一处，两路口径不分叉。
+    token.reset();
 }
 
 // 多流程并发：**唯一**的执行器信号连接点（N3 富反馈统一）。首执行器（构造函数）与
@@ -957,7 +953,8 @@ void MainWindow::cleanupCameras()
     //    MvsImageSourceNode::grabImage 的 MV_CC_GetOneFrameTimeout 中阻塞取流，
     //    随后第 3 步直接 DestroyHandle 会造成 use-after-free。
     QList<FlowExecutor *> executors;
-    for (FlowExecutor *ex : m_flowExecutors) {
+    for (const auto &token : m_flowExecutors) {
+        FlowExecutor *ex = token ? token->executor() : nullptr;
         if (ex && !executors.contains(ex))
             executors.append(ex);
     }
@@ -1780,7 +1777,8 @@ void MainWindow::onNewProject()
     // 超时则中止本次新建（N1）：保留旧方案场景与执行器，不删场景、不回收执行器，
     // 避免运行中的线程在场景被释放后访问（UAF）；旧流程被 stop 后会在算子返回自然退出。
     QList<FlowExecutor *> oldExecutors;
-    for (FlowExecutor *ex : qAsConst(m_flowExecutors)) {
+    for (const auto &token : m_flowExecutors) {
+        FlowExecutor *ex = token ? token->executor() : nullptr;
         if (ex && !oldExecutors.contains(ex))
             oldExecutors.append(ex);
     }
@@ -1789,7 +1787,7 @@ void MainWindow::onNewProject()
 
     for (FlowExecutor *ex : oldExecutors)
         ex->stopExecution();
-    // 统一等待真正退出：共享 15s 总预算（与 retireExecutor 阈值一致），避免 N 个执行器串行
+    // 统一等待真正退出：共享 15s 总预算（与令牌收尾的阈值一致），避免 N 个执行器串行
     // wait(15000) 致 UI 最坏冻结 15s×N。超时即中止。
     const qint64 deadlineMs = QDateTime::currentMSecsSinceEpoch() + 15000;
     QList<FlowExecutor *> stuckExecutors;
@@ -1807,22 +1805,23 @@ void MainWindow::onNewProject()
         return;
     }
 
-    FlowExecutor *spareExecutor = nullptr;
-    for (FlowExecutor *ex : oldExecutors) {
+    // 词条切片 C P3b 期：留一个占位令牌，其余令牌随表清空而释放 ⇒ 令牌析构执行收尾
+    // （停止 ＋ 有界等待 ＋ 回收；超时绝不 terminate）——与原回收件同口径、同顺序。
+    std::shared_ptr<FlowExecutorToken> spareToken;
+    for (const auto &token : m_flowExecutors) {
+        FlowExecutor *ex = token ? token->executor() : nullptr;
         if (!ex)
             continue;
         GlobalTriggerManager::instance()->unregisterExecutor(ex);
         ex->stopExecution();          // 停掉旧方案可能运行中的流程（新方案首个流程会复用 spare）
         ex->setFlowScene(nullptr);
-        if (!spareExecutor)
-            spareExecutor = ex;   // 保留一个占位，供新方案首个流程复用
-        else
-            retireExecutor(ex);   // 安全回收：stop+wait，超时绝不 terminate
+        if (!spareToken)
+            spareToken = token;   // 保留一个占位令牌，供新方案首个流程复用
     }
     m_flowExecutors.clear();
-    m_executor = spareExecutor;
-    if (spareExecutor)
-        m_flowExecutors.insert(nullptr, spareExecutor);
+    m_executor = spareToken ? spareToken->executor() : nullptr;
+    if (spareToken)
+        m_flowExecutors.insert(nullptr, spareToken);
 
     // 清掉旧场景在图像显示控制器里的显式显示源键，避免悬垂指针（removeScene 漏 loadProjectFile 调用点）
     for (FlowScene *scene : qAsConst(m_flowScenes))
@@ -2713,7 +2712,8 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
     // 场景与执行器，不删场景、不回收执行器。运行中的线程若此刻删场景 = UAF，比崩溃更该避免的是
     // 脏数据；这里直接中止切换，旧流程被 stop 后会在算子返回自然退出，方案保持原样可再用。
     QList<FlowExecutor *> oldExecutors;
-    for (FlowExecutor *ex : m_flowExecutors) {
+    for (const auto &token : m_flowExecutors) {
+        FlowExecutor *ex = token ? token->executor() : nullptr;
         if (ex && !oldExecutors.contains(ex))
             oldExecutors.append(ex);
     }
@@ -2722,7 +2722,7 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
 
     for (FlowExecutor *ex : oldExecutors)
         ex->stopExecution();
-    // 统一等待真正退出：共享 15s 总预算（与 retireExecutor 阈值一致），避免 N 个执行器串行
+    // 统一等待真正退出：共享 15s 总预算（与令牌收尾的阈值一致），避免 N 个执行器串行
     // wait(15000) 致 UI 最坏冻结 15s×N。超时即中止。
     const qint64 deadlineMs = QDateTime::currentMSecsSinceEpoch() + 15000;
     QList<FlowExecutor *> stuckExecutors;
@@ -2744,23 +2744,23 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
         return;
     }
 
-    FlowExecutor *spareExecutor = nullptr;
-    for (FlowExecutor *ex : oldExecutors) {
+    // 词条切片 C P3b 期：留一个占位令牌，其余令牌随表清空而释放 ⇒ 令牌析构执行收尾
+    // （停止 ＋ 有界等待 ＋ 回收；超时绝不 terminate）——与原回收件同口径、同顺序。
+    std::shared_ptr<FlowExecutorToken> spareToken;
+    for (const auto &token : m_flowExecutors) {
+        FlowExecutor *ex = token ? token->executor() : nullptr;
         if (!ex)
             continue;
         GlobalTriggerManager::instance()->unregisterExecutor(ex);
         ex->stopExecution();
         ex->setFlowScene(nullptr);
-        if (!spareExecutor) {
-            spareExecutor = ex;   // 保留一个作为占位执行器，供新方案首个流程复用
-        } else {
-            retireExecutor(ex);   // 安全回收：stop+wait，超时绝不 terminate
-        }
+        if (!spareToken)
+            spareToken = token;   // 保留一个占位令牌，供新方案首个流程复用
     }
     m_flowExecutors.clear();
-    m_executor = spareExecutor;
-    if (spareExecutor)
-        m_flowExecutors.insert(nullptr, spareExecutor);
+    m_executor = spareToken ? spareToken->executor() : nullptr;
+    if (spareToken)
+        m_flowExecutors.insert(nullptr, spareToken);
 
     // 清掉旧场景在图像显示控制器里的显式显示源键，避免悬垂指针（removeScene 漏 loadProjectFile 调用点）
     for (FlowScene *scene : qAsConst(m_flowScenes))
@@ -2972,19 +2972,22 @@ void MainWindow::onCloseFlowTab(int index)
     if (sceneEx) {
         sceneEx->setFlowScene(nullptr);
         GlobalTriggerManager::instance()->unregisterExecutor(sceneEx);
-        m_flowExecutors.remove(scene);
+        // 词条切片 C P3b 期：从表里**摘出**令牌（take 不销毁）⇒ 放掉它即触发收尾。
+        std::shared_ptr<FlowExecutorToken> sceneToken = m_flowExecutors.take(scene);
         if (m_flowScenes.isEmpty()) {
             // 最后一个流程：执行器放回占位，等待下次复用
-            m_flowExecutors.insert(nullptr, sceneEx);
+            if (sceneToken)
+                m_flowExecutors.insert(nullptr, sceneToken);
             m_executor = sceneEx;
-        } else if (sceneEx != m_executor) {
-            retireExecutor(sceneEx);
         } else {
-            // 关闭的是当前激活流程：回收其专属执行器（已摘场景），再切到邻近流程的执行器；
-            // 旧实现漏回收 → 每关一次激活页泄漏一个执行器（存量）。
-            retireExecutor(sceneEx);
-            m_executor = executorForScene(
-                m_flowScenes[qMin(index, m_flowScenes.size() - 1)]);
+            // 释放令牌 ⇒ 令牌析构执行收尾（停止 ＋ 有界等待 ＋ 回收；超时绝不 terminate）
+            releaseExecutorToken(sceneToken);
+            if (sceneEx == m_executor) {
+                // 关闭的是当前激活流程：回收其专属执行器（已摘场景），再切到邻近流程的执行器；
+                // 旧实现漏回收 → 每关一次激活页泄漏一个执行器（存量）。
+                m_executor = executorForScene(
+                    m_flowScenes[qMin(index, m_flowScenes.size() - 1)]);
+            }
         }
     }
 
@@ -3920,7 +3923,7 @@ void MainWindow::applyPermissionRestrictions()
     // 收在 SessionManager::canvasEditShouldBeLocked（与 716/720 的运行态接线同一枚决策件）。
     for (auto it = m_flowExecutors.constBegin(); it != m_flowExecutors.constEnd(); ++it) {
         if (FlowScene *scene = it.key()) {
-            FlowExecutor *sceneEx = it.value();
+            FlowExecutor *sceneEx = it.value() ? it.value()->executor() : nullptr;
             scene->setEditLocked(SessionManager::instance()->canvasEditShouldBeLocked(
                 sceneEx ? !sceneEx->allowsGraphEditing() : false));
         }

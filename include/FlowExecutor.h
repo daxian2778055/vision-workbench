@@ -64,12 +64,12 @@ public:
     /// 停止并**在 timeoutMs 内等待工作线程真正退出**（析构与调用方销毁共用的唯一实现）。
     /// 返回 true = 线程已退出，可以安全销毁本对象；
     /// 返回 false = 线程还在跑，此时销毁本对象会让 run() 访问已释放内存（UB），
-    /// 调用方必须改走"放弃销毁 / 挂 finished 自删"的泄漏保护路径（见 MainWindow::retireExecutor）。
+    /// 调用方必须改走"放弃销毁 / 挂 finished 自删"的泄漏保护路径（见 FlowExecutorToken 的收尾）。
     bool joinForDestroy(int timeoutMs);
     ExecutionState getState() const;
 
     /// 析构两段有界等待（178 行软化拍板）：一段 5s 与旧实现同值；二段 15s 与
-    /// retireExecutor 的前置等待同量级——网络超时类阻塞节点在二段窗口里走得完就
+    /// 令牌收尾的前置等待同量级——网络超时类阻塞节点在二段窗口里走得完就
     /// 走得完，不再让整套进程陪葬。终局中止本身保持（析构时序不可逆是边界不是裁量）。
     static constexpr int kDtorJoinStage1Ms = 5000;
     static constexpr int kDtorJoinStage2Ms = 15000;

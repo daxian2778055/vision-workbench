@@ -17,6 +17,7 @@ private slots:
     void testReleaseReclaimsExecutor();   // 最后一个令牌释放即回收本体
     void testSharedTokenCleansUpOnce();   // 多个持有者只收尾一次
     void testExecutorUsableWhileHeld();   // 持有期间本体可调用
+    void testReleaseIsSynchronous();      // 释放返回时本体已收干净（P3b 界面侧依赖的同步语义）
 };
 
 void FlowExecutorTokenTest::testTokenTakesOwnership()
@@ -72,6 +73,22 @@ void FlowExecutorTokenTest::testExecutorUsableWhileHeld()
         QCOMPARE(token.executor()->getState(), ExecutionState::Idle);
         QCOMPARE(token.executor()->getFlowMode(), FlowMode::SoftwareTrigger);
         QVERIFY(watch != nullptr);
+    }
+    QVERIFY(watch.isNull());
+}
+
+void FlowExecutorTokenTest::testReleaseIsSynchronous()
+{
+    // P3b（销毁权归一）：界面侧的释放点要求「调用方等它停干净」⇒ 释放令牌必须**同步**收尾，
+    // 不能把回收推迟到别处（否则界面侧先删本体就与令牌的收尾抢同一个对象）。
+    QPointer<FlowExecutor> watch;
+    {
+        FlowExecutor *ex = new FlowExecutor();
+        watch = ex;
+        auto token = std::make_shared<FlowExecutorToken>(ex);
+        token.reset();                       // 释放
+        // 释放返回时本体已收干净（不等事件循环、不等别的持有者）
+        QVERIFY(watch.isNull());
     }
     QVERIFY(watch.isNull());
 }
