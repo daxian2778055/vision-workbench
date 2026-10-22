@@ -188,6 +188,7 @@ set(SOURCES
     src/ColorConversionNode.cpp
     src/DataObject.cpp
     src/FlowScene.cpp
+    src/FlowSceneAliveBlock.cpp
     src/NodeTemplateStore.cpp
     src/FlowExecutor.cpp
     src/FlowCachePurgeLedger.cpp
@@ -445,6 +446,7 @@ set(HEADERS
     include/ColorConversionNode.h
     include/DataObject.h
     include/FlowScene.h
+    include/FlowSceneAliveBlock.h
     include/NodeTemplateStore.h
     include/FlowExecutor.h
     include/HalconWindow.h

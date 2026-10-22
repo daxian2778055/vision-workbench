@@ -20,6 +20,8 @@
 #include <halconcpp/HalconCpp.h>
 #include "FlowExecutionEnums.h"   // 执行状态与运行模式（切片 C 立项书 P2a 期：自此头拆出的轻头件）
 #include "FlowRunContext.h"       // 运行上下文块（切片 C 立项书 P2a 期新增件，P2b 期起承载状态与模式）
+#include "FlowSceneAliveBlock.h"   // 切片 C 段二：场景存活控制块（executor 借当值场景自代的块，shared_ptr 持有）
+#include "SubFlowDefs.h"   // FR15.10 运行期子流程定义（值类型；段二：collectSubFlowBodies 改吃定义副本）
 #include "FlowRuntimeStats.h"
 #include "FlowCachePurgeLedger.h"   // 缓存清理登记账（切片 A 抽出：账叶锁与登记列随账走）
 
@@ -240,7 +242,7 @@ private:
     QList<NodeBase *> collectLoopBody(NodeBase *loopNode) const;
     /// FR15.10 子流程：轮首收集"被引用子流程定义"的成员/边界（同循环体 P3 模式；
     /// worker 线程私有，仅执行线程访问。须在 m_loopBodyNodes 填充之后调用）
-    void collectSubFlowBodies(FlowScene *scene, const QList<NodeBase *> &liveNodes);
+    void collectSubFlowBodies(const QList<SubFlowDef> &defs, const QList<NodeBase *> &liveNodes);
     void resetState();
     /// 记录一个节点被跳过（未激活分支 / 循环体由外层调度），并对外发 nodeSkipped
     void recordNodeSkipped(NodeBase *node, const QString &reason);
@@ -262,6 +264,11 @@ private:
 
 private:
     FlowScene *m_scene;
+    /// 切片 C 段二（立项书 §13.1）：场景存活控制块——随 setFlowScene 取**当值场景自代**的块
+    /// （每场景一块；块随执行器的 shared_ptr 拷贝活着 ⇒ 场景先亡后墓碑与运行态仍可读，
+    /// 执行线程在飞快照的借面在块读锁内，析构的 markGone 写锁被其互斥）。
+    /// GUI 线程快路径（flowScene() 访问器与断接面）仍走 m_scene——其生死由既有解除绑定合同管。
+    std::shared_ptr<FlowSceneAliveBlock> m_aliveBlock;
     /// 运行上下文块（切片 C 立项书 P2b 期：运行态与运行模式已改走此块）。
     /// 块是**非对象**的共享件（不持任何裸指针、其互斥量为叶子）；算子读面在 P2c 期改持它。
     std::shared_ptr<FlowRunContext> m_runContext;

@@ -22,6 +22,7 @@
 #include "FlowExecutor.h"
 #include "FlowExecutorToken.h"
 #include "FlowScene.h"
+#include "FlowSceneAliveBlock.h"   // 切片 C 段二：块腿完整类型（显式引，不靠 FlowScene.h 传递）
 #include "GlobalTriggerManager.h"
 #include "NodeBase.h"
 
@@ -36,6 +37,8 @@ private slots:
     void testTriggerBindingUnregisteredOnDestruction();  // ④ 触发面按执行器身份配对注销
     void testTriggerRoutingRunsOnAppThread();  // ⑤ 触发路由与执行器析构同线程（线程前提）
     void testExecutorSleepStopsWithExecutor();  // ⑥ 执行器停后其可取消等待立即返回未完成（P2b 接线）
+    void testAliveBlockGoneMarkedOnSceneDestruction();  // ⑦ 段二：场景亡⇒其块落墓碑（售票判走；红臂靶）
+    void testAliveBlockPerSceneBindingServe();  // ⑧ 段二：每场景自代各自的块（在世服务面，死亡面由⑦照管）
 };
 
 void FlowExecutorOwnershipTest::testCurrentSingletonLifecycle()
@@ -150,6 +153,61 @@ void FlowExecutorOwnershipTest::testExecutorSleepStopsWithExecutor()
     executor.stopExecution();
     QCOMPARE(executor.getState(), ExecutionState::Stopped);
     QVERIFY(!executor.interruptibleSleep(50));
+}
+
+void FlowExecutorOwnershipTest::testAliveBlockGoneMarkedOnSceneDestruction()
+{
+    // 段二（立项书 §13.1）：场景亡 ⇒ 析构体首在自己块上落墓碑（markGone）⇒ 之后售票判走
+    // （不再可借）。座纪律照旧：不启动工作线程、不把执行器带进悬垂面——腿只借块本身说话。
+    FlowScene *scene = new FlowScene;
+    std::shared_ptr<FlowSceneAliveBlock> block = scene->aliveBlockShared();
+    QVERIFY(block != nullptr);
+    block->bind(scene);   // 执行器 setFlowScene 的同款绑定
+    QCOMPARE(block->generation(), quint64(1));
+    {
+        FlowSceneAliveBlock::CaptureTicket inLife = block->acquireForCapture();
+        QVERIFY(inLife.alive());
+        QCOMPARE(inLife.scene(), scene);
+    }   // 在世窗口服务正常
+    delete scene;   // 无在飞快照（M-2 安静）；析构体首动作＝落墓碑
+    {
+        FlowSceneAliveBlock::CaptureTicket afterDeath = block->acquireForCapture();
+        QVERIFY2(!afterDeath.alive(),
+                 "scene death must tombstone its alive block (markGone first action missing?)");
+        QCOMPARE(afterDeath.scene(), static_cast<FlowScene *>(nullptr));
+    }   // 票先还锁、块才收核（座位纪律：块不得带着未归还的借锁收核——QMutex 悬锁即挂死）
+    block.reset();   // 最后一个引用放 ⇒ 块真析构（此时其互斥不在任何活票手上）
+}
+
+void FlowExecutorOwnershipTest::testAliveBlockPerSceneBindingServe()
+{
+    // 段二生产形：每场景自建自己的块（执行器 setFlowScene 取当值场景自代的块）。
+    // 两场景两块、绑定后各自在世售票：alive 且 scene() 各指当值场景；换绑计数逐块独立。
+    // 死亡面的断言不在本腿（由腿⑦照管）——本腿保持死亡断言零依赖 ⇒ 红臂只打⑦。
+    FlowScene *s1 = new FlowScene;
+    FlowScene *s2 = new FlowScene;
+    std::shared_ptr<FlowSceneAliveBlock> b1 = s1->aliveBlockShared();
+    std::shared_ptr<FlowSceneAliveBlock> b2 = s2->aliveBlockShared();
+    QVERIFY(b1 != nullptr);
+    QVERIFY(b2 != nullptr);
+    QVERIFY2(b1 != b2, "each scene must own its own alive block");
+    b1->bind(s1);   // 执行器 setFlowScene(s1) 的同款动作
+    b2->bind(s2);   // 执行器 setFlowScene(s2) 的同款动作
+    {
+        FlowSceneAliveBlock::CaptureTicket t1 = b1->acquireForCapture();
+        FlowSceneAliveBlock::CaptureTicket t2 = b2->acquireForCapture();
+        QVERIFY(t1.alive());
+        QCOMPARE(t1.scene(), s1);
+        QVERIFY(t2.alive());
+        QCOMPARE(t2.scene(), s2);
+    }   // 票先还锁：generation() 须取同一把块锁，票在手上时再取＝同线程死等（座内已踩一课）
+    QCOMPARE(b1->generation(), quint64(1));
+    QCOMPARE(b2->generation(), quint64(1));
+    // 清座：块随 shared_ptr 落底（块本身不拒收场景退出）；两场景各自析构落各自的墓碑（无断言依赖）。
+    b1.reset();
+    b2.reset();
+    delete s1;
+    delete s2;
 }
 
 QTEST_MAIN(FlowExecutorOwnershipTest)

@@ -147,6 +147,31 @@ std::shared_ptr<FlowRunContext> FlowExecutor::currentContext()
     return s_currentContext;
 }
 
+// ---- 切片 C 段二：执行线程借场景一律经存活控制块（在场借面唯一入口） ----
+// 三面合同：① 售票即判走（场景亡/未绑 ⇒ 不借场景指针，票内已置空）；
+// ② 票的块读锁跨快照全程 ⇒ 场景析构的 markGone 写锁被挡（析构等在飞快照完成，不并发）；
+// ③ 未借到一律返回空句柄，调用方各自走显式退化路径（run 报错＋停轮；UI 路径静默返回）。
+static FlowScene::GraphSnapshotGuard captureViaAliveBlock(
+    const std::shared_ptr<FlowSceneAliveBlock> &block,
+    QList<SubFlowDef> *outSubFlowDefs = nullptr)
+{
+    std::shared_ptr<FlowSceneAliveBlock> owned = block;   // 增可在任何时机（纯原子加）：
+    // 借出的 shared_ptr 拷贝先到手、才碰块——GUI 线程换绑场景时成员可被整体替换，旧块随
+    // 最后一个引用收核；票在手上时块必须活着（票持锁 ⇒ 块锁不得悬，否则收核即悬锁）。
+    if (!owned) {
+        return FlowScene::GraphSnapshotGuard();
+    }
+    FlowSceneAliveBlock::CaptureTicket ticket = owned->acquireForCapture();
+    FlowScene *scene = ticket.scene();
+    if (scene == nullptr) {
+        return FlowScene::GraphSnapshotGuard();
+    }
+    // 二读同窗：子流程定义副本与拓扑快照的两笔场景读都放进票的块读锁窗（场所在窗内必活）。
+    if (outSubFlowDefs)
+        *outSubFlowDefs = scene->subFlows();
+    return scene->captureGraphSnapshot();
+}
+
 void FlowExecutor::disconnectFromScene()
 {
     FlowScene *s = nullptr;
@@ -288,6 +313,11 @@ void FlowExecutor::setFlowScene(FlowScene *scene)
         QMutexLocker locker(&m_mutex);
         m_scene = scene;
     }
+    // 段二：随场景换绑——取**当值场景自代**的存活块，并把当值场景写进块内（bind：弱侧指针、
+    // 清墓碑、换绑计数＋1——块内 m_scene 由 bind 落笔；解绑（nullptr）＝清块持有，回到未借态）。
+    m_aliveBlock = scene ? scene->aliveBlockShared() : std::shared_ptr<FlowSceneAliveBlock>();
+    if (m_aliveBlock)
+        m_aliveBlock->bind(scene);
     {
         QMutexLocker locker(&m_graphCacheMutex);
         m_graphStructureDirty = true;
@@ -558,21 +588,18 @@ void FlowExecutor::run()
         QElapsedTimer roundTimer;
         roundTimer.start();
 
-        FlowScene *scene = nullptr;
-        {
-            QMutexLocker sceneLocker(&m_mutex);
-            scene = m_scene;
-        }
-        if (!scene) {
+        // S1：本轮捕获一次拓扑快照（RAII 句柄，随迭代结束 / break / continue 自动释放）。
+        // 持快照期间删除节点/连边只做墓碑延迟析构，整轮可安全使用这批裸指针；轮内不再访问场景容器。
+        // 段二：借面改走存活控制块——alive 判走与块读锁跨快照均在票内；场景先亡不再
+        // 解引用（与"未设场景"同一显式退化路径：报错＋停轮）。
+        m_diagPhase.store(1, std::memory_order_relaxed);   // 诊断：轮首/取快照前
+        QList<SubFlowDef> subFlowDefs;   // 段二：定义副本在票窗内一并带出（第二轮同窗读）
+        FlowScene::GraphSnapshotGuard graphSnapshot = captureViaAliveBlock(m_aliveBlock, &subFlowDefs);
+        if (!graphSnapshot.isHeld()) {
             emit executionError(tr("Flow scene is not set"));
             emit executionStopped();   // 终态信号：错误路径不发终态会让界面按钮停在"运行中"
             break;
         }
-
-        // S1：本轮捕获一次拓扑快照（RAII 句柄，随迭代结束 / break / continue 自动释放）。
-        // 持快照期间删除节点/连边只做墓碑延迟析构，整轮可安全使用这批裸指针；轮内不再访问场景容器。
-        m_diagPhase.store(1, std::memory_order_relaxed);   // 诊断：轮首/取快照前
-        FlowScene::GraphSnapshotGuard graphSnapshot = scene->captureGraphSnapshot();
         m_diagPhase.store(2, std::memory_order_relaxed);   // 诊断：已取快照
         const QList<NodeBase *> nodes = graphSnapshot.snapshot().nodes;
         if (nodes.isEmpty()) {
@@ -622,7 +649,7 @@ void FlowExecutor::run()
 
         // FR15.10 子流程：轮首收集被引用定义的成员/边界（同循环体 P3 模式，worker 线程私有）。
         // 必须在 m_loopBodyNodes 填充之后：与循环体交叉的成员让位给循环体（v1 限制）。
-        collectSubFlowBodies(scene, nodes);
+        collectSubFlowBodies(subFlowDefs, nodes);
 
         for (int i = 0; i < sortedNodes.size(); i++) {
             NodeBase *node = sortedNodes[i];
@@ -1519,14 +1546,14 @@ QList<NodeBase *> FlowExecutor::collectLoopBody(NodeBase *loopNode) const
 
 // ---- FR15.10 运行期子流程 ----
 
-void FlowExecutor::collectSubFlowBodies(FlowScene *scene, const QList<NodeBase *> &liveNodes)
+void FlowExecutor::collectSubFlowBodies(const QList<SubFlowDef> &defs, const QList<NodeBase *> &liveNodes)
 {
     // worker 线程私有（与 m_loopBodyNodes 同语义）：每轮重收，不做跨轮缓存——
     // 子流程定义可在两次运行之间被增删/改名（不触发图结构脏标记），按轮重收天然一致。
     m_subFlowBodyNodes.clear();
     m_subFlowMembers.clear();
     m_subFlowIOs.clear();
-    if (!scene || liveNodes.isEmpty())
+    if (liveNodes.isEmpty())
         return;
 
     // 只登记"本轮确实被调用点引用"的定义：调用点写了不存在的名字 → 执行时显式报"未定义"
@@ -1542,7 +1569,14 @@ void FlowExecutor::collectSubFlowBodies(FlowScene *scene, const QList<NodeBase *
     if (referenced.isEmpty())
         return;
 
-    const QList<SubFlowDef> defs = scene->subFlows();   // 场景图锁短临界区取副本
+    // 段二：定义副本由票口 helper 在同窗第二读带出（此处只吃副本）；成员/出入口解析改从快照
+    // 节点本地查（快照列受墓碑机保护 ⇒ 本函数不再解引用场景，nodeByModuleId 的场景依赖归零；
+    // 查不到一律 nullptr，与旧 registry 语义等价——调用侧本就按空处理）。
+    QMap<int, NodeBase *> nodesById;
+    for (NodeBase *n : liveNodes) {
+        if (n)
+            nodesById.insert(n->moduleId(), n);
+    }
     for (const SubFlowDef &def : defs) {
         if (!referenced.contains(def.name))
             continue;
@@ -1552,7 +1586,7 @@ void FlowExecutor::collectSubFlowBodies(FlowScene *scene, const QList<NodeBase *
         NodeBase *outputNode = nullptr;
         bool broken = false;
         for (int id : def.members) {
-            if (NodeBase *m = scene->nodeByModuleId(id))
+            if (NodeBase *m = nodesById.value(id, nullptr))
                 members.append(m);
             else {
                 broken = true;   // 成员已被删除：登记为"损坏"，执行时可见报错（不静默跑旧逻辑）
@@ -1560,9 +1594,9 @@ void FlowExecutor::collectSubFlowBodies(FlowScene *scene, const QList<NodeBase *
             }
         }
         if (!broken)
-            inputNode = def.input >= 0 ? scene->nodeByModuleId(def.input) : nullptr;
+            inputNode = def.input >= 0 ? nodesById.value(def.input, nullptr) : nullptr;
         if (!broken)
-            outputNode = def.output >= 0 ? scene->nodeByModuleId(def.output) : nullptr;
+            outputNode = def.output >= 0 ? nodesById.value(def.output, nullptr) : nullptr;
 
         if (broken || !inputNode || !outputNode) {
             m_subFlowMembers.insert(def.name, {});
@@ -1824,15 +1858,18 @@ bool FlowExecutor::interruptibleSleep(int ms)
 
 void FlowExecutor::executeUpTo(NodeBase *endNode)
 {
-    if (!endNode || !m_scene)
+    if (!endNode)
         return;
     // 暂停中不可再起同步执行：否则与仍在挂起的工作线程并发跑同一批节点（双跑写设备算子）。
     const ExecutionState st = getState();
     if (st == ExecutionState::Running || st == ExecutionState::Paused)
         return;
 
-    // S1：同步执行同样走快照（UI 线程单发；持快照期间删除走墓碑，函数返回即释放）
-    FlowScene::GraphSnapshotGuard graphSnapshot = m_scene->captureGraphSnapshot();
+    // S1：同步执行同样走快照（UI 线程单发；持快照期间删除走墓碑，函数返回即释放）。
+    // 段二：借面改走存活控制块（同族同面）；未借到（亡/未绑）＝与「无起点」同形：静默返回。
+    FlowScene::GraphSnapshotGuard graphSnapshot = captureViaAliveBlock(m_aliveBlock);
+    if (!graphSnapshot.isHeld())
+        return;
     const QList<NodeBase *> nodes = graphSnapshot.snapshot().nodes;
     QList<NodeBase *> sorted;
     {
@@ -1871,15 +1908,18 @@ void FlowExecutor::executeUpTo(NodeBase *endNode)
 
 void FlowExecutor::executeFrom(NodeBase *startNode)
 {
-    if (!startNode || !m_scene)
+    if (!startNode)
         return;
     // 暂停中不可再起同步执行：否则与仍在挂起的工作线程并发跑同一批节点（双跑写设备算子）。
     const ExecutionState st = getState();
     if (st == ExecutionState::Running || st == ExecutionState::Paused)
         return;
 
-    // S1：同步执行同样走快照（UI 线程单发；持快照期间删除走墓碑，函数返回即释放）
-    FlowScene::GraphSnapshotGuard graphSnapshot = m_scene->captureGraphSnapshot();
+    // S1：同步执行同样走快照（UI 线程单发；持快照期间删除走墓碑，函数返回即释放）。
+    // 段二：借面改走存活控制块（同族同面）；未借到（亡/未绑）＝与「无起点」同形：静默返回。
+    FlowScene::GraphSnapshotGuard graphSnapshot = captureViaAliveBlock(m_aliveBlock);
+    if (!graphSnapshot.isHeld())
+        return;
     const QList<NodeBase *> nodes = graphSnapshot.snapshot().nodes;
     QList<NodeBase *> sorted;
     {
@@ -1954,13 +1994,10 @@ void FlowExecutor::invalidateDownstreamOf(NodeBase *startNode)
         // 图结构有变更（撤销/删除节点等）时 m_outgoing 可能仍指向已释放的连接/节点，
         // 直接遍历会踩悬垂指针——先按当前场景重建索引（含缓存剪枝），再遍历。
         if (m_graphStructureDirty) {
-            FlowScene *scene = nullptr;
-            {
-                QMutexLocker sceneLock(&m_mutex);
-                scene = m_scene;
-            }
-            if (scene) {
-                graphSnapshot = scene->captureGraphSnapshot();
+            // 段二：借面改走存活控制块（同族同面）；未借到走 else 分支＝旧"无场景"行为原样保留
+            //（清缓存并标清洁；场景亡后不再重建、留给下次在世重建）。
+            graphSnapshot = captureViaAliveBlock(m_aliveBlock);
+            if (graphSnapshot.isHeld()) {
                 const QList<NodeBase *> &snapNodes = graphSnapshot.snapshot().nodes;
                 rebuildIncomingIndex(snapNodes, graphSnapshot.snapshot().connections);
                 QList<NodeBase *> sorted;

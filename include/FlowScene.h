@@ -13,6 +13,7 @@
 #include "NodeBase.h"
 #include "NodeStateBody.h"   // 切片 C P2 期段一：快照列持身份体 shared_ptr（完整类型）
 #include "ThreadSafeParams.h"   // 快照列持参数内核 shared_ptr（完整类型）
+#include "FlowSceneAliveBlock.h"   // 切片 C 段二：每场景自建存活块（体首 markGone；executor 借 shared_ptr）
 #include "FlowFixture.h"   // 命名夹具值类型（切片 B 夹具族首抽自此头拆出）
 #include "SubFlowDefs.h"   // FR15.10 运行期子流程定义（值类型，随方案与撤销快照持久化）
 
@@ -128,6 +129,9 @@ public:
     };
     /// 捕获一次拓扑快照（持锁拷贝成员集）并登记一个存活句柄；未释放前删除一律走墓碑
     GraphSnapshotGuard captureGraphSnapshot();
+    /// 段二：本场景自代的存活块（执行器 setFlowScene 时取 shared_ptr 持有；块随场景构造出生）。
+    /// 场景亡 ⇒ 块还在执行器手里（墓碑与换绑计数可读），执行线程的借面由票判走。
+    std::shared_ptr<FlowSceneAliveBlock> aliveBlockShared() const { return m_aliveBlock; }
 
     NodeGraphicsItem *getGraphicsItemForNode(NodeBase *node) const;
     ConnectionGraphicsItem *getGraphicsItemForConnection(MyProject::Connection *connection) const;
@@ -288,6 +292,8 @@ private:
     // ---- S1 执行期隔离：成员集读写锁 + 墓碑延迟析构 ----
     /// 保护 m_nodeItems / m_connectionItems / 墓碑队列（递归锁：removeNode→removeConnection 会嵌套）
     mutable QRecursiveMutex m_graphMutex;
+    /// 段二：本场景自代的存活控制块（构造即建；~FlowScene 体首在此块落墓碑）
+    std::shared_ptr<FlowSceneAliveBlock> m_aliveBlock;
     int m_liveSnapshotCount = 0;                    ///> 存活快照句柄数（>0 时删除只摘除不析构）
     static bool s_danglingSnapshotAssertEnabled;    ///> M-2：析构断言开关（默认 true）
     QList<NodeBase *> m_retiredNodes;               ///> 墓碑：待析构节点（存活句柄归零后 flush）

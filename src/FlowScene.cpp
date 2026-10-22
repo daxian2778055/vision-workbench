@@ -68,6 +68,7 @@ bool reachesNodeByOutgoingEdges(NodeBase *from, NodeBase *to)
 FlowScene::FlowScene(QObject *parent)
     : QGraphicsScene(parent)
 {
+    m_aliveBlock = std::make_shared<FlowSceneAliveBlock>();   // 段二：每场景一块（析构体首 markGone；executor 借 shared_ptr）
     setSceneRect(0, 0, 10000, 10000);
     m_dragHelper = new ConnectionDragHelper(this);
     addItem(m_dragHelper);
@@ -124,6 +125,11 @@ bool FlowScene::s_danglingSnapshotAssertEnabled = true;   // M-2：默认开启�
 
 FlowScene::~FlowScene()
 {
+    // 段二：析构**体首动作**——在本场景自己的存活块上落墓碑（块写锁）。
+    // 在飞捕获持块读锁 ⇒ 写锁被挡住：场景销毁等在飞快照完成才推进（取快照与销毁不并发）。
+    // 身份认领只对本场景到的块（别的场景块不沾；换绑后的块随其当值场景表态）。
+    if (m_aliveBlock)
+        m_aliveBlock->markGone(this);
     // N-2：仍有存活快照时销毁场景 = 调用方顺序错误（必须先停执行器 / setFlowScene(nullptr)）。
     // 此时节点会随 QObject 父子机制一并析构，而执行线程仍持其指针 → 这里把"静默约定"变成可见错误：
     // 告警 + 断言（Debug 构建暴露，Release 只留告警）。句柄侧已用弱引用兜住"场景先亡"的 UAF。
