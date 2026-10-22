@@ -99,7 +99,7 @@ Tesseract:      thirdparty/tesseract/
 CMakeLists.txt              # CMake 配置
 README.md                   # 项目说明
 .gitignore                  # Git 忽略文件
-需求.txt                    # 需求文档
+docs/归档/需求.txt          # 需求文档（已损坏的原件，2026-10-22 归档）
 ```
 
 ### 规则文件

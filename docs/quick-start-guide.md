@@ -85,7 +85,7 @@ VisionFlowPlatform/
 │   ├── rules/                 # 开发规则
 │   └── mcp.json               # MCP 配置
 ├── CMakeLists.txt              # CMake 配置
-└── 需求.txt                    # 需求文档
+├── docs/归档/需求.txt          # 需求文档（已损坏的原件，2026-10-22 归档）
 ```
 
 ---
