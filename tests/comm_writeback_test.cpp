@@ -190,7 +190,8 @@ void CommWritebackTest::testPipelineWritebackWithSuffix()
 
     // 流程：单个「发送数据」算子，绑定模拟 PLC；无上游输入时用 sendText 参数回写
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("CommWriteback"));
     exec.setFlowMode(FlowMode::SoftwareTrigger);
 
@@ -225,7 +226,8 @@ void CommWritebackTest::testWritebackFailureIsReported()
     // 设备名不存在：以前 doSend 静默返回、process() 恒为 true，
     // 现场表现是「流程全过、PLC 什么都没收到、日志无痕迹」——这条断言把它钉住。
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("CommWritebackFail"));
     exec.setFlowMode(FlowMode::SoftwareTrigger);
 
@@ -347,7 +349,8 @@ void CommWritebackTest::testModbusRegisterWritebackAndRawSendGuard()
     // 用户可见后果：把「发送数据」算子绑到 Modbus 设备时，流程必须报失败（而不是显示成功）
     {
         FlowScene scene;
-        FlowExecutor exec;
+        auto execToken = FlowExecutorToken::create(new FlowExecutor());
+        FlowExecutor &exec = *execToken->executor();
         exec.setFlowName(QStringLiteral("CommWritebackModbus"));
         exec.setFlowMode(FlowMode::SoftwareTrigger);
         NodeBase *send = scene.createNode(NodeBase::OUTPUT, QPointF(120, 120),

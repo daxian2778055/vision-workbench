@@ -83,28 +83,8 @@ protected:
     }
 };
 
-/// （178 行 legs）二段窗口腿座：自起点跑满 releaseAfterMs 后自然退出。
-/// 析构一段 5s 必然失败（此刻线程还剩约 1s），二段 15s 在 6.5s 处等到——
-/// 本腿专摸析构的"二段达成交替按常态继续销毁"分支；旧实现只有一段，
-/// 走进本腿的进程会直接凭 qFatal 死亡（红臂破坏位缩小二段窗口正取此形）。
-class StuckUntilExecutor : public FlowExecutor
-{
-public:
-    explicit StuckUntilExecutor(int releaseAfterMs) : m_releaseAfterMs(releaseAfterMs) {}
-
-protected:
-    void run() override
-    {
-        QElapsedTimer t;
-        t.start();
-        while (t.elapsed() < m_releaseAfterMs) {
-            QThread::msleep(10);
-        }
-    }
-
-private:
-    int m_releaseAfterMs;
-};
+/// （178 行的二段窗口腿座已随 U-203 撤除）：该腿座专摸析构的「二段升格」分支，
+/// 而析构里的两段有界等待与硬中止已整段撤除（删除权收进令牌），故题眼不复存在。
 
 class IntegrationTest : public QObject
 {
@@ -134,7 +114,6 @@ private slots:
     void testContinuousSecondRoundClearsStaleData();
     void testDestroyWhileRunningIsSafe();
     void testJoinForDestroyTimeoutRefusesDestroy();   // A1-④：超时分支不得批准销毁
-    void testDtorStuckStageTimeoutsPinned();          // 178 行：两段有界等待常量钉值
     void testOrderlyStopHookMachinery();              // 178 行：收尾钩子机械（默认空透传卸载）
     void testTwoExecutorsIsolation();
     void testScriptNodeStopCancellable();
@@ -212,24 +191,27 @@ private slots:
     void testJudgeRedRoundBroadcastsReasonField();       // 闸 A：原因必须随快照推出
     void testReasonNotReplayedOnLaterRedRound();         // 闸 B：上一轮的原因不得陈旧复读
 
-    // （178 行）二段窗口腿放套件最尾：红臂把二段窗口改短时本腿属"进程死亡"形态，
-    // 死亡点之后的腿再不运行——尾位使殃及面不扩大到既有腿。
-    void testStuckStage2OrderlyRecovery();
+    // （178 行的二段窗口腿已随 U-203 撤除）：析构里的两段有界等待与硬中止整段撤除后，
+    // 「缩小二段窗口即进程死亡」那枚红臂形态不复存在，尾位留白。
 
 private:
     FlowScene *m_scene = nullptr;
     FlowExecutor *m_executor = nullptr;
+    /// U-203：执行器的删除权只经令牌（析构私有）⇒ 夹具持令牌而不是直接 delete 本体。
+    std::shared_ptr<FlowExecutorToken> m_executorToken;
 };
 
 void IntegrationTest::initTestCase()
 {
     m_scene = new FlowScene(this);
-    m_executor = new FlowExecutor(this);
+    m_executorToken = FlowExecutorToken::create(new FlowExecutor());
+    m_executor = m_executorToken->executor();
 }
 
 void IntegrationTest::cleanupTestCase()
 {
-    delete m_executor;
+    m_executorToken.reset();   // 令牌收尾 → 回收本体（须早于场景销毁）
+    m_executor = nullptr;
     delete m_scene;
 }
 
@@ -338,7 +320,8 @@ void IntegrationTest::testLoopIterationOrder()
     // 循环体应完整执行 loopCount 次，且迭代号为 1,2,3（而非旧实现的 2,3,3）
     // 使用本测试私有的场景与执行器，避免与其它用例共享状态
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("RegressionLoopIteration"));
 
     NodeBase *loop = scene.createNode(NodeBase::LOGIC, QPointF(100, 200), QStringLiteral("Loop"));
@@ -388,7 +371,8 @@ void IntegrationTest::testDelayStopCancellable()
 {
     // 运行中停止流程：延时等待应被立即取消，而不是等满 delayMs
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("RegressionDelayStop"));
 
     NodeBase *delay = scene.createNode(NodeBase::LOGIC, QPointF(200, 200), QStringLiteral("Delay"));
@@ -449,7 +433,8 @@ void IntegrationTest::testGraphSnapshotDefersDeletionDuringRound()
     // (2) 轮内删除正在执行的节点
     {
         FlowScene scene;
-        FlowExecutor exec;
+        auto execToken = FlowExecutorToken::create(new FlowExecutor());
+        FlowExecutor &exec = *execToken->executor();
         exec.setFlowName(QStringLiteral("RegressionGraphSnapshot"));
         exec.setFlowMode(FlowMode::SoftwareTrigger);
 
@@ -501,7 +486,8 @@ void IntegrationTest::testNodeChurnDuringContinuousRun()
     // 该自死锁已随本批修复（见 commit）⇒ 本用例**恢复默认运行**，作为该缺陷的回归钉子。
 
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("RegressionNodeChurn"));
     exec.setFlowMode(FlowMode::Continuous);   // 连续模式：轮次密集，删改窗口/轮比最高
     exec.setLoopIntervalMs(0);
@@ -572,7 +558,8 @@ void IntegrationTest::testDelayPauseResumeKeepsRemaining()
 {
     // 暂停不应消耗延时预算；恢复后延时应继续剩余时间而不是提前结束
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("RegressionDelayPause"));
 
     NodeBase *delay = scene.createNode(NodeBase::LOGIC, QPointF(200, 200), QStringLiteral("Delay"));
@@ -609,7 +596,8 @@ void IntegrationTest::testContinuousSecondRoundClearsStaleData()
 {
     // 连续两轮：第二轮上游不再产生输出，下游不得读到第一轮残留数据（P2）
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("RegressionStaleRound"));
     // W-2 之后"上游本轮无产出"是**真失败**（此前公式节点空产出仍判成功）⇒ 默认 stopOnFailure
     // 会在第一轮后就中断流程，本条要看第二轮就再也走不到。清空检查与"失败是否中断"无关，故关掉。
@@ -675,14 +663,16 @@ void IntegrationTest::testContinuousSecondRoundClearsStaleData()
 
 void IntegrationTest::testDestroyWhileRunningIsSafe()
 {
-    // 运行中销毁执行器：析构应唤醒阻塞节点并等线程真正退出，不得挂起（P1 #4）
+    // 运行中销毁执行器：应唤醒阻塞节点并等线程真正退出，不得挂起（P1 #4）
     FlowScene *scene = new FlowScene();
-    FlowExecutor *exec = new FlowExecutor();
+    // U-203：删除权只经令牌 ⇒ 运行中销毁改走「释放令牌」（收尾＝停止 ＋ 有界等待 ＋ 回收本体）。
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor *exec = execToken->executor();
     exec->setFlowName(QStringLiteral("RegressionDestroy"));
 
     NodeBase *delay = scene->createNode(NodeBase::LOGIC, QPointF(200, 200), QStringLiteral("Delay"));
     if (delay == nullptr) {
-        delete exec;
+        execToken.reset();
         delete scene;
         QFAIL("无法创建延时节点");
     }
@@ -695,7 +685,7 @@ void IntegrationTest::testDestroyWhileRunningIsSafe()
 
     QElapsedTimer t;
     t.start();
-    delete exec;                 // 销毁：内部 stopExecution + wait
+    execToken.reset();            // 释放令牌：收尾（停止 ＋ 有界等待）＋ 回收本体
     const qint64 elapsed = t.elapsed();
     delete scene;
     QCoreApplication::processEvents();
@@ -731,17 +721,9 @@ void IntegrationTest::testJoinForDestroyTimeoutRefusesDestroy()
     delete exec;                   // 此时析构内的兜底 wait 不会触发
 }
 
-// （178 行）两段有界等待常量钉值：一段同旧实现 5000；二段与 retireExecutor 的 15s 同量级。
-// 红臂破坏位 = 二段改短（100ms）——钉腿当场断言红，二段窗口腿当场死为进程（如实两枚判据）。
-void IntegrationTest::testDtorStuckStageTimeoutsPinned()
-{
-    QCOMPARE(FlowExecutor::kDtorJoinStage1Ms, 5000);
-    QCOMPARE(FlowExecutor::kDtorJoinStage2Ms, 15000);
-}
-
 // （178 行）收尾钩子机械腿：默认空钩不炸；安装后 payload 原样透传；卸载后回到无钩状态。
-// 析构终局里的钩子调用点在本进程不可达（qFatal 前一格，按下即不得返回），机械可用性
-// 在可达面单独钉——调用点与 qFatal 的先后次序由析构 census 段点名。
+// U-203：钩子的调用点从「析构终局（qFatal 前一格）」迁到**令牌的放弃路径**——
+// 软失败那一侧才是真正需要「送别一格」的地方（把方案/日志收好），而硬中止已撤除。
 void IntegrationTest::testOrderlyStopHookMachinery()
 {
     FlowExecutor::invokeOrderlyStopHook(QStringLiteral("默认空钩不炸"));
@@ -763,8 +745,10 @@ void IntegrationTest::testTwoExecutorsIsolation()
     // 多流程隔离：停止流程 A 不应影响流程 B 的阻塞等待（E3）
     FlowScene sceneA;
     FlowScene sceneB;
-    FlowExecutor execA;
-    FlowExecutor execB;
+    auto execAToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &execA = *execAToken->executor();
+    auto execBToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &execB = *execBToken->executor();
     execA.setFlowName(QStringLiteral("RegressionIsolationA"));
     execB.setFlowName(QStringLiteral("RegressionIsolationB"));
 
@@ -818,7 +802,8 @@ void IntegrationTest::testScriptNodeStopCancellable()
     policy.setBlockWhenElevated(false);
     policy.setSandboxEnabled(true);   // 强制走受限令牌启动路径
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("RegressionScriptCancel"));
 
     NodeBase *script = scene.createNode(NodeBase::OUTPUT, QPointF(200, 200), QStringLiteral("Script"));
@@ -860,7 +845,8 @@ void IntegrationTest::testExecutorReuseAcrossScenesWithLoop()
     // 切换后循环体缓存必须重建，否则循环体会被主遍历与 executeLoop 重复执行（P1）
     FlowScene sceneA;
     FlowScene sceneB;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("RegressionSceneSwitch"));
 
     // --- 场景 A：单个延时节点（先让执行器缓存一份“无循环”的图信息） ---
@@ -925,7 +911,8 @@ void IntegrationTest::testLoopAddedToSameSceneIsDetected()
     // （节点/连线变更只置脏、不清缓存），循环体识别必须以当前场景节点为准，
     // 否则新增的循环体不会被登记，会被主遍历重复执行（P1）
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("RegressionLoopAddedLater"));
 
     // 首轮：场景内只有延时节点，先缓存一份“不含循环”的图
@@ -1001,7 +988,8 @@ void IntegrationTest::testScriptNodeReportsSuccess()
     policy.setSandboxEnabled(true);   // 强制走受限令牌启动路径
 
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("RegressionScriptSuccess"));
 
     NodeBase *script = scene.createNode(NodeBase::OUTPUT, QPointF(200, 200), QStringLiteral("Script"));
@@ -1095,7 +1083,8 @@ void IntegrationTest::testConditionalBranchSkipClearsStaleOutput()
 {
     // 条件分支：未选中分支的节点必须被跳过，且其上一轮输出要清空（P2）
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("RegressionBranchSkip"));
 
     NodeBase *cond = scene.createNode(NodeBase::LOGIC, QPointF(100, 200), QStringLiteral("If-Else"));
@@ -1179,7 +1168,8 @@ void IntegrationTest::testParamRefResolvesEachRound()
     // 若修复缺失：第一轮解析出 7+1=8 后，引用值被 setParam 永久写回成字面量，
     // 第二轮即使上游改成 9，下游仍按 8 跑——且存方案会把引用直接存成常量。
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("RegressionParamRefE1"));
 
     NodeBase *source = scene.createNode(NodeBase::LOGIC, QPointF(120, 200), QStringLiteral("Formula"));
@@ -1276,7 +1266,8 @@ void IntegrationTest::testParamRefRestoredBeforeNodeSignals()
     // 原本发生在"参数仍是本轮解析值"的窗口内。窗口内取参数的人（各界面面板、结果表、
     // 以及任何在槽里存盘/快照的代码）拿到的就是常量 ⇒ 存盘会把 {模块号} 引用落成常量。
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("RegressionE1SignalWindow"));
 
     NodeBase *source = scene.createNode(NodeBase::LOGIC, QPointF(120, 200), QStringLiteral("Formula"));
@@ -1341,7 +1332,8 @@ void IntegrationTest::testNonStdExceptionInBroadcastIsContained()
     // E1 残留②：广播就在那个 try 内，直连槽抛出的**非标准**异常此前会一路逃出 executeNode，
     // 而 run() 里没有 catch ⇒ std::terminate；参数也永久停在解析出的常量上。
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("RegressionE1NonStdThrow"));
 
     NodeBase *source = scene.createNode(NodeBase::LOGIC, QPointF(120, 200), QStringLiteral("Formula"));
@@ -1411,7 +1403,8 @@ void IntegrationTest::testParamRefRestoredWhenNodeThrowsBeforeSignals()
     // E1 的 RAII 还原器兜的是"**还原点之前**就抛出"的路径：探针在 collectNodeOutputVars
     // 里（参数已解析、尚未还原）抛非标准异常，此刻只有析构/处理器里的还原能救回表达式。
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("RegressionE1RestoreOnThrow"));
 
     NodeBase *source = scene.createNode(NodeBase::LOGIC, QPointF(120, 200), QStringLiteral("Formula"));
@@ -1455,7 +1448,8 @@ void IntegrationTest::testSkippedAndFailedNodesLoseReusableMark()
     // E2：m_validOutputs 的"输出可复用"位此前只写不清。今天没有读者（增量复用分支已回退）
     // ⇒ 属**潜伏**缺口，只能靠 isOutputMarkedValid() 这个只读视图钉住"清空输出即撤销标记"。
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("RegressionE2ReusableMark"));
 
     NodeBase *cond = scene.createNode(NodeBase::LOGIC, QPointF(100, 200), QStringLiteral("If-Else"));
@@ -1642,7 +1636,8 @@ void IntegrationTest::testRoundRateNotClampedByFixedInterval()
     // 谁把默认值改回 50，今天的门禁一行都不会红。**注意本用例不调 setLoopIntervalMs**，
     // 测的就是出厂默认节拍；默认策略本身要不要限速属开放项 O-1，本轮不在此拍板。
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("RegressionE6Cadence"));
     NodeBase *node = scene.createNode(NodeBase::LOGIC, QPointF(120, 200), QStringLiteral("Formula"));
     QVERIFY(node != nullptr);
@@ -1690,7 +1685,8 @@ void IntegrationTest::testNestedLoopIterations()
     // 嵌套循环：外层 2 次 × 内层 3 次 → 最内层节点执行 6 次，
     // 内层迭代号 1,2,3 循环两遍，外层迭代号 1,1,1,2,2,2
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("RegressionNestedLoop"));
 
     NodeBase *outer = scene.createNode(NodeBase::LOGIC, QPointF(80, 200), QStringLiteral("Loop"));
@@ -1747,7 +1743,8 @@ void IntegrationTest::testRuntimeStatsCounters()
     // --- 阶段 1：正常流程跑两轮，校验执行计数 ---
     {
         FlowScene scene;
-        FlowExecutor exec;
+        auto execToken = FlowExecutorToken::create(new FlowExecutor());
+        FlowExecutor &exec = *execToken->executor();
         exec.setFlowName(QStringLiteral("RegressionStatsOk"));
         exec.setStatsLogIntervalMs(0);   // 测试内不输出统计日志
 
@@ -1796,7 +1793,8 @@ void IntegrationTest::testRuntimeStatsCounters()
     // --- 阶段 2：失败流程（节点无输入必然失败），校验失败计数与进程资源采样 ---
     {
         FlowScene scene;
-        FlowExecutor exec;
+        auto execToken = FlowExecutorToken::create(new FlowExecutor());
+        FlowExecutor &exec = *execToken->executor();
         exec.setFlowName(QStringLiteral("RegressionStatsFail"));
         exec.setStatsLogIntervalMs(0);
 
@@ -1950,7 +1948,8 @@ void IntegrationTest::testEndToEndPipelineSmoke()
     QVERIFY2(QFile::exists(imagePath), "测试图像未生成");
 
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("RegressionEndToEnd"));
 
     NodeBase *reader = scene.createNode(NodeBase::IMAGE_ACQUISITION, QPointF(120, 200),
@@ -2068,7 +2067,8 @@ void IntegrationTest::testRecomputeDownstreamOnly()
     makeImage(imageB, sizeB, squareB);
 
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("RegressionDownstreamRecompute"));
 
     // 链路 A：读取图像 → OpenCV二值化；链路 B：孤立读取图像（无关分支，用于证明不被重跑）
@@ -2438,7 +2438,8 @@ void IntegrationTest::testStepModeExitRestoresNormalRun()
     // 单步模式必须能退出：历史缺陷 m_stepMode 只在 stopExecution 里清 →
     // 单步用过一次后，之后每次"开始执行/继续"仍在每个节点后暂停（模式粘住）。
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("StepModeFlow"));
     exec.setFlowMode(FlowMode::SoftwareTrigger);
 
@@ -2754,7 +2755,8 @@ void IntegrationTest::testExternalTriggerAcceptedOnlyInSoftwareMode()
     // 且 GTM 会照常计数并发 triggerFired → 幻影计数（现场已按 B 方案"载入即自动连续跑"，不收口就是
     // 全天候虚报）。判别点取 requestExternalRound() 的返回值：false=未受理 → GTM 不计数、不发信号。
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("RegressionExtTriggerMode"));
 
     NodeBase *delay = scene.createNode(NodeBase::LOGIC, QPointF(200, 200), QStringLiteral("Delay"));
@@ -3525,7 +3527,8 @@ void IntegrationTest::testExecutionStatusController()
     QAction stopAction;
     QToolButton singleShot;
     QToolButton pauseBtn;
-    FlowExecutor ex;
+    auto exToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &ex = *exToken->executor();
     ctrl.setControls(&startAction, &stopAction, &singleShot, &pauseBtn);
     ctrl.setExecutorProvider([&ex]() { return &ex; });
 
@@ -3653,7 +3656,9 @@ struct ReasonFlow
     QTemporaryDir tmp;
     QString imagePath;
     FlowScene scene;
-    FlowExecutor exec;
+    // U-203：成员不能是 auto ⇒ 显式类型；令牌持有本体，引用只作取用。
+    std::shared_ptr<FlowExecutorToken> execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     NodeBase *reader = nullptr;
     NodeBase *calib = nullptr;
     struct Snapshot {
@@ -5339,25 +5344,8 @@ void IntegrationTest::testUnregisteredOperatorLossIsCountedAsSaveLoss()
     bail();
 }
 
-// （178 行）二段窗口腿：析构一段 5s 失败后，二段 15s 在 6.5s 处等到线程——按常态
-// 继续销毁，进程不死。耗时落在两段量级带内：超过 5.5s = 二段确实接手（不是只等一段），
-// 小于 15s = 线程到点自然退出、wait 不空耗。红臂把二段改短 100ms 时本腿直接凭 qFatal 死亡。
-void IntegrationTest::testStuckStage2OrderlyRecovery()
-{
-    StuckUntilExecutor *exec = new StuckUntilExecutor(6500);
-    exec->start();
-    QTest::qWait(150);
-    QVERIFY2(exec->isRunning(), "线性自退线程没起来，本用例失去前提");
-
-    QElapsedTimer t;
-    t.start();
-    delete exec;   // 析构路径：一段 5s 失败（此刻线程约 6.3s 界前），二段在 6.5s 处等到
-    const qint64 elapsed = t.elapsed();
-    QVERIFY2(elapsed >= 5500,
-             qPrintable(QStringLiteral("析构 %1ms 就返回——二段升格形同虚设或线程提前退出").arg(elapsed)));
-    QVERIFY2(elapsed < 15000,
-             qPrintable(QStringLiteral("析构 %1ms 才返回，超出两段有界等待的量级").arg(elapsed)));
-}
+// （178 行的二段窗口腿已随 U-203 撤除）：析构里的两段有界等待与硬中止一并撤除，
+// 收尾语义归位到令牌侧（等待 ＋ 超时转可观测终态的放弃路径），本腿的题眼不复存在。
 
 QTEST_MAIN(IntegrationTest)
 #include "integration_test.moc"

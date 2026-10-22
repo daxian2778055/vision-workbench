@@ -1,4 +1,5 @@
 #include <QtTest>
+#include "FlowExecutorToken.h"
 #include <QCoreApplication>
 #include <algorithm>
 #include <QJsonArray>
@@ -357,7 +358,8 @@ void NodeGroupTest::testExecutionUnaffectedByGroup()
 {
     // ② 的核心：分组不得改变执行。真跑两轮（分组前/分组后），比较每轮节点执行次数。
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("GroupExecutionRegression"));
 
     NodeBase *delay = scene.createNode(NodeBase::LOGIC, QPointF(200, 200),
@@ -539,7 +541,8 @@ void NodeGroupTest::testCollapseDoesNotAffectExecution()
 {
     // 折叠是纯显示：成员图元被隐藏，但模型（节点/连线/参数）一点没动，流程必须照跑
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("GroupCollapseExecution"));
     NodeBase *first = scene.createNode(NodeBase::LOGIC, QPointF(200, 200), QStringLiteral("Delay"));
     NodeBase *second = scene.createNode(NodeBase::LOGIC, QPointF(420, 200), QStringLiteral("Delay"));

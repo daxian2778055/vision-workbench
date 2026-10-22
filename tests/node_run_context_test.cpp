@@ -3,6 +3,7 @@
 // 单例兜底（静态当前上下文与执行器同源）。fixture 用真场景与真节点（场景自建节点）。
 // 红臂破坏位 = 析构内的归属清空段（移除即已死执行器在节点上留指向）——清空腿当场红，余腿原样绿。
 #include <QtTest>
+#include "FlowExecutorToken.h"
 #include <QPointF>
 
 #include "FlowExecutor.h"
@@ -26,7 +27,8 @@ void NodeRunContextTest::testNodeContextSameSourceAsExecutor()
     NodeBase *node = scene.createNode(NodeBase::LOGIC, QPointF(0, 0), QStringLiteral("ctx_node"));
     QVERIFY(node != nullptr);
 
-    FlowExecutor executor;
+    auto executorToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &executor = *executorToken->executor();
     executor.setFlowScene(&scene);
 
     // 归属上下文已交到节点上，且与执行器同源（同一块 ⇒ 状态读数一致）
@@ -46,7 +48,8 @@ void NodeRunContextTest::testContextClearedOnExecutorDeath()
     NodeBase *node = scene.createNode(NodeBase::LOGIC, QPointF(0, 0), QStringLiteral("ctx_node"));
     QVERIFY(node != nullptr);
     {
-        FlowExecutor executor;
+        auto executorToken = FlowExecutorToken::create(new FlowExecutor());
+        FlowExecutor &executor = *executorToken->executor();
         executor.setFlowScene(&scene);
         QVERIFY(node->ownerContext() != nullptr);
     }
@@ -67,7 +70,8 @@ void NodeRunContextTest::testNodeWithoutContextHasEmptySlot()
 
 void NodeRunContextTest::testCurrentContextFallbackHolds()
 {
-    FlowExecutor executor;
+    auto executorToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &executor = *executorToken->executor();
     const auto ctx = FlowExecutor::currentContext();
     QVERIFY(ctx != nullptr);
     // 兜底块与执行器同源

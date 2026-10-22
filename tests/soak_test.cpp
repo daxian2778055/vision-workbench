@@ -20,6 +20,7 @@
 // 门限设计：句柄/内存门限取**宽松值**（句柄 ≤ 500、工作集 ≤ 300 MB），目的是抓"持续增长"这种
 // 量级明显的问题，而不是把正常波动判成失败；实际数值一律打印出来供人复核。
 #include <QtTest/QtTest>
+#include "FlowExecutorToken.h"
 #include <QObject>
 #include <QString>
 #include <QPointF>
@@ -123,7 +124,8 @@ void SoakTest::testContinuousSoak()
 
     // ── 2. 建流程（类别与展示名与注册表一致；连线用 PortConnectivity 找首个兼容端口，不靠猜类型）──
     FlowScene scene;
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("SoakContinuous"));
     exec.setFlowMode(FlowMode::Continuous);
     const qint64 intervalMs = envIntervalMs();

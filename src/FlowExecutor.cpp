@@ -25,8 +25,8 @@ std::atomic<FlowExecutor *> FlowExecutor::s_currentInstance{nullptr};
 QMutex FlowExecutor::s_currentContextMutex;
 std::shared_ptr<FlowRunContext> FlowExecutor::s_currentContext;
 
-FlowExecutor::FlowExecutor(QObject *parent)
-    : QThread(parent)
+FlowExecutor::FlowExecutor()
+    : QThread(nullptr)
     , m_scene(nullptr)
     , m_runContext(std::make_shared<FlowRunContext>())
 {
@@ -98,37 +98,19 @@ FlowExecutor::~FlowExecutor()
     if (s_currentInstance.load() == this) {
         s_currentInstance.store(nullptr);
     }
-    // A1-④：线程没真正退出，就绝不继续往下拆。
-    // 旧实现在 wait(5000) 失败后只打一行日志，然后照常 disconnectFromScene() 并返回——
-    // 而"返回"就意味着本对象内存被释放，还在跑的 run() 从下一行起访问的就是野指针。
-    // 这种时序问题的表现是偶发的错误检测结果或随机崩溃，比一次明确的中止坏得多。
-    // 正常销毁路径应在 delete 之前先 joinForDestroy()（见 FlowExecutorToken 的收尾：等待成功即
-    // 回收本体，等待超时绝不 terminate 而转 finished 自删）；
-    // 在这里超时说明该协议被绕过，宁可带着卡点阶段名当场中止，也不留一个会算错数的进程。
-    //
-    // 178 行软化（两段升格 + 收尾钩子，终局中止保持）：一段 5s 失败不再立刻终局——
-    // 重停一轮（joinForDestroy 内含 stopExecution + wakeAll，幂等）再给 15s，与
-    // 令牌收尾的前置等待同量级；网络超时类阻塞节点在这个窗口里走得完就不再
-    // 陪葬。两段皆尽才进终局：先过应用层收尾钩子（把方案/日志收好的一格，默认空），
-    // 返回后 qFatal 中止——终局形状不动：调用方绕过 joinForDestroy 直接 delete 时，
-    // 工作线程仍会读 this，内存已在释放流程中，任何"继续析构"都是 use-after-free；
-    // 全砍中止需全核 shared_ptr 化重设计，属 P2-6 词条。
-    if (!joinForDestroy(kDtorJoinStage1Ms)) {
-        VFP_RUNTIME_INFO.noquote() << QStringLiteral("FlowExecutor 析构一段等待超时，二段升格重停一轮");
-        if (!joinForDestroy(kDtorJoinStage2Ms)) {
-            qCritical() << "FlowExecutor 析构超时（两段皆尽）：线程仍卡在" << workerPhaseName()
-                        << " state=" << int(m_runContext->state());
-            const QString why = QStringLiteral(
-                "FlowExecutor 工作线程未在两段有界等待（%1ms + %2ms）内退出：继续析构必然是"
-                " use-after-free，主动中止进程。销毁执行器请先调用 joinForDestroy()"
-                "（参见 FlowExecutorToken 的收尾）。")
-                            .arg(kDtorJoinStage1Ms)
-                            .arg(kDtorJoinStage2Ms);
-            invokeOrderlyStopHook(why);
-            qFatal("%s", why.toUtf8().constData());
-        }
-        VFP_RUNTIME_INFO.noquote() << QStringLiteral("FlowExecutor 析构二段升格等到线程退出，按常态继续销毁");
-    }
+    // U-203 期（终局撤除收尾）：本析构里原有的「两段有界等待（5s + 15s）＋ 硬中止」
+    // 整段撤除。理由与新不变量：
+    //   · 那段等待是给「绕过令牌直接 delete」兜底的——工作线程还活着就析构，必然
+    //     use-after-free（旧实现先中止进程，是把不可逆的时序问题变成一次明确的死）。
+    //   · 令牌协议（P3a/P3b）落地后，生产侧删除只经令牌，而令牌只在 join 成功后才
+    //     delete 本体 ⇒ 这条兜底路径**不可达**；析构里的中止只剩「不可达兜底」这一层，
+    //     而它恰好是全树唯一的硬中止残留。
+    //   · 于是把删除权收进类型系统：析构私有（唯一删除者是 FlowExecutorToken）＋
+    //     构造不接受父对象（父对象是第二条删除路径）⇒ 「绕过令牌直接 delete」与
+    //     「栈上执行器」两种写法在**编译期**就写不出来。
+    //   · 收尾语义随之归位：等待与超时处置全在令牌侧（joinForDestroy ＋ 放弃路径），
+    //     超时不再中止进程，而是转入可观测终态（P3d）并让线程退出后自删。
+    // 本析构因此只做「拆干净」：注销触发登记、清场景归属、清节点侧归属指针。
     disconnectFromScene();
     // S-1（第五轮审核）：本对象一出去，节点里存的归属指针必然是野指针——
     // setFlowScene(nullptr) 刻意不清（见 setFlowScene 里那段注释：节点可能转由别的执行器

@@ -1,4 +1,5 @@
 #include <QtTest>
+#include "FlowExecutorToken.h"
 #include <QCoreApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -393,7 +394,8 @@ void FlowSnippetTest::testPastedSnippetExecutes()
     const QList<NodeBase *> created = FlowSnippet::insert(&target, snippet, QPointF(0, 0), &error);
     QVERIFY2(created.size() == 2, qPrintable(error));
 
-    FlowExecutor exec;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
     exec.setFlowName(QStringLiteral("SnippetPasteExecution"));
     int okRuns = 0;
     const auto conn = QObject::connect(

@@ -42,7 +42,8 @@ void FlowExecutorOwnershipTest::testCurrentSingletonLifecycle()
 {
     FlowExecutor *alive = nullptr;
     {
-        FlowExecutor executor;
+        auto executorToken = FlowExecutorToken::create(new FlowExecutor());
+        FlowExecutor &executor = *executorToken->executor();
         alive = &executor;
         // 构造即登记为当前实例（节点侧查运行状态走这条）
         QCOMPARE(FlowExecutor::current(), static_cast<FlowExecutor *>(&executor));
@@ -144,7 +145,8 @@ void FlowExecutorOwnershipTest::testExecutorSleepStopsWithExecutor()
 {
     // P2b 接线：执行器的可取消等待已委给运行上下文块（状态与取消信号在块内）。
     // 停后等待必须立即返回「未完成」——块被停在状态上时同形。
-    FlowExecutor executor;
+    auto executorToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &executor = *executorToken->executor();
     executor.stopExecution();
     QCOMPARE(executor.getState(), ExecutionState::Stopped);
     QVERIFY(!executor.interruptibleSleep(50));

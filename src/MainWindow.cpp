@@ -297,7 +297,7 @@ MainWindow::MainWindow(QWidget *parent) :
         VFP_DEBUG << "Creating FlowExecutor";
         // 词条切片 C P3b 期（销毁权归一）：新建即建令牌——令牌接管本体的所有权（并解除父子），
         // 本体的删除只有令牌件这一处；界面侧此后只借出裸指针（token->executor()）。
-        m_flowExecutors.insert(nullptr, FlowExecutorToken::create(new FlowExecutor(this)));
+        m_flowExecutors.insert(nullptr, FlowExecutorToken::create(new FlowExecutor()));
         m_executor = m_flowExecutors.value(nullptr)->executor();  // 占位：首个流程创建时复用
         // 应用失败中断策略（setupDockWidgets 早于此处调用，故在此真正生效）
         {
@@ -684,7 +684,7 @@ FlowExecutor *MainWindow::executorForScene(FlowScene *scene)
     }
     // 词条切片 C P3b 期：新建即建令牌（令牌接管本体的所有权，删除权归令牌）；
     // P3c 期起经 create 建——它同时把弱引用挂到本体（节点归属与触发路由据此取用）。
-    std::shared_ptr<FlowExecutorToken> token = FlowExecutorToken::create(new FlowExecutor(this));
+    std::shared_ptr<FlowExecutorToken> token = FlowExecutorToken::create(new FlowExecutor());
     FlowExecutor *ex = token->executor();
     connectExecutorSignals(ex);
     m_flowExecutors.insert(scene, token);

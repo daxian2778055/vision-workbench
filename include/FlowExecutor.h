@@ -39,9 +39,10 @@ class FlowExecutor : public QThread
     Q_OBJECT
 
 public:
-    explicit FlowExecutor(QObject *parent = nullptr);
-    ~FlowExecutor();
-
+    /// 构造：**不接受父对象**（U-203 期：删除权归令牌，父对象是第二条删除路径）。
+    /// 析构在 C++ 里是隐式 public 的，这里刻意把它收进 private 段——直接 delete 本体的写法
+    /// 因此**编译期就写不出来**，不是靠约定。
+    FlowExecutor();
     void setFlowScene(FlowScene *scene);
     /// 词条切片 C P3c 期（持有面迁移）：登记本体的**生命周期令牌**。
     /// 只存**弱引用**——令牌拥有本体，令牌若被强持在执行器里就是环（本体↔令牌互等，析构永不到）
@@ -78,14 +79,10 @@ public:
     void markExecutionAbandoned(const QString &reason);
     bool isAbandoned() const { return m_abandoned.load(std::memory_order_acquire); }
 
-    /// 析构两段有界等待（178 行软化拍板）：一段 5s 与旧实现同值；二段 15s 与
-    /// 令牌收尾的前置等待同量级——网络超时类阻塞节点在二段窗口里走得完就
-    /// 走得完，不再让整套进程陪葬。终局中止本身保持（析构时序不可逆是边界不是裁量）。
-    static constexpr int kDtorJoinStage1Ms = 5000;
-    static constexpr int kDtorJoinStage2Ms = 15000;
-
-    /// 应用层秩序收尾钩子（178 行软化）：终局中止前给 app 一格收好方案/冲日志，
-    /// 默认空 = 无操作。payload 是终局原因串（含两段超时与现场提示）。
+    /// 应用层秩序收尾钩子（178 行软化；U-203 起挂在**令牌的放弃路径**上）：软失败时给 app
+    /// 一格收好方案/冲日志，默认空 = 无操作。payload 是终局原因串。
+    /// 为什么换挂点：硬中止已随析构的等待一并撤除，而「送别一格」真正该发生的地方
+    /// 是放弃路径——进程继续，但这个执行器不会再被接管，方案与日志得先收好。
     static void setOrderlyStopHook(std::function<void(const QString &)> hook);
     static void invokeOrderlyStopHook(const QString &why);
 
@@ -207,6 +204,20 @@ private slots:
     /// 消费待清理条目（**须在已持 m_graphCacheMutex 时调用**）：摘账走 FlowCachePurgeLedger::
     /// takePending（自带叶子锁短窗），随后 remove 三族在图锁内做。
     void applyPendingCachePurgesLocked();
+
+protected:
+    /// 析构收进 protected（U-203 期）：本体的删除权**只经 FlowExecutorToken**。
+    /// 理由：析构里的「两段有界等待 + 硬中止」本来是给「绕过令牌直接 delete」兜底的——
+    /// 令牌协议下这条路径不可达（令牌只在 join 成功后才 delete 本体），兜底本身就成了
+    /// 全树唯一的硬中止残留。把删除权收进类型系统，兜底与中止一并撤除：超时不再中止进程，
+    /// 而是走令牌的放弃路径（可观测终态 ＋ 进程继续 ＋ 线程退出后自删）。
+    /// 为什么是 protected 而不是 private：private 会让**派生类无法定义**（MSVC C2282：
+    /// 派生析构覆盖了不可达的基类析构），而测试侧需要「自造卡死线程」这一机制来钉
+    /// joinForDestroy 的超时判定。本体类型本身仍然**从外部不可析构**（直接 delete 编译期就
+    /// 写不出来，见测试侧 is_destructible 契约腿）；派生类那条孔洞由「本仓生产侧不存在
+    /// 执行器派生类」兜住（普查段点名）。
+    ~FlowExecutor();
+    friend class FlowExecutorToken;
 
 private:
     void executeNode(NodeBase *node, bool isLastNode = false);

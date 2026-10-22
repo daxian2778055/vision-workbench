@@ -5,8 +5,11 @@
 // 时放弃强杀、本体进入可观测终态并发专用信号（进程不中止）。
 // 观测手段用 QPointer（本体被回收即置空），不靠日志读数。
 // 红臂破坏位 = 令牌的收尾（等待成功即回收本体）——回收腿当场红，其余腿臂内原样绿。
+// U-203 增一腿：删除权只经令牌（本体从外部不可析构，编译期封闭）。
 #include <QtTest>
 #include <QPointer>
+
+#include <type_traits>   // U-203：删除权契约的类型 traits 断言（is_destructible）
 
 #include "FlowExecutor.h"
 #include "FlowExecutorToken.h"
@@ -27,6 +30,7 @@ private slots:
     void testNodeBorrowsExecutorThroughToken();     // P3c：节点面经令牌借本体，收尾后借不到
     void testTriggerBindingBorrowsThroughToken();   // P3c：触发面经令牌取用，路由副本强持期间本体不死
     void testAbandonedExecutorEntersTerminalState(); // P3d：收尾超时 ⇒ 可观测终态，进程不中止
+    void testExecutorBodyNotDestructibleOutside();  // U-203：删除权只经令牌（编译期封闭）
 };
 
 void FlowExecutorTokenTest::testTokenTakesOwnership()
@@ -171,7 +175,19 @@ void FlowExecutorTokenTest::testAbandonedExecutorEntersTerminalState()
     QVERIFY(why.contains(QStringLiteral("可观测终态")));
     QVERIFY(!ex->allowsGraphEditing());                // 工作线程可能仍在跑 ⇒ 图必须保持锁定
 
-    delete ex;   // 测试收尾：本体从未启动，析构内的真实等待立即返回，删除安全
+    // U-203：本体不可从外部直接析构（删除权只经令牌）⇒ 本腿不再 delete；
+    // 放弃路径下的本体靠 finished 自删，而本腿的线程从未启动 ⇒ 进程退出时随内存回收。
+}
+
+void FlowExecutorTokenTest::testExecutorBodyNotDestructibleOutside()
+{
+    // U-203：执行器的析构收进 private（唯一删除者是 FlowExecutorToken）⇒
+    // 「绕过令牌直接 delete 本体」在**编译期**就写不出来。
+    // 这条腿把该契约钉在运行期可读的面上：类型 traits 读出「从外部不可析构」。
+    QVERIFY2(!std::is_destructible<FlowExecutor>::value,
+             "执行器本体必须不可从外部析构（删除权只经令牌）");
+    // 反面对照：令牌自己是可析构的——它才是那个持有删除权的东西。
+    QVERIFY(std::is_destructible<FlowExecutorToken>::value);
 }
 
 QTEST_MAIN(FlowExecutorTokenTest)

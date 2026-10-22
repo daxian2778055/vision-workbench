@@ -55,6 +55,10 @@ FlowExecutorToken::~FlowExecutorToken()
     const QString why = QStringLiteral(
         "FlowExecutorToken 收尾：执行器工作线程未在 %1ms 内退出，已放弃强杀并转入可观测终态"
         "（进程继续；线程退出后本体自删）。").arg(kFinishTimeoutMs);
+    // U-203：硬中止已随析构的等待一并撤除，「送别一格」（应用层收尾钩子：把方案/日志
+    // 收好）改挂在这条软失败路径上——这才是真正需要送别的地方：进程继续，
+    // 但这个执行器不会再被接管。
+    FlowExecutor::invokeOrderlyStopHook(why);
     ex->markExecutionAbandoned(why);
     ex->disconnect();
     QObject::connect(ex, &QThread::finished, ex, &QObject::deleteLater);
