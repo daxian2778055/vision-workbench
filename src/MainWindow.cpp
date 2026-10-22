@@ -754,6 +754,14 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
         if (ex == m_executor) onExecutionError(err);
         else logMessage(QStringLiteral("流程错误: %1").arg(err));
     });
+    // P3d（终局撤除）：令牌收尾超时 ⇒ 可观测终态。专用信号不走 executionStopped——
+    // 后者会解锁图，而此刻被放弃的工作线程可能仍在跑；这里只更新状态栏与按钮态。
+    // 日志直接记 payload（原因串自带语境：令牌收尾超时与终态处置），避免与控制器
+    // 的状态栏提示句形成同句双份。
+    connect(ex, &FlowExecutor::executionAbandoned, this, [this, ex](const QString &why) {
+        if (ex == m_executor && m_execStatus) m_execStatus->onAbandoned(why);
+        logMessage(why);
+    });
 
     // ── 全局 UI：运行模式变更 → 刷新所有场景 MVS 节点的像素格式可用性 ──
     // （⑤a：旧实现在构造函数只内联连首执行器，新/后台流程的模式切换不刷新；

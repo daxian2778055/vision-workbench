@@ -111,6 +111,18 @@ void ExecutionStatusController::onError(const QString &error)
     // 变成"点不完的确认框"（生产现场不可接受）。错误改为状态栏 + 调用方日志留痕。
 }
 
+void ExecutionStatusController::onAbandoned(const QString &reason)
+{
+    if (m_stateLabel) m_stateLabel->setText(QStringLiteral("状态: 已放弃（线程未退出）"));
+    if (m_statusBar) m_statusBar->showMessage(tr("执行器已放弃强杀: %1").arg(reason));
+    // 终态：运行控制全部禁用（不再给出「可开始」的误导）；图编辑锁由窗口侧按
+    // allowsGraphEditing 保持锁定，本控制器不碰图。
+    if (m_startAction) m_startAction->setEnabled(false);
+    if (m_stopAction) m_stopAction->setEnabled(false);
+    if (m_singleShotBtn) m_singleShotBtn->setEnabled(false);
+    if (m_pauseBtn) m_pauseBtn->setEnabled(false);
+}
+
 void ExecutionStatusController::onPaused()
 {
     // 暂停请求已受理：当前节点可能仍在跑（"已暂停"由 onParked 在 worker 真停稳后给出）

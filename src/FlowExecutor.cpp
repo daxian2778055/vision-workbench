@@ -390,6 +390,8 @@ void FlowExecutor::parkWhilePausedLocked()
 
 bool FlowExecutor::allowsGraphEditing() const
 {
+    if (m_abandoned.load(std::memory_order_acquire))
+        return false;                                   // P3d：已放弃强杀 ⇒ 工作线程可能仍在跑，图必须保持锁定
     QMutexLocker locker(&m_mutex);
     if (m_runContext->state() == ExecutionState::Running)
         return false;                                   // 真在跑：禁止
@@ -511,7 +513,18 @@ void FlowExecutor::setRunState(ExecutionState state)
 ExecutionState FlowExecutor::getState() const
 {
     // 运行态在块内（原子读；块是共享件，故读侧无需再取主体锁）
+    if (m_abandoned.load(std::memory_order_acquire))
+        return ExecutionState::Error;   // P3d：终态位优先——收尾超时后不得再回落到 Stopped
     return m_runContext->state();
+}
+
+void FlowExecutor::markExecutionAbandoned(const QString &reason)
+{
+    // 顺序：先置终态位（此后读侧恒见 Error），再写块（唤醒块内等待者），最后发信号。
+    m_abandoned.store(true, std::memory_order_release);
+    m_runContext->setState(ExecutionState::Error);
+    qCritical().noquote() << reason;
+    emit executionAbandoned(reason);
 }
 
 void FlowExecutor::setFlowMode(FlowMode mode)

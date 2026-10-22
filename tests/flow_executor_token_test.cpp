@@ -1,7 +1,8 @@
 // FlowExecutorTokenTest（词条切片 C P3a/P3c 期：令牌与持有面）——执行器生命周期令牌的行为座。
 // 腿：构造即接管（解除父子）、释放即回收本体、多个持有者只收尾一次、持有期间本体可调用、
 // 释放即同步收尾；P3c 增两腿——节点面经令牌借本体（收尾后借不到）、触发面经令牌取用
-//（路由副本强持期间本体不得被收、绑定在收尾后失联）。
+//（路由副本强持期间本体不得被收、绑定在收尾后失联）；P3d 增一腿——收尾超时（注入策略）
+// 时放弃强杀、本体进入可观测终态并发专用信号（进程不中止）。
 // 观测手段用 QPointer（本体被回收即置空），不靠日志读数。
 // 红臂破坏位 = 令牌的收尾（等待成功即回收本体）——回收腿当场红，其余腿臂内原样绿。
 #include <QtTest>
@@ -25,6 +26,7 @@ private slots:
     void testReleaseIsSynchronous();      // 释放返回时本体已收干净（P3b 界面侧依赖的同步语义）
     void testNodeBorrowsExecutorThroughToken();     // P3c：节点面经令牌借本体，收尾后借不到
     void testTriggerBindingBorrowsThroughToken();   // P3c：触发面经令牌取用，路由副本强持期间本体不死
+    void testAbandonedExecutorEntersTerminalState(); // P3d：收尾超时 ⇒ 可观测终态，进程不中止
 };
 
 void FlowExecutorTokenTest::testTokenTakesOwnership()
@@ -145,6 +147,31 @@ void FlowExecutorTokenTest::testTriggerBindingBorrowsThroughToken()
 
     route.reset();   // 最后一个强引用释放 ⇒ 收尾
     QVERIFY(gtm->executorForFlow(flow) == nullptr);   // 绑定失联（弱引用过期）
+}
+
+void FlowExecutorTokenTest::testAbandonedExecutorEntersTerminalState()
+{
+    // P3d（终局撤除）：注入一个「等待失败」的收尾策略，模拟两段等待皆尽——令牌必须放弃强杀
+    // （不 delete 本体），让本体进入可观测终态并发专用信号；进程继续（座本身就是进程还活着）。
+    FlowExecutor *ex = new FlowExecutor();
+    QPointer<FlowExecutor> watch(ex);
+    QSignalSpy abandonedSpy(ex, &FlowExecutor::executionAbandoned);
+
+    {
+        auto token = FlowExecutorToken::create(ex, [](FlowExecutor *, int) { return false; });
+        QVERIFY(token != nullptr);
+        QCOMPARE(token->executor(), ex);
+    }   // 释放令牌 ⇒ 注入策略返回 false ⇒ 放弃路径
+
+    QVERIFY2(watch != nullptr, "超时分支不得回收本体（线程可能仍在跑，删除即 use-after-free）");
+    QCOMPARE(ex->getState(), ExecutionState::Error);   // 终态可观测
+    QVERIFY(ex->isAbandoned());
+    QCOMPARE(abandonedSpy.count(), 1);                 // 专用信号只发一次
+    const QString why = abandonedSpy.at(0).at(0).toString();
+    QVERIFY(why.contains(QStringLiteral("可观测终态")));
+    QVERIFY(!ex->allowsGraphEditing());                // 工作线程可能仍在跑 ⇒ 图必须保持锁定
+
+    delete ex;   // 测试收尾：本体从未启动，析构内的真实等待立即返回，删除安全
 }
 
 QTEST_MAIN(FlowExecutorTokenTest)

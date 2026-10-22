@@ -72,6 +72,12 @@ public:
     bool joinForDestroy(int timeoutMs);
     ExecutionState getState() const;
 
+    /// P3d 期（终局撤除）：令牌收尾超时后把本体置入**可观测终态**——进程不中止。
+    /// 置终态位（此后 getState 恒 Error、图编辑恒锁）＋ 写 Error ＋ 发 executionAbandoned。
+    /// 本体的回收仍由令牌挂的 finished 自删路径接管（线程真退出后才删）。
+    void markExecutionAbandoned(const QString &reason);
+    bool isAbandoned() const { return m_abandoned.load(std::memory_order_acquire); }
+
     /// 析构两段有界等待（178 行软化拍板）：一段 5s 与旧实现同值；二段 15s 与
     /// 令牌收尾的前置等待同量级——网络超时类阻塞节点在二段窗口里走得完就
     /// 走得完，不再让整套进程陪葬。终局中止本身保持（析构时序不可逆是边界不是裁量）。
@@ -159,6 +165,9 @@ signals:
     void executionParked();
     void executionStopped();
     void executionError(const QString &error);
+    /// P3d 期（终局撤除）：令牌收尾超时——已放弃强杀，执行器进入可观测终态，进程继续。
+    /// **不要**用本信号替代 executionStopped：后者会解锁图，而此刻工作线程可能仍在跑。
+    void executionAbandoned(const QString &reason);
     void nodeExecuted(NodeBase *node, bool success);
     void executionFinished();
     void imageReady(NodeBase *node, const HalconCpp::HImage &image);
@@ -249,6 +258,8 @@ private:
     /// 持有面（触发面绑定、节点残余面）同样只持弱引用；取用方先 lock 出**强**副本再调方法
     /// ⇒ 调用期间本体必存活，而收尾点仍落在界面侧释放最后一个强令牌处。
     std::weak_ptr<class FlowExecutorToken> m_lifetimeToken;
+    /// P3d 期（终局撤除）：收尾超时后的终态位。一旦置位不再清除——本体正在放弃路径上自删。
+    std::atomic<bool> m_abandoned{false};
     bool m_stopOnFailure = true;   /// 节点失败时停止流程（对标 VisionMaster 默认行为）
     bool m_stepMode = false;       /// 单步执行模式（每执行一个节点后暂停）
     int m_loopIntervalMs = 0;      /// 连续/硬触发循环节拍间隔（ms），0=无额外限速（E6）

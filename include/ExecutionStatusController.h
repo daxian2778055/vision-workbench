@@ -43,6 +43,9 @@ public:
     void onStopped();
     void onFinished();
     void onError(const QString &error);
+    /// P3d：执行器收尾超时、已放弃强杀 ⇒ 可观测终态（四个运行控制按钮全部禁用；
+    /// **不**解锁图——工作线程可能仍在跑）。
+    void onAbandoned(const QString &reason);
     /// 暂停请求已受理（当前节点可能仍在跑）/ 真停稳 / 已继续
     /// —— 与 FlowExecutor 的 executionPaused / executionParked / executionResumed 一一对应
     void onPaused();

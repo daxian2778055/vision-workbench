@@ -3562,6 +3562,12 @@ void IntegrationTest::testExecutionStatusController()
     ctrl.updateButtons(ExecutionState::Idle);
     QVERIFY2(startAction.isEnabled(), "硬触发/空闲下「开始执行」必须可用（进入等待触发）");
     QVERIFY(!stopAction.isEnabled() && !pauseBtn.isEnabled());
+
+    // P3d：收尾超时 ⇒ 已放弃终态；四个运行控制按钮全部禁用（不再有「可开始」的误导）
+    ctrl.onAbandoned(QStringLiteral("线程未退出"));
+    QCOMPARE(ctrl.stateText(), QStringLiteral("状态: 已放弃（线程未退出）"));
+    QVERIFY(!startAction.isEnabled() && !stopAction.isEnabled());
+    QVERIFY(!singleShot.isEnabled() && !pauseBtn.isEnabled());
 }
 
 void IntegrationTest::testRecentFilesMenu()
