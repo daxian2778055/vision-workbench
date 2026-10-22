@@ -24,7 +24,7 @@ ImageReadNode::ImageReadNode(QObject *parent)
     : HalconNode(parent)
 {
     m_type = IMAGE_ACQUISITION;
-    m_name = "Image Read";
+    setName(QStringLiteral("Image Read"));
     // filePath / mono8Mode / autoSwitch / mode 的默认值已移入 init()（参数表）
     m_isDirectory = false;
     m_currentImageIndex = -1;

@@ -11,6 +11,8 @@
 #include <QPointer>
 #include <utility>
 #include "NodeBase.h"
+#include "NodeStateBody.h"   // 切片 C P2 期段一：快照列持身份体 shared_ptr（完整类型）
+#include "ThreadSafeParams.h"   // 快照列持参数内核 shared_ptr（完整类型）
 #include "FlowFixture.h"   // 命名夹具值类型（切片 B 夹具族首抽自此头拆出）
 #include "SubFlowDefs.h"   // FR15.10 运行期子流程定义（值类型，随方案与撤销快照持久化）
 
@@ -79,6 +81,13 @@ public:
     struct GraphSnapshot {
         QList<NodeBase *> nodes;
         QList<MyProject::Connection *> connections;
+        /// 切片 C 立项书 P2 期段一：身份状态体列与参数内核列（与 nodes **逐位对齐**；
+        /// 无参数表的算子在 paramCores 对应位为空占位）。壳的存活仍由墓碑机制保证
+        /// （execute() 仍走壳），**状态的存活改由这两列的 shared_ptr 保证**——壳与场景
+        /// 先亡时仍可读（立项书 §13.1 净收益）。增（入列）在图锁内＝纯原子加；
+        /// 减（可能真析构）不得在任何其他锁的临界区内（立项书 §13.2 补充行）。
+        QList<std::shared_ptr<NodeStateBody>> nodeStates;
+        QList<std::shared_ptr<ThreadSafeParams::Core>> paramCores;
     };
     /// RAII 句柄：持有期间，从图中删除节点/连边只做"墓碑"（成员集立即摘除 + 延迟析构），
     /// 保证执行线程手里那批裸指针在整轮结束前不会悬垂；析构（含提前 return / 异常 / break）即释放。

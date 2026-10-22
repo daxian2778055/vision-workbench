@@ -14,13 +14,14 @@ static int s_nextId = 1;
 static QMutex s_idMutex;
 
 NodeBase::NodeBase(QObject *parent)
-    : QObject(parent), m_position(0, 0), m_size(120, 80), m_moduleId(NodeBase::allocateModuleId()), m_type(IMAGE_ACQUISITION), m_executionSuccess(false), m_hasExecuted(false)
+    : QObject(parent), m_position(0, 0), m_size(120, 80), m_type(IMAGE_ACQUISITION), m_executionSuccess(false), m_hasExecuted(false), m_stateBody(std::make_shared<NodeStateBody>())
 {
+    m_stateBody->moduleId = NodeBase::allocateModuleId();   // 单调不回收（见 allocateModuleId 注释）
 }
 
 NodeBase::~NodeBase()
 {
-    NodeBase::releaseModuleId(m_moduleId);
+    NodeBase::releaseModuleId(m_stateBody->moduleId);
     qDeleteAll(m_inputPorts);
     qDeleteAll(m_outputPorts);
 }
@@ -47,12 +48,12 @@ QSizeF NodeBase::size() const
 
 QString NodeBase::name() const
 {
-    return m_name;
+    return m_stateBody->name;
 }
 
 void NodeBase::setName(const QString &name)
 {
-    m_name = name;
+    m_stateBody->name = name;
 }
 
 NodeBase::NodeType NodeBase::type() const
@@ -114,12 +115,12 @@ bool NodeBase::execute()
 
         return m_executionSuccess;
     } catch (const std::exception &e) {
-        qWarning() << "Error executing node" << m_name << ":" << e.what();
+        qWarning() << "Error executing node" << name() << ":" << e.what();
         m_hasExecuted = true;
         m_executionSuccess = false;
         return false;
     } catch (...) {
-        qWarning() << "Unknown error executing node" << m_name;
+        qWarning() << "Unknown error executing node" << name();
         m_hasExecuted = true;
         m_executionSuccess = false;
         return false;
@@ -152,12 +153,12 @@ void NodeBase::setOutputData(int portIndex, QSharedPointer<DataObject> data)
 
 int NodeBase::moduleId() const
 {
-    return m_moduleId;
+    return m_stateBody->moduleId;
 }
 
 QString NodeBase::fullName() const
 {
-    return QString("%1 [%2]").arg(m_name).arg(m_moduleId);
+    return QString("%1 [%2]").arg(m_stateBody->name).arg(m_stateBody->moduleId);
 }
 
 int NodeBase::allocateModuleId()
@@ -176,10 +177,10 @@ void NodeBase::releaseModuleId(int id)
 
 void NodeBase::setModuleId(int id)
 {
-    if (id <= 0 || id == m_moduleId)
+    if (id <= 0 || id == m_stateBody->moduleId)
         return;
     reserveModuleId(id);   // 先抬高计数器，避免后续新建的算子被分到同一个号
-    m_moduleId = id;
+    m_stateBody->moduleId = id;
 }
 
 void NodeBase::reserveModuleId(int id)

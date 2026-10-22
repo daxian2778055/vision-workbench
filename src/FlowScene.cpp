@@ -522,6 +522,13 @@ FlowScene::GraphSnapshotGuard FlowScene::captureGraphSnapshot()
         QMutexLocker locker(&m_graphMutex);
         snap.nodes = m_nodeItems.keys();
         snap.connections = m_connectionItems.keys();
+        // 切片 C 立项书 P2 期段一：身份体与参数内核随快照入列（与 nodes 逐位对齐）。
+        // shared_ptr 拷贝＝纯原子加，在图锁内进行是安全的——不跑用户代码、无死锁面；
+        // 减（可能真析构状态体/内核）不得在任何其他锁的临界区内（§13.2 补充行）。
+        for (NodeBase *n : snap.nodes) {
+            snap.nodeStates.append(n->stateBody());
+            snap.paramCores.append(n->paramCore());
+        }
         ++m_liveSnapshotCount;
     }
     return GraphSnapshotGuard(this, std::move(snap));

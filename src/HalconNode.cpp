@@ -240,7 +240,7 @@ void HalconNode::executePreview()
     emit executionTimeMeasured(this, elapsed);
     emit previewCompleted(this, success);
 
-    VFP_DEBUG << "Auto preview for" << m_name << ":" << (success ? "success" : "failed")
+    VFP_DEBUG << "Auto preview for" << name() << ":" << (success ? "success" : "failed")
               << "time:" << elapsed << "ms";
 }
 
@@ -252,10 +252,10 @@ void HalconNode::drawResult()
 QJsonObject HalconNode::toJson() const
 {
     QJsonObject json;
-    json["name"] = m_name;
+    json["name"] = name();
     json["type"] = m_type;
     json["nodeType"] = m_type;
-    json["nodeName"] = m_name;
+    json["nodeName"] = name();
     json["position"] = QJsonObject({
         {"x", m_position.x()},
         {"y", m_position.y()}
@@ -264,7 +264,7 @@ QJsonObject HalconNode::toJson() const
         {"width", m_size.width()},
         {"height", m_size.height()}
     });
-    json["moduleId"] = m_moduleId;
+    json["moduleId"] = moduleId();
     json["executionSuccess"] = m_executionSuccess;
     json["enabled"] = m_enabled;
     
@@ -362,9 +362,9 @@ static QVariant validateParamValue(const ParamSpec &spec, const QVariant &value)
 
 void HalconNode::fromJson(const QJsonObject &json)
 {
-    m_name = json["name"].toString();
+    setName(json["name"].toString());
     if (json.contains("nodeName")) {
-        m_name = json["nodeName"].toString();
+        setName(json["nodeName"].toString());
     }
     m_type = static_cast<NodeType>(json["type"].toInt());
     if (json.contains("nodeType")) {
@@ -380,11 +380,11 @@ void HalconNode::fromJson(const QJsonObject &json)
     // 恢复模块ID（可选，因为模块ID是运行时生成的）
     if (json.contains("moduleId")) {
         int storedId = json["moduleId"].toInt();
-        if (storedId != m_moduleId) {
+        if (storedId != m_stateBody->moduleId) {
             // 抬升全局计数器到 storedId 之上：新会话 s_nextId 从 1 重计，否则随后新建节点
             // 会再次分配到同一号（S4：模块号不复用是为了不让"新节点"继承旧节点的输出变量表）。
             NodeBase::reserveModuleId(storedId);
-            m_moduleId = storedId;
+            m_stateBody->moduleId = storedId;
         }
     }
     
@@ -407,7 +407,7 @@ void HalconNode::fromJson(const QJsonObject &json)
             const QVariant raw = it.value().toVariant();
             const QVariant fixed = validateParamValue(*spec, raw);
             if (fixed != raw) {
-                VFP_DEBUG << "ParamSchemaFix:" << m_name << key
+                VFP_DEBUG << "ParamSchemaFix:" << name() << key
                           << "raw=" << raw.toString() << "->" << fixed.toString();
             }
             m_params[key] = fixed;

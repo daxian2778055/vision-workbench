@@ -30,6 +30,9 @@ public:
     virtual void setParam(const QString &name, const QVariant &value) override;
     virtual QVariant getParam(const QString &name) const override;
     virtual QList<QString> getAllParamNames() const override { return m_params.keys(); }
+    /// 参数内核共享句柄（切片 C 立项书 P2 期段一）：快照捕获时随快照列入列，
+    /// 壳先亡（场景销毁）时参数表仍可读（§13.1 净收益）。
+    std::shared_ptr<ThreadSafeParams::Core> paramCore() const override { return m_params.core(); }
     bool hasParam(const QString &name) const;
     /// 图像对本节点是否为必需输入：本轮没有可用输入图像时，process() 据此判失败而非静默成功。
     /// 默认按"是否声明了 Image 类型输入端口"判定；图像只是可选旁路（条件判断、脚本执行等）

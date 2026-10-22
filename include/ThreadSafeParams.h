@@ -5,6 +5,7 @@
 #include <QString>
 #include <QStringList>
 #include <QVariant>
+#include <memory>
 
 /// 线程安全参数表：接口兼容 QMap<QString, QVariant> 的常用子集。
 ///
@@ -18,12 +19,29 @@
 ///
 /// 注意：不要持有 value() 返回的 QVariant 引用；跨线程一致性由本类型保证，
 /// 但不提供"多键原子读"——需要原子地读多键时先 snapshot()。
+///
+/// 共享化（切片 C 立项书 P2 期段一）：参数本体（映射＋读写锁）收进内核 Core（纯数据、
+/// 非 QObject），节点壳持 shared_ptr，快照捕获时再入快照列一份——壳先亡（场景销毁）
+/// 时参数表仍活着，执行线程经快照列可读（立项书 §13.1 净收益）。拷贝与赋值仍禁用，
+/// 因此不存在内核被意外共享成两份口径的风险。
 class ThreadSafeParams
 {
 public:
-    ThreadSafeParams() = default;
+    /// 参数内核（映射＋读写锁）。公开仅为让快照列持完整类型；内核指针只该被持有，
+    /// 读写一律走下方加锁方法，绕锁直摸映射不在契约之内。
+    struct Core
+    {
+        mutable QReadWriteLock lock;
+        QMap<QString, QVariant> map;
+    };
+
+    ThreadSafeParams() : m_core(std::make_shared<Core>()) {}
     ThreadSafeParams(const ThreadSafeParams &) = delete;
     ThreadSafeParams &operator=(const ThreadSafeParams &) = delete;
+
+    /// 参数内核共享句柄（立项书 §13.2 补充行：增（拷贝）可在图锁内＝纯原子加；
+    /// 减（可能真析构内核）不得在任何其他锁的临界区内）。仅供快照列持有。
+    const std::shared_ptr<Core> &core() const { return m_core; }
 
     /// `params[key] = value` 的写入代理（不能安全返回内部引用，故用代理对象）
     class WriteProxy
@@ -57,62 +75,62 @@ public:
     // ---- 读取（读锁）----
     QVariant value(const QString &key) const
     {
-        QReadLocker locker(&m_lock);
-        return m_map.value(key);
+        QReadLocker locker(&m_core->lock);
+        return m_core->map.value(key);
     }
     QVariant value(const QString &key, const QVariant &def) const
     {
-        QReadLocker locker(&m_lock);
-        return m_map.value(key, def);
+        QReadLocker locker(&m_core->lock);
+        return m_core->map.value(key, def);
     }
     bool contains(const QString &key) const
     {
-        QReadLocker locker(&m_lock);
-        return m_map.contains(key);
+        QReadLocker locker(&m_core->lock);
+        return m_core->map.contains(key);
     }
     bool isEmpty() const
     {
-        QReadLocker locker(&m_lock);
-        return m_map.isEmpty();
+        QReadLocker locker(&m_core->lock);
+        return m_core->map.isEmpty();
     }
     int size() const
     {
-        QReadLocker locker(&m_lock);
-        return m_map.size();
+        QReadLocker locker(&m_core->lock);
+        return m_core->map.size();
     }
     int count() const { return size(); }
     QStringList keys() const
     {
-        QReadLocker locker(&m_lock);
-        return m_map.keys();
+        QReadLocker locker(&m_core->lock);
+        return m_core->map.keys();
     }
     QList<QVariant> values() const
     {
-        QReadLocker locker(&m_lock);
-        return m_map.values();
+        QReadLocker locker(&m_core->lock);
+        return m_core->map.values();
     }
     /// 整体快照（遍历/序列化用；请遍历快照而不是遍历本对象）
     QMap<QString, QVariant> snapshot() const
     {
-        QReadLocker locker(&m_lock);
-        return m_map;
+        QReadLocker locker(&m_core->lock);
+        return m_core->map;
     }
 
     // ---- 写入（写锁）----
     void insert(const QString &key, const QVariant &value)
     {
-        QWriteLocker locker(&m_lock);
-        m_map.insert(key, value);
+        QWriteLocker locker(&m_core->lock);
+        m_core->map.insert(key, value);
     }
     void remove(const QString &key)
     {
-        QWriteLocker locker(&m_lock);
-        m_map.remove(key);
+        QWriteLocker locker(&m_core->lock);
+        m_core->map.remove(key);
     }
     void clear()
     {
-        QWriteLocker locker(&m_lock);
-        m_map.clear();
+        QWriteLocker locker(&m_core->lock);
+        m_core->map.clear();
     }
 
     // ---- 下标：写用代理，读返回加锁拷贝 ----
@@ -120,6 +138,5 @@ public:
     QVariant operator[](const QString &key) const { return value(key); }
 
 private:
-    mutable QReadWriteLock m_lock;
-    QMap<QString, QVariant> m_map;
+    std::shared_ptr<Core> m_core;
 };

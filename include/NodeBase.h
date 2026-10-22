@@ -14,6 +14,8 @@
 #include <memory>
 
 #include "PortDataType.h"
+#include "NodeStateBody.h"   // 身份状态体（切片 C 立项书 P2 期段一：非 QObject 共享载体）
+#include "ThreadSafeParams.h"   // 参数内核（立项书 P2 期段一：paramCore 虚钩子返回类型）
 #include "FlowRunContext.h"   // 归属上下文块（切片 C 立项书 P2c 期：算子侧改持它）
 #include "FlowExecutorToken.h"   // 生命周期令牌（切片 C P3c 期：残余面改持它的弱引用）
 
@@ -99,8 +101,6 @@ protected:
 
     QPointF m_position;
     QSizeF m_size;
-    QString m_name;
-    int m_moduleId; // 唯一的模块号
     NodeType m_type;
     QList<Port *> m_inputPorts;
     QList<Port *> m_outputPorts;
@@ -112,12 +112,25 @@ protected:
     bool m_executionSuccess; // 执行状态，true表示成功，false表示失败
     bool m_hasExecuted; // 是否已经执行过
     bool m_enabled = true;   // 算子是否启用（禁用后运行时跳过）
+    /// 身份状态体（切片 C 立项书 P2 期段一）：名字与模块号的非 QObject 共享载体。
+    /// 壳持一份，快照捕获时快照列再持一份；壳与场景先亡后身份仍可读（§13.1 净收益）。
+    /// 写入面只在停稳期（方案装载与重命名），并发面与拆分前裸读写一致，故不加锁。
+    std::shared_ptr<NodeStateBody> m_stateBody;
 
 public:
     int moduleId() const;
     QString fullName() const; // 包含模块号的完整名称
     bool executionSuccess() const; // 获取执行状态
     bool hasExecuted() const; // 获取是否已经执行过
+
+    /// 身份状态体共享句柄（立项书 P2 期段一）：仅供快照捕获入快照列。
+    /// 增（拷贝）可在图锁内＝纯原子加；减（可能真析构身份体）不得在任何其他锁的
+    /// 临界区内（立项书 §13.2 补充行）。
+    const std::shared_ptr<NodeStateBody> &stateBody() const { return m_stateBody; }
+
+    /// 参数内核共享句柄（立项书 P2 期段一）：默认空（无参数表的算子）；
+    /// 带参数表的家族（HalconNode）覆写并交出自己的内核，快照捕获时入快照列。
+    virtual std::shared_ptr<ThreadSafeParams::Core> paramCore() const { return {}; }
 
     /// 所属流程场景（供参数引用枚举模块输出参数；由 FlowScene::createNode 绑定）
     void setFlowSceneRef(FlowScene *scene) { m_flowSceneRef = scene; }

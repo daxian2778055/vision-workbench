@@ -1167,6 +1167,17 @@ if(MSVC)
     vfp_configure_gui_test(FlowExecutorOwnershipTest)
 endif()
 
+# 节点身份体与参数内核随快照共享化（切片 C 立项书 P2 期段一）：
+# 壳先亡时状态仍可读（立项书 §13.1 净收益）的双腿座（身份腿＋参数内核腿）；
+# 场景与快照句柄走堆，显式控制「先杀壳、再释句柄」的顺序（M-2 断言在用例内临时关闭并恢复）。
+# 红臂破坏位 = captureGraphSnapshot 的身份列填充（塞空指针）⇒ 身份腿腿红、参数内核腿原样绿。
+if(MSVC)
+    add_executable(node_state_body_test tests/node_state_body_test.cpp)
+    target_link_libraries(node_state_body_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    vfp_add_qtest(NAME NodeStateBodyTest TARGET node_state_body_test)
+    vfp_configure_gui_test(NodeStateBodyTest)
+endif()
+
 # ROI 交互判定面（词条切片 B 图元族首抽，从显示窗抽出）：手柄命中与拖拽映射的纯几何座
 # （五腿按形状族分腿；不需 GUI 与 HALCON 图）
 add_executable(roi_geometry_test tests/roi_geometry_test.cpp)
@@ -1251,7 +1262,7 @@ if(MSVC)
                   ManualPathResolverTest RoundVariableFeedTest NodeIconPaletteTest UpstreamWalkTest
                   FlowExecutorOwnershipTest RoiGeometryTest FixtureValidationTest
                   FlowRunContextTest NodeRunContextTest FlowExecutorTokenTest
-                  RegisterValueParseTest)
+                  RegisterValueParseTest NodeStateBodyTest)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
         # path_list_prepend 由 CMake 负责插入并处理平台路径分隔符，避免在
         # ENVIRONMENT 值里嵌套分号导致列表被错误拆分
