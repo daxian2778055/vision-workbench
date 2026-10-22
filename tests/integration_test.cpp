@@ -55,6 +55,8 @@
 #include <QPointer>
 #include <QCoreApplication>
 #include <QTemporaryDir>
+#include <QJsonDocument>   // U-204：旧明文打包的拒收腿要手工包 v1 字节
+#include "SchemePackage.h"  // U-204：v1 旧明文打包的字节形状（magic 与版本号）
 #include <QFile>
 #include <QDir>
 #include <QFileInfo>
@@ -115,6 +117,7 @@ private slots:
     void testDestroyWhileRunningIsSafe();
     void testJoinForDestroyTimeoutRefusesDestroy();   // A1-④：超时分支不得批准销毁
     void testOrderlyStopHookMachinery();              // 178 行：收尾钩子机械（默认空透传卸载）
+    void testLegacyPlaintextPackageRefusedOnLoad();   // U-204：旧明文打包（无完整性位）真加载入口拒收
     void testTwoExecutorsIsolation();
     void testScriptNodeStopCancellable();
     void testExecutorReuseAcrossScenesWithLoop();
@@ -193,6 +196,7 @@ private slots:
 
     // （178 行的二段窗口腿已随 U-203 撤除）：析构里的两段有界等待与硬中止整段撤除后，
     // 「缩小二段窗口即进程死亡」那枚红臂形态不复存在，尾位留白。
+
 
 private:
     FlowScene *m_scene = nullptr;
@@ -5346,6 +5350,65 @@ void IntegrationTest::testUnregisteredOperatorLossIsCountedAsSaveLoss()
 
 // （178 行的二段窗口腿已随 U-203 撤除）：析构里的两段有界等待与硬中止一并撤除，
 // 收尾语义归位到令牌侧（等待 ＋ 超时转可观测终态的放弃路径），本腿的题眼不复存在。
+
+void IntegrationTest::testLegacyPlaintextPackageRefusedOnLoad()
+{
+    // U-204：v1 旧明文打包（无完整性位）在**真加载入口**拒收——
+    // 分享链路上最后一种「方案不带完整性位」的形状不再能被接管（旧格式的缺位是事实）。
+    QTemporaryDir tmp;
+    QVERIFY2(tmp.isValid(), "临时目录取不到，本腿失去前提");
+
+    // 造一份真方案 JSON（走真写侧的序列化），再手工包成 v1 明文打包字节：
+    // magic ＋ 版本 1 ＋ 标志（无加密位）＋ 压缩载荷（无盐、无 MAC）。
+    FlowScene scene;
+    NodeBase *delay = scene.createNode(NodeBase::LOGIC, QPointF(100, 100), QStringLiteral("Delay"));
+    QVERIFY2(delay != nullptr, "无法创建延时节点");
+    ProjectManager writer;
+    const QJsonObject root = writer.buildProjectJson(QList<FlowScene *>{ &scene });
+    const QByteArray json = QJsonDocument(root).toJson();
+
+    QByteArray v1;
+    v1.append(SchemePackage::kMagic, 4);
+    v1.append(static_cast<char>(SchemePackage::kFormatVersion));   // 1：旧明文打包
+    v1.append(static_cast<char>(0x00));                             // 标志：无加密位、无只读位
+    v1.append(qCompress(json));
+    const QString legacyPath = QDir(tmp.path()).filePath(QStringLiteral("legacy-v1.vfp"));
+    {
+        QFile f(legacyPath);
+        QVERIFY2(f.open(QIODevice::WriteOnly), "旧格式方案落盘失败");
+        f.write(v1);
+        f.close();
+    }
+
+    ProjectManager loader;
+    QStringList notes;
+    QObject::connect(&loader, &ProjectManager::loadNote,
+                     [&notes](const QString &note) { notes.append(note); });
+    QList<FlowScene *> loaded;
+    QVERIFY2(!loader.loadProject(legacyPath, loaded), "旧明文打包必须被拒收（不得接管）");
+    QVERIFY2(loaded.isEmpty(), "拒载后不得留半装载的场景清单");
+    QVERIFY(loader.lastLoadRefusedForIntegrity());
+    const QString joined = notes.join(QStringLiteral("|"));
+    QVERIFY2(joined.contains(QStringLiteral("完整性")),
+             qPrintable(QStringLiteral("拒收须留可执行提示：%1").arg(joined)));
+    QVERIFY2(joined.contains(QStringLiteral("新格式")),
+             qPrintable(QStringLiteral("提示须留给出路：%1").arg(joined)));
+
+    // 反面对照：同内容的 v2 明文打包（带完整性位）必须照常载入——
+    // 拒收只针对「无完整性位」那一种形状，不是把明文打包整体拒了。
+    const QString v2Path = QDir(tmp.path()).filePath(QStringLiteral("v2.vfp"));
+    {
+        QFile f(v2Path);
+        QVERIFY2(f.open(QIODevice::WriteOnly), "新格式方案落盘失败");
+        f.write(SchemePackage::exportScheme(json, QString(), false));
+        f.close();
+    }
+    ProjectManager loader2;
+    QList<FlowScene *> loaded2;
+    QVERIFY2(loader2.loadProject(v2Path, loaded2), "带完整性位的新格式必须照常载入");
+    QCOMPARE(loaded2.size(), 1);
+    qDeleteAll(loaded2);
+}
 
 QTEST_MAIN(IntegrationTest)
 #include "integration_test.moc"

@@ -211,6 +211,7 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
     setLastFilePath(filePath);
     m_loadedReadonly = false;
     m_lastLoadRefusedForOutsidePaths = false;   // U-201：每次载入复位（这次的决定不留给下一次）
+    m_lastLoadRefusedForIntegrity = false;      // U-204：同上（本次载入的拒载原因不留给下一次）
     m_lastIntegrityNote.clear();
     // 信封方案（加密 / 只读打包）：解密 → 解析 JSON → 应用；老明文 .vfp 走原路径。
     if (SchemePackage::isEnvelope(raw)) {
@@ -221,8 +222,19 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
             VFP_DEBUG << "方案加载失败：信封解析/解密失败（口令错误或文件损坏）" << filePath;
             return false; // 不改动 scenes，调用方可以保留当前方案
         }
-        if (integrityMissing)
-            m_lastIntegrityNote = QStringLiteral("旧明文打包格式");
+        if (integrityMissing) {
+            // U-204：v1 旧明文打包（无完整性位）在**真加载入口拒收**。
+            // 判据：分享链路上最后一种「方案不带完整性位」的形状不再能被接管——
+            // 旧格式的缺位是事实（读侧判出来），不是猜测；而「加注提示后照收」
+            // 等于让一份可能被改过的文件直接驱动机器（参数与路径都能被改）。
+            // 死路与出路一并说清：本版本不接收该格式，请让提供方用新版本导出
+            // （新格式带完整性位），或用旧版本打开后「另存为」成新格式。
+            m_lastLoadRefusedForIntegrity = true;
+            reportLoadNote(QStringLiteral(
+                "方案包拒收：旧明文打包格式（不带完整性校验位）本版本不再接收；"
+                "请用带完整性位的新格式重新获取，或由旧版本打开后另存为新格式"));
+            return false;   // 不改动 scenes，调用方保留当前方案
+        }
         QJsonParseError parseError{};
         QJsonDocument doc = QJsonDocument::fromJson(json, &parseError);
         if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {

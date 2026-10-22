@@ -2711,6 +2711,8 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
         qDeleteAll(loadedScenes);
         if (pm->lastLoadRefusedForOutsidePaths())
             logMessage(tr("项目未载入：方案含方案目录外绝对路径且未获确认（当前方案保持不变）"));
+        else if (pm->lastLoadRefusedForIntegrity())
+            logMessage(tr("项目未载入：旧明文打包格式（不带完整性校验位）本版本不再接收（当前方案保持不变）"));
         else if (ProjectManager::fileNeedsPassphrase(fileName))
             logMessage(tr("项目加载失败：口令错误或文件损坏（当前方案保持不变）"));
         else

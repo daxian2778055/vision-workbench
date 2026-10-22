@@ -43,6 +43,10 @@ public:
     /// 窗口侧据此给一句准确的话（而不是笼统的「文件不存在或格式损坏」）。
     bool lastLoadRefusedForOutsidePaths() const { return m_lastLoadRefusedForOutsidePaths; }
 
+    /// 最近一次 loadProject 是否因「旧明文打包（无完整性位）」而拒载（U-204）。
+    /// 与上一条同类：拒载有具体原因，窗口侧据此给准确的话。
+    bool lastLoadRefusedForIntegrity() const { return m_lastLoadRefusedForIntegrity; }
+
     /// 文件是否为需口令的加密信封（供 UI 在打开前决定是否弹入口令框）。
     static bool fileNeedsPassphrase(const QString &filePath);
 
@@ -112,6 +116,8 @@ private:
     bool m_loadedReadonly = false;
     /// U-201：最近一次载入是否被「目录外绝对路径未获确认」拒载（每次载入复位）。
     bool m_lastLoadRefusedForOutsidePaths = false;
+    /// U-204：最近一次载入是否被「旧明文打包（无完整性位）」拒载（每次载入复位）。
+    bool m_lastLoadRefusedForIntegrity = false;
     /// U-36：本次载入有多少条「原始载荷没进内存表」——按两条通道数（标定整条被拒／夹具侧降级），
     /// 其中夹具那条通道装着两类不同后果：矩阵或位姿作废（键名保留、载荷写成空）与键名为空整条跳过
     /// （不进表、无键名可保留 ⇒ 保存后整条不再写回），合起来是三种落盘损失（U-37 复核意见 S-1）。
