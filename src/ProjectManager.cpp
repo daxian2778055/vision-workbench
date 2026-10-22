@@ -205,8 +205,12 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
     const QByteArray raw = file.readAll();
     file.close();
 
+    // U-201：这次载入若被拒（目录外绝对路径未获确认），方案基目录快照必须回到原处——
+    // 否则「当前方案没换、基目录却指向被拒方案」会让相对路径解析落到错的目录。
+    const QString prevFilePath = m_lastFilePath;
     setLastFilePath(filePath);
     m_loadedReadonly = false;
+    m_lastLoadRefusedForOutsidePaths = false;   // U-201：每次载入复位（这次的决定不留给下一次）
     m_lastIntegrityNote.clear();
     // 信封方案（加密 / 只读打包）：解密 → 解析 JSON → 应用；老明文 .vfp 走原路径。
     if (SchemePackage::isEnvelope(raw)) {
@@ -226,17 +230,16 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
             return false;
         }
         m_loadedReadonly = readonly;
-        bool applied = applyProjectJson(doc.object(), scenes);
-        if (applied) {
-            /// 179 行：载入后路径审查（非阻断提示确认面）。清单进 loadNote 一句，
-            /// 旧方案目录外绝对路径数与节点在案（P1-1② 拍板：硬限位不做，提示做）。
-            const ProjectPaths::PathReview review =
-                ProjectPaths::reviewScenes(scenes, filePath);
-            const QString summary = ProjectPaths::pathReviewSummary(review);
-            if (!summary.isEmpty())
-                reportLoadNote(QStringLiteral("路径审查：本方案含%1").arg(summary));
+        if (!buildScenesFromJson(doc.object(), scenes))
+            return false;
+        /// U-201 载入门禁：方案目录外绝对路径须显式确认；未确认即拒载——
+        /// 全局配置此刻尚未应用（拒载不留半装载现场）。
+        if (!confirmOutsideSchemePaths(scenes, filePath)) {
+            setLastFilePath(prevFilePath);
+            return false;
         }
-        return applied;
+        applyGlobalsFromJson(doc.object());
+        return true;
     }
 
     // 原实现未校验解析结果：文件损坏时 doc.object() 为空、循环不执行，
@@ -251,15 +254,46 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
 
     // 应用方案内容（与崩溃恢复共用 applyProjectJson：场景 + 全局配置 + 运行界面布局）
     m_lastIntegrityNote = QStringLiteral("旧明文 JSON 格式");
-    bool ok = applyProjectJson(doc.object(), scenes);
-    if (ok) {
-        const ProjectPaths::PathReview review =
-            ProjectPaths::reviewScenes(scenes, filePath);
+    if (!buildScenesFromJson(doc.object(), scenes))
+        return false;
+    /// U-201 载入门禁：同信封路径——目录外绝对路径未获确认即拒载。
+    if (!confirmOutsideSchemePaths(scenes, filePath)) {
+        setLastFilePath(prevFilePath);
+        return false;
+    }
+    applyGlobalsFromJson(doc.object());
+    return true;
+}
+
+bool ProjectManager::confirmOutsideSchemePaths(QList<FlowScene *> &scenes,
+                                               const QString &schemeFilePath)
+{
+    const ProjectPaths::PathReview review = ProjectPaths::reviewScenes(scenes, schemeFilePath);
+    if (review.outsideCount == 0) {
+        // 无目录外绝对路径：沿用 179 行的旧留痕（相对路径计数），不打扰操作员。
         const QString summary = ProjectPaths::pathReviewSummary(review);
         if (!summary.isEmpty())
             reportLoadNote(QStringLiteral("路径审查：本方案含%1").arg(summary));
+        return true;
     }
-    return ok;
+    // U-201：目录外绝对路径须显式确认——未装确认器也算未确认（fail-closed：
+    // 没有操作员就没有确认；CI 与无界面调用同样不得默认放行）。
+    bool confirmed = false;
+    if (m_outsidePathConfirmer)
+        confirmed = m_outsidePathConfirmer(review);
+    if (!confirmed) {
+        // 拒载：清空场景清单（不留半装载），全局配置此刻尚未应用。
+        qDeleteAll(scenes);
+        scenes.clear();
+        m_lastLoadRefusedForOutsidePaths = true;
+        reportLoadNote(QStringLiteral(
+            "路径审查：本方案含 %1 处方案目录外绝对路径，未获确认，载入已取消（当前方案保持不变）")
+            .arg(review.outsideCount));
+        return false;
+    }
+    reportLoadNote(QStringLiteral(
+        "路径审查：%1 处方案目录外绝对路径已确认放行").arg(review.outsideCount));
+    return true;
 }
 
 bool ProjectManager::exportEncryptedProject(const QString &filePath,
@@ -328,6 +362,16 @@ void ProjectManager::reportLoadNote(const QString &text)
 
 bool ProjectManager::applyProjectJson(const QJsonObject &root, QList<FlowScene *> &scenes)
 {
+    // 内存应用入口（不触盘、无方案目录锚）：U-201 起拆成「建场景」与「应用全局配置」两段，
+    // 供载入面在两段之间插入路径审查与确认。本入口本身不设门禁（门禁在文件载入口 loadProject）。
+    if (!buildScenesFromJson(root, scenes))
+        return false;
+    applyGlobalsFromJson(root);
+    return true;
+}
+
+bool ProjectManager::buildScenesFromJson(const QJsonObject &root, QList<FlowScene *> &scenes)
+{
     m_loadRawLossCount = 0;   // 一次载入一个数：手动打开与崩溃恢复共用本入口，不得串上一次的降级
     // U-38：算子侧那两个必须与上面这行同处复位——分两条通道是为了让现场看出损失出在哪一侧，
     // 不是为了让第二轮带着上一轮的数复读（第二轮无新损失时就该一句都不发）。
@@ -351,7 +395,11 @@ bool ProjectManager::applyProjectJson(const QJsonObject &root, QList<FlowScene *
         sceneFromJson(sceneJson, scene);
         scenes.append(scene);
     }
+    return true;
+}
 
+void ProjectManager::applyGlobalsFromJson(const QJsonObject &root)
+{
     // 恢复全局配置（兼容旧项目文件：缺失字段时跳过）
     if (root.contains(QStringLiteral("globalVariables")))
         GlobalVariableManager::instance()->fromJson(root[QStringLiteral("globalVariables")].toObject());
@@ -429,8 +477,6 @@ bool ProjectManager::applyProjectJson(const QJsonObject &root, QList<FlowScene *
             "改写成通用算子的那一份；需要保留原始文件请先复制一份备份")
                            .arg(nodeSideLossCount).arg(m_loadNodeTypeLossCount).arg(m_loadEdgeLossCount));
     }
-
-    return true;
 }
 
 QJsonObject ProjectManager::sceneToJson(FlowScene *scene) const

@@ -3,9 +3,15 @@
 // 相对解析锚定方案目录（未落盘方案回落 cwd）、拾取换相对形态、载入期审查计数。
 // 红臂破坏位 = 目录内判定取反（InSchemeDir↔OutsideSchemeDir 换位）——分类腿与
 // 审查计数腿当场红。
+//
+// U-201 增三腿（载入门禁：目录外绝对路径须显式确认）：未确认即拒载（场景清单清空、
+// 留痕一句、当前方案保持不变）；确认后放行并留痕；无目录外路径时确认器不得被叫起。
+// 红臂破坏位 = 绕过确认器（确认结果一律当放行）——拒载腿当场红，放行腿与负对照腿原样绿。
 #include <QtTest/QtTest>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
 #include <QTemporaryDir>
 
 #include "FlowScene.h"
@@ -29,8 +35,15 @@ private slots:
     void testSchemeBaseFunnel();
     void testReviewScenesCounting();
     void testPathReviewSummaryText();
+    // U-201 载入门禁三腿
+    void testOutsideSchemePathNeedsConfirmation();        // 未确认即拒载（清单清空 + 留痕）
+    void testOutsideSchemePathAllowedAfterConfirm();       // 确认后放行（并留痕）
+    void testSchemeWithoutOutsidePathSkipsConfirmation();  // 负对照：无目录外路径不叫确认器
 
 private:
+    /// 造一份带指定 filePath 的方案文件（走真写侧序列化 buildProjectJson），返回是否落盘。
+    bool writeSchemeWithFilePath(const QString &filePathValue);
+
     QTemporaryDir m_tmp;           // 方案目录：plan.vfp 落此
     QString m_scheme;              // 方案文件绝对路径
     QString m_savedCwd;            // 测试期 cwd 回恢复位
@@ -191,6 +204,99 @@ void ProjectPathsTest::testPathReviewSummaryText()
     const QString text = ProjectPaths::pathReviewSummary(some);
     QVERIFY2(text.contains(QStringLiteral("2 处")), qPrintable(QStringLiteral("总纲句应携带处数：%1").arg(text)));
     QVERIFY2(text.contains(QStringLiteral("相对路径")), "总纲句应把相对形态点名");
+}
+
+bool ProjectPathsTest::writeSchemeWithFilePath(const QString &filePathValue)
+{
+    // 走真写侧的序列化（buildProjectJson）：座里不另写一套拼装，免得与产线形状分叉。
+    FlowScene scene;
+    NodeBase *reader = scene.createNode(NodeBase::IMAGE_ACQUISITION, QPointF(100, 200),
+                                        QStringLiteral("读旧外"));
+    if (!reader)
+        return false;
+    reader->setParam(QStringLiteral("filePath"), filePathValue);
+    ProjectManager pm;
+    QJsonObject root = pm.buildProjectJson(QList<FlowScene *>{ &scene });
+    root.remove(QStringLiteral("runtimeLayout"));   // 座内不碰运行界面布局文件（免得写应用目录）
+    QFile file(m_scheme);
+    if (!file.open(QIODevice::WriteOnly))
+        return false;
+    const QByteArray payload = QJsonDocument(root).toJson();
+    return file.write(payload) == payload.size();
+}
+
+void ProjectPathsTest::testOutsideSchemePathNeedsConfirmation()
+{
+    // U-201：含方案目录外绝对路径的方案，载入前必须取得一次显式确认；未确认即拒载。
+    const QString outside =
+        QDir(QDir::tempPath()).filePath(QStringLiteral("vfp201_outside/r1.png"));
+    QVERIFY2(writeSchemeWithFilePath(outside), "方案素材落盘失败");
+
+    ProjectManager loader;
+    int asked = 0;
+    loader.setOutsidePathConfirmer([&asked](const ProjectPaths::PathReview &) {
+        ++asked;
+        return false;   // 操作员不确认
+    });
+    QStringList notes;
+    QObject::connect(&loader, &ProjectManager::loadNote,
+                     [&notes](const QString &note) { notes.append(note); });
+
+    QList<FlowScene *> reopened;
+    const bool ok = loader.loadProject(m_scheme, reopened);
+    QVERIFY2(!ok, "未确认的目录外绝对路径方案不得载入");
+    QCOMPARE(asked, 1);                          // 确认器必须被咨询（不得静默放行）
+    QVERIFY2(reopened.isEmpty(), "拒载后不得留半装载的场景清单");
+    QVERIFY2(notes.join(QStringLiteral("|")).contains(QStringLiteral("未获确认")),
+             qPrintable(QStringLiteral("拒载须留痕：%1").arg(notes.join(QStringLiteral("|")))));
+    QVERIFY(loader.lastLoadRefusedForOutsidePaths());
+    qDeleteAll(reopened);
+}
+
+void ProjectPathsTest::testOutsideSchemePathAllowedAfterConfirm()
+{
+    // U-201：操作员确认后放行——载入成功，且留痕写明已确认放行。
+    const QString outside =
+        QDir(QDir::tempPath()).filePath(QStringLiteral("vfp201_outside/r1.png"));
+    QVERIFY(writeSchemeWithFilePath(outside));
+
+    ProjectManager loader;
+    int asked = 0;
+    loader.setOutsidePathConfirmer([&asked](const ProjectPaths::PathReview &review) {
+        ++asked;
+        return review.outsideCount > 0;   // 操作员看过清单后放行
+    });
+    QStringList notes;
+    QObject::connect(&loader, &ProjectManager::loadNote,
+                     [&notes](const QString &note) { notes.append(note); });
+
+    QList<FlowScene *> reopened;
+    const bool ok = loader.loadProject(m_scheme, reopened);
+    QVERIFY2(ok, "确认后应当放行载入");
+    QCOMPARE(asked, 1);
+    QVERIFY(!reopened.isEmpty());
+    QVERIFY2(notes.join(QStringLiteral("|")).contains(QStringLiteral("已确认放行")),
+             qPrintable(QStringLiteral("放行须留痕：%1").arg(notes.join(QStringLiteral("|")))));
+    qDeleteAll(reopened);
+}
+
+void ProjectPathsTest::testSchemeWithoutOutsidePathSkipsConfirmation()
+{
+    // 负对照：方案内只有相对形态路径时不得打扰操作员（确认器一次都不能被叫起）。
+    QVERIFY(writeSchemeWithFilePath(QStringLiteral("images/rel.png")));
+
+    ProjectManager loader;
+    int asked = 0;
+    loader.setOutsidePathConfirmer([&asked](const ProjectPaths::PathReview &) {
+        ++asked;
+        return false;   // 即便这个确认器会拒，也轮不到它说话
+    });
+    QList<FlowScene *> reopened;
+    const bool ok = loader.loadProject(m_scheme, reopened);
+    QVERIFY2(ok, "无目录外绝对路径的方案不得被门禁拦下");
+    QCOMPARE(asked, 0);
+    QVERIFY(!reopened.isEmpty());
+    qDeleteAll(reopened);
 }
 
 QTEST_MAIN(ProjectPathsTest)

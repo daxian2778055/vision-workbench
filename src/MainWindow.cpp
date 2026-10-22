@@ -11,6 +11,7 @@
 #include "NodeBase.h"
 #include "NodeGroupItem.h"
 #include "FlowSnippet.h"
+#include "ProjectPaths.h"   // U-201 载入门禁：目录外绝对路径的确认清单
 #include "YieldMonitor.h"
 #include "InspectionRecord.h"
 #include "ReportAutoExport.h"
@@ -2695,6 +2696,12 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
             return; // 用户取消
     }
 
+    // U-201 载入门禁：方案目录外绝对路径须显式确认（模态，逐条列路径）；
+    // 未确认即拒载——当前方案保持不变，窗口侧不接管任何半装载内容。
+    pm->setOutsidePathConfirmer([this](const ProjectPaths::PathReview &review) {
+        return confirmOutsideSchemePaths(review);
+    });
+
     // 先加载到临时列表：只有加载成功才销毁当前方案。
     // 原实现是先 qDeleteAll 再加载，文件损坏时旧方案已丢、新方案为空，且仍报“加载成功”。
     QList<FlowScene*> loadedScenes;
@@ -2702,7 +2709,9 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
 
     if (!success) {
         qDeleteAll(loadedScenes);
-        if (ProjectManager::fileNeedsPassphrase(fileName))
+        if (pm->lastLoadRefusedForOutsidePaths())
+            logMessage(tr("项目未载入：方案含方案目录外绝对路径且未获确认（当前方案保持不变）"));
+        else if (ProjectManager::fileNeedsPassphrase(fileName))
             logMessage(tr("项目加载失败：口令错误或文件损坏（当前方案保持不变）"));
         else
             logMessage(tr("项目加载失败：文件不存在、格式损坏或内容为空（当前方案保持不变）"));
@@ -2893,6 +2902,35 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
     // 否则关窗时不会提示保存，用户会以为已经存好了——丢工作的经典路径。
     if (!recoveryRestore)
         markProjectSaved();
+}
+
+bool MainWindow::confirmOutsideSchemePaths(const ProjectPaths::PathReview &review)
+{
+    // U-201 载入门禁：逐条点名方案目录外的绝对路径（节点 · 参数 · 原路径）。
+    // 默认按钮落在「否」上——误按回车即拒载（拒载无副作用：当前方案保持不变）。
+    const int total = review.outsideHits.size();
+    const int shown = qMin(10, total);
+    QStringList lines;
+    for (int i = 0; i < shown; ++i) {
+        const ProjectPaths::PathReviewHit &hit = review.outsideHits.at(i);
+        lines << QStringLiteral("%1 · %2：%3").arg(hit.nodeName, hit.paramName, hit.rawPath);
+    }
+    if (total > shown) {
+        lines << QStringLiteral("……另有 %1 处未逐条列出").arg(total - shown);
+    }
+    QMessageBox box(QMessageBox::Warning, tr("方案含方案目录外路径"),
+                    tr("该方案引用了 %1 处方案目录外的绝对路径：\n\n%2\n\n"
+                       "是否确认放行载入？不确认则本次载入取消，当前方案保持不变。")
+                        .arg(review.outsideCount)
+                        .arg(lines.join(QStringLiteral("\n"))),
+                    QMessageBox::Yes | QMessageBox::No, this);
+    box.setDefaultButton(QMessageBox::No);
+    QStringList allLines;
+    for (const ProjectPaths::PathReviewHit &hit : review.outsideHits) {
+        allLines << QStringLiteral("%1 · %2：%3").arg(hit.nodeName, hit.paramName, hit.rawPath);
+    }
+    box.setDetailedText(allLines.join(QStringLiteral("\n")));
+    return box.exec() == QMessageBox::Yes;
 }
 
 void MainWindow::checkHalconNodesHint()

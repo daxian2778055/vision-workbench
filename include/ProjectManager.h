@@ -6,6 +6,9 @@
 #include <QJsonObject>
 #include <QList>
 
+#include <functional>
+#include <utility>
+
 class FlowScene;
 class QWidget;
 
@@ -36,6 +39,10 @@ public:
     /// 加密信封与 v2 明文打包（带 HMAC 位）载入后为空。
     QString lastIntegrityNote() const { return m_lastIntegrityNote; }
 
+    /// 最近一次 loadProject 是否因「方案目录外绝对路径未获确认」而拒载（U-201）。
+    /// 窗口侧据此给一句准确的话（而不是笼统的「文件不存在或格式损坏」）。
+    bool lastLoadRefusedForOutsidePaths() const { return m_lastLoadRefusedForOutsidePaths; }
+
     /// 文件是否为需口令的加密信封（供 UI 在打开前决定是否弹入口令框）。
     static bool fileNeedsPassphrase(const QString &filePath);
 
@@ -46,6 +53,15 @@ public:
     /// 把方案 JSON 应用到场景列表与各全局管理器（loadProject 与崩溃恢复共用）。
     /// 非 const：内部要调用非 const 的 sceneFromJson，且会改写全局管理器单例。
     bool applyProjectJson(const QJsonObject &root, QList<FlowScene *> &scenes);
+
+    /// 方案目录外绝对路径的确认器（U-201 载入门禁）：入参是本次载入的路径审查结果，
+    /// 返回 true = 放行载入；false = 拒载（当前方案保持不变）。
+    /// 未装确认器 = 拒载（fail-closed：没有操作员就没有确认，CI 与无界面调用同样不得默认放行）。
+    using OutsidePathConfirmer = std::function<bool(const ProjectPaths::PathReview &)>;
+    void setOutsidePathConfirmer(OutsidePathConfirmer confirmer)
+    {
+        m_outsidePathConfirmer = std::move(confirmer);
+    }
 
     /// 交互式保存：弹文件对话框（.vfp 补全）+ 保存 + 成功/失败提示框。
     /// 返回是否保存成功；savedPath 在用户选定路径后即被赋值（取消则为空串）。
@@ -78,9 +94,24 @@ private:
     /// 文案在这里拼一遍，载入期八个站点都调它。
     void reportLoadNote(const QString &text);
 
+    /// 建场景（只建场景，不碰全局配置）：U-201 起载入面拆成「建场景 → 路径审查与确认 →
+    /// 应用全局配置」——拒载时全局配置（相机／触发／通讯／标定／运行界面布局）不得被这次
+    /// 载入改动，否则会出现「场景没接管、全局配置已换」的半装载现场。
+    bool buildScenesFromJson(const QJsonObject &root, QList<FlowScene *> &scenes);
+    /// 应用全局配置与运行界面布局（U-201：从 applyProjectJson 里拆出，与建场景分开）。
+    void applyGlobalsFromJson(const QJsonObject &root);
+    /// 路径审查 ＋ 显式确认（U-201）：本次载入含方案目录外绝对路径时必须取得一次确认；
+    /// 未确认（含未装确认器）即拒载——清空场景清单（不留半装载）并留痕，返回 false。
+    bool confirmOutsideSchemePaths(QList<FlowScene *> &scenes, const QString &schemeFilePath);
+
+    /// 目录外绝对路径的确认器（未装 = 拒载，见 setOutsidePathConfirmer）。
+    OutsidePathConfirmer m_outsidePathConfirmer;
+
     QString m_lastFilePath;
     QString m_lastIntegrityNote;
     bool m_loadedReadonly = false;
+    /// U-201：最近一次载入是否被「目录外绝对路径未获确认」拒载（每次载入复位）。
+    bool m_lastLoadRefusedForOutsidePaths = false;
     /// U-36：本次载入有多少条「原始载荷没进内存表」——按两条通道数（标定整条被拒／夹具侧降级），
     /// 其中夹具那条通道装着两类不同后果：矩阵或位姿作废（键名保留、载荷写成空）与键名为空整条跳过
     /// （不进表、无键名可保留 ⇒ 保存后整条不再写回），合起来是三种落盘损失（U-37 复核意见 S-1）。

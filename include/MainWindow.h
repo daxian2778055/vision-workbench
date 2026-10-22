@@ -52,6 +52,10 @@ class OutputDataViewer;
 class NodeSearchWidget;
 class HelpViewer;
 class BrandHeader;
+
+namespace ProjectPaths {
+struct PathReview;   // U-201 载入门禁：目录外绝对路径的确认面（清单结构）
+}
 #include "FlowExecutor.h"
 
 // 语言枚举
@@ -215,6 +219,9 @@ private:
     /// recoveryRestore=true（来自崩溃恢复）：不记入最近文件、不把内容标为"已落盘"——
     /// 恢复出来的内容还没写回原方案文件，关闭时仍须提示保存。
     void loadProjectFile(const QString &fileName, bool recoveryRestore = false);
+    /// U-201 载入门禁：本次载入含方案目录外绝对路径时弹模态确认（逐条列路径）；
+    /// 返回 true = 操作员放行；false = 拒载（当前方案保持不变）。
+    bool confirmOutsideSchemePaths(const ProjectPaths::PathReview &review);
     /// 取得（必要时创建）方案序列化器：保存/加载/自动保存共用同一实例
     ProjectManager *projectManager();
     /// 交互式保存方案（文件对话框 + 结果提示）；返回是否真的保存成功
