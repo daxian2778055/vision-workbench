@@ -52,7 +52,7 @@ void ModbusNode::init()
     m_params[QStringLiteral("reconnectInterval")] = 3000;
     m_params[QStringLiteral("writeVerify")] = false;   // S4：回写三段确认（默认关闭）
     m_params[QStringLiteral("pollInterval")] = 100;
-    m_params[QStringLiteral("bindAddress")] = QString(); // 177 行：留空=全网卡默认（Modbus 从站）
+    m_params[QStringLiteral("bindAddress")] = QString(); // U-202：留空 = 未配置，从站拒启动（要全网卡写 0.0.0.0）
     setParamDirect(QStringLiteral("connected"), false);
 
     // 自动重连定时器
@@ -110,14 +110,20 @@ bool ModbusNode::openConnection()
 
     // ===== 服务器模式：监听端口，对外提供寄存器 =====
     if (m_role == MODBUS_SERVER) {
-        // 177 行：从站监听地址解析（CommBind 见基类头注）。默认面 = Any 产品语义保持
-        // （Qt Modbus 服务器未设 NetworkAddressParameter 即全网卡）；显式 = 该地址；
-        // 无效 = 拒启动不静默回落（N4 同形）。
+        // 从站监听地址解析（CommBind 见基类头注）。U-202：未配置（留空）= 拒启动并留可执行
+        // 提示；显式 = 该地址原样绑定（0.0.0.0 即显式全网卡）；无效 = 拒启动不静默回落（N4 同形）。
         const CommBind::BindChoice bind = CommBind::resolveListenAddress(
             m_params.value(QStringLiteral("bindAddress")).toString());
+        if (bind.kind == CommBind::BindKind::Missing) {
+            emit communicationError(QStringLiteral(
+                "Modbus 从站监听地址未配置：请显式填写要监听的 IP 字面量（如需全网卡请写 0.0.0.0）"));
+            m_connected = false;
+            setParamDirect(QStringLiteral("connected"), false);
+            return false;
+        }
         if (bind.kind == CommBind::BindKind::Invalid) {
             emit communicationError(QStringLiteral(
-                "\u4ECE\u7AD9\u76D1\u542C\u5730\u5740\u914D\u7F6E\u65E0\u6548\uFF08\u5E94\u586B IP \u5B57\u9762\u91CF\uFF0C\u7559\u7A7A\u4E3A\u5168\u7F51\u5361 0.0.0.0\uFF09"));
+                "Modbus 从站监听地址配置无效（应填 IP 字面量，如需全网卡请写 0.0.0.0）"));
             m_connected = false;
             setParamDirect(QStringLiteral("connected"), false);
             return false;
@@ -128,10 +134,10 @@ bool ModbusNode::openConnection()
         m_modbusServer->setConnectionParameter(
             QModbusDevice::NetworkPortParameter,
             m_params.value(QStringLiteral("port"), 502).toInt());
-        if (bind.kind == CommBind::BindKind::Explicit) {
-            m_modbusServer->setConnectionParameter(
-                QModbusDevice::NetworkAddressParameter, bind.address.toString());
-        }
+        // U-202：解析器已保证走到这里必是 Explicit —— 从站监听地址一律显式设置
+        // （不设 NetworkAddressParameter 即 Qt 原生全网卡，那是 U-202 前的旧默认面）。
+        m_modbusServer->setConnectionParameter(
+            QModbusDevice::NetworkAddressParameter, bind.address.toString());
 
         // 必须先 setMap：QModbusServer 默认寄存器表为空，未映射地址的写入会被直接拒绝——
         // 既不会改值、也不会触发 dataWritten（表现为"客户端写成功、服务器毫无反应"）。

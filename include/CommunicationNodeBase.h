@@ -64,17 +64,22 @@ protected:
     QString m_deviceName;
 };
 
-/// 监听地址解析（177 行拍板）：通信服务端（TCP listen / UDP bind / Modbus 从站）绑定面
-/// 统一走这里，禁止静默 Any——空参 = 产品默认全网卡（历史 0.0.0.0 语义保持，无静默性质：
-/// 配置面板留空即明示默认）；显式参数必须解析成功为 IP 字面量（数字形式，主机名不解析）；
+/// 监听地址解析（177 行拍板；U-202 期客户改口径）：通信服务端（TCP listen / UDP bind /
+/// Modbus 从站）绑定面统一走这里，禁止静默 Any——**空参不再等价于全网卡**：判 Missing
+/// （未配置）由调用方拒启动；显式参数必须解析成功为 IP 字面量（数字形式，主机名不解析）；
 /// 无效参数一律 Invalid，由调用方拒绝启动——宁可不起服务，不静默回落扩面。
-/// "0.0.0.0"/"::" 属合法字面量Explicit（显式全网卡，绑定后就位时留日志）。
+/// "0.0.0.0"/"::" 属合法字面量 Explicit（显式全网卡，绑定后就位时留日志）：
+/// 「确实要听全网卡」写成字面量即可，平台不再替人默认。
+/// U-202 口径变更（明示行为变更）：变更前空参 = Default = 全网卡（177 行的产品默认面）；
+/// 变更后空参 = Missing = 拒启动并留可执行提示。取舍：空参回落 127.0.0.1 也能收窄监听面，
+/// 但那是**静默收窄**——现场症状是「PLC 连不上」，会被误判成网络或 PLC 的问题；
+/// 拒启动则当场说清「哪个字段没填、怎么填」，且全网卡仍可显式写 0.0.0.0。
 namespace CommBind {
-enum class BindKind { Default, Explicit, Invalid };
+enum class BindKind { Missing, Explicit, Invalid };
 
 struct BindChoice {
     BindKind kind = BindKind::Invalid;
-    QHostAddress address; // Explicit 时有效；Default 时置 Any 由调用方按协议选 Any/AnyIPv4
+    QHostAddress address; // Explicit 时有效；Missing 时留空（不得携带任何监听地址）
 };
 
 inline BindChoice resolveListenAddress(const QString &raw)
@@ -82,7 +87,7 @@ inline BindChoice resolveListenAddress(const QString &raw)
     BindChoice c;
     const QString trimmed = raw.trimmed();
     if (trimmed.isEmpty()) {
-        c.kind = BindKind::Default;
+        c.kind = BindKind::Missing;   // U-202：未配置 ≠ 全网卡；调用方须拒启动
         return c;
     }
     QHostAddress addr;

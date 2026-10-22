@@ -22,7 +22,7 @@ void TcpCommNode::init()
     m_params[QStringLiteral("serverIp")] = QStringLiteral("127.0.0.1");
     m_params[QStringLiteral("port")] = 502;
     m_params[QStringLiteral("mode")] = QStringLiteral("Client");
-    m_params[QStringLiteral("bindAddress")] = QString(); // 177 行：留空=全网卡默认
+    m_params[QStringLiteral("bindAddress")] = QString(); // U-202：留空 = 未配置，服务端拒启动（要全网卡写 0.0.0.0）
     m_params[QStringLiteral("autoReconnect")] = true;
     m_params[QStringLiteral("reconnectInterval")] = 3000;
     // 帧组装（粘包/半包治理）：默认关闭，行为与历史一致；在设备配置里开启
@@ -94,20 +94,26 @@ bool TcpCommNode::openConnection()
 
     if (m_isServer) {
         m_server = new QTcpServer(this);
-        // 177 行：监听地址从节点参数 bindAddress 解析（CommBind 见基类头注）。
-        // 默认面 = 全网卡（0.0.0.0 历史语义保持）；显式 = 该地址；无效 = 拒启动不回落。
+        // 监听地址从节点参数 bindAddress 解析（CommBind 见基类头注）。
+        // U-202：未配置（留空）= 拒启动并留可执行提示；显式 = 该地址原样绑定
+        //（0.0.0.0 即显式全网卡）；无效 = 拒启动不回落。
         const CommBind::BindChoice bind = CommBind::resolveListenAddress(
             m_params.value(QStringLiteral("bindAddress")).toString());
-        if (bind.kind == CommBind::BindKind::Invalid) {
+        if (bind.kind == CommBind::BindKind::Missing) {
             emit communicationError(QStringLiteral(
-                "\u76D1\u542C\u5730\u5740\u914D\u7F6E\u65E0\u6548\uFF08\u5E94\u586B IP \u5B57\u9762\u91CF\uFF0C\u7559\u7A7A\u4E3A\u5168\u7F51\u5361 0.0.0.0\uFF09"));
+                "TCP 监听地址未配置：请在参数面板显式填写要监听的 IP 字面量（如需全网卡请写 0.0.0.0）"));
             m_connected = false;
             setParamDirect(QStringLiteral("connected"), false);
             return false;
         }
-        const QHostAddress bindAddr = (bind.kind == CommBind::BindKind::Explicit)
-                                          ? bind.address
-                                          : QHostAddress::Any;
+        if (bind.kind == CommBind::BindKind::Invalid) {
+            emit communicationError(QStringLiteral(
+                "TCP 监听地址配置无效（应填 IP 字面量，如需全网卡请写 0.0.0.0）"));
+            m_connected = false;
+            setParamDirect(QStringLiteral("connected"), false);
+            return false;
+        }
+        const QHostAddress bindAddr = bind.address;
         if (!m_server->listen(bindAddr, m_params.value(QStringLiteral("port"), 502).toInt())) {
             emit communicationError(QStringLiteral("\u670D\u52A1\u7AEF\u542F\u52A8\u5931\u8D25: %1").arg(m_server->errorString()));
             m_connected = false;
@@ -323,11 +329,11 @@ QWidget *TcpCommNode::createParamPanel()
     layout->addWidget(new QLabel(QStringLiteral("\u7AEF\u53E3:")));
     layout->addWidget(portEdit);
 
-    // 监听地址（177 行拍板）：仅服务端模式生效。留空 = 全网卡默认（0.0.0.0 历史语义
-    // 保持，无静默性质）；填 IP 字面量 = 显式绑定；无效值启动时拒绝（不静默回落）。
+    // 监听地址（U-202 口径）：仅服务端模式生效。必填——留空即未配置，服务端拒启动；
+    // 填 IP 字面量 = 显式绑定（0.0.0.0 即显式全网卡）；无效值启动时拒绝（不静默回落）。
     auto *bindEdit = new QLineEdit();
     bindEdit->setObjectName(QStringLiteral("tcpBindAddress"));
-    bindEdit->setPlaceholderText(QStringLiteral("留空=全网卡(0.0.0.0)"));
+    bindEdit->setPlaceholderText(QStringLiteral("必填：如 127.0.0.1；全网卡写 0.0.0.0"));
     bindEdit->setText(m_params.value(QStringLiteral("bindAddress")).toString());
     connect(bindEdit, &QLineEdit::editingFinished, this, [this, bindEdit]() {
         setParam(QStringLiteral("bindAddress"), bindEdit->text().trimmed());

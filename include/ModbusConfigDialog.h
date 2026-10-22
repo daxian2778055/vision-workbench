@@ -53,8 +53,8 @@ private:
     QLabel *m_hostLabel = nullptr;
     QSpinBox *m_port = nullptr;
     QLabel *m_portLabel = nullptr;
-    // 从站监听地址（177 行）：留空 = 全网卡默认（历史语义保持）；显式 IP 字面量 = 只绑该网卡；
-    // 无效值由节点侧拒启动（不静默回落）。
+    // 从站监听地址（U-202 口径）：必填——留空即未配置，从站拒启动；显式 IP 字面量 = 只绑该网卡
+    // （0.0.0.0 即显式全网卡）；无效值由节点侧拒启动（不静默回落）。
     QLineEdit *m_bindAddress = nullptr;
     QLabel *m_bindAddressLabel = nullptr;
     // RTU（RS485）串口参数：连接类型选 RTU 时显示（历史缺陷：有 RTU 选项但无任何串口字段）

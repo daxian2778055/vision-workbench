@@ -1,6 +1,9 @@
 // 通讯回写链路端到端验证：本机起一个 QTcpServer 充当「模拟 PLC」，让平台按 TCP 客户端连上去，
 // 再由流程里的「发送数据」算子把结果写回；并验证"设备不存在 / 未连接"时回写失败是**可见**的
 // （此前 process() 恒返回 true：PLC 什么都没收到，流程却显示成功、日志里也没有任何痕迹）。
+//
+// U-202（通信监听地址收紧为必填）：十处服务端配置的 bindAddress 从「留空＝全网卡」改为
+// 显式 127.0.0.1 —— 收紧后留空即未配置、从站拒启动（生产侧同口径：配置面必须显式给地址）。
 #include <QtTest>
 #include <QPushButton>
 #include <QTableWidget>
@@ -135,6 +138,7 @@ private slots:
     void testModbusSingleRegisterByteOrder();
     void testModbusWriteReadByteOrderRoundTrip();   // S3/S4：写入逆变换 + 宽类型拆寄存器往返
     void testModbusServerWideRegisterInit();         // S7：服务器寄存器表初始化须按宽类型拆字
+    void testModbusServerRefusesEmptyBindAddress();  // U-202：空监听地址＝未配置 ⇒ 从站拒启动并留痕
     void testPlcWriteReadByteOrderRoundTrip();       // S3（PLC 半边）：PLC 写入逆变换往返
     void testModbusUserCloseDoesNotResurrect();      // S-1：真连后用户关闭不复活 + 重开后自愈仍有效
     void testPlcUserCloseDoesNotResurrect();         // S-1（PLC 同款）：并钉住 openConnection 两行复位
@@ -274,6 +278,7 @@ void CommWritebackTest::testModbusRegisterWritebackAndRawSendGuard()
 
     QJsonObject srvCfg;
     srvCfg[QStringLiteral("role")] = QStringLiteral("服务器");
+    srvCfg[QStringLiteral("bindAddress")] = QStringLiteral("127.0.0.1");
     srvCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
     srvCfg[QStringLiteral("port")] = port;
     srvCfg[QStringLiteral("slaveAddress")] = 1;
@@ -368,6 +373,34 @@ void CommWritebackTest::testModbusRegisterWritebackAndRawSendGuard()
     QVERIFY(cm->removeDevice(QStringLiteral("MB_CLI")));
     QVERIFY(cm->closeDevice(QStringLiteral("MB_SRV")));
     QVERIFY(cm->removeDevice(QStringLiteral("MB_SRV")));
+}
+
+void CommWritebackTest::testModbusServerRefusesEmptyBindAddress()
+{
+    // U-202：空监听地址 = 未配置（不再是「留空＝全网卡默认」）⇒ 从站必须拒启动，
+    // 并留一句可执行的话。留空就能起服务 = 平台替人默认监听全网卡，是本轮撤掉的那条默认面。
+    auto *cm = CommunicationManager::instance();
+    DeviceCleanup cleanup{ { QStringLiteral("MB_NOBIND") } };
+
+    QJsonObject srvCfg;
+    srvCfg[QStringLiteral("role")] = QStringLiteral("服务器");
+    srvCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
+    srvCfg[QStringLiteral("port")] = pickFreePort();
+    srvCfg[QStringLiteral("slaveAddress")] = 1;
+    // 刻意不投 bindAddress：配置面缺这一项 = 留空 = 未配置。
+    QVERIFY2(cm->addDevice(QStringLiteral("MB_NOBIND"), QStringLiteral("Modbus"), srvCfg),
+             "addDevice(服务器·空监听地址) 失败");
+    auto *srv = qobject_cast<ModbusNode *>(cm->deviceNode(QStringLiteral("MB_NOBIND")));
+    QVERIFY2(srv != nullptr, "从站节点类型不符");
+
+    QSignalSpy errSpy(srv, &CommunicationNodeBase::communicationError);
+    QVERIFY2(!cm->openDevice(QStringLiteral("MB_NOBIND")),
+             "空监听地址的从站不得启动（U-202：留空＝未配置）");
+    QVERIFY(!srv->isServerListening());
+    QCOMPARE(errSpy.count(), 1);
+    const QString reason = errSpy.at(0).at(0).toString();
+    QVERIFY2(reason.contains(QStringLiteral("未配置")),
+             qPrintable(QStringLiteral("拒启动须留可执行提示：%1").arg(reason)));
 }
 
 void CommWritebackTest::testPlcDataTriggersFlowAndWritesBack()
@@ -1044,6 +1077,8 @@ void CommWritebackTest::testUdpRoundTrip()
     cfg[QStringLiteral("localPort")] = int(kUdpLocalPort);
     cfg[QStringLiteral("remoteIp")] = QStringLiteral("127.0.0.1");
     cfg[QStringLiteral("remotePort")] = int(peerPort);
+    // U-202：本地端口 > 0 即接收面，留空＝未配置 ⇒ 拒绑定（收包面必须显式给地址）。
+    cfg[QStringLiteral("bindAddress")] = QStringLiteral("127.0.0.1");
     QVERIFY2(cm->addDevice(QStringLiteral("SIM_UDP"), QStringLiteral("UDP"), cfg),
              "addDevice(UDP) 失败");
     QVERIFY2(cm->openDevice(QStringLiteral("SIM_UDP")), "UDP 绑定失败");
@@ -1749,6 +1784,7 @@ void CommWritebackTest::testModbusCloseNoDoubleReportOnTransientDrop()
 
     QJsonObject srvCfg;
     srvCfg[QStringLiteral("role")] = QStringLiteral("服务器");
+    srvCfg[QStringLiteral("bindAddress")] = QStringLiteral("127.0.0.1");
     srvCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
     srvCfg[QStringLiteral("port")] = port;
     srvCfg[QStringLiteral("slaveAddress")] = 1;
@@ -1798,6 +1834,7 @@ void CommWritebackTest::testPlcCloseNoDoubleReportOnTransientDrop()
 
     QJsonObject srvCfg;
     srvCfg[QStringLiteral("role")] = QStringLiteral("服务器");
+    srvCfg[QStringLiteral("bindAddress")] = QStringLiteral("127.0.0.1");
     srvCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
     srvCfg[QStringLiteral("port")] = port;
     srvCfg[QStringLiteral("slaveAddress")] = 1;
@@ -1848,6 +1885,7 @@ void CommWritebackTest::testModbusCoilWriteback()
 
     QJsonObject srvCfg;
     srvCfg[QStringLiteral("role")] = QStringLiteral("服务器");
+    srvCfg[QStringLiteral("bindAddress")] = QStringLiteral("127.0.0.1");
     srvCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
     srvCfg[QStringLiteral("port")] = port;
     srvCfg[QStringLiteral("slaveAddress")] = 1;
@@ -1908,6 +1946,7 @@ void CommWritebackTest::testModbusUserCloseDoesNotResurrect()
 
     QJsonObject srvCfg;
     srvCfg[QStringLiteral("role")] = QStringLiteral("服务器");
+    srvCfg[QStringLiteral("bindAddress")] = QStringLiteral("127.0.0.1");
     srvCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
     srvCfg[QStringLiteral("port")] = port;
     srvCfg[QStringLiteral("slaveAddress")] = 1;
@@ -1970,6 +2009,7 @@ void CommWritebackTest::testPlcUserCloseDoesNotResurrect()
 
     QJsonObject srvCfg;
     srvCfg[QStringLiteral("role")] = QStringLiteral("服务器");
+    srvCfg[QStringLiteral("bindAddress")] = QStringLiteral("127.0.0.1");
     srvCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
     srvCfg[QStringLiteral("port")] = port;
     srvCfg[QStringLiteral("slaveAddress")] = 1;
@@ -2065,6 +2105,7 @@ void CommWritebackTest::testModbusSingleRegisterByteOrder()
 
     QJsonObject srvCfg;
     srvCfg[QStringLiteral("role")] = QStringLiteral("服务器");
+    srvCfg[QStringLiteral("bindAddress")] = QStringLiteral("127.0.0.1");
     srvCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
     srvCfg[QStringLiteral("port")] = port;
     srvCfg[QStringLiteral("slaveAddress")] = 1;
@@ -2154,6 +2195,7 @@ void CommWritebackTest::testModbusWriteReadByteOrderRoundTrip()
 
     QJsonObject srvCfg;
     srvCfg[QStringLiteral("role")] = QStringLiteral("服务器");
+    srvCfg[QStringLiteral("bindAddress")] = QStringLiteral("127.0.0.1");
     srvCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
     srvCfg[QStringLiteral("port")] = port;
     srvCfg[QStringLiteral("slaveAddress")] = 1;
@@ -2283,6 +2325,7 @@ void CommWritebackTest::testModbusServerWideRegisterInit()
 
     QJsonObject srvCfg;
     srvCfg[QStringLiteral("role")] = QStringLiteral("服务器");
+    srvCfg[QStringLiteral("bindAddress")] = QStringLiteral("127.0.0.1");
     srvCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
     srvCfg[QStringLiteral("port")] = port;
     srvCfg[QStringLiteral("slaveAddress")] = 1;
@@ -2342,6 +2385,7 @@ void CommWritebackTest::testPlcWriteReadByteOrderRoundTrip()
 
     QJsonObject srvCfg;
     srvCfg[QStringLiteral("role")] = QStringLiteral("服务器");
+    srvCfg[QStringLiteral("bindAddress")] = QStringLiteral("127.0.0.1");
     srvCfg[QStringLiteral("connectionType")] = QStringLiteral("TCP");
     srvCfg[QStringLiteral("port")] = port;
     srvCfg[QStringLiteral("slaveAddress")] = 1;

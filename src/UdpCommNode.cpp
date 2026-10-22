@@ -24,7 +24,7 @@ void UdpCommNode::init()
     m_params[QStringLiteral("localPort")] = 8000;      /// 本地绑定端口
     m_params[QStringLiteral("remoteIp")] = QStringLiteral("127.0.0.1"); /// 发送目标（空=仅接收）
     m_params[QStringLiteral("remotePort")] = 8000;     /// 发送目标端口
-    m_params[QStringLiteral("bindAddress")] = QString(); /// 177 行：留空=本机全部网卡默认
+    m_params[QStringLiteral("bindAddress")] = QString(); /// U-202：留空 = 未配置（接收面拒绑定；全网卡写 0.0.0.0）
     setParamDirect(QStringLiteral("connected"), false);
     // 帧组装（UDP 一般天然分包，保留配置项以统一行为）：默认关闭
     m_params[QStringLiteral("frameTimeoutMs")] = 0;
@@ -48,13 +48,23 @@ bool UdpCommNode::openConnection()
         return false;
     }
     const quint16 localPort = static_cast<quint16>(rawLocalPort);
-    // 绑定地址（177 行）：解析见表 CommunicationNodeBase.h——留空 = AnyIPv4 产品默认
-    // （历史语义保持）；显式 IP 字面量 = 只绑该网卡；无效 = 拒绑定不静默回落。
+    // 绑定地址（U-202 口径）：解析见表 CommunicationNodeBase.h——未配置（留空）在**接收面**
+    // （本地端口 > 0，即真的有监听面）拒绑定并留可执行提示；显式 IP 字面量 = 只绑该网卡；
+    // 无效 = 拒绑定不静默回落。端口 0（仅发送场景）没有监听面，绑定只是源地址选择，维持旧行为。
     const CommBind::BindChoice bind = CommBind::resolveListenAddress(
         m_params.value(QStringLiteral("bindAddress")).toString());
+    if (bind.kind == CommBind::BindKind::Missing && localPort > 0) {
+        emit communicationError(QStringLiteral(
+            "UDP 绑定地址未配置：请显式填写要绑定的 IP 字面量（如需全网卡请写 0.0.0.0）"));
+        m_socket->deleteLater();
+        m_socket = nullptr;
+        m_connected = false;
+        setParamDirect(QStringLiteral("connected"), false);
+        return false;
+    }
     if (bind.kind == CommBind::BindKind::Invalid) {
         emit communicationError(QStringLiteral(
-            "\u672C\u5730\u5730\u5740\u914D\u7F6E\u65E0\u6548\uFF08\u5E94\u586B IP \u5B57\u9762\u91CF\uFF0C\u7559\u7A7A\u4E3A\u672C\u673A\u5168\u90E8\u7F51\u5361\uFF09"));
+            "UDP 绑定地址配置无效（应填 IP 字面量，如需全网卡请写 0.0.0.0）"));
         m_socket->deleteLater();
         m_socket = nullptr;
         m_connected = false;
@@ -185,11 +195,11 @@ QWidget *UdpCommNode::createParamPanel()
     layout->addWidget(new QLabel(QStringLiteral("本地端口:")));
     layout->addWidget(localSpin);
 
-    // 本地约束地址（177 行）：留空 = 本机全部网卡（产品默认面）；填 IP 字面量 = 只绑该网卡；
-    // 无效值启动时拒绝（不静默回落）。仅接收面生效。
+    // 本地约束地址（U-202 口径）：接收面（本地端口 > 0）必填——留空即未配置，拒绑定；
+    // 填 IP 字面量 = 只绑该网卡；无效值启动时拒绝（不静默回落）。
     auto *bindEdit = new QLineEdit();
     bindEdit->setObjectName(QStringLiteral("udpBindAddress"));
-    bindEdit->setPlaceholderText(QStringLiteral("留空=本机全部网卡"));
+    bindEdit->setPlaceholderText(QStringLiteral("接收必填：如 127.0.0.1；全网卡写 0.0.0.0"));
     bindEdit->setText(m_params.value(QStringLiteral("bindAddress")).toString());
     connect(bindEdit, &QLineEdit::editingFinished, this, [this, bindEdit]() {
         setParam(QStringLiteral("bindAddress"), bindEdit->text().trimmed());

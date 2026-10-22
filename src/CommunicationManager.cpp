@@ -172,6 +172,10 @@ void CommunicationManager::createDeviceNode(const QString &name, const QString &
             tcp->setParam(QStringLiteral("port"), config[QStringLiteral("port")].toInt());
         if (config.contains(QStringLiteral("mode")))
             tcp->setParam(QStringLiteral("mode"), config[QStringLiteral("mode")].toString());
+        // U-202：监听地址键此前不投递——经通信管理器建的 TCP 服务端设备根本没法填监听地址，
+        // 收紧默认面（留空＝未配置＝拒启动）后这就是死路，必须先补这条投递。
+        if (config.contains(QStringLiteral("bindAddress")))
+            tcp->setParam(QStringLiteral("bindAddress"), config[QStringLiteral("bindAddress")].toString());
         // 重连参数：此前不传，配置里改的重连开关/间隔对新建连接无效
         if (config.contains(QStringLiteral("autoReconnect")))
             tcp->setParam(QStringLiteral("autoReconnect"), config[QStringLiteral("autoReconnect")].toBool());
@@ -191,6 +195,9 @@ void CommunicationManager::createDeviceNode(const QString &name, const QString &
             udp->setParam(QStringLiteral("remoteIp"), config[QStringLiteral("remoteIp")].toString());
         if (config.contains(QStringLiteral("remotePort")))
             udp->setParam(QStringLiteral("remotePort"), config[QStringLiteral("remotePort")].toInt());
+        // U-202：本地绑定地址键此前不投递——同 TCP 服务端，收紧默认面后必须能填（见上条注）。
+        if (config.contains(QStringLiteral("bindAddress")))
+            udp->setParam(QStringLiteral("bindAddress"), config[QStringLiteral("bindAddress")].toString());
         if (config.contains(QStringLiteral("frameTimeoutMs")))
             udp->setParam(QStringLiteral("frameTimeoutMs"), config[QStringLiteral("frameTimeoutMs")].toInt());
         if (config.contains(QStringLiteral("frameTerminator")))
@@ -223,6 +230,10 @@ void CommunicationManager::createDeviceNode(const QString &name, const QString &
             modbus->setParam(QStringLiteral("port"), config[QStringLiteral("port")].toInt());
         if (config.contains(QStringLiteral("slaveAddress")))
             modbus->setParam(QStringLiteral("slaveAddress"), config[QStringLiteral("slaveAddress")].toInt());
+        // U-202：从站监听地址键此前不投递——通信管理器建的 Modbus 从站设备没法填监听地址，
+        // 收紧默认面（留空＝未配置＝从站拒启动）后这就是死路，必须先补这条投递。
+        if (config.contains(QStringLiteral("bindAddress")))
+            modbus->setParam(QStringLiteral("bindAddress"), config[QStringLiteral("bindAddress")].toString());
         if (config.contains(QStringLiteral("autoReconnect")))
             modbus->setParam(QStringLiteral("autoReconnect"), config[QStringLiteral("autoReconnect")].toBool());
         if (config.contains(QStringLiteral("reconnectInterval")))

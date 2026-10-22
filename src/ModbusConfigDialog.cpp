@@ -92,11 +92,11 @@ void ModbusConfigDialog::setupUI()
     m_port->setValue(502);
     formLayout->addRow(m_portLabel, m_port);
 
-    // 从站监听地址（177 行）：从站监听面。留空 = 全网卡默认（历史语义保持）；
-    // 显式 IP 字面量 = 只绑该网卡；无效值由节点侧拒启动（不静默回落）。
+    // 从站监听地址（U-202 口径）：从站监听面。必填——留空即未配置，从站拒启动；
+    // 显式 IP 字面量 = 只绑该网卡（0.0.0.0 即显式全网卡）；无效值由节点侧拒启动（不静默回落）。
     m_bindAddressLabel = new QLabel(QStringLiteral("从站监听地址:"));
     m_bindAddress = new QLineEdit();
-    m_bindAddress->setPlaceholderText(QStringLiteral("留空=从站全网卡默认"));
+    m_bindAddress->setPlaceholderText(QStringLiteral("必填：填从站要监听的 IP；全网卡写 0.0.0.0"));
     formLayout->addRow(m_bindAddressLabel, m_bindAddress);
 
     // RTU（RS485）串口参数：连接类型选 RTU 时必须能配串口——
