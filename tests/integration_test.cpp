@@ -37,6 +37,7 @@
 #include "SendDataNode.h"
 #include "RecordNode.h"
 #include "ReceiveDataNode.h"
+#include "SessionManager.h"  // U-206：写闸口径的回归钉（闸只拦新发起，跑着的照跑）
 #include <QDir>
 #include <QFile>
 #include "ProjectManager.h"   // U-33：往返要同时走真加载入口（applyProjectJson）与写侧（buildProjectJson）
@@ -118,6 +119,7 @@ private slots:
     void testJoinForDestroyTimeoutRefusesDestroy();   // A1-④：超时分支不得批准销毁
     void testOrderlyStopHookMachinery();              // 178 行：收尾钩子机械（默认空透传卸载）
     void testLegacyPlaintextPackageRefusedOnLoad();   // U-204：旧明文打包（无完整性位）真加载入口拒收
+    void testWriteGateDoesNotInterruptRunningFlow();   // 173 行口径：闸只拦新发起，跑着的照跑
     void testTwoExecutorsIsolation();
     void testScriptNodeStopCancellable();
     void testExecutorReuseAcrossScenesWithLoop();
@@ -5408,6 +5410,55 @@ void IntegrationTest::testLegacyPlaintextPackageRefusedOnLoad()
     QVERIFY2(loader2.loadProject(v2Path, loaded2), "带完整性位的新格式必须照常载入");
     QCOMPARE(loaded2.size(), 1);
     qDeleteAll(loaded2);
+}
+
+void IntegrationTest::testWriteGateDoesNotInterruptRunningFlow()
+{
+    // 173 行拍板口径的**回归钉**（U-206）：写闸只拦**新发起**（空闲位起跑被拒），
+    // **跑着的照跑**——闸升起时在跑的流程不被停，已入队的补跑仍被受理并排队。
+    // 这条口径此前只写在代码与账本里，没有腿钉住；本腿把它钉成可回归的契约。
+    auto *s = SessionManager::instance();
+    const bool blockedBefore = s->writesBlocked();
+    struct GateRestore {
+        SessionManager *s;
+        bool before;
+        ~GateRestore() { s->setWritesBlocked(before); }
+    } gateRestore{ s, blockedBefore };
+
+    FlowScene scene;
+    NodeBase *delay = scene.createNode(NodeBase::LOGIC, QPointF(100, 100), QStringLiteral("Delay"));
+    QVERIFY2(delay != nullptr, "无法创建延时节点");
+    delay->setParam(QStringLiteral("delayMs"), 3000);   // 窗口要够宽，下面的断言都在这一轮里
+
+    auto token = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor *exec = token->executor();
+    exec->setFlowName(QStringLiteral("GateKeepRunning"));
+    exec->setFlowScene(&scene);
+    exec->setFlowMode(FlowMode::SoftwareTrigger);
+
+    // ① 空闲位：闸开着 ⇒ 外部触发**不受理**（那是一次新的运行发起）。
+    s->setWritesBlocked(true);
+    QVERIFY2(!exec->requestExternalRound(),
+             "闸开启时空闲位的外部触发不得受理（那是一次新的运行发起）");
+
+    // ② 起跑（起跑入口由界面侧的 canRunFlow 管，引擎侧只管外触这一路）。
+    s->setWritesBlocked(false);
+    exec->startExecution();
+    QTRY_VERIFY_WITH_TIMEOUT(exec->getState() == ExecutionState::Running, 3000);
+
+    // ③ 闸在跑着的时候升起 ⇒ 流程不被停（产线不停线是已拍板口径）。
+    s->setWritesBlocked(true);
+    QVERIFY2(exec->isRunning(), "闸开启不得打断已在跑的流程");
+    QVERIFY2(exec->getState() == ExecutionState::Running, "运行态不得被闸改成别的态");
+
+    // ④ 运行位的外触仍被受理并排队（跑着的照跑，含已入队的补跑：轮末消费）。
+    QVERIFY2(exec->requestExternalRound(), "闸开启时运行位的外触仍应受理（跑着的照跑）");
+    QVERIFY2(exec->pendingExternalRounds() >= 1, "外触应被排队（轮末消费）");
+
+    // 收尾：停流程 → 脱离场景 → 令牌收尾（须早于场景析构）。
+    exec->stopExecution();
+    exec->setFlowScene(nullptr);
+    token.reset();
 }
 
 QTEST_MAIN(IntegrationTest)
