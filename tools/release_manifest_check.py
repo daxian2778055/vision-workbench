@@ -141,22 +141,25 @@ def main():
     # （HEAD 早已前进），此时仍可显式 --package 指到具体包，否则用默认目录。
     tag_on_head = head_rc_tags[0] if head_rc_tags else ""
     required_tag = args.expect_tag or tag_on_head
-    if args.package:
-        package = os.path.abspath(args.package)
-    elif tag_on_head:
+    dated = None
+    if required_tag:
         # 带日期包候选：<tag> 全名（rc-20261023.2）与去掉 rc- 前缀的日期形式
         # （VisionFlowPlatform-20261013/20261017 是历史约定，两种都认，全名优先）
-        bare = tag_on_head[3:] if tag_on_head.startswith("rc-") else tag_on_head
-        candidates = [os.path.join(repo, "dist", "VisionFlowPlatform-" + tag_on_head),
+        bare = required_tag[3:] if required_tag.startswith("rc-") else required_tag
+        candidates = [os.path.join(repo, "dist", "VisionFlowPlatform-" + required_tag),
                       os.path.join(repo, "dist", "VisionFlowPlatform-" + bare)]
         dated = next((c for c in candidates if os.path.isdir(c)), None)
-        if dated:
-            package = dated
-        else:
-            finding("dated_package_missing", " | ".join(candidates))
-            out("[RM-INV] findings=%d skipped=0" % len(findings))
-            out("[RM-VERDICT] RED")
-            return 1
+    if args.package:
+        package = os.path.abspath(args.package)
+    elif dated:
+        # 有带日期包就校验它：无论是 CI（tag 在 HEAD 上）还是发版后手工复核（--expect-tag）
+        package = dated
+    elif tag_on_head:
+        # HEAD 带着 tag 却没有对应的带日期包：直接 RED，不要退回去校验无日期目录
+        finding("dated_package_missing", " | ".join(candidates))
+        out("[RM-INV] findings=%d skipped=0" % len(findings))
+        out("[RM-VERDICT] RED")
+        return 1
     else:
         package = os.path.join(repo, "dist", "VisionFlowPlatform")
     out("[RM] package=%s" % package)

@@ -301,14 +301,17 @@ python tools\release_manifest_check.py --repo . --mode require
 | manifest 的工作树未提交改动数 == 0 | `dirty_worktree` |
 | manifest 的标签与要求的 `rc-*` tag 一致 | `manifest_tag_mismatch` / `manifest_tag_not_on_head` |
 
-> 校验目标：未指定 `--package` 时，**HEAD 带 `rc-*` tag 就校验 `dist/VisionFlowPlatform-<tag>`**，
-> 否则校验 `dist/VisionFlowPlatform`。发版后 main 继续前进时的复核用
-> `--expect-tag <旧tag>`（此时以 tag 指向的提交为锚，不会再要求带日期包）。
+> 校验目标：未指定 `--package` 时，只要解析出的 tag（HEAD 上的 `rc-*`，或 `--expect-tag`）**存在
+> 对应的带日期包就校验它**（目录名 `VisionFlowPlatform-<tag>` 或历史约定 `VisionFlowPlatform-<日期>`，
+> 全名优先）；HEAD 带 tag 但没有带日期包 → RED `dated_package_missing`；无 tag 才校验
+> `dist/VisionFlowPlatform`（开发构建）。发版后 main 继续前进时的复核用
+> `--expect-tag <旧tag>`，此时以 tag 指向的提交为锚，并优先校验该 tag 的带日期包。
 
 在 CI（`tools/ci.ps1`）里它是一道独立闸（退出码 **16**）：
 
-- **先跑门禁自测** `tools/selftest_release_manifest.py`（13 个夹具用例，分别把每个判据做绿/做红，
-  含"发版后 main 继续前进、包仍应对应 tag"与"HEAD 带 tag 必须校验带日期包"两条）；自测本身失败 = 闸不可信 = exit 16。
+- **先跑门禁自测** `tools/selftest_release_manifest.py`（15 个夹具用例，分别把每个判据做绿/做红，
+  含"发版后 main 继续前进、包仍应对应 tag"、"HEAD 带 tag 必须校验带日期包"、
+  "有带日期包时 --expect-tag 优先校验它"三条）；自测本身失败 = 闸不可信 = exit 16。
 - 再跑正式校验，模式 `auto`：HEAD **没有** `rc-*` tag 时打印 `skipped=1 reason=no_rc_tag_on_head`
   并放行（`dist/` 被 gitignore，开发构建允许陈旧）；HEAD **带** `rc-*` tag 时同一套判据为硬门禁。
   永远不会静默跳过——日志里必有 `[RM-VERDICT]` 或明确的 `skipped` 原因。

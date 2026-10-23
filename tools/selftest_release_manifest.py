@@ -179,6 +179,20 @@ def main():
         results.append(expect("dated_package_missing_red", repo_dated_missing, [], 1, "RED",
                               ["dated_package_missing"]))
 
+        # 3e) 发版后 HEAD 前进 + 存在带日期包：--expect-tag 应优先校验带日期包
+        #     （否则手工复核会落到无日期开发目录上，得到与发版件无关的读数）
+        repo_dated_moved = os.path.join(tmp, "repo_dated_moved")
+        commit_dm = make_repo(repo_dated_moved, tag="rc-selftest")
+        make_package(repo_dated_moved, commit_dm, "rc-selftest",
+                     pkg_subdir=os.path.join("dist", "VisionFlowPlatform-rc-selftest"))
+        make_package(repo_dated_moved, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "none")
+        with open(os.path.join(repo_dated_moved, "NEXT.txt"), "w", encoding="utf-8") as fh:
+            fh.write("post-release commit\n")
+        sh(repo_dated_moved, "git", "add", "NEXT.txt")
+        sh(repo_dated_moved, "git", "commit", "-q", "-m", "post-release")
+        results.append(expect("dated_package_wins_over_default", repo_dated_moved,
+                              ["--expect-tag", "rc-selftest"], 0, "GREEN", []))
+
         # 4) md5 不符 → RED
         make_package(repo_tagged, commit_tagged, "rc-selftest", md5_override="0" * 32)
         results.append(expect("md5_mismatch_red", repo_tagged, pkg_tagged_arg, 1, "RED", ["exe_md5_mismatch"]))
