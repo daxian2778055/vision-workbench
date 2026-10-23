@@ -506,41 +506,35 @@ function Get-FileMd5Hex([string]$path) {
 $exeHash = Get-FileMd5Hex $exeInDst
 $exeBytes = (Get-Item -LiteralPath $exeInDst).Length
 
-# manifest 的"提交"以 **exe 实际内嵌的提交** 为准（解析为完整哈希），而不是打包时的 HEAD：
-# 只写 HEAD 会在"提交了工具/文档但没重新构建就部署"时让 manifest 声称一个 exe 并不对应的提交
-# ——现场拿它复现问题必然对不上。exe 里读不到（外部传入的 exe）才回退 HEAD。
-$manifestCommit = $gitRev
-$manifestTag = $gitTag
-if ($embeddedHash) {
-    $rcFull = & git -C $RepoRoot rev-parse $embeddedHash 2>$null
-    if ($LASTEXITCODE -eq 0 -and $rcFull) { $manifestCommit = ($rcFull | Select-Object -First 1).Trim() }
-    $tagAtExe = ((& git -C $RepoRoot tag --points-at $manifestCommit 2>$null) | Select-Object -First 1)
-    if ($tagAtExe) { $manifestTag = $tagAtExe } else { $manifestTag = "none" }
-    if ($manifestCommit -ne $gitRev) {
-        Write-Warning ("exe 由 {0} 编出，与打包时 HEAD {1} 不同；manifest 记录 exe 的真实提交" -f `
-            $manifestCommit.Substring(0,7), $gitRev.Substring(0,7))
-    }
-}
+# manifest 的"提交"= 打包时的 HEAD；另记一行"exe 是否内嵌该 HEAD 的版本哈希"。
+# 为什么不是反过来记 exe 的提交：从二进制里反解 exe 的真实提交需要额外基础设施（版本旁挂文件），
+# 而"提交了却没重新构建就打包"这类错配必须先被看见——所以用"是否匹配"把它变成显式读数：
+# 匹配=是，这份 exe 就是 HEAD 编的；匹配=否，manifest 的提交号只说明打包环境，不代表 exe 来源，
+# 此时上面的告警已要求先重新构建（发版前必须为"是"）。
+$exeEmbedsHead = "unknown"
+if ($embeddedHash) { $exeEmbedsHead = "yes" } elseif ($gitRev -and $gitRev -ne "unknown") { $exeEmbedsHead = "no" }
 
 $manifestLines = @(
     "VisionFlowPlatform 包内自识别（本文件由 tools/deploy.ps1 生成，请勿手改）",
     ("打包时间     : {0}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss")),
-    ("提交         : {0}" -f $manifestCommit),
+    ("提交         : {0}" -f $gitRev),
     ("分支         : {0}" -f $gitBranch),
-    ("该提交上的标签: {0}" -f $manifestTag),
+    ("该提交上的标签: {0}" -f $gitTag),
     ("工作树未提交改动条数: {0}" -f $worktreeDirty),
+    ("exe 内嵌 HEAD 版本哈希: {0}" -f $exeEmbedsHead),
     ("VisionFlowPlatform.exe md5 : {0}" -f $exeHash),
     ("VisionFlowPlatform.exe 字节 : {0}" -f $exeBytes),
     "",
-    "读法：提交=这份 exe 二进制里内嵌的 git 提交（关于框可见同一哈希），不是打包时的 HEAD；",
-    "      工作树未提交改动条数为 0 时，打包环境本身是干净的；非 0 表示打包时源码有未提交改动。",
+    "读法：提交=打包时的 HEAD；exe 内嵌 HEAD 版本哈希=yes 表示这份 exe 就是该提交编出来的",
+    "      （no = 打包前没重新构建，manifest 的提交号不代表 exe 来源，发版件必须为 yes）；",
+    "      工作树未提交改动条数为 0 时，打包环境本身是干净的。",
     "      要核对包里的 exe 就是刚测过的那份，比对上面这行 md5 与门禁面记录的那行。",
     "      机器校验：python tools/release_manifest_check.py --repo . --expect-tag <tag>"
 )
 [System.IO.File]::WriteAllText((Join-Path $OutDir "版本说明.txt"), `
     ($manifestLines -join [Environment]::NewLine), (New-Object System.Text.UTF8Encoding($true)))
-Write-Host ("  -> 提交 {0}  标签 {1}  exe_md5 {2}  工作树未提交 {3}" -f `
-    $manifestCommit, $manifestTag, $exeHash, $worktreeDirty) -ForegroundColor Green
+Write-Host ("  -> 提交 {0}  标签 {1}  exe_md5 {2}  工作树未提交 {3}  exe内嵌HEAD版本 {4}" -f `
+    $gitRev, $gitTag, $exeHash, $worktreeDirty, $exeEmbedsHead) -ForegroundColor Green
 
 Write-Host "========================================" -ForegroundColor Green
 Write-Host "  部署完成!" -ForegroundColor Green
