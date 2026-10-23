@@ -199,17 +199,27 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly)) {
         VFP_DEBUG << "方案加载失败：无法读取" << filePath << file.errorString();
-        return false;
+        return false;   // U-214：先于任何状态触碰——快照/只读旗/附注原值未动，无需回滚
     }
 
     const QByteArray raw = file.readAll();
     file.close();
 
-    // U-201：这次载入若被拒（目录外绝对路径未获确认），方案基目录快照必须回到原处——
-    // 否则「当前方案没换、基目录却指向被拒方案」会让相对路径解析落到错的目录。
+    // U-214（r11 第三方复核 P2-9）：快照提交纪律——方案基目录快照（经 353 行漏斗喂
+    // ProjectPaths 进程级快照位）、只读旗、载入附注**三件成功才提交**。进数原值先记下，
+    // 每条失败支一律按原值回滚：旧行为在确认前就喂快照并清只读旗，解密/MAC 失败、
+    // integrityMissing、两种 JSON 解析失败、建场景失败统统不收回（确认拒载两支也只收回
+    // 路径、漏只读旗），「当前方案保持不变」在基目录快照这一层对不上号。审查与建场景
+    // 不吃快照：classifySchemePath／reviewScenes 吃传入的方案文件路径，相对路径的运行期
+    // 解析仍走漏斗喂的快照位——两者口径本轮均不动。
     const QString prevFilePath = m_lastFilePath;
-    setLastFilePath(filePath);
-    m_loadedReadonly = false;
+    const bool prevReadonly = m_loadedReadonly;
+    const QString prevIntegrityNote = m_lastIntegrityNote;
+    const auto rollbackSnapshot = [this, &prevFilePath, &prevReadonly, &prevIntegrityNote]() {
+        setLastFilePath(prevFilePath);   // 漏斗回灌：进程级快照位同步回到原值
+        m_loadedReadonly = prevReadonly;
+        m_lastIntegrityNote = prevIntegrityNote;
+    };
     m_lastLoadRefusedForOutsidePaths = false;   // U-201：每次载入复位（这次的决定不留给下一次）
     m_lastLoadRefusedForIntegrity = false;      // U-204：同上（本次载入的拒载原因不留给下一次）
     m_lastIntegrityNote.clear();
@@ -220,6 +230,7 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
             SchemePackage::importScheme(raw, passphrase, &readonly, &ok, &integrityMissing);
         if (!ok) {
             VFP_DEBUG << "方案加载失败：信封解析/解密失败（口令错误或文件损坏）" << filePath;
+            rollbackSnapshot();   // U-214：失败支回滚三件套（下同）
             return false; // 不改动 scenes，调用方可以保留当前方案
         }
         if (integrityMissing) {
@@ -233,23 +244,29 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
             reportLoadNote(QStringLiteral(
                 "方案包拒收：旧明文打包格式（不带完整性校验位）本版本不再接收；"
                 "请用带完整性位的新格式重新获取，或由旧版本打开后另存为新格式"));
+            rollbackSnapshot();
             return false;   // 不改动 scenes，调用方保留当前方案
         }
         QJsonParseError parseError{};
         QJsonDocument doc = QJsonDocument::fromJson(json, &parseError);
         if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
             VFP_DEBUG << "方案加载失败：信封内 JSON 非法，偏移" << parseError.offset;
+            rollbackSnapshot();
             return false;
         }
-        m_loadedReadonly = readonly;
-        if (!buildScenesFromJson(doc.object(), scenes))
+        if (!buildScenesFromJson(doc.object(), scenes)) {
+            rollbackSnapshot();
             return false;
+        }
         /// U-201 载入门禁：方案目录外绝对路径须显式确认；未确认即拒载——
         /// 全局配置此刻尚未应用（拒载不留半装载现场）。
         if (!confirmOutsideSchemePaths(scenes, filePath)) {
-            setLastFilePath(prevFilePath);
+            rollbackSnapshot();
             return false;
         }
+        // U-214：成功才提交三件（只读旗在此按信封标志立位，与确认通过同刻）。
+        setLastFilePath(filePath);
+        m_loadedReadonly = readonly;
         applyGlobalsFromJson(doc.object());
         return true;
     }
@@ -261,18 +278,25 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
     if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
         VFP_DEBUG << "方案加载失败：文件不是合法 JSON，偏移" << parseError.offset
                   << parseError.errorString();
+        rollbackSnapshot();
         return false; // 不改动 scenes，调用方可以保留当前方案
     }
 
-    // 应用方案内容（与崩溃恢复共用 applyProjectJson：场景 + 全局配置 + 运行界面布局）
-    m_lastIntegrityNote = QStringLiteral("旧明文 JSON 格式");
-    if (!buildScenesFromJson(doc.object(), scenes))
-        return false;
-    /// U-201 载入门禁：同信封路径——目录外绝对路径未获确认即拒载。
-    if (!confirmOutsideSchemePaths(scenes, filePath)) {
-        setLastFilePath(prevFilePath);
+    if (!buildScenesFromJson(doc.object(), scenes)) {
+        rollbackSnapshot();
         return false;
     }
+    /// 应用方案内容（与崩溃恢复共用 applyProjectJson：场景 + 全局配置 + 运行界面布局）。
+    /// U-201 载入门禁：同信封路径——目录外绝对路径未获确认即拒载。
+    if (!confirmOutsideSchemePaths(scenes, filePath)) {
+        rollbackSnapshot();
+        return false;
+    }
+    // U-214：成功才提交（附注「旧明文 JSON 格式」从建场景前移到提交位——旧行为在建场景
+    // 前就位，失败时会把陈旧附注遗留给未成功载入的文件）。
+    setLastFilePath(filePath);
+    m_loadedReadonly = false;   // 旧明文 JSON 即为可编辑方案（既有口径）
+    m_lastIntegrityNote = QStringLiteral("旧明文 JSON 格式");
     applyGlobalsFromJson(doc.object());
     return true;
 }

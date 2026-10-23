@@ -20,6 +20,7 @@
 #include "ParamSpec.h"
 #include "ProjectManager.h"
 #include "ProjectPaths.h"
+#include "SchemePackage.h"
 
 class ProjectPathsTest : public QObject
 {
@@ -39,6 +40,8 @@ private slots:
     void testOutsideSchemePathNeedsConfirmation();        // 未确认即拒载（清单清空 + 留痕）
     void testOutsideSchemePathAllowedAfterConfirm();       // 确认后放行（并留痕）
     void testSchemeWithoutOutsidePathSkipsConfirmation();  // 负对照：无目录外路径不叫确认器
+    // U-214 失败回滚腿
+    void testFailedLoadRestoresSnapshotAndReadonly();      // r11 P2-9：失败支回滚三件套（成功才提交）
 
 private:
     /// 造一份带指定 filePath 的方案文件（走真写侧序列化 buildProjectJson），返回是否落盘。
@@ -297,6 +300,121 @@ void ProjectPathsTest::testSchemeWithoutOutsidePathSkipsConfirmation()
     QCOMPARE(asked, 0);
     QVERIFY(!reopened.isEmpty());
     qDeleteAll(reopened);
+}
+
+void ProjectPathsTest::testFailedLoadRestoresSnapshotAndReadonly()
+{
+    // U-214（r11 第三方复核 P2-9）：快照提交纪律的运行期钉——**成功才提交，失败支回滚**。
+    // 场景按复核原述：先成功载入一份带相对路径的方案（快照＝方案目录、明文可编辑），
+    // 再依次打开别处的四条失败形状（v1 旧明文打包、口令错误的只读信封、确认拒载、JSON 语法
+    // 坏件），每一条退回后断言「基目录快照、只读旗、载入附注」三件都回到原值——
+    // 旧行为只收回确认拒载的路径、其余失败支干脆不收回，且确认组两支漏只读旗。
+    ProjectPaths::setCurrentSchemeFilePath(QString());   // 座给腿净态（快照位不接上一腿）
+    ProjectManager loader;
+    loader.setOutsidePathConfirmer([](const ProjectPaths::PathReview &) {
+        return false;   // 拒认器：供确认拒载形状用（相对路径方案不会叫起它）
+    });
+    QList<FlowScene *> opened;
+
+    // 先成功载入一次（带相对路径的明文方案）：给三件立住原值
+    QVERIFY2(writeSchemeWithFilePath(QStringLiteral("images/rel.png")), "方案素材落盘失败");
+    QVERIFY2(loader.loadProject(m_scheme, opened), "先成功载入一次，为三件立住原值");
+    QCOMPARE(opened.size(), 1);
+    QCOMPARE(ProjectPaths::currentSchemeFilePath(), m_scheme);
+    QVERIFY2(!loader.isReadonlyLoaded(), "明文方案为可编辑：只读旗应清除");
+    QVERIFY2(loader.lastIntegrityNote().contains(QStringLiteral("旧明文")),
+             "明文载入后附注应写明旧明文");
+    qDeleteAll(opened);
+    opened.clear();
+
+    // 信封载荷（真写侧序列化；无文件参数 ⇒ 全程不叫确认器）
+    FlowScene payloadScene;
+    QVERIFY2(payloadScene.createNode(NodeBase::OUTPUT, QPointF(100, 100), QStringLiteral("空载荷")),
+             "工厂没给输出节点，本腿失去前提");
+    ProjectManager writer;
+    QJsonObject envRoot = writer.buildProjectJson(QList<FlowScene *>{ &payloadScene });
+    envRoot.remove(QStringLiteral("runtimeLayout"));
+    const QByteArray envJson = QJsonDocument(envRoot).toJson();
+
+    // 失败形状①：v1 旧明文打包（integrityMissing 拒收支）
+    QByteArray v1;
+    v1.append(SchemePackage::kMagic, 4);
+    v1.append(static_cast<char>(SchemePackage::kFormatVersion));
+    v1.append(static_cast<char>(0x00));
+    v1.append(qCompress(envJson));
+    const QString legacyPath = m_tmp.filePath(QStringLiteral("legacy-v1.vfp"));
+    {
+        QFile f(legacyPath);
+        QVERIFY2(f.open(QIODevice::WriteOnly), "旧格式方案落盘失败");
+        f.write(v1);
+        f.close();
+    }
+    QVERIFY2(!loader.loadProject(legacyPath, opened), "v1 旧明文打包必须被拒收");
+    QVERIFY(loader.lastLoadRefusedForIntegrity());
+    QVERIFY2(opened.isEmpty(), "拒载后不得留半装载的场景清单");
+    QCOMPARE(ProjectPaths::currentSchemeFilePath(), m_scheme);   // 锚不得留在被拒文件上
+    QVERIFY2(!loader.isReadonlyLoaded(), "只读旗不得被失败的载入改写");
+    QVERIFY2(loader.lastIntegrityNote().contains(QStringLiteral("旧明文")),
+             "附注描述的是当值方案，失败载入不得清掉它");
+    qDeleteAll(opened);
+    opened.clear();
+
+    // 成功形状：只读 v2 信封（成功才提交 ⇒ 锚换到信封所在、只读旗立真）
+    const QString roEnvelope = m_tmp.filePath(QStringLiteral("readonly.vfp"));
+    {
+        QFile f(roEnvelope);
+        QVERIFY2(f.open(QIODevice::WriteOnly), "只读信封落盘失败");
+        f.write(SchemePackage::exportScheme(envJson, QStringLiteral("pw"), true));
+        f.close();
+    }
+    QVERIFY2(loader.loadProject(roEnvelope, opened, QStringLiteral("pw")),
+             "带完整性位且口令正确的信封须照常载入");
+    QCOMPARE(opened.size(), 1);
+    QVERIFY2(loader.isReadonlyLoaded(), "只读打包方案的旗应立真");
+    QCOMPARE(ProjectPaths::currentSchemeFilePath(), roEnvelope);
+    QVERIFY2(loader.lastIntegrityNote().isEmpty(),
+             "信封方案的附注应为空（附注描述当值方案的格式，信封不是旧明文）");
+    qDeleteAll(opened);
+    opened.clear();
+
+    // 失败形状②：口令错误（信封 !ok 分支）
+    QVERIFY2(!loader.loadProject(roEnvelope, opened, QStringLiteral("wrong")), "错口令必须被拒");
+    QCOMPARE(ProjectPaths::currentSchemeFilePath(), roEnvelope);   // 锚回到信封
+    QVERIFY2(loader.isReadonlyLoaded(), "只读旗不得被失败的载入清掉");
+    QVERIFY2(loader.lastIntegrityNote().isEmpty(),
+             "附注回滚到信封原值（空）；失败载入不得注入新附注");
+    qDeleteAll(opened);
+    opened.clear();
+
+    // 失败形状③：确认拒载（只读旗原值＝真——旧行为两支确认拒载只收路径、漏只读旗）
+    const QString outside =
+        QDir(QDir::tempPath()).filePath(QStringLiteral("vfp214_outside/x.png"));
+    QVERIFY2(writeSchemeWithFilePath(outside), "目录外路径方案落盘失败");
+    QVERIFY2(!loader.loadProject(m_scheme, opened), "未确认的目录外绝对路径必须拒");
+    QVERIFY(loader.lastLoadRefusedForOutsidePaths());
+    QVERIFY2(opened.isEmpty(), "拒载后不得留半装载的场景清单");
+    QCOMPARE(ProjectPaths::currentSchemeFilePath(), roEnvelope);   // 锚回到信封
+    QVERIFY2(loader.isReadonlyLoaded(), "只读旗在确认拒载后也必须回到原值");
+    qDeleteAll(opened);
+    opened.clear();
+
+    // 失败形状④：JSON 语法坏件（解析失败支）
+    const QString junk = m_tmp.filePath(QStringLiteral("junk.vfp"));
+    {
+        QFile f(junk);
+        QVERIFY2(f.open(QIODevice::WriteOnly), "语法坏件落盘失败");
+        f.write("{ not json");
+        f.close();
+    }
+    QVERIFY2(!loader.loadProject(junk, opened), "语法坏件必须被拒");
+    QCOMPARE(ProjectPaths::currentSchemeFilePath(), roEnvelope);
+    QVERIFY2(loader.isReadonlyLoaded(), "只读旗不得被解析失败支清掉");
+    QVERIFY2(loader.lastIntegrityNote().isEmpty(),
+             "附注在三件回滚之列（红臂破坏位落在第一条失败支：integrity 支）");
+    qDeleteAll(opened);
+    opened.clear();
+
+    ProjectPaths::setCurrentSchemeFilePath(QString());   // 腿尾净态（cleanupTestCase 兜底再清一次）
 }
 
 QTEST_MAIN(ProjectPathsTest)
