@@ -279,14 +279,14 @@ unzip ../deployment-package.zip
 Windows 侧的正式发版流程是：
 
 ```powershell
-# 1) 在干净的 HEAD 上构建 Release
+# 1) 在干净的 HEAD 上构建 Release（版本号/提交哈希随构建进入 exe，关于框可见）
 cmake --build build --config Release
-# 2) 部署出包（会写包内 版本说明.txt：提交 / 标签 / exe md5 / 字节 / 工作树脏数）
-powershell -ExecutionPolicy Bypass -File tools\deploy.ps1
-# 3) 打 tag（annotated）并推送
+# 2) 打 tag（annotated）并推送
 git tag -a rc-YYYYMMDD -m "rc-YYYYMMDD —— 上线候选（提交 <short>）"
 git push origin rc-YYYYMMDD
-# 4) 出包后重新跑一次 deploy 让 manifest 记上 tag，然后机器校验
+# 3) 出"带日期"的发版包（装机只认它；无日期 dist/VisionFlowPlatform 是开发构建）
+powershell -ExecutionPolicy Bypass -File tools\deploy.ps1 -OutDir dist\VisionFlowPlatform-rc-YYYYMMDD
+# 4) 机器校验：HEAD 带 rc tag 时自动校验上面的带日期包（tag/manifest/exe-md5）
 python tools\release_manifest_check.py --repo . --mode require
 ```
 
@@ -295,15 +295,20 @@ python tools\release_manifest_check.py --repo . --mode require
 | 判据 | 失败码 |
 |------|--------|
 | 包目录 / 包内 `版本说明.txt` 存在且键齐全 | `package_missing` / `manifest_missing` / `manifest_key_missing` |
+| **HEAD 带 `rc-*` tag 时，必须存在对应的带日期包 `dist/VisionFlowPlatform-<tag>`**（装机只认带日期的包；无日期目录是开发构建） | `dated_package_missing` |
 | 包内 exe 的 md5 与字节数与 manifest 一致 | `exe_md5_mismatch` / `exe_bytes_mismatch` |
-| manifest 的提交 == 当前 HEAD（短哈希须 ≥7 位且为前缀） | `commit_mismatch` / `commit_too_short` |
+| manifest 的提交 == tag 指向的提交（无 tag 时 = HEAD；短哈希须 ≥7 位且为前缀） | `commit_mismatch` / `commit_too_short` |
 | manifest 的工作树未提交改动数 == 0 | `dirty_worktree` |
-| manifest 的标签与 HEAD 上的 `rc-*` tag 一致 | `manifest_tag_mismatch` / `expected_tag_not_on_head` |
+| manifest 的标签与要求的 `rc-*` tag 一致 | `manifest_tag_mismatch` / `manifest_tag_not_on_head` |
+
+> 校验目标：未指定 `--package` 时，**HEAD 带 `rc-*` tag 就校验 `dist/VisionFlowPlatform-<tag>`**，
+> 否则校验 `dist/VisionFlowPlatform`。发版后 main 继续前进时的复核用
+> `--expect-tag <旧tag>`（此时以 tag 指向的提交为锚，不会再要求带日期包）。
 
 在 CI（`tools/ci.ps1`）里它是一道独立闸（退出码 **16**）：
 
-- **先跑门禁自测** `tools/selftest_release_manifest.py`（11 个夹具用例，分别把每个判据做绿/做红，
-  含"发版后 main 继续前进、包仍应对应 tag"这一条）；自测本身失败 = 闸不可信 = exit 16。
+- **先跑门禁自测** `tools/selftest_release_manifest.py`（13 个夹具用例，分别把每个判据做绿/做红，
+  含"发版后 main 继续前进、包仍应对应 tag"与"HEAD 带 tag 必须校验带日期包"两条）；自测本身失败 = 闸不可信 = exit 16。
 - 再跑正式校验，模式 `auto`：HEAD **没有** `rc-*` tag 时打印 `skipped=1 reason=no_rc_tag_on_head`
   并放行（`dist/` 被 gitignore，开发构建允许陈旧）；HEAD **带** `rc-*` tag 时同一套判据为硬门禁。
   永远不会静默跳过——日志里必有 `[RM-VERDICT]` 或明确的 `skipped` 原因。

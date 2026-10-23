@@ -62,8 +62,8 @@ def make_repo(root, tag=None):
 
 
 def make_package(root, commit, tag, dirty="0", md5_override=None, bytes_override=None,
-                 manifest=True):
-    pkg = os.path.join(root, "dist", "VisionFlowPlatform")
+                 manifest=True, pkg_subdir=None):
+    pkg = os.path.join(root, pkg_subdir or os.path.join("dist", "VisionFlowPlatform"))
     os.makedirs(pkg, exist_ok=True)
     exe = os.path.join(pkg, EXE_NAME)
     payload = b"selftest-exe-payload"
@@ -136,9 +136,14 @@ def main():
         results.append(expect("no_tag_require_red", repo_plain, ["--mode", "require"], 1, "RED",
                               ["no_release_tag"]))
 
+        # 以下用例的仓库 HEAD 带 rc tag，但包放在**无日期**目录——那是"开发构建"形态。
+        # 带 tag 的 HEAD 默认只认带日期包（见 3c/3d），所以这些用例显式 --package 指到
+        # 无日期目录，继续钉各判据本身。
+        pkg_tagged_arg = ["--package", os.path.join(repo_tagged, "dist", "VisionFlowPlatform")]
+
         # 3) 有 tag + 全一致 → GREEN
         make_package(repo_tagged, commit_tagged, "rc-selftest")
-        results.append(expect("coherent_green", repo_tagged, [], 0, "GREEN", []))
+        results.append(expect("coherent_green", repo_tagged, pkg_tagged_arg, 0, "GREEN", []))
 
         # 3b) 发版后 main 继续前进：包属于 tag，不属于"当前 HEAD"。
         #     显式 --expect-tag 时锚必须是 tag 的提交，否则每次发版后手工复核都会误红。
@@ -152,33 +157,47 @@ def main():
         results.append(expect("post_release_head_moved_green", repo_moved,
                               ["--expect-tag", "rc-selftest"], 0, "GREEN", []))
 
+        # 3c) HEAD 带 tag：默认校验"带日期"的包（dist/VisionFlowPlatform-<tag>），
+        #     不是无日期目录——装机只认带日期的包，这是 2026-10-23 复核的核心结论之一。
+        repo_dated = os.path.join(tmp, "repo_dated")
+        commit_dated = make_repo(repo_dated, tag="rc-selftest")
+        make_package(repo_dated, commit_dated, "rc-selftest",
+                     pkg_subdir=os.path.join("dist", "VisionFlowPlatform-rc-selftest"))
+        results.append(expect("dated_package_preferred_green", repo_dated, [], 0, "GREEN", []))
+
+        # 3d) 打了 tag 却没有带日期包 → RED，且不退回去校验无日期目录
+        repo_dated_missing = os.path.join(tmp, "repo_dated_missing")
+        make_repo(repo_dated_missing, tag="rc-selftest")
+        results.append(expect("dated_package_missing_red", repo_dated_missing, [], 1, "RED",
+                              ["dated_package_missing"]))
+
         # 4) md5 不符 → RED
         make_package(repo_tagged, commit_tagged, "rc-selftest", md5_override="0" * 32)
-        results.append(expect("md5_mismatch_red", repo_tagged, [], 1, "RED", ["exe_md5_mismatch"]))
+        results.append(expect("md5_mismatch_red", repo_tagged, pkg_tagged_arg, 1, "RED", ["exe_md5_mismatch"]))
 
         # 5) 字节数不符 → RED
         make_package(repo_tagged, commit_tagged, "rc-selftest", bytes_override="123")
-        results.append(expect("bytes_mismatch_red", repo_tagged, [], 1, "RED", ["exe_bytes_mismatch"]))
+        results.append(expect("bytes_mismatch_red", repo_tagged, pkg_tagged_arg, 1, "RED", ["exe_bytes_mismatch"]))
 
         # 6) dirty 非 0 → RED
         make_package(repo_tagged, commit_tagged, "rc-selftest", dirty="3")
-        results.append(expect("dirty_red", repo_tagged, [], 1, "RED", ["dirty_worktree"]))
+        results.append(expect("dirty_red", repo_tagged, pkg_tagged_arg, 1, "RED", ["dirty_worktree"]))
 
         # 7) manifest tag 与 HEAD 的 rc tag 不一致 → RED
         make_package(repo_tagged, commit_tagged, "rc-other")
-        results.append(expect("tag_mismatch_red", repo_tagged, [], 1, "RED", ["manifest_tag_mismatch"]))
+        results.append(expect("tag_mismatch_red", repo_tagged, pkg_tagged_arg, 1, "RED", ["manifest_tag_mismatch"]))
 
         # 8) 提交号不符 → RED
         make_package(repo_tagged, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "rc-selftest")
-        results.append(expect("commit_mismatch_red", repo_tagged, [], 1, "RED", ["commit_mismatch"]))
+        results.append(expect("commit_mismatch_red", repo_tagged, pkg_tagged_arg, 1, "RED", ["commit_mismatch"]))
 
         # 9) manifest 缺失 → RED
         make_package(repo_tagged, commit_tagged, "rc-selftest", manifest=False)
-        results.append(expect("manifest_missing_red", repo_tagged, [], 1, "RED", ["manifest_missing"]))
+        results.append(expect("manifest_missing_red", repo_tagged, pkg_tagged_arg, 1, "RED", ["manifest_missing"]))
 
         # 10) 包目录缺失 → RED
         shutil.rmtree(os.path.join(repo_tagged, "dist"), ignore_errors=True)
-        results.append(expect("package_missing_red", repo_tagged, [], 1, "RED", ["package_missing"]))
+        results.append(expect("package_missing_red", repo_tagged, pkg_tagged_arg, 1, "RED", ["package_missing"]))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

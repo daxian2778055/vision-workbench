@@ -104,24 +104,22 @@ def decode_text(path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", default=".", help="仓库根目录（默认当前目录）")
-    ap.add_argument("--package", default="", help="包目录（默认 <repo>/dist/VisionFlowPlatform）")
+    ap.add_argument("--package", default="",
+                    help="包目录（默认：HEAD 带 rc-* tag 时取 dist/VisionFlowPlatform-<tag>，"
+                         "否则 dist/VisionFlowPlatform）")
     ap.add_argument("--mode", choices=["auto", "require"], default="auto",
                     help="auto=HEAD 无 rc-* tag 时明确 SKIP；require=必须有 tag 且全一致")
     ap.add_argument("--expect-tag", default="", help="要求的发版 tag（如 rc-20261023）")
     args = ap.parse_args()
 
     repo = os.path.abspath(args.repo)
-    package = os.path.abspath(args.package) if args.package else os.path.join(repo, "dist", "VisionFlowPlatform")
     findings = []
 
     def finding(code, detail):
         findings.append((code, detail))
         out("[RM] finding=%s: %s" % (code, detail))
 
-    out("[RM] package=%s" % package)
-    out("[RM] mode=%s" % args.mode)
-
-    # ---- 0. HEAD / tag 先读：决定 auto 模式是否 SKIP ----
+    # ---- 0. HEAD / tag 先读：决定 auto 模式是否 SKIP、以及校验哪个包 ----
     rc, head, err = run_git(repo, "rev-parse", "HEAD")
     if rc != 0 or not head:
         finding("git_head_unreadable", err or ("git rev-parse rc=%d" % rc))
@@ -135,6 +133,30 @@ def main():
     out("[RM] head_tags=%s" % (",".join(head_tags) if head_tags else "none"))
     if rc2 != 0:
         finding("git_tags_unreadable", err2 or ("git tag rc=%d" % rc2))
+
+    # 带 tag 的 HEAD：装机只认"带日期的包"（dist/VisionFlowPlatform-<tag>）。
+    # 无日期目录是开发构建，拿它当发版件正是 2026-10-23 复核指出的误区——所以这里不退回
+    # 校验无日期目录，而是直接 RED：打了 tag 就必须有对应的带日期发版包。
+    # 注意只对"tag 在 HEAD 上"（CI 场景）强制；显式 --expect-tag 是发版后手工复核
+    # （HEAD 早已前进），此时仍可显式 --package 指到具体包，否则用默认目录。
+    tag_on_head = head_rc_tags[0] if head_rc_tags else ""
+    required_tag = args.expect_tag or tag_on_head
+    if args.package:
+        package = os.path.abspath(args.package)
+    elif tag_on_head:
+        dated = os.path.join(repo, "dist", "VisionFlowPlatform-" + tag_on_head)
+        if os.path.isdir(dated):
+            package = dated
+        else:
+            finding("dated_package_missing", dated)
+            out("[RM-INV] findings=%d skipped=0" % len(findings))
+            out("[RM-VERDICT] RED")
+            return 1
+    else:
+        package = os.path.join(repo, "dist", "VisionFlowPlatform")
+    out("[RM] package=%s" % package)
+    out("[RM] mode=%s" % args.mode)
+    out("[RM] required_tag=%s" % (required_tag or "none"))
 
     if args.mode == "auto" and not head_rc_tags and not args.expect_tag:
         # dev build：dist/ 被 gitignore，允许陈旧；但必须明确说出来，不能安静通过。
@@ -182,7 +204,6 @@ def main():
     # ---- 5. tag 先解析出它的提交：发版之后 main 继续前进是常态，
     #         包属于 tag，不属于"当前 HEAD"——用 tag 指向的提交做锚，才不会误红。
     man_tag = (man.get(KEY_TAG) or "").strip()
-    required_tag = args.expect_tag or (head_rc_tags[0] if head_rc_tags else "")
     tag_commit = ""
     if required_tag:
         rc_tag, tc, err_tag = run_git(repo, "rev-list", "-n", "1", required_tag)
