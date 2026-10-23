@@ -428,7 +428,10 @@ $gitRev = "unknown"; $gitTag = "none"; $gitBranch = "unknown"; $worktreeDirty = 
 if (Get-Command git -ErrorAction SilentlyContinue) {
     $gitRev = ((& git -C $RepoRoot rev-parse HEAD 2>$null) | Select-Object -First 1)
     $gitBranch = ((& git -C $RepoRoot rev-parse --abbrev-ref HEAD 2>$null) | Select-Object -First 1)
-    $gitTag = ((& git -C $RepoRoot describe --tags --exact-match $gitRev 2>$null) | Select-Object -First 1)
+    # 用 `git tag --points-at`（无 tag 时输出空且退出码 0），不要用 `describe --exact-match`：
+    # 后者在未打 tag 的 HEAD 上退出非零并把 fatal: 写到 stderr，在 $ErrorActionPreference='Stop'
+    # 下会把脚本掀翻——表现恰恰是"非发版构建不生成版本说明.txt"，而那正是最需要自识别的场合。
+    $gitTag = ((& git -C $RepoRoot tag --points-at $gitRev 2>$null) | Select-Object -First 1)
     $dirtyLines = @(& git -C $RepoRoot status --porcelain 2>$null)
     $worktreeDirty = $dirtyLines.Count
     if (-not $gitTag) { $gitTag = "none" }
