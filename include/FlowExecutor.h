@@ -135,6 +135,9 @@ public:
     /// 只读查询：该节点当前是否带「输出可复用」标记（`m_validOutputs`）。
     /// 复用分支回退后该位无读者，E2 的不变量（清空输出即撤销标记）只能经此视图钉住。
     bool isOutputMarkedValid(NodeBase *node) const;
+    /// 只读查询：慢路径图缓存清空计数（段四·U-217）——同场景幂等快速路不计入。
+    /// 不参与任何执行决策；只供回归钉「同场景重绑不走慢路径」（切页对运行中执行器的竞态源）。
+    quint64 graphCacheClearCount() const;
     /// 清零统计（例如开始长跑观测前调用）
     void resetRuntimeStats();
     /// 统计日志间隔（ms），0=不输出；默认 60000（首轮立即输出一条便于确认埋点生效）
@@ -292,6 +295,7 @@ private:
     // 执行线程在关键点写、任意线程经 workerPhaseName() 读；relaxed 原子，不参与任何业务逻辑。
     std::atomic<int> m_diagPhase {-1};    /// 当前阶段编号（见 kWorkerPhaseNames）
     std::atomic<int> m_diagNodeId {-1};   /// 正在执行的节点模块号（无则 -1）
+    std::atomic<quint64> m_graphCacheClearCount {0};  /// 段四·U-217：慢路径缓存清空次数（只读视图的累加点）
 
     // ---- S9 外部触发排队（有界 FIFO；忙时不再静默丢弃）----
     static constexpr int kMaxPendingExternalRounds = 3;  /// 待补跑上限：有界，避免越跑越落后腿

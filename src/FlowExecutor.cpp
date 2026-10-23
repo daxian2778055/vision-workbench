@@ -229,6 +229,13 @@ bool FlowExecutor::isOutputMarkedValid(NodeBase *node) const
     return m_validOutputs.value(node, false);
 }
 
+/// 「图缓存清空次数」只读视图（段四·U-217 回归用）：慢路径每清一次 +1；
+/// 同场景幂等快速路不计入。只供座腿钉「同场景重绑不走慢路径」——不参与任何执行决策。
+quint64 FlowExecutor::graphCacheClearCount() const
+{
+    return m_graphCacheClearCount.load(std::memory_order_relaxed);
+}
+
 void FlowExecutor::onSceneNodeRemoved(NodeBase *node)
 {
     // S1 Stage 1b 第 2 步定稿：本槽**只登记、不清理**。
@@ -308,6 +315,35 @@ void FlowExecutor::setLifetimeToken(const std::shared_ptr<FlowExecutorToken> &to
 
 void FlowExecutor::setFlowScene(FlowScene *scene)
 {
+    // 段四（P1-6 余量，r12 复核）：**同场景幂等快速路**——切回已绑定的同场景页签（executorForScene
+    // 复用每场景执行器 ⇒ 绑定内容恒等，见 MainWindow 切页注释）时，慢路径的断/接信号与整块图缓
+    // 存清空是**纯盖章**：绑定内容一致无须重建；且运行中的目标执行器（多流程自启后切到其页签）
+    // worker 正在轮内无锁读 m_loopBodyNodes/m_subFlowBodyNodes/m_subFlowMembers/m_subFlowIOs/
+    // m_subFlowCallStack——慢路径「锁内清」对 worker「无锁读写」＝U-213 收口后残余的混锁竞态源。
+    // 快速路保留两项既有切页语义：① 最近激活执行器登记（current()/currentContext）；② 节点归属
+    // 刷新（晚到节点的归属只能经 setFlowScene 补挂——撤了就是行为变更）。跳过的：disconnectFromScene、
+    // 块重绑、图缓存清空（清空计数器不计入）、connectToScene。判同须在 m_mutex 内（与发布合同同锁）；
+    // nullptr 永走慢路（解绑语义包含清缓存，不可并入幂等面）。
+    FlowScene *bound = nullptr;
+    {
+        QMutexLocker locker(&m_mutex);
+        bound = m_scene;
+    }
+    if (scene != nullptr && scene == bound) {
+        const QList<NodeBase *> liveNodes = scene->nodes();
+        for (NodeBase *n : liveNodes) {
+            if (n) {
+                n->setOwnerContext(m_runContext);
+                n->setOwnerToken(m_lifetimeToken.lock());   // 残余面：仅子流程节点的执行调用需要（见 NodeBase 注释）
+            }
+        }
+        s_currentInstance = this;
+        {
+            QMutexLocker locker(&s_currentContextMutex);
+            s_currentContext = m_runContext;
+        }
+        return;
+    }
     disconnectFromScene();
     // 段二：随场景换绑——取**当值场景自代**的存活块，并把当值场景写进块内（bind：弱侧指针、
     // 清墓碑、换绑计数＋1——块内 m_scene 由 bind 落笔；解绑（nullptr）＝清块持有，回到未借态）。
@@ -331,6 +367,7 @@ void FlowExecutor::setFlowScene(FlowScene *scene)
     {
         QMutexLocker locker(&m_graphCacheMutex);
         m_graphStructureDirty = true;
+        ++m_graphCacheClearCount;   // 段四：慢路径清空计数（只读视图；同场景幂等快速路不计）
         // 切换场景：立即清空上一场景的图缓存。否则下一次 rebuildIncomingIndex
         // 识别循环体时会误用旧场景的节点（漏识别循环体），若旧场景已销毁还会
         // 解引用已释放的节点指针（P1）

@@ -40,6 +40,7 @@ private slots:
     void testAliveBlockGoneMarkedOnSceneDestruction();  // ⑦ 段二：场景亡⇒其块落墓碑（售票判走；红臂靶）
     void testAliveBlockPerSceneBindingServe();  // ⑧ 段二：每场景自代各自的块（在世服务面，死亡面由⑦照管）
 void testAliveBlockBoundViaProductionSetFlowScene();  // ⑨ 段三：生产 setFlowScene 自带 bind（发布合同语义半边；红臂靶）
+    void testSameSceneRebindSkipsCacheChurn();  // ⑩ 段四·U-217：同场景重绑不走慢路径（切页对运行中执行器的竞态源）
 };
 
 void FlowExecutorOwnershipTest::testCurrentSingletonLifecycle()
@@ -240,6 +241,47 @@ void FlowExecutorOwnershipTest::testAliveBlockBoundViaProductionSetFlowScene()
         QVERIFY(t2.alive());
         QCOMPARE(t2.scene(), &scene2);
     }
+}
+
+void FlowExecutorOwnershipTest::testSameSceneRebindSkipsCacheChurn()
+{
+    // 段四回归腿（U-217，r12 复核 P1-6 余量）：同场景重绑必须走幂等快速路——**不走慢路径**。
+    // 机制：切回已绑定的同场景页签（executorForScene 复用每场景执行器）内容恒等，慢路径的
+    // 断/接信号与整块图缓存清空是纯盖章；且目标执行器可能在 Running（多流程自启后切页），
+    // worker 正在轮内无锁读循环体/子流集合——「锁内清 vs 无锁读」＝U-213 收口后残余的混锁
+    // 竞态源。观测用只读计数器（不参与执行决策：慢路径清空一次 +1，快速路不计）。
+    // 红臂破坏位＝同场景快速路守卫撤除（慢路径无条件执行 ⇒ 计数第二次自增，本腿当场红）。
+    FlowScene scene;
+    NodeBase *first = scene.createNode(NodeBase::LOGIC, QPointF(0, 0), QStringLiteral("churn_first"));
+    QVERIFY(first != nullptr);
+    auto token = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor *exec = token->executor();
+    exec->setFlowScene(&scene);
+    const quint64 afterFirst = exec->graphCacheClearCount();
+    QCOMPARE(afterFirst, quint64(1));   // 首绑＝慢路径一次清
+
+    // 同场景重绑（切回 tab 的真实形状）：计数不得再涨——归属与 current() 语义照旧保留。
+    exec->setFlowScene(&scene);
+    QCOMPARE(exec->graphCacheClearCount(), afterFirst);
+    NodeBase *late = scene.createNode(NodeBase::LOGIC, QPointF(10, 10), QStringLiteral("churn_late"));
+    QVERIFY(late != nullptr);
+    exec->setFlowScene(&scene);   // 快速路仍须补挂晚到节点的归属
+    QCOMPARE(late->ownerExecutor(), exec);
+    QCOMPARE(late->ownerToken(), token);
+    QCOMPARE(FlowExecutor::current(), exec);   // 最近激活执行器登记照旧
+
+    // 跨场景换绑与解绑仍走慢路径（清空语义属它们）：计数继续自增。
+    FlowScene other;
+    exec->setFlowScene(&other);
+    QCOMPARE(exec->graphCacheClearCount(), afterFirst + 1);
+    exec->setFlowScene(nullptr);
+    QCOMPARE(exec->graphCacheClearCount(), afterFirst + 2);
+
+    // 复绑任意新场景后，同场景幂等再走快速路（换场景后的第一次重绑必须先慢一次）：
+    exec->setFlowScene(&scene);
+    QCOMPARE(exec->graphCacheClearCount(), afterFirst + 3);
+    exec->setFlowScene(&scene);
+    QCOMPARE(exec->graphCacheClearCount(), afterFirst + 3);
 }
 
 QTEST_MAIN(FlowExecutorOwnershipTest)
