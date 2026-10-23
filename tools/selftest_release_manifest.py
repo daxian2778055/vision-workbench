@@ -157,13 +157,21 @@ def main():
         results.append(expect("post_release_head_moved_green", repo_moved,
                               ["--expect-tag", "rc-selftest"], 0, "GREEN", []))
 
-        # 3c) HEAD 带 tag：默认校验"带日期"的包（dist/VisionFlowPlatform-<tag>），
-        #     不是无日期目录——装机只认带日期的包，这是 2026-10-23 复核的核心结论之一。
+        # 3c) HEAD 带 tag：默认校验"带日期"的包（dist/VisionFlowPlatform-<tag> 或历史约定
+        #     的 VisionFlowPlatform-<日期>），不是无日期目录——装机只认带日期的包，
+        #     这是 2026-10-23 复核的核心结论之一。
         repo_dated = os.path.join(tmp, "repo_dated")
         commit_dated = make_repo(repo_dated, tag="rc-selftest")
         make_package(repo_dated, commit_dated, "rc-selftest",
                      pkg_subdir=os.path.join("dist", "VisionFlowPlatform-rc-selftest"))
         results.append(expect("dated_package_preferred_green", repo_dated, [], 0, "GREEN", []))
+
+        # 3c-bis) 历史命名：VisionFlowPlatform-<去掉 rc- 的日期> 同样被认
+        repo_dated_bare = os.path.join(tmp, "repo_dated_bare")
+        commit_dated_bare = make_repo(repo_dated_bare, tag="rc-selftest")
+        make_package(repo_dated_bare, commit_dated_bare, "rc-selftest",
+                     pkg_subdir=os.path.join("dist", "VisionFlowPlatform-selftest"))
+        results.append(expect("dated_package_bare_name_green", repo_dated_bare, [], 0, "GREEN", []))
 
         # 3d) 打了 tag 却没有带日期包 → RED，且不退回去校验无日期目录
         repo_dated_missing = os.path.join(tmp, "repo_dated_missing")

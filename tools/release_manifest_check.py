@@ -144,11 +144,16 @@ def main():
     if args.package:
         package = os.path.abspath(args.package)
     elif tag_on_head:
-        dated = os.path.join(repo, "dist", "VisionFlowPlatform-" + tag_on_head)
-        if os.path.isdir(dated):
+        # 带日期包候选：<tag> 全名（rc-20261023.2）与去掉 rc- 前缀的日期形式
+        # （VisionFlowPlatform-20261013/20261017 是历史约定，两种都认，全名优先）
+        bare = tag_on_head[3:] if tag_on_head.startswith("rc-") else tag_on_head
+        candidates = [os.path.join(repo, "dist", "VisionFlowPlatform-" + tag_on_head),
+                      os.path.join(repo, "dist", "VisionFlowPlatform-" + bare)]
+        dated = next((c for c in candidates if os.path.isdir(c)), None)
+        if dated:
             package = dated
         else:
-            finding("dated_package_missing", dated)
+            finding("dated_package_missing", " | ".join(candidates))
             out("[RM-INV] findings=%d skipped=0" % len(findings))
             out("[RM-VERDICT] RED")
             return 1
