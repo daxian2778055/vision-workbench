@@ -62,6 +62,7 @@ EXPECTED_STEPS = [
     "Cited-log presence check",
     "Register appendix append-only check",
     "Registered open-item re-measurement",
+    "Release package coherence (tag / manifest / exe md5)",
     "Build ($Config)",
     "Artifact freshness",
     "Tests (CTest / $Config)",
@@ -82,6 +83,7 @@ GATE_CODE_OF_STEP = [
     ("Cited-log presence check", "13"),
     ("Register appendix append-only check", "14"),
     ("Registered open-item re-measurement", "15"),
+    ("Release package coherence (tag / manifest / exe md5)", "16"),
 ]
 
 # Frozen executable-stop counts of the gate codes. 3 reads 2 because the interpreter is required
@@ -89,7 +91,7 @@ GATE_CODE_OF_STEP = [
 # code fires from exactly one place.
 FROZEN_GATE_COUNTS = {
     "3": 2, "4": 1, "5": 1, "6": 1, "7": 1, "8": 1, "9": 1, "10": 1, "11": 1, "12": 1, "13": 1,
-    "14": 1, "15": 1,
+    "14": 1, "15": 1, "16": 1,
 }
 SHARED_CODES = ("0", "1", "2", "3")
 

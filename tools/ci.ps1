@@ -35,6 +35,9 @@
            unreadable or no rounds judged 2, crash 3)
       15 = a registered "still open" item that was measured closed has regressed, or the registry
            itself is malformed (tools/open_items_gate.py -- findings 1, gate could not run 2)
+      16 = the release package is incoherent with HEAD: tag / manifest / exe md5 mismatch, a missing
+           manifest, a dirty-worktree claim, or the gate's own selftest failed
+           (tools/release_manifest_check.py + tools/selftest_release_manifest.py)
 
     Note: this script is intentionally ASCII-only, and therefore carries no UTF-8 BOM
     (PowerShell 5.1 only needs a BOM when a .ps1 contains non-ASCII text). The two-sided
@@ -445,6 +448,49 @@ if ($oigCode -ne 0) {
     exit 15
 }
 Write-Ok "enforced open items re-measured as closed ($hygieneExe)"
+
+# ------------------------------------------------------------------ 1m
+# Why it runs here: the 2026-10-23 review found release artifacts were verified by eye and text only.
+# The same round measured deploy.ps1 aborting BEFORE writing the manifest in two ways (untagged HEAD's
+# `describe --exact-match` non-zero; `Get-FileHash` missing in a restricted PowerShell) -- so a package
+# could be missing its self-identification file and nobody would notice. This step makes
+# tag / manifest / exe-md5 a command. In auto mode a HEAD without an rc-* tag prints an EXPLICIT skip
+# (dist/ is git-ignored, dev builds may legitimately be stale) -- never a silent pass; once HEAD carries
+# an rc-* tag the same check is hard. Must never be a silent skip: selftest or check non-zero = exit 16.
+Write-Step "Release package coherence (tag / manifest / exe md5)"
+$rmSelfLog = Join-Path $RepoRoot 'ci-release-manifest-selftest.log'
+$rmSelfArgs = $hygienePre + @('tools/selftest_release_manifest.py')
+& $hygieneExe @rmSelfArgs 2>&1 | Tee-Object -FilePath $rmSelfLog | Out-Null
+$rmSelfCode = $LASTEXITCODE
+$rmSelfAll = @(Get-Content $rmSelfLog -ErrorAction SilentlyContinue)
+$rmSelfShown = @($rmSelfAll | Where-Object { $_ -match '^\[RSM' })
+foreach ($line in $rmSelfShown) { Write-Host "  $line" }
+if ($rmSelfShown.Count -eq 0 -and $rmSelfAll.Count -gt 0) {
+    Write-Host "  (no RSM line in $($rmSelfAll.Count) log line(s) - the selftest did not reach its summary)"
+}
+if ($rmSelfCode -ne 0) {
+    # No separate stop here: a gate step may own exactly one exit code (geometry legs C/E), so the
+    # selftest failure is folded into the single exit 16 below.
+    Write-Host "  selftest failed (exit $rmSelfCode) - the real check below is not trusted" -ForegroundColor Yellow
+}
+
+$rmLog = Join-Path $RepoRoot 'ci-release-manifest.log'
+$rmArgs = $hygienePre + @('tools/release_manifest_check.py', '--repo', $RepoRoot)
+& $hygieneExe @rmArgs 2>&1 | Tee-Object -FilePath $rmLog | Out-Null
+$rmCode = $LASTEXITCODE
+$rmAll = @(Get-Content $rmLog -ErrorAction SilentlyContinue)
+$rmShown = @($rmAll | Where-Object { $_ -match '^\[RM' })
+foreach ($line in $rmShown) { Write-Host "  $line" }
+if ($rmShown.Count -eq 0 -and $rmAll.Count -gt 0) {
+    Write-Host "  (no RM line in $($rmAll.Count) log line(s) - the script did not reach its summary)"
+}
+Write-Host "  full release reading: $rmLog ($($rmAll.Count) line(s))"
+if ($rmSelfCode -ne 0 -or $rmCode -ne 0) {
+    Write-Err "release package gate failed (selftest exit $rmSelfCode, check exit $rmCode) via '$hygieneExe'; see $rmSelfLog / $rmLog"
+    Pop-Location
+    exit 16
+}
+Write-Ok "release package coherent with HEAD tag (or dev build explicitly skipped)"
 
 # ------------------------------------------------------------------ 2. clean
 if ($Clean -and (Test-Path $BuildDir)) {
