@@ -6,8 +6,12 @@
 # configure 时的提交——manifest 声称的提交与实际二进制不符，现场拿它复现问题必然对不上。
 # 该轮在树上实测到：build/generated/Version.h 写 ce6968a，而 HEAD 已是 24b8127。
 #
-# 用法：cmake -DHEADER=<path> -DREPO=<repo> -DVERSION=<ver> [-DGIT=<git exe>]
-#            -P RefreshVersionHeader.cmake
+# 单一数据源：正文模板只此一份（cmake/Version.h.in），本脚本与 configure 期的
+# configure_file 都从它产出。曾经把正文内嵌在本脚本里，两份定义漂移过一次
+# （注释不同 ⇒ 每次 configure 后首次构建多重编一次 MainWindow.cpp，且只改 .in 不生效）。
+#
+# 用法：cmake -DHEADER=<path> -DTEMPLATE=<tpl> -DREPO=<repo> -DVERSION=<ver>
+#            [-DGIT=<git exe>] -P RefreshVersionHeader.cmake
 # 内容不变则不重写（不碰时间戳），避免每次构建都触发 MainWindow.cpp 重编。
 
 if(NOT DEFINED GIT)
@@ -27,20 +31,11 @@ endif()
 
 string(TIMESTAMP _date "%Y-%m-%d")
 
-# 与 cmake/Version.h.in 的产出保持逐字一致（configure 期 bootstrap 与构建期刷新同一格式）
-set(_content "#pragma once
-
-// 由 CMake 生成，请勿手改（改 cmake/Version.h.in 或 CMakeLists.txt 的 project VERSION）。
-// 哈希与日期在**每次构建**时刷新（cmake/RefreshVersionHeader.cmake，经 vfp_version_header
-// 目标），不是 configure 时的一次性快照——否则复用既有配置的增量构建会嵌进旧提交。
-// 作用：让程序内「关于」框能说清装的是哪一版（版本号 + 提交短哈希 + 构建日期）。
-#define VFP_VERSION_STRING \"${VERSION}\"
-#define VFP_GIT_HASH \"${_hash}\"
-#define VFP_BUILD_DATE \"${_date}\"
-
-// 供 About 框直接使用的整串（字面量拼接，可交给 QStringLiteral）
-#define VFP_VERSION_DISPLAY \"VisionFlowPlatform \" VFP_VERSION_STRING \" (\" VFP_GIT_HASH \" / \" VFP_BUILD_DATE \")\"
-")
+# 从唯一模板产出（替换语义与 configure_file 的 @ONLY 一致）
+file(READ "${TEMPLATE}" _content)
+string(REPLACE "@PROJECT_VERSION@" "${VERSION}" _content "${_content}")
+string(REPLACE "@VFP_GIT_HASH@" "${_hash}" _content "${_content}")
+string(REPLACE "@VFP_BUILD_DATE@" "${_date}" _content "${_content}")
 
 if(EXISTS "${HEADER}")
     file(READ "${HEADER}" _old)

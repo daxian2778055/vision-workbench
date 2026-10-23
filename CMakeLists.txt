@@ -38,6 +38,7 @@ endif()
 add_custom_target(vfp_version_header ALL
     COMMAND "${CMAKE_COMMAND}"
             "-DHEADER=${CMAKE_CURRENT_BINARY_DIR}/generated/Version.h"
+            "-DTEMPLATE=${CMAKE_CURRENT_SOURCE_DIR}/cmake/Version.h.in"
             "-DREPO=${CMAKE_CURRENT_SOURCE_DIR}"
             "-DVERSION=${PROJECT_VERSION}"
             "-DGIT=${_vfp_git_exe}"
