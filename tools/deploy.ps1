@@ -441,7 +441,20 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
 } else {
     Write-Warning "本机找不到 git —— 包内无法记录提交号，只能靠人记（这是发版最易丢的一格）"
 }
-$exeHash = (Get-FileHash -LiteralPath $exeInDst -Algorithm MD5).Hash.ToLower()
+# 不要用 Get-FileHash：受限/精简 PowerShell（如 CI 宿主、PSModulePath 被裁剪的子进程）里
+# 该 cmdlet 可能"未识别"，在 $ErrorActionPreference='Stop' 下会把脚本掀翻在写 manifest 之前
+# ——包看着部署成功、实际少一件且退出码没人查。这里走 .NET，零 cmdlet 依赖。
+function Get-FileMd5Hex([string]$path) {
+    $md5 = [System.Security.Cryptography.MD5]::Create()
+    try {
+        $fs = [System.IO.File]::OpenRead($path)
+        try {
+            $bytes = $md5.ComputeHash($fs)
+            return (($bytes | ForEach-Object { $_.ToString('x2') }) -join '')
+        } finally { $fs.Dispose() }
+    } finally { $md5.Dispose() }
+}
+$exeHash = Get-FileMd5Hex $exeInDst
 $exeBytes = (Get-Item -LiteralPath $exeInDst).Length
 $manifestLines = @(
     "VisionFlowPlatform 包内自识别（本文件由 tools/deploy.ps1 生成，请勿手改）",
