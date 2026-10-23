@@ -139,6 +139,7 @@ private slots:
     void testModbusWriteReadByteOrderRoundTrip();   // S3/S4：写入逆变换 + 宽类型拆寄存器往返
     void testModbusServerWideRegisterInit();         // S7：服务器寄存器表初始化须按宽类型拆字
     void testModbusServerRefusesEmptyBindAddress();  // U-202：空监听地址＝未配置 ⇒ 从站拒启动并留痕
+    void testUdpBindGatePairing();                   // U-219 钉位缺口①：UDP 收半拒（行 219 闸位）＋发半端口 0 维持放行（U-216 拍板）
     void testPlcWriteReadByteOrderRoundTrip();       // S3（PLC 半边）：PLC 写入逆变换往返
     void testModbusUserCloseDoesNotResurrect();      // S-1：真连后用户关闭不复活 + 重开后自愈仍有效
     void testPlcUserCloseDoesNotResurrect();         // S-1（PLC 同款）：并钉住 openConnection 两行复位
@@ -2467,6 +2468,49 @@ void CommWritebackTest::testAllocFlowNameAvoidsCollision()
     gtm->unregisterFlow(QStringLiteral("流程 1"));
     gtm->unregisterFlow(QStringLiteral("流程 2"));
     gtm->unregisterFlow(QStringLiteral("流程 3"));
+}
+
+void CommWritebackTest::testUdpBindGatePairing()
+{
+    // U-219 钉位缺口①（U-216 拍板留档的钉族收口）：行 219 把 UDP 闸只放在接收面——
+    // 收半（本地端口 > 0 且 bindAddress 留空＝未配置）必须拒绑定并留可执行提示；
+    // 发半（端口 0＝仅发送场景，无监听面）维持旧行为放行（U-216 拍板：原注在码在册，
+    // 「端口零语义不动」）。收发两半一双钉形——此前收半只被解析座纯函数腿与从站面腿
+    // 隔邻钉着，调用面闸位的 conjunct（Missing 且端口大于 0）从未被座直名钉过；
+    // 重复关闭腿虽间接走过端口 0 直通，但那是配置便利不是语义钉名。
+    auto *cm = CommunicationManager::instance();
+    DeviceCleanup cleanup{ { QStringLiteral("GATE_UDP_RECV"), QStringLiteral("GATE_UDP_SEND") } };
+
+    // 收半：端口 > 0＋留空＝未配置 ⇒ 拒绑定（行 219 闸位半边）
+    QJsonObject recvCfg;
+    recvCfg[QStringLiteral("localPort")] = pickFreePort();
+    QVERIFY2(cm->addDevice(QStringLiteral("GATE_UDP_RECV"), QStringLiteral("UDP"), recvCfg),
+             "addDevice(UDP·收半·留空) 失败");
+    auto *recvNode = cm->deviceNode(QStringLiteral("GATE_UDP_RECV"));
+    QVERIFY2(recvNode != nullptr, "UDP 收半节点缺失");
+    {
+        QSignalSpy errSpy(recvNode, &CommunicationNodeBase::communicationError);
+        QVERIFY2(!cm->openDevice(QStringLiteral("GATE_UDP_RECV")),
+                 "接收面留空必须拒绑定（行 219 闸位：Missing 且本地端口大于 0）");
+        QVERIFY(!recvNode->isConnected());
+        QCOMPARE(errSpy.count(), 1);
+        const QString reason = errSpy.at(0).at(0).toString();
+        QVERIFY2(reason.contains(QStringLiteral("绑定地址未配置")),
+                 qPrintable(QStringLiteral("拒收须留可执行提示：%1").arg(reason)));
+    }
+    QVERIFY2(cm->removeDevice(QStringLiteral("GATE_UDP_RECV")), "收半撤除失败");
+
+    // 发半：端口 0＋留空＝仅发送场景 ⇒ 维持放行（U-216 拍板半边，复核条件句落地的维持面）
+    QJsonObject sendCfg;
+    sendCfg[QStringLiteral("localPort")] = 0;
+    QVERIFY2(cm->addDevice(QStringLiteral("GATE_UDP_SEND"), QStringLiteral("UDP"), sendCfg),
+             "addDevice(UDP·发半·端口 0) 失败");
+    auto *sendNode = cm->deviceNode(QStringLiteral("GATE_UDP_SEND"));
+    QVERIFY2(sendNode != nullptr, "UDP 发半节点缺失");
+    QVERIFY2(cm->openDevice(QStringLiteral("GATE_UDP_SEND")),
+             "仅发送面（端口 0＋空地址）维持放行——U-216 拍板语义，不得被悄悄收紧");
+    QVERIFY(sendNode->isConnected());
+    QVERIFY2(cm->removeDevice(QStringLiteral("GATE_UDP_SEND")), "发半撤除失败");
 }
 
 QTEST_MAIN(CommWritebackTest)

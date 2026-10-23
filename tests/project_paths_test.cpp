@@ -46,6 +46,8 @@ private slots:
     void testEscapedRelativeClassifiedAndGated();          // r11 P1-1②：相对 `..` 解析后分类并入确认闸
     // U-218 写侧同族腿
     void testFailedSaveRestoresAnchorAndReadonly();        // r12 P2-10：保存失败不带走锚与只读守卫；导出全链不动锚
+    // U-219 钉位缺口②（U-216 拍板维持：内存入口不闸）
+    void testApplyProjectJsonStaysUngated();               // 边界钉形：内存应用入口不叫确认器、也无锚
 
 private:
     /// 造一份带指定 filePath 的方案文件（走真写侧序列化 buildProjectJson），返回是否落盘。
@@ -555,6 +557,43 @@ void ProjectPathsTest::testFailedSaveRestoresAnchorAndReadonly()
     QCOMPARE(ProjectPaths::currentSchemeFilePath(), second);
     QVERIFY2(!loader.isReadonlyLoaded(), "另存新路径后旗解除");
 
+    ProjectPaths::setCurrentSchemeFilePath(QString());   // 腿尾净态（cleanupTestCase 兜底再清一次）
+}
+
+void ProjectPathsTest::testApplyProjectJsonStaysUngated()
+{
+    // U-219 钉位缺口②（U-216 拍板留档的钉族收口）：内存应用入口 applyProjectJson 维持不进
+    // U-201 确认闸——行 216 边界如实登记在先（门禁只装文件载入口：手动打开与崩溃恢复同走
+    // loadProjectFile；内存入口不触盘、无方案目录锚，也无生产调用方，测试面在用）。
+    // 本腿把该边界钉成行为：目录外绝对路径载荷经内存入口必须放行、确认器不得被叫起、
+    // 锚保持原值——三件任何一件变化都是门禁边界的悄悄改写。
+    ProjectPaths::setCurrentSchemeFilePath(QString());   // 座给腿净态（快照位不接上一腿）
+    ProjectManager loader;
+    int confirmCalls = 0;
+    loader.setOutsidePathConfirmer([&confirmCalls](const ProjectPaths::PathReview &) {
+        ++confirmCalls;
+        return false;   // 拒认器：内存入口若被改道进闸且未确认，应用当场失败
+    });
+
+    // 内存载荷：目录外绝对路径（真写侧序列化，座内不另拼装免与产线形状分叉）
+    FlowScene scene;
+    NodeBase *reader = scene.createNode(NodeBase::IMAGE_ACQUISITION, QPointF(100, 200),
+                                        QStringLiteral("内存外"));
+    QVERIFY2(reader != nullptr, "工厂没给读取节点，本腿失去前提");
+    reader->setParam(QStringLiteral("filePath"),
+                     QDir(QDir::tempPath()).filePath(QStringLiteral("u219_ungated/abs.png")));
+    ProjectManager writer;
+    QJsonObject root = writer.buildProjectJson(QList<FlowScene *>{ &scene });
+    root.remove(QStringLiteral("runtimeLayout"));   // 座内不碰运行界面布局文件（免得写应用目录）
+
+    QList<FlowScene *> opened;
+    QVERIFY2(loader.applyProjectJson(root, opened),
+             "内存应用入口应放行（不进 U-201 确认闸——行 216 边界的钉形）");
+    QCOMPARE(confirmCalls, 0);
+    QCOMPARE(opened.size(), 1);
+    QCOMPARE(ProjectPaths::currentSchemeFilePath(), QString());   // 不触盘也无锚
+    qDeleteAll(opened);
+    opened.clear();
     ProjectPaths::setCurrentSchemeFilePath(QString());   // 腿尾净态（cleanupTestCase 兜底再清一次）
 }
 

@@ -417,6 +417,7 @@ bool ProjectManager::applyProjectJson(const QJsonObject &root, QList<FlowScene *
 {
     // 内存应用入口（不触盘、无方案目录锚）：U-201 起拆成「建场景」与「应用全局配置」两段，
     // 供载入面在两段之间插入路径审查与确认。本入口本身不设门禁（门禁在文件载入口 loadProject）。
+    // U-219：不闸的边界钉成行为——目录外载荷经本入口放行且确认器不得被叫起（项目路径座腿）。
     if (!buildScenesFromJson(root, scenes))
         return false;
     applyGlobalsFromJson(root);

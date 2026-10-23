@@ -51,6 +51,7 @@ bool UdpCommNode::openConnection()
     // 绑定地址（U-202 口径）：解析见表 CommunicationNodeBase.h——未配置（留空）在**接收面**
     // （本地端口 > 0，即真的有监听面）拒绑定并留可执行提示；显式 IP 字面量 = 只绑该网卡；
     // 无效 = 拒绑定不静默回落。端口 0（仅发送场景）没有监听面，绑定只是源地址选择，维持旧行为。
+    // U-219：收发两半（拒半 = Missing 且本地端口大于 0；放半 = 端口 0）由通讯座域一双腿直名钉住。
     const CommBind::BindChoice bind = CommBind::resolveListenAddress(
         m_params.value(QStringLiteral("bindAddress")).toString());
     if (bind.kind == CommBind::BindKind::Missing && localPort > 0) {
