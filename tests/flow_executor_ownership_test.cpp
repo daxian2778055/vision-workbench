@@ -39,6 +39,7 @@ private slots:
     void testExecutorSleepStopsWithExecutor();  // ⑥ 执行器停后其可取消等待立即返回未完成（P2b 接线）
     void testAliveBlockGoneMarkedOnSceneDestruction();  // ⑦ 段二：场景亡⇒其块落墓碑（售票判走；红臂靶）
     void testAliveBlockPerSceneBindingServe();  // ⑧ 段二：每场景自代各自的块（在世服务面，死亡面由⑦照管）
+void testAliveBlockBoundViaProductionSetFlowScene();  // ⑨ 段三：生产 setFlowScene 自带 bind（发布合同语义半边；红臂靶）
 };
 
 void FlowExecutorOwnershipTest::testCurrentSingletonLifecycle()
@@ -208,6 +209,37 @@ void FlowExecutorOwnershipTest::testAliveBlockPerSceneBindingServe()
     b2.reset();
     delete s1;
     delete s2;
+}
+
+void FlowExecutorOwnershipTest::testAliveBlockBoundViaProductionSetFlowScene()
+{
+    // 段三回归腿（U-213，r11 复核 P1-6 同轮）：生产 setFlowScene 必须自带 bind——座位世界不再
+    // 手写 bind、只走生产路径，块仍能售票（发布合同运行时可见的一半：bind 落笔）。
+    // 锁内发布/锁外减是形状判据（普查直读，运行时无确定性数据竞争判据）；本腿红臂＝撤 bind 调用。
+    FlowScene scene;
+    auto token = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor *exec = token->executor();
+    exec->setFlowName(QStringLiteral("ownership_publish_probe"));
+    exec->setFlowScene(&scene);   // 生产路径：无任何手写 bind
+    const std::shared_ptr<FlowSceneAliveBlock> block = scene.aliveBlockShared();
+    QVERIFY(block != nullptr);
+    QCOMPARE(block->generation(), quint64(1));   // bind 已由生产路径落笔（换绑计数）
+    {
+        FlowSceneAliveBlock::CaptureTicket inLife = block->acquireForCapture();
+        QVERIFY2(inLife.alive(),
+                 "production setFlowScene must bind the scene's own block (bind missing from publish path?)");
+        QCOMPARE(inLife.scene(), &scene);
+    }
+    // 换绑面：换第二场景 ⇒ 新块同票形（换绑计数逐块独立；换绑即换天然精准）。
+    FlowScene scene2;
+    exec->setFlowScene(&scene2);
+    const std::shared_ptr<FlowSceneAliveBlock> b2 = scene2.aliveBlockShared();
+    QCOMPARE(b2->generation(), quint64(1));
+    {
+        FlowSceneAliveBlock::CaptureTicket t2 = b2->acquireForCapture();
+        QVERIFY(t2.alive());
+        QCOMPARE(t2.scene(), &scene2);
+    }
 }
 
 QTEST_MAIN(FlowExecutorOwnershipTest)

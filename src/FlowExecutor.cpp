@@ -309,15 +309,25 @@ void FlowExecutor::setLifetimeToken(const std::shared_ptr<FlowExecutorToken> &to
 void FlowExecutor::setFlowScene(FlowScene *scene)
 {
     disconnectFromScene();
+    // 段二：随场景换绑——取**当值场景自代**的存活块，并把当值场景写进块内（bind：弱侧指针、
+    // 清墓碑、换绑计数＋1——块内 m_scene 由 bind 落笔；解绑（nullptr）＝清块持有，回到未借态）。
+    // 段三（P1-6，r11 复核）：发布合同两半——bind 先落笔（块写锁短临界、在 m_mutex 外，让在飞
+    // 票先完成）；随后与 m_scene 同锁发布：shared_ptr 对象自身的赋值/拷贝竞争，控制块引用计数
+    // 的原子性替代不了对象互斥；发布先于可见（m_aliveBlock 换成新块的那一刻块必已绑当值场景，
+    // 无「发布了未绑块」窗口）；旧块换出到锁外再释（§13.2 增减不对称：减不落任何锁临界区内；
+    // 活票持照拷 ⇒ 活票期间引用计数≥2，此处减不会真析构带票的块）。
+    std::shared_ptr<FlowSceneAliveBlock> newBlock = scene ? scene->aliveBlockShared()
+                                                          : std::shared_ptr<FlowSceneAliveBlock>();
+    if (newBlock)
+        newBlock->bind(scene);
+    std::shared_ptr<FlowSceneAliveBlock> oldBlock;
     {
         QMutexLocker locker(&m_mutex);
         m_scene = scene;
+        oldBlock.swap(m_aliveBlock);   // 旧块换出到锁外（随后减在锁外做）
+        m_aliveBlock = std::move(newBlock);   // 段三：同锁发布（P1-6）
     }
-    // 段二：随场景换绑——取**当值场景自代**的存活块，并把当值场景写进块内（bind：弱侧指针、
-    // 清墓碑、换绑计数＋1——块内 m_scene 由 bind 落笔；解绑（nullptr）＝清块持有，回到未借态）。
-    m_aliveBlock = scene ? scene->aliveBlockShared() : std::shared_ptr<FlowSceneAliveBlock>();
-    if (m_aliveBlock)
-        m_aliveBlock->bind(scene);
+    oldBlock.reset();   // 锁外真减（可能真析构）
     {
         QMutexLocker locker(&m_graphCacheMutex);
         m_graphStructureDirty = true;
@@ -582,6 +592,9 @@ void FlowExecutor::run()
             break;
         }
         
+        // 段三（P1-6，r11 复核）：轮首仍在 m_mutex 持握内抄块副本——与 setFlowScene 的同锁发布
+        // 成对；解锁后 helper 只吃副本（shared_ptr 对象自身的读写在锁内完成，票口锁不管这层）。
+        std::shared_ptr<FlowSceneAliveBlock> blockCopy = m_aliveBlock;
         locker.unlock();
 
         // 本轮计时（运行期统计用）
@@ -594,7 +607,7 @@ void FlowExecutor::run()
         // 解引用（与"未设场景"同一显式退化路径：报错＋停轮）。
         m_diagPhase.store(1, std::memory_order_relaxed);   // 诊断：轮首/取快照前
         QList<SubFlowDef> subFlowDefs;   // 段二：定义副本在票窗内一并带出（第二轮同窗读）
-        FlowScene::GraphSnapshotGuard graphSnapshot = captureViaAliveBlock(m_aliveBlock, &subFlowDefs);
+        FlowScene::GraphSnapshotGuard graphSnapshot = captureViaAliveBlock(blockCopy, &subFlowDefs);
         if (!graphSnapshot.isHeld()) {
             emit executionError(tr("Flow scene is not set"));
             emit executionStopped();   // 终态信号：错误路径不发终态会让界面按钮停在"运行中"
@@ -1867,7 +1880,14 @@ void FlowExecutor::executeUpTo(NodeBase *endNode)
 
     // S1：同步执行同样走快照（UI 线程单发；持快照期间删除走墓碑，函数返回即释放）。
     // 段二：借面改走存活控制块（同族同面）；未借到（亡/未绑）＝与「无起点」同形：静默返回。
-    FlowScene::GraphSnapshotGuard graphSnapshot = captureViaAliveBlock(m_aliveBlock);
+    // 段三（P1-6）：副本在 m_mutex 内抄后喂票口（发布/拷贝同锁；直传成员＝锁外读 shared_ptr 对象，
+    // 与 setFlowScene 的同锁赋值成竞争面）。
+    std::shared_ptr<FlowSceneAliveBlock> blockCopy;
+    {
+        QMutexLocker sceneLock(&m_mutex);
+        blockCopy = m_aliveBlock;
+    }
+    FlowScene::GraphSnapshotGuard graphSnapshot = captureViaAliveBlock(blockCopy);
     if (!graphSnapshot.isHeld())
         return;
     const QList<NodeBase *> nodes = graphSnapshot.snapshot().nodes;
@@ -1917,7 +1937,14 @@ void FlowExecutor::executeFrom(NodeBase *startNode)
 
     // S1：同步执行同样走快照（UI 线程单发；持快照期间删除走墓碑，函数返回即释放）。
     // 段二：借面改走存活控制块（同族同面）；未借到（亡/未绑）＝与「无起点」同形：静默返回。
-    FlowScene::GraphSnapshotGuard graphSnapshot = captureViaAliveBlock(m_aliveBlock);
+    // 段三（P1-6）：副本在 m_mutex 内抄后喂票口（发布/拷贝同锁；直传成员＝锁外读 shared_ptr 对象，
+    // 与 setFlowScene 的同锁赋值成竞争面）。
+    std::shared_ptr<FlowSceneAliveBlock> blockCopy;
+    {
+        QMutexLocker sceneLock(&m_mutex);
+        blockCopy = m_aliveBlock;
+    }
+    FlowScene::GraphSnapshotGuard graphSnapshot = captureViaAliveBlock(blockCopy);
     if (!graphSnapshot.isHeld())
         return;
     const QList<NodeBase *> nodes = graphSnapshot.snapshot().nodes;
@@ -1996,7 +2023,14 @@ void FlowExecutor::invalidateDownstreamOf(NodeBase *startNode)
         if (m_graphStructureDirty) {
             // 段二：借面改走存活控制块（同族同面）；未借到走 else 分支＝旧"无场景"行为原样保留
             //（清缓存并标清洁；场景亡后不再重建、留给下次在世重建）。
-            graphSnapshot = captureViaAliveBlock(m_aliveBlock);
+            // 段三（P1-6）：副本在 m_mutex 内抄后喂票口（持图缓存锁再取 m_mutex＝既有同向次序；
+            // 发布/拷贝同锁，与 setFlowScene 成对）。
+            std::shared_ptr<FlowSceneAliveBlock> blockCopy;
+            {
+                QMutexLocker sceneLock(&m_mutex);
+                blockCopy = m_aliveBlock;
+            }
+            graphSnapshot = captureViaAliveBlock(blockCopy);
             if (graphSnapshot.isHeld()) {
                 const QList<NodeBase *> &snapNodes = graphSnapshot.snapshot().nodes;
                 rebuildIncomingIndex(snapNodes, graphSnapshot.snapshot().connections);
