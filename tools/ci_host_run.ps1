@@ -1,4 +1,4 @@
-<#
+﻿<#
   ci_host_run.ps1 -- run the host CI script and put ITS OWN exit code into the same stdout
   stream the caller redirects to a log.
 
@@ -60,9 +60,25 @@ if (-not $exe) {
 Write-Host ('ci_host_run interpreter: ' + $exe)
 
 $global:LASTEXITCODE = $null
-$raw = & $exe -NoProfile -ExecutionPolicy Bypass -File $InnerScript 2>&1
-$rc = $LASTEXITCODE
-foreach ($line in @($raw)) { Write-Host ('' + $line) }
+# 流式透出：子进程输出一边实时写本进程 stdout（调用方重定向到的日志因此随跑随长），
+# 一边落临时文件供结束后扫描判读行与计数。
+# 旧写法是 `$raw = & $exe ...` 先把全部输出收进变量再打印，表现为"头几分钟日志只有
+# 包装器自己那两行、子进程退出才一次性倾泻"——排障时极易误判为卡死（2026-10-23 复核 P3）。
+# 契约不变：末行仍是 [HOST-RC] ...，退出码仍是子进程自己的码（Tee-Object 不覆盖
+# $LASTEXITCODE，与 ci.ps1 内部各闸的 `| Tee-Object | Out-Null` 同一用法）。
+$rawLog = Join-Path $env:TEMP ('ci_host_run_' + $PID + '.log')
+try {
+    & $exe -NoProfile -ExecutionPolicy Bypass -File $InnerScript 2>&1 |
+        Tee-Object -FilePath $rawLog |
+        ForEach-Object { Write-Host ('' + $_); [Console]::Out.Flush() }
+    $rc = $LASTEXITCODE
+    $raw = @()
+    if (Test-Path -LiteralPath $rawLog) { $raw = @(Get-Content -LiteralPath $rawLog) }
+} finally {
+    if (Test-Path -LiteralPath $rawLog) {
+        Remove-Item -LiteralPath $rawLog -Force -ErrorAction SilentlyContinue
+    }
+}
 
 if ($null -eq $rc) {
     Write-Host '[HOST-RC-ABORT] the child produced no process exit code (it never started) -- not reporting 0'
