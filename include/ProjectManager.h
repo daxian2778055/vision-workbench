@@ -58,7 +58,8 @@ public:
     /// 非 const：内部要调用非 const 的 sceneFromJson，且会改写全局管理器单例。
     bool applyProjectJson(const QJsonObject &root, QList<FlowScene *> &scenes);
 
-    /// 方案目录外绝对路径的确认器（U-201 载入门禁）：入参是本次载入的路径审查结果，
+    /// 方案目录外路径的确认器（U-201 载入门禁；U-215 起相对逃逸与目录外绝对同权）：
+    /// 入参是本次载入的路径审查结果，
     /// 返回 true = 放行载入；false = 拒载（当前方案保持不变）。
     /// 未装确认器 = 拒载（fail-closed：没有操作员就没有确认，CI 与无界面调用同样不得默认放行）。
     using OutsidePathConfirmer = std::function<bool(const ProjectPaths::PathReview &)>;
@@ -108,7 +109,7 @@ private:
     /// 未确认（含未装确认器）即拒载——清空场景清单（不留半装载）并留痕，返回 false。
     bool confirmOutsideSchemePaths(QList<FlowScene *> &scenes, const QString &schemeFilePath);
 
-    /// 目录外绝对路径的确认器（未装 = 拒载，见 setOutsidePathConfirmer）。
+    /// 目录外路径的确认器（未装 = 拒载，见 setOutsidePathConfirmer）。
     OutsidePathConfirmer m_outsidePathConfirmer;
 
     QString m_lastFilePath;

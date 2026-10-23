@@ -14,13 +14,15 @@ class FlowScene;
 ///    当前方案保持不变；清单面走 reviewScenes，拒载与放行各留一句 loadNote）。
 namespace ProjectPaths {
 
-/// 分类结果：空参 / 相对形态（按方案目录解析）/ 方案目录内绝对 / 目录外绝对
+/// 分类结果：空参 / 相对形态（按方案目录解析）/ 方案目录内绝对 / 目录外绝对 /
+/// 相对逃逸（相对 `..` 形态解析后落出方案目录——U-215 补形，与目录外绝对同进确认闸）
 enum class PathScope
 {
     Empty,
     RelativeRaw,
     InSchemeDir,
-    OutsideSchemeDir
+    OutsideSchemeDir,
+    EscapedRelative
 };
 
 const char *pathScopeName(PathScope scope);
@@ -53,13 +55,16 @@ struct PathReviewHit
     PathScope scope = PathScope::Empty;
 };
 
-/// 载入期路径审查结果：目录外绝对路径逐条在案（提示面载荷），相对路径只给计数。
+/// 载入期路径审查结果：目录外绝对路径与相对逃逸逐条在案（提示面载荷），
+/// 纯目录内相对路径只给计数。
 struct PathReview
 {
     int outsideCount = 0;
     int relativeCount = 0;
+    int escapedRelativeCount = 0;
     QVector<PathReviewHit> outsideHits;
     QVector<PathReviewHit> relativeHits;
+    QVector<PathReviewHit> escapedRelativeHits;
 };
 
 /// 扫描场景列表中全部节点的文件路径参数（规格型 + 遗传三键 + MVS 快照位）。

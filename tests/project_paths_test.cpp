@@ -42,6 +42,8 @@ private slots:
     void testSchemeWithoutOutsidePathSkipsConfirmation();  // 负对照：无目录外路径不叫确认器
     // U-214 失败回滚腿
     void testFailedLoadRestoresSnapshotAndReadonly();      // r11 P2-9：失败支回滚三件套（成功才提交）
+    // U-215 相对逃逸腿
+    void testEscapedRelativeClassifiedAndGated();          // r11 P1-1②：相对 `..` 解析后分类并入确认闸
 
 private:
     /// 造一份带指定 filePath 的方案文件（走真写侧序列化 buildProjectJson），返回是否落盘。
@@ -414,6 +416,70 @@ void ProjectPathsTest::testFailedLoadRestoresSnapshotAndReadonly()
     qDeleteAll(opened);
     opened.clear();
 
+    ProjectPaths::setCurrentSchemeFilePath(QString());   // 腿尾净态（cleanupTestCase 兜底再清一次）
+}
+
+void ProjectPathsTest::testEscapedRelativeClassifiedAndGated()
+{
+    // U-215（r11 复核 P1-1② 补形）：相对形态不再一律 RelativeRaw——先按方案目录锚定解析，
+    // 解析后仍在方案目录内的照旧 RelativeRaw；逃出去的相对 `..` 形态给 EscapedRelative，
+    // 与目录外绝对路径同进确认闸（未确认即拒载，确认后放行）——既有拍板口径在相对形态上同权。
+    // 红臂破坏位＝classify 的相对分支撤回（一律 RelativeRaw）——本腿当场红，其余腿不受影响。
+    ProjectPaths::setCurrentSchemeFilePath(QString());   // 腿自含净态（快照位不接上一腿）
+
+    // ① 分类断言：目录内相对照旧；`..` 逃逸新类（两条都在腿内，红臂判据自含）
+    QCOMPARE(int(ProjectPaths::classifySchemePath(QStringLiteral("images/a.png"), m_scheme)),
+             int(ProjectPaths::PathScope::RelativeRaw));
+    QCOMPARE(int(ProjectPaths::classifySchemePath(QStringLiteral("../rel_out/x.png"), m_scheme)),
+             int(ProjectPaths::PathScope::EscapedRelative));
+
+    // ② 计数与解析落点：逃逸单独计数进 escapedRelativeHits；解析落点在方案目录外
+    FlowScene scene;
+    NodeBase *reader = scene.createNode(NodeBase::IMAGE_ACQUISITION,
+                                        QPointF(100, 100), QStringLiteral("读逃逸"));
+    QVERIFY2(reader != nullptr, "工厂没给读取节点，本腿失去前提");
+    reader->setParam(QStringLiteral("filePath"), QStringLiteral("../rel_out/x.png"));
+    const ProjectPaths::PathReview review =
+        ProjectPaths::reviewScenes(QList<FlowScene *>{ &scene }, m_scheme);
+    QCOMPARE(review.escapedRelativeCount, 1);
+    QCOMPARE(review.outsideCount, 0);
+    QCOMPARE(review.relativeCount, 0);
+    QVERIFY2(!review.escapedRelativeHits.isEmpty(), "逃逸形态须逐条在案（与目录外绝对同载荷）");
+    QCOMPARE(review.escapedRelativeHits.at(0).rawPath, QStringLiteral("../rel_out/x.png"));
+    const QString resolved =
+        ProjectPaths::resolveSchemePath(QStringLiteral("../rel_out/x.png"), m_scheme);
+    const QString expectedDir = QDir::cleanPath(m_tmp.path() + QStringLiteral("/../rel_out"));
+    QCOMPARE(QFileInfo(resolved).absolutePath(), expectedDir);   // 解析落点在方案目录之外（逃逸）
+
+    // ③ 载入闸（拒面）：未确认即拒载——清单清空、拒载留痕、拒载原因位立真
+    QVERIFY2(writeSchemeWithFilePath(QStringLiteral("../rel_out/x.png")), "方案素材落盘失败");
+    ProjectManager loader;
+    int asked = 0;
+    loader.setOutsidePathConfirmer([&asked](const ProjectPaths::PathReview &) {
+        ++asked;
+        return false;   // 操作员不确认
+    });
+    QStringList notes;
+    QObject::connect(&loader, &ProjectManager::loadNote,
+                     [&notes](const QString &note) { notes.append(note); });
+    QList<FlowScene *> opened;
+    QVERIFY2(!loader.loadProject(m_scheme, opened), "相对逃逸未确认必须拒载（既有口径同权）");
+    QCOMPARE(asked, 1);                          // 确认器必须被咨询（不得静默放行）
+    QVERIFY2(opened.isEmpty(), "拒载后不得留半装载的场景清单");
+    QVERIFY2(notes.join(QStringLiteral("|")).contains(QStringLiteral("未获确认")),
+             qPrintable(QStringLiteral("拒载须留痕：%1").arg(notes.join(QStringLiteral("|")))));
+    QVERIFY(loader.lastLoadRefusedForOutsidePaths());
+    qDeleteAll(opened);
+    opened.clear();
+
+    // ④ 载入闸（放行面）：确认后放行——留痕写明已确认放行
+    loader.setOutsidePathConfirmer([](const ProjectPaths::PathReview &) { return true; });
+    QVERIFY2(loader.loadProject(m_scheme, opened), "确认后相对逃逸照常放行");
+    QVERIFY2(opened.size() == 1, "放行后应接管场景清单");
+    QVERIFY2(notes.join(QStringLiteral("|")).contains(QStringLiteral("已确认放行")),
+             qPrintable(QStringLiteral("放行须留痕：%1").arg(notes.join(QStringLiteral("|")))));
+    qDeleteAll(opened);
+    opened.clear();
     ProjectPaths::setCurrentSchemeFilePath(QString());   // 腿尾净态（cleanupTestCase 兜底再清一次）
 }
 

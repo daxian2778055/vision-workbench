@@ -48,6 +48,7 @@ const char *pathScopeName(PathScope scope)
     case PathScope::RelativeRaw: return "RelativeRaw";
     case PathScope::InSchemeDir: return "InSchemeDir";
     case PathScope::OutsideSchemeDir: return "OutsideSchemeDir";
+    case PathScope::EscapedRelative: return "EscapedRelative";
     }
     return "Unknown";
 }
@@ -66,8 +67,16 @@ PathScope classifySchemePath(const QString &raw, const QString &schemeFilePath)
     const QString v = raw.trimmed();
     if (v.isEmpty())
         return PathScope::Empty;
-    if (QFileInfo(v).isRelative())
-        return PathScope::RelativeRaw;
+    if (QFileInfo(v).isRelative()) {
+        // U-215（r11 复核 P1-1② 补形）：相对形态不再一律 RelativeRaw——先按方案目录锚定解析
+        // （与 resolveSchemePath 同锚，未落盘方案回落 cwd），解析后仍在方案目录内的给
+        // RelativeRaw；逃出去的（相对 `..` 形态）给 EscapedRelative，与目录外绝对路径同进
+        // 确认闸——既有拍板口径「目录外未确认即拒载」在相对形态上同权执行。
+        const QString resolved = resolveSchemePath(v, schemeFilePath);
+        if (sameOrInsideDir(resolved, schemeBaseDir(schemeFilePath)))
+            return PathScope::RelativeRaw;
+        return PathScope::EscapedRelative;
+    }
     if (sameOrInsideDir(v, schemeBaseDir(schemeFilePath)))
         return PathScope::InSchemeDir;
     return PathScope::OutsideSchemeDir;
@@ -132,6 +141,10 @@ static void tallyHit(PathReview &review, const QString &nodeName, const QString 
     } else if (scope == PathScope::RelativeRaw) {
         ++review.relativeCount;
         review.relativeHits.append(hit);
+    } else if (scope == PathScope::EscapedRelative) {
+        // U-215：相对逃逸单独计数与点名——提示面文字各格保持准确（「绝对」措辞不混装）。
+        ++review.escapedRelativeCount;
+        review.escapedRelativeHits.append(hit);
     }
 }
 
@@ -181,11 +194,17 @@ PathReview reviewScenes(const QList<FlowScene *> &scenes, const QString &schemeF
 
 QString pathReviewSummary(const PathReview &review)
 {
-    if (review.outsideHits.isEmpty() && review.relativeCount == 0)
+    if (review.outsideHits.isEmpty() && review.escapedRelativeHits.isEmpty()
+        && review.relativeCount == 0)
         return QString();
     QStringList parts;
     if (!review.outsideHits.isEmpty()) {
         parts << QStringLiteral("方案目录外绝对路径 %1 处").arg(review.outsideCount);
+    }
+    if (!review.escapedRelativeHits.isEmpty()) {
+        // U-215：相对逃逸单独一格——文字各格准确（这些不是绝对路径，是解析后落出方案的相对形态）。
+        parts << QStringLiteral("相对逃逸 %1 处（解析后落出方案目录，须与目录外绝对路径同确认）")
+                     .arg(review.escapedRelativeCount);
     }
     if (review.relativeCount > 0) {
         parts << QStringLiteral("相对路径 %1 处（执行时按方案目录解析）").arg(review.relativeCount);

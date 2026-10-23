@@ -258,8 +258,8 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
             rollbackSnapshot();
             return false;
         }
-        /// U-201 载入门禁：方案目录外绝对路径须显式确认；未确认即拒载——
-        /// 全局配置此刻尚未应用（拒载不留半装载现场）。
+        /// U-201 载入门禁：方案目录外路径（目录外绝对或相对逃逸，U-215 起同权）须显式确认；
+        /// 未确认即拒载——全局配置此刻尚未应用（拒载不留半装载现场）。
         if (!confirmOutsideSchemePaths(scenes, filePath)) {
             rollbackSnapshot();
             return false;
@@ -287,7 +287,7 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
         return false;
     }
     /// 应用方案内容（与崩溃恢复共用 applyProjectJson：场景 + 全局配置 + 运行界面布局）。
-    /// U-201 载入门禁：同信封路径——目录外绝对路径未获确认即拒载。
+    /// U-201 载入门禁：同信封路径——目录外路径（绝对或相对逃逸）未获确认即拒载。
     if (!confirmOutsideSchemePaths(scenes, filePath)) {
         rollbackSnapshot();
         return false;
@@ -305,14 +305,16 @@ bool ProjectManager::confirmOutsideSchemePaths(QList<FlowScene *> &scenes,
                                                const QString &schemeFilePath)
 {
     const ProjectPaths::PathReview review = ProjectPaths::reviewScenes(scenes, schemeFilePath);
-    if (review.outsideCount == 0) {
-        // 无目录外绝对路径：沿用 179 行的旧留痕（相对路径计数），不打扰操作员。
+    if (review.outsideCount == 0 && review.escapedRelativeCount == 0) {
+        // 无目录外路径（目录外绝对与相对逃逸均无）：沿用 179 行的旧留痕（相对路径计数），
+        // 不打扰操作员。
         const QString summary = ProjectPaths::pathReviewSummary(review);
         if (!summary.isEmpty())
             reportLoadNote(QStringLiteral("路径审查：本方案含%1").arg(summary));
         return true;
     }
-    // U-201：目录外绝对路径须显式确认——未装确认器也算未确认（fail-closed：
+    // U-201：目录外路径须显式确认（U-215 起：目录外绝对与相对逃逸同权——相对形态按解析后
+    // 落点判界）——未装确认器也算未确认（fail-closed：
     // 没有操作员就没有确认；CI 与无界面调用同样不得默认放行）。
     bool confirmed = false;
     if (m_outsidePathConfirmer)
@@ -323,12 +325,14 @@ bool ProjectManager::confirmOutsideSchemePaths(QList<FlowScene *> &scenes,
         scenes.clear();
         m_lastLoadRefusedForOutsidePaths = true;
         reportLoadNote(QStringLiteral(
-            "路径审查：本方案含 %1 处方案目录外绝对路径，未获确认，载入已取消（当前方案保持不变）")
-            .arg(review.outsideCount));
+            "路径审查：本方案含 %1 处方案目录外路径（绝对或相对逃逸），未获确认，载入已取消"
+            "（当前方案保持不变）")
+            .arg(review.outsideCount + review.escapedRelativeCount));
         return false;
     }
     reportLoadNote(QStringLiteral(
-        "路径审查：%1 处方案目录外绝对路径已确认放行").arg(review.outsideCount));
+        "路径审查：%1 处方案目录外路径（绝对或相对逃逸）已确认放行")
+        .arg(review.outsideCount + review.escapedRelativeCount));
     return true;
 }
 
