@@ -302,8 +302,8 @@ python tools\release_manifest_check.py --repo . --mode require
 
 在 CI（`tools/ci.ps1`）里它是一道独立闸（退出码 **16**）：
 
-- **先跑门禁自测** `tools/selftest_release_manifest.py`（10 个夹具用例，分别把每个判据做绿/做红）；
-  自测本身失败 = 闸不可信 = exit 16。
+- **先跑门禁自测** `tools/selftest_release_manifest.py`（11 个夹具用例，分别把每个判据做绿/做红，
+  含"发版后 main 继续前进、包仍应对应 tag"这一条）；自测本身失败 = 闸不可信 = exit 16。
 - 再跑正式校验，模式 `auto`：HEAD **没有** `rc-*` tag 时打印 `skipped=1 reason=no_rc_tag_on_head`
   并放行（`dist/` 被 gitignore，开发构建允许陈旧）；HEAD **带** `rc-*` tag 时同一套判据为硬门禁。
   永远不会静默跳过——日志里必有 `[RM-VERDICT]` 或明确的 `skipped` 原因。

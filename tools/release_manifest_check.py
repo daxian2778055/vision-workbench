@@ -179,14 +179,30 @@ def main():
             if declared != exe_bytes:
                 finding("exe_bytes_mismatch", "manifest=%s actual=%d" % (man[KEY_BYTES], exe_bytes))
 
-    # ---- 3. 提交一致性 ----
+    # ---- 5. tag 先解析出它的提交：发版之后 main 继续前进是常态，
+    #         包属于 tag，不属于"当前 HEAD"——用 tag 指向的提交做锚，才不会误红。
+    man_tag = (man.get(KEY_TAG) or "").strip()
+    required_tag = args.expect_tag or (head_rc_tags[0] if head_rc_tags else "")
+    tag_commit = ""
+    if required_tag:
+        rc_tag, tc, err_tag = run_git(repo, "rev-list", "-n", "1", required_tag)
+        if rc_tag == 0 and tc:
+            tag_commit = tc.strip()
+            out("[RM] tag_commit=%s" % tag_commit)
+        else:
+            finding("tag_unresolvable", "tag=%s %s" % (required_tag, err_tag))
+
+    # ---- 3. 提交一致性（锚 = tag 提交；无 tag 时锚 = HEAD）----
+    target_commit = (tag_commit or head).lower()
     man_commit = (man.get(KEY_COMMIT) or "").lower()
     if man_commit:
         out("[RM] manifest_commit=%s" % man_commit)
         if len(man_commit) < 7:
             finding("commit_too_short", man_commit)
-        elif head and not head.lower().startswith(man_commit):
-            finding("commit_mismatch", "manifest=%s head=%s" % (man_commit, head.lower()))
+        elif target_commit and not target_commit.startswith(man_commit):
+            finding("commit_mismatch",
+                    "manifest=%s anchor=%s%s" % (man_commit, target_commit,
+                                                 " (tag %s)" % required_tag if required_tag else " (HEAD)"))
 
     # ---- 4. 干净度 ----
     man_dirty = (man.get(KEY_DIRTY) or "").strip()
@@ -200,19 +216,15 @@ def main():
             finding("dirty_worktree",
                     "manifest_dirty=%s（非 0 表示该包不对应任何提交）" % man_dirty)
 
-    # ---- 5. tag 一致性 ----
-    man_tag = (man.get(KEY_TAG) or "").strip()
+    # ---- 5b. tag 一致性（required_tag / man_tag 已在解析 tag 提交时取好）----
     out("[RM] manifest_tag=%s" % (man_tag or "none"))
-    required_tag = args.expect_tag or (head_rc_tags[0] if head_rc_tags else "")
+    out("[RM] required_tag=%s" % (required_tag or "none"))
     if args.mode == "require" and not required_tag:
-        finding("no_release_tag", "mode=require 但 HEAD 上没有 rc-* tag")
+        finding("no_release_tag", "mode=require but HEAD carries no rc-* tag and --expect-tag is empty")
     if required_tag:
-        if required_tag not in head_rc_tags:
-            # expect-tag 指定了但 HEAD 不指向它（或它根本不在 HEAD 上）
-            finding("expected_tag_not_on_head", "expect=%s head_tags=%s"
-                    % (required_tag, ",".join(head_rc_tags) if head_rc_tags else "none"))
         if man_tag != required_tag:
-            finding("manifest_tag_mismatch", "manifest=%s expected=%s" % (man_tag or "none", required_tag))
+            finding("manifest_tag_mismatch",
+                    "manifest=%s expected=%s" % (man_tag or "none", required_tag))
     elif man_tag and man_tag.lower() != "none":
         # 没有要求的 tag，但 manifest 声称有：该 tag 必须真的指向 HEAD，否则是伪造/陈旧读数
         if man_tag not in head_tags:

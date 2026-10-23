@@ -140,6 +140,18 @@ def main():
         make_package(repo_tagged, commit_tagged, "rc-selftest")
         results.append(expect("coherent_green", repo_tagged, [], 0, "GREEN", []))
 
+        # 3b) 发版后 main 继续前进：包属于 tag，不属于"当前 HEAD"。
+        #     显式 --expect-tag 时锚必须是 tag 的提交，否则每次发版后手工复核都会误红。
+        repo_moved = os.path.join(tmp, "repo_moved")
+        commit_before = make_repo(repo_moved, tag="rc-selftest")
+        make_package(repo_moved, commit_before, "rc-selftest")
+        with open(os.path.join(repo_moved, "NEXT.txt"), "w", encoding="utf-8") as fh:
+            fh.write("post-release commit\n")
+        sh(repo_moved, "git", "add", "NEXT.txt")
+        sh(repo_moved, "git", "commit", "-q", "-m", "post-release")
+        results.append(expect("post_release_head_moved_green", repo_moved,
+                              ["--expect-tag", "rc-selftest"], 0, "GREEN", []))
+
         # 4) md5 不符 → RED
         make_package(repo_tagged, commit_tagged, "rc-selftest", md5_override="0" * 32)
         results.append(expect("md5_mismatch_red", repo_tagged, [], 1, "RED", ["exe_md5_mismatch"]))
