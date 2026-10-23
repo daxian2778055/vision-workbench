@@ -268,16 +268,32 @@ if ($qtBinDir) {
 }
 
 # ============================================================
-# Step 6: 拷贝 docs（软件内 F1 查看的操作手册）
+# Step 6: 拷贝 docs（白名单：仅对外文档）
 # ============================================================
-Step "拷贝使用手册"
-$docsSrc = Join-Path $RepoRoot "docs"
-if (Test-Path $docsSrc) {
-    Copy-Item -Path $docsSrc -Destination $OutDir -Recurse -Force
-    Write-Host "  -> docs/ 已拷贝（F1 查看手册）" -ForegroundColor Green
-} else {
-    Write-Warning "未找到 docs 目录（软件内手册不可用）"
+# 为什么是白名单而不是整目录拷贝：2026-10-23 实测，整目录拷贝把
+# 对标差距推进计划（内部台账）、登记附表、客户复核与切片C拍板回执、code-review-process 等
+# 内部件一并带进了客户包——现场客户能看到内部审计与复核记录。
+# F1 只依赖 用户操作手册.md（ManualPathResolver 候选链 + qrc 兜底），
+# 因此其余文档显式列出：不在此表内的一律不随包。
+$docsToShip = @('用户操作手册.md', '离线可用性说明.md', '深度学习集成指南.md', '统计报表说明.md')
+Step "拷贝对外文档（白名单 $($docsToShip.Count) 份）"
+$dstDocs = Join-Path $OutDir "docs"
+New-Item -ItemType Directory -Path $dstDocs -Force | Out-Null
+# deploy 不清目录：上一次部署遗留的非白名单文档会一直躺在包里，先清后拷
+$staleDocs = @(Get-ChildItem -LiteralPath $dstDocs -File -ErrorAction SilentlyContinue |
+    Where-Object { $docsToShip -notcontains $_.Name })
+foreach ($f in $staleDocs) { Remove-Item -LiteralPath $f.FullName -Force }
+$docsCopied = 0
+foreach ($docName in $docsToShip) {
+    $docSrc = Join-Path $RepoRoot "docs\$docName"
+    if (Test-Path -LiteralPath $docSrc) {
+        Copy-Item -LiteralPath $docSrc -Destination $dstDocs -Force
+        $docsCopied++
+    } else {
+        Write-Warning "白名单文档缺失: docs/$docName（目标机上看不到这份文档）"
+    }
 }
+Write-Host ("  -> docs/ 现有 {0} 份对外文档；清理上轮遗留 {1} 份" -f $docsCopied, $staleDocs.Count) -ForegroundColor Green
 
 # ============================================================
 # Step 7: 创建数据/日志目录
@@ -407,6 +423,15 @@ if (-not $SkipVerify) {
     } else {
         $problems += '未生成自检报告'
     }
+
+    # 9.4 docs 白名单：内部台账/复核件不得随客户包分发（2026-10-23 实测泄漏，白名单见 Step 6）
+    $leakedDocs = @(Get-ChildItem -LiteralPath (Join-Path $OutDir 'docs') -File -ErrorAction SilentlyContinue |
+        Where-Object { $docsToShip -notcontains $_.Name } | ForEach-Object { $_.Name })
+    if ($leakedDocs.Count -gt 0) {
+        $problems += ("docs 白名单外文件（内部件不得随客户包分发）: " + ($leakedDocs -join ', '))
+    } else {
+        Write-Host ("  docs 白名单: 干净（{0} 份）" -f $docsToShip.Count)
+    }
 }
 
 # ============================================================
@@ -441,6 +466,30 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
 } else {
     Write-Warning "本机找不到 git —— 包内无法记录提交号，只能靠人记（这是发版最易丢的一格）"
 }
+
+# exe 内嵌版本完整性：CMake 把配置期的 git 短哈希编进了 exe（cmake/Version.h.in，关于框可见）。
+# 它能抓一类静默错配：提交了工具/文档却没重新构建就部署——此时 manifest 声称的提交与
+# 实际编出来的东西不符（现场无法复现问题的经典成因）。短哈希取 exe 二进制里的字面量；
+# 找不到（如外部传入的 exe）只警告，不阻断。
+$embeddedHash = ""
+if ($gitRev -and $gitRev -ne "unknown" -and $gitRev.Length -ge 7) {
+    $shortRev = $gitRev.Substring(0, 7)
+    try {
+        $exeText = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($exeInDst))
+        if ($exeText.Contains($shortRev)) { $embeddedHash = $shortRev }
+    } catch {
+        Write-Warning "无法读取 exe 以核对内嵌版本哈希: $_"
+    }
+}
+if ($gitRev -and $gitRev -ne "unknown") {
+    if ($embeddedHash) {
+        Write-Host ("  exe 内嵌版本哈希 = {0}，与 HEAD 一致" -f $embeddedHash) -ForegroundColor Green
+    } else {
+        Write-Warning (("exe 内嵌版本哈希未匹配 HEAD {0} —— 这份 exe 很可能不是当前 HEAD 编出来的；" +
+                        "若刚提交过未重新构建，请先 cmake --build 再部署，否则 manifest 的提交号不可信") `
+                       -f $gitRev.Substring(0, 7))
+    }
+}
 # 不要用 Get-FileHash：受限/精简 PowerShell（如 CI 宿主、PSModulePath 被裁剪的子进程）里
 # 该 cmdlet 可能"未识别"，在 $ErrorActionPreference='Stop' 下会把脚本掀翻在写 manifest 之前
 # ——包看着部署成功、实际少一件且退出码没人查。这里走 .NET，零 cmdlet 依赖。
@@ -456,24 +505,42 @@ function Get-FileMd5Hex([string]$path) {
 }
 $exeHash = Get-FileMd5Hex $exeInDst
 $exeBytes = (Get-Item -LiteralPath $exeInDst).Length
+
+# manifest 的"提交"以 **exe 实际内嵌的提交** 为准（解析为完整哈希），而不是打包时的 HEAD：
+# 只写 HEAD 会在"提交了工具/文档但没重新构建就部署"时让 manifest 声称一个 exe 并不对应的提交
+# ——现场拿它复现问题必然对不上。exe 里读不到（外部传入的 exe）才回退 HEAD。
+$manifestCommit = $gitRev
+$manifestTag = $gitTag
+if ($embeddedHash) {
+    $rcFull = & git -C $RepoRoot rev-parse $embeddedHash 2>$null
+    if ($LASTEXITCODE -eq 0 -and $rcFull) { $manifestCommit = ($rcFull | Select-Object -First 1).Trim() }
+    $tagAtExe = ((& git -C $RepoRoot tag --points-at $manifestCommit 2>$null) | Select-Object -First 1)
+    if ($tagAtExe) { $manifestTag = $tagAtExe } else { $manifestTag = "none" }
+    if ($manifestCommit -ne $gitRev) {
+        Write-Warning ("exe 由 {0} 编出，与打包时 HEAD {1} 不同；manifest 记录 exe 的真实提交" -f `
+            $manifestCommit.Substring(0,7), $gitRev.Substring(0,7))
+    }
+}
+
 $manifestLines = @(
     "VisionFlowPlatform 包内自识别（本文件由 tools/deploy.ps1 生成，请勿手改）",
     ("打包时间     : {0}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss")),
-    ("提交         : {0}" -f $gitRev),
+    ("提交         : {0}" -f $manifestCommit),
     ("分支         : {0}" -f $gitBranch),
-    ("该提交上的标签: {0}" -f $gitTag),
+    ("该提交上的标签: {0}" -f $manifestTag),
     ("工作树未提交改动条数: {0}" -f $worktreeDirty),
     ("VisionFlowPlatform.exe md5 : {0}" -f $exeHash),
     ("VisionFlowPlatform.exe 字节 : {0}" -f $exeBytes),
     "",
-    "读法：工作树未提交改动条数为 0 时，这份 exe 就是上面那枚提交编出来的；",
-    "      非 0 表示打包时源码有未提交改动，这份包不对应任何一枚提交，不要当发版件用。",
-    "      要核对包里的 exe 就是刚测过的那份，比对上面这行 md5 与门禁面记录的那行。"
+    "读法：提交=这份 exe 二进制里内嵌的 git 提交（关于框可见同一哈希），不是打包时的 HEAD；",
+    "      工作树未提交改动条数为 0 时，打包环境本身是干净的；非 0 表示打包时源码有未提交改动。",
+    "      要核对包里的 exe 就是刚测过的那份，比对上面这行 md5 与门禁面记录的那行。",
+    "      机器校验：python tools/release_manifest_check.py --repo . --expect-tag <tag>"
 )
 [System.IO.File]::WriteAllText((Join-Path $OutDir "版本说明.txt"), `
     ($manifestLines -join [Environment]::NewLine), (New-Object System.Text.UTF8Encoding($true)))
 Write-Host ("  -> 提交 {0}  标签 {1}  exe_md5 {2}  工作树未提交 {3}" -f `
-    $gitRev, $gitTag, $exeHash, $worktreeDirty) -ForegroundColor Green
+    $manifestCommit, $manifestTag, $exeHash, $worktreeDirty) -ForegroundColor Green
 
 Write-Host "========================================" -ForegroundColor Green
 Write-Host "  部署完成!" -ForegroundColor Green
