@@ -127,8 +127,13 @@ bool ProjectManager::saveProject(const QString &filePath, const QList<FlowScene 
         return false;
     }
 
-    setLastFilePath(filePath);
-    m_loadedReadonly = false; // 明文保存即为可编辑方案
+    // U-218（r12 复核 P2-10，写侧同族）：三件套提交纪律延到保存面——锚与只读旗在
+    // commit 成功后才提交。写面无早动需求（路径审查与确认流是载入面的事，保存期
+    // 不读锚），故 open/短写/commit 三条失败支零已改状态——比 U-214 载入面的
+    // 「早动＋失败回滚」更强：失败支本来就没有可回滚的东西，不存在丢守卫窗口。
+    // 旧行为在写之前就改锚清旗：写失败后相对路径解析指向没写成的目标目录
+    // （在跑流程吃错基目录，P0-1 契约），失败的「另存为」还丢掉
+    // saveProjectInteractive 的只读覆盖守卫。
     // 序列化与自动保存共用同一实现（buildProjectJson）：两套实现一旦分叉，表现是
     // "崩溃恢复出来的方案缺东西 / 与手动保存不一致"——极难发现，故此处不留第二份拷贝。
     const QJsonObject root = buildProjectJson(scenes);
@@ -156,6 +161,9 @@ bool ProjectManager::saveProject(const QString &filePath, const QList<FlowScene 
         return false;
     }
 
+    // U-218 成功尾：三件套提交（锚经唯一漏斗喂 ProjectPaths 进程级快照位；明文保存即为可编辑方案）
+    setLastFilePath(filePath);
+    m_loadedReadonly = false;
     return true;
 }
 
@@ -345,7 +353,12 @@ bool ProjectManager::exportEncryptedProject(const QString &filePath,
         return false;
     }
 
-    setLastFilePath(filePath);
+    // U-218（r12 复核 P2-10，同轮拍板面）：导出是**分发复制**不是另存为——对话框文案
+    // 是「导出」，只读旗仍描述先前加载包；旧行为在写之前把锚经唯一漏斗打到导出
+    // 目录：失败导出留下指向未写成目标的锚（同保存面的 P2-10 主题），成功导出则把
+    // 相对路径解析的整体依据拽到导出件上，而只读旗还停在先前加载包——两个状态
+    // 错位。本轮拍板：导出全链不动锚（**明示行为变更**：先前导出成功会把锚打到
+    // 导出目录）。在跑流程按当值锚解析（P0-1 契约）不受导出动作扰动。
 
     const QJsonObject root = buildProjectJson(scenes);
     const QByteArray json = QJsonDocument(root).toJson();

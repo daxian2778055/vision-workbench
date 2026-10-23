@@ -44,6 +44,8 @@ private slots:
     void testFailedLoadRestoresSnapshotAndReadonly();      // r11 P2-9：失败支回滚三件套（成功才提交）
     // U-215 相对逃逸腿
     void testEscapedRelativeClassifiedAndGated();          // r11 P1-1②：相对 `..` 解析后分类并入确认闸
+    // U-218 写侧同族腿
+    void testFailedSaveRestoresAnchorAndReadonly();        // r12 P2-10：保存失败不带走锚与只读守卫；导出全链不动锚
 
 private:
     /// 造一份带指定 filePath 的方案文件（走真写侧序列化 buildProjectJson），返回是否落盘。
@@ -480,6 +482,79 @@ void ProjectPathsTest::testEscapedRelativeClassifiedAndGated()
              qPrintable(QStringLiteral("放行须留痕：%1").arg(notes.join(QStringLiteral("|")))));
     qDeleteAll(opened);
     opened.clear();
+    ProjectPaths::setCurrentSchemeFilePath(QString());   // 腿尾净态（cleanupTestCase 兜底再清一次）
+}
+
+void ProjectPathsTest::testFailedSaveRestoresAnchorAndReadonly()
+{
+    // U-218（r12 第三方复核 P2-10，写侧同族）：三件套提交纪律的写面运行期钉——
+    // 保存的锚与只读旗 commit 成功才提交，失败支（open/短写/commit）零已改状态：
+    // 旧行为在写之前就改锚清旗——写失败后相对路径解析指向没写成的目标目录（在跑
+    // 流程吃错基目录，P0-1 契约），失败的「另存为」还丢掉 saveProjectInteractive
+    // 的只读覆盖守卫。同轮拍板面：导出是分发复制不是另存为——成功导出也不改锚
+    // （明示行为变更：旧行为把锚打到导出目录）。
+    // 红臂破坏位＝两点合一：saveProject 的早动双行挪回写前＋exportEncryptedProject
+    // 恢复读前落锚——两半任一在位，本腿对应断言当场红。
+    ProjectPaths::setCurrentSchemeFilePath(QString());   // 座给腿净态（快照位不接上一腿）
+    ProjectManager writer;
+    FlowScene scene;
+    QVERIFY2(scene.createNode(NodeBase::OUTPUT, QPointF(100, 100), QStringLiteral("写面载荷")),
+             "工厂没给输出节点，本腿失去前提");
+    const QList<FlowScene *> scenes{ &scene };
+
+    // 先成功保存一次：给两件立住原值（锚＝落盘位、明文可编辑——成功尾提交）
+    const QString first = m_tmp.filePath(QStringLiteral("write-first.vfp"));
+    QVERIFY2(writer.saveProject(first, scenes), "首存必须成功（为两件立原值）");
+    QCOMPARE(ProjectPaths::currentSchemeFilePath(), first);
+    QVERIFY2(!writer.isReadonlyLoaded(), "明文保存的只读旗应清除");
+
+    // 失败形状①（open 支）：目标目录根本不存在——两件不得被失败的保存带走
+    const QString missingDir = m_tmp.filePath(QStringLiteral("missing-dir/x.vfp"));
+    QVERIFY2(!writer.saveProject(missingDir, scenes), "不存在的目录必须写失败");
+    QCOMPARE(ProjectPaths::currentSchemeFilePath(), first);
+    QVERIFY2(!writer.isReadonlyLoaded(), "open 支失败不得带走锚与旗");
+
+    // 失败形状②（commit 支）：目标位是一个已有目录——临时件可写、终改名失败
+    // （文件名压到目录名上在两个平台都改名不了；open 支或 commit 支失败平台而定，
+    // 断言只吃「失败＋两件零动」）。
+    const QString dirTarget = m_tmp.filePath(QStringLiteral("occupied-dir"));
+    QVERIFY2(QDir(dirTarget).mkpath(QStringLiteral(".")), "占位目录造不出，commit 支失去前提");
+    QVERIFY2(!writer.saveProject(dirTarget, scenes), "目标位是目录必须写失败");
+    QCOMPARE(ProjectPaths::currentSchemeFilePath(), first);
+    QVERIFY2(!writer.isReadonlyLoaded(), "commit 支失败也不得带走两件");
+
+    // 导出成功（分发复制）：只读信封落盘，锚不动（明示行为变更点——旧行为在此把锚拽到导出件）
+    const QString roEnvelope = m_tmp.filePath(QStringLiteral("write-envelope.vfp"));
+    QVERIFY2(writer.exportEncryptedProject(roEnvelope, scenes, QStringLiteral("pw"), true),
+             "导出必须成功（导出失败支在下一形状）");
+    QCOMPARE(ProjectPaths::currentSchemeFilePath(), first);
+    QVERIFY2(ProjectManager::fileNeedsPassphrase(roEnvelope), "导出件应为加密信封");
+
+    // 失败形状③（导出 open 支）：锚与旗同样零动
+    QVERIFY2(!writer.exportEncryptedProject(missingDir, scenes, QStringLiteral("pw"), true),
+             "不存在的目录导出必须失败");
+    QCOMPARE(ProjectPaths::currentSchemeFilePath(), first);
+    QVERIFY2(!writer.isReadonlyLoaded(), "失败导出不得改写两件");
+
+    // 复核主述形状：只读方案在役——失败的另存为不得丢掉只读覆盖守卫
+    ProjectManager loader;
+    QList<FlowScene *> opened;
+    QVERIFY2(loader.loadProject(roEnvelope, opened, QStringLiteral("pw")), "只读信封应载入");
+    QCOMPARE(opened.size(), 1);
+    QVERIFY2(loader.isReadonlyLoaded(), "只读旗应立真");
+    QCOMPARE(ProjectPaths::currentSchemeFilePath(), roEnvelope);
+    qDeleteAll(opened);
+    opened.clear();
+    QVERIFY2(!loader.saveProject(missingDir, scenes), "失败另存为必须失败");
+    QCOMPARE(ProjectPaths::currentSchemeFilePath(), roEnvelope);
+    QVERIFY2(loader.isReadonlyLoaded(), "失败另存为不得丢掉只读覆盖守卫（旧行为在此清旗）");
+
+    // 成功的另存为（另选路径）：锚换位、旗解除（只读另存语义在册，G-P1-10 的写后解除半）
+    const QString second = m_tmp.filePath(QStringLiteral("write-second.vfp"));
+    QVERIFY2(loader.saveProject(second, scenes), "另存新路径必须成功");
+    QCOMPARE(ProjectPaths::currentSchemeFilePath(), second);
+    QVERIFY2(!loader.isReadonlyLoaded(), "另存新路径后旗解除");
+
     ProjectPaths::setCurrentSchemeFilePath(QString());   // 腿尾净态（cleanupTestCase 兜底再清一次）
 }
 
