@@ -43,6 +43,7 @@
 #include <QDialogButtonBox>
 #include <QVBoxLayout>
 #include <QProcess>
+#include "Version.h"   // CMake 注入：版本号 / 提交短哈希 / 配置日期（#520）
 #include "Port.h"
 #include "Connection.h"
 #include "NodeGraphicsItem.h"
@@ -1161,8 +1162,10 @@ void MainWindow::initActions()
         helpMenu->addSeparator();
         QAction *aboutAct = helpMenu->addAction(tr("关于"));
         connect(aboutAct, &QAction::triggered, this, [this]() {
+            // 版本串由 CMake 注入（cmake/Version.h.in）：版本号 + 提交短哈希 + 配置日期，
+            // 现场报障时能直接说出装的是哪一版（#520）。
             QMessageBox::about(this, tr("关于 VisionFlowPlatform"),
-                               QStringLiteral("VisionFlowPlatform 1.0\n"
+                               QStringLiteral(VFP_VERSION_DISPLAY "\n"
                                               "对标 VisionMaster 4.4 的视觉流程开发平台\n"
                                               "算法：OpenCV\n"
                                               "图容器 / DeepOCR：HALCON 24.11"));

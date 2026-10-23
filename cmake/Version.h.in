@@ -1,0 +1,10 @@
+#pragma once
+
+// 由 CMake configure_file 生成，请勿手改（改 cmake/Version.h.in 或 CMakeLists.txt 的 project VERSION）。
+// 作用：让程序内"关于"框能说清装的是哪一版（版本号 + 提交短哈希 + 配置日期）。
+#define VFP_VERSION_STRING "@PROJECT_VERSION@"
+#define VFP_GIT_HASH "@VFP_GIT_HASH@"
+#define VFP_BUILD_DATE "@VFP_BUILD_DATE@"
+
+// 供 About 框直接使用的整串（字面量拼接，可交给 QStringLiteral）
+#define VFP_VERSION_DISPLAY "VisionFlowPlatform " VFP_VERSION_STRING " (" VFP_GIT_HASH " / " VFP_BUILD_DATE ")"

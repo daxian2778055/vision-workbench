@@ -1,5 +1,28 @@
 cmake_minimum_required(VERSION 3.16)
-project(VisionFlowPlatform)
+project(VisionFlowPlatform VERSION 1.0.0)
+
+# ---------------------------------------------------------------
+# 版本信息注入（#520）：程序内「关于」框与包内自识别要能说清"装的是哪一版"。
+# 版本号来自上面的 project(VERSION)；提交短哈希与配置日期在 configure 期取一次，
+# 重新 configure 即刷新（CI 每轮都全新配置，故与构建一致）。
+# 生成物：<build>/generated/Version.h（见 cmake/Version.h.in），勿手改。
+# ---------------------------------------------------------------
+set(VFP_GIT_HASH "unknown")
+find_package(Git QUIET)
+if(GIT_FOUND)
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_CURRENT_SOURCE_DIR}" rev-parse --short HEAD
+        OUTPUT_VARIABLE VFP_GIT_HASH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE _vfp_git_rc)
+    if(NOT _vfp_git_rc EQUAL 0)
+        set(VFP_GIT_HASH "unknown")
+    endif()
+endif()
+string(TIMESTAMP VFP_BUILD_DATE "%Y-%m-%d")
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Version.h.in"
+               "${CMAKE_CURRENT_BINARY_DIR}/generated/Version.h" @ONLY)
 
 # 启用测试：必须在顶层调用，否则 add_test() 只定义目标而不注册用例，
 # 生成的 build/ 目录下不会有 CTestTestfile.cmake，`ctest` 会报 "No tests were found"。
@@ -553,6 +576,7 @@ qt_add_resources(vfp_core manual_resources
 # PUBLIC：使用方（主程序/测试）自动继承头文件路径与链接库
 target_include_directories(vfp_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"   # Version.h（configure_file 生成）
     ${HALCON_INCLUDE_DIRS}
     ${MVS_INCLUDE_DIRS}
     ${OpenCV_INCLUDE_DIRS}
