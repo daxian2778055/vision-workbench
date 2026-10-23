@@ -3,9 +3,15 @@ project(VisionFlowPlatform VERSION 1.0.0)
 
 # ---------------------------------------------------------------
 # 版本信息注入（#520）：程序内「关于」框与包内自识别要能说清"装的是哪一版"。
-# 版本号来自上面的 project(VERSION)；提交短哈希与配置日期在 configure 期取一次，
-# 重新 configure 即刷新（CI 每轮都全新配置，故与构建一致）。
-# 生成物：<build>/generated/Version.h（见 cmake/Version.h.in），勿手改。
+# 版本号来自上面的 project(VERSION)。提交短哈希与日期有两条产出路径：
+#   ① configure 期 bootstrap（本段 configure_file）——让"只 configure 不构建"的场景也有头；
+#   ② 构建期刷新（下方 vfp_version_header 目标，见 cmake/RefreshVersionHeader.cmake）
+#      ——**每次构建**重取 git 短哈希与日期。
+# 为什么必须有 ②：configure_file 只在 configure 时求值，而 ci.ps1 默认**复用既有配置**
+# （日志里的 "reusing existing configuration in build"，只有 -Clean 才重配），
+# 于是"提交了代码 → 增量重编 → 打包"会嵌进上一次 configure 时的提交（2026-10-23 复核
+# P1-3 实测：Version.h 写 ce6968a 而 HEAD 已是 24b8127）。
+# 生成物：<build>/generated/Version.h（模板见 cmake/Version.h.in），勿手改。
 # ---------------------------------------------------------------
 set(VFP_GIT_HASH "unknown")
 find_package(Git QUIET)
@@ -23,6 +29,20 @@ endif()
 string(TIMESTAMP VFP_BUILD_DATE "%Y-%m-%d")
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/Version.h.in"
                "${CMAKE_CURRENT_BINARY_DIR}/generated/Version.h" @ONLY)
+
+# 构建期刷新：每次构建都跑（ALL），内容不变则不重写文件（不碰时间戳，避免无谓重编）。
+set(_vfp_git_exe "git")
+if(GIT_FOUND AND GIT_EXECUTABLE)
+    set(_vfp_git_exe "${GIT_EXECUTABLE}")
+endif()
+add_custom_target(vfp_version_header ALL
+    COMMAND "${CMAKE_COMMAND}"
+            "-DHEADER=${CMAKE_CURRENT_BINARY_DIR}/generated/Version.h"
+            "-DREPO=${CMAKE_CURRENT_SOURCE_DIR}"
+            "-DVERSION=${PROJECT_VERSION}"
+            "-DGIT=${_vfp_git_exe}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RefreshVersionHeader.cmake"
+    COMMENT "刷新 Version.h（本次构建的 git 短哈希）")
 
 # 启用测试：必须在顶层调用，否则 add_test() 只定义目标而不注册用例，
 # 生成的 build/ 目录下不会有 CTestTestfile.cmake，`ctest` 会报 "No tests were found"。
@@ -565,6 +585,8 @@ add_library(vfp_core OBJECT
     ${HEADERS}
     ${UI_FILES}
 )
+# 构建顺序：Version.h 必须在该库编译任何源文件之前刷新（P1-3）
+add_dependencies(vfp_core vfp_version_header)
 
 # 嵌入手册（软件内 F1 查看的兜底资源；外部 docs/ 文件优先覆盖）
 # 放在 OBJECT 库上：生成的目标文件会被所有使用方包含，资源注册不会丢失

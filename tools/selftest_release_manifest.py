@@ -62,7 +62,7 @@ def make_repo(root, tag=None):
 
 
 def make_package(root, commit, tag, dirty="0", md5_override=None, bytes_override=None,
-                 manifest=True, pkg_subdir=None):
+                 manifest=True, pkg_subdir=None, embeds="yes"):
     pkg = os.path.join(root, pkg_subdir or os.path.join("dist", "VisionFlowPlatform"))
     os.makedirs(pkg, exist_ok=True)
     exe = os.path.join(pkg, EXE_NAME)
@@ -80,6 +80,11 @@ def make_package(root, commit, tag, dirty="0", md5_override=None, bytes_override
             "分支         : main",
             "该提交上的标签: %s" % tag,
             "工作树未提交改动条数: %s" % dirty,
+        ]
+        # embeds=None → 不写这一行（模拟 deploy.ps1 之前的旧包）；"yes"/"no" → 写对应值
+        if embeds is not None:
+            lines.append("exe 内嵌 HEAD 版本哈希: %s" % embeds)
+        lines += [
             "VisionFlowPlatform.exe md5 : %s" % (md5_override or real_md5),
             "VisionFlowPlatform.exe 字节 : %s" % (bytes_override or real_bytes),
         ]
@@ -145,17 +150,44 @@ def main():
         make_package(repo_tagged, commit_tagged, "rc-selftest")
         results.append(expect("coherent_green", repo_tagged, pkg_tagged_arg, 0, "GREEN", []))
 
+        # 3-i) exe 内嵌 HEAD 版本哈希 = no（改了代码、增量重编但哈希陈旧就打包）→ RED。
+        #      deploy 只告警、manifest 只记录都不够，这道闸必须能红（2026-10-23 复核 P1-1）。
+        make_package(repo_tagged, commit_tagged, "rc-selftest", embeds="no")
+        results.append(expect("exe_not_built_from_head_red", repo_tagged, pkg_tagged_arg, 1, "RED",
+                              ["exe_not_built_from_head"]))
+
+        # 3-ii) 旧包没有这一行 → 同样 RED：没写就不能声称它证明了自己的来源
+        make_package(repo_tagged, commit_tagged, "rc-selftest", embeds=None)
+        results.append(expect("exe_embeds_line_missing_red", repo_tagged, pkg_tagged_arg, 1, "RED",
+                              ["manifest_key_missing"]))
+
         # 3b) 发版后 main 继续前进：包属于 tag，不属于"当前 HEAD"。
         #     显式 --expect-tag 时锚必须是 tag 的提交，否则每次发版后手工复核都会误红。
+        #     同时必须配带日期包：解析出 tag 就没有"退回开发目录"这条退路（P1-2）。
         repo_moved = os.path.join(tmp, "repo_moved")
         commit_before = make_repo(repo_moved, tag="rc-selftest")
-        make_package(repo_moved, commit_before, "rc-selftest")
+        make_package(repo_moved, commit_before, "rc-selftest",
+                     pkg_subdir=os.path.join("dist", "VisionFlowPlatform-rc-selftest"))
         with open(os.path.join(repo_moved, "NEXT.txt"), "w", encoding="utf-8") as fh:
             fh.write("post-release commit\n")
         sh(repo_moved, "git", "add", "NEXT.txt")
         sh(repo_moved, "git", "commit", "-q", "-m", "post-release")
         results.append(expect("post_release_head_moved_green", repo_moved,
                               ["--expect-tag", "rc-selftest"], 0, "GREEN", []))
+
+        # 3b-ii) 发版后 HEAD 前进、**没有**带日期包（旧包被搬走/只在别的机器上）：
+        #        --expect-tag 必须 RED dated_package_missing，不许退回开发目录绿着报告
+        #        一个不存在的发版件（2026-10-23 复核 P1-2）。
+        repo_moved_no_pkg = os.path.join(tmp, "repo_moved_no_pkg")
+        commit_mnp = make_repo(repo_moved_no_pkg, tag="rc-selftest")
+        make_package(repo_moved_no_pkg, commit_mnp, "rc-selftest")   # 只在无日期目录
+        with open(os.path.join(repo_moved_no_pkg, "NEXT.txt"), "w", encoding="utf-8") as fh:
+            fh.write("post-release commit\n")
+        sh(repo_moved_no_pkg, "git", "add", "NEXT.txt")
+        sh(repo_moved_no_pkg, "git", "commit", "-q", "-m", "post-release")
+        results.append(expect("expect_tag_without_dated_package_red", repo_moved_no_pkg,
+                              ["--expect-tag", "rc-selftest"], 1, "RED",
+                              ["dated_package_missing"]))
 
         # 3c) HEAD 带 tag：默认校验"带日期"的包（dist/VisionFlowPlatform-<tag> 或历史约定
         #     的 VisionFlowPlatform-<日期>），不是无日期目录——装机只认带日期的包，

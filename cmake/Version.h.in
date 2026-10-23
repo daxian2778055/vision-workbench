@@ -1,7 +1,9 @@
 #pragma once
 
-// 由 CMake configure_file 生成，请勿手改（改 cmake/Version.h.in 或 CMakeLists.txt 的 project VERSION）。
-// 作用：让程序内"关于"框能说清装的是哪一版（版本号 + 提交短哈希 + 配置日期）。
+// 由 CMake 生成，请勿手改（改 cmake/Version.h.in 或 CMakeLists.txt 的 project VERSION）。
+// 哈希与日期在**每次构建**时刷新（cmake/RefreshVersionHeader.cmake，经 vfp_version_header
+// 目标），不是 configure 时的一次性快照——否则复用既有配置的增量构建会嵌进旧提交。
+// 作用：让程序内"关于"框能说清装的是哪一版（版本号 + 提交短哈希 + 构建日期）。
 #define VFP_VERSION_STRING "@PROJECT_VERSION@"
 #define VFP_GIT_HASH "@VFP_GIT_HASH@"
 #define VFP_BUILD_DATE "@VFP_BUILD_DATE@"

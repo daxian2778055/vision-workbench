@@ -50,6 +50,7 @@ KEY_TAG = "该提交上的标签"
 KEY_DIRTY = "工作树未提交改动条数"
 KEY_MD5 = "VisionFlowPlatform.exe md5"
 KEY_BYTES = "VisionFlowPlatform.exe 字节"
+KEY_EXE_EMBEDS = "exe 内嵌 HEAD 版本哈希"
 
 
 def out(line):
@@ -139,27 +140,30 @@ def main():
     # 校验无日期目录，而是直接 RED：打了 tag 就必须有对应的带日期发版包。
     # 注意只对"tag 在 HEAD 上"（CI 场景）强制；显式 --expect-tag 是发版后手工复核
     # （HEAD 早已前进），此时仍可显式 --package 指到具体包，否则用默认目录。
+    # 多 tag 同指一枚提交时：--expect-tag 明确指定了就听它的，否则取第一个（head_rc_tags
+    # 已按 git 输出序；此处不再做字母序强约定，只保证"显式指定优先"）。
     tag_on_head = head_rc_tags[0] if head_rc_tags else ""
+    if args.expect_tag and args.expect_tag in head_rc_tags:
+        tag_on_head = args.expect_tag
     required_tag = args.expect_tag or tag_on_head
-    dated = None
-    if required_tag:
-        # 带日期包候选：<tag> 全名（rc-20261023.2）与去掉 rc- 前缀的日期形式
-        # （VisionFlowPlatform-20261013/20261017 是历史约定，两种都认，全名优先）
+    if args.package:
+        # 显式 --package 是最高优先级（测试与"就校验这一个目录"的场合），不再要求带日期包
+        package = os.path.abspath(args.package)
+    elif required_tag:
         bare = required_tag[3:] if required_tag.startswith("rc-") else required_tag
         candidates = [os.path.join(repo, "dist", "VisionFlowPlatform-" + required_tag),
                       os.path.join(repo, "dist", "VisionFlowPlatform-" + bare)]
         dated = next((c for c in candidates if os.path.isdir(c)), None)
-    if args.package:
-        package = os.path.abspath(args.package)
-    elif dated:
-        # 有带日期包就校验它：无论是 CI（tag 在 HEAD 上）还是发版后手工复核（--expect-tag）
+        if not dated:
+            # 只要解析出了 tag（HEAD 上的或 --expect-tag 显式给的），就必须有带日期包。
+            # 不退回无日期开发目录：那会"绿着"报告一个不存在的发版件（2026-10-23 复核 P1-2：
+            # 发版后复核、或旧包被搬走后，退回开发目录读到的是无关读数）。
+            finding("dated_package_missing", " | ".join(candidates))
+            out("[RM-INV] findings=%d skipped=0" % len(findings))
+            out("[RM-VERDICT] RED")
+            return 1
+        # CI（tag 在 HEAD 上）与手工复核（--expect-tag）同一口径：有带日期包就校验它
         package = dated
-    elif tag_on_head:
-        # HEAD 带着 tag 却没有对应的带日期包：直接 RED，不要退回去校验无日期目录
-        finding("dated_package_missing", " | ".join(candidates))
-        out("[RM-INV] findings=%d skipped=0" % len(findings))
-        out("[RM-VERDICT] RED")
-        return 1
     else:
         package = os.path.join(repo, "dist", "VisionFlowPlatform")
     out("[RM] package=%s" % package)
@@ -185,6 +189,19 @@ def main():
         for key in (KEY_COMMIT, KEY_TAG, KEY_DIRTY, KEY_MD5, KEY_BYTES):
             if not man.get(key):
                 finding("manifest_key_missing", key)
+        # 发版件（解析出 tag）额外要求"exe 内嵌 HEAD 版本哈希 == yes"。
+        # 为什么是硬条件：deploy 只告警、manifest 只记录，这道闸不读它，那么
+        # "改了代码 → 增量重编（没重配，哈希陈旧）→ 打 tag → 打包"就能整条绿着过去，
+        # 而包里是一枚旧 exe——正是 2026-10-23 复核报的"新构建从未打包"换位复发。
+        # 缺行同样判红：老包没有这一行，就不能声称它证明了自己的来源。
+        if required_tag:
+            embeds = (man.get(KEY_EXE_EMBEDS) or "").strip().lower()
+            if not embeds:
+                finding("manifest_key_missing", KEY_EXE_EMBEDS)
+            elif embeds != "yes":
+                finding("exe_not_built_from_head",
+                        "%s=%s（发版件必须为 yes：exe 不是打包时 HEAD 编出来的，先重新构建再打包）"
+                        % (KEY_EXE_EMBEDS, embeds))
 
     # ---- 2. exe 与指纹 ----
     exe_path = os.path.join(package, EXE_NAME)
