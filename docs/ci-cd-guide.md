@@ -311,12 +311,16 @@ python tools\release_manifest_check.py --repo . --mode require
 > `dist/VisionFlowPlatform`（开发构建）。发版后 main 继续前进时的复核用
 > `--expect-tag <旧tag>`，此时以 tag 指向的提交为锚，并优先校验该 tag 的带日期包。
 
-在 CI（`tools/ci.ps1`）里它是一道独立闸（退出码 **16**）：
+在 CI（`tools/ci.ps1`）里它是一道独立闸（退出码 **16**），其前还有一道 **Version header single-source check**（退出码 **17**，`tools/version_header_check.py`）：
 
 - **先跑门禁自测** `tools/selftest_release_manifest.py`（18 个夹具用例，分别把每个判据做绿/做红，
   含"发版后 main 继续前进、包仍应对应 tag"、"HEAD 带 tag 必须校验带日期包"、
   "有带日期包时 --expect-tag 优先校验它"、"exe 内嵌版本 = no / 缺行必红"、
   "解析出 tag 却没有带日期包必红"各条）；自测本身失败 = 闸不可信 = exit 16。
+- 版本头闸守的是"`cmake/Version.h.in` 是唯一正文数据源"这条承诺：模板里每个 `@TOKEN@` 都必须被
+  `cmake/RefreshVersionHeader.cmake` 替换（覆盖），且两个生成器（configure 期 `configure_file`
+  与构建期刷新脚本）在**同一组输入**下产出**逐字节相同**（等价）。先跑自证臂（往临时模板注入一个
+  不被替换的 token，必须判红）再跑正式校验；`--selftest` 与正式校验任一非零 = exit 17。
 - 再跑正式校验，模式 `auto`：HEAD **没有** `rc-*` tag 时打印 `skipped=1 reason=no_rc_tag_on_head`
   并放行（`dist/` 被 gitignore，开发构建允许陈旧）；HEAD **带** `rc-*` tag 时同一套判据为硬门禁。
   永远不会静默跳过——日志里必有 `[RM-VERDICT]` 或明确的 `skipped` 原因。

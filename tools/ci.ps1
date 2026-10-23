@@ -38,6 +38,9 @@
       16 = the release package is incoherent with HEAD: tag / manifest / exe md5 mismatch, a missing
            manifest, a dirty-worktree claim, or the gate's own selftest failed
            (tools/release_manifest_check.py + tools/selftest_release_manifest.py)
+      17 = Version.h single-source promise broken: a template @TOKEN@ the build-time refresh script
+           does not replace, or the two generators produced different bytes
+           (tools/version_header_check.py)
 
     Note: this script is intentionally ASCII-only, and therefore carries no UTF-8 BOM
     (PowerShell 5.1 only needs a BOM when a .ps1 contains non-ASCII text). The two-sided
@@ -448,6 +451,47 @@ if ($oigCode -ne 0) {
     exit 15
 }
 Write-Ok "enforced open items re-measured as closed ($hygieneExe)"
+
+# ------------------------------------------------------------------ 1m-0
+# Why it runs here: build/generated/Version.h has two producers -- the configure-time
+# configure_file bootstrap and the build-time refresh script (vfp_version_header). The template is
+# single-source, but "which @TOKEN@ gets replaced" lived in two places, and a future fourth token
+# would be replaced by configure_file and NOT by the refresh script -- drift returning through
+# another seam. This step makes the single-source promise a command: token coverage plus
+# byte-equality of both generators on identical inputs. The selftest arm runs first so a dead gate
+# can never read as green. Must never be a silent skip: any non-zero = exit 17.
+Write-Step "Version header single-source check"
+$vhcSelfLog = Join-Path $RepoRoot 'ci-version-header-selftest.log'
+$vhcSelfArgs = $hygienePre + @('tools/version_header_check.py', '--repo', $RepoRoot, '--selftest')
+& $hygieneExe @vhcSelfArgs 2>&1 | Tee-Object -FilePath $vhcSelfLog | Out-Null
+$vhcSelfCode = $LASTEXITCODE
+$vhcSelfAll = @(Get-Content $vhcSelfLog -ErrorAction SilentlyContinue)
+$vhcSelfShown = @($vhcSelfAll | Where-Object { $_ -match '^\[VHC' })
+foreach ($line in $vhcSelfShown) { Write-Host "  $line" }
+if ($vhcSelfShown.Count -eq 0 -and $vhcSelfAll.Count -gt 0) {
+    Write-Host "  (no VHC line in $($vhcSelfAll.Count) log line(s) - the selftest did not reach its summary)"
+}
+if ($vhcSelfCode -ne 0) {
+    Write-Host "  selftest failed (exit $vhcSelfCode) - the real check below is not trusted" -ForegroundColor Yellow
+}
+
+$vhcLog = Join-Path $RepoRoot 'ci-version-header.log'
+$vhcArgs = $hygienePre + @('tools/version_header_check.py', '--repo', $RepoRoot)
+& $hygieneExe @vhcArgs 2>&1 | Tee-Object -FilePath $vhcLog | Out-Null
+$vhcCode = $LASTEXITCODE
+$vhcAll = @(Get-Content $vhcLog -ErrorAction SilentlyContinue)
+$vhcShown = @($vhcAll | Where-Object { $_ -match '^\[VHC' })
+foreach ($line in $vhcShown) { Write-Host "  $line" }
+if ($vhcShown.Count -eq 0 -and $vhcAll.Count -gt 0) {
+    Write-Host "  (no VHC line in $($vhcAll.Count) log line(s) - the script did not reach its summary)"
+}
+Write-Host "  full version-header reading: $vhcLog ($($vhcAll.Count) line(s))"
+if ($vhcSelfCode -ne 0 -or $vhcCode -ne 0) {
+    Write-Err "version header single-source check failed (selftest exit $vhcSelfCode, check exit $vhcCode) via '$hygieneExe'; see $vhcSelfLog / $vhcLog"
+    Pop-Location
+    exit 17
+}
+Write-Ok "version header single-source (token coverage + both generators byte-identical)"
 
 # ------------------------------------------------------------------ 1m
 # Why it runs here: the 2026-10-23 review found release artifacts were verified by eye and text only.
