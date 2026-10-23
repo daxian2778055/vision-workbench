@@ -475,8 +475,16 @@ $embeddedHash = ""
 if ($gitRev -and $gitRev -ne "unknown" -and $gitRev.Length -ge 7) {
     $shortRev = $gitRev.Substring(0, 7)
     try {
-        $exeText = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($exeInDst))
-        if ($exeText.Contains($shortRev)) { $embeddedHash = $shortRev }
+        # 版本串经 QStringLiteral 进入二进制，是 UTF-16LE；同时扫 ASCII 兜底（其它引入路径）。
+        # 只用"逐字节等值"的 Latin1 视图做 Contains，避免按 UTF-8 解码把二进制搅成乱码。
+        # 注意：Windows PowerShell 5.1 跑在 .NET Framework 上没有 Encoding.Latin1（那是 .NET Core 才有），
+        # 用代码页 28591（iso-8859-1）显式取，5.1 与 7.x 都可用。
+        $latin1 = [System.Text.Encoding]::GetEncoding(28591)
+        $bytesAll = [System.IO.File]::ReadAllBytes($exeInDst)
+        $latView = $latin1.GetString($bytesAll)
+        $needleAscii = $latin1.GetString([System.Text.Encoding]::ASCII.GetBytes($shortRev))
+        $needleUtf16 = $latin1.GetString([System.Text.Encoding]::Unicode.GetBytes($shortRev))
+        if ($latView.Contains($needleAscii) -or $latView.Contains($needleUtf16)) { $embeddedHash = $shortRev }
     } catch {
         Write-Warning "无法读取 exe 以核对内嵌版本哈希: $_"
     }
