@@ -122,7 +122,10 @@ def check(repo, template, refresh_script):
         d = grab("VFP_BUILD_DATE")
         out("[VHC] generator_a version=%s hash=%s date=%s" % (v, h, d))
 
-        # B 赋值断言：刷新脚本必须把"哪个值"放进"哪个字段"（防值替错位）
+        # B 赋值断言：刷新脚本必须把"哪个值"放进"哪个字段"（防值替错位）。
+        # 三个字段各有判据：版本/哈希是硬相等，日期是"形如 YYYY-MM-DD 且接近当天"
+        # （±1 天容差只给跨零点，不给"写死某天"留口子——2026-10-24 复审臂6/臂7：
+        #   日期写死 2020-01-01、日期位塞版本号，都曾因"只 note 不判红"而整闸读绿）。
         if v != VERSION_CONST:
             finding(findings, "version_misassigned",
                     "版本字段实际是 %r（应为 %r）——刷新脚本把别的值塞进了版本位" % (v, VERSION_CONST))
@@ -130,9 +133,15 @@ def check(repo, template, refresh_script):
             finding(findings, "hash_misassigned",
                     "哈希字段实际是 %r（应为 git 短哈希 %r）——刷新脚本把别的值塞进了哈希位"
                     % (h, expected_hash))
-        if d != expected_date:
-            # 跨零点容忍：不判红，只记录（真被互换也会被上面两条断言抓到）
-            out("[VHC] note=date_not_today parsed=%s today=%s（跨零点容忍，不判红）" % (d, expected_date))
+        try:
+            parsed_date = datetime.date.fromisoformat(d)
+        except ValueError:
+            finding(findings, "date_malformed",
+                    "日期字段实际是 %r，不是 YYYY-MM-DD——刷新脚本把别的值塞进了日期位" % d)
+        else:
+            if abs((parsed_date - datetime.date.today()).days) > 1:
+                finding(findings, "date_misassigned",
+                        "日期字段实际是 %s，应接近当天 %s（±1 天仅容跨零点）" % (d, expected_date))
 
         # C 等价：B 用同一组已知输入（日期取 A 的，避免跨零点误红）
         script_b = os.path.join(tmp, "b.cmake")
@@ -194,6 +203,26 @@ def selftest(repo, template, refresh_script):
             else:
                 problems.append("arm2_dead")
                 out("[VHC] selftest_arm2=FAIL（版本/哈希替错位后仍判绿：这道闸有盲点）")
+        # 臂3：把日期位的值换成版本号（2026-10-24 复审臂7：版本位与哈希位都对、
+        #     只有日期位被塞了别的东西——曾因"日期只 note 不判红"而整闸读绿）
+        tampered3 = os.path.join(tmp, "RefreshVersionHeader_date.cmake")
+        text3 = read_text(refresh_script)
+        swapped3 = text3.replace(
+            'string(REPLACE "@VFP_BUILD_DATE@" "${_date}"',
+            'string(REPLACE "@VFP_BUILD_DATE@" "${VERSION}"')
+        if swapped3 == text3:
+            problems.append("arm3_setup_failed")
+            out("[VHC] selftest_arm3=FAIL（未能在临时脚本里构造日期位替错位——REPLACE 行是否已改形）")
+        else:
+            with open(tampered3, "w", encoding="utf-8") as fh:
+                fh.write(swapped3)
+            f3 = check(repo, template, tampered3)
+            caught3 = [c for c in f3 if c in ("date_malformed", "date_misassigned", "generators_diverge")]
+            if caught3:
+                out("[VHC] selftest_arm3=ok（日期位塞版本号后判红：%s）" % ",".join(caught3))
+            else:
+                problems.append("arm3_dead")
+                out("[VHC] selftest_arm3=FAIL（日期位塞版本号后仍判绿：这道闸有盲点）")
     return problems
 
 

@@ -319,11 +319,15 @@ python tools\release_manifest_check.py --repo . --mode require
   "解析出 tag 却没有带日期包必红"各条）；自测本身失败 = 闸不可信 = exit 16。
 - 版本头闸守的是"`cmake/Version.h.in` 是唯一正文数据源"这条承诺，三条判据：
   **覆盖**（模板里每个 `@TOKEN@`——大小写都算——都必须被 `cmake/RefreshVersionHeader.cmake`
-  替换）、**赋值**（刷新脚本产出里版本号/哈希/日期必须分别等于已知输入：常量版本号 /
-  `git rev-parse --short HEAD` / 当天；**不能**用"A 的产出值喂 B"，否则 A 内部把值替错位时
-  等价恒成立——2026-10-24 复审臂3 正是这么骗过等价判据的）、**等价**（两个生成器对同一组
-  已知输入产出逐字节相同）。自证臂两枚：注入未替换的 token、把版本与哈希的替换值写反，
-  都必须判红；`--selftest` 与正式校验任一非零 = exit 17。
+  替换）、**赋值**（刷新脚本产出里版本号/哈希/日期必须分别落在正确的字段且值等于已知输入：
+  常量版本号 / `git rev-parse --short HEAD` / 形如 `YYYY-MM-DD` 且接近当天（±1 天仅容跨零点）；
+  **不能**用"A 的产出值喂 B"，否则 A 内部把值替错位时等价恒成立——2026-10-24 复审臂3 正是
+  这么骗过等价判据的）、**等价**（两个生成器对同一组已知输入产出逐字节相同）。
+  自证臂三枚：注入未替换的 token、把版本与哈希的替换值写反、把日期位换成版本号，都必须判红；
+  `--selftest` 与正式校验任一非零 = exit 17。
+- 两处脚本顶部都设了 `[Console]::OutputEncoding = UTF8`（`ci.ps1` / `ci_host_run.ps1`）：
+  否则 PowerShell 用 cp936 解 Python 闸写出的 UTF-8 中文判词，`ci-*.log` 里中文全是乱码
+  （finding 码与退出码是 ASCII，结论不受影响，但给人看的那半句丢了）。
 - 再跑正式校验，模式 `auto`：HEAD **没有** `rc-*` tag 时打印 `skipped=1 reason=no_rc_tag_on_head`
   并放行（`dist/` 被 gitignore，开发构建允许陈旧）；HEAD **带** `rc-*` tag 时同一套判据为硬门禁。
   永远不会静默跳过——日志里必有 `[RM-VERDICT]` 或明确的 `skipped` 原因。

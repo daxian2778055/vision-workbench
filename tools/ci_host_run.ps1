@@ -29,6 +29,12 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
+# 子进程输出按 UTF-8 解码：内层 ci.ps1 的 Python 闸会把中文判词写进 stdout，PowerShell 默认用
+# 控制台代码页（cp936/GBK）解这些字节会把中文变成乱码（判词/finding 码/退出码都是 ASCII，
+# 结论不受影响，但给人看的中文说明丢了）。失败不阻断：重定向/宿主场景下设置可能抛异常，
+# 那只是回到旧的乱码形态。与 tools/ci.ps1 顶部同一行，两边都设。
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
+
 # Both sides of the fraction must be >= 1: 'tests: 0/0 passed' is a run that never ran anything,
 # and it must not satisfy this contract (ci.ps1 has its own total -eq 0 guard, exit 2, but the
 # wrapper's rule is checked by an arm of its own and has to hold on its own terms).

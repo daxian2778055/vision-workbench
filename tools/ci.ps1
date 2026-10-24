@@ -55,6 +55,16 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
+
+# Decode child-process output as UTF-8. This repo's Python gates (version_header_check,
+# release_manifest_check, ...) write Chinese verdict text to stdout (they reconfigure their own
+# streams to UTF-8). PowerShell would otherwise decode those bytes with the console code page
+# (cp936/GBK on Simplified Chinese Windows), so the Chinese in the Tee'd ci-*.log files comes out
+# as mojibake -- verdict codes, finding codes and exit numbers are ASCII and unaffected, but the
+# human-readable half of the line is lost (2026-10-24 review: 2 of 32 ci-*.log files had this,
+# exactly the two carrying Chinese finding lines). Failure is not fatal: some hosted/redirected
+# contexts throw on the setter, and that only restores the old mojibake shape.
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 
 function Write-Step { param([string]$Text) Write-Host "`n=== $Text ===" -ForegroundColor Cyan }
