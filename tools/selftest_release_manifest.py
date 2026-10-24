@@ -14,6 +14,7 @@
 """
 
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -61,8 +62,21 @@ def make_repo(root, tag=None):
     return sh(root, "git", "rev-parse", "HEAD")
 
 
+def write_registry(root, tag, commit, md5, size):
+    """在临时仓库里写发版登记表（docs/release-registry.json）。"""
+    docs = os.path.join(root, "docs")
+    os.makedirs(docs, exist_ok=True)
+    data = {
+        "schema": 1,
+        "releases": [{"tag": tag, "commit": commit, "exe_md5": md5, "exe_bytes": size}],
+    }
+    with open(os.path.join(docs, "release-registry.json"), "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=2)
+
+
 def make_package(root, commit, tag, dirty="0", md5_override=None, bytes_override=None,
-                 manifest=True, pkg_subdir=None, embeds="yes"):
+                 manifest=True, pkg_subdir=None, embeds="yes", registry=True,
+                 registry_tag="rc-selftest"):
     pkg = os.path.join(root, pkg_subdir or os.path.join("dist", "VisionFlowPlatform"))
     os.makedirs(pkg, exist_ok=True)
     exe = os.path.join(pkg, EXE_NAME)
@@ -96,6 +110,10 @@ def make_package(root, commit, tag, dirty="0", md5_override=None, bytes_override
             os.remove(manifest_path)
         except FileNotFoundError:
             pass
+    # 发版登记表：默认写入与包一致的一行（tag → commit → 实际 exe md5）。
+    # registry=False 用于"诱饵包"（同一仓库另放一枚不该被校验的包）等场景。
+    if registry:
+        write_registry(root, registry_tag, commit, real_md5, real_bytes)
     return pkg
 
 
@@ -217,13 +235,38 @@ def main():
         commit_dm = make_repo(repo_dated_moved, tag="rc-selftest")
         make_package(repo_dated_moved, commit_dm, "rc-selftest",
                      pkg_subdir=os.path.join("dist", "VisionFlowPlatform-rc-selftest"))
-        make_package(repo_dated_moved, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "none")
+        # 诱饵：无日期目录里的包（提交是假的、且不该动登记表）
+        make_package(repo_dated_moved, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "none",
+                     registry=False)
         with open(os.path.join(repo_dated_moved, "NEXT.txt"), "w", encoding="utf-8") as fh:
             fh.write("post-release commit\n")
         sh(repo_dated_moved, "git", "add", "NEXT.txt")
         sh(repo_dated_moved, "git", "commit", "-q", "-m", "post-release")
         results.append(expect("dated_package_wins_over_default", repo_dated_moved,
                               ["--expect-tag", "rc-selftest"], 0, "GREEN", []))
+
+        # 3f) 发版登记：exe md5 只在包内 版本说明.txt（gitignore）里，重建不保证同字节，
+        #     所以清包前必须在 docs/release-registry.json 登记；缺行/值不符都要判红
+        #     （2026-10-24 复核 P2：此前"md5 都在 git 里"是说法强于实现）。
+        repo_reg = os.path.join(tmp, "repo_reg")
+        commit_reg = make_repo(repo_reg, tag="rc-selftest")
+        dated_reg = os.path.join("dist", "VisionFlowPlatform-rc-selftest")
+        real_md5 = hashlib.md5(b"selftest-exe-payload").hexdigest()
+
+        make_package(repo_reg, commit_reg, "rc-selftest", pkg_subdir=dated_reg)
+        os.remove(os.path.join(repo_reg, "docs", "release-registry.json"))
+        results.append(expect("registry_missing_red", repo_reg, [], 1, "RED", ["registry_missing"]))
+
+        make_package(repo_reg, commit_reg, "rc-selftest", pkg_subdir=dated_reg)
+        write_registry(repo_reg, "rc-selftest", commit_reg, "0" * 32, 20)
+        results.append(expect("registry_md5_mismatch_red", repo_reg, [], 1, "RED",
+                              ["registry_md5_mismatch"]))
+
+        make_package(repo_reg, commit_reg, "rc-selftest", pkg_subdir=dated_reg)
+        write_registry(repo_reg, "rc-selftest",
+                       "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", real_md5, 20)
+        results.append(expect("registry_commit_mismatch_red", repo_reg, [], 1, "RED",
+                              ["registry_commit_mismatch"]))
 
         # 4) md5 不符 → RED
         make_package(repo_tagged, commit_tagged, "rc-selftest", md5_override="0" * 32)

@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "note": "发版登记：tag → 提交 → exe md5/字节。包内 版本说明.txt 在 gitignore 的 dist/ 下、从未入库，而重建出来的 exe 与原件不保证逐字节相同——所以清理发版包之前，必须先在 releases 里有一行；这是 md5 唯一受跟踪的落点。release_manifest_check.py 在解析出 tag 时会强制核对本文件。",
+  "releases": [
+    {
+      "tag": "rc-20261023",
+      "commit": "9b5b2f11693cbf19d7dfa4361f05fa4333e1eb19",
+      "exe_md5": "06ac3300072c5c1ed34ec83cb78ec5b1",
+      "exe_bytes": 9707008,
+      "package_dir": "dist/VisionFlowPlatform",
+      "recorded_at": "2026-10-23",
+      "recorded_note": "发版包 rc-20261023 后来被取代并清理；此行补录于 2026-10-24（值取自当时的部署输出）"
+    },
+    {
+      "tag": "rc-20261023.2",
+      "commit": "ce6968a377a6aea23e265f58b3c3c2d905335bbb",
+      "exe_md5": "4399145e7a8282835e6ceb7c9d70c0bc",
+      "exe_bytes": 9707008,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261023.2",
+      "recorded_at": "2026-10-23",
+      "recorded_note": "该包已于 2026-10-24 清理（被 .3 取代、台账无引用）；md5 在此之前未入库，此行是补录"
+    },
+    {
+      "tag": "rc-20261023.3",
+      "commit": "75c293900cbdedf472a166a49ffd8aec126c76c7",
+      "exe_md5": "f3ed4e3ed7d394dc2406af3e627923b6",
+      "exe_bytes": 9707008,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261023.3",
+      "recorded_at": "2026-10-24",
+      "recorded_note": "当前装机包（门禁 GREEN，含 exe 内嵌 HEAD 版本 yes）"
+    }
+  ],
+  "legacy_unregistered": [
+    {
+      "tag": "rc-20261013",
+      "note": "包已清理；md5 从未入库，此处无值可补（tag 可追索提交，但原 exe 字节已不可考）"
+    },
+    {
+      "tag": "rc-20261017",
+      "note": "包已清理；第三方复核报告只给出 md5 前缀 bf65e25f…（9,587,712 字节），完整值从未入库，此处不补写以免伪造"
+    }
+  ]
+}

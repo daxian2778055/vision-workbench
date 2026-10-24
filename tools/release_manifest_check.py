@@ -30,6 +30,7 @@ manifest 前中止**（未打 tag 的 HEAD 上 `describe --exact-match` 非零�
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -111,9 +112,13 @@ def main():
     ap.add_argument("--mode", choices=["auto", "require"], default="auto",
                     help="auto=HEAD 无 rc-* tag 时明确 SKIP；require=必须有 tag 且全一致")
     ap.add_argument("--expect-tag", default="", help="要求的发版 tag（如 rc-20261023）")
+    ap.add_argument("--registry", default="",
+                    help="发版登记表（默认 <repo>/docs/release-registry.json）")
     args = ap.parse_args()
 
     repo = os.path.abspath(args.repo)
+    registry_path = os.path.abspath(args.registry) if args.registry else \
+        os.path.join(repo, "docs", "release-registry.json")
     findings = []
 
     def finding(code, detail):
@@ -237,6 +242,46 @@ def main():
             out("[RM] tag_commit=%s" % tag_commit)
         else:
             finding("tag_unresolvable", "tag=%s %s" % (required_tag, err_tag))
+
+    # ---- 2b. 发版登记（md5 的唯一受跟踪落点）----
+    # 为什么必须有：包内 版本说明.txt 在 gitignore 的 dist/ 下、从未入库，而重建出来的 exe
+    # 不保证与原件逐字节相同（见 docs/ci-cd-guide.md "dist 目录生命周期"）。所以清包之前
+    # 必须先在 docs/release-registry.json 里登记 tag/commit/exe_md5；这里强制核对，
+    # 缺行或值不符都判红——否则"删除不丢身份"只是句说法（2026-10-24 复核 P2）。
+    if required_tag:
+        if not os.path.isfile(registry_path):
+            finding("registry_missing", registry_path)
+        else:
+            try:
+                reg = json.loads(decode_text(registry_path))
+            except Exception as exc:  # noqa: BLE001 - 坏文件必须是可见 finding
+                finding("registry_unreadable", "%s: %s" % (registry_path, exc))
+                reg = {}
+            entries = {}
+            for e in (reg.get("releases") or []):
+                if isinstance(e, dict) and e.get("tag"):
+                    entries[e["tag"]] = e
+            entry = entries.get(required_tag)
+            out("[RM] registry_entries=%d" % len(entries))
+            if entry is None:
+                finding("md5_not_registered",
+                        "docs/release-registry.json 里没有 tag=%s 的登记行——清理该包前必须先登记 "
+                        "tag/commit/exe_md5（重建不等于原字节）" % required_tag)
+            else:
+                reg_commit = (entry.get("commit") or "").lower()
+                out("[RM] registry_commit=%s" % (reg_commit or "none"))
+                if tag_commit and reg_commit != tag_commit.lower():
+                    finding("registry_commit_mismatch",
+                            "registry=%s tag(%s)=%s" % (reg_commit, required_tag, tag_commit.lower()))
+                reg_md5 = (entry.get("exe_md5") or "").lower()
+                out("[RM] registry_md5=%s" % (reg_md5 or "none"))
+                if exe_md5 and reg_md5 != exe_md5:
+                    finding("registry_md5_mismatch",
+                            "registry=%s actual=%s" % (reg_md5 or "none", exe_md5))
+                reg_bytes = entry.get("exe_bytes")
+                if exe_bytes is not None and isinstance(reg_bytes, int) and reg_bytes != exe_bytes:
+                    finding("registry_bytes_mismatch",
+                            "registry=%s actual=%d" % (reg_bytes, exe_bytes))
 
     # ---- 3. 提交一致性（锚 = tag 提交；无 tag 时锚 = HEAD）----
     target_commit = (tag_commit or head).lower()

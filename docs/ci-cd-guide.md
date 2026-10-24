@@ -281,8 +281,14 @@ unzip ../deployment-package.zip
 - 发版包按 tag 命名放在 `dist/VisionFlowPlatform-<tag>`（历史约定也有 `-<日期>` 形式）；
   无日期目录 `dist/VisionFlowPlatform` 是**开发构建**，不是发版件。
 - 包被更新版取代且台账无引用时可以删除（2026-10-24 清理过 `-20261013` / `-20261017` 两枚）。
-  **删除不丢身份**：tag 与包内 `版本说明.txt` 记录的提交/exe md5 都在 git 里，需要时能从对应
-  tag 重新构建出一枚可复核的包。
+  **身份追索分两半，别混为一谈**：tag 在 git 里，永远可追到提交；**exe md5 不在 git 里**——
+  `版本说明.txt` 位于 gitignore 的 `dist/` 下、从未入库，而且从 tag 重建出来的 exe **不保证与
+  原件逐字节相同**（构建不可逐字节复现）。
+- 因此 **md5 必须先登记再清理**：`docs/release-registry.json` 是它唯一受跟踪的落点，
+  清包前在 `releases` 里加一行 `tag / commit / exe_md5 / exe_bytes`；
+  `release_manifest_check.py` 在解析出 tag 时会核对这一行（缺行、提交不符、md5 不符都判红）。
+  这是 2026-10-24 复核补的：此前那句“md5 都在 git 里”是**说法强于实现**，
+  `rc-20261023.2` 的 md5 就是在清理时险些永久丢失（靠部署日志才补录回来）。
 - 台账/文档引用具体包路径时，若该包已被清理，在下一轮登记里补一句“该包已于 <日期> 清理，
   身份见 tag 与 md5”——**路径会随时间失效，tag + md5 不会**（2026-10-24 复核：归档一
   第一百四十条仍指着已删的 `-20261017`，按路径去找会扑空）。
@@ -301,7 +307,11 @@ git tag -a rc-YYYYMMDD -m "rc-YYYYMMDD —— 上线候选（提交 <short>）"
 git push origin rc-YYYYMMDD
 # 3) 出"带日期"的发版包（装机只认它；无日期 dist/VisionFlowPlatform 是开发构建）
 powershell -ExecutionPolicy Bypass -File tools\deploy.ps1 -OutDir dist\VisionFlowPlatform-rc-YYYYMMDD
-# 4) 机器校验：HEAD 带 rc tag 时自动校验上面的带日期包（tag/manifest/exe-md5/exe 内嵌版本）
+# 4) 登记（必做，且在清理任何旧包之前）：把 tag / commit / exe md5 / 字节写进
+#    docs/release-registry.json —— 包内 版本说明.txt 在 gitignore 的 dist/ 下，
+#    这是 md5 唯一受跟踪的落点；重建出来的 exe 不保证与原件逐字节相同。
+git add docs/release-registry.json && git commit -m "发版登记：rc-YYYYMMDD → <short> → <exe md5>"
+# 5) 机器校验：HEAD 带 rc tag 时自动校验带日期包（tag/manifest/exe-md5/exe 内嵌版本/发版登记）
 python tools\release_manifest_check.py --repo . --mode require
 ```
 
@@ -316,6 +326,7 @@ python tools\release_manifest_check.py --repo . --mode require
 | manifest 的工作树未提交改动数 == 0 | `dirty_worktree` |
 | manifest 的标签与要求的 `rc-*` tag 一致 | `manifest_tag_mismatch` / `manifest_tag_not_on_head` |
 | **解析出 tag 时，`exe 内嵌 HEAD 版本哈希` 必须存在且 == `yes`**（= exe 确实是打包时 HEAD 编出来的；缺行或 `no` 都红——旧包没有这一行同样判红，它没证明自己的来源） | `exe_not_built_from_head` / `manifest_key_missing` |
+| **解析出 tag 时，`docs/release-registry.json` 必须有该 tag 的登记行，且 commit/exe_md5/exe_bytes 与包一致**（md5 不在 git 里、重建不保证同字节 ⇒ 清包前必须先登记） | `registry_missing` / `md5_not_registered` / `registry_commit_mismatch` / `registry_md5_mismatch` / `registry_bytes_mismatch` |
 
 > 校验目标：未指定 `--package` 时，只要解析出的 tag（HEAD 上的 `rc-*`，或 `--expect-tag`）**存在
 > 对应的带日期包就校验它**（目录名 `VisionFlowPlatform-<tag>` 或历史约定 `VisionFlowPlatform-<日期>`，
@@ -325,10 +336,11 @@ python tools\release_manifest_check.py --repo . --mode require
 
 在 CI（`tools/ci.ps1`）里它是一道独立闸（退出码 **16**），其前还有一道 **Version header single-source check**（退出码 **17**，`tools/version_header_check.py`）：
 
-- **先跑门禁自测** `tools/selftest_release_manifest.py`（18 个夹具用例，分别把每个判据做绿/做红，
+- **先跑门禁自测** `tools/selftest_release_manifest.py`（21 个夹具用例，分别把每个判据做绿/做红，
   含"发版后 main 继续前进、包仍应对应 tag"、"HEAD 带 tag 必须校验带日期包"、
   "有带日期包时 --expect-tag 优先校验它"、"exe 内嵌版本 = no / 缺行必红"、
-  "解析出 tag 却没有带日期包必红"各条）；自测本身失败 = 闸不可信 = exit 16。
+  "解析出 tag 却没有带日期包必红"、"发版登记缺行 / md5 不符 / 提交不符必红"各条）；
+  自测本身失败 = 闸不可信 = exit 16。
 - 版本头闸守的是"`cmake/Version.h.in` 是唯一正文数据源"这条承诺，三条判据：
   **覆盖**（模板里每个 `@TOKEN@`——大小写都算——都必须被 `cmake/RefreshVersionHeader.cmake`
   替换）、**赋值**（刷新脚本产出里版本号/哈希/日期必须分别落在正确的字段且值等于已知输入：
