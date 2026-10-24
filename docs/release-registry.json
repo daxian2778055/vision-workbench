@@ -36,7 +36,16 @@
       "exe_bytes": 9707520,
       "package_dir": "dist/VisionFlowPlatform-rc-20261024",
       "recorded_at": "2026-10-24",
-      "recorded_note": "当前装机包：修现场缺陷（工具拖不进/双击入画布后不能动）——onExecutionError 补画布锁重算 + addNode 补编辑锁判据；新增 EditLockReleaseTest 与 CI 第18步接线闸"
+      "recorded_note": "门禁 GREEN。该包已于 2026-10-24 清理（被 rc-20261024.1 取代，后者已含其全部改动）"
+    },
+    {
+      "tag": "rc-20261024.1",
+      "commit": "4956dd626e8543c44265db870a1ca4ebaf948f37",
+      "exe_md5": "77e6598419adcf56fe9e8fc3d9785080",
+      "exe_bytes": 9710592,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261024.1",
+      "recorded_at": "2026-10-24",
+      "recorded_note": "当前装机包：含 rc-20261024 的画布锁修复，另加 cleanupCameras 线程未退出则跳过拆相机句柄（UAF 防护）+ 参数面板生效时机提示 + 手册 8.4/8.5"
     }
   ],
   "legacy_backfilled": [
