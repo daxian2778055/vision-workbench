@@ -1302,7 +1302,19 @@ void MainWindow::addNode(const QString &nodeType)
             VFP_DEBUG << "scene is null";
             return;
         }
-        
+
+        // 双击工具库入画布必须与拖拽用同一把锁：FlowScene::dragEnter/dragMove/drop 都判
+        // m_editLocked，而这条路径直接 createNode（createNode 本身不查锁），于是锁定时
+        // "拖不进、双击能进"，进去后节点又不可动——体验上就是"工具坏了"。
+        // 这里显式拦下并给出原因，而不是静默建一个动不了的节点（2026-10-24 现场反馈）。
+        if (scene->isEditLocked()) {
+            if (ui->statusBar) {
+                ui->statusBar->showMessage(
+                    tr("画布已锁定（流程运行中）——请先停止执行，再双击/拖拽添加算子"), 5000);
+            }
+            return;
+        }
+
         NodeBase *node = nullptr;
 
         const QPointF pos(100, 100);
@@ -3204,6 +3216,10 @@ void MainWindow::onExecutionError(const QString &error)
 {
     m_execStatus->onError(error);   // 状态栏留痕（不弹模态框，理由见控制器注释）
     logMessage(QStringLiteral("执行错误: %1").arg(error));
+    // 画布锁必须在这里也重算：onExecutionStopped / onExecutionFinished 都会算，但错误路径
+    // 不一定走到 executionFinished（例如执行器内部提前停）。漏了这一行，画布会永久停在锁定态
+    // ——现场表现为"算子拖不进去、双击能进但进去也不能动"（2026-10-24 现场反馈）。
+    updateEditLockForCurrentScene();
 }
 
 QVector<OverlayShape> MainWindow::collectOverlayFromNode(NodeBase *node) const

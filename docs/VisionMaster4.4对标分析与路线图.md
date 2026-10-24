@@ -293,6 +293,13 @@
 | `src/NodeSearchWidget.cpp:220` | `// TODO: 高亮节点` | 工具库 / 画布 Ctrl+F 搜索到节点后**不做高亮定位**（FR1.7 的"英文名/别名参与搜索"已交付，这是它的可视化收尾） |
 | `src/OutputDataViewer.cpp:311` | `// TODO: 区域可视化显示` | 结果查看器不显示**区域几何**（测量 / Blob 的 region 没有可视化出口，现场只能看数值） |
 
+**已修的现场缺陷（2026-10-24 登记）**：操作中工具拖不进画布、双击入画布后节点不能动。根因两条：
+① `MainWindow::onExecutionError` 未像其余执行槽那样重算画布锁（错误路径没走到 `executionFinished`
+时画布永久锁定）；② 工具箱双击走 `MainWindow::addNode` 直接 `createNode`，绕过 `FlowScene` 拖拽路径的
+`m_editLocked` 判据（`createNode` 本身不查锁）。修法：错误槽补 `updateEditLockForCurrentScene()`；
+`addNode` 加锁判据 + 状态栏可见提示。守卫两道：运行期 `EditLockReleaseTest`（失败停止后允许编辑、
+节点恢复可拖动）+ CI 第 18 步接线闸（删掉任一处即红）。
+
 **已知、且决定不单独处理的包内文案（2026-10-24 登记）**：`rc-20261023.3` 包内《部署说明.txt》
 的 FAQ 仍写 `opencv_world451.dll`，而实际随包的是 `opencv_world4130.dll`（拷贝、自检、启动都按 4130）。
 `tools/deploy.ps1` 已改为单一变量（下次部署自动正确），**不为这一行重切发版包**——现场以目录里实际

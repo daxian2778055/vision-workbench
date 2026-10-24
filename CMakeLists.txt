@@ -1063,6 +1063,14 @@ if(MSVC)
     vfp_configure_gui_test(SubFlowTest)
 endif()
 
+# 画布编辑锁释放（2026-10-24 现场回归）：失败停止后执行器必须允许编辑，节点恢复可拖动
+if(MSVC)
+    add_executable(edit_lock_release_test tests/edit_lock_release_test.cpp)
+    target_link_libraries(edit_lock_release_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    vfp_add_qtest(NAME EditLockReleaseTest TARGET edit_lock_release_test)
+    vfp_configure_gui_test(EditLockReleaseTest)
+endif()
+
 # 良率目标监控（P1-11）：闭锁只报一次 / 恢复重置 / 滚动窗口 / 最小样本 / 配置变更重置
 if(MSVC)
     add_executable(yield_monitor_test tests/yield_monitor_test.cpp)
@@ -1304,7 +1312,7 @@ if(MSVC)
     set(VFP_TESTS NodeCoreTest OpencvSerializationTest IntegrationTest DatabaseTest PerfTest
                   ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest CameraIoTest
                   DnnSegmentTest OpencvDefectAlignTest SoakTest StatisticsReportTest SchemePackageTest
-                  I18nTest SubFlowTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
+                  I18nTest SubFlowTest EditLockReleaseTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
                   FactoryPasswordGuardTest FeatureMatchTest CalibChainTest OpencvNodesTest
                   ProjectPathsTest FlowCachePurgeLedgerTest ExecutionControlPolicyTest
                   AuxDialogMenuRouterTest ModuleEditorRegistryTest UITranslatorTest

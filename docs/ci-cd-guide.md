@@ -364,6 +364,24 @@ python tools\release_manifest_check.py --repo . --mode require
 > （未打 tag 的 HEAD 上 `describe --exact-match` 非零；受限 PowerShell 缺 `Get-FileHash`），
 > 于是"包少了自识别件"可以无人察觉。两处脚本缺陷已修，并加本闸防回潮。
 
+#### 7. 画布编辑锁接线校验（exit 18）
+
+2026-10-24 现场反馈：工具**拖不进**画布；双击能进，但进去后节点不能动。根因两条都在
+`MainWindow` 的接线（不是算法）：
+
+| 缺陷 | 表现 | 修法 |
+|---|---|---|
+| `onExecutionError` 不像 Started/Stopped/Finished 那样重算画布锁 | 错误路径若没走到 `executionFinished`，画布永久锁定 | 槽末补 `updateEditLockForCurrentScene()` |
+| 工具箱双击走 `MainWindow::addNode` 直接 `createNode`，绕过 `FlowScene::dropEvent` 的锁判据（`createNode` 本身不查锁） | 锁定期间"拖不进、双击能进"，进去后不可动 | `addNode` 里加 `isEditLocked()` 判据 + 状态栏可见提示 |
+
+两道守卫（各钉一半）：
+
+- **运行期** `EditLockReleaseTest`：流程因节点失败停止后，`allowsGraphEditing()` 必须为真，
+  且按该判据重算后画布解锁、节点恢复 `ItemIsMovable`——执行器若停在 Running 即红。
+- **接线** `tools/edit_lock_wiring_check.py`（CI 第 18 步，先跑自证臂）：四个执行槽的函数体
+  必须各有 `updateEditLockForCurrentScene`，`addNode` 必须有 `isEditLocked`；删掉任一处即红
+  ——运行期用例钉不住"某个槽忘了调"，这正是缺陷所在位置。
+
 ## 配置文件详解
 
 ### 1. GitHub Actions 配置 (.github/workflows/ci-cd.yml)
