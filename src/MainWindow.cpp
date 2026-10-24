@@ -1309,8 +1309,16 @@ void MainWindow::addNode(const QString &nodeType)
         // 这里显式拦下并给出原因，而不是静默建一个动不了的节点（2026-10-24 现场反馈）。
         if (scene->isEditLocked()) {
             if (ui->statusBar) {
+                auto *session = SessionManager::instance();
+                // 锁是「运行态 || 写闸」的组合（见 SessionManager::canvasEditShouldBeLocked）。
+                // 若一律提示"先停止执行"，写闸生效时用户照做也永远解不开——下一步动作必须
+                // 跟着真实来源走。写闸文案复用 writeGateRefusal()（唯一来源），只补菜单路径。
+                const QString refusal = session->writeGateRefusal();
                 ui->statusBar->showMessage(
-                    tr("画布已锁定（流程运行中）——请先停止执行，再双击/拖拽添加算子"), 5000);
+                    !refusal.isEmpty()
+                        ? refusal + tr("（菜单：系统 → 修改管理员口令）")
+                        : tr("画布已锁定（流程运行中）——请先停止执行，再双击/拖拽添加算子"),
+                    8000);
             }
             return;
         }
