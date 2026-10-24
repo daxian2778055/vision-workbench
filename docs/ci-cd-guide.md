@@ -317,10 +317,13 @@ python tools\release_manifest_check.py --repo . --mode require
   含"发版后 main 继续前进、包仍应对应 tag"、"HEAD 带 tag 必须校验带日期包"、
   "有带日期包时 --expect-tag 优先校验它"、"exe 内嵌版本 = no / 缺行必红"、
   "解析出 tag 却没有带日期包必红"各条）；自测本身失败 = 闸不可信 = exit 16。
-- 版本头闸守的是"`cmake/Version.h.in` 是唯一正文数据源"这条承诺：模板里每个 `@TOKEN@` 都必须被
-  `cmake/RefreshVersionHeader.cmake` 替换（覆盖），且两个生成器（configure 期 `configure_file`
-  与构建期刷新脚本）在**同一组输入**下产出**逐字节相同**（等价）。先跑自证臂（往临时模板注入一个
-  不被替换的 token，必须判红）再跑正式校验；`--selftest` 与正式校验任一非零 = exit 17。
+- 版本头闸守的是"`cmake/Version.h.in` 是唯一正文数据源"这条承诺，三条判据：
+  **覆盖**（模板里每个 `@TOKEN@`——大小写都算——都必须被 `cmake/RefreshVersionHeader.cmake`
+  替换）、**赋值**（刷新脚本产出里版本号/哈希/日期必须分别等于已知输入：常量版本号 /
+  `git rev-parse --short HEAD` / 当天；**不能**用"A 的产出值喂 B"，否则 A 内部把值替错位时
+  等价恒成立——2026-10-24 复审臂3 正是这么骗过等价判据的）、**等价**（两个生成器对同一组
+  已知输入产出逐字节相同）。自证臂两枚：注入未替换的 token、把版本与哈希的替换值写反，
+  都必须判红；`--selftest` 与正式校验任一非零 = exit 17。
 - 再跑正式校验，模式 `auto`：HEAD **没有** `rc-*` tag 时打印 `skipped=1 reason=no_rc_tag_on_head`
   并放行（`dist/` 被 gitignore，开发构建允许陈旧）；HEAD **带** `rc-*` tag 时同一套判据为硬门禁。
   永远不会静默跳过——日志里必有 `[RM-VERDICT]` 或明确的 `skipped` 原因。

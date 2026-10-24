@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Version.h 单一数据源守卫（2026-10-23 复审 P3 建议落地）。
+"""Version.h 单一数据源守卫（2026-10-23 复审 P3 建议落地，10-24 盲点修复）。
 
 背景：`build/generated/Version.h` 有两个生成器——
   ① configure 期 bootstrap：CMakeLists.txt 里的 configure_file(cmake/Version.h.in @ONLY)
   ② 构建期刷新：cmake/RefreshVersionHeader.cmake（vfp_version_header 目标，每次构建跑）
-正文模板已经合一（② 改为读 ① 的模板做替换），但"**哪几个 @TOKEN@ 要被替换**"仍写在两处：
-模板里的占位符，与刷新脚本里的 string(REPLACE) 各行。将来模板若新增第四个 token，
-configure_file 会替换而刷新脚本不会——漂移会从另一条缝回来（该轮复核靠人工复验才发现
-同类问题，人工复验不该是长期机制）。
+正文模板已经合一（② 改为读 ① 的模板做替换），但"哪个值进哪个字段、哪些 @TOKEN@ 被替换"
+这类约定若只靠人守，迟早漂移。本脚本把三条承诺变成命令：
 
-本脚本把这条承诺变成命令，两条判据：
   A 覆盖：模板里的每个 @TOKEN@ 都必须出现在刷新脚本的 string(REPLACE ...) 里；
-  B 等价：两个生成器在**同一组输入**下产出必须逐字节相同
-          （跑刷新脚本得一份 → 从该份解析出哈希/日期/版本号 → 用同值跑 configure_file 得另一份 → 比对）。
+  B 赋值：刷新脚本跑出来的一份，其 版本号/哈希/日期 必须分别等于
+          已知输入（常量版本号 / git rev-parse --short HEAD / 当天）——
+          **不能**"从 A 的产出解析值再喂给 B"，那会让 A 内部把值替错位时等价恒成立
+          （2026-10-24 复审臂3：把 @PROJECT_VERSION@ 与 @VFP_GIT_HASH@ 的替换值写反，
+            覆盖检查过、字节比对也过，但生产里 configure 期得到正确头、构建期覆写成错位头，
+            而 deploy 的"exe 是否内嵌 HEAD 哈希"只做子串搜索——哈希出现在版本字段里也算命中，
+            整条发版链会带着一个错误的关于框版本串一路绿到底）；
+  C 等价：两个生成器对**同一组已知输入**的产出必须逐字节相同
+          （日期用 A 自己那次跑出来的值喂 B：跨零点不误红，且日期互换无害、
+            真被互换也会被 B 的赋值断言抓到）。
 
 用法：
   python tools/version_header_check.py --repo .            # 正常校验
@@ -27,6 +32,7 @@ configure_file 会替换而刷新脚本不会——漂移会从另一条缝回�
 """
 
 import argparse
+import datetime
 import os
 import re
 import subprocess
@@ -39,8 +45,11 @@ try:
 except Exception:
     pass
 
-TOKEN_RX = re.compile(r"@([A-Z][A-Z0-9_]*)@")
-REPLACE_RX = re.compile(r'string\(\s*REPLACE\s+"@([A-Z][A-Z0-9_]*)@"')
+# token 名放宽到大小写：configure_file 对 @foo@ 与 @FOO@ 一视同仁，覆盖检查不能漏小写
+TOKEN_RX = re.compile(r"@([A-Za-z0-9_]+)@")
+REPLACE_RX = re.compile(r'string\(\s*REPLACE\s+"@([A-Za-z0-9_]+)@"')
+
+VERSION_CONST = "0.0.0-check"
 
 
 def out(line):
@@ -85,14 +94,17 @@ def check(repo, template, refresh_script):
                 "模板里的 %s 在 %s 中没有对应 string(REPLACE)——configure_file 会替换、"
                 "构建期刷新不会，两头会漂移" % (",".join(missing), os.path.basename(refresh_script)))
 
-    # ---- B 等价：两个生成器同输入 → 逐字节相同 ----
-    version = "0.0.0-check"
+    # ---- B/C：已知输入跑 A → 断言赋值 → 同值跑 B → 逐字节比对 ----
+    expected_hash = git_short(repo)
+    expected_date = datetime.date.today().isoformat()
+    out("[VHC] known_inputs version=%s hash=%s date=%s" % (VERSION_CONST, expected_hash, expected_date))
+
     with tempfile.TemporaryDirectory(prefix="vfp_vhc_") as tmp:
         head_a = os.path.join(tmp, "Version.h.a")
         p = run_cmake(["-DHEADER=%s" % head_a,
                        "-DTEMPLATE=%s" % template,
                        "-DREPO=%s" % repo,
-                       "-DVERSION=%s" % version,
+                       "-DVERSION=%s" % VERSION_CONST,
                        "-DGIT=git",
                        "-P", refresh_script])
         if p.returncode != 0 or not os.path.isfile(head_a):
@@ -101,7 +113,6 @@ def check(repo, template, refresh_script):
             return findings
         text_a = read_text(head_a)
 
-        # 从 A 的产出解析三个值，作为 B 的输入（不依赖时钟/环境，必然同值）
         def grab(name):
             m = re.search(r'#define\s+%s\s+"([^"]*)"' % name, text_a)
             return m.group(1) if m else ""
@@ -109,13 +120,26 @@ def check(repo, template, refresh_script):
         v = grab("VFP_VERSION_STRING")
         h = grab("VFP_GIT_HASH")
         d = grab("VFP_BUILD_DATE")
-        out("[VHC] generator_a_version=%s hash=%s date=%s" % (v, h, d))
+        out("[VHC] generator_a version=%s hash=%s date=%s" % (v, h, d))
 
+        # B 赋值断言：刷新脚本必须把"哪个值"放进"哪个字段"（防值替错位）
+        if v != VERSION_CONST:
+            finding(findings, "version_misassigned",
+                    "版本字段实际是 %r（应为 %r）——刷新脚本把别的值塞进了版本位" % (v, VERSION_CONST))
+        if h != expected_hash:
+            finding(findings, "hash_misassigned",
+                    "哈希字段实际是 %r（应为 git 短哈希 %r）——刷新脚本把别的值塞进了哈希位"
+                    % (h, expected_hash))
+        if d != expected_date:
+            # 跨零点容忍：不判红，只记录（真被互换也会被上面两条断言抓到）
+            out("[VHC] note=date_not_today parsed=%s today=%s（跨零点容忍，不判红）" % (d, expected_date))
+
+        # C 等价：B 用同一组已知输入（日期取 A 的，避免跨零点误红）
         script_b = os.path.join(tmp, "b.cmake")
         head_b = os.path.join(tmp, "Version.h.b")
         with open(script_b, "w", encoding="utf-8") as fh:
-            fh.write('set(PROJECT_VERSION "%s")\n' % v)
-            fh.write('set(VFP_GIT_HASH "%s")\n' % h)
+            fh.write('set(PROJECT_VERSION "%s")\n' % VERSION_CONST)
+            fh.write('set(VFP_GIT_HASH "%s")\n' % expected_hash)
             fh.write('set(VFP_BUILD_DATE "%s")\n' % d)
             fh.write('configure_file("%s" "%s" @ONLY)\n' % (template, head_b))
         p2 = run_cmake(["-P", script_b])
@@ -127,24 +151,50 @@ def check(repo, template, refresh_script):
         with open(head_a, "rb") as fa, open(head_b, "rb") as fb:
             if fa.read() != fb.read():
                 finding(findings, "generators_diverge",
-                        "两个生成器对同一模板、同一组输入产出了不同内容——单一数据源承诺被破坏")
+                        "两个生成器对同一模板、同一组已知输入产出了不同内容——单一数据源承诺被破坏")
 
     return findings
 
 
 def selftest(repo, template, refresh_script):
-    """自证能变红：给临时模板加一个刷新脚本不替换的 token，必须 RED。"""
+    """两枚破坏臂，都必须判红（自证这道闸不是活的）。"""
+    problems = []
     with tempfile.TemporaryDirectory(prefix="vfp_vhc_st_") as tmp:
+        # 臂1：模板新增一个刷新脚本不替换的 token → token_not_replaced
         tpl = os.path.join(tmp, "Version.h.in")
-        text = read_text(template)
         with open(tpl, "w", encoding="utf-8") as fh:
-            fh.write(text + '\n#define VFP_EXTRA "@VFP_DELIBERATE_DRIFT_TOKEN@"\n')
-        findings = check(repo, tpl, refresh_script)
-        if "token_not_replaced" in findings:
-            out("[VHC] selftest=ok（注入未替换 token 后确实判红）")
-            return []
-        out("[VHC] selftest=FAIL（注入未替换 token 后仍判绿：这道闸是死的）")
-        return ["selftest_dead"]
+            fh.write(read_text(template) + '\n#define VFP_EXTRA "@VFP_DELIBERATE_DRIFT_TOKEN@"\n')
+        f1 = check(repo, tpl, refresh_script)
+        if "token_not_replaced" in f1:
+            out("[VHC] selftest_arm1=ok（注入未替换 token 后确实判红）")
+        else:
+            problems.append("arm1_dead")
+            out("[VHC] selftest_arm1=FAIL（注入未替换 token 后仍判绿）")
+
+        # 臂2：把刷新脚本里两个 REPLACE 的值写反（版本位塞哈希、哈希位塞版本号）
+        #     ——2026-10-24 复审臂3：覆盖检查过、字节比对也过，但生产里是错位头。
+        tampered = os.path.join(tmp, "RefreshVersionHeader.cmake")
+        text = read_text(refresh_script)
+        swapped = text.replace(
+            'string(REPLACE "@PROJECT_VERSION@" "${VERSION}"',
+            'string(REPLACE "@PROJECT_VERSION@" "${_hash}"').replace(
+            'string(REPLACE "@VFP_GIT_HASH@" "${_hash}"',
+            'string(REPLACE "@VFP_GIT_HASH@" "${VERSION}"')
+        if swapped == text:
+            problems.append("arm2_setup_failed")
+            out("[VHC] selftest_arm2=FAIL（未能在临时脚本里构造替错位——刷新脚本的 REPLACE 行是否已改形）")
+        else:
+            with open(tampered, "w", encoding="utf-8") as fh:
+                fh.write(swapped)
+            f2 = check(repo, template, tampered)
+            caught = [c for c in f2
+                      if c in ("version_misassigned", "hash_misassigned", "generators_diverge")]
+            if caught:
+                out("[VHC] selftest_arm2=ok（版本/哈希替错位后判红：%s）" % ",".join(caught))
+            else:
+                problems.append("arm2_dead")
+                out("[VHC] selftest_arm2=FAIL（版本/哈希替错位后仍判绿：这道闸有盲点）")
+    return problems
 
 
 def main():
