@@ -315,8 +315,10 @@ powershell -ExecutionPolicy Bypass -File tools\deploy.ps1 -OutDir dist\VisionFlo
 #    docs/release-registry.json —— 包内 版本说明.txt 在 gitignore 的 dist/ 下，
 #    这是 md5 唯一受跟踪的落点；重建出来的 exe 不保证与原件逐字节相同。
 git add docs/release-registry.json && git commit -m "发版登记：rc-YYYYMMDD → <short> → <exe md5>"
-# 5) 机器校验：HEAD 带 rc tag 时自动校验带日期包（tag/manifest/exe-md5/exe 内嵌版本/发版登记）
-python tools\release_manifest_check.py --repo . --mode require
+# 5) 机器校验：**必须显式带 --expect-tag**——第 4 步的登记提交会让 HEAD 越过 tag，
+#    不带 tag 时闸会去校验无日期的开发目录（那是另一枚包，读数无关）。
+#    带上 tag 后以 tag 指向的提交为锚，并优先校验该 tag 的带日期包。
+python tools\release_manifest_check.py --repo . --expect-tag rc-YYYYMMDD
 ```
 
 `tools/release_manifest_check.py` 的判据（任一不满足即 RED）：
