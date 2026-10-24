@@ -263,10 +263,11 @@ def main():
                     entries[e["tag"]] = e
             entry = entries.get(required_tag)
             out("[RM] registry_entries=%d" % len(entries))
+            reg_rel = os.path.relpath(registry_path, repo) if registry_path.startswith(repo) else registry_path
             if entry is None:
                 finding("md5_not_registered",
-                        "docs/release-registry.json 里没有 tag=%s 的登记行——清理该包前必须先登记 "
-                        "tag/commit/exe_md5（重建不等于原字节）" % required_tag)
+                        "%s 里没有 tag=%s 的登记行——清理该包前必须先登记 "
+                        "tag/commit/exe_md5/exe_bytes（重建不等于原字节）" % (reg_rel, required_tag))
             else:
                 reg_commit = (entry.get("commit") or "").lower()
                 out("[RM] registry_commit=%s" % (reg_commit or "none"))
@@ -278,8 +279,13 @@ def main():
                 if exe_md5 and reg_md5 != exe_md5:
                     finding("registry_md5_mismatch",
                             "registry=%s actual=%s" % (reg_md5 or "none", exe_md5))
+                # 字节数：缺字段或类型不对也判红（旧版只在"值是整数"时才比对，写错类型会静默跳过）。
                 reg_bytes = entry.get("exe_bytes")
-                if exe_bytes is not None and isinstance(reg_bytes, int) and reg_bytes != exe_bytes:
+                if not isinstance(reg_bytes, int) or isinstance(reg_bytes, bool):
+                    finding("registry_bytes_missing",
+                            "registry exe_bytes=%r（发版登记必须写整数字节数；缺省/字符串都不算登记）"
+                            % (reg_bytes,))
+                elif exe_bytes is not None and reg_bytes != exe_bytes:
                     finding("registry_bytes_mismatch",
                             "registry=%s actual=%d" % (reg_bytes, exe_bytes))
 

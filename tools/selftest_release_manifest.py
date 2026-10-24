@@ -62,14 +62,14 @@ def make_repo(root, tag=None):
     return sh(root, "git", "rev-parse", "HEAD")
 
 
-def write_registry(root, tag, commit, md5, size):
+def write_registry(root, tag, commit, md5, size, with_bytes=True):
     """在临时仓库里写发版登记表（docs/release-registry.json）。"""
     docs = os.path.join(root, "docs")
     os.makedirs(docs, exist_ok=True)
-    data = {
-        "schema": 1,
-        "releases": [{"tag": tag, "commit": commit, "exe_md5": md5, "exe_bytes": size}],
-    }
+    entry = {"tag": tag, "commit": commit, "exe_md5": md5}
+    if with_bytes:
+        entry["exe_bytes"] = size
+    data = {"schema": 1, "releases": [entry]}
     with open(os.path.join(docs, "release-registry.json"), "w", encoding="utf-8") as fh:
         json.dump(data, fh, ensure_ascii=False, indent=2)
 
@@ -267,6 +267,12 @@ def main():
                        "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", real_md5, 20)
         results.append(expect("registry_commit_mismatch_red", repo_reg, [], 1, "RED",
                               ["registry_commit_mismatch"]))
+
+        # 缺 exe_bytes（旧版只在"值是整数"时才比对，写错类型会静默跳过）
+        make_package(repo_reg, commit_reg, "rc-selftest", pkg_subdir=dated_reg)
+        write_registry(repo_reg, "rc-selftest", commit_reg, real_md5, 20, with_bytes=False)
+        results.append(expect("registry_bytes_missing_red", repo_reg, [], 1, "RED",
+                              ["registry_bytes_missing"]))
 
         # 4) md5 不符 → RED
         make_package(repo_tagged, commit_tagged, "rc-selftest", md5_override="0" * 32)

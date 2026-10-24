@@ -286,9 +286,13 @@ unzip ../deployment-package.zip
   原件逐字节相同**（构建不可逐字节复现）。
 - 因此 **md5 必须先登记再清理**：`docs/release-registry.json` 是它唯一受跟踪的落点，
   清包前在 `releases` 里加一行 `tag / commit / exe_md5 / exe_bytes`；
-  `release_manifest_check.py` 在解析出 tag 时会核对这一行（缺行、提交不符、md5 不符都判红）。
+  `release_manifest_check.py` 在解析出 tag 时会核对这一行（缺行、提交不符、md5 不符、
+  字节数缺失或类型不对都判红）。
   这是 2026-10-24 复核补的：此前那句“md5 都在 git 里”是**说法强于实现**，
   `rc-20261023.2` 的 md5 就是在清理时险些永久丢失（靠部署日志才补录回来）。
+- `legacy_backfilled` 收已清理、当时未登记的两枚（`rc-20261013` / `rc-20261017`）：
+  提交由 tag 追索，md5（与 17 的字节数）取自 2026-10-23 第三方复核对清理前包内 exe 的直接计算，
+  **注明来源、宁缺不造**（13 的字节数不可考，就写 null 而不猜）。
 - 台账/文档引用具体包路径时，若该包已被清理，在下一轮登记里补一句“该包已于 <日期> 清理，
   身份见 tag 与 md5”——**路径会随时间失效，tag + md5 不会**（2026-10-24 复核：归档一
   第一百四十条仍指着已删的 `-20261017`，按路径去找会扑空）。
@@ -326,7 +330,7 @@ python tools\release_manifest_check.py --repo . --mode require
 | manifest 的工作树未提交改动数 == 0 | `dirty_worktree` |
 | manifest 的标签与要求的 `rc-*` tag 一致 | `manifest_tag_mismatch` / `manifest_tag_not_on_head` |
 | **解析出 tag 时，`exe 内嵌 HEAD 版本哈希` 必须存在且 == `yes`**（= exe 确实是打包时 HEAD 编出来的；缺行或 `no` 都红——旧包没有这一行同样判红，它没证明自己的来源） | `exe_not_built_from_head` / `manifest_key_missing` |
-| **解析出 tag 时，`docs/release-registry.json` 必须有该 tag 的登记行，且 commit/exe_md5/exe_bytes 与包一致**（md5 不在 git 里、重建不保证同字节 ⇒ 清包前必须先登记） | `registry_missing` / `md5_not_registered` / `registry_commit_mismatch` / `registry_md5_mismatch` / `registry_bytes_mismatch` |
+| **解析出 tag 时，`docs/release-registry.json` 必须有该 tag 的登记行，且 commit/exe_md5/exe_bytes 与包一致**（md5 不在 git 里、重建不保证同字节 ⇒ 清包前必须先登记；`exe_bytes` 必须是整数，缺字段或写成字符串同样判红，不会静默跳过） | `registry_missing` / `md5_not_registered` / `registry_commit_mismatch` / `registry_md5_mismatch` / `registry_bytes_missing` / `registry_bytes_mismatch` |
 
 > 校验目标：未指定 `--package` 时，只要解析出的 tag（HEAD 上的 `rc-*`，或 `--expect-tag`）**存在
 > 对应的带日期包就校验它**（目录名 `VisionFlowPlatform-<tag>` 或历史约定 `VisionFlowPlatform-<日期>`，
@@ -336,10 +340,10 @@ python tools\release_manifest_check.py --repo . --mode require
 
 在 CI（`tools/ci.ps1`）里它是一道独立闸（退出码 **16**），其前还有一道 **Version header single-source check**（退出码 **17**，`tools/version_header_check.py`）：
 
-- **先跑门禁自测** `tools/selftest_release_manifest.py`（21 个夹具用例，分别把每个判据做绿/做红，
+- **先跑门禁自测** `tools/selftest_release_manifest.py`（22 个夹具用例，分别把每个判据做绿/做红，
   含"发版后 main 继续前进、包仍应对应 tag"、"HEAD 带 tag 必须校验带日期包"、
   "有带日期包时 --expect-tag 优先校验它"、"exe 内嵌版本 = no / 缺行必红"、
-  "解析出 tag 却没有带日期包必红"、"发版登记缺行 / md5 不符 / 提交不符必红"各条）；
+  "解析出 tag 却没有带日期包必红"、"发版登记缺行 / md5 不符 / 提交不符 / 缺字节数必红"各条）；
   自测本身失败 = 闸不可信 = exit 16。
 - 版本头闸守的是"`cmake/Version.h.in` 是唯一正文数据源"这条承诺，三条判据：
   **覆盖**（模板里每个 `@TOKEN@`——大小写都算——都必须被 `cmake/RefreshVersionHeader.cmake`
