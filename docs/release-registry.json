@@ -27,7 +27,16 @@
       "exe_bytes": 9707008,
       "package_dir": "dist/VisionFlowPlatform-rc-20261023.3",
       "recorded_at": "2026-10-24",
-      "recorded_note": "当前装机包（门禁 GREEN，含 exe 内嵌 HEAD 版本 yes）"
+      "recorded_note": "门禁 GREEN，含 exe 内嵌 HEAD 版本 yes；已被 rc-20261024 取代（后者含画布锁现场修复）"
+    },
+    {
+      "tag": "rc-20261024",
+      "commit": "5b7775fa993efac27c798949311d845d8ccf2bd0",
+      "exe_md5": "611ce74bdd9b08d21a89210544891900",
+      "exe_bytes": 9707520,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261024",
+      "recorded_at": "2026-10-24",
+      "recorded_note": "当前装机包：修现场缺陷（工具拖不进/双击入画布后不能动）——onExecutionError 补画布锁重算 + addNode 补编辑锁判据；新增 EditLockReleaseTest 与 CI 第18步接线闸"
     }
   ],
   "legacy_backfilled": [
