@@ -171,10 +171,13 @@ if (Test-Path $MvsBin) {
 # Step 5: OpenCV 运行时（OpenCV 节点族依赖）
 # ============================================================
 Step "拷贝 OpenCV 运行时 DLL"
+# 单一来源：拷贝、自检清单、部署说明正文都引用这个变量——
+# 曾经正文写死 opencv_world451.dll 而实际拷的是 4130，现场照 FAQ 找会扑空。
+$OpenCvDllName = "opencv_world4130.dll"
 if (Test-Path $OpenCVBin) {
-    Copy-Item -Path (Join-Path $OpenCVBin "opencv_world4130.dll") -Destination $OutDir -Force
+    Copy-Item -Path (Join-Path $OpenCVBin $OpenCvDllName) -Destination $OutDir -Force
     Copy-Item -Path (Join-Path $OpenCVBin "opencv_world4130d.dll") -Destination $OutDir -Force -ErrorAction SilentlyContinue
-    Write-Host "  -> opencv_world4130.dll 已拷贝" -ForegroundColor Green
+    Write-Host "  -> $OpenCvDllName 已拷贝" -ForegroundColor Green
 } else {
     Write-Warning "未找到 OpenCV 运行时目录: $OpenCVBin（OpenCV 节点不可用，其余功能不受影响）"
 }
@@ -337,7 +340,7 @@ VisionFlowPlatform 部署说明
    - 提示缺少 DLL: 用 Dependencies / Process Explorer 查看缺失项，确认是 Qt、
      HALCON、OpenCV 还是 MVS 组件。
    - 相机枚举不到: 检查 MVS 客户端能否枚举，确认 GigE 网卡 IP 与相机同网段。
-   - OpenCV 节点不可用: 确认 opencv_world451.dll 已随包拷贝（脚本自动处理）。
+   - OpenCV 节点不可用: 确认 $OpenCvDllName 已随包拷贝（脚本自动处理）。
 "@
 Set-Content -Path (Join-Path $OutDir "部署说明.txt") -Value $readme -Encoding UTF8
 Write-Host "  -> 部署说明.txt" -ForegroundColor Green
