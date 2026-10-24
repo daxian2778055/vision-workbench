@@ -973,9 +973,21 @@ void MainWindow::cleanupCameras()
 
     for (FlowExecutor *ex : executors)
         ex->stopExecution();
+    QList<FlowExecutor *> stuck;
     for (FlowExecutor *ex : executors) {
-        if (ex->isRunning())
-            ex->wait(3000);
+        if (ex->isRunning() && !ex->wait(3000))
+            stuck.append(ex);
+    }
+    if (!stuck.isEmpty()) {
+        // 有执行线程没停下来：此时调 closeCamera / DestroyHandle 等于在工作线程
+        // 仍可能持有 SDK 句柄时拆句柄——正是本函数开头注释警告过的 use-after-free
+        // 同类（MvsImageSourceNode::grabImage 里的 MV_CC_GetOneFrameTimeout 可能
+        // 在 SDK 内部卡住超过 3 秒）。宁可不关相机（进程退出时由 OS/驱动回收），
+        // 也不在握有活线程时拆句柄。与 onCloseFlowTab 的"超时即中止、不动现场"同口径。
+        logMessage(tr("有 %1 个流程执行线程未能在 3 秒内退出，已跳过相机关闭"
+                      "（请勿在流程运行中直接关窗；可在停止执行后再关闭）")
+                       .arg(stuck.size()));
+        return;
     }
 
     // 2. 关闭所有 MVS 图像源节点的本地相机（按顺序清理每个 flow scene）
@@ -1436,6 +1448,15 @@ void MainWindow::showNodeParameters(NodeBase *node)
         : (node->executionSuccess() ? QStringLiteral("上次执行：成功")
                                     : QStringLiteral("上次执行：失败"));
     box->addWidget(new QLabel(status));
+
+    // 运行中改参数是允许的（设计如此），但不提示会让现场以为"改了没生效"——
+    // 参数写入线程安全、下一轮生效，这句话必须写在参数旁边而不是只写在文档里。
+    auto *hint = new QLabel(m_currentLanguage == Language::Chinese
+                                ? QStringLiteral("提示：运行中修改参数将于下一轮生效")
+                                : QStringLiteral("Note: parameter changes take effect next cycle"));
+    hint->setWordWrap(true);
+    hint->setStyleSheet(QStringLiteral("color:#9a9aa6;"));
+    box->addWidget(hint);
 
     if (auto *hn = qobject_cast<HalconNode *>(node)) {
         if (hn->geometryRoiType() != RoiType::None)
