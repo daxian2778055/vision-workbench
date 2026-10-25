@@ -246,6 +246,9 @@ private:
     /// FR15.10 子流程：轮首收集"被引用子流程定义"的成员/边界（同循环体 P3 模式；
     /// worker 线程私有，仅执行线程访问。须在 m_loopBodyNodes 填充之后调用）
     void collectSubFlowBodies(const QList<SubFlowDef> &defs, const QList<NodeBase *> &liveNodes);
+    /// P2-5：executeNode 异常出口的收口（清三类执行缓存 + 置轮失败位），
+    /// 与 try 内失败分支同口径。仅执行线程调用。
+    void clearNodeCachesOnException(NodeBase *node);
     void resetState();
     /// 记录一个节点被跳过（未激活分支 / 循环体由外层调度），并对外发 nodeSkipped
     void recordNodeSkipped(NodeBase *node, const QString &reason);

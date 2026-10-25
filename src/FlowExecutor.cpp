@@ -1357,6 +1357,7 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
     } catch (const std::exception &e) {
         paramRefs.restore();   // 幂等：正常路径已在第一条 emit 前还原，这里兜"还原之前抛出"的路径
         success = false;        // 见函数尾注释：异常一律按失败收口，不再被 m_lastNodeSuccess 覆盖回 true
+        clearNodeCachesOnException(node);   // P2-5：异常出口与正常失败路径同一套收口
         emit executionError(tr("Error executing node %1: %2").arg(node->name()).arg(e.what()));
         emit nodeExecuted(node, false);
     } catch (...) {
@@ -1366,6 +1367,7 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
         // propagateData / 缓存写入 / 落库 / 全局变量，以及**直连槽**——emit 就在这个 try 内。
         paramRefs.restore();
         success = false;
+        clearNodeCachesOnException(node);   // P2-5：同上
         emit executionError(tr("算子 %1 执行期间抛出非标准异常（类型未知），本轮按失败处理").arg(node->name()));
         emit nodeExecuted(node, false);
     }
@@ -1373,6 +1375,25 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
     // 异常路径已在上面把 success 置假 ⇒ 失败一定拦停（旧写法在 handler 里写 m_lastNodeSuccess=false，
     // 却被这一行的 `success`（异常前可能已是 true）覆盖，等于"报了 executionError 却不拦停"）
     m_lastNodeSuccess = success;
+}
+
+// P2-5（2026-10-25 复核）：executeNode 的异常出口必须与"正常失败路径"同一套收口。
+// try 里的失败分支（清三类执行缓存 / 置 m_roundHadFailure）在异常抛出时会被跳过：
+//   · 若异常发生在输出已发布之后，三类缓存里留着失败节点的半成品输出 ⇒ 下游读到脏数据；
+//   · m_roundHadFailure 不置位 ⇒ 轮末汇总仍写成 passed=true ⇒ 良率虚高。
+// 触发面窄（NodeBase::execute 已吞掉算子自身异常；能逃到这里的多为直连槽、缓存写入、
+// 落库、全局变量），但一旦触发就是"报了错却照常算 OK"。
+void FlowExecutor::clearNodeCachesOnException(NodeBase *node)
+{
+    if (!node)
+        return;
+    {
+        QMutexLocker cacheLock(&m_graphCacheMutex);
+        m_nodeData[node].clear();
+        m_nodeOutputVars[node->moduleId()].clear();
+        m_validOutputs.remove(node);
+    }
+    m_roundHadFailure = true;   // 本轮按失败收口（与 try 内失败分支同口径）
 }
 
 void FlowExecutor::collectNodeOutputVars(NodeBase *node)
