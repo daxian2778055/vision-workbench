@@ -42,8 +42,9 @@
            does not replace, or the two generators produced different bytes
            (tools/version_header_check.py)
       18 = a wiring invariant drifted: an execution slot no longer re-evaluates the canvas lock,
-           MainWindow::addNode (toolbox double-click) no longer checks it, or a hardcoded
-           "Admin" audit operator reappeared under src/ (tools/wiring_checks.py)
+           MainWindow::addNode no longer checks it, a hardcoded "Admin" audit operator
+           reappeared under src/, or the camera task ledger / closeCamera drain guard was
+           bypassed (tools/wiring_checks.py)
 
     Note: this script is intentionally ASCII-only, and therefore carries no UTF-8 BOM
     (PowerShell 5.1 only needs a BOM when a .ps1 contains non-ASCII text). The two-sided
@@ -477,7 +478,7 @@ Write-Ok "enforced open items re-measured as closed ($hygieneExe)"
 #        action is logged as the same person.
 # Selftest first (three arms: remove the call, defuse the check, plant a hardcoded operator) so a
 # dead gate cannot read green. Any non-zero = exit 18.
-Write-Step "Wiring checks (canvas lock / audit operator)"
+Write-Step "Wiring checks"
 $elwSelfLog = Join-Path $RepoRoot 'ci-edit-lock-selftest.log'
 $elwSelfArgs = $hygienePre + @('tools/wiring_checks.py', '--repo', $RepoRoot, '--selftest')
 & $hygieneExe @elwSelfArgs 2>&1 | Tee-Object -FilePath $elwSelfLog | Out-Null
@@ -508,7 +509,7 @@ if ($elwSelfCode -ne 0 -or $elwCode -ne 0) {
     Pop-Location
     exit 18
 }
-Write-Ok "canvas lock re-evaluated in every execution slot and addNode guarded"
+Write-Ok "wiring invariants hold (canvas lock / audit operator / camera task ledger)"
 
 # ------------------------------------------------------------------ 1m-0
 # Why it runs here: build/generated/Version.h has two producers -- the configure-time

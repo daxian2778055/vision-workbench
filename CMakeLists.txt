@@ -228,6 +228,7 @@ set(SOURCES
     src/PlcCommNode.cpp
     src/PlcConfigDialog.cpp
     src/MvsImageSourceNode.cpp
+    src/CameraTaskLedger.cpp
     src/HalconImageSourceNode.cpp
     src/ColorConversionNode.cpp
     src/DataObject.cpp
@@ -486,6 +487,7 @@ set(HEADERS
     include/SortNode.h
     include/RecordNode.h
     include/MvsImageSourceNode.h
+    include/CameraTaskLedger.h
     include/HalconImageSourceNode.h
     include/ColorConversionNode.h
     include/DataObject.h
@@ -1111,6 +1113,14 @@ if(MSVC)
     vfp_configure_gui_test(DbThreadConnectionCleanupTest)
 endif()
 
+# 相机线程池任务在飞账（2026-10-25 复核 P2-3）：关相机前必须等任务排空
+if(MSVC)
+    add_executable(camera_task_ledger_test tests/camera_task_ledger_test.cpp)
+    target_link_libraries(camera_task_ledger_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    vfp_add_qtest(NAME CameraTaskLedgerTest TARGET camera_task_ledger_test)
+    vfp_configure_gui_test(CameraTaskLedgerTest)
+endif()
+
 # 良率目标监控（P1-11）：闭锁只报一次 / 恢复重置 / 滚动窗口 / 最小样本 / 配置变更重置
 if(MSVC)
     add_executable(yield_monitor_test tests/yield_monitor_test.cpp)
@@ -1352,7 +1362,7 @@ if(MSVC)
     set(VFP_TESTS NodeCoreTest OpencvSerializationTest IntegrationTest DatabaseTest PerfTest
                   ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest CameraIoTest
                   DnnSegmentTest OpencvDefectAlignTest SoakTest StatisticsReportTest SchemePackageTest
-                  I18nTest SubFlowTest EditLockReleaseTest RoundAbortSummaryTest UndoHistoryAfterLoadTest NodeExceptionExitTest RejectedConnectionUndoTest DbThreadConnectionCleanupTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
+                  I18nTest SubFlowTest EditLockReleaseTest RoundAbortSummaryTest UndoHistoryAfterLoadTest NodeExceptionExitTest RejectedConnectionUndoTest DbThreadConnectionCleanupTest CameraTaskLedgerTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
                   FactoryPasswordGuardTest FeatureMatchTest CalibChainTest OpencvNodesTest
                   ProjectPathsTest FlowCachePurgeLedgerTest ExecutionControlPolicyTest
                   AuxDialogMenuRouterTest ModuleEditorRegistryTest UITranslatorTest

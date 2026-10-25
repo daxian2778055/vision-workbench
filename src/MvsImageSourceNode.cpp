@@ -2,6 +2,7 @@
 #include "DataObject.h"
 #include "GlobalCameraManager.h"
 #include "GlobalCameraDialog.h"
+#include "CameraTaskLedger.h"   // P2-3：相机线程池任务的在飞账
 #include "ProjectPaths.h"   // 179 行：目录快照位执行锚定方案目录
 #include <QDebug>
 #include <QDir>
@@ -43,6 +44,11 @@ public:
 
     void run() override
     {
+        // P2-3：在飞账——closeCamera 靠它决定能否安全拆句柄（任务在锁外拿裸句柄调 SDK）
+        CameraTaskLedger::enter();
+        struct LeaveGuard {
+            ~LeaveGuard() { CameraTaskLedger::leave(); }
+        } leaveGuard;
         if (!m_node) {
             return;
         }
@@ -745,8 +751,16 @@ void MvsImageSourceNode::openCameraInThread()
 
 void MvsImageSourceNode::closeCamera()
 {
+    // P2-3（2026-10-25 复核）：先等相机线程池任务排空，再拆句柄。
+    // 两个要点：① 必须**在取 m_mutex 之前**等——任务开头也要取同一把锁，持锁等待会死锁；
+    //          ② 超时未排空就跳过关闭（句柄留给进程退出时回收），而不是硬拆。
+    if (!CameraTaskLedger::waitDrained(CameraTaskLedger::drainTimeoutMs())) {
+        VFP_DEBUG << "相机线程池任务未排空，跳过本次关闭（句柄留给进程退出时回收）";
+        return;
+    }
+
     QMutexLocker locker(&m_mutex);
-    
+
     if (m_hCamera && m_globalCameraName.isEmpty()) {
         // 仅关闭本地相机（非全局相机）
         MV_CC_StopGrabbing(m_hCamera);

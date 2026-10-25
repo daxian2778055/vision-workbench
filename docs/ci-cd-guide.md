@@ -380,11 +380,13 @@ python tools\release_manifest_check.py --repo . --expect-tag rc-YYYYMMDD
 
 - **运行期** `EditLockReleaseTest`：流程因节点失败停止后，`allowsGraphEditing()` 必须为真，
   且按该判据重算后画布解锁、节点恢复 `ItemIsMovable`——执行器若停在 Running 即红。
-- **接线** `tools/wiring_checks.py`（CI 第 18 步，先跑三枚自证臂）：四个执行槽的函数体
-  必须各有 `updateEditLockForCurrentScene`，`addNode` 必须有 `isEditLocked`；且 `src/` 下不得
-  出现硬编码 `logOperation("Admin", …)`（审计操作者必须取 `SessionManager::currentUser()`，
-  否则所有用户动作都记成同一个人）。删掉任一处即红——运行期用例钉不住"某个槽忘了调"，
-  这正是这类缺陷所在的位置。
+- **接线** `tools/wiring_checks.py`（CI 第 18 步，先跑五枚自证臂）：
+  ① 四个执行槽的函数体必须各有 `updateEditLockForCurrentScene`，`addNode` 必须有 `isEditLocked`；
+  ② `src/` 下不得出现硬编码 `logOperation("Admin", …)`（审计操作者必须取
+  `SessionManager::currentUser()`，否则所有用户动作都记成同一个人）；
+  ③ 相机线程池任务必须进出 `CameraTaskLedger`，且 `MvsImageSourceNode::closeCamera`
+  拆句柄前必须 `waitDrained`（否则关窗/切方案会与在飞任务抢句柄 → use-after-free）。
+  删掉任一处即红——运行期用例钉不住"某个槽忘了调"，这正是这类缺陷所在的位置。
 
 ## 配置文件详解
 

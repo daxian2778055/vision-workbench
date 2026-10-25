@@ -50,6 +50,10 @@ REQUIRED_SLOTS = [
 HARDCODED_OPERATOR_RX = re.compile(
     r'logOperation\(\s*(?:QStringLiteral\(\s*)?"Admin"')
 
+# INV3：相机线程池任务的生命周期（P2-3）——任务自己进出在飞账，关相机前必须等排空
+MVS_REL = os.path.join("src", "MvsImageSourceNode.cpp")
+CAMERA_LEDGER_TOKENS = ["CameraTaskLedger::enter()", "CameraTaskLedger::leave()"]
+
 
 def out(line):
     sys.stdout.write(line + "\n")
@@ -148,6 +152,39 @@ def selftest(repo):
             problems.append("arm3_dead")
             out("[ELW] selftest_arm3=FAIL(塞入硬编码 Admin 操作者后仍判绿：这道闸有盲点)")
 
+    # 臂4/5：相机生命周期（P2-3）——任务不再记在飞账 / closeCamera 不再等排空
+    mvs_src = os.path.join(repo, MVS_REL)
+    if not os.path.isfile(mvs_src):
+        problems.append("arm4_setup_failed")
+        out("[ELW] selftest_arm4=FAIL(找不到 %s)" % MVS_REL)
+    else:
+        base = open(mvs_src, "rb").read().decode("utf-8", "replace")
+        with tempfile.TemporaryDirectory(prefix="vfp_elw_st45_") as tmp:
+            # 臂4：摘掉 enter（任务不再进账）
+            arm4_path = os.path.join(tmp, "arm4.cpp")
+            with open(arm4_path, "w", encoding="utf-8") as fh:
+                fh.write(base.replace("CameraTaskLedger::enter();", "", 1))
+            if check_camera_lifecycle(arm4_path):
+                out("[ELW] selftest_arm4=ok(任务不记在飞账后判红)")
+            else:
+                problems.append("arm4_dead")
+                out("[ELW] selftest_arm4=FAIL(摘掉 enter 后仍判绿)")
+
+            # 臂5：关相机不再等排空
+            arm5_path = os.path.join(tmp, "arm5.cpp")
+            arm5 = base.replace("if (!CameraTaskLedger::waitDrained(CameraTaskLedger::drainTimeoutMs()))",
+                                "if (false)", 1)
+            with open(arm5_path, "w", encoding="utf-8") as fh:
+                fh.write(arm5)
+            if arm5 == base:
+                problems.append("arm5_setup_failed")
+                out("[ELW] selftest_arm5=FAIL(未能构造：closeCamera 里找不到 waitDrained 判据)")
+            elif check_camera_lifecycle(arm5_path):
+                out("[ELW] selftest_arm5=ok(closeCamera 不等排空后判红)")
+            else:
+                problems.append("arm5_dead")
+                out("[ELW] selftest_arm5=FAIL(关相机不等排空后仍判绿)")
+
     return problems
 
 
@@ -179,6 +216,38 @@ def check_audit_operator(repo):
     return findings
 
 
+def check_camera_lifecycle(mvs_path):
+    """INV3：任务进出在飞账 + closeCamera 拆句柄前等待排空。返回 findings。"""
+    findings = []
+    if not os.path.isfile(mvs_path):
+        out("[ELW] finding=mvs_source_missing: %s" % mvs_path)
+        return ["mvs_source_missing"]
+
+    text = open(mvs_path, "rb").read().decode("utf-8", "replace")
+    for tok in CAMERA_LEDGER_TOKENS:
+        ok = tok in text
+        out("[ELW] camera_ledger=%s %s" % (tok, "ok" if ok else "MISSING"))
+        if not ok:
+            findings.append("camera_ledger_missing:%s" % tok)
+
+    lines = text.splitlines()
+    idx = -1
+    for i, line in enumerate(lines):
+        if line.startswith("void MvsImageSourceNode::closeCamera("):
+            idx = i
+            break
+    if idx < 0:
+        out("[ELW] finding=closeCamera_not_found")
+        findings.append("closeCamera_not_found")
+    else:
+        body = body_of(lines, idx)
+        ok = "waitDrained" in body
+        out("[ELW] closeCamera_waits=%s %s" % ("waitDrained", "ok" if ok else "MISSING"))
+        if not ok:
+            findings.append("missing_waitDrained_in_closeCamera")
+    return findings
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", default=".")
@@ -200,6 +269,7 @@ def main():
         findings += selftest(repo)
     findings += check(text)
     findings += check_audit_operator(repo)
+    findings += check_camera_lifecycle(os.path.join(repo, MVS_REL))
 
     out("[ELW-INV] findings=%d" % len(findings))
     if findings:
