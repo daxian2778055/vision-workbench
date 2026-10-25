@@ -99,7 +99,25 @@
       "exe_bytes": 9731584,
       "package_dir": "dist/VisionFlowPlatform-rc-20261025.5",
       "recorded_at": "2026-10-25",
-      "recorded_note": "当前装机包：中止标志提前（异常不再给中止调用点补 NG 行）+ 中止有效位运行期腿 + 脚本确认开关未登录 fail-closed + 部署自检 START/超时读取/stderr + 39 条英文翻译补齐（含脚本确认 6 条）+ 弹框措辞按 Windows 账户 + 启动提示移到登录后"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261025.7 取代（后者含其全部改动）"
+    },
+    {
+      "tag": "rc-20261025.6",
+      "commit": "a6faca13b52dd635398027b407c77011676a6aed",
+      "exe_md5": "999654dd68590ae6b8e1cfec68cbd932",
+      "exe_bytes": 9731584,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261025.6",
+      "recorded_at": "2026-10-25",
+      "recorded_note": "未发布：部署自检被脚本执行前确认的模态框阻塞（START 诊断显示卡在 ScriptNode，10 分钟超时、无自检报告），不满足发版件要求；已由 rc-20261025.7 修复该缺陷并取代，包于同日清理"
+    },
+    {
+      "tag": "rc-20261025.7",
+      "commit": "7c0c9ae60d0a106f7c9b5e063f889fb107899375",
+      "exe_md5": "d9168b7daf2903abad6b9524a090f495",
+      "exe_bytes": 9731584,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261025.7",
+      "recorded_at": "2026-10-25",
+      "recorded_note": "当前装机包：译文静态闸 + 脚本确认 6 条全钉 + 菜单路径文案/部署超时说明消歧 + 首次安装提示并入写闸常驻提示 + 修 --selftest-nodes 被脚本确认模态框阻塞（自检 1.4 秒完成）"
     }
   ],
   "legacy_backfilled": [
