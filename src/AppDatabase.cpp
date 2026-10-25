@@ -297,6 +297,19 @@ QSqlDatabase AppDatabase::threadDatabase() const
             noteFailure(QStringLiteral("threadDatabase"), db, pragma.lastError().text(), sql);
         }
     }
+
+    // 线程结束时摘除本线程的连接（2026-10-25 复核 P3-10）：连接名按线程 ID 编，
+    // 而线程退出后其 ID 可能被新线程复用——旧连接仍挂在 QSqlDatabase 注册表里，
+    // 新线程 contains(name) 为真、拿到的却是"别人家的线程"建的连接（Qt 只告警，
+    // 随后查询失败），长期换方案时是"换了方案却连到旧库"一类难查现象。
+    // 只有 QThread 管理的线程能挂 finished；裸 std::thread 建的连接留到进程退出
+    //（数量有界，且这些线程目前不写库）。
+    if (QThread *self = QThread::currentThread()) {
+        QObject::connect(self, &QThread::finished, this, [name]() {
+            if (QSqlDatabase::contains(name))
+                QSqlDatabase::removeDatabase(name);
+        }, Qt::DirectConnection);
+    }
     return db;
 }
 

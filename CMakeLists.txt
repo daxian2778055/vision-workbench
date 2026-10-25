@@ -1103,6 +1103,14 @@ if(MSVC)
     vfp_configure_gui_test(RejectedConnectionUndoTest)
 endif()
 
+# 每线程数据库连接的生命周期（2026-10-25 复核 P3-10）：线程退出后连接必须摘除
+if(MSVC)
+    add_executable(db_thread_connection_cleanup_test tests/db_thread_connection_cleanup_test.cpp)
+    target_link_libraries(db_thread_connection_cleanup_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    vfp_add_qtest(NAME DbThreadConnectionCleanupTest TARGET db_thread_connection_cleanup_test)
+    vfp_configure_gui_test(DbThreadConnectionCleanupTest)
+endif()
+
 # 良率目标监控（P1-11）：闭锁只报一次 / 恢复重置 / 滚动窗口 / 最小样本 / 配置变更重置
 if(MSVC)
     add_executable(yield_monitor_test tests/yield_monitor_test.cpp)
@@ -1344,7 +1352,7 @@ if(MSVC)
     set(VFP_TESTS NodeCoreTest OpencvSerializationTest IntegrationTest DatabaseTest PerfTest
                   ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest CameraIoTest
                   DnnSegmentTest OpencvDefectAlignTest SoakTest StatisticsReportTest SchemePackageTest
-                  I18nTest SubFlowTest EditLockReleaseTest RoundAbortSummaryTest UndoHistoryAfterLoadTest NodeExceptionExitTest RejectedConnectionUndoTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
+                  I18nTest SubFlowTest EditLockReleaseTest RoundAbortSummaryTest UndoHistoryAfterLoadTest NodeExceptionExitTest RejectedConnectionUndoTest DbThreadConnectionCleanupTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
                   FactoryPasswordGuardTest FeatureMatchTest CalibChainTest OpencvNodesTest
                   ProjectPathsTest FlowCachePurgeLedgerTest ExecutionControlPolicyTest
                   AuxDialogMenuRouterTest ModuleEditorRegistryTest UITranslatorTest
