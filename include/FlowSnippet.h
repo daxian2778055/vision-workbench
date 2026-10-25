@@ -45,8 +45,10 @@ public:
 
     /// 插入片段：返回新建的算子（失败返回空且场景不被改动）。
     /// at 为插入点（片段左上角落在这里）。**撤销由调用方在插入前记录一次**（内部批量抑制分步记录）。
+    /// droppedConnections：未能接回的连线数（端口越界/成环）——调用方应如实告知用户，
+    /// 否则"粘贴后少了一根线"现场看不出来（2026-10-25 复核 P3-7）。
     static QList<NodeBase *> insert(FlowScene *scene, const QJsonObject &snippet, const QPointF &at,
-                                    QString *error = nullptr);
+                                    QString *error = nullptr, int *droppedConnections = nullptr);
 
     /// 建议的插入左上角：让片段整体落在 center（一般传视图中心），而不是让左上角落在那里
     /// ——否则大片段会有一多半跑到视口外，用户以为"没粘上"。

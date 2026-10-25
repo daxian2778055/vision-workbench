@@ -200,8 +200,10 @@ bool FlowSnippet::isValid(const QJsonObject &snippet, QString *error)
 }
 
 QList<NodeBase *> FlowSnippet::insert(FlowScene *scene, const QJsonObject &snippet, const QPointF &at,
-                                      QString *error)
+                                      QString *error, int *droppedConnectionsOut)
 {
+    if (droppedConnectionsOut)
+        *droppedConnectionsOut = 0;
     QList<NodeBase *> created;
     if (!scene)
         return created;
@@ -306,6 +308,10 @@ QList<NodeBase *> FlowSnippet::insert(FlowScene *scene, const QJsonObject &snipp
     }
 
     scene->endUndoBatch();
+    // 掉线数交给调用方（2026-10-25 复核 P3-7）：此前只累加不报告，粘贴后"少了一根线"
+    // 现场完全看不出来，还以为片段本身就是断的。
+    if (droppedConnectionsOut)
+        *droppedConnectionsOut = droppedConnections;
     return created;
 }
 

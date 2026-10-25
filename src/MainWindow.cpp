@@ -2170,7 +2170,9 @@ bool MainWindow::insertSnippetIntoScene(FlowScene *scene, const QJsonObject &sni
 
     scene->recordUndo();   // 一次插入 = 一步撤销（内部批量抑制分步记录）
     const QPointF at = FlowSnippet::suggestedInsertTopLeft(snippet, viewCenterInScene(scene));
-    const QList<NodeBase *> created = FlowSnippet::insert(scene, snippet, at, error);
+    int droppedConnections = 0;
+    const QList<NodeBase *> created =
+        FlowSnippet::insert(scene, snippet, at, error, &droppedConnections);
     if (created.isEmpty()) {
         if (error)
             ui->statusBar->showMessage(tr("插入片段失败：%1").arg(*error), 6000);
@@ -2185,8 +2187,13 @@ bool MainWindow::insertSnippetIntoScene(FlowScene *scene, const QJsonObject &sni
         if (NodeGraphicsItem *item = scene->getGraphicsItemForNode(n))
             item->setSelected(true);
     }
-    const QString msg = tr("已插入 %1 个算子").arg(created.size());
-    ui->statusBar->showMessage(msg, 5000);
+    // 掉线必须说出来（2026-10-25 复核 P3-7）：此前只累加不报告，粘贴后"少了一根线"
+    // 现场看不出来，还会以为片段本身是断的。
+    const QString msg = droppedConnections > 0
+        ? tr("已插入 %1 个算子；%2 条连线未能接回（端口越界或会成环）")
+              .arg(created.size()).arg(droppedConnections)
+        : tr("已插入 %1 个算子").arg(created.size());
+    ui->statusBar->showMessage(msg, droppedConnections > 0 ? 8000 : 5000);
     logMessage(msg);
     return true;
 }

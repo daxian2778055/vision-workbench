@@ -43,6 +43,7 @@ private slots:
     void testGroupTravelsOnlyWhenFullySelected();
     void testPastedSnippetExecutes();
     void testSingleUndoStep();
+    void testDroppedConnectionsAreReported();
     void testInsertIntoLockedSceneRejected();
     void testCanvasCtrlCVEmitsRequests();
     void testSuggestedInsertTopLeftCentersCluster();
@@ -445,6 +446,37 @@ void FlowSnippetTest::testSingleUndoStep()
     QVERIFY(target.undo());
     QCOMPARE(int(target.nodes().size()), baseline);
     QCOMPARE(int(target.connections().size()), 0);
+}
+
+// 插入时未能接回的连线必须如实计数交给调用方（2026-10-25 复核 P3-7）：
+// 此前只累加不报告，粘贴后"少了一根线"现场看不出来。
+void FlowSnippetTest::testDroppedConnectionsAreReported()
+{
+    FlowScene source;
+    NodeBase *a = addNode(&source, QStringLiteral("Delay"), QPointF(0, 0));
+    NodeBase *b = addNode(&source, QStringLiteral("Delay"), QPointF(220, 0));
+    QVERIFY(a && b);
+    QVERIFY(source.createConnection(a->outputPorts().first(), b->inputPorts().first(), true));
+
+    QJsonObject snippet = FlowSnippet::capture(&source, { a, b });
+    // 追加一条指向"片段里不存在的算子序号"的连线：插入时必须丢弃并计入掉线数
+    QJsonArray conns = snippet.value(QStringLiteral("connections")).toArray();
+    QJsonObject bogus;
+    bogus[QStringLiteral("from")] = 99;   // 越界序号
+    bogus[QStringLiteral("to")] = 0;
+    bogus[QStringLiteral("fromPort")] = 0;
+    bogus[QStringLiteral("toPort")] = 0;
+    conns.append(bogus);
+    snippet[QStringLiteral("connections")] = conns;
+
+    FlowScene target;
+    int dropped = 0;
+    QString error;
+    const QList<NodeBase *> created =
+        FlowSnippet::insert(&target, snippet, QPointF(0, 0), &error, &dropped);
+    QVERIFY2(created.size() == 2, qPrintable(error));
+    QCOMPARE(dropped, 1);                       // 掉线必须报告
+    QCOMPARE(target.connections().size(), 1);   // 合法的那条照常接回
 }
 
 void FlowSnippetTest::testInsertIntoLockedSceneRejected()
