@@ -135,7 +135,16 @@
       "exe_bytes": 9731584,
       "package_dir": "dist/VisionFlowPlatform-rc-20261025.9",
       "recorded_at": "2026-10-25",
-      "recorded_note": "当前装机包：静态闸两处边界（无空格 <message/> 计数差判红、vanished/obsolete 按 translation 属性判定且 ignoredCount 对账）+ 夹具腿 3 形态 + 改密后提示移到模态框之后"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261025.10 取代（后者含其全部改动）"
+    },
+    {
+      "tag": "rc-20261025.10",
+      "commit": "18128fee971fc7755c4bbd280f075c09addd2963",
+      "exe_md5": "25b36a33bf56ea74ce2caecc55c5ca6e",
+      "exe_bytes": 9736704,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261025.10",
+      "recorded_at": "2026-10-25",
+      "recorded_note": "当前装机包：P1-1 OpenCV 桥接按 HALCON 类型真实映射深度（16 位图不再拆字节对）+ P2-1 非 8U 不再饱和截断 + P2-2 N 点共线 NaN 判红 + P2-3 N 点坏行点名拒收 + P2-4 测量空结果/内层异常不再判绿 + P3 五项（无效 Measure 导 NaN、异常路径释放句柄、缺 descr 判红、标定成功后清帧、F-3 文档结案）"
     }
   ],
   "legacy_backfilled": [
