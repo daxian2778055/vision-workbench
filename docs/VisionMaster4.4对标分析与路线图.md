@@ -293,6 +293,20 @@
 | `src/NodeSearchWidget.cpp:220` | `// TODO: 高亮节点` | 工具库 / 画布 Ctrl+F 搜索到节点后**不做高亮定位**（FR1.7 的"英文名/别名参与搜索"已交付，这是它的可视化收尾） |
 | `src/OutputDataViewer.cpp:311` | `// TODO: 区域可视化显示` | 结果查看器不显示**区域几何**（测量 / Blob 的 region 没有可视化出口，现场只能看数值） |
 
+**已修的复核缺陷（2026-10-25 登记）**：
+
+| 级别 | 缺陷 | 修法 | 守卫 |
+|---|---|---|---|
+| P1 | 数据库时间戳三处口径打架：存储是 `CURRENT_TIMESTAMP`(UTC)，查询把 QDateTime 直接绑定（Qt 写成本地 ISO-T，`'T' > ' '` 使同一天的行全落在 BETWEEN 之外）、读回把 UTC 墙钟当本地解析、purge cutoff 用本地串 ⇒ 凌晨查报表/报警/结果全是 0 行、界面整体慢一个时区偏移 | `AppDatabase` 统一收口 `utcBindText`/`readUtcTimestamp` 两个辅助，无需迁移历史数据 | 三条回归腿（最近 24h / 今天 00:00 跨午夜 / 读回时刻），实测破坏绑定后变红 |
+| P2-1 | 中途停止的一轮被写成「整轮 OK」：轮内 break 后轮末汇总照常执行，半截流程记 `passed=true`，良率把人为中断算成 OK 产品（YieldMonitor 只读汇总行） | 轮内因停止 break 时置 `m_roundAborted`，轮末跳过汇总行（已执行节点记录照常落库） | `RoundAbortSummaryTest` 两腿，破坏跳过逻辑后变红 |
+| P2-2 | 打开方案后撤销栈被半成品快照塞满（20 节点≈39 步），第一次 Ctrl+Z 拆掉刚载入的流程 | `sceneFromJson` 末尾 `clearUndoHistory()`（覆盖全部调用方）；恢复期守卫 `m_restoring`，否则 undo 的 redo 栈被抹掉 | `UndoHistoryAfterLoadTest` 两腿（该腿正是抓到 redo 交互 bug 的） |
+
+**仍开放（本次未修，按风险排序待排期）**：P2-3 相机线程池任务与 closeCamera 无生命周期同步（UAF）；
+P2-4 全局相机关闭/解绑/自动重连不看消费者（UAF）；P2-5 `executeNode` 异常出口不清执行缓存、不置轮失败位（潜伏）；
+以及 12 条 P3（ownerContext 数据竞争、锁外清缓存、锁序、脚本进程先跑后入 Job、审计操作者硬编码 Admin、
+`cv::imwrite` 返回值丢弃、片段连线静默丢失、子流程出入口与循环体交叉、`QSqlDatabase` 按线程 ID 命名、
+被拒连线也记撤销、幽灵设备、MVS 参数提示不完全）。
+
 **已修的现场缺陷（2026-10-24 登记）**：操作中工具拖不进画布、双击入画布后节点不能动。根因两条：
 ① `MainWindow::onExecutionError` 未像其余执行槽那样重算画布锁（错误路径没走到 `executionFinished`
 时画布永久锁定）；② 工具箱双击走 `MainWindow::addNode` 直接 `createNode`，绕过 `FlowScene` 拖拽路径的
