@@ -7,6 +7,7 @@
 #include <QStringList>
 #include <QMutex>
 #include <QRecursiveMutex>
+#include <atomic>   // m_closing（P2-3 残留：关闭闸）
 
 class QComboBox;
 
@@ -81,6 +82,8 @@ public:
 
     /// 关闭相机（同时释放 MVS SDK 资源）
     void closeCamera();
+    /// 是否正在关闭（P2-3 残留）：后台任务据此在碰句柄前退让
+    bool isClosing() const { return m_closing.load(std::memory_order_relaxed); }
 
 signals:
     void imageAcquired(); // 移除了 Halcon 图像参数
@@ -124,6 +127,8 @@ private:
     // 相机状态
     bool m_cameraOpened;
     void* m_hCamera;
+    /// 关闭闸（P2-3 残留）：closeCamera 置位后，排队/新到的任务不再碰句柄
+    std::atomic<bool> m_closing{false};
     /// 单帧取图缓冲大小（按相机 PayloadSize 动态分配，避免高分辨率相机缓冲不足）
     unsigned int m_payloadSize = 10 * 1024 * 1024;
     bool m_isDetectingCameras;

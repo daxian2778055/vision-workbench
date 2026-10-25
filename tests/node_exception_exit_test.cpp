@@ -136,6 +136,21 @@ void NodeExceptionExitTest::exceptionInDirectSlotMakesRoundNg()
     QCOMPARE(summaries.size(), 1);
     QVERIFY2(!summaries.first().passed,
              "异常节点的这一轮被写成整轮 OK：异常出口没有置轮失败位（P2-5）");
+
+    // P3-1 残留（2026-10-25 复核）：异常出口还要与失败分支同口径——
+    // ① 清输出端口（否则 propagateData 回落到 getOutputData 仍读到半成品）
+    // ② 失败节点落库（否则追溯里只剩一条 NG 汇总，看不出是哪个算子）
+    QVERIFY2(gen->getOutputData(0).isNull(),
+             "异常节点的输出端口未清空：下游可能读到半成品输出（P3-1 残留）");
+    bool genRecorded = false;
+    const QList<InspectionRecord> all =
+        AppDatabase::instance()->queryResults(QDateTime::currentDateTime().addDays(-1),
+                                              QDateTime::currentDateTime().addSecs(60), 5000);
+    for (const InspectionRecord &r : all) {
+        if (r.nodeName == gen->fullName() && !r.passed)
+            genRecorded = true;
+    }
+    QVERIFY2(genRecorded, "异常节点没有落库：追溯只剩一条 NG 汇总（P3-1 残留）");
 }
 
 void NodeExceptionExitTest::controlRoundWithoutExceptionIsOk()

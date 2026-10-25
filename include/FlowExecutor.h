@@ -294,6 +294,9 @@ private:
     int m_statsLogIntervalMs = 60000; /// 统计日志间隔（ms），0=不输出
     bool m_roundHadFailure = false;   /// 本轮是否出现失败节点（仅执行线程访问）
     bool m_roundAborted = false;      /// 本轮是否被中途停止（仅执行线程访问）：半截流程不得计入整轮 OK
+    /// 人为停止请求（界面线程置、执行线程读）：轮末据此判"中止"，而不是看 Stopped 状态
+    /// ——失败停止同样是 Stopped，且被停止的算子可能自判失败（2026-10-25 复核 P2-1 残留）
+    std::atomic<bool> m_userStopRequested{false};
 
     // ---- worker 阶段观测（正式能力）：定位"worker 不退出"类挂起时可在挂起态安全轮询。
     // 执行线程在关键点写、任意线程经 workerPhaseName() 读；relaxed 原子，不参与任何业务逻辑。

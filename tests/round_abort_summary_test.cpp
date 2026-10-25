@@ -174,6 +174,14 @@ void RoundAbortSummaryTest::abortedLoopAtTailHasNoSummaryRow()
 
     auto token = FlowExecutorToken::create(new FlowExecutor());
     FlowExecutor &exec = *token->executor();
+    // 断言停止确实落在轮内（否则"没有汇总"可能只是因为压根没跑）
+    bool bodyStarted = false;
+    QObject::connect(&exec, &FlowExecutor::nodeExecuted, &exec,
+                     [&bodyStarted, body](NodeBase *n, bool) {
+                         if (n == body)
+                             bodyStarted = true;
+                     },
+                     Qt::DirectConnection);
     exec.setFlowName(QStringLiteral("loopAbortFlow"));
     exec.setFlowMode(FlowMode::SoftwareTrigger);
     exec.setFlowScene(&scene);
@@ -190,6 +198,7 @@ void RoundAbortSummaryTest::abortedLoopAtTailHasNoSummaryRow()
 
     const int after = summaryRows(QDateTime::currentDateTime().addDays(-1),
                                   QDateTime::currentDateTime().addSecs(60));
+    QVERIFY2(bodyStarted, "循环体没跑起来：本腿没验到'轮内中止'这条路径");
     QCOMPARE(after, before);   // 中止轮不得写汇总行
 }
 

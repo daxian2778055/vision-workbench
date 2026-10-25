@@ -410,7 +410,10 @@ void FlowExecutor::startExecution()
     if (m_runContext->state() == ExecutionState::Running) {
         return;
     }
-    
+
+    // 清掉上一轮遗留的"人为停止"标记（P2-1 残留）：两轮之间按停止时标记会一直悬着，
+    // 不清的话下一次启动的第一轮会被误判成中止、良率漏掉一整轮。
+    m_userStopRequested.store(false, std::memory_order_relaxed);
     setRunState(ExecutionState::Running);
     resetState();
     
@@ -489,6 +492,11 @@ void FlowExecutor::stepExecution()
 void FlowExecutor::stopExecution()
 {
     QMutexLocker locker(&m_mutex);
+    // 人为停止标记（2026-10-25 复核 P2-1 残留）：轮末据此判断"这一轮是被用户中止的"。
+    // 不能只看状态 Stopped——失败停止（stopOnFailure 的 setRunState(Stopped)）同样是 Stopped，
+    // 而且循环体里的算子在被停止时也可能把自己判失败（例如延时段），只看状态会把真失败
+    // 当成中止而从良率里抹掉。
+    m_userStopRequested.store(true, std::memory_order_relaxed);
     setRunState(ExecutionState::Stopped);
     m_stepMode = false;
     m_pendingExternalRounds = 0;   // S9：停止即放弃待补跑，避免"停止后又自己跑起来"
@@ -802,11 +810,9 @@ void FlowExecutor::run()
         // 只在主遍历的两个 break 点置位不够：循环体 executeLoop 在多个点直接 return、
         // 子流程 executeSubFlow 遇停止也直接返回——若那条路径恰好是最后一节点，主遍历
         // 自然结束，轮末仍会写 passed=true 的汇总。这里一处兜住所有退出路径。
-        {
-            QMutexLocker l(&m_mutex);
-            if (m_runContext->state() == ExecutionState::Stopped)
-                m_roundAborted = true;
-        }
+        if (m_userStopRequested.load(std::memory_order_relaxed))
+            m_roundAborted = true;   // 本轮被人为停止（不管有没有节点因此判失败）
+        m_userStopRequested.store(false, std::memory_order_relaxed);
         // P1-11 报表：轮末追加一条「整轮汇总」记录（见 InspectionRecord.h 的 kRoundSummaryNodeName）。
         // 为什么在这里做：记录是"每节点一条"且无轮次标识，报表据此只能算节点执行通过率、算不出良率；
         // 本行让"良率/趋势"有可靠口径。此刻 m_roundHadFailure 还没被 recordRoundFinished 复位，取值有效。
@@ -1396,6 +1402,12 @@ void FlowExecutor::clearNodeCachesOnException(NodeBase *node)
 {
     if (!node)
         return;
+    // ① 清输出端口（与正常失败分支同口径，2026-10-25 复核 P3-1 残留）：只清 m_nodeData
+    //    不够——propagateData 在没有缓存条目时会回落到 sourceNode->getOutputData(port)，
+    //    于是下游仍能读到失败节点的旧/半成品输出（stopOnFailure=false 时下游会继续跑）。
+    const QList<Port *> outPorts = node->outputPorts();
+    for (int i = 0; i < outPorts.size(); ++i)
+        node->setOutputData(i, QSharedPointer<DataObject>());
     {
         QMutexLocker cacheLock(&m_graphCacheMutex);
         m_nodeData[node].clear();
@@ -1403,6 +1415,16 @@ void FlowExecutor::clearNodeCachesOnException(NodeBase *node)
         m_validOutputs.remove(node);
     }
     m_roundHadFailure = true;   // 本轮按失败收口（与 try 内失败分支同口径）
+
+    // ② 失败节点同样落库 + 告警（P3-1 残留）：异常路径此前跳过这一块，追溯只剩一条 NG 汇总，
+    //    看不出是哪个算子、什么原因。与正常失败分支同表同字段。
+    if (!AppDatabase::instance()->databasePath().isEmpty()) {
+        const QString flowName = m_flowName.isEmpty() ? QStringLiteral("(未命名流程)") : m_flowName;
+        m_pendingResults.append(InspectionRecord{ 0, flowName, node->fullName(), false,
+                                                  QString(), QDateTime() });
+        AppDatabase::instance()->addAlarm(node->fullName(), QStringLiteral("Error"),
+                                          QStringLiteral("算子执行异常: %1").arg(node->name()));
+    }
 }
 
 void FlowExecutor::collectNodeOutputVars(NodeBase *node)
@@ -1700,10 +1722,12 @@ void FlowExecutor::collectSubFlowBodies(const QList<SubFlowDef> &defs, const QLi
             if (!m_loopBodyNodes.contains(m))
                 usable.append(m);
         }
-        // 入口/出口若恰好被循环体过滤掉，必须在这里显式判坏（2026-10-25 复核 P3-8）：
-        // 注释一直说"执行时会以定义损坏报错"，但代码没有这一步——m_subFlowIOs 仍指向循环体
-        // 里的节点，执行时喂进去的数据会被循环调度覆盖、出口读到的可能是上一轮旧值。
-        if (!usable.contains(inputNode) || !usable.contains(outputNode)) {
+        // 任何成员被循环体过滤掉都要判坏（2026-10-25 复核 P3-8 + 残留）：
+        // 入口/出口被过滤时会拿错数据；**内部成员**被过滤同样是半截子流程——主遍历跳过它、
+        // 调用点又没调度它，它根本不会执行，下游读到的还是上一轮的旧值。v1 不支持成员与
+        // 循环体交叉，所以一律显式报"定义损坏"，不静默跑半截。
+        if (usable.size() != members.size()
+            || !usable.contains(inputNode) || !usable.contains(outputNode)) {
             m_subFlowMembers.insert(def.name, {});
             m_subFlowIOs.insert(def.name, qMakePair(nullptr, nullptr));
             continue;

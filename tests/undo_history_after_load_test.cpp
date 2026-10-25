@@ -5,7 +5,8 @@
 // 撤销栈里约堆着 39 个半成品快照（上限 50）。用户打开方案后按一次 Ctrl+Z，刚载入的流程
 // 就被拆掉最后一条线/一个节点——"一打开就坏"的观感。
 //
-// 修法：ProjectManager::buildScenesFromJson 载入后调 FlowScene::clearUndoHistory()。
+// 修法：ProjectManager::sceneFromJson 末尾调 FlowScene::clearUndoHistory()（放在更里层，
+//       打开方案/崩溃恢复/片段/测试所有调用方都经过它）。
 // 本用例钉住两侧：① 载入后 canUndo/canRedo 都为 false；② 之后正常编辑仍能记录、能撤销
 //（证明不是把撤销功能整个关掉）。
 #include "FlowScene.h"

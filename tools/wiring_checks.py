@@ -11,6 +11,9 @@
   INV2 审计操作者（2026-10-25 复核 P3-5：用户管理日志的操作者写死 "Admin"）
        src/ 下不得出现 logOperation(...,"Admin",...) 这类硬编码操作者——
        操作者必须取 SessionManager::currentUser()，否则审计日志里所有动作都记成同一个人。
+  INV3 相机线程池任务的生命周期（2026-10-25 复核 P2-3：关相机与在飞任务抢句柄）
+       CameraOperationTask 必须进出 CameraTaskLedger，且 closeCamera 拆句柄前必须
+       waitDrained（先关闸再排空；超时跳过关闭），否则就是 use-after-free。
 
 用法：python tools/wiring_checks.py [--repo .] [--selftest]
 输出契约（ci.ps1 按前缀筛行）：

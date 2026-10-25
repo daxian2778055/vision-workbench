@@ -40,16 +40,28 @@ public:
     };
 
     CameraOperationTask(MvsImageSourceNode *node, OperationType operation)
-        : m_node(node), m_operation(operation) {}
+        : m_node(node), m_operation(operation)
+    {
+        // P2-3（2026-10-25 复核残留）：**入队即记账**，而不是等 run() 开始。
+        // 只数"已进入 run()"的任务时，QThreadPool 里排队的任务不计入账：waitDrained 看到 0
+        // 返回后、拆句柄之前，一个排队任务开始并复制到非空句柄 → 仍是 UAF 窗口。
+        CameraTaskLedger::enter();
+    }
+
+    ~CameraOperationTask() override
+    {
+        CameraTaskLedger::leave();   // 与构造成对（QRunnable autoDelete，池子负责析构）
+    }
 
     void run() override
     {
-        // P2-3：在飞账——closeCamera 靠它决定能否安全拆句柄（任务在锁外拿裸句柄调 SDK）
-        CameraTaskLedger::enter();
-        struct LeaveGuard {
-            ~LeaveGuard() { CameraTaskLedger::leave(); }
-        } leaveGuard;
         if (!m_node) {
+            return;
+        }
+        // 关闭闸（P2-3 残留）：closeCamera 在等待排空前先置 closing；此后才启动的任务
+        // 一律不碰句柄（它已入账，等它返回即可，绝不与拆句柄并发）。
+        if (m_node->isClosing()) {
+            VFP_DEBUG << "相机正在关闭，跳过本任务:" << int(m_operation);
             return;
         }
         switch (m_operation) {
@@ -655,6 +667,9 @@ bool MvsImageSourceNode::openCamera()
 
 void MvsImageSourceNode::openCameraInThread()
 {
+    // 重新打开 = 解除关闭闸（P2-3 残留）：closeCamera 置位后，任务在入口退让；
+    // 打开动作本身要把闸撤回，否则打开后所有参数下发都会被误挡。
+    m_closing.store(false, std::memory_order_relaxed);
     try {
         QString cameraName;
         {
@@ -751,11 +766,14 @@ void MvsImageSourceNode::openCameraInThread()
 
 void MvsImageSourceNode::closeCamera()
 {
-    // P2-3（2026-10-25 复核）：先等相机线程池任务排空，再拆句柄。
-    // 两个要点：① 必须**在取 m_mutex 之前**等——任务开头也要取同一把锁，持锁等待会死锁；
-    //          ② 超时未排空就跳过关闭（句柄留给进程退出时回收），而不是硬拆。
+    // P2-3（2026-10-25 复核 + 同日残留修复）：先关闸、再等相机线程池任务排空，最后拆句柄。
+    // 三个要点：① 先置 closing——此后才启动/排队的任务在 run() 入口就退让，不会拿到句柄；
+    //          ② 必须**在取 m_mutex 之前**等——任务开头也要取同一把锁，持锁等待会死锁；
+    //          ③ 超时未排空就跳过关闭（句柄留给进程退出时回收），并撤闸让相机继续可用。
+    m_closing.store(true, std::memory_order_relaxed);
     if (!CameraTaskLedger::waitDrained(CameraTaskLedger::drainTimeoutMs())) {
         VFP_DEBUG << "相机线程池任务未排空，跳过本次关闭（句柄留给进程退出时回收）";
+        m_closing.store(false, std::memory_order_relaxed);   // 没关成：相机仍可用，撤闸
         return;
     }
 
@@ -1557,9 +1575,13 @@ bool MvsImageSourceNode::tryAutoReconnect()
             // P2-4（2026-10-25 复核）：只有"我是唯一消费者"时才允许拆重开。别的节点也在用
             // 这台全局相机时，拆句柄等于在它的取图调用里 UAF——宁可这次不重连，等它自己恢复。
             const QStringList consumers = gcm->consumersForCamera(cam);
-            if (consumers.size() > 1) {
-                VFP_DEBUG << "全局相机仍有其它消费者，跳过自动重连（不拆共享句柄）:"
-                          << cam << consumers;
+            // 必须确认"唯一的那个消费者就是我"（2026-10-25 复核 P2-4 残留）：只按数量判，
+            // 在登记缺失/竞态下可能把别人的句柄 force 拆掉（我自己的登记恰好没写进去时数量也是 1）。
+            const bool soleConsumerIsMe =
+                (consumers.size() == 1 && consumers.first() == m_cameraConsumerId);
+            if (!soleConsumerIsMe) {
+                VFP_DEBUG << "全局相机不是本节点独占，跳过自动重连（不拆共享句柄）:"
+                          << cam << consumers << "me:" << m_cameraConsumerId;
                 return false;
             }
             gcm->closeCamera(cam, /*force*/ true);   // 我是唯一消费者：强制拆（默认会被消费者闸拒）

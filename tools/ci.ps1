@@ -476,8 +476,9 @@ Write-Ok "enforced open items re-measured as closed ($hygieneExe)"
 #   INV2 audit operator (2026-10-25 review P3-5): no hardcoded logOperation("Admin", ...) under
 #        src/ -- the operator must come from SessionManager::currentUser(), otherwise every user
 #        action is logged as the same person.
-# Selftest first (three arms: remove the call, defuse the check, plant a hardcoded operator) so a
-# dead gate cannot read green. Any non-zero = exit 18.
+# Selftest first (five arms: remove the lock call, defuse the addNode check, plant a hardcoded
+# operator, drop the camera ledger, bypass the closeCamera drain) so a dead gate cannot read green.
+# Any non-zero = exit 18.
 Write-Step "Wiring checks"
 $elwSelfLog = Join-Path $RepoRoot 'ci-edit-lock-selftest.log'
 $elwSelfArgs = $hygienePre + @('tools/wiring_checks.py', '--repo', $RepoRoot, '--selftest')

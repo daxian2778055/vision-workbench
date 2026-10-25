@@ -82,6 +82,8 @@ public:
 
 signals:
     void deviceAdded(const QString &name, const QString &type);
+    /// 方案载入时某条设备无法建立（未知类型/构造失败）：载入面据此汇总提示，不留无声丢失
+    void deviceLoadFailed(const QString &name, const QString &type, const QString &reason);
     void deviceRemoved(const QString &name);
     void deviceConnected(const QString &name);
     void deviceDisconnected(const QString &name);

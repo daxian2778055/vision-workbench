@@ -271,8 +271,13 @@ bool GlobalCameraManager::removeCameraDevice(const QString &cameraName)
             return false;
         }
     }
-    if (isCameraOpen(cameraName)) {
-        closeCamera(cameraName);
+    // 解绑前必须关相机，且沿用同一条消费者闸（2026-10-25 复核 P2-4 残留）：
+    // 原实现只在"已打开"时才 close 且忽略返回值，于是"未打开但有消费者"时照样清掉绑定，
+    // 旁路了 closeCamera 的闸。closeCamera 未打开时返回 true、有消费者时返回 false。
+    if (!closeCamera(cameraName)) {
+        VFP_DEBUG << "拒绝解除设备绑定（相机仍被消费者占用）:" << cameraName
+                  << consumersForCamera(cameraName);
+        return false;
     }
     {
         QMutexLocker locker(&m_mutex);

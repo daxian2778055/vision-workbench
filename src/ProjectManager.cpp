@@ -459,8 +459,19 @@ void ProjectManager::applyGlobalsFromJson(const QJsonObject &root)
         GlobalVariableManager::instance()->fromJson(root[QStringLiteral("globalVariables")].toObject());
     if (root.contains(QStringLiteral("cameras")))
         GlobalCameraManager::instance()->fromJson(root[QStringLiteral("cameras")].toObject());
-    if (root.contains(QStringLiteral("communication")))
-        CommunicationManager::instance()->fromJson(root[QStringLiteral("communication")].toObject());
+    if (root.contains(QStringLiteral("communication"))) {
+        // 通信设备建不出来时必须走与其它载入损失同一条上报通道（2026-10-25 复核 P3-12 残留）：
+        // 静默丢设备 = "打开方案后设备不见了"，且下一次保存会把该条目整条抹掉。
+        CommunicationManager *comm = CommunicationManager::instance();
+        const QMetaObject::Connection conn = connect(
+            comm, &CommunicationManager::deviceLoadFailed, this,
+            [this](const QString &name, const QString &type, const QString &reason) {
+                reportLoadNote(QStringLiteral("警告：方案中的通信设备未能建立: %1（类型 %2：%3）")
+                                   .arg(name, type, reason));
+            });
+        comm->fromJson(root[QStringLiteral("communication")].toObject());
+        disconnect(conn);
+    }
     if (root.contains(QStringLiteral("globalTriggers"))) {
         // 同上条标定的痕迹形状（U-27）：加载面与配置面同一枚前缀歧义闸（U-154）——空串源
         // 与互为前缀的字符串条目在批量输入里整条不进，留痕给现场。静默少装的读数表现是

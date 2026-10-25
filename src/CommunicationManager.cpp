@@ -749,13 +749,20 @@ void CommunicationManager::fromJson(const QJsonObject &json)
     }
     m_frameTimers.clear();
 
-    // 加载设备：addDevice 每次自行加锁，避免嵌套死锁
+    // 加载设备：addDevice 每次自行加锁，避免嵌套死锁。
+    // 建不出来（未知类型）必须留痕（2026-10-25 复核 P3-12 残留）：静默丢设备的后果是
+    // "方案里的通信设备打开后不见了"，而且下一次保存会把它整条抹掉——现场根本查不到原因。
     QJsonArray devicesArr = json[QStringLiteral("devices")].toArray();
     for (const auto &v : devicesArr) {
         QJsonObject dObj = v.toObject();
-        addDevice(dObj[QStringLiteral("name")].toString(),
-                  dObj[QStringLiteral("type")].toString(),
-                  dObj[QStringLiteral("config")].toObject());
+        const QString devName = dObj[QStringLiteral("name")].toString();
+        const QString devType = dObj[QStringLiteral("type")].toString();
+        if (!addDevice(devName, devType, dObj[QStringLiteral("config")].toObject())) {
+            const QString reason = QStringLiteral("类型未知或节点构造失败");
+            VFP_DEBUG << "方案载入：通信设备未能建立，保留原始条目待人工确认:"
+                      << devName << devType << reason;
+            emit deviceLoadFailed(devName, devType, reason);   // 载入面据此汇总提示
+        }
     }
 
     // 加载接收事件
