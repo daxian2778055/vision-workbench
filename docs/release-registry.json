@@ -126,7 +126,16 @@
       "exe_bytes": 9731584,
       "package_dir": "dist/VisionFlowPlatform-rc-20261025.8",
       "recorded_at": "2026-10-25",
-      "recorded_note": "当前装机包：译文静态闸补自闭合/畸形标签盲区（每条 <message> 必须进检查，夹具牙五形态）+ 自检关闭确认作用域守卫 + 改密成功后补回脚本提示"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261025.9 取代（后者含其全部改动）"
+    },
+    {
+      "tag": "rc-20261025.9",
+      "commit": "d7fb782f78eb30a5b272926245b2ed399fb2a998",
+      "exe_md5": "d41c4d7ce69c022fbcbe5e2d588c0097",
+      "exe_bytes": 9731584,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261025.9",
+      "recorded_at": "2026-10-25",
+      "recorded_note": "当前装机包：静态闸两处边界（无空格 <message/> 计数差判红、vanished/obsolete 按 translation 属性判定且 ignoredCount 对账）+ 夹具腿 3 形态 + 改密后提示移到模态框之后"
     }
   ],
   "legacy_backfilled": [
