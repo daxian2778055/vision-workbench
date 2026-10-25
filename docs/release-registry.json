@@ -90,7 +90,16 @@
       "exe_bytes": 9730560,
       "package_dir": "dist/VisionFlowPlatform-rc-20261025.4",
       "recorded_at": "2026-10-25",
-      "recorded_note": "当前装机包：脚本执行前确认开关收口（Engineer 及以上、关闭二次确认、落审计、启动提示、原子量、英文）+ 中止的记录处置与有效位 + 内/外层循环体精确判据 + 部署自检超时打印输出"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261025.5 取代（后者含其全部改动）"
+    },
+    {
+      "tag": "rc-20261025.5",
+      "commit": "0910dd28ecc1575d3fd8a4b054465add82d9c370",
+      "exe_md5": "1d4fa14575f4d1439f8d2be1319ec49e",
+      "exe_bytes": 9731584,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261025.5",
+      "recorded_at": "2026-10-25",
+      "recorded_note": "当前装机包：中止标志提前（异常不再给中止调用点补 NG 行）+ 中止有效位运行期腿 + 脚本确认开关未登录 fail-closed + 部署自检 START/超时读取/stderr + 39 条英文翻译补齐（含脚本确认 6 条）+ 弹框措辞按 Windows 账户 + 启动提示移到登录后"
     }
   ],
   "legacy_backfilled": [
