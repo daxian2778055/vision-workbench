@@ -4203,14 +4203,16 @@ void MainWindow::enforceFactoryPasswordPolicy()
                                                        confirmEdit->text(), &error)) {
             applyPermissionRestrictions();
             ui->statusBar->clearMessage();
+            QMessageBox::information(this, tr("修改管理员口令"), tr("出厂口令已停用，写操作已恢复。"));
             // 改密成功后写闸解除，之前**合并进写闸常驻提示**的"脚本确认已关"也跟着没了
             // （2026-10-25 复核：首次安装 + 当场改密这条窄分支）——补回同一条提示。
+            // 必须放在信息框**之后**：模态框会冻结事件循环，写在前面的 15 秒提示会在用户读完
+            // 信息框之前就过期（2026-10-25 复核 P3）。
             if (!ScriptSecurityPolicy::instance().requireConfirmation()) {
                 ui->statusBar->showMessage(
                     tr("注意：脚本执行前确认处于关闭状态（脚本将直接运行）——"
                        "可在「系统 → 脚本安全：执行前确认脚本」恢复"), 15000);
             }
-            QMessageBox::information(this, tr("修改管理员口令"), tr("出厂口令已停用，写操作已恢复。"));
             break;
         }
         QMessageBox::warning(this, tr("修改管理员口令"), error);

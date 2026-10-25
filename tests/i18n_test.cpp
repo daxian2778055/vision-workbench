@@ -21,7 +21,8 @@ private slots:
 /// 返回 problem 条目；checked 为**全部** <message> 数（不是"解析成功的条数"）——
 /// 2026-10-25 复核：原实现只统计 regex 能匹配的条目，自闭合 <translation .../> 会被整条
 /// 跳过（既不进 problems 也不进 checked），闸对它完全失明。
-static void checkTsText(const QString &ts, QStringList &problems, int &messageCount)
+static void checkTsText(const QString &ts, QStringList &problems, int &messageCount,
+                        int &ignoredCount)
 {
     auto hasCjk = [](const QString &s) {
         for (const QChar &ch : s) {
@@ -34,7 +35,11 @@ static void checkTsText(const QString &ts, QStringList &problems, int &messageCo
 
     problems.clear();
     messageCount = 0;
-    const QRegularExpression msgRx(QStringLiteral("<message>(.*?)</message>"),
+    ignoredCount = 0;
+    // 消息标签允许带属性（2026-10-25 复核：原只认精确 <message>，lupdate 生成
+    // <message numerus="yes"> 时该条既不进检查也不进计数，"计数相等"照样绿）。
+    // 自闭合 <message/> 会以空 body 命中 → 判"无 <source>"，仍红。
+    const QRegularExpression msgRx(QStringLiteral("<message(?:\\s[^>]*)?>(.*?)</message>"),
                                    QRegularExpression::DotMatchesEverythingOption);
     const QRegularExpression srcRx(QStringLiteral("<source>(.*?)</source>"),
                                    QRegularExpression::DotMatchesEverythingOption);
@@ -56,6 +61,13 @@ static void checkTsText(const QString &ts, QStringList &problems, int &messageCo
         const QString label = src.left(28).replace(QLatin1Char('\n'), QLatin1Char(' '));
         if (!trM.hasMatch()) {
             problems << QStringLiteral("missing/closed <translation>: %1").arg(label);
+            continue;
+        }
+        // 已废弃条目（vanished/obsolete）不参与"活动译文"的判据（2026-10-25 复核）：
+        // 它们的译文本就会随源码淘汰而陈旧，把空/等值判红是误报。只保证标签成对即可。
+        if (body.contains(QStringLiteral("type=\"vanished\""))
+            || body.contains(QStringLiteral("type=\"obsolete\""))) {
+            ++ignoredCount;
             continue;
         }
         const QString en = trM.captured(1);
@@ -156,9 +168,6 @@ void I18nTest::englishQmLoadsAndTranslates()
              QStringLiteral("未抽取的占位文本123"));
 }
 
-// 静态闸（2026-10-25 复核：39 条译文此前只有 3 条运行期腿，lupdate 新增未翻串没人报红）。
-// .ts 里不得出现：type="unfinished"、空译文、或**中文源文**的译文等于源文。
-// 英文源文等值是允许的（"New"/"Save"/"Vision Flow Platform" 这类本来就是英文）。
 void I18nTest::tsHasNoUnfinishedEmptyOrMirrorTranslations()
 {
 #ifndef VFP_TS_PATH
@@ -171,11 +180,17 @@ void I18nTest::tsHasNoUnfinishedEmptyOrMirrorTranslations()
 
     QStringList problems;
     int messageCount = 0;
-    checkTsText(ts, problems, messageCount);
+    int ignoredCount = 0;
+    checkTsText(ts, problems, messageCount, ignoredCount);
 
     // 每条 <message> 都必须被检查过：进检查的条数 == 文本里的 <message> 总数，
     // 而不是只看"总数大于某个阈值"（2026-10-25 复核：原 checked>200 防不住单条被跳过）
-    const int rawMessageCount = ts.count(QStringLiteral("<message>"));
+    int rawMessageCount = 0;
+    for (auto it = QRegularExpression(QStringLiteral("<message(?:\\s[^>]*)?>")).globalMatch(ts);
+         it.hasNext();) {
+        it.next();
+        ++rawMessageCount;
+    }
     QCOMPARE(messageCount, rawMessageCount);
     QVERIFY2(messageCount > 200, "条目数异常偏低，解析可能退化");
     QVERIFY2(problems.isEmpty(),
@@ -191,40 +206,61 @@ void I18nTest::tsGateCatchesSelfClosingAndMissingTranslations()
 {
     QStringList problems;
     int n = 0;
+    int ignored = 0;
 
     // ① 自闭合 unfinished：必须判红（正是上次漏掉的那种）
     checkTsText(QStringLiteral("<message><source>\u6d4b\u8bd5\u4e32</source>"
                                "<translation type=\"unfinished\"/></message>"),
-                problems, n);
+                problems, n, ignored);
     QCOMPARE(n, 1);
     QVERIFY2(!problems.isEmpty(), "自闭合 <translation/> 没被识别为问题（闸有盲区）");
 
     // ② 缺 <translation> 标签：必须判红
     checkTsText(QStringLiteral("<message><source>\u6d4b\u8bd5\u4e32\u4e8c</source></message>"),
-                problems, n);
+                problems, n, ignored);
     QCOMPARE(n, 1);
     QVERIFY2(!problems.isEmpty(), "缺失 <translation> 标签没被识别为问题");
 
     // ③ 空译文：必须判红
     checkTsText(QStringLiteral("<message><source>\u6d4b\u8bd5\u4e32\u4e09</source>"
                                "<translation></translation></message>"),
-                problems, n);
+                problems, n, ignored);
     QCOMPARE(n, 1);
     QVERIFY2(!problems.isEmpty(), "空译文没被识别为问题");
 
     // ④ 中文源文译文等值：必须判红
     checkTsText(QStringLiteral("<message><source>\u6d4b\u8bd5\u4e32\u56db</source>"
                                "<translation>\u6d4b\u8bd5\u4e32\u56db</translation></message>"),
-                problems, n);
+                problems, n, ignored);
     QCOMPARE(n, 1);
     QVERIFY2(!problems.isEmpty(), "中文源文译文等值没被识别为问题");
 
-    // ⑤ 合法条目（英文源文等值 + 中文有译文）：必须全绿，防止闸误伤
+    // ⑤ 带属性的消息（lupdate 的 numerus 形态）：必须**被检查到**——此前正则只认裸 <message>，
+    // 这类条目既不进检查也不进计数，"计数相等"照样绿（2026-10-25 复核）
+    checkTsText(QStringLiteral("<message numerus=\"yes\"><source>\u6d4b\u8bd5\u5c5e\u6027</source>"
+                               "<translation type=\"unfinished\"/></message>"),
+                problems, n, ignored);
+    QCOMPARE(n, 1);
+    QVERIFY2(!problems.isEmpty(), "带属性的 <message numerus=\"yes\"> 没被检查到（闸仍失明）");
+
+    // ⑥ 已废弃（vanished/obsolete）条目豁免空/等值判据：不得误报
+    checkTsText(QStringLiteral("<message><source>\u5e9f\u5f03\u4e00</source>"
+                               "<translation type=\"vanished\"></translation></message>"
+                               "<message><source>\u5e9f\u5f03\u4e8c</source>"
+                               "<translation type=\"obsolete\">\u5e9f\u5f03\u4e8c</translation></message>"),
+                problems, n, ignored);
+    QCOMPARE(n, 2);
+    QCOMPARE(ignored, 2);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("\u5df2\u5e9f\u5f03\u6761\u76ee\u88ab\u8bef\u5224\uff1a%1")
+                            .arg(problems.join(QStringLiteral(" | ")))));
+
+    // ⑦ 合法条目（英文源文等值 + 中文有译文）：必须全绿，防止闸误伤
     checkTsText(QStringLiteral("<message><source>Vision Flow Platform</source>"
                                "<translation>Vision Flow Platform</translation></message>"
                                "<message><source>\u6d4b\u8bd5\u4e32\u4e94</source>"
                                "<translation>Test Five</translation></message>"),
-                problems, n);
+                problems, n, ignored);
     QCOMPARE(n, 2);
     QVERIFY2(problems.isEmpty(),
              qPrintable(QStringLiteral("\u5408\u6cd5\u6761\u76ee\u88ab\u8bef\u5224\uff1a%1")
