@@ -1453,9 +1453,18 @@ void MainWindow::showNodeParameters(NodeBase *node)
 
     // 运行中改参数是允许的（设计如此），但不提示会让现场以为"改了没生效"——
     // 参数写入线程安全、下一轮生效，这句话必须写在参数旁边而不是只写在文档里。
-    auto *hint = new QLabel(m_currentLanguage == Language::Chinese
-                                ? QStringLiteral("提示：运行中修改参数将于下一轮生效")
-                                : QStringLiteral("Note: parameter changes take effect next cycle"));
+    // 例外：MVS 相机的曝光/增益/像素格式要写硬件（2026-10-25 复核 P3-9）——必须点
+    // "应用参数到相机"才下发，且运行中像素格式会被跳过；对它们说"下一轮生效"是假话。
+    const bool isMvsCamera = qobject_cast<MvsImageSourceNode *>(node) != nullptr;
+    const QString hintText = isMvsCamera
+        ? (m_currentLanguage == Language::Chinese
+               ? QStringLiteral("提示：相机参数需点「应用参数到相机」才写入；运行中像素格式会被跳过")
+               : QStringLiteral("Note: camera parameters are written only by \"Apply to camera\"; "
+                                "pixel format is skipped while running"))
+        : (m_currentLanguage == Language::Chinese
+               ? QStringLiteral("提示：运行中修改参数将于下一轮生效")
+               : QStringLiteral("Note: parameter changes take effect next cycle"));
+    auto *hint = new QLabel(hintText);
     hint->setWordWrap(true);
     hint->setStyleSheet(QStringLiteral("color:#9a9aa6;"));
     box->addWidget(hint);

@@ -301,11 +301,30 @@
 | P2-1 | 中途停止的一轮被写成「整轮 OK」：轮内 break 后轮末汇总照常执行，半截流程记 `passed=true`，良率把人为中断算成 OK 产品（YieldMonitor 只读汇总行） | 轮内因停止 break 时置 `m_roundAborted`，轮末跳过汇总行（已执行节点记录照常落库） | `RoundAbortSummaryTest` 两腿，破坏跳过逻辑后变红 |
 | P2-2 | 打开方案后撤销栈被半成品快照塞满（20 节点≈39 步），第一次 Ctrl+Z 拆掉刚载入的流程 | `sceneFromJson` 末尾 `clearUndoHistory()`（覆盖全部调用方）；恢复期守卫 `m_restoring`，否则 undo 的 redo 栈被抹掉 | `UndoHistoryAfterLoadTest` 两腿（该腿正是抓到 redo 交互 bug 的） |
 
-**仍开放（本次未修，按风险排序待排期）**：P2-3 相机线程池任务与 closeCamera 无生命周期同步（UAF）；
-P2-4 全局相机关闭/解绑/自动重连不看消费者（UAF）；P2-5 `executeNode` 异常出口不清执行缓存、不置轮失败位（潜伏）；
-以及 12 条 P3（ownerContext 数据竞争、锁外清缓存、锁序、脚本进程先跑后入 Job、审计操作者硬编码 Admin、
-`cv::imwrite` 返回值丢弃、片段连线静默丢失、子流程出入口与循环体交叉、`QSqlDatabase` 按线程 ID 命名、
-被拒连线也记撤销、幽灵设备、MVS 参数提示不完全）。
+**2026-10-25 第二轮（复核清单 P2-3~5 / P3-2/5/6/8/9/10/11/12 已修）**：
+
+| 项 | 修法 | 守卫 |
+|---|---|---|
+| P2-3 相机线程池任务 vs 关相机（UAF） | 新增 `CameraTaskLedger`（在飞账 + 有界排空），任务进出记账；`closeCamera` 拆句柄前 `waitDrained`（在 `m_mutex` 之前等，超时跳过关闭） | `CameraTaskLedgerTest` + 接线闸 INV3（含两枚臂） |
+| P2-4 全局相机关闭/解绑/重连不看消费者（UAF） | `closeCamera(name, force=false)` 有消费者时拒绝；对话框解绑被拒时弹窗说明；自动重连仅在唯一消费者时 force；关机清理显式 force | `GlobalCameraConsumerGateTest` 三腿 |
+| P2-5 异常出口不清缓存/不置轮失败（潜伏） | 两个 catch 调 `clearNodeCachesOnException`（清三类缓存 + 置 `m_roundHadFailure`） | `NodeExceptionExitTest`（直连槽抛异常，异常轮必须 NG） |
+| P3-2 锁外清缓存 | `invalidateDownstreamOf` 的缓存清理入 `m_graphCacheMutex` | 代码形状（无独立运行期腿） |
+| P3-5 审计操作者硬编码 Admin | 改 `SessionManager::currentUser()` | 接线闸 INV2（三枚臂） |
+| P3-6 `cv::imwrite` 返回值丢弃 | 检查并显示失败原因 | 无（GUI 对话框无测试框架） |
+| P3-8 子流程出入口落在循环体 | 收集时显式判坏（此前注释说会报、代码没报） | `subflow_test` 新增循环体重叠腿 |
+| P3-9 手册/提示前提 | 手册注明"单次执行"仅软触发；MVS 相机参数需"应用参数到相机"、运行中像素格式跳过；参数面板提示按节点类型分支 | — |
+| P3-10 每线程 DB 连接不摘除 | 建连时挂 `QThread::finished` → `removeDatabase` | `DbThreadConnectionCleanupTest` |
+| P3-11 被拒连线也记撤销 | `recordUndo` 移到语义/闭环校验之后 | `RejectedConnectionUndoTest` 两腿 |
+| P3-12 幽灵设备 | `createDeviceNode` 返回 bool；建不出则回滚登记并返回 false | `CommDeviceGhostTest` 两腿 |
+
+**仍开放（本轮未修，各有理由）**：
+
+| 项 | 位置 | 为什么没在这次改 |
+|---|---|---|
+| P3-1 `ownerContext/ownerToken` 是普通 shared_ptr/weak_ptr | `NodeBase.h` / `FlowExecutor` | 切页与 worker 同时赋值在标准上属数据竞争，但写入值相同、实际风险低；改 atomic shared_ptr 会改动执行器生命周期核心，收益/风险比不划算，**保留为已知项** |
+| P3-3 `startExecution` 取锁次序与文档相反；run() 尾部两次置 Idle 的极窄窗口 | `FlowExecutor.cpp` | 与 E3/E4 的自死锁修复同一片代码，动锁序容易引入更难查的挂起；窗口极窄，暂不动 |
+| P3-4 脚本进程先运行后入 Job（无 CREATE_SUSPENDED） | `ScriptSecurityPolicy.cpp` | AppContainer/Low IL 仍在生效；改进程启动方式需要真机验证脚本节点全链路，留待现场一轮 |
+| P3-7 片段 `droppedConnections` 只累加不报告；失败时未 adopt 的节点泄漏 | `FlowSnippet.cpp` | 行为可见性改造 + 节点回收需要新增返回结构，属独立小项，留待下一轮 |
 
 **已修的现场缺陷（2026-10-24 登记）**：操作中工具拖不进画布、双击入画布后节点不能动。根因两条：
 ① `MainWindow::onExecutionError` 未像其余执行槽那样重算画布锁（错误路径没走到 `executionFinished`
