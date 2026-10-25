@@ -1738,10 +1738,22 @@ void FlowExecutor::collectSubFlowBodies(const QList<SubFlowDef> &defs, const QLi
             continue;
         }
 
-        // 与循环体交叉的成员让位给循环体（v1 限制：子流程成员不得同时是循环体）。
+        // 与**外层**循环体交叉的成员让位给循环体（v1 限制：子流程成员不得同时是别的循环的体）。
+        // 注意区分"定义内部的循环"（2026-10-25 复核 P2-A 与 P3-8 的冲突）：成员里的 LoopNode
+        // 自己的循环体若也在成员内，那是子流程的内部结构、必须允许——否则任何嵌套循环的定义
+        // 都会被判坏，成员退回主遍历，调用点反而永远不执行（真失败/中止都无从谈起）。
+        QSet<NodeBase *> internalLoopBody;
+        for (NodeBase *m : members) {
+            if (LoopNode *ln = qobject_cast<LoopNode *>(m)) {
+                for (NodeBase *bn : collectLoopBody(ln)) {
+                    if (members.contains(bn))
+                        internalLoopBody.insert(bn);
+                }
+            }
+        }
         QList<NodeBase *> usable;
         for (NodeBase *m : members) {
-            if (!m_loopBodyNodes.contains(m))
+            if (!m_loopBodyNodes.contains(m) || internalLoopBody.contains(m))
                 usable.append(m);
         }
         // 任何成员被循环体过滤掉都要判坏（2026-10-25 复核 P3-8 + 残留）：

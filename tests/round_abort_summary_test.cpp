@@ -325,9 +325,12 @@ void RoundAbortSummaryTest::subFlowNestedLoopFailureIsStillNg()
     auto token = FlowExecutorToken::create(new FlowExecutor());
     FlowExecutor &exec = *token->executor();
     bool callerFailed = false;
+    QHash<QString, bool> nodeStates;   // 诊断：每个节点最后一次 nodeExecuted
     QStringList errors;
     QObject::connect(&exec, &FlowExecutor::nodeExecuted, &exec,
-                     [&callerFailed, caller](NodeBase *n, bool ok) {
+                     [&callerFailed, &nodeStates, caller](NodeBase *n, bool ok) {
+                         if (n)
+                             nodeStates.insert(n->fullName(), ok);
                          if (n == caller && !ok)
                              callerFailed = true;
                      },
@@ -350,11 +353,18 @@ void RoundAbortSummaryTest::subFlowNestedLoopFailureIsStillNg()
     QCoreApplication::processEvents();
 
     // 真失败：调用点判失败、写 NG 汇总（不得被当成中止而跳过汇总/调用点变绿）
-    QVERIFY2(callerFailed,
-             qPrintable(QStringLiteral("子流程内循环体失败时调用点没有判失败（P2-A）"
-                                       " finished=%1 errors=[%2]")
-                            .arg(finished ? 1 : 0)
-                            .arg(errors.join(QStringLiteral(" | ")))));
+    {
+        // 诊断：把每个节点最后一次 nodeExecuted 打出来（谁绿谁红一目了然）
+        QStringList stateList;
+        for (auto it = nodeStates.constBegin(); it != nodeStates.constEnd(); ++it)
+            stateList << (it.key() + QLatin1String("=") + (it.value() ? "ok" : "fail"));
+        QVERIFY2(callerFailed,
+                 qPrintable(QStringLiteral("子流程内循环体失败时调用点没有判失败（P2-A）"
+                                           " finished=%1 nodes=[%2] errors=[%3]")
+                                .arg(finished ? 1 : 0)
+                                .arg(stateList.join(QStringLiteral(" , ")))
+                                .arg(errors.join(QStringLiteral(" | ")))));
+    }
     const int after = summaryRows(QDateTime::currentDateTime().addDays(-1),
                                   QDateTime::currentDateTime().addSecs(60));
     QCOMPARE(after, before + 1);   // 必须写汇总行
