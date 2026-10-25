@@ -349,7 +349,6 @@ MyProject::Connection *FlowScene::createConnection(Port *source, Port *target, b
     if (!source || !target) {
         return nullptr;
     }
-    recordUndo();
 
     QString reject;
     const bool semanticOk =
@@ -370,6 +369,11 @@ MyProject::Connection *FlowScene::createConnection(Port *source, Port *target, b
         }
         return nullptr;
     }
+
+    // 语义/闭环校验都过了才记撤销（2026-10-25 复核 P3-11）：原来 recordUndo 在校验之前，
+    // 于是一次被拒的连线也会往撤销栈压一步快照并清空 redo 栈——现场表现是"线没连上，
+    // 但按一次 Ctrl+Z 却撤掉了别的东西 / 重做莫名其妙没了"。
+    recordUndo();
 
     // Create connection
     MyProject::Connection *connection = new MyProject::Connection(source, target, this);
