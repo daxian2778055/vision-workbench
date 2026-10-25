@@ -2,6 +2,7 @@
 #include "NodeRegistry.h"
 #include "NodeBase.h"
 #include "AppLog.h"
+#include "ScriptSecurityPolicy.h"
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
@@ -15,6 +16,12 @@ int runNodeSelfTest()
 {
     // 确保注册表已填充
     registerAllNodes();
+
+    // 自检绝不弹窗（2026-10-25 实测）：ScriptNode::run 会走脚本执行前确认，而 --selftest-nodes
+    // 是有 QApplication 的（主程序的 GUI 初始化在先），确认框会以**模态**弹出并把无头自检永久
+    // 阻塞在 ScriptNode 上——部署脚本只能按超时收场，且拿不到自检报告。这里只改本进程的内存
+    // 标志（不 save，不动用户的持久配置），语义与"无 QApplication 时直接放行"同一档。
+    ScriptSecurityPolicy::instance().setRequireConfirmation(false);
 
     const auto &regs = NodeRegistry::instance().all();
     QStringList report;
