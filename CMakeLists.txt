@@ -1071,6 +1071,14 @@ if(MSVC)
     vfp_configure_gui_test(EditLockReleaseTest)
 endif()
 
+# 中途停止的轮次不得写成整轮 OK（2026-10-25 复核 P2-1）：中止轮无汇总行、完整轮有且 passed
+if(MSVC)
+    add_executable(round_abort_summary_test tests/round_abort_summary_test.cpp)
+    target_link_libraries(round_abort_summary_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    vfp_add_qtest(NAME RoundAbortSummaryTest TARGET round_abort_summary_test)
+    vfp_configure_gui_test(RoundAbortSummaryTest)
+endif()
+
 # 良率目标监控（P1-11）：闭锁只报一次 / 恢复重置 / 滚动窗口 / 最小样本 / 配置变更重置
 if(MSVC)
     add_executable(yield_monitor_test tests/yield_monitor_test.cpp)
@@ -1312,7 +1320,7 @@ if(MSVC)
     set(VFP_TESTS NodeCoreTest OpencvSerializationTest IntegrationTest DatabaseTest PerfTest
                   ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest CameraIoTest
                   DnnSegmentTest OpencvDefectAlignTest SoakTest StatisticsReportTest SchemePackageTest
-                  I18nTest SubFlowTest EditLockReleaseTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
+                  I18nTest SubFlowTest EditLockReleaseTest RoundAbortSummaryTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
                   FactoryPasswordGuardTest FeatureMatchTest CalibChainTest OpencvNodesTest
                   ProjectPathsTest FlowCachePurgeLedgerTest ExecutionControlPolicyTest
                   AuxDialogMenuRouterTest ModuleEditorRegistryTest UITranslatorTest

@@ -290,6 +290,7 @@ private:
     QElapsedTimer m_statsLogTimer;    /// 统计日志节流
     int m_statsLogIntervalMs = 60000; /// 统计日志间隔（ms），0=不输出
     bool m_roundHadFailure = false;   /// 本轮是否出现失败节点（仅执行线程访问）
+    bool m_roundAborted = false;      /// 本轮是否被中途停止（仅执行线程访问）：半截流程不得计入整轮 OK
 
     // ---- worker 阶段观测（正式能力）：定位"worker 不退出"类挂起时可在挂起态安全轮询。
     // 执行线程在关键点写、任意线程经 workerPhaseName() 读；relaxed 原子，不参与任何业务逻辑。

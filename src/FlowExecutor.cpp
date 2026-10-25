@@ -723,6 +723,7 @@ void FlowExecutor::run()
                 // 会对同一把**非递归**锁再次加锁 → **自死锁**：worker 永不退出、停止/退出失效。
                 // 触发条件：停止请求落在"轮内"（阶段探针实测卡在"轮末·信号后"）。
                 locker.unlock();
+                m_roundAborted = true;   // 人为中断：本轮只是半截流程，轮末不得写成整轮 OK
                 emit executionStopped();
                 break;
             }
@@ -733,6 +734,7 @@ void FlowExecutor::run()
             
             if (m_runContext->state() == ExecutionState::Stopped) {
                 locker.unlock();   // 同上：持 m_mutex 时 break 会在轮末/循环尾再锁同一把锁 → 自死锁
+                m_roundAborted = true;   // 人为中断（含"暂停中被停止"）：轮末不得写成整轮 OK
                 emit executionStopped();
                 break;
             }
@@ -799,6 +801,13 @@ void FlowExecutor::run()
         // P1-11 报表：轮末追加一条「整轮汇总」记录（见 InspectionRecord.h 的 kRoundSummaryNodeName）。
         // 为什么在这里做：记录是"每节点一条"且无轮次标识，报表据此只能算节点执行通过率、算不出良率；
         // 本行让"良率/趋势"有可靠口径。此刻 m_roundHadFailure 还没被 recordRoundFinished 复位，取值有效。
+        //
+        // 中途被停止的一轮**不写汇总行**（2026-10-25 复核 P2-1）：半截流程写 passed=true 会让
+        // 良率把一次人为中断记成一件 OK 产品（YieldMonitor 只读这类汇总行）——宁可这一轮不出现在
+        // 良率口径里，也不谎报。已执行节点的那几条记录照常落库，追溯不丢。
+        if (m_roundAborted) {
+            VFP_EXEC_DEBUG << "Round aborted by stop; round-summary row skipped";
+        } else {
         m_pendingResults.append(InspectionRecord{
             0,
             m_flowName.isEmpty() ? QStringLiteral("(未命名流程)") : m_flowName,
@@ -806,6 +815,7 @@ void FlowExecutor::run()
             !m_roundHadFailure,
             m_roundHadFailure ? QStringLiteral("NG") : QStringLiteral("OK"),
             QDateTime() });
+        }
         // 轮末批量落库：整轮结果一个事务提交。放在统计之前，保证本轮记录已落库。
         // 未启用数据库（databasePath 为空）时只清缓冲，不做任何 IO。
         if (!m_pendingResults.isEmpty()) {
@@ -1879,6 +1889,7 @@ void FlowExecutor::recordRoundFinished(qint64 roundMs)
 {
     const bool hadFailure = m_roundHadFailure;
     m_roundHadFailure = false;
+    m_roundAborted = false;   // 与 hadFailure 同周期复位（worker 线程私有，仅此处写）
 
     bool shouldLog = false;
     QString line;
