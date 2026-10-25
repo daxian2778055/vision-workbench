@@ -390,21 +390,50 @@ void I18nTest::tsGateCatchesSelfClosingAndMissingTranslations()
                                              .arg(problems.join(QStringLiteral(" | ")))));
     }
 
-    // ⑥i 源文/译文里出现 type="unfinished" 字样：不得把正常条目误判成未翻（2026-10-25 复核）
-    checkTsText(QStringLiteral("<message><source>type=\"unfinished\" \u5b57\u6837</source>"
-                               "<translation>Normal Translation</translation></message>"),
-                problems, n, ignored);
-    QCOMPARE(n, 1);
-    QVERIFY2(problems.isEmpty(),
-             qPrintable(QStringLiteral("源文含 type=unfinished 字样导致正常条目被误判：%1")
-                            .arg(problems.join(QStringLiteral(" | ")))));
-    // ⑥h 多行源文（含换行）：同样要被检查（2026-10-25 实测的更深盲区）
+    // ⑥h 多行源文（含换行）：同样要被检查（回归腿——父版本本就支持，防再退化）
     checkTsText(QStringLiteral("<message><source>\u591a\u884c\u6e90\u6587\n\u7b2c\u4e8c\u884c</source>"
                                "<translation></translation></message>"),
                 problems, n, ignored);
     QCOMPARE(n, 1);
     QVERIFY2(!problems.isEmpty(), "多行源文条目被整条跳过（空译文逃过检查）");
 
+    // ⑥i 源文正文里出现 type="unfinished" 字样：不得把正常条目误判成未翻
+    checkTsText(QStringLiteral("<message><source>type=\"unfinished\" \u5b57\u6837</source>"
+                               "<translation>Normal Translation</translation></message>"),
+                problems, n, ignored);
+    QCOMPARE(n, 1);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("源文含该字样导致正常条目被误判：%1")
+                            .arg(problems.join(QStringLiteral(" | ")))));
+
+    // ⑥j 译文正文里出现该字样：另一半（旧 body 子串同样会误判）
+    checkTsText(QStringLiteral("<message><source>\u6b63\u5e38\u6761\u76ee</source>"
+                               "<translation>text type=\"unfinished\" in body</translation></message>"),
+                problems, n, ignored);
+    QCOMPARE(n, 1);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("译文正文含该字样导致正常条目被误判：%1")
+                            .arg(problems.join(QStringLiteral(" | ")))));
+
+    // ⑥k 正向腿：配对的未翻条目必须报 unfinished（2026-10-25 复核 P3-1——此前只有反向腿，
+    // 判据整条置死也能全绿：①/⑤ 走的是自闭合的 missing/closed 分支，不经过 unfinishedRx）
+    checkTsText(QStringLiteral("<message><source>\u914d\u5bf9\u672a\u7ffb</source>"
+                               "<translation type=\"unfinished\">Some English</translation></message>"),
+                problems, n, ignored);
+    QCOMPARE(n, 1);
+    QVERIFY2(!problems.isEmpty()
+                 && problems.first().contains(QLatin1String("unfinished")),
+             qPrintable(QStringLiteral("配对未翻没有被判为 unfinished（正向路径无腿）：%1")
+                            .arg(problems.join(QStringLiteral(" | ")))));
+
+    // ⑥l data-type="unfinished" 不是未翻标记：正常译文不得误判
+    checkTsText(QStringLiteral("<message><source>data-type \u672a\u7ffb\u5b57\u6837</source>"
+                               "<translation data-type=\"unfinished\">Fine</translation></message>"),
+                problems, n, ignored);
+    QCOMPARE(n, 1);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("data-type=unfinished 被误判成未翻标记：%1")
+                            .arg(problems.join(QStringLiteral(" | ")))));
     // ⑦ 合法条目（英文源文等值 + 中文有译文）：必须全绿，防止闸误伤
     checkTsText(QStringLiteral("<message><source>Vision Flow Platform</source>"
                                "<translation>Vision Flow Platform</translation></message>"
