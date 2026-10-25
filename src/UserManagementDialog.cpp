@@ -92,7 +92,10 @@ void UserManagementDialog::onAddUser()
     auto *db = AppDatabase::instance();
     if (db->addUser(username.trimmed(), password, role)) {
         refreshUserTable();
-        db->logOperation(QStringLiteral("Admin"), QStringLiteral("\u6DFB\u52A0\u7528\u6237"),
+        // 操作者取当前登录用户（2026-10-25 复核 P3-5）：原来硬编码 "Admin"，
+        // 于是审计日志里所有用户管理动作都记成同一个人——出了事查不到是谁干的
+        db->logOperation(SessionManager::instance()->currentUser(),
+                         QStringLiteral("\u6DFB\u52A0\u7528\u6237"),
                          QStringLiteral("\u6DFB\u52A0\u7528\u6237: %1, \u89D2\u8272: %2").arg(username).arg(role));
         QMessageBox::information(this, QStringLiteral("\u6210\u529F"), QStringLiteral("\u7528\u6237\u6DFB\u52A0\u6210\u529F"));
     } else {
@@ -131,7 +134,9 @@ void UserManagementDialog::onRemoveUser()
             return;
         }
         refreshUserTable();
-        db->logOperation(QStringLiteral("Admin"), QStringLiteral("\u5220\u9664\u7528\u6237"),
+        // 同上：操作者取当前登录用户，不写死 Admin（P3-5）
+        db->logOperation(SessionManager::instance()->currentUser(),
+                         QStringLiteral("\u5220\u9664\u7528\u6237"),
                          QStringLiteral("\u5220\u9664\u7528\u6237: %1").arg(username));
     }
 }

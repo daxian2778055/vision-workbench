@@ -41,9 +41,9 @@
       17 = Version.h single-source promise broken: a template @TOKEN@ the build-time refresh script
            does not replace, or the two generators produced different bytes
            (tools/version_header_check.py)
-      18 = the canvas edit-lock wiring drifted: an execution slot no longer re-evaluates the lock,
-           or MainWindow::addNode (toolbox double-click) no longer checks it
-           (tools/edit_lock_wiring_check.py)
+      18 = a wiring invariant drifted: an execution slot no longer re-evaluates the canvas lock,
+           MainWindow::addNode (toolbox double-click) no longer checks it, or a hardcoded
+           "Admin" audit operator reappeared under src/ (tools/wiring_checks.py)
 
     Note: this script is intentionally ASCII-only, and therefore carries no UTF-8 BOM
     (PowerShell 5.1 only needs a BOM when a .ps1 contains non-ASCII text). The two-sided
@@ -466,17 +466,20 @@ if ($oigCode -ne 0) {
 Write-Ok "enforced open items re-measured as closed ($hygieneExe)"
 
 # ------------------------------------------------------------------ 1m-1
-# Why: the 2026-10-24 field report ("tools cannot be dragged in; double-click inserts one that then
-# cannot be moved") traced to two wiring omissions in MainWindow: onExecutionError did not
-# re-evaluate the canvas lock (unlike Started/Stopped/Finished), and the toolbox double-click path
-# (MainWindow::addNode) bypassed the edit-lock check that drag/drop performs. The runtime test
-# (EditLockReleaseTest) pins the engine half -- "after a failure-stop the executor allows editing";
-# this step pins the wiring half, because a deleted call is invisible to any test that drives the
-# executor directly. Selftest first (two arms: remove the call, defuse the check) so a dead gate
-# cannot read green. Any non-zero = exit 18.
-Write-Step "Canvas edit-lock wiring check"
+# Why: some defects live in wiring, not algorithms -- a slot that forgets to call one line, a value
+# hardcoded where the live one belongs. Runtime tests cannot pin those (a test drives the executor
+# or a dialog differently from production), so these are source-shape invariants:
+#   INV1 canvas lock (2026-10-24 field report "tools cannot be dragged in; double-click inserts one
+#        that then cannot be moved"): every execution slot re-evaluates the lock, and the toolbox
+#        double-click path (MainWindow::addNode) checks it.
+#   INV2 audit operator (2026-10-25 review P3-5): no hardcoded logOperation("Admin", ...) under
+#        src/ -- the operator must come from SessionManager::currentUser(), otherwise every user
+#        action is logged as the same person.
+# Selftest first (three arms: remove the call, defuse the check, plant a hardcoded operator) so a
+# dead gate cannot read green. Any non-zero = exit 18.
+Write-Step "Wiring checks (canvas lock / audit operator)"
 $elwSelfLog = Join-Path $RepoRoot 'ci-edit-lock-selftest.log'
-$elwSelfArgs = $hygienePre + @('tools/edit_lock_wiring_check.py', '--repo', $RepoRoot, '--selftest')
+$elwSelfArgs = $hygienePre + @('tools/wiring_checks.py', '--repo', $RepoRoot, '--selftest')
 & $hygieneExe @elwSelfArgs 2>&1 | Tee-Object -FilePath $elwSelfLog | Out-Null
 $elwSelfCode = $LASTEXITCODE
 $elwSelfAll = @(Get-Content $elwSelfLog -ErrorAction SilentlyContinue)
@@ -490,7 +493,7 @@ if ($elwSelfCode -ne 0) {
 }
 
 $elwLog = Join-Path $RepoRoot 'ci-edit-lock.log'
-$elwArgs = $hygienePre + @('tools/edit_lock_wiring_check.py', '--repo', $RepoRoot)
+$elwArgs = $hygienePre + @('tools/wiring_checks.py', '--repo', $RepoRoot)
 & $hygieneExe @elwArgs 2>&1 | Tee-Object -FilePath $elwLog | Out-Null
 $elwCode = $LASTEXITCODE
 $elwAll = @(Get-Content $elwLog -ErrorAction SilentlyContinue)

@@ -288,13 +288,13 @@ unzip ../deployment-package.zip
   清包前在 `releases` 里加一行 `tag / commit / exe_md5 / exe_bytes`；
   `release_manifest_check.py` 在解析出 tag 时会核对这一行（缺行、提交不符、md5 不符、
   字节数缺失或类型不对都判红）。
-  这是 2026-10-24 复核补的：此前那句“md5 都在 git 里”是**说法强于实现**，
+  这是 2026-10-24 复核补的：此前那句"md5 都在 git 里"是**说法强于实现**，
   `rc-20261023.2` 的 md5 就是在清理时险些永久丢失（靠部署日志才补录回来）。
 - `legacy_backfilled` 收已清理、当时未登记的两枚（`rc-20261013` / `rc-20261017`）：
   提交由 tag 追索；md5 与字节数为 **2026-10-23 复核时对清理前包内 exe 的直接计算**
   （包已清理、事后无法就地复核——来源只写这件必定成立的事实，不把它归给某份仓内读不到的文件）。
-- 台账/文档引用具体包路径时，若该包已被清理，在下一轮登记里补一句“该包已于 <日期> 清理，
-  身份见 tag 与 md5”——**路径会随时间失效，tag + md5 不会**（2026-10-24 复核：归档一
+- 台账/文档引用具体包路径时，若该包已被清理，在下一轮登记里补一句"该包已于 <日期> 清理，
+  身份见 tag 与 md5"——**路径会随时间失效，tag + md5 不会**（2026-10-24 复核：归档一
   第一百四十条仍指着已删的 `-20261017`，按路径去找会扑空）。
 - 清理只动 `dist/`（gitignore 内），不进版本历史；发版 tag 永不删除。
 
@@ -366,7 +366,7 @@ python tools\release_manifest_check.py --repo . --expect-tag rc-YYYYMMDD
 > （未打 tag 的 HEAD 上 `describe --exact-match` 非零；受限 PowerShell 缺 `Get-FileHash`），
 > 于是"包少了自识别件"可以无人察觉。两处脚本缺陷已修，并加本闸防回潮。
 
-#### 7. 画布编辑锁接线校验（exit 18）
+#### 7. 接线校验（exit 18）
 
 2026-10-24 现场反馈：工具**拖不进**画布；双击能进，但进去后节点不能动。根因两条都在
 `MainWindow` 的接线（不是算法）：
@@ -380,9 +380,11 @@ python tools\release_manifest_check.py --repo . --expect-tag rc-YYYYMMDD
 
 - **运行期** `EditLockReleaseTest`：流程因节点失败停止后，`allowsGraphEditing()` 必须为真，
   且按该判据重算后画布解锁、节点恢复 `ItemIsMovable`——执行器若停在 Running 即红。
-- **接线** `tools/edit_lock_wiring_check.py`（CI 第 18 步，先跑自证臂）：四个执行槽的函数体
-  必须各有 `updateEditLockForCurrentScene`，`addNode` 必须有 `isEditLocked`；删掉任一处即红
-  ——运行期用例钉不住"某个槽忘了调"，这正是缺陷所在位置。
+- **接线** `tools/wiring_checks.py`（CI 第 18 步，先跑三枚自证臂）：四个执行槽的函数体
+  必须各有 `updateEditLockForCurrentScene`，`addNode` 必须有 `isEditLocked`；且 `src/` 下不得
+  出现硬编码 `logOperation("Admin", …)`（审计操作者必须取 `SessionManager::currentUser()`，
+  否则所有用户动作都记成同一个人）。删掉任一处即红——运行期用例钉不住"某个槽忘了调"，
+  这正是这类缺陷所在的位置。
 
 ## 配置文件详解
 

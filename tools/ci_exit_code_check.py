@@ -62,7 +62,7 @@ EXPECTED_STEPS = [
     "Cited-log presence check",
     "Register appendix append-only check",
     "Registered open-item re-measurement",
-    "Canvas edit-lock wiring check",
+    "Wiring checks (canvas lock / audit operator)",
     "Version header single-source check",
     "Release package coherence (tag / manifest / exe md5)",
     "Build ($Config)",
@@ -85,7 +85,7 @@ GATE_CODE_OF_STEP = [
     ("Cited-log presence check", "13"),
     ("Register appendix append-only check", "14"),
     ("Registered open-item re-measurement", "15"),
-    ("Canvas edit-lock wiring check", "18"),
+    ("Wiring checks (canvas lock / audit operator)", "18"),
     ("Version header single-source check", "17"),
     ("Release package coherence (tag / manifest / exe md5)", "16"),
 ]

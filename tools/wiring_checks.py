@@ -1,27 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""画布编辑锁的接线守卫（2026-10-24 现场反馈）。
+"""接线守卫（2026-10-24 画布锁 / 2026-10-25 审计操作者）。
 
-现场现象：工具拖不进画布；双击能进，但进去后节点不能动。
-根因两条（都在 MainWindow 的"接线"上，不是算法）：
+有些缺陷不在算法里，而在"接线"上——某个槽忘了调一句、某处写死了一个值。运行期用例钉不住
+它们（用例驱动执行器/对话框的方式与生产路径不同），所以用源码形状的硬约束来守：
 
-  ① 四个执行状态槽里，`onExecutionStarted / onExecutionStopped / onExecutionFinished` 都会
-     调 `updateEditLockForCurrentScene()` 重算画布锁，只有 `onExecutionError` 漏了。
-     错误路径若没走到 executionFinished，画布就永久停在锁定态。
-  ② 工具箱双击走 `MainWindow::addNode`，它直接 `createNode`；而 `FlowScene::createNode`
-     本身不查 `m_editLocked`（拖拽路径是在 dragEnter/dragMove/drop 里查的）。于是锁定期间
-     "拖不进、双击能进"，进去后节点又不可动。
+  INV1 画布锁（2026-10-24 现场：工具拖不进、双击入画布后不能动）
+       每个执行状态槽的函数体里必须有 updateEditLockForCurrentScene；
+       MainWindow::addNode（工具箱双击路径）必须有 isEditLocked 判据。
+  INV2 审计操作者（2026-10-25 复核 P3-5：用户管理日志的操作者写死 "Admin"）
+       src/ 下不得出现 logOperation(...,"Admin",...) 这类硬编码操作者——
+       操作者必须取 SessionManager::currentUser()，否则审计日志里所有动作都记成同一个人。
 
-本闸把这两条变成源码形状的硬约束，删掉任一处即红：
-  INV1 每个执行状态槽的函数体里必须有 `updateEditLockForCurrentScene`
-  INV2 `MainWindow::addNode` 的函数体里必须有 `isEditLocked` 判据
-
-为什么要形状闸而不是只靠运行期用例：运行期用例（EditLockReleaseTest）钉的是"失败停止后
-执行器允许编辑"，钉不住"MainWindow 有没有在这个槽里重算"——那正是本次缺陷的位置。
-
-用法：python tools/edit_lock_wiring_check.py [--repo .] [--selftest]
+用法：python tools/wiring_checks.py [--repo .] [--selftest]
 输出契约（ci.ps1 按前缀筛行）：
-  [ELW] slot=<name> ok|MISSING
+  [ELW] key=value
   [ELW] finding=<code>: <detail>
   [ELW-INV] findings=N
   [ELW-VERDICT] GREEN|RED
@@ -29,6 +22,7 @@
 """
 
 import argparse
+import glob
 import os
 import re
 import sys
@@ -51,6 +45,10 @@ REQUIRED_SLOTS = [
     ("onExecutionError", LOCK_CALL),
     ("addNode", "isEditLocked"),
 ]
+
+# INV2：硬编码审计操作者（logOperation("Admin", ...) / logOperation(QStringLiteral("Admin"), ...)）
+HARDCODED_OPERATOR_RX = re.compile(
+    r'logOperation\(\s*(?:QStringLiteral\(\s*)?"Admin"')
 
 
 def out(line):
@@ -137,7 +135,48 @@ def selftest(repo):
             problems.append("arm2_dead")
             out("[ELW] selftest_arm2=FAIL(删掉锁判据后仍判绿：这道闸有盲点)")
 
+    # 臂3：往 src/ 里塞一个硬编码审计操作者（模拟 P3-5 的回潮）
+    #     在临时副本目录里做：真仓库一个字节都不碰。
+    with tempfile.TemporaryDirectory(prefix="vfp_elw_st3_") as tmp:
+        victim = os.path.join(tmp, "UserManagementDialog.cpp")
+        with open(victim, "w", encoding="utf-8") as fh:
+            fh.write('db->logOperation(QStringLiteral("Admin"), QStringLiteral("删除用户"), x);\n')
+        hits = scan_hardcoded_operator([victim])
+        if hits:
+            out("[ELW] selftest_arm3=ok(塞入硬编码 Admin 操作者后判红)")
+        else:
+            problems.append("arm3_dead")
+            out("[ELW] selftest_arm3=FAIL(塞入硬编码 Admin 操作者后仍判绿：这道闸有盲点)")
+
     return problems
+
+
+def scan_hardcoded_operator(paths):
+    """返回 [(文件, 行号, 行内容)]：硬编码 logOperation("Admin", ...) 的出现处。"""
+    hits = []
+    for path in paths:
+        try:
+            with open(path, "rb") as fh:
+                lines = fh.read().decode("utf-8", "replace").splitlines()
+        except OSError:
+            continue
+        for i, line in enumerate(lines, 1):
+            if HARDCODED_OPERATOR_RX.search(line):
+                hits.append((path, i, line.strip()))
+    return hits
+
+
+def check_audit_operator(repo):
+    """INV2：src/ 下不得有硬编码审计操作者。"""
+    findings = []
+    files = sorted(glob.glob(os.path.join(repo, "src", "**", "*.cpp"), recursive=True))
+    out("[ELW] audited_files=%d" % len(files))
+    hits = scan_hardcoded_operator(files)
+    for path, lineno, line in hits:
+        rel = os.path.relpath(path, repo)
+        findings.append("hardcoded_operator:%s:%d" % (rel, lineno))
+        out("[ELW] finding=hardcoded_operator: %s:%d %s" % (rel, lineno, line[:100]))
+    return findings
 
 
 def main():
@@ -160,6 +199,7 @@ def main():
     if args.selftest:
         findings += selftest(repo)
     findings += check(text)
+    findings += check_audit_operator(repo)
 
     out("[ELW-INV] findings=%d" % len(findings))
     if findings:
