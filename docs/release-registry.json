@@ -117,7 +117,16 @@
       "exe_bytes": 9731584,
       "package_dir": "dist/VisionFlowPlatform-rc-20261025.7",
       "recorded_at": "2026-10-25",
-      "recorded_note": "当前装机包：译文静态闸 + 脚本确认 6 条全钉 + 菜单路径文案/部署超时说明消歧 + 首次安装提示并入写闸常驻提示 + 修 --selftest-nodes 被脚本确认模态框阻塞（自检 1.4 秒完成）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261025.8 取代（后者含其全部改动）"
+    },
+    {
+      "tag": "rc-20261025.8",
+      "commit": "2e832bc6803a8d8105b81c978997bdf3b892afa9",
+      "exe_md5": "da0265fde4ef14e75f5a1e4e1760d426",
+      "exe_bytes": 9731584,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261025.8",
+      "recorded_at": "2026-10-25",
+      "recorded_note": "当前装机包：译文静态闸补自闭合/畸形标签盲区（每条 <message> 必须进检查，夹具牙五形态）+ 自检关闭确认作用域守卫 + 改密成功后补回脚本提示"
     }
   ],
   "legacy_backfilled": [
