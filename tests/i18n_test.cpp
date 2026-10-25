@@ -18,7 +18,7 @@ private slots:
 };
 
 /// 译文表静态闸（纯函数，可对合成文本自测）。
-/// 返回 problem 条目；checked 为**全部** <message> 数（不是"解析成功的条数"）——
+/// 返回 problem 条目；messageCount 为**全部** <message> 数（不是"解析成功的条数"）——
 /// 2026-10-25 复核：原实现只统计 regex 能匹配的条目，自闭合 <translation .../> 会被整条
 /// 跳过（既不进 problems 也不进 checked），闸对它完全失明。
 static void checkTsText(const QString &ts, QStringList &problems, int &messageCount,
@@ -72,7 +72,11 @@ static void checkTsText(const QString &ts, QStringList &problems, int &messageCo
         const QRegularExpression trTagRx(QStringLiteral("<translation([^>]*)>"));
         const auto trTag = trTagRx.match(body);
         const QString trAttrs = trTag.hasMatch() ? trTag.captured(1) : QString();
-        if (trAttrs.contains(QLatin1String("vanished")) || trAttrs.contains(QLatin1String("obsolete"))) {
+        // 精确匹配 type="vanished|obsolete"（2026-10-25 复核：属性子串会把 foo="vanished"
+        // 也算成废弃 ⇒ ignoredCount 多算而对账报红，诊断却指不到具体属性）
+        static const QRegularExpression obsoleteRx(
+            QStringLiteral("\\btype\\s*=\\s*\"(?:vanished|obsolete)\""));
+        if (obsoleteRx.match(trAttrs).hasMatch()) {
             ++ignoredCount;
             continue;
         }
@@ -83,6 +87,23 @@ static void checkTsText(const QString &ts, QStringList &problems, int &messageCo
             problems << QStringLiteral("empty: %1").arg(label);
         else if (hasCjk(src) && en == src)
             problems << QStringLiteral("mirrored Chinese source: %1").arg(label);
+    }
+
+    // 诊断补强（2026-10-25 复核）：未配对的 <message…>（自闭合/缺闭标签）——红由计数差负责，
+    // 但原来只报"271 vs 272"，现场排障指不到具体是哪个标签畸形。这里把没进成对匹配的开口
+    // 标签逐个点名。
+    QSet<int> covered;
+    for (auto it = msgRx.globalMatch(ts); it.hasNext();) {
+        covered.insert(it.next().capturedStart(0));
+    }
+    const QRegularExpression openRx(QStringLiteral("<message\\b[^>]*?>"));
+    for (auto it = openRx.globalMatch(ts); it.hasNext();) {
+        const auto m = it.next();
+        if (covered.contains(m.capturedStart(0)))
+            continue;
+        problems << QStringLiteral("unpaired/malformed message tag: %1")
+                        .arg(ts.mid(m.capturedStart(0), 40)
+                                 .replace(QLatin1Char('\n'), QLatin1Char(' ')));
     }
 }
 
@@ -277,7 +298,11 @@ void I18nTest::tsGateCatchesSelfClosingAndMissingTranslations()
     checkTsText(QStringLiteral("<message/>"),
                 problems, n, ignored);
     QCOMPARE(n, 0);
-    QVERIFY(problems.isEmpty());   // 本函数按条报问题；这条的红由计数差负责
+    // 诊断必须点名这个畸形标签（2026-10-25 复核：原来只有计数差，报错不指位置）
+    QVERIFY2(!problems.isEmpty()
+                 && problems.first().contains(QLatin1String("unpaired")),
+             qPrintable(QStringLiteral("未配对 <message/> 没有产生点名诊断：%1")
+                            .arg(problems.join(QStringLiteral(" | ")))));
     {
         int raw = 0;
         for (auto it = QRegularExpression(QStringLiteral("<message\\b[^>]*?>"))
@@ -297,6 +322,15 @@ void I18nTest::tsGateCatchesSelfClosingAndMissingTranslations()
     QCOMPARE(ignored, 0);
     QVERIFY2(!problems.isEmpty(),
              "源文含 type=vanished 字样导致整条被误判为废弃（空译文逃过检查）");
+
+    // ⑥d foo="vanished" 这类属性不得被当成废弃标记（2026-10-25 复核：属性子串判定会误认）
+    checkTsText(QStringLiteral("<message><source>\u4f2a\u5e9f\u5f03</source>"
+                               "<translation foo=\"vanished\"></translation></message>"),
+                problems, n, ignored);
+    QCOMPARE(n, 1);
+    QCOMPARE(ignored, 0);
+    QVERIFY2(!problems.isEmpty(),
+             "foo=\"vanished\" 被误判成废弃标记，空译文逃过了检查");
 
     // ⑦ 合法条目（英文源文等值 + 中文有译文）：必须全绿，防止闸误伤
     checkTsText(QStringLiteral("<message><source>Vision Flow Platform</source>"
