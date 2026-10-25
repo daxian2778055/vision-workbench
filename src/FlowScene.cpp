@@ -443,6 +443,23 @@ void FlowScene::recordUndo()
     emit redoAvailable(false);
 }
 
+void FlowScene::clearUndoHistory()
+{
+    // 恢复快照时不清：restoreSnapshot → sceneFromJson 走的是同一条路，而 undo() 正是
+    // 先把当前状态压进 m_redoStack 再恢复——这里若清栈，redo 立刻失效（2026-10-25
+    // 由 UndoHistoryAfterLoadTest 第二腿实测抓到）。载入路径 m_restoring 为 false，照常清。
+    if (m_restoring)
+        return;
+    {
+        QMutexLocker locker(&m_graphMutex);
+        m_undoStack.clear();
+        m_redoStack.clear();
+    }
+    // 信号在锁外发（与 recordUndo/undo/redo 同一纪律）
+    emit undoAvailable(false);
+    emit redoAvailable(false);
+}
+
 void FlowScene::beginUndoBatch()
 {
     ++m_undoBatch;

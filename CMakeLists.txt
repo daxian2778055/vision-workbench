@@ -1079,6 +1079,14 @@ if(MSVC)
     vfp_configure_gui_test(RoundAbortSummaryTest)
 endif()
 
+# 打开方案后撤销栈必须为空（2026-10-25 复核 P2-2），且之后编辑仍能记能撤
+if(MSVC)
+    add_executable(undo_history_after_load_test tests/undo_history_after_load_test.cpp)
+    target_link_libraries(undo_history_after_load_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    vfp_add_qtest(NAME UndoHistoryAfterLoadTest TARGET undo_history_after_load_test)
+    vfp_configure_gui_test(UndoHistoryAfterLoadTest)
+endif()
+
 # 良率目标监控（P1-11）：闭锁只报一次 / 恢复重置 / 滚动窗口 / 最小样本 / 配置变更重置
 if(MSVC)
     add_executable(yield_monitor_test tests/yield_monitor_test.cpp)
@@ -1320,7 +1328,7 @@ if(MSVC)
     set(VFP_TESTS NodeCoreTest OpencvSerializationTest IntegrationTest DatabaseTest PerfTest
                   ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest CameraIoTest
                   DnnSegmentTest OpencvDefectAlignTest SoakTest StatisticsReportTest SchemePackageTest
-                  I18nTest SubFlowTest EditLockReleaseTest RoundAbortSummaryTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
+                  I18nTest SubFlowTest EditLockReleaseTest RoundAbortSummaryTest UndoHistoryAfterLoadTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
                   FactoryPasswordGuardTest FeatureMatchTest CalibChainTest OpencvNodesTest
                   ProjectPathsTest FlowCachePurgeLedgerTest ExecutionControlPolicyTest
                   AuxDialogMenuRouterTest ModuleEditorRegistryTest UITranslatorTest

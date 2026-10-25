@@ -170,6 +170,11 @@ public:
     bool redo();
     bool canUndo() const { return !m_undoStack.isEmpty(); }
     bool canRedo() const { return !m_redoStack.isEmpty(); }
+    /// 清空撤销/重做历史。载入方案后必须调用：sceneFromJson 内部每次 createNode /
+    /// createConnection 都会 recordUndo（m_restoring 只在 restoreSnapshot 内置位，载入路径
+    /// 没有），于是"打开方案"会在撤销栈里留下几十个半成品快照——第一次 Ctrl+Z 就把刚
+    /// 载入的流程拆掉（2026-10-25 复核 P2-2）。
+    void clearUndoHistory();
 
     /// 删除当前选中的算子与注释
     void deleteSelectedItems();

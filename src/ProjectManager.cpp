@@ -446,7 +446,7 @@ bool ProjectManager::buildScenesFromJson(const QJsonObject &root, QList<FlowScen
     for (int i = 0; i < sceneArray.size(); ++i) {
         QJsonObject sceneJson = sceneArray[i].toObject();
         FlowScene *scene = new FlowScene();
-        sceneFromJson(sceneJson, scene);
+        sceneFromJson(sceneJson, scene);   // 内部末尾已清空撤销/重做历史（P2-2）
         scenes.append(scene);
     }
     return true;
@@ -753,4 +753,12 @@ void ProjectManager::sceneFromJson(const QJsonObject &json, FlowScene *scene)
     for (const QString &n : fixtureNotes)
         reportLoadNote(QStringLiteral("方案加载：夹具条目降级 %1").arg(n));
     m_loadRawLossCount += fixtureNotes.size();   // 键名留着、矩阵被写成空——同一次保存的后果
+
+    // 载入后清空撤销/重做历史（2026-10-25 复核 P2-2）：上面的 createNode /
+    // createConnection 每一步都会 recordUndo（载入路径不置 m_restoring，那个标志只在
+    // restoreSnapshot 内置位）。不清的话，一个 20 节点的方案载入后撤销栈里约堆着 39 个
+    // 半成品快照（上限 50），用户打开方案按一次 Ctrl+Z 就把刚载入的流程拆掉——
+    // "一打开就坏"的观感。放在 sceneFromJson 末尾而不是 buildScenesFromJson：所有调用方
+    // （打开方案、崩溃恢复、测试、片段）都经这里，少一处漏一个。
+    scene->clearUndoHistory();
 }
