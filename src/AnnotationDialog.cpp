@@ -127,7 +127,12 @@ void AnnotationDialog::onRoiEdited(const RoiShape &shape)
     const QString path = classDir + QLatin1Char('/')
         + QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_hhmmss_zzz"))
         + QStringLiteral(".png");
-    cv::imwrite(path.toStdString(), crop);
+    // 检查 cv::imwrite 的返回值（2026-10-25 复核 P3-6）：原来返回值直接丢掉，路径含中文、
+    // 无写权限、磁盘满时静默失败，界面却照常提示"已保存"——样本凭空丢失，现场以为存上了。
+    if (!cv::imwrite(path.toStdString(), crop)) {
+        m_hint->setText(QStringLiteral("样本保存失败：%1（路径/权限/磁盘？）").arg(path));
+        return;
+    }
     refreshClassList();
     m_classCombo->setCurrentText(cls);
     m_hint->setText(QStringLiteral("已保存 %1").arg(path));
