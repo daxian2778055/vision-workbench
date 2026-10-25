@@ -3,8 +3,9 @@
 #include <QObject>
 #include <QCoreApplication>
 #include <QFile>
+#include <QPair>
 #include <QRegularExpression>
-#include <QSet>
+#include <QVector>
 #include <QTranslator>
 #include <QString>
 #include <QtTest/QtTest>
@@ -89,7 +90,10 @@ static void checkTsText(const QString &ts, QStringList &problems, int &messageCo
                 continue;
             }
             const QString en = trM.captured(1);
-            if (body.contains(QStringLiteral("type=\"unfinished\"")))
+            // unfinished 与 obsolete 同一判据：看 <translation> 标签的 type 属性（2026-10-25
+            // 复核：body 子串会把源文/译文里出现该字样的正常条目误判成未翻）
+            static const QRegularExpression unfinishedRx("(?:^|\\s)type\\s*=\\s*\"unfinished\"");
+            if (unfinishedRx.match(trAttrs).hasMatch())
                 problems << QStringLiteral("unfinished: %1").arg(label);
             else if (en.trimmed().isEmpty())
                 problems << QStringLiteral("empty: %1").arg(label);
@@ -386,6 +390,14 @@ void I18nTest::tsGateCatchesSelfClosingAndMissingTranslations()
                                              .arg(problems.join(QStringLiteral(" | ")))));
     }
 
+    // ⑥i 源文/译文里出现 type="unfinished" 字样：不得把正常条目误判成未翻（2026-10-25 复核）
+    checkTsText(QStringLiteral("<message><source>type=\"unfinished\" \u5b57\u6837</source>"
+                               "<translation>Normal Translation</translation></message>"),
+                problems, n, ignored);
+    QCOMPARE(n, 1);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("源文含 type=unfinished 字样导致正常条目被误判：%1")
+                            .arg(problems.join(QStringLiteral(" | ")))));
     // ⑥h 多行源文（含换行）：同样要被检查（2026-10-25 实测的更深盲区）
     checkTsText(QStringLiteral("<message><source>\u591a\u884c\u6e90\u6587\n\u7b2c\u4e8c\u884c</source>"
                                "<translation></translation></message>"),
