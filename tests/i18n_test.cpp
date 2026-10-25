@@ -36,10 +36,12 @@ static void checkTsText(const QString &ts, QStringList &problems, int &messageCo
     problems.clear();
     messageCount = 0;
     ignoredCount = 0;
-    // 消息标签允许带属性（2026-10-25 复核：原只认精确 <message>，lupdate 生成
-    // <message numerus="yes"> 时该条既不进检查也不进计数，"计数相等"照样绿）。
-    // 自闭合 <message/> 会以空 body 命中 → 判"无 <source>"，仍红。
-    const QRegularExpression msgRx(QStringLiteral("<message(?:\\s[^>]*)?>(.*?)</message>"),
+    // 消息标签允许带属性（2026-10-25 复核两轮）：
+    //   · 第一轮：原只认精确 <message>，<message numerus="yes"> 既不进检查也不进计数；
+    //   · 第二轮：计数正则 <message(?:\s[^>]*)?> 又漏了**无空格自闭合** <message/>。
+    // 现在：计数用 <message\b[^>]*?>（含自闭合），正文用"必须有成对 </message>"的写法——
+    // 自闭合条目会被计进总数却进不了正文检查 ⇒ 计数不等判红（这是机制，不是"空 body"）。
+    const QRegularExpression msgRx(QStringLiteral("<message\\b[^>]*?>(.*?)</message>"),
                                    QRegularExpression::DotMatchesEverythingOption);
     const QRegularExpression srcRx(QStringLiteral("<source>(.*?)</source>"),
                                    QRegularExpression::DotMatchesEverythingOption);
@@ -65,8 +67,12 @@ static void checkTsText(const QString &ts, QStringList &problems, int &messageCo
         }
         // 已废弃条目（vanished/obsolete）不参与"活动译文"的判据（2026-10-25 复核）：
         // 它们的译文本就会随源码淘汰而陈旧，把空/等值判红是误报。只保证标签成对即可。
-        if (body.contains(QStringLiteral("type=\"vanished\""))
-            || body.contains(QStringLiteral("type=\"obsolete\""))) {
+        // 判定看 **<translation> 标签的 type 属性**，不是对整个 message body 做子串匹配——
+        // 源文里若出现 'type="vanished"' 字样会被整条误认成废弃条目（2026-10-25 复核第二轮）。
+        const QRegularExpression trTagRx(QStringLiteral("<translation([^>]*)>"));
+        const auto trTag = trTagRx.match(body);
+        const QString trAttrs = trTag.hasMatch() ? trTag.captured(1) : QString();
+        if (trAttrs.contains(QLatin1String("vanished")) || trAttrs.contains(QLatin1String("obsolete"))) {
             ++ignoredCount;
             continue;
         }
@@ -186,13 +192,24 @@ void I18nTest::tsHasNoUnfinishedEmptyOrMirrorTranslations()
     // 每条 <message> 都必须被检查过：进检查的条数 == 文本里的 <message> 总数，
     // 而不是只看"总数大于某个阈值"（2026-10-25 复核：原 checked>200 防不住单条被跳过）
     int rawMessageCount = 0;
-    for (auto it = QRegularExpression(QStringLiteral("<message(?:\\s[^>]*)?>")).globalMatch(ts);
+    for (auto it = QRegularExpression(QStringLiteral("<message\\b[^>]*?>")).globalMatch(ts);
          it.hasNext();) {
         it.next();
         ++rawMessageCount;
     }
     QCOMPARE(messageCount, rawMessageCount);
     QVERIFY2(messageCount > 200, "条目数异常偏低，解析可能退化");
+    // ignoredCount 必须与文本里真实的废弃标签数对账（2026-10-25 复核第二轮：原实现算了没人看，
+    // 空 vanished 注入后条数变了也照样绿）。对不上就是"有条目被悄悄跳过/误判"。
+    int rawIgnored = 0;
+    for (auto it = QRegularExpression(QStringLiteral("<translation\\s+type=\"(?:vanished|obsolete)\""))
+                     .globalMatch(ts);
+         it.hasNext();) {
+        it.next();
+        ++rawIgnored;
+    }
+    QCOMPARE(ignoredCount, rawIgnored);
+    qInfo("译文表：%d 条活动条目受检，%d 条已废弃条目豁免", messageCount - ignoredCount, ignoredCount);
     QVERIFY2(problems.isEmpty(),
              qPrintable(QStringLiteral("\u8bd1\u6587\u8868\u6709 %1 \u5904\u95ee\u9898\uff1a%2")
                             .arg(problems.size())
@@ -254,6 +271,32 @@ void I18nTest::tsGateCatchesSelfClosingAndMissingTranslations()
     QVERIFY2(problems.isEmpty(),
              qPrintable(QStringLiteral("\u5df2\u5e9f\u5f03\u6761\u76ee\u88ab\u8bef\u5224\uff1a%1")
                             .arg(problems.join(QStringLiteral(" | ")))));
+
+    // ⑥b 无空格自闭合 <message/>：计数正则认它、正文正则不认 ⇒ 本函数 messageCount=0，
+    // 而主槽的"进检查条数 == <message 总数>"会不等 ⇒ 判红（机制是计数差，不是"空 body"）
+    checkTsText(QStringLiteral("<message/>"),
+                problems, n, ignored);
+    QCOMPARE(n, 0);
+    QVERIFY(problems.isEmpty());   // 本函数按条报问题；这条的红由计数差负责
+    {
+        int raw = 0;
+        for (auto it = QRegularExpression(QStringLiteral("<message\\b[^>]*?>"))
+                         .globalMatch(QStringLiteral("<message/>"));
+             it.hasNext();) {
+            it.next();
+            ++raw;
+        }
+        QCOMPARE(raw, 1);   // 计数认它 ⇒ 主槽里 messageCount(0) != raw(1) ⇒ 红
+    }
+
+    // ⑥c 源文里出现 type="vanished" 字样不得整条误判为废弃：译文为空仍要判红
+    checkTsText(QStringLiteral("<message><source>type=\"vanished\" 字样</source>"
+                               "<translation></translation></message>"),
+                problems, n, ignored);
+    QCOMPARE(n, 1);
+    QCOMPARE(ignored, 0);
+    QVERIFY2(!problems.isEmpty(),
+             "源文含 type=vanished 字样导致整条被误判为废弃（空译文逃过检查）");
 
     // ⑦ 合法条目（英文源文等值 + 中文有译文）：必须全绿，防止闸误伤
     checkTsText(QStringLiteral("<message><source>Vision Flow Platform</source>"
