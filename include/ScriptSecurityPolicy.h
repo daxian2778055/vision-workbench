@@ -5,6 +5,7 @@
 #include <QProcessEnvironment>
 #include <QMutex>
 #include <QSet>
+#include <atomic>   // m_requireConfirmation（2026-10-25：运行期可翻转，跨线程读）
 #include <functional>
 
 class QProcess;
@@ -39,8 +40,9 @@ public:
     QStringList allowedLanguages() const { return m_allowedLanguages; }
     void setAllowedLanguages(const QStringList &v) { m_allowedLanguages = v; }
 
-    bool requireConfirmation() const { return m_requireConfirmation; }
-    void setRequireConfirmation(bool v) { m_requireConfirmation = v; }
+    /// 执行前确认开关（2026-10-25 复核对：GUI 运行期可翻转，worker 每轮读 ⇒ 用原子）
+    bool requireConfirmation() const { return m_requireConfirmation.load(std::memory_order_relaxed); }
+    void setRequireConfirmation(bool v) { m_requireConfirmation.store(v, std::memory_order_relaxed); }
 
     /// 174 行拍板：会话级一次同意缓存。默认翻转成「开」之后，确认弹窗若逐轮重复会把
     /// 连续/硬触发产线卡死——所以同意按 (语言, 内容哈希) 记账：首次必问、同意一次本会话
@@ -188,7 +190,8 @@ private:
     bool m_enabled = true;
     QStringList m_allowedLanguages = { QStringLiteral("Python"), QStringLiteral("Lua") };
     /// 174 行拍板：确认默认开启（原 false 属 146 行登记的取舍，本次按同粒度翻面配腿）。
-    bool m_requireConfirmation = true;
+    /// 2026-10-25 复核对：GUI 运行期可翻转（系统菜单开关），worker 每轮读 ⇒ 原子。
+    std::atomic<bool> m_requireConfirmation{true};
     /// 同意缓存（thread-safe：ScriptNode::run 在执行线程进，弹窗经 BlockingQueuedConnection
     /// 切主线程——缓存读写两侧都可能从执行线程来，必须带锁；mutable 是判定方法的 const 面）。
     mutable QMutex m_approvalMutex;

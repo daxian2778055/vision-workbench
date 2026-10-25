@@ -364,6 +364,28 @@ void RoundAbortSummaryTest::subFlowNestedLoopFailureIsStillNg()
                                 .arg(finished ? 1 : 0)
                                 .arg(stateList.join(QStringLiteral(" , ")))
                                 .arg(errors.join(QStringLiteral(" | ")))));
+
+        // 本腿必须真的走到"嵌套循环体失败"这条路径（2026-10-25 复核 P3-3）：
+        // 若内部循环体又被判成"定义损坏"，调用点同样失败、同样写 NG —— 上面那两条断言
+        // 照样绿，等于没钉住 P2-A × P3-8 的冲突修复。这里用"循环体节点真的执行过"+
+        // "错误里是循环体失败而不是定义损坏"两条把它钉死。
+        QVERIFY2(nodeStates.contains(bad->fullName()),
+                 qPrintable(QStringLiteral("循环体节点没执行（多半又被判成定义损坏）：nodes=[%1]")
+                                .arg(stateList.join(QStringLiteral(" , ")))));
+        bool sawBrokenDef = false;
+        for (const QString &e : errors) {
+            if (e.contains(QStringLiteral("定义损坏")))
+                sawBrokenDef = true;
+        }
+        QVERIFY2(!sawBrokenDef,
+                 qPrintable(QStringLiteral("定义被判成损坏，本腿没验到嵌套循环路径：%1")
+                                .arg(errors.join(QStringLiteral(" | ")))));
+        // 循环**体内**的节点必须真的执行过且判失败（说明失败确实来自那次嵌套执行）。
+        // 注意循环节点本身在子流程里是 executeLoop 直接调度的，不走 executeNode，故不发
+        // nodeExecuted——不能拿它当判据。
+        QVERIFY2(nodeStates.contains(bad->fullName()) && !nodeStates.value(bad->fullName()),
+                 qPrintable(QStringLiteral("循环体节点没有执行/没判失败：nodes=[%1]")
+                                .arg(stateList.join(QStringLiteral(" , ")))));
     }
     const int after = summaryRows(QDateTime::currentDateTime().addDays(-1),
                                   QDateTime::currentDateTime().addSecs(60));

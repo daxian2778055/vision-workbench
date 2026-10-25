@@ -1217,9 +1217,16 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
                 }
             }
             {
-                // 标记"输出有效"：供局部执行的可复用判定（见 reusesCachedOutput）
+                // 标记"输出有效"：供局部执行的可复用判定（见 reusesCachedOutput）。
+                // 中止不是成功（2026-10-25 复核 P3-2）：被用户中止的调用点输出为空，
+                // 不得标"可复用/有效"——否则局部执行的复用判定会把它当成有结果。
+                // （画布颜色仍走 nodeExecuted(true)：节点态只有 成功/失败 两色，第三态
+                //   需要动结果面板与图元的配色契约，登记为已知项 P3-14。）
                 QMutexLocker cacheLock(&m_graphCacheMutex);
-                m_validOutputs[node] = true;
+                if (m_lastNodeAborted)
+                    m_validOutputs.remove(node);
+                else
+                    m_validOutputs[node] = true;
             }
         } else {
             for (int p = 0; p < node->outputPorts().size(); ++p)
@@ -1292,6 +1299,10 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
         // Phase 4: 保存检测结果到数据库
         // 中止不是成功（2026-10-25 复核 P3-1）：子流程中止返回的调用点不落 OK 行——
         // 输出为空、整轮也不出汇总，节点级通过率若把它算成成功，报表上会多出绿的假成功。
+        // 中止时也要把"处置已决定"记上（2026-10-25 复核 P3-1 残留）：否则此后若再抛异常，
+        // 异常出口会以为"还没落库"而补一条 NG 行——同轮同节点凭空多一条失败记录。
+        if (m_lastNodeAborted)
+            m_nodeRecordWritten = true;
         if (!m_lastNodeAborted && !AppDatabase::instance()->databasePath().isEmpty()) {
             // \u6570\u636E\u5E93\u5DF2\u521D\u59CB\u5316
             // 报表「流程」列必须是可读且跨会话稳定的流程名：此前写的是场景指针的十进制数字
@@ -1740,20 +1751,22 @@ void FlowExecutor::collectSubFlowBodies(const QList<SubFlowDef> &defs, const QLi
 
         // 与**外层**循环体交叉的成员让位给循环体（v1 限制：子流程成员不得同时是别的循环的体）。
         // 注意区分"定义内部的循环"（2026-10-25 复核 P2-A 与 P3-8 的冲突）：成员里的 LoopNode
-        // 自己的循环体若也在成员内，那是子流程的内部结构、必须允许——否则任何嵌套循环的定义
-        // 都会被判坏，成员退回主遍历，调用点反而永远不执行（真失败/中止都无从谈起）。
-        QSet<NodeBase *> internalLoopBody;
-        for (NodeBase *m : members) {
-            if (LoopNode *ln = qobject_cast<LoopNode *>(m)) {
-                for (NodeBase *bn : collectLoopBody(ln)) {
-                    if (members.contains(bn))
-                        internalLoopBody.insert(bn);
-                }
-            }
+        // 自己的循环体在成员内属内部结构、必须允许——否则任何嵌套循环的定义都会被判坏。
+        //
+        // 判据按"体所属的 LoopNode 是否在 members 内"逐节点算（2026-10-25 复核 P3-4）：
+        // 先前用「m_loopBodyNodes 命中 且 不在内部体集合里」的并集写法，会把"既是内部循环体、
+        // 又是某个外部 LoopNode 的体"的成员误放行——那种节点外层循环与子流程都会调度它。
+        QSet<NodeBase *> externalLoopBody;
+        for (NodeBase *live : liveNodes) {
+            LoopNode *ln = qobject_cast<LoopNode *>(live);
+            if (!ln || members.contains(ln))
+                continue;   // 定义内部的循环：它的体是内部结构，不算交叉
+            for (NodeBase *bn : collectLoopBody(ln))
+                externalLoopBody.insert(bn);
         }
         QList<NodeBase *> usable;
         for (NodeBase *m : members) {
-            if (!m_loopBodyNodes.contains(m) || internalLoopBody.contains(m))
+            if (!externalLoopBody.contains(m))
                 usable.append(m);
         }
         // 任何成员被循环体过滤掉都要判坏（2026-10-25 复核 P3-8 + 残留）：

@@ -410,6 +410,21 @@ if (-not $SkipVerify) {
     if (-not $p.WaitForExit(600000)) {
         $p.Kill()
         $problems += '节点自检超时（>10 分钟）'
+        # 超时必须把自检的中间输出打出来（2026-10-25 复核 P3-5）：NodeSelfTest 已逐节点
+        # fflush，但这里用 ReadToEndAsync 缓冲，此前只记一句"超时"，现场根本看不到卡在哪个
+        # 节点——那条信息正是排障唯一有用的东西。
+        try {
+            $partial = $outTask.Result
+        } catch {
+            $partial = ''
+        }
+        if ($partial) {
+            $tail = ($partial -split "`r?`n") | Where-Object { $_ -ne '' } | Select-Object -Last 12
+            Write-Host '  超时前最后输出（可据此定位卡在哪个节点）:'
+            foreach ($line in $tail) { Write-Host ("    " + $line) }
+        } else {
+            Write-Host '  超时前无任何输出（多半卡在启动/单例初始化，不在节点循环里）'
+        }
     } else {
         Write-Host ("  自检退出码: " + $p.ExitCode)
         if ($p.ExitCode -ne 0) { $problems += "节点自检未通过（退出码 $($p.ExitCode)）" }

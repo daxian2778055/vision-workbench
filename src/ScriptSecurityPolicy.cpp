@@ -54,7 +54,10 @@ void ScriptSecurityPolicy::load()
     m_enabled = settings.value(QStringLiteral("enabled"), m_enabled).toBool();
     const QStringList def = { QStringLiteral("Python"), QStringLiteral("Lua") };
     m_allowedLanguages = settings.value(QStringLiteral("allowedLanguages"), def).toStringList();
-    m_requireConfirmation = settings.value(QStringLiteral("requireConfirmation"), m_requireConfirmation).toBool();
+    m_requireConfirmation.store(
+        settings.value(QStringLiteral("requireConfirmation"), m_requireConfirmation.load())
+            .toBool(),
+        std::memory_order_relaxed);
     m_maxExecutionMs = settings.value(QStringLiteral("maxExecutionMs"), m_maxExecutionMs).toInt();
     m_isolatedPython = settings.value(QStringLiteral("isolatedPython"), m_isolatedPython).toBool();
     m_stripEnvironment = settings.value(QStringLiteral("stripEnvironment"), m_stripEnvironment).toBool();
@@ -80,7 +83,7 @@ void ScriptSecurityPolicy::save()
     settings.beginGroup(QStringLiteral("scriptSecurity"));
     settings.setValue(QStringLiteral("enabled"), m_enabled);
     settings.setValue(QStringLiteral("allowedLanguages"), m_allowedLanguages);
-    settings.setValue(QStringLiteral("requireConfirmation"), m_requireConfirmation);
+    settings.setValue(QStringLiteral("requireConfirmation"), m_requireConfirmation.load());
     settings.setValue(QStringLiteral("maxExecutionMs"), m_maxExecutionMs);
     settings.setValue(QStringLiteral("isolatedPython"), m_isolatedPython);
     settings.setValue(QStringLiteral("stripEnvironment"), m_stripEnvironment);
@@ -224,7 +227,7 @@ void ScriptSecurityPolicy::approveScript(const QString &language, const QString 
 
 bool ScriptSecurityPolicy::requestConfirmation(const QString &language, const QString &script) const
 {
-    if (!m_requireConfirmation) {
+    if (!m_requireConfirmation.load(std::memory_order_relaxed)) {
         return true;
     }
     // 174 行式：会话内同内容已经用户同意 → 直接放行（连续/硬触发模式若逐轮弹窗会把

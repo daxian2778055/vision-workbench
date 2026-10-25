@@ -287,6 +287,9 @@ protected:
     /// 报表定时导出定时器（每分钟检查一次；是否导出见 reporting/autoExport*）
     QTimer *m_reportTimer = nullptr;
     /// 算子分组菜单项（FR1.9；文案在 retranslateUi 里随语言切换）
+    /// 系统菜单「脚本安全：执行前确认脚本」开关（2026-10-25）：权限收口要按角色灰掉，
+    /// 故须留成员指针（applyPermissionRestrictions 里统一处理）
+    QAction *m_confirmScriptAct = nullptr;
     QAction *m_actionCreateGroup = nullptr;
     QAction *m_actionDissolveGroup = nullptr;
     QAction *m_actionToggleGroup = nullptr;

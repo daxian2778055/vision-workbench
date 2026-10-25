@@ -3958,21 +3958,54 @@ void MainWindow::setupSystemMenu()
         // 策略本身是对的（默认开启、会话内同内容只问一次、改内容重问），但界面此前**没有
         // 任何开关**——脚本安全策略头注释写明"可由配置关闭"，实际只能改注册表。
         // 这里把配置接到菜单上：勾掉即直接执行（风险自负），勾上恢复确认。
+        //
+        // 2026-10-25 复核对本开关的三条要求，一并收在这里：
+        //   ① 权限收口：属整机安全配置，按 Engineer 及以上（见 applyPermissionRestrictions）；
+        //   ② 关闭要二次确认：一次误点会让整机的脚本都不再确认；
+        //   ③ 关闭状态要留痕：落 operation_logs + 启动时状态栏提示（只有勾选看不出关着）。
         ScriptSecurityPolicy &policy = ScriptSecurityPolicy::instance();
-        QAction *confirmScriptAct = ui->menuSystem->addAction(
+        m_confirmScriptAct = ui->menuSystem->addAction(
             QStringLiteral("脚本安全：执行前确认脚本（取消勾选则直接执行）"));
-        confirmScriptAct->setCheckable(true);
-        confirmScriptAct->setChecked(policy.requireConfirmation());
-        m_menuRouter.direct(confirmScriptAct, this, [this, confirmScriptAct]() {
+        m_confirmScriptAct->setCheckable(true);
+        m_confirmScriptAct->setChecked(policy.requireConfirmation());
+        m_menuRouter.direct(m_confirmScriptAct, this, [this]() {
             ScriptSecurityPolicy &p = ScriptSecurityPolicy::instance();
-            p.setRequireConfirmation(confirmScriptAct->isChecked());
+            const bool turningOff = !m_confirmScriptAct->isChecked();
+            if (turningOff) {
+                QMessageBox box(this);
+                box.setIcon(QMessageBox::Warning);
+                box.setWindowTitle(tr("关闭脚本执行前确认"));
+                box.setText(tr("关闭后，方案里的脚本将以当前用户权限直接执行，不再弹窗确认。\n"
+                               "这是整机设置，会影响本机所有登录会话。\n\n确定要关闭吗？"));
+                QPushButton *yes = box.addButton(tr("仍要关闭"), QMessageBox::AcceptRole);
+                QPushButton *no = box.addButton(tr("取消"), QMessageBox::RejectRole);
+                box.setDefaultButton(no);   // 默认"取消"：回车不会误关
+                box.exec();
+                if (box.clickedButton() != yes) {
+                    m_confirmScriptAct->setChecked(true);   // 回滚勾选，不改配置
+                    return;
+                }
+            }
+            p.setRequireConfirmation(!turningOff);
             p.save();   // 立即落 QSettings，下次启动保持一致
-            const QString msg = confirmScriptAct->isChecked()
-                ? tr("脚本执行前确认：已开启（同一脚本每次启动后首次执行前确认一次）")
-                : tr("脚本执行前确认：已关闭——脚本将以当前用户权限直接执行，请确认脚本内容可信");
+            const QString msg = turningOff
+                ? tr("脚本执行前确认：已关闭——脚本将以当前用户权限直接执行")
+                : tr("脚本执行前确认：已开启（同一脚本每次启动后首次执行前确认一次）");
             logMessage(msg);
             ui->statusBar->showMessage(msg, 8000);
+            // 持久审计：谁把整机的脚本确认关掉了（重启后也能查）
+            AppDatabase::instance()->logOperation(
+                SessionManager::instance()->currentUser(),
+                turningOff ? QStringLiteral("关闭脚本执行前确认") : QStringLiteral("开启脚本执行前确认"),
+                msg);
         });
+        if (!policy.requireConfirmation()) {
+            // 启动留痕：关闭状态只有菜单勾选可见，现场极易忘记
+            const QString warn = tr("注意：脚本执行前确认处于关闭状态（脚本将直接运行）——"
+                                    "可在「系统 → 脚本安全」恢复");
+            logMessage(warn);
+            ui->statusBar->showMessage(warn, 15000);
+        }
     }
 
     m_menuRouter.direct(ui->actionCameraConfig, this,
@@ -4040,6 +4073,12 @@ void MainWindow::applyPermissionRestrictions()
         ui->actionSave->setEnabled(canEdit);
         ui->actionLoad->setEnabled(canEdit);
         ui->actionNew->setEnabled(canEdit);
+    }
+    // 脚本执行前确认是**整机**安全配置（关闭后影响本机所有会话），按 Engineer 及以上收口：
+    // 操作员不能把产线的脚本护栏关掉（2026-10-25 复核 P2）。菜单项可能尚未建立（构造早期），
+    // 空指针守卫兜住。
+    if (m_confirmScriptAct) {
+        m_confirmScriptAct->setEnabled(session->canEditScheme());
     }
     if (ui->menuEdit) {
         ui->menuEdit->setEnabled(session->canEditScheme());
@@ -4190,6 +4229,12 @@ void MainWindow::retranslateUi()
                 QStringLiteral("系统"), QStringLiteral("System"));
     m_texts.add([this](const QString &s) { ui->menuLanguage->setTitle(s); },
                 QStringLiteral("语言"), QStringLiteral("Language"));
+    // 脚本确认开关（2026-10-25 复核 P3：新菜单项此前硬编码中文，英文界面下漏翻）
+    m_texts.add([this](const QString &s) {
+        if (m_confirmScriptAct)
+            m_confirmScriptAct->setText(s);
+    }, QStringLiteral("脚本安全：执行前确认脚本（取消勾选则直接执行）"),
+       QStringLiteral("Script safety: confirm scripts before running (uncheck = run directly)"));
 
     m_texts.add([this](const QString &s) { ui->actionNew->setText(s); },
                 QStringLiteral("新建方案"), QStringLiteral("New Scheme"));
