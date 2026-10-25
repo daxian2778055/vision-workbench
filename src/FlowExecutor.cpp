@@ -1685,12 +1685,19 @@ void FlowExecutor::collectSubFlowBodies(const QList<SubFlowDef> &defs, const QLi
             continue;
         }
 
-        // 与循环体交叉的成员让位给循环体（v1 限制：子流程成员不得同时是循环体）；
-        // 若因此丢掉了入口/出口，执行时会以"定义损坏"显式报错。
+        // 与循环体交叉的成员让位给循环体（v1 限制：子流程成员不得同时是循环体）。
         QList<NodeBase *> usable;
         for (NodeBase *m : members) {
             if (!m_loopBodyNodes.contains(m))
                 usable.append(m);
+        }
+        // 入口/出口若恰好被循环体过滤掉，必须在这里显式判坏（2026-10-25 复核 P3-8）：
+        // 注释一直说"执行时会以定义损坏报错"，但代码没有这一步——m_subFlowIOs 仍指向循环体
+        // 里的节点，执行时喂进去的数据会被循环调度覆盖、出口读到的可能是上一轮旧值。
+        if (!usable.contains(inputNode) || !usable.contains(outputNode)) {
+            m_subFlowMembers.insert(def.name, {});
+            m_subFlowIOs.insert(def.name, qMakePair(nullptr, nullptr));
+            continue;
         }
         m_subFlowMembers.insert(def.name, usable);
         m_subFlowIOs.insert(def.name, qMakePair(inputNode, outputNode));
@@ -2137,7 +2144,7 @@ void FlowExecutor::invalidateDownstreamOf(NodeBase *startNode)
         }
     }
 
-    // 逐节点清空三类缓存：输出端口数据、按端口的 m_nodeData、{模块号.参数名} 输出变量表。
+    // 逐节点清空输出端口数据（节点自身的端口锁，与主遍历清理时同一用法）。
     for (NodeBase *n : affected) {
         if (!n) {
             continue;
@@ -2147,9 +2154,22 @@ void FlowExecutor::invalidateDownstreamOf(NodeBase *startNode)
         for (int i = 0; i < outPorts.size(); ++i) {
             n->setOutputData(i, QSharedPointer<DataObject>());
         }
-        m_nodeData[n].clear();
-        m_nodeOutputVars[n->moduleId()].clear();
-        // 同时判为失效：否则局部执行会把"已被作废的输出"当成可复用结果（数据其实是空的/旧的）
-        m_validOutputs.remove(n);
+    }
+
+    // 三类执行缓存统一入锁（2026-10-25 复核 P3-2）：头文件写明 m_nodeData /
+    // m_nodeOutputVars / m_validOutputs 受 m_graphCacheMutex 保护，而这里此前在锁外清——
+    // 与执行线程的缓存写入不是同一套纪律。状态检查只挡住了 Running/Paused 这个窗口，
+    // 纪律仍应一致。
+    {
+        QMutexLocker cacheLock(&m_graphCacheMutex);
+        for (NodeBase *n : affected) {
+            if (!n) {
+                continue;
+            }
+            m_nodeData[n].clear();
+            m_nodeOutputVars[n->moduleId()].clear();
+            // 同时判为失效：否则局部执行会把"已被作废的输出"当成可复用结果（数据其实是空的/旧的）
+            m_validOutputs.remove(n);
+        }
     }
 }

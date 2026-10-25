@@ -34,6 +34,7 @@ private slots:
     void testRecursionRejected();
     void testUndefinedRejected();
     void testUnfedSubFlowCallerStaysGreenAndEmpty();
+    void testLoopBodyOverlapIsReportedBroken();
 };
 
 namespace {
@@ -378,6 +379,47 @@ void SubFlowTest::testUnfedSubFlowCallerStaysGreenAndEmpty()
              "无喂入的子流程调用点被判失败：豁免被改坏了（延时段空转是合法用法）");
     QVERIFY2(caller->getOutputData(0).isNull(),
              "无喂入的子流程调用点吐出了数据对象（凭空结果 / 上一轮残留）");
+}
+
+// 出入口恰好落在循环体里时必须显式报"定义损坏"（2026-10-25 复核 P3-8）。
+// 构造：先定义子流程（此时 A/B 无外部连线）→ 再把这段挂到 LoopNode 下面（用户完全可能这么改）。
+// 轮首收集成员时 A/B 因"让位给循环体"被过滤，若入口/出口也在其中而代码不判坏，
+// m_subFlowIOs 仍指向循环体节点 ⇒ 喂进去的数据被循环调度覆盖、出口读到上一轮旧值。
+void SubFlowTest::testLoopBodyOverlapIsReportedBroken()
+{
+    FlowScene scene;
+    NodeBase *a = addDelay(&scene, QPointF(0, 220));
+    NodeBase *b = addDelay(&scene, QPointF(220, 220));
+    QVERIFY(a && b);
+    QVERIFY(scene.createConnection(a->outputPorts().first(), b->inputPorts().first(), true));
+
+    selectOnly(&scene, { a, b });
+    QString err;
+    QVERIFY2(scene.defineSubFlowFromSelection(QStringLiteral("循环体段"), &err), qPrintable(err));
+
+    // 定义之后再把这段挂到循环体下面（这时 A 有了成员外的入边——定义时校验已过）
+    NodeBase *loop = addNodeById(&scene, QStringLiteral("LoopNode"), QPointF(0, 440));
+    QVERIFY2(loop, "构造失败：拿不到 LoopNode");
+    loop->setParam(QStringLiteral("loopCount"), 1);
+    QVERIFY(scene.createConnection(loop->outputPorts().first(), a->inputPorts().first(), true));
+
+    // 循环外放一个调用点（不和循环体连边，否则它自己也会被算作循环体）
+    NodeBase *gen = addFormula(&scene, QStringLiteral("1"), QPointF(0, 660));
+    NodeBase *caller = addCaller(&scene, QStringLiteral("循环体段"), QPointF(220, 660));
+    QVERIFY(gen && caller);
+    connectNodes(&scene, gen, caller);
+
+    const RoundResult r = runOneRound(&scene);
+
+    QVERIFY(!r.lastByNode.value(caller->fullName()));
+    bool hasBroken = false;
+    for (const QString &e : r.errors) {
+        if (e.contains(QStringLiteral("定义损坏")))
+            hasBroken = true;
+    }
+    QVERIFY2(hasBroken,
+             qPrintable(QStringLiteral("出入口落在循环体里时没有报定义损坏（P3-8）：%1")
+                            .arg(r.errors.join(QStringLiteral(" | ")))));
 }
 
 QTEST_MAIN(SubFlowTest)
