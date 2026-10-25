@@ -19,9 +19,14 @@ private slots:
 };
 
 /// 译文表静态闸（纯函数，可对合成文本自测）。
-/// 返回 problem 条目；messageCount 为**全部** <message> 数（不是"解析成功的条数"）——
-/// 2026-10-25 复核：原实现只统计 regex 能匹配的条目，自闭合 <translation .../> 会被整条
-/// 跳过（既不进 problems 也不进 checked），闸对它完全失明。
+/// 返回 problem 条目；messageCount 为**成功配对**的 <message> 数。
+/// 三轮复核（2026-10-25）：
+///   · 第一轮：regex 成对匹配会整条跳过自闭合 <translation/>，计數相等照样绿；
+///   · 第二轮：自闭合 <message/> 会"借"走后面好条目的 </message>，诊断点错对象；
+///   · 第三轮：缺闭标签同样会借后面的好 </message>。
+/// 现改为**栈式配对**：扫描所有 message 侧标签（开口/自闭合/闭标签），
+/// 开口入栈、闭标签弹栈配对；自闭合直接点名；栈里剩下的开口逐个点名
+/// "缺 </message>"。诊断由此始终指向真正畸形的那个标签。
 static void checkTsText(const QString &ts, QStringList &problems, int &messageCount,
                         int &ignoredCount)
 {
@@ -38,75 +43,69 @@ static void checkTsText(const QString &ts, QStringList &problems, int &messageCo
     messageCount = 0;
     ignoredCount = 0;
 
-    // ① 自闭合 <message…/>：直接点名，并**从文本里预剔除**（2026-10-25 复核）——
-    // 它的开口会与下一条正常消息的 </message> 配对，把畸形藏起来、反而让"未配对"诊断
-    // 点名后面那条好标签。剔除后配对才不会被劫持。
-    const QRegularExpression selfCloseRx("<message\\b[^>]*/>");
-    QString work;
-    int last = 0;
-    for (auto it = selfCloseRx.globalMatch(ts); it.hasNext();) {
-        const auto m = it.next();
-        problems << QStringLiteral("self-closing message tag: %1")
-                        .arg(ts.mid(m.capturedStart(0), 40)
-                                 .replace(QLatin1Char('\n'), QLatin1Char(' ')));
-        work += ts.mid(last, m.capturedStart(0) - last);
-        last = m.capturedEnd(0);
-    }
-    work += ts.mid(last);
-
-    const QRegularExpression msgRx("<message\\b[^>]*?>(.*?)</message>", QRegularExpression::DotMatchesEverythingOption);
-    const QRegularExpression srcRx("<source>(.*?)</source>", QRegularExpression::DotMatchesEverythingOption);
+    const QRegularExpression tagRx("<message\\b[^>]*?>|</message>");
+    // DotMatchesEverything 必须开（2026-10-25 实测）：多行 <source>（含换行的
+    // 提示/警告长文）此前因 . 不匹配换行而匹配失败，整条被当"无 <source>"跳过——
+    // 真 .ts 里有 15 条这样的条目（含 1 条 vanished），未翻/空/镜像对它们全部失明。
+    const QRegularExpression srcRx("<source>(.*?)</source>",
+                                   QRegularExpression::DotMatchesEverythingOption);
     const QRegularExpression trRx("<translation(?:\\s[^>]*)?>(.*?)</translation>", QRegularExpression::DotMatchesEverythingOption);
-    for (auto it = msgRx.globalMatch(work); it.hasNext();) {
-        const QString body = it.next().captured(1);
-        ++messageCount;
-        const auto srcM = srcRx.match(body);
-        const auto trM = trRx.match(body);
-        // 一条 <message> 必须同时有 <source> 与**成对**的 <translation>；缺任一都判红。
-        if (!srcM.hasMatch()) {
-            problems << QStringLiteral("message without <source>");
-            continue;
-        }
-        const QString src = srcM.captured(1);
-        const QString label = src.left(28).replace(QLatin1Char('\n'), QLatin1Char(' '));
-        if (!trM.hasMatch()) {
-            problems << QStringLiteral("missing/closed <translation>: %1").arg(label);
-            continue;
-        }
-        // 已废弃条目（vanished/obsolete）豁免空/等值判据；判定看 <translation> 标签的
-        // **type 属性**，且要求 type 前是行首或空白（2026-10-25 复核：\btype 会命中
-        // data-type="vanished"；属性子串判定会把 foo="vanished" 也算进来）。
-        const QRegularExpression trTagRx("<translation([^>]*)>");
-        const auto trTag = trTagRx.match(body);
-        const QString trAttrs = trTag.hasMatch() ? trTag.captured(1) : QString();
-        static const QRegularExpression obsoleteRx("(?:^|\\s)type\\s*=\\s*\"(?:vanished|obsolete)\"");
-        if (obsoleteRx.match(trAttrs).hasMatch()) {
-            ++ignoredCount;
-            continue;
-        }
-        const QString en = trM.captured(1);
-        if (body.contains(QStringLiteral("type=\"unfinished\"")))
-            problems << QStringLiteral("unfinished: %1").arg(label);
-        else if (en.trimmed().isEmpty())
-            problems << QStringLiteral("empty: %1").arg(label);
-        else if (hasCjk(src) && en == src)
-            problems << QStringLiteral("mirrored Chinese source: %1").arg(label);
-    }
+    const QRegularExpression trTagRx("<translation([^>]*)>");
 
-    // ② 缺 </message> 的开口：逐个点名（2026-10-25 复核：原来只报总数差，指不到标签；
-    //    自闭合劫持配对时还会点错对象——已由上面的预剔除消除）。
-    QSet<int> covered;
-    for (auto it = msgRx.globalMatch(work); it.hasNext();) {
-        covered.insert(it.next().capturedStart(0));
-    }
-    const QRegularExpression openRx("<message\\b[^>]*?>");
-    for (auto it = openRx.globalMatch(work); it.hasNext();) {
+    QVector<QPair<int, int>> openStack;   // (tagStart, tagEnd)
+    for (auto it = tagRx.globalMatch(ts); it.hasNext();) {
         const auto m = it.next();
-        if (covered.contains(m.capturedStart(0)))
-            continue;
-        problems << QStringLiteral("unpaired/malformed message tag: %1")
-                        .arg(work.mid(m.capturedStart(0), 40)
-                                 .replace(QLatin1Char('\n'), QLatin1Char(' ')));
+        const QString tag = m.captured(0);
+        const int pos = m.capturedStart(0);
+        const int end = m.capturedEnd(0);
+
+        if (tag.startsWith(QLatin1String("</"))) {
+            if (openStack.isEmpty()) {
+                problems << QStringLiteral("stray </message> at offset %1").arg(pos);
+                continue;
+            }
+            const QPair<int, int> open = openStack.takeLast();
+            ++messageCount;
+            const QString body = ts.mid(open.second, pos - open.second);
+            const auto srcM = srcRx.match(body);
+            const auto trM = trRx.match(body);
+            if (!srcM.hasMatch()) {
+                problems << QStringLiteral("message without <source>");
+                continue;
+            }
+            const QString src = srcM.captured(1);
+            const QString label = src.left(28).replace(QLatin1Char('\n'), QLatin1Char(' '));
+            if (!trM.hasMatch()) {
+                problems << QStringLiteral("missing/closed <translation>: %1").arg(label);
+                continue;
+            }
+            // 已废弃条目豁免空/等值判据；判定看 <translation> 的 type 属性，
+            // 且 type 前须是行首或空白（防 data-type="…" 误中）。
+            const auto trTag = trTagRx.match(body);
+            const QString trAttrs = trTag.hasMatch() ? trTag.captured(1) : QString();
+            static const QRegularExpression obsoleteRx("(?:^|\\s)type\\s*=\\s*\"(?:vanished|obsolete)\"");
+            if (obsoleteRx.match(trAttrs).hasMatch()) {
+                ++ignoredCount;
+                continue;
+            }
+            const QString en = trM.captured(1);
+            if (body.contains(QStringLiteral("type=\"unfinished\"")))
+                problems << QStringLiteral("unfinished: %1").arg(label);
+            else if (en.trimmed().isEmpty())
+                problems << QStringLiteral("empty: %1").arg(label);
+            else if (hasCjk(src) && en == src)
+                problems << QStringLiteral("mirrored Chinese source: %1").arg(label);
+        } else if (tag.endsWith(QLatin1String("/>"))) {
+            problems << QStringLiteral("self-closing message tag: %1")
+                            .arg(tag.left(40).replace(QLatin1Char('\n'), QLatin1Char(' ')));
+        } else {
+            openStack.append(qMakePair(pos, end));
+        }
+    }
+    // 栈里剩的开口 = 缺闭标签：逐个点名（不再被"借闭标签"的好条目顶名）
+    for (const QPair<int, int> &open : openStack) {
+        problems << QStringLiteral("message tag missing </message>: %1")
+                        .arg(ts.mid(open.first, 40).replace(QLatin1Char('\n'), QLatin1Char(' ')));
     }
 }
 
@@ -365,6 +364,34 @@ void I18nTest::tsGateCatchesSelfClosingAndMissingTranslations()
     QCOMPARE(ignored, 0);
     QVERIFY2(!problems.isEmpty(),
              "data-type=vanished 被误判成废弃标记，空译文逃过了检查");
+
+    // ⑥g 中间缺闭标签：诊断必须点名**缺闭标签那条**，不得把后面好条目报成 unpaired
+    checkTsText(QStringLiteral("<message><source>\u7f3a\u95ed\u6807\u7b7e</source>"
+                               "<translation>Missing</translation>"
+                               "<message><source>GoodSix</source>"
+                               "<translation>Good Six</translation></message>"),
+                problems, n, ignored);
+    QVERIFY2(!problems.isEmpty(), "中间缺闭标签没有产生诊断");
+    {
+        bool namesMissing = false;
+        bool blamesGood = false;
+        for (const QString &pr : problems) {
+            if (pr.contains(QLatin1String("missing </message>")))
+                namesMissing = true;
+            if (pr.contains(QLatin1String("GoodSix")))
+                blamesGood = true;
+        }
+        QVERIFY2(namesMissing, "缺闭标签没有被点名（诊断缺失）");
+        QVERIFY2(!blamesGood, qPrintable(QStringLiteral("\u8bca\u65ad\u70b9\u9519\u4e86\u597d\u6761\u76ee GoodSix\uff1a%1")
+                                             .arg(problems.join(QStringLiteral(" | ")))));
+    }
+
+    // ⑥h 多行源文（含换行）：同样要被检查（2026-10-25 实测的更深盲区）
+    checkTsText(QStringLiteral("<message><source>\u591a\u884c\u6e90\u6587\n\u7b2c\u4e8c\u884c</source>"
+                               "<translation></translation></message>"),
+                problems, n, ignored);
+    QCOMPARE(n, 1);
+    QVERIFY2(!problems.isEmpty(), "多行源文条目被整条跳过（空译文逃过检查）");
 
     // ⑦ 合法条目（英文源文等值 + 中文有译文）：必须全绿，防止闸误伤
     checkTsText(QStringLiteral("<message><source>Vision Flow Platform</source>"
