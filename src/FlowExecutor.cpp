@@ -12,6 +12,7 @@
 #include "AppLog.h"
 #include <QRegularExpression>
 #include <QElapsedTimer>
+#include <limits>
 #include <functional>
 #include "AppDatabase.h"
 #include "GlobalVariableManager.h"
@@ -1353,9 +1354,16 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
                             case DataObject::DataType::Bool:
                                 gvm->setVariable(varName, out->getData().toBool());
                                 break;
-                            case DataObject::DataType::Measure:
-                                gvm->setVariable(varName, out->getMeasureResult().value);
+                            case DataObject::DataType::Measure: {
+                                // 无效测量不得导出成 0（2026-10-25 复核 P3）：显示层会跳过
+                                // 无效结果，而这里直接取 .value——测不到时下游公式拿到 0，
+                                // 与"测到 0"无从分辨。导出 NaN，至少 isfinite/比较能识破。
+                                const auto mr = out->getMeasureResult();
+                                gvm->setVariable(varName, mr.valid
+                                     ? mr.value
+                                     : std::numeric_limits<double>::quiet_NaN());
                                 break;
+                            }
                             default:
                                 gvm->setVariable(varName, out->getData().toString());
                                 break;
@@ -1473,7 +1481,11 @@ void FlowExecutor::collectNodeOutputVars(NodeBase *node)
     // 主值：优先取端口1（Measure），其次端口0（Number/String）
     QSharedPointer<DataObject> out = node->getOutputData(1);
     if (out && out->getType() == DataObject::DataType::Measure) {
-        vars[QStringLiteral("value")] = out->getMeasureResult().value;
+        // 同上：无效测量导出 NaN，不冒充 0（2026-10-25 复核 P3）
+        const auto mr = out->getMeasureResult();
+        vars[QStringLiteral("value")] = mr.valid
+            ? mr.value
+            : std::numeric_limits<double>::quiet_NaN();
     } else {
         QSharedPointer<DataObject> out0 = node->getOutputData(0);
         if (out0) {

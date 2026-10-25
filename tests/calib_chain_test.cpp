@@ -61,6 +61,8 @@ private slots:
     void nPointRecoversKnownAffine();      // ④
     void nPointInsufficientPairsJudgeRed(); // ⑦
     void nPointDegeneratePairsJudgeRed();   // ⑦
+    void nPointCollinearPairsJudgeRed();    // ⑧ 共线→NaN 矩阵（2026-10-25 P2-2）
+    void nPointBadRowsJudgeRedAndNameThem();// ⑧ 坏行点名拒收（2026-10-25 P2-3）
     void handEyeRecoversKnownRigid();       // ⑤
     void handEyeIsRigidNotScaled();         // ⑤ 口径（结论 C）
     void handEyeInsufficientPairsJudgeRed();// ⑦
@@ -661,6 +663,73 @@ void CalibChainTest::nPointDegeneratePairsJudgeRed()
 }
 
 // ⑤：手眼是"像素→机器人"的 2D 刚体拟合（旋转+平移）。用已知刚体造点对 ⇒ 6 元矩阵逐项对上真值。
+
+// ⑧ 共线点对 → 仿射估计返回**非空** 2×3 全 -nan（2026-10-25 复核 P2-2）：
+// 原判据只查 empty/rows/cols，NaN 矩阵会存进标定管理器与夹具、模块状态判绿。
+void CalibChainTest::nPointCollinearPairsJudgeRed()
+{
+    const QVector<QPointF> pixels = {QPointF(0, 0), QPointF(1, 1), QPointF(2, 2)};
+    const QVector<QPointF> worlds = {QPointF(5, 5), QPointF(9, 2), QPointF(13, 11)};
+
+    NPointCalibNode node;
+    node.init();
+    node.setParam(QStringLiteral("pointsText"), pairsText(pixels, worlds));
+    node.setParam(QStringLiteral("saveName"), QStringLiteral("c2test_npoint_collinear"));
+    feedImage(node, blankImage());
+    const bool ok = node.execute();
+    const QVector<double> m = matrixFromPort(node, 1);
+
+    QStringList reasons;
+    if (ok)
+        reasons << QStringLiteral("execute()=true（共线输入被判成功）");
+    if (node.getParam(QStringLiteral("moduleStatus")).toBool())
+        reasons << QStringLiteral("moduleStatus=true");
+    for (double v : m)
+        if (!std::isfinite(v))
+            reasons << QStringLiteral("矩阵含非有限值却仍输出");
+    if (CalibrationManager::instance()->hasHomography(QStringLiteral("c2test_npoint_collinear")))
+        reasons << QStringLiteral("NaN 矩阵被写进标定管理器");
+    QVERIFY2(reasons.isEmpty(),
+             qPrintable(QStringLiteral("共线点对未被判红：")
+                        + reasons.join(QStringLiteral("; "))
+                        + QStringLiteral("，calibNote=") + noteOf(node)));
+
+    CalibrationManager::instance()->remove(QStringLiteral("c2test_npoint_collinear"));
+}
+
+// ⑧ 坏行必须点名拒收（2026-10-25 复核 P2-3）：语义对齐手眼侧 R-1——本节点不跳过坏行。
+void CalibChainTest::nPointBadRowsJudgeRedAndNameThem()
+{
+    // 4 对好点 + 1 行含 nan；旧实现把坏行 continue 掉、4 对照样"成功"
+    const QString text = QStringLiteral(
+        "100,80 5,4\n"
+        "320,90 16,4.5\n"
+        "150,240 7.5,12\n"
+        "400,260 20,13\n"
+        "200,nan 10,9");
+    NPointCalibNode node;
+    node.init();
+    node.setParam(QStringLiteral("pointsText"), text);
+    node.setParam(QStringLiteral("saveName"), QStringLiteral("c2test_npoint_badrow"));
+    feedImage(node, blankImage());
+    const bool ok = node.execute();
+
+    QStringList reasons;
+    if (ok)
+        reasons << QStringLiteral("execute()=true（坏行被静默跳过）");
+    if (node.getParam(QStringLiteral("moduleStatus")).toBool())
+        reasons << QStringLiteral("moduleStatus=true");
+    const QString note = noteOf(node);
+    if (!note.contains(QStringLiteral("坏行")))
+        reasons << QStringLiteral("calibNote 未点名坏行");
+    QVERIFY2(reasons.isEmpty(),
+             qPrintable(QStringLiteral("坏行未被点名拒收：")
+                        + reasons.join(QStringLiteral("; "))
+                        + QStringLiteral("，calibNote=") + note));
+
+    CalibrationManager::instance()->remove(QStringLiteral("c2test_npoint_badrow"));
+}
+
 void CalibChainTest::handEyeRecoversKnownRigid()
 {
     const double deg = -35.0, th = deg * CV_PI / 180.0;

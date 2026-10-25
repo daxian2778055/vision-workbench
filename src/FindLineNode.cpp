@@ -45,6 +45,8 @@ void FindLineNode::init()
 
 void FindLineNode::run(bool)
 {
+        HTuple handle;
+    bool metroHandleCreated = false;
     try {
         if (!m_inputImage.IsInitialized()) return;
         auto pv = [this](const QString &n, double d) { return m_params.value(n, d).toDouble(); };
@@ -61,8 +63,8 @@ void FindLineNode::run(bool)
         const QString selectMode =
             m_params.value(QStringLiteral("selectMode"), QStringLiteral("all")).toString();
 
-        HTuple handle;
         CreateMetrologyModel(&handle);
+        metroHandleCreated = true;
         HTuple index;
         // HALCON 24.11 签名：GenParamName/GenParamValue 支持 'measure_transition' 等初始参数
         AddMetrologyObjectLineMeasure(handle, r1, c1, r2, c2, ml, mw, sg, th,

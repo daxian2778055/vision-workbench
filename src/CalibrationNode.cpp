@@ -36,6 +36,8 @@ void CalibrationNode::init()
 
 void CalibrationNode::run(bool /*autoSwitch*/)
 {
+        HTuple calibID;
+    bool calibHandleCreated = false;
     try {
         if (!m_inputImage.IsInitialized()) {
             m_outputImage.Clear();
@@ -49,6 +51,9 @@ void CalibrationNode::run(bool /*autoSwitch*/)
             setOutputData(1, warnObj);
             m_outputImage = m_inputImage;
             m_params[QStringLiteral("calibrated")] = false;
+            // 缺 .descr 也要判红（2026-10-25 复核 P3）：process() 预置 moduleStatus=true，
+            // 原来只写提示串就返回——"没标定"也是绿的，与"标定完成"视觉上无从分辨。
+            m_params["moduleStatus"] = false;
             return;
         }
         auto pv = [this](const QString &n, double d) { return m_params.value(n, d).toDouble(); };
@@ -57,8 +62,8 @@ void CalibrationNode::run(bool /*autoSwitch*/)
         // 与 CalibrationBoardNode 相同的标定链路：
         // CreateCalibData -> SetCalibDataCamParam -> SetCalibDataCalibObject
         // -> FindCalibObject -> CalibrateCameras -> GetCalibData
-        HTuple calibID;
-        CreateCalibData("calibration_object", 1, 1, &calibID);
+                CreateCalibData("calibration_object", 1, 1, &calibID);
+        calibHandleCreated = true;
 
         HTuple camParams;
         camParams.Append(pv(QStringLiteral("focus"), 16));
@@ -121,6 +126,7 @@ void CalibrationNode::run(bool /*autoSwitch*/)
         m_params["moduleStatus"] = true;
         m_outputImage = m_inputImage;
     } catch (const HException &e) {
+        if (calibHandleCreated) { try { ClearCalibData(calibID); } catch (...) {} calibHandleCreated = false; }
         m_outputImage.Clear();
         const QString why = QStringLiteral("标定失败: %1")
                                     .arg(QString::fromStdString(e.ErrorMessage().Text()));

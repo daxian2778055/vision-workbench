@@ -4,10 +4,39 @@
 #include <QImage>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <vector>
 
 using namespace HalconCpp;
 
 namespace OpencvUtil {
+
+// HALCON 像素类型串 → OpenCV 深度（2026-10-25 复核 P1-1：原实现取了 type 却直接按
+// CV_8UC1 包像素——uint2（Mono10/12/16、16 位图像文件）会被拆成字节对，45 个调用方
+// 全部在错图上跑且判绿）。
+static int halconTypeToCvDepth(const QByteArray &type)
+{
+    if (type == "byte") return CV_8U;
+    if (type == "int1") return CV_8S;
+    if (type == "uint2") return CV_16U;
+    if (type == "int2") return CV_16S;
+    if (type == "int4") return CV_32S;
+    if (type == "real") return CV_32F;
+    return -1;
+}
+
+static const char *cvDepthToHalconType(int depth)
+{
+    switch (depth) {
+    case CV_8U:  return "byte";
+    case CV_8S:  return "int1";
+    case CV_16U: return "uint2";
+    case CV_16S: return "int2";
+    case CV_32S: return "int4";
+    case CV_32F: return "real";
+    default:     return nullptr;
+    }
+}
 
 cv::Mat himageToMat(const HImage &img)
 {
@@ -23,29 +52,34 @@ cv::Mat himageToMat(const HImage &img)
         HTuple type, pointer;
         if (ch.I() <= 1) {
             GetImagePointer1(img, &pointer, &type, &width, &height);
+            const int depth = halconTypeToCvDepth(QByteArray(type.S()));
+            if (depth < 0) return cv::Mat();
             const uchar *ptr = reinterpret_cast<const uchar *>(pointer.L());
             if (!ptr) return cv::Mat();
             // 共享像素内存：行对齐按 HALCON 惯例为偶数对齐，多数情况与 Mat 连续一致
-            return cv::Mat(h, w, CV_8UC1, const_cast<uchar *>(ptr)).clone();
+            return cv::Mat(h, w, CV_MAKETYPE(depth, 1), const_cast<uchar *>(ptr)).clone();
         }
         // 三通道（RGB）
         HTuple pR, pG, pB;
         GetImagePointer3(img, &pR, &pG, &pB, &type, &width, &height);
+        const int depth = halconTypeToCvDepth(QByteArray(type.S()));
+        if (depth < 0) return cv::Mat();
+        const size_t elem = static_cast<size_t>(CV_ELEM_SIZE(depth));
         const uchar *r = reinterpret_cast<const uchar *>(pR.L());
         const uchar *g = reinterpret_cast<const uchar *>(pG.L());
         const uchar *b = reinterpret_cast<const uchar *>(pB.L());
         if (!r || !g || !b) return cv::Mat();
-        cv::Mat rgb(h, w, CV_8UC3);
-        // HALCON RGB 平面 → OpenCV BGR 交织
+        cv::Mat rgb(h, w, CV_MAKETYPE(depth, 3));
+        // HALCON RGB 平面 → OpenCV BGR 交织（按元素宽度搬运，不再假定 1 字节）
         for (int y = 0; y < h; ++y) {
-            const uchar *pr = r + y * w;
-            const uchar *pg = g + y * w;
-            const uchar *pb = b + y * w;
+            const uchar *pr = r + static_cast<size_t>(y) * w * elem;
+            const uchar *pg = g + static_cast<size_t>(y) * w * elem;
+            const uchar *pb = b + static_cast<size_t>(y) * w * elem;
             uchar *dst = rgb.ptr<uchar>(y);
             for (int x = 0; x < w; ++x) {
-                dst[x * 3 + 0] = pb[x];
-                dst[x * 3 + 1] = pg[x];
-                dst[x * 3 + 2] = pr[x];
+                memcpy(dst + (static_cast<size_t>(x) * 3 + 0) * elem, pb + x * elem, elem);
+                memcpy(dst + (static_cast<size_t>(x) * 3 + 1) * elem, pg + x * elem, elem);
+                memcpy(dst + (static_cast<size_t>(x) * 3 + 2) * elem, pr + x * elem, elem);
             }
         }
         return rgb;
@@ -57,46 +91,61 @@ cv::Mat himageToMat(const HImage &img)
 HImage matToHimage(const cv::Mat &matIn)
 {
     if (matIn.empty()) return HImage();
-    cv::Mat mat;
-    if (matIn.type() != CV_8UC1 && matIn.type() != CV_8UC3) {
-        // 非 8bit 转 8bit（归一化到 0-255）
+    cv::Mat mat = matIn;
+    // 深度映射到 HALCON 类型（2026-10-25 复核 P2-1）：原实现把一切非 8UC1/3 都 convertTo
+    // CV_8U（scale=1.0，**饱和截断**，注释写"归一化"是错的）——ConvertImageNode 的六个
+    // 目标类型全部变成 byte，0/1000/60000 → 0/255/255（真探针实测）。现在保留深度。
+    int depth = mat.depth();
+    const char *halType = cvDepthToHalconType(depth);
+    if (!halType) {
         cv::Mat tmp;
-        matIn.convertTo(tmp, CV_8U, 255.0 / 255.0);
+        if (depth == CV_64F) {
+            mat.convertTo(tmp, CV_32F);          // 64F → 32F（值域保留）
+        } else {
+            mat.convertTo(tmp, CV_8U);           // 其余不支持的深度：饱和截断到 byte
+        }
         mat = tmp;
-    } else {
-        mat = matIn;
+        depth = mat.depth();
+        halType = cvDepthToHalconType(depth);
     }
+    if (!halType) return HImage();
     // 保证连续，避免行对齐问题
     if (!mat.isContinuous()) mat = mat.clone();
 
     try {
+        const size_t elem = static_cast<size_t>(CV_ELEM_SIZE(depth));
         if (mat.channels() == 1) {
             HImage img;
-            GenImage1(&img, "byte", mat.cols, mat.rows,
+            GenImage1(&img, halType, mat.cols, mat.rows,
                       reinterpret_cast<Hlong>(mat.data));
             return img;
         }
-        // BGR → HALCON RGB 平面
-        const int w = mat.cols;
-        const int h = mat.rows;
-        std::vector<uchar> r(h * w), g(h * w), b(h * w);
-        for (int y = 0; y < h; ++y) {
-            const uchar *src = mat.ptr<uchar>(y);
-            uchar *pr = r.data() + y * w;
-            uchar *pg = g.data() + y * w;
-            uchar *pb = b.data() + y * w;
-            for (int x = 0; x < w; ++x) {
-                pb[x] = src[x * 3 + 0];
-                pg[x] = src[x * 3 + 1];
-                pr[x] = src[x * 3 + 2];
+        if (mat.channels() == 3) {
+            // BGR 交织 → HALCON RGB 平面
+            const int w = mat.cols;
+            const int h = mat.rows;
+            std::vector<uchar> r(static_cast<size_t>(h) * w * elem);
+            std::vector<uchar> g(static_cast<size_t>(h) * w * elem);
+            std::vector<uchar> b(static_cast<size_t>(h) * w * elem);
+            for (int y = 0; y < h; ++y) {
+                const uchar *src = mat.ptr<uchar>(y);
+                uchar *pr = r.data() + static_cast<size_t>(y) * w * elem;
+                uchar *pg = g.data() + static_cast<size_t>(y) * w * elem;
+                uchar *pb = b.data() + static_cast<size_t>(y) * w * elem;
+                for (int x = 0; x < w; ++x) {
+                    memcpy(pb + x * elem, src + (static_cast<size_t>(x) * 3 + 0) * elem, elem);
+                    memcpy(pg + x * elem, src + (static_cast<size_t>(x) * 3 + 1) * elem, elem);
+                    memcpy(pr + x * elem, src + (static_cast<size_t>(x) * 3 + 2) * elem, elem);
+                }
             }
+            HImage img;
+            GenImage3(&img, halType, mat.cols, mat.rows,
+                      reinterpret_cast<Hlong>(r.data()),
+                      reinterpret_cast<Hlong>(g.data()),
+                      reinterpret_cast<Hlong>(b.data()));
+            return img;
         }
-        HObject imgR, imgG, imgB, merged;
-        GenImage1(&imgR, "byte", w, h, reinterpret_cast<Hlong>(r.data()));
-        GenImage1(&imgG, "byte", w, h, reinterpret_cast<Hlong>(g.data()));
-        GenImage1(&imgB, "byte", w, h, reinterpret_cast<Hlong>(b.data()));
-        Compose3(imgR, imgG, imgB, &merged);
-        return HImage(merged);
+        return HImage();
     } catch (const HException &) {
         return HImage();
     }

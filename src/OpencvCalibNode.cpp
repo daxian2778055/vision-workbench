@@ -97,6 +97,9 @@ void OpencvCalibNode::run(bool /*autoSwitch*/)
                 if (performCalibration(&detail)) {
                     status = QStringLiteral("标定完成。%1").arg(detail);
                     m_params[QStringLiteral("calibrated")] = true;
+                    // 成功后清采集帧（2026-10-25 复核 P3）：原来只在失败分支清，
+                    // 每来一帧继续追加并重新 calibrateCamera，旧场景点会污染新标定。
+                    m_cornerSets.clear();
                     m_params["moduleStatus"] = true;
                     m_params[QStringLiteral("calibNote")] = QString();
                 } else {

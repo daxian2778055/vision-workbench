@@ -82,6 +82,7 @@ void FitLineNode::run(bool /*autoSwitch*/)
         SelectShape(connected, &selected, "area", "and", HTuple(10), HTuple(1e9));
 
         // Try to fit line to selected regions
+        bool measurementOk = true;   // P2-4：内层测量异常不得再判绿
         try {
             HObject edges;
             SelectShape(selected, &edges, "width", "and", HTuple(2), HTuple(200));
@@ -132,7 +133,10 @@ void FitLineNode::run(bool /*autoSwitch*/)
                 m_outputImage = gray;
             }
         } catch (const HException &) {
+            // 内层 HALCON 异常必须判红（2026-10-25 复核 P2-4）：原来只把输出图设成 gray，
+            // 随后无条件 moduleStatus=true——测量端口为空却绿灯，正是"静默绿灯"族。
             m_outputImage = gray;
+            measurementOk = false;
         }
 
         HalconCpp::HImage output(m_outputImage);
@@ -141,7 +145,11 @@ void FitLineNode::run(bool /*autoSwitch*/)
             outObj->setHImage(output);
             setOutputData(0, outObj);
         }
-        m_params["moduleStatus"] = true;
+        // 测量端口为空也判红（2026-10-25 复核 P2-4）：内层异常与"没测到"都会留下空的
+        // 测量端口，两种都是静默绿灯（S-1 产出守卫拦不住）。异常路径已由 measurementOk
+        // 覆盖，这里再加"有结果"这条，把整族收掉。
+        const bool haveMeasurement = !getOutputData(1).isNull();
+        m_params["moduleStatus"] = measurementOk && haveMeasurement;
     } catch (const HException &e) {
         VFP_DEBUG << "FitLineNode error:" << e.ErrorMessage().TextA();
         m_params["moduleStatus"] = false;

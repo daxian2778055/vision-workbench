@@ -31,6 +31,8 @@ void CalibrationBoardNode::init()
 
 void CalibrationBoardNode::run(bool)
 {
+        HTuple calibID;
+    bool calibHandleCreated = false;
     try {
         if (!m_inputImage.IsInitialized()) return;
         const QString descr = m_params.value(QStringLiteral("descrPath")).toString();
@@ -41,12 +43,13 @@ void CalibrationBoardNode::run(bool)
             setOutputData(1, strObj);
             m_outputImage = m_inputImage;
             return;
+            m_params["moduleStatus"] = false;   // 缺 .descr 判红（2026-10-25 复核 P3）
         }
         auto pv = [this](const QString &n, double d) { return m_params.value(n, d).toDouble(); };
         auto pi = [this](const QString &n, int d) { return m_params.value(n, d).toInt(); };
 
-        HTuple calibID;
-        CreateCalibData("calibration_object", 1, 1, &calibID);
+                CreateCalibData("calibration_object", 1, 1, &calibID);
+        calibHandleCreated = true;
 
         HTuple camParams;
         camParams.Append(pv(QStringLiteral("focus"), 16));
@@ -100,6 +103,7 @@ void CalibrationBoardNode::run(bool)
 
         m_outputImage = m_inputImage;
     } catch (const HException &e) {
+        if (calibHandleCreated) { try { ClearCalibData(calibID); } catch (...) {} calibHandleCreated = false; }
         m_outputImage.Clear();
         const QString why = QStringLiteral("标定失败: %1")
                                     .arg(QString::fromStdString(e.ErrorMessage().Text()));

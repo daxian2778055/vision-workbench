@@ -1137,6 +1137,22 @@ if(MSVC)
     vfp_configure_gui_test(CommDeviceGhostTest)
 endif()
 
+# OpenCV 桥接深度保真（2026-10-25 复核 P1-1/P2-1）：16 位图不得被拆字节对、非 8U 不得被饱和截断
+if(MSVC)
+    add_executable(opencv_bridge_test tests/opencv_bridge_test.cpp)
+    target_link_libraries(opencv_bridge_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    vfp_add_qtest(NAME OpencvBridgeTest TARGET opencv_bridge_test)
+    vfp_configure_gui_test(OpencvBridgeTest)
+endif()
+
+# 测量簇静默绿灯守卫（2026-10-25 复核 P2-4）：内层 HALCON 异常不得再判绿
+if(MSVC)
+    add_executable(measure_green_guard_test tests/measure_green_guard_test.cpp)
+    target_link_libraries(measure_green_guard_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    vfp_add_qtest(NAME MeasureGreenGuardTest TARGET measure_green_guard_test)
+    vfp_configure_gui_test(MeasureGreenGuardTest)
+endif()
+
 # 良率目标监控（P1-11）：闭锁只报一次 / 恢复重置 / 滚动窗口 / 最小样本 / 配置变更重置
 if(MSVC)
     add_executable(yield_monitor_test tests/yield_monitor_test.cpp)
@@ -1380,7 +1396,7 @@ if(MSVC)
     set(VFP_TESTS NodeCoreTest OpencvSerializationTest IntegrationTest DatabaseTest PerfTest
                   ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest CameraIoTest
                   DnnSegmentTest OpencvDefectAlignTest SoakTest StatisticsReportTest SchemePackageTest
-                  I18nTest SubFlowTest EditLockReleaseTest RoundAbortSummaryTest UndoHistoryAfterLoadTest NodeExceptionExitTest RejectedConnectionUndoTest DbThreadConnectionCleanupTest CameraTaskLedgerTest GlobalCameraConsumerGateTest CommDeviceGhostTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
+                  I18nTest SubFlowTest EditLockReleaseTest RoundAbortSummaryTest UndoHistoryAfterLoadTest NodeExceptionExitTest RejectedConnectionUndoTest DbThreadConnectionCleanupTest CameraTaskLedgerTest GlobalCameraConsumerGateTest CommDeviceGhostTest OpencvBridgeTest MeasureGreenGuardTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
                   FactoryPasswordGuardTest FeatureMatchTest CalibChainTest OpencvNodesTest
                   ProjectPathsTest FlowCachePurgeLedgerTest ExecutionControlPolicyTest
                   AuxDialogMenuRouterTest ModuleEditorRegistryTest UITranslatorTest
