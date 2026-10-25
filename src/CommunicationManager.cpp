@@ -89,7 +89,18 @@ bool CommunicationManager::addDevice(const QString &name, const QString &type, c
         m_deviceInfos[name] = info;
     }
 
-    createDeviceNode(name, type, config);
+    // P3-12（2026-10-25 复核）：未知设备类型时 createDeviceNode 什么都不建，而这里照样
+    // emit + return true ⇒ 方案里留下一个永远打不开的"幽灵设备"（列表里有、点开报错）。
+    // 建不出节点就回滚登记并返回 false，让调用方看见失败。
+    if (!createDeviceNode(name, type, config)) {
+        {
+            QMutexLocker locker(&m_mutex);
+            m_deviceInfos.remove(name);
+        }
+        VFP_DEBUG << "Communication device NOT added (unknown type or node create failed):"
+                  << name << "type:" << type;
+        return false;
+    }
     emit deviceAdded(name, type);
 
     VFP_DEBUG << "Communication device added:" << name << "type:" << type;
@@ -134,7 +145,7 @@ bool CommunicationManager::removeDevice(const QString &name)
     return true;
 }
 
-void CommunicationManager::createDeviceNode(const QString &name, const QString &type, const QJsonObject &config)
+bool CommunicationManager::createDeviceNode(const QString &name, const QString &type, const QJsonObject &config)
 {
     // 节点构造 / init() / 参数下发一律在锁外进行（init 等实现可能触发信号，持锁调用有重入风险，
     // 见 CommunicationManager.h 中的约束说明）；锁只保护最终的注册与信号连接。
@@ -302,7 +313,7 @@ void CommunicationManager::createDeviceNode(const QString &name, const QString &
     }
 
     if (!node)
-        return;
+        return false;   // 未知类型：调用方（addDevice）据此回滚登记，不留幽灵设备（P3-12）
 
     // 统一透传（根治"配了不生效"）：上面逐键下发的键保持"类型收敛"（如 baudRate 取 int），
     // 其余**未声明**的键一律按原始类型透传。历史缺陷：这里曾是 fail-closed 白名单——新增配置键
@@ -353,7 +364,7 @@ void CommunicationManager::createDeviceNode(const QString &name, const QString &
         node->closeConnection();
         node->deleteLater();
         VFP_DEBUG << "Device already exists, drop duplicate node:" << name;
-        return;
+        return true;   // 重复节点已显式回收；登记已存在，对调用方算成功
     }
     m_devices[name] = node;
     node->setDeviceName(name);
@@ -419,6 +430,7 @@ void CommunicationManager::createDeviceNode(const QString &name, const QString &
             });
         }
     }
+    return true;   // 节点已注册（P3-12：调用方据此决定是否 emit/保留登记）
 }
 
 QByteArray CommunicationManager::decodeEscapes(const QString &text)

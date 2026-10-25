@@ -98,7 +98,8 @@ private:
     CommunicationManager(const CommunicationManager &) = delete;
     CommunicationManager &operator=(const CommunicationManager &) = delete;
 
-    void createDeviceNode(const QString &name, const QString &type, const QJsonObject &config);
+    /// 按类型构造并注册通信节点。返回 false = 未知类型/构造失败（调用方应回滚登记，勿留幽灵设备）。
+    bool createDeviceNode(const QString &name, const QString &type, const QJsonObject &config);
 
     /// 帧组装（TCP/串口/UDP 的粘包/半包治理）：
     /// 按设备节点的参数 frameTimeoutMs（静默即一帧）/ frameTerminator（结束符，支持 \r\n 等转义）
