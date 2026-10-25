@@ -45,7 +45,16 @@
       "exe_bytes": 9710592,
       "package_dir": "dist/VisionFlowPlatform-rc-20261024.1",
       "recorded_at": "2026-10-24",
-      "recorded_note": "当前装机包：含 rc-20261024 的画布锁修复，另加 cleanupCameras 线程未退出则跳过拆相机句柄（UAF 防护）+ 参数面板生效时机提示 + 手册 8.4/8.5"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261025 取代（后者含其全部改动）"
+    },
+    {
+      "tag": "rc-20261025",
+      "commit": "123e118d8a6fd42c0d0b0c869e7f63428265baec",
+      "exe_md5": "0e52d84ec1b5d2db49760284d24c19dc",
+      "exe_bytes": 9712640,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261025",
+      "recorded_at": "2026-10-25",
+      "recorded_note": "当前装机包：P1 数据库时间戳口径统一 UTC（凌晨查报表/报警/结果 0 行、界面慢一个时区）+ P2-1 中途停止不再写成整轮 OK + P2-2 打开方案后撤销栈清空；新增 3 个回归测试文件"
     }
   ],
   "legacy_backfilled": [
