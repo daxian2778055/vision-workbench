@@ -667,9 +667,9 @@ bool MvsImageSourceNode::openCamera()
 
 void MvsImageSourceNode::openCameraInThread()
 {
-    // 重新打开 = 解除关闭闸（P2-3 残留）：closeCamera 置位后，任务在入口退让；
-    // 打开动作本身要把闸撤回，否则打开后所有参数下发都会被误挡。
-    m_closing.store(false, std::memory_order_relaxed);
+    // 注意（2026-10-25 复核 P3-3）：m_closing 的语义是"关闭进行中"，由 closeCamera 成对
+    // 置/清，打开动作**不碰**它——否则"关闭排空期间"一个 OpenCamera 任务会把闸清回 false，
+    // 新到的 Apply 任务又踩着拆句柄窗口。打开失败/成功都不影响闸。
     try {
         QString cameraName;
         {
@@ -794,6 +794,9 @@ void MvsImageSourceNode::closeCamera()
         VFP_DEBUG << "清除全局相机引用:" << m_globalCameraName;
     }
     
+    // 关闭完成（成功拆句柄）→ 撤闸（P3-3）：m_closing 的语义是"关闭进行中"，
+    // 由 closeCamera 成对置/清；打开动作不碰它。这样"关闭后再打开"在结构上可达。
+    m_closing.store(false, std::memory_order_relaxed);
     emit cameraStatusChanged(false);
 }
 

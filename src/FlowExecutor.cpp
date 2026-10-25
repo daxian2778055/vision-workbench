@@ -411,9 +411,14 @@ void FlowExecutor::startExecution()
         return;
     }
 
-    // 清掉上一轮遗留的"人为停止"标记（P2-1 残留）：两轮之间按停止时标记会一直悬着，
-    // 不清的话下一次启动的第一轮会被误判成中止、良率漏掉一整轮。
+    // 清掉上一轮/局部执行遗留的轮级标志（P2-1/P2-B 残留）：
+    // · m_userStopRequested 两轮之间会悬着（下一轮被误判中止）；
+    // · m_roundHadFailure / m_roundAborted 会被**同步局部执行**（executeUpTo/executeFrom）
+    //   污染——局部执行失败置了失败位、或触发子流程中止置了中止位，而局部执行没有轮末，
+    //   下一次正常生产轮即使全成功，轮末汇总仍写 NG 或干脆跳过。
     m_userStopRequested.store(false, std::memory_order_relaxed);
+    m_roundHadFailure = false;
+    m_roundAborted = false;
     setRunState(ExecutionState::Running);
     resetState();
     
@@ -832,24 +837,7 @@ void FlowExecutor::run()
             QDateTime() });
         }
         // 轮末批量落库：整轮结果一个事务提交。放在统计之前，保证本轮记录已落库。
-        // 未启用数据库（databasePath 为空）时只清缓冲，不做任何 IO。
-        if (!m_pendingResults.isEmpty()) {
-            const QList<InspectionRecord> batch = m_pendingResults;
-            m_pendingResults.clear();
-            if (!AppDatabase::instance()->databasePath().isEmpty()) {
-                // P1：这条返回值原来直接丢掉。连续模式下一旦写库失败（连接没开、表缺失、
-                // 库被占用…），每轮的全部检测结果连同「整轮汇总」都会静默消失——
-                // 报表与追溯凭空少一段，而界面一切正常。
-                // 失败必须让操作员当场看见；但不据此停止流程：记录失败不该挡住检测本身。
-                if (!AppDatabase::instance()->saveInspectionResults(batch)) {
-                    const QString detail = AppDatabase::instance()->lastDatabaseError();
-                    VFP_EXEC_DEBUG << "Round results not saved:" << batch.size() << detail;
-                    emit executionError(QStringLiteral("本轮 %1 条检测结果未能写入数据库（报表/追溯会缺这一段）：%2")
-                                            .arg(batch.size())
-                                            .arg(detail));
-                }
-            }
-        }
+        flushPendingResults();
         m_diagPhase.store(7, std::memory_order_relaxed);   // 诊断：轮末·落库后
 
         // 轮次统计 + 周期性进程资源采样/日志
@@ -1153,6 +1141,10 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
     node->setOwnerContext(m_runContext);
     node->setOwnerToken(m_lifetimeToken.lock());   // 残余面：仅子流程节点的执行调用需要（见 NodeBase 注释）
 
+    // 每次 executeNode 调用复位两个节点级标志（P3-1/P3-2）：中止不落 OK 行、异常不重复落库
+    m_lastNodeAborted = false;
+    m_nodeRecordWritten = false;
+
     bool success = false;
     QElapsedTimer nodeTimer;
     nodeTimer.start();
@@ -1298,7 +1290,9 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
         }
 
         // Phase 4: 保存检测结果到数据库
-        if (!AppDatabase::instance()->databasePath().isEmpty()) {
+        // 中止不是成功（2026-10-25 复核 P3-1）：子流程中止返回的调用点不落 OK 行——
+        // 输出为空、整轮也不出汇总，节点级通过率若把它算成成功，报表上会多出绿的假成功。
+        if (!m_lastNodeAborted && !AppDatabase::instance()->databasePath().isEmpty()) {
             // \u6570\u636E\u5E93\u5DF2\u521D\u59CB\u5316
             // 报表「流程」列必须是可读且跨会话稳定的流程名：此前写的是场景指针的十进制数字
             // （reinterpret_cast<quintptr>(m_scene)），报表里显示内存地址且每次运行都不同。
@@ -1311,6 +1305,7 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
             // 连续模式下"每节点一次自动提交"是主要固定开销（40 节点 = 40 次提交/轮）。
             m_pendingResults.append(InspectionRecord{ 0, flowName, node->fullName(), success,
                                                       resultVal, QDateTime() });
+            m_nodeRecordWritten = true;   // 已落库：异常出口据此不重复落库（P3-2）
             if (!success) {
                 AppDatabase::instance()->addAlarm(node->fullName(), QStringLiteral("Error"),
                     QStringLiteral("\u7B97\u5B50\u6267\u884C\u5931\u8D25: %1").arg(node->name()));
@@ -1392,6 +1387,30 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
     m_lastNodeSuccess = success;
 }
 
+void FlowExecutor::flushPendingResults()
+{
+    // 把按轮缓冲的节点记录批量落库（单个事务）。未启用数据库（databasePath 为空）时
+    // 只清缓冲，不做任何 IO。轮末与**同步局部执行**（executeUpTo/executeFrom）都用它：
+    // 局部执行若不刷，节点记录会被拖到下一轮一起提交、时间戳被记成下一轮（P2-B）。
+    if (m_pendingResults.isEmpty())
+        return;
+    const QList<InspectionRecord> batch = m_pendingResults;
+    m_pendingResults.clear();
+    if (!AppDatabase::instance()->databasePath().isEmpty()) {
+        // P1：这条返回值原来直接丢掉。连续模式下一旦写库失败（连接没开、表缺失、
+        // 库被占用…），每轮的全部检测结果连同「整轮汇总」都会静默消失——
+        // 报表与追溯凭空少一段，而界面一切正常。
+        // 失败必须让操作员当场看见；但不据此停止流程：记录失败不该挡住检测本身。
+        if (!AppDatabase::instance()->saveInspectionResults(batch)) {
+            const QString detail = AppDatabase::instance()->lastDatabaseError();
+            VFP_EXEC_DEBUG << "Round results not saved:" << batch.size() << detail;
+            emit executionError(QStringLiteral("本轮 %1 条检测结果未能写入数据库（报表/追溯会缺这一段）：%2")
+                                    .arg(batch.size())
+                                    .arg(detail));
+        }
+    }
+}
+
 // P2-5（2026-10-25 复核）：executeNode 的异常出口必须与"正常失败路径"同一套收口。
 // try 里的失败分支（清三类执行缓存 / 置 m_roundHadFailure）在异常抛出时会被跳过：
 //   · 若异常发生在输出已发布之后，三类缓存里留着失败节点的半成品输出 ⇒ 下游读到脏数据；
@@ -1418,7 +1437,10 @@ void FlowExecutor::clearNodeCachesOnException(NodeBase *node)
 
     // ② 失败节点同样落库 + 告警（P3-1 残留）：异常路径此前跳过这一块，追溯只剩一条 NG 汇总，
     //    看不出是哪个算子、什么原因。与正常失败分支同表同字段。
-    if (!AppDatabase::instance()->databasePath().isEmpty()) {
+    // 只有"本次执行还没写过节点记录"才补：异常若发生在正常落库块之后（imageAvailable /
+    // 全局变量 / imageReady 的直连槽都在其后），try 里已写过成功行，这里再补一行就会
+    // 同轮同节点出现 OK+NG 两条（2026-10-25 复核 P3-2）。
+    if (!m_nodeRecordWritten && !AppDatabase::instance()->databasePath().isEmpty()) {
         const QString flowName = m_flowName.isEmpty() ? QStringLiteral("(未命名流程)") : m_flowName;
         m_pendingResults.append(InspectionRecord{ 0, flowName, node->fullName(), false,
                                                   QString(), QDateTime() });
@@ -1833,13 +1855,17 @@ bool FlowExecutor::executeSubFlow(SubFlowNode *caller)
     }
     m_subFlowCallStack.removeLast();
     if (aborted) {
-        // 人为停止 ≠ 执行失败（2026-10-25 复核 P2-1 残留）：原实现返回 false，调用点被判失败，
-        // 默认 stopOnFailure 立刻把它报成"节点 … 执行失败"并写 NG 汇总——一次人为中断被记成
-        // 一次产品失败。这里按"中止"收口：置轮中止位、输出留空、返回成功，让主循环的状态检查
-        // 或轮末统一判定收尾。
-        m_roundAborted = true;
-        caller->setOutputData(0, QSharedPointer<DataObject>());
-        return true;
+        // 只有"用户按了停止"才按中止收口（2026-10-25 复核 P2-A）：循环体/子流程里的**真失败**
+        // 同样会让状态走到 Stopped（executeLoop 的失败分支会 setRunState(Stopped)），
+        // 无条件按中止收口就把一次真失败记成了中止——调用点变绿、轮末汇总被跳过、
+        // 真失败只留下一条 executionError。必须区分：中止只认 m_userStopRequested。
+        if (m_userStopRequested.load(std::memory_order_relaxed)) {
+            m_roundAborted = true;
+            m_lastNodeAborted = true;   // 调用点不落"OK"行（中止不是成功）
+            caller->setOutputData(0, QSharedPointer<DataObject>());
+            return true;
+        }
+        return false;   // 失败路径接管：调用点判失败、走 m_lastNodeSuccess 的正常收口
     }
 
     // 出口结果 → 调用点输出端口 0。executeNode(caller) 在 execute() 返回后统一
@@ -2040,6 +2066,14 @@ void FlowExecutor::executeUpTo(NodeBase *endNode)
         if (!m_lastNodeSuccess && m_stopOnFailure)
             break;
     }
+
+    // 局部执行不写轮级标志、也不与下一轮混批（P2-B）：
+    // · 失败位/中止位只对"轮"有意义，而局部执行没有轮末——留着会让下一轮全绿也写 NG / 跳过汇总；
+    // · 节点记录当场刷库，否则会被拖到下一轮一起提交、时间戳被记成下一轮。
+    m_roundHadFailure = false;
+    m_roundAborted = false;
+    m_userStopRequested.store(false, std::memory_order_relaxed);
+    flushPendingResults();
 }
 
 void FlowExecutor::executeFrom(NodeBase *startNode)
@@ -2107,6 +2141,12 @@ void FlowExecutor::executeFrom(NodeBase *startNode)
         if (!m_lastNodeSuccess && m_stopOnFailure)
             break;
     }
+
+    // 局部执行不写轮级标志、也不与下一轮混批（P2-B，同 executeUpTo）
+    m_roundHadFailure = false;
+    m_roundAborted = false;
+    m_userStopRequested.store(false, std::memory_order_relaxed);
+    flushPendingResults();
 }
 
 void FlowExecutor::invalidateDownstreamOf(NodeBase *startNode)

@@ -249,6 +249,8 @@ private:
     /// P2-5：executeNode 异常出口的收口（清三类执行缓存 + 置轮失败位），
     /// 与 try 内失败分支同口径。仅执行线程调用。
     void clearNodeCachesOnException(NodeBase *node);
+    /// 把按轮缓冲的节点记录批量落库（单个事务）。轮末与同步局部执行都用它（P2-B）。
+    void flushPendingResults();
     void resetState();
     /// 记录一个节点被跳过（未激活分支 / 循环体由外层调度），并对外发 nodeSkipped
     void recordNodeSkipped(NodeBase *node, const QString &reason);
@@ -297,6 +299,12 @@ private:
     /// 人为停止请求（界面线程置、执行线程读）：轮末据此判"中止"，而不是看 Stopped 状态
     /// ——失败停止同样是 Stopped，且被停止的算子可能自判失败（2026-10-25 复核 P2-1 残留）
     std::atomic<bool> m_userStopRequested{false};
+    /// 本次 executeNode 调用是否"因人为中止而收口"（worker 线程私有）：中止不是成功，
+    /// 调用点不得落 passed=1 的节点行（2026-10-25 复核 P3-1）
+    bool m_lastNodeAborted = false;
+    /// 本次 executeNode 是否已写过节点记录（worker 线程私有）：异常若发生在正常落库块之后，
+    /// 不得再补一条失败行 —— 否则同轮同节点出现 OK+NG 两条（2026-10-25 复核 P3-2）
+    bool m_nodeRecordWritten = false;
 
     // ---- worker 阶段观测（正式能力）：定位"worker 不退出"类挂起时可在挂起态安全轮询。
     // 执行线程在关键点写、任意线程经 workerPhaseName() 读；relaxed 原子，不参与任何业务逻辑。

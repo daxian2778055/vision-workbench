@@ -328,6 +328,18 @@
 | P3-12 载入时静默丢设备 | 新增 `deviceLoadFailed` 信号，`ProjectManager` 接到既有载入损失通道（`reportLoadNote`） | — |
 | P2-4 解绑旁路、重连只看数量 | `removeCameraDevice` 走同一消费者闸；自动重连要求"唯一消费者**是自己**"（按 consumerId 比对） | `GlobalCameraConsumerGateTest` 三腿 |
 
+**2026-10-25 第三批复核（"修了又引入/修了没修全"两类）**：
+
+| 项 | 修法 | 守卫 |
+|---|---|---|
+| P2-A 子流程内嵌套循环的真失败被当中止（本轮引入的回归） | `executeSubFlow` 的中止分支只认 `m_userStopRequested`；真失败（executeLoop 失败分支同样置 Stopped）走失败路径 | `subFlowNestedLoopFailureIsStillNg` 腿（调用点必须判失败、汇总必须 NG） |
+| P2-B 同步局部执行污染下一轮汇总 | `startExecution` 统一复位三枚轮级标志；`executeUpTo/executeFrom` 收尾复位并 `flushPendingResults()`（否则局部执行的记录拖到下一轮、时间戳被记错） | `localExecutionFailureDoesNotPoisonNextRound` 腿 |
+| P3-1 中止的调用点仍落 OK 行 | `m_lastNodeAborted`：中止不落节点行（中止不是成功，节点级通过率不得虚高） | 子流程中止腿补"不得有 passed=1 的调用点行"断言 |
+| P3-2 异常出口重复落库 | `m_nodeRecordWritten`：正常落库后异常不再补失败行（同轮同节点 OK+NG） | — |
+| P3-3 `m_closing` 语义 | 改为"关闭进行中"：closeCamera 成对置/清，打开动作不碰（此前打开会在关闭排空期间清闸，且"关闭后再打开"不可达） | — |
+| P3-5 解绑对话框忽略失败返回 | 未打开但有消费者时 manager 同样拒绝；对话框统一处理拒绝 | — |
+| 测试自身 | 时序断言放宽、悬空引用修复、中止腿补"停止落在轮内"前提、汇总数改差分 | — |
+
 **仍开放（本轮未修，各有理由）**：
 
 | 项 | 位置 | 为什么没在这次改 |
@@ -335,7 +347,7 @@
 | P3-1 `ownerContext/ownerToken` 是普通 shared_ptr/weak_ptr | `NodeBase.h` / `FlowExecutor` | 切页与 worker 同时赋值在标准上属数据竞争，但写入值相同、实际风险低；改 atomic shared_ptr 会改动执行器生命周期核心，收益/风险比不划算，**保留为已知项** |
 | P3-3 `startExecution` 取锁次序与文档相反；run() 尾部两次置 Idle 的极窄窗口 | `FlowExecutor.cpp` | 与 E3/E4 的自死锁修复同一片代码，动锁序容易引入更难查的挂起；窗口极窄，暂不动 |
 | P3-4 脚本进程先运行后入 Job（无 CREATE_SUSPENDED） | `ScriptSecurityPolicy.cpp` | AppContainer/Low IL 仍在生效；改进程启动方式需要真机验证脚本节点全链路，留待现场一轮 |
-| P3-7 片段 `droppedConnections` 只累加不报告；失败时未 adopt 的节点泄漏 | `FlowSnippet.cpp` | 行为可见性改造 + 节点回收需要新增返回结构，属独立小项，留待下一轮 |
+| P3-13 析构超时后节点可能被释放，卡住的任务仍进入节点方法（2026-10-25 第二批复核新增） | `MvsImageSourceNode.cpp` | 修法需要"句柄持有者共享_ptr/可取消 SDK 调用"这类设计改造（任务持句柄、节点析构不拆）；当前以 `QPointer` 入口守卫 + 3 秒排空尽力而为，超时会跳过拆句柄（宁可泄漏也不 UAF），但节点对象本身仍可能在极端情况下被释放。**保留为已知残余**，与相机 SDK 的可取消性一起排期 |
 
 **已修的现场缺陷（2026-10-24 登记）**：操作中工具拖不进画布、双击入画布后节点不能动。根因两条：
 ① `MainWindow::onExecutionError` 未像其余执行槽那样重算画布锁（错误路径没走到 `executionFinished`
