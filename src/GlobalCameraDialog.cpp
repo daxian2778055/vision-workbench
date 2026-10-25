@@ -285,11 +285,22 @@ void GlobalCameraDialog::onUnbindDevice()
     
     GlobalCameraManager *manager = GlobalCameraManager::instance();
     
-    // 关闭相机
+    // 关闭相机。消费者闸（P2-4）：本对话框是非模态的，运行中可能正在被流程使用——
+    // 此时 closeCamera 会拒绝（返回 false），必须把原因说出来，不能让用户以为已经解绑。
     if (manager->isCameraOpen(cameraName)) {
-        manager->closeCamera(cameraName);
+        if (!manager->closeCamera(cameraName)) {
+            const QStringList users = manager->consumersForCamera(cameraName);
+            QMessageBox::warning(
+                this, QStringLiteral("无法解绑"),
+                QStringLiteral("相机 %1 仍被 %2 个图像源使用（%3）。\n"
+                               "请先停止执行并把这些算子的相机解绑，再回来解除设备绑定。")
+                    .arg(cameraName)
+                    .arg(users.size())
+                    .arg(users.join(QStringLiteral(", "))));
+            return;
+        }
     }
-    
+
     // 移除设备绑定
     manager->removeCameraDevice(cameraName);
     

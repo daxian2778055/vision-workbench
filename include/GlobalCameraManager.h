@@ -86,8 +86,11 @@ public:
     // 打开相机
     bool openCamera(const QString &cameraName);
 
-    // 关闭相机
-    bool closeCamera(const QString &cameraName);
+    // 关闭相机。
+    // force=false（默认）：仍有消费者（isCameraUsed）时**拒绝关闭**并返回 false——否则就是
+    //   在别人的 MV_CC_GetOneFrameTimeout 里拆句柄（2026-10-25 复核 P2-4）。
+    // force=true：调用方明确知道自己在拆全场的相机（关机清理 / 自己是唯一消费者）。
+    bool closeCamera(const QString &cameraName, bool force = false);
 
     // 读取相机参数
     bool readCameraParams(const QString &cameraName);

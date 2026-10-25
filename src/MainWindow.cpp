@@ -1009,7 +1009,9 @@ void MainWindow::cleanupCameras()
     for (auto it = allCameras.begin(); it != allCameras.end(); ++it) {
         const QString &cameraName = it.key();
         if (gcm->isCameraOpen(cameraName)) {
-            gcm->closeCamera(cameraName);
+            // 关机清理：此时上面的 MVS 节点已各自 closeCamera，消费者账可能还没随析构清掉，
+            // 所以这里显式 force（P2-4：默认路径会被消费者闸拒，而那会让关窗时相机全不关）
+            gcm->closeCamera(cameraName, /*force*/ true);
         }
     }
 

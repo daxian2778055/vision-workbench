@@ -655,8 +655,17 @@ bool GlobalCameraManager::openCamera(const QString &cameraName)
     }
 }
 
-bool GlobalCameraManager::closeCamera(const QString &cameraName)
+bool GlobalCameraManager::closeCamera(const QString &cameraName, bool force)
 {
+    // 消费者闸（2026-10-25 复核 P2-4）：isCameraUsed 此前没有任何生产调用点——相机管理对话框
+    // 是非模态的，运行中可以直接解绑；自动重连也会关掉一台可能被别的节点共享的全局相机。
+    // 别的消费者正拿着裸句柄在 MV_CC_GetOneFrameTimeout 里，拆句柄就是 UAF。
+    if (!force && isCameraUsed(cameraName)) {
+        VFP_DEBUG << "拒绝关闭全局相机（仍有消费者）:" << cameraName
+                  << consumersForCamera(cameraName);
+        return false;
+    }
+
     void* hCamera = nullptr;
     {
         QMutexLocker locker(&m_mutex);

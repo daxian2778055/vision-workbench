@@ -1554,7 +1554,15 @@ bool MvsImageSourceNode::tryAutoReconnect()
         GlobalCameraManager *gcm = GlobalCameraManager::instance();
         const QString cam = m_globalCameraName;
         if (gcm->isCameraOpen(cam)) {
-            gcm->closeCamera(cam);
+            // P2-4（2026-10-25 复核）：只有"我是唯一消费者"时才允许拆重开。别的节点也在用
+            // 这台全局相机时，拆句柄等于在它的取图调用里 UAF——宁可这次不重连，等它自己恢复。
+            const QStringList consumers = gcm->consumersForCamera(cam);
+            if (consumers.size() > 1) {
+                VFP_DEBUG << "全局相机仍有其它消费者，跳过自动重连（不拆共享句柄）:"
+                          << cam << consumers;
+                return false;
+            }
+            gcm->closeCamera(cam, /*force*/ true);   // 我是唯一消费者：强制拆（默认会被消费者闸拒）
             QThread::msleep(300);
         }
         gcm->openCamera(cam);
