@@ -72,7 +72,25 @@
       "exe_bytes": 9725440,
       "package_dir": "dist/VisionFlowPlatform-rc-20261025.2",
       "recorded_at": "2026-10-25",
-      "recorded_note": "当前装机包：第二批复核残留收口（中止判定按用户停止请求/相机入队记账+关闭闸/异常出口补端口与落库/子流程任何重叠判坏/载入丢设备上报/解绑走消费者闸/重连确认唯一消费者是自己/片段掉线上报）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261025.4 取代（后者含其全部改动）"
+    },
+    {
+      "tag": "rc-20261025.3",
+      "commit": "42f21b18cabd167af23cd5c5cc563d749e161138",
+      "exe_md5": "90c697c925e4ac02a720fe814c32c79a",
+      "exe_bytes": 9726976,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261025.3",
+      "recorded_at": "2026-10-25",
+      "recorded_note": "未发布：该包 exe 内嵌版本与打包提交不一致（版本说明里为 no），不满足发版件要求；其提交内容已全部包含在 rc-20261025.4 中，包于同日清理"
+    },
+    {
+      "tag": "rc-20261025.4",
+      "commit": "812bd4a39d5d194a556b92f5aa46abffeda59434",
+      "exe_md5": "b934d684c7f2176f9c5260014abf6bb9",
+      "exe_bytes": 9730560,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261025.4",
+      "recorded_at": "2026-10-25",
+      "recorded_note": "当前装机包：脚本执行前确认开关收口（Engineer 及以上、关闭二次确认、落审计、启动提示、原子量、英文）+ 中止的记录处置与有效位 + 内/外层循环体精确判据 + 部署自检超时打印输出"
     }
   ],
   "legacy_backfilled": [
