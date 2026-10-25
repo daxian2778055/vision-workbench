@@ -427,7 +427,7 @@ if (-not $SkipVerify) {
         }
         if ($partial) {
             $tail = ($partial -split "`r?`n") | Where-Object { $_ -ne '' } | Select-Object -Last 12
-            Write-Host '  超时前最后输出（最后一行 START 之后的节点就是卡住的那个）:'
+            Write-Host '  超时前最后输出（最后一行 START 即卡住的节点；只有构造/初始化阶段卡住时才轮到它下面那个）:'
             foreach ($line in $tail) { Write-Host ("    " + $line) }
         } else {
             Write-Host '  超时前无任何输出（多半卡在启动/单例初始化，不在节点循环里）'

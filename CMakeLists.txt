@@ -1166,6 +1166,8 @@ if(MSVC)
     target_link_libraries(i18n_test PRIVATE vfp_core Qt6::Test)
     # 确保 .qm 已生成并部署到运行目录（Qt6::Test 已带入 Qt6::Core）
     add_dependencies(i18n_test VisionFlowPlatform)
+    # 静态闸要读 .ts 原文（unfinished/空译文判红），把源文件路径编进来
+    target_compile_definitions(i18n_test PRIVATE VFP_TS_PATH="${VFP_TS}")
     vfp_add_qtest(NAME I18nTest TARGET i18n_test)
 endif()
 

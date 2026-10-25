@@ -626,11 +626,13 @@ MainWindow::MainWindow(QWidget *parent) :
             VFP_DEBUG << "User logged in:" << user << "Role:" << role;
             setWindowTitle(QStringLiteral("视觉方案工作台 - %1 [%2]").arg(user, role));
             applyPermissionRestrictions();
-            // 脚本确认处于关闭态时的提示：**登录后**才写状态栏（构造期写会在窗口出现前过期）
-            if (!ScriptSecurityPolicy::instance().requireConfirmation()) {
+            // 脚本确认处于关闭态时的提示：**登录后**才写状态栏（构造期写会在窗口出现前过期）。
+            // 写闸开启时这条会被合并进写闸的常驻提示，这里不再单独写（避免互相顶掉）。
+            if (!ScriptSecurityPolicy::instance().requireConfirmation()
+                && !SessionManager::instance()->writesBlocked()) {
                 ui->statusBar->showMessage(
                     tr("注意：脚本执行前确认处于关闭状态（脚本将直接运行）——"
-                       "可在「系统 → 脚本安全」恢复"), 15000);
+                       "可在「系统 → 脚本安全：执行前确认脚本」恢复"), 15000);
             }
 
             // 出厂默认口令仍在使用 ⇒ 上写操作闸并强制改密（取代历史的"弹一次告警就放行"）
@@ -4012,7 +4014,7 @@ void MainWindow::setupSystemMenu()
             // 这里只写日志——**状态栏提示放到登录成功之后**（2026-10-25 复核 P3）：
             // 本函数在构造期运行，登录框在其后才弹，此刻写的 15 秒提示会在窗口出现前就过期。
             logMessage(tr("注意：脚本执行前确认处于关闭状态（脚本将直接运行）——"
-                          "可在「系统 → 脚本安全」恢复"));
+                          "可在「系统 → 脚本安全：执行前确认脚本」恢复"));
         }
     }
 
@@ -4211,8 +4213,14 @@ void MainWindow::enforceFactoryPasswordPolicy()
     if (session->writesBlocked()) {
         // 常驻（timeout=0）：灰掉菜单不等于安全，真正的拒绝发生在 ProjectManager 落盘处，
         // 必须一直有个看得见的原因说明"为什么保存没反应"。
-        ui->statusBar->showMessage(
-            tr("写操作已被禁止：出厂默认口令仍在使用（「系统 → 修改管理员口令」可解除）"), 0);
+        QString gateMsg =
+            tr("写操作已被禁止：出厂默认口令仍在使用（「系统 → 修改管理员口令」可解除）");
+        // 首次安装时脚本确认的提示会被这条常驻提示顶掉（2026-10-25 复核）：两件都是"装完就该
+        // 知道"的事，合并进同一条常驻提示，否则后写的盖掉前一条，现场只看得到一半。
+        if (!ScriptSecurityPolicy::instance().requireConfirmation()) {
+            gateMsg += tr("；且脚本执行前确认处于关闭状态（系统 → 脚本安全：执行前确认脚本）");
+        }
+        ui->statusBar->showMessage(gateMsg, 0);
         logMessage(tr("出厂默认口令仍在使用：写操作已禁止，直到管理员口令被修改"));
     }
 }

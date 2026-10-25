@@ -156,8 +156,8 @@
     </message>
     <message>
         <location filename="../ui/MainWindow.ui" line="212"/>
-        <location filename="../src/MainWindow.cpp" line="1142"/>
-        <location filename="../src/MainWindow.cpp" line="2271"/>
+        <location filename="../src/MainWindow.cpp" line="1150"/>
+        <location filename="../src/MainWindow.cpp" line="2279"/>
         <source>语言</source>
         <translation>Language</translation>
     </message>
@@ -198,7 +198,7 @@
     </message>
     <message>
         <location filename="../ui/MainWindow.ui" line="266"/>
-        <location filename="../src/MainWindow.cpp" line="2744"/>
+        <location filename="../src/MainWindow.cpp" line="2752"/>
         <source>打开方案</source>
         <translation>Open Scheme</translation>
     </message>
@@ -209,7 +209,7 @@
     </message>
     <message>
         <location filename="../ui/MainWindow.ui" line="279"/>
-        <location filename="../src/MainWindow.cpp" line="1144"/>
+        <location filename="../src/MainWindow.cpp" line="1152"/>
         <source>English</source>
         <translation>English</translation>
     </message>
@@ -437,352 +437,358 @@
 Please change the password immediately via &quot;System -&gt; User Management&quot;.</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="988"/>
+        <location filename="../src/MainWindow.cpp" line="634"/>
+        <location filename="../src/MainWindow.cpp" line="4016"/>
+        <source>注意：脚本执行前确认处于关闭状态（脚本将直接运行）——可在「系统 → 脚本安全：执行前确认脚本」恢复</source>
+        <translation>Warning: script confirmation is OFF (scripts run directly) - restore it under System -> Script safety: confirm scripts before running</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="996"/>
         <source>有 %1 个流程执行线程未能在 3 秒内退出，已跳过相机关闭（请勿在流程运行中直接关窗；可在停止执行后再关闭）</source>
         <translation>%1 flow engine thread(s) did not exit within 3 s; camera shutdown was skipped (do not close the window while a flow is running; stop the flow first)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1068"/>
+        <location filename="../src/MainWindow.cpp" line="1076"/>
         <source>创建分组</source>
         <translation>Create Group</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1070"/>
+        <location filename="../src/MainWindow.cpp" line="1078"/>
         <source>把当前选中的算子框成一组（纯视觉容器，不影响执行）</source>
         <translation>Group the selected operators (visual container only; does not affect execution)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1071"/>
+        <location filename="../src/MainWindow.cpp" line="1079"/>
         <source>解散分组</source>
         <translation>Dissolve Group</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1073"/>
+        <location filename="../src/MainWindow.cpp" line="1081"/>
         <source>删除选中的分组框，组内算子保留</source>
         <translation>Remove the selected group box; operators inside are kept</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1076"/>
+        <location filename="../src/MainWindow.cpp" line="1084"/>
         <source>折叠/展开分组</source>
         <translation>Collapse/Expand Group</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1077"/>
+        <location filename="../src/MainWindow.cpp" line="1085"/>
         <source>把选中的分组折叠成一条标题栏（纯显示，不影响执行）</source>
         <translation>Collapse the selected group into a title bar (display only; does not affect execution)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1082"/>
+        <location filename="../src/MainWindow.cpp" line="1090"/>
         <source>复制所选算子</source>
         <translation>Copy Selected Operators</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1085"/>
+        <location filename="../src/MainWindow.cpp" line="1093"/>
         <source>粘贴</source>
         <translation>Paste</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1088"/>
+        <location filename="../src/MainWindow.cpp" line="1096"/>
         <source>导出片段…</source>
         <translation>Export Snippet...</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1089"/>
+        <location filename="../src/MainWindow.cpp" line="1097"/>
         <source>把选中的算子（含内部连线）导出为片段文件，供别的方案插入</source>
         <translation>Export selected operators (including internal connections) to a snippet file for insertion into other schemes</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1090"/>
+        <location filename="../src/MainWindow.cpp" line="1098"/>
         <source>导入片段…</source>
         <translation>Import Snippet...</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1091"/>
+        <location filename="../src/MainWindow.cpp" line="1099"/>
         <source>把片段文件插入到当前流程（放在当前视图中心）</source>
         <translation>Insert a snippet file into the current flow (placed at the center of the current view)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1109"/>
+        <location filename="../src/MainWindow.cpp" line="1117"/>
         <source>导出加密/只读方案…</source>
         <translation>Export Encrypted/Read-only Scheme...</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1123"/>
+        <location filename="../src/MainWindow.cpp" line="1131"/>
         <source>定义为子流程…</source>
         <translation>Define as Subflow...</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1124"/>
+        <location filename="../src/MainWindow.cpp" line="1132"/>
         <source>把选中的算子（≥2，单进单出、不与成员外连线）定义为命名子流程，供「子流程」算子按名调用；一处修改、所有引用同步生效</source>
         <translation>Define the selected operators (&gt;=2, single input/output, no connections outside the selection) as a named subflow, called by name by the &apos;SubFlow&apos; operator; edit once and every reference follows</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1127"/>
+        <location filename="../src/MainWindow.cpp" line="1135"/>
         <source>删除子流程定义…</source>
         <translation>Delete Subflow Definition...</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1128"/>
+        <location filename="../src/MainWindow.cpp" line="1136"/>
         <source>删除一个子流程定义；画布算子原样保留，引用它的「子流程」算子执行时将报「未定义」</source>
         <translation>Delete a subflow definition; the operators on the canvas are kept, and &apos;SubFlow&apos; operators referencing it will report &apos;undefined&apos; at runtime</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1143"/>
+        <location filename="../src/MainWindow.cpp" line="1151"/>
         <source>简体中文</source>
         <translation>Simplified Chinese</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1170"/>
+        <location filename="../src/MainWindow.cpp" line="1178"/>
         <source>帮助(&amp;H)</source>
         <translation>Help (&amp;H)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1172"/>
+        <location filename="../src/MainWindow.cpp" line="1180"/>
         <source>使用手册(&amp;M)</source>
         <translation>User Manual (&amp;M)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1178"/>
+        <location filename="../src/MainWindow.cpp" line="1186"/>
         <source>关于</source>
         <translation>About</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1182"/>
+        <location filename="../src/MainWindow.cpp" line="1190"/>
         <source>关于 VisionFlowPlatform</source>
         <translation>About VisionFlowPlatform</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1334"/>
+        <location filename="../src/MainWindow.cpp" line="1342"/>
         <source>（菜单：系统 → 修改管理员口令）</source>
-        <translation>(menu: System -> Change administrator password)</translation>
+        <translation>(menu: System -&gt; Change administrator password)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1335"/>
+        <location filename="../src/MainWindow.cpp" line="1343"/>
         <source>画布已锁定（流程运行中）——请先停止执行，再双击/拖拽添加算子</source>
         <translation>Canvas locked (flow is running) - stop execution before adding nodes by double-click or drag</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1556"/>
+        <location filename="../src/MainWindow.cpp" line="1564"/>
         <source>模块编辑被禁止</source>
         <translation>Module editing is disabled</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1669"/>
+        <location filename="../src/MainWindow.cpp" line="1677"/>
         <source>写闸开启期间不受理重算下游：出厂默认口令仍在使用（改密后恢复）</source>
         <translation>Recompute-downstream is refused while the write gate is on: the factory default password is still in use (recovers after the password is changed)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1711"/>
+        <location filename="../src/MainWindow.cpp" line="1719"/>
         <source>写闸开启期间不受理单算子执行：出厂默认口令仍在使用（改密后恢复）</source>
         <translation>Single-node execution is refused while the write gate is on: the factory default password is still in use (recovers after the password is changed)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1836"/>
+        <location filename="../src/MainWindow.cpp" line="1844"/>
         <source>新建方案</source>
         <translation>New Scheme</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1869"/>
+        <location filename="../src/MainWindow.cpp" line="1877"/>
         <source>有流程执行线程超时未退出，已取消新建方案</source>
         <translation>A flow execution thread timed out and did not exit; creating a new scheme was cancelled</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1870"/>
-        <location filename="../src/MainWindow.cpp" line="2826"/>
+        <location filename="../src/MainWindow.cpp" line="1878"/>
+        <location filename="../src/MainWindow.cpp" line="2834"/>
         <source>提示</source>
         <translation>Hint</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1871"/>
+        <location filename="../src/MainWindow.cpp" line="1879"/>
         <source>有流程仍在执行且未能在限定时间内退出，已取消新建方案以避免程序崩溃。</source>
         <translation>Flows are still running and did not exit within the time limit; creating a new scheme was cancelled to avoid a crash.</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1963"/>
+        <location filename="../src/MainWindow.cpp" line="1971"/>
         <source>保存项目: %1</source>
         <translation>Save project: %1</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1965"/>
+        <location filename="../src/MainWindow.cpp" line="1973"/>
         <source>项目保存成功: %1</source>
         <translation>Project saved successfully: %1</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1970"/>
+        <location filename="../src/MainWindow.cpp" line="1978"/>
         <source>项目保存失败: %1</source>
         <translation>Failed to save project: %1</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="1999"/>
+        <location filename="../src/MainWindow.cpp" line="2007"/>
         <source>已创建分组「%1」（%2 个算子）</source>
         <translation>Created group &quot;%1&quot; (%2 operators)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2003"/>
+        <location filename="../src/MainWindow.cpp" line="2011"/>
         <source>创建分组：%1（%2 个算子）</source>
         <translation>Create group: %1 (%2 operators)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2008"/>
+        <location filename="../src/MainWindow.cpp" line="2016"/>
         <source>请先在画布上选中至少 2 个算子，再创建分组</source>
         <translation>Please select at least 2 operators on the canvas before creating a group</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2020"/>
+        <location filename="../src/MainWindow.cpp" line="2028"/>
         <source>定义为子流程</source>
         <translation>Define Subflow</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2021"/>
+        <location filename="../src/MainWindow.cpp" line="2029"/>
         <source>子流程名称：</source>
         <translation>Subflow name:</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2027"/>
+        <location filename="../src/MainWindow.cpp" line="2035"/>
         <source>已定义子流程「%1」（%2 个算子）。用「子流程」算子按此名称调用。</source>
         <translation>Subflow &apos;%1&apos; defined (%2 operators). Call it by this name with the &apos;SubFlow&apos; operator.</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2032"/>
+        <location filename="../src/MainWindow.cpp" line="2040"/>
         <source>定义子流程：%1</source>
         <translation>Define subflow: %1</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2035"/>
+        <location filename="../src/MainWindow.cpp" line="2043"/>
         <source>定义子流程失败：%1</source>
         <translation>Failed to define subflow: %1</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2046"/>
+        <location filename="../src/MainWindow.cpp" line="2054"/>
         <source>当前流程没有子流程定义</source>
         <translation>The current flow has no subflow definitions</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2053"/>
+        <location filename="../src/MainWindow.cpp" line="2061"/>
         <source>删除子流程定义</source>
         <translation>Delete Subflow Definition</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2054"/>
+        <location filename="../src/MainWindow.cpp" line="2062"/>
         <source>选择要删除的子流程（画布算子会保留）：</source>
         <translation>Select the subflow to delete (operators on the canvas are kept):</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2060"/>
+        <location filename="../src/MainWindow.cpp" line="2068"/>
         <source>已删除子流程定义「%1」</source>
         <translation>Subflow definition &apos;%1&apos; deleted</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2061"/>
+        <location filename="../src/MainWindow.cpp" line="2069"/>
         <source>删除子流程定义：%1</source>
         <translation>Delete subflow definition: %1</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2072"/>
+        <location filename="../src/MainWindow.cpp" line="2080"/>
         <source>已解散 %1 个分组（组内算子已保留）</source>
         <translation>Dissolved %1 group(s); operators inside are kept</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2073"/>
+        <location filename="../src/MainWindow.cpp" line="2081"/>
         <source>解散分组：%1 个</source>
         <translation>Dissolve group: %1</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2075"/>
+        <location filename="../src/MainWindow.cpp" line="2083"/>
         <source>请先选中要解散的分组框（点分组标题栏）</source>
         <translation>Please select the group box to dissolve (click its title bar)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2091"/>
+        <location filename="../src/MainWindow.cpp" line="2099"/>
         <source>请先选中要折叠/展开的分组框（点分组标题栏）</source>
         <translation>Please select the group box to collapse/expand (click its title bar)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2096"/>
+        <location filename="../src/MainWindow.cpp" line="2104"/>
         <source>已折叠/展开 %1 个分组</source>
         <translation>Collapsed/Expanded %1 group(s)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2097"/>
+        <location filename="../src/MainWindow.cpp" line="2105"/>
         <source>折叠/展开分组：%1 个</source>
         <translation>Collapse/Expand group: %1</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2124"/>
+        <location filename="../src/MainWindow.cpp" line="2132"/>
         <source>请先选中要复制的算子</source>
         <translation>Please select the operator to copy first</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2131"/>
+        <location filename="../src/MainWindow.cpp" line="2139"/>
         <source>复制失败：没有可复制的算子</source>
         <translation>Copy failed: no operator to copy</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2136"/>
+        <location filename="../src/MainWindow.cpp" line="2144"/>
         <source>已复制 %1 个算子</source>
         <translation>Copied %1 operator(s)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2139"/>
+        <location filename="../src/MainWindow.cpp" line="2147"/>
         <source>（%1 条跨边界的连线未包含）</source>
         <translation>(%1 cross-boundary connection(s) not included)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2152"/>
+        <location filename="../src/MainWindow.cpp" line="2160"/>
         <source>粘贴失败：%1</source>
         <translation>Paste failed: %1</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2162"/>
+        <location filename="../src/MainWindow.cpp" line="2170"/>
         <source>当前没有流程</source>
         <translation>No flow currently</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2167"/>
+        <location filename="../src/MainWindow.cpp" line="2175"/>
         <source>流程处于编辑锁定状态（运行中），无法插入片段</source>
         <translation>The flow is edit-locked (running); cannot insert snippet</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2179"/>
-        <location filename="../src/MainWindow.cpp" line="2181"/>
+        <location filename="../src/MainWindow.cpp" line="2187"/>
+        <location filename="../src/MainWindow.cpp" line="2189"/>
         <source>插入片段失败：%1</source>
         <translation>Failed to insert snippet: %1</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2194"/>
+        <location filename="../src/MainWindow.cpp" line="2202"/>
         <source>已插入 %1 个算子；%2 条连线未能接回（端口越界或会成环）</source>
         <translation>Inserted %1 node(s); %2 connection(s) could not be restored (port index out of range or would form a cycle)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2196"/>
+        <location filename="../src/MainWindow.cpp" line="2204"/>
         <source>已插入 %1 个算子</source>
         <translation>Inserted %1 operator(s)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2209"/>
+        <location filename="../src/MainWindow.cpp" line="2217"/>
         <source>请先选中要导出的算子</source>
         <translation>Please select the operator to export first</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2216"/>
+        <location filename="../src/MainWindow.cpp" line="2224"/>
         <source>导出失败：没有可导出的算子</source>
         <translation>Export failed: no operator to export</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2221"/>
-        <location filename="../src/MainWindow.cpp" line="2230"/>
+        <location filename="../src/MainWindow.cpp" line="2229"/>
         <location filename="../src/MainWindow.cpp" line="2238"/>
+        <location filename="../src/MainWindow.cpp" line="2246"/>
         <source>导出方案片段</source>
         <translation>Export Scheme Snippet</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2222"/>
-        <location filename="../src/MainWindow.cpp" line="2358"/>
+        <location filename="../src/MainWindow.cpp" line="2230"/>
+        <location filename="../src/MainWindow.cpp" line="2366"/>
         <source>方案片段 (*%1)</source>
         <translation>Scheme Snippet (*%1)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2231"/>
+        <location filename="../src/MainWindow.cpp" line="2239"/>
         <source>无法写入文件：
 %1
 %2</source>
@@ -791,129 +797,129 @@ Please change the password immediately via &quot;System -&gt; User Management&qu
 %2</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2238"/>
+        <location filename="../src/MainWindow.cpp" line="2246"/>
         <source>写入不完整：
 %1</source>
         <translation>Incomplete write:
 %1</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2242"/>
+        <location filename="../src/MainWindow.cpp" line="2250"/>
         <source>已导出片段：%1（%2 个算子）</source>
         <translation>Exported snippet: %1 (%2 operators)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2244"/>
+        <location filename="../src/MainWindow.cpp" line="2252"/>
         <source>；%1 条跨边界连线未包含</source>
         <translation>; %1 cross-boundary connection(s) not included</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2261"/>
+        <location filename="../src/MainWindow.cpp" line="2269"/>
         <source>只读方案：禁止覆盖保存（可另存为新方案）</source>
         <translation>Read-only scheme: overwriting is forbidden (you may save as a new scheme)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2271"/>
+        <location filename="../src/MainWindow.cpp" line="2279"/>
         <source>语言设置将在重启后生效。</source>
         <translation>Language setting takes effect after restart.</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2285"/>
-        <location filename="../src/MainWindow.cpp" line="2292"/>
-        <location filename="../src/MainWindow.cpp" line="2317"/>
-        <location filename="../src/MainWindow.cpp" line="2321"/>
-        <location filename="../src/MainWindow.cpp" line="2328"/>
-        <location filename="../src/MainWindow.cpp" line="2346"/>
+        <location filename="../src/MainWindow.cpp" line="2293"/>
+        <location filename="../src/MainWindow.cpp" line="2300"/>
+        <location filename="../src/MainWindow.cpp" line="2325"/>
+        <location filename="../src/MainWindow.cpp" line="2329"/>
+        <location filename="../src/MainWindow.cpp" line="2336"/>
+        <location filename="../src/MainWindow.cpp" line="2354"/>
         <source>导出加密/只读方案</source>
         <translation>Export Encrypted/Read-only Scheme</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2286"/>
+        <location filename="../src/MainWindow.cpp" line="2294"/>
         <source>当前没有可导出的方案。</source>
         <translation>No scheme available to export.</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2294"/>
+        <location filename="../src/MainWindow.cpp" line="2302"/>
         <source>加密（打开时需口令）</source>
         <translation>Encrypted (requires password to open)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2300"/>
+        <location filename="../src/MainWindow.cpp" line="2308"/>
         <source>只读（分发后禁止覆盖保存）</source>
         <translation>Read-only (overwriting forbidden after distribution)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2301"/>
+        <location filename="../src/MainWindow.cpp" line="2309"/>
         <source>加密：</source>
         <translation>Encryption:</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2302"/>
+        <location filename="../src/MainWindow.cpp" line="2310"/>
         <source>口令：</source>
         <translation>Password:</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2303"/>
+        <location filename="../src/MainWindow.cpp" line="2311"/>
         <source>确认口令：</source>
         <translation>Confirm password:</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2304"/>
+        <location filename="../src/MainWindow.cpp" line="2312"/>
         <source>只读：</source>
         <translation>Read-only:</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2317"/>
+        <location filename="../src/MainWindow.cpp" line="2325"/>
         <source>加密必须设置口令。</source>
         <translation>Encryption requires a password.</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2321"/>
+        <location filename="../src/MainWindow.cpp" line="2329"/>
         <source>两次输入的口令不一致。</source>
         <translation>The two password entries do not match.</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2329"/>
+        <location filename="../src/MainWindow.cpp" line="2337"/>
         <source>加密方案 (*.vfpe);;方案文件 (*.vfp)</source>
         <translation>Encrypted scheme (*.vfpe);;Scheme file (*.vfp)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2340"/>
+        <location filename="../src/MainWindow.cpp" line="2348"/>
         <source>加密</source>
         <translation>Encrypted</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2340"/>
+        <location filename="../src/MainWindow.cpp" line="2348"/>
         <source>未加密</source>
         <translation>Not encrypted</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2341"/>
+        <location filename="../src/MainWindow.cpp" line="2349"/>
         <source>+只读</source>
         <translation>+Read-only</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2342"/>
+        <location filename="../src/MainWindow.cpp" line="2350"/>
         <source>已导出%1方案：%2</source>
         <translation>Exported %1 scheme: %2</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2347"/>
+        <location filename="../src/MainWindow.cpp" line="2355"/>
         <source>导出失败：
 %1</source>
         <translation>Export failed:
 %1</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2357"/>
-        <location filename="../src/MainWindow.cpp" line="2364"/>
-        <location filename="../src/MainWindow.cpp" line="2374"/>
-        <location filename="../src/MainWindow.cpp" line="2379"/>
+        <location filename="../src/MainWindow.cpp" line="2365"/>
+        <location filename="../src/MainWindow.cpp" line="2372"/>
+        <location filename="../src/MainWindow.cpp" line="2382"/>
+        <location filename="../src/MainWindow.cpp" line="2387"/>
         <source>导入方案片段</source>
         <translation>Import Scheme Snippet</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2365"/>
+        <location filename="../src/MainWindow.cpp" line="2373"/>
         <source>无法读取文件：
 %1
 %2</source>
@@ -922,71 +928,71 @@ Please change the password immediately via &quot;System -&gt; User Management&qu
 %2</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2377"/>
+        <location filename="../src/MainWindow.cpp" line="2385"/>
         <source>导入片段：%1</source>
         <translation>Imported snippet: %1</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2420"/>
+        <location filename="../src/MainWindow.cpp" line="2428"/>
         <source>已自动保存（异常退出后可恢复）</source>
         <translation>Auto-saved (recoverable after abnormal exit)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2480"/>
-        <location filename="../src/MainWindow.cpp" line="2481"/>
+        <location filename="../src/MainWindow.cpp" line="2488"/>
+        <location filename="../src/MainWindow.cpp" line="2489"/>
         <source>定时导出失败：%1</source>
         <translation>Scheduled export failed: %1</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2488"/>
+        <location filename="../src/MainWindow.cpp" line="2496"/>
         <source>已定时导出 %1 个文件到 %2</source>
         <translation>Scheduled export wrote %1 file(s) to %2</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2490"/>
+        <location filename="../src/MainWindow.cpp" line="2498"/>
         <source>（清理旧报告 %1 个）</source>
         <translation>(cleaned up %1 old report(s))</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2492"/>
+        <location filename="../src/MainWindow.cpp" line="2500"/>
         <source> ⚠ 记录数触顶（仅覆盖最近 %1 条），报表可能不完整（建议调小统计小时数）</source>
         <translation> ⚠ Record limit reached (only the most recent %1 kept); report may be incomplete (consider reducing the statistics hour count)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2496"/>
+        <location filename="../src/MainWindow.cpp" line="2504"/>
         <source>定时导出部分失败：%1</source>
         <translation>Scheduled export partially failed: %1</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2512"/>
+        <location filename="../src/MainWindow.cpp" line="2520"/>
         <source>上次异常退出留下的恢复文件已损坏，无法恢复，已清除</source>
         <translation>The recovery file from the last abnormal exit is corrupted and cannot be restored; it has been cleared</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2522"/>
+        <location filename="../src/MainWindow.cpp" line="2530"/>
         <source>时间未知</source>
         <translation>Time unknown</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2524"/>
-        <location filename="../src/MainWindow.cpp" line="2582"/>
-        <location filename="../src/MainWindow.cpp" line="2620"/>
+        <location filename="../src/MainWindow.cpp" line="2532"/>
+        <location filename="../src/MainWindow.cpp" line="2590"/>
+        <location filename="../src/MainWindow.cpp" line="2628"/>
         <source>未命名方案（从未保存过）</source>
         <translation>Unsaved scheme (never saved)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2528"/>
-        <location filename="../src/MainWindow.cpp" line="2547"/>
+        <location filename="../src/MainWindow.cpp" line="2536"/>
+        <location filename="../src/MainWindow.cpp" line="2555"/>
         <source>崩溃恢复</source>
         <translation>Crash Recovery</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2530"/>
+        <location filename="../src/MainWindow.cpp" line="2538"/>
         <source>检测到上次运行未正常退出，存在自动保存的内容：</source>
         <translation>Detected that the last run did not exit normally; auto-saved content exists:</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2531"/>
+        <location filename="../src/MainWindow.cpp" line="2539"/>
         <source>原方案：%1
 自动保存时间：%2
 
@@ -999,44 +1005,44 @@ Restore to the interface?
 (Choosing &quot;Discard&quot; deletes the recovery file)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2534"/>
+        <location filename="../src/MainWindow.cpp" line="2542"/>
         <source>恢复</source>
         <translation>Restore</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2535"/>
+        <location filename="../src/MainWindow.cpp" line="2543"/>
         <source>丢弃</source>
         <translation>Discard</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2541"/>
+        <location filename="../src/MainWindow.cpp" line="2549"/>
         <source>已丢弃上次异常退出留下的自动保存内容</source>
         <translation>Discarded the auto-saved content from the last abnormal exit</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2548"/>
+        <location filename="../src/MainWindow.cpp" line="2556"/>
         <source>恢复失败：无法读取恢复文件。
 %1</source>
         <translation>Restore failed: cannot read the recovery file.
 %1</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2559"/>
+        <location filename="../src/MainWindow.cpp" line="2567"/>
         <source>已从自动保存内容恢复（原方案：%1；自动保存时间：%2）。请确认后用「保存」写回方案文件</source>
         <translation>Recovered from auto-saved content (original scheme: %1; auto-save time: %2). Please confirm and use &quot;Save&quot; to write back to the scheme file</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2577"/>
+        <location filename="../src/MainWindow.cpp" line="2585"/>
         <source>未保存的修改</source>
         <translation>Unsaved Changes</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2579"/>
+        <location filename="../src/MainWindow.cpp" line="2587"/>
         <source>%1 前，当前方案有未保存的修改：</source>
         <translation>%1 ago, the current scheme had unsaved changes:</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2581"/>
+        <location filename="../src/MainWindow.cpp" line="2589"/>
         <source>方案：%1
 
 「保存并继续」写回方案文件；「不保存继续」将丢弃这些修改。</source>
@@ -1045,34 +1051,34 @@ Restore to the interface?
 &quot;Save and Continue&quot; writes back to the scheme file; &quot;Continue without Saving&quot; discards these changes.</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2584"/>
+        <location filename="../src/MainWindow.cpp" line="2592"/>
         <source>保存并继续</source>
         <translation>Save and Continue</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2585"/>
+        <location filename="../src/MainWindow.cpp" line="2593"/>
         <source>不保存继续</source>
         <translation>Continue without Saving</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2586"/>
-        <location filename="../src/MainWindow.cpp" line="2624"/>
-        <location filename="../src/MainWindow.cpp" line="3983"/>
+        <location filename="../src/MainWindow.cpp" line="2594"/>
+        <location filename="../src/MainWindow.cpp" line="2632"/>
+        <location filename="../src/MainWindow.cpp" line="3991"/>
         <source>取消</source>
         <translation>Cancel</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2614"/>
+        <location filename="../src/MainWindow.cpp" line="2622"/>
         <source>退出前确认</source>
         <translation>Confirm Before Exit</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2616"/>
+        <location filename="../src/MainWindow.cpp" line="2624"/>
         <source>方案有未保存的修改：</source>
         <translation>The scheme has unsaved changes:</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2618"/>
+        <location filename="../src/MainWindow.cpp" line="2626"/>
         <source>方案：%1
 
 「保存并退出」写回方案文件；「不保存退出」将丢弃这些修改，自动保存内容也会一并清除。</source>
@@ -1081,92 +1087,92 @@ Restore to the interface?
 &quot;Save and Exit&quot; writes back to the scheme file; &quot;Exit without Saving&quot; discards these changes and also clears the auto-saved content.</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2622"/>
+        <location filename="../src/MainWindow.cpp" line="2630"/>
         <source>保存并退出</source>
         <translation>Save and Exit</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2623"/>
+        <location filename="../src/MainWindow.cpp" line="2631"/>
         <source>不保存退出</source>
         <translation>Exit without Saving</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2673"/>
+        <location filename="../src/MainWindow.cpp" line="2681"/>
         <source>写闸开启期间不受理新的运行：出厂默认口令仍在使用（正在跑的流程不受影响，改密后恢复）</source>
         <translation>New runs are refused while the write gate is on: the factory default password is still in use (recovers after the password is changed)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2712"/>
+        <location filename="../src/MainWindow.cpp" line="2720"/>
         <source>写闸开启期间不受理单次执行：出厂默认口令仍在使用（改密后恢复）</source>
         <translation>Single-run is refused while the write gate is on: the factory default password is still in use (recovers after the password is changed)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2746"/>
+        <location filename="../src/MainWindow.cpp" line="2754"/>
         <source>加载项目: %1</source>
         <translation>Load project: %1</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2756"/>
+        <location filename="../src/MainWindow.cpp" line="2764"/>
         <source>打开加密方案</source>
         <translation>Open Encrypted Scheme</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2757"/>
+        <location filename="../src/MainWindow.cpp" line="2765"/>
         <source>该方案已加密，请输入口令：</source>
         <translation>This scheme is encrypted; please enter the password:</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2776"/>
+        <location filename="../src/MainWindow.cpp" line="2784"/>
         <source>项目未载入：方案含方案目录外路径（绝对或相对逃逸）且未获确认（当前方案保持不变）</source>
         <translation>Project not loaded: the scheme references paths outside the scheme directory (absolute or relative escape) and was not confirmed (current scheme unchanged)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2778"/>
+        <location filename="../src/MainWindow.cpp" line="2786"/>
         <source>项目未载入：旧明文打包格式（不带完整性校验位）本版本不再接收（当前方案保持不变）</source>
         <translation>Project not loaded: the legacy plain package format (no integrity check) is no longer accepted by this version (current scheme unchanged)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2780"/>
+        <location filename="../src/MainWindow.cpp" line="2788"/>
         <source>项目加载失败：口令错误或文件损坏（当前方案保持不变）</source>
         <translation>Failed to load project: wrong password or corrupted file (current scheme unchanged)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2782"/>
+        <location filename="../src/MainWindow.cpp" line="2790"/>
         <source>项目加载失败：文件不存在、格式损坏或内容为空（当前方案保持不变）</source>
         <translation>Failed to load project: file not found, corrupted, or empty (current scheme unchanged)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2791"/>
+        <location filename="../src/MainWindow.cpp" line="2799"/>
         <source>提示：该方案为%1（无完整性校验位），建议用「另存为」重新导出一次获得校验位</source>
         <translation>Note: this scheme is %1 (no integrity check); re-export it via Save As to get an integrity check</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2825"/>
+        <location filename="../src/MainWindow.cpp" line="2833"/>
         <source>有流程执行线程超时未退出，已取消打开方案</source>
         <translation>A flow execution thread timed out and did not exit; opening the scheme was cancelled</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2827"/>
+        <location filename="../src/MainWindow.cpp" line="2835"/>
         <source>有流程仍在执行且未能在限定时间内退出，已取消打开方案以避免程序崩溃。</source>
         <translation>Flows are still running and did not exit within the time limit; opening the scheme was cancelled to avoid a crash.</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2872"/>
+        <location filename="../src/MainWindow.cpp" line="2880"/>
         <source>项目加载成功</source>
         <translation>Project loaded successfully</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2945"/>
+        <location filename="../src/MainWindow.cpp" line="2953"/>
         <source>写闸开启期间不自动开始运行：「%1」为连续模式但出厂口令未改（改密后可从「开始执行」恢复）</source>
-        <translation>Auto-start is suppressed while the write gate is on: "%1" is in continuous mode but the factory password is unchanged (Start becomes available after the password is changed)</translation>
+        <translation>Auto-start is suppressed while the write gate is on: &quot;%1&quot; is in continuous mode but the factory password is unchanged (Start becomes available after the password is changed)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2989"/>
+        <location filename="../src/MainWindow.cpp" line="2997"/>
         <source>方案含方案目录外路径</source>
         <translation>The scheme references paths outside the scheme directory</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="2990"/>
+        <location filename="../src/MainWindow.cpp" line="2998"/>
         <source>该方案引用了 %1 处方案目录外路径（绝对或相对逃逸）：
 
 %2
@@ -1179,138 +1185,142 @@ Restore to the interface?
 Allow loading anyway? If not, this load is cancelled and the current scheme stays unchanged.</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="3129"/>
+        <location filename="../src/MainWindow.cpp" line="3137"/>
         <source>节点 %1 执行成功</source>
         <translation>Node %1 executed successfully</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="3142"/>
+        <location filename="../src/MainWindow.cpp" line="3150"/>
         <source>节点 %1 执行失败</source>
         <translation>Node %1 failed to execute</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="3284"/>
+        <location filename="../src/MainWindow.cpp" line="3292"/>
         <source>请在图像上拖拽绘制搜索区域（右键取消）</source>
         <translation>Drag on the image to draw the search region (right-click to cancel)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="3293"/>
+        <location filename="../src/MainWindow.cpp" line="3301"/>
         <source>ROI 已写入 %1 参数</source>
         <translation>ROI written to %1 parameter</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="3645"/>
+        <location filename="../src/MainWindow.cpp" line="3653"/>
         <source>写闸开启期间不受理新的运行：出厂默认口令仍在使用（改密后恢复）</source>
         <translation>New runs are refused while the write gate is on: the factory default password is still in use (recovers after the password is changed)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="3977"/>
+        <location filename="../src/MainWindow.cpp" line="3985"/>
         <source>关闭脚本执行前确认</source>
         <translation>Turn off script confirmation</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="3980"/>
+        <location filename="../src/MainWindow.cpp" line="3988"/>
         <source>关闭后，方案里的脚本将以当前用户权限直接执行，不再弹窗确认。
 该设置按 Windows 账户保存，对本账户下的全部登录会话生效。
 
 确定要关闭吗？</source>
-        <translation>Once disabled, scripts in the scheme run directly with the current user's privileges, without confirmation.
+        <translation>Once disabled, scripts in the scheme run directly with the current user&apos;s privileges, without confirmation.
 The setting is stored per Windows account and applies to all sign-in sessions of this account.
 
 Turn it off?</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="3982"/>
+        <location filename="../src/MainWindow.cpp" line="3990"/>
         <source>仍要关闭</source>
         <translation>Turn off anyway</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="3994"/>
+        <location filename="../src/MainWindow.cpp" line="4002"/>
         <source>脚本执行前确认：已关闭——脚本将以当前用户权限直接执行</source>
-        <translation>Script confirmation: OFF - scripts will run directly with the current user's privileges</translation>
+        <translation>Script confirmation: OFF - scripts will run directly with the current user&apos;s privileges</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="3995"/>
+        <location filename="../src/MainWindow.cpp" line="4003"/>
         <source>脚本执行前确认：已开启（同一脚本每次启动后首次执行前确认一次）</source>
         <translation>Script confirmation: ON (a given script is confirmed once per app start)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="4006"/>
         <source>注意：脚本执行前确认处于关闭状态（脚本将直接运行）——可在「系统 → 脚本安全」恢复</source>
-        <translation>Warning: script confirmation is OFF (scripts run directly) - restore it under System -> Script safety</translation>
+        <translation type="vanished">Warning: script confirmation is OFF (scripts run directly) - restore it under System -&gt; Script safety</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="4143"/>
+        <location filename="../src/MainWindow.cpp" line="4151"/>
         <source>无法判定出厂口令</source>
         <translation>Cannot determine the factory password</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="4144"/>
+        <location filename="../src/MainWindow.cpp" line="4152"/>
         <source>当前读不到用户表，无法确认管理员是否仍在使用出厂默认口令，画布与模块编辑、保存/导出方案、用户增删与通信配置入口保持禁止。
 请先确认数据库可读写，再走「系统 → 修改管理员口令」。
 
 %1</source>
         <translation>The user table is unreadable, so it cannot be verified whether the administrator still uses the factory default password. Canvas and module editing, saving/exporting schemes, user management and communication configuration stay disabled.
-Make the database readable first, then use System -> Change administrator password.
+Make the database readable first, then use System -&gt; Change administrator password.
 
 %1</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="4149"/>
+        <location filename="../src/MainWindow.cpp" line="4157"/>
         <source>写操作已被禁止：读不到用户表，无法确认出厂默认口令是否仍在用</source>
         <translation>Write operations are blocked: the user table is unreadable, so it cannot be verified whether the factory default password is still in use</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="4150"/>
+        <location filename="../src/MainWindow.cpp" line="4158"/>
         <source>出厂口令判定做不出来（用户表读不到）：写操作保持禁止</source>
         <translation>The factory-password check cannot be performed (user table unreadable): write operations stay blocked</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="4156"/>
-        <location filename="../src/MainWindow.cpp" line="4198"/>
-        <location filename="../src/MainWindow.cpp" line="4201"/>
+        <location filename="../src/MainWindow.cpp" line="4164"/>
+        <location filename="../src/MainWindow.cpp" line="4206"/>
+        <location filename="../src/MainWindow.cpp" line="4209"/>
         <source>修改管理员口令</source>
         <translation>Change administrator password</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="4157"/>
+        <location filename="../src/MainWindow.cpp" line="4165"/>
         <source>管理员账户 admin 仍在使用出厂默认口令，任何人都能免授权登录并修改方案。
 在改掉口令之前，画布与模块编辑、保存/导出方案、用户增删与通信配置入口均被禁止，新的流程运行也不受理（用户增删在落库层拒绝，不只是菜单置灰；正在跑的流程不受影响）。</source>
-        <translation>The administrator account 'admin' still uses the factory default password, so anyone can sign in without authorization and modify the scheme.
+        <translation>The administrator account &apos;admin&apos; still uses the factory default password, so anyone can sign in without authorization and modify the scheme.
 Until the password is changed, canvas and module editing, saving/exporting schemes, user management and communication configuration are disabled, and new runs are refused (user changes are rejected at the storage layer, not merely greyed out; running flows are unaffected).</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="4170"/>
+        <location filename="../src/MainWindow.cpp" line="4178"/>
         <source>当前出厂口令</source>
         <translation>Current factory password</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="4171"/>
+        <location filename="../src/MainWindow.cpp" line="4179"/>
         <source>新口令（至少 6 位）</source>
         <translation>New password (at least 6 characters)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="4172"/>
+        <location filename="../src/MainWindow.cpp" line="4180"/>
         <source>确认新口令</source>
         <translation>Confirm new password</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="4189"/>
+        <location filename="../src/MainWindow.cpp" line="4197"/>
         <source>放弃修改出厂口令：本次会话已结束，写闸保持禁止（重新登录后继续）</source>
         <translation>Factory-password change cancelled: this session has ended and the write gate stays on (sign in again to continue)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="4198"/>
+        <location filename="../src/MainWindow.cpp" line="4206"/>
         <source>出厂口令已停用，写操作已恢复。</source>
         <translation>The factory password is disabled; write operations have been restored.</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="4209"/>
+        <location filename="../src/MainWindow.cpp" line="4217"/>
         <source>写操作已被禁止：出厂默认口令仍在使用（「系统 → 修改管理员口令」可解除）</source>
-        <translation>Write operations are blocked: the factory default password is still in use (clear it via System -> Change administrator password)</translation>
+        <translation>Write operations are blocked: the factory default password is still in use (clear it via System -&gt; Change administrator password)</translation>
     </message>
     <message>
-        <location filename="../src/MainWindow.cpp" line="4210"/>
+        <location filename="../src/MainWindow.cpp" line="4221"/>
+        <source>；且脚本执行前确认处于关闭状态（系统 → 脚本安全：执行前确认脚本）</source>
+        <translation>; script confirmation is also OFF (System -> Script safety: confirm scripts before running)</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="4224"/>
         <source>出厂默认口令仍在使用：写操作已禁止，直到管理员口令被修改</source>
         <translation>The factory default password is still in use: write operations stay blocked until the administrator password is changed</translation>
     </message>
