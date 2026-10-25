@@ -405,9 +405,11 @@ if (-not $SkipVerify) {
     $p = [System.Diagnostics.Process]::Start($psi)
     $errTask = $p.StandardError.ReadToEndAsync()
     $outTask = $p.StandardOutput.ReadToEndAsync()
-    if (-not $p.WaitForExit(300000)) {
+    # 10 分钟（原 5 分钟）：2026-10-25 实测在同一台机器上自检耗时 3s / 12s / >5min 都可能出现
+    #（杀进程残留、杀毒扫描、MVS 服务状态都会拉长启动），5 分钟会偶发误报"自检超时"。
+    if (-not $p.WaitForExit(600000)) {
         $p.Kill()
-        $problems += '节点自检超时（>5 分钟）'
+        $problems += '节点自检超时（>10 分钟）'
     } else {
         Write-Host ("  自检退出码: " + $p.ExitCode)
         if ($p.ExitCode -ne 0) { $problems += "节点自检未通过（退出码 $($p.ExitCode)）" }

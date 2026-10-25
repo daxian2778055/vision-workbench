@@ -73,6 +73,10 @@ int runNodeSelfTest()
             ++fail;
         }
         report << status;
+        // 逐节点即时输出（2026-10-25：自检曾整体卡住且无中间输出，无法定位卡在哪个节点；
+        // 报告仍只在末尾落盘，但这里把每行立刻刷到 stdout，排障时能直接看到最后一个节点）
+        fprintf(stdout, "%s\n", qPrintable(status));
+        fflush(stdout);
         delete node;
     }
 
