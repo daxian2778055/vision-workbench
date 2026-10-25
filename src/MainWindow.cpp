@@ -66,6 +66,7 @@
 #include "GlobalTriggerManager.h"
 #include "GlobalTriggerDialog.h"
 #include "SessionManager.h"
+#include "ScriptSecurityPolicy.h"   // 系统菜单「脚本安全：执行前确认」开关
 #include "FactoryPasswordGuard.h"
 #include "OperationLogDialog.h"
 #include "ParameterSearchDialog.h"
@@ -3950,6 +3951,28 @@ void MainWindow::setupSystemMenu()
         // 而改密前必须填对当前出厂口令，非持有者点了也改不动任何东西。
         retireAct->setEnabled(true);
         m_menuRouter.direct(retireAct, this, [this]() { enforceFactoryPasswordPolicy(); });
+    }
+
+    if (ui->menuSystem) {
+        // 脚本安全：执行前确认（2026-10-25 现场反馈"每次都要手动点确认"）。
+        // 策略本身是对的（默认开启、会话内同内容只问一次、改内容重问），但界面此前**没有
+        // 任何开关**——脚本安全策略头注释写明"可由配置关闭"，实际只能改注册表。
+        // 这里把配置接到菜单上：勾掉即直接执行（风险自负），勾上恢复确认。
+        ScriptSecurityPolicy &policy = ScriptSecurityPolicy::instance();
+        QAction *confirmScriptAct = ui->menuSystem->addAction(
+            QStringLiteral("脚本安全：执行前确认脚本（取消勾选则直接执行）"));
+        confirmScriptAct->setCheckable(true);
+        confirmScriptAct->setChecked(policy.requireConfirmation());
+        m_menuRouter.direct(confirmScriptAct, this, [this, confirmScriptAct]() {
+            ScriptSecurityPolicy &p = ScriptSecurityPolicy::instance();
+            p.setRequireConfirmation(confirmScriptAct->isChecked());
+            p.save();   // 立即落 QSettings，下次启动保持一致
+            const QString msg = confirmScriptAct->isChecked()
+                ? tr("脚本执行前确认：已开启（同一脚本每次启动后首次执行前确认一次）")
+                : tr("脚本执行前确认：已关闭——脚本将以当前用户权限直接执行，请确认脚本内容可信");
+            logMessage(msg);
+            ui->statusBar->showMessage(msg, 8000);
+        });
     }
 
     m_menuRouter.direct(ui->actionCameraConfig, this,
