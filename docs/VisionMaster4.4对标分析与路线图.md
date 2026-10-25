@@ -317,6 +317,17 @@
 | P3-11 被拒连线也记撤销 | `recordUndo` 移到语义/闭环校验之后 | `RejectedConnectionUndoTest` 两腿 |
 | P3-12 幽灵设备 | `createDeviceNode` 返回 bool；建不出则回滚登记并返回 false | `CommDeviceGhostTest` 两腿 |
 
+**2026-10-25 第二批残留（复核指出的"修了但没修全"）**：
+
+| 残留 | 修法 | 守卫 |
+|---|---|---|
+| P2-1 中止只覆盖主遍历：循环体直接 return、子流程中止被记失败 | 轮末改按 **`m_userStopRequested`（用户是否请求停止）** 判定中止——失败停止同样置 Stopped、被停算子还可能自判失败，按状态判会把真失败当中止抹掉；子流程中止按"中止"收口（不判失败、输出留空） | `round_abort_summary_test` 增两条：循环末节点中止、子流程中止（断言不报失败、无汇总） |
+| P2-3 只数已进入 run() 的任务：排队任务仍能踩着关闭窗口 | 记账移到**入队时**（构造 enter / 析构 leave）+ 每节点 `m_closing` 关闭闸（关闸后新任务入口退让；超时未排空则撤闸） | `CameraTaskLedgerTest` 增"排队任务也必须计账"腿（饱和线程池构造排队） |
+| P3-1 异常出口未清端口、未落库 | 异常收口补：清输出端口（否则 propagateData 回落到 `getOutputData` 读半成品）+ 失败节点落库与告警 | `NodeExceptionExitTest` 增两条断言 |
+| P3-8 只判入口/出口；内部成员被过滤仍静默 | 任何成员与循环体重叠都判"定义损坏"（`usable.size() != members.size()`） | `subflow_test` 重叠腿 |
+| P3-12 载入时静默丢设备 | 新增 `deviceLoadFailed` 信号，`ProjectManager` 接到既有载入损失通道（`reportLoadNote`） | — |
+| P2-4 解绑旁路、重连只看数量 | `removeCameraDevice` 走同一消费者闸；自动重连要求"唯一消费者**是自己**"（按 consumerId 比对） | `GlobalCameraConsumerGateTest` 三腿 |
+
 **仍开放（本轮未修，各有理由）**：
 
 | 项 | 位置 | 为什么没在这次改 |
