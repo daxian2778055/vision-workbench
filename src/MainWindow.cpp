@@ -626,6 +626,12 @@ MainWindow::MainWindow(QWidget *parent) :
             VFP_DEBUG << "User logged in:" << user << "Role:" << role;
             setWindowTitle(QStringLiteral("视觉方案工作台 - %1 [%2]").arg(user, role));
             applyPermissionRestrictions();
+            // 脚本确认处于关闭态时的提示：**登录后**才写状态栏（构造期写会在窗口出现前过期）
+            if (!ScriptSecurityPolicy::instance().requireConfirmation()) {
+                ui->statusBar->showMessage(
+                    tr("注意：脚本执行前确认处于关闭状态（脚本将直接运行）——"
+                       "可在「系统 → 脚本安全」恢复"), 15000);
+            }
 
             // 出厂默认口令仍在使用 ⇒ 上写操作闸并强制改密（取代历史的"弹一次告警就放行"）
             enforceFactoryPasswordPolicy();
@@ -3975,8 +3981,10 @@ void MainWindow::setupSystemMenu()
                 QMessageBox box(this);
                 box.setIcon(QMessageBox::Warning);
                 box.setWindowTitle(tr("关闭脚本执行前确认"));
+                // 措辞按实际作用域写（2026-10-25 复核）：QSettings 默认构造按 **Windows 用户**
+                // 隔离，所以只对"本 Windows 账户"下的会话生效，说"整机"是夸大。
                 box.setText(tr("关闭后，方案里的脚本将以当前用户权限直接执行，不再弹窗确认。\n"
-                               "这是整机设置，会影响本机所有登录会话。\n\n确定要关闭吗？"));
+                               "该设置按 Windows 账户保存，对本账户下的全部登录会话生效。\n\n确定要关闭吗？"));
                 QPushButton *yes = box.addButton(tr("仍要关闭"), QMessageBox::AcceptRole);
                 QPushButton *no = box.addButton(tr("取消"), QMessageBox::RejectRole);
                 box.setDefaultButton(no);   // 默认"取消"：回车不会误关
@@ -4000,11 +4008,11 @@ void MainWindow::setupSystemMenu()
                 msg);
         });
         if (!policy.requireConfirmation()) {
-            // 启动留痕：关闭状态只有菜单勾选可见，现场极易忘记
-            const QString warn = tr("注意：脚本执行前确认处于关闭状态（脚本将直接运行）——"
-                                    "可在「系统 → 脚本安全」恢复");
-            logMessage(warn);
-            ui->statusBar->showMessage(warn, 15000);
+            // 启动留痕：关闭状态只有菜单勾选可见，现场极易忘记。
+            // 这里只写日志——**状态栏提示放到登录成功之后**（2026-10-25 复核 P3）：
+            // 本函数在构造期运行，登录框在其后才弹，此刻写的 15 秒提示会在窗口出现前就过期。
+            logMessage(tr("注意：脚本执行前确认处于关闭状态（脚本将直接运行）——"
+                          "可在「系统 → 脚本安全」恢复"));
         }
     }
 
@@ -4061,7 +4069,15 @@ void MainWindow::setupSystemMenu()
 void MainWindow::applyPermissionRestrictions()
 {
     auto *session = SessionManager::instance();
-    if (!session->isLoggedIn()) return;
+    if (!session->isLoggedIn()) {
+        // 未登录时对**新增的整机安全开关**显式 fail-closed（2026-10-25 复核 P3）：
+        // 原实现直接 return，会保留上一次的 enabled 状态——当前唯一的 logout 路径发生在
+        // 写闸开启时（菜单项已被禁用），所以不是现成绕过；但只要将来多一条"未开写闸也能
+        // 登出"的路径，这项就会带着旧的可用态留在界面上。安全开关按最严处理。
+        if (m_confirmScriptAct)
+            m_confirmScriptAct->setEnabled(false);
+        return;
+    }
 
     // 用户管理仅 Admin 可见/可用
     if (ui->actionUserManagement) {

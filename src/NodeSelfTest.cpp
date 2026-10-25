@@ -54,6 +54,10 @@ int runNodeSelfTest()
                 delete node;
                 continue;
             }
+            // "开始 <id>"必须先刷出去（2026-10-25 复核 P3）：只在 run() 之后打印的话，
+            // 尾部若干行只能指出"最后一个跑完的节点"，真正卡住的那个永远无名。
+            fprintf(stdout, "START %s\n", qPrintable(id));
+            fflush(stdout);
             QElapsedTimer t;
             t.start();
             node->run();

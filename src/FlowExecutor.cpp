@@ -1887,6 +1887,11 @@ bool FlowExecutor::executeSubFlow(SubFlowNode *caller)
         if (m_userStopRequested.load(std::memory_order_relaxed)) {
             m_roundAborted = true;
             m_lastNodeAborted = true;   // 调用点不落"OK"行（中止不是成功）
+            // 记录处置就此定死（2026-10-25 复核 P3-1 残留）：此后的 executeNode 还要走
+            // collectNodeOutputVars 与 nodeExecuted / nodeOutputsUpdated 的直连槽，任一抛异常
+            // 都会进异常出口——那时若还不知道"这条已决定不落库"，就会补一条 NG 行，
+            // 与"中止不是失败"自相矛盾。放在这里而不是等 Phase 4 再置位，就是为了盖住这段。
+            m_nodeRecordWritten = true;
             caller->setOutputData(0, QSharedPointer<DataObject>());
             return true;
         }

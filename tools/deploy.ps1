@@ -413,18 +413,32 @@ if (-not $SkipVerify) {
         # 超时必须把自检的中间输出打出来（2026-10-25 复核 P3-5）：NodeSelfTest 已逐节点
         # fflush，但这里用 ReadToEndAsync 缓冲，此前只记一句"超时"，现场根本看不到卡在哪个
         # 节点——那条信息正是排障唯一有用的东西。
+        # .Result 必须带超时（2026-10-25 复核 P3）：若脚本子进程继承了 stdout 句柄，
+        # Kill() 之后流不会关闭，直接读 .Result 会把部署脚本永久挂住——排障代码反倒成了新故障点。
+        $partial = ''
         try {
-            $partial = $outTask.Result
+            if ($outTask.Wait(5000)) {
+                $partial = $outTask.Result
+            } else {
+                $partial = '(自检输出读取超时 5 秒：可能有子进程继承了 stdout 句柄)'
+            }
         } catch {
             $partial = ''
         }
         if ($partial) {
             $tail = ($partial -split "`r?`n") | Where-Object { $_ -ne '' } | Select-Object -Last 12
-            Write-Host '  超时前最后输出（可据此定位卡在哪个节点）:'
+            Write-Host '  超时前最后输出（最后一行 START 之后的节点就是卡住的那个）:'
             foreach ($line in $tail) { Write-Host ("    " + $line) }
         } else {
             Write-Host '  超时前无任何输出（多半卡在启动/单例初始化，不在节点循环里）'
         }
+        try {
+            if ($errTask.Wait(2000) -and $errTask.Result) {
+                $errTail = ($errTask.Result -split "`r?`n") | Where-Object { $_ -ne '' } | Select-Object -Last 6
+                Write-Host '  stderr 尾部:'
+                foreach ($line in $errTail) { Write-Host ("    " + $line) }
+            }
+        } catch { }
     } else {
         Write-Host ("  自检退出码: " + $p.ExitCode)
         if ($p.ExitCode -ne 0) { $problems += "节点自检未通过（退出码 $($p.ExitCode)）" }

@@ -292,6 +292,10 @@ void RoundAbortSummaryTest::abortedSubFlowIsNotReportedAsFailure()
         QVERIFY2(!(r.nodeName == caller->fullName() && r.passed),
                  "中止的调用点落了 passed=1 的节点行（P3-1：中止不是成功）");
     }
+    // 运行期腿：中止的调用点不得被标成"输出有效/可复用"（2026-10-25 复核 P3-2）——
+    // 此前只有"没有 OK 行"的断言，有效位这条修复没有腿。
+    QVERIFY2(!exec.isOutputMarkedValid(caller),
+             "中止的调用点被标成了输出有效：局部执行的复用判定会把它当成有结果（P3-2）");
 }
 
 // P2-A（2026-10-25 复核第二批）：子流程里嵌套的循环体**真失败**，必须还是 NG——

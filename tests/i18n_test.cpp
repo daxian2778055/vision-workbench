@@ -32,6 +32,15 @@ void I18nTest::englishQmLoadsAndTranslates()
     QCOMPARE(QCoreApplication::translate("ExecutionStatusController", "暂停"),
              QStringLiteral("Pause"));
 
+    // 脚本确认开关（2026-10-25 复核：新增的 6 条串此前整条缺失，英文界面下仍是中文）
+    QCOMPARE(QCoreApplication::translate("MainWindow", "关闭脚本执行前确认"),
+             QStringLiteral("Turn off script confirmation"));
+    QCOMPARE(QCoreApplication::translate("MainWindow", "仍要关闭"),
+             QStringLiteral("Turn off anyway"));
+    // 这一条在 ProjectManager 上下文（同源文在别的上下文另有条目，别按 MainWindow 查）
+    QCOMPARE(QCoreApplication::translate("ProjectManager", "写操作已被禁止"),
+             QStringLiteral("Write operations are blocked"));
+
     // 主窗口运行期消息（MainWindow 上下文）
     QCOMPARE(QCoreApplication::translate("MainWindow", "新建方案"),
              QStringLiteral("New Scheme"));
