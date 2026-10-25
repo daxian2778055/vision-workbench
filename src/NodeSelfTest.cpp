@@ -21,7 +21,20 @@ int runNodeSelfTest()
     // 是有 QApplication 的（主程序的 GUI 初始化在先），确认框会以**模态**弹出并把无头自检永久
     // 阻塞在 ScriptNode 上——部署脚本只能按超时收场，且拿不到自检报告。这里只改本进程的内存
     // 标志（不 save，不动用户的持久配置），语义与"无 QApplication 时直接放行"同一档。
-    ScriptSecurityPolicy::instance().setRequireConfirmation(false);
+    //
+    // 作用域守卫恢复（2026-10-25 复核）：当前唯一调用点会立刻退出进程，不恢复也没泄漏；但只要
+    // 将来多一条调用路径（例如界面诊断入口），进程会带着"确认已关"继续跑。守卫把这条踩死。
+    struct ConfirmScopeGuard {
+        ScriptSecurityPolicy &policy;
+        bool saved;
+        ConfirmScopeGuard()
+            : policy(ScriptSecurityPolicy::instance()),
+              saved(policy.requireConfirmation())
+        {
+            policy.setRequireConfirmation(false);
+        }
+        ~ConfirmScopeGuard() { policy.setRequireConfirmation(saved); }
+    } confirmScopeGuard;
 
     const auto &regs = NodeRegistry::instance().all();
     QStringList report;

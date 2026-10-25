@@ -14,7 +14,59 @@ class I18nTest : public QObject {
 private slots:
     void englishQmLoadsAndTranslates();
     void tsHasNoUnfinishedEmptyOrMirrorTranslations();
+    void tsGateCatchesSelfClosingAndMissingTranslations();   // 自闭合夹具牙
 };
+
+/// 译文表静态闸（纯函数，可对合成文本自测）。
+/// 返回 problem 条目；checked 为**全部** <message> 数（不是"解析成功的条数"）——
+/// 2026-10-25 复核：原实现只统计 regex 能匹配的条目，自闭合 <translation .../> 会被整条
+/// 跳过（既不进 problems 也不进 checked），闸对它完全失明。
+static void checkTsText(const QString &ts, QStringList &problems, int &messageCount)
+{
+    auto hasCjk = [](const QString &s) {
+        for (const QChar &ch : s) {
+            const ushort u = ch.unicode();
+            if ((u >= 0x4E00 && u <= 0x9FFF) || (u >= 0x3400 && u <= 0x4DBF))
+                return true;
+        }
+        return false;
+    };
+
+    problems.clear();
+    messageCount = 0;
+    const QRegularExpression msgRx(QStringLiteral("<message>(.*?)</message>"),
+                                   QRegularExpression::DotMatchesEverythingOption);
+    const QRegularExpression srcRx(QStringLiteral("<source>(.*?)</source>"),
+                                   QRegularExpression::DotMatchesEverythingOption);
+    const QRegularExpression trRx(
+        QStringLiteral("<translation(?:\\s[^>]*)?>(.*?)</translation>"),
+        QRegularExpression::DotMatchesEverythingOption);
+    for (auto it = msgRx.globalMatch(ts); it.hasNext();) {
+        const QString body = it.next().captured(1);
+        ++messageCount;
+        const auto srcM = srcRx.match(body);
+        const auto trM = trRx.match(body);
+        // 一条 <message> 必须同时有 <source> 与**成对**的 <translation>；缺任一都判红，
+        // 否则自闭合/畸形标签会让整条从检查里消失（2026-10-25 实测：自闭合形式改坏后仍绿）。
+        if (!srcM.hasMatch()) {
+            problems << QStringLiteral("message without <source>");
+            continue;
+        }
+        const QString src = srcM.captured(1);
+        const QString label = src.left(28).replace(QLatin1Char('\n'), QLatin1Char(' '));
+        if (!trM.hasMatch()) {
+            problems << QStringLiteral("missing/closed <translation>: %1").arg(label);
+            continue;
+        }
+        const QString en = trM.captured(1);
+        if (body.contains(QStringLiteral("type=\"unfinished\"")))
+            problems << QStringLiteral("unfinished: %1").arg(label);
+        else if (en.trimmed().isEmpty())
+            problems << QStringLiteral("empty: %1").arg(label);
+        else if (hasCjk(src) && en == src)
+            problems << QStringLiteral("mirrored Chinese source: %1").arg(label);
+    }
+}
 
 void I18nTest::englishQmLoadsAndTranslates()
 {
@@ -114,48 +166,68 @@ void I18nTest::tsHasNoUnfinishedEmptyOrMirrorTranslations()
 #endif
     QFile f(QString::fromUtf8(VFP_TS_PATH));
     QVERIFY2(f.open(QIODevice::ReadOnly | QIODevice::Text),
-             qPrintable(QStringLiteral("打不开 .ts：%1").arg(f.fileName())));
+             qPrintable(QStringLiteral("\u6253\u4e0d\u5f00 .ts\uff1a%1").arg(f.fileName())));
     const QString ts = QString::fromUtf8(f.readAll());
 
-    auto hasCjk = [](const QString &s) {
-        for (const QChar &ch : s) {
-            const ushort u = ch.unicode();
-            if ((u >= 0x4E00 && u <= 0x9FFF) || (u >= 0x3400 && u <= 0x4DBF))
-                return true;
-        }
-        return false;
-    };
-
-    int checked = 0;
     QStringList problems;
-    const QRegularExpression msgRx(QStringLiteral("<message>(.*?)</message>"),
-                                   QRegularExpression::DotMatchesEverythingOption);
-    const QRegularExpression srcRx(QStringLiteral("<source>(.*?)</source>"),
-                                   QRegularExpression::DotMatchesEverythingOption);
-    const QRegularExpression trRx(
-        QStringLiteral("<translation(?:\\s[^>]*)?>(.*?)</translation>"),
-        QRegularExpression::DotMatchesEverythingOption);
-    for (auto it = msgRx.globalMatch(ts); it.hasNext();) {
-        const QString body = it.next().captured(1);
-        const auto srcM = srcRx.match(body);
-        const auto trM = trRx.match(body);
-        if (!srcM.hasMatch() || !trM.hasMatch())
-            continue;
-        ++checked;
-        const QString src = srcM.captured(1);
-        const QString en = trM.captured(1);
-        const QString label = src.left(28).replace(QLatin1Char('\n'), QLatin1Char(' '));
-        if (body.contains(QStringLiteral("type=\"unfinished\"")))
-            problems << QStringLiteral("unfinished: %1").arg(label);
-        else if (en.trimmed().isEmpty())
-            problems << QStringLiteral("empty: %1").arg(label);
-        else if (hasCjk(src) && en == src)
-            problems << QStringLiteral("mirrored Chinese source: %1").arg(label);
-    }
-    QVERIFY(checked > 200);   // 防解析退化：条目数掉了要报红，不能"空跑判绿"
+    int messageCount = 0;
+    checkTsText(ts, problems, messageCount);
+
+    // 每条 <message> 都必须被检查过：进检查的条数 == 文本里的 <message> 总数，
+    // 而不是只看"总数大于某个阈值"（2026-10-25 复核：原 checked>200 防不住单条被跳过）
+    const int rawMessageCount = ts.count(QStringLiteral("<message>"));
+    QCOMPARE(messageCount, rawMessageCount);
+    QVERIFY2(messageCount > 200, "条目数异常偏低，解析可能退化");
     QVERIFY2(problems.isEmpty(),
-             qPrintable(QStringLiteral("译文表有 %1 处问题：%2")
+             qPrintable(QStringLiteral("\u8bd1\u6587\u8868\u6709 %1 \u5904\u95ee\u9898\uff1a%2")
                             .arg(problems.size())
+                            .arg(problems.join(QStringLiteral(" | ")))));
+}
+
+// 自闭合/畸形夹具牙（2026-10-25 复核）：改坏复跑实测「闭标签形式能红、自闭合形式仍绿」——
+// 原 regex 只认成对闭标签，<translation .../> 会让整条从检查里消失。这里用合成文本把各种
+// 畸形钉住，闸再漏就是这条腿先红。
+void I18nTest::tsGateCatchesSelfClosingAndMissingTranslations()
+{
+    QStringList problems;
+    int n = 0;
+
+    // ① 自闭合 unfinished：必须判红（正是上次漏掉的那种）
+    checkTsText(QStringLiteral("<message><source>\u6d4b\u8bd5\u4e32</source>"
+                               "<translation type=\"unfinished\"/></message>"),
+                problems, n);
+    QCOMPARE(n, 1);
+    QVERIFY2(!problems.isEmpty(), "自闭合 <translation/> 没被识别为问题（闸有盲区）");
+
+    // ② 缺 <translation> 标签：必须判红
+    checkTsText(QStringLiteral("<message><source>\u6d4b\u8bd5\u4e32\u4e8c</source></message>"),
+                problems, n);
+    QCOMPARE(n, 1);
+    QVERIFY2(!problems.isEmpty(), "缺失 <translation> 标签没被识别为问题");
+
+    // ③ 空译文：必须判红
+    checkTsText(QStringLiteral("<message><source>\u6d4b\u8bd5\u4e32\u4e09</source>"
+                               "<translation></translation></message>"),
+                problems, n);
+    QCOMPARE(n, 1);
+    QVERIFY2(!problems.isEmpty(), "空译文没被识别为问题");
+
+    // ④ 中文源文译文等值：必须判红
+    checkTsText(QStringLiteral("<message><source>\u6d4b\u8bd5\u4e32\u56db</source>"
+                               "<translation>\u6d4b\u8bd5\u4e32\u56db</translation></message>"),
+                problems, n);
+    QCOMPARE(n, 1);
+    QVERIFY2(!problems.isEmpty(), "中文源文译文等值没被识别为问题");
+
+    // ⑤ 合法条目（英文源文等值 + 中文有译文）：必须全绿，防止闸误伤
+    checkTsText(QStringLiteral("<message><source>Vision Flow Platform</source>"
+                               "<translation>Vision Flow Platform</translation></message>"
+                               "<message><source>\u6d4b\u8bd5\u4e32\u4e94</source>"
+                               "<translation>Test Five</translation></message>"),
+                problems, n);
+    QCOMPARE(n, 2);
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("\u5408\u6cd5\u6761\u76ee\u88ab\u8bef\u5224\uff1a%1")
                             .arg(problems.join(QStringLiteral(" | ")))));
 }
 
