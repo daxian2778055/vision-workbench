@@ -15,6 +15,35 @@
 static QMutex s_dbMutex;
 
 namespace {
+// ---- 时间戳口径（2026-10-25 复核 P1）----
+// 库里所有时间戳都由 SQLite CURRENT_TIMESTAMP 写入：**UTC**，格式 "yyyy-MM-dd HH:mm:ss"。
+// 三个口径此前互相打架，现场后果是"凌晨查报表/报警/结果全是 0 行、界面时间整体慢 8 小时"：
+//   ① 查询把 QDateTime 直接 addBindValue：Qt 6 写成**本地** ISO-T（2026-10-24T23:53:32.219），
+//      与库里的 ' ' 分隔串做 BETWEEN 时 'T' > ' ' ⇒ 同一天的行全落在下界之外；
+//   ② 读回 q.value(...).toDateTime()：把 UTC 墙钟当**本地**解析 ⇒ 界面整体慢一个时区偏移；
+//   ③ purgeOldRecords 的 cutoff 用本地时间串 ⇒ 清理边界比预期早一个时区偏移。
+// 统一收口在这两个函数：绑 UTC 同格式串、读回按 UTC 解析再转本地。无历史数据迁移
+// （存量行本就是 UTC，只是此前查/读的口径错）。
+constexpr char kTsFormat[] = "yyyy-MM-dd HH:mm:ss";
+
+QString utcBindText(const QDateTime &dt)
+{
+    return dt.toUTC().toString(QString::fromLatin1(kTsFormat));
+}
+
+QDateTime readUtcTimestamp(const QVariant &v)
+{
+    const QString text = v.toString();
+    QDateTime dt = QDateTime::fromString(text, QString::fromLatin1(kTsFormat));
+    if (!dt.isValid())
+        return v.toDateTime();   // 兼容带 T 的 ISO / 空值：不猜
+    dt.setTimeSpec(Qt::UTC);     // 这段墙钟是 UTC
+    return dt.toLocalTime();     // 回给界面的是本地时刻（比较/分组都按它）
+}
+
+} // namespace
+
+namespace {
 // 账户口令 KDF：PBKDF2-HMAC-SHA256（SchemeCrypto 里那份实现，与方案信封共源）。
 // 先前的形状是「加盐 12000 轮裸 SHA-256 自制迭代链」——升级的是构造不是成本线（152 行）。
 // 167 行拍板把轮数抬到 60000（仍在本机一次派生 ≈0.6s 量级，与方案信封 100000 轮那条
@@ -409,8 +438,8 @@ QList<AlarmRecord> AppDatabase::queryAlarms(const QDateTime &from, const QDateTi
                      QStringLiteral("queryAlarms"))) {
         return records;
     }
-    q.addBindValue(from);
-    q.addBindValue(to);
+    q.addBindValue(utcBindText(from));
+    q.addBindValue(utcBindText(to));
     q.addBindValue(limit);
     if (!execRead(q, db, QStringLiteral("queryAlarms"))) return records;
 
@@ -420,7 +449,7 @@ QList<AlarmRecord> AppDatabase::queryAlarms(const QDateTime &from, const QDateTi
         r.module = q.value(1).toString();
         r.level = q.value(2).toString();
         r.message = q.value(3).toString();
-        r.timestamp = q.value(4).toDateTime();
+        r.timestamp = readUtcTimestamp(q.value(4));
         records.append(r);
     }
     return records;
@@ -521,8 +550,8 @@ QList<InspectionRecord> AppDatabase::queryResults(const QDateTime &from, const Q
                      QStringLiteral("queryResults"))) {
         return records;
     }
-    q.addBindValue(from);
-    q.addBindValue(to);
+    q.addBindValue(utcBindText(from));
+    q.addBindValue(utcBindText(to));
     q.addBindValue(limit);
     if (!execRead(q, db, QStringLiteral("queryResults"))) return records;
 
@@ -533,7 +562,7 @@ QList<InspectionRecord> AppDatabase::queryResults(const QDateTime &from, const Q
         r.nodeName = q.value(2).toString();
         r.passed = q.value(3).toInt() != 0;
         r.value = q.value(4).toString();
-        r.timestamp = q.value(5).toDateTime();
+        r.timestamp = readUtcTimestamp(q.value(5));
         records.append(r);
     }
     return records;
@@ -701,7 +730,7 @@ QList<UserRecord> AppDatabase::queryUsers() const
         r.id = q.value(0).toInt();
         r.name = q.value(1).toString();
         r.role = q.value(2).toString();
-        r.createdAt = q.value(3).toDateTime();
+        r.createdAt = readUtcTimestamp(q.value(3));
         records.append(r);
     }
     return records;
@@ -770,8 +799,8 @@ QList<OperationLogRecord> AppDatabase::queryOperationLogs(const QDateTime &from,
                      QStringLiteral("queryOperationLogs"))) {
         return records;
     }
-    q.addBindValue(from);
-    q.addBindValue(to);
+    q.addBindValue(utcBindText(from));
+    q.addBindValue(utcBindText(to));
     q.addBindValue(limit);
     if (!execRead(q, db, QStringLiteral("queryOperationLogs"))) return records;
 
@@ -781,7 +810,7 @@ QList<OperationLogRecord> AppDatabase::queryOperationLogs(const QDateTime &from,
         r.user = q.value(1).toString();
         r.action = q.value(2).toString();
         r.detail = q.value(3).toString();
-        r.timestamp = q.value(4).toDateTime();
+        r.timestamp = readUtcTimestamp(q.value(4));
         records.append(r);
     }
     return records;
@@ -792,9 +821,10 @@ int AppDatabase::purgeOldRecords(int retainDays)
     QMutexLocker locker(&s_dbMutex);
 
     if (retainDays < 1) retainDays = 30;
-    const QString cutoff = QDateTime::currentDateTime()
+    // cutoff 与存储同口径（UTC）：用本地时间串会让清理边界比预期早一个时区偏移
+    const QString cutoff = QDateTime::currentDateTimeUtc()
                                .addDays(-retainDays)
-                               .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+                               .toString(QString::fromLatin1(kTsFormat));
 
     int total = 0;
     const QSqlDatabase db = threadDatabase();

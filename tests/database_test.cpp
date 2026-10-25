@@ -108,6 +108,12 @@ private slots:
     // 之前的加盐自制迭代链）都要能登进来，且登录成功那一刻被换写成 PBKDF2 token。
     // 只动 users 表、自己造夹具也自己收，排在最后一腿（DROP inspection_results 那条）之前。
     void testLegacyHashesAuthenticateAndUpgrade();
+    // 时间戳口径三腿（2026-10-25 复核 P1）：库里是 UTC 墙钟，查询绑定/读回/purge 曾按本地口径，
+    // 同一天的行全落在 BETWEEN 之外（凌晨查报表=0 行）、界面整体慢一个时区偏移。
+    // 旧测试的下界是 addYears(-1)，永远大于库里的日期，绕过了"同一天"边界——所以这里用当天窗口。
+    void testSameDayWindowFindsJustWrittenRow();
+    void testReadBackTimestampMatchesInsertInstant();
+    void testPurgeKeepsRowsInsideRetentionWindow();
     // ⚠️ 必须排在最后：本腿会 DROP 掉 inspection_results 来复现"表不在"的写失败路径
     void testWriteFailureIsVisibleAndNotMisleading();
 
@@ -158,6 +164,136 @@ void DatabaseTest::testMainThreadWriteRead()
                          QDateTime::currentDateTime().addDays(1),
                          500);
     QVERIFY2(rows.size() >= 1, "主线程写入后应能查到记录");
+}
+
+// ---- 时间戳口径（2026-10-25 复核 P1）----
+
+void DatabaseTest::testSameDayWindowFindsJustWrittenRow()
+{
+    AppDatabase *db = AppDatabase::instance();
+    const QString flow = QStringLiteral("tzFlow");
+    const QString node = QStringLiteral("tzNode");
+    QVERIFY2(db->saveInspectionResult(flow, node, true, QStringLiteral("1")),
+             "写入失败，本腿前提不成立");
+
+    const QDateTime now = QDateTime::currentDateTime();
+
+    // ① 「最近 24 小时」——默认区间，也是故障表现最直接的地方：绑定值曾带 'T' 分隔，
+    //    与库里的 ' ' 分隔串比 BETWEEN 时同一天的行全被排除（凌晨查出来就是 0 行）。
+    const QList<InspectionRecord> last24 =
+        db->queryResults(now.addDays(-1), now, 500);
+    bool found24 = false;
+    for (const InspectionRecord &r : last24)
+        if (r.flowName == flow && r.nodeName == node)
+            found24 = true;
+    QVERIFY2(found24, "刚写入的记录在「最近 24 小时」窗口里查不到：时间戳口径不一致（UTC/本地打架）");
+
+    // ② 跨午夜的日历日窗口：今天 00:00 到现在
+    const QDateTime dayStart(now.date(), QTime(0, 0, 0));
+    const QList<InspectionRecord> today = db->queryResults(dayStart, now, 500);
+    bool foundToday = false;
+    for (const InspectionRecord &r : today)
+        if (r.flowName == flow && r.nodeName == node)
+            foundToday = true;
+    QVERIFY2(foundToday, "刚写入的记录在「今天 00:00 起」窗口里查不到：日历日边界口径不一致");
+}
+
+void DatabaseTest::testReadBackTimestampMatchesInsertInstant()
+{
+    AppDatabase *db = AppDatabase::instance();
+    QVERIFY2(db->saveInspectionResult(QStringLiteral("tzReadFlow"),
+                                      QStringLiteral("tzReadNode"),
+                                      true,
+                                      QStringLiteral("2")),
+             "写入失败，本腿前提不成立");
+
+    const QDateTime before = QDateTime::currentDateTime();
+    const QList<InspectionRecord> rows =
+        db->queryResults(before.addSecs(-60), QDateTime::currentDateTime().addSecs(60), 50);
+    QVERIFY2(!rows.isEmpty(), "写完后立刻查不到本行");
+
+    const InspectionRecord r = rows.first();
+    // 读回值必须与插入时刻是同一个瞬间（无论库里存的是 UTC 墙钟、界面要本地时刻）。
+    // 旧实现把 UTC 文本当本地解析 ⇒ 差一个时区偏移（东八区 = 慢 8 小时），这条会红。
+    const qint64 skew = r.timestamp.secsTo(before);
+    QVERIFY2(qAbs(skew) < 120,
+             qPrintable(QStringLiteral("读回时间与插入时刻相差 %1 秒（时区口径错）").arg(skew)));
+
+    // 报警与操作日志同口径（三条查询共用同一对辅助函数，各验一条）
+    QVERIFY(db->addAlarm(QStringLiteral("tzModule"), QStringLiteral("Warning"),
+                         QStringLiteral("tz alarm")));
+    const QList<AlarmRecord> alarms =
+        db->queryAlarms(before.addSecs(-60), QDateTime::currentDateTime().addSecs(60), 50);
+    bool alarmOk = false;
+    for (const AlarmRecord &a : alarms) {
+        if (a.module == QStringLiteral("tzModule") && qAbs(a.timestamp.secsTo(before)) < 120)
+            alarmOk = true;
+    }
+    QVERIFY2(alarmOk, "报警记录在同一天窗口查不到，或读回时间偏了一个时区");
+
+    // logOperation 返回 void：失败与否由下面同窗口能否查到该行来判定（与另两条同一判据）
+    db->logOperation(QStringLiteral("tzUser"), QStringLiteral("tzAction"),
+                     QStringLiteral("tz op"));
+    const QList<OperationLogRecord> ops =
+        db->queryOperationLogs(before.addSecs(-60),
+                               QDateTime::currentDateTime().addSecs(60), 50);
+    bool opOk = false;
+    for (const OperationLogRecord &o : ops) {
+        if (o.action == QStringLiteral("tzAction") && qAbs(o.timestamp.secsTo(before)) < 120)
+            opOk = true;
+    }
+    QVERIFY2(opOk, "操作日志在同一天窗口查不到，或读回时间偏了一个时区");
+}
+
+void DatabaseTest::testPurgeKeepsRowsInsideRetentionWindow()
+{
+    AppDatabase *db = AppDatabase::instance();
+
+    // 用探针连接按存储口径（UTC 墙钟）直接插两行：一行在保留窗内（20 小时前），
+    // 一行在窗外（40 小时前）。public API 不接受自定义时间戳，只能走探针。
+    const QString kProbe = QStringLiteral("p1_probe_purge_tz");
+    QSqlDatabase probe = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), kProbe);
+    probe.setDatabaseName(db->databasePath());
+    QVERIFY2(probe.open(), qPrintable(probe.lastError().text()));
+
+    const QString inside = QDateTime::currentDateTimeUtc().addSecs(-20 * 3600)
+                               .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+    const QString outside = QDateTime::currentDateTimeUtc().addSecs(-40 * 3600)
+                                .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+    auto insertAt = [&probe](const QString &ts) {
+        QSqlQuery q(probe);
+        return q.exec(QStringLiteral(
+            "INSERT INTO inspection_results (flow_name,node_name,passed,value,timestamp) "
+            "VALUES ('tzPurgeFlow','tzPurgeNode',1,'0','%1')").arg(ts));
+    };
+    QVERIFY2(insertAt(inside), qPrintable(probe.lastError().text()));
+    QVERIFY2(insertAt(outside), qPrintable(probe.lastError().text()));
+    probe.close();
+    QSqlDatabase::removeDatabase(kProbe);
+
+    // 保留 1 天：20 小时前的行必须活下来（旧实现 cutoff 用本地串，边界早一个时区偏移，
+    // 会把窗内的行提前删掉）；40 小时前的行必须被删掉（证明 purge 仍然在工作，不是空转）。
+    const int removed = db->purgeOldRecords(1);
+    QVERIFY2(removed >= 1, qPrintable(QStringLiteral(
+        "purgeOldRecords(1) 一行都没删（%1）：清理逻辑可能已失效").arg(removed)));
+
+    const QList<InspectionRecord> rows =
+        db->queryResults(QDateTime::currentDateTime().addDays(-2),
+                         QDateTime::currentDateTime().addDays(1), 500);
+    bool insideAlive = false;
+    bool outsideGone = true;
+    for (const InspectionRecord &r : rows) {
+        if (r.flowName != QStringLiteral("tzPurgeFlow"))
+            continue;
+        // 20h/40h 用「与此刻的间隔」区分，避免再依赖任何时区口径
+        const qint64 age = r.timestamp.secsTo(QDateTime::currentDateTime());
+        if (qAbs(age - 20 * 3600) < 3600)
+            insideAlive = true;
+        if (qAbs(age - 40 * 3600) < 3600)
+            outsideGone = false;
+    }
+    QVERIFY2(insideAlive, "保留窗内（20 小时前）的行被 purge 删掉了：cutoff 用了本地时间串");
+    QVERIFY2(outsideGone, "窗外（40 小时前）的行没被删掉：purge 边界口径同样有问题");
 }
 
 // 旧实现会在工作线程上失败；这是本测试的核心断言
