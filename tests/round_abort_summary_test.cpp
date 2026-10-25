@@ -13,6 +13,7 @@
 #include "FlowExecutorToken.h"
 #include "AppDatabase.h"
 #include "NodeBase.h"
+#include "NodeGraphicsItem.h"   // 选中节点定义子流程需要图元
 #include "NodeRegistry.h"
 #include "InspectionRecord.h"
 
@@ -30,6 +31,9 @@ private slots:
     void cleanupTestCase();
     void abortedRoundHasNoSummaryRow();
     void completeRoundHasSummaryRow();
+    // P2-1 残留（2026-10-25 复核）：中止只覆盖主遍历时，循环体/子流程路径仍会写错汇总
+    void abortedLoopAtTailHasNoSummaryRow();
+    void abortedSubFlowIsNotReportedAsFailure();
 };
 
 namespace {
@@ -150,6 +154,110 @@ void RoundAbortSummaryTest::completeRoundHasSummaryRow()
     }
     QCOMPARE(summary, 1);
     QVERIFY2(anyPassed, "正常跑完的一轮，汇总行必须是 passed=true");
+}
+
+// 循环节点恰好是拓扑末节点、轮内被停止：executeLoop 在迭代/节点边界直接 return，
+// 主遍历因此自然结束（不走那两个 break 点）——轮末必须认这一轮为中止（P2-1 残留）。
+void RoundAbortSummaryTest::abortedLoopAtTailHasNoSummaryRow()
+{
+    FlowScene scene;
+    NodeBase *loop = addById(&scene, "LoopNode", QPointF(0, 0));
+    NodeBase *body = addById(&scene, "DelayNode", QPointF(220, 0));
+    QVERIFY(loop && body);
+    loop->setParam(QStringLiteral("loopCount"), 3);
+    body->setParam(QStringLiteral("delayMs"), 600);
+    QVERIFY(scene.createConnection(loop->outputPorts().first(),
+                                   body->inputPorts().first(), true));
+
+    const int before = summaryRows(QDateTime::currentDateTime().addDays(-1),
+                                   QDateTime::currentDateTime().addSecs(60));
+
+    auto token = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *token->executor();
+    exec.setFlowName(QStringLiteral("loopAbortFlow"));
+    exec.setFlowMode(FlowMode::SoftwareTrigger);
+    exec.setFlowScene(&scene);
+    exec.startExecution();
+    QTest::qWait(300);          // 落在第一轮迭代的 600ms 延时里
+    exec.stopExecution();
+    bool finished = exec.wait(15000);
+    if (!finished) {
+        exec.stopExecution();
+        exec.wait(3000);
+    }
+    exec.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+
+    const int after = summaryRows(QDateTime::currentDateTime().addDays(-1),
+                                  QDateTime::currentDateTime().addSecs(60));
+    QCOMPARE(after, before);   // 中止轮不得写汇总行
+}
+
+// 子流程成员执行中被人为停止：不得把调用点报成"执行失败"，也不得写汇总（P2-1 残留）。
+void RoundAbortSummaryTest::abortedSubFlowIsNotReportedAsFailure()
+{
+    FlowScene scene;
+    NodeBase *gen = addById(&scene, "FormulaNode", QPointF(0, 0));
+    NodeBase *caller = addById(&scene, "SubFlowNode", QPointF(220, 0));
+    NodeBase *m1 = addById(&scene, "DelayNode", QPointF(0, 220));
+    NodeBase *m2 = addById(&scene, "DelayNode", QPointF(220, 220));
+    QVERIFY(gen && caller && m1 && m2);
+    gen->setParam(QStringLiteral("expression"), QStringLiteral("1"));
+    m1->setParam(QStringLiteral("delayMs"), 600);
+    m2->setParam(QStringLiteral("delayMs"), 10);
+    QVERIFY(scene.createConnection(gen->outputPorts().first(),
+                                   caller->inputPorts().first(), true));
+    QVERIFY(scene.createConnection(m1->outputPorts().first(),
+                                   m2->inputPorts().first(), true));
+    scene.clearSelection();
+    for (NodeBase *n : { m1, m2 }) {
+        if (NodeGraphicsItem *item = scene.getGraphicsItemForNode(n))
+            item->setSelected(true);
+    }
+    QString err;
+    QVERIFY2(scene.defineSubFlowFromSelection(QStringLiteral("慢段"), &err), qPrintable(err));
+    caller->setParam(QStringLiteral("subFlowName"), QStringLiteral("慢段"));
+
+    const int before = summaryRows(QDateTime::currentDateTime().addDays(-1),
+                                   QDateTime::currentDateTime().addSecs(60));
+
+    auto token = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *token->executor();
+    bool callerFailed = false;
+    QStringList errors;
+    QObject::connect(&exec, &FlowExecutor::nodeExecuted, &exec,
+                     [&callerFailed, caller](NodeBase *n, bool ok) {
+                         if (n == caller && !ok)
+                             callerFailed = true;
+                     },
+                     Qt::DirectConnection);
+    QObject::connect(&exec, &FlowExecutor::executionError, &exec,
+                     [&errors](const QString &e) { errors << e; }, Qt::DirectConnection);
+
+    exec.setFlowName(QStringLiteral("subAbortFlow"));
+    exec.setFlowMode(FlowMode::SoftwareTrigger);
+    exec.setFlowScene(&scene);
+    exec.startExecution();
+    QTest::qWait(300);          // 落在子流程成员 m1 的 600ms 延时里
+    exec.stopExecution();
+    bool finished = exec.wait(15000);
+    if (!finished) {
+        exec.stopExecution();
+        exec.wait(3000);
+    }
+    exec.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+
+    // 中止不得报成节点失败，也不得出现"节点 … 执行失败"的错误
+    QVERIFY2(!callerFailed, "子流程被中止时调用点被记成执行失败（P2-1 残留）");
+    for (const QString &e : errors) {
+        QVERIFY2(!e.contains(QStringLiteral("执行失败")),
+                 qPrintable(QStringLiteral("中止被报成了执行失败：%1").arg(e)));
+    }
+    // 同样不得写汇总
+    const int after = summaryRows(QDateTime::currentDateTime().addDays(-1),
+                                  QDateTime::currentDateTime().addSecs(60));
+    QCOMPARE(after, before);
 }
 
 QTEST_MAIN(RoundAbortSummaryTest)

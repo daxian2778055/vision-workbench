@@ -798,6 +798,15 @@ void FlowExecutor::run()
         }
         
         m_diagPhase.store(6, std::memory_order_relaxed);   // 诊断：轮末·落库前
+        // 轮末统一判定"这一轮是不是被人为中止的半截流程"（2026-10-25 复核 P2-1 残留）。
+        // 只在主遍历的两个 break 点置位不够：循环体 executeLoop 在多个点直接 return、
+        // 子流程 executeSubFlow 遇停止也直接返回——若那条路径恰好是最后一节点，主遍历
+        // 自然结束，轮末仍会写 passed=true 的汇总。这里一处兜住所有退出路径。
+        {
+            QMutexLocker l(&m_mutex);
+            if (m_runContext->state() == ExecutionState::Stopped)
+                m_roundAborted = true;
+        }
         // P1-11 报表：轮末追加一条「整轮汇总」记录（见 InspectionRecord.h 的 kRoundSummaryNodeName）。
         // 为什么在这里做：记录是"每节点一条"且无轮次标识，报表据此只能算节点执行通过率、算不出良率；
         // 本行让"良率/趋势"有可靠口径。此刻 m_roundHadFailure 还没被 recordRoundFinished 复位，取值有效。
@@ -1799,8 +1808,15 @@ bool FlowExecutor::executeSubFlow(SubFlowNode *caller)
         }
     }
     m_subFlowCallStack.removeLast();
-    if (aborted)
-        return false;
+    if (aborted) {
+        // 人为停止 ≠ 执行失败（2026-10-25 复核 P2-1 残留）：原实现返回 false，调用点被判失败，
+        // 默认 stopOnFailure 立刻把它报成"节点 … 执行失败"并写 NG 汇总——一次人为中断被记成
+        // 一次产品失败。这里按"中止"收口：置轮中止位、输出留空、返回成功，让主循环的状态检查
+        // 或轮末统一判定收尾。
+        m_roundAborted = true;
+        caller->setOutputData(0, QSharedPointer<DataObject>());
+        return true;
+    }
 
     // 出口结果 → 调用点输出端口 0。executeNode(caller) 在 execute() 返回后统一
     // 读取输出端口写缓存/发信号，下游由此拿到数据（与普通算子同一出口，无特殊路径）。

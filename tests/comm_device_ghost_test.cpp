@@ -27,17 +27,22 @@ void CommDeviceGhostTest::unknownTypeIsRejectedAndLeavesNoGhost()
         mgr->removeDevice(name);
 
     bool addedEmitted = false;
-    QObject::connect(mgr, &CommunicationManager::deviceAdded, mgr,
-                     [&addedEmitted, &name](const QString &n, const QString &) {
-                         if (n == name)
-                             addedEmitted = true;
-                     });
+    // 捕获按值 + 用后断开（2026-10-25 复核）：单例上的连接若捕获局部变量引用且不断开，
+    // 下一个用例发 deviceAdded 时引用已悬空（UB）。name 是局部 QString，按值捕获；
+    // 连接在用例末尾 disconnect。
+    const QMetaObject::Connection conn =
+        QObject::connect(mgr, &CommunicationManager::deviceAdded, mgr,
+                         [&addedEmitted, name](const QString &n, const QString &) {
+                             if (n == name)
+                                 addedEmitted = true;
+                         });
 
     // 未知类型：必须 false，且不留登记、不发 deviceAdded
     const bool ok = mgr->addDevice(name, QStringLiteral("NoSuchType"), QJsonObject());
     QVERIFY2(!ok, "未知设备类型被当成添加成功了（幽灵设备，P3-12）");
     QVERIFY2(!mgr->hasDevice(name), "未知类型仍在设备表里：幽灵设备残留");
     QVERIFY2(!addedEmitted, "未知类型也发出了 deviceAdded：界面会出现一个打不开的设备");
+    QObject::disconnect(conn);
 }
 
 void CommDeviceGhostTest::knownTypeStillAddsDevice()
