@@ -1,4 +1,5 @@
 #include "OpencvFitLineNode.h"
+#include "NodeResultFields.h"
 #include "OpencvUtil.h"
 #include "DataObject.h"
 #include "AppLog.h"
@@ -93,6 +94,11 @@ void OpencvFitLineNode::run(bool /*autoSwitch*/)
         if (!valid) {
             setOutputData(1, QSharedPointer<DataObject>());
             m_params[QStringLiteral("fitPointCount")] = 0;
+            // 显式失败分支也要有可读原因（2026-10-26 复核）
+            m_params[QStringLiteral("lastError")] =
+                QStringLiteral("有效轮廓点不足（%1 < %2），无法拟合直线")
+                    .arg(int(pts.size()))
+                    .arg(std::max(2, minPoints));
             m_params["moduleStatus"] = false;
             m_outputImage = m_inputImage;
             return;
@@ -137,6 +143,7 @@ void OpencvFitLineNode::run(bool /*autoSwitch*/)
         m_params["moduleStatus"] = false;
         m_outputImage.Clear();
     } catch (...) {
+        m_params[QStringLiteral("lastError")] = unknownExceptionReason();
         m_params["moduleStatus"] = false;
         m_outputImage.Clear();
     }

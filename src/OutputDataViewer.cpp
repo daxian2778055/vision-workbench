@@ -84,7 +84,14 @@ void OutputDataViewer::onNodeExecuted(NodeBase *node, bool success)
     if (success) {
         refresh();
     } else {
-        m_statusLabel->setText(QStringLiteral("执行失败"));
+        // 失败轮必须清掉上一轮的端口数据（2026-10-26 复核 P3）：原来只改状态标签，
+        // 界面上还挂着上一轮的图像与数值，与"本轮失败"直接矛盾。
+        const QList<Port *> ports = m_currentNode->outputPorts();
+        for (int i = 0; i < ports.size(); ++i)
+            updatePortData(i, QSharedPointer<DataObject>());
+        const QString why = m_currentNode->getParam(QStringLiteral("lastError")).toString();
+        m_statusLabel->setText(why.isEmpty() ? QStringLiteral("执行失败")
+                                             : QStringLiteral("执行失败：%1").arg(why));
         m_statusLabel->setStyleSheet(QStringLiteral("color: red;"));
     }
 }

@@ -1,4 +1,5 @@
 #include "OpencvClassifyNode.h"
+#include "NodeResultFields.h"
 #include "ClassifierTrainer.h"
 #include "OpencvUtil.h"
 #include "DataObject.h"
@@ -87,6 +88,7 @@ void OpencvClassifyNode::run(bool /*autoSwitch*/)
         m_params["moduleStatus"] = false;
         m_outputImage.Clear();
     } catch (...) {
+        m_params[QStringLiteral("lastError")] = unknownExceptionReason();
         m_params["moduleStatus"] = false;
         m_outputImage.Clear();
     }

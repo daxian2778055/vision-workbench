@@ -59,6 +59,9 @@ void OpencvAngleNode::run(bool /*autoSwitch*/)
         m_outputImage = m_inputImage;
     } else {
         m_params[QStringLiteral("angle")] = 0.0;
+        // 线段退化要说明原因（2026-10-26 复核）：只判红，面板上看不到为什么
+        m_params[QStringLiteral("lastError")] =
+            QStringLiteral("线段长度为零（A/B 端点重合），无法计算夹角");
         m_params[QStringLiteral("moduleStatus")] = false;
     }
 

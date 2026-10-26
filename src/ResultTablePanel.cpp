@@ -1,4 +1,5 @@
 #include "ResultTablePanel.h"
+#include "ExportWriteCheck.h"
 
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -81,14 +82,13 @@ ResultTablePanel::ResultTablePanel(QWidget *parent)
         if (path.isEmpty())
             return;
         QFile file(path);
-        if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QMessageBox::warning(this, QStringLiteral("导出失败"),
-                                 QStringLiteral("无法写入 %1：%2").arg(path, file.errorString()));
+        // 打开与收尾都走 ExportWriteCheck（2026-10-26 复核：此前这里只查 open，
+        // 写失败照样当成功，句子也与其它导出重复）
+        if (!ExportWriteCheck::openForExport(this, file, path))
             return;
-        }
         QTextStream out(&file);
         out << toReportText();
-        file.close();
+        ExportWriteCheck::finishTextExport(this, file, out, path);
     });
 }
 
@@ -344,6 +344,16 @@ bool ResultTablePanel::exportCsv(const QString &path, QString *errorOut) const
         }
     }
 
+    // 写失败要能报回调用方（2026-10-26 复核）：原先 close 后直接 return true，
+    // 磁盘满/网络盘断开会当成功。
+    out.flush();
+    const bool streamOk = out.status() == QTextStream::Ok;
+    const bool flushOk = file.flush();
     file.close();
+    if (!streamOk || !flushOk) {
+        if (errorOut)
+            *errorOut = file.errorString();
+        return false;
+    }
     return true;
 }

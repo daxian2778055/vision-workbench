@@ -90,6 +90,8 @@ void OcrNode::run(bool /*autoSwitch*/)
         } catch (const HException &e) {
             measureOk = false;
             VFP_DEBUG << "Ocr processing error:" << e.ErrorMessage().TextA();
+            m_params[QStringLiteral("lastError")] =
+                QString::fromLocal8Bit(e.ErrorMessage().TextA());
             m_params[QStringLiteral("ocrText")] = QString();
             m_params[QStringLiteral("confidence")] = 0.0;
             setOutputData(1, QSharedPointer<DataObject>());

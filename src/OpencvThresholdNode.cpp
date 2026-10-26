@@ -1,4 +1,5 @@
 #include "OpencvThresholdNode.h"
+#include "NodeResultFields.h"
 #include "OpencvUtil.h"
 #include "DataObject.h"
 #include "AppLog.h"
@@ -78,6 +79,7 @@ void OpencvThresholdNode::run(bool /*autoSwitch*/)
         m_params["moduleStatus"] = false;
         m_outputImage.Clear();
     } catch (...) {
+        m_params[QStringLiteral("lastError")] = unknownExceptionReason();
         m_params["moduleStatus"] = false;
         m_outputImage.Clear();
     }

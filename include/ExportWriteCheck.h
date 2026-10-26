@@ -26,9 +26,11 @@ inline bool finishTextExport(QWidget *parent, QFile &file, QTextStream &ts, cons
 {
     ts.flush();
     const bool streamOk = ts.status() == QTextStream::Ok;
-    const QString err = file.errorString();
     const bool flushOk = file.flush();
     file.close();
+    // errorString 必须**在** flush/close 之后取（2026-10-26 复核）：磁盘满/网络盘断开时
+    // 错误码是在 flush/close 那一刻才置上的，提前取会拿到旧值或空串。
+    const QString err = file.errorString();
     if (streamOk && flushOk)
         return true;
     QMessageBox::warning(parent, QObject::tr("导出失败"),

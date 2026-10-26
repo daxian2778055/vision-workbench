@@ -358,9 +358,9 @@
 |---|---|---|
 | P3 导出只查打开不查写成功（CodeExport / CommMonitor / InspectionResult / StatisticsReport×2） | 写完 `flush()` 后查 `QTextStream::status()` 并 `close()`，失败弹警告不再报“导出完成”。**报表用于追溯，静默截断属合规问题** | — |
 | P3 模板匹配教学保存失败仍绿（OpencvTemplateMatch / TemplateMatch） | 落盘失败 → `moduleStatus=false` + `lastError` + 返回（不再“本轮照常匹配、下一轮莫名其妙失败”） | — |
-| P3 非 8 位的拒绝原因到不了现场 | 六个网络节点 + 其余 13 个 OpenCV 节点的 `catch` 统一写 `lastError`（**原因键**，会推到结果面板） | — |
+| P3 非 8 位的拒绝原因到不了现场 | **`requireGray8` 的 5 个站点**（阈值/卡尺/Tesseract/ZXing/分类器特征提取）本就抛异常判红；原因可见靠 **13 个 OpenCV 节点 + Undistort 的 catch 统一写 `lastError`**（原因键，推到结果面板），另补 20 处 `catch (...)`、Caliper 零长度、FitLine 点数不足、OpencvAngle 线段退化、FeatureMatch `fail` lambda、Ocr/Barcode 内层 catch。原表述“六个网络节点”不准确，特此更正 | — |
 | P3 用户表读取失败与空表同形 | `refreshUserTable` 用 `accountSurface()==Unreadable` 单独显示“读取用户表失败”，不再冒充“没有用户” | — |
-| **口径变更（有意）** OCR/条码“识别不到”由判绿改为**判红** | Ocr/Barcode 空结果 → `moduleStatus=false` + `lastError='未识别到…内容'`，与 ZXing/Tesseract 统一。需要“可选识别”的流程请在其后接条件节点。**项目未上线，此处按多数口径统一** | — |
+| **口径变更（有意）** OCR/条码“识别不到”由判绿改为**判红** | Ocr/Barcode **及 DataCode2D** 空结果 → `moduleStatus=false` + `lastError`，与 ZXing/Tesseract 统一。需要“可选识别”的流程请在其后接条件节点。**注意：这三个节点当前在 `NodeRegistry` 里是注释状态（未注册）**，所以本变更对现场是**潜伏**的——重新注册时口径已一致，不会再冲突 | — |
 
 **仍开放（本轮未修，各有理由）**：
 

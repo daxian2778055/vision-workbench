@@ -77,6 +77,8 @@ void BarcodeNode::run(bool /*autoSwitch*/)
         } catch (const HException &e) {
             measureOk = false;
             VFP_DEBUG << "Barcode processing error:" << e.ErrorMessage().TextA();
+            m_params[QStringLiteral("lastError")] =
+                QString::fromLocal8Bit(e.ErrorMessage().TextA());
             m_params[QStringLiteral("barcodeText")] = QString();
             setOutputData(1, QSharedPointer<DataObject>());
         }

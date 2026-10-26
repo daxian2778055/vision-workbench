@@ -60,6 +60,9 @@ void DataCode2DNode::run(bool)
             result = lines.join(QStringLiteral("\n"));
         } else {
             result = QStringLiteral("未识别到二维码");
+            // 未识别到内容判红（2026-10-26：与 Ocr/Barcode/ZXing/Tesseract 统一口径）
+            m_params[QStringLiteral("lastError")] = result;
+            m_params["moduleStatus"] = false;
         }
 
         auto strObj = QSharedPointer<DataObject>::create();

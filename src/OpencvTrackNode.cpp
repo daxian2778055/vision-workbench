@@ -1,4 +1,5 @@
 #include "OpencvTrackNode.h"
+#include "NodeResultFields.h"
 #include "OpenCvTracker.h"
 #include "OpencvUtil.h"
 #include "DataObject.h"
@@ -133,6 +134,7 @@ void OpencvTrackNode::run(bool /*autoSwitch*/)
         m_params["moduleStatus"] = false;
         m_outputImage.Clear();
     } catch (...) {
+        m_params[QStringLiteral("lastError")] = unknownExceptionReason();
         m_params["moduleStatus"] = false;
         m_outputImage.Clear();
     }

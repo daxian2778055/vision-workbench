@@ -236,7 +236,7 @@ def main():
 BASELINE = (
     (4, 'ROI 宽度（0=全图）'),
     (4, 'ROI 高度（0=全图）'),
-    (3, '无法写入 %1：%2'),   # 4 -> 3（2026-10-26）：两个统计报表导出改用 ExportWriteCheck::openForExport
+    (2, '无法写入 %1：%2'),   # 4 -> 3 -> 2（2026-10-26）：统计报表两处、ResultTablePanel 报表导出改用 ExportWriteCheck::openForExport，仅余 exportCsv 的错误串接口
     (4, '枚举设备失败，错误码:'),
     (3, '<i>提示：点击后在图像视图上拖拽绘制搜索线/圆，'),
     (3, 'ONNX 模型加载失败'),

@@ -1,4 +1,5 @@
 #include "OpencvCaliperNode.h"
+#include "NodeResultFields.h"
 #include "OpencvUtil.h"
 #include "DataObject.h"
 #include "AppLog.h"
@@ -75,6 +76,9 @@ void OpencvCaliperNode::run(bool /*autoSwitch*/)
         const double dy = r2 - r1;
         const double L = std::hypot(dx, dy);
         if (L < 1.0) {
+            // 显式失败分支也要有可读原因（2026-10-26 复核）：原来只判红，面板上看不到为什么
+            m_params[QStringLiteral("lastError")] =
+                QStringLiteral("卡尺两点重合（长度为 0），无法定义搜索方向");
             m_params["moduleStatus"] = false;
             m_outputImage = m_inputImage;
             return;
@@ -182,6 +186,7 @@ void OpencvCaliperNode::run(bool /*autoSwitch*/)
         m_params["moduleStatus"] = false;
         m_outputImage.Clear();
     } catch (...) {
+        m_params[QStringLiteral("lastError")] = unknownExceptionReason();
         m_params["moduleStatus"] = false;
         m_outputImage.Clear();
     }

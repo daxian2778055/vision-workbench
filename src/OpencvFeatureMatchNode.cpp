@@ -1,4 +1,5 @@
 #include "OpencvFeatureMatchNode.h"
+#include "NodeResultFields.h"
 #include "OpencvTemplateMatchNode.h"   // 复用 extractTemplatePatch（同一套 ROI→模板块抠取）
 #include "OpencvUtil.h"
 #include "DataObject.h"
@@ -184,6 +185,8 @@ void OpencvFeatureMatchNode::run(bool /*autoSwitch*/)
 {
     const auto fail = [this](const QString &why) {
         m_params[QStringLiteral("matchNote")] = why;
+        // 原因键（2026-10-26 复核）：面板要能看到为什么红
+        m_params[QStringLiteral("lastError")] = why;
         m_params["moduleStatus"] = false;
         m_outputImage = m_inputImage;
         setOutputData(1, QSharedPointer<DataObject>());
@@ -227,8 +230,17 @@ void OpencvFeatureMatchNode::run(bool /*autoSwitch*/)
                           : QStringLiteral("模板保存失败: %1").arg(templatePath);
                 // 教学是一次性动作：落盘成功后回到匹配模式，此后每轮读文件而不是重教覆写。
                 // 走 setParamDirect：run() 里调 setParam 会重启预览定时器，形成自激。
-                if (saved)
-                    setParamDirect(QStringLiteral("trainFromImage"), false);
+                if (!saved) {
+                    // 教学落盘失败必须判红（2026-10-26 复核）：这是第三个"从图教学并落盘"的节点，
+                    // 原来只写 trainStatus 就继续匹配，现场以为模板已存。
+                    m_params[QStringLiteral("lastError")] =
+                        m_params[QStringLiteral("trainStatus")];
+                    m_params["moduleStatus"] = false;
+                    m_outputImage = m_inputImage;
+                    setOutputData(1, QSharedPointer<DataObject>());
+                    return;
+                }
+                setParamDirect(QStringLiteral("trainFromImage"), false);
             } else {
                 m_params[QStringLiteral("trainStatus")] = QStringLiteral("已教学（未保存文件）");
             }
@@ -358,6 +370,7 @@ void OpencvFeatureMatchNode::run(bool /*autoSwitch*/)
         VFP_DEBUG << kTag << "error:" << e.what();
         fail(QStringLiteral("异常: %1").arg(QString::fromLocal8Bit(e.what())));
     } catch (...) {
+        m_params[QStringLiteral("lastError")] = unknownExceptionReason();
         fail(QStringLiteral("未知异常"));
     }
 }
