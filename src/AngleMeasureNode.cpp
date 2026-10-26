@@ -42,6 +42,13 @@ void AngleMeasureNode::run(bool)
 
         HTuple handle;
         CreateMetrologyModel(&handle);
+        // 异常/提前返回也要释放模型（2026-10-26 复核 P3）：原实现只在成功路径清，
+        // 反复失败会累积 HALCON 句柄。RAII 守卫覆盖所有退出路径（含 throw）。
+        struct ModelScopeGuard {
+            HTuple h; bool armed = true;
+            explicit ModelScopeGuard(const HTuple &v) : h(v) {}
+            ~ModelScopeGuard() { if (armed) { try { ClearMetrologyModel(h); } catch (...) {} } }
+        } modelGuard(handle);
         HTuple idx1, idx2;
         // HALCON 24.11 签名：GenParamName/GenParamValue 明确设置边缘极性（避免空串歧义）
         AddMetrologyObjectLineMeasure(handle, pv(QStringLiteral("r1a"), 100), pv(QStringLiteral("c1a"), 100),
@@ -73,7 +80,7 @@ void AngleMeasureNode::run(bool)
             while (d > 180.0) d -= 180.0;
             deg = d;
         }
-        ClearMetrologyModel(handle);
+        /* 释放由 modelGuard 在离开作用域时完成（RAII，异常路径同样覆盖） */
 
         MeasureResult res;
         res.type = QStringLiteral("angle");

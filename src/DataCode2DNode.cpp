@@ -38,6 +38,13 @@ void DataCode2DNode::run(bool)
 
         HTuple handle;
         CreateDataCode2dModel(HTuple(types[idx].toStdString().c_str()), HTuple(), HTuple(), &handle);
+        // 异常/提前返回也要释放模型（2026-10-26 复核 P3）：原实现只在成功路径清，
+        // 反复失败会累积 HALCON 句柄。RAII 守卫覆盖所有退出路径（含 throw）。
+        struct ModelScopeGuard {
+            HTuple h; bool armed = true;
+            explicit ModelScopeGuard(const HTuple &v) : h(v) {}
+            ~ModelScopeGuard() { if (armed) { try { ClearDataCode2dModel(h); } catch (...) {} } }
+        } modelGuard(handle);
         SetDataCode2dParam(handle, "contrast", contrasts[cont].toStdString().c_str());
 
         HObject symbolXLDs;
@@ -64,7 +71,7 @@ void DataCode2DNode::run(bool)
         xldObj->setHXLDCont(HXLDCont(symbolXLDs));
         setOutputData(2, xldObj);
 
-        ClearDataCode2dModel(handle);
+        /* 释放由 modelGuard 在离开作用域时完成（RAII，异常路径同样覆盖） */
         m_outputImage = m_inputImage;
     } catch (const HException &) {
         m_outputImage.Clear();

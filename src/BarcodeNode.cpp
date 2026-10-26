@@ -46,6 +46,13 @@ void BarcodeNode::run(bool /*autoSwitch*/)
             // Create barcode model
             HTuple barcodeHandle;
             CreateBarCodeModel(HTuple(), HTuple(), &barcodeHandle);
+        // 异常/提前返回也要释放模型（2026-10-26 复核 P3）：原实现只在成功路径清，
+        // 反复失败会累积 HALCON 句柄。RAII 守卫覆盖所有退出路径（含 throw）。
+        struct ModelScopeGuard {
+            HTuple h; bool armed = true;
+            explicit ModelScopeGuard(const HTuple &v) : h(v) {}
+            ~ModelScopeGuard() { if (armed) { try { ClearBarCodeModel(h); } catch (...) {} } }
+        } modelGuard(barcodeHandle);
 
             // Find and decode barcode: FindBarCode(Image, SymbolRegions, BarCodeHandle, CodeType, DecodedDataStrings)
             HObject symbolRegions;
@@ -66,7 +73,7 @@ void BarcodeNode::run(bool /*autoSwitch*/)
             strObj->setData(m_params[QStringLiteral("barcodeText")].toString());
             setOutputData(1, strObj);
 
-            ClearBarCodeModel(barcodeHandle);
+            /* 释放由 modelGuard 在离开作用域时完成（RAII，异常路径同样覆盖） */
         } catch (const HException &e) {
             measureOk = false;
             VFP_DEBUG << "Barcode processing error:" << e.ErrorMessage().TextA();

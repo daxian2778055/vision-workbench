@@ -64,6 +64,13 @@ void CaliperMeasureNode::run(bool)
 
         HTuple handle;
         CreateMetrologyModel(&handle);
+        // 异常/提前返回也要释放模型（2026-10-26 复核 P3）：原实现只在成功路径清，
+        // 反复失败会累积 HALCON 句柄。RAII 守卫覆盖所有退出路径（含 throw）。
+        struct ModelScopeGuard {
+            HTuple h; bool armed = true;
+            explicit ModelScopeGuard(const HTuple &v) : h(v) {}
+            ~ModelScopeGuard() { if (armed) { try { ClearMetrologyModel(h); } catch (...) {} } }
+        } modelGuard(handle);
         HTuple index;
         // HALCON 24.11 签名：第 10/11 参为 GenParamName/GenParamValue（此处设置边缘极性）
         AddMetrologyObjectLineMeasure(handle, r1, c1, r2, c2, ml, mw, sg, th,
@@ -87,7 +94,7 @@ void CaliperMeasureNode::run(bool)
             if (n.I() > 1)
                 res.point2 = QPointF(col[n.I() - 1].D(), row[n.I() - 1].D());
         }
-        ClearMetrologyModel(handle);
+        /* 释放由 modelGuard 在离开作用域时完成（RAII，异常路径同样覆盖） */
 
         auto resObj = QSharedPointer<DataObject>::create();
         resObj->setMeasureResult(res);

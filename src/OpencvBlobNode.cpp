@@ -3,6 +3,7 @@
 #include "DataObject.h"
 #include "AppLog.h"
 #include <opencv2/imgproc.hpp>
+#include <vector>
 #include <QWidget>
 
 OpencvBlobNode::OpencvBlobNode(QObject *parent) : HalconNode(parent)
@@ -75,18 +76,22 @@ void OpencvBlobNode::run(bool /*autoSwitch*/)
         m_params[QStringLiteral("maxBlobCentroidCol")] = maxCol;
         m_params["moduleStatus"] = true;
 
-        // 标记图：每个 blob 按标签映射为灰阶（背景黑）
-        cv::Mat vis = cv::Mat::zeros(bin.size(), CV_8UC1);
+        // 标记图：**单遍扫描 + 标签查色**（2026-10-26 复核 P3：原实现对每个 blob 都扫一遍
+        // 全图 = O(blob 数 × 像素数)，5MP 图 × 100 个 blob 就是 5 亿次比较，现场会明显卡顿）。
+        std::vector<uchar> colorOf(static_cast<size_t>(n), 0);
         for (int i = 1; i < n; ++i) {
             const int area = stats.at<int>(i, cv::CC_STAT_AREA);
             if (area < minArea || area > maxArea) continue;
-            const uchar gray = static_cast<uchar>(20 + (i % 12) * 20);
-            for (int y = 0; y < labels.rows; ++y) {
-                const int *lp = labels.ptr<int>(y);
-                uchar *vp = vis.ptr<uchar>(y);
-                for (int x = 0; x < labels.cols; ++x) {
-                    if (lp[x] == i) vp[x] = gray;
-                }
+            colorOf[static_cast<size_t>(i)] = static_cast<uchar>(20 + (i % 12) * 20);
+        }
+        cv::Mat vis = cv::Mat::zeros(bin.size(), CV_8UC1);
+        for (int y = 0; y < labels.rows; ++y) {
+            const int *lp = labels.ptr<int>(y);
+            uchar *vp = vis.ptr<uchar>(y);
+            for (int x = 0; x < labels.cols; ++x) {
+                const int lb = lp[x];
+                if (lb > 0 && lb < n)
+                    vp[x] = colorOf[static_cast<size_t>(lb)];
             }
         }
 

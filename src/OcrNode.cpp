@@ -59,9 +59,16 @@ void OcrNode::run(bool /*autoSwitch*/)
                     &ocrHandle);
 
             HTuple classes, confidences;
+            // 异常路径也要释放 OCR 句柄（2026-10-26 复核 P3）：原实现只在 DoOcrMulti
+            // 成功之后清，识别抛异常就漏。
+            struct OcrScopeGuard {
+                HTuple h; bool armed = true;
+                explicit OcrScopeGuard(const HTuple &v) : h(v) {}
+                ~OcrScopeGuard() { if (armed) { try { ClearOcrClassMlp(h); } catch (...) {} } }
+            } ocrGuard(ocrHandle);
             DoOcrMulti(selected, gray, ocrHandle, &classes, &confidences);
 
-            ClearOcrClassMlp(ocrHandle);
+            /* 释放由 ocrGuard 在离开作用域时完成（RAII，异常路径同样覆盖） */
 
             QString result;
             double avgConf = 0.0;
