@@ -103,6 +103,7 @@ void FindCircleNode::run(bool)
 
         m_outputImage = m_inputImage;
     } catch (const HException &) {
+        if (metroHandleCreated) { try { ClearMetrologyModel(handle); } catch (...) {} metroHandleCreated = false; }
         m_outputImage.Clear();
         setOutputData(1, QSharedPointer<DataObject>());
         setOutputData(2, QSharedPointer<DataObject>());

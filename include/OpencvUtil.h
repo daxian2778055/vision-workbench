@@ -26,6 +26,12 @@ HalconCpp::HImage matToHimage(const cv::Mat &mat);
 /// 判断 HALCON 图像是否可用（含像素指针校验），用于桥接失败时的日志
 bool isImageValid(const HalconCpp::HImage &img);
 
+/// 非 8 位输入的显式策略（2026-10-25 复核 P2）：桥接修好后会如实返回 CV_16U（Mono10/12/16），
+/// 而阈值的 0-255 区间、`at<uchar>` 访问、Tesseract/ZXing 的 8 位入口都按 8 位写死——不拦就是
+/// 静默错值。本判据只放行 8 位（单/三通道），其余一律返回 false 并在 `why` 里给出可直接照做的
+/// 建议（前级接「类型转换」）。**不在这里偷偷缩放**：缩放比例取决于相机位深与用途，猜错比拒绝更糟。
+bool requireGray8(const cv::Mat &mat, QString *why);
+
 /// 将灰度掩膜（白=保留）按最近邻缩放到 bin 尺寸后做按位与
 void applyGrayMask(cv::Mat &bin, const QImage &mask);
 

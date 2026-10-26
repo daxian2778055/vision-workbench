@@ -317,10 +317,13 @@ bool AnomalyDetectNode::teachAndScorePixel(const cv::Mat &inspect, const QString
                      .arg(working.rows);
         if (!path.isEmpty()) {
             QString saveErr;
-            if (!m_baseline.save(path, &saveErr))
-                status += QStringLiteral("；保存失败：%1").arg(saveErr);
-            else
-                m_loadedFrom = path;
+            if (!m_baseline.save(path, &saveErr)) {
+                // 保存失败必须判红（2026-10-26 复核 P3）：原来只拼进 status，节点仍绿——
+                // 现场以为"教学已存盘"，重启/换机就没了。
+                error = QStringLiteral("统计基线保存失败：%1").arg(saveErr);
+                return false;
+            }
+            m_loadedFrom = path;
         }
     } else if (m_baseline.isEmpty()) {
         error = QStringLiteral("基线为空：先教学（或指定基线文件）");
@@ -370,10 +373,13 @@ bool AnomalyDetectNode::teachAndScorePca(const cv::Mat &inspect, const QString &
                      .arg(m_pca.analysisSize().height);
         if (!path.isEmpty()) {
             QString saveErr;
-            if (!m_pca.save(path, &saveErr))
-                status += QStringLiteral("；保存失败：%1").arg(saveErr);
-            else
-                m_loadedFrom = path;
+            if (!m_pca.save(path, &saveErr)) {
+                // 保存失败必须判红（2026-10-26 复核 P3）：原来只拼进 status，节点仍绿——
+                // 现场以为"教学已存盘"，重启/换机就没了。
+                error = QStringLiteral("PCA 模型保存失败：%1").arg(saveErr);
+                return false;
+            }
+            m_loadedFrom = path;
         }
     } else if (m_pca.isEmpty()) {
         error = QStringLiteral("PCA 模型为空：先教学（或指定模型文件，注意与统计基线文件不通用）");

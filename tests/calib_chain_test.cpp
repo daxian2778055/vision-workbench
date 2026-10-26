@@ -62,6 +62,7 @@ private slots:
     void nPointInsufficientPairsJudgeRed(); // ⑦
     void nPointDegeneratePairsJudgeRed();   // ⑦
     void nPointCollinearPairsJudgeRed();    // ⑧ 共线→NaN 矩阵（2026-10-25 P2-2）
+    void calibNodeSecondCycleAlsoSucceeds(); // ⑨ 两轮连续成功（2026-10-26 P2-1）
     void nPointBadRowsJudgeRedAndNameThem();// ⑧ 坏行点名拒收（2026-10-25 P2-3）
     void handEyeRecoversKnownRigid();       // ⑤
     void handEyeIsRigidNotScaled();         // ⑤ 口径（结论 C）
@@ -899,6 +900,43 @@ void CalibChainTest::calibNodeRecoversKnownIntrinsics()
 }
 
 // ① 失败面：画面里没有棋盘格 ⇒ 节点必须显式判红（不写位的话 process() 的预置 true 就是绿灯）。
+
+// ⑨ 两轮连续标定都要成功（2026-10-26 复核 P2-1）：成功分支若只清 m_cornerSets 而留下
+// m_objectPoints，第二轮攒满帧后 size 不等必然判红。既有用例只跑一轮，覆盖不到。
+void CalibChainTest::calibNodeSecondCycleAlsoSucceeds()
+{
+    const std::vector<cv::Mat> frames = makeCalibFrames();
+
+    OpencvCalibNode node;
+    node.init();
+    node.setParam(QStringLiteral("patternW"), kPatternW);
+    node.setParam(QStringLiteral("patternH"), kPatternH);
+    node.setParam(QStringLiteral("squareSize"), kSquare);
+    node.setParam(QStringLiteral("requiredFrames"), int(frames.size()));
+
+    QStringList problems;
+    for (int cycle = 1; cycle <= 2; ++cycle) {
+        for (size_t i = 0; i < frames.size(); ++i) {
+            feedImage(node, OpencvUtil::matToHimage(frames[i]));
+            const bool ok = node.execute();
+            if (!ok) {
+                problems << QStringLiteral("第 %1 轮第 %2 帧判红（note=%3）")
+                                .arg(cycle).arg(i + 1)
+                                .arg(node.getParam(QStringLiteral("calibNote")).toString());
+                break;
+            }
+            const int collected = node.getParam(QStringLiteral("collectedFrames")).toInt();
+            if (collected != int(i) + 1)
+                problems << QStringLiteral("第 %1 轮第 %2 帧后 collectedFrames=%3")
+                                .arg(cycle).arg(i + 1).arg(collected);
+        }
+        if (!node.getParam(QStringLiteral("calibrated")).toBool())
+            problems << QStringLiteral("第 %1 轮未标记 calibrated").arg(cycle);
+    }
+    QVERIFY2(problems.isEmpty(),
+             qPrintable(QStringLiteral("两轮连续标定不成立：") + problems.join(QStringLiteral("; "))));
+}
+
 void CalibChainTest::calibNodeJudgeRedWithoutBoard()
 {
     OpencvCalibNode node;

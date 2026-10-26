@@ -38,7 +38,11 @@ void ImageAddNode::run(bool)
         if (m_inputData.contains(1) && m_inputData[1] && m_inputData[1]->getHImage().IsInitialized()) {
             AddImage(HImage(m_inputImage), m_inputData[1]->getHImage(), &result, 1.0, 0.0);
         } else {
-            AddImage(HImage(m_inputImage), HImage(m_inputImage), &result, 1.0, v);
+            // 未接第二输入时与**常量图**相加（2026-10-26 复核 P3）：原来写
+            // AddImage(I, I, 1.0, v) = 2I+v，与参数标签"加数"不符（整幅亮一倍）。
+            // 常量图构造 makeConstantImageLike 早就在本文件里，之前没被用。
+            AddImage(HImage(m_inputImage), makeConstantImageLike(HImage(m_inputImage), v),
+                     &result, 1.0, 0.0);
         }
         m_outputImage = result;
     } catch (const HException &) {

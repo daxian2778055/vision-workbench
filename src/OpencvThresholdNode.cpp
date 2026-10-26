@@ -38,6 +38,13 @@ void OpencvThresholdNode::run(bool /*autoSwitch*/)
             m_params["moduleStatus"] = false;
             return;
         }
+        // 非 8 位输入的显式拒绝（2026-10-25 复核 P2）：桥接修好后 16 位图会如实返回 CV_16U，
+        // 而这里的阈值 0-255 / at<uchar> / 外部 8 位入口都按 8 位写死——静默错值比判红更糟。
+        {
+            QString depthWhy;
+            if (!OpencvUtil::requireGray8(mat, &depthWhy))
+                throw std::runtime_error(depthWhy.toStdString());
+        }
         if (mat.channels() == 3) {
             cv::cvtColor(mat, mat, cv::COLOR_BGR2GRAY);
         }

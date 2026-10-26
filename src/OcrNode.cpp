@@ -52,6 +52,7 @@ void OcrNode::run(bool /*autoSwitch*/)
         SelectShape(connected, &selected, "area", "and", HTuple(20), HTuple(10000));
 
         // Attempt OCR with DoOcrMulti (works with font files)
+        bool measureOk = true;   // 内层识别异常不得再判绿（2026-10-26 复核 P2）
         try {
             HTuple ocrHandle;
             ReadOcr(HTuple(m_params.value(QStringLiteral("fontName")).toString().toLocal8Bit().constData()),
@@ -80,6 +81,7 @@ void OcrNode::run(bool /*autoSwitch*/)
             strObj->setData(result);
             setOutputData(1, strObj);
         } catch (const HException &e) {
+            measureOk = false;
             VFP_DEBUG << "Ocr processing error:" << e.ErrorMessage().TextA();
             m_params[QStringLiteral("ocrText")] = QString();
             m_params[QStringLiteral("confidence")] = 0.0;
@@ -94,7 +96,7 @@ void OcrNode::run(bool /*autoSwitch*/)
             outObj->setHImage(output);
             setOutputData(0, outObj);
         }
-        m_params["moduleStatus"] = true;
+        m_params["moduleStatus"] = measureOk;
     } catch (const HException &e) {
         VFP_DEBUG << "OcrNode error:" << e.ErrorMessage().TextA();
         m_params["moduleStatus"] = false;

@@ -42,8 +42,8 @@ void CalibrationBoardNode::run(bool)
             strObj->setData(QStringLiteral("请先选择标定板描述文件 (.descr)"));
             setOutputData(1, strObj);
             m_outputImage = m_inputImage;
-            return;
             m_params["moduleStatus"] = false;   // 缺 .descr 判红（2026-10-25 复核 P3）
+            return;
         }
         auto pv = [this](const QString &n, double d) { return m_params.value(n, d).toDouble(); };
         auto pi = [this](const QString &n, int d) { return m_params.value(n, d).toInt(); };

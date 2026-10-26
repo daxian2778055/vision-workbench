@@ -100,6 +100,11 @@ void OpencvCalibNode::run(bool /*autoSwitch*/)
                     // 成功后清采集帧（2026-10-25 复核 P3）：原来只在失败分支清，
                     // 每来一帧继续追加并重新 calibrateCamera，旧场景点会污染新标定。
                     m_cornerSets.clear();
+                    // 两个容器必须一起清（2026-10-26 复核）：只清 m_cornerSets 会让下一轮
+                    // 攒满帧后 m_objectPoints.size() != m_cornerSets.size() 恒成立 ⇒ 必判失败。
+                    // 注意**不要**在这里复位 collectedFrames：那是"当批采集数"的展示值，
+                    // 既有用例按成功后仍显示当批帧数断言（复位会误伤，也不符合现场读数习惯）。
+                    m_objectPoints.clear();
                     m_params["moduleStatus"] = true;
                     m_params[QStringLiteral("calibNote")] = QString();
                 } else {

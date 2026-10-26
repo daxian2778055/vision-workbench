@@ -47,6 +47,11 @@ inline bool extractFeature(const cv::Mat &img, int mode, std::vector<float> &fea
 {
     cv::Mat g;
     if (img.empty()) return false;
+    // 只接受 8 位（2026-10-25 复核 P2）：mode 1 的分母写死 /255，16 位图会静默压成一片黑。
+    // 只接受 8 位（2026-10-25 复核 P2）：mode 1 的分母写死 /255，16 位图会静默压成一片黑。
+    // 本函数无 error 出参，调用方（Trainer）对 false 会给出自己的原因串。
+    if (img.depth() != CV_8U)
+        return false;
     if (img.channels() == 3)
         cv::cvtColor(img, g, cv::COLOR_BGR2GRAY);
     else if (img.channels() == 1)

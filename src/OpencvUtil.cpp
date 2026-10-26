@@ -166,6 +166,25 @@ bool isImageValid(const HImage &img)
     }
 }
 
+bool requireGray8(const cv::Mat &mat, QString *why)
+{
+    if (mat.empty()) {
+        if (why) *why = QStringLiteral("输入图像为空");
+        return false;
+    }
+    if (mat.depth() == CV_8U)
+        return true;
+    if (why) {
+        const int bits = CV_ELEM_SIZE(mat.depth()) * 8;
+        *why = QStringLiteral(
+                   "该算子只支持 8 位图（当前 %1 位/通道、%2 通道）："
+                   "请在前级接「类型转换」把图像转为 8 位，或改用支持该位深的算子")
+                   .arg(bits)
+                   .arg(mat.channels());
+    }
+    return false;
+}
+
 void applyGrayMask(cv::Mat &bin, const QImage &mask)
 {
     if (bin.empty() || mask.isNull())

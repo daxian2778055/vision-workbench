@@ -41,6 +41,7 @@ void BarcodeNode::run(bool /*autoSwitch*/)
             gray = input;
         }
 
+        bool measureOk = true;   // 内层识别异常不得再判绿（2026-10-26 复核 P2）
         try {
             // Create barcode model
             HTuple barcodeHandle;
@@ -67,6 +68,7 @@ void BarcodeNode::run(bool /*autoSwitch*/)
 
             ClearBarCodeModel(barcodeHandle);
         } catch (const HException &e) {
+            measureOk = false;
             VFP_DEBUG << "Barcode processing error:" << e.ErrorMessage().TextA();
             m_params[QStringLiteral("barcodeText")] = QString();
             setOutputData(1, QSharedPointer<DataObject>());
@@ -80,7 +82,7 @@ void BarcodeNode::run(bool /*autoSwitch*/)
             outObj->setHImage(output);
             setOutputData(0, outObj);
         }
-        m_params["moduleStatus"] = true;
+        m_params["moduleStatus"] = measureOk;
     } catch (const HException &e) {
         VFP_DEBUG << "BarcodeNode error:" << e.ErrorMessage().TextA();
         m_params["moduleStatus"] = false;
