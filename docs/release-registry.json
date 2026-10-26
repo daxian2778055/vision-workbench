@@ -171,7 +171,16 @@
       "exe_bytes": 9768448,
       "package_dir": "dist/VisionFlowPlatform-rc-20261025.13",
       "recorded_at": "2026-10-26",
-      "recorded_note": "当前装机包：ResultTablePanel 真正接入 ExportWriteCheck（上批失实）+ errorString 时序 + lastError 覆盖 catch(...)/显式失败分支/内层 catch + FeatureMatch 教学判红 + DataCode2D 口径 + OutputDataViewer 失败清端口"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261025.14 取代（后者含其全部改动）"
+    },
+    {
+      "tag": "rc-20261025.14",
+      "commit": "318eaefda7b15558f8c2b52dba04ee43563cc729",
+      "exe_md5": "4e6eaa229c72a5996f31e72dc0dc4dda",
+      "exe_bytes": 9769984,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261025.14",
+      "recorded_at": "2026-10-26",
+      "recorded_note": "当前装机包：FeatureMatch 原因不被覆盖 + TemplateMatch/FitCircle 正常失败补原因 + OutputDataViewer 成功清红字 + AnnotationDialog 查 mkpath + confirmDestructive/白名单抽共享 + UiGuardsTest 3 腿 + 原因键计数脚本入库并接进文档闸"
     }
   ],
   "legacy_backfilled": [
