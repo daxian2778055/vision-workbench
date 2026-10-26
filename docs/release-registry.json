@@ -162,7 +162,16 @@
       "exe_bytes": 9758208,
       "package_dir": "dist/VisionFlowPlatform-rc-20261025.12",
       "recorded_at": "2026-10-26",
-      "recorded_note": "当前装机包：五处导出补写状态检查（集中到 ExportWriteCheck）+ 两处模板教学保存判红 + 13 个 OpenCV 节点 catch 统一写 lastError + 用户表读失败单独显示 + OCR/条码识别不到改为判红（口径统一）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261025.13 取代（后者含其全部改动，并补上 .12 说明里失实的 ResultTablePanel 接入）"
+    },
+    {
+      "tag": "rc-20261025.13",
+      "commit": "dd3e9a404ac6d7d99612f26bda5a58ea11c992a3",
+      "exe_md5": "2024bb4e741eeff8fcf6a597454842c9",
+      "exe_bytes": 9768448,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261025.13",
+      "recorded_at": "2026-10-26",
+      "recorded_note": "当前装机包：ResultTablePanel 真正接入 ExportWriteCheck（上批失实）+ errorString 时序 + lastError 覆盖 catch(...)/显式失败分支/内层 catch + FeatureMatch 教学判红 + DataCode2D 口径 + OutputDataViewer 失败清端口"
     }
   ],
   "legacy_backfilled": [
