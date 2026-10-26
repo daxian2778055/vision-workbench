@@ -153,7 +153,16 @@
       "exe_bytes": 9740288,
       "package_dir": "dist/VisionFlowPlatform-rc-20261025.11",
       "recorded_at": "2026-10-26",
-      "recorded_note": "当前装机包：OpencvCalib 两容器同清（两轮标定腿）+ Board 不可达判红 + FindLine/FitCircle 句柄 + OCR/条码内层异常不再判绿 + 非 8 位显式拒绝（阈值/卡尺/Tesseract/ZXing/分类器）+ ImageAdd 常量相加 + 教学保存判红 + Blob 单遍可视化 + 五节点模型句柄 RAII"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261025.12 取代（后者含其全部改动）"
+    },
+    {
+      "tag": "rc-20261025.12",
+      "commit": "3565f00ab0ae8f0a398ceec33d2a77efdd38255c",
+      "exe_md5": "b2a1e26e4ea548aa40247fd5cb5c6eb3",
+      "exe_bytes": 9758208,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261025.12",
+      "recorded_at": "2026-10-26",
+      "recorded_note": "当前装机包：五处导出补写状态检查（集中到 ExportWriteCheck）+ 两处模板教学保存判红 + 13 个 OpenCV 节点 catch 统一写 lastError + 用户表读失败单独显示 + OCR/条码识别不到改为判红（口径统一）"
     }
   ],
   "legacy_backfilled": [
