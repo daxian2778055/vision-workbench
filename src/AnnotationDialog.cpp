@@ -13,6 +13,40 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
 
+namespace {
+
+/// 类别名白名单（2026-10-26 复核 P2）：可编辑下拉框没有校验器，类别名此前直接拼进目录路径，
+/// `..\..\x` 这类名字能把 PNG 写到标注目录之外（该对话框经 OpenvpcTrainClassifierNode 打开，
+/// 是活路径）。只允许字母/数字/下划线/连字符/中文；拒绝任何路径分隔符与 `.`/`..`。
+bool classLabelIsSafe(const QString &raw, QString *why)
+{
+    const QString s = raw.trimmed();
+    if (s.isEmpty()) {
+        if (why) *why = QStringLiteral("类别名为空");
+        return false;
+    }
+    if (s == QStringLiteral(".") || s == QStringLiteral("..")) {
+        if (why) *why = QStringLiteral("类别名不能是 . 或 ..");
+        return false;
+    }
+    for (const QChar &ch : s) {
+        const ushort u = ch.unicode();
+        const bool ok = (u >= 'a' && u <= 'z') || (u >= 'A' && u <= 'Z')
+                        || (u >= '0' && u <= '9') || ch == QLatin1Char('_')
+                        || ch == QLatin1Char('-') || (u >= 0x4E00 && u <= 0x9FFF);
+        if (!ok) {
+            if (why) {
+                *why = QStringLiteral("类别名含非法字符「%1」：只允许字母/数字/下划线/连字符/中文")
+                           .arg(ch);
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
 AnnotationDialog::AnnotationDialog(NodeBase *node, const QString &annotationDir, QWidget *parent)
     : QDialog(parent)
     , m_node(node)
@@ -93,6 +127,12 @@ void AnnotationDialog::refreshClassList()
         QTextStream ts(&cls);
         for (const QString &s : dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot))
             ts << s << '\n';
+        ts.flush();
+        // 写失败要有声（2026-10-26 复核 P3）：类别索引落后于实际目录，训练侧会漏类
+        if (ts.status() != QTextStream::Ok || !cls.flush())
+            m_hint->setText(QStringLiteral("classes.txt 写入失败：%1").arg(cls.errorString()));
+    } else {
+        m_hint->setText(QStringLiteral("classes.txt 打不开：%1").arg(cls.errorString()));
     }
 }
 
@@ -122,8 +162,23 @@ void AnnotationDialog::onRoiEdited(const RoiShape &shape)
     const int h = qBound(1, int(r.height()), mat.rows - y);
     cv::Mat crop = mat(cv::Rect(x, y, w, h)).clone();
 
+    // 类别名校验 + 目录包含检查（2026-10-26 复核 P2）：双保险，防 `..\..\x` 逃出标注目录
+    QString labelWhy;
+    if (!classLabelIsSafe(cls, &labelWhy)) {
+        m_hint->setText(QStringLiteral("类别名不可用：%1").arg(labelWhy));
+        return;
+    }
     const QString classDir = m_dir + QLatin1Char('/') + cls;
     QDir().mkpath(classDir);
+    {
+        const QString rootCanon = QFileInfo(m_dir).canonicalFilePath();
+        const QString dirCanon = QFileInfo(classDir).canonicalFilePath();
+        if (rootCanon.isEmpty() || dirCanon.isEmpty()
+            || !(dirCanon == rootCanon || dirCanon.startsWith(rootCanon + QLatin1Char('/')))) {
+            m_hint->setText(QStringLiteral("类别目录越出标注目录，已拒绝写入：%1").arg(classDir));
+            return;
+        }
+    }
     const QString path = classDir + QLatin1Char('/')
         + QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_hhmmss_zzz"))
         + QStringLiteral(".png");

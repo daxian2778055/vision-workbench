@@ -121,6 +121,7 @@ void TesseractOcrNode::run(bool /*autoSwitch*/)
         setOutputData(1, strObj);
     } catch (const std::exception &e) {
         VFP_DEBUG << "TesseractOcrNode error:" << e.what();
+        m_params[QStringLiteral("lastError")] = QString::fromUtf8(e.what());   // 原因到面板（2026-10-26）
         m_params["moduleStatus"] = false;
         m_outputImage.Clear();
     } catch (...) {

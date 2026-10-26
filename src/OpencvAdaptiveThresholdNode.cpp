@@ -66,6 +66,7 @@ void OpencvAdaptiveThresholdNode::run(bool /*autoSwitch*/)
         setOutputData(2, numObj);
     } catch (const std::exception &e) {
         VFP_DEBUG << "OpencvAdaptiveThresholdNode error:" << e.what();
+        m_params[QStringLiteral("lastError")] = QString::fromUtf8(e.what());   // 原因到面板（2026-10-26）
         m_params["moduleStatus"] = false;
         m_outputImage.Clear();
     } catch (...) {

@@ -176,9 +176,13 @@ bool requireGray8(const cv::Mat &mat, QString *why)
         return true;
     if (why) {
         const int bits = CV_ELEM_SIZE(mat.depth()) * 8;
+        // 补救路径必须写对（2026-10-26 复核）：早先指向「类型转换」的 byte 目标，那是
+        // convertTo(CV_8U)（scale=1，**饱和截断**）——12 位图会整片变 255。正确做法是先
+        // 「灰度拉伸」把值域压到 0-255 再转 8 位。
         *why = QStringLiteral(
                    "该算子只支持 8 位图（当前 %1 位/通道、%2 通道）："
-                   "请在前级接「类型转换」把图像转为 8 位，或改用支持该位深的算子")
+                   "请在前级先接「灰度拉伸」把值域压到 0-255，再接「类型转换」转为 8 位"
+                   "（直接转 byte 会饱和截断成一片白）；或改用支持该位深的算子")
                    .arg(bits)
                    .arg(mat.channels());
     }

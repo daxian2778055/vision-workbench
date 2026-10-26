@@ -8,6 +8,25 @@
 #include <QFileDialog>
 #include <QLabel>
 
+namespace {
+
+/// 破坏性确认框（2026-10-26 复核 P3）：静态 QMessageBox::question 不能指定默认键，
+/// 回车即执行删除；这里显式建框并把默认键设为"取消"。
+bool confirmDestructive(QWidget *parent, const QString &title, const QString &text)
+{
+    QMessageBox box(parent);
+    box.setIcon(QMessageBox::Question);
+    box.setWindowTitle(title);
+    box.setText(text);
+    QPushButton *yes = box.addButton(QStringLiteral("确定"), QMessageBox::YesRole);
+    QPushButton *no = box.addButton(QStringLiteral("取消"), QMessageBox::NoRole);
+    box.setDefaultButton(no);
+    box.exec();
+    return box.clickedButton() == yes;
+}
+
+} // namespace
+
 RecipeDialog::RecipeDialog(QWidget *parent)
     : QDialog(parent)
 {
@@ -153,9 +172,8 @@ void RecipeDialog::onDeleteRecipe()
         return;
     }
 
-    if (QMessageBox::question(this, QStringLiteral("\u786E\u8BA4"),
-                              QStringLiteral("\u786E\u5B9A\u8981\u5220\u9664\u914D\u65B9 \"%1\" \u5417\uFF1F").arg(item->text()))
-        == QMessageBox::Yes) {
+    // 破坏性操作默认落"否"（2026-10-26 复核 P3）
+    if (confirmDestructive(this, QStringLiteral("\u786E\u8BA4"), QStringLiteral("\u786E\u5B9A\u8981\u5220\u9664\u914D\u65B9 \"%1\" \u5417\uFF1F").arg(item->text()))) {
         RecipeManager::instance()->deleteRecipe(item->text());
         refreshRecipeList();
     }

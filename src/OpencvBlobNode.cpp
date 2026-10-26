@@ -109,6 +109,7 @@ void OpencvBlobNode::run(bool /*autoSwitch*/)
         setOutputData(3, areaObj);
     } catch (const std::exception &e) {
         VFP_DEBUG << "OpencvBlobNode error:" << e.what();
+        m_params[QStringLiteral("lastError")] = QString::fromUtf8(e.what());   // 原因到面板（2026-10-26）
         m_params["moduleStatus"] = false;
         m_outputImage.Clear();
     } catch (...) {
