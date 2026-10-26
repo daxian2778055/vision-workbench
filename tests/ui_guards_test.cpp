@@ -17,6 +17,8 @@ class UiGuardsTest : public QObject
 private slots:
     void annotationLabelAcceptsSafeNames();
     void annotationLabelRejectsTraversalAndSeparators();
+    void annotationClassDirStaysUnderRoot();
+    void annotationClassDirRejectsEscape();
     void finishTextExportSucceedsOnWritableFile();
 };
 
@@ -51,6 +53,46 @@ void UiGuardsTest::annotationLabelRejectsTraversalAndSeparators()
                  qPrintable(QStringLiteral("非法类别名被放行：%1").arg(name)));
         QVERIFY2(!why.isEmpty(), "拒绝时必须给出原因");
     }
+}
+
+void UiGuardsTest::annotationClassDirStaysUnderRoot()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+
+    QString dir;
+    QString why;
+    QVERIFY2(annotationClassDir(root.path(), QStringLiteral("划痕"), &dir, &why),
+             qPrintable(why));
+    QVERIFY(QDir(dir).exists());
+    QVERIFY2(dir.startsWith(root.path()), "类别目录没有落在标注目录下");
+    QVERIFY2(QFileInfo(dir).fileName() == QStringLiteral("划痕"), "目录名被改写");
+}
+
+void UiGuardsTest::annotationClassDirRejectsEscape()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    // 再嵌一层，让"逃逸目标"落在**自己的临时目录内**（<tmp>/evil），
+    // 不依赖共享的 %TEMP%——否则别的残留会让这条腿误红（2026-10-26 实测踩过）。
+    const QString rootPath = tmp.path() + QStringLiteral("/root");
+    QVERIFY(QDir().mkpath(rootPath));
+
+    // 逃逸名一律拒绝，且**目录里不能多出任何东西**（白名单在 mkpath 之前就拦掉）
+    const QStringList evil = {QStringLiteral("../evil"), QStringLiteral("../../evil"),
+                              QStringLiteral(".."), QStringLiteral("a/b"),
+                              QStringLiteral("a\\b")};
+    for (const QString &name : evil) {
+        QString dir;
+        QString why;
+        QVERIFY2(!annotationClassDir(rootPath, name, &dir, &why),
+                 qPrintable(QStringLiteral("逃逸名被放行：%1").arg(name)));
+        QVERIFY2(dir.isEmpty(), "被拒绝时不应交出目录");
+        QVERIFY2(!why.isEmpty(), "拒绝时必须给出原因");
+    }
+    // 事后核对：标注目录的父目录里不该出现 evil
+    const QString escaped = QDir(rootPath).absoluteFilePath(QStringLiteral("../evil"));
+    QVERIFY2(!QFileInfo::exists(escaped), "标注目录之外被创建了文件/目录");
 }
 
 void UiGuardsTest::finishTextExportSucceedsOnWritableFile()

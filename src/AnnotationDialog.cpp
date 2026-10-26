@@ -129,27 +129,13 @@ void AnnotationDialog::onRoiEdited(const RoiShape &shape)
     const int h = qBound(1, int(r.height()), mat.rows - y);
     cv::Mat crop = mat(cv::Rect(x, y, w, h)).clone();
 
-    // 类别名校验 + 目录包含检查（2026-10-26 复核 P2）：双保险，防 `..\..\x` 逃出标注目录
+    // 类别名 + 目录落点一次解析（2026-10-26）：白名单 → mkpath → canonical 包含检查都收在
+    // annotationClassDir 里，便于用临时目录单测"真的写不出去"（见 UiGuardsTest）。
+    QString classDir;
     QString labelWhy;
-    if (!annotationClassLabelIsSafe(cls, &labelWhy)) {
-        m_hint->setText(QStringLiteral("类别名不可用：%1").arg(labelWhy));
+    if (!annotationClassDir(m_dir, cls, &classDir, &labelWhy)) {
+        m_hint->setText(QStringLiteral("类别不可用：%1").arg(labelWhy));
         return;
-    }
-    const QString classDir = m_dir + QLatin1Char('/') + cls;
-    // mkpath 返回值要查（2026-10-26 复核）：创建失败时 canonical 为空，会落进下面的
-    // "越出标注目录"分支——诊断指错方向（真实原因是建目录失败：权限/磁盘/路径过长）。
-    if (!QDir().mkpath(classDir)) {
-        m_hint->setText(QStringLiteral("类别目录创建失败：%1（权限/磁盘/路径长度？）").arg(classDir));
-        return;
-    }
-    {
-        const QString rootCanon = QFileInfo(m_dir).canonicalFilePath();
-        const QString dirCanon = QFileInfo(classDir).canonicalFilePath();
-        if (rootCanon.isEmpty() || dirCanon.isEmpty()
-            || !(dirCanon == rootCanon || dirCanon.startsWith(rootCanon + QLatin1Char('/')))) {
-            m_hint->setText(QStringLiteral("类别目录越出标注目录，已拒绝写入：%1").arg(classDir));
-            return;
-        }
     }
     const QString path = classDir + QLatin1Char('/')
         + QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_hhmmss_zzz"))

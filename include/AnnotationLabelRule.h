@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QDir>
+#include <QFileInfo>
 #include <QString>
 
 /// 标注类别名的白名单规则（2026-10-26）：类别名会被直接拼进目录路径，`..\..\x` 这类名字能把
@@ -29,5 +31,36 @@ inline bool annotationClassLabelIsSafe(const QString &raw, QString *why)
             return false;
         }
     }
+    return true;
+}
+
+/// 在 root 之下解析并创建类别目录（2026-10-26）：名字校验 → mkpath → canonical 包含检查。
+/// 抽成纯函数的原因：对话框里这段依赖 QWidget / ROI / 图像，难以单测，而它正是"样本写到
+/// 标注目录之外"的最后一道闸——必须能在临时目录上真跑一遍（含 `..` 逃逸尝试）。
+/// 返回 false 时 why 给出可直接展示的原因；成功时 outDir 为已创建的类别目录。
+inline bool annotationClassDir(const QString &root, const QString &rawLabel,
+                               QString *outDir, QString *why)
+{
+    if (!annotationClassLabelIsSafe(rawLabel, why))
+        return false;
+    const QString label = rawLabel.trimmed();
+    const QString dir = root + QLatin1Char('/') + label;
+    if (!QDir().mkpath(dir)) {
+        if (why)
+            *why = QStringLiteral("类别目录创建失败（权限/磁盘/路径长度？）：%1").arg(dir);
+        return false;
+    }
+    // canonical 包含检查：即便名字过了白名单，也不允许实际落点跑到 root 之外
+    //（symlink / 大小写差异 / 平台路径规范化都在这一步兜住）。
+    const QString rootCanon = QFileInfo(root).canonicalFilePath();
+    const QString dirCanon = QFileInfo(dir).canonicalFilePath();
+    if (rootCanon.isEmpty() || dirCanon.isEmpty()
+        || !(dirCanon == rootCanon || dirCanon.startsWith(rootCanon + QLatin1Char('/')))) {
+        if (why)
+            *why = QStringLiteral("类别目录越出标注目录，已拒绝写入：%1").arg(dir);
+        return false;
+    }
+    if (outDir)
+        *outDir = dir;
     return true;
 }
