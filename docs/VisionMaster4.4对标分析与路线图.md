@@ -352,6 +352,16 @@
 | P3-4 循环体判据的内外层口径（原记："内/外层循环体判据近似"） | 改成"体所属的 LoopNode 是否在 members 内"逐节点算，不再用两集合并集 | **—**（原记：该腿；2026-10-25 更正：**等价重构**——按 `collectLoopBody` 的单入边规则，无法构造出能区分新旧两版判据的图。嵌套循环腿验的是"内部循环体必须允许"，不是"外部循环体必须拒绝"，故不能算它的守卫） |
 | P3-5 部署自检中间输出看不见 | 超时分支打印自检 stdout 尾部 12 行（NodeSelfTest 已逐节点 fflush） | — |
 
+**2026-10-26 第五批（上线前清零：UI 假成功 + 原因可见性 + 节点口径统一）**：
+
+| 项 | 修法 | 守卫 |
+|---|---|---|
+| P3 导出只查打开不查写成功（CodeExport / CommMonitor / InspectionResult / StatisticsReport×2） | 写完 `flush()` 后查 `QTextStream::status()` 并 `close()`，失败弹警告不再报“导出完成”。**报表用于追溯，静默截断属合规问题** | — |
+| P3 模板匹配教学保存失败仍绿（OpencvTemplateMatch / TemplateMatch） | 落盘失败 → `moduleStatus=false` + `lastError` + 返回（不再“本轮照常匹配、下一轮莫名其妙失败”） | — |
+| P3 非 8 位的拒绝原因到不了现场 | 六个网络节点 + 其余 13 个 OpenCV 节点的 `catch` 统一写 `lastError`（**原因键**，会推到结果面板） | — |
+| P3 用户表读取失败与空表同形 | `refreshUserTable` 用 `accountSurface()==Unreadable` 单独显示“读取用户表失败”，不再冒充“没有用户” | — |
+| **口径变更（有意）** OCR/条码“识别不到”由判绿改为**判红** | Ocr/Barcode 空结果 → `moduleStatus=false` + `lastError='未识别到…内容'`，与 ZXing/Tesseract 统一。需要“可选识别”的流程请在其后接条件节点。**项目未上线，此处按多数口径统一** | — |
+
 **仍开放（本轮未修，各有理由）**：
 
 | 项 | 位置 | 为什么没在这次改 |

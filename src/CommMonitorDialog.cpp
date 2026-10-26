@@ -128,11 +128,25 @@ void CommMonitorDialog::setupUI()
             QStringLiteral("comm_monitor.txt"), QStringLiteral("Text (*.txt)"));
         if (path.isEmpty()) return;
         QFile f(path);
-        if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream ts(&f);
-            ts << m_logView->toPlainText();
-            f.close();
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QMessageBox::warning(this, QStringLiteral("导出失败"),
+                                 QStringLiteral("无法写入 %1：%2").arg(path, f.errorString()));
+            return;
         }
+        QTextStream ts(&f);
+        ts << m_logView->toPlainText();
+        ts.flush();
+        // 写成功才算导出完成（2026-10-26 复核 P3）：原来连提示都没有，失败也无声
+        if (ts.status() != QTextStream::Ok || !f.flush()) {
+            const QString err = f.errorString();
+            f.close();
+            QMessageBox::warning(this, QStringLiteral("导出失败"),
+                                 QStringLiteral("写入未完成 %1：%2").arg(path, err));
+            return;
+        }
+        f.close();
+        QMessageBox::information(this, QStringLiteral("导出完成"),
+                                 QStringLiteral("已导出：\n%1").arg(path));
     });
     toolLayout->addWidget(saveBtn);
     mainLayout->addLayout(toolLayout);

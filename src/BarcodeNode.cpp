@@ -89,6 +89,11 @@ void BarcodeNode::run(bool /*autoSwitch*/)
             outObj->setHImage(output);
             setOutputData(0, outObj);
         }
+        // 未识别到条码判红（2026-10-26 复核：与 ZXing/Tesseract 统一口径）
+        if (measureOk && m_params[QStringLiteral("barcodeText")].toString().isEmpty()) {
+            measureOk = false;
+            m_params[QStringLiteral("lastError")] = QStringLiteral("未识别到条码内容");
+        }
         m_params["moduleStatus"] = measureOk;
     } catch (const HException &e) {
         VFP_DEBUG << "BarcodeNode error:" << e.ErrorMessage().TextA();

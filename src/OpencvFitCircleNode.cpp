@@ -125,6 +125,8 @@ void OpencvFitCircleNode::run(bool /*autoSwitch*/)
         resObj->setMeasureResult(res);
         setOutputData(1, resObj);
     } catch (const std::exception &e) {
+        m_params[QStringLiteral("lastError")] =
+            QString::fromUtf8(e.what());   // 原因到面板（2026-10-26）
         VFP_DEBUG << "OpencvFitCircleNode error:" << e.what();
         m_params["moduleStatus"] = false;
         m_outputImage.Clear();

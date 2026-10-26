@@ -144,6 +144,13 @@ void TemplateMatchNode::run(bool /*autoSwitch*/)
                 } catch (const HException &e) {
                     m_params[QStringLiteral("trainStatus")] =
                         QStringLiteral("模板保存失败: %1").arg(QString::fromLocal8Bit(e.ErrorMessage().TextA()));
+                    // 教学落盘失败必须判红（2026-10-26 复核 P3）：原来只写 trainStatus 就继续，
+                    // 现场以为模板已存，下一轮读不到文件才在别处失败。
+                    m_params[QStringLiteral("lastError")] =
+                        m_params[QStringLiteral("trainStatus")];
+                    m_params["moduleStatus"] = false;
+                    m_outputImage = m_inputImage;
+                    return;
                 }
             } else {
                 m_params[QStringLiteral("trainStatus")] = QStringLiteral("已训练（未保存模板文件）");

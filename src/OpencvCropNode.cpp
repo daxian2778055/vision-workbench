@@ -60,6 +60,8 @@ void OpencvCropNode::run(bool /*autoSwitch*/)
         outObj->setHImage(m_outputImage);
         setOutputData(1, outObj);
     } catch (const std::exception &e) {
+        m_params[QStringLiteral("lastError")] =
+            QString::fromUtf8(e.what());   // 原因到面板（2026-10-26）
         VFP_DEBUG << "OpencvCropNode error:" << e.what();
         m_params["moduleStatus"] = false;
         m_outputImage.Clear();

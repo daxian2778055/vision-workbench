@@ -103,6 +103,12 @@ void OcrNode::run(bool /*autoSwitch*/)
             outObj->setHImage(output);
             setOutputData(0, outObj);
         }
+        // 识别不到内容判红（2026-10-26 复核：与 ZXing/Tesseract 统一口径——"读不到"就是没测到，
+        // 不再以"绿 + 空串"放行；需要"可选 OCR"的流程请在其后接条件节点判断文本）
+        if (measureOk && m_params[QStringLiteral("ocrText")].toString().isEmpty()) {
+            measureOk = false;
+            m_params[QStringLiteral("lastError")] = QStringLiteral("未识别到文本内容");
+        }
         m_params["moduleStatus"] = measureOk;
     } catch (const HException &e) {
         VFP_DEBUG << "OcrNode error:" << e.ErrorMessage().TextA();

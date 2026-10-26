@@ -177,12 +177,17 @@ void OpencvUndistortNode::run(bool)
                                                      .arg(QString::fromUtf8(e.what()));
         m_params["moduleStatus"] = false;
     } catch (const HException &e) {
+        // HALCON 异常没有 what()，用 ErrorMessage().Text()（2026-10-26）
+        m_params[QStringLiteral("lastError")] =
+            QString::fromUtf8(e.ErrorMessage().Text());
         m_outputImage.Clear();
         setOutputData(1, QSharedPointer<DataObject>());
         m_params[QStringLiteral("calibNote")] = QStringLiteral("畸变校正失败(HException): %1")
                                                      .arg(QString::fromUtf8(e.ErrorMessage().Text()));
         m_params["moduleStatus"] = false;
     } catch (const std::exception &e) {
+        m_params[QStringLiteral("lastError")] =
+            QString::fromUtf8(e.what());   // 原因到面板（2026-10-26）
         m_outputImage.Clear();
         setOutputData(1, QSharedPointer<DataObject>());
         m_params[QStringLiteral("calibNote")] = QStringLiteral("畸变校正失败(std::exception): %1")

@@ -162,6 +162,14 @@ void UserManagementDialog::onRemoveUser()
 void UserManagementDialog::refreshUserTable()
 {
     m_userTable->setRowCount(0);
+    // 读不到与"没有用户"必须分开显示（2026-10-26 复核 P3）：原来两者都是空表，
+    // 现场会以为用户被删光。accountSurface() 的三态正是为这件事准备的。
+    if (AppDatabase::instance()->accountSurface() == AccountSurface::Unreadable) {
+        m_userTable->insertRow(0);
+        m_userTable->setItem(0, 0, new QTableWidgetItem(QStringLiteral("（读取用户表失败，请检查数据库）")));
+        m_userTable->setSpan(0, 0, 1, 4);
+        return;
+    }
     auto users = AppDatabase::instance()->queryUsers();
     for (const auto &u : users) {
         int row = m_userTable->rowCount();

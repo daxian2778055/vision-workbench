@@ -59,6 +59,8 @@ void OpencvPixelStatsNode::run(bool /*autoSwitch*/)
         meanObj->setValue(meanV);
         setOutputData(3, meanObj);
     } catch (const std::exception &e) {
+        m_params[QStringLiteral("lastError")] =
+            QString::fromUtf8(e.what());   // 原因到面板（2026-10-26）
         VFP_DEBUG << "OpencvPixelStatsNode error:" << e.what();
         m_params["moduleStatus"] = false;
         m_outputImage.Clear();

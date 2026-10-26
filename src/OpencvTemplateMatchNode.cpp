@@ -189,12 +189,26 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
                         // 走 setParamDirect：run() 里调 setParam 会重启预览定时器，形成自激。
                         setParamDirect(QStringLiteral("trainFromImage"), false);
                     } else {
+                        // 教学要落盘却没落成必须判红（2026-10-26 复核 P3）：原来只写 trainStatus
+                        // 就继续匹配——现场以为模板已存，下一轮读不到文件才在别处失败。
                         m_params[QStringLiteral("trainStatus")] =
                             QStringLiteral("模板保存失败: %1").arg(templatePath);
+                        m_params[QStringLiteral("lastError")] =
+                            m_params[QStringLiteral("trainStatus")];
+                        m_params["moduleStatus"] = false;
+                        m_outputImage = m_inputImage;
+                        setOutputData(1, QSharedPointer<DataObject>());
+                        return;
                     }
                 } catch (const std::exception &e) {
                     m_params[QStringLiteral("trainStatus")] =
                         QStringLiteral("模板保存异常: %1").arg(QString::fromLocal8Bit(e.what()));
+                    m_params[QStringLiteral("lastError")] =
+                        m_params[QStringLiteral("trainStatus")];
+                    m_params["moduleStatus"] = false;
+                    m_outputImage = m_inputImage;
+                    setOutputData(1, QSharedPointer<DataObject>());
+                    return;
                 }
             } else {
                 m_params[QStringLiteral("trainStatus")] = QStringLiteral("已训练（未保存文件）");

@@ -353,6 +353,8 @@ void OpencvFeatureMatchNode::run(bool /*autoSwitch*/)
         resObj->setMeasureResult(res);
         setOutputData(1, resObj);
     } catch (const std::exception &e) {
+        m_params[QStringLiteral("lastError")] =
+            QString::fromUtf8(e.what());   // 原因到面板（2026-10-26）
         VFP_DEBUG << kTag << "error:" << e.what();
         fail(QStringLiteral("异常: %1").arg(QString::fromLocal8Bit(e.what())));
     } catch (...) {

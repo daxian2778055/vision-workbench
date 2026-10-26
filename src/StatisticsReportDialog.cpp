@@ -567,6 +567,16 @@ void StatisticsReportDialog::exportCsv()
     ts.setEncoding(QStringConverter::Utf8);
     ts << StatisticsReport::toCsv(m_summary, QDateTime::currentDateTime(), targetPercent());
     ts.flush();
+    // 写成功才算导出完成（2026-10-26 复核 P3）：open 成功不等于写成功，磁盘满/网络盘断开
+    // 会在 flush 或 close 时暴露。报表用于追溯，静默截断比报错更糟。
+    if (ts.status() != QTextStream::Ok || !f.flush()) {
+        const QString err = f.errorString();
+        f.close();
+        QMessageBox::warning(this, QStringLiteral("导出失败"),
+                             QStringLiteral("写入未完成 %1：%2").arg(path, err));
+        return;
+    }
+    f.close();
     QMessageBox::information(this, QStringLiteral("导出完成"), QStringLiteral("已导出：\n%1").arg(path));
 }
 
@@ -590,6 +600,15 @@ void StatisticsReportDialog::exportHtml()
                               : QStringLiteral("VisionFlowPlatform 统计报表 - %1").arg(currentFlowFilter());
     ts << StatisticsReport::toHtml(m_summary, title, QDateTime::currentDateTime(), targetPercent());
     ts.flush();
+    // 同上：写成功才算导出完成（2026-10-26 复核 P3）
+    if (ts.status() != QTextStream::Ok || !f.flush()) {
+        const QString err = f.errorString();
+        f.close();
+        QMessageBox::warning(this, QStringLiteral("导出失败"),
+                             QStringLiteral("写入未完成 %1：%2").arg(path, err));
+        return;
+    }
+    f.close();
     QMessageBox::information(this, QStringLiteral("导出完成"),
                              QStringLiteral("已导出（自包含 HTML，离线可看）：\n%1").arg(path));
 }
