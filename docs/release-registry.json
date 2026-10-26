@@ -180,7 +180,16 @@
       "exe_bytes": 9769984,
       "package_dir": "dist/VisionFlowPlatform-rc-20261025.14",
       "recorded_at": "2026-10-26",
-      "recorded_note": "当前装机包：FeatureMatch 原因不被覆盖 + TemplateMatch/FitCircle 正常失败补原因 + OutputDataViewer 成功清红字 + AnnotationDialog 查 mkpath + confirmDestructive/白名单抽共享 + UiGuardsTest 3 腿 + 原因键计数脚本入库并接进文档闸"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261025.15 取代（后者含其全部改动）"
+    },
+    {
+      "tag": "rc-20261025.15",
+      "commit": "8a4884bc63faea002d02b7ba27cba86f03d9de87",
+      "exe_md5": "ef5b39a14652377ad0d94a50ed60a0f8",
+      "exe_bytes": 9770496,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261025.15",
+      "recorded_at": "2026-10-26",
+      "recorded_note": "当前装机包：标注类别目录解析抽成 annotationClassDir（白名单 + mkpath + canonical 包含）+ 文件系统级腿两条（合法落点 / 逃逸拒绝并事后核对无残留）"
     }
   ],
   "legacy_backfilled": [
