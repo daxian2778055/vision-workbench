@@ -198,7 +198,16 @@
       "exe_bytes": 9770496,
       "package_dir": "dist/VisionFlowPlatform-rc-20261025.16",
       "recorded_at": "2026-10-26",
-      "recorded_note": "当前装机包：计数脚本 fail-closed + 四数比对、canonical 包含判据抽谓词并补边界腿、annotationClassDir 拒空 root 且失败清 outDir、lastError 自动化腿"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261025.17 取代（后者修了 .16 未覆盖的 junction 绕过）"
+    },
+    {
+      "tag": "rc-20261025.17",
+      "commit": "97caedc91d0494d56f72cde460638d6bbf3f82ac",
+      "exe_md5": "482c7d2ae97a833f8a5f5a32bddc1826",
+      "exe_bytes": 9771008,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261025.17",
+      "recorded_at": "2026-10-26",
+      "recorded_note": "当前装机包：修 junction 绕过标注目录包含检查（canonicalFilePath 不解析目录联接 → 新增 resolveFinalPath 走 GetFinalPathNameByHandleW）+ junction 端到端腿 + 空 root 原因文本收紧 + 出参同口径清空"
     }
   ],
   "legacy_backfilled": [
