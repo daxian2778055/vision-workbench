@@ -9,6 +9,7 @@
 #include <QMessageBox>
 #include <QFile>
 #include <QTextStream>
+#include "ExportWriteCheck.h"
 
 InspectionResultDialog::InspectionResultDialog(QWidget *parent)
     : QDialog(parent)
@@ -134,16 +135,9 @@ void InspectionResultDialog::onExport()
         out << QStringLiteral("\n");
     }
 
-    out.flush();
-    // 写成功才算导出成功（2026-10-26 复核 P3）：open() 成功不代表写完成功
-    if (out.status() != QTextStream::Ok) {
-        const QString err = file.errorString();
-        file.close();
-        QMessageBox::warning(this, QStringLiteral("提示"),
-            QStringLiteral("写入未完成（磁盘满或权限？）：%1").arg(err));
+    // 写成功才算导出成功（2026-10-26）：收尾检查集中在 ExportWriteCheck
+    if (!ExportWriteCheck::finishTextExport(this, file, out, filePath))
         return;
-    }
-    file.close();
     QMessageBox::information(this, QStringLiteral("\u6210\u529F"), QStringLiteral("\u68C0\u6D4B\u7ED3\u679C\u5DF2\u5BFC\u51FA"));
 }
 

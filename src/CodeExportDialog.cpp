@@ -10,6 +10,7 @@
 #include <QMessageBox>
 #include <QApplication>
 #include <QClipboard>
+#include "ExportWriteCheck.h"
 
 CodeExportDialog::CodeExportDialog(const QList<FlowScene *> &flows, QWidget *parent)
     : QDialog(parent)
@@ -188,17 +189,10 @@ void CodeExportDialog::onSave()
     if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         QTextStream out(&file);
         out << m_codeView->toPlainText();
-        out.flush();
-        // 写成功才算导出成功（2026-10-26 复核 P3）：open() 成功不代表写完成功——
-        // 磁盘满/网络盘断开都在 flush 或 close 时才暴露，原来会假报"已保存"。
-        if (out.status() != QTextStream::Ok) {
-            const QString err = file.errorString();
-            file.close();
-            QMessageBox::warning(this, QStringLiteral("提示"),
-                QStringLiteral("写入未完成（磁盘满或权限？）：%1").arg(err));
+        // 写成功才算导出成功（2026-10-26）：open() 成功不代表写完成功，收尾检查集中在
+        // ExportWriteCheck（磁盘满/网络盘断开只在 flush 或 close 时暴露）。
+        if (!ExportWriteCheck::finishTextExport(this, file, out, path))
             return;
-        }
-        file.close();
         QMessageBox::information(this, QStringLiteral("\u63D0\u793A"),
             QStringLiteral("\u5DF2\u4FDD\u5B58\u5230: %1").arg(path));
     } else {
