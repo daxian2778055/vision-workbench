@@ -111,6 +111,9 @@ void OpencvFitCircleNode::run(bool /*autoSwitch*/)
         m_outputImage = m_inputImage;
 
         if (!fitted) {
+            // 未拟合给出原因（2026-10-26 复核）：原来只判红就返回
+            m_params[QStringLiteral("lastError")] =
+                QStringLiteral("圆拟合失败（有效边缘点不足，本轮 %1 点）").arg(bestPoints);
             setOutputData(1, QSharedPointer<DataObject>());
             return;
         }

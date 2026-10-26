@@ -1,4 +1,5 @@
 #include "UserManagementDialog.h"
+#include "ConfirmDestructive.h"
 #include "AppDatabase.h"
 #include "AppLog.h"
 #include "SessionManager.h"
@@ -8,25 +9,6 @@
 #include <QMessageBox>
 #include <QInputDialog>
 #include <QLabel>
-
-namespace {
-
-/// 破坏性确认框（2026-10-26 复核 P3）：静态 QMessageBox::question 不能指定默认键，
-/// 回车即执行删除；这里显式建框并把默认键设为"取消"。
-bool confirmDestructive(QWidget *parent, const QString &title, const QString &text)
-{
-    QMessageBox box(parent);
-    box.setIcon(QMessageBox::Question);
-    box.setWindowTitle(title);
-    box.setText(text);
-    QPushButton *yes = box.addButton(QStringLiteral("确定"), QMessageBox::YesRole);
-    QPushButton *no = box.addButton(QStringLiteral("取消"), QMessageBox::NoRole);
-    box.setDefaultButton(no);
-    box.exec();
-    return box.clickedButton() == yes;
-}
-
-} // namespace
 
 UserManagementDialog::UserManagementDialog(QWidget *parent)
     : QDialog(parent)

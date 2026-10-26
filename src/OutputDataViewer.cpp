@@ -83,6 +83,9 @@ void OutputDataViewer::onNodeExecuted(NodeBase *node, bool success)
 
     if (success) {
         refresh();
+        // 成功要清掉上一轮的红字（2026-10-26 复核）：原来只 refresh()，失败提示会一直挂着
+        m_statusLabel->setText(QStringLiteral("执行成功"));
+        m_statusLabel->setStyleSheet(QStringLiteral("color: green;"));
     } else {
         // 失败轮必须清掉上一轮的端口数据（2026-10-26 复核 P3）：原来只改状态标签，
         // 界面上还挂着上一轮的图像与数值，与"本轮失败"直接矛盾。

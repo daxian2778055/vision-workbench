@@ -335,6 +335,11 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
         m_params[QStringLiteral("matchAngle")] = bestAngle;
         m_params[QStringLiteral("matchScale")] = bestScale;
         m_params["moduleStatus"] = (bestScore >= minScore);
+        if (bestScore < minScore) {
+            // 未匹配也要说明原因（2026-10-26 复核）：只判红，面板上看不到差多少
+            m_params[QStringLiteral("lastError")] =
+                QStringLiteral("匹配分数 %1 低于阈值 %2").arg(bestScore).arg(minScore);
+        }
         const QString fixtureName =
             m_params.value(QStringLiteral("writeFixtureName")).toString().trimmed();
         if (!fixtureName.isEmpty() && bestScore >= minScore) {
@@ -355,6 +360,8 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
         setOutputData(1, resObj);
     } catch (const std::exception &e) {
         VFP_DEBUG << "OpencvTemplateMatchNode error:" << e.what();
+        m_params[QStringLiteral("lastError")] =
+            QString::fromUtf8(e.what());   // 与 catch(...) 对齐（2026-10-26 复核）
         m_params["moduleStatus"] = false;
         m_outputImage.Clear();
     } catch (...) {

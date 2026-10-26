@@ -1145,6 +1145,14 @@ if(MSVC)
     vfp_configure_gui_test(OpencvBridgeTest)
 endif()
 
+# UI 守卫（2026-10-26）：标注类别名白名单 + 导出写检查
+if(MSVC)
+    add_executable(ui_guards_test tests/ui_guards_test.cpp)
+    target_link_libraries(ui_guards_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    vfp_add_qtest(NAME UiGuardsTest TARGET ui_guards_test)
+    vfp_configure_gui_test(UiGuardsTest)
+endif()
+
 # 测量簇静默绿灯守卫（2026-10-25 复核 P2-4）：内层 HALCON 异常不得再判绿
 if(MSVC)
     add_executable(measure_green_guard_test tests/measure_green_guard_test.cpp)
@@ -1396,7 +1404,7 @@ if(MSVC)
     set(VFP_TESTS NodeCoreTest OpencvSerializationTest IntegrationTest DatabaseTest PerfTest
                   ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest CameraIoTest
                   DnnSegmentTest OpencvDefectAlignTest SoakTest StatisticsReportTest SchemePackageTest
-                  I18nTest SubFlowTest EditLockReleaseTest RoundAbortSummaryTest UndoHistoryAfterLoadTest NodeExceptionExitTest RejectedConnectionUndoTest DbThreadConnectionCleanupTest CameraTaskLedgerTest GlobalCameraConsumerGateTest CommDeviceGhostTest OpencvBridgeTest MeasureGreenGuardTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
+                  I18nTest SubFlowTest EditLockReleaseTest RoundAbortSummaryTest UndoHistoryAfterLoadTest NodeExceptionExitTest RejectedConnectionUndoTest DbThreadConnectionCleanupTest CameraTaskLedgerTest GlobalCameraConsumerGateTest CommDeviceGhostTest OpencvBridgeTest MeasureGreenGuardTest UiGuardsTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
                   FactoryPasswordGuardTest FeatureMatchTest CalibChainTest OpencvNodesTest
                   ProjectPathsTest FlowCachePurgeLedgerTest ExecutionControlPolicyTest
                   AuxDialogMenuRouterTest ModuleEditorRegistryTest UITranslatorTest

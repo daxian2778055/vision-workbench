@@ -18,9 +18,9 @@ inline QString unknownExceptionReason()
 }
 
 /// 规则：键 == "lastError" 或以 "Note" 结尾。
-/// 依据（2026-10-26 重测的写侧站点表，共 172 处）：lastError 104 / *Note 35 / trainStatus 33。
-/// 早期版本记的是 84 处（lastError 50），之后逐批补了原因写入，数字已过期——统计口径见
-/// build/count_reasons.py 的一次性脚本（不入库），改动原因键后请重测。
+/// 依据（2026-10-26 重测的写侧站点表，共 173 处）：lastError 105 / *Note 35 / trainStatus 33。
+/// 数字一律以 `python tools/reason_key_sites.py` 的输出为准（`--check` 会与本注释比对，
+/// 不一致退出 1）——早先写"一次性脚本、不入库"导致数值无法复现，已改成入库脚本。
 /// 旧记（原文照抄）：共 84 处：lastError 50 / calibNote 24 / matchNote 4 /
 /// transformNote 3 / correctNote 3；这 5 个键没有一个被声明成参数面板可配项
 /// （makeXxxParam / registerParams 里 0 命中）⇒ 不会把用户配置值当成失败原因。

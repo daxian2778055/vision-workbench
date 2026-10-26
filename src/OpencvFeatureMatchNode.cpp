@@ -365,13 +365,12 @@ void OpencvFeatureMatchNode::run(bool /*autoSwitch*/)
         resObj->setMeasureResult(res);
         setOutputData(1, resObj);
     } catch (const std::exception &e) {
-        m_params[QStringLiteral("lastError")] =
-            QString::fromUtf8(e.what());   // 原因到面板（2026-10-26）
+        // 原因只写一次、由 fail 落 lastError（2026-10-26 复核）：此前先写 lastError 再调
+        // fail(...)，被 fail 里的 why 覆盖，"非 std::exception"那层信息就丢了。
         VFP_DEBUG << kTag << "error:" << e.what();
         fail(QStringLiteral("异常: %1").arg(QString::fromLocal8Bit(e.what())));
     } catch (...) {
-        m_params[QStringLiteral("lastError")] = unknownExceptionReason();
-        fail(QStringLiteral("未知异常"));
+        fail(unknownExceptionReason());
     }
 }
 

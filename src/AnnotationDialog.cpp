@@ -1,4 +1,5 @@
 #include "AnnotationDialog.h"
+#include "AnnotationLabelRule.h"
 #include "HalconNode.h"
 #include "OpencvUtil.h"
 #include <QVBoxLayout>
@@ -12,40 +13,6 @@
 #include <QDateTime>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
-
-namespace {
-
-/// 类别名白名单（2026-10-26 复核 P2）：可编辑下拉框没有校验器，类别名此前直接拼进目录路径，
-/// `..\..\x` 这类名字能把 PNG 写到标注目录之外（该对话框经 OpenvpcTrainClassifierNode 打开，
-/// 是活路径）。只允许字母/数字/下划线/连字符/中文；拒绝任何路径分隔符与 `.`/`..`。
-bool classLabelIsSafe(const QString &raw, QString *why)
-{
-    const QString s = raw.trimmed();
-    if (s.isEmpty()) {
-        if (why) *why = QStringLiteral("类别名为空");
-        return false;
-    }
-    if (s == QStringLiteral(".") || s == QStringLiteral("..")) {
-        if (why) *why = QStringLiteral("类别名不能是 . 或 ..");
-        return false;
-    }
-    for (const QChar &ch : s) {
-        const ushort u = ch.unicode();
-        const bool ok = (u >= 'a' && u <= 'z') || (u >= 'A' && u <= 'Z')
-                        || (u >= '0' && u <= '9') || ch == QLatin1Char('_')
-                        || ch == QLatin1Char('-') || (u >= 0x4E00 && u <= 0x9FFF);
-        if (!ok) {
-            if (why) {
-                *why = QStringLiteral("类别名含非法字符「%1」：只允许字母/数字/下划线/连字符/中文")
-                           .arg(ch);
-            }
-            return false;
-        }
-    }
-    return true;
-}
-
-} // namespace
 
 AnnotationDialog::AnnotationDialog(NodeBase *node, const QString &annotationDir, QWidget *parent)
     : QDialog(parent)
@@ -164,12 +131,17 @@ void AnnotationDialog::onRoiEdited(const RoiShape &shape)
 
     // 类别名校验 + 目录包含检查（2026-10-26 复核 P2）：双保险，防 `..\..\x` 逃出标注目录
     QString labelWhy;
-    if (!classLabelIsSafe(cls, &labelWhy)) {
+    if (!annotationClassLabelIsSafe(cls, &labelWhy)) {
         m_hint->setText(QStringLiteral("类别名不可用：%1").arg(labelWhy));
         return;
     }
     const QString classDir = m_dir + QLatin1Char('/') + cls;
-    QDir().mkpath(classDir);
+    // mkpath 返回值要查（2026-10-26 复核）：创建失败时 canonical 为空，会落进下面的
+    // "越出标注目录"分支——诊断指错方向（真实原因是建目录失败：权限/磁盘/路径过长）。
+    if (!QDir().mkpath(classDir)) {
+        m_hint->setText(QStringLiteral("类别目录创建失败：%1（权限/磁盘/路径长度？）").arg(classDir));
+        return;
+    }
     {
         const QString rootCanon = QFileInfo(m_dir).canonicalFilePath();
         const QString dirCanon = QFileInfo(classDir).canonicalFilePath();

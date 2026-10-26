@@ -125,6 +125,18 @@ foreach ($f in $docFiles) {
     }
 }
 
+# ---------- C) reason-key site count (docs must quote a runnable script's output) ----------
+# NodeResultFields.h states "共 N 处：lastError X"; the numbers must match tools/reason_key_sites.py
+# so that the doc claim stays reproducible instead of quoting a throwaway session count.
+$reasonScript = Join-Path $PSScriptRoot 'reason_key_sites.py'
+if (Test-Path $reasonScript) {
+    $reasonOut = & python $reasonScript --check 2>&1
+    Write-Host ($reasonOut -join "`n")
+    if ($LASTEXITCODE -ne 0) {
+        $Problems += 'reason-key site count in include/NodeResultFields.h disagrees with tools/reason_key_sites.py'
+    }
+}
+
 # ---------- result ----------
 Write-Host "doc_check: $($docFiles.Count) markdown files under '$DocsDir'"
 Write-Host "  A) delivered-node claims checked : $claimsChecked"
