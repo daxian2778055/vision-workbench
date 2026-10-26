@@ -2,13 +2,18 @@
 # -*- coding: utf-8 -*-
 """统计 src/include 里"原因键"的写侧站点数（NodeResultFields.h 的注释引用本脚本输出）。
 
-为什么要有这个脚本：NodeResultFields.h 的注释里写着"共 N 处：lastError X / ..."，
-早先是在临时会话里数的、语句说"一次性不入库"——那种声明的数值没人能复现。现在把统计
-逻辑落进仓，注释里的数字一律以本脚本输出为准。
+为什么要有这个脚本：NodeResultFields.h 的注释里写着"共 N 处：lastError X / *Note Y /
+trainStatus Z"，早先是在临时会话里数的、声明"一次性不入库"——那种数值没人能复现。
+现在统计逻辑在仓里，注释里的四个数一律以本脚本输出为准。
 
 用法：
     python tools/reason_key_sites.py          # 打印计数表
-    python tools/reason_key_sites.py --check  # 与 NodeResultFields.h 注释里的数字比对（不一致退出 1）
+    python tools/reason_key_sites.py --check  # 与头文件注释比对四个数（不一致/找不到声明 → 退出 1）
+
+--check 的契约是 **fail-closed**（2026-10-26 复核）：
+  * 找不到计数声明 → 退出 1（早先打印"跳过"并返回 0，等于静默放行）；
+  * 四个数（合计 / lastError / *Note / trainStatus）逐个比对，不再只看前两个
+    （夹具实测过：头文件把 *Note 写成 99 也能 CHECK OK）。
 """
 from __future__ import annotations
 
@@ -17,12 +22,14 @@ import io
 import re
 import sys
 
-ROOT = "."
 HEADER = "include/NodeResultFields.h"
 
 PAT_LAST = re.compile(r'm_params\[QStringLiteral\("lastError"\)\]\s*=')
 PAT_NOTE = re.compile(r'm_params\[QStringLiteral\("(\w*Note)"\)\]\s*=')
 PAT_TRAIN = re.compile(r'm_params\[QStringLiteral\("trainStatus"\)\]\s*=')
+# 头文件里的四元组：共 N 处）：lastError X / *Note Y / trainStatus Z
+PAT_CLAIM = re.compile(
+    r"共\s*(\d+)\s*处）：lastError\s*(\d+)\s*/\s*\*Note\s*(\d+)\s*/\s*trainStatus\s*(\d+)")
 
 
 def count() -> dict:
@@ -49,18 +56,29 @@ def main() -> int:
     for k, v in sorted(c["per_note"].items()):
         sys.stdout.write("  %s=%d\n" % (k, v))
 
-    if "--check" in sys.argv:
-        text = io.open(HEADER, encoding="utf-8").read()
-        m = re.search(r"共 (\d+) 处）：lastError (\d+)", text)
-        if not m:
-            sys.stdout.write("CHECK: 头文件里找不到计数声明，跳过\n")
-            return 0
-        want_total, want_last = int(m.group(1)), int(m.group(2))
-        if want_total != c["total"] or want_last != c["lastError"]:
-            sys.stdout.write("CHECK FAIL: 注释写的是 %d 处 / lastError %d，实测 %d / %d\n"
-                             % (want_total, want_last, c["total"], c["lastError"]))
-            return 1
-        sys.stdout.write("CHECK OK: 注释与实测一致\n")
+    if "--check" not in sys.argv:
+        return 0
+
+    text = io.open(HEADER, encoding="utf-8").read()
+    m = PAT_CLAIM.search(text)
+    if not m:
+        # fail-closed：声明没了就没人知道该对到哪，必须判红
+        sys.stdout.write("CHECK FAIL: %s 里找不到计数声明（共 N 处）：lastError X / *Note Y / "
+                         "trainStatus Z），无法核对——按 fail-closed 判红\n" % HEADER)
+        return 1
+
+    want = {
+        "total": int(m.group(1)),
+        "lastError": int(m.group(2)),
+        "note": int(m.group(3)),
+        "trainStatus": int(m.group(4)),
+    }
+    bad = [k for k in ("total", "lastError", "note", "trainStatus") if want[k] != c[k]]
+    if bad:
+        for k in bad:
+            sys.stdout.write("CHECK FAIL: %s 声明 %d，实测 %d\n" % (k, want[k], c[k]))
+        return 1
+    sys.stdout.write("CHECK OK: 四个数与声明一致\n")
     return 0
 
 

@@ -34,13 +34,35 @@ inline bool annotationClassLabelIsSafe(const QString &raw, QString *why)
     return true;
 }
 
+/// canonical 包含谓词（2026-10-26）：dirCanon 必须等于 rootCanon，或位于其**子路径**下。
+/// 抽成纯谓词的原因：这是 symlink / junction 场景的最后一道闸，而名字白名单会先把明显的
+/// 逃逸名挡掉，端到端用例无法单独触发它（实测：只撤掉包含检查，五条腿仍全绿）。有了谓词
+/// 就能直接钉住边界（`/a/bc` 不算 `/a/b` 的子路径）。
+inline bool annotationPathIsInside(const QString &rootCanon, const QString &dirCanon)
+{
+    if (rootCanon.isEmpty() || dirCanon.isEmpty())
+        return false;
+    return dirCanon == rootCanon
+           || dirCanon.startsWith(rootCanon + QLatin1Char('/'));
+}
+
 /// 在 root 之下解析并创建类别目录（2026-10-26）：名字校验 → mkpath → canonical 包含检查。
 /// 抽成纯函数的原因：对话框里这段依赖 QWidget / ROI / 图像，难以单测，而它正是"样本写到
 /// 标注目录之外"的最后一道闸——必须能在临时目录上真跑一遍（含 `..` 逃逸尝试）。
-/// 返回 false 时 why 给出可直接展示的原因；成功时 outDir 为已创建的类别目录。
+/// 返回 false 时 why 给出可直接展示的原因，且 **outDir 一定被清空**（不把上次的值留给调用方）；
+/// 成功时 outDir 为已创建的类别目录。
 inline bool annotationClassDir(const QString &root, const QString &rawLabel,
                                QString *outDir, QString *why)
 {
+    if (outDir)
+        outDir->clear();          // 失败路径不得留下上一次的目录（2026-10-26 复核）
+    if (root.trimmed().isEmpty()) {
+        // 空 root 会让 dir 变成 "/<label>"，而 mkpath 在包含检查之前就跑——必须提前拒
+        //（当前唯一调用方总会补成 cwd/annotations，但本函数定位是可复用的最后一道闸）。
+        if (why)
+            *why = QStringLiteral("标注目录未设置，无法保存样本");
+        return false;
+    }
     if (!annotationClassLabelIsSafe(rawLabel, why))
         return false;
     const QString label = rawLabel.trimmed();
@@ -50,12 +72,10 @@ inline bool annotationClassDir(const QString &root, const QString &rawLabel,
             *why = QStringLiteral("类别目录创建失败（权限/磁盘/路径长度？）：%1").arg(dir);
         return false;
     }
-    // canonical 包含检查：即便名字过了白名单，也不允许实际落点跑到 root 之外
-    //（symlink / 大小写差异 / 平台路径规范化都在这一步兜住）。
+    // canonical 包含检查（symlink / junction / 大小写差异都在这步兜住）
     const QString rootCanon = QFileInfo(root).canonicalFilePath();
     const QString dirCanon = QFileInfo(dir).canonicalFilePath();
-    if (rootCanon.isEmpty() || dirCanon.isEmpty()
-        || !(dirCanon == rootCanon || dirCanon.startsWith(rootCanon + QLatin1Char('/')))) {
+    if (!annotationPathIsInside(rootCanon, dirCanon)) {
         if (why)
             *why = QStringLiteral("类别目录越出标注目录，已拒绝写入：%1").arg(dir);
         return false;

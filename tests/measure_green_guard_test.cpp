@@ -5,6 +5,7 @@
 // 断言节点必须判红、测量端口必须为空。
 #include "FitLineNode.h"
 #include "FitCircleNode.h"
+#include "OpencvAngleNode.h"
 #include "NodeBase.h"
 #include "HalconNode.h"
 
@@ -18,6 +19,8 @@ class MeasureGreenGuardTest : public QObject
 private slots:
     void fitLineInnerExceptionJudgesRed();
     void fitCircleInnerExceptionJudgesRed();
+    // 正常失败（非异常）也要带可读原因——2026-10-26 复核要求的自动化腿
+    void degenerateAngleCarriesReadableReason();
 };
 
 using namespace HalconCpp;
@@ -70,6 +73,29 @@ void MeasureGreenGuardTest::fitCircleInnerExceptionJudgesRed()
         reasons << QStringLiteral("测量端口非空（异常路径不该有结果）");
     QVERIFY2(reasons.isEmpty(),
              qPrintable(QStringLiteral("FitCircle 静默绿灯：") + reasons.join(QStringLiteral("; "))));
+}
+
+void MeasureGreenGuardTest::degenerateAngleCarriesReadableReason()
+{
+    // 线段 A 的两端点重合 ⇒ 夹角无定义。判红之外，面板必须能看到为什么
+    //（lastError 是"原因键"，执行器会把它推到结果面板）。
+    OpencvAngleNode node;
+    node.init();
+    node.setParam(QStringLiteral("r1a"), 100);
+    node.setParam(QStringLiteral("c1a"), 100);
+    node.setParam(QStringLiteral("r1b"), 100);   // 与 r1a/c1a 重合
+    node.setParam(QStringLiteral("c1b"), 100);
+    node.setParam(QStringLiteral("r2a"), 100);
+    node.setParam(QStringLiteral("c2a"), 200);
+    node.setParam(QStringLiteral("r2b"), 200);
+    node.setParam(QStringLiteral("c2b"), 200);
+    node.run(false);
+
+    QVERIFY2(!node.getParam(QStringLiteral("moduleStatus")).toBool(),
+             "线段退化却判了绿");
+    const QString why = node.getParam(QStringLiteral("lastError")).toString();
+    QVERIFY2(!why.isEmpty(), "判红但没有 lastError：面板上看不到原因");
+    QVERIFY2(why.contains(QStringLiteral("线段")), qPrintable(QStringLiteral("原因不含关键词：%1").arg(why)));
 }
 
 QTEST_MAIN(MeasureGreenGuardTest)

@@ -19,6 +19,8 @@ private slots:
     void annotationLabelRejectsTraversalAndSeparators();
     void annotationClassDirStaysUnderRoot();
     void annotationClassDirRejectsEscape();
+    void annotationClassDirRejectsEmptyRoot();
+    void annotationPathIsInsideBoundaries();
     void finishTextExportSucceedsOnWritableFile();
 };
 
@@ -78,21 +80,52 @@ void UiGuardsTest::annotationClassDirRejectsEscape()
     const QString rootPath = tmp.path() + QStringLiteral("/root");
     QVERIFY(QDir().mkpath(rootPath));
 
-    // 逃逸名一律拒绝，且**目录里不能多出任何东西**（白名单在 mkpath 之前就拦掉）
-    const QStringList evil = {QStringLiteral("../evil"), QStringLiteral("../../evil"),
-                              QStringLiteral(".."), QStringLiteral("a/b"),
-                              QStringLiteral("a\\b")};
+    // 逃逸名一律拒绝，且**目录里不能多出任何东西**（白名单在 mkpath 之前就拦掉）。
+    // 注意：`../../evil` 的落点是 QTemporaryDir 的父目录（共享 %TEMP%），本用例无法可靠
+    // 核对它与别人的残留——不列进来（2026-10-26 复核：原先列了却只核对 <tmp>/evil）。
+    const QStringList evil = {QStringLiteral("../evil"), QStringLiteral(".."),
+                              QStringLiteral("a/b"), QStringLiteral("a\\b")};
     for (const QString &name : evil) {
-        QString dir;
+        QString dir = QStringLiteral("sentinel");   // 失败时函数必须清空（否则复用时踩坑）
         QString why;
         QVERIFY2(!annotationClassDir(rootPath, name, &dir, &why),
                  qPrintable(QStringLiteral("逃逸名被放行：%1").arg(name)));
-        QVERIFY2(dir.isEmpty(), "被拒绝时不应交出目录");
+        QVERIFY2(dir.isEmpty(), "被拒绝时不应交出目录（也不应留下上一次的值）");
         QVERIFY2(!why.isEmpty(), "拒绝时必须给出原因");
     }
     // 事后核对：标注目录的父目录里不该出现 evil
     const QString escaped = QDir(rootPath).absoluteFilePath(QStringLiteral("../evil"));
     QVERIFY2(!QFileInfo::exists(escaped), "标注目录之外被创建了文件/目录");
+}
+
+void UiGuardsTest::annotationClassDirRejectsEmptyRoot()
+{
+    // 空 root 会让 dir 变成 "/<label>" 而 mkpath 先于包含检查跑——必须提前拒绝
+    QString dir = QStringLiteral("sentinel");
+    QString why;
+    QVERIFY2(!annotationClassDir(QString(), QStringLiteral("划痕"), &dir, &why),
+             "空标注目录被放行");
+    QVERIFY2(dir.isEmpty(), "拒绝时必须清空 outDir");
+    QVERIFY2(!why.isEmpty(), "拒绝时必须给出原因");
+
+    QString dir2 = QStringLiteral("sentinel");
+    QVERIFY2(!annotationClassDir(QStringLiteral("   "), QStringLiteral("划痕"), &dir2, &why),
+             "空白标注目录被放行");
+    QVERIFY2(dir2.isEmpty(), "拒绝时必须清空 outDir");
+}
+
+void UiGuardsTest::annotationPathIsInsideBoundaries()
+{
+    // 包含判据的边界（端到端用例触发不到它：白名单先挡掉了逃逸名）
+    QVERIFY(annotationPathIsInside(QStringLiteral("/a/b"), QStringLiteral("/a/b")));
+    QVERIFY(annotationPathIsInside(QStringLiteral("/a/b"), QStringLiteral("/a/b/c")));
+    // 前缀相似但不是子路径——必须判 false（这正是 startsWith 不加分隔符会漏的坑）
+    QVERIFY(!annotationPathIsInside(QStringLiteral("/a/b"), QStringLiteral("/a/bc")));
+    QVERIFY(!annotationPathIsInside(QStringLiteral("/a/b"), QStringLiteral("/a")));
+    QVERIFY(!annotationPathIsInside(QStringLiteral("/a/b"), QStringLiteral("/x/y")));
+    // 空串（目录不存在或创建失败）一律 false
+    QVERIFY(!annotationPathIsInside(QString(), QStringLiteral("/a/b")));
+    QVERIFY(!annotationPathIsInside(QStringLiteral("/a/b"), QString()));
 }
 
 void UiGuardsTest::finishTextExportSucceedsOnWritableFile()

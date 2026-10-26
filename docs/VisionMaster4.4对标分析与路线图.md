@@ -362,6 +362,18 @@
 | P3 用户表读取失败与空表同形 | `refreshUserTable` 用 `accountSurface()==Unreadable` 单独显示“读取用户表失败”，不再冒充“没有用户” | — |
 | **口径变更（有意）** OCR/条码“识别不到”由判绿改为**判红** | Ocr/Barcode **及 DataCode2D** 空结果 → `moduleStatus=false` + `lastError`，与 ZXing/Tesseract 统一。需要“可选识别”的流程请在其后接条件节点。**注意：这三个节点当前在 `NodeRegistry` 里是注释状态（未注册）**，所以本变更对现场是**潜伏**的——重新注册时口径已一致，不会再冲突 | — |
 
+**2026-10-26 第六批（复核残留 + 测试腿补强）**：
+
+| 项 | 修法 | 守卫 |
+|---|---|---|
+| 计数尺 `--check` 会静默放行 | 找不到声明 → **退出 1**（fail-closed）；四个数（合计/lastError/*Note/trainStatus）逐个比对（原先只比前两个） | 夹具实测：删声明 rc=1、把 *Note 改成 99 也 rc=1 |
+| canonical 包含检查无腿 | 抽出纯谓词 `annotationPathIsInside`（含 `/a/bc` 不算 `/a/b` 子路径的边界），UiGuardsTest 直接钉住 | **改坏臂：撤掉包含判据 → 该腿红**（此前撤掉全绿） |
+| `annotationClassDir` 不拒空 root、失败不清 outDir | 空/空白 root 提前拒绝；入口先清 `*outDir` | 新腿：空 root 被拒 + outDir 被清 |
+| 逃逸腿的"无残留"核对比名单窄 | 名单里去掉 `../../evil`（落点是共享 `%TEMP%`，无法可靠核对），并注明原因 | — |
+| `confirmDestructive` 两份重复、注释失实 | 抽到 `include/ConfirmDestructive.h`；注释改正（静态 `question` 本就有 `defaultButton` 形参） | — |
+| 无 lastError 自动化腿 | `MeasureGreenGuardTest` 加一条：线段退化 → 判红且 `lastError` 含关键词 | 该腿 |
+| OutputDataViewer 失败清端口/成功清红字 | 代码已改 | **无腿**：尝试加腿（`setNode` + `onNodeExecuted(false)`）后标签未更新，机制未查明，为不留假绿/假红已撤掉该腿——保留代码审查证据 |
+
 **仍开放（本轮未修，各有理由）**：
 
 | 项 | 位置 | 为什么没在这次改 |
