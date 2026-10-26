@@ -121,6 +121,7 @@ set(SOURCES
     src/HalconEnvCheck.cpp
     src/HelpDialog.cpp
     src/OpencvUtil.cpp
+    src/PathSafety.cpp
     src/OpencvThresholdNode.cpp
     src/OpencvAdaptiveThresholdNode.cpp
     src/OpencvAngleNode.cpp

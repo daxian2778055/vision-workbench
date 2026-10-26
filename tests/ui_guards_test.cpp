@@ -8,6 +8,8 @@
 #include <QFile>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QFileInfo>
+#include <QProcess>
 #include <QTextStream>
 #include <QtTest/QtTest>
 
@@ -21,6 +23,8 @@ private slots:
     void annotationClassDirRejectsEscape();
     void annotationClassDirRejectsEmptyRoot();
     void annotationPathIsInsideBoundaries();
+    // 闸"有没有接线"的端到端腿：junction 指向 root 之外必须被拦（臂 D 的缺口）
+    void annotationClassDirRejectsJunctionEscape();
     void finishTextExportSucceedsOnWritableFile();
 };
 
@@ -106,12 +110,51 @@ void UiGuardsTest::annotationClassDirRejectsEmptyRoot()
     QVERIFY2(!annotationClassDir(QString(), QStringLiteral("划痕"), &dir, &why),
              "空标注目录被放行");
     QVERIFY2(dir.isEmpty(), "拒绝时必须清空 outDir");
-    QVERIFY2(!why.isEmpty(), "拒绝时必须给出原因");
+    // 只断"原因非空"挡不住位置退化：删掉早退守卫后 mkpath 会先在盘根建目录、canonical
+    // 拿到空串照样拒、原因照样非空 ⇒ 腿仍绿（2026-10-26 复核指出）。要钉住**是哪条原因**。
+    QVERIFY2(why.contains(QStringLiteral("标注目录未设置")), qPrintable(why));
 
     QString dir2 = QStringLiteral("sentinel");
     QVERIFY2(!annotationClassDir(QStringLiteral("   "), QStringLiteral("划痕"), &dir2, &why),
              "空白标注目录被放行");
     QVERIFY2(dir2.isEmpty(), "拒绝时必须清空 outDir");
+}
+
+void UiGuardsTest::annotationClassDirRejectsJunctionEscape()
+{
+    // 臂 D 的缺口：谓词本身有牙，但"annotationClassDir 到底有没有用它"没人守——
+    // 把调用换成恒真（annotationPathIsInside(rootCanon, rootCanon)）时七条腿全绿。
+    // 这里用目录联接（junction / symlink）做端到端：名字合法（link 全字母），只有包含
+    // 检查能拦住；闸没接线的话就会被接受。建不了联接就跳过并打印原因。
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    const QString outside = tmp.path() + QStringLiteral("/outside");
+    const QString root = tmp.path() + QStringLiteral("/root");
+    QVERIFY(QDir().mkpath(outside));
+    QVERIFY(QDir().mkpath(root));
+    const QString link = root + QStringLiteral("/link");
+
+#ifdef Q_OS_WIN
+    const int rc = QProcess::execute(
+        QStringLiteral("cmd"),
+        {QStringLiteral("/c"), QStringLiteral("mklink"), QStringLiteral("/J"),
+         QDir::toNativeSeparators(link), QDir::toNativeSeparators(outside)});
+    if (rc != 0)
+        QSKIP("本机无法创建 junction（mklink /J 失败），跳过该腿");
+#else
+    if (!QFile::link(outside, link))
+        QSKIP("本机无法创建符号链接，跳过该腿");
+#endif
+    QVERIFY2(QFileInfo(link).isDir() || QFileInfo(link).isSymLink(), "联接没建起来");
+
+    QString dir;
+    QString why;
+    const bool accepted = annotationClassDir(root, QStringLiteral("link"), &dir, &why);
+    QVERIFY2(!accepted,
+             qPrintable(QStringLiteral("junction 指向 root 之外却被接受：%1").arg(dir)));
+    QVERIFY2(why.contains(QStringLiteral("越出")), qPrintable(why));
+
+    QFile::remove(link);
 }
 
 void UiGuardsTest::annotationPathIsInsideBoundaries()

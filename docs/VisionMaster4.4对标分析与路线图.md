@@ -373,6 +373,9 @@
 | `confirmDestructive` 两份重复、注释失实 | 抽到 `include/ConfirmDestructive.h`；注释改正（静态 `question` 本就有 `defaultButton` 形参） | — |
 | 无 lastError 自动化腿 | `MeasureGreenGuardTest` 加一条：线段退化 → 判红且 `lastError` 含关键词 | 该腿 |
 | OutputDataViewer 失败清端口/成功清红字 | 代码已改 | **无腿**：尝试加腿（`setNode` + `onNodeExecuted(false)`）后标签未更新，机制未查明，为不留假绿/假红已撤掉该腿——保留代码审查证据 |
+| **包含检查被 junction 绕过（实测发现）** | `QFileInfo::canonicalFilePath()` 在 Windows 上**不解析 junction**：`root/link → 目录外` 时它仍返回 `root/link`，包含检查直接放行。新增 `resolveFinalPath()`（`src/PathSafety.cpp`，Windows 走 `GetFinalPathNameByHandleW`，其它平台退回 canonical），`annotationClassDir` 改用之 | **junction 端到端腿**（建不了则 QSKIP）：改后拦得住；把调用换成恒真（臂 D）→ 该腿红 |
+| 空 root 腿咬不到"位置" | 断言 `why` 含"标注目录未设置"，删掉早退守卫即红 | 该腿 |
+| outDir 清了、`*why` 没清 | 入口两个出参一起清（契约与实现同口径） | — |
 
 **仍开放（本轮未修，各有理由）**：
 
