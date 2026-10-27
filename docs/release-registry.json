@@ -288,7 +288,16 @@
       "exe_bytes": 9908736,
       "package_dir": "dist/VisionFlowPlatform-rc-20261027.8",
       "recorded_at": "2026-10-27",
-      "recorded_note": "当前装机包：运行界面绑定增强——修属性面板刷新静默丢绑定 bug + 绑定失效红显（staleBindings 共用判据）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261027.9 取代（后者修评估越界读与八项）"
+    },
+    {
+      "tag": "rc-20261027.9",
+      "commit": "7ddd21f0a4c8d67d4ed8475cd8c38982059aa517",
+      "exe_md5": "e27e08a2f5a664b62db3e954e5e3b115",
+      "exe_bytes": 9918976,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261027.9",
+      "recorded_at": "2026-10-27",
+      "recorded_note": "当前装机包（修复）：P1 评估越界读 + 类别集合校验、真留出验证集、发布失败如实、样本形状校验、零均值噪声、检索元数据化、启动期假红、脚本交换失败留因"
     }
   ],
   "legacy_backfilled": [
