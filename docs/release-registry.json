@@ -252,7 +252,16 @@
       "exe_bytes": 9859584,
       "package_dir": "dist/VisionFlowPlatform-rc-20261027.4",
       "recorded_at": "2026-10-27",
-      "recorded_note": "当前装机包（能力新增）：图库管理界面（筛选/缩略图/删除清空）+ 检索可视化（Top1 内点圈选与得分）+ 入库存缩略图 PNG"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261027.5 取代（后者新增少样本接线）"
+    },
+    {
+      "tag": "rc-20261027.5",
+      "commit": "1bc9ed23aab5968fc0e6bc22688adcded7975b71",
+      "exe_md5": "7e282a7f897d5042894656aee083a450",
+      "exe_bytes": 9865216,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261027.5",
+      "recorded_at": "2026-10-27",
+      "recorded_note": "当前装机包（能力新增）：少样本接线——特征匹配参照来源=特征库样本（换型按名字切），配端到端腿"
     }
   ],
   "legacy_backfilled": [
