@@ -270,7 +270,16 @@
       "exe_bytes": 9894400,
       "package_dir": "dist/VisionFlowPlatform-rc-20261027.6",
       "recorded_at": "2026-10-27",
-      "recorded_note": "当前装机包（能力新增）：训练向导最小闭环（数据集装配/训练/评估混淆矩阵/发布提示）+ 可复现评估 API"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261027.7 取代（后者新增增广与发布）"
+    },
+    {
+      "tag": "rc-20261027.7",
+      "commit": "badd5dd550270264858960fe85ec3c1851bef2fe",
+      "exe_md5": "237bfbef9679d9dc6ebd51d102a2ca04",
+      "exe_bytes": 9903616,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261027.7",
+      "recorded_at": "2026-10-27",
+      "recorded_note": "当前装机包（能力新增）：训练向导第二片——数据增广（确定性）+ 一键发布为算子（插入预填模型的分类节点）"
     }
   ],
   "legacy_backfilled": [
