@@ -225,7 +225,16 @@
       "exe_bytes": 9775616,
       "package_dir": "dist/VisionFlowPlatform-rc-20261027.1",
       "recorded_at": "2026-10-27",
-      "recorded_note": "当前装机包（能力新增）：脚本节点支持图像处理（--vfp-image-in/out 文件契约，沙箱不变）+ 交换文件低完整性标签修复（受限脚本可写）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261027.2 取代（后者新增 GPU 加速）"
+    },
+    {
+      "tag": "rc-20261027.2",
+      "commit": "4273d830941ec27aa47270e51111266a9305c929",
+      "exe_md5": "7e497131559f88acfab4996ac468cf75",
+      "exe_bytes": 9783296,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261027.2",
+      "recorded_at": "2026-10-27",
+      "recorded_note": "当前装机包（能力新增）：GPU 加速（OpenCV T-API，三模式 + 菜单切换 + 性能面板显示加速/回退）"
     }
   ],
   "legacy_backfilled": [
