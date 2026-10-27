@@ -2440,7 +2440,8 @@ void ParamPanelBindingTest::testUnnamedFindChildSitesAreSingleCandidate()
     QVERIFY2(panelFails.isEmpty() && panelsBuilt == regs.size(),
              qPrintable(QStringLiteral("甲 的扫描不完整：panelsBuilt=%1 registry=%2，另有 %3 个建面板失败")
                             .arg(panelsBuilt).arg(regs.size()).arg(panelFails.size())));
-    QVERIFY2(fieldSlots == 249,
+    // 249 → 254（2026-10-27）：FeatureSearchNode 声明式参数 5 个（mode/detector/topK/ratio/sampleName）
+    QVERIFY2(fieldSlots == 254,
              qPrintable(QStringLiteral("字段槽位分母从 249 变成 %1 ⇒ 本闸口径已漂移，"
                                         "先核对面板改动再把基准一起改").arg(fieldSlots)));
     QVERIFY2(badSlots.isEmpty(),

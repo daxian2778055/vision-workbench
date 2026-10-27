@@ -17,11 +17,59 @@ FeatureSearchNode::FeatureSearchNode(QObject *parent) : HalconNode(parent)
 void FeatureSearchNode::init()
 {
     HalconNode::init();
-    m_params[QStringLiteral("mode")] = QStringLiteral("Search");   // Search | Add
-    m_params[QStringLiteral("detector")] = QStringLiteral("ORB");   // ORB | SIFT
-    m_params[QStringLiteral("topK")] = 5;
-    m_params[QStringLiteral("ratio")] = 0.75;
-    m_params[QStringLiteral("sampleName")] = QString();
+    // 声明式参数（2026-10-27）：自动面板与序列化范围校验都靠 paramSpecs；
+    // Enum 存 int 索引（与 ParamType::Enum 约定一致），run() 里映射成行为名。
+    {
+        ParamSpec sp;
+        sp.name = QStringLiteral("mode");
+        sp.type = ParamType::Enum;
+        sp.defaultValue = 0;
+        sp.enumValues = QStringList{QStringLiteral("检索"), QStringLiteral("入库")};
+        sp.label = QStringLiteral("工作方式");
+        sp.tooltip = QStringLiteral("检索=在库里找最像的样本；入库=把当前图的特征存进库");
+        registerParam(sp);
+    }
+    {
+        ParamSpec sp;
+        sp.name = QStringLiteral("detector");
+        sp.type = ParamType::Enum;
+        sp.defaultValue = 0;
+        sp.enumValues = QStringList{QStringLiteral("ORB"), QStringLiteral("SIFT")};
+        sp.label = QStringLiteral("检测器");
+        sp.tooltip = QStringLiteral("ORB 快且无专利；SIFT 更稳但慢");
+        registerParam(sp);
+    }
+    {
+        ParamSpec sp;
+        sp.name = QStringLiteral("topK");
+        sp.type = ParamType::Int;
+        sp.defaultValue = 5;
+        sp.minValue = 1;
+        sp.maxValue = 100;
+        sp.hasRange = true;
+        sp.label = QStringLiteral("返回前 K 名");
+        registerParam(sp);
+    }
+    {
+        ParamSpec sp;
+        sp.name = QStringLiteral("ratio");
+        sp.type = ParamType::Double;
+        sp.defaultValue = 0.75;
+        sp.minValue = 0.1;
+        sp.maxValue = 0.95;
+        sp.hasRange = true;
+        sp.label = QStringLiteral("比值检验阈值");
+        sp.tooltip = QStringLiteral("越小越严格（Lowe ratio test）");
+        registerParam(sp);
+    }
+    {
+        ParamSpec sp;
+        sp.name = QStringLiteral("sampleName");
+        sp.type = ParamType::String;
+        sp.defaultValue = QString();
+        sp.label = QStringLiteral("样本名（入库用）");
+        registerParam(sp);
+    }
     m_params[QStringLiteral("searchNote")] = QString();
 }
 
@@ -42,10 +90,17 @@ void FeatureSearchNode::run(bool /*autoSwitch*/)
         return;
     }
 
-    const QString detector = m_params.value(QStringLiteral("detector")).toString();
-    const QString mode = m_params.value(QStringLiteral("mode")).toString();
+    // Enum 存 int 索引（0/1）；也兼容旧工程里存字符串的情形
+    const QVariant detVar = m_params.value(QStringLiteral("detector"));
+    const QString detector = detVar.toString().isEmpty() || detVar.typeId() == QMetaType::Int
+        ? (detVar.toInt() == 1 ? QStringLiteral("SIFT") : QStringLiteral("ORB"))
+        : detVar.toString();
+    const QVariant modeVar = m_params.value(QStringLiteral("mode"));
+    const bool isAdd = modeVar.typeId() == QMetaType::Int
+                           ? modeVar.toInt() == 1
+                           : modeVar.toString() == QStringLiteral("Add");
 
-    if (mode == QLatin1String("Add")) {
+    if (isAdd) {
         // 入库：特征提取 + 序列化 + 持久化
         std::vector<cv::KeyPoint> kps;
         cv::Mat desc;
