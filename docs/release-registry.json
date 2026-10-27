@@ -207,7 +207,16 @@
       "exe_bytes": 9771008,
       "package_dir": "dist/VisionFlowPlatform-rc-20261025.17",
       "recorded_at": "2026-10-26",
-      "recorded_note": "当前装机包：修 junction 绕过标注目录包含检查（canonicalFilePath 不解析目录联接 → 新增 resolveFinalPath 走 GetFinalPathNameByHandleW）+ junction 端到端腿 + 空 root 原因文本收紧 + 出参同口径清空"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261025.18 取代（后者含其全部改动）"
+    },
+    {
+      "tag": "rc-20261025.18",
+      "commit": "a8589d3ca7d3065ccd3624d9dd1c6c65a63a40be",
+      "exe_md5": "b1c50342ee812dd08e99755243c4806d",
+      "exe_bytes": 9771520,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261025.18",
+      "recorded_at": "2026-10-27",
+      "recorded_note": "当前装机包：解析失败与越出拆成两条诊断 + resolveFinalPath 按需分配缓冲（长路径不再误判）+ junction 腿在 Windows 不可跳过（建不了即红）+ 路径级/句柄级边界登记"
     }
   ],
   "legacy_backfilled": [
