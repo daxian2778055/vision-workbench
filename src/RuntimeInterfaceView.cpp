@@ -6,6 +6,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QPainter>
+#include <QSet>
 #include <QResizeEvent>
 #include <QMetaType>
 #include <QTabWidget>
@@ -533,6 +534,17 @@ void RuntimeInterfaceView::updateStatusLight(QLabel *light, const RuntimeControl
 
 void RuntimeInterfaceView::paintEvent(QPaintEvent *event)
 {
+    if (!m_staleBindings.isEmpty()) {
+        QPainter p(this);
+        p.setPen(QColor(220, 40, 40));
+        QFont f = p.font();
+        f.setPointSize(11);
+        f.setBold(true);
+        p.setFont(f);
+        p.drawText(rect().adjusted(8, 4, -8, -rect().height() + 30),
+                   Qt::AlignLeft | Qt::AlignVCenter,
+                   QStringLiteral("绑定失效：%1").arg(m_staleBindings.join(QStringLiteral("、"))));
+    }
     QWidget::paintEvent(event);
     if (m_current.totalControlCount() == 0) {
         QPainter p(this);
@@ -565,4 +577,19 @@ void RuntimeInterfaceView::resizeEvent(QResizeEvent *event)
         if (m_widgets[i] && m_widgetCtrls[i])
             m_widgets[i]->setGeometry(scaledGeometry(m_widgetCtrls[i]->geometry));
     }
+}
+
+void RuntimeInterfaceView::setKnownNodeNames(const QStringList &names)
+{
+    m_knownNodeNames = names;
+    // 绑定体检（2026-10-27）：现场最容易踩的坑是"控件一直空白/旧值，不知道是没跑
+    // 还是绑定没了"。这里把失效绑定列在页面顶部（红字），一眼可见。
+    QSet<QString> globals, nodes;
+    const auto vars = GlobalVariableManager::instance()->variables();
+    for (auto it = vars.constBegin(); it != vars.constEnd(); ++it)
+        globals.insert(it.key());
+    for (const QString &n : m_knownNodeNames)
+        nodes.insert(n);
+    m_staleBindings = m_current.staleBindings(globals, nodes);
+    update();
 }

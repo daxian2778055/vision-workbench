@@ -3853,8 +3853,12 @@ void MainWindow::loadRuntimeInterfaceLayout()
 {
     if (!m_runtimeView) return;
     RuntimeInterface layout;
-    if (layout.loadFromFile(RuntimeInterfaceDesigner::defaultLayoutPath()))
+    if (layout.loadFromFile(RuntimeInterfaceDesigner::defaultLayoutPath())) {
         m_runtimeView->setInterface(layout);
+        // 绑定失效红显（2026-10-27）：把当前流程节点名喂给视图做体检，
+        // 失效绑定会以红字列在页面顶部（与设计器共用 staleBindings 判据）
+        m_runtimeView->setKnownNodeNames(allNodeFullNames());
+    }
 }
 
 void MainWindow::setupLanguageMenu()

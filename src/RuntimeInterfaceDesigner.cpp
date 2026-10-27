@@ -980,6 +980,12 @@ void RuntimeInterfaceDesigner::populateBindKeyCombo()
         m_bindKeyCombo->addItem(QStringLiteral("单次执行"), QStringLiteral("single"));
         m_bindKeyCombo->addItem(QStringLiteral("触发流程"), QStringLiteral("trigger"));
         int idx = m_bindKeyCombo->findData(ctrl->bindKey);
+        if (idx < 0 && !ctrl->bindKey.isEmpty()) {
+            // 同上：动作绑定失效（触发流程被删）也不许静默丢
+            m_bindKeyCombo->addItem(QStringLiteral("（已失效：%1）").arg(ctrl->bindKey),
+                                    ctrl->bindKey);
+            idx = m_bindKeyCombo->count() - 1;
+        }
         if (idx < 0 && ctrl->bindKey.isEmpty())
             idx = m_bindKeyCombo->findData(QStringLiteral("start"));
         m_bindKeyCombo->setCurrentIndex(idx >= 0 ? idx : 0);
@@ -997,6 +1003,14 @@ void RuntimeInterfaceDesigner::populateBindKeyCombo()
         }
     }
     int idx = m_bindKeyCombo->findData(ctrl->bindKey);
+    if (idx < 0 && !ctrl->bindKey.isEmpty()) {
+        // 绑定已失效（全局变量/节点被删）：显式保留为"(已失效)"，不让面板刷新把它静默清掉
+        // （2026-10-27）：原逻辑 idx<0 → 选"(无)"，currentIndexChanged 会把空值写回控件
+        // ——用户一刷新属性面板，绑定就没了，还查不出为什么。
+        m_bindKeyCombo->addItem(QStringLiteral("（已失效：%1）").arg(ctrl->bindKey),
+                                ctrl->bindKey);
+        idx = m_bindKeyCombo->count() - 1;
+    }
     m_bindKeyCombo->setCurrentIndex(idx >= 0 ? idx : 0);
 }
 

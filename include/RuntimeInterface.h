@@ -6,6 +6,8 @@
 #include <QString>
 #include <QJsonObject>
 #include <QVariant>
+#include <QSet>
+#include <QStringList>
 
 /// 运行界面控件类型（对齐 VisionMaster 4.4 运行界面元素）
 enum class RuntimeControlType {
@@ -89,6 +91,11 @@ public:
     int addPage();                  /// 新增页，返回索引
     void removePage(int index);     /// 删除页（至少保留一页）
     int totalControlCount() const;  /// 全部页控件总数（判断是否已配置）
+
+    /// 绑定体检（2026-10-27）：返回**失效**的绑定键（找不到对应全局变量/节点）。
+    /// 设计器与运行视图共用同一判据——否则会出现"设计器看得见、运行态红一片"或反过来。
+    /// 失效键以 "global:<键>" / "node:<键>" 形式返回，便于定位到具体控件来源。
+    QStringList staleBindings(const QSet<QString> &globals, const QSet<QString> &nodes) const;
 
     QJsonObject toJson() const;
     bool fromJson(const QJsonObject &json);   /// 兼容旧单页格式

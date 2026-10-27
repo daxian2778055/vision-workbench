@@ -39,6 +39,10 @@ public:
     /// 控件数量（用于判断是否已配置运行界面）
     int controlCount() const { return m_current.totalControlCount(); }
 
+    /// 提供当前流程的节点名（2026-10-27）：配合"绑定失效红显"。
+    /// 设计器与运行态共用 RuntimeInterface::staleBindings 判据，避免两边口径不一。
+    void setKnownNodeNames(const QStringList &names);
+
 signals:
     /// 按钮动作触发：actionId 为 "start"/"stop"/"single"/"trigger:<流程名>"
     void actionTriggered(const QString &actionId);
@@ -52,6 +56,8 @@ private slots:
     void commitTableRows();
 
 private:
+    QStringList m_knownNodeNames;   /// 已知节点名（绑定体检用）
+    QStringList m_staleBindings;    /// 失效绑定（绘制在页面顶部）
     QRect scaledGeometry(const QRect &g) const;
     void rebuildWidgets();
     void clearWidgets();

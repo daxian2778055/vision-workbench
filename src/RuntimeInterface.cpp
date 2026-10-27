@@ -259,3 +259,21 @@ bool RuntimeInterface::loadFromFile(const QString &fileName)
         return false;
     return fromJson(doc.object());
 }
+
+QStringList RuntimeInterface::staleBindings(const QSet<QString> &globals,
+                                            const QSet<QString> &nodes) const
+{
+    QStringList bad;
+    for (const RuntimeInterfacePage &page : pages) {
+        for (const RuntimeControl &c : page.controls) {
+            if (c.bindKey.isEmpty() || c.bindType.isEmpty())
+                continue;
+            if (c.bindType == QLatin1String("global") && !globals.contains(c.bindKey))
+                bad << QStringLiteral("global:%1").arg(c.bindKey);
+            else if (c.bindType == QLatin1String("node") && !nodes.contains(c.bindKey))
+                bad << QStringLiteral("node:%1").arg(c.bindKey);
+        }
+    }
+    bad.removeDuplicates();
+    return bad;
+}

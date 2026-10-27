@@ -2,6 +2,7 @@
 //   1) 标注类别名白名单——`..\..\x` 这类名字能把样本写到标注目录之外（活路径，P2 修复）；
 //   2) 导出写检查——open() 成功不代表写成功，写完必须 flush + 查状态。
 #include "AnnotationLabelRule.h"
+#include "RuntimeInterface.h"
 #include "ExportWriteCheck.h"
 
 #include <QDir>
@@ -26,6 +27,8 @@ private slots:
     // 闸"有没有接线"的端到端腿：junction 指向 root 之外必须被拦（臂 D 的缺口）
     void annotationClassDirRejectsJunctionEscape();
     void finishTextExportSucceedsOnWritableFile();
+    void staleBindingsFindsMissingTargets();
+    void staleBindingsIgnoresValidAndUnbound();
 };
 
 void UiGuardsTest::annotationLabelAcceptsSafeNames()
@@ -193,6 +196,47 @@ void UiGuardsTest::finishTextExportSucceedsOnWritableFile()
     QVERIFY(read.open(QIODevice::ReadOnly | QIODevice::Text));
     const QString body = QString::fromUtf8(read.readAll());
     QVERIFY2(body.contains(QStringLiteral("hello")), "写入内容不完整");
+}
+
+void UiGuardsTest::staleBindingsFindsMissingTargets()
+{
+    // 绑定失效必须被体检抓到（2026-10-27）：设计器与运行视图共用这一判据
+    RuntimeInterface itf;
+    RuntimeControl c1;
+    c1.type = RuntimeControlType::ValueDisplay;
+    c1.bindType = QStringLiteral("global");
+    c1.bindKey = QStringLiteral("missingVar");
+    itf.currentPage()->controls.append(c1);
+
+    RuntimeControl c2;
+    c2.type = RuntimeControlType::ImageView;
+    c2.bindType = QStringLiteral("node");
+    c2.bindKey = QStringLiteral("不存在的节点");
+    itf.currentPage()->controls.append(c2);
+
+    const QStringList bad = itf.staleBindings({QStringLiteral("exists")},
+                                              {QStringLiteral("节点A")});
+    QCOMPARE(bad.size(), 2);
+    QVERIFY2(bad.contains(QStringLiteral("global:missingVar")), qPrintable(bad.join(QLatin1Char(','))));
+    QVERIFY2(bad.contains(QStringLiteral("node:不存在的节点")), qPrintable(bad.join(QLatin1Char(','))));
+}
+
+void UiGuardsTest::staleBindingsIgnoresValidAndUnbound()
+{
+    RuntimeInterface itf;
+    RuntimeControl ok;
+    ok.bindType = QStringLiteral("global");
+    ok.bindKey = QStringLiteral("g1");
+    itf.currentPage()->controls.append(ok);
+    RuntimeControl ok2;
+    ok2.bindType = QStringLiteral("node");
+    ok2.bindKey = QStringLiteral("n1");
+    itf.currentPage()->controls.append(ok2);
+    RuntimeControl free;   // 无绑定（静态文本/按钮默认）
+    itf.currentPage()->controls.append(free);
+
+    const QStringList bad = itf.staleBindings({QStringLiteral("g1")}, {QStringLiteral("n1")});
+    QVERIFY2(bad.isEmpty(), qPrintable(bad.join(QLatin1Char(','))));
 }
 
 QTEST_MAIN(UiGuardsTest)
