@@ -2,6 +2,8 @@
 #include "NodeResultFields.h"
 #include "OpencvTemplateMatchNode.h"   // 复用 extractTemplatePatch（同一套 ROI→模板块抠取）
 #include "OpencvUtil.h"
+#include "AppDatabase.h"
+#include "FeatureIndex.h"
 #include "DataObject.h"
 #include "AppLog.h"
 #include "FlowScene.h"
@@ -84,6 +86,12 @@ void OpencvFeatureMatchNode::init()
     registerParams({
         makeFilePathParam(QStringLiteral("templatePath"), QString(),
                           QStringLiteral("模板图像文件 (png/bmp/jpg)")),
+        // 参照来源（2026-10-27 少样本接线）：可直接用特征库样本当参照，换型按名字切
+        makeEnumParam(QStringLiteral("templateSource"), 0,
+                      {QStringLiteral("模板文件"), QStringLiteral("特征库样本")},
+                      QStringLiteral("参照来源")),
+        makeStringParam(QStringLiteral("librarySampleName"), QString(),
+                        QStringLiteral("特征库样本名（参照来源=特征库样本时）")),
         makeBoolParam(QStringLiteral("trainFromImage"), false,
                       QStringLiteral("从图像 ROI 教学特征模板（教学落盘后自动取消勾选）")),
         makeEnumParam(QStringLiteral("detector"), 0,
@@ -244,6 +252,43 @@ void OpencvFeatureMatchNode::run(bool /*autoSwitch*/)
             } else {
                 m_params[QStringLiteral("trainStatus")] = QStringLiteral("已教学（未保存文件）");
             }
+        } else if (m_params.value(QStringLiteral("templateSource"), 0).toInt() == 1) {
+            // 参照来自特征库样本（2026-10-27 少样本接线）：用样本缩略图当模板，
+            // 换型按名字切、不带模板文件；样本没缩略图就明说该怎么办。
+            const QString wantName =
+                m_params.value(QStringLiteral("librarySampleName")).toString().trimmed();
+            if (wantName.isEmpty()) {
+                fail(QStringLiteral("参照来源=特征库样本时必须填写样本名"));
+                return;
+            }
+            FeatureSample hit;
+            for (const QString &det : {QStringLiteral("ORB"), QStringLiteral("SIFT")}) {
+                for (const FeatureSample &s : AppDatabase::instance()->loadFeatureSamples(det)) {
+                    if (s.name == wantName) {
+                        hit = s;
+                        break;
+                    }
+                }
+                if (hit.isValid() || !hit.imagePng.isEmpty())
+                    break;
+            }
+            if (hit.id < 0) {
+                fail(QStringLiteral("特征库里没有名为「%1」的样本").arg(wantName));
+                return;
+            }
+            if (hit.imagePng.isEmpty()) {
+                fail(QStringLiteral("样本「%1」没有缩略图（旧入库未存图）——请用「特征检索-入库」重建该样本")
+                         .arg(wantName));
+                return;
+            }
+            tmpl = cv::imdecode(std::vector<uchar>(hit.imagePng.begin(), hit.imagePng.end()),
+                                cv::IMREAD_GRAYSCALE);
+            if (tmpl.empty()) {
+                fail(QStringLiteral("样本「%1」的缩略图解码失败").arg(wantName));
+                return;
+            }
+            m_params[QStringLiteral("trainStatus")] =
+                QStringLiteral("已加载特征库样本: %1").arg(wantName);
         } else {
             if (templatePath.isEmpty()) {
                 fail(QStringLiteral("匹配模式需要设置模板文件路径"));

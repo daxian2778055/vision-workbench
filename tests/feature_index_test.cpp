@@ -1,3 +1,5 @@
+#define NOMINMAX
+#include <algorithm>
 // 特征检索（2026-10-27）：图库持久化与"以图查图"的正确性腿。
 //   ① 入库→检索，自己必排第一（排序正确性）；
 //   ② 序列化往返：存进去的描述子取出来逐字节一致（持久化不失真）；
@@ -5,8 +7,11 @@
 //   ④ 空库/无命中给出可读错误（与"识别不到内容判红"同口径）。
 #include "FeatureIndex.h"
 #include "AppDatabase.h"
+#include "OpencvFeatureMatchNode.h"
+#include "OpencvUtil.h"
 
 #include <opencv2/imgproc.hpp>
+#include <opencv2/imgcodecs.hpp>
 #include <QTemporaryDir>
 #include <QtTest/QtTest>
 
@@ -22,6 +27,7 @@ private slots:
     void deleteAndClearWork();
     void thumbnailRoundTrip();
     void searchAnnotatesTop1();
+    void featureMatchCanUseLibrarySample();
 
 private:
     static cv::Mat pattern(int seed, int w = 320, int h = 240);
@@ -172,6 +178,43 @@ void FeatureIndexTest::searchAnnotatesTop1()
     QVERIFY2(!annotated.empty(), "命中却没有可视化输出");
     QCOMPARE(annotated.rows, q.rows);
     QCOMPARE(annotated.cols, q.cols);
+    QVERIFY(AppDatabase::instance()->clearFeatureSamples());
+}
+
+void FeatureIndexTest::featureMatchCanUseLibrarySample()
+{
+    // 少样本接线（2026-10-27）：特征匹配可用图库样本当参照，换型按名字切
+    const cv::Mat img = pattern(21);
+    std::vector<cv::KeyPoint> kps;
+    cv::Mat desc;
+    QVERIFY(FeatureIndex::extract(QStringLiteral("ORB"), img, kps, desc));
+
+    std::vector<uchar> png;
+    QVERIFY(cv::imencode(".png", img, png));
+    FeatureSample s;
+    s.setFrom(QStringLiteral("variant_A"), QStringLiteral("ORB"), kps, desc,
+              QByteArray(reinterpret_cast<const char *>(png.data()), int(png.size())));
+    QVERIFY(AppDatabase::instance()->saveFeatureSample(s));
+
+    OpencvFeatureMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("templateSource"), 1);          // 特征库样本
+    node.setParam(QStringLiteral("librarySampleName"), QStringLiteral("variant_A"));
+    node.setInputImage(OpencvUtil::matToHimage(img));
+    node.run(false);
+
+    QVERIFY2(node.getParam(QStringLiteral("moduleStatus")).toBool(),
+             qPrintable(node.getParam(QStringLiteral("matchNote")).toString()));
+    QVERIFY(node.getParam(QStringLiteral("matchNote")).toString().contains(QStringLiteral("variant_A"))
+            || node.getParam(QStringLiteral("trainStatus")).toString().contains(QStringLiteral("variant_A")));
+
+    // 名字对不上必须给可读原因
+    node.setParam(QStringLiteral("librarySampleName"), QStringLiteral("no_such_sample"));
+    node.run(false);
+    QVERIFY2(!node.getParam(QStringLiteral("moduleStatus")).toBool(), "不存在的样本名却判了绿");
+    QVERIFY2(!node.getParam(QStringLiteral("lastError")).toString().isEmpty(),
+             "不存在的样本名没有给出可读原因");
+
     QVERIFY(AppDatabase::instance()->clearFeatureSamples());
 }
 
