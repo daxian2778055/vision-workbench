@@ -2,6 +2,11 @@
 #include "DataObject.h"
 #include "AppLog.h"
 #include "ScriptSecurityPolicy.h"
+#include "OpencvUtil.h"
+#include "PathSafety.h"
+#include <QTemporaryDir>
+#include <QFile>
+#include <opencv2/imgcodecs.hpp>
 #include "FlowExecutor.h"
 #include <QWidget>
 #include <QElapsedTimer>
@@ -31,10 +36,25 @@ void ScriptNode::init()
 {
     HalconNode::init();
     m_params[QStringLiteral("language")] = QStringLiteral("Python");
+    // 图像走文件契约：输入图路径在 --vfp-image-in=…，要产出图就写到 --vfp-image-out=…
+    // （2026-10-27 补齐：旧模板注释声称"输入变量 inputImage"，实际并未注入图像，纯属误导）
     m_params[QStringLiteral("scriptContent")] = QStringLiteral(
-        "# \u8F93\u5165\u53D8\u91CF: inputImage (\u56FE\u50CF), inputValue (\u6570\u503C)\n"
-        "# \u8F93\u51FA\u53D8\u91CF: result\n"
-        "result = \"Hello from Python\"\n"
+        "# 脚本以独立进程运行（沙箱/超时/审计）。\n"
+        "#  - 参数: 你配置的 scriptArgs，以及两个保留参数:\n"
+        "#        --vfp-image-in=<输入图 PNG>   --vfp-image-out=<输出图 PNG>\n"
+        "#  - 结果: 标准输出进入 lastOutput；写出图像即可产出节点输出图\n"
+        "#    （没写文件则输出图=输入图，行为与旧版一致）\n"
+        "import shutil, sys\n"
+        "inp = out = None\n"
+        "for a in sys.argv[1:]:\n"
+        "    if not a.startswith('--vfp-image-'):\n"
+        "        continue\n"
+        "    k, _, v = a.partition('=')\n"
+        "    if k == '--vfp-image-in': inp = v\n"
+        "    if k == '--vfp-image-out': out = v\n"
+        "if inp and out:\n"
+        "    shutil.copyfile(inp, out)   # 例: 原样回传；换成你的图像处理\n"
+        "print('done')\n"
     );
     m_params[QStringLiteral("scriptArgs")] = QStringList();
     m_params[QStringLiteral("lastOutput")] = QString();
@@ -56,6 +76,32 @@ void ScriptNode::run(bool /*autoSwitch*/)
 
     QStringList args = m_params.value(QStringLiteral("scriptArgs")).toStringList();
     QString lang = m_params.value(QStringLiteral("language")).toString();
+
+    // 图像 I/O 契约（2026-10-27）：把输入图导出成 PNG，路径以保留参数传给脚本；脚本把结果
+    // 图写到输出路径，节点读回作为输出图。沙箱语义不变——脚本仍然只是读写两个文件。
+    QTemporaryDir imageIoDir;
+    QString imageInPath, imageOutPath;
+    if (m_inputImage.IsInitialized() && imageIoDir.isValid()) {
+        const cv::Mat inMat = OpencvUtil::himageToMat(HImage(m_inputImage));
+        if (!inMat.empty()) {
+            imageInPath = imageIoDir.path() + QStringLiteral("/vfp_input.png");
+            imageOutPath = imageIoDir.path() + QStringLiteral("/vfp_output.png");
+            if (cv::imwrite(imageInPath.toStdString(), inMat)) {
+                // 预创建输出文件（受限令牌未必能建新文件），并把两个交换文件的 DACL 放开：
+                // 受限令牌要求 DACL 覆盖受限 SID，否则脚本一写就 Permission denied（实测）。
+                QFile preset(imageOutPath);
+                preset.open(QIODevice::WriteOnly);
+                preset.close();
+                makeWorldWritable(imageInPath);
+                makeWorldWritable(imageOutPath);
+                args << QStringLiteral("--vfp-image-in=") + imageInPath;
+                args << QStringLiteral("--vfp-image-out=") + imageOutPath;
+            } else {
+                imageInPath.clear();
+                imageOutPath.clear();
+            }
+        }
+    }
 
     {
         ScriptSecurityPolicy &policy = ScriptSecurityPolicy::instance();
@@ -88,7 +134,21 @@ void ScriptNode::run(bool /*autoSwitch*/)
     }
 
     m_params[QStringLiteral("lastOutput")] = output;
-    m_outputImage = m_inputImage; // Pass through image
+
+    // 脚本产出了图就用产出图，否则保持旧行为：透传输入图
+    bool produced = false;
+    if (!imageOutPath.isEmpty()) {
+        const cv::Mat outMat = cv::imread(imageOutPath.toStdString(), cv::IMREAD_UNCHANGED);
+        if (!outMat.empty()) {
+            HImage out = OpencvUtil::matToHimage(outMat);
+            if (out.IsInitialized()) {
+                m_outputImage = out;
+                produced = true;
+            }
+        }
+    }
+    if (!produced)
+        m_outputImage = m_inputImage;   // 未产出图：透传
 
     if (m_outputImage.IsInitialized()) {
         auto outObj = QSharedPointer<DataObject>::create();

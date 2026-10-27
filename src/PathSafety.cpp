@@ -1,12 +1,14 @@
 #include "PathSafety.h"
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 
 #include <vector>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
+#include <sddl.h>
 
 QString resolveFinalPath(const QString &path)
 {
@@ -54,4 +56,39 @@ QString resolveFinalPath(const QString &path)
     return QDir::fromNativeSeparators(canon);
 }
 
+#endif
+
+#ifdef Q_OS_WIN
+bool makeWorldWritable(const QString &path)
+{
+    SECURITY_DESCRIPTOR sd;
+    if (!InitializeSecurityDescriptor(&sd, SECURITY_DESCRIPTOR_REVISION))
+        return false;
+    // NULL DACL = Everyone 全权。只用于节点自己创建的短生命周期交换文件。
+    if (!SetSecurityDescriptorDacl(&sd, TRUE, nullptr, FALSE))
+        return false;
+    const QString native = QDir::toNativeSeparators(path);
+    const BOOL aclOk = SetFileSecurityW(reinterpret_cast<LPCWSTR>(native.utf16()),
+                                        DACL_SECURITY_INFORMATION, &sd);
+
+    // 仅放开 DACL 还不够：受限脚本是**低完整性**进程，Windows 的强制完整性控制（MIC）
+    // 会拒绝它写 Medium 完整性的文件（实测 PermissionError[13]）。把交换文件的完整性
+    // 标签降到 Low（SDDL ML;;NW;;;LW），Low IL 才能写。只对节点自建的短生命周期交换文件用。
+    PSECURITY_DESCRIPTOR lowSd = nullptr;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"S:(ML;;NW;;;LW)",
+                                                             SDDL_REVISION_1, &lowSd, nullptr))
+        return false;
+    const BOOL ilOk = SetFileSecurityW(reinterpret_cast<LPCWSTR>(native.utf16()),
+                                       LABEL_SECURITY_INFORMATION, lowSd);
+    LocalFree(lowSd);
+    return aclOk && ilOk;
+}
+#else
+bool makeWorldWritable(const QString &path)
+{
+    return QFile::setPermissions(path, QFile::ReadOwner | QFile::WriteOwner
+                                       | QFile::ReadUser | QFile::WriteUser
+                                       | QFile::ReadGroup | QFile::WriteGroup
+                                       | QFile::ReadOther | QFile::WriteOther);
+}
 #endif
