@@ -1,4 +1,5 @@
 #include "PerformancePanel.h"
+#include "ComputeBackend.h"
 #include "FlowExecutor.h"
 #include "NodeBase.h"
 #include <QHeaderView>
@@ -40,6 +41,9 @@ void PerformancePanel::unbindExecutor()
 
 void PerformancePanel::setupUi()
 {
+    m_backendLabel = new QLabel(ComputeBackend::instance().describe());
+    m_backendLabel->setObjectName(QStringLiteral("computeBackendLabel"));
+    m_backendLabel->setStyleSheet(QStringLiteral("color: #0a7;"));
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(4, 4, 4, 4);
     layout->setSpacing(4);
@@ -50,6 +54,8 @@ void PerformancePanel::setupUi()
     titleLabel->setStyleSheet(QStringLiteral("font-weight: bold; font-size: 14px;"));
     headerLayout->addWidget(titleLabel);
     headerLayout->addStretch();
+    // 计算后端状态（2026-10-27）：现场要看清当前是 GPU 加速还是回退 CPU
+    headerLayout->addWidget(m_backendLabel);
 
     m_clearBtn = new QPushButton(QStringLiteral("清空"));
     m_clearBtn->setToolTip(QStringLiteral("清空统计数据"));

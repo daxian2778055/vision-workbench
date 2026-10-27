@@ -66,7 +66,9 @@
 #include "GlobalTriggerManager.h"
 #include "GlobalTriggerDialog.h"
 #include "SessionManager.h"
-#include "ScriptSecurityPolicy.h"   // 系统菜单「脚本安全：执行前确认」开关
+#include "ScriptSecurityPolicy.h"
+#include "ComputeBackend.h"
+#include <QActionGroup>   // 系统菜单「脚本安全：执行前确认」开关
 #include "FactoryPasswordGuard.h"
 #include "OperationLogDialog.h"
 #include "ParameterSearchDialog.h"
@@ -3975,6 +3977,32 @@ void MainWindow::setupSystemMenu()
         m_confirmScriptAct = ui->menuSystem->addAction(
             QStringLiteral("脚本安全：执行前确认脚本（取消勾选则直接执行）"));
         m_confirmScriptAct->setCheckable(true);
+        // 计算后端（2026-10-27）：T-API 透明加速，现场要能关掉（驱动异常回退）并看得见。
+        // 这是性能设置不是安全设置，不落审计，但切换后状态栏显示当前实际后端。
+        {
+            auto *backendMenu = ui->menuSystem->addMenu(QStringLiteral("计算后端"));
+            auto *grp = new QActionGroup(backendMenu);
+            grp->setExclusive(true);
+            const auto mode = ComputeBackend::instance().mode();
+            struct Item { const char *text; ComputeBackend::Mode m; };
+            const Item items[] = {
+                {"自动（有 OpenCL 就用）", ComputeBackend::Mode::Auto},
+                {"强制 OpenCL", ComputeBackend::Mode::OpenCL},
+                {"仅 CPU", ComputeBackend::Mode::Cpu},
+            };
+            for (const Item &it : items) {
+                auto *act = backendMenu->addAction(QString::fromUtf8(it.text));
+                act->setCheckable(true);
+                act->setActionGroup(grp);
+                act->setChecked(it.m == mode);
+                connect(act, &QAction::triggered, this, [this, it]() {
+                    ComputeBackend::instance().setMode(it.m);
+                    statusBar()->showMessage(
+                        QStringLiteral("计算后端：%1").arg(ComputeBackend::instance().describe()), 8000);
+                });
+            }
+            backendMenu->setToolTip(ComputeBackend::instance().describe());
+        }
         m_confirmScriptAct->setChecked(policy.requireConfirmation());
         m_menuRouter.direct(m_confirmScriptAct, this, [this]() {
             ScriptSecurityPolicy &p = ScriptSecurityPolicy::instance();

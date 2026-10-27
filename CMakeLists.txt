@@ -122,6 +122,7 @@ set(SOURCES
     src/HelpDialog.cpp
     src/OpencvUtil.cpp
     src/PathSafety.cpp
+    src/ComputeBackend.cpp
     src/OpencvThresholdNode.cpp
     src/OpencvAdaptiveThresholdNode.cpp
     src/OpencvAngleNode.cpp
@@ -1146,6 +1147,14 @@ if(MSVC)
     vfp_configure_gui_test(OpencvBridgeTest)
 endif()
 
+# 计算后端（2026-10-27）：T-API 透明加速的开关与正确性
+if(MSVC)
+    add_executable(compute_backend_test tests/compute_backend_test.cpp)
+    target_link_libraries(compute_backend_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    vfp_add_qtest(NAME ComputeBackendTest TARGET compute_backend_test)
+    vfp_configure_gui_test(ComputeBackendTest)
+endif()
+
 # 脚本图像 I/O 契约（2026-10-27）
 if(MSVC)
     add_executable(script_image_io_test tests/script_image_io_test.cpp)
@@ -1413,7 +1422,7 @@ if(MSVC)
     set(VFP_TESTS NodeCoreTest OpencvSerializationTest IntegrationTest DatabaseTest PerfTest
                   ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest CameraIoTest
                   DnnSegmentTest OpencvDefectAlignTest SoakTest StatisticsReportTest SchemePackageTest
-                  I18nTest SubFlowTest EditLockReleaseTest RoundAbortSummaryTest UndoHistoryAfterLoadTest NodeExceptionExitTest RejectedConnectionUndoTest DbThreadConnectionCleanupTest CameraTaskLedgerTest GlobalCameraConsumerGateTest CommDeviceGhostTest OpencvBridgeTest MeasureGreenGuardTest UiGuardsTest ScriptImageIoTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
+                  I18nTest SubFlowTest EditLockReleaseTest RoundAbortSummaryTest UndoHistoryAfterLoadTest NodeExceptionExitTest RejectedConnectionUndoTest DbThreadConnectionCleanupTest CameraTaskLedgerTest GlobalCameraConsumerGateTest CommDeviceGhostTest OpencvBridgeTest MeasureGreenGuardTest UiGuardsTest ScriptImageIoTest ComputeBackendTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
                   FactoryPasswordGuardTest FeatureMatchTest CalibChainTest OpencvNodesTest
                   ProjectPathsTest FlowCachePurgeLedgerTest ExecutionControlPolicyTest
                   AuxDialogMenuRouterTest ModuleEditorRegistryTest UITranslatorTest

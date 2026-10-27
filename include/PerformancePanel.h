@@ -67,6 +67,7 @@ private:
     };
 
     QTableWidget *m_table = nullptr;
+    QLabel *m_backendLabel = nullptr;
     QLabel *m_summaryLabel = nullptr;
     QLabel *m_flowTimeLabel = nullptr;
     QPushButton *m_clearBtn = nullptr;

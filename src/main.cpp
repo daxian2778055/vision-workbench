@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "ComputeBackend.h"
 #include "AppDatabase.h"
 #include "DataObject.h"
 #include "AppLog.h"
@@ -259,6 +260,8 @@ UINT ActivateRequestFilter::ms_activateMsg = 0;
 
 int main(int argc, char *argv[])
 {
+    // 计算后端（OpenCV T-API）必须在任何 cv:: 运算之前应用
+    ComputeBackend::instance().init();
     // 单实例保护：多开会导致相机/串口/SQLite 资源冲突
     const QString lockPath =
         QDir::temp().filePath(QStringLiteral("VisionFlowPlatform.lock"));
