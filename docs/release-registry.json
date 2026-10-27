@@ -261,7 +261,16 @@
       "exe_bytes": 9865216,
       "package_dir": "dist/VisionFlowPlatform-rc-20261027.5",
       "recorded_at": "2026-10-27",
-      "recorded_note": "当前装机包（能力新增）：少样本接线——特征匹配参照来源=特征库样本（换型按名字切），配端到端腿"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261027.6 取代（后者新增训练向导）"
+    },
+    {
+      "tag": "rc-20261027.6",
+      "commit": "cbc0b553a86e4d01be2ae95804b3c949d2b9da6e",
+      "exe_md5": "0b7360c5b77cae851b492162b7e4b71e",
+      "exe_bytes": 9894400,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261027.6",
+      "recorded_at": "2026-10-27",
+      "recorded_note": "当前装机包（能力新增）：训练向导最小闭环（数据集装配/训练/评估混淆矩阵/发布提示）+ 可复现评估 API"
     }
   ],
   "legacy_backfilled": [
