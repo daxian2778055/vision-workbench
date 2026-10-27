@@ -279,7 +279,16 @@
       "exe_bytes": 9903616,
       "package_dir": "dist/VisionFlowPlatform-rc-20261027.7",
       "recorded_at": "2026-10-27",
-      "recorded_note": "当前装机包（能力新增）：训练向导第二片——数据增广（确定性）+ 一键发布为算子（插入预填模型的分类节点）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261027.8 取代（后者修运行界面静默丢绑定）"
+    },
+    {
+      "tag": "rc-20261027.8",
+      "commit": "a603cb52bd546339c4dfeab6af63944a7c41669c",
+      "exe_md5": "f920fb814a3944f0152afb321a2c28d1",
+      "exe_bytes": 9908736,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261027.8",
+      "recorded_at": "2026-10-27",
+      "recorded_note": "当前装机包：运行界面绑定增强——修属性面板刷新静默丢绑定 bug + 绑定失效红显（staleBindings 共用判据）"
     }
   ],
   "legacy_backfilled": [
