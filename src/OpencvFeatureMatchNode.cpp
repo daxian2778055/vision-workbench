@@ -261,17 +261,8 @@ void OpencvFeatureMatchNode::run(bool /*autoSwitch*/)
                 fail(QStringLiteral("参照来源=特征库样本时必须填写样本名"));
                 return;
             }
-            FeatureSample hit;
-            for (const QString &det : {QStringLiteral("ORB"), QStringLiteral("SIFT")}) {
-                for (const FeatureSample &s : AppDatabase::instance()->loadFeatureSamples(det)) {
-                    if (s.name == wantName) {
-                        hit = s;
-                        break;
-                    }
-                }
-                if (hit.isValid() || !hit.imagePng.isEmpty())
-                    break;
-            }
+            // 按名取单行（含缩略图）：比整库读完再找名省掉全部图像传输（2026-10-27 P3-4）
+            FeatureSample hit = AppDatabase::instance()->loadFeatureSampleByName(wantName);
             if (hit.id < 0) {
                 fail(QStringLiteral("特征库里没有名为「%1」的样本").arg(wantName));
                 return;

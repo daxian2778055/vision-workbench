@@ -84,6 +84,10 @@ public:
     /// 特征库（2026-10-27）：图库索引的持久化出入口，与其它表同一把锁/同一套线程连接。
     bool saveFeatureSample(const FeatureSample &sample);
     QList<FeatureSample> loadFeatureSamples(const QString &detector) const;
+    /// 不带图像 BLOB 的元数据查询（检索/按名查找用，2026-10-27 P3-4）
+    QList<FeatureSample> loadFeatureSamplesMeta(const QString &detector) const;
+    /// 按名取单行（含图像）：参照匹配用（2026-10-27 P3-4）
+    FeatureSample loadFeatureSampleByName(const QString &name) const;
     bool deleteFeatureSample(int id);
     bool clearFeatureSamples();
 

@@ -24,7 +24,26 @@ struct FeatureSample {
     int descType = 0;             // CV_8U / CV_32F ...
     QDateTime createdAt;
 
-    bool isValid() const { return descRows > 0 && descCols > 0 && !descriptors.isEmpty(); }
+    /// 形状校验（2026-10-27 P2-4）：DB 行可能被截断/半写/旧格式，直接按 rows/cols/type
+    /// 把 blob 包成 cv::Mat 会让 Mat 容量小于声明尺寸 → BFMatcher 越界读。
+    /// 三件事必须同时成立：描述子字节数 == rows*cols*elemSize、关键点字节数是 16 的倍数、
+    /// 关键点数 == 行数。
+    bool isValid() const
+    {
+        if (descRows <= 0 || descCols <= 0 || descType < 0)
+            return false;
+        const size_t elem = (descType == CV_8U) ? 1
+                            : (descType == CV_32F) ? 4
+                            : (descType == CV_64F) ? 8 : 0;
+        if (elem == 0)
+            return false;
+        const size_t want = size_t(descRows) * size_t(descCols) * elem;
+        if (size_t(descriptors.size()) != want)
+            return false;
+        if (keypoints.size() % 16 != 0)   // 每点 4×float32
+            return false;
+        return size_t(keypoints.size() / 16) == size_t(descRows);
+    }
 
     /// 反序列化成 OpenCV 结构（失败返回空）
     cv::Mat descriptorMat() const;

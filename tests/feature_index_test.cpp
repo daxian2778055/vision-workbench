@@ -28,6 +28,7 @@ private slots:
     void thumbnailRoundTrip();
     void searchAnnotatesTop1();
     void featureMatchCanUseLibrarySample();
+    void truncatedSampleIsRejected();
 
 private:
     static cv::Mat pattern(int seed, int w = 320, int h = 240);
@@ -218,5 +219,32 @@ void FeatureIndexTest::featureMatchCanUseLibrarySample()
     QVERIFY(AppDatabase::instance()->clearFeatureSamples());
 }
 
+void FeatureIndexTest::truncatedSampleIsRejected()
+{
+    // 形状校验（2026-10-27 P2-4）：半写/损坏行不得进 BFMatcher（容量不足 → 越界读）
+    std::vector<cv::KeyPoint> kps;
+    cv::Mat desc;
+    QVERIFY(FeatureIndex::extract(QStringLiteral("ORB"), pattern(31), kps, desc));
+    FeatureSample s;
+    s.setFrom(QStringLiteral("broken"), QStringLiteral("ORB"), kps, desc, QByteArray());
+    QVERIFY(s.isValid());
+
+    // 砍掉一半描述子：必须判无效
+    FeatureSample bad = s;
+    bad.descriptors = bad.descriptors.left(bad.descriptors.size() / 2);
+    QVERIFY2(!bad.isValid(), "截断的描述子被判为有效");
+
+    // 关键点数与行数不一致：必须判无效
+    FeatureSample bad2 = s;
+    bad2.keypoints = bad2.keypoints.left(bad2.keypoints.size() - 16);
+    QVERIFY2(!bad2.isValid(), "关键点数与描述子行数不一致却判为有效");
+
+    // 入库后 loadFeatureSamples 必须跳过坏行
+    QVERIFY(AppDatabase::instance()->saveFeatureSample(s));
+    QVERIFY(AppDatabase::instance()->saveFeatureSample(bad));
+    const auto lib = AppDatabase::instance()->loadFeatureSamples(QStringLiteral("ORB"));
+    QCOMPARE(lib.size(), 1);   // 只有好的那行
+    QVERIFY(AppDatabase::instance()->clearFeatureSamples());
+}
 QTEST_MAIN(FeatureIndexTest)
 #include "feature_index_test.moc"

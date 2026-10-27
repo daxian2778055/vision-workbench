@@ -120,19 +120,43 @@ inline cv::Mat augmentSample(const cv::Mat &src, int k, const AugmentOptions &au
     }
 
     if (aug.noiseSigma > 0.01) {
-        cv::Mat noise(img.size(), img.type());
+        // 零均值噪声（2026-10-27 P3-1，两轮修正）：
+        //  一版 saturate_cast<N(0,σ)> 把负值钳成 0（实测 53% 像素为 0、提亮 +2.4 灰阶）；
+        //  二版"先减 128 再加噪"仍在 8U 域做减法，负值照样钳成 0（实测均值 132）。
+        // 正解：整段在 16S 域做，最后一次性饱和回 8U——只要图不贴 0/255，均值就是零偏。
+        cv::Mat signedImg;
+        img.convertTo(signedImg, CV_16SC1);
+        cv::Mat noise(img.size(), CV_16SC1);
         std::normal_distribution<double> nd(0.0, aug.noiseSigma);
         for (int y = 0; y < noise.rows; ++y)
             for (int x = 0; x < noise.cols; ++x)
-                noise.at<uchar>(y, x) = cv::saturate_cast<uchar>(nd(rng));
-        img += noise;
+                noise.at<short>(y, x) = short(std::lround(nd(rng)));
+        signedImg += noise;
+        signedImg.convertTo(img, img.type());
     }
     return img;
 }
 
+/// 确定性验证集划分（2026-10-27 P2-2）：train 与 evaluate **必须用同一函数**——否则
+/// "验证准确率"是模型训练时见过的样本（in-sample），过拟合模型会虚高到接近 100%。
+/// 返回升序的验证下标。
+inline std::vector<size_t> validationSplit(size_t n, double ratio, unsigned seed, size_t classIdx)
+{
+    std::vector<size_t> order(n);
+    for (size_t i = 0; i < n; ++i) order[i] = i;
+    std::mt19937 rng(seed + (unsigned)classIdx * 7919u);
+    std::shuffle(order.begin(), order.end(), rng);
+    const double r = (ratio < 0.05) ? 0.05 : (ratio > 0.95 ? 0.95 : ratio);
+    const size_t valCount = std::max<size_t>(1, size_t(double(n) * r));
+    std::vector<size_t> val(order.begin(), order.begin() + std::min(valCount, n));
+    std::sort(val.begin(), val.end());
+    return val;
+}
+
 inline TrainStats trainFromDir(const std::string &dir, const std::string &savePath,
                                int featureMode, int hiddenNeurons, int maxIterations,
-                               const AugmentOptions &aug = AugmentOptions())
+                               const AugmentOptions &aug = AugmentOptions(),
+                               double validationRatio = 0.0, unsigned seed = 42)
 {
     TrainStats st;
     namespace fs = std::filesystem;
@@ -159,14 +183,25 @@ inline TrainStats trainFromDir(const std::string &dir, const std::string &savePa
     const std::vector<std::string> exts = {".png", ".jpg", ".jpeg", ".bmp"};
     for (size_t ci = 0; ci < classDirs.size(); ++ci) {
         const fs::path cdir = fs::path(dir) / classDirs[ci];
+        // 先收集+排序，再按 validationSplit 留出验证集（2026-10-27 P2-2）：
+        // 与 evaluateFromDir 用同一划分，训练不得见验证样本，准确率才是泛化指标。
+        std::vector<std::string> files;
         for (const auto &e : fs::directory_iterator(cdir, ec)) {
             if (!e.is_regular_file(ec)) continue;
-            const std::string ext = e.path().extension().string();
-            std::string lower = ext;
+            std::string lower = e.path().extension().string();
             std::transform(lower.begin(), lower.end(), lower.begin(),
                            [](unsigned char c) { return (char)std::tolower(c); });
             if (std::find(exts.begin(), exts.end(), lower) == exts.end()) continue;
-            cv::Mat img = cv::imread(e.path().string(), cv::IMREAD_GRAYSCALE);
+            files.push_back(e.path().string());
+        }
+        std::sort(files.begin(), files.end());
+        std::vector<size_t> valIdx;
+        if (validationRatio > 0.001)
+            valIdx = validationSplit(files.size(), validationRatio, seed, ci);
+        for (size_t fi = 0; fi < files.size(); ++fi) {
+            if (std::binary_search(valIdx.begin(), valIdx.end(), fi))
+                continue;   // 验证样本：训练不得见
+            cv::Mat img = cv::imread(files[fi], cv::IMREAD_GRAYSCALE);
             if (img.empty()) continue;
             std::vector<float> f;
             if (!extractFeature(img, featureMode, f) || f.empty()) continue;
@@ -372,6 +407,21 @@ inline EvalResult evaluateFromDir(const std::string &modelPath, const std::strin
     }
     ev.classNames = classDirs;
     const size_t C = classDirs.size();
+    // 模型类别集合必须与评估目录一致（2026-10-27 P1/P3-6）：原实现用**目录**类别数 C
+    // 去索引**模型** classNames（长度可能更小）——训练 2 类后加第 3 个类目录、直接点评估
+    // 就是越界读（release 下 UB）；集合不同还会让混淆矩阵"表头写 C、列里装 B"。
+    if (m.classNames.size() != classDirs.size()) {
+        ev.error = "模型类别数(" + std::to_string(m.classNames.size())
+                   + ")与评估目录类别数(" + std::to_string(C) + ")不一致：请重新训练或改用同一数据集";
+        return ev;
+    }
+    for (size_t i = 0; i < C; ++i) {
+        if (m.classNames[i] != classDirs[i]) {
+            ev.error = "模型类别与评估目录不一致（第 " + std::to_string(i + 1)
+                       + " 个）：模型=" + m.classNames[i] + " 目录=" + classDirs[i];
+            return ev;
+        }
+    }
     ev.confusion.assign(C, std::vector<int>(C, 0));
 
     const std::vector<std::string> exts = {".png", ".jpg", ".jpeg", ".bmp"};
@@ -405,8 +455,11 @@ inline EvalResult evaluateFromDir(const std::string &modelPath, const std::strin
             if (!pr.ok) continue;
             ++ev.total;
             size_t pi = 0;
-            for (size_t j = 0; j < C; ++j)
-                if (m.classNames[j] == pr.className) { pi = j; break; }
+            bool found = false;
+            for (size_t j = 0; j < m.classNames.size(); ++j)
+                if (m.classNames[j] == pr.className) { pi = j; found = true; break; }
+            if (!found)
+                continue;
             ev.confusion[ci][pi] += 1;
             if (pr.className == classDirs[ci]) ++ev.correct;
         }

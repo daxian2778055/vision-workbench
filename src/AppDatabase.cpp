@@ -938,6 +938,7 @@ QList<FeatureSample> AppDatabase::loadFeatureSamples(const QString &detector) co
         noteFailure(QStringLiteral("loadFeatureSamples"), db, q.lastError().text());
         return out;
     }
+    int skipped = 0;
     while (q.next()) {
         FeatureSample s;
         s.id = q.value(0).toInt();
@@ -950,6 +951,49 @@ QList<FeatureSample> AppDatabase::loadFeatureSamples(const QString &detector) co
         s.descCols = q.value(7).toInt();
         s.descType = q.value(8).toInt();
         s.createdAt = readUtcTimestamp(q.value(9));
+        // 形状校验（2026-10-27 P2-4）：半写/损坏行跳过，不让坏 blob 进 BFMatcher
+        if (!s.isValid()) {
+            ++skipped;
+            continue;
+        }
+        out.append(s);
+    }
+    if (skipped > 0)
+        noteFailure(QStringLiteral("loadFeatureSamples/shape"),
+                    db, QStringLiteral("跳过 %1 个损坏样本").arg(skipped));
+    return out;
+}
+
+QList<FeatureSample> AppDatabase::loadFeatureSamplesMeta(const QString &detector) const
+{
+    // 元数据查询（2026-10-27 P3-4）：检索/按名查找不需要图像 BLOB——样本多了每次检索
+    // 都搬几百 MB，现场明显卡顿。图像只在预览时取。
+    QMutexLocker locker(&s_dbMutex);
+    QList<FeatureSample> out;
+    const QSqlDatabase db = threadDatabase();
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral(
+        "SELECT id, name, detector, keypoints, descriptors,"
+        " desc_rows, desc_cols, desc_type, created_at FROM feature_samples"
+        " WHERE detector = ? ORDER BY id"));
+    q.addBindValue(detector);
+    if (!q.exec()) {
+        noteFailure(QStringLiteral("loadFeatureSamplesMeta"), db, q.lastError().text());
+        return out;
+    }
+    while (q.next()) {
+        FeatureSample s;
+        s.id = q.value(0).toInt();
+        s.name = q.value(1).toString();
+        s.detector = q.value(2).toString();
+        s.keypoints = q.value(3).toByteArray();
+        s.descriptors = q.value(4).toByteArray();
+        s.descRows = q.value(5).toInt();
+        s.descCols = q.value(6).toInt();
+        s.descType = q.value(7).toInt();
+        s.createdAt = readUtcTimestamp(q.value(8));
+        if (!s.isValid())
+            continue;
         out.append(s);
     }
     return out;
@@ -987,4 +1031,36 @@ bool AppDatabase::clearFeatureSamples()
         return false;
     }
     return true;
+}
+
+FeatureSample AppDatabase::loadFeatureSampleByName(const QString &name) const
+{
+    // 按名取单行（含图像 BLOB）：FeatureMatch 按名做参照时用——比"整库读完再找名"
+    // 省掉全部图像传输（2026-10-27 P3-4）。
+    QMutexLocker locker(&s_dbMutex);
+    FeatureSample s;
+    const QSqlDatabase db = threadDatabase();
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral(
+        "SELECT id, name, detector, image, keypoints, descriptors,"
+        " desc_rows, desc_cols, desc_type, created_at FROM feature_samples"
+        " WHERE name = ? ORDER BY id DESC LIMIT 1"));
+    q.addBindValue(name);
+    if (!q.exec()) {
+        noteFailure(QStringLiteral("loadFeatureSampleByName"), db, q.lastError().text());
+        return s;
+    }
+    if (!q.next())
+        return s;
+    s.id = q.value(0).toInt();
+    s.name = q.value(1).toString();
+    s.detector = q.value(2).toString();
+    s.imagePng = q.value(3).toByteArray();
+    s.keypoints = q.value(4).toByteArray();
+    s.descriptors = q.value(5).toByteArray();
+    s.descRows = q.value(6).toInt();
+    s.descCols = q.value(7).toInt();
+    s.descType = q.value(8).toInt();
+    s.createdAt = readUtcTimestamp(q.value(9));
+    return s;
 }

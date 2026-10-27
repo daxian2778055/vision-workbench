@@ -18,6 +18,8 @@ private slots:
     void badDatasetReportsError();
     void augmentIsDeterministic();
     void augmentationExpandsDataset();
+    void holdoutExcludesValidationFromTraining();
+    void augmentationNoiseIsZeroMean();
 
 private:
     static cv::Mat makeSample(int cls, int seed);
@@ -159,5 +161,42 @@ void TrainingEvalTest::augmentationExpandsDataset()
              qPrintable(QStringLiteral("增广后准确率过低：%1%").arg(ev.accuracy * 100.0, 0, 'f', 1)));
 }
 
+void TrainingEvalTest::holdoutExcludesValidationFromTraining()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    buildDataset(dir.path(), 10);   // 20 张
+
+    const std::string model = QDir(dir.path()).filePath(QStringLiteral("m.yaml")).toStdString();
+    // 留出 30% → 训练只应见到 ~14 张（20 - 6）
+    const ClsTrainer::TrainStats st = ClsTrainer::trainFromDir(
+        dir.path().toStdString(), model, 0, 16, 150, ClsTrainer::AugmentOptions(), 0.3, 42);
+    QVERIFY2(st.ok, qPrintable(QString::fromStdString(st.error)));
+    QVERIFY2(st.samples <= 16,
+             qPrintable(QStringLiteral("验证样本参与了训练：samples=%1（20 张留 30%% 应 ≤16）")
+                            .arg(st.samples)));
+}
+
+void TrainingEvalTest::augmentationNoiseIsZeroMean()
+{
+    // 零均值噪声（2026-10-27 P3-1）：单边钳位会把负值压成 0，训练样本被系统性提亮
+    const cv::Mat src(128, 128, CV_8UC1, cv::Scalar(128));
+    ClsTrainer::AugmentOptions aug;
+    aug.enabled = true;
+    aug.rotateDeg = 0.0;      // 只留噪声
+    aug.brightness = 0.0;
+    aug.horizontalFlip = false;
+    aug.noiseSigma = 10.0;
+    // 多个变体取平均，抵消单次随机
+    double sum = 0.0;
+    const int N = 8;
+    for (int k = 1; k <= N; ++k) {
+        const cv::Mat a = ClsTrainer::augmentSample(src, k, aug, 1000 + k);
+        sum += cv::mean(a)[0];
+    }
+    const double mean = sum / N;
+    QVERIFY2(qAbs(mean - 128.0) < 1.5,
+             qPrintable(QStringLiteral("噪声不是零均值：均值 %1（应≈128）").arg(mean, 0, 'f', 2)));
+}
 QTEST_MAIN(TrainingEvalTest)
 #include "training_eval_test.moc"

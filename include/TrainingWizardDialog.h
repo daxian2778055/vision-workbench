@@ -23,7 +23,7 @@ public:
 
     /// 一键发布为算子（2026-10-27）：由主窗口注入"在画布插入预设节点"的能力，
     /// 对话框不直接依赖 FlowScene/MainWindow（保持可单测、低耦合）。
-    std::function<void(const QString &nodeType, const QJsonObject &params)> insertNode;
+    std::function<bool(const QString &nodeType, const QJsonObject &params)> insertNode;
 
 private slots:
     void refreshDataset();

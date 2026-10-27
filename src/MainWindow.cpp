@@ -3183,6 +3183,10 @@ void MainWindow::onNodeExecuted(NodeBase *executedNode, bool success)
 
 void MainWindow::onExecutionStarted()
 {
+    // 项目/流程载入后再体检一次（2026-10-27 P3-6）：启动期节点名单未知，
+    // 只在载入后才有意义
+    if (m_runtimeView)
+        m_runtimeView->setKnownNodeNames(allNodeFullNames());
     m_execStatus->onStarted();   // 状态栏 + 计时开始 + 按钮态
     refreshAllMvsPixelFormats();
     updateEditLockForCurrentScene();
@@ -4021,7 +4025,7 @@ void MainWindow::setupSystemMenu()
                     TrainingWizardDialog dlg(this);
                     // 一键发布为算子（2026-10-27）：把"插预设节点"能力注入向导；
                     // 走 addNode（有画布锁检查与状态提示），再把参数灌到刚创建的节点。
-                    dlg.insertNode = [this](const QString &nodeType, const QJsonObject &params) {
+                    dlg.insertNode = [this](const QString &nodeType, const QJsonObject &params) -> bool {
                         FlowScene *scene = nullptr;
                         const int idx = ui->flowTabs ? ui->flowTabs->currentIndex() : -1;
                         if (idx >= 0 && idx < m_flowScenes.size())
@@ -4030,13 +4034,14 @@ void MainWindow::setupSystemMenu()
                         addNode(nodeType);
                         if (!scene || scene->nodes().size() <= before) {
                             statusBar()->showMessage(QStringLiteral("插入节点失败（画布已锁定？）"), 8000);
-                            return;
+                            return false;
                         }
                         NodeBase *node = scene->nodes().last();
                         for (auto it = params.begin(); it != params.end(); ++it)
                             node->setParam(it.key(), it.value().toVariant());
                         statusBar()->showMessage(
                             QStringLiteral("已插入 %1 并预填 %2 个参数").arg(nodeType).arg(params.size()), 8000);
+                        return true;
                     };
                     dlg.exec();
                 });

@@ -110,7 +110,7 @@ QVector<FeatureMatchHit> FeatureIndex::search(const QString &detector,
         return hits;
     }
 
-    const QList<FeatureSample> lib = AppDatabase::instance()->loadFeatureSamples(detector);
+    const QList<FeatureSample> lib = AppDatabase::instance()->loadFeatureSamplesMeta(detector);
     if (lib.isEmpty()) {
         if (errors) *errors << QStringLiteral("特征库为空（detector=%1）").arg(detector);
         return hits;

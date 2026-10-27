@@ -29,6 +29,7 @@ private slots:
     void finishTextExportSucceedsOnWritableFile();
     void staleBindingsFindsMissingTargets();
     void staleBindingsIgnoresValidAndUnbound();
+    void staleBindingsTreatsUnknownNodeSetAsUnknown();
 };
 
 void UiGuardsTest::annotationLabelAcceptsSafeNames()
@@ -239,5 +240,15 @@ void UiGuardsTest::staleBindingsIgnoresValidAndUnbound()
     QVERIFY2(bad.isEmpty(), qPrintable(bad.join(QLatin1Char(','))));
 }
 
+void UiGuardsTest::staleBindingsTreatsUnknownNodeSetAsUnknown()
+{
+    // 启动期项目未载入：节点集为空 = 未知，不能全标红（2026-10-27 P3-6 假红）
+    RuntimeInterface itf;
+    RuntimeControl c;
+    c.bindType = QStringLiteral("node");
+    c.bindKey = QStringLiteral("尚未载入的节点");
+    itf.currentPage()->controls.append(c);
+    QVERIFY2(itf.staleBindings({}, {}).isEmpty(), "空节点集却把节点绑定判为失效");
+}
 QTEST_MAIN(UiGuardsTest)
 #include "ui_guards_test.moc"

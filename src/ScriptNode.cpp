@@ -90,7 +90,12 @@ void ScriptNode::run(bool /*autoSwitch*/)
                 // 预创建输出文件（受限令牌未必能建新文件），并把两个交换文件的 DACL 放开：
                 // 受限令牌要求 DACL 覆盖受限 SID，否则脚本一写就 Permission denied（实测）。
                 QFile preset(imageOutPath);
-                preset.open(QIODevice::WriteOnly);
+                if (!preset.open(QIODevice::WriteOnly)) {
+                    // 预创建失败必须留因（2026-10-27 P3-7）：否则脚本写不进来、节点静默透传输入图
+                    m_params[QStringLiteral("lastError")] =
+                        QStringLiteral("图像交换文件创建失败（脚本将无法产出图像）：%1")
+                            .arg(preset.errorString());
+                }
                 preset.close();
                 makeWorldWritable(imageInPath);
                 makeWorldWritable(imageOutPath);

@@ -270,7 +270,10 @@ QStringList RuntimeInterface::staleBindings(const QSet<QString> &globals,
                 continue;
             if (c.bindType == QLatin1String("global") && !globals.contains(c.bindKey))
                 bad << QStringLiteral("global:%1").arg(c.bindKey);
-            else if (c.bindType == QLatin1String("node") && !nodes.contains(c.bindKey))
+            // 节点集为空 = "未知"而非"失效"（2026-10-27 P3-6）：启动期先打开运行界面时
+            // 项目还没载入，全部 node 绑定会被误判成失效（假红）。
+            else if (c.bindType == QLatin1String("node") && !nodes.isEmpty()
+                     && !nodes.contains(c.bindKey))
                 bad << QStringLiteral("node:%1").arg(c.bindKey);
         }
     }

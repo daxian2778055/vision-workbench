@@ -107,8 +107,13 @@ TrainingWizardDialog::TrainingWizardDialog(QWidget *parent) : QDialog(parent)
         QJsonObject params;
         params[QStringLiteral("modelPath")] = modelPath();
         if (insertNode) {
-            insertNode(QStringLiteral("OpencvClassifyNode"), params);
-            m_log->appendPlainText(QStringLiteral("已插入分类节点并预填模型路径：%1").arg(modelPath()));
+            // 回调返回成败（2026-10-27 P2-3）：画布锁定时插入会失败，原先照样写"已插入"，
+            // 现场以为节点进图了——现在失败明确写红
+            if (insertNode(QStringLiteral("OpencvClassifyNode"), params)) {
+                m_log->appendPlainText(QStringLiteral("已插入分类节点并预填模型路径：%1").arg(modelPath()));
+            } else {
+                m_log->appendHtml(QStringLiteral("<span style='color:#c22'>插入失败：画布已锁定或无可用流程页——模型未进图</span>"));
+            }
         } else {
             m_log->appendPlainText(QStringLiteral("发布：请把模型路径填到分类节点 → %1").arg(modelPath()));
         }
@@ -193,9 +198,12 @@ void TrainingWizardDialog::onTrain()
     aug.factor = m_augFactor->value();
     aug.rotateDeg = m_augRotate->value();
     aug.noiseSigma = m_augNoise->value();
+    // 验证比例同时作用于**训练留出**（2026-10-27 P2-2）：训练不得见验证样本，
+    // 「评估」的准确率才是泛化指标，训练前后对比才有意义
     const ClsTrainer::TrainStats st = ClsTrainer::trainFromDir(
         dir.toStdString(), savePath, m_featureMode->currentIndex(),
-        m_hidden->value(), m_iters->value(), aug);
+        m_hidden->value(), m_iters->value(), aug,
+        m_valRatio->value(), 42);
     unsetCursor();
 
     if (!st.ok) {
@@ -210,6 +218,9 @@ void TrainingWizardDialog::onTrain()
             .arg(st.featDim)
             .arg(modelPath()));
     m_log->appendPlainText(QStringLiteral("下一步：点「评估」看模型质量；发布时把模型路径填到分类节点。"));
+    m_log->appendPlainText(
+        QStringLiteral("提示：classes.txt 与数据集目录同级——同一目录放多个模型会共用类名表，"
+                       "换模型请分目录或重新训练。"));
 }
 
 void TrainingWizardDialog::onEvaluate()
@@ -220,18 +231,21 @@ void TrainingWizardDialog::onEvaluate()
                              QStringLiteral("模型文件不存在，请先训练：%1").arg(mp));
         return;
     }
+    // 评估用模型自带特征模式（2026-10-27 P3-2）：下拉在评估时禁用，避免误以为生效
+    m_featureMode->setEnabled(false);
     setCursor(Qt::BusyCursor);
     const ClsTrainer::EvalResult ev = ClsTrainer::evaluateFromDir(
         mp.toStdString(), datasetDir().toStdString(), m_featureMode->currentIndex(),
         m_valRatio->value(), 42);
     unsetCursor();
+    m_featureMode->setEnabled(true);
 
     if (!ev.ok) {
         m_log->appendPlainText(QStringLiteral("评估失败：%1").arg(QString::fromStdString(ev.error)));
         m_summary->setText(QStringLiteral("评估失败"));
         return;
     }
-    m_summary->setText(QStringLiteral("验证集 %1 张，正确 %2，准确率 %3%")
+    m_summary->setText(QStringLiteral("留出验证集 %1 张（未参与训练），正确 %2，准确率 %3%")
                            .arg(ev.total)
                            .arg(ev.correct)
                            .arg(ev.accuracy * 100.0, 0, 'f', 1));
