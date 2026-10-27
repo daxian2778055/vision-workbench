@@ -82,8 +82,57 @@ inline bool extractFeature(const cv::Mat &img, int mode, std::vector<float> &fea
 }
 
 // 训练：trainDir/<类别名>/*.img -> savePath(.yaml)
+/// 数据增广（2026-10-27 训练向导第二片）：小样本现场最常见的问题是"样本不够"。
+/// 这里做**确定性**增广（同 seed 同结果），否则评估的可复现性会被增广随机性破坏。
+struct AugmentOptions {
+    bool enabled = false;
+    int factor = 2;              // 每张原图扩成 N 张（含原图）
+    unsigned seed = 42;
+    double rotateDeg = 8.0;      // ±度
+    double brightness = 20.0;    // ±灰阶
+    double noiseSigma = 6.0;     // 高斯噪声标准差
+    bool horizontalFlip = true;
+};
+
+/// 对单张灰度图生成第 k 个增广变体（k=0 为原图）
+inline cv::Mat augmentSample(const cv::Mat &src, int k, const AugmentOptions &aug,
+                             unsigned seedBase)
+{
+    if (k <= 0 || src.empty())
+        return src.clone();
+    std::mt19937 rng(seedBase + (unsigned)k * 7919u);
+    cv::Mat img = src.clone();
+
+    if (aug.horizontalFlip && (rng() % 2u == 0))
+        cv::flip(img, img, 1);
+
+    if (aug.rotateDeg > 0.01) {
+        std::uniform_real_distribution<double> dist(-aug.rotateDeg, aug.rotateDeg);
+        const double ang = dist(rng);
+        const cv::Point2f c(img.cols * 0.5f, img.rows * 0.5f);
+        const cv::Mat M = cv::getRotationMatrix2D(c, ang, 1.0);
+        cv::warpAffine(img, img, M, img.size(), cv::INTER_LINEAR, cv::BORDER_REFLECT);
+    }
+
+    if (aug.brightness > 0.01) {
+        std::uniform_real_distribution<double> dist(-aug.brightness, aug.brightness);
+        img.convertTo(img, -1, 1.0, dist(rng));
+    }
+
+    if (aug.noiseSigma > 0.01) {
+        cv::Mat noise(img.size(), img.type());
+        std::normal_distribution<double> nd(0.0, aug.noiseSigma);
+        for (int y = 0; y < noise.rows; ++y)
+            for (int x = 0; x < noise.cols; ++x)
+                noise.at<uchar>(y, x) = cv::saturate_cast<uchar>(nd(rng));
+        img += noise;
+    }
+    return img;
+}
+
 inline TrainStats trainFromDir(const std::string &dir, const std::string &savePath,
-                               int featureMode, int hiddenNeurons, int maxIterations)
+                               int featureMode, int hiddenNeurons, int maxIterations,
+                               const AugmentOptions &aug = AugmentOptions())
 {
     TrainStats st;
     namespace fs = std::filesystem;
@@ -123,6 +172,18 @@ inline TrainStats trainFromDir(const std::string &dir, const std::string &savePa
             if (!extractFeature(img, featureMode, f) || f.empty()) continue;
             feats.push_back(std::move(f));
             labels.push_back((int)ci);
+            // 增广变体（2026-10-27）：确定性，同 seed 同结果
+            if (aug.enabled && aug.factor > 1) {
+                for (int k = 1; k < aug.factor; ++k) {
+                    cv::Mat augImg = augmentSample(img, k, aug,
+                                                   aug.seed + (unsigned)feats.size());
+                    std::vector<float> fa;
+                    if (!extractFeature(augImg, featureMode, fa) || fa.empty())
+                        continue;
+                    feats.push_back(std::move(fa));
+                    labels.push_back((int)ci);
+                }
+            }
         }
     }
     if ((int)feats.size() < (int)classDirs.size() * 2) {

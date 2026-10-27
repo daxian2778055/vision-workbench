@@ -1,14 +1,18 @@
 #include "TrainingWizardDialog.h"
 
 #include "ClassifierTrainer.h"
+#include "OpencvClassifyNode.h"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
+#include <QFile>
 #include <QDoubleSpinBox>
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -71,6 +75,20 @@ TrainingWizardDialog::TrainingWizardDialog(QWidget *parent) : QDialog(parent)
     form->addRow(QStringLiteral("验证比例"), m_valRatio);
     m_modelName = new QLineEdit(QStringLiteral("model.yaml"));
     form->addRow(QStringLiteral("模型文件名"), m_modelName);
+    m_augEnable = new QCheckBox(QStringLiteral("启用数据增广（小样本必开）"));
+    form->addRow(QString(), m_augEnable);
+    m_augFactor = new QSpinBox();
+    m_augFactor->setRange(1, 10);
+    m_augFactor->setValue(3);
+    form->addRow(QStringLiteral("每图扩成 N 张"), m_augFactor);
+    m_augRotate = new QDoubleSpinBox();
+    m_augRotate->setRange(0.0, 45.0);
+    m_augRotate->setValue(8.0);
+    form->addRow(QStringLiteral("随机旋转 ±°"), m_augRotate);
+    m_augNoise = new QDoubleSpinBox();
+    m_augNoise->setRange(0.0, 30.0);
+    m_augNoise->setValue(6.0);
+    form->addRow(QStringLiteral("高斯噪声 σ"), m_augNoise);
     root->addLayout(form);
 
     // 按钮
@@ -79,10 +97,27 @@ TrainingWizardDialog::TrainingWizardDialog(QWidget *parent) : QDialog(parent)
     connect(trainBtn, &QPushButton::clicked, this, &TrainingWizardDialog::onTrain);
     auto *evalBtn = new QPushButton(QStringLiteral("评估"));
     connect(evalBtn, &QPushButton::clicked, this, &TrainingWizardDialog::onEvaluate);
+    auto *publishBtn = new QPushButton(QStringLiteral("发布并插入分类节点"));
+    connect(publishBtn, &QPushButton::clicked, this, [this]() {
+        if (!QFile::exists(modelPath())) {
+            QMessageBox::warning(this, QStringLiteral("失败"),
+                                 QStringLiteral("模型不存在，请先训练：%1").arg(modelPath()));
+            return;
+        }
+        QJsonObject params;
+        params[QStringLiteral("modelPath")] = modelPath();
+        if (insertNode) {
+            insertNode(QStringLiteral("OpencvClassifyNode"), params);
+            m_log->appendPlainText(QStringLiteral("已插入分类节点并预填模型路径：%1").arg(modelPath()));
+        } else {
+            m_log->appendPlainText(QStringLiteral("发布：请把模型路径填到分类节点 → %1").arg(modelPath()));
+        }
+    });
     auto *closeBtn = new QPushButton(QStringLiteral("关闭"));
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
     btns->addWidget(trainBtn);
     btns->addWidget(evalBtn);
+    btns->addWidget(publishBtn);
     btns->addStretch();
     btns->addWidget(closeBtn);
     root->addLayout(btns);
@@ -153,9 +188,14 @@ void TrainingWizardDialog::onTrain()
     const std::string savePath = modelPath().toStdString();
     m_log->appendPlainText(QStringLiteral("开始训练：%1 …").arg(modelPath()));
     setCursor(Qt::BusyCursor);
+    ClsTrainer::AugmentOptions aug;
+    aug.enabled = m_augEnable->isChecked();
+    aug.factor = m_augFactor->value();
+    aug.rotateDeg = m_augRotate->value();
+    aug.noiseSigma = m_augNoise->value();
     const ClsTrainer::TrainStats st = ClsTrainer::trainFromDir(
         dir.toStdString(), savePath, m_featureMode->currentIndex(),
-        m_hidden->value(), m_iters->value());
+        m_hidden->value(), m_iters->value(), aug);
     unsetCursor();
 
     if (!st.ok) {

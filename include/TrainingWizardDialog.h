@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QDialog>
+#include <QJsonObject>
+#include <functional>
 
 class QComboBox;
 class QLineEdit;
@@ -19,6 +21,10 @@ class TrainingWizardDialog : public QDialog
 public:
     explicit TrainingWizardDialog(QWidget *parent = nullptr);
 
+    /// 一键发布为算子（2026-10-27）：由主窗口注入"在画布插入预设节点"的能力，
+    /// 对话框不直接依赖 FlowScene/MainWindow（保持可单测、低耦合）。
+    std::function<void(const QString &nodeType, const QJsonObject &params)> insertNode;
+
 private slots:
     void refreshDataset();
     void onTrain();
@@ -34,6 +40,10 @@ private:
     QSpinBox *m_hidden = nullptr;
     QSpinBox *m_iters = nullptr;
     QDoubleSpinBox *m_valRatio = nullptr;
+    class QCheckBox *m_augEnable = nullptr;
+    QSpinBox *m_augFactor = nullptr;
+    QDoubleSpinBox *m_augRotate = nullptr;
+    QDoubleSpinBox *m_augNoise = nullptr;
     QLineEdit *m_modelName = nullptr;
     QPlainTextEdit *m_log = nullptr;
     QTableWidget *m_confusion = nullptr;

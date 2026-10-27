@@ -70,6 +70,7 @@
 #include "ComputeBackend.h"
 #include "FeatureLibraryDialog.h"
 #include "TrainingWizardDialog.h"
+#include <QJsonObject>
 #include <QActionGroup>   // 系统菜单「脚本安全：执行前确认」开关
 #include "FactoryPasswordGuard.h"
 #include "OperationLogDialog.h"
@@ -4014,6 +4015,25 @@ void MainWindow::setupSystemMenu()
         connect(ui->menuSystem->addAction(QStringLiteral("训练向导…")), &QAction::triggered,
                 this, [this]() {
                     TrainingWizardDialog dlg(this);
+                    // 一键发布为算子（2026-10-27）：把"插预设节点"能力注入向导；
+                    // 走 addNode（有画布锁检查与状态提示），再把参数灌到刚创建的节点。
+                    dlg.insertNode = [this](const QString &nodeType, const QJsonObject &params) {
+                        FlowScene *scene = nullptr;
+                        const int idx = ui->flowTabs ? ui->flowTabs->currentIndex() : -1;
+                        if (idx >= 0 && idx < m_flowScenes.size())
+                            scene = m_flowScenes[idx];
+                        const int before = scene ? scene->nodes().size() : 0;
+                        addNode(nodeType);
+                        if (!scene || scene->nodes().size() <= before) {
+                            statusBar()->showMessage(QStringLiteral("插入节点失败（画布已锁定？）"), 8000);
+                            return;
+                        }
+                        NodeBase *node = scene->nodes().last();
+                        for (auto it = params.begin(); it != params.end(); ++it)
+                            node->setParam(it.key(), it.value().toVariant());
+                        statusBar()->showMessage(
+                            QStringLiteral("已插入 %1 并预填 %2 个参数").arg(nodeType).arg(params.size()), 8000);
+                    };
                     dlg.exec();
                 });
         m_confirmScriptAct->setChecked(policy.requireConfirmation());

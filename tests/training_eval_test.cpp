@@ -16,6 +16,8 @@ private slots:
     void trainAndEvaluateOnSeparableData();
     void evaluateIsReproducible();
     void badDatasetReportsError();
+    void augmentIsDeterministic();
+    void augmentationExpandsDataset();
 
 private:
     static cv::Mat makeSample(int cls, int seed);
@@ -112,6 +114,49 @@ void TrainingEvalTest::badDatasetReportsError()
         dir.path().toStdString(), 0, 0.3, 42);
     QVERIFY2(!ev.ok, "不存在的模型却评估成功");
     QVERIFY2(!ev.error.empty(), "模型加载失败没有可读原因");
+}
+
+void TrainingEvalTest::augmentIsDeterministic()
+{
+    const cv::Mat src = makeSample(0, 3);
+    ClsTrainer::AugmentOptions aug;
+    aug.enabled = true;
+    aug.factor = 3;
+    aug.seed = 7;
+
+    const cv::Mat a = ClsTrainer::augmentSample(src, 1, aug, 100);
+    const cv::Mat b = ClsTrainer::augmentSample(src, 1, aug, 100);
+    QVERIFY2(a.size() == b.size(), "增广尺寸不稳定");
+    QVERIFY2(cv::countNonZero(a != b) == 0, "同 seed 增广结果不一致：评估可复现性会被破坏");
+
+    const cv::Mat c = ClsTrainer::augmentSample(src, 2, aug, 100);
+    // 不同变体应当有差异（否则增广没起作用）
+    QVERIFY2(cv::countNonZero(a != c) > 0, "不同变体完全相同：增广没有起作用");
+}
+
+void TrainingEvalTest::augmentationExpandsDataset()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    buildDataset(dir.path(), 6);   // 2 类 × 6 = 12 张
+
+    ClsTrainer::AugmentOptions aug;
+    aug.enabled = true;
+    aug.factor = 3;               // 扩成 3 倍 ≈ 36
+    aug.seed = 42;
+
+    const std::string model = QDir(dir.path()).filePath(QStringLiteral("m.yaml")).toStdString();
+    const ClsTrainer::TrainStats st = ClsTrainer::trainFromDir(
+        dir.path().toStdString(), model, 0, 24, 250, aug);
+    QVERIFY2(st.ok, qPrintable(QString::fromStdString(st.error)));
+    QVERIFY2(st.samples >= 30,
+             qPrintable(QStringLiteral("增广未扩样：samples=%1（应接近 36）").arg(st.samples)));
+
+    // 增广训练后评估仍应可分
+    const auto ev = ClsTrainer::evaluateFromDir(model, dir.path().toStdString(), 0, 0.3, 42);
+    QVERIFY2(ev.ok, qPrintable(QString::fromStdString(ev.error)));
+    QVERIFY2(ev.accuracy >= 0.8,
+             qPrintable(QStringLiteral("增广后准确率过低：%1%").arg(ev.accuracy * 100.0, 0, 'f', 1)));
 }
 
 QTEST_MAIN(TrainingEvalTest)
