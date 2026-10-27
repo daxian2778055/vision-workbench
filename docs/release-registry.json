@@ -216,7 +216,16 @@
       "exe_bytes": 9771520,
       "package_dir": "dist/VisionFlowPlatform-rc-20261025.18",
       "recorded_at": "2026-10-27",
-      "recorded_note": "当前装机包：解析失败与越出拆成两条诊断 + resolveFinalPath 按需分配缓冲（长路径不再误判）+ junction 腿在 Windows 不可跳过（建不了即红）+ 路径级/句柄级边界登记"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261027.1 取代（后者新增脚本图像 I/O）"
+    },
+    {
+      "tag": "rc-20261027.1",
+      "commit": "a6de898f97363eabe866ce39d635474a93ae5020",
+      "exe_md5": "708de18ae6d2f0226109ce29567d5184",
+      "exe_bytes": 9775616,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261027.1",
+      "recorded_at": "2026-10-27",
+      "recorded_note": "当前装机包（能力新增）：脚本节点支持图像处理（--vfp-image-in/out 文件契约，沙箱不变）+ 交换文件低完整性标签修复（受限脚本可写）"
     }
   ],
   "legacy_backfilled": [
