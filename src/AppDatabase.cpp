@@ -361,6 +361,25 @@ bool AppDatabase::createTables()
         return false;
     }
 
+    const QString createFeatureSamples = QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS feature_samples ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  name TEXT NOT NULL,"
+        "  detector TEXT NOT NULL,"
+        "  image BLOB,"
+        "  keypoints BLOB NOT NULL,"
+        "  descriptors BLOB NOT NULL,"
+        "  desc_rows INTEGER NOT NULL,"
+        "  desc_cols INTEGER NOT NULL,"
+        "  desc_type INTEGER NOT NULL,"
+        "  created_at DATETIME DEFAULT CURRENT_TIMESTAMP"
+        ")"
+    );
+    if (!q.exec(createFeatureSamples)) {
+        noteFailure(QStringLiteral("createTables/feature_samples"), db, q.lastError().text());
+        return false;
+    }
+
     const QString createLogs = QStringLiteral(
         "CREATE TABLE IF NOT EXISTS operation_logs ("
         "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -872,4 +891,100 @@ int AppDatabase::purgeOldRecords(int retainDays)
                   << "records older than" << retainDays << "days";
     }
     return total;
+}
+
+bool AppDatabase::saveFeatureSample(const FeatureSample &sample)
+{
+    QMutexLocker locker(&s_dbMutex);
+    if (const QString refusal = SessionManager::instance()->writeGateRefusal(); !refusal.isEmpty()) {
+        VFP_DEBUG << "特征样本保存被写操作闸拒绝:" << sample.name << refusal;
+        return false;
+    }
+    const QSqlDatabase db = threadDatabase();
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral(
+        "INSERT INTO feature_samples (name, detector, image, keypoints, descriptors,"
+        " desc_rows, desc_cols, desc_type, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"));
+    q.addBindValue(sample.name);
+    q.addBindValue(sample.detector);
+    q.addBindValue(sample.imagePng);
+    q.addBindValue(sample.keypoints);
+    q.addBindValue(sample.descriptors);
+    q.addBindValue(sample.descRows);
+    q.addBindValue(sample.descCols);
+    q.addBindValue(sample.descType);
+    q.addBindValue(utcBindText(sample.createdAt.isValid() ? sample.createdAt
+                                                          : QDateTime::currentDateTimeUtc()));
+    if (!q.exec()) {
+        noteFailure(QStringLiteral("saveFeatureSample"), db, q.lastError().text());
+        return false;
+    }
+    return true;
+}
+
+QList<FeatureSample> AppDatabase::loadFeatureSamples(const QString &detector) const
+{
+    QMutexLocker locker(&s_dbMutex);
+    QList<FeatureSample> out;
+    const QSqlDatabase db = threadDatabase();
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral(
+        "SELECT id, name, detector, image, keypoints, descriptors,"
+        " desc_rows, desc_cols, desc_type, created_at FROM feature_samples"
+        " WHERE detector = ? ORDER BY id"));
+    q.addBindValue(detector);
+    if (!q.exec()) {
+        noteFailure(QStringLiteral("loadFeatureSamples"), db, q.lastError().text());
+        return out;
+    }
+    while (q.next()) {
+        FeatureSample s;
+        s.id = q.value(0).toInt();
+        s.name = q.value(1).toString();
+        s.detector = q.value(2).toString();
+        s.imagePng = q.value(3).toByteArray();
+        s.keypoints = q.value(4).toByteArray();
+        s.descriptors = q.value(5).toByteArray();
+        s.descRows = q.value(6).toInt();
+        s.descCols = q.value(7).toInt();
+        s.descType = q.value(8).toInt();
+        s.createdAt = readUtcTimestamp(q.value(9));
+        out.append(s);
+    }
+    return out;
+}
+
+bool AppDatabase::deleteFeatureSample(int id)
+{
+    QMutexLocker locker(&s_dbMutex);
+    if (const QString refusal = SessionManager::instance()->writeGateRefusal(); !refusal.isEmpty()) {
+        VFP_DEBUG << "特征样本删除被写操作闸拒绝:" << id << refusal;
+        return false;
+    }
+    const QSqlDatabase db = threadDatabase();
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral("DELETE FROM feature_samples WHERE id = ?"));
+    q.addBindValue(id);
+    if (!q.exec()) {
+        noteFailure(QStringLiteral("deleteFeatureSample"), db, q.lastError().text());
+        return false;
+    }
+    return q.numRowsAffected() > 0;
+}
+
+bool AppDatabase::clearFeatureSamples()
+{
+    QMutexLocker locker(&s_dbMutex);
+    if (const QString refusal = SessionManager::instance()->writeGateRefusal(); !refusal.isEmpty()) {
+        VFP_DEBUG << "特征库清空被写操作闸拒绝:" << refusal;
+        return false;
+    }
+    const QSqlDatabase db = threadDatabase();
+    QSqlQuery q(db);
+    if (!q.exec(QStringLiteral("DELETE FROM feature_samples"))) {
+        noteFailure(QStringLiteral("clearFeatureSamples"), db, q.lastError().text());
+        return false;
+    }
+    return true;
 }

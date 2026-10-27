@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QString>
 #include <QList>
+#include "FeatureIndex.h"
 #include <QDateTime>
 #include <QSqlDatabase>
 
@@ -79,6 +80,12 @@ public:
     bool authenticateUser(const QString &name, const QString &password,
                           bool *readFailed = nullptr) const;
     QList<UserRecord> queryUsers() const;
+
+    /// 特征库（2026-10-27）：图库索引的持久化出入口，与其它表同一把锁/同一套线程连接。
+    bool saveFeatureSample(const FeatureSample &sample);
+    QList<FeatureSample> loadFeatureSamples(const QString &detector) const;
+    bool deleteFeatureSample(int id);
+    bool clearFeatureSamples();
 
     /// 账户面三态：有账户 / 确实一个都没有 / 今天读不出来。登录页据此决定走
     /// 「首次使用初始化管理员」还是走认证。为什么不能就地用 queryUsers().isEmpty()：

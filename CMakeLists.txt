@@ -123,6 +123,8 @@ set(SOURCES
     src/OpencvUtil.cpp
     src/PathSafety.cpp
     src/ComputeBackend.cpp
+    src/FeatureSearchNode.cpp
+    src/FeatureIndex.cpp
     src/OpencvThresholdNode.cpp
     src/OpencvAdaptiveThresholdNode.cpp
     src/OpencvAngleNode.cpp
@@ -590,6 +592,10 @@ add_library(vfp_core OBJECT
     ${HEADERS}
     ${UI_FILES}
 )
+
+# AUTOMOC 对新增 Q_OBJECT 头偶发不扫（2026-10-27 实测）：把头显式列进目标源，
+# 强制生成 moc_FeatureSearchNode.cpp。
+target_sources(vfp_core PRIVATE include/FeatureSearchNode.h)
 # 构建顺序：Version.h 必须在该库编译任何源文件之前刷新（P1-3）
 add_dependencies(vfp_core vfp_version_header)
 
@@ -1147,6 +1153,14 @@ if(MSVC)
     vfp_configure_gui_test(OpencvBridgeTest)
 endif()
 
+# 特征检索（2026-10-27）：图库持久化与检索排序
+if(MSVC)
+    add_executable(feature_index_test tests/feature_index_test.cpp)
+    target_link_libraries(feature_index_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    vfp_add_qtest(NAME FeatureIndexTest TARGET feature_index_test)
+    vfp_configure_gui_test(FeatureIndexTest)
+endif()
+
 # 计算后端（2026-10-27）：T-API 透明加速的开关与正确性
 if(MSVC)
     add_executable(compute_backend_test tests/compute_backend_test.cpp)
@@ -1422,7 +1436,7 @@ if(MSVC)
     set(VFP_TESTS NodeCoreTest OpencvSerializationTest IntegrationTest DatabaseTest PerfTest
                   ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest CameraIoTest
                   DnnSegmentTest OpencvDefectAlignTest SoakTest StatisticsReportTest SchemePackageTest
-                  I18nTest SubFlowTest EditLockReleaseTest RoundAbortSummaryTest UndoHistoryAfterLoadTest NodeExceptionExitTest RejectedConnectionUndoTest DbThreadConnectionCleanupTest CameraTaskLedgerTest GlobalCameraConsumerGateTest CommDeviceGhostTest OpencvBridgeTest MeasureGreenGuardTest UiGuardsTest ScriptImageIoTest ComputeBackendTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
+                  I18nTest SubFlowTest EditLockReleaseTest RoundAbortSummaryTest UndoHistoryAfterLoadTest NodeExceptionExitTest RejectedConnectionUndoTest DbThreadConnectionCleanupTest CameraTaskLedgerTest GlobalCameraConsumerGateTest CommDeviceGhostTest OpencvBridgeTest MeasureGreenGuardTest UiGuardsTest ScriptImageIoTest ComputeBackendTest FeatureIndexTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
                   FactoryPasswordGuardTest FeatureMatchTest CalibChainTest OpencvNodesTest
                   ProjectPathsTest FlowCachePurgeLedgerTest ExecutionControlPolicyTest
                   AuxDialogMenuRouterTest ModuleEditorRegistryTest UITranslatorTest
