@@ -297,7 +297,16 @@
       "exe_bytes": 9918976,
       "package_dir": "dist/VisionFlowPlatform-rc-20261027.9",
       "recorded_at": "2026-10-27",
-      "recorded_note": "当前装机包（修复）：P1 评估越界读 + 类别集合校验、真留出验证集、发布失败如实、样本形状校验、零均值噪声、检索元数据化、启动期假红、脚本交换失败留因"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261027.10 取代（后者训练/评估下线程）"
+    },
+    {
+      "tag": "rc-20261027.10",
+      "commit": "297913631fef882657fac36c4ec068f7bd29e677",
+      "exe_md5": "2410c79e47113691230019cdd4a7d407",
+      "exe_bytes": 9937408,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261027.10",
+      "recorded_at": "2026-10-27",
+      "recorded_note": "当前装机包（能力新增）：训练/评估下线程（进度 + 取消，UI 不再假死）+ 进度取消回调 API"
     }
   ],
   "legacy_backfilled": [
