@@ -8,6 +8,7 @@
 #include <opencv2/objdetect.hpp>
 #include <opencv2/ml.hpp>
 #include <algorithm>
+#include <random>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -264,5 +265,99 @@ inline PredictResult predict(const Model &m, const cv::Mat &img)
     r.confidence = (sum > 0.f) ? (1.f / sum) : 0.f;
     return r;
 }
+
+/// 评估结果（2026-10-27 训练向导）：准确率 + 混淆矩阵，用于训练后立即看出模型质量。
+struct EvalResult {
+    bool ok = false;
+    int total = 0;
+    int correct = 0;
+    double accuracy = 0.0;
+    std::vector<std::string> classNames;                 // 行列同序（类目录名字典序）
+    std::vector<std::vector<int>> confusion;             // confusion[真][预]
+    std::string error;
+};
+
+/// 在目录上评估已有模型（2026-10-27）：按 seed 确定性划分验证集，训练集不计入准确率。
+/// 为什么按 seed 划分而不是随机：评估结果要可复现（同一数据集两次读数必须一致），
+/// 否则"训练前后对比"没有基准。
+inline EvalResult evaluateFromDir(const std::string &modelPath, const std::string &dir,
+                                  int featureMode, double validationRatio = 0.3,
+                                  unsigned seed = 42)
+{
+    EvalResult ev;
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    Model m = loadModel(modelPath);
+    if (!m.loaded) {
+        ev.error = m.error.empty() ? ("模型加载失败: " + modelPath) : m.error;
+        return ev;
+    }
+    if (!fs::is_directory(dir, ec)) {
+        ev.error = "评估目录不存在: " + dir;
+        return ev;
+    }
+
+    // 收集样本（类名字典序），每类内部按文件名排序 → 划分可复现
+    std::vector<std::string> classDirs;
+    for (const auto &e : fs::directory_iterator(dir, ec)) {
+        if (!e.is_directory(ec)) continue;
+        const std::string name = e.path().filename().string();
+        if (!name.empty() && name[0] != '.') classDirs.push_back(name);
+    }
+    std::sort(classDirs.begin(), classDirs.end());
+    if (classDirs.size() < 2) {
+        ev.error = "评估需要至少 2 个类别子目录";
+        return ev;
+    }
+    ev.classNames = classDirs;
+    const size_t C = classDirs.size();
+    ev.confusion.assign(C, std::vector<int>(C, 0));
+
+    const std::vector<std::string> exts = {".png", ".jpg", ".jpeg", ".bmp"};
+    const double ratio = (validationRatio < 0.05) ? 0.05 : (validationRatio > 0.95 ? 0.95 : validationRatio);
+
+    for (size_t ci = 0; ci < C; ++ci) {
+        std::vector<std::string> files;
+        const fs::path cdir = fs::path(dir) / classDirs[ci];
+        for (const auto &e : fs::directory_iterator(cdir, ec)) {
+            if (!e.is_regular_file(ec)) continue;
+            std::string lower = e.path().extension().string();
+            std::transform(lower.begin(), lower.end(), lower.begin(),
+                           [](unsigned char c) { return (char)std::tolower(c); });
+            if (std::find(exts.begin(), exts.end(), lower) == exts.end()) continue;
+            files.push_back(e.path().string());
+        }
+        std::sort(files.begin(), files.end());
+
+        // 确定性划分：按 seed + 文件序做一次伪随机抽取，样本数为 0 时全留验证
+        std::vector<size_t> order(files.size());
+        for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+        std::mt19937 rng(seed + (unsigned)ci);
+        std::shuffle(order.begin(), order.end(), rng);
+        const size_t valCount = std::max<size_t>(1, size_t(double(files.size()) * ratio));
+        for (size_t k = 0; k < order.size(); ++k) {
+            if (k >= valCount) continue;   // 只评验证集
+            const std::string &f = files[order[k]];
+            cv::Mat img = cv::imread(f, cv::IMREAD_GRAYSCALE);
+            if (img.empty()) continue;
+            PredictResult pr = predict(m, img);
+            if (!pr.ok) continue;
+            ++ev.total;
+            size_t pi = 0;
+            for (size_t j = 0; j < C; ++j)
+                if (m.classNames[j] == pr.className) { pi = j; break; }
+            ev.confusion[ci][pi] += 1;
+            if (pr.className == classDirs[ci]) ++ev.correct;
+        }
+    }
+    if (ev.total == 0) {
+        ev.error = "验证集为空（每类样本不足）";
+        return ev;
+    }
+    ev.accuracy = double(ev.correct) / double(ev.total);
+    ev.ok = true;
+    return ev;
+}
+
 
 }  // namespace ClsTrainer

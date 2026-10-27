@@ -69,6 +69,7 @@
 #include "ScriptSecurityPolicy.h"
 #include "ComputeBackend.h"
 #include "FeatureLibraryDialog.h"
+#include "TrainingWizardDialog.h"
 #include <QActionGroup>   // 系统菜单「脚本安全：执行前确认」开关
 #include "FactoryPasswordGuard.h"
 #include "OperationLogDialog.h"
@@ -4007,6 +4008,12 @@ void MainWindow::setupSystemMenu()
         connect(ui->menuSystem->addAction(QStringLiteral("特征库管理…")), &QAction::triggered,
                 this, [this]() {
                     FeatureLibraryDialog dlg(this);
+                    dlg.exec();
+                });
+        // 训练向导（2026-10-27）：数据集装配 → 训练 → 评估 → 发布，一条链走完
+        connect(ui->menuSystem->addAction(QStringLiteral("训练向导…")), &QAction::triggered,
+                this, [this]() {
+                    TrainingWizardDialog dlg(this);
                     dlg.exec();
                 });
         m_confirmScriptAct->setChecked(policy.requireConfirmation());
