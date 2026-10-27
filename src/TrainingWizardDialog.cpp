@@ -1,6 +1,10 @@
 #include "TrainingWizardDialog.h"
 
 #include "ClassifierTrainer.h"
+#include <QtConcurrent>
+#include <QMetaObject>
+#include <QProgressBar>
+#include <QPointer>
 #include "OpencvClassifyNode.h"
 
 #include <QCheckBox>
@@ -97,6 +101,18 @@ TrainingWizardDialog::TrainingWizardDialog(QWidget *parent) : QDialog(parent)
     connect(trainBtn, &QPushButton::clicked, this, &TrainingWizardDialog::onTrain);
     auto *evalBtn = new QPushButton(QStringLiteral("评估"));
     connect(evalBtn, &QPushButton::clicked, this, &TrainingWizardDialog::onEvaluate);
+    m_progress = new QProgressBar();
+    m_progress->setRange(0, 0);
+    m_progress->setVisible(false);
+    btns->addWidget(m_progress);
+    m_cancelBtn = new QPushButton(QStringLiteral("取消"));
+    m_cancelBtn->setVisible(false);
+    connect(m_cancelBtn, &QPushButton::clicked, this, [this]() {
+        m_cancel.store(true);
+        m_cancelBtn->setEnabled(false);
+        m_log->appendPlainText(QStringLiteral("正在取消…（当前样本处理完即停）"));
+    });
+    btns->addWidget(m_cancelBtn);
     auto *publishBtn = new QPushButton(QStringLiteral("发布并插入分类节点"));
     connect(publishBtn, &QPushButton::clicked, this, [this]() {
         if (!QFile::exists(modelPath())) {
@@ -140,7 +156,20 @@ TrainingWizardDialog::TrainingWizardDialog(QWidget *parent) : QDialog(parent)
     mid->addLayout(right, 2);
     root->addLayout(mid, 2);
 
+    m_watcher = new QFutureWatcher<void>(this);
+    connect(m_watcher, &QFutureWatcher<void>::finished, this,
+            [this]() { setRunning(false); });
     refreshDataset();
+}
+
+void TrainingWizardDialog::setRunning(bool on)
+{
+    m_running = on;
+    m_cancelBtn->setVisible(on);
+    m_cancelBtn->setEnabled(on);
+    m_progress->setVisible(on);
+    if (on)
+        m_cancel.store(false);
 }
 
 QString TrainingWizardDialog::datasetDir() const
@@ -191,33 +220,48 @@ void TrainingWizardDialog::onTrain()
         return;
     }
     const std::string savePath = modelPath().toStdString();
-    m_log->appendPlainText(QStringLiteral("开始训练：%1 …").arg(modelPath()));
-    setCursor(Qt::BusyCursor);
+    m_log->appendPlainText(QStringLiteral("开始训练：%1 …（后台运行，可取消）").arg(modelPath()));
     ClsTrainer::AugmentOptions aug;
     aug.enabled = m_augEnable->isChecked();
     aug.factor = m_augFactor->value();
     aug.rotateDeg = m_augRotate->value();
     aug.noiseSigma = m_augNoise->value();
-    // 验证比例同时作用于**训练留出**（2026-10-27 P2-2）：训练不得见验证样本，
-    // 「评估」的准确率才是泛化指标，训练前后对比才有意义
-    const ClsTrainer::TrainStats st = ClsTrainer::trainFromDir(
-        dir.toStdString(), savePath, m_featureMode->currentIndex(),
-        m_hidden->value(), m_iters->value(), aug,
-        m_valRatio->value(), 42);
-    unsetCursor();
-
-    if (!st.ok) {
-        m_log->appendPlainText(QStringLiteral("训练失败：%1")
-                                   .arg(QString::fromStdString(st.error)));
-        return;
-    }
-    m_log->appendPlainText(
-        QStringLiteral("训练完成：%1 个样本 / %2 类 / 特征 %3 维\n模型已保存：%4")
-            .arg(st.samples)
-            .arg(st.classes)
-            .arg(st.featDim)
-            .arg(modelPath()));
-    m_log->appendPlainText(QStringLiteral("下一步：点「评估」看模型质量；发布时把模型路径填到分类节点。"));
+    // 验证比例同时作用于**训练留出**（2026-10-27 P2-2）：训练不得见验证样本
+    setRunning(true);
+    const int featMode = m_featureMode->currentIndex();
+    const int hidden = m_hidden->value();
+    const int iters = m_iters->value();
+    const double valRatio = m_valRatio->value();
+    QPointer<TrainingWizardDialog> self(this);
+    m_watcher->setFuture(QtConcurrent::run([this, self, dir, savePath, featMode, hidden,
+                                            iters, aug, valRatio]() {
+        const ClsTrainer::TrainStats st = ClsTrainer::trainFromDir(
+            dir.toStdString(), savePath, featMode, hidden, iters, aug,
+            valRatio, 42,
+            [self](int done, int) {
+                if (!self) return;
+                QMetaObject::invokeMethod(self, [self, done]() {
+                    if (self) self->m_progress->setFormat(
+                        QStringLiteral("已处理 %1 个样本…").arg(done));
+                }, Qt::QueuedConnection);
+            },
+            [this]() { return m_cancel.load(); });
+        if (!self) return;
+        QMetaObject::invokeMethod(self, [self, st, savePath]() {
+            if (!self) return;
+            if (st.ok) {
+                self->m_log->appendPlainText(
+                    QStringLiteral("训练完成：%1 个样本 / %2 类 / 特征 %3 维\n模型已保存：%4")
+                        .arg(st.samples).arg(st.classes).arg(st.featDim)
+                        .arg(QString::fromStdString(savePath)));
+                self->m_log->appendPlainText(
+                    QStringLiteral("下一步：点「评估」看模型质量；发布时把模型路径填到分类节点。"));
+            } else {
+                self->m_log->appendPlainText(
+                    QStringLiteral("训练失败：%1").arg(QString::fromStdString(st.error)));
+            }
+        }, Qt::QueuedConnection);
+    }));
     m_log->appendPlainText(
         QStringLiteral("提示：classes.txt 与数据集目录同级——同一目录放多个模型会共用类名表，"
                        "换模型请分目录或重新训练。"));
@@ -233,40 +277,53 @@ void TrainingWizardDialog::onEvaluate()
     }
     // 评估用模型自带特征模式（2026-10-27 P3-2）：下拉在评估时禁用，避免误以为生效
     m_featureMode->setEnabled(false);
-    setCursor(Qt::BusyCursor);
-    const ClsTrainer::EvalResult ev = ClsTrainer::evaluateFromDir(
-        mp.toStdString(), datasetDir().toStdString(), m_featureMode->currentIndex(),
-        m_valRatio->value(), 42);
-    unsetCursor();
-    m_featureMode->setEnabled(true);
-
-    if (!ev.ok) {
-        m_log->appendPlainText(QStringLiteral("评估失败：%1").arg(QString::fromStdString(ev.error)));
-        m_summary->setText(QStringLiteral("评估失败"));
-        return;
-    }
-    m_summary->setText(QStringLiteral("留出验证集 %1 张（未参与训练），正确 %2，准确率 %3%")
-                           .arg(ev.total)
-                           .arg(ev.correct)
-                           .arg(ev.accuracy * 100.0, 0, 'f', 1));
-    m_log->appendPlainText(QStringLiteral("评估：%1/%2 正确（%3%）")
-                               .arg(ev.correct)
-                               .arg(ev.total)
-                               .arg(ev.accuracy * 100.0, 0, 'f', 1));
-
-    // 混淆矩阵
-    const int n = int(ev.classNames.size());
-    m_confusion->clear();
-    m_confusion->setRowCount(n);
-    m_confusion->setColumnCount(n + 1);
-    QStringList headers{QStringLiteral("真\\预")};
-    for (const auto &c : ev.classNames)
-        headers << QString::fromStdString(c);
-    m_confusion->setHorizontalHeaderLabels(headers);
-    for (int i = 0; i < n; ++i) {
-        m_confusion->setItem(i, 0, new QTableWidgetItem(QString::fromStdString(ev.classNames[size_t(i)])));
-        for (int j = 0; j < n; ++j)
-            m_confusion->setItem(i, j + 1,
-                                 new QTableWidgetItem(QString::number(ev.confusion[size_t(i)][size_t(j)])));
-    }
+    setRunning(true);
+    const int featMode = m_featureMode->currentIndex();
+    const double valRatio = m_valRatio->value();
+    const QString ds = datasetDir();
+    QPointer<TrainingWizardDialog> self(this);
+    m_watcher->setFuture(QtConcurrent::run([this, self, mp, ds, featMode, valRatio]() {
+        const ClsTrainer::EvalResult ev = ClsTrainer::evaluateFromDir(
+            mp.toStdString(), ds.toStdString(), featMode, valRatio, 42,
+            [self](int done, int) {
+                if (!self) return;
+                QMetaObject::invokeMethod(self, [self, done]() {
+                    if (self) self->m_progress->setFormat(
+                        QStringLiteral("已评估 %1 张…").arg(done));
+                }, Qt::QueuedConnection);
+            },
+            [this]() { return m_cancel.load(); });
+        if (!self) return;
+        QMetaObject::invokeMethod(self, [self, ev]() {
+            if (!self) return;
+            self->m_featureMode->setEnabled(true);
+            if (!ev.ok) {
+                self->m_log->appendPlainText(
+                    QStringLiteral("评估失败：%1").arg(QString::fromStdString(ev.error)));
+                self->m_summary->setText(QStringLiteral("评估失败"));
+                return;
+            }
+            self->m_log->appendPlainText(
+                QStringLiteral("评估：%1/%2 正确（%3%）")
+                    .arg(ev.correct).arg(ev.total).arg(ev.accuracy * 100.0, 0, 'f', 1));
+            self->m_summary->setText(
+                QStringLiteral("留出验证集 %1 张（未参与训练），正确 %2，准确率 %3%")
+                    .arg(ev.total).arg(ev.correct).arg(ev.accuracy * 100.0, 0, 'f', 1));
+            const int n = int(ev.classNames.size());
+            self->m_confusion->clear();
+            self->m_confusion->setRowCount(n);
+            self->m_confusion->setColumnCount(n + 1);
+            QStringList headers{QStringLiteral("真\\预")};
+            for (const auto &c : ev.classNames)
+                headers << QString::fromStdString(c);
+            self->m_confusion->setHorizontalHeaderLabels(headers);
+            for (int i = 0; i < n; ++i) {
+                self->m_confusion->setItem(i, 0,
+                    new QTableWidgetItem(QString::fromStdString(ev.classNames[size_t(i)])));
+                for (int j = 0; j < n; ++j)
+                    self->m_confusion->setItem(i, j + 1,
+                        new QTableWidgetItem(QString::number(ev.confusion[size_t(i)][size_t(j)])));
+            }
+        }, Qt::QueuedConnection);
+    }));
 }

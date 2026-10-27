@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QDialog>
+#include <QFutureWatcher>
+#include <atomic>
 #include <QJsonObject>
 #include <functional>
 
@@ -44,6 +46,13 @@ private:
     QSpinBox *m_augFactor = nullptr;
     QDoubleSpinBox *m_augRotate = nullptr;
     QDoubleSpinBox *m_augNoise = nullptr;
+    class QProgressBar *m_progress = nullptr;
+    class QPushButton *m_cancelBtn = nullptr;
+    QFutureWatcher<void> *m_watcher = nullptr;
+    std::atomic<bool> m_cancel{false};
+    bool m_running = false;
+
+    void setRunning(bool on);
     QLineEdit *m_modelName = nullptr;
     QPlainTextEdit *m_log = nullptr;
     QTableWidget *m_confusion = nullptr;

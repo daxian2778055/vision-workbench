@@ -9,6 +9,7 @@
 #include <opencv2/ml.hpp>
 #include <algorithm>
 #include <random>
+#include <functional>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -153,10 +154,17 @@ inline std::vector<size_t> validationSplit(size_t n, double ratio, unsigned seed
     return val;
 }
 
+/// 进度/取消回调（2026-10-27）：训练在工作线程跑，UI 需要知道进度并能取消。
+/// done/total 以"样本数"为单位（含增广变体）。
+using ProgressFn = std::function<void(int done, int total)>;
+using CancelFn = std::function<bool()>;
+
 inline TrainStats trainFromDir(const std::string &dir, const std::string &savePath,
                                int featureMode, int hiddenNeurons, int maxIterations,
                                const AugmentOptions &aug = AugmentOptions(),
-                               double validationRatio = 0.0, unsigned seed = 42)
+                               double validationRatio = 0.0, unsigned seed = 42,
+                               const ProgressFn &progress = ProgressFn(),
+                               const CancelFn &shouldCancel = CancelFn())
 {
     TrainStats st;
     namespace fs = std::filesystem;
@@ -201,12 +209,18 @@ inline TrainStats trainFromDir(const std::string &dir, const std::string &savePa
         for (size_t fi = 0; fi < files.size(); ++fi) {
             if (std::binary_search(valIdx.begin(), valIdx.end(), fi))
                 continue;   // 验证样本：训练不得见
+            if (shouldCancel && shouldCancel()) {
+                st.error = "训练被用户取消";
+                return st;
+            }
             cv::Mat img = cv::imread(files[fi], cv::IMREAD_GRAYSCALE);
             if (img.empty()) continue;
             std::vector<float> f;
             if (!extractFeature(img, featureMode, f) || f.empty()) continue;
             feats.push_back(std::move(f));
             labels.push_back((int)ci);
+            if (progress)
+                progress(int(feats.size()), -1);   // total 在下面补
             // 增广变体（2026-10-27）：确定性，同 seed 同结果
             if (aug.enabled && aug.factor > 1) {
                 for (int k = 1; k < aug.factor; ++k) {
@@ -378,7 +392,9 @@ struct EvalResult {
 /// 否则"训练前后对比"没有基准。
 inline EvalResult evaluateFromDir(const std::string &modelPath, const std::string &dir,
                                   int featureMode, double validationRatio = 0.3,
-                                  unsigned seed = 42)
+                                  unsigned seed = 42,
+                                  const ProgressFn &progress = ProgressFn(),
+                                  const CancelFn &shouldCancel = CancelFn())
 {
     EvalResult ev;
     namespace fs = std::filesystem;
@@ -449,6 +465,12 @@ inline EvalResult evaluateFromDir(const std::string &modelPath, const std::strin
         for (size_t k = 0; k < order.size(); ++k) {
             if (k >= valCount) continue;   // 只评验证集
             const std::string &f = files[order[k]];
+            if (shouldCancel && shouldCancel()) {
+                ev.error = "评估被用户取消";
+                return ev;
+            }
+            if (progress)
+                progress(ev.total + 1, -1);
             cv::Mat img = cv::imread(f, cv::IMREAD_GRAYSCALE);
             if (img.empty()) continue;
             PredictResult pr = predict(m, img);
