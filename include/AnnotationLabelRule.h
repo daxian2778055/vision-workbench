@@ -82,6 +82,13 @@ inline bool annotationClassDir(const QString &root, const QString &rawLabel,
     // 会让 "root/link → 目录外" 的联接直接通过包含检查（2026-10-26 实测的绕过）。
     const QString rootCanon = resolveFinalPath(root);
     const QString dirCanon = resolveFinalPath(dir);
+    // 解析失败与"越出"必须分开报（2026-10-27 复核）：resolveFinalPath 返回空的原因包括
+    // 路径超长、网络盘断开、卷名异常等，一律说成"越出标注目录"会把现场引向错方向。
+    if (rootCanon.isEmpty() || dirCanon.isEmpty()) {
+        if (why)
+            *why = QStringLiteral("无法解析最终路径（路径过长/网络盘断开？）：%1").arg(dir);
+        return false;
+    }
     if (!annotationPathIsInside(rootCanon, dirCanon)) {
         if (why)
             *why = QStringLiteral("类别目录越出标注目录，已拒绝写入：%1").arg(dir);

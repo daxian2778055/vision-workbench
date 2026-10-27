@@ -376,6 +376,10 @@
 | **包含检查被 junction 绕过（实测发现）** | `QFileInfo::canonicalFilePath()` 在 Windows 上**不解析 junction**：`root/link → 目录外` 时它仍返回 `root/link`，包含检查直接放行。新增 `resolveFinalPath()`（`src/PathSafety.cpp`，Windows 走 `GetFinalPathNameByHandleW`，其它平台退回 canonical），`annotationClassDir` 改用之 | **junction 端到端腿**（建不了则 QSKIP）：改后拦得住；把调用换成恒真（臂 D）→ 该腿红 |
 | 空 root 腿咬不到"位置" | 断言 `why` 含"标注目录未设置"，删掉早退守卫即红 | 该腿 |
 | outDir 清了、`*why` 没清 | 入口两个出参一起清（契约与实现同口径） | — |
+| 解析失败与"越出"共用诊断 | 分开报：解析失败 → 「无法解析最终路径（路径过长/网络盘断开？）」；真越出才说"越出标注目录" | — |
+| `resolveFinalPath` 固定 2K 缓冲 | 改为先问所需长度再分配（`GetFinalPathNameByHandleW(h,nullptr,0,…)`），长路径不再误判成不可信 | — |
+| junction 腿可能被 QSKIP 静默失效 | Windows 下建不了联接**直接判红**（该腿是"闸有没有接线"的唯一端到端守卫），仅非 Windows 保留 QSKIP；删联接改用 `QDir().rmdir` | 实测 10 腿 0 skip |
+| **边界（登记，不算缺陷）** | 检查是**路径级**而非**句柄级**：解析与 `imwrite` 之间若有人把联接换掉仍可逃逸。本地标注工具、目录由使用者自己配置，威胁模型下接受 | — |
 
 **仍开放（本轮未修，各有理由）**：
 

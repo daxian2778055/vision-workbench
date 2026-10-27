@@ -139,8 +139,11 @@ void UiGuardsTest::annotationClassDirRejectsJunctionEscape()
         QStringLiteral("cmd"),
         {QStringLiteral("/c"), QStringLiteral("mklink"), QStringLiteral("/J"),
          QDir::toNativeSeparators(link), QDir::toNativeSeparators(outside)});
-    if (rc != 0)
-        QSKIP("本机无法创建 junction（mklink /J 失败），跳过该腿");
+    // Windows 上不许跳过（2026-10-27 复核）：mklink /J 通常不需要提权，若因策略或非 NTFS
+    // 失败，这条是唯一覆盖"闸有没有接线"的端到端腿——跳过等于让它静默失效，直接判红。
+    QVERIFY2(rc == 0,
+             "本机无法创建 junction（mklink /J 失败）：这条腿是闸接线的唯一端到端守卫，"
+             "不能跳过——请确认 TEMP 在 NTFS 上且未禁用 mklink");
 #else
     if (!QFile::link(outside, link))
         QSKIP("本机无法创建符号链接，跳过该腿");
@@ -154,7 +157,7 @@ void UiGuardsTest::annotationClassDirRejectsJunctionEscape()
              qPrintable(QStringLiteral("junction 指向 root 之外却被接受：%1").arg(dir)));
     QVERIFY2(why.contains(QStringLiteral("越出")), qPrintable(why));
 
-    QFile::remove(link);
+    QDir().rmdir(link);   // 目录联接只能用 rmdir 删（QFile::remove 删不掉目录）
 }
 
 void UiGuardsTest::annotationPathIsInsideBoundaries()
