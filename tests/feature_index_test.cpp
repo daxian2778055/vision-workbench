@@ -20,6 +20,8 @@ private slots:
     void searchRanksSelfFirst();
     void emptyLibraryReportsError();
     void deleteAndClearWork();
+    void thumbnailRoundTrip();
+    void searchAnnotatesTop1();
 
 private:
     static cv::Mat pattern(int seed, int w = 320, int h = 240);
@@ -135,6 +137,42 @@ void FeatureIndexTest::deleteAndClearWork()
                                                             ->loadFeatureSamples(QStringLiteral("ORB"))
                                                             .first().id));
     QVERIFY(AppDatabase::instance()->loadFeatureSamples(QStringLiteral("ORB")).isEmpty());
+}
+
+void FeatureIndexTest::thumbnailRoundTrip()
+{
+    std::vector<cv::KeyPoint> kps;
+    cv::Mat desc;
+    QVERIFY(FeatureIndex::extract(QStringLiteral("ORB"), pattern(9), kps, desc));
+    const QByteArray png = QByteArray::fromHex("89504e470d0a1a0a");   // PNG 头即可（不校验图像）
+    FeatureSample s;
+    s.setFrom(QStringLiteral("withThumb"), QStringLiteral("ORB"), kps, desc, png);
+    QVERIFY(AppDatabase::instance()->saveFeatureSample(s));
+    const auto lib = AppDatabase::instance()->loadFeatureSamples(QStringLiteral("ORB"));
+    QVERIFY(!lib.isEmpty());
+    QVERIFY2(lib.last().imagePng == png, "缩略图往返不一致");
+    QVERIFY(AppDatabase::instance()->clearFeatureSamples());
+}
+
+void FeatureIndexTest::searchAnnotatesTop1()
+{
+    for (int seed = 11; seed <= 12; ++seed) {
+        std::vector<cv::KeyPoint> kps;
+        cv::Mat desc;
+        QVERIFY(FeatureIndex::extract(QStringLiteral("ORB"), pattern(seed), kps, desc));
+        FeatureSample s;
+        s.setFrom(QStringLiteral("viz%1").arg(seed), QStringLiteral("ORB"), kps, desc, QByteArray());
+        QVERIFY(AppDatabase::instance()->saveFeatureSample(s));
+    }
+    const cv::Mat q = pattern(11);
+    cv::Mat annotated;
+    QStringList errs;
+    const auto hits = FeatureIndex::search(QStringLiteral("ORB"), q, 2, 0.75, &errs, &annotated);
+    QVERIFY2(!hits.isEmpty(), qPrintable(errs.join(QStringLiteral("；"))));
+    QVERIFY2(!annotated.empty(), "命中却没有可视化输出");
+    QCOMPARE(annotated.rows, q.rows);
+    QCOMPARE(annotated.cols, q.cols);
+    QVERIFY(AppDatabase::instance()->clearFeatureSamples());
 }
 
 QTEST_MAIN(FeatureIndexTest)

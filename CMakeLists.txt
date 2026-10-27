@@ -124,6 +124,7 @@ set(SOURCES
     src/PathSafety.cpp
     src/ComputeBackend.cpp
     src/FeatureSearchNode.cpp
+    src/FeatureLibraryDialog.cpp
     src/FeatureIndex.cpp
     src/OpencvThresholdNode.cpp
     src/OpencvAdaptiveThresholdNode.cpp
@@ -595,7 +596,7 @@ add_library(vfp_core OBJECT
 
 # AUTOMOC 对新增 Q_OBJECT 头偶发不扫（2026-10-27 实测）：把头显式列进目标源，
 # 强制生成 moc_FeatureSearchNode.cpp。
-target_sources(vfp_core PRIVATE include/FeatureSearchNode.h)
+target_sources(vfp_core PRIVATE include/FeatureSearchNode.h include/FeatureLibraryDialog.h)
 # 构建顺序：Version.h 必须在该库编译任何源文件之前刷新（P1-3）
 add_dependencies(vfp_core vfp_version_header)
 

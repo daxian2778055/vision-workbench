@@ -99,7 +99,8 @@ bool FeatureIndex::extract(const QString &detector, const cv::Mat &bgrOrGray,
 QVector<FeatureMatchHit> FeatureIndex::search(const QString &detector,
                                               const cv::Mat &queryImage,
                                               int topK, double ratio,
-                                              QStringList *errors)
+                                              QStringList *errors,
+                                              cv::Mat *annotatedOut)
 {
     QVector<FeatureMatchHit> hits;
     std::vector<cv::KeyPoint> qkps;
@@ -142,6 +143,7 @@ QVector<FeatureMatchHit> FeatureIndex::search(const QString &detector,
 
         // 几何一致性：单应内点数（>=4 对才试）
         int inliers = 0;
+        std::vector<cv::Point2f> inlierPts;
         if (good.size() >= 4) {
             const QVector<cv::KeyPoint> lkps = s.keyPoints();
             std::vector<cv::Point2f> qp, lp;
@@ -155,6 +157,11 @@ QVector<FeatureMatchHit> FeatureIndex::search(const QString &detector,
                 try {
                     cv::findHomography(qp, lp, cv::RANSAC, 3.0, mask);
                     inliers = mask.empty() ? 0 : cv::countNonZero(mask);
+                    if (!mask.empty()) {
+                        for (int i = 0; i < mask.rows; ++i)
+                            if (mask.at<uchar>(i))
+                                inlierPts.push_back(qp[size_t(i)]);
+                    }
                 } catch (const cv::Exception &) {
                     inliers = 0;
                 }
@@ -166,6 +173,7 @@ QVector<FeatureMatchHit> FeatureIndex::search(const QString &detector,
         h.name = s.name;
         h.goodMatches = int(good.size());
         h.inliers = inliers;
+        h.inlierPoints = QVector<cv::Point2f>(inlierPts.begin(), inlierPts.end());
         // 综合分：匹配数与内点数各占一半，各自按经验上限归一
         const double partMatch = qMin(1.0, double(good.size()) / 50.0);
         const double partInlier = qMin(1.0, double(inliers) / 30.0);
@@ -179,5 +187,24 @@ QVector<FeatureMatchHit> FeatureIndex::search(const QString &detector,
               });
     if (hits.size() > topK)
         hits.resize(topK);
+
+    // 可视化（2026-10-27）：把 Top1 的内点画在查询图上，现场据此调 ratio/topK
+    if (annotatedOut && !hits.isEmpty()) {
+        cv::Mat canvas;
+        if (queryImage.channels() == 1)
+            cv::cvtColor(queryImage, canvas, cv::COLOR_GRAY2BGR);
+        else
+            canvas = queryImage.clone();
+        for (const cv::Point2f &p : hits.first().inlierPoints)
+            cv::circle(canvas, p, 6, cv::Scalar(0, 255, 0), 2);
+        const QString title = QStringLiteral("%1  score=%2  matches=%3 inliers=%4")
+                                  .arg(hits.first().name)
+                                  .arg(hits.first().score, 0, 'f', 3)
+                                  .arg(hits.first().goodMatches)
+                                  .arg(hits.first().inliers);
+        cv::putText(canvas, title.toStdString(), cv::Point(8, 24),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 255), 2);
+        *annotatedOut = canvas;
+    }
     return hits;
 }

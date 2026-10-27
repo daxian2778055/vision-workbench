@@ -4,6 +4,7 @@
 #include "AppDatabase.h"
 #include "OpencvUtil.h"
 #include "NodeResultFields.h"
+#include <opencv2/imgcodecs.hpp>
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -113,7 +114,14 @@ void FeatureSearchNode::run(bool /*autoSwitch*/)
         if (name.isEmpty())
             name = QStringLiteral("sample_%1")
                        .arg(QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyyMMdd_hhmmss_zzz")));
-        s.setFrom(name, detector, kps, desc, QByteArray());
+        // 缩略图存 PNG（图库管理界面预览用，2026-10-27）
+        QByteArray png;
+        {
+            std::vector<uchar> buf;
+            if (cv::imencode(".png", mat, buf))
+                png = QByteArray(reinterpret_cast<const char *>(buf.data()), int(buf.size()));
+        }
+        s.setFrom(name, detector, kps, desc, png);
         if (!AppDatabase::instance()->saveFeatureSample(s)) {
             m_params[QStringLiteral("lastError")] = QStringLiteral("特征样本入库失败（写操作闸/数据库？）");
             return;
@@ -134,8 +142,9 @@ void FeatureSearchNode::run(bool /*autoSwitch*/)
     const int topK = qMax(1, m_params.value(QStringLiteral("topK")).toInt());
     const double ratio = qBound(0.1, m_params.value(QStringLiteral("ratio")).toDouble(), 0.95);
     QStringList errs;
+    cv::Mat annotated;
     const QVector<FeatureMatchHit> hits =
-        FeatureIndex::search(detector, mat, topK, ratio, &errs);
+        FeatureIndex::search(detector, mat, topK, ratio, &errs, &annotated);
 
     QJsonArray arr;
     for (const FeatureMatchHit &h : hits) {
@@ -177,7 +186,14 @@ void FeatureSearchNode::run(bool /*autoSwitch*/)
     if (hits.isEmpty())
         m_params[QStringLiteral("lastError")] = m_params[QStringLiteral("searchNote")];
 
+    // 有命中就把可视化图（Top1 内点 + 得分）作为输出图，便于现场调 ratio/topK；
+    // 没命中或画不出来则透传输入图
     m_outputImage = m_inputImage;
+    if (!annotated.empty()) {
+        HImage viz = OpencvUtil::matToHimage(annotated);
+        if (viz.IsInitialized())
+            m_outputImage = viz;
+    }
     if (m_outputImage.IsInitialized()) {
         auto outObj = QSharedPointer<DataObject>::create();
         outObj->setHImage(m_outputImage);

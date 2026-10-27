@@ -42,6 +42,7 @@ struct FeatureMatchHit {
     int goodMatches = 0;      // 比值检验后的匹配数
     int inliers = 0;          // 几何一致性内点数
     double score = 0.0;       // 综合分（0..1，越大越像）
+    QVector<cv::Point2f> inlierPoints;   // 查询图上的内点坐标（可视化用）
 };
 
 /// 特征检索（2026-10-27）：图库索引 + 以图查图。
@@ -59,8 +60,10 @@ public:
 
     /// 检索：在库里找与 query 最像的 topK 个样本。
     /// 打分 = 比值检验好匹配数 + 单应内点数（几何一致性），归一化到 0..1。
+    /// annotatedOut 非空时画出 Top1 的匹配内点（现场调 ratio/topK 用，2026-10-27）
     static QVector<FeatureMatchHit> search(const QString &detector,
                                            const cv::Mat &queryImage,
                                            int topK, double ratio,
-                                           QStringList *errors = nullptr);
+                                           QStringList *errors = nullptr,
+                                           cv::Mat *annotatedOut = nullptr);
 };

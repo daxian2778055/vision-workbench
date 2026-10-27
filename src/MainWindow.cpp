@@ -68,6 +68,7 @@
 #include "SessionManager.h"
 #include "ScriptSecurityPolicy.h"
 #include "ComputeBackend.h"
+#include "FeatureLibraryDialog.h"
 #include <QActionGroup>   // 系统菜单「脚本安全：执行前确认」开关
 #include "FactoryPasswordGuard.h"
 #include "OperationLogDialog.h"
@@ -4001,8 +4002,13 @@ void MainWindow::setupSystemMenu()
                         QStringLiteral("计算后端：%1").arg(ComputeBackend::instance().describe()), 8000);
                 });
             }
-            backendMenu->setToolTip(ComputeBackend::instance().describe());
         }
+        // 特征库管理（2026-10-27）：现场要看得到库里有什么——浏览/预览/删除/清空
+        connect(ui->menuSystem->addAction(QStringLiteral("特征库管理…")), &QAction::triggered,
+                this, [this]() {
+                    FeatureLibraryDialog dlg(this);
+                    dlg.exec();
+                });
         m_confirmScriptAct->setChecked(policy.requireConfirmation());
         m_menuRouter.direct(m_confirmScriptAct, this, [this]() {
             ScriptSecurityPolicy &p = ScriptSecurityPolicy::instance();
