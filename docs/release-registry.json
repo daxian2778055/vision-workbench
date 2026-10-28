@@ -369,7 +369,16 @@
       "exe_bytes": 10019840,
       "package_dir": "dist/VisionFlowPlatform-rc-20261028.7",
       "recorded_at": "2026-10-28",
-      "recorded_note": "当前装机包：流程启动自动清零（onRoundStart + resetOnStart + INV4 接线闸）+ 模型打包进方案（ProjectPackager + 文件菜单 + 5 腿）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261028.8 取代（后者加 YOLO 双布局支持）"
+    },
+    {
+      "tag": "rc-20261028.8",
+      "commit": "843a367f931b0dfd9d01e53811492be7669ca77e",
+      "exe_md5": "3ea7a3519c85c4ac2f2b0232e39e6c7c",
+      "exe_bytes": 10022912,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261028.8",
+      "recorded_at": "2026-10-28",
+      "recorded_note": "当前装机包：YOLO 双布局（v8/v11 与 v5/YOLOX）+ 负对照腿；配合 Apache-2.0 的 YOLOX 可规避 AGPL"
     }
   ],
   "legacy_backfilled": [
