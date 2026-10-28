@@ -28,12 +28,14 @@ public:
                                 double confThresh, double nmsThresh,
                                 QVector<DetectionBox> &result);
 
-private:
-    /// 获取或加载 ONNX 模型（带缓存，最多 10 个）
-    cv::dnn::Net getOrLoadNet(const QString &modelPath);
+    /// 获取或加载 ONNX 模型（带缓存，最多 10 个）。public static（2026-10-28）：
+    /// 流水线计数节点复用同一套加载/解码，避免复制一份 YOLO 前处理（复制就会漂移）。
+    static cv::dnn::Net getOrLoadNet(const QString &modelPath);
 
-    /// 读取类别名（显式路径优先，否则取模型同目录 classes.txt）
-    QStringList loadClassNames(const QString &modelPath, const QString &explicitPath) const;
+    /// 读取类别名（显式路径优先，否则取模型同目录 classes.txt）。同上，供计数节点复用。
+    static QStringList loadClassNames(const QString &modelPath, const QString &explicitPath);
+
+private:
 
     static QMap<QString, cv::dnn::Net> s_netCache;
     QString m_currentModelPath;

@@ -88,6 +88,7 @@ const QHash<QString, QString> kFailsWithoutResource = {
     {QStringLiteral("ZxingBarcodeNode"), QStringLiteral("合成图内无条形码 ⇒ 无结果是失败")},
     {QStringLiteral("TesseractOcrNode"), QStringLiteral("语言数据目录不存在 ⇒ 引擎初始化失败（路径已在 kParamTweaks 里钉死）")},
 {QStringLiteral("FeatureSearchNode"), QStringLiteral("空特征库 ⇒ 检索无命中（与识别不到内容同口径判红；入库模式可正常跑）")},
+{QStringLiteral("ObjectCountingNode"), QStringLiteral("默认参数没有 YOLO 模型 ⇒ 判红（与 DnnDetect 同口径；配好模型才能跑）")},
     // 特征定位族：默认参数下 templatePath 为空 ⇒ 匹配模式直接判红（原因「匹配模式需要设置模板文件路径」）。
     // ⚠️ 就地更正（U-30／§3.31）：本条归类理由原先写的是"图内无特征可教学 ⇒ 无结果"，那是
     //   trainFromImage 默认 true 时代的口径——每轮从当前图现教，实测 ORB 整图 0 点／中心教学窗 0 点

@@ -44,7 +44,7 @@ cv::dnn::Net DnnDetectNode::getOrLoadNet(const QString &modelPath)
 }
 
 QStringList DnnDetectNode::loadClassNames(const QString &modelPath,
-                                          const QString &explicitPath) const
+                                          const QString &explicitPath)
 {
     QString clsPath = explicitPath.trimmed();
     if (clsPath.isEmpty())

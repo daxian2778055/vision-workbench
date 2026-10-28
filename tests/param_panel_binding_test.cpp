@@ -2440,15 +2440,15 @@ void ParamPanelBindingTest::testUnnamedFindChildSitesAreSingleCandidate()
     QVERIFY2(panelFails.isEmpty() && panelsBuilt == regs.size(),
              qPrintable(QStringLiteral("甲 的扫描不完整：panelsBuilt=%1 registry=%2，另有 %3 个建面板失败")
                             .arg(panelsBuilt).arg(regs.size()).arg(panelFails.size())));
-    // 249 → 256（2026-10-27）：FeatureSearchNode 声明式参数 5 个 + FeatureMatch 接库样本 2 个
-    QVERIFY2(fieldSlots == 256,
-             qPrintable(QStringLiteral("字段槽位分母从 256 变成 %1 ⇒ 本闸口径已漂移，"
+    // 249 → 256 → 269（2026-10-28）：再加 ObjectCountingNode 的 13 个声明式参数
+    QVERIFY2(fieldSlots == 269,
+             qPrintable(QStringLiteral("字段槽位分母从 269 变成 %1 ⇒ 本闸口径已漂移，"
                                         "先核对面板改动再把基准一起改").arg(fieldSlots)));
     QVERIFY2(badSlots.isEmpty(),
              qPrintable(QStringLiteral("U5-MULTI: %1 个字段槽位里同类型候选不止一个 ⇒ 站点 1 的无名 "
                                         "findChild 会取到错控件（明细见上方 [U5-T15-AB]）\n%2")
                             .arg(badSlots.size()).arg(badSlots.join(QStringLiteral("\n")))));
-    QVERIFY2(fpReadings.size() == 13,
+    QVERIFY2(fpReadings.size() == 15,
              qPrintable(QStringLiteral("FilePath 声明从 13 条变成 %1 条 ⇒ 乙 的分母已漂移").arg(fpReadings.size())));
     QVERIFY2(fpBad.isEmpty(),
              qPrintable(QStringLiteral("U5-FPSITE: %1 条 FilePath 站点的无名 findChild 命中的不是该参数"

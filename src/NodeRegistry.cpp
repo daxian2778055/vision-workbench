@@ -103,6 +103,7 @@
 #include "ZxingBarcodeNode.h"
 #include "TesseractOcrNode.h"
 #include "FeatureSearchNode.h"
+#include "ObjectCountingNode.h"
 
 // 简洁注册宏：id=调色板ID，ch/en=中英文名，cat=分类，grp=工具库分组，T=工厂类
 #define VFP_REG(T, id, ch, en, cat, grp) \
@@ -218,6 +219,8 @@ void registerAllNodes()
             NodeBase::SHAPE_ANALYSIS, "\u7279\u5F81\u5B9A\u4F4D");
     VFP_REG(FeatureSearchNode,  "FeatureSearchNode",  "特征检索", "Feature Search",
             NodeBase::SHAPE_ANALYSIS, "特征定位");
+    VFP_REG(ObjectCountingNode, "ObjectCountingNode", "流水线计数", "Object Counting",
+            NodeBase::MEASUREMENT, "特征定位");
     VFP_REG(OpencvDefectNode,     "OpencvDefectNode",     "缺陷检测", "Defect",
             NodeBase::SHAPE_ANALYSIS, "\u7279\u5F81\u5B9A\u4F4D");
     VFP_REG(AnomalyDetectNode,    "AnomalyDetectNode",    "异常检测", "Anomaly Detect",
