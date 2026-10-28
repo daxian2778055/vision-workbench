@@ -306,7 +306,16 @@
       "exe_bytes": 9937408,
       "package_dir": "dist/VisionFlowPlatform-rc-20261027.10",
       "recorded_at": "2026-10-27",
-      "recorded_note": "当前装机包（能力新增）：训练/评估下线程（进度 + 取消，UI 不再假死）+ 进度取消回调 API"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261028.1 取代（后者收口登记项）"
+    },
+    {
+      "tag": "rc-20261028.1",
+      "commit": "81ce0aa3e51e1c3fd3985ed95079e8921d71f9e5",
+      "exe_md5": "3329fe006b9b99a8e9f221b3d9cf6733",
+      "exe_bytes": 9937920,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261028.1",
+      "recorded_at": "2026-10-28",
+      "recorded_note": "当前装机包（收口）：中止第三态（画布琥珀）+ 报表口径脚注 + EOL 形状闸重新冻结收口"
     }
   ],
   "legacy_backfilled": [
