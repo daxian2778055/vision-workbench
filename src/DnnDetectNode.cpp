@@ -64,7 +64,7 @@ QStringList DnnDetectNode::loadClassNames(const QString &modelPath,
 
 bool DnnDetectNode::parseYoloOutput(const cv::Mat &out, int inputSize, const cv::Size &orig,
                                     double confThresh, double nmsThresh,
-                                    QVector<DetectionBox> &result)
+                                    QVector<DetectionBox> &result, int yoloLayout)
 {
     result.clear();
     if (out.empty() || inputSize <= 0 || orig.width <= 0 || orig.height <= 0)
@@ -100,7 +100,10 @@ bool DnnDetectNode::parseYoloOutput(const cv::Mat &out, int inputSize, const cv:
     m.convertTo(fm, CV_32F);
     m = fm;
     const int cols = m.cols;
-    const int numClasses = cols - 4;
+    // 布局（2026-10-28）：v8/v11 = [N, 4+类数]；v5 / YOLOX = [N, 5+类数]（第 4 列是 objectness）。
+    // 选错布局的现场表现是"框对了、类别全错"——objectness 被当成第一个类别的分数。
+    const bool withObjectness = (yoloLayout == 1);
+    const int numClasses = cols - (withObjectness ? 5 : 4);
     if (numClasses < 1) return false;
 
     // 2) letterbox 映射参数（原图 -> 输入）
@@ -115,9 +118,18 @@ bool DnnDetectNode::parseYoloOutput(const cv::Mat &out, int inputSize, const cv:
     std::vector<int> clsIds;
     for (int i = 0; i < m.rows; ++i) {
         int bestC = 0;
-        float bestS = m.at<float>(i, 4);
-        for (int c = 5; c < cols; ++c)
-            if (m.at<float>(i, c) > bestS) { bestS = m.at<float>(i, c); bestC = c - 4; }
+        // 无 objectness：第 4 列即类别分数；有 objectness：第 4 列是置信度，
+        // 最终分数 = objectness × 类别分数（与 YOLOv5/YOLOX 官方后处理一致）。
+        const float obj = withObjectness ? m.at<float>(i, 4) : 1.0f;
+        const int firstClsCol = withObjectness ? 5 : 4;
+        if (withObjectness && obj < confThresh) continue;
+        float bestClsScore = m.at<float>(i, firstClsCol);
+        for (int c = firstClsCol + 1; c < cols; ++c)
+            if (m.at<float>(i, c) > bestClsScore) {
+                bestClsScore = m.at<float>(i, c);
+                bestC = c - firstClsCol;
+            }
+        const float bestS = obj * bestClsScore;
         if (bestS < confThresh) continue;
         const double cx = m.at<float>(i, 0), cy = m.at<float>(i, 1),
                      w = m.at<float>(i, 2), h = m.at<float>(i, 3);
@@ -179,6 +191,9 @@ void DnnDetectNode::init()
         makeEnumParam(QStringLiteral("dnnBackend"), 0,
                       {QStringLiteral("CPU"), QStringLiteral("OpenCL（GPU）")},
                       QStringLiteral("推理后端")),
+        makeEnumParam(QStringLiteral("yoloLayout"), 0,
+                      yoloLayoutLabels(),
+                      QStringLiteral("输出布局")),
     m_params[QStringLiteral("detCount")] = 0;
     m_params[QStringLiteral("lastError")] = QString();
 }
@@ -247,7 +262,8 @@ void DnnDetectNode::run(bool /*autoSwitch*/)
         const double conf = m_params.value(QStringLiteral("confThresh"), 0.25).toDouble();
         const double nms = m_params.value(QStringLiteral("nmsThresh"), 0.45).toDouble();
         QVector<DetectionBox> boxes;
-        if (!parseYoloOutput(out, size, cv::Size(img.cols, img.rows), conf, nms, boxes)) {
+        const int layout = m_params.value(QStringLiteral("yoloLayout"), 0).toInt();
+        if (!parseYoloOutput(out, size, cv::Size(img.cols, img.rows), conf, nms, boxes, layout)) {
             m_params[QStringLiteral("lastError")] = QStringLiteral("YOLO 输出解析失败");
             return;
         }
@@ -310,4 +326,10 @@ QWidget *DnnDetectNode::createParamPanel()
 void DnnDetectNode::updateParamPanel(QWidget *panel)
 {
     updateAutoParamPanel(panel);
+}
+
+QStringList DnnDetectNode::yoloLayoutLabels()
+{
+    return QStringList{QStringLiteral("v8/v11（无 objectness）"),
+                       QStringLiteral("v5/YOLOX（带 objectness）")};
 }

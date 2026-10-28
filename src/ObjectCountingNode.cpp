@@ -149,6 +149,16 @@ void ObjectCountingNode::init()
     }
     {
         ParamSpec sp;
+        sp.name = QStringLiteral("yoloLayout");
+        sp.type = ParamType::Enum;
+        sp.defaultValue = 0;
+        sp.enumValues = DnnDetectNode::yoloLayoutLabels();
+        sp.label = QStringLiteral("输出布局");
+        sp.tooltip = QStringLiteral("与导出模型对应：选错会表现为框对了但类别全错");
+        registerParam(sp);
+    }
+    {
+        ParamSpec sp;
         sp.name = QStringLiteral("resetOnStart");
         sp.type = ParamType::Bool;
         sp.defaultValue = true;
@@ -268,8 +278,9 @@ void ObjectCountingNode::run(bool /*autoSwitch*/)
 
         const double conf = m_params.value(QStringLiteral("confThresh")).toDouble();
         const double nms = m_params.value(QStringLiteral("nmsThresh")).toDouble();
+        const int layout = m_params.value(QStringLiteral("yoloLayout"), 0).toInt();
         if (!DnnDetectNode::parseYoloOutput(out, inputSize, cv::Size(img.cols, img.rows),
-                                            conf, nms, boxes)) {
+                                            conf, nms, boxes, layout)) {
             m_params[QStringLiteral("lastError")] = QStringLiteral("检测输出无法解析（模型与输入尺寸不匹配？）");
             return;
         }

@@ -24,9 +24,10 @@ public:
     /// 解析 YOLO 网络输出（兼容 v5 [1,N,C] 与 v8 [1,C,N] 布局），置信过滤 + NMS，
     /// 并把框坐标从网络输入空间（inputSize×inputSize）letterbox 映射回原图坐标。
     /// out: net.forward() 原始输出；orig: 原图尺寸。返回是否成功解析。
+    /// yoloLayout: 0 = v8/v11（[N, 4+类数]，无 objectness）；1 = v5 / YOLOX（[N, 5+类数]）
     static bool parseYoloOutput(const cv::Mat &out, int inputSize, const cv::Size &orig,
                                 double confThresh, double nmsThresh,
-                                QVector<DetectionBox> &result);
+                                QVector<DetectionBox> &result, int yoloLayout = 0);
 
     /// 获取或加载 ONNX 模型（带缓存，最多 10 个）。public static（2026-10-28）：
     /// 流水线计数节点复用同一套加载/解码，避免复制一份 YOLO 前处理（复制就会漂移）。
@@ -34,6 +35,9 @@ public:
 
     /// 读取类别名（显式路径优先，否则取模型同目录 classes.txt）。同上，供计数节点复用。
     static QStringList loadClassNames(const QString &modelPath, const QString &explicitPath);
+
+    /// 输出布局候选标签（2026-10-28）：检测与计数两个节点共用，避免文案分叉
+    static QStringList yoloLayoutLabels();
 
 private:
 

@@ -4,8 +4,10 @@
 #include "ObjectTracking.h"
 #include "ObjectCountingNode.h"
 #include "OpencvUtil.h"
+#include "DnnDetectNode.h"
 
 #include <QtTest/QtTest>
+#include <cstring>
 
 class ObjectCountingTest : public QObject
 {
@@ -20,6 +22,7 @@ private slots:
     void nodeReportsMissingModel();
     void nodeReportsDegenerateLine();
     void nodeResetsCounterOnRequest();
+    void yoloLayoutV8AndV5BothDecode();
 
 private:
     static DetectionBox makeBox(float cx, float cy, float w = 40, float h = 40,
@@ -164,6 +167,50 @@ void ObjectCountingTest::nodeResetsCounterOnRequest()
     node.run(false);
     QVERIFY2(!node.getParam(QStringLiteral("resetCounter")).toBool(),
              "resetCounter 用完没有复位（下次运行会再次清零）");
+}
+
+void ObjectCountingTest::yoloLayoutV8AndV5BothDecode()
+{
+    // 两种输出布局（2026-10-28）：v8/v11 = [N, 4+类数]；v5/YOLOX = [N, 5+类数]（第 4 列 objectness）。
+    // 选错布局的现场表现是"框对了、类别全错"，所以正反两条都要钉住。
+    const int inputSize = 64;
+    const cv::Size orig(64, 64);   // 与原图相同 ⇒ letterbox 恒等，坐标可直读
+    const int nc = 3;
+
+    // v8：一行一个框，[cx,cy,w,h, cls0,cls1,cls2]
+    cv::Mat v8(1, 1, CV_32FC(4 + nc));
+    {
+        float *p = v8.ptr<float>(0);
+        const float row[4 + 3] = {32.f, 32.f, 16.f, 16.f, 0.10f, 0.85f, 0.05f};
+        std::memcpy(p, row, sizeof(row));
+    }
+    v8 = v8.reshape(1, 1);   // [1, 7]
+    QVector<DetectionBox> b8;
+    QVERIFY(DnnDetectNode::parseYoloOutput(v8, inputSize, orig, 0.25, 0.45, b8, /*layout=*/0));
+    QCOMPARE(b8.size(), 1);
+    QCOMPARE(b8[0].classId, 1);                     // 2 号列（0-based 1）= 最高分
+    QVERIFY(qAbs(b8[0].confidence - 0.85) < 1e-4);
+
+    // v5/YOLOX：[cx,cy,w,h, obj, cls0,cls1,cls2]
+    cv::Mat v5(1, 1, CV_32FC(5 + nc));
+    {
+        float *p = v5.ptr<float>(0);
+        const float row[5 + 3] = {32.f, 32.f, 16.f, 16.f, 0.90f, 0.10f, 0.80f, 0.05f};
+        std::memcpy(p, row, sizeof(row));
+    }
+    v5 = v5.reshape(1, 1);
+    QVector<DetectionBox> b5;
+    QVERIFY(DnnDetectNode::parseYoloOutput(v5, inputSize, orig, 0.25, 0.45, b5, /*layout=*/1));
+    QCOMPARE(b5.size(), 1);
+    QCOMPARE(b5[0].classId, 1);                     // 与 v8 同一类别（不被 objectness 顶掉）
+    QVERIFY2(qAbs(b5[0].confidence - 0.90 * 0.80) < 1e-4,
+             qPrintable(QStringLiteral("v5 分数应为 obj×cls，实得 %1").arg(b5[0].confidence)));
+
+    // 负对照：把 v5 张量按 v8 解 → 类别必然错（objectness 被当成第 0 类分数）
+    QVector<DetectionBox> wrong;
+    QVERIFY(DnnDetectNode::parseYoloOutput(v5, inputSize, orig, 0.25, 0.45, wrong, /*layout=*/0));
+    QVERIFY2(!wrong.isEmpty() && wrong[0].classId == 0,
+             "按 v8 解 v5 张量却没有错位：负对照失效（布局参数可能没生效）");
 }
 
 QTEST_MAIN(ObjectCountingTest)
