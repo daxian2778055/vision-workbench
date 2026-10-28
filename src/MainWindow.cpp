@@ -71,6 +71,7 @@
 #include "FeatureLibraryDialog.h"
 #include "ProjectPackager.h"
 #include "TrainingWizardDialog.h"
+#include "BoxAnnotatorDialog.h"
 #include <QJsonObject>
 #include <QActionGroup>   // 系统菜单「脚本安全：执行前确认」开关
 #include "FactoryPasswordGuard.h"
@@ -4047,6 +4048,13 @@ void MainWindow::setupSystemMenu()
                             QStringLiteral("已插入 %1 并预填 %2 个参数").arg(nodeType).arg(params.size()), 8000);
                         return true;
                     };
+                    dlg.exec();
+                });
+        // 检测框标注（2026-10-28）：画框 → 同名 YOLO txt（cls cx cy w h 归一化），
+        // Ultralytics / YOLOX 直接能吃，不需要再导出。
+        connect(ui->menuSystem->addAction(QStringLiteral("检测框标注…")), &QAction::triggered,
+                this, [this]() {
+                    BoxAnnotatorDialog dlg(this);
                     dlg.exec();
                 });
         // 打包模型与依赖（2026-10-28）：把 onnx/classes.txt 等外部文件收进方案目录，
