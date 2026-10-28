@@ -139,6 +139,16 @@ void ObjectCountingNode::init()
     }
     {
         ParamSpec sp;
+        sp.name = QStringLiteral("dnnBackend");
+        sp.type = ParamType::Enum;
+        sp.defaultValue = 0;
+        sp.enumValues = QStringList{QStringLiteral("CPU"), QStringLiteral("OpenCL（GPU）")};
+        sp.label = QStringLiteral("推理后端");
+        sp.tooltip = QStringLiteral("OpenCL 需 OpenCV 支持；无可用设备时自动回退 CPU");
+        registerParam(sp);
+    }
+    {
+        ParamSpec sp;
         sp.name = QStringLiteral("resetCounter");
         sp.type = ParamType::Bool;
         sp.defaultValue = false;
@@ -216,6 +226,16 @@ void ObjectCountingNode::run(bool /*autoSwitch*/)
                 QStringLiteral("模型加载失败：%1").arg(modelPath);
             return;
         }
+        // 推理后端（2026-10-28）：产线逐帧跑 YOLO，CPU 常是瓶颈；OpenCL 目标可能被
+        // OpenCV 静默回退，这里如实记下"实际用了哪种"。
+        const int backend = m_params.value(QStringLiteral("dnnBackend")).toInt();
+        if (backend == 1) {
+            net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+            net.setPreferableTarget(cv::dnn::DNN_TARGET_OPENCL);
+        } else {
+            net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+            net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
+        }
         const int inputSize = m_params.value(QStringLiteral("inputSize")).toInt();
         const double scale = m_params.value(QStringLiteral("scale")).toDouble();
         const bool swapRB = m_params.value(QStringLiteral("swapRB")).toBool();
@@ -243,6 +263,19 @@ void ObjectCountingNode::run(bool /*autoSwitch*/)
         for (auto &b : boxes)
             if (b.classId >= 0 && b.classId < classNames.size())
                 b.className = classNames[b.classId];
+        // 类别校验（2026-10-28）：classes.txt 缺失/行数不足是现场最高频的配置错，
+        // 直接把"几个框没名字"说出来，比让人对着一张全是数字的图猜要快
+        int unnamed = 0;
+        for (const auto &b : boxes)
+            if (b.className.isEmpty() && b.classId >= 0)
+                ++unnamed;
+        if (unnamed > 0) {
+            m_params[QStringLiteral("countNote")] =
+                QStringLiteral("模型输出 %1 类，classes.txt 只有 %2 行：%3 个框无类名")
+                    .arg(classNames.isEmpty() ? 0 : classNames.size())
+                    .arg(classNames.size())
+                    .arg(unnamed);
+        }
     } catch (const cv::Exception &e) {
         m_params[QStringLiteral("lastError")] =
             QStringLiteral("推理异常：%1").arg(QString::fromUtf8(e.what()));

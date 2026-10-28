@@ -176,6 +176,9 @@ void DnnDetectNode::init()
         makeBoolParam(QStringLiteral("swapRB"), true,
                       QStringLiteral("BGR/RGB 交换")),
     });
+        makeEnumParam(QStringLiteral("dnnBackend"), 0,
+                      {QStringLiteral("CPU"), QStringLiteral("OpenCL（GPU）")},
+                      QStringLiteral("推理后端")),
     m_params[QStringLiteral("detCount")] = 0;
     m_params[QStringLiteral("lastError")] = QString();
 }
@@ -198,6 +201,14 @@ void DnnDetectNode::run(bool /*autoSwitch*/)
             return;
         }
         cv::dnn::Net net = getOrLoadNet(modelPath);
+        // 推理后端（2026-10-28）：逐帧 YOLO 在 CPU 上常是瓶颈；OpenCL 不可用时
+        // OpenCV 会静默回退，这里显式设置，便于现场按需切换。
+        {
+            const int backend = m_params.value(QStringLiteral("dnnBackend"), 0).toInt();
+            net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
+            net.setPreferableTarget(backend == 1 ? cv::dnn::DNN_TARGET_OPENCL
+                                                 : cv::dnn::DNN_TARGET_CPU);
+        }
         if (net.empty()) {
             m_params[QStringLiteral("lastError")] = QStringLiteral("ONNX 模型加载失败");
             return;
