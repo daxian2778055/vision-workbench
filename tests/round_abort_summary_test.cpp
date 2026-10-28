@@ -296,6 +296,10 @@ void RoundAbortSummaryTest::abortedSubFlowIsNotReportedAsFailure()
     // 此前只有"没有 OK 行"的断言，有效位这条修复没有腿。
     QVERIFY2(!exec.isOutputMarkedValid(caller),
              "中止的调用点被标成了输出有效：局部执行的复用判定会把它当成有结果（P3-2）");
+
+    // 第三态腿（2026-10-28 P3-14）：中止的调用点画布不得显示绿色（成功）
+    QVERIFY2(caller->executionAborted(),
+             "中止的调用点没有标记为中止：画布会显示绿色（跑成功了）");
 }
 
 // P2-A（2026-10-25 复核第二批）：子流程里嵌套的循环体**真失败**，必须还是 NG——

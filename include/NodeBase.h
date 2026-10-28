@@ -110,6 +110,7 @@ protected:
     /// 并发，QMap 非线程安全，必须加锁防结构破坏
     mutable QMutex m_dataMutex;
     bool m_executionSuccess; // 执行状态，true表示成功，false表示失败
+    bool m_runAborted = false;   // 本轮被用户中止（2026-10-28 P3-14：第三态）
     bool m_hasExecuted; // 是否已经执行过
     bool m_enabled = true;   // 算子是否启用（禁用后运行时跳过）
     /// 身份状态体（切片 C 立项书 P2 期段一）：名字与模块号的非 QObject 共享载体。
@@ -121,6 +122,10 @@ public:
     int moduleId() const;
     QString fullName() const; // 包含模块号的完整名称
     bool executionSuccess() const; // 获取执行状态
+    /// 本轮是否被用户中止（与成功/失败并列的第三态；画布用琥珀色，
+    /// 表示"没跑完"而不是"跑成功了"——2026-10-28 P3-14）
+    bool executionAborted() const;
+    void setRunAborted(bool on);
     bool hasExecuted() const; // 获取是否已经执行过
 
     /// 身份状态体共享句柄（立项书 P2 期段一）：仅供快照捕获入快照列。

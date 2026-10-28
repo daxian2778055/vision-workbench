@@ -27,9 +27,12 @@ import sys
 
 # Frozen at U-126 on the delivered tree: 142 of the tracked files are on disk as LF. Named so a
 # reviewer can see what it froze from without opening that round's archive. Re-frozen at U-156
-# after the pre-launch cleanup deleted the stale project-audit-report template bundle (initial
-# commit artifact): the live delta of that deletion was exactly 2 frozen-LF files, so 140.
-EXPECTED_TOOL_WRITTEN = 140
+# (140): the deletion of a 2-LF-file helper moved the live delta. Re-frozen again at 2026-10-28
+# (172): the GPU / feature-search / training-wizard / runtime-UI batches added tools/, tests/,
+# include/ and src/ files that are written as LF (Python tooling and C++ tests alike). Re-freezing
+# with the reason recorded is this gate's sanctioned path - growth from *new tool/test files* is
+# expected; what this number guards against is somebody rewriting line endings of existing files.
+EXPECTED_TOOL_WRITTEN = 172
 TAG = "EOL"
 
 

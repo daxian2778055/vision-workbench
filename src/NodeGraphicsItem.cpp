@@ -82,7 +82,12 @@ void NodeGraphicsItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *
 
     QColor fill(0x37, 0x39, 0x40);
     QColor edge(0x55, 0x58, 0x62);
-    if (m_node->hasExecuted()) {
+    if (m_node->executionAborted()) {
+        // 第三态：被中止/跳过（2026-10-28 P3-14）——琥珀色 = "没跑完"，
+        // 不是绿（跑成功了）也不是红（跑失败了）
+        fill = QColor(0x4a, 0x3c, 0x1a);
+        edge = QColor(0xe8, 0xb3, 0x3d);
+    } else if (m_node->hasExecuted()) {
         if (m_node->executionSuccess()) {
             fill = QColor(0x1e, 0x38, 0x2e);
             edge = QColor(0x73, 0xd1, 0x3d);

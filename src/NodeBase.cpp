@@ -203,3 +203,13 @@ bool NodeBase::hasExecuted() const
 }
 
 
+
+bool NodeBase::executionAborted() const
+{
+    return m_runAborted;
+}
+
+void NodeBase::setRunAborted(bool on)
+{
+    m_runAborted = on;
+}

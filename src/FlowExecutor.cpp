@@ -1145,6 +1145,7 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
     // 每次 executeNode 调用复位两个节点级标志（P3-1/P3-2）：中止不落 OK 行、异常不重复落库
     m_lastNodeAborted = false;
     m_nodeRecordWritten = false;
+    node->setRunAborted(false);   // 第三态复位（2026-10-28 P3-14）
 
     bool success = false;
     QElapsedTimer nodeTimer;
@@ -1899,6 +1900,8 @@ bool FlowExecutor::executeSubFlow(SubFlowNode *caller)
         if (m_userStopRequested.load(std::memory_order_relaxed)) {
             m_roundAborted = true;
             m_lastNodeAborted = true;   // 调用点不落"OK"行（中止不是成功）
+            // 画布第三态（2026-10-28 P3-14）：中止的调用点不再显示绿色
+            caller->setRunAborted(true);
             // 记录处置就此定死（2026-10-25 复核 P3-1 残留）：此后的 executeNode 还要走
             // collectNodeOutputVars 与 nodeExecuted / nodeOutputsUpdated 的直连槽，任一抛异常
             // 都会进异常出口——那时若还不知道"这条已决定不落库"，就会补一条 NG 行，
@@ -2018,6 +2021,8 @@ void FlowExecutor::recordNodeSkipped(NodeBase *node, const QString &reason)
         m_stats.onNodeSkipped(node->fullName());
     }
     // 三态可视化：把"跳过"从统计数字变成 UI 可消费的事件（跨线程排队到界面线程）
+    // 跳过 = 第三态（2026-10-28 P3-14）：画布琥珀表示"本轮未执行"，不是绿（成功）
+    node->setRunAborted(true);
     emit nodeSkipped(node, reason);
 }
 
