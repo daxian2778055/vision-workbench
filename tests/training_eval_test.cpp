@@ -25,6 +25,7 @@ private slots:
     void metaClassNameWithSpaceRoundTrips();
     void missingMetaWarns();
     void changedDatasetWarns();
+    void unchangedDatasetDoesNotWarn();
 
 private:
     static cv::Mat makeSample(int cls, int seed);
@@ -280,6 +281,9 @@ void TrainingEvalTest::changedDatasetWarns()
     const auto ev = ClsTrainer::evaluateFromDir(model, dir.path().toStdString(), 0, 0.3, 42);
     QVERIFY2(ev.ok, qPrintable(QString::fromStdString(ev.error)));
     QVERIFY2(!ev.warning.empty(), "数据集变化却没有提示");
+    // 正向腿也要钉内容：否则"任何 warning"都能过（含误报）
+    QVERIFY2(QString::fromStdString(ev.warning).contains(QStringLiteral("规模")),
+             qPrintable(QString::fromStdString(ev.warning)));
 }
 
 void TrainingEvalTest::buildDatasetExtra(const QString &root, int extraPerClass)
@@ -293,6 +297,25 @@ void TrainingEvalTest::buildDatasetExtra(const QString &root, int extraPerClass)
                         img);
         }
     }
+}
+
+void TrainingEvalTest::unchangedDatasetDoesNotWarn()
+{
+    // 负对照（2026-10-28 P2）：数据一个字没动时**不得**报"数据集规模不同"。
+    // 原实现训练侧存 feats.size()（扣留出+含增广）、评估侧反推 total/ratio，口径不同，
+    // 20 张/0.3 就会报"训练 14，本次约 20"——现在两边都数候选文件数。
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    buildDataset(dir.path(), 10);   // 20 张
+    const std::string model = QDir(dir.path()).filePath(QStringLiteral("m.yaml")).toStdString();
+    QVERIFY(ClsTrainer::trainFromDir(dir.path().toStdString(), model, 0, 12, 120,
+                                     ClsTrainer::AugmentOptions(), 0.3, 42).ok);
+
+    const auto ev = ClsTrainer::evaluateFromDir(model, dir.path().toStdString(), 0, 0.3, 42);
+    QVERIFY2(ev.ok, qPrintable(QString::fromStdString(ev.error)));
+    QVERIFY2(ev.warning.empty(),
+             qPrintable(QStringLiteral("数据集未改动却告警：%1")
+                            .arg(QString::fromStdString(ev.warning))));
 }
 
 QTEST_MAIN(TrainingEvalTest)

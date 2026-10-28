@@ -59,6 +59,9 @@ private:
     std::shared_ptr<std::atomic<bool>> m_cancel =
         std::make_shared<std::atomic<bool>>(false);
     bool m_running = false;
+    /// 用户点了关闭/Esc（2026-10-28 复核）：worker 收尾后自动关窗，别让人再点一次
+    bool m_closeRequested = false;
+    bool m_stopLogged = false;
 
     void setRunning(bool on);
     /// 关窗前先让工作线程收尾（2026-10-28 P1）：训练/评估中点 X 不能直接析构
@@ -66,6 +69,7 @@ private:
     /// Esc 走 reject()（不经过 closeEvent）：必须与关窗同一套策略（2026-10-28 复核）
     void reject() override;
     void statusBarHint();   /// 轻量提示：不阻塞、不弹模态
+    void requestStopAndMaybeClose();   /// 置取消 + 记一次日志（防连按刷屏）
     QLineEdit *m_modelName = nullptr;
     QPlainTextEdit *m_log = nullptr;
     QTableWidget *m_confusion = nullptr;

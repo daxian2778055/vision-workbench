@@ -169,7 +169,8 @@ struct ModelMeta {
     int featureMode = 0;
     double validationRatio = 0.3;
     unsigned seed = 42;
-    int fileCount = 0;   /// 训练时的样本文件总数（检测数据集是否已变）
+    int fileCount = 0;   /// 训练时**候选文件数**（留出与增广之前，逐类 files.size() 求和）——
+                         /// 与评估侧同一口径，用于检测数据集是否已变
     std::vector<std::string> classNames;
 };
 
@@ -247,6 +248,7 @@ inline TrainStats trainFromDir(const std::string &dir, const std::string &savePa
     std::vector<std::vector<float>> feats;
     std::vector<int> labels;
     const std::vector<std::string> exts = {".png", ".jpg", ".jpeg", ".bmp"};
+    int candidateFiles = 0;   // 候选文件总数（P2：与评估侧同口径）
     for (size_t ci = 0; ci < classDirs.size(); ++ci) {
         const fs::path cdir = fs::path(dir) / classDirs[ci];
         // 先收集+排序，再按 validationSplit 留出验证集（2026-10-27 P2-2）：
@@ -261,6 +263,7 @@ inline TrainStats trainFromDir(const std::string &dir, const std::string &savePa
             files.push_back(e.path().string());
         }
         std::sort(files.begin(), files.end());
+        candidateFiles += int(files.size());   // 留出/增广之前的候选数（2026-10-28 P2 修正口径）
         std::vector<size_t> valIdx;
         if (validationRatio > 0.001)
             valIdx = validationSplit(files.size(), validationRatio, seed, ci);
@@ -330,7 +333,7 @@ inline TrainStats trainFromDir(const std::string &dir, const std::string &savePa
         mt.featureMode = featureMode;
         mt.validationRatio = validationRatio;
         mt.seed = seed;
-        mt.fileCount = int(feats.size());   // 含增广后的样本数，作数据集指纹
+        mt.fileCount = candidateFiles;   // 候选文件数（不含增广、未扣留出）
         mt.classNames = classDirs;
         if (!saveModelMeta(savePath, mt)) {
             // 静默失败会让评估回退到滑块比例（P2 那个坑原样回来）——必须报出来
@@ -528,6 +531,7 @@ inline EvalResult evaluateFromDir(const std::string &modelPath, const std::strin
     const std::vector<std::string> exts = {".png", ".jpg", ".jpeg", ".bmp"};
     const double ratio = (validationRatio < 0.05) ? 0.05 : (validationRatio > 0.95 ? 0.95 : validationRatio);
 
+    int candidateFiles = 0;   // 与训练侧同口径：逐类候选文件数之和（2026-10-28 P2）
     for (size_t ci = 0; ci < C; ++ci) {
         std::vector<std::string> files;
         const fs::path cdir = fs::path(dir) / classDirs[ci];
@@ -540,6 +544,7 @@ inline EvalResult evaluateFromDir(const std::string &modelPath, const std::strin
             files.push_back(e.path().string());
         }
         std::sort(files.begin(), files.end());
+        candidateFiles += int(files.size());
 
         // 确定性划分：按 seed + 文件序做一次伪随机抽取，样本数为 0 时全留验证
         std::vector<size_t> order(files.size());
@@ -575,15 +580,14 @@ inline EvalResult evaluateFromDir(const std::string &modelPath, const std::strin
         ev.error = "验证集为空（每类样本不足）";
         return ev;
     }
-    // 数据集变化检测（2026-10-28 复核）：meta 只存比例+seed，不存文件集；
-    // 训练后增删图片会让"留出集"与训练时不一致——至少要在摘要里说清
-    if (meta.found && meta.fileCount > 0 && ev.total > 0) {
-        const int seen = int(double(ev.total) / (validationRatio > 0.01 ? validationRatio : 0.3));
-        if (std::abs(seen - meta.fileCount) > std::max(2, meta.fileCount / 10)) {
-            if (!ev.warning.empty()) ev.warning += "；";
-            ev.warning += "数据集规模与训练时不同（训练 " + std::to_string(meta.fileCount)
-                          + "，本次约 " + std::to_string(seen) + "）：留出集按当前数据集重新划分";
-        }
+    // 数据集变化检测（2026-10-28 P2 修正）：两边都数**候选文件数**（留出/增广之前）。
+    // 原实现训练侧存 feats.size()（扣过留出、含增广）、评估侧反推 total/ratio——两个口径不同，
+    // 未改动的数据集也会报"规模不同"（20 张/0.3：训练记 14，评估推 20）。
+    if (meta.found && meta.fileCount > 0 && candidateFiles != meta.fileCount) {
+        if (!ev.warning.empty()) ev.warning += "；";
+        ev.warning += "数据集规模与训练时不同（训练 " + std::to_string(meta.fileCount)
+                      + " 个文件，本次 " + std::to_string(candidateFiles)
+                      + "）：留出集按当前数据集重新划分";
     }
     ev.accuracy = double(ev.correct) / double(ev.total);
     ev.usedValidationRatio = validationRatio;

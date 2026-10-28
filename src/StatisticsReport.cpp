@@ -314,7 +314,7 @@ QString StatisticsReport::toHtml(const Summary &s, const QString &title, const Q
 
     // 口径说明（2026-10-28 P3-15）：写进报表本身（脚注）
     html += QStringLiteral("<!-- 口径说明（2026-10-28 P3-15） -->\n<p style='color:#666;font-size:12px'>口径说明：晚异常发生在正常 OK 行之后时，为保证不出现 OK+NG 两条，节点行保留 passed=1 而轮汇总记 NG &rarr; 该轮的<b>节点通过率</b>与<b>轮良率</b>不一致。此为有意取舍（宁可少一条假失败行）。</p>\n");
-    // 闭合标签必须留着（2026-10-28 复核）：腔本内容替换时把 </body></html> 一并吃掉了
+    // 闭合标签必须留着（2026-10-28 复核）：整段内容替换时把 </body></html> 一并吃掉了
     html += QStringLiteral("</body>\n</html>\n");
     return html;
 }

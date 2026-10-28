@@ -158,8 +158,16 @@ TrainingWizardDialog::TrainingWizardDialog(QWidget *parent) : QDialog(parent)
     root->addLayout(mid, 2);
 
     m_watcher = new QFutureWatcher<void>(this);
-    connect(m_watcher, &QFutureWatcher<void>::finished, this,
-            [this]() { setRunning(false); });
+    connect(m_watcher, &QFutureWatcher<void>::finished, this, [this]() {
+        setRunning(false);
+        m_stopLogged = false;
+        // 用户已请求关闭 → 收尾后自动关窗（2026-10-28 复核：文案说"会关闭"就要真关，
+        // 否则和"关窗"的直觉不符）
+        if (m_closeRequested) {
+            m_closeRequested = false;
+            accept();
+        }
+    });
     refreshDataset();
 }
 
@@ -184,10 +192,8 @@ void TrainingWizardDialog::closeEvent(QCloseEvent *e)
     if (m_running) {
         // 拒绝关闭而不是阻塞等待（2026-10-28 复核）：waitForFinished 会冻结 GUI，
         // 而"正在停止…"那行也刷不出来；最终 ANN 训练段本身不可逐样本取消，会冻到训练结束。
-        // 策略：请求取消 + 明确提示，等 worker 收尾后用户再关。
-        m_cancel->store(true);
-        m_log->appendPlainText(QStringLiteral("已请求停止：等后台任务收尾后再关闭窗口"));
-        statusBarHint();
+        // 策略：请求取消 + 明确提示；收尾后由 finished 自动关窗（见构造里的连接）。
+        requestStopAndMaybeClose();
         e->ignore();
         return;
     }
@@ -199,12 +205,22 @@ void TrainingWizardDialog::reject()
     // Esc 不经过 closeEvent（2026-10-28 复核）：如果不在这里拦，训练中按 Esc 会立刻关窗，
     // worker 继续跑完并写盘，对话框已消失。
     if (m_running) {
-        m_cancel->store(true);
-        m_log->appendPlainText(QStringLiteral("已请求停止：等后台任务收尾后再关闭窗口"));
-        statusBarHint();
+        requestStopAndMaybeClose();
         return;
     }
     QDialog::reject();
+}
+
+void TrainingWizardDialog::requestStopAndMaybeClose()
+{
+    m_cancel->store(true);
+    m_closeRequested = true;
+    // 连按关闭/Esc 不要刷屏（2026-10-28 复核）：只在第一次请求时记一条
+    if (!m_stopLogged) {
+        m_stopLogged = true;
+        m_log->appendPlainText(QStringLiteral("已请求停止：任务收尾后窗口会自动关闭"));
+    }
+    statusBarHint();
 }
 
 void TrainingWizardDialog::statusBarHint()
