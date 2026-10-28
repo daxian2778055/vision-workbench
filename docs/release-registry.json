@@ -342,7 +342,16 @@
       "exe_bytes": 9950720,
       "package_dir": "dist/VisionFlowPlatform-rc-20261028.4",
       "recorded_at": "2026-10-28",
-      "recorded_note": "当前装机包（修复）：数据集变化告警改候选文件数口径（不再对未改动数据集误报）+ 负对照腿；报表错字真修；关窗日志不刷屏；收尾自动关窗。训练评估测试 14 腿"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261028.5 取代（后者新增流水线计数）"
+    },
+    {
+      "tag": "rc-20261028.5",
+      "commit": "9c87e0d42e6f3bf00f1be0b998ffbf8431a3bf73",
+      "exe_md5": "eb14caffc7ce289a4523f207868f0ba1",
+      "exe_bytes": 10003968,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261028.5",
+      "recorded_at": "2026-10-28",
+      "recorded_note": "当前装机包（能力新增）：流水线目标计数（IOU 跟踪 + 过线去重，方向过滤/去抖/一次性清零）+ ObjectCountingNode + 10 腿"
     }
   ],
   "legacy_backfilled": [
