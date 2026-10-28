@@ -8,6 +8,7 @@
 #include "OpencvClassifyNode.h"
 
 #include <QCheckBox>
+#include <QCloseEvent>
 #include <QComboBox>
 #include <QDir>
 #include <QFile>
@@ -97,10 +98,10 @@ TrainingWizardDialog::TrainingWizardDialog(QWidget *parent) : QDialog(parent)
 
     // 按钮
     auto *btns = new QHBoxLayout();
-    auto *trainBtn = new QPushButton(QStringLiteral("训练"));
-    connect(trainBtn, &QPushButton::clicked, this, &TrainingWizardDialog::onTrain);
-    auto *evalBtn = new QPushButton(QStringLiteral("评估"));
-    connect(evalBtn, &QPushButton::clicked, this, &TrainingWizardDialog::onEvaluate);
+    m_trainBtn = new QPushButton(QStringLiteral("训练"));
+    connect(m_trainBtn, &QPushButton::clicked, this, &TrainingWizardDialog::onTrain);
+    m_evalBtn = new QPushButton(QStringLiteral("评估"));
+    connect(m_evalBtn, &QPushButton::clicked, this, &TrainingWizardDialog::onEvaluate);
     m_progress = new QProgressBar();
     m_progress->setRange(0, 0);
     m_progress->setVisible(false);
@@ -108,13 +109,13 @@ TrainingWizardDialog::TrainingWizardDialog(QWidget *parent) : QDialog(parent)
     m_cancelBtn = new QPushButton(QStringLiteral("取消"));
     m_cancelBtn->setVisible(false);
     connect(m_cancelBtn, &QPushButton::clicked, this, [this]() {
-        m_cancel.store(true);
+        m_cancel->store(true);
         m_cancelBtn->setEnabled(false);
         m_log->appendPlainText(QStringLiteral("正在取消…（当前样本处理完即停）"));
     });
     btns->addWidget(m_cancelBtn);
-    auto *publishBtn = new QPushButton(QStringLiteral("发布并插入分类节点"));
-    connect(publishBtn, &QPushButton::clicked, this, [this]() {
+    m_publishBtn = new QPushButton(QStringLiteral("发布并插入分类节点"));
+    connect(m_publishBtn, &QPushButton::clicked, this, [this]() {
         if (!QFile::exists(modelPath())) {
             QMessageBox::warning(this, QStringLiteral("失败"),
                                  QStringLiteral("模型不存在，请先训练：%1").arg(modelPath()));
@@ -134,13 +135,13 @@ TrainingWizardDialog::TrainingWizardDialog(QWidget *parent) : QDialog(parent)
             m_log->appendPlainText(QStringLiteral("发布：请把模型路径填到分类节点 → %1").arg(modelPath()));
         }
     });
-    auto *closeBtn = new QPushButton(QStringLiteral("关闭"));
-    connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
-    btns->addWidget(trainBtn);
-    btns->addWidget(evalBtn);
-    btns->addWidget(publishBtn);
+    m_closeBtn = new QPushButton(QStringLiteral("关闭"));
+    connect(m_closeBtn, &QPushButton::clicked, this, &QDialog::accept);
+    btns->addWidget(m_trainBtn);
+    btns->addWidget(m_evalBtn);
+    btns->addWidget(m_publishBtn);
     btns->addStretch();
-    btns->addWidget(closeBtn);
+    btns->addWidget(m_closeBtn);
     root->addLayout(btns);
 
     // 结果区
@@ -165,11 +166,30 @@ TrainingWizardDialog::TrainingWizardDialog(QWidget *parent) : QDialog(parent)
 void TrainingWizardDialog::setRunning(bool on)
 {
     m_running = on;
+    // 四个动作按钮统一禁用（2026-10-28 P1）：原实现只开关进度条与取消键，
+    // 连点两次「训练」会起两个任务同时写同一个 model.yaml。
+    for (QPushButton *b : {m_trainBtn, m_evalBtn, m_publishBtn, m_closeBtn}) {
+        if (b)
+            b->setEnabled(!on);
+    }
     m_cancelBtn->setVisible(on);
     m_cancelBtn->setEnabled(on);
     m_progress->setVisible(on);
     if (on)
-        m_cancel.store(false);
+        m_cancel->store(false);
+}
+
+void TrainingWizardDialog::closeEvent(QCloseEvent *e)
+{
+    if (m_running && m_watcher) {
+        // 先请 worker 收尾再关（2026-10-28 P1）：直接析构会让 worker 的取消回调读到已释放内存
+        m_cancel->store(true);
+        m_log->appendPlainText(QStringLiteral("正在停止后台任务，请稍候…"));
+        setCursor(Qt::BusyCursor);
+        m_watcher->waitForFinished();
+        unsetCursor();
+    }
+    QDialog::closeEvent(e);
 }
 
 QString TrainingWizardDialog::datasetDir() const
@@ -214,6 +234,7 @@ void TrainingWizardDialog::refreshDataset()
 
 void TrainingWizardDialog::onTrain()
 {
+    if (m_running) return;   // 重入守卫（2026-10-28 P1）
     const QString dir = datasetDir();
     if (!QDir(dir).exists()) {
         QMessageBox::warning(this, QStringLiteral("失败"), QStringLiteral("数据集目录不存在"));
@@ -233,8 +254,9 @@ void TrainingWizardDialog::onTrain()
     const int iters = m_iters->value();
     const double valRatio = m_valRatio->value();
     QPointer<TrainingWizardDialog> self(this);
-    m_watcher->setFuture(QtConcurrent::run([this, self, dir, savePath, featMode, hidden,
-                                            iters, aug, valRatio]() {
+    auto cancel = m_cancel;
+    m_watcher->setFuture(QtConcurrent::run([this, self, cancel, dir, savePath, featMode,
+                                            hidden, iters, aug, valRatio]() {
         const ClsTrainer::TrainStats st = ClsTrainer::trainFromDir(
             dir.toStdString(), savePath, featMode, hidden, iters, aug,
             valRatio, 42,
@@ -245,7 +267,7 @@ void TrainingWizardDialog::onTrain()
                         QStringLiteral("已处理 %1 个样本…").arg(done));
                 }, Qt::QueuedConnection);
             },
-            [this]() { return m_cancel.load(); });
+            [cancel]() { return cancel->load(); });
         if (!self) return;
         QMetaObject::invokeMethod(self, [self, st, savePath]() {
             if (!self) return;
@@ -257,8 +279,13 @@ void TrainingWizardDialog::onTrain()
                 self->m_log->appendPlainText(
                     QStringLiteral("下一步：点「评估」看模型质量；发布时把模型路径填到分类节点。"));
             } else {
-                self->m_log->appendPlainText(
-                    QStringLiteral("训练失败：%1").arg(QString::fromStdString(st.error)));
+                const QString why = QString::fromStdString(st.error);
+                // 取消不是失败（2026-10-28 复核 P3）：用中性措辞，别把主动取消写成红字"失败"
+                if (why.contains(QStringLiteral("取消")))
+                    self->m_log->appendPlainText(
+                        QStringLiteral("已取消（未完成；模型文件未更新）"));
+                else
+                    self->m_log->appendPlainText(QStringLiteral("训练失败：%1").arg(why));
             }
         }, Qt::QueuedConnection);
     }));
@@ -269,6 +296,7 @@ void TrainingWizardDialog::onTrain()
 
 void TrainingWizardDialog::onEvaluate()
 {
+    if (m_running) return;   // 重入守卫（2026-10-28 P1）
     const QString mp = modelPath();
     if (!QFile::exists(mp)) {
         QMessageBox::warning(this, QStringLiteral("失败"),
@@ -282,7 +310,8 @@ void TrainingWizardDialog::onEvaluate()
     const double valRatio = m_valRatio->value();
     const QString ds = datasetDir();
     QPointer<TrainingWizardDialog> self(this);
-    m_watcher->setFuture(QtConcurrent::run([this, self, mp, ds, featMode, valRatio]() {
+    auto cancel = m_cancel;
+    m_watcher->setFuture(QtConcurrent::run([this, self, cancel, mp, ds, featMode, valRatio]() {
         const ClsTrainer::EvalResult ev = ClsTrainer::evaluateFromDir(
             mp.toStdString(), ds.toStdString(), featMode, valRatio, 42,
             [self](int done, int) {
@@ -292,15 +321,20 @@ void TrainingWizardDialog::onEvaluate()
                         QStringLiteral("已评估 %1 张…").arg(done));
                 }, Qt::QueuedConnection);
             },
-            [this]() { return m_cancel.load(); });
+            [cancel]() { return cancel->load(); });
         if (!self) return;
         QMetaObject::invokeMethod(self, [self, ev]() {
             if (!self) return;
             self->m_featureMode->setEnabled(true);
             if (!ev.ok) {
-                self->m_log->appendPlainText(
-                    QStringLiteral("评估失败：%1").arg(QString::fromStdString(ev.error)));
-                self->m_summary->setText(QStringLiteral("评估失败"));
+                const QString why = QString::fromStdString(ev.error);
+                if (why.contains(QStringLiteral("取消"))) {
+                    self->m_log->appendPlainText(QStringLiteral("评估已取消"));
+                    self->m_summary->setText(QStringLiteral("已取消"));
+                } else {
+                    self->m_log->appendPlainText(QStringLiteral("评估失败：%1").arg(why));
+                    self->m_summary->setText(QStringLiteral("评估失败"));
+                }
                 return;
             }
             self->m_log->appendPlainText(

@@ -800,6 +800,9 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
         Q_UNUSED(reason)
         if (ex != m_executor)
             return;
+        // 立刻重绘（2026-10-28 复核 P3）：第三态只置了节点标志，画布要等下次重绘才变色
+        if (FlowScene *scene = currentFlowScene())
+            scene->update();
         auto *rt = m_auxPanels ? m_auxPanels->resultTablePanel() : nullptr;
         if (!node || !rt)
             return;

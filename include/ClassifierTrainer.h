@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <random>
 #include <functional>
+#include <fstream>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -159,6 +160,51 @@ inline std::vector<size_t> validationSplit(size_t n, double ratio, unsigned seed
 using ProgressFn = std::function<void(int done, int total)>;
 using CancelFn = std::function<bool()>;
 
+/// 模型元数据（2026-10-28 P2）：训练时的特征模式/验证比例/seed/类别必须随模型落盘。
+/// 否则评估若用了不同比例，「留出验证集」就会重新包含训练样本——P2-2 只守住了"不改滑块"的情形。
+struct ModelMeta {
+    bool found = false;
+    int featureMode = 0;
+    double validationRatio = 0.3;
+    unsigned seed = 42;
+    std::vector<std::string> classNames;
+};
+
+inline std::string modelMetaPath(const std::string &modelPath)
+{
+    return modelPath + ".meta";
+}
+
+inline bool saveModelMeta(const std::string &modelPath, const ModelMeta &m)
+{
+    std::ofstream f(modelMetaPath(modelPath), std::ios::trunc);
+    if (!f)
+        return false;
+    f << "featureMode " << m.featureMode << "\n"
+      << "validationRatio " << m.validationRatio << "\n"
+      << "seed " << m.seed << "\n";
+    for (const auto &c : m.classNames)
+        f << "class " << c << "\n";
+    return bool(f);
+}
+
+inline ModelMeta loadModelMeta(const std::string &modelPath)
+{
+    ModelMeta m;
+    std::ifstream f(modelMetaPath(modelPath));
+    if (!f)
+        return m;
+    std::string key;
+    while (f >> key) {
+        if (key == "featureMode") f >> m.featureMode;
+        else if (key == "validationRatio") f >> m.validationRatio;
+        else if (key == "seed") f >> m.seed;
+        else if (key == "class") { std::string c; f >> c; m.classNames.push_back(c); }
+    }
+    m.found = true;
+    return m;
+}
+
 inline TrainStats trainFromDir(const std::string &dir, const std::string &savePath,
                                int featureMode, int hiddenNeurons, int maxIterations,
                                const AugmentOptions &aug = AugmentOptions(),
@@ -266,6 +312,15 @@ inline TrainStats trainFromDir(const std::string &dir, const std::string &savePa
     // 保存：先写模型根节点，再以 APPEND 模式追加元数据（同一 yaml 文件）
     try {
         mlp->save(savePath);
+    // 记录训练时的划分参数（2026-10-28 P2）：评估必须用同一组，否则留出验证集失效
+    {
+        ModelMeta mt;
+        mt.featureMode = featureMode;
+        mt.validationRatio = validationRatio;
+        mt.seed = seed;
+        mt.classNames = classDirs;
+        saveModelMeta(savePath, mt);
+    }
         cv::FileStorage fs(savePath, cv::FileStorage::APPEND);
         if (!fs.isOpened()) {
             st.error = "无法写入模型文件: " + savePath;
@@ -385,6 +440,7 @@ struct EvalResult {
     std::vector<std::string> classNames;                 // 行列同序（类目录名字典序）
     std::vector<std::vector<int>> confusion;             // confusion[真][预]
     std::string error;
+    double usedValidationRatio = 0.0;   // 实际用的比例（模型 meta 优先）
 };
 
 /// 在目录上评估已有模型（2026-10-27）：按 seed 确定性划分验证集，训练集不计入准确率。
@@ -399,6 +455,14 @@ inline EvalResult evaluateFromDir(const std::string &modelPath, const std::strin
     EvalResult ev;
     namespace fs = std::filesystem;
     std::error_code ec;
+    // 训练时记录的划分参数优先（2026-10-28 P2）：滑块事后被改也不会让验证集混入训练样本
+    {
+        const ModelMeta mt = loadModelMeta(modelPath);
+        if (mt.found) {
+            validationRatio = mt.validationRatio;
+            seed = mt.seed;
+        }
+    }
     Model m = loadModel(modelPath);
     if (!m.loaded) {
         ev.error = m.error.empty() ? ("模型加载失败: " + modelPath) : m.error;
@@ -491,6 +555,7 @@ inline EvalResult evaluateFromDir(const std::string &modelPath, const std::strin
         return ev;
     }
     ev.accuracy = double(ev.correct) / double(ev.total);
+    ev.usedValidationRatio = validationRatio;
     ev.ok = true;
     return ev;
 }

@@ -92,9 +92,19 @@ void ScriptNode::run(bool /*autoSwitch*/)
                 QFile preset(imageOutPath);
                 if (!preset.open(QIODevice::WriteOnly)) {
                     // 预创建失败必须留因（2026-10-27 P3-7）：否则脚本写不进来、节点静默透传输入图
+                    // 判红（2026-10-28 复核 P3）：只写 lastError 时节点可能仍绿，原因键也不会推面板；
+                    // 既然脚本拿不到输出文件，"能产出图像"这个承诺就不成立——按失败处理。
                     m_params[QStringLiteral("lastError")] =
                         QStringLiteral("图像交换文件创建失败（脚本将无法产出图像）：%1")
                             .arg(preset.errorString());
+                    setParamDirect(QStringLiteral("moduleStatus"), false);
+                    m_outputImage = m_inputImage;
+                    if (m_outputImage.IsInitialized()) {
+                        auto outObj = QSharedPointer<DataObject>::create();
+                        outObj->setHImage(m_outputImage);
+                        setOutputData(0, outObj);
+                    }
+                    return;
                 }
                 preset.close();
                 makeWorldWritable(imageInPath);

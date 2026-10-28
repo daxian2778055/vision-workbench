@@ -3,6 +3,7 @@
 #include <QDialog>
 #include <QFutureWatcher>
 #include <atomic>
+#include <memory>
 #include <QJsonObject>
 #include <functional>
 
@@ -46,13 +47,22 @@ private:
     QSpinBox *m_augFactor = nullptr;
     QDoubleSpinBox *m_augRotate = nullptr;
     QDoubleSpinBox *m_augNoise = nullptr;
+    class QPushButton *m_trainBtn = nullptr;
+    class QPushButton *m_evalBtn = nullptr;
+    class QPushButton *m_publishBtn = nullptr;
+    class QPushButton *m_closeBtn = nullptr;
     class QProgressBar *m_progress = nullptr;
     class QPushButton *m_cancelBtn = nullptr;
     QFutureWatcher<void> *m_watcher = nullptr;
-    std::atomic<bool> m_cancel{false};
+    /// 取消标志用 shared_ptr 按值捕获（2026-10-28 P1）：worker 的 shouldCancel 若捕获
+    /// this，训练中点关闭/标题栏 X 时对话框析构 → worker 读已释放成员 = UB。
+    std::shared_ptr<std::atomic<bool>> m_cancel =
+        std::make_shared<std::atomic<bool>>(false);
     bool m_running = false;
 
     void setRunning(bool on);
+    /// 关窗前先让工作线程收尾（2026-10-28 P1）：训练/评估中点 X 不能直接析构
+    void closeEvent(QCloseEvent *e) override;
     QLineEdit *m_modelName = nullptr;
     QPlainTextEdit *m_log = nullptr;
     QTableWidget *m_confusion = nullptr;

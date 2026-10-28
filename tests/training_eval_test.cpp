@@ -5,6 +5,7 @@
 #include "ClassifierTrainer.h"
 
 #include <QDir>
+#include <QFile>
 #include <QTemporaryDir>
 #include <QtTest/QtTest>
 #include <opencv2/imgcodecs.hpp>
@@ -20,6 +21,7 @@ private slots:
     void augmentationExpandsDataset();
     void holdoutExcludesValidationFromTraining();
     void augmentationNoiseIsZeroMean();
+    void evalUsesTrainedRatioNotSlider();
 
 private:
     static cv::Mat makeSample(int cls, int seed);
@@ -198,5 +200,27 @@ void TrainingEvalTest::augmentationNoiseIsZeroMean()
     QVERIFY2(qAbs(mean - 128.0) < 1.5,
              qPrintable(QStringLiteral("噪声不是零均值：均值 %1（应≈128）").arg(mean, 0, 'f', 2)));
 }
+void TrainingEvalTest::evalUsesTrainedRatioNotSlider()
+{
+    // P2（2026-10-28）：评估必须用**训练时**的验证划分。用户训练用 0.3、评估前把滑块拖到 0.5，
+    // 原实现会用 0.5 重新划分 → 部分训练样本被算进"留出验证集"，摘要却仍写"未参与训练"。
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    buildDataset(dir.path(), 10);
+    const std::string model = QDir(dir.path()).filePath(QStringLiteral("m.yaml")).toStdString();
+
+    QVERIFY(ClsTrainer::trainFromDir(dir.path().toStdString(), model, 0, 16, 150,
+                                     ClsTrainer::AugmentOptions(), 0.3, 42).ok);
+    QVERIFY2(QFile::exists(QString::fromStdString(ClsTrainer::modelMetaPath(model))),
+             "训练没有写出模型元数据");
+
+    // 故意传 0.5：应被 meta 里的 0.3 覆盖
+    const auto ev = ClsTrainer::evaluateFromDir(model, dir.path().toStdString(), 0, 0.5, 42);
+    QVERIFY2(ev.ok, qPrintable(QString::fromStdString(ev.error)));
+    QVERIFY2(qAbs(ev.usedValidationRatio - 0.3) < 1e-6,
+             qPrintable(QStringLiteral("评估用了外部比例 %1，应改用训练的 0.3")
+                            .arg(ev.usedValidationRatio)));
+}
+
 QTEST_MAIN(TrainingEvalTest)
 #include "training_eval_test.moc"
