@@ -333,7 +333,16 @@
       "exe_bytes": 9951232,
       "package_dir": "dist/VisionFlowPlatform-rc-20261028.3",
       "recorded_at": "2026-10-28",
-      "recorded_note": "当前装机包（修复）：Esc 与关窗同策略（不再冻结/不再绕过）、meta 落盘检查与三类告警（写失败/缺 meta/数据集变化）、类名空格往返、worker 未用捕获清理。训练评估测试 13 腿"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261028.4 取代（后者修数据集变化告警误报）"
+    },
+    {
+      "tag": "rc-20261028.4",
+      "commit": "12e02fac6346582203d63161fd6d190c8cac9ec9",
+      "exe_md5": "41a16f1f29c1870fcc9316e38da39061",
+      "exe_bytes": 9950720,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261028.4",
+      "recorded_at": "2026-10-28",
+      "recorded_note": "当前装机包（修复）：数据集变化告警改候选文件数口径（不再对未改动数据集误报）+ 负对照腿；报表错字真修；关窗日志不刷屏；收尾自动关窗。训练评估测试 14 腿"
     }
   ],
   "legacy_backfilled": [
