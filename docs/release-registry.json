@@ -360,7 +360,16 @@
       "exe_bytes": 10008064,
       "package_dir": "dist/VisionFlowPlatform-rc-20261028.6",
       "recorded_at": "2026-10-28",
-      "recorded_note": "当前装机包（能力补齐）：YOLO 推理后端 CPU/OpenCL + 类别名一致性校验 + docs/YOLO检测计数上线手册"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261028.7 取代（后者加流程启动自动清零与模型打包）"
+    },
+    {
+      "tag": "rc-20261028.7",
+      "commit": "5146432f4cbdcf162107f191c1b27fba7099f961",
+      "exe_md5": "fe95042a5abe128cbc9cb43373f65bd0",
+      "exe_bytes": 10019840,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261028.7",
+      "recorded_at": "2026-10-28",
+      "recorded_note": "当前装机包：流程启动自动清零（onRoundStart + resetOnStart + INV4 接线闸）+ 模型打包进方案（ProjectPackager + 文件菜单 + 5 腿）"
     }
   ],
   "legacy_backfilled": [
