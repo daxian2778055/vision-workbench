@@ -324,7 +324,16 @@
       "exe_bytes": 9946112,
       "package_dir": "dist/VisionFlowPlatform-rc-20261028.2",
       "recorded_at": "2026-10-28",
-      "recorded_note": "当前装机包（修复）：P1 训练评估线程生命周期与重入（shared_ptr 取消标志/按钮真禁用/closeEvent 等收尾/重入守卫）+ P2 模型 meta 锁验证划分 + 报表闭合与措辞等三项 P3"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261028.3 取代（后者修 Esc/关窗策略与 meta 告警）"
+    },
+    {
+      "tag": "rc-20261028.3",
+      "commit": "dcee26f6696407fc71aaaeeb0f091c729d8a28ea",
+      "exe_md5": "c5adbf5e39b30345d7f2a9d01083973d",
+      "exe_bytes": 9951232,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261028.3",
+      "recorded_at": "2026-10-28",
+      "recorded_note": "当前装机包（修复）：Esc 与关窗同策略（不再冻结/不再绕过）、meta 落盘检查与三类告警（写失败/缺 meta/数据集变化）、类名空格往返、worker 未用捕获清理。训练评估测试 13 腿"
     }
   ],
   "legacy_backfilled": [
