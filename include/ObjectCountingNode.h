@@ -23,6 +23,9 @@ public:
     /// 清零累计计数（换批次/换料时用；也可把 resetCounter 参数置 true 触发一次）
     void resetCounting();
 
+    /// 每次开始执行时：若 resetOnStart 为真则清零累计（2026-10-28）
+    void onRoundStart() override;
+
 private:
     ObjectTracker m_tracker;
     LineCounter m_lineCounter;

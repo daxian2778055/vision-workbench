@@ -50,6 +50,11 @@ public:
     /// 全部参数名（供全局变量输出等按名扫描）
     virtual QList<QString> getAllParamNames() const { return {}; }
     virtual void drawResult() = 0;
+
+    /// 新一次执行开始时的钩子（2026-10-28）：默认空实现。
+    /// 用于"按批次复位"的状态（如流水线计数器的累计值）——由 FlowExecutor 在轮首统一调用，
+    /// 节点不必自己猜"什么时候算新一批"。
+    virtual void onRoundStart() {}
     virtual QJsonObject toJson() const = 0;
     virtual void fromJson(const QJsonObject &json) = 0;
     

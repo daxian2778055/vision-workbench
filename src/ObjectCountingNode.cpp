@@ -149,6 +149,15 @@ void ObjectCountingNode::init()
     }
     {
         ParamSpec sp;
+        sp.name = QStringLiteral("resetOnStart");
+        sp.type = ParamType::Bool;
+        sp.defaultValue = true;
+        sp.label = QStringLiteral("每次开始执行时清零累计");
+        sp.tooltip = QStringLiteral("按批次计数时保持开启；要跨批次累计就关掉");
+        registerParam(sp);
+    }
+    {
+        ParamSpec sp;
         sp.name = QStringLiteral("resetCounter");
         sp.type = ParamType::Bool;
         sp.defaultValue = false;
@@ -166,6 +175,12 @@ void ObjectCountingNode::resetCounting()
     m_lineCounter = LineCounter();
     m_lastLineKey.clear();
     m_initedLine = false;
+}
+
+void ObjectCountingNode::onRoundStart()
+{
+    if (m_params.value(QStringLiteral("resetOnStart"), true).toBool())
+        resetCounting();
 }
 
 void ObjectCountingNode::run(bool /*autoSwitch*/)

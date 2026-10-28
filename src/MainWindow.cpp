@@ -69,6 +69,7 @@
 #include "ScriptSecurityPolicy.h"
 #include "ComputeBackend.h"
 #include "FeatureLibraryDialog.h"
+#include "ProjectPackager.h"
 #include "TrainingWizardDialog.h"
 #include <QJsonObject>
 #include <QActionGroup>   // 系统菜单「脚本安全：执行前确认」开关
@@ -4047,6 +4048,29 @@ void MainWindow::setupSystemMenu()
                         return true;
                     };
                     dlg.exec();
+                });
+        // 打包模型与依赖（2026-10-28）：把 onnx/classes.txt 等外部文件收进方案目录，
+        // 换机器拷方案就能跑——显式动作，不在保存时偷偷搬用户文件。
+        // 让用户选方案目录（MainWindow 没有公开的"当前方案路径"，选目录比猜更明确）。
+        connect(ui->menuFile->addAction(QStringLiteral("打包模型与依赖…")), &QAction::triggered,
+                this, [this]() {
+                    const QString dir = QFileDialog::getExistingDirectory(
+                        this, QStringLiteral("选择方案目录（依赖将收进 <目录>/assets/）"));
+                    if (dir.isEmpty())
+                        return;
+                    const QString scheme = dir + QStringLiteral("/scheme.vfp");
+                    const ProjectPackager::Result r = ProjectPackager::pack(currentFlowScene(), scheme);
+                    if (!r.ok) {
+                        QMessageBox::warning(this, QStringLiteral("打包失败"), r.error);
+                        return;
+                    }
+                    QString msg = r.copied.isEmpty()
+                                      ? QStringLiteral("没有需要打包的外部依赖")
+                                      : QStringLiteral("已打包 %1 个依赖到 assets/：\n%2\n\n"
+                                                       "节点参数已改为相对路径，请保存方案以生效。")
+                                            .arg(r.copied.size())
+                                            .arg(r.copied.join(QStringLiteral("\n")));
+                    QMessageBox::information(this, QStringLiteral("打包完成"), msg);
                 });
         m_confirmScriptAct->setChecked(policy.requireConfirmation());
         m_menuRouter.direct(m_confirmScriptAct, this, [this]() {

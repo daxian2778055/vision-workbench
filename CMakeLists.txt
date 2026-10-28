@@ -126,6 +126,7 @@ set(SOURCES
     src/FeatureSearchNode.cpp
     src/FeatureLibraryDialog.cpp
     src/ObjectCountingNode.cpp
+    src/ProjectPackager.cpp
     src/TrainingWizardDialog.cpp
     src/FeatureIndex.cpp
     src/OpencvThresholdNode.cpp
@@ -1156,6 +1157,14 @@ if(MSVC)
     vfp_configure_gui_test(OpencvBridgeTest)
 endif()
 
+# 方案依赖打包（2026-10-28）
+if(MSVC)
+    add_executable(project_packager_test tests/project_packager_test.cpp)
+    target_link_libraries(project_packager_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    vfp_add_qtest(NAME ProjectPackagerTest TARGET project_packager_test)
+    vfp_configure_gui_test(ProjectPackagerTest)
+endif()
+
 # 流水线计数核心（2026-10-28）：跟踪 ID 与过线去重
 if(MSVC)
     add_executable(object_counting_test tests/object_counting_test.cpp)
@@ -1455,7 +1464,7 @@ if(MSVC)
     set(VFP_TESTS NodeCoreTest OpencvSerializationTest IntegrationTest DatabaseTest PerfTest
                   ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest CameraIoTest
                   DnnSegmentTest OpencvDefectAlignTest SoakTest StatisticsReportTest SchemePackageTest
-                  I18nTest SubFlowTest EditLockReleaseTest RoundAbortSummaryTest UndoHistoryAfterLoadTest NodeExceptionExitTest RejectedConnectionUndoTest DbThreadConnectionCleanupTest CameraTaskLedgerTest GlobalCameraConsumerGateTest CommDeviceGhostTest OpencvBridgeTest MeasureGreenGuardTest UiGuardsTest ScriptImageIoTest ComputeBackendTest FeatureIndexTest TrainingEvalTest ObjectCountingTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
+                  I18nTest SubFlowTest EditLockReleaseTest RoundAbortSummaryTest UndoHistoryAfterLoadTest NodeExceptionExitTest RejectedConnectionUndoTest DbThreadConnectionCleanupTest CameraTaskLedgerTest GlobalCameraConsumerGateTest CommDeviceGhostTest OpencvBridgeTest MeasureGreenGuardTest UiGuardsTest ScriptImageIoTest ComputeBackendTest FeatureIndexTest TrainingEvalTest ObjectCountingTest ProjectPackagerTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
                   FactoryPasswordGuardTest FeatureMatchTest CalibChainTest OpencvNodesTest
                   ProjectPathsTest FlowCachePurgeLedgerTest ExecutionControlPolicyTest
                   AuxDialogMenuRouterTest ModuleEditorRegistryTest UITranslatorTest

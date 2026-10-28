@@ -1987,6 +1987,16 @@ void FlowExecutor::resetState()
         m_nodeOutputVars.clear();   // 重新启动清空变量缓存，避免引用上一轮数值（P2）
     }
     m_executionQueue.clear();
+
+    // 轮首钩子（2026-10-28）：让"按批次累计"的节点（流水线计数器等）在新一次执行开始时复位。
+    // 放在 resetState 里而不是 executeNode 里——后者每帧都调，计数器会被清成 0。
+    if (m_scene) {
+        const QList<NodeBase *> all = m_scene->nodes();
+        for (NodeBase *n : all) {
+            if (n)
+                n->onRoundStart();
+        }
+    }
 }
 
 FlowRuntimeStats FlowExecutor::runtimeStats() const

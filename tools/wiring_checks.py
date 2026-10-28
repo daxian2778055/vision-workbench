@@ -55,6 +55,7 @@ HARDCODED_OPERATOR_RX = re.compile(
 
 # INV3：相机线程池任务的生命周期（P2-3）——任务自己进出在飞账，关相机前必须等排空
 MVS_REL = os.path.join("src", "MvsImageSourceNode.cpp")
+FLOW_EXECUTOR_REL = os.path.join("src", "FlowExecutor.cpp")
 CAMERA_LEDGER_TOKENS = ["CameraTaskLedger::enter()", "CameraTaskLedger::leave()"]
 
 
@@ -251,6 +252,27 @@ def check_camera_lifecycle(mvs_path):
     return findings
 
 
+def check_round_start_hook(repo):
+    """INV4：轮首必须调用 onRoundStart（2026-10-28）。
+
+    流水线计数器这类"按批次累计"的节点靠这一行复位；删掉不会报错、界面也没有异常，
+    只是累计值不再清零——最典型的"接线丢掉"型缺陷。
+    """
+    findings = []
+    path = os.path.join(repo, FLOW_EXECUTOR_REL)
+    if not os.path.isfile(path):
+        findings.append("source_missing: %s" % path)
+        return findings
+    text = open(path, "rb").read().decode("utf-8", "replace")
+    # 只看真实代码：注释里的同一串不算命中（2026-10-28 实测：注释掉调用仍被判绿）
+    import re as _re
+    code = _re.sub(r"/\*.*?\*/", "", text, flags=_re.S)
+    code = _re.sub(r"//[^\n]*", "", code)
+    if "onRoundStart();" not in code:
+        findings.append("FlowExecutor no longer calls onRoundStart() -> per-batch nodes silently stop resetting")
+    return findings
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", default=".")
@@ -273,6 +295,7 @@ def main():
     findings += check(text)
     findings += check_audit_operator(repo)
     findings += check_camera_lifecycle(os.path.join(repo, MVS_REL))
+    findings += check_round_start_hook(repo)
 
     out("[ELW-INV] findings=%d" % len(findings))
     if findings:
