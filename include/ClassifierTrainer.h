@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <random>
 #include <functional>
+#include <cstdlib>
 #include <fstream>
 #include <cmath>
 #include <cstdio>
@@ -25,6 +26,7 @@ struct TrainStats {
     int classes = 0;
     int featDim = 0;
     std::string error;
+    std::string warning;   /// 非致命问题（如元数据未落盘），UI 需显示
 };
 
 struct Model {
@@ -167,6 +169,7 @@ struct ModelMeta {
     int featureMode = 0;
     double validationRatio = 0.3;
     unsigned seed = 42;
+    int fileCount = 0;   /// 训练时的样本文件总数（检测数据集是否已变）
     std::vector<std::string> classNames;
 };
 
@@ -182,9 +185,12 @@ inline bool saveModelMeta(const std::string &modelPath, const ModelMeta &m)
         return false;
     f << "featureMode " << m.featureMode << "\n"
       << "validationRatio " << m.validationRatio << "\n"
-      << "seed " << m.seed << "\n";
+      << "seed " << m.seed << "\n"
+      << "fileCount " << m.fileCount << "\n";
+    // 类名按行写/读（2026-10-28 复核）：用 >> 读会被空格截断
     for (const auto &c : m.classNames)
         f << "class " << c << "\n";
+    f.flush();
     return bool(f);
 }
 
@@ -194,12 +200,18 @@ inline ModelMeta loadModelMeta(const std::string &modelPath)
     std::ifstream f(modelMetaPath(modelPath));
     if (!f)
         return m;
-    std::string key;
-    while (f >> key) {
-        if (key == "featureMode") f >> m.featureMode;
-        else if (key == "validationRatio") f >> m.validationRatio;
-        else if (key == "seed") f >> m.seed;
-        else if (key == "class") { std::string c; f >> c; m.classNames.push_back(c); }
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.rfind("featureMode ", 0) == 0)
+            m.featureMode = std::atoi(line.c_str() + 12);
+        else if (line.rfind("validationRatio ", 0) == 0)
+            m.validationRatio = std::atof(line.c_str() + 16);
+        else if (line.rfind("seed ", 0) == 0)
+            m.seed = unsigned(std::atoi(line.c_str() + 5));
+        else if (line.rfind("fileCount ", 0) == 0)
+            m.fileCount = std::atoi(line.c_str() + 10);
+        else if (line.rfind("class ", 0) == 0)
+            m.classNames.push_back(line.substr(6));   // 整行取，含空格也完整
     }
     m.found = true;
     return m;
@@ -318,8 +330,12 @@ inline TrainStats trainFromDir(const std::string &dir, const std::string &savePa
         mt.featureMode = featureMode;
         mt.validationRatio = validationRatio;
         mt.seed = seed;
+        mt.fileCount = int(feats.size());   // 含增广后的样本数，作数据集指纹
         mt.classNames = classDirs;
-        saveModelMeta(savePath, mt);
+        if (!saveModelMeta(savePath, mt)) {
+            // 静默失败会让评估回退到滑块比例（P2 那个坑原样回来）——必须报出来
+            st.warning = "元数据未落盘（磁盘满/无权限？）：评估的验证比例将回退到界面设置";
+        }
     }
         cv::FileStorage fs(savePath, cv::FileStorage::APPEND);
         if (!fs.isOpened()) {
@@ -441,6 +457,7 @@ struct EvalResult {
     std::vector<std::vector<int>> confusion;             // confusion[真][预]
     std::string error;
     double usedValidationRatio = 0.0;   // 实际用的比例（模型 meta 优先）
+    std::string warning;                // 非致命提示（meta 缺失/数据集已变等）
 };
 
 /// 在目录上评估已有模型（2026-10-27）：按 seed 确定性划分验证集，训练集不计入准确率。
@@ -456,11 +473,15 @@ inline EvalResult evaluateFromDir(const std::string &modelPath, const std::strin
     namespace fs = std::filesystem;
     std::error_code ec;
     // 训练时记录的划分参数优先（2026-10-28 P2）：滑块事后被改也不会让验证集混入训练样本
+    ModelMeta meta;
     {
-        const ModelMeta mt = loadModelMeta(modelPath);
-        if (mt.found) {
-            validationRatio = mt.validationRatio;
-            seed = mt.seed;
+        meta = loadModelMeta(modelPath);
+        if (meta.found) {
+            validationRatio = meta.validationRatio;
+            seed = meta.seed;
+        } else {
+            // 旧模型没有 .meta：比例只能用滑块值，可能已与训练时不一致——摘要必须说清
+            ev.warning = "该模型没有 .meta（旧版本训练）：验证比例取自界面设置，可能与训练时不一致";
         }
     }
     Model m = loadModel(modelPath);
@@ -553,6 +574,16 @@ inline EvalResult evaluateFromDir(const std::string &modelPath, const std::strin
     if (ev.total == 0) {
         ev.error = "验证集为空（每类样本不足）";
         return ev;
+    }
+    // 数据集变化检测（2026-10-28 复核）：meta 只存比例+seed，不存文件集；
+    // 训练后增删图片会让"留出集"与训练时不一致——至少要在摘要里说清
+    if (meta.found && meta.fileCount > 0 && ev.total > 0) {
+        const int seen = int(double(ev.total) / (validationRatio > 0.01 ? validationRatio : 0.3));
+        if (std::abs(seen - meta.fileCount) > std::max(2, meta.fileCount / 10)) {
+            if (!ev.warning.empty()) ev.warning += "；";
+            ev.warning += "数据集规模与训练时不同（训练 " + std::to_string(meta.fileCount)
+                          + "，本次约 " + std::to_string(seen) + "）：留出集按当前数据集重新划分";
+        }
     }
     ev.accuracy = double(ev.correct) / double(ev.total);
     ev.usedValidationRatio = validationRatio;

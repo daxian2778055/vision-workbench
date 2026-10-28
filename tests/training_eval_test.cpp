@@ -22,10 +22,14 @@ private slots:
     void holdoutExcludesValidationFromTraining();
     void augmentationNoiseIsZeroMean();
     void evalUsesTrainedRatioNotSlider();
+    void metaClassNameWithSpaceRoundTrips();
+    void missingMetaWarns();
+    void changedDatasetWarns();
 
 private:
     static cv::Mat makeSample(int cls, int seed);
     static void buildDataset(const QString &root, int perClass);
+    static void buildDatasetExtra(const QString &root, int extraPerClass);
 };
 
 cv::Mat TrainingEvalTest::makeSample(int cls, int seed)
@@ -220,6 +224,75 @@ void TrainingEvalTest::evalUsesTrainedRatioNotSlider()
     QVERIFY2(qAbs(ev.usedValidationRatio - 0.3) < 1e-6,
              qPrintable(QStringLiteral("评估用了外部比例 %1，应改用训练的 0.3")
                             .arg(ev.usedValidationRatio)));
+}
+
+void TrainingEvalTest::metaClassNameWithSpaceRoundTrips()
+{
+    // 类名按行读写（2026-10-28 复核）：用 >> 读会被空格截断
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const std::string model = QDir(dir.path()).filePath(QStringLiteral("m.yaml")).toStdString();
+    ClsTrainer::ModelMeta mt;
+    mt.featureMode = 1;
+    mt.validationRatio = 0.25;
+    mt.seed = 7;
+    mt.fileCount = 33;
+    mt.classNames = {"外圈 划痕", "内圈", "class with spaces"};
+    QVERIFY(ClsTrainer::saveModelMeta(model, mt));
+
+    const ClsTrainer::ModelMeta back = ClsTrainer::loadModelMeta(model);
+    QVERIFY(back.found);
+    QCOMPARE(int(back.classNames.size()), 3);
+    QCOMPARE(QString::fromStdString(back.classNames[0]), QStringLiteral("外圈 划痕"));
+    QCOMPARE(QString::fromStdString(back.classNames[2]), QStringLiteral("class with spaces"));
+    QCOMPARE(back.fileCount, 33);
+}
+
+void TrainingEvalTest::missingMetaWarns()
+{
+    // 旧模型没有 .meta：必须提示"比例取自界面设置"（2026-10-28 复核）
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    buildDataset(dir.path(), 8);
+    const std::string model = QDir(dir.path()).filePath(QStringLiteral("m.yaml")).toStdString();
+    QVERIFY(ClsTrainer::trainFromDir(dir.path().toStdString(), model, 0, 12, 120).ok);
+    QFile::remove(QString::fromStdString(ClsTrainer::modelMetaPath(model)));   // 模拟旧模型
+
+    const auto ev = ClsTrainer::evaluateFromDir(model, dir.path().toStdString(), 0, 0.3, 42);
+    QVERIFY2(ev.ok, qPrintable(QString::fromStdString(ev.error)));
+    QVERIFY2(!ev.warning.empty(), "缺 .meta 却没有提示");
+    QVERIFY2(QString::fromStdString(ev.warning).contains(QStringLiteral("meta")),
+             qPrintable(QString::fromStdString(ev.warning)));
+}
+
+void TrainingEvalTest::changedDatasetWarns()
+{
+    // 数据集规模变化：留出集不再等同训练时的留出集，必须说清（2026-10-28 复核）
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    buildDataset(dir.path(), 8);   // 16 张
+    const std::string model = QDir(dir.path()).filePath(QStringLiteral("m.yaml")).toStdString();
+    QVERIFY(ClsTrainer::trainFromDir(dir.path().toStdString(), model, 0, 12, 120,
+                                     ClsTrainer::AugmentOptions(), 0.3, 42).ok);
+    // 再补一批图（每类 +8 → 32 张）
+    buildDatasetExtra(dir.path(), 8);
+
+    const auto ev = ClsTrainer::evaluateFromDir(model, dir.path().toStdString(), 0, 0.3, 42);
+    QVERIFY2(ev.ok, qPrintable(QString::fromStdString(ev.error)));
+    QVERIFY2(!ev.warning.empty(), "数据集变化却没有提示");
+}
+
+void TrainingEvalTest::buildDatasetExtra(const QString &root, int extraPerClass)
+{
+    for (int cls = 0; cls < 2; ++cls) {
+        const QString d = QDir(root).filePath(QStringLiteral("c%1").arg(cls));
+        for (int i = 0; i < extraPerClass; ++i) {
+            const cv::Mat img = makeSample(cls, 100 + i);
+            cv::imwrite(QDir(d).filePath(QStringLiteral("x%1.png").arg(i, 3, 10, QLatin1Char('0')))
+                            .toStdString(),
+                        img);
+        }
+    }
 }
 
 QTEST_MAIN(TrainingEvalTest)

@@ -181,15 +181,37 @@ void TrainingWizardDialog::setRunning(bool on)
 
 void TrainingWizardDialog::closeEvent(QCloseEvent *e)
 {
-    if (m_running && m_watcher) {
-        // 先请 worker 收尾再关（2026-10-28 P1）：直接析构会让 worker 的取消回调读到已释放内存
+    if (m_running) {
+        // 拒绝关闭而不是阻塞等待（2026-10-28 复核）：waitForFinished 会冻结 GUI，
+        // 而"正在停止…"那行也刷不出来；最终 ANN 训练段本身不可逐样本取消，会冻到训练结束。
+        // 策略：请求取消 + 明确提示，等 worker 收尾后用户再关。
         m_cancel->store(true);
-        m_log->appendPlainText(QStringLiteral("正在停止后台任务，请稍候…"));
-        setCursor(Qt::BusyCursor);
-        m_watcher->waitForFinished();
-        unsetCursor();
+        m_log->appendPlainText(QStringLiteral("已请求停止：等后台任务收尾后再关闭窗口"));
+        statusBarHint();
+        e->ignore();
+        return;
     }
     QDialog::closeEvent(e);
+}
+
+void TrainingWizardDialog::reject()
+{
+    // Esc 不经过 closeEvent（2026-10-28 复核）：如果不在这里拦，训练中按 Esc 会立刻关窗，
+    // worker 继续跑完并写盘，对话框已消失。
+    if (m_running) {
+        m_cancel->store(true);
+        m_log->appendPlainText(QStringLiteral("已请求停止：等后台任务收尾后再关闭窗口"));
+        statusBarHint();
+        return;
+    }
+    QDialog::reject();
+}
+
+void TrainingWizardDialog::statusBarHint()
+{
+    // 轻量提示：不阻塞、不弹模态（避免又一个"关不掉"）
+    if (m_summary)
+        m_summary->setText(QStringLiteral("正在停止后台任务…（完成后可关闭）"));
 }
 
 QString TrainingWizardDialog::datasetDir() const
@@ -255,7 +277,7 @@ void TrainingWizardDialog::onTrain()
     const double valRatio = m_valRatio->value();
     QPointer<TrainingWizardDialog> self(this);
     auto cancel = m_cancel;
-    m_watcher->setFuture(QtConcurrent::run([this, self, cancel, dir, savePath, featMode,
+    m_watcher->setFuture(QtConcurrent::run([self, cancel, dir, savePath, featMode,
                                             hidden, iters, aug, valRatio]() {
         const ClsTrainer::TrainStats st = ClsTrainer::trainFromDir(
             dir.toStdString(), savePath, featMode, hidden, iters, aug,
@@ -276,6 +298,9 @@ void TrainingWizardDialog::onTrain()
                     QStringLiteral("训练完成：%1 个样本 / %2 类 / 特征 %3 维\n模型已保存：%4")
                         .arg(st.samples).arg(st.classes).arg(st.featDim)
                         .arg(QString::fromStdString(savePath)));
+                if (!st.warning.empty())
+                    self->m_log->appendPlainText(
+                        QStringLiteral("注意：%1").arg(QString::fromStdString(st.warning)));
                 self->m_log->appendPlainText(
                     QStringLiteral("下一步：点「评估」看模型质量；发布时把模型路径填到分类节点。"));
             } else {
@@ -311,7 +336,7 @@ void TrainingWizardDialog::onEvaluate()
     const QString ds = datasetDir();
     QPointer<TrainingWizardDialog> self(this);
     auto cancel = m_cancel;
-    m_watcher->setFuture(QtConcurrent::run([this, self, cancel, mp, ds, featMode, valRatio]() {
+    m_watcher->setFuture(QtConcurrent::run([self, cancel, mp, ds, featMode, valRatio]() {
         const ClsTrainer::EvalResult ev = ClsTrainer::evaluateFromDir(
             mp.toStdString(), ds.toStdString(), featMode, valRatio, 42,
             [self](int done, int) {
@@ -340,6 +365,9 @@ void TrainingWizardDialog::onEvaluate()
             self->m_log->appendPlainText(
                 QStringLiteral("评估：%1/%2 正确（%3%）")
                     .arg(ev.correct).arg(ev.total).arg(ev.accuracy * 100.0, 0, 'f', 1));
+            if (!ev.warning.empty())
+                self->m_log->appendPlainText(
+                    QStringLiteral("注意：%1").arg(QString::fromStdString(ev.warning)));
             self->m_summary->setText(
                 QStringLiteral("留出验证集 %1 张（未参与训练），正确 %2，准确率 %3%")
                     .arg(ev.total).arg(ev.correct).arg(ev.accuracy * 100.0, 0, 'f', 1));
