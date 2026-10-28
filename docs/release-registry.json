@@ -378,7 +378,16 @@
       "exe_bytes": 10022912,
       "package_dir": "dist/VisionFlowPlatform-rc-20261028.8",
       "recorded_at": "2026-10-28",
-      "recorded_note": "当前装机包：YOLO 双布局（v8/v11 与 v5/YOLOX）+ 负对照腿；配合 Apache-2.0 的 YOLOX 可规避 AGPL"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261028.9 取代（后者加检测框标注）"
+    },
+    {
+      "tag": "rc-20261028.9",
+      "commit": "f1b3ebf04867c4ceba5e7a8f9ba3483499d14b96",
+      "exe_md5": "07ca169889e903a822962041b36c4973",
+      "exe_bytes": 10054144,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261028.9",
+      "recorded_at": "2026-10-28",
+      "recorded_note": "当前装机包：检测框标注（YoloAnnotation 核心 + BoxAnnotatorDialog + 9 腿），标注直接写 YOLO txt"
     }
   ],
   "legacy_backfilled": [
