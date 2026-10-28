@@ -174,7 +174,7 @@ void ObjectCountingNode::run(bool /*autoSwitch*/)
     }
     const cv::Mat img = OpencvUtil::himageToMat(m_inputImage);
     if (img.empty()) {
-        m_params[QStringLiteral("lastError")] = QStringLiteral("输入图像为空或桥接失败");
+        m_params[QStringLiteral("lastError")] = QStringLiteral("计数节点：输入图像不可用（为空或桥接失败）");
         return;
     }
 
@@ -235,7 +235,7 @@ void ObjectCountingNode::run(bool /*autoSwitch*/)
         const double nms = m_params.value(QStringLiteral("nmsThresh")).toDouble();
         if (!DnnDetectNode::parseYoloOutput(out, inputSize, cv::Size(img.cols, img.rows),
                                             conf, nms, boxes)) {
-            m_params[QStringLiteral("lastError")] = QStringLiteral("YOLO 输出解析失败");
+            m_params[QStringLiteral("lastError")] = QStringLiteral("检测输出无法解析（模型与输入尺寸不匹配？）");
             return;
         }
         const QStringList classNames = DnnDetectNode::loadClassNames(
