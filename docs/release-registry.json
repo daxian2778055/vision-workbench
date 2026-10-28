@@ -351,7 +351,16 @@
       "exe_bytes": 10003968,
       "package_dir": "dist/VisionFlowPlatform-rc-20261028.5",
       "recorded_at": "2026-10-28",
-      "recorded_note": "当前装机包（能力新增）：流水线目标计数（IOU 跟踪 + 过线去重，方向过滤/去抖/一次性清零）+ ObjectCountingNode + 10 腿"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261028.6 取代（后者补推理后端/类别校验/手册）"
+    },
+    {
+      "tag": "rc-20261028.6",
+      "commit": "26143a7b5a8ec4511620ebd416d123805ca4ebfc",
+      "exe_md5": "7d717d1f878f62b4ec13f81dcb2f2dbd",
+      "exe_bytes": 10008064,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261028.6",
+      "recorded_at": "2026-10-28",
+      "recorded_note": "当前装机包（能力补齐）：YOLO 推理后端 CPU/OpenCL + 类别名一致性校验 + docs/YOLO检测计数上线手册"
     }
   ],
   "legacy_backfilled": [
