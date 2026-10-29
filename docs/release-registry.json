@@ -432,7 +432,7 @@
       "exe_bytes": 10109440,
       "package_dir": "dist/VisionFlowPlatform-rc-20261029.5",
       "recorded_at": "2026-10-29",
-      "recorded_note": "门禁 GREEN。该包已被 rc-20261029.6 取代。更正：.5 说明里的角色行恢复是失实声明——交付字节里是字面 \\\\uXXXX 转义串（PowerShell 不解释），客户看到乱码；.6 改回真实中文并重编重打"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261029.6 取代。更正：.5 说明里的角色行恢复是失实声明——交付字节里是字面 \\uXXXX 转义串（PowerShell 不解释），客户看到乱码；.6 改回真实中文并重编重打"
     },
     {
       "tag": "rc-20261029.6",
