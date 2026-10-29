@@ -432,7 +432,16 @@
       "exe_bytes": 10109440,
       "package_dir": "dist/VisionFlowPlatform-rc-20261029.5",
       "recorded_at": "2026-10-29",
-      "recorded_note": "当前装机包：强杀定时器按进程身份绑定（不再误杀下一趟）+ 打包顺序稳定（包字节可复现）+ 关闭按钮走守卫 + 角色行恢复 + 强杀/重启两条腿（training_runner 8 腿）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261029.6 取代。更正：.5 说明里的角色行恢复是失实声明——交付字节里是字面 \\\\uXXXX 转义串（PowerShell 不解释），客户看到乱码；.6 改回真实中文并重编重打"
+    },
+    {
+      "tag": "rc-20261029.6",
+      "commit": "70fc30bea6d2428f275d99d5ad55950ee34ef7f7",
+      "exe_md5": "c469368191f9cef5dee3c6c76ab86f54",
+      "exe_bytes": 10109440,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261029.6",
+      "recorded_at": "2026-10-29",
+      "recorded_note": "当前装机包（交付面修复）：版本说明角色行改回真实中文（.5 为字面转义乱码，声明与交付物不一致已属实更正）+ 顽固腿补 5 秒下界与日志命中断言（改坏臂实测各有牙）"
     }
   ],
   "legacy_backfilled": [
