@@ -77,3 +77,5 @@ data/
 __pycache__/
 *.pyc
 deploy-extras/train-env/wheels/
+deploy-extras/train-env/*.log
+deploy-extras/train-env/*.err
