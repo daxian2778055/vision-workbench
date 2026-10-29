@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileInfo>
+#include <QStandardPaths>
 
 TrainingRunner::TrainingRunner(QObject *parent) : QObject(parent) {}
 
@@ -22,7 +23,11 @@ TrainingRunner::EnvStatus TrainingRunner::probe(const QString &pythonPath, int t
         st.detail = QStringLiteral("未配置 Python 路径");
         return st;
     }
-    if (!QFileInfo::exists(pythonPath)) {
+    // 允许只写名字（"python"）：PATH 里的也要能找到（2026-10-28 复核 P3）
+    QString resolved = pythonPath;
+    if (!QFileInfo::exists(resolved))
+        resolved = QStandardPaths::findExecutable(pythonPath);
+    if (resolved.isEmpty()) {
         st.detail = QStringLiteral("Python 不存在：%1").arg(pythonPath);
         return st;
     }
@@ -30,7 +35,7 @@ TrainingRunner::EnvStatus TrainingRunner::probe(const QString &pythonPath, int t
     QProcess proc;
     proc.setProcessChannelMode(QProcess::MergedChannels);
     // 只查最关键的两件事：torch 在不在、CUDA 有没有。YOLOX 目录由界面单独校验。
-    proc.start(pythonPath, {QStringLiteral("-c"),
+    proc.start(resolved, {QStringLiteral("-c"),
                             QStringLiteral("import torch,sys;"
                                            "print(torch.__version__, '| cuda', torch.cuda.is_available())")});
     if (!proc.waitForStarted(5000)) {

@@ -3,6 +3,7 @@
 #include "TrainingRunner.h"
 
 #include <QDialog>
+#include <QCloseEvent>
 
 class QComboBox;
 class QLineEdit;
@@ -20,6 +21,12 @@ class TrainingRunnerDialog : public QDialog
     Q_OBJECT
 public:
     explicit TrainingRunnerDialog(QWidget *parent = nullptr);
+
+protected:
+    /// 训练中关窗不得静默杀进程（2026-10-28 复核 P3）：跑了几小时的训练
+    /// 会被顺手关窗带走——与训练向导同一策略：请求取消 + 拒绝关闭。
+    void closeEvent(QCloseEvent *e) override;
+    void reject() override;
 
 private slots:
     void onProbeEnv();

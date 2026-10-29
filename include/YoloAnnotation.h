@@ -7,6 +7,7 @@
 #include <QVector>
 
 #include <QFile>
+#include <QRegularExpression>
 #include <QFileInfo>
 #include <QTextStream>
 
@@ -67,8 +68,10 @@ public:
             return out;
         QTextStream ts(&f);
         while (!ts.atEnd()) {
-            const QStringList parts = ts.readLine().trimmed().split(QLatin1Char(' '),
-                                                                    Qt::SkipEmptyParts);
+            // 任何空白分隔都认（2026-10-28 复核 P3）：只按空格切会让制表符分隔的 txt
+            // 整行被当成非法——而制表符是很多标注工具的默认输出
+            static const QRegularExpression ws(QStringLiteral("[\\t ]+"));
+            const QStringList parts = ts.readLine().trimmed().split(ws, Qt::SkipEmptyParts);
             if (parts.size() < 5) {
                 if (badLines)
                     ++*badLines;
@@ -82,7 +85,9 @@ public:
             if (ok) b.w = parts[3].toDouble(&ok);
             if (ok) b.h = parts[4].toDouble(&ok);
             // 归一化越界的一律丢弃：训练时会静默裁掉，不如现在就说
-            if (!ok || b.x < 0 || b.y < 0 || b.w <= 0 || b.h <= 0
+            // classId 也校验（2026-10-28 复核 P3）：负数会让训练工具静默丢类
+            if (!ok || b.classId < 0
+                || b.x < 0 || b.y < 0 || b.w <= 0 || b.h <= 0
                 || b.x + b.w > 1.0001 || b.y + b.h > 1.0001) {
                 if (badLines)
                     ++*badLines;
@@ -105,7 +110,10 @@ public:
                << QString::number(b.y, 'f', 6) << ' ' << QString::number(b.w, 'f', 6) << ' '
                << QString::number(b.h, 'f', 6) << '\n';
         ts.flush();
-        return ts.status() == QTextStream::Ok;
+        // 2026-10-28 复核 P3：只查 QTextStream 不够，磁盘满在 close/flush 时才暴露
+        const bool ok = ts.status() == QTextStream::Ok && f.flush();
+        f.close();
+        return ok;
     }
 
     /// 同名的标注文件路径（image.jpg → image.txt）

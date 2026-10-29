@@ -318,15 +318,15 @@ void ObjectCountingNode::run(bool /*autoSwitch*/)
 
     const QVector<ObjectTrack> tracks = m_tracker.update(boxes);
     const int dirMode = m_params.value(QStringLiteral("direction")).toInt();
+    // 方向过滤交给计数器（2026-10-28 P2-2）：节点侧二次过滤会让"被过滤的穿越"仍写进
+    // 已计集合，同一个 ID 后来再穿就永远不计了。
+    const int allowedDir = (dirMode == 1) ? +1 : (dirMode == 2) ? -1 : 0;
     const QVector<LineCounter::Event> events =
         m_lineCounter.update(tracks, /*confirmedOnly=*/true,
-                             [this](const ObjectTrack &t) { return m_tracker.confirmed(t); });
+                             [this](const ObjectTrack &t) { return m_tracker.confirmed(t); },
+                             allowedDir);
     int added = 0;
     for (const LineCounter::Event &e : events) {
-        if (dirMode == 1 && e.direction < 0)
-            continue;
-        if (dirMode == 2 && e.direction > 0)
-            continue;
         ++m_totalCount;
         ++added;
         const QString cls = e.className.isEmpty() ? QStringLiteral("(未分类)") : e.className;

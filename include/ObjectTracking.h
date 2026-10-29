@@ -59,6 +59,11 @@ public:
         std::vector<Pair> pairs;
         for (int ti = 0; ti < m_tracks.size(); ++ti) {
             for (int di = 0; di < dets.size(); ++di) {
+                // 类别一致才允许匹配（2026-10-28 复核 P3）：不同类别的框高度重叠时会
+                // 互相"吃掉"身份，className 被改写，按类计数就会串。
+                if (!m_tracks[ti].className.isEmpty() && !dets[di].className.isEmpty()
+                    && m_tracks[ti].className != dets[di].className)
+                    continue;
                 const float iou = iouOf(m_tracks[ti].box, rectOf(dets[di]));
                 if (iou >= m_cfg.iouThreshold)
                     pairs.push_back({ti, di, iou});
@@ -180,8 +185,12 @@ public:
     }
     bool valid() const { return std::hypot(m_b.x - m_a.x, m_b.y - m_a.y) > 1.0; }
 
+    /// allowedDirection: 0=双向；+1 只接受"负侧→正侧"；-1 只接受"正侧→负侧"。
+    /// 2026-10-28 复核 P2-2：**未接受的方向不能写入已计集合**，否则"先反向（被过滤）
+    /// 再正向（同 ID 已在已计里）"会永久漏计，回流/返工的工位就是这么少数的。
     QVector<Event> update(const QVector<ObjectTrack> &tracks, bool confirmedOnly,
-                          const std::function<bool(const ObjectTrack &)> &isConfirmed)
+                          const std::function<bool(const ObjectTrack &)> &isConfirmed,
+                          int allowedDirection = 0)
     {
         QVector<Event> events;
         if (!valid())
@@ -203,11 +212,17 @@ public:
             if (m_counted.contains(t.id) || prev == 0.f || side == 0.f
                 || (prev > 0) == (side > 0))
                 continue;
-            m_counted.insert(t.id);   // 计数器自己记账：同一 ID 只计一次
             Event e;
             e.trackId = t.id;
             e.className = t.className;
             e.direction = (side > 0) ? +1 : -1;
+            // 方向过滤在记账**之前**：被过滤掉的穿越不留痕迹，
+            // 目标之后换方向再穿仍应正常计数（2026-10-28 P2-2）
+            if (allowedDirection != 0 && e.direction != allowedDirection) {
+                // 不更新 m_lastSide 已在上面写过；这里只跳过计数
+                continue;
+            }
+            m_counted.insert(t.id);   // 计数器自己记账：同一 ID 只计一次
             events.append(e);
         }
         // 清理已消失轨迹的侧记录（长跑内存不涨）

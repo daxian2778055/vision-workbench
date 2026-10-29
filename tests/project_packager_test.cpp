@@ -19,6 +19,7 @@ private slots:
     void copiesExternalModelAndRewritesPath();
     void alreadyInsideIsNotCopiedAgain();
     void sameNameFromDifferentSourceGetsSuffix();
+    void sameSourceIsCopiedOnce();
 
 private:
     static void writeFile(const QString &path, const QByteArray &body);
@@ -116,6 +117,29 @@ void ProjectPackagerTest::sameNameFromDifferentSourceGetsSuffix()
     QVERIFY(QFile::exists(a) && QFile::exists(b));
     QCOMPARE(readFile(a), QByteArray("A"));
     QCOMPARE(readFile(b), QByteArray("B"));   // 不能被覆盖
+}
+
+void ProjectPackagerTest::sameSourceIsCopiedOnce()
+{
+    // 2026-10-28 复核 P3：两个节点引用同一个外部模型 → 只应复制一份
+    QTemporaryDir schemeDir;
+    QTemporaryDir ext;
+    QVERIFY(schemeDir.isValid() && ext.isValid());
+    writeFile(ext.path() + QStringLiteral("/best.onnx"), QByteArray("SAME"));
+
+    FlowScene scene;
+    for (int i = 0; i < 2; ++i) {
+        auto *n = new ObjectCountingNode;
+        n->init();
+        scene.adoptNode(n, QPointF(10, 10));
+        n->setParam(QStringLiteral("modelPath"), ext.path() + QStringLiteral("/best.onnx"));
+    }
+    const ProjectPackager::Result r =
+        ProjectPackager::pack(&scene, schemeDir.path() + QStringLiteral("/scheme.vfp"));
+    QVERIFY2(r.ok, qPrintable(r.error));
+    QCOMPARE(r.copied.size(), 1);   // 只复制一份
+    QVERIFY2(!QFile::exists(schemeDir.path() + QStringLiteral("/assets/best_2.onnx")),
+             "同源被复制成了两份（best_2.onnx 不应存在）");
 }
 
 QTEST_MAIN(ProjectPackagerTest)

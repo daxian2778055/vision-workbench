@@ -19,6 +19,8 @@ private slots:
     void jitterNearLineDoesNotCount();
     void reverseDirectionIsReported();
     void unconfirmedTracksDoNotCount();
+    void reverseThenForwardCountsOnce();
+    void differentClassesDoNotStealIdentity();
     void nodeReportsMissingModel();
     void nodeReportsDegenerateLine();
     void nodeResetsCounterOnRequest();
@@ -211,6 +213,50 @@ void ObjectCountingTest::yoloLayoutV8AndV5BothDecode()
     QVERIFY(DnnDetectNode::parseYoloOutput(v5, inputSize, orig, 0.25, 0.45, wrong, /*layout=*/0));
     QVERIFY2(!wrong.isEmpty() && wrong[0].classId == 0,
              "按 v8 解 v5 张量却没有错位：负对照失效（布局参数可能没生效）");
+}
+
+void ObjectCountingTest::reverseThenForwardCountsOnce()
+{
+    // P2-2（2026-10-28）：方向过滤不得把"被过滤的穿越"写进已计集合。
+    // 回流/返工场景：目标先反向穿一次（被过滤），再正向穿回——必须计 1。
+    LineCounter counter({200, 0}, {200, 400});
+    ObjectTracker tracker;
+    int events = 0;
+    // 只接受正向（负侧→正侧）
+    auto isConfirmed = [&](const ObjectTrack &t) { return tracker.confirmed(t); };
+
+    // 1) 先反向：从正侧走到负侧（250→150）——被过滤，不计，也不得留痕迹
+    for (int x = 250; x >= 150; x -= 10) {
+        const auto tracks = tracker.update({makeBox(float(x), 200)});
+        events += counter.update(tracks, false, isConfirmed, +1).size();
+    }
+    QCOMPARE(events, 0);
+    // 2) 再正向：从负侧走回正侧（150→250）——应当计 1
+    for (int x = 150; x <= 250; x += 10) {
+        const auto tracks = tracker.update({makeBox(float(x), 200)});
+        events += counter.update(tracks, false, isConfirmed, +1).size();
+    }
+    QCOMPARE(events, 1);
+}
+
+void ObjectCountingTest::differentClassesDoNotStealIdentity()
+{
+    // 2026-10-28 复核 P3：两个不同类别的框高度重叠时不得互相"吃掉"身份，
+    // 否则 className 被改写、按类计数会串。
+    ObjectTracker tracker;
+    tracker.update({makeBox(100, 100, 40, 40, QStringLiteral("A"))});
+    const auto tracks = tracker.update({makeBox(101, 100, 40, 40, QStringLiteral("B"))});
+    // 不匹配 → 原轨迹 miss、新轨迹诞生：总数应为 2，且 A 的名字没被改写
+    QCOMPARE(tracks.size(), 2);
+    for (const auto &t : tracks) {
+        if (t.hits == 1 && t.missed == 0) {
+            // 新建的这条
+            QCOMPARE(t.className, QStringLiteral("B"));
+        } else if (t.missed > 0) {
+            // 旧的这条
+            QCOMPARE(t.className, QStringLiteral("A"));
+        }
+    }
 }
 
 QTEST_MAIN(ObjectCountingTest)

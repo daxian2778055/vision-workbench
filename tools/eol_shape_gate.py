@@ -56,6 +56,13 @@ def main(argv):
         # not fall back to reporting the frozen one.
         say("[%s-SHAPE] could not read git ls-files --eol (rc=%d), so the shape is unreadable "
             "here, which is not the frozen shape" % (TAG, proc.returncode))
+        # tool_written listing (2026-10-29): when the count drifts, name the files
+        # instead of making the reviewer guess. Only printed on mismatch.
+        if len(tool_written) != EXPECTED_TOOL_WRITTEN:
+            say("[%s-SHAPE] tool_written listing (%d):" % (TAG, len(tool_written)))
+            for _rel in sorted(tool_written):
+                say("[%s-SHAPE]   %s" % (TAG, _rel))
+
         say("[%s-SHAPE] tracked=-1 tool_written=-1 expected=%d offenders=-1 verdict=RED"
             % (TAG, EXPECTED_TOOL_WRITTEN))
         return _finish(said, archive, 1)

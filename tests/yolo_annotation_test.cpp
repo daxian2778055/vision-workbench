@@ -17,6 +17,7 @@ private slots:
     void badLinesAreCountedAndSkipped();
     void emptyFileMeansNoObjects();
     void classesRoundTrip();
+    void tabSeparatedAndNegativeClassId();
 };
 
 void YoloAnnotationTest::pixelToNormalizedRoundTrip()
@@ -122,6 +123,25 @@ void YoloAnnotationTest::classesRoundTrip()
     QCOMPARE(YoloAnnotation::loadClasses(dir.path() + QStringLiteral("/classes.txt")), names);
     // 缺文件 → 空列表（不崩）
     QVERIFY(YoloAnnotation::loadClasses(dir.path() + QStringLiteral("/nope.txt")).isEmpty());
+}
+
+void YoloAnnotationTest::tabSeparatedAndNegativeClassId()
+{
+    // 2026-10-28 复核 P3：制表符分隔是很多标注工具的默认输出，不能当非法行；
+    // 负 classId 会让训练工具静默丢类，必须算坏行。
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString img = dir.path() + QStringLiteral("/t.png");
+    QFile f(YoloAnnotation::labelPath(img));
+    QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Text));
+    QTextStream ts(&f);
+    ts << "0\t0.5\t0.5\t0.2\t0.2\n";     // tab 分隔：好
+    ts << "-1 0.1 0.1 0.2 0.2\n";           // 负类号：坏
+    f.close();
+    int bad = 0;
+    const auto back = YoloAnnotation::load(img, &bad);
+    QCOMPARE(back.size(), 1);
+    QCOMPARE(bad, 1);
 }
 
 QTEST_MAIN(YoloAnnotationTest)

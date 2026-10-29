@@ -4,14 +4,17 @@
 #include "NodeBase.h"
 #include "HalconNode.h"
 #include "ProjectPaths.h"
+#include "PathSafety.h"
 
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 
 ProjectPackager::Result ProjectPackager::pack(FlowScene *scene, const QString &schemeFilePath)
 {
     Result r;
+    QHash<QString, QString> copiedBySource;   // 源绝对路径 -> assets 相对路径（同源只复制一次）
     if (!scene) {
         r.error = QStringLiteral("没有可用流程页");
         return r;
@@ -48,9 +51,25 @@ ProjectPackager::Result ProjectPackager::pack(FlowScene *scene, const QString &s
                 r.skipped << QStringLiteral("%1（不是文件：%2）").arg(spec.name, raw);
                 continue;
             }
-            // 已在方案目录内：只把参数改成相对路径，不复制
+            // 同源去重（2026-10-28 复核 P3）：两个节点引用同一个外部模型时只复制一份，
+            // 否则 assets 里会出现 model.onnx 与 model_2.onnx 两份完全相同的内容。
+            const QString srcAbs = fi.absoluteFilePath();
+            const auto already = copiedBySource.find(srcAbs);
+            if (already != copiedBySource.end()) {
+                node->setParam(spec.name, already.value());
+                r.skipped << QStringLiteral("%1（同源已打包）").arg(spec.name);
+                continue;
+            }
+            // 判"是否在方案内"用真实落点（2026-10-28 复核 P3）：联接/符号链接按字面路径
+            // 看是在方案内，实际目标在外部——换机后包就断。
             const QString schemeAbs = QDir(schemeDir).absolutePath() + QLatin1Char('/');
-            if (fi.absoluteFilePath().startsWith(schemeAbs, Qt::CaseInsensitive)) {
+            const QString srcReal = resolveFinalPath(srcAbs);
+            const QString schemeReal = resolveFinalPath(schemeDir);
+            const bool insideByPath = fi.absoluteFilePath().startsWith(schemeAbs, Qt::CaseInsensitive);
+            const bool insideByReal = !srcReal.isEmpty() && !schemeReal.isEmpty()
+                                      && (srcReal == schemeReal
+                                          || srcReal.startsWith(schemeReal + QLatin1Char('/')));
+            if (insideByPath && insideByReal) {
                 const QString rel = fi.absoluteFilePath().mid(schemeAbs.size());
                 node->setParam(spec.name, rel);
                 r.skipped << QStringLiteral("%1（已在方案内）").arg(spec.name);
@@ -72,6 +91,7 @@ ProjectPackager::Result ProjectPackager::pack(FlowScene *scene, const QString &s
             }
             const QString rel = QStringLiteral("assets/") + QFileInfo(target).fileName();
             node->setParam(spec.name, rel);
+            copiedBySource.insert(srcAbs, rel);
             r.copied << QStringLiteral("%1 → %2").arg(spec.name, rel);
         }
     }

@@ -327,6 +327,28 @@ void TrainingRunnerDialog::refreshCommand()
     m_imgsz->setEnabled(!yolox);
 }
 
+void TrainingRunnerDialog::closeEvent(QCloseEvent *e)
+{
+    if (m_runner && m_runner->running()) {
+        // 拒绝关闭 + 请求取消：跑了几小时的训练不能被顺手关窗带走（2026-10-28 复核 P3）
+        m_runner->cancel();
+        appendLog(QStringLiteral("已请求停止：训练收尾后再关闭窗口"));
+        e->ignore();
+        return;
+    }
+    QDialog::closeEvent(e);
+}
+
+void TrainingRunnerDialog::reject()
+{
+    if (m_runner && m_runner->running()) {
+        m_runner->cancel();
+        appendLog(QStringLiteral("已请求停止：训练收尾后再关闭窗口"));
+        return;
+    }
+    QDialog::reject();
+}
+
 void TrainingRunnerDialog::appendLog(const QString &line)
 {
     m_log->appendPlainText(line);

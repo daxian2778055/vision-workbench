@@ -3,6 +3,7 @@
 #include "YoloAnnotation.h"
 
 #include <QDialog>
+#include <QCloseEvent>
 #include <QImage>
 #include <QPixmap>
 
@@ -61,6 +62,11 @@ class BoxAnnotatorDialog : public QDialog
 public:
     explicit BoxAnnotatorDialog(QWidget *parent = nullptr);
     BoxAnnotatorDialog(const QString &dir, QWidget *parent = nullptr);
+
+protected:
+    /// 关窗/拒绝前必须保存：标完一张就关是最常见用法（2026-10-28 P2-1）
+    void closeEvent(QCloseEvent *e) override;
+    void reject() override;
 
 private slots:
     void onChooseDir();

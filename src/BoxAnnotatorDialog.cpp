@@ -183,6 +183,9 @@ BoxAnnotatorDialog::BoxAnnotatorDialog(const QString &dir, QWidget *parent) : QD
     m_deleteBtn = new QPushButton(QStringLiteral("删除所选框"));
     connect(m_deleteBtn, &QPushButton::clicked, this, &BoxAnnotatorDialog::onDeleteBox);
     rightLayout->addWidget(m_deleteBtn);
+    auto *saveBtn = new QPushButton(QStringLiteral("保存本图"));
+    connect(saveBtn, &QPushButton::clicked, this, &BoxAnnotatorDialog::saveCurrentImage);
+    rightLayout->addWidget(saveBtn);
     m_clearBtn = new QPushButton(QStringLiteral("清空本图"));
     connect(m_clearBtn, &QPushButton::clicked, this, &BoxAnnotatorDialog::onClearImage);
     rightLayout->addWidget(m_clearBtn);
@@ -236,6 +239,19 @@ void BoxAnnotatorDialog::reloadImages()
     m_loading = false;
     if (!m_images.isEmpty())
         m_imageList->setCurrentRow(0);
+}
+
+void BoxAnnotatorDialog::closeEvent(QCloseEvent *e)
+{
+    // 标完当前图直接点 X 是最常见用法——这一张的框必须存（2026-10-28 P2-1）
+    saveCurrentImage();
+    QDialog::closeEvent(e);
+}
+
+void BoxAnnotatorDialog::reject()
+{
+    saveCurrentImage();
+    QDialog::reject();
 }
 
 QString BoxAnnotatorDialog::currentImagePath() const
