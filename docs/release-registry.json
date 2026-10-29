@@ -414,7 +414,16 @@
       "exe_bytes": 10103808,
       "package_dir": "dist/VisionFlowPlatform-rc-20261029.3",
       "recorded_at": "2026-10-29",
-      "recorded_note": "当前装机包：训练关窗不阻塞且收尾自动关、打包器去重用真实落点、标注 save 查 close 错误、类别抖动边界登记、版本说明补交付口径"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261029.4 取代（后者统一取消路径与强杀兜底）"
+    },
+    {
+      "tag": "rc-20261029.4",
+      "commit": "ab3dd5323e1113a4ce5abae9bea3df8d747c8d7f",
+      "exe_md5": "de5a89dded8912f873f7e0d02a8fbcd2",
+      "exe_bytes": 10104320,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261029.4",
+      "recorded_at": "2026-10-29",
+      "recorded_note": "当前装机包：取消统一非阻塞 + 5 秒强杀兜底（QTimer 两路径共用）、版本说明客户面/打包者指示分离"
     }
   ],
   "legacy_backfilled": [
