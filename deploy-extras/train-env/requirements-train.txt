@@ -1,0 +1,10 @@
+# Train-machine dependencies (Windows x64, Python 3.10)
+# torch / torchvision are installed separately from the CPU index - see install-train-env.ps1
+numpy==1.26.4
+opencv-python==4.10.0.84
+pyyaml==6.0.2
+loguru==0.7.2
+tqdm==4.66.5
+cython==3.0.11
+ninja==1.11.1.1
+matplotlib==3.9.2

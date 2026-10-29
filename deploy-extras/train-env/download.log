@@ -1,0 +1,112 @@
+[download-wheels] torch/torchvision from https://download.pytorch.org/whl/cpu (target cp310 win_amd64)
+Looking in indexes: https://download.pytorch.org/whl/cpu
+Collecting torch
+  Downloading torch-2.14.1%2Bcpu-cp310-cp310-win_amd64.whl.metadata (38 kB)
+Collecting torchvision
+  Downloading torchvision-0.29.2%2Bcpu-py3-none-win_amd64.whl.metadata (5.8 kB)
+Collecting filelock (from torch)
+  Downloading filelock-4.1.0-py3-none-any.whl.metadata (2.0 kB)
+Collecting typing-extensions>=4.10.0 (from torch)
+  Downloading typing_extensions-4.16.0-py3-none-any.whl.metadata (3.3 kB)
+Collecting setuptools>=77.0.3 (from torch)
+  Downloading setuptools-78.1.0-py3-none-any.whl.metadata (6.6 kB)
+Collecting sympy>=1.13.3 (from torch)
+  Downloading sympy-1.14.0-py3-none-any.whl.metadata (12 kB)
+Collecting networkx>=2.5.1 (from torch)
+  Downloading networkx-3.4.2-py3-none-any.whl.metadata (6.3 kB)
+Collecting jinja2 (from torch)
+  Downloading jinja2-3.1.6-py3-none-any.whl.metadata (2.9 kB)
+Collecting fsspec>=0.8.5 (from torch)
+  Downloading fsspec-2026.9.0-py3-none-any.whl.metadata (10 kB)
+Collecting numpy (from torchvision)
+  Downloading numpy-2.2.6-cp310-cp310-win_amd64.whl.metadata (60 kB)
+Collecting pillow!=8.3.*,>=5.3.0 (from torchvision)
+  Downloading pillow-12.3.0-cp310-cp310-win_amd64.whl.metadata (9.3 kB)
+Collecting mpmath<1.4,>=1.1.0 (from sympy>=1.13.3->torch)
+  Downloading mpmath-1.3.0-py3-none-any.whl.metadata (8.6 kB)
+Collecting MarkupSafe>=2.0 (from jinja2->torch)
+  Downloading markupsafe-3.0.3-cp310-cp310-win_amd64.whl.metadata (2.8 kB)
+Downloading torch-2.14.1%2Bcpu-cp310-cp310-win_amd64.whl (124.0 MB)
+   ---------------------------------------- 124.0/124.0 MB 4.9 MB/s  0:00:25
+Downloading torchvision-0.29.2%2Bcpu-py3-none-win_amd64.whl (1.4 MB)
+   ---------------------------------------- 1.4/1.4 MB 5.2 MB/s  0:00:00
+Downloading fsspec-2026.9.0-py3-none-any.whl (221 kB)
+Downloading networkx-3.4.2-py3-none-any.whl (1.7 MB)
+   ---------------------------------------- 1.7/1.7 MB 370.5 kB/s  0:00:04
+Downloading pillow-12.3.0-cp310-cp310-win_amd64.whl (7.2 MB)
+   ---------------------------------------- 7.2/7.2 MB 225.8 kB/s  0:00:31
+Downloading setuptools-78.1.0-py3-none-any.whl (1.3 MB)
+   ---------------------------------------- 1.3/1.3 MB 5.1 MB/s  0:00:00
+Downloading sympy-1.14.0-py3-none-any.whl (6.3 MB)
+   ---------------------------------------- 6.3/6.3 MB 291.2 kB/s  0:00:22
+Downloading mpmath-1.3.0-py3-none-any.whl (536 kB)
+   ---------------------------------------- 536.2/536.2 kB 367.5 kB/s  0:00:01
+Downloading typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+Downloading filelock-4.1.0-py3-none-any.whl (133 kB)
+Downloading jinja2-3.1.6-py3-none-any.whl (134 kB)
+Downloading markupsafe-3.0.3-cp310-cp310-win_amd64.whl (15 kB)
+Downloading numpy-2.2.6-cp310-cp310-win_amd64.whl (12.9 MB)
+   ---------------------------------------- 12.9/12.9 MB 213.8 kB/s  0:00:47
+Saved .\wheels\torch-2.14.1+cpu-cp310-cp310-win_amd64.whl
+Saved .\wheels\torchvision-0.29.2+cpu-py3-none-win_amd64.whl
+Saved .\wheels\fsspec-2026.9.0-py3-none-any.whl
+Saved .\wheels\networkx-3.4.2-py3-none-any.whl
+Saved .\wheels\pillow-12.3.0-cp310-cp310-win_amd64.whl
+Saved .\wheels\setuptools-78.1.0-py3-none-any.whl
+Saved .\wheels\sympy-1.14.0-py3-none-any.whl
+Saved .\wheels\mpmath-1.3.0-py3-none-any.whl
+Saved .\wheels\typing_extensions-4.16.0-py3-none-any.whl
+Saved .\wheels\filelock-4.1.0-py3-none-any.whl
+Saved .\wheels\jinja2-3.1.6-py3-none-any.whl
+Saved .\wheels\markupsafe-3.0.3-cp310-cp310-win_amd64.whl
+Saved .\wheels\numpy-2.2.6-cp310-cp310-win_amd64.whl
+Successfully downloaded torch torchvision fsspec networkx pillow setuptools sympy mpmath typing-extensions filelock jinja2 MarkupSafe numpy
+[download-wheels] remaining deps from PyPI
+Collecting numpy==1.26.4 (from -r E:\halcon\2\xin1\deploy-extras\train-env\requirements-train.txt (line 3))
+  Downloading numpy-1.26.4-cp310-cp310-win_amd64.whl.metadata (61 kB)
+Collecting opencv-python==4.10.0.84 (from -r E:\halcon\2\xin1\deploy-extras\train-env\requirements-train.txt (line 4))
+  Downloading opencv_python-4.10.0.84-cp37-abi3-win_amd64.whl.metadata (20 kB)
+Collecting pyyaml==6.0.2 (from -r E:\halcon\2\xin1\deploy-extras\train-env\requirements-train.txt (line 5))
+  Downloading PyYAML-6.0.2-cp310-cp310-win_amd64.whl.metadata (2.1 kB)
+Collecting loguru==0.7.2 (from -r E:\halcon\2\xin1\deploy-extras\train-env\requirements-train.txt (line 6))
+  Downloading loguru-0.7.2-py3-none-any.whl.metadata (23 kB)
+Collecting tqdm==4.66.5 (from -r E:\halcon\2\xin1\deploy-extras\train-env\requirements-train.txt (line 7))
+  Downloading tqdm-4.66.5-py3-none-any.whl.metadata (57 kB)
+Collecting cython==3.0.11 (from -r E:\halcon\2\xin1\deploy-extras\train-env\requirements-train.txt (line 8))
+  Downloading Cython-3.0.11-cp310-cp310-win_amd64.whl.metadata (3.2 kB)
+Collecting ninja==1.11.1.1 (from -r E:\halcon\2\xin1\deploy-extras\train-env\requirements-train.txt (line 9))
+  Downloading ninja-1.11.1.1-py2.py3-none-win_amd64.whl.metadata (5.4 kB)
+Collecting matplotlib==3.9.2 (from -r E:\halcon\2\xin1\deploy-extras\train-env\requirements-train.txt (line 10))
+  Downloading matplotlib-3.9.2-cp310-cp310-win_amd64.whl.metadata (11 kB)
+Collecting colorama>=0.3.4 (from loguru==0.7.2->-r E:\halcon\2\xin1\deploy-extras\train-env\requirements-train.txt (line 6))
+  Downloading colorama-0.4.6-py2.py3-none-any.whl.metadata (17 kB)
+Collecting win32-setctime>=1.0.0 (from loguru==0.7.2->-r E:\halcon\2\xin1\deploy-extras\train-env\requirements-train.txt (line 6))
+  Downloading win32_setctime-1.2.1-py3-none-any.whl.metadata (2.7 kB)
+Collecting contourpy>=1.0.1 (from matplotlib==3.9.2->-r E:\halcon\2\xin1\deploy-extras\train-env\requirements-train.txt (line 10))
+  Downloading contourpy-1.3.2-cp310-cp310-win_amd64.whl.metadata (5.5 kB)
+Collecting cycler>=0.10 (from matplotlib==3.9.2->-r E:\halcon\2\xin1\deploy-extras\train-env\requirements-train.txt (line 10))
+  Downloading cycler-0.12.1-py3-none-any.whl.metadata (3.8 kB)
+Collecting fonttools>=4.22.0 (from matplotlib==3.9.2->-r E:\halcon\2\xin1\deploy-extras\train-env\requirements-train.txt (line 10))
+  Downloading fonttools-4.65.0-cp310-cp310-win_amd64.whl.metadata (127 kB)
+Collecting kiwisolver>=1.3.1 (from matplotlib==3.9.2->-r E:\halcon\2\xin1\deploy-extras\train-env\requirements-train.txt (line 10))
+  Downloading kiwisolver-1.5.1-cp310-cp310-win_amd64.whl.metadata (5.2 kB)
+Collecting packaging>=20.0 (from matplotlib==3.9.2->-r E:\halcon\2\xin1\deploy-extras\train-env\requirements-train.txt (line 10))
+  Downloading packaging-26.3-py3-none-any.whl.metadata (3.5 kB)
+Collecting pillow>=8 (from matplotlib==3.9.2->-r E:\halcon\2\xin1\deploy-extras\train-env\requirements-train.txt (line 10))
+  File was already downloaded e:\halcon\2\xin1\deploy-extras\train-env\wheels\pillow-12.3.0-cp310-cp310-win_amd64.whl
+Collecting pyparsing>=2.3.1 (from matplotlib==3.9.2->-r E:\halcon\2\xin1\deploy-extras\train-env\requirements-train.txt (line 10))
+  Downloading pyparsing-3.3.3-py3-none-any.whl.metadata (5.9 kB)
+Collecting python-dateutil>=2.7 (from matplotlib==3.9.2->-r E:\halcon\2\xin1\deploy-extras\train-env\requirements-train.txt (line 10))
+  Downloading python_dateutil-3.0.0-py2.py3-none-any.whl.metadata (8.2 kB)
+Collecting six>=1.6 (from python-dateutil>=2.7->matplotlib==3.9.2->-r E:\halcon\2\xin1\deploy-extras\train-env\requirements-train.txt (line 10))
+  Downloading six-1.17.0-py2.py3-none-any.whl.metadata (1.7 kB)
+Collecting tzdata (from python-dateutil>=2.7->matplotlib==3.9.2->-r E:\halcon\2\xin1\deploy-extras\train-env\requirements-train.txt (line 10))
+  Downloading tzdata-2026.6-py2.py3-none-any.whl.metadata (1.4 kB)
+Downloading numpy-1.26.4-cp310-cp310-win_amd64.whl (15.8 MB)
+   ---------------------------------------- 15.8/15.8 MB 222.6 kB/s  0:01:12
+Downloading opencv_python-4.10.0.84-cp37-abi3-win_amd64.whl (38.8 MB)
+   ---------------------------------------- 38.8/38.8 MB 265.2 kB/s  0:03:34
+Downloading PyYAML-6.0.2-cp310-cp310-win_amd64.whl (161 kB)
+Downloading loguru-0.7.2-py3-none-any.whl (62 kB)
+Downloading tqdm-4.66.5-py3-none-any.whl (78 kB)
+Downloading Cython-3.0.11-cp310-cp310-win_amd64.whl (2.8 MB)

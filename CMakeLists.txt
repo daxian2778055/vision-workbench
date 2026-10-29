@@ -128,6 +128,8 @@ set(SOURCES
     src/ObjectCountingNode.cpp
     src/ProjectPackager.cpp
     src/BoxAnnotatorDialog.cpp
+    src/TrainingRunner.cpp
+    src/TrainingRunnerDialog.cpp
     src/TrainingWizardDialog.cpp
     src/FeatureIndex.cpp
     src/OpencvThresholdNode.cpp
@@ -600,7 +602,7 @@ add_library(vfp_core OBJECT
 
 # AUTOMOC 对新增 Q_OBJECT 头偶发不扫（2026-10-27 实测）：把头显式列进目标源，
 # 强制生成 moc_FeatureSearchNode.cpp。
-target_sources(vfp_core PRIVATE include/FeatureSearchNode.h include/FeatureLibraryDialog.h include/TrainingWizardDialog.h include/ObjectCountingNode.h include/BoxAnnotatorDialog.h)
+target_sources(vfp_core PRIVATE include/FeatureSearchNode.h include/FeatureLibraryDialog.h include/TrainingWizardDialog.h include/ObjectCountingNode.h include/BoxAnnotatorDialog.h include/TrainingRunnerDialog.h include/TrainingRunner.h)
 # 构建顺序：Version.h 必须在该库编译任何源文件之前刷新（P1-3）
 add_dependencies(vfp_core vfp_version_header)
 
@@ -1158,6 +1160,14 @@ if(MSVC)
     vfp_configure_gui_test(OpencvBridgeTest)
 endif()
 
+# 训练环境探测（2026-10-29）
+if(MSVC)
+    add_executable(training_runner_test tests/training_runner_test.cpp)
+    target_link_libraries(training_runner_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    vfp_add_qtest(NAME TrainingRunnerTest TARGET training_runner_test)
+    vfp_configure_gui_test(TrainingRunnerTest)
+endif()
+
 # 检测框标注核心（2026-10-28）
 if(MSVC)
     add_executable(yolo_annotation_test tests/yolo_annotation_test.cpp)
@@ -1473,7 +1483,7 @@ if(MSVC)
     set(VFP_TESTS NodeCoreTest OpencvSerializationTest IntegrationTest DatabaseTest PerfTest
                   ScriptSecurityPolicyTest CommWritebackTest OpencvAngleAreaTest DnnDetectTest CameraIoTest
                   DnnSegmentTest OpencvDefectAlignTest SoakTest StatisticsReportTest SchemePackageTest
-                  I18nTest SubFlowTest EditLockReleaseTest RoundAbortSummaryTest UndoHistoryAfterLoadTest NodeExceptionExitTest RejectedConnectionUndoTest DbThreadConnectionCleanupTest CameraTaskLedgerTest GlobalCameraConsumerGateTest CommDeviceGhostTest OpencvBridgeTest MeasureGreenGuardTest UiGuardsTest ScriptImageIoTest ComputeBackendTest FeatureIndexTest TrainingEvalTest ObjectCountingTest ProjectPackagerTest YoloAnnotationTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
+                  I18nTest SubFlowTest EditLockReleaseTest RoundAbortSummaryTest UndoHistoryAfterLoadTest NodeExceptionExitTest RejectedConnectionUndoTest DbThreadConnectionCleanupTest CameraTaskLedgerTest GlobalCameraConsumerGateTest CommDeviceGhostTest OpencvBridgeTest MeasureGreenGuardTest UiGuardsTest ScriptImageIoTest ComputeBackendTest FeatureIndexTest TrainingEvalTest ObjectCountingTest ProjectPackagerTest YoloAnnotationTest TrainingRunnerTest AnomalyDetectTest NodeExecuteSmokeTest CommBindTest
                   FactoryPasswordGuardTest FeatureMatchTest CalibChainTest OpencvNodesTest
                   ProjectPathsTest FlowCachePurgeLedgerTest ExecutionControlPolicyTest
                   AuxDialogMenuRouterTest ModuleEditorRegistryTest UITranslatorTest

@@ -298,6 +298,24 @@ foreach ($docName in $docsToShip) {
 }
 Write-Host ("  -> docs/ 现有 {0} 份对外文档；清理上轮遗留 {1} 份" -f $docsCopied, $staleDocs.Count) -ForegroundColor Green
 
+# ---------- train-env folder (new-machine prep for the TRAIN machine) ----------
+# Why it ships in the customer package: the train machine is ours to set up, and a
+# README + install script + pre-downloaded wheels means it can be prepared offline
+# (factory networks usually have no internet). Production machines never need it.
+$trainEnvSrc = Join-Path $RepoRoot "deploy-extras\train-env"
+$trainEnvDst = Join-Path $OutDir "train-env"
+if (Test-Path -LiteralPath $trainEnvSrc) {
+    if (Test-Path -LiteralPath $trainEnvDst) { Remove-Item -LiteralPath $trainEnvDst -Recurse -Force }
+    Copy-Item -LiteralPath $trainEnvSrc -Destination $trainEnvDst -Recurse -Force
+    $wheelCount = @(Get-ChildItem -LiteralPath $trainEnvDst -Filter *.whl -Recurse -ErrorAction SilentlyContinue).Count
+    $wheelMb = 0
+    $whl = @(Get-ChildItem -LiteralPath $trainEnvDst -Filter *.whl -Recurse -ErrorAction SilentlyContinue)
+    if ($whl.Count -gt 0) { $wheelMb = [math]::Round((($whl | Measure-Object Length -Sum).Sum / 1MB), 0) }
+    Write-Host ("  -> train-env/ shipped ({0} wheels, {1} MB)" -f $wheelCount, $wheelMb) -ForegroundColor Green
+} else {
+    Write-Warning "deploy-extras/train-env missing - the train machine will have no offline prep assets"
+}
+
 # ============================================================
 # Step 7: 创建数据/日志目录
 # ============================================================
