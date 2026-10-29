@@ -441,7 +441,16 @@
       "exe_bytes": 10109440,
       "package_dir": "dist/VisionFlowPlatform-rc-20261029.6",
       "recorded_at": "2026-10-29",
-      "recorded_note": "当前装机包（交付面修复）：版本说明角色行改回真实中文（.5 为字面转义乱码，声明与交付物不一致已属实更正）+ 顽固腿补 5 秒下界与日志命中断言（改坏臂实测各有牙）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261029.7 取代（后者修 r14 的 2 个 P1：计数全零 blob 与检测节点布局参数未登记）"
+    },
+    {
+      "tag": "rc-20261029.7",
+      "commit": "ff8980228ac1854537f8613a6e0b9adb4b7bcd8b",
+      "exe_md5": "b57054591d1466ce68b3380b997bc2fa",
+      "exe_bytes": 10127360,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261029.7",
+      "recorded_at": "2026-10-29",
+      "recorded_note": "当前装机包（关键修复）：r14 复核 2 个 P1（计数节点 scale 未登记→全零 blob；检测节点 dnnBackend/yoloLayout 在 registerParams 外）+ 6 项 P2/P3 + 新增 INV5 闸（读参数必须能说清来源）"
     }
   ],
   "legacy_backfilled": [
