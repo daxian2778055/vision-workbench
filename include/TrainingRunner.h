@@ -30,6 +30,10 @@ public:
 
     /// 用命令模板启动训练。模板里的占位符先由调用方替换好，这里只负责跑。
     void start(const QString &program, const QStringList &args, const QString &workDir);
+    /// 非阻塞请求取消（2026-10-29）：只发 terminate，不等待——关窗路径不能
+    /// 在 GUI 线程上同步 waitForFinished(5000)，那会冻结界面。
+    void requestCancel();
+    /// 阻塞式取消（保留给「取消」按钮之外的场景）
     void cancel();
     bool running() const;
 

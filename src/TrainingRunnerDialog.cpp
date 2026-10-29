@@ -140,6 +140,12 @@ TrainingRunnerDialog::TrainingRunnerDialog(QWidget *parent) : QDialog(parent)
     connect(m_runner, &TrainingRunner::finished, this, [this](bool ok, const QString &msg) {
         appendLog(QStringLiteral("[结束] %1").arg(msg));
         setRunning(false);
+        // 用户已请求关闭 → 收尾后自动关窗（2026-10-29）：文案说「会自动关闭」就真关
+        if (m_closeRequested) {
+            m_closeRequested = false;
+            accept();
+            return;
+        }
         if (!ok)
             appendLog(QStringLiteral("[注意] 训练没有正常结束，先看日志里的最后一条错误"));
     });
@@ -331,8 +337,10 @@ void TrainingRunnerDialog::closeEvent(QCloseEvent *e)
 {
     if (m_runner && m_runner->running()) {
         // 拒绝关闭 + 请求取消：跑了几小时的训练不能被顺手关窗带走（2026-10-28 复核 P3）
-        m_runner->cancel();
-        appendLog(QStringLiteral("已请求停止：训练收尾后再关闭窗口"));
+        // 非阻塞（2026-10-29）：cancel() 的 waitForFinished 会冻结 GUI 最多 5 秒
+        m_runner->requestCancel();
+        m_closeRequested = true;
+        appendLog(QStringLiteral("已请求停止：训练收尾后窗口会自动关闭"));
         e->ignore();
         return;
     }
@@ -342,8 +350,9 @@ void TrainingRunnerDialog::closeEvent(QCloseEvent *e)
 void TrainingRunnerDialog::reject()
 {
     if (m_runner && m_runner->running()) {
-        m_runner->cancel();
-        appendLog(QStringLiteral("已请求停止：训练收尾后再关闭窗口"));
+        m_runner->requestCancel();
+        m_closeRequested = true;
+        appendLog(QStringLiteral("已请求停止：训练收尾后窗口会自动关闭"));
         return;
     }
     QDialog::reject();

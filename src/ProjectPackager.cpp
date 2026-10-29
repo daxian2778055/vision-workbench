@@ -53,7 +53,10 @@ ProjectPackager::Result ProjectPackager::pack(FlowScene *scene, const QString &s
             }
             // 同源去重（2026-10-28 复核 P3）：两个节点引用同一个外部模型时只复制一份，
             // 否则 assets 里会出现 model.onnx 与 model_2.onnx 两份完全相同的内容。
-            const QString srcAbs = fi.absoluteFilePath();
+            // 去重键用真实落点（2026-10-29）：字面路径不同但指向同一文件的联接/别名，
+            // 否则仍会复制两份（与「是否在方案内」的真实落点口径不一致）。
+            const QString srcReal0 = resolveFinalPath(fi.absoluteFilePath());
+            const QString srcAbs = srcReal0.isEmpty() ? fi.absoluteFilePath() : srcReal0;
             const auto already = copiedBySource.find(srcAbs);
             if (already != copiedBySource.end()) {
                 node->setParam(spec.name, already.value());

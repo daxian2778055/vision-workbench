@@ -65,4 +65,6 @@ private:
     QPushButton *m_probeBtn = nullptr;
     TrainingRunner *m_runner = nullptr;
     bool m_envOk = false;
+    /// 用户点了关闭/Esc：收尾后自动关窗（2026-10-29，与训练向导同策略）
+    bool m_closeRequested = false;
 };

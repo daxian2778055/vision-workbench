@@ -97,6 +97,14 @@ void TrainingRunner::start(const QString &program, const QStringList &args, cons
     m_proc->start(program, args);
 }
 
+void TrainingRunner::requestCancel()
+{
+    if (!running())
+        return;
+    m_cancelRequested = true;
+    m_proc->terminate();
+}
+
 void TrainingRunner::cancel()
 {
     if (!running())

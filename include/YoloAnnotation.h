@@ -111,9 +111,10 @@ public:
                << QString::number(b.h, 'f', 6) << '\n';
         ts.flush();
         // 2026-10-28 复核 P3：只查 QTextStream 不够，磁盘满在 close/flush 时才暴露
-        const bool ok = ts.status() == QTextStream::Ok && f.flush();
+        const bool streamOk = ts.status() == QTextStream::Ok && f.flush();
         f.close();
-        return ok;
+        // close() 时的错误也要看（2026-10-29）：磁盘满常在 close 才暴露
+        return streamOk && f.error() == QFileDevice::NoError;
     }
 
     /// 同名的标注文件路径（image.jpg → image.txt）
