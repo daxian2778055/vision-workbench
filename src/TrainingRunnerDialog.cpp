@@ -251,7 +251,8 @@ void TrainingRunnerDialog::onStart()
 
 void TrainingRunnerDialog::onCancel()
 {
-    appendLog(QStringLiteral("[取消] 正在终止训练进程…"));
+    // cancel() 现在也是非阻塞（2026-10-29）：只发 terminate + 5 秒后强杀兜底
+    appendLog(QStringLiteral("[取消] 正在终止训练进程…（约 5 秒后仍未退出会强制结束）"));
     m_runner->cancel();
 }
 

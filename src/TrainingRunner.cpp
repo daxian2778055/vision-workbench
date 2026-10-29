@@ -102,16 +102,24 @@ void TrainingRunner::requestCancel()
     if (!running())
         return;
     m_cancelRequested = true;
+    // 先温和：给它一个写完 checkpoint 的机会（terminate = WM_CLOSE，多数训练进程不理）
     m_proc->terminate();
+    // 强杀兜底（2026-10-29）：5 秒后仍在跑就 kill——否则关窗路径会永远"收尾后自动关"
+    if (!m_killTimer) {
+        m_killTimer = new QTimer(this);
+        m_killTimer->setSingleShot(true);
+        connect(m_killTimer, &QTimer::timeout, this, [this]() {
+            if (running()) {
+                emit logLine(QStringLiteral("[取消] 进程 5 秒内未退出，强制结束"));
+                m_proc->kill();
+            }
+        });
+    }
+    m_killTimer->start(5000);
 }
 
 void TrainingRunner::cancel()
 {
-    if (!running())
-        return;
-    m_cancelRequested = true;
-    // 先温和后强杀：YOLOX 收到 terminate 有机会写完最后一个 checkpoint
-    m_proc->terminate();
-    if (!m_proc->waitForFinished(5000))
-        m_proc->kill();
+    // 与 requestCancel 同义（2026-10-29）：取消按钮以前走阻塞等待，会冻结界面最多 5 秒
+    requestCancel();
 }

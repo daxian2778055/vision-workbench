@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QProcess>
+#include <QTimer>
 #include <QString>
 #include <QStringList>
 
@@ -30,10 +31,12 @@ public:
 
     /// 用命令模板启动训练。模板里的占位符先由调用方替换好，这里只负责跑。
     void start(const QString &program, const QStringList &args, const QString &workDir);
-    /// 非阻塞请求取消（2026-10-29）：只发 terminate，不等待——关窗路径不能
-    /// 在 GUI 线程上同步 waitForFinished(5000)，那会冻结界面。
+    /// 请求取消（2026-10-29 两轮修正）：**非阻塞**。terminate() 在 Windows 上只是
+    /// 给进程投 WM_CLOSE，控制台跑的训练进程通常不理它——所以这里再挂一个 5 秒定时器，
+    /// 到点仍在跑就 kill()。关窗与「取消训练」按钮共用这一条路径（取消按钮以前走
+    /// 阻塞的 cancel()，会冻结界面最多 5 秒）。
     void requestCancel();
-    /// 阻塞式取消（保留给「取消」按钮之外的场景）
+    /// 同 requestCancel()（保留旧名字，语义已是非阻塞）
     void cancel();
     bool running() const;
 
@@ -44,5 +47,6 @@ signals:
 
 private:
     QProcess *m_proc = nullptr;
+    QTimer *m_killTimer = nullptr;   /// 5 秒强杀兜底（terminate 对控制台进程常无效）
     bool m_cancelRequested = false;
 };

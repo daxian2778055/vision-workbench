@@ -585,12 +585,14 @@ $manifestLines = @(
     ("VisionFlowPlatform.exe md5 : {0}" -f $exeHash),
     ("VisionFlowPlatform.exe 字节 : {0}" -f $exeBytes),
     "",
+# (packager note, NOT part of the shipped text) if this package flows outside the customer,
+# replace the credential lines above with "initial password: see delivery sheet" so the
+# factory password is not printed in a delivered document.
     "默认账号/口令（首次启动自动播种）：admin / admin",
     "  ⚠ 首次登录后请立刻在「系统 → 修改管理员口令」改掉默认口令。",
     "  在改密之前，画布编辑/方案保存/通信配置/用户增删等写操作会被「写操作闸」拦住——",
     "  这不是故障，是防默认口令被滥用；改密后自动解除。",
-    "  角色：Admin（全部功能）；Operator 由 Admin 在「系统 → 用户管理」里创建。",    "  交付客户时请由实施人员在装机现场改密并记入交付单；若本包会外流，可把本节改为：",
-    "  「初始口令见交付单」后再分发（口令不再随包明文写出）。",
+    "  交付客户时请由实施人员在装机现场改密并记入交付单（默认口令仅供首次装机）。",
 
     "",
     "读法：提交=打包时的 HEAD；exe 内嵌 HEAD 版本哈希=yes 表示这份 exe 就是该提交编出来的",
