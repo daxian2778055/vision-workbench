@@ -405,7 +405,16 @@
       "exe_bytes": 10103808,
       "package_dir": "dist/VisionFlowPlatform-rc-20261029.2",
       "recorded_at": "2026-10-29",
-      "recorded_note": "当前装机包：标注器关窗保存、方向过滤记账修正、打包器同源去重/真实落点、训练关窗守卫、EOL 闸收口；版本说明含初始账号 admin/admin"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261029.3 取代（后者修训练关窗阻塞等）"
+    },
+    {
+      "tag": "rc-20261029.3",
+      "commit": "ed2623f0d93deedd27d4c6d75fe80f2e78108619",
+      "exe_md5": "ad48420b4fcdd4788c4bd58986e801f4",
+      "exe_bytes": 10103808,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261029.3",
+      "recorded_at": "2026-10-29",
+      "recorded_note": "当前装机包：训练关窗不阻塞且收尾自动关、打包器去重用真实落点、标注 save 查 close 错误、类别抖动边界登记、版本说明补交付口径"
     }
   ],
   "legacy_backfilled": [
