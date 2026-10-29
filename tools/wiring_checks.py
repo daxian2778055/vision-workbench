@@ -273,6 +273,66 @@ def check_round_start_hook(repo):
     return findings
 
 
+def check_param_registration(repo):
+    """INV5：run() 里读的参数必须能说清来源（2026-10-29 r14 P1-7）。
+
+    DnnDetectNode / ObjectCountingNode 各踩过一次：读 scale 却从未登记，QVariant::toDouble()
+    把缺省读成 0 —— blobFromImage 得到全零 blob，节点仍报 moduleStatus=true，现场表现是
+    "流程成功、计数 0"。这类缺陷读代码看不出来，但"读了没登记"可以静态比出来。
+
+    判据：run() 里出现的每个 m_params 键，必须满足其一 ——
+      ① init() 里登记过（面板可见、序列化能带上）；
+      ② 本文件里写过（运行期计算/缓存）；
+      ③ 在 INJECTED 名单里（框架/上游注入的约定键，注释写明理由）。
+    注意"带缺省读取"不算豁免：带缺省只是不会崩，缺省值与面板值仍可能悄悄分叉。
+    """
+    findings = []
+    # 上游 ROI 注入：这三个测量节点从 m_params 读 roi*（带 0 缺省），由 ROI/上游写入，
+    # 不是面板参数 —— 属框架约定，具名豁免。
+    INJECTED = {"roiCol", "roiRow", "roiWidth", "roiHeight",
+                "lastInput"}   # ProtocolParseNode 的"上一条输入"缓存
+    import re as _re
+    reg = _re.compile(r'(?:make\w+Param\s*\(\s*QStringLiteral|sp\.name\s*=\s*QStringLiteral)'
+                      r'\("([A-Za-z]+)"\)')
+    read = _re.compile(r'm_params(?:\]|\.value\s*\(\s*QStringLiteral|\[\s*QStringLiteral)'
+                       r'\("?([A-Za-z]+)"?\)')
+    read2 = _re.compile(r'm_params\[\s*QStringLiteral\("([A-Za-z]+)"\)\s*\]')
+    read3 = _re.compile(r'm_params\.value\s*\(\s*QStringLiteral\("([A-Za-z]+)"\)')
+    wr1 = _re.compile(r'm_params\s*\[\s*QStringLiteral\("([A-Za-z]+)"\)\s*\]\s*=')
+    wr2 = _re.compile(r'setParamDirect\s*\(\s*QStringLiteral\("([A-Za-z]+)"\)')
+
+    src_dir = os.path.join(repo, "src")
+    if not os.path.isdir(src_dir):
+        return ["source_missing: %s" % src_dir]
+
+    def body(code, sig):
+        i = code.find(sig)
+        if i < 0:
+            return ""
+        j = code.find("\n}", i)
+        return code[i: j if j > 0 else len(code)]
+
+    for name in sorted(os.listdir(src_dir)):
+        if not name.endswith(".cpp"):
+            continue
+        path = os.path.join(src_dir, name)
+        text = open(path, "rb").read().decode("utf-8", "replace")
+        code = _re.sub(r"/\*.*?\*/", "", text, flags=_re.S)
+        code = _re.sub(r"//[^\n]*", "", code)
+        init_b = body(code, "::init()")
+        run_b = body(code, "::run(")
+        if not init_b or not run_b:
+            continue
+        registered = set(reg.findall(init_b))
+        written = set(wr1.findall(code)) | set(wr2.findall(code))
+        read_keys = set(read.findall(run_b)) | set(read2.findall(run_b)) | set(read3.findall(run_b))
+        missing = sorted(read_keys - registered - written - INJECTED)
+        if missing:
+            findings.append("%s run() reads but nothing registers/writes: %s"
+                            % (name, ", ".join(missing)))
+    return findings
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", default=".")
@@ -296,6 +356,7 @@ def main():
     findings += check_audit_operator(repo)
     findings += check_camera_lifecycle(os.path.join(repo, MVS_REL))
     findings += check_round_start_hook(repo)
+    findings += check_param_registration(repo)
 
     out("[ELW-INV] findings=%d" % len(findings))
     if findings:
