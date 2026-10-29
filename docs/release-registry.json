@@ -401,7 +401,7 @@
     {
       "tag": "rc-20261029.2",
       "commit": "4bf8dc4b34dbd4b12b7f23b3a3aa72edc3f9130c",
-      "exe_md5": "b37624fef78e22476de4b61bf3433b2",
+      "exe_md5": "b37624fef78e22476de4b61bf3433b2e",
       "exe_bytes": 10103808,
       "package_dir": "dist/VisionFlowPlatform-rc-20261029.2",
       "recorded_at": "2026-10-29",
