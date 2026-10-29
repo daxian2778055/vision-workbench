@@ -61,6 +61,9 @@ void TrainingRunnerTest::stubbornProcessIsKilledAfterGrace()
     TrainingRunner r;
     bool done = false;
     connect(&r, &TrainingRunner::finished, this, [&done](bool, const QString &) { done = true; });
+    QStringList seen;
+    connect(&r, &TrainingRunner::logLine, this,
+            [&seen](const QString &l) { seen << l; });
     // ping 是控制台进程，terminate(WM_CLOSE) 对它无效
     r.start(QStringLiteral("ping"), {QStringLiteral("-n"), QStringLiteral("60"), QStringLiteral("127.0.0.1")},
             QString());
@@ -72,6 +75,18 @@ void TrainingRunnerTest::stubbornProcessIsKilledAfterGrace()
         QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
     QVERIFY2(done, "15 秒内没有结束：5 秒强杀兜底没开火");
     QVERIFY2(!r.running(), "强杀后进程仍在跑");
+    // 下界（2026-10-29 复核 P3-2）：若 terminate() 将来对某类进程生效，这条腿会在
+    // 1 秒内变绿——定时器坏了也看不出来。强杀路径必须走满约 5 秒。
+    QVERIFY2(t.elapsed() >= 4500,
+             qPrintable(QStringLiteral("结束太快（%1 ms）：terminate 生效了或定时器没走满 5 秒，"
+                                        "这条腿守的是 5 秒强杀路径").arg(t.elapsed())));
+    // 直接证明定时器回调走到了（比耗时断言更贴机制）
+    bool sawKillLog = false;
+    for (const QString &l : seen) {
+        if (l.contains(QStringLiteral("强制结束")))
+            sawKillLog = true;
+    }
+    QVERIFY2(sawKillLog, "日志里没有 5 秒强杀记录：定时器回调没走");
 }
 
 void TrainingRunnerTest::restartWithinWindowIsNotKilled()
