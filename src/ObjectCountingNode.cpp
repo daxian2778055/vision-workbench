@@ -174,6 +174,15 @@ void ObjectCountingNode::init()
         sp.label = QStringLiteral("下一次运行前清零累计");
         registerParam(sp);
     }
+    // YOLO 前处理参数（2026-10-29 复核 P1-7）：run 一直在读，却从未登记 ⇒ QVariant::toDouble()
+    // 把缺省的 scale 读成 0 ⇒ blobFromImage 得到全零 blob ⇒ 永远解不出框，而 moduleStatus
+    // 仍写 true（现场=流程成功、计数 0）。默认值与 DnnDetectNode 完全一致。
+    registerParam(makeDoubleParam(QStringLiteral("scale"), 1.0 / 255.0, 0.0001, 10.0,
+                                  DnnDetectNode::labelScale()));
+    registerParam(makeBoolParam(QStringLiteral("swapRB"), true,
+                                DnnDetectNode::labelSwapRB()));
+    registerParam(makeStringParam(QStringLiteral("mean"), QStringLiteral("0,0,0"),
+                                  DnnDetectNode::labelMean()));
     m_params[QStringLiteral("countNote")] = QString();
 }
 
@@ -244,7 +253,10 @@ void ObjectCountingNode::run(bool /*autoSwitch*/)
 
     // ── 检测（复用 DnnDetectNode 的加载与解码，避免复制 YOLO 前处理）──
     QVector<DetectionBox> boxes;
+    QString classWarn;   // 类别告警：留到累计摘要后面显示（P2-11）
     try {
+        // 共享网络互斥（2026-10-29 复核 P2-14）：与检测节点同一把锁
+        QMutexLocker dnnLocker(&DnnDetectNode::dnnMutex());
         cv::dnn::Net net = DnnDetectNode::getOrLoadNet(modelPath);
         if (net.empty()) {
             m_params[QStringLiteral("lastError")] =
@@ -261,18 +273,26 @@ void ObjectCountingNode::run(bool /*autoSwitch*/)
             net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
             net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
         }
-        const int inputSize = m_params.value(QStringLiteral("inputSize")).toInt();
-        const double scale = m_params.value(QStringLiteral("scale")).toDouble();
-        const bool swapRB = m_params.value(QStringLiteral("swapRB")).toBool();
-        // mean 形如 "0,0,0"
+        const int inputSize = m_params.value(QStringLiteral("inputSize"), 640).toInt();
+        // 前处理与检测节点共用（2026-10-29 复核 P1-7）：先前直接拉伸进正方形，而
+        // parseYoloOutput 是按 letterbox 反算的 ⇒ 非方图上的框位会偏，过线用的正是这个中心。
+        const double scale = m_params.value(QStringLiteral("scale"), 1.0 / 255.0).toDouble();
+        const bool swapRB = m_params.value(QStringLiteral("swapRB"), true).toBool();
         cv::Scalar mean(0, 0, 0);
-        const QStringList parts =
-            m_params.value(QStringLiteral("mean")).toString().split(QLatin1Char(','));
-        if (parts.size() == 3)
-            mean = cv::Scalar(parts[0].toDouble(), parts[1].toDouble(), parts[2].toDouble());
+        {
+            const QStringList parts =
+                m_params.value(QStringLiteral("mean"), QStringLiteral("0,0,0"))
+                    .toString()
+                    .split(QLatin1Char(','));
+            if (parts.size() == 3)
+                mean = cv::Scalar(parts[0].toDouble(), parts[1].toDouble(), parts[2].toDouble());
+        }
 
-        cv::Mat blob = cv::dnn::blobFromImage(img, scale, cv::Size(inputSize, inputSize),
-                                              mean, swapRB, false, CV_32F);
+        cv::Mat blob;
+        if (!DnnDetectNode::yoloBlob(img, inputSize, scale, swapRB, mean, &blob)) {
+            m_params[QStringLiteral("lastError")] = DnnDetectNode::msgYoloPreprocessFailed();
+            return;
+        }
         net.setInput(blob);
         const cv::Mat out = net.forward();
 
@@ -291,16 +311,21 @@ void ObjectCountingNode::run(bool /*autoSwitch*/)
                 b.className = classNames[b.classId];
         // 类别校验（2026-10-28）：classes.txt 缺失/行数不足是现场最高频的配置错，
         // 直接把"几个框没名字"说出来，比让人对着一张全是数字的图猜要快
-        int unnamed = 0;
-        for (const auto &b : boxes)
+        // 类别校验（2026-10-28，2026-10-29 复核 P2-11 修正）：两个数字原先都是
+        // classNames.size()——模型类别数根本没参与；且这段在成功返回时被累计摘要覆盖。
+        // 改成「框上最大 classId + 1」对「classes.txt 行数」，并把告警留到摘要后面。
+        int unnamed = 0, maxClassId = -1;
+        for (const auto &b : boxes) {
+            if (b.classId > maxClassId)
+                maxClassId = b.classId;
             if (b.className.isEmpty() && b.classId >= 0)
                 ++unnamed;
+        }
         if (unnamed > 0) {
-            m_params[QStringLiteral("countNote")] =
-                QStringLiteral("模型输出 %1 类，classes.txt 只有 %2 行：%3 个框无类名")
-                    .arg(classNames.isEmpty() ? 0 : classNames.size())
-                    .arg(classNames.size())
-                    .arg(unnamed);
+            classWarn = QStringLiteral("模型输出 %1 类，classes.txt 只有 %2 行：%3 个框无类名")
+                            .arg(maxClassId + 1)
+                            .arg(classNames.size())
+                            .arg(unnamed);
         }
     } catch (const cv::Exception &e) {
         m_params[QStringLiteral("lastError")] =
@@ -387,8 +412,13 @@ void ObjectCountingNode::run(bool /*autoSwitch*/)
     jsonObj->setData(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact)));
     setOutputData(2, jsonObj);
 
-    m_params[QStringLiteral("countNote")] =
-        QStringLiteral("累计 %1（本帧 +%2，在跟 %3）").arg(m_totalCount).arg(added).arg(tracks.size());
+    QString note = QStringLiteral("累计 %1（本帧 +%2，在跟 %3）")
+                       .arg(m_totalCount)
+                       .arg(added)
+                       .arg(tracks.size());
+    if (!classWarn.isEmpty())
+        note += QStringLiteral("\n") + classWarn;
+    m_params[QStringLiteral("countNote")] = note;
     setParamDirect(QStringLiteral("moduleStatus"), true);
 }
 

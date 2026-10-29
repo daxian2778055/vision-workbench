@@ -1,5 +1,7 @@
 #include "TrainingRunnerDialog.h"
 
+#include <QtConcurrent>
+
 #include <QComboBox>
 #include <QDir>
 #include <QFileDialog>
@@ -213,16 +215,34 @@ void TrainingRunnerDialog::onBrowseCkpt()
 
 void TrainingRunnerDialog::onProbeEnv()
 {
-    m_envLabel->setText(QStringLiteral("检测中…"));
-    const TrainingRunner::EnvStatus st = TrainingRunner::probe(m_python->text().trimmed());
-    m_envOk = st.ok;
-    m_envLabel->setText(st.ok
-                            ? QStringLiteral("环境就绪：%1").arg(st.detail)
-                            : QStringLiteral("环境不可用：%1（见 train-env/README.md）").arg(st.detail));
-    m_envLabel->setStyleSheet(st.ok ? QStringLiteral("color:#1a7f37;")
-                                    : QStringLiteral("color:#c22;"));
-    setRunning(m_runner->running());
-    saveSettings();
+    // 后台探测（2026-10-29 复核 P3-1）：probe 同步等子进程，最长 20 秒；
+    // 放 QtConcurrent 里跑，界面只收结果。重复点击时忽略（已在探测中）。
+    if (m_probeWatcher && m_probeWatcher->isRunning())
+        return;
+    const QString python = m_python->text().trimmed();
+    m_envLabel->setStyleSheet(QString());
+    m_envLabel->setText(QStringLiteral("检测中…（后台进行，界面不会卡住）"));
+    if (m_probeBtn)
+        m_probeBtn->setEnabled(false);
+
+    if (!m_probeWatcher) {
+        m_probeWatcher = new QFutureWatcher<TrainingRunner::EnvStatus>(this);
+        connect(m_probeWatcher, &QFutureWatcher<TrainingRunner::EnvStatus>::finished, this, [this]() {
+            const TrainingRunner::EnvStatus st = m_probeWatcher->result();
+            m_envOk = st.ok;
+            m_envLabel->setText(st.ok
+                                    ? QStringLiteral("环境就绪：%1").arg(st.detail)
+                                    : QStringLiteral("环境不可用：%1（见 train-env/README.md）").arg(st.detail));
+            m_envLabel->setStyleSheet(st.ok ? QStringLiteral("color:#1a7f37;")
+                                            : QStringLiteral("color:#c22;"));
+            if (m_probeBtn)
+                m_probeBtn->setEnabled(true);
+            setRunning(m_runner && m_runner->running());
+            saveSettings();
+        });
+    }
+    m_probeWatcher->setFuture(
+        QtConcurrent::run([python]() { return TrainingRunner::probe(python); }));
 }
 
 void TrainingRunnerDialog::onStart()
@@ -230,15 +250,13 @@ void TrainingRunnerDialog::onStart()
     if (m_runner->running())
         return;
     if (!m_envOk) {
-        // 先自动探一次，避免"忘了点检测"就被拒
+        // 环境还没确认（2026-10-29 复核 P3-1）：先起一次后台探测，别把界面冻在这里。
         onProbeEnv();
-        if (!m_envOk) {
-            QMessageBox::warning(this, QStringLiteral("训练环境不可用"),
-                                 m_envLabel->text()
-                                     + QStringLiteral("\n\n产线机不需要装训练环境；"
-                                                      "请在训练机上按 train-env/README.md 安装。"));
-            return;
-        }
+        QMessageBox::information(
+            this, QStringLiteral("先检测训练环境"),
+            QStringLiteral("正在后台检测训练环境，结果出来后（标签变绿）再点「开始训练」。\n\n"
+                           "产线机不需要装训练环境；训练机上请按 train-env/README.md 安装。"));
+        return;
     }
     const QString program = buildProgram();
     const QStringList args = buildArgs();

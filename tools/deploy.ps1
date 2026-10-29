@@ -352,7 +352,8 @@ VisionFlowPlatform 部署说明
 
 3. 首次运行
    - 双击 VisionFlowPlatform.exe 即可。
-   - 首次启动需创建初始管理员账号（用户名 + 密码至少 6 位，无默认口令）。
+   - 首次启动会播种出厂管理员 admin / admin；登录后请立刻在「系统 → 修改管理员口令」改掉。
+     改密前画布编辑与方案保存会被写闸挡住（这是防默认口令被滥用，不是故障）。
 
 4. 常见问题
    - 提示缺少 DLL: 用 Dependencies / Process Explorer 查看缺失项，确认是 Qt、

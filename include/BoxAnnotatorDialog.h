@@ -79,7 +79,8 @@ private slots:
 private:
     void reloadImages();
     void loadCurrentImage();
-    void saveCurrentImage();
+    /// 保存当前图（2026-10-29 复核 P2-12：返回是否真的写成功——磁盘满时不能装作已存）
+    bool saveCurrentImage();
     QString currentImagePath() const;
     void refreshBoxList();
 
@@ -97,4 +98,5 @@ private:
     QPushButton *m_deleteBtn = nullptr;
     QPushButton *m_clearBtn = nullptr;
     bool m_loading = false;
+    int m_lastRow = -1;   /// 上一次成功载入的行（保存失败时回退到它）
 };

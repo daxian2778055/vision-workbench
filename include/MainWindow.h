@@ -290,6 +290,8 @@ protected:
     /// 系统菜单「脚本安全：执行前确认脚本」开关（2026-10-25）：权限收口要按角色灰掉，
     /// 故须留成员指针（applyPermissionRestrictions 里统一处理）
     QAction *m_confirmScriptAct = nullptr;
+    /// 打包模型与依赖（2026-10-29 复核 P2-13）：它改写活方案的路径，必须随写闸/编辑锁灰掉
+    QAction *m_packModelsAct = nullptr;
     QAction *m_actionCreateGroup = nullptr;
     QAction *m_actionDissolveGroup = nullptr;
     QAction *m_actionToggleGroup = nullptr;

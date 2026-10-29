@@ -16,6 +16,58 @@
 // 静态模型缓存（与 DnnInferNode 隔离，避免不同任务互相淘汰）
 QMap<QString, cv::dnn::Net> DnnDetectNode::s_netCache;
 
+QString DnnDetectNode::labelScale()
+{
+    return QStringLiteral("缩放系数");
+}
+
+QString DnnDetectNode::labelSwapRB()
+{
+    return QStringLiteral("BGR/RGB 交换");
+}
+
+QString DnnDetectNode::labelMean()
+{
+    return QStringLiteral("均值（R,G,B）");
+}
+
+QString DnnDetectNode::msgYoloPreprocessFailed()
+{
+    return QStringLiteral("YOLO 前处理失败：请检查缩放系数（须 > 0）与输入尺寸");
+}
+
+QMutex &DnnDetectNode::dnnMutex()
+{
+    static QMutex m;   // 函数内静态：避开静态初始化顺序问题
+    return m;
+}
+
+bool DnnDetectNode::yoloBlob(const cv::Mat &bgr, int inputSize, double scale, bool swapRB,
+                             const cv::Scalar &mean, cv::Mat *blob)
+{
+    if (!blob || bgr.empty() || inputSize <= 0)
+        return false;
+    if (!(scale > 0.0))
+        return false;   // P1-7：scale=0 会得到全零 blob，直接判失败
+    cv::Mat img;
+    if (bgr.channels() == 1)
+        cv::cvtColor(bgr, img, cv::COLOR_GRAY2BGR);
+    else if (bgr.channels() == 4)
+        cv::cvtColor(bgr, img, cv::COLOR_BGRA2BGR);
+    else
+        img = bgr;
+    // letterbox：保持长宽比，灰边 114 —— 与 parseYoloOutput 里的 padX/padY 是同一套几何
+    const double lscale = std::min(double(inputSize) / img.cols, double(inputSize) / img.rows);
+    const int nw = cvRound(img.cols * lscale), nh = cvRound(img.rows * lscale);
+    cv::Mat resized;
+    cv::resize(img, resized, cv::Size(nw, nh));
+    cv::Mat letter(inputSize, inputSize, CV_8UC3, cv::Scalar(114, 114, 114));
+    resized.copyTo(letter(cv::Rect((inputSize - nw) / 2, (inputSize - nh) / 2, nw, nh)));
+    *blob = cv::dnn::blobFromImage(letter, scale, cv::Size(inputSize, inputSize),
+                                   mean, swapRB, false);
+    return !blob->empty();
+}
+
 DnnDetectNode::DnnDetectNode(QObject *parent) : HalconNode(parent)
 {
     setName(QStringLiteral("ONNX目标检测"));
@@ -182,18 +234,18 @@ void DnnDetectNode::init()
         makeDoubleParam(QStringLiteral("nmsThresh"), 0.45, 0.0, 1.0,
                         QStringLiteral("NMS 阈值")),
         makeStringParam(QStringLiteral("mean"), QStringLiteral("0,0,0"),
-                        QStringLiteral("均值（R,G,B）")),
+                        labelMean()),
         makeDoubleParam(QStringLiteral("scale"), 1.0 / 255.0, 0.0001, 10.0,
-                        QStringLiteral("缩放系数")),
+                        labelScale()),
         makeBoolParam(QStringLiteral("swapRB"), true,
-                      QStringLiteral("BGR/RGB 交换")),
-    });
+                      labelSwapRB()),
         makeEnumParam(QStringLiteral("dnnBackend"), 0,
                       {QStringLiteral("CPU"), QStringLiteral("OpenCL（GPU）")},
                       QStringLiteral("推理后端")),
         makeEnumParam(QStringLiteral("yoloLayout"), 0,
                       yoloLayoutLabels(),
                       QStringLiteral("输出布局")),
+    });
     m_params[QStringLiteral("detCount")] = 0;
     m_params[QStringLiteral("lastError")] = QString();
 }
@@ -215,6 +267,8 @@ void DnnDetectNode::run(bool /*autoSwitch*/)
             m_outputImage.Clear();
             return;
         }
+        // 共享网络互斥（2026-10-29 复核 P2-14）：取网络与推理都在这把锁内
+        QMutexLocker dnnLocker(&dnnMutex());
         cv::dnn::Net net = getOrLoadNet(modelPath);
         // 推理后端（2026-10-28）：逐帧 YOLO 在 CPU 上常是瓶颈；OpenCL 不可用时
         // OpenCV 会静默回退，这里显式设置，便于现场按需切换。
@@ -241,21 +295,14 @@ void DnnDetectNode::run(bool /*autoSwitch*/)
 
         cv::Mat img = OpencvUtil::himageToMat(input);
         if (img.empty()) return;
-        if (img.channels() == 1)
-            cv::cvtColor(img, img, cv::COLOR_GRAY2BGR);
-        else if (img.channels() == 4)
-            cv::cvtColor(img, img, cv::COLOR_BGRA2BGR);
 
-        // letterbox 预处理（保持长宽比，灰边填充 114）
-        const double lscale = std::min(double(size) / img.cols, double(size) / img.rows);
-        const int nw = cvRound(img.cols * lscale), nh = cvRound(img.rows * lscale);
-        cv::Mat resized;
-        cv::resize(img, resized, cv::Size(nw, nh));
-        cv::Mat letter(size, size, CV_8UC3, cv::Scalar(114, 114, 114));
-        resized.copyTo(letter(cv::Rect((size - nw) / 2, (size - nh) / 2, nw, nh)));
-
-        cv::Mat blob = cv::dnn::blobFromImage(letter, scale, cv::Size(size, size),
-                                              mean, swapRB, false);
+        // 前处理收进 yoloBlob（2026-10-29 复核 P1-7）：检测与计数共用同一套 letterbox + blob
+        cv::Mat blob;
+        if (!yoloBlob(img, size, scale, swapRB, mean, &blob)) {
+            m_params[QStringLiteral("lastError")] = msgYoloPreprocessFailed();
+            m_outputImage.Clear();
+            return;
+        }
         net.setInput(blob);
         cv::Mat out = net.forward();
 

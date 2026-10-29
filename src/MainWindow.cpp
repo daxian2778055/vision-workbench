@@ -4068,8 +4068,8 @@ void MainWindow::setupSystemMenu()
         // 打包模型与依赖（2026-10-28）：把 onnx/classes.txt 等外部文件收进方案目录，
         // 换机器拷方案就能跑——显式动作，不在保存时偷偷搬用户文件。
         // 让用户选方案目录（MainWindow 没有公开的"当前方案路径"，选目录比猜更明确）。
-        connect(ui->menuFile->addAction(QStringLiteral("打包模型与依赖…")), &QAction::triggered,
-                this, [this]() {
+        m_packModelsAct = ui->menuFile->addAction(QStringLiteral("打包模型与依赖…"));
+        connect(m_packModelsAct, &QAction::triggered, this, [this]() {
                     const QString dir = QFileDialog::getExistingDirectory(
                         this, QStringLiteral("选择方案目录（依赖将收进 <目录>/assets/）"));
                     if (dir.isEmpty())
@@ -4191,6 +4191,8 @@ void MainWindow::applyPermissionRestrictions()
         // 登出"的路径，这项就会带着旧的可用态留在界面上。安全开关按最严处理。
         if (m_confirmScriptAct)
             m_confirmScriptAct->setEnabled(false);
+        if (m_packModelsAct)
+            m_packModelsAct->setEnabled(false);   // P2-13：改活方案路径，未登录一律禁用
         return;
     }
 
@@ -4210,6 +4212,10 @@ void MainWindow::applyPermissionRestrictions()
     // 空指针守卫兜住。
     if (m_confirmScriptAct) {
         m_confirmScriptAct->setEnabled(session->canEditScheme());
+    }
+    if (m_packModelsAct) {
+        // 打包会改写活方案里的文件路径（2026-10-29 复核 P2-13）：写闸开着或画布锁着时不给用
+        m_packModelsAct->setEnabled(session->canEditScheme() && !session->canvasEditShouldBeLocked(m_executor && m_executor->isRunning()));
     }
     if (ui->menuEdit) {
         ui->menuEdit->setEnabled(session->canEditScheme());

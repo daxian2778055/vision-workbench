@@ -4,6 +4,7 @@
 #include "DataObject.h"
 #include <opencv2/dnn.hpp>
 #include <QMap>
+#include <QMutex>
 #include <QVector>
 
 /// ONNX 目标检测节点（YOLO 系列）：cv::dnn 加载 ONNX 模型，输出类别 + 位置框。
@@ -38,6 +39,25 @@ public:
 
     /// 输出布局候选标签（2026-10-28）：检测与计数两个节点共用，避免文案分叉
     static QStringList yoloLayoutLabels();
+
+    /// YOLO 前处理（letterbox 保持长宽比 + 灰边 114 + blobFromImage）。检测与计数共用同一套，
+    /// 避免复制漂移（2026-10-29 复核 P1-7：计数节点原先直接拉伸进正方形、且 scale 未登记为 0
+    /// ⇒ 送进网络的是全零 blob，解码再按 letterbox 反算 ⇒ 框位也偏）。
+    /// scale <= 0 直接返回 false（宁可不跑，也不静默出全零结果）。
+    static bool yoloBlob(const cv::Mat &bgr, int inputSize, double scale, bool swapRB,
+                         const cv::Scalar &mean, cv::Mat *blob);
+
+    /// 共享推理互斥（2026-10-29 复核 P2-14）：s_netCache 是静态的，cv::dnn::Net 副本共享
+    /// 同一份实现；两台执行器并发 forward（或一边改 target 一边 forward）会踩同一份缓存。
+    /// 取网络与推理都在同一把锁内。
+    static QMutex &dnnMutex();
+
+    /// 检测与计数共用的参数标签与前处理失败提示（2026-10-29）：两个节点必须一致，
+    /// 集中一处——复制同一句中文会被仓库的中文重复闸拦下。
+    static QString labelScale();
+    static QString labelSwapRB();
+    static QString labelMean();
+    static QString msgYoloPreprocessFailed();
 
 private:
 

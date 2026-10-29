@@ -3,6 +3,7 @@
 #include "TrainingRunner.h"
 
 #include <QDialog>
+#include <QFutureWatcher>
 #include <QCloseEvent>
 
 class QComboBox;
@@ -65,6 +66,9 @@ private:
     QPushButton *m_cancelBtn = nullptr;
     QPushButton *m_probeBtn = nullptr;
     TrainingRunner *m_runner = nullptr;
+    /// 环境探测放到后台（2026-10-29 复核 P3-1）：probe 里 waitForFinished 默认 20 秒，
+    /// 在界面线程同步等会让窗口像卡死。
+    QFutureWatcher<TrainingRunner::EnvStatus> *m_probeWatcher = nullptr;
     bool m_envOk = false;
     /// 用户点了关闭/Esc：收尾后自动关窗（2026-10-29，与训练向导同策略）
     bool m_closeRequested = false;

@@ -25,6 +25,8 @@ private slots:
     void nodeReportsDegenerateLine();
     void nodeResetsCounterOnRequest();
     void yoloLayoutV8AndV5BothDecode();
+    void dnnParamsAreRegistered();
+    void yoloBlobRejectsZeroScaleAndLettersboxes();
 
 private:
     static DetectionBox makeBox(float cx, float cy, float w = 40, float h = 40,
@@ -257,6 +259,67 @@ void ObjectCountingTest::differentClassesDoNotStealIdentity()
             QCOMPARE(t.className, QStringLiteral("A"));
         }
     }
+}
+
+void ObjectCountingTest::dnnParamsAreRegistered()
+{
+    // r14 复核 P1-7 / P1-8：登记是"能不能用"的一半——run 读了没登记的键，缺省值会把推理带偏。
+    // 计数节点：scale 缺省被 toDouble() 读成 0 ⇒ 全零 blob；检测节点：两个枚举落在列表外，
+    // 面板上没有「推理后端 / 输出布局」。
+    ObjectCountingNode counting;
+    counting.init();
+    QStringList have;
+    for (const ParamSpec &sp : counting.paramSpecs())
+        have << sp.name;
+    const QStringList want{QStringLiteral("scale"), QStringLiteral("swapRB"),
+                           QStringLiteral("mean"), QStringLiteral("dnnBackend"),
+                           QStringLiteral("yoloLayout")};
+    for (const QString &k : want)
+        QVERIFY2(have.contains(k),
+                 qPrintable(QStringLiteral("计数节点缺登记参数 %1（现有：%2）")
+                                .arg(k, have.join(QLatin1Char(',')))));
+
+    // 缺省值必须"能真跑"：scale 不能是 0
+    QVERIFY2(counting.getParam(QStringLiteral("scale")).toDouble() > 0.0,
+             "scale 缺省为 0：送进网络的是全零 blob（P1-7 的现场症状）");
+    QCOMPARE(counting.getParam(QStringLiteral("swapRB")).toBool(), true);
+    QCOMPARE(counting.getParam(QStringLiteral("mean")).toString(), QStringLiteral("0,0,0"));
+
+    DnnDetectNode detect;
+    detect.init();
+    QStringList dhave;
+    for (const ParamSpec &sp : detect.paramSpecs())
+        dhave << sp.name;
+    QVERIFY2(dhave.contains(QStringLiteral("dnnBackend")),
+             qPrintable(QStringLiteral("检测节点缺 dnnBackend（P1-8，现有：%1）")
+                            .arg(dhave.join(QLatin1Char(',')))));
+    QVERIFY2(dhave.contains(QStringLiteral("yoloLayout")),
+             "检测节点缺 yoloLayout：YOLOX/v5 模型在检测节点上无法选对布局");
+}
+
+void ObjectCountingTest::yoloBlobRejectsZeroScaleAndLettersboxes()
+{
+    // ① 根因形态：scale=0 必须拒绝（blobFromImage 会给出全零 blob，现场表现为"成功但计数 0"）
+    cv::Mat img(48, 64, CV_8UC3, cv::Scalar(10, 20, 30));   // 非方图，顺带验 letterbox
+    cv::Mat blob;
+    QVERIFY2(!DnnDetectNode::yoloBlob(img, 64, 0.0, true, cv::Scalar(0, 0, 0), &blob),
+             "scale=0 被接受了：会得到全零 blob 却仍报成功");
+
+    // ② 正常路径：形状 1x3x64x64、非零、灰边(114)在
+    QVERIFY(DnnDetectNode::yoloBlob(img, 64, 1.0 / 255.0, true, cv::Scalar(0, 0, 0), &blob));
+    QCOMPARE(blob.dims, 4);
+    QCOMPARE(blob.size[1], 3);
+    QCOMPARE(blob.size[2], 64);
+    QCOMPARE(blob.size[3], 64);
+    double mn = 0.0, mx = 0.0;
+    cv::minMaxLoc(blob.reshape(1, 1), &mn, &mx);
+    QVERIFY2(mx > 0.0, "blob 全零：前处理参数没生效");
+    // 64x48 放进 64x64：上下各 8 行灰边 114 ⇒ 左上角像素应贴近 114/255
+    const cv::Mat flat = blob.reshape(1, 1);
+    const float corner = flat.at<float>(0, 0);   // 首元素属于灰边
+    QVERIFY2(qAbs(corner - 114.0f / 255.0f) < 0.02f,
+             qPrintable(QStringLiteral("letterbox 灰边缺失（corner=%1）：几何与反算不一致")
+                            .arg(corner)));
 }
 
 QTEST_MAIN(ObjectCountingTest)

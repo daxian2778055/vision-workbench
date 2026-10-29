@@ -1,4 +1,5 @@
 #include "BoxAnnotatorDialog.h"
+#include "ConfirmDestructive.h"
 
 #include <QComboBox>
 #include <QDir>
@@ -243,14 +244,27 @@ void BoxAnnotatorDialog::reloadImages()
 
 void BoxAnnotatorDialog::closeEvent(QCloseEvent *e)
 {
-    // 标完当前图直接点 X 是最常见用法——这一张的框必须存（2026-10-28 P2-1）
-    saveCurrentImage();
+    // 标完当前图直接点 X 是最常见用法——这一张的框必须存（2026-10-28 P2-1）。
+    // 存失败时不能装作存上了（2026-10-29 复核 P2-12）：问一句，默认"取消"留在窗口里。
+    if (!saveCurrentImage()
+        && !confirmDestructive(this, QStringLiteral("标注保存失败"),
+                               QStringLiteral("本图标注没能写入（磁盘满或权限？）。\n"
+                                              "仍要关闭会丢失当前这张图上的框。"))) {
+        e->ignore();
+        return;
+    }
     QDialog::closeEvent(e);
 }
 
 void BoxAnnotatorDialog::reject()
 {
-    saveCurrentImage();
+    // Esc 走这里，与关窗同一策略
+    if (!saveCurrentImage()
+        && !confirmDestructive(this, QStringLiteral("标注保存失败"),
+                               QStringLiteral("本图标注没能写入（磁盘满或权限？）。\n"
+                                              "仍要关闭会丢失当前这张图上的框。"))) {
+        return;
+    }
     QDialog::reject();
 }
 
@@ -266,7 +280,15 @@ void BoxAnnotatorDialog::onImageChanged(int row)
 {
     if (m_loading)
         return;
-    saveCurrentImage();   // 切换即存，避免"标了一半换图丢了"
+    // 切换即存；存不上就**不换图**（2026-10-29 复核 P2-12：否则这张的框静默丢失）
+    if (!saveCurrentImage()) {
+        m_loading = true;
+        if (m_lastRow >= 0 && m_lastRow < m_imageList->count())
+            m_imageList->setCurrentRow(m_lastRow);
+        m_loading = false;
+        return;
+    }
+    m_lastRow = row;
     if (row < 0 || row >= m_images.size()) {
         m_canvas->setImage(QImage());
         m_boxes.clear();
@@ -298,15 +320,22 @@ void BoxAnnotatorDialog::loadCurrentImage()
                               : QStringLiteral("已载入 %1 个框").arg(m_boxes.size()));
 }
 
-void BoxAnnotatorDialog::saveCurrentImage()
+bool BoxAnnotatorDialog::saveCurrentImage()
 {
     const QString path = currentImagePath();
     if (path.isEmpty() || m_canvas == nullptr)
-        return;
+        return true;   // 没有可存的图，不算失败
     // 只有真的动过（有图且 boxes 与磁盘一致与否不追）才写：这里简单起见每次切换都写，
     // 空标注写空文件（= 这张图没有目标），语义正确。
-    if (!m_boxes.isEmpty() || QFileInfo::exists(YoloAnnotation::labelPath(path)))
-        YoloAnnotation::save(path, m_boxes);
+    if (!m_boxes.isEmpty() || QFileInfo::exists(YoloAnnotation::labelPath(path))) {
+        // 返回值必须看（2026-10-29 复核 P2-12）：磁盘满/权限不足时 save 返回假，
+        // 原先照样按"已经存了"关窗或换图——标注就这么静默丢了。
+        if (!YoloAnnotation::save(path, m_boxes)) {
+            m_status->setText(QStringLiteral("标注保存失败（磁盘满或权限？）：%1").arg(path));
+            return false;
+        }
+    }
+    return true;
 }
 
 void BoxAnnotatorDialog::onBoxDrawn(const QRectF &px, bool /*shift*/)

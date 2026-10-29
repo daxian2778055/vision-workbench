@@ -18,7 +18,7 @@ inline QString unknownExceptionReason()
 }
 
 /// 规则：键 == "lastError" 或以 "Note" 结尾。
-/// 依据（2026-10-28 重测的写侧站点表，共 196 处）：lastError 120 / *Note 42 / trainStatus 34。
+/// 依据（2026-10-28 重测的写侧站点表，共 197 处）：lastError 122 / *Note 41 / trainStatus 34。
 /// 数字一律以 `python tools/reason_key_sites.py` 的输出为准（`--check` 会与本注释比对，
 /// 不一致退出 1）——早先写"一次性脚本、不入库"导致数值无法复现，已改成入库脚本。
 /// 旧记（原文照抄）：共 84 处：lastError 50 / calibNote 24 / matchNote 4 /

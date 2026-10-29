@@ -35,6 +35,15 @@ ProjectPackager::Result ProjectPackager::pack(FlowScene *scene, const QString &s
     // 稳定顺序（2026-10-29 P2-2）：QHash 的 items().keys() 顺序不保证，
     // 同一方案重复打包会让 assets 文件名互换（best.onnx / best_2.onnx 对调）——
     // 功能不受影响（参数按节点各自改写），但包字节不可复现。
+    // 两段式改写（2026-10-29 复核 P2-13）：先记下要改的参数，全部复制成功后再统一写回。
+    // 原先边复制边 setParam，中途失败会留下「一半节点指 assets、一半指原路径」的半套状态。
+    struct PendingRewrite {
+        NodeBase *node = nullptr;
+        QString param;
+        QString rel;
+    };
+    QVector<PendingRewrite> pending;
+
     QList<NodeBase *> stableOrder;
     for (NodeBase *n : scene->nodes())
         if (n)
@@ -72,7 +81,7 @@ ProjectPackager::Result ProjectPackager::pack(FlowScene *scene, const QString &s
             const QString srcAbs = srcReal0.isEmpty() ? fi.absoluteFilePath() : srcReal0;
             const auto already = copiedBySource.find(srcAbs);
             if (already != copiedBySource.end()) {
-                node->setParam(spec.name, already.value());
+                pending.append(PendingRewrite{node, spec.name, already.value()});
                 r.skipped << QStringLiteral("%1（同源已打包）").arg(spec.name);
                 continue;
             }
@@ -87,7 +96,7 @@ ProjectPackager::Result ProjectPackager::pack(FlowScene *scene, const QString &s
                                           || srcReal.startsWith(schemeReal + QLatin1Char('/')));
             if (insideByPath && insideByReal) {
                 const QString rel = fi.absoluteFilePath().mid(schemeAbs.size());
-                node->setParam(spec.name, rel);
+                pending.append(PendingRewrite{node, spec.name, rel});
                 r.skipped << QStringLiteral("%1（已在方案内）").arg(spec.name);
                 continue;
             }
@@ -106,10 +115,15 @@ ProjectPackager::Result ProjectPackager::pack(FlowScene *scene, const QString &s
                 return r;
             }
             const QString rel = QStringLiteral("assets/") + QFileInfo(target).fileName();
-            node->setParam(spec.name, rel);
+            pending.append(PendingRewrite{node, spec.name, rel});
             copiedBySource.insert(srcAbs, rel);
             r.copied << QStringLiteral("%1 → %2").arg(spec.name, rel);
         }
+    }
+    // 全部复制成功后统一改写（P2-13）：失败时不会留下半套路径
+    for (const PendingRewrite &w : pending) {
+        if (w.node)
+            w.node->setParam(w.param, w.rel);
     }
     r.ok = true;
     return r;
