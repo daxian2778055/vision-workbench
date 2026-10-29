@@ -450,7 +450,16 @@
       "exe_bytes": 10127360,
       "package_dir": "dist/VisionFlowPlatform-rc-20261029.7",
       "recorded_at": "2026-10-29",
-      "recorded_note": "当前装机包（关键修复）：r14 复核 2 个 P1（计数节点 scale 未登记→全零 blob；检测节点 dnnBackend/yoloLayout 在 registerParams 外）+ 6 项 P2/P3 + 新增 INV5 闸（读参数必须能说清来源）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261029.8 取代（后者修 r15 的 P1-9：标注切图保存写错文件）"
+    },
+    {
+      "tag": "rc-20261029.8",
+      "commit": "0bd456390bdf1882ed724e819e60f9240fbb1241",
+      "exe_md5": "c6ab05aed0059cdd81b5dec76168806a",
+      "exe_bytes": 10128384,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261029.8",
+      "recorded_at": "2026-10-29",
+      "recorded_note": "当前装机包（关键修复）：r15 P1-9（标注切换保存写错文件、打开数据集截断第一张 txt）+ P2-12/P2-13 残留 + INV5 收紧（只认 registerParam(s) 实参，挡住 P1-8 形态）"
     }
   ],
   "legacy_backfilled": [
