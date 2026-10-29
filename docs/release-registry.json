@@ -396,7 +396,16 @@
       "exe_bytes": 10097152,
       "package_dir": "dist/VisionFlowPlatform-rc-20261029.1",
       "recorded_at": "2026-10-29",
-      "recorded_note": "当前装机包：训练编排（环境探测/命令预览/取消）+ train-env 新机准备（README、安装/下载脚本、33 个离线轮子含 Python 3.10 安装包）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261029.2 取代（后者修标注关窗/方向记账等并补凭据）"
+    },
+    {
+      "tag": "rc-20261029.2",
+      "commit": "4bf8dc4b34dbd4b12b7f23b3a3aa72edc3f9130c",
+      "exe_md5": "b37624fef78e22476de4b61bf3433b2",
+      "exe_bytes": 10103808,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261029.2",
+      "recorded_at": "2026-10-29",
+      "recorded_note": "当前装机包：标注器关窗保存、方向过滤记账修正、打包器同源去重/真实落点、训练关窗守卫、EOL 闸收口；版本说明含初始账号 admin/admin"
     }
   ],
   "legacy_backfilled": [
