@@ -423,7 +423,16 @@
       "exe_bytes": 10104320,
       "package_dir": "dist/VisionFlowPlatform-rc-20261029.4",
       "recorded_at": "2026-10-29",
-      "recorded_note": "当前装机包：取消统一非阻塞 + 5 秒强杀兜底（QTimer 两路径共用）、版本说明客户面/打包者指示分离"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261029.5 取代（后者修强杀误杀/打包顺序/关闭按钮守卫）"
+    },
+    {
+      "tag": "rc-20261029.5",
+      "commit": "c587239cb64c0a85f2d25d0a9f8822dee6144276",
+      "exe_md5": "4d0b65c294359d1f1e53c2328b82568a",
+      "exe_bytes": 10109440,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261029.5",
+      "recorded_at": "2026-10-29",
+      "recorded_note": "当前装机包：强杀定时器按进程身份绑定（不再误杀下一趟）+ 打包顺序稳定（包字节可复现）+ 关闭按钮走守卫 + 角色行恢复 + 强杀/重启两条腿（training_runner 8 腿）"
     }
   ],
   "legacy_backfilled": [
