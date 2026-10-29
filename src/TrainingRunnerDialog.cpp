@@ -122,7 +122,9 @@ TrainingRunnerDialog::TrainingRunnerDialog(QWidget *parent) : QDialog(parent)
     m_cancelBtn->setEnabled(false);
     connect(m_cancelBtn, &QPushButton::clicked, this, &TrainingRunnerDialog::onCancel);
     auto *closeBtn = new QPushButton(QStringLiteral("关闭"));
-    connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
+    // 走 close()（经 closeEvent 守卫），不要连 QDialog::accept（2026-10-29 P2-3）：
+    // accept() 不经过 closeEvent/reject，训练中点「关闭」会直接硬杀、没有收尾机会。
+    connect(closeBtn, &QPushButton::clicked, this, &QWidget::close);
     btns->addWidget(m_startBtn);
     btns->addWidget(m_cancelBtn);
     btns->addStretch();
@@ -346,6 +348,18 @@ void TrainingRunnerDialog::closeEvent(QCloseEvent *e)
         return;
     }
     QDialog::closeEvent(e);
+}
+
+void TrainingRunnerDialog::accept()
+{
+    // 与 closeEvent/reject 同一守卫（2026-10-29 P2-3）：训练中不允许"硬关"
+    if (m_runner && m_runner->running()) {
+        m_runner->requestCancel();
+        m_closeRequested = true;
+        appendLog(QStringLiteral("已请求停止：训练收尾后窗口会自动关闭"));
+        return;
+    }
+    QDialog::accept();
 }
 
 void TrainingRunnerDialog::reject()

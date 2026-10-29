@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QProcess>
+#include <QPointer>
 #include <QTimer>
 #include <QString>
 #include <QStringList>
@@ -48,5 +49,6 @@ signals:
 private:
     QProcess *m_proc = nullptr;
     QTimer *m_killTimer = nullptr;   /// 5 秒强杀兜底（terminate 对控制台进程常无效）
+    QPointer<QProcess> m_killTarget;   /// 被取消的那一趟进程（P2-1：定时器只杀它）
     bool m_cancelRequested = false;
 };

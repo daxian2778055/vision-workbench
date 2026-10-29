@@ -10,6 +10,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
+#include <algorithm>
 
 ProjectPackager::Result ProjectPackager::pack(FlowScene *scene, const QString &schemeFilePath)
 {
@@ -31,7 +32,19 @@ ProjectPackager::Result ProjectPackager::pack(FlowScene *scene, const QString &s
         return r;
     }
 
-    for (NodeBase *node : scene->nodes()) {
+    // 稳定顺序（2026-10-29 P2-2）：QHash 的 items().keys() 顺序不保证，
+    // 同一方案重复打包会让 assets 文件名互换（best.onnx / best_2.onnx 对调）——
+    // 功能不受影响（参数按节点各自改写），但包字节不可复现。
+    QList<NodeBase *> stableOrder;
+    for (NodeBase *n : scene->nodes())
+        if (n)
+            stableOrder.append(n);
+    std::sort(stableOrder.begin(), stableOrder.end(), [](NodeBase *a, NodeBase *b) {
+        if (a->moduleId() != b->moduleId())
+            return a->moduleId() < b->moduleId();
+        return a->fullName() < b->fullName();
+    });
+    for (NodeBase *node : stableOrder) {
         if (!node)
             continue;
         // paramSpecs 在 HalconNode 上（NodeBase 是基类，不假定所有节点都有）

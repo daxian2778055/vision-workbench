@@ -69,6 +69,10 @@ void TrainingRunner::start(const QString &program, const QStringList &args, cons
     if (running())
         return;
     m_cancelRequested = false;
+    // 停掉上一趟的强杀定时器（2026-10-29 P2-1）：否则上一趟的 5 秒定时器会在
+    // 新一趟开跑后把它误杀，日志还会误报"5 秒内未退出"。
+    if (m_killTimer)
+        m_killTimer->stop();
     m_proc = new QProcess(this);
     m_proc->setProcessChannelMode(QProcess::MergedChannels);
     if (!workDir.isEmpty())
@@ -86,6 +90,9 @@ void TrainingRunner::start(const QString &program, const QStringList &args, cons
     });
     connect(m_proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
             [this](int code, QProcess::ExitStatus status) {
+                if (m_killTimer)
+                    m_killTimer->stop();   // 本趟结束，别让强杀定时器留到下一趟
+                m_killTarget.clear();
                 const bool ok = (status == QProcess::NormalExit && code == 0);
                 const QString msg = m_cancelRequested
                                         ? QStringLiteral("已取消（进程已终止）")
@@ -102,6 +109,8 @@ void TrainingRunner::requestCancel()
     if (!running())
         return;
     m_cancelRequested = true;
+    // 记住"被取消的是哪一个"（2026-10-29 P2-1）：定时器到点只认它
+    m_killTarget = m_proc;
     // 先温和：给它一个写完 checkpoint 的机会（terminate = WM_CLOSE，多数训练进程不理）
     m_proc->terminate();
     // 强杀兜底（2026-10-29）：5 秒后仍在跑就 kill——否则关窗路径会永远"收尾后自动关"
@@ -109,7 +118,9 @@ void TrainingRunner::requestCancel()
         m_killTimer = new QTimer(this);
         m_killTimer->setSingleShot(true);
         connect(m_killTimer, &QTimer::timeout, this, [this]() {
-            if (running()) {
+            // 只杀"发起取消时的那个进程"（2026-10-29 P2-1）：只看 running() 会把
+            // 5 秒内新起的训练一起杀掉。用 QPointer 绑定到具体 QProcess 身份。
+            if (m_killTarget && m_killTarget == m_proc && running()) {
                 emit logLine(QStringLiteral("[取消] 进程 5 秒内未退出，强制结束"));
                 m_proc->kill();
             }

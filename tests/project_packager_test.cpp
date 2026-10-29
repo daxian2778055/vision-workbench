@@ -112,11 +112,21 @@ void ProjectPackagerTest::sameNameFromDifferentSourceGetsSuffix()
         ProjectPackager::pack(&scene, schemeDir.path() + QStringLiteral("/scheme.vfp"));
     QVERIFY2(r.ok, qPrintable(r.error));
     QCOMPARE(r.copied.size(), 2);
-    const QString a = schemeDir.path() + QStringLiteral("/assets/best.onnx");
-    const QString b = schemeDir.path() + QStringLiteral("/assets/best_2.onnx");
-    QVERIFY(QFile::exists(a) && QFile::exists(b));
-    QCOMPARE(readFile(a), QByteArray("A"));
-    QCOMPARE(readFile(b), QByteArray("B"));   // 不能被覆盖
+    // 2026-10-29 P2-2：不钉"谁拿基础名"（那取决于遍历顺序，实测 20% 抖动）；
+    // 只钉"每个节点最终指向的文件内容 = 它自己的源"，并且两个源内容都没被覆盖。
+    int seenA = 0, seenB = 0;
+    for (NodeBase *n : scene.nodes()) {
+        const QString rel = n->getParam(QStringLiteral("modelPath")).toString();
+        const QByteArray body = readFile(schemeDir.path() + QLatin1Char('/') + rel);
+        if (body == QByteArray("A")) ++seenA;
+        if (body == QByteArray("B")) ++seenB;
+    }
+    QCOMPARE(seenA, 1);
+    QCOMPARE(seenB, 1);
+    // assets 里应当恰好两个文件、内容不同（不被互相覆盖）
+    const auto files = QDir(schemeDir.path() + QStringLiteral("/assets"))
+                           .entryList(QDir::Files);
+    QCOMPARE(files.size(), 2);
 }
 
 void ProjectPackagerTest::sameSourceIsCopiedOnce()
