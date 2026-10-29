@@ -211,7 +211,8 @@ void BoxAnnotatorDialog::onChooseDir()
     const QString d = QFileDialog::getExistingDirectory(this, QStringLiteral("选择数据集目录"));
     if (d.isEmpty())
         return;
-    saveCurrentImage();
+    if (!saveCurrentImage())
+        return;   // 存不上就别换目录（2026-10-29 r15 P2-12：换目录会丢掉当前框）
     m_dir = d;
     m_dirLabel->setText(d);
     reloadImages();
@@ -237,6 +238,11 @@ void BoxAnnotatorDialog::reloadImages()
     m_images = dir.entryList(filters, QDir::Files, QDir::Name);
     for (const QString &name : m_images)
         m_imageList->addItem(name);
+    // 清掉"当前归属"（2026-10-29 r15 P1-9）：新列表的第 0 行不是刚才那张，
+    // 保留旧 m_boxes/m_currentPath 会让 setCurrentRow(0) 把旧数据集的框写进新目录第一张。
+    m_boxes.clear();
+    m_currentPath.clear();
+    m_lastRow = -1;
     m_loading = false;
     if (!m_images.isEmpty())
         m_imageList->setCurrentRow(0);
@@ -280,7 +286,7 @@ void BoxAnnotatorDialog::onImageChanged(int row)
 {
     if (m_loading)
         return;
-    // 切换即存；存不上就**不换图**（2026-10-29 复核 P2-12：否则这张的框静默丢失）
+    // 切换即存；存不上就**不换图**（P2-12）。注意保存目标由 m_currentPath 决定（P1-9）。
     if (!saveCurrentImage()) {
         m_loading = true;
         if (m_lastRow >= 0 && m_lastRow < m_imageList->count())
@@ -288,13 +294,15 @@ void BoxAnnotatorDialog::onImageChanged(int row)
         m_loading = false;
         return;
     }
-    m_lastRow = row;
     if (row < 0 || row >= m_images.size()) {
         m_canvas->setImage(QImage());
         m_boxes.clear();
+        m_currentPath.clear();
+        m_lastRow = -1;
         refreshBoxList();
         return;
     }
+    m_lastRow = row;
     loadCurrentImage();
 }
 
@@ -307,11 +315,17 @@ void BoxAnnotatorDialog::loadCurrentImage()
     reader.setAutoTransform(true);
     const QImage img = reader.read();
     if (img.isNull()) {
+        // 读不出就别认领这张（2026-10-29 r15 P1-9）：否则后续保存会用空框覆盖它的 txt
+        m_boxes.clear();
+        m_currentPath.clear();
+        m_canvas->setImage(QImage());
+        refreshBoxList();
         m_status->setText(QStringLiteral("读不出这张图：%1").arg(path));
         return;
     }
     int bad = 0;
     m_boxes = YoloAnnotation::load(path, &bad);
+    m_currentPath = path;   // 从这一刻起，m_boxes 属于这个文件
     m_canvas->setImage(img);
     m_canvas->setBoxes(m_boxes, m_classNames);
     refreshBoxList();
@@ -322,9 +336,11 @@ void BoxAnnotatorDialog::loadCurrentImage()
 
 bool BoxAnnotatorDialog::saveCurrentImage()
 {
-    const QString path = currentImagePath();
+    // 存的是"m_boxes 所属的那张"（2026-10-29 r15 P1-9）——不能读 currentRow：
+    // currentRowChanged 进槽时行已经是新的，那样会把上一张的框写进下一张。
+    const QString path = m_currentPath;
     if (path.isEmpty() || m_canvas == nullptr)
-        return true;   // 没有可存的图，不算失败
+        return true;   // 一张都还没载入过：没有可存的，也不算失败
     // 只有真的动过（有图且 boxes 与磁盘一致与否不追）才写：这里简单起见每次切换都写，
     // 空标注写空文件（= 这张图没有目标），语义正确。
     if (!m_boxes.isEmpty() || QFileInfo::exists(YoloAnnotation::labelPath(path))) {
@@ -376,7 +392,12 @@ void BoxAnnotatorDialog::onDeleteBox()
     m_boxes.removeAt(index);
     m_canvas->setBoxes(m_boxes, m_classNames);
     refreshBoxList();
-    saveCurrentImage();
+    if (!saveCurrentImage()) {
+        // 内存已删、磁盘没落（2026-10-29 r15 P2-12）：不能说"已删除"
+        m_status->setText(QStringLiteral("已从画布删除，但保存失败（磁盘满或权限？）：%1")
+                              .arg(m_currentPath));
+        return;
+    }
     m_status->setText(QStringLiteral("已删除，剩 %1 个框").arg(m_boxes.size()));
 }
 
@@ -385,7 +406,11 @@ void BoxAnnotatorDialog::onClearImage()
     m_boxes.clear();
     m_canvas->setBoxes(m_boxes, m_classNames);
     refreshBoxList();
-    saveCurrentImage();
+    if (!saveCurrentImage()) {
+        m_status->setText(QStringLiteral("画布已清空，但保存失败（磁盘满或权限？）：%1")
+                              .arg(m_currentPath));
+        return;
+    }
     m_status->setText(QStringLiteral("已清空本图（写出空 txt = 这张图没有目标）"));
 }
 

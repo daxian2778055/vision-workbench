@@ -3196,6 +3196,8 @@ void MainWindow::onExecutionStarted()
     m_execStatus->onStarted();   // 状态栏 + 计时开始 + 按钮态
     refreshAllMvsPixelFormats();
     updateEditLockForCurrentScene();
+    // 运行态变化要重算菜单可用性（2026-10-29 r15 P2-13）：打包会改活方案路径
+    applyPermissionRestrictions();
 }
 
 void MainWindow::onExecutionStopped()
@@ -3203,6 +3205,8 @@ void MainWindow::onExecutionStopped()
     m_execStatus->onStopped();   // 状态栏 + 耗时结算 + 按钮态
     refreshAllMvsPixelFormats();
     updateEditLockForCurrentScene();
+    // 运行态变化要重算菜单可用性（2026-10-29 r15 P2-13）：打包会改活方案路径
+    applyPermissionRestrictions();
 }
 
 void MainWindow::onExecutionFinished()
@@ -4070,6 +4074,16 @@ void MainWindow::setupSystemMenu()
         // 让用户选方案目录（MainWindow 没有公开的"当前方案路径"，选目录比猜更明确）。
         m_packModelsAct = ui->menuFile->addAction(QStringLiteral("打包模型与依赖…"));
         connect(m_packModelsAct, &QAction::triggered, this, [this]() {
+            // 入口再查一次（2026-10-29 r15 P2-13）：菜单可能在运行开始前就已打开
+            auto *sess = SessionManager::instance();
+            if (!sess->canEditScheme()
+                || (m_executor && !m_executor->allowsGraphEditing())) {
+                QMessageBox::warning(
+                    this, QStringLiteral("暂时不能打包"),
+                    QStringLiteral("流程正在运行，或写操作被禁止。\n"
+                                   "停止后重试；出厂口令未改时请先改密。"));
+                return;
+            }
                     const QString dir = QFileDialog::getExistingDirectory(
                         this, QStringLiteral("选择方案目录（依赖将收进 <目录>/assets/）"));
                     if (dir.isEmpty())
@@ -4215,7 +4229,12 @@ void MainWindow::applyPermissionRestrictions()
     }
     if (m_packModelsAct) {
         // 打包会改写活方案里的文件路径（2026-10-29 复核 P2-13）：写闸开着或画布锁着时不给用
-        m_packModelsAct->setEnabled(session->canEditScheme() && !session->canvasEditShouldBeLocked(m_executor && m_executor->isRunning()));
+        // 与画布锁同一判据（2026-10-29 r15 P2-13）：原先用 isRunning()，暂停等待里线程仍在跑
+        // 但已允许改图 —— 两套布尔不一致。这里统一用 !allowsGraphEditing()。
+        m_packModelsAct->setEnabled(
+            session->canEditScheme()
+            && !session->canvasEditShouldBeLocked(m_executor ? !m_executor->allowsGraphEditing()
+                                                              : false));
     }
     if (ui->menuEdit) {
         ui->menuEdit->setEnabled(session->canEditScheme());

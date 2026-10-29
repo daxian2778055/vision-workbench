@@ -43,6 +43,9 @@ ProjectPackager::Result ProjectPackager::pack(FlowScene *scene, const QString &s
         QString rel;
     };
     QVector<PendingRewrite> pending;
+    // 本轮已复制出来的目标（2026-10-29 r15 P2-13）：失败时删掉，否则残留文件会把
+    // 下一轮成功的拷贝挤成 name_2.ext
+    QStringList createdTargets;
 
     QList<NodeBase *> stableOrder;
     for (NodeBase *n : scene->nodes())
@@ -112,8 +115,12 @@ ProjectPackager::Result ProjectPackager::pack(FlowScene *scene, const QString &s
             }
             if (!QFile::copy(fi.absoluteFilePath(), target)) {
                 r.error = QStringLiteral("复制失败：%1 → %2").arg(fi.absoluteFilePath(), target);
+                // 回滚本轮已复制出的文件（P2-13）：不留下孤儿
+                for (const QString &gone : createdTargets)
+                    QFile::remove(gone);
                 return r;
             }
+            createdTargets << target;
             const QString rel = QStringLiteral("assets/") + QFileInfo(target).fileName();
             pending.append(PendingRewrite{node, spec.name, rel});
             copiedBySource.insert(srcAbs, rel);

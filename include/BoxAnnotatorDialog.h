@@ -99,4 +99,7 @@ private:
     QPushButton *m_clearBtn = nullptr;
     bool m_loading = false;
     int m_lastRow = -1;   /// 上一次成功载入的行（保存失败时回退到它）
+    /// m_boxes 属于哪个文件（2026-10-29 r15 P1-9）：currentRowChanged 进槽时行已经
+    /// 变过，用 currentImagePath() 保存会把上一张的框写进下一张的 txt。
+    QString m_currentPath;
 };

@@ -2,11 +2,15 @@
 //   1) 标注类别名白名单——`..\..\x` 这类名字能把样本写到标注目录之外（活路径，P2 修复）；
 //   2) 导出写检查——open() 成功不代表写成功，写完必须 flush + 查状态。
 #include "AnnotationLabelRule.h"
+#include "BoxAnnotatorDialog.h"
+#include "YoloAnnotation.h"
 #include "RuntimeInterface.h"
 #include "ExportWriteCheck.h"
 
 #include <QDir>
 #include <QFile>
+#include <QImage>
+#include <QListWidget>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QFileInfo>
@@ -30,6 +34,9 @@ private slots:
     void staleBindingsFindsMissingTargets();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
+    // r15 P1-9：切图保存必须写到「上一张」
+    void annotationDialogDoesNotTruncateOnOpen();
+    void annotationDialogSwitchSavesToPreviousImage();
 };
 
 void UiGuardsTest::annotationLabelAcceptsSafeNames()
@@ -250,5 +257,85 @@ void UiGuardsTest::staleBindingsTreatsUnknownNodeSetAsUnknown()
     itf.currentPage()->controls.append(c);
     QVERIFY2(itf.staleBindings({}, {}).isEmpty(), "空节点集却把节点绑定判为失效");
 }
+namespace {
+
+/// 造一个最小数据集：两张力图 + classes.txt + 第一张的已有标注
+QString makeAnnotationDataSet(const QString &root)
+{
+    QDir().mkpath(root);
+    for (int i = 0; i < 2; ++i) {
+        QImage img(64, 48, QImage::Format_RGB32);
+        img.fill(QColor(128, 128, 128));
+        img.save(QStringLiteral("%1/img%2.png").arg(root).arg(i));
+    }
+    QFile cls(root + QStringLiteral("/classes.txt"));
+    cls.open(QIODevice::WriteOnly | QIODevice::Text);
+    cls.write("part\n");
+    cls.close();
+    const QString label0 = YoloAnnotation::labelPath(root + QStringLiteral("/img0.png"));
+    QFile f(label0);
+    f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text);
+    f.write("0 0.500000 0.500000 0.500000 0.500000\n");
+    f.close();
+    return label0;
+}
+
+QString readAll(const QString &path)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly))
+        return QString();
+    return QString::fromUtf8(f.readAll());
+}
+
+/// 找出图像列表（两个 QListWidget 里，条目以 .png 结尾的那个）
+QListWidget *imageListOf(BoxAnnotatorDialog *dlg)
+{
+    for (QListWidget *w : dlg->findChildren<QListWidget *>())
+        if (w->count() > 0 && w->item(0)->text().endsWith(QStringLiteral(".png")))
+            return w;
+    return nullptr;
+}
+
+}   // namespace
+
+void UiGuardsTest::annotationDialogDoesNotTruncateOnOpen()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    const QString label0 = makeAnnotationDataSet(tmp.path());
+    const QString before = readAll(label0);
+    QVERIFY2(!before.isEmpty(), "前置条件：第一张图应已有标注");
+
+    BoxAnnotatorDialog dlg(tmp.path());
+    // 打开数据集会把第一张载入画布（setCurrentRow(0) → onImageChanged）
+    QCOMPARE(readAll(label0), before);   // 必须是逐字不变，不能变成空文件
+}
+
+void UiGuardsTest::annotationDialogSwitchSavesToPreviousImage()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    const QString label0 = makeAnnotationDataSet(tmp.path());
+    const QString label1 = YoloAnnotation::labelPath(tmp.path() + QStringLiteral("/img1.png"));
+    const int linesBefore = readAll(label0).count(QChar('\n'));
+    QCOMPARE(linesBefore, 1);
+
+    BoxAnnotatorDialog dlg(tmp.path());
+    // 在画布上"画"一个框（onBoxDrawn 是私有槽，用元对象调用，避免依赖鼠标模拟）
+    const bool invoked = QMetaObject::invokeMethod(
+        &dlg, "onBoxDrawn", Qt::DirectConnection,
+        Q_ARG(QRectF, QRectF(8, 8, 24, 16)), Q_ARG(bool, false));
+    QVERIFY2(invoked, "调用 onBoxDrawn 失败（槽被改名？）");
+
+    QListWidget *list = imageListOf(&dlg);
+    QVERIFY2(list, "找不到图像列表");
+    list->setCurrentRow(1);   // 切到第二张：应当先把第一张的 2 个框存进 img0.txt
+
+    const QString after0 = readAll(label0);
+    QCOMPARE(after0.count(QChar('\n')), 2);            // 第一张多了一个框
+    QVERIFY2(!QFile::exists(label1), "第二张的 txt 被创建了：说明保存写错了目标（P1-9）");
+}
+
 QTEST_MAIN(UiGuardsTest)
 #include "ui_guards_test.moc"

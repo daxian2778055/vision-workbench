@@ -274,36 +274,62 @@ def check_round_start_hook(repo):
 
 
 def check_param_registration(repo):
-    """INV5：run() 里读的参数必须能说清来源（2026-10-29 r14 P1-7）。
+    """INV5：run() 里读的参数必须能说清来源（2026-10-29 r14 P1-7；r15 收紧）。
 
     DnnDetectNode / ObjectCountingNode 各踩过一次：读 scale 却从未登记，QVariant::toDouble()
     把缺省读成 0 —— blobFromImage 得到全零 blob，节点仍报 moduleStatus=true，现场表现是
     "流程成功、计数 0"。这类缺陷读代码看不出来，但"读了没登记"可以静态比出来。
 
-    判据：run() 里出现的每个 m_params 键，必须满足其一 ——
-      ① init() 里登记过（面板可见、序列化能带上）；
-      ② 本文件里写过（运行期计算/缓存）；
-      ③ 在 INJECTED 名单里（框架/上游注入的约定键，注释写明理由）。
-    注意"带缺省读取"不算豁免：带缺省只是不会崩，缺省值与面板值仍可能悄悄分叉。
+    判据（r15 收紧）：run() 里出现的每个 m_params 键，必须满足其一 ——
+      ① 出现在 registerParams({...}) 或 registerParam(make*Param("键", ...)) 的**实参**里。
+         光有 make*Param 文本不算：r15 实测过"写在 registerParams 的 }); 之外、返回值被丢掉"，
+         那种写法编译通过、面板上没有，旧判据却算它已登记（P1-8）；
+      ② init 里用 sp.name = "键" 声明，且同一函数里确实 registerParam(sp)；
+      ③ 本文件里写过（运行期计算/缓存）；
+      ④ 在 INJECTED 名单里（框架/上游注入的约定键，注释写明理由）。
+
+    **已知盲区**（写在这里，别把它读成"所有读参都有登记"）：
+      · 只看 ::run( 的正文——run 调出去的函数里读的键（doSend / openConnection）不在范围内；
+      · 不看前处理几何（letterbox 与反算是否同一套 pad，那是 P1-7 的另一半）；
+      · 「本文件写过」不要求进 paramSpecs：面板看不见但 init 里赋过值的键也会绿。
     """
     findings = []
-    # 上游 ROI 注入：这三个测量节点从 m_params 读 roi*（带 0 缺省），由 ROI/上游写入，
+    # 上游 ROI 注入：三个测量节点从 m_params 读 roi*（带 0 缺省），由 ROI/上游写入，
     # 不是面板参数 —— 属框架约定，具名豁免。
     INJECTED = {"roiCol", "roiRow", "roiWidth", "roiHeight",
                 "lastInput"}   # ProtocolParseNode 的"上一条输入"缓存
     import re as _re
-    reg = _re.compile(r'(?:make\w+Param\s*\(\s*QStringLiteral|sp\.name\s*=\s*QStringLiteral)'
-                      r'\("([A-Za-z]+)"\)')
-    read = _re.compile(r'm_params(?:\]|\.value\s*\(\s*QStringLiteral|\[\s*QStringLiteral)'
-                       r'\("?([A-Za-z]+)"?\)')
-    read2 = _re.compile(r'm_params\[\s*QStringLiteral\("([A-Za-z]+)"\)\s*\]')
-    read3 = _re.compile(r'm_params\.value\s*\(\s*QStringLiteral\("([A-Za-z]+)"\)')
-    wr1 = _re.compile(r'm_params\s*\[\s*QStringLiteral\("([A-Za-z]+)"\)\s*\]\s*=')
-    wr2 = _re.compile(r'setParamDirect\s*\(\s*QStringLiteral\("([A-Za-z]+)"\)')
 
-    src_dir = os.path.join(repo, "src")
-    if not os.path.isdir(src_dir):
-        return ["source_missing: %s" % src_dir]
+    # 统一的字面量片段：QStringLiteral("键") —— 括号必须在这里，否则两侧都匹配不到
+    LIT = r'QStringLiteral\s*\(\s*"([A-Za-z][A-Za-z0-9_]*)"\s*\)'
+    decl = _re.compile(r'(?:make\w+Param\s*\(\s*|sp\.name\s*=\s*)' + LIT)
+    read1 = _re.compile(r'm_params\s*\[\s*' + LIT + r'\s*\]')
+    read2 = _re.compile(r'm_params\.value\s*\(\s*' + LIT)
+    wr1 = _re.compile(r'm_params\s*\[\s*' + LIT + r'\s*\]\s*=')
+    wr2 = _re.compile(r'setParamDirect\s*\(\s*' + LIT)
+    reg_call = _re.compile(r'registerParam(?:s)?\s*\(')
+
+    def balanced(code, open_idx):
+        """从 open_idx 处的 '(' 起做括号配对，返回块文本。"""
+        depth = 0
+        i = open_idx
+        while i < len(code):
+            if code[i] == "(":
+                depth += 1
+            elif code[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    return code[open_idx:i + 1]
+            i += 1
+        return code[open_idx:]
+
+    def registered_keys(code):
+        keys = set()
+        for m in reg_call.finditer(code):
+            keys |= set(decl.findall(balanced(code, m.end() - 1)))
+        if "registerParam(sp)" in code:
+            keys |= set(decl.findall(code))
+        return keys
 
     def body(code, sig):
         i = code.find(sig)
@@ -312,6 +338,11 @@ def check_param_registration(repo):
         j = code.find("\n}", i)
         return code[i: j if j > 0 else len(code)]
 
+    src_dir = os.path.join(repo, "src")
+    if not os.path.isdir(src_dir):
+        return ["source_missing: %s" % src_dir]
+
+    total_keys = [0]   # 全仓级"空跑"防护：正则退化时一个键都解析不出来
     for name in sorted(os.listdir(src_dir)):
         if not name.endswith(".cpp"):
             continue
@@ -323,13 +354,16 @@ def check_param_registration(repo):
         run_b = body(code, "::run(")
         if not init_b or not run_b:
             continue
-        registered = set(reg.findall(init_b))
+        registered = registered_keys(init_b)
         written = set(wr1.findall(code)) | set(wr2.findall(code))
-        read_keys = set(read.findall(run_b)) | set(read2.findall(run_b)) | set(read3.findall(run_b))
+        read_keys = set(read1.findall(run_b)) | set(read2.findall(run_b))
+        total_keys[0] += len(read_keys)
         missing = sorted(read_keys - registered - written - INJECTED)
         if missing:
             findings.append("%s run() reads but nothing registers/writes: %s"
                             % (name, ", ".join(missing)))
+    if total_keys[0] == 0:
+        findings.append("regex_degraded: 全仓未从 run() 解析出任何 m_params 键")
     return findings
 
 
