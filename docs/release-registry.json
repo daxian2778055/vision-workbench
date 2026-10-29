@@ -387,7 +387,16 @@
       "exe_bytes": 10054144,
       "package_dir": "dist/VisionFlowPlatform-rc-20261028.9",
       "recorded_at": "2026-10-28",
-      "recorded_note": "当前装机包：检测框标注（YoloAnnotation 核心 + BoxAnnotatorDialog + 9 腿），标注直接写 YOLO txt"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261029.1 取代（后者加训练编排与新机准备）"
+    },
+    {
+      "tag": "rc-20261029.1",
+      "commit": "b85f880e169d0f591ff431e1ae56122782d628e7",
+      "exe_md5": "3eef951348971a1bb6631d8449ab390a",
+      "exe_bytes": 10097152,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261029.1",
+      "recorded_at": "2026-10-29",
+      "recorded_note": "当前装机包：训练编排（环境探测/命令预览/取消）+ train-env 新机准备（README、安装/下载脚本、33 个离线轮子含 Python 3.10 安装包）"
     }
   ],
   "legacy_backfilled": [
