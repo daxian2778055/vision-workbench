@@ -55,6 +55,82 @@ void ImageReadNode::init()
     m_params[QStringLiteral("mode")] = static_cast<int>(Mode::SingleImage);
 }
 
+namespace {
+
+/// 解码缓存（r19 P1-6）：每轮 ReadImage 同一个文件是纯浪费。
+/// 键含 mtime 与 mono8：换文件/换模式自动重载。HImage 引用计数，返回值只读使用。
+HImage cachedReadImage(const QString &path, bool mono8Mode, bool *ok)
+{
+    static QMutex s_mu;
+    static QString s_key;
+    static HImage s_image;
+    *ok = false;
+    const QFileInfo fi(path);
+    const QString key = fi.exists() ? (QDir::cleanPath(path) + QLatin1Char('|')
+                                       + QString::number(fi.lastModified().toMSecsSinceEpoch())
+                                       + QLatin1Char('|') + (mono8Mode ? QStringLiteral("m")
+                                                                      : QStringLiteral("c")))
+                                    : QString();
+    if (key.isEmpty())
+        return HImage();
+
+    QMutexLocker<QMutex> locker(&s_mu);
+    if (key != s_key) {
+        HImage img;
+        try {
+            ReadImage(&img, path.toStdString().c_str());
+        } catch (HException &) {
+            s_key.clear();
+            s_image.Clear();
+            return HImage();
+        }
+        if (!img.IsInitialized()) {
+            s_key.clear();
+            s_image.Clear();
+            return HImage();
+        }
+        if (mono8Mode) {
+            try {
+                HTuple channels;
+                CountChannels(img, &channels);
+                if (channels.I() > 1) {
+                    cv::Mat src = OpencvUtil::himageToMat(img);
+                    if (!src.empty()) {
+                        cv::Mat gray;
+                        if (src.channels() == 3)
+                            cv::cvtColor(src, gray, cv::COLOR_BGR2GRAY);
+                        else
+                            gray = src;
+                        img = OpencvUtil::matToHimage(gray);
+                    }
+                }
+            } catch (HException &) {
+                // 转换失败就用原图（与旧行为一致：不因此整帧失败）
+            }
+        }
+        s_image = img;
+        s_key = key;
+    }
+    *ok = s_image.IsInitialized();
+    return s_image;
+}
+
+}   // namespace
+
+void ImageReadNode::notifyThumbnailsIfChanged()
+{
+    // 签名 = 文件数 | 当前显示索引 | 图名（r19 P1-6）：三者没变就说明缩略图区不需要重建。
+    const QString sig = QStringLiteral("%1|%2|%3")
+                            .arg(m_imageFiles.size())
+                            .arg(m_displayImageIndex)
+                            .arg(m_imageName);
+    if (sig == m_thumbSignature)
+        return;
+    m_thumbSignature = sig;
+    m_thumbnailNeedsUpdate = true;
+    emit thumbnailUpdated();
+}
+
 void ImageReadNode::run(bool autoSwitch)
 {
     // 参数唯一来源：本轮开始各取一次（局部快照）——避免逐次加锁，并保证同一轮用同一份配置
@@ -99,7 +175,7 @@ void ImageReadNode::run(bool autoSwitch)
                 m_displayImageIndex = displayIndex;
                 // 发出缩略图更新信号，确保黄色框显示
                 m_thumbnailNeedsUpdate = true;
-                emit thumbnailUpdated();
+                notifyThumbnailsIfChanged();
                 
                 // 执行完成后，如果启用了自动切换，切换到下一张图像，用于下一次执行
                 if (autoSwitchEnabled && autoSwitch) {
@@ -118,7 +194,9 @@ void ImageReadNode::run(bool autoSwitch)
             }
             
             VFP_DEBUG << "Reading image:" << currentImagePath;
-            ReadImage(&m_outputImage, currentImagePath.toStdString().c_str());
+            // 每轮 ReadImage 同一个文件是纯浪费（r19 P1-6）：按 (路径, mtime, mono8) 缓存
+            bool cachedOk = false;
+            m_outputImage = cachedReadImage(currentImagePath, mono8Mode, &cachedOk);
             VFP_DEBUG << "Image read successfully";
             
             // Check if image is initialized
@@ -152,27 +230,9 @@ void ImageReadNode::run(bool autoSwitch)
                 VFP_DEBUG << "Pixel format:" << m_pixelFormat;
                 VFP_DEBUG << "Image name:" << m_imageName;
                 
-                // Apply mono8 mode if enabled
+                // mono8 转换已并入 cachedReadImage（r19 P1-6）：这里只回填格式标签
                 if (mono8Mode) {
-                    HTuple channels;
-                    CountChannels(m_outputImage, &channels);
-                    if (channels.I() > 1) {
-                        VFP_DEBUG << "Converting color image to grayscale for mono8 mode";
-                        cv::Mat src = OpencvUtil::himageToMat(HImage(m_outputImage));
-                        if (!src.empty()) {
-                            cv::Mat gray;
-                            if (src.channels() == 3)
-                                cv::cvtColor(src, gray, cv::COLOR_BGR2GRAY);
-                            else
-                                gray = src;
-                            m_outputImage = OpencvUtil::matToHimage(gray);
-                        }
-                        m_pixelFormat = "mono8";
-                        VFP_DEBUG << "Image converted to grayscale";
-                    } else {
-                        // 如果已经是单通道图像，也设置为mono8
-                        m_pixelFormat = "mono8";
-                    }
+                    m_pixelFormat = "mono8";
                 }
                 
                 // Set output data - 图像数据到端口0
@@ -189,7 +249,7 @@ void ImageReadNode::run(bool autoSwitch)
                 emit imageRead(m_outputImage);
                 // Emit signal to update thumbnails, ensure yellow frame shows correctly
                 VFP_DEBUG << "Emitting thumbnailUpdated signal";
-                emit thumbnailUpdated();
+                notifyThumbnailsIfChanged();
             } else {
                 VFP_DEBUG << "Error: Image is not initialized after ReadImage";
                 // 更新模块状态参数 - 执行失败
@@ -351,7 +411,7 @@ bool ImageReadNode::process() {
         m_displayImageIndex = 0;
         // 设置标志而不是直接发射信号，因为参数面板可能还没有创建
         m_thumbnailNeedsUpdate = true;
-        emit thumbnailUpdated();
+        notifyThumbnailsIfChanged();
     }
     
     run(true); // 自动切换到下一张图像

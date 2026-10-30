@@ -54,6 +54,10 @@ private:
     QString m_pixelFormat;
     QString m_imageName;
     bool m_thumbnailNeedsUpdate;
+    /// 缩略图通知签名（r19 P1-6）：文件集/当前索引/图名没变就不发——
+    /// 每轮都发会让 MainWindow 清空重建所有缩略图控件与 QPixmap。
+    QString m_thumbSignature;
+    void notifyThumbnailsIfChanged();
     void updateImageFiles();
     void selectMultipleFiles();
     
