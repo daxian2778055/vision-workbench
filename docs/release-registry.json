@@ -549,7 +549,16 @@
       "exe_bytes": 10145280,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.10",
       "recorded_at": "2026-10-30",
-      "recorded_note": "当前装机包：r19 P1-12——串口端口挪到专属 IO 线程（创建/读写/关闭同线程，消除 QIODevice 跨线程 UB）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.11 取代（后者收 r19 P1-11）"
+    },
+    {
+      "tag": "rc-20261030.11",
+      "commit": "8be28d91fc4d0f0e1581cdefdde0a1e2175f7242",
+      "exe_md5": "fffc751b3cdc0a6093e6b25db6412060",
+      "exe_bytes": 10145280,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.11",
+      "recorded_at": "2026-10-30",
+      "recorded_note": "当前装机包：r19 P1-11——轮级发送失败计数，执行器在写结果前把本轮判失败（链路断开不再谎报通过）"
     }
   ],
   "legacy_backfilled": [
