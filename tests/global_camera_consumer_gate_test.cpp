@@ -9,6 +9,9 @@
 // 拆全场（关机清理）或自己是唯一消费者（自动重连）时才 force。
 // 本用例不需要真机：闸在"取句柄"之前执行，账目可直接验。
 #include "GlobalCameraManager.h"
+#include <QMutex>
+#include <atomic>
+#include <thread>
 
 #include <QtTest/QtTest>
 
@@ -20,6 +23,8 @@ private slots:
     void closeRefusedWhileConsumersExist();
     void forceOverridesConsumerGate();
     void closeAllowedAfterLastConsumerLeaves();
+    // r19 P1-4：同一句柄的 SDK 调用必须串行（并发取图是 UB）
+    void sdkMutexIsPerHandle();
 };
 
 namespace {
@@ -67,6 +72,34 @@ void GlobalCameraConsumerGateTest::closeAllowedAfterLastConsumerLeaves()
     m->markCameraUnused(kCam, QStringLiteral("consumer-A"));
     QVERIFY(m->consumersForCamera(kCam).isEmpty());
     QVERIFY2(m->closeCamera(kCam), "最后一个消费者离开后仍拒绝关闭（闸把相机永久锁死了）");
+}
+
+void GlobalCameraConsumerGateTest::sdkMutexIsPerHandle()
+{
+    // ① 同一句柄 → 同一把锁
+    void *h1 = reinterpret_cast<void *>(0x1000);
+    void *h2 = reinterpret_cast<void *>(0x2000);
+    QVERIFY(&GlobalCameraManager::sdkMutexFor(h1) == &GlobalCameraManager::sdkMutexFor(h1));
+    // ② 不同句柄 → 不同锁（一把全局锁会把两台相机也串成一台）
+    QVERIFY(&GlobalCameraManager::sdkMutexFor(h1) != &GlobalCameraManager::sdkMutexFor(h2));
+
+    // ③ 两线程抢同一句柄的锁：临界区必须互斥
+    std::atomic<int> inside(0);
+    std::atomic<int> overlaps(0);
+    auto worker = [&]() {
+        for (int i = 0; i < 200; ++i) {
+            QMutexLocker locker(&GlobalCameraManager::sdkMutexFor(h1));
+            if (inside.fetch_add(1) != 0)
+                ++overlaps;
+            std::this_thread::yield();
+            inside.fetch_sub(1);
+        }
+    };
+    std::thread a(worker);
+    std::thread b(worker);
+    a.join();
+    b.join();
+    QCOMPARE(int(overlaps), 0);   // 同一句柄的临界区从不重叠
 }
 
 QTEST_MAIN(GlobalCameraConsumerGateTest)

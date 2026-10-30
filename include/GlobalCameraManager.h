@@ -36,6 +36,11 @@ class GlobalCameraManager : public QObject
     Q_OBJECT
 
 public:
+
+    /// 按句柄的 SDK 互斥（2026-10-30 r19 P1-4）：MVS SDK 对同一 handle 并发调用
+/// 是 UB——两个节点共用一个全局相机时，取图/软触发/启停采集必须串行。
+/// 返回的是**同一句柄同一把锁**（句柄销毁后可复用，锁本身只是一把互斥）。
+    static QMutex &sdkMutexFor(void *handle);
     struct Camera {
         QString name;           // 全局相机名称
         QString deviceName;     // 绑定的设备名称

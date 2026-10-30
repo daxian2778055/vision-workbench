@@ -1,4 +1,5 @@
 #include "GlobalCameraManager.h"
+#include <QHash>
 #include <QMutex>
 #include <QFile>
 #include <QSaveFile>
@@ -8,6 +9,19 @@
 #include "AppLog.h"
 #include "MvCameraControl.h"
 #include "PixelType.h"
+
+QMutex &GlobalCameraManager::sdkMutexFor(void *handle)
+{
+    // 按句柄分锁（r19 P1-4）：一把全局锁会把两台相机也串成一台；
+    // 表本身由 s_mapMutex 保护，条目只增不减（句柄数量有界，锁对象极小）。
+    static QMutex s_mapMutex;
+    static QHash<void *, QMutex *> s_locks;
+    QMutexLocker mapLocker(&s_mapMutex);
+    QMutex *&slot = s_locks[handle];
+    if (!slot)
+        slot = new QMutex();
+    return *slot;
+}
 
 GlobalCameraManager *GlobalCameraManager::instance()
 {

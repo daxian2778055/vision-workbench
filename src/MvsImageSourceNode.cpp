@@ -439,6 +439,9 @@ bool MvsImageSourceNode::grabImage()
 
         // 软触发模式：取图前下发软件触发命令
         {
+            // 同一句柄的 SDK 调用必须串行（r19 P1-4）：两个节点共用一个全局相机时，
+            // 并发调 MVS SDK 是 UB。取图/软触发都进这把按句柄的锁。
+            QMutexLocker sdkLocker(&GlobalCameraManager::sdkMutexFor(m_hCamera));
             QMutexLocker locker(&m_mutex);
             if (m_triggerMode == SOFTWARE_TRIGGER) {
                 MV_CC_SetCommandValue(m_hCamera, "TriggerSoftware");
@@ -452,7 +455,11 @@ bool MvsImageSourceNode::grabImage()
             hardwareWait = (ctx->flowMode() == FlowMode::HardwareTrigger);
         }
 
-        int nRet = MV_CC_GetOneFrameTimeout(m_hCamera, imgBuf, nDataSize, &frameInfo, 1000);
+        int nRet = MV_OK;
+        {
+            QMutexLocker sdkLocker(&GlobalCameraManager::sdkMutexFor(m_hCamera));   // r19 P1-4
+            nRet = MV_CC_GetOneFrameTimeout(m_hCamera, imgBuf, nDataSize, &frameInfo, 1000);
+        }
         if (nRet != MV_OK && hardwareWait) {
             // 超时未取到帧：若流程仍在运行则继续等待下一次硬件触发。
             // 单次等待用 200ms（而非 1s）：FlowExecutor::stopExecution 只能在节点边界生效，
@@ -463,7 +470,10 @@ bool MvsImageSourceNode::grabImage()
                 if (!stillRunning) {
                     break;
                 }
-                nRet = MV_CC_GetOneFrameTimeout(m_hCamera, imgBuf, nDataSize, &frameInfo, 200);
+                {
+                    QMutexLocker sdkLocker(&GlobalCameraManager::sdkMutexFor(m_hCamera));
+                    nRet = MV_CC_GetOneFrameTimeout(m_hCamera, imgBuf, nDataSize, &frameInfo, 200);
+                }
             }
         }
         if (nRet != MV_OK) {
@@ -653,6 +663,17 @@ bool MvsImageSourceNode::openCamera()
         void* cameraHandle = manager->getCameraHandle(m_globalCameraName);
         if (cameraHandle) {
             m_hCamera = cameraHandle;
+            // 采用句柄也要查 PayloadSize（r19 P1-4）：默认 10MB 缓冲装不下高分辨率帧
+            //（2448x2048 RGB8 约 15MB），现场表现为每帧取图失败 + 重连风暴。
+            {
+                MVCC_INTVALUE stIntParam;
+                memset(&stIntParam, 0, sizeof(MVCC_INTVALUE));
+                if (MV_CC_GetIntValue(cameraHandle, "PayloadSize", &stIntParam) == MV_OK
+                    && stIntParam.nCurValue > 0) {
+                    m_payloadSize = static_cast<unsigned int>(stIntParam.nCurValue);
+                    VFP_DEBUG << "采用句柄的 PayloadSize:" << m_payloadSize;
+                }
+            }
             m_cameraOpened = true;
             VFP_DEBUG << "直接使用全局相机句柄，相机已打开";
             emit cameraStatusChanged(true);
@@ -730,7 +751,12 @@ void MvsImageSourceNode::openCameraInThread()
         // 开始采集
         nRet = MV_CC_StartGrabbing(hCamera);
         if (nRet != MV_OK) {
+            // 失败就别报"已打开"（r19 P2 同族）：后续每帧取图必失败，还会触发重连风暴
             VFP_DEBUG << "开始采集失败，错误码:" << nRet;
+            MV_CC_CloseDevice(hCamera);
+            MV_CC_DestroyHandle(hCamera);
+            emit cameraStatusChanged(false);
+            return;
         }
 
         // 查询单帧数据量，动态分配取图缓冲（高分辨率相机 >10MB 时原固定缓冲会取图失败）
