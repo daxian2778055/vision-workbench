@@ -41,6 +41,12 @@ class FlowExecutor : public QThread
     Q_OBJECT
 
 public:
+
+    /// 落库失败兜底（2026-10-30 r19 P1-1）：批次绝不静默丢——重试后仍失败就落 JSONL。
+    /// 落盘路径与库同目录（inspection-spill.jsonl），现场可直接发回开发。
+    static QString spillFilePath(const QString &dbPath);
+    static bool spillBatchToDisk(const QString &dbPath, const QList<InspectionRecord> &batch,
+                                 QString *writtenPath = nullptr);
     /// 构造：**不接受父对象**（U-203 期：删除权归令牌，父对象是第二条删除路径）。
     /// 析构在 C++ 里是隐式 public 的，这里刻意把它收进 private 段——直接 delete 本体的写法
     /// 因此**编译期就写不出来**，不是靠约定。

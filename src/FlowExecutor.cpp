@@ -1,4 +1,11 @@
 #include "FlowExecutor.h"
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QFile>
+#include <QThread>
+#include <QTextStream>
+#include <QFileInfo>
+#include <QDir>
 #include "FlowScene.h"
 #include "SessionManager.h"   // 173 行：闸开不发新跑的外部触发 idle 位判定
 #include "NodeBase.h"
@@ -1407,6 +1414,46 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
     m_lastNodeSuccess = success;
 }
 
+QString FlowExecutor::spillFilePath(const QString &dbPath)
+{
+    return QFileInfo(dbPath).absolutePath() + QStringLiteral("/inspection-spill.jsonl");
+}
+
+bool FlowExecutor::spillBatchToDisk(const QString &dbPath, const QList<InspectionRecord> &batch,
+                                    QString *writtenPath)
+{
+    if (batch.isEmpty())
+        return true;
+    const QString path = spillFilePath(dbPath);
+    // 兜底目录也要能建（库目录可能不存在——"库没建成"本身就是写库失败的一种）
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QFile f(path);
+    if (!f.open(QIODevice::Append | QIODevice::Text))
+        return false;
+    QTextStream ts(&f);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    ts.setEncoding(QStringConverter::Utf8);
+#else
+    ts.setCodec("UTF-8");
+#endif
+    for (const InspectionRecord &r : batch) {
+        // 走 QJsonDocument 做转义（换行/引号/反斜杠都交它，自己拼容易漏）
+        QJsonObject obj;
+        obj.insert(QStringLiteral("ts"), r.timestamp.toString(Qt::ISODateWithMs));
+        obj.insert(QStringLiteral("flow"), r.flowName);
+        obj.insert(QStringLiteral("node"), r.nodeName);
+        obj.insert(QStringLiteral("passed"), r.passed);
+        obj.insert(QStringLiteral("value"), r.value);
+        ts << QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)) << "\n";
+    }
+    ts.flush();
+    const bool ok = (f.flush() && f.error() == QFileDevice::NoError);
+    f.close();
+    if (ok && writtenPath)
+        *writtenPath = path;
+    return ok;
+}
+
 void FlowExecutor::flushPendingResults()
 {
     // 把按轮缓冲的节点记录批量落库（单个事务）。未启用数据库（databasePath 为空）时
@@ -1421,12 +1468,33 @@ void FlowExecutor::flushPendingResults()
         // 库被占用…），每轮的全部检测结果连同「整轮汇总」都会静默消失——
         // 报表与追溯凭空少一段，而界面一切正常。
         // 失败必须让操作员当场看见；但不据此停止流程：记录失败不该挡住检测本身。
-        if (!AppDatabase::instance()->saveInspectionResults(batch)) {
-            const QString detail = AppDatabase::instance()->lastDatabaseError();
-            VFP_EXEC_DEBUG << "Round results not saved:" << batch.size() << detail;
-            emit executionError(QStringLiteral("本轮 %1 条检测结果未能写入数据库（报表/追溯会缺这一段）：%2")
-                                    .arg(batch.size())
-                                    .arg(detail));
+        // 有界重试（2026-10-30 r19 P1-1）：瞬时 SQLITE_BUSY / 连接未开不该吃掉整轮
+        const QString dbPath = AppDatabase::instance()->databasePath();
+        bool saved = false;
+        QString detail;
+        for (int attempt = 0; attempt < 3 && !saved; ++attempt) {
+            if (attempt > 0)
+                QThread::msleep(attempt == 1 ? 50 : 150);
+            saved = AppDatabase::instance()->saveInspectionResults(batch);
+            if (!saved)
+                detail = AppDatabase::instance()->lastDatabaseError();
+        }
+        if (!saved) {
+            // 三次仍失败：落 JSONL 兜底，**不静默丢**（r19 P1-1）
+            QString spilled;
+            const bool spilledOk = spillBatchToDisk(dbPath, batch, &spilled);
+            VFP_EXEC_DEBUG << "Round results not saved:" << batch.size() << detail
+                           << "spilled=" << spilledOk << spilled;
+            emit executionError(
+                spilledOk
+                    ? QStringLiteral("本轮 %1 条检测结果未能写入数据库（报表/追溯会缺这一段）：%2。"
+                                     "已落到 %3（JSONL，可重放入库；现场把该文件发回开发即可）")
+                          .arg(batch.size())
+                          .arg(detail)
+                          .arg(spilled)
+                    : QStringLiteral("本轮 %1 条检测结果未能写入数据库，且落盘兜底也失败：%2")
+                          .arg(batch.size())
+                          .arg(detail));
         }
     }
 }

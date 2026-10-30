@@ -32,6 +32,7 @@
 #include "DataObject.h"
 #include "OpencvUtil.h"
 #include "AppDatabase.h"     // P1：「数据记录」算子真写库，本套件得给它一条可用的连接
+#include "FlowExecutor.h"    // r19 P1-1：落库失败兜底（spillBatchToDisk）的腿
 #include "RecordNode.h"
 #include <QDateTime>
 #include <QTemporaryDir>
@@ -926,11 +927,65 @@ private slots:
                             + wronglySucceeded.join(QStringLiteral(", "))));
     }
 
+    // r19 P1-1：落库失败时批次落 JSONL，绝不静默丢
+    void spillBatchWritesJsonl();
+
 private:
     /// 「数据记录」算子落库用的临时库目录（与生产 data/visionflow.db 隔离）。
     /// 注：进程结束时这条连接仍未关，临时目录可能删不掉——与 DatabaseTest 的 m_tempDir 同现状。
     QTemporaryDir m_dbDir;
 };
+
+void NodeExecuteSmokeTest::spillBatchWritesJsonl()
+{
+    // r19 P1-1：写库失败时批次落 JSONL —— 逐行可解析、字段齐全、路径可预期
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    const QString dbPath = tmp.path() + QStringLiteral("/db/visionflow.db");
+
+    QList<InspectionRecord> batch;
+    InspectionRecord a;
+    a.flowName = QStringLiteral("产线A");
+    a.nodeName = QStringLiteral("检测(1)");
+    a.passed = true;
+    a.value = QStringLiteral("OK\n第二行\"引号\"\\反斜杠");
+    a.timestamp = QDateTime::fromString(QStringLiteral("2026-10-30T10:00:00.000"),
+                                        Qt::ISODateWithMs);
+    batch << a;
+    InspectionRecord b;
+    b.flowName = QStringLiteral("产线B");
+    b.nodeName = QStringLiteral("(整轮汇总)");
+    b.passed = false;
+    b.value = QStringLiteral("NG");
+    b.timestamp = a.timestamp;
+    batch << b;
+
+    QString written;
+    QVERIFY2(FlowExecutor::spillBatchToDisk(dbPath, batch, &written),
+             "落盘兜底失败：批次会被静默丢弃（P1-1 的核心）");
+    QCOMPARE(written, FlowExecutor::spillFilePath(dbPath));
+    QVERIFY(QFile::exists(written));
+
+    QFile f(written);
+    QVERIFY(f.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QStringList lines =
+        QString::fromUtf8(f.readAll()).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    QCOMPARE(int(lines.size()), 2);
+    for (const QString &line : lines) {
+        const QJsonObject obj = QJsonDocument::fromJson(line.toUtf8()).object();
+        QVERIFY2(!obj.isEmpty(), qPrintable(QStringLiteral("不是合法 JSONL：%1").arg(line)));
+        QVERIFY(obj.contains(QStringLiteral("ts")));
+        QVERIFY(obj.contains(QStringLiteral("flow")));
+        QVERIFY(obj.contains(QStringLiteral("node")));
+        QVERIFY(obj.contains(QStringLiteral("passed")));
+        QVERIFY(obj.contains(QStringLiteral("value")));
+    }
+    const QJsonObject first = QJsonDocument::fromJson(lines.first().toUtf8()).object();
+    QCOMPARE(first.value(QStringLiteral("value")).toString(), a.value);
+    QCOMPARE(first.value(QStringLiteral("flow")).toString(), a.flowName);
+
+    QVERIFY(FlowExecutor::spillBatchToDisk(dbPath, QList<InspectionRecord>(), nullptr));
+}
 
 QTEST_MAIN(NodeExecuteSmokeTest)
 #include "node_execute_smoke_test.moc"
