@@ -1,4 +1,5 @@
 #include "AppDatabase.h"
+#include <atomic>
 #include "AppLog.h"
 #include "SchemeCrypto.h"
 #include "SessionManager.h"
@@ -12,7 +13,29 @@
 #include <QStringList>
 #include <QThread>
 
-static QMutex s_dbMutex;
+// 2026-10-30 r19 P1-2：全局一把锁拆三份 ——
+//   s_connMutex：只保护「按线程取连接」的 Qt 连接注册表（短，threadDatabase 内部用）；
+//   s_writeMutex：串行化写事务（落库/建表/清理/改账号）；
+//   读接口**两把都不拿**：各自用本线程连接，WAL 下读者与写者本就可并发。
+// 动机：原先 25 处一把 s_writeMutex，GUI 大查询（每 60 秒 5 万行、报表 20 万行）
+// 会堵住执行器的轮末落库（r19 P1-2）。
+static QMutex s_connMutex;
+static QMutex s_writeMutex;
+// 写锁持有计数（2026-10-30 r19 P1-2）：把「写正在持锁」变成可观测事实，
+// 测试据此判断读者写者是否真并发（时序采样会被置标志与抢锁之间的空隙骗过）。
+static std::atomic<int> s_writeLockHolders{0};
+namespace {
+struct WriteLock {
+    QMutexLocker<QMutex> locker;
+    explicit WriteLock(QMutex *m) : locker(m) { ++s_writeLockHolders; }
+    ~WriteLock() { --s_writeLockHolders; }
+};
+}   // namespace
+
+bool AppDatabase::writeLockHeldForTest()
+{
+    return s_writeLockHolders.load() > 0;
+}
 
 namespace {
 // ---- 时间戳口径（2026-10-25 复核 P1）----
@@ -157,7 +180,7 @@ bool AppDatabase::execRead(QSqlQuery &q, const QSqlDatabase &db, const QString &
 
 QString AppDatabase::lastDatabaseError() const
 {
-    QMutexLocker locker(&s_dbMutex);
+    WriteLock locker(&s_writeMutex);
     return m_lastDatabaseError;
 }
 
@@ -229,7 +252,7 @@ bool AppDatabase::verifyPassword(const QString &password, const QString &stored)
 
 bool AppDatabase::initialize(const QString &dbPath)
 {
-    QMutexLocker locker(&s_dbMutex);
+    WriteLock locker(&s_writeMutex);
 
     if (!dbPath.isEmpty()) {
         m_dbPath = dbPath;
@@ -279,6 +302,8 @@ bool AppDatabase::initialize(const QString &dbPath)
 
 QSqlDatabase AppDatabase::threadDatabase() const
 {
+    // Qt 的连接注册表不是线程安全的；这里只锁取连接这一段（P1-2 拆锁）
+    QMutexLocker connLocker(&s_connMutex);
     // 初始化线程（主线程）直接复用已打开的 m_db，避免多开一条无用连接
     if (m_ownerThread && m_ownerThread == QThread::currentThread() && m_db.isValid())
         return m_db;
@@ -448,7 +473,7 @@ bool AppDatabase::createTables()
 
 int AppDatabase::addAlarm(const QString &module, const QString &level, const QString &message)
 {
-    QMutexLocker locker(&s_dbMutex);
+    WriteLock locker(&s_writeMutex);
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
     if (!prepareWrite(q, db,
@@ -468,7 +493,6 @@ int AppDatabase::addAlarm(const QString &module, const QString &level, const QSt
 
 QList<AlarmRecord> AppDatabase::queryAlarms(const QDateTime &from, const QDateTime &to, int limit) const
 {
-    QMutexLocker locker(&s_dbMutex);
     QList<AlarmRecord> records;
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
@@ -502,7 +526,7 @@ bool AppDatabase::saveInspectionResults(const QList<InspectionRecord> &records)
     if (records.isEmpty()) {
         return true;   // 空批不产生事务
     }
-    QMutexLocker locker(&s_dbMutex);
+    WriteLock locker(&s_writeMutex);
     // 注意：不能用 const —— QSqlDatabase::transaction/commit/rollback 都是非 const 成员
     QSqlDatabase db = threadDatabase();
     const QString op = QStringLiteral("saveInspectionResults(%1)").arg(records.size());
@@ -558,7 +582,7 @@ bool AppDatabase::saveInspectionResults(const QList<InspectionRecord> &records)
 bool AppDatabase::saveInspectionResult(const QString &flowName, const QString &nodeName,
                                         bool passed, const QString &value)
 {
-    QMutexLocker locker(&s_dbMutex);
+    WriteLock locker(&s_writeMutex);
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
     if (!prepareWrite(q, db,
@@ -580,7 +604,6 @@ bool AppDatabase::saveInspectionResult(const QString &flowName, const QString &n
 
 QList<InspectionRecord> AppDatabase::queryResults(const QDateTime &from, const QDateTime &to, int limit) const
 {
-    QMutexLocker locker(&s_dbMutex);
     QList<InspectionRecord> records;
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
@@ -612,7 +635,7 @@ QList<InspectionRecord> AppDatabase::queryResults(const QDateTime &from, const Q
 
 bool AppDatabase::addUser(const QString &name, const QString &password, const QString &role)
 {
-    QMutexLocker locker(&s_dbMutex);
+    WriteLock locker(&s_writeMutex);
     // W-1①：闸必须落在这里。此前"用户管理需 Admin"只在菜单置灰上体现，而
     // enforceFactoryPasswordPolicy() 的文案宣称用户管理已被禁止——拿到出厂口令的人
     // 仍能建一个 Admin 账户当后门。落库层拒绝才是 fail-closed。
@@ -645,7 +668,7 @@ bool AppDatabase::authenticateUser(const QString &name, const QString &password,
     if (readFailed) {
         *readFailed = false;
     }
-    QMutexLocker locker(&s_dbMutex);
+    WriteLock locker(&s_writeMutex);
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
     if (!prepareRead(q, db, QStringLiteral("SELECT id, password_hash FROM users WHERE name = ?"),
@@ -699,7 +722,7 @@ bool AppDatabase::authenticateUser(const QString &name, const QString &password,
 
 bool AppDatabase::changeUserPassword(const QString &name, const QString &newPassword)
 {
-    QMutexLocker locker(&s_dbMutex);
+    WriteLock locker(&s_writeMutex);
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
     if (!prepareWrite(q, db,
@@ -724,9 +747,8 @@ bool AppDatabase::changeUserPassword(const QString &name, const QString &newPass
 
 AdminPasswordState AppDatabase::adminPasswordState() const
 {
-    // 不能复用 authenticateUser()：它自己锁 s_dbMutex，而 QMutex 不可重入，这里再锁一次即自锁。
+    // 不能复用 authenticateUser()：它自己锁 s_writeMutex，而 QMutex 不可重入，这里再锁一次即自锁。
     // 只做读+校验，不做旧版哈希迁移（那是登录路径的事）。
-    QMutexLocker locker(&s_dbMutex);
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
     if (!prepareRead(q, db, QStringLiteral("SELECT password_hash FROM users WHERE name = ?"),
@@ -747,7 +769,6 @@ AdminPasswordState AppDatabase::adminPasswordState() const
 
 AccountSurface AppDatabase::accountSurface() const
 {
-    QMutexLocker locker(&s_dbMutex);
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
     if (!prepareRead(q, db, QStringLiteral("SELECT COUNT(*) FROM users"),
@@ -767,7 +788,6 @@ AccountSurface AppDatabase::accountSurface() const
 
 QList<UserRecord> AppDatabase::queryUsers() const
 {
-    QMutexLocker locker(&s_dbMutex);
     QList<UserRecord> records;
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
@@ -789,7 +809,7 @@ QList<UserRecord> AppDatabase::queryUsers() const
 
 bool AppDatabase::removeUser(const QString &name)
 {
-    QMutexLocker locker(&s_dbMutex);
+    WriteLock locker(&s_writeMutex);
     if (const QString refusal = SessionManager::instance()->writeGateRefusal(); !refusal.isEmpty()) {
         VFP_DEBUG << "用户删除被写操作闸拒绝:" << name << refusal;
         return false;
@@ -819,7 +839,7 @@ bool AppDatabase::removeUser(const QString &name)
 
 void AppDatabase::logOperation(const QString &user, const QString &action, const QString &detail)
 {
-    QMutexLocker locker(&s_dbMutex);
+    WriteLock locker(&s_writeMutex);
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
     // 返回 void：操作日志写不进去不该挡住业务动作，但失败必须留痕（原实现 prepare 没查，
@@ -840,7 +860,6 @@ void AppDatabase::logOperation(const QString &user, const QString &action, const
 QList<OperationLogRecord> AppDatabase::queryOperationLogs(const QDateTime &from, const QDateTime &to,
                                                            int limit) const
 {
-    QMutexLocker locker(&s_dbMutex);
     QList<OperationLogRecord> records;
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
@@ -869,7 +888,7 @@ QList<OperationLogRecord> AppDatabase::queryOperationLogs(const QDateTime &from,
 
 int AppDatabase::purgeOldRecords(int retainDays)
 {
-    QMutexLocker locker(&s_dbMutex);
+    WriteLock locker(&s_writeMutex);
 
     if (retainDays < 1) retainDays = 30;
     // cutoff 与存储同口径（UTC）：用本地时间串会让清理边界比预期早一个时区偏移
@@ -914,7 +933,7 @@ int AppDatabase::purgeOldRecords(int retainDays)
 
 bool AppDatabase::saveFeatureSample(const FeatureSample &sample)
 {
-    QMutexLocker locker(&s_dbMutex);
+    WriteLock locker(&s_writeMutex);
     if (const QString refusal = SessionManager::instance()->writeGateRefusal(); !refusal.isEmpty()) {
         VFP_DEBUG << "特征样本保存被写操作闸拒绝:" << sample.name << refusal;
         return false;
@@ -944,7 +963,6 @@ bool AppDatabase::saveFeatureSample(const FeatureSample &sample)
 
 QList<FeatureSample> AppDatabase::loadFeatureSamples(const QString &detector) const
 {
-    QMutexLocker locker(&s_dbMutex);
     QList<FeatureSample> out;
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
@@ -987,7 +1005,6 @@ QList<FeatureSample> AppDatabase::loadFeatureSamplesMeta(const QString &detector
 {
     // 元数据查询（2026-10-27 P3-4）：检索/按名查找不需要图像 BLOB——样本多了每次检索
     // 都搬几百 MB，现场明显卡顿。图像只在预览时取。
-    QMutexLocker locker(&s_dbMutex);
     QList<FeatureSample> out;
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
@@ -1020,7 +1037,7 @@ QList<FeatureSample> AppDatabase::loadFeatureSamplesMeta(const QString &detector
 
 bool AppDatabase::deleteFeatureSample(int id)
 {
-    QMutexLocker locker(&s_dbMutex);
+    WriteLock locker(&s_writeMutex);
     if (const QString refusal = SessionManager::instance()->writeGateRefusal(); !refusal.isEmpty()) {
         VFP_DEBUG << "特征样本删除被写操作闸拒绝:" << id << refusal;
         return false;
@@ -1038,7 +1055,7 @@ bool AppDatabase::deleteFeatureSample(int id)
 
 bool AppDatabase::clearFeatureSamples()
 {
-    QMutexLocker locker(&s_dbMutex);
+    WriteLock locker(&s_writeMutex);
     if (const QString refusal = SessionManager::instance()->writeGateRefusal(); !refusal.isEmpty()) {
         VFP_DEBUG << "特征库清空被写操作闸拒绝:" << refusal;
         return false;
@@ -1056,7 +1073,6 @@ FeatureSample AppDatabase::loadFeatureSampleByName(const QString &name) const
 {
     // 按名取单行（含图像 BLOB）：FeatureMatch 按名做参照时用——比"整库读完再找名"
     // 省掉全部图像传输（2026-10-27 P3-4）。
-    QMutexLocker locker(&s_dbMutex);
     FeatureSample s;
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);

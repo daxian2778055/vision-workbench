@@ -26,6 +26,8 @@
 #include <QCryptographicHash>
 
 #include "AppDatabase.h"
+#include <atomic>
+#include <thread>
 #include "SchemeCrypto.h"
 #include "RecordNode.h"
 #include "DataObject.h"
@@ -119,6 +121,9 @@ private slots:
     void testPurgeKeepsRowsInsideRetentionWindow();
     // ⚠️ 必须排在最后：本腿会 DROP 掉 inspection_results 来复现"表不在"的写失败路径
     void testWriteFailureIsVisibleAndNotMisleading();
+
+    // r19 P1-2：拆锁后读者写者要能真并发（写不被饿死、读不读到半事务）
+    void concurrentReadDoesNotBlockWriter();
 
 private:
     QTemporaryDir m_tempDir;
@@ -943,6 +948,94 @@ void DatabaseTest::testLowIterationTokenIsUpgradedOnLogin()
     }
     QSqlDatabase::removeDatabase(QStringLiteral("p21_probe_kdf2"));
 }
+
+void DatabaseTest::concurrentReadDoesNotBlockWriter()
+{
+    // r19 P1-2：原先 25 处一把 s_dbMutex，GUI 大查询会堵住执行器的轮末落库。
+    // 这条腿钉的是**真并发**：写线程在一次长事务里持锁期间，读线程必须仍能完成查询。
+    // 旧的单锁形态下读只能等写放锁 → readsDuringWrites 为 0 → 判红。
+    AppDatabase *db = AppDatabase::instance();
+    QVERIFY2(!db->databasePath().isEmpty(), "本腿需要一条可用的数据库连接");
+
+    // 自给自足：前面的用例（testReadFailureIsAlsoVisible）会故意把库弄坏来测失败可见性，
+    // 这里自己把表建好，不依赖任何前置状态
+    {
+        QSqlDatabase probe = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                       QStringLiteral("p12_setup"));
+        probe.setDatabaseName(db->databasePath());
+        QVERIFY2(probe.open(), qPrintable(probe.lastError().text()));
+        QSqlQuery q(probe);
+        QVERIFY2(q.exec(QStringLiteral(
+                       "CREATE TABLE IF NOT EXISTS inspection_results ("
+                       " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                       " flow_name TEXT NOT NULL, node_name TEXT NOT NULL,"
+                       " passed INTEGER NOT NULL, value TEXT,"
+                       " timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)")),
+                 qPrintable(q.lastError().text()));
+        probe.close();
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("p12_setup"));
+
+    // 一批足够大：让单次写事务持续几十毫秒以上（给读线程稳定的重叠窗口）
+    QList<InspectionRecord> big;
+    for (int i = 0; i < 20000; ++i) {
+        InspectionRecord r;
+        r.flowName = QStringLiteral("P12-并发腿-自清理");
+        r.nodeName = QStringLiteral("节点%1").arg(i);
+        r.passed = true;
+        r.value = QString::number(i);
+        r.timestamp = QDateTime::currentDateTime();
+        big << r;
+    }
+
+    std::atomic<bool> writerDone(false);
+    std::atomic<int> writes(0);
+    std::atomic<int> readsDuringWrites(0);
+    std::atomic<int> readsTotal(0);
+
+    std::thread reader([&]() {
+        while (!writerDone) {
+            // 用「写锁被持有」这个可观测事实判重叠（2026-10-30）：时序采样会被
+            // 「置标志与抢锁之间的空隙」骗过（实测踩过，单锁形态也判绿）。
+            const bool heldBefore = AppDatabase::writeLockHeldForTest();
+            db->queryResults(QDateTime(), QDateTime(), 500);
+            if (heldBefore && AppDatabase::writeLockHeldForTest())
+                ++readsDuringWrites;
+            ++readsTotal;
+        }
+    });
+    // 先让读者转起来，再开始写（否则可能整个写事务发生在读者被调度之前）
+    QThread::msleep(20);
+
+    std::thread writer([&]() {
+        const bool ok = db->saveInspectionResults(big);
+        if (ok)
+            ++writes;
+        writerDone = true;
+    });
+
+    writer.join();
+    reader.join();
+
+    QCOMPARE(int(writes), 1);                 // 长事务本身要成功
+
+    // 自清理：这批 2 万行会打乱后续用例（如 testPurge）的取数假设，用完即删
+    {
+        QSqlDatabase probe = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                       QStringLiteral("p12_cleanup"));
+        probe.setDatabaseName(db->databasePath());
+        if (probe.open()) {
+            QSqlQuery q(probe);
+            q.exec(QStringLiteral("DELETE FROM inspection_results WHERE flow_name = 'P12-并发腿-自清理'"));
+            probe.close();
+        }
+        QSqlDatabase::removeDatabase(QStringLiteral("p12_cleanup"));
+    }
+    QVERIFY2(int(readsTotal) > 0, "读线程一次都没跑");
+    QVERIFY2(int(readsDuringWrites) > 0,
+             "写持锁期间读一次都没完成：读仍被写挡住（全局锁没拆开）");
+}
+
 
 QTEST_MAIN(DatabaseTest)
 #include "database_test.moc"

@@ -50,6 +50,10 @@ class AppDatabase : public QObject
 {
     Q_OBJECT
 public:
+
+    /// 测试用（2026-10-30 r19 P1-2）：写事务是否正持有全局写锁。
+    /// 并发腿据此断言读者写者真并发，而不是靠时序采样。
+    static bool writeLockHeldForTest();
     static AppDatabase *instance();
 
     /// \u521D\u59CB\u5316\u6570\u636E\u5E93\uFF08\u521B\u5EFA/\u6253\u5F00\uFF09
