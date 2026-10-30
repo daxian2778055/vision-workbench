@@ -489,6 +489,25 @@
 
 一处定义差异（不是矛盾）：`MainWindow.cpp` 里 `\btr\s*\(` 为 **206** 处（含源串为纯英文的调用），普查口径「`tr("中文…")`」为 **204** 处——两者都对，别混用。
 
+**2026-10-30 第十一批（r19 复核：1 个 P0 + 12 个 P1）——本轮收 P0 与低风险项**
+
+| 项 | 处置 | 守卫 |
+|---|---|---|
+| **P0-1** DnnSegmentNode / DnnInferNode 静态模型缓存无锁（多流程并发是产品支持项 ⇒ 两线程碰同一 `QMap` = **无条件 UB**） | 新增 `DnnNetCache`：一模型一条目、**条目内互斥**（同一模型 `setInput/forward` 串行、**不同模型并发**）；后端只在**加载时**设一次；**键含 mtime**（同路径换文件重新加载并摘旧条目）。两个节点的 `getOrLoadNet` 与静态表删除，`clearNetCache` 改走统一缓存 | ObjectCountingTest 两腿：注入钩子 + 按 mtime 失效（换文件必须重新加载）；8 线程并发 acquire 不崩。改坏臂（键去 mtime）→ 红 |
+| **P1-3 低风险部分** | `crashLogHandler` 对 Debug **默认不再逐条 open/append/close**（实测约 3,900 行/s 上限，而执行器每节点每轮 2 条 debug、201 轮/秒 ⇒ 数千行/秒）；排查时设 `VFP_LOG_DEBUG=1`。UI 日志 `setMaximumBlockCount(2000)` | — |
+
+**r19 其余项（按风险/收益排的后续队列，本轮未动）**：
+
+| 队列 | 项 |
+|---|---|
+| **下一轮先做** | **P1-9 全局锁串行化**（把 Detect/Counting 也迁到 `DnnNetCache`，锁只包 `setInput/forward`，顺带收掉它们「键只有路径」）、**P1-1** 落库失败丢批次（有界重试 + JSONL spill）、**P1-3 余量**（异步 appender） |
+| 其后 | P1-2 全库一把锁（单写线程 + 报表独立读连接 + `synchronous=NORMAL`）、P1-4 相机句柄/`PayloadSize`、P1-12 串口线程归属、P1-11 发送假成功 |
+| 性能池 | P1-5 主预览每轮全图转换、P1-6 图像源每轮重读+重建缩略图、P1-7 重型节点每轮重载模型/模板、P1-10 `HImage↔cv::Mat` 整图 clone（注释与实现不符） |
+| 结构性 | P1-13 析构 GUI 线程等 15 秒后进不可复用终态 |
+| P2 池 | 相机（StartGrabbing 失败仍报成功、切相机不关本地句柄、每帧 memset 10MB）、DB（失败句柄缓存、锁内 VACUUM、`feature_samples` 不清理）、通信（`lastData` 无时间戳/连接状态）、DNN 缓存键（Detect/Counting）、错误可见性（`catch (...)` 不写 `lastError`）、预览判据取反、崩溃日志自锁 |
+
+> 复核方同时点出的健康面（执行器快照/墓碑、外触有界队列、轮末单事务、DB 按线程建连接、运行界面 latest-wins、60 秒 soak Δ句柄 2/Δ工作集 0MB、编辑性能余量）与登记在案，不再改。
+
 **仍开放（本轮未修，各有理由）**：
 
 | 项 | 位置 | 为什么没在这次改 |
