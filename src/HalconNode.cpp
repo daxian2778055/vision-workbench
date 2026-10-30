@@ -216,7 +216,8 @@ void HalconNode::executePreview()
         // 检查是否有输入数据
         bool hasInput = false;
         for (auto it = m_inputData.begin(); it != m_inputData.end(); ++it) {
-            if (it.value() && !it.value()->getHImage().IsInitialized()) {
+            // r19 P2：判据取反了（原写 !IsInitialized()，会把"没有图"当成有输入）
+            if (it.value() && it.value()->getHImage().IsInitialized()) {
                 hasInput = true;
                 break;
             }
@@ -515,6 +516,10 @@ bool HalconNode::process()
         return true;
     } catch (...) {
         m_params["moduleStatus"] = false;
+        // r19 P2：现场只看到"红节点"、不知道原因——异常必须留下 lastError
+        if (m_params.value(QStringLiteral("lastError")).toString().trimmed().isEmpty())
+            m_params[QStringLiteral("lastError")] =
+                QStringLiteral("节点执行抛出异常（原因未提供）");
         m_outputImage.Clear();
         // 异常失败清空全部输出（P2）
         for (int p = 0; p < outputPorts().size(); ++p)

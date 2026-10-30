@@ -116,11 +116,18 @@ bool NodeBase::execute()
         return m_executionSuccess;
     } catch (const std::exception &e) {
         qWarning() << "Error executing node" << name() << ":" << e.what();
+        // r19 P2：qWarning 只进日志，界面上的红节点没有原因——同时写 lastError
+        if (getParam(QStringLiteral("lastError")).toString().trimmed().isEmpty())
+            setParam(QStringLiteral("lastError"),
+                     QStringLiteral("%1 执行异常：%2").arg(name(), QString::fromUtf8(e.what())));
         m_hasExecuted = true;
         m_executionSuccess = false;
         return false;
     } catch (...) {
         qWarning() << "Unknown error executing node" << name();
+        if (getParam(QStringLiteral("lastError")).toString().trimmed().isEmpty())
+            setParam(QStringLiteral("lastError"),
+                     QStringLiteral("%1 执行异常（未知类型）").arg(name()));
         m_hasExecuted = true;
         m_executionSuccess = false;
         return false;

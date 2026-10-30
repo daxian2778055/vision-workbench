@@ -1,3 +1,5 @@
+#include <QHash>
+#include <QMutex>
 #include "DnnDetectNode.h"
 #include "DnnNetCache.h"
 #include <QMutexLocker>
@@ -80,17 +82,36 @@ QStringList DnnDetectNode::loadClassNames(const QString &modelPath,
     QString clsPath = explicitPath.trimmed();
     if (clsPath.isEmpty())
         clsPath = QFileInfo(modelPath).absolutePath() + QStringLiteral("/classes.txt");
-    QStringList names;
-    QFile f(clsPath);
-    if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QTextStream ts(&f);
-        while (!ts.atEnd()) {
-            const QString line = ts.readLine().trimmed();
-            if (!line.isEmpty())
-                names.append(line);
+
+    // 每帧重读 classes.txt 是浪费（r19 P2）：按 (路径, mtime) 缓存，换文件自动重载
+    {
+        static QMutex s_mu;
+        static QHash<QString, QStringList> s_cache;
+        const QFileInfo fi(clsPath);
+        const QString key = fi.exists()
+                                ? (QDir::cleanPath(clsPath) + QLatin1Char('|')
+                                   + QString::number(fi.lastModified().toMSecsSinceEpoch()))
+                                : (QDir::cleanPath(clsPath) + QStringLiteral("|missing"));
+        QMutexLocker<QMutex> locker(&s_mu);
+        QHash<QString, QStringList>::const_iterator hit = s_cache.constFind(key);
+        if (hit != s_cache.constEnd())
+            return hit.value();
+        QStringList loaded;
+        QFile cf(clsPath);
+        if (cf.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            QTextStream cts(&cf);
+            while (!cts.atEnd()) {
+                const QString line = cts.readLine().trimmed();
+                if (!line.isEmpty())
+                    loaded.append(line);
+            }
         }
+        if (s_cache.size() > 32)   // 换型频繁时不无限增长
+            s_cache.clear();
+        s_cache.insert(key, loaded);
+        return loaded;
     }
-    return names;
+
 }
 
 bool DnnDetectNode::parseYoloOutput(const cv::Mat &out, int inputSize, const cv::Size &orig,

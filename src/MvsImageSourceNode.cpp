@@ -431,10 +431,12 @@ bool MvsImageSourceNode::grabImage()
             return false;
         }
 
-        // 帧缓冲改用 std::vector 托管：所有退出路径（含异常）都会自动释放。
-        // 原实现 new[]/delete[] 且 catch 分支不释放，异常时每帧泄漏一次 payload 大小内存。
-        std::vector<unsigned char> imgBufStorage(payload);
-        unsigned char *imgBuf = imgBufStorage.data();
+        // 帧缓冲**复用成员**（r19 P2）：原来每帧 vector(payload) 会把 10MB 先清零再被 SDK
+        // 整个覆盖（满速约 300MB/s 的无用 memset）。只在容量不足时扩容——扩容那一次清零，
+        // 摊薄到"换分辨率/首次取图"，稳态零 memset。
+        if (m_frameBuffer.size() < payload)
+            m_frameBuffer.resize(payload);
+        unsigned char *imgBuf = m_frameBuffer.data();
         unsigned int nDataSize = payload;
 
         // 软触发模式：取图前下发软件触发命令

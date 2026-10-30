@@ -2,6 +2,7 @@
 #define MVSIMAGESOURCENODE_H
 
 // 工业相机取图：使用真实海康 MVS SDK（MvCameraControl.h + CameraParams.h）
+#include <vector>
 #include "VisionIntegrationPolicy.h"
 #include "HalconNode.h"
 #include <QStringList>
@@ -131,6 +132,8 @@ private:
     std::atomic<bool> m_closing{false};
     /// 单帧取图缓冲大小（按相机 PayloadSize 动态分配，避免高分辨率相机缓冲不足）
     unsigned int m_payloadSize = 10 * 1024 * 1024;
+    /// 取图缓冲复用（r19 P2）：避免每帧 10MB 清零 + 分配；只在容量不足时扩容
+    std::vector<unsigned char> m_frameBuffer;
     bool m_isDetectingCameras;
     /// 连续取图失败次数（用于自动重连判断）
     int m_consecutiveGrabFailures = 0;
