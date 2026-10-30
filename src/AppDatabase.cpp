@@ -317,11 +317,14 @@ QSqlDatabase AppDatabase::threadDatabase() const
     QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), name);
     db.setDatabaseName(m_dbPath);
     if (!db.open()) {
-        // 仍返回这条未打开的连接：调用方每次都按线程取连接，此处直接返回空句柄等于
-        // "本线程永远写不了库"；把失败记进诊断串后，写侧文本会带上 open=no 与驱动原文。
+        // 打开失败不能把"未打开的句柄"留在 Qt 连接注册表里（r19 P2）：注册表按线程名 contains
+        // 命中后会一直返回这条坏连接，本线程**再也不重试**——库里一旦恢复可用也写不进去。
+        // 记下失败后移除注册项、返回空句柄，下次调用重新 open。
         noteFailure(QStringLiteral("threadDatabase"), db, db.lastError().text(),
                     QStringLiteral("open %1").arg(name));
-        return db;
+        db = QSqlDatabase();                    // 先释放引用，removeDatabase 才不会告警
+        QSqlDatabase::removeDatabase(name);
+        return QSqlDatabase();
     }
     const QStringList &pragmas = dbPragmas();
     for (const QString &sql : pragmas) {
@@ -888,8 +891,6 @@ QList<OperationLogRecord> AppDatabase::queryOperationLogs(const QDateTime &from,
 
 int AppDatabase::purgeOldRecords(int retainDays)
 {
-    WriteLock locker(&s_writeMutex);
-
     if (retainDays < 1) retainDays = 30;
     // cutoff 与存储同口径（UTC）：用本地时间串会让清理边界比预期早一个时区偏移
     const QString cutoff = QDateTime::currentDateTimeUtc()
@@ -898,28 +899,44 @@ int AppDatabase::purgeOldRecords(int retainDays)
 
     int total = 0;
     const QSqlDatabase db = threadDatabase();
-    const QStringList tables = {
-        QStringLiteral("alarms"),
-        QStringLiteral("inspection_results"),
-        QStringLiteral("operation_logs")
+
+    // 表名 + 时间列（r19 P2）：feature_samples 用的是 created_at，其余是 timestamp。
+    // 它原先不在清理列表里 ⇒ BLOB（缩略图/关键点/描述子）只增不减。
+    struct PurgeTarget {
+        const char *table;
+        const char *tsColumn;
     };
-    for (const QString &table : tables) {
-        QSqlQuery q(db);
-        const QString op = QStringLiteral("purgeOldRecords %1").arg(table);
-        if (!prepareWrite(q, db,
-                          QStringLiteral("DELETE FROM %1 WHERE timestamp < ?").arg(table),
-                          op)) {
-            continue;   // 这条表本轮清不动，计数不含它
-        }
-        q.addBindValue(cutoff);
-        if (q.exec()) {
-            total += q.numRowsAffected();
-        } else {
-            noteFailure(op, db, q.lastError().text());
+    const PurgeTarget targets[] = {
+        {"alarms", "timestamp"},
+        {"inspection_results", "timestamp"},
+        {"operation_logs", "timestamp"},
+        {"feature_samples", "created_at"},
+    };
+
+    {
+        // 写锁只覆盖 DELETEs（r19 P2）：原先把 VACUUM 也罩在锁内，而 VACUUM 会重写整个
+        // 库文件——期间所有写排队在这把进程内锁上，还把界面拖住。
+        WriteLock locker(&s_writeMutex);
+        for (const PurgeTarget &t : targets) {
+            QSqlQuery q(db);
+            const QString op = QStringLiteral("purgeOldRecords %1").arg(QLatin1String(t.table));
+            if (!prepareWrite(q, db,
+                              QStringLiteral("DELETE FROM %1 WHERE %2 < ?")
+                                  .arg(QLatin1String(t.table), QLatin1String(t.tsColumn)),
+                              op)) {
+                continue;   // 这条表本轮清不动，计数不含它
+            }
+            q.addBindValue(cutoff);
+            if (q.exec()) {
+                total += q.numRowsAffected();
+            } else {
+                noteFailure(op, db, q.lastError().text());
+            }
         }
     }
 
     if (total > 0) {
+        // VACUUM 在锁外（r19 P2）：SQLite 自己会拿库级排他锁，不需要我们再端一把进程内锁
         QSqlQuery vq(db);
         if (!vq.exec(QStringLiteral("VACUUM"))) {
             // 记录已删但库文件没收缩：现场问"为什么还在涨"时这条是唯一线索

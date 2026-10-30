@@ -125,6 +125,9 @@ private slots:
     // r19 P1-2：拆锁后读者写者要能真并发（写不被饿死、读不读到半事务）
     void concurrentReadDoesNotBlockWriter();
 
+    // r19 P2：feature_samples 原先不在保留清理的表里，BLOB 只涨不消
+    void purgeAlsoCoversFeatureSamples();
+
 private:
     QTemporaryDir m_tempDir;
 };
@@ -1036,6 +1039,67 @@ void DatabaseTest::concurrentReadDoesNotBlockWriter()
              "写持锁期间读一次都没完成：读仍被写挡住（全局锁没拆开）");
 }
 
+
+void DatabaseTest::purgeAlsoCoversFeatureSamples()
+{
+    // r19 P2：feature_samples 用的是 created_at（其余表是 timestamp），原先不在清理名单里。
+    AppDatabase *db = AppDatabase::instance();
+    QVERIFY2(!db->databasePath().isEmpty(), "本腿需要一条可用的数据库连接");
+
+    const QString oldTs = QDateTime::currentDateTimeUtc().addDays(-30)
+                              .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"));
+    {
+        QSqlDatabase probe = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                       QStringLiteral("p2b2_probe"));
+        probe.setDatabaseName(db->databasePath());
+        QVERIFY2(probe.open(), qPrintable(probe.lastError().text()));
+        QSqlQuery q(probe);
+        QVERIFY2(q.exec(QStringLiteral(
+                       "CREATE TABLE IF NOT EXISTS feature_samples ("
+                       " id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, detector TEXT,"
+                       " image BLOB, keypoints BLOB, descriptors BLOB,"
+                       " kp_rows INTEGER, kp_cols INTEGER, kp_type INTEGER,"
+                       " desc_rows INTEGER, desc_cols INTEGER, desc_type INTEGER,"
+                       " created_at DATETIME)")),
+                 qPrintable(q.lastError().text()));
+        QVERIFY2(q.exec(QStringLiteral("DELETE FROM feature_samples")),
+                 qPrintable(q.lastError().text()));
+        QVERIFY2(q.exec(QStringLiteral(
+                       "INSERT INTO feature_samples (name, detector, keypoints, descriptors,"
+                       " desc_rows, desc_cols, desc_type, created_at) "
+                       "VALUES ('ancient', 'sift', zeroblob(0), zeroblob(0), 0, 0, 0, '%1')").arg(oldTs)),
+                 qPrintable(q.lastError().text()));
+        // 同时留一条"新鲜"的，必须活着
+        QVERIFY2(q.exec(QStringLiteral(
+                       "INSERT INTO feature_samples (name, detector, keypoints, descriptors,"
+                       " desc_rows, desc_cols, desc_type, created_at) "
+                       "VALUES ('fresh', 'sift', zeroblob(0), zeroblob(0), 0, 0, 0, '%1')")
+                       .arg(QDateTime::currentDateTimeUtc()
+                                .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz")))),
+                 qPrintable(q.lastError().text()));
+        probe.close();
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("p2b2_probe"));
+
+    QVERIFY(db->purgeOldRecords(7) >= 1);   // 30 天前那条要删掉
+
+    {
+        QSqlDatabase probe = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                       QStringLiteral("p2b2_verify"));
+        probe.setDatabaseName(db->databasePath());
+        QVERIFY(probe.open());
+        QSqlQuery q(probe);
+        QVERIFY(q.exec(QStringLiteral("SELECT name FROM feature_samples")));
+        QStringList names;
+        while (q.next())
+            names << q.value(0).toString();
+        probe.close();
+        QSqlDatabase::removeDatabase(QStringLiteral("p2b2_verify"));
+        QVERIFY2(!names.contains(QStringLiteral("ancient")),
+                 "feature_samples 的过期行没被清理（P2）");
+        QVERIFY2(names.contains(QStringLiteral("fresh")), "保留窗口内的行被误删");
+    }
+}
 
 QTEST_MAIN(DatabaseTest)
 #include "database_test.moc"
