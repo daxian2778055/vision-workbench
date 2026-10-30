@@ -495,7 +495,16 @@
       "exe_bytes": 10129408,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.4",
       "recorded_at": "2026-10-30",
-      "recorded_note": "当前装机包：新增 docs/现场验收清单.md（7 节打勾表 + 11 类失败分诊），随包分发；exe 与上一包同源重建（deploy 白名单变更需重打）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.5 取代（后者修 r19 P0-1）"
+    },
+    {
+      "tag": "rc-20261030.5",
+      "commit": "ec6c5d44043e14f9ac1594dca2198765d807c7a1",
+      "exe_md5": "d0675e10bc75e855665bf7c005dc6f87",
+      "exe_bytes": 10140160,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.5",
+      "recorded_at": "2026-10-30",
+      "recorded_note": "当前装机包：r19 P0-1——DNN 静态模型缓存无锁（多流程并发 UB）改统一 DnnNetCache（按模型分锁、后端只设一次、键含 mtime）+ P1-3 低风险部分（Debug 日志不逐条开关文件、UI 日志限 2000 行）"
     }
   ],
   "legacy_backfilled": [
