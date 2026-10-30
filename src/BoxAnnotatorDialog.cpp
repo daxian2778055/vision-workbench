@@ -389,12 +389,17 @@ void BoxAnnotatorDialog::onDeleteBox()
         index = m_canvas->selectedIndex();
     if (index < 0 || index >= m_boxes.size())
         return;
+    const QVector<YoloBoxLabel> snapshot = m_boxes;   // 失败要回滚（2026-10-30 r17 余量）
     m_boxes.removeAt(index);
     m_canvas->setBoxes(m_boxes, m_classNames);
     refreshBoxList();
     if (!saveCurrentImage()) {
-        // 内存已删、磁盘没落（2026-10-29 r15 P2-12）：不能说"已删除"
-        m_status->setText(QStringLiteral("已从画布删除，但保存失败（磁盘满或权限？）：%1")
+        // 磁盘没变，画布也别变（r15 P2-12 + r17 余量）：否则现场看到的是"删掉了"，
+        // 实际文件还在——两套状态比报错更难查
+        m_boxes = snapshot;
+        m_canvas->setBoxes(m_boxes, m_classNames);
+        refreshBoxList();
+        m_status->setText(QStringLiteral("保存失败（磁盘满或权限？），已撤回这次删除：%1")
                               .arg(m_currentPath));
         return;
     }
@@ -403,11 +408,15 @@ void BoxAnnotatorDialog::onDeleteBox()
 
 void BoxAnnotatorDialog::onClearImage()
 {
+    const QVector<YoloBoxLabel> snapshot = m_boxes;   // 同上
     m_boxes.clear();
     m_canvas->setBoxes(m_boxes, m_classNames);
     refreshBoxList();
     if (!saveCurrentImage()) {
-        m_status->setText(QStringLiteral("画布已清空，但保存失败（磁盘满或权限？）：%1")
+        m_boxes = snapshot;
+        m_canvas->setBoxes(m_boxes, m_classNames);
+        refreshBoxList();
+        m_status->setText(QStringLiteral("保存失败（磁盘满或权限？），已撤回这次清空：%1")
                               .arg(m_currentPath));
         return;
     }

@@ -10,6 +10,7 @@
 #include <QDir>
 #include <QFile>
 #include <QImage>
+#include <QLabel>
 #include <QListWidget>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -37,6 +38,7 @@ private slots:
     // r15 P1-9：切图保存必须写到「上一张」
     void annotationDialogDoesNotTruncateOnOpen();
     void annotationDialogSwitchSavesToPreviousImage();
+    void annotationDialogRollsBackWhenSaveFails();
 };
 
 void UiGuardsTest::annotationLabelAcceptsSafeNames()
@@ -335,6 +337,46 @@ void UiGuardsTest::annotationDialogSwitchSavesToPreviousImage()
     const QString after0 = readAll(label0);
     QCOMPARE(after0.count(QChar('\n')), 2);            // 第一张多了一个框
     QVERIFY2(!QFile::exists(label1), "第二张的 txt 被创建了：说明保存写错了目标（P1-9）");
+}
+
+void UiGuardsTest::annotationDialogRollsBackWhenSaveFails()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    // 只造一张图 + classes.txt；随后把它的 txt 建成目录，让保存必然失败
+    QDir().mkpath(tmp.path());
+    {
+        QImage img(64, 48, QImage::Format_RGB32);
+        img.fill(QColor(120, 120, 120));
+        img.save(tmp.path() + QStringLiteral("/img0.png"));
+        QFile cls(tmp.path() + QStringLiteral("/classes.txt"));
+        cls.open(QIODevice::WriteOnly | QIODevice::Text);
+        cls.write("part\n");
+        cls.close();
+    }
+    QVERIFY(QDir().mkpath(YoloAnnotation::labelPath(tmp.path() + QStringLiteral("/img0.png"))));
+
+    BoxAnnotatorDialog dlg(tmp.path());
+    // 画一个框（内存里 1 个），再"清空"——保存失败后应当撤回成 1 个
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "onBoxDrawn", Qt::DirectConnection,
+                                      Q_ARG(QRectF, QRectF(8, 8, 24, 16)), Q_ARG(bool, false)));
+
+    QListWidget *boxList = nullptr;
+    for (QListWidget *w : dlg.findChildren<QListWidget *>())
+        if (w->count() > 0 && !w->item(0)->text().endsWith(QStringLiteral(".png")))
+            boxList = w;
+    QVERIFY2(boxList, "找不到标注列表");
+    const int before = boxList->count();
+    QVERIFY2(before >= 1, "前置条件：画布上应有一个框");
+
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "onClearImage", Qt::DirectConnection));
+
+    QCOMPARE(boxList->count(), before);   // 回滚了：清空没有生效
+    bool sawRollback = false;
+    for (QLabel *l : dlg.findChildren<QLabel *>())
+        if (l->text().contains(QStringLiteral("撤回")))
+            sawRollback = true;
+    QVERIFY2(sawRollback, "状态栏没有说明已撤回");
 }
 
 QTEST_MAIN(UiGuardsTest)

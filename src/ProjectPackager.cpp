@@ -115,9 +115,19 @@ ProjectPackager::Result ProjectPackager::pack(FlowScene *scene, const QString &s
             }
             if (!QFile::copy(fi.absoluteFilePath(), target)) {
                 r.error = QStringLiteral("复制失败：%1 → %2").arg(fi.absoluteFilePath(), target);
-                // 回滚本轮已复制出的文件（P2-13）：不留下孤儿
-                for (const QString &gone : createdTargets)
-                    QFile::remove(gone);
+                // 回滚本轮已复制出的文件（P2-13）：不留下孤儿。
+                // 删不掉的要写进错误里（2026-10-30 r17 余量）：残留会把下一轮成功的拷贝
+                // 挤成 name_2.ext，而现场只看到一句"复制失败"。
+                QStringList notRemoved;
+                for (const QString &gone : createdTargets) {
+                    if (!QFile::remove(gone))
+                        notRemoved << gone;
+                }
+                if (!notRemoved.isEmpty()) {
+                    r.error += QStringLiteral("；另有 %1 个已复制的文件未能删除，请手动清理：%2")
+                                   .arg(notRemoved.size())
+                                   .arg(notRemoved.join(QStringLiteral(", ")));
+                }
                 return r;
             }
             createdTargets << target;
