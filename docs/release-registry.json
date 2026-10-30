@@ -558,7 +558,16 @@
       "exe_bytes": 10145280,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.11",
       "recorded_at": "2026-10-30",
-      "recorded_note": "当前装机包：r19 P1-11——轮级发送失败计数，执行器在写结果前把本轮判失败（链路断开不再谎报通过）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.12 取代（后者收 r19 P1-7）"
+    },
+    {
+      "tag": "rc-20261030.12",
+      "commit": "1ac23025451a728336fdbde4332af17be0235497",
+      "exe_md5": "37b9c7e346d28b0fd615f9e6dfdc019e",
+      "exe_bytes": 10166784,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.12",
+      "recorded_at": "2026-10-30",
+      "recorded_note": "当前装机包：r19 P1-7——重型节点每轮重载模型/模板改 ModelCache（键含 mtime、无稳定标识不缓存），含 DeepOCR 引擎复用"
     }
   ],
   "legacy_backfilled": [
