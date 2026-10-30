@@ -748,15 +748,19 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
     //    后台流程暂停停稳/恢复时若漏更新，就会出现"后台正在跑却可编辑"的漏洞。
     //    · executionParked：worker 真停进等待点（当前节点已跑完）→ 解锁，可安全改图
     //    · executionResumed：恢复执行 → 立即加锁（否则暂停中改完图点继续，运行中仍是可编辑）
-    connect(ex, &FlowExecutor::executionParked, this, [ex]() {
+    connect(ex, &FlowExecutor::executionParked, this, [this, ex]() {
         if (FlowScene *s = ex->flowScene())
             s->setEditLocked(SessionManager::instance()->canvasEditShouldBeLocked(
                 !ex->allowsGraphEditing()));
+        // 停稳暂停已允许改图（2026-10-29 r16 P2-13）：菜单要跟着解锁
+        applyPermissionRestrictions();
     });
-    connect(ex, &FlowExecutor::executionResumed, this, [ex]() {
+    connect(ex, &FlowExecutor::executionResumed, this, [this, ex]() {
         if (FlowScene *s = ex->flowScene())
             s->setEditLocked(SessionManager::instance()->canvasEditShouldBeLocked(
                 !ex->allowsGraphEditing()));
+        // 恢复执行立刻再锁上
+        applyPermissionRestrictions();
     });
     // 运行控制的状态反馈：暂停请求已受理 / 真停稳 / 已继续（ex == m_executor 门槛，避免后台流程
     // 污染当前状态栏与按钮态）
@@ -3215,6 +3219,11 @@ void MainWindow::onExecutionFinished()
     fireSendEventsForRound();     // 每轮结束自动上报已启用的发送事件
     refreshAllMvsPixelFormats();
     updateEditLockForCurrentScene();
+    // 正常跑完一轮只发 executionFinished、**不发** executionStopped（2026-10-29 r16 P2-13）：
+    // 菜单原本只在 started/stopped 里重算，于是"点一次开始→跑完→菜单一直灰、画布已可编辑"。
+    // 不能把 Finished 当成"已停止"（连续模式每轮都发、状态仍是 Running）——这里让
+    // applyPermissionRestrictions 自己去读 allowsGraphEditing()，跑着就仍然是灰的。
+    applyPermissionRestrictions();
 }
 
 void MainWindow::checkYieldTarget(FlowExecutor *executor)
@@ -4088,6 +4097,15 @@ void MainWindow::setupSystemMenu()
                         this, QStringLiteral("选择方案目录（依赖将收进 <目录>/assets/）"));
                     if (dir.isEmpty())
                         return;
+                    // 选目录用的是嵌套事件循环（2026-10-29 r16 P2-13）：这段时间里外部触发
+                    // 仍可能把流程拉起来，返回后必须再查一次，否则会往正在跑的流程里改路径。
+                    if (!SessionManager::instance()->canEditScheme()
+                        || (m_executor && !m_executor->allowsGraphEditing())) {
+                        QMessageBox::warning(
+                            this, QStringLiteral("暂时不能打包"),
+                            QStringLiteral("等待选择目录期间流程已开始运行。\n停止后再试。"));
+                        return;
+                    }
                     const QString scheme = dir + QStringLiteral("/scheme.vfp");
                     const ProjectPackager::Result r = ProjectPackager::pack(currentFlowScene(), scheme);
                     if (!r.ok) {

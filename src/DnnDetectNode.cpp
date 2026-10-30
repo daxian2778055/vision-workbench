@@ -159,10 +159,17 @@ bool DnnDetectNode::parseYoloOutput(const cv::Mat &out, int inputSize, const cv:
     if (numClasses < 1) return false;
 
     // 2) letterbox 映射参数（原图 -> 输入）
+    // 必须与 yoloBlob 的放置用同一套整数口径（2026-10-30 r15/r16 余量）：那边先
+    // cvRound 出整数边长 nw/nh，再用整数除法定位左上角；这里若用未取整的浮点 pad，
+    // 框会有不到 1 个网络像素的系统偏差（实测最大 ~0.75px）。
     const double scale = std::min(double(inputSize) / orig.width,
                                   double(inputSize) / orig.height);
-    const double padX = (inputSize - orig.width * scale) / 2.0;
-    const double padY = (inputSize - orig.height * scale) / 2.0;
+    const int nw = cvRound(orig.width * scale);
+    const int nh = cvRound(orig.height * scale);
+    const int padXi = (inputSize - nw) / 2;   // 整数除法，与放置一致
+    const int padYi = (inputSize - nh) / 2;
+    const double padX = padXi;
+    const double padY = padYi;
 
     // 3) 置信过滤 + 取最优类别
     std::vector<cv::Rect> rects;

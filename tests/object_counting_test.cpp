@@ -27,6 +27,7 @@ private slots:
     void yoloLayoutV8AndV5BothDecode();
     void dnnParamsAreRegistered();
     void yoloBlobRejectsZeroScaleAndLettersboxes();
+    void letterboxGeometryRoundTrips();
 
 private:
     static DetectionBox makeBox(float cx, float cy, float w = 40, float h = 40,
@@ -320,6 +321,39 @@ void ObjectCountingTest::yoloBlobRejectsZeroScaleAndLettersboxes()
     QVERIFY2(qAbs(corner - 114.0f / 255.0f) < 0.02f,
              qPrintable(QStringLiteral("letterbox 灰边缺失（corner=%1）：几何与反算不一致")
                             .arg(corner)));
+}
+
+void ObjectCountingTest::letterboxGeometryRoundTrips()
+{
+    // 非方图 letterbox 的几何往返（2026-10-30）：放置用 yoloBlob（整数 nw/nh + 整数 pad），
+    // 反算用 parseYoloOutput —— 两边必须同一套口径，否则框位有系统性偏差。
+    // 原图 100x51 放进 64x64：scale=0.64、nw=64、nh=cvRound(32.64)=33。
+    // 整数 padY=(64-33)/2=15；若用未取整的浮点 padY=(64-32.64)/2=15.68 —— 差 0.68 网络像素，
+    // 折算到原图约 1.06 像素，容差 0.6 就能把「浮点口径」判红。
+    const int inputSize = 64;
+    const cv::Size orig(100, 51);
+    const int nc = 1;
+    cv::Mat out(1, 1, CV_32FC(4 + nc));
+    {
+        float *p = out.ptr<float>(0);
+        // 网络坐标里中心 (32,31.5)、原始 10x5 => 网络 6.4x3.2
+        const float row[4 + 1] = {32.f, 31.5f, 6.4f, 3.2f, 0.9f};
+        std::memcpy(p, row, sizeof(row));
+    }
+    out = out.reshape(1, 1);
+
+    QVector<DetectionBox> boxes;
+    QVERIFY(DnnDetectNode::parseYoloOutput(out, inputSize, orig, 0.25, 0.45, boxes, 0));
+    QCOMPARE(boxes.size(), 1);
+    // 反算（按整数 pad=15）：cx=(32-0)/0.64=50, cy=(31.5-15)/0.64=25.78125, w=10, h=5
+    const DetectionBox &b = boxes[0];
+    const double cx = b.x + b.w / 2.0;
+    const double cy = b.y + b.h / 2.0;
+    QVERIFY2(qAbs(cx - 50.0) <= 0.6, qPrintable(QStringLiteral("cx 反算偏了：%1").arg(cx)));
+    QVERIFY2(qAbs(cy - 25.78125) <= 0.6,
+             qPrintable(QStringLiteral("cy 反算偏了：%1（浮点 pad 会得到约 24.72）").arg(cy)));
+    QVERIFY2(qAbs(b.w - 10.0) <= 0.6, qPrintable(QStringLiteral("w=%1").arg(b.w)));
+    QVERIFY2(qAbs(b.h - 5.0) <= 0.6, qPrintable(QStringLiteral("h=%1").arg(b.h)));
 }
 
 QTEST_MAIN(ObjectCountingTest)

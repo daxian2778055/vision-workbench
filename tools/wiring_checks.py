@@ -284,7 +284,8 @@ def check_param_registration(repo):
       ① 出现在 registerParams({...}) 或 registerParam(make*Param("键", ...)) 的**实参**里。
          光有 make*Param 文本不算：r15 实测过"写在 registerParams 的 }); 之外、返回值被丢掉"，
          那种写法编译通过、面板上没有，旧判据却算它已登记（P1-8）；
-      ② init 里用 sp.name = "键" 声明，且同一函数里确实 registerParam(sp)；
+      ② init 里用 sp.name = "键" 声明，且同一函数里确实 registerParam(sp)
+         （只认 sp.name 声明；正文里裸 make*Param 文本不算——P1-8 就栽在这条旁路上）；
       ③ 本文件里写过（运行期计算/缓存）；
       ④ 在 INJECTED 名单里（框架/上游注入的约定键，注释写明理由）。
 
@@ -327,8 +328,12 @@ def check_param_registration(repo):
         keys = set()
         for m in reg_call.finditer(code):
             keys |= set(decl.findall(balanced(code, m.end() - 1)))
+        # registerParam(sp) 只兜住 "sp.name = \"键\"; registerParam(sp);" 这种形态。
+        # 2026-10-29 r16：这里原先对**整个 init 正文**跑 decl，等于"正文里出现过
+        # make*Param(\"键\") 就算已登记"——P1-8 的形状换个文件就能溜过去。
         if "registerParam(sp)" in code:
-            keys |= set(decl.findall(code))
+            spname = _re.compile(r'sp\.name\s*=\s*' + LIT)
+            keys |= set(spname.findall(code))
         return keys
 
     def body(code, sig):

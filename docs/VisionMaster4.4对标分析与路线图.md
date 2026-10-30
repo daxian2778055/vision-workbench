@@ -410,6 +410,15 @@
 | P2-13 残留 | 菜单随执行起停重算（与画布锁同源）；谓词统一 `!allowsGraphEditing()`；槽内入口再查写闸与锁；复制失败回滚本轮已复制的文件 | — |
 | **INV5 收紧** | 登记只认 `registerParam(...)` / `registerParams({...})` 的**实参**（`make*Param` 文本写在调用外不算——P1-8 形态）；键名允许下划线与数字；全仓空跑防护 | 改坏臂：摘 `scale` 登记 → RED；把枚举搬出 `registerParams` → RED（旧判据在这两种形态里都是绿） |
 
+**2026-10-30 第九批（r16 复核：P2-13 余量 + INV5 第三条旁路 + pad 口径）**：
+
+| 项 | 修法 | 守卫 |
+|---|---|---|
+| **P2-13 菜单跟错结束信号** | 正常跑完一轮只发 `executionFinished`、不发 `executionStopped`，菜单停在"开始"里设下的禁用（跑完反而一直灰）。菜单重算补到 `onExecutionFinished` 与 `executionParked`/`executionResumed` —— 不能把 Finished 当"已停止"（连续模式每轮都发），重算内部自己读 `allowsGraphEditing()` | — |
+| **P2-13 选目录时间窗** | `getExistingDirectory` 用嵌套事件循环，期间外部触发可拉起流程；返回后**再查一次**写闸与画布锁 | — |
+| **INV5 第三条旁路** | `registerParam(sp)` 分支原先对**整个 init 正文**跑登记正则 = "正文里出现过 `make*Param("键")` 就算登记"，P1-8 的形状换个文件就能溜过去；改成只认 `sp.name = "键"` 声明 | 三形态改坏臂：摘 `scale` 登记 → RED；枚举搬出 `registerParams` → RED；**丢掉 `registerParam` 包裹但保留 `make*Param` 文本 → RED**（修前为 GREEN） |
+| **letterbox pad 口径** | `parseYoloOutput` 的 pad 改用与 `yoloBlob` 一致的整数口径（`cvRound` 边长 + 整数除法），消掉 <1 网络像素的系统偏差 | 新增几何往返腿（100×51 → 64×64，按整数 pad 算期望值，容差 0.6px）：浮点口径 → RED |
+
 **仍开放（本轮未修，各有理由）**：
 
 | 项 | 位置 | 为什么没在这次改 |
