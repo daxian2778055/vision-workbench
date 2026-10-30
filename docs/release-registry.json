@@ -513,7 +513,16 @@
       "exe_bytes": 10138624,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.6",
       "recorded_at": "2026-10-30",
-      "recorded_note": "当前装机包：r19 P1-9（Detect/Counting 迁进 DnnNetCache：按模型分锁、后端只设一次、键含 mtime）+ P1-1（落库失败有界重试与 JSONL 兜底，不丢批次）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.7 取代（后者收 r19 P1-3 余量与 P1-2 一半）"
+    },
+    {
+      "tag": "rc-20261030.7",
+      "commit": "151a262ab328df3f6edbd1927c24abb10780abbf",
+      "exe_md5": "07f1ea1a097ae8b90ae6944ace0a1349",
+      "exe_bytes": 10139136,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.7",
+      "recorded_at": "2026-10-30",
+      "recorded_note": "当前装机包：r19 P1-3 余量（日志常开句柄，每 256 条才重开）+ P1-2 的安全一半（PRAGMA synchronous=NORMAL）"
     }
   ],
   "legacy_backfilled": [
