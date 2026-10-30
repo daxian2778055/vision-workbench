@@ -603,7 +603,16 @@
       "exe_bytes": 10180096,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.16",
       "recorded_at": "2026-10-30",
-      "recorded_note": "当前装机包：r19 P2 第 1 批——异常写 lastError（红节点有原因）、预览判据取反修正、MVS 帧缓冲复用、classes.txt 按 mtime 缓存"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.17 取代（后者收 r19 P2 第 2 批）"
+    },
+    {
+      "tag": "rc-20261030.17",
+      "commit": "9e6ed41fb5c651219a2a46c2f30e21f66590512e",
+      "exe_md5": "236ad8c83b879ec4d99876ebdb7dc428",
+      "exe_bytes": 10179584,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.17",
+      "recorded_at": "2026-10-30",
+      "recorded_note": "当前装机包：r19 P2 第 2 批——VACUUM 移出写锁、feature_samples 进保留清理（BLOB 不再只涨）、DB 打开失败不留坏句柄（可重试）"
     }
   ],
   "legacy_backfilled": [
