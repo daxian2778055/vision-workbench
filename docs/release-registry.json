@@ -477,7 +477,16 @@
       "exe_bytes": 10129408,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.2",
       "recorded_at": "2026-10-30",
-      "recorded_note": "当前装机包：r17 余量——打包回滚失败点名（QFile::remove 写进 r.error）+ 删除/清空保存失败回滚内存与画布（配稳定失败用例：txt 建成目录）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.3 取代（后者收口 P2-1：口令 KDF 轮数 210000 + 登录时透明升级）"
+    },
+    {
+      "tag": "rc-20261030.3",
+      "commit": "95d8a1ad74d49173a88c37989252032e6378d846",
+      "exe_md5": "d4d0ad2c01b71ca9e368b28980efa240",
+      "exe_bytes": 10129408,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.3",
+      "recorded_at": "2026-10-30",
+      "recorded_note": "当前装机包：P2-1 收口——口令 PBKDF2 轮数 60000→210000（先量后定），登录成功时透明升级低轮数 token；配新腿与两半改坏臂"
     }
   ],
   "legacy_backfilled": [
