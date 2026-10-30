@@ -910,7 +910,7 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
             if (outputData) {
                 const HImage image = outputData->getHImage();
                 if (image.IsInitialized()) {
-                    m_imageView->setImage(image, targetDisplayNode->fullName());
+                    m_imageView->requestImage(image, targetDisplayNode->fullName());
                     if (m_imageSourceLabel) {
                         m_imageSourceLabel->setText(
                             QStringLiteral("图像来源: %1").arg(targetDisplayNode->fullName()));
@@ -1779,7 +1779,7 @@ void MainWindow::onNodeAdded(NodeBase *node)
             // 使用统一规则：下拉框选择 > 画布选中 > 兜底
             NodeBase *target = resolveDisplayNode(imageReadNode);
             if (target == imageReadNode && m_imageView) {
-                m_imageView->setImage(image, imageReadNode->fullName());
+                m_imageView->requestImage(image, imageReadNode->fullName());
                 if (m_imageSourceLabel) {
                     m_imageSourceLabel->setText(QString("图像来源: %1").arg(imageReadNode->fullName()));
                 }
@@ -1848,7 +1848,7 @@ void MainWindow::onNodeAdded(NodeBase *node)
 void MainWindow::onImageRead(const HalconCpp::HImage &image)
 {
     // 显示读取的图像
-    m_imageView->setImage(image, "读取图像");
+    m_imageView->requestImage(image, "读取图像");
     if (m_imageSourceLabel) {
         m_imageSourceLabel->setText("图像来源: 读取图像");
     }

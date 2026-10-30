@@ -69,19 +69,15 @@ cv::Mat himageToMat(const HImage &img)
         const uchar *g = reinterpret_cast<const uchar *>(pG.L());
         const uchar *b = reinterpret_cast<const uchar *>(pB.L());
         if (!r || !g || !b) return cv::Mat();
-        cv::Mat rgb(h, w, CV_MAKETYPE(depth, 3));
-        // HALCON RGB 平面 → OpenCV BGR 交织（按元素宽度搬运，不再假定 1 字节）
-        for (int y = 0; y < h; ++y) {
-            const uchar *pr = r + static_cast<size_t>(y) * w * elem;
-            const uchar *pg = g + static_cast<size_t>(y) * w * elem;
-            const uchar *pb = b + static_cast<size_t>(y) * w * elem;
-            uchar *dst = rgb.ptr<uchar>(y);
-            for (int x = 0; x < w; ++x) {
-                memcpy(dst + (static_cast<size_t>(x) * 3 + 0) * elem, pb + x * elem, elem);
-                memcpy(dst + (static_cast<size_t>(x) * 3 + 1) * elem, pg + x * elem, elem);
-                memcpy(dst + (static_cast<size_t>(x) * 3 + 2) * elem, pr + x * elem, elem);
-            }
-        }
+        // HALCON RGB 平面 → OpenCV BGR 交织（r19 P1-10）：改用 cv::merge（SIMD）。
+        // 原实现是逐像素三重 memcpy（5MP RGB 一次约 15MB 搬运，全库 59 个调用点都在走它）。
+        // 注意这里是**拷贝**：HALCON 的平面与 OpenCV 的交织布局不同，无法零拷贝。
+        cv::Mat pr(h, w, CV_MAKETYPE(depth, 1), const_cast<uchar *>(r));
+        cv::Mat pg(h, w, CV_MAKETYPE(depth, 1), const_cast<uchar *>(g));
+        cv::Mat pb(h, w, CV_MAKETYPE(depth, 1), const_cast<uchar *>(b));
+        std::vector<cv::Mat> bgr = {pb, pg, pr};
+        cv::Mat rgb;
+        cv::merge(bgr, rgb);
         return rgb;
     } catch (const HException &) {
         return cv::Mat();

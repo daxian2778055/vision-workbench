@@ -17,7 +17,8 @@ namespace OpencvUtil {
 
 /// HALCON HImage → cv::Mat（单通道/三通道 8bit；其他类型转为 CV_8U）
 /// 替换版环境下 HALCON 图像层已实测正常（GetImagePointer1/3 读写一致）。
-/// 返回的 Mat 与 HImage 共享像素内存（只读拷贝安全，写操作前请 clone）。
+/// 返回的 Mat 是**深拷贝**（r19 P1-10 修正注释：原写"共享内存"，实现是 clone）。
+/// 三通道走 cv::merge（SIMD），仍是拷贝——HALCON 平面与 OpenCV 交织布局不同，无法零拷贝。
 cv::Mat himageToMat(const HalconCpp::HImage &img);
 
 /// cv::Mat → HALCON HImage（8bit 单/三通道；其他类型先转换）
