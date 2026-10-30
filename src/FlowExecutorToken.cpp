@@ -1,3 +1,4 @@
+#include <thread>
 #include "FlowExecutorToken.h"
 
 #include "FlowExecutor.h"
@@ -37,30 +38,48 @@ FlowExecutorToken::~FlowExecutorToken()
         return;
     }
     FlowExecutor *ex = m_owner;
-    // 收尾策略：默认 joinForDestroy（停止 ＋ 有界等待退出，唯一实现）；非空 = 测试注入。
+    m_owner = nullptr;   // 收尾期间令牌不再借出本体
     constexpr int kFinishTimeoutMs = 15000;
-    const bool joined = m_finisher ? m_finisher(ex, kFinishTimeoutMs)
-                                   : ex->joinForDestroy(kFinishTimeoutMs);
-    if (joined) {
-        // 顺序要点：**先回收再置空**。本体析构里要按归属块把节点的归属槽清空（P3c），
-        // 那一段发生在 delete 之内；令牌若提前置空，令牌面在本体收尾期间就借不到本体了。
-        delete ex;
-        m_owner = nullptr;
+
+    // ── 注入 finisher（测试钉超时分支）：保持同步，改异步会让断言时序失效 ──
+    if (m_finisher) {
+        const bool joined = m_finisher(ex, kFinishTimeoutMs);
+        if (joined) {
+            delete ex;
+            return;
+        }
+        abandonBody(ex, kFinishTimeoutMs);
         return;
     }
-    // P3d（终局撤除）：超时仍未退出——绝不 delete（线程析构会硬杀，比一个随进程退出被回收
-    // 的线程更危险）。先把本体置入**可观测终态**（Error ＋ executionAbandoned ＋ 关键日志），
-    // 再断开信号并挂 finished 自删；所有权交给自删路径。与旧行为的差：此前只写一条调试
-    // 日志就静默消失，界面可能停在「运行中」且现场无提示；进程同样不中止。
+
+    // ── 默认路径（r19 P1-13）：短等待内联、长等待挪出 GUI 线程 ──
+    // 此前 GUI 线程最多冻 15 秒（切方案/关流程都走这里）。空闲/已停的执行器 300ms 内
+    // 一定能收掉，常规关闭仍是同步语义；收不掉的（长节点/硬件等待）交给后台，界面继续可用。
+    constexpr int kInlineWaitMs = 300;
+    if (ex->joinForDestroy(kInlineWaitMs)) {
+        delete ex;
+        return;
+    }
+    std::thread([ex]() {
+        constexpr int kRestMs = 15000 - 300;
+        if (ex->joinForDestroy(kRestMs)) {
+            delete ex;
+            return;
+        }
+        abandonBody(ex, 15000);
+    }).detach();
+}
+
+void FlowExecutorToken::abandonBody(FlowExecutor *ex, int timeoutMs)
+{
+    // 超时仍未退出——绝不 delete（线程析构会硬杀）。先把本体置入**可观测终态**
+    //（Error + executionAbandoned + 关键日志），再断开信号并挂 finished 自删。
     const QString why = QStringLiteral(
         "FlowExecutorToken 收尾：执行器工作线程未在 %1ms 内退出，已放弃强杀并转入可观测终态"
-        "（进程继续；线程退出后本体自删）。").arg(kFinishTimeoutMs);
-    // U-203：硬中止已随析构的等待一并撤除，「送别一格」（应用层收尾钩子：把方案/日志
-    // 收好）改挂在这条软失败路径上——这才是真正需要送别的地方：进程继续，
-    // 但这个执行器不会再被接管。
+        "（进程继续；线程退出后本体自删）。").arg(timeoutMs);
     FlowExecutor::invokeOrderlyStopHook(why);
     ex->markExecutionAbandoned(why);
     ex->disconnect();
     QObject::connect(ex, &QThread::finished, ex, &QObject::deleteLater);
-    m_owner = nullptr;   // 所有权交给自删路径：令牌此后不得再借出本体
 }
+

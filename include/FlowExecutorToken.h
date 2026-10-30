@@ -51,6 +51,8 @@ public:
     FlowExecutor *executor() const { return m_owner; }
 
 private:
+    /// 超时未退出的收尾（r19 P1-13）：置可观测终态 + finished 自删，绝不 delete
+    static void abandonBody(FlowExecutor *ex, int timeoutMs);
     /// 本体由本令牌拥有；收尾后交出（超时分支由自删路径接管）。
     FlowExecutor *m_owner = nullptr;
     /// 收尾策略（默认空 = joinForDestroy；测试可注入以钉超时分支）。
