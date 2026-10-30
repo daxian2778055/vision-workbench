@@ -155,6 +155,7 @@ set(SOURCES
     src/DnnInferNode.cpp
     src/DnnDetectNode.cpp
     src/DnnNetCache.cpp
+src/ModelCache.cpp
     src/DnnSegmentNode.cpp
     src/CameraIoNode.cpp
     src/DeepOcrNode.cpp

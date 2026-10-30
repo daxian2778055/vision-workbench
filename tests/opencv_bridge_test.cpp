@@ -6,6 +6,10 @@
 // 目标类型全部输出 byte，0/1000/60000 → 0/255/255（饱和截断，注释写"归一化"是错的）。
 //
 // 本用例用真 HALCON 图像做往返，不依赖相机/文件。
+#include "ModelCache.h"
+#include <opencv2/imgcodecs.hpp>
+#include <QDateTime>
+#include <QTemporaryDir>
 #include "OpencvUtil.h"
 #include "ConvertImageNode.h"
 #include "NodeBase.h"
@@ -25,6 +29,9 @@ private slots:
     void uint2ThreeChannelRoundTrip();      // P1：16 位三通道
     void convertImage16uIsNotSaturated();   // P2-1：ConvertImageNode 的 16U 目标
     void realRoundTripPreservesValues();    // real（float）往返
+    // r19 P1-7：每轮 imread/imdecode/重算关键点太贵，按 (键, mtime, 参数) 缓存
+    void modelCacheCachesByMtime();
+
 };
 
 using namespace HalconCpp;
@@ -173,6 +180,50 @@ void OpencvBridgeTest::realRoundTripPreservesValues()
     const float *q = reinterpret_cast<const float *>(p.L());
     QCOMPARE(q[1], -1.25f);
     QCOMPARE(q[2], 100.0f);
+}
+
+void OpencvBridgeTest::modelCacheCachesByMtime()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    const QString path = tmp.path() + QStringLiteral("/t.png");
+    {
+        QImage img(32, 24, QImage::Format_Grayscale8);
+        img.fill(10);
+        QVERIFY(img.save(path));
+    }
+
+    ModelCache::clear();
+    cv::Mat a = ModelCache::imageFor(path, cv::IMREAD_GRAYSCALE);
+    QVERIFY2(!a.empty(), "首次解码为空");
+    cv::Mat b = ModelCache::imageFor(path, cv::IMREAD_GRAYSCALE);
+    QCOMPARE(a.data, b.data);   // 同一份缓存（共享数据，不再重复解码）
+
+    // 换文件（mtime 变）→ 必须重新加载
+    {
+        QImage img(32, 24, QImage::Format_Grayscale8);
+        img.fill(200);
+        QVERIFY(img.save(path));
+    }
+    {
+        QFile f(path);
+        QVERIFY(f.open(QIODevice::ReadWrite));
+        f.setFileTime(QDateTime::currentDateTime().addSecs(5), QFileDevice::FileModificationTime);
+    }
+    cv::Mat c = ModelCache::imageFor(path, cv::IMREAD_GRAYSCALE);
+    QVERIFY(!c.empty());
+    QVERIFY2(c.data != a.data, "mtime 变了仍命中旧缓存（换型不生效）");
+
+    // 关键点：同键同参数两次必须命中同一份
+    std::vector<cv::KeyPoint> k1, k2;
+    cv::Mat d1, d2;
+    ModelCache::keypointsFor(QStringLiteral("k"), 0, 200, c, &k1, &d1);
+    ModelCache::keypointsFor(QStringLiteral("k"), 0, 200, c, &k2, &d2);
+    QCOMPARE(int(k1.size()), int(k2.size()));
+    QCOMPARE(d1.data, d2.data);
+
+    ModelCache::clear();
+    QCOMPARE(ModelCache::size(), 0);
 }
 
 QTEST_MAIN(OpencvBridgeTest)

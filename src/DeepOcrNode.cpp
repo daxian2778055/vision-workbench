@@ -1,3 +1,5 @@
+#include <QMutex>
+#include <QMap>
 #include "DeepOcrNode.h"
 #include <algorithm>
 #include "DataObject.h"
@@ -11,6 +13,27 @@ DeepOcrNode::DeepOcrNode(QObject *parent) : HalconNode(parent)
     setName(QStringLiteral("HALCON DeepOCR"));
     m_type = SHAPE_ANALYSIS;
 }
+
+namespace {
+
+/// DeepOCR 引擎缓存（r19 P1-7）：每帧 CreateDeepOcr + ClearDlModel 是纯浪费。
+/// 引擎按 mode 缓存、进程内常驻（HTuple 持引用，节点析构不误伤）。
+HTuple cachedDeepOcr(const QString &mode, QString *error)
+{
+    static QMutex s_mu;
+    static QMap<QString, HTuple> s_engines;
+    QMutexLocker<QMutex> locker(&s_mu);
+    QMap<QString, HTuple>::const_iterator it = s_engines.constFind(mode);
+    if (it != s_engines.constEnd())
+        return it.value();
+    HTuple ocrH;
+    CreateDeepOcr(HTuple("mode"), HTuple(mode.toStdString().c_str()), &ocrH);
+    s_engines.insert(mode, ocrH);
+    Q_UNUSED(error)
+    return ocrH;
+}
+
+}   // namespace
 
 void DeepOcrNode::init()
 {
@@ -58,7 +81,7 @@ void DeepOcrNode::run(bool /*autoSwitch*/)
 
         HTuple ocrH;
         try {
-            CreateDeepOcr(HTuple("mode"), HTuple(mode.toStdString().c_str()), &ocrH);
+            ocrH = cachedDeepOcr(mode, nullptr);   // 每帧 Create 是纯浪费（r19 P1-7）
         } catch (const HException &e) {
             m_params[QStringLiteral("lastError")] =
                 QStringLiteral("DeepOCR 创建失败（需 HALCONROOT/dl 下的官方预训练模型）: %1")
@@ -84,20 +107,11 @@ void DeepOcrNode::run(bool /*autoSwitch*/)
                 QStringLiteral("DeepOCR 推理失败: %1")
                     .arg(QString::fromStdString(e.ErrorMessage().Text()));
             m_params["moduleStatus"] = false;
-            try { ClearDlModel(ocrH); }
-            catch (const HException &ce) {
-                m_params[QStringLiteral("lastError")] =
-                    QStringLiteral("DeepOCR 推理失败后清理模型也失败: %1")
-                        .arg(QString::fromStdString(ce.ErrorMessage().Text()));
-            }
+            // 引擎进缓存复用（r19 P1-7）：这里不再 ClearDlModel，
+            // 否则下一次取到的是已被释放的句柄。
             return;
         }
-        try { ClearDlModel(ocrH); }
-        catch (const HException &ce) {
-            m_params[QStringLiteral("lastError")] =
-                QStringLiteral("DeepOCR 清理模型失败: %1")
-                    .arg(QString::fromStdString(ce.ErrorMessage().Text()));
-        }
+        // 不再 ClearDlModel（r19 P1-7）：引擎进缓存复用
 
         // 解析结果 dict（deep_ocr 结果：单个 dict）
         QStringList words;

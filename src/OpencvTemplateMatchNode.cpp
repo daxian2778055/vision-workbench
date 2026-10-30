@@ -1,6 +1,7 @@
 #include "OpencvTemplateMatchNode.h"
 #include "NodeResultFields.h"
 #include "OpencvUtil.h"
+#include "ModelCache.h"
 #include "DataObject.h"
 #include "AppLog.h"
 #include "FlowScene.h"
@@ -223,7 +224,8 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
                 setOutputData(1, QSharedPointer<DataObject>());
                 return;
             }
-            cv::Mat loaded = cv::imread(templatePath.toStdString(), cv::IMREAD_GRAYSCALE);
+            // 每轮 imread 同一个模板是纯浪费（r19 P1-7）：按 (路径, mtime) 缓存，换文件自动重载
+        cv::Mat loaded = ModelCache::imageFor(templatePath, cv::IMREAD_GRAYSCALE);
             if (loaded.empty()) {
                 m_params[QStringLiteral("trainStatus")] =
                     QStringLiteral("模板加载失败: %1").arg(templatePath);

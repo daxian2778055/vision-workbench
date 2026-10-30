@@ -1,3 +1,5 @@
+#include <QMutex>
+#include <QFileInfo>
 #include "OpencvClassifyNode.h"
 #include "NodeResultFields.h"
 #include "ClassifierTrainer.h"
@@ -13,6 +15,29 @@ OpencvClassifyNode::OpencvClassifyNode(QObject *parent) : HalconNode(parent)
     setName(QStringLiteral("分类推理"));
     m_type = IMAGE_PROCESSING;
 }
+
+namespace {
+
+/// 分类模型缓存（r19 P1-7）：键含 mtime，换文件自动重载
+ClsTrainer::Model cachedClassifyModel(const QString &absPath)
+{
+    static QMutex s_mu;
+    static QString s_key;
+    static ClsTrainer::Model s_model;
+    const QFileInfo fi(absPath);
+    const QString key = fi.exists()
+                            ? (fi.absoluteFilePath() + QLatin1Char('|')
+                               + QString::number(fi.lastModified().toMSecsSinceEpoch()))
+                            : absPath;
+    QMutexLocker<QMutex> locker(&s_mu);
+    if (key != s_key) {
+        s_model = ClsTrainer::loadModel(absPath.toLocal8Bit().constData());
+        s_key = key;
+    }
+    return s_model;
+}
+
+}   // namespace
 
 void OpencvClassifyNode::init()
 {
@@ -47,8 +72,8 @@ void OpencvClassifyNode::run(bool /*autoSwitch*/)
             m_params["moduleStatus"] = false;
             return;
         }
-        ClsTrainer::Model m =
-            ClsTrainer::loadModel(modelPath.toLocal8Bit().constData());
+        // 每轮 loadModel 同一个文件太贵（r19 P1-7）：按 (路径, mtime) 缓存，换文件自动重载
+        ClsTrainer::Model m = cachedClassifyModel(modelPath);
         if (!m.loaded) {
             m_params[QStringLiteral("lastError")] = QString::fromLocal8Bit(m.error.c_str());
             m_params["moduleStatus"] = false;

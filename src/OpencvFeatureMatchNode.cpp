@@ -1,3 +1,4 @@
+#include "ModelCache.h"
 #include "OpencvFeatureMatchNode.h"
 #include "NodeResultFields.h"
 #include "OpencvTemplateMatchNode.h"   // 复用 extractTemplatePatch（同一套 ROI→模板块抠取）
@@ -219,6 +220,7 @@ void OpencvFeatureMatchNode::run(bool /*autoSwitch*/)
         const bool train = m_params.value(QStringLiteral("trainFromImage"), false).toBool();
 
         cv::Mat tmpl;
+        QString wantName;   // 特征库样本名（r19 P1-7 关键点缓存的键用）
         if (train) {
             tmpl = OpencvTemplateMatchNode::extractTemplatePatch(gray, geometryRoi());
             if (tmpl.empty()) {
@@ -255,7 +257,7 @@ void OpencvFeatureMatchNode::run(bool /*autoSwitch*/)
         } else if (m_params.value(QStringLiteral("templateSource"), 0).toInt() == 1) {
             // 参照来自特征库样本（2026-10-27 少样本接线）：用样本缩略图当模板，
             // 换型按名字切、不带模板文件；样本没缩略图就明说该怎么办。
-            const QString wantName =
+            wantName =
                 m_params.value(QStringLiteral("librarySampleName")).toString().trimmed();
             if (wantName.isEmpty()) {
                 fail(QStringLiteral("参照来源=特征库样本时必须填写样本名"));
@@ -285,7 +287,8 @@ void OpencvFeatureMatchNode::run(bool /*autoSwitch*/)
                 fail(QStringLiteral("匹配模式需要设置模板文件路径"));
                 return;
             }
-            tmpl = cv::imread(templatePath.toStdString(), cv::IMREAD_GRAYSCALE);
+            // 每轮 imread 同一个模板（r19 P1-7）
+            tmpl = ModelCache::imageFor(templatePath, cv::IMREAD_GRAYSCALE);
             if (tmpl.empty()) {
                 fail(QStringLiteral("模板加载失败: %1").arg(templatePath));
                 return;
@@ -308,7 +311,18 @@ void OpencvFeatureMatchNode::run(bool /*autoSwitch*/)
             makeDetector(detectorIdx, m_params.value(QStringLiteral("nFeatures"), 2000).toInt());
         std::vector<cv::KeyPoint> objKp, sceneKp;
         cv::Mat objDesc, sceneDesc;
-        f2d->detectAndCompute(tmpl, cv::noArray(), objKp, objDesc);
+        // 模板侧关键点每轮重算太贵（r19 P1-7）：按 (模板键, 检测器, nFeatures) 缓存；
+        // 场景侧每帧都在变，照旧现算。
+        {
+            QFileInfo tfi(templatePath);
+            const QString tmplKey = wantName.isEmpty()
+                                        ? (QDir::cleanPath(templatePath) + QLatin1Char('|')
+                                           + QString::number(tfi.lastModified().toMSecsSinceEpoch()))
+                                        : (QStringLiteral("db:") + wantName);
+            ModelCache::keypointsFor(tmplKey, detectorIdx,
+                                     m_params.value(QStringLiteral("nFeatures"), 2000).toInt(),
+                                     tmpl, &objKp, &objDesc);
+        }
         f2d->detectAndCompute(gray, cv::noArray(), sceneKp, sceneDesc);
         m_params[QStringLiteral("templateKeypoints")] = static_cast<int>(objKp.size());
         m_params[QStringLiteral("sceneKeypoints")] = static_cast<int>(sceneKp.size());
