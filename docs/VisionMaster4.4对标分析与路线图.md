@@ -436,13 +436,41 @@
 
 | 项 | 决定 | 依据 |
 |---|---|---|
-| **P2-5 英文界面覆盖**（24 个界面文件、约 1500 处中文字面量未走 `tr()`，其中用户可见约 1200） | **暂停，维持 Partial**，不排期 | 客户与现场操作员以中文为主；外方需求尚未明确。按当前口径做完整覆盖约需 **1.5–2 人日**（机械包装 + `.ts` 英文翻译 + 闸复核），收益不抵当前优先级 |
+| **P2-5 英文界面覆盖**（166 个 `.cpp`、**2012 处**未国际化 UI 文案，详见下节普查） | **暂停，维持 Partial**，不排期 | 客户与现场操作员以中文为主；外方需求尚未明确。按当前口径做完整覆盖约需 **1.5–2 人日**（机械包装 + `.ts` 英文翻译 + 闸复核），收益不抵当前优先级 |
 
 若日后确有外方需求，已知路径（本轮已试通、代码可复用）：
 1. 逐文件把 **UI 文案**的 `QStringLiteral("中文")` 改为 `tr("中文")`（只换调用头，兼容相邻字面量拼接）；
 2. `lupdate` 生成 `.ts` 条目 → 填英文 → `lrelease`；
 3. `i18n_test` 的静态闸会拦住"未翻/空译/与原中文相同"三类；
 4. **参数标签**（`paramSpecs` 的 label/tooltip，约 400+ 处）需要 `QT_TRANSLATE_NOOP` + 面板显示时 `translate`，属另一条独立工作量，不要与 UI 文案混做。
+
+**P2-5 普查落地（2026-10-30，账本要求「拍板保留 + 普查补齐」的普查部分）**
+
+计数可复跑：`python tools/i18n_census.py`（`--md` 出表格）。口径：`QStringLiteral("中文…")` / `QString::fromUtf8("中文…")` 且不在参数键/日志/QSettings/对象名行上；注释不计；`tr("中文…")` 计入已国际化。
+
+| 读数 | 值 |
+|---|---|
+| 涉及文件 | **166** 个 `.cpp` |
+| **未国际化 UI 文案** | **2012** 处 |
+| 参数键/日志类（**不算** UI 文案） | 158 处 |
+| 已 `tr()` | 245 处 |
+
+前 10 个文件（改造成本集中在这里）：
+
+| 文件 | 未国际化 | 参数/日志 | 已 tr() |
+|---|---:|---:|---:|
+| `MainWindow.cpp` | 104 | 21 | 204 |
+| `RuntimeInterfaceDesigner.cpp` | 85 | 0 | 0 |
+| `StatisticsReportDialog.cpp` | 79 | 0 | 0 |
+| `TrainingWizardDialog.cpp` | 58 | 0 | 0 |
+| `StatisticsReport.cpp` | 52 | 0 | 0 |
+| `CommEventEditDialogs.cpp` | 50 | 0 | 0 |
+| `OpencvFeatureMatchNode.cpp` | 47 | 1 | 0 |
+| `TrainingRunnerDialog.cpp` | 46 | 0 | 0 |
+| `ResultTablePanel.cpp` | 41 | 0 | 0 |
+| `DnnSegmentNode.cpp` | 37 | 0 | 0 |
+
+> **口径提醒**：这 2012 处里含大量**参数标签**（`paramSpecs` 的 label/tooltip）。它们不能靠 `tr()` 直接解决——`paramSpecs` 里的字符串是运行期拼的，`lupdate` 扫不到，需要 `QT_TRANSLATE_NOOP` 声明 + 面板显示时 `translate`。真正"纯 UI 文案"的量比 2012 小，但**改造仍按文件推进**，不可一次性机械替换。
 
 **仍开放（本轮未修，各有理由）**：
 
