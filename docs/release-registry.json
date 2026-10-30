@@ -567,7 +567,16 @@
       "exe_bytes": 10166784,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.12",
       "recorded_at": "2026-10-30",
-      "recorded_note": "当前装机包：r19 P1-7——重型节点每轮重载模型/模板改 ModelCache（键含 mtime、无稳定标识不缓存），含 DeepOCR 引擎复用"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.13 取代（后者收 r19 P1-6）"
+    },
+    {
+      "tag": "rc-20261030.13",
+      "commit": "51aae32b68819e90f428216c5c48c1c044106193",
+      "exe_md5": "c085645adc847f49412e975aed9532f3",
+      "exe_bytes": 10169856,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.13",
+      "recorded_at": "2026-10-30",
+      "recorded_note": "当前装机包：r19 P1-6——图像源解码缓存（含 mono8）+ 缩略图通知按签名去重（不再每轮全量重建）"
     }
   ],
   "legacy_backfilled": [
