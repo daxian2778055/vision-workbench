@@ -278,7 +278,8 @@ if ($qtBinDir) {
 # 内部件一并带进了客户包——现场客户能看到内部审计与复核记录。
 # F1 只依赖 用户操作手册.md（ManualPathResolver 候选链 + qrc 兜底），
 # 因此其余文档显式列出：不在此表内的一律不随包。
-$docsToShip = @('用户操作手册.md', '离线可用性说明.md', '深度学习集成指南.md', '统计报表说明.md')
+$docsToShip = @('用户操作手册.md', '离线可用性说明.md', '深度学习集成指南.md',
+                 '统计报表说明.md', '现场验收清单.md')   # 2026-10-30：验收清单随包（实施人员照此打勾）
 Step "拷贝对外文档（白名单 $($docsToShip.Count) 份）"
 $dstDocs = Join-Path $OutDir "docs"
 New-Item -ItemType Directory -Path $dstDocs -Force | Out-Null
