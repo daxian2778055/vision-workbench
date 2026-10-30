@@ -26,6 +26,7 @@
 #include <QCryptographicHash>
 
 #include "AppDatabase.h"
+#include "SchemeCrypto.h"
 #include "RecordNode.h"
 #include "DataObject.h"
 
@@ -108,6 +109,8 @@ private slots:
     // 之前的加盐自制迭代链）都要能登进来，且登录成功那一刻被换写成 PBKDF2 token。
     // 只动 users 表、自己造夹具也自己收，排在最后一腿（DROP inspection_results 那条）之前。
     void testLegacyHashesAuthenticateAndUpgrade();
+    // P2-1（2026-10-30）：轮数抬到 210000 之后，老 PBKDF2 token 要能在登录时被换写
+    void testLowIterationTokenIsUpgradedOnLogin();
     // 时间戳口径三腿（2026-10-25 复核 P1）：库里是 UTC 墙钟，查询绑定/读回/purge 曾按本地口径，
     // 同一天的行全落在 BETWEEN 之外（凌晨查报表=0 行）、界面整体慢一个时区偏移。
     // 旧测试的下界是 addYears(-1)，永远大于库里的日期，绕过了"同一天"边界——所以这里用当天窗口。
@@ -879,6 +882,66 @@ void DatabaseTest::testWriteFailureIsVisibleAndNotMisleading()
     QVERIFY2(notOpen.contains(QStringLiteral("open=no")), qPrintable(notOpen));
     QVERIFY2(!notOpen.contains(QStringLiteral("Parameter count mismatch")), qPrintable(notOpen));
     QSqlDatabase::database(ownerConn, false).open();   // 开回去：本腿排最后，但析构路径仍会读库
+}
+
+void DatabaseTest::testLowIterationTokenIsUpgradedOnLogin()
+{
+    // P2-1（2026-10-30）：kHashIterations 60000 → 210000 之后
+    // ① 新口令一律走新轮数；② 库里已有的 60000 轮 token 仍能登录，**登录成功即被换写成新轮数**
+    //（读侧照旧按 token 自报轮数校验，所以抬值不会把老账号锁在门外）。
+    const QString fresh = AppDatabase::createPasswordHash(QStringLiteral("Probe!pw"));
+    QVERIFY2(fresh.startsWith(QStringLiteral("pbkdf2$210000$")),
+             qPrintable(QStringLiteral("新口令没用 210000 轮：%1").arg(fresh.left(28))));
+
+    AppDatabase *db = AppDatabase::instance();
+    const QString path = db->databasePath();
+    QVERIFY2(!path.isEmpty(), "databasePath 为空，本腿无从定位库文件");
+
+    // 造一个 60000 轮的老 token
+    const QByteArray salt = QByteArray::fromHex(QByteArrayLiteral("00112233445566778899aabbccddeeff"));
+    const QByteArray dk = SchemeCrypto::pbkdf2HmacSha256(
+        QStringLiteral("Old!pw").toUtf8(), salt, 60000, 32);
+    const QString oldToken = QStringLiteral("pbkdf2$60000$%1$%2")
+                                 .arg(QString::fromLatin1(salt.toHex()),
+                                      QString::fromLatin1(dk.toHex()));
+
+    {
+        QSqlDatabase probe = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                       QStringLiteral("p21_probe_kdf"));
+        probe.setDatabaseName(path);
+        QVERIFY2(probe.open(), qPrintable(probe.lastError().text()));
+        QVERIFY(probeExec(probe, QStringLiteral("DROP TABLE IF EXISTS users")).isEmpty());
+        QVERIFY(probeExec(probe, kUsersDdl).isEmpty());
+        QVERIFY(probeExec(probe, QStringLiteral(
+            "INSERT INTO users (name, password_hash, role) VALUES ('olditer', '%1', 'Admin')")
+            .arg(oldToken)).isEmpty());
+        probe.close();
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("p21_probe_kdf"));
+
+    // 老 token 仍能登录（不能把现场已存账号锁在门外）
+    bool readFailed = true;
+    QVERIFY2(db->authenticateUser(QStringLiteral("olditer"), QStringLiteral("Old!pw"), &readFailed),
+             "60000 轮的老 token 登不进来了");
+    QVERIFY2(!readFailed, "健康库上的正确口令被报成读失败");
+
+    // 登录成功之后应已被换写成当前轮数
+    {
+        QSqlDatabase probe = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                       QStringLiteral("p21_probe_kdf2"));
+        probe.setDatabaseName(path);
+        QVERIFY2(probe.open(), qPrintable(probe.lastError().text()));
+        QSqlQuery q(probe);
+        QVERIFY(q.exec(QStringLiteral("SELECT password_hash FROM users WHERE name = 'olditer'")));
+        QVERIFY(q.next());
+        const QString stored = q.value(0).toString();
+        QVERIFY2(stored.startsWith(QStringLiteral("pbkdf2$210000$")),
+                 qPrintable(QStringLiteral("老 token 没有被升级：%1").arg(stored.left(28))));
+        // 升级后的串仍要能校验同一个口令
+        QVERIFY(AppDatabase::verifyPassword(QStringLiteral("Old!pw"), stored));
+        probe.close();
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("p21_probe_kdf2"));
 }
 
 QTEST_MAIN(DatabaseTest)

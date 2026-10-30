@@ -46,9 +46,13 @@ QDateTime readUtcTimestamp(const QVariant &v)
 namespace {
 // 账户口令 KDF：PBKDF2-HMAC-SHA256（SchemeCrypto 里那份实现，与方案信封共源）。
 // 先前的形状是「加盐 12000 轮裸 SHA-256 自制迭代链」——升级的是构造不是成本线（152 行）。
-// 167 行拍板把轮数抬到 60000（仍在本机一次派生 ≈0.6s 量级，与方案信封 100000 轮那条
+// 2026-10-30 P2-1：轮数 60000 → 210000（先量后定：本机 CNG/BCrypt 实测 60k=157ms、
+// 210k=550ms、600k=1246ms。取 210000 是 OWASP 对 PBKDF2-HMAC-SHA512 的档位——比现状强
+// 3.5 倍而登录仍约 0.55s；OWASP 对 SHA-256 的 600k 在本机是 1.25s，产线机更慢，故不取）。
+// 轮数原本就写在 token 里，抬值不需要迁移旧串；登录成功时顺带把低轮数 token 换成新轮数。
+// 旧注（原文照抄）：// 167 行拍板把轮数抬到 60000（仍在本机一次派生 ≈0.6s 量级，与方案信封 100000 轮那条
 // ~1s 的派生成本同档，登录是低频操作）；旧 token 自报轮数照常校验，不破旧账。
-constexpr int kHashIterations = 60000;
+constexpr int kHashIterations = 210000;
 // 读侧封顶：token 里的轮数是数据不是报价——0 轮与上限外的 token 一概不进派生（与方案信封
 // 进口的先值检同一叙事，见 SchemePackage.h 的头注）。
 constexpr quint32 kHashIterationsMax = 1000000;
@@ -656,8 +660,19 @@ bool AppDatabase::authenticateUser(const QString &name, const QString &password,
     const QString stored = q.value(1).toString();
     if (!verifyPassword(password, stored)) return false;
 
-    // 兼容旧版（无盐 SHA-256 或旧的自制迭代链）：登录已验证通过即换写成 PBKDF2 token
-    if (!stored.startsWith(QLatin1String(kKdfTokenPrefix))) {
+    // 登录成功后的透明升级（2026-10-30 P2-1）：不只看"非 PBKDF2 旧格式"，
+    // **PBKDF2 token 的轮数低于当前目标**也要换写——否则抬了 kHashIterations 之后，
+    // 老账号会永远停在旧成本上（读侧照旧校验，只是强度不涨）。
+    bool needsUpgrade = !stored.startsWith(QLatin1String(kKdfTokenPrefix));
+    if (!needsUpgrade) {
+        const QStringList parts = stored.split(QLatin1Char('$'));
+        if (parts.size() == 4) {
+            bool itersOk = false;
+            const quint64 iters = parts[1].toULongLong(&itersOk);
+            needsUpgrade = itersOk && iters < quint64(kHashIterations);
+        }
+    }
+    if (needsUpgrade) {
         QSqlQuery up(db);
         // 迁移失败**不改变登录结果**（口令已验证通过），但必须留痕：静默失败意味着
         // 这条账户一直是无盐哈希，而界面上没人看得出来（原实现 prepare/exec 返回值都没查）。
