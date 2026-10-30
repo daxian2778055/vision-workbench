@@ -612,7 +612,16 @@
       "exe_bytes": 10179584,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.17",
       "recorded_at": "2026-10-30",
-      "recorded_note": "当前装机包：r19 P2 第 2 批——VACUUM 移出写锁、feature_samples 进保留清理（BLOB 不再只涨）、DB 打开失败不留坏句柄（可重试）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.18 取代（后者收 r19 P2 第 3 批）"
+    },
+    {
+      "tag": "rc-20261030.18",
+      "commit": "e773db77428afb65680c962fd0c3f42d4ac3a379",
+      "exe_md5": "763bb13a18f7d75cb4223b20584e8321",
+      "exe_bytes": 10181120,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.18",
+      "recorded_at": "2026-10-30",
+      "recorded_note": "当前装机包：r19 P2 第 3 批——切全局相机先关旧句柄（不再留幽灵句柄）、接收数据带 lastDataTs/lastDataAgeMs、崩溃日志改 tryLock（SIGSEGV 不再自锁）"
     }
   ],
   "legacy_backfilled": [
