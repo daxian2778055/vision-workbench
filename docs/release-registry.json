@@ -576,7 +576,16 @@
       "exe_bytes": 10169856,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.13",
       "recorded_at": "2026-10-30",
-      "recorded_note": "当前装机包：r19 P1-6——图像源解码缓存（含 mono8）+ 缩略图通知按签名去重（不再每轮全量重建）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.14 取代（后者收 r19 P1-5/P1-10）"
+    },
+    {
+      "tag": "rc-20261030.14",
+      "commit": "37552214cc227b5ad6a876f6cb05c242340eff04",
+      "exe_md5": "138239bd1bde37e97274f58ec3353ff1",
+      "exe_bytes": 10170368,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.14",
+      "recorded_at": "2026-10-30",
+      "recorded_note": "当前装机包：r19 P1-5/P1-10——主预览改走 requestImage 的 latest-wins 合并 + HImage↔Mat 三通道 cv::merge + 修掉「共享内存」假注释"
     }
   ],
   "legacy_backfilled": [
