@@ -468,7 +468,16 @@
       "exe_bytes": 10128384,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.1",
       "recorded_at": "2026-10-30",
-      "recorded_note": "当前装机包：r16 修复——P2-13 菜单随 executionFinished/parked/resumed 重算 + 选目录后复查；INV5 收窄 sp 旁路（三形态改坏臂均 RED）；letterbox pad 整数口径 + 几何往返腿"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.2 取代（后者清 r17 的两条余量）"
+    },
+    {
+      "tag": "rc-20261030.2",
+      "commit": "ca4390879055a5619faaa1ac2f24bb1b58788f4d",
+      "exe_md5": "91023b64a315817a4eeaf3f31b520805",
+      "exe_bytes": 10129408,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.2",
+      "recorded_at": "2026-10-30",
+      "recorded_note": "当前装机包：r17 余量——打包回滚失败点名（QFile::remove 写进 r.error）+ 删除/清空保存失败回滚内存与画布（配稳定失败用例：txt 建成目录）"
     }
   ],
   "legacy_backfilled": [
