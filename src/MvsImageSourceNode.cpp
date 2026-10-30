@@ -186,6 +186,14 @@ void MvsImageSourceNode::readGlobalCamerasInThread()
 
 void MvsImageSourceNode::setParam(const QString &key, const QVariant &value)
 {
+    // 切全局相机要先把旧句柄关掉（r19 P2）：原来只置 nullptr，旧句柄既不 StopGrabbing
+    // 也不销毁，SDK 侧成了"没人拥有却还在采集"的幽灵。closeCamera() 自己会取 m_mutex，
+    // 所以必须在下面这把锁**之前**做，否则自锁。
+    if (key == QStringLiteral("globalCameraName")) {
+        const QString next = value.toString().trimmed();
+        if (next != m_globalCameraName && (m_cameraOpened || m_hCamera))
+            closeCamera();
+    }
     QMutexLocker locker(&m_mutex);
     VFP_DEBUG << "MvsImageSourceNode::setParam key=" << key << "value=" << value;
     

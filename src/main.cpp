@@ -39,6 +39,20 @@ namespace {
 
 QMutex g_crashMutex;
 
+namespace {
+
+/// 崩溃路径专用锁（r19 P2）：SIGSEGV 若落在"已持 g_crashMutex 的线程"上，
+/// QMutexLocker 会自锁、崩溃日志永远写不出来。这里 tryLock：拿不到就跳过串行化尽力写。
+struct TryLocker {
+    QMutex &mutex;
+    bool held;
+    explicit TryLocker(QMutex &m) : mutex(m), held(m.tryLock(200)) {}
+    ~TryLocker() { if (held) mutex.unlock(); }
+};
+
+}   // namespace
+
+
 // ---- 数据库历史数据自动清理策略 ----
 constexpr int kDatabaseRetainDays = 30;                        ///< 报警/检测结果/操作日志保留天数
 constexpr int kDatabasePurgeFirstDelayMs = 60 * 1000;          ///< 启动后首次清理的延迟
@@ -89,7 +103,7 @@ void crashLogHandler(QtMsgType type, const QMessageLogContext &ctx, const QStrin
     };
     int idx = qBound(0, static_cast<int>(type), 4);
 
-    QMutexLocker locker(&g_crashMutex);
+    TryLocker locker(g_crashMutex);
 
     // 常开句柄（2026-10-30 r19 P1-3 余量）：原先每条都 open/append/close + 一次体积检查，
     // 高频时开销全在文件 IO。现在平时只 write；每 256 条才重开一次，轮转检查随之摊薄
@@ -122,7 +136,7 @@ void uncaughtExceptionHandler()
     try {
         throw;
     } catch (const std::exception &e) {
-        QMutexLocker locker(&g_crashMutex);
+        TryLocker locker(g_crashMutex);
         const QString logPath = prepareCrashLog();
         QFile file(logPath);
         if (file.open(QIODevice::Append | QIODevice::Text)) {
@@ -169,7 +183,7 @@ void dumpStackToLog(QTextStream &out)
 
 void signalHandler(int sig)
 {
-    QMutexLocker locker(&g_crashMutex);
+    TryLocker locker(g_crashMutex);
     const QString logPath = prepareCrashLog();
     QFile file(logPath);
     if (file.open(QIODevice::Append | QIODevice::Text)) {
@@ -193,7 +207,7 @@ LONG WINAPI sehHandler(EXCEPTION_POINTERS *ep)
 
     // 1) 文本栈
     {
-        QMutexLocker locker(&g_crashMutex);
+        TryLocker locker(g_crashMutex);
         const QString logPath = dir + QStringLiteral("/crash.log");
         rotateCrashLogIfNeeded(logPath);
         QFile file(logPath);
@@ -210,7 +224,7 @@ LONG WINAPI sehHandler(EXCEPTION_POINTERS *ep)
 
     // 2) minidump（供 WinDbg/VS 离线分析）
     {
-        QMutexLocker locker(&g_crashMutex);
+        TryLocker locker(g_crashMutex);
         const QString dmpPath = dir + QStringLiteral("/crash.dmp");
         HANDLE hFile = CreateFileW(dmpPath.toStdWString().c_str(), GENERIC_WRITE, 0, nullptr,
                                    CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);

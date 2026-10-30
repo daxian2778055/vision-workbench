@@ -1,3 +1,4 @@
+#include <QDateTime>
 #include "ReceiveDataNode.h"
 #include "CommunicationManager.h"
 #include "DataObject.h"
@@ -30,6 +31,9 @@ void ReceiveDataNode::init()
         connect(cm, &CommunicationManager::dataReceived,
                 this, &ReceiveDataNode::onDataReceived);
     }
+    // 数据新鲜度门（r19 P2）：0 = 不限；>0 时超过该毫秒数就不输出
+    registerParam(makeIntParam(QStringLiteral("maxAgeMs"), 0, 0, 3600000,
+                              QStringLiteral("数据过期阈值(ms，0=不限)")));
 }
 
 bool ReceiveDataNode::process()
@@ -45,6 +49,19 @@ void ReceiveDataNode::run(bool /*autoSwitch*/)
     // 将缓存数据放到输出
     QString lastData = m_params.value(QStringLiteral("lastData")).toString();
     if (!lastData.isEmpty()) {
+        // 数据新鲜度（r19 P2）：原来每轮无条件输出缓存值，下游分不清"刚收到"还是"十分钟前"。
+        const QString tsStr = m_params.value(QStringLiteral("lastDataTs")).toString();
+        const QDateTime ts = QDateTime::fromString(tsStr, Qt::ISODateWithMs);
+        const qint64 ageMs = ts.isValid() ? ts.msecsTo(QDateTime::currentDateTimeUtc()) : -1;
+        m_params[QStringLiteral("lastDataAgeMs")] = ageMs;
+
+        // 过期门：maxAgeMs > 0 时，超过就不输出（让下游看到"这一轮没有新数据"）
+        const int maxAgeMs = m_params.value(QStringLiteral("maxAgeMs"), 0).toInt();
+        if (maxAgeMs > 0 && ageMs >= 0 && ageMs > maxAgeMs) {
+            m_params[QStringLiteral("lastDataNote")] =
+                QStringLiteral("数据已过期 %1ms（阈值 %2ms），本轮不输出").arg(ageMs).arg(maxAgeMs);
+            return;
+        }
         auto dataObj = QSharedPointer<DataObject>::create();
         dataObj->setData(QVariant(lastData));
         setOutputData(0, dataObj);
@@ -87,6 +104,9 @@ void ReceiveDataNode::onDataReceived(const QString &deviceName, const QByteArray
     }
 
     m_params[QStringLiteral("lastData")] = outputData;
+    // 收数时间（r19 P2）：run() 据此算年龄，下游能判新鲜度
+    m_params[QStringLiteral("lastDataTs")] =
+        QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
 }
 
 QWidget *ReceiveDataNode::createParamPanel()
