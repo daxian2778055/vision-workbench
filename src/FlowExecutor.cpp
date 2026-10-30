@@ -1,4 +1,5 @@
 #include "FlowExecutor.h"
+#include "CommunicationNodeBase.h"   // r19 P1-11：轮级发送失败计数
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QFile>
@@ -426,6 +427,7 @@ void FlowExecutor::startExecution()
     //   下一次正常生产轮即使全成功，轮末汇总仍写 NG 或干脆跳过。
     m_userStopRequested.store(false, std::memory_order_relaxed);
     m_roundHadFailure = false;
+    m_sendFailuresAtRoundStart = CommunicationNodeBase::sendWriteFailureCount();   // P1-11
     m_roundAborted = false;
     setRunState(ExecutionState::Running);
     resetState();
@@ -833,6 +835,15 @@ void FlowExecutor::run()
         // 中途被停止的一轮**不写汇总行**（2026-10-25 复核 P2-1）：半截流程写 passed=true 会让
         // 良率把一次人为中断记成一件 OK 产品（YieldMonitor 只读这类汇总行）——宁可这一轮不出现在
         // 良率口径里，也不谎报。已执行节点的那几条记录照常落库，追溯不丢。
+        // 发送失败计数（2026-10-30 r19 P1-11）：sendData 入队即报成功，真正的写在稍后
+        // 执行；写失败原先只进界面日志，本轮仍记「通过」。这里在写结果前拦下。
+        const int sendFailures =
+            CommunicationNodeBase::sendWriteFailureCount() - m_sendFailuresAtRoundStart;
+        if (sendFailures > 0) {
+            m_roundHadFailure = true;
+            emit executionError(QStringLiteral("本轮有 %1 次发送失败（PLC/下位机可能没收到），"
+                                        "本轮按不通过记账").arg(sendFailures));
+        }
         if (m_roundAborted) {
             VFP_EXEC_DEBUG << "Round aborted by stop; round-summary row skipped";
         } else {

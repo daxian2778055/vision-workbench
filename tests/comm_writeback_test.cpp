@@ -14,6 +14,8 @@
 #include <QJsonObject>
 #include <QTemporaryDir>
 
+#include "SerialCommNode.h"
+#include "CommunicationNodeBase.h"
 #include "CommunicationManager.h"
 #include "FlowExecutor.h"
 #include "FlowExecutorToken.h"
@@ -144,6 +146,9 @@ private slots:
     void testModbusUserCloseDoesNotResurrect();      // S-1：真连后用户关闭不复活 + 重开后自愈仍有效
     void testPlcUserCloseDoesNotResurrect();         // S-1（PLC 同款）：并钉住 openConnection 两行复位
     void testAllocFlowNameAvoidsCollision();
+    // r19 P1-11：写失败要被计数（sendData 入队即报成功，真正的写在稍后）
+    void sendWriteFailuresAreCounted();
+
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -2511,6 +2516,23 @@ void CommWritebackTest::testUdpBindGatePairing()
              "仅发送面（端口 0＋空地址）维持放行——U-216 拍板语义，不得被悄悄收紧");
     QVERIFY(sendNode->isConnected());
     QVERIFY2(cm->removeDevice(QStringLiteral("GATE_UDP_SEND")), "发半撤除失败");
+}
+
+void CommWritebackTest::sendWriteFailuresAreCounted()
+{
+    // r19 P1-11：sendData 只做「已连接？+ 排队」就返回 true，真正的写在稍后执行；
+    // 写失败原先只进界面日志，流程仍记「通过」。这里钉住：失败会被计数、reset 会清零，
+    // 执行器在轮末用「本轮计数增量」把这一轮判失败。
+    CommunicationNodeBase::resetSendWriteFailureCount();
+    QCOMPARE(CommunicationNodeBase::sendWriteFailureCount(), 0);
+
+    SerialCommNode node;   // 未连接：onSendRequested 必走失败路径
+    QVERIFY(QMetaObject::invokeMethod(&node, "onSendRequested", Qt::DirectConnection,
+                                      Q_ARG(QByteArray, QByteArray("x"))));
+    QCOMPARE(CommunicationNodeBase::sendWriteFailureCount(), 1);
+
+    CommunicationNodeBase::resetSendWriteFailureCount();
+    QCOMPARE(CommunicationNodeBase::sendWriteFailureCount(), 0);
 }
 
 QTEST_MAIN(CommWritebackTest)

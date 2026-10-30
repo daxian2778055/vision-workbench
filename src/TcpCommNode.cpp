@@ -222,11 +222,11 @@ void TcpCommNode::onSendRequested(const QByteArray &data)
     // 到这里才真正 write——若中间链路已断（半开/被拔线），数据被静默丢弃，
     // 调用方（「发送数据」算子/心跳）以为成功。必须显式报错让失败可见。
     if (!m_connected || !m_socket) {
-        emit communicationError(QStringLiteral("TCP 发送失败: 未连接"));
+        noteSendWriteFailure(QStringLiteral("TCP 发送失败: 未连接"));
         return;
     }
     if (m_socket->state() != QAbstractSocket::ConnectedState) {
-        emit communicationError(QStringLiteral("TCP 发送失败: 套接字未处于已连接状态"));
+        noteSendWriteFailure(QStringLiteral("TCP 发送失败: 套接字未处于已连接状态"));
         return;
     }
     const qint64 written = m_socket->write(data);

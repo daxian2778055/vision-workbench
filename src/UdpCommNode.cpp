@@ -155,7 +155,7 @@ void UdpCommNode::onSendRequested(const QByteArray &data)
 {
     // 静默早退是历史缺陷：调用方已在 sendData() 拿到 true，这里的丢弃会让"发送成功"是假的
     if (!m_connected || !m_socket) {
-        emit communicationError(QStringLiteral("UDP 发送失败: 未连接"));
+        noteSendWriteFailure(QStringLiteral("UDP 发送失败: 未连接"));
         return;
     }
     const QString ip = m_params.value(QStringLiteral("remoteIp")).toString().trimmed();
@@ -168,7 +168,7 @@ void UdpCommNode::onSendRequested(const QByteArray &data)
     const qint64 written =
         m_socket->writeDatagram(data, QHostAddress(ip), port);
     if (written < 0) {
-        emit communicationError(QStringLiteral("UDP 发送失败: %1").arg(m_socket->errorString()));
+        noteSendWriteFailure(QStringLiteral("UDP 发送失败: %1").arg(m_socket->errorString()));
         return;
     }
     setParamDirect(QStringLiteral("lastSent"), QString::fromLatin1(data));

@@ -1,4 +1,5 @@
 #include "CommunicationNodeBase.h"
+#include <atomic>
 #include "DataObject.h"
 #include <QWidget>
 #include <QVBoxLayout>
@@ -17,6 +18,26 @@ void CommunicationNodeBase::init()
 {
     HalconNode::init();
     setParamDirect(QStringLiteral("connected"), false);
+}
+
+namespace {
+std::atomic<int> s_sendWriteFailures{0};
+}
+
+int CommunicationNodeBase::sendWriteFailureCount()
+{
+    return s_sendWriteFailures.load();
+}
+
+void CommunicationNodeBase::resetSendWriteFailureCount()
+{
+    s_sendWriteFailures.store(0);
+}
+
+void CommunicationNodeBase::noteSendWriteFailure(const QString &why)
+{
+    ++s_sendWriteFailures;
+    emit communicationError(why);
 }
 
 void CommunicationNodeBase::run(bool /*autoSwitch*/)

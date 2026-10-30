@@ -300,7 +300,9 @@ private:
     mutable QMutex m_statsMutex;      /// 统计读写锁（执行线程写 / 界面线程读）
     QElapsedTimer m_statsLogTimer;    /// 统计日志节流
     int m_statsLogIntervalMs = 60000; /// 统计日志间隔（ms），0=不输出
-    bool m_roundHadFailure = false;   /// 本轮是否出现失败节点（仅执行线程访问）
+    bool m_roundHadFailure = false;
+    /// 轮首的发送失败计数快照（r19 P1-11）：轮末对比，增加即本轮判失败
+    int m_sendFailuresAtRoundStart = 0;   /// 本轮是否出现失败节点（仅执行线程访问）
     bool m_roundAborted = false;      /// 本轮是否被中途停止（仅执行线程访问）：半截流程不得计入整轮 OK
     /// 人为停止请求（界面线程置、执行线程读）：轮末据此判"中止"，而不是看 Stopped 状态
     /// ——失败停止同样是 Stopped，且被停止的算子可能自判失败（2026-10-25 复核 P2-1 残留）

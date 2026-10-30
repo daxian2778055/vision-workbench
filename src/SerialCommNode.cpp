@@ -277,7 +277,7 @@ void SerialCommNode::onSendRequested(const QByteArray &data)
         connected = m_connected;
     }
     if (!connected || !port) {
-        emit communicationError(QStringLiteral("serial send failed: not connected"));
+        noteSendWriteFailure(QStringLiteral("serial send failed: not connected"));
         return;
     }
     // write() also runs in the IO thread (r19 P1-12)
@@ -291,7 +291,7 @@ void SerialCommNode::onSendRequested(const QByteArray &data)
         },
         Qt::BlockingQueuedConnection);
     if (written != data.size()) {
-        emit communicationError(QStringLiteral("serial send failed: %1").arg(port->errorString()));
+        noteSendWriteFailure(QStringLiteral("serial send failed: %1").arg(port->errorString()));
         return;
     }
     setParamDirect(QStringLiteral("lastSent"), QString::fromLatin1(data));

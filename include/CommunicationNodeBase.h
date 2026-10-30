@@ -11,6 +11,12 @@ class CommunicationNodeBase : public HalconNode
 {
     Q_OBJECT
 public:
+
+    /// 轮级发送失败计数（2026-10-30 r19 P1-11）：sendData 入队即返回 true，
+    /// 真正的写在稍后执行；写失败原先只报界面日志，流程仍记「通过」。
+    /// 累计写失败次数，执行器在轮末据此把本轮判失败。
+    static int sendWriteFailureCount();
+    static void resetSendWriteFailureCount();
     enum CommType {
         SERIAL,
         TCP_CLIENT,
@@ -59,6 +65,9 @@ protected slots:
     virtual void onSendRequested(const QByteArray &data) { Q_UNUSED(data); }
 
 protected:
+
+    /// 写失败的统一收口：计数 + 报错（各节点的发送失败路径都走它）
+    void noteSendWriteFailure(const QString &why);
     CommType m_commType;
     bool m_connected = false;
     QString m_deviceName;
