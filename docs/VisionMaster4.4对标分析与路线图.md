@@ -472,6 +472,23 @@
 
 > **口径提醒**：这 2012 处里含大量**参数标签**（`paramSpecs` 的 label/tooltip）。它们不能靠 `tr()` 直接解决——`paramSpecs` 里的字符串是运行期拼的，`lupdate` 扫不到，需要 `QT_TRANSLATE_NOOP` 声明 + 面板显示时 `translate`。真正"纯 UI 文案"的量比 2012 小，但**改造仍按文件推进**，不可一次性机械替换。
 
+**2026-10-30 r18 复核对账（静态轮，无新 finding）**
+
+复核方本轮无 checkout，声明三项未实测：`i18n_census.py`、`database_test`/`ui_guards`、INV5 三条改坏臂。本地补齐证据：
+
+| 复核方未实测项 | 本地读数（本提交前） |
+|---|---|
+| `tools/i18n_census.py` | 跑通：**166** 文件 / **2012** 未国际化 UI / **158** 非 UI / **245** 已 `tr()`（与文档一致） |
+| `database_test` | **17 条用例（Totals 18 passed）** 全绿 |
+| `ui_guards_test` | **14 条用例（Totals 16 passed）** 全绿（含打印回滚腿） |
+| INV5 三条改坏臂 | `python tools/verify_inv5_arms.py` → **A/B/C 全 RED，复原 GREEN**（脚本已随仓，便于复核方与日后回归） |
+
+两处口径更正（此前是我记错）：
+- `database_test` 是 **17 条用例（Totals 18）**，我上轮报"18 用例"是把 Totals 当用例数；
+- `MainWindow.cpp` 实际 **4674 行**（我按 `\n` 计数 +1 得 4675，文件末有换行时应为 4674）。
+
+一处定义差异（不是矛盾）：`MainWindow.cpp` 里 `\btr\s*\(` 为 **206** 处（含源串为纯英文的调用），普查口径「`tr("中文…")`」为 **204** 处——两者都对，别混用。
+
 **仍开放（本轮未修，各有理由）**：
 
 | 项 | 位置 | 为什么没在这次改 |
