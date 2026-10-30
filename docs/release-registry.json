@@ -594,7 +594,16 @@
       "exe_bytes": 10171904,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.15",
       "recorded_at": "2026-10-30",
-      "recorded_note": "当前装机包：r19 P1-13——令牌析构短等待内联 + 长等待后台（GUI 不再冻 15 秒）；r19 的 P1 全部清零"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.16 取代（后者收 r19 P2 第 1 批）"
+    },
+    {
+      "tag": "rc-20261030.16",
+      "commit": "72c8e745e8999e7d23949c4900d5a2b6fa8321be",
+      "exe_md5": "c631e0b02bdf97a73ce1fe9192700dda",
+      "exe_bytes": 10180096,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.16",
+      "recorded_at": "2026-10-30",
+      "recorded_note": "当前装机包：r19 P2 第 1 批——异常写 lastError（红节点有原因）、预览判据取反修正、MVS 帧缓冲复用、classes.txt 按 mtime 缓存"
     }
   ],
   "legacy_backfilled": [
