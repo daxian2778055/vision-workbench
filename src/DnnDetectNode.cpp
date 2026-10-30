@@ -1,5 +1,6 @@
 #include "DnnDetectNode.h"
 #include "DnnNetCache.h"
+#include <QMutexLocker>
 #include "OpencvUtil.h"
 #include "AppLog.h"
 #include "ProjectPaths.h"   // 179 行：文件路径参数执行侧锚定方案目录
@@ -15,7 +16,6 @@
 #include <algorithm>
 
 // 静态模型缓存（与 DnnInferNode 隔离，避免不同任务互相淘汰）
-QMap<QString, cv::dnn::Net> DnnDetectNode::s_netCache;
 
 QString DnnDetectNode::labelScale()
 {
@@ -35,12 +35,6 @@ QString DnnDetectNode::labelMean()
 QString DnnDetectNode::msgYoloPreprocessFailed()
 {
     return QStringLiteral("YOLO 前处理失败：请检查缩放系数（须 > 0）与输入尺寸");
-}
-
-QMutex &DnnDetectNode::dnnMutex()
-{
-    static QMutex m;   // 函数内静态：避开静态初始化顺序问题
-    return m;
 }
 
 bool DnnDetectNode::yoloBlob(const cv::Mat &bgr, int inputSize, double scale, bool swapRB,
@@ -79,22 +73,6 @@ DnnDetectNode::~DnnDetectNode()
 {
 }
 
-cv::dnn::Net DnnDetectNode::getOrLoadNet(const QString &modelPath)
-{
-    if (s_netCache.contains(modelPath)) {
-        VFP_DEBUG << "DnnDetectNode: 使用缓存模型" << modelPath;
-        return s_netCache[modelPath];
-    }
-    VFP_DEBUG << "DnnDetectNode: 加载新模型" << modelPath;
-    cv::dnn::Net net = cv::dnn::readNetFromONNX(modelPath.toLocal8Bit().constData());
-    if (!net.empty()) {
-        if (s_netCache.size() >= 10) {
-            s_netCache.erase(s_netCache.begin());
-        }
-        s_netCache[modelPath] = net;
-    }
-    return net;
-}
 
 QStringList DnnDetectNode::loadClassNames(const QString &modelPath,
                                           const QString &explicitPath)
@@ -275,19 +253,15 @@ void DnnDetectNode::run(bool /*autoSwitch*/)
             m_outputImage.Clear();
             return;
         }
-        // 共享网络互斥（2026-10-29 复核 P2-14）：取网络与推理都在这把锁内
-        QMutexLocker dnnLocker(&dnnMutex());
-        cv::dnn::Net net = getOrLoadNet(modelPath);
-        // 推理后端（2026-10-28）：逐帧 YOLO 在 CPU 上常是瓶颈；OpenCL 不可用时
-        // OpenCV 会静默回退，这里显式设置，便于现场按需切换。
-        {
-            const int backend = m_params.value(QStringLiteral("dnnBackend"), 0).toInt();
-            net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
-            net.setPreferableTarget(backend == 1 ? cv::dnn::DNN_TARGET_OPENCL
-                                                 : cv::dnn::DNN_TARGET_CPU);
-        }
-        if (net.empty()) {
-            m_params[QStringLiteral("lastError")] = DnnNetCache::textLoadFailed();
+        // 模型缓存（2026-10-30 r19 P1-9）：按模型分锁、后端只在加载时设、键含 mtime。
+        // 锁只包 setInput/forward —— 前后处理（letterbox/NMS）在锁外，两个流程可并发。
+        const bool useOpenCL =
+            m_params.value(QStringLiteral("dnnBackend"), 0).toInt() == 1;
+        QString netErr;
+        std::shared_ptr<DnnNetEntry> entry = DnnNetCache::acquire(modelPath, useOpenCL, &netErr);
+        if (!entry || entry->net.empty()) {
+            m_params[QStringLiteral("lastError")] =
+                netErr.isEmpty() ? DnnNetCache::textLoadFailed() : netErr;
             return;
         }
 
@@ -311,8 +285,12 @@ void DnnDetectNode::run(bool /*autoSwitch*/)
             m_outputImage.Clear();
             return;
         }
-        net.setInput(blob);
-        cv::Mat out = net.forward();
+        cv::Mat out;
+        {
+            QMutexLocker netLocker(&entry->mutex);   // 同模型串行、不同模型并发
+            entry->net.setInput(blob);
+            out = entry->net.forward();
+        }
 
         const double conf = m_params.value(QStringLiteral("confThresh"), 0.25).toDouble();
         const double nms = m_params.value(QStringLiteral("nmsThresh"), 0.45).toDouble();

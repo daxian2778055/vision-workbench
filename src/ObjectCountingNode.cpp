@@ -1,7 +1,8 @@
 #include "ObjectCountingNode.h"
 
 #include "DataObject.h"
-#include "DnnDetectNode.h"      // 复用 YOLO 的加载与解码
+#include "DnnDetectNode.h"
+#include "DnnNetCache.h"      // 复用 YOLO 的加载与解码
 #include "OpencvUtil.h"
 #include "PathSafety.h"
 #include "ProjectPaths.h"
@@ -256,22 +257,16 @@ void ObjectCountingNode::run(bool /*autoSwitch*/)
     QString classWarn;   // 类别告警：留到累计摘要后面显示（P2-11）
     try {
         // 共享网络互斥（2026-10-29 复核 P2-14）：与检测节点同一把锁
-        QMutexLocker dnnLocker(&DnnDetectNode::dnnMutex());
-        cv::dnn::Net net = DnnDetectNode::getOrLoadNet(modelPath);
-        if (net.empty()) {
+        // 模型缓存（2026-10-30 r19 P1-9）：与检测节点共用同一份缓存——按模型分锁、
+        // 后端只在加载时设、键含 mtime；锁只包 setInput/forward。
+        const bool useOpenCL =
+            m_params.value(QStringLiteral("dnnBackend"), 0).toInt() == 1;
+        QString netErr;
+        std::shared_ptr<DnnNetEntry> entry = DnnNetCache::acquire(modelPath, useOpenCL, &netErr);
+        if (!entry || entry->net.empty()) {
             m_params[QStringLiteral("lastError")] =
-                QStringLiteral("模型加载失败：%1").arg(modelPath);
+                netErr.isEmpty() ? DnnNetCache::textLoadFailed() : netErr;
             return;
-        }
-        // 推理后端（2026-10-28）：产线逐帧跑 YOLO，CPU 常是瓶颈；OpenCL 目标可能被
-        // OpenCV 静默回退，这里如实记下"实际用了哪种"。
-        const int backend = m_params.value(QStringLiteral("dnnBackend")).toInt();
-        if (backend == 1) {
-            net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
-            net.setPreferableTarget(cv::dnn::DNN_TARGET_OPENCL);
-        } else {
-            net.setPreferableBackend(cv::dnn::DNN_BACKEND_OPENCV);
-            net.setPreferableTarget(cv::dnn::DNN_TARGET_CPU);
         }
         const int inputSize = m_params.value(QStringLiteral("inputSize"), 640).toInt();
         // 前处理与检测节点共用（2026-10-29 复核 P1-7）：先前直接拉伸进正方形，而
@@ -293,8 +288,12 @@ void ObjectCountingNode::run(bool /*autoSwitch*/)
             m_params[QStringLiteral("lastError")] = DnnDetectNode::msgYoloPreprocessFailed();
             return;
         }
-        net.setInput(blob);
-        const cv::Mat out = net.forward();
+        cv::Mat out;
+        {
+            QMutexLocker netLocker(&entry->mutex);   // 同模型串行、不同模型并发
+            entry->net.setInput(blob);
+            out = entry->net.forward();
+        }
 
         const double conf = m_params.value(QStringLiteral("confThresh")).toDouble();
         const double nms = m_params.value(QStringLiteral("nmsThresh")).toDouble();

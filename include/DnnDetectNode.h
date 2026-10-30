@@ -32,7 +32,6 @@ public:
 
     /// 获取或加载 ONNX 模型（带缓存，最多 10 个）。public static（2026-10-28）：
     /// 流水线计数节点复用同一套加载/解码，避免复制一份 YOLO 前处理（复制就会漂移）。
-    static cv::dnn::Net getOrLoadNet(const QString &modelPath);
 
     /// 读取类别名（显式路径优先，否则取模型同目录 classes.txt）。同上，供计数节点复用。
     static QStringList loadClassNames(const QString &modelPath, const QString &explicitPath);
@@ -47,10 +46,6 @@ public:
     static bool yoloBlob(const cv::Mat &bgr, int inputSize, double scale, bool swapRB,
                          const cv::Scalar &mean, cv::Mat *blob);
 
-    /// 共享推理互斥（2026-10-29 复核 P2-14）：s_netCache 是静态的，cv::dnn::Net 副本共享
-    /// 同一份实现；两台执行器并发 forward（或一边改 target 一边 forward）会踩同一份缓存。
-    /// 取网络与推理都在同一把锁内。
-    static QMutex &dnnMutex();
 
     /// 检测与计数共用的参数标签与前处理失败提示（2026-10-29）：两个节点必须一致，
     /// 集中一处——复制同一句中文会被仓库的中文重复闸拦下。
@@ -61,6 +56,5 @@ public:
 
 private:
 
-    static QMap<QString, cv::dnn::Net> s_netCache;
     QString m_currentModelPath;
 };
