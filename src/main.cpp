@@ -90,13 +90,25 @@ void crashLogHandler(QtMsgType type, const QMessageLogContext &ctx, const QStrin
     int idx = qBound(0, static_cast<int>(type), 4);
 
     QMutexLocker locker(&g_crashMutex);
-    const QString logPath = prepareCrashLog();
-    QFile file(logPath);
-    if (file.open(QIODevice::Append | QIODevice::Text)) {
-        QTextStream out(&file);
+
+    // 常开句柄（2026-10-30 r19 P1-3 余量）：原先每条都 open/append/close + 一次体积检查，
+    // 高频时开销全在文件 IO。现在平时只 write；每 256 条才重开一次，轮转检查随之摊薄
+    // （2,400 行/秒时：原先 2,400 次 open/close/秒 → 现在约 9 次/秒）。
+    static QFile s_logFile;
+    static int s_sinceReopen = 0;
+    if (!s_logFile.isOpen() || ++s_sinceReopen >= 256) {
+        if (s_logFile.isOpen())
+            s_logFile.close();
+        s_sinceReopen = 0;
+        s_logFile.setFileName(prepareCrashLog());   // 体积检查 + 轮转在这里
+        if (!s_logFile.open(QIODevice::Append | QIODevice::Text))
+            return;
+    }
+    {
+        QTextStream out(&s_logFile);
         out << QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"))
             << " [" << levelStr[idx] << "] " << msg << '\n';
-        file.close();
+        out.flush();
     }
 
     // 保留默认输出

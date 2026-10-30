@@ -73,6 +73,10 @@ const QStringList &dbPragmas()
         QStringLiteral("PRAGMA journal_mode=WAL"),
         QStringLiteral("PRAGMA foreign_keys=ON"),
         QStringLiteral("PRAGMA busy_timeout=5000"),   // 多连接并发时避免立即返回 SQLITE_BUSY
+        // 2026-10-30 r19 P1-2（安全的一半）：WAL 下 synchronous=NORMAL 让提交不必每次
+        // 落盘——批量落库的事务提交开销下降。代价是**断电/系统崩溃**时可能丢最后几个
+        // 事务（应用崩溃不受影响，库不会损坏）；检测记录属可重算数据，这个取舍合理。
+        QStringLiteral("PRAGMA synchronous=NORMAL"),
     };
     return kValues;
 }
