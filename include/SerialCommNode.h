@@ -3,6 +3,8 @@
 #include "CommunicationNodeBase.h"
 #include <QSerialPort>
 #include <QTimer>
+#include <QThread>
+#include <QMutex>
 
 /// 串口通信节点（数据位/停止位/校验生效；USB 掉线自动重连）
 class SerialCommNode : public CommunicationNodeBase
@@ -10,6 +12,7 @@ class SerialCommNode : public CommunicationNodeBase
     Q_OBJECT
 public:
     explicit SerialCommNode(QObject *parent = nullptr);
+    ~SerialCommNode() override;
 
     void init() override;
     void run(bool autoSwitch = true) override;
@@ -30,10 +33,14 @@ private slots:
 
 private:
     /// 按 m_params 应用数据位/停止位/校验（历史缺陷：打开时硬编码 8/1/None，配置形同虚设）
-    void applyPortSettings();
+    void applyPortSettings(QSerialPort *port);   // 指定端口（端口在 IO 线程里）
     void scheduleReconnect();
 
-    QSerialPort *m_serial = nullptr;
+    QSerialPort *m_serial = nullptr;   // 归 m_ioThread（r19 P1-12）
+    /// 端口专属事件循环线程：创建/读写/关闭/删除都只在这里做
+    QThread *m_ioThread = nullptr;
+    /// 保护 m_serial / m_connected（多线程：执行线程 run、界面线程 write、IO 线程回写）
+    QMutex m_stateMutex;
 
     // 断线自动重连（USB 转串口松动/掉线时自愈并报警）
     // S1 残留收口（通信类第 14 类）：autoReconnect / reconnectInterval 的**唯一来源改为参数表**，

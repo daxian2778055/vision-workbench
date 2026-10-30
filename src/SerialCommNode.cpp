@@ -15,6 +15,20 @@ SerialCommNode::SerialCommNode(QObject *parent) : CommunicationNodeBase(parent)
     setName(QStringLiteral("\u4E32\u53E3\u901A\u4FE1"));
     m_commType = SERIAL;
     m_type = OUTPUT;
+    // Port-owned IO thread (r19 P1-12): has its own event loop so readyRead/error
+    // are delivered, and it never blocks on the GUI join (P1-13).
+    m_ioThread = new QThread(this);
+    m_ioThread->setObjectName(QStringLiteral("serial-io"));
+    m_ioThread->start();
+}
+
+SerialCommNode::~SerialCommNode()
+{
+    closeConnection();
+    if (m_ioThread) {
+        m_ioThread->quit();
+        m_ioThread->wait(3000);
+    }
 }
 
 void SerialCommNode::init()
@@ -77,75 +91,97 @@ void SerialCommNode::scheduleReconnect()
         m_reconnectTimer->start(getParam(QStringLiteral("reconnectInterval")).toInt());
 }
 
-void SerialCommNode::applyPortSettings()
+void SerialCommNode::applyPortSettings(QSerialPort *port)
 {
-    if (!m_serial) return;
+    if (!port) return;
     // 数据位 / 停止位 / 校验：真正使用配置（历史实现硬编码 8/1/None，用户在界面上
     // 改校验位、停止位完全不生效，通讯不上还查不出原因）
     switch (m_params.value(QStringLiteral("dataBits"), 8).toInt()) {
-    case 5:  m_serial->setDataBits(QSerialPort::Data5); break;
-    case 6:  m_serial->setDataBits(QSerialPort::Data6); break;
-    case 7:  m_serial->setDataBits(QSerialPort::Data7); break;
-    default: m_serial->setDataBits(QSerialPort::Data8); break;
+    case 5:  port->setDataBits(QSerialPort::Data5); break;
+    case 6:  port->setDataBits(QSerialPort::Data6); break;
+    case 7:  port->setDataBits(QSerialPort::Data7); break;
+    default: port->setDataBits(QSerialPort::Data8); break;
     }
     switch (m_params.value(QStringLiteral("stopBits"), 1).toInt()) {
-    case 2:  m_serial->setStopBits(QSerialPort::TwoStop); break;
-    case 3:  m_serial->setStopBits(QSerialPort::OneAndHalfStop); break;   // 约定 3=1.5 位
-    default: m_serial->setStopBits(QSerialPort::OneStop); break;
+    case 2:  port->setStopBits(QSerialPort::TwoStop); break;
+    case 3:  port->setStopBits(QSerialPort::OneAndHalfStop); break;   // 约定 3=1.5 位
+    default: port->setStopBits(QSerialPort::OneStop); break;
     }
     const QString parity =
         m_params.value(QStringLiteral("parity"), QStringLiteral("None")).toString().trimmed().toLower();
     if (parity == QStringLiteral("even") || parity == QStringLiteral("\u5076"))
-        m_serial->setParity(QSerialPort::EvenParity);
+        port->setParity(QSerialPort::EvenParity);
     else if (parity == QStringLiteral("odd") || parity == QStringLiteral("\u5947"))
-        m_serial->setParity(QSerialPort::OddParity);
+        port->setParity(QSerialPort::OddParity);
     else
-        m_serial->setParity(QSerialPort::NoParity);
+        port->setParity(QSerialPort::NoParity);
 }
 
 bool SerialCommNode::openConnection()
 {
     if (m_serial) closeConnection();
-    m_userClosed = false;   // 本次是主动建立连接
+    m_userClosed = false;
     if (m_reconnectTimer) m_reconnectTimer->stop();
 
-    m_serial = new QSerialPort(this);
-    // N4 判空：未配置串口号时 open("") 必然失败，且会被自动重连每 3s 刷屏——快速失败且不排重连
-    // （与下方"波特率不支持"同一策略：配置错误重试无意义）。
     const QString portName = m_params.value(QStringLiteral("portName")).toString().trimmed();
     if (portName.isEmpty()) {
-        emit communicationError(QStringLiteral("未配置串口号，串口未打开"));
-        m_serial->deleteLater();
-        m_serial = nullptr;
+        emit communicationError(QStringLiteral("no serial port configured"));
         m_connected = false;
         setParamDirect(QStringLiteral("connected"), false);
         return false;
     }
-    m_serial->setPortName(portName);
     const int baud = m_params.value(QStringLiteral("baudRate"), 9600).toInt();
-    if (!m_serial->setBaudRate(baud)) {
-        // 波特率不受支持时继续打开只会以错误速率"永远通不上"——明确失败并提示，
-        // 且不排自动重连（配置错误重试无意义，避免每 3s 刷屏）
-        emit communicationError(QStringLiteral("波特率 %1 不受支持，串口未打开").arg(baud));
-        m_serial->deleteLater();
-        m_serial = nullptr;
+
+    // r19 P1-12: create/configure/open the port in the dedicated IO thread. QIODevice
+    // must not be touched from other threads; open() may come from the executor thread
+    // while write() comes from the node thread and readyRead must arrive on the port's
+    // own thread. The IO thread always has a running event loop and never waits on the
+    // GUI, so no deadlock with joinForDestroy (P1-13).
+    bool ok = false;
+    bool retryable = false;
+    QString err;
+    QSerialPort *created = nullptr;
+    QMetaObject::invokeMethod(
+        m_ioThread,
+        [this, &ok, &err, &retryable, &created, portName, baud]() {
+            auto *port = new QSerialPort();   // no parent: owned by the IO thread
+            port->setPortName(portName);
+            if (!port->setBaudRate(baud)) {
+                err = QStringLiteral("baud rate %1 unsupported").arg(baud);
+                delete port;
+                return;
+            }
+            applyPortSettings(port);
+            if (!port->open(QIODevice::ReadWrite)) {
+                err = QStringLiteral("open failed: %1").arg(port->errorString());
+                retryable = true;
+                delete port;
+                return;
+            }
+            connect(port, &QSerialPort::readyRead, port, [this, port]() {
+                const QByteArray data = port->readAll();
+                emit dataReceived(data);
+                setParamDirect(QStringLiteral("lastReceived"), QString::fromLatin1(data));
+            });
+            connect(port, &QSerialPort::errorOccurred, this, &SerialCommNode::onSerialError);
+            created = port;
+            ok = true;
+        },
+        Qt::BlockingQueuedConnection);
+
+    if (!ok) {
+        emit communicationError(err.isEmpty() ? QStringLiteral("serial open failed") : err);
         m_connected = false;
         setParamDirect(QStringLiteral("connected"), false);
+        if (retryable)
+            scheduleReconnect();
         return false;
     }
-    applyPortSettings();   // 数据位/停止位/校验按配置生效
-
-    if (!m_serial->open(QIODevice::ReadWrite)) {
-        emit communicationError(QStringLiteral("\u6253\u5F00\u4E32\u53E3\u5931\u8D25: %1").arg(m_serial->errorString()));
-        m_connected = false;
-        setParamDirect(QStringLiteral("connected"), false);
-        scheduleReconnect();   // 串口暂不可用（设备未插/被占用）→ 稍后自动重试
-        return false;
+    {
+        QMutexLocker<QMutex> locker(&m_stateMutex);
+        m_serial = created;
+        m_connected = true;
     }
-
-    connect(m_serial, &QSerialPort::readyRead, this, &SerialCommNode::onDataReceived);
-    connect(m_serial, &QSerialPort::errorOccurred, this, &SerialCommNode::onSerialError);
-    m_connected = true;
     setParamDirect(QStringLiteral("connected"), true);
     emit connectionOpened();
     return true;
@@ -181,19 +217,28 @@ void SerialCommNode::onSerialError(QSerialPort::SerialPortError error)
 
 void SerialCommNode::closeConnection()
 {
-    m_userClosed = true;   // 主动关闭：不触发自动重连
+    m_userClosed = true;
     if (m_reconnectTimer) m_reconnectTimer->stop();
-    // 只在"确实连过"时上报断开：否则 openConnection() 开头的清理、每次自动重连尝试、
-    // closeDevice/removeDevice 的无条件 close 都会各发一次假"串口连接中断"，
-    // 下游（心跳/接收事件/界面状态）被反复的 closed/opened 抖动淹没。
     const bool wasConnected = m_connected;
-    if (m_serial) {
-        m_serial->close();
-        m_serial->deleteLater();
+    QSerialPort *port = nullptr;
+    {
+        QMutexLocker<QMutex> locker(&m_stateMutex);
+        port = m_serial;
         m_serial = nullptr;
+        m_connected = false;
     }
-    m_connected = false;
-    setParamDirect(QStringLiteral("connected"), false);   // 参数照旧写（不emit），保持界面数值真实
+    if (port) {
+        // close/disconnect/delete all happen in the IO thread (r19 P1-12)
+        QMetaObject::invokeMethod(
+            m_ioThread,
+            [port]() {
+                port->close();
+                port->disconnect();
+                port->deleteLater();
+            },
+            Qt::BlockingQueuedConnection);
+    }
+    setParamDirect(QStringLiteral("connected"), false);
     if (!wasConnected)
         return;
     emit connectionClosed();
@@ -224,18 +269,31 @@ void SerialCommNode::onDataReceived()
 
 void SerialCommNode::onSendRequested(const QByteArray &data)
 {
-    // 静默早退是历史缺陷：sendData() 在调用瞬间判过 isConnected() 并已返回 true，
-    // 到这里才真正 write——若中间串口已断（USB 转串口掉线），数据被静默丢弃。
-    if (!m_connected || !m_serial) {
-        emit communicationError(QStringLiteral("串口发送失败: 未连接"));
+    QSerialPort *port = nullptr;
+    bool connected = false;
+    {
+        QMutexLocker<QMutex> locker(&m_stateMutex);
+        port = m_serial;
+        connected = m_connected;
+    }
+    if (!connected || !port) {
+        emit communicationError(QStringLiteral("serial send failed: not connected"));
         return;
     }
-    const qint64 written = m_serial->write(data);
-    if (written != data.size()) {   // 短写/失败都必须报错，不能静默丢弃
-        emit communicationError(QStringLiteral("\u4E32\u53E3\u53D1\u9001\u5931\u8D25: %1").arg(m_serial->errorString()));
+    // write() also runs in the IO thread (r19 P1-12)
+    qint64 written = -1;
+    QMetaObject::invokeMethod(
+        m_ioThread,
+        [port, data, &written]() {
+            written = port->write(data);
+            if (written == data.size())
+                port->flush();
+        },
+        Qt::BlockingQueuedConnection);
+    if (written != data.size()) {
+        emit communicationError(QStringLiteral("serial send failed: %1").arg(port->errorString()));
         return;
     }
-    m_serial->flush();
     setParamDirect(QStringLiteral("lastSent"), QString::fromLatin1(data));
 }
 
