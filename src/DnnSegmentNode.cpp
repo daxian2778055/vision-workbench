@@ -1,6 +1,8 @@
 #include "DnnSegmentNode.h"
 #include "OpencvUtil.h"
 #include "AppLog.h"
+#include "DnnNetCache.h"
+#include <QMutexLocker>
 #include "ProjectPaths.h"   // 179 行：文件路径参数执行侧锚定方案目录
 #include <QWidget>
 #include <QFile>
@@ -11,8 +13,6 @@
 #include <algorithm>
 #include <vector>
 
-// 静态模型缓存（与 DnnDetectNode / DnnInferNode 隔离：不同任务的特征不同，避免互相淘汰）
-QMap<QString, cv::dnn::Net> DnnSegmentNode::s_netCache;
 
 namespace {
 
@@ -85,22 +85,6 @@ DnnSegmentNode::~DnnSegmentNode()
 {
 }
 
-cv::dnn::Net DnnSegmentNode::getOrLoadNet(const QString &modelPath)
-{
-    if (s_netCache.contains(modelPath)) {
-        VFP_DEBUG << "DnnSegmentNode: 使用缓存模型" << modelPath;
-        return s_netCache[modelPath];
-    }
-    VFP_DEBUG << "DnnSegmentNode: 加载新模型" << modelPath;
-    cv::dnn::Net net = cv::dnn::readNetFromONNX(modelPath.toLocal8Bit().constData());
-    if (!net.empty()) {
-        if (s_netCache.size() >= 10) {
-            s_netCache.erase(s_netCache.begin());
-        }
-        s_netCache[modelPath] = net;
-    }
-    return net;
-}
 
 QStringList DnnSegmentNode::loadClassNames(const QString &modelPath,
                                            const QString &explicitPath) const
@@ -475,9 +459,10 @@ void DnnSegmentNode::run(bool /*autoSwitch*/)
                 setOutputData(p, QSharedPointer<DataObject>());
             return;
         }
-        cv::dnn::Net net = getOrLoadNet(modelPath);
-        if (net.empty()) {
-            fail(QStringLiteral("ONNX 模型加载失败"));
+        QString netErr;
+        std::shared_ptr<DnnNetEntry> entry = DnnNetCache::acquire(modelPath, false, &netErr);
+        if (!entry || entry->net.empty()) {
+            fail(netErr.isEmpty() ? DnnNetCache::textLoadFailed() : netErr);
             return;
         }
 
@@ -523,10 +508,15 @@ void DnnSegmentNode::run(bool /*autoSwitch*/)
 
         cv::Mat blob = cv::dnn::blobFromImage(blobSrc, scale, cv::Size(inputW, inputH),
                                               mean, swapRB, false);
-        net.setInput(blob);
-        std::vector<cv::String> outNames = net.getUnconnectedOutLayersNames();
+        std::vector<cv::String> outNames;
         std::vector<cv::Mat> outs;
-        net.forward(outs, outNames);      // 单/双输出都走同一条路
+        {
+            // 条目锁（2026-10-30 r19 P0-1）：同一模型串行、不同模型并发；前后处理在锁外
+            QMutexLocker netLocker(&entry->mutex);
+            entry->net.setInput(blob);
+            outNames = entry->net.getUnconnectedOutLayersNames();
+            entry->net.forward(outs, outNames);   // 单/双输出都走同一条路
+        }      // 单/双输出都走同一条路
         if (outs.empty()) {
             fail(QStringLiteral("模型未产出任何输出"));
             return;

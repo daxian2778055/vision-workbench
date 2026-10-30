@@ -2,6 +2,8 @@
 #include "OpencvUtil.h"
 #include "DataObject.h"
 #include "AppLog.h"
+#include "DnnNetCache.h"
+#include <QMutexLocker>
 #include "ProjectPaths.h"   // 179 行：文件路径参数执行侧锚定方案目录
 #include <QWidget>
 #include <QFile>
@@ -11,8 +13,6 @@
 #include <opencv2/dnn.hpp>
 #include <opencv2/imgproc.hpp>
 
-// 静态模型缓存
-QMap<QString, cv::dnn::Net> DnnInferNode::s_netCache;
 
 DnnInferNode::DnnInferNode(QObject *parent) : HalconNode(parent)
 {
@@ -26,34 +26,11 @@ DnnInferNode::~DnnInferNode()
     // 注意：不删除静态缓存，因为其他节点可能也在使用
 }
 
-cv::dnn::Net DnnInferNode::getOrLoadNet(const QString &modelPath)
-{
-    // 检查缓存中是否已有该模型
-    if (s_netCache.contains(modelPath)) {
-        VFP_DEBUG << "DnnInferNode: 使用缓存模型" << modelPath;
-        return s_netCache[modelPath];
-    }
-
-    // 加载新模型
-    VFP_DEBUG << "DnnInferNode: 加载新模型" << modelPath;
-    cv::dnn::Net net = cv::dnn::readNetFromONNX(modelPath.toLocal8Bit().constData());
-
-    if (!net.empty()) {
-        // 缓存模型（限制缓存大小，最多保存 10 个模型）
-        if (s_netCache.size() >= 10) {
-            // 移除最旧的缓存项
-            auto it = s_netCache.begin();
-            s_netCache.erase(it);
-        }
-        s_netCache[modelPath] = net;
-    }
-
-    return net;
-}
 
 void DnnInferNode::clearNetCache()
 {
-    s_netCache.clear();
+    // 2026-10-30 r19：模型缓存已统一到 DnnNetCache（按 mtime 键、条目内互斥）
+    DnnNetCache::clear();
 }
 
 void DnnInferNode::init()
@@ -101,9 +78,11 @@ void DnnInferNode::run(bool /*autoSwitch*/)
         }
 
         // 使用缓存加载模型
-        cv::dnn::Net net = getOrLoadNet(modelPath);
-        if (net.empty()) {
-            m_params[QStringLiteral("lastError")] = QStringLiteral("ONNX 模型加载失败");
+        QString netErr;
+        std::shared_ptr<DnnNetEntry> entry = DnnNetCache::acquire(modelPath, false, &netErr);
+        if (!entry || entry->net.empty()) {
+            m_params[QStringLiteral("lastError")] =
+                netErr.isEmpty() ? DnnNetCache::textLoadFailed() : netErr;
             m_params["moduleStatus"] = false;
             return;
         }
@@ -131,8 +110,12 @@ void DnnInferNode::run(bool /*autoSwitch*/)
 
         cv::Mat blob = cv::dnn::blobFromImage(img, scale, cv::Size(size, size), mean,
                                               swapRB, false);
-        net.setInput(blob);
-        cv::Mat out = net.forward();
+        cv::Mat out;
+        {
+            QMutexLocker netLocker(&entry->mutex);   // r19 P0-1
+            entry->net.setInput(blob);
+            out = entry->net.forward();
+        }
         // 输出展平为一维向量
         cv::Mat flat = out.reshape(1, 1);
         if (flat.cols < 2) {

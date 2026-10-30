@@ -77,6 +77,11 @@ QString prepareCrashLog()
 /// 将所有 Qt 警告/错误/致命日志同时写入崩溃日志文件
 void crashLogHandler(QtMsgType type, const QMessageLogContext &ctx, const QString &msg)
 {
+    // 2026-10-30 r19 P1-3：每条日志都要 open/append/close（实测约 3,900 行/s 上限），
+    // 而执行器每节点每轮写 2 条 debug，201 轮/秒时是数千行/秒——默认不再落文件。
+    // 需要排查时设环境变量 VFP_LOG_DEBUG=1 再启动。
+    if (type == QtDebugMsg && !qEnvironmentVariableIsSet("VFP_LOG_DEBUG"))
+        return;
     Q_UNUSED(ctx)
     static const QString levelStr[] = {
         QStringLiteral("Debug"), QStringLiteral("Warning"),

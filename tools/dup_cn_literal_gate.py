@@ -239,7 +239,6 @@ BASELINE = (
     (2, '无法写入 %1：%2'),   # 4 -> 3 -> 2（2026-10-26）：统计报表两处、ResultTablePanel 报表导出改用 ExportWriteCheck::openForExport，仅余 exportCsv 的错误串接口
     (4, '枚举设备失败，错误码:'),
     (3, '<i>提示：点击后在图像视图上拖拽绘制搜索线/圆，'),
-    (3, 'ONNX 模型加载失败'),
     (3, 'ONNX 模型文件 (.onnx)'),
     (3, 'VisionFlowPlatform 统计报表'),
     (3, '匹配模式需要设置模板文件路径'),

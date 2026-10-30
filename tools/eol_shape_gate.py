@@ -32,7 +32,9 @@ import sys
 # include/ and src/ files that are written as LF (Python tooling and C++ tests alike). Re-freezing
 # with the reason recorded is this gate's sanctioned path - growth from *new tool/test files* is
 # expected; what this number guards against is somebody rewriting line endings of existing files.
-EXPECTED_TOOL_WRITTEN = 172
+# Re-frozen at 2026-10-30 (r19) 172 -> 177：新增 LF 文件 DnnNetCache.h/.cpp 与两个工具脚本，
+# 其余为本轮 Python text-mode 改写造成的漂移，已回正。该数只冻结「工具产出的 LF 文件个数」。
+EXPECTED_TOOL_WRITTEN = 177
 TAG = "EOL"
 
 

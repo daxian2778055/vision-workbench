@@ -1,4 +1,5 @@
 #include "DnnDetectNode.h"
+#include "DnnNetCache.h"
 #include "OpencvUtil.h"
 #include "AppLog.h"
 #include "ProjectPaths.h"   // 179 行：文件路径参数执行侧锚定方案目录
@@ -286,7 +287,7 @@ void DnnDetectNode::run(bool /*autoSwitch*/)
                                                  : cv::dnn::DNN_TARGET_CPU);
         }
         if (net.empty()) {
-            m_params[QStringLiteral("lastError")] = QStringLiteral("ONNX 模型加载失败");
+            m_params[QStringLiteral("lastError")] = DnnNetCache::textLoadFailed();
             return;
         }
 

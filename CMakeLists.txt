@@ -154,6 +154,7 @@ set(SOURCES
     src/OpencvClassifyNode.cpp
     src/DnnInferNode.cpp
     src/DnnDetectNode.cpp
+    src/DnnNetCache.cpp
     src/DnnSegmentNode.cpp
     src/CameraIoNode.cpp
     src/DeepOcrNode.cpp

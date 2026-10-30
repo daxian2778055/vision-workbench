@@ -180,6 +180,8 @@ MainWindow::MainWindow(QWidget *parent) :
         
         VFP_DEBUG << "Calling setupUi";
         ui->setupUi(this);
+    // 2026-10-30 r19 P1-3：UI 日志无上限，长跑内存与重绘持续增长
+    ui->logTextEdit->setMaximumBlockCount(2000);
 
         if (auto *qa = qobject_cast<QApplication *>(QApplication::instance())) {
             VisionWorkbenchStyle::applyFusionDarkPalette(qa);

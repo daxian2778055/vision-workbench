@@ -5,9 +5,13 @@
 #include "ObjectCountingNode.h"
 #include "OpencvUtil.h"
 #include "DnnDetectNode.h"
+#include "DnnNetCache.h"
 
 #include <QtTest/QtTest>
 #include <cstring>
+#include <thread>
+#include <atomic>
+#include <QDateTime>
 
 class ObjectCountingTest : public QObject
 {
@@ -28,6 +32,8 @@ private slots:
     void dnnParamsAreRegistered();
     void yoloBlobRejectsZeroScaleAndLettersboxes();
     void letterboxGeometryRoundTrips();
+    void netCacheInvalidatesOnMtimeChange();
+    void netCacheConcurrentAcquireIsSafe();
 
 private:
     static DetectionBox makeBox(float cx, float cy, float w = 40, float h = 40,
@@ -354,6 +360,76 @@ void ObjectCountingTest::letterboxGeometryRoundTrips()
              qPrintable(QStringLiteral("cy 反算偏了：%1（浮点 pad 会得到约 24.72）").arg(cy)));
     QVERIFY2(qAbs(b.w - 10.0) <= 0.6, qPrintable(QStringLiteral("w=%1").arg(b.w)));
     QVERIFY2(qAbs(b.h - 5.0) <= 0.6, qPrintable(QStringLiteral("h=%1").arg(b.h)));
+}
+
+void ObjectCountingTest::netCacheInvalidatesOnMtimeChange()
+{
+    // 用注入钩子代替真实模型：验证「缓存复用」与「换文件重新加载」两条语义
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    const QString path = tmp.path() + QStringLiteral("/model.onnx");
+    {
+        QFile f(path);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("fake");
+    }
+
+    std::atomic<int> loads(0);
+    DnnNetCache::clear();
+    DnnNetCache::setInjectionHook([&loads](const QString &) -> cv::dnn::Net {
+        ++loads;
+        return cv::dnn::Net();   // 空网：只验缓存身份，不验推理
+    });
+
+    auto a = DnnNetCache::acquire(path, false, nullptr);
+    auto b = DnnNetCache::acquire(path, false, nullptr);
+    QVERIFY2(a && b, "注入路径应返回条目");
+    QCOMPARE(int(loads), 1);                 // 第二次走缓存
+    QCOMPARE(a.get(), b.get());              // 同一条目
+
+    // 换文件（mtime 变）→ 必须重新加载，且旧条目被摘掉
+    QVERIFY(QFile::remove(path));
+    {
+        QFile f(path);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("fake2");
+    }
+    {
+        QFile f(path);
+        QVERIFY(f.open(QIODevice::ReadWrite));
+        f.setFileTime(QDateTime::currentDateTime().addSecs(5), QFileDevice::FileModificationTime);
+    }
+    auto c = DnnNetCache::acquire(path, false, nullptr);
+    QVERIFY2(c, "换文件后仍应取到条目");
+    QCOMPARE(int(loads), 2);
+    QVERIFY2(c.get() != a.get(), "mtime 变了必须是新条目");
+
+    DnnNetCache::setInjectionHook(nullptr);
+    DnnNetCache::clear();
+    QCOMPARE(DnnNetCache::size(), 0);
+}
+
+void ObjectCountingTest::netCacheConcurrentAcquireIsSafe()
+{
+    // 原形态：静态 QMap 的 contains/[] 无互斥，两个执行线程同跑 = 无条件 UB（r19 P0-1）。
+    // 这里八个线程同时 acquire 同一个不存在的路径：都不该崩，也都不该留下条目。
+    DnnNetCache::clear();
+    std::atomic<int> ok(0);
+    std::vector<std::thread> threads;
+    for (int t = 0; t < 8; ++t) {
+        threads.emplace_back([&ok]() {
+            for (int i = 0; i < 200; ++i) {
+                QString err;
+                auto e = DnnNetCache::acquire(QStringLiteral("Z:/no/such/model.onnx"), false, &err);
+                if (!e && !err.isEmpty())
+                    ++ok;
+            }
+        });
+    }
+    for (auto &t : threads)
+        t.join();
+    QCOMPARE(int(ok), 8 * 200);
+    QCOMPARE(DnnNetCache::size(), 0);
 }
 
 QTEST_MAIN(ObjectCountingTest)

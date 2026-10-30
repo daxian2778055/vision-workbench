@@ -26,7 +26,6 @@ private:
     void clearNetCache();
 
     /// 模型缓存：路径 -> 网络
-    static QMap<QString, cv::dnn::Net> s_netCache;
     /// 当前使用的模型路径（用于检测路径变化）
     QString m_currentModelPath;
 };

@@ -87,5 +87,4 @@ private:
     /// 读取类别名（显式路径优先，否则取模型同目录 classes.txt）
     QStringList loadClassNames(const QString &modelPath, const QString &explicitPath) const;
 
-    static QMap<QString, cv::dnn::Net> s_netCache;
 };
