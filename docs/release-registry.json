@@ -540,7 +540,16 @@
       "exe_bytes": 10141696,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.9",
       "recorded_at": "2026-10-30",
-      "recorded_note": "当前装机包：r19 P1-4——MVS 同一句柄并发取图改按句柄分锁（消除 UB）+ 采用句柄查 PayloadSize（高分辨率不再每帧失败）+ StartGrabbing 失败如实报"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.10 取代（后者收 r19 P1-12）"
+    },
+    {
+      "tag": "rc-20261030.10",
+      "commit": "2e94aaf6792e037e88c452ee7044498f75850a83",
+      "exe_md5": "1d238e49703a83d0009b6f4597980bb5",
+      "exe_bytes": 10145280,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.10",
+      "recorded_at": "2026-10-30",
+      "recorded_note": "当前装机包：r19 P1-12——串口端口挪到专属 IO 线程（创建/读写/关闭同线程，消除 QIODevice 跨线程 UB）"
     }
   ],
   "legacy_backfilled": [
