@@ -314,14 +314,23 @@ void OpencvFeatureMatchNode::run(bool /*autoSwitch*/)
         // 模板侧关键点每轮重算太贵（r19 P1-7）：按 (模板键, 检测器, nFeatures) 缓存；
         // 场景侧每帧都在变，照旧现算。
         {
-            QFileInfo tfi(templatePath);
-            const QString tmplKey = wantName.isEmpty()
-                                        ? (QDir::cleanPath(templatePath) + QLatin1Char('|')
-                                           + QString::number(tfi.lastModified().toMSecsSinceEpoch()))
-                                        : (QStringLiteral("db:") + wantName);
-            ModelCache::keypointsFor(tmplKey, detectorIdx,
-                                     m_params.value(QStringLiteral("nFeatures"), 2000).toInt(),
-                                     tmpl, &objKp, &objDesc);
+            // 缓存键必须稳定（r19 P1-7）：样本名 > 文件+mtime > **无稳定标识就不缓存**
+            //（教学模式 templatePath 为空，键恒定会把上一次的空模板结果串给这一张）。
+            QString tmplKey;
+            if (!wantName.isEmpty())
+                tmplKey = QStringLiteral("db:") + wantName;
+            else if (!templatePath.isEmpty()) {
+                QFileInfo tfi(templatePath);
+                tmplKey = QDir::cleanPath(templatePath) + QLatin1Char('|')
+                          + QString::number(tfi.lastModified().toMSecsSinceEpoch());
+            }
+            if (tmplKey.isEmpty()) {
+                f2d->detectAndCompute(tmpl, cv::noArray(), objKp, objDesc);
+            } else {
+                ModelCache::keypointsFor(tmplKey, detectorIdx,
+                                         m_params.value(QStringLiteral("nFeatures"), 2000).toInt(),
+                                         tmpl, &objKp, &objDesc);
+            }
         }
         f2d->detectAndCompute(gray, cv::noArray(), sceneKp, sceneDesc);
         m_params[QStringLiteral("templateKeypoints")] = static_cast<int>(objKp.size());
