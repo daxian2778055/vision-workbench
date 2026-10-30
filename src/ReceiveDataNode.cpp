@@ -31,9 +31,6 @@ void ReceiveDataNode::init()
         connect(cm, &CommunicationManager::dataReceived,
                 this, &ReceiveDataNode::onDataReceived);
     }
-    // 数据新鲜度门（r19 P2）：0 = 不限；>0 时超过该毫秒数就不输出
-    registerParam(makeIntParam(QStringLiteral("maxAgeMs"), 0, 0, 3600000,
-                              QStringLiteral("数据过期阈值(ms，0=不限)")));
 }
 
 bool ReceiveDataNode::process()
@@ -55,13 +52,6 @@ void ReceiveDataNode::run(bool /*autoSwitch*/)
         const qint64 ageMs = ts.isValid() ? ts.msecsTo(QDateTime::currentDateTimeUtc()) : -1;
         m_params[QStringLiteral("lastDataAgeMs")] = ageMs;
 
-        // 过期门：maxAgeMs > 0 时，超过就不输出（让下游看到"这一轮没有新数据"）
-        const int maxAgeMs = m_params.value(QStringLiteral("maxAgeMs"), 0).toInt();
-        if (maxAgeMs > 0 && ageMs >= 0 && ageMs > maxAgeMs) {
-            m_params[QStringLiteral("lastDataNote")] =
-                QStringLiteral("数据已过期 %1ms（阈值 %2ms），本轮不输出").arg(ageMs).arg(maxAgeMs);
-            return;
-        }
         auto dataObj = QSharedPointer<DataObject>::create();
         dataObj->setData(QVariant(lastData));
         setOutputData(0, dataObj);
