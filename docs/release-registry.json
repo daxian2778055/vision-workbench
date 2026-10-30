@@ -585,7 +585,16 @@
       "exe_bytes": 10170368,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.14",
       "recorded_at": "2026-10-30",
-      "recorded_note": "当前装机包：r19 P1-5/P1-10——主预览改走 requestImage 的 latest-wins 合并 + HImage↔Mat 三通道 cv::merge + 修掉「共享内存」假注释"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.15 取代（后者收 r19 P1-13，P1 清零）"
+    },
+    {
+      "tag": "rc-20261030.15",
+      "commit": "ab29025c2e3ab28c033f08886f06cd87a0993650",
+      "exe_md5": "814dd34a76f5286b1544e3a08143d330",
+      "exe_bytes": 10171904,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.15",
+      "recorded_at": "2026-10-30",
+      "recorded_note": "当前装机包：r19 P1-13——令牌析构短等待内联 + 长等待后台（GUI 不再冻 15 秒）；r19 的 P1 全部清零"
     }
   ],
   "legacy_backfilled": [
