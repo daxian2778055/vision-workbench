@@ -459,7 +459,16 @@
       "exe_bytes": 10128384,
       "package_dir": "dist/VisionFlowPlatform-rc-20261029.8",
       "recorded_at": "2026-10-29",
-      "recorded_note": "当前装机包（关键修复）：r15 P1-9（标注切换保存写错文件、打开数据集截断第一张 txt）+ P2-12/P2-13 残留 + INV5 收紧（只认 registerParam(s) 实参，挡住 P1-8 形态）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.1 取代（后者修 r16 的 P2-13 菜单生命周期与 INV5 旁路）"
+    },
+    {
+      "tag": "rc-20261030.1",
+      "commit": "4f8872e5f40e86f976026035f8fc25bc3f1eaaa8",
+      "exe_md5": "c145fd514c6a4a0a2bb11d740507de48",
+      "exe_bytes": 10128384,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.1",
+      "recorded_at": "2026-10-30",
+      "recorded_note": "当前装机包：r16 修复——P2-13 菜单随 executionFinished/parked/resumed 重算 + 选目录后复查；INV5 收窄 sp 旁路（三形态改坏臂均 RED）；letterbox pad 整数口径 + 几何往返腿"
     }
   ],
   "legacy_backfilled": [
