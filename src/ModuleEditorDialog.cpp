@@ -76,6 +76,10 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     auto *maskBtn = new QPushButton(QStringLiteral("编辑掩膜"));
     auto *clearMaskBtn = new QPushButton(QStringLiteral("清除掩膜"));
     auto *saveTmplBtn = new QPushButton(QStringLiteral("保存模板图像"));
+    // 训练模板（r19 补全清单第 3 项）：按当前 ROI 从图像训练并落盘，
+    // 训练完立刻刷新模板预览、并在画布上显示匹配结果（VM 的训练手感）。
+    auto *trainTmplBtn = new QPushButton(QStringLiteral("训练模板"));
+    trainTmplBtn->setToolTip(QStringLiteral("按当前 ROI 从图像训练并保存模板，随后刷新预览与结果"));
     auto *fitBtn = new QPushButton(QStringLiteral("适应窗口"));
     m_autoRecomputeCheck = new QCheckBox(QStringLiteral("自动重算"));
     m_autoRecomputeCheck->setChecked(true);
@@ -87,6 +91,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     toolbar->addWidget(maskBtn);
     toolbar->addWidget(clearMaskBtn);
     toolbar->addWidget(saveTmplBtn);
+    toolbar->addWidget(trainTmplBtn);
     toolbar->addWidget(m_autoRecomputeCheck);
 
     // 变量引用：点开即列出可引用的 {模块号.参数名} / {global.名称}，选中插入到参数编辑框。
@@ -213,6 +218,13 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     connect(maskBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onEditMask);
     connect(clearMaskBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onClearMask);
     connect(saveTmplBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onSaveTemplate);
+    connect(trainTmplBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_node)
+            return;
+        m_node->setParam(QStringLiteral("trainFromImage"), true);
+        emit executeRequested();       // MainWindow: executeNodeOnce（含 reload + setResultOverlay）
+        refreshTemplatePreview();      // 训练后立刻刷新模板预览
+    });
     connect(fitBtn, &QPushButton::clicked, m_view, &HalconWindow::fitToWindow);
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
     connect(m_view, &HalconWindow::roiEdited, this, &ModuleEditorDialog::onRoiEdited);
