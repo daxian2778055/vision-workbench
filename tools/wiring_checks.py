@@ -20,6 +20,8 @@
   [ELW] key=value
   [ELW] finding=<code>: <detail>
   [ELW-INV] findings=N
+    for _f in findings:
+        print('[ELW-INV-DETAIL] ' + _f)
   [ELW-VERDICT] GREEN|RED
 退出码：0 = GREEN，1 = RED。
 """

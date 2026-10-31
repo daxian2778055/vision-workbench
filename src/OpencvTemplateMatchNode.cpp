@@ -157,7 +157,11 @@ void OpencvTemplateMatchNode::init()
                  QStringLiteral("搜索区域宽")),
     makeIntParam(QStringLiteral("searchRegionHeight"), 0, 0, 100000,
                  QStringLiteral("搜索区域高")),
+    // 搜索区域多边形（r19）："x1,y1 x2,y2 ..."，>=3 点生效，优先于矩形。
+    makeStringParam(QStringLiteral("searchRegionPolygon"), QString(),
+                    QStringLiteral("搜索区域多边形(空=用矩形)")),
 });
+
 
     // 搜索区域（r19 批 A 第 2 步）：匹配只在这个矩形内搜——既是 VM 的"检测区域"，
     // 也是提速手段（区域越小、matchTemplate 越快）。0 = 整图（默认行为不变）。
@@ -230,6 +234,38 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
                                  & cv::Rect(0, 0, gray.cols, gray.rows);
                 if (searchRect.width > 2 && searchRect.height > 2)
                     gray = gray(searchRect);
+            }
+        }
+
+        // 多边形搜索区域（r19）："x1,y1 x2,y2 ..."；>=3 点生效，优先于矩形
+        std::vector<cv::Point> searchPoly;
+        {
+            const QString polyText =
+                m_params.value(QStringLiteral("searchRegionPolygon")).toString().trimmed();
+            const QStringList pts = polyText.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+            for (const QString &pt : pts) {
+                const QStringList xy = pt.split(QLatin1Char(','));
+                if (xy.size() == 2) {
+                    bool ok1 = false, ok2 = false;
+                    const double x = xy[0].toDouble(&ok1);
+                    const double y = xy[1].toDouble(&ok2);
+                    if (ok1 && ok2)
+                        searchPoly.push_back(cv::Point(int(x) - searchRect.x, int(y) - searchRect.y));
+                }
+            }
+            if (searchPoly.size() >= 3) {
+                const cv::Rect polyBox = cv::boundingRect(searchPoly)
+                                         & cv::Rect(0, 0, gray.cols, gray.rows);
+                if (polyBox.width > 2 && polyBox.height > 2) {
+                    gray = gray(polyBox);
+                    searchRect = polyBox + searchRect.tl();
+                    for (auto &pt : searchPoly) {
+                        pt.x -= polyBox.x;
+                        pt.y -= polyBox.y;
+                    }
+                }
+            } else {
+                searchPoly.clear();
             }
         }
         if (gray.empty()) {
@@ -393,6 +429,23 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
                 const double tVar = tStd[0] * tStd[0];
                 if (tVar > 1e-6)
                     result.setTo(0.0, varROI < tVar * 0.25);
+            }
+            // 多边形过滤：候选位置（模板中心）不在多边形内的峰值屏蔽掉
+            if (!searchPoly.empty() && !result.empty()) {
+                cv::Mat candMask = cv::Mat::zeros(result.size(), CV_8U);
+                for (int yy = 0; yy < result.rows; ++yy) {
+                    for (int xx = 0; xx < result.cols; ++xx) {
+                        const double cx = xx + warpedPair.second.x;
+                        const double cy = yy + warpedPair.second.y;
+                        if (cv::pointPolygonTest(searchPoly, cv::Point2f(float(cx), float(cy)),
+                                                 false) >= 0.0)
+                            candMask.at<uchar>(yy, xx) = 255;
+                    }
+                }
+                if (methodIdx == 0)
+                    result.setTo(1e9, ~candMask);
+                else
+                    result.setTo(-1e9, ~candMask);
             }
             double minVal = 0.0, maxVal = 0.0;
             cv::Point minLoc, maxLoc;
