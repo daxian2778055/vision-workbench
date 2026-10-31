@@ -231,6 +231,8 @@ protected:
     friend class FlowExecutorToken;
 
 private:
+    /// 轮末按预算释放图像输出（r19 P2-3）：每节点一帧跨轮驻留会到百 MB 级
+    void releaseRoundOutputsOverBudget();
     void executeNode(NodeBase *node, bool isLastNode = false);
     /// （178 行）应用层收尾钩子的存放位（终局中止前的送别窗，见公共区注）
     static std::function<void(const QString &)> s_orderlyStopHook;

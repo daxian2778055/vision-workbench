@@ -843,6 +843,8 @@ void FlowExecutor::run()
         // 消费完就推进快照（r19 P1-11 复核）：原快照只在 startExecution 取一次，连续模式下
         // 第一次失败之后每一轮都差值 >0 → 永久判 NG，还要被别的流程连累。每轮只看自己这一窗。
         m_sendFailuresAtRoundStart = CommunicationNodeBase::sendWriteFailureCount(m_runContext.get());
+
+        releaseRoundOutputsOverBudget();   // r19 P2-3：轮末按预算释放图像输出
         if (sendFailures > 0) {
             m_roundHadFailure = true;
             emit executionError(QStringLiteral("本轮有 %1 次发送失败（PLC/下位机可能没收到），"
@@ -1480,6 +1482,49 @@ bool FlowExecutor::spillBatchToDisk(const QString &dbPath, const QList<Inspectio
     if (ok && writtenPath)
         *writtenPath = path;
     return ok;
+}
+
+void FlowExecutor::releaseRoundOutputsOverBudget()
+{
+    // 每节点每端口只留最后一份（不是泄漏），但「图像节点数 × 单帧大小」会到百 MB 级：
+    // 5MP RGB ≈ 15MB，10 个图像节点 ≈ 150MB，在轮与轮之间驻留。
+    // 安全性：节点执行前本来就会清自己的输出（见 run 里 m_nodeData[node].clear()），
+    // 下游只在轮内消费；界面显示拿的是 HImage 引用计数副本，清表不影响它。
+    constexpr qint64 kBudgetBytes = 64LL * 1024 * 1024;
+    qint64 total = 0;
+    QList<QPair<NodeBase *, int>> images;   // (节点, 端口)
+    for (auto it = m_nodeData.constBegin(); it != m_nodeData.constEnd(); ++it) {
+        for (auto pit = it.value().constBegin(); pit != it.value().constEnd(); ++pit) {
+            const auto obj = pit.value();
+            if (!obj)
+                continue;
+            const QVariant v = obj->getData();
+            if (v.canConvert<HImage>()) {
+                const HImage img = v.value<HImage>();
+                if (img.IsInitialized()) {
+                    HTuple w, h, ch;
+                    try {
+                        GetImageSize(img, &w, &h);
+                        CountChannels(img, &ch);
+                        const qint64 bytes = qint64(w.I()) * qint64(h.I()) * qint64(ch.I());
+                        total += bytes;
+                        images.append({it.key(), pit.key()});
+                    } catch (HException &) {
+                        // 取不到尺寸就按 0 计（不影响别的条目）
+                    }
+                }
+            }
+        }
+    }
+    if (total <= kBudgetBytes)
+        return;
+    // 超预算：把这轮所有图像输出放掉（下一轮会重新填；界面已有自己的引用）
+    for (const auto &e : images) {
+        auto it = m_nodeData.find(e.first);
+        if (it != m_nodeData.end())
+            it.value().remove(e.second);
+    }
+    VFP_EXEC_DEBUG << "released round image outputs over budget:" << total << "bytes";
 }
 
 void FlowExecutor::flushPendingResults()
