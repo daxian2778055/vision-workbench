@@ -90,10 +90,12 @@ cv::Mat ModelCache::imageFor(const QString &absPath, int flags)
     for (QHash<QString, ImgEntry>::iterator i = imgTable().begin(); i != imgTable().end();) {
         const QString prefix = QDir::cleanPath(path) + QLatin1Char('|') + QString::number(flags)
                                + QLatin1Char('|');
-        if (i.key().startsWith(prefix) && i.key() != key)
+        if (i.key().startsWith(prefix) && i.key() != key) {
+            imgOrder().removeAll(i.key());   // 顺序表同步（r19 复核 P3）：否则积累失效键
             i = imgTable().erase(i);
-        else
+        } else {
             ++i;
+        }
     }
     imgTable().insert(key, e);
     // 上限（r19 复核 P2）：模板/样本路径多了会一直累积。只淘汰本表最旧的插入项，

@@ -218,8 +218,11 @@ void PlcCommNode::verifyWrittenValue(int address, double expected, const QString
                 // 只在"确实有读失败待复位"时清 lastError（r19 复核 P3）：
         // 无差别清会把最近一次**写**失败的文本也抹掉，诊断偏乐观。
         if (!m_lastReadError.isEmpty()) {
+            // 只有 lastError 仍是那条读失败文本时才清（r19 复核 P3）：
+            // 否则"读失败→写失败→读成功"会把写失败的文本一起抹掉。
+            if (getParam(QStringLiteral("lastError")).toString() == m_lastReadError)
+                setParam(QStringLiteral("lastError"), QString());
             m_lastReadError.clear();
-            setParam(QStringLiteral("lastError"), QString());
         }
             const QModbusDataUnit du = reply->result();
             QVector<quint16> words;
@@ -346,8 +349,11 @@ bool PlcCommNode::readRegister(int slaveAddr, int regAddr, int count)
                 // 只在"确实有读失败待复位"时清 lastError（r19 复核 P3）：
         // 无差别清会把最近一次**写**失败的文本也抹掉，诊断偏乐观。
         if (!m_lastReadError.isEmpty()) {
+            // 只有 lastError 仍是那条读失败文本时才清（r19 复核 P3）：
+            // 否则"读失败→写失败→读成功"会把写失败的文本一起抹掉。
+            if (getParam(QStringLiteral("lastError")).toString() == m_lastReadError)
+                setParam(QStringLiteral("lastError"), QString());
             m_lastReadError.clear();
-            setParam(QStringLiteral("lastError"), QString());
         }
                     const QModbusDataUnit unit = reply->result();
                     const QVector<quint16> values = unit.values();

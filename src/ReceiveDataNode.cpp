@@ -62,9 +62,13 @@ void ReceiveDataNode::run(bool /*autoSwitch*/)
                 QStringLiteral("设备未连接，本轮不输出（避免下游用过期数据）");
             return;
         }
-        // 连通了就把上一次的"未连接"提示清掉（r19 复核 P3：恢复后界面不该留旧提示）
-        if (!dev0.isEmpty())
-            m_params[QStringLiteral("lastDataNote")] = QString();
+        // 连通了、或干脆不再配设备名，都把"未连接"提示清掉（r19 复核 P3）：
+        // 原实现只在 dev0 非空时清，改配置（清空设备名）会把旧提示留在界面上。
+        {
+            const bool linked = m_params.value(QStringLiteral("connected")).toBool();
+            if (dev0.isEmpty() || linked)
+                m_params[QStringLiteral("lastDataNote")] = QString();
+        }
     }
 
     QString lastData = m_params.value(QStringLiteral("lastData")).toString();
