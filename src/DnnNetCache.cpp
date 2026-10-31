@@ -32,9 +32,14 @@ DnnNetCache::ReadyHook &readyHook()
 }
 
 /// 键：真实落点 + mtime（同路径换文件 → 重新加载）。联接/别名指向同一文件时共用一个条目。
-QString cacheKey(const QString &absPath, qint64 mtime)
+QString cacheKey(const QString &absPath, qint64 mtime, bool useOpenCL)
 {
-    return QDir::cleanPath(absPath) + QLatin1Char('|') + QString::number(mtime);
+    // realpath（r19 P2 复核）：注释说"真实落点"，实现却是 cleanPath——联接/别名会各缓存一份。
+    const QString canonical = QFileInfo(absPath).canonicalFilePath();
+    const QString norm = canonical.isEmpty() ? QDir::cleanPath(absPath) : canonical;
+    // backend 入键（r19 P2 复核）：两个节点同路径不同后端时，先加载者会赢。
+    return norm + QLatin1Char('|') + QString::number(mtime) + QLatin1Char('|')
+           + (useOpenCL ? QStringLiteral("ocl") : QStringLiteral("cpu"));
 }
 
 }   // namespace
@@ -68,7 +73,7 @@ std::shared_ptr<DnnNetEntry> DnnNetCache::acquire(const QString &absPath, bool u
 
     const QFileInfo fi(path);
     const qint64 mtime = fi.exists() ? fi.lastModified().toMSecsSinceEpoch() : 0;
-    const QString key = cacheKey(path, mtime);
+    const QString key = cacheKey(path, mtime, useOpenCL);
 
     QHash<QString, std::shared_ptr<DnnNetEntry>>::iterator it = table().find(key);
     if (it != table().end())
@@ -125,6 +130,19 @@ std::shared_ptr<DnnNetEntry> DnnNetCache::acquire(const QString &absPath, bool u
             ++it;
     }
     table().insert(key, entry);
+
+    // 条目上限（r19 P2 复核）：旧缓存有 10 条上限，这里原来无界。只淘汰**没人在用**的
+    // 条目（use_count()==1 表示除表之外无人持有），避免把正在推理的模型摘掉。
+    constexpr int kMaxEntries = 8;
+    if (table().size() > kMaxEntries) {
+        for (QHash<QString, std::shared_ptr<DnnNetEntry>>::iterator i = table().begin();
+             i != table().end() && table().size() > kMaxEntries;) {
+            if (i.key() != key && i.value().use_count() == 1)
+                i = table().erase(i);
+            else
+                ++i;
+        }
+    }
     return entry;
 }
 

@@ -21,6 +21,9 @@
 // 会堵住执行器的轮末落库（r19 P1-2）。
 static QMutex s_connMutex;
 static QMutex s_writeMutex;
+// 错误串单独一把锁（r19 P2 复核）：拆锁后 noteFailure 可能在 s_connMutex 下
+// 写、而 lastDatabaseError() 在 s_writeMutex 下读 —— QString 数据竞争。
+static QMutex s_errMutex;
 // 写锁持有计数（2026-10-30 r19 P1-2）：把「写正在持锁」变成可观测事实，
 // 测试据此判断读者写者是否真并发（时序采样会被置标志与抢锁之间的空隙骗过）。
 static std::atomic<int> s_writeLockHolders{0};
@@ -143,7 +146,10 @@ QString AppDatabase::failureText(const QString &op, const QString &stage,
 void AppDatabase::noteFailure(const QString &op, const QSqlDatabase &db,
                               const QString &driverReason, const QString &stage) const
 {
-    m_lastDatabaseError = failureText(op, stage, db, driverReason);
+    {
+        QMutexLocker<QMutex> errLock(&s_errMutex);
+        m_lastDatabaseError = failureText(op, stage, db, driverReason);
+    }
     VFP_DEBUG << m_lastDatabaseError;
 }
 
@@ -181,6 +187,7 @@ bool AppDatabase::execRead(QSqlQuery &q, const QSqlDatabase &db, const QString &
 QString AppDatabase::lastDatabaseError() const
 {
     WriteLock locker(&s_writeMutex);
+    QMutexLocker<QMutex> errLock(&s_errMutex);
     return m_lastDatabaseError;
 }
 

@@ -1,3 +1,4 @@
+#include <QMutex>
 #include "FlowExecutor.h"
 #include "CommunicationNodeBase.h"   // r19 P1-11：轮级发送失败计数
 #include <QJsonDocument>
@@ -1441,6 +1442,19 @@ bool FlowExecutor::spillBatchToDisk(const QString &dbPath, const QList<Inspectio
     const QString path = spillFilePath(dbPath);
     // 兜底目录也要能建（库目录可能不存在——"库没建成"本身就是写库失败的一种）
     QDir().mkpath(QFileInfo(path).absolutePath());
+
+    // 互斥 + 上限（r19 P2 复核）：多流程同时写库失败会交叉写同一个 JSONL；
+    // 兜底文件本身是恢复数据，不能让它先坏。超上限就轮转成 .1（只留一份旧的）。
+    static QMutex s_spillMutex;
+    QMutexLocker<QMutex> spillLock(&s_spillMutex);
+    constexpr qint64 kMaxSpillBytes = 64LL * 1024 * 1024;
+    {
+        const QFileInfo sfi(path);
+        if (sfi.exists() && sfi.size() > kMaxSpillBytes) {
+            QFile::remove(path + QStringLiteral(".1"));
+            QFile::rename(path, path + QStringLiteral(".1"));
+        }
+    }
     QFile f(path);
     if (!f.open(QIODevice::Append | QIODevice::Text))
         return false;

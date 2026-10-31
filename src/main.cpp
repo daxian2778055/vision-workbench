@@ -104,6 +104,13 @@ void crashLogHandler(QtMsgType type, const QMessageLogContext &ctx, const QStrin
     int idx = qBound(0, static_cast<int>(type), 4);
 
     TryLocker locker(g_crashMutex);
+    // 拿不到锁就别写同一个 static QFile（r19 P2 复核）：没有互斥保护的文件句柄
+    // 多线程同时写会交错甚至崩，宁可只留 stderr。
+    if (!locker.held) {
+        if (type != QtDebugMsg)
+            fprintf(stderr, "%s\n", qPrintable(msg));
+        return;
+    }
 
     // 常开句柄（2026-10-30 r19 P1-3 余量）：原先每条都 open/append/close + 一次体积检查，
     // 高频时开销全在文件 IO。现在平时只 write；每 256 条才重开一次，轮转检查随之摊薄
