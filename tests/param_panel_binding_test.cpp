@@ -2441,8 +2441,8 @@ void ParamPanelBindingTest::testUnnamedFindChildSitesAreSingleCandidate()
              qPrintable(QStringLiteral("甲 的扫描不完整：panelsBuilt=%1 registry=%2，另有 %3 个建面板失败")
                             .arg(panelsBuilt).arg(regs.size()).arg(panelFails.size())));
     // 249 → 256 → 269（2026-10-28）：再加 ObjectCountingNode 的 dnnBackend/resetOnStart/yoloLayout（+2026-10-29 补登记的 scale/swapRB/mean）与 DnnDetectNode 的 dnnBackend/yoloLayout（原在 registerParams 之外，P1-8 修好后真正上面板）
-    QVERIFY2(fieldSlots == 281,
-             qPrintable(QStringLiteral("字段槽位分母从 281 变成 %1 ⇒ 本闸口径已漂移，"
+    QVERIFY2(fieldSlots == 282,
+             qPrintable(QStringLiteral("字段槽位分母从 282 变成 %1 ⇒ 本闸口径已漂移，"
                                         "先核对面板改动再把基准一起改").arg(fieldSlots)));
     QVERIFY2(badSlots.isEmpty(),
              qPrintable(QStringLiteral("U5-MULTI: %1 个字段槽位里同类型候选不止一个 ⇒ 站点 1 的无名 "
