@@ -62,11 +62,19 @@ FlowExecutorToken::~FlowExecutorToken()
     }
     std::thread([ex]() {
         constexpr int kRestMs = 15000 - 300;
-        if (ex->joinForDestroy(kRestMs)) {
-            delete ex;
-            return;
-        }
-        abandonBody(ex, 15000);
+        const bool joined = ex->joinForDestroy(kRestMs);
+        // 删除与收尾都回 GUI 线程（r19 P1-13 复核）：FlowExecutor 是 QThread，亲和性在 GUI，
+        // 从 detached std::thread 里 delete/connect 它不受支持（切换方案时会 UAF/崩）。
+        QMetaObject::invokeMethod(
+            ex,
+            [ex, joined]() {
+                if (joined) {
+                    delete ex;
+                    return;
+                }
+                abandonBody(ex, 15000);
+            },
+            Qt::QueuedConnection);
     }).detach();
 }
 

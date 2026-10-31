@@ -839,6 +839,9 @@ void FlowExecutor::run()
         // 执行；写失败原先只进界面日志，本轮仍记「通过」。这里在写结果前拦下。
         const int sendFailures =
             CommunicationNodeBase::sendWriteFailureCount() - m_sendFailuresAtRoundStart;
+        // 消费完就推进快照（r19 P1-11 复核）：原快照只在 startExecution 取一次，连续模式下
+        // 第一次失败之后每一轮都差值 >0 → 永久判 NG，还要被别的流程连累。每轮只看自己这一窗。
+        m_sendFailuresAtRoundStart = CommunicationNodeBase::sendWriteFailureCount();
         if (sendFailures > 0) {
             m_roundHadFailure = true;
             emit executionError(QStringLiteral("本轮有 %1 次发送失败（PLC/下位机可能没收到），"

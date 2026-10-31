@@ -1,3 +1,5 @@
+#include <QThread>
+#include "FlowExecutor.h"
 #include "HalconNode.h"
 #include <QBuffer>
 #include <QByteArray>
@@ -198,6 +200,13 @@ void HalconNode::setAutoPreviewEnabled(bool enabled)
 
 void HalconNode::triggerDelayedPreview()
 {
+    // r19 P1-8：执行器会在工作线程 setParam → 这里可能在非节点线程被调；
+    // QTimer 只能在它所属线程启动。跨线程就排队回节点线程再触发。
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, &HalconNode::triggerDelayedPreview,
+                                  Qt::QueuedConnection);
+        return;
+    }
     if (m_previewTimer && m_autoPreviewEnabled) {
         m_previewTimer->start();  // 重启定时器，实现防抖
     }
@@ -205,6 +214,9 @@ void HalconNode::triggerDelayedPreview()
 
 void HalconNode::executePreview()
 {
+    // r19 P1-8：执行器正在处理这个节点时，别在界面线程抢同一份输入/输出
+    if (auto ctx = ownerContext(); ctx && ctx->state() == ExecutionState::Running)
+        return;
     if (!m_autoPreviewEnabled) return;
 
     // 记录执行时间

@@ -11,6 +11,11 @@ class SerialCommNode : public CommunicationNodeBase
 {
     Q_OBJECT
 public:
+    /// 测试用（r19 P1-12）：端口对象所在的线程。必须 != 节点线程，
+    /// 否则说明 invokeMethod 又用 QThread 对象当 context 了。
+    QThread *serialIoThreadForTest() const;
+    /// 测试用：以端口为 context 跑一次探针，返回它实际执行的线程
+    QThread *probeIoThreadForTest();
     explicit SerialCommNode(QObject *parent = nullptr);
     ~SerialCommNode() override;
 

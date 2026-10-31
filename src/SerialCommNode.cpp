@@ -20,11 +20,46 @@ SerialCommNode::SerialCommNode(QObject *parent) : CommunicationNodeBase(parent)
     m_ioThread = new QThread(this);
     m_ioThread->setObjectName(QStringLiteral("serial-io"));
     m_ioThread->start();
+    // r19 P1-12 修正：QThread **对象**的线程亲和性是"创建它的线程"（GUI），拿它当
+    // invokeMethod 的 context 等于还在 GUI 执行（复核方最小 Qt 腿实测 inside==GUI）。
+    // 让端口对象自己 moveToThread 到 IO 线程，后续一律以**端口**为 context。
+    m_serial = new QSerialPort();   // 无父对象，否则 moveToThread 会被 Qt 拒绝
+    m_serial->moveToThread(m_ioThread);
+}
+
+QThread *SerialCommNode::probeIoThreadForTest()
+{
+    QSerialPort *port = m_serial;
+    if (!port)
+        return nullptr;
+    QThread *seen = nullptr;
+    auto probe = [&seen]() { seen = QThread::currentThread(); };
+    if (QThread::currentThread() == port->thread())
+        probe();
+    else
+        QMetaObject::invokeMethod(port, probe, Qt::BlockingQueuedConnection);
+    return seen;
+}
+
+QThread *SerialCommNode::serialIoThreadForTest() const
+{
+    return m_serial ? m_serial->thread() : nullptr;
 }
 
 SerialCommNode::~SerialCommNode()
 {
-    closeConnection();
+    // 端口归属 IO 线程：关闭与删除都要在那边做，再收线程（r19 P1-12 修正）
+    if (m_serial) {
+        QSerialPort *port = m_serial;
+        m_serial = nullptr;
+        if (QThread::currentThread() == port->thread()) {
+            port->close();
+            delete port;
+        } else {
+            QMetaObject::invokeMethod(port, [port]() { port->close(); delete port; },
+                                      Qt::BlockingQueuedConnection);
+        }
+    }
     if (m_ioThread) {
         m_ioThread->quit();
         m_ioThread->wait(3000);
@@ -140,34 +175,31 @@ bool SerialCommNode::openConnection()
     bool ok = false;
     bool retryable = false;
     QString err;
-    QSerialPort *created = nullptr;
-    QMetaObject::invokeMethod(
-        m_ioThread,
-        [this, &ok, &err, &retryable, &created, portName, baud]() {
-            auto *port = new QSerialPort();   // no parent: owned by the IO thread
-            port->setPortName(portName);
-            if (!port->setBaudRate(baud)) {
-                err = QStringLiteral("baud rate %1 unsupported").arg(baud);
-                delete port;
-                return;
-            }
-            applyPortSettings(port);
-            if (!port->open(QIODevice::ReadWrite)) {
-                err = QStringLiteral("open failed: %1").arg(port->errorString());
-                retryable = true;
-                delete port;
-                return;
-            }
-            connect(port, &QSerialPort::readyRead, port, [this, port]() {
-                const QByteArray data = port->readAll();
-                emit dataReceived(data);
-                setParamDirect(QStringLiteral("lastReceived"), QString::fromLatin1(data));
-            });
-            connect(port, &QSerialPort::errorOccurred, this, &SerialCommNode::onSerialError);
-            created = port;
-            ok = true;
-        },
-        Qt::BlockingQueuedConnection);
+    QSerialPort *port = m_serial;   // 归属 IO 线程（见构造）
+    auto doOpen = [this, port, &ok, &err, &retryable, portName, baud]() {
+        port->setPortName(portName);
+        if (!port->setBaudRate(baud)) {
+            err = QStringLiteral("baud rate %1 unsupported").arg(baud);
+            return;
+        }
+        applyPortSettings(port);
+        if (!port->open(QIODevice::ReadWrite)) {
+            err = QStringLiteral("open failed: %1").arg(port->errorString());
+            retryable = true;
+            return;
+        }
+        connect(port, &QSerialPort::readyRead, port, [this, port]() {
+            const QByteArray data = port->readAll();
+            emit dataReceived(data);
+            setParamDirect(QStringLiteral("lastReceived"), QString::fromLatin1(data));
+        });
+        connect(port, &QSerialPort::errorOccurred, this, &SerialCommNode::onSerialError);
+        ok = true;
+    };
+    if (port && QThread::currentThread() == port->thread())
+        doOpen();   // 已在 IO 线程：直接调（blocking queued 到自己是死锁）
+    else
+        QMetaObject::invokeMethod(port, doOpen, Qt::BlockingQueuedConnection);
 
     if (!ok) {
         emit communicationError(err.isEmpty() ? QStringLiteral("serial open failed") : err);
@@ -179,8 +211,7 @@ bool SerialCommNode::openConnection()
     }
     {
         QMutexLocker<QMutex> locker(&m_stateMutex);
-        m_serial = created;
-        m_connected = true;
+        m_connected = true;   // 端口对象常驻（m_serial 在构造里建好），这里只改状态
     }
     setParamDirect(QStringLiteral("connected"), true);
     emit connectionOpened();
@@ -223,20 +254,16 @@ void SerialCommNode::closeConnection()
     QSerialPort *port = nullptr;
     {
         QMutexLocker<QMutex> locker(&m_stateMutex);
-        port = m_serial;
-        m_serial = nullptr;
+        port = m_serial;   // 端口常驻（归属 IO 线程），这里只清连接状态
         m_connected = false;
     }
     if (port) {
-        // close/disconnect/delete all happen in the IO thread (r19 P1-12)
-        QMetaObject::invokeMethod(
-            m_ioThread,
-            [port]() {
-                port->close();
-                port->disconnect();
-                port->deleteLater();
-            },
-            Qt::BlockingQueuedConnection);
+        // 关闭在 IO 线程做（r19 P1-12 修正：context 用端口，不用 QThread 对象）
+        auto doClose = [port]() { port->close(); };
+        if (QThread::currentThread() == port->thread())
+            doClose();
+        else
+            QMetaObject::invokeMethod(port, doClose, Qt::BlockingQueuedConnection);
     }
     setParamDirect(QStringLiteral("connected"), false);
     if (!wasConnected)
@@ -282,14 +309,15 @@ void SerialCommNode::onSendRequested(const QByteArray &data)
     }
     // write() also runs in the IO thread (r19 P1-12)
     qint64 written = -1;
-    QMetaObject::invokeMethod(
-        m_ioThread,
-        [port, data, &written]() {
-            written = port->write(data);
-            if (written == data.size())
-                port->flush();
-        },
-        Qt::BlockingQueuedConnection);
+    auto doWrite = [port, data, &written]() {
+        written = port->write(data);
+        if (written == data.size())
+            port->flush();
+    };
+    if (QThread::currentThread() == port->thread())
+        doWrite();
+    else
+        QMetaObject::invokeMethod(port, doWrite, Qt::BlockingQueuedConnection);
     if (written != data.size()) {
         noteSendWriteFailure(QStringLiteral("serial send failed: %1").arg(port->errorString()));
         return;

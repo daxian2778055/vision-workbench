@@ -149,6 +149,8 @@ private slots:
     // r19 P1-11：写失败要被计数（sendData 入队即报成功，真正的写在稍后）
     void sendWriteFailuresAreCounted();
 
+    // r19 P1-12：端口必须在自己的 IO 线程，且 lambda 真在那里跑
+    void serialPortLivesInItsOwnThread();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -2533,6 +2535,20 @@ void CommWritebackTest::sendWriteFailuresAreCounted()
 
     CommunicationNodeBase::resetSendWriteFailureCount();
     QCOMPARE(CommunicationNodeBase::sendWriteFailureCount(), 0);
+}
+
+void CommWritebackTest::serialPortLivesInItsOwnThread()
+{
+    // 复核方用同一招证伪了上一版：QThread 对象当 context → lambda 落在 GUI。
+    SerialCommNode node;
+    QThread *io = node.serialIoThreadForTest();
+    QVERIFY2(io != nullptr, "端口对象不存在");
+    QVERIFY2(io != node.thread(),
+             "端口仍在节点线程：invokeMethod 又用 QThread 对象当 context 了（P1-12）");
+
+    // 以端口为 context 跑探针：它必须在 io 线程执行（不能拿 QThread 对象当 context，
+    // 那等于 blocking-queued 到自己 → fail-fast）
+    QCOMPARE(node.probeIoThreadForTest(), io);
 }
 
 QTEST_MAIN(CommWritebackTest)
