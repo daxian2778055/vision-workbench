@@ -1,3 +1,5 @@
+#include <QLineEdit>
+#include <QDoubleSpinBox>
 #include "ModuleEditorDialog.h"
 #include "HalconNode.h"
 #include "OpencvTemplateMatchNode.h"
@@ -302,7 +304,27 @@ void ModuleEditorDialog::rebuildParamPanel()
     if (!m_node || !m_paramHost)
         return;
     QWidget *panel = m_node->createParamPanel();
-    m_paramHost->setWidget(panel);
+
+    // 布局修复（r19 批 A 第 1 项，现场反馈"右边参数部分没看全"）：
+    // ① 包一层 QScrollArea——参数多时能滚；② 内容给最小宽度，长数值不再被裁；
+    // ③ 数值输入框统一最小宽度，`2391.00` 这类不再掉一位。
+    if (panel) {
+        panel->setMinimumWidth(420);
+        for (QLineEdit *w : panel->findChildren<QLineEdit *>())
+            w->setMinimumWidth(120);
+        for (QDoubleSpinBox *w : panel->findChildren<QDoubleSpinBox *>())
+            w->setMinimumWidth(120);
+        for (QSpinBox *w : panel->findChildren<QSpinBox *>())
+            w->setMinimumWidth(120);
+
+        auto *scroll = new QScrollArea();
+        scroll->setWidget(panel);
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+        m_paramHost->setWidget(scroll);
+    } else {
+        m_paramHost->setWidget(panel);
+    }
     installParamHooks(panel);
 }
 
