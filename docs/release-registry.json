@@ -675,7 +675,16 @@
       "exe_bytes": 10194432,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.24",
       "recorded_at": "2026-10-31",
-      "recorded_note": "当前装机包：复核第四轮 P2/P3——ReceiveDataNode 断线不输出（fail-closed）、ModelCache 32 条上限、Modbus/PLC 读成功清 lastError、noteFailure 打印锁内副本"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.25 取代（后者修复核 12:36 三处 P3）"
+    },
+    {
+      "tag": "rc-20261030.25",
+      "commit": "a6245ab4210fb708326c54179e7aed897564b28d",
+      "exe_md5": "b76468bcfc2e20da1c5cac199c57264b",
+      "exe_bytes": 10196480,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.25",
+      "recorded_at": "2026-10-31",
+      "recorded_note": "当前装机包：lastDataNote 连通即清、ModelCache 真 LRU、Modbus/PLC 读成功条件清 lastError；唯一挂账 P2 是发送失败错轮（需轮内 ack）"
     }
   ],
   "legacy_backfilled": [
