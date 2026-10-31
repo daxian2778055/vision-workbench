@@ -702,7 +702,16 @@
       "exe_bytes": 10200064,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.27",
       "recorded_at": "2026-10-31",
-      "recorded_note": "当前装机包：P2-3——轮末按 64MB 预算释放图像输出（10 个 5MP 图像节点不再跨轮驻留 150MB）。仍挂账：P2-1 发送错轮、P2-2 报表 GUI 取数、P2-4 相机广播、P2-5 模板算法、P2-6 真机长跑"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.28 取代（后者改模板匹配为粗到细）"
+    },
+    {
+      "tag": "rc-20261030.28",
+      "commit": "c8b85b6f37d7b08f5b29d2284786de9d0cd3f888",
+      "exe_md5": "7698fd12c897715373ef25e6f8bf8a66",
+      "exe_bytes": 10208768,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.28",
+      "recorded_at": "2026-10-31",
+      "recorded_note": "当前装机包：模板匹配粗到细（粗搜 480 长边 + 局部全分辨率精修 + warp 缓存 + 提前收工），针对现场 16380ms/轮。仍待做：自动预览防抖/后台、检测区域 ROI、多边形 ROI、低分算法质量"
     }
   ],
   "legacy_backfilled": [
