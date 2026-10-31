@@ -639,7 +639,16 @@
       "exe_bytes": 10184192,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.20",
       "recorded_at": "2026-10-31",
-      "recorded_note": "当前装机包：复核第二轮 4 条——P1-12 端口对象 moveToThread 到 IO 线程（以端口为 context，附证伪腿）、P1-11 轮末消费发送失败增量、P1-13 收尾排队回 GUI、P1-8 预览并发保护"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.21 取代（后者收 P2/P3 残留四条）"
+    },
+    {
+      "tag": "rc-20261030.21",
+      "commit": "a49968e7a6da5e635da013970163b555cbe19e6a",
+      "exe_md5": "7b2be7f4978b1aee455f4b5edcf06cea",
+      "exe_bytes": 10186240,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.21",
+      "recorded_at": "2026-10-31",
+      "recorded_note": "当前装机包：P2/P3 残留四条——DnnNetCache 上限/键含 backend/realpath、spill 互斥+64MB 轮转、m_lastDatabaseError 独立互斥、崩溃锁失败仅 stderr"
     }
   ],
   "legacy_backfilled": [
