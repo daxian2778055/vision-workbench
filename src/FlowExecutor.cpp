@@ -428,7 +428,7 @@ void FlowExecutor::startExecution()
     //   下一次正常生产轮即使全成功，轮末汇总仍写 NG 或干脆跳过。
     m_userStopRequested.store(false, std::memory_order_relaxed);
     m_roundHadFailure = false;
-    m_sendFailuresAtRoundStart = CommunicationNodeBase::sendWriteFailureCount();   // P1-11
+    m_sendFailuresAtRoundStart = CommunicationNodeBase::sendWriteFailureCount(m_runContext.get());   // P1-11 按流程
     m_roundAborted = false;
     setRunState(ExecutionState::Running);
     resetState();
@@ -839,10 +839,10 @@ void FlowExecutor::run()
         // 发送失败计数（2026-10-30 r19 P1-11）：sendData 入队即报成功，真正的写在稍后
         // 执行；写失败原先只进界面日志，本轮仍记「通过」。这里在写结果前拦下。
         const int sendFailures =
-            CommunicationNodeBase::sendWriteFailureCount() - m_sendFailuresAtRoundStart;
+            CommunicationNodeBase::sendWriteFailureCount(m_runContext.get()) - m_sendFailuresAtRoundStart;
         // 消费完就推进快照（r19 P1-11 复核）：原快照只在 startExecution 取一次，连续模式下
         // 第一次失败之后每一轮都差值 >0 → 永久判 NG，还要被别的流程连累。每轮只看自己这一窗。
-        m_sendFailuresAtRoundStart = CommunicationNodeBase::sendWriteFailureCount();
+        m_sendFailuresAtRoundStart = CommunicationNodeBase::sendWriteFailureCount(m_runContext.get());
         if (sendFailures > 0) {
             m_roundHadFailure = true;
             emit executionError(QStringLiteral("本轮有 %1 次发送失败（PLC/下位机可能没收到），"

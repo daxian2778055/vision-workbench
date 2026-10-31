@@ -15,8 +15,9 @@ public:
     /// 轮级发送失败计数（2026-10-30 r19 P1-11）：sendData 入队即返回 true，
     /// 真正的写在稍后执行；写失败原先只报界面日志，流程仍记「通过」。
     /// 累计写失败次数，执行器在轮末据此把本轮判失败。
-    static int sendWriteFailureCount();
-    static void resetSendWriteFailureCount();
+    /// flow 传 FlowRunContext 指针（流程隔离）；nullptr = 进程级兜底桶（r19 复核 P1-11）
+    static int sendWriteFailureCount(const void *flow = nullptr);
+    static void resetSendWriteFailureCount(const void *flow = nullptr);
     enum CommType {
         SERIAL,
         TCP_CLIENT,

@@ -15,6 +15,7 @@
 #include <QTemporaryDir>
 
 #include "SerialCommNode.h"
+#include <QSerialPort>
 #include "CommunicationNodeBase.h"
 #include "CommunicationManager.h"
 #include "FlowExecutor.h"
@@ -151,6 +152,8 @@ private slots:
 
     // r19 P1-12：端口必须在自己的 IO 线程，且 lambda 真在那里跑
     void serialPortLivesInItsOwnThread();
+    // r19 复核：串口报错后常驻端口不能丢——丢了 openConnection 拿 nullptr，重连永远失败
+    void serialPortSurvivesPortError();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -2549,6 +2552,20 @@ void CommWritebackTest::serialPortLivesInItsOwnThread()
     // 以端口为 context 跑探针：它必须在 io 线程执行（不能拿 QThread 对象当 context，
     // 那等于 blocking-queued 到自己 → fail-fast）
     QCOMPARE(node.probeIoThreadForTest(), io);
+}
+
+void CommWritebackTest::serialPortSurvivesPortError()
+{
+    SerialCommNode node;
+    QVERIFY2(node.serialIoThreadForTest() != nullptr, "前置：端口应在构造时就建好");
+
+    // 模拟 USB 掉线（ResourceError）——槽以 this 为接收者，但清理必须派到端口线程
+    QVERIFY(QMetaObject::invokeMethod(&node, "onSerialError", Qt::DirectConnection,
+                                      Q_ARG(QSerialPort::SerialPortError,
+                                            QSerialPort::ResourceError)));
+
+    QVERIFY2(node.serialIoThreadForTest() != nullptr,
+             "报错后端口被删了：自动重连会永远失败（openConnection 拿到 nullptr）");
 }
 
 QTEST_MAIN(CommWritebackTest)

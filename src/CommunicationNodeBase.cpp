@@ -21,22 +21,40 @@ void CommunicationNodeBase::init()
 }
 
 namespace {
-std::atomic<int> s_sendWriteFailures{0};
+
+// r19 复核 P1-11：计数必须**按流程**分桶——进程级静态量会让 A 流程的发送失败把 B 流程
+// 的轮次一起判 NG。键用 FlowRunContext 裸指针（流程存活期内唯一；流程销毁后条目失效，
+// 由 reset 清理）。
+QMutex s_failMutex;
+QHash<const void *, int> s_sendWriteFailures;
+
+int bumpFailure(const void *flow)
+{
+    QMutexLocker<QMutex> locker(&s_failMutex);
+    return ++s_sendWriteFailures[flow];
 }
 
-int CommunicationNodeBase::sendWriteFailureCount()
+}   // namespace
+
+int CommunicationNodeBase::sendWriteFailureCount(const void *flow)
 {
-    return s_sendWriteFailures.load();
+    QMutexLocker<QMutex> locker(&s_failMutex);
+    return s_sendWriteFailures.value(flow, 0);
 }
 
-void CommunicationNodeBase::resetSendWriteFailureCount()
+void CommunicationNodeBase::resetSendWriteFailureCount(const void *flow)
 {
-    s_sendWriteFailures.store(0);
+    QMutexLocker<QMutex> locker(&s_failMutex);
+    if (flow)
+        s_sendWriteFailures.remove(flow);
+    else
+        s_sendWriteFailures.clear();
 }
 
 void CommunicationNodeBase::noteSendWriteFailure(const QString &why)
 {
-    ++s_sendWriteFailures;
+    // 归属本节点的流程上下文（没有上下文时记为 nullptr 桶，兼容非流程场景）
+    bumpFailure(ownerContext().get());
     emit communicationError(why);
 }
 

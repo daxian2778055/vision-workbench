@@ -175,7 +175,11 @@ bool SerialCommNode::openConnection()
     bool ok = false;
     bool retryable = false;
     QString err;
-    QSerialPort *port = m_serial;   // 归属 IO 线程（见构造）
+    QSerialPort *port = nullptr;
+    {
+        QMutexLocker<QMutex> locker(&m_stateMutex);
+        port = m_serial;   // 归属 IO 线程（见构造）
+    }
     auto doOpen = [this, port, &ok, &err, &retryable, portName, baud]() {
         port->setPortName(portName);
         if (!port->setBaudRate(baud)) {
@@ -230,17 +234,39 @@ void SerialCommNode::onSerialError(QSerialPort::SerialPortError error)
 
     // 先取出错误描述再清理：close()/deleteLater() 之后 errorString() 已无效。
     // 历史实现先置空 m_serial 再取 → 诊断信息永远丢失（只知道"断线"，不知"为什么"）。
-    const QString errorText = m_serial ? m_serial->errorString() : QString();
-    if (m_serial) {
-        m_serial->close();
-        m_serial->deleteLater();
-        m_serial = nullptr;
+    // r19 复核：端口活在 IO 线程，close()/errorString() 必须派过去；而且**不能删常驻端口**
+    //（构造时就建好、open/close 复用的那一个）——删了 openConnection 拿到 nullptr，
+    // 自动重连会永远失败。这里只 close，保留对象等下次 open()。
+    QSerialPort *port = nullptr;
+    {
+        QMutexLocker<QMutex> locker(&m_stateMutex);
+        port = m_serial;
     }
-    if (m_connected) {
+    QString errorText;
+    if (port) {
+        auto doClose = [port, &errorText]() {
+            errorText = port->errorString();
+            if (port->isOpen())
+                port->close();
+        };
+        if (QThread::currentThread() == port->thread())
+            doClose();
+        else
+            QMetaObject::invokeMethod(port, doClose, Qt::BlockingQueuedConnection);
+    }
+
+    bool wasConnected = false;
+    {
+        QMutexLocker<QMutex> locker(&m_stateMutex);
+        wasConnected = m_connected;
         m_connected = false;
+    }
+    if (wasConnected) {
         setParamDirect(QStringLiteral("connected"), false);
         emit communicationError(QStringLiteral("\u4E32\u53E3\u8FDE\u63A5\u4E2D\u65AD: %1")
-                                    .arg(errorText.isEmpty() ? QStringLiteral("设备移除") : errorText));
+                                    .arg(errorText.isEmpty()
+                                             ? QStringLiteral("\u8bbe\u5907\u79fb\u9664")
+                                             : errorText));
         emit connectionClosed();
     }
     scheduleReconnect();
