@@ -729,7 +729,16 @@
       "exe_bytes": 10214400,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.30",
       "recorded_at": "2026-10-31",
-      "recorded_note": "当前装机包：批 A 第 2+3 步——搜索区域（检测区域，区域内搜兼提速）+ 未命中画灰框候选（VM 的总能找到，给出分数）。待做：第 4 步图形拖拽↔参数双向同步"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.31 取代（后者含双向同步，批 A 完整）"
+    },
+    {
+      "tag": "rc-20261030.31",
+      "commit": "85fa9b8f6179f22a9ad4fa612366aa443dac2369",
+      "exe_md5": "7f689e0be9da8815528d5923cb36d477",
+      "exe_bytes": 10214400,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.31",
+      "recorded_at": "2026-10-31",
+      "recorded_note": "当前装机包：批 A 完整（VM 手感地基）——搜索区域（检测区域）+ 未命中灰框候选（总能找到给出分数）+ 图上拖拽与参数面板双向同步。待做：搜索区域多边形（代码已备，INV5 注册缺口待定位）"
     }
   ],
   "legacy_backfilled": [
