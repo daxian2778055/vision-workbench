@@ -648,7 +648,16 @@
       "exe_bytes": 10186240,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.21",
       "recorded_at": "2026-10-31",
-      "recorded_note": "当前装机包：P2/P3 残留四条——DnnNetCache 上限/键含 backend/realpath、spill 互斥+64MB 轮转、m_lastDatabaseError 独立互斥、崩溃锁失败仅 stderr"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.22 取代（后者收 P2/P3 第二批）"
+    },
+    {
+      "tag": "rc-20261030.22",
+      "commit": "61a9f3c1497344cb2d341fd350019a2773eb9194",
+      "exe_md5": "dc6beefb3efc27d4eff6a2fa0beeef93",
+      "exe_bytes": 10187776,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.22",
+      "recorded_at": "2026-10-31",
+      "recorded_note": "当前装机包：P2/P3 第二批——关键点缓存键加内容指纹（同名样本重存不再命中旧关键点）、Modbus/PLC 读成功复位 m_lastReadError"
     }
   ],
   "legacy_backfilled": [
