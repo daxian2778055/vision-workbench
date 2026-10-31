@@ -3319,7 +3319,6 @@ void MainWindow::onExecutionError(const QString &error)
 QVector<OverlayShape> MainWindow::collectOverlayFromNode(NodeBase *node) const
 {
     // 叠加规则（线/圆/模板/缺陷/卡尺 → OverlayShape）在 ImageDisplayController
-    }
     return m_imageDisplay->collectOverlayFromNode(node);
 }
 
