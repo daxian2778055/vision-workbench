@@ -17,6 +17,7 @@
 #include <QFileInfo>
 #include <QFile>
 
+#include <QElapsedTimer>
 #include "OpencvFeatureMatchNode.h"
 #include "OpencvTemplateMatchNode.h"
 #include "TemplateMatchNode.h"
@@ -47,6 +48,8 @@ private slots:
     void teachingPersistsOnceAndStopsOverwriting();  // 教学落盘后自动翻回 ＋ 第二轮不覆写模板文件
     void teachingWithoutFileKeepsTraining();         // 边界：没有文件路径时不翻回（否则下一轮平白判红）
     void matchModeWithoutFileFailsAcrossFamily();    // 默认参数＋没模板：三处都判红并给原因
+    // 模板匹配基准（r19）：现场 1500×1000 + 208px + 31 角度 = 16380ms/轮
+    void templateMatchSearchIsFastEnough();
 };
 
 namespace {
@@ -634,6 +637,50 @@ void FeatureMatchTest::matchModeWithoutFileFailsAcrossFamily()
                                         "匹配模式需要设置模板文件路径"
                                         "）：")
                         + noReason.join(QStringLiteral(", "))));
+}
+
+void FeatureMatchTest::templateMatchSearchIsFastEnough()
+{
+    // 现场等效：1500×1000 图 + 208px 模板 + 31 个角度（-30..30 步进 2）
+    cv::Mat big(1000, 1500, CV_8UC1);
+    cv::RNG rng(12345);
+    rng.fill(big, cv::RNG::UNIFORM, 40, 210);
+    cv::Mat color;
+    cv::cvtColor(big, color, cv::COLOR_GRAY2BGR);
+    const HObject img = OpencvUtil::matToHimage(color);
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("roiCenterCol"), 704.0);   // 600 + 208/2
+    node.setParam(QStringLiteral("roiCenterRow"), 504.0);   // 400 + 208/2
+    node.setParam(QStringLiteral("roiWidth"), 208.0);
+    node.setParam(QStringLiteral("roiHeight"), 208.0);
+    node.setParam(QStringLiteral("roiAngle"), 0.0);
+    node.setParam(QStringLiteral("angleMin"), -30.0);
+    node.setParam(QStringLiteral("angleMax"), 30.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("scaleMin"), 1.0);
+    node.setParam(QStringLiteral("scaleMax"), 1.0);
+    node.setParam(QStringLiteral("trainFromImage"), true);   // 从图像按矩形取模板
+    node.setParam(QStringLiteral("minScore"), 0.3);
+    node.setInputImage(img);
+
+    QElapsedTimer timer;
+    timer.start();
+    node.run(false);
+    const qint64 ms = timer.elapsed();
+    const double score = node.getParam(QStringLiteral("matchScore")).toDouble();
+    const double col = node.getParam(QStringLiteral("matchCol")).toDouble();
+    const double row = node.getParam(QStringLiteral("matchRow")).toDouble();
+    qInfo("template-match benchmark: %lld ms score=%.3f at (%.1f, %.1f)", ms, score, col, row);
+
+    // 上限取 8s：远低于现场 16.4s，又给慢机器留余量（这条腿守的是"别再回到十几秒"）
+    QVERIFY2(ms < 8000, qPrintable(QStringLiteral("匹配耗时 %1 ms 超过 8s 上限").arg(ms)));
+    // 几何约定：roi* 这四个参数是"模板框"的旋转矩形描述，取模板的具体落点与
+    // extractTemplatePatch 的约定有关（本腿用合成图，未复刻编辑器那条路径）。
+    // 所以这里只钉两件事：① 找得到（分数高）② 耗时别再回到十几秒。
+    QVERIFY2(score > 0.9, qPrintable(QStringLiteral("分数过低：%1（匹配没真正生效？）").arg(score)));
+    QVERIFY2(col >= 0.0 && row >= 0.0, "匹配位置无效（未找到）");
 }
 
 QTEST_MAIN(FeatureMatchTest)
