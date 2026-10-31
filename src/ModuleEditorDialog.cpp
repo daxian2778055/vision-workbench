@@ -408,6 +408,13 @@ bool ModuleEditorDialog::eventFilter(QObject *watched, QEvent *event)
 
 void ModuleEditorDialog::onParamWidgetEdited()
 {
+    // 参数→图形（r19 批 A 第 4 步）：面板改数值时把几何 ROI 拉回画布，
+    // 与 onRoiEdited 的「图形→参数」构成双向同步（VM 的手感就是这条）。
+    if (HalconNode *hn = halconNode()) {
+        if (m_view)
+            m_view->setRoiShape(hn->geometryRoi());
+    }
+
     if (m_paramHookBusy)
         return;
     scheduleAutoRecompute();
