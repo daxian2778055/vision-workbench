@@ -102,6 +102,8 @@ public:
     void setMaskImage(const QImage &mask);
     QImage maskImage() const { return m_maskImage; }
     void setMaskBrushRadius(int radius);
+    /// 掩膜模式（r19 补全清单第 2 项）：true=涂抹保留、false=擦除
+    void setMaskPaintKeep(bool keep);
     void ensureMaskForCurrentImage();
 
 signals:

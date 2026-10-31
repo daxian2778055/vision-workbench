@@ -980,6 +980,11 @@ void HalconWindow::setMaskImage(const QImage &mask)
     update();
 }
 
+void HalconWindow::setMaskPaintKeep(bool keep)
+{
+    m_maskPaintKeep = keep;   // true=涂抹、false=擦除（r19 补全清单第 2 项）
+}
+
 void HalconWindow::setMaskBrushRadius(int radius)
 {
     m_maskBrushRadius = qBound(2, radius, 80);

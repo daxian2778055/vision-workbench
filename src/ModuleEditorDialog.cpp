@@ -170,6 +170,13 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
             m_view->setMaskBrushRadius(v);
         }
     });
+    auto *maskEraseCheck = new QCheckBox(QStringLiteral("擦除"));
+    maskEraseCheck->setToolTip(QStringLiteral("勾选后在图上拖拽即擦除掩膜；取消则涂抹保留"));
+    connect(maskEraseCheck, &QCheckBox::toggled, this, [this](bool on) {
+        if (m_view)
+            m_view->setMaskPaintKeep(!on);
+    });
+    bottom->addWidget(maskEraseCheck);
     bottom->addWidget(maskBrushLabel);
     bottom->addWidget(maskBrushSpin);
     bottom->addStretch();
@@ -185,6 +192,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     maskBtn->setVisible(hasMask);
     clearMaskBtn->setVisible(hasMask);
     maskBrushLabel->setVisible(hasMask);
+    maskEraseCheck->setVisible(hasMask);
     maskBrushSpin->setVisible(hasMask);
     saveTmplBtn->setVisible(isTmpl);
     m_templatePreview->setVisible(isTmpl);
