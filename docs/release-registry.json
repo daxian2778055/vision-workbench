@@ -621,7 +621,16 @@
       "exe_bytes": 10181120,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.18",
       "recorded_at": "2026-10-30",
-      "recorded_note": "当前装机包：r19 P2 第 3 批——切全局相机先关旧句柄（不再留幽灵句柄）、接收数据带 lastDataTs/lastDataAgeMs、崩溃日志改 tryLock（SIGSEGV 不再自锁）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.19 取代（后者收 r19 P2 收尾三条，P2 池清空）"
+    },
+    {
+      "tag": "rc-20261030.19",
+      "commit": "b0152c6cf2d9f5386fb7a6363ea1dcbb527e3256",
+      "exe_md5": "7c4b4cd8f21504f3769d3c1ef55be156",
+      "exe_bytes": 10183168,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.19",
+      "recorded_at": "2026-10-31",
+      "recorded_note": "当前装机包：r19 P2 收尾——关窗等待改共享 3 秒、接收节点补 connected、Modbus/PLC 读失败上报（同故障不刷屏）。r19 的 P0/P1/P2 全部清零"
     }
   ],
   "legacy_backfilled": [
