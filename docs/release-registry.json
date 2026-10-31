@@ -657,7 +657,16 @@
       "exe_bytes": 10187776,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.22",
       "recorded_at": "2026-10-31",
-      "recorded_note": "当前装机包：P2/P3 第二批——关键点缓存键加内容指纹（同名样本重存不再命中旧关键点）、Modbus/PLC 读成功复位 m_lastReadError"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.23 取代（后者修复核第三轮两条 P1：串口错误路径与计数跨流程）"
+    },
+    {
+      "tag": "rc-20261030.23",
+      "commit": "40c13073b52eb310ff159f94238976aec4d9d7b3",
+      "exe_md5": "6a6afdec08ac778cac2d0e886765c258",
+      "exe_bytes": 10190848,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.23",
+      "recorded_at": "2026-10-31",
+      "recorded_note": "当前装机包：串口错误路径派到端口线程且不删常驻端口（掉线可重连）、发送失败计数按流程分桶（A 流程不再连累 B）"
     }
   ],
   "legacy_backfilled": [
