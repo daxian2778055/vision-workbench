@@ -114,6 +114,15 @@ bool PlcCommNode::isConnected() const
     return m_connected;
 }
 
+void PlcCommNode::reportReadFailure(const QString &text)
+{
+    if (text == m_lastReadError)
+        return;   // 同一故障只报一次；恢复后再犯会重新报
+    m_lastReadError = text;
+    setParam(QStringLiteral("lastError"), text);
+    emit communicationError(text);
+}
+
 void PlcCommNode::run(bool /*autoSwitch*/)
 {
     // PLC 轮询数据在 onPollTimeout 中异步完成
@@ -297,6 +306,7 @@ void PlcCommNode::onPollTimeout()
             // 导致轮询入口直接 return（轮询冻结且无报警）
             m_pendingQueue.removeLast();
             VFP_DEBUG << "PLC read dispatch failed at address" << reg.address;
+            reportReadFailure(QStringLiteral("PLC 读取失败(地址%1)").arg(reg.address));
         }
         // 只推进一步（历史缺陷：函数末尾又无条件推进一次 → 偶数个寄存器时一半永不刷新）
         m_currentRegIdx = (idx + 1) % m_registers.size();
@@ -350,6 +360,7 @@ bool PlcCommNode::readRegister(int slaveAddr, int regAddr, int count)
                     }
                 } else {
                     VFP_DEBUG << "PLC read error at address" << regAddr << ":" << reply->errorString();
+            reportReadFailure(QStringLiteral("PLC 读取失败(地址%1)").arg(regAddr));
                 }
                 reply->deleteLater();
     };

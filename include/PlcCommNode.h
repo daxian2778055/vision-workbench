@@ -65,6 +65,9 @@ private slots:
     void onModbusStateChanged(int state);
 
 private:
+    /// 读失败上报（r19 P2）：同一故障不刷屏
+    void reportReadFailure(const QString &text);
+    QString m_lastReadError;
     /// 发起读请求；返回 false 表示请求未发出（调用方需回滚 pendingQueue 条目）
     bool readRegister(int slaveAddr, int regAddr, int count);
 

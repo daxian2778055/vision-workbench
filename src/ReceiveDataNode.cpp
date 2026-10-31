@@ -44,6 +44,15 @@ void ReceiveDataNode::run(bool /*autoSwitch*/)
 {
     // run 时不做实际读取 — 数据已在 onDataReceived 中缓存
     // 将缓存数据放到输出
+    // 连接状态（r19 P2）：接收节点原先只看缓存值，断线后下游仍在用旧数据。
+    // 每轮刷新 connected，配合 lastDataTs / lastDataAgeMs 判断数据是否可信。
+    {
+        const QString dev = m_params.value(QStringLiteral("deviceName")).toString().trimmed();
+        m_params[QStringLiteral("connected")] =
+            !dev.isEmpty() &&
+            CommunicationManager::instance()->deviceInfo(dev).isConnected;
+    }
+
     QString lastData = m_params.value(QStringLiteral("lastData")).toString();
     if (!lastData.isEmpty()) {
         // 数据新鲜度（r19 P2）：原来每轮无条件输出缓存值，下游分不清"刚收到"还是"十分钟前"。

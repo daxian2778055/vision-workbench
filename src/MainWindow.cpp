@@ -1,3 +1,4 @@
+#include <QElapsedTimer>
 #include "MainWindow.h"
 #include "ResultTablePanel.h"
 #include "VariablePanel.h"
@@ -1000,8 +1001,15 @@ void MainWindow::cleanupCameras()
     for (FlowExecutor *ex : executors)
         ex->stopExecution();
     QList<FlowExecutor *> stuck;
+    // 共享截止时间（r19 P2）：原先是每个执行器各等 3000ms，N 条流程关窗最坏 3N 秒。
+    // 现在总共最多 3 秒——先全部发过停止，再按剩余时间等。
+    QElapsedTimer closeWait;
+    closeWait.start();
     for (FlowExecutor *ex : executors) {
-        if (ex->isRunning() && !ex->wait(3000))
+        if (!ex->isRunning())
+            continue;
+        const int remain = 3000 - int(closeWait.elapsed());
+        if (remain <= 0 || !ex->wait(remain))
             stuck.append(ex);
     }
     if (!stuck.isEmpty()) {

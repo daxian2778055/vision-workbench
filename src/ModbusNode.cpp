@@ -636,6 +636,7 @@ void ModbusNode::onPollTimeout()
             // 后续每次轮询都在入口处直接 return（轮询永久冻结且无任何报警）
             m_pendingQueue.removeLast();
             VFP_DEBUG << "Modbus read dispatch failed at address" << reg.address;
+            reportReadFailure(QStringLiteral("Modbus 读取失败(地址%1)").arg(reg.address));
         }
         // 只推进一步。历史缺陷：此处推进后函数末尾又无条件推进一次 → 偶数个寄存器时
         // 每逢一个跳过一个，一半寄存器永久不刷新，界面/日志却"看起来正常"。
@@ -695,6 +696,7 @@ bool ModbusNode::readRegister(int slaveAddr, int regAddr, int count)
                     }
                 } else {
                     VFP_DEBUG << "Modbus read error at address" << regAddr << ":" << reply->errorString();
+            reportReadFailure(QStringLiteral("Modbus 读取失败(地址%1)").arg(regAddr));
                 }
                 reply->deleteLater();
     };
@@ -731,6 +733,15 @@ void ModbusNode::onModbusStateChanged(int state)
             m_reconnectTimer->start(getParam(QStringLiteral("reconnectInterval")).toInt());
         }
     }
+}
+
+void ModbusNode::reportReadFailure(const QString &text)
+{
+    if (text == m_lastReadError)
+        return;   // 同一故障只报一次；恢复后再犯会重新报
+    m_lastReadError = text;
+    setParam(QStringLiteral("lastError"), text);
+    emit communicationError(text);
 }
 
 void ModbusNode::run(bool /*autoSwitch*/)
