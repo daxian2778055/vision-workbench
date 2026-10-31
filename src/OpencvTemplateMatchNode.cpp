@@ -147,7 +147,28 @@ void OpencvTemplateMatchNode::init()
                         QStringLiteral("搜索尺度步进")),
         makeStringParam(QStringLiteral("writeFixtureName"), QString(),
                         QStringLiteral("匹配位姿写入 Fixture 名（空=不写）")),
-    });
+        // 搜索区域（r19 批 A 第 2 步）：匹配只在这个矩形内搜——既是 VM 的「检测区域」，
+    // 也是提速手段（区域越小 matchTemplate 越快）。0 = 整图（默认行为不变）。
+    makeIntParam(QStringLiteral("searchRegionCol"), 0, 0, 100000,
+                 QStringLiteral("搜索区域左列")),
+    makeIntParam(QStringLiteral("searchRegionRow"), 0, 0, 100000,
+                 QStringLiteral("搜索区域上行")),
+    makeIntParam(QStringLiteral("searchRegionWidth"), 0, 0, 100000,
+                 QStringLiteral("搜索区域宽")),
+    makeIntParam(QStringLiteral("searchRegionHeight"), 0, 0, 100000,
+                 QStringLiteral("搜索区域高")),
+});
+
+    // 搜索区域（r19 批 A 第 2 步）：匹配只在这个矩形内搜——既是 VM 的"检测区域"，
+    // 也是提速手段（区域越小、matchTemplate 越快）。0 = 整图（默认行为不变）。
+    makeIntParam(QStringLiteral("searchRegionCol"), 0, 0, 100000,
+                 QStringLiteral("搜索区域左列")),
+    makeIntParam(QStringLiteral("searchRegionRow"), 0, 0, 100000,
+                 QStringLiteral("搜索区域上行")),
+    makeIntParam(QStringLiteral("searchRegionWidth"), 0, 0, 100000,
+                 QStringLiteral("搜索区域宽")),
+    makeIntParam(QStringLiteral("searchRegionHeight"), 0, 0, 100000,
+                 QStringLiteral("搜索区域高")),
     m_params[QStringLiteral("matchRow")] = 0.0;
     m_params[QStringLiteral("matchCol")] = 0.0;
     m_params[QStringLiteral("matchScore")] = 0.0;
@@ -193,6 +214,24 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
             return;
         }
         cv::Mat gray = OpencvUtil::himageToMat(input);
+
+        // 只在搜索区域内搜（r19 批 A 第 2 步）：0 = 整图；裁剪后坐标再换算回原图
+        cv::Rect searchRect(0, 0, gray.cols, gray.rows);
+        {
+            const int rc = m_params.value(QStringLiteral("searchRegionCol"), 0).toInt();
+            const int rr = m_params.value(QStringLiteral("searchRegionRow"), 0).toInt();
+            const int rw = m_params.value(QStringLiteral("searchRegionWidth"), 0).toInt();
+            const int rh = m_params.value(QStringLiteral("searchRegionHeight"), 0).toInt();
+            if (rw > 2 && rh > 2) {
+                searchRect = cv::Rect(qBound(0, rc, gray.cols - 1),
+                                     qBound(0, rr, gray.rows - 1),
+                                     qMin(rw, gray.cols),
+                                     qMin(rh, gray.rows))
+                                 & cv::Rect(0, 0, gray.cols, gray.rows);
+                if (searchRect.width > 2 && searchRect.height > 2)
+                    gray = gray(searchRect);
+            }
+        }
         if (gray.empty()) {
             m_params["moduleStatus"] = false;
             return;
@@ -423,8 +462,9 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
             return;
         }
 
-        const double col = bestLoc.x + bestCenterInWarp.x;
-        const double row = bestLoc.y + bestCenterInWarp.y;
+        // 坐标换算回原图（搜索区域裁剪过时）
+        const double col = bestLoc.x + searchRect.x + bestCenterInWarp.x;
+        const double row = bestLoc.y + searchRect.y + bestCenterInWarp.y;
         const double outW = tmplW * bestScale;
         const double outH = tmplH * bestScale;
 
