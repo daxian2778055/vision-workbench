@@ -738,7 +738,16 @@
       "exe_bytes": 10214400,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.31",
       "recorded_at": "2026-10-31",
-      "recorded_note": "当前装机包：批 A 完整（VM 手感地基）——搜索区域（检测区域）+ 未命中灰框候选（总能找到给出分数）+ 图上拖拽与参数面板双向同步。待做：搜索区域多边形（代码已备，INV5 注册缺口待定位）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.32 取代（后者修参数面板布局）"
+    },
+    {
+      "tag": "rc-20261030.32",
+      "commit": "d81f38f16260be58e95f0fbf350f54158cf86780",
+      "exe_md5": "a18a5bc7037ae14a10d237db7bac54a0",
+      "exe_bytes": 10215424,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.32",
+      "recorded_at": "2026-10-31",
+      "recorded_note": "当前装机包：补全清单第 1 项——参数面板布局（QScrollArea + 最小宽度，长数值不再被裁，所有工具生效）。待做：掩膜笔刷/擦除、训练模板按钮+预览、运行时匹配渲染、多边形搜索区域"
     }
   ],
   "legacy_backfilled": [
