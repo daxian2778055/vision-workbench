@@ -756,7 +756,16 @@
       "exe_bytes": 10219520,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.33",
       "recorded_at": "2026-10-31",
-      "recorded_note": "当前装机包：补全清单第 2+5 项——掩膜擦除模式（勾选后拖拽即擦除）+ 多边形搜索区域（x1,y1 x2,y2 …，>=3 点生效、优先于矩形，候选掩膜过滤界外峰值）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.34 取代（后者含自动重算刷新结果叠加）"
+    },
+    {
+      "tag": "rc-20261030.34",
+      "commit": "ff0bf4264f0393ae136cdfa880db7b3915b3e031",
+      "exe_md5": "1533c294e05d8fb5d2f69d7d98efcd23",
+      "exe_bytes": 10219520,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.34",
+      "recorded_at": "2026-10-31",
+      "recorded_note": "当前装机包：补全清单第 4 项——自动重算后刷新结果叠加（改参数/拖 ROI/涂掩膜 → 立刻显示命中绿框或灰框候选）。清单仅剩第 3 项（训练模板按钮+预览）"
     }
   ],
   "legacy_backfilled": [
