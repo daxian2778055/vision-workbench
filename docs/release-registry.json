@@ -666,7 +666,16 @@
       "exe_bytes": 10190848,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.23",
       "recorded_at": "2026-10-31",
-      "recorded_note": "当前装机包：串口错误路径派到端口线程且不删常驻端口（掉线可重连）、发送失败计数按流程分桶（A 流程不再连累 B）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.24 取代（后者收复核第四轮 P2/P3 四条）"
+    },
+    {
+      "tag": "rc-20261030.24",
+      "commit": "af929a20fcc7f5b3f80aa3b5c88753cf4a02c2ff",
+      "exe_md5": "a36a52a3d34c038bcfc867b966a8bc77",
+      "exe_bytes": 10194432,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.24",
+      "recorded_at": "2026-10-31",
+      "recorded_note": "当前装机包：复核第四轮 P2/P3——ReceiveDataNode 断线不输出（fail-closed）、ModelCache 32 条上限、Modbus/PLC 读成功清 lastError、noteFailure 打印锁内副本"
     }
   ],
   "legacy_backfilled": [
