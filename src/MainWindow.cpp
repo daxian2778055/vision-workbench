@@ -1612,8 +1612,12 @@ void MainWindow::openModuleEditor(NodeBase *node)
         recomputeDownstream(node);
     });
     // 自动重算（改参数/拖 ROI/涂掩膜）：静默执行，流程忙时直接跳过
-    connect(dlg, &ModuleEditorDialog::autoRecomputeRequested, this, [this, node]() {
+    connect(dlg, &ModuleEditorDialog::autoRecomputeRequested, this, [this, node, dlg]() {
         recomputeDownstream(node, true);
+        // 自动重算后刷新结果叠加（r19 补全清单第 4 项）：与「执行算子」同款两行。
+        // 缺这两行时，改参数/拖 ROI 后画布上看不到新的匹配框（现场反馈"没有运行时渲染"）。
+        dlg->reloadFromNode();
+        dlg->setResultOverlay(collectOverlayFromNode(node));
     });
     // 「变量引用」菜单：每次展开时按当前变量生成列表（上游结果 → 下游参数的一键联动）
     dlg->setVariableReferenceProvider([this]() { return buildVariableReferences(); });
