@@ -38,6 +38,45 @@ cv::Mat warpTemplate(const cv::Mat &tmpl, double angleDeg, double scale, cv::Poi
         *centerOut = cv::Point2f(nw * 0.5f, nh * 0.5f);
     return out;
 }
+namespace {
+
+/// 旋转/缩放后的模板缓存（模板不变时跨帧复用；LRU 32 条）。
+/// 连 centerInWarp 一起缓存——它由 warpTemplate 按旋转后的包围盒算出，不能事后猜。
+std::pair<cv::Mat, cv::Point2f> warpTemplateCached(const cv::Mat &tmpl, const QString &keyBase,
+                                                   double angle, double scale)
+{
+    static QMutex mu;
+    static QHash<QString, std::pair<cv::Mat, cv::Point2f>> cache;
+    static QStringList order;
+    const QString key = keyBase + QStringLiteral("|%1|%2")
+                                       .arg(angle, 0, 'f', 3)
+                                       .arg(scale, 0, 'f', 3);
+    {
+        QMutexLocker<QMutex> locker(&mu);
+        auto it = cache.constFind(key);
+        if (it != cache.constEnd()) {
+            order.removeAll(key);
+            order.append(key);
+            return it.value();
+        }
+    }
+    cv::Point2f c;
+    cv::Mat warped = warpTemplate(tmpl, angle, scale, &c);
+    {
+        QMutexLocker<QMutex> locker(&mu);
+        cache.insert(key, {warped, c});
+        order.append(key);
+        while (cache.size() > 32 && !order.isEmpty()) {
+            const QString victim = order.takeFirst();
+            if (victim != key)
+                cache.remove(victim);
+        }
+    }
+    return {warped, c};
+}
+
+}   // namespace
+
 
 void collectSearchValues(double mn, double mx, double step, int maxCount, QVector<double> &out)
 {
@@ -261,6 +300,29 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
         const bool singleIdentity = (angles.size() == 1 && qAbs(angles.first()) < 1e-6
                                      && scales.size() == 1 && qAbs(scales.first() - 1.0) < 1e-6);
 
+        // ── 粗到细搜索（r19：对齐 VisionMaster 的做法） ──
+        // 实测：1500×1000 + 208px 模板 + 31 角度，全分辨率穷举 ≈16 秒。
+        // 现在先在长边≈480 的粗图上搜全部姿态，再只对最优姿态做全分辨率局部精修。
+        const int maxSide = qMax(gray.cols, gray.rows);
+        const double coarseFactor = (singleIdentity || maxSide <= 640)
+                                        ? 1.0
+                                        : double(maxSide) / 480.0;
+        cv::Mat graySearch = gray;
+        cv::Mat tmplSearch = tmpl;
+        if (coarseFactor > 1.0) {
+            cv::resize(gray, graySearch, cv::Size(), 1.0 / coarseFactor, 1.0 / coarseFactor,
+                       cv::INTER_AREA);
+            cv::resize(tmpl, tmplSearch, cv::Size(), 1.0 / coarseFactor, 1.0 / coarseFactor,
+                       cv::INTER_AREA);
+        }
+
+        // 缓存键：模板身份（尺寸 + 路径）+ 角度 + 尺度
+        const QString warpKeyBase =
+            QStringLiteral("%1x%2:%3")
+                .arg(tmpl.cols)
+                .arg(tmpl.rows)
+                .arg(templatePath.isEmpty() ? QStringLiteral("mem") : templatePath);
+
         double bestScore = -1e9;
         cv::Point bestLoc(0, 0);
         double bestAngle = 0.0;
@@ -269,51 +331,86 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
         const double tmplW = tmpl.cols;
         const double tmplH = tmpl.rows;
 
+        // 单姿态 + 单尺度时保留原有的"低方差区域抑制"（避免纹理空白处高分）
+        auto evalOne = [&](const cv::Mat &search, const cv::Mat &base, double angle,
+                           double scale, cv::Point *locOut, cv::Point2f *centerOut) -> double {
+            const auto warpedPair = warpTemplateCached(base, warpKeyBase, angle, scale);
+            const cv::Mat &warped = warpedPair.first;
+            if (warped.empty() || warped.cols >= search.cols || warped.rows >= search.rows)
+                return -1e9;
+            cv::Mat result;
+            cv::matchTemplate(search, warped, result, method);
+            if (singleIdentity) {
+                cv::Mat grayF;
+                search.convertTo(grayF, CV_32F);
+                cv::Mat mean, meanSq, sqF;
+                cv::multiply(grayF, grayF, sqF);
+                cv::boxFilter(grayF, mean, CV_32F, warped.size());
+                cv::boxFilter(sqF, meanSq, CV_32F, warped.size());
+                cv::Mat var = meanSq - mean.mul(mean);
+                cv::Mat varROI = var(cv::Rect(0, 0, result.cols, result.rows));
+                cv::Scalar tMean, tStd;
+                cv::meanStdDev(warped, tMean, tStd);
+                const double tVar = tStd[0] * tStd[0];
+                if (tVar > 1e-6)
+                    result.setTo(0.0, varROI < tVar * 0.25);
+            }
+            double minVal = 0.0, maxVal = 0.0;
+            cv::Point minLoc, maxLoc;
+            cv::minMaxLoc(result, &minVal, &maxVal, &minLoc, &maxLoc);
+            if (locOut)
+                *locOut = (methodIdx == 0) ? minLoc : maxLoc;
+            if (centerOut)
+                *centerOut = warpedPair.second;
+            return (methodIdx == 0) ? (1.0 - minVal) : maxVal;
+        };
+
+        // ① 粗搜：全部角度 × 尺度（粗图上跑）
         for (double scale : scales) {
             for (double angle : angles) {
-                cv::Point2f centerInWarp;
-                cv::Mat warped = warpTemplate(tmpl, angle, scale, &centerInWarp);
-                if (warped.empty() || warped.cols >= gray.cols || warped.rows >= gray.rows)
-                    continue;
-
-                cv::Mat result;
-                cv::matchTemplate(gray, warped, result, method);
-
-                if (singleIdentity) {
-                    cv::Mat grayF;
-                    gray.convertTo(grayF, CV_32F);
-                    cv::Mat mean, meanSq, sqF;
-                    cv::multiply(grayF, grayF, sqF);
-                    cv::boxFilter(grayF, mean, CV_32F, warped.size());
-                    cv::boxFilter(sqF, meanSq, CV_32F, warped.size());
-                    cv::Mat var = meanSq - mean.mul(mean);
-                    cv::Mat varROI = var(cv::Rect(0, 0, result.cols, result.rows));
-                    cv::Scalar tMean, tStd;
-                    cv::meanStdDev(warped, tMean, tStd);
-                    const double tVar = tStd[0] * tStd[0];
-                    if (tVar > 1e-6)
-                        result.setTo(0.0, varROI < tVar * 0.25);
-                }
-
-                double minVal = 0.0, maxVal = 0.0;
-                cv::Point minLoc, maxLoc;
-                cv::minMaxLoc(result, &minVal, &maxVal, &minLoc, &maxLoc);
-
-                double score = 0.0;
                 cv::Point loc;
-                if (methodIdx == 0) {
-                    score = 1.0 - minVal;
-                    loc = minLoc;
-                } else {
-                    score = maxVal;
-                    loc = maxLoc;
-                }
-                if (score > bestScore) {
-                    bestScore = score;
+                cv::Point2f centerInWarp;
+                const double sc = evalOne(graySearch, tmplSearch, angle, scale, &loc, &centerInWarp);
+                if (sc > bestScore) {
+                    bestScore = sc;
                     bestLoc = loc;
                     bestAngle = angle;
                     bestScale = scale;
                     bestCenterInWarp = centerInWarp;
+                }
+                if (bestScore >= 0.95)
+                    break;   // 足够好就收工（VM 也这么做）
+            }
+            if (bestScore >= 0.95)
+                break;
+        }
+
+        // ② 精修：全分辨率、最优姿态附近（角度 ±1 步 + 位置局部窗口）
+        if (coarseFactor > 1.0 && bestScore > -1e8) {
+            const int margin = qMax(24, int(qMax(tmplW, tmplH) * 0.6));
+            const int cx = int(bestLoc.x * coarseFactor);
+            const int cy = int(bestLoc.y * coarseFactor);
+            const int x0 = qBound(0, cx - margin, qMax(0, gray.cols - 1));
+            const int y0 = qBound(0, cy - margin, qMax(0, gray.rows - 1));
+            const int w = qMin(gray.cols - x0, int(tmplW) + margin * 2);
+            const int h = qMin(gray.rows - y0, int(tmplH) + margin * 2);
+            if (w > tmplW + 2 && h > tmplH + 2) {
+                const cv::Mat win = gray(cv::Rect(x0, y0, w, h));
+                const double stepA =
+                    qMax(0.5, m_params.value(QStringLiteral("angleStep"), 2.0).toDouble());
+                for (int k = -1; k <= 1; ++k) {
+                    const double angle = bestAngle + k * stepA;
+                    if (angle < angles.first() - 1e-9 || angle > angles.last() + 1e-9)
+                        continue;
+                    cv::Point loc;
+                    cv::Point2f centerInWarp;
+                    const double sc = evalOne(win, tmpl, angle, bestScale, &loc, &centerInWarp);
+                    if (sc > bestScore) {
+                        bestScore = sc;
+                        bestLoc = cv::Point(x0 + loc.x, y0 + loc.y);
+                        bestAngle = angle;
+                        bestCenterInWarp = centerInWarp;
+                    }
                 }
             }
         }
