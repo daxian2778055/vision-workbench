@@ -324,6 +324,20 @@ void OpencvFeatureMatchNode::run(bool /*autoSwitch*/)
                 tmplKey = QDir::cleanPath(templatePath) + QLatin1Char('|')
                           + QString::number(tfi.lastModified().toMSecsSinceEpoch());
             }
+            // 内容指纹（r19 复核 P2）：样本名/文件+mtime 都不足以反映"图被换了内容"——
+            // 同名样本重存后仍会命中旧关键点。用尺寸 + 抽样字节和做第三段键（够区分换图，成本可忽略）。
+            if (!tmplKey.isEmpty() && !tmpl.empty()) {
+                const size_t total = size_t(tmpl.total()) * size_t(tmpl.channels());
+                const uchar *base = tmpl.data;
+                quint32 h = 2166136261u;
+                const size_t step = qMax<size_t>(1, total / 64);
+                for (size_t i = 0; i < total; i += step)
+                    h = (h ^ base[i]) * 16777619u;
+                tmplKey += QStringLiteral(":%1x%2:%3")
+                               .arg(tmpl.cols)
+                               .arg(tmpl.rows)
+                               .arg(h, 8, 16, QLatin1Char('0'));
+            }
             if (tmplKey.isEmpty()) {
                 f2d->detectAndCompute(tmpl, cv::noArray(), objKp, objDesc);
             } else {
