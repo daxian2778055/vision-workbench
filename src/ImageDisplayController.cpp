@@ -71,10 +71,13 @@ QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *n
         auto data = node->getOutputData(p);
         if (!data || data->getType() != DataObject::DataType::Measure) continue;
         MeasureResult mr = data->getMeasureResult();
-        if (!mr.valid) continue;
+        // 未命中也画**灰框候选**（r19 批 A 第 3 步）：VM 的「总能找到，给出分数」——
+        // 原先把 !mr.valid 整条丢掉，现场只剩红节点、没有框，无从判断差多少。
+        const bool hit = mr.valid;
 
         OverlayShape s;
-        s.color = QColor(0, 255, 0);
+        // 命中绿框；未命中灰框候选（r19 批 A 第 3 步）
+        s.color = hit ? QColor(0, 255, 0) : QColor(170, 170, 170);
         if (mr.type == QLatin1String("line")) {
             s.type = OverlayShape::Type::Line;
             s.p1 = mr.point1;
