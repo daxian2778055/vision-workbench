@@ -720,7 +720,16 @@
       "exe_bytes": 10208768,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.29",
       "recorded_at": "2026-10-31",
-      "recorded_note": "当前装机包：模板匹配粗到细（合成基准 127~175ms，score 0.991）+ 基准腿（守耗时<8s 与分数>0.9）。下一步：VM 手感改造（画布式图形交互 / 即时预览 / 流程画布）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.30 取代（后者含搜索区域与灰框候选）"
+    },
+    {
+      "tag": "rc-20261030.30",
+      "commit": "03be20eae469c828773a37eedeb5cfa100a812b3",
+      "exe_md5": "fb819fba6899a0775fb19cdc8e4b5866",
+      "exe_bytes": 10214400,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.30",
+      "recorded_at": "2026-10-31",
+      "recorded_note": "当前装机包：批 A 第 2+3 步——搜索区域（检测区域，区域内搜兼提速）+ 未命中画灰框候选（VM 的总能找到，给出分数）。待做：第 4 步图形拖拽↔参数双向同步"
     }
   ],
   "legacy_backfilled": [
