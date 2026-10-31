@@ -1,3 +1,4 @@
+#include <QStringList>
 #include "ModelCache.h"
 
 #include <QHash>
@@ -25,6 +26,19 @@ struct KpEntry {
     std::vector<cv::KeyPoint> kp;
     cv::Mat desc;
 };
+
+/// 插入顺序（LRU 用）：QHash 本身不保序，靠它才知道谁最旧
+QStringList &imgOrder()
+{
+    static QStringList o;
+    return o;
+}
+
+QStringList &kpOrder()
+{
+    static QStringList o;
+    return o;
+}
 
 QHash<QString, ImgEntry> &imgTable()
 {
@@ -57,8 +71,11 @@ cv::Mat ModelCache::imageFor(const QString &absPath, int flags)
 
     QMutexLocker<QMutex> locker(&mapMutex());
     QHash<QString, ImgEntry>::const_iterator it = imgTable().constFind(key);
-    if (it != imgTable().constEnd())
+    if (it != imgTable().constEnd()) {
+        imgOrder().removeAll(key);
+        imgOrder().append(key);   // 命中即刷新（真 LRU）
         return it.value().mat;
+    }
 
     ImgEntry e;
     e.mtime = mt;
@@ -81,9 +98,13 @@ cv::Mat ModelCache::imageFor(const QString &absPath, int flags)
     imgTable().insert(key, e);
     // 上限（r19 复核 P2）：模板/样本路径多了会一直累积。只淘汰本表最旧的插入项，
     // 正在被调用方使用的 cv::Mat 是引用计数数据，表里删掉不影响已返回的副本。
+    imgOrder().append(key);
     constexpr int kMaxImages = 32;
-    while (imgTable().size() > kMaxImages)
-        imgTable().erase(imgTable().begin());
+    while (imgTable().size() > kMaxImages && !imgOrder().isEmpty()) {
+        const QString victim = imgOrder().takeFirst();   // 真正最旧的插入项
+        if (victim != key)
+            imgTable().remove(victim);
+    }
     return e.mat;
 }
 
@@ -99,6 +120,8 @@ void ModelCache::keypointsFor(const QString &templateKey, int detectorIdx, int n
         QMutexLocker<QMutex> locker(&mapMutex());
         QHash<QString, KpEntry>::const_iterator it = kpTable().constFind(key);
         if (it != kpTable().constEnd()) {
+            kpOrder().removeAll(key);
+            kpOrder().append(key);
             *kp = it.value().kp;
             *desc = it.value().desc;
             return;
@@ -122,9 +145,13 @@ void ModelCache::keypointsFor(const QString &templateKey, int detectorIdx, int n
 
     QMutexLocker<QMutex> locker(&mapMutex());
     kpTable().insert(key, e);
+    kpOrder().append(key);
     constexpr int kMaxKeypointSets = 32;
-    while (kpTable().size() > kMaxKeypointSets)
-        kpTable().erase(kpTable().begin());
+    while (kpTable().size() > kMaxKeypointSets && !kpOrder().isEmpty()) {
+        const QString victim = kpOrder().takeFirst();
+        if (victim != key)
+            kpTable().remove(victim);
+    }
     *kp = e.kp;
     *desc = e.desc;
 }
@@ -134,6 +161,8 @@ void ModelCache::clear()
     QMutexLocker<QMutex> locker(&mapMutex());
     imgTable().clear();
     kpTable().clear();
+    imgOrder().clear();
+    kpOrder().clear();
 }
 
 int ModelCache::size()

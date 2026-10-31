@@ -669,8 +669,12 @@ bool ModbusNode::readRegister(int slaveAddr, int regAddr, int count)
                 }
 
                 if (reply->error() == QModbusDevice::NoError) {
-                m_lastReadError.clear();   // 读成功就复位（r19 复核）
-        setParam(QStringLiteral("lastError"), QString());   // 界面红字也清掉
+                // 只在"确实有读失败待复位"时清 lastError（r19 复核 P3）：
+        // 无差别清会把最近一次**写**失败的文本也抹掉，诊断偏乐观。
+        if (!m_lastReadError.isEmpty()) {
+            m_lastReadError.clear();
+            setParam(QStringLiteral("lastError"), QString());
+        }
                     const QModbusDataUnit unit = reply->result();
                     const QVector<quint16> values = unit.values();
 
@@ -814,8 +818,12 @@ void ModbusNode::verifyWrittenValue(int address, double expected, const QString 
     // 一份处理逻辑，同步/异步两条路径共用（K-2：同步完成且**成功**的 reply 不得被误判成"读回失败"）
     const auto handleVerifyReply = [this, address, expected, dataType, byteOrder](QModbusReply *reply) {
         if (reply->error() == QModbusDevice::NoError) {
-                m_lastReadError.clear();   // 读成功就复位（r19 复核）
-        setParam(QStringLiteral("lastError"), QString());   // 界面红字也清掉
+                // 只在"确实有读失败待复位"时清 lastError（r19 复核 P3）：
+        // 无差别清会把最近一次**写**失败的文本也抹掉，诊断偏乐观。
+        if (!m_lastReadError.isEmpty()) {
+            m_lastReadError.clear();
+            setParam(QStringLiteral("lastError"), QString());
+        }
             const QModbusDataUnit du = reply->result();
             QVector<quint16> words;
             words.reserve(du.valueCount());
