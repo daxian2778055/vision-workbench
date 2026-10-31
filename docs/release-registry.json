@@ -684,7 +684,16 @@
       "exe_bytes": 10196480,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.25",
       "recorded_at": "2026-10-31",
-      "recorded_note": "当前装机包：lastDataNote 连通即清、ModelCache 真 LRU、Modbus/PLC 读成功条件清 lastError；唯一挂账 P2 是发送失败错轮（需轮内 ack）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.26 取代（后者收三条 P3 尾巴）"
+    },
+    {
+      "tag": "rc-20261030.26",
+      "commit": "4babbe4318d85215b94ba5671fe9d308bde5d242",
+      "exe_md5": "59cbfe5e0bc55ae390d1caad2c344c11",
+      "exe_bytes": 10196992,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261030.26",
+      "recorded_at": "2026-10-31",
+      "recorded_note": "当前装机包：三条 P3 尾巴（ModelCache 顺序表同步、deviceName 清空清提示、lastError 精确清）。仍挂账：P2-1 发送错轮（设计级）、P2-2/3/4/5（工作线程/内存预算/相机广播/算法）、P2-6 真机与长跑"
     }
   ],
   "legacy_backfilled": [
