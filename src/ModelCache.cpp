@@ -79,6 +79,11 @@ cv::Mat ModelCache::imageFor(const QString &absPath, int flags)
             ++i;
     }
     imgTable().insert(key, e);
+    // 上限（r19 复核 P2）：模板/样本路径多了会一直累积。只淘汰本表最旧的插入项，
+    // 正在被调用方使用的 cv::Mat 是引用计数数据，表里删掉不影响已返回的副本。
+    constexpr int kMaxImages = 32;
+    while (imgTable().size() > kMaxImages)
+        imgTable().erase(imgTable().begin());
     return e.mat;
 }
 
@@ -117,6 +122,9 @@ void ModelCache::keypointsFor(const QString &templateKey, int detectorIdx, int n
 
     QMutexLocker<QMutex> locker(&mapMutex());
     kpTable().insert(key, e);
+    constexpr int kMaxKeypointSets = 32;
+    while (kpTable().size() > kMaxKeypointSets)
+        kpTable().erase(kpTable().begin());
     *kp = e.kp;
     *desc = e.desc;
 }

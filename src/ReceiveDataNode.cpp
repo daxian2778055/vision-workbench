@@ -53,6 +53,17 @@ void ReceiveDataNode::run(bool /*autoSwitch*/)
             CommunicationManager::instance()->deviceInfo(dev).isConnected;
     }
 
+    // 断线即不输出（r19 复核 P2）：原先只把 connected/age 挂在参数上，下游不看就继续用旧值。
+    // 只在"配了设备名"时判定——没配设备名的场景（离线回放/测试）保持原行为。
+    {
+        const QString dev0 = m_params.value(QStringLiteral("deviceName")).toString().trimmed();
+        if (!dev0.isEmpty() && !m_params.value(QStringLiteral("connected")).toBool()) {
+            m_params[QStringLiteral("lastDataNote")] =
+                QStringLiteral("设备未连接，本轮不输出（避免下游用过期数据）");
+            return;
+        }
+    }
+
     QString lastData = m_params.value(QStringLiteral("lastData")).toString();
     if (!lastData.isEmpty()) {
         // 数据新鲜度（r19 P2）：原来每轮无条件输出缓存值，下游分不清"刚收到"还是"十分钟前"。

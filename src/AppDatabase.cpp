@@ -146,11 +146,13 @@ QString AppDatabase::failureText(const QString &op, const QString &stage,
 void AppDatabase::noteFailure(const QString &op, const QSqlDatabase &db,
                               const QString &driverReason, const QString &stage) const
 {
+    QString snapshot;
     {
         QMutexLocker<QMutex> errLock(&s_errMutex);
         m_lastDatabaseError = failureText(op, stage, db, driverReason);
+        snapshot = m_lastDatabaseError;   // 锁内取副本，避免锁外读成员（r19 复核 P3）
     }
-    VFP_DEBUG << m_lastDatabaseError;
+    VFP_DEBUG << snapshot;
 }
 
 bool AppDatabase::prepareWrite(QSqlQuery &q, const QSqlDatabase &db,

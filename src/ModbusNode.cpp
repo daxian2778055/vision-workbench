@@ -670,6 +670,7 @@ bool ModbusNode::readRegister(int slaveAddr, int regAddr, int count)
 
                 if (reply->error() == QModbusDevice::NoError) {
                 m_lastReadError.clear();   // 读成功就复位（r19 复核）
+        setParam(QStringLiteral("lastError"), QString());   // 界面红字也清掉
                     const QModbusDataUnit unit = reply->result();
                     const QVector<quint16> values = unit.values();
 
@@ -814,6 +815,7 @@ void ModbusNode::verifyWrittenValue(int address, double expected, const QString 
     const auto handleVerifyReply = [this, address, expected, dataType, byteOrder](QModbusReply *reply) {
         if (reply->error() == QModbusDevice::NoError) {
                 m_lastReadError.clear();   // 读成功就复位（r19 复核）
+        setParam(QStringLiteral("lastError"), QString());   // 界面红字也清掉
             const QModbusDataUnit du = reply->result();
             QVector<quint16> words;
             words.reserve(du.valueCount());
