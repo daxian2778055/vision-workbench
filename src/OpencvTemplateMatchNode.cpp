@@ -441,6 +441,21 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
 
         // 多边形按当前搜索栅格换算（r19 P1-14 ②）：粗搜是降采样图、精修是子窗口，
         // 两者与原图的点不是同一栅格，不能直接拿裁剪后的点去过滤。
+        // 编辑器掩膜（白=保留、黑=忽略）：裁到 gray 的坐标，方法 2 评分时按它排除
+        cv::Mat maskOfGray;
+        if (hasEditMask()) {
+            const QImage mImg = editMask();
+            if (!mImg.isNull()) {
+                QImage g = mImg.convertToFormat(QImage::Format_Grayscale8);
+                cv::Mat mv(g.height(), g.width(), CV_8UC1,
+                           const_cast<uchar *>(g.constBits()), qsizetype(g.bytesPerLine()));
+                const cv::Rect want(searchRect.tl(), gray.size());
+                const cv::Rect avail(0, 0, mv.cols, mv.rows);
+                const cv::Rect r = want & avail;
+                if (r.width == gray.cols && r.height == gray.rows)
+                    maskOfGray = mv(r).clone();
+            }
+        }
         cv::Mat curSearchCos, curSearchSin;   // method=2 搜索图方向图（每遍一次）
         cv::Mat curSearchStrong;             // 搜索图强梯度掩膜（遮挡自适应用）
         std::vector<cv::Point> polyCoarse, polyFull;
@@ -615,6 +630,16 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
             curSearchStrong.convertTo(curSearchStrong, CV_32F);
             cv::multiply(curSearchCos, curSearchStrong, curSearchCos);   // 分子分母同掩膜
             cv::multiply(curSearchSin, curSearchStrong, curSearchSin);
+            if (!maskOfGray.empty()) {   // 掩膜参与评分：忽略区在分子分母都排除
+            cv::Mat maskHere;
+            cv::resize(maskOfGray, maskHere, curSearchStrong.size());
+                cv::Mat keep;
+                cv::threshold(maskHere, keep, 127.0, 1.0, cv::THRESH_BINARY);
+                keep.convertTo(keep, CV_32F);
+                curSearchStrong = curSearchStrong.mul(keep);
+                curSearchCos = curSearchCos.mul(keep);
+                curSearchSin = curSearchSin.mul(keep);
+            }
         }
                 const double sc = evalOne(coarseSearchImg, coarseTmplImg, angle, scale, &loc, &centerInWarp,
                                          &subpixTmp);
@@ -674,6 +699,21 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
                     curSearchStrong.convertTo(curSearchStrong, CV_32F);
                     cv::multiply(curSearchCos, curSearchStrong, curSearchCos);   // 分子分母同掩膜
                     cv::multiply(curSearchSin, curSearchStrong, curSearchSin);
+                    if (!maskOfGray.empty()) {   // 掩膜参与评分：忽略区在分子分母都排除
+                    cv::Mat maskHere = maskOfGray;
+                    if (searchOrigin.x + maskHere.cols >= 0 &&
+                        searchOrigin.x + curSearchStrong.cols <= maskHere.cols &&
+                        searchOrigin.y + curSearchStrong.rows <= maskHere.rows) {
+                        maskHere = maskOfGray(cv::Rect(searchOrigin.x, searchOrigin.y,
+                                                                                  curSearchStrong.cols, curSearchStrong.rows));
+                    }
+                        cv::Mat keep;
+                        cv::threshold(maskHere, keep, 127.0, 1.0, cv::THRESH_BINARY);
+                        keep.convertTo(keep, CV_32F);
+                        curSearchStrong = curSearchStrong.mul(keep);
+                        curSearchCos = curSearchCos.mul(keep);
+                        curSearchSin = curSearchSin.mul(keep);
+                    }
                 }
                 // 多边形换到子窗口栅格（r19 P1-14 ②）
                 if (!searchPoly.empty()) {
