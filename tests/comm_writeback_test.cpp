@@ -149,6 +149,7 @@ private slots:
     void testAllocFlowNameAvoidsCollision();
     // r19 P1-11：写失败要被计数（sendData 入队即报成功，真正的写在稍后）
     void sendWriteFailuresAreCounted();
+    void pendingSendDrainsToZero();
 
     // r19 P1-12：端口必须在自己的 IO 线程，且 lambda 真在那里跑
     void serialPortLivesInItsOwnThread();
@@ -2566,6 +2567,27 @@ void CommWritebackTest::serialPortSurvivesPortError()
 
     QVERIFY2(node.serialIoThreadForTest() != nullptr,
              "报错后端口被删了：自动重连会永远失败（openConnection 拿到 nullptr）");
+}
+
+
+// r19 P2：轮末排空的前提——入队计数必须能在事件循环里归零，
+// 否则 waitSendDrain 会一直等到超时（等于每次轮末都白等 200ms）。
+void CommWritebackTest::pendingSendDrainsToZero()
+{
+    SerialCommNode node;
+    node.init();
+    const void *flow = node.ownerContext().get();
+    const int before = CommunicationNodeBase::pendingSendCount(flow);
+
+    node.requestSend(QByteArrayLiteral("x"));
+    QVERIFY2(CommunicationNodeBase::pendingSendCount(flow) == before + 1,
+             "requestSend 之后排队计数没加一");
+
+    // 队列出口在节点线程；本测试里用事件循环把它跑掉
+    for (int i = 0; i < 50 && CommunicationNodeBase::pendingSendCount(flow) > before; ++i)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+
+    QCOMPARE(CommunicationNodeBase::pendingSendCount(flow), before);
 }
 
 QTEST_MAIN(CommWritebackTest)

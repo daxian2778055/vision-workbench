@@ -17,6 +17,10 @@ public:
     /// 累计写失败次数，执行器在轮末据此把本轮判失败。
     /// flow 传 FlowRunContext 指针（流程隔离）；nullptr = 进程级兜底桶（r19 复核 P1-11）
     static int sendWriteFailureCount(const void *flow = nullptr);
+    /// 排队中（已入队、尚未写完）的发送条数（r19 P2：轮末排空用）
+    static int pendingSendCount(const void *flow = nullptr);
+    /// 等本轮入队的发送全部落地（有界）；返回 true=已排空
+    static bool waitSendDrain(const void *flow, int timeoutMs);
     static void resetSendWriteFailureCount(const void *flow = nullptr);
     enum CommType {
         SERIAL,
@@ -43,7 +47,11 @@ public:
     QString deviceName() const { return m_deviceName; }
 
     /// 发送外部数据（由 CommunicationManager::sendData 触发，队列投递到节点线程执行）
-    void requestSend(const QByteArray &data) { emit sendRequested(data); }
+    void requestSend(const QByteArray &data)
+    {
+        bumpSendPending(ownerContext().get());
+        emit sendRequested(data);
+    }
 
     /// 本节点是否支持「原始字节发送」。
     /// Modbus/PLC 是寄存器语义（写寄存器），不支持裸字节；上层据此**提前失败**，
@@ -65,9 +73,15 @@ protected slots:
     /// 实际发送实现（子类覆盖：socket/串口 write）。默认空实现。
     virtual void onSendRequested(const QByteArray &data) { Q_UNUSED(data); }
 
+private slots:
+    /// 队列出口（r19 P2）：先跑子类的发送实现，再销掉一条 pending
+    void handleSendRequested(const QByteArray &data);
+
 protected:
 
     /// 写失败的统一收口：计数 + 报错（各节点的发送失败路径都走它）
+    static void bumpSendPending(const void *flow);
+    static void dropSendPending(const void *flow);
     void noteSendWriteFailure(const QString &why);
     CommType m_commType;
     bool m_connected = false;

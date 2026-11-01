@@ -428,6 +428,8 @@ void FlowExecutor::startExecution()
     //   下一次正常生产轮即使全成功，轮末汇总仍写 NG 或干脆跳过。
     m_userStopRequested.store(false, std::memory_order_relaxed);
     m_roundHadFailure = false;
+    // r19 P2：先让本轮入队的发送落地，再读失败数（否则失败会被记到下一轮）
+    CommunicationNodeBase::waitSendDrain(m_runContext.get(), 200);
     m_sendFailuresAtRoundStart = CommunicationNodeBase::sendWriteFailureCount(m_runContext.get());   // P1-11 按流程
     m_roundAborted = false;
     setRunState(ExecutionState::Running);
