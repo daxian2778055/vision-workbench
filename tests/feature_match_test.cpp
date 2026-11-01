@@ -18,6 +18,7 @@
 #include <QFile>
 
 #include <QElapsedTimer>
+#include "TemplateSearchBudget.h"
 #include "OpencvFeatureMatchNode.h"
 #include "OpencvTemplateMatchNode.h"
 #include "TemplateMatchNode.h"
@@ -51,6 +52,7 @@ private slots:
     // 模板匹配基准（r19）：现场 1500×1000 + 208px + 31 角度 = 16380ms/轮
     void templateMatchSearchIsFastEnough();
     void templateMatchFindsMultipleInstances();
+    void searchBudgetCountsCombos();
 };
 
 namespace {
@@ -755,6 +757,25 @@ void FeatureMatchTest::templateMatchFindsMultipleInstances()
         }
         QVERIFY2(nearOk, qPrintable(QStringLiteral("实例位置不在任何真实中心附近：(%1, %2)").arg(col).arg(row)));
     }
+}
+
+
+// 向导 ③/4：搜索预算（角度×尺度组合数）——纯函数，最容易守，也最容易被改坏。
+void FeatureMatchTest::searchBudgetCountsCombos()
+{
+    using namespace TemplateSearchBudget;
+    // 现场那组：-30..30 步进 2 => 31 个角度，尺度固定 => 1 档
+    QCOMPARE(stepsInRange(-30.0, 30.0, 2.0), 31);
+    QCOMPARE(stepsInRange(1.0, 1.0, 0.05), 1);
+    QCOMPARE(stepsInRange(0.0, 0.0, 2.0), 1);
+    QCOMPARE(stepsInRange(0.0, 1.0, 0.0), 1);          // 步进非法按 1 档
+    QCOMPARE(comboCount(-30.0, 30.0, 2.0, 1.0, 1.0, 0.05), 31);
+    // 加 3 档尺度 => 31 × 3
+    QCOMPARE(comboCount(-30.0, 30.0, 2.0, 0.9, 1.1, 0.1), 93);
+
+    const QString text = describe(31);
+    QVERIFY2(text.contains(QStringLiteral("31")), qPrintable(text));
+    QVERIFY2(estimateMs(31) > 100.0 && estimateMs(31) < 200.0, "单帧估算偏离实测（约 130ms）");
 }
 
 QTEST_MAIN(FeatureMatchTest)

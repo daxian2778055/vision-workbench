@@ -1,5 +1,6 @@
 #include <QLineEdit>
 #include <QDoubleSpinBox>
+#include "TemplateSearchBudget.h"
 #include "ModuleEditorDialog.h"
 #include "HalconNode.h"
 #include "OpencvTemplateMatchNode.h"
@@ -84,6 +85,8 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     // 训练完立刻刷新模板预览、并在画布上显示匹配结果（VM 的训练手感）。
     auto *trainTmplBtn = new QPushButton(QStringLiteral("训练模板"));
     auto *evalBtn = new QPushButton(QStringLiteral("评估模板"));
+    auto *budgetBtn = new QPushButton(QStringLiteral("参数体检"));
+    budgetBtn->setToolTip(QStringLiteral("算一下角度×尺度的组合数与预计耗时，防止现场卡顿"));
     evalBtn->setToolTip(QStringLiteral("按当前参数跑一次，给出模板质量评级与改进建议"));
     trainTmplBtn->setToolTip(QStringLiteral("按当前 ROI 从图像训练并保存模板，随后刷新预览与结果"));
     auto *fitBtn = new QPushButton(QStringLiteral("适应窗口"));
@@ -101,6 +104,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     toolbar->addWidget(saveTmplBtn);
     toolbar->addWidget(trainTmplBtn);
     toolbar->addWidget(evalBtn);
+    toolbar->addWidget(budgetBtn);
     toolbar->addWidget(m_autoRecomputeCheck);
 
     // 变量引用：点开即列出可引用的 {模块号.参数名} / {global.名称}，选中插入到参数编辑框。
@@ -229,6 +233,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     connect(maskBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onEditMask);
     connect(clearMaskBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onClearMask);
     connect(saveTmplBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onSaveTemplate);
+    connect(budgetBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onCheckBudget);
     connect(evalBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onEvaluateTemplate);
     connect(trainTmplBtn, &QPushButton::clicked, this, [this]() {
         if (!m_node)
@@ -750,6 +755,22 @@ void ModuleEditorDialog::onMaskEdited()
     if (HalconNode *hn = halconNode())
         hn->setEditMask(m_view->maskImage());
     scheduleAutoRecompute();   // 掩膜在执行时才参与运算，不重算就看不到效果
+}
+
+void ModuleEditorDialog::onCheckBudget()
+{
+    HalconNode *hn = halconNode();
+    if (!hn)
+        return;
+    const double aMin = hn->getParam(QStringLiteral("angleMin")).toDouble();
+    const double aMax = hn->getParam(QStringLiteral("angleMax")).toDouble();
+    const double aStep = hn->getParam(QStringLiteral("angleStep")).toDouble();
+    const double sMin = hn->getParam(QStringLiteral("scaleMin")).toDouble();
+    const double sMax = hn->getParam(QStringLiteral("scaleMax")).toDouble();
+    const double sStep = hn->getParam(QStringLiteral("scaleStep")).toDouble();
+
+    const int combos = TemplateSearchBudget::comboCount(aMin, aMax, aStep, sMin, sMax, sStep);
+    m_hintLabel->setText(TemplateSearchBudget::describe(combos));
 }
 
 void ModuleEditorDialog::onEvaluateTemplate()

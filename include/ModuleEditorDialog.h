@@ -45,6 +45,7 @@ private slots:
     void onMaskEdited();
     void onSaveTemplate();
     void onEvaluateTemplate();
+    void onCheckBudget();
     void onParamWidgetEdited();
     void onAutoRecomputeTimeout();
 
