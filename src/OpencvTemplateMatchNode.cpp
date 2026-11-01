@@ -123,6 +123,8 @@ void OpencvTemplateMatchNode::init()
                       QStringLiteral("从图像 ROI 训练并保存模板（训练落盘后自动取消勾选）")),
         makeIntParam(QStringLiteral("method"), 1, 0, 2,
                      QStringLiteral("匹配方法：0=归一化平方差，1=归一化相关系数，2=边缘梯度")),
+        makeIntParam(QStringLiteral("polarity"), 1, 0, 1,
+                     QStringLiteral("是否考虑极性：1=考虑（默认），0=忽略（亮标/暗标反色也能找到）")),
         makeIntParam(QStringLiteral("maxMatches"), 1, 1, 16,
                      QStringLiteral("最多匹配个数（1=只输出最优；多件场景调大）")),
         makeDoubleParam(QStringLiteral("minScore"), 0.6, 0.0, 1.0,
@@ -518,6 +520,8 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
                 const double need = qMax(16.0, 0.4 * n);   // 可见率门槛：少于 40% 判无效
                 cv::Mat scoreVis = (r1 + r2) / (rv + 1e-6f);   // cos(Δθ) 的和除以可见点数
                 scoreVis.setTo(-1.0, rv < need);           // 无效处给 -1（不会被选为最优）
+                if (m_params.value(QStringLiteral("polarity"), 1).toInt() == 0)
+                    cv::absdiff(scoreVis, cv::Scalar(0), scoreVis);
                 result = scoreVis;
             } else {
                 cv::matchTemplate(search, warped, result, method);
