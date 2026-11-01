@@ -783,7 +783,16 @@
       "exe_bytes": 10223616,
       "package_dir": "dist/VisionFlowPlatform-rc-20261031.1",
       "recorded_at": "2026-11-01",
-      "recorded_note": "当前装机包：修复核 r19 的 P1-14（粗到细坐标换算 + 多边形栅格 + 训练原点，实测命中 704.7/504.7 期望 704/504）与 P1-17（串口信号叠加）。仍开：P1-15 场景寿命 UAF、P1-16 发送错轮、P2-14/15、P2-16、P3-2"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261031.2 取代（后者含 P1-15 场景 UAF 修复）"
+    },
+    {
+      "tag": "rc-20261031.2",
+      "commit": "705bd83ddd3ee6a529ca37499c434e3805b631cd",
+      "exe_md5": "92e2fef022a088c9428a8cc2e1d47aa0",
+      "exe_bytes": 10224640,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261031.2",
+      "recorded_at": "2026-11-01",
+      "recorded_note": "当前装机包：P1-14 坐标（.1 起）+ P1-17 串口信号 + P1-15 场景 UAF（令牌 waitForFinish，删场景前先等收尾）。仍开：P1-16 发送错轮、P2-14/15/16、P3-2"
     }
   ],
   "legacy_backfilled": [
