@@ -162,17 +162,6 @@ void OpencvTemplateMatchNode::init()
                     QStringLiteral("搜索区域多边形(空=用矩形)")),
 });
 
-
-    // 搜索区域（r19 批 A 第 2 步）：匹配只在这个矩形内搜——既是 VM 的"检测区域"，
-    // 也是提速手段（区域越小、matchTemplate 越快）。0 = 整图（默认行为不变）。
-    makeIntParam(QStringLiteral("searchRegionCol"), 0, 0, 100000,
-                 QStringLiteral("搜索区域左列")),
-    makeIntParam(QStringLiteral("searchRegionRow"), 0, 0, 100000,
-                 QStringLiteral("搜索区域上行")),
-    makeIntParam(QStringLiteral("searchRegionWidth"), 0, 0, 100000,
-                 QStringLiteral("搜索区域宽")),
-    makeIntParam(QStringLiteral("searchRegionHeight"), 0, 0, 100000,
-                 QStringLiteral("搜索区域高")),
     m_params[QStringLiteral("matchRow")] = 0.0;
     m_params[QStringLiteral("matchCol")] = 0.0;
     m_params[QStringLiteral("matchScore")] = 0.0;
