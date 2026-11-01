@@ -846,7 +846,16 @@
       "exe_bytes": 10242560,
       "package_dir": "dist/VisionFlowPlatform-rc-20261031.8",
       "recorded_at": "2026-11-01",
-      "recorded_note": "当前装机包：挂账 P2 收口——发送失败错轮改轮末有界排空（按流程 pending 计数，200ms）；模板匹配多目标/倒角/图形即参数闭环齐备。待做：训练向导、亚像素、掩膜参与匹配"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261031.9 取代（后者含模板质量评分）"
+    },
+    {
+      "tag": "rc-20261031.9",
+      "commit": "4d25f2b7ea7b48b59f32bcf5173fcc2ee164710d",
+      "exe_md5": "3b2fc6e24ad499a8aab6c8588c82df5f",
+      "exe_bytes": 10247168,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261031.9",
+      "recorded_at": "2026-11-01",
+      "recorded_note": "当前装机包：训练向导 ①/4 模板质量评分（三档评级+建议值）＋ 多目标输出 ＋ 倒角匹配 ＋ 图形即参数闭环。待做：向导 ②③④（框选引导/矫正预览/范围预设）、亚像素、掩膜参与匹配"
     }
   ],
   "legacy_backfilled": [
