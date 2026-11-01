@@ -73,6 +73,8 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     recomputeBtn->setToolTip(QStringLiteral("参数改完后：作废本算子及其下游的缓存，只重跑这一段链路（不重跑无关分支）"));
     auto *drawBtn = new QPushButton(QStringLiteral("在图上绘制"));
     auto *searchBtn = new QPushButton(QStringLiteral("\u7ed8\u5236\u641c\u7d22\u533a\u57df"));   // 绘制搜索区域
+    auto *polyBtn = new QPushButton(QStringLiteral("\u7ed8\u5236\u591a\u8fb9\u5f62\u533a\u57df"));   // 绘制多边形区域
+    polyBtn->setToolTip(QStringLiteral("\u5355\u51fb\u9010\u70b9\u3001\u53cc\u51fb\u5b8c\u6210\uff1a\u591a\u8fb9\u5f62\u641c\u7d22\u533a\u57df\uff08\u4f18\u5148\u4e8e\u77e9\u5f62\uff09"));
     searchBtn->setToolTip(QStringLiteral("\u5728\u56fe\u4e0a\u6846\u5b9a\u641c\u7d22\u533a\u57df\uff1a\u53ea\u5728\u8fd9\u4e2a\u6846\u5185\u627e\u6a21\u677f"));
     auto *clearGeomBtn = new QPushButton(QStringLiteral("清除几何"));
     auto *maskBtn = new QPushButton(QStringLiteral("编辑掩膜"));
@@ -90,6 +92,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     toolbar->addWidget(recomputeBtn);
     toolbar->addWidget(drawBtn);
     toolbar->addWidget(searchBtn);
+    toolbar->addWidget(polyBtn);
     toolbar->addWidget(clearGeomBtn);
     toolbar->addWidget(maskBtn);
     toolbar->addWidget(clearMaskBtn);
@@ -218,6 +221,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     connect(recomputeBtn, &QPushButton::clicked, this, &ModuleEditorDialog::recomputeRequested);
     connect(drawBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onDrawGeometry);
     connect(searchBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onDrawSearchRegion);
+    connect(polyBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onDrawSearchPolygon);
     connect(clearGeomBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onClearGeometry);
     connect(maskBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onEditMask);
     connect(clearMaskBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onClearMask);
@@ -578,7 +582,54 @@ void ModuleEditorDialog::refreshSearchOverlay()
     const OverlayShape sr = searchRegionShape();
     if (sr.width > 1.0)
         all.append(sr);
+    // 多边形搜索区域：顶点串 → 闭合折线（青色），与矩形框同色系
+    HalconNode *hn = halconNode();
+    const QString polyText =
+        hn ? hn->getParam(QStringLiteral("searchRegionPolygon")).toString().trimmed() : QString();
+    if (!polyText.isEmpty()) {
+        QVector<QPointF> pts;
+        const QStringList items = polyText.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        for (const QString &it : items) {
+            const QStringList xy = it.split(QLatin1Char(','));
+            if (xy.size() == 2) {
+                bool ok1 = false, ok2 = false;
+                const double x = xy[0].toDouble(&ok1);
+                const double y = xy[1].toDouble(&ok2);
+                if (ok1 && ok2)
+                    pts.append(QPointF(x, y));
+            }
+        }
+        for (int i = 0; i + 1 < pts.size(); ++i) {
+            OverlayShape e;
+            e.type = OverlayShape::Type::Line;
+            e.p1 = pts[i];
+            e.p2 = pts[i + 1];
+            e.color = QColor(0, 200, 255);
+            all.append(e);
+        }
+        if (pts.size() >= 3) {
+            OverlayShape e;
+            e.type = OverlayShape::Type::Line;
+            e.p1 = pts.last();
+            e.p2 = pts.first();
+            e.color = QColor(0, 200, 255);
+            all.append(e);
+        }
+    }
     m_view->setOverlay(all);
+}
+
+void ModuleEditorDialog::onDrawSearchPolygon()
+{
+    if (!m_view || !m_node)
+        return;
+    m_pickingSearchPolygon = true;
+    m_view->setMaskEditable(false);
+    m_view->clearRoi();
+    m_view->setRoiEditable(true, RoiType::Polygon);
+    m_hintLabel->setText(
+        QStringLiteral("\u5355\u51fb\u9010\u70b9\u3001\u53cc\u51fb\u5b8c\u6210\uff1b"
+                       "\u5b8c\u6210\u540e\u5199\u56de\u591a\u8fb9\u5f62\u641c\u7d22\u533a\u57df\u3002\u53f3\u952e\u53d6\u6d88\u3002"));
 }
 
 void ModuleEditorDialog::onClearGeometry()
@@ -634,6 +685,34 @@ void ModuleEditorDialog::onRoiEdited(const RoiShape &shape)
             hn->setParam(QStringLiteral("searchRegionHeight"), qMax(1, int(b.height() + 0.5)));
             m_hintLabel->setText(QStringLiteral("\u641c\u7d22\u533a\u57df\u5df2\u5199\u56de\uff1a"
                                                 "\u5339\u914d\u53ea\u5728\u8fd9\u4e2a\u6846\u5185\u8fdb\u884c\u3002"));
+        }
+        m_view->setRoiEditable(false);
+        m_view->setRoiShape(hn->geometryRoi());
+        m_view->setRoiHandleEditEnabled(true);
+        m_paramHookBusy = true;
+        if (QWidget *panel = m_paramHost->widget())
+            hn->updateParamPanel(panel);
+        m_paramHookBusy = false;
+        refreshSearchOverlay();
+        scheduleAutoRecompute();
+        return;
+    }
+
+    // 多边形搜索区域：顶点序列写成 "x,y x,y ..."，并清掉矩形（多边形优先）
+    if (m_pickingSearchPolygon) {
+        m_pickingSearchPolygon = false;
+        if (shape.type == RoiType::Polygon && shape.points.size() >= 3) {
+            if (FlowScene *fs = hn->flowSceneRef())
+                fs->recordUndo();
+            QStringList pts;
+            pts.reserve(shape.points.size());
+            for (const QPointF &p : shape.points)
+                pts << QStringLiteral("%1,%2").arg(int(p.x() + 0.5)).arg(int(p.y() + 0.5));
+            hn->setParam(QStringLiteral("searchRegionPolygon"), pts.join(QLatin1Char(' ')));
+            hn->setParam(QStringLiteral("searchRegionWidth"), 0);
+            hn->setParam(QStringLiteral("searchRegionHeight"), 0);
+            m_hintLabel->setText(QStringLiteral("多边形已写回："
+                                                "匹配只在这个多边形内进行。"));
         }
         m_view->setRoiEditable(false);
         m_view->setRoiShape(hn->geometryRoi());
