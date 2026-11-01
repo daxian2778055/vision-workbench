@@ -837,7 +837,16 @@
       "exe_bytes": 10240000,
       "package_dir": "dist/VisionFlowPlatform-rc-20261031.7",
       "recorded_at": "2026-11-01",
-      "recorded_note": "当前装机包：模板匹配多目标输出（maxMatches 1..16，result 矩阵抑制，matchCount/matchList，叠加多框；实测 3 件全中）+ 倒角方法 + 图形即参数闭环。待做：训练向导、亚像素、掩膜参与匹配"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261031.8 取代（后者收口发送失败错轮 P2）"
+    },
+    {
+      "tag": "rc-20261031.8",
+      "commit": "b532970276ebd54acfda7fccb943bab858cda2fa",
+      "exe_md5": "50a661ce54385d1effbb89c25a5f843f",
+      "exe_bytes": 10242560,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261031.8",
+      "recorded_at": "2026-11-01",
+      "recorded_note": "当前装机包：挂账 P2 收口——发送失败错轮改轮末有界排空（按流程 pending 计数，200ms）；模板匹配多目标/倒角/图形即参数闭环齐备。待做：训练向导、亚像素、掩膜参与匹配"
     }
   ],
   "legacy_backfilled": [
