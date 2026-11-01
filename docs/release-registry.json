@@ -720,7 +720,7 @@
       "exe_bytes": 10208768,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.29",
       "recorded_at": "2026-10-31",
-      "recorded_note": "门禁 GREEN。该包已被 rc-20261030.30 取代（后者含搜索区域与灰框候选）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261031.3 取代（后者含搜索区域）"
     },
     {
       "tag": "rc-20261030.30",
@@ -793,6 +793,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261031.2",
       "recorded_at": "2026-11-01",
       "recorded_note": "当前装机包：P1-14 坐标（.1 起）+ P1-17 串口信号 + P1-15 场景 UAF（令牌 waitForFinish，删场景前先等收尾）。仍开：P1-16 发送错轮、P2-14/15/16、P3-2"
+    },
+    {
+      "tag": "rc-20261031.3",
+      "commit": "3c5393940c33c64fc9a154242e4f69df471335b4",
+      "exe_md5": "ab83ed90082918eba7f342e8ea6c5d33",
+      "exe_bytes": 10222592,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261031.3",
+      "recorded_at": "2026-11-01",
+      "recorded_note": "当前装机包：VM 手感批 A 第 2 步——搜索区域（矩形），匹配只在区域内搜（既是检测区域，也是提速手段）；面板槽位 277→282。待做：结果叠加、编辑器接画布、多边形 ROI"
     }
   ],
   "legacy_backfilled": [
