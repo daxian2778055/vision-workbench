@@ -804,10 +804,7 @@ void FeatureMatchTest::templateMatchOnRealImage()
     // 断言只钉第一张（纹理可分辨的那类）；其余作**实测记录**：
     // 重复纹理（栅格/按键类）会让粗到细锁到另一个重复单元 —— 这是粗到细的
     // 已知局限（coarse 峰在 1/5 尺度上分辨不出重复单元），根治要投影金字塔/全分辨率核验。
-    bool first = true;
     for (const QString &name : files) {
-        const bool strict = first;
-        first = false;
         const QString path = dir.filePath(name);
         QImage qimg(path);
         QVERIFY2(!qimg.isNull(), qPrintable(QStringLiteral("真图读取失败：%1").arg(name)));
@@ -877,18 +874,18 @@ void FeatureMatchTest::templateMatchOnRealImage()
             // 2.6px 是"期望值口径"的系统偏差（两方法位置完全一致），不是算法偏差。
             // 实拍图自匹配的天花板约 0.90（纹理最强窗口实测 0.895；合成图才是 1.0），
             // 分数阈值按证据取 0.85；**位置**才是硬指标（±4px）。
-            if (strict) QVERIFY2(score > 0.85,
+            QVERIFY2(score > 0.85,
                      qPrintable(QStringLiteral("method=1 真图自匹配分数过低：%1").arg(score)));
-            if (strict) QVERIFY2(qAbs(col - cx) <= 4.0 && qAbs(row - cy) <= 4.0,
+            QVERIFY2(qAbs(col - cx) <= 1.5 && qAbs(row - cy) <= 1.5,
                      qPrintable(QStringLiteral("method=1 真图自匹配位置偏了：(%1, %2) 期望 (%3, %4)")
                                     .arg(col).arg(row).arg(cx).arg(cy)));
         } else {
             // 梯度方向相关（GOC）升级后实测：0.998 @ ±0.3px（倒角时 0.721、偏 80px）。
             // 与 method=1 同档严格 —— GOC 的价值在遮挡/非线性光照场景，自匹配必须完美。
             // GOC 对亚像素错位更敏感（边缘方向），实拍图 0.84；阈值按证据取 0.7
-            if (strict) QVERIFY2(score > 0.7,
+            QVERIFY2(score > 0.7,
                      qPrintable(QStringLiteral("method=2 真图自匹配分数过低：%1").arg(score)));
-            if (strict) QVERIFY2(qAbs(col - cx) <= 4.0 && qAbs(row - cy) <= 4.0,
+            QVERIFY2(qAbs(col - cx) <= 1.5 && qAbs(row - cy) <= 1.5,
                      qPrintable(QStringLiteral("method=2 真图自匹配位置偏了：(%1, %2) 期望 (%3, %4)")
                                     .arg(col).arg(row).arg(cx).arg(cy)));
         }

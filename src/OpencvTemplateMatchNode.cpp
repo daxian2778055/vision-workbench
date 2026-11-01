@@ -45,6 +45,12 @@ namespace {
 std::pair<cv::Mat, cv::Point2f> warpTemplateCached(const cv::Mat &tmpl, const QString &keyBase,
                                                    double angle, double scale)
 {
+        // 恒等快路径（r19）：角度 0、尺度 1 时直接用原模板 —— warpAffine 即便
+        // 恒等变换也会重采样，导致自匹配到不了 1.0、位置偏约 2px。
+        if (qAbs(angle) < 1e-6 && qAbs(scale - 1.0) < 1e-6) {
+            return {tmpl, cv::Point2f(float(tmpl.cols) * 0.5f, float(tmpl.rows) * 0.5f)};
+        }
+
     static QMutex mu;
     static QHash<QString, std::pair<cv::Mat, cv::Point2f>> cache;
     static QStringList order;
@@ -179,6 +185,15 @@ cv::Mat OpencvTemplateMatchNode::extractTemplatePatch(const cv::Mat &gray, const
     if (roi.type == RoiType::RotatedRect && roi.width > 1 && roi.height > 1) {
         const int w = qMax(1, int(roi.width + 0.5));
         const int h = qMax(1, int(roi.height + 0.5));
+        // 零角度直裁（r19）：warpAffine 即使角度 0 也会重采样，抠出的模板与源窗口
+        // 不一致 → 自匹配永远到不了 1.0、位置恒偏约 2px。整数直裁保证像素级一致。
+        if (qAbs(roi.angleDeg) < 1e-6) {
+            const int x0 = qBound(0, int(std::floor(roi.p1.x() - w * 0.5 + 0.5)), gray.cols - 1);
+            const int y0 = qBound(0, int(std::floor(roi.p1.y() - h * 0.5 + 0.5)), gray.rows - 1);
+            const int ww = qBound(1, w, gray.cols - x0);
+            const int hh = qBound(1, h, gray.rows - y0);
+            return gray(cv::Rect(x0, y0, ww, hh)).clone();
+        }
         const cv::Point2f c(float(roi.p1.x()), float(roi.p1.y()));
         cv::Mat M = cv::getRotationMatrix2D(c, roi.angleDeg, 1.0);
         M.at<double>(0, 2) += w * 0.5 - c.x;
