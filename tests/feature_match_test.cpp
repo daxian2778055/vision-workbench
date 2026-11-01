@@ -683,6 +683,22 @@ void FeatureMatchTest::templateMatchSearchIsFastEnough()
              qPrintable(QStringLiteral("列偏了：%1（期望 704，粗到细坐标没换算回来？）").arg(col)));
     QVERIFY2(qAbs(row - 504.0) <= 6.0,
              qPrintable(QStringLiteral("行偏了：%1（期望 504）").arg(row)));
+
+    // method=2 边缘梯度相关（r19）：同一张图再跑一遍，只验证"能稳定找到、分数可用"。
+    // 这条腿防的是"漏算边沿图 → 直接拿灰度跟边沿比"这种写坏，分数会明显塌下来。
+    node.setParam(QStringLiteral("method"), 2);
+    timer.restart();
+    node.run(false);
+    const qint64 msEdge = timer.elapsed();
+    const double scoreEdge = node.getParam(QStringLiteral("matchScore")).toDouble();
+    const double colEdge = node.getParam(QStringLiteral("matchCol")).toDouble();
+    const double rowEdge = node.getParam(QStringLiteral("matchRow")).toDouble();
+    qInfo("template-match edge-method: %lld ms score=%.3f at (%.1f, %.1f)",
+          msEdge, scoreEdge, colEdge, rowEdge);
+    QVERIFY2(scoreEdge > 0.9,
+             qPrintable(QStringLiteral("倒角匹配分数过低：%1（距离场没生效？）").arg(scoreEdge)));
+    QVERIFY2(qAbs(colEdge - 704.0) <= 6.0 && qAbs(rowEdge - 504.0) <= 6.0,
+             qPrintable(QStringLiteral("倒角匹配位置偏了：(%1, %2)").arg(colEdge).arg(rowEdge)));
 }
 
 QTEST_MAIN(FeatureMatchTest)

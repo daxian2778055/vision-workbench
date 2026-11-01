@@ -115,8 +115,8 @@ void OpencvTemplateMatchNode::init()
                           QStringLiteral("模板图像文件 (png/bmp/jpg)")),
         makeBoolParam(QStringLiteral("trainFromImage"), false,
                       QStringLiteral("从图像 ROI 训练并保存模板（训练落盘后自动取消勾选）")),
-        makeIntParam(QStringLiteral("method"), 1, 0, 1,
-                     QStringLiteral("匹配方法：0=归一化平方差，1=归一化相关系数")),
+        makeIntParam(QStringLiteral("method"), 1, 0, 2,
+                     QStringLiteral("匹配方法：0=归一化平方差，1=归一化相关系数，2=边缘梯度")),
         makeDoubleParam(QStringLiteral("minScore"), 0.6, 0.0, 1.0,
                         QStringLiteral("最低匹配度")),
         makeIntParam(QStringLiteral("roiRow"), 0, 0, 100000,
@@ -197,6 +197,41 @@ cv::Mat OpencvTemplateMatchNode::extractTemplatePatch(const cv::Mat &gray, const
     }
     return {};
 }
+
+namespace {
+/// 边缘幅值图：Sobel 3x3 -> 幅值 -> 8U。
+/// 为什么需要它：灰度 NCC 在旋转插值与光照变化下会大幅掉分（现场出现过"找到了但只有
+/// 17% 分"）；VM / VisionPro 的模板匹配都建立在边缘上——边缘幅值对整体亮度不敏感、
+/// 对结构更敏感，同样姿态下分数区分度更好。
+cv::Mat edgeMagnitudeOf(const cv::Mat &gray)
+{
+    if (gray.empty())
+        return cv::Mat();
+    cv::Mat gx, gy, mag;
+    cv::Sobel(gray, gx, CV_32F, 1, 0, 3);
+    cv::Sobel(gray, gy, CV_32F, 0, 1, 3);
+    cv::magnitude(gx, gy, mag);
+    cv::Mat out;
+    mag.convertTo(out, CV_8U);
+    return out;
+}
+}   // namespace
+
+namespace {
+/// "到最近边沿的距离场"（chamfer 用）：边沿=0，越远离边沿值越大。
+/// 稀疏边沿图不能直接做 NCC（实测分数 0.138/0.448 而位置全对），
+/// 形状匹配的标准做法是拿模板边沿点落在这个距离场上求均值。
+cv::Mat edgeDistanceField(const cv::Mat &edge8u)
+{
+    if (edge8u.empty())
+        return cv::Mat();
+    cv::Mat inv;
+    cv::bitwise_not(edge8u, inv);          // 边沿变 0，背景变 255
+    cv::Mat dist;
+    cv::distanceTransform(inv, dist, cv::DIST_L2, 3);
+    return dist;                            // CV_32F
+}
+}   // namespace
 
 void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
 {
@@ -412,7 +447,20 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
             if (warped.empty() || warped.cols >= search.cols || warped.rows >= search.rows)
                 return -1e9;
             cv::Mat result;
-            cv::matchTemplate(search, warped, result, method);
+            if (methodIdx == 2) {
+                // chamfer：search 传入的是距离场（32F）；模板边沿当掩膜，求均值距离
+                cv::Mat mask;
+                cv::threshold(warped, mask, 20, 1, cv::THRESH_BINARY);
+                mask.convertTo(mask, CV_32F);
+                const double cnt = cv::sum(mask)[0];
+                if (cnt < 16.0)
+                    return -1e9;
+                cv::matchTemplate(search, mask, result, cv::TM_CCORR);
+                const double kMaxDist = 8.0;
+                result = 1.0 - (result / cnt) / kMaxDist;
+            } else {
+                cv::matchTemplate(search, warped, result, method);
+            }
             if (singleIdentity) {
                 cv::Mat grayF;
                 search.convertTo(grayF, CV_32F);
@@ -470,7 +518,12 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
             for (double angle : angles) {
                 cv::Point loc;
                 cv::Point2f centerInWarp;
-                const double sc = evalOne(graySearch, tmplSearch, angle, scale, &loc, &centerInWarp);
+        // method=2：倒角匹配（搜索图先转距离场，模板边沿落场取均值）
+        const cv::Mat coarseSearchImg =
+            (methodIdx == 2) ? edgeDistanceField(edgeMagnitudeOf(graySearch)) : graySearch;
+        const cv::Mat coarseTmplImg =
+            (methodIdx == 2) ? edgeMagnitudeOf(tmplSearch) : tmplSearch;
+                const double sc = evalOne(coarseSearchImg, coarseTmplImg, angle, scale, &loc, &centerInWarp);
                 if (sc > bestScore) {
                     bestScore = sc;
                     bestLoc = loc;
@@ -508,6 +561,11 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
             const int h = qMin(gray.rows - y0, int(tmplH) + margin * 2);
             if (w > tmplW + 2 && h > tmplH + 2) {
                 const cv::Mat win = gray(cv::Rect(x0, y0, w, h));
+                // method=2：精修同样走边缘幅值（窗口小，代价可忽略）
+                const cv::Mat refineWin =
+                    (methodIdx == 2) ? edgeDistanceField(edgeMagnitudeOf(win)) : win;
+                const cv::Mat refineTmpl =
+                    (methodIdx == 2) ? edgeMagnitudeOf(tmpl) : tmpl;
                 // 多边形换到子窗口栅格（r19 P1-14 ②）
                 if (!searchPoly.empty()) {
                     polyFull.clear();
@@ -523,7 +581,7 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
                         continue;
                     cv::Point loc;
                     cv::Point2f centerInWarp;
-                    const double sc = evalOne(win, tmpl, angle, bestScale, &loc, &centerInWarp);
+                    const double sc = evalOne(refineWin, refineTmpl, angle, bestScale, &loc, &centerInWarp);
                     if (sc > bestScore) {
                         bestScore = sc;
                         bestLoc = cv::Point(x0 + loc.x, y0 + loc.y);
