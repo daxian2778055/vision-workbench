@@ -841,11 +841,13 @@ void FeatureMatchTest::templateMatchOnRealImage()
                      qPrintable(QStringLiteral("method=1 真图自匹配位置偏了：(%1, %2) 期望 (%3, %4)")
                                     .arg(col).arg(row).arg(cx).arg(cy)));
         } else {
-            // 已知缺陷（真图实测）：倒角（chamfer）在真实纹理上不可靠 —— 本图实测
-            // score 0.721、位置偏 80px。它对合成图有效、对真图无效，因此这里只钉
-            // "不崩 + 有输出"，把差距如实暴露；升级到梯度方向金字塔后才收严。
-            QVERIFY2(score > 0.5,
-                     qPrintable(QStringLiteral("method=2 真图自匹配分数过低（连 0.5 都不到）：%1").arg(score)));
+            // 梯度方向相关（GOC）升级后实测：0.998 @ ±0.3px（倒角时 0.721、偏 80px）。
+            // 与 method=1 同档严格 —— GOC 的价值在遮挡/非线性光照场景，自匹配必须完美。
+            QVERIFY2(score > 0.9,
+                     qPrintable(QStringLiteral("method=2 真图自匹配分数过低：%1").arg(score)));
+            QVERIFY2(qAbs(col - cx) <= 1.5 && qAbs(row - cy) <= 1.5,
+                     qPrintable(QStringLiteral("method=2 真图自匹配位置偏了：(%1, %2) 期望 (%3, %4)")
+                                    .arg(col).arg(row).arg(cx).arg(cy)));
         }
     }
 }

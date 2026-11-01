@@ -441,6 +441,7 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
 
         // 多边形按当前搜索栅格换算（r19 P1-14 ②）：粗搜是降采样图、精修是子窗口，
         // 两者与原图的点不是同一栅格，不能直接拿裁剪后的点去过滤。
+        cv::Mat curSearchCos, curSearchSin;   // method=2 搜索图方向图（每遍一次）
         std::vector<cv::Point> polyCoarse, polyFull;
         const std::vector<cv::Point> *activePoly = nullptr;
 
@@ -460,16 +461,28 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
                 return -1e9;
             cv::Mat result;
             if (methodIdx == 2) {
-                // chamfer：search 传入的是距离场（32F）；模板边沿当掩膜，求均值距离
-                cv::Mat mask;
-                cv::threshold(warped, mask, 20, 1, cv::THRESH_BINARY);
-                mask.convertTo(mask, CV_32F);
-                const double cnt = cv::sum(mask)[0];
-                if (cnt < 16.0)
+                // 梯度方向相关（GOC）：Σ cos(θs−θt)·mask / N（模板强梯度点的方向一致性均值）
+                if (curSearchCos.empty() || curSearchSin.empty() || warped.empty())
                     return -1e9;
-                cv::matchTemplate(search, mask, result, cv::TM_CCORR);
-                const double kMaxDist = 8.0;
-                result = 1.0 - (result / cnt) / kMaxDist;
+                cv::Mat wgx, wgy, wmag;
+                cv::Sobel(warped, wgx, CV_32F, 1, 0, 3);
+                cv::Sobel(warped, wgy, CV_32F, 0, 1, 3);
+                cv::magnitude(wgx, wgy, wmag);
+                cv::Mat wm;
+                cv::threshold(wmag, wm, 20.0, 1.0, cv::THRESH_BINARY);
+                wm.convertTo(wm, CV_32F);
+                const double n = cv::sum(wm)[0];
+                if (n < 16.0)
+                    return -1e9;
+                cv::Mat wc, ws;
+                cv::divide(wgx, wmag + 1e-6f, wc);
+                cv::divide(wgy, wmag + 1e-6f, ws);
+                wc = wc.mul(wm);
+                ws = ws.mul(wm);
+                cv::Mat r1, r2;
+                cv::matchTemplate(curSearchCos, wc, r1, cv::TM_CCORR);
+                cv::matchTemplate(curSearchSin, ws, r2, cv::TM_CCORR);
+                result = (r1 + r2) * (1.0 / n);
             } else {
                 cv::matchTemplate(search, warped, result, method);
             }
@@ -583,10 +596,16 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
                 cv::Point loc;
                 cv::Point2f centerInWarp;
         // method=2：倒角匹配（搜索图先转距离场，模板边沿落场取均值）
-        const cv::Mat coarseSearchImg =
-            (methodIdx == 2) ? edgeDistanceField(edgeMagnitudeOf(graySearch)) : graySearch;
-        const cv::Mat coarseTmplImg =
-            (methodIdx == 2) ? edgeMagnitudeOf(tmplSearch) : tmplSearch;
+        const cv::Mat coarseSearchImg = graySearch;
+        const cv::Mat coarseTmplImg = tmplSearch;
+        if (methodIdx == 2) {
+            cv::Mat sgx, sgy, smag;
+            cv::Sobel(graySearch, sgx, CV_32F, 1, 0, 3);
+            cv::Sobel(graySearch, sgy, CV_32F, 0, 1, 3);
+            cv::magnitude(sgx, sgy, smag);
+            cv::divide(sgx, smag + 1e-6f, curSearchCos);
+            cv::divide(sgy, smag + 1e-6f, curSearchSin);
+        }
                 const double sc = evalOne(coarseSearchImg, coarseTmplImg, angle, scale, &loc, &centerInWarp,
                                          &subpixTmp);
                 if (sc > bestScore) {
@@ -632,10 +651,16 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
                 rasterScale = 1.0;
                 searchOrigin = cv::Point(x0, y0);
                 // method=2：精修同样走边缘幅值（窗口小，代价可忽略）
-                const cv::Mat refineWin =
-                    (methodIdx == 2) ? edgeDistanceField(edgeMagnitudeOf(win)) : win;
-                const cv::Mat refineTmpl =
-                    (methodIdx == 2) ? edgeMagnitudeOf(tmpl) : tmpl;
+                const cv::Mat refineWin = win;
+                const cv::Mat refineTmpl = tmpl;
+                if (methodIdx == 2) {
+                    cv::Mat sgx, sgy, smag;
+                    cv::Sobel(win, sgx, CV_32F, 1, 0, 3);
+                    cv::Sobel(win, sgy, CV_32F, 0, 1, 3);
+                    cv::magnitude(sgx, sgy, smag);
+                    cv::divide(sgx, smag + 1e-6f, curSearchCos);
+                    cv::divide(sgy, smag + 1e-6f, curSearchSin);
+                }
                 // 多边形换到子窗口栅格（r19 P1-14 ②）
                 if (!searchPoly.empty()) {
                     polyFull.clear();
