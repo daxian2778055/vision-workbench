@@ -682,8 +682,13 @@ MainWindow::~MainWindow()
     }
     m_flowExecutors.clear();
     m_executor = nullptr;   // 已随列表摘除，置空避免悬垂
-    for (auto &token : allTokens)
+    for (auto &token : allTokens) {
+        // 先等后台收尾（r19 P1-15）：令牌析构不再同步等，紧接着 qDeleteAll(m_flowScenes)
+        // 会让仍在跑的线程访问已释放的节点。等不到才放弃（留痕）。
+        if (token && !token->waitForFinish(15000))
+            VFP_DEBUG << "FlowExecutor teardown timed out before scene deletion";
         token.reset();      // 最后一个令牌释放 ⇒ 令牌执行收尾
+    }
     delete ui;
     qDeleteAll(m_flowScenes);
     m_flowScenes.clear();

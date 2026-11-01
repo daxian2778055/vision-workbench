@@ -60,7 +60,10 @@ FlowExecutorToken::~FlowExecutorToken()
         delete ex;
         return;
     }
-    std::thread([ex]() {
+    // 完成信号（r19 P1-15）：shared_ptr 由线程持一份，令牌先销毁也不悬垂
+    m_finishSem = std::make_shared<QSemaphore>();
+    std::shared_ptr<QSemaphore> finishSem = m_finishSem;
+    std::thread([ex, finishSem]() {
         constexpr int kRestMs = 15000 - 300;
         const bool joined = ex->joinForDestroy(kRestMs);
         // 删除与收尾都回 GUI 线程（r19 P1-13 复核）：FlowExecutor 是 QThread，亲和性在 GUI，
@@ -75,7 +78,15 @@ FlowExecutorToken::~FlowExecutorToken()
                 abandonBody(ex, 15000);
             },
             Qt::QueuedConnection);
+        finishSem->release();   // 收尾完成（r19 P1-15）
     }).detach();
+}
+
+bool FlowExecutorToken::waitForFinish(int timeoutMs)
+{
+    if (!m_finishSem)
+        return true;   // 没走 detach 分支：析构里已经同步收干净
+    return m_finishSem->tryAcquire(1, timeoutMs);
 }
 
 void FlowExecutorToken::abandonBody(FlowExecutor *ex, int timeoutMs)

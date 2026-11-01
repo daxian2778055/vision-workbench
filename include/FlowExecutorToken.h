@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <memory>
+#include <QSemaphore>
 
 class FlowExecutor;
 
@@ -30,6 +31,9 @@ class FlowExecutor;
 /// 释放即收尾 ⇒ **本体的删除只有本件这一处**（界面侧不再自己 delete 执行器）。
 class FlowExecutorToken final {
 public:
+    /// 显式等待收尾完成（r19 P1-15）：析构不再同步等，调用方若在之后要拆场景/节点，
+    /// 必须先调它。返回 true=已收干净；false=超时（后台仍会收尾，但场景不能立刻删）。
+    bool waitForFinish(int timeoutMs);
     /// 收尾策略：返回 true = 本体已停稳可回收；false = 超时（放弃强杀）。
     /// 默认空 = 调本体的 joinForDestroy；非空仅供测试注入（钉超时分支，不必真等 15s）。
     using Finisher = std::function<bool(FlowExecutor *, int)>;
@@ -51,6 +55,8 @@ public:
     FlowExecutor *executor() const { return m_owner; }
 
 private:
+    /// 后台收尾的完成信号（shared_ptr：线程持一份，令牌销毁也不悬垂）
+    std::shared_ptr<QSemaphore> m_finishSem;
     /// 超时未退出的收尾（r19 P1-13）：置可观测终态 + finished 自删，绝不 delete
     static void abandonBody(FlowExecutor *ex, int timeoutMs);
     /// 本体由本令牌拥有；收尾后交出（超时分支由自删路径接管）。
