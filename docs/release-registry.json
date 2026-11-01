@@ -864,7 +864,16 @@
       "exe_bytes": 10249728,
       "package_dir": "dist/VisionFlowPlatform-rc-20261031.10",
       "recorded_at": "2026-11-01",
-      "recorded_note": "当前装机包：训练向导 ③/4 参数体检（角度×尺度组合数与预计耗时）+ ①/4 模板质量评分 + 多目标 + 倒角匹配 + 图形即参数闭环。待做：向导 ②④（框选引导/矫正预览）、亚像素、掩膜参与匹配"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261031.11 取代（后者向导四段齐）"
+    },
+    {
+      "tag": "rc-20261031.11",
+      "commit": "cb975d3adeddbfa980c0eb58035b0565d447b8b7",
+      "exe_md5": "fe701b2f07c883049c10e3de06fc3199",
+      "exe_bytes": 10251776,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261031.11",
+      "recorded_at": "2026-11-01",
+      "recorded_note": "当前装机包：训练向导四段齐（质量评分/步进引导/参数体检/预览徽标）+ 多目标输出 + 倒角匹配 + 图形即参数闭环 + 挂账 P2 收口。待做：矫正预览旋转显示（需先核对角度约定）、亚像素、掩膜参与匹配"
     }
   ],
   "legacy_backfilled": [
