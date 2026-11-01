@@ -554,8 +554,10 @@ QRectF roiBoundsOf(const RoiShape &shape)
 
 void ModuleEditorDialog::onDrawSearchRegion()
 {
-    if (!m_view || !m_node)
+    if (!m_view || !m_node) {
+        m_hintLabel->setText(QStringLiteral("无法绘制：图像或算子未就绪（先双击打开工具并载入图像）"));
         return;
+    }
     m_pickingSearchRegion = true;
     m_view->setMaskEditable(false);
     m_view->clearRoi();                        // 收起模板框句柄，避免两个框混在一起点不中
@@ -634,8 +636,10 @@ void ModuleEditorDialog::refreshSearchOverlay()
 
 void ModuleEditorDialog::onDrawSearchPolygon()
 {
-    if (!m_view || !m_node)
+    if (!m_view || !m_node) {
+        m_hintLabel->setText(QStringLiteral("无法绘制：图像或算子未就绪（先双击打开工具并载入图像）"));
         return;
+    }
     m_pickingSearchPolygon = true;
     m_view->setMaskEditable(false);
     m_view->clearRoi();
