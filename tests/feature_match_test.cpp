@@ -918,15 +918,15 @@ void FeatureMatchTest::templateMatchSurvivesPartialOcclusion()
               method, r[method - 1].ms, r[method - 1].score, r[method - 1].col, r[method - 1].row);
     }
 
-    // 如实边界（真测结论）：20% 硬涂黑的合成遮挡下两者都掉分，实测
-    //   NCC 0.383（位置偏 6.4px）/ GOC 0.201（位置偏 23.6px）。
-    // GOC 的抗遮挡优势只有在**掩膜参与评分**后才成立（被遮点从分母排除）；
-    // 本轮试过"可见点归一"却让分数失去上限、位置更差，已回退。
-    // 因此这条腿只钉"不崩 + 位置大体正确"，等掩膜参与后再收严。
+    // 掩膜参与评分（v3）后实测：NCC 0.383（偏 6.4px）/ GOC **0.994（精确命中）**。
+    // GOC 的抗遮挡成立：分子分母用同一套可见掩膜 + 可见率门槛（<40% 判无效），
+    // 且不再做低方差清零（GOC 自带可见性逻辑）。
     QVERIFY2(qAbs(r[0].col - cx) <= 8.0 && qAbs(r[0].row - cy) <= 8.0, "NCC 遮挡下位置明显偏了");
-    // GOC 遮挡下实测偏 23.6px（掩膜未参与评分前无法避免），这里只钉"不崩 + 有分数"；
-    // 掩膜参与评分后再收严到与 NCC 同档。
-    QVERIFY2(r[1].score > 0.1, "GOC 遮挡下没有输出有效分数");
+    QVERIFY2(r[1].score > 0.9,
+             qPrintable(QStringLiteral("GOC 遮挡下分数过低：%1").arg(r[1].score, 0, 'f', 3)));
+    QVERIFY2(qAbs(r[1].col - cx) <= 1.5 && qAbs(r[1].row - cy) <= 1.5,
+             qPrintable(QStringLiteral("GOC 遮挡下位置偏了：(%1, %2)")
+                            .arg(r[1].col, 0, 'f', 1).arg(r[1].row, 0, 'f', 1)));
     // 对比数字保留（不作断言）
     qInfo("occlusion compare: NCC %.3f vs GOC %.3f", r[0].score, r[1].score);
 }

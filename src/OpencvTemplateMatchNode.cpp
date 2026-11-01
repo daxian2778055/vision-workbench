@@ -442,6 +442,7 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
         // 多边形按当前搜索栅格换算（r19 P1-14 ②）：粗搜是降采样图、精修是子窗口，
         // 两者与原图的点不是同一栅格，不能直接拿裁剪后的点去过滤。
         cv::Mat curSearchCos, curSearchSin;   // method=2 搜索图方向图（每遍一次）
+        cv::Mat curSearchStrong;             // 搜索图强梯度掩膜（遮挡自适应用）
         std::vector<cv::Point> polyCoarse, polyFull;
         const std::vector<cv::Point> *activePoly = nullptr;
 
@@ -479,14 +480,19 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
                 cv::divide(wgy, wmag + 1e-6f, ws);
                 wc = wc.mul(wm);
                 ws = ws.mul(wm);
-                cv::Mat r1, r2;
+                cv::Mat r1, r2, rv;
                 cv::matchTemplate(curSearchCos, wc, r1, cv::TM_CCORR);
                 cv::matchTemplate(curSearchSin, ws, r2, cv::TM_CCORR);
-                result = (r1 + r2) * (1.0 / n);
+                // 可见点数（分子已按同一掩膜屏蔽，分母也用它）
+                cv::matchTemplate(curSearchStrong, wm, rv, cv::TM_CCORR);
+                const double need = qMax(16.0, 0.4 * n);   // 可见率门槛：少于 40% 判无效
+                cv::Mat scoreVis = (r1 + r2) / (rv + 1e-6f);   // cos(Δθ) 的和除以可见点数
+                scoreVis.setTo(-1.0, rv < need);           // 无效处给 -1（不会被选为最优）
+                result = scoreVis;
             } else {
                 cv::matchTemplate(search, warped, result, method);
             }
-            if (singleIdentity) {
+            if (singleIdentity && methodIdx != 2) {   // GOC 自带可见性逻辑，不再做低方差清零
                 cv::Mat grayF;
                 search.convertTo(grayF, CV_32F);
                 cv::Mat mean, meanSq, sqF;
@@ -605,6 +611,10 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
             cv::magnitude(sgx, sgy, smag);
             cv::divide(sgx, smag + 1e-6f, curSearchCos);
             cv::divide(sgy, smag + 1e-6f, curSearchSin);
+            cv::threshold(smag, curSearchStrong, 20.0, 1.0, cv::THRESH_BINARY);
+            curSearchStrong.convertTo(curSearchStrong, CV_32F);
+            cv::multiply(curSearchCos, curSearchStrong, curSearchCos);   // 分子分母同掩膜
+            cv::multiply(curSearchSin, curSearchStrong, curSearchSin);
         }
                 const double sc = evalOne(coarseSearchImg, coarseTmplImg, angle, scale, &loc, &centerInWarp,
                                          &subpixTmp);
@@ -660,6 +670,10 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
                     cv::magnitude(sgx, sgy, smag);
                     cv::divide(sgx, smag + 1e-6f, curSearchCos);
                     cv::divide(sgy, smag + 1e-6f, curSearchSin);
+                    cv::threshold(smag, curSearchStrong, 20.0, 1.0, cv::THRESH_BINARY);
+                    curSearchStrong.convertTo(curSearchStrong, CV_32F);
+                    cv::multiply(curSearchCos, curSearchStrong, curSearchCos);   // 分子分母同掩膜
+                    cv::multiply(curSearchSin, curSearchStrong, curSearchSin);
                 }
                 // 多边形换到子窗口栅格（r19 P1-14 ②）
                 if (!searchPoly.empty()) {
