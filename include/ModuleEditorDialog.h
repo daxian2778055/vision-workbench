@@ -46,6 +46,7 @@ private slots:
     void onSaveTemplate();
     void onEvaluateTemplate();
     void onCheckBudget();
+    void onWizardGuide();
     void onParamWidgetEdited();
     void onAutoRecomputeTimeout();
 
@@ -95,7 +96,8 @@ private:
     QTimer *m_autoRecomputeTimer = nullptr;      /// 去抖定时器
     bool m_paramHookBusy = false;
     bool m_pickingSearchRegion = false;
-    bool m_pickingSearchPolygon = false;        /// 正在画多边形搜索区域          /// 正在画搜索区域（否则画模板框）
+    bool m_pickingSearchPolygon = false;
+    int m_wizardStep = 0;                       /// 训练向导步进（0=未启动）        /// 正在画多边形搜索区域          /// 正在画搜索区域（否则画模板框）
     QVector<OverlayShape> m_resultOverlay;      /// 测量结果叠加（与搜索框合并后再下发）                /// 程序化回填参数期间抑制挂钩回调
     QToolButton *m_varRefButton = nullptr;       /// 「变量引用」按钮
     QMenu *m_varRefMenu = nullptr;               /// 变量引用下拉菜单

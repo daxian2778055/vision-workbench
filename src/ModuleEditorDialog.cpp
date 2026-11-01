@@ -86,6 +86,8 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     auto *trainTmplBtn = new QPushButton(QStringLiteral("训练模板"));
     auto *evalBtn = new QPushButton(QStringLiteral("评估模板"));
     auto *budgetBtn = new QPushButton(QStringLiteral("参数体检"));
+    auto *wizardBtn = new QPushButton(QStringLiteral("向导"));
+    wizardBtn->setToolTip(QStringLiteral("按步骤训练模板：画框 → 设范围 → 评估"));
     budgetBtn->setToolTip(QStringLiteral("算一下角度×尺度的组合数与预计耗时，防止现场卡顿"));
     evalBtn->setToolTip(QStringLiteral("按当前参数跑一次，给出模板质量评级与改进建议"));
     trainTmplBtn->setToolTip(QStringLiteral("按当前 ROI 从图像训练并保存模板，随后刷新预览与结果"));
@@ -105,6 +107,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     toolbar->addWidget(trainTmplBtn);
     toolbar->addWidget(evalBtn);
     toolbar->addWidget(budgetBtn);
+    toolbar->addWidget(wizardBtn);
     toolbar->addWidget(m_autoRecomputeCheck);
 
     // 变量引用：点开即列出可引用的 {模块号.参数名} / {global.名称}，选中插入到参数编辑框。
@@ -233,6 +236,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     connect(maskBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onEditMask);
     connect(clearMaskBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onClearMask);
     connect(saveTmplBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onSaveTemplate);
+    connect(wizardBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onWizardGuide);
     connect(budgetBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onCheckBudget);
     connect(evalBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onEvaluateTemplate);
     connect(trainTmplBtn, &QPushButton::clicked, this, [this]() {
@@ -747,6 +751,12 @@ void ModuleEditorDialog::onRoiEdited(const RoiShape &shape)
     m_paramHookBusy = false;
     refreshTemplatePreview();
     m_hintLabel->setText(QStringLiteral("几何已写回并自动重算下游；可拖角点/中心/旋转柄继续改。"));
+        // 向导 ②：画完模板框 → 进入第2步（设范围 + 体检）
+        if (m_wizardStep == 1) {
+            m_wizardStep = 2;
+            onCheckBudget();
+            m_hintLabel->setText(QStringLiteral("向导 2/3：按需调整角度/尺度范围（上一行是耗时体检）；满意后点「评估模板」"));
+        }
     scheduleAutoRecompute();
 }
 
@@ -755,6 +765,15 @@ void ModuleEditorDialog::onMaskEdited()
     if (HalconNode *hn = halconNode())
         hn->setEditMask(m_view->maskImage());
     scheduleAutoRecompute();   // 掩膜在执行时才参与运算，不重算就看不到效果
+}
+
+void ModuleEditorDialog::onWizardGuide()
+{
+    // 训练向导 ②/4：步进引导（不新建对话框，复用已有三个动作）
+    m_wizardStep = 1;
+    onDrawGeometry();
+    m_hintLabel->setText(
+        QStringLiteral("向导 1/3：在图像上拖框选出模板区域（含明显轮廓）；画完自动进入下一步"));
 }
 
 void ModuleEditorDialog::onCheckBudget()
@@ -823,6 +842,9 @@ void ModuleEditorDialog::onEvaluateTemplate()
         hn->updateParamPanel(panel);
     m_paramHookBusy = false;
     refreshTemplatePreview();
+    // 向导 ②：评估即收尾（评级已在提示条）
+    if (m_wizardStep >= 2)
+        m_wizardStep = 0;
 }
 
 void ModuleEditorDialog::onSaveTemplate()
@@ -901,7 +923,14 @@ void ModuleEditorDialog::refreshTemplatePreview()
         m_templatePreview->setPixmap(QPixmap());
         return;
     }
+    // 训练向导 ④/4：矫正预览带徽标 —— 改参数时立刻看到"这组设置下的期望角度/尺度/分数"
+    const double ang = tmplNode->getParam(QStringLiteral("roiAngle")).toDouble();
+    const double scl = tmplNode->getParam(QStringLiteral("matchScale")).toDouble();
+    const double sco = tmplNode->getParam(QStringLiteral("matchScore")).toDouble();
     m_templatePreview->setPixmap(QPixmap::fromImage(preview).scaled(
         m_templatePreview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
-    m_templatePreview->setText(QString());
+    m_templatePreview->setText(QStringLiteral("角度 %1° / 尺度 %2 / 分数 %3")
+                                   .arg(ang, 0, 'f', 1)
+                                   .arg(scl > 0.0 ? scl : 1.0, 0, 'f', 2)
+                                   .arg(sco, 0, 'f', 3));
 }
