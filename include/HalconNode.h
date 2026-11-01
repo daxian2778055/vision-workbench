@@ -22,7 +22,8 @@ class HalconNode : public NodeBase
     Q_OBJECT
 
 public:
-    HalconNode(QObject *parent = nullptr);
+    HalconNode(QObject *parent = nullptr, bool withDefaultImagePort = true);
+    bool m_withDefaultImagePort = true;   /// 是否带默认图像输出（统一输出用）
     virtual ~HalconNode();
 
     virtual void init() override;

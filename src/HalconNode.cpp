@@ -50,10 +50,11 @@ void invalidateReasonFields(ThreadSafeParams &params)
 
 } // namespace
 
-HalconNode::HalconNode(QObject *parent)
+HalconNode::HalconNode(QObject *parent, bool withDefaultImagePort)
     : NodeBase(parent)
 {
     m_type = IMAGE_PROCESSING;
+    m_withDefaultImagePort = withDefaultImagePort;
 
     // 初始化实时预览定时器
     m_previewTimer = new QTimer(this);
@@ -75,7 +76,8 @@ void HalconNode::init()
     addInputPort(QStringLiteral("输入图像"));
 
     // 添加输出端口（一个红点代表所有输出参数）
-    addOutputPort(QStringLiteral("输出图像"));
+    if (m_withDefaultImagePort)   // r19 A 批：统一输出 —— 模板匹配等可只留自己的端口
+        addOutputPort(QStringLiteral("输出图像"));
     
     // 初始化默认参数
     setParamDirect(QStringLiteral("moduleStatus"), false); // 模块状态（bool量）

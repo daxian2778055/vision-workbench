@@ -106,7 +106,7 @@ void collectSearchValues(double mn, double mx, double step, int maxCount, QVecto
 
 } // namespace
 
-OpencvTemplateMatchNode::OpencvTemplateMatchNode(QObject *parent) : HalconNode(parent)
+OpencvTemplateMatchNode::OpencvTemplateMatchNode(QObject *parent) : HalconNode(parent, false)
 {
     setName(QStringLiteral("模板匹配"));
     m_type = SHAPE_ANALYSIS;
