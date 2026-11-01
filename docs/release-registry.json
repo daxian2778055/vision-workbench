@@ -774,7 +774,16 @@
       "exe_bytes": 10221568,
       "package_dir": "dist/VisionFlowPlatform-rc-20261030.35",
       "recorded_at": "2026-10-31",
-      "recorded_note": "当前装机包：模板匹配交互补全五项全含——参数面板布局 / 掩膜擦除 / 训练模板按钮+预览 / 运行时渲染（自动重算刷新叠加）/ 多边形搜索区域"
+      "recorded_note": "门禁 GREEN。该包含 P1-14 坐标 bug（匹配位置偏约 3 倍），已被 rc-20261031.1 取代"
+    },
+    {
+      "tag": "rc-20261031.1",
+      "commit": "b6a6773905dd31fb79f8846da134e855e04ac1e9",
+      "exe_md5": "cf447d1f09008f9627e5ba7080608560",
+      "exe_bytes": 10223616,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261031.1",
+      "recorded_at": "2026-11-01",
+      "recorded_note": "当前装机包：修复核 r19 的 P1-14（粗到细坐标换算 + 多边形栅格 + 训练原点，实测命中 704.7/504.7 期望 704/504）与 P1-17（串口信号叠加）。仍开：P1-15 场景寿命 UAF、P1-16 发送错轮、P2-14/15、P2-16、P3-2"
     }
   ],
   "legacy_backfilled": [
