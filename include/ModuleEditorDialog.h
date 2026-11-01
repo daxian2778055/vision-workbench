@@ -44,6 +44,7 @@ private slots:
     void onRoiEdited(const RoiShape &shape);
     void onMaskEdited();
     void onSaveTemplate();
+    void onEvaluateTemplate();
     void onParamWidgetEdited();
     void onAutoRecomputeTimeout();
 

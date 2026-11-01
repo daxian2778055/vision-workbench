@@ -83,6 +83,8 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     // 训练模板（r19 补全清单第 3 项）：按当前 ROI 从图像训练并落盘，
     // 训练完立刻刷新模板预览、并在画布上显示匹配结果（VM 的训练手感）。
     auto *trainTmplBtn = new QPushButton(QStringLiteral("训练模板"));
+    auto *evalBtn = new QPushButton(QStringLiteral("评估模板"));
+    evalBtn->setToolTip(QStringLiteral("按当前参数跑一次，给出模板质量评级与改进建议"));
     trainTmplBtn->setToolTip(QStringLiteral("按当前 ROI 从图像训练并保存模板，随后刷新预览与结果"));
     auto *fitBtn = new QPushButton(QStringLiteral("适应窗口"));
     m_autoRecomputeCheck = new QCheckBox(QStringLiteral("自动重算"));
@@ -98,6 +100,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     toolbar->addWidget(clearMaskBtn);
     toolbar->addWidget(saveTmplBtn);
     toolbar->addWidget(trainTmplBtn);
+    toolbar->addWidget(evalBtn);
     toolbar->addWidget(m_autoRecomputeCheck);
 
     // 变量引用：点开即列出可引用的 {模块号.参数名} / {global.名称}，选中插入到参数编辑框。
@@ -226,6 +229,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     connect(maskBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onEditMask);
     connect(clearMaskBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onClearMask);
     connect(saveTmplBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onSaveTemplate);
+    connect(evalBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onEvaluateTemplate);
     connect(trainTmplBtn, &QPushButton::clicked, this, [this]() {
         if (!m_node)
             return;
@@ -746,6 +750,58 @@ void ModuleEditorDialog::onMaskEdited()
     if (HalconNode *hn = halconNode())
         hn->setEditMask(m_view->maskImage());
     scheduleAutoRecompute();   // 掩膜在执行时才参与运算，不重算就看不到效果
+}
+
+void ModuleEditorDialog::onEvaluateTemplate()
+{
+    HalconNode *hn = halconNode();
+    if (!hn || !m_view)
+        return;
+
+    // 先跑一次（沿用手动执行路径：执行完会刷新结果叠加）
+    emit executeRequested();
+
+    const double score = hn->getParam(QStringLiteral("matchScore")).toDouble();
+    const int count = hn->getParam(QStringLiteral("matchCount")).toInt();
+    const bool ok = hn->getParam(QStringLiteral("moduleStatus")).toBool();
+    const QString why = hn->getParam(QStringLiteral("trainStatus")).toString();
+
+    // 评级：VM 里"模板质量"最重要的是能不能稳定找到 + 分数是否留有余量
+    QString grade;
+    QString advice;
+    if (!ok || score < 0.6) {
+        grade = QStringLiteral("差");
+        advice = QStringLiteral("分数 %1：模板可能取错区域，或目标在搜索区域外。"
+                                "建议重新框选模板区（确保框内含明显轮廓），必要时勾选从图像训练。")
+                     .arg(score, 0, 'f', 3);
+    } else if (score < 0.85) {
+        grade = QStringLiteral("一般");
+        advice = QStringLiteral("分数 %1：能匹配但余量不大。建议缩小角度/尺度范围，"
+                                "或提高「最低匹配度」以免误检。")
+                     .arg(score, 0, 'f', 3);
+    } else {
+        grade = QStringLiteral("好");
+        advice = QStringLiteral("分数 %1：模板轮廓清晰、定位稳定。"
+                                "可考虑把「最低匹配度」提到 %2 以减少误检。")
+                     .arg(score, 0, 'f', 3)
+                     .arg(qBound(0.5, score - 0.15, 0.95), 0, 'f', 2);
+    }
+
+    hn->setParam(QStringLiteral("trainStatus"),
+                 QStringLiteral("模板评估：%1（分数 %2，实例 %3）")
+                     .arg(grade)
+                     .arg(score, 0, 'f', 3)
+                     .arg(count));
+    m_hintLabel->setText(QStringLiteral("模板评估：%1 — %2 %3")
+                             .arg(grade, advice,
+                                  why.isEmpty() ? QString() : QStringLiteral("（%1）").arg(why)));
+
+    // 面板刷新，让 trainStatus 可见
+    m_paramHookBusy = true;
+    if (QWidget *panel = m_paramHost->widget())
+        hn->updateParamPanel(panel);
+    m_paramHookBusy = false;
+    refreshTemplatePreview();
 }
 
 void ModuleEditorDialog::onSaveTemplate()
