@@ -36,6 +36,7 @@ signals:
 
 private slots:
     void onDrawGeometry();
+    void onDrawSearchRegion();
     void onClearGeometry();
     void onEditMask();
     void onClearMask();
@@ -50,6 +51,9 @@ private:
     void rebuildParamPanel();
     void refreshTemplatePreview();
     void echoGeometry();
+    /// 搜索区域（r19 批 A 第 4 步）：把 searchRegion* 画成青色框，并与结果叠加合并
+    void refreshSearchOverlay();
+    OverlayShape searchRegionShape() const;
     /// 给参数面板上的可编辑控件挂钩变更信号（面板由节点自建，控件种类不定）
     void installParamHooks(QWidget *panel);
     void scheduleAutoRecompute();
@@ -86,7 +90,9 @@ private:
     QLabel *m_templatePreview = nullptr;
     QCheckBox *m_autoRecomputeCheck = nullptr;   /// 「自动重算」开关
     QTimer *m_autoRecomputeTimer = nullptr;      /// 去抖定时器
-    bool m_paramHookBusy = false;                /// 程序化回填参数期间抑制挂钩回调
+    bool m_paramHookBusy = false;
+    bool m_pickingSearchRegion = false;          /// 正在画搜索区域（否则画模板框）
+    QVector<OverlayShape> m_resultOverlay;      /// 测量结果叠加（与搜索框合并后再下发）                /// 程序化回填参数期间抑制挂钩回调
     QToolButton *m_varRefButton = nullptr;       /// 「变量引用」按钮
     QMenu *m_varRefMenu = nullptr;               /// 变量引用下拉菜单
     QWidget *m_lastEditor = nullptr;             /// 最近获得焦点的参数编辑控件（插入目标）

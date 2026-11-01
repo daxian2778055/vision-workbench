@@ -72,6 +72,8 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     auto *recomputeBtn = new QPushButton(QStringLiteral("重算下游"));
     recomputeBtn->setToolTip(QStringLiteral("参数改完后：作废本算子及其下游的缓存，只重跑这一段链路（不重跑无关分支）"));
     auto *drawBtn = new QPushButton(QStringLiteral("在图上绘制"));
+    auto *searchBtn = new QPushButton(QStringLiteral("\u7ed8\u5236\u641c\u7d22\u533a\u57df"));   // 绘制搜索区域
+    searchBtn->setToolTip(QStringLiteral("\u5728\u56fe\u4e0a\u6846\u5b9a\u641c\u7d22\u533a\u57df\uff1a\u53ea\u5728\u8fd9\u4e2a\u6846\u5185\u627e\u6a21\u677f"));
     auto *clearGeomBtn = new QPushButton(QStringLiteral("清除几何"));
     auto *maskBtn = new QPushButton(QStringLiteral("编辑掩膜"));
     auto *clearMaskBtn = new QPushButton(QStringLiteral("清除掩膜"));
@@ -87,6 +89,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     toolbar->addWidget(execBtn);
     toolbar->addWidget(recomputeBtn);
     toolbar->addWidget(drawBtn);
+    toolbar->addWidget(searchBtn);
     toolbar->addWidget(clearGeomBtn);
     toolbar->addWidget(maskBtn);
     toolbar->addWidget(clearMaskBtn);
@@ -214,6 +217,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     connect(execBtn, &QPushButton::clicked, this, &ModuleEditorDialog::executeRequested);
     connect(recomputeBtn, &QPushButton::clicked, this, &ModuleEditorDialog::recomputeRequested);
     connect(drawBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onDrawGeometry);
+    connect(searchBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onDrawSearchRegion);
     connect(clearGeomBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onClearGeometry);
     connect(maskBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onEditMask);
     connect(clearMaskBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onClearMask);
@@ -456,6 +460,7 @@ void ModuleEditorDialog::onParamWidgetEdited()
         if (m_view)
             m_view->setRoiShape(hn->geometryRoi());
     }
+    refreshSearchOverlay();
 
     if (m_paramHookBusy)
         return;
@@ -485,12 +490,15 @@ void ModuleEditorDialog::echoGeometry()
         m_view->setRoiShape(hn->geometryRoi());
         m_view->setRoiHandleEditEnabled(true);
     }
+    refreshSearchOverlay();
 }
 
 void ModuleEditorDialog::setResultOverlay(const QVector<OverlayShape> &shapes)
 {
-    if (m_view)
-        m_view->setOverlay(shapes);
+    // 结果叠加与搜索区域框合并（r19 批 A 第 4 步）：两者同屏，现场才看得出
+    // "在整个图里找" 与 "只在这个框里找" 的区别。
+    m_resultOverlay = shapes;
+    refreshSearchOverlay();
 }
 
 void ModuleEditorDialog::onDrawGeometry()
@@ -501,6 +509,76 @@ void ModuleEditorDialog::onDrawGeometry()
     m_view->setMaskEditable(false);
     m_view->setRoiEditable(true, hn->geometryRoiType());
     m_hintLabel->setText(QStringLiteral("请在图像上拖拽绘制；画完后可拖改。右键取消。"));
+}
+
+namespace {
+/// RoiShape → 轴对齐包围盒（Rect 用 p1/p2，其余按四角求界）
+QRectF roiBoundsOf(const RoiShape &shape)
+{
+    QRectF r;
+    if (shape.type == RoiType::Rect) {
+        r = QRectF(shape.p1, shape.p2).normalized();
+        if (r.width() > 1.0 && r.height() > 1.0)
+            return r;
+    }
+    const QVector<QPointF> c = rotatedRectCorners(shape);
+    if (c.isEmpty())
+        return QRectF();
+    double x0 = c.first().x(), x1 = x0, y0 = c.first().y(), y1 = y0;
+    for (const QPointF &p : c) {
+        x0 = qMin(x0, p.x());
+        x1 = qMax(x1, p.x());
+        y0 = qMin(y0, p.y());
+        y1 = qMax(y1, p.y());
+    }
+    return QRectF(QPointF(x0, y0), QPointF(x1, y1));
+}
+}   // namespace
+
+void ModuleEditorDialog::onDrawSearchRegion()
+{
+    if (!m_view || !m_node)
+        return;
+    m_pickingSearchRegion = true;
+    m_view->setMaskEditable(false);
+    m_view->clearRoi();                        // 收起模板框句柄，避免两个框混在一起点不中
+    m_view->setRoiEditable(true, RoiType::Rect);
+    m_hintLabel->setText(
+        QStringLiteral("\u8bf7\u5728\u56fe\u50cf\u4e0a\u6846\u5b9a\u641c\u7d22\u533a\u57df\uff1b"
+                       "\u6846\u5b8c\u81ea\u52a8\u5199\u56de\u53c2\u6570\u3002\u53f3\u952e\u53d6\u6d88\u3002"));
+}
+
+OverlayShape ModuleEditorDialog::searchRegionShape() const
+{
+    OverlayShape s;
+    HalconNode *hn = halconNode();
+    if (!hn)
+        return s;
+    const double col = hn->getParam(QStringLiteral("searchRegionCol")).toDouble();
+    const double row = hn->getParam(QStringLiteral("searchRegionRow")).toDouble();
+    const double w = hn->getParam(QStringLiteral("searchRegionWidth")).toDouble();
+    const double h = hn->getParam(QStringLiteral("searchRegionHeight")).toDouble();
+    if (w <= 1.0 || h <= 1.0)
+        return s;                              // 宽/高为 0 ⇒ 整图搜索，不画框
+    s.type = OverlayShape::Type::RotatedRect;
+    s.p1 = QPointF(col + w * 0.5, row + h * 0.5);
+    s.width = w;
+    s.height = h;
+    s.angleDeg = 0.0;
+    s.color = QColor(0, 200, 255);             // 青色：搜索区域（绿色是结果框）
+    s.text = QStringLiteral("search");
+    return s;
+}
+
+void ModuleEditorDialog::refreshSearchOverlay()
+{
+    if (!m_view)
+        return;
+    QVector<OverlayShape> all = m_resultOverlay;
+    const OverlayShape sr = searchRegionShape();
+    if (sr.width > 1.0)
+        all.append(sr);
+    m_view->setOverlay(all);
 }
 
 void ModuleEditorDialog::onClearGeometry()
@@ -542,6 +620,32 @@ void ModuleEditorDialog::onRoiEdited(const RoiShape &shape)
     HalconNode *hn = halconNode();
     if (!hn)
         return;
+
+    // 搜索区域（r19 批 A 第 4 步）：一次绘制即写回 4 个参数，然后恢复模板框句柄
+    if (m_pickingSearchRegion) {
+        m_pickingSearchRegion = false;
+        const QRectF b = roiBoundsOf(shape);
+        if (b.width() > 1.0 && b.height() > 1.0) {
+            if (FlowScene *fs = hn->flowSceneRef())
+                fs->recordUndo();
+            hn->setParam(QStringLiteral("searchRegionCol"), int(b.x() + 0.5));
+            hn->setParam(QStringLiteral("searchRegionRow"), int(b.y() + 0.5));
+            hn->setParam(QStringLiteral("searchRegionWidth"), qMax(1, int(b.width() + 0.5)));
+            hn->setParam(QStringLiteral("searchRegionHeight"), qMax(1, int(b.height() + 0.5)));
+            m_hintLabel->setText(QStringLiteral("\u641c\u7d22\u533a\u57df\u5df2\u5199\u56de\uff1a"
+                                                "\u5339\u914d\u53ea\u5728\u8fd9\u4e2a\u6846\u5185\u8fdb\u884c\u3002"));
+        }
+        m_view->setRoiEditable(false);
+        m_view->setRoiShape(hn->geometryRoi());
+        m_view->setRoiHandleEditEnabled(true);
+        m_paramHookBusy = true;
+        if (QWidget *panel = m_paramHost->widget())
+            hn->updateParamPanel(panel);
+        m_paramHookBusy = false;
+        refreshSearchOverlay();
+        scheduleAutoRecompute();
+        return;
+    }
     if (FlowScene *fs = hn->flowSceneRef())
         fs->recordUndo();
     hn->applyGeometryRoi(shape);
