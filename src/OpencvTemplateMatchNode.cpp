@@ -220,6 +220,10 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
         cv::Mat gray = OpencvUtil::himageToMat(input);
 
         // 只在搜索区域内搜（r19 批 A 第 2 步）：0 = 整图；裁剪后坐标再换算回原图
+        // 未裁剪原图（r19 P1-14 ③）：训练抠模板必须用原图坐标，不能用裁过的 gray
+        cv::Mat grayFull = gray;
+        if (grayFull.channels() == 3)
+            cv::cvtColor(grayFull, grayFull, cv::COLOR_BGR2GRAY);
         cv::Rect searchRect(0, 0, gray.cols, gray.rows);
         {
             const int rc = m_params.value(QStringLiteral("searchRegionCol"), 0).toInt();
@@ -286,7 +290,7 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
         cv::Mat tmpl;
         if (train) {
             const RoiShape roi = geometryRoi();
-            tmpl = extractTemplatePatch(gray, roi);
+            tmpl = extractTemplatePatch(grayFull, roi);   // r19 P1-14 ③：用未裁剪原图
             if (tmpl.empty()) {
                 const int y = static_cast<int>(gray.rows * 0.25);
                 const int x = static_cast<int>(gray.cols * 0.25);
@@ -406,6 +410,11 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
         const double tmplW = tmpl.cols;
         const double tmplH = tmpl.rows;
 
+        // 多边形按当前搜索栅格换算（r19 P1-14 ②）：粗搜是降采样图、精修是子窗口，
+        // 两者与原图的点不是同一栅格，不能直接拿裁剪后的点去过滤。
+        std::vector<cv::Point> polyCoarse, polyFull;
+        const std::vector<cv::Point> *activePoly = nullptr;
+
         // 单姿态 + 单尺度时保留原有的"低方差区域抑制"（避免纹理空白处高分）
         auto evalOne = [&](const cv::Mat &search, const cv::Mat &base, double angle,
                            double scale, cv::Point *locOut, cv::Point2f *centerOut) -> double {
@@ -431,13 +440,13 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
                     result.setTo(0.0, varROI < tVar * 0.25);
             }
             // 多边形过滤：候选位置（模板中心）不在多边形内的峰值屏蔽掉
-            if (!searchPoly.empty() && !result.empty()) {
+            if (activePoly && !activePoly->empty() && !result.empty()) {
                 cv::Mat candMask = cv::Mat::zeros(result.size(), CV_8U);
                 for (int yy = 0; yy < result.rows; ++yy) {
                     for (int xx = 0; xx < result.cols; ++xx) {
                         const double cx = xx + warpedPair.second.x;
                         const double cy = yy + warpedPair.second.y;
-                        if (cv::pointPolygonTest(searchPoly, cv::Point2f(float(cx), float(cy)),
+                        if (cv::pointPolygonTest(*activePoly, cv::Point2f(float(cx), float(cy)),
                                                  false) >= 0.0)
                             candMask.at<uchar>(yy, xx) = 255;
                     }
@@ -456,6 +465,16 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
                 *centerOut = warpedPair.second;
             return (methodIdx == 0) ? (1.0 - minVal) : maxVal;
         };
+
+        // 多边形换算到粗搜栅格（r19 P1-14 ②）
+        if (!searchPoly.empty() && coarseFactor > 1.0) {
+            for (const auto &pt : searchPoly)
+                polyCoarse.emplace_back(int(pt.x / coarseFactor), int(pt.y / coarseFactor));
+            activePoly = &polyCoarse;
+        } else if (!searchPoly.empty()) {
+            polyFull = searchPoly;
+            activePoly = &polyFull;
+        }
 
         // ① 粗搜：全部角度 × 尺度（粗图上跑）
         for (double scale : scales) {
@@ -477,17 +496,36 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
                 break;
         }
 
+        // 粗搜坐标**无条件**换算回全分辨率（r19 P1-14 ①）：原来只在精修严格更好时才改写，
+        // 分数持平/略低时把降采样像素当成全图坐标 → 位置偏 ≈coarseFactor（现场 3 倍）。
+        if (coarseFactor > 1.0 && bestScore > -1e8) {
+            bestLoc = cv::Point(int(bestLoc.x * coarseFactor + 0.5),
+                                int(bestLoc.y * coarseFactor + 0.5));
+            bestCenterInWarp = cv::Point2f(float(bestCenterInWarp.x * coarseFactor),
+                                           float(bestCenterInWarp.y * coarseFactor));
+            // 精修栅格 = 全分辨率子窗口；多边形也要跟着换算（减窗口偏移在下面做）
+            polyFull = searchPoly;
+            activePoly = searchPoly.empty() ? nullptr : &polyFull;
+        }
+
         // ② 精修：全分辨率、最优姿态附近（角度 ±1 步 + 位置局部窗口）
         if (coarseFactor > 1.0 && bestScore > -1e8) {
             const int margin = qMax(24, int(qMax(tmplW, tmplH) * 0.6));
-            const int cx = int(bestLoc.x * coarseFactor);
-            const int cy = int(bestLoc.y * coarseFactor);
+            const int cx = bestLoc.x;   // r19 P1-14 ①：bestLoc 已是全分辨率
+            const int cy = bestLoc.y;
             const int x0 = qBound(0, cx - margin, qMax(0, gray.cols - 1));
             const int y0 = qBound(0, cy - margin, qMax(0, gray.rows - 1));
             const int w = qMin(gray.cols - x0, int(tmplW) + margin * 2);
             const int h = qMin(gray.rows - y0, int(tmplH) + margin * 2);
             if (w > tmplW + 2 && h > tmplH + 2) {
                 const cv::Mat win = gray(cv::Rect(x0, y0, w, h));
+                // 多边形换到子窗口栅格（r19 P1-14 ②）
+                if (!searchPoly.empty()) {
+                    polyFull.clear();
+                    for (const auto &pt : searchPoly)
+                        polyFull.emplace_back(pt.x - x0, pt.y - y0);
+                    activePoly = &polyFull;
+                }
                 const double stepA =
                     qMax(0.5, m_params.value(QStringLiteral("angleStep"), 2.0).toDouble());
                 for (int k = -1; k <= 1; ++k) {

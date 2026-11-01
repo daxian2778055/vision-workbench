@@ -676,11 +676,13 @@ void FeatureMatchTest::templateMatchSearchIsFastEnough()
 
     // 上限取 8s：远低于现场 16.4s，又给慢机器留余量（这条腿守的是"别再回到十几秒"）
     QVERIFY2(ms < 8000, qPrintable(QStringLiteral("匹配耗时 %1 ms 超过 8s 上限").arg(ms)));
-    // 几何约定：roi* 这四个参数是"模板框"的旋转矩形描述，取模板的具体落点与
-    // extractTemplatePatch 的约定有关（本腿用合成图，未复刻编辑器那条路径）。
-    // 所以这里只钉两件事：① 找得到（分数高）② 耗时别再回到十几秒。
+    // r19 P1-14：坐标必须钉死。粗到细曾把降采样像素当全图坐标（偏 ≈coarseFactor），
+    // 而这条腿当时只钉耗时与分数，放过了它。现在按合成图的真实落点断言（±6px）。
     QVERIFY2(score > 0.9, qPrintable(QStringLiteral("分数过低：%1（匹配没真正生效？）").arg(score)));
-    QVERIFY2(col >= 0.0 && row >= 0.0, "匹配位置无效（未找到）");
+    QVERIFY2(qAbs(col - 704.0) <= 6.0,
+             qPrintable(QStringLiteral("列偏了：%1（期望 704，粗到细坐标没换算回来？）").arg(col)));
+    QVERIFY2(qAbs(row - 504.0) <= 6.0,
+             qPrintable(QStringLiteral("行偏了：%1（期望 504）").arg(row)));
 }
 
 QTEST_MAIN(FeatureMatchTest)

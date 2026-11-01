@@ -192,6 +192,10 @@ bool SerialCommNode::openConnection()
             retryable = true;
             return;
         }
+        // r19 P1-17：每次 open 都会再 connect 一层，重连 N 次后一帧数据触发 N 次。
+        // UniqueConnection 对 lambda 无效（每个 lambda 是不同对象）→ 先断再接。
+        disconnect(port, &QSerialPort::readyRead, nullptr, nullptr);
+        disconnect(port, &QSerialPort::errorOccurred, nullptr, nullptr);
         connect(port, &QSerialPort::readyRead, port, [this, port]() {
             const QByteArray data = port->readAll();
             emit dataReceived(data);
