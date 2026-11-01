@@ -50,6 +50,7 @@ private slots:
     void matchModeWithoutFileFailsAcrossFamily();    // 默认参数＋没模板：三处都判红并给原因
     // 模板匹配基准（r19）：现场 1500×1000 + 208px + 31 角度 = 16380ms/轮
     void templateMatchSearchIsFastEnough();
+    void templateMatchFindsMultipleInstances();
 };
 
 namespace {
@@ -699,6 +700,61 @@ void FeatureMatchTest::templateMatchSearchIsFastEnough()
              qPrintable(QStringLiteral("倒角匹配分数过低：%1（距离场没生效？）").arg(scoreEdge)));
     QVERIFY2(qAbs(colEdge - 704.0) <= 6.0 && qAbs(rowEdge - 504.0) <= 6.0,
              qPrintable(QStringLiteral("倒角匹配位置偏了：(%1, %2)").arg(colEdge).arg(rowEdge)));
+}
+
+
+// 多目标（r19 批 A 续）：画布上放 3 个同款工件，maxMatches=3 必须找出多个。
+// 这条腿守两件事：① 抑制半径能把已找到的位置排除掉 ② matchList 的坐标是图像坐标不是模板局部坐标。
+void FeatureMatchTest::templateMatchFindsMultipleInstances()
+{
+    const cv::Mat patch = makePatch();                      // 128x128 有纹理的小块
+    cv::Mat big(1000, 1500, CV_8UC1, cv::Scalar(25));       // 纯色底：只有贴上去的工件能匹配
+    struct Pt { int x, y; };
+    const Pt centers[3] = {{300, 250}, {750, 500}, {1180, 750}};
+    for (const Pt &c : centers) {
+        const cv::Rect dst(c.x - patch.cols / 2, c.y - patch.rows / 2, patch.cols, patch.rows);
+        patch.copyTo(big(dst));
+    }
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("roiCenterCol"), double(centers[0].x));
+    node.setParam(QStringLiteral("roiCenterRow"), double(centers[0].y));
+    node.setParam(QStringLiteral("roiWidth"), double(patch.cols));
+    node.setParam(QStringLiteral("roiHeight"), double(patch.rows));
+    node.setParam(QStringLiteral("roiAngle"), 0.0);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("trainFromImage"), true);
+    node.setParam(QStringLiteral("minScore"), 0.5);
+    node.setParam(QStringLiteral("maxMatches"), 3);
+    node.setInputImage(OpencvUtil::matToHimage(big));
+    node.run(false);
+
+    const int count = node.getParam(QStringLiteral("matchCount")).toInt();
+    const QString list = node.getParam(QStringLiteral("matchList")).toString();
+    qInfo("multi-instance: count=%d list=%s", count, qPrintable(list));
+
+    QVERIFY2(count >= 2, qPrintable(QStringLiteral("多目标只找到 %1 个（抑制半径或循环有问题）").arg(count)));
+    const QStringList items = list.split(QLatin1Char(';'), Qt::SkipEmptyParts);
+    QCOMPARE(items.size(), count);
+    for (const QString &it : items) {
+        const QStringList f = it.split(QLatin1Char(','));
+        QCOMPARE(f.size(), 3);
+        const double row = f[0].toDouble();
+        const double col = f[1].toDouble();
+        const double score = f[2].toDouble();
+        QVERIFY2(score > 0.5, "多目标里有低于阈值的实例");
+        bool nearOk = false;
+        for (const Pt &c : centers) {
+            if (qAbs(col - c.x) <= 8.0 && qAbs(row - c.y) <= 8.0) {
+                nearOk = true;
+                break;
+            }
+        }
+        QVERIFY2(nearOk, qPrintable(QStringLiteral("实例位置不在任何真实中心附近：(%1, %2)").arg(col).arg(row)));
+    }
 }
 
 QTEST_MAIN(FeatureMatchTest)

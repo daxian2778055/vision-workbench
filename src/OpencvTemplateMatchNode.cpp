@@ -117,6 +117,8 @@ void OpencvTemplateMatchNode::init()
                       QStringLiteral("从图像 ROI 训练并保存模板（训练落盘后自动取消勾选）")),
         makeIntParam(QStringLiteral("method"), 1, 0, 2,
                      QStringLiteral("匹配方法：0=归一化平方差，1=归一化相关系数，2=边缘梯度")),
+        makeIntParam(QStringLiteral("maxMatches"), 1, 1, 16,
+                     QStringLiteral("最多匹配个数（1=只输出最优；多件场景调大）")),
         makeDoubleParam(QStringLiteral("minScore"), 0.6, 0.0, 1.0,
                         QStringLiteral("最低匹配度")),
         makeIntParam(QStringLiteral("roiRow"), 0, 0, 100000,
@@ -431,6 +433,7 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
         double bestAngle = 0.0;
         double bestScale = 1.0;
         cv::Point2f bestCenterInWarp(tmpl.cols * 0.5f, tmpl.rows * 0.5f);
+        cv::Point2f bestCoarseCenter;   // 粗搜栅格下的中心（多目标抑制用）
         const double tmplW = tmpl.cols;
         const double tmplH = tmpl.rows;
 
@@ -438,6 +441,12 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
         // 两者与原图的点不是同一栅格，不能直接拿裁剪后的点去过滤。
         std::vector<cv::Point> polyCoarse, polyFull;
         const std::vector<cv::Point> *activePoly = nullptr;
+
+        // 多目标（r19）：已找到中心（全分辨率）+ 当前搜索栅格映射
+        const double suppressR = 0.6 * qMax(tmplW, tmplH);   // 抑制半径（全分辨率像素）
+        std::vector<cv::Point2f> foundCenters;
+        double rasterScale = 1.0;        // 搜索图像素 / 全分辨率像素
+        cv::Point searchOrigin;          // 搜索图在图像中的左上角（粗搜为 0）
 
         // 单姿态 + 单尺度时保留原有的"低方差区域抑制"（避免纹理空白处高分）
         auto evalOne = [&](const cv::Mat &search, const cv::Mat &base, double angle,
@@ -493,6 +502,17 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
                 else
                     result.setTo(-1e9, ~candMask);
             }
+            // 已找到的位置附近在 result 上清零，下一次扫描才能看到次优峰
+            if (!foundCenters.empty() && !result.empty()) {
+                for (const cv::Point2f &fc : foundCenters) {
+                    const double rx = fc.x * rasterScale - searchOrigin.x - warpedPair.second.x;
+                    const double ry = fc.y * rasterScale - searchOrigin.y - warpedPair.second.y;
+                    const double rr = suppressR * rasterScale;
+                    if (rr >= 1.0)
+                        cv::circle(result, cv::Point(int(rx), int(ry)), int(rr),
+                                   (methodIdx == 0) ? cv::Scalar(1e9) : cv::Scalar(-1e9), -1);
+                }
+            }
             double minVal = 0.0, maxVal = 0.0;
             cv::Point minLoc, maxLoc;
             cv::minMaxLoc(result, &minVal, &maxVal, &minLoc, &maxLoc);
@@ -514,6 +534,26 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
         }
 
         // ① 粗搜：全部角度 × 尺度（粗图上跑）
+        // 多目标（r19 批 A 续）：每轮抑制已找到的中心，最多 maxMatches 个
+        const int maxMatches =
+            qBound(1, m_params.value(QStringLiteral("maxMatches"), 1).toInt(), 16);
+        QStringList matchList;
+        int matchCount = 0;
+        cv::Point mainLoc;
+        double mainScore = -1e9, mainAngle = 0.0, mainScale = 1.0;
+        cv::Point2f mainCenter;
+
+        for (int inst = 0; inst < maxMatches; ++inst) {
+            bestScore = -1e9;
+            bestLoc = cv::Point();
+            bestAngle = 0.0;
+            bestScale = 1.0;
+            bestCenterInWarp = cv::Point2f();
+            bestCoarseCenter = cv::Point2f();
+
+            // 粗搜：全部角度 x 尺度（粗图上跑）
+            rasterScale = 1.0 / qMax(1.0, coarseFactor);
+            searchOrigin = cv::Point(0, 0);
         for (double scale : scales) {
             for (double angle : angles) {
                 cv::Point loc;
@@ -530,6 +570,8 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
                     bestAngle = angle;
                     bestScale = scale;
                     bestCenterInWarp = centerInWarp;
+                    bestCoarseCenter = cv::Point2f(loc.x + centerInWarp.x,
+                                                   loc.y + centerInWarp.y);
                 }
                 if (bestScore >= 0.95)
                     break;   // 足够好就收工（VM 也这么做）
@@ -561,6 +603,8 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
             const int h = qMin(gray.rows - y0, int(tmplH) + margin * 2);
             if (w > tmplW + 2 && h > tmplH + 2) {
                 const cv::Mat win = gray(cv::Rect(x0, y0, w, h));
+                rasterScale = 1.0;
+                searchOrigin = cv::Point(x0, y0);
                 // method=2：精修同样走边缘幅值（窗口小，代价可忽略）
                 const cv::Mat refineWin =
                     (methodIdx == 2) ? edgeDistanceField(edgeMagnitudeOf(win)) : win;
@@ -591,6 +635,39 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
                 }
             }
         }
+
+            if (bestScore < -1e8)
+                break;
+            if (inst > 0 && bestScore < minScore)
+                break;                       // 追加实例必须过阈值（第一实例维持原口径）
+            if (inst == 0) {
+                mainLoc = bestLoc;
+                mainScore = bestScore;
+                mainAngle = bestAngle;
+                mainScale = bestScale;
+                mainCenter = bestCenterInWarp;
+            }
+            matchList << QStringLiteral("%1,%2,%3")
+                             .arg(bestLoc.y + bestCenterInWarp.y, 0, 'f', 1)
+                             .arg(bestLoc.x + bestCenterInWarp.x, 0, 'f', 1)
+                             .arg(bestScore, 0, 'f', 3);
+            ++matchCount;
+            foundCenters.push_back(cv::Point2f(float(bestLoc.x + bestCenterInWarp.x),
+                                              float(bestLoc.y + bestCenterInWarp.y)));
+            if (bestScore < minScore)
+                break;                       // 第一实例也未达标：不再找更多
+        }
+
+        // 第一实例写回既有输出口径
+        if (matchCount > 0) {
+            bestLoc = mainLoc;
+            bestScore = mainScore;
+            bestAngle = mainAngle;
+            bestScale = mainScale;
+            bestCenterInWarp = mainCenter;
+        }
+        m_params[QStringLiteral("matchCount")] = matchCount;
+        m_params[QStringLiteral("matchList")] = matchList.join(QLatin1Char(';'));
 
         if (bestScore < -1e8) {
             m_params[QStringLiteral("trainStatus")] = QStringLiteral("无有效搜索位姿（模板相对图像过大）");

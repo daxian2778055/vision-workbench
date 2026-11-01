@@ -102,6 +102,25 @@ QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *n
                 s.p1 = mr.point1;
                 s.text = QStringLiteral("score=%1").arg(mr.value, 0, 'f', 2);
             }
+            // 多目标（r19）：matchList 里除第一实例外，其余也画出来（同色同尺寸）
+            const QString listText = node->getParam(QStringLiteral("matchList")).toString();
+            if (!listText.isEmpty()) {
+                const QStringList items = listText.split(QLatin1Char(';'), Qt::SkipEmptyParts);
+                for (int k = 1; k < items.size(); ++k) {
+                    const QStringList f = items[k].split(QLatin1Char(','));
+                    if (f.size() != 3)
+                        continue;
+                    OverlayShape extra;
+                    extra.type = OverlayShape::Type::RotatedRect;
+                    extra.p1 = QPointF(f[1].toDouble(), f[0].toDouble());
+                    extra.width = s.width;
+                    extra.height = s.height;
+                    extra.angleDeg = s.angleDeg;
+                    extra.color = s.color;
+                    extra.text = QStringLiteral("%1").arg(f[2].toDouble(), 0, 'f', 2);
+                    overlay.append(extra);
+                }
+            }
         } else if (mr.type == QLatin1String("defect")) {
             for (int i = 0; i + 3 < mr.extraValues.size(); i += 4) {
                 OverlayShape box;
