@@ -55,6 +55,7 @@ private slots:
     void templateMatchFindsMultipleInstances();
     void searchBudgetCountsCombos();
     void templateMatchOnRealImage();
+    void templateMatchAcrossFrames();
     void templateMatchSurvivesPartialOcclusion();
 };
 
@@ -969,6 +970,112 @@ void FeatureMatchTest::templateMatchSurvivesPartialOcclusion()
                             .arg(r[1].col, 0, 'f', 1).arg(r[1].row, 0, 'f', 1)));
     // 对比数字保留（不作断言）
     qInfo("occlusion compare: NCC %.3f vs GOC %.3f", r[0].score, r[1].score);
+}
+
+
+// 跨图验证（r19 收尾）：同工件多帧 —— 首帧训练，在其余帧上搜索。
+void FeatureMatchTest::templateMatchAcrossFrames()
+{
+    const QString dirPath =
+        QStringLiteral("F:/\u65b9\u6848/\u6b63\u6cf0/\u4eea\u8868/\u6fc0\u5149\u6253\u6807");
+    QDir dir(dirPath);
+    QStringList files = dir.entryList(QStringList() << QStringLiteral("Image_*.bmp"),
+                                      QDir::Files, QDir::Name);
+    if (files.size() < 2)
+        QSKIP("跨图需要至少两张真图（跳过）");
+
+    // 用首帧训练模板（纹理最强窗口）
+    QImage first(dir.filePath(files.first()));
+    QVERIFY(!first.isNull());
+    QImage grayImg = first.convertToFormat(QImage::Format_Grayscale8);
+    cv::Mat gray0(grayImg.height(), grayImg.width(), CV_8UC1,
+                  const_cast<uchar *>(grayImg.constBits()), qsizetype(grayImg.bytesPerLine()));
+    gray0 = gray0.clone();
+
+    const int side = qBound(120, gray0.cols / 5, 260);
+    double bestE = -1.0;
+    double cx = gray0.cols * 0.5, cy = gray0.rows * 0.5;
+    {
+        cv::Mat gx, gy, mag;
+        cv::Sobel(gray0, gx, CV_32F, 1, 0, 3);
+        cv::Sobel(gray0, gy, CV_32F, 0, 1, 3);
+        cv::magnitude(gx, gy, mag);
+        for (int yy = side / 2; yy + side / 2 < gray0.rows; yy += side / 2)
+            for (int xx = side / 2; xx + side / 2 < gray0.cols; xx += side / 2) {
+                const double e = cv::mean(mag(cv::Rect(xx - side / 2, yy - side / 2, side, side)))[0];
+                if (e > bestE) {
+                    bestE = e;
+                    cx = xx;
+                    cy = yy;
+                }
+            }
+    }
+
+    QTemporaryDir dir2;
+    const QString tmplPath = dir2.filePath(QStringLiteral("cross_template.png"));
+
+    for (int method = 1; method <= 2; ++method) {
+        {
+            OpencvTemplateMatchNode trainer;
+            trainer.init();
+            trainer.setParam(QStringLiteral("method"), method);
+            trainer.setParam(QStringLiteral("templatePath"), tmplPath);
+            trainer.setParam(QStringLiteral("roiCenterCol"), cx);
+            trainer.setParam(QStringLiteral("roiCenterRow"), cy);
+            trainer.setParam(QStringLiteral("roiWidth"), double(side));
+            trainer.setParam(QStringLiteral("roiHeight"), double(side));
+            trainer.setParam(QStringLiteral("roiAngle"), 0.0);
+            trainer.setParam(QStringLiteral("angleMin"), -30.0);
+            trainer.setParam(QStringLiteral("angleMax"), 30.0);
+            trainer.setParam(QStringLiteral("angleStep"), 2.0);
+            trainer.setParam(QStringLiteral("trainFromImage"), true);
+            trainer.setParam(QStringLiteral("minScore"), 0.3);
+            cv::Mat color;
+            cv::cvtColor(gray0, color, cv::COLOR_GRAY2BGR);
+            trainer.setInputImage(OpencvUtil::matToHimage(color));
+            trainer.run(false);
+            QVERIFY2(QFileInfo::exists(tmplPath), "模板没落盘");
+        }
+
+        for (int k = 1; k < files.size(); ++k) {
+            QImage q2(dir.filePath(files[k]));
+            if (q2.isNull())
+                continue;
+            QImage g2 = q2.convertToFormat(QImage::Format_Grayscale8);
+            cv::Mat gray(g2.height(), g2.width(), CV_8UC1,
+                         const_cast<uchar *>(g2.constBits()), qsizetype(g2.bytesPerLine()));
+            gray = gray.clone();
+            cv::Mat color;
+            cv::cvtColor(gray, color, cv::COLOR_GRAY2BGR);
+
+            OpencvTemplateMatchNode node;
+            node.init();
+            node.setParam(QStringLiteral("method"), method);
+            node.setParam(QStringLiteral("templatePath"), tmplPath);
+            node.setParam(QStringLiteral("angleMin"), -30.0);
+            node.setParam(QStringLiteral("angleMax"), 30.0);
+            node.setParam(QStringLiteral("angleStep"), 2.0);
+            node.setParam(QStringLiteral("trainFromImage"), false);
+            node.setParam(QStringLiteral("minScore"), 0.3);
+            node.setInputImage(OpencvUtil::matToHimage(color));
+            QElapsedTimer timer;
+            timer.start();
+            node.run(false);
+            const qint64 ms = timer.elapsed();
+            const double score = node.getParam(QStringLiteral("matchScore")).toDouble();
+            const double col = node.getParam(QStringLiteral("matchCol")).toDouble();
+            const double row = node.getParam(QStringLiteral("matchRow")).toDouble();
+            qInfo("cross method=%d [%s]: %lld ms score=%.3f at (%.1f, %.1f) tmpl(%.0f, %.0f)",
+                  method, qPrintable(files[k]), ms, score, col, row, cx, cy);
+
+            // 跨帧实测（同工件多帧）：NCC 0.705~0.950、GOC 0.387~0.857 ——
+            // 跨图鲁棒性是与 VisionPro 的真实差距（自匹配 1.000 证明不了它）。
+            // 断言只钉"找得到"的底线 0.3；收严要等跨图数据更全/算法改进后再做。
+            QVERIFY2(score > 0.3,
+                     qPrintable(QStringLiteral("跨图 method=%1 [%2] 分数过低：%3")
+                                    .arg(method).arg(files[k]).arg(score, 0, 'f', 3)));
+        }
+    }
 }
 
 QTEST_MAIN(FeatureMatchTest)
