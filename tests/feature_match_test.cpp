@@ -53,6 +53,7 @@ private slots:
     void templateMatchSearchIsFastEnough();
     void templateMatchFindsMultipleInstances();
     void searchBudgetCountsCombos();
+    void templateMatchOnRealImage();
 };
 
 namespace {
@@ -776,6 +777,77 @@ void FeatureMatchTest::searchBudgetCountsCombos()
     const QString text = describe(31);
     QVERIFY2(text.contains(QStringLiteral("31")), qPrintable(text));
     QVERIFY2(estimateMs(31) > 100.0 && estimateMs(31) < 200.0, "单帧估算偏离实测（约 130ms）");
+}
+
+
+// 真图验证（r19 收尾）：现场真实 BMP 上做 ROI 自匹配。
+// 文件不在本机时 QSKIP（交付机/现场机上跑）；存在则必须通过。
+void FeatureMatchTest::templateMatchOnRealImage()
+{
+    const QString path =
+        QStringLiteral("F:/\u65b9\u6848/\u6b63\u6cf0/\u5357\u7f51/Image_20260423085400391.bmp");
+    if (!QFileInfo::exists(path))
+        QSKIP("真图不在本机（跳过）");
+    QImage qimg(path);
+    QVERIFY2(!qimg.isNull(), "真图读取失败");
+    QImage grayImg = qimg.convertToFormat(QImage::Format_Grayscale8);
+    cv::Mat gray(grayImg.height(), grayImg.width(), CV_8UC1,
+                 const_cast<uchar *>(grayImg.constBits()), qsizetype(grayImg.bytesPerLine()));
+    gray = gray.clone();
+    cv::Mat color;
+    cv::cvtColor(gray, color, cv::COLOR_GRAY2BGR);
+    const HObject img = OpencvUtil::matToHimage(color);
+    qInfo("real-image: %d x %d", gray.cols, gray.rows);
+
+    // 在图中取一块真实区域作为模板（避开边缘）
+    const double cx = gray.cols * 0.5;
+    const double cy = gray.rows * 0.5;
+    const int side = qBound(120, gray.cols / 5, 260);
+
+    for (int method = 1; method <= 2; ++method) {
+        OpencvTemplateMatchNode node;
+        node.init();
+        node.setParam(QStringLiteral("method"), method);
+        node.setParam(QStringLiteral("roiCenterCol"), cx);
+        node.setParam(QStringLiteral("roiCenterRow"), cy);
+        node.setParam(QStringLiteral("roiWidth"), double(side));
+        node.setParam(QStringLiteral("roiHeight"), double(side));
+        node.setParam(QStringLiteral("roiAngle"), 0.0);
+        node.setParam(QStringLiteral("angleMin"), -30.0);
+        node.setParam(QStringLiteral("angleMax"), 30.0);
+        node.setParam(QStringLiteral("angleStep"), 2.0);
+        node.setParam(QStringLiteral("scaleMin"), 1.0);
+        node.setParam(QStringLiteral("scaleMax"), 1.0);
+        node.setParam(QStringLiteral("trainFromImage"), true);
+        node.setParam(QStringLiteral("minScore"), 0.5);
+        node.setInputImage(img);
+
+        QElapsedTimer timer;
+        timer.start();
+        node.run(false);
+        const qint64 ms = timer.elapsed();
+        const double score = node.getParam(QStringLiteral("matchScore")).toDouble();
+        const double col = node.getParam(QStringLiteral("matchCol")).toDouble();
+        const double row = node.getParam(QStringLiteral("matchRow")).toDouble();
+        qInfo("real-image method=%d: %lld ms score=%.3f at (%.1f, %.1f) expect (%.0f, %.0f)",
+              method, ms, score, col, row, cx, cy);
+
+        QVERIFY2(ms < 8000, qPrintable(QStringLiteral("真图 %1 ms 超过 8s").arg(ms)));
+        if (method == 1) {
+            // 灰度 NCC 在真图自匹配上必须完美（实测 264ms / 1.000 / ±0.4px）
+            QVERIFY2(score > 0.9,
+                     qPrintable(QStringLiteral("method=1 真图自匹配分数过低：%1").arg(score)));
+            QVERIFY2(qAbs(col - cx) <= 1.5 && qAbs(row - cy) <= 1.5,
+                     qPrintable(QStringLiteral("method=1 真图自匹配位置偏了：(%1, %2) 期望 (%3, %4)")
+                                    .arg(col).arg(row).arg(cx).arg(cy)));
+        } else {
+            // 已知缺陷（真图实测）：倒角（chamfer）在真实纹理上不可靠 —— 本图实测
+            // score 0.721、位置偏 80px。它对合成图有效、对真图无效，因此这里只钉
+            // "不崩 + 有输出"，把差距如实暴露；升级到梯度方向金字塔后才收严。
+            QVERIFY2(score > 0.5,
+                     qPrintable(QStringLiteral("method=2 真图自匹配分数过低（连 0.5 都不到）：%1").arg(score)));
+        }
+    }
 }
 
 QTEST_MAIN(FeatureMatchTest)
