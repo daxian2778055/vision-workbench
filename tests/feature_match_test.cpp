@@ -682,9 +682,9 @@ void FeatureMatchTest::templateMatchSearchIsFastEnough()
     // r19 P1-14：坐标必须钉死。粗到细曾把降采样像素当全图坐标（偏 ≈coarseFactor），
     // 而这条腿当时只钉耗时与分数，放过了它。现在按合成图的真实落点断言（±6px）。
     QVERIFY2(score > 0.9, qPrintable(QStringLiteral("分数过低：%1（匹配没真正生效？）").arg(score)));
-    QVERIFY2(qAbs(col - 704.0) <= 6.0,
+    QVERIFY2(qAbs(col - 704.0) <= 1.5,
              qPrintable(QStringLiteral("列偏了：%1（期望 704，粗到细坐标没换算回来？）").arg(col)));
-    QVERIFY2(qAbs(row - 504.0) <= 6.0,
+    QVERIFY2(qAbs(row - 504.0) <= 1.5,
              qPrintable(QStringLiteral("行偏了：%1（期望 504）").arg(row)));
 
     // method=2 边缘梯度相关（r19）：同一张图再跑一遍，只验证"能稳定找到、分数可用"。
@@ -700,7 +700,7 @@ void FeatureMatchTest::templateMatchSearchIsFastEnough()
           msEdge, scoreEdge, colEdge, rowEdge);
     QVERIFY2(scoreEdge > 0.9,
              qPrintable(QStringLiteral("倒角匹配分数过低：%1（距离场没生效？）").arg(scoreEdge)));
-    QVERIFY2(qAbs(colEdge - 704.0) <= 6.0 && qAbs(rowEdge - 504.0) <= 6.0,
+    QVERIFY2(qAbs(colEdge - 704.0) <= 1.5 && qAbs(rowEdge - 504.0) <= 1.5,
              qPrintable(QStringLiteral("倒角匹配位置偏了：(%1, %2)").arg(colEdge).arg(rowEdge)));
 }
 

@@ -434,6 +434,8 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
         double bestScale = 1.0;
         cv::Point2f bestCenterInWarp(tmpl.cols * 0.5f, tmpl.rows * 0.5f);
         cv::Point2f bestCoarseCenter;   // 粗搜栅格下的中心（多目标抑制用）
+        cv::Point2f bestSubpix;         // 亚像素偏移（r19 收尾）
+        cv::Point2f subpixTmp;
         const double tmplW = tmpl.cols;
         const double tmplH = tmpl.rows;
 
@@ -450,7 +452,8 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
 
         // 单姿态 + 单尺度时保留原有的"低方差区域抑制"（避免纹理空白处高分）
         auto evalOne = [&](const cv::Mat &search, const cv::Mat &base, double angle,
-                           double scale, cv::Point *locOut, cv::Point2f *centerOut) -> double {
+                           double scale, cv::Point *locOut, cv::Point2f *centerOut,
+                           cv::Point2f *subpixOut = nullptr) -> double {
             const auto warpedPair = warpTemplateCached(base, warpKeyBase, angle, scale);
             const cv::Mat &warped = warpedPair.first;
             if (warped.empty() || warped.cols >= search.cols || warped.rows >= search.rows)
@@ -517,7 +520,27 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
             cv::Point minLoc, maxLoc;
             cv::minMaxLoc(result, &minVal, &maxVal, &minLoc, &maxLoc);
             if (locOut)
-                *locOut = (methodIdx == 0) ? minLoc : maxLoc;
+                // 亚像素：峰值邻域抛物线插值（x/y 各一次），VM/VisionPro 都给亚像素
+            if (subpixOut) {
+                const cv::Point peak = (methodIdx == 0) ? minLoc : maxLoc;
+                auto at = [&](int y, int x) -> float {
+                    if (y < 0 || x < 0 || y >= result.rows || x >= result.cols)
+                        return (methodIdx == 0) ? 1e9f : -1e9f;
+                    return result.at<float>(y, x);
+                };
+                const float vc = at(peak.y, peak.x);
+                const float vl = at(peak.y, peak.x - 1), vr = at(peak.y, peak.x + 1);
+                const float vu = at(peak.y - 1, peak.x), vd = at(peak.y + 1, peak.x);
+                float dx = 0.f, dy = 0.f;
+                const float denX = vl - 2.f * vc + vr;
+                const float denY = vu - 2.f * vc + vd;
+                if (std::fabs(denX) > 1e-12f)
+                    dx = 0.5f * (vl - vr) / denX;
+                if (std::fabs(denY) > 1e-12f)
+                    dy = 0.5f * (vu - vd) / denY;
+                *subpixOut = cv::Point2f(qBound(-1.f, dx, 1.f), qBound(-1.f, dy, 1.f));
+            }
+            *locOut = (methodIdx == 0) ? minLoc : maxLoc;
             if (centerOut)
                 *centerOut = warpedPair.second;
             return (methodIdx == 0) ? (1.0 - minVal) : maxVal;
@@ -550,6 +573,7 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
             bestScale = 1.0;
             bestCenterInWarp = cv::Point2f();
             bestCoarseCenter = cv::Point2f();
+            bestSubpix = cv::Point2f();
 
             // 粗搜：全部角度 x 尺度（粗图上跑）
             rasterScale = 1.0 / qMax(1.0, coarseFactor);
@@ -563,13 +587,15 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
             (methodIdx == 2) ? edgeDistanceField(edgeMagnitudeOf(graySearch)) : graySearch;
         const cv::Mat coarseTmplImg =
             (methodIdx == 2) ? edgeMagnitudeOf(tmplSearch) : tmplSearch;
-                const double sc = evalOne(coarseSearchImg, coarseTmplImg, angle, scale, &loc, &centerInWarp);
+                const double sc = evalOne(coarseSearchImg, coarseTmplImg, angle, scale, &loc, &centerInWarp,
+                                         &subpixTmp);
                 if (sc > bestScore) {
                     bestScore = sc;
                     bestLoc = loc;
                     bestAngle = angle;
                     bestScale = scale;
                     bestCenterInWarp = centerInWarp;
+                    bestSubpix = subpixTmp;
                     bestCoarseCenter = cv::Point2f(loc.x + centerInWarp.x,
                                                    loc.y + centerInWarp.y);
                 }
@@ -625,7 +651,8 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
                         continue;
                     cv::Point loc;
                     cv::Point2f centerInWarp;
-                    const double sc = evalOne(refineWin, refineTmpl, angle, bestScale, &loc, &centerInWarp);
+                    const double sc = evalOne(refineWin, refineTmpl, angle, bestScale, &loc, &centerInWarp,
+                                         &subpixTmp);
                     if (sc > bestScore) {
                         bestScore = sc;
                         bestLoc = cv::Point(x0 + loc.x, y0 + loc.y);
@@ -683,8 +710,8 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
         const double outW = tmplW * bestScale;
         const double outH = tmplH * bestScale;
 
-        m_params[QStringLiteral("matchRow")] = row;
-        m_params[QStringLiteral("matchCol")] = col;
+        m_params[QStringLiteral("matchRow")] = row + bestSubpix.y;
+        m_params[QStringLiteral("matchCol")] = col + bestSubpix.x;
         m_params[QStringLiteral("matchScore")] = bestScore;
         m_params[QStringLiteral("matchAngle")] = bestAngle;
         m_params[QStringLiteral("matchScale")] = bestScale;
