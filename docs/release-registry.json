@@ -891,7 +891,16 @@
       "exe_bytes": 10257408,
       "package_dir": "dist/VisionFlowPlatform-rc-20261031.13",
       "recorded_at": "2026-11-01",
-      "recorded_note": "当前装机包：真图验证腿（现场 BMP：NCC 1.000/±0.4px、倒角 0.721/偏80px）+ 亚像素 + 训练向导四段 + 多目标 + 图形即参数闭环。仍开：梯度方向金字塔（3-5 天，真图证据已定其必要性）"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261031.14 取代（后者 method=2 升级 GOC）"
+    },
+    {
+      "tag": "rc-20261031.14",
+      "commit": "ca6dacf4a0a6f9cd5f535200406fd05c12b3eaa2",
+      "exe_md5": "0a9c824c1441848658754e92820eff7a",
+      "exe_bytes": 10258944,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261031.14",
+      "recorded_at": "2026-11-01",
+      "recorded_note": "当前装机包：method=2 梯度方向相关（真图 0.998/±0.3px，追平 NCC）+ 亚像素 + 训练向导四段 + 多目标 + 图形即参数闭环。仍开：投影金字塔（抗遮挡）、掩膜参与评分"
     }
   ],
   "legacy_backfilled": [
