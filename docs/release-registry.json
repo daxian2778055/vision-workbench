@@ -918,7 +918,16 @@
       "exe_bytes": 10263552,
       "package_dir": "dist/VisionFlowPlatform-rc-20261031.16",
       "recorded_at": "2026-11-01",
-      "recorded_note": "当前装机包：warp 恒等快路径根因修复（5 张真图自匹配 1.000/±0.4px，重复纹理图原错位→精确）+ 跨图腿（同状态帧 0.95 一致、跨状态 0.71）+ 抗遮挡 GOC + 掩膜参与 + 亚像素 + 训练向导四段。CLAHE 光照归一化实测无效已回退"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261031.17 取代（后者含 polarity）"
+    },
+    {
+      "tag": "rc-20261031.17",
+      "commit": "ced1e36d6d400f3c3f4fc306d6f4870d31e7acdf",
+      "exe_md5": "613b75850c720bc6d5a77a08f154a54c",
+      "exe_bytes": 10264064,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261031.17",
+      "recorded_at": "2026-11-01",
+      "recorded_note": "当前装机包：工作流四要素齐（ROI 矩形/多边形 + 角度范围 + 缩放范围 + 极性）+ 输出 score/X/Y/角度/缩放/多目标 + warp 恒等根因修复（真图 1.000/±0.4px）+ 抗遮挡 GOC + 亚像素 + 训练向导四段"
     }
   ],
   "legacy_backfilled": [
