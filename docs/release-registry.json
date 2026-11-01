@@ -801,7 +801,16 @@
       "exe_bytes": 10222592,
       "package_dir": "dist/VisionFlowPlatform-rc-20261031.3",
       "recorded_at": "2026-11-01",
-      "recorded_note": "当前装机包：VM 手感批 A 第 2 步——搜索区域（矩形），匹配只在区域内搜（既是检测区域，也是提速手段）；面板槽位 277→282。待做：结果叠加、编辑器接画布、多边形 ROI"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261031.4 取代（后者含搜索区域上画布，批 A 四步齐）"
+    },
+    {
+      "tag": "rc-20261031.4",
+      "commit": "f1fcec29b1d0a66dd83680b58c7952b10b71c3b1",
+      "exe_md5": "324eb2d99ace760e8f07d636b94ae100",
+      "exe_bytes": 10227200,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261031.4",
+      "recorded_at": "2026-11-01",
+      "recorded_note": "当前装机包：VM 手感批 A 完成——ShapeBinding 绑定层 / 搜索区域参数与区域内搜 / 结果叠加（命中绿框+未命中灰框候选）/ 搜索区域上画布（青框可画、参数实时回填）。待做：多边形搜索区域画布交互"
     }
   ],
   "legacy_backfilled": [
