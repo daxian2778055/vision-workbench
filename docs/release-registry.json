@@ -909,7 +909,16 @@
       "exe_bytes": 10260480,
       "package_dir": "dist/VisionFlowPlatform-rc-20261031.15",
       "recorded_at": "2026-11-01",
-      "recorded_note": "当前装机包：GOC 抗遮挡 v3（遮挡 20% 实测 0.383→0.994 精确命中；真图 0.998/±0.3px 不回归）+ 亚像素 + 训练向导四段 + 多目标 + 图形即参数闭环。待做：编辑器掩膜接入评分分母"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261031.16 取代（后者含 warp 恒等快路径根因修复）"
+    },
+    {
+      "tag": "rc-20261031.16",
+      "commit": "5d519c001d70e9510645533030a78bb070455596",
+      "exe_md5": "705c5417cc0a324c8d9f177a20c7b0c7",
+      "exe_bytes": 10263552,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261031.16",
+      "recorded_at": "2026-11-01",
+      "recorded_note": "当前装机包：warp 恒等快路径根因修复（5 张真图自匹配 1.000/±0.4px，重复纹理图原错位→精确）+ 跨图腿（同状态帧 0.95 一致、跨状态 0.71）+ 抗遮挡 GOC + 掩膜参与 + 亚像素 + 训练向导四段。CLAHE 光照归一化实测无效已回退"
     }
   ],
   "legacy_backfilled": [
