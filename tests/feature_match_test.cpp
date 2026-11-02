@@ -61,6 +61,8 @@ private slots:
     void templateMatchSurvivesPartialOcclusion();
     // 掩膜参与评分（r19 遗留项）：只改掩膜 → 命中位置必须变化
     void templateMatchMaskMovesBestHit();
+    // 训练后特征点可视化：绿点必须落在模板框内，且跟着 ROI 走（VM 模板配置同款）
+    void templateMatchFeaturePointsFollowRoi();
 };
 
 namespace {
@@ -1167,6 +1169,57 @@ void FeatureMatchTest::templateMatchMaskMovesBestHit()
     QVERIFY2(qAbs(col1 - rightCx) <= 8.0 && qAbs(row1 - rightCy) <= 8.0,
              qPrintable(QStringLiteral("命中应只剩右侧 (%1, %2)，实际 (%3, %4)")
                             .arg(rightCx).arg(rightCy).arg(col1).arg(row1)));
+}
+
+// 训练后特征点可视化：绿点 = 模板强梯度点。两条硬要求：
+//   ① 点全部落在模板框内（画到框外=坐标映射错，现场会以为模板取错位置）；
+//   ② 改 ROI 后点跟着走（说明是实时按当前模板算的，不是缓存的旧图）。
+void FeatureMatchTest::templateMatchFeaturePointsFollowRoi()
+{
+    const cv::Mat patch = makePatch();
+    cv::Mat canvas(300, 700, CV_8UC1, cv::Scalar(kCanvasBackground));
+    const cv::Rect left(50, 50, kTemplateSize, kTemplateSize);
+    const cv::Rect right(400, 50, kTemplateSize, kTemplateSize);
+    patch.copyTo(canvas(left));
+    patch.copyTo(canvas(right));
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 2);
+    node.setParam(QStringLiteral("roiCenterCol"), left.x + kTemplateSize / 2.0);
+    node.setParam(QStringLiteral("roiCenterRow"), left.y + kTemplateSize / 2.0);
+    node.setParam(QStringLiteral("roiWidth"), double(kTemplateSize));
+    node.setParam(QStringLiteral("roiHeight"), double(kTemplateSize));
+    node.setParam(QStringLiteral("roiAngle"), 0.0);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+
+    const QVector<QPointF> pts0 = node.editorFeaturePoints();
+    qInfo("feature-points: left=%d", int(pts0.size()));
+    QVERIFY2(pts0.size() > 100,
+             qPrintable(QStringLiteral("模板特征点太少/为空：%1（训练后应当能看到绿点）").arg(pts0.size())));
+    for (const QPointF &p : pts0) {
+        QVERIFY2(p.x() >= left.x - 1 && p.x() <= left.x + kTemplateSize + 1
+                     && p.y() >= left.y - 1 && p.y() <= left.y + kTemplateSize + 1,
+                 qPrintable(QStringLiteral("特征点跑到模板框外：(%1, %2)").arg(p.x()).arg(p.y())));
+    }
+
+    // 换到右侧同款工件：点必须整体平移过去
+    RoiShape s;
+    s.type = RoiType::RotatedRect;
+    s.p1 = QPointF(right.x + kTemplateSize / 2.0, right.y + kTemplateSize / 2.0);
+    s.width = kTemplateSize;
+    s.height = kTemplateSize;
+    s.angleDeg = 0.0;
+    node.applyGeometryRoi(s);
+
+    const QVector<QPointF> pts1 = node.editorFeaturePoints();
+    qInfo("feature-points: right=%d", int(pts1.size()));
+    QVERIFY2(pts1.size() > 100, qPrintable(QStringLiteral("换 ROI 后特征点为空：%1").arg(pts1.size())));
+    for (const QPointF &p : pts1) {
+        QVERIFY2(p.x() >= right.x - 1 && p.x() <= right.x + kTemplateSize + 1
+                     && p.y() >= right.y - 1 && p.y() <= right.y + kTemplateSize + 1,
+                 qPrintable(QStringLiteral("换 ROI 后特征点没跟着走：(%1, %2)").arg(p.x()).arg(p.y())));
+    }
 }
 
 QTEST_MAIN(FeatureMatchTest)

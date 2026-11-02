@@ -17,6 +17,10 @@
 
 namespace {
 
+/// GOC 的强梯度阈值：模板与搜索图共用同一个值。编辑器画特征点必须也用它，
+/// 否则"看到的点"和"真正打分的点"不是一回事（VM 的绿色特征点就是这条口径）。
+constexpr double kGocEdgeThreshold = 20.0;
+
 cv::Mat warpTemplate(const cv::Mat &tmpl, double angleDeg, double scale, cv::Point2f *centerOut)
 {
     if (qAbs(angleDeg) < 1e-6 && qAbs(scale - 1.0) < 1e-6) {
@@ -502,7 +506,7 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
                 cv::Sobel(warped, wgy, CV_32F, 0, 1, 3);
                 cv::magnitude(wgx, wgy, wmag);
                 cv::Mat wm;
-                cv::threshold(wmag, wm, 20.0, 1.0, cv::THRESH_BINARY);
+                cv::threshold(wmag, wm, kGocEdgeThreshold, 1.0, cv::THRESH_BINARY);
                 wm.convertTo(wm, CV_32F);
                 const double n = cv::sum(wm)[0];
                 if (n < 16.0)
@@ -645,7 +649,7 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
             cv::magnitude(sgx, sgy, smag);
             cv::divide(sgx, smag + 1e-6f, curSearchCos);
             cv::divide(sgy, smag + 1e-6f, curSearchSin);
-            cv::threshold(smag, curSearchStrong, 20.0, 1.0, cv::THRESH_BINARY);
+            cv::threshold(smag, curSearchStrong, kGocEdgeThreshold, 1.0, cv::THRESH_BINARY);
             curSearchStrong.convertTo(curSearchStrong, CV_32F);
             cv::multiply(curSearchCos, curSearchStrong, curSearchCos);   // 分子分母同掩膜
             cv::multiply(curSearchSin, curSearchStrong, curSearchSin);
@@ -714,7 +718,7 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
                     cv::magnitude(sgx, sgy, smag);
                     cv::divide(sgx, smag + 1e-6f, curSearchCos);
                     cv::divide(sgy, smag + 1e-6f, curSearchSin);
-                    cv::threshold(smag, curSearchStrong, 20.0, 1.0, cv::THRESH_BINARY);
+                    cv::threshold(smag, curSearchStrong, kGocEdgeThreshold, 1.0, cv::THRESH_BINARY);
                     curSearchStrong.convertTo(curSearchStrong, CV_32F);
                     cv::multiply(curSearchCos, curSearchStrong, curSearchCos);   // 分子分母同掩膜
                     cv::multiply(curSearchSin, curSearchStrong, curSearchSin);
@@ -918,4 +922,67 @@ void OpencvTemplateMatchNode::applyGeometryRoi(const RoiShape &shape)
         setParam(QStringLiteral("roiAngle"), 0.0);
         setParam(QStringLiteral("trainFromImage"), true);
     }
+}
+
+QVector<QPointF> OpencvTemplateMatchNode::editorFeaturePoints() const
+{
+    // 绿点 = 模板强梯度点。GOC（method=2）就是拿这些点打分；灰度法（0/1）逐像素算，
+    // 这里仍画出来给操作员看模板轮廓质量（训练向导的"角点丰富度"看的就是它）。
+    // 模板来源与 run() 同一优先级：先模板文件，再当前输入图 + ROI 现抠
+    cv::Mat tmpl;
+    const QString path = ProjectPaths::resolveExecutionPath(
+        m_params.value(QStringLiteral("templatePath"), QString()).toString()).trimmed();
+    if (!path.isEmpty())
+        tmpl = ModelCache::imageFor(path, cv::IMREAD_GRAYSCALE);
+    if (tmpl.empty()) {
+        const HObject input = getInputImage();
+        if (input.IsInitialized()) {
+            cv::Mat gray = OpencvUtil::himageToMat(HImage(input));
+            if (gray.channels() == 3)
+                cv::cvtColor(gray, gray, cv::COLOR_BGR2GRAY);
+            tmpl = extractTemplatePatch(gray, geometryRoi());
+        }
+    }
+    if (tmpl.empty())
+        return {};
+
+    cv::Mat gx, gy, mag;
+    cv::Sobel(tmpl, gx, CV_32F, 1, 0, 3);
+    cv::Sobel(tmpl, gy, CV_32F, 0, 1, 3);
+    cv::magnitude(gx, gy, mag);
+
+    const int w = tmpl.cols;
+    const int h = tmpl.rows;
+    // 点太多时按步长抽稀：视觉上仍能看出轮廓，又不至于每帧画几万个点。
+    const int stride = qMax(1, int(std::lround(std::sqrt(double(w) * double(h) / 5000.0))));
+
+    // 模板像素 → 图像坐标：轴对齐走 extractTemplatePatch 的整数直裁同一公式；
+    // 旋转框走 getRotationMatrix2D 的逆映射（与 warpTemplate 的口径一致）。
+    const RoiShape roi = geometryRoi();
+    const bool axisAligned = (roi.type != RoiType::RotatedRect) || qAbs(roi.angleDeg) < 1e-6;
+    const double cx = roi.p1.x();
+    const double cy = roi.p1.y();
+    const int x0 = int(std::floor(cx - w * 0.5 + 0.5));
+    const int y0 = int(std::floor(cy - h * 0.5 + 0.5));
+    const double rad = roi.angleDeg * 3.14159265358979323846 / 180.0;
+    const double ca = std::cos(rad);
+    const double sa = std::sin(rad);
+
+    QVector<QPointF> pts;
+    pts.reserve(qMin(6000, (w / stride + 1) * (h / stride + 1)));
+    for (int v = 0; v < h; v += stride) {
+        const float *magRow = mag.ptr<float>(v);
+        for (int u = 0; u < w; u += stride) {
+            if (magRow[u] <= float(kGocEdgeThreshold))
+                continue;
+            if (axisAligned) {
+                pts.append(QPointF(x0 + u, y0 + v));
+            } else {
+                const double lx = u - w * 0.5 + 0.5;
+                const double ly = v - h * 0.5 + 0.5;
+                pts.append(QPointF(cx + ca * lx - sa * ly, cy + sa * lx + ca * ly));
+            }
+        }
+    }
+    return pts;
 }

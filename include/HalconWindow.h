@@ -94,6 +94,8 @@ public:
     void clearRoi();
     /// ROI 主色（模板框=绿、搜索区域=青；只影响绘制，不影响数据）
     void setRoiColor(const QColor &color);
+    /// 模板特征点（图像坐标，绿点）：打开工具/选中算子时画出"这次匹配到底用了哪些点"
+    void setFeaturePoints(const QVector<QPointF> &points);
     /// 允许拖改已有 ROI 控制点（不必先点「绘制」）
     void setRoiHandleEditEnabled(bool on);
     bool isRoiHandleEditEnabled() const { return m_roiHandleEdit; }
@@ -184,6 +186,7 @@ private:
     bool m_roiEditable = false;    /// 是否处于 ROI 绘制模式
     RoiType m_roiType = RoiType::Rect;
     QColor m_roiColor {0, 200, 80}; /// ROI 主色（模板框绿 / 搜索区域青）
+    QVector<QPointF> m_featurePoints;   /// 模板特征点（图像坐标）
     RoiShape m_roiShape;           /// 当前 ROI（显示用）
     RoiShape m_roiDraft;           /// 绘制中的草稿
     bool m_roiDrawing = false;     /// 是否正在绘制

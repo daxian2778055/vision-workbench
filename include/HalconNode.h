@@ -99,6 +99,9 @@ public:
     virtual RoiShape geometryRoi() const { return RoiShape(); }
     /// 图上画完后写回参数
     virtual void applyGeometryRoi(const RoiShape &shape) { Q_UNUSED(shape); }
+    /// 编辑器可视化：该算子真正参与匹配的特征点（图像坐标）。默认无；
+    /// 模板匹配把它画成绿点——训练完能直接看到"哪些边缘被用来打分"。
+    virtual QVector<QPointF> editorFeaturePoints() const { return {}; }
     /// 是否支持掩膜涂抹（阈值/Blob 等）
     virtual bool supportsMaskEdit() const { return false; }
 

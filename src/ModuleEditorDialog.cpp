@@ -262,6 +262,8 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
         m_node->setParam(QStringLiteral("trainFromImage"), true);
         emit executeRequested();       // MainWindow: executeNodeOnce（含 reload + setResultOverlay）
         refreshTemplatePreview();      // 训练后立刻刷新模板预览
+        m_hintLabel->setText(QStringLiteral(
+            "已按 ROI 训练；图上绿点 = 模板强梯度点（GOC 用它打分，灰度法仅作质量参考）"));
     });
     connect(fitBtn, &QPushButton::clicked, m_view, &HalconWindow::fitToWindow);
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
@@ -525,6 +527,8 @@ void ModuleEditorDialog::echoGeometry()
         m_view->setRoiHandleEditEnabled(true);
     }
     applyEditTarget();
+    // 训练后的特征点：VM 模板配置里那层绿点，画的是"这次打分真正用到的边缘"
+    m_view->setFeaturePoints(hn->editorFeaturePoints());
     refreshSearchOverlay();
 }
 

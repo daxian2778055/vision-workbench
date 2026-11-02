@@ -21,4 +21,8 @@ public:
 
     /// 按几何从灰度图抠出直立模板块（轴对齐或旋转框）
     static cv::Mat extractTemplatePatch(const cv::Mat &gray, const RoiShape &roi);
+
+    /// 编辑器可视化：当前模板的强梯度点（图像坐标）。GOC 直接用这些点打分；
+    /// 灰度法只作为模板质量参考。
+    QVector<QPointF> editorFeaturePoints() const override;
 };

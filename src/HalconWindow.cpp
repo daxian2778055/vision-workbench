@@ -1079,8 +1079,26 @@ bool HalconWindow::imagePosFromWidget(const QPoint &widgetPos, QPointF &imgPos)
     return true;
 }
 
+void HalconWindow::setFeaturePoints(const QVector<QPointF> &points)
+{
+    m_featurePoints = points;
+    update();
+}
+
 void HalconWindow::drawRoiOverlay(QPainter &painter)
 {
+    // 先画特征点（绿），再把 ROI 框压在上面：现场要能一眼看出"模板到底用了哪些点"。
+    if (!m_featurePoints.isEmpty()) {
+        painter.save();
+        painter.setPen(QPen(QColor(0, 220, 120), 1));
+        for (const QPointF &p : m_featurePoints) {
+            const QPoint w = widgetPosFromImage(p);
+            if (rect().contains(w))
+                painter.drawPoint(w);
+        }
+        painter.restore();
+    }
+
     QPen pen(m_roiColor, 2);
     pen.setCosmetic(true);
     painter.setPen(pen);

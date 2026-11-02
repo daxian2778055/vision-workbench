@@ -162,6 +162,55 @@ QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *n
         }
         overlay.append(s);
     }
+
+    // 检测区域（搜索区域）：模板匹配类工具必须能一眼看到自己的搜索范围。
+    // VM 把这块放在图像区配置；我们同样画在主画布上（青框），可拖与否由编辑对象开关决定。
+    if (HalconNode *hn = qobject_cast<HalconNode *>(node)) {
+        if (hn->hasParam(QStringLiteral("searchRegionWidth"))
+            && hn->hasParam(QStringLiteral("searchRegionHeight"))) {
+            const QString poly =
+                hn->getParam(QStringLiteral("searchRegionPolygon")).toString().trimmed();
+            if (!poly.isEmpty()) {
+                QVector<QPointF> pts;
+                for (const QString &it : poly.split(QLatin1Char(' '), Qt::SkipEmptyParts)) {
+                    const QStringList xy = it.split(QLatin1Char(','));
+                    if (xy.size() == 2)
+                        pts.append(QPointF(xy[0].toDouble(), xy[1].toDouble()));
+                }
+                for (int i = 0; i + 1 < pts.size(); ++i) {
+                    OverlayShape e;
+                    e.type = OverlayShape::Type::Line;
+                    e.p1 = pts[i];
+                    e.p2 = pts[i + 1];
+                    e.color = QColor(0, 200, 255);
+                    overlay.append(e);
+                }
+                if (pts.size() >= 3) {
+                    OverlayShape e;
+                    e.type = OverlayShape::Type::Line;
+                    e.p1 = pts.last();
+                    e.p2 = pts.first();
+                    e.color = QColor(0, 200, 255);
+                    overlay.append(e);
+                }
+            } else {
+                const double col = hn->getParam(QStringLiteral("searchRegionCol")).toDouble();
+                const double row = hn->getParam(QStringLiteral("searchRegionRow")).toDouble();
+                const double w = hn->getParam(QStringLiteral("searchRegionWidth")).toDouble();
+                const double h = hn->getParam(QStringLiteral("searchRegionHeight")).toDouble();
+                if (w > 1.0 && h > 1.0) {
+                    OverlayShape box;
+                    box.type = OverlayShape::Type::RotatedRect;
+                    box.p1 = QPointF(col + w * 0.5, row + h * 0.5);
+                    box.width = w;
+                    box.height = h;
+                    box.angleDeg = 0.0;
+                    box.color = QColor(0, 200, 255);
+                    overlay.append(box);
+                }
+            }
+        }
+    }
     return overlay;
 }
 
@@ -201,6 +250,7 @@ bool ImageDisplayController::showNodeGeometry(NodeBase *node)
         m_geometryRoiNode = nullptr;
         m_searchRegionNode = nullptr;
         m_imageView->clearRoi();
+        m_imageView->setFeaturePoints({});
         m_imageView->setRoiHandleEditEnabled(false);
         return false;
     }
@@ -210,6 +260,7 @@ bool ImageDisplayController::showNodeGeometry(NodeBase *node)
     m_imageView->setRoiEditable(false);      // 只拖句柄，不进入重画模式
     m_imageView->setRoiColor(QColor(0, 200, 80));
     m_imageView->setRoiShape(hn->geometryRoi());
+    m_imageView->setFeaturePoints(hn->editorFeaturePoints());   // 主画布也能看到模板特征点
     m_imageView->setRoiHandleEditEnabled(true);
     return true;
 }
