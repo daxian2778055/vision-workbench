@@ -964,6 +964,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261102.2",
       "recorded_at": "2026-11-02",
       "recorded_note": "模板工程化第二批：模板对象/模板配置窗/多模板同时匹配/结果表7列/多形状/图像型ROI/输出掩膜/匹配中心锁定/分割剪刀/继承ROI"
+    },
+    {
+      "tag": "rc-20261102.3",
+      "commit": "bbbe54aee6b34bb5b5203549fcc2d2f4e0985579",
+      "exe_md5": "2606e0796d8144256153847308556238",
+      "exe_bytes": 10481152,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261102.3",
+      "recorded_at": "2026-11-02",
+      "recorded_note": "VM 4.4 高精度匹配对齐缺口全部闭合：多模板/模板配置窗全工具/内部参数6项/建模板自动调参/结果表7列/图像型+继承ROI/输出掩膜/匹配中心/屏蔽形状/尺度模式"
     }
   ],
   "legacy_backfilled": [
