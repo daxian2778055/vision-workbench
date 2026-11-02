@@ -73,6 +73,8 @@ private slots:
     void templateMatchUsesActiveTemplateFromList();
     // 多模板同时匹配：画布只有 B 时，开关打开后必须自动选中模板 B
     void templateMatchAllTemplatesPicksBest();
+    // 多边形/圆形模板：必须能抠出包围盒（此前多边形直接返回空 → 建模板必失败）
+    void templateShapeExtractionSupportsPolygonAndCircle();
 };
 
 namespace {
@@ -1515,6 +1517,39 @@ void FeatureMatchTest::templateMatchAllTemplatesPicksBest()
                             .arg(pcol).arg(prow)));
     QCOMPARE(sx, 1.0);
     QCOMPARE(sy, 1.0);
+}
+
+// 多边形/圆形模板的形状抠图：以前 Polygon/Circle 落到 roiAxisAlignedBounds 返回空，
+// 配置窗里画完多边形点确定只会得到"模板区域无效"。现在按包围盒直裁，形状外的像素由打分掩膜排除。
+void FeatureMatchTest::templateShapeExtractionSupportsPolygonAndCircle()
+{
+    cv::Mat img(200, 200, CV_8UC1, cv::Scalar(50));
+    cv::circle(img, cv::Point(100, 100), 60, cv::Scalar(255), 8);
+
+    RoiShape poly;
+    poly.type = RoiType::Polygon;
+    poly.points = {QPointF(60, 60), QPointF(140, 60), QPointF(100, 140)};
+    const cv::Mat polyPatch = OpencvTemplateMatchNode::extractTemplatePatch(img, poly);
+    QVERIFY2(!polyPatch.empty(), "多边形模板抠图为空（配置窗会报模板区域无效）");
+    QCOMPARE(polyPatch.cols, 80);
+    QCOMPARE(polyPatch.rows, 80);
+
+    RoiShape circ;
+    circ.type = RoiType::Circle;
+    circ.p1 = QPointF(100, 100);          // 圆心
+    circ.p2 = QPointF(160, 100);          // 半径 60
+    const cv::Mat circlePatch = OpencvTemplateMatchNode::extractTemplatePatch(img, circ);
+    QVERIFY2(!circlePatch.empty(), "圆形模板抠图为空");
+    QCOMPARE(circlePatch.cols, 120);
+    QCOMPARE(circlePatch.rows, 120);
+
+    // 形状 JSON 往返：圆/多边形都要能存进模板列表
+    TemplateEntry e;
+    e.shape = circ;
+    const TemplateEntry back = TemplateEntry::fromJson(e.toJson());
+    QCOMPARE(back.shape.type, RoiType::Circle);
+    QCOMPARE(back.shape.p1, circ.p1);
+    QCOMPARE(back.shape.p2, circ.p2);
 }
 
 QTEST_MAIN(FeatureMatchTest)

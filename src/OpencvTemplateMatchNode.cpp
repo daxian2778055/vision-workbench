@@ -41,6 +41,13 @@ QJsonObject TemplateEntry::toJson() const
         s[QStringLiteral("h")] = shape.height;
         s[QStringLiteral("angle")] = shape.angleDeg;
         break;
+    case RoiType::Circle:
+        s[QStringLiteral("type")] = QStringLiteral("circle");
+        s[QStringLiteral("cx")] = shape.p1.x();
+        s[QStringLiteral("cy")] = shape.p1.y();
+        s[QStringLiteral("ex")] = shape.p2.x();
+        s[QStringLiteral("ey")] = shape.p2.y();
+        break;
     case RoiType::Polygon: {
         s[QStringLiteral("type")] = QStringLiteral("poly");
         QJsonArray pts;
@@ -85,6 +92,12 @@ TemplateEntry TemplateEntry::fromJson(const QJsonObject &obj)
         e.shape.width = s.value(QStringLiteral("w")).toDouble();
         e.shape.height = s.value(QStringLiteral("h")).toDouble();
         e.shape.angleDeg = s.value(QStringLiteral("angle")).toDouble();
+    } else if (type == QLatin1String("circle")) {
+        e.shape.type = RoiType::Circle;
+        e.shape.p1 = QPointF(s.value(QStringLiteral("cx")).toDouble(),
+                             s.value(QStringLiteral("cy")).toDouble());
+        e.shape.p2 = QPointF(s.value(QStringLiteral("ex")).toDouble(),
+                             s.value(QStringLiteral("ey")).toDouble());
     } else if (type == QLatin1String("poly")) {
         e.shape.type = RoiType::Polygon;
         for (const QJsonValue &v : s.value(QStringLiteral("points")).toArray()) {
@@ -313,9 +326,9 @@ cv::Mat OpencvTemplateMatchNode::extractTemplatePatch(const cv::Mat &gray, const
         cv::warpAffine(gray, patch, M, cv::Size(w, h), cv::INTER_LINEAR, cv::BORDER_REPLICATE);
         return patch;
     }
-    const QRectF r = (roi.type == RoiType::Rect) ? roiAxisAlignedBounds(roi)
-                                                 : ((roi.width > 1 && roi.height > 1)
-                                                        ? roiAxisAlignedBounds(roi) : QRectF());
+    // 轴对齐的几类（矩形/多边形/圆）统一走包围盒直裁；
+    // 多边形/圆的角外内容由打分时的形状掩膜排除（见 runSingle 的 shapeMask）。
+    const QRectF r = roiAxisAlignedBounds(roi);
     if (r.width() > 1 && r.height() > 1) {
         const int x = qBound(0, int(r.x()), gray.cols - 1);
         const int y = qBound(0, int(r.y()), gray.rows - 1);
@@ -601,6 +614,32 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                        cv::INTER_AREA);
         }
 
+        // 形状掩膜：多边形/圆模板的包围盒角外内容不参与打分
+        // （否则圆模板会拿四个角去匹配，等于把"圆"当成了"方"）。
+        cv::Mat shapeMask;
+        if (active.shape.type == RoiType::Polygon || active.shape.type == RoiType::Circle) {
+            const QRectF box = roiAxisAlignedBounds(active.shape);
+            if (box.width() > 4 && box.height() > 4) {
+                shapeMask = cv::Mat::zeros(int(box.height() + 0.5), int(box.width() + 0.5), CV_8UC1);
+                if (active.shape.type == RoiType::Circle) {
+                    const double r = std::hypot(active.shape.p2.x() - active.shape.p1.x(),
+                                                active.shape.p2.y() - active.shape.p1.y());
+                    cv::circle(shapeMask,
+                               cv::Point(int(active.shape.p1.x() - box.x()),
+                                         int(active.shape.p1.y() - box.y())),
+                               int(r + 0.5), cv::Scalar(255), -1);
+                } else {
+                    std::vector<cv::Point> pts;
+                    pts.reserve(size_t(active.shape.points.size()));
+                    for (const QPointF &p : active.shape.points)
+                        pts.emplace_back(int(p.x() - box.x()), int(p.y() - box.y()));
+                    if (pts.size() >= 3)
+                        cv::fillPoly(shapeMask, std::vector<std::vector<cv::Point>>{pts},
+                                     cv::Scalar(255));
+                }
+            }
+        }
+
         // 缓存键：模板身份（尺寸 + 路径）+ 角度 + 尺度
         const QString warpKeyBase =
             QStringLiteral("%1x%2:%3")
@@ -667,6 +706,17 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 cv::Mat wm;
                 cv::threshold(wmag, wm, edgeThreshold, 1.0, cv::THRESH_BINARY);
                 wm.convertTo(wm, CV_32F);
+                if (!shapeMask.empty()) {
+                    // 掩膜与模板同一套 warp（同一 keyBase + 角度/尺度），保证像素严格对齐
+                    const auto warpedMask = warpTemplateCached(
+                        shapeMask, warpKeyBase + QStringLiteral("#shapeMask"), angle, scale);
+                    if (!warpedMask.first.empty() && warpedMask.first.size() == wm.size()) {
+                        cv::Mat keep;
+                        cv::threshold(warpedMask.first, keep, 127.0, 1.0, cv::THRESH_BINARY);
+                        keep.convertTo(keep, CV_32F);
+                        wm = wm.mul(keep);
+                    }
+                }
                 const double n = cv::sum(wm)[0];
                 if (n < 16.0)
                     return -1e9;
@@ -1283,8 +1333,10 @@ QVector<QPointF> OpencvTemplateMatchNode::featurePointsForPatch(const cv::Mat &t
     // 模板像素 → 图像坐标：轴对齐走 extractTemplatePatch 的整数直裁同一公式；
     // 旋转框走 getRotationMatrix2D 的逆映射（与 warpTemplate 的口径一致）。
     const bool axisAligned = (roi.type != RoiType::RotatedRect) || qAbs(roi.angleDeg) < 1e-6;
-    const double cx = roi.p1.x();
-    const double cy = roi.p1.y();
+    // 多边形/圆的 p1 不是中心（多边形 p1 未用、圆 p1 是圆心），统一取包围盒中心
+    const QRectF shapeBox = roiAxisAlignedBounds(roi);
+    const double cx = axisAligned ? shapeBox.center().x() : roi.p1.x();
+    const double cy = axisAligned ? shapeBox.center().y() : roi.p1.y();
     const int x0 = int(std::floor(cx - w * 0.5 + 0.5));
     const int y0 = int(std::floor(cy - h * 0.5 + 0.5));
     const double rad = roi.angleDeg * 3.14159265358979323846 / 180.0;

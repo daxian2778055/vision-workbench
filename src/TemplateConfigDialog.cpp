@@ -24,6 +24,7 @@
 #include <QPushButton>
 #include <QSpinBox>
 #include <QVBoxLayout>
+#include <cmath>
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -50,9 +51,11 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     top->addStretch();
     auto *shapeRectBtn = new QPushButton(QStringLiteral("矩形"));
     auto *shapePolyBtn = new QPushButton(QStringLiteral("多边形"));
+    auto *shapeCircleBtn = new QPushButton(QStringLiteral("圆形"));
     auto *clearShapeBtn = new QPushButton(QStringLiteral("清除形状"));
     top->addWidget(shapeRectBtn);
     top->addWidget(shapePolyBtn);
+    top->addWidget(shapeCircleBtn);
     top->addWidget(clearShapeBtn);
     root->addLayout(top);
 
@@ -143,6 +146,7 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     connect(savePathBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onPickSavePath);
     connect(shapeRectBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onPickRect);
     connect(shapePolyBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onPickPolygon);
+    connect(shapeCircleBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onPickCircle);
     connect(clearShapeBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onClearShape);
     connect(okBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onConfirm);
     connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
@@ -242,6 +246,13 @@ void TemplateConfigDialog::onPickPolygon()
     m_hint->setText(QStringLiteral("单击逐点、双击完成多边形模板区域；右键取消。"));
 }
 
+void TemplateConfigDialog::onPickCircle()
+{
+    m_view->setRoiColor(QColor(0, 200, 255));
+    m_view->setRoiEditable(true, RoiType::Circle);
+    m_hint->setText(QStringLiteral("按下定圆心、拖出半径；右键取消。"));
+}
+
 void TemplateConfigDialog::onClearShape()
 {
     m_shape = RoiShape();
@@ -277,6 +288,13 @@ void TemplateConfigDialog::refreshShapeList()
                    .arg(m_shape.angleDeg, 0, 'f', 1);
     } else if (m_shape.type == RoiType::Polygon) {
         text = QStringLiteral("多边形  %1 点").arg(m_shape.points.size());
+    } else if (m_shape.type == RoiType::Circle) {
+        const double r = std::hypot(m_shape.p2.x() - m_shape.p1.x(),
+                                    m_shape.p2.y() - m_shape.p1.y());
+        text = QStringLiteral("圆  半径 %1 @ (%2, %3)")
+                   .arg(r, 0, 'f', 1)
+                   .arg(m_shape.p1.x(), 0, 'f', 1)
+                   .arg(m_shape.p1.y(), 0, 'f', 1);
     }
     if (!text.isEmpty())
         m_list->addItem(text);

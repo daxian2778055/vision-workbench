@@ -72,5 +72,22 @@ inline QRectF roiAxisAlignedBounds(const RoiShape &s)
         return QRectF(QPointF(qMin(s.p1.x(), s.p2.x()), qMin(s.p1.y(), s.p2.y())),
                       QPointF(qMax(s.p1.x(), s.p2.x()), qMax(s.p1.y(), s.p2.y())));
     }
+    if (s.type == RoiType::Polygon && s.points.size() >= 3) {
+        double x0 = s.points[0].x(), x1 = s.points[0].x();
+        double y0 = s.points[0].y(), y1 = s.points[0].y();
+        for (const QPointF &p : s.points) {
+            x0 = qMin(x0, p.x());
+            x1 = qMax(x1, p.x());
+            y0 = qMin(y0, p.y());
+            y1 = qMax(y1, p.y());
+        }
+        return QRectF(QPointF(x0, y0), QPointF(x1, y1));
+    }
+    if (s.type == RoiType::Circle) {
+        // 圆的句柄约定：p1=圆心，p2=圆周上一点
+        const double r = std::hypot(s.p2.x() - s.p1.x(), s.p2.y() - s.p1.y());
+        if (r > 1.0)
+            return QRectF(s.p1.x() - r, s.p1.y() - r, 2.0 * r, 2.0 * r);
+    }
     return QRectF();
 }

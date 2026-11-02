@@ -38,6 +38,7 @@ public:
 private slots:
     void onPickRect();
     void onPickPolygon();
+    void onPickCircle();
     void onClearShape();
     void onRoiEdited(const RoiShape &shape);
     void onPickOtherImage();
