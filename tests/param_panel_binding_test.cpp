@@ -2449,8 +2449,9 @@ void ParamPanelBindingTest::testUnnamedFindChildSitesAreSingleCandidate()
     // → 292：输出掩膜开关 outputMask
     // → 293：ROI 创建来源 roiSource（0=绘制 / 1=继承上游）
     // → 294：尺度模式 scaleMode（0=手动 / 1=自动）
-    QVERIFY2(fieldSlots == 294,
-             qPrintable(QStringLiteral("字段槽位分母从 294 变成 %1 ⇒ 本闸口径已漂移，"
+    // → 298：结果显示四层显隐（showSearchRegion/MatchResult/MatchPoint/FeaturePoints）
+    QVERIFY2(fieldSlots == 298,
+             qPrintable(QStringLiteral("字段槽位分母从 298 变成 %1 ⇒ 本闸口径已漂移，"
                                        "先核对面板改动再把基准一起改").arg(fieldSlots)));
     QVERIFY2(badSlots.isEmpty(),
              qPrintable(QStringLiteral("U5-MULTI: %1 个字段槽位里同类型候选不止一个 ⇒ 站点 1 的无名 "

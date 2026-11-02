@@ -69,6 +69,8 @@ private:
     void refreshTemplateList();
     /// VM 结果表口径：每个命中一行（中心/匹配点/角度/尺度/分数）
     void refreshResultTable();
+    /// VM 4.4 工具窗四页签：把参数分组框/模板列表/结果表归位（仅模板匹配算子）
+    void rebuildVmTabs();
     void echoGeometry();
     /// 搜索区域（r19 批 A 第 4 步）：把 searchRegion* 画成青色框，并与结果叠加合并
     void refreshSearchOverlay();

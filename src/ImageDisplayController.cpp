@@ -65,6 +65,15 @@ bool ImageDisplayController::displayNodeOutput(NodeBase *node)
     return true;
 }
 
+namespace {
+/// 参数开关（默认开启）：未注册该键时按默认值走，避免老方案全被关掉
+bool showLayer(NodeBase *node, const char *name, bool def = true)
+{
+    const QVariant v = node->getParam(QString::fromUtf8(name));
+    return v.isValid() ? v.toBool() : def;
+}
+}   // namespace
+
 QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *node) const
 {
     QVector<OverlayShape> overlay;
@@ -147,7 +156,7 @@ QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *n
                 }
             }
             // 匹配点（模板左上角在场景中的位置）：VM 结果表里的“匹配点 X/Y”，画布上也标出来
-            if (mr.extraValues.size() >= 11) {
+            if (mr.extraValues.size() >= 11 && showLayer(node, "showMatchPoint")) {
                 OverlayShape anchor;
                 anchor.type = OverlayShape::Type::Point;
                 anchor.p1 = QPointF(mr.extraValues[8], mr.extraValues[7]);
@@ -183,10 +192,13 @@ QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *n
         overlay.append(s);
     }
 
+    // VM「结果显示 → 图像显示」各层可单独显隐（截图 4 的眼睛开关）
+
     // 模板框（只读绿框）：画布上编辑检测区域时，模板在哪必须仍然看得见。
     // 只给"同时有检测区域"的工具画，避免与别的算子的几何 ROI 重复叠一层。
     if (HalconNode *hn = qobject_cast<HalconNode *>(node)) {
-        if (hn->hasParam(QStringLiteral("searchRegionWidth"))
+        const bool showRegion = showLayer(hn, "showSearchRegion");
+        if (showRegion && hn->hasParam(QStringLiteral("searchRegionWidth"))
             && hn->geometryRoiType() != RoiType::None) {
             const RoiShape g = hn->geometryRoi();
             OverlayShape box;
@@ -215,7 +227,8 @@ QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *n
     // 检测区域（搜索区域）：模板匹配类工具必须能一眼看到自己的搜索范围。
     // VM 把这块放在图像区配置；我们同样画在主画布上（青框），可拖与否由编辑对象开关决定。
     if (HalconNode *hn = qobject_cast<HalconNode *>(node)) {
-        if (hn->hasParam(QStringLiteral("searchRegionWidth"))
+        if (showLayer(hn, "showSearchRegion")
+            && hn->hasParam(QStringLiteral("searchRegionWidth"))
             && hn->hasParam(QStringLiteral("searchRegionHeight"))) {
             const QString poly =
                 hn->getParam(QStringLiteral("searchRegionPolygon")).toString().trimmed();

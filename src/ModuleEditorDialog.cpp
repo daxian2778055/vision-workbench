@@ -6,8 +6,10 @@
 #include "OpencvTemplateMatchNode.h"
 #include "TemplateConfigDialog.h"
 #include <QAbstractItemView>
+#include <QGroupBox>
 #include <QHeaderView>
 #include <QListWidget>
+#include <QTabWidget>
 #include <QMessageBox>
 #include <QTableWidget>
 #include "OpencvUtil.h"
@@ -450,6 +452,83 @@ void ModuleEditorDialog::rebuildParamPanel()
         m_paramHost->setWidget(panel);
     }
     installParamHooks(panel);
+    rebuildVmTabs();
+}
+
+// VM 4.4 工具窗 = 基本参数 / 特征模板 / 运行参数 / 结果显示 四页（截图 1~4）。
+// 此前右侧是一长条平铺：参数组、模板列表、结果表挤在一起，看着乱。
+// 这里把面板里按 ParamSpec.group 生成的 QGroupBox 归位到四页签上；
+// 所有控件仍留在 panel 的子树里，updateParamPanel 的 findChild 查找不受影响。
+void ModuleEditorDialog::rebuildVmTabs()
+{
+    if (!qobject_cast<OpencvTemplateMatchNode *>(m_node) || !m_paramHost)
+        return;
+    QWidget *panel = m_paramHost->widget();
+    while (panel && qobject_cast<QScrollArea *>(panel))
+        panel = qobject_cast<QScrollArea *>(panel)->widget();
+    if (!panel || panel->findChild<QTabWidget *>(QStringLiteral("vmTabs"),
+                                                 Qt::FindDirectChildrenOnly))
+        return;
+
+    auto *tabs = new QTabWidget(panel);
+    tabs->setObjectName(QStringLiteral("vmTabs"));
+    auto makePage = [&](QWidget **page, QVBoxLayout **lay) {
+        *page = new QWidget();
+        *lay = new QVBoxLayout(*page);
+        (*lay)->setContentsMargins(8, 10, 8, 8);
+        (*lay)->setSpacing(8);
+    };
+    QWidget *basicPage, *tmplPage, *runPage, *resPage;
+    QVBoxLayout *basicLay, *tmplLay, *runLay, *resLay;
+    makePage(&basicPage, &basicLay);
+    makePage(&tmplPage, &tmplLay);
+    makePage(&runPage, &runLay);
+    makePage(&resPage, &resLay);
+
+    // ① 参数分组框按标题归位
+    const QList<QGroupBox *> boxes =
+        panel->findChildren<QGroupBox *>(QString(), Qt::FindDirectChildrenOnly);
+    for (QGroupBox *box : boxes) {
+        const QString t = box->title();
+        if (t == QStringLiteral("图像输入") || t == QStringLiteral("ROI区域"))
+            basicLay->addWidget(box);
+        else if (t == QStringLiteral("模板配置"))
+            tmplLay->addWidget(box);          // 模板配置参数与模板同页（VM 放在模板配置窗右下）
+        else
+            runLay->addWidget(box);
+    }
+    basicLay->addStretch();
+    runLay->addStretch();
+
+    // ② 特征模板页：预览 + 列表 + 创建/编辑/删除
+    if (m_templatePreview)
+        tmplLay->addWidget(m_templatePreview);
+    if (m_templateList)
+        tmplLay->addWidget(m_templateList, 1);
+    auto *row = new QWidget();
+    auto *rowLay = new QHBoxLayout(row);
+    rowLay->setContentsMargins(0, 0, 0, 0);
+    for (QPushButton *b : {m_tmplNewBtn, m_tmplEditBtn, m_tmplDelBtn}) {
+        if (b)
+            rowLay->addWidget(b);
+    }
+    rowLay->addStretch();
+    tmplLay->addWidget(row);
+
+    // ③ 结果显示页：结果表
+    if (m_resultTable)
+        resLay->addWidget(m_resultTable, 1);
+
+    tabs->addTab(basicPage, QStringLiteral("基本参数"));
+    tabs->addTab(tmplPage, QStringLiteral("特征模板"));
+    tabs->addTab(runPage, QStringLiteral("运行参数"));
+    tabs->addTab(resPage, QStringLiteral("结果显示"));
+
+    // ④ panel 布局清空后放页签（GroupBox 已被 addWidget 移走，剩下的是 stretch/空项）
+    QLayout *lay = panel->layout();
+    while (QLayoutItem *it = lay->takeAt(0))
+        delete it;
+    lay->addWidget(tabs);
 }
 
 void ModuleEditorDialog::refreshParamHooks()

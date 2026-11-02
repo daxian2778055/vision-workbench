@@ -290,6 +290,11 @@ void OpencvTemplateMatchNode::init()
                      QStringLiteral("ROI创建：0=绘制（searchRegion*），1=继承上游命中框")),
         makeIntParam(QStringLiteral("scaleMode"), 0, 0, 1,
                      QStringLiteral("尺度模式：0=手动（scaleMin/Max/Step），1=自动按模板占比估范围")),
+        // VM「结果显示 → 图像显示」：每一层可单独显隐（截图 4 的四个眼睛开关）
+        makeBoolParam(QStringLiteral("showSearchRegion"), true, QStringLiteral("显示检测区域")),
+        makeBoolParam(QStringLiteral("showMatchResult"), true, QStringLiteral("显示匹配结果")),
+        makeBoolParam(QStringLiteral("showMatchPoint"), true, QStringLiteral("显示匹配点")),
+        makeBoolParam(QStringLiteral("showFeaturePoints"), true, QStringLiteral("显示特征点")),
         makeDoubleParam(QStringLiteral("minScore"), 0.6, 0.0, 1.0,
                         QStringLiteral("最低匹配度")),
         // VM「配置参数」对齐（2026-11-02）：把原先写死的边缘参数放出来。
@@ -346,6 +351,29 @@ void OpencvTemplateMatchNode::init()
     makeStringParam(QStringLiteral("searchRegionPolygon"), QString(),
                     QStringLiteral("搜索区域多边形(空=用矩形)")),
 });
+
+    // VM 4.4 口径分组（对应工具窗四个页签）。此前所有参数都落在默认的「参数」一组里，
+    // 一长条平铺下来就是"看着乱"的根源；分组后每个 QGroupBox 归位到对应页签。
+    for (auto &s : m_paramSpecs) {
+        const QString &n = s.name;
+        if (n == QLatin1String("templatePath") || n == QLatin1String("trainFromImage")
+            || n == QLatin1String("method"))
+            s.group = QStringLiteral("图像输入");
+        else if (n == QLatin1String("outputMask") || n == QLatin1String("roiType")
+                 || n == QLatin1String("roiSource")
+                 || n.startsWith(QLatin1String("searchRegion")))
+            s.group = QStringLiteral("ROI区域");
+        else if (n == QLatin1String("scaleMode") || n == QLatin1String("edgeThreshold")
+                 || n == QLatin1String("autoEdgeThreshold")
+                 || n == QLatin1String("edgeAperture")
+                 || n == QLatin1String("coarseLongSide")
+                 || n == QLatin1String("minVisibleRatio"))
+            s.group = QStringLiteral("模板配置");
+        else if (n.startsWith(QLatin1String("show")))
+            s.group = QStringLiteral("结果显示");
+        else
+            s.group = QStringLiteral("运行参数");
+    }
 
     m_params[QStringLiteral("matchRow")] = 0.0;
     m_params[QStringLiteral("matchCol")] = 0.0;
