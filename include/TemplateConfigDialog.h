@@ -39,12 +39,21 @@ public:
     /// 取最大外轮廓并做多边形逼近；返回图像坐标顶点（<3 点表示失败）。
     static QVector<QPointF> wandPolygon(const cv::Mat &gray, const QPoint &seed, int tolerance);
 
+    /// 形状布尔编辑（纯函数，便于无界面测试）：
+    /// 把一块形状按连通域拆成多个多边形；hasCut=true 时先沿 cutA→cutB 擦掉一条 3px 带（剪刀）。
+    static QVector<RoiShape> splitShape(const RoiShape &shape, const QPointF &cutA = QPointF(),
+                                        const QPointF &cutB = QPointF(), bool hasCut = false);
+
 private slots:
     void onPickRect();
     void onPickPolygon();
     void onPickCircle();
     void onPickFreehand();
     void onPickWand();
+    /// 分割：把选中形状按连通域拆成多块（未选中 = 全部拆）
+    void onSplitShape();
+    /// 剪刀：画一条线，沿它把形状切开
+    void onScissors();
     /// 魔术棒：在图上点一下，按点击点做泛洪取形（容差可调）
     void onImageClicked(const QPointF &imagePos);
     void onClearShape();
@@ -75,6 +84,7 @@ private:
     QDoubleSpinBox *m_anchorY = nullptr;
     QCheckBox *m_anchorLock = nullptr;
     bool m_wandMode = false;
+    bool m_cutMode = false;        ///< 剪刀：等用户画一条线
 
     RoiShape m_shape;              ///< 主形状（=m_shapes.first()，老逻辑兼容）
     QVector<RoiShape> m_shapes;    ///< 全部形状（一个模板可由多块组成）

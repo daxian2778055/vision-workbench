@@ -60,6 +60,8 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     m_wandTol->setPrefix(QStringLiteral("容差 "));
     auto *clearShapeBtn = new QPushButton(QStringLiteral("清除形状"));
     auto *delShapeBtn = new QPushButton(QStringLiteral("删除选中"));
+    auto *splitBtn = new QPushButton(QStringLiteral("分割"));
+    auto *scissorsBtn = new QPushButton(QStringLiteral("剪刀"));
     top->addWidget(shapeRectBtn);
     top->addWidget(shapePolyBtn);
     top->addWidget(shapeCircleBtn);
@@ -68,6 +70,8 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     top->addWidget(m_wandTol);
     top->addWidget(clearShapeBtn);
     top->addWidget(delShapeBtn);
+    top->addWidget(splitBtn);
+    top->addWidget(scissorsBtn);
     root->addLayout(top);
 
     // ---- 左：图像区；右：配置参数 + 形状列表 ----
@@ -182,6 +186,8 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     connect(shapeWandBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onPickWand);
     connect(m_view, &HalconWindow::imageClicked, this, &TemplateConfigDialog::onImageClicked);
     connect(clearShapeBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onClearShape);
+    connect(splitBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onSplitShape);
+    connect(scissorsBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onScissors);
     connect(delShapeBtn, &QPushButton::clicked, this, [this]() {
         const int row = m_list->currentRow();
         if (row < 0 || row >= m_shapes.size())
@@ -376,6 +382,123 @@ QVector<QPointF> TemplateConfigDialog::wandPolygon(const cv::Mat &gray, const QP
     return out;
 }
 
+QVector<RoiShape> TemplateConfigDialog::splitShape(const RoiShape &shape, const QPointF &cutA,
+                                                  const QPointF &cutB, bool hasCut)
+{
+    QVector<RoiShape> out;
+    const QRectF box = roiAxisAlignedBounds(shape);
+    if (box.width() <= 3.0 || box.height() <= 3.0)
+        return out;
+    const int ox = int(box.x()) - 2;
+    const int oy = int(box.y()) - 2;
+    const int w = int(box.width()) + 5;
+    const int h = int(box.height()) + 5;
+    cv::Mat mask = cv::Mat::zeros(h, w, CV_8UC1);
+    auto toLocal = [&](const QPointF &p) {
+        return cv::Point(int(p.x()) - ox, int(p.y()) - oy);
+    };
+    switch (shape.type) {
+    case RoiType::Rect: {
+        const QRectF r = QRectF(shape.p1, shape.p2).normalized();
+        cv::rectangle(mask, cv::Rect(toLocal(r.topLeft()), toLocal(r.bottomRight())),
+                      cv::Scalar(255), cv::FILLED);
+        break;
+    }
+    case RoiType::RotatedRect: {
+        std::vector<cv::Point> pts;
+        for (const QPointF &p : rotatedRectCorners(shape))
+            pts.push_back(toLocal(p));
+        cv::fillConvexPoly(mask, pts, cv::Scalar(255));
+        break;
+    }
+    case RoiType::Circle: {
+        const double r = std::hypot(shape.p2.x() - shape.p1.x(), shape.p2.y() - shape.p1.y());
+        cv::circle(mask, toLocal(shape.p1), int(r + 0.5), cv::Scalar(255), cv::FILLED);
+        break;
+    }
+    case RoiType::Polygon: {
+        std::vector<cv::Point> pts;
+        for (const QPointF &p : shape.points)
+            pts.push_back(toLocal(p));
+        if (pts.size() >= 3)
+            cv::fillPoly(mask, std::vector<std::vector<cv::Point>>{pts}, cv::Scalar(255));
+        break;
+    }
+    default:
+        return out;
+    }
+    if (hasCut) {
+        // 剪刀：沿线擦掉一条 3px 带，剩下的连通域就是切开后的块
+        cv::line(mask, toLocal(cutA), toLocal(cutB), cv::Scalar(0), 3);
+    }
+
+    cv::Mat labels, stats, centroids;
+    const int n = cv::connectedComponentsWithStats(mask, labels, stats, centroids, 8, CV_32S);
+    for (int i = 1; i < n; ++i) {
+        if (stats.at<int>(i, cv::CC_STAT_AREA) < 20)
+            continue;
+        const cv::Mat comp = (labels == i);
+        std::vector<std::vector<cv::Point>> contours;
+        cv::findContours(comp, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+        if (contours.empty())
+            continue;
+        auto largest = std::max_element(
+            contours.begin(), contours.end(),
+            [](const std::vector<cv::Point> &a, const std::vector<cv::Point> &b) {
+                return cv::contourArea(a) < cv::contourArea(b);
+            });
+        std::vector<cv::Point> approx;
+        cv::approxPolyDP(*largest, approx, 1.5, true);
+        if (approx.size() < 3)
+            continue;
+        RoiShape s;
+        s.type = RoiType::Polygon;
+        for (const cv::Point &p : approx)
+            s.points.append(QPointF(p.x + ox, p.y + oy));
+        out.append(s);
+    }
+    return out;
+}
+
+void TemplateConfigDialog::onSplitShape()
+{
+    if (m_shapes.isEmpty())
+        return;
+    const int row = m_list->currentRow();
+    QVector<RoiShape> next;
+    for (int i = 0; i < m_shapes.size(); ++i) {
+        if (row >= 0 && i != row) {
+            next.append(m_shapes.at(i));          // 只拆选中的那块
+            continue;
+        }
+        const QVector<RoiShape> parts = splitShape(m_shapes.at(i));
+        if (parts.size() >= 2)
+            next += parts;
+        else
+            next.append(m_shapes.at(i));          // 拆不开（本来就是一块）就原样保留
+    }
+    const int before = m_shapes.size();
+    m_shapes = next;
+    m_shape = m_shapes.isEmpty() ? RoiShape() : m_shapes.first();
+    refreshShapeList();
+    refreshFeaturePreview();
+    m_hint->setText(QStringLiteral("分割完成：%1 块 → %2 块。").arg(before).arg(m_shapes.size()));
+}
+
+void TemplateConfigDialog::onScissors()
+{
+    if (m_shapes.isEmpty()) {
+        m_hint->setText(QStringLiteral("先画一块形状，再用剪刀沿线切开。"));
+        return;
+    }
+    m_wandMode = false;
+    m_cutMode = true;
+    m_view->setRoiFreehand(false);
+    m_view->setRoiColor(QColor(255, 180, 60));
+    m_view->setRoiEditable(true, RoiType::Line);
+    m_hint->setText(QStringLiteral("沿要切开的位置拖一条线（穿过形状），松手即切。"));
+}
+
 void TemplateConfigDialog::onImageClicked(const QPointF &imagePos)
 {
     if (!m_wandMode || m_trainGray.empty())
@@ -416,6 +539,35 @@ void TemplateConfigDialog::onRoiEdited(const RoiShape &shape)
 {
     if (shape.type == RoiType::None)
         return;
+    // 剪刀：画完一条线就沿它切开（只切选中的那块，未选中则全部）
+    if (m_cutMode && shape.type == RoiType::Line) {
+        m_cutMode = false;
+        const int row = m_list->currentRow();
+        QVector<RoiShape> next;
+        for (int i = 0; i < m_shapes.size(); ++i) {
+            if (row >= 0 && i != row) {
+                next.append(m_shapes.at(i));
+                continue;
+            }
+            const QVector<RoiShape> parts =
+                splitShape(m_shapes.at(i), shape.p1, shape.p2, true);
+            if (parts.size() >= 2)
+                next += parts;
+            else
+                next.append(m_shapes.at(i));   // 线没穿过，形状不变
+        }
+        m_shapes = next;
+        m_shape = m_shapes.isEmpty() ? RoiShape() : m_shapes.first();
+        m_view->setRoiEditable(false);
+        m_view->setRoiColor(QColor(0, 200, 255));
+        if (!m_shapes.isEmpty())
+            m_view->setRoiShape(m_shape);
+        m_view->setRoiHandleEditEnabled(true);
+        refreshShapeList();
+        refreshFeaturePreview();
+        m_hint->setText(QStringLiteral("已沿线切开：现在共 %1 块。").arg(m_shapes.size()));
+        return;
+    }
     m_shapes.append(shape);          // 多形状：每次画完追加一块，不清掉之前的
     m_shape = m_shapes.first();
     m_view->setRoiEditable(false);

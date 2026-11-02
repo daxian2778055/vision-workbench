@@ -88,6 +88,8 @@ private slots:
     void templateOutputsSearchMask();
     // 匹配中心（锚点）偏移：匹配点必须跟着锚点走（VM 的「匹配中心 X/Y」）
     void templateMatchAnchorOffsetsMatchPoint();
+    // 分割/剪刀：按连通域拆块、沿画线切开
+    void templateSplitShapeByCut();
 };
 
 namespace {
@@ -1848,6 +1850,49 @@ void FeatureMatchTest::templateMatchAnchorOffsetsMatchPoint()
     QCOMPARE(back.anchorDx, 32.0);
     QCOMPARE(back.anchorDy, -16.0);
     QVERIFY(back.anchorLocked);
+}
+
+// 模板形状的布尔编辑（VM 工具条上的「分割 / 剪刀」）：
+//   ① 分割：一块矩形 → 仍是一块（没有断点）；
+//   ② 剪刀：一条穿过它的线 → 必须切成两块，且每块面积约为一半；
+//   ③ 线没穿过 → 不许误切（仍是 1 块）。
+void FeatureMatchTest::templateSplitShapeByCut()
+{
+    auto area = [](const RoiShape &s) {
+        double a = 0.0;
+        for (int i = 0; i < s.points.size(); ++i) {
+            const QPointF &p = s.points.at(i);
+            const QPointF &q = s.points.at((i + 1) % s.points.size());
+            a += p.x() * q.y() - q.x() * p.y();
+        }
+        return std::abs(a) * 0.5;
+    };
+
+    RoiShape r;
+    r.type = RoiType::Rect;
+    r.p1 = QPointF(100, 100);
+    r.p2 = QPointF(200, 200);
+
+    const QVector<RoiShape> whole = TemplateConfigDialog::splitShape(r);
+    QCOMPARE(whole.size(), 1);
+    QVERIFY2(std::abs(area(whole.first()) - 10000.0) <= 400.0,
+             qPrintable(QStringLiteral("整块面积应≈10000，实际 %1").arg(area(whole.first()))));
+
+    const QVector<RoiShape> halves = TemplateConfigDialog::splitShape(
+        r, QPointF(150, 80), QPointF(150, 220), true);
+    qInfo("split: pieces=%d areas=%.0f/%.0f", int(halves.size()),
+          halves.isEmpty() ? 0.0 : area(halves.at(0)),
+          halves.size() < 2 ? 0.0 : area(halves.at(1)));
+    QCOMPARE(halves.size(), 2);
+    for (const RoiShape &s : halves) {
+        QVERIFY2(std::abs(area(s) - 4850.0) <= 400.0,
+                 qPrintable(QStringLiteral("切开后半块面积应≈4850，实际 %1").arg(area(s))));
+    }
+
+    // 短线只擦到角上，切不断 → 仍是一整块
+    const QVector<RoiShape> notCut = TemplateConfigDialog::splitShape(
+        r, QPointF(105, 105), QPointF(115, 105), true);
+    QCOMPARE(notCut.size(), 1);
 }
 
 QTEST_MAIN(FeatureMatchTest)
