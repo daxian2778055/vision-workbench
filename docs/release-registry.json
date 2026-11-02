@@ -973,6 +973,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261102.3",
       "recorded_at": "2026-11-02",
       "recorded_note": "VM 4.4 高精度匹配对齐缺口全部闭合：多模板/模板配置窗全工具/内部参数6项/建模板自动调参/结果表7列/图像型+继承ROI/输出掩膜/匹配中心/屏蔽形状/尺度模式"
+    },
+    {
+      "tag": "rc-20261102.4",
+      "commit": "9ddee37e60df4082ce53b3c013a2dc1ed118c3b4",
+      "exe_md5": "007d16088c5deae8a122496669bd8499",
+      "exe_bytes": 10530816,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261102.4",
+      "recorded_at": "2026-11-02",
+      "recorded_note": "VM 4.4 对齐全部闭合：参数语义/运行参数/多模板顺序/配置窗全工具/尺度XY/擦除轮廓点/匹配中心/输出掩膜/图像型ROI/继承ROI/多形状/四页签/结果显示四层显隐"
     }
   ],
   "legacy_backfilled": [
