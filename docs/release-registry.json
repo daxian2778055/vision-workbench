@@ -927,7 +927,16 @@
       "exe_bytes": 10264064,
       "package_dir": "dist/VisionFlowPlatform-rc-20261031.17",
       "recorded_at": "2026-11-01",
-      "recorded_note": "当前装机包：工作流四要素齐（ROI 矩形/多边形 + 角度范围 + 缩放范围 + 极性）+ 输出 score/X/Y/角度/缩放/多目标 + warp 恒等根因修复（真图 1.000/±0.4px）+ 抗遮挡 GOC + 亚像素 + 训练向导四段"
+      "recorded_note": "门禁 GREEN。该包已被 rc-20261031.18 取代（后者统一输出端口 + 绘制入口诊断）"
+    },
+    {
+      "tag": "rc-20261031.18",
+      "commit": "05d254c8b3e190c906efb9dc76cc61b890b83292",
+      "exe_md5": "b7e16c42edc6198fec7490c20cd590e3",
+      "exe_bytes": 10264064,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261031.18",
+      "recorded_at": "2026-11-02",
+      "recorded_note": "当前装机包：统一输出端口（模板匹配只留匹配结果一个输出点）+ 绘制入口诊断反馈（多边形/搜索区域点了没反应时会提示原因）。待做：多边形草稿交互若仍失败需加计数日志；B 批（搜索框可拖/点工具显示 ROI/训练后轮廓点）；C 批（ROI 跟随位置修正）"
     }
   ],
   "legacy_backfilled": [
