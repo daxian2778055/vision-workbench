@@ -763,10 +763,16 @@ void FeatureMatchTest::templateMatchFindsMultipleInstances()
     QCOMPARE(items.size(), count);
     for (const QString &it : items) {
         const QStringList f = it.split(QLatin1Char(','));
-        QCOMPARE(f.size(), 3);
+        QVERIFY2(f.size() >= 7,
+                 qPrintable(QStringLiteral("matchList 应含 角度/尺度/匹配点（实际 %1 项）").arg(f.size())));
         const double row = f[0].toDouble();
         const double col = f[1].toDouble();
         const double score = f[2].toDouble();
+        // 角度 0、尺度 1：匹配点 = 中心 - 半宽/半高
+        QVERIFY2(qAbs(f[6].toDouble() - (col - kTemplateSize / 2.0)) <= 2.0
+                     && qAbs(f[5].toDouble() - (row - kTemplateSize / 2.0)) <= 2.0,
+                 qPrintable(QStringLiteral("匹配点与中心不符：中心(%1,%2) 匹配点(%3,%4)")
+                                .arg(col).arg(row).arg(f[6].toDouble()).arg(f[5].toDouble())));
         QVERIFY2(score > 0.5, "多目标里有低于阈值的实例");
         bool nearOk = false;
         for (const Pt &c : centers) {
@@ -1141,7 +1147,7 @@ void FeatureMatchTest::templateMatchMaskMovesBestHit()
     int nearLeft = 0, nearRight = 0;
     for (const QString &it : list0.split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
         const QStringList f = it.split(QLatin1Char(','));
-        QCOMPARE(f.size(), 3);                    // row,col,score
+        QVERIFY(f.size() >= 3);                   // row,col,score[,angle,scale,prow,pcol]
         const double row = f[0].toDouble();
         const double col = f[1].toDouble();
         if (qAbs(col - leftCx) <= 8.0 && qAbs(row - leftCy) <= 8.0) ++nearLeft;
@@ -1171,7 +1177,7 @@ void FeatureMatchTest::templateMatchMaskMovesBestHit()
     const QStringList items1 = list1.split(QLatin1Char(';'), Qt::SkipEmptyParts);
     QCOMPARE(items1.size(), 1);
     const QStringList f1 = items1.first().split(QLatin1Char(','));
-    QCOMPARE(f1.size(), 3);
+    QVERIFY(f1.size() >= 3);
     const double row1 = f1[0].toDouble();
     const double col1 = f1[1].toDouble();
     const double score1 = f1[2].toDouble();

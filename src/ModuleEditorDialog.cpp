@@ -5,8 +5,11 @@
 #include "HalconNode.h"
 #include "OpencvTemplateMatchNode.h"
 #include "TemplateConfigDialog.h"
+#include <QAbstractItemView>
+#include <QHeaderView>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QTableWidget>
 #include "OpencvUtil.h"
 #include "DataObject.h"
 #include "FlowScene.h"
@@ -181,6 +184,19 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     tmplBtns->addWidget(m_tmplDelBtn);
     rightLay->addLayout(tmplBtns);
 
+    // VM 结果表口径：每个命中一行，列 = 序号/中心X/中心Y/匹配点X/匹配点Y/角度/尺度X/尺度Y/分数
+    m_resultTable = new QTableWidget(0, 9);
+    m_resultTable->setHorizontalHeaderLabels(
+        {QStringLiteral("序号"), QStringLiteral("中心X"), QStringLiteral("中心Y"),
+         QStringLiteral("匹配点X"), QStringLiteral("匹配点Y"), QStringLiteral("角度"),
+         QStringLiteral("尺度X"), QStringLiteral("尺度Y"), QStringLiteral("分数")});
+    m_resultTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_resultTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_resultTable->verticalHeader()->setVisible(false);
+    m_resultTable->horizontalHeader()->setStretchLastSection(true);
+    m_resultTable->setMaximumHeight(130);
+    rightLay->addWidget(m_resultTable);
+
     m_paramHost = new QScrollArea();
     m_paramHost->setWidgetResizable(true);
     // 参数区只允许纵向滚动：横向滚动条强制关闭（参数被横向裁切/来回滚看的体验根因）
@@ -257,6 +273,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     m_tmplNewBtn->setVisible(isTmpl);
     m_tmplEditBtn->setVisible(isTmpl);
     m_tmplDelBtn->setVisible(isTmpl);
+    m_resultTable->setVisible(isTmpl);
 
     if (hasGeom) {
         m_hintLabel->setText(QStringLiteral(
@@ -362,6 +379,7 @@ void ModuleEditorDialog::reloadFromNode()
         m_view->setMaskImage(hn->editMask());
     refreshTemplatePreview();
     refreshTemplateList();
+    refreshResultTable();
     // 程序化回填参数不应触发自动重算（否则会与用户操作形成回路）
     m_paramHookBusy = true;
     if (QWidget *panel = m_paramHost->widget())
@@ -1115,6 +1133,50 @@ void ModuleEditorDialog::onSaveTemplate()
         tmplNode->updateParamPanel(panel);
     m_hintLabel->setText(saved ? QStringLiteral("模板已保存：%1").arg(path)
                                : QStringLiteral("模板保存失败：%1").arg(path));
+}
+
+void ModuleEditorDialog::refreshResultTable()
+{
+    if (!m_resultTable)
+        return;
+    m_resultTable->setRowCount(0);
+    auto *tmplNode = qobject_cast<OpencvTemplateMatchNode *>(m_node);
+    if (!tmplNode)
+        return;
+
+    QStringList rows = tmplNode->getParam(QStringLiteral("matchList"))
+                           .toString()
+                           .split(QLatin1Char(';'), Qt::SkipEmptyParts);
+    if (rows.isEmpty() && tmplNode->getParam(QStringLiteral("matchScore")).toDouble() > 0.0) {
+        // 没有 matchList（老工程/单结果）时用单结果参数合成一行，列序与 matchList 一致
+        rows << QStringLiteral("%1,%2,%3,%4,%5,%6,%7")
+                    .arg(tmplNode->getParam(QStringLiteral("matchRow")).toDouble(), 0, 'f', 1)
+                    .arg(tmplNode->getParam(QStringLiteral("matchCol")).toDouble(), 0, 'f', 1)
+                    .arg(tmplNode->getParam(QStringLiteral("matchScore")).toDouble(), 0, 'f', 3)
+                    .arg(tmplNode->getParam(QStringLiteral("matchAngle")).toDouble(), 0, 'f', 2)
+                    .arg(tmplNode->getParam(QStringLiteral("matchScale")).toDouble(), 0, 'f', 4)
+                    .arg(tmplNode->getParam(QStringLiteral("matchPointRow")).toDouble(), 0, 'f', 1)
+                    .arg(tmplNode->getParam(QStringLiteral("matchPointCol")).toDouble(), 0, 'f', 1);
+    }
+    for (const QString &line : rows) {
+        const QStringList f = line.split(QLatin1Char(','));
+        if (f.size() < 3)
+            continue;
+        const int r = m_resultTable->rowCount();
+        m_resultTable->insertRow(r);
+        auto set = [&](int col, const QString &text) {
+            m_resultTable->setItem(r, col, new QTableWidgetItem(text));
+        };
+        set(0, QString::number(r + 1));
+        set(1, f[1]);                                        // 匹配框中心 X
+        set(2, f[0]);                                        // 匹配框中心 Y
+        set(3, f.size() >= 7 ? f[6] : QStringLiteral("-"));   // 匹配点 X
+        set(4, f.size() >= 7 ? f[5] : QStringLiteral("-"));   // 匹配点 Y
+        set(5, f.size() >= 5 ? f[3] : QStringLiteral("-"));   // 角度
+        set(6, f.size() >= 5 ? f[4] : QStringLiteral("-"));   // 尺度 X
+        set(7, f.size() >= 5 ? f[4] : QStringLiteral("-"));   // 尺度 Y（当前等比例）
+        set(8, f[2]);                                        // 分数
+    }
 }
 
 void ModuleEditorDialog::refreshTemplateList()

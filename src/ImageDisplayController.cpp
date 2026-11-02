@@ -121,17 +121,29 @@ QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *n
                 const QStringList items = listText.split(QLatin1Char(';'), Qt::SkipEmptyParts);
                 for (int k = 1; k < items.size(); ++k) {
                     const QStringList f = items[k].split(QLatin1Char(','));
-                    if (f.size() != 3)
+                    if (f.size() < 3)
                         continue;
                     OverlayShape extra;
                     extra.type = OverlayShape::Type::RotatedRect;
                     extra.p1 = QPointF(f[1].toDouble(), f[0].toDouble());
-                    extra.width = s.width;
-                    extra.height = s.height;
-                    extra.angleDeg = s.angleDeg;
+                    // 4..7 项是后加的（角度/尺度/匹配点）；老文件只有 3 项时沿用第一实例的尺寸
+                    const double instAngle = f.size() >= 7 ? f[3].toDouble() : s.angleDeg;
+                    const double instScale = f.size() >= 7 ? f[4].toDouble() : 0.0;
+                    const double baseScale = mr.extraValues.size() >= 5 ? mr.extraValues[4] : 0.0;
+                    const double ratio = (instScale > 0.0 && baseScale > 0.0) ? instScale / baseScale : 1.0;
+                    extra.width = s.width * ratio;
+                    extra.height = s.height * ratio;
+                    extra.angleDeg = instAngle;
                     extra.color = s.color;
                     extra.text = QStringLiteral("%1").arg(f[2].toDouble(), 0, 'f', 2);
                     overlay.append(extra);
+                    if (f.size() >= 7) {
+                        OverlayShape anchor;
+                        anchor.type = OverlayShape::Type::Point;
+                        anchor.p1 = QPointF(f[6].toDouble(), f[5].toDouble());
+                        anchor.color = s.color;
+                        overlay.append(anchor);
+                    }
                 }
             }
             // 匹配点（模板左上角在场景中的位置）：VM 结果表里的“匹配点 X/Y”，画布上也标出来

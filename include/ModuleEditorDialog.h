@@ -12,6 +12,7 @@ class QScrollArea;
 class QCheckBox;
 class QListWidget;
 class QPushButton;
+class QTableWidget;
 class QTimer;
 class QToolButton;
 class QMenu;
@@ -66,6 +67,8 @@ private:
     void refreshTemplatePreview();
     /// 把节点的模板列表灌进左侧列表（当前模板高亮）
     void refreshTemplateList();
+    /// VM 结果表口径：每个命中一行（中心/匹配点/角度/尺度/分数）
+    void refreshResultTable();
     void echoGeometry();
     /// 搜索区域（r19 批 A 第 4 步）：把 searchRegion* 画成青色框，并与结果叠加合并
     void refreshSearchOverlay();
@@ -111,6 +114,7 @@ private:
     QLabel *m_hintLabel = nullptr;
     QLabel *m_templatePreview = nullptr;
     QListWidget *m_templateList = nullptr;
+    QTableWidget *m_resultTable = nullptr;
     QPushButton *m_tmplNewBtn = nullptr;
     QPushButton *m_tmplEditBtn = nullptr;
     QPushButton *m_tmplDelBtn = nullptr;

@@ -935,10 +935,27 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 mainScale = bestScale;
                 mainCenter = bestCenterInWarp;
             }
-            matchList << QStringLiteral("%1,%2,%3")
-                             .arg(bestLoc.y + bestCenterInWarp.y, 0, 'f', 1)
-                             .arg(bestLoc.x + bestCenterInWarp.x, 0, 'f', 1)
-                             .arg(bestScore, 0, 'f', 3);
+            {
+                // 列表坐标必须换算回原图（搜索区域裁剪过时，直接用 bestLoc 会整体偏一个 searchRect）。
+                // 字段：row,col,score,angle,scale,pointRow,pointCol —— 前 3 项保持老顺序。
+                const double centerX = bestLoc.x + bestCenterInWarp.x + searchRect.x;
+                const double centerY = bestLoc.y + bestCenterInWarp.y + searchRect.y;
+                const double instW = tmplW * bestScale;
+                const double instH = tmplH * bestScale;
+                const double rad = bestAngle * 3.14159265358979323846 / 180.0;
+                const double ca = std::cos(rad);
+                const double sa = std::sin(rad);
+                const double pCol = centerX + ca * (-instW * 0.5) - sa * (-instH * 0.5);
+                const double pRow = centerY + sa * (-instW * 0.5) + ca * (-instH * 0.5);
+                matchList << QStringLiteral("%1,%2,%3,%4,%5,%6,%7")
+                                 .arg(centerY, 0, 'f', 1)
+                                 .arg(centerX, 0, 'f', 1)
+                                 .arg(bestScore, 0, 'f', 3)
+                                 .arg(bestAngle, 0, 'f', 2)
+                                 .arg(bestScale, 0, 'f', 4)
+                                 .arg(pRow, 0, 'f', 1)
+                                 .arg(pCol, 0, 'f', 1);
+            }
             ++matchCount;
             foundCenters.push_back(cv::Point2f(float(bestLoc.x + bestCenterInWarp.x),
                                               float(bestLoc.y + bestCenterInWarp.y)));
