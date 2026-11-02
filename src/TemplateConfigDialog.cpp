@@ -59,6 +59,7 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     m_wandTol->setValue(30);
     m_wandTol->setPrefix(QStringLiteral("容差 "));
     auto *clearShapeBtn = new QPushButton(QStringLiteral("清除形状"));
+    auto *delShapeBtn = new QPushButton(QStringLiteral("删除选中"));
     top->addWidget(shapeRectBtn);
     top->addWidget(shapePolyBtn);
     top->addWidget(shapeCircleBtn);
@@ -66,6 +67,7 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     top->addWidget(shapeWandBtn);
     top->addWidget(m_wandTol);
     top->addWidget(clearShapeBtn);
+    top->addWidget(delShapeBtn);
     root->addLayout(top);
 
     // ---- 左：图像区；右：配置参数 + 形状列表 ----
@@ -160,6 +162,25 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     connect(shapeWandBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onPickWand);
     connect(m_view, &HalconWindow::imageClicked, this, &TemplateConfigDialog::onImageClicked);
     connect(clearShapeBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onClearShape);
+    connect(delShapeBtn, &QPushButton::clicked, this, [this]() {
+        const int row = m_list->currentRow();
+        if (row < 0 || row >= m_shapes.size())
+            return;
+        m_shapes.removeAt(row);
+        m_shape = m_shapes.isEmpty() ? RoiShape() : m_shapes.first();
+        refreshShapeList();
+        refreshFeaturePreview();
+        if (m_shapes.isEmpty())
+            m_view->clearRoi();
+    });
+    // 点列表项 → 画布上把该形状挂成 ROI（便于确认删哪一块）
+    connect(m_list, &QListWidget::currentRowChanged, this, [this](int row) {
+        if (row < 0 || row >= m_shapes.size())
+            return;
+        m_view->setRoiColor(QColor(0, 200, 255));
+        m_view->setRoiShape(m_shapes.at(row));
+        m_view->setRoiHandleEditEnabled(true);
+    });
     connect(okBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onConfirm);
     connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
     connect(m_view, &HalconWindow::roiEdited, this, &TemplateConfigDialog::onRoiEdited);

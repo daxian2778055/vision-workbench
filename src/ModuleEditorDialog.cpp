@@ -185,11 +185,12 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     rightLay->addLayout(tmplBtns);
 
     // VM 结果表口径：每个命中一行，列 = 序号/中心X/中心Y/匹配点X/匹配点Y/角度/尺度X/尺度Y/分数
-    m_resultTable = new QTableWidget(0, 9);
+    m_resultTable = new QTableWidget(0, 10);
     m_resultTable->setHorizontalHeaderLabels(
         {QStringLiteral("序号"), QStringLiteral("中心X"), QStringLiteral("中心Y"),
          QStringLiteral("匹配点X"), QStringLiteral("匹配点Y"), QStringLiteral("角度"),
-         QStringLiteral("尺度X"), QStringLiteral("尺度Y"), QStringLiteral("分数")});
+         QStringLiteral("尺度X"), QStringLiteral("尺度Y"), QStringLiteral("分数"),
+         QStringLiteral("模板")});
     m_resultTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_resultTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_resultTable->verticalHeader()->setVisible(false);
@@ -1176,6 +1177,9 @@ void ModuleEditorDialog::refreshResultTable()
         set(6, f.size() >= 5 ? f[4] : QStringLiteral("-"));   // 尺度 X
         set(7, f.size() >= 5 ? f[4] : QStringLiteral("-"));   // 尺度 Y（当前等比例）
         set(8, f[2]);                                        // 分数
+        const QString tmplName =
+            tmplNode->getParam(QStringLiteral("matchTemplateName")).toString();
+        set(9, tmplName.isEmpty() ? QStringLiteral("-") : tmplName);   // 命中模板（多模板模式）
     }
 }
 
