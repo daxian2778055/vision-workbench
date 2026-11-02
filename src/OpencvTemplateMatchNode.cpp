@@ -120,10 +120,12 @@ QJsonObject TemplateEntry::toJson() const
     for (const RoiShape &s : excludes)
         exArr.append(shapeToJsonObj(s));
     obj[QStringLiteral("excludes")] = exArr;
-    obj[QStringLiteral("edgeThreshold")] = edgeThreshold;
+    obj[QStringLiteral("contrastThreshold")] = contrastThreshold;
     obj[QStringLiteral("autoThreshold")] = autoThreshold;
-    obj[QStringLiteral("aperture")] = aperture;
-    obj[QStringLiteral("coarseLongSide")] = coarseLongSide;
+    obj[QStringLiteral("featureScale")] = featureScale;
+    obj[QStringLiteral("speedScale")] = speedScale;
+    obj[QStringLiteral("minChainLength")] = minChainLength;
+    obj[QStringLiteral("chainMode")] = chainModeAuto;
     obj[QStringLiteral("anchorX")] = anchorDx;
     obj[QStringLiteral("anchorY")] = anchorDy;
     obj[QStringLiteral("anchorLocked")] = anchorLocked;
@@ -149,10 +151,23 @@ TemplateEntry TemplateEntry::fromJson(const QJsonObject &obj)
     for (const QJsonValue &v : obj.value(QStringLiteral("excludes")).toArray())
         if (v.isObject())
             e.excludes.append(shapeFromJsonObj(v.toObject()));
-    e.edgeThreshold = obj.value(QStringLiteral("edgeThreshold")).toDouble(20.0);
-    e.autoThreshold = obj.value(QStringLiteral("autoThreshold")).toBool(true);
-    e.aperture = obj.value(QStringLiteral("aperture")).toInt(3);
-    e.coarseLongSide = obj.value(QStringLiteral("coarseLongSide")).toInt(480);
+    e.autoThreshold = obj.value(QStringLiteral("autoThreshold")).toBool(false);
+    // VM 口径字段；老 v1 JSON 只有 edgeThreshold/aperture/coarseLongSide，做一次迁移。
+    // 注意：老 edgeThreshold 是 Sobel 幅值，要 /4 换成灰度差才不改变老工程行为；
+    // 老 aperture 是 Sobel 核、老 coarseLongSide 是像素长边，与新量纲不同，一律按"不过滤/不稀疏"落地。
+    if (obj.contains(QStringLiteral("contrastThreshold")))
+        e.contrastThreshold = qBound(1, obj.value(QStringLiteral("contrastThreshold")).toInt(5), 255);
+    else
+        e.contrastThreshold =
+            qBound(1, int(obj.value(QStringLiteral("edgeThreshold")).toDouble(20.0) * 0.25 + 0.5), 255);
+    if (obj.contains(QStringLiteral("featureScale")))
+        e.featureScale = qBound(1, obj.value(QStringLiteral("featureScale")).toInt(1), 20);
+    else
+        e.featureScale = 1;                 // 老工程不稀疏（=原行为）
+    if (obj.contains(QStringLiteral("speedScale")))
+        e.speedScale = qBound(1, obj.value(QStringLiteral("speedScale")).toInt(3), 20);
+    e.minChainLength = qBound(1, obj.value(QStringLiteral("minChainLength")).toInt(1), 200);
+    e.chainModeAuto = obj.value(QStringLiteral("chainMode")).toBool(false);
     e.anchorDx = obj.value(QStringLiteral("anchorX")).toDouble(0.0);
     e.anchorDy = obj.value(QStringLiteral("anchorY")).toDouble(0.0);
     e.anchorLocked = obj.value(QStringLiteral("anchorLocked")).toBool(false);
@@ -161,9 +176,59 @@ TemplateEntry TemplateEntry::fromJson(const QJsonObject &obj)
 
 namespace {
 
-/// GOC 强梯度阈值的默认值（=原写死常量）。运行期以 edgeThreshold 参数为准，
+/// GOC 强梯度阈值的默认值（=原写死常量）。运行期以对比度阈值为准，
 /// 自动模式按模板梯度分位数覆盖；可视化与打分都必须走 effectiveEdgeThreshold()。
 constexpr double kGocEdgeThreshold = 20.0;
+
+/// VM「最小链长」+「特征尺度」的等效实现：
+///  ① 只保留连通长度 ≥ minChain 的特征链（短链是噪声/杂点，建模时丢弃）；
+///  ② 按 step×step 网格稀疏化（VM：特征尺度越大特征点越稀疏、抗形变越强）。
+/// 接受 CV_32F(1/0) 或 CV_8U，原地改写。
+void refineFeatureMask(cv::Mat &bin, int minChain, int featureScale)
+{
+    if (bin.empty())
+        return;
+    cv::Mat m8;
+    if (bin.type() == CV_32F)
+        bin.convertTo(m8, CV_8U, 255.0);
+    else {
+        m8 = bin.clone();
+        cv::threshold(m8, m8, 0, 255, cv::THRESH_BINARY);
+    }
+
+    if (minChain > 1) {
+        cv::Mat labels, stats, centroids;
+        const int n = cv::connectedComponentsWithStats(m8, labels, stats, centroids, 8, CV_32S);
+        for (int i = 1; i < n; ++i) {
+            if (stats.at<int>(i, cv::CC_STAT_AREA) < minChain)
+                m8.setTo(cv::Scalar(0), labels == i);
+        }
+    }
+
+    if (featureScale > 1) {
+        for (int y = 0; y < m8.rows; y += featureScale) {
+            for (int x = 0; x < m8.cols; x += featureScale) {
+                bool seen = false;
+                for (int j = 0; j < featureScale && y + j < m8.rows; ++j) {
+                    uchar *row = m8.ptr<uchar>(y + j);
+                    for (int i = 0; i < featureScale && x + i < m8.cols; ++i) {
+                        if (row[x + i]) {
+                            if (seen)
+                                row[x + i] = 0;
+                            else
+                                seen = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (bin.type() == CV_32F)
+        m8.convertTo(bin, CV_32F, 1.0 / 255.0);
+    else
+        bin = m8;
+}
 
 cv::Mat warpTemplate(const cv::Mat &tmpl, double angleDeg, double scale, cv::Point2f *centerOut)
 {
@@ -280,8 +345,10 @@ void OpencvTemplateMatchNode::init()
                      QStringLiteral("最多匹配个数（1=只输出最优；多件场景调大）")),
         makeBoolParam(QStringLiteral("matchAllTemplates"), false,
                       QStringLiteral("多模板同时匹配（模板列表逐个跑，取最高分）")),
-        makeDoubleParam(QStringLiteral("minVisibleRatio"), 0.4, 0.1, 1.0,
-                        QStringLiteral("链长模式：最小可见率（掩膜/遮挡后至少保留多少模板边缘点）")),
+        makeIntParam(QStringLiteral("minChainLength"), 1, 1, 200,
+                     QStringLiteral("最小链长（特征链短于此不保留）")),
+        makeBoolParam(QStringLiteral("chainMode"), false,
+                      QStringLiteral("链长模式：自动（关=用上面的最小链长）")),
         makeIntParam(QStringLiteral("roiType"), 0, 0, 1,
                      QStringLiteral("ROI区域类型：0=图形（searchRegion*），1=图像（第2个输入当掩膜）")),
         makeBoolParam(QStringLiteral("outputMask"), false,
@@ -299,16 +366,15 @@ void OpencvTemplateMatchNode::init()
                         QStringLiteral("最低匹配度")),
         // VM「配置参数」对齐（2026-11-02）：把原先写死的边缘参数放出来。
         // 默认值 = 原常量，老方案行为逐字节不变。
-        makeDoubleParam(QStringLiteral("edgeThreshold"), 20.0, 1.0, 200.0,
-                        QStringLiteral("对比度阈值（手动模式；越大只用越强的边缘）")),
+        makeIntParam(QStringLiteral("contrastThreshold"), 5, 1, 255,
+                     QStringLiteral("对比度阈值（特征点与背景的灰度差，越大淘汰越多）"),
+                     QStringLiteral("灰阶")),
         makeBoolParam(QStringLiteral("autoEdgeThreshold"), false,
-                      QStringLiteral("阈值模式：自动（按模板梯度 70 分位给阈值）")),
-        makeIntParam(QStringLiteral("edgeAperture"), 3, 3, 7,
-                     QStringLiteral("特征尺度（Sobel 核 3/5/7）"),
-                     QStringLiteral("px")),
-        makeIntParam(QStringLiteral("coarseLongSide"), 480, 240, 1600,
-                     QStringLiteral("速度尺度：粗搜长边（越小越快、越粗）"),
-                     QStringLiteral("px")),
+                      QStringLiteral("阈值模式：自动（按模板对比度自动生成）")),
+        makeIntParam(QStringLiteral("featureScale"), 1, 1, 20,
+                     QStringLiteral("特征尺度（金字塔底层粒度，越大特征点越稀疏；1 最精细）")),
+        makeIntParam(QStringLiteral("speedScale"), 3, 1, 20,
+                     QStringLiteral("速度尺度（金字塔顶层降采样倍率，越大越快越易漏检）")),
         makeIntParam(QStringLiteral("roiRow"), 0, 0, 100000,
                      QStringLiteral("模板区行（旧工程：左上；0=未设置）"), QStringLiteral("px")),
         makeIntParam(QStringLiteral("roiCol"), 0, 0, 100000,
@@ -363,11 +429,12 @@ void OpencvTemplateMatchNode::init()
                  || n == QLatin1String("roiSource")
                  || n.startsWith(QLatin1String("searchRegion")))
             s.group = QStringLiteral("ROI区域");
-        else if (n == QLatin1String("scaleMode") || n == QLatin1String("edgeThreshold")
+        else if (n == QLatin1String("scaleMode") || n == QLatin1String("contrastThreshold")
                  || n == QLatin1String("autoEdgeThreshold")
-                 || n == QLatin1String("edgeAperture")
-                 || n == QLatin1String("coarseLongSide")
-                 || n == QLatin1String("minVisibleRatio"))
+                 || n == QLatin1String("featureScale")
+                 || n == QLatin1String("speedScale")
+                 || n == QLatin1String("minChainLength")
+                 || n == QLatin1String("chainMode"))
             s.group = QStringLiteral("模板配置");
         else if (n.startsWith(QLatin1String("show")))
             s.group = QStringLiteral("结果显示");
@@ -715,14 +782,25 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
 
         // VM 对齐（2026-11-02）：边缘阈值 / 特征尺度（Sobel 核）/ 速度尺度（粗搜长边）
         // 取"当前模板"的参数（列表为空时 = 节点参数）。默认值 = 原常量，老方案行为不变。
-        const int edgeAperture = qBound(3, active.aperture, 7) | 1;
+        // ── VM 模板配置参数（官方口径，见 docs/VM4.4高精度匹配对齐规范.md）──
+        // 速度尺度(1~20) = 搜索降采样倍率；尺度模式=自动时按图像大小定（让顶层约 256px）。
+        // 特征尺度(1~20, ≤速度尺度) = 特征点提取粒度（网格稀疏化），1 最精细。
+        // 对比度阈值(1~255) = 特征点与背景的灰度差；Sobel(ksize=3) 阶跃响应 = 4×灰度差。
+        // 最小链长 = 特征链最短点数，短于此的链在建模时丢弃。
+        int speedScale = qBound(1, active.speedScale, 20);
+        if (m_params.value(QStringLiteral("scaleMode"), 1).toInt() == 1) {
+            // 自动：让粗搜降采样后长边约 640px（≈老版本 coarseLongSide=480 的档位），
+            // 再粗位置误差就会超过精修窗口，现场会看到"整体偏一截"。
+            speedScale =
+                qBound(2, int(std::lround(double(qMax(gray.cols, gray.rows)) / 640.0)), 20);
+        }
+        const int featureScale = qBound(1, qMin(active.featureScale, speedScale), 20);
+        const int sobelKsize = 3;
         const double edgeThreshold = effectiveEdgeThresholdFor(
-            tmpl, edgeAperture, active.edgeThreshold, active.autoThreshold);
-        const int coarseLongSide = qBound(240, active.coarseLongSide, 1600);
-        // 链长模式：可见率门槛（默认 0.4 = 原常量）。调高更严（遮挡多一点就判无效），
-        // 调低更容忍遮挡。
-        const double minVisibleRatio =
-            qBound(0.1, m_params.value(QStringLiteral("minVisibleRatio"), 0.4).toDouble(), 1.0);
+            tmpl, sobelKsize, active.contrastThreshold, active.autoThreshold);
+        const int minChain = active.chainModeAuto
+                                 ? qMax(2, featureScale * 2)
+                                 : qBound(1, active.minChainLength, 200);
 
         QVector<double> angles;
         QVector<double> scales;
@@ -751,10 +829,9 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         // ── 粗到细搜索（r19：对齐 VisionMaster 的做法） ──
         // 实测：1500×1000 + 208px 模板 + 31 角度，全分辨率穷举 ≈16 秒。
         // 现在先在长边≈480 的粗图上搜全部姿态，再只对最优姿态做全分辨率局部精修。
-        const int maxSide = qMax(gray.cols, gray.rows);
-        const double coarseFactor = (singleIdentity || maxSide <= coarseLongSide + 160)
-                                        ? 1.0
-                                        : double(maxSide) / double(coarseLongSide);
+        // 速度尺度 = 粗搜降采样倍率（1=不降采样）；VM：值越大越快越易漏检
+        const double coarseFactor = (singleIdentity || speedScale <= 1) ? 1.0
+                                                                        : double(speedScale);
         cv::Mat graySearch = gray;
         cv::Mat tmplSearch = tmpl;
         if (coarseFactor > 1.0) {
@@ -865,8 +942,8 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 if (curSearchCos.empty() || curSearchSin.empty() || warped.empty())
                     return -1e9;
                 cv::Mat wgx, wgy, wmag;
-                cv::Sobel(warped, wgx, CV_32F, 1, 0, edgeAperture);
-                cv::Sobel(warped, wgy, CV_32F, 0, 1, edgeAperture);
+                cv::Sobel(warped, wgx, CV_32F, 1, 0, sobelKsize);
+                cv::Sobel(warped, wgy, CV_32F, 0, 1, sobelKsize);
                 cv::magnitude(wgx, wgy, wmag);
                 cv::Mat wm;
                 cv::threshold(wmag, wm, edgeThreshold, 1.0, cv::THRESH_BINARY);
@@ -882,6 +959,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                         wm = wm.mul(keep);
                     }
                 }
+                refineFeatureMask(wm, minChain, featureScale);   // 最小链长 + 特征尺度
                 const double n = cv::sum(wm)[0];
                 if (n < 16.0)
                     return -1e9;
@@ -895,7 +973,9 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 cv::matchTemplate(curSearchSin, ws, r2, cv::TM_CCORR);
                 // 可见点数（分子已按同一掩膜屏蔽，分母也用它）
                 cv::matchTemplate(curSearchStrong, wm, rv, cv::TM_CCORR);
-                const double need = qMax(16.0, minVisibleRatio * n);   // 可见率门槛（minVisibleRatio）
+                // 可见率门槛：内部常量（非 VM 参数）。少于 40% 的模板边缘可见即判无效，
+                // 用来抗遮挡；VM 未暴露这一项，保持原写死值。
+                const double need = qMax(16.0, 0.4 * n);
                 cv::Mat scoreVis = (r1 + r2) / (rv + 1e-6f);   // cos(Δθ) 的和除以可见点数
                 scoreVis.setTo(-1.0, rv < need);           // 无效处给 -1（不会被选为最优）
                 if (m_params.value(QStringLiteral("polarity"), 1).toInt() == 0)
@@ -1033,12 +1113,13 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         const cv::Mat coarseTmplImg = tmplSearch;
         if (methodIdx == 2) {
             cv::Mat sgx, sgy, smag;
-            cv::Sobel(graySearch, sgx, CV_32F, 1, 0, edgeAperture);
-            cv::Sobel(graySearch, sgy, CV_32F, 0, 1, edgeAperture);
+            cv::Sobel(graySearch, sgx, CV_32F, 1, 0, sobelKsize);
+            cv::Sobel(graySearch, sgy, CV_32F, 0, 1, sobelKsize);
             cv::magnitude(sgx, sgy, smag);
             cv::divide(sgx, smag + 1e-6f, curSearchCos);
             cv::divide(sgy, smag + 1e-6f, curSearchSin);
             cv::threshold(smag, curSearchStrong, edgeThreshold, 1.0, cv::THRESH_BINARY);
+            refineFeatureMask(curSearchStrong, minChain, featureScale);
             curSearchStrong.convertTo(curSearchStrong, CV_32F);
             cv::multiply(curSearchCos, curSearchStrong, curSearchCos);   // 分子分母同掩膜
             cv::multiply(curSearchSin, curSearchStrong, curSearchSin);
@@ -1102,12 +1183,13 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 const cv::Mat refineTmpl = tmpl;
                 if (methodIdx == 2) {
                     cv::Mat sgx, sgy, smag;
-                    cv::Sobel(win, sgx, CV_32F, 1, 0, edgeAperture);
-                    cv::Sobel(win, sgy, CV_32F, 0, 1, edgeAperture);
+                    cv::Sobel(win, sgx, CV_32F, 1, 0, sobelKsize);
+                    cv::Sobel(win, sgy, CV_32F, 0, 1, sobelKsize);
                     cv::magnitude(sgx, sgy, smag);
                     cv::divide(sgx, smag + 1e-6f, curSearchCos);
                     cv::divide(sgy, smag + 1e-6f, curSearchSin);
                     cv::threshold(smag, curSearchStrong, edgeThreshold, 1.0, cv::THRESH_BINARY);
+            refineFeatureMask(curSearchStrong, minChain, featureScale);
                     curSearchStrong.convertTo(curSearchStrong, CV_32F);
                     cv::multiply(curSearchCos, curSearchStrong, curSearchCos);   // 分子分母同掩膜
                     cv::multiply(curSearchSin, curSearchStrong, curSearchSin);
@@ -1397,11 +1479,22 @@ QVector<TemplateEntry> OpencvTemplateMatchNode::templates() const
             e.name = QFileInfo(path).fileName();
             e.imagePath = path;
             e.shape = geometryRoi();
-            e.edgeThreshold = m_params.value(QStringLiteral("edgeThreshold"), 20.0).toDouble();
-            e.autoThreshold = m_params.value(QStringLiteral("autoEdgeThreshold"), false).toBool();
-            e.aperture = qBound(3, m_params.value(QStringLiteral("edgeAperture"), 3).toInt(), 7);
-            e.coarseLongSide =
-                qBound(240, m_params.value(QStringLiteral("coarseLongSide"), 480).toInt(), 1600);
+            e.contrastThreshold = qBound(
+                1, m_params.value(QStringLiteral("contrastThreshold"),
+                                  qMax(1, int(m_params.value(QStringLiteral("edgeThreshold"), 20.0)
+                                                  .toDouble()
+                                          * 0.25
+                                          + 0.5)))
+                       .toInt(),
+                255);
+            e.autoThreshold =
+                m_params.value(QStringLiteral("autoEdgeThreshold"), false).toBool();
+            e.featureScale =
+                qBound(1, m_params.value(QStringLiteral("featureScale"), 1).toInt(), 20);
+            e.speedScale = qBound(1, m_params.value(QStringLiteral("speedScale"), 3).toInt(), 20);
+            e.minChainLength =
+                qBound(1, m_params.value(QStringLiteral("minChainLength"), 1).toInt(), 200);
+            e.chainModeAuto = m_params.value(QStringLiteral("chainMode"), false).toBool();
             out.append(e);
         }
     }
@@ -1436,11 +1529,20 @@ TemplateEntry OpencvTemplateMatchNode::activeTemplate() const
     if (list.isEmpty()) {
         // 连 templatePath 都没有：返回一个"空模板"，调用方按原逻辑报"需要模板文件"
         TemplateEntry e;
-        e.edgeThreshold = m_params.value(QStringLiteral("edgeThreshold"), 20.0).toDouble();
+        e.contrastThreshold = qBound(
+            1, m_params.value(QStringLiteral("contrastThreshold"),
+                              qMax(1, int(m_params.value(QStringLiteral("edgeThreshold"), 20.0)
+                                              .toDouble()
+                                      * 0.25
+                                      + 0.5)))
+                   .toInt(),
+            255);
         e.autoThreshold = m_params.value(QStringLiteral("autoEdgeThreshold"), false).toBool();
-        e.aperture = qBound(3, m_params.value(QStringLiteral("edgeAperture"), 3).toInt(), 7);
-        e.coarseLongSide =
-            qBound(240, m_params.value(QStringLiteral("coarseLongSide"), 480).toInt(), 1600);
+        e.featureScale = qBound(1, m_params.value(QStringLiteral("featureScale"), 1).toInt(), 20);
+        e.speedScale = qBound(1, m_params.value(QStringLiteral("speedScale"), 3).toInt(), 20);
+        e.minChainLength =
+            qBound(1, m_params.value(QStringLiteral("minChainLength"), 1).toInt(), 200);
+        e.chainModeAuto = m_params.value(QStringLiteral("chainMode"), false).toBool();
         return e;
     }
     return list.at(activeTemplateIndex());
@@ -1459,9 +1561,11 @@ void OpencvTemplateMatchNode::migrateLegacyTemplate()
 }
 
 double OpencvTemplateMatchNode::effectiveEdgeThresholdFor(const cv::Mat &tmpl, int aperture,
-                                                          double manualThreshold, bool autoMode)
+                                                          double manualGrayDiff, bool autoMode)
 {
-    const double manual = manualThreshold;
+    // 入参是 VM 口径的「灰度差」(1~255)；Sobel(ksize=3) 的阶跃响应 = 4×灰度差，
+    // 统一在这里换算，调用方都按灰度差传值。
+    const double manual = manualGrayDiff * 4.0;
     if (!autoMode || tmpl.empty())
         return qBound(1.0, manual, 200.0);
 
@@ -1487,7 +1591,7 @@ double OpencvTemplateMatchNode::effectiveEdgeThresholdFor(const cv::Mat &tmpl, i
 double OpencvTemplateMatchNode::effectiveEdgeThreshold(const cv::Mat &tmpl, int aperture) const
 {
     const TemplateEntry e = activeTemplate();
-    return effectiveEdgeThresholdFor(tmpl, aperture, e.edgeThreshold, e.autoThreshold);
+    return effectiveEdgeThresholdFor(tmpl, aperture, e.contrastThreshold, e.autoThreshold);
 }
 
 QVector<QPointF> OpencvTemplateMatchNode::editorFeaturePoints() const
@@ -1515,9 +1619,9 @@ QVector<QPointF> OpencvTemplateMatchNode::editorFeaturePoints() const
     if (tmpl.empty())
         return {};
 
-    const int aperture = qBound(3, active.aperture, 7) | 1;
+    const int aperture = 3;
     const double threshold =
-        effectiveEdgeThresholdFor(tmpl, aperture, active.edgeThreshold, active.autoThreshold);
+        effectiveEdgeThresholdFor(tmpl, aperture, active.contrastThreshold, active.autoThreshold);
     const QVector<RoiShape> shapeList = active.allShapes();
     cv::Mat shapeMask;
     bool needMask = shapeList.size() > 1;
@@ -1527,7 +1631,11 @@ QVector<QPointF> OpencvTemplateMatchNode::editorFeaturePoints() const
     }
     if (needMask)
         shapeMask = shapesMask(shapeList, shapesBounds(shapeList));
-    return featurePointsForPatch(tmpl, geometryRoi(), threshold, aperture, shapeMask);
+    const int featureScale = qBound(1, active.featureScale, 20);
+    const int minChain = active.chainModeAuto ? qMax(2, featureScale * 2)
+                                              : qBound(1, active.minChainLength, 200);
+    return featurePointsForPatch(tmpl, geometryRoi(), threshold, aperture, shapeMask,
+                                 featureScale, minChain);
 }
 
 OpencvTemplateMatchNode::ParamSuggestion
@@ -1536,14 +1644,14 @@ OpencvTemplateMatchNode::suggestParams(const cv::Mat &tmpl)
     ParamSuggestion s;
     if (tmpl.empty())
         return s;
-    const int longSide = qMax(tmpl.cols, tmpl.rows);
-    // 特征尺度：大模板用 5（抑制细节噪声），小模板 3（保细节）
-    s.aperture = longSide >= 200 ? 5 : 3;
-    // 对比度阈值：取"非平坦像素"梯度幅值的 70 分位（只看真正的边，避免大片背景把分位数拉成 0），
-    // 落到 0.5 的整数倍。低对比模板自然给低值、高对比模板给高值。
+    // VM 口径：速度尺度/特征尺度默认取官方截图里建模板成功后的 3 / 3；
+    // 对比度阈值按模板真实对比度给（灰度差 = Sobel 幅值 / 4 的 70 分位）。
+    s.speedScale = 3;
+    s.featureScale = 3;
+    s.minChainLength = 3;
     cv::Mat gx, gy, mag;
-    cv::Sobel(tmpl, gx, CV_32F, 1, 0, s.aperture);
-    cv::Sobel(tmpl, gy, CV_32F, 0, 1, s.aperture);
+    cv::Sobel(tmpl, gx, CV_32F, 1, 0, 3);
+    cv::Sobel(tmpl, gy, CV_32F, 0, 1, 3);
     cv::magnitude(gx, gy, mag);
     std::vector<float> edges;
     edges.reserve(size_t(mag.total()) / 4);
@@ -1551,19 +1659,17 @@ OpencvTemplateMatchNode::suggestParams(const cv::Mat &tmpl)
         const float *row = mag.ptr<float>(y);
         for (int x = 0; x < mag.cols; ++x) {
             if (row[x] > 2.0f)
-                edges.push_back(row[x]);
+                edges.push_back(row[x] * 0.25f);   // Sobel → 灰度差
         }
     }
-    double t = kGocEdgeThreshold;
+    double t = 20.0;
     if (!edges.empty()) {
         const size_t k = size_t(double(edges.size()) * 0.7);
         std::nth_element(edges.begin(), edges.begin() + k, edges.end());
         t = edges[k];
     }
-    s.edgeThreshold = qBound(6.0, std::round(t * 2.0) / 2.0, 80.0);
+    s.contrastThreshold = qBound(1, int(std::round(t)), 255);
     s.autoThreshold = false;          // 给的是具体数字，操作员能看懂也能改
-    // 速度尺度：粗搜长边 ≈ 模板长边 × 4（粗图上模板仍有 ~32px，不会糊成一团）
-    s.coarseLongSide = qBound(240, longSide * 4, 1600);
     return s;
 }
 
@@ -1589,19 +1695,21 @@ bool OpencvTemplateMatchNode::applySuggestedParams()
     if (tmpl.empty())
         return false;
     const ParamSuggestion s = suggestParams(tmpl);
-    m_params[QStringLiteral("edgeThreshold")] = s.edgeThreshold;
+    m_params[QStringLiteral("contrastThreshold")] = s.contrastThreshold;
     m_params[QStringLiteral("autoEdgeThreshold")] = s.autoThreshold;
-    m_params[QStringLiteral("edgeAperture")] = s.aperture;
-    m_params[QStringLiteral("coarseLongSide")] = s.coarseLongSide;
+    m_params[QStringLiteral("featureScale")] = s.featureScale;
+    m_params[QStringLiteral("speedScale")] = s.speedScale;
+    m_params[QStringLiteral("minChainLength")] = s.minChainLength;
     // 当前模板对象也同步：否则列表里的模板仍用旧参数
     QVector<TemplateEntry> list = templates();
     if (!list.isEmpty()) {
         const int idx = activeTemplateIndex();
         if (idx >= 0 && idx < list.size()) {
-            list[idx].edgeThreshold = s.edgeThreshold;
+            list[idx].contrastThreshold = s.contrastThreshold;
             list[idx].autoThreshold = s.autoThreshold;
-            list[idx].aperture = s.aperture;
-            list[idx].coarseLongSide = s.coarseLongSide;
+            list[idx].featureScale = s.featureScale;
+            list[idx].speedScale = s.speedScale;
+            list[idx].minChainLength = s.minChainLength;
             setTemplates(list);
         }
     }
@@ -1682,7 +1790,8 @@ cv::Mat OpencvTemplateMatchNode::shapesMask(const QVector<RoiShape> &shapes, con
 QVector<QPointF> OpencvTemplateMatchNode::featurePointsForPatch(const cv::Mat &tmpl,
                                                                const RoiShape &roi,
                                                                double threshold, int aperture,
-                                                               const cv::Mat &mask)
+                                                               const cv::Mat &mask,
+                                                               int featureScale, int minChain)
 {
     if (tmpl.empty())
         return {};
@@ -1690,6 +1799,10 @@ QVector<QPointF> OpencvTemplateMatchNode::featurePointsForPatch(const cv::Mat &t
     cv::Sobel(tmpl, gx, CV_32F, 1, 0, qBound(3, aperture, 7) | 1);
     cv::Sobel(tmpl, gy, CV_32F, 0, 1, qBound(3, aperture, 7) | 1);
     cv::magnitude(gx, gy, mag);
+    // 与打分同一套提纯：最小链长 + 特征尺度稀疏化（否则"看到的点"和"打分的点"又分叉）
+    cv::Mat strong;
+    cv::threshold(mag, strong, threshold, 1.0, cv::THRESH_BINARY);
+    refineFeatureMask(strong, minChain, featureScale);
 
     const int w = tmpl.cols;
     const int h = tmpl.rows;
@@ -1712,9 +1825,9 @@ QVector<QPointF> OpencvTemplateMatchNode::featurePointsForPatch(const cv::Mat &t
     QVector<QPointF> pts;
     pts.reserve(qMin(6000, (w / stride + 1) * (h / stride + 1)));
     for (int v = 0; v < h; v += stride) {
-        const float *magRow = mag.ptr<float>(v);
+        const float *strongRow = strong.ptr<float>(v);
         for (int u = 0; u < w; u += stride) {
-            if (magRow[u] <= float(threshold))
+            if (strongRow[u] <= 0.5f)
                 continue;
             // 形状掩膜外（多形状/圆/多边形的角外）不算特征点——与打分口径一致
             if (!mask.empty() && mask.type() == CV_8U && mask.size() == tmpl.size()

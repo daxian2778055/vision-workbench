@@ -319,9 +319,9 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
                     tmplNode->updateParamPanel(panel);
                 const QString hint = QStringLiteral(
                     "已训练，并按模板自动给出参数：阈值 %1 / 特征尺度 %2 / 速度尺度 %3")
-                                         .arg(tmplNode->getParam(QStringLiteral("edgeThreshold")).toDouble())
-                                         .arg(tmplNode->getParam(QStringLiteral("edgeAperture")).toInt())
-                                         .arg(tmplNode->getParam(QStringLiteral("coarseLongSide")).toInt());
+                                         .arg(tmplNode->getParam(QStringLiteral("contrastThreshold")).toInt())
+                                         .arg(tmplNode->getParam(QStringLiteral("featureScale")).toInt())
+                                         .arg(tmplNode->getParam(QStringLiteral("speedScale")).toInt());
                 m_hintLabel->setText(hint);
                 return;
             }
@@ -1310,10 +1310,10 @@ void ModuleEditorDialog::onTemplateSelected(int row)
     tmplNode->setActiveTemplateIndex(row);
     // 与老字段同步：run() 兜底路径、参数面板、其它读 templatePath 的代码都按当前模板走
     tmplNode->setParam(QStringLiteral("templatePath"), e.imagePath);
-    tmplNode->setParam(QStringLiteral("edgeThreshold"), e.edgeThreshold);
+    tmplNode->setParam(QStringLiteral("contrastThreshold"), e.contrastThreshold);
     tmplNode->setParam(QStringLiteral("autoEdgeThreshold"), e.autoThreshold);
-    tmplNode->setParam(QStringLiteral("edgeAperture"), e.aperture);
-    tmplNode->setParam(QStringLiteral("coarseLongSide"), e.coarseLongSide);
+    tmplNode->setParam(QStringLiteral("featureScale"), e.featureScale);
+    tmplNode->setParam(QStringLiteral("speedScale"), e.speedScale);
 
     // 模板框跟着当前模板的形状走（applyGeometryRoi 会顺手把 trainFromImage 打开，
     // 这里必须还原——切模板不等于"要重新训练"）。

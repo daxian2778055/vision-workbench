@@ -21,10 +21,17 @@ struct TemplateEntry
     double anchorDx = 0.0;
     double anchorDy = 0.0;
     bool anchorLocked = false;          ///< 仅约束编辑器里的 X/Y 输入框（锁定后不可改）
-    double edgeThreshold = 20.0;        ///< 对比度阈值（手动模式）
-    bool autoThreshold = true;          ///< 阈值模式：true=自动（模板梯度分位数）
-    int aperture = 3;                   ///< 特征尺度（Sobel 核 3/5/7）
-    int coarseLongSide = 480;           ///< 速度尺度（粗搜长边）
+    // ── VM「模板配置参数」官方口径（见 docs/VM4.4高精度匹配对齐规范.md）──
+    // 注：VM 用图像金字塔顶层/底层；我们没有金字塔，按等效效果实现（在规范里注明）。
+    // 默认值刻意取"老方案等效"：阈值 5 灰度差 ≈ Sobel 20（原常量）、不稀疏、不过滤。
+    // VM 口径的 3/3/20 由「建模板时的自动建议」给（suggestParams），不动存量工程。
+    int contrastThreshold = 5;          ///< 对比度阈值 1~255：特征点与背景的灰度差
+    bool autoThreshold = false;         ///< 阈值模式：true=自动（按模板对比度自动生成）
+    int featureScale = 1;               ///< 特征尺度 1~20（≤速度尺度）：特征点提取粒度，1 最精细
+    int speedScale = 3;                 ///< 速度尺度 1~20：搜索降采样倍率，越大越快越易漏检
+    int minChainLength = 1;             ///< 最小链长：特征链短于此长度不保留
+    bool chainModeAuto = false;         ///< 链长模式：true=自动（按特征尺度给）
+    // 老字段（v1 JSON 兼容，fromJson 迁移到上面）：edgeThreshold/autoThreshold/aperture/coarseLongSide
 
     QJsonObject toJson() const;
     static TemplateEntry fromJson(const QJsonObject &obj);
@@ -85,16 +92,18 @@ public:
     /// mask 非空且尺寸与模板块一致时，掩膜外（值为 0）的点被跳过。
     static QVector<QPointF> featurePointsForPatch(const cv::Mat &tmpl, const RoiShape &roi,
                                                   double threshold, int aperture,
-                                                  const cv::Mat &mask = cv::Mat());
+                                                  const cv::Mat &mask = cv::Mat(),
+                                                  int featureScale = 1, int minChain = 1);
 
     /// 建/改模板后的参数建议（VM「创建模板成功 → 参数自动变成 8.0/2/37」同款口径）。
     /// 目的：操作员画完模板就能直接跑，不必自己猜 4 个边缘参数。
     struct ParamSuggestion
     {
-        double edgeThreshold = 20.0;
-        bool autoThreshold = false;
-        int aperture = 3;
-        int coarseLongSide = 480;
+        int contrastThreshold = 20;   ///< 对比度阈值（灰度差 1~255）
+        bool autoThreshold = true;    ///< 阈值模式：自动
+        int featureScale = 3;         ///< 特征尺度 1~20
+        int speedScale = 3;           ///< 速度尺度 1~20
+        int minChainLength = 3;       ///< 最小链长
     };
     static ParamSuggestion suggestParams(const cv::Mat &tmpl);
     /// 按当前模板算建议值并写回节点参数（训练/建模板后调用）；模板不可用时返回 false

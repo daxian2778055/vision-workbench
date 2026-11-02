@@ -111,18 +111,19 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     m_autoChk->setChecked(true);
     makeRow(QStringLiteral("阈值模式"), m_autoChk);
     m_edgeSpin = new QDoubleSpinBox();
-    m_edgeSpin->setRange(1.0, 200.0);
-    m_edgeSpin->setDecimals(1);
+    m_edgeSpin->setRange(1.0, 255.0);      // VM：对比度阈值 = 灰度差 1~255
+    m_edgeSpin->setDecimals(0);
     m_edgeSpin->setValue(20.0);
-    makeRow(QStringLiteral("对比度阈值"), m_edgeSpin);
+    makeRow(QStringLiteral("对比度阈值（灰度差）"), m_edgeSpin);
     m_apertureCombo = new QComboBox();
-    m_apertureCombo->addItems({QStringLiteral("3"), QStringLiteral("5"), QStringLiteral("7")});
-    makeRow(QStringLiteral("特征尺度"), m_apertureCombo);
+    for (int i = 1; i <= 20; ++i)          // VM：特征尺度 1~20，1 最精细
+        m_apertureCombo->addItem(QString::number(i));
+    m_apertureCombo->setCurrentText(QStringLiteral("3"));
+    makeRow(QStringLiteral("特征尺度（1~20）"), m_apertureCombo);
     m_coarseSpin = new QSpinBox();
-    m_coarseSpin->setRange(240, 1600);
-    m_coarseSpin->setSingleStep(40);
-    m_coarseSpin->setValue(480);
-    makeRow(QStringLiteral("速度尺度（粗搜长边）"), m_coarseSpin);
+    m_coarseSpin->setRange(1, 20);         // VM：速度尺度 1~20（金字塔顶层降采样倍率）
+    m_coarseSpin->setValue(3);
+    makeRow(QStringLiteral("速度尺度（1~20）"), m_coarseSpin);
     rightLay->addLayout(form);
 
     // VM「匹配中心 + 锁定」：锚点相对模板中心的偏移，结果里的「匹配点」就是它落到场景的位置
@@ -265,12 +266,10 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
             m_excludes = e.excludes;
             m_shape = m_shapes.isEmpty() ? RoiShape() : m_shapes.first();
             m_savePath = e.imagePath;
-            m_edgeSpin->setValue(e.edgeThreshold);
+            m_edgeSpin->setValue(e.contrastThreshold);
             m_autoChk->setChecked(e.autoThreshold);
-            const int idx = m_apertureCombo->findText(QString::number(e.aperture));
-            if (idx >= 0)
-                m_apertureCombo->setCurrentIndex(idx);
-            m_coarseSpin->setValue(e.coarseLongSide);
+            m_apertureCombo->setCurrentText(QString::number(qBound(1, e.featureScale, 20)));
+            m_coarseSpin->setValue(qBound(1, e.speedScale, 20));
             m_anchorX->setValue(e.anchorDx);
             m_anchorY->setValue(e.anchorDy);
             m_anchorLock->setChecked(e.anchorLocked);
@@ -736,17 +735,15 @@ void TemplateConfigDialog::applySuggestedParams()
         return;
     const OpencvTemplateMatchNode::ParamSuggestion s =
         OpencvTemplateMatchNode::suggestParams(patch);
-    const int idx = m_apertureCombo->findText(QString::number(s.aperture));
-    if (idx >= 0)
-        m_apertureCombo->setCurrentIndex(idx);
-    m_coarseSpin->setValue(s.coarseLongSide);
+    m_apertureCombo->setCurrentText(QString::number(s.featureScale));
+    m_coarseSpin->setValue(s.speedScale);
     if (!m_autoChk->isChecked())
-        m_edgeSpin->setValue(s.edgeThreshold);
+        m_edgeSpin->setValue(s.contrastThreshold);
     m_hint->setText(QStringLiteral(
-        "已按模板自动给出建议参数：阈值 %1 / 特征尺度 %2 / 速度尺度 %3（可再调）。")
-                        .arg(s.edgeThreshold)
-                        .arg(s.aperture)
-                        .arg(s.coarseLongSide));
+        "已按模板自动给出建议参数：对比度阈值 %1 / 特征尺度 %2 / 速度尺度 %3（可再调）。")
+                        .arg(s.contrastThreshold)
+                        .arg(s.featureScale)
+                        .arg(s.speedScale));
 }
 
 void TemplateConfigDialog::refreshFeaturePreview()
@@ -842,10 +839,10 @@ void TemplateConfigDialog::onConfirm()
     entry.shapes = m_shapes;             // 多形状模板
     entry.excludes = m_excludes;         // 屏蔽形状：最终掩膜 = 保留 − 屏蔽
     entry.shape = m_shapes.isEmpty() ? RoiShape() : m_shapes.first();   // 老字段 = 第一块
-    entry.edgeThreshold = m_edgeSpin->value();
+    entry.contrastThreshold = int(m_edgeSpin->value());
     entry.autoThreshold = m_autoChk->isChecked();
-    entry.aperture = m_apertureCombo->currentText().toInt();
-    entry.coarseLongSide = m_coarseSpin->value();
+    entry.featureScale = m_apertureCombo->currentText().toInt();
+    entry.speedScale = m_coarseSpin->value();
     entry.anchorDx = m_anchorX->value();
     entry.anchorDy = m_anchorY->value();
     entry.anchorLocked = m_anchorLock->isChecked();
@@ -861,10 +858,10 @@ void TemplateConfigDialog::onConfirm()
     m_node->setActiveTemplateIndex(active);
     // 与老字段同步：run() 的兜底路径、面板显示、其它读取 templatePath 的代码都还有效
     m_node->setParam(QStringLiteral("templatePath"), savePath);
-    m_node->setParam(QStringLiteral("edgeThreshold"), entry.edgeThreshold);
+    m_node->setParam(QStringLiteral("contrastThreshold"), entry.contrastThreshold);
     m_node->setParam(QStringLiteral("autoEdgeThreshold"), entry.autoThreshold);
-    m_node->setParam(QStringLiteral("edgeAperture"), entry.aperture);
-    m_node->setParam(QStringLiteral("coarseLongSide"), entry.coarseLongSide);
+    m_node->setParam(QStringLiteral("featureScale"), entry.featureScale);
+    m_node->setParam(QStringLiteral("speedScale"), entry.speedScale);
 
     QMessageBox::information(this, QStringLiteral("模板配置"),
                              QStringLiteral("创建模板成功：%1").arg(entry.name));

@@ -96,10 +96,12 @@ private slots:
     void templateWandPlusAppends();
     // 建模板后的参数建议：低对比给低阈值、大模板给大特征尺度
     void templateSuggestParamsFollowsTemplate();
+    // VM 特征尺度/最小链长：特征点必须真的随参数变稀疏、短链被丢弃
+    void templateFeatureScaleAndChainLengthFilterPoints();
     // 屏蔽形状：最终掩膜 = 保留 − 屏蔽
     void templateExcludeShapesSubtractFromMask();
     // 尺度模式=自动：按模板占比估出搜索范围，能命中 1.15 倍实例
-    void templateAutoScaleModeFindsScaledInstance();
+    void templateScaleRangeFindsScaledInstance();
 };
 
 namespace {
@@ -1325,17 +1327,21 @@ void FeatureMatchTest::templateMatchEdgeThresholdTakesEffect()
     node.setParam(QStringLiteral("roiAngle"), 0.0);
     node.setInputImage(OpencvUtil::matToHimage(img));
 
-    node.setParam(QStringLiteral("edgeThreshold"), 20.0);
+    // 对比度阈值 = 特征点与背景的灰度差（VM 1~255）。这条低对比边灰度差 ≈ 10，
+    // Sobel 响应 ≈ 40；阈值 5（Sobel 20）应保留、20（Sobel 80）应淘汰。
+    // 阈值模式必须先切到手动（VM 默认是自动，自动会覆盖手填值）。
+    node.setParam(QStringLiteral("autoEdgeThreshold"), false);
+    node.setParam(QStringLiteral("contrastThreshold"), 5);
     const int n20 = node.editorFeaturePoints().size();
-    node.setParam(QStringLiteral("edgeThreshold"), 60.0);
+    node.setParam(QStringLiteral("contrastThreshold"), 20);
     const int n60 = node.editorFeaturePoints().size();
-    qInfo("edge-threshold: t=20 -> %d 点, t=60 -> %d 点", n20, n60);
-    QVERIFY2(n20 > 0, "对比度阈值 20 时低对比边应当被当成特征点");
-    QVERIFY2(n60 == 0, qPrintable(QStringLiteral("阈值 60 时不应再留点（实际 %1 个）⇒ "
-                                                 "edgeThreshold 没接进评分").arg(n60)));
+    qInfo("edge-threshold: t=5 -> %d 点, t=20 -> %d 点", n20, n60);
+    QVERIFY2(n20 > 0, "对比度阈值 5 时低对比边应当被当成特征点");
+    QVERIFY2(n60 == 0, qPrintable(QStringLiteral("阈值 20 时不应再留点（实际 %1 个）⇒ "
+                                                 "对比度阈值没接进评分").arg(n60)));
 
-    // 阈值模式=自动：按模板梯度分位数给值，这条低对比边仍应被判为特征点
-    node.setParam(QStringLiteral("edgeThreshold"), 150.0);
+    // 阈值模式=自动：按模板对比度自动生成，这条低对比边仍应被判为特征点
+    node.setParam(QStringLiteral("contrastThreshold"), 255);
     node.setParam(QStringLiteral("autoEdgeThreshold"), true);
     const int nAuto = node.editorFeaturePoints().size();
     qInfo("edge-threshold: auto -> %d 点", nAuto);
@@ -1353,10 +1359,11 @@ void FeatureMatchTest::templateEntryRoundTripAndLegacyMigration()
     e.shape.width = 96.0;
     e.shape.height = 64.0;
     e.shape.angleDeg = 12.5;
-    e.edgeThreshold = 33.0;
+    e.contrastThreshold = 33;
     e.autoThreshold = false;
-    e.aperture = 5;
-    e.coarseLongSide = 640;
+    e.featureScale = 5;
+    e.speedScale = 7;
+    e.minChainLength = 9;
 
     const TemplateEntry back = TemplateEntry::fromJson(e.toJson());
     QCOMPARE(back.name, e.name);
@@ -1366,20 +1373,21 @@ void FeatureMatchTest::templateEntryRoundTripAndLegacyMigration()
     QCOMPARE(back.shape.width, e.shape.width);
     QCOMPARE(back.shape.height, e.shape.height);
     QCOMPARE(back.shape.angleDeg, e.shape.angleDeg);
-    QCOMPARE(back.edgeThreshold, e.edgeThreshold);
+    QCOMPARE(back.contrastThreshold, e.contrastThreshold);
     QCOMPARE(back.autoThreshold, e.autoThreshold);
-    QCOMPARE(back.aperture, e.aperture);
-    QCOMPARE(back.coarseLongSide, e.coarseLongSide);
+    QCOMPARE(back.featureScale, e.featureScale);
+    QCOMPARE(back.speedScale, e.speedScale);
+    QCOMPARE(back.minChainLength, e.minChainLength);
 
     // 老方案：只有一个 templatePath → templates() 自动合成一条，migrate 后落库
     OpencvTemplateMatchNode node;
     node.init();
     node.setParam(QStringLiteral("templatePath"), QStringLiteral("templates/legacy.png"));
-    node.setParam(QStringLiteral("edgeThreshold"), 44.0);
+    node.setParam(QStringLiteral("contrastThreshold"), 44);
     const QVector<TemplateEntry> legacy = node.templates();
     QCOMPARE(legacy.size(), 1);
     QCOMPARE(legacy.first().imagePath, QStringLiteral("templates/legacy.png"));
-    QCOMPARE(legacy.first().edgeThreshold, 44.0);
+    QCOMPARE(legacy.first().contrastThreshold, 44);
     QVERIFY(node.getParam(QStringLiteral("templates")).toString().isEmpty());   // 只读不写
 
     node.migrateLegacyTemplate();
@@ -1601,9 +1609,9 @@ void FeatureMatchTest::templateWandPolygonFollowsRegion()
     QVERIFY(TemplateConfigDialog::wandPolygon(cv::Mat(), QPoint(1, 1), 20).isEmpty());
 }
 
-// 链长模式（VM 配置参数里那项）：可见率门槛。
-// 掩膜盖掉模板 62% 的宽度 → 可见约 38%：
-//   minVisibleRatio=0.3 → 仍应命中；0.7 → 必须判无效（否则参数是摆设）。
+// 可见率门槛（内部常量 40%，VM 未暴露该项）：
+//   遮挡 20% → 可见 ~80%，应当命中；
+//   遮挡 62% → 可见 ~38% < 40%，必须判无效（抗遮挡的底线）。
 void FeatureMatchTest::templateMinVisibleRatioControlsOcclusion()
 {
     QTemporaryDir dir;
@@ -1631,30 +1639,29 @@ void FeatureMatchTest::templateMinVisibleRatioControlsOcclusion()
     node.setParam(QStringLiteral("searchRegionHeight"), canvas.rows);
     node.setInputImage(OpencvUtil::matToHimage(canvas));
 
-    // 掩膜：盖掉左边 80/128 列（约 62%），保留右侧
-    QImage mask(canvas.cols, canvas.rows, QImage::Format_Grayscale8);
-    mask.fill(255);
-    {
+    auto maskWidth = [&](int covered) {
+        QImage mask(canvas.cols, canvas.rows, QImage::Format_Grayscale8);
+        mask.fill(255);
         QPainter p(&mask);
-        p.fillRect(QRect(box.x, box.y, 80, kTemplateSize), Qt::black);
+        p.fillRect(QRect(box.x, box.y, covered, kTemplateSize), Qt::black);
         p.end();
-    }
-    node.setEditMask(mask);
+        return mask;
+    };
 
-    node.setParam(QStringLiteral("minVisibleRatio"), 0.3);
+    node.setEditMask(maskWidth(26));          // 遮挡 ~20%
     node.run(false);
-    const bool ok03 = node.getParam(QStringLiteral("moduleStatus")).toBool();
-    const double score03 = node.getParam(QStringLiteral("matchScore")).toDouble();
-    qInfo("visible-ratio 0.3: ok=%d score=%.3f", int(ok03), score03);
-    QVERIFY2(ok03, qPrintable(QStringLiteral("门槛 0.3 时应命中，实际判红（score=%1）").arg(score03)));
+    const bool okLight = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    const double scoreLight = node.getParam(QStringLiteral("matchScore")).toDouble();
+    qInfo("occlusion-gate: light ok=%d score=%.3f", int(okLight), scoreLight);
+    QVERIFY2(okLight, qPrintable(QStringLiteral("遮挡 20%% 应命中，实际判红（score=%1）").arg(scoreLight)));
 
-    node.setParam(QStringLiteral("minVisibleRatio"), 0.7);
+    node.setEditMask(maskWidth(80));          // 遮挡 ~62%
     node.run(false);
-    const bool ok07 = node.getParam(QStringLiteral("moduleStatus")).toBool();
-    const double score07 = node.getParam(QStringLiteral("matchScore")).toDouble();
-    qInfo("visible-ratio 0.7: ok=%d score=%.3f", int(ok07), score07);
-    QVERIFY2(!ok07, qPrintable(QStringLiteral("门槛 0.7 时可见率只有 ~38%%，却仍判成功（score=%1）")
-                                   .arg(score07)));
+    const bool okHeavy = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    const double scoreHeavy = node.getParam(QStringLiteral("matchScore")).toDouble();
+    qInfo("occlusion-gate: heavy ok=%d score=%.3f", int(okHeavy), scoreHeavy);
+    QVERIFY2(!okHeavy, qPrintable(QStringLiteral("遮挡 62%%（可见 ~38%% < 40%% 门槛）却仍判成功（score=%1）")
+                                      .arg(scoreHeavy)));
 }
 
 // 多形状模板：一个模板由"矩形 + 圆"两块组成。
@@ -2015,22 +2022,25 @@ void FeatureMatchTest::templateSuggestParamsFollowsTemplate()
 
     const auto sl = OpencvTemplateMatchNode::suggestParams(low);
     const auto sh = OpencvTemplateMatchNode::suggestParams(high);
-    qInfo("suggest: low t=%.1f a=%d c=%d | high t=%.1f a=%d c=%d", sl.edgeThreshold, sl.aperture,
-          sl.coarseLongSide, sh.edgeThreshold, sh.aperture, sh.coarseLongSide);
+    qInfo("suggest: low t=%d f=%d s=%d | high t=%d f=%d s=%d", sl.contrastThreshold,
+          sl.featureScale, sl.speedScale, sh.contrastThreshold, sh.featureScale, sh.speedScale);
 
-    QVERIFY2(sl.edgeThreshold >= 6.0 && sl.edgeThreshold <= 80.0, "阈值必须夹在 6..80");
-    QVERIFY2(sh.edgeThreshold >= sl.edgeThreshold,
+    QVERIFY2(sl.contrastThreshold >= 1 && sl.contrastThreshold <= 255,
+             "对比度阈值必须夹在 1..255（VM 口径：灰度差）");
+    QVERIFY2(sh.contrastThreshold >= sl.contrastThreshold,
              qPrintable(QStringLiteral("高对比模板的阈值不应低于低对比：%1 vs %2")
-                            .arg(sh.edgeThreshold).arg(sl.edgeThreshold)));
-    QCOMPARE(sl.aperture, 3);
-    QCOMPARE(sl.coarseLongSide, 512);       // 128 × 4
-    QVERIFY(!sl.autoThreshold);
+                            .arg(sh.contrastThreshold).arg(sl.contrastThreshold)));
+    QCOMPARE(sl.featureScale, 3);           // VM 截图建模板成功后的默认值
+    QCOMPARE(sl.speedScale, 3);
+    QCOMPARE(sl.minChainLength, 3);
+    QVERIFY(!sl.autoThreshold);             // 给的是具体数字
 
     cv::Mat big(256, 256, CV_8UC1, cv::Scalar(20));
     cv::rectangle(big, cv::Rect(10, 10, 200, 200), cv::Scalar(230), cv::FILLED);
     const auto sb = OpencvTemplateMatchNode::suggestParams(big);
-    QCOMPARE(sb.aperture, 5);               // 大模板用 5 抑制细节
-    QCOMPARE(sb.coarseLongSide, 1024);      // 256 × 4
+    QCOMPARE(sb.featureScale, 3);
+    QCOMPARE(sb.speedScale, 3);
+    QVERIFY(sb.contrastThreshold > 40);     // 高对比模板给更高的阈值
 }
 
 // 屏蔽形状（VM 的「屏蔽区」）：最终掩膜 = 保留 − 屏蔽，用来挖掉 logo/水印。
@@ -2082,7 +2092,7 @@ void FeatureMatchTest::templateExcludeShapesSubtractFromMask()
 // 画布上放一个 1.15 倍的实例：
 //   scaleMode=0（手动，scaleMin=Max=1）→ 只能按 1.0 找，分数低、尺度=1；
 //   scaleMode=1 → 自动把范围扩到 ~0.77..1.3，命中 ≈1.15 的实例且分数更高。
-void FeatureMatchTest::templateAutoScaleModeFindsScaledInstance()
+void FeatureMatchTest::templateScaleRangeFindsScaledInstance()
 {
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
@@ -2112,30 +2122,78 @@ void FeatureMatchTest::templateAutoScaleModeFindsScaledInstance()
     node.setParam(QStringLiteral("templatePath"), tpl);
     node.setInputImage(OpencvUtil::matToHimage(canvas));
 
-    node.setParam(QStringLiteral("scaleMode"), 0);      // 手动：只搜 1.0
+    // 尺度范围=1.0：只能按原尺寸找，分数明显低
     node.run(false);
     const double s0 = node.getParam(QStringLiteral("matchScore")).toDouble();
     const double k0 = node.getParam(QStringLiteral("matchScale")).toDouble();
 
-    node.setParam(QStringLiteral("scaleMode"), 1);      // 自动：估出尺度范围
+    // 尺度范围 0.8~1.3：应搜到 ≈1.15 的实例
+    node.setParam(QStringLiteral("scaleMin"), 0.8);
+    node.setParam(QStringLiteral("scaleMax"), 1.3);
+    node.setParam(QStringLiteral("scaleStep"), 0.05);
     node.run(false);
     const bool ok = node.getParam(QStringLiteral("moduleStatus")).toBool();
     const double s1 = node.getParam(QStringLiteral("matchScore")).toDouble();
     const double k1 = node.getParam(QStringLiteral("matchScale")).toDouble();
     const double col = node.getParam(QStringLiteral("matchCol")).toDouble();
     const double row = node.getParam(QStringLiteral("matchRow")).toDouble();
-    qInfo("scale-mode: manual k=%.2f score=%.3f | auto k=%.2f score=%.3f at (%.1f,%.1f)", k0, s0,
+    qInfo("scale-range: fixed k=%.2f score=%.3f | ranged k=%.2f score=%.3f at (%.1f,%.1f)", k0, s0,
           k1, s1, col, row);
 
-    QVERIFY2(ok, "自动尺度模式下应命中");
+    QVERIFY2(ok, "尺度范围覆盖 1.15 时应命中");
     QVERIFY2(qAbs(k1 - 1.15) <= 0.10,
-             qPrintable(QStringLiteral("自动模式应搜到 ≈1.15 的尺度，实际 %1").arg(k1)));
-    QVERIFY2(qAbs(k0 - 1.0) < 1e-6, "手动模式下尺度应固定 1.0");
+             qPrintable(QStringLiteral("应搜到 ≈1.15 的尺度，实际 %1").arg(k1)));
+    QVERIFY2(qAbs(k0 - 1.0) < 1e-6, "尺度范围 1.0 时尺度应固定 1.0");
     QVERIFY2(s1 > s0,
              qPrintable(QStringLiteral("按真实尺度匹配的分数应更高：%1 vs %2").arg(s1).arg(s0)));
     QVERIFY2(qAbs(col - cx) <= 3.0 && qAbs(row - cy) <= 3.0,
              qPrintable(QStringLiteral("命中位置应在 (%1,%2)，实际 (%3,%4)")
                             .arg(cx).arg(cy).arg(col).arg(row)));
+}
+
+// VM「特征尺度 / 最小链长」（官方定义：特征尺度越大特征点越稀疏；链长小于最小链长的特征链不保留）。
+//   ① 特征尺度 1 → 5：点数必须明显下降（稀疏化真的生效）；
+//   ② 孤立噪点（单像素）在最小链长 5 下被丢弃，长线保留。
+void FeatureMatchTest::templateFeatureScaleAndChainLengthFilterPoints()
+{
+    // 长竖线 + 右下角一个孤立点
+    cv::Mat img(80, 80, CV_8UC1, cv::Scalar(60));
+    img(cv::Rect(0, 0, 40, 80)).setTo(70);          // 一条贯穿的竖边
+    img.at<uchar>(70, 70) = 255;                   // 孤立亮噪点
+
+    RoiShape roi;
+    roi.type = RoiType::Rect;
+    roi.p1 = QPointF(0, 0);
+    roi.p2 = QPointF(80, 80);
+
+    const QVector<QPointF> fine =
+        OpencvTemplateMatchNode::featurePointsForPatch(img, roi, 20.0, 3, cv::Mat(), 1, 1);
+    const QVector<QPointF> coarse =
+        OpencvTemplateMatchNode::featurePointsForPatch(img, roi, 20.0, 3, cv::Mat(), 5, 1);
+    qInfo("feature-scale: 1 -> %d 点, 5 -> %d 点", int(fine.size()), int(coarse.size()));
+    QVERIFY2(fine.size() > coarse.size(),
+             qPrintable(QStringLiteral("特征尺度变大点数没减少：%1 vs %2")
+                            .arg(fine.size()).arg(coarse.size())));
+
+    // 最小链长：孤立噪点（Sobel 响应只在一小片）要被丢掉，贯穿竖线（长链）要留下
+    const QVector<QPointF> unfiltered =
+        OpencvTemplateMatchNode::featurePointsForPatch(img, roi, 20.0, 3, cv::Mat(), 1, 1);
+    const QVector<QPointF> chained =
+        OpencvTemplateMatchNode::featurePointsForPatch(img, roi, 20.0, 3, cv::Mat(), 1, 20);
+    auto rightSide = [](const QVector<QPointF> &pts) {
+        int n = 0;
+        for (const QPointF &p : pts)
+            if (p.x() > 45.0)
+                ++n;
+        return n;
+    };
+    qInfo("chain-length: 不过滤右侧 %d 点, 最小链长 20 右侧 %d 点", rightSide(unfiltered),
+          rightSide(chained));
+    QVERIFY2(!chained.isEmpty(), "长链（竖边）应被保留");
+    QVERIFY2(rightSide(unfiltered) > 0, "不过滤时右侧噪点应存在（否则测不到过滤效果）");
+    QVERIFY2(rightSide(chained) == 0,
+             qPrintable(QStringLiteral("最小链长 20 没把孤立噪点滤掉（还剩 %1 个）")
+                            .arg(rightSide(chained))));
 }
 
 QTEST_MAIN(FeatureMatchTest)
