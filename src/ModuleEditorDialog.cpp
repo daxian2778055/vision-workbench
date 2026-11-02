@@ -310,6 +310,20 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
         m_node->setParam(QStringLiteral("trainFromImage"), true);
         emit executeRequested();       // MainWindow: executeNodeOnce（含 reload + setResultOverlay）
         refreshTemplatePreview();      // 训练后立刻刷新模板预览
+        // 训练完直接给一组可用的边缘参数（阈值/特征尺度/速度尺度），省掉"画完再猜参数"
+        if (auto *tmplNode = qobject_cast<OpencvTemplateMatchNode *>(m_node)) {
+            if (tmplNode->applySuggestedParams()) {
+                if (QWidget *panel = m_paramHost->widget())
+                    tmplNode->updateParamPanel(panel);
+                const QString hint = QStringLiteral(
+                    "已训练，并按模板自动给出参数：阈值 %1 / 特征尺度 %2 / 速度尺度 %3")
+                                         .arg(tmplNode->getParam(QStringLiteral("edgeThreshold")).toDouble())
+                                         .arg(tmplNode->getParam(QStringLiteral("edgeAperture")).toInt())
+                                         .arg(tmplNode->getParam(QStringLiteral("coarseLongSide")).toInt());
+                m_hintLabel->setText(hint);
+                return;
+            }
+        }
         m_hintLabel->setText(QStringLiteral(
             "已按 ROI 训练；图上绿点 = 模板强梯度点（GOC 用它打分，灰度法仅作质量参考）"));
     });

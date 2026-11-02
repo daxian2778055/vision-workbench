@@ -550,6 +550,8 @@ void TemplateConfigDialog::onImageClicked(const QPointF &imagePos)
     refreshShapeList();
     syncAutoParamsToUi();
     refreshFeaturePreview();
+    if (m_shapes.size() <= 1)
+        applySuggestedParams();
     m_hint->setText(QStringLiteral("魔术棒已取形：%1 个顶点（共 %2 块形状）。")
                         .arg(pts.size())
                         .arg(m_shapes.size()));
@@ -604,6 +606,8 @@ void TemplateConfigDialog::onRoiEdited(const RoiShape &shape)
     refreshShapeList();
     syncAutoParamsToUi();
     refreshFeaturePreview();
+    if (m_shapes.size() == 1)
+        applySuggestedParams();          // 第一块形状落下时给一次建议值
     m_hint->setText(QStringLiteral("已添加形状（共 %1 块）；可继续画下一块，或直接确定。")
                         .arg(m_shapes.size()));
 }
@@ -661,6 +665,28 @@ void TemplateConfigDialog::syncAutoParamsToUi()
     const double autoThreshold = OpencvTemplateMatchNode::effectiveEdgeThresholdFor(
         patch, aperture, m_edgeSpin->value(), true);
     m_edgeSpin->setValue(autoThreshold);
+}
+
+void TemplateConfigDialog::applySuggestedParams()
+{
+    if (m_editIndex >= 0)          // 编辑已有模板：不覆盖用户/历史设置
+        return;
+    const cv::Mat patch = cropTemplate();
+    if (patch.empty())
+        return;
+    const OpencvTemplateMatchNode::ParamSuggestion s =
+        OpencvTemplateMatchNode::suggestParams(patch);
+    const int idx = m_apertureCombo->findText(QString::number(s.aperture));
+    if (idx >= 0)
+        m_apertureCombo->setCurrentIndex(idx);
+    m_coarseSpin->setValue(s.coarseLongSide);
+    if (!m_autoChk->isChecked())
+        m_edgeSpin->setValue(s.edgeThreshold);
+    m_hint->setText(QStringLiteral(
+        "已按模板自动给出建议参数：阈值 %1 / 特征尺度 %2 / 速度尺度 %3（可再调）。")
+                        .arg(s.edgeThreshold)
+                        .arg(s.aperture)
+                        .arg(s.coarseLongSide));
 }
 
 void TemplateConfigDialog::refreshFeaturePreview()

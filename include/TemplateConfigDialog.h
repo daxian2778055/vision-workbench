@@ -71,6 +71,8 @@ private:
     void refreshShapeList();
     void refreshFeaturePreview();
     void syncAutoParamsToUi();
+    /// 建模板时按模板梯度/尺寸给一组建议参数（只在第一块形状落下时填一次，不跟用户抢）
+    void applySuggestedParams();
     bool ensureSavePath(QString *path);
     cv::Mat cropTemplate() const;
 

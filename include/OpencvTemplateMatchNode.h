@@ -85,6 +85,19 @@ public:
                                                   double threshold, int aperture,
                                                   const cv::Mat &mask = cv::Mat());
 
+    /// 建/改模板后的参数建议（VM「创建模板成功 → 参数自动变成 8.0/2/37」同款口径）。
+    /// 目的：操作员画完模板就能直接跑，不必自己猜 4 个边缘参数。
+    struct ParamSuggestion
+    {
+        double edgeThreshold = 20.0;
+        bool autoThreshold = false;
+        int aperture = 3;
+        int coarseLongSide = 480;
+    };
+    static ParamSuggestion suggestParams(const cv::Mat &tmpl);
+    /// 按当前模板算建议值并写回节点参数（训练/建模板后调用）；模板不可用时返回 false
+    bool applySuggestedParams();
+
     /// 多形状模板：所有形状的并集包围盒（裁剪口径的唯一出处）
     static QRectF shapesBounds(const QVector<RoiShape> &shapes);
     /// 多形状模板：并集形状掩膜（8U，255=保留），尺寸 = shapesBounds 的四舍五入

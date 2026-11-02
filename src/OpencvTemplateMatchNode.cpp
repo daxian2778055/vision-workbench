@@ -1480,6 +1480,84 @@ QVector<QPointF> OpencvTemplateMatchNode::editorFeaturePoints() const
     return featurePointsForPatch(tmpl, geometryRoi(), threshold, aperture, shapeMask);
 }
 
+OpencvTemplateMatchNode::ParamSuggestion
+OpencvTemplateMatchNode::suggestParams(const cv::Mat &tmpl)
+{
+    ParamSuggestion s;
+    if (tmpl.empty())
+        return s;
+    const int longSide = qMax(tmpl.cols, tmpl.rows);
+    // 特征尺度：大模板用 5（抑制细节噪声），小模板 3（保细节）
+    s.aperture = longSide >= 200 ? 5 : 3;
+    // 对比度阈值：取"非平坦像素"梯度幅值的 70 分位（只看真正的边，避免大片背景把分位数拉成 0），
+    // 落到 0.5 的整数倍。低对比模板自然给低值、高对比模板给高值。
+    cv::Mat gx, gy, mag;
+    cv::Sobel(tmpl, gx, CV_32F, 1, 0, s.aperture);
+    cv::Sobel(tmpl, gy, CV_32F, 0, 1, s.aperture);
+    cv::magnitude(gx, gy, mag);
+    std::vector<float> edges;
+    edges.reserve(size_t(mag.total()) / 4);
+    for (int y = 0; y < mag.rows; ++y) {
+        const float *row = mag.ptr<float>(y);
+        for (int x = 0; x < mag.cols; ++x) {
+            if (row[x] > 2.0f)
+                edges.push_back(row[x]);
+        }
+    }
+    double t = kGocEdgeThreshold;
+    if (!edges.empty()) {
+        const size_t k = size_t(double(edges.size()) * 0.7);
+        std::nth_element(edges.begin(), edges.begin() + k, edges.end());
+        t = edges[k];
+    }
+    s.edgeThreshold = qBound(6.0, std::round(t * 2.0) / 2.0, 80.0);
+    s.autoThreshold = false;          // 给的是具体数字，操作员能看懂也能改
+    // 速度尺度：粗搜长边 ≈ 模板长边 × 4（粗图上模板仍有 ~32px，不会糊成一团）
+    s.coarseLongSide = qBound(240, longSide * 4, 1600);
+    return s;
+}
+
+bool OpencvTemplateMatchNode::applySuggestedParams()
+{
+    const TemplateEntry active = activeTemplate();
+    cv::Mat tmpl;
+    const QString path = ProjectPaths::resolveExecutionPath(
+        active.imagePath.trimmed().isEmpty()
+            ? m_params.value(QStringLiteral("templatePath"), QString()).toString()
+            : active.imagePath).trimmed();
+    if (!path.isEmpty())
+        tmpl = ModelCache::imageFor(path, cv::IMREAD_GRAYSCALE);
+    if (tmpl.empty()) {
+        const HObject input = getInputImage();
+        if (!input.IsInitialized())
+            return false;
+        cv::Mat gray = OpencvUtil::himageToMat(HImage(input));
+        if (gray.channels() == 3)
+            cv::cvtColor(gray, gray, cv::COLOR_BGR2GRAY);
+        tmpl = extractTemplatePatch(gray, geometryRoi());
+    }
+    if (tmpl.empty())
+        return false;
+    const ParamSuggestion s = suggestParams(tmpl);
+    m_params[QStringLiteral("edgeThreshold")] = s.edgeThreshold;
+    m_params[QStringLiteral("autoEdgeThreshold")] = s.autoThreshold;
+    m_params[QStringLiteral("edgeAperture")] = s.aperture;
+    m_params[QStringLiteral("coarseLongSide")] = s.coarseLongSide;
+    // 当前模板对象也同步：否则列表里的模板仍用旧参数
+    QVector<TemplateEntry> list = templates();
+    if (!list.isEmpty()) {
+        const int idx = activeTemplateIndex();
+        if (idx >= 0 && idx < list.size()) {
+            list[idx].edgeThreshold = s.edgeThreshold;
+            list[idx].autoThreshold = s.autoThreshold;
+            list[idx].aperture = s.aperture;
+            list[idx].coarseLongSide = s.coarseLongSide;
+            setTemplates(list);
+        }
+    }
+    return true;
+}
+
 QRectF OpencvTemplateMatchNode::shapesBounds(const QVector<RoiShape> &shapes)
 {
     QRectF box;

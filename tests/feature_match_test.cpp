@@ -94,6 +94,8 @@ private slots:
     void templateInheritsUpstreamBoxAsSearchRegion();
     // 魔术棒 / 魔术棒+：替换 vs 追加
     void templateWandPlusAppends();
+    // 建模板后的参数建议：低对比给低阈值、大模板给大特征尺度
+    void templateSuggestParamsFollowsTemplate();
 };
 
 namespace {
@@ -1993,6 +1995,38 @@ void FeatureMatchTest::templateWandPlusAppends()
         TemplateConfigDialog::applyWand(base, cv::Mat(), QPoint(100, 80), 20, false);
     QCOMPARE(failed.size(), 1);
     QCOMPARE(failed.first().type, RoiType::Rect);
+}
+
+// 建/改模板后的参数建议（VM「创建模板成功 → 参数自动变成 8.0/2/37」同款）：
+//   ① 低对比模板给低阈值、高对比模板给高阈值（都落在 6..80）；
+//   ② 小模板特征尺度 3、大模板 5；
+//   ③ 速度尺度 = 模板长边 × 4（夹在 240..1600）。
+void FeatureMatchTest::templateSuggestParamsFollowsTemplate()
+{
+    cv::Mat low(128, 128, CV_8UC1, cv::Scalar(100));
+    cv::rectangle(low, cv::Rect(0, 0, 64, 128), cv::Scalar(110), cv::FILLED);   // 对比 10
+
+    cv::Mat high(128, 128, CV_8UC1, cv::Scalar(30));
+    cv::rectangle(high, cv::Rect(0, 0, 64, 128), cv::Scalar(220), cv::FILLED);  // 对比 190
+
+    const auto sl = OpencvTemplateMatchNode::suggestParams(low);
+    const auto sh = OpencvTemplateMatchNode::suggestParams(high);
+    qInfo("suggest: low t=%.1f a=%d c=%d | high t=%.1f a=%d c=%d", sl.edgeThreshold, sl.aperture,
+          sl.coarseLongSide, sh.edgeThreshold, sh.aperture, sh.coarseLongSide);
+
+    QVERIFY2(sl.edgeThreshold >= 6.0 && sl.edgeThreshold <= 80.0, "阈值必须夹在 6..80");
+    QVERIFY2(sh.edgeThreshold >= sl.edgeThreshold,
+             qPrintable(QStringLiteral("高对比模板的阈值不应低于低对比：%1 vs %2")
+                            .arg(sh.edgeThreshold).arg(sl.edgeThreshold)));
+    QCOMPARE(sl.aperture, 3);
+    QCOMPARE(sl.coarseLongSide, 512);       // 128 × 4
+    QVERIFY(!sl.autoThreshold);
+
+    cv::Mat big(256, 256, CV_8UC1, cv::Scalar(20));
+    cv::rectangle(big, cv::Rect(10, 10, 200, 200), cv::Scalar(230), cv::FILLED);
+    const auto sb = OpencvTemplateMatchNode::suggestParams(big);
+    QCOMPARE(sb.aperture, 5);               // 大模板用 5 抑制细节
+    QCOMPARE(sb.coarseLongSide, 1024);      // 256 × 4
 }
 
 QTEST_MAIN(FeatureMatchTest)
