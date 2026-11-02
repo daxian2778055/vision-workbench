@@ -67,6 +67,10 @@ private slots:
     void templateMatchOverlayShowsRegionAndTemplate();
     // VM「对比度阈值/阈值模式」对齐：参数必须真的改变参与打分的点
     void templateMatchEdgeThresholdTakesEffect();
+    // 模板对象：序列化往返 + 老 templatePath 迁移
+    void templateEntryRoundTripAndLegacyMigration();
+    // 模板列表驱动匹配：切 active 索引，命中必须跟着换模板
+    void templateMatchUsesActiveTemplateFromList();
 };
 
 namespace {
@@ -1302,6 +1306,121 @@ void FeatureMatchTest::templateMatchEdgeThresholdTakesEffect()
     const int nAuto = node.editorFeaturePoints().size();
     qInfo("edge-threshold: auto -> %d 点", nAuto);
     QVERIFY2(nAuto > 0, "自动阈值模式没生效（点全被滤掉）");
+}
+
+// 模板对象：JSON 往返不丢字段；老 templatePath 能无痛迁移成一条模板记录。
+void FeatureMatchTest::templateEntryRoundTripAndLegacyMigration()
+{
+    TemplateEntry e;
+    e.name = QStringLiteral("工件A");
+    e.imagePath = QStringLiteral("templates/a.png");
+    e.shape.type = RoiType::RotatedRect;
+    e.shape.p1 = QPointF(120.5, 240.25);
+    e.shape.width = 96.0;
+    e.shape.height = 64.0;
+    e.shape.angleDeg = 12.5;
+    e.edgeThreshold = 33.0;
+    e.autoThreshold = false;
+    e.aperture = 5;
+    e.coarseLongSide = 640;
+
+    const TemplateEntry back = TemplateEntry::fromJson(e.toJson());
+    QCOMPARE(back.name, e.name);
+    QCOMPARE(back.imagePath, e.imagePath);
+    QCOMPARE(back.shape.type, RoiType::RotatedRect);
+    QCOMPARE(back.shape.p1, e.shape.p1);
+    QCOMPARE(back.shape.width, e.shape.width);
+    QCOMPARE(back.shape.height, e.shape.height);
+    QCOMPARE(back.shape.angleDeg, e.shape.angleDeg);
+    QCOMPARE(back.edgeThreshold, e.edgeThreshold);
+    QCOMPARE(back.autoThreshold, e.autoThreshold);
+    QCOMPARE(back.aperture, e.aperture);
+    QCOMPARE(back.coarseLongSide, e.coarseLongSide);
+
+    // 老方案：只有一个 templatePath → templates() 自动合成一条，migrate 后落库
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("templatePath"), QStringLiteral("templates/legacy.png"));
+    node.setParam(QStringLiteral("edgeThreshold"), 44.0);
+    const QVector<TemplateEntry> legacy = node.templates();
+    QCOMPARE(legacy.size(), 1);
+    QCOMPARE(legacy.first().imagePath, QStringLiteral("templates/legacy.png"));
+    QCOMPARE(legacy.first().edgeThreshold, 44.0);
+    QVERIFY(node.getParam(QStringLiteral("templates")).toString().isEmpty());   // 只读不写
+
+    node.migrateLegacyTemplate();
+    QVERIFY(!node.getParam(QStringLiteral("templates")).toString().isEmpty());
+    QCOMPARE(node.templates().size(), 1);
+    QCOMPARE(node.activeTemplateIndex(), 0);
+}
+
+// 模板列表驱动匹配：两个模板指向两张不同图，切 active 后命中位置必须跟着换。
+void FeatureMatchTest::templateMatchUsesActiveTemplateFromList()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const cv::Mat patchA = makePatch();
+    cv::Mat patchB(kTemplateSize, kTemplateSize, CV_8UC1, cv::Scalar(20));
+    cv::circle(patchB, cv::Point(64, 64), 50, cv::Scalar(255), 6);
+    cv::circle(patchB, cv::Point(64, 64), 26, cv::Scalar(190), 4);
+    cv::line(patchB, cv::Point(12, 12), cv::Point(116, 116), cv::Scalar(240), 3);
+
+    const QString pathA = dir.filePath(QStringLiteral("a.png"));
+    const QString pathB = dir.filePath(QStringLiteral("b.png"));
+    QVERIFY(cv::imwrite(pathA.toStdString(), patchA));
+    QVERIFY(cv::imwrite(pathB.toStdString(), patchB));
+
+    cv::Mat canvas(300, 700, CV_8UC1, cv::Scalar(kCanvasBackground));
+    const cv::Rect boxA(80, 90, kTemplateSize, kTemplateSize);
+    const cv::Rect boxB(420, 90, kTemplateSize, kTemplateSize);
+    patchA.copyTo(canvas(boxA));
+    patchB.copyTo(canvas(boxB));
+    const double cxA = boxA.x + kTemplateSize / 2.0;
+    const double cyA = boxA.y + kTemplateSize / 2.0;
+    const double cxB = boxB.x + kTemplateSize / 2.0;
+    const double cyB = boxB.y + kTemplateSize / 2.0;
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.5);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("searchRegionCol"), 0);
+    node.setParam(QStringLiteral("searchRegionRow"), 0);
+    node.setParam(QStringLiteral("searchRegionWidth"), canvas.cols);
+    node.setParam(QStringLiteral("searchRegionHeight"), canvas.rows);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+
+    TemplateEntry ea;
+    ea.name = QStringLiteral("A");
+    ea.imagePath = pathA;
+    TemplateEntry eb;
+    eb.name = QStringLiteral("B");
+    eb.imagePath = pathB;
+    node.setTemplates({ea, eb});
+    QCOMPARE(node.templates().size(), 2);
+
+    node.setActiveTemplateIndex(0);
+    node.run(false);
+    const double c0 = node.getParam(QStringLiteral("matchCol")).toDouble();
+    const double r0 = node.getParam(QStringLiteral("matchRow")).toDouble();
+    qInfo("template-list: active=0 hit (%.1f, %.1f)", c0, r0);
+    QVERIFY2(qAbs(c0 - cxA) <= 2.0 && qAbs(r0 - cyA) <= 2.0,
+             qPrintable(QStringLiteral("模板 A 应命中 (%1,%2)，实际 (%3,%4)")
+                            .arg(cxA).arg(cyA).arg(c0).arg(r0)));
+
+    node.setActiveTemplateIndex(1);
+    node.run(false);
+    const double c1 = node.getParam(QStringLiteral("matchCol")).toDouble();
+    const double r1 = node.getParam(QStringLiteral("matchRow")).toDouble();
+    qInfo("template-list: active=1 hit (%.1f, %.1f)", c1, r1);
+    QVERIFY2(qAbs(c1 - cxB) <= 2.0 && qAbs(r1 - cyB) <= 2.0,
+             qPrintable(QStringLiteral("模板 B 应命中 (%1,%2)，实际 (%3,%4)")
+                            .arg(cxB).arg(cyB).arg(c1).arg(r1)));
 }
 
 QTEST_MAIN(FeatureMatchTest)

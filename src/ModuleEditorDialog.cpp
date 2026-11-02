@@ -4,6 +4,9 @@
 #include "ModuleEditorDialog.h"
 #include "HalconNode.h"
 #include "OpencvTemplateMatchNode.h"
+#include "TemplateConfigDialog.h"
+#include <QListWidget>
+#include <QMessageBox>
 #include "OpencvUtil.h"
 #include "DataObject.h"
 #include "FlowScene.h"
@@ -160,6 +163,24 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     m_templatePreview->setStyleSheet(QStringLiteral("background:#1e1e21; color:#aaa; border:1px solid #444;"));
     rightLay->addWidget(m_templatePreview);
 
+    // VM「特征模板」页：模板列表 + 创建/编辑/删除（列表项 = 一个模板对象，不是文件路径）
+    m_templateList = new QListWidget();
+    m_templateList->setObjectName(QStringLiteral("templateList"));
+    m_templateList->setMaximumHeight(110);
+    m_templateList->setToolTip(QStringLiteral("当前算子的模板列表；点一行即切换当前匹配用的模板"));
+    rightLay->addWidget(m_templateList);
+    auto *tmplBtns = new QHBoxLayout();
+    m_tmplNewBtn = new QPushButton(QStringLiteral("创建模板"));
+    m_tmplEditBtn = new QPushButton(QStringLiteral("编辑模板"));
+    m_tmplDelBtn = new QPushButton(QStringLiteral("删除所有模板"));
+    m_tmplNewBtn->setToolTip(QStringLiteral("打开「模板配置」窗：在图上框形状、调参数、确定即创建"));
+    m_tmplEditBtn->setToolTip(QStringLiteral("编辑列表里选中的模板（原地更新）"));
+    m_tmplDelBtn->setToolTip(QStringLiteral("清空该算子的模板列表（文件不删）"));
+    tmplBtns->addWidget(m_tmplNewBtn);
+    tmplBtns->addWidget(m_tmplEditBtn);
+    tmplBtns->addWidget(m_tmplDelBtn);
+    rightLay->addLayout(tmplBtns);
+
     m_paramHost = new QScrollArea();
     m_paramHost->setWidgetResizable(true);
     // 参数区只允许纵向滚动：横向滚动条强制关闭（参数被横向裁切/来回滚看的体验根因）
@@ -232,6 +253,10 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     m_templatePreview->setVisible(isTmpl);
     m_targetGeomBtn->setVisible(isTmpl);
     m_targetSearchBtn->setVisible(isTmpl);
+    m_templateList->setVisible(isTmpl);
+    m_tmplNewBtn->setVisible(isTmpl);
+    m_tmplEditBtn->setVisible(isTmpl);
+    m_tmplDelBtn->setVisible(isTmpl);
 
     if (hasGeom) {
         m_hintLabel->setText(QStringLiteral(
@@ -249,6 +274,11 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     connect(polyBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onDrawSearchPolygon);
     connect(m_targetGeomBtn, &QToolButton::clicked, this, &ModuleEditorDialog::onEditTargetGeometry);
     connect(m_targetSearchBtn, &QToolButton::clicked, this, &ModuleEditorDialog::onEditTargetSearch);
+    connect(m_tmplNewBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onNewTemplate);
+    connect(m_tmplEditBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onEditTemplate);
+    connect(m_tmplDelBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onDeleteTemplate);
+    connect(m_templateList, &QListWidget::currentRowChanged, this,
+            &ModuleEditorDialog::onTemplateSelected);
     connect(clearGeomBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onClearGeometry);
     connect(maskBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onEditMask);
     connect(clearMaskBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onClearMask);
@@ -331,6 +361,7 @@ void ModuleEditorDialog::reloadFromNode()
     if (HalconNode *hn = halconNode())
         m_view->setMaskImage(hn->editMask());
     refreshTemplatePreview();
+    refreshTemplateList();
     // 程序化回填参数不应触发自动重算（否则会与用户操作形成回路）
     m_paramHookBusy = true;
     if (QWidget *panel = m_paramHost->widget())
@@ -1084,6 +1115,116 @@ void ModuleEditorDialog::onSaveTemplate()
         tmplNode->updateParamPanel(panel);
     m_hintLabel->setText(saved ? QStringLiteral("模板已保存：%1").arg(path)
                                : QStringLiteral("模板保存失败：%1").arg(path));
+}
+
+void ModuleEditorDialog::refreshTemplateList()
+{
+    if (!m_templateList)
+        return;
+    auto *tmplNode = qobject_cast<OpencvTemplateMatchNode *>(m_node);
+    m_templateList->blockSignals(true);
+    m_templateList->clear();
+    if (!tmplNode) {
+        m_templateList->blockSignals(false);
+        return;
+    }
+    const QVector<TemplateEntry> entries = tmplNode->templates();
+    for (const TemplateEntry &e : entries) {
+        const QString name = e.name.trimmed().isEmpty() ? QFileInfo(e.imagePath).fileName() : e.name;
+        m_templateList->addItem(name);
+    }
+    const int active = tmplNode->activeTemplateIndex();
+    if (active >= 0 && active < m_templateList->count())
+        m_templateList->setCurrentRow(active);
+    m_templateList->blockSignals(false);
+}
+
+void ModuleEditorDialog::onTemplateSelected(int row)
+{
+    auto *tmplNode = qobject_cast<OpencvTemplateMatchNode *>(m_node);
+    if (!tmplNode || row < 0)
+        return;
+    const QVector<TemplateEntry> entries = tmplNode->templates();
+    if (row >= entries.size())
+        return;
+    const TemplateEntry &e = entries.at(row);
+    tmplNode->setActiveTemplateIndex(row);
+    // 与老字段同步：run() 兜底路径、参数面板、其它读 templatePath 的代码都按当前模板走
+    tmplNode->setParam(QStringLiteral("templatePath"), e.imagePath);
+    tmplNode->setParam(QStringLiteral("edgeThreshold"), e.edgeThreshold);
+    tmplNode->setParam(QStringLiteral("autoEdgeThreshold"), e.autoThreshold);
+    tmplNode->setParam(QStringLiteral("edgeAperture"), e.aperture);
+    tmplNode->setParam(QStringLiteral("coarseLongSide"), e.coarseLongSide);
+
+    // 模板框跟着当前模板的形状走（applyGeometryRoi 会顺手把 trainFromImage 打开，
+    // 这里必须还原——切模板不等于"要重新训练"）。
+    if (e.shape.type != RoiType::None) {
+        const bool wasTrain = tmplNode->getParam(QStringLiteral("trainFromImage")).toBool();
+        tmplNode->applyGeometryRoi(e.shape);
+        tmplNode->setParam(QStringLiteral("trainFromImage"), wasTrain);
+    }
+    refreshTemplatePreview();
+    echoGeometry();                       // 特征点/模板框按新模板刷新
+    if (QWidget *panel = m_paramHost->widget())
+        tmplNode->updateParamPanel(panel);
+    m_hintLabel->setText(QStringLiteral("当前模板：%1").arg(m_templateList->currentItem()
+                                                              ? m_templateList->currentItem()->text()
+                                                              : QString()));
+}
+
+void ModuleEditorDialog::onNewTemplate()
+{
+    auto *tmplNode = qobject_cast<OpencvTemplateMatchNode *>(m_node);
+    if (!tmplNode)
+        return;
+    TemplateConfigDialog dlg(tmplNode, -1, this);
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+    refreshTemplateList();
+    refreshTemplatePreview();
+    echoGeometry();
+    if (QWidget *panel = m_paramHost->widget())
+        tmplNode->updateParamPanel(panel);
+    m_hintLabel->setText(QStringLiteral("模板已创建：列表里选中它即用于匹配。"));
+}
+
+void ModuleEditorDialog::onEditTemplate()
+{
+    auto *tmplNode = qobject_cast<OpencvTemplateMatchNode *>(m_node);
+    if (!tmplNode || !m_templateList)
+        return;
+    const int row = m_templateList->currentRow();
+    if (row < 0 || row >= tmplNode->templates().size()) {
+        m_hintLabel->setText(QStringLiteral("先在列表里选中要编辑的模板。"));
+        return;
+    }
+    TemplateConfigDialog dlg(tmplNode, row, this);
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+    refreshTemplateList();
+    refreshTemplatePreview();
+    echoGeometry();
+    if (QWidget *panel = m_paramHost->widget())
+        tmplNode->updateParamPanel(panel);
+    m_hintLabel->setText(QStringLiteral("模板已更新。"));
+}
+
+void ModuleEditorDialog::onDeleteTemplate()
+{
+    auto *tmplNode = qobject_cast<OpencvTemplateMatchNode *>(m_node);
+    if (!tmplNode || tmplNode->templates().isEmpty())
+        return;
+    if (QMessageBox::question(this, QStringLiteral("删除所有模板"),
+                              QStringLiteral("确定清空该算子的模板列表？（模板文件不删除）"))
+        != QMessageBox::Yes)
+        return;
+    tmplNode->setTemplates({});
+    tmplNode->setActiveTemplateIndex(0);
+    tmplNode->setParam(QStringLiteral("templatePath"), QString());
+    refreshTemplateList();
+    refreshTemplatePreview();
+    echoGeometry();
+    m_hintLabel->setText(QStringLiteral("模板列表已清空。"));
 }
 
 void ModuleEditorDialog::refreshTemplatePreview()

@@ -341,6 +341,7 @@ src/ModelCache.cpp
     src/ConnectionDragHelper.cpp
     src/HelpViewer.cpp
     src/ModuleEditorDialog.cpp
+    src/TemplateConfigDialog.cpp
     src/CommentGraphicsItem.cpp
     src/FlowVariableDialog.cpp
     src/AnnotationDialog.cpp
@@ -560,6 +561,7 @@ set(HEADERS
     include/ResultTablePanel.h
     include/VariablePanel.h
     include/ModuleEditorDialog.h
+    include/TemplateConfigDialog.h
     include/CommentGraphicsItem.h
     include/FlowVariableDialog.h
     include/AnnotationDialog.h

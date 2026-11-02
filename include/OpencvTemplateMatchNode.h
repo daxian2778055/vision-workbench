@@ -1,7 +1,25 @@
 #pragma once
 
 #include "HalconNode.h"
+#include <QJsonObject>
 #include <opencv2/core.hpp>
+
+/// 一个模板对象（VM「特征模板」页里的一行）。
+/// 为什么需要它：原来模板只是节点上的一个 templatePath 字符串——没有"创建/编辑/删除"、
+/// 也没有每模板独立的边缘参数。对齐 VM 的第一步是把模板从"一个路径"变成"一条记录"。
+struct TemplateEntry
+{
+    QString name;                       ///< 显示名（默认取文件名）
+    QString imagePath;                  ///< 模板图路径（相对项目目录或绝对）
+    RoiShape shape;                     ///< 建模板时的形状（编辑器回显/重画用）
+    double edgeThreshold = 20.0;        ///< 对比度阈值（手动模式）
+    bool autoThreshold = true;          ///< 阈值模式：true=自动（模板梯度分位数）
+    int aperture = 3;                   ///< 特征尺度（Sobel 核 3/5/7）
+    int coarseLongSide = 480;           ///< 速度尺度（粗搜长边）
+
+    QJsonObject toJson() const;
+    static TemplateEntry fromJson(const QJsonObject &obj);
+};
 
 /// OpenCV 模板匹配节点：cv::matchTemplate（灰度/NCC），支持从图像训练保存模板
 class OpencvTemplateMatchNode : public HalconNode
@@ -29,4 +47,23 @@ public:
     /// 有效边缘阈值：手动模式取 edgeThreshold；自动模式取模板梯度 70 分位（clamp 6..80）。
     /// 打分与可视化必须共用它，否则"看到的点"和"打分的点"又分叉。
     double effectiveEdgeThreshold(const cv::Mat &tmpl, int aperture) const;
+
+    // ---- 模板列表（VM 对齐）----
+    /// 解析 m_params["templates"]；空列表时用 templatePath 合成一条（老方案零迁移）。
+    QVector<TemplateEntry> templates() const;
+    void setTemplates(const QVector<TemplateEntry> &entries);
+    /// 当前生效的模板序号（越界自动夹取）
+    int activeTemplateIndex() const;
+    void setActiveTemplateIndex(int index);
+    /// 当前生效的模板（列表为空时按节点参数合成一条，保证调用方永远拿到"一个模板"）
+    TemplateEntry activeTemplate() const;
+    /// 老 templatePath → 模板列表的一次性迁移（幂等）
+    void migrateLegacyTemplate();
+
+    /// 有效边缘阈值（显式传入本模板参数；run/可视化/对话框共用）
+    static double effectiveEdgeThresholdFor(const cv::Mat &tmpl, int aperture,
+                                            double manualThreshold, bool autoMode);
+    /// 模板块 → 图像坐标的强梯度点（对话框预览与编辑器共用同一映射）
+    static QVector<QPointF> featurePointsForPatch(const cv::Mat &tmpl, const RoiShape &roi,
+                                                  double threshold, int aperture);
 };

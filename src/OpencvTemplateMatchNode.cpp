@@ -12,10 +12,93 @@
 #include <QFileInfo>
 #include <QDir>
 #include <QVector>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <algorithm>
 #include <cmath>
 #include <utility>
 #include <vector>
+
+QJsonObject TemplateEntry::toJson() const
+{
+    QJsonObject obj;
+    obj[QStringLiteral("name")] = name;
+    obj[QStringLiteral("image")] = imagePath;
+    QJsonObject s;
+    switch (shape.type) {
+    case RoiType::Rect:
+        s[QStringLiteral("type")] = QStringLiteral("rect");
+        s[QStringLiteral("x1")] = shape.p1.x();
+        s[QStringLiteral("y1")] = shape.p1.y();
+        s[QStringLiteral("x2")] = shape.p2.x();
+        s[QStringLiteral("y2")] = shape.p2.y();
+        break;
+    case RoiType::RotatedRect:
+        s[QStringLiteral("type")] = QStringLiteral("rot");
+        s[QStringLiteral("cx")] = shape.p1.x();
+        s[QStringLiteral("cy")] = shape.p1.y();
+        s[QStringLiteral("w")] = shape.width;
+        s[QStringLiteral("h")] = shape.height;
+        s[QStringLiteral("angle")] = shape.angleDeg;
+        break;
+    case RoiType::Polygon: {
+        s[QStringLiteral("type")] = QStringLiteral("poly");
+        QJsonArray pts;
+        for (const QPointF &p : shape.points) {
+            QJsonArray xy;
+            xy.append(p.x());
+            xy.append(p.y());
+            pts.append(xy);
+        }
+        s[QStringLiteral("points")] = pts;
+        break;
+    }
+    default:
+        s[QStringLiteral("type")] = QStringLiteral("none");
+        break;
+    }
+    obj[QStringLiteral("shape")] = s;
+    obj[QStringLiteral("edgeThreshold")] = edgeThreshold;
+    obj[QStringLiteral("autoThreshold")] = autoThreshold;
+    obj[QStringLiteral("aperture")] = aperture;
+    obj[QStringLiteral("coarseLongSide")] = coarseLongSide;
+    return obj;
+}
+
+TemplateEntry TemplateEntry::fromJson(const QJsonObject &obj)
+{
+    TemplateEntry e;
+    e.name = obj.value(QStringLiteral("name")).toString();
+    e.imagePath = obj.value(QStringLiteral("image")).toString();
+    const QJsonObject s = obj.value(QStringLiteral("shape")).toObject();
+    const QString type = s.value(QStringLiteral("type")).toString();
+    if (type == QLatin1String("rect")) {
+        e.shape.type = RoiType::Rect;
+        e.shape.p1 = QPointF(s.value(QStringLiteral("x1")).toDouble(),
+                             s.value(QStringLiteral("y1")).toDouble());
+        e.shape.p2 = QPointF(s.value(QStringLiteral("x2")).toDouble(),
+                             s.value(QStringLiteral("y2")).toDouble());
+    } else if (type == QLatin1String("rot")) {
+        e.shape.type = RoiType::RotatedRect;
+        e.shape.p1 = QPointF(s.value(QStringLiteral("cx")).toDouble(),
+                             s.value(QStringLiteral("cy")).toDouble());
+        e.shape.width = s.value(QStringLiteral("w")).toDouble();
+        e.shape.height = s.value(QStringLiteral("h")).toDouble();
+        e.shape.angleDeg = s.value(QStringLiteral("angle")).toDouble();
+    } else if (type == QLatin1String("poly")) {
+        e.shape.type = RoiType::Polygon;
+        for (const QJsonValue &v : s.value(QStringLiteral("points")).toArray()) {
+            const QJsonArray xy = v.toArray();
+            if (xy.size() == 2)
+                e.shape.points.append(QPointF(xy[0].toDouble(), xy[1].toDouble()));
+        }
+    }
+    e.edgeThreshold = obj.value(QStringLiteral("edgeThreshold")).toDouble(20.0);
+    e.autoThreshold = obj.value(QStringLiteral("autoThreshold")).toBool(true);
+    e.aperture = obj.value(QStringLiteral("aperture")).toInt(3);
+    e.coarseLongSide = obj.value(QStringLiteral("coarseLongSide")).toInt(480);
+    return e;
+}
 
 namespace {
 
@@ -341,8 +424,13 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
             cv::cvtColor(gray, gray, cv::COLOR_BGR2GRAY);
         }
 
+        // 模板对象（VM 对齐）：列表非空时，路径与 4 项边缘参数都取"当前模板"的；
+        // 列表为空则退回老的 templatePath + 节点参数（老方案逐字节不变）。
+        const TemplateEntry active = activeTemplate();
         const QString templatePath = ProjectPaths::resolveExecutionPath(
-            m_params.value(QStringLiteral("templatePath"), QString()).toString()).trimmed();
+            active.imagePath.trimmed().isEmpty()
+                ? m_params.value(QStringLiteral("templatePath"), QString()).toString()
+                : active.imagePath).trimmed();
         const bool train = m_params.value(QStringLiteral("trainFromImage"), false).toBool();
         const int methodIdx = m_params.value(QStringLiteral("method"), 1).toInt();
         const double minScore = m_params.value(QStringLiteral("minScore"), 0.6).toDouble();
@@ -427,12 +515,11 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
         }
 
         // VM 对齐（2026-11-02）：边缘阈值 / 特征尺度（Sobel 核）/ 速度尺度（粗搜长边）
-        // 从内部常量变成参数。默认值 = 原常量，老方案行为不变。
-        const int edgeAperture =
-            qBound(3, m_params.value(QStringLiteral("edgeAperture"), 3).toInt(), 7) | 1;
-        const double edgeThreshold = effectiveEdgeThreshold(tmpl, edgeAperture);
-        const int coarseLongSide =
-            qBound(240, m_params.value(QStringLiteral("coarseLongSide"), 480).toInt(), 1600);
+        // 取"当前模板"的参数（列表为空时 = 节点参数）。默认值 = 原常量，老方案行为不变。
+        const int edgeAperture = qBound(3, active.aperture, 7) | 1;
+        const double edgeThreshold = effectiveEdgeThresholdFor(
+            tmpl, edgeAperture, active.edgeThreshold, active.autoThreshold);
+        const int coarseLongSide = qBound(240, active.coarseLongSide, 1600);
 
         QVector<double> angles;
         QVector<double> scales;
@@ -946,10 +1033,96 @@ void OpencvTemplateMatchNode::applyGeometryRoi(const RoiShape &shape)
     }
 }
 
-double OpencvTemplateMatchNode::effectiveEdgeThreshold(const cv::Mat &tmpl, int aperture) const
+QVector<TemplateEntry> OpencvTemplateMatchNode::templates() const
 {
-    const double manual = m_params.value(QStringLiteral("edgeThreshold"), kGocEdgeThreshold).toDouble();
-    if (!m_params.value(QStringLiteral("autoEdgeThreshold"), false).toBool() || tmpl.empty())
+    QVector<TemplateEntry> out;
+    const QString json =
+        m_params.value(QStringLiteral("templates"), QString()).toString().trimmed();
+    if (!json.isEmpty()) {
+        const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+        if (doc.isArray()) {
+            for (const QJsonValue &v : doc.array()) {
+                if (v.isObject())
+                    out.append(TemplateEntry::fromJson(v.toObject()));
+            }
+        }
+    }
+    if (out.isEmpty()) {
+        // 老方案：只有一个 templatePath。这里合成一条，让调用方永远拿到"至少一个模板"。
+        // 注意：不写回参数（migrateLegacyTemplate 才落库），避免只读路径改状态。
+        const QString path =
+            m_params.value(QStringLiteral("templatePath"), QString()).toString().trimmed();
+        if (!path.isEmpty()) {
+            TemplateEntry e;
+            e.name = QFileInfo(path).fileName();
+            e.imagePath = path;
+            e.shape = geometryRoi();
+            e.edgeThreshold = m_params.value(QStringLiteral("edgeThreshold"), 20.0).toDouble();
+            e.autoThreshold = m_params.value(QStringLiteral("autoEdgeThreshold"), false).toBool();
+            e.aperture = qBound(3, m_params.value(QStringLiteral("edgeAperture"), 3).toInt(), 7);
+            e.coarseLongSide =
+                qBound(240, m_params.value(QStringLiteral("coarseLongSide"), 480).toInt(), 1600);
+            out.append(e);
+        }
+    }
+    return out;
+}
+
+void OpencvTemplateMatchNode::setTemplates(const QVector<TemplateEntry> &entries)
+{
+    QJsonArray arr;
+    for (const TemplateEntry &e : entries)
+        arr.append(e.toJson());
+    m_params[QStringLiteral("templates")] =
+        QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact));
+}
+
+int OpencvTemplateMatchNode::activeTemplateIndex() const
+{
+    const int count = templates().size();
+    if (count <= 0)
+        return 0;
+    return qBound(0, m_params.value(QStringLiteral("templateIndex"), 0).toInt(), count - 1);
+}
+
+void OpencvTemplateMatchNode::setActiveTemplateIndex(int index)
+{
+    m_params[QStringLiteral("templateIndex")] = qMax(0, index);
+}
+
+TemplateEntry OpencvTemplateMatchNode::activeTemplate() const
+{
+    const QVector<TemplateEntry> list = templates();
+    if (list.isEmpty()) {
+        // 连 templatePath 都没有：返回一个"空模板"，调用方按原逻辑报"需要模板文件"
+        TemplateEntry e;
+        e.edgeThreshold = m_params.value(QStringLiteral("edgeThreshold"), 20.0).toDouble();
+        e.autoThreshold = m_params.value(QStringLiteral("autoEdgeThreshold"), false).toBool();
+        e.aperture = qBound(3, m_params.value(QStringLiteral("edgeAperture"), 3).toInt(), 7);
+        e.coarseLongSide =
+            qBound(240, m_params.value(QStringLiteral("coarseLongSide"), 480).toInt(), 1600);
+        return e;
+    }
+    return list.at(activeTemplateIndex());
+}
+
+void OpencvTemplateMatchNode::migrateLegacyTemplate()
+{
+    if (!m_params.value(QStringLiteral("templates"), QString()).toString().trimmed().isEmpty())
+        return;
+    const QString path =
+        m_params.value(QStringLiteral("templatePath"), QString()).toString().trimmed();
+    if (path.isEmpty())
+        return;
+    setTemplates(templates());   // templates() 已按老参数合成一条
+    setActiveTemplateIndex(0);
+}
+
+double OpencvTemplateMatchNode::effectiveEdgeThresholdFor(const cv::Mat &tmpl, int aperture,
+                                                          double manualThreshold, bool autoMode)
+{
+    const double manual = manualThreshold;
+    if (!autoMode || tmpl.empty())
         return qBound(1.0, manual, 200.0);
 
     // 自动模式：取模板梯度强度的 70 分位。模板本身对比度高 → 阈值自动抬高；
@@ -971,14 +1144,23 @@ double OpencvTemplateMatchNode::effectiveEdgeThreshold(const cv::Mat &tmpl, int 
     return qBound(6.0, double(vals[k]), 80.0);
 }
 
+double OpencvTemplateMatchNode::effectiveEdgeThreshold(const cv::Mat &tmpl, int aperture) const
+{
+    const TemplateEntry e = activeTemplate();
+    return effectiveEdgeThresholdFor(tmpl, aperture, e.edgeThreshold, e.autoThreshold);
+}
+
 QVector<QPointF> OpencvTemplateMatchNode::editorFeaturePoints() const
 {
     // 绿点 = 模板强梯度点。GOC（method=2）就是拿这些点打分；灰度法（0/1）逐像素算，
     // 这里仍画出来给操作员看模板轮廓质量（训练向导的"角点丰富度"看的就是它）。
-    // 模板来源与 run() 同一优先级：先模板文件，再当前输入图 + ROI 现抠
+    // 模板来源与 run() 同一优先级：先"当前模板"的文件，再当前输入图 + ROI 现抠
+    const TemplateEntry active = activeTemplate();
     cv::Mat tmpl;
     const QString path = ProjectPaths::resolveExecutionPath(
-        m_params.value(QStringLiteral("templatePath"), QString()).toString()).trimmed();
+        active.imagePath.trimmed().isEmpty()
+            ? m_params.value(QStringLiteral("templatePath"), QString()).toString()
+            : active.imagePath).trimmed();
     if (!path.isEmpty())
         tmpl = ModelCache::imageFor(path, cv::IMREAD_GRAYSCALE);
     if (tmpl.empty()) {
@@ -993,13 +1175,22 @@ QVector<QPointF> OpencvTemplateMatchNode::editorFeaturePoints() const
     if (tmpl.empty())
         return {};
 
-    const int aperture =
-        qBound(3, m_params.value(QStringLiteral("edgeAperture"), 3).toInt(), 7) | 1;
+    const int aperture = qBound(3, active.aperture, 7) | 1;
+    const double threshold =
+        effectiveEdgeThresholdFor(tmpl, aperture, active.edgeThreshold, active.autoThreshold);
+    return featurePointsForPatch(tmpl, geometryRoi(), threshold, aperture);
+}
+
+QVector<QPointF> OpencvTemplateMatchNode::featurePointsForPatch(const cv::Mat &tmpl,
+                                                               const RoiShape &roi,
+                                                               double threshold, int aperture)
+{
+    if (tmpl.empty())
+        return {};
     cv::Mat gx, gy, mag;
-    cv::Sobel(tmpl, gx, CV_32F, 1, 0, aperture);
-    cv::Sobel(tmpl, gy, CV_32F, 0, 1, aperture);
+    cv::Sobel(tmpl, gx, CV_32F, 1, 0, qBound(3, aperture, 7) | 1);
+    cv::Sobel(tmpl, gy, CV_32F, 0, 1, qBound(3, aperture, 7) | 1);
     cv::magnitude(gx, gy, mag);
-    const double threshold = effectiveEdgeThreshold(tmpl, aperture);
 
     const int w = tmpl.cols;
     const int h = tmpl.rows;
@@ -1008,7 +1199,6 @@ QVector<QPointF> OpencvTemplateMatchNode::editorFeaturePoints() const
 
     // 模板像素 → 图像坐标：轴对齐走 extractTemplatePatch 的整数直裁同一公式；
     // 旋转框走 getRotationMatrix2D 的逆映射（与 warpTemplate 的口径一致）。
-    const RoiShape roi = geometryRoi();
     const bool axisAligned = (roi.type != RoiType::RotatedRect) || qAbs(roi.angleDeg) < 1e-6;
     const double cx = roi.p1.x();
     const double cy = roi.p1.y();

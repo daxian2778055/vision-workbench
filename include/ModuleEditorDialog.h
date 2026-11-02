@@ -10,6 +10,8 @@ class HalconNode;
 class QLabel;
 class QScrollArea;
 class QCheckBox;
+class QListWidget;
+class QPushButton;
 class QTimer;
 class QToolButton;
 class QMenu;
@@ -47,6 +49,11 @@ private slots:
     void onRoiEdited(const RoiShape &shape);
     void onMaskEdited();
     void onSaveTemplate();
+    // ---- VM「特征模板」页对齐：模板列表（创建/编辑/删除）----
+    void onNewTemplate();
+    void onEditTemplate();
+    void onDeleteTemplate();
+    void onTemplateSelected(int row);
     void onEvaluateTemplate();
     void onCheckBudget();
     void onWizardGuide();
@@ -57,6 +64,8 @@ private:
     void loadImage();
     void rebuildParamPanel();
     void refreshTemplatePreview();
+    /// 把节点的模板列表灌进左侧列表（当前模板高亮）
+    void refreshTemplateList();
     void echoGeometry();
     /// 搜索区域（r19 批 A 第 4 步）：把 searchRegion* 画成青色框，并与结果叠加合并
     void refreshSearchOverlay();
@@ -101,6 +110,10 @@ private:
     QTimer *m_geoSaveTimer = nullptr;
     QLabel *m_hintLabel = nullptr;
     QLabel *m_templatePreview = nullptr;
+    QListWidget *m_templateList = nullptr;
+    QPushButton *m_tmplNewBtn = nullptr;
+    QPushButton *m_tmplEditBtn = nullptr;
+    QPushButton *m_tmplDelBtn = nullptr;
     QCheckBox *m_autoRecomputeCheck = nullptr;   /// 「自动重算」开关
     QTimer *m_autoRecomputeTimer = nullptr;      /// 去抖定时器
     bool m_paramHookBusy = false;
