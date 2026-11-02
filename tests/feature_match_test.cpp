@@ -84,6 +84,8 @@ private slots:
     void templateMultiShapeEntryAndMask();
     // 图像型 ROI（VM 区域类型=图像类型）：候选中心必须落在掩膜白区
     void templateImageTypeRoiLimitsCandidates();
+    // 输出掩膜：开关打开后唯一端口上应带一张与搜索区域一致的掩膜图
+    void templateOutputsSearchMask();
 };
 
 namespace {
@@ -1728,6 +1730,67 @@ void FeatureMatchTest::templateImageTypeRoiLimitsCandidates()
                  && qAbs(row - (right.y + kTemplateSize / 2.0)) <= 2.0,
              qPrintable(QStringLiteral("掩膜只留右侧，却命中 (%1,%2) ⇒ 图像型 ROI 没生效")
                             .arg(col).arg(row)));
+}
+
+// 输出掩膜（VM 基本参数页开关）：打开后唯一端口上除匹配结果外还要带一张掩膜，
+// 内容 = 搜索区域（矩形/多边形）白、区域外黑；关掉则不输出。
+void FeatureMatchTest::templateOutputsSearchMask()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const cv::Mat patch = makePatch();
+    const QString tpl = dir.filePath(QStringLiteral("tpl.png"));
+    QVERIFY(cv::imwrite(tpl.toStdString(), patch));
+
+    cv::Mat canvas(400, 500, CV_8UC1, cv::Scalar(kCanvasBackground));
+    patch.copyTo(canvas(cv::Rect(180, 130, kTemplateSize, kTemplateSize)));
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.5);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("templatePath"), tpl);
+    node.setParam(QStringLiteral("searchRegionCol"), 100);
+    node.setParam(QStringLiteral("searchRegionRow"), 80);
+    node.setParam(QStringLiteral("searchRegionWidth"), 300);
+    node.setParam(QStringLiteral("searchRegionHeight"), 220);
+    node.setParam(QStringLiteral("outputMask"), true);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+    node.run(false);
+
+    // 直接调用 run() 时结果挂在端口 1；聚合端口(0)由 process() 生成，这里验数据面
+    const auto resData = node.getOutputData(1);
+    QVERIFY2(resData, "匹配结果对象缺失");
+    QSharedPointer<DataObject> maskObj;
+    for (const auto &p : resData->attachedResults()) {
+        if (p.first == QStringLiteral("掩膜"))
+            maskObj = p.second;
+    }
+    QVERIFY2(maskObj && maskObj->getHImage().IsInitialized(),
+             "输出掩膜打开后，结果对象上应有「掩膜」子结果");
+    const cv::Mat mask = OpencvUtil::himageToMat(HImage(maskObj->getHImage()));
+    QCOMPARE(mask.cols, canvas.cols);
+    QCOMPARE(mask.rows, canvas.rows);
+    QVERIFY2(mask.at<uchar>(150, 150) != 0, "搜索区域内部应为白");
+    QVERIFY2(mask.at<uchar>(10, 10) == 0, "搜索区域外应为黑");
+
+    // 关掉后该子结果不应再带图
+    node.setParam(QStringLiteral("outputMask"), false);
+    node.run(false);
+    const auto resOff = node.getOutputData(1);
+    QSharedPointer<DataObject> maskOff;
+    if (resOff) {
+        for (const auto &p : resOff->attachedResults()) {
+            if (p.first == QStringLiteral("掩膜"))
+                maskOff = p.second;
+        }
+    }
+    QVERIFY2(!maskOff || !maskOff->getHImage().IsInitialized(),
+             "输出掩膜关闭后不应再产出掩膜图");
 }
 
 QTEST_MAIN(FeatureMatchTest)

@@ -271,6 +271,8 @@ void OpencvTemplateMatchNode::init()
                         QStringLiteral("链长模式：最小可见率（掩膜/遮挡后至少保留多少模板边缘点）")),
         makeIntParam(QStringLiteral("roiType"), 0, 0, 1,
                      QStringLiteral("ROI区域类型：0=图形（searchRegion*），1=图像（第2个输入当掩膜）")),
+        makeBoolParam(QStringLiteral("outputMask"), false,
+                      QStringLiteral("输出掩膜（把最终搜索区域作为具名子结果输出）")),
         makeDoubleParam(QStringLiteral("minScore"), 0.6, 0.0, 1.0,
                         QStringLiteral("最低匹配度")),
         // VM「配置参数」对齐（2026-11-02）：把原先写死的边缘参数放出来。
@@ -675,6 +677,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         // ROI 图像类型（VM 的「区域类型=图像类型」）：第二个图像输入当掩膜，
         // 白=允许、黑=排除。按粗搜栅格缩放，候选中心必须落在白区。
         cv::Mat roiMask;
+        cv::Mat roiMaskFull;   // 原图尺寸（输出掩膜用）
         if (m_params.value(QStringLiteral("roiType"), 0).toInt() == 1) {
             const QSharedPointer<DataObject> maskData = m_inputData.value(1);
             if (maskData && maskData->getHImage().IsInitialized()) {
@@ -687,6 +690,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                     const cv::Rect rr =
                         searchRect & cv::Rect(0, 0, grayFull.cols, grayFull.rows);
                     if (rr.width > 2 && rr.height > 2) {
+                        cv::threshold(m, roiMaskFull, 127, 255, cv::THRESH_BINARY);
                         cv::resize(m(rr), roiMask, graySearch.size(), 0, 0, cv::INTER_NEAREST);
                         cv::threshold(roiMask, roiMask, 127, 255, cv::THRESH_BINARY);
                     }
@@ -1139,6 +1143,30 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         }
         m_outputImage = m_inputImage;
 
+        // 输出掩膜（VM 开关）：最终搜索区域/掩膜作为具名子结果，挂在主结果对象上
+        QSharedPointer<DataObject> maskOutObj;
+        if (m_params.value(QStringLiteral("outputMask"), false).toBool()) {
+            cv::Mat maskOut;
+            if (!roiMaskFull.empty()) {
+                maskOut = roiMaskFull;
+            } else {
+                maskOut = cv::Mat::zeros(grayFull.size(), CV_8UC1);
+                if (searchPoly.size() >= 3) {
+                    std::vector<cv::Point> pts = searchPoly;
+                    for (cv::Point &p : pts) {
+                        p.x += searchRect.x;
+                        p.y += searchRect.y;
+                    }
+                    cv::fillPoly(maskOut, std::vector<std::vector<cv::Point>>{pts},
+                                 cv::Scalar(255));
+                } else {
+                    cv::rectangle(maskOut, searchRect, cv::Scalar(255), cv::FILLED);
+                }
+            }
+            maskOutObj = QSharedPointer<DataObject>::create();
+            maskOutObj->setHImage(OpencvUtil::matToHimage(maskOut));
+        }
+
         MeasureResult res;
         res.type = QStringLiteral("template");
         res.valueName = QStringLiteral("匹配得分");
@@ -1151,6 +1179,8 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                                            bestScale, bestScale});
         auto resObj = QSharedPointer<DataObject>::create();
         resObj->setMeasureResult(res);
+        if (maskOutObj)
+            resObj->attachResult(QStringLiteral("掩膜"), maskOutObj);
         setOutputData(1, resObj);
     } catch (const std::exception &e) {
         VFP_DEBUG << "OpencvTemplateMatchNode error:" << e.what();
