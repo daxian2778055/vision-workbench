@@ -98,6 +98,8 @@ private slots:
     void templateSuggestParamsFollowsTemplate();
     // VM 特征尺度/最小链长：特征点必须真的随参数变稀疏、短链被丢弃
     void templateFeatureScaleAndChainLengthFilterPoints();
+    // VM 排序类型：多目标结果的排序依据必须生效
+    void templateSortTypeOrdersMatchList();
     // 屏蔽形状：最终掩膜 = 保留 − 屏蔽
     void templateExcludeShapesSubtractFromMask();
     // 尺度模式=自动：按模板占比估出搜索范围，能命中 1.15 倍实例
@@ -2194,6 +2196,54 @@ void FeatureMatchTest::templateFeatureScaleAndChainLengthFilterPoints()
     QVERIFY2(rightSide(chained) == 0,
              qPrintable(QStringLiteral("最小链长 20 没把孤立噪点滤掉（还剩 %1 个）")
                             .arg(rightSide(chained))));
+}
+
+// VM「排序类型」：多目标结果按指定依据排序。两个同款工件一上一下：
+//   sortType=3（按Y由小到大）→ 第一行 row 必须小于第二行。
+void FeatureMatchTest::templateSortTypeOrdersMatchList()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const cv::Mat patch = makePatch();
+    const QString tpl = dir.filePath(QStringLiteral("tpl.png"));
+    QVERIFY(cv::imwrite(tpl.toStdString(), patch));
+
+    cv::Mat canvas(500, 400, CV_8UC1, cv::Scalar(kCanvasBackground));
+    patch.copyTo(canvas(cv::Rect(60, 300, kTemplateSize, kTemplateSize)));   // 下
+    patch.copyTo(canvas(cv::Rect(60, 60, kTemplateSize, kTemplateSize)));    // 上
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.5);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("maxMatches"), 2);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("templatePath"), tpl);
+    node.setParam(QStringLiteral("searchRegionCol"), 0);
+    node.setParam(QStringLiteral("searchRegionRow"), 0);
+    node.setParam(QStringLiteral("searchRegionWidth"), canvas.cols);
+    node.setParam(QStringLiteral("searchRegionHeight"), canvas.rows);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+
+    node.setParam(QStringLiteral("sortType"), 3);        // 按Y由小到大
+    node.run(false);
+    const QStringList rows =
+        node.getParam(QStringLiteral("matchList")).toString().split(QLatin1Char(';'), Qt::SkipEmptyParts);
+    qInfo("sort-type: %s", qPrintable(node.getParam(QStringLiteral("matchList")).toString()));
+    QCOMPARE(rows.size(), 2);
+    const double row0 = rows.at(0).split(QLatin1Char(',')).at(0).toDouble();
+    const double row1 = rows.at(1).split(QLatin1Char(',')).at(0).toDouble();
+    QVERIFY2(row0 < row1,
+             qPrintable(QStringLiteral("按Y升序没生效：第一行 %1，第二行 %2").arg(row0).arg(row1)));
+
+    node.setParam(QStringLiteral("sortType"), 2);        // 按X由小到大（同列时顺序应稳定）
+    node.run(false);
+    const QStringList rows2 =
+        node.getParam(QStringLiteral("matchList")).toString().split(QLatin1Char(';'), Qt::SkipEmptyParts);
+    QCOMPARE(rows2.size(), 2);
 }
 
 QTEST_MAIN(FeatureMatchTest)

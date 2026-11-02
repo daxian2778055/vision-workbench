@@ -2451,8 +2451,9 @@ void ParamPanelBindingTest::testUnnamedFindChildSitesAreSingleCandidate()
     // → 294：尺度模式 scaleMode（0=手动 / 1=自动）
     // → 298：结果显示四层显隐（showSearchRegion/MatchResult/MatchPoint/FeaturePoints）
     // → 299：最小链长 minChainLength + 链长模式 chainMode（VM 口径替换我发明的可见率）
-    QVERIFY2(fieldSlots == 299,
-             qPrintable(QStringLiteral("字段槽位分母从 299 变成 %1 ⇒ 本闸口径已漂移，"
+    // → 305：运行参数补齐 6 项（阈值类型/手动阈值/排序类型/最大重叠率/延拓阈值/超时控制）
+    QVERIFY2(fieldSlots == 305,
+             qPrintable(QStringLiteral("字段槽位分母从 305 变成 %1 ⇒ 本闸口径已漂移，"
                                        "先核对面板改动再把基准一起改").arg(fieldSlots)));
     QVERIFY2(badSlots.isEmpty(),
              qPrintable(QStringLiteral("U5-MULTI: %1 个字段槽位里同类型候选不止一个 ⇒ 站点 1 的无名 "

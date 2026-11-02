@@ -12,6 +12,7 @@
 #include <QFileInfo>
 #include <QDir>
 #include <QVector>
+#include <QElapsedTimer>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <algorithm>
@@ -349,6 +350,19 @@ void OpencvTemplateMatchNode::init()
                      QStringLiteral("最小链长（特征链短于此不保留）")),
         makeBoolParam(QStringLiteral("chainMode"), false,
                       QStringLiteral("链长模式：自动（关=用上面的最小链长）")),
+        // ── VM「运行参数」补齐（官方口径，见 docs/VM4.4高精度匹配对齐规范.md）──
+        makeIntParam(QStringLiteral("thresholdType"), 2, 0, 2,
+                     QStringLiteral("阈值类型：0=自动（按目标图像）1=模板 2=手动")),
+        makeIntParam(QStringLiteral("matchContrastThreshold"), 5, 1, 255,
+                     QStringLiteral("手动阈值（灰度差 1~255，阈值类型=手动时用）")),
+        makeIntParam(QStringLiteral("sortType"), 0, 0, 5,
+                     QStringLiteral("排序类型：0=按分数降序 1=按角度降序 2=按X升序 3=按Y升序 4=按X再Y 5=按Y再X")),
+        makeIntParam(QStringLiteral("maxOverlap"), 50, 0, 100,
+                     QStringLiteral("最大重叠率（0~100，默认 50；重叠超此值时丢低分目标）")),
+        makeIntParam(QStringLiteral("extendThreshold"), 0, 0, 100,
+                     QStringLiteral("延拓阈值（目标被图像边缘截断时允许缺失的特征比例 %）")),
+        makeIntParam(QStringLiteral("timeoutMs"), 0, 0, 10000,
+                     QStringLiteral("超时控制（搜索超时毫秒数，0=关闭）")),
         makeIntParam(QStringLiteral("roiType"), 0, 0, 1,
                      QStringLiteral("ROI区域类型：0=图形（searchRegion*），1=图像（第2个输入当掩膜）")),
         makeBoolParam(QStringLiteral("outputMask"), false,
@@ -802,6 +816,25 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                                  ? qMax(2, featureScale * 2)
                                  : qBound(1, active.minChainLength, 200);
 
+        // 阈值类型（VM 运行参数）：匹配阶段的边缘对比度阈值来自哪
+        //   0=自动（按目标图像自动生成）  1=模板（用模板配置里的对比度阈值）  2=手动
+        const int thresholdType = qBound(0, m_params.value(QStringLiteral("thresholdType"), 2).toInt(), 2);
+        double searchEdgeThreshold = edgeThreshold;
+        if (thresholdType == 2) {
+            searchEdgeThreshold = qBound(1, m_params.value(QStringLiteral("matchContrastThreshold"), 5).toInt(), 255)
+                                  * 4.0;
+        } else if (thresholdType == 0) {
+            searchEdgeThreshold =
+                effectiveEdgeThresholdFor(gray, sobelKsize, active.contrastThreshold, true);
+        }
+        // 延拓阈值（VM）：目标被图像边缘截断时，允许缺失的特征比例（0~100）
+        const double extendRatio =
+            qBound(0, m_params.value(QStringLiteral("extendThreshold"), 0).toInt(), 100) / 100.0;
+        // 超时控制（VM）：搜索超时毫秒数，0=关闭
+        const int timeoutMs = qBound(0, m_params.value(QStringLiteral("timeoutMs"), 0).toInt(), 10000);
+        QElapsedTimer searchTimer;
+        searchTimer.start();
+
         QVector<double> angles;
         QVector<double> scales;
         collectSearchValues(m_params.value(QStringLiteral("angleMin"), -30.0).toDouble(),
@@ -978,6 +1011,36 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 const double need = qMax(16.0, 0.4 * n);
                 cv::Mat scoreVis = (r1 + r2) / (rv + 1e-6f);   // cos(Δθ) 的和除以可见点数
                 scoreVis.setTo(-1.0, rv < need);           // 无效处给 -1（不会被选为最优）
+                // 延拓阈值（VM）：目标被图像边缘截断时，缺失特征比例可放宽可见率门槛
+                if (extendRatio > 0.0 && !wm.empty()) {
+                    const double wW = double(wm.cols);
+                    const double hW = double(wm.rows);
+                    const double area = qMax(1.0, wW * hW);
+                    const double W = double(curSearchStrong.cols);
+                    const double H = double(curSearchStrong.rows);
+                    for (int yy = 0; yy < scoreVis.rows; ++yy) {
+                        for (int xx = 0; xx < scoreVis.cols; ++xx) {
+                            if (scoreVis.at<float>(yy, xx) > -0.5f)
+                                continue;
+                            const double cx = xx + warpedPair.second.x;
+                            const double cy = yy + warpedPair.second.y;
+                            const double ix0 = qMax(0.0, cx - wW * 0.5);
+                            const double ix1 = qMin(W, cx + wW * 0.5);
+                            const double iy0 = qMax(0.0, cy - hW * 0.5);
+                            const double iy1 = qMin(H, cy + hW * 0.5);
+                            const double inter = qMax(0.0, ix1 - ix0) * qMax(0.0, iy1 - iy0);
+                            const double outside = qBound(0.0, 1.0 - inter / area, 1.0);
+                            if (outside <= 1e-6)
+                                continue;
+                            const double relaxedNeed =
+                                qMax(16.0, 0.4 * n * (1.0 - extendRatio * outside));
+                            const float v = rv.at<float>(yy, xx);
+                            if (v >= relaxedNeed)
+                                scoreVis.at<float>(yy, xx) =
+                                    (r1.at<float>(yy, xx) + r2.at<float>(yy, xx)) / (v + 1e-6f);
+                        }
+                    }
+                }
                 if (m_params.value(QStringLiteral("polarity"), 1).toInt() == 0)
                     cv::absdiff(scoreVis, cv::Scalar(0), scoreVis);
                 result = scoreVis;
@@ -1087,6 +1150,11 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         const int maxMatches =
             qBound(1, m_params.value(QStringLiteral("maxMatches"), 1).toInt(), 16);
         QStringList matchList;
+        // VM「排序类型 / 最大重叠率」：先收集命中，最后统一排序 + 重叠过滤再格式化
+        struct MatchHit {
+            double row, col, score, angle, scale, prow, pcol;
+        };
+        QVector<MatchHit> hits;
         int matchCount = 0;
         cv::Point mainLoc;
         double mainScore = -1e9, mainAngle = 0.0, mainScale = 1.0;
@@ -1104,8 +1172,16 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             // 粗搜：全部角度 x 尺度（粗图上跑）
             rasterScale = 1.0 / qMax(1.0, coarseFactor);
             searchOrigin = cv::Point(0, 0);
+        bool searchTimedOut = false;
         for (double scale : scales) {
+            if (searchTimedOut)
+                break;
             for (double angle : angles) {
+                // 超时控制（VM）：到点即停，保留已找到的最优
+                if (timeoutMs > 0 && searchTimer.elapsed() >= timeoutMs) {
+                    searchTimedOut = true;
+                    break;
+                }
                 cv::Point loc;
                 cv::Point2f centerInWarp;
         // method=2：倒角匹配（搜索图先转距离场，模板边沿落场取均值）
@@ -1118,7 +1194,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             cv::magnitude(sgx, sgy, smag);
             cv::divide(sgx, smag + 1e-6f, curSearchCos);
             cv::divide(sgy, smag + 1e-6f, curSearchSin);
-            cv::threshold(smag, curSearchStrong, edgeThreshold, 1.0, cv::THRESH_BINARY);
+            cv::threshold(smag, curSearchStrong, searchEdgeThreshold, 1.0, cv::THRESH_BINARY);
             refineFeatureMask(curSearchStrong, minChain, featureScale);
             curSearchStrong.convertTo(curSearchStrong, CV_32F);
             cv::multiply(curSearchCos, curSearchStrong, curSearchCos);   // 分子分母同掩膜
@@ -1188,7 +1264,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                     cv::magnitude(sgx, sgy, smag);
                     cv::divide(sgx, smag + 1e-6f, curSearchCos);
                     cv::divide(sgy, smag + 1e-6f, curSearchSin);
-                    cv::threshold(smag, curSearchStrong, edgeThreshold, 1.0, cv::THRESH_BINARY);
+                    cv::threshold(smag, curSearchStrong, searchEdgeThreshold, 1.0, cv::THRESH_BINARY);
             refineFeatureMask(curSearchStrong, minChain, featureScale);
                     curSearchStrong.convertTo(curSearchStrong, CV_32F);
                     cv::multiply(curSearchCos, curSearchStrong, curSearchCos);   // 分子分母同掩膜
@@ -1260,6 +1336,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 const double sa = std::sin(rad);
                 const double pCol = centerX + ca * ax - sa * ay;
                 const double pRow = centerY + sa * ax + ca * ay;
+                hits.append({centerY, centerX, bestScore, bestAngle, bestScale, pRow, pCol});
                 matchList << QStringLiteral("%1,%2,%3,%4,%5,%6,%7")
                                  .arg(centerY, 0, 'f', 1)
                                  .arg(centerX, 0, 'f', 1)
@@ -1285,6 +1362,63 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             bestCenterInWarp = mainCenter;
         }
         m_params[QStringLiteral("matchCount")] = matchCount;
+        // VM「最大重叠率」：重叠超阈值时舍弃得分较低的目标（先按分数降序处理，保高分）
+        {
+            const double maxOverlap =
+                qBound(0, m_params.value(QStringLiteral("maxOverlap"), 50).toInt(), 100) / 100.0;
+            if (maxOverlap < 1.0 && hits.size() > 1) {
+                std::stable_sort(hits.begin(), hits.end(),
+                                 [](const MatchHit &a, const MatchHit &b) { return a.score > b.score; });
+                QVector<MatchHit> kept;
+                for (const MatchHit &h : hits) {
+                    const double hw = qMax(4.0, tmplW * h.scale);
+                    const double hh = qMax(4.0, tmplH * h.scale);
+                    bool drop = false;
+                    for (const MatchHit &k : kept) {
+                        const double kw = qMax(4.0, tmplW * k.scale);
+                        const double kh = qMax(4.0, tmplH * k.scale);
+                        const double interW = qMax(0.0, (hw + kw) * 0.5 - qAbs(h.col - k.col));
+                        const double interH = qMax(0.0, (hh + kh) * 0.5 - qAbs(h.row - k.row));
+                        const double inter = interW * interH;
+                        const double minArea = qMin(hw * hh, kw * kh);
+                        if (minArea > 1.0 && inter / minArea > maxOverlap) {
+                            drop = true;
+                            break;
+                        }
+                    }
+                    if (!drop)
+                        kept.append(h);
+                }
+                hits = kept;
+            }
+        }
+        // VM「排序类型」：多目标结果的排序依据（默认按分数降序）
+        {
+            const int sortType =
+                qBound(0, m_params.value(QStringLiteral("sortType"), 0).toInt(), 5);
+            std::stable_sort(hits.begin(), hits.end(),
+                             [sortType](const MatchHit &a, const MatchHit &b) {
+                                 switch (sortType) {
+                                 case 1: return a.angle > b.angle;
+                                 case 2: return a.col < b.col;
+                                 case 3: return a.row < b.row;
+                                 case 4: return a.col != b.col ? a.col < b.col : a.row < b.row;
+                                 case 5: return a.row != b.row ? a.row < b.row : a.col < b.col;
+                                 default: return a.score > b.score;
+                                 }
+                             });
+        }
+        matchList.clear();
+        for (const MatchHit &h : hits) {
+            matchList << QStringLiteral("%1,%2,%3,%4,%5,%6,%7")
+                             .arg(h.row, 0, 'f', 1)
+                             .arg(h.col, 0, 'f', 1)
+                             .arg(h.score, 0, 'f', 3)
+                             .arg(h.angle, 0, 'f', 2)
+                             .arg(h.scale, 0, 'f', 4)
+                             .arg(h.prow, 0, 'f', 1)
+                             .arg(h.pcol, 0, 'f', 1);
+        }
         m_params[QStringLiteral("matchList")] = matchList.join(QLatin1Char(';'));
 
         if (bestScore < -1e8) {
