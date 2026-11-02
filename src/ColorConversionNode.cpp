@@ -378,8 +378,8 @@ QWidget *ColorConversionNode::createParamPanel()
                                 if (outputData) {
                                     // 将枚举类型转换为整数输出
                                     VFP_DEBUG << "  Data type:" << static_cast<int>(outputData->getType());
-                                    // 检查输出数据类型是否为图像
-                                    if (outputData->getType() == DataObject::DataType::Image) {
+                                    // 检查输出对象是否带图像（B1：聚合端口的主类型可能是 Measure/Number）
+                                    if (outputData->getHImage().IsInitialized()) {
                                         QString itemText = QString("%1 [%2] - %3").arg(node->name()).arg(node->moduleId()).arg(outputPort->name());
                                         inputImageCombo->addItem(itemText, QVariant::fromValue(QPair<NodeBase*, int>(node, j)));
                                         VFP_DEBUG << "  Added item:" << itemText;

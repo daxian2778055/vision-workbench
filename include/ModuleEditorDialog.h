@@ -38,6 +38,9 @@ private slots:
     void onDrawGeometry();
     void onDrawSearchRegion();
     void onDrawSearchPolygon();
+    /// B2：编辑对象切换 —— 句柄只出现在当前对象上（模板框 / 搜索区域）
+    void onEditTargetGeometry();
+    void onEditTargetSearch();
     void onClearGeometry();
     void onEditMask();
     void onClearMask();
@@ -58,6 +61,12 @@ private:
     /// 搜索区域（r19 批 A 第 4 步）：把 searchRegion* 画成青色框，并与结果叠加合并
     void refreshSearchOverlay();
     OverlayShape searchRegionShape() const;
+    /// 把 RoiShape 转成只读叠加图元（编辑搜索区域时仍能看到模板框）
+    QVector<OverlayShape> geometryOverlayShapes() const;
+    /// 按当前编辑对象重设画布上的可编辑 ROI（模板框 or 搜索区域）
+    void applyEditTarget();
+    /// 搜索区域矩形写回 4 个参数
+    void writeSearchRect(const RoiShape &shape);
     /// 给参数面板上的可编辑控件挂钩变更信号（面板由节点自建，控件种类不定）
     void installParamHooks(QWidget *panel);
     void scheduleAutoRecompute();
@@ -97,6 +106,10 @@ private:
     bool m_paramHookBusy = false;
     bool m_pickingSearchRegion = false;
     bool m_pickingSearchPolygon = false;
+    /// B2 当前编辑对象：0=模板框（算子几何），1=搜索区域
+    int m_editTarget = 0;
+    QToolButton *m_targetGeomBtn = nullptr;
+    QToolButton *m_targetSearchBtn = nullptr;
     int m_wizardStep = 0;                       /// 训练向导步进（0=未启动）        /// 正在画多边形搜索区域          /// 正在画搜索区域（否则画模板框）
     QVector<OverlayShape> m_resultOverlay;      /// 测量结果叠加（与搜索框合并后再下发）                /// 程序化回填参数期间抑制挂钩回调
     QToolButton *m_varRefButton = nullptr;       /// 「变量引用」按钮

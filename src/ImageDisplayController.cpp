@@ -1,6 +1,8 @@
 #include "ImageDisplayController.h"
 
 #include "NodeBase.h"
+#include "HalconNode.h"
+#include "FlowScene.h"
 #include "DataObject.h"
 #include "FindLineNode.h"
 #include "FindCircleNode.h"
@@ -67,10 +69,21 @@ QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *n
 {
     QVector<OverlayShape> overlay;
     if (!node) return overlay;
-    for (int p = 1; p < node->outputPorts().size(); ++p) {
+
+    // B1 统一输出：结果不再挂在端口 1..N，而是与图像同一个对象（附加结果表）。
+    // 仍然兼容尚未聚合的节点（例如条件判断的分支端口 / 老插件）：端口 1..N 也扫一遍。
+    QVector<MeasureResult> results;
+    QSharedPointer<DataObject> mainData = node->getOutputData(0);
+    if (mainData)
+        results = mainData->measureResults();
+    for (int p = 1; p < node->logicalOutputPortCount(); ++p) {
         auto data = node->getOutputData(p);
-        if (!data || data->getType() != DataObject::DataType::Measure) continue;
-        MeasureResult mr = data->getMeasureResult();
+        if (!data) continue;
+        for (const MeasureResult &mr : data->measureResults())
+            results.append(mr);
+    }
+
+    for (const MeasureResult &mr : results) {
         // 未命中也画**灰框候选**（r19 批 A 第 3 步）：VM 的「总能找到，给出分数」——
         // 原先把 !mr.valid 整条丢掉，现场只剩红节点、没有框，无从判断差多少。
         const bool hit = mr.valid;
@@ -179,11 +192,65 @@ void ImageDisplayController::removeScene(FlowScene *scene)
     m_selectedOutputNodes.remove(scene);
 }
 
+bool ImageDisplayController::showNodeGeometry(NodeBase *node)
+{
+    if (!m_imageView)
+        return false;
+    HalconNode *hn = qobject_cast<HalconNode *>(node);
+    if (!hn || hn->geometryRoiType() == RoiType::None) {
+        m_geometryRoiNode = nullptr;
+        m_searchRegionNode = nullptr;
+        m_imageView->clearRoi();
+        m_imageView->setRoiHandleEditEnabled(false);
+        return false;
+    }
+    m_geometryRoiNode = node;
+    m_searchRegionNode = nullptr;
+    m_roiPickNode = nullptr;                 // 与"取点"互斥
+    m_imageView->setRoiEditable(false);      // 只拖句柄，不进入重画模式
+    m_imageView->setRoiColor(QColor(0, 200, 80));
+    m_imageView->setRoiShape(hn->geometryRoi());
+    m_imageView->setRoiHandleEditEnabled(true);
+    return true;
+}
+
+bool ImageDisplayController::hasSearchRegion(NodeBase *node)
+{
+    HalconNode *hn = qobject_cast<HalconNode *>(node);
+    return hn && hn->hasParam(QStringLiteral("searchRegionWidth"))
+           && hn->hasParam(QStringLiteral("searchRegionHeight"));
+}
+
+bool ImageDisplayController::showNodeSearchRegion(NodeBase *node)
+{
+    if (!m_imageView || !hasSearchRegion(node))
+        return false;
+    HalconNode *hn = qobject_cast<HalconNode *>(node);
+    m_searchRegionNode = node;
+    m_geometryRoiNode = nullptr;
+    m_roiPickNode = nullptr;
+    const double col = hn->getParam(QStringLiteral("searchRegionCol")).toDouble();
+    const double row = hn->getParam(QStringLiteral("searchRegionRow")).toDouble();
+    const double w = hn->getParam(QStringLiteral("searchRegionWidth")).toDouble();
+    const double h = hn->getParam(QStringLiteral("searchRegionHeight")).toDouble();
+    RoiShape s;
+    s.type = RoiType::Rect;
+    s.p1 = QPointF(col, row);
+    s.p2 = QPointF(col + qMax(0.0, w), row + qMax(0.0, h));
+    m_imageView->setRoiEditable(false);
+    m_imageView->setRoiColor(QColor(0, 200, 255));
+    m_imageView->setRoiShape(s);
+    m_imageView->setRoiHandleEditEnabled(true);
+    return true;
+}
+
 bool ImageDisplayController::startRoiPick(NodeBase *node)
 {
     if (!m_imageView || !node)
         return false;
     m_roiPickNode = node;
+    m_geometryRoiNode = nullptr;             // 取点期间不再同时编辑几何
+    m_searchRegionNode = nullptr;
     if (qobject_cast<FindCircleNode *>(node)) {
         m_imageView->setRoiEditable(true, RoiType::Circle);
     } else {
@@ -194,6 +261,38 @@ bool ImageDisplayController::startRoiPick(NodeBase *node)
 
 NodeBase *ImageDisplayController::writeRoiToNode(const RoiShape &shape)
 {
+    // B3：主画布"搜索区域"编辑——写回 4 个参数（只写参数，不打断执行线程，下一轮生效）
+    if (m_searchRegionNode && shape.type == RoiType::Rect) {
+        HalconNode *hn = qobject_cast<HalconNode *>(m_searchRegionNode);
+        if (hn) {
+            const QRectF b = QRectF(shape.p1, shape.p2).normalized();
+            if (b.width() > 1.0 && b.height() > 1.0) {
+                if (FlowScene *fs = hn->flowSceneRef())
+                    fs->recordUndo();
+                hn->setParam(QStringLiteral("searchRegionCol"), int(b.x() + 0.5));
+                hn->setParam(QStringLiteral("searchRegionRow"), int(b.y() + 0.5));
+                hn->setParam(QStringLiteral("searchRegionWidth"), qMax(1, int(b.width() + 0.5)));
+                hn->setParam(QStringLiteral("searchRegionHeight"), qMax(1, int(b.height() + 0.5)));
+                if (m_imageView)
+                    m_imageView->setRoiShape(shape);
+            }
+            return hn;
+        }
+    }
+
+    // B3：主画布几何编辑（不是"取点"）——写回 applyGeometryRoi，节点保持可继续拖。
+    if (m_geometryRoiNode && shape.type != RoiType::None) {
+        HalconNode *hn = qobject_cast<HalconNode *>(m_geometryRoiNode);
+        if (hn && hn->geometryRoiType() != RoiType::None) {
+            if (FlowScene *fs = hn->flowSceneRef())
+                fs->recordUndo();
+            hn->applyGeometryRoi(shape);
+            if (m_imageView)
+                m_imageView->setRoiShape(hn->geometryRoi());
+            return hn;
+        }
+    }
+
     NodeBase *node = m_roiPickNode;
     m_roiPickNode = nullptr;
     if (m_imageView) {

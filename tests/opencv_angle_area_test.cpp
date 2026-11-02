@@ -82,11 +82,12 @@ void OpencvAngleAreaTest::testBlobAreaPort()
     OpencvBlobNode node;
     node.init();
 
-    // 端口已暴露：面积（索引 3）
+    // B1：面积不再是独立端口，而是唯一「输出」上的具名子结果（名字仍可被读到）
     QStringList names;
     for (const Port *p : node.outputPorts()) names.append(p->name());
+    for (const auto &lo : node.logicalOutputs()) names.append(lo.first);
     QVERIFY2(names.contains(QString::fromUtf8("面积")),
-             "OpencvBlobNode 应暴露『面积』输出端口");
+             "OpencvBlobNode 应暴露『面积』子结果");
 
     const int w = 60, h = 40;
     // 全白图：二值化后整图为一个 Blob，面积 = W*H

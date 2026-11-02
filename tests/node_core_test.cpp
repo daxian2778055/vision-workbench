@@ -173,13 +173,16 @@ void NodeCoreTest::testPortCreation()
     OpencvThresholdNode node;
     node.init();
 
-    // 验证端口数量
-    QCOMPARE(node.inputPorts().size(), 1);  // 图像输入
-    QCOMPARE(node.outputPorts().size(), 3);  // 图像输出 + 二值图 + 前景像素数
+    // 验证端口数量（B1 统一输出：二值图/前景像素数已折叠进同一端口，不再是 3 个红点）
+    QCOMPARE(node.inputPorts().size(), 1);   // 图像输入
+    QCOMPARE(node.outputPorts().size(), 1);  // 唯一「输出」：图像 + 子结果
 
-    // 验证端口类型
+    // 验证端口类型：聚合端口对下游一视同仁（Any），承诺图像与否记在声明类型上
     QCOMPARE(node.inputPorts()[0]->dataType(), PortDataType::Image);
-    QCOMPARE(node.outputPorts()[0]->dataType(), PortDataType::Image);
+    QCOMPARE(node.outputPorts()[0]->dataType(), PortDataType::Any);
+    QCOMPARE(node.logicalOutputs().size(), 2);   // 二值图 + 前景像素数
+    QCOMPARE(node.logicalOutputs().at(0).first, QStringLiteral("二值图"));
+    QCOMPARE(node.logicalOutputs().at(1).first, QStringLiteral("前景像素数"));
 }
 
 void NodeCoreTest::testPortConnection()

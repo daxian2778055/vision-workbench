@@ -8,6 +8,8 @@
 #include <QJsonObject>
 #include <QVariant>
 #include <QSet>
+#include <QPair>
+#include <QSharedPointer>
 #include <QWidget>
 #include <QVBoxLayout>
 #include <QMutex>
@@ -81,7 +83,19 @@ public:
     QList<Port *> outputPorts() const;
 
     Port *addInputPort(const QString &name, PortDataType dataType = PortDataType::Image);
-    Port *addOutputPort(const QString &name, PortDataType dataType = PortDataType::Image);
+    /// 虚函数：HalconNode 覆写后把"第 2 个及以后"的输出折叠成同一端口上的具名子结果
+    /// （B1 统一输出：一个算子只对外暴露一个输出点）。
+    virtual Port *addOutputPort(const QString &name, PortDataType dataType = PortDataType::Image);
+
+    /// 本节点是否把输出聚合到单个端口（B1）。逻辑/分支类节点（条件判断 TRUE/FALSE 两路）
+    /// 覆写为 false —— 分支是拓扑语义，不是数据多类型，合并会让分支路由失效。
+    virtual bool aggregatesOutputPorts() const { return false; }
+    /// 逻辑输出个数（含被折叠的子输出）：给「按端口号取结果」的老读取者一个上界。
+    /// 默认 = 真实端口数；聚合节点覆写为 1 + 子输出数。
+    virtual int logicalOutputPortCount() const { return outputPorts().size(); }
+    /// 具名输出表（端口名 → 数据）：默认按真实端口枚举；聚合节点覆写为"主输出 + 子结果"，
+    /// 供运行界面按名取值（IO 状态灯的 值/成功/错误 等）。
+    virtual QVector<QPair<QString, QSharedPointer<DataObject>>> namedOutputs() const;
 
     bool hasConnection() const;
 

@@ -43,15 +43,10 @@ void DelayNode::run(bool /*autoSwitch*/)
         }
     }
     // 数据透传；无输入时清空输出，避免把上一轮结果留给下游（P1）
+    // B1：统一输出后对象里还带图像/测量结果/具名子结果，"只拷 type+data"会丢图丢结果，
+    // 直接透传同一对象（下游只读，不做就地修改）。
     auto input = getInputData(0);
-    if (input) {
-        auto out = QSharedPointer<DataObject>::create();
-        out->setType(input->getType());
-        out->setData(input->getData());
-        setOutputData(0, out);
-    } else {
-        setOutputData(0, QSharedPointer<DataObject>());
-    }
+    setOutputData(0, input);
 }
 
 void DelayNode::setParam(const QString &name, const QVariant &value)

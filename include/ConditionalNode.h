@@ -11,6 +11,9 @@ public:
     explicit ConditionalNode(QObject *parent = nullptr);
 
     void init() override;
+    /// B1 例外：TRUE/FALSE 两路是**拓扑分支**（执行引擎按源端口号决定激活哪侧下游），
+    /// 不是"同一结果的多数据类型"，合并成一个端口会让两侧永远同时激活。
+    bool aggregatesOutputPorts() const override { return false; }
     /// 判定不消费图像（继承来的"输入图像"端口只为兼容旧项目），空输入不得判失败
     bool requiresInputImage() const override { return false; }
     void run(bool autoSwitch = true) override;

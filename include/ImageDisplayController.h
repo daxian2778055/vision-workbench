@@ -55,6 +55,17 @@ public:
     /// 删除场景时清掉该场景的显式显示源键（否则场景对象已释放但键仍在 → 悬垂指针）
     void removeScene(FlowScene *scene);
 
+    /// B3：主画布直接编辑算子几何 ROI（模板框/搜索框/卡尺线…）。
+    /// 传 nullptr 关闭。返回 false = 该节点没有可编辑几何或无画布。
+    /// 运行中调用是安全的：只写参数（线程安全），执行线程下一轮读到新值。
+    bool showNodeGeometry(NodeBase *node);
+    /// B3：主画布直接编辑该节点的「搜索区域」（模板匹配等有 searchRegion* 参数的工具）。
+    /// 与几何编辑互斥；同样只写参数，运行中改下一轮生效。
+    bool showNodeSearchRegion(NodeBase *node);
+    /// 该节点是否声明了搜索区域参数（searchRegionWidth/Height）
+    static bool hasSearchRegion(NodeBase *node);
+    /// 当前主画布是否在编辑"搜索区域"（参数面板用它回显开关状态）
+    bool editingSearchRegion() const { return m_searchRegionNode != nullptr; }
     /// 开始在画布上取点；返回 false = 无画布或无目标节点（调用方不应做提示）
     bool startRoiPick(NodeBase *node);
     /// 画布 ROI 收笔：清状态 + 关 ROI 编辑 + 写回目标节点参数；返回目标节点（无目标/取消/未知类型为 nullptr）
@@ -65,6 +76,10 @@ private:
     QLabel *m_sourceLabel;
     QMap<FlowScene *, NodeBase *> m_selectedOutputNodes;
     NodeBase *m_roiPickNode = nullptr;
+    /// B3：主画布当前正在编辑几何的节点（与"取点"互斥）
+    NodeBase *m_geometryRoiNode = nullptr;
+    /// B3：主画布当前正在编辑搜索区域的节点
+    NodeBase *m_searchRegionNode = nullptr;
     std::function<FlowScene *()> m_sceneProvider;
     std::function<NodeBase *()> m_canvasSelectionProvider;
 };

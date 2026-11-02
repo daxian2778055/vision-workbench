@@ -37,7 +37,7 @@ void CounterNode::run(bool /*autoSwitch*/)
     bool condition = false;
     auto data = getInputData(0);
     if (data) {
-        QVariant var = data->getData();
+        QVariant var = data->primaryValue();   // B1：测量结果也按数值参与判定
         if (conditionMode == QStringLiteral("number")) {
             bool ok = false;
             double v = var.toDouble(&ok);

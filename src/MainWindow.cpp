@@ -930,9 +930,11 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
             // 全端口输出映射：端口0 走 updateNodeOutput（数值/状态灯）；
             // 全部端口按名走 updateNodePortMap（IO状态控件消费 成功/值/错误）
             QVariantMap portMap;
-            const QList<Port *> outPorts = node->outputPorts();
-            for (int pi = 0; pi < outPorts.size(); ++pi) {
-                QSharedPointer<DataObject> out = node->getOutputData(pi);
+            // B1 统一输出：一个端口 + 具名子结果（值/成功/错误、匹配结果…）。
+            // 按名取值而不是按端口号，IO 状态灯等按名绑定的控件才不受聚合影响。
+            const auto named = node->namedOutputs();
+            for (int pi = 0; pi < named.size(); ++pi) {
+                QSharedPointer<DataObject> out = named.at(pi).second;
                 if (!out) continue;
                 QVariant v;
                 switch (out->getType()) {
@@ -956,8 +958,7 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
                     break;
                 }
                 if (v.isValid()) {
-                    if (outPorts[pi])
-                        portMap.insert(outPorts[pi]->name(), v);
+                    portMap.insert(named.at(pi).first, v);
                     if (pi == 0)
                         m_runtimeView->updateNodeOutput(node->fullName(), v);
                 }
@@ -1407,6 +1408,8 @@ void MainWindow::onNodeSelected(NodeBase *node)
             // 模块的图，而不用先去执行它）。数据直接取自节点输出端口，无需改执行引擎；
             // 尚未执行、没有可用图像时保持当前画面不动，避免把已有画面清空。
             m_imageDisplay->displayNodeOutput(node);
+            // B3：选中即在主画布上挂出该算子的几何 ROI（可直接拖角点/中心改，运行中也可改）
+            m_imageDisplay->showNodeGeometry(resolveDisplayNode(node));
 
             // 测量节点画布取点：连接 ROI 按钮信号（断开旧连接防重复）
             if (m_roiPickConn) {
@@ -1442,8 +1445,13 @@ void MainWindow::onNodeSelected(NodeBase *node)
                         // 与原实现一致：此路径只换图像与来源标签，不动叠加图元
                         m_imageDisplay->showImage(image, target->fullName());
                     }
+                    // B3：显示源换了，ROI 也要跟着换成该节点的几何
+                    m_imageDisplay->showNodeGeometry(target);
                 });
             }
+        } else if (m_imageDisplay) {
+            // 取消选中：收起可编辑 ROI，避免继续对着"上一个人的框"改参数
+            m_imageDisplay->showNodeGeometry(nullptr);
         }
     } catch (const std::exception &e) {
         VFP_DEBUG << "Exception in onNodeSelected:" << e.what();
@@ -1515,6 +1523,24 @@ void MainWindow::showNodeParameters(NodeBase *node)
             box->addWidget(new QLabel(QStringLiteral("双击可编辑掩膜")));
         else
             box->addWidget(new QLabel(QStringLiteral("双击打开完整参数")));
+
+        // B3：主画布直接改搜索区域（不必打开模块编辑窗）；运行中改也安全，下一轮生效。
+        if (ImageDisplayController::hasSearchRegion(node) && m_imageDisplay) {
+            auto *roiTarget = new QCheckBox(QStringLiteral("主画布编辑：搜索区域"));
+            roiTarget->setChecked(m_imageDisplay->editingSearchRegion());
+            roiTarget->setToolTip(QStringLiteral(
+                "勾选后主画布上的可编辑框 = 搜索区域（青色）；取消则回到模板框。"
+                "拖角点/中心即可改，参数立即回写，运行中下一轮生效。"));
+            connect(roiTarget, &QCheckBox::toggled, this, [this, node](bool on) {
+                if (!m_imageDisplay)
+                    return;
+                if (on)
+                    m_imageDisplay->showNodeSearchRegion(node);
+                else
+                    m_imageDisplay->showNodeGeometry(node);
+            });
+            box->addWidget(roiTarget);
+        }
 
         int shown = 0;
         for (const ParamSpec &spec : hn->paramSpecs()) {
@@ -3172,7 +3198,8 @@ void MainWindow::onNodeExecuted(NodeBase *executedNode, bool success)
 
         // Get output data from the node (use port index 0)
         QSharedPointer<DataObject> outputData = executedNode->getOutputData(0);
-        if (outputData && outputData->getType() == DataObject::DataType::Image) {
+        // B1：统一输出端口的主类型可能是 Measure/Number，图像在同一个对象里
+        if (outputData && outputData->getHImage().IsInitialized()) {
             const HImage image = outputData->getHImage();
             if (image.IsInitialized()) {
                 // 经 ImageDisplayController 显示：刷新图像**并**叠加图元（连续运行下叠加必须

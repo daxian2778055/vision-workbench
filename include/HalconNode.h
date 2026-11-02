@@ -28,6 +28,13 @@ public:
 
     virtual void init() override;
     virtual void run(bool autoSwitch = true) override;
+    /// B1 统一输出：第一个输出端口 = 唯一「输出」，第 2 个及以后只登记为具名子结果
+    virtual Port *addOutputPort(const QString &name, PortDataType dataType = PortDataType::Image) override;
+    bool aggregatesOutputPorts() const override { return true; }
+    int logicalOutputPortCount() const override { return 1 + m_logicalOutputs.size(); }
+    virtual QVector<QPair<QString, QSharedPointer<DataObject>>> namedOutputs() const override;
+    /// 逻辑子输出名（不含主端口），顺序 = 原端口 1..N 的顺序
+    QVector<QPair<QString, PortDataType>> logicalOutputs() const { return m_logicalOutputs; }
     virtual void setParam(const QString &name, const QVariant &value) override;
     virtual QVariant getParam(const QString &name) const override;
     virtual QList<QString> getAllParamNames() const override { return m_params.keys(); }
@@ -119,6 +126,17 @@ protected:
 
     HObject m_inputImage;
     HObject m_outputImage;
+    /// B1：本算子声明过的逻辑输出（第 2..N 个），只保留名称/类型，不再造 Port
+    QVector<QPair<QString, PortDataType>> m_logicalOutputs;
+    /// 主端口在子类 init() 里声明的类型（Image=承诺吐图；Number/Measure=只出数据）
+    PortDataType m_declaredMainPortType = PortDataType::Image;
+    bool m_mainPortDeclared = false;
+    /// 主端口原名（"输出"/"匹配结果"/"计算结果"…；聚合后主结果沿用这个名字）
+    QString m_mainPortName = QStringLiteral("输出");
+    /// 清空全部逻辑输出（含真实端口与已折叠的子输出）
+    void clearAllOutputData();
+    /// 把本轮各逻辑输出合并成一个对象写到唯一端口
+    void publishAggregatedOutputs();
     /// 线程安全参数表（内部 QReadWriteLock）：界面线程与执行线程可并发访问。
     /// 支持 m_params[k] = v（加锁写代理）/ value / contains / keys / insert / remove / clear；
     /// 需要整体遍历时用 m_params.snapshot()（切勿遍历本对象）。

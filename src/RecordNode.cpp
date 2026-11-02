@@ -40,7 +40,7 @@ void RecordNode::run(bool /*autoSwitch*/)
     QString valueStr;
     auto data = getInputData(0);
     if (data) {
-        QVariant var = data->getData();
+        const QVariant var = data->primaryValue();   // B1：测量结果也落库
         if (var.canConvert<QString>()) {
             valueStr = var.toString();
         }

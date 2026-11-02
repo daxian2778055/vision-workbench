@@ -19,6 +19,8 @@
 #include <QFile>
 
 #include <QElapsedTimer>
+#include <QImage>
+#include <QPainter>
 #include "TemplateSearchBudget.h"
 #include "OpencvFeatureMatchNode.h"
 #include "OpencvTemplateMatchNode.h"
@@ -57,6 +59,8 @@ private slots:
     void templateMatchOnRealImage();
     void templateMatchAcrossFrames();
     void templateMatchSurvivesPartialOcclusion();
+    // 掩膜参与评分（r19 遗留项）：只改掩膜 → 命中位置必须变化
+    void templateMatchMaskMovesBestHit();
 };
 
 namespace {
@@ -1076,6 +1080,93 @@ void FeatureMatchTest::templateMatchAcrossFrames()
                                     .arg(method).arg(files[k]).arg(score, 0, 'f', 3)));
         }
     }
+}
+
+// 掩膜参与评分（r19 遗留项）：同一张图、同一套参数，**只改掩膜** → 命中位置必须变化。
+// 图上放两个同款工件；把左边那块在掩膜里涂黑，唯一端口给出的命中必须跳到右边。
+// 守的是：掩膜真的进了 GOC 的分子/分母（曾经只是存下来、评分没用）。
+void FeatureMatchTest::templateMatchMaskMovesBestHit()
+{
+    const cv::Mat patch = makePatch();                       // 128×128 高纹理块
+    cv::Mat canvas(300, 600, CV_8UC1, cv::Scalar(kCanvasBackground));
+    const cv::Rect left(110, 110, kTemplateSize, kTemplateSize);
+    const cv::Rect right(410, 110, kTemplateSize, kTemplateSize);
+    patch.copyTo(canvas(left));
+    patch.copyTo(canvas(right));
+    const double leftCx = left.x + kTemplateSize / 2.0;
+    const double leftCy = left.y + kTemplateSize / 2.0;
+    const double rightCx = right.x + kTemplateSize / 2.0;
+    const double rightCy = right.y + kTemplateSize / 2.0;
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 2);              // 掩膜只参与 GOC（method=2）
+    node.setParam(QStringLiteral("minScore"), 0.3);
+    node.setParam(QStringLiteral("polarity"), 1);
+    node.setParam(QStringLiteral("angleMin"), 0.0);          // 不搜角度：结果只由掩膜决定
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("maxMatches"), 2);          // 两个同款工件都要能报出来
+    node.setParam(QStringLiteral("roiCenterCol"), leftCx);
+    node.setParam(QStringLiteral("roiCenterRow"), leftCy);
+    node.setParam(QStringLiteral("roiWidth"), double(kTemplateSize));
+    node.setParam(QStringLiteral("roiHeight"), double(kTemplateSize));
+    node.setParam(QStringLiteral("roiAngle"), 0.0);
+    node.setParam(QStringLiteral("searchRegionCol"), 0);
+    node.setParam(QStringLiteral("searchRegionRow"), 0);
+    node.setParam(QStringLiteral("searchRegionWidth"), canvas.cols);
+    node.setParam(QStringLiteral("searchRegionHeight"), canvas.rows);
+    node.setParam(QStringLiteral("trainFromImage"), true);   // 直接按 ROI 取模板，不落盘
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+
+    // ① 无掩膜：两个工件都要命中（各 1.000）
+    node.run(false);
+    const int count0 = node.getParam(QStringLiteral("matchCount")).toInt();
+    const QString list0 = node.getParam(QStringLiteral("matchList")).toString();
+    qInfo("mask-leg no-mask: count=%d list=%s", count0, qPrintable(list0));
+    QVERIFY2(count0 == 2, qPrintable(QStringLiteral("无掩膜应找到 2 个工件，实际 %1（%2）")
+                                          .arg(count0).arg(list0)));
+    int nearLeft = 0, nearRight = 0;
+    for (const QString &it : list0.split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
+        const QStringList f = it.split(QLatin1Char(','));
+        QCOMPARE(f.size(), 3);                    // row,col,score
+        const double row = f[0].toDouble();
+        const double col = f[1].toDouble();
+        if (qAbs(col - leftCx) <= 8.0 && qAbs(row - leftCy) <= 8.0) ++nearLeft;
+        if (qAbs(col - rightCx) <= 8.0 && qAbs(row - rightCy) <= 8.0) ++nearRight;
+    }
+    QVERIFY2(nearLeft == 1 && nearRight == 1,
+             qPrintable(QStringLiteral("无掩膜的命中位置不对（左 %1 / 右 %2）：%3")
+                            .arg(nearLeft).arg(nearRight).arg(list0)));
+
+    // ② 只改掩膜：把左侧工件整块涂黑（含模板边沿），可见率不足 ⇒ 该处判无效
+    QImage mask(canvas.cols, canvas.rows, QImage::Format_RGB32);
+    mask.fill(Qt::white);
+    {
+        QPainter p(&mask);
+        p.fillRect(QRect(left.x - 30, left.y - 30, kTemplateSize + 60, kTemplateSize + 60),
+                   Qt::black);
+        p.end();
+    }
+    node.setEditMask(mask);
+
+    node.run(false);
+    const int count1 = node.getParam(QStringLiteral("matchCount")).toInt();
+    const QString list1 = node.getParam(QStringLiteral("matchList")).toString();
+    qInfo("mask-leg masked: count=%d list=%s", count1, qPrintable(list1));
+    QVERIFY2(count1 == 1, qPrintable(QStringLiteral("掩膜没参与评分：屏蔽左侧后仍报 %1 个（%2）")
+                                          .arg(count1).arg(list1)));
+    const QStringList items1 = list1.split(QLatin1Char(';'), Qt::SkipEmptyParts);
+    QCOMPARE(items1.size(), 1);
+    const QStringList f1 = items1.first().split(QLatin1Char(','));
+    QCOMPARE(f1.size(), 3);
+    const double row1 = f1[0].toDouble();
+    const double col1 = f1[1].toDouble();
+    const double score1 = f1[2].toDouble();
+    QVERIFY2(score1 > 0.9, qPrintable(QStringLiteral("屏蔽左侧后右侧分数过低：%1").arg(score1)));
+    QVERIFY2(qAbs(col1 - rightCx) <= 8.0 && qAbs(row1 - rightCy) <= 8.0,
+             qPrintable(QStringLiteral("命中应只剩右侧 (%1, %2)，实际 (%3, %4)")
+                            .arg(rightCx).arg(rightCy).arg(col1).arg(row1)));
 }
 
 QTEST_MAIN(FeatureMatchTest)

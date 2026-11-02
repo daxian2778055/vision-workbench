@@ -264,13 +264,13 @@ void IntegrationTest::testDataPropagation()
     OpencvThresholdNode *threshold = new OpencvThresholdNode();
     threshold->init();
 
-    // 验证端口
+    // 验证端口（B1：子输出折叠，只剩一个「输出」）
     QCOMPARE(threshold->inputPorts().size(), 1);
-    QVERIFY(threshold->outputPorts().size() >= 2);
+    QCOMPARE(threshold->outputPorts().size(), 1);
 
     // 验证端口类型
     QCOMPARE(threshold->inputPorts()[0]->dataType(), PortDataType::Image);
-    QCOMPARE(threshold->outputPorts()[0]->dataType(), PortDataType::Image);
+    QCOMPARE(threshold->outputPorts()[0]->dataType(), PortDataType::Any);
 
     delete threshold;
 }

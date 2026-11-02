@@ -259,8 +259,9 @@ void FormulaNode::run(bool /*autoSwitch*/)
     for (int i = 0; i < 4; ++i) {
         auto data = getInputData(i);
         if (data) {
+            // B1：上游统一输出端口的主结果可能是测量值（getData 里是 MeasureResult）
             bool ok = false;
-            double v = data->getData().toDouble(&ok);
+            const double v = data->primaryNumber(&ok);
             if (ok) vars[QStringLiteral("p%1").arg(i)] = v;
         }
     }

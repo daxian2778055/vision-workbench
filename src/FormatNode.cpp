@@ -43,8 +43,7 @@ void FormatNode::run(bool /*autoSwitch*/)
     QString inputStr;
     auto inputData = getInputData(0);
     if (inputData) {
-        QVariant var = inputData->getData();
-        inputStr = var.toString();
+        inputStr = inputData->primaryValue().toString();   // B1：测量结果也参与格式化
     }
 
     if (tmpl.isEmpty()) {

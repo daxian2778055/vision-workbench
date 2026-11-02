@@ -35,11 +35,12 @@ void OutputDataViewer::setNode(NodeBase *node)
     m_nodeNameLabel->setText(node->name());
     m_statusLabel->setText(node->isEnabled() ? QStringLiteral("已启用") : QStringLiteral("已禁用"));
 
-    // 为每个输出端口创建标签页
-    QList<Port*> outputPorts = node->outputPorts();
-    for (int i = 0; i < outputPorts.size(); ++i) {
-        Port *port = outputPorts[i];
-        QString tabName = port->name().isEmpty() ? QStringLiteral("输出 %1").arg(i + 1) : port->name();
+    // 为每个"具名输出"创建标签页（B1：唯一端口 + 折叠进来的子结果都要能看到）
+    const auto named = node->namedOutputs();
+    for (int i = 0; i < named.size(); ++i) {
+        const QString tabName = named.at(i).first.isEmpty()
+                                    ? QStringLiteral("输出 %1").arg(i + 1)
+                                    : named.at(i).first;
 
         auto *portWidget = new QWidget();
         auto *layout = new QVBoxLayout(portWidget);
@@ -49,10 +50,10 @@ void OutputDataViewer::setNode(NodeBase *node)
         m_portWidgets[i] = portWidget;
 
         // 显示端口数据
-        updatePortData(i, node->getOutputData(i));
+        updatePortData(i, named.at(i).second);
     }
 
-    if (outputPorts.isEmpty()) {
+    if (named.isEmpty()) {
         auto *noPortLabel = new QLabel(QStringLiteral("该节点没有输出端口"));
         noPortLabel->setAlignment(Qt::AlignCenter);
         m_tabWidget->addTab(noPortLabel, QStringLiteral("无输出"));
@@ -70,10 +71,10 @@ void OutputDataViewer::refresh()
 {
     if (!m_currentNode) return;
 
-    // 刷新所有端口数据
-    QList<Port*> outputPorts = m_currentNode->outputPorts();
-    for (int i = 0; i < outputPorts.size(); ++i) {
-        updatePortData(i, m_currentNode->getOutputData(i));
+    // 刷新所有具名输出数据
+    const auto named = m_currentNode->namedOutputs();
+    for (int i = 0; i < named.size(); ++i) {
+        updatePortData(i, named.at(i).second);
     }
 }
 
@@ -161,6 +162,26 @@ void OutputDataViewer::updatePortData(int portIndex, QSharedPointer<DataObject> 
         return;
     }
 
+    // 带图像就先显示图像（B1：主类型可能是 Measure/Number，图像在同一对象里）
+    if (data->getHImage().IsInitialized()) {
+        // 图像之外的主结果也报一行，否则唯一端口只剩画面、分数/计数看不见
+        QStringList parts;
+        const QString name = data->primaryName();
+        const QVariant value = data->primaryValue();
+        if (value.isValid())
+            parts << QStringLiteral("%1: %2").arg(name.isEmpty() ? QStringLiteral("结果") : name,
+                                                value.toString());
+        if (data->measureResults().size() > 1)
+            parts << QStringLiteral("测量结果 %1 条").arg(data->measureResults().size());
+        if (!parts.isEmpty()) {
+            auto *summary = new QLabel(parts.join(QStringLiteral("；")));
+            summary->setWordWrap(true);
+            summary->setStyleSheet(QStringLiteral("color: #555; padding: 2px;"));
+            portWidget->layout()->addWidget(summary);
+        }
+        displayImageData(portIndex, data);
+        return;
+    }
     // 根据数据类型显示
     DataObject::DataType dataType = data->getType();
     switch (dataType) {

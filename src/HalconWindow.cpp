@@ -543,14 +543,27 @@ void HalconWindow::mousePressEvent(QMouseEvent *event)
                 return;
             }
             if (m_roiType == RoiType::Polygon) {
-                // 多边形：每次单击追加顶点
+                // 多边形：每次单击追加顶点；点回起点（或双击）收笔。
+                // 历史缺陷：mouseReleaseEvent 里无条件 finalizeRoi()，第一个顶点一松手就被
+                // 当成"画完了"，所以永远画不出第二个点（现场表现为"多边形画不出来"）。
                 if (!m_roiDrawing) {
                     m_roiDraft = RoiShape();
                     m_roiDraft.type = RoiType::Polygon;
                     m_roiDrawing = true;
                 }
-                if (!m_roiDraft.points.contains(imgPos))
+                const bool nearFirst =
+                    m_roiDraft.points.size() >= 3
+                    && QLineF(m_roiDraft.points.first(), imgPos).length() <= 8.0 / qMax(1e-6, m_scaleFactor);
+                if (nearFirst) {
+                    finalizeRoi();
+                    return;
+                }
+                if (m_roiDraft.points.isEmpty()
+                    || QLineF(m_roiDraft.points.last(), imgPos).length() > 0.5) {
                     m_roiDraft.points.append(imgPos);
+                }
+                m_roiHoverImg = imgPos;
+                m_roiHoverValid = true;
                 update();
                 return;
             }
@@ -613,12 +626,9 @@ void HalconWindow::mouseMoveEvent(QMouseEvent *event)
         QPointF imgPos;
         if (imagePosFromWidget(event->pos(), imgPos)) {
             if (m_roiDraft.type == RoiType::Polygon) {
-                // 多边形：预览最后一点跟随光标
-                if (!m_roiDraft.points.isEmpty()) {
-                    if (m_roiDraft.points.size() > 1 && m_roiDraft.points.last() != imgPos) {
-                        // 用 points 末尾跟踪预览：简单起见直接追加并最后替换
-                    }
-                }
+                // 多边形：橡皮筋跟随光标（不写入顶点，收笔时才提交）
+                m_roiHoverImg = imgPos;
+                m_roiHoverValid = true;
             } else {
                 m_roiDraft.p2 = imgPos;
             }
@@ -663,6 +673,9 @@ void HalconWindow::mouseReleaseEvent(QMouseEvent *event)
     }
 
     if (m_roiEditable && m_roiDrawing && event->button() == Qt::LeftButton) {
+        // 多边形是"多次单击"图元：松手只是完成一个顶点，收笔靠双击/点回起点。
+        if (m_roiType == RoiType::Polygon || m_roiDraft.type == RoiType::Polygon)
+            return;
         finalizeRoi();
         return;
     }
@@ -924,9 +937,13 @@ void HalconWindow::setRoiEditable(bool editable, RoiType type)
 {
     m_roiEditable = editable;
     m_roiType = type;
+    m_roiColor = (type == RoiType::Polygon || type == RoiType::Rect) && editable
+                     ? QColor(0, 200, 255)   // 绘制中的框统一青色（搜索区域最常见）
+                     : m_roiColor;
     m_roiDrawing = false;
     m_activeHandle = RoiHandle::None;
     m_roiDraft = RoiShape();
+    m_roiHoverValid = false;
     if (editable)
         m_roiHandleEdit = true;
     setCursor(Qt::CrossCursor);
@@ -938,6 +955,13 @@ void HalconWindow::setRoiShape(const RoiShape &shape)
     m_roiShape = shape;
     if (shape.type != RoiType::None)
         m_roiHandleEdit = true;
+    update();
+}
+
+void HalconWindow::setRoiColor(const QColor &color)
+{
+    if (color.isValid())
+        m_roiColor = color;
     update();
 }
 
@@ -1057,11 +1081,11 @@ bool HalconWindow::imagePosFromWidget(const QPoint &widgetPos, QPointF &imgPos)
 
 void HalconWindow::drawRoiOverlay(QPainter &painter)
 {
-    QPen pen(QColor(0, 200, 80), 2);
+    QPen pen(m_roiColor, 2);
     pen.setCosmetic(true);
     painter.setPen(pen);
 
-    auto drawShape = [&](const RoiShape &shape) {
+    auto drawShape = [&](const RoiShape &shape, bool closed = false) {
         if (shape.type == RoiType::None) return;
         switch (shape.type) {
         case RoiType::Rect: {
@@ -1092,11 +1116,18 @@ void HalconWindow::drawRoiOverlay(QPainter &painter)
             break;
         }
         case RoiType::Polygon: {
-            if (shape.points.size() >= 2) {
-                QPolygonF poly;
-                for (const auto &p : shape.points)
-                    poly.append(widgetPosFromImage(p));
-                painter.drawPolyline(poly);
+            QPolygonF poly;
+            for (const auto &p : shape.points)
+                poly.append(widgetPosFromImage(p));
+            if (closed && poly.size() >= 3)
+                painter.drawPolygon(poly);       // 收笔后闭合（搜索区域是多边形面）
+            else if (poly.size() >= 2)
+                painter.drawPolyline(poly);      // 绘制中：折线 + 顶点标记
+            if (!closed) {
+                painter.setBrush(QColor(255, 255, 255));
+                for (const QPointF &w : poly)
+                    painter.drawEllipse(w, 3, 3);
+                painter.setBrush(Qt::NoBrush);
             }
             break;
         }
@@ -1128,10 +1159,17 @@ void HalconWindow::drawRoiOverlay(QPainter &painter)
                                (m_roiDraft.p1.y() + m_roiDraft.p2.y()) * 0.5);
             draft.angleDeg = 0;
         }
-        drawShape(draft);
+        drawShape(draft, false);
+        // 多边形橡皮筋：最后一个顶点 → 光标（否则用户看不到"下一个点会落在哪"）
+        if (draft.type == RoiType::Polygon && m_roiHoverValid && !draft.points.isEmpty()) {
+            painter.setPen(QPen(QColor(255, 180, 60), 1, Qt::DotLine));
+            painter.drawLine(widgetPosFromImage(draft.points.last()),
+                             widgetPosFromImage(m_roiHoverImg));
+            painter.setPen(dashedPen);
+        }
     }
     painter.setPen(pen);
-    drawShape(m_roiShape);
+    drawShape(m_roiShape, m_roiShape.type == RoiType::Polygon);
     if (!m_roiDrawing && m_roiShape.type != RoiType::None && roiInteractionActive())
         drawRoiHandles(painter, m_roiShape);
 }
@@ -1140,6 +1178,22 @@ void HalconWindow::finalizeRoi()
 {
     if (!m_roiDrawing) return;
     RoiShape done = m_roiDraft;
+    if (done.type == RoiType::Polygon) {
+        // 顶点去重（双击的第二下会重复落在同一点，抖动会留 0.x px 的重复点），
+        // 少于 3 个点不提交 —— 1~2 个点交给算法只会得到"多边形无效"。
+        QVector<QPointF> pts;
+        for (const QPointF &p : done.points) {
+            if (pts.isEmpty() || QLineF(pts.last(), p).length() > 1.0)
+                pts.append(p);
+        }
+        if (pts.size() > 1 && QLineF(pts.first(), pts.last()).length() <= 1.0)
+            pts.removeLast();
+        done.points = pts;
+        if (done.points.size() < 3) {
+            update();   // 继续收集顶点，不关闭本次绘制
+            return;
+        }
+    }
     if (m_roiType == RoiType::RotatedRect) {
         done.type = RoiType::RotatedRect;
         done.width = qAbs(m_roiDraft.p2.x() - m_roiDraft.p1.x());
@@ -1151,6 +1205,7 @@ void HalconWindow::finalizeRoi()
     }
     m_roiShape = done;
     m_roiDrawing = false;
+    m_roiHoverValid = false;
     m_roiHandleEdit = true;
     setCursor(Qt::CrossCursor);
     emit roiEdited(m_roiShape);
@@ -1198,7 +1253,7 @@ void HalconWindow::drawRoiHandles(QPainter &painter, const RoiShape &shape)
             painter.setBrush(QColor(80, 180, 255));
             painter.drawEllipse(w, 5, 5);
         } else {
-            painter.setPen(QPen(QColor(0, 200, 80), 1));
+            painter.setPen(QPen(m_roiColor, 1));
             painter.setBrush(QColor(255, 255, 255));
             painter.drawRect(QRect(w.x() - 4, w.y() - 4, 8, 8));
         }

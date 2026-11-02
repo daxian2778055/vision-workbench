@@ -158,6 +158,17 @@ void NodeBase::setOutputData(int portIndex, QSharedPointer<DataObject> data)
     m_outputData[portIndex] = data;
 }
 
+QVector<QPair<QString, QSharedPointer<DataObject>>> NodeBase::namedOutputs() const
+{
+    QVector<QPair<QString, QSharedPointer<DataObject>>> out;
+    const QList<Port *> ports = outputPorts();
+    for (int i = 0; i < ports.size(); ++i) {
+        Port *p = ports.at(i);
+        out.append(qMakePair(p ? p->name() : QStringLiteral("输出%1").arg(i), getOutputData(i)));
+    }
+    return out;
+}
+
 int NodeBase::moduleId() const
 {
     return m_stateBody->moduleId;

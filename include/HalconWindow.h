@@ -92,6 +92,8 @@ public:
     RoiShape roiShape() const { return m_roiShape; }
     /// 清除 ROI
     void clearRoi();
+    /// ROI 主色（模板框=绿、搜索区域=青；只影响绘制，不影响数据）
+    void setRoiColor(const QColor &color);
     /// 允许拖改已有 ROI 控制点（不必先点「绘制」）
     void setRoiHandleEditEnabled(bool on);
     bool isRoiHandleEditEnabled() const { return m_roiHandleEdit; }
@@ -181,10 +183,14 @@ private:
     // ---- ROI 状态 ----
     bool m_roiEditable = false;    /// 是否处于 ROI 绘制模式
     RoiType m_roiType = RoiType::Rect;
+    QColor m_roiColor {0, 200, 80}; /// ROI 主色（模板框绿 / 搜索区域青）
     RoiShape m_roiShape;           /// 当前 ROI（显示用）
     RoiShape m_roiDraft;           /// 绘制中的草稿
     bool m_roiDrawing = false;     /// 是否正在绘制
     bool m_roiHandleEdit = false;  /// 允许拖改已有 ROI
+    /// 多边形绘制：光标预览点（从最后一个顶点到光标的橡皮筋）
+    QPointF m_roiHoverImg;
+    bool m_roiHoverValid = false;
     RoiHandle m_activeHandle = RoiHandle::None;
     RoiShape m_handleStartShape;
     QPointF m_handleStartImg;

@@ -731,11 +731,23 @@ void ProjectManager::sceneFromJson(const QJsonObject &json, FlowScene *scene)
             NodeBase *sourceNode = nodeMap[sourceNodeId];
             NodeBase *targetNode = nodeMap[targetNodeId];
             
+            // B1 迁移：老方案里指向"第 2..N 个输出"的线，在统一输出后没有对应端口。
+            // 折叠到唯一「输出」上（该对象已把原端口的数据/结果聚合在一起），
+            // 不能像旧逻辑那样直接丢线——现场看到的是"方案打开后连线凭空消失"。
+            // 只对"确实还有这个逻辑输出"的算子迁移：老端口号必须落在新的逻辑输出范围内
+            // （聚合节点 = 1 + 折叠进来的子输出数）。算子下线被降级成通用算子时逻辑输出只剩 1 路，
+            // 原端口的数据根本不存在，仍按丢线处理并留痕（U-38 的损失口径不能改）。
+            if (sourcePortIndex >= 1
+                && sourceNode->outputPorts().size() == 1
+                && sourceNode->aggregatesOutputPorts()
+                && sourcePortIndex < sourceNode->logicalOutputPortCount()) {
+                sourcePortIndex = 0;
+            }
             if (sourcePortIndex >= 0 && sourcePortIndex < sourceNode->outputPorts().size() &&
                 targetPortIndex >= 0 && targetPortIndex < targetNode->inputPorts().size()) {
                 Port *sourcePort = sourceNode->outputPorts()[sourcePortIndex];
                 Port *targetPort = targetNode->inputPorts()[targetPortIndex];
-                
+
                 scene->createConnection(sourcePort, targetPort, true);
             } else {
                 // U-38：原实现这里静默跳过 ⇒ 文件里那条线在下一次保存整条不再写回，而现场读不出任何迹象。

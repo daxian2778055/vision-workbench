@@ -1208,7 +1208,9 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
         // 首次实现后回归用例显示复用未生效（readerA 仍被重跑），但同一对象在用例内直接调用
         // reusesCachedOutput() 却返回 true，两者矛盾且未能定位，故先回退该分支，
         // 避免留下"看起来在优化、实际没生效"的代码。NodeBase/ImageReadNode 上的契约声明保留备查。
-        for (int p = 0; p < node->outputPorts().size(); ++p)
+        // B1：按"逻辑输出"清（含被折叠进唯一端口的子输出），否则上一轮结果会从
+        // getOutputData(1..N) 漏给老读取者/叠加层。
+        for (int p = 0; p < node->logicalOutputPortCount(); ++p)
             node->setOutputData(p, QSharedPointer<DataObject>());
 
         success = node->execute();
@@ -1587,8 +1589,7 @@ void FlowExecutor::clearNodeCachesOnException(NodeBase *node)
     // ① 清输出端口（与正常失败分支同口径，2026-10-25 复核 P3-1 残留）：只清 m_nodeData
     //    不够——propagateData 在没有缓存条目时会回落到 sourceNode->getOutputData(port)，
     //    于是下游仍能读到失败节点的旧/半成品输出（stopOnFailure=false 时下游会继续跑）。
-    const QList<Port *> outPorts = node->outputPorts();
-    for (int i = 0; i < outPorts.size(); ++i)
+    for (int i = 0; i < node->logicalOutputPortCount(); ++i)
         node->setOutputData(i, QSharedPointer<DataObject>());
     {
         QMutexLocker cacheLock(&m_graphCacheMutex);
@@ -1622,22 +1623,20 @@ void FlowExecutor::collectNodeOutputVars(NodeBase *node)
         if (v.isValid() && !v.isNull())
             vars[k] = v;
     }
-    // 主值：优先取端口1（Measure），其次端口0（Number/String）
-    QSharedPointer<DataObject> out = node->getOutputData(1);
-    if (out && out->getType() == DataObject::DataType::Measure) {
+    // 主值：统一输出端口（B1）——图像与结果同一个对象，类型看主结果
+    QSharedPointer<DataObject> out0 = node->getOutputData(0);
+    const QSharedPointer<DataObject> out = out0;
+    if (out && (out->getType() == DataObject::DataType::Measure || out->hasMeasureResult())) {
         // 同上：无效测量导出 NaN，不冒充 0（2026-10-25 复核 P3）
         const auto mr = out->getMeasureResult();
         vars[QStringLiteral("value")] = mr.valid
             ? mr.value
             : std::numeric_limits<double>::quiet_NaN();
-    } else {
-        QSharedPointer<DataObject> out0 = node->getOutputData(0);
-        if (out0) {
-            if (out0->getType() == DataObject::DataType::Number)
-                vars[QStringLiteral("value")] = out0->getData().toDouble();
-            else if (out0->getType() == DataObject::DataType::String)
-                vars[QStringLiteral("value")] = out0->getData().toString();
-        }
+    } else if (out) {
+        if (out->getType() == DataObject::DataType::Number)
+            vars[QStringLiteral("value")] = out->getData().toDouble();
+        else if (out->getType() == DataObject::DataType::String)
+            vars[QStringLiteral("value")] = out->getData().toString();
     }
     {
         // S1 Stage 1：输出变量表写入入锁（三类执行缓存统一受 m_graphCacheMutex 保护）

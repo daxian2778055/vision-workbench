@@ -24,9 +24,9 @@ void CameraIoTest::testInitPortsAndParams()
 {
     CameraIoNode node;
     node.init();
-    // 注：HalconNode::init() 默认带 输入图像 / 输出图像 各一个端口，故总数为 3 输入 / 4 输出
+    // 注：B1 统一输出后只剩一个「输出」端口；值/成功/错误是它上面的具名子结果
     QCOMPARE(node.inputPorts().size(), 3);
-    QCOMPARE(node.outputPorts().size(), 4);
+    QCOMPARE(node.outputPorts().size(), 1);
     QVERIFY(node.hasParam(QStringLiteral("cameraName")));
     QVERIFY(node.hasParam(QStringLiteral("lineIndex")));
     QVERIFY(node.hasParam(QStringLiteral("lineMode")));
@@ -34,10 +34,15 @@ void CameraIoTest::testInitPortsAndParams()
     QVERIFY(node.hasParam(QStringLiteral("writeValue")));
     QCOMPARE(node.getParam(QStringLiteral("lineMode")).toInt(), 1);
     QCOMPARE(node.getParam(QStringLiteral("action")).toInt(), 1);
-    // 输出端口（含继承的"输出图像"）：值/成功 = Bool，错误 = String
-    QCOMPARE(static_cast<int>(node.outputPorts()[1]->dataType()), static_cast<int>(PortDataType::Bool));
-    QCOMPARE(static_cast<int>(node.outputPorts()[2]->dataType()), static_cast<int>(PortDataType::Bool));
-    QCOMPARE(static_cast<int>(node.outputPorts()[3]->dataType()), static_cast<int>(PortDataType::String));
+    // 折叠后的子输出：值/成功 = Bool，错误 = String（运行界面按名取值仍能对上）
+    const auto logical = node.logicalOutputs();
+    QCOMPARE(logical.size(), 3);
+    QCOMPARE(logical.at(0).first, QStringLiteral("值"));
+    QCOMPARE(static_cast<int>(logical.at(0).second), static_cast<int>(PortDataType::Bool));
+    QCOMPARE(logical.at(1).first, QStringLiteral("成功"));
+    QCOMPARE(static_cast<int>(logical.at(1).second), static_cast<int>(PortDataType::Bool));
+    QCOMPARE(logical.at(2).first, QStringLiteral("错误"));
+    QCOMPARE(static_cast<int>(logical.at(2).second), static_cast<int>(PortDataType::String));
     // 输入端口（含继承的"输入图像"）：值 = Bool，执行 = Any
     QCOMPARE(static_cast<int>(node.inputPorts()[1]->dataType()), static_cast<int>(PortDataType::Bool));
     QCOMPARE(static_cast<int>(node.inputPorts()[2]->dataType()), static_cast<int>(PortDataType::Any));

@@ -44,7 +44,7 @@ void ClassifyNode::run(bool /*autoSwitch*/)
     double v = 0.0;
     auto data = getInputData(0);
     if (data) {
-        v = data->getData().toDouble(&ok);
+        v = data->primaryNumber(&ok);   // B1：测量结果/数值主值统一取数
     }
 
     QString category;

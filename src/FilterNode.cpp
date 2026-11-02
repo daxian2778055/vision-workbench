@@ -34,7 +34,7 @@ void FilterNode::run(bool /*autoSwitch*/)
     double v = 0.0;
     auto data = getInputData(0);
     if (data) {
-        v = data->getData().toDouble(&ok);
+        v = data->primaryNumber(&ok);   // B1：测量结果/数值主值统一取数
     }
 
     // 参数唯一来源：本轮开始各取一次（局部快照）——既避免逐次加锁，也保证同一轮内判据一致

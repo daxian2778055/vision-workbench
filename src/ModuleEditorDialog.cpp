@@ -77,6 +77,17 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     auto *polyBtn = new QPushButton(QStringLiteral("\u7ed8\u5236\u591a\u8fb9\u5f62\u533a\u57df"));   // 绘制多边形区域
     polyBtn->setToolTip(QStringLiteral("\u5355\u51fb\u9010\u70b9\u3001\u53cc\u51fb\u5b8c\u6210\uff1a\u591a\u8fb9\u5f62\u641c\u7d22\u533a\u57df\uff08\u4f18\u5148\u4e8e\u77e9\u5f62\uff09"));
     searchBtn->setToolTip(QStringLiteral("\u5728\u56fe\u4e0a\u6846\u5b9a\u641c\u7d22\u533a\u57df\uff1a\u53ea\u5728\u8fd9\u4e2a\u6846\u5185\u627e\u6a21\u677f"));
+    // B2：编辑对象切换。两个互斥按钮，句柄只出现在当前对象上——
+    // 之前两个框同时可拖，点哪个都不中（现场"拖不动/拖错"）。
+    m_targetGeomBtn = new QToolButton();
+    m_targetGeomBtn->setText(QStringLiteral("编辑：模板框"));
+    m_targetGeomBtn->setCheckable(true);
+    m_targetGeomBtn->setChecked(true);
+    m_targetGeomBtn->setToolTip(QStringLiteral("当前编辑对象 = 模板框（绿色，带角点/旋转柄）"));
+    m_targetSearchBtn = new QToolButton();
+    m_targetSearchBtn->setText(QStringLiteral("编辑：搜索区域"));
+    m_targetSearchBtn->setCheckable(true);
+    m_targetSearchBtn->setToolTip(QStringLiteral("当前编辑对象 = 搜索区域（青色，可直接拖角点改大小）"));
     auto *clearGeomBtn = new QPushButton(QStringLiteral("清除几何"));
     auto *maskBtn = new QPushButton(QStringLiteral("编辑掩膜"));
     auto *clearMaskBtn = new QPushButton(QStringLiteral("清除掩膜"));
@@ -100,6 +111,8 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     toolbar->addWidget(drawBtn);
     toolbar->addWidget(searchBtn);
     toolbar->addWidget(polyBtn);
+    toolbar->addWidget(m_targetGeomBtn);
+    toolbar->addWidget(m_targetSearchBtn);
     toolbar->addWidget(clearGeomBtn);
     toolbar->addWidget(maskBtn);
     toolbar->addWidget(clearMaskBtn);
@@ -217,6 +230,8 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     maskBrushSpin->setVisible(hasMask);
     saveTmplBtn->setVisible(isTmpl);
     m_templatePreview->setVisible(isTmpl);
+    m_targetGeomBtn->setVisible(isTmpl);
+    m_targetSearchBtn->setVisible(isTmpl);
 
     if (hasGeom) {
         m_hintLabel->setText(QStringLiteral(
@@ -232,6 +247,8 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     connect(drawBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onDrawGeometry);
     connect(searchBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onDrawSearchRegion);
     connect(polyBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onDrawSearchPolygon);
+    connect(m_targetGeomBtn, &QToolButton::clicked, this, &ModuleEditorDialog::onEditTargetGeometry);
+    connect(m_targetSearchBtn, &QToolButton::clicked, this, &ModuleEditorDialog::onEditTargetSearch);
     connect(clearGeomBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onClearGeometry);
     connect(maskBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onEditMask);
     connect(clearMaskBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onClearMask);
@@ -507,7 +524,146 @@ void ModuleEditorDialog::echoGeometry()
         m_view->setRoiShape(hn->geometryRoi());
         m_view->setRoiHandleEditEnabled(true);
     }
+    applyEditTarget();
     refreshSearchOverlay();
+}
+
+void ModuleEditorDialog::onEditTargetGeometry()
+{
+    m_editTarget = 0;
+    m_pickingSearchRegion = false;
+    m_pickingSearchPolygon = false;
+    m_targetGeomBtn->setChecked(true);
+    m_targetSearchBtn->setChecked(false);
+    applyEditTarget();
+    refreshSearchOverlay();
+    m_hintLabel->setText(QStringLiteral(
+        "编辑对象：模板框。可拖角点缩放、拖中心移动、拖蓝点旋转；改完自动重算。"));
+}
+
+void ModuleEditorDialog::onEditTargetSearch()
+{
+    m_editTarget = 1;
+    m_pickingSearchRegion = false;
+    m_pickingSearchPolygon = false;
+    m_targetGeomBtn->setChecked(false);
+    m_targetSearchBtn->setChecked(true);
+    applyEditTarget();
+    refreshSearchOverlay();
+    m_hintLabel->setText(QStringLiteral(
+        "编辑对象：搜索区域。直接拖青框角点/中心即可改；点「绘制搜索区域」可重画。"));
+}
+
+void ModuleEditorDialog::applyEditTarget()
+{
+    HalconNode *hn = halconNode();
+    if (!hn || !m_view)
+        return;
+    m_view->setMaskEditable(false);
+    m_view->setRoiColor(m_editTarget == 1 ? QColor(0, 200, 255) : QColor(0, 200, 80));
+    if (m_editTarget == 1 && hn->geometryRoiType() != RoiType::None) {
+        // 搜索区域：取当前 searchRegion* 参数回显成可编辑矩形（句柄只在这一个对象上）
+        const double col = hn->getParam(QStringLiteral("searchRegionCol")).toDouble();
+        const double row = hn->getParam(QStringLiteral("searchRegionRow")).toDouble();
+        const double w = hn->getParam(QStringLiteral("searchRegionWidth")).toDouble();
+        const double h = hn->getParam(QStringLiteral("searchRegionHeight")).toDouble();
+        m_view->setRoiEditable(false);
+        if (w <= 1.0 || h <= 1.0) {
+            // 没有矩形（=整图搜索，或当前生效的是多边形）：不要把 0×0 的框挂在原点当句柄
+            const QString poly =
+                hn->getParam(QStringLiteral("searchRegionPolygon")).toString().trimmed();
+            if (!poly.isEmpty()) {
+                QVector<QPointF> pts;
+                const QStringList items = poly.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+                for (const QString &it : items) {
+                    const QStringList xy = it.split(QLatin1Char(','));
+                    if (xy.size() == 2)
+                        pts.append(QPointF(xy[0].toDouble(), xy[1].toDouble()));
+                }
+                RoiShape s;
+                s.type = pts.size() >= 3 ? RoiType::Polygon : RoiType::None;
+                s.points = pts;
+                m_view->setRoiShape(s);
+                m_view->setRoiHandleEditEnabled(false);   // 顶点不可拖：重画走「绘制多边形区域」
+            } else {
+                m_view->clearRoi();
+                m_view->setRoiHandleEditEnabled(false);
+            }
+            return;
+        }
+        RoiShape s;
+        s.type = RoiType::Rect;
+        s.p1 = QPointF(col, row);
+        s.p2 = QPointF(col + w, row + h);
+        m_view->setRoiShape(s);
+        m_view->setRoiHandleEditEnabled(true);
+    } else if (hn->geometryRoiType() != RoiType::None) {
+        m_view->setRoiEditable(false);
+        m_view->setRoiShape(hn->geometryRoi());
+        m_view->setRoiHandleEditEnabled(true);
+    }
+}
+
+QVector<OverlayShape> ModuleEditorDialog::geometryOverlayShapes() const
+{
+    QVector<OverlayShape> out;
+    HalconNode *hn = halconNode();
+    if (!hn || hn->geometryRoiType() == RoiType::None)
+        return out;
+    const RoiShape s = hn->geometryRoi();
+    OverlayShape o;
+    o.color = QColor(0, 200, 80);
+    switch (s.type) {
+    case RoiType::Rect:
+        o.type = OverlayShape::Type::RotatedRect;
+        o.p1 = QPointF((s.p1.x() + s.p2.x()) * 0.5, (s.p1.y() + s.p2.y()) * 0.5);
+        o.width = qAbs(s.p2.x() - s.p1.x());
+        o.height = qAbs(s.p2.y() - s.p1.y());
+        break;
+    case RoiType::RotatedRect:
+        o.type = OverlayShape::Type::RotatedRect;
+        o.p1 = s.p1;
+        o.width = s.width;
+        o.height = s.height;
+        o.angleDeg = s.angleDeg;
+        break;
+    case RoiType::Line:
+        o.type = OverlayShape::Type::Line;
+        o.p1 = s.p1;
+        o.p2 = s.p2;
+        break;
+    case RoiType::Circle:
+        o.type = OverlayShape::Type::Circle;
+        o.p1 = s.p1;
+        o.radius = std::hypot(s.p2.x() - s.p1.x(), s.p2.y() - s.p1.y());
+        break;
+    case RoiType::Point:
+        o.type = OverlayShape::Type::Point;
+        o.p1 = s.p1;
+        break;
+    case RoiType::Polygon:
+        for (int i = 0; i + 1 < s.points.size(); ++i) {
+            OverlayShape e;
+            e.type = OverlayShape::Type::Line;
+            e.p1 = s.points[i];
+            e.p2 = s.points[i + 1];
+            e.color = o.color;
+            out.append(e);
+        }
+        if (s.points.size() >= 3) {
+            OverlayShape e;
+            e.type = OverlayShape::Type::Line;
+            e.p1 = s.points.last();
+            e.p2 = s.points.first();
+            e.color = o.color;
+            out.append(e);
+        }
+        return out;
+    default:
+        return out;
+    }
+    out.append(o);
+    return out;
 }
 
 void ModuleEditorDialog::setResultOverlay(const QVector<OverlayShape> &shapes)
@@ -523,6 +679,9 @@ void ModuleEditorDialog::onDrawGeometry()
     HalconNode *hn = halconNode();
     if (!hn || !m_view)
         return;
+    m_editTarget = 0;
+    if (m_targetGeomBtn) m_targetGeomBtn->setChecked(true);
+    if (m_targetSearchBtn) m_targetSearchBtn->setChecked(false);
     m_view->setMaskEditable(false);
     m_view->setRoiEditable(true, hn->geometryRoiType());
     m_hintLabel->setText(QStringLiteral("请在图像上拖拽绘制；画完后可拖改。右键取消。"));
@@ -559,6 +718,10 @@ void ModuleEditorDialog::onDrawSearchRegion()
         return;
     }
     m_pickingSearchRegion = true;
+    m_pickingSearchPolygon = false;
+    m_editTarget = 1;
+    if (m_targetGeomBtn) m_targetGeomBtn->setChecked(false);
+    if (m_targetSearchBtn) m_targetSearchBtn->setChecked(true);
     m_view->setMaskEditable(false);
     m_view->clearRoi();                        // 收起模板框句柄，避免两个框混在一起点不中
     m_view->setRoiEditable(true, RoiType::Rect);
@@ -594,9 +757,15 @@ void ModuleEditorDialog::refreshSearchOverlay()
     if (!m_view)
         return;
     QVector<OverlayShape> all = m_resultOverlay;
-    const OverlayShape sr = searchRegionShape();
-    if (sr.width > 1.0)
-        all.append(sr);
+    // 编辑搜索区域时：该框是画布上的可编辑 ROI（带句柄），不再重复画成叠加；
+    // 反过来把模板框画成只读叠加，让"当前在改哪个"一眼可见。
+    if (m_editTarget == 1) {
+        all += geometryOverlayShapes();
+    } else {
+        const OverlayShape sr = searchRegionShape();
+        if (sr.width > 1.0)
+            all.append(sr);
+    }
     // 多边形搜索区域：顶点串 → 闭合折线（青色），与矩形框同色系
     HalconNode *hn = halconNode();
     const QString polyText =
@@ -641,6 +810,10 @@ void ModuleEditorDialog::onDrawSearchPolygon()
         return;
     }
     m_pickingSearchPolygon = true;
+    m_pickingSearchRegion = false;
+    m_editTarget = 1;
+    if (m_targetGeomBtn) m_targetGeomBtn->setChecked(false);
+    if (m_targetSearchBtn) m_targetSearchBtn->setChecked(true);
     m_view->setMaskEditable(false);
     m_view->clearRoi();
     m_view->setRoiEditable(true, RoiType::Polygon);
@@ -683,29 +856,45 @@ void ModuleEditorDialog::onClearMask()
     scheduleAutoRecompute();
 }
 
+void ModuleEditorDialog::writeSearchRect(const RoiShape &shape)
+{
+    HalconNode *hn = halconNode();
+    if (!hn)
+        return;
+    const QRectF b = roiBoundsOf(shape);
+    if (b.width() <= 1.0 || b.height() <= 1.0)
+        return;
+    if (FlowScene *fs = hn->flowSceneRef())
+        fs->recordUndo();
+    hn->setParam(QStringLiteral("searchRegionCol"), int(b.x() + 0.5));
+    hn->setParam(QStringLiteral("searchRegionRow"), int(b.y() + 0.5));
+    hn->setParam(QStringLiteral("searchRegionWidth"), qMax(1, int(b.width() + 0.5)));
+    hn->setParam(QStringLiteral("searchRegionHeight"), qMax(1, int(b.height() + 0.5)));
+    // 多边形优先于矩形：拖矩形 = 明确改用矩形，必须把残留的多边形清掉，
+    // 否则"拖了没反应"（匹配仍按旧多边形走）。
+    const bool hadPolygon =
+        !hn->getParam(QStringLiteral("searchRegionPolygon")).toString().trimmed().isEmpty();
+    if (hadPolygon)
+        hn->setParam(QStringLiteral("searchRegionPolygon"), QString());
+    m_hintLabel->setText(hadPolygon
+        ? QStringLiteral("搜索区域已写回（矩形），原多边形已清除。")
+        : QStringLiteral("搜索区域已写回：匹配只在这个框内进行。"));
+}
+
 void ModuleEditorDialog::onRoiEdited(const RoiShape &shape)
 {
     HalconNode *hn = halconNode();
     if (!hn)
         return;
 
-    // 搜索区域（r19 批 A 第 4 步）：一次绘制即写回 4 个参数，然后恢复模板框句柄
-    if (m_pickingSearchRegion) {
+    // 搜索区域矩形：绘制一次写回；编辑对象是搜索区域时，拖角点也走这里（B2/B3）
+    if (m_pickingSearchRegion
+        || (m_editTarget == 1 && shape.type == RoiType::Rect
+            && !m_pickingSearchPolygon)) {
         m_pickingSearchRegion = false;
-        const QRectF b = roiBoundsOf(shape);
-        if (b.width() > 1.0 && b.height() > 1.0) {
-            if (FlowScene *fs = hn->flowSceneRef())
-                fs->recordUndo();
-            hn->setParam(QStringLiteral("searchRegionCol"), int(b.x() + 0.5));
-            hn->setParam(QStringLiteral("searchRegionRow"), int(b.y() + 0.5));
-            hn->setParam(QStringLiteral("searchRegionWidth"), qMax(1, int(b.width() + 0.5)));
-            hn->setParam(QStringLiteral("searchRegionHeight"), qMax(1, int(b.height() + 0.5)));
-            m_hintLabel->setText(QStringLiteral("\u641c\u7d22\u533a\u57df\u5df2\u5199\u56de\uff1a"
-                                                "\u5339\u914d\u53ea\u5728\u8fd9\u4e2a\u6846\u5185\u8fdb\u884c\u3002"));
-        }
+        writeSearchRect(shape);
         m_view->setRoiEditable(false);
-        m_view->setRoiShape(hn->geometryRoi());
-        m_view->setRoiHandleEditEnabled(true);
+        applyEditTarget();
         m_paramHookBusy = true;
         if (QWidget *panel = m_paramHost->widget())
             hn->updateParamPanel(panel);
@@ -732,8 +921,7 @@ void ModuleEditorDialog::onRoiEdited(const RoiShape &shape)
                                                 "匹配只在这个多边形内进行。"));
         }
         m_view->setRoiEditable(false);
-        m_view->setRoiShape(hn->geometryRoi());
-        m_view->setRoiHandleEditEnabled(true);
+        applyEditTarget();
         m_paramHookBusy = true;
         if (QWidget *panel = m_paramHost->widget())
             hn->updateParamPanel(panel);

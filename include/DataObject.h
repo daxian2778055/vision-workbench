@@ -4,6 +4,7 @@
 #include <QVariant>
 #include <QPointF>
 #include <QVector>
+#include <QPair>
 #include <QSharedPointer>
 #include <QMutex>
 #include <QMutexLocker>
@@ -96,6 +97,25 @@ public:
     MeasureResult getMeasureResult() const;
     void setMeasureResult(const MeasureResult &r);
 
+    // ---- 统一输出（B1）：同一对象可同时携带图像 + 测量结果 + 其它工具输出 ----
+    /// 附加一路测量结果（不改变主类型，供"图像 + 结果"同端口输出用；可多路）
+    void attachMeasureResult(const MeasureResult &r);
+    /// 全部附加测量结果（按附加顺序；老对象无附加时由主值派生 0/1 项）
+    QVector<MeasureResult> measureResults() const;
+    /// 是否带测量结果（不看主类型）
+    bool hasMeasureResult() const;
+    /// 附加一路具名子结果（原多输出工具的第 2..N 个端口：二值图/XLD/区域/数值…）
+    void attachResult(const QString &name, const QSharedPointer<DataObject> &object);
+    QVector<QPair<QString, QSharedPointer<DataObject>>> attachedResults() const;
+    QSharedPointer<DataObject> attachedResult(const QString &name) const;
+    /// 主值：Number/String/Bool/Array/Point/Matrix 直接取 m_data；Measure 取 value
+    QVariant primaryValue() const;
+    /// 主数值（数据类算子取数统一入口；Measure 走 value，无效测量 ok=false）
+    double primaryNumber(bool *ok = nullptr) const;
+    /// 主结果在原端口清单里的名字（聚合输出后运行界面按名取值的依据）
+    void setPrimaryName(const QString &name);
+    QString primaryName() const;
+
     // 目标检测结果
     DetectionResult getDetectionResult() const;
     void setDetectionResult(const DetectionResult &r);
@@ -118,6 +138,12 @@ private:
     HalconCpp::HImage m_hImage; // 专门存储HImage对象
     HalconCpp::HObject m_hObject; // 通用 HObject（Region/XLD 等）
     QString m_sourceInfo; // 数据来源信息
+    /// 附加测量结果（统一输出：主类型仍是图像/数值时结果不丢）
+    QVector<MeasureResult> m_measureResults;
+    /// 附加子结果（原多输出工具的第 2..N 个端口，按端口名索引）
+    QVector<QPair<QString, QSharedPointer<DataObject>>> m_attachedResults;
+    /// 主结果名（"值"/"匹配结果"/"输出"…）
+    QString m_primaryName;
 
 public:
     QString sourceInfo() const;

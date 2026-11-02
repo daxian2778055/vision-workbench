@@ -882,6 +882,18 @@ if(MSVC)
     vfp_add_qtest(NAME NodeCoreTest TARGET node_core_test)
 endif()
 
+# B1 统一输出端口门槛线：注册表里每个工具只有一个输出点（第 2..N 个折叠成具名子结果）
+if(MSVC)
+    add_executable(single_output_port_test tests/single_output_port_test.cpp)
+    # Widgets：老方案端口迁移那条腿要真的 FlowScene/QGraphicsScene（QTEST_MAIN 建 QApplication）
+    target_link_libraries(single_output_port_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    vfp_add_qtest(NAME SingleOutputPortTest TARGET single_output_port_test)
+    # 本用例遍历整个注册表 ⇒ 静态库会拉进 MVS 相机源节点，启动就需要 MvCameraControl.dll。
+    # 与 GUI 用例同一套注入（dist/VisionFlowPlatform 进 PATH），否则干净环境直接 0xc0000135。
+    set_tests_properties(SingleOutputPortTest PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${CMAKE_CURRENT_SOURCE_DIR}/dist/VisionFlowPlatform")
+endif()
+
 # OpenCV 节点序列化测试（toJson/fromJson 完整性验证）
 if(MSVC)
     add_executable(opencv_serialization_test tests/opencv_serialization_test.cpp)

@@ -114,6 +114,8 @@ void DataObject::setHXLDCont(const HalconCpp::HXLDCont &xld)
 MeasureResult DataObject::getMeasureResult() const
 {
     QMutexLocker locker(&m_mutex);
+    if (!m_measureResults.isEmpty())
+        return m_measureResults.first();
     if (m_data.canConvert<MeasureResult>())
         return m_data.value<MeasureResult>();
     return MeasureResult();
@@ -122,8 +124,130 @@ MeasureResult DataObject::getMeasureResult() const
 void DataObject::setMeasureResult(const MeasureResult &r)
 {
     QMutexLocker locker(&m_mutex);
+    m_measureResults.clear();
+    m_measureResults.append(r);
     m_data = QVariant::fromValue(r);
     m_type = DataType::Measure;
+}
+
+void DataObject::attachMeasureResult(const MeasureResult &r)
+{
+    QMutexLocker locker(&m_mutex);
+    m_measureResults.append(r);
+    // 主值不是数据类时，把测量结果也作为老读取路径（getData()）的兜底：
+    // 统一输出端口上"图像 + 结果"共用一个对象，老的 `getData().value<MeasureResult>()`
+    // 调用方（若有）仍能拿到结果，不至于因为类型变成 Image 就丢失。
+    if (m_type == DataType::Unknown || m_type == DataType::Image)
+        m_data = QVariant::fromValue(r);
+}
+
+QVector<MeasureResult> DataObject::measureResults() const
+{
+    QMutexLocker locker(&m_mutex);
+    if (!m_measureResults.isEmpty())
+        return m_measureResults;
+    if (m_data.canConvert<MeasureResult>())
+        return {m_data.value<MeasureResult>()};
+    return {};
+}
+
+bool DataObject::hasMeasureResult() const
+{
+    QMutexLocker locker(&m_mutex);
+    return !m_measureResults.isEmpty() || m_data.canConvert<MeasureResult>();
+}
+
+void DataObject::attachResult(const QString &name, const QSharedPointer<DataObject> &object)
+{
+    if (!object)
+        return;
+    QMutexLocker locker(&m_mutex);
+    m_attachedResults.append(qMakePair(name, object));
+}
+
+QVector<QPair<QString, QSharedPointer<DataObject>>> DataObject::attachedResults() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_attachedResults;
+}
+
+QSharedPointer<DataObject> DataObject::attachedResult(const QString &name) const
+{
+    QMutexLocker locker(&m_mutex);
+    for (const auto &item : m_attachedResults) {
+        if (item.first == name)
+            return item.second;
+    }
+    return {};
+}
+
+QVariant DataObject::primaryValue() const
+{
+    QMutexLocker locker(&m_mutex);
+    if (m_type == DataType::Measure) {
+        if (!m_measureResults.isEmpty())
+            return m_measureResults.first().valid ? QVariant(m_measureResults.first().value)
+                                                  : QVariant();
+        if (m_data.canConvert<MeasureResult>()) {
+            const MeasureResult r = m_data.value<MeasureResult>();
+            return r.valid ? QVariant(r.value) : QVariant();
+        }
+        return {};
+    }
+    // 主类型是图像时，m_data 里若挂了测量结果（历史 attach 兜底）不冒充主值
+    if (m_type == DataType::Image)
+        return {};
+    return m_data;
+}
+
+void DataObject::setPrimaryName(const QString &name)
+{
+    QMutexLocker locker(&m_mutex);
+    m_primaryName = name;
+}
+
+QString DataObject::primaryName() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_primaryName;
+}
+
+double DataObject::primaryNumber(bool *ok) const
+{
+    if (ok)
+        *ok = false;
+    {
+        QMutexLocker locker(&m_mutex);
+        if (m_type == DataType::Measure) {
+            MeasureResult r;
+            if (!m_measureResults.isEmpty())
+                r = m_measureResults.first();
+            else if (m_data.canConvert<MeasureResult>())
+                r = m_data.value<MeasureResult>();
+            if (r.valid) {
+                if (ok)
+                    *ok = true;
+                return r.value;
+            }
+            return 0.0;
+        }
+        if (m_type != DataType::Image) {
+            bool conv = false;
+            const double v = m_data.toDouble(&conv);
+            if (conv) {
+                if (ok)
+                    *ok = true;
+                return v;
+            }
+        }
+        // 图像对象也允许带附加测量结果（统一输出）：数值侧回落到结果
+        if (!m_measureResults.isEmpty() && m_measureResults.first().valid) {
+            if (ok)
+                *ok = true;
+            return m_measureResults.first().value;
+        }
+    }
+    return 0.0;
 }
 
 DetectionResult DataObject::getDetectionResult() const

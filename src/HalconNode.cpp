@@ -75,12 +75,33 @@ void HalconNode::init()
     // HalconNode是非图像获取算子，必须有输入图像参数
     addInputPort(QStringLiteral("输入图像"));
 
-    // 添加输出端口（一个红点代表所有输出参数）
-    if (m_withDefaultImagePort)   // r19 A 批：统一输出 —— 模板匹配等可只留自己的端口
-        addOutputPort(QStringLiteral("输出图像"));
-    
+    // B1 统一输出：所有工具只对外暴露一个「输出」端口（图像 + 结果同一对象）。
+    // 子类 init() 里后续的 addOutputPort 会被折叠成具名子结果，不再长出第 2 个红点。
+    if (m_withDefaultImagePort)
+        addOutputPort(QStringLiteral("输出"), PortDataType::Image);
+
     // 初始化默认参数
     setParamDirect(QStringLiteral("moduleStatus"), false); // 模块状态（bool量）
+}
+
+Port *HalconNode::addOutputPort(const QString &name, PortDataType dataType)
+{
+    if (!aggregatesOutputPorts())
+        return NodeBase::addOutputPort(name, dataType);
+
+    if (!m_mainPortDeclared) {
+        m_mainPortDeclared = true;
+        m_declaredMainPortType = dataType;
+        m_mainPortName = name;
+        m_logicalOutputs.clear();
+        // 聚合端口对下游一视同仁：类型给 Any，"结果"也能接到数值/布尔输入端。
+        // 端口声明类型另存 m_declaredMainPortType，产出守卫按它判（不按 Any）。
+        return NodeBase::addOutputPort(name, PortDataType::Any);
+    }
+
+    // 第 2..N 个输出：只登记名称/类型，数据仍写 m_outputData[i]，由 process() 合并。
+    m_logicalOutputs.append(qMakePair(name, dataType));
+    return m_outputPorts.value(0);
 }
 
 bool HalconNode::requiresInputImage() const
@@ -100,8 +121,8 @@ bool HalconNode::requiresImageOutput() const
         return false;
     if (m_outputPorts.isEmpty())
         return false;
-    Port *p0 = m_outputPorts.first();
-    return p0 && p0->dataType() == PortDataType::Image;
+    // B1：端口本身是 Any（聚合），"是否承诺吐图"看首次 addOutputPort 的声明类型
+    return m_declaredMainPortType == PortDataType::Image;
 }
 
 QSet<int> HalconNode::requiredInputDataPorts() const
@@ -120,11 +141,39 @@ QSet<int> HalconNode::requiredInputDataPorts() const
 
 bool HalconNode::requiresDataOutput() const
 {
-    for (Port *p : m_outputPorts) {
-        if (p && p->dataType() != PortDataType::Image)
+    if (!aggregatesOutputPorts()) {
+        for (Port *p : m_outputPorts) {
+            if (p && p->dataType() != PortDataType::Image)
+                return true;
+        }
+        return false;
+    }
+    // B1：真实端口是 Any，按"主端口声明类型 + 子输出类型"判是否承诺出数据
+    if (m_declaredMainPortType != PortDataType::Image)
+        return true;
+    for (const auto &lo : m_logicalOutputs) {
+        if (lo.second != PortDataType::Image)
             return true;
     }
     return false;
+}
+
+QVector<QPair<QString, QSharedPointer<DataObject>>> HalconNode::namedOutputs() const
+{
+    QVector<QPair<QString, QSharedPointer<DataObject>>> out;
+    const QSharedPointer<DataObject> main = getOutputData(0);
+    if (!main)
+        return out;
+    // 主结果沿用它在原端口清单里的名字（"值"/"匹配结果"/"输出"…），
+    // 运行界面按名取值（IO 状态灯消费 值/成功/错误）才能对上。
+    const QString primaryName = main->primaryName().isEmpty() ? QStringLiteral("输出")
+                                                             : main->primaryName();
+    out.append(qMakePair(primaryName, main));
+    for (const auto &att : main->attachedResults()) {
+        if (att.second)
+            out.append(att);
+    }
+    return out;
 }
 
 bool HalconNode::inputDataPresent(int portIndex) const
@@ -465,6 +514,9 @@ bool HalconNode::process()
         // 每轮重新计算结果：先清空上一轮输出图像，避免本轮无有效结果时
         // 仍把上一轮图像作为输出发布给下游（P1）
         m_outputImage.Clear();
+        // B1：逻辑输出（m_outputData 的键）也要清——聚合后它们不在接口上，
+        // 但同样是"上一轮的结果"，残留会被本轮合并进去。
+        clearAllOutputData();
         // U-18：同一处作废上一轮的原因字段——图像侧有 P1/P2 的清场，原因字段原来没人清，
         // 于是「本轮判红但没人写原因」时面板显示的还是上一轮的原因（闸 B 实测到这一形态）。
         invalidateReasonFields(m_params);
@@ -482,8 +534,7 @@ bool HalconNode::process()
         // 否则"成功默认值"会让 run() 里 `if (!initialized) return;` 的节点在空输入下显示绿灯。
         if (requiresInputImage() && !m_inputImage.IsInitialized()) {
             m_params[QStringLiteral("moduleStatus")] = false;
-            for (int p = 0; p < outputPorts().size(); ++p)
-                setOutputData(p, QSharedPointer<DataObject>());
+            clearAllOutputData();
             return false;
         }
 
@@ -500,12 +551,26 @@ bool HalconNode::process()
             && !m_params[QStringLiteral("moduleStatus")].toBool()) {
             m_outputImage.Clear();
             // 失败清空全部输出，避免下游误用上一轮结果（P2）
-            for (int p = 0; p < outputPorts().size(); ++p)
-                setOutputData(p, QSharedPointer<DataObject>());
+            clearAllOutputData();
             return false;
         }
 
         HalconCpp::HImage output(m_outputImage);
+        // B1：聚合节点还要看逻辑输出里的图（二值图/带框图/旋转图…），后写的（处理更深的）优先
+        if (aggregatesOutputPorts()) {
+            QMap<int, QSharedPointer<DataObject>> outputs;
+            {
+                QMutexLocker locker(&m_dataMutex);
+                outputs = m_outputData;
+            }
+            for (auto it = outputs.constBegin(); it != outputs.constEnd(); ++it) {
+                if (!it.value())
+                    continue;
+                const HalconCpp::HImage img = it.value()->getHImage();
+                if (img.IsInitialized())
+                    output = img;
+            }
+        }
 
         // 成功必须有产出（S-1）：本族大量 run() 的失败/异常分支只做 `m_outputImage.Clear();
         // return;`，从不写 moduleStatus=false，而 catch(const std::exception&) 同样不清位
@@ -514,12 +579,31 @@ bool HalconNode::process()
         // 没有产出就是失败，不能靠逐个节点补写位。
         if (requiresImageOutput() && !output.IsInitialized()) {
             m_params[QStringLiteral("moduleStatus")] = false;
-            for (int p = 0; p < outputPorts().size(); ++p)
-                setOutputData(p, QSharedPointer<DataObject>());
+            clearAllOutputData();
             return false;
         }
+        // B1：承诺出数据（结果/数值）的节点，本轮一个逻辑输出都没有同样判失败
+        if (requiresDataOutput()) {
+            bool produced = false;
+            {
+                QMutexLocker locker(&m_dataMutex);
+                for (auto it = m_outputData.constBegin(); it != m_outputData.constEnd(); ++it) {
+                    if (it.value()) {
+                        produced = true;
+                        break;
+                    }
+                }
+            }
+            if (!produced && !output.IsInitialized()) {
+                m_params[QStringLiteral("moduleStatus")] = false;
+                clearAllOutputData();
+                return false;
+            }
+        }
 
-        if (output.IsInitialized()) {
+        if (aggregatesOutputPorts()) {
+            publishAggregatedOutputs();
+        } else if (output.IsInitialized()) {
             auto outObj = QSharedPointer<DataObject>::create();
             outObj->setHImage(output);
             setOutputData(0, outObj);
@@ -536,17 +620,105 @@ bool HalconNode::process()
                 QStringLiteral("节点执行抛出异常（原因未提供）");
         m_outputImage.Clear();
         // 异常失败清空全部输出（P2）
-        for (int p = 0; p < outputPorts().size(); ++p)
-            setOutputData(p, QSharedPointer<DataObject>());
+        clearAllOutputData();
         return false;
     }
+}
+
+void HalconNode::clearAllOutputData()
+{
+    QMutexLocker locker(&m_dataMutex);
+    if (aggregatesOutputPorts()) {
+        m_outputData.clear();   // 逻辑端口一并清（聚合后它们不在接口上，但同属本轮结果）
+        return;
+    }
+    for (int p = 0; p < m_outputPorts.size(); ++p)
+        m_outputData.remove(p);
+}
+
+void HalconNode::publishAggregatedOutputs()
+{
+    QMap<int, QSharedPointer<DataObject>> outputs;
+    {
+        QMutexLocker locker(&m_dataMutex);
+        outputs = m_outputData;
+    }
+
+    HalconCpp::HImage image(m_outputImage);
+    QSharedPointer<DataObject> primary;
+    int primaryKey = -1;
+    QVector<QPair<int, QSharedPointer<DataObject>>> extras;
+
+    for (auto it = outputs.constBegin(); it != outputs.constEnd(); ++it) {
+        const QSharedPointer<DataObject> &obj = it.value();
+        if (!obj)
+            continue;
+        const HalconCpp::HImage img = obj->getHImage();
+        if (img.IsInitialized())
+            image = img;         // 后写的（处理更深的）图像优先
+        // 纯图像对象只贡献图像；带主值/测量结果的对象（含透传的聚合对象）进主结果候选
+        const bool pureImage = obj->getType() == DataObject::DataType::Image
+                               && !obj->hasMeasureResult() && !obj->primaryValue().isValid();
+        if (pureImage)
+            continue;
+        if (!primary) {
+            primary = obj;
+            primaryKey = it.key();
+        } else {
+            extras.append(qMakePair(it.key(), obj));
+        }
+    }
+
+    auto merged = QSharedPointer<DataObject>::create();
+    if (image.IsInitialized())
+        merged->setHImage(image);
+
+    if (primary) {
+        // 主结果：保留原类型/原值 —— 老的 getData()/getType() 读取者行为不变
+        merged->setData(primary->getData());
+        merged->setType(primary->getType());
+        if (primary->getType() == DataObject::DataType::Measure)
+            merged->attachMeasureResult(primary->getMeasureResult());
+        // 透传节点（延时等）带进来的具名子结果要原样保留
+        for (const auto &att : primary->attachedResults())
+            merged->attachResult(att.first, att.second);
+        merged->setPrimaryName(primaryKey == 0
+                                   ? m_mainPortName
+                                   : (primaryKey - 1 < m_logicalOutputs.size()
+                                          ? m_logicalOutputs.at(primaryKey - 1).first
+                                          : m_mainPortName));
+    } else {
+        merged->setPrimaryName(m_mainPortName);
+    }
+
+    // 其它逻辑输出：测量结果并进结果表（叠加层要全部画出来），其余按端口名存为子结果
+    for (const auto &e : extras) {
+        const QSharedPointer<DataObject> &obj = e.second;
+        if (!obj)
+            continue;
+        if (obj->hasMeasureResult())
+            merged->attachMeasureResult(obj->getMeasureResult());
+        const int logical = e.first;
+        const QString name = (logical > 0 && logical - 1 < m_logicalOutputs.size())
+                                 ? m_logicalOutputs.at(logical - 1).first
+                                 : QStringLiteral("输出%1").arg(logical + 1);
+        merged->attachResult(name, obj);
+    }
+
+    if (!primary && !image.IsInitialized()) {
+        setOutputData(0, QSharedPointer<DataObject>());
+        return;
+    }
+
+    // 逻辑子输出仍留在各自的旧键上（getOutputData(1..N) 的老读取者——用例/脚本/旧插件——
+    // 行为不变）；接口上只有端口 0 这一个红点。
+    setOutputData(0, merged);
 }
 
 bool HalconNode::processDataOutputs()
 {
     const auto clearAllOutputs = [this] {
-        for (int p = 0; p < m_outputPorts.size(); ++p)
-            setOutputData(p, QSharedPointer<DataObject>());
+        clearAllOutputData();
     };
     const auto failRound = [this, &clearAllOutputs] {
         m_params[QStringLiteral("moduleStatus")] = false;
@@ -596,14 +768,16 @@ bool HalconNode::processDataOutputs()
             return failRound();
         }
 
-        // 产出守卫（S-1 的数据侧孪生）：承诺出数据的节点，本轮全部输出端口为空就是失败
+        // 产出守卫（S-1 的数据侧孪生）：承诺出数据的节点，本轮全部逻辑输出为空就是失败
         if (requiresDataOutput()) {
             bool produced = false;
-            for (int p = 0; p < m_outputPorts.size(); ++p) {
-                const QSharedPointer<DataObject> out = getOutputData(p);
-                if (out) {
-                    produced = true;
-                    break;
+            {
+                QMutexLocker locker(&m_dataMutex);
+                for (auto it = m_outputData.constBegin(); it != m_outputData.constEnd(); ++it) {
+                    if (it.value()) {
+                        produced = true;
+                        break;
+                    }
                 }
             }
             if (!produced) {
@@ -612,6 +786,8 @@ bool HalconNode::processDataOutputs()
             }
         }
 
+        // B1：数据也走唯一「输出」端口（多输出同样折叠）
+        publishAggregatedOutputs();
         return true;
     } catch (...) {
         VFP_DEBUG << "数据型节点失败[抛出异常]" << name();
@@ -740,8 +916,8 @@ QWidget *HalconNode::createParamPanel()
                                 if (outputData) {
                                     // 将枚举类型转换为整数输出
                                     VFP_DEBUG << "  Data type:" << static_cast<int>(outputData->getType());
-                                    // 检查输出数据类型是否为图像
-                                    if (outputData->getType() == DataObject::DataType::Image) {
+                                    // 检查输出对象是否带图像（B1：聚合端口的主类型可能是 Measure/Number）
+                                    if (outputData->getHImage().IsInitialized()) {
                                         QString itemText = QString("%1 [%2] - %3").arg(node->name()).arg(node->moduleId()).arg(outputPort->name());
                                         inputImageCombo->addItem(itemText, QVariant::fromValue(QPair<NodeBase*, int>(node, i)));
                                         VFP_DEBUG << "  Added item:" << itemText;
