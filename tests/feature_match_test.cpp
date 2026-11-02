@@ -94,6 +94,8 @@ private slots:
     void templateInheritsUpstreamBoxAsSearchRegion();
     // 魔术棒 / 魔术棒+：替换 vs 追加
     void templateWandPlusAppends();
+    // 多模板顺序匹配：matchAllTemplates=false 时按列表顺序试，达标即停
+    void templateSequentialMatchStopsAtFirstHit();
     // 建模板后的参数建议：低对比给低阈值、大模板给大特征尺度
     void templateSuggestParamsFollowsTemplate();
     // VM 特征尺度/最小链长：特征点必须真的随参数变稀疏、短链被丢弃
@@ -1448,28 +1450,34 @@ void FeatureMatchTest::templateMatchUsesActiveTemplateFromList()
     node.setTemplates({ea, eb});
     QCOMPARE(node.templates().size(), 2);
 
-    node.setActiveTemplateIndex(0);
+    // VM「全部搜索模式=关」语义：按列表顺序 [A, B] 逐个试，达标即停。
+    // 画布上 A/B 都在，A 先试就命中 → 停止；active 挂在哪不影响结果。
+    node.setActiveTemplateIndex(1);       // 故意挂到 B
+    node.setParam(QStringLiteral("matchAllTemplates"), false);
     node.run(false);
     const double c0 = node.getParam(QStringLiteral("matchCol")).toDouble();
     const double r0 = node.getParam(QStringLiteral("matchRow")).toDouble();
-    qInfo("template-list: active=0 hit (%.1f, %.1f)", c0, r0);
+    const int idx0 = node.getParam(QStringLiteral("matchTemplateIndex")).toInt();
+    qInfo("template-list: sequential hit (%.1f, %.1f) idx=%d", c0, r0, idx0);
     QVERIFY2(qAbs(c0 - cxA) <= 2.0 && qAbs(r0 - cyA) <= 2.0,
-             qPrintable(QStringLiteral("模板 A 应命中 (%1,%2)，实际 (%3,%4)")
+             qPrintable(QStringLiteral("顺序匹配应命中列表里第一个能匹配的模板 A (%1,%2)，实际 (%3,%4)")
                             .arg(cxA).arg(cyA).arg(c0).arg(r0)));
+    QCOMPARE(idx0, 0);
 
-    node.setActiveTemplateIndex(1);
+    // matchAllTemplates=true：全部试完取最优（两个都在，至少命中一个）
+    node.setParam(QStringLiteral("matchAllTemplates"), true);
     node.run(false);
     const double c1 = node.getParam(QStringLiteral("matchCol")).toDouble();
     const double r1 = node.getParam(QStringLiteral("matchRow")).toDouble();
-    qInfo("template-list: active=1 hit (%.1f, %.1f)", c1, r1);
-    QVERIFY2(qAbs(c1 - cxB) <= 2.0 && qAbs(r1 - cyB) <= 2.0,
-             qPrintable(QStringLiteral("模板 B 应命中 (%1,%2)，实际 (%3,%4)")
-                            .arg(cxB).arg(cyB).arg(c1).arg(r1)));
+    qInfo("template-list: matchAll hit (%.1f, %.1f)", c1, r1);
+    QVERIFY2(node.getParam(QStringLiteral("moduleStatus")).toBool(),
+             qPrintable(QStringLiteral("全部搜索模式应至少命中一个模板，实际 (%1,%2)")
+                            .arg(c1).arg(r1)));
 }
 
-// 多模板同时匹配：列表里 A/B 两块模板，画布上只有 B。
-//  ① 关（默认）：按 active=0（A）跑，判红；
-//  ② 开：逐个模板跑，自动选中 B 并给出正确的 matchTemplateIndex / 位置。
+// 多模板匹配：列表里 A/B 两块模板，画布上只有 B。
+//  ① matchAllTemplates=false（顺序匹配）：A 失败后继续试 B → 命中 B；
+//  ② matchAllTemplates=true（全部搜索）：逐个模板跑，取最优 → 命中 B。
 void FeatureMatchTest::templateMatchAllTemplatesPicksBest()
 {
     QTemporaryDir dir;
@@ -1515,11 +1523,16 @@ void FeatureMatchTest::templateMatchAllTemplatesPicksBest()
     node.setTemplates({ea, eb});
     node.setActiveTemplateIndex(0);                    // 默认挂在 A 上
 
-    // ① 关闭多模板：A 不在画面里 ⇒ 判红
+    // ① matchAllTemplates=false（顺序匹配）：A 失败后继续试 B → 命中 B
     node.setParam(QStringLiteral("matchAllTemplates"), false);
     node.run(false);
-    QVERIFY2(!node.getParam(QStringLiteral("moduleStatus")).toBool(),
-             "画布只有 B，却用 A 匹配成功了 —— 单模板路径不该扫到别的模板");
+    {
+        const bool okSeq = node.getParam(QStringLiteral("moduleStatus")).toBool();
+        const int idxSeq = node.getParam(QStringLiteral("matchTemplateIndex")).toInt();
+        qInfo("sequential-only-B: ok=%d idx=%d", int(okSeq), idxSeq);
+        QVERIFY2(okSeq, "顺序匹配应由 B 命中（A 失败后继续试 B）");
+        QCOMPARE(idxSeq, 1);
+    }
 
     // ② 打开多模板：必须自动选中 B
     node.setParam(QStringLiteral("matchAllTemplates"), true);
@@ -2244,6 +2257,72 @@ void FeatureMatchTest::templateSortTypeOrdersMatchList()
     const QStringList rows2 =
         node.getParam(QStringLiteral("matchList")).toString().split(QLatin1Char(';'), Qt::SkipEmptyParts);
     QCOMPARE(rows2.size(), 2);
+}
+
+// VM「全部搜索模式=关」语义：按模板列表顺序逐个试，达标即停。
+// 画布上只有 B，模板列表 [A, B]：A 先试（失败）→ B 试（命中）→ 停止。
+// 不应该跳过 A 直接用 B（那就是 active 模板语义），也不应该试完两个取最优（那是 matchAll）。
+void FeatureMatchTest::templateSequentialMatchStopsAtFirstHit()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const cv::Mat patchA = makePatch();
+    cv::Mat patchB(kTemplateSize, kTemplateSize, CV_8UC1, cv::Scalar(20));
+    cv::circle(patchB, cv::Point(64, 64), 50, cv::Scalar(255), 6);
+    cv::circle(patchB, cv::Point(64, 64), 26, cv::Scalar(190), 4);
+    cv::line(patchB, cv::Point(12, 12), cv::Point(116, 116), cv::Scalar(240), 3);
+
+    const QString pathA = dir.filePath(QStringLiteral("a.png"));
+    const QString pathB = dir.filePath(QStringLiteral("b.png"));
+    QVERIFY(cv::imwrite(pathA.toStdString(), patchA));
+    QVERIFY(cv::imwrite(pathB.toStdString(), patchB));
+
+    cv::Mat canvas(300, 600, CV_8UC1, cv::Scalar(kCanvasBackground));
+    const cv::Rect boxB(360, 90, kTemplateSize, kTemplateSize);
+    patchB.copyTo(canvas(boxB));
+    const double cxB = boxB.x + kTemplateSize / 2.0;
+    const double cyB = boxB.y + kTemplateSize / 2.0;
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.5);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("searchRegionCol"), 0);
+    node.setParam(QStringLiteral("searchRegionRow"), 0);
+    node.setParam(QStringLiteral("searchRegionWidth"), canvas.cols);
+    node.setParam(QStringLiteral("searchRegionHeight"), canvas.rows);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+
+    TemplateEntry ea;
+    ea.name = QStringLiteral("A");
+    ea.imagePath = pathA;
+    TemplateEntry eb;
+    eb.name = QStringLiteral("B");
+    eb.imagePath = pathB;
+    node.setTemplates({ea, eb});          // 列表顺序 [A, B]
+    node.setActiveTemplateIndex(0);       // active 挂在 A 上（故意不匹配）
+    node.setParam(QStringLiteral("matchAllTemplates"), false);
+
+    node.run(false);
+    const bool ok = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    const int idx = node.getParam(QStringLiteral("matchTemplateIndex")).toInt();
+    const QString name = node.getParam(QStringLiteral("matchTemplateName")).toString();
+    const double col = node.getParam(QStringLiteral("matchCol")).toDouble();
+    const double row = node.getParam(QStringLiteral("matchRow")).toDouble();
+    qInfo("sequential: ok=%d index=%d name=%s at (%.1f, %.1f)", int(ok), idx,
+          qPrintable(name), col, row);
+
+    QVERIFY2(ok, "顺序匹配应由 B 命中（A 失败后继续试 B）");
+    QCOMPARE(idx, 1);
+    QCOMPARE(name, QStringLiteral("B"));
+    QVERIFY2(qAbs(col - cxB) <= 2.0 && qAbs(row - cyB) <= 2.0,
+             qPrintable(QStringLiteral("命中位置应在 B (%1,%2)，实际 (%3,%4)")
+                            .arg(cxB).arg(cyB).arg(col).arg(row)));
 }
 
 QTEST_MAIN(FeatureMatchTest)

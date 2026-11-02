@@ -93,6 +93,7 @@ private:
     bool m_wandMode = false;
     bool m_cutMode = false;        ///< 剪刀：等用户画一条线
     bool m_wandAppend = false;     ///< 魔术棒+：取到的区域追加到现有形状
+    bool m_anchorPickMode = false; ///< 匹配中心取点：图上单击设锚点
 
     RoiShape m_shape;              ///< 主形状（=m_shapes.first()，老逻辑兼容）
     QVector<RoiShape> m_shapes;    ///< 保留形状（一个模板可由多块组成）

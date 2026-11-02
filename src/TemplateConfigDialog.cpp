@@ -65,6 +65,7 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     auto *scissorsBtn = new QPushButton(QStringLiteral("剪刀"));
     auto *maskModeBtn = new QPushButton(QStringLiteral("屏蔽模式"));
     maskModeBtn->setCheckable(true);
+    auto *blockAllBtn = new QPushButton(QStringLiteral("全部屏蔽"));
     maskModeBtn->setToolTip(QStringLiteral(
         "勾上后画/取到的形状进「屏蔽」列表：从保留区里挖掉（logo/水印/背景）。"
         "屏蔽=保留 − 屏蔽；不画保留区时默认整块保留再挖。"));
@@ -80,6 +81,7 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     top->addWidget(splitBtn);
     top->addWidget(scissorsBtn);
     top->addWidget(maskModeBtn);
+    top->addWidget(blockAllBtn);
     root->addLayout(top);
 
     // ---- 左：图像区；右：配置参数 + 形状列表 ----
@@ -139,10 +141,13 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     m_anchorY->setValue(0.0);
     m_anchorLock = new QCheckBox(QStringLiteral("锁定"));
     m_anchorLock->setToolTip(QStringLiteral("锁定后不允许改匹配中心 X/Y（防误改）"));
+    auto *anchorPickBtn = new QPushButton(QStringLiteral("图上取点"));
+    anchorPickBtn->setToolTip(QStringLiteral("点图上位置设为匹配中心（VM「选择匹配中心」）"));
     anchorRow->addWidget(new QLabel(QStringLiteral("X")));
     anchorRow->addWidget(m_anchorX);
     anchorRow->addWidget(new QLabel(QStringLiteral("Y")));
     anchorRow->addWidget(m_anchorY);
+    anchorRow->addWidget(anchorPickBtn);
     anchorRow->addWidget(m_anchorLock);
     rightLay->addLayout(anchorRow);
 
@@ -204,6 +209,37 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     connect(clearShapeBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onClearShape);
     connect(splitBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onSplitShape);
     connect(scissorsBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onScissors);
+    connect(anchorPickBtn, &QPushButton::clicked, this, [this]() {
+        m_anchorPickMode = true;
+        m_wandMode = false;
+        m_cutMode = false;
+        m_view->setRoiFreehand(false);
+        m_view->setRoiEditable(false);
+        m_view->setCursor(Qt::CrossCursor);
+        m_hint->setText(QStringLiteral("在图上单击设匹配中心位置。"));
+    });
+    connect(blockAllBtn, &QPushButton::clicked, this, [this]() {
+        // VM「全部屏蔽」：清空所有已画形状与匹配中心，进入刷绘模式画保留区
+        m_shapes.clear();
+        m_excludes.clear();
+        m_shape = RoiShape();
+        m_anchorX->setValue(0.0);
+        m_anchorY->setValue(0.0);
+        m_anchorLock->setChecked(false);
+        m_anchorPickMode = false;
+        m_view->clearRoi();
+        m_view->setFeaturePoints({});
+        m_view->setRoiFreehand(true);
+        m_view->setRoiColor(QColor(0, 200, 255));
+        refreshShapeList();
+        refreshFeaturePreview();
+        m_hint->setText(QStringLiteral(
+            "已全部屏蔽（形状与匹配中心清空）；请用套索/矩形/魔术棒画出要保留的区域。"));
+    });
+    // VM：锁定后隐藏「图上取点」按钮（锁定=不允许再改匹配中心）
+    connect(m_anchorLock, &QCheckBox::toggled, anchorPickBtn, [anchorPickBtn](bool locked) {
+        anchorPickBtn->setVisible(!locked);
+    });
     connect(maskModeBtn, &QPushButton::toggled, this, [this](bool on) {
         m_maskMode = on;
         m_hint->setText(on
@@ -555,6 +591,24 @@ void TemplateConfigDialog::onScissors()
 
 void TemplateConfigDialog::onImageClicked(const QPointF &imagePos)
 {
+    // 匹配中心取点：图上单击设锚点（VM「选择匹配中心」）
+    if (m_anchorPickMode) {
+        m_anchorPickMode = false;
+        m_view->setCursor(Qt::ArrowCursor);
+        // 锚点 = 相对模板中心的偏移；先算模板中心
+        const QRectF box = OpencvTemplateMatchNode::shapesBounds(
+            m_shapes.isEmpty() ? QVector<RoiShape>() : m_shapes);
+        const double cx = box.isValid() ? box.center().x() : 0.0;
+        const double cy = box.isValid() ? box.center().y() : 0.0;
+        m_anchorX->setValue(imagePos.x() - cx);
+        m_anchorY->setValue(imagePos.y() - cy);
+        m_hint->setText(QStringLiteral("匹配中心已设为 (%1, %2)（相对模板中心 %3, %4）")
+                            .arg(imagePos.x(), 0, 'f', 1)
+                            .arg(imagePos.y(), 0, 'f', 1)
+                            .arg(cx, 0, 'f', 1)
+                            .arg(cy, 0, 'f', 1));
+        return;
+    }
     if (!m_wandMode || m_trainGray.empty())
         return;
     const QPoint seed(int(imagePos.x()), int(imagePos.y()));

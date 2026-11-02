@@ -554,7 +554,26 @@ void OpencvTemplateMatchNode::run(bool autoSwitch)
         entries.size() > 1 && !train
         && m_params.value(QStringLiteral("matchAllTemplates"), false).toBool();
     if (!matchAll) {
-        runSingle(autoSwitch);
+        // VM「全部搜索模式=关」：按模板列表顺序逐个试，达标即停。
+        // 此前只用 active 模板，VM 是按排序优先级依次尝试。
+        if (entries.isEmpty()) {
+            runSingle(autoSwitch);
+            return;
+        }
+        const int savedIndex = activeTemplateIndex();
+        for (int i = 0; i < entries.size(); ++i) {
+            m_params[QStringLiteral("templateIndex")] = i;
+            runSingle(autoSwitch);
+            if (m_params.value(QStringLiteral("moduleStatus"), false).toBool()) {
+                m_params[QStringLiteral("matchTemplateIndex")] = i;
+                m_params[QStringLiteral("matchTemplateName")] = entries.at(i).name;
+                return;                          // 达标即停
+            }
+        }
+        // 全部模板都没命中
+        m_params[QStringLiteral("templateIndex")] = savedIndex;
+        m_params[QStringLiteral("matchTemplateIndex")] = -1;
+        m_params[QStringLiteral("matchTemplateName")] = QString();
         return;
     }
 
