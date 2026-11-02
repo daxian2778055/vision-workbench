@@ -542,6 +542,15 @@ void HalconWindow::mousePressEvent(QMouseEvent *event)
                 update();
                 return;
             }
+            if (m_roiType == RoiType::Polygon && m_roiFreehand) {
+                // 自由绘制：按下即开始，拖动连续取点，松手收笔
+                m_roiDraft = RoiShape();
+                m_roiDraft.type = RoiType::Polygon;
+                m_roiDraft.points.append(imgPos);
+                m_roiDrawing = true;
+                update();
+                return;
+            }
             if (m_roiType == RoiType::Polygon) {
                 // 多边形：每次单击追加顶点；点回起点（或双击）收笔。
                 // 历史缺陷：mouseReleaseEvent 里无条件 finalizeRoi()，第一个顶点一松手就被
@@ -579,6 +588,13 @@ void HalconWindow::mousePressEvent(QMouseEvent *event)
         }
     }
 
+    // 魔术棒取点：非绘制/非掩膜状态下，左键单击把图像坐标抛给上层
+    if (event->button() == Qt::LeftButton && !m_roiEditable && !m_maskEditable) {
+        QPointF imgPos;
+        if (imagePosFromWidget(event->pos(), imgPos))
+            emit imageClicked(imgPos);
+    }
+
     if (event->button() == Qt::RightButton) {
         m_fitToWindowAction->setChecked(m_fitToWindow);
         m_contextMenu->exec(event->globalPos());
@@ -606,6 +622,19 @@ void HalconWindow::mouseMoveEvent(QMouseEvent *event)
         if (imagePosFromWidget(event->pos(), imgPos)) {
             applyHandleDrag(imgPos);
             update();
+        }
+        return;
+    }
+
+    if (m_roiFreehand && m_roiDrawing) {
+        QPointF imgPos;
+        if (imagePosFromWidget(event->pos(), imgPos)) {
+            const double step = 2.0 / qMax(1e-6, m_scaleFactor);
+            if (m_roiDraft.points.isEmpty()
+                || QLineF(m_roiDraft.points.last(), imgPos).length() > step) {
+                m_roiDraft.points.append(imgPos);
+                update();
+            }
         }
         return;
     }
@@ -674,7 +703,9 @@ void HalconWindow::mouseReleaseEvent(QMouseEvent *event)
 
     if (m_roiEditable && m_roiDrawing && event->button() == Qt::LeftButton) {
         // 多边形是"多次单击"图元：松手只是完成一个顶点，收笔靠双击/点回起点。
-        if (m_roiType == RoiType::Polygon || m_roiDraft.type == RoiType::Polygon)
+        // 自由绘制例外：松手即收笔。
+        if (!m_roiFreehand
+            && (m_roiType == RoiType::Polygon || m_roiDraft.type == RoiType::Polygon))
             return;
         finalizeRoi();
         return;
@@ -944,6 +975,7 @@ void HalconWindow::setRoiEditable(bool editable, RoiType type)
     m_activeHandle = RoiHandle::None;
     m_roiDraft = RoiShape();
     m_roiHoverValid = false;
+    m_roiFreehand = false;          // 任何一次 setRoiEditable 都回到"单击逐点"模式
     if (editable)
         m_roiHandleEdit = true;
     setCursor(Qt::CrossCursor);
@@ -956,6 +988,16 @@ void HalconWindow::setRoiShape(const RoiShape &shape)
     if (shape.type != RoiType::None)
         m_roiHandleEdit = true;
     update();
+}
+
+void HalconWindow::setRoiFreehand(bool on)
+{
+    if (on) {
+        setRoiEditable(true, RoiType::Polygon);   // 内部会清标志，先调用再置位
+        m_roiFreehand = true;
+    } else {
+        m_roiFreehand = false;
+    }
 }
 
 void HalconWindow::setRoiColor(const QColor &color)

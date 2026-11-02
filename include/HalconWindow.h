@@ -96,6 +96,8 @@ public:
     void setRoiColor(const QColor &color);
     /// 模板特征点（图像坐标，绿点）：打开工具/选中算子时画出"这次匹配到底用了哪些点"
     void setFeaturePoints(const QVector<QPointF> &points);
+    /// 自由绘制（套索）：进入后按下拖动即连续取点，松手收笔（仅对 Polygon 有效）
+    void setRoiFreehand(bool on);
     /// 允许拖改已有 ROI 控制点（不必先点「绘制」）
     void setRoiHandleEditEnabled(bool on);
     bool isRoiHandleEditEnabled() const { return m_roiHandleEdit; }
@@ -115,6 +117,8 @@ signals:
     void roiEdited(const RoiShape &shape);
     void roiEditCanceled();
     void maskEdited();
+    /// 非绘制状态下左键单击的图像坐标（魔术棒取点用）
+    void imageClicked(const QPointF &imagePos);
 
 protected:
     // 事件处理
@@ -191,6 +195,7 @@ private:
     RoiShape m_roiDraft;           /// 绘制中的草稿
     bool m_roiDrawing = false;     /// 是否正在绘制
     bool m_roiHandleEdit = false;  /// 允许拖改已有 ROI
+    bool m_roiFreehand = false;    /// 自由绘制（套索）：拖动连续取点
     /// 多边形绘制：光标预览点（从最后一个顶点到光标的橡皮筋）
     QPointF m_roiHoverImg;
     bool m_roiHoverValid = false;

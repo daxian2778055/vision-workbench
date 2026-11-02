@@ -35,10 +35,18 @@ public:
     explicit TemplateConfigDialog(OpencvTemplateMatchNode *node, int editIndex = -1,
                                   QWidget *parent = nullptr);
 
+    /// 魔术棒取形（纯函数，便于无界面测试）：以 seed 为种子按容差泛洪，
+    /// 取最大外轮廓并做多边形逼近；返回图像坐标顶点（<3 点表示失败）。
+    static QVector<QPointF> wandPolygon(const cv::Mat &gray, const QPoint &seed, int tolerance);
+
 private slots:
     void onPickRect();
     void onPickPolygon();
     void onPickCircle();
+    void onPickFreehand();
+    void onPickWand();
+    /// 魔术棒：在图上点一下，按点击点做泛洪取形（容差可调）
+    void onImageClicked(const QPointF &imagePos);
     void onClearShape();
     void onRoiEdited(const RoiShape &shape);
     void onPickOtherImage();
@@ -62,6 +70,8 @@ private:
     QSpinBox *m_coarseSpin = nullptr;
     QListWidget *m_list = nullptr;
     QLabel *m_hint = nullptr;
+    QSpinBox *m_wandTol = nullptr;
+    bool m_wandMode = false;
 
     RoiShape m_shape;
     cv::Mat m_trainGray;      ///< 训练用灰度图（当前输入图或"选择其他图像"）

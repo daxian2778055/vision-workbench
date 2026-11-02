@@ -28,6 +28,7 @@
 #include "OpencvUtil.h"
 #include "DataObject.h"
 #include "ImageDisplayController.h"   // OverlayShape + collectOverlayFromNode
+#include "TemplateConfigDialog.h"     // 魔术棒取形（纯函数）
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -75,6 +76,8 @@ private slots:
     void templateMatchAllTemplatesPicksBest();
     // 多边形/圆形模板：必须能抠出包围盒（此前多边形直接返回空 → 建模板必失败）
     void templateShapeExtractionSupportsPolygonAndCircle();
+    // 魔术棒取形：泛洪出的多边形必须贴合目标区域
+    void templateWandPolygonFollowsRegion();
 };
 
 namespace {
@@ -1550,6 +1553,33 @@ void FeatureMatchTest::templateShapeExtractionSupportsPolygonAndCircle()
     QCOMPARE(back.shape.type, RoiType::Circle);
     QCOMPARE(back.shape.p1, circ.p1);
     QCOMPARE(back.shape.p2, circ.p2);
+}
+
+// 魔术棒取形：亮底上一个暗矩形，从块内取种子，泛洪+轮廓近似必须贴合矩形四边。
+void FeatureMatchTest::templateWandPolygonFollowsRegion()
+{
+    cv::Mat img(200, 200, CV_8UC1, cv::Scalar(240));
+    cv::rectangle(img, cv::Rect(50, 40, 100, 80), cv::Scalar(40), cv::FILLED);
+
+    const QVector<QPointF> pts =
+        TemplateConfigDialog::wandPolygon(img, QPoint(100, 80), 20);
+    qInfo("wand: points=%d", int(pts.size()));
+    QVERIFY2(pts.size() >= 4, qPrintable(QStringLiteral("魔术棒只取到 %1 个顶点").arg(pts.size())));
+
+    double x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+    for (const QPointF &p : pts) {
+        x0 = qMin(x0, p.x());
+        x1 = qMax(x1, p.x());
+        y0 = qMin(y0, p.y());
+        y1 = qMax(y1, p.y());
+    }
+    QVERIFY2(qAbs(x0 - 50.0) <= 2.0 && qAbs(x1 - 150.0) <= 2.0
+                 && qAbs(y0 - 40.0) <= 2.0 && qAbs(y1 - 120.0) <= 2.0,
+             qPrintable(QStringLiteral("魔术棒包围盒 (%1,%2)-(%3,%4) 与暗块 (50,40)-(150,120) 不符")
+                            .arg(x0).arg(y0).arg(x1).arg(y1)));
+
+    // 空图必须返回空（不能崩）
+    QVERIFY(TemplateConfigDialog::wandPolygon(cv::Mat(), QPoint(1, 1), 20).isEmpty());
 }
 
 QTEST_MAIN(FeatureMatchTest)

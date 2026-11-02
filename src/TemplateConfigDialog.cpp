@@ -52,10 +52,19 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     auto *shapeRectBtn = new QPushButton(QStringLiteral("矩形"));
     auto *shapePolyBtn = new QPushButton(QStringLiteral("多边形"));
     auto *shapeCircleBtn = new QPushButton(QStringLiteral("圆形"));
+    auto *shapeFreeBtn = new QPushButton(QStringLiteral("自由绘制"));
+    auto *shapeWandBtn = new QPushButton(QStringLiteral("魔术棒"));
+    m_wandTol = new QSpinBox();
+    m_wandTol->setRange(1, 120);
+    m_wandTol->setValue(30);
+    m_wandTol->setPrefix(QStringLiteral("容差 "));
     auto *clearShapeBtn = new QPushButton(QStringLiteral("清除形状"));
     top->addWidget(shapeRectBtn);
     top->addWidget(shapePolyBtn);
     top->addWidget(shapeCircleBtn);
+    top->addWidget(shapeFreeBtn);
+    top->addWidget(shapeWandBtn);
+    top->addWidget(m_wandTol);
     top->addWidget(clearShapeBtn);
     root->addLayout(top);
 
@@ -147,6 +156,9 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     connect(shapeRectBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onPickRect);
     connect(shapePolyBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onPickPolygon);
     connect(shapeCircleBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onPickCircle);
+    connect(shapeFreeBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onPickFreehand);
+    connect(shapeWandBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onPickWand);
+    connect(m_view, &HalconWindow::imageClicked, this, &TemplateConfigDialog::onImageClicked);
     connect(clearShapeBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onClearShape);
     connect(okBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onConfirm);
     connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
@@ -234,6 +246,8 @@ void TemplateConfigDialog::onPickSavePath()
 
 void TemplateConfigDialog::onPickRect()
 {
+    m_wandMode = false;
+    m_view->setRoiFreehand(false);
     m_view->setRoiColor(QColor(0, 200, 255));
     m_view->setRoiEditable(true, RoiType::Rect);
     m_hint->setText(QStringLiteral("在图上拖出矩形模板区域；右键取消。"));
@@ -241,6 +255,8 @@ void TemplateConfigDialog::onPickRect()
 
 void TemplateConfigDialog::onPickPolygon()
 {
+    m_wandMode = false;
+    m_view->setRoiFreehand(false);
     m_view->setRoiColor(QColor(0, 200, 255));
     m_view->setRoiEditable(true, RoiType::Polygon);
     m_hint->setText(QStringLiteral("单击逐点、双击完成多边形模板区域；右键取消。"));
@@ -248,9 +264,92 @@ void TemplateConfigDialog::onPickPolygon()
 
 void TemplateConfigDialog::onPickCircle()
 {
+    m_wandMode = false;
+    m_view->setRoiFreehand(false);
     m_view->setRoiColor(QColor(0, 200, 255));
     m_view->setRoiEditable(true, RoiType::Circle);
     m_hint->setText(QStringLiteral("按下定圆心、拖出半径；右键取消。"));
+}
+
+void TemplateConfigDialog::onPickFreehand()
+{
+    m_wandMode = false;
+    m_view->setRoiColor(QColor(0, 200, 255));
+    m_view->setRoiFreehand(true);
+    m_hint->setText(QStringLiteral("按下后沿轮廓拖动、松手自动闭合；右键取消。"));
+}
+
+void TemplateConfigDialog::onPickWand()
+{
+    m_view->setRoiFreehand(false);
+    m_view->setRoiEditable(false);
+    m_wandMode = true;
+    m_view->setCursor(Qt::PointingHandCursor);
+    m_hint->setText(QStringLiteral("点图像里要提取的区域（容差 %1）；泛洪取形后自动转成多边形。")
+                        .arg(m_wandTol->value()));
+}
+
+QVector<QPointF> TemplateConfigDialog::wandPolygon(const cv::Mat &gray, const QPoint &seed,
+                                                  int tolerance)
+{
+    QVector<QPointF> out;
+    if (gray.empty() || gray.channels() != 1)
+        return out;
+    const int x = qBound(0, seed.x(), gray.cols - 1);
+    const int y = qBound(0, seed.y(), gray.rows - 1);
+    const int tol = qBound(1, tolerance, 255);
+
+    // 只取掩膜、不改图（FLOODFILL_MASK_ONLY）；掩膜比图大 2 像素，取出内层
+    cv::Mat mask = cv::Mat::zeros(gray.rows + 2, gray.cols + 2, CV_8UC1);
+    cv::floodFill(gray, mask, cv::Point(x, y), cv::Scalar(),
+                  nullptr, cv::Scalar(tol), cv::Scalar(tol),
+                  4 | (255 << 8) | cv::FLOODFILL_MASK_ONLY);
+    const cv::Mat region = mask(cv::Rect(1, 1, gray.cols, gray.rows));
+
+    std::vector<std::vector<cv::Point>> contours;
+    cv::findContours(region, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+    if (contours.empty())
+        return out;
+    auto largest = std::max_element(
+        contours.begin(), contours.end(),
+        [](const std::vector<cv::Point> &a, const std::vector<cv::Point> &b) {
+            return cv::contourArea(a) < cv::contourArea(b);
+        });
+    std::vector<cv::Point> approx;
+    cv::approxPolyDP(*largest, approx, 1.5, true);
+    if (approx.size() < 3)
+        return out;
+    out.reserve(int(approx.size()));
+    for (const cv::Point &p : approx)
+        out.append(QPointF(p.x, p.y));
+    return out;
+}
+
+void TemplateConfigDialog::onImageClicked(const QPointF &imagePos)
+{
+    if (!m_wandMode || m_trainGray.empty())
+        return;
+    const QVector<QPointF> pts = wandPolygon(
+        m_trainGray, QPoint(int(imagePos.x()), int(imagePos.y())), m_wandTol->value());
+    if (pts.size() < 3) {
+        m_hint->setText(QStringLiteral("魔术棒没取到区域：换个点或调大容差再试。"));
+        return;
+    }
+
+    RoiShape s;
+    s.type = RoiType::Polygon;
+    s.points = pts;
+
+    m_shape = s;
+    m_wandMode = false;
+    m_view->setRoiEditable(false);
+    m_view->setRoiColor(QColor(0, 200, 255));
+    m_view->setRoiShape(s);
+    m_view->setRoiHandleEditEnabled(true);
+    refreshShapeList();
+    syncAutoParamsToUi();
+    refreshFeaturePreview();
+    m_hint->setText(QStringLiteral("魔术棒已取形：%1 个顶点。").arg(s.points.size()));
 }
 
 void TemplateConfigDialog::onClearShape()
