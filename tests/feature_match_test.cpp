@@ -96,6 +96,10 @@ private slots:
     void templateWandPlusAppends();
     // 多模板顺序匹配：matchAllTemplates=false 时按列表顺序试，达标即停
     void templateSequentialMatchStopsAtFirstHit();
+    // 尺度范围 XY：X/Y 独立缩放（scaleRangeType=1）
+    void templateScaleRangeXYFindsAnisotropicInstance();
+    // 擦除轮廓点：擦除区域内的特征点不参与匹配
+    void templateErasesRemoveFeaturePoints();
     // 建模板后的参数建议：低对比给低阈值、大模板给大特征尺度
     void templateSuggestParamsFollowsTemplate();
     // VM 特征尺度/最小链长：特征点必须真的随参数变稀疏、短链被丢弃
@@ -2323,6 +2327,115 @@ void FeatureMatchTest::templateSequentialMatchStopsAtFirstHit()
     QVERIFY2(qAbs(col - cxB) <= 2.0 && qAbs(row - cyB) <= 2.0,
              qPrintable(QStringLiteral("命中位置应在 B (%1,%2)，实际 (%3,%4)")
                             .arg(cxB).arg(cyB).arg(col).arg(row)));
+}
+
+// 尺度范围 XY（VM「尺度范围类型=尺度范围XY」）：X/Y 独立缩放。
+// 画布上放一个 scaleX=1.2, scaleY=0.8 的实例（非均匀缩放），
+// scaleRangeType=1 + 覆盖该范围 → 应命中；scaleRangeType=0（整体）→ 分数低。
+void FeatureMatchTest::templateScaleRangeXYFindsAnisotropicInstance()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const cv::Mat patch = makePatch();
+    const QString tpl = dir.filePath(QStringLiteral("tpl.png"));
+    QVERIFY(cv::imwrite(tpl.toStdString(), patch));
+
+    // 非均匀缩放实例：X 放大 1.2、Y 缩小 0.8
+    cv::Mat canvas(400, 500, CV_8UC1, cv::Scalar(kCanvasBackground));
+    cv::Mat scaled;
+    cv::resize(patch, scaled, cv::Size(), 1.2, 0.8, cv::INTER_LINEAR);
+    const cv::Rect place(180, 140, scaled.cols, scaled.rows);
+    scaled.copyTo(canvas(place));
+    const double cx = place.x + scaled.cols / 2.0;
+    const double cy = place.y + scaled.rows / 2.0;
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.5);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("templatePath"), tpl);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+
+    // 整体尺度范围：scaleX=scaleY，找不到非均匀实例
+    node.setParam(QStringLiteral("scaleRangeType"), 0);
+    node.setParam(QStringLiteral("scaleMin"), 0.7);
+    node.setParam(QStringLiteral("scaleMax"), 1.3);
+    node.setParam(QStringLiteral("scaleStep"), 0.1);
+    node.run(false);
+    const double score0 = node.getParam(QStringLiteral("matchScore")).toDouble();
+    const double sx0 = node.getParam(QStringLiteral("matchScaleX")).toDouble();
+    const double sy0 = node.getParam(QStringLiteral("matchScaleY")).toDouble();
+    qInfo("scale-xy: uniform score=%.3f scale=(%.2f,%.2f)", score0, sx0, sy0);
+
+    // XY 尺度范围：X 1.2、Y 0.8
+    node.setParam(QStringLiteral("scaleRangeType"), 1);
+    node.setParam(QStringLiteral("scaleMinX"), 1.0);
+    node.setParam(QStringLiteral("scaleMaxX"), 1.4);
+    node.setParam(QStringLiteral("scaleMinY"), 0.6);
+    node.setParam(QStringLiteral("scaleMaxY"), 1.0);
+    node.setParam(QStringLiteral("scaleStep"), 0.1);
+    node.run(false);
+    const bool ok = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    const double score1 = node.getParam(QStringLiteral("matchScore")).toDouble();
+    const double sx1 = node.getParam(QStringLiteral("matchScaleX")).toDouble();
+    const double sy1 = node.getParam(QStringLiteral("matchScaleY")).toDouble();
+    const double col = node.getParam(QStringLiteral("matchCol")).toDouble();
+    const double row = node.getParam(QStringLiteral("matchRow")).toDouble();
+    qInfo("scale-xy: anisotropic ok=%d score=%.3f scale=(%.2f,%.2f) at (%.1f,%.1f)",
+          int(ok), score1, sx1, sy1, col, row);
+
+    QVERIFY2(ok, "XY 尺度范围下应命中非均匀缩放实例");
+    QVERIFY2(qAbs(sx1 - 1.2) <= 0.15,
+             qPrintable(QStringLiteral("X 尺度应≈1.2，实际 %1").arg(sx1)));
+    QVERIFY2(qAbs(sy1 - 0.8) <= 0.15,
+             qPrintable(QStringLiteral("Y 尺度应≈0.8，实际 %1").arg(sy1)));
+    QVERIFY2(score1 > score0,
+             qPrintable(QStringLiteral("XY 尺度范围的分数应高于整体范围：%1 vs %2")
+                            .arg(score1).arg(score0)));
+}
+
+// 擦除轮廓点（VM「擦除轮廓点」）：擦除区域内的特征点不参与匹配。
+//   ① 无擦除：特征点 > 0；
+//   ② 全部擦除（覆盖整个模板）：特征点 = 0；
+//   ③ JSON 往返不丢擦除区域。
+void FeatureMatchTest::templateErasesRemoveFeaturePoints()
+{
+    cv::Mat img(200, 200, CV_8UC1, cv::Scalar(60));
+    cv::rectangle(img, cv::Rect(0, 0, 100, 200), cv::Scalar(70), cv::FILLED);   // 一条竖边
+
+    RoiShape roi;
+    roi.type = RoiType::Rect;
+    roi.p1 = QPointF(0, 0);
+    roi.p2 = QPointF(200, 200);
+
+    // ① 无擦除
+    const QVector<QPointF> pts0 =
+        OpencvTemplateMatchNode::featurePointsForPatch(img, roi, 20.0, 3);
+    QVERIFY2(!pts0.isEmpty(), "无擦除时应有特征点");
+
+    // ② 全部擦除（一个大圆覆盖整个模板）
+    RoiShape bigErase;
+    bigErase.type = RoiType::Circle;
+    bigErase.p1 = QPointF(100, 100);
+    bigErase.p2 = QPointF(200, 100);   // 半径 100
+    const QVector<QPointF> pts1 =
+        OpencvTemplateMatchNode::featurePointsForPatch(img, roi, 20.0, 3, cv::Mat(), 1, 1,
+                                                       {bigErase});
+    qInfo("erases: no-erase=%d full-erase=%d", int(pts0.size()), int(pts1.size()));
+    QVERIFY2(pts1.isEmpty(), qPrintable(QStringLiteral("全部擦除后仍剩 %1 个特征点").arg(pts1.size())));
+
+    // ③ JSON 往返
+    TemplateEntry e;
+    e.erases = {bigErase};
+    const TemplateEntry back = TemplateEntry::fromJson(e.toJson());
+    QCOMPARE(back.erases.size(), 1);
+    QCOMPARE(back.erases.first().type, RoiType::Circle);
+    QCOMPARE(back.erases.first().p1, bigErase.p1);
+    QCOMPARE(back.erases.first().p2, bigErase.p2);
 }
 
 QTEST_MAIN(FeatureMatchTest)

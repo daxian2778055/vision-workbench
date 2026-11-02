@@ -21,6 +21,8 @@ struct TemplateEntry
     double anchorDx = 0.0;
     double anchorDy = 0.0;
     bool anchorLocked = false;          ///< 仅约束编辑器里的 X/Y 输入框（锁定后不可改）
+    /// 擦除轮廓点区域（VM「擦除轮廓点」）：圆形区域内的特征点不参与匹配。
+    QVector<RoiShape> erases;           ///< type=Circle，p1=圆心，p2=圆周一点（半径）
     // ── VM「模板配置参数」官方口径（见 docs/VM4.4高精度匹配对齐规范.md）──
     // 注：VM 用图像金字塔顶层/底层；我们没有金字塔，按等效效果实现（在规范里注明）。
     // 默认值刻意取"老方案等效"：阈值 5 灰度差 ≈ Sobel 20（原常量）、不稀疏、不过滤。
@@ -93,7 +95,8 @@ public:
     static QVector<QPointF> featurePointsForPatch(const cv::Mat &tmpl, const RoiShape &roi,
                                                   double threshold, int aperture,
                                                   const cv::Mat &mask = cv::Mat(),
-                                                  int featureScale = 1, int minChain = 1);
+                                                  int featureScale = 1, int minChain = 1,
+                                                  const QVector<RoiShape> &erases = QVector<RoiShape>());
 
     /// 建/改模板后的参数建议（VM「创建模板成功 → 参数自动变成 8.0/2/37」同款口径）。
     /// 目的：操作员画完模板就能直接跑，不必自己猜 4 个边缘参数。

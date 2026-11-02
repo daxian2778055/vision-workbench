@@ -130,6 +130,10 @@ QJsonObject TemplateEntry::toJson() const
     obj[QStringLiteral("anchorX")] = anchorDx;
     obj[QStringLiteral("anchorY")] = anchorDy;
     obj[QStringLiteral("anchorLocked")] = anchorLocked;
+    QJsonArray eraseArr;
+    for (const RoiShape &s : erases)
+        eraseArr.append(shapeToJsonObj(s));
+    obj[QStringLiteral("erases")] = eraseArr;
     return obj;
 }
 
@@ -172,6 +176,9 @@ TemplateEntry TemplateEntry::fromJson(const QJsonObject &obj)
     e.anchorDx = obj.value(QStringLiteral("anchorX")).toDouble(0.0);
     e.anchorDy = obj.value(QStringLiteral("anchorY")).toDouble(0.0);
     e.anchorLocked = obj.value(QStringLiteral("anchorLocked")).toBool(false);
+    for (const QJsonValue &v : obj.value(QStringLiteral("erases")).toArray())
+        if (v.isObject())
+            e.erases.append(shapeFromJsonObj(v.toObject()));
     return e;
 }
 
@@ -231,19 +238,34 @@ void refineFeatureMask(cv::Mat &bin, int minChain, int featureScale)
         bin = m8;
 }
 
-cv::Mat warpTemplate(const cv::Mat &tmpl, double angleDeg, double scale, cv::Point2f *centerOut)
+cv::Mat warpTemplate(const cv::Mat &tmpl, double angleDeg, double scaleX, double scaleY,
+                     cv::Point2f *centerOut)
 {
-    if (qAbs(angleDeg) < 1e-6 && qAbs(scale - 1.0) < 1e-6) {
+    if (qAbs(angleDeg) < 1e-6 && qAbs(scaleX - 1.0) < 1e-6 && qAbs(scaleY - 1.0) < 1e-6) {
         if (centerOut)
             *centerOut = cv::Point2f(tmpl.cols * 0.5f, tmpl.rows * 0.5f);
         return tmpl;
     }
     const cv::Point2f center(tmpl.cols * 0.5f, tmpl.rows * 0.5f);
-    cv::Mat M = cv::getRotationMatrix2D(center, angleDeg, scale);
-    const double cosA = std::abs(M.at<double>(0, 0));
-    const double sinA = std::abs(M.at<double>(0, 1));
-    const int nw = std::max(1, int(std::ceil(tmpl.rows * sinA + tmpl.cols * cosA)));
-    const int nh = std::max(1, int(std::ceil(tmpl.rows * cosA + tmpl.cols * sinA)));
+    cv::Mat M = cv::getRotationMatrix2D(center, angleDeg, 1.0);   // 先拿纯旋转
+    // 非均匀缩放：R * diag(scaleX, scaleY) —— 缩放在模板局部系、旋转在其后
+    M.at<double>(0, 0) *= scaleX;
+    M.at<double>(0, 1) *= scaleY;
+    M.at<double>(1, 0) *= scaleX;
+    M.at<double>(1, 1) *= scaleY;
+    // 平移必须按缩放后的矩阵重算（否则 scale≠1 时中心会偏）
+    {
+        const double a = M.at<double>(0, 0), b = M.at<double>(0, 1);
+        const double c = M.at<double>(1, 0), d = M.at<double>(1, 1);
+        M.at<double>(0, 2) = center.x - (a * center.x + b * center.y);
+        M.at<double>(1, 2) = center.y - (c * center.x + d * center.y);
+    }
+    const double c00 = std::abs(M.at<double>(0, 0));
+    const double c01 = std::abs(M.at<double>(0, 1));
+    const double c10 = std::abs(M.at<double>(1, 0));
+    const double c11 = std::abs(M.at<double>(1, 1));
+    const int nw = std::max(1, int(std::ceil(tmpl.cols * c00 + tmpl.rows * c01)));
+    const int nh = std::max(1, int(std::ceil(tmpl.cols * c10 + tmpl.rows * c11)));
     M.at<double>(0, 2) += nw * 0.5 - center.x;
     M.at<double>(1, 2) += nh * 0.5 - center.y;
     cv::Mat out;
@@ -257,20 +279,21 @@ namespace {
 /// 旋转/缩放后的模板缓存（模板不变时跨帧复用；LRU 32 条）。
 /// 连 centerInWarp 一起缓存——它由 warpTemplate 按旋转后的包围盒算出，不能事后猜。
 std::pair<cv::Mat, cv::Point2f> warpTemplateCached(const cv::Mat &tmpl, const QString &keyBase,
-                                                   double angle, double scale)
+                                                   double angle, double scaleX, double scaleY)
 {
         // 恒等快路径（r19）：角度 0、尺度 1 时直接用原模板 —— warpAffine 即便
         // 恒等变换也会重采样，导致自匹配到不了 1.0、位置偏约 2px。
-        if (qAbs(angle) < 1e-6 && qAbs(scale - 1.0) < 1e-6) {
+        if (qAbs(angle) < 1e-6 && qAbs(scaleX - 1.0) < 1e-6 && qAbs(scaleY - 1.0) < 1e-6) {
             return {tmpl, cv::Point2f(float(tmpl.cols) * 0.5f, float(tmpl.rows) * 0.5f)};
         }
 
     static QMutex mu;
     static QHash<QString, std::pair<cv::Mat, cv::Point2f>> cache;
     static QStringList order;
-    const QString key = keyBase + QStringLiteral("|%1|%2")
+    const QString key = keyBase + QStringLiteral("|%1|%2|%3")
                                        .arg(angle, 0, 'f', 3)
-                                       .arg(scale, 0, 'f', 3);
+                                       .arg(scaleX, 0, 'f', 3)
+                                       .arg(scaleY, 0, 'f', 3);
     {
         QMutexLocker<QMutex> locker(&mu);
         auto it = cache.constFind(key);
@@ -281,7 +304,7 @@ std::pair<cv::Mat, cv::Point2f> warpTemplateCached(const cv::Mat &tmpl, const QS
         }
     }
     cv::Point2f c;
-    cv::Mat warped = warpTemplate(tmpl, angle, scale, &c);
+    cv::Mat warped = warpTemplate(tmpl, angle, scaleX, scaleY, &c);
     {
         QMutexLocker<QMutex> locker(&mu);
         cache.insert(key, {warped, c});
@@ -415,6 +438,16 @@ void OpencvTemplateMatchNode::init()
                         QStringLiteral("搜索尺度上限")),
         makeDoubleParam(QStringLiteral("scaleStep"), 0.05, 0.01, 0.5,
                         QStringLiteral("搜索尺度步进")),
+        makeIntParam(QStringLiteral("scaleRangeType"), 0, 0, 1,
+                     QStringLiteral("尺度范围类型：0=整体（scaleMin/Max），1=XY（X/Y 独立）")),
+        makeDoubleParam(QStringLiteral("scaleMinX"), 1.0, 0.3, 3.0,
+                        QStringLiteral("X 尺度起（scaleRangeType=1）")),
+        makeDoubleParam(QStringLiteral("scaleMaxX"), 1.0, 0.3, 3.0,
+                        QStringLiteral("X 尺度止（scaleRangeType=1）")),
+        makeDoubleParam(QStringLiteral("scaleMinY"), 1.0, 0.3, 3.0,
+                        QStringLiteral("Y 尺度起（scaleRangeType=1）")),
+        makeDoubleParam(QStringLiteral("scaleMaxY"), 1.0, 0.3, 3.0,
+                        QStringLiteral("Y 尺度止（scaleRangeType=1）")),
         makeStringParam(QStringLiteral("writeFixtureName"), QString(),
                         QStringLiteral("匹配位姿写入 Fixture 名（空=不写）")),
         // 搜索区域（r19 批 A 第 2 步）：匹配只在这个矩形内搜——既是 VM 的「检测区域」，
@@ -875,8 +908,28 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         }
         collectSearchValues(sMin, sMax, sStep, 16, scales);
 
+        // 尺度范围类型（VM）：0=整体（scaleMin/Max），1=XY（X/Y 独立缩放）
+        QVector<QPair<double, double>> scalePairs;
+        if (m_params.value(QStringLiteral("scaleRangeType"), 0).toInt() == 1) {
+            QVector<double> sx, sy;
+            collectSearchValues(m_params.value(QStringLiteral("scaleMinX"), 1.0).toDouble(),
+                                m_params.value(QStringLiteral("scaleMaxX"), 1.0).toDouble(),
+                                sStep, 16, sx);
+            collectSearchValues(m_params.value(QStringLiteral("scaleMinY"), 1.0).toDouble(),
+                                m_params.value(QStringLiteral("scaleMaxY"), 1.0).toDouble(),
+                                sStep, 16, sy);
+            for (double x : sx)
+                for (double y : sy)
+                    scalePairs.append({x, y});
+        } else {
+            for (double s : scales)
+                scalePairs.append({s, s});
+        }
+
         const bool singleIdentity = (angles.size() == 1 && qAbs(angles.first()) < 1e-6
-                                     && scales.size() == 1 && qAbs(scales.first() - 1.0) < 1e-6);
+                                     && scalePairs.size() == 1
+                                     && qAbs(scalePairs.first().first - 1.0) < 1e-6
+                                     && qAbs(scalePairs.first().second - 1.0) < 1e-6);
 
         // ── 粗到细搜索（r19：对齐 VisionMaster 的做法） ──
         // 实测：1500×1000 + 208px 模板 + 31 角度，全分辨率穷举 ≈16 秒。
@@ -944,7 +997,8 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         double bestScore = -1e9;
         cv::Point bestLoc(0, 0);
         double bestAngle = 0.0;
-        double bestScale = 1.0;
+        double bestScale = 1.0;       // = bestScaleX（VM matchScale）
+        double bestScaleY = 1.0;
         cv::Point2f bestCenterInWarp(tmpl.cols * 0.5f, tmpl.rows * 0.5f);
         cv::Point2f bestCoarseCenter;   // 粗搜栅格下的中心（多目标抑制用）
         cv::Point2f bestSubpix;         // 亚像素偏移（r19 收尾）
@@ -982,9 +1036,10 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
 
         // 单姿态 + 单尺度时保留原有的"低方差区域抑制"（避免纹理空白处高分）
         auto evalOne = [&](const cv::Mat &search, const cv::Mat &base, double angle,
-                           double scale, cv::Point *locOut, cv::Point2f *centerOut,
+                           double scaleX, double scaleY,
+                           cv::Point *locOut, cv::Point2f *centerOut,
                            cv::Point2f *subpixOut = nullptr) -> double {
-            const auto warpedPair = warpTemplateCached(base, warpKeyBase, angle, scale);
+            const auto warpedPair = warpTemplateCached(base, warpKeyBase, angle, scaleX, scaleY);
             const cv::Mat &warped = warpedPair.first;
             if (warped.empty() || warped.cols >= search.cols || warped.rows >= search.rows)
                 return -1e9;
@@ -1003,7 +1058,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 if (!shapeMask.empty()) {
                     // 掩膜与模板同一套 warp（同一 keyBase + 角度/尺度），保证像素严格对齐
                     const auto warpedMask = warpTemplateCached(
-                        shapeMask, warpKeyBase + QStringLiteral("#shapeMask"), angle, scale);
+                        shapeMask, warpKeyBase + QStringLiteral("#shapeMask"), angle, scaleX, scaleY);
                     if (!warpedMask.first.empty() && warpedMask.first.size() == wm.size()) {
                         cv::Mat keep;
                         cv::threshold(warpedMask.first, keep, 127.0, 1.0, cv::THRESH_BINARY);
@@ -1184,6 +1239,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             bestLoc = cv::Point();
             bestAngle = 0.0;
             bestScale = 1.0;
+            bestScaleY = 1.0;
             bestCenterInWarp = cv::Point2f();
             bestCoarseCenter = cv::Point2f();
             bestSubpix = cv::Point2f();
@@ -1192,7 +1248,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             rasterScale = 1.0 / qMax(1.0, coarseFactor);
             searchOrigin = cv::Point(0, 0);
         bool searchTimedOut = false;
-        for (double scale : scales) {
+        for (const auto &sp : scalePairs) {
             if (searchTimedOut)
                 break;
             for (double angle : angles) {
@@ -1229,13 +1285,14 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 curSearchSin = curSearchSin.mul(keep);
             }
         }
-                const double sc = evalOne(coarseSearchImg, coarseTmplImg, angle, scale, &loc, &centerInWarp,
-                                         &subpixTmp);
+                const double sc = evalOne(coarseSearchImg, coarseTmplImg, angle, sp.first, sp.second,
+                                         &loc, &centerInWarp, &subpixTmp);
                 if (sc > bestScore) {
                     bestScore = sc;
                     bestLoc = loc;
                     bestAngle = angle;
-                    bestScale = scale;
+                    bestScale = sp.first;
+                    bestScaleY = sp.second;
                     bestCenterInWarp = centerInWarp;
                     bestSubpix = subpixTmp;
                     bestCoarseCenter = cv::Point2f(loc.x + centerInWarp.x,
@@ -1319,7 +1376,8 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                         continue;
                     cv::Point loc;
                     cv::Point2f centerInWarp;
-                    const double sc = evalOne(refineWin, refineTmpl, angle, bestScale, &loc, &centerInWarp,
+                    const double sc = evalOne(refineWin, refineTmpl, angle, bestScale, bestScaleY,
+                                         &loc, &centerInWarp,
                                          &subpixTmp);
                     if (sc > bestScore) {
                         bestScore = sc;
@@ -1470,7 +1528,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             m_params[QStringLiteral("matchPointCol")] = col + bestSubpix.x + caA * hx - saA * hy;
             m_params[QStringLiteral("matchPointRow")] = row + bestSubpix.y + saA * hx + caA * hy;
             m_params[QStringLiteral("matchScaleX")] = bestScale;
-            m_params[QStringLiteral("matchScaleY")] = bestScale;
+            m_params[QStringLiteral("matchScaleY")] = bestScaleY;
         }
         m_params["moduleStatus"] = (bestScore >= minScore);
         if (bestScore < minScore) {
@@ -1788,7 +1846,7 @@ QVector<QPointF> OpencvTemplateMatchNode::editorFeaturePoints() const
     const int minChain = active.chainModeAuto ? qMax(2, featureScale * 2)
                                               : qBound(1, active.minChainLength, 200);
     return featurePointsForPatch(tmpl, geometryRoi(), threshold, aperture, shapeMask,
-                                 featureScale, minChain);
+                                 featureScale, minChain, active.erases);
 }
 
 OpencvTemplateMatchNode::ParamSuggestion
@@ -1944,7 +2002,8 @@ QVector<QPointF> OpencvTemplateMatchNode::featurePointsForPatch(const cv::Mat &t
                                                                const RoiShape &roi,
                                                                double threshold, int aperture,
                                                                const cv::Mat &mask,
-                                                               int featureScale, int minChain)
+                                                               int featureScale, int minChain,
+                                                               const QVector<RoiShape> &erases)
 {
     if (tmpl.empty())
         return {};
@@ -1986,13 +2045,27 @@ QVector<QPointF> OpencvTemplateMatchNode::featurePointsForPatch(const cv::Mat &t
             if (!mask.empty() && mask.type() == CV_8U && mask.size() == tmpl.size()
                 && mask.at<uchar>(v, u) == 0)
                 continue;
+            QPointF imgPt;
             if (axisAligned) {
-                pts.append(QPointF(x0 + u, y0 + v));
+                imgPt = QPointF(x0 + u, y0 + v);
             } else {
                 const double lx = u - w * 0.5 + 0.5;
                 const double ly = v - h * 0.5 + 0.5;
-                pts.append(QPointF(cx + ca * lx - sa * ly, cy + sa * lx + ca * ly));
+                imgPt = QPointF(cx + ca * lx - sa * ly, cy + sa * lx + ca * ly);
             }
+            // 擦除轮廓点（VM）：落在擦除圆内的特征点不参与匹配
+            bool erased = false;
+            for (const RoiShape &e : erases) {
+                if (e.type != RoiType::Circle)
+                    continue;
+                const double r = std::hypot(e.p2.x() - e.p1.x(), e.p2.y() - e.p1.y());
+                if (r > 1.0 && QLineF(e.p1, imgPt).length() <= r + 0.5) {
+                    erased = true;
+                    break;
+                }
+            }
+            if (!erased)
+                pts.append(imgPt);
         }
     }
     return pts;

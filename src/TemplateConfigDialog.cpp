@@ -66,6 +66,7 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     auto *maskModeBtn = new QPushButton(QStringLiteral("屏蔽模式"));
     maskModeBtn->setCheckable(true);
     auto *blockAllBtn = new QPushButton(QStringLiteral("全部屏蔽"));
+    auto *eraseBtn = new QPushButton(QStringLiteral("擦除轮廓点"));
     maskModeBtn->setToolTip(QStringLiteral(
         "勾上后画/取到的形状进「屏蔽」列表：从保留区里挖掉（logo/水印/背景）。"
         "屏蔽=保留 − 屏蔽；不画保留区时默认整块保留再挖。"));
@@ -82,6 +83,7 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     top->addWidget(scissorsBtn);
     top->addWidget(maskModeBtn);
     top->addWidget(blockAllBtn);
+    top->addWidget(eraseBtn);
     root->addLayout(top);
 
     // ---- 左：图像区；右：配置参数 + 形状列表 ----
@@ -218,6 +220,17 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
         m_view->setCursor(Qt::CrossCursor);
         m_hint->setText(QStringLiteral("在图上单击设匹配中心位置。"));
     });
+    connect(eraseBtn, &QPushButton::clicked, this, [this]() {
+        m_eraseMode = true;
+        m_anchorPickMode = false;
+        m_wandMode = false;
+        m_cutMode = false;
+        m_view->setRoiFreehand(false);
+        m_view->setRoiEditable(false);
+        m_view->setCursor(Qt::PointingHandCursor);
+        m_hint->setText(QStringLiteral(
+            "在图上单击擦掉该区域的特征点（半径 20px）；擦掉的点不参与匹配。"));
+    });
     connect(blockAllBtn, &QPushButton::clicked, this, [this]() {
         // VM「全部屏蔽」：清空所有已画形状与匹配中心，进入刷绘模式画保留区
         m_shapes.clear();
@@ -298,6 +311,7 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
         if (m_editIndex < entries.size()) {
             const TemplateEntry &e = entries.at(m_editIndex);
             prefillName = e.name;
+            m_erases = e.erases;
             m_shapes = e.allShapes();
             m_excludes = e.excludes;
             m_shape = m_shapes.isEmpty() ? RoiShape() : m_shapes.first();
@@ -591,6 +605,22 @@ void TemplateConfigDialog::onScissors()
 
 void TemplateConfigDialog::onImageClicked(const QPointF &imagePos)
 {
+    // 擦除轮廓点：图上单击擦掉该区域特征点（VM「擦除轮廓点」）
+    if (m_eraseMode) {
+        m_eraseMode = false;
+        m_view->setCursor(Qt::ArrowCursor);
+        RoiShape e;
+        e.type = RoiType::Circle;
+        e.p1 = imagePos;
+        e.p2 = QPointF(imagePos.x() + 20.0, imagePos.y());   // 半径 20px
+        m_erases.append(e);
+        refreshFeaturePreview();
+        m_hint->setText(QStringLiteral("已擦除 (%1, %2) 附近特征点（共 %3 个擦除区）")
+                            .arg(imagePos.x(), 0, 'f', 1)
+                            .arg(imagePos.y(), 0, 'f', 1)
+                            .arg(m_erases.size()));
+        return;
+    }
     // 匹配中心取点：图上单击设锚点（VM「选择匹配中心」）
     if (m_anchorPickMode) {
         m_anchorPickMode = false;
@@ -826,7 +856,8 @@ void TemplateConfigDialog::refreshFeaturePreview()
     if (needMask)
         mask = OpencvTemplateMatchNode::shapesMask(m_shapes, box, m_excludes);
     m_view->setFeaturePoints(
-        OpencvTemplateMatchNode::featurePointsForPatch(patch, rect, threshold, aperture, mask));
+        OpencvTemplateMatchNode::featurePointsForPatch(patch, rect, threshold, aperture, mask,
+                                                       1, 1, m_erases));
 }
 
 bool TemplateConfigDialog::ensureSavePath(QString *path)
@@ -900,6 +931,7 @@ void TemplateConfigDialog::onConfirm()
     entry.anchorDx = m_anchorX->value();
     entry.anchorDy = m_anchorY->value();
     entry.anchorLocked = m_anchorLock->isChecked();
+    entry.erases = m_erases;
 
     QVector<TemplateEntry> entries = m_node->templates();
     if (m_editIndex >= 0 && m_editIndex < entries.size())
