@@ -63,6 +63,11 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     auto *delShapeBtn = new QPushButton(QStringLiteral("删除选中"));
     auto *splitBtn = new QPushButton(QStringLiteral("分割"));
     auto *scissorsBtn = new QPushButton(QStringLiteral("剪刀"));
+    auto *maskModeBtn = new QPushButton(QStringLiteral("屏蔽模式"));
+    maskModeBtn->setCheckable(true);
+    maskModeBtn->setToolTip(QStringLiteral(
+        "勾上后画/取到的形状进「屏蔽」列表：从保留区里挖掉（logo/水印/背景）。"
+        "屏蔽=保留 − 屏蔽；不画保留区时默认整块保留再挖。"));
     top->addWidget(shapeRectBtn);
     top->addWidget(shapePolyBtn);
     top->addWidget(shapeCircleBtn);
@@ -74,6 +79,7 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     top->addWidget(delShapeBtn);
     top->addWidget(splitBtn);
     top->addWidget(scissorsBtn);
+    top->addWidget(maskModeBtn);
     root->addLayout(top);
 
     // ---- 左：图像区；右：配置参数 + 形状列表 ----
@@ -197,23 +203,42 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     connect(clearShapeBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onClearShape);
     connect(splitBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onSplitShape);
     connect(scissorsBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onScissors);
+    connect(maskModeBtn, &QPushButton::toggled, this, [this](bool on) {
+        m_maskMode = on;
+        m_hint->setText(on
+                            ? QStringLiteral("屏蔽模式：接下来画/取到的形状都进屏蔽列表（挖掉该区域）。")
+                            : QStringLiteral("保留模式：接下来画/取到的形状进保留列表。"));
+    });
     connect(delShapeBtn, &QPushButton::clicked, this, [this]() {
         const int row = m_list->currentRow();
-        if (row < 0 || row >= m_shapes.size())
+        if (row < 0)
             return;
-        m_shapes.removeAt(row);
+        if (row < m_shapes.size()) {
+            m_shapes.removeAt(row);                       // 保留行
+        } else if (row - m_shapes.size() < m_excludes.size()) {
+            m_excludes.removeAt(row - m_shapes.size());   // 屏蔽行
+        } else {
+            return;
+        }
         m_shape = m_shapes.isEmpty() ? RoiShape() : m_shapes.first();
         refreshShapeList();
         refreshFeaturePreview();
-        if (m_shapes.isEmpty())
+        if (m_shapes.isEmpty() && m_excludes.isEmpty())
             m_view->clearRoi();
     });
     // 点列表项 → 画布上把该形状挂成 ROI（便于确认删哪一块）
     connect(m_list, &QListWidget::currentRowChanged, this, [this](int row) {
-        if (row < 0 || row >= m_shapes.size())
+        if (row < 0)
             return;
-        m_view->setRoiColor(QColor(0, 200, 255));
-        m_view->setRoiShape(m_shapes.at(row));
+        if (row < m_shapes.size()) {
+            m_view->setRoiColor(QColor(0, 200, 255));
+            m_view->setRoiShape(m_shapes.at(row));
+        } else if (row - m_shapes.size() < m_excludes.size()) {
+            m_view->setRoiColor(QColor(220, 60, 60));        // 屏蔽块用红色区分
+            m_view->setRoiShape(m_excludes.at(row - m_shapes.size()));
+        } else {
+            return;
+        }
         m_view->setRoiHandleEditEnabled(true);
     });
     connect(okBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onConfirm);
@@ -237,6 +262,7 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
             const TemplateEntry &e = entries.at(m_editIndex);
             prefillName = e.name;
             m_shapes = e.allShapes();
+            m_excludes = e.excludes;
             m_shape = m_shapes.isEmpty() ? RoiShape() : m_shapes.first();
             m_savePath = e.imagePath;
             m_edgeSpin->setValue(e.edgeThreshold);
@@ -539,8 +565,14 @@ void TemplateConfigDialog::onImageClicked(const QPointF &imagePos)
         return;
     }
 
-    m_shapes = applyWand(m_shapes, m_trainGray, seed, m_wandTol->value(), m_wandAppend);
+    if (m_maskMode) {
+        m_excludes = applyWand(m_excludes, m_trainGray, seed, m_wandTol->value(), m_wandAppend);
+    } else {
+        m_shapes = applyWand(m_shapes, m_trainGray, seed, m_wandTol->value(), m_wandAppend);
+    }
     m_shape = m_shapes.isEmpty() ? RoiShape() : m_shapes.last();
+    if (m_shape.type == RoiType::None && !m_excludes.isEmpty())
+        m_shape = m_excludes.last();
     m_wandMode = false;
     m_view->setRoiEditable(false);
     m_view->setRoiColor(QColor(0, 200, 255));
@@ -561,6 +593,7 @@ void TemplateConfigDialog::onClearShape()
 {
     m_shape = RoiShape();
     m_shapes.clear();
+    m_excludes.clear();
     m_view->clearRoi();
     m_view->setFeaturePoints({});
     refreshShapeList();
@@ -570,6 +603,18 @@ void TemplateConfigDialog::onRoiEdited(const RoiShape &shape)
 {
     if (shape.type == RoiType::None)
         return;
+    // 屏蔽模式：这条形状进屏蔽列表（挖掉该区域），不进保留列表
+    if (m_maskMode && shape.type != RoiType::Line) {
+        m_excludes.append(shape);
+        m_view->setRoiEditable(false);
+        m_view->setRoiHandleEditEnabled(true);
+        refreshShapeList();
+        refreshFeaturePreview();
+        m_hint->setText(QStringLiteral("已添加屏蔽形状（屏蔽 %1 块 / 保留 %2 块）。")
+                            .arg(m_excludes.size())
+                            .arg(m_shapes.size()));
+        return;
+    }
     // 剪刀：画完一条线就沿它切开（只切选中的那块，未选中则全部）
     if (m_cutMode && shape.type == RoiType::Line) {
         m_cutMode = false;
@@ -615,36 +660,51 @@ void TemplateConfigDialog::onRoiEdited(const RoiShape &shape)
 void TemplateConfigDialog::refreshShapeList()
 {
     m_list->clear();
-    for (int i = 0; i < m_shapes.size(); ++i) {
-        const RoiShape &s = m_shapes.at(i);
-        QString text;
+    auto describe = [](const RoiShape &s) -> QString {
         if (s.type == RoiType::Rect) {
             const QRectF r = QRectF(s.p1, s.p2).normalized();
-            text = QStringLiteral("%1. 矩形  %2×%3 @ (%4, %5)")
-                       .arg(i + 1).arg(int(r.width())).arg(int(r.height()))
-                       .arg(int(r.x())).arg(int(r.y()));
-        } else if (s.type == RoiType::RotatedRect) {
-            text = QStringLiteral("%1. 旋转矩形  %2×%3  %4°")
-                       .arg(i + 1).arg(int(s.width)).arg(int(s.height)).arg(s.angleDeg, 0, 'f', 1);
-        } else if (s.type == RoiType::Polygon) {
-            text = QStringLiteral("%1. 多边形  %2 点").arg(i + 1).arg(s.points.size());
-        } else if (s.type == RoiType::Circle) {
-            const double r = std::hypot(s.p2.x() - s.p1.x(), s.p2.y() - s.p1.y());
-            text = QStringLiteral("%1. 圆  半径 %2 @ (%3, %4)")
-                       .arg(i + 1).arg(r, 0, 'f', 1)
-                       .arg(s.p1.x(), 0, 'f', 1).arg(s.p1.y(), 0, 'f', 1);
+            return QStringLiteral("矩形  %1×%2 @ (%3, %4)")
+                .arg(int(r.width()))
+                .arg(int(r.height()))
+                .arg(int(r.x()))
+                .arg(int(r.y()));
         }
-        if (!text.isEmpty())
-            m_list->addItem(text);
+        if (s.type == RoiType::RotatedRect)
+            return QStringLiteral("旋转矩形  %1×%2  %3°")
+                .arg(int(s.width))
+                .arg(int(s.height))
+                .arg(s.angleDeg, 0, 'f', 1);
+        if (s.type == RoiType::Polygon)
+            return QStringLiteral("多边形  %1 点").arg(s.points.size());
+        if (s.type == RoiType::Circle) {
+            const double r = std::hypot(s.p2.x() - s.p1.x(), s.p2.y() - s.p1.y());
+            return QStringLiteral("圆  半径 %1 @ (%2, %3)")
+                .arg(r, 0, 'f', 1)
+                .arg(s.p1.x(), 0, 'f', 1)
+                .arg(s.p1.y(), 0, 'f', 1);
+        }
+        return QString();
+    };
+    for (int i = 0; i < m_shapes.size(); ++i) {
+        const QString t = describe(m_shapes.at(i));
+        if (!t.isEmpty())
+            m_list->addItem(QStringLiteral("%1. %2").arg(i + 1).arg(t));
+    }
+    for (int i = 0; i < m_excludes.size(); ++i) {
+        const QString t = describe(m_excludes.at(i));
+        if (!t.isEmpty())
+            m_list->addItem(QStringLiteral("屏蔽%1. %2").arg(i + 1).arg(t));
     }
 }
 
 cv::Mat TemplateConfigDialog::cropTemplate() const
 {
-    if (m_trainGray.empty() || m_shapes.isEmpty())
+    if (m_trainGray.empty() || (m_shapes.isEmpty() && m_excludes.isEmpty()))
         return {};
-    // 多形状：裁剪口径 = 所有形状的并集包围盒（与打分掩膜同一口径）
-    const QRectF box = OpencvTemplateMatchNode::shapesBounds(m_shapes);
+    // 裁剪口径 = 保留 + 屏蔽的并集包围盒（与打分掩膜同一口径）
+    QVector<RoiShape> all = m_shapes;
+    all += m_excludes;
+    const QRectF box = OpencvTemplateMatchNode::shapesBounds(all);
     if (box.width() <= 1.0 || box.height() <= 1.0)
         return {};
     RoiShape rect;
@@ -692,11 +752,13 @@ void TemplateConfigDialog::applySuggestedParams()
 void TemplateConfigDialog::refreshFeaturePreview()
 {
     const cv::Mat patch = cropTemplate();
-    if (patch.empty() || m_shapes.isEmpty()) {
+    if (patch.empty() || (m_shapes.isEmpty() && m_excludes.isEmpty())) {
         m_view->setFeaturePoints({});
         return;
     }
-    const QRectF box = OpencvTemplateMatchNode::shapesBounds(m_shapes);
+    QVector<RoiShape> all = m_shapes;
+    all += m_excludes;
+    const QRectF box = OpencvTemplateMatchNode::shapesBounds(all);
     RoiShape rect;
     rect.type = RoiType::Rect;
     rect.p1 = box.topLeft();
@@ -705,13 +767,13 @@ void TemplateConfigDialog::refreshFeaturePreview()
     const double threshold = OpencvTemplateMatchNode::effectiveEdgeThresholdFor(
         patch, aperture, m_edgeSpin->value(), m_autoChk->isChecked());
     cv::Mat mask;
-    bool needMask = m_shapes.size() > 1;
+    bool needMask = m_shapes.size() > 1 || !m_excludes.isEmpty();
     for (const RoiShape &s : m_shapes) {
         if (s.type == RoiType::Polygon || s.type == RoiType::Circle)
             needMask = true;
     }
     if (needMask)
-        mask = OpencvTemplateMatchNode::shapesMask(m_shapes, box);
+        mask = OpencvTemplateMatchNode::shapesMask(m_shapes, box, m_excludes);
     m_view->setFeaturePoints(
         OpencvTemplateMatchNode::featurePointsForPatch(patch, rect, threshold, aperture, mask));
 }
@@ -752,7 +814,7 @@ void TemplateConfigDialog::onConfirm()
                              QStringLiteral("没有训练图像：先点「选择当前图像」或「选择其他图像」。"));
         return;
     }
-    if (m_shapes.isEmpty()) {
+    if (m_shapes.isEmpty() && m_excludes.isEmpty()) {
         QMessageBox::warning(this, QStringLiteral("模板配置"),
                              QStringLiteral("还没有形状：先用矩形/多边形/圆/套索/魔术棒画一块。"));
         return;
@@ -778,7 +840,8 @@ void TemplateConfigDialog::onConfirm()
                      : m_nameEdit->text().trimmed();
     entry.imagePath = savePath;
     entry.shapes = m_shapes;             // 多形状模板
-    entry.shape = m_shapes.first();      // 老字段 = 第一块
+    entry.excludes = m_excludes;         // 屏蔽形状：最终掩膜 = 保留 − 屏蔽
+    entry.shape = m_shapes.isEmpty() ? RoiShape() : m_shapes.first();   // 老字段 = 第一块
     entry.edgeThreshold = m_edgeSpin->value();
     entry.autoThreshold = m_autoChk->isChecked();
     entry.aperture = m_apertureCombo->currentText().toInt();

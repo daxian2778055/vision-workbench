@@ -96,6 +96,8 @@ private slots:
     void templateWandPlusAppends();
     // 建模板后的参数建议：低对比给低阈值、大模板给大特征尺度
     void templateSuggestParamsFollowsTemplate();
+    // 屏蔽形状：最终掩膜 = 保留 − 屏蔽
+    void templateExcludeShapesSubtractFromMask();
 };
 
 namespace {
@@ -2027,6 +2029,51 @@ void FeatureMatchTest::templateSuggestParamsFollowsTemplate()
     const auto sb = OpencvTemplateMatchNode::suggestParams(big);
     QCOMPARE(sb.aperture, 5);               // 大模板用 5 抑制细节
     QCOMPARE(sb.coarseLongSide, 1024);      // 256 × 4
+}
+
+// 屏蔽形状（VM 的「屏蔽区」）：最终掩膜 = 保留 − 屏蔽，用来挖掉 logo/水印。
+//   ① 保留矩形 + 屏蔽圆：圆心 0、角上 255；
+//   ② 只有屏蔽、没画保留区：默认整块保留再挖；
+//   ③ 屏蔽形状随模板列表 JSON 持久化。
+void FeatureMatchTest::templateExcludeShapesSubtractFromMask()
+{
+    RoiShape keep;
+    keep.type = RoiType::Rect;
+    keep.p1 = QPointF(100, 100);
+    keep.p2 = QPointF(200, 200);
+
+    RoiShape hole;
+    hole.type = RoiType::Circle;
+    hole.p1 = QPointF(150, 150);
+    hole.p2 = QPointF(180, 150);       // 半径 30
+
+    QVector<RoiShape> keepList{keep};
+    QVector<RoiShape> exList{hole};
+
+    const QRectF box = OpencvTemplateMatchNode::shapesBounds(keepList + exList);
+    QVERIFY2(qAbs(box.width() - 100.0) <= 1.0 && qAbs(box.height() - 100.0) <= 1.0,
+             qPrintable(QStringLiteral("并集包围盒应为 100x100，实际 %1x%2")
+                            .arg(box.width())
+                            .arg(box.height())));
+
+    const cv::Mat mask = OpencvTemplateMatchNode::shapesMask(keepList, box, exList);
+    QCOMPARE(mask.cols, 100);
+    QCOMPARE(mask.rows, 100);
+    QVERIFY2(mask.at<uchar>(50, 50) == 0, "圆心处应被屏蔽挖掉");
+    QVERIFY2(mask.at<uchar>(5, 5) != 0, "角上仍应保留");
+
+    // 只画了屏蔽、没画保留区：默认整块保留再挖
+    const cv::Mat m2 = OpencvTemplateMatchNode::shapesMask({}, box, exList);
+    QVERIFY2(m2.at<uchar>(50, 50) == 0, "仅屏蔽时圆心也应被挖掉");
+    QVERIFY2(m2.at<uchar>(5, 5) != 0, "仅屏蔽时其余区域应默认保留");
+
+    TemplateEntry e;
+    e.shapes = keepList;
+    e.excludes = exList;
+    const TemplateEntry back = TemplateEntry::fromJson(e.toJson());
+    QCOMPARE(back.excludes.size(), 1);
+    QCOMPARE(back.excludes.first().type, RoiType::Circle);
+    QCOMPARE(back.shapes.size(), 1);
 }
 
 QTEST_MAIN(FeatureMatchTest)

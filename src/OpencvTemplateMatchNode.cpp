@@ -116,6 +116,10 @@ QJsonObject TemplateEntry::toJson() const
     obj[QStringLiteral("shape")] =
         arr.isEmpty() ? QJsonObject{{QStringLiteral("type"), QStringLiteral("none")}}
                       : arr.first().toObject();
+    QJsonArray exArr;
+    for (const RoiShape &s : excludes)
+        exArr.append(shapeToJsonObj(s));
+    obj[QStringLiteral("excludes")] = exArr;
     obj[QStringLiteral("edgeThreshold")] = edgeThreshold;
     obj[QStringLiteral("autoThreshold")] = autoThreshold;
     obj[QStringLiteral("aperture")] = aperture;
@@ -142,6 +146,9 @@ TemplateEntry TemplateEntry::fromJson(const QJsonObject &obj)
     }
     if (!e.shapes.isEmpty())
         e.shape = e.shapes.first();
+    for (const QJsonValue &v : obj.value(QStringLiteral("excludes")).toArray())
+        if (v.isObject())
+            e.excludes.append(shapeFromJsonObj(v.toObject()));
     e.edgeThreshold = obj.value(QStringLiteral("edgeThreshold")).toDouble(20.0);
     e.autoThreshold = obj.value(QStringLiteral("autoThreshold")).toBool(true);
     e.aperture = obj.value(QStringLiteral("aperture")).toInt(3);
@@ -722,13 +729,16 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         cv::Mat shapeMask;
         {
             const QVector<RoiShape> shapeList = active.allShapes();
-            bool needMask = shapeList.size() > 1;
+            bool needMask = shapeList.size() > 1 || !active.excludes.isEmpty();
             for (const RoiShape &s : shapeList) {
                 if (s.type == RoiType::Polygon || s.type == RoiType::Circle)
                     needMask = true;
             }
-            if (needMask)
-                shapeMask = shapesMask(shapeList, shapesBounds(shapeList));
+            if (needMask) {
+                QVector<RoiShape> all = shapeList;
+                all += active.excludes;
+                shapeMask = shapesMask(shapeList, shapesBounds(all), active.excludes);
+            }
         }
 
         // ROI 图像类型（VM 的「区域类型=图像类型」）：第二个图像输入当掩膜，
@@ -1570,39 +1580,59 @@ QRectF OpencvTemplateMatchNode::shapesBounds(const QVector<RoiShape> &shapes)
     return box;
 }
 
-cv::Mat OpencvTemplateMatchNode::shapesMask(const QVector<RoiShape> &shapes, const QRectF &box)
+cv::Mat OpencvTemplateMatchNode::shapesMask(const QVector<RoiShape> &shapes, const QRectF &box,
+                                            const QVector<RoiShape> &excludes)
 {
     if (box.width() <= 4.0 || box.height() <= 4.0)
         return {};
     const int w = int(box.width() + 0.5);
     const int h = int(box.height() + 0.5);
-    cv::Mat mask = cv::Mat::zeros(h, w, CV_8UC1);
     const int ox = int(box.x());
     const int oy = int(box.y());
-    bool any = false;
-    for (const RoiShape &s : shapes) {
+    cv::Mat mask = cv::Mat::zeros(h, w, CV_8UC1);
+
+    // 单块形状画进掩膜（value = 255 保留 / 0 屏蔽）
+    auto paint = [&](const RoiShape &s, unsigned char value) {
+        const cv::Scalar v(value);
         if (s.type == RoiType::Circle) {
             const double r = std::hypot(s.p2.x() - s.p1.x(), s.p2.y() - s.p1.y());
             if (r <= 1.0)
-                continue;
-            cv::circle(mask, cv::Point(int(s.p1.x()) - ox, int(s.p1.y()) - oy), int(r + 0.5),
-                       cv::Scalar(255), -1);
-            any = true;
-        } else if (s.type == RoiType::Polygon && s.points.size() >= 3) {
+                return false;
+            cv::circle(mask, cv::Point(int(s.p1.x()) - ox, int(s.p1.y()) - oy), int(r + 0.5), v, -1);
+            return true;
+        }
+        if (s.type == RoiType::Polygon && s.points.size() >= 3) {
             std::vector<cv::Point> pts;
             pts.reserve(size_t(s.points.size()));
             for (const QPointF &p : s.points)
                 pts.emplace_back(int(p.x()) - ox, int(p.y()) - oy);
-            cv::fillPoly(mask, std::vector<std::vector<cv::Point>>{pts}, cv::Scalar(255));
-            any = true;
-        } else if (s.type == RoiType::Rect || s.type == RoiType::RotatedRect) {
+            cv::fillPoly(mask, std::vector<std::vector<cv::Point>>{pts}, v);
+            return true;
+        }
+        if (s.type == RoiType::Rect || s.type == RoiType::RotatedRect) {
             const QRectF b = roiAxisAlignedBounds(s);
             if (b.width() <= 1.0 || b.height() <= 1.0)
-                continue;
-            cv::rectangle(mask, cv::Rect(int(b.x()) - ox, int(b.y()) - oy, int(b.width()), int(b.height())),
-                          cv::Scalar(255), -1);
-            any = true;
+                return false;
+            cv::rectangle(mask,
+                          cv::Rect(int(b.x()) - ox, int(b.y()) - oy, int(b.width()), int(b.height())),
+                          v, -1);
+            return true;
         }
+        return false;
+    };
+
+    bool any = false;
+    if (shapes.isEmpty() && !excludes.isEmpty()) {
+        // 只画了屏蔽形状：默认整块保留，再减掉屏蔽区（"把 logo 挖掉"最常见）
+        mask.setTo(cv::Scalar(255));
+        any = true;
+    }
+    for (const RoiShape &s : shapes) {
+        if (paint(s, 255))
+            any = true;
+    }
+    for (const RoiShape &s : excludes) {
+        paint(s, 0);      // 屏蔽：从保留区里挖掉
     }
     if (!any)
         return {};

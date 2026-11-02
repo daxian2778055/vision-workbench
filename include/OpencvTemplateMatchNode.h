@@ -14,6 +14,8 @@ struct TemplateEntry
     RoiShape shape;                     ///< 主形状（=shapes.first()，老字段兼容）
     /// 全部形状（VM 一个模板可由多块形状组成）。空 = 回退 shape。
     QVector<RoiShape> shapes;
+    /// 屏蔽形状（保留区里再挖掉的部分：logo/水印/背景）。掩膜 = 保留 − 屏蔽。
+    QVector<RoiShape> excludes;
     /// 匹配中心（锚点）：相对模板中心的偏移（模板像素、尺度 1）。默认 0 = 匹配点与匹配框中心重合。
     /// VM 的「匹配中心 X/Y + 锁定」就是这一个点：结果里的「匹配点」= 它在场景中的位置。
     double anchorDx = 0.0;
@@ -100,6 +102,9 @@ public:
 
     /// 多形状模板：所有形状的并集包围盒（裁剪口径的唯一出处）
     static QRectF shapesBounds(const QVector<RoiShape> &shapes);
-    /// 多形状模板：并集形状掩膜（8U，255=保留），尺寸 = shapesBounds 的四舍五入
-    static cv::Mat shapesMask(const QVector<RoiShape> &shapes, const QRectF &box);
+    /// 多形状模板：并集形状掩膜（8U，255=保留），尺寸 = shapesBounds 的四舍五入。
+    /// excludes 非空时从保留区里减掉（logo/水印等屏蔽）；shapes 为空但 excludes 非空时
+    /// 默认整块保留再减。
+    static cv::Mat shapesMask(const QVector<RoiShape> &shapes, const QRectF &box,
+                              const QVector<RoiShape> &excludes = QVector<RoiShape>());
 };
