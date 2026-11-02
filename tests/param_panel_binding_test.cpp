@@ -2447,8 +2447,9 @@ void ParamPanelBindingTest::testUnnamedFindChildSitesAreSingleCandidate()
     // → 290：链长模式 minVisibleRatio（可见率门槛）
     // → 291：ROI 区域类型 roiType（0=图形 / 1=图像）
     // → 292：输出掩膜开关 outputMask
-    QVERIFY2(fieldSlots == 292,
-             qPrintable(QStringLiteral("字段槽位分母从 292 变成 %1 ⇒ 本闸口径已漂移，"
+    // → 293：ROI 创建来源 roiSource（0=绘制 / 1=继承上游）
+    QVERIFY2(fieldSlots == 293,
+             qPrintable(QStringLiteral("字段槽位分母从 293 变成 %1 ⇒ 本闸口径已漂移，"
                                        "先核对面板改动再把基准一起改").arg(fieldSlots)));
     QVERIFY2(badSlots.isEmpty(),
              qPrintable(QStringLiteral("U5-MULTI: %1 个字段槽位里同类型候选不止一个 ⇒ 站点 1 的无名 "

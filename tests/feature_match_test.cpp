@@ -90,6 +90,8 @@ private slots:
     void templateMatchAnchorOffsetsMatchPoint();
     // 分割/剪刀：按连通域拆块、沿画线切开
     void templateSplitShapeByCut();
+    // 继承 ROI：上游命中框当成搜索区域（框外的更优候选不许抢）
+    void templateInheritsUpstreamBoxAsSearchRegion();
 };
 
 namespace {
@@ -1893,6 +1895,69 @@ void FeatureMatchTest::templateSplitShapeByCut()
     const QVector<RoiShape> notCut = TemplateConfigDialog::splitShape(
         r, QPointF(105, 105), QPointF(115, 105), true);
     QCOMPARE(notCut.size(), 1);
+}
+
+// 继承 ROI（VM 基本参数页「ROI创建 = 继承」）：上游命中框直接当本次搜索区域。
+// 构造：左侧工件被压掉一块（分数低），右侧完好（分数高）；上游命中框指向左侧。
+//   roiSource=0 → 全图搜，命中右侧；
+//   roiSource=1 → 只在继承框内搜，命中左侧。
+void FeatureMatchTest::templateInheritsUpstreamBoxAsSearchRegion()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const cv::Mat patch = makePatch();
+    const QString tpl = dir.filePath(QStringLiteral("tpl.png"));
+    QVERIFY(cv::imwrite(tpl.toStdString(), patch));
+
+    cv::Mat canvas(300, 700, CV_8UC1, cv::Scalar(kCanvasBackground));
+    const cv::Rect left(60, 80, kTemplateSize, kTemplateSize);
+    const cv::Rect right(460, 80, kTemplateSize, kTemplateSize);
+    patch.copyTo(canvas(left));
+    patch.copyTo(canvas(right));
+    cv::rectangle(canvas, cv::Rect(left.x + 10, left.y + 10, 46, 46), cv::Scalar(200), cv::FILLED);
+
+    const double leftCx = left.x + kTemplateSize / 2.0;
+    const double leftCy = left.y + kTemplateSize / 2.0;
+    const double rightCx = right.x + kTemplateSize / 2.0;
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.3);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("templatePath"), tpl);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+
+    // 上游结果：图像 + 一个指向左侧工件的 template 命中框
+    MeasureResult mr;
+    mr.type = QStringLiteral("template");
+    mr.valid = true;
+    mr.value = 0.9;
+    mr.point1 = QPointF(leftCx, leftCy);
+    mr.extraValues = QVector<double>({leftCy, leftCx, 0.9, 0.0, 1.0,
+                                      double(kTemplateSize), double(kTemplateSize)});
+    auto upstream = QSharedPointer<DataObject>::create();
+    upstream->setHImage(OpencvUtil::matToHimage(canvas));
+    upstream->setMeasureResult(mr);
+    node.setInputData(0, upstream);
+
+    node.setParam(QStringLiteral("roiSource"), 0);
+    node.run(false);
+    const double c0 = node.getParam(QStringLiteral("matchCol")).toDouble();
+    qInfo("inherit-roi: 绘制模式命中 x=%.1f", c0);
+    QVERIFY2(c0 > rightCx - 20.0,
+             qPrintable(QStringLiteral("不继承时应命中右侧完好的工件，实际 x=%1").arg(c0)));
+
+    node.setParam(QStringLiteral("roiSource"), 1);
+    node.run(false);
+    const double c1 = node.getParam(QStringLiteral("matchCol")).toDouble();
+    const double r1 = node.getParam(QStringLiteral("matchRow")).toDouble();
+    qInfo("inherit-roi: 继承模式命中 (%.1f, %.1f)", c1, r1);
+    QVERIFY2(qAbs(c1 - leftCx) <= 2.0 && qAbs(r1 - leftCy) <= 2.0,
+             qPrintable(QStringLiteral("继承上游框后应只在左侧搜，实际 (%1, %2)").arg(c1).arg(r1)));
 }
 
 QTEST_MAIN(FeatureMatchTest)

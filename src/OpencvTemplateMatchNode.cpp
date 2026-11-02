@@ -279,6 +279,8 @@ void OpencvTemplateMatchNode::init()
                      QStringLiteral("ROI区域类型：0=图形（searchRegion*），1=图像（第2个输入当掩膜）")),
         makeBoolParam(QStringLiteral("outputMask"), false,
                       QStringLiteral("输出掩膜（把最终搜索区域作为具名子结果输出）")),
+        makeIntParam(QStringLiteral("roiSource"), 0, 0, 1,
+                     QStringLiteral("ROI创建：0=绘制（searchRegion*），1=继承上游命中框")),
         makeDoubleParam(QStringLiteral("minScore"), 0.6, 0.0, 1.0,
                         QStringLiteral("最低匹配度")),
         // VM「配置参数」对齐（2026-11-02）：把原先写死的边缘参数放出来。
@@ -479,12 +481,61 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         cv::Mat grayFull = gray;
         if (grayFull.channels() == 3)
             cv::cvtColor(grayFull, grayFull, cv::COLOR_BGR2GRAY);
+        // ROI 继承（VM「ROI 创建 = 继承」）：上游模板/特征命中框直接当搜索区域。
+        // 数据面取（不依赖场景图）：上游结果就在输入对象的 measureResults 里。
+        int inheritCol = 0, inheritRow = 0, inheritW = 0, inheritH = 0;
+        if (m_params.value(QStringLiteral("roiSource"), 0).toInt() == 1) {
+            const QSharedPointer<DataObject> upstream = m_inputData.value(0);
+            if (upstream) {
+                for (const MeasureResult &mr : upstream->measureResults()) {
+                    if ((mr.type == QLatin1String("template")
+                         || mr.type == QLatin1String("feature"))
+                        && mr.extraValues.size() >= 7) {
+                        const double cx = mr.extraValues[1];
+                        const double cy = mr.extraValues[0];
+                        const double bw = mr.extraValues[5];
+                        const double bh = mr.extraValues[6];
+                        const double rad =
+                            mr.extraValues[3] * 3.14159265358979323846 / 180.0;
+                        const double ca = std::cos(rad);
+                        const double sa = std::sin(rad);
+                        const double corners[4][2] = {{-bw * 0.5, -bh * 0.5},
+                                                      {bw * 0.5, -bh * 0.5},
+                                                      {bw * 0.5, bh * 0.5},
+                                                      {-bw * 0.5, bh * 0.5}};
+                        double x0 = 1e18, x1 = -1e18, y0 = 1e18, y1 = -1e18;
+                        for (const auto &c : corners) {
+                            const double px = cx + ca * c[0] - sa * c[1];
+                            const double py = cy + sa * c[0] + ca * c[1];
+                            x0 = qMin(x0, px);
+                            x1 = qMax(x1, px);
+                            y0 = qMin(y0, py);
+                            y1 = qMax(y1, py);
+                        }
+                        // 外扩 8px：上游框通常正好等于模板大小，不扩会因
+                        // "模板尺寸 >= 搜索区域" 被判无效，也留一点位置抖动余量
+                        inheritCol = int(x0) - 8;
+                        inheritRow = int(y0) - 8;
+                        inheritW = qMax(1, int(x1 - x0) + 16);
+                        inheritH = qMax(1, int(y1 - y0) + 16);
+                        break;
+                    }
+                }
+            }
+        }
+
         cv::Rect searchRect(0, 0, gray.cols, gray.rows);
         {
-            const int rc = m_params.value(QStringLiteral("searchRegionCol"), 0).toInt();
-            const int rr = m_params.value(QStringLiteral("searchRegionRow"), 0).toInt();
-            const int rw = m_params.value(QStringLiteral("searchRegionWidth"), 0).toInt();
-            const int rh = m_params.value(QStringLiteral("searchRegionHeight"), 0).toInt();
+            int rc = m_params.value(QStringLiteral("searchRegionCol"), 0).toInt();
+            int rr = m_params.value(QStringLiteral("searchRegionRow"), 0).toInt();
+            int rw = m_params.value(QStringLiteral("searchRegionWidth"), 0).toInt();
+            int rh = m_params.value(QStringLiteral("searchRegionHeight"), 0).toInt();
+            if (inheritW > 2 && inheritH > 2) {
+                rc = inheritCol;
+                rr = inheritRow;
+                rw = inheritW;
+                rh = inheritH;
+            }
             if (rw > 2 && rh > 2) {
                 searchRect = cv::Rect(qBound(0, rc, gray.cols - 1),
                                      qBound(0, rr, gray.rows - 1),
