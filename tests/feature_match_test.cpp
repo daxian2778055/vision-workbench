@@ -82,6 +82,8 @@ private slots:
     void templateMinVisibleRatioControlsOcclusion();
     // 多形状模板：JSON 往返 + 并集包围盒/并集掩膜
     void templateMultiShapeEntryAndMask();
+    // 图像型 ROI（VM 区域类型=图像类型）：候选中心必须落在掩膜白区
+    void templateImageTypeRoiLimitsCandidates();
 };
 
 namespace {
@@ -1679,6 +1681,53 @@ void FeatureMatchTest::templateMultiShapeEntryAndMask()
     QVERIFY2(mask.at<uchar>(5, 5) == 255, "矩形内部应为保留区");
     QVERIFY2(mask.at<uchar>(10, 70) == 0, "两块形状之间应为排除区");
     QVERIFY2(mask.at<uchar>(40, 110) == 255, "圆心处应为保留区");
+}
+
+// 图像型 ROI：第二个图像输入当掩膜（白=允许、黑=排除）。
+// 画布上左右各一个同款工件，掩膜只保留右侧 → 必须命中右侧。
+void FeatureMatchTest::templateImageTypeRoiLimitsCandidates()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const cv::Mat patch = makePatch();
+    const QString tpl = dir.filePath(QStringLiteral("tpl.png"));
+    QVERIFY(cv::imwrite(tpl.toStdString(), patch));
+
+    cv::Mat canvas(300, 700, CV_8UC1, cv::Scalar(kCanvasBackground));
+    const cv::Rect left(60, 80, kTemplateSize, kTemplateSize);
+    const cv::Rect right(460, 80, kTemplateSize, kTemplateSize);
+    patch.copyTo(canvas(left));
+    patch.copyTo(canvas(right));
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.5);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("templatePath"), tpl);
+    node.setParam(QStringLiteral("roiType"), 1);      // 图像类型
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+
+    // 掩膜：只在右侧工件处为白，其余全黑
+    cv::Mat maskMat(canvas.rows, canvas.cols, CV_8UC1, cv::Scalar(0));
+    cv::rectangle(maskMat, right, cv::Scalar(255), cv::FILLED);
+    auto maskObj = QSharedPointer<DataObject>::create();
+    maskObj->setHImage(OpencvUtil::matToHimage(maskMat));
+    node.setInputData(1, maskObj);
+
+    node.run(false);
+    const bool ok = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    const double col = node.getParam(QStringLiteral("matchCol")).toDouble();
+    const double row = node.getParam(QStringLiteral("matchRow")).toDouble();
+    qInfo("image-roi: ok=%d at (%.1f, %.1f)", int(ok), col, row);
+    QVERIFY2(ok, "图像型 ROI 下右侧工件应能命中");
+    QVERIFY2(qAbs(col - (right.x + kTemplateSize / 2.0)) <= 2.0
+                 && qAbs(row - (right.y + kTemplateSize / 2.0)) <= 2.0,
+             qPrintable(QStringLiteral("掩膜只留右侧，却命中 (%1,%2) ⇒ 图像型 ROI 没生效")
+                            .arg(col).arg(row)));
 }
 
 QTEST_MAIN(FeatureMatchTest)

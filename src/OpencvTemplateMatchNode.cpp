@@ -249,7 +249,10 @@ OpencvTemplateMatchNode::OpencvTemplateMatchNode(QObject *parent) : HalconNode(p
 
 void OpencvTemplateMatchNode::init()
 {
-    HalconNode::init();
+    HalconNode::init();   // 先建「输入图像」（必须是 0 号），再加 ROI 掩膜输入
+    // VM 基本参数页的「ROI区域类型=图像类型」：第二个图像输入当 ROI 掩膜
+    // （白色=允许匹配，黑色=排除）。图形类型仍走 searchRegion* 参数。
+    addInputPort(QStringLiteral("ROI掩膜"));
     addOutputPort(QStringLiteral("匹配结果"), PortDataType::Measure);
     registerParams({
         makeFilePathParam(QStringLiteral("templatePath"), QString(),
@@ -266,6 +269,8 @@ void OpencvTemplateMatchNode::init()
                       QStringLiteral("多模板同时匹配（模板列表逐个跑，取最高分）")),
         makeDoubleParam(QStringLiteral("minVisibleRatio"), 0.4, 0.1, 1.0,
                         QStringLiteral("链长模式：最小可见率（掩膜/遮挡后至少保留多少模板边缘点）")),
+        makeIntParam(QStringLiteral("roiType"), 0, 0, 1,
+                     QStringLiteral("ROI区域类型：0=图形（searchRegion*），1=图像（第2个输入当掩膜）")),
         makeDoubleParam(QStringLiteral("minScore"), 0.6, 0.0, 1.0,
                         QStringLiteral("最低匹配度")),
         // VM「配置参数」对齐（2026-11-02）：把原先写死的边缘参数放出来。
@@ -667,6 +672,28 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 shapeMask = shapesMask(shapeList, shapesBounds(shapeList));
         }
 
+        // ROI 图像类型（VM 的「区域类型=图像类型」）：第二个图像输入当掩膜，
+        // 白=允许、黑=排除。按粗搜栅格缩放，候选中心必须落在白区。
+        cv::Mat roiMask;
+        if (m_params.value(QStringLiteral("roiType"), 0).toInt() == 1) {
+            const QSharedPointer<DataObject> maskData = m_inputData.value(1);
+            if (maskData && maskData->getHImage().IsInitialized()) {
+                cv::Mat m = OpencvUtil::himageToMat(HImage(maskData->getHImage()));
+                if (m.channels() == 3)
+                    cv::cvtColor(m, m, cv::COLOR_BGR2GRAY);
+                if (!m.empty()) {
+                    if (m.size() != grayFull.size())
+                        cv::resize(m, m, grayFull.size(), 0, 0, cv::INTER_NEAREST);
+                    const cv::Rect rr =
+                        searchRect & cv::Rect(0, 0, grayFull.cols, grayFull.rows);
+                    if (rr.width > 2 && rr.height > 2) {
+                        cv::resize(m(rr), roiMask, graySearch.size(), 0, 0, cv::INTER_NEAREST);
+                        cv::threshold(roiMask, roiMask, 127, 255, cv::THRESH_BINARY);
+                    }
+                }
+            }
+        }
+
         // 缓存键：模板身份（尺寸 + 路径）+ 角度 + 尺度
         const QString warpKeyBase =
             QStringLiteral("%1x%2:%3")
@@ -781,6 +808,21 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 if (tVar > 1e-6)
                     result.setTo(0.0, varROI < tVar * 0.25);
             }
+            // ROI 图像类型：候选中心落在掩膜黑区的一律判无效（与多边形过滤同一层）
+            if (!roiMask.empty() && !result.empty() && roiMask.size() == search.size()) {
+                cv::Mat candMask = cv::Mat::zeros(result.size(), CV_8U);
+                for (int yy = 0; yy < result.rows; ++yy) {
+                    for (int xx = 0; xx < result.cols; ++xx) {
+                        const int cx = xx + int(warpedPair.second.x);
+                        const int cy = yy + int(warpedPair.second.y);
+                        if (cx >= 0 && cy >= 0 && cx < roiMask.cols && cy < roiMask.rows
+                            && roiMask.at<uchar>(cy, cx) != 0)
+                            candMask.at<uchar>(yy, xx) = 255;
+                    }
+                }
+                result.setTo(-1e9, ~candMask);
+            }
+
             // 多边形过滤：候选位置（模板中心）不在多边形内的峰值屏蔽掉
             if (activePoly && !activePoly->empty() && !result.empty()) {
                 cv::Mat candMask = cv::Mat::zeros(result.size(), CV_8U);
