@@ -2444,8 +2444,9 @@ void ParamPanelBindingTest::testUnnamedFindChildSitesAreSingleCandidate()
     // 284 → 288（2026-11-02）：模板匹配对齐 VM 配置参数，新增
     // edgeThreshold / autoEdgeThreshold / edgeAperture / coarseLongSide 四个字段
     // → 289：多模板同时匹配开关 matchAllTemplates
-    QVERIFY2(fieldSlots == 289,
-             qPrintable(QStringLiteral("字段槽位分母从 289 变成 %1 ⇒ 本闸口径已漂移，"
+    // → 290：链长模式 minVisibleRatio（可见率门槛）
+    QVERIFY2(fieldSlots == 290,
+             qPrintable(QStringLiteral("字段槽位分母从 290 变成 %1 ⇒ 本闸口径已漂移，"
                                        "先核对面板改动再把基准一起改").arg(fieldSlots)));
     QVERIFY2(badSlots.isEmpty(),
              qPrintable(QStringLiteral("U5-MULTI: %1 个字段槽位里同类型候选不止一个 ⇒ 站点 1 的无名 "

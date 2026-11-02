@@ -231,6 +231,8 @@ void OpencvTemplateMatchNode::init()
                      QStringLiteral("最多匹配个数（1=只输出最优；多件场景调大）")),
         makeBoolParam(QStringLiteral("matchAllTemplates"), false,
                       QStringLiteral("多模板同时匹配（模板列表逐个跑，取最高分）")),
+        makeDoubleParam(QStringLiteral("minVisibleRatio"), 0.4, 0.1, 1.0,
+                        QStringLiteral("链长模式：最小可见率（掩膜/遮挡后至少保留多少模板边缘点）")),
         makeDoubleParam(QStringLiteral("minScore"), 0.6, 0.0, 1.0,
                         QStringLiteral("最低匹配度")),
         // VM「配置参数」对齐（2026-11-02）：把原先写死的边缘参数放出来。
@@ -583,6 +585,10 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         const double edgeThreshold = effectiveEdgeThresholdFor(
             tmpl, edgeAperture, active.edgeThreshold, active.autoThreshold);
         const int coarseLongSide = qBound(240, active.coarseLongSide, 1600);
+        // 链长模式：可见率门槛（默认 0.4 = 原常量）。调高更严（遮挡多一点就判无效），
+        // 调低更容忍遮挡。
+        const double minVisibleRatio =
+            qBound(0.1, m_params.value(QStringLiteral("minVisibleRatio"), 0.4).toDouble(), 1.0);
 
         QVector<double> angles;
         QVector<double> scales;
@@ -730,7 +736,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 cv::matchTemplate(curSearchSin, ws, r2, cv::TM_CCORR);
                 // 可见点数（分子已按同一掩膜屏蔽，分母也用它）
                 cv::matchTemplate(curSearchStrong, wm, rv, cv::TM_CCORR);
-                const double need = qMax(16.0, 0.4 * n);   // 可见率门槛：少于 40% 判无效
+                const double need = qMax(16.0, minVisibleRatio * n);   // 可见率门槛（minVisibleRatio）
                 cv::Mat scoreVis = (r1 + r2) / (rv + 1e-6f);   // cos(Δθ) 的和除以可见点数
                 scoreVis.setTo(-1.0, rv < need);           // 无效处给 -1（不会被选为最优）
                 if (m_params.value(QStringLiteral("polarity"), 1).toInt() == 0)

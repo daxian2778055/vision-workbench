@@ -78,6 +78,8 @@ private slots:
     void templateShapeExtractionSupportsPolygonAndCircle();
     // 魔术棒取形：泛洪出的多边形必须贴合目标区域
     void templateWandPolygonFollowsRegion();
+    // 链长模式：可见率门槛必须真的能把遮挡过多的候选判无效
+    void templateMinVisibleRatioControlsOcclusion();
 };
 
 namespace {
@@ -1580,6 +1582,62 @@ void FeatureMatchTest::templateWandPolygonFollowsRegion()
 
     // 空图必须返回空（不能崩）
     QVERIFY(TemplateConfigDialog::wandPolygon(cv::Mat(), QPoint(1, 1), 20).isEmpty());
+}
+
+// 链长模式（VM 配置参数里那项）：可见率门槛。
+// 掩膜盖掉模板 62% 的宽度 → 可见约 38%：
+//   minVisibleRatio=0.3 → 仍应命中；0.7 → 必须判无效（否则参数是摆设）。
+void FeatureMatchTest::templateMinVisibleRatioControlsOcclusion()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const cv::Mat patch = makePatch();
+    const QString tpl = dir.filePath(QStringLiteral("tpl.png"));
+    QVERIFY(cv::imwrite(tpl.toStdString(), patch));
+
+    cv::Mat canvas(400, 400, CV_8UC1, cv::Scalar(kCanvasBackground));
+    const cv::Rect box(136, 136, kTemplateSize, kTemplateSize);
+    patch.copyTo(canvas(box));
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 2);
+    node.setParam(QStringLiteral("minScore"), 0.5);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("templatePath"), tpl);
+    node.setParam(QStringLiteral("searchRegionCol"), 0);
+    node.setParam(QStringLiteral("searchRegionRow"), 0);
+    node.setParam(QStringLiteral("searchRegionWidth"), canvas.cols);
+    node.setParam(QStringLiteral("searchRegionHeight"), canvas.rows);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+
+    // 掩膜：盖掉左边 80/128 列（约 62%），保留右侧
+    QImage mask(canvas.cols, canvas.rows, QImage::Format_Grayscale8);
+    mask.fill(255);
+    {
+        QPainter p(&mask);
+        p.fillRect(QRect(box.x, box.y, 80, kTemplateSize), Qt::black);
+        p.end();
+    }
+    node.setEditMask(mask);
+
+    node.setParam(QStringLiteral("minVisibleRatio"), 0.3);
+    node.run(false);
+    const bool ok03 = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    const double score03 = node.getParam(QStringLiteral("matchScore")).toDouble();
+    qInfo("visible-ratio 0.3: ok=%d score=%.3f", int(ok03), score03);
+    QVERIFY2(ok03, qPrintable(QStringLiteral("门槛 0.3 时应命中，实际判红（score=%1）").arg(score03)));
+
+    node.setParam(QStringLiteral("minVisibleRatio"), 0.7);
+    node.run(false);
+    const bool ok07 = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    const double score07 = node.getParam(QStringLiteral("matchScore")).toDouble();
+    qInfo("visible-ratio 0.7: ok=%d score=%.3f", int(ok07), score07);
+    QVERIFY2(!ok07, qPrintable(QStringLiteral("门槛 0.7 时可见率只有 ~38%%，却仍判成功（score=%1）")
+                                   .arg(score07)));
 }
 
 QTEST_MAIN(FeatureMatchTest)
