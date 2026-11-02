@@ -134,6 +134,14 @@ QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *n
                     overlay.append(extra);
                 }
             }
+            // 匹配点（模板左上角在场景中的位置）：VM 结果表里的“匹配点 X/Y”，画布上也标出来
+            if (mr.extraValues.size() >= 11) {
+                OverlayShape anchor;
+                anchor.type = OverlayShape::Type::Point;
+                anchor.p1 = QPointF(mr.extraValues[8], mr.extraValues[7]);
+                anchor.color = s.color;
+                overlay.append(anchor);
+            }
         } else if (mr.type == QLatin1String("defect")) {
             for (int i = 0; i + 3 < mr.extraValues.size(); i += 4) {
                 OverlayShape box;

@@ -280,6 +280,12 @@ void OpencvTemplateMatchNode::init()
     m_params[QStringLiteral("matchScore")] = 0.0;
     m_params[QStringLiteral("matchAngle")] = 0.0;
     m_params[QStringLiteral("matchScale")] = 1.0;
+    m_params[QStringLiteral("matchPointRow")] = 0.0;
+    m_params[QStringLiteral("matchPointCol")] = 0.0;
+    m_params[QStringLiteral("matchScaleX")] = 1.0;
+    m_params[QStringLiteral("matchScaleY")] = 1.0;
+    m_params[QStringLiteral("matchTemplateIndex")] = -1;
+    m_params[QStringLiteral("matchTemplateName")] = QString();
     m_params[QStringLiteral("trainStatus")] = QString();
 }
 
@@ -970,6 +976,19 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         m_params[QStringLiteral("matchScore")] = bestScore;
         m_params[QStringLiteral("matchAngle")] = bestAngle;
         m_params[QStringLiteral("matchScale")] = bestScale;
+        // VM 结果表口径：除"匹配框中心"外还要"匹配点"（模板左上角落到场景里的位置）
+        // 与尺度 X/Y。anchor = 中心 + R(angle)·(-w/2, -h/2)。
+        {
+            const double radA = bestAngle * 3.14159265358979323846 / 180.0;
+            const double caA = std::cos(radA);
+            const double saA = std::sin(radA);
+            const double hx = -outW * 0.5;
+            const double hy = -outH * 0.5;
+            m_params[QStringLiteral("matchPointCol")] = col + bestSubpix.x + caA * hx - saA * hy;
+            m_params[QStringLiteral("matchPointRow")] = row + bestSubpix.y + saA * hx + caA * hy;
+            m_params[QStringLiteral("matchScaleX")] = bestScale;
+            m_params[QStringLiteral("matchScaleY")] = bestScale;
+        }
         m_params["moduleStatus"] = (bestScore >= minScore);
         if (bestScore < minScore) {
             // 未匹配也要说明原因（2026-10-26 复核）：只判红，面板上看不到差多少
@@ -990,7 +1009,10 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         res.valid = (bestScore >= minScore);
         res.value = bestScore;
         res.point1 = QPointF(col, row);
-        res.extraValues = QVector<double>({row, col, bestScore, bestAngle, bestScale, outW, outH});
+        res.extraValues = QVector<double>({row, col, bestScore, bestAngle, bestScale, outW, outH,
+                                           m_params.value(QStringLiteral("matchPointRow")).toDouble(),
+                                           m_params.value(QStringLiteral("matchPointCol")).toDouble(),
+                                           bestScale, bestScale});
         auto resObj = QSharedPointer<DataObject>::create();
         resObj->setMeasureResult(res);
         setOutputData(1, resObj);

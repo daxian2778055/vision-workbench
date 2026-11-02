@@ -1495,6 +1495,20 @@ void FeatureMatchTest::templateMatchAllTemplatesPicksBest()
     QVERIFY2(qAbs(col - cxB) <= 2.0 && qAbs(row - cyB) <= 2.0,
              qPrintable(QStringLiteral("命中位置应在 B (%1,%2)，实际 (%3,%4)")
                             .arg(cxB).arg(cyB).arg(col).arg(row)));
+
+    // 匹配点 = 模板左上角（角度 0 时 = 中心 - 半宽/半高）；尺度 X/Y 同期输出
+    const double pcol = node.getParam(QStringLiteral("matchPointCol")).toDouble();
+    const double prow = node.getParam(QStringLiteral("matchPointRow")).toDouble();
+    const double sx = node.getParam(QStringLiteral("matchScaleX")).toDouble();
+    const double sy = node.getParam(QStringLiteral("matchScaleY")).toDouble();
+    qInfo("match-point: (%.1f, %.1f) scale=(%.2f, %.2f)", pcol, prow, sx, sy);
+    QVERIFY2(qAbs(pcol - (cxB - kTemplateSize / 2.0)) <= 2.0
+                 && qAbs(prow - (cyB - kTemplateSize / 2.0)) <= 2.0,
+             qPrintable(QStringLiteral("匹配点应在 (%1,%2)，实际 (%3,%4)")
+                            .arg(cxB - kTemplateSize / 2.0).arg(cyB - kTemplateSize / 2.0)
+                            .arg(pcol).arg(prow)));
+    QCOMPARE(sx, 1.0);
+    QCOMPARE(sy, 1.0);
 }
 
 QTEST_MAIN(FeatureMatchTest)
