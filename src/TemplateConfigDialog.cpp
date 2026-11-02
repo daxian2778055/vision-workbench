@@ -113,6 +113,26 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     makeRow(QStringLiteral("速度尺度（粗搜长边）"), m_coarseSpin);
     rightLay->addLayout(form);
 
+    // VM「匹配中心 + 锁定」：锚点相对模板中心的偏移，结果里的「匹配点」就是它落到场景的位置
+    rightLay->addWidget(new QLabel(QStringLiteral("匹配中心（相对模板中心）")));
+    auto *anchorRow = new QHBoxLayout();
+    m_anchorX = new QDoubleSpinBox();
+    m_anchorX->setRange(-4096.0, 4096.0);
+    m_anchorX->setDecimals(1);
+    m_anchorX->setValue(0.0);
+    m_anchorY = new QDoubleSpinBox();
+    m_anchorY->setRange(-4096.0, 4096.0);
+    m_anchorY->setDecimals(1);
+    m_anchorY->setValue(0.0);
+    m_anchorLock = new QCheckBox(QStringLiteral("锁定"));
+    m_anchorLock->setToolTip(QStringLiteral("锁定后不允许改匹配中心 X/Y（防误改）"));
+    anchorRow->addWidget(new QLabel(QStringLiteral("X")));
+    anchorRow->addWidget(m_anchorX);
+    anchorRow->addWidget(new QLabel(QStringLiteral("Y")));
+    anchorRow->addWidget(m_anchorY);
+    anchorRow->addWidget(m_anchorLock);
+    rightLay->addLayout(anchorRow);
+
     rightLay->addWidget(new QLabel(QStringLiteral("列表")));
     m_list = new QListWidget();
     m_list->setMaximumHeight(110);
@@ -184,6 +204,10 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     connect(okBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onConfirm);
     connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
     connect(m_view, &HalconWindow::roiEdited, this, &TemplateConfigDialog::onRoiEdited);
+    connect(m_anchorLock, &QCheckBox::toggled, this, [this](bool on) {
+        m_anchorX->setEnabled(!on);
+        m_anchorY->setEnabled(!on);
+    });
     connect(m_autoChk, &QCheckBox::toggled, this, [this](bool on) {
         m_edgeSpin->setEnabled(!on);
         if (on)
@@ -206,6 +230,11 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
             if (idx >= 0)
                 m_apertureCombo->setCurrentIndex(idx);
             m_coarseSpin->setValue(e.coarseLongSide);
+            m_anchorX->setValue(e.anchorDx);
+            m_anchorY->setValue(e.anchorDy);
+            m_anchorLock->setChecked(e.anchorLocked);
+            m_anchorX->setEnabled(!e.anchorLocked);
+            m_anchorY->setEnabled(!e.anchorLocked);
         }
     } else if (m_node && !m_node->templates().isEmpty()) {
         m_shape = m_node->activeTemplate().shape;
@@ -547,6 +576,9 @@ void TemplateConfigDialog::onConfirm()
     entry.autoThreshold = m_autoChk->isChecked();
     entry.aperture = m_apertureCombo->currentText().toInt();
     entry.coarseLongSide = m_coarseSpin->value();
+    entry.anchorDx = m_anchorX->value();
+    entry.anchorDy = m_anchorY->value();
+    entry.anchorLocked = m_anchorLock->isChecked();
 
     QVector<TemplateEntry> entries = m_node->templates();
     if (m_editIndex >= 0 && m_editIndex < entries.size())

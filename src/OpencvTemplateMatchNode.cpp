@@ -120,6 +120,9 @@ QJsonObject TemplateEntry::toJson() const
     obj[QStringLiteral("autoThreshold")] = autoThreshold;
     obj[QStringLiteral("aperture")] = aperture;
     obj[QStringLiteral("coarseLongSide")] = coarseLongSide;
+    obj[QStringLiteral("anchorX")] = anchorDx;
+    obj[QStringLiteral("anchorY")] = anchorDy;
+    obj[QStringLiteral("anchorLocked")] = anchorLocked;
     return obj;
 }
 
@@ -143,6 +146,9 @@ TemplateEntry TemplateEntry::fromJson(const QJsonObject &obj)
     e.autoThreshold = obj.value(QStringLiteral("autoThreshold")).toBool(true);
     e.aperture = obj.value(QStringLiteral("aperture")).toInt(3);
     e.coarseLongSide = obj.value(QStringLiteral("coarseLongSide")).toInt(480);
+    e.anchorDx = obj.value(QStringLiteral("anchorX")).toDouble(0.0);
+    e.anchorDy = obj.value(QStringLiteral("anchorY")).toDouble(0.0);
+    e.anchorLocked = obj.value(QStringLiteral("anchorLocked")).toBool(false);
     return e;
 }
 
@@ -1063,13 +1069,14 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 // 字段：row,col,score,angle,scale,pointRow,pointCol —— 前 3 项保持老顺序。
                 const double centerX = bestLoc.x + bestCenterInWarp.x + searchRect.x;
                 const double centerY = bestLoc.y + bestCenterInWarp.y + searchRect.y;
-                const double instW = tmplW * bestScale;
-                const double instH = tmplH * bestScale;
+                // 匹配点 = 锚点（模板中心 + 配置的偏移）缩放旋转后的落点
+                const double ax = active.anchorDx * bestScale;
+                const double ay = active.anchorDy * bestScale;
                 const double rad = bestAngle * 3.14159265358979323846 / 180.0;
                 const double ca = std::cos(rad);
                 const double sa = std::sin(rad);
-                const double pCol = centerX + ca * (-instW * 0.5) - sa * (-instH * 0.5);
-                const double pRow = centerY + sa * (-instW * 0.5) + ca * (-instH * 0.5);
+                const double pCol = centerX + ca * ax - sa * ay;
+                const double pRow = centerY + sa * ax + ca * ay;
                 matchList << QStringLiteral("%1,%2,%3,%4,%5,%6,%7")
                                  .arg(centerY, 0, 'f', 1)
                                  .arg(centerX, 0, 'f', 1)
@@ -1116,14 +1123,14 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         m_params[QStringLiteral("matchScore")] = bestScore;
         m_params[QStringLiteral("matchAngle")] = bestAngle;
         m_params[QStringLiteral("matchScale")] = bestScale;
-        // VM 结果表口径：除"匹配框中心"外还要"匹配点"（模板左上角落到场景里的位置）
-        // 与尺度 X/Y。anchor = 中心 + R(angle)·(-w/2, -h/2)。
+        // VM 结果表口径：「匹配点」= 模板的匹配中心（锚点）落到场景里的位置。
+        // 锚点默认在模板中心（anchorDx/Dy=0），可在模板配置窗里偏移并锁定。
         {
             const double radA = bestAngle * 3.14159265358979323846 / 180.0;
             const double caA = std::cos(radA);
             const double saA = std::sin(radA);
-            const double hx = -outW * 0.5;
-            const double hy = -outH * 0.5;
+            const double hx = active.anchorDx * bestScale;
+            const double hy = active.anchorDy * bestScale;
             m_params[QStringLiteral("matchPointCol")] = col + bestSubpix.x + caA * hx - saA * hy;
             m_params[QStringLiteral("matchPointRow")] = row + bestSubpix.y + saA * hx + caA * hy;
             m_params[QStringLiteral("matchScaleX")] = bestScale;

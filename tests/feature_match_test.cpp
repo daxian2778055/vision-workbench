@@ -86,6 +86,8 @@ private slots:
     void templateImageTypeRoiLimitsCandidates();
     // 输出掩膜：开关打开后唯一端口上应带一张与搜索区域一致的掩膜图
     void templateOutputsSearchMask();
+    // 匹配中心（锚点）偏移：匹配点必须跟着锚点走（VM 的「匹配中心 X/Y」）
+    void templateMatchAnchorOffsetsMatchPoint();
 };
 
 namespace {
@@ -781,9 +783,8 @@ void FeatureMatchTest::templateMatchFindsMultipleInstances()
         const double row = f[0].toDouble();
         const double col = f[1].toDouble();
         const double score = f[2].toDouble();
-        // 角度 0、尺度 1：匹配点 = 中心 - 半宽/半高
-        QVERIFY2(qAbs(f[6].toDouble() - (col - kTemplateSize / 2.0)) <= 2.0
-                     && qAbs(f[5].toDouble() - (row - kTemplateSize / 2.0)) <= 2.0,
+        // 默认锚点在模板中心：匹配点 = 匹配框中心（VM 口径，锚点可偏移后才会分开）
+        QVERIFY2(qAbs(f[6].toDouble() - col) <= 2.0 && qAbs(f[5].toDouble() - row) <= 2.0,
                  qPrintable(QStringLiteral("匹配点与中心不符：中心(%1,%2) 匹配点(%3,%4)")
                                 .arg(col).arg(row).arg(f[6].toDouble()).arg(f[5].toDouble())));
         QVERIFY2(score > 0.5, "多目标里有低于阈值的实例");
@@ -1515,17 +1516,15 @@ void FeatureMatchTest::templateMatchAllTemplatesPicksBest()
              qPrintable(QStringLiteral("命中位置应在 B (%1,%2)，实际 (%3,%4)")
                             .arg(cxB).arg(cyB).arg(col).arg(row)));
 
-    // 匹配点 = 模板左上角（角度 0 时 = 中心 - 半宽/半高）；尺度 X/Y 同期输出
+    // 默认锚点（匹配中心）在模板中心：匹配点 = 匹配框中心；尺度 X/Y 同期输出
     const double pcol = node.getParam(QStringLiteral("matchPointCol")).toDouble();
     const double prow = node.getParam(QStringLiteral("matchPointRow")).toDouble();
     const double sx = node.getParam(QStringLiteral("matchScaleX")).toDouble();
     const double sy = node.getParam(QStringLiteral("matchScaleY")).toDouble();
     qInfo("match-point: (%.1f, %.1f) scale=(%.2f, %.2f)", pcol, prow, sx, sy);
-    QVERIFY2(qAbs(pcol - (cxB - kTemplateSize / 2.0)) <= 2.0
-                 && qAbs(prow - (cyB - kTemplateSize / 2.0)) <= 2.0,
+    QVERIFY2(qAbs(pcol - cxB) <= 2.0 && qAbs(prow - cyB) <= 2.0,
              qPrintable(QStringLiteral("匹配点应在 (%1,%2)，实际 (%3,%4)")
-                            .arg(cxB - kTemplateSize / 2.0).arg(cyB - kTemplateSize / 2.0)
-                            .arg(pcol).arg(prow)));
+                            .arg(cxB).arg(cyB).arg(pcol).arg(prow)));
     QCOMPARE(sx, 1.0);
     QCOMPARE(sy, 1.0);
 }
@@ -1791,6 +1790,64 @@ void FeatureMatchTest::templateOutputsSearchMask()
     }
     QVERIFY2(!maskOff || !maskOff->getHImage().IsInitialized(),
              "输出掩膜关闭后不应再产出掩膜图");
+}
+
+// 匹配中心（锚点）：默认在模板中心；配置偏移后，结果的「匹配点」必须整体平移过去。
+// 这条守的是"锚点真的参与了结果换算"，而不是只存在 JSON 里。
+void FeatureMatchTest::templateMatchAnchorOffsetsMatchPoint()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const cv::Mat patch = makePatch();
+    const QString tpl = dir.filePath(QStringLiteral("tpl.png"));
+    QVERIFY(cv::imwrite(tpl.toStdString(), patch));
+
+    cv::Mat canvas(400, 600, CV_8UC1, cv::Scalar(kCanvasBackground));
+    const cv::Rect box(240, 140, kTemplateSize, kTemplateSize);
+    patch.copyTo(canvas(box));
+    const double cx = box.x + kTemplateSize / 2.0;
+    const double cy = box.y + kTemplateSize / 2.0;
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.5);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("templatePath"), tpl);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+
+    TemplateEntry e;
+    e.name = QStringLiteral("A");
+    e.imagePath = tpl;
+    e.anchorDx = 32.0;
+    e.anchorDy = -16.0;
+    e.anchorLocked = true;
+    node.setTemplates({e});
+    node.setActiveTemplateIndex(0);
+
+    node.run(false);
+    const bool ok = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    const double pcol = node.getParam(QStringLiteral("matchPointCol")).toDouble();
+    const double prow = node.getParam(QStringLiteral("matchPointRow")).toDouble();
+    const double mcol = node.getParam(QStringLiteral("matchCol")).toDouble();
+    const double mrow = node.getParam(QStringLiteral("matchRow")).toDouble();
+    qInfo("anchor-leg: center=(%.1f,%.1f) point=(%.1f,%.1f)", mcol, mrow, pcol, prow);
+    QVERIFY2(ok, "锚点用例应当匹配成功");
+    QVERIFY2(qAbs(mcol - cx) <= 2.0 && qAbs(mrow - cy) <= 2.0,
+             qPrintable(QStringLiteral("匹配框中心应在 (%1,%2)，实际 (%3,%4)")
+                            .arg(cx).arg(cy).arg(mcol).arg(mrow)));
+    QVERIFY2(qAbs(pcol - (cx + 32.0)) <= 2.0 && qAbs(prow - (cy - 16.0)) <= 2.0,
+             qPrintable(QStringLiteral("匹配点应随锚点偏移到 (%1,%2)，实际 (%3,%4)")
+                            .arg(cx + 32.0).arg(cy - 16.0).arg(pcol).arg(prow)));
+
+    // 锚点信息必须能存进模板列表（否则换型/重开工程就丢）
+    const TemplateEntry back = node.templates().first();
+    QCOMPARE(back.anchorDx, 32.0);
+    QCOMPARE(back.anchorDy, -16.0);
+    QVERIFY(back.anchorLocked);
 }
 
 QTEST_MAIN(FeatureMatchTest)

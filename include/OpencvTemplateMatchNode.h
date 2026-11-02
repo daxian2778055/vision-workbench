@@ -14,6 +14,11 @@ struct TemplateEntry
     RoiShape shape;                     ///< 主形状（=shapes.first()，老字段兼容）
     /// 全部形状（VM 一个模板可由多块形状组成）。空 = 回退 shape。
     QVector<RoiShape> shapes;
+    /// 匹配中心（锚点）：相对模板中心的偏移（模板像素、尺度 1）。默认 0 = 匹配点与匹配框中心重合。
+    /// VM 的「匹配中心 X/Y + 锁定」就是这一个点：结果里的「匹配点」= 它在场景中的位置。
+    double anchorDx = 0.0;
+    double anchorDy = 0.0;
+    bool anchorLocked = false;          ///< 仅约束编辑器里的 X/Y 输入框（锁定后不可改）
     double edgeThreshold = 20.0;        ///< 对比度阈值（手动模式）
     bool autoThreshold = true;          ///< 阈值模式：true=自动（模板梯度分位数）
     int aperture = 3;                   ///< 特征尺度（Sobel 核 3/5/7）

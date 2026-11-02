@@ -71,6 +71,9 @@ private:
     QListWidget *m_list = nullptr;
     QLabel *m_hint = nullptr;
     QSpinBox *m_wandTol = nullptr;
+    QDoubleSpinBox *m_anchorX = nullptr;
+    QDoubleSpinBox *m_anchorY = nullptr;
+    QCheckBox *m_anchorLock = nullptr;
     bool m_wandMode = false;
 
     RoiShape m_shape;              ///< 主形状（=m_shapes.first()，老逻辑兼容）
