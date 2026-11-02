@@ -12,13 +12,15 @@
 #include <QFileInfo>
 #include <QDir>
 #include <QVector>
+#include <algorithm>
 #include <cmath>
 #include <utility>
+#include <vector>
 
 namespace {
 
-/// GOC 的强梯度阈值：模板与搜索图共用同一个值。编辑器画特征点必须也用它，
-/// 否则"看到的点"和"真正打分的点"不是一回事（VM 的绿色特征点就是这条口径）。
+/// GOC 强梯度阈值的默认值（=原写死常量）。运行期以 edgeThreshold 参数为准，
+/// 自动模式按模板梯度分位数覆盖；可视化与打分都必须走 effectiveEdgeThreshold()。
 constexpr double kGocEdgeThreshold = 20.0;
 
 cv::Mat warpTemplate(const cv::Mat &tmpl, double angleDeg, double scale, cv::Point2f *centerOut)
@@ -133,6 +135,18 @@ void OpencvTemplateMatchNode::init()
                      QStringLiteral("最多匹配个数（1=只输出最优；多件场景调大）")),
         makeDoubleParam(QStringLiteral("minScore"), 0.6, 0.0, 1.0,
                         QStringLiteral("最低匹配度")),
+        // VM「配置参数」对齐（2026-11-02）：把原先写死的边缘参数放出来。
+        // 默认值 = 原常量，老方案行为逐字节不变。
+        makeDoubleParam(QStringLiteral("edgeThreshold"), 20.0, 1.0, 200.0,
+                        QStringLiteral("对比度阈值（手动模式；越大只用越强的边缘）")),
+        makeBoolParam(QStringLiteral("autoEdgeThreshold"), false,
+                      QStringLiteral("阈值模式：自动（按模板梯度 70 分位给阈值）")),
+        makeIntParam(QStringLiteral("edgeAperture"), 3, 3, 7,
+                     QStringLiteral("特征尺度（Sobel 核 3/5/7）"),
+                     QStringLiteral("px")),
+        makeIntParam(QStringLiteral("coarseLongSide"), 480, 240, 1600,
+                     QStringLiteral("速度尺度：粗搜长边（越小越快、越粗）"),
+                     QStringLiteral("px")),
         makeIntParam(QStringLiteral("roiRow"), 0, 0, 100000,
                      QStringLiteral("模板区行（旧工程：左上；0=未设置）"), QStringLiteral("px")),
         makeIntParam(QStringLiteral("roiCol"), 0, 0, 100000,
@@ -412,6 +426,14 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
             return;
         }
 
+        // VM 对齐（2026-11-02）：边缘阈值 / 特征尺度（Sobel 核）/ 速度尺度（粗搜长边）
+        // 从内部常量变成参数。默认值 = 原常量，老方案行为不变。
+        const int edgeAperture =
+            qBound(3, m_params.value(QStringLiteral("edgeAperture"), 3).toInt(), 7) | 1;
+        const double edgeThreshold = effectiveEdgeThreshold(tmpl, edgeAperture);
+        const int coarseLongSide =
+            qBound(240, m_params.value(QStringLiteral("coarseLongSide"), 480).toInt(), 1600);
+
         QVector<double> angles;
         QVector<double> scales;
         collectSearchValues(m_params.value(QStringLiteral("angleMin"), -30.0).toDouble(),
@@ -430,9 +452,9 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
         // 实测：1500×1000 + 208px 模板 + 31 角度，全分辨率穷举 ≈16 秒。
         // 现在先在长边≈480 的粗图上搜全部姿态，再只对最优姿态做全分辨率局部精修。
         const int maxSide = qMax(gray.cols, gray.rows);
-        const double coarseFactor = (singleIdentity || maxSide <= 640)
+        const double coarseFactor = (singleIdentity || maxSide <= coarseLongSide + 160)
                                         ? 1.0
-                                        : double(maxSide) / 480.0;
+                                        : double(maxSide) / double(coarseLongSide);
         cv::Mat graySearch = gray;
         cv::Mat tmplSearch = tmpl;
         if (coarseFactor > 1.0) {
@@ -502,11 +524,11 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
                 if (curSearchCos.empty() || curSearchSin.empty() || warped.empty())
                     return -1e9;
                 cv::Mat wgx, wgy, wmag;
-                cv::Sobel(warped, wgx, CV_32F, 1, 0, 3);
-                cv::Sobel(warped, wgy, CV_32F, 0, 1, 3);
+                cv::Sobel(warped, wgx, CV_32F, 1, 0, edgeAperture);
+                cv::Sobel(warped, wgy, CV_32F, 0, 1, edgeAperture);
                 cv::magnitude(wgx, wgy, wmag);
                 cv::Mat wm;
-                cv::threshold(wmag, wm, kGocEdgeThreshold, 1.0, cv::THRESH_BINARY);
+                cv::threshold(wmag, wm, edgeThreshold, 1.0, cv::THRESH_BINARY);
                 wm.convertTo(wm, CV_32F);
                 const double n = cv::sum(wm)[0];
                 if (n < 16.0)
@@ -644,12 +666,12 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
         const cv::Mat coarseTmplImg = tmplSearch;
         if (methodIdx == 2) {
             cv::Mat sgx, sgy, smag;
-            cv::Sobel(graySearch, sgx, CV_32F, 1, 0, 3);
-            cv::Sobel(graySearch, sgy, CV_32F, 0, 1, 3);
+            cv::Sobel(graySearch, sgx, CV_32F, 1, 0, edgeAperture);
+            cv::Sobel(graySearch, sgy, CV_32F, 0, 1, edgeAperture);
             cv::magnitude(sgx, sgy, smag);
             cv::divide(sgx, smag + 1e-6f, curSearchCos);
             cv::divide(sgy, smag + 1e-6f, curSearchSin);
-            cv::threshold(smag, curSearchStrong, kGocEdgeThreshold, 1.0, cv::THRESH_BINARY);
+            cv::threshold(smag, curSearchStrong, edgeThreshold, 1.0, cv::THRESH_BINARY);
             curSearchStrong.convertTo(curSearchStrong, CV_32F);
             cv::multiply(curSearchCos, curSearchStrong, curSearchCos);   // 分子分母同掩膜
             cv::multiply(curSearchSin, curSearchStrong, curSearchSin);
@@ -713,12 +735,12 @@ void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
                 const cv::Mat refineTmpl = tmpl;
                 if (methodIdx == 2) {
                     cv::Mat sgx, sgy, smag;
-                    cv::Sobel(win, sgx, CV_32F, 1, 0, 3);
-                    cv::Sobel(win, sgy, CV_32F, 0, 1, 3);
+                    cv::Sobel(win, sgx, CV_32F, 1, 0, edgeAperture);
+                    cv::Sobel(win, sgy, CV_32F, 0, 1, edgeAperture);
                     cv::magnitude(sgx, sgy, smag);
                     cv::divide(sgx, smag + 1e-6f, curSearchCos);
                     cv::divide(sgy, smag + 1e-6f, curSearchSin);
-                    cv::threshold(smag, curSearchStrong, kGocEdgeThreshold, 1.0, cv::THRESH_BINARY);
+                    cv::threshold(smag, curSearchStrong, edgeThreshold, 1.0, cv::THRESH_BINARY);
                     curSearchStrong.convertTo(curSearchStrong, CV_32F);
                     cv::multiply(curSearchCos, curSearchStrong, curSearchCos);   // 分子分母同掩膜
                     cv::multiply(curSearchSin, curSearchStrong, curSearchSin);
@@ -924,6 +946,31 @@ void OpencvTemplateMatchNode::applyGeometryRoi(const RoiShape &shape)
     }
 }
 
+double OpencvTemplateMatchNode::effectiveEdgeThreshold(const cv::Mat &tmpl, int aperture) const
+{
+    const double manual = m_params.value(QStringLiteral("edgeThreshold"), kGocEdgeThreshold).toDouble();
+    if (!m_params.value(QStringLiteral("autoEdgeThreshold"), false).toBool() || tmpl.empty())
+        return qBound(1.0, manual, 200.0);
+
+    // 自动模式：取模板梯度强度的 70 分位。模板本身对比度高 → 阈值自动抬高；
+    // 低对比工件 → 自动压低，不会因为"固定 20"一个都用不上或全用上。
+    cv::Mat gx, gy, mag;
+    cv::Sobel(tmpl, gx, CV_32F, 1, 0, aperture);
+    cv::Sobel(tmpl, gy, CV_32F, 0, 1, aperture);
+    cv::magnitude(gx, gy, mag);
+    std::vector<float> vals;
+    vals.reserve(size_t(mag.total()));
+    for (int y = 0; y < mag.rows; ++y) {
+        const float *row = mag.ptr<float>(y);
+        vals.insert(vals.end(), row, row + mag.cols);
+    }
+    if (vals.empty())
+        return qBound(1.0, manual, 200.0);
+    const size_t k = size_t(double(vals.size()) * 0.7);
+    std::nth_element(vals.begin(), vals.begin() + k, vals.end());
+    return qBound(6.0, double(vals[k]), 80.0);
+}
+
 QVector<QPointF> OpencvTemplateMatchNode::editorFeaturePoints() const
 {
     // 绿点 = 模板强梯度点。GOC（method=2）就是拿这些点打分；灰度法（0/1）逐像素算，
@@ -946,10 +993,13 @@ QVector<QPointF> OpencvTemplateMatchNode::editorFeaturePoints() const
     if (tmpl.empty())
         return {};
 
+    const int aperture =
+        qBound(3, m_params.value(QStringLiteral("edgeAperture"), 3).toInt(), 7) | 1;
     cv::Mat gx, gy, mag;
-    cv::Sobel(tmpl, gx, CV_32F, 1, 0, 3);
-    cv::Sobel(tmpl, gy, CV_32F, 0, 1, 3);
+    cv::Sobel(tmpl, gx, CV_32F, 1, 0, aperture);
+    cv::Sobel(tmpl, gy, CV_32F, 0, 1, aperture);
     cv::magnitude(gx, gy, mag);
+    const double threshold = effectiveEdgeThreshold(tmpl, aperture);
 
     const int w = tmpl.cols;
     const int h = tmpl.rows;
@@ -973,7 +1023,7 @@ QVector<QPointF> OpencvTemplateMatchNode::editorFeaturePoints() const
     for (int v = 0; v < h; v += stride) {
         const float *magRow = mag.ptr<float>(v);
         for (int u = 0; u < w; u += stride) {
-            if (magRow[u] <= float(kGocEdgeThreshold))
+            if (magRow[u] <= float(threshold))
                 continue;
             if (axisAligned) {
                 pts.append(QPointF(x0 + u, y0 + v));

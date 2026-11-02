@@ -25,4 +25,8 @@ public:
     /// 编辑器可视化：当前模板的强梯度点（图像坐标）。GOC 直接用这些点打分；
     /// 灰度法只作为模板质量参考。
     QVector<QPointF> editorFeaturePoints() const override;
+
+    /// 有效边缘阈值：手动模式取 edgeThreshold；自动模式取模板梯度 70 分位（clamp 6..80）。
+    /// 打分与可视化必须共用它，否则"看到的点"和"打分的点"又分叉。
+    double effectiveEdgeThreshold(const cv::Mat &tmpl, int aperture) const;
 };

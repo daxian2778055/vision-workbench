@@ -1537,7 +1537,7 @@ void MainWindow::showNodeParameters(NodeBase *node)
                 if (on)
                     m_imageDisplay->showNodeSearchRegion(node);
                 else
-                    m_imageDisplay->showNodeGeometry(node);
+                    m_imageDisplay->showNodeGeometry(node, /*preferSearchRegion=*/false);
             });
             box->addWidget(roiTarget);
         }

@@ -63,6 +63,10 @@ private slots:
     void templateMatchMaskMovesBestHit();
     // 训练后特征点可视化：绿点必须落在模板框内，且跟着 ROI 走（VM 模板配置同款）
     void templateMatchFeaturePointsFollowRoi();
+    // 检测区域画布化：模板框（绿）与检测区域（青）必须同时画出来
+    void templateMatchOverlayShowsRegionAndTemplate();
+    // VM「对比度阈值/阈值模式」对齐：参数必须真的改变参与打分的点
+    void templateMatchEdgeThresholdTakesEffect();
 };
 
 namespace {
@@ -1220,6 +1224,84 @@ void FeatureMatchTest::templateMatchFeaturePointsFollowRoi()
                      && p.y() >= right.y - 1 && p.y() <= right.y + kTemplateSize + 1,
                  qPrintable(QStringLiteral("换 ROI 后特征点没跟着走：(%1, %2)").arg(p.x()).arg(p.y())));
     }
+}
+
+// 检测区域画布化：VM 的检测区域是画布上的主对象。落到我们这里两条显示契约：
+//   ① 检测区域（青）与模板框（绿）必须同时出现，缺一个现场就会"不知道自己框到哪"；
+//   ② 两者的中心/尺寸要等于参数里的值（画错位置比不画更糟）。
+void FeatureMatchTest::templateMatchOverlayShowsRegionAndTemplate()
+{
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("roiCenterCol"), 240.0);
+    node.setParam(QStringLiteral("roiCenterRow"), 160.0);
+    node.setParam(QStringLiteral("roiWidth"), 120.0);
+    node.setParam(QStringLiteral("roiHeight"), 80.0);
+    node.setParam(QStringLiteral("roiAngle"), 0.0);
+    node.setParam(QStringLiteral("searchRegionCol"), 60);
+    node.setParam(QStringLiteral("searchRegionRow"), 40);
+    node.setParam(QStringLiteral("searchRegionWidth"), 400);
+    node.setParam(QStringLiteral("searchRegionHeight"), 260);
+
+    ImageDisplayController ctrl(nullptr, nullptr, nullptr);
+    const QVector<OverlayShape> overlay = ctrl.collectOverlayFromNode(&node);
+
+    const OverlayShape *tmplBox = nullptr;
+    const OverlayShape *regionBox = nullptr;
+    for (const OverlayShape &s : overlay) {
+        if (s.type != OverlayShape::Type::RotatedRect)
+            continue;
+        if (s.color == QColor(0, 220, 120))
+            tmplBox = &s;
+        else if (s.color == QColor(0, 200, 255))
+            regionBox = &s;
+    }
+    QVERIFY2(tmplBox, "画布上没有模板框（绿）");
+    QVERIFY2(regionBox, "画布上没有检测区域（青）");
+    QVERIFY2(qAbs(tmplBox->p1.x() - 240.0) <= 0.5 && qAbs(tmplBox->p1.y() - 160.0) <= 0.5
+                 && qAbs(tmplBox->width - 120.0) <= 0.5 && qAbs(tmplBox->height - 80.0) <= 0.5,
+             qPrintable(QStringLiteral("模板框画错：中心(%1,%2) 尺寸(%3,%4)")
+                            .arg(tmplBox->p1.x()).arg(tmplBox->p1.y())
+                            .arg(tmplBox->width).arg(tmplBox->height)));
+    QVERIFY2(qAbs(regionBox->p1.x() - 260.0) <= 0.5 && qAbs(regionBox->p1.y() - 170.0) <= 0.5
+                 && qAbs(regionBox->width - 400.0) <= 0.5 && qAbs(regionBox->height - 260.0) <= 0.5,
+             qPrintable(QStringLiteral("检测区域画错：中心(%1,%2) 尺寸(%3,%4)")
+                            .arg(regionBox->p1.x()).arg(regionBox->p1.y())
+                            .arg(regionBox->width).arg(regionBox->height)));
+}
+
+// VM「对比度阈值 / 阈值模式」对齐：这两个参数必须真的改变参与打分的特征点数量，
+// 否则就是把界面参数做成了摆设（值改了、匹配一点不变）。
+void FeatureMatchTest::templateMatchEdgeThresholdTakesEffect()
+{
+    // 低对比竖边：灰度 100 → 110，Sobel(ksize=3) 幅值 ≈ 40。
+    cv::Mat img(80, 80, CV_8UC1, cv::Scalar(100));
+    img(cv::Rect(0, 0, 40, 80)).setTo(110);
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("roiCenterCol"), 40.0);
+    node.setParam(QStringLiteral("roiCenterRow"), 40.0);
+    node.setParam(QStringLiteral("roiWidth"), 64.0);
+    node.setParam(QStringLiteral("roiHeight"), 64.0);
+    node.setParam(QStringLiteral("roiAngle"), 0.0);
+    node.setInputImage(OpencvUtil::matToHimage(img));
+
+    node.setParam(QStringLiteral("edgeThreshold"), 20.0);
+    const int n20 = node.editorFeaturePoints().size();
+    node.setParam(QStringLiteral("edgeThreshold"), 60.0);
+    const int n60 = node.editorFeaturePoints().size();
+    qInfo("edge-threshold: t=20 -> %d 点, t=60 -> %d 点", n20, n60);
+    QVERIFY2(n20 > 0, "对比度阈值 20 时低对比边应当被当成特征点");
+    QVERIFY2(n60 == 0, qPrintable(QStringLiteral("阈值 60 时不应再留点（实际 %1 个）⇒ "
+                                                 "edgeThreshold 没接进评分").arg(n60)));
+
+    // 阈值模式=自动：按模板梯度分位数给值，这条低对比边仍应被判为特征点
+    node.setParam(QStringLiteral("edgeThreshold"), 150.0);
+    node.setParam(QStringLiteral("autoEdgeThreshold"), true);
+    const int nAuto = node.editorFeaturePoints().size();
+    qInfo("edge-threshold: auto -> %d 点", nAuto);
+    QVERIFY2(nAuto > 0, "自动阈值模式没生效（点全被滤掉）");
 }
 
 QTEST_MAIN(FeatureMatchTest)

@@ -163,6 +163,35 @@ QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *n
         overlay.append(s);
     }
 
+    // 模板框（只读绿框）：画布上编辑检测区域时，模板在哪必须仍然看得见。
+    // 只给"同时有检测区域"的工具画，避免与别的算子的几何 ROI 重复叠一层。
+    if (HalconNode *hn = qobject_cast<HalconNode *>(node)) {
+        if (hn->hasParam(QStringLiteral("searchRegionWidth"))
+            && hn->geometryRoiType() != RoiType::None) {
+            const RoiShape g = hn->geometryRoi();
+            OverlayShape box;
+            box.color = QColor(0, 220, 120);
+            if (g.type == RoiType::RotatedRect && g.width > 1.0 && g.height > 1.0) {
+                box.type = OverlayShape::Type::RotatedRect;
+                box.p1 = g.p1;
+                box.width = g.width;
+                box.height = g.height;
+                box.angleDeg = g.angleDeg;
+                overlay.append(box);
+            } else if (g.type == RoiType::Rect) {
+                const QRectF r = QRectF(g.p1, g.p2).normalized();
+                if (r.width() > 1.0 && r.height() > 1.0) {
+                    box.type = OverlayShape::Type::RotatedRect;
+                    box.p1 = r.center();
+                    box.width = r.width();
+                    box.height = r.height();
+                    box.angleDeg = 0.0;
+                    overlay.append(box);
+                }
+            }
+        }
+    }
+
     // 检测区域（搜索区域）：模板匹配类工具必须能一眼看到自己的搜索范围。
     // VM 把这块放在图像区配置；我们同样画在主画布上（青框），可拖与否由编辑对象开关决定。
     if (HalconNode *hn = qobject_cast<HalconNode *>(node)) {
@@ -241,7 +270,7 @@ void ImageDisplayController::removeScene(FlowScene *scene)
     m_selectedOutputNodes.remove(scene);
 }
 
-bool ImageDisplayController::showNodeGeometry(NodeBase *node)
+bool ImageDisplayController::showNodeGeometry(NodeBase *node, bool preferSearchRegion)
 {
     if (!m_imageView)
         return false;
@@ -253,6 +282,30 @@ bool ImageDisplayController::showNodeGeometry(NodeBase *node)
         m_imageView->setFeaturePoints({});
         m_imageView->setRoiHandleEditEnabled(false);
         return false;
+    }
+
+    // VM 口径：检测区域（搜索区域）是画布上的主编辑对象，模板框只作只读参照。
+    // 只有真的设了检测区域（宽高 > 1）才走这条；没设=整图搜索，退回编辑模板框。
+    if (preferSearchRegion && hasSearchRegion(node)) {
+        const double col = hn->getParam(QStringLiteral("searchRegionCol")).toDouble();
+        const double row = hn->getParam(QStringLiteral("searchRegionRow")).toDouble();
+        const double w = hn->getParam(QStringLiteral("searchRegionWidth")).toDouble();
+        const double h = hn->getParam(QStringLiteral("searchRegionHeight")).toDouble();
+        if (w > 1.0 && h > 1.0) {
+            m_searchRegionNode = node;
+            m_geometryRoiNode = nullptr;
+            m_roiPickNode = nullptr;
+            RoiShape s;
+            s.type = RoiType::Rect;
+            s.p1 = QPointF(col, row);
+            s.p2 = QPointF(col + w, row + h);
+            m_imageView->setRoiEditable(false);
+            m_imageView->setRoiColor(QColor(0, 200, 255));
+            m_imageView->setRoiShape(s);
+            m_imageView->setFeaturePoints(hn->editorFeaturePoints());
+            m_imageView->setRoiHandleEditEnabled(true);
+            return true;
+        }
     }
     m_geometryRoiNode = node;
     m_searchRegionNode = nullptr;

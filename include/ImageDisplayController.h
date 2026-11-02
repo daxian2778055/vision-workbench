@@ -58,7 +58,9 @@ public:
     /// B3：主画布直接编辑算子几何 ROI（模板框/搜索框/卡尺线…）。
     /// 传 nullptr 关闭。返回 false = 该节点没有可编辑几何或无画布。
     /// 运行中调用是安全的：只写参数（线程安全），执行线程下一轮读到新值。
-    bool showNodeGeometry(NodeBase *node);
+    /// preferSearchRegion=true（默认，VM 口径）：有检测区域的工具，画布上的可编辑框就是
+    /// 搜索区域，模板框退为只读绿框；置 false 则改回编辑模板框句柄。
+    bool showNodeGeometry(NodeBase *node, bool preferSearchRegion = true);
     /// B3：主画布直接编辑该节点的「搜索区域」（模板匹配等有 searchRegion* 参数的工具）。
     /// 与几何编辑互斥；同样只写参数，运行中改下一轮生效。
     bool showNodeSearchRegion(NodeBase *node);
