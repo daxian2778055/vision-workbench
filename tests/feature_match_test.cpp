@@ -98,6 +98,8 @@ private slots:
     void templateSuggestParamsFollowsTemplate();
     // 屏蔽形状：最终掩膜 = 保留 − 屏蔽
     void templateExcludeShapesSubtractFromMask();
+    // 尺度模式=自动：按模板占比估出搜索范围，能命中 1.15 倍实例
+    void templateAutoScaleModeFindsScaledInstance();
 };
 
 namespace {
@@ -2074,6 +2076,66 @@ void FeatureMatchTest::templateExcludeShapesSubtractFromMask()
     QCOMPARE(back.excludes.size(), 1);
     QCOMPARE(back.excludes.first().type, RoiType::Circle);
     QCOMPARE(back.shapes.size(), 1);
+}
+
+// 尺度模式（VM 配置参数最后一项）：自动 = 按模板占搜索区的比例估出尺度范围。
+// 画布上放一个 1.15 倍的实例：
+//   scaleMode=0（手动，scaleMin=Max=1）→ 只能按 1.0 找，分数低、尺度=1；
+//   scaleMode=1 → 自动把范围扩到 ~0.77..1.3，命中 ≈1.15 的实例且分数更高。
+void FeatureMatchTest::templateAutoScaleModeFindsScaledInstance()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const cv::Mat patch = makePatch();
+    const QString tpl = dir.filePath(QStringLiteral("tpl.png"));
+    QVERIFY(cv::imwrite(tpl.toStdString(), patch));
+
+    cv::Mat canvas(400, 500, CV_8UC1, cv::Scalar(kCanvasBackground));
+    cv::Mat scaled;
+    cv::resize(patch, scaled, cv::Size(), 1.15, 1.15, cv::INTER_LINEAR);
+    const cv::Rect place(200, 150, scaled.cols, scaled.rows);
+    scaled.copyTo(canvas(place));
+    const double cx = place.x + scaled.cols / 2.0;
+    const double cy = place.y + scaled.rows / 2.0;
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.5);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("scaleMin"), 1.0);
+    node.setParam(QStringLiteral("scaleMax"), 1.0);
+    node.setParam(QStringLiteral("scaleStep"), 0.05);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("templatePath"), tpl);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+
+    node.setParam(QStringLiteral("scaleMode"), 0);      // 手动：只搜 1.0
+    node.run(false);
+    const double s0 = node.getParam(QStringLiteral("matchScore")).toDouble();
+    const double k0 = node.getParam(QStringLiteral("matchScale")).toDouble();
+
+    node.setParam(QStringLiteral("scaleMode"), 1);      // 自动：估出尺度范围
+    node.run(false);
+    const bool ok = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    const double s1 = node.getParam(QStringLiteral("matchScore")).toDouble();
+    const double k1 = node.getParam(QStringLiteral("matchScale")).toDouble();
+    const double col = node.getParam(QStringLiteral("matchCol")).toDouble();
+    const double row = node.getParam(QStringLiteral("matchRow")).toDouble();
+    qInfo("scale-mode: manual k=%.2f score=%.3f | auto k=%.2f score=%.3f at (%.1f,%.1f)", k0, s0,
+          k1, s1, col, row);
+
+    QVERIFY2(ok, "自动尺度模式下应命中");
+    QVERIFY2(qAbs(k1 - 1.15) <= 0.10,
+             qPrintable(QStringLiteral("自动模式应搜到 ≈1.15 的尺度，实际 %1").arg(k1)));
+    QVERIFY2(qAbs(k0 - 1.0) < 1e-6, "手动模式下尺度应固定 1.0");
+    QVERIFY2(s1 > s0,
+             qPrintable(QStringLiteral("按真实尺度匹配的分数应更高：%1 vs %2").arg(s1).arg(s0)));
+    QVERIFY2(qAbs(col - cx) <= 3.0 && qAbs(row - cy) <= 3.0,
+             qPrintable(QStringLiteral("命中位置应在 (%1,%2)，实际 (%3,%4)")
+                            .arg(cx).arg(cy).arg(col).arg(row)));
 }
 
 QTEST_MAIN(FeatureMatchTest)

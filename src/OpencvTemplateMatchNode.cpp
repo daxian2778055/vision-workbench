@@ -288,6 +288,8 @@ void OpencvTemplateMatchNode::init()
                       QStringLiteral("输出掩膜（把最终搜索区域作为具名子结果输出）")),
         makeIntParam(QStringLiteral("roiSource"), 0, 0, 1,
                      QStringLiteral("ROI创建：0=绘制（searchRegion*），1=继承上游命中框")),
+        makeIntParam(QStringLiteral("scaleMode"), 0, 0, 1,
+                     QStringLiteral("尺度模式：0=手动（scaleMin/Max/Step），1=自动按模板占比估范围")),
         makeDoubleParam(QStringLiteral("minScore"), 0.6, 0.0, 1.0,
                         QStringLiteral("最低匹配度")),
         // VM「配置参数」对齐（2026-11-02）：把原先写死的边缘参数放出来。
@@ -700,10 +702,20 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                             m_params.value(QStringLiteral("angleMax"), 30.0).toDouble(),
                             m_params.value(QStringLiteral("angleStep"), 2.0).toDouble(),
                             90, angles);
-        collectSearchValues(m_params.value(QStringLiteral("scaleMin"), 1.0).toDouble(),
-                            m_params.value(QStringLiteral("scaleMax"), 1.0).toDouble(),
-                            m_params.value(QStringLiteral("scaleStep"), 0.05).toDouble(),
-                            16, scales);
+        double sMin = m_params.value(QStringLiteral("scaleMin"), 1.0).toDouble();
+        double sMax = m_params.value(QStringLiteral("scaleMax"), 1.0).toDouble();
+        double sStep = m_params.value(QStringLiteral("scaleStep"), 0.05).toDouble();
+        if (m_params.value(QStringLiteral("scaleMode"), 0).toInt() == 1) {
+            // 尺度模式=自动（VM）：模板占搜索区越大，能缩放的空间越小。
+            // 覆盖 >25% 只留 ±10%；否则 ±30%（缩小侧与放大侧等幅度），步长 = 跨度/6。
+            const double tArea = double(tmpl.cols) * double(tmpl.rows);
+            const double sArea = double(gray.cols) * double(gray.rows);
+            const double span = (sArea > 1.0 && tArea / sArea > 0.25) ? 0.10 : 0.30;
+            sMin = 1.0 / (1.0 + span);
+            sMax = 1.0 + span;
+            sStep = (sMax - sMin) / 6.0;
+        }
+        collectSearchValues(sMin, sMax, sStep, 16, scales);
 
         const bool singleIdentity = (angles.size() == 1 && qAbs(angles.first()) < 1e-6
                                      && scales.size() == 1 && qAbs(scales.first() - 1.0) < 1e-6);
