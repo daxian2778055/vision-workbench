@@ -937,6 +937,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261031.18",
       "recorded_at": "2026-11-02",
       "recorded_note": "当前装机包：统一输出端口（模板匹配只留匹配结果一个输出点）+ 绘制入口诊断反馈（多边形/搜索区域点了没反应时会提示原因）。待做：多边形草稿交互若仍失败需加计数日志；B 批（搜索框可拖/点工具显示 ROI/训练后轮廓点）；C 批（ROI 跟随位置修正）"
+    },
+    {
+      "tag": "rc-20261102",
+      "commit": "c428df0ddcdae6a9edc9113c4cbeb00a40b4951c",
+      "exe_md5": "8929fbf89555fccf9c91025abbe62e25",
+      "exe_bytes": 10311168,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261102",
+      "recorded_at": "2026-11-02",
+      "recorded_note": "B1 全局单输出端口（所有工具只剩一个「输出」，第 2..N 输出折叠为具名子结果；老方案端口索引自动迁移）+ B2 编辑对象切换 + B3 主画布直接改 ROI（含运行中）+ 多边形 ROI 收笔修复；新增 SingleOutputPortTest / 掩膜腿"
     }
   ],
   "legacy_backfilled": [
