@@ -19,11 +19,10 @@
 #include <utility>
 #include <vector>
 
-QJsonObject TemplateEntry::toJson() const
+namespace {
+
+QJsonObject shapeToJsonObj(const RoiShape &shape)
 {
-    QJsonObject obj;
-    obj[QStringLiteral("name")] = name;
-    obj[QStringLiteral("image")] = imagePath;
     QJsonObject s;
     switch (shape.type) {
     case RoiType::Rect:
@@ -64,7 +63,59 @@ QJsonObject TemplateEntry::toJson() const
         s[QStringLiteral("type")] = QStringLiteral("none");
         break;
     }
-    obj[QStringLiteral("shape")] = s;
+    return s;
+}
+
+RoiShape shapeFromJsonObj(const QJsonObject &s)
+{
+    RoiShape shape;
+    const QString type = s.value(QStringLiteral("type")).toString();
+    if (type == QLatin1String("rect")) {
+        shape.type = RoiType::Rect;
+        shape.p1 = QPointF(s.value(QStringLiteral("x1")).toDouble(),
+                           s.value(QStringLiteral("y1")).toDouble());
+        shape.p2 = QPointF(s.value(QStringLiteral("x2")).toDouble(),
+                           s.value(QStringLiteral("y2")).toDouble());
+    } else if (type == QLatin1String("rot")) {
+        shape.type = RoiType::RotatedRect;
+        shape.p1 = QPointF(s.value(QStringLiteral("cx")).toDouble(),
+                           s.value(QStringLiteral("cy")).toDouble());
+        shape.width = s.value(QStringLiteral("w")).toDouble();
+        shape.height = s.value(QStringLiteral("h")).toDouble();
+        shape.angleDeg = s.value(QStringLiteral("angle")).toDouble();
+    } else if (type == QLatin1String("circle")) {
+        shape.type = RoiType::Circle;
+        shape.p1 = QPointF(s.value(QStringLiteral("cx")).toDouble(),
+                           s.value(QStringLiteral("cy")).toDouble());
+        shape.p2 = QPointF(s.value(QStringLiteral("ex")).toDouble(),
+                           s.value(QStringLiteral("ey")).toDouble());
+    } else if (type == QLatin1String("poly")) {
+        shape.type = RoiType::Polygon;
+        for (const QJsonValue &v : s.value(QStringLiteral("points")).toArray()) {
+            const QJsonArray xy = v.toArray();
+            if (xy.size() == 2)
+                shape.points.append(QPointF(xy[0].toDouble(), xy[1].toDouble()));
+        }
+    }
+    return shape;
+}
+
+}   // namespace
+
+QJsonObject TemplateEntry::toJson() const
+{
+    QJsonObject obj;
+    obj[QStringLiteral("name")] = name;
+    obj[QStringLiteral("image")] = imagePath;
+    const QVector<RoiShape> list = allShapes();
+    QJsonArray arr;
+    for (const RoiShape &s : list)
+        arr.append(shapeToJsonObj(s));
+    obj[QStringLiteral("shapes")] = arr;
+    // 老读取方只看 shape；保持它 = 第一块形状
+    obj[QStringLiteral("shape")] =
+        arr.isEmpty() ? QJsonObject{{QStringLiteral("type"), QStringLiteral("none")}}
+                      : arr.first().toObject();
     obj[QStringLiteral("edgeThreshold")] = edgeThreshold;
     obj[QStringLiteral("autoThreshold")] = autoThreshold;
     obj[QStringLiteral("aperture")] = aperture;
@@ -77,35 +128,17 @@ TemplateEntry TemplateEntry::fromJson(const QJsonObject &obj)
     TemplateEntry e;
     e.name = obj.value(QStringLiteral("name")).toString();
     e.imagePath = obj.value(QStringLiteral("image")).toString();
-    const QJsonObject s = obj.value(QStringLiteral("shape")).toObject();
-    const QString type = s.value(QStringLiteral("type")).toString();
-    if (type == QLatin1String("rect")) {
-        e.shape.type = RoiType::Rect;
-        e.shape.p1 = QPointF(s.value(QStringLiteral("x1")).toDouble(),
-                             s.value(QStringLiteral("y1")).toDouble());
-        e.shape.p2 = QPointF(s.value(QStringLiteral("x2")).toDouble(),
-                             s.value(QStringLiteral("y2")).toDouble());
-    } else if (type == QLatin1String("rot")) {
-        e.shape.type = RoiType::RotatedRect;
-        e.shape.p1 = QPointF(s.value(QStringLiteral("cx")).toDouble(),
-                             s.value(QStringLiteral("cy")).toDouble());
-        e.shape.width = s.value(QStringLiteral("w")).toDouble();
-        e.shape.height = s.value(QStringLiteral("h")).toDouble();
-        e.shape.angleDeg = s.value(QStringLiteral("angle")).toDouble();
-    } else if (type == QLatin1String("circle")) {
-        e.shape.type = RoiType::Circle;
-        e.shape.p1 = QPointF(s.value(QStringLiteral("cx")).toDouble(),
-                             s.value(QStringLiteral("cy")).toDouble());
-        e.shape.p2 = QPointF(s.value(QStringLiteral("ex")).toDouble(),
-                             s.value(QStringLiteral("ey")).toDouble());
-    } else if (type == QLatin1String("poly")) {
-        e.shape.type = RoiType::Polygon;
-        for (const QJsonValue &v : s.value(QStringLiteral("points")).toArray()) {
-            const QJsonArray xy = v.toArray();
-            if (xy.size() == 2)
-                e.shape.points.append(QPointF(xy[0].toDouble(), xy[1].toDouble()));
-        }
+    // 新格式：shapes 数组；老格式：单个 shape
+    for (const QJsonValue &v : obj.value(QStringLiteral("shapes")).toArray())
+        if (v.isObject())
+            e.shapes.append(shapeFromJsonObj(v.toObject()));
+    if (e.shapes.isEmpty()) {
+        const RoiShape s = shapeFromJsonObj(obj.value(QStringLiteral("shape")).toObject());
+        if (s.type != RoiType::None)
+            e.shapes.append(s);
     }
+    if (!e.shapes.isEmpty())
+        e.shape = e.shapes.first();
     e.edgeThreshold = obj.value(QStringLiteral("edgeThreshold")).toDouble(20.0);
     e.autoThreshold = obj.value(QStringLiteral("autoThreshold")).toBool(true);
     e.aperture = obj.value(QStringLiteral("aperture")).toInt(3);
@@ -620,30 +653,18 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                        cv::INTER_AREA);
         }
 
-        // 形状掩膜：多边形/圆模板的包围盒角外内容不参与打分
+        // 形状掩膜：多形状模板 / 多边形 / 圆的包围盒外内容不参与打分
         // （否则圆模板会拿四个角去匹配，等于把"圆"当成了"方"）。
         cv::Mat shapeMask;
-        if (active.shape.type == RoiType::Polygon || active.shape.type == RoiType::Circle) {
-            const QRectF box = roiAxisAlignedBounds(active.shape);
-            if (box.width() > 4 && box.height() > 4) {
-                shapeMask = cv::Mat::zeros(int(box.height() + 0.5), int(box.width() + 0.5), CV_8UC1);
-                if (active.shape.type == RoiType::Circle) {
-                    const double r = std::hypot(active.shape.p2.x() - active.shape.p1.x(),
-                                                active.shape.p2.y() - active.shape.p1.y());
-                    cv::circle(shapeMask,
-                               cv::Point(int(active.shape.p1.x() - box.x()),
-                                         int(active.shape.p1.y() - box.y())),
-                               int(r + 0.5), cv::Scalar(255), -1);
-                } else {
-                    std::vector<cv::Point> pts;
-                    pts.reserve(size_t(active.shape.points.size()));
-                    for (const QPointF &p : active.shape.points)
-                        pts.emplace_back(int(p.x() - box.x()), int(p.y() - box.y()));
-                    if (pts.size() >= 3)
-                        cv::fillPoly(shapeMask, std::vector<std::vector<cv::Point>>{pts},
-                                     cv::Scalar(255));
-                }
+        {
+            const QVector<RoiShape> shapeList = active.allShapes();
+            bool needMask = shapeList.size() > 1;
+            for (const RoiShape &s : shapeList) {
+                if (s.type == RoiType::Polygon || s.type == RoiType::Circle)
+                    needMask = true;
             }
+            if (needMask)
+                shapeMask = shapesMask(shapeList, shapesBounds(shapeList));
         }
 
         // 缓存键：模板身份（尺寸 + 路径）+ 角度 + 尺度
@@ -1317,12 +1338,73 @@ QVector<QPointF> OpencvTemplateMatchNode::editorFeaturePoints() const
     const int aperture = qBound(3, active.aperture, 7) | 1;
     const double threshold =
         effectiveEdgeThresholdFor(tmpl, aperture, active.edgeThreshold, active.autoThreshold);
-    return featurePointsForPatch(tmpl, geometryRoi(), threshold, aperture);
+    const QVector<RoiShape> shapeList = active.allShapes();
+    cv::Mat shapeMask;
+    bool needMask = shapeList.size() > 1;
+    for (const RoiShape &s : shapeList) {
+        if (s.type == RoiType::Polygon || s.type == RoiType::Circle)
+            needMask = true;
+    }
+    if (needMask)
+        shapeMask = shapesMask(shapeList, shapesBounds(shapeList));
+    return featurePointsForPatch(tmpl, geometryRoi(), threshold, aperture, shapeMask);
+}
+
+QRectF OpencvTemplateMatchNode::shapesBounds(const QVector<RoiShape> &shapes)
+{
+    QRectF box;
+    for (const RoiShape &s : shapes) {
+        const QRectF b = roiAxisAlignedBounds(s);
+        if (b.width() <= 1.0 || b.height() <= 1.0)
+            continue;
+        box = box.isNull() ? b : box.united(b);
+    }
+    return box;
+}
+
+cv::Mat OpencvTemplateMatchNode::shapesMask(const QVector<RoiShape> &shapes, const QRectF &box)
+{
+    if (box.width() <= 4.0 || box.height() <= 4.0)
+        return {};
+    const int w = int(box.width() + 0.5);
+    const int h = int(box.height() + 0.5);
+    cv::Mat mask = cv::Mat::zeros(h, w, CV_8UC1);
+    const int ox = int(box.x());
+    const int oy = int(box.y());
+    bool any = false;
+    for (const RoiShape &s : shapes) {
+        if (s.type == RoiType::Circle) {
+            const double r = std::hypot(s.p2.x() - s.p1.x(), s.p2.y() - s.p1.y());
+            if (r <= 1.0)
+                continue;
+            cv::circle(mask, cv::Point(int(s.p1.x()) - ox, int(s.p1.y()) - oy), int(r + 0.5),
+                       cv::Scalar(255), -1);
+            any = true;
+        } else if (s.type == RoiType::Polygon && s.points.size() >= 3) {
+            std::vector<cv::Point> pts;
+            pts.reserve(size_t(s.points.size()));
+            for (const QPointF &p : s.points)
+                pts.emplace_back(int(p.x()) - ox, int(p.y()) - oy);
+            cv::fillPoly(mask, std::vector<std::vector<cv::Point>>{pts}, cv::Scalar(255));
+            any = true;
+        } else if (s.type == RoiType::Rect || s.type == RoiType::RotatedRect) {
+            const QRectF b = roiAxisAlignedBounds(s);
+            if (b.width() <= 1.0 || b.height() <= 1.0)
+                continue;
+            cv::rectangle(mask, cv::Rect(int(b.x()) - ox, int(b.y()) - oy, int(b.width()), int(b.height())),
+                          cv::Scalar(255), -1);
+            any = true;
+        }
+    }
+    if (!any)
+        return {};
+    return mask;
 }
 
 QVector<QPointF> OpencvTemplateMatchNode::featurePointsForPatch(const cv::Mat &tmpl,
                                                                const RoiShape &roi,
-                                                               double threshold, int aperture)
+                                                               double threshold, int aperture,
+                                                               const cv::Mat &mask)
 {
     if (tmpl.empty())
         return {};
@@ -1355,6 +1437,10 @@ QVector<QPointF> OpencvTemplateMatchNode::featurePointsForPatch(const cv::Mat &t
         const float *magRow = mag.ptr<float>(v);
         for (int u = 0; u < w; u += stride) {
             if (magRow[u] <= float(threshold))
+                continue;
+            // 形状掩膜外（多形状/圆/多边形的角外）不算特征点——与打分口径一致
+            if (!mask.empty() && mask.type() == CV_8U && mask.size() == tmpl.size()
+                && mask.at<uchar>(v, u) == 0)
                 continue;
             if (axisAligned) {
                 pts.append(QPointF(x0 + u, y0 + v));

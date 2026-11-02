@@ -80,6 +80,8 @@ private slots:
     void templateWandPolygonFollowsRegion();
     // 链长模式：可见率门槛必须真的能把遮挡过多的候选判无效
     void templateMinVisibleRatioControlsOcclusion();
+    // 多形状模板：JSON 往返 + 并集包围盒/并集掩膜
+    void templateMultiShapeEntryAndMask();
 };
 
 namespace {
@@ -1638,6 +1640,45 @@ void FeatureMatchTest::templateMinVisibleRatioControlsOcclusion()
     qInfo("visible-ratio 0.7: ok=%d score=%.3f", int(ok07), score07);
     QVERIFY2(!ok07, qPrintable(QStringLiteral("门槛 0.7 时可见率只有 ~38%%，却仍判成功（score=%1）")
                                    .arg(score07)));
+}
+
+// 多形状模板：一个模板由"矩形 + 圆"两块组成。
+// 关键契约：裁剪包围盒 = 并集、评分掩膜 = 并集、老字段 shape = 第一块。
+void FeatureMatchTest::templateMultiShapeEntryAndMask()
+{
+    RoiShape r;
+    r.type = RoiType::Rect;
+    r.p1 = QPointF(10, 20);
+    r.p2 = QPointF(60, 70);
+
+    RoiShape c;
+    c.type = RoiType::Circle;
+    c.p1 = QPointF(120, 60);
+    c.p2 = QPointF(150, 60);      // 半径 30
+
+    TemplateEntry e;
+    e.shapes = {r, c};
+    e.shape = r;
+
+    const TemplateEntry back = TemplateEntry::fromJson(e.toJson());
+    QCOMPARE(back.shapes.size(), 2);
+    QCOMPARE(back.shapes.at(0).type, RoiType::Rect);
+    QCOMPARE(back.shapes.at(1).type, RoiType::Circle);
+    QCOMPARE(back.shape.type, RoiType::Rect);       // 老字段 = 第一块
+
+    const QRectF box = OpencvTemplateMatchNode::shapesBounds(e.shapes);
+    QVERIFY2(qAbs(box.x() - 10.0) <= 0.5 && qAbs(box.y() - 20.0) <= 0.5
+                 && qAbs(box.right() - 150.0) <= 0.5 && qAbs(box.bottom() - 90.0) <= 0.5,
+             qPrintable(QStringLiteral("并集包围盒错：(%1,%2)-(%3,%4)")
+                            .arg(box.x()).arg(box.y()).arg(box.right()).arg(box.bottom())));
+
+    const cv::Mat mask = OpencvTemplateMatchNode::shapesMask(e.shapes, box);
+    QVERIFY2(!mask.empty(), "并集掩膜为空");
+    QCOMPARE(mask.cols, 140);
+    QCOMPARE(mask.rows, 70);
+    QVERIFY2(mask.at<uchar>(5, 5) == 255, "矩形内部应为保留区");
+    QVERIFY2(mask.at<uchar>(10, 70) == 0, "两块形状之间应为排除区");
+    QVERIFY2(mask.at<uchar>(40, 110) == 255, "圆心处应为保留区");
 }
 
 QTEST_MAIN(FeatureMatchTest)

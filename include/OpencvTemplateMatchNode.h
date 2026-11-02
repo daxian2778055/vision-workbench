@@ -11,7 +11,9 @@ struct TemplateEntry
 {
     QString name;                       ///< 显示名（默认取文件名）
     QString imagePath;                  ///< 模板图路径（相对项目目录或绝对）
-    RoiShape shape;                     ///< 建模板时的形状（编辑器回显/重画用）
+    RoiShape shape;                     ///< 主形状（=shapes.first()，老字段兼容）
+    /// 全部形状（VM 一个模板可由多块形状组成）。空 = 回退 shape。
+    QVector<RoiShape> shapes;
     double edgeThreshold = 20.0;        ///< 对比度阈值（手动模式）
     bool autoThreshold = true;          ///< 阈值模式：true=自动（模板梯度分位数）
     int aperture = 3;                   ///< 特征尺度（Sobel 核 3/5/7）
@@ -19,6 +21,13 @@ struct TemplateEntry
 
     QJsonObject toJson() const;
     static TemplateEntry fromJson(const QJsonObject &obj);
+    /// 参与匹配的形状集合（shapes 为空时返回 {shape}）
+    QVector<RoiShape> allShapes() const
+    {
+        if (!shapes.isEmpty())
+            return shapes;
+        return shape.type == RoiType::None ? QVector<RoiShape>() : QVector<RoiShape>{shape};
+    }
 };
 
 /// OpenCV 模板匹配节点：cv::matchTemplate（灰度/NCC），支持从图像训练保存模板
@@ -65,7 +74,14 @@ public:
     /// 有效边缘阈值（显式传入本模板参数；run/可视化/对话框共用）
     static double effectiveEdgeThresholdFor(const cv::Mat &tmpl, int aperture,
                                             double manualThreshold, bool autoMode);
-    /// 模板块 → 图像坐标的强梯度点（对话框预览与编辑器共用同一映射）
+    /// 模板块 → 图像坐标的强梯度点（对话框预览与编辑器共用同一映射）。
+    /// mask 非空且尺寸与模板块一致时，掩膜外（值为 0）的点被跳过。
     static QVector<QPointF> featurePointsForPatch(const cv::Mat &tmpl, const RoiShape &roi,
-                                                  double threshold, int aperture);
+                                                  double threshold, int aperture,
+                                                  const cv::Mat &mask = cv::Mat());
+
+    /// 多形状模板：所有形状的并集包围盒（裁剪口径的唯一出处）
+    static QRectF shapesBounds(const QVector<RoiShape> &shapes);
+    /// 多形状模板：并集形状掩膜（8U，255=保留），尺寸 = shapesBounds 的四舍五入
+    static cv::Mat shapesMask(const QVector<RoiShape> &shapes, const QRectF &box);
 };

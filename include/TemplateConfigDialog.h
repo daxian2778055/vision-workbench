@@ -73,7 +73,8 @@ private:
     QSpinBox *m_wandTol = nullptr;
     bool m_wandMode = false;
 
-    RoiShape m_shape;
+    RoiShape m_shape;              ///< 主形状（=m_shapes.first()，老逻辑兼容）
+    QVector<RoiShape> m_shapes;    ///< 全部形状（一个模板可由多块组成）
     cv::Mat m_trainGray;      ///< 训练用灰度图（当前输入图或"选择其他图像"）
     QString m_trainLabel;     ///< 图上角标：输入源名/文件名
     QString m_savePath;       ///< 模板存图目标（空 = 确定时再问）
