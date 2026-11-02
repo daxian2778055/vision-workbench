@@ -955,6 +955,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261102.1",
       "recorded_at": "2026-11-02",
       "recorded_note": "VM 对齐第二批：模板对象/模板配置窗/多模板同时匹配/结果表 7 列/多边形圆形形状掩膜/套索+魔术棒/链长模式；模板块坐标契约未动"
+    },
+    {
+      "tag": "rc-20261102.2",
+      "commit": "63c04fb9ca1e16c3b06e6dbe214e7814cb814cb6",
+      "exe_md5": "e35071e02e001ab7af170d8c6bbe201d",
+      "exe_bytes": 10466304,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261102.2",
+      "recorded_at": "2026-11-02",
+      "recorded_note": "模板工程化第二批：模板对象/模板配置窗/多模板同时匹配/结果表7列/多形状/图像型ROI/输出掩膜/匹配中心锁定/分割剪刀/继承ROI"
     }
   ],
   "legacy_backfilled": [
