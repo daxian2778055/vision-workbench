@@ -2443,8 +2443,9 @@ void ParamPanelBindingTest::testUnnamedFindChildSitesAreSingleCandidate()
     // 249 → 256 → 269（2026-10-28）：再加 ObjectCountingNode 的 dnnBackend/resetOnStart/yoloLayout（+2026-10-29 补登记的 scale/swapRB/mean）与 DnnDetectNode 的 dnnBackend/yoloLayout（原在 registerParams 之外，P1-8 修好后真正上面板）
     // 284 → 288（2026-11-02）：模板匹配对齐 VM 配置参数，新增
     // edgeThreshold / autoEdgeThreshold / edgeAperture / coarseLongSide 四个字段
-    QVERIFY2(fieldSlots == 288,
-             qPrintable(QStringLiteral("字段槽位分母从 288 变成 %1 ⇒ 本闸口径已漂移，"
+    // → 289：多模板同时匹配开关 matchAllTemplates
+    QVERIFY2(fieldSlots == 289,
+             qPrintable(QStringLiteral("字段槽位分母从 289 变成 %1 ⇒ 本闸口径已漂移，"
                                        "先核对面板改动再把基准一起改").arg(fieldSlots)));
     QVERIFY2(badSlots.isEmpty(),
              qPrintable(QStringLiteral("U5-MULTI: %1 个字段槽位里同类型候选不止一个 ⇒ 站点 1 的无名 "

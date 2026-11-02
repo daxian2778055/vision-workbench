@@ -216,6 +216,8 @@ void OpencvTemplateMatchNode::init()
                      QStringLiteral("是否考虑极性：1=考虑（默认），0=忽略（亮标/暗标反色也能找到）")),
         makeIntParam(QStringLiteral("maxMatches"), 1, 1, 16,
                      QStringLiteral("最多匹配个数（1=只输出最优；多件场景调大）")),
+        makeBoolParam(QStringLiteral("matchAllTemplates"), false,
+                      QStringLiteral("多模板同时匹配（模板列表逐个跑，取最高分）")),
         makeDoubleParam(QStringLiteral("minScore"), 0.6, 0.0, 1.0,
                         QStringLiteral("最低匹配度")),
         // VM「配置参数」对齐（2026-11-02）：把原先写死的边缘参数放出来。
@@ -353,7 +355,49 @@ cv::Mat edgeDistanceField(const cv::Mat &edge8u)
 }
 }   // namespace
 
-void OpencvTemplateMatchNode::run(bool /*autoSwitch*/)
+void OpencvTemplateMatchNode::run(bool autoSwitch)
+{
+    // 多模板同时匹配（VM 的「特征模板」页语义）：逐个模板跑完整流程，取分数最高者。
+    // 为什么要重跑一次：单模板流程末尾会把结果写成"本次命中"，直接汇总中间态很容易
+    // 漏掉叠加/Measurement 的字段；用最优模板再跑一遍，所有产出与单模板路径完全一致。
+    // 代价：N 个模板 ≈ N 倍匹配时间（2~3 个模板在 100~500ms 量级，可接受）。
+    const QVector<TemplateEntry> entries = templates();
+    const bool train = m_params.value(QStringLiteral("trainFromImage"), false).toBool();
+    const bool matchAll =
+        entries.size() > 1 && !train
+        && m_params.value(QStringLiteral("matchAllTemplates"), false).toBool();
+    if (!matchAll) {
+        runSingle(autoSwitch);
+        return;
+    }
+
+    const int savedIndex = activeTemplateIndex();
+    double bestScore = -1e9;
+    int bestIdx = -1;
+    for (int i = 0; i < entries.size(); ++i) {
+        m_params[QStringLiteral("templateIndex")] = i;
+        runSingle(autoSwitch);
+        const double score = m_params.value(QStringLiteral("matchScore"), 0.0).toDouble();
+        if (m_params.value(QStringLiteral("moduleStatus"), false).toBool() && score > bestScore) {
+            bestScore = score;
+            bestIdx = i;
+        }
+    }
+
+    if (bestIdx >= 0) {
+        m_params[QStringLiteral("templateIndex")] = bestIdx;
+        runSingle(autoSwitch);            // 用命中模板再跑一次：结果/叠加/输出对象一次成型
+        m_params[QStringLiteral("matchTemplateIndex")] = bestIdx;
+        m_params[QStringLiteral("matchTemplateName")] = entries.at(bestIdx).name;
+    } else {
+        m_params[QStringLiteral("templateIndex")] = savedIndex;
+        m_params[QStringLiteral("matchTemplateIndex")] = -1;
+        m_params[QStringLiteral("matchTemplateName")] = QString();
+        m_params[QStringLiteral("moduleStatus")] = false;   // 失败原因保留最后一次模板的 lastError
+    }
+}
+
+void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
 {
     try {
         HImage input(m_inputImage);

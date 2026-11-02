@@ -71,6 +71,8 @@ private slots:
     void templateEntryRoundTripAndLegacyMigration();
     // 模板列表驱动匹配：切 active 索引，命中必须跟着换模板
     void templateMatchUsesActiveTemplateFromList();
+    // 多模板同时匹配：画布只有 B 时，开关打开后必须自动选中模板 B
+    void templateMatchAllTemplatesPicksBest();
 };
 
 namespace {
@@ -1421,6 +1423,78 @@ void FeatureMatchTest::templateMatchUsesActiveTemplateFromList()
     QVERIFY2(qAbs(c1 - cxB) <= 2.0 && qAbs(r1 - cyB) <= 2.0,
              qPrintable(QStringLiteral("模板 B 应命中 (%1,%2)，实际 (%3,%4)")
                             .arg(cxB).arg(cyB).arg(c1).arg(r1)));
+}
+
+// 多模板同时匹配：列表里 A/B 两块模板，画布上只有 B。
+//  ① 关（默认）：按 active=0（A）跑，判红；
+//  ② 开：逐个模板跑，自动选中 B 并给出正确的 matchTemplateIndex / 位置。
+void FeatureMatchTest::templateMatchAllTemplatesPicksBest()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const cv::Mat patchA = makePatch();
+    cv::Mat patchB(kTemplateSize, kTemplateSize, CV_8UC1, cv::Scalar(20));
+    cv::circle(patchB, cv::Point(64, 64), 50, cv::Scalar(255), 6);
+    cv::circle(patchB, cv::Point(64, 64), 26, cv::Scalar(190), 4);
+    cv::line(patchB, cv::Point(12, 12), cv::Point(116, 116), cv::Scalar(240), 3);
+
+    const QString pathA = dir.filePath(QStringLiteral("a.png"));
+    const QString pathB = dir.filePath(QStringLiteral("b.png"));
+    QVERIFY(cv::imwrite(pathA.toStdString(), patchA));
+    QVERIFY(cv::imwrite(pathB.toStdString(), patchB));
+
+    cv::Mat canvas(300, 600, CV_8UC1, cv::Scalar(kCanvasBackground));
+    const cv::Rect boxB(360, 90, kTemplateSize, kTemplateSize);
+    patchB.copyTo(canvas(boxB));                       // 只放 B
+    const double cxB = boxB.x + kTemplateSize / 2.0;
+    const double cyB = boxB.y + kTemplateSize / 2.0;
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.5);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("searchRegionCol"), 0);
+    node.setParam(QStringLiteral("searchRegionRow"), 0);
+    node.setParam(QStringLiteral("searchRegionWidth"), canvas.cols);
+    node.setParam(QStringLiteral("searchRegionHeight"), canvas.rows);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+
+    TemplateEntry ea;
+    ea.name = QStringLiteral("A");
+    ea.imagePath = pathA;
+    TemplateEntry eb;
+    eb.name = QStringLiteral("B");
+    eb.imagePath = pathB;
+    node.setTemplates({ea, eb});
+    node.setActiveTemplateIndex(0);                    // 默认挂在 A 上
+
+    // ① 关闭多模板：A 不在画面里 ⇒ 判红
+    node.setParam(QStringLiteral("matchAllTemplates"), false);
+    node.run(false);
+    QVERIFY2(!node.getParam(QStringLiteral("moduleStatus")).toBool(),
+             "画布只有 B，却用 A 匹配成功了 —— 单模板路径不该扫到别的模板");
+
+    // ② 打开多模板：必须自动选中 B
+    node.setParam(QStringLiteral("matchAllTemplates"), true);
+    node.run(false);
+    const bool ok = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    const int idx = node.getParam(QStringLiteral("matchTemplateIndex")).toInt();
+    const QString name = node.getParam(QStringLiteral("matchTemplateName")).toString();
+    const double col = node.getParam(QStringLiteral("matchCol")).toDouble();
+    const double row = node.getParam(QStringLiteral("matchRow")).toDouble();
+    qInfo("all-templates: ok=%d index=%d name=%s at (%.1f, %.1f)",
+          int(ok), idx, qPrintable(name), col, row);
+    QVERIFY2(ok, "多模板模式下应当由 B 命中");
+    QCOMPARE(idx, 1);
+    QCOMPARE(name, QStringLiteral("B"));
+    QVERIFY2(qAbs(col - cxB) <= 2.0 && qAbs(row - cyB) <= 2.0,
+             qPrintable(QStringLiteral("命中位置应在 B (%1,%2)，实际 (%3,%4)")
+                            .arg(cxB).arg(cyB).arg(col).arg(row)));
 }
 
 QTEST_MAIN(FeatureMatchTest)

@@ -30,6 +30,8 @@ public:
 
     void init() override;
     void run(bool autoSwitch = true) override;
+    /// 单个模板的完整匹配流程（原 run 的实现）。多模板模式由 run() 逐模板调用后取最优。
+    void runSingle(bool autoSwitch);
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;
 
