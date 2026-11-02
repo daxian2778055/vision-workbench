@@ -946,6 +946,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261102",
       "recorded_at": "2026-11-02",
       "recorded_note": "B1 全局单输出端口（所有工具只剩一个「输出」，第 2..N 输出折叠为具名子结果；老方案端口索引自动迁移）+ B2 编辑对象切换 + B3 主画布直接改 ROI（含运行中）+ 多边形 ROI 收笔修复；新增 SingleOutputPortTest / 掩膜腿"
+    },
+    {
+      "tag": "rc-20261102.1",
+      "commit": "2fee91d30a2d0598dec0ea6335c008c1dc453f74",
+      "exe_md5": "3401b9ffff41964c86d1ab7635b3d345",
+      "exe_bytes": 10426880,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261102.1",
+      "recorded_at": "2026-11-02",
+      "recorded_note": "VM 对齐第二批：模板对象/模板配置窗/多模板同时匹配/结果表 7 列/多边形圆形形状掩膜/套索+魔术棒/链长模式；模板块坐标契约未动"
     }
   ],
   "legacy_backfilled": [
