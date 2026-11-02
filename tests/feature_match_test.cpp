@@ -92,6 +92,8 @@ private slots:
     void templateSplitShapeByCut();
     // 继承 ROI：上游命中框当成搜索区域（框外的更优候选不许抢）
     void templateInheritsUpstreamBoxAsSearchRegion();
+    // 魔术棒 / 魔术棒+：替换 vs 追加
+    void templateWandPlusAppends();
 };
 
 namespace {
@@ -1958,6 +1960,39 @@ void FeatureMatchTest::templateInheritsUpstreamBoxAsSearchRegion()
     qInfo("inherit-roi: 继承模式命中 (%.1f, %.1f)", c1, r1);
     QVERIFY2(qAbs(c1 - leftCx) <= 2.0 && qAbs(r1 - leftCy) <= 2.0,
              qPrintable(QStringLiteral("继承上游框后应只在左侧搜，实际 (%1, %2)").arg(c1).arg(r1)));
+}
+
+// 魔术棒 / 魔术棒+（VM 工具条上成对的两个按钮）：
+//   魔术棒 = 用取到的区域替换当前选择；魔术棒+ = 追加一块；取不到时不许误清空。
+void FeatureMatchTest::templateWandPlusAppends()
+{
+    cv::Mat img(200, 200, CV_8UC1, cv::Scalar(240));
+    cv::rectangle(img, cv::Rect(50, 40, 100, 80), cv::Scalar(40), cv::FILLED);
+
+    RoiShape existing;
+    existing.type = RoiType::Rect;
+    existing.p1 = QPointF(0, 0);
+    existing.p2 = QPointF(20, 20);
+    const QVector<RoiShape> base{existing};
+
+    const QVector<RoiShape> replaced =
+        TemplateConfigDialog::applyWand(base, img, QPoint(100, 80), 20, false);
+    QCOMPARE(replaced.size(), 1);
+    QCOMPARE(replaced.first().type, RoiType::Polygon);
+    QVERIFY(replaced.first().points.size() >= 4);
+
+    const QVector<RoiShape> appended =
+        TemplateConfigDialog::applyWand(base, img, QPoint(100, 80), 20, true);
+    qInfo("wand-plus: base=1 -> append=%d", int(appended.size()));
+    QCOMPARE(appended.size(), 2);
+    QCOMPARE(appended.at(0).type, RoiType::Rect);       // 原形状保留
+    QCOMPARE(appended.at(1).type, RoiType::Polygon);    // 新取到的追加在后
+
+    // 取不到区域（空图）时保持原样，绝不误清空
+    const QVector<RoiShape> failed =
+        TemplateConfigDialog::applyWand(base, cv::Mat(), QPoint(100, 80), 20, false);
+    QCOMPARE(failed.size(), 1);
+    QCOMPARE(failed.first().type, RoiType::Rect);
 }
 
 QTEST_MAIN(FeatureMatchTest)

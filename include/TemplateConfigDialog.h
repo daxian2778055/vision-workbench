@@ -44,6 +44,11 @@ public:
     static QVector<RoiShape> splitShape(const RoiShape &shape, const QPointF &cutA = QPointF(),
                                         const QPointF &cutB = QPointF(), bool hasCut = false);
 
+    /// 魔术棒取形并合并到当前形状列表：append=true 追加（魔术棒+），false 替换（魔术棒）。
+    /// 取不到区域时原样返回（不允许把已有形状误清空）。
+    static QVector<RoiShape> applyWand(const QVector<RoiShape> &current, const cv::Mat &gray,
+                                       const QPoint &seed, int tolerance, bool append);
+
 private slots:
     void onPickRect();
     void onPickPolygon();
@@ -85,6 +90,7 @@ private:
     QCheckBox *m_anchorLock = nullptr;
     bool m_wandMode = false;
     bool m_cutMode = false;        ///< 剪刀：等用户画一条线
+    bool m_wandAppend = false;     ///< 魔术棒+：取到的区域追加到现有形状
 
     RoiShape m_shape;              ///< 主形状（=m_shapes.first()，老逻辑兼容）
     QVector<RoiShape> m_shapes;    ///< 全部形状（一个模板可由多块组成）

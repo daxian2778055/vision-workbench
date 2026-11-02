@@ -54,6 +54,7 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     auto *shapeCircleBtn = new QPushButton(QStringLiteral("圆形"));
     auto *shapeFreeBtn = new QPushButton(QStringLiteral("自由绘制"));
     auto *shapeWandBtn = new QPushButton(QStringLiteral("魔术棒"));
+    auto *shapeWandPlusBtn = new QPushButton(QStringLiteral("魔术棒+"));
     m_wandTol = new QSpinBox();
     m_wandTol->setRange(1, 120);
     m_wandTol->setValue(30);
@@ -67,6 +68,7 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     top->addWidget(shapeCircleBtn);
     top->addWidget(shapeFreeBtn);
     top->addWidget(shapeWandBtn);
+    top->addWidget(shapeWandPlusBtn);
     top->addWidget(m_wandTol);
     top->addWidget(clearShapeBtn);
     top->addWidget(delShapeBtn);
@@ -183,7 +185,14 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     connect(shapePolyBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onPickPolygon);
     connect(shapeCircleBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onPickCircle);
     connect(shapeFreeBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onPickFreehand);
-    connect(shapeWandBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onPickWand);
+    connect(shapeWandBtn, &QPushButton::clicked, this, [this]() {
+        m_wandAppend = false;      // 魔术棒：替换当前选择
+        onPickWand();
+    });
+    connect(shapeWandPlusBtn, &QPushButton::clicked, this, [this]() {
+        m_wandAppend = true;       // 魔术棒+：追加一块
+        onPickWand();
+    });
     connect(m_view, &HalconWindow::imageClicked, this, &TemplateConfigDialog::onImageClicked);
     connect(clearShapeBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onClearShape);
     connect(splitBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onSplitShape);
@@ -342,8 +351,11 @@ void TemplateConfigDialog::onPickWand()
     m_view->setRoiEditable(false);
     m_wandMode = true;
     m_view->setCursor(Qt::PointingHandCursor);
-    m_hint->setText(QStringLiteral("点图像里要提取的区域（容差 %1）；泛洪取形后自动转成多边形。")
-                        .arg(m_wandTol->value()));
+    m_hint->setText(m_wandAppend
+                        ? QStringLiteral("点要追加提取的区域（容差 %1）；取到的区域会加到现有形状上。")
+                              .arg(m_wandTol->value())
+                        : QStringLiteral("点要提取的区域（容差 %1）；取形后会替换当前形状。")
+                              .arg(m_wandTol->value()));
 }
 
 QVector<QPointF> TemplateConfigDialog::wandPolygon(const cv::Mat &gray, const QPoint &seed,
@@ -379,6 +391,23 @@ QVector<QPointF> TemplateConfigDialog::wandPolygon(const cv::Mat &gray, const QP
     out.reserve(int(approx.size()));
     for (const cv::Point &p : approx)
         out.append(QPointF(p.x, p.y));
+    return out;
+}
+
+QVector<RoiShape> TemplateConfigDialog::applyWand(const QVector<RoiShape> &current,
+                                                 const cv::Mat &gray, const QPoint &seed,
+                                                 int tolerance, bool append)
+{
+    const QVector<QPointF> pts = wandPolygon(gray, seed, tolerance);
+    if (pts.size() < 3)
+        return current;                     // 取不到就保持原样，绝不误清空
+    RoiShape s;
+    s.type = RoiType::Polygon;
+    s.points = pts;
+    if (!append)
+        return QVector<RoiShape>{s};       // 魔术棒：替换当前选择
+    QVector<RoiShape> out = current;       // 魔术棒+：追加一块
+    out.append(s);
     return out;
 }
 
@@ -503,27 +532,27 @@ void TemplateConfigDialog::onImageClicked(const QPointF &imagePos)
 {
     if (!m_wandMode || m_trainGray.empty())
         return;
-    const QVector<QPointF> pts = wandPolygon(
-        m_trainGray, QPoint(int(imagePos.x()), int(imagePos.y())), m_wandTol->value());
+    const QPoint seed(int(imagePos.x()), int(imagePos.y()));
+    const QVector<QPointF> pts = wandPolygon(m_trainGray, seed, m_wandTol->value());
     if (pts.size() < 3) {
         m_hint->setText(QStringLiteral("魔术棒没取到区域：换个点或调大容差再试。"));
         return;
     }
 
-    RoiShape s;
-    s.type = RoiType::Polygon;
-    s.points = pts;
-
-    m_shape = s;
+    m_shapes = applyWand(m_shapes, m_trainGray, seed, m_wandTol->value(), m_wandAppend);
+    m_shape = m_shapes.isEmpty() ? RoiShape() : m_shapes.last();
     m_wandMode = false;
     m_view->setRoiEditable(false);
     m_view->setRoiColor(QColor(0, 200, 255));
-    m_view->setRoiShape(s);
+    if (m_shape.type != RoiType::None)
+        m_view->setRoiShape(m_shape);
     m_view->setRoiHandleEditEnabled(true);
     refreshShapeList();
     syncAutoParamsToUi();
     refreshFeaturePreview();
-    m_hint->setText(QStringLiteral("魔术棒已取形：%1 个顶点。").arg(s.points.size()));
+    m_hint->setText(QStringLiteral("魔术棒已取形：%1 个顶点（共 %2 块形状）。")
+                        .arg(pts.size())
+                        .arg(m_shapes.size()));
 }
 
 void TemplateConfigDialog::onClearShape()
