@@ -95,14 +95,49 @@ static QIcon vmToolIcon(const QString &kind)
             p.drawLine(QPointF(23, 18), QPointF(23, 25));
             p.drawLine(QPointF(20, 21.5), QPointF(26, 21.5));
         }
+    } else if (kind == QLatin1String("clear")) {
+        // 清除形状：圆 + 斜杠（"清空"），不要和垃圾桶（删除选中）撞脸
+        p.drawEllipse(6, 6, 16, 16);
+        p.drawLine(QPointF(9, 9), QPointF(19, 19));
+    } else if (kind == QLatin1String("scissors")) {
+        // 分割：一个被竖虚线切开的矩形（左右各一块）
+        p.drawRect(5, 8, 8, 12);
+        p.drawRect(15, 8, 8, 12);
+        QPen dashed = p.pen();
+        dashed.setStyle(Qt::DashLine);
+        p.setPen(dashed);
+        p.drawLine(QPointF(14, 4), QPointF(14, 24));
+    } else if (kind == QLatin1String("cut")) {
+        // 剪刀：两片刀刃 + 两个指环，和上面的"分割"一眼可分
+        p.drawEllipse(5, 17, 6, 6);
+        p.drawEllipse(5, 5, 6, 6);
+        p.drawLine(QPointF(10, 8), QPointF(23, 21));
+        p.drawLine(QPointF(10, 20), QPointF(23, 7));
+    } else if (kind == QLatin1String("brush")) {
+        p.drawRoundedRect(5, 13, 14, 8, 2, 2);
+        p.drawLine(QPointF(19, 13), QPointF(24, 8));
+        p.drawLine(QPointF(22, 6), QPointF(26, 10));
+        p.drawPoint(QPointF(8, 17));
+        p.drawPoint(QPointF(12, 17));
+    } else if (kind == QLatin1String("eraserdots")) {
+        p.drawRect(6, 12, 13, 7);
+        p.drawLine(QPointF(8, 12), QPointF(15, 5));
+        p.drawPoint(QPointF(21, 18));
+        p.drawPoint(QPointF(24, 15));
+        p.drawPoint(QPointF(21, 12));
     } else if (kind == QLatin1String("eraser")) {
         p.drawRect(7, 12, 14, 7);
         p.drawLine(QPointF(9, 12), QPointF(16, 5));
         p.drawLine(QPointF(20, 12), QPointF(23, 7));
     } else if (kind == QLatin1String("delete")) {
-        p.drawRect(9, 9, 10, 14);
+        // 删除选中：垃圾桶（桶身竖线 + 桶盖 + 提手），与"清除形状"的圆斜杠区分
         p.drawLine(QPointF(6, 9), QPointF(22, 9));
-        p.drawLine(QPointF(12, 6), QPointF(16, 6));
+        p.drawLine(QPointF(11, 6), QPointF(17, 6));
+        p.drawLine(QPointF(9, 9), QPointF(10, 23));
+        p.drawLine(QPointF(10, 23), QPointF(18, 23));
+        p.drawLine(QPointF(18, 23), QPointF(19, 9));
+        p.drawLine(QPointF(13, 12), QPointF(13, 20));
+        p.drawLine(QPointF(16, 12), QPointF(16, 20));
     } else if (kind == QLatin1String("undo") || kind == QLatin1String("redo")) {
         QPainterPath path;
         path.moveTo(kind == QLatin1String("undo") ? 22 : 6, 8);
@@ -178,6 +213,8 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     resize(1100, 720);
 
     auto *root = new QVBoxLayout(this);
+    root->setContentsMargins(6, 6, 6, 6);
+    root->setSpacing(4);
 
     // ---- 顶栏：选择当前图像 / 选择其他图像 / 模板存图 ----
     auto *top = new QHBoxLayout();
@@ -219,12 +256,12 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     makeToolButton(shapeFreeBtn, QStringLiteral("freehand"), QStringLiteral("自由绘制"));
     makeToolButton(shapeWandBtn, QStringLiteral("wand"), QStringLiteral("魔术棒"));
     makeToolButton(shapeWandPlusBtn, QStringLiteral("wandplus"), QStringLiteral("魔术棒+"));
-    makeToolButton(clearShapeBtn, QStringLiteral("delete"), QStringLiteral("清除形状"));
+    makeToolButton(clearShapeBtn, QStringLiteral("clear"), QStringLiteral("清除形状"));
     makeToolButton(delShapeBtn, QStringLiteral("delete"), QStringLiteral("删除选中"));
-    makeToolButton(splitBtn, QStringLiteral("fit"), QStringLiteral("分割"));
-    makeToolButton(scissorsBtn, QStringLiteral("eraser"), QStringLiteral("剪刀"));
-    makeToolButton(maskModeBtn, QStringLiteral("eraser"), QStringLiteral("屏蔽模式"));
-    makeToolButton(eraseBtn, QStringLiteral("eraser"), QStringLiteral("擦除轮廓点"));
+    makeToolButton(splitBtn, QStringLiteral("scissors"), QStringLiteral("分割"));
+    makeToolButton(scissorsBtn, QStringLiteral("cut"), QStringLiteral("剪刀"));
+    makeToolButton(maskModeBtn, QStringLiteral("brush"), QStringLiteral("屏蔽模式"));
+    makeToolButton(eraseBtn, QStringLiteral("eraserdots"), QStringLiteral("擦除轮廓点"));
     maskModeBtn->setToolTip(QStringLiteral(
         "勾上后画/取到的形状进「屏蔽」列表：从保留区里挖掉（logo/水印/背景）。"
         "屏蔽=保留 − 屏蔽；不画保留区时默认整块保留再挖。"));
@@ -280,7 +317,8 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
 
     auto *right = new QWidget(this);
     auto *rightLay = new QVBoxLayout(right);
-    rightLay->setContentsMargins(8, 0, 0, 0);
+    rightLay->setContentsMargins(6, 0, 0, 0);
+    rightLay->setSpacing(4);
 
     // VM 模板配置窗没有单独的「模板名称」行：名称自动取模板序号/文件名。
     // 控件保留但隐藏，onConfirm 仍按它生成模板名。
@@ -295,6 +333,7 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
 
     rightLay->addWidget(new QLabel(QStringLiteral("配置参数")));
     auto *form = new QVBoxLayout();
+    form->setSpacing(3);
     auto makeRow = [&](const QString &label, QWidget *w) {
         auto *row = new QHBoxLayout();
         row->addWidget(new QLabel(label));

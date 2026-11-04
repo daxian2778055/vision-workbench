@@ -550,8 +550,60 @@ bool ImageDisplayController::startRoiPick(NodeBase *node)
     return true;
 }
 
+bool ImageDisplayController::startSearchRegionPick(NodeBase *node, bool polygon)
+{
+    if (!m_imageView || !hasSearchRegion(node))
+        return false;
+    // 与「取点」「几何编辑」互斥：三者只允许一个在画布上活跃，否则句柄互相抢点击。
+    m_roiPickNode = nullptr;
+    m_geometryRoiNode = nullptr;
+    m_searchRegionNode = node;
+    m_imageView->setRoiColor(QColor(0, 200, 255));   // 青色 = 检测区域（绿框是模板）
+    m_imageView->clearRoi();
+    m_imageView->setRoiEditable(true, polygon ? RoiType::Polygon : RoiType::Rect);
+    return true;
+}
+
+bool ImageDisplayController::startTemplateRoiPick(NodeBase *node, bool rotatedRect)
+{
+    if (!m_imageView)
+        return false;
+    HalconNode *hn = qobject_cast<HalconNode *>(node);
+    if (!hn || hn->geometryRoiType() == RoiType::None)
+        return false;
+    m_roiPickNode = nullptr;
+    m_searchRegionNode = nullptr;
+    m_geometryRoiNode = node;
+    m_imageView->setRoiColor(QColor(0, 200, 80));    // 绿色 = 模板框
+    m_imageView->clearRoi();
+    m_imageView->setRoiEditable(true, rotatedRect ? RoiType::RotatedRect : RoiType::Rect);
+    return true;
+}
+
 NodeBase *ImageDisplayController::writeRoiToNode(const RoiShape &shape)
 {
+    // B3：主画布"搜索区域"编辑——多边形与矩形都写回 searchRegion*（只写参数，
+    // 不打断执行线程，下一轮生效）。VM 的「检测区域」是多边形优先于矩形。
+    if (m_searchRegionNode && shape.type == RoiType::Polygon) {
+        HalconNode *hn = qobject_cast<HalconNode *>(m_searchRegionNode);
+        if (hn && shape.points.size() >= 3) {
+            if (FlowScene *fs = hn->flowSceneRef())
+                fs->recordUndo();
+            QStringList pts;
+            pts.reserve(shape.points.size());
+            for (const QPointF &p : shape.points)
+                pts << QStringLiteral("%1,%2").arg(int(p.x() + 0.5)).arg(int(p.y() + 0.5));
+            hn->setParam(QStringLiteral("searchRegionPolygon"), pts.join(QLatin1Char(' ')));
+            hn->setParam(QStringLiteral("searchRegionWidth"), 0);
+            hn->setParam(QStringLiteral("searchRegionHeight"), 0);
+            if (m_imageView) {
+                m_imageView->setRoiEditable(false);
+                m_imageView->setRoiShape(shape);
+                m_imageView->setRoiHandleEditEnabled(false);   // 顶点不拖：重画走「绘制」
+            }
+        }
+        return hn;
+    }
     // B3：主画布"搜索区域"编辑——写回 4 个参数（只写参数，不打断执行线程，下一轮生效）
     if (m_searchRegionNode && shape.type == RoiType::Rect) {
         HalconNode *hn = qobject_cast<HalconNode *>(m_searchRegionNode);
@@ -564,8 +616,13 @@ NodeBase *ImageDisplayController::writeRoiToNode(const RoiShape &shape)
                 hn->setParam(QStringLiteral("searchRegionRow"), int(b.y() + 0.5));
                 hn->setParam(QStringLiteral("searchRegionWidth"), qMax(1, int(b.width() + 0.5)));
                 hn->setParam(QStringLiteral("searchRegionHeight"), qMax(1, int(b.height() + 0.5)));
-                if (m_imageView)
+                // 画矩形 = 放弃旧多边形：留着它会让"多边形优先"把刚画的矩形完全遮掉。
+                hn->setParam(QStringLiteral("searchRegionPolygon"), QString());
+                if (m_imageView) {
                     m_imageView->setRoiShape(shape);
+                    m_imageView->setRoiEditable(false);
+                    m_imageView->setRoiHandleEditEnabled(true);   // 画完继续拖角点微调
+                }
             }
             return hn;
         }
@@ -578,8 +635,11 @@ NodeBase *ImageDisplayController::writeRoiToNode(const RoiShape &shape)
             if (FlowScene *fs = hn->flowSceneRef())
                 fs->recordUndo();
             hn->applyGeometryRoi(shape);
-            if (m_imageView)
+            if (m_imageView) {
+                m_imageView->setRoiEditable(false);
                 m_imageView->setRoiShape(hn->geometryRoi());
+                m_imageView->setRoiHandleEditEnabled(true);
+            }
             return hn;
         }
     }

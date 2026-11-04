@@ -2435,6 +2435,12 @@ void MainWindow::openModuleEditor(NodeBase *node)
             m_helpViewer = new HelpViewer(this);
         m_helpViewer->showHelpForNode(target ? target : node);
     });
+    // 模块窗「绘制检测区域」→ 主画布拾取（VM 的模块窗是纯参数窗，绘制在图像窗口完成）
+    connect(dlg, &ModuleEditorDialog::searchRegionPickRequested,
+            this, &MainWindow::beginSearchRegionPick);
+    // 模块窗「ROI 区域绘制」→ 主画布画模板框（框完再由「训练模板」显式训练）
+    connect(dlg, &ModuleEditorDialog::templateRoiPickRequested,
+            this, &MainWindow::beginTemplateRoiPick);
     // 「变量引用」菜单：每次展开时按当前变量生成列表（上游结果 → 下游参数的一键联动）
     dlg->setVariableReferenceProvider([this]() { return buildVariableReferences(); });
     dlg->show();
@@ -4045,6 +4051,28 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
     }
     checkHalconNodesHint();
 
+    // 打开方案默认回到设计态：工具箱/图像显示/参数/日志四个面板必须可见。
+    // 现场反馈：上次停在运行态时打开方案，画布铺满、左侧工具箱和右侧图像都不见了。
+    if (!recoveryRestore) {
+        switchToDesignMode();
+        if (ui->imageDock && ui->imageDock->isFloating())
+            onToggleImageFloat();       // 从运行态最大化浮窗还原为右侧停靠
+        if (ui->toolDock) {
+            ui->toolDock->show();
+            ui->toolDock->raise();
+        }
+        if (ui->imageDock) {
+            ui->imageDock->show();
+            ui->imageDock->raise();
+        }
+        // 旧存档可能把左侧工具箱拖成 0 宽（"看得见面板但点不到/看不见"），
+        // 打开方案时给一个可用的默认宽度；用户拖得比这更宽则保持不动。
+        if (ui->toolDock && !ui->toolDock->isFloating() && ui->toolDock->width() < 140)
+            resizeDocks({ui->toolDock}, {220}, Qt::Horizontal);
+        if (ui->imageDock && !ui->imageDock->isFloating() && ui->imageDock->width() < 220)
+            resizeDocks({ui->imageDock}, {qMax(360, width() / 3)}, Qt::Horizontal);
+    }
+
     // 记录"当前内容已落盘"基线（内容此时与刚读入的文件一致）。
     // 崩溃恢复例外：恢复出来的内容还没写回原方案文件，必须保持"未保存"状态，
     // 否则关窗时不会提示保存，用户会以为已经存好了——丢工作的经典路径。
@@ -5063,6 +5091,69 @@ void MainWindow::startRoiPick(NodeBase *node)
     ui->statusBar->showMessage(tr("请在图像上拖拽绘制搜索区域（右键取消）"), 5000);
 }
 
+bool MainWindow::prepareCanvasPick(NodeBase *node)
+{
+    if (!m_imageDisplay || !node)
+        return false;
+    // 模板匹配模块窗是纯参数窗（对齐 VM 4.4）：绘制落在主画布的图像显示上。
+    // 先把图像显示拉回可见/停靠状态，否则「绘制」点下去只改了一个看不见的隐藏画布。
+    if (ui->imageDock) {
+        if (ui->imageDock->isFloating())
+            onToggleImageFloat();
+        ui->imageDock->show();
+        ui->imageDock->raise();
+    }
+    if (!m_imageDisplay->displayNodeOutput(node)) {
+        // 还没执行过 ⇒ 没有输出图：退回输入图，保证框选时有画面可点
+        if (HalconNode *hn = qobject_cast<HalconNode *>(node)) {
+            HImage img(hn->getInputImage());
+            if (!img.IsInitialized())
+                img = HImage(hn->getOutputImage());
+            if (img.IsInitialized())
+                m_imageDisplay->showImage(img, node->fullName(), node);
+        }
+    }
+    if (!m_imageView || !m_imageView->hasImage()) {
+        ui->statusBar->showMessage(tr("当前没有可绘制图像：请先执行图像源或载入图像"), 5000);
+        return false;
+    }
+    return true;
+}
+
+void MainWindow::beginSearchRegionPick(NodeBase *node, bool polygon)
+{
+    if (!prepareCanvasPick(node))
+        return;
+    if (!m_imageDisplay->startSearchRegionPick(node, polygon)) {
+        ui->statusBar->showMessage(tr("该模块没有可绘制的检测区域"), 4000);
+        return;
+    }
+    ui->statusBar->showMessage(
+        polygon ? tr("请在图像上逐点绘制检测区域：单击加点、双击完成、右键取消")
+                : tr("请在图像上拖拽框定检测区域（右键取消）"),
+        8000);
+    // 模块窗保持在前：画布在右侧仍可点，画完能立刻看到参数回填
+    if (QWidget *editor = m_editors.lookup(node)) {
+        editor->raise();
+        editor->activateWindow();
+    }
+}
+
+void MainWindow::beginTemplateRoiPick(NodeBase *node, bool rotatedRect)
+{
+    if (!prepareCanvasPick(node))
+        return;
+    if (!m_imageDisplay->startTemplateRoiPick(node, rotatedRect)) {
+        ui->statusBar->showMessage(tr("该模块没有可绘制的 ROI 区域"), 4000);
+        return;
+    }
+    ui->statusBar->showMessage(tr("请在图像上框定 ROI 区域；框完在「特征模板」页点「训练模板」"), 8000);
+    if (QWidget *editor = m_editors.lookup(node)) {
+        editor->raise();
+        editor->activateWindow();
+    }
+}
+
 void MainWindow::handleRoiEdited(const RoiShape &shape)
 {
     // 参数写回（各测量节点的行列/半径）在 ImageDisplayController；这里做提示与面板刷新
@@ -5072,6 +5163,13 @@ void MainWindow::handleRoiEdited(const RoiShape &shape)
     ui->statusBar->showMessage(tr("ROI 已写入 %1 参数").arg(node->name()), 3000);
     // 刷新参数面板显示
     showNodeParameters(m_selectedNode);
+    // 模块窗若开着：把刚写入的检测区域/几何回填到参数控件，避免窗里还是画之前的旧值
+    if (QWidget *editorWidget = m_editors.lookup(node)) {
+        if (auto *dlg = qobject_cast<ModuleEditorDialog *>(editorWidget)) {
+            dlg->reloadFromNode();
+            dlg->setResultOverlay(collectOverlayFromNode(node));
+        }
+    }
 }
 
 void MainWindow::openManualDialog()
@@ -5572,6 +5670,10 @@ void MainWindow::setupDockWidgets()
         ui->imageDock->show();
     if (ui->paramDock)
         ui->paramDock->show();
+    // 右侧是「图像显示 / 参数配置」两个子页签：默认必须停在图像显示页，
+    // 否则 show(paramDock) 会把参数页抬到前面，现场看到的就是"图像显示没了"。
+    if (ui->imageDock)
+        ui->imageDock->raise();
     // 流程编辑已迁到中央控件：旧存档即使带 flowDock 也不让它重新露出来
     if (ui->flowDock)
         ui->flowDock->hide();
@@ -5590,6 +5692,8 @@ void MainWindow::switchToDesignMode()
     if (ui->imageDock) ui->imageDock->show();
     if (ui->paramDock) ui->paramDock->show();
     if (ui->logDock) ui->logDock->show();
+    // 右侧子页签默认停在图像显示（与启动默认一致）
+    if (ui->imageDock) ui->imageDock->raise();
 
     // 运行界面（自定义运行界面）仅在运行模式显示
     if (m_runtimeViewDock) m_runtimeViewDock->hide();
@@ -6900,8 +7004,16 @@ void MainWindow::showEvent(QShowEvent *event)
         s_firstShow = false;
         QTimer::singleShot(0, this, [this]() {
             // 用户上次退出时拖过的停靠比例优先，只有没有存档时才套默认比例
-            if (!m_dockLayoutRestored)
+            if (!m_dockLayoutRestored) {
                 applyDefaultDockSizes();
+            } else {
+                // 存档可能是"面板还在但被拖成 0 宽"的坏布局：启动时给一个可用宽度，
+                // 否则用户看到的是只有流程画布、工具箱/图像显示都不见了。
+                if (ui->toolDock && !ui->toolDock->isFloating() && ui->toolDock->width() < 140)
+                    resizeDocks({ui->toolDock}, {220}, Qt::Horizontal);
+                if (ui->imageDock && !ui->imageDock->isFloating() && ui->imageDock->width() < 220)
+                    resizeDocks({ui->imageDock}, {qMax(360, width() / 3)}, Qt::Horizontal);
+            }
             // 崩溃恢复询问放在界面搭好之后：模态框不在 showEvent 里直接弹，避免挡住首帧
             checkRecoveryOnStartup();
         });

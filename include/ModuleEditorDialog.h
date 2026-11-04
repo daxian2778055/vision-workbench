@@ -45,9 +45,14 @@ signals:
     void autoRecomputeRequested();
     /// P1-1：请求打开本算子的帮助页（MainWindow 统一收口到 HelpViewer）
     void helpRequested(NodeBase *node);
+    /// 请求在主画布上重画模板匹配的检测区域（VM 模块窗是纯参数窗，绘制落在主画布）
+    void searchRegionPickRequested(NodeBase *node, bool polygon);
+    /// 请求在主画布上重画模板匹配的 ROI 区域（模板框；VM 的「ROI创建 = 绘制」）
+    void templateRoiPickRequested(NodeBase *node, bool rotatedRect);
 
 private slots:
     void onDrawGeometry();
+    void onDrawTemplateRoi();
     void onDrawSearchRegion();
     void onDrawSearchPolygon();
     /// B2：编辑对象切换 —— 句柄只出现在当前对象上（模板框 / 搜索区域）
@@ -102,8 +107,6 @@ private:
     QVector<OverlayShape> geometryOverlayShapes() const;
     /// 按当前编辑对象重设画布上的可编辑 ROI（模板框 or 搜索区域）
     void applyEditTarget();
-    /// 搜索区域矩形写回 4 个参数
-    void writeSearchRect(const RoiShape &shape);
     /// 给参数面板上的可编辑控件挂钩变更信号（面板由节点自建，控件种类不定）
     void installParamHooks(QWidget *panel);
     void scheduleAutoRecompute();
@@ -148,8 +151,8 @@ private:
     QCheckBox *m_autoRecomputeCheck = nullptr;   /// 「自动重算」开关
     QTimer *m_autoRecomputeTimer = nullptr;      /// 去抖定时器
     bool m_paramHookBusy = false;
-    bool m_pickingSearchRegion = false;
-    bool m_pickingSearchPolygon = false;
+    /// 「形状」下拉当前选择：true=旋转矩形，false=矩形（决定 ROI 绘制落在主画布画什么）
+    bool m_roiShapeRotated = true;
     /// B2 当前编辑对象：0=模板框（算子几何），1=搜索区域
     int m_editTarget = 0;
     QToolButton *m_targetGeomBtn = nullptr;

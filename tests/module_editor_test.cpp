@@ -18,11 +18,17 @@
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QRadioButton>
+#include <QSignalSpy>
+#include <QComboBox>
+#include <QGroupBox>
 #include <QTemporaryDir>
 #include <QFile>
 #include <QFileInfo>
 
 #include "ModuleEditorDialog.h"
+#include "TemplateConfigDialog.h"
+#include "ImageDisplayController.h"
+#include "HalconWindow.h"
 #include "FlowScene.h"
 #include "NodeBase.h"
 #include "OpencvTemplateMatchNode.h"
@@ -41,6 +47,8 @@ private slots:
     void testVariableReferenceInsert();
     void testTeachingButtonLeavesMatchMode();
     void testVmModuleWindowTabs();
+    void testDrawRequestsMainCanvas();
+    void testCanvasPickWritesRegionWithoutTraining();
 };
 
 void ModuleEditorTest::testParamEditTriggersDebouncedRecompute()
@@ -283,9 +291,161 @@ void ModuleEditorTest::testVmModuleWindowTabs()
              qPrintable(QStringLiteral("缺少 ROI 区域类型单选：%1").arg(radios.join(QStringLiteral("、")))));
     QVERIFY2(radios.contains(QStringLiteral("绘制")) && radios.contains(QStringLiteral("继承")),
              qPrintable(QStringLiteral("缺少 ROI 创建单选：%1").arg(radios.join(QStringLiteral("、")))));
+
+    // VM 基本参数的组顺序：图像输入 → ROI掩膜图像（订阅）→ ROI区域 → 检测区域。
+    // 之前订阅组被搬到 ROI 组下面，与 VM 截图不符（2026-11-04 现场对照）。
+    QStringList groupOrder;
+    for (int i = 0; i < tabs->widget(0)->layout()->count(); ++i) {
+        if (auto *gb = qobject_cast<QGroupBox *>(tabs->widget(0)->layout()->itemAt(i)->widget()))
+            groupOrder << gb->title();
+    }
+    const int iInput = groupOrder.indexOf(QStringLiteral("图像输入"));
+    const int iSub = groupOrder.indexOf(QStringLiteral("ROI掩膜图像（订阅）"));
+    const int iRoi = groupOrder.indexOf(QStringLiteral("ROI区域"));
+    const int iDetect = groupOrder.indexOf(QStringLiteral("检测区域"));
+    QVERIFY2(iInput >= 0 && iSub > iInput && iRoi > iSub && iDetect > iRoi,
+             qPrintable(QStringLiteral("基本参数组顺序不是 VM 口径：%1")
+                            .arg(groupOrder.join(QStringLiteral(" → ")))));
+    // 「（参数修改后自动执行）」是全角括号，旧的半角前缀匹配漏隐藏（快照里仍可见）。
+    for (QLabel *lb : dlg.findChildren<QLabel *>()) {
+        if (lb->text().contains(QStringLiteral("参数修改后自动执行")))
+            QVERIFY2(!lb->isVisibleTo(&dlg), "自动预览说明标签仍未隐藏");
+    }
+
     // 标题按 VM：模块号 + 模块名
     QVERIFY2(dlg.windowTitle().startsWith(QString::number(node->moduleId())),
              qPrintable(QStringLiteral("标题不是模块号开头：%1").arg(dlg.windowTitle())));
+
+    // 可选自检：设置 VFP_UI_SNAPSHOT 后把模块窗渲染成 PNG，供人工对照 VM 布局。
+    const QString snapshot = qEnvironmentVariable("VFP_UI_SNAPSHOT");
+    if (!snapshot.isEmpty()) {
+        dlg.resize(520, 680);
+        dlg.show();
+        QTest::qWait(120);
+        QVERIFY2(dlg.grab().save(snapshot), qPrintable(QStringLiteral("快照保存失败：%1").arg(snapshot)));
+        // 特征模板页：训练入口是否显眼（VM：先框区域，再点训练）
+        if (tabs->count() > 1) {
+            tabs->setCurrentIndex(1);
+            QTest::qWait(80);
+            QVERIFY2(dlg.grab().save(snapshot + QStringLiteral(".feature.png")),
+                     "特征模板页快照保存失败");
+        }
+    }
+
+    // 可选自检：模板配置窗（图标工具条 + 右栏）
+    const QString tmplSnapshot = qEnvironmentVariable("VFP_UI_SNAPSHOT_TMPL");
+    if (!tmplSnapshot.isEmpty()) {
+        TemplateConfigDialog cfg(qobject_cast<OpencvTemplateMatchNode *>(node));
+        cfg.resize(1024, 720);
+        cfg.show();
+        QTest::qWait(120);
+        QVERIFY2(cfg.grab().save(tmplSnapshot),
+                 qPrintable(QStringLiteral("模板配置窗快照保存失败：%1").arg(tmplSnapshot)));
+    }
+}
+
+// 现场问题（2026-11-04）：模块窗的「绘制」点了没反应——它操作的是本窗里已被隐藏的画布。
+// 现在必须发出 templateRoiPickRequested（ROI 区域=模板框），由 MainWindow 在主画布上拾取；
+// 检测区域的两个按钮发 searchRegionPickRequested（矩形/多边形）。
+void ModuleEditorTest::testDrawRequestsMainCanvas()
+{
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("searchRegionCol"), 100);
+    node.setParam(QStringLiteral("searchRegionRow"), 80);
+    node.setParam(QStringLiteral("searchRegionWidth"), 200);
+    node.setParam(QStringLiteral("searchRegionHeight"), 160);
+    ModuleEditorDialog dlg(&node);
+
+    QSignalSpy tmplSpy(&dlg, &ModuleEditorDialog::templateRoiPickRequested);
+    QSignalSpy searchSpy(&dlg, &ModuleEditorDialog::searchRegionPickRequested);
+    QComboBox *shape = dlg.findChild<QComboBox *>(QStringLiteral("roiShapeCombo"));
+    QVERIFY2(shape, "ROI 区域缺少形状下拉（旋转矩形/矩形）");
+    QCOMPARE(shape->count(), 2);
+
+    QPushButton *drawBtn = nullptr;
+    QPushButton *boxBtn = nullptr;
+    QPushButton *polyBtn = nullptr;
+    for (QPushButton *b : dlg.findChildren<QPushButton *>()) {
+        if (b->text() == QStringLiteral("绘制"))
+            drawBtn = b;
+        else if (b->text() == QStringLiteral("框选"))
+            boxBtn = b;
+        else if (b->text() == QStringLiteral("多边形"))
+            polyBtn = b;
+    }
+    QVERIFY2(drawBtn, "ROI 区域没有「绘制」按钮 ⇒ 现场无从发起绘制");
+    QVERIFY2(boxBtn && polyBtn, "检测区域没有「框选/多边形」绘制入口");
+
+    // ROI 区域：默认旋转矩形 → 切换成矩形，两次都要发模板框拾取请求
+    drawBtn->click();
+    QCOMPARE(tmplSpy.count(), 1);
+    QCOMPARE(tmplSpy.at(0).at(1).toBool(), true);   // 旋转矩形
+    shape->setCurrentIndex(1);                      // 矩形
+    drawBtn->click();
+    QCOMPARE(tmplSpy.count(), 2);
+    QCOMPARE(tmplSpy.at(1).at(1).toBool(), false);
+
+    // 检测区域：矩形 / 多边形
+    boxBtn->click();
+    QCOMPARE(searchSpy.count(), 1);
+    QCOMPARE(searchSpy.at(0).at(1).toBool(), false);
+    polyBtn->click();
+    QCOMPARE(searchSpy.count(), 2);
+    QCOMPARE(searchSpy.at(1).at(1).toBool(), true);
+}
+
+// 画布拾取 → 参数写回（与 UI 信号链互补）：直接调控制器，钉住
+//   ① ROI 区域绘制写回模板框且**不自动训练**（VM：先框区域，再点训练）；
+//   ② 检测区域矩形/多边形写回 searchRegion*，多边形优先。
+void ModuleEditorTest::testCanvasPickWritesRegionWithoutTraining()
+{
+    FlowScene scene;
+    NodeBase *node = scene.createNode(NodeBase::IMAGE_PROCESSING, QPointF(80, 80),
+                                      QStringLiteral("模板匹配"));
+    QVERIFY(node);
+    OpencvTemplateMatchNode *tmpl = qobject_cast<OpencvTemplateMatchNode *>(node);
+    QVERIFY(tmpl);
+
+    HalconWindow view;
+    ImageDisplayController controller(&view, nullptr);
+
+    // ① ROI 区域（模板框）：旋转矩形绘制后只写 roi* 参数，训练必须仍为 false
+    QVERIFY(controller.startTemplateRoiPick(node, /*rotatedRect=*/true));
+    RoiShape roi;
+    roi.type = RoiType::RotatedRect;
+    roi.p1 = QPointF(200.0, 160.0);
+    roi.width = 120.0;
+    roi.height = 90.0;
+    roi.angleDeg = 0.0;
+    QVERIFY(controller.writeRoiToNode(roi) != nullptr);
+    QCOMPARE(tmpl->getParam(QStringLiteral("roiWidth")).toInt(), 120);
+    QCOMPARE(tmpl->getParam(QStringLiteral("roiHeight")).toInt(), 90);
+    QVERIFY2(!tmpl->getParam(QStringLiteral("trainFromImage")).toBool(),
+             "框完 ROI 自动进入训练态 ⇒ 用户会以为「训练模板」按钮是摆设");
+
+    // ② 检测区域：矩形 → 4 个 searchRegion 参数 + 清掉旧多边形
+    QVERIFY(controller.startSearchRegionPick(node, /*polygon=*/false));
+    RoiShape rect;
+    rect.type = RoiType::Rect;
+    rect.p1 = QPointF(40.0, 30.0);
+    rect.p2 = QPointF(240.0, 190.0);
+    QVERIFY(controller.writeRoiToNode(rect) != nullptr);
+    QCOMPARE(tmpl->getParam(QStringLiteral("searchRegionCol")).toInt(), 40);
+    QCOMPARE(tmpl->getParam(QStringLiteral("searchRegionRow")).toInt(), 30);
+    QCOMPARE(tmpl->getParam(QStringLiteral("searchRegionWidth")).toInt(), 200);
+    QCOMPARE(tmpl->getParam(QStringLiteral("searchRegionHeight")).toInt(), 160);
+    QVERIFY(tmpl->getParam(QStringLiteral("searchRegionPolygon")).toString().isEmpty());
+
+    // ③ 检测区域：多边形 → 写点串，矩形宽高归零（多边形优先于矩形）
+    QVERIFY(controller.startSearchRegionPick(node, /*polygon=*/true));
+    RoiShape poly;
+    poly.type = RoiType::Polygon;
+    poly.points = {QPointF(20.0, 20.0), QPointF(220.0, 40.0), QPointF(120.0, 200.0)};
+    QVERIFY(controller.writeRoiToNode(poly) != nullptr);
+    QVERIFY(!tmpl->getParam(QStringLiteral("searchRegionPolygon")).toString().isEmpty());
+    QCOMPARE(tmpl->getParam(QStringLiteral("searchRegionWidth")).toInt(), 0);
+    QCOMPARE(tmpl->getParam(QStringLiteral("searchRegionHeight")).toInt(), 0);
 }
 
 QTEST_MAIN(ModuleEditorTest)

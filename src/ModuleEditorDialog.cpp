@@ -209,9 +209,10 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
 
     m_hintLabel = new QLabel();
     m_hintLabel->setObjectName(QStringLiteral("paramHintLabel"));
-    m_hintLabel->setWordWrap(true);
+    // VM 模块窗页签上方没有提示行；提示放到底部状态位（不占页签高度）。
+    m_hintLabel->setWordWrap(false);
+    m_hintLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     m_hintLabel->setStyleSheet(QStringLiteral("color:#666;"));
-    root->addWidget(m_hintLabel);
 
     auto *splitter = new QSplitter(Qt::Horizontal, this);
     m_view = new HalconWindow(splitter);
@@ -230,7 +231,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     // VM「特征模板」页：模板列表 + 创建/编辑/删除（列表项 = 一个模板对象，不是文件路径）
     m_templateList = new QListWidget();
     m_templateList->setObjectName(QStringLiteral("templateList"));
-    m_templateList->setMaximumHeight(110);
+    m_templateList->setMinimumHeight(160);
     m_templateList->setToolTip(QStringLiteral("当前算子的模板列表；点一行即切换当前匹配用的模板"));
     rightLay->addWidget(m_templateList);
     auto *tmplBtns = new QHBoxLayout();
@@ -318,13 +319,20 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     m_restoreDefaultsBtn = new QPushButton(QStringLiteral("恢复默认值"));
     m_restoreDefaultsBtn->setToolTip(QStringLiteral("把本算子的全部参数恢复为出厂默认值；点「确定」后才提交"));
     bottom->addWidget(m_restoreDefaultsBtn);
-    bottom->addStretch();
+    bottom->addWidget(m_hintLabel, 1);
 
     // VM 4.4 模块窗底部按钮：连续执行 / 执行 / 确定（图 13「轮廓匹配特征模板列表」）。
+    // 先留弹性空间，三个按钮保持 sizeHint、靠右排（VM 不是等宽铺满整行）。
+    bottom->addStretch(1);
     m_continuousBtn = new QToolButton();
     m_continuousBtn->setObjectName(QStringLiteral("continuousRunButton"));
     m_continuousBtn->setText(QStringLiteral("连续执行"));
     m_continuousBtn->setCheckable(true);
+    m_continuousBtn->setStyleSheet(QStringLiteral(
+        "QToolButton { background:#FCFCFC; color:#333333; border:1px solid #C9C9C9;"
+        " border-radius:2px; padding:4px 10px; min-height:22px; }"
+        "QToolButton:hover { background:#F2F2F2; border-color:#E76900; }"
+        "QToolButton:checked { background:#E76900; color:#FFFFFF; border-color:#E76900; }"));
     m_continuousBtn->setToolTip(QStringLiteral("勾选后改动即重算（自动预览）；取消则改完点「执行」或「确定」"));
     connect(m_continuousBtn, &QToolButton::toggled, this, [this](bool on) {
         if (m_autoRecomputeCheck)
@@ -607,13 +615,20 @@ void ModuleEditorDialog::rebuildParamPanel()
     // ① 包一层 QScrollArea——参数多时能滚；② 内容给最小宽度，长数值不再被裁；
     // ③ 数值输入框统一最小宽度，`2391.00` 这类不再掉一位。
     if (panel) {
-        panel->setMinimumWidth(420);
+        panel->setMinimumWidth(390);
         for (QLineEdit *w : panel->findChildren<QLineEdit *>())
-            w->setMinimumWidth(120);
+            w->setMinimumWidth(110);
         for (QDoubleSpinBox *w : panel->findChildren<QDoubleSpinBox *>())
-            w->setMinimumWidth(120);
+            w->setMinimumWidth(100);
         for (QSpinBox *w : panel->findChildren<QSpinBox *>())
-            w->setMinimumWidth(120);
+            w->setMinimumWidth(90);
+        // VM 的表单是"标签左、控件右且不拉满"：控件保持 sizeHint，不随页宽拉伸，
+        // 行距压到 4，避免参数区看起来松散。
+        for (QFormLayout *f : panel->findChildren<QFormLayout *>()) {
+            f->setVerticalSpacing(4);
+            f->setHorizontalSpacing(6);
+            f->setFieldGrowthPolicy(QFormLayout::FieldsStayAtSizeHint);
+        }
 
         auto *scroll = new QScrollArea();
         scroll->setWidget(panel);
@@ -650,8 +665,9 @@ void ModuleEditorDialog::rebuildVmTabs()
     auto makePage = [&](QWidget **page, QVBoxLayout **lay) {
         *page = new QWidget();
         *lay = new QVBoxLayout(*page);
-        (*lay)->setContentsMargins(8, 10, 8, 8);
-        (*lay)->setSpacing(8);
+        // VM 子窗是紧凑排布：页边距 6、行距 4，避免大块空白把内容推得很散。
+        (*lay)->setContentsMargins(6, 6, 6, 6);
+        (*lay)->setSpacing(4);
     };
     QWidget *basicPage, *runPage, *resPage;
     QVBoxLayout *basicLay, *runLay, *resLay;
@@ -701,7 +717,27 @@ void ModuleEditorDialog::rebuildVmTabs()
                     if (m_node)
                         m_node->setEnabled(on);
                 });
-        basicLay->addWidget(enabledCheck);
+        if (isTmpl) {
+            // VM 模块窗没有这两项：禁用模块在画布上做，自动预览由底部「连续执行」承担。
+            enabledCheck->setVisible(false);
+            for (QCheckBox *cb : basicPage->findChildren<QCheckBox *>()) {
+                if (cb->text().startsWith(QStringLiteral("自动预览")))
+                    cb->setVisible(false);
+            }
+            for (QLabel *lb : basicPage->findChildren<QLabel *>()) {
+                // 自动面板用的是全角括号「（参数修改后自动执行）」；按前缀半角匹配会漏掉。
+                if (lb->text().contains(QStringLiteral("参数修改后自动执行")))
+                    lb->setVisible(false);
+            }
+            if (m_hintLabel)
+                m_hintLabel->setVisible(false);   // 底部按钮行只留 VM 的三个按钮
+            // VM 的参数组是"贴着内容"的：组框不吸收页面剩余高度，
+            // 否则最后一个组会拉出一大块空白，整体看起来松散。
+            for (QGroupBox *gb : basicPage->findChildren<QGroupBox *>())
+                gb->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+        } else {
+            basicLay->addWidget(enabledCheck);
+        }
     }
     basicLay->addStretch();
     // VM「运行参数」页 = 运行参数本身；不再额外插入旧框架的「参数订阅」表。
@@ -735,14 +771,17 @@ void ModuleEditorDialog::rebuildVmTabs()
         auto *thumbCol = new QWidget();
         auto *thumbLay = new QVBoxLayout(thumbCol);
         thumbLay->setContentsMargins(0, 0, 0, 0);
-        if (m_templatePreview)
+        thumbCol->setMinimumWidth(150);
+        if (m_templatePreview) {
+            m_templatePreview->setMinimumSize(130, 130);
             thumbLay->addWidget(m_templatePreview);
+        }
         for (QPushButton *b : {m_tmplEditBtn, m_tmplDelBtn}) {
             if (b)
                 thumbLay->addWidget(b);
         }
         thumbLay->addStretch();
-        contentLay->addWidget(thumbCol, 0);
+        contentLay->addWidget(thumbCol, 0, Qt::AlignTop);
         tmplLay->addWidget(contentRow, 1);
     }
 
@@ -828,6 +867,8 @@ void ModuleEditorDialog::rebuildVmTabs()
     {
         auto *inputGroup = new QGroupBox(QStringLiteral("图像输入"));
         auto *inputForm = new QFormLayout(inputGroup);
+        inputForm->setVerticalSpacing(4);
+        inputForm->setFieldGrowthPolicy(QFormLayout::FieldsStayAtSizeHint);
         auto *sourceCombo = new QComboBox(inputGroup);
         sourceCombo->setObjectName(QStringLiteral("inputSourceCombo"));
         QStringList sources;
@@ -855,8 +896,8 @@ void ModuleEditorDialog::rebuildVmTabs()
             auto *box = new QGroupBox(tmplNode ? QStringLiteral("ROI掩膜图像（订阅）")
                                                : QStringLiteral("输入订阅"));
             auto *boxLay = new QVBoxLayout(box);
-            boxLay->setContentsMargins(8, 8, 8, 8);
-            boxLay->setSpacing(6);
+            boxLay->setContentsMargins(6, 6, 6, 6);
+            boxLay->setSpacing(4);
             const QMap<int, NodeBase::InputBinding> currentBindings = m_node->inputBindings();
             FlowScene *scene = m_node->flowSceneRef();
             for (int slot = realInputs; slot < logicalInputs; ++slot) {
@@ -925,13 +966,18 @@ void ModuleEditorDialog::rebuildVmTabs()
                 if (!label)
                     continue;
                 const QString text = label->text();
-                if (text == QStringLiteral("输出掩膜") || text == QStringLiteral("ROI区域类型")
-                    || text == QStringLiteral("ROI创建")) {
+                // 标签可能带括号说明（"输出掩膜（…）"），用前缀匹配，避免漏隐藏后
+                // 检测区域里又出现一个同名复选框。
+                if (text.startsWith(QStringLiteral("输出掩膜"))
+                    || text == QStringLiteral("ROI区域类型") || text == QStringLiteral("ROI创建")) {
+                    // 只 hide() 的话 QFormLayout 仍保留整行空位（组框会拖出一截空白）；
+                    // setRowVisible 才是真正折叠该行（Qt 6.4+）。
                     label->hide();
                     if (QLayoutItem *field = form->itemAt(row, QFormLayout::FieldRole)) {
                         if (QWidget *w = field->widget())
                             w->hide();
                     }
+                    form->setRowVisible(row, false);
                 }
             }
         }
@@ -939,6 +985,9 @@ void ModuleEditorDialog::rebuildVmTabs()
 
         auto *roiBox = new QGroupBox(QStringLiteral("ROI区域"), basicPage);
         auto *roiForm = new QFormLayout(roiBox);
+        roiForm->setVerticalSpacing(4);
+        roiForm->setHorizontalSpacing(6);
+        roiForm->setFieldGrowthPolicy(QFormLayout::FieldsStayAtSizeHint);
         auto write = [this](const QString &key, const QVariant &value) {
             if (!m_node)
                 return;
@@ -1000,17 +1049,57 @@ void ModuleEditorDialog::rebuildVmTabs()
                 write(QStringLiteral("roiSource"), 1);
         });
 
-        // 形状：模板匹配的几何 ROI 固定是旋转矩形（在模板配置窗里改）
+        // 形状：VM 的 ROISelecter 是「旋转矩形 / 矩形」选择；「绘制」画的是训练用的 ROI 区域
+        // （模板框）。检测区域的绘制入口在下面「检测区域」组内，两者语义不同，不能混用。
         auto *shapeRow = new QWidget(roiBox);
         auto *shapeLay = new QHBoxLayout(shapeRow);
         shapeLay->setContentsMargins(0, 0, 0, 0);
-        auto *shapeBtn = new QToolButton(shapeRow);
-        shapeBtn->setText(QStringLiteral("旋转矩形"));
-        shapeBtn->setEnabled(false);
-        shapeBtn->setToolTip(QStringLiteral("模板框形状在「模板配置」窗里绘制"));
-        shapeLay->addWidget(shapeBtn);
+        shapeLay->setSpacing(4);
+        auto *shapeCombo = new QComboBox(shapeRow);
+        shapeCombo->setObjectName(QStringLiteral("roiShapeCombo"));
+        shapeCombo->addItems({QStringLiteral("旋转矩形"), QStringLiteral("矩形")});
+        connect(shapeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                [this](int index) { m_roiShapeRotated = (index == 0); });
+        auto *drawRoiBtn = new QPushButton(QStringLiteral("绘制"), shapeRow);
+        drawRoiBtn->setToolTip(QStringLiteral("在主画布图像上框定 ROI 区域（模板框），框完点「训练模板」"));
+        auto *clearRoiBtn = new QPushButton(QStringLiteral("清除"), shapeRow);
+        clearRoiBtn->setToolTip(QStringLiteral("清除 ROI 区域（模板框）"));
+        shapeLay->addWidget(shapeCombo);
+        shapeLay->addWidget(drawRoiBtn);
+        shapeLay->addWidget(clearRoiBtn);
         shapeLay->addStretch();
+        connect(drawRoiBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onDrawTemplateRoi);
+        connect(clearRoiBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onClearGeometry);
         roiForm->addRow(QStringLiteral("形状"), shapeRow);
+
+        // VM 里「ROI创建 = 绘制」就是进入画布的绘制态：这里同样直接发起 ROI 拾取，
+        // 已选中「绘制」时再点一次没有信号，用户可点形状行的「绘制」重画。
+        connect(srcDraw, &QRadioButton::toggled, this, [this](bool on) {
+            if (on)
+                onDrawTemplateRoi();
+        });
+
+        // 检测区域（搜索区域）的绘制入口：VM 里这组是纯数值/取点，没有独立绘制按钮；
+        // 我们补一行紧凑按钮，保证没有内部画布的模块窗也能在画布上框出搜索区域。
+        {
+            auto *searchRow = new QWidget(roiBox);
+            auto *searchLay = new QHBoxLayout(searchRow);
+            searchLay->setContentsMargins(0, 0, 0, 0);
+            searchLay->setSpacing(4);
+            auto *drawSearchBtn = new QPushButton(QStringLiteral("框选"), searchRow);
+            drawSearchBtn->setToolTip(QStringLiteral("在主画布上框定检测区域（右键取消）"));
+            auto *drawPolyBtn = new QPushButton(QStringLiteral("多边形"), searchRow);
+            drawPolyBtn->setToolTip(QStringLiteral("在主画布上逐点绘制检测区域（双击完成）"));
+            connect(drawSearchBtn, &QPushButton::clicked, this,
+                    &ModuleEditorDialog::onDrawSearchRegion);
+            connect(drawPolyBtn, &QPushButton::clicked, this,
+                    &ModuleEditorDialog::onDrawSearchPolygon);
+            searchLay->addWidget(drawSearchBtn);
+            searchLay->addWidget(drawPolyBtn);
+            searchLay->addStretch();
+            if (auto *form = qobject_cast<QFormLayout *>(roiAutoBox->layout()))
+                form->addRow(QStringLiteral("检测区域绘制"), searchRow);
+        }
 
         // VM 基本参数里还有「屏蔽区创建 / 屏蔽区 / 位置修正」三行。算法侧尚未实现，
         // 先按 VM 布局放置并置灰，避免界面看起来缺一块（tooltip 明确说明未实现）。
@@ -1043,6 +1132,8 @@ void ModuleEditorDialog::rebuildVmTabs()
 
         const int insertAt = basicLay->indexOf(roiAutoBox);
         basicLay->insertWidget(insertAt >= 0 ? insertAt : 0, roiBox);
+        // VM 基本参数顺序：图像输入 → ROI掩膜图像（订阅）→ ROI区域 → 检测区域。
+        // 订阅组在构造时已插到「图像输入」后的第 2 位，这里不再搬动。
     }
 
     // 输出参数
@@ -1863,8 +1954,6 @@ void ModuleEditorDialog::echoGeometry()
 void ModuleEditorDialog::onEditTargetGeometry()
 {
     m_editTarget = 0;
-    m_pickingSearchRegion = false;
-    m_pickingSearchPolygon = false;
     m_targetGeomBtn->setChecked(true);
     m_targetSearchBtn->setChecked(false);
     applyEditTarget();
@@ -1880,8 +1969,6 @@ void ModuleEditorDialog::onEditTargetSearch()
         return;
     }
     m_editTarget = 1;
-    m_pickingSearchRegion = false;
-    m_pickingSearchPolygon = false;
     m_targetGeomBtn->setChecked(false);
     m_targetSearchBtn->setChecked(true);
     applyEditTarget();
@@ -2023,29 +2110,20 @@ void ModuleEditorDialog::onDrawGeometry()
     m_hintLabel->setText(QStringLiteral("请在图像上拖拽绘制；画完后可拖改。右键取消。"));
 }
 
-namespace {
-/// RoiShape → 轴对齐包围盒（Rect 用 p1/p2，其余按四角求界）
-QRectF roiBoundsOf(const RoiShape &shape)
+void ModuleEditorDialog::onDrawTemplateRoi()
 {
-    QRectF r;
-    if (shape.type == RoiType::Rect) {
-        r = QRectF(shape.p1, shape.p2).normalized();
-        if (r.width() > 1.0 && r.height() > 1.0)
-            return r;
+    if (!qobject_cast<OpencvTemplateMatchNode *>(m_node)) {
+        m_hintLabel->setText(QStringLiteral("当前算子不支持 ROI 区域。"));
+        return;
     }
-    const QVector<QPointF> c = rotatedRectCorners(shape);
-    if (c.isEmpty())
-        return QRectF();
-    double x0 = c.first().x(), x1 = x0, y0 = c.first().y(), y1 = y0;
-    for (const QPointF &p : c) {
-        x0 = qMin(x0, p.x());
-        x1 = qMax(x1, p.x());
-        y0 = qMin(y0, p.y());
-        y1 = qMax(y1, p.y());
+    if (!m_node) {
+        m_hintLabel->setText(QStringLiteral("无法绘制：算子未就绪"));
+        return;
     }
-    return QRectF(QPointF(x0, y0), QPointF(x1, y1));
+    // VM 的「ROI创建 = 绘制」画的是训练模板用的 ROI 区域（模板框），绘制落在主画布。
+    // 框完不训练：训练由「特征模板」页的「训练模板」按钮显式触发（VM 流程）。
+    emit templateRoiPickRequested(m_node, m_roiShapeRotated);
 }
-}   // namespace
 
 void ModuleEditorDialog::onDrawSearchRegion()
 {
@@ -2054,21 +2132,13 @@ void ModuleEditorDialog::onDrawSearchRegion()
         m_hintLabel->setText(QStringLiteral("当前算子不支持搜索区域。"));
         return;
     }
-    if (!m_view || !m_node) {
-        m_hintLabel->setText(QStringLiteral("无法绘制：图像或算子未就绪（先双击打开工具并载入图像）"));
+    if (!m_node) {
+        m_hintLabel->setText(QStringLiteral("无法绘制：算子未就绪"));
         return;
     }
-    m_pickingSearchRegion = true;
-    m_pickingSearchPolygon = false;
-    m_editTarget = 1;
-    if (m_targetGeomBtn) m_targetGeomBtn->setChecked(false);
-    if (m_targetSearchBtn) m_targetSearchBtn->setChecked(true);
-    m_view->setMaskEditable(false);
-    m_view->clearRoi();                        // 收起模板框句柄，避免两个框混在一起点不中
-    m_view->setRoiEditable(true, RoiType::Rect);
-    m_hintLabel->setText(
-        QStringLiteral("\u8bf7\u5728\u56fe\u50cf\u4e0a\u6846\u5b9a\u641c\u7d22\u533a\u57df\uff1b"
-                       "\u6846\u5b8c\u81ea\u52a8\u5199\u56de\u53c2\u6570\u3002\u53f3\u952e\u53d6\u6d88\u3002"));
+    // VM 模块窗没有内置图像区：绘制请求交给主画布（MainWindow::beginSearchRegionPick）。
+    // 之前这里操作的是本窗内被隐藏的 m_view ⇒ 点「绘制」看不到任何反应（现场反馈 ROI 绘制用不了）。
+    emit searchRegionPickRequested(m_node, /*polygon=*/false);
 }
 
 OverlayShape ModuleEditorDialog::searchRegionShape() const
@@ -2155,21 +2225,12 @@ void ModuleEditorDialog::onDrawSearchPolygon()
         m_hintLabel->setText(QStringLiteral("当前算子不支持搜索区域。"));
         return;
     }
-    if (!m_view || !m_node) {
-        m_hintLabel->setText(QStringLiteral("无法绘制：图像或算子未就绪（先双击打开工具并载入图像）"));
+    if (!m_node) {
+        m_hintLabel->setText(QStringLiteral("无法绘制：算子未就绪"));
         return;
     }
-    m_pickingSearchPolygon = true;
-    m_pickingSearchRegion = false;
-    m_editTarget = 1;
-    if (m_targetGeomBtn) m_targetGeomBtn->setChecked(false);
-    if (m_targetSearchBtn) m_targetSearchBtn->setChecked(true);
-    m_view->setMaskEditable(false);
-    m_view->clearRoi();
-    m_view->setRoiEditable(true, RoiType::Polygon);
-    m_hintLabel->setText(
-        QStringLiteral("\u5355\u51fb\u9010\u70b9\u3001\u53cc\u51fb\u5b8c\u6210\uff1b"
-                       "\u5b8c\u6210\u540e\u5199\u56de\u591a\u8fb9\u5f62\u641c\u7d22\u533a\u57df\u3002\u53f3\u952e\u53d6\u6d88\u3002"));
+    // 同上：多边形也在主画布逐点绘制（双击完成、右键取消），本窗不再操作隐藏画布。
+    emit searchRegionPickRequested(m_node, /*polygon=*/true);
 }
 
 void ModuleEditorDialog::onClearGeometry()
@@ -2206,80 +2267,14 @@ void ModuleEditorDialog::onClearMask()
     scheduleAutoRecompute();
 }
 
-void ModuleEditorDialog::writeSearchRect(const RoiShape &shape)
-{
-    HalconNode *hn = halconNode();
-    if (!hn)
-        return;
-    const QRectF b = roiBoundsOf(shape);
-    if (b.width() <= 1.0 || b.height() <= 1.0)
-        return;
-    if (FlowScene *fs = hn->flowSceneRef())
-        fs->recordUndo();
-    hn->setParam(QStringLiteral("searchRegionCol"), int(b.x() + 0.5));
-    hn->setParam(QStringLiteral("searchRegionRow"), int(b.y() + 0.5));
-    hn->setParam(QStringLiteral("searchRegionWidth"), qMax(1, int(b.width() + 0.5)));
-    hn->setParam(QStringLiteral("searchRegionHeight"), qMax(1, int(b.height() + 0.5)));
-    // 多边形优先于矩形：拖矩形 = 明确改用矩形，必须把残留的多边形清掉，
-    // 否则"拖了没反应"（匹配仍按旧多边形走）。
-    const bool hadPolygon =
-        !hn->getParam(QStringLiteral("searchRegionPolygon")).toString().trimmed().isEmpty();
-    if (hadPolygon)
-        hn->setParam(QStringLiteral("searchRegionPolygon"), QString());
-    m_hintLabel->setText(hadPolygon
-        ? QStringLiteral("搜索区域已写回（矩形），原多边形已清除。")
-        : QStringLiteral("搜索区域已写回：匹配只在这个框内进行。"));
-}
-
 void ModuleEditorDialog::onRoiEdited(const RoiShape &shape)
 {
     HalconNode *hn = halconNode();
     if (!hn)
         return;
 
-    // 搜索区域矩形：绘制一次写回；编辑对象是搜索区域时，拖角点也走这里（B2/B3）
-    if (m_pickingSearchRegion
-        || (m_editTarget == 1 && shape.type == RoiType::Rect
-            && !m_pickingSearchPolygon)) {
-        m_pickingSearchRegion = false;
-        writeSearchRect(shape);
-        m_view->setRoiEditable(false);
-        applyEditTarget();
-        m_paramHookBusy = true;
-        if (QWidget *panel = m_paramHost->widget())
-            hn->updateParamPanel(panel);
-        m_paramHookBusy = false;
-        refreshSearchOverlay();
-        scheduleAutoRecompute();
-        return;
-    }
-
-    // 多边形搜索区域：顶点序列写成 "x,y x,y ..."，并清掉矩形（多边形优先）
-    if (m_pickingSearchPolygon) {
-        m_pickingSearchPolygon = false;
-        if (shape.type == RoiType::Polygon && shape.points.size() >= 3) {
-            if (FlowScene *fs = hn->flowSceneRef())
-                fs->recordUndo();
-            QStringList pts;
-            pts.reserve(shape.points.size());
-            for (const QPointF &p : shape.points)
-                pts << QStringLiteral("%1,%2").arg(int(p.x() + 0.5)).arg(int(p.y() + 0.5));
-            hn->setParam(QStringLiteral("searchRegionPolygon"), pts.join(QLatin1Char(' ')));
-            hn->setParam(QStringLiteral("searchRegionWidth"), 0);
-            hn->setParam(QStringLiteral("searchRegionHeight"), 0);
-            m_hintLabel->setText(QStringLiteral("多边形已写回："
-                                                "匹配只在这个多边形内进行。"));
-        }
-        m_view->setRoiEditable(false);
-        applyEditTarget();
-        m_paramHookBusy = true;
-        if (QWidget *panel = m_paramHost->widget())
-            hn->updateParamPanel(panel);
-        m_paramHookBusy = false;
-        refreshSearchOverlay();
-        scheduleAutoRecompute();
-        return;
-    }
+    // 检测区域的绘制/编辑已迁到主画布（ImageDisplayController::writeRoiToNode），
+    // 本窗的 m_view 在模板匹配下是隐藏的，只保留模板框/几何 ROI 的拖拽写回。
     if (FlowScene *fs = hn->flowSceneRef())
         fs->recordUndo();
     hn->applyGeometryRoi(shape);

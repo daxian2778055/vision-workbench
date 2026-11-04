@@ -77,6 +77,12 @@ public:
     bool editingSearchRegion() const { return m_searchRegionNode != nullptr; }
     /// 开始在画布上取点；返回 false = 无画布或无目标节点（调用方不应做提示）
     bool startRoiPick(NodeBase *node);
+    /// 开始在画布上重画模板匹配的「检测区域」：polygon=true 逐点绘制，否则矩形框选。
+    /// VM 模块窗是纯参数窗，绘制落在主画布上；返回 false = 无画布或该节点没有检测区域参数。
+    bool startSearchRegionPick(NodeBase *node, bool polygon = false);
+    /// 开始重画算子几何 ROI（模板匹配的模板框）：rotatedRect=true 旋转矩形，否则轴对齐矩形。
+    /// 返回 false = 无画布或该节点没有几何 ROI。
+    bool startTemplateRoiPick(NodeBase *node, bool rotatedRect = true);
     /// 画布 ROI 收笔：清状态 + 关 ROI 编辑 + 写回目标节点参数；返回目标节点（无目标/取消/未知类型为 nullptr）
     NodeBase *writeRoiToNode(const RoiShape &shape);
 

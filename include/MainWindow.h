@@ -226,6 +226,12 @@ private:
     QVector<OverlayShape> collectOverlayFromNode(NodeBase *node) const;
     /// 进入画布 ROI 编辑模式（测量节点取点）
     void startRoiPick(NodeBase *node);
+    /// 模块窗「绘制」→ 主画布重画模板匹配的检测区域（polygon=true 逐点绘制）
+    void beginSearchRegionPick(NodeBase *node, bool polygon);
+    /// 模块窗「绘制」→ 主画布重画模板匹配的 ROI 区域（模板框）
+    void beginTemplateRoiPick(NodeBase *node, bool rotatedRect);
+    /// 把主画布切到该节点的图像并保证图像窗口可见（两种绘制入口共用）
+    bool prepareCanvasPick(NodeBase *node);
     /// ROI 绘制完成：写回节点参数
     void handleRoiEdited(const RoiShape &shape);
     /// 当前流程标签页对应的场景（无则 nullptr）。分组等画布操作按"当前流程"作用。

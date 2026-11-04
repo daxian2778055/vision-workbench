@@ -508,12 +508,12 @@ void OpencvTemplateMatchNode::init()
     makeIntParam(QStringLiteral("searchRegionRow"), 0, 0, 100000,
                  QStringLiteral("搜索区域上行")),
     makeIntParam(QStringLiteral("searchRegionWidth"), 0, 0, 100000,
-                 QStringLiteral("搜索区域宽")),
+                 QStringLiteral("搜索区域宽度")),
     makeIntParam(QStringLiteral("searchRegionHeight"), 0, 0, 100000,
-                 QStringLiteral("搜索区域高")),
+                 QStringLiteral("搜索区域高度")),
     // 搜索区域多边形（r19）："x1,y1 x2,y2 ..."，>=3 点生效，优先于矩形。
     makeStringParam(QStringLiteral("searchRegionPolygon"), QString(),
-                    QStringLiteral("搜索区域多边形(空=用矩形)")),
+                    QStringLiteral("搜索区域多边形（空=矩形）")),
 });
 
     // VM 4.4 口径分组（对应工具窗四个页签）。此前所有参数都落在默认的「参数」一组里，
@@ -1855,7 +1855,8 @@ void OpencvTemplateMatchNode::applyGeometryRoi(const RoiShape &shape)
         setParam(QStringLiteral("roiAngle"), shape.angleDeg);
         setParam(QStringLiteral("roiCol"), int(aabb.x() + 0.5));
         setParam(QStringLiteral("roiRow"), int(aabb.y() + 0.5));
-        setParam(QStringLiteral("trainFromImage"), true);
+        // 注意：这里不再自动把 trainFromImage 置 true。
+        // VM 的流程是"先框区域 → 再点训练"；框完就自动训练会让用户以为训练按钮是摆设。
         return;
     }
     if (shape.type == RoiType::Rect) {
@@ -1869,7 +1870,7 @@ void OpencvTemplateMatchNode::applyGeometryRoi(const RoiShape &shape)
         setParam(QStringLiteral("roiCenterCol"), r.center().x());
         setParam(QStringLiteral("roiCenterRow"), r.center().y());
         setParam(QStringLiteral("roiAngle"), 0.0);
-        setParam(QStringLiteral("trainFromImage"), true);
+        // 训练由「训练模板」按钮显式触发（见 ModuleEditorDialog::onTrainTemplate）。
     }
 }
 
