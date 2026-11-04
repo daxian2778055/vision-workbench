@@ -991,6 +991,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261104.3",
       "recorded_at": "2026-11-04",
       "recorded_note": "交付审计收口：P1 参数/结果深度（Blob/卡尺/角度/标定/OCR）、运行策略/采集策略/后台运行、欢迎页与布局持久化、删除节点等悬垂指针清理、大文件存图内存上限；75/75 测试与三项门禁全绿"
+    },
+    {
+      "tag": "rc-20261104.4",
+      "commit": "a33941ed485e2833e2a97bf862d610c7e615dedb",
+      "exe_md5": "4966eb9b3ff35b5aa1859ae3eee8f3ca",
+      "exe_bytes": 11060224,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261104.4",
+      "recorded_at": "2026-11-04",
+      "recorded_note": "B2 单输入契约（模板匹配/图像四则/公式/相机IO 全部 1 输入点，老连线迁移为订阅）+ VM 4.4 模块窗四页签框架、轮廓匹配固定结果判断行、模板配置两行工具条；73/73 测试全绿"
     }
   ],
   "legacy_backfilled": [
