@@ -22,6 +22,7 @@
 
 #include <QHBoxLayout>
 #include <QVBoxLayout>
+#include <QFormLayout>
 #include <QSplitter>
 #include <QPushButton>
 #include <QLabel>
@@ -86,7 +87,11 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(8, 8, 8, 8);
 
-    auto *toolbar = new QHBoxLayout();
+    // 工具条装进独立容器：模板匹配按 VM 只保留页签（下面的动作已在各页内提供），
+    // 其它算子仍需要绘制/掩膜等入口，保留这一行。
+    auto *toolbarHost = new QWidget(this);
+    auto *toolbar = new QHBoxLayout(toolbarHost);
+    toolbar->setContentsMargins(0, 0, 0, 0);
     // P1-1：左上角帮助入口（对标 VM 模块窗的 ? 按钮）
     m_helpBtn = new QToolButton(this);
     m_helpBtn->setObjectName(QStringLiteral("moduleHelpButton"));
@@ -119,14 +124,14 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     auto *saveTmplBtn = new QPushButton(QStringLiteral("保存模板图像"));
     // 训练模板（r19 补全清单第 3 项）：按当前 ROI 从图像训练并落盘，
     // 训练完立刻刷新模板预览、并在画布上显示匹配结果（VM 的训练手感）。
-    auto *trainTmplBtn = new QPushButton(QStringLiteral("训练模板"));
+    m_trainTmplBtn = new QPushButton(QStringLiteral("训练模板"));
     auto *evalBtn = new QPushButton(QStringLiteral("评估模板"));
     auto *budgetBtn = new QPushButton(QStringLiteral("参数体检"));
     auto *wizardBtn = new QPushButton(QStringLiteral("向导"));
     wizardBtn->setToolTip(QStringLiteral("按步骤训练模板：画框 → 设范围 → 评估"));
     budgetBtn->setToolTip(QStringLiteral("算一下角度×尺度的组合数与预计耗时，防止现场卡顿"));
     evalBtn->setToolTip(QStringLiteral("按当前参数跑一次，给出模板质量评级与改进建议"));
-    trainTmplBtn->setToolTip(QStringLiteral("按当前 ROI 从图像训练并保存模板，随后刷新预览与结果"));
+    m_trainTmplBtn->setToolTip(QStringLiteral("按当前 ROI 从图像训练并保存模板，随后刷新预览与结果"));
     auto *fitBtn = new QPushButton(QStringLiteral("适应窗口"));
     m_autoRecomputeCheck = new QCheckBox(QStringLiteral("自动预览"));
     m_autoRecomputeCheck->setObjectName(QStringLiteral("autoRecomputeCheck"));
@@ -158,7 +163,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
         addActionFor(QStringLiteral("绘制搜索区域"), searchBtn);
         addActionFor(QStringLiteral("绘制多边形区域"), polyBtn);
         addActionFor(QStringLiteral("保存模板图像"), saveTmplBtn);
-        addActionFor(QStringLiteral("训练模板"), trainTmplBtn);
+        addActionFor(QStringLiteral("训练模板"), m_trainTmplBtn);
         addActionFor(QStringLiteral("评估模板"), evalBtn);
         addActionFor(QStringLiteral("参数体检"), budgetBtn);
         addActionFor(QStringLiteral("向导"), wizardBtn);
@@ -172,7 +177,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
         auto *tmplButtonHost = new QWidget(this);
         auto *tmplButtonLay = new QHBoxLayout(tmplButtonHost);
         tmplButtonLay->setContentsMargins(0, 0, 0, 0);
-        for (QPushButton *b : {searchBtn, polyBtn, saveTmplBtn, trainTmplBtn,
+        for (QPushButton *b : {searchBtn, polyBtn, saveTmplBtn, m_trainTmplBtn,
                                evalBtn, budgetBtn, wizardBtn}) {
             tmplButtonLay->addWidget(b);
         }
@@ -195,7 +200,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     toolbar->addWidget(m_varRefButton);
     toolbar->addWidget(fitBtn);
     toolbar->addStretch();
-    root->addLayout(toolbar);
+    root->addWidget(toolbarHost);
 
     m_hintLabel = new QLabel();
     m_hintLabel->setObjectName(QStringLiteral("paramHintLabel"));
@@ -355,7 +360,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     tmplToolsBtn->setVisible(isTmpl);
     searchBtn->setVisible(isTmpl);
     polyBtn->setVisible(isTmpl);
-    trainTmplBtn->setVisible(isTmpl);
+    m_trainTmplBtn->setVisible(isTmpl);
     evalBtn->setVisible(isTmpl);
     budgetBtn->setVisible(isTmpl);
     wizardBtn->setVisible(isTmpl);
@@ -367,6 +372,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     m_templateList->setVisible(isTmpl);
     m_tmplNewBtn->setVisible(isTmpl);
     m_tmplLoadBtn->setVisible(isTmpl);
+    m_trainTmplBtn->setVisible(isTmpl);
     m_tmplEditBtn->setVisible(isTmpl);
     m_tmplDelBtn->setVisible(isTmpl);
     // P0-2：结果显示是所有模块的通用页（非模板算子显示通用输出/状态/耗时）
@@ -380,6 +386,8 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
             m_view->setVisible(false);
         if (m_splitter)
             m_splitter->setSizes({0, 520});
+        // VM 模块窗没有顶部工具条：模板相关动作放在「特征模板」页，ROI 绘制在模板配置窗。
+        toolbarHost->setVisible(false);
         resize(qMax(width(), 520), qMax(height(), 660));
     }
 
@@ -431,29 +439,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     connect(wizardBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onWizardGuide);
     connect(budgetBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onCheckBudget);
     connect(evalBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onEvaluateTemplate);
-    connect(trainTmplBtn, &QPushButton::clicked, this, [this]() {
-        if (!m_node)
-            return;
-        m_node->setParam(QStringLiteral("trainFromImage"), true);
-        emit executeRequested();       // MainWindow: executeNodeOnce（含 reload + setResultOverlay）
-        refreshTemplatePreview();      // 训练后立刻刷新模板预览
-        // 训练完直接给一组可用的边缘参数（阈值/特征尺度/速度尺度），省掉"画完再猜参数"
-        if (auto *tmplNode = qobject_cast<OpencvTemplateMatchNode *>(m_node)) {
-            if (tmplNode->applySuggestedParams()) {
-                if (QWidget *panel = m_paramHost->widget())
-                    tmplNode->updateParamPanel(panel);
-                const QString hint = QStringLiteral(
-                    "已训练，并按模板自动给出参数：阈值 %1 / 特征尺度 %2 / 速度尺度 %3")
-                                         .arg(tmplNode->getParam(QStringLiteral("contrastThreshold")).toInt())
-                                         .arg(tmplNode->getParam(QStringLiteral("featureScale")).toInt())
-                                         .arg(tmplNode->getParam(QStringLiteral("speedScale")).toInt());
-                m_hintLabel->setText(hint);
-                return;
-            }
-        }
-        m_hintLabel->setText(QStringLiteral(
-            "已按 ROI 训练；图上绿点 = 模板强梯度点（GOC 用它打分，灰度法仅作质量参考）"));
-    });
+    connect(m_trainTmplBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onTrainTemplate);
     connect(fitBtn, &QPushButton::clicked, m_view, &HalconWindow::fitToWindow);
     connect(m_helpBtn, &QToolButton::clicked, this, [this]() { emit helpRequested(m_node); });
     connect(m_cancelBtn, &QPushButton::clicked, this, [this]() { reject(); });
@@ -681,8 +667,8 @@ void ModuleEditorDialog::rebuildVmTabs()
         if (t == QStringLiteral("图像输入") || t == QStringLiteral("ROI区域")
             || t.contains(QStringLiteral("基本"))) {
             basicLay->addWidget(box);
-        } else if (t == QStringLiteral("模板配置") && isTmpl) {
-            tmplLay->addWidget(box);   // 模板配置参数与模板同页（VM 放在模板配置窗右下）
+        } else if ((t == QStringLiteral("模板配置") || t == QStringLiteral("特征模板")) && isTmpl) {
+            tmplLay->addWidget(box);   // 模板源/模板配置参数与模板同页（VM 放在模板配置窗右下）
         } else {
             runLay->addWidget(box);
         }
@@ -723,7 +709,7 @@ void ModuleEditorDialog::rebuildVmTabs()
         auto *createRow = new QWidget();
         auto *createLay = new QHBoxLayout(createRow);
         createLay->setContentsMargins(0, 0, 0, 0);
-        for (QPushButton *b : {m_tmplNewBtn, m_tmplLoadBtn}) {
+        for (QPushButton *b : {m_tmplNewBtn, m_tmplLoadBtn, m_trainTmplBtn}) {
             if (b)
                 createLay->addWidget(b);
         }
@@ -822,29 +808,25 @@ void ModuleEditorDialog::rebuildVmTabs()
         aboutLay->addStretch();
     }
 
-    // 输入参数：端口来源摘要 + 原有图像输入/ROI 参数组
+    // VM「基本参数 → 图像输入」：一行「输入源」，不再用端口表。
     {
-        auto *inputTable = makeReadOnlyTable({QStringLiteral("输入端口"), QStringLiteral("来源模块")});
-        const QList<Port *> inputs = m_node->inputPorts();
-        for (Port *port : inputs) {
-            QStringList sources;
+        auto *inputGroup = new QGroupBox(QStringLiteral("图像输入"));
+        auto *inputForm = new QFormLayout(inputGroup);
+        auto *sourceCombo = new QComboBox(inputGroup);
+        sourceCombo->setObjectName(QStringLiteral("inputSourceCombo"));
+        QStringList sources;
+        for (Port *port : m_node->inputPorts()) {
             for (MyProject::Connection *conn : port->connections()) {
                 if (conn && conn->getSourceNode())
                     sources << conn->getSourceNode()->fullName();
             }
-            const int row = inputTable->rowCount();
-            inputTable->insertRow(row);
-            inputTable->setItem(row, 0, new QTableWidgetItem(port->name()));
-            inputTable->setItem(row, 1, new QTableWidgetItem(
-                                           sources.isEmpty() ? QStringLiteral("未连接")
-                                                             : sources.join(QStringLiteral("、"))));
         }
-        if (inputs.isEmpty()) {
-            inputTable->insertRow(0);
-            inputTable->setItem(0, 0, new QTableWidgetItem(QStringLiteral("无输入端口")));
-        }
-        inputTable->setMaximumHeight(150);
-        basicLay->insertWidget(0, inputTable);
+        sourceCombo->addItem(sources.isEmpty() ? QStringLiteral("未连接")
+                                               : sources.join(QStringLiteral("、")));
+        sourceCombo->setEnabled(false);   // 改来源请在主画布重新连线
+        sourceCombo->setToolTip(QStringLiteral("当前输入图像来源；如需切换，请在流程画布上重新连线"));
+        inputForm->addRow(QStringLiteral("输入源"), sourceCombo);
+        basicLay->insertWidget(0, inputGroup);
     }
 
     // B2 单输入契约：逻辑输入槽的「订阅」选择（VM 基本参数页的输入源/掩膜图像订阅）。
@@ -853,7 +835,9 @@ void ModuleEditorDialog::rebuildVmTabs()
         const int realInputs = m_node->inputPorts().size();
         const int logicalInputs = m_node->logicalInputPortCount();
         if (logicalInputs > realInputs) {
-            auto *box = new QGroupBox(QStringLiteral("输入订阅"));
+            const bool tmplNode = qobject_cast<OpencvTemplateMatchNode *>(m_node) != nullptr;
+            auto *box = new QGroupBox(tmplNode ? QStringLiteral("ROI掩膜图像（订阅）")
+                                               : QStringLiteral("输入订阅"));
             auto *boxLay = new QVBoxLayout(box);
             boxLay->setContentsMargins(8, 8, 8, 8);
             boxLay->setSpacing(6);
@@ -2268,6 +2252,30 @@ void ModuleEditorDialog::onEvaluateTemplate()
     // 向导 ②：评估即收尾（评级已在提示条）
     if (m_wizardStep >= 2)
         m_wizardStep = 0;
+}
+
+void ModuleEditorDialog::onTrainTemplate()
+{
+    if (!m_node)
+        return;
+    m_node->setParam(QStringLiteral("trainFromImage"), true);
+    emit executeRequested();       // MainWindow: executeNodeOnce（含 reload + setResultOverlay）
+    refreshTemplatePreview();      // 训练后立刻刷新模板预览
+    // 训练完直接给一组可用的边缘参数（阈值/特征尺度/速度尺度），省掉"画完再猜参数"
+    if (auto *tmplNode = qobject_cast<OpencvTemplateMatchNode *>(m_node)) {
+        if (tmplNode->applySuggestedParams()) {
+            if (QWidget *panel = m_paramHost->widget())
+                tmplNode->updateParamPanel(panel);
+            m_hintLabel->setText(
+                QStringLiteral("已训练，并按模板自动给出参数：阈值 %1 / 特征尺度 %2 / 速度尺度 %3")
+                    .arg(tmplNode->getParam(QStringLiteral("contrastThreshold")).toInt())
+                    .arg(tmplNode->getParam(QStringLiteral("featureScale")).toInt())
+                    .arg(tmplNode->getParam(QStringLiteral("speedScale")).toInt()));
+            return;
+        }
+    }
+    m_hintLabel->setText(QStringLiteral(
+        "已按 ROI 训练；图上绿点 = 模板轮廓点（GOC 用它打分，灰度法仅作质量参考）"));
 }
 
 void ModuleEditorDialog::onSaveTemplate()

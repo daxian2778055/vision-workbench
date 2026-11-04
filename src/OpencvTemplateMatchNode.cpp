@@ -188,6 +188,53 @@ namespace {
 /// 自动模式按模板梯度分位数覆盖；可视化与打分都必须走 effectiveEdgeThreshold()。
 constexpr double kGocEdgeThreshold = 20.0;
 
+/// 边缘细化（非极大值抑制）：沿梯度方向只保留局部最大值，把 Sobel 的 2~3 像素宽带
+/// 压成 1 像素轮廓线。VM 的模板轮廓点就是这种"细线点集"；直接对幅值二值化会把暗部
+/// 纹理整片点亮，看起来是密密麻麻的点、也把打分权重摊到纹理上。
+static cv::Mat thinEdgeMask(const cv::Mat &gx, const cv::Mat &gy, const cv::Mat &mag,
+                            double threshold)
+{
+    cv::Mat mask = cv::Mat::zeros(mag.size(), CV_32F);
+    if (mag.empty() || gx.empty() || gy.empty()
+        || gx.size() != mag.size() || gy.size() != mag.size()) {
+        return mask;
+    }
+    for (int y = 0; y < mag.rows; ++y) {
+        const float *mRow = mag.ptr<float>(y);
+        const float *gxRow = gx.ptr<float>(y);
+        const float *gyRow = gy.ptr<float>(y);
+        float *outRow = mask.ptr<float>(y);
+        for (int x = 0; x < mag.cols; ++x) {
+            const float m = mRow[x];
+            if (m < float(threshold))
+                continue;
+            const float ax = std::abs(gxRow[x]);
+            const float ay = std::abs(gyRow[x]);
+            // 梯度方向量化为最近的主方向：水平 / 垂直 / 两条对角
+            int dx = 0;
+            int dy = 0;
+            if (ax >= 2.0f * ay) {
+                dx = 1;
+            } else if (ay >= 2.0f * ax) {
+                dy = 1;
+            } else {
+                dx = 1;
+                dy = (gxRow[x] * gyRow[x] > 0.0f) ? 1 : -1;
+            }
+            const auto at = [&mag](int yy, int xx) -> float {
+                if (yy < 0 || yy >= mag.rows || xx < 0 || xx >= mag.cols)
+                    return 0.0f;
+                return mag.ptr<float>(yy)[xx];
+            };
+            // 两侧邻居都更强 ⇒ 不是脊线中心，丢掉；保留 1 像素的局部极大
+            if (at(y + dy, x + dx) > m || at(y - dy, x - dx) > m)
+                continue;
+            outRow[x] = 1.0f;
+        }
+    }
+    return mask;
+}
+
 /// VM「最小链长」+「特征尺度」的等效实现：
 ///  ① 只保留连通长度 ≥ minChain 的特征链（短链是噪声/杂点，建模时丢弃）；
 ///  ② 按 step×step 网格稀疏化（VM：特征尺度越大特征点越稀疏、抗形变越强）。
@@ -388,12 +435,14 @@ void OpencvTemplateMatchNode::init()
                      QStringLiteral("延拓阈值（目标被图像边缘截断时允许缺失的特征比例 %）")),
         makeIntParam(QStringLiteral("timeoutMs"), 0, 0, 10000,
                      QStringLiteral("超时控制（搜索超时毫秒数，0=关闭）")),
-        makeIntParam(QStringLiteral("roiType"), 0, 0, 1,
-                     QStringLiteral("ROI区域类型：0=图形（searchRegion*），1=图像（第2个输入当掩膜）")),
+        makeEnumParam(QStringLiteral("roiType"), 0,
+                      QStringList{QStringLiteral("图形类型"), QStringLiteral("图像类型")},
+                      QStringLiteral("ROI区域类型")),
         makeBoolParam(QStringLiteral("outputMask"), false,
                       QStringLiteral("输出掩膜（把最终搜索区域作为具名子结果输出）")),
-        makeIntParam(QStringLiteral("roiSource"), 0, 0, 1,
-                     QStringLiteral("ROI创建：0=绘制（searchRegion*），1=继承上游命中框")),
+        makeEnumParam(QStringLiteral("roiSource"), 0,
+                      QStringList{QStringLiteral("绘制"), QStringLiteral("继承")},
+                      QStringLiteral("ROI创建")),
         makeIntParam(QStringLiteral("scaleMode"), 0, 0, 1,
                      QStringLiteral("尺度模式：0=手动（scaleMin/Max/Step），1=自动按模板占比估范围")),
         // VM「结果显示 → 图像显示」：每一层可单独显隐（截图 4 的四个眼睛开关）
@@ -473,7 +522,8 @@ void OpencvTemplateMatchNode::init()
         const QString &n = s.name;
         if (n == QLatin1String("templatePath") || n == QLatin1String("trainFromImage")
             || n == QLatin1String("method"))
-            s.group = QStringLiteral("图像输入");
+            s.group = QStringLiteral("特征模板");   // VM：模板源/匹配方式属于模板页，不在基本参数
+
         else if (n == QLatin1String("outputMask") || n == QLatin1String("roiType")
                  || n == QLatin1String("roiSource")
                  || n.startsWith(QLatin1String("searchRegion")))
@@ -526,6 +576,32 @@ void OpencvTemplateMatchNode::init()
                          });
         for (int i = 0; i < runPositions.size(); ++i)
             m_paramSpecs[runPositions.at(i)] = runSpecs.at(i);
+    }
+
+    // VM「基本参数 → ROI区域」字段顺序：输出掩膜 → ROI区域类型 → ROI创建 → 检测区域。
+    {
+        static const QStringList kRoiOrder = {
+            QStringLiteral("outputMask"), QStringLiteral("roiType"), QStringLiteral("roiSource"),
+            QStringLiteral("searchRegionCol"), QStringLiteral("searchRegionRow"),
+            QStringLiteral("searchRegionWidth"), QStringLiteral("searchRegionHeight"),
+            QStringLiteral("searchRegionPolygon"),
+        };
+        QVector<ParamSpec> roiSpecs;
+        QVector<int> roiPositions;
+        for (int i = 0; i < m_paramSpecs.size(); ++i) {
+            if (m_paramSpecs.at(i).group == QStringLiteral("ROI区域")) {
+                roiSpecs.append(m_paramSpecs.at(i));
+                roiPositions.append(i);
+            }
+        }
+        std::stable_sort(roiSpecs.begin(), roiSpecs.end(),
+                         [](const ParamSpec &a, const ParamSpec &b) {
+                             const int ra = kRoiOrder.indexOf(a.name);
+                             const int rb = kRoiOrder.indexOf(b.name);
+                             return (ra < 0 ? 999 : ra) < (rb < 0 ? 999 : rb);
+                         });
+        for (int i = 0; i < roiPositions.size(); ++i)
+            m_paramSpecs[roiPositions.at(i)] = roiSpecs.at(i);
     }
 
     m_params[QStringLiteral("matchRow")] = 0.0;
@@ -1172,6 +1248,8 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 cv::Sobel(warped, wgx, CV_32F, 1, 0, sobelKsize);
                 cv::Sobel(warped, wgy, CV_32F, 0, 1, sobelKsize);
                 cv::magnitude(wgx, wgy, wmag);
+                // 打分沿用幅值掩膜（轮廓细化只用于界面显示）：细化会把可见点压到
+                // 1 像素线，跨帧/遮挡场景的可见点数容易跌破门槛，导致整帧判无效。
                 cv::Mat wm;
                 cv::threshold(wmag, wm, edgeThreshold, 1.0, cv::THRESH_BINARY);
                 wm.convertTo(wm, CV_32F);
@@ -2141,8 +2219,7 @@ QVector<QPointF> OpencvTemplateMatchNode::featurePointsForPatch(const cv::Mat &t
     cv::Sobel(tmpl, gy, CV_32F, 0, 1, qBound(3, aperture, 7) | 1);
     cv::magnitude(gx, gy, mag);
     // 与打分同一套提纯：最小链长 + 特征尺度稀疏化（否则"看到的点"和"打分的点"又分叉）
-    cv::Mat strong;
-    cv::threshold(mag, strong, threshold, 1.0, cv::THRESH_BINARY);
+    cv::Mat strong = thinEdgeMask(gx, gy, mag, threshold);
     refineFeatureMask(strong, minChain, featureScale);
 
     const int w = tmpl.cols;

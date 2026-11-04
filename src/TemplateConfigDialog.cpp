@@ -13,6 +13,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
+#include <QRegularExpression>
 #include <QDoubleSpinBox>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -861,13 +862,18 @@ void TemplateConfigDialog::refreshFeaturePreview()
     }
     if (needMask)
         mask = OpencvTemplateMatchNode::shapesMask(m_shapes, box, m_excludes);
+    // 预览必须用当前「特征尺度」和自动链长，否则界面上永远是 1/1 的最密点集
+    // （现场观感：暗部纹理密密麻麻，和 VM 的轮廓点集完全不同）。
+    const int featureScale = qMax(1, m_apertureCombo->currentText().toInt());
+    const int minChain = qMax(2, featureScale * 2);
     m_view->setFeaturePoints(
         OpencvTemplateMatchNode::featurePointsForPatch(patch, rect, threshold, aperture, mask,
-                                                       1, 1, m_erases));
+                                                       featureScale, minChain, m_erases));
 }
 
 bool TemplateConfigDialog::ensureSavePath(QString *path)
 {
+    // 用户显式点过「模板存图…」：用它给的路径。
     if (!m_savePath.isEmpty()) {
         QFileInfo fi(m_savePath);
         if (!fi.dir().exists() && !QDir().mkpath(fi.absolutePath())) {
@@ -878,16 +884,36 @@ bool TemplateConfigDialog::ensureSavePath(QString *path)
         *path = m_savePath;
         return true;
     }
-    QString def = m_nameEdit->text().trimmed();
-    if (def.isEmpty())
-        def = QStringLiteral("template");
-    const QString chosen = QFileDialog::getSaveFileName(
-        this, QStringLiteral("模板存图"), def + QStringLiteral(".png"),
-        QStringLiteral("PNG (*.png);;BMP (*.bmp)"));
-    if (chosen.isEmpty())
-        return false;
-    m_savePath = chosen;
-    *path = chosen;
+
+    // VM 的「确定」不会再弹保存对话框：模板属于方案，内部静默落盘到方案目录的
+    // templates/ 下（「模板存图」只决定是否额外保留一张可浏览的模板图）。
+    QString base = ProjectPaths::schemeBaseDir(ProjectPaths::currentSchemeFilePath());
+    QDir dir(base + QStringLiteral("/templates"));
+    if (!dir.exists() && !dir.mkpath(QStringLiteral("."))) {
+        // 方案未落盘 / 程序目录不可写：退回用户临时目录，仍不打断创建流程
+        dir = QDir(QDir::tempPath() + QStringLiteral("/VisionFlow_templates"));
+        if (!dir.exists() && !dir.mkpath(QStringLiteral("."))) {
+            QMessageBox::warning(this, QStringLiteral("模板配置"),
+                                 QStringLiteral("模板目录创建失败：%1").arg(dir.absolutePath()));
+            return false;
+        }
+    }
+    QString name = m_nameEdit->text().trimmed();
+    if (name.isEmpty())
+        name = QStringLiteral("template");
+    name.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_\\-\\x4e00-\\x9fa5]")),
+                 QStringLiteral("_"));
+    const int moduleId = m_node ? m_node->moduleId() : 0;
+    QString file = dir.filePath(QStringLiteral("%1_%2.png").arg(moduleId).arg(name));
+    int suffix = 2;
+    while (QFileInfo::exists(file)) {
+        file = dir.filePath(QStringLiteral("%1_%2_%3.png").arg(moduleId).arg(name).arg(suffix));
+        ++suffix;
+        if (suffix > 99)
+            break;
+    }
+    m_savePath = file;
+    *path = file;
     return true;
 }
 
@@ -955,7 +981,7 @@ void TemplateConfigDialog::onConfirm()
     m_node->setParam(QStringLiteral("featureScale"), entry.featureScale);
     m_node->setParam(QStringLiteral("speedScale"), entry.speedScale);
 
-    QMessageBox::information(this, QStringLiteral("模板配置"),
-                             QStringLiteral("创建模板成功：%1").arg(entry.name));
+    // VM 的「确定」直接关闭窗口，不再弹成功提示（结果在特征模板页的列表里可见）。
+    m_hint->setText(QStringLiteral("已创建模板：%1").arg(entry.name));
     accept();
 }

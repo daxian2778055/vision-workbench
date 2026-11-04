@@ -59,6 +59,8 @@ private slots:
     void onRoiEdited(const RoiShape &shape);
     void onMaskEdited();
     void onSaveTemplate();
+    /// 按当前 ROI 从输入图训练模板并给出一组可用边缘参数（VM 特征模板页的“训练”入口）
+    void onTrainTemplate();
     // ---- VM「特征模板」页对齐：模板列表（创建/编辑/删除）----
     void onNewTemplate();
     void onEditTemplate();
@@ -140,6 +142,7 @@ private:
     QTableWidget *m_resultTable = nullptr;
     QPushButton *m_tmplNewBtn = nullptr;
     QPushButton *m_tmplLoadBtn = nullptr;         /// VM「特征模板」页：载入（本地模板图像）
+    QPushButton *m_trainTmplBtn = nullptr;        /// 训练模板（可见入口，不再藏在「模板工具」菜单里）
     QPushButton *m_tmplEditBtn = nullptr;
     QPushButton *m_tmplDelBtn = nullptr;
     QCheckBox *m_autoRecomputeCheck = nullptr;   /// 「自动重算」开关
