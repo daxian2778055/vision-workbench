@@ -1027,6 +1027,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261104.7",
       "recorded_at": "2026-11-04",
       "recorded_note": "模板匹配 UI 继续 1:1：模板配置图标工具条、模板存图/全部屏蔽开关、右栏 VM 顺序、基本参数 ROI 开关/单选钮/形状行、特征模板页两栏；73/73 测试全绿"
+    },
+    {
+      "tag": "rc-20261104.8",
+      "commit": "7b4a8e77c6ab8cee4fcb012d394b52cff70d9889",
+      "exe_md5": "043842d9f318ccedef29c7d782fb7f1c",
+      "exe_bytes": 11103232,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261104.8",
+      "recorded_at": "2026-11-04",
+      "recorded_note": "模板匹配 UI 细节：VM 开关样式（模板存图/全部屏蔽）、选择指针/旋转矩形图标、缩放适应全屏可用、屏蔽区创建/屏蔽区/位置修正占位并置灰、模板名称行隐藏；73/73 测试全绿"
     }
   ],
   "legacy_backfilled": [
