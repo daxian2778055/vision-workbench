@@ -15,11 +15,11 @@ CameraIoNode::~CameraIoNode()
 
 void CameraIoNode::init()
 {
-    HalconNode::init();
-    // 输入：值（Bool，写操作的动态值，置于继承的"输入图像"之后为索引1）；
-    //       执行（Any，便于串接在检测/判定之后）
-    addInputPort(QStringLiteral("值"), PortDataType::Bool);
-    addInputPort(QStringLiteral("执行"), PortDataType::Any);
+    // B2：IO 控制不消费图像。旧实现靠 HalconNode::init() 多带一个"输入图像"端口，
+    // 单输入契约下画布会出现 2 个点（值/执行之外还多一个图像）——这里不调基类 init，
+    // 只保留 1 个真实输入「执行」，写值改为逻辑槽（订阅绑定注入）。
+    addInputPort(QStringLiteral("执行"), PortDataType::Any);   // 0：执行/串接
+    addInputSlot(QStringLiteral("值"), PortDataType::Bool);      // 1：写值（可订阅）
     // 输出：值（Bool 回读/写入值）；成功（Bool）；错误（String）
     addOutputPort(QStringLiteral("值"), PortDataType::Bool);
     addOutputPort(QStringLiteral("成功"), PortDataType::Bool);

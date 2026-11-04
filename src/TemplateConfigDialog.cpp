@@ -70,21 +70,27 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     maskModeBtn->setToolTip(QStringLiteral(
         "勾上后画/取到的形状进「屏蔽」列表：从保留区里挖掉（logo/水印/背景）。"
         "屏蔽=保留 − 屏蔽；不画保留区时默认整块保留再挖。"));
-    top->addWidget(shapeRectBtn);
-    top->addWidget(shapePolyBtn);
-    top->addWidget(shapeCircleBtn);
-    top->addWidget(shapeFreeBtn);
-    top->addWidget(shapeWandBtn);
-    top->addWidget(shapeWandPlusBtn);
-    top->addWidget(m_wandTol);
-    top->addWidget(clearShapeBtn);
-    top->addWidget(delShapeBtn);
-    top->addWidget(splitBtn);
-    top->addWidget(scissorsBtn);
-    top->addWidget(maskModeBtn);
+    // VM 模板配置窗是两行工具条：第一行图像/存图/屏蔽开关，第二行形状与编辑工具。
+    // 旧实现把所有按钮平铺在一行，窗口一窄就被挤成省略号；这里按 VM 分两行。
     top->addWidget(blockAllBtn);
-    top->addWidget(eraseBtn);
     root->addLayout(top);
+
+    auto *tools = new QHBoxLayout();
+    tools->addWidget(shapeRectBtn);
+    tools->addWidget(shapePolyBtn);
+    tools->addWidget(shapeCircleBtn);
+    tools->addWidget(shapeFreeBtn);
+    tools->addWidget(shapeWandBtn);
+    tools->addWidget(shapeWandPlusBtn);
+    tools->addWidget(m_wandTol);
+    tools->addWidget(clearShapeBtn);
+    tools->addWidget(delShapeBtn);
+    tools->addWidget(splitBtn);
+    tools->addWidget(scissorsBtn);
+    tools->addWidget(maskModeBtn);
+    tools->addWidget(eraseBtn);
+    tools->addStretch();
+    root->addLayout(tools);
 
     // ---- 左：图像区；右：配置参数 + 形状列表 ----
     auto *split = new QHBoxLayout();

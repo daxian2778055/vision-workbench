@@ -25,7 +25,8 @@ void CameraIoTest::testInitPortsAndParams()
     CameraIoNode node;
     node.init();
     // 注：B1 统一输出后只剩一个「输出」端口；值/成功/错误是它上面的具名子结果
-    QCOMPARE(node.inputPorts().size(), 3);
+    // B2 单输入契约：画布只有 1 个输入点「执行」；写值改为逻辑槽（订阅绑定注入）。
+    QCOMPARE(node.inputPorts().size(), 1);
     QCOMPARE(node.outputPorts().size(), 1);
     QVERIFY(node.hasParam(QStringLiteral("cameraName")));
     QVERIFY(node.hasParam(QStringLiteral("lineIndex")));
@@ -34,18 +35,19 @@ void CameraIoTest::testInitPortsAndParams()
     QVERIFY(node.hasParam(QStringLiteral("writeValue")));
     QCOMPARE(node.getParam(QStringLiteral("lineMode")).toInt(), 1);
     QCOMPARE(node.getParam(QStringLiteral("action")).toInt(), 1);
-    // 折叠后的子输出：值/成功 = Bool，错误 = String（运行界面按名取值仍能对上）
+    // 折叠后的子输出：主端口「值」= Bool；成功 = Bool，错误 = String（按名取值仍能对上）
+    QCOMPARE(node.outputPorts().first()->name(), QStringLiteral("值"));
     const auto logical = node.logicalOutputs();
-    QCOMPARE(logical.size(), 3);
-    QCOMPARE(logical.at(0).first, QStringLiteral("值"));
+    QCOMPARE(logical.size(), 2);
+    QCOMPARE(logical.at(0).first, QStringLiteral("成功"));
     QCOMPARE(static_cast<int>(logical.at(0).second), static_cast<int>(PortDataType::Bool));
-    QCOMPARE(logical.at(1).first, QStringLiteral("成功"));
-    QCOMPARE(static_cast<int>(logical.at(1).second), static_cast<int>(PortDataType::Bool));
-    QCOMPARE(logical.at(2).first, QStringLiteral("错误"));
-    QCOMPARE(static_cast<int>(logical.at(2).second), static_cast<int>(PortDataType::String));
-    // 输入端口（含继承的"输入图像"）：值 = Bool，执行 = Any
-    QCOMPARE(static_cast<int>(node.inputPorts()[1]->dataType()), static_cast<int>(PortDataType::Bool));
-    QCOMPARE(static_cast<int>(node.inputPorts()[2]->dataType()), static_cast<int>(PortDataType::Any));
+    QCOMPARE(logical.at(1).first, QStringLiteral("错误"));
+    QCOMPARE(static_cast<int>(logical.at(1).second), static_cast<int>(PortDataType::String));
+    // 输入端口：执行 = Any；写值在逻辑槽 1（Bool），不占画布点
+    QCOMPARE(node.inputPorts()[0]->name(), QStringLiteral("执行"));
+    QCOMPARE(static_cast<int>(node.inputPorts()[0]->dataType()), static_cast<int>(PortDataType::Any));
+    QCOMPARE(node.logicalInputPortCount(), 2);
+    QCOMPARE(node.inputSlotName(1), QStringLiteral("值"));
 }
 
 void CameraIoTest::testSerialization()

@@ -351,10 +351,12 @@ OpencvTemplateMatchNode::OpencvTemplateMatchNode(QObject *parent) : HalconNode(p
 
 void OpencvTemplateMatchNode::init()
 {
-    HalconNode::init();   // 先建「输入图像」（必须是 0 号），再加 ROI 掩膜输入
-    // VM 基本参数页的「ROI区域类型=图像类型」：第二个图像输入当 ROI 掩膜
-    // （白色=允许匹配，黑色=排除）。图形类型仍走 searchRegion* 参数。
-    addInputPort(QStringLiteral("ROI掩膜"));
+    HalconNode::init();   // 先建「输入图像」（必须是 0 号）
+    // VM 4.4 基本参数页的「ROI区域类型=图像类型」：掩膜图像是**订阅**前序模块，
+    // 不是第二个输入点（帮助文档：基本参数 → ROI区域 → 图像类型 → 掩膜图像）。
+    // 因此这里只登记逻辑槽（下标 1，与老方案端口号一致），画布上始终只有 1 个输入点。
+    // 数据由 FlowExecutor 在执行前按订阅绑定注入 m_inputData[1]。
+    addInputSlot(QStringLiteral("掩膜图像"), PortDataType::Image);
     addOutputPort(QStringLiteral("匹配结果"), PortDataType::Measure);
     registerParams({
         makeFilePathParam(QStringLiteral("templatePath"), QString(),
@@ -489,6 +491,43 @@ void OpencvTemplateMatchNode::init()
             s.group = QStringLiteral("运行参数");
     }
 
+    // VM 4.4「运行参数」页字段顺序（帮助文档 GUID-3EEB6D91「参数配置」）：
+    // 全部搜索模式(+多模板重叠率) → 最小匹配分数 → 最大匹配个数 → 匹配极性 →
+    // 角度范围 → 尺度范围类型/尺度 → 最大重叠率 → 排序类型 → 阈值类型 →
+    // 延拓阈值 → 超时控制。只调整 UI 顺序，参数名/默认值/存盘格式不变。
+    {
+        static const QStringList kRunOrder = {
+            QStringLiteral("matchAllTemplates"), QStringLiteral("maxOverlap"),
+            QStringLiteral("minScore"), QStringLiteral("maxMatches"),
+            QStringLiteral("polarity"),
+            QStringLiteral("angleMin"), QStringLiteral("angleMax"),
+            QStringLiteral("scaleRangeType"),
+            QStringLiteral("scaleMin"), QStringLiteral("scaleMax"), QStringLiteral("scaleStep"),
+            QStringLiteral("scaleMinX"), QStringLiteral("scaleMaxX"),
+            QStringLiteral("scaleMinY"), QStringLiteral("scaleMaxY"),
+            QStringLiteral("sortType"),
+            QStringLiteral("thresholdType"), QStringLiteral("matchContrastThreshold"),
+            QStringLiteral("extendThreshold"), QStringLiteral("timeoutMs"),
+            QStringLiteral("writeFixtureName"),
+        };
+        QVector<ParamSpec> runSpecs;
+        QVector<int> runPositions;
+        for (int i = 0; i < m_paramSpecs.size(); ++i) {
+            if (m_paramSpecs.at(i).group == QStringLiteral("运行参数")) {
+                runSpecs.append(m_paramSpecs.at(i));
+                runPositions.append(i);
+            }
+        }
+        std::stable_sort(runSpecs.begin(), runSpecs.end(),
+                         [](const ParamSpec &a, const ParamSpec &b) {
+                             const int ra = kRunOrder.indexOf(a.name);
+                             const int rb = kRunOrder.indexOf(b.name);
+                             return (ra < 0 ? 999 : ra) < (rb < 0 ? 999 : rb);
+                         });
+        for (int i = 0; i < runPositions.size(); ++i)
+            m_paramSpecs[runPositions.at(i)] = runSpecs.at(i);
+    }
+
     m_params[QStringLiteral("matchRow")] = 0.0;
     m_params[QStringLiteral("matchCol")] = 0.0;
     m_params[QStringLiteral("matchScore")] = 0.0;
@@ -574,6 +613,78 @@ cv::Mat edgeDistanceField(const cv::Mat &edge8u)
     return dist;                            // CV_32F
 }
 }   // namespace
+
+bool OpencvTemplateMatchNode::resultJudgmentOk(QString *reason) const
+{
+    // VM「结果显示 → 结果判断」固定条件。字段名与模块窗控件一致：
+    // resJudge<Key>Enable / resJudge<Key>Low / resJudge<Key>High。
+    auto enabled = [this](const QString &key) {
+        return m_params.value(QStringLiteral("resJudge%1Enable").arg(key), false).toBool();
+    };
+    auto low = [this](const QString &key, double def) {
+        return m_params.value(QStringLiteral("resJudge%1Low").arg(key), def).toDouble();
+    };
+    auto high = [this](const QString &key, double def) {
+        return m_params.value(QStringLiteral("resJudge%1High").arg(key), def).toDouble();
+    };
+
+    // VM「无目标时判定 OK」：数量为 0 直接通过（不再判其它条件）
+    if (m_params.value(QStringLiteral("resJudgeOkWhenZero"), false).toBool()
+        && m_params.value(QStringLiteral("matchCount"), 0).toInt() == 0) {
+        return true;
+    }
+
+    auto checkRange = [&](const QString &key, const QString &label, double value,
+                          double defLow, double defHigh) {
+        if (!enabled(key))
+            return true;
+        const double lo = low(key, defLow);
+        const double hi = high(key, defHigh);
+        if (value < lo - 1e-9 || value > hi + 1e-9) {
+            if (reason) {
+                *reason = QStringLiteral("%1 %2 超出判定范围 [%3, %4]")
+                              .arg(label)
+                              .arg(value, 0, 'f', 3)
+                              .arg(lo, 0, 'f', 3)
+                              .arg(hi, 0, 'f', 3);
+            }
+            return false;
+        }
+        return true;
+    };
+
+    if (!checkRange(QStringLiteral("Num"), QStringLiteral("匹配数量"),
+                    m_params.value(QStringLiteral("matchCount"), 0).toInt(), 1.0, 1000.0))
+        return false;
+    if (!checkRange(QStringLiteral("Angle"), QStringLiteral("角度"),
+                    m_params.value(QStringLiteral("matchAngle"), 0.0).toDouble(), -180.0, 180.0))
+        return false;
+    if (!checkRange(QStringLiteral("Scale"), QStringLiteral("尺度"),
+                    m_params.value(QStringLiteral("matchScale"), 0.0).toDouble(), 0.0, 10.0))
+        return false;
+    if (!checkRange(QStringLiteral("ScaleX"), QStringLiteral("尺度X"),
+                    m_params.value(QStringLiteral("matchScaleX"), 0.0).toDouble(), 0.0, 10.0))
+        return false;
+    if (!checkRange(QStringLiteral("ScaleY"), QStringLiteral("尺度Y"),
+                    m_params.value(QStringLiteral("matchScaleY"), 0.0).toDouble(), 0.0, 10.0))
+        return false;
+    if (!checkRange(QStringLiteral("Score"), QStringLiteral("匹配分数"),
+                    m_params.value(QStringLiteral("matchScore"), 0.0).toDouble(), 0.0, 1.0))
+        return false;
+    if (!checkRange(QStringLiteral("PointX"), QStringLiteral("匹配点X"),
+                    m_params.value(QStringLiteral("matchPointCol"), 0.0).toDouble(), 0.0, 100000.0))
+        return false;
+    if (!checkRange(QStringLiteral("PointY"), QStringLiteral("匹配点Y"),
+                    m_params.value(QStringLiteral("matchPointRow"), 0.0).toDouble(), 0.0, 100000.0))
+        return false;
+    if (!checkRange(QStringLiteral("BoxX"), QStringLiteral("匹配框中心X"),
+                    m_params.value(QStringLiteral("matchCol"), 0.0).toDouble(), 0.0, 100000.0))
+        return false;
+    if (!checkRange(QStringLiteral("BoxY"), QStringLiteral("匹配框中心Y"),
+                    m_params.value(QStringLiteral("matchRow"), 0.0).toDouble(), 0.0, 100000.0))
+        return false;
+    return true;
+}
 
 void OpencvTemplateMatchNode::run(bool autoSwitch)
 {
@@ -969,6 +1080,15 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         cv::Mat roiMaskFull;   // 原图尺寸（输出掩膜用）
         if (m_params.value(QStringLiteral("roiType"), 0).toInt() == 1) {
             const QSharedPointer<DataObject> maskData = m_inputData.value(1);
+            // B2：图像型 ROI 的掩膜来源是「输入订阅」，不是第二个输入点。
+            // 没订阅时必须明确报错，不能静默退回图形 ROI（现场会以为 ROI 生效了）。
+            if (!maskData || !maskData->getHImage().IsInitialized()) {
+                m_params[QStringLiteral("lastError")] =
+                    QStringLiteral("ROI区域类型=图像，但未订阅「掩膜图像」（基本参数 → 输入订阅）");
+                m_params[QStringLiteral("moduleStatus")] = false;
+                m_outputImage.Clear();
+                return;
+            }
             if (maskData && maskData->getHImage().IsInitialized()) {
                 cv::Mat m = OpencvUtil::himageToMat(HImage(maskData->getHImage()));
                 if (m.channels() == 3)
@@ -1530,12 +1650,21 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             m_params[QStringLiteral("matchScaleX")] = bestScale;
             m_params[QStringLiteral("matchScaleY")] = bestScaleY;
         }
-        m_params["moduleStatus"] = (bestScore >= minScore);
-        if (bestScore < minScore) {
+        bool judgedOk = (bestScore >= minScore);
+        if (judgedOk) {
+            // VM「结果显示 → 结果判断」：已启用的数量/角度/尺度/分数/坐标条件逐条判定。
+            QString judgeReason;
+            if (!resultJudgmentOk(&judgeReason)) {
+                judgedOk = false;
+                if (!judgeReason.isEmpty())
+                    m_params[QStringLiteral("lastError")] = judgeReason;
+            }
+        } else {
             // 未匹配也要说明原因（2026-10-26 复核）：只判红，面板上看不到差多少
             m_params[QStringLiteral("lastError")] =
                 QStringLiteral("匹配分数 %1 低于阈值 %2").arg(bestScore).arg(minScore);
         }
+        m_params["moduleStatus"] = judgedOk;
         const QString fixtureName =
             m_params.value(QStringLiteral("writeFixtureName")).toString().trimmed();
         if (!fixtureName.isEmpty() && bestScore >= minScore) {

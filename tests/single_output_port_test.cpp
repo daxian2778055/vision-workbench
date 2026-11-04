@@ -27,7 +27,11 @@ class SingleOutputPortTest : public QObject
 private slots:
     void initTestCase() { registerAllNodes(); }   // 注册表按需初始化（NodeFactory 首次使用）
     void testAllRegisteredToolsHaveOneOutputPort();
+    void testAllRegisteredToolsHaveAtMostOneInputPort();
     void testTemplateMatchOnlyOnePort();
+    void testTemplateMatchSingleInputPort();
+    void testTemplateResultJudgment();
+    void testLegacyInputConnectionMigratesToBinding();
     void testFoldedSubOutputsStillReachable();
     void testDataNodePrimaryValueOnSinglePort();
     void testDataObjectAttachMeasureKeepsImageSlot();
@@ -64,6 +68,31 @@ void SingleOutputPortTest::testAllRegisteredToolsHaveOneOutputPort()
                             .arg(aggregated).arg(regs.size())));
 }
 
+void SingleOutputPortTest::testAllRegisteredToolsHaveAtMostOneInputPort()
+{
+    // B2 单输入契约：画布上一个工具最多 1 个输入点（图像源类 0 个，本就无输入）。
+    // 第 2..N 个输入必须是逻辑槽（inputSlotCount），不得是可见 Port。
+    const QList<NodeRegistration> regs = NodeRegistry::instance().all();
+    QVERIFY2(regs.size() > 10, "注册表为空/过小");
+
+    QStringList offenders;
+    for (const NodeRegistration &reg : regs) {
+        NodeBase *node = NodeRegistry::instance().createById(reg.id, nullptr);
+        if (!node)
+            continue;
+        node->init();
+        if (node->inputPorts().size() > 1) {
+            offenders << QStringLiteral("%1(%2) 入端口=%3（逻辑槽=%4）")
+                             .arg(reg.id, reg.displayName)
+                             .arg(node->inputPorts().size())
+                             .arg(node->inputSlotCount());
+        }
+        delete node;
+    }
+    QVERIFY2(offenders.isEmpty(),
+             qPrintable(QStringLiteral("以下算子仍有多个输入端口：") + offenders.join(QStringLiteral("；"))));
+}
+
 void SingleOutputPortTest::testTemplateMatchOnlyOnePort()
 {
     OpencvTemplateMatchNode node;
@@ -74,6 +103,102 @@ void SingleOutputPortTest::testTemplateMatchOnlyOnePort()
     // 模板匹配本来就没有"输出图像"主端口：唯一端口就是「匹配结果」，不再另加子结果
     QCOMPARE(node.outputPorts().first()->name(), QStringLiteral("匹配结果"));
     QCOMPARE(node.logicalOutputs().size(), 0);
+}
+
+void SingleOutputPortTest::testTemplateMatchSingleInputPort()
+{
+    // B2：画布上一个工具只允许 1 个输入点。模板匹配的「掩膜图像」按 VM 4.4
+    // 基本参数页实现为订阅，不是第二个端口。
+    OpencvTemplateMatchNode node;
+    node.init();
+    QCOMPARE(node.inputPorts().size(), 1);
+    QCOMPARE(node.inputPorts().first()->name(), QStringLiteral("输入图像"));
+    QCOMPARE(node.logicalInputPortCount(), 2);          // 真实输入 0 + 逻辑槽 1
+    QCOMPARE(node.inputSlotName(1), QStringLiteral("掩膜图像"));
+
+    // 真实端口不接受订阅绑定（只允许逻辑槽，防止绕过连线语义）
+    node.setInputBinding(0, 42, 0);
+    QVERIFY(!node.hasInputBinding(0));
+    // 逻辑槽可绑定
+    node.setInputBinding(1, 42, 0);
+    QVERIFY(node.hasInputBinding(1));
+    QCOMPARE(node.inputBindings().value(1).sourceModuleId, 42);
+}
+
+void SingleOutputPortTest::testTemplateResultJudgment()
+{
+    // VM「结果显示 → 结果判断」：未启用任何条件时保持旧行为（通过）；
+    // 启用后越界必须给出可读原因；「无目标时 OK」优先于其它条件。
+    OpencvTemplateMatchNode node;
+    node.init();
+    QString reason;
+    QVERIFY(node.resultJudgmentOk(&reason));
+
+    node.setParam(QStringLiteral("matchCount"), 1);
+    node.setParam(QStringLiteral("matchAngle"), 5.0);
+    node.setParam(QStringLiteral("matchScore"), 0.9);
+    node.setParam(QStringLiteral("resJudgeNumEnable"), true);
+    node.setParam(QStringLiteral("resJudgeNumLow"), 2.0);
+    node.setParam(QStringLiteral("resJudgeNumHigh"), 5.0);
+    QVERIFY2(!node.resultJudgmentOk(&reason), "数量 1 应判 NG");
+    QVERIFY2(reason.contains(QStringLiteral("匹配数量")), qPrintable(reason));
+
+    node.setParam(QStringLiteral("resJudgeNumEnable"), false);
+    node.setParam(QStringLiteral("resJudgeOkWhenZero"), true);
+    node.setParam(QStringLiteral("matchCount"), 0);
+    node.setParam(QStringLiteral("resJudgeScoreEnable"), true);
+    node.setParam(QStringLiteral("resJudgeScoreLow"), 0.8);
+    node.setParam(QStringLiteral("resJudgeScoreHigh"), 1.0);
+    QVERIFY2(node.resultJudgmentOk(&reason), "无目标且勾选 OKWhenNumIsZero 应通过");
+}
+
+void SingleOutputPortTest::testLegacyInputConnectionMigratesToBinding()
+{
+    // 老方案把 ROI 掩膜接在模板匹配的第 2 个输入端口（targetPortIndex=1）。
+    // 单输入契约后该端口变成逻辑槽：载入时必须转成订阅绑定，不能静默丢线。
+    FlowScene scene;
+    NodeBase *src = scene.createNode(NodeBase::NodeType::IMAGE_PROCESSING,
+                                     QPointF(100, 100), QStringLiteral("二值化"));
+    QVERIFY(src);
+    NodeBase *tpl = scene.createNode(NodeBase::NodeType::IMAGE_PROCESSING,
+                                     QPointF(400, 100), QStringLiteral("模板匹配"));
+    QVERIFY2(tpl, "模板匹配算子应能从注册表创建");
+    QCOMPARE(tpl->property("vfpNodeTypeId").toString(), QStringLiteral("OpencvTemplateMatchNode"));
+    QCOMPARE(tpl->inputPorts().size(), 1);
+    // 先接一条合法主线，保证源节点能被执行到
+    QVERIFY(scene.createConnection(src->outputPorts().first(), tpl->inputPorts().first(), true));
+
+    ProjectManager pm;
+    QJsonObject root = pm.buildProjectJson({&scene});
+    QJsonArray scenes = root.value(QStringLiteral("scenes")).toArray();
+    QCOMPARE(scenes.size(), 1);
+    QJsonObject sc = scenes.at(0).toObject();
+    QJsonArray conns = sc.value(QStringLiteral("connections")).toArray();
+    QCOMPARE(conns.size(), 1);
+    QJsonObject legacy = conns.at(0).toObject();
+    legacy[QStringLiteral("targetPortIndex")] = 1;   // 旧方案：第 2 个输入（ROI 掩膜）
+    conns[0] = legacy;
+    sc[QStringLiteral("connections")] = conns;
+    scenes[0] = sc;
+    root[QStringLiteral("scenes")] = scenes;
+
+    ProjectManager loader;
+    QList<FlowScene *> opened;
+    QVERIFY2(loader.applyProjectJson(root, opened), "老方案应能载入");
+    QCOMPARE(opened.size(), 1);
+
+    FlowScene *loaded = opened.first();
+    NodeBase *loadedTpl = nullptr;
+    for (NodeBase *n : loaded->nodes()) {
+        if (n->property("vfpNodeTypeId").toString() == QLatin1String("OpencvTemplateMatchNode"))
+            loadedTpl = n;
+    }
+    QVERIFY(loadedTpl);
+    // 迁移结果：这条线不再作为连线存在，而是换成逻辑槽 1 的订阅绑定
+    QCOMPARE(loaded->connections().size(), 0);
+    QVERIFY(loadedTpl->hasInputBinding(1));
+    QCOMPARE(loadedTpl->inputBindings().value(1).sourceModuleId, src->moduleId());
+    qDeleteAll(opened);
 }
 
 void SingleOutputPortTest::testFoldedSubOutputsStillReachable()

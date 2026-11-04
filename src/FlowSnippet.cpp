@@ -82,6 +82,9 @@ QJsonObject FlowSnippet::capture(FlowScene *scene, const QList<NodeBase *> &node
         nodeJson.remove(QStringLiteral("id"));
         nodeJson.remove(QStringLiteral("position"));
         nodeJson.remove(QStringLiteral("executionSuccess"));
+        // B2：订阅绑定按"模块号"指向方案内其它算子；片段里的节点会重新发号，
+        // 原样带走会指到别的算子（或指回原件）。复制/粘贴阶段先丢弃，粘贴后由用户重新订阅。
+        nodeJson.remove(QStringLiteral("inputBindings"));
         nodeJson[kNodeTypeKey] = int(n->type());
         nodeJson[kNodeNameKey] = n->name();
         const QString typeId = n->property("vfpNodeTypeId").toString();

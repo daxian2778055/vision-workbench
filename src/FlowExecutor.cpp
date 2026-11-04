@@ -971,8 +971,13 @@ void FlowExecutor::rebuildIncomingIndex(const QList<NodeBase *> &liveNodes,
 {
     m_incoming.clear();
     m_outgoing.clear();
+    m_nodesByModuleId.clear();
     m_incoming.reserve(connections.size());
     m_outgoing.reserve(connections.size());
+    for (NodeBase *n : liveNodes) {
+        if (n)
+            m_nodesByModuleId.insert(n->moduleId(), n);
+    }
     for (MyProject::Connection *conn : connections) {
         if (!conn) {
             continue;
@@ -1114,7 +1119,19 @@ bool FlowExecutor::visit(NodeBase *node, QSet<NodeBase*> &visited, QSet<NodeBase
             }
         }
     }
-    
+
+    // B2：逻辑输入槽的订阅也是拓扑依赖。订阅源必须先于本节点执行，
+    // 否则本轮拿到的是上一轮的输出（表现为"偶尔对、偶尔错"的时序故障）。
+    const QMap<int, NodeBase::InputBinding> bindings = node->inputBindings();
+    for (const auto &binding : bindings) {
+        NodeBase *sourceNode = m_nodesByModuleId.value(binding.sourceModuleId, nullptr);
+        if (sourceNode && sourceNode != node) {
+            if (!visit(sourceNode, visited, tempMarked, sortedNodes)) {
+                return false;
+            }
+        }
+    }
+
     tempMarked.remove(node);
     visited.insert(node);
     sortedNodes.append(node);
@@ -2075,43 +2092,88 @@ void FlowExecutor::propagateData(NodeBase *node)
     }
 
     const auto incIt = m_incoming.constFind(node);
-    if (incIt == m_incoming.cend()) {
-        return;
+    if (incIt != m_incoming.cend()) {
+        for (MyProject::Connection *conn : *incIt) {
+            if (!conn) {
+                continue;
+            }
+            NodeBase *sourceNode = conn->getSourceNode();
+            if (!sourceNode) {
+                continue;
+            }
+            const int sourcePort = conn->getSourcePort();
+            const int destPort = conn->getDestinationPort();
+
+            DataObjectPtr data;
+            {
+                // S1 Stage 1b：读上游缓存入锁（端口回退取值走端口自身的锁，放在图锁之外）
+                QMutexLocker cacheLock(&m_graphCacheMutex);
+                if (m_nodeData.contains(sourceNode) && m_nodeData[sourceNode].contains(sourcePort)) {
+                    data = m_nodeData[sourceNode][sourcePort];
+                }
+            }
+            if (!data) {
+                data = sourceNode->getOutputData(sourcePort);
+            }
+
+            if (data) {
+                data->setSourceInfo(QString("%1 的输出").arg(sourceNode->fullName()));
+            }
+            // 显式传播（含空值）：每轮覆盖下游旧输入，避免上一轮数据进入本轮检测（E2）
+            {
+                // S1 Stage 1b：写下游缓存入锁（setInputData 走端口自身的锁，放在图锁之外）
+                QMutexLocker cacheLock(&m_graphCacheMutex);
+                m_nodeData[node][destPort] = data;
+            }
+            node->setInputData(destPort, data);
+        }
     }
 
-    for (MyProject::Connection *conn : *incIt) {
-        if (!conn) {
+    // B2 单输入契约：逻辑输入槽的订阅数据注入。
+    // 槽没有画布端口，数据不进连线通道，但仍写同一个 m_inputData 下标，
+    // 算子实现（m_inputData[1] 等）不需要知道"连进来的还是订阅来的"。
+    const QMap<int, NodeBase::InputBinding> bindings = node->inputBindings();
+    // 未订阅的逻辑槽显式清空：界面刚删掉订阅时，上一轮的掩膜/图像2 不能继续留在 m_inputData 里。
+    for (int slot = node->inputPorts().size(); slot < node->logicalInputPortCount(); ++slot) {
+        if (bindings.contains(slot))
             continue;
+        {
+            QMutexLocker cacheLock(&m_graphCacheMutex);
+            m_nodeData[node][slot] = nullptr;
         }
-        NodeBase *sourceNode = conn->getSourceNode();
-        if (!sourceNode) {
-            continue;
-        }
-        const int sourcePort = conn->getSourcePort();
-        const int destPort = conn->getDestinationPort();
+        node->setInputData(slot, nullptr);
+    }
+    for (auto it = bindings.constBegin(); it != bindings.constEnd(); ++it) {
+        const int slot = it.key();
+        const int sourceModuleId = it.value().sourceModuleId;
+        const int sourcePort = it.value().sourcePort;
+        NodeBase *sourceNode = m_nodesByModuleId.value(sourceModuleId, nullptr);
 
         DataObjectPtr data;
-        {
-            // S1 Stage 1b：读上游缓存入锁（端口回退取值走端口自身的锁，放在图锁之外）
-            QMutexLocker cacheLock(&m_graphCacheMutex);
-            if (m_nodeData.contains(sourceNode) && m_nodeData[sourceNode].contains(sourcePort)) {
-                data = m_nodeData[sourceNode][sourcePort];
+        if (sourceNode) {
+            {
+                // 与连线路径同一读法：优先执行器缓存（本轮已执行源的最坏情况也覆盖），
+                // 缓存没有时回落到源端口。两段分开取锁，避免在锁内做会再取锁的调用。
+                QMutexLocker cacheLock(&m_graphCacheMutex);
+                if (m_nodeData.contains(sourceNode) && m_nodeData[sourceNode].contains(sourcePort)) {
+                    data = m_nodeData[sourceNode][sourcePort];
+                }
+            }
+            if (!data) {
+                data = sourceNode->getOutputData(sourcePort);
             }
         }
-        if (!data) {
-            data = sourceNode->getOutputData(sourcePort);
-        }
-
         if (data) {
-            data->setSourceInfo(QString("%1 的输出").arg(sourceNode->fullName()));
+            data->setSourceInfo(QStringLiteral("%1 的输出（订阅）").arg(sourceNode->fullName()));
+        } else if (sourceNode) {
+            VFP_EXEC_DEBUG << "订阅输入为空，节点" << node->name() << "槽" << slot
+                           << "源" << sourceNode->name() << "端口" << sourcePort;
         }
-        // 显式传播（含空值）：每轮覆盖下游旧输入，避免上一轮数据进入本轮检测（E2）
         {
-            // S1 Stage 1b：写下游缓存入锁（setInputData 走端口自身的锁，放在图锁之外）
             QMutexLocker cacheLock(&m_graphCacheMutex);
-            m_nodeData[node][destPort] = data;
+            m_nodeData[node][slot] = data;   // 显式覆盖（含空值），杜绝上一轮数据残留
         }
-        node->setInputData(destPort, data);
+        node->setInputData(slot, data);
     }
 }
 
@@ -2248,6 +2310,14 @@ void FlowExecutor::executeUpTo(NodeBase *endNode)
         if (!n || keep.contains(n))
             return;
         keep.insert(n);
+        // B2：订阅绑定也是上游依赖，局部执行必须把订阅源一起带上，
+        // 否则目标节点会拿到订阅源上一轮的输出（看起来"改了没生效"）。
+        const QMap<int, NodeBase::InputBinding> bindings = n->inputBindings();
+        for (const auto &b : bindings) {
+            NodeBase *src = m_nodesByModuleId.value(b.sourceModuleId, nullptr);
+            if (src && src != n)
+                walkUp(src);
+        }
         const auto it = m_incoming.constFind(n);
         if (it == m_incoming.cend())
             return;
@@ -2313,6 +2383,18 @@ void FlowExecutor::executeFrom(NodeBase *startNode)
         if (!n || keep.contains(n))
             return;
         keep.insert(n);
+        // B2：通过订阅绑定消费本节点输出的下游，也算"下游"，必须一并重算。
+        for (NodeBase *candidate : m_nodesByModuleId) {
+            if (!candidate || candidate == n)
+                continue;
+            const QMap<int, NodeBase::InputBinding> bindings = candidate->inputBindings();
+            for (const auto &b : bindings) {
+                if (b.sourceModuleId == n->moduleId()) {
+                    walkDown(candidate);
+                    break;
+                }
+            }
+        }
         const auto it = m_outgoing.constFind(n);
         if (it == m_outgoing.cend())
             return;

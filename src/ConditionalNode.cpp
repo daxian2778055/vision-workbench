@@ -14,7 +14,8 @@ void ConditionalNode::init()
     HalconNode::init();
     // 端口结构：0=图像入/出（兼容旧项目），1=条件输入（Bool/Number，可选），
     // 1=TRUE 分支输出，2=FALSE 分支输出
-    addInputPort(QStringLiteral("条件"), PortDataType::Any);
+    // B2：条件输入不再画第二个点，改为逻辑槽（订阅绑定注入，下标仍为 1）
+    addInputSlot(QStringLiteral("条件"), PortDataType::Any);
     addOutputPort(QStringLiteral("TRUE 分支"), PortDataType::Image);
     addOutputPort(QStringLiteral("FALSE 分支"), PortDataType::Image);
 

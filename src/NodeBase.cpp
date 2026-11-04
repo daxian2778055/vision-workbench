@@ -78,6 +78,68 @@ Port *NodeBase::addInputPort(const QString &name, PortDataType dataType)
     return port;
 }
 
+int NodeBase::addInputSlot(const QString &name, PortDataType dataType)
+{
+    // 逻辑下标 = 已有真实端口数 + 已有逻辑槽数：与旧方案 targetPortIndex 同号，
+    // 老连线迁移时不需要另一张映射表。
+    const int index = m_inputPorts.size() + m_inputSlots.size();
+    InputSlot slot;
+    slot.name = name;
+    slot.type = dataType;
+    m_inputSlots.append(slot);
+    return index;
+}
+
+void NodeBase::setInputBinding(int slot, int sourceModuleId, int sourcePort)
+{
+    if (slot < 0 || slot >= m_inputPorts.size() + m_inputSlots.size())
+        return;
+    if (slot < m_inputPorts.size())
+        return;   // 真实端口由连线驱动，不接受订阅绑定
+    if (sourceModuleId <= 0 || sourcePort < 0)
+        return;
+    QMutexLocker locker(&m_bindingMutex);
+    m_inputBindings[slot] = InputBinding{sourceModuleId, sourcePort};
+}
+
+void NodeBase::clearInputBinding(int slot)
+{
+    QMutexLocker locker(&m_bindingMutex);
+    m_inputBindings.remove(slot);
+}
+
+bool NodeBase::hasInputBinding(int slot) const
+{
+    QMutexLocker locker(&m_bindingMutex);
+    return m_inputBindings.contains(slot);
+}
+
+QMap<int, NodeBase::InputBinding> NodeBase::inputBindings() const
+{
+    QMutexLocker locker(&m_bindingMutex);
+    return m_inputBindings;
+}
+
+QString NodeBase::inputSlotName(int slot) const
+{
+    if (slot < m_inputPorts.size())
+        return QString();
+    const int pos = slot - m_inputPorts.size();
+    if (pos < 0 || pos >= m_inputSlots.size())
+        return QString();
+    return m_inputSlots.at(pos).name;
+}
+
+PortDataType NodeBase::inputSlotType(int slot) const
+{
+    if (slot < m_inputPorts.size())
+        return PortDataType::Any;
+    const int pos = slot - m_inputPorts.size();
+    if (pos < 0 || pos >= m_inputSlots.size())
+        return PortDataType::Any;
+    return m_inputSlots.at(pos).type;
+}
+
 Port *NodeBase::addOutputPort(const QString &name, PortDataType dataType)
 {
     Port *port = new Port(Port::OUTPUT, name, this, dataType);

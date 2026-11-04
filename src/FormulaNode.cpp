@@ -217,10 +217,12 @@ FormulaNode::FormulaNode(QObject *parent)
 
 void FormulaNode::init()
 {
+    // B2：公式工具同样只保留 1 个输入点。p0 是真实端口，p1..p3 为逻辑槽
+    // （VM 的多路数值输入由参数页订阅，不在画布上多画点）。
     addInputPort(QStringLiteral("p0"), PortDataType::Number);
-    addInputPort(QStringLiteral("p1"), PortDataType::Number);
-    addInputPort(QStringLiteral("p2"), PortDataType::Number);
-    addInputPort(QStringLiteral("p3"), PortDataType::Number);
+    addInputSlot(QStringLiteral("p1"), PortDataType::Number);
+    addInputSlot(QStringLiteral("p2"), PortDataType::Number);
+    addInputSlot(QStringLiteral("p3"), PortDataType::Number);
     addOutputPort(QStringLiteral("\u8BA1\u7B97\u7ED3\u679C"), PortDataType::Number);
 
     m_params[QStringLiteral("expression")] = QStringLiteral("p0 + p1");

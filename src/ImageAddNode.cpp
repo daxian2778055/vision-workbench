@@ -22,7 +22,8 @@ ImageAddNode::ImageAddNode(QObject *parent) : HalconNode(parent)
 void ImageAddNode::init()
 {
     HalconNode::init();
-    addInputPort(QStringLiteral("图像2"));
+    // B2：图像2 不再画第二个输入点，改为逻辑槽（VM 基本参数里的图像输入订阅）
+    addInputSlot(QStringLiteral("图像2"), PortDataType::Image);
     registerParams({
         makeDoubleParam(QStringLiteral("value"), 0.0, -255.0, 255.0,
                         QStringLiteral("加数（未连接图像2时使用）")),

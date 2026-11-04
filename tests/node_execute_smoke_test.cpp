@@ -166,8 +166,14 @@ NodeBase *makeNode(const QString &id, QObject *parent)
 
 void feedImage(NodeBase *node, const HalconCpp::HImage &himg)
 {
-    const int inCount = node->inputPorts().size();
+    // B2：逻辑槽（图像2/掩膜图像）也吃图——否则图像四则/模板匹配的"第二图"路径永远测不到。
+    const int inCount = node->logicalInputPortCount();
     for (int i = 0; i < inCount; ++i) {
+        const PortDataType t = (i < node->inputPorts().size())
+                                   ? node->inputPorts()[i]->dataType()
+                                   : node->inputSlotType(i);
+        if (i >= node->inputPorts().size() && t != PortDataType::Image)
+            continue;
         auto d = QSharedPointer<DataObject>::create();
         d->setHImage(himg);
         node->setInputData(i, d);
@@ -194,6 +200,10 @@ int imageInputPortCount(NodeBase *node)
     for (Port *p : node->inputPorts())
         if (p && p->dataType() == PortDataType::Image)
             ++n;
+    // B2：逻辑槽里的图像输入同样算"一路图像"（ImageAdd 的图像2 等）
+    for (int i = node->inputPorts().size(); i < node->logicalInputPortCount(); ++i)
+        if (node->inputSlotType(i) == PortDataType::Image)
+            ++n;
     return n;
 }
 
@@ -210,8 +220,10 @@ bool dataOnlyNode(NodeBase *node)
 void feedDataInputs(NodeBase *node)
 {
     const QList<Port *> ports = node->inputPorts();
-    for (int i = 0; i < ports.size(); ++i) {
-        const PortDataType t = ports[i] ? ports[i]->dataType() : PortDataType::Any;
+    const int logicalCount = node->logicalInputPortCount();
+    for (int i = 0; i < logicalCount; ++i) {
+        const PortDataType t = (i < ports.size()) ? ports[i]->dataType()
+                                                  : node->inputSlotType(i);
         QVariant v;
         DataObject::DataType dt = DataObject::DataType::Number;
         switch (t) {

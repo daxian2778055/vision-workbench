@@ -356,6 +356,9 @@ private:
     QList<NodeBase *> m_cachedSortedNodes;
     QHash<NodeBase *, QList<MyProject::Connection *>> m_incoming;
     QHash<NodeBase *, QList<MyProject::Connection *>> m_outgoing;  /// 源节点 -> 出边（分支激活用）
+    /// 模块号 -> 节点：逻辑输入槽的订阅绑定按模块号解析（B2 单输入契约）。
+    /// 与 m_incoming 同批重建，只在本轮快照的活节点表内解析。
+    QHash<int, NodeBase *> m_nodesByModuleId;
     QSet<NodeBase *> m_activeNodes;                                /// 本轮执行激活集合（条件分支）
     /// 模块号 -> 输出变量表（供后级参数引用 {模块号.参数名}，跨轮保留最近值）
     QHash<int, QHash<QString, QVariant>> m_nodeOutputVars;

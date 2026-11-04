@@ -139,6 +139,7 @@ private:
     QListWidget *m_templateList = nullptr;
     QTableWidget *m_resultTable = nullptr;
     QPushButton *m_tmplNewBtn = nullptr;
+    QPushButton *m_tmplLoadBtn = nullptr;         /// VM「特征模板」页：载入（本地模板图像）
     QPushButton *m_tmplEditBtn = nullptr;
     QPushButton *m_tmplDelBtn = nullptr;
     QCheckBox *m_autoRecomputeCheck = nullptr;   /// 「自动重算」开关
@@ -159,7 +160,8 @@ private:
 
     QToolButton *m_helpBtn = nullptr;             /// P1-1 左上角帮助
     QPushButton *m_okBtn = nullptr;               /// P1-1/P1-10 确定（提交）
-    QPushButton *m_cancelBtn = nullptr;           /// P1-1/P1-10 取消（回滚）
+    QToolButton *m_continuousBtn = nullptr;       /// VM 模块窗底部「连续执行」开关
+    QPushButton *m_cancelBtn = nullptr;           /// P1-1/P1-10 取消（回滚；VM 布局中隐藏，保留对象供既有调用查找）
     QPushButton *m_restoreDefaultsBtn = nullptr;  /// P2-8 恢复默认值
     QTableWidget *m_paramSubscriptionTable = nullptr; /// P2-8 逐参数订阅表
     QTabWidget *m_vmTabs = nullptr;

@@ -112,6 +112,11 @@ public:
     /// 按当前模板算建议值并写回节点参数（训练/建模板后调用）；模板不可用时返回 false
     bool applySuggestedParams();
 
+    /// VM 4.4「结果显示 → 结果判断」：按已启用的固定条件（数量/角度/尺度/分数/
+    /// 匹配点/匹配框中心）判定本轮 OK/NG。reason 返回第一条不满足的条件说明。
+    /// 未启用任何条件时返回 true（保持旧行为）。
+    bool resultJudgmentOk(QString *reason) const;
+
     /// 多形状模板：所有形状的并集包围盒（裁剪口径的唯一出处）
     static QRectF shapesBounds(const QVector<RoiShape> &shapes);
     /// 多形状模板：并集形状掩膜（8U，255=保留），尺寸 = shapesBounds 的四舍五入。

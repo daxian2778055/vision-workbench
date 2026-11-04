@@ -64,8 +64,9 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     , m_node(node)
 {
     setAttribute(Qt::WA_DeleteOnClose);
-    setWindowTitle(node ? QStringLiteral("编辑模块 — %1").arg(node->fullName())
-                        : QStringLiteral("编辑模块"));
+    // VM 模块窗标题：「<模块号> <模块名>」（如「3 轮廓匹配」），不再写"编辑模块 — xxx"。
+    setWindowTitle(node ? QStringLiteral("%1 %2").arg(node->moduleId()).arg(node->name())
+                        : QStringLiteral("模块配置"));
     // 窗口几何持久化：用户拖过一次就永久记住（含位置），下次直接用；
     // 首次（无存档）按屏幕可用区自适应，绝不超出屏幕（旧固定 1100×720 在小屏/缩放屏会溢出）
     {
@@ -223,13 +224,16 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     m_templateList->setToolTip(QStringLiteral("当前算子的模板列表；点一行即切换当前匹配用的模板"));
     rightLay->addWidget(m_templateList);
     auto *tmplBtns = new QHBoxLayout();
-    m_tmplNewBtn = new QPushButton(QStringLiteral("创建模板"));
+    m_tmplNewBtn = new QPushButton(QStringLiteral("创建"));
+    m_tmplLoadBtn = new QPushButton(QStringLiteral("载入"));
     m_tmplEditBtn = new QPushButton(QStringLiteral("编辑模板"));
     m_tmplDelBtn = new QPushButton(QStringLiteral("删除所有模板"));
     m_tmplNewBtn->setToolTip(QStringLiteral("打开「模板配置」窗：在图上框形状、调参数、确定即创建"));
+    m_tmplLoadBtn->setToolTip(QStringLiteral("从本地图像载入一个模板（VM「特征模板」页的载入）"));
     m_tmplEditBtn->setToolTip(QStringLiteral("编辑列表里选中的模板（原地更新）"));
     m_tmplDelBtn->setToolTip(QStringLiteral("清空该算子的模板列表（文件不删）"));
     tmplBtns->addWidget(m_tmplNewBtn);
+    tmplBtns->addWidget(m_tmplLoadBtn);
     tmplBtns->addWidget(m_tmplEditBtn);
     tmplBtns->addWidget(m_tmplDelBtn);
     rightLay->addLayout(tmplBtns);
@@ -306,14 +310,32 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     bottom->addWidget(m_restoreDefaultsBtn);
     bottom->addStretch();
 
-    // P1-1/P1-10：右下角「取消 / 确定」——确定提交本次参数，取消回滚到打开时快照
-    m_cancelBtn = new QPushButton(QStringLiteral("取消"));
+    // VM 4.4 模块窗底部按钮：连续执行 / 执行 / 确定（图 13「轮廓匹配特征模板列表」）。
+    m_continuousBtn = new QToolButton();
+    m_continuousBtn->setObjectName(QStringLiteral("continuousRunButton"));
+    m_continuousBtn->setText(QStringLiteral("连续执行"));
+    m_continuousBtn->setCheckable(true);
+    m_continuousBtn->setToolTip(QStringLiteral("勾选后改动即重算（自动预览）；取消则改完点「执行」或「确定」"));
+    connect(m_continuousBtn, &QToolButton::toggled, this, [this](bool on) {
+        if (m_autoRecomputeCheck)
+            m_autoRecomputeCheck->setChecked(on);
+        if (on)
+            emit executeRequested();
+    });
+    auto *bottomExecBtn = new QPushButton(QStringLiteral("执行"));
+    bottomExecBtn->setToolTip(QStringLiteral("按当前参数执行一次本算子"));
+    connect(bottomExecBtn, &QPushButton::clicked, this, &ModuleEditorDialog::executeRequested);
+    m_cancelBtn = new QPushButton(QStringLiteral("取消"), this);
     m_cancelBtn->setToolTip(QStringLiteral("放弃本次修改并回滚到打开时的参数"));
     m_okBtn = new QPushButton(QStringLiteral("确定"));
     m_okBtn->setDefault(true);
     m_okBtn->setToolTip(QStringLiteral("提交本次修改并重算本算子及其下游"));
-    bottom->addWidget(m_cancelBtn);
+    bottom->addWidget(m_continuousBtn);
+    bottom->addWidget(bottomExecBtn);
     bottom->addWidget(m_okBtn);
+    // 旧「取消」按钮保留对象（既有调用/测试按文本查找），但不进入 VM 布局：
+    // 关闭窗口 = 放弃未提交改动，与 VM 右上角 X 一致。
+    m_cancelBtn->setVisible(false);
     root->addLayout(bottom);
 
     HalconNode *hn = halconNode();
@@ -338,14 +360,28 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     budgetBtn->setVisible(isTmpl);
     wizardBtn->setVisible(isTmpl);
     m_templatePreview->setVisible(isTmpl);
-    m_targetGeomBtn->setVisible(isTmpl);
-    m_targetSearchBtn->setVisible(isTmpl);
+    // 模板匹配的内置图像区已隐藏（VM 模块窗不含图像），这两个"在窗内切换编辑对象"的按钮
+    // 失去落点；模板框/搜索区域改在独立的「模板配置」窗与主画布编辑。
+    m_targetGeomBtn->setVisible(false);
+    m_targetSearchBtn->setVisible(false);
     m_templateList->setVisible(isTmpl);
     m_tmplNewBtn->setVisible(isTmpl);
+    m_tmplLoadBtn->setVisible(isTmpl);
     m_tmplEditBtn->setVisible(isTmpl);
     m_tmplDelBtn->setVisible(isTmpl);
     // P0-2：结果显示是所有模块的通用页（非模板算子显示通用输出/状态/耗时）
     m_resultTable->setVisible(true);
+
+    // VM 4.4 模块窗是"纯页签"窗口（图 13 轮廓匹配：约 400×570，无内置图像区）；
+    // 模板图像/掩膜的绘制在独立的「模板配置」窗完成。因此模板匹配隐藏内置预览，
+    // 其余算子的 ROI 仍在本窗绘制（保留图像区）。
+    if (isTmpl) {
+        if (m_view)
+            m_view->setVisible(false);
+        if (m_splitter)
+            m_splitter->setSizes({0, 520});
+        resize(qMax(width(), 520), qMax(height(), 660));
+    }
 
     if (hasGeom) {
         m_hintLabel->setText(QStringLiteral(
@@ -364,6 +400,26 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     connect(m_targetGeomBtn, &QToolButton::clicked, this, &ModuleEditorDialog::onEditTargetGeometry);
     connect(m_targetSearchBtn, &QToolButton::clicked, this, &ModuleEditorDialog::onEditTargetSearch);
     connect(m_tmplNewBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onNewTemplate);
+    connect(m_tmplLoadBtn, &QPushButton::clicked, this, [this]() {
+        OpencvTemplateMatchNode *tmplNode = qobject_cast<OpencvTemplateMatchNode *>(m_node);
+        if (!tmplNode)
+            return;
+        const QString path = QFileDialog::getOpenFileName(
+            this, QStringLiteral("载入模板图像"), QString(),
+            QStringLiteral("图像文件 (*.png *.bmp *.jpg *.jpeg *.tif *.tiff)"));
+        if (path.isEmpty())
+            return;
+        QVector<TemplateEntry> list = tmplNode->templates();
+        TemplateEntry entry;
+        entry.name = QFileInfo(path).baseName();
+        entry.imagePath = path;
+        list.append(entry);
+        tmplNode->setTemplates(list);
+        tmplNode->setActiveTemplateIndex(list.size() - 1);
+        refreshTemplateList();
+        m_paramsDirty = true;
+        scheduleAutoRecompute();
+    });
     connect(m_tmplEditBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onEditTemplate);
     connect(m_tmplDelBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onDeleteTemplate);
     connect(m_templateList, &QListWidget::currentRowChanged, this,
@@ -639,9 +695,20 @@ void ModuleEditorDialog::rebuildVmTabs()
             continue;
         basicLay->addWidget(w);
     }
+    // 旧「工具特性」页的启用开关并入基本参数：VM 模块窗没有单独的特性页，
+    // 但"禁用此模块"是执行语义，不能因为改布局而丢掉。
+    {
+        auto *enabledCheck = new QCheckBox(QStringLiteral("启用此模块（禁用后执行时跳过）"), basicPage);
+        enabledCheck->setChecked(m_node->isEnabled());
+        connect(enabledCheck, &QCheckBox::toggled, this,
+                [this](bool on) {
+                    if (m_node)
+                        m_node->setEnabled(on);
+                });
+        basicLay->addWidget(enabledCheck);
+    }
     basicLay->addStretch();
-    // P2-8：运行参数页补「参数订阅」表（逐参数自定义/订阅切换）
-    buildParamSubscriptionGroup(runLay);
+    // VM「运行参数」页 = 运行参数本身；不再额外插入旧框架的「参数订阅」表。
     runLay->addStretch();
     if (runLay->count() <= 1) {
         auto *emptyHint = new QLabel(QStringLiteral("该算子无独立运行参数。"));
@@ -651,19 +718,30 @@ void ModuleEditorDialog::rebuildVmTabs()
 
     // ② 特征模板页：预览 + 列表 + 创建/编辑/删除（仅模板算子）
     if (isTmpl) {
-        if (m_templatePreview)
-            tmplLay->addWidget(m_templatePreview);
+        // VM「特征模板」页布局（帮助文档图 13）：顶部 创建 / 载入；中间模板列表；
+        // 右侧缩略图 + 编辑模板 / 删除所有模板。这里用纵向等价排布，不改变操作顺序。
+        auto *createRow = new QWidget();
+        auto *createLay = new QHBoxLayout(createRow);
+        createLay->setContentsMargins(0, 0, 0, 0);
+        for (QPushButton *b : {m_tmplNewBtn, m_tmplLoadBtn}) {
+            if (b)
+                createLay->addWidget(b);
+        }
+        createLay->addStretch();
+        tmplLay->addWidget(createRow);
         if (m_templateList)
             tmplLay->addWidget(m_templateList, 1);
-        auto *row = new QWidget();
-        auto *rowLay = new QHBoxLayout(row);
-        rowLay->setContentsMargins(0, 0, 0, 0);
-        for (QPushButton *b : {m_tmplNewBtn, m_tmplEditBtn, m_tmplDelBtn}) {
+        if (m_templatePreview)
+            tmplLay->addWidget(m_templatePreview);
+        auto *manageRow = new QWidget();
+        auto *manageLay = new QHBoxLayout(manageRow);
+        manageLay->setContentsMargins(0, 0, 0, 0);
+        for (QPushButton *b : {m_tmplEditBtn, m_tmplDelBtn}) {
             if (b)
-                rowLay->addWidget(b);
+                manageLay->addWidget(b);
         }
-        rowLay->addStretch();
-        tmplLay->addWidget(row);
+        manageLay->addStretch();
+        tmplLay->addWidget(manageRow);
     }
 
     // ③ 结果显示页：结果表 + VM「结果判断/图像显示/文本显示」配置
@@ -767,6 +845,73 @@ void ModuleEditorDialog::rebuildVmTabs()
         }
         inputTable->setMaximumHeight(150);
         basicLay->insertWidget(0, inputTable);
+    }
+
+    // B2 单输入契约：逻辑输入槽的「订阅」选择（VM 基本参数页的输入源/掩膜图像订阅）。
+    // 画布上不再有第 2 个输入点，多图/多值来源统一在这里选前序模块的输出。
+    {
+        const int realInputs = m_node->inputPorts().size();
+        const int logicalInputs = m_node->logicalInputPortCount();
+        if (logicalInputs > realInputs) {
+            auto *box = new QGroupBox(QStringLiteral("输入订阅"));
+            auto *boxLay = new QVBoxLayout(box);
+            boxLay->setContentsMargins(8, 8, 8, 8);
+            boxLay->setSpacing(6);
+            const QMap<int, NodeBase::InputBinding> currentBindings = m_node->inputBindings();
+            FlowScene *scene = m_node->flowSceneRef();
+            for (int slot = realInputs; slot < logicalInputs; ++slot) {
+                const QString slotName = m_node->inputSlotName(slot);
+                if (slotName.isEmpty())
+                    continue;
+                auto *row = new QWidget(box);
+                auto *rowLay = new QHBoxLayout(row);
+                rowLay->setContentsMargins(0, 0, 0, 0);
+                auto *label = new QLabel(slotName, row);
+                label->setMinimumWidth(76);
+                auto *combo = new QComboBox(row);
+                combo->setObjectName(QStringLiteral("inputBindingCombo_%1").arg(slot));
+                combo->addItem(QStringLiteral("未订阅"), QVariant());
+                if (scene) {
+                    for (NodeBase *src : scene->nodes()) {
+                        if (!src || src == m_node)
+                            continue;
+                        const QList<Port *> outs = src->outputPorts();
+                        for (int p = 0; p < outs.size(); ++p) {
+                            combo->addItem(QStringLiteral("%1 [%2]").arg(src->fullName(), outs.at(p)->name()),
+                                           QVariant::fromValue(QPair<int, int>(src->moduleId(), p)));
+                        }
+                    }
+                }
+                if (currentBindings.contains(slot)) {
+                    const NodeBase::InputBinding b = currentBindings.value(slot);
+                    for (int i = 1; i < combo->count(); ++i) {
+                        const QPair<int, int> pair = combo->itemData(i).value<QPair<int, int>>();
+                        if (pair.first == b.sourceModuleId && pair.second == b.sourcePort) {
+                            combo->setCurrentIndex(i);
+                            break;
+                        }
+                    }
+                }
+                connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                        [this, combo, slot](int index) {
+                            if (!m_node)
+                                return;
+                            if (index <= 0) {
+                                m_node->clearInputBinding(slot);
+                            } else {
+                                const QPair<int, int> pair =
+                                    combo->itemData(index).value<QPair<int, int>>();
+                                m_node->setInputBinding(slot, pair.first, pair.second);
+                            }
+                            m_paramsDirty = true;
+                            scheduleAutoRecompute();
+                        });
+                rowLay->addWidget(label);
+                rowLay->addWidget(combo, 1);
+                boxLay->addWidget(row);
+            }
+            basicLay->insertWidget(1, box);
+        }
     }
 
     // 输出参数
@@ -931,16 +1076,21 @@ void ModuleEditorDialog::rebuildVmTabs()
         traitLay->addStretch();
     }
 
-    m_vmTabs->addTab(aboutPage, QStringLiteral("关于"));
-    m_vmTabs->addTab(basicPage, QStringLiteral("输入参数"));
-    m_vmTabs->addTab(outputPage, QStringLiteral("输出参数"));
-    m_vmTabs->addTab(roiPage, QStringLiteral("ROI配置"));
-    m_vmTabs->addTab(runPage, QStringLiteral("参数面板"));
-    m_vmTabs->addTab(connPage, QStringLiteral("连线"));
-    m_vmTabs->addTab(traitPage, QStringLiteral("工具特性"));
+    // VM 4.4 模块窗只有这四页（帮助文档「轮廓匹配」：基本参数 / 特征模板 / 运行参数 / 结果显示）。
+    // 关于/输入参数/输出参数/ROI配置/参数面板/连线/工具特性是旧框架，已移除；
+    // 其中仍需保留的内容（输入源、ROI 绘制入口、启用开关）并入「基本参数」。
+    m_vmTabs->addTab(basicPage, QStringLiteral("基本参数"));
     if (isTmpl)
         m_vmTabs->addTab(tmplPage, QStringLiteral("特征模板"));
+    m_vmTabs->addTab(runPage, QStringLiteral("运行参数"));
     m_vmTabs->addTab(resPage, QStringLiteral("结果显示"));
+
+    // 未挂到页签的旧页面没有父控件，不显式释放会随着每次打开工具窗泄漏。
+    delete aboutPage;
+    delete outputPage;
+    delete roiPage;
+    delete connPage;
+    delete traitPage;
 
     // ④ panel 布局清空后放页签（GroupBox 已被 addWidget 移走，剩下的是 stretch/空项）
     QLayout *lay = panel->layout();
@@ -1160,6 +1310,91 @@ void ModuleEditorDialog::buildResultDisplayPage(QVBoxLayout *resLay)
             [this](QTableWidgetItem *) { persistJudgeConditions(); });
 
     loadJudgeConditions();
+
+    // ①-b VM 4.4 轮廓匹配的固定结果判断行（帮助文档「结果显示 → 结果判断」）。
+    // 只对模板匹配显示；其它工具继续用上面的通用条件表。
+    if (qobject_cast<OpencvTemplateMatchNode *>(m_node)) {
+        auto *fixedGroup = new QGroupBox(QStringLiteral("结果判断（模板匹配）"));
+        auto *fixedLay = new QVBoxLayout(fixedGroup);
+
+        auto *okZero = new QCheckBox(QStringLiteral("无目标时判定 OK（OKWhenNumIsZero）"));
+        okZero->setChecked(boolParam(QStringLiteral("resJudgeOkWhenZero"), false));
+        fixedLay->addWidget(okZero);
+        connect(okZero, &QCheckBox::toggled, this, [writeParam](bool on) {
+            writeParam(QStringLiteral("resJudgeOkWhenZero"), on);
+        });
+
+        struct JudgeRow { QString key; QString label; double lo; double hi; int decimals; };
+        const QVector<JudgeRow> rows {
+            {QStringLiteral("Num"), QStringLiteral("匹配数量"), 1.0, 1000.0, 0},
+            {QStringLiteral("Angle"), QStringLiteral("角度"), -180.0, 180.0, 2},
+            {QStringLiteral("Scale"), QStringLiteral("尺度"), 0.0, 10.0, 3},
+            {QStringLiteral("ScaleX"), QStringLiteral("尺度X"), 0.0, 10.0, 3},
+            {QStringLiteral("ScaleY"), QStringLiteral("尺度Y"), 0.0, 10.0, 3},
+            {QStringLiteral("Score"), QStringLiteral("匹配分数"), 0.0, 1.0, 3},
+            {QStringLiteral("PointX"), QStringLiteral("匹配点X"), 0.0, 100000.0, 2},
+            {QStringLiteral("PointY"), QStringLiteral("匹配点Y"), 0.0, 100000.0, 2},
+            {QStringLiteral("BoxX"), QStringLiteral("匹配框中心X"), 0.0, 100000.0, 2},
+            {QStringLiteral("BoxY"), QStringLiteral("匹配框中心Y"), 0.0, 100000.0, 2},
+        };
+
+        auto *table = new QTableWidget(rows.size(), 4, fixedGroup);
+        table->setObjectName(QStringLiteral("templateJudgeTable"));
+        table->setHorizontalHeaderLabels({QStringLiteral("启用"), QStringLiteral("条件"),
+                                          QStringLiteral("下限"), QStringLiteral("上限")});
+        table->verticalHeader()->setVisible(false);
+        table->horizontalHeader()->setStretchLastSection(true);
+        table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        table->setSelectionMode(QAbstractItemView::NoSelection);
+        table->setMinimumHeight(260);
+
+        for (int r = 0; r < rows.size(); ++r) {
+            const JudgeRow &spec = rows.at(r);
+            auto *enable = new QCheckBox(table);
+            enable->setObjectName(QStringLiteral("judgeEnable_%1").arg(spec.key));
+            enable->setChecked(boolParam(QStringLiteral("resJudge%1Enable").arg(spec.key), false));
+            auto *enableHost = new QWidget(table);
+            auto *enableLay = new QHBoxLayout(enableHost);
+            enableLay->setContentsMargins(0, 0, 0, 0);
+            enableLay->addWidget(enable, 0, Qt::AlignCenter);
+            table->setCellWidget(r, 0, enableHost);
+
+            QTableWidgetItem *nameItem = new QTableWidgetItem(spec.label);
+            nameItem->setFlags(Qt::ItemIsEnabled);
+            table->setItem(r, 1, nameItem);
+
+            auto makeSpin = [&](const QString &suffix, double def) {
+                auto *spin = new QDoubleSpinBox(table);
+                spin->setRange(-100000.0, 100000.0);
+                spin->setDecimals(spec.decimals);
+                spin->setValue(m_node->getParam(QStringLiteral("resJudge%1%2").arg(spec.key, suffix))
+                                   .toDouble());
+                if (!m_node->getAllParamNames().contains(
+                        QStringLiteral("resJudge%1%2").arg(spec.key, suffix)))
+                    spin->setValue(def);
+                return spin;
+            };
+            auto *lowSpin = makeSpin(QStringLiteral("Low"), spec.lo);
+            auto *highSpin = makeSpin(QStringLiteral("High"), spec.hi);
+            table->setCellWidget(r, 2, lowSpin);
+            table->setCellWidget(r, 3, highSpin);
+
+            connect(enable, &QCheckBox::toggled, this,
+                    [writeParam, key = spec.key](bool on) {
+                        writeParam(QStringLiteral("resJudge%1Enable").arg(key), on);
+                    });
+            connect(lowSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+                    [writeParam, key = spec.key](double v) {
+                        writeParam(QStringLiteral("resJudge%1Low").arg(key), v);
+                    });
+            connect(highSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+                    [writeParam, key = spec.key](double v) {
+                        writeParam(QStringLiteral("resJudge%1High").arg(key), v);
+                    });
+        }
+        fixedLay->addWidget(table);
+        resLay->addWidget(fixedGroup);
+    }
 
     // ② 图像显示
     auto *imageGroup = new QGroupBox(QStringLiteral("图像显示"));

@@ -603,7 +603,9 @@ QJsonObject ProjectManager::sceneToJson(FlowScene *scene) const
             outputPortsArray.append(portJson);
         }
         nodeJson["outputPorts"] = outputPortsArray;
-        
+
+        // B2 的 inputBindings 由 HalconNode::toJson() 统一写入（片段复制等路径同样带上），
+        // 这里不再重复拼装。
         nodesArray.append(nodeJson);
         nodeIds[node] = nodeId;
         nodeId++;
@@ -718,6 +720,9 @@ void ProjectManager::sceneFromJson(const QJsonObject &json, FlowScene *scene)
         }
     }
     
+    // B2 的 inputBindings 已在 node->fromJson()（HalconNode）里恢复；
+    // 越界的旧连线仍在下面的 connections 处理中迁移成绑定。
+
     // Load connections
     QJsonArray connectionsArray = json["connections"].toArray();
     for (int i = 0; i < connectionsArray.size(); ++i) {
@@ -743,6 +748,35 @@ void ProjectManager::sceneFromJson(const QJsonObject &json, FlowScene *scene)
                 && sourcePortIndex < sourceNode->logicalOutputPortCount()) {
                 sourcePortIndex = 0;
             }
+
+            // B2 迁移：老方案连到"第 2..N 个输入"的线，在单输入契约下该端口已是逻辑槽。
+            // 不能丢线（现场表现是"打开方案后掩膜/图像2 的源没了、结果全错"），
+            // 改成订阅绑定，运行期仍把同一份数据注入对应下标。
+            // 先做"旧端口号 → 新逻辑下标"映射（CameraIo 这类端口顺序被重排的算子会覆写）。
+            // 只有"当前端口表里不存在"的旧端口号才走迁移映射。
+            // 新方案连接到真实端口 0 必须原样保留（CameraIo 把旧 2→新 0，若无条件映射会把新线也删掉）。
+            const int mappedInputIndex =
+                (targetPortIndex >= targetNode->inputPorts().size())
+                    ? targetNode->migrateLegacyInputPortIndex(targetPortIndex)
+                    : targetPortIndex;
+            if (mappedInputIndex < 0) {
+                reportLoadNote(QStringLiteral("方案加载：%1 的旧输入 %2 在新实现中已不存在，连线未接回（源 %3）")
+                                   .arg(targetNode->name()).arg(targetPortIndex).arg(sourceNode->name()));
+                ++m_loadEdgeLossCount;
+                continue;
+            }
+            if (mappedInputIndex >= targetNode->inputPorts().size()
+                && mappedInputIndex < targetNode->logicalInputPortCount()
+                && !targetNode->inputSlotName(mappedInputIndex).isEmpty()) {
+                targetNode->setInputBinding(mappedInputIndex, sourceNode->moduleId(), sourcePortIndex);
+                reportLoadNote(QStringLiteral("方案加载：%1 的输入槽「%2」已从旧连线迁移为订阅绑定（源 %3）")
+                                   .arg(targetNode->name(),
+                                        targetNode->inputSlotName(mappedInputIndex),
+                                        sourceNode->name()));
+                continue;
+            }
+            targetPortIndex = mappedInputIndex;
+
             if (sourcePortIndex >= 0 && sourcePortIndex < sourceNode->outputPorts().size() &&
                 targetPortIndex >= 0 && targetPortIndex < targetNode->inputPorts().size()) {
                 Port *sourcePort = sourceNode->outputPorts()[sourcePortIndex];

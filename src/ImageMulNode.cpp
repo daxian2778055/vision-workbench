@@ -22,7 +22,8 @@ ImageMulNode::ImageMulNode(QObject *parent) : HalconNode(parent)
 void ImageMulNode::init()
 {
     HalconNode::init();
-    addInputPort(QStringLiteral("图像2"));
+    // B2：图像2 不画输入点，改为逻辑槽（订阅绑定注入）
+    addInputSlot(QStringLiteral("图像2"), PortDataType::Image);
     registerParams({
         makeDoubleParam(QStringLiteral("value"), 1.0, 0.0, 255.0,
                         QStringLiteral("乘数（未连接图像2时使用）")),

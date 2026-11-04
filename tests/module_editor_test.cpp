@@ -15,6 +15,8 @@
 #include <QFocusEvent>
 #include <QApplication>
 #include <QPushButton>
+#include <QTabWidget>
+#include <QTableWidget>
 #include <QTemporaryDir>
 #include <QFile>
 #include <QFileInfo>
@@ -37,6 +39,7 @@ private slots:
     void testParamEditTriggersDebouncedRecompute();
     void testVariableReferenceInsert();
     void testTeachingButtonLeavesMatchMode();
+    void testVmModuleWindowTabs();
 };
 
 void ModuleEditorTest::testParamEditTriggersDebouncedRecompute()
@@ -242,6 +245,36 @@ void ModuleEditorTest::testTeachingButtonLeavesMatchMode()
              "模板写失败却翻回匹配模式 ⇒ 下一轮因找不到文件平白判红，真实原因（保存失败）被掩盖");
     QVERIFY2(hint->text().contains(QStringLiteral("失败")),
              qPrintable(QStringLiteral("写失败时现场提示应说「失败」，实际：") + hint->text()));
+}
+
+void ModuleEditorTest::testVmModuleWindowTabs()
+{
+    // VM 4.4 模块窗框架：4 个页签（基本参数 / 特征模板 / 运行参数 / 结果显示），
+    // 输入端口只有 1 个。旧框架的 关于/输入参数/输出参数/ROI配置/参数面板/连线/工具特性 不得再出现。
+    FlowScene scene;
+    NodeBase *node = scene.createNode(NodeBase::IMAGE_PROCESSING, QPointF(80, 80),
+                                      QStringLiteral("模板匹配"));
+    QVERIFY(node);
+    QCOMPARE(node->property("vfpNodeTypeId").toString(), QStringLiteral("OpencvTemplateMatchNode"));
+    QCOMPARE(node->inputPorts().size(), 1);
+
+    ModuleEditorDialog dlg(node);
+    QTabWidget *tabs = dlg.findChild<QTabWidget *>(QStringLiteral("vmTabs"));
+    QVERIFY2(tabs, "模块窗没有 VM 页签容器");
+    QStringList names;
+    for (int i = 0; i < tabs->count(); ++i)
+        names << tabs->tabText(i);
+    QStringList expected {QStringLiteral("基本参数"), QStringLiteral("特征模板"),
+                          QStringLiteral("运行参数"), QStringLiteral("结果显示")};
+    QCOMPARE(names, expected);
+    // VM 轮廓匹配的固定结果判断行（数量/角度/尺度X/Y/分数/匹配点X/Y/匹配框X/Y）
+    QTableWidget *judge = dlg.findChild<QTableWidget *>(QStringLiteral("templateJudgeTable"));
+    QVERIFY2(judge, "模板匹配没有 VM 固定结果判断表");
+    QCOMPARE(judge->rowCount(), 10);
+    QCOMPARE(judge->columnCount(), 4);
+    // 标题按 VM：模块号 + 模块名
+    QVERIFY2(dlg.windowTitle().startsWith(QString::number(node->moduleId())),
+             qPrintable(QStringLiteral("标题不是模块号开头：%1").arg(dlg.windowTitle())));
 }
 
 QTEST_MAIN(ModuleEditorTest)

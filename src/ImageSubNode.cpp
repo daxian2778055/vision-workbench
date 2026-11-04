@@ -14,7 +14,8 @@ ImageSubNode::ImageSubNode(QObject *parent) : HalconNode(parent)
 void ImageSubNode::init()
 {
     HalconNode::init();
-    addInputPort(QStringLiteral("图像2"));
+    // B2：图像2 不画输入点，改为逻辑槽（订阅绑定注入）
+    addInputSlot(QStringLiteral("图像2"), PortDataType::Image);
     registerParams({
         makeDoubleParam(QStringLiteral("value"), 0.0, -255.0, 255.0,
                         QStringLiteral("减数（未连接图像2时使用）")),

@@ -3,6 +3,7 @@
 #include "HalconNode.h"
 #include <QBuffer>
 #include <QByteArray>
+#include <QJsonArray>
 #include <QStringList>
 #include <QIODevice>
 #include <QPointer>
@@ -354,6 +355,21 @@ QJsonObject HalconNode::toJson() const
     }
     json["params"] = params;
 
+    // B2 单输入契约：逻辑输入槽的订阅绑定（按模块号存盘）。
+    // 放在基类 toJson 里，方案保存 / 片段复制 / 模板存盘等所有路径都自动带上。
+    const QMap<int, InputBinding> bindings = inputBindings();
+    if (!bindings.isEmpty()) {
+        QJsonArray bindingArray;
+        for (auto it = bindings.constBegin(); it != bindings.constEnd(); ++it) {
+            QJsonObject bindingJson;
+            bindingJson["slot"] = it.key();
+            bindingJson["sourceModuleId"] = it.value().sourceModuleId;
+            bindingJson["sourcePort"] = it.value().sourcePort;
+            bindingArray.append(bindingJson);
+        }
+        json[QStringLiteral("inputBindings")] = bindingArray;
+    }
+
     {
         QMutexLocker maskLocker(&m_maskMutex);   // 运行中存盘也不得与 UI 侧写掩膜竞争
         if (!m_editMask.isNull()) {
@@ -466,6 +482,19 @@ void HalconNode::fromJson(const QJsonObject &json)
         }
     }
     
+    // B2：恢复逻辑输入槽的订阅绑定（模块号此时已恢复，运行期按号解析源节点）
+    {
+        QMutexLocker locker(&m_bindingMutex);
+        m_inputBindings.clear();
+    }
+    const QJsonArray bindingArray = json.value(QStringLiteral("inputBindings")).toArray();
+    for (const QJsonValue &v : bindingArray) {
+        const QJsonObject bindingJson = v.toObject();
+        setInputBinding(bindingJson["slot"].toInt(),
+                        bindingJson["sourceModuleId"].toInt(),
+                        bindingJson["sourcePort"].toInt());
+    }
+
     // 恢复执行状态
     if (json.contains("executionSuccess")) {
         m_executionSuccess = json["executionSuccess"].toBool();
