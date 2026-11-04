@@ -1009,6 +1009,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261104.5",
       "recorded_at": "2026-11-04",
       "recorded_note": "模板匹配 UI 细节对齐：轮廓点改边缘细化+特征尺度/链长过滤、特征模板页新增可见训练模板按钮、确定不弹存图（静默落方案目录 templates/）、模块窗去掉顶部工具条、基本参数改 VM 输入源/ROI 枚举；73/73 测试全绿"
+    },
+    {
+      "tag": "rc-20261104.6",
+      "commit": "a8411907ac27bc429f702b02a1ce3db35764d348",
+      "exe_md5": "58e1dd049f76cf9aeb4fcb22b9781f83",
+      "exe_bytes": 11079168,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261104.6",
+      "recorded_at": "2026-11-04",
+      "recorded_note": "启动默认强制显示工具箱/图像显示/参数面板；特征模板页 创建/载入/训练模板 固定页首、模板参数表单移出；模板配置右栏按 VM 排序（列表→配置参数→匹配中心）并新增链长模式/最小链长；73/73 测试全绿"
     }
   ],
   "legacy_backfilled": [
