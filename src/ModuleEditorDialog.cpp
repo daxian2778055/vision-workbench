@@ -31,6 +31,8 @@
 #include <QFileInfo>
 #include <QDir>
 #include <QCheckBox>
+#include <QRadioButton>
+#include <QButtonGroup>
 #include <QSpinBox>
 #include <QComboBox>
 #include <QColorDialog>
@@ -660,12 +662,15 @@ void ModuleEditorDialog::rebuildVmTabs()
         makePage(&tmplPage, &tmplLay);
 
     // ① 参数分组框按标题归位（图像输入/ROI → 基本；模板配置 → 特征模板；其余 → 运行）
+    QGroupBox *roiAutoBox = nullptr;   // 模板匹配：自动生成的 ROI 参数组（后面拆成 VM 控件）
     const QList<QGroupBox *> boxes =
         panel->findChildren<QGroupBox *>(QString(), Qt::FindDirectChildrenOnly);
     for (QGroupBox *box : boxes) {
         const QString t = box->title();
         if (t == QStringLiteral("图像输入") || t == QStringLiteral("ROI区域")
             || t.contains(QStringLiteral("基本"))) {
+            if (t == QStringLiteral("ROI区域") && isTmpl)
+                roiAutoBox = box;
             basicLay->addWidget(box);
         } else if ((t == QStringLiteral("模板配置") || t == QStringLiteral("特征模板")) && isTmpl) {
             // VM 的「特征模板」页只有模板列表/缩略图/编辑按钮，不放参数表单。
@@ -718,19 +723,24 @@ void ModuleEditorDialog::rebuildVmTabs()
         createLay->addStretch();
         // 三个入口固定在页首：页面内容再长也不用滚动才能找到（VM 图 13 同款位置）。
         tmplLay->insertWidget(0, createRow);
+        // VM 图 13：左侧模板列表，右侧缩略图 + 编辑模板/删除所有模板。
+        auto *contentRow = new QWidget();
+        auto *contentLay = new QHBoxLayout(contentRow);
+        contentLay->setContentsMargins(0, 0, 0, 0);
         if (m_templateList)
-            tmplLay->addWidget(m_templateList, 1);
+            contentLay->addWidget(m_templateList, 1);
+        auto *thumbCol = new QWidget();
+        auto *thumbLay = new QVBoxLayout(thumbCol);
+        thumbLay->setContentsMargins(0, 0, 0, 0);
         if (m_templatePreview)
-            tmplLay->addWidget(m_templatePreview);
-        auto *manageRow = new QWidget();
-        auto *manageLay = new QHBoxLayout(manageRow);
-        manageLay->setContentsMargins(0, 0, 0, 0);
+            thumbLay->addWidget(m_templatePreview);
         for (QPushButton *b : {m_tmplEditBtn, m_tmplDelBtn}) {
             if (b)
-                manageLay->addWidget(b);
+                thumbLay->addWidget(b);
         }
-        manageLay->addStretch();
-        tmplLay->addWidget(manageRow);
+        thumbLay->addStretch();
+        contentLay->addWidget(thumbCol, 0);
+        tmplLay->addWidget(contentRow, 1);
     }
 
     // ③ 结果显示页：结果表 + VM「结果判断/图像显示/文本显示」配置
@@ -899,6 +909,108 @@ void ModuleEditorDialog::rebuildVmTabs()
             }
             basicLay->insertWidget(1, box);
         }
+    }
+
+    // VM「基本参数 → ROI区域」：把自动面板里的数字下拉换成 VM 的开关/单选圆钮。
+    // 搜索区域（检测区域）仍沿用自动面板的字段，只是标题改成 VM 的叫法。
+    if (isTmpl && roiAutoBox) {
+        QFormLayout *form = qobject_cast<QFormLayout *>(roiAutoBox->layout());
+        if (form) {
+            for (int row = 0; row < form->rowCount(); ++row) {
+                QLayoutItem *labelItem = form->itemAt(row, QFormLayout::LabelRole);
+                QLabel *label = labelItem ? qobject_cast<QLabel *>(labelItem->widget()) : nullptr;
+                if (!label)
+                    continue;
+                const QString text = label->text();
+                if (text == QStringLiteral("输出掩膜") || text == QStringLiteral("ROI区域类型")
+                    || text == QStringLiteral("ROI创建")) {
+                    label->hide();
+                    if (QLayoutItem *field = form->itemAt(row, QFormLayout::FieldRole)) {
+                        if (QWidget *w = field->widget())
+                            w->hide();
+                    }
+                }
+            }
+        }
+        roiAutoBox->setTitle(QStringLiteral("检测区域"));
+
+        auto *roiBox = new QGroupBox(QStringLiteral("ROI区域"), basicPage);
+        auto *roiForm = new QFormLayout(roiBox);
+        auto write = [this](const QString &key, const QVariant &value) {
+            if (!m_node)
+                return;
+            m_node->setParam(key, value);
+            m_paramsDirty = true;
+            scheduleAutoRecompute();
+        };
+
+        // 输出掩膜（VM 开关）
+        auto *maskSwitch = new QCheckBox(roiBox);
+        maskSwitch->setObjectName(QStringLiteral("outputMaskSwitch"));
+        maskSwitch->setChecked(m_node->getParam(QStringLiteral("outputMask")).toBool());
+        maskSwitch->setStyleSheet(QStringLiteral(
+            "QCheckBox::indicator { width:34px; height:18px; border-radius:9px; background:#5a6068; }"
+            "QCheckBox::indicator:checked { background:#e07b3a; }"));
+        roiForm->addRow(QStringLiteral("输出掩膜"), maskSwitch);
+        connect(maskSwitch, &QCheckBox::toggled, this,
+                [write](bool on) { write(QStringLiteral("outputMask"), on); });
+
+        // ROI区域类型（VM 单选）
+        auto *typeShape = new QRadioButton(QStringLiteral("图形类型"), roiBox);
+        auto *typeImage = new QRadioButton(QStringLiteral("图像类型"), roiBox);
+        const int roiType = m_node->getParam(QStringLiteral("roiType")).toInt();
+        (roiType == 1 ? typeImage : typeShape)->setChecked(true);
+        auto *typeRow = new QWidget(roiBox);
+        auto *typeLay = new QHBoxLayout(typeRow);
+        typeLay->setContentsMargins(0, 0, 0, 0);
+        typeLay->addWidget(typeShape);
+        typeLay->addWidget(typeImage);
+        typeLay->addStretch();
+        roiForm->addRow(QStringLiteral("ROI区域类型"), typeRow);
+        connect(typeShape, &QRadioButton::toggled, this, [write](bool on) {
+            if (on)
+                write(QStringLiteral("roiType"), 0);
+        });
+        connect(typeImage, &QRadioButton::toggled, this, [write](bool on) {
+            if (on)
+                write(QStringLiteral("roiType"), 1);
+        });
+
+        // ROI创建（VM 单选）
+        auto *srcDraw = new QRadioButton(QStringLiteral("绘制"), roiBox);
+        auto *srcInherit = new QRadioButton(QStringLiteral("继承"), roiBox);
+        const int roiSource = m_node->getParam(QStringLiteral("roiSource")).toInt();
+        (roiSource == 1 ? srcInherit : srcDraw)->setChecked(true);
+        auto *srcRow = new QWidget(roiBox);
+        auto *srcLay = new QHBoxLayout(srcRow);
+        srcLay->setContentsMargins(0, 0, 0, 0);
+        srcLay->addWidget(srcDraw);
+        srcLay->addWidget(srcInherit);
+        srcLay->addStretch();
+        roiForm->addRow(QStringLiteral("ROI创建"), srcRow);
+        connect(srcDraw, &QRadioButton::toggled, this, [write](bool on) {
+            if (on)
+                write(QStringLiteral("roiSource"), 0);
+        });
+        connect(srcInherit, &QRadioButton::toggled, this, [write](bool on) {
+            if (on)
+                write(QStringLiteral("roiSource"), 1);
+        });
+
+        // 形状：模板匹配的几何 ROI 固定是旋转矩形（在模板配置窗里改）
+        auto *shapeRow = new QWidget(roiBox);
+        auto *shapeLay = new QHBoxLayout(shapeRow);
+        shapeLay->setContentsMargins(0, 0, 0, 0);
+        auto *shapeBtn = new QToolButton(shapeRow);
+        shapeBtn->setText(QStringLiteral("旋转矩形"));
+        shapeBtn->setEnabled(false);
+        shapeBtn->setToolTip(QStringLiteral("模板框形状在「模板配置」窗里绘制"));
+        shapeLay->addWidget(shapeBtn);
+        shapeLay->addStretch();
+        roiForm->addRow(QStringLiteral("形状"), shapeRow);
+
+        const int insertAt = basicLay->indexOf(roiAutoBox);
+        basicLay->insertWidget(insertAt >= 0 ? insertAt : 0, roiBox);
     }
 
     // 输出参数

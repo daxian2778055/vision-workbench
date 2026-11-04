@@ -17,6 +17,7 @@
 #include <QPushButton>
 #include <QTabWidget>
 #include <QTableWidget>
+#include <QRadioButton>
 #include <QTemporaryDir>
 #include <QFile>
 #include <QFileInfo>
@@ -272,6 +273,16 @@ void ModuleEditorTest::testVmModuleWindowTabs()
     QVERIFY2(judge, "模板匹配没有 VM 固定结果判断表");
     QCOMPARE(judge->rowCount(), 10);
     QCOMPARE(judge->columnCount(), 4);
+    // VM 基本参数：输出掩膜开关 + ROI 区域类型/ROI 创建单选圆钮
+    QVERIFY2(dlg.findChild<QCheckBox *>(QStringLiteral("outputMaskSwitch")),
+             "缺少 VM 输出掩膜开关");
+    QStringList radios;
+    for (QRadioButton *r : dlg.findChildren<QRadioButton *>())
+        radios << r->text();
+    QVERIFY2(radios.contains(QStringLiteral("图形类型")) && radios.contains(QStringLiteral("图像类型")),
+             qPrintable(QStringLiteral("缺少 ROI 区域类型单选：%1").arg(radios.join(QStringLiteral("、")))));
+    QVERIFY2(radios.contains(QStringLiteral("绘制")) && radios.contains(QStringLiteral("继承")),
+             qPrintable(QStringLiteral("缺少 ROI 创建单选：%1").arg(radios.join(QStringLiteral("、")))));
     // 标题按 VM：模块号 + 模块名
     QVERIFY2(dlg.windowTitle().startsWith(QString::number(node->moduleId())),
              qPrintable(QStringLiteral("标题不是模块号开头：%1").arg(dlg.windowTitle())));

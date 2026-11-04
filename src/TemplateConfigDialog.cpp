@@ -13,7 +13,12 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
+#include <QIcon>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPixmap>
 #include <QRegularExpression>
+#include <QToolButton>
 #include <QDoubleSpinBox>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -30,6 +35,106 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
+namespace {
+
+/// VM 模板配置窗的工具图标：用 QPainter 画单色线稿，避免把第三方图标资源带进仓库。
+static QIcon vmToolIcon(const QString &kind)
+{
+    QPixmap pm(28, 28);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(QColor(QStringLiteral("#cfd8e3")));
+    pen.setWidthF(1.4);
+    p.setPen(pen);
+
+    if (kind == QLatin1String("rect")) {
+        p.drawRect(6, 8, 16, 12);
+    } else if (kind == QLatin1String("circle")) {
+        p.drawEllipse(6, 6, 16, 16);
+    } else if (kind == QLatin1String("polygon")) {
+        QPainterPath path;
+        path.moveTo(14, 5); path.lineTo(24, 12); path.lineTo(20, 23);
+        path.lineTo(8, 23); path.lineTo(4, 12); path.closeSubpath();
+        p.drawPath(path);
+    } else if (kind == QLatin1String("freehand")) {
+        QPainterPath path;
+        path.moveTo(4, 20);
+        path.cubicTo(8, 8, 13, 24, 18, 12);
+        path.cubicTo(21, 6, 23, 12, 25, 9);
+        p.drawPath(path);
+    } else if (kind == QLatin1String("wand") || kind == QLatin1String("wandplus")) {
+        p.drawLine(QPointF(7, 23), QPointF(21, 9));
+        QPainterPath star;
+        star.moveTo(22, 5); star.lineTo(24, 9); star.lineTo(27, 10);
+        star.lineTo(24, 12); star.lineTo(23, 16); star.lineTo(21, 12);
+        star.lineTo(18, 11); star.closeSubpath();
+        p.drawPath(star);
+        if (kind == QLatin1String("wandplus")) {
+            p.drawLine(QPointF(23, 18), QPointF(23, 25));
+            p.drawLine(QPointF(20, 21.5), QPointF(26, 21.5));
+        }
+    } else if (kind == QLatin1String("eraser")) {
+        p.drawRect(7, 12, 14, 7);
+        p.drawLine(QPointF(9, 12), QPointF(16, 5));
+        p.drawLine(QPointF(20, 12), QPointF(23, 7));
+    } else if (kind == QLatin1String("delete")) {
+        p.drawRect(9, 9, 10, 14);
+        p.drawLine(QPointF(6, 9), QPointF(22, 9));
+        p.drawLine(QPointF(12, 6), QPointF(16, 6));
+    } else if (kind == QLatin1String("undo") || kind == QLatin1String("redo")) {
+        QPainterPath path;
+        path.moveTo(kind == QLatin1String("undo") ? 22 : 6, 8);
+        path.cubicTo(12, 4, 6, 10, kind == QLatin1String("undo") ? 7 : 21, 20);
+        p.drawPath(path);
+        if (kind == QLatin1String("undo")) {
+            p.drawLine(QPointF(4, 5), QPointF(7, 9));
+            p.drawLine(QPointF(10, 5), QPointF(7, 9));
+        } else {
+            p.drawLine(QPointF(24, 5), QPointF(21, 9));
+            p.drawLine(QPointF(18, 5), QPointF(21, 9));
+        }
+    } else if (kind == QLatin1String("zoomin") || kind == QLatin1String("zoomout")) {
+        p.drawEllipse(6, 6, 11, 11);
+        p.drawLine(QPointF(16, 16), QPointF(23, 23));
+        p.drawLine(QPointF(8.5, 11.5), QPointF(14.5, 11.5));
+        if (kind == QLatin1String("zoomin"))
+            p.drawLine(QPointF(11.5, 8.5), QPointF(11.5, 14.5));
+    } else if (kind == QLatin1String("fit")) {
+        p.drawLine(QPointF(6, 12), QPointF(6, 6));
+        p.drawLine(QPointF(6, 6), QPointF(12, 6));
+        p.drawLine(QPointF(22, 6), QPointF(22, 12));
+        p.drawLine(QPointF(22, 22), QPointF(16, 22));
+        p.drawLine(QPointF(6, 16), QPointF(6, 22));
+        p.drawRect(10, 10, 8, 8);
+    } else if (kind == QLatin1String("fullscreen")) {
+        p.drawLine(QPointF(6, 12), QPointF(6, 6));
+        p.drawLine(QPointF(6, 6), QPointF(12, 6));
+        p.drawLine(QPointF(22, 16), QPointF(22, 22));
+        p.drawLine(QPointF(22, 22), QPointF(16, 22));
+        p.drawLine(QPointF(16, 6), QPointF(22, 6));
+        p.drawLine(QPointF(22, 6), QPointF(22, 12));
+        p.drawLine(QPointF(6, 16), QPointF(6, 22));
+        p.drawLine(QPointF(6, 22), QPointF(12, 22));
+    }
+    p.end();
+    return QIcon(pm);
+}
+
+/// 把工具按钮变成 VM 工具栏那样的"图标 + 悬浮提示"形态（文字只留在 tooltip）。
+static void makeToolButton(QPushButton *btn, const QString &glyph, const QString &name)
+{
+    btn->setText(QString());
+    btn->setIcon(vmToolIcon(glyph));
+    btn->setIconSize(QSize(20, 20));
+    btn->setFixedSize(30, 26);
+    btn->setFlat(true);
+    btn->setToolTip(name);
+    btn->setAccessibleName(name);
+}
+
+}   // namespace
+
 TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int editIndex,
                                            QWidget *parent)
     : QDialog(parent)
@@ -45,52 +150,86 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     auto *top = new QHBoxLayout();
     auto *useCurrentBtn = new QPushButton(QStringLiteral("选择当前图像"));
     auto *useOtherBtn = new QPushButton(QStringLiteral("选择其他图像"));
-    auto *savePathBtn = new QPushButton(QStringLiteral("模板存图…"));
+    auto *savePathBtn = new QPushButton(QStringLiteral("模板存图"));
+    savePathBtn->setCheckable(true);
+    savePathBtn->setToolTip(QStringLiteral("勾选后可指定模板图片保存位置；不勾选则静默存到方案 templates/"));
+    auto *saveFileBtn = new QPushButton(QStringLiteral("↑"));
+    saveFileBtn->setFixedSize(28, 26);
+    saveFileBtn->setToolTip(QStringLiteral("选择模板图片保存位置"));
     top->addWidget(useCurrentBtn);
     top->addWidget(useOtherBtn);
     top->addWidget(savePathBtn);
+    top->addWidget(saveFileBtn);
     top->addStretch();
-    auto *shapeRectBtn = new QPushButton(QStringLiteral("矩形"));
-    auto *shapePolyBtn = new QPushButton(QStringLiteral("多边形"));
-    auto *shapeCircleBtn = new QPushButton(QStringLiteral("圆形"));
-    auto *shapeFreeBtn = new QPushButton(QStringLiteral("自由绘制"));
-    auto *shapeWandBtn = new QPushButton(QStringLiteral("魔术棒"));
-    auto *shapeWandPlusBtn = new QPushButton(QStringLiteral("魔术棒+"));
+    auto *blockAllBtn = new QPushButton(QStringLiteral("全部屏蔽"));
+    blockAllBtn->setCheckable(true);
+    top->addWidget(blockAllBtn);
+    root->addLayout(top);
+
+    // VM 第二行：图标工具条 + 容差 + 缩放/适应/全屏
+    auto *shapeRectBtn = new QPushButton();
+    auto *shapePolyBtn = new QPushButton();
+    auto *shapeCircleBtn = new QPushButton();
+    auto *shapeFreeBtn = new QPushButton();
+    auto *shapeWandBtn = new QPushButton();
+    auto *shapeWandPlusBtn = new QPushButton();
+    auto *clearShapeBtn = new QPushButton();
+    auto *delShapeBtn = new QPushButton();
+    auto *splitBtn = new QPushButton();
+    auto *scissorsBtn = new QPushButton();
+    auto *maskModeBtn = new QPushButton();
+    maskModeBtn->setCheckable(true);
+    auto *eraseBtn = new QPushButton();
+    makeToolButton(shapeRectBtn, QStringLiteral("rect"), QStringLiteral("矩形"));
+    makeToolButton(shapePolyBtn, QStringLiteral("polygon"), QStringLiteral("多边形"));
+    makeToolButton(shapeCircleBtn, QStringLiteral("circle"), QStringLiteral("圆形"));
+    makeToolButton(shapeFreeBtn, QStringLiteral("freehand"), QStringLiteral("自由绘制"));
+    makeToolButton(shapeWandBtn, QStringLiteral("wand"), QStringLiteral("魔术棒"));
+    makeToolButton(shapeWandPlusBtn, QStringLiteral("wandplus"), QStringLiteral("魔术棒+"));
+    makeToolButton(clearShapeBtn, QStringLiteral("delete"), QStringLiteral("清除形状"));
+    makeToolButton(delShapeBtn, QStringLiteral("delete"), QStringLiteral("删除选中"));
+    makeToolButton(splitBtn, QStringLiteral("fit"), QStringLiteral("分割"));
+    makeToolButton(scissorsBtn, QStringLiteral("eraser"), QStringLiteral("剪刀"));
+    makeToolButton(maskModeBtn, QStringLiteral("eraser"), QStringLiteral("屏蔽模式"));
+    makeToolButton(eraseBtn, QStringLiteral("eraser"), QStringLiteral("擦除轮廓点"));
+    maskModeBtn->setToolTip(QStringLiteral(
+        "勾上后画/取到的形状进「屏蔽」列表：从保留区里挖掉（logo/水印/背景）。"
+        "屏蔽=保留 − 屏蔽；不画保留区时默认整块保留再挖。"));
+
     m_wandTol = new QSpinBox();
     m_wandTol->setRange(1, 120);
     m_wandTol->setValue(30);
     m_wandTol->setPrefix(QStringLiteral("容差 "));
-    auto *clearShapeBtn = new QPushButton(QStringLiteral("清除形状"));
-    auto *delShapeBtn = new QPushButton(QStringLiteral("删除选中"));
-    auto *splitBtn = new QPushButton(QStringLiteral("分割"));
-    auto *scissorsBtn = new QPushButton(QStringLiteral("剪刀"));
-    auto *maskModeBtn = new QPushButton(QStringLiteral("屏蔽模式"));
-    maskModeBtn->setCheckable(true);
-    auto *blockAllBtn = new QPushButton(QStringLiteral("全部屏蔽"));
-    auto *eraseBtn = new QPushButton(QStringLiteral("擦除轮廓点"));
-    maskModeBtn->setToolTip(QStringLiteral(
-        "勾上后画/取到的形状进「屏蔽」列表：从保留区里挖掉（logo/水印/背景）。"
-        "屏蔽=保留 − 屏蔽；不画保留区时默认整块保留再挖。"));
-    // VM 模板配置窗是两行工具条：第一行图像/存图/屏蔽开关，第二行形状与编辑工具。
-    // 旧实现把所有按钮平铺在一行，窗口一窄就被挤成省略号；这里按 VM 分两行。
-    top->addWidget(blockAllBtn);
-    root->addLayout(top);
+
+    auto *undoBtn = new QPushButton();
+    auto *redoBtn = new QPushButton();
+    auto *zoomInBtn = new QPushButton();
+    auto *zoomOutBtn = new QPushButton();
+    auto *fitBtn = new QPushButton();
+    auto *fullBtn = new QPushButton();
+    makeToolButton(undoBtn, QStringLiteral("undo"), QStringLiteral("撤销"));
+    makeToolButton(redoBtn, QStringLiteral("redo"), QStringLiteral("重做"));
+    makeToolButton(zoomInBtn, QStringLiteral("zoomin"), QStringLiteral("放大"));
+    makeToolButton(zoomOutBtn, QStringLiteral("zoomout"), QStringLiteral("缩小"));
+    makeToolButton(fitBtn, QStringLiteral("fit"), QStringLiteral("图像自适应"));
+    makeToolButton(fullBtn, QStringLiteral("fullscreen"), QStringLiteral("全屏显示"));
+    undoBtn->setEnabled(false);   // 对话框暂无历史栈
+    redoBtn->setEnabled(false);
 
     auto *tools = new QHBoxLayout();
-    tools->addWidget(shapeRectBtn);
-    tools->addWidget(shapePolyBtn);
-    tools->addWidget(shapeCircleBtn);
-    tools->addWidget(shapeFreeBtn);
-    tools->addWidget(shapeWandBtn);
-    tools->addWidget(shapeWandPlusBtn);
+    for (QPushButton *b : {shapeRectBtn, shapePolyBtn, shapeCircleBtn, shapeFreeBtn,
+                           shapeWandBtn, shapeWandPlusBtn}) {
+        tools->addWidget(b);
+    }
     tools->addWidget(m_wandTol);
-    tools->addWidget(clearShapeBtn);
-    tools->addWidget(delShapeBtn);
-    tools->addWidget(splitBtn);
-    tools->addWidget(scissorsBtn);
-    tools->addWidget(maskModeBtn);
-    tools->addWidget(eraseBtn);
+    for (QPushButton *b : {clearShapeBtn, delShapeBtn, splitBtn, scissorsBtn,
+                           maskModeBtn, eraseBtn, undoBtn, redoBtn}) {
+        tools->addWidget(b);
+    }
     tools->addStretch();
+    for (QPushButton *b : {zoomInBtn, zoomOutBtn, fitBtn, fullBtn}) {
+        tools->addWidget(b);
+    }
     root->addLayout(tools);
 
     // ---- 左：图像区；右：配置参数 + 形状列表 ----
@@ -212,7 +351,20 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
         refreshFeaturePreview();
     });
     connect(useOtherBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onPickOtherImage);
-    connect(savePathBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onPickSavePath);
+    connect(saveFileBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onPickSavePath);
+    connect(savePathBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (on)
+            onPickSavePath();
+    });
+    connect(zoomInBtn, &QPushButton::clicked, this, [this]() { m_view->zoomIn(); });
+    connect(zoomOutBtn, &QPushButton::clicked, this, [this]() { m_view->zoomOut(); });
+    connect(fitBtn, &QPushButton::clicked, this, [this]() { m_view->fitToWindow(); });
+    connect(fullBtn, &QPushButton::clicked, this, [this]() {
+        if (isFullScreen())
+            showNormal();
+        else
+            showFullScreen();
+    });
     connect(shapeRectBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onPickRect);
     connect(shapePolyBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onPickPolygon);
     connect(shapeCircleBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onPickCircle);
@@ -249,23 +401,38 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
         m_hint->setText(QStringLiteral(
             "在图上单击擦掉该区域的特征点（半径 20px）；擦掉的点不参与匹配。"));
     });
-    connect(blockAllBtn, &QPushButton::clicked, this, [this]() {
-        // VM「全部屏蔽」：清空所有已画形状与匹配中心，进入刷绘模式画保留区
-        m_shapes.clear();
-        m_excludes.clear();
-        m_shape = RoiShape();
-        m_anchorX->setValue(0.0);
-        m_anchorY->setValue(0.0);
-        m_anchorLock->setChecked(false);
-        m_anchorPickMode = false;
-        m_view->clearRoi();
-        m_view->setFeaturePoints({});
-        m_view->setRoiFreehand(true);
-        m_view->setRoiColor(QColor(0, 200, 255));
-        refreshShapeList();
-        refreshFeaturePreview();
-        m_hint->setText(QStringLiteral(
-            "已全部屏蔽（形状与匹配中心清空）；请用套索/矩形/魔术棒画出要保留的区域。"));
+    connect(blockAllBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (on) {
+            // VM「全部屏蔽」开关：先暂存当前形状，再清空画面进入刷绘模式
+            m_blockedShapes = m_shapes;
+            m_blockedExcludes = m_excludes;
+            m_blockAllActive = true;
+            m_shapes.clear();
+            m_excludes.clear();
+            m_shape = RoiShape();
+            m_anchorX->setValue(0.0);
+            m_anchorY->setValue(0.0);
+            m_anchorLock->setChecked(false);
+            m_anchorPickMode = false;
+            m_view->clearRoi();
+            m_view->setFeaturePoints({});
+            m_view->setRoiFreehand(true);
+            m_view->setRoiColor(QColor(0, 200, 255));
+            refreshShapeList();
+            refreshFeaturePreview();
+            m_hint->setText(QStringLiteral(
+                "已全部屏蔽（形状与匹配中心清空）；请用套索/矩形/魔术棒画出要保留的区域。"));
+        } else if (m_blockAllActive) {
+            m_shapes = m_blockedShapes;
+            m_excludes = m_blockedExcludes;
+            m_blockedShapes.clear();
+            m_blockedExcludes.clear();
+            m_blockAllActive = false;
+            m_shape = m_shapes.isEmpty() ? RoiShape() : m_shapes.first();
+            refreshShapeList();
+            refreshFeaturePreview();
+            m_hint->setText(QStringLiteral("已恢复屏蔽前的形状。"));
+        }
     });
     // VM：锁定后隐藏「图上取点」按钮（锁定=不允许再改匹配中心）
     connect(m_anchorLock, &QCheckBox::toggled, anchorPickBtn, [anchorPickBtn](bool locked) {
