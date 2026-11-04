@@ -982,6 +982,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261102.4",
       "recorded_at": "2026-11-02",
       "recorded_note": "VM 4.4 对齐全部闭合：参数语义/运行参数/多模板顺序/配置窗全工具/尺度XY/擦除轮廓点/匹配中心/输出掩膜/图像型ROI/继承ROI/多形状/四页签/结果显示四层显隐"
+    },
+    {
+      "tag": "rc-20261104.3",
+      "commit": "6b6d87e539767587159784c4427ffac5112b1460",
+      "exe_md5": "792c8992e3427a0766098252ef885e42",
+      "exe_bytes": 10999808,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261104.3",
+      "recorded_at": "2026-11-04",
+      "recorded_note": "交付审计收口：P1 参数/结果深度（Blob/卡尺/角度/标定/OCR）、运行策略/采集策略/后台运行、欢迎页与布局持久化、删除节点等悬垂指针清理、大文件存图内存上限；75/75 测试与三项门禁全绿"
     }
   ],
   "legacy_backfilled": [
