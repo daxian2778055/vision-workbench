@@ -595,6 +595,22 @@ void CalibChainTest::nPointRecoversKnownAffine()
     QVERIFY(node.getParam(QStringLiteral("moduleStatus")).toBool());
     QVERIFY(noteOf(node).isEmpty());
 
+    // 结果深度（P1）：点对数/内点/残差/缩放/旋转/平移
+    QCOMPARE(node.getParam(QStringLiteral("pointCount")).toInt(), pixels.size());
+    QCOMPARE(node.getParam(QStringLiteral("inlierCount")).toInt(), pixels.size());
+    QVERIFY2(node.getParam(QStringLiteral("rmsError")).toDouble() < 1e-3,
+             qPrintable(QStringLiteral("精确点对 RMS 应接近 0，实际 %1")
+                            .arg(node.getParam(QStringLiteral("rmsError")).toDouble())));
+    QVERIFY2(qAbs(node.getParam(QStringLiteral("rotationDeg")).toDouble() - deg) < 1e-4,
+             qPrintable(QStringLiteral("旋转角应≈%1，实际 %2")
+                            .arg(deg)
+                            .arg(node.getParam(QStringLiteral("rotationDeg")).toDouble())));
+    QVERIFY2(qAbs(node.getParam(QStringLiteral("scaleX")).toDouble() - s) < 1e-6
+                 && qAbs(node.getParam(QStringLiteral("scaleY")).toDouble() - s) < 1e-6,
+             "仿射缩放应为 0.05");
+    QVERIFY2(qAbs(node.getParam(QStringLiteral("translateCol")).toDouble() - truth.m13) < 1e-4,
+             "平移列项应等于真值");
+
     const QVector<double> stored = CalibrationManager::instance()->homography(QStringLiteral("c2test_npoint"));
     const QString storedDev = vecDeviation(stored, truthVec, 1e-4);
     QVERIFY2(storedDev.isEmpty(),

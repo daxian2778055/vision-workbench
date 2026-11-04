@@ -78,7 +78,11 @@ void HelpViewer::showHelpForNode(NodeBase *node)
 {
     if (!node) return;
 
-    QString nodeId = QString::number(node->moduleId());
+    // 帮助按“算子类型 ID”查注册表；moduleId 是运行期实例号（数字），查不到任何注册项。
+    // 类型 ID 由 NodeRegistry 在创建节点时写入 vfpNodeTypeId；极老方案可能缺属性，退回类名。
+    QString nodeId = node->property("vfpNodeTypeId").toString();
+    if (nodeId.isEmpty())
+        nodeId = QString::fromLatin1(node->metaObject()->className());
     showHelpForNodeId(nodeId);
 }
 
@@ -98,17 +102,21 @@ void HelpViewer::registerHelpContent(const QString &nodeId, const QString &htmlC
 
 void HelpViewer::loadHelpContent(const QString &nodeId)
 {
+    const NodeRegistration *reg = NodeRegistry::instance().findById(nodeId);
+    const QString title = QStringLiteral("算子帮助：%1")
+                              .arg(reg ? reg->displayName : nodeId);
+
     // 查找已注册的帮助内容
     if (s_helpContents.contains(nodeId)) {
         m_textBrowser->setHtml(s_helpContents[nodeId]);
-        m_titleLabel->setText(QStringLiteral("算子帮助：%1").arg(nodeId));
+        m_titleLabel->setText(title);
         return;
     }
 
     // 使用默认帮助内容
     QString defaultContent = createDefaultHelpContent(nodeId);
     m_textBrowser->setHtml(defaultContent);
-    m_titleLabel->setText(QStringLiteral("算子帮助：%1").arg(nodeId));
+    m_titleLabel->setText(title);
 }
 
 QString HelpViewer::createDefaultHelpContent(const QString &nodeId) const
@@ -134,6 +142,17 @@ QString HelpViewer::createDefaultHelpContent(const QString &nodeId) const
         else
             description = QStringLiteral("暂无描述");
     }
+
+    // 端口与参数说明按算子分组给出，避免数据节点也显示“图像输入/图像输出”
+    const bool dataFlow = reg && (reg->group == QStringLiteral("逻辑与控制")
+                                  || reg->group == QStringLiteral("结果输出"));
+    const QString inputList = dataFlow
+        ? QStringLiteral("<li><strong>数据输入</strong>：上游模块的结果数据</li>")
+        : QStringLiteral("<li><strong>图像输入</strong>：待处理的图像数据</li>");
+    const QString outputList = dataFlow
+        ? QStringLiteral("<li><strong>数据输出</strong>：判断/统计/格式化后的结果</li>")
+        : QStringLiteral("<li><strong>图像输出</strong>：处理后的图像数据</li>"
+                         "<li><strong>结果数据</strong>：测量/定位结果</li>");
 
     // 生成帮助文档HTML
     QString html = QStringLiteral(R"(
@@ -210,18 +229,18 @@ h2 {
 <h2>输入端口</h2>
 <p>本算子接受以下输入：</p>
 <ul>
-<li><strong>图像输入</strong>：待处理的图像数据</li>
+%6
 </ul>
 
 <h2>输出端口</h2>
 <p>本算子提供以下输出：</p>
 <ul>
-<li><strong>图像输出</strong>：处理后的图像数据</li>
-<li><strong>结果数据</strong>：分析结果或参数</li>
+%7
 </ul>
 
 <h2>参数说明</h2>
-<p>本算子的参数可在右侧参数面板中配置。具体参数取决于算子实现。</p>
+<p>参数在模块配置窗中按“基本参数 / 运行参数 / 结果显示”分组展示；
+数值型运行参数支持“自定义 / 订阅”，左下角可恢复默认值。</p>
 
 <h2>使用示例</h2>
 <div class="note">
@@ -247,7 +266,9 @@ h2 {
     .arg(nodeId)
     .arg(group)
     .arg(getNodeCategoryDescription(nodeId))
-    .arg(description);
+    .arg(description)
+    .arg(inputList)
+    .arg(outputList);
 
     return html;
 }

@@ -216,7 +216,7 @@ NodeBase *FlowScene::createNodeByTypeIdOrName(const QString &typeId, int typeVal
 
 NodeBase *FlowScene::duplicateNode(NodeBase *node)
 {
-    if (!node || m_editLocked) return nullptr;
+    if (!node || isEditLocked()) return nullptr;
     recordUndo();
 
     // 序列化原算子参数（moduleId 不复制，副本保持自己的模块 ID）
@@ -263,7 +263,7 @@ void FlowScene::adoptNode(NodeBase *node, const QPointF &pos)
 
 NodeBase *FlowScene::createNodeFromTemplate(const QString &templateName, const QPointF &pos)
 {
-    if (m_editLocked) return nullptr;
+    if (isEditLocked()) return nullptr;
 
     NodeTemplateStore &store = NodeTemplateStore::instance();
     const QJsonObject nodeJson = store.nodeJson(templateName);
@@ -434,7 +434,7 @@ void FlowScene::removeConnection(MyProject::Connection *connection)
 
 void FlowScene::recordUndo()
 {
-    if (m_restoring || m_editLocked || m_undoBatch > 0) {
+    if (m_restoring || isEditLocked() || m_undoBatch > 0) {
         return;
     }
     ProjectManager pm;
@@ -486,7 +486,7 @@ void FlowScene::restoreSnapshot(const QJsonObject &snapshot)
 
 bool FlowScene::undo()
 {
-    if (m_undoStack.isEmpty() || m_editLocked) {
+    if (m_undoStack.isEmpty() || isEditLocked()) {
         return false;
     }
     ProjectManager pm;
@@ -503,7 +503,7 @@ bool FlowScene::undo()
 
 bool FlowScene::redo()
 {
-    if (m_redoStack.isEmpty() || m_editLocked) {
+    if (m_redoStack.isEmpty() || isEditLocked()) {
         return false;
     }
     ProjectManager pm;
@@ -517,6 +517,34 @@ bool FlowScene::redo()
     emit redoAvailable(!m_redoStack.isEmpty());
     return true;
 }
+
+QStringList FlowScene::undoHistoryTexts() const
+{
+    // 栈尾是"下一步要撤销到的状态"；历史菜单按最新在前展示。
+    QStringList texts;
+    texts.reserve(m_undoStack.size());
+    for (int i = m_undoStack.size() - 1; i >= 0; --i) {
+        const QJsonObject &snapshot = m_undoStack.at(i);
+        const int nodes = snapshot.value(QStringLiteral("nodes")).toArray().size();
+        const int connections = snapshot.value(QStringLiteral("connections")).toArray().size();
+        texts << tr("返回到 %1 个模块 / %2 条连线").arg(nodes).arg(connections);
+    }
+    return texts;
+}
+
+QStringList FlowScene::redoHistoryTexts() const
+{
+    QStringList texts;
+    texts.reserve(m_redoStack.size());
+    for (int i = m_redoStack.size() - 1; i >= 0; --i) {
+        const QJsonObject &snapshot = m_redoStack.at(i);
+        const int nodes = snapshot.value(QStringLiteral("nodes")).toArray().size();
+        const int connections = snapshot.value(QStringLiteral("connections")).toArray().size();
+        texts << tr("前进到 %1 个模块 / %2 条连线").arg(nodes).arg(connections);
+    }
+    return texts;
+}
+
 
 QList<NodeBase *> FlowScene::nodes() const
 {
@@ -654,32 +682,43 @@ void FlowScene::setEditLocked(bool locked)
 {
     m_editLocked = locked;
     // 锁定/解锁所有节点图形的可移动性（加锁取副本再改，避免与执行线程读成员集并发）
+    // 有效锁 = 运行态锁 ∨ 用户显式锁：只关运行态锁时，用户锁仍须生效。
+    const bool effective = m_editLocked || m_userLocked;
     QList<NodeGraphicsItem *> items;
     {
         QMutexLocker locker(&m_graphMutex);
         items = m_nodeItems.values();
     }
     for (NodeGraphicsItem *item : items) {
-        item->setFlag(QGraphicsItem::ItemIsMovable, !locked);
+        item->setFlag(QGraphicsItem::ItemIsMovable, !effective);
     }
     for (CommentGraphicsItem *c : m_comments) {
         if (c)
-            c->setFlag(QGraphicsItem::ItemIsMovable, !locked);
+            c->setFlag(QGraphicsItem::ItemIsMovable, !effective);
     }
     for (NodeGroupItem *g : m_groups) {
         if (g)
-            g->setFlag(QGraphicsItem::ItemIsMovable, !locked);
+            g->setFlag(QGraphicsItem::ItemIsMovable, !effective);
     }
+}
+
+void FlowScene::setUserLocked(bool locked)
+{
+    if (m_userLocked == locked)
+        return;
+    m_userLocked = locked;
+    // 与运行态锁取或后统一施加（setEditLocked 内部会再算一次有效锁）。
+    setEditLocked(m_editLocked);
 }
 
 bool FlowScene::isEditLocked() const
 {
-    return m_editLocked;
+    return m_editLocked || m_userLocked;
 }
 
 void FlowScene::dragEnterEvent(QGraphicsSceneDragDropEvent *event)
 {
-    if (m_editLocked) { event->ignore(); return; }
+    if (isEditLocked()) { event->ignore(); return; }
     const QMimeData *mime = event->mimeData();
     if (!mime) return;
     if (mime->hasText() || mime->hasFormat(NodeFactory::toolPaletteMimeFormat()))
@@ -688,7 +727,7 @@ void FlowScene::dragEnterEvent(QGraphicsSceneDragDropEvent *event)
 
 void FlowScene::dragMoveEvent(QGraphicsSceneDragDropEvent *event)
 {
-    if (m_editLocked) { event->ignore(); return; }
+    if (isEditLocked()) { event->ignore(); return; }
     const QMimeData *mime = event->mimeData();
     if (!mime) return;
     if (mime->hasText() || mime->hasFormat(NodeFactory::toolPaletteMimeFormat()))
@@ -697,7 +736,7 @@ void FlowScene::dragMoveEvent(QGraphicsSceneDragDropEvent *event)
 
 void FlowScene::dropEvent(QGraphicsSceneDragDropEvent *event)
 {
-    if (m_editLocked) { event->ignore(); return; }
+    if (isEditLocked()) { event->ignore(); return; }
     const QMimeData *mime = event->mimeData();
     if (!mime) { QGraphicsScene::dropEvent(event); return; }
 
@@ -715,7 +754,87 @@ void FlowScene::dropEvent(QGraphicsSceneDragDropEvent *event)
     }
     if (!ok) { QGraphicsScene::dropEvent(event); return; }
 
-    createNode(type, event->scenePos(), nodeName);
+    NodeBase *added = createNode(type, event->scenePos(), nodeName);
+    if (added) {
+        // P0-4（对标 VM「搭建入门级方案」）：拖入模块与已有模块**对齐**时自动连线。
+        // 对齐判据：水平串联要求竖直中心差 ≤ 20px 且左边缘距已有模块右边缘 0~64px；
+        // 竖直串联要求水平中心差 ≤ 20px 且上边缘距已有模块下边缘 0~64px。
+        // 只连数据语义兼容的端口对；连线不额外记撤销（与创建节点合并为一步）。
+        NodeGraphicsItem *addedItem = getGraphicsItemForNode(added);
+        if (addedItem) {
+            const QRectF nr = addedItem->sceneBoundingRect();
+            NodeGraphicsItem *bestItem = nullptr;
+            qreal bestGap = 64.0;
+            bool sourceIsExisting = true;   // 连线方向：已有 → 新建（false 表示新建 → 已有）
+            QList<NodeGraphicsItem *> existing;
+            {
+                QMutexLocker locker(&m_graphMutex);
+                existing = m_nodeItems.values();
+            }
+            for (NodeGraphicsItem *item : existing) {
+                if (item == addedItem)
+                    continue;
+                const QRectF er = item->sceneBoundingRect();
+                // 新建在已有右侧：已有 → 新建
+                const qreal hGap = nr.left() - er.right();
+                if (qAbs(er.center().y() - nr.center().y()) <= 20.0
+                    && hGap >= -8.0 && hGap <= 64.0 && hGap < bestGap) {
+                    bestItem = item;
+                    bestGap = hGap;
+                    sourceIsExisting = true;
+                }
+                // 新建在已有左侧：新建 → 已有
+                const qreal hGapLeft = er.left() - nr.right();
+                if (qAbs(er.center().y() - nr.center().y()) <= 20.0
+                    && hGapLeft >= -8.0 && hGapLeft <= 64.0 && hGapLeft < bestGap) {
+                    bestItem = item;
+                    bestGap = hGapLeft;
+                    sourceIsExisting = false;
+                }
+                // 新建在已有下方：已有 → 新建
+                const qreal vGap = nr.top() - er.bottom();
+                if (qAbs(er.center().x() - nr.center().x()) <= 20.0
+                    && vGap >= -8.0 && vGap <= 64.0 && vGap < bestGap) {
+                    bestItem = item;
+                    bestGap = vGap;
+                    sourceIsExisting = true;
+                }
+                // 新建在已有上方：新建 → 已有
+                const qreal vGapTop = er.top() - nr.bottom();
+                if (qAbs(er.center().x() - nr.center().x()) <= 20.0
+                    && vGapTop >= -8.0 && vGapTop <= 64.0 && vGapTop < bestGap) {
+                    bestItem = item;
+                    bestGap = vGapTop;
+                    sourceIsExisting = false;
+                }
+            }
+            if (bestItem) {
+                NodeBase *srcNode = sourceIsExisting ? bestItem->node() : added;
+                NodeBase *dstNode = sourceIsExisting ? added : bestItem->node();
+                Port *srcPort = nullptr;
+                Port *dstPort = nullptr;
+                for (Port *out : srcNode->outputPorts()) {
+                    for (Port *in : dstNode->inputPorts()) {
+                        const PortDataType a = out->dataType();
+                        const PortDataType b = in->dataType();
+                        if (a == b || a == PortDataType::Any || a == PortDataType::Unknown
+                            || b == PortDataType::Any || b == PortDataType::Unknown) {
+                            srcPort = out;
+                            dstPort = in;
+                            break;
+                        }
+                    }
+                    if (srcPort)
+                        break;
+                }
+                if (srcPort && dstPort) {
+                    beginUndoBatch();
+                    createConnection(srcPort, dstPort);
+                    endUndoBatch();
+                }
+            }
+        }
+    }
     event->acceptProposedAction();
 }
 
@@ -744,7 +863,7 @@ void FlowScene::mousePressEvent(QGraphicsSceneMouseEvent *event)
 
 void FlowScene::keyPressEvent(QKeyEvent *event)
 {
-    if (!m_editLocked && (event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace)) {
+    if (!isEditLocked() && (event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace)) {
         deleteSelectedItems();
         event->accept();
         return;
@@ -773,17 +892,17 @@ void FlowScene::contextMenuEvent(QGraphicsSceneContextMenuEvent *event)
     }
     QMenu menu;
     QAction *addCommentAct = menu.addAction(QStringLiteral("添加注释"));
-    addCommentAct->setEnabled(!m_editLocked);
+    addCommentAct->setEnabled(!isEditLocked());
     // FR1.9：把选中的算子框成一组（纯视觉容器，不影响执行）
     const int selCount = selectedNodes().size();
     QAction *groupAct = menu.addAction(selCount >= 2
                                            ? QStringLiteral("创建分组（%1 个算子）").arg(selCount)
                                            : QStringLiteral("创建分组（请先选中 ≥2 个算子）"));
-    groupAct->setEnabled(!m_editLocked && selCount >= 2);
+    groupAct->setEnabled(!isEditLocked() && selCount >= 2);
     QAction *chosen = menu.exec(event->screenPos());
-    if (chosen == addCommentAct && !m_editLocked)
+    if (chosen == addCommentAct && !isEditLocked())
         addComment(event->scenePos(), QStringLiteral("注释"));
-    else if (chosen == groupAct && !m_editLocked)
+    else if (chosen == groupAct && !isEditLocked())
         createGroupFromSelection();
 }
 
@@ -799,7 +918,7 @@ QList<NodeBase *> FlowScene::selectedNodes() const
 
 void FlowScene::deleteSelectedItems()
 {
-    if (m_editLocked)
+    if (isEditLocked())
         return;
     const auto nodes = selectedNodes();
     QList<CommentGraphicsItem *> comments;
@@ -829,7 +948,7 @@ void FlowScene::deleteSelectedItems()
 
 void FlowScene::setSelectedNodesEnabled(bool on)
 {
-    if (m_editLocked)
+    if (isEditLocked())
         return;
     recordUndo();
     for (NodeBase *n : selectedNodes()) {
@@ -845,7 +964,7 @@ CommentGraphicsItem *FlowScene::addComment(const QPointF &pos, const QString &te
         recordUndo();
     auto *item = new CommentGraphicsItem(text);
     item->setPos(pos);
-    item->setFlag(QGraphicsItem::ItemIsMovable, !m_editLocked);
+    item->setFlag(QGraphicsItem::ItemIsMovable, !isEditLocked());
     addItem(item);
     m_comments.append(item);
     return item;
@@ -925,7 +1044,7 @@ void FlowScene::deleteGroupItem(NodeGroupItem *group)
 
 NodeGroupItem *FlowScene::createGroupFromSelection(const QString &title)
 {
-    if (m_editLocked)
+    if (isEditLocked())
         return nullptr;
     const QList<NodeBase *> sel = selectedNodes();
     if (sel.size() < 2)
@@ -960,7 +1079,7 @@ void FlowScene::removeGroup(NodeGroupItem *group)
 
 int FlowScene::dissolveSelectedGroups()
 {
-    if (m_editLocked)
+    if (isEditLocked())
         return 0;
     QList<NodeGroupItem *> selected;
     for (QGraphicsItem *it : selectedItems()) {
@@ -1019,7 +1138,7 @@ void FlowScene::registerLoadedGroup(NodeGroupItem *group, qreal width, qreal hei
 {
     if (!group)
         return;
-    group->setFlag(QGraphicsItem::ItemIsMovable, !m_editLocked);
+    group->setFlag(QGraphicsItem::ItemIsMovable, !isEditLocked());
     group->setFrameSize(width, height);
     addItem(group);
     m_groups.append(group);
@@ -1327,7 +1446,7 @@ void FlowScene::extrasFromJson(const QJsonObject &json, QStringList *rejected)
         CommentGraphicsItem *item = CommentGraphicsItem::fromJson(cv.toObject());
         if (!item)
             continue;
-        item->setFlag(QGraphicsItem::ItemIsMovable, !m_editLocked);
+        item->setFlag(QGraphicsItem::ItemIsMovable, !isEditLocked());
         addItem(item);
         m_comments.append(item);
     }

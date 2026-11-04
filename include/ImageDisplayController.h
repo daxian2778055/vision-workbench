@@ -34,6 +34,10 @@ public:
     void setSceneProvider(std::function<FlowScene *()> provider) { m_sceneProvider = std::move(provider); }
     void setCanvasSelectionProvider(std::function<NodeBase *()> provider)
     { m_canvasSelectionProvider = std::move(provider); }
+    /// 双画面：副视图显示完整结果，主视图显示当前模块输入源（实装 4.4 语义）
+    void setSecondaryView(HalconWindow *view) { m_secondaryView = view; }
+    void setDualViewEnabled(bool on);
+    bool dualViewEnabled() const { return m_dualViewEnabled; }
 
     /// 显示决策：下拉框选择 > 画布选中节点 > fallbackNode
     NodeBase *resolveDisplayNode(NodeBase *fallbackNode = nullptr) const;
@@ -54,6 +58,9 @@ public:
     void clearSelection();
     /// 删除场景时清掉该场景的显式显示源键（否则场景对象已释放但键仍在 → 悬垂指针）
     void removeScene(FlowScene *scene);
+    /// 节点被删除时清掉所有指向它的裸指针（显式显示源/取点目标/几何编辑目标）。
+    /// 缺这条时删除节点后下一次刷新/取点会解引用已析构对象。
+    void forgetNode(NodeBase *node);
 
     /// B3：主画布直接编辑算子几何 ROI（模板框/搜索框/卡尺线…）。
     /// 传 nullptr 关闭。返回 false = 该节点没有可编辑几何或无画布。
@@ -74,7 +81,12 @@ public:
     NodeBase *writeRoiToNode(const RoiShape &shape);
 
 private:
+    /// 双画面左窗：显示当前模块的输入图像（无输入则清空）；返回是否显示成功
+    bool showInputOnPrimary(NodeBase *moduleNode);
+
     HalconWindow *m_imageView;
+    HalconWindow *m_secondaryView = nullptr;
+    bool m_dualViewEnabled = false;
     QLabel *m_sourceLabel;
     QMap<FlowScene *, NodeBase *> m_selectedOutputNodes;
     NodeBase *m_roiPickNode = nullptr;

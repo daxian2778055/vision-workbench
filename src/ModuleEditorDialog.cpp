@@ -15,6 +15,9 @@
 #include "OpencvUtil.h"
 #include "DataObject.h"
 #include "FlowScene.h"
+#include "NodeRegistry.h"
+#include "Port.h"
+#include "Connection.h"
 #include "VariablePanel.h"
 
 #include <QHBoxLayout>
@@ -28,7 +31,13 @@
 #include <QDir>
 #include <QCheckBox>
 #include <QSpinBox>
+#include <QComboBox>
+#include <QColorDialog>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTimer>
+#include <QHeaderView>
 #include <QToolButton>
 #include <QMenu>
 #include <QApplication>
@@ -77,6 +86,13 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     root->setContentsMargins(8, 8, 8, 8);
 
     auto *toolbar = new QHBoxLayout();
+    // P1-1：左上角帮助入口（对标 VM 模块窗的 ? 按钮）
+    m_helpBtn = new QToolButton(this);
+    m_helpBtn->setObjectName(QStringLiteral("moduleHelpButton"));
+    m_helpBtn->setText(QStringLiteral("?"));
+    m_helpBtn->setToolTip(QStringLiteral("查看本算子的帮助说明"));
+    m_helpBtn->setFixedSize(26, 26);
+    toolbar->addWidget(m_helpBtn);
     auto *execBtn = new QPushButton(QStringLiteral("执行算子"));
     auto *recomputeBtn = new QPushButton(QStringLiteral("重算下游"));
     recomputeBtn->setToolTip(QStringLiteral("参数改完后：作废本算子及其下游的缓存，只重跑这一段链路（不重跑无关分支）"));
@@ -111,24 +127,56 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     evalBtn->setToolTip(QStringLiteral("按当前参数跑一次，给出模板质量评级与改进建议"));
     trainTmplBtn->setToolTip(QStringLiteral("按当前 ROI 从图像训练并保存模板，随后刷新预览与结果"));
     auto *fitBtn = new QPushButton(QStringLiteral("适应窗口"));
-    m_autoRecomputeCheck = new QCheckBox(QStringLiteral("自动重算"));
-    m_autoRecomputeCheck->setChecked(true);
-    m_autoRecomputeCheck->setToolTip(QStringLiteral("改参数 / 拖 ROI / 涂掩膜后，自动重算本算子及其下游（去抖 400ms）"));
+    m_autoRecomputeCheck = new QCheckBox(QStringLiteral("自动预览"));
+    m_autoRecomputeCheck->setObjectName(QStringLiteral("autoRecomputeCheck"));
+    m_autoRecomputeCheck->setChecked(false);
+    m_autoRecomputeCheck->setToolTip(QStringLiteral(
+        "勾选后：改参数 / 拖 ROI / 涂掩膜立即重算预览（去抖 400ms）。\n"
+        "不勾选时改动只暂存在本窗口，点「确定」才提交并重算；点「取消」丢弃本次改动。"));
     toolbar->addWidget(execBtn);
     toolbar->addWidget(recomputeBtn);
     toolbar->addWidget(drawBtn);
-    toolbar->addWidget(searchBtn);
-    toolbar->addWidget(polyBtn);
     toolbar->addWidget(m_targetGeomBtn);
     toolbar->addWidget(m_targetSearchBtn);
     toolbar->addWidget(clearGeomBtn);
     toolbar->addWidget(maskBtn);
     toolbar->addWidget(clearMaskBtn);
-    toolbar->addWidget(saveTmplBtn);
-    toolbar->addWidget(trainTmplBtn);
-    toolbar->addWidget(evalBtn);
-    toolbar->addWidget(budgetBtn);
-    toolbar->addWidget(wizardBtn);
+    // P2-10：模板专属动作收进「模板工具」下拉，避免一行十几个按钮把通用动作挤没
+    //（VM 的模块窗也不会把所有模板动作平铺在主工具条上）。
+    auto *tmplToolsBtn = new QToolButton(this);
+    tmplToolsBtn->setObjectName(QStringLiteral("templateToolsButton"));
+    tmplToolsBtn->setText(QStringLiteral("模板工具"));
+    tmplToolsBtn->setToolTip(QStringLiteral("模板匹配专属动作：搜索区域、训练、评估、体检、向导"));
+    tmplToolsBtn->setPopupMode(QToolButton::InstantPopup);
+    {
+        QMenu *menu = new QMenu(tmplToolsBtn);
+        auto addActionFor = [menu](const QString &text, QPushButton *button) {
+            QAction *act = menu->addAction(text);
+            QObject::connect(act, &QAction::triggered, button, &QPushButton::click);
+        };
+        addActionFor(QStringLiteral("绘制搜索区域"), searchBtn);
+        addActionFor(QStringLiteral("绘制多边形区域"), polyBtn);
+        addActionFor(QStringLiteral("保存模板图像"), saveTmplBtn);
+        addActionFor(QStringLiteral("训练模板"), trainTmplBtn);
+        addActionFor(QStringLiteral("评估模板"), evalBtn);
+        addActionFor(QStringLiteral("参数体检"), budgetBtn);
+        addActionFor(QStringLiteral("向导"), wizardBtn);
+        tmplToolsBtn->setMenu(menu);
+    }
+    toolbar->addWidget(tmplToolsBtn);
+    // P2-10：模板专属动作收进菜单后，按钮本体仍保留（菜单项通过 click() 触发），
+    // 但不参与工具条布局。统一挂在隐藏容器里，避免无父控件时游离在窗口左上角，
+    // 也保证既有按按钮文本查找的调用方/测试仍能找到它们。
+    {
+        auto *tmplButtonHost = new QWidget(this);
+        auto *tmplButtonLay = new QHBoxLayout(tmplButtonHost);
+        tmplButtonLay->setContentsMargins(0, 0, 0, 0);
+        for (QPushButton *b : {searchBtn, polyBtn, saveTmplBtn, trainTmplBtn,
+                               evalBtn, budgetBtn, wizardBtn}) {
+            tmplButtonLay->addWidget(b);
+        }
+        tmplButtonHost->setVisible(false);
+    }
     toolbar->addWidget(m_autoRecomputeCheck);
 
     // 变量引用：点开即列出可引用的 {模块号.参数名} / {global.名称}，选中插入到参数编辑框。
@@ -226,7 +274,6 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     }
     root->addWidget(splitter, 1);
 
-    auto *closeBtn = new QPushButton(QStringLiteral("完成"));
     auto *bottom = new QHBoxLayout();
     // 掩膜画笔半径入口：此前 HalconWindow::setMaskBrushRadius 有实现却**没有任何调用者**，
     // 半径永远固定为默认的 16，粗结构上涂抹太慢、细小区域又太糙。这里补上入口
@@ -253,14 +300,27 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     bottom->addWidget(maskEraseCheck);
     bottom->addWidget(maskBrushLabel);
     bottom->addWidget(maskBrushSpin);
+    // P2-8：左下角「恢复默认值」（VM 运行参数页左下角口径；只对声明式参数算子可见）
+    m_restoreDefaultsBtn = new QPushButton(QStringLiteral("恢复默认值"));
+    m_restoreDefaultsBtn->setToolTip(QStringLiteral("把本算子的全部参数恢复为出厂默认值；点「确定」后才提交"));
+    bottom->addWidget(m_restoreDefaultsBtn);
     bottom->addStretch();
-    bottom->addWidget(closeBtn);
+
+    // P1-1/P1-10：右下角「取消 / 确定」——确定提交本次参数，取消回滚到打开时快照
+    m_cancelBtn = new QPushButton(QStringLiteral("取消"));
+    m_cancelBtn->setToolTip(QStringLiteral("放弃本次修改并回滚到打开时的参数"));
+    m_okBtn = new QPushButton(QStringLiteral("确定"));
+    m_okBtn->setDefault(true);
+    m_okBtn->setToolTip(QStringLiteral("提交本次修改并重算本算子及其下游"));
+    bottom->addWidget(m_cancelBtn);
+    bottom->addWidget(m_okBtn);
     root->addLayout(bottom);
 
     HalconNode *hn = halconNode();
     const bool hasGeom = hn && hn->geometryRoiType() != RoiType::None;
     const bool hasMask = hn && hn->supportsMaskEdit();
     const bool isTmpl = qobject_cast<OpencvTemplateMatchNode *>(m_node);
+    m_restoreDefaultsBtn->setVisible(hn && !hn->paramSpecs().isEmpty());
     drawBtn->setVisible(hasGeom);
     clearGeomBtn->setVisible(hasGeom);
     maskBtn->setVisible(hasMask);
@@ -269,6 +329,14 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     maskEraseCheck->setVisible(hasMask);
     maskBrushSpin->setVisible(hasMask);
     saveTmplBtn->setVisible(isTmpl);
+    // P0-3：模板专属按钮只对模板匹配算子可见（旧版对所有节点可见，点下去读不到参数）
+    tmplToolsBtn->setVisible(isTmpl);
+    searchBtn->setVisible(isTmpl);
+    polyBtn->setVisible(isTmpl);
+    trainTmplBtn->setVisible(isTmpl);
+    evalBtn->setVisible(isTmpl);
+    budgetBtn->setVisible(isTmpl);
+    wizardBtn->setVisible(isTmpl);
     m_templatePreview->setVisible(isTmpl);
     m_targetGeomBtn->setVisible(isTmpl);
     m_targetSearchBtn->setVisible(isTmpl);
@@ -276,7 +344,8 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     m_tmplNewBtn->setVisible(isTmpl);
     m_tmplEditBtn->setVisible(isTmpl);
     m_tmplDelBtn->setVisible(isTmpl);
-    m_resultTable->setVisible(isTmpl);
+    // P0-2：结果显示是所有模块的通用页（非模板算子显示通用输出/状态/耗时）
+    m_resultTable->setVisible(true);
 
     if (hasGeom) {
         m_hintLabel->setText(QStringLiteral(
@@ -330,7 +399,11 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
             "已按 ROI 训练；图上绿点 = 模板强梯度点（GOC 用它打分，灰度法仅作质量参考）"));
     });
     connect(fitBtn, &QPushButton::clicked, m_view, &HalconWindow::fitToWindow);
-    connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
+    connect(m_helpBtn, &QToolButton::clicked, this, [this]() { emit helpRequested(m_node); });
+    connect(m_cancelBtn, &QPushButton::clicked, this, [this]() { reject(); });
+    connect(m_okBtn, &QPushButton::clicked, this, [this]() { accept(); });
+    connect(m_restoreDefaultsBtn, &QPushButton::clicked, this,
+            &ModuleEditorDialog::restoreParamDefaults);
     connect(m_view, &HalconWindow::roiEdited, this, &ModuleEditorDialog::onRoiEdited);
     connect(m_view, &HalconWindow::maskEdited, this, &ModuleEditorDialog::onMaskEdited);
 
@@ -349,13 +422,65 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
 
     rebuildParamPanel();
     reloadFromNode();
+    // P1-10：记录打开时参数，作为「取消」的回滚基线
+    snapshotParams();
+    m_paramsDirty = false;
 }
 
 void ModuleEditorDialog::done(int r)
 {
-    // 完成 / 右上角 X / Esc 的兜底保存（平时调整大小/移动即已即时落盘）
+    // 窗口几何的兜底保存（平时调整大小/移动即已即时落盘）
     saveGeometryNow();
+    if (m_autoRecomputeTimer)
+        m_autoRecomputeTimer->stop();
+
+    // P1-10：取消 = 回滚到打开时快照；确定 = 保留并提交一次重算。
+    // 右上角 X / Esc 与「取消」同义（不意外提交半改状态）。
+    if (r == QDialog::Rejected) {
+        const bool dirty = m_paramsDirty;
+        restoreParams();
+        m_paramsDirty = false;
+        if (dirty)
+            emit recomputeRequested();   // 让下游回到快照值
+    } else if (r == QDialog::Accepted) {
+        const bool dirty = m_paramsDirty;
+        m_paramsDirty = false;
+        if (dirty)
+            emit recomputeRequested();   // 一次性提交，而不是每个控件各算一次
+    }
     QDialog::done(r);
+}
+
+void ModuleEditorDialog::snapshotParams()
+{
+    m_paramSnapshot.clear();
+    if (!m_node)
+        return;
+    for (const QString &name : m_node->getAllParamNames())
+        m_paramSnapshot.insert(name, m_node->getParam(name));
+}
+
+void ModuleEditorDialog::restoreParams()
+{
+    if (!m_node || m_paramSnapshot.isEmpty())
+        return;
+    m_paramHookBusy = true;
+    if (m_autoRecomputeTimer)
+        m_autoRecomputeTimer->stop();
+    for (auto it = m_paramSnapshot.cbegin(); it != m_paramSnapshot.cend(); ++it) {
+        if (auto *hn = qobject_cast<HalconNode *>(m_node))
+            hn->setParam(it.key(), it.value());   // 一次回滚，避免每个参数各自触发预览
+        else
+            m_node->setParam(it.key(), it.value());
+    }
+    if (QWidget *panel = m_paramHost ? m_paramHost->widget() : nullptr)
+        m_node->updateParamPanel(panel);
+    m_paramHookBusy = false;
+    // 参数回滚后，图形 ROI/搜索框/结果表也要回到基线
+    echoGeometry();
+    refreshTemplatePreview();
+    refreshResultTable();
+    refreshParamHooks();
 }
 
 void ModuleEditorDialog::resizeEvent(QResizeEvent *event)
@@ -461,7 +586,7 @@ void ModuleEditorDialog::rebuildParamPanel()
 // 所有控件仍留在 panel 的子树里，updateParamPanel 的 findChild 查找不受影响。
 void ModuleEditorDialog::rebuildVmTabs()
 {
-    if (!qobject_cast<OpencvTemplateMatchNode *>(m_node) || !m_paramHost)
+    if (!m_paramHost)
         return;
     QWidget *panel = m_paramHost->widget();
     while (panel && qobject_cast<QScrollArea *>(panel))
@@ -470,70 +595,763 @@ void ModuleEditorDialog::rebuildVmTabs()
                                                  Qt::FindDirectChildrenOnly))
         return;
 
-    auto *tabs = new QTabWidget(panel);
-    tabs->setObjectName(QStringLiteral("vmTabs"));
+    // P0-2：基本/运行/结果显示三页签对**所有模块**生效；「特征模板」页仅模板匹配算子有。
+    const bool isTmpl = qobject_cast<OpencvTemplateMatchNode *>(m_node) != nullptr;
+
+    m_vmTabs = new QTabWidget(panel);
+    m_vmTabs->setObjectName(QStringLiteral("vmTabs"));
     auto makePage = [&](QWidget **page, QVBoxLayout **lay) {
         *page = new QWidget();
         *lay = new QVBoxLayout(*page);
         (*lay)->setContentsMargins(8, 10, 8, 8);
         (*lay)->setSpacing(8);
     };
-    QWidget *basicPage, *tmplPage, *runPage, *resPage;
-    QVBoxLayout *basicLay, *tmplLay, *runLay, *resLay;
+    QWidget *basicPage, *runPage, *resPage;
+    QVBoxLayout *basicLay, *runLay, *resLay;
     makePage(&basicPage, &basicLay);
-    makePage(&tmplPage, &tmplLay);
     makePage(&runPage, &runLay);
     makePage(&resPage, &resLay);
 
-    // ① 参数分组框按标题归位
+    QWidget *tmplPage = nullptr;
+    QVBoxLayout *tmplLay = nullptr;
+    if (isTmpl)
+        makePage(&tmplPage, &tmplLay);
+
+    // ① 参数分组框按标题归位（图像输入/ROI → 基本；模板配置 → 特征模板；其余 → 运行）
     const QList<QGroupBox *> boxes =
         panel->findChildren<QGroupBox *>(QString(), Qt::FindDirectChildrenOnly);
     for (QGroupBox *box : boxes) {
         const QString t = box->title();
-        if (t == QStringLiteral("图像输入") || t == QStringLiteral("ROI区域"))
+        if (t == QStringLiteral("图像输入") || t == QStringLiteral("ROI区域")
+            || t.contains(QStringLiteral("基本"))) {
             basicLay->addWidget(box);
-        else if (t == QStringLiteral("模板配置"))
-            tmplLay->addWidget(box);          // 模板配置参数与模板同页（VM 放在模板配置窗右下）
-        else
+        } else if (t == QStringLiteral("模板配置") && isTmpl) {
+            tmplLay->addWidget(box);   // 模板配置参数与模板同页（VM 放在模板配置窗右下）
+        } else {
             runLay->addWidget(box);
+        }
+    }
+    // 非分组式面板（部分节点直接平铺控件）：把 panel 直属控件整体归入「基本参数」。
+    // 必须跳过 m_vmTabs 本身：它也是 panel 的直属子控件，若被塞进自己的子页布局，
+    // 同一控件会被两套布局反复设置几何 → 布局激活死循环（实测直接卡住测试与界面）。
+    for (QWidget *w : panel->findChildren<QWidget *>(QString(), Qt::FindDirectChildrenOnly)) {
+        if (qobject_cast<QGroupBox *>(w) || w == m_vmTabs)
+            continue;
+        basicLay->addWidget(w);
     }
     basicLay->addStretch();
+    // P2-8：运行参数页补「参数订阅」表（逐参数自定义/订阅切换）
+    buildParamSubscriptionGroup(runLay);
     runLay->addStretch();
-
-    // ② 特征模板页：预览 + 列表 + 创建/编辑/删除
-    if (m_templatePreview)
-        tmplLay->addWidget(m_templatePreview);
-    if (m_templateList)
-        tmplLay->addWidget(m_templateList, 1);
-    auto *row = new QWidget();
-    auto *rowLay = new QHBoxLayout(row);
-    rowLay->setContentsMargins(0, 0, 0, 0);
-    for (QPushButton *b : {m_tmplNewBtn, m_tmplEditBtn, m_tmplDelBtn}) {
-        if (b)
-            rowLay->addWidget(b);
+    if (runLay->count() <= 1) {
+        auto *emptyHint = new QLabel(QStringLiteral("该算子无独立运行参数。"));
+        emptyHint->setStyleSheet(QStringLiteral("color:#888;"));
+        runLay->insertWidget(0, emptyHint);
     }
-    rowLay->addStretch();
-    tmplLay->addWidget(row);
 
-    // ③ 结果显示页：结果表
-    if (m_resultTable)
+    // ② 特征模板页：预览 + 列表 + 创建/编辑/删除（仅模板算子）
+    if (isTmpl) {
+        if (m_templatePreview)
+            tmplLay->addWidget(m_templatePreview);
+        if (m_templateList)
+            tmplLay->addWidget(m_templateList, 1);
+        auto *row = new QWidget();
+        auto *rowLay = new QHBoxLayout(row);
+        rowLay->setContentsMargins(0, 0, 0, 0);
+        for (QPushButton *b : {m_tmplNewBtn, m_tmplEditBtn, m_tmplDelBtn}) {
+            if (b)
+                rowLay->addWidget(b);
+        }
+        rowLay->addStretch();
+        tmplLay->addWidget(row);
+    }
+
+    // ③ 结果显示页：结果表 + VM「结果判断/图像显示/文本显示」配置
+    if (m_resultTable) {
+        m_resultTable->setMaximumHeight(QWIDGETSIZE_MAX);
+        m_resultTable->setMinimumHeight(120);
         resLay->addWidget(m_resultTable, 1);
+    }
+    buildResultDisplayPage(resLay);
 
-    tabs->addTab(basicPage, QStringLiteral("基本参数"));
-    tabs->addTab(tmplPage, QStringLiteral("特征模板"));
-    tabs->addTab(runPage, QStringLiteral("运行参数"));
-    tabs->addTab(resPage, QStringLiteral("结果显示"));
+    // ── 实装 4.4 工具通用框架：关于 / 输入参数 / 输出参数 / ROI配置 /
+    //    参数面板 / 连线 / 工具特性（每个工具都有，模块专属页排在其后）──
+    auto makeReadOnlyTable = [](const QStringList &headers) {
+        auto *table = new QTableWidget(0, headers.size());
+        table->setHorizontalHeaderLabels(headers);
+        table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        table->setSelectionBehavior(QAbstractItemView::SelectRows);
+        table->verticalHeader()->setVisible(false);
+        table->horizontalHeader()->setStretchLastSection(true);
+        table->setAlternatingRowColors(true);
+        return table;
+    };
+    auto nodeTypeText = [](NodeBase::NodeType type) {
+        switch (type) {
+        case NodeBase::IMAGE_ACQUISITION: return QStringLiteral("图像采集");
+        case NodeBase::IMAGE_PROCESSING: return QStringLiteral("图像处理");
+        case NodeBase::SHAPE_ANALYSIS: return QStringLiteral("特征定位");
+        case NodeBase::MEASUREMENT: return QStringLiteral("几何测量");
+        case NodeBase::LOGIC: return QStringLiteral("逻辑控制");
+        case NodeBase::OUTPUT: return QStringLiteral("结果输出");
+        }
+        return QStringLiteral("未知");
+    };
+    auto roiTypeText = [](RoiType type) {
+        switch (type) {
+        case RoiType::Rect: return QStringLiteral("矩形");
+        case RoiType::Circle: return QStringLiteral("圆");
+        case RoiType::Line: return QStringLiteral("线段");
+        case RoiType::Polygon: return QStringLiteral("多边形");
+        case RoiType::RotatedRect: return QStringLiteral("旋转矩形");
+        case RoiType::Point: return QStringLiteral("点");
+        default: return QStringLiteral("无");
+        }
+    };
+    auto sectionLabel = [](const QString &text) {
+        auto *label = new QLabel(QStringLiteral("<b>%1</b>").arg(text));
+        label->setStyleSheet(QStringLiteral("color:#cfd8e3; margin-top:6px;"));
+        return label;
+    };
+
+    const NodeRegistration *reg =
+        NodeRegistry::instance().findById(m_node->property("vfpNodeTypeId").toString());
+
+    // 关于
+    auto *aboutPage = new QWidget();
+    auto *aboutLay = new QVBoxLayout(aboutPage);
+    aboutLay->setContentsMargins(10, 10, 10, 10);
+    aboutLay->setSpacing(8);
+    {
+        auto *title = new QLabel(m_node->fullName());
+        title->setStyleSheet(QStringLiteral("font-size:16px; font-weight:bold; color:#ffffff;"));
+        aboutLay->addWidget(title);
+        auto *meta = new QLabel(QStringLiteral("分组：%1　类型：%2　模块号：%3")
+                                    .arg(reg ? reg->group : QStringLiteral("未知"),
+                                         nodeTypeText(m_node->type()))
+                                    .arg(m_node->moduleId()));
+        meta->setStyleSheet(QStringLiteral("color:#9fb3c8;"));
+        aboutLay->addWidget(meta);
+        auto *desc = new QLabel(reg && !reg->description.isEmpty()
+                                    ? reg->description
+                                    : QStringLiteral("该算子暂无简介。"));
+        desc->setWordWrap(true);
+        desc->setStyleSheet(QStringLiteral("color:#d8dee9;"));
+        aboutLay->addWidget(desc);
+        auto *helpBtn = new QPushButton(QStringLiteral("查看帮助"));
+        connect(helpBtn, &QPushButton::clicked, this, [this]() { emit helpRequested(m_node); });
+        aboutLay->addWidget(helpBtn, 0, Qt::AlignLeft);
+        aboutLay->addStretch();
+    }
+
+    // 输入参数：端口来源摘要 + 原有图像输入/ROI 参数组
+    {
+        auto *inputTable = makeReadOnlyTable({QStringLiteral("输入端口"), QStringLiteral("来源模块")});
+        const QList<Port *> inputs = m_node->inputPorts();
+        for (Port *port : inputs) {
+            QStringList sources;
+            for (MyProject::Connection *conn : port->connections()) {
+                if (conn && conn->getSourceNode())
+                    sources << conn->getSourceNode()->fullName();
+            }
+            const int row = inputTable->rowCount();
+            inputTable->insertRow(row);
+            inputTable->setItem(row, 0, new QTableWidgetItem(port->name()));
+            inputTable->setItem(row, 1, new QTableWidgetItem(
+                                           sources.isEmpty() ? QStringLiteral("未连接")
+                                                             : sources.join(QStringLiteral("、"))));
+        }
+        if (inputs.isEmpty()) {
+            inputTable->insertRow(0);
+            inputTable->setItem(0, 0, new QTableWidgetItem(QStringLiteral("无输入端口")));
+        }
+        inputTable->setMaximumHeight(150);
+        basicLay->insertWidget(0, inputTable);
+    }
+
+    // 输出参数
+    auto *outputPage = new QWidget();
+    auto *outputLay = new QVBoxLayout(outputPage);
+    outputLay->setContentsMargins(10, 10, 10, 10);
+    outputLay->setSpacing(8);
+    {
+        outputLay->addWidget(sectionLabel(QStringLiteral("输出端口与最近结果")));
+        auto *outputTable = makeReadOnlyTable(
+            {QStringLiteral("输出端口"), QStringLiteral("最近输出")});
+        const QList<Port *> outputs = m_node->outputPorts();
+        for (int i = 0; i < outputs.size(); ++i) {
+            auto data = m_node->getOutputData(i);
+            const int row = outputTable->rowCount();
+            outputTable->insertRow(row);
+            outputTable->setItem(row, 0, new QTableWidgetItem(outputs.at(i)->name()));
+            outputTable->setItem(row, 1, new QTableWidgetItem(
+                                           data ? QStringLiteral("有数据")
+                                                : QStringLiteral("无数据（尚未执行）")));
+        }
+        if (outputs.isEmpty()) {
+            outputTable->insertRow(0);
+            outputTable->setItem(0, 0, new QTableWidgetItem(QStringLiteral("无输出端口")));
+        }
+        outputLay->addWidget(outputTable, 1);
+        auto *note = new QLabel(QStringLiteral("运行后的详细数值见「结果显示」页或主界面结果区。"));
+        note->setStyleSheet(QStringLiteral("color:#8f9aa8;"));
+        note->setWordWrap(true);
+        outputLay->addWidget(note);
+    }
+
+    // ROI 配置
+    auto *roiPage = new QWidget();
+    auto *roiLay = new QVBoxLayout(roiPage);
+    roiLay->setContentsMargins(10, 10, 10, 10);
+    roiLay->setSpacing(8);
+    {
+        HalconNode *halcon = halconNode();
+        if (halcon) {
+            roiLay->addWidget(sectionLabel(QStringLiteral("当前 ROI")));
+            const RoiShape shape = halcon->geometryRoi();
+            const QString info = QStringLiteral("类型：%1　P1=(%2, %3)　P2=(%4, %5)　点数：%6")
+                                     .arg(roiTypeText(halcon->geometryRoiType()))
+                                     .arg(shape.p1.x(), 0, 'f', 1)
+                                     .arg(shape.p1.y(), 0, 'f', 1)
+                                     .arg(shape.p2.x(), 0, 'f', 1)
+                                     .arg(shape.p2.y(), 0, 'f', 1)
+                                     .arg(shape.points.size());
+            auto *infoLabel = new QLabel(info);
+            infoLabel->setWordWrap(true);
+            infoLabel->setStyleSheet(QStringLiteral("color:#d8dee9;"));
+            roiLay->addWidget(infoLabel);
+        } else {
+            auto *infoLabel = new QLabel(QStringLiteral("该算子没有几何 ROI，使用参数面板中的坐标参数。"));
+            infoLabel->setWordWrap(true);
+            infoLabel->setStyleSheet(QStringLiteral("color:#8f9aa8;"));
+            roiLay->addWidget(infoLabel);
+        }
+
+        auto *btnRow = new QHBoxLayout();
+        if (halcon && halcon->geometryRoiType() != RoiType::None) {
+            auto *drawBtn = new QPushButton(QStringLiteral("在图上绘制"));
+            auto *clearBtn = new QPushButton(QStringLiteral("清除几何"));
+            connect(drawBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onDrawGeometry);
+            connect(clearBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onClearGeometry);
+            btnRow->addWidget(drawBtn);
+            btnRow->addWidget(clearBtn);
+        }
+        if (isTmpl) {
+            auto *searchBtn = new QPushButton(QStringLiteral("绘制搜索区域"));
+            auto *polyBtn = new QPushButton(QStringLiteral("绘制多边形区域"));
+            connect(searchBtn, &QPushButton::clicked, this,
+                    &ModuleEditorDialog::onDrawSearchRegion);
+            connect(polyBtn, &QPushButton::clicked, this,
+                    &ModuleEditorDialog::onDrawSearchPolygon);
+            btnRow->addWidget(searchBtn);
+            btnRow->addWidget(polyBtn);
+        }
+        btnRow->addStretch();
+        roiLay->addLayout(btnRow);
+
+        auto *note = new QLabel(
+            QStringLiteral("画完后可拖中心移动、拖角点缩放、拖蓝点旋转；运行中修改在下一轮执行生效。"));
+        note->setWordWrap(true);
+        note->setStyleSheet(QStringLiteral("color:#8f9aa8;"));
+        roiLay->addWidget(note);
+        roiLay->addStretch();
+    }
+
+    // 连线
+    auto *connPage = new QWidget();
+    auto *connLay = new QVBoxLayout(connPage);
+    connLay->setContentsMargins(10, 10, 10, 10);
+    connLay->setSpacing(8);
+    {
+        connLay->addWidget(sectionLabel(QStringLiteral("上游 / 下游连线")));
+        auto *connTable = makeReadOnlyTable({QStringLiteral("方向"), QStringLiteral("本端端口"),
+                                             QStringLiteral("对端模块"), QStringLiteral("对端端口")});
+        auto addRow = [connTable](const QString &dir, const QString &port,
+                                  const QString &nodeName, const QString &otherPort) {
+            const int row = connTable->rowCount();
+            connTable->insertRow(row);
+            connTable->setItem(row, 0, new QTableWidgetItem(dir));
+            connTable->setItem(row, 1, new QTableWidgetItem(port));
+            connTable->setItem(row, 2, new QTableWidgetItem(nodeName));
+            connTable->setItem(row, 3, new QTableWidgetItem(otherPort));
+        };
+        for (Port *port : m_node->inputPorts()) {
+            for (MyProject::Connection *conn : port->connections()) {
+                if (!conn || !conn->getSourceNode())
+                    continue;
+                addRow(QStringLiteral("输入"), port->name(),
+                       conn->getSourceNode()->fullName(),
+                       conn->sourcePort() ? conn->sourcePort()->name() : QString());
+            }
+        }
+        for (Port *port : m_node->outputPorts()) {
+            for (MyProject::Connection *conn : port->connections()) {
+                if (!conn || !conn->getDestinationNode())
+                    continue;
+                addRow(QStringLiteral("输出"), port->name(),
+                       conn->getDestinationNode()->fullName(),
+                       conn->targetPort() ? conn->targetPort()->name() : QString());
+            }
+        }
+        if (connTable->rowCount() == 0) {
+            connTable->insertRow(0);
+            connTable->setItem(0, 0, new QTableWidgetItem(QStringLiteral("暂无连线")));
+        }
+        connLay->addWidget(connTable, 1);
+    }
+
+    // 工具特性
+    auto *traitPage = new QWidget();
+    auto *traitLay = new QVBoxLayout(traitPage);
+    traitLay->setContentsMargins(10, 10, 10, 10);
+    traitLay->setSpacing(8);
+    {
+        traitLay->addWidget(sectionLabel(QStringLiteral("执行特性")));
+        auto *info = new QLabel(
+            QStringLiteral("节点类型：%1\n模块号：%2\n输出聚合：%3\n缓存复用：%4\n自动预览：%5")
+                .arg(nodeTypeText(m_node->type()))
+                .arg(m_node->moduleId())
+                .arg(m_node->aggregatesOutputPorts() ? QStringLiteral("是") : QStringLiteral("否"))
+                .arg(m_node->reusesCachedOutput() ? QStringLiteral("是（确定性输出）")
+                                                 : QStringLiteral("否"))
+                .arg(m_autoRecomputeCheck && m_autoRecomputeCheck->isChecked()
+                         ? QStringLiteral("开启（顶部工具栏切换）")
+                         : QStringLiteral("关闭（顶部工具栏切换）")));
+        info->setWordWrap(true);
+        info->setStyleSheet(QStringLiteral("color:#d8dee9;"));
+        traitLay->addWidget(info);
+        auto *enabledCheck = new QCheckBox(QStringLiteral("启用此模块（禁用后执行时跳过）"));
+        enabledCheck->setChecked(m_node->isEnabled());
+        connect(enabledCheck, &QCheckBox::toggled, this,
+                [this](bool on) {
+                    if (m_node)
+                        m_node->setEnabled(on);
+                });
+        traitLay->addWidget(enabledCheck);
+        traitLay->addStretch();
+    }
+
+    m_vmTabs->addTab(aboutPage, QStringLiteral("关于"));
+    m_vmTabs->addTab(basicPage, QStringLiteral("输入参数"));
+    m_vmTabs->addTab(outputPage, QStringLiteral("输出参数"));
+    m_vmTabs->addTab(roiPage, QStringLiteral("ROI配置"));
+    m_vmTabs->addTab(runPage, QStringLiteral("参数面板"));
+    m_vmTabs->addTab(connPage, QStringLiteral("连线"));
+    m_vmTabs->addTab(traitPage, QStringLiteral("工具特性"));
+    if (isTmpl)
+        m_vmTabs->addTab(tmplPage, QStringLiteral("特征模板"));
+    m_vmTabs->addTab(resPage, QStringLiteral("结果显示"));
 
     // ④ panel 布局清空后放页签（GroupBox 已被 addWidget 移走，剩下的是 stretch/空项）
     QLayout *lay = panel->layout();
-    while (QLayoutItem *it = lay->takeAt(0))
-        delete it;
-    lay->addWidget(tabs);
+    if (lay) {
+        while (QLayoutItem *it = lay->takeAt(0))
+            delete it;
+        lay->addWidget(m_vmTabs);
+    }
+}
+
+void ModuleEditorDialog::buildParamSubscriptionGroup(QVBoxLayout *runLay)
+{
+    HalconNode *hn = halconNode();
+    if (!runLay || !hn || hn->paramSpecs().isEmpty())
+        return;
+
+    auto *box = new QGroupBox(QStringLiteral("参数订阅（自定义 / 订阅）"));
+    auto *lay = new QVBoxLayout(box);
+    lay->setContentsMargins(8, 8, 8, 8);
+    lay->setSpacing(6);
+
+    auto *hint = new QLabel(
+        QStringLiteral("「订阅」表示该参数在每轮执行前由外部变量覆盖；"
+                       "支持 {global.变量名} 与 {模块号.参数名}。留空则保持自定义值。"));
+    hint->setWordWrap(true);
+    hint->setStyleSheet(QStringLiteral("color:#8f9aa8; font-size:12px;"));
+    lay->addWidget(hint);
+
+    const QString subPrefix = QStringLiteral("__sub__");
+    m_paramSubscriptionTable = new QTableWidget(0, 4, box);
+    m_paramSubscriptionTable->setObjectName(QStringLiteral("paramSubscriptionTable"));
+    m_paramSubscriptionTable->setHorizontalHeaderLabels(
+        {QStringLiteral("参数"), QStringLiteral("当前值"),
+         QStringLiteral("来源"), QStringLiteral("订阅表达式")});
+    m_paramSubscriptionTable->horizontalHeader()->setStretchLastSection(true);
+    m_paramSubscriptionTable->verticalHeader()->setVisible(false);
+    m_paramSubscriptionTable->setSelectionMode(QAbstractItemView::NoSelection);
+    m_paramSubscriptionTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+
+    int row = 0;
+    for (const ParamSpec &spec : hn->paramSpecs()) {
+        if (spec.type != ParamType::Int && spec.type != ParamType::Double)
+            continue;
+        m_paramSubscriptionTable->insertRow(row);
+
+        auto *nameItem = new QTableWidgetItem(spec.label.isEmpty() ? spec.name : spec.label);
+        nameItem->setToolTip(QStringLiteral("%1（%2）").arg(spec.label, spec.name));
+        nameItem->setData(Qt::UserRole, spec.name);
+        m_paramSubscriptionTable->setItem(row, 0, nameItem);
+
+        auto *valueItem = new QTableWidgetItem(m_node->getParam(spec.name).toString());
+        m_paramSubscriptionTable->setItem(row, 1, valueItem);
+
+        auto *sourceCombo = new QComboBox(m_paramSubscriptionTable);
+        sourceCombo->addItem(QStringLiteral("自定义"));
+        sourceCombo->addItem(QStringLiteral("订阅"));
+        const QString expr = m_node->getParam(subPrefix + spec.name).toString();
+        sourceCombo->setCurrentIndex(expr.isEmpty() ? 0 : 1);
+        m_paramSubscriptionTable->setCellWidget(row, 2, sourceCombo);
+
+        auto *exprEdit = new QLineEdit(m_paramSubscriptionTable);
+        exprEdit->setPlaceholderText(QStringLiteral("{global.变量名} 或 {模块号.参数名}"));
+        exprEdit->setText(expr);
+        exprEdit->setEnabled(!expr.isEmpty());
+        m_paramSubscriptionTable->setCellWidget(row, 3, exprEdit);
+
+        connect(sourceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                [this, spec, exprEdit, subPrefix](int index) {
+                    const bool subscribe = index == 1;
+                    exprEdit->setEnabled(subscribe);
+                    if (!subscribe) {
+                        m_paramHookBusy = true;
+                        m_node->setParam(subPrefix + spec.name, QString());
+                        m_paramHookBusy = false;
+                        m_paramsDirty = true;
+                        return;
+                    }
+                    exprEdit->setFocus();
+                    const QString current = exprEdit->text().trimmed();
+                    if (!current.isEmpty()) {
+                        m_paramHookBusy = true;
+                        m_node->setParam(subPrefix + spec.name, current);
+                        m_paramHookBusy = false;
+                    }
+                    m_paramsDirty = true;
+                });
+        connect(exprEdit, &QLineEdit::editingFinished, this, [this, spec, exprEdit, subPrefix]() {
+            m_paramHookBusy = true;
+            m_node->setParam(subPrefix + spec.name, exprEdit->text().trimmed());
+            m_paramHookBusy = false;
+            m_paramsDirty = true;
+        });
+        ++row;
+    }
+
+    m_paramSubscriptionTable->resizeColumnsToContents();
+    m_paramSubscriptionTable->setMaximumHeight(180);
+    lay->addWidget(m_paramSubscriptionTable);
+    runLay->insertWidget(runLay->count(), box);
+}
+
+void ModuleEditorDialog::restoreParamDefaults()
+{
+    HalconNode *hn = halconNode();
+    if (!hn)
+        return;
+    const int restored = hn->restoreDefaultParams();
+    if (restored <= 0) {
+        m_hintLabel->setText(QStringLiteral("该算子没有可恢复的默认参数。"));
+        return;
+    }
+    // 回填面板显示值（不触发自动重算），并把本次改动标记为待提交
+    m_paramHookBusy = true;
+    QWidget *panel = m_paramHost ? m_paramHost->widget() : nullptr;
+    while (panel && qobject_cast<QScrollArea *>(panel))
+        panel = qobject_cast<QScrollArea *>(panel)->widget();
+    if (panel)
+        hn->updateParamPanel(panel);
+    m_paramHookBusy = false;
+    refreshParamHooks();
+    m_paramsDirty = true;
+    m_hintLabel->setText(QStringLiteral("已恢复 %1 个参数为默认值；点「确定」提交。").arg(restored));
 }
 
 void ModuleEditorDialog::refreshParamHooks()
 {
     installParamHooks(m_paramHost ? m_paramHost->widget() : nullptr);
+}
+
+void ModuleEditorDialog::buildResultDisplayPage(QVBoxLayout *resLay)
+{
+    if (!resLay || !m_node)
+        return;
+
+    // 写参数不触发自动重算（这些是显示配置，不是算法参数）
+    auto writeParam = [this](const QString &key, const QVariant &value) {
+        if (!m_node)
+            return;
+        m_paramHookBusy = true;
+        // 显示配置不参与算法，走 setParam 跳过节点内的延迟预览
+        if (auto *hn = qobject_cast<HalconNode *>(m_node))
+            hn->setParam(key, value);
+        else
+            m_node->setParam(key, value);
+        m_paramHookBusy = false;
+        m_paramsDirty = true;
+    };
+    auto boolParam = [this](const QString &key, bool def) {
+        return m_node->getAllParamNames().contains(key) ? m_node->getParam(key).toBool() : def;
+    };
+    auto intParam = [this](const QString &key, int def) {
+        return m_node->getAllParamNames().contains(key) ? m_node->getParam(key).toInt() : def;
+    };
+    auto strParam = [this](const QString &key, const QString &def) {
+        return m_node->getAllParamNames().contains(key) ? m_node->getParam(key).toString() : def;
+    };
+
+    // ① 结果判断（VM「结果显示」页）：全部/任一条件 + 条件表
+    auto *judgeGroup = new QGroupBox(QStringLiteral("结果判断"));
+    auto *judgeLay = new QVBoxLayout(judgeGroup);
+    auto *modeRow = new QHBoxLayout();
+    modeRow->addWidget(new QLabel(QStringLiteral("判断方式:")));
+    m_judgeModeCombo = new QComboBox();
+    m_judgeModeCombo->addItem(QStringLiteral("全部条件满足 (AND)"));
+    m_judgeModeCombo->addItem(QStringLiteral("任一条件满足 (OR)"));
+    m_judgeModeCombo->setCurrentIndex(intParam(QStringLiteral("resJudgeMode"), 0) == 1 ? 1 : 0);
+    modeRow->addWidget(m_judgeModeCombo, 1);
+    judgeLay->addLayout(modeRow);
+
+    m_judgeTable = new QTableWidget(0, 3);
+    m_judgeTable->setHorizontalHeaderLabels(
+        {QStringLiteral("参数"), QStringLiteral("运算符"), QStringLiteral("值")});
+    m_judgeTable->verticalHeader()->setVisible(false);
+    m_judgeTable->horizontalHeader()->setStretchLastSection(true);
+    m_judgeTable->setMinimumHeight(110);
+    m_judgeTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    judgeLay->addWidget(m_judgeTable);
+
+    auto *judgeBtnRow = new QHBoxLayout();
+    auto *addCondBtn = new QPushButton(QStringLiteral("添加条件"));
+    auto *delCondBtn = new QPushButton(QStringLiteral("删除条件"));
+    judgeBtnRow->addWidget(addCondBtn);
+    judgeBtnRow->addWidget(delCondBtn);
+    judgeBtnRow->addStretch();
+    judgeLay->addLayout(judgeBtnRow);
+    resLay->addWidget(judgeGroup);
+
+    connect(m_judgeModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this, writeParam](int index) {
+                writeParam(QStringLiteral("resJudgeMode"), index);
+            });
+    connect(addCondBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_judgeTable)
+            return;
+        const int r = m_judgeTable->rowCount();
+        m_judgeTable->insertRow(r);
+        const QStringList names = m_node ? m_node->getAllParamNames() : QStringList();
+        m_judgeTable->setItem(r, 0, new QTableWidgetItem(names.value(0)));
+        auto *opCombo = new QComboBox();
+        opCombo->addItems({QStringLiteral(">="), QStringLiteral("<="), QStringLiteral(">"),
+                           QStringLiteral("<"), QStringLiteral("=="), QStringLiteral("!=")});
+        m_judgeTable->setCellWidget(r, 1, opCombo);
+        m_judgeTable->setItem(r, 2, new QTableWidgetItem(QStringLiteral("0")));
+        connect(opCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                [this](int) { persistJudgeConditions(); });
+        persistJudgeConditions();
+    });
+    connect(delCondBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_judgeTable)
+            return;
+        const int row = m_judgeTable->currentRow();
+        if (row >= 0)
+            m_judgeTable->removeRow(row);
+        persistJudgeConditions();
+    });
+    connect(m_judgeTable, &QTableWidget::itemChanged, this,
+            [this](QTableWidgetItem *) { persistJudgeConditions(); });
+
+    loadJudgeConditions();
+
+    // ② 图像显示
+    auto *imageGroup = new QGroupBox(QStringLiteral("图像显示"));
+    auto *imageLay = new QVBoxLayout(imageGroup);
+    m_showResultImageCheck = new QCheckBox(QStringLiteral("显示结果图像"));
+    m_showResultImageCheck->setChecked(boolParam(QStringLiteral("resShowImage"), true));
+    imageLay->addWidget(m_showResultImageCheck);
+
+    auto *imageColorRow = new QHBoxLayout();
+    imageColorRow->addWidget(new QLabel(QStringLiteral("叠加颜色:")));
+    m_resultImageColor = strParam(QStringLiteral("resImageColor"), QStringLiteral("#00C8FF"));
+    m_resultImageColorBtn = new QPushButton(m_resultImageColor);
+    m_resultImageColorBtn->setFixedWidth(110);
+    m_resultImageColorBtn->setStyleSheet(
+        QStringLiteral("background-color:%1; color:#000;").arg(m_resultImageColor));
+    imageColorRow->addWidget(m_resultImageColorBtn);
+    imageColorRow->addStretch();
+    imageLay->addLayout(imageColorRow);
+
+    auto *imageOpacityRow = new QHBoxLayout();
+    imageOpacityRow->addWidget(new QLabel(QStringLiteral("透明度:")));
+    m_resultImageOpacitySpin = new QSpinBox();
+    m_resultImageOpacitySpin->setRange(0, 100);
+    m_resultImageOpacitySpin->setSuffix(QStringLiteral(" %"));
+    m_resultImageOpacitySpin->setValue(intParam(QStringLiteral("resImageOpacity"), 100));
+    imageOpacityRow->addWidget(m_resultImageOpacitySpin);
+    imageOpacityRow->addSpacing(16);
+    imageOpacityRow->addWidget(new QLabel(QStringLiteral("线宽:")));
+    m_resultImageLineWidthSpin = new QSpinBox();
+    m_resultImageLineWidthSpin->setRange(1, 10);
+    m_resultImageLineWidthSpin->setValue(intParam(QStringLiteral("resImageLineWidth"), 2));
+    imageOpacityRow->addWidget(m_resultImageLineWidthSpin);
+    imageOpacityRow->addStretch();
+    imageLay->addLayout(imageOpacityRow);
+    resLay->addWidget(imageGroup);
+
+    connect(m_showResultImageCheck, &QCheckBox::toggled, this, [writeParam](bool on) {
+        writeParam(QStringLiteral("resShowImage"), on);
+    });
+    connect(m_resultImageColorBtn, &QPushButton::clicked, this, [this, writeParam]() {
+        const QColor color = QColorDialog::getColor(QColor(m_resultImageColor), this,
+                                                    QStringLiteral("选择叠加颜色"));
+        if (!color.isValid())
+            return;
+        m_resultImageColor = color.name(QColor::HexRgb).toUpper();
+        m_resultImageColorBtn->setText(m_resultImageColor);
+        m_resultImageColorBtn->setStyleSheet(
+            QStringLiteral("background-color:%1; color:%2;")
+                .arg(m_resultImageColor,
+                     color.lightness() > 128 ? QStringLiteral("#000") : QStringLiteral("#fff")));
+        writeParam(QStringLiteral("resImageColor"), m_resultImageColor);
+    });
+    connect(m_resultImageOpacitySpin, QOverload<int>::of(&QSpinBox::valueChanged), this,
+            [writeParam](int v) { writeParam(QStringLiteral("resImageOpacity"), v); });
+    connect(m_resultImageLineWidthSpin, QOverload<int>::of(&QSpinBox::valueChanged), this,
+            [writeParam](int v) { writeParam(QStringLiteral("resImageLineWidth"), v); });
+
+    // ③ 文本显示
+    auto *textGroup = new QGroupBox(QStringLiteral("文本显示"));
+    auto *textLay = new QVBoxLayout(textGroup);
+    m_showResultTextCheck = new QCheckBox(QStringLiteral("显示结果文本"));
+    m_showResultTextCheck->setChecked(boolParam(QStringLiteral("resShowText"), true));
+    textLay->addWidget(m_showResultTextCheck);
+
+    auto *textRow = new QHBoxLayout();
+    textRow->addWidget(new QLabel(QStringLiteral("内容:")));
+    m_resultTextEdit = new QLineEdit(strParam(QStringLiteral("resTextContent"),
+                                              QStringLiteral("{module}: {status}  {elapsed}ms")));
+    textRow->addWidget(m_resultTextEdit, 1);
+    textLay->addLayout(textRow);
+
+    auto *textStyleRow = new QHBoxLayout();
+    textStyleRow->addWidget(new QLabel(QStringLiteral("颜色:")));
+    m_resultTextColor = strParam(QStringLiteral("resTextColor"), QStringLiteral("#FFFFFF"));
+    m_resultTextColorBtn = new QPushButton(m_resultTextColor);
+    m_resultTextColorBtn->setFixedWidth(110);
+    m_resultTextColorBtn->setStyleSheet(
+        QStringLiteral("background-color:%1; color:#000;").arg(m_resultTextColor));
+    textStyleRow->addWidget(m_resultTextColorBtn);
+    textStyleRow->addSpacing(12);
+    textStyleRow->addWidget(new QLabel(QStringLiteral("字号:")));
+    m_resultTextSizeSpin = new QSpinBox();
+    m_resultTextSizeSpin->setRange(8, 48);
+    m_resultTextSizeSpin->setValue(intParam(QStringLiteral("resTextFontSize"), 14));
+    textStyleRow->addWidget(m_resultTextSizeSpin);
+    textStyleRow->addSpacing(12);
+    textStyleRow->addWidget(new QLabel(QStringLiteral("透明度:")));
+    m_resultTextOpacitySpin = new QSpinBox();
+    m_resultTextOpacitySpin->setRange(0, 100);
+    m_resultTextOpacitySpin->setSuffix(QStringLiteral(" %"));
+    m_resultTextOpacitySpin->setValue(intParam(QStringLiteral("resTextOpacity"), 100));
+    textStyleRow->addWidget(m_resultTextOpacitySpin);
+    textStyleRow->addStretch();
+    textLay->addLayout(textStyleRow);
+
+    auto *textPosRow = new QHBoxLayout();
+    textPosRow->addWidget(new QLabel(QStringLiteral("位置:")));
+    m_resultTextPosCombo = new QComboBox();
+    m_resultTextPosCombo->addItems({QStringLiteral("左上"), QStringLiteral("右上"),
+                                    QStringLiteral("左下"), QStringLiteral("右下")});
+    m_resultTextPosCombo->setCurrentIndex(intParam(QStringLiteral("resTextPosition"), 0) & 3);
+    textPosRow->addWidget(m_resultTextPosCombo);
+    textPosRow->addStretch();
+    textLay->addLayout(textPosRow);
+    resLay->addWidget(textGroup);
+    resLay->addStretch();
+
+    connect(m_showResultTextCheck, &QCheckBox::toggled, this, [writeParam](bool on) {
+        writeParam(QStringLiteral("resShowText"), on);
+    });
+    connect(m_resultTextEdit, &QLineEdit::editingFinished, this, [this, writeParam]() {
+        writeParam(QStringLiteral("resTextContent"), m_resultTextEdit->text());
+    });
+    connect(m_resultTextColorBtn, &QPushButton::clicked, this, [this, writeParam]() {
+        const QColor color = QColorDialog::getColor(QColor(m_resultTextColor), this,
+                                                    QStringLiteral("选择文本颜色"));
+        if (!color.isValid())
+            return;
+        m_resultTextColor = color.name(QColor::HexRgb).toUpper();
+        m_resultTextColorBtn->setText(m_resultTextColor);
+        m_resultTextColorBtn->setStyleSheet(
+            QStringLiteral("background-color:%1; color:%2;")
+                .arg(m_resultTextColor,
+                     color.lightness() > 128 ? QStringLiteral("#000") : QStringLiteral("#fff")));
+        writeParam(QStringLiteral("resTextColor"), m_resultTextColor);
+    });
+    connect(m_resultTextSizeSpin, QOverload<int>::of(&QSpinBox::valueChanged), this,
+            [writeParam](int v) { writeParam(QStringLiteral("resTextFontSize"), v); });
+    connect(m_resultTextOpacitySpin, QOverload<int>::of(&QSpinBox::valueChanged), this,
+            [writeParam](int v) { writeParam(QStringLiteral("resTextOpacity"), v); });
+    connect(m_resultTextPosCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [writeParam](int index) { writeParam(QStringLiteral("resTextPosition"), index); });
+}
+
+void ModuleEditorDialog::persistJudgeConditions()
+{
+    if (!m_node || !m_judgeTable)
+        return;
+    QJsonArray conditions;
+    for (int r = 0; r < m_judgeTable->rowCount(); ++r) {
+        QJsonObject condition;
+        condition.insert(QStringLiteral("param"),
+                         m_judgeTable->item(r, 0) ? m_judgeTable->item(r, 0)->text() : QString());
+        QString op = QStringLiteral(">=");
+        if (auto *combo = qobject_cast<QComboBox *>(m_judgeTable->cellWidget(r, 1)))
+            op = combo->currentText();
+        else if (m_judgeTable->item(r, 1))
+            op = m_judgeTable->item(r, 1)->text();
+        condition.insert(QStringLiteral("op"), op);
+        condition.insert(QStringLiteral("value"),
+                         m_judgeTable->item(r, 2) ? m_judgeTable->item(r, 2)->text() : QString());
+        conditions.append(condition);
+    }
+    m_paramHookBusy = true;
+    if (auto *hn = qobject_cast<HalconNode *>(m_node))
+        hn->setParam(QStringLiteral("resJudgeConditions"),
+                           QJsonDocument(conditions).toJson(QJsonDocument::Compact));
+    else
+        m_node->setParam(QStringLiteral("resJudgeConditions"),
+                         QJsonDocument(conditions).toJson(QJsonDocument::Compact));
+    m_paramHookBusy = false;
+    m_paramsDirty = true;
+}
+
+void ModuleEditorDialog::loadJudgeConditions()
+{
+    if (!m_node || !m_judgeTable)
+        return;
+    m_judgeTable->blockSignals(true);
+    m_judgeTable->setRowCount(0);
+    const QString raw = m_node->getParam(QStringLiteral("resJudgeConditions")).toString();
+    if (!raw.trimmed().isEmpty()) {
+        const QJsonArray arr = QJsonDocument::fromJson(raw.toUtf8()).array();
+        for (const QJsonValue &value : arr) {
+            const QJsonObject condition = value.toObject();
+            const int r = m_judgeTable->rowCount();
+            m_judgeTable->insertRow(r);
+            m_judgeTable->setItem(r, 0, new QTableWidgetItem(condition.value(QStringLiteral("param")).toString()));
+            auto *opCombo = new QComboBox();
+            opCombo->addItems({QStringLiteral(">="), QStringLiteral("<="), QStringLiteral(">"),
+                               QStringLiteral("<"), QStringLiteral("=="), QStringLiteral("!=")});
+            const QString op = condition.value(QStringLiteral("op")).toString();
+            const int opIndex = opCombo->findText(op);
+            if (opIndex >= 0)
+                opCombo->setCurrentIndex(opIndex);
+            m_judgeTable->setCellWidget(r, 1, opCombo);
+            m_judgeTable->setItem(r, 2, new QTableWidgetItem(condition.value(QStringLiteral("value")).toString()));
+            connect(opCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                    [this](int) { persistJudgeConditions(); });
+        }
+    }
+    m_judgeTable->blockSignals(false);
 }
 
 void ModuleEditorDialog::installParamHooks(QWidget *panel)
@@ -643,6 +1461,7 @@ void ModuleEditorDialog::onParamWidgetEdited()
 
     if (m_paramHookBusy)
         return;
+    m_paramsDirty = true;   // P1-10：本次编辑有改动（确定提交 / 取消回滚的判据）
     scheduleAutoRecompute();
 }
 
@@ -690,6 +1509,10 @@ void ModuleEditorDialog::onEditTargetGeometry()
 
 void ModuleEditorDialog::onEditTargetSearch()
 {
+    if (!qobject_cast<OpencvTemplateMatchNode *>(m_node)) {
+        m_hintLabel->setText(QStringLiteral("当前算子不支持搜索区域。"));
+        return;
+    }
     m_editTarget = 1;
     m_pickingSearchRegion = false;
     m_pickingSearchPolygon = false;
@@ -860,6 +1683,11 @@ QRectF roiBoundsOf(const RoiShape &shape)
 
 void ModuleEditorDialog::onDrawSearchRegion()
 {
+    // P0-3：搜索区域仅模板匹配算子有（非模板节点直接拒绝，避免写不存在参数）
+    if (!qobject_cast<OpencvTemplateMatchNode *>(m_node)) {
+        m_hintLabel->setText(QStringLiteral("当前算子不支持搜索区域。"));
+        return;
+    }
     if (!m_view || !m_node) {
         m_hintLabel->setText(QStringLiteral("无法绘制：图像或算子未就绪（先双击打开工具并载入图像）"));
         return;
@@ -903,6 +1731,11 @@ void ModuleEditorDialog::refreshSearchOverlay()
 {
     if (!m_view)
         return;
+    if (!qobject_cast<OpencvTemplateMatchNode *>(m_node)) {
+        // 非模板算子没有搜索区域，只显示测量结果叠加
+        m_view->setOverlay(m_resultOverlay);
+        return;
+    }
     QVector<OverlayShape> all = m_resultOverlay;
     // 编辑搜索区域时：该框是画布上的可编辑 ROI（带句柄），不再重复画成叠加；
     // 反过来把模板框画成只读叠加，让"当前在改哪个"一眼可见。
@@ -952,6 +1785,10 @@ void ModuleEditorDialog::refreshSearchOverlay()
 
 void ModuleEditorDialog::onDrawSearchPolygon()
 {
+    if (!qobject_cast<OpencvTemplateMatchNode *>(m_node)) {
+        m_hintLabel->setText(QStringLiteral("当前算子不支持搜索区域。"));
+        return;
+    }
     if (!m_view || !m_node) {
         m_hintLabel->setText(QStringLiteral("无法绘制：图像或算子未就绪（先双击打开工具并载入图像）"));
         return;
@@ -1108,6 +1945,10 @@ void ModuleEditorDialog::onMaskEdited()
 
 void ModuleEditorDialog::onWizardGuide()
 {
+    if (!qobject_cast<OpencvTemplateMatchNode *>(m_node)) {
+        m_hintLabel->setText(QStringLiteral("训练向导仅适用于模板匹配算子。"));
+        return;
+    }
     // 训练向导 ②/4：步进引导（不新建对话框，复用已有三个动作）
     m_wizardStep = 1;
     onDrawGeometry();
@@ -1117,6 +1958,10 @@ void ModuleEditorDialog::onWizardGuide()
 
 void ModuleEditorDialog::onCheckBudget()
 {
+    if (!qobject_cast<OpencvTemplateMatchNode *>(m_node)) {
+        m_hintLabel->setText(QStringLiteral("参数体检仅适用于模板匹配算子。"));
+        return;
+    }
     HalconNode *hn = halconNode();
     if (!hn)
         return;
@@ -1133,6 +1978,10 @@ void ModuleEditorDialog::onCheckBudget()
 
 void ModuleEditorDialog::onEvaluateTemplate()
 {
+    if (!qobject_cast<OpencvTemplateMatchNode *>(m_node)) {
+        m_hintLabel->setText(QStringLiteral("模板评估仅适用于模板匹配算子。"));
+        return;
+    }
     HalconNode *hn = halconNode();
     if (!hn || !m_view)
         return;
@@ -1235,8 +2084,49 @@ void ModuleEditorDialog::refreshResultTable()
         return;
     m_resultTable->setRowCount(0);
     auto *tmplNode = qobject_cast<OpencvTemplateMatchNode *>(m_node);
-    if (!tmplNode)
+    if (!tmplNode) {
+        // P0-2：非模板算子也有「结果显示」——显示本算子具名输出的值/类型/状态。
+        m_resultTable->clear();
+        m_resultTable->setColumnCount(4);
+        m_resultTable->setHorizontalHeaderLabels({QStringLiteral("输出项"), QStringLiteral("值"),
+                                                  QStringLiteral("类型"), QStringLiteral("状态")});
+        const auto named = m_node ? m_node->namedOutputs() : QVector<QPair<QString, QSharedPointer<DataObject>>>();
+        int row = 0;
+        for (const auto &entry : named) {
+            const QString name = entry.first.isEmpty()
+                                     ? QStringLiteral("输出 %1").arg(row + 1)
+                                     : entry.first;
+            QString value = QStringLiteral("-");
+            QString type = QStringLiteral("未知");
+            QString status = QStringLiteral("无数据");
+            if (entry.second) {
+                status = QStringLiteral("有数据");
+                type = entry.second->getTypeString();
+                if (entry.second->getHImage().IsInitialized()) {
+                    value = QStringLiteral("图像");
+                } else {
+                    const QVariant primary = entry.second->primaryValue();
+                    if (primary.isValid())
+                        value = primary.toString();
+                }
+            }
+            m_resultTable->insertRow(row);
+            m_resultTable->setItem(row, 0, new QTableWidgetItem(name));
+            m_resultTable->setItem(row, 1, new QTableWidgetItem(value));
+            m_resultTable->setItem(row, 2, new QTableWidgetItem(type));
+            m_resultTable->setItem(row, 3, new QTableWidgetItem(status));
+            ++row;
+        }
         return;
+    }
+
+    m_resultTable->clear();
+    m_resultTable->setColumnCount(10);
+    m_resultTable->setHorizontalHeaderLabels(
+        {QStringLiteral("序号"), QStringLiteral("中心X"), QStringLiteral("中心Y"),
+         QStringLiteral("匹配点X"), QStringLiteral("匹配点Y"), QStringLiteral("角度"),
+         QStringLiteral("尺度X"), QStringLiteral("尺度Y"), QStringLiteral("分数"),
+         QStringLiteral("模板")});
 
     QStringList rows = tmplNode->getParam(QStringLiteral("matchList"))
                            .toString()

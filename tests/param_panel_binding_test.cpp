@@ -2453,8 +2453,14 @@ void ParamPanelBindingTest::testUnnamedFindChildSitesAreSingleCandidate()
     // → 299：最小链长 minChainLength + 链长模式 chainMode（VM 口径替换我发明的可见率）
     // → 305：运行参数补齐 6 项（阈值类型/手动阈值/排序类型/最大重叠率/延拓阈值/超时控制）
     // → 310：尺度范围 XY（scaleRangeType + scaleMinX/MaxX/MinY/MaxY）
-    QVERIFY2(fieldSlots == 310,
-             qPrintable(QStringLiteral("字段槽位分母从 310 变成 %1 ⇒ 本闸口径已漂移，"
+    // → 334（2026-11-03）：Blob 参数加深 +16（阈值类型/极性/低高阈值、外接宽高/圆度/连通性/孔洞填充、
+    //        输出个数/排序特征/排序方式/检测框显隐）；卡尺参数加深 +8（边缘模式/边对间距/投影方式/
+    //        投影宽度/亚像素/最大结果数/排序/边对连线显隐）
+    // → 350（2026-11-03 P1 下一批）：角度 +2（角度范围/线段显隐）、N点标定 +2（标定模型/最大RMS误差）、
+    //        相机标定 +6（检测方式/亚像素窗口/最大重投影误差/固定主点/切向置零/固定K3）、
+    //        TesseractOCR +3（版面模式/字符白名单/最低置信度）、DeepOCR +3（最短词长/最多词数/词间分隔符）
+    QVERIFY2(fieldSlots == 350,
+             qPrintable(QStringLiteral("字段槽位分母从 350 变成 %1 ⇒ 本闸口径已漂移，"
                                        "先核对面板改动再把基准一起改").arg(fieldSlots)));
     QVERIFY2(badSlots.isEmpty(),
              qPrintable(QStringLiteral("U5-MULTI: %1 个字段槽位里同类型候选不止一个 ⇒ 站点 1 的无名 "

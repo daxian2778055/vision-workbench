@@ -6,6 +6,7 @@
 #include "AppLog.h"
 #include <opencv2/calib3d.hpp>
 #include <opencv2/imgproc.hpp>
+#include <algorithm>
 #include <QWidget>
 
 OpencvCalibNode::OpencvCalibNode(QObject *parent) : HalconNode(parent)
@@ -30,10 +31,33 @@ void OpencvCalibNode::init()
                         QStringLiteral("方格边长"), QStringLiteral("mm")),
         makeIntParam(QStringLiteral("requiredFrames"), 10, 3, 100,
                      QStringLiteral("所需有效标定帧数")),
+        makeEnumParam(QStringLiteral("detectMethod"), 0,
+                      {QStringLiteral("自动（SB 优先）"),
+                       QStringLiteral("经典角点检测"),
+                       QStringLiteral("仅 SB 检测器")},
+                      QStringLiteral("角点检测方式")),
+        makeIntParam(QStringLiteral("subpixWindow"), 5, 1, 21,
+                     QStringLiteral("亚像素细化窗口半径"), QStringLiteral("px")),
+        makeDoubleParam(QStringLiteral("maxReprojError"), 0.0, 0.0, 100.0,
+                        QStringLiteral("最大允许重投影误差（0=不校验）"), QStringLiteral("px")),
+        makeBoolParam(QStringLiteral("fixPrincipalPoint"), false,
+                      QStringLiteral("固定主点（只标定焦距与畸变）")),
+        makeBoolParam(QStringLiteral("zeroTangentDist"), false,
+                      QStringLiteral("切向畸变置零")),
+        makeBoolParam(QStringLiteral("fixK3"), false,
+                      QStringLiteral("固定 K3（仅估 K1/K2/P1/P2）")),
     });
     m_params[QStringLiteral("collectedFrames")] = 0;
     m_params[QStringLiteral("calibrated")] = false;
     m_params[QStringLiteral("reprojectionError")] = 0.0;
+    m_params[QStringLiteral("framesUsed")] = 0;
+    m_params[QStringLiteral("calibImageWidth")] = 0;
+    m_params[QStringLiteral("calibImageHeight")] = 0;
+    m_params[QStringLiteral("calibK1")] = 0.0;
+    m_params[QStringLiteral("calibK2")] = 0.0;
+    m_params[QStringLiteral("calibK3")] = 0.0;
+    m_params[QStringLiteral("calibP1")] = 0.0;
+    m_params[QStringLiteral("calibP2")] = 0.0;
     // 结果字段（不进参数面板）：判红时输出端口会被 process() 清空，原因只能留在这里
     m_params[QStringLiteral("calibNote")] = QString();
 }
@@ -61,11 +85,16 @@ void OpencvCalibNode::run(bool /*autoSwitch*/)
         const int required = m_params.value(QStringLiteral("requiredFrames"), 10).toInt();
 
         // 棋盘格角点检测：优先 SB 检测器（4.5.4+ 新算法，本环境已验证可绕过
-        // 旧检测器在大图上的缺陷），失败时回退经典检测器
+        // 旧检测器在大图上的缺陷），失败时回退经典检测器（可由参数强制指定）
+        const int detectMethod = m_params.value(QStringLiteral("detectMethod"), 0).toInt();
+        const int subpixWindow = m_params.value(QStringLiteral("subpixWindow"), 5).toInt();
         std::vector<cv::Point2f> corners;
-        bool found = cv::findChessboardCornersSB(gray, cv::Size(pw, ph), corners,
-                                                 cv::CALIB_CB_NORMALIZE_IMAGE);
-        if (!found) {
+        bool found = false;
+        if (detectMethod != 1) {
+            found = cv::findChessboardCornersSB(gray, cv::Size(pw, ph), corners,
+                                                cv::CALIB_CB_NORMALIZE_IMAGE);
+        }
+        if (!found && detectMethod != 2) {
             found = cv::findChessboardCorners(gray, cv::Size(pw, ph), corners,
                                               cv::CALIB_CB_ADAPTIVE_THRESH | cv::CALIB_CB_NORMALIZE_IMAGE);
         }
@@ -76,7 +105,8 @@ void OpencvCalibNode::run(bool /*autoSwitch*/)
             // 亚像素精化
             cv::Mat refined;
             gray.convertTo(refined, CV_8U);
-            cv::cornerSubPix(refined, corners, cv::Size(5, 5), cv::Size(-1, -1),
+            const int halfWin = qMax(1, subpixWindow);
+            cv::cornerSubPix(refined, corners, cv::Size(halfWin, halfWin), cv::Size(-1, -1),
                              cv::TermCriteria(cv::TermCriteria::EPS | cv::TermCriteria::COUNT, 30, 0.01));
             m_cornerSets.append(corners);
 
@@ -175,16 +205,40 @@ bool OpencvCalibNode::performCalibration(QString *detail)
     std::vector<std::vector<cv::Point2f>> corners(m_cornerSets.begin(), m_cornerSets.end());
     std::vector<std::vector<cv::Point3f>> objPts(m_objectPoints.begin(), m_objectPoints.end());
 
+    int flags = 0;
+    if (m_params.value(QStringLiteral("fixPrincipalPoint"), false).toBool())
+        flags |= cv::CALIB_FIX_PRINCIPAL_POINT;
+    if (m_params.value(QStringLiteral("zeroTangentDist"), false).toBool())
+        flags |= cv::CALIB_ZERO_TANGENT_DIST;
+    if (m_params.value(QStringLiteral("fixK3"), false).toBool())
+        flags |= cv::CALIB_FIX_K3;
+
     double rms = 0.0;
     try {
         rms = cv::calibrateCamera(objPts, corners, m_imageSize, cameraMatrix, distCoeffs,
-                                  rvecs, tvecs);
+                                  rvecs, tvecs, flags);
     } catch (const cv::Exception &e) {
         if (detail) *detail = QStringLiteral("calibrateCamera: %1").arg(QString::fromLocal8Bit(e.what()));
         return false;
     }
     if (!std::isfinite(rms)) {
         if (detail) *detail = QStringLiteral("标定结果无效（重投影误差非有限值）");
+        return false;
+    }
+
+    m_params[QStringLiteral("framesUsed")] = static_cast<int>(m_cornerSets.size());
+    m_params[QStringLiteral("calibImageWidth")] = m_imageSize.width;
+    m_params[QStringLiteral("calibImageHeight")] = m_imageSize.height;
+
+    // 重投影误差超阈值 ⇒ 判红且不写入单例（避免下游拿到坏内参）
+    const double maxReproj = m_params.value(QStringLiteral("maxReprojError"), 0.0).toDouble();
+    if (maxReproj > 0.0 && rms > maxReproj) {
+        if (detail) {
+            *detail = QStringLiteral("重投影误差 %1 px 超过阈值 %2 px（%3 帧）")
+                          .arg(rms, 0, 'f', 3)
+                          .arg(maxReproj, 0, 'f', 3)
+                          .arg(m_cornerSets.size());
+        }
         return false;
     }
 
@@ -197,6 +251,7 @@ bool OpencvCalibNode::performCalibration(QString *detail)
     const double k2 = distCoeffs.at<double>(1);
     const double p1 = distCoeffs.at<double>(2);
     const double p2 = distCoeffs.at<double>(3);
+    const double k3 = distCoeffs.at<double>(4);
 
     QVector<double> params = {fx, fy, cx, cy, k1, k2, p1, p2, rms};
     if (!CalibrationManager::instance()->setHomography(QStringLiteral("cam_params"), params)) {
@@ -214,6 +269,11 @@ bool OpencvCalibNode::performCalibration(QString *detail)
     m_params[QStringLiteral("calibFy")] = fy;
     m_params[QStringLiteral("calibCx")] = cx;
     m_params[QStringLiteral("calibCy")] = cy;
+    m_params[QStringLiteral("calibK1")] = k1;
+    m_params[QStringLiteral("calibK2")] = k2;
+    m_params[QStringLiteral("calibK3")] = k3;
+    m_params[QStringLiteral("calibP1")] = p1;
+    m_params[QStringLiteral("calibP2")] = p2;
 
     auto matObj = QSharedPointer<DataObject>::create();
     matObj->setType(DataObject::DataType::Matrix);

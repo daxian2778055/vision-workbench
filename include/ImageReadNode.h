@@ -63,4 +63,32 @@ private:
     
 public:
     void updateThumbnails(QHBoxLayout *thumbnailLayout);
+
+    // ---- P2-6：图像显示区「本地图④区」的最小只读/切换 API ----
+    /// 当前本地图列表（目录模式下是文件名，单图/多选模式下是绝对路径）
+    QStringList localImageFiles() const { return m_imageFiles; }
+    /// 当前是否以「文件夹」为图源
+    bool isLocalFolderMode() const { return m_isDirectory; }
+    /// 当前轮换索引（-1 = 尚未选择）
+    int currentLocalImageIndex() const { return m_currentImageIndex; }
+    /// 选中第 index 张（只改下一轮取图索引并刷新缩略图高亮；不执行）
+    void setLocalImageIndex(int index)
+    {
+        if (index < 0 || index >= m_imageFiles.size())
+            return;
+        m_currentImageIndex = index;
+        m_displayImageIndex = index;
+        m_thumbnailNeedsUpdate = true;
+        notifyThumbnailsIfChanged();
+    }
+    /// 清空本地图（filePath 置空，列表/索引归零）
+    void clearLocalImages()
+    {
+        setParam(QStringLiteral("filePath"), QString());
+        m_imageFiles.clear();
+        m_currentImageIndex = -1;
+        m_displayImageIndex = -1;
+    }
+    /// 追加本地图片（文件选择框多选）；返回是否加入了至少一张
+    bool addLocalImageFiles(const QStringList &files);
 };

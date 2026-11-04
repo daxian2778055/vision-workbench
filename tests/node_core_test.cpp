@@ -13,9 +13,12 @@
 #include "OpencvEdgeNode.h"
 #include "OpencvBlobNode.h"
 #include "FormulaNode.h"
+#include "ImageReadNode.h"
 #include "DataObject.h"
 #include "Port.h"
 #include "PortConnectivity.h"
+#include <QTemporaryDir>
+#include <QImage>
 
 class NodeCoreTest : public QObject
 {
@@ -43,6 +46,7 @@ private slots:
     void testCropBasic();
     void testImageArithDivByZero();
     void testFormulaEvaluation();
+    void testImageReadAddSingleLocalFile();
 
 private:
     void compareParams(HalconNode *node1, HalconNode *node2, const QStringList &excludeKeys = {});
@@ -288,6 +292,30 @@ void NodeCoreTest::testFormulaEvaluation()
     ok = FormulaNode::evaluate("max(p0, p1)", vars, result);
     QVERIFY(ok);
     QCOMPARE(result, 20.0);
+}
+
+void NodeCoreTest::testImageReadAddSingleLocalFile()
+{
+    // 回归（2026-11-04 现场闪退）：addLocalImageFiles 在“加入后恰好 1 张”分支里
+    // 先 setParam(mode=SingleImage) 再取 m_imageFiles.first()；前者会触发 updateImageFiles()
+    // 把列表清空 ⇒ 对空表 first()，release 下越界读直接崩溃。
+    ImageReadNode node;
+    node.init();
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("one.png"));
+    QImage img(16, 12, QImage::Format_Grayscale8);
+    img.fill(128);
+    QVERIFY2(img.save(path), "测试图应能写入临时目录");
+
+    QStringList files;
+    files << path;
+    QVERIFY2(node.addLocalImageFiles(files), "单张本地图应添加成功");
+    QCOMPARE(node.localImageFiles().size(), 1);
+    QCOMPARE(node.getParam(QStringLiteral("filePath")).toString(), path);
+    QCOMPARE(node.getParam(QStringLiteral("mode")).toInt(),
+             static_cast<int>(ImageReadNode::Mode::SingleImage));
 }
 
 QTEST_MAIN(NodeCoreTest)

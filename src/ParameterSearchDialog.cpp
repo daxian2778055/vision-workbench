@@ -2,78 +2,89 @@
 #include "FlowScene.h"
 #include "NodeBase.h"
 #include "HalconNode.h"
+#include "Port.h"
+
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
 #include <QMessageBox>
+#include <QTreeWidget>
+#include <functional>
 
 ParameterSearchDialog::ParameterSearchDialog(const QList<FlowScene *> &flows, QWidget *parent)
     : QDialog(parent)
     , m_flows(flows)
 {
     setupUI();
-    collectNodes();
-    doSearch();
+    buildTree();
+    applyFilter();
 }
 
-ParameterSearchDialog::~ParameterSearchDialog()
-{
-}
+ParameterSearchDialog::~ParameterSearchDialog() = default;
 
 void ParameterSearchDialog::setupUI()
 {
-    setWindowTitle(QStringLiteral("\u53C2\u6570\u67E5\u627E"));
-    setMinimumSize(780, 480);
+    setWindowTitle(QStringLiteral("参数查找工具"));
+    setMinimumSize(900, 560);
     setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
 
     auto *mainLayout = new QVBoxLayout(this);
 
-    auto *titleLabel = new QLabel(QStringLiteral("<b>\u53C2\u6570\u67E5\u627E\u5DE5\u5177</b>"));
-    titleLabel->setStyleSheet("font-size: 14px;");
+    auto *titleLabel = new QLabel(
+        QStringLiteral("<b>参数查找工具</b>　"
+                       "<span style='color:#8f9aa8;'>流程 → 模块 → 输入/输出/运行参数</span>"));
+    titleLabel->setStyleSheet(QStringLiteral("font-size: 14px;"));
     mainLayout->addWidget(titleLabel);
 
     auto *searchLayout = new QHBoxLayout();
-    searchLayout->addWidget(new QLabel(QStringLiteral("\u5173\u952E\u5B57:")));
+    searchLayout->addWidget(new QLabel(QStringLiteral("关键字:")));
     m_keywordEdit = new QLineEdit();
-    m_keywordEdit->setPlaceholderText(QStringLiteral("\u8F93\u5165\u53C2\u6570\u540D\u79F0\u6216\u503C"));
-    m_keywordEdit->setMinimumWidth(200);
-    searchLayout->addWidget(m_keywordEdit);
+    m_keywordEdit->setPlaceholderText(QStringLiteral("过滤参数名 / 参数值（留空显示全部）"));
+    m_keywordEdit->setMinimumWidth(240);
+    searchLayout->addWidget(m_keywordEdit, 1);
 
     m_scopeCombo = new QComboBox();
-    m_scopeCombo->addItem(QStringLiteral("\u5168\u90E8"), 0);
-    m_scopeCombo->addItem(QStringLiteral("\u53C2\u6570\u540D"), 1);
-    m_scopeCombo->addItem(QStringLiteral("\u53C2\u6570\u503C"), 2);
+    m_scopeCombo->addItem(QStringLiteral("全部"), 0);
+    m_scopeCombo->addItem(QStringLiteral("参数名"), 1);
+    m_scopeCombo->addItem(QStringLiteral("参数值"), 2);
     searchLayout->addWidget(m_scopeCombo);
 
-    m_searchBtn = new QPushButton(QStringLiteral("\u641C\u7D22"));
+    m_searchBtn = new QPushButton(QStringLiteral("搜索"));
     m_searchBtn->setMinimumHeight(28);
     searchLayout->addWidget(m_searchBtn);
 
-    m_locateBtn = new QPushButton(QStringLiteral("\u5B9A\u4F4D\u5230\u8282\u70B9"));
+    m_locateBtn = new QPushButton(QStringLiteral("定位到节点"));
     m_locateBtn->setMinimumHeight(28);
     searchLayout->addWidget(m_locateBtn);
 
     searchLayout->addStretch();
     mainLayout->addLayout(searchLayout);
 
-    m_resultTable = new QTableWidget();
-    m_resultTable->setColumnCount(4);
-    m_resultTable->setHorizontalHeaderLabels({
-        QStringLiteral("\u6D41\u7A0B"),
-        QStringLiteral("\u7B97\u5B50"),
-        QStringLiteral("\u53C2\u6570\u540D"),
-        QStringLiteral("\u53C2\u6570\u503C")
+    m_resultTree = new QTreeWidget();
+    m_resultTree->setObjectName(QStringLiteral("parameterResultTree"));
+    m_resultTree->setColumnCount(4);
+    m_resultTree->setHeaderLabels({
+        QStringLiteral("软件参数名"),
+        QStringLiteral("算子参数名"),
+        QStringLiteral("当前值"),
+        QStringLiteral("调用代码")
     });
-    m_resultTable->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_resultTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_resultTable->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
-    m_resultTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
-    mainLayout->addWidget(m_resultTable);
+    m_resultTree->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_resultTree->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_resultTree->setAlternatingRowColors(true);
+    m_resultTree->header()->setSectionResizeMode(0, QHeaderView::Interactive);
+    m_resultTree->header()->setSectionResizeMode(1, QHeaderView::Interactive);
+    m_resultTree->header()->setSectionResizeMode(2, QHeaderView::Interactive);
+    m_resultTree->header()->setSectionResizeMode(3, QHeaderView::Stretch);
+    m_resultTree->setColumnWidth(0, 220);
+    m_resultTree->setColumnWidth(1, 180);
+    m_resultTree->setColumnWidth(2, 160);
+    mainLayout->addWidget(m_resultTree, 1);
 
     auto *btnLayout = new QHBoxLayout();
     btnLayout->addStretch();
-    m_closeBtn = new QPushButton(QStringLiteral("\u5173\u95ED"));
+    m_closeBtn = new QPushButton(QStringLiteral("关闭"));
     m_closeBtn->setMinimumHeight(30);
     btnLayout->addWidget(m_closeBtn);
     mainLayout->addLayout(btnLayout);
@@ -82,116 +93,185 @@ void ParameterSearchDialog::setupUI()
     connect(m_keywordEdit, &QLineEdit::returnPressed, this, &ParameterSearchDialog::onSearch);
     connect(m_closeBtn, &QPushButton::clicked, this, &QDialog::accept);
     connect(m_locateBtn, &QPushButton::clicked, this, &ParameterSearchDialog::onLocateNode);
+    connect(m_resultTree, &QTreeWidget::itemDoubleClicked, this,
+            &ParameterSearchDialog::onItemDoubleClicked);
 }
 
-void ParameterSearchDialog::collectNodes()
+void ParameterSearchDialog::buildTree()
 {
-    m_entries.clear();
+    m_resultTree->clear();
     int flowIndex = 0;
     for (FlowScene *scene : m_flows) {
-        if (!scene) { ++flowIndex; continue; }
-        QString flowName = (!scene->flowName().isEmpty())
-                              ? scene->flowName()
-                              : QStringLiteral("\u6D41\u7A0B %1").arg(flowIndex + 1);
-        for (NodeBase *node : scene->nodes()) {
-            if (!node) continue;
-            // 遍历该算子的参数描述，若无则尝试常见参数名
-            auto *halcon = dynamic_cast<HalconNode *>(node);
-            if (halcon) {
-                const auto &specs = halcon->paramSpecs();
-                if (!specs.isEmpty()) {
-                    for (const auto &spec : specs) {
-                        QVariant val = node->getParam(spec.name);
-                        Entry e;
-                        e.flowName = flowName;
-                        e.nodeName = node->fullName();
-                        e.paramName = spec.name;
-                        e.paramValue = val.toString();
-                        e.node = node;
-                        m_entries.append(e);
-                    }
-                    continue;
-                }
-            }
-            // 无 ParamSpec 时，用一组常见参数名兜底
-            QStringList keys = { QStringLiteral("threshold"), QStringLiteral("min"),
-                                 QStringLiteral("max"), QStringLiteral("angle"),
-                                 QStringLiteral("distance"), QStringLiteral("sigma"),
-                                 QStringLiteral("expression"), QStringLiteral("host"),
-                                 QStringLiteral("port"), QStringLiteral("fileName") };
-            for (const QString &key : keys) {
-                QVariant val = node->getParam(key);
-                if (!val.isNull() && val.isValid()) {
-                    Entry e;
-                    e.flowName = flowName;
-                    e.nodeName = node->fullName();
-                    e.paramName = key;
-                    e.paramValue = val.toString();
-                    e.node = node;
-                    m_entries.append(e);
-                }
-            }
+        if (!scene) {
+            ++flowIndex;
+            continue;
         }
+        const QString flowName = scene->flowName().isEmpty()
+                                     ? QStringLiteral("流程 %1").arg(flowIndex + 1)
+                                     : scene->flowName();
+        auto *flowItem = new QTreeWidgetItem(m_resultTree);
+        flowItem->setText(0, flowName);
+        flowItem->setFirstColumnSpanned(true);
+        QFont bold = flowItem->font(0);
+        bold.setBold(true);
+        flowItem->setFont(0, bold);
+
+        for (NodeBase *node : scene->nodes()) {
+            if (!node)
+                continue;
+            auto *nodeItem = new QTreeWidgetItem(flowItem);
+            nodeItem->setText(0, node->fullName());
+            nodeItem->setFirstColumnSpanned(true);
+            nodeItem->setData(0, Qt::UserRole, QVariant::fromValue<qulonglong>(
+                                                     reinterpret_cast<qulonglong>(node)));
+
+            // ---- 输入参数 ----
+            auto *inputItem = new QTreeWidgetItem(nodeItem);
+            inputItem->setText(0, QStringLiteral("输入参数"));
+            inputItem->setFirstColumnSpanned(true);
+            const QList<Port *> inputs = node->inputPorts();
+            for (int i = 0; i < inputs.size(); ++i) {
+                Port *port = inputs.at(i);
+                if (!port)
+                    continue;
+                auto *leaf = new QTreeWidgetItem(inputItem);
+                leaf->setText(0, QStringLiteral("输入 · %1").arg(port->name()));
+                leaf->setText(1, port->name());
+                leaf->setText(2, QStringLiteral("—"));
+                leaf->setText(3, QStringLiteral("node->getInputData(%1)").arg(i));
+                leaf->setData(0, Qt::UserRole, QVariant::fromValue<qulonglong>(
+                                                 reinterpret_cast<qulonglong>(node)));
+            }
+
+            // ---- 输出参数 ----
+            auto *outputItem = new QTreeWidgetItem(nodeItem);
+            outputItem->setText(0, QStringLiteral("输出参数"));
+            outputItem->setFirstColumnSpanned(true);
+            const QList<Port *> outputs = node->outputPorts();
+            for (int i = 0; i < outputs.size(); ++i) {
+                Port *port = outputs.at(i);
+                if (!port)
+                    continue;
+                auto *leaf = new QTreeWidgetItem(outputItem);
+                leaf->setText(0, QStringLiteral("输出 · %1").arg(port->name()));
+                leaf->setText(1, port->name());
+                leaf->setText(2, QStringLiteral("—"));
+                leaf->setText(3, QStringLiteral("node->getOutputData(%1)").arg(i));
+                leaf->setData(0, Qt::UserRole, QVariant::fromValue<qulonglong>(
+                                                 reinterpret_cast<qulonglong>(node)));
+            }
+
+            // ---- 运行参数 ----
+            auto *paramItem = new QTreeWidgetItem(nodeItem);
+            paramItem->setText(0, QStringLiteral("运行参数"));
+            paramItem->setFirstColumnSpanned(true);
+            struct ParamRow { QString label; QString name; };
+            QList<ParamRow> rows;
+            if (auto *halcon = dynamic_cast<HalconNode *>(node)) {
+                for (const ParamSpec &spec : halcon->paramSpecs())
+                    rows.append({spec.label.isEmpty() ? spec.name : spec.label, spec.name});
+            }
+            if (rows.isEmpty()) {
+                for (const QString &name : node->getAllParamNames())
+                    rows.append({name, name});
+            }
+            for (const ParamRow &row : rows) {
+                auto *leaf = new QTreeWidgetItem(paramItem);
+                leaf->setText(0, row.label);
+                leaf->setText(1, row.name);
+                leaf->setText(2, node->getParam(row.name).toString());
+                leaf->setText(3, QStringLiteral("node->getParam(\"%1\")").arg(row.name));
+                leaf->setData(0, Qt::UserRole, QVariant::fromValue<qulonglong>(
+                                                 reinterpret_cast<qulonglong>(node)));
+            }
+
+            if (inputItem->childCount() == 0)
+                delete inputItem;
+            if (outputItem->childCount() == 0)
+                delete outputItem;
+            if (paramItem->childCount() == 0)
+                delete paramItem;
+        }
+        if (flowItem->childCount() == 0)
+            delete flowItem;
         ++flowIndex;
     }
+    m_resultTree->expandAll();
 }
 
-void ParameterSearchDialog::doSearch()
+void ParameterSearchDialog::applyFilter()
 {
-    QString keyword = m_keywordEdit->text().trimmed();
-    int scope = m_scopeCombo->currentData().toInt();
+    const QString keyword = m_keywordEdit->text().trimmed();
+    const int scope = m_scopeCombo->currentData().toInt();
 
-    m_resultTable->setRowCount(0);
-    for (int i = 0; i < m_entries.size(); ++i) {
-        const auto &e = m_entries[i];
-        bool match = keyword.isEmpty();
-        if (!match) {
-            if (scope == 1) {
-                match = e.paramName.contains(keyword, Qt::CaseInsensitive);
-            } else if (scope == 2) {
-                match = e.paramValue.contains(keyword, Qt::CaseInsensitive);
-            } else {
-                match = e.paramName.contains(keyword, Qt::CaseInsensitive)
-                        || e.paramValue.contains(keyword, Qt::CaseInsensitive)
-                        || e.nodeName.contains(keyword, Qt::CaseInsensitive);
+    std::function<bool(QTreeWidgetItem *)> visit = [&](QTreeWidgetItem *item) -> bool {
+        if (!item)
+            return false;
+        if (item->childCount() == 0) {
+            bool match = keyword.isEmpty();
+            if (!match) {
+                if (scope == 1)
+                    match = item->text(0).contains(keyword, Qt::CaseInsensitive)
+                            || item->text(1).contains(keyword, Qt::CaseInsensitive);
+                else if (scope == 2)
+                    match = item->text(2).contains(keyword, Qt::CaseInsensitive);
+                else
+                    match = item->text(0).contains(keyword, Qt::CaseInsensitive)
+                            || item->text(1).contains(keyword, Qt::CaseInsensitive)
+                            || item->text(2).contains(keyword, Qt::CaseInsensitive)
+                            || item->text(3).contains(keyword, Qt::CaseInsensitive);
             }
+            item->setHidden(!match);
+            return match;
         }
-        if (!match) continue;
+        bool anyVisible = false;
+        for (int i = 0; i < item->childCount(); ++i)
+            anyVisible = visit(item->child(i)) || anyVisible;
+        item->setHidden(!anyVisible);
+        if (anyVisible)
+            item->setExpanded(true);
+        return anyVisible;
+    };
 
-        int row = m_resultTable->rowCount();
-        m_resultTable->insertRow(row);
-        m_resultTable->setItem(row, 0, new QTableWidgetItem(e.flowName));
-        m_resultTable->setItem(row, 1, new QTableWidgetItem(e.nodeName));
-        m_resultTable->setItem(row, 2, new QTableWidgetItem(e.paramName));
-        auto *valueItem = new QTableWidgetItem(e.paramValue);
-        valueItem->setData(Qt::UserRole, i); // 记录原始条目索引，便于定位节点
-        m_resultTable->setItem(row, 3, valueItem);
-    }
-    m_resultTable->resizeColumnsToContents();
+    for (int i = 0; i < m_resultTree->topLevelItemCount(); ++i)
+        visit(m_resultTree->topLevelItem(i));
 }
 
 void ParameterSearchDialog::onSearch()
 {
-    doSearch();
+    applyFilter();
+}
+
+void ParameterSearchDialog::onItemDoubleClicked(QTreeWidgetItem *item, int column)
+{
+    Q_UNUSED(column)
+    if (item && item->childCount() == 0) {
+        m_resultTree->setCurrentItem(item);
+        onLocateNode();
+    }
 }
 
 void ParameterSearchDialog::onLocateNode()
 {
-    int row = m_resultTable->currentRow();
-    if (row < 0) {
-        QMessageBox::information(this, QStringLiteral("\u63D0\u793A"),
-            QStringLiteral("\u8BF7\u5148\u5728\u7ED3\u679C\u4E2D\u9009\u62E9\u4E00\u884C"));
+    QTreeWidgetItem *item = m_resultTree->currentItem();
+    if (!item || item->childCount() != 0) {
+        // 选中父级时取第一个叶子，减少用户操作
+        if (item && item->childCount() > 0)
+            item = item->child(0);
+    }
+    if (!item) {
+        QMessageBox::information(this, QStringLiteral("提示"),
+                                 QStringLiteral("请先在结果中选择一个参数"));
         return;
     }
-    QTableWidgetItem *nameItem = m_resultTable->item(row, 1);
-    QTableWidgetItem *idxItem = m_resultTable->item(row, 3);
-    NodeBase *node = nullptr;
-    if (idxItem) {
-        int i = idxItem->data(Qt::UserRole).toInt();
-        if (i >= 0 && i < m_entries.size()) node = m_entries[i].node;
-    }
-    QMessageBox::information(this, QStringLiteral("\u5B9A\u4F4D"),
-        QStringLiteral("\u5DF2\u5B9A\u4F4D\u5230\u7B97\u5B50: %1")
-            .arg(node ? node->fullName()
-                      : (nameItem ? nameItem->text() : QStringLiteral("?"))));
+
+    NodeBase *node = reinterpret_cast<NodeBase *>(
+        item->data(0, Qt::UserRole).toULongLong());
+    const QString nodeName = item->parent() && item->parent()->parent()
+                                 ? item->parent()->parent()->text(0)
+                                 : QString();
+    QMessageBox::information(
+        this, QStringLiteral("定位"),
+        QStringLiteral("已定位到模块: %1\n参数: %2")
+            .arg(node ? node->fullName() : nodeName, item->text(1)));
 }

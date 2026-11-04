@@ -3,6 +3,7 @@
 #include "HalconNode.h"
 
 /// OpenCV 卡尺测量节点：沿直线方向逐采样窗口做法线方向一维边缘搜索（亚像素），
+/// 支持单边/边对模式、剖面投影与结果排序，
 /// 替代替换版环境下损坏的 HALCON metrology 测量内核
 class OpencvCaliperNode : public HalconNode
 {

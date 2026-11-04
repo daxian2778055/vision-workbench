@@ -54,6 +54,13 @@ public:
     void setOverlay(const QVector<OverlayShape> &shapes);
     /// 清空叠加
     void clearOverlay();
+    /// 实装 4.4：多选图像叠加（在 base 图上以 50% 透明度叠画，尺寸不同时拉伸到 base 区域）
+    void setHImageOverlays(const QVector<HImage> &images);
+    void clearHImageOverlays();
+    int hImageOverlayCount() const { return m_imageOverlays.size(); }
+    /// 叠加透明度（0~100），默认 50
+    void setHImageOverlayOpacity(int percent);
+    int hImageOverlayOpacity() const { return m_imageOverlayOpacity; }
     
     // 清除图像
     void clear();
@@ -75,9 +82,26 @@ public:
     void setActualSize();
     /// 保存当前图像
     void saveImage();
-    /// 显示/隐藏中心十字线
+    /// 十字辅助线配置（实装 4.4 口径：两条独立辅助线，坐标按图像像素）
+    struct CrosshairConfig {
+        bool visible = false;
+        double x = -1.0;            ///< 图像 X 坐标（像素）；<0 表示首帧自动居中
+        double y = -1.0;            ///< 图像 Y 坐标（像素）
+        int thickness = 1;          ///< 线宽 1~10
+        QColor color {255, 60, 60};
+        bool locked = false;        ///< 锁定后不可在预览画面上拖动
+    };
+    /// 替换式设置辅助线（不足两条时补默认值，多余丢弃）
+    void setCrosshairConfigs(const QVector<CrosshairConfig> &configs);
+    QVector<CrosshairConfig> crosshairConfigs() const { return m_crosshairConfigs; }
+    /// 工具栏开关：同时显示/隐藏全部辅助线
     void setCrosshairVisible(bool on);
-    bool crosshairVisible() const { return m_showCrosshair; }
+    bool crosshairVisible() const;
+    /// P2-5：当前显示图像 / 叠加图元的只读快照（全屏查看用）
+    QImage currentQImage() const { return m_qImage ? *m_qImage : QImage(); }
+    QVector<OverlayShape> overlayShapes() const { return m_overlay; }
+    /// 用已转换的 QImage 直接设置画面（不经过 HALCON 转换；全屏查看/截图复用）
+    void setQImage(const QImage &image, const QString &caption = QString());
     /// 当前缩放比例（像素显示倍率）
     double scaleFactor() const { return m_scaleFactor; }
     /// 是否有图像
@@ -113,6 +137,10 @@ public:
     void ensureMaskForCurrentImage();
 
 signals:
+    /// P2-5：画面内容（图像或叠加图元）发生变化后发出，供双画面副视图同步
+    void displayContentChanged();
+    /// 十字辅助线配置变化（位置/颜色/线宽/锁定），供双画面副视图同步
+    void crosshairConfigsChanged();
     /// 用户完成 ROI 绘制时发出（图像坐标系）
     void roiEdited(const RoiShape &shape);
     void roiEditCanceled();
@@ -158,6 +186,12 @@ private:
     QPointF handleImagePos(const RoiShape &shape, RoiHandle h) const;
     void applyHandleDrag(const QPointF &imgPos);
     bool roiInteractionActive() const { return m_roiEditable || m_roiHandleEdit; }
+    /// 辅助线命中测试（返回索引，-1 = 未命中）
+    int hitTestCrosshair(const QPoint &widgetPos) const;
+    /// 辅助线交叉点在视图坐标系中的位置（无图像/未启用返回无效点）
+    QPointF crosshairViewPos(const CrosshairConfig &config) const;
+    /// 首帧居中 / 图像尺寸变化后夹紧辅助线像素坐标
+    void normalizeCrosshairPositions();
 
     // 成员变量
     HWindow m_hWindow;
@@ -178,7 +212,8 @@ private:
     bool m_pendingValid = false;
     int m_imageOffsetX;
     int m_imageOffsetY;
-    bool m_showCrosshair = false;   /// 是否显示中心十字线
+    QVector<CrosshairConfig> m_crosshairConfigs {CrosshairConfig(), CrosshairConfig()};
+    int m_dragCrosshair = -1;       ///< 正在拖动的辅助线索引（-1 = 未拖动）
 
     // 拖拽平移
     bool m_isPanning;
@@ -211,4 +246,6 @@ private:
 
     // ---- 结果叠加 ----
     QVector<OverlayShape> m_overlay;  /// 测量/拟合结果叠加图元
+    QVector<QImage> m_imageOverlays;  /// 多选图像叠加（已转换为 QImage）
+    int m_imageOverlayOpacity = 50;   /// 图像叠加透明度（%）
 };

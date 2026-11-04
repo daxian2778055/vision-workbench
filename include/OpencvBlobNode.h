@@ -2,7 +2,8 @@
 
 #include "HalconNode.h"
 
-/// OpenCV Blob 分析节点：输入二值图（>0 为前景），输出连通域统计
+/// OpenCV Blob 分析节点：灰度阈值/极性 → 连通域 → 面积/宽高/圆度/孔洞筛选 → 排序与数量限制，
+/// 结果含数量、面积统计与每个 Blob 的检测框（画布叠加用）
 class OpencvBlobNode : public HalconNode
 {
     Q_OBJECT

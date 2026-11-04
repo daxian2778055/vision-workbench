@@ -1,4 +1,5 @@
 #include "RuntimeInterfaceDesigner.h"
+#include "RuntimeInterfaceView.h"
 #include "GlobalVariableManager.h"
 
 #include <QListWidget>
@@ -611,15 +612,33 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
 
     // ---- 底部按钮 ----
     auto *saveBtn = new QPushButton(QStringLiteral("保存布局"), this);
+    auto *previewBtn = new QPushButton(QStringLiteral("预览"), this);
     auto *loadBtn = new QPushButton(QStringLiteral("加载布局"), this);
     auto *applyBtn = new QPushButton(QStringLiteral("应用并进入运行模式"), this);
+    previewBtn->setToolTip(QStringLiteral("按当前布局生成运行界面预览（不改动已保存的布局）"));
     applyBtn->setStyleSheet("QPushButton{background:#3d9a5a;color:white;border:none;border-radius:4px;padding:8px 16px;font-weight:bold;}");
     connect(saveBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::saveLayout);
+    connect(previewBtn, &QPushButton::clicked, this, [this]() {
+        if (m_layout.pages.isEmpty()) {
+            QMessageBox::information(this, QStringLiteral("预览"),
+                                     QStringLiteral("当前没有可预览的布局"));
+            return;
+        }
+        QDialog previewDialog(this);
+        previewDialog.setWindowTitle(QStringLiteral("运行界面预览"));
+        previewDialog.resize(960, 620);
+        auto *layout = new QVBoxLayout(&previewDialog);
+        auto *view = new RuntimeInterfaceView(&previewDialog);
+        view->setInterface(m_layout);
+        layout->addWidget(view);
+        previewDialog.exec();
+    });
     connect(loadBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::loadLayout);
     connect(applyBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::applyAndClose);
 
     auto *btnRow = new QHBoxLayout();
     btnRow->addWidget(saveBtn);
+    btnRow->addWidget(previewBtn);
     btnRow->addWidget(loadBtn);
     btnRow->addStretch();
     btnRow->addWidget(applyBtn);

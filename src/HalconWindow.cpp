@@ -299,6 +299,7 @@ void HalconWindow::setImage(const HImage &image, const QString &caption)
         delete m_qImage;
     }
     m_qImage = new QImage(newImage);
+    normalizeCrosshairPositions();   // 辅助线按像素定位：首帧居中，越界夹紧
 
     // 首次显示或图像尺寸变化时自动适应，否则保持用户的缩放/平移状态
     if (m_fitToWindow || sizeChanged) {
@@ -317,6 +318,7 @@ void HalconWindow::setImage(const HImage &image, const QString &caption)
     m_pixelInfoLabel->hide();
     updateZoomLabel();
     update();
+    emit displayContentChanged();   // P2-5：通知双画面副视图同步
     VFP_DEBUG << "Image displayed successfully using QImage";
 }
 
@@ -324,11 +326,45 @@ void HalconWindow::setOverlay(const QVector<OverlayShape> &shapes)
 {
     m_overlay = shapes;
     update();
+    emit displayContentChanged();   // P2-5：叠加变化同样算画面内容变化
 }
 
 void HalconWindow::clearOverlay()
 {
     m_overlay.clear();
+    update();
+    emit displayContentChanged();
+}
+
+void HalconWindow::setHImageOverlays(const QVector<HImage> &images)
+{
+    m_imageOverlays.clear();
+    for (const HImage &image : images) {
+        if (!image.IsInitialized())
+            continue;
+        const QImage converted = convertHImageToQImage(image);
+        if (!converted.isNull())
+            m_imageOverlays.append(converted);
+    }
+    update();
+    emit displayContentChanged();
+}
+
+void HalconWindow::clearHImageOverlays()
+{
+    if (m_imageOverlays.isEmpty())
+        return;
+    m_imageOverlays.clear();
+    update();
+    emit displayContentChanged();
+}
+
+void HalconWindow::setHImageOverlayOpacity(int percent)
+{
+    const int clamped = qBound(0, percent, 100);
+    if (clamped == m_imageOverlayOpacity)
+        return;
+    m_imageOverlayOpacity = clamped;
     update();
 }
 
@@ -352,6 +388,7 @@ void HalconWindow::clear()
         m_qImage = nullptr;
     }
     m_overlay.clear();
+    m_imageOverlays.clear();
     m_scaleFactor = 1.0;
     m_imageOffsetX = 0;
     m_imageOffsetY = 0;
@@ -359,6 +396,7 @@ void HalconWindow::clear()
     m_pixelInfoLabel->hide();
     m_zoomLabel->hide();
     update();
+    emit displayContentChanged();   // P2-5：清空画面后副视图同步清空
 }
 
 HWindow HalconWindow::getHWindow() const
@@ -396,14 +434,28 @@ void HalconWindow::paintEvent(QPaintEvent *event)
 
         painter.drawImage(QRect(m_imageOffsetX, m_imageOffsetY, imageWidth, imageHeight), *m_qImage);
 
-        // 中心十字线
-        if (m_showCrosshair) {
-            const QColor chColor(255, 60, 60);
-            painter.setPen(QPen(chColor, 1, Qt::DashLine));
-            const int cx = m_imageOffsetX + imageWidth / 2;
-            const int cy = m_imageOffsetY + imageHeight / 2;
-            painter.drawLine(cx, m_imageOffsetY, cx, m_imageOffsetY + imageHeight);
-            painter.drawLine(m_imageOffsetX, cy, m_imageOffsetX + imageWidth, cy);
+        // 多选图像叠加（实装 4.4）：按配置透明度叠画在 base 图上
+        if (!m_imageOverlays.isEmpty()) {
+            painter.setOpacity(qBound(0, m_imageOverlayOpacity, 100) / 100.0);
+            for (const QImage &overlay : m_imageOverlays) {
+                painter.drawImage(QRect(m_imageOffsetX, m_imageOffsetY, imageWidth, imageHeight),
+                                  overlay);
+            }
+            painter.setOpacity(1.0);
+        }
+
+        // 十字辅助线（两条独立：像素坐标/线宽/颜色/锁定，实装 4.4 口径）
+        for (const CrosshairConfig &cfg : m_crosshairConfigs) {
+            if (!cfg.visible)
+                continue;
+            const QPointF p = crosshairViewPos(cfg);
+            if (p.x() < 0)
+                continue;
+            painter.setPen(QPen(cfg.color, qMax(1, cfg.thickness), Qt::SolidLine));
+            painter.drawLine(QPointF(p.x(), m_imageOffsetY),
+                             QPointF(p.x(), m_imageOffsetY + imageHeight));
+            painter.drawLine(QPointF(m_imageOffsetX, p.y()),
+                             QPointF(m_imageOffsetX + imageWidth, p.y()));
         }
 
         // 结果叠加层（测量线/圆/点/标注，图像坐标系 → 视图坐标系）
@@ -498,6 +550,16 @@ void HalconWindow::mousePressEvent(QMouseEvent *event)
             m_maskPainting = true;
             m_maskPaintKeep = (event->button() == Qt::LeftButton);
             paintMaskAt(event->pos(), m_maskPaintKeep);
+            return;
+        }
+    }
+
+    // 辅助线拖动：非 ROI/掩膜编辑态下，左键落在交叉点附近即进入拖动
+    if (!m_maskEditable && !roiInteractionActive() && event->button() == Qt::LeftButton) {
+        const int hit = hitTestCrosshair(event->pos());
+        if (hit >= 0) {
+            m_dragCrosshair = hit;
+            setCursor(Qt::ClosedHandCursor);
             return;
         }
     }
@@ -617,6 +679,19 @@ void HalconWindow::mouseMoveEvent(QMouseEvent *event)
         return;
     }
 
+    // 拖辅助线：交叉点跟随光标（像素坐标，越界夹紧）
+    if (m_dragCrosshair >= 0) {
+        QPointF imgPos;
+        if (m_qImage && imagePosFromWidget(event->pos(), imgPos)) {
+            CrosshairConfig &cfg = m_crosshairConfigs[m_dragCrosshair];
+            cfg.x = qBound(0.0, imgPos.x(), double(m_qImage->width() - 1));
+            cfg.y = qBound(0.0, imgPos.y(), double(m_qImage->height() - 1));
+            update();
+            emit crosshairConfigsChanged();
+        }
+        return;
+    }
+
     if (m_activeHandle != RoiHandle::None) {
         QPointF imgPos;
         if (imagePosFromWidget(event->pos(), imgPos)) {
@@ -690,6 +765,13 @@ void HalconWindow::mouseReleaseEvent(QMouseEvent *event)
         && (event->button() == Qt::LeftButton || event->button() == Qt::RightButton)) {
         m_maskPainting = false;
         emit maskEdited();
+        return;
+    }
+
+    if (m_dragCrosshair >= 0 && event->button() == Qt::LeftButton) {
+        m_dragCrosshair = -1;
+        setCursor(Qt::CrossCursor);
+        update();
         return;
     }
 
@@ -838,8 +920,107 @@ void HalconWindow::saveImage()
 
 void HalconWindow::setCrosshairVisible(bool on)
 {
-    m_showCrosshair = on;
+    // 工具栏开关 = 全局显隐：两条辅助线一起开关（单条启用在配置窗里设置）
+    for (CrosshairConfig &cfg : m_crosshairConfigs)
+        cfg.visible = on;
     update();
+    emit crosshairConfigsChanged();
+}
+
+bool HalconWindow::crosshairVisible() const
+{
+    for (const CrosshairConfig &cfg : m_crosshairConfigs) {
+        if (cfg.visible)
+            return true;
+    }
+    return false;
+}
+
+void HalconWindow::setCrosshairConfigs(const QVector<CrosshairConfig> &configs)
+{
+    m_crosshairConfigs = configs.mid(0, 2);
+    while (m_crosshairConfigs.size() < 2)
+        m_crosshairConfigs.append(CrosshairConfig());
+    normalizeCrosshairPositions();
+    update();
+    emit crosshairConfigsChanged();
+}
+
+void HalconWindow::normalizeCrosshairPositions()
+{
+    if (!m_qImage)
+        return;
+    const double maxX = qMax(0, m_qImage->width() - 1);
+    const double maxY = qMax(0, m_qImage->height() - 1);
+    for (CrosshairConfig &cfg : m_crosshairConfigs) {
+        if (cfg.x < 0.0 || cfg.y < 0.0) {
+            cfg.x = maxX / 2.0;
+            cfg.y = maxY / 2.0;
+        }
+        cfg.x = qBound(0.0, cfg.x, maxX);
+        cfg.y = qBound(0.0, cfg.y, maxY);
+    }
+}
+
+QPointF HalconWindow::crosshairViewPos(const CrosshairConfig &config) const
+{
+    if (!m_qImage)
+        return QPointF(-1, -1);
+    const double imgW = m_qImage->width();
+    const double imgH = m_qImage->height();
+    const double viewW = imgW * m_scaleFactor;
+    const double viewH = imgH * m_scaleFactor;
+    int offX = m_imageOffsetX;
+    int offY = m_imageOffsetY;
+    if (m_fitToWindow) {
+        offX = (std::max)(0, (width() - qRound(viewW)) / 2);
+        offY = (std::max)(0, (height() - qRound(viewH)) / 2);
+    }
+    const double ix = (config.x < 0.0) ? imgW / 2.0 : config.x;
+    const double iy = (config.y < 0.0) ? imgH / 2.0 : config.y;
+    return QPointF(offX + ix * (viewW / imgW), offY + iy * (viewH / imgH));
+}
+
+int HalconWindow::hitTestCrosshair(const QPoint &widgetPos) const
+{
+    if (!m_qImage)
+        return -1;
+    for (int i = 0; i < m_crosshairConfigs.size(); ++i) {
+        const CrosshairConfig &cfg = m_crosshairConfigs.at(i);
+        if (!cfg.visible || cfg.locked)
+            continue;
+        const QPointF p = crosshairViewPos(cfg);
+        if (p.x() < 0)
+            continue;
+        if (QLineF(QPointF(widgetPos), p).length() <= 10.0)
+            return i;
+    }
+    return -1;
+}
+
+void HalconWindow::setQImage(const QImage &image, const QString &caption)
+{
+    m_pendingValid = false;
+    if (image.isNull()) {
+        clear();
+        return;
+    }
+    // 首帧或尺寸变化才复位为自适应；尺寸不变时保留用户缩放/平移，
+    // 否则双画面副视图每收到一帧都会被拉回适应窗口，"独立缩放"失效。
+    const bool sizeChanged = (!m_qImage) || (m_qImage->size() != image.size());
+    if (!m_qImage)
+        m_qImage = new QImage(image);
+    else
+        *m_qImage = image;
+    normalizeCrosshairPositions();   // 辅助线按像素定位：首帧居中，越界夹紧
+    if (sizeChanged || m_fitToWindow) {
+        m_fitToWindow = true;
+        fitToWindowSize();
+    }
+    if (!caption.isEmpty())
+        m_captionLabel->setText(caption);
+    update();
+    emit displayContentChanged();   // P2-5：通知双画面副视图同步
 }
 
 void HalconWindow::updateScaleFactor(double delta, QPoint zoomCenter)

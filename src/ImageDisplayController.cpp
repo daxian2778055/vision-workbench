@@ -39,11 +39,48 @@ NodeBase *ImageDisplayController::resolveDisplayNode(NodeBase *fallbackNode) con
     return fallbackNode;
 }
 
+void ImageDisplayController::setDualViewEnabled(bool on)
+{
+    m_dualViewEnabled = on;
+}
+
+bool ImageDisplayController::showInputOnPrimary(NodeBase *moduleNode)
+{
+    if (!m_imageView || !moduleNode)
+        return false;
+    auto input = moduleNode->getInputData(0);
+    if (!input)
+        return false;
+    const HImage image = input->getHImage();
+    if (!image.IsInitialized())
+        return false;
+    m_imageView->setImage(image, tr("输入 - %1").arg(moduleNode->fullName()));
+    m_imageView->clearOverlay();
+    return true;
+}
+
 void ImageDisplayController::showImage(const HalconCpp::HImage &image, const QString &sourceName,
                                        NodeBase *overlaySource)
 {
     if (!m_imageView || !image.IsInitialized())
         return;
+
+    // 双画面（实装 4.4 口径）：右窗=完整结果，左窗=当前模块输入源；不再做镜像同步
+    if (m_dualViewEnabled && m_secondaryView) {
+        m_secondaryView->setImage(image, sourceName);
+        if (overlaySource)
+            m_secondaryView->setOverlay(collectOverlayFromNode(overlaySource));
+        else
+            m_secondaryView->clearOverlay();
+
+        NodeBase *current = m_canvasSelectionProvider ? m_canvasSelectionProvider() : overlaySource;
+        if (!showInputOnPrimary(current))
+            m_imageView->clear();
+        if (m_sourceLabel)
+            m_sourceLabel->setText(QStringLiteral("图像来源: %1").arg(sourceName));
+        return;
+    }
+
     m_imageView->setImage(image, sourceName);
     if (overlaySource)
         m_imageView->setOverlay(collectOverlayFromNode(overlaySource));
@@ -61,6 +98,18 @@ bool ImageDisplayController::displayNodeOutput(NodeBase *node)
     const HImage image = outputData->getHImage();
     if (!image.IsInitialized())
         return false;
+
+    if (m_dualViewEnabled && m_secondaryView) {
+        m_secondaryView->setImage(image, node->fullName());
+        m_secondaryView->setOverlay(collectOverlayFromNode(node));
+        NodeBase *current = m_canvasSelectionProvider ? m_canvasSelectionProvider() : node;
+        if (!showInputOnPrimary(current))
+            m_imageView->clear();
+        if (m_sourceLabel)
+            m_sourceLabel->setText(QStringLiteral("图像来源: %1").arg(node->fullName()));
+        return true;
+    }
+
     showImage(image, node->fullName(), node);
     return true;
 }
@@ -85,11 +134,15 @@ QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *n
     QSharedPointer<DataObject> mainData = node->getOutputData(0);
     if (mainData)
         results = mainData->measureResults();
-    for (int p = 1; p < node->logicalOutputPortCount(); ++p) {
-        auto data = node->getOutputData(p);
-        if (!data) continue;
-        for (const MeasureResult &mr : data->measureResults())
-            results.append(mr);
+    // 聚合端口已把子输出里的结果全部并入主对象 ⇒ 再扫端口 1..N 只会把同一批结果画两遍。
+    // 只有主对象没带结果时（分支类节点 / 尚未聚合的旧插件）才回退按端口扫。
+    if (results.isEmpty()) {
+        for (int p = 1; p < node->logicalOutputPortCount(); ++p) {
+            auto data = node->getOutputData(p);
+            if (!data) continue;
+            for (const MeasureResult &mr : data->measureResults())
+                results.append(mr);
+        }
     }
 
     for (const MeasureResult &mr : results) {
@@ -184,6 +237,74 @@ QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *n
             for (int i = 0; i + 1 < mr.extraValues.size(); i += 2) {
                 s.points.append(QPointF(mr.extraValues[i], mr.extraValues[i + 1]));
             }
+        } else if (mr.type == QLatin1String("caliperPair")) {
+            // 卡尺边对：extraValues=[col1,row1,col2,row2,width,...]，每对画一条连线 + 宽度文字
+            if (!showLayer(node, "showCaliperPair"))
+                continue;
+            double lastWidth = 0.0;
+            QPointF lastMid;
+            for (int i = 0; i + 4 < mr.extraValues.size(); i += 5) {
+                OverlayShape link;
+                link.type = OverlayShape::Type::Line;
+                link.p1 = QPointF(mr.extraValues[i], mr.extraValues[i + 1]);
+                link.p2 = QPointF(mr.extraValues[i + 2], mr.extraValues[i + 3]);
+                link.color = QColor(0, 255, 0);
+                overlay.append(link);
+                lastWidth = mr.extraValues[i + 4];
+                lastMid = QPointF((link.p1.x() + link.p2.x()) * 0.5,
+                                  (link.p1.y() + link.p2.y()) * 0.5);
+            }
+            s.type = OverlayShape::Type::Text;
+            s.p1 = lastMid;
+            s.text = QStringLiteral("边对宽=%1").arg(lastWidth, 0, 'f', 2);
+        } else if (mr.type == QLatin1String("rect")) {
+            // Blob 检测框：extraValues=[x,y,w,h]（图像坐标左上角 + 宽高），point1=质心
+            if (!showLayer(node, "showBlobBox"))
+                continue;
+            if (mr.extraValues.size() >= 4 && mr.extraValues[2] > 0 && mr.extraValues[3] > 0) {
+                s.type = OverlayShape::Type::RotatedRect;
+                s.p1 = QPointF(mr.extraValues[0] + mr.extraValues[2] * 0.5,
+                               mr.extraValues[1] + mr.extraValues[3] * 0.5);
+                s.width = mr.extraValues[2];
+                s.height = mr.extraValues[3];
+                s.angleDeg = 0.0;
+            } else {
+                s.type = OverlayShape::Type::Point;
+                s.p1 = mr.point1;
+            }
+        } else if (mr.type == QLatin1String("angle")) {
+            // 角度测量：extraValues=[c1a,r1a,c1b,r1b,c2a,r2a,c2b,r2b,(col,row)交点]
+            if (!showLayer(node, "showAngleLines"))
+                continue;
+            if (mr.extraValues.size() >= 8) {
+                OverlayShape l1;
+                l1.type = OverlayShape::Type::Line;
+                l1.p1 = QPointF(mr.extraValues[0], mr.extraValues[1]);
+                l1.p2 = QPointF(mr.extraValues[2], mr.extraValues[3]);
+                l1.color = QColor(0, 255, 0);
+                overlay.append(l1);
+                OverlayShape l2;
+                l2.type = OverlayShape::Type::Line;
+                l2.p1 = QPointF(mr.extraValues[4], mr.extraValues[5]);
+                l2.p2 = QPointF(mr.extraValues[6], mr.extraValues[7]);
+                l2.color = QColor(0, 200, 255);
+                overlay.append(l2);
+                if (mr.extraValues.size() >= 10) {
+                    OverlayShape ix;
+                    ix.type = OverlayShape::Type::Point;
+                    ix.p1 = QPointF(mr.extraValues[8], mr.extraValues[9]);
+                    ix.color = QColor(255, 220, 0);
+                    overlay.append(ix);
+                }
+            }
+            s.type = OverlayShape::Type::Text;
+            s.p1 = QPointF((mr.extraValues.size() >= 8
+                                ? (mr.extraValues[0] + mr.extraValues[2]) * 0.5
+                                : mr.point1.x()),
+                           (mr.extraValues.size() >= 8
+                                ? (mr.extraValues[1] + mr.extraValues[3]) * 0.5
+                                : mr.point1.y()));
+            s.text = QStringLiteral("夹角=%1°").arg(mr.value, 0, 'f', 2);
         } else {
             s.type = OverlayShape::Type::Point;
             s.p1 = mr.point1;
@@ -301,6 +422,39 @@ void ImageDisplayController::removeScene(FlowScene *scene)
     if (!scene)
         return;
     m_selectedOutputNodes.remove(scene);
+}
+
+void ImageDisplayController::forgetNode(NodeBase *node)
+{
+    if (!node)
+        return;
+    // 显式显示源指向被删节点时必须**删键**而不是置空：resolveDisplayNode 对“键存在”
+    // 直接返回其值，置空会让该场景此后一直解析到 nullptr、选中新节点也不再显示。
+    for (auto it = m_selectedOutputNodes.begin(); it != m_selectedOutputNodes.end();) {
+        if (it.value() == node)
+            it = m_selectedOutputNodes.erase(it);
+        else
+            ++it;
+    }
+
+    const bool wasPicking = (m_roiPickNode == node);
+    if (wasPicking)
+        m_roiPickNode = nullptr;
+    if (m_geometryRoiNode == node)
+        m_geometryRoiNode = nullptr;
+    if (m_searchRegionNode == node)
+        m_searchRegionNode = nullptr;
+
+    if (!m_imageView)
+        return;
+    if (wasPicking)
+        m_imageView->setRoiEditable(false);
+    // 当前画布上的 ROI 正属于被删节点：收起句柄与模板特征点，避免继续对着悬垂数据编辑
+    if (!m_geometryRoiNode && !m_searchRegionNode) {
+        m_imageView->setRoiHandleEditEnabled(false);
+        m_imageView->setFeaturePoints({});
+        m_imageView->clearRoi();
+    }
 }
 
 bool ImageDisplayController::showNodeGeometry(NodeBase *node, bool preferSearchRegion)

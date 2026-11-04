@@ -1,5 +1,7 @@
 // 模块编辑窗「自动重算」挂钩验证：
 //   参数控件变更 → 去抖（400ms）→ autoRecomputeRequested；连续微调只触发一次；关掉开关后不再触发。
+// P1-10（对标 VM 确定/取消语义）：自动预览默认**关闭**——改动只暂存，点「确定」才提交；
+//   本用例显式勾选后才验证去抖链路。
 // 说明：不 show() 窗口，因此可在无桌面的 CI（自托管 Windows runner）上稳定运行。
 #include <QtTest>
 #include <QScrollArea>
@@ -58,24 +60,33 @@ void ModuleEditorTest::testParamEditTriggersDebouncedRecompute()
     spin->setRange(0, 1000);
     dlg.refreshParamHooks();            // 面板内容变化后重新挂钩
 
-    // 连续微调三次 → 去抖后只请求一次
+    // P1-10：自动预览默认关闭 ⇒ 改参数不应发起重算（改动只暂存，等「确定」提交）
     spin->setValue(1);
     spin->setValue(2);
+    QTest::qWait(700);
+    QCOMPARE(autoRequests, 0);
+
+    auto *toggle = dlg.findChild<QCheckBox *>(QStringLiteral("autoRecomputeCheck"));
+    QVERIFY2(toggle != nullptr, "未找到「自动预览」开关");
+    QVERIFY2(!toggle->isChecked(), "自动预览默认应为关闭（P1-10 确定/取消语义）");
+    toggle->setChecked(true);           // 显式打开：之后才走「改参数即重算」链路
+
+    // 连续微调三次 → 去抖后只请求一次
     spin->setValue(3);
+    spin->setValue(4);
+    spin->setValue(5);
     QCOMPARE(autoRequests, 0);          // 去抖期内不应立即请求
     QTest::qWait(700);
     QCOMPARE(autoRequests, 1);
 
     // 再次变更仍能触发（挂钩未失效）
-    spin->setValue(4);
+    spin->setValue(6);
     QTest::qWait(700);
     QCOMPARE(autoRequests, 2);
 
     // 关掉「自动重算」后，再改也不请求
-    auto *toggle = dlg.findChild<QCheckBox *>();
-    QVERIFY2(toggle != nullptr, "未找到「自动重算」开关");
     toggle->setChecked(false);
-    spin->setValue(5);
+    spin->setValue(7);
     QTest::qWait(700);
     QCOMPARE(autoRequests, 2);
 }

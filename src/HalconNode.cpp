@@ -241,6 +241,20 @@ void HalconNode::setParamDirect(const QString &name, const QVariant &value)
     m_params.insert(name, value);
 }
 
+int HalconNode::restoreDefaultParams()
+{
+    int restored = 0;
+    for (const ParamSpec &spec : m_paramSpecs) {
+        if (!spec.defaultValue.isValid())
+            continue;
+        // 直接写参数表：恢复默认属于"编辑中"的动作，不应立刻触发预览/重算；
+        // 提交语义由模块编辑窗的「确定」统一负责。
+        m_params.insert(spec.name, spec.defaultValue);
+        ++restored;
+    }
+    return restored;
+}
+
 void HalconNode::setAutoPreviewEnabled(bool enabled)
 {
     m_autoPreviewEnabled = enabled;
@@ -677,8 +691,12 @@ void HalconNode::publishAggregatedOutputs()
         // 主结果：保留原类型/原值 —— 老的 getData()/getType() 读取者行为不变
         merged->setData(primary->getData());
         merged->setType(primary->getType());
-        if (primary->getType() == DataObject::DataType::Measure)
-            merged->attachMeasureResult(primary->getMeasureResult());
+        // 主结果是 Measure 时可携带多路结果：全部并入（只搬第一路会丢剩余结果）。
+        // 非 Measure 主结果维持原语义（getData/type 不被附加结果改写）。
+        if (primary->getType() == DataObject::DataType::Measure) {
+            for (const MeasureResult &r : primary->measureResults())
+                merged->attachMeasureResult(r);
+        }
         // 透传节点（延时等）带进来的具名子结果要原样保留
         for (const auto &att : primary->attachedResults())
             merged->attachResult(att.first, att.second);
@@ -696,8 +714,11 @@ void HalconNode::publishAggregatedOutputs()
         const QSharedPointer<DataObject> &obj = e.second;
         if (!obj)
             continue;
-        if (obj->hasMeasureResult())
-            merged->attachMeasureResult(obj->getMeasureResult());
+        if (obj->hasMeasureResult()) {
+            // 多路结果（如 Blob 的每个检测框）逐条并入：叠加层/结果表要全部可读
+            for (const MeasureResult &r : obj->measureResults())
+                merged->attachMeasureResult(r);
+        }
         const int logical = e.first;
         const QString name = (logical > 0 && logical - 1 < m_logicalOutputs.size())
                                  ? m_logicalOutputs.at(logical - 1).first

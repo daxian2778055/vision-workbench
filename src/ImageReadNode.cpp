@@ -3,6 +3,7 @@
 #include "OpencvUtil.h"
 #include <opencv2/imgproc.hpp>
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QVariant>
 #include <QDir>
 #include <QFileInfo>
@@ -288,11 +289,49 @@ void ImageReadNode::selectMultipleFiles()
     }
 }
 
+bool ImageReadNode::addLocalImageFiles(const QStringList &files)
+{
+    QStringList incoming;
+    for (const QString &path : files) {
+        const QFileInfo info(path);
+        if (info.exists() && info.isFile())
+            incoming << info.absoluteFilePath();
+    }
+    if (incoming.isEmpty())
+        return false;
+
+    // 目录模式下列表存的是文件名，混入绝对路径会读错；先转成文件列表再追加
+    if (m_isDirectory) {
+        m_imageFiles.clear();
+        m_isDirectory = false;
+    }
+    for (const QString &path : incoming) {
+        if (!m_imageFiles.contains(path))
+            m_imageFiles << path;
+    }
+
+    if (m_imageFiles.size() == 1) {
+        // 必须先取副本再写 mode：setParam(mode=SingleImage) 会触发 updateImageFiles()，
+        // 它会清空 m_imageFiles 并按旧 filePath 重建——之后 m_imageFiles.first() 就是空表取首元素
+        //（Qt6 release 下越界读 / 随即崩溃，现场表现为“添加图片后直接闪退”）。
+        const QString onlyFile = m_imageFiles.first();
+        setParam(QStringLiteral("mode"), static_cast<int>(Mode::SingleImage));
+        setParam(QStringLiteral("filePath"), onlyFile);
+    } else {
+        setParam(QStringLiteral("mode"), static_cast<int>(Mode::MultiImage));
+        m_currentImageIndex = 0;
+        m_displayImageIndex = 0;
+        m_thumbnailNeedsUpdate = true;
+        notifyThumbnailsIfChanged();
+    }
+    return true;
+}
+
 void ImageReadNode::updateImageFiles()
 {
     m_imageFiles.clear();
     m_currentImageIndex = -1; // 初始化为 -1，表示没有图像被选中
-    
+
     // 参数唯一来源：filePath 从参数表读（本函数由 setParam 触发，也可能在界面线程被直接调用）
     const QString filePath = ProjectPaths::resolveExecutionPath(getParam(QStringLiteral("filePath")).toString());
     QDir dir(filePath);
@@ -359,6 +398,14 @@ QJsonObject ImageReadNode::toJson() const
     json["mono8Mode"] = QJsonValue::fromVariant(getParam(QStringLiteral("mono8Mode")));
     json["autoSwitch"] = QJsonValue::fromVariant(getParam(QStringLiteral("autoSwitch")));
     json["mode"] = QJsonValue::fromVariant(getParam(QStringLiteral("mode")));
+    // 多文件模式（非目录）的清单不属于 filePath 派生缓存，必须单独落盘，否则重开方案就丢图
+    if (!m_isDirectory
+        && static_cast<Mode>(getParam(QStringLiteral("mode")).toInt()) == Mode::MultiImage) {
+        QJsonArray imageFiles;
+        for (const QString &path : m_imageFiles)
+            imageFiles.append(path);
+        json["imageFiles"] = imageFiles;
+    }
     json["imageWidth"] = m_imageWidth;
     json["imageHeight"] = m_imageHeight;
     json["pixelFormat"] = m_pixelFormat;
@@ -382,6 +429,24 @@ void ImageReadNode::fromJson(const QJsonObject &json)
     }
     if (json.contains("mode")) {
         setParam(QStringLiteral("mode"), json["mode"].toInt());
+    }
+    // 恢复多文件清单（放在 filePath/mode 之后：前两者可能重建目录缓存并清空列表）
+    if (json.contains("imageFiles") && json["imageFiles"].isArray()) {
+        const QJsonArray imageFiles = json["imageFiles"].toArray();
+        if (!imageFiles.isEmpty()) {
+            m_imageFiles.clear();
+            for (const QJsonValue &value : imageFiles) {
+                const QString path = value.toString();
+                if (!path.isEmpty())
+                    m_imageFiles << path;
+            }
+            m_isDirectory = false;
+            if (m_currentImageIndex < 0 || m_currentImageIndex >= m_imageFiles.size())
+                m_currentImageIndex = 0;
+            m_displayImageIndex = m_currentImageIndex;
+            m_thumbnailNeedsUpdate = true;
+            notifyThumbnailsIfChanged();
+        }
     }
     if (json.contains("imageWidth")) {
         m_imageWidth = json["imageWidth"].toInt();

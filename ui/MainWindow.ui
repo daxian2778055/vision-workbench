@@ -31,7 +31,7 @@
      <item>
       <widget class="QTreeWidget" name="toolLibrary">
        <property name="headerLabel">
-        <string>Tool Library</string>
+        <string>模块</string>
        </property>
       </widget>
      </item>
@@ -207,19 +207,11 @@
     <addaction name="separator"/>
     <addaction name="actionStopOnFailure"/>
    </widget>
-   <widget class="QMenu" name="menuLanguage">
-    <property name="title">
-     <string>语言</string>
-    </property>
-    <addaction name="actionChinese"/>
-    <addaction name="actionEnglish"/>
-   </widget>
    <addaction name="menuFile"/>
    <addaction name="menuEdit"/>
    <addaction name="menuView"/>
    <addaction name="menuCommunication"/>
    <addaction name="menuSystem"/>
-   <addaction name="menuLanguage"/>
   </widget>
 
   <!-- ====== Status Bar ====== -->
@@ -228,32 +220,32 @@
   <!-- ====== Actions ====== -->
   <action name="actionNew">
    <property name="text">
-    <string>New</string>
+    <string>新建方案</string>
    </property>
   </action>
   <action name="actionSave">
    <property name="text">
-    <string>Save</string>
+    <string>保存方案</string>
    </property>
   </action>
   <action name="actionLoad">
    <property name="text">
-    <string>Load</string>
+    <string>打开方案</string>
    </property>
   </action>
   <action name="actionExit">
    <property name="text">
-    <string>Exit</string>
+    <string>退出</string>
    </property>
   </action>
   <action name="actionAddFlow">
    <property name="text">
-    <string>Add Flow</string>
+    <string>添加流程</string>
    </property>
   </action>
   <action name="actionDeleteFlow">
    <property name="text">
-    <string>Delete Flow</string>
+    <string>删除流程</string>
    </property>
   </action>
   <action name="actionSaveScheme">
@@ -264,22 +256,6 @@
   <action name="actionOpenScheme">
    <property name="text">
     <string>打开方案</string>
-   </property>
-  </action>
-  <action name="actionChinese">
-   <property name="text">
-    <string>Chinese</string>
-   </property>
-   <property name="checkable">
-    <bool>true</bool>
-   </property>
-  </action>
-  <action name="actionEnglish">
-   <property name="text">
-    <string>English</string>
-   </property>
-   <property name="checkable">
-    <bool>true</bool>
    </property>
   </action>
   <action name="actionStartExecution">
@@ -422,7 +398,7 @@
   </action>
   <action name="actionParameterSearch">
    <property name="text">
-    <string>参数查找</string>
+    <string>参数查找工具</string>
    </property>
   </action>
   <action name="actionCodeExport">

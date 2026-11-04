@@ -16,12 +16,19 @@
 #include <QColor>
 #include <QMessageBox>
 #include <QTime>
+#include <QDateTime>
+#include <QTabWidget>
+#include <QTableWidget>
+#include <QTextBrowser>
+#include <QSignalBlocker>
 
 namespace {
 constexpr int kColName = 0;
 constexpr int kColValue = 1;
 constexpr int kColStatus = 2;
 constexpr int kColElapsed = 3;
+constexpr int kColSeq = 4;
+constexpr int kColTime = 5;
 }
 
 ResultTablePanel::ResultTablePanel(QWidget *parent)
@@ -48,12 +55,16 @@ ResultTablePanel::ResultTablePanel(QWidget *parent)
     bar->addStretch();
     m_summary = new QLabel(QStringLiteral("暂无结果"), this);
     bar->addWidget(m_summary);
-    root->addLayout(bar);
+    // 顶部操作栏稍后放入「当前结果」页（P1-2 三页签）
+
+    // 顶部操作栏稍后放入「当前结果」页（P1-2 三页签）
 
     m_tree = new QTreeWidget(this);
-    m_tree->setColumnCount(4);
+    // P2-13：结果表补「执行序号 / 执行时间」两列（VM 结果显示区域口径）
+    m_tree->setColumnCount(6);
     m_tree->setHeaderLabels({QStringLiteral("模块 / 输出项"), QStringLiteral("值"),
-                             QStringLiteral("状态"), QStringLiteral("耗时(ms)")});
+                             QStringLiteral("状态"), QStringLiteral("耗时(ms)"),
+                             QStringLiteral("执行序号"), QStringLiteral("执行时间")});
     m_tree->setAlternatingRowColors(true);
     m_tree->setUniformRowHeights(true);
     m_tree->setRootIsDecorated(true);
@@ -61,7 +72,51 @@ ResultTablePanel::ResultTablePanel(QWidget *parent)
     // 后续按当前排序键重排会变成空操作（新模块不会归位）。
     m_tree->setSortingEnabled(true);
     m_tree->sortByColumn(kColName, Qt::AscendingOrder);
-    root->addWidget(m_tree, 1);
+    // ── P1-2：VM 结果区三页签「当前结果 / 历史结果 / 帮助」──
+    auto *currentPage = new QWidget(this);
+    auto *currentLay = new QVBoxLayout(currentPage);
+    currentLay->setContentsMargins(0, 0, 0, 0);
+    currentLay->addLayout(bar);
+    currentLay->addWidget(m_tree, 1);
+
+    auto *historyPage = new QWidget(this);
+    auto *historyLay = new QVBoxLayout(historyPage);
+    historyLay->setContentsMargins(0, 0, 0, 0);
+    m_history = new QTableWidget(0, 6, historyPage);
+    m_history->setHorizontalHeaderLabels(
+        {QStringLiteral("轮次"), QStringLiteral("时间"), QStringLiteral("模块"),
+         QStringLiteral("状态"), QStringLiteral("耗时(ms)"), QStringLiteral("输出摘要")});
+    m_history->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_history->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_history->setAlternatingRowColors(true);
+    m_history->horizontalHeader()->setStretchLastSection(true);
+    m_history->verticalHeader()->setVisible(false);
+    historyLay->addWidget(m_history, 1);
+
+    auto *helpPage = new QWidget(this);
+    auto *helpLay = new QVBoxLayout(helpPage);
+    helpLay->setContentsMargins(0, 0, 0, 0);
+    auto *helpText = new QTextBrowser(helpPage);
+    m_helpText = helpText;
+    helpText->setOpenExternalLinks(false);
+    helpText->setHtml(QStringLiteral(
+        "<p><b>结果区说明（对标 VisionMaster 4.4）</b></p>"
+        "<p><b>当前结果</b>：显示本轮各模块的输出项、状态、耗时、执行序号与执行时间；"
+        "在画布上选中模块时会自动高亮对应行。执行新的一轮会清空并重新汇总。</p>"
+        "<p><b>历史结果</b>：按轮次保留每次执行的模块状态与关键输出（最多 500 条），"
+        "用于对比不同参数/不同来料下的结果变化。</p>"
+        "<p><b>状态含义</b>：<span style='color:#1B7F37;'>成功</span> = 算子正常返回；"
+        "<span style='color:#C02B1D;'>失败</span> = 算子判红或异常；"
+        "<span style='color:#808080;'>跳过</span> = 分支未激活或由循环调度，本轮未执行。</p>"
+        "<p><b>导出</b>：CSV 为扁平表（模块/输出项/值/状态/耗时）；"
+        "运行明细报告额外带流程名与生成时间，便于现场留档。</p>"));
+    helpLay->addWidget(helpText, 1);
+
+    m_tabs = new QTabWidget(this);
+    m_tabs->addTab(currentPage, QStringLiteral("当前结果"));
+    m_tabs->addTab(historyPage, QStringLiteral("历史结果"));
+    m_tabs->addTab(helpPage, QStringLiteral("帮助信息"));
+    root->addWidget(m_tabs, 1);
 
     connect(clearBtn, &QPushButton::clicked, this, &ResultTablePanel::clearResults);
     connect(m_filter, &QLineEdit::textChanged, this, [this](const QString &t) { setFilterText(t); });
@@ -122,8 +177,9 @@ QString ResultTablePanel::toReportText(const QString &flowName) const
 
     for (int i = 0; i < total; ++i) {
         QTreeWidgetItem *row = m_tree->topLevelItem(i);
-        lines << QStringLiteral("■ %1（%2，%3 ms）")
-                     .arg(row->text(kColName), row->text(kColStatus), row->text(kColElapsed));
+        lines << QStringLiteral("■ %1（%2，%3 ms，第 %4 次 @ %5）")
+                     .arg(row->text(kColName), row->text(kColStatus), row->text(kColElapsed),
+                          row->text(kColSeq), row->text(kColTime));
         if (row->childCount() == 0) {
             lines << QStringLiteral("    - （无输出项）");
             continue;
@@ -139,6 +195,12 @@ QString ResultTablePanel::toReportText(const QString &flowName) const
     return lines.join(QLatin1Char('\n'));
 }
 
+void ResultTablePanel::setHelpContent(const QString &html)
+{
+    if (m_helpText)
+        m_helpText->setHtml(html);
+}
+
 void ResultTablePanel::setModuleResult(int moduleId, const QString &moduleName, bool success,
                                        qint64 elapsedMs, const QVariantMap &vars)
 {
@@ -152,6 +214,9 @@ void ResultTablePanel::setModuleResult(int moduleId, const QString &moduleName, 
     row->setText(kColName, moduleName.isEmpty() ? QStringLiteral("模块 %1").arg(moduleId) : moduleName);
     row->setText(kColStatus, success ? QStringLiteral("成功") : QStringLiteral("失败"));
     row->setText(kColElapsed, QString::number(elapsedMs));
+    // P2-13：执行序号（轮次）与执行时间（本模块结果落地时刻）
+    row->setText(kColSeq, QString::number(m_runSequence));
+    row->setText(kColTime, QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz")));
     row->setForeground(kColStatus, success ? QBrush(QColor(0x1B, 0x7F, 0x37))
                                            : QBrush(QColor(0xC0, 0x2B, 0x1D)));
     row->setText(kColValue, QString());
@@ -189,6 +254,17 @@ void ResultTablePanel::setModuleResult(int moduleId, const QString &moduleName, 
         // 首次出现时把列宽铺开，避免值/状态列被挤住
         m_tree->resizeColumnToContents(kColName);
     }
+    // P1-2：当前结果同步写入历史页（同轮同模块覆盖，避免重复）
+    QStringList summary;
+    for (int c = 0; c < row->childCount(); ++c) {
+        QTreeWidgetItem *child = row->child(c);
+        const QString valueText = child->text(kColValue);
+        summary << (valueText.isEmpty() ? child->text(kColName)
+                                        : QStringLiteral("%1=%2").arg(child->text(kColName), valueText));
+    }
+    appendHistoryEntry(moduleId, row->text(kColName),
+                       success ? QStringLiteral("成功") : QStringLiteral("失败"),
+                       elapsedMs, summary);
     if (!m_filterText.isEmpty())
         applyFilter();   // 筛选生效期间新增的结果也要遵守筛选
     // 排序：Qt 只在「插入时」排序，而行文本是插入后才填的，所以这里按当前排序键显式重排；
@@ -211,6 +287,8 @@ void ResultTablePanel::setModuleSkipped(int moduleId, const QString &moduleName)
     row->setText(kColStatus, QStringLiteral("跳过"));
     row->setForeground(kColStatus, QBrush(QColor(0x80, 0x80, 0x80)));   // 灰色：未执行 ≠ 失败
     row->setText(kColElapsed, QStringLiteral("-"));
+    row->setText(kColSeq, QString::number(m_runSequence));
+    row->setText(kColTime, QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz")));
     row->setText(kColValue, QString());
 
     const QList<QTreeWidgetItem *> old = row->takeChildren();
@@ -218,6 +296,9 @@ void ResultTablePanel::setModuleSkipped(int moduleId, const QString &moduleName)
     auto *child = new QTreeWidgetItem(row);
     child->setText(kColName, QStringLiteral("(本轮未执行：分支未激活或由循环调度)"));
     row->setExpanded(true);
+    // P1-2：跳过也要进历史（现场排查"哪个算子没跑"需要跨轮对照）
+    appendHistoryEntry(moduleId, row->text(kColName), QStringLiteral("跳过"), -1,
+                       {child->text(kColName)});
 
     if (isNew)
         m_tree->resizeColumnToContents(kColName);
@@ -280,6 +361,71 @@ int ResultTablePanel::moduleCount() const
     return m_tree ? m_tree->topLevelItemCount() : 0;
 }
 
+void ResultTablePanel::beginRunRound()
+{
+    ++m_runSequence;
+    clearResults();
+}
+
+void ResultTablePanel::setCurrentModule(int moduleId)
+{
+    m_currentModuleId = moduleId;
+    if (!m_tree)
+        return;
+    m_tree->clearSelection();
+    m_tree->setCurrentItem(nullptr);
+    if (moduleId < 0)
+        return;
+    if (QTreeWidgetItem *row = m_rows.value(moduleId, nullptr)) {
+        if (row->isHidden())
+            return;   // 被筛选隐藏时不强行选中
+        row->setSelected(true);
+        m_tree->setCurrentItem(row);
+        m_tree->scrollToItem(row, QAbstractItemView::PositionAtCenter);
+    }
+}
+
+void ResultTablePanel::appendHistoryEntry(int moduleId, const QString &moduleName,
+                                          const QString &status, qint64 elapsedMs,
+                                          const QStringList &values)
+{
+    Q_UNUSED(moduleId)
+    if (!m_history)
+        return;
+
+    // 同一轮内同一模块可能先"跳过"后被更新/重试：先删掉该轮同名旧行，保证一条
+    const QString roundText = QString::number(m_runSequence);
+    for (int r = m_history->rowCount() - 1; r >= 0; --r) {
+        QTableWidgetItem *roundItem = m_history->item(r, 0);
+        QTableWidgetItem *moduleItem = m_history->item(r, 2);
+        if (roundItem && moduleItem && roundItem->text() == roundText
+            && moduleItem->text() == moduleName) {
+            m_history->removeRow(r);
+        }
+    }
+
+    m_history->insertRow(0);
+    m_history->setItem(0, 0, new QTableWidgetItem(roundText));
+    m_history->setItem(0, 1, new QTableWidgetItem(
+        QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz"))));
+    m_history->setItem(0, 2, new QTableWidgetItem(moduleName));
+    m_history->setItem(0, 3, new QTableWidgetItem(status));
+    m_history->setItem(0, 4, new QTableWidgetItem(
+        elapsedMs < 0 ? QStringLiteral("-") : QString::number(elapsedMs)));
+    m_history->setItem(0, 5, new QTableWidgetItem(values.join(QStringLiteral("; "))));
+
+    if (status == QStringLiteral("成功"))
+        m_history->item(0, 3)->setForeground(QBrush(QColor(0x1B, 0x7F, 0x37)));
+    else if (status == QStringLiteral("失败"))
+        m_history->item(0, 3)->setForeground(QBrush(QColor(0xC0, 0x2B, 0x1D)));
+    else
+        m_history->item(0, 3)->setForeground(QBrush(QColor(0x80, 0x80, 0x80)));
+
+    // 历史上限：500 条，超出丢弃最旧（避免长时间运行内存无界增长）
+    while (m_history->rowCount() > 500)
+        m_history->removeRow(m_history->rowCount() - 1);
+}
+
 void ResultTablePanel::updateSummary()
 {
     if (!m_summary)
@@ -325,22 +471,27 @@ bool ResultTablePanel::exportCsv(const QString &path, QString *errorOut) const
     out << QChar(0xFEFF);     // BOM：Excel 直接打开不乱码
     out << esc(QStringLiteral("模块")) << ',' << esc(QStringLiteral("输出项")) << ','
         << esc(QStringLiteral("值")) << ',' << esc(QStringLiteral("状态")) << ','
-        << esc(QStringLiteral("耗时(ms)")) << '\n';
+        << esc(QStringLiteral("耗时(ms)")) << ',' << esc(QStringLiteral("执行序号")) << ','
+        << esc(QStringLiteral("执行时间")) << '\n';
 
     for (int i = 0; i < m_tree->topLevelItemCount(); ++i) {
         QTreeWidgetItem *row = m_tree->topLevelItem(i);
         const QString module = row->text(kColName);
         const QString status = row->text(kColStatus);
         const QString elapsed = row->text(kColElapsed);
+        const QString seq = row->text(kColSeq);
+        const QString time = row->text(kColTime);
         if (row->childCount() == 0) {
             out << esc(module) << ',' << esc(QString()) << ',' << esc(QString()) << ','
-                << esc(status) << ',' << esc(elapsed) << '\n';
+                << esc(status) << ',' << esc(elapsed) << ',' << esc(seq) << ','
+                << esc(time) << '\n';
             continue;
         }
         for (int c = 0; c < row->childCount(); ++c) {
             QTreeWidgetItem *child = row->child(c);
             out << esc(module) << ',' << esc(child->text(kColName)) << ','
-                << esc(child->text(kColValue)) << ',' << esc(status) << ',' << esc(elapsed) << '\n';
+                << esc(child->text(kColValue)) << ',' << esc(status) << ',' << esc(elapsed)
+                << ',' << esc(seq) << ',' << esc(time) << '\n';
         }
     }
 

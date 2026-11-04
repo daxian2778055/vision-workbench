@@ -50,10 +50,18 @@ void DeepOcrNode::init()
                       QStringLiteral("推理设备（无 GPU 环境用 cpu）")),
         makeDoubleParam(QStringLiteral("minConfidence"), 0.3, 0.0, 1.0,
                         QStringLiteral("最低置信度（低于此值的词丢弃）")),
+        makeIntParam(QStringLiteral("minWordLength"), 0, 0, 50,
+                     QStringLiteral("最短词长度（0=不限）")),
+        makeIntParam(QStringLiteral("maxWords"), 0, 0, 10000,
+                     QStringLiteral("最多输出词数（0=不限）")),
+        makeStringParam(QStringLiteral("joinSeparator"), QStringLiteral(" "),
+                        QStringLiteral("词间分隔符")),
     });
     m_params[QStringLiteral("ocrText")] = QString();
     m_params[QStringLiteral("ocrCount")] = 0;
     m_params[QStringLiteral("ocrConfidence")] = 0.0;
+    m_params[QStringLiteral("ocrAvgConfidence")] = 0.0;
+    m_params[QStringLiteral("ocrRawWordCount")] = 0;
     m_params[QStringLiteral("lastError")] = QString();
 }
 
@@ -62,6 +70,8 @@ void DeepOcrNode::run(bool /*autoSwitch*/)
     m_params[QStringLiteral("ocrText")] = QString();
     m_params[QStringLiteral("ocrCount")] = 0;
     m_params[QStringLiteral("ocrConfidence")] = 0.0;
+    m_params[QStringLiteral("ocrAvgConfidence")] = 0.0;
+    m_params[QStringLiteral("ocrRawWordCount")] = 0;
     m_params[QStringLiteral("lastError")] = QString();
     try {
         HImage input(m_inputImage);
@@ -78,6 +88,10 @@ void DeepOcrNode::run(bool /*autoSwitch*/)
             (runtimeIdx == 1) ? QStringLiteral("auto") : QStringLiteral("cpu");
         const double minConf =
             m_params.value(QStringLiteral("minConfidence"), 0.3).toDouble();
+        const int minWordLength = m_params.value(QStringLiteral("minWordLength"), 0).toInt();
+        const int maxWords = m_params.value(QStringLiteral("maxWords"), 0).toInt();
+        const QString separator =
+            m_params.value(QStringLiteral("joinSeparator"), QStringLiteral(" ")).toString();
 
         HTuple ocrH;
         try {
@@ -117,6 +131,7 @@ void DeepOcrNode::run(bool /*autoSwitch*/)
         QStringList words;
         double confSum = 0.0;
         int confN = 0;
+        int rawWordCount = 0;   // 过滤前的词数（结果宽度参考）
         bool haveResult = false;
         try {
             if (results.Length() > 0) {
@@ -131,8 +146,11 @@ void DeepOcrNode::run(bool /*autoSwitch*/)
                     for (Hlong i = 0; i < ws.Length(); ++i) {
                         QString w = QString::fromStdString(ws[i].S().Text());
                         if (w.isEmpty()) continue;
+                        ++rawWordCount;
                         const double c = (cs.Length() > i) ? cs[i].D() : 0.0;
                         if (c < minConf) continue;
+                        if (minWordLength > 0 && w.size() < minWordLength) continue;
+                        if (maxWords > 0 && words.size() >= maxWords) continue;
                         words << w;
                         confSum += c;
                         ++confN;
@@ -150,8 +168,11 @@ void DeepOcrNode::run(bool /*autoSwitch*/)
             return;
         }
 
-        m_params[QStringLiteral("ocrText")] = words.join(QStringLiteral(" "));
+        m_params[QStringLiteral("ocrText")] = words.join(separator);
         m_params[QStringLiteral("ocrCount")] = words.size();
+        m_params[QStringLiteral("ocrAvgConfidence")] =
+            confN > 0 ? confSum / static_cast<double>(confN) : 0.0;
+        m_params[QStringLiteral("ocrRawWordCount")] = rawWordCount;
         m_params["moduleStatus"] = true;
         m_outputImage = m_inputImage;
 
@@ -165,7 +186,9 @@ void DeepOcrNode::run(bool /*autoSwitch*/)
         res.valueName = QStringLiteral("词数");
         res.valid = true;
         res.value = words.size();
-        res.extraValues = QVector<double>({m_params[QStringLiteral("ocrConfidence")].toDouble()});
+        res.extraValues = QVector<double>(
+            {m_params[QStringLiteral("ocrConfidence")].toDouble(),
+             m_params[QStringLiteral("ocrAvgConfidence")].toDouble()});
         auto resObj = QSharedPointer<DataObject>::create();
         resObj->setMeasureResult(res);
         setOutputData(2, resObj);

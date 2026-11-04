@@ -2,6 +2,7 @@
 #include "DataObject.h"
 #include "OpencvUtil.h"
 #include "ProjectPaths.h"   // 179 行：拾取与执行两侧的方案目录锚定
+#include "LargeFileImageStore.h"
 #include <opencv2/imgcodecs.hpp>
 #include <QVBoxLayout>
 #include <QLabel>
@@ -36,6 +37,23 @@ void WriteFileNode::run(bool /*autoSwitch*/)
         }
         const QString path = ProjectPaths::resolveExecutionPath(
             m_params.value(QStringLiteral("filePath")).toString());
+
+        // 采集策略·大文件存图（VM 4.4 手册 11.5）：开启后忽略本模块路径，统一攒批写 .dat
+        if (LargeFileImageStore *store = LargeFileImageStore::instance(); store->enabled()) {
+            QString batchFile;
+            QString why;
+            if (!store->append(src, fullName(), &batchFile, &why)) {
+                m_params[QStringLiteral("lastError")] =
+                    QStringLiteral("大文件存图失败：%1").arg(why);
+                m_outputImage.Clear();
+                return;
+            }
+            m_outputImage = m_inputImage;
+            m_params[QStringLiteral("lastSavedPath")] =
+                batchFile.isEmpty() ? QStringLiteral("（待写入批次）") : batchFile;
+            return;
+        }
+
         if (!cv::imwrite(path.toLocal8Bit().constData(), src)) {
             m_outputImage.Clear();
             return;

@@ -386,12 +386,12 @@ int main(int argc, char *argv[])
         auto *purgeTimer = new QTimer(&a);
         purgeTimer->setInterval(kDatabasePurgeIntervalMs);
         QObject::connect(purgeTimer, &QTimer::timeout, &a, []() {
-            QtConcurrent::run([]() {
+            (void)QtConcurrent::run([]() {
                 AppDatabase::instance()->purgeOldRecords(kDatabaseRetainDays);
             });
         });
         QTimer::singleShot(kDatabasePurgeFirstDelayMs, &a, [purgeTimer]() {
-            QtConcurrent::run([]() {
+            (void)QtConcurrent::run([]() {
                 AppDatabase::instance()->purgeOldRecords(kDatabaseRetainDays);
             });
             purgeTimer->start();   // 首次完成后开始每日周期
@@ -413,6 +413,8 @@ int main(int argc, char *argv[])
         ActivateRequestFilter activateFilter(&w);
         a.installNativeEventFilter(&activateFilter);
         w.show();
+        // P2-1：欢迎页在主界面首帧之后弹出（配置了「启动时不再显示」则跳过）
+        QTimer::singleShot(0, &w, &MainWindow::maybeShowWelcomeOnStartup);
 
         int result = a.exec();
         a.removeNativeEventFilter(&activateFilter);

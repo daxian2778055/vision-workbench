@@ -170,6 +170,7 @@ src/ModelCache.cpp
     src/NodeFactory.cpp
     src/NodeRegistry.cpp
     src/MainWindow.cpp
+    src/WelcomeDialog.cpp
     src/NodeBase.cpp
     src/HalconNode.cpp
     src/NodeSelfTest.cpp
@@ -224,6 +225,8 @@ src/ModelCache.cpp
     src/LoopNode.cpp
     src/DisplaySinkNode.cpp
     src/WriteFileNode.cpp
+    src/LargeFileImageStore.cpp
+    src/LargeFileStoreDialog.cpp
     src/TemplateMatchNode.cpp
     src/CalibrationNode.cpp
     src/OcrNode.cpp
@@ -246,6 +249,7 @@ src/ModelCache.cpp
     src/ColorConversionNode.cpp
     src/DataObject.cpp
     src/FlowScene.cpp
+    src/FlowCanvasView.cpp
     src/FlowSceneAliveBlock.cpp
     src/NodeTemplateStore.cpp
     src/FlowExecutor.cpp
@@ -404,6 +408,7 @@ set(HEADERS
     include/NodeFactory.h
     include/NodeRegistry.h
     include/MainWindow.h
+    include/WelcomeDialog.h
     include/NodeBase.h
     include/HalconNode.h
     include/NodeSelfTest.h
@@ -482,6 +487,8 @@ set(HEADERS
     include/RecipeDialog.h
     include/AlarmHistoryDialog.h
     include/InspectionResultDialog.h
+    include/LargeFileImageStore.h
+    include/LargeFileStoreDialog.h
     include/ScriptNode.h
     include/ScriptSecurityPolicy.h
     # \u901A\u4FE1\u7B97\u5B50
@@ -506,6 +513,7 @@ set(HEADERS
     include/ColorConversionNode.h
     include/DataObject.h
     include/FlowScene.h
+    include/FlowCanvasView.h
     include/FlowSceneAliveBlock.h
     include/NodeTemplateStore.h
     include/FlowExecutor.h
@@ -908,6 +916,16 @@ if(MSVC)
     add_executable(opencv_angle_area_test tests/opencv_angle_area_test.cpp)
     target_link_libraries(opencv_angle_area_test PRIVATE vfp_core Qt6::Test)
     vfp_add_qtest(NAME OpencvAngleAreaTest TARGET opencv_angle_area_test)
+endif()
+
+# 采集策略·大文件存图（VM 4.4 手册 11.5）：批量写盘 / 读取 / 解包
+if(MSVC)
+    add_executable(large_file_store_test tests/large_file_store_test.cpp)
+    target_link_libraries(large_file_store_test PRIVATE vfp_core Qt6::Test)
+    vfp_add_qtest(NAME LargeFileStoreTest TARGET large_file_store_test)
+    # 与 GUI 用例同一套注入（dist/VisionFlowPlatform 进 PATH），否则干净环境启动即 0xc0000135
+    set_tests_properties(LargeFileStoreTest PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${CMAKE_CURRENT_SOURCE_DIR}/dist/VisionFlowPlatform")
 endif()
 
 # ONNX 目标检测功能测试（🥈：YOLO 输出解析/NMS/坐标映射 + 序列化 + 缺模型降级）

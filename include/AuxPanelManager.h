@@ -32,6 +32,8 @@ public:
 
     /// 已创建的面板指针；未创建返回 nullptr
     ResultTablePanel *resultTablePanel() const { return m_resultTablePanel; }
+    /// 结果表停靠面板（未创建返回 nullptr）；用于选中模块时自动前置（P1-2）
+    QDockWidget *resultTableDock() const { return m_resultTableDock; }
     VariablePanel *variablePanel() const { return m_variablePanel; }
     PerformancePanel *performancePanel() const { return m_performancePanel; }
     OutputDataViewer *outputDataViewer() const { return m_outputDataViewer; }

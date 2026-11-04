@@ -67,6 +67,9 @@ public:
     virtual bool process() override;
     virtual QWidget *createParamPanel() override;
     virtual void updateParamPanel(QWidget *panel) override;
+    /// P2-8：把所有声明了默认值的参数恢复为默认值（不触发自动预览，由调用方决定何时重算）。
+    /// 返回实际恢复的参数个数。
+    int restoreDefaultParams();
     virtual void displayImage() override;
 
     HObject getInputImage() const;

@@ -11,7 +11,7 @@ const QString kRecentFilesKey = QStringLiteral("recentFiles");
 RecentFilesMenu::RecentFilesMenu(QMenu *menuParent, std::function<void(const QString &)> openCallback,
                                  const QString &settingsIniPath, QObject *parent)
     : QObject(parent)
-    , m_menu(new QMenu(QStringLiteral("最近打开"), menuParent))
+    , m_menu(new QMenu(QStringLiteral("最近打开方案"), menuParent))
     , m_openCallback(std::move(openCallback))
 {
     if (settingsIniPath.isEmpty())

@@ -7,6 +7,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QRegularExpression>
 #include <QWidget>
 
 TesseractOcrNode::TesseractOcrNode(QObject *parent) : HalconNode(parent)
@@ -33,9 +34,21 @@ void TesseractOcrNode::init()
                         QStringLiteral("语言（eng/chi_sim，逗号分隔多语言）")),
         makeStringParam(QStringLiteral("tessdataPath"), QString(),
                         QStringLiteral("语言数据目录（留空自动查找 exe 旁 tessdata）")),
+        makeEnumParam(QStringLiteral("pageSegMode"), 0,
+                      {QStringLiteral("自动"), QStringLiteral("单行"),
+                       QStringLiteral("单块"), QStringLiteral("稀疏文本"),
+                       QStringLiteral("单字")},
+                      QStringLiteral("版面模式")),
+        makeStringParam(QStringLiteral("charWhitelist"), QString(),
+                        QStringLiteral("字符白名单（如 0123456789.，留空=不限）")),
+        makeDoubleParam(QStringLiteral("minConfidence"), 0.0, 0.0, 100.0,
+                        QStringLiteral("最低平均置信度（0=不校验）")),
     });
     m_params[QStringLiteral("ocrText")] = QString();
     m_params[QStringLiteral("confidence")] = 0.0;
+    m_params[QStringLiteral("ocrTextLength")] = 0;
+    m_params[QStringLiteral("ocrLineCount")] = 0;
+    m_params[QStringLiteral("ocrWordCount")] = 0;
 }
 
 void TesseractOcrNode::run(bool /*autoSwitch*/)
@@ -100,6 +113,21 @@ void TesseractOcrNode::run(bool /*autoSwitch*/)
         m_api->SetImage(gray.data, gray.cols, gray.rows, 1, static_cast<int>(gray.step));
         m_api->SetSourceResolution(300);
 
+        // 版面模式 / 字符白名单：每次执行前下发（引擎不重建，参数变化即时生效）
+        tesseract::PageSegMode psm = tesseract::PSM_AUTO;
+        switch (m_params.value(QStringLiteral("pageSegMode"), 0).toInt()) {
+        case 1: psm = tesseract::PSM_SINGLE_LINE; break;
+        case 2: psm = tesseract::PSM_SINGLE_BLOCK; break;
+        case 3: psm = tesseract::PSM_SPARSE_TEXT; break;
+        case 4: psm = tesseract::PSM_SINGLE_CHAR; break;
+        default: psm = tesseract::PSM_AUTO; break;
+        }
+        m_api->SetPageSegMode(psm);
+        const QString whitelist =
+            m_params.value(QStringLiteral("charWhitelist"), QString()).toString().trimmed();
+        // 留空时清掉上一次的白名单（SetVariable 是粘性的，不清会沿用旧限制）
+        m_api->SetVariable("tessedit_char_whitelist", whitelist.toUtf8().constData());
+
         // 使用 RAII 方式管理 text 内存，防止异常导致内存泄漏
         char *text = m_api->GetUTF8Text();
         const float conf = m_api->MeanTextConf();
@@ -110,9 +138,34 @@ void TesseractOcrNode::run(bool /*autoSwitch*/)
         // text 会在 textGuard 析构时自动释放
 
         const QString trimmed = result.trimmed();
+        const double meanConf = static_cast<double>(conf);
+        const double minConf =
+            m_params.value(QStringLiteral("minConfidence"), 0.0).toDouble();
+
         m_params[QStringLiteral("ocrText")] = trimmed;
-        m_params[QStringLiteral("confidence")] = static_cast<double>(conf);
-        m_params["moduleStatus"] = !trimmed.isEmpty();
+        m_params[QStringLiteral("confidence")] = meanConf;
+        m_params[QStringLiteral("ocrTextLength")] = trimmed.size();
+        m_params[QStringLiteral("ocrLineCount")] =
+            trimmed.isEmpty()
+                ? 0
+                : trimmed.split(QRegularExpression(QStringLiteral("[\\r\\n]+")),
+                                Qt::SkipEmptyParts).size();
+        m_params[QStringLiteral("ocrWordCount")] =
+            trimmed.isEmpty()
+                ? 0
+                : trimmed.split(QRegularExpression(QStringLiteral("\\s+")),
+                                Qt::SkipEmptyParts).size();
+
+        // 置信度门槛：低于阈值判红（文本照样输出，原因写进 lastError）
+        if (!trimmed.isEmpty() && minConf > 0.0 && meanConf < minConf) {
+            m_params[QStringLiteral("lastError")] =
+                QStringLiteral("识别平均置信度 %1 低于阈值 %2")
+                    .arg(meanConf, 0, 'f', 1)
+                    .arg(minConf, 0, 'f', 1);
+            m_params["moduleStatus"] = false;
+        } else {
+            m_params["moduleStatus"] = !trimmed.isEmpty();
+        }
         m_outputImage = m_inputImage;
 
         auto strObj = QSharedPointer<DataObject>::create();

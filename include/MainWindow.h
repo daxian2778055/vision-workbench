@@ -10,6 +10,7 @@
 #include <QElapsedTimer>
 #include <QVector>
 #include <QHash>
+#include <QSet>
 #include <QShowEvent>
 #include <QJsonObject>
 #include <functional>
@@ -19,6 +20,13 @@ class QDockWidget;
 class QDialog;
 class QTimer;
 class QAction;
+class QGroupBox;
+class QListWidget;
+class QToolButton;
+class QCheckBox;
+class QSpinBox;
+class QComboBox;
+class QSystemTrayIcon;
 
 #include <halconcpp/HalconCpp.h>
 #include "HalconWindow.h"
@@ -37,6 +45,8 @@ class MainWindow;
 }
 
 class FlowScene;
+class FlowCanvasView;
+class ImageReadNode;
 class FlowExecutorToken;
 class ProjectManager;
 class AuxPanelManager;
@@ -80,6 +90,8 @@ public:
     void checkHalconNodesHint();
     /// 帮助菜单：检测 HALCON 图像层（读图/显示）
     void runHalconEnvCheck();
+    /// P2-1：启动时按设置决定是否弹欢迎页（main 在窗口 show 之后调用，避免测试/无界面场景被打断）
+    void maybeShowWelcomeOnStartup();
 
 private slots:
     /// 打开「结果表」面板（视图菜单）
@@ -102,6 +114,9 @@ private slots:
     void onNodeExecuted(NodeBase *node, bool success);
     void onCurrentTabChanged(int index);
     void onNodeAdded(NodeBase *node);
+    /// 节点删除后清理所有以裸指针键控的界面状态（选中/本地图/叠加/耗时/编辑窗/显示源）。
+    /// 缺这条时 m_selectedNode 等会在节点析构后悬垂，下一次点击/刷新即随机闪退。
+    void onNodeRemoved(NodeBase *node);
     void onImageRead(const HalconCpp::HImage &image);
     void onExit();
     void onManageGlobalCameras();  // 管理全局相机
@@ -133,10 +148,22 @@ private:
     void switchToDesignMode();
     void switchToRuntimeMode();
     void logMessage(const QString &message);
-    void setupLanguageMenu();  // 设置语言菜单
+    /// P2-3：日志栏折叠为「最近一条」/展开为全量（VM 日志栏默认只显示最近一条）
+    void setLogExpanded(bool on);
+    /// P2-2：顶栏方案名（路径为空 = 未命名方案）
+    void updateSchemeLabel(const QString &filePath = QString());
+    /// P2-2：右上角资源占用（CPU / 内存 / 硬盘），每 2 秒刷新
+    void refreshResourceUsage();
+    // ---- 后台运行（VM 4.4 口径：关闭时可选"保持后台运行"）----
+    void setupSystemTray();
+    void minimizeToTray();
+    void restoreFromTray();
+    bool anyFlowRunning() const;
     void setupSchemeMenu();    // 设置方案菜单
     void setupCommunicationMenu(); // 设置通讯管理菜单
     void setupSystemMenu();       // 设置系统菜单
+    /// 实装 4.4 菜单收敛：顶层 = 文件/设置/工具/系统/帮助，编辑/视图/通讯归并
+    void reorganizeMenuBar();
     void updateLanguage();     // 更新界面语言
     void retranslateUi();      // 重新翻译UI
     void showNodeParameters(NodeBase *node);
@@ -145,8 +172,15 @@ private:
     /// 参数改动后只重算该算子及其下游：先作废缓存，再执行这一段链路
     /// quiet=true 表示自动重算（不写日志、流程忙时静默跳过）
     void recomputeDownstream(NodeBase *node, bool quiet = false);
+    /// P2-8：执行前把各节点的「参数订阅」表达式解析为实际值
+    ///（支持 {global.变量名} / {模块号.参数名}；解析失败保持原值）
+    void applyParamSubscriptions(FlowScene *scene);
     /// 构造可引用变量清单（{模块号.参数名} / {global.名称}），供模块编辑窗「变量引用」菜单
     QStringList buildVariableReferences() const;
+    /// 结果区「帮助信息」页：选中模块的说明/端口/参数（随选中联动）
+    QString buildNodeHelpHtml(NodeBase *node) const;
+    /// 刷新图像区「图像源」下拉（当前模块 + 上游输出；按场景记忆选择）
+    void refreshImageSourceCombo(NodeBase *node);
     /// 打开/聚焦辅助面板（key: resultTable / variable / performance / outputData）
     void openAuxPanel(const QString &key);
     /// 记住辅助面板的显隐（关闭时调用）
@@ -158,6 +192,20 @@ private:
     bool eventFilter(QObject *obj, QEvent *event) override;
     /// 转发 ImageDisplayController::resolveDisplayNode（保持调用点稳定）
     NodeBase *resolveDisplayNode(NodeBase *fallbackNode = nullptr) const;
+    /// P2-4：当前流程对应的画布视图（用于耗时角标）
+    FlowCanvasView *canvasViewForScene(FlowScene *scene) const;
+    /// P2-4：按选中模块刷新画布角标的「模块耗时」
+    void updateCanvasSelectionElapsed(NodeBase *node);
+    /// P2-6：图像区「本地图」区随选中 ImageReadNode 联动（非读图模块隐藏）
+    void refreshLocalImagePanel(NodeBase *node);
+    /// P2-5：十字辅助线配置对话框（位置按百分比、颜色可配）
+    void showCrosshairSettings();
+    /// P2-5：全屏查看当前图像（Esc 退出）
+    void showFullScreenImage();
+    /// P2-5：叠加上游——收集当前模块的所有上游模块
+    QList<NodeBase *> upstreamNodes(NodeBase *node) const;
+    /// P2-5：把额外勾选的上游模块结果叠加到当前图像上
+    void applyExtraOverlays(NodeBase *displayNode);
     /// 刷新所有 MVS 图像源的像素格式控件可用状态
     void refreshAllMvsPixelFormats();
     /// 根据当前流程的运行模式更新画布编辑锁定状态
@@ -252,8 +300,32 @@ private:
     /// 打开/新建方案前确认：有未保存改动时询问（保存并继续 / 不保存继续 / 取消）
     /// action 用于提示文案（如"打开方案"/"新建方案"）；返回 false 表示用户取消，调用方应放弃本次操作
     bool confirmDiscardUnsavedChanges(const QString &action);
+    /// 删除流程前的统一确认（流程名 + 模块数 + 未保存提示）。
+    /// 关闭标签页 X、Ctrl+Shift+T、流程栏右键「删除流程」都必须经过这里。
+    bool confirmDeleteFlow(FlowScene *scene, int index);
+    /// 流程栏右键动作（P1-3，对标 VM「其他操作与配置」）
+    void showFlowTabContextMenu(const QPoint &pos);
+    void renameFlow(int index);
+    void duplicateFlow(int index);
+    void exportFlowToFile(int index);
+    /// 恢复最近一次删除的流程（P0-1 的"可撤销保护"低成本实现）
+    void restoreLastDeletedFlow();
+    /// 按场景刷新工具栏「锁定」按钮的选中态（切页签时调用）
+    void syncCanvasLockAction();
+    /// 刷新右上角用户/角色按钮文本（登录、切换用户、注销后调用）
+    void updateUserButton();
+    /// 切换用户（保留登录审计，运行中可切换角色）
+    void switchUser();
+    /// 注销并返回登录框；取消登录则退出应用
+    void logoutUser();
+    /// 流程超时监控一拍（UI 层计时，不侵入执行器线程）
+    void onFlowTimeout();
     /// 打开使用手册查看对话框（F1 / 帮助菜单）
     void openManualDialog();
+    /// P2-1/P2-12：显示欢迎页（启动时按设置自动弹出；帮助菜单可随时再次打开）
+    void showWelcomePage();
+    /// P2-11：综合配置入口——把相机/通讯/触发/用户/报表等分散入口集中到一处
+    void openComprehensiveConfig();
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -264,6 +336,23 @@ protected:
     ProjectManager *m_projectManager;
     QList<FlowScene *> m_flowScenes;
     HalconWindow *m_imageView;
+    /// P2-5：双画面副视图（与主视图独立缩放；默认隐藏）
+    HalconWindow *m_imageView2 = nullptr;
+    /// P2-5：叠加上游勾选集合
+    QSet<NodeBase *> m_overlayNodes;
+    QToolButton *m_overlayUpstreamBtn = nullptr;
+    QSpinBox *m_overlayOpacitySpin = nullptr;   ///< 图像叠加透明度（%）
+    /// 实装 4.4：图像区①区「图像源」选择（当前模块 + 上游输出）
+    QComboBox *m_imageSourceCombo = nullptr;
+    /// P2-6：图像区「本地图」区（仅在选中 ImageReadNode 时显示）
+    QGroupBox *m_localImageGroup = nullptr;
+    QListWidget *m_localImageList = nullptr;
+    ImageReadNode *m_localImageNode = nullptr;
+    /// P2-6/实装 4.4：本地图导航与自动切换
+    QToolButton *m_localPrevBtn = nullptr;
+    QToolButton *m_localNextBtn = nullptr;
+    QLabel *m_localIndexLabel = nullptr;
+    QCheckBox *m_localAutoSwitch = nullptr;
     /// 图像显示路由与画布交互（显示决策/叠加/ROI 取点；逻辑见 ImageDisplayController）
     ImageDisplayController *m_imageDisplay = nullptr;
     FlowExecutor *m_executor;
@@ -310,6 +399,41 @@ protected:
     
     // 登录会话（A1-②）：默认 false —— 只有登录框 Accepted 的路径会置位
     bool m_loginAccepted = false;
+
+    // ---- P0-1 流程删除保护：最近一次删除的快照（可恢复）----
+    QJsonObject m_lastDeletedFlowJson;
+    QString m_lastDeletedFlowName;
+    int m_lastDeletedFlowMode = 1;
+
+    // ---- P1-3 流程栏运行配置（按场景，UI 侧持有；不写入执行器核心状态）----
+    QMap<FlowScene *, int> m_flowRunIntervals;   ///< 运行间隔 ms（0=连续不停顿）
+    QMap<FlowScene *, int> m_flowTimeouts;       ///< 流程超时 ms（0=不限）
+    FlowScene *m_timeoutScene = nullptr;         ///< 本次超时计时对应的流程（切页签后仍停对应流程）
+    QTimer *m_flowTimeoutTimer = nullptr;        ///< 当前流程超时监控（单次触发）
+
+    // ---- P1-5/P1-7/P1-8 快捷工具条与锁定/用户入口 ----
+    QAction *m_undoAction = nullptr;
+    QAction *m_redoAction = nullptr;
+    QAction *m_lockCanvasAction = nullptr;       ///< 可勾选：用户显式锁定当前流程
+    QToolButton *m_userButton = nullptr;         ///< 右上角「用户：xxx [角色]」切换/注销
+    QAction *m_restoreDeletedFlowAction = nullptr;
+
+    // ---- P2-2/P2-3 顶栏信息与日志栏 ----
+    QLabel *m_schemeLabel = nullptr;             ///< 顶栏「方案：xxx」
+    QLabel *m_resourceLabel = nullptr;           ///< 顶栏资源占用
+    QTimer *m_resourceTimer = nullptr;           ///< 资源占用刷新（2s）
+    QToolButton *m_logExpandBtn = nullptr;       ///< 日志栏展开/收起
+    QMenu *m_helpMenu = nullptr;                 ///< 帮助菜单（菜单收敛后语言子菜单挂这里）
+    bool m_logExpanded = false;                  ///< 日志栏当前是否展开
+    void updateLogExpandButton();
+
+    // ---- 运行策略（VM 4.4 手册 11.4：普通模式静默 / 诊断模式资源超限告警）----
+    bool m_resourceDiagnosticMode = false;
+    QElapsedTimer m_diagWarnTimer;               ///< 告警节流（避免每 2 秒刷日志）
+
+    // ---- 后台运行（VM 4.4：关闭时询问是否保持后台运行）----
+    QSystemTrayIcon *m_trayIcon = nullptr;
+    bool m_forceQuit = false;                    ///< 托盘「退出软件」置位，跳过后台运行询问
 
     // 自定义运行界面（对齐 VisionMaster 4.4 运行界面）
     RuntimeInterfaceView *m_runtimeView = nullptr;
@@ -359,6 +483,8 @@ protected:
     AuxDialogMenuRouter m_menuRouter;
     /// 最近一次执行各模块的输出变量（UI 线程缓存，供「变量引用」菜单构造引用列表）
     QHash<int, QVariantMap> m_lastModuleVars;
+    /// P2-4：最近一轮各模块耗时（画布选中模块角标；节点执行后被覆盖）
+    QHash<NodeBase *, qint64> m_nodeElapsed;
     NodeSearchWidget *m_nodeSearchWidget = nullptr;      // 算子搜索控件
     HelpViewer *m_helpViewer = nullptr;                  // 算子帮助文档查看器
     /// 模块编辑器登记簿（「一算子一窗」；词条切片 B 对话框族首抽——命中刷新/缺失建窗/摘除归簿）

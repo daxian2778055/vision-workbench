@@ -155,6 +155,10 @@ public:
     /// 锁定/解锁编辑（连续模式运行时禁止画布改动）
     void setEditLocked(bool locked);
     bool isEditLocked() const;
+    /// 用户显式锁定（对标 VisionMaster 工具栏「锁定」）：与运行态锁**取或**，
+    /// 用户解锁后若流程仍在跑，仍保持锁定（两把锁互不覆盖）。
+    void setUserLocked(bool locked);
+    bool isUserLocked() const { return m_userLocked; }
 
     // ---- 撤销/重做（快照式，覆盖节点增删/连线增删/节点移动） ----
     /// 记录当前场景状态到撤销栈（结构变化前调用）
@@ -170,6 +174,11 @@ public:
     bool redo();
     bool canUndo() const { return !m_undoStack.isEmpty(); }
     bool canRedo() const { return !m_redoStack.isEmpty(); }
+    /// P2-9：撤销/重做历史（最新一步在前；供工具栏下拉展示「第 N 步 · M 个模块」）
+    int undoDepth() const { return m_undoStack.size(); }
+    int redoDepth() const { return m_redoStack.size(); }
+    QStringList undoHistoryTexts() const;
+    QStringList redoHistoryTexts() const;
     /// 清空撤销/重做历史。载入方案后必须调用：sceneFromJson 内部每次 createNode /
     /// createConnection 都会 recordUndo（m_restoring 只在 restoreSnapshot 内置位，载入路径
     /// 没有），于是"打开方案"会在撤销栈里留下几十个半成品快照——第一次 Ctrl+Z 就把刚
@@ -318,6 +327,7 @@ private:
     QString m_flowName;          /// 流程名称（方案持久化 + 触发按名路由，S2）
     int m_flowMode = 1;          /// 运行模式（0=连续 1=软触发 2=硬触发；默认软触发，随方案持久化）
     bool m_editLocked = false;   /// 编辑锁定（连续模式运行时禁止布图操作）
+    bool m_userLocked = false;   /// 用户显式锁定（与运行态锁取或，见 setUserLocked）
 
     // ---- 撤销/重做状态 ----
     QVector<QJsonObject> m_undoStack;

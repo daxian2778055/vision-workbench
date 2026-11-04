@@ -392,12 +392,162 @@ void registerAllNodes()
     VFP_REG(RecordNode,           "RecordNode",           "\u6570\u636E\u8BB0\u5F55", "Record",
             NodeBase::OUTPUT, "\u7ED3\u679C\u8F93\u51FA");
 
+    // ---- 算子简介（模块箱悬停提示 / 模块窗帮助共用同一份口径）----
+    // 每个注册节点一条，说明“这个算子做什么、需要什么关键资源”，不写实现细节。
     r.setDescription(QStringLiteral("ImageReadNode"),
-                     QStringLiteral("HALCON 读图（图容器）"));
+                     QStringLiteral("读取本地图像文件或文件夹（支持单图/多图轮换）"));
+    r.setDescription(QStringLiteral("MvsImageSourceNode"),
+                     QStringLiteral("海康 MVS 相机取图（支持软触发/硬触发）"));
     r.setDescription(QStringLiteral("HalconImageSourceNode"),
-                     QStringLiteral("HALCON 采集接口"));
+                     QStringLiteral("HALCON 采集接口取图（需 HALCON 采集设备）"));
+
+    r.setDescription(QStringLiteral("ColorConversionNode"),
+                     QStringLiteral("在 BGR/灰度/HSV 等色彩空间之间转换"));
+    r.setDescription(QStringLiteral("BlurNode"),
+                     QStringLiteral("均值/高斯模糊，用于降噪与平滑"));
+    r.setDescription(QStringLiteral("TranslateImageNode"),
+                     QStringLiteral("按像素偏移平移图像（可设边界填充）"));
+    r.setDescription(QStringLiteral("ResizeNode"),
+                     QStringLiteral("按比例或目标尺寸缩放图像"));
+    r.setDescription(QStringLiteral("MirrorNode"),
+                     QStringLiteral("水平/垂直镜像翻转图像"));
+    r.setDescription(QStringLiteral("HistogramEqualizeNode"),
+                     QStringLiteral("直方图均衡，提升全局对比度"));
+    r.setDescription(QStringLiteral("ContrastStretchNode"),
+                     QStringLiteral("对比度线性拉伸，拉开灰度动态范围"));
+    r.setDescription(QStringLiteral("SharpenNode"),
+                     QStringLiteral("锐化滤波，增强边缘细节"));
+    r.setDescription(QStringLiteral("GrayStretchNode"),
+                     QStringLiteral("灰度拉伸/归一化到指定区间"));
+    r.setDescription(QStringLiteral("MedianFilterNode"),
+                     QStringLiteral("中值滤波，去除椒盐噪声"));
+    r.setDescription(QStringLiteral("ImageSubNode"),
+                     QStringLiteral("两幅图像逐像素相减（取绝对差）"));
+    r.setDescription(QStringLiteral("ImageDivNode"),
+                     QStringLiteral("两幅图像逐像素相除"));
+    r.setDescription(QStringLiteral("ImageInvertNode"),
+                     QStringLiteral("灰度求反（255 - 像素值）"));
+    r.setDescription(QStringLiteral("OpencvThresholdNode"),
+                     QStringLiteral("固定阈值/OTSU 二值化"));
+    r.setDescription(QStringLiteral("OpencvAdaptiveThresholdNode"),
+                     QStringLiteral("自适应局部阈值二值化"));
+    r.setDescription(QStringLiteral("OpencvCropNode"),
+                     QStringLiteral("按 ROI 矩形裁剪图像"));
+    r.setDescription(QStringLiteral("OpencvImageArithNode"),
+                     QStringLiteral("图像与常数/图像的加、减、乘、除"));
+    r.setDescription(QStringLiteral("OpencvRotateNode"),
+                     QStringLiteral("任意角度旋转图像（可扩边/裁剪）"));
+    r.setDescription(QStringLiteral("OpencvPixelStatsNode"),
+                     QStringLiteral("统计 ROI 内灰度均值/方差/极值"));
+    r.setDescription(QStringLiteral("OpencvBlobNode"),
+                     QStringLiteral("连通域 Blob 分析（面积/重心/外接框）"));
+    r.setDescription(QStringLiteral("OpencvMorphNode"),
+                     QStringLiteral("腐蚀/膨胀/开/闭等形态学运算"));
+    r.setDescription(QStringLiteral("ConvertImageNode"),
+                     QStringLiteral("图像数据类型/通道数转换"));
+
+    r.setDescription(QStringLiteral("OpencvEdgeNode"),
+                     QStringLiteral("Canny/Sobel 边缘检测"));
+    r.setDescription(QStringLiteral("OpencvFitLineNode"),
+                     QStringLiteral("由点集拟合直线（最小二乘）"));
+    r.setDescription(QStringLiteral("OpencvFitCircleNode"),
+                     QStringLiteral("由点集拟合圆（圆心/半径）"));
+    r.setDescription(QStringLiteral("OpencvTemplateMatchNode"),
+                     QStringLiteral("灰度模板匹配（ROI 教学或模板文件）"));
+    r.setDescription(QStringLiteral("OpencvFeatureMatchNode"),
+                     QStringLiteral("ORB/SIFT 特征点匹配与目标定位"));
+    r.setDescription(QStringLiteral("FeatureSearchNode"),
+                     QStringLiteral("图库特征检索：入库或按图查图（TopK）"));
+    r.setDescription(QStringLiteral("ObjectCountingNode"),
+                     QStringLiteral("YOLO 检测 + 跨帧跟踪 + 过线计数"));
+    r.setDescription(QStringLiteral("OpencvDefectNode"),
+                     QStringLiteral("黄金模板差影 + 形态学残差判缺陷"));
+    r.setDescription(QStringLiteral("AnomalyDetectNode"),
+                     QStringLiteral("无监督异常检测（需先建立基线模型）"));
+    r.setDescription(QStringLiteral("OpencvCaliperNode"),
+                     QStringLiteral("卡尺沿搜索线找边缘并测量间距"));
+    r.setDescription(QStringLiteral("OpencvAngleNode"),
+                     QStringLiteral("三点/两线夹角测量"));
+    r.setDescription(QStringLiteral("PointLineDistanceNode"),
+                     QStringLiteral("点到直线距离"));
+    r.setDescription(QStringLiteral("PointCircleDistanceNode"),
+                     QStringLiteral("点到圆心距离（可含半径修正）"));
+    r.setDescription(QStringLiteral("DistanceMeasureNode"),
+                     QStringLiteral("两点欧氏距离"));
+    r.setDescription(QStringLiteral("DistanceNode"),
+                     QStringLiteral("两点距离测量（通用）"));
+    r.setDescription(QStringLiteral("PositionCorrectNode"),
+                     QStringLiteral("用仿射变换修正点位/坐标系"));
+    r.setDescription(QStringLiteral("CoordinateTransformNode"),
+                     QStringLiteral("齐次变换矩阵作用于点坐标"));
+    r.setDescription(QStringLiteral("NPointCalibNode"),
+                     QStringLiteral("N 点标定：像素坐标 → 世界坐标"));
+    r.setDescription(QStringLiteral("HandEyeCalibNode"),
+                     QStringLiteral("手眼标定：像素坐标 → 机器人坐标"));
+    r.setDescription(QStringLiteral("OpencvCalibNode"),
+                     QStringLiteral("棋盘格相机标定（内参与畸变系数）"));
+    r.setDescription(QStringLiteral("OpencvUndistortNode"),
+                     QStringLiteral("按相机内参做畸变校正"));
+    r.setDescription(QStringLiteral("CornerNode"),
+                     QStringLiteral("Harris/Shi-Tomasi 角点检测"));
+
+    r.setDescription(QStringLiteral("OpencvTrainClassifierNode"),
+                     QStringLiteral("训练分类模型（特征/深度）"));
+    r.setDescription(QStringLiteral("OpencvClassifyNode"),
+                     QStringLiteral("加载模型对图像分类"));
+    r.setDescription(QStringLiteral("DnnInferNode"),
+                     QStringLiteral("通用 ONNX 模型推理"));
+    r.setDescription(QStringLiteral("DnnDetectNode"),
+                     QStringLiteral("ONNX 目标检测（YOLO 系列）"));
+    r.setDescription(QStringLiteral("DnnSegmentNode"),
+                     QStringLiteral("ONNX 语义/实例分割"));
+    r.setDescription(QStringLiteral("OpencvQrNode"),
+                     QStringLiteral("OpenCV 二维码检测与解码"));
+    r.setDescription(QStringLiteral("ZxingBarcodeNode"),
+                     QStringLiteral("ZXing 一维码/二维码解码"));
+    r.setDescription(QStringLiteral("TesseractOcrNode"),
+                     QStringLiteral("Tesseract 文字识别（需语言数据）"));
     r.setDescription(QStringLiteral("DeepOcrNode"),
-                     QStringLiteral("HALCON DeepOCR（本软件唯一 HALCON 算法）"));
+                     QStringLiteral("HALCON DeepOCR 文字识别（需 HALCON 模型）"));
+    r.setDescription(QStringLiteral("OpencvTrackNode"),
+                     QStringLiteral("帧间模板匹配目标跟踪"));
+    r.setDescription(QStringLiteral("CameraIoNode"),
+                     QStringLiteral("相机 IO/触发/频闪控制"));
+
+    r.setDescription(QStringLiteral("ConditionNode"),
+                     QStringLiteral("条件判断，输出 TRUE/FALSE 两路分支"));
+    r.setDescription(QStringLiteral("LoopNode"),
+                     QStringLiteral("循环体控制（按次数或条件）"));
+    r.setDescription(QStringLiteral("DisplayNode"),
+                     QStringLiteral("在运行界面显示图像/文本/结果"));
+    r.setDescription(QStringLiteral("WriteFileNode"),
+                     QStringLiteral("将结果写入文件（CSV/TXT/图像）"));
+    r.setDescription(QStringLiteral("ScriptNode"),
+                     QStringLiteral("调用外部脚本执行自定义逻辑"));
+    r.setDescription(QStringLiteral("ReceiveDataNode"),
+                     QStringLiteral("从通讯设备接收数据"));
+    r.setDescription(QStringLiteral("SendDataNode"),
+                     QStringLiteral("向通讯设备发送数据"));
+    r.setDescription(QStringLiteral("ProtocolParseNode"),
+                     QStringLiteral("解析通讯报文为结构化数据"));
+    r.setDescription(QStringLiteral("FormatNode"),
+                     QStringLiteral("按模板格式化字符串"));
+    r.setDescription(QStringLiteral("FormulaNode"),
+                     QStringLiteral("表达式求值（可引用上游端口数值）"));
+    r.setDescription(QStringLiteral("DelayNode"),
+                     QStringLiteral("延时/节拍控制"));
+    r.setDescription(QStringLiteral("SubFlowNode"),
+                     QStringLiteral("调用方案内命名子流程"));
+    r.setDescription(QStringLiteral("CounterNode"),
+                     QStringLiteral("条件为真时累计计数"));
+    r.setDescription(QStringLiteral("FilterNode"),
+                     QStringLiteral("按条件筛选数据"));
+    r.setDescription(QStringLiteral("ClassifyNode"),
+                     QStringLiteral("按阈值区间对数值分类"));
+    r.setDescription(QStringLiteral("SortNode"),
+                     QStringLiteral("对数据集合排序"));
+    r.setDescription(QStringLiteral("RecordNode"),
+                     QStringLiteral("将检测结果写入数据库"));
 
     r.addAliases(QStringLiteral("OpencvThresholdNode"),
                  {QStringLiteral("OpenCV二值化"), QStringLiteral("OpenCV Threshold")});

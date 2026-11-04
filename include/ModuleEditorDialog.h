@@ -2,6 +2,8 @@
 
 #include <QDialog>
 #include <QVector>
+#include <QMap>
+#include <QVariant>
 #include <functional>
 #include "HalconWindow.h"
 
@@ -17,6 +19,11 @@ class QTimer;
 class QToolButton;
 class QMenu;
 class QSplitter;
+class QTabWidget;
+class QComboBox;
+class QSpinBox;
+class QLineEdit;
+class QVBoxLayout;
 
 /// 双击算子打开的模块编辑窗：大图 + 完整参数 + ROI/掩膜/模板
 class ModuleEditorDialog : public QDialog
@@ -36,6 +43,8 @@ signals:
     void recomputeRequested();
     /// 自动重算请求（改参数/拖 ROI/涂掩膜后经去抖发出）；流程运行中应静默跳过
     void autoRecomputeRequested();
+    /// P1-1：请求打开本算子的帮助页（MainWindow 统一收口到 HelpViewer）
+    void helpRequested(NodeBase *node);
 
 private slots:
     void onDrawGeometry();
@@ -69,8 +78,20 @@ private:
     void refreshTemplateList();
     /// VM 结果表口径：每个命中一行（中心/匹配点/角度/尺度/分数）
     void refreshResultTable();
-    /// VM 4.4 工具窗四页签：把参数分组框/模板列表/结果表归位（仅模板匹配算子）
+    /// VM 4.4 工具窗四页签：把参数分组框/模板列表/结果表归位（所有算子通用；模板页仅模板算子）
     void rebuildVmTabs();
+    /// P1-10：打开时快照全部参数；取消时回滚（确定则保留）
+    void snapshotParams();
+    void restoreParams();
+    /// P1-9：结果显示页的「结果判断 / 图像显示 / 文本显示」配置区
+    void buildResultDisplayPage(QVBoxLayout *resLay);
+    /// P2-8：运行参数页的「参数订阅」表（逐参数自定义/订阅切换）
+    void buildParamSubscriptionGroup(QVBoxLayout *runLay);
+    /// P2-8：左下角「恢复默认值」
+    void restoreParamDefaults();
+    /// 结果判断条件表 → 节点参数（JSON）
+    void persistJudgeConditions();
+    void loadJudgeConditions();
     void echoGeometry();
     /// 搜索区域（r19 批 A 第 4 步）：把 searchRegion* 画成青色框，并与结果叠加合并
     void refreshSearchOverlay();
@@ -135,4 +156,29 @@ private:
     QMenu *m_varRefMenu = nullptr;               /// 变量引用下拉菜单
     QWidget *m_lastEditor = nullptr;             /// 最近获得焦点的参数编辑控件（插入目标）
     std::function<QStringList()> m_varRefProvider;
+
+    QToolButton *m_helpBtn = nullptr;             /// P1-1 左上角帮助
+    QPushButton *m_okBtn = nullptr;               /// P1-1/P1-10 确定（提交）
+    QPushButton *m_cancelBtn = nullptr;           /// P1-1/P1-10 取消（回滚）
+    QPushButton *m_restoreDefaultsBtn = nullptr;  /// P2-8 恢复默认值
+    QTableWidget *m_paramSubscriptionTable = nullptr; /// P2-8 逐参数订阅表
+    QTabWidget *m_vmTabs = nullptr;
+    QMap<QString, QVariant> m_paramSnapshot;      /// 打开时的参数快照（取消回滚）
+    bool m_paramsDirty = false;                   /// 本次编辑是否改过参数
+
+    // P1-9 结果显示页配置控件（值写入节点参数，随方案保存）
+    QComboBox *m_judgeModeCombo = nullptr;
+    QTableWidget *m_judgeTable = nullptr;
+    QCheckBox *m_showResultImageCheck = nullptr;
+    QPushButton *m_resultImageColorBtn = nullptr;
+    QSpinBox *m_resultImageOpacitySpin = nullptr;
+    QSpinBox *m_resultImageLineWidthSpin = nullptr;
+    QCheckBox *m_showResultTextCheck = nullptr;
+    QLineEdit *m_resultTextEdit = nullptr;
+    QPushButton *m_resultTextColorBtn = nullptr;
+    QSpinBox *m_resultTextSizeSpin = nullptr;
+    QSpinBox *m_resultTextOpacitySpin = nullptr;
+    QComboBox *m_resultTextPosCombo = nullptr;
+    QString m_resultImageColor = QStringLiteral("#00C8FF");
+    QString m_resultTextColor = QStringLiteral("#FFFFFF");
 };
