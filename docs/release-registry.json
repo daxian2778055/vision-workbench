@@ -1045,6 +1045,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261104.9",
       "recorded_at": "2026-11-04",
       "recorded_note": "模块子窗采用 VM ColorStyle1 浅色主题（#F2F3F5/#4E5054/#E76900）；页签、输入框、按钮、表格、开关、图标线稿全部按 VM 子窗改色；文档补本机 VM 4.4 UI 参考资源清单；73/73 测试全绿"
+    },
+    {
+      "tag": "rc-20261104.10",
+      "commit": "762db55a17b63f071083c0a74c20a9ab69a2ee9d",
+      "exe_md5": "32f1854aff1f87593a12dd1bfa7fee95",
+      "exe_bytes": 11119616,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261104.10",
+      "recorded_at": "2026-11-04",
+      "recorded_note": "打开方案恢复设计态并显示工具箱/图像显示（右侧默认图像页，坏存档 0 宽面板自动修复）；ROI 区域「绘制」改为主画布画模板框，检测区域新增框选/多边形入口；框 ROI 不再自动训练，训练只由「训练模板」显式触发；模板配置工具条图标逐一区分（清除/删除/分割/剪刀/屏蔽/擦除不再同图）；基本参数按 VM 顺序并紧凑化；75/75 测试全绿"
     }
   ],
   "legacy_backfilled": [
