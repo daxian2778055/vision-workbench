@@ -1036,6 +1036,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261104.8",
       "recorded_at": "2026-11-04",
       "recorded_note": "模板匹配 UI 细节：VM 开关样式（模板存图/全部屏蔽）、选择指针/旋转矩形图标、缩放适应全屏可用、屏蔽区创建/屏蔽区/位置修正占位并置灰、模板名称行隐藏；73/73 测试全绿"
+    },
+    {
+      "tag": "rc-20261104.9",
+      "commit": "37c871c399ad4028913a4494677f2932f78ac9cc",
+      "exe_md5": "b78ec95e4fa85b5e441da4b62735812e",
+      "exe_bytes": 11108864,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261104.9",
+      "recorded_at": "2026-11-04",
+      "recorded_note": "模块子窗采用 VM ColorStyle1 浅色主题（#F2F3F5/#4E5054/#E76900）；页签、输入框、按钮、表格、开关、图标线稿全部按 VM 子窗改色；文档补本机 VM 4.4 UI 参考资源清单；73/73 测试全绿"
     }
   ],
   "legacy_backfilled": [
