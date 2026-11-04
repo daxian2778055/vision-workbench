@@ -1009,6 +1009,35 @@ void ModuleEditorDialog::rebuildVmTabs()
         shapeLay->addStretch();
         roiForm->addRow(QStringLiteral("形状"), shapeRow);
 
+        // VM 基本参数里还有「屏蔽区创建 / 屏蔽区 / 位置修正」三行。算法侧尚未实现，
+        // 先按 VM 布局放置并置灰，避免界面看起来缺一块（tooltip 明确说明未实现）。
+        auto *excludeDraw = new QRadioButton(QStringLiteral("绘制"), roiBox);
+        auto *excludeInherit = new QRadioButton(QStringLiteral("继承"), roiBox);
+        excludeDraw->setEnabled(false);
+        excludeInherit->setEnabled(false);
+        auto *excludeRow = new QWidget(roiBox);
+        auto *excludeLay = new QHBoxLayout(excludeRow);
+        excludeLay->setContentsMargins(0, 0, 0, 0);
+        excludeLay->addWidget(excludeDraw);
+        excludeLay->addWidget(excludeInherit);
+        excludeLay->addStretch();
+        excludeRow->setToolTip(QStringLiteral("屏蔽区创建：当前版本尚未实现"));
+        roiForm->addRow(QStringLiteral("屏蔽区创建"), excludeRow);
+
+        auto *excludeBtn = new QToolButton(roiBox);
+        excludeBtn->setText(QStringLiteral("屏蔽区"));
+        excludeBtn->setEnabled(false);
+        excludeBtn->setToolTip(QStringLiteral("屏蔽区：当前版本尚未实现"));
+        roiForm->addRow(QStringLiteral("屏蔽区"), excludeBtn);
+
+        auto *fixSwitch = new QCheckBox(roiBox);
+        fixSwitch->setEnabled(false);
+        fixSwitch->setStyleSheet(QStringLiteral(
+            "QCheckBox::indicator { width:34px; height:18px; border-radius:9px; background:#5a6068; }"
+            "QCheckBox::indicator:checked { background:#e07b3a; }"));
+        fixSwitch->setToolTip(QStringLiteral("位置修正：由位置修正模块提供，当前版本尚未接入"));
+        roiForm->addRow(QStringLiteral("位置修正"), fixSwitch);
+
         const int insertAt = basicLay->indexOf(roiAutoBox);
         basicLay->insertWidget(insertAt >= 0 ? insertAt : 0, roiBox);
     }

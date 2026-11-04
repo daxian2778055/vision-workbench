@@ -48,7 +48,27 @@ static QIcon vmToolIcon(const QString &kind)
     pen.setWidthF(1.4);
     p.setPen(pen);
 
-    if (kind == QLatin1String("rect")) {
+    if (kind == QLatin1String("select")) {
+        // VM 工具条第一个图标：箭头指针
+        QPainterPath arrow;
+        arrow.moveTo(7, 5);
+        arrow.lineTo(20, 13);
+        arrow.lineTo(14, 15);
+        arrow.lineTo(18, 23);
+        arrow.lineTo(15, 24);
+        arrow.lineTo(11, 16);
+        arrow.lineTo(7, 21);
+        arrow.closeSubpath();
+        p.drawPath(arrow);
+    } else if (kind == QLatin1String("rotatedrect")) {
+        QPainterPath rr;
+        rr.moveTo(8, 12);
+        rr.lineTo(18, 6);
+        rr.lineTo(23, 15);
+        rr.lineTo(11, 22);
+        rr.closeSubpath();
+        p.drawPath(rr);
+    } else if (kind == QLatin1String("rect")) {
         p.drawRect(6, 8, 16, 12);
     } else if (kind == QLatin1String("circle")) {
         p.drawEllipse(6, 6, 16, 16);
@@ -121,6 +141,17 @@ static QIcon vmToolIcon(const QString &kind)
     return QIcon(pm);
 }
 
+/// VM 的开关样式（模板存图/全部屏蔽/输出掩膜）：灰底 → 橙底。
+static QCheckBox *makeSwitch(QWidget *parent)
+{
+    auto *sw = new QCheckBox(parent);
+    sw->setFixedSize(36, 18);
+    sw->setStyleSheet(QStringLiteral(
+        "QCheckBox::indicator { width:34px; height:18px; border-radius:9px; background:#5a6068; }"
+        "QCheckBox::indicator:checked { background:#e07b3a; }"));
+    return sw;
+}
+
 /// 把工具按钮变成 VM 工具栏那样的"图标 + 悬浮提示"形态（文字只留在 tooltip）。
 static void makeToolButton(QPushButton *btn, const QString &glyph, const QString &name)
 {
@@ -150,20 +181,20 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     auto *top = new QHBoxLayout();
     auto *useCurrentBtn = new QPushButton(QStringLiteral("选择当前图像"));
     auto *useOtherBtn = new QPushButton(QStringLiteral("选择其他图像"));
-    auto *savePathBtn = new QPushButton(QStringLiteral("模板存图"));
-    savePathBtn->setCheckable(true);
-    savePathBtn->setToolTip(QStringLiteral("勾选后可指定模板图片保存位置；不勾选则静默存到方案 templates/"));
+    auto *saveSwitch = makeSwitch(this);
+    saveSwitch->setToolTip(QStringLiteral("开启后可指定模板图片保存位置；关闭则静默存到方案 templates/"));
     auto *saveFileBtn = new QPushButton(QStringLiteral("↑"));
     saveFileBtn->setFixedSize(28, 26);
     saveFileBtn->setToolTip(QStringLiteral("选择模板图片保存位置"));
     top->addWidget(useCurrentBtn);
     top->addWidget(useOtherBtn);
-    top->addWidget(savePathBtn);
+    top->addWidget(new QLabel(QStringLiteral("模板存图")));
+    top->addWidget(saveSwitch);
     top->addWidget(saveFileBtn);
     top->addStretch();
-    auto *blockAllBtn = new QPushButton(QStringLiteral("全部屏蔽"));
-    blockAllBtn->setCheckable(true);
-    top->addWidget(blockAllBtn);
+    top->addWidget(new QLabel(QStringLiteral("全部屏蔽")));
+    auto *blockSwitch = makeSwitch(this);
+    top->addWidget(blockSwitch);
     root->addLayout(top);
 
     // VM 第二行：图标工具条 + 容差 + 缩放/适应/全屏
@@ -201,6 +232,11 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     m_wandTol->setValue(30);
     m_wandTol->setPrefix(QStringLiteral("容差 "));
 
+    auto *selectBtn = new QPushButton();
+    auto *rotatedBtn = new QPushButton();
+    makeToolButton(selectBtn, QStringLiteral("select"), QStringLiteral("选择"));
+    makeToolButton(rotatedBtn, QStringLiteral("rotatedrect"), QStringLiteral("旋转矩形"));
+
     auto *undoBtn = new QPushButton();
     auto *redoBtn = new QPushButton();
     auto *zoomInBtn = new QPushButton();
@@ -217,6 +253,8 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     redoBtn->setEnabled(false);
 
     auto *tools = new QHBoxLayout();
+    tools->addWidget(selectBtn);
+    tools->addWidget(rotatedBtn);
     for (QPushButton *b : {shapeRectBtn, shapePolyBtn, shapeCircleBtn, shapeFreeBtn,
                            shapeWandBtn, shapeWandPlusBtn}) {
         tools->addWidget(b);
@@ -242,11 +280,10 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     auto *rightLay = new QVBoxLayout(right);
     rightLay->setContentsMargins(8, 0, 0, 0);
 
-    auto *nameRow = new QHBoxLayout();
-    nameRow->addWidget(new QLabel(QStringLiteral("模板名称")));
-    m_nameEdit = new QLineEdit();
-    nameRow->addWidget(m_nameEdit, 1);
-    rightLay->addLayout(nameRow);
+    // VM 模板配置窗没有单独的「模板名称」行：名称自动取模板序号/文件名。
+    // 控件保留但隐藏，onConfirm 仍按它生成模板名。
+    m_nameEdit = new QLineEdit(right);
+    m_nameEdit->setVisible(false);
 
     // VM 模板配置窗右栏：列表在上（占满纵向），配置参数在下，匹配中心在底。
     rightLay->addWidget(new QLabel(QStringLiteral("列表")));
@@ -352,7 +389,7 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     });
     connect(useOtherBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onPickOtherImage);
     connect(saveFileBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onPickSavePath);
-    connect(savePathBtn, &QPushButton::toggled, this, [this](bool on) {
+    connect(saveSwitch, &QCheckBox::toggled, this, [this](bool on) {
         if (on)
             onPickSavePath();
     });
@@ -401,7 +438,22 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
         m_hint->setText(QStringLiteral(
             "在图上单击擦掉该区域的特征点（半径 20px）；擦掉的点不参与匹配。"));
     });
-    connect(blockAllBtn, &QPushButton::toggled, this, [this](bool on) {
+    connect(selectBtn, &QPushButton::clicked, this, [this, maskModeBtn]() {
+        m_wandMode = false;
+        m_cutMode = false;
+        m_eraseMode = false;
+        m_anchorPickMode = false;
+        m_maskMode = false;
+        if (maskModeBtn)
+            maskModeBtn->setChecked(false);
+        m_view->setMaskEditable(false);
+        m_view->setRoiFreehand(false);
+        m_view->setRoiEditable(true,
+                              m_shape.type == RoiType::None ? RoiType::RotatedRect : m_shape.type);
+        m_hint->setText(QStringLiteral("选择模式：可拖动/缩放已有形状。"));
+    });
+    connect(rotatedBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onPickRect);
+    connect(blockSwitch, &QCheckBox::toggled, this, [this](bool on) {
         if (on) {
             // VM「全部屏蔽」开关：先暂存当前形状，再清空画面进入刷绘模式
             m_blockedShapes = m_shapes;
