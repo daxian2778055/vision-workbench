@@ -27,7 +27,8 @@ QPushButton *makeActionButton(const QString &text, const QString &subtitle, QWid
 }
 }
 
-WelcomeDialog::WelcomeDialog(const QStringList &recentFiles, QWidget *parent)
+WelcomeDialog::WelcomeDialog(const QStringList &recentFiles, QWidget *parent,
+                             bool exampleAvailable)
     : QDialog(parent)
 {
     setObjectName(QStringLiteral("welcomeDialog"));
@@ -65,8 +66,14 @@ WelcomeDialog::WelcomeDialog(const QStringList &recentFiles, QWidget *parent)
     auto *manualBtn = makeActionButton(tr("使用手册"), tr("查看操作说明与快捷键（F1）"), this);
     actions->addWidget(newBtn, 0, 0);
     actions->addWidget(openBtn, 0, 1);
-    actions->addWidget(exampleBtn, 1, 0);
-    actions->addWidget(manualBtn, 1, 1);
+    if (exampleAvailable) {
+        actions->addWidget(exampleBtn, 1, 0);
+        actions->addWidget(manualBtn, 1, 1);
+    } else {
+        // 包内没有 examples/ 时不展示死按钮（点了只会弹“未找到示例方案”）
+        exampleBtn->hide();
+        actions->addWidget(manualBtn, 1, 0, 1, 2);
+    }
     left->addLayout(actions);
     left->addSpacing(10);
 

@@ -25,6 +25,8 @@ public:
 
     /// 设置要查看的节点
     void setNode(NodeBase *node);
+    /// 当前查看的节点（供节点删除时清空悬垂指针）
+    NodeBase *currentNode() const { return m_currentNode; }
 
     /// 清空显示
     void clear();

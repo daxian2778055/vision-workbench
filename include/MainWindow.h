@@ -434,6 +434,8 @@ protected:
     // ---- 后台运行（VM 4.4：关闭时询问是否保持后台运行）----
     QSystemTrayIcon *m_trayIcon = nullptr;
     bool m_forceQuit = false;                    ///< 托盘「退出软件」置位，跳过后台运行询问
+    /// 已从 QSettings 恢复过停靠布局 ⇒ 首帧不再套用默认比例（否则用户拖过的占比被覆盖）
+    bool m_dockLayoutRestored = false;
 
     // 自定义运行界面（对齐 VisionMaster 4.4 运行界面）
     RuntimeInterfaceView *m_runtimeView = nullptr;

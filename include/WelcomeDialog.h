@@ -24,7 +24,8 @@ public:
         OpenManual      ///< 打开使用手册
     };
 
-    explicit WelcomeDialog(const QStringList &recentFiles, QWidget *parent = nullptr);
+    explicit WelcomeDialog(const QStringList &recentFiles, QWidget *parent = nullptr,
+                           bool exampleAvailable = false);
 
     Action chosenAction() const { return m_action; }
     QString selectedProjectPath() const { return m_selectedPath; }

@@ -1600,6 +1600,8 @@ void MainWindow::closeEvent(QCloseEvent *event)
     VFP_DEBUG << "closeEvent: 关闭主窗口，保存面板显隐并清理相机…";
     // 记住辅助面板显隐，下次启动时恢复（避免每次重启都要重新打开结果表/变量面板）
     saveAuxPanelVisibility();
+    // 记住停靠布局：用户拖过的左右占比/面板位置下次启动原样恢复
+    QSettings().setValue(QStringLiteral("ui/mainWindowState2"), saveState());
     cleanupCameras();
     LargeFileImageStore::instance()->flush();   // 采集策略：退出前把未满一批落盘
     if (m_trayIcon)
@@ -2827,6 +2829,11 @@ void MainWindow::onNodeRemoved(NodeBase *node)
 
     // 编辑窗内持节点裸指针：节点销毁前先关窗（窗的 WA_DeleteOnClose 会走登记簿摘位）
     m_editors.closeIfPresent(node);
+    // 输出数据查看器是非模态面板，也可能正看着该节点
+    if (m_auxPanels) {
+        if (auto *ov = m_auxPanels->outputDataViewer(); ov && ov->currentNode() == node)
+            ov->setNode(nullptr);
+    }
     m_overlayNodes.remove(node);
     m_nodeElapsed.remove(node);
     m_nodeParameters.remove(node);
@@ -4672,7 +4679,30 @@ void MainWindow::showWelcomePage()
     if (hadMainVisible)
         hide();
 
-    WelcomeDialog dialog(m_recentFiles ? m_recentFiles->files() : QStringList(), this);
+    // 示例方案随安装目录分发：可执行目录及上级的 examples/ 都找一遍。
+    // 找不到时欢迎页不展示「打开示例方案」，避免一个点了只会报错的死按钮。
+    const QString exampleFile = []() -> QString {
+        const QString appDir = QApplication::applicationDirPath();
+        const QStringList candidates = {
+            QDir(appDir).filePath(QStringLiteral("examples")),
+            QDir(appDir).filePath(QStringLiteral("../examples")),
+            QDir(appDir).filePath(QStringLiteral("../../examples")),
+            QDir(QDir::currentPath()).filePath(QStringLiteral("examples")),
+        };
+        for (const QString &dirPath : candidates) {
+            QDir dir(dirPath);
+            if (!dir.exists())
+                continue;
+            const QStringList files = dir.entryList(QStringList() << QStringLiteral("*.vfp"),
+                                                    QDir::Files, QDir::Name);
+            if (!files.isEmpty())
+                return dir.absoluteFilePath(files.first());
+        }
+        return {};
+    }();
+
+    WelcomeDialog dialog(m_recentFiles ? m_recentFiles->files() : QStringList(), this,
+                         !exampleFile.isEmpty());
     const bool accepted = dialog.exec() == QDialog::Accepted;
 
     if (hadMainVisible) {
@@ -4699,36 +4729,10 @@ void MainWindow::showWelcomePage()
         if (!dialog.selectedProjectPath().isEmpty())
             loadProjectFile(dialog.selectedProjectPath());
         break;
-    case WelcomeDialog::Action::OpenExample: {
-        // 示例方案随安装目录分发：可执行目录及上级的 examples/ 都找一遍
-        const QString appDir = QApplication::applicationDirPath();
-        const QStringList candidates = {
-            QDir(appDir).filePath(QStringLiteral("examples")),
-            QDir(appDir).filePath(QStringLiteral("../examples")),
-            QDir(appDir).filePath(QStringLiteral("../../examples")),
-            QDir(QDir::currentPath()).filePath(QStringLiteral("examples")),
-        };
-        QString exampleFile;
-        for (const QString &dirPath : candidates) {
-            QDir dir(dirPath);
-            if (!dir.exists())
-                continue;
-            const QStringList files = dir.entryList(QStringList() << QStringLiteral("*.vfp"),
-                                                    QDir::Files, QDir::Name);
-            if (!files.isEmpty()) {
-                exampleFile = dir.absoluteFilePath(files.first());
-                break;
-            }
-        }
-        if (exampleFile.isEmpty()) {
-            QMessageBox::information(this, tr("示例方案"),
-                                     tr("未找到随软件附带的示例方案（examples/*.vfp）。\n"
-                                        "可先「新建空白方案」开始搭建。"));
-        } else {
+    case WelcomeDialog::Action::OpenExample:
+        if (!exampleFile.isEmpty())
             loadProjectFile(exampleFile);
-        }
         break;
-    }
     case WelcomeDialog::Action::OpenManual:
         openManualDialog();
         break;
@@ -4829,10 +4833,16 @@ void MainWindow::openComprehensiveConfig()
         uiGrid->addWidget(resetLayoutBtn, 2, 0, 1, 2);
         connect(resetLayoutBtn, &QPushButton::clicked, this, [this]() {
             addDockWidget(Qt::LeftDockWidgetArea, ui->toolDock);
-            addDockWidget(Qt::LeftDockWidgetArea, ui->flowDock);
+            // 流程编辑是中央控件（setupDockWidgets 里已从 dock 迁出），不要再把旧 flowDock 加回来
             addDockWidget(Qt::RightDockWidgetArea, ui->imageDock);
             addDockWidget(Qt::RightDockWidgetArea, ui->paramDock);
+            if (ui->imageDock && ui->paramDock) {
+                // 默认形态是右侧两个可切换子页面（FR4.3），不是上下/左右并排
+                tabifyDockWidget(ui->imageDock, ui->paramDock);
+                ui->imageDock->raise();
+            }
             addDockWidget(Qt::BottomDockWidgetArea, ui->logDock);
+            m_dockLayoutRestored = false;   // 显式恢复默认布局：下次关闭时按新布局存档
             applyDefaultDockSizes();
         });
     }
@@ -5544,6 +5554,19 @@ void MainWindow::setupDockWidgets()
                           : QStringLiteral("已关闭：节点失败时流程继续执行"));
         });
     }
+
+    // 恢复上次退出时的停靠布局（用户拖过的左右占比、面板显隐都要记住）。
+    // 键名带版本：旧版本存过“流程区被挤成一条缝”的布局，不能让它覆盖本次修正后的默认比例。
+    {
+        QSettings settings;
+        const QByteArray state =
+            settings.value(QStringLiteral("ui/mainWindowState2")).toByteArray();
+        if (!state.isEmpty() && restoreState(state))
+            m_dockLayoutRestored = true;
+    }
+    // 流程编辑已迁到中央控件：旧存档即使带 flowDock 也不让它重新露出来
+    if (ui->flowDock)
+        ui->flowDock->hide();
 
     // 恢复上次退出时打开的辅助面板（结果表 / 变量 / 性能统计 / 输出数据）
     restoreAuxPanelVisibility();
@@ -6867,7 +6890,9 @@ void MainWindow::showEvent(QShowEvent *event)
     if (s_firstShow) {
         s_firstShow = false;
         QTimer::singleShot(0, this, [this]() {
-            applyDefaultDockSizes();
+            // 用户上次退出时拖过的停靠比例优先，只有没有存档时才套默认比例
+            if (!m_dockLayoutRestored)
+                applyDefaultDockSizes();
             // 崩溃恢复询问放在界面搭好之后：模态框不在 showEvent 里直接弹，避免挡住首帧
             checkRecoveryOnStartup();
         });
