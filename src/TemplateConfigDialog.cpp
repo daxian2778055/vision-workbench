@@ -9,6 +9,7 @@
 #include "HalconWindow.h"
 #include "OpencvUtil.h"
 #include "ProjectPaths.h"
+#include "VisionWorkbenchStyle.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -44,7 +45,7 @@ static QIcon vmToolIcon(const QString &kind)
     pm.fill(Qt::transparent);
     QPainter p(&pm);
     p.setRenderHint(QPainter::Antialiasing, true);
-    QPen pen(QColor(QStringLiteral("#cfd8e3")));
+    QPen pen(QColor(QStringLiteral("#5A5A5A")));
     pen.setWidthF(1.4);
     p.setPen(pen);
 
@@ -147,8 +148,8 @@ static QCheckBox *makeSwitch(QWidget *parent)
     auto *sw = new QCheckBox(parent);
     sw->setFixedSize(36, 18);
     sw->setStyleSheet(QStringLiteral(
-        "QCheckBox::indicator { width:34px; height:18px; border-radius:9px; background:#5a6068; }"
-        "QCheckBox::indicator:checked { background:#e07b3a; }"));
+        "QCheckBox::indicator { width:34px; height:18px; border-radius:9px; background:#C9C9C9; }"
+        "QCheckBox::indicator:checked { background:#E76900; }"));
     return sw;
 }
 
@@ -173,6 +174,7 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     , m_editIndex(editIndex)
 {
     setWindowTitle(QStringLiteral("模板配置"));
+    setStyleSheet(VisionWorkbenchStyle::moduleDialogStylesheet());
     resize(1100, 720);
 
     auto *root = new QVBoxLayout(this);

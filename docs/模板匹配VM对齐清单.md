@@ -56,3 +56,18 @@ ROI 自匹配（抠一块当模板再找回去）：
 2. **稀疏掩膜需要下限保护**：模板边沿点 < 16 个时直接判无效，否则距离场"处处为 0"会骗高分。
 3. **粗到细的坐标必须无条件换算回全分辨率**（曾经只在精修更好时改写 → 位置偏 3 倍）。
 4. **补丁脚本连跑两次会在 `registerParams({...});` 之后留游离副本**（能编译、不生效）→ 加参数后必须核对 `fieldSlots` 实测值。
+
+## 五、本机 VM 4.4 的 UI 参考资源（2026-11-04 核实）
+
+安装目录：`D:\Program Files\VisionMaster4.4.0\Applications\`
+
+| 资源 | 路径 | 用途 |
+|---|---|---|
+| 主题色/控件色 | `ColorStyle\ColorStyle1.xaml`（当前生效，见 `ColorCFG\ColorStyleSet.cfg`） | `Col_SubForm_Background #F2F3F5`、`Col_SubForm_Foreground #4E5054`、`Col_Theme #E76900`、工具栏 `#202023`、画布格 `#2D2D2D/#3C3C3C`；模块子窗用它复刻 |
+| 模块页签/字段定义 | `Module(sp)\x64\Location\IMVSContourMatchModu\IMVSContourMatchModuAlgorithmTab.xml` | 四页签、基本参数/ROI、运行参数、结果显示的字段名与顺序 |
+| 模块结果字段 | 同目录 `IMVSContourMatchModuAlgorithm.xml` / `IMVSContourMatchModuDisplay.xml` | 结果项、显示层开关 |
+| 帮助正文/截图 | `Help\CH\GUID-3EEB6D91-78DA-40BF-AC7B-537FEBB00FFC.html` 及同目录 `GUID-*-high.png` | 参数含义、模板配置窗/特征模板页/结果判断截图 |
+| 主工具栏图标 | `Resources\ToolBar\*.png`、`Resources\ToolGroupImage\*.png` | 开始/停止/保存/撤销/重做/相机等图标（只作视觉参照，不直接拷入仓库） |
+| 菜单/关于文案 | `Resources\MenuItems.xml`、`Lang\zh-cn.xaml` | 菜单命名、模块别名 |
+
+> 说明：主题色与布局字段可直接从这些文件读取；图标为厂商资源，仓库内用 QPainter 线稿近似，避免把第三方 UI 资源打包进交付件。

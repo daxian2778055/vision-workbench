@@ -314,3 +314,48 @@ void VisionWorkbenchStyle::markIntSpinDirty(QSpinBox *spin, bool dirty)
         spin->setStyleSheet(QString());
     }
 }
+
+QString VisionWorkbenchStyle::moduleDialogStylesheet()
+{
+    // 颜色取自 VM 4.4 ColorStyle1.xaml：
+    //   子窗底色 Col_SubForm_Background #F2F3F5 / 前景 #4E5054 / 主题橙 Col_Theme #E76900
+    return QStringLiteral(
+        "QDialog { background:#F2F3F5; color:#4E5054; }"
+        "QLabel { color:#4E5054; }"
+        "QGroupBox { border:1px solid #D8D8D8; border-radius:2px; margin-top:10px;"
+        " background:transparent; color:#4E5054; }"
+        "QGroupBox::title { subcontrol-origin:margin; left:8px; padding:0 4px; color:#4E5054; }"
+        "QTabWidget::pane { border:1px solid #D8D8D8; background:#F2F3F5; }"
+        "QTabBar::tab { background:#ECECEC; color:#4E5054; padding:6px 18px; border:none; }"
+        "QTabBar::tab:hover { background:#F6F6F6; }"
+        "QTabBar::tab:selected { background:#FFFFFF; color:#E76900; border-bottom:2px solid #E76900; }"
+        "QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox { background:#FFFFFF; color:#333333;"
+        " border:1px solid #C9C9C9; border-radius:2px; padding:3px 6px; min-height:22px;"
+        " selection-background-color:#E76900; selection-color:#FFFFFF; }"
+        "QComboBox QAbstractItemView { background:#FFFFFF; color:#333333;"
+        " selection-background-color:#E76900; selection-color:#FFFFFF; }"
+        "QPushButton { background:#FCFCFC; color:#333333; border:1px solid #C9C9C9;"
+        " border-radius:2px; padding:4px 10px; min-height:22px; }"
+        "QPushButton:hover { background:#F2F2F2; border-color:#E76900; }"
+        "QPushButton:pressed { background:#E6E6E6; }"
+        "QPushButton:checked { background:#E76900; color:#FFFFFF; border-color:#E76900; }"
+        "QPushButton:disabled { color:#9A9A9A; background:#F4F4F4; border-color:#DCDCDC; }"
+        "QToolButton { background:transparent; color:#4E5054; border:1px solid transparent;"
+        " border-radius:2px; }"
+        "QToolButton:hover { background:#E9E9E9; border-color:#D0D0D0; }"
+        "QToolButton:checked { background:#E76900; color:#FFFFFF; }"
+        "QCheckBox, QRadioButton { color:#4E5054; }"
+        "QTableWidget, QListWidget { background:#FFFFFF; color:#333333; border:1px solid #D0D0D0;"
+        " alternate-background-color:#F7F7F7; }"
+        "QHeaderView::section { background:#ECECEC; color:#444444; border:none;"
+        " border-right:1px solid #D8D8D8; padding:4px; }"
+        "QTableWidget::item:selected, QListWidget::item:selected { background:#FBE3D1; color:#333333; }"
+        "QScrollArea { background:transparent; }"
+        "QScrollBar:vertical { background:#ECECEC; width:12px; }"
+        "QScrollBar::handle:vertical { background:#C9C9C9; border-radius:6px; min-height:20px; }"
+        "QScrollBar::add-line, QScrollBar::sub-line { height:0; }"
+        "QSplitter::handle { background:#D8D8D8; }"
+        "QMenu { background:#FFFFFF; color:#333333; border:1px solid #C9C9C9; }"
+        "QMenu::item:selected { background:#FBE3D1; color:#333333; }"
+        );
+}

@@ -19,6 +19,7 @@
 #include "Port.h"
 #include "Connection.h"
 #include "VariablePanel.h"
+#include "VisionWorkbenchStyle.h"
 
 #include <QHBoxLayout>
 #include <QVBoxLayout>
@@ -67,6 +68,8 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     , m_node(node)
 {
     setAttribute(Qt::WA_DeleteOnClose);
+    // VM 子窗浅色主题：主工作台深色，但模块配置子窗是 #F2F3F5 底、#E76900 主题色。
+    setStyleSheet(VisionWorkbenchStyle::moduleDialogStylesheet());
     // VM 模块窗标题：「<模块号> <模块名>」（如「3 轮廓匹配」），不再写"编辑模块 — xxx"。
     setWindowTitle(node ? QStringLiteral("%1 %2").arg(node->moduleId()).arg(node->name())
                         : QStringLiteral("模块配置"));
@@ -221,7 +224,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     m_templatePreview = new QLabel(QStringLiteral("模板预览"));
     m_templatePreview->setAlignment(Qt::AlignCenter);
     m_templatePreview->setMinimumHeight(120);
-    m_templatePreview->setStyleSheet(QStringLiteral("background:#1e1e21; color:#aaa; border:1px solid #444;"));
+    m_templatePreview->setStyleSheet(QStringLiteral("background:#FFFFFF; color:#9A9A9A; border:1px solid #D8D8D8;"));
     rightLay->addWidget(m_templatePreview);
 
     // VM「特征模板」页：模板列表 + 创建/编辑/删除（列表项 = 一个模板对象，不是文件路径）
@@ -787,7 +790,7 @@ void ModuleEditorDialog::rebuildVmTabs()
     };
     auto sectionLabel = [](const QString &text) {
         auto *label = new QLabel(QStringLiteral("<b>%1</b>").arg(text));
-        label->setStyleSheet(QStringLiteral("color:#cfd8e3; margin-top:6px;"));
+        label->setStyleSheet(QStringLiteral("color:#4E5054; margin-top:6px;"));
         return label;
     };
 
@@ -949,8 +952,8 @@ void ModuleEditorDialog::rebuildVmTabs()
         maskSwitch->setObjectName(QStringLiteral("outputMaskSwitch"));
         maskSwitch->setChecked(m_node->getParam(QStringLiteral("outputMask")).toBool());
         maskSwitch->setStyleSheet(QStringLiteral(
-            "QCheckBox::indicator { width:34px; height:18px; border-radius:9px; background:#5a6068; }"
-            "QCheckBox::indicator:checked { background:#e07b3a; }"));
+            "QCheckBox::indicator { width:34px; height:18px; border-radius:9px; background:#C9C9C9; }"
+            "QCheckBox::indicator:checked { background:#E76900; }"));
         roiForm->addRow(QStringLiteral("输出掩膜"), maskSwitch);
         connect(maskSwitch, &QCheckBox::toggled, this,
                 [write](bool on) { write(QStringLiteral("outputMask"), on); });
@@ -1033,8 +1036,8 @@ void ModuleEditorDialog::rebuildVmTabs()
         auto *fixSwitch = new QCheckBox(roiBox);
         fixSwitch->setEnabled(false);
         fixSwitch->setStyleSheet(QStringLiteral(
-            "QCheckBox::indicator { width:34px; height:18px; border-radius:9px; background:#5a6068; }"
-            "QCheckBox::indicator:checked { background:#e07b3a; }"));
+            "QCheckBox::indicator { width:34px; height:18px; border-radius:9px; background:#C9C9C9; }"
+            "QCheckBox::indicator:checked { background:#E76900; }"));
         fixSwitch->setToolTip(QStringLiteral("位置修正：由位置修正模块提供，当前版本尚未接入"));
         roiForm->addRow(QStringLiteral("位置修正"), fixSwitch);
 

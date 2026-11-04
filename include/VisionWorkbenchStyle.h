@@ -20,6 +20,11 @@ QString globalWidgetsStylesheet();
 /// 画布下方「图像来源」信息条样式
 QString imageSourceStripStylesheet();
 
+/// VM 4.4 模块配置子窗（ModuleEditorDialog / TemplateConfigDialog）的浅色主题：
+/// 取自 ColorStyle1.xaml（Col_SubForm_Background #F2F3F5 / Col_Theme #E76900）。
+/// 主工作台仍是深色，只有这两个"模块子窗"按 VM 的浅色子窗呈现。
+QString moduleDialogStylesheet();
+
 void applyGraphicsViewWorkbenchDefaults(QGraphicsView *view);
 
 /// 画布背景主色（与 FlowScene::drawBackground 一致）
