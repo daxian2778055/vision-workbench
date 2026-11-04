@@ -1000,6 +1000,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261104.4",
       "recorded_at": "2026-11-04",
       "recorded_note": "B2 单输入契约（模板匹配/图像四则/公式/相机IO 全部 1 输入点，老连线迁移为订阅）+ VM 4.4 模块窗四页签框架、轮廓匹配固定结果判断行、模板配置两行工具条；73/73 测试全绿"
+    },
+    {
+      "tag": "rc-20261104.5",
+      "commit": "c18f516b88290de296ddfb2d95ebbd182959737c",
+      "exe_md5": "40dbe827f24d0d62a63381f0a2af3b62",
+      "exe_bytes": 11077120,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261104.5",
+      "recorded_at": "2026-11-04",
+      "recorded_note": "模板匹配 UI 细节对齐：轮廓点改边缘细化+特征尺度/链长过滤、特征模板页新增可见训练模板按钮、确定不弹存图（静默落方案目录 templates/）、模块窗去掉顶部工具条、基本参数改 VM 输入源/ROI 枚举；73/73 测试全绿"
     }
   ],
   "legacy_backfilled": [
