@@ -5564,6 +5564,14 @@ void MainWindow::setupDockWidgets()
         if (!state.isEmpty() && restoreState(state))
             m_dockLayoutRestored = true;
     }
+    // 启动默认必须能看到「工具箱」和「图像显示」：旧存档可能是用户把面板关掉后的状态，
+    // 直接恢复会出现"打开软件只有一块空白画布"（现场反馈）。这两个面板固定 show。
+    if (ui->toolDock)
+        ui->toolDock->show();
+    if (ui->imageDock)
+        ui->imageDock->show();
+    if (ui->paramDock)
+        ui->paramDock->show();
     // 流程编辑已迁到中央控件：旧存档即使带 flowDock 也不让它重新露出来
     if (ui->flowDock)
         ui->flowDock->hide();
@@ -5577,8 +5585,9 @@ void MainWindow::setupDockWidgets()
 void MainWindow::switchToDesignMode()
 {
     VFP_DEBUG << "Switching to Design Mode";
-    // 显示所有 dock widgets
+    // 显示所有 dock widgets（图像显示是设计态主视图之一，不能漏）
     if (ui->toolDock) ui->toolDock->show();
+    if (ui->imageDock) ui->imageDock->show();
     if (ui->paramDock) ui->paramDock->show();
     if (ui->logDock) ui->logDock->show();
 

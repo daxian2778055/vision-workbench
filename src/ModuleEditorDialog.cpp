@@ -668,7 +668,9 @@ void ModuleEditorDialog::rebuildVmTabs()
             || t.contains(QStringLiteral("基本"))) {
             basicLay->addWidget(box);
         } else if ((t == QStringLiteral("模板配置") || t == QStringLiteral("特征模板")) && isTmpl) {
-            tmplLay->addWidget(box);   // 模板源/模板配置参数与模板同页（VM 放在模板配置窗右下）
+            // VM 的「特征模板」页只有模板列表/缩略图/编辑按钮，不放参数表单。
+            // 这些模板参数在独立的「模板配置」窗里编辑，页面上不再堆一长条控件。
+            box->setVisible(false);
         } else {
             runLay->addWidget(box);
         }
@@ -714,7 +716,8 @@ void ModuleEditorDialog::rebuildVmTabs()
                 createLay->addWidget(b);
         }
         createLay->addStretch();
-        tmplLay->addWidget(createRow);
+        // 三个入口固定在页首：页面内容再长也不用滚动才能找到（VM 图 13 同款位置）。
+        tmplLay->insertWidget(0, createRow);
         if (m_templateList)
             tmplLay->addWidget(m_templateList, 1);
         if (m_templatePreview)

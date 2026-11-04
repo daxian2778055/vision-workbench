@@ -109,6 +109,12 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     nameRow->addWidget(m_nameEdit, 1);
     rightLay->addLayout(nameRow);
 
+    // VM 模板配置窗右栏：列表在上（占满纵向），配置参数在下，匹配中心在底。
+    rightLay->addWidget(new QLabel(QStringLiteral("列表")));
+    m_list = new QListWidget();
+    m_list->setMinimumHeight(160);
+    rightLay->addWidget(m_list, 1);
+
     rightLay->addWidget(new QLabel(QStringLiteral("配置参数")));
     auto *form = new QVBoxLayout();
     auto makeRow = [&](const QString &label, QWidget *w) {
@@ -118,6 +124,15 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
         row->addWidget(w);
         form->addLayout(row);
     };
+    m_coarseSpin = new QSpinBox();
+    m_coarseSpin->setRange(1, 20);         // VM：速度尺度 1~20（金字塔顶层降采样倍率）
+    m_coarseSpin->setValue(3);
+    makeRow(QStringLiteral("速度尺度"), m_coarseSpin);
+    m_apertureCombo = new QComboBox();
+    for (int i = 1; i <= 20; ++i)          // VM：特征尺度 1~20，1 最精细
+        m_apertureCombo->addItem(QString::number(i));
+    m_apertureCombo->setCurrentText(QStringLiteral("3"));
+    makeRow(QStringLiteral("特征尺度"), m_apertureCombo);
     m_autoChk = new QCheckBox(QStringLiteral("自动"));
     m_autoChk->setChecked(true);
     makeRow(QStringLiteral("阈值模式"), m_autoChk);
@@ -125,16 +140,17 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     m_edgeSpin->setRange(1.0, 255.0);      // VM：对比度阈值 = 灰度差 1~255
     m_edgeSpin->setDecimals(0);
     m_edgeSpin->setValue(20.0);
-    makeRow(QStringLiteral("对比度阈值（灰度差）"), m_edgeSpin);
-    m_apertureCombo = new QComboBox();
-    for (int i = 1; i <= 20; ++i)          // VM：特征尺度 1~20，1 最精细
-        m_apertureCombo->addItem(QString::number(i));
-    m_apertureCombo->setCurrentText(QStringLiteral("3"));
-    makeRow(QStringLiteral("特征尺度（1~20）"), m_apertureCombo);
-    m_coarseSpin = new QSpinBox();
-    m_coarseSpin->setRange(1, 20);         // VM：速度尺度 1~20（金字塔顶层降采样倍率）
-    m_coarseSpin->setValue(3);
-    makeRow(QStringLiteral("速度尺度（1~20）"), m_coarseSpin);
+    makeRow(QStringLiteral("对比度阈值"), m_edgeSpin);
+    m_chainModeCombo = new QComboBox();
+    m_chainModeCombo->addItems({QStringLiteral("自动"), QStringLiteral("手动")});
+    makeRow(QStringLiteral("链长模式"), m_chainModeCombo);
+    m_minChainSpin = new QSpinBox();
+    m_minChainSpin->setRange(1, 200);
+    m_minChainSpin->setValue(3);
+    m_minChainSpin->setEnabled(false);   // 链长模式=自动时不可改（VM 同款）
+    makeRow(QStringLiteral("最小链长"), m_minChainSpin);
+    connect(m_chainModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int index) { m_minChainSpin->setEnabled(index == 1); });
     rightLay->addLayout(form);
 
     // VM「匹配中心 + 锁定」：锚点相对模板中心的偏移，结果里的「匹配点」就是它落到场景的位置
@@ -160,12 +176,6 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     anchorRow->addWidget(m_anchorLock);
     rightLay->addLayout(anchorRow);
 
-    rightLay->addWidget(new QLabel(QStringLiteral("列表")));
-    m_list = new QListWidget();
-    m_list->setMaximumHeight(110);
-    rightLay->addWidget(m_list);
-    rightLay->addStretch();
-
     split->addWidget(right, 0);
     right->setMinimumWidth(320);
     root->addLayout(split, 1);
@@ -175,12 +185,13 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     m_hint->setStyleSheet(QStringLiteral("color:#666;"));
     root->addWidget(m_hint);
 
+    // VM 模板配置窗底部只有「确定」；放弃编辑直接关右上角 X。
     auto *bottom = new QHBoxLayout();
     bottom->addStretch();
-    auto *cancelBtn = new QPushButton(QStringLiteral("取消"));
+    auto *cancelBtn = new QPushButton(QStringLiteral("取消"), this);
+    cancelBtn->setVisible(false);   // 保留对象给既有调用查找，不进入 VM 布局
     auto *okBtn = new QPushButton(QStringLiteral("确定"));
     okBtn->setDefault(true);
-    bottom->addWidget(cancelBtn);
     bottom->addWidget(okBtn);
     root->addLayout(bottom);
 
@@ -327,6 +338,9 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
             m_autoChk->setChecked(e.autoThreshold);
             m_apertureCombo->setCurrentText(QString::number(qBound(1, e.featureScale, 20)));
             m_coarseSpin->setValue(qBound(1, e.speedScale, 20));
+            m_chainModeCombo->setCurrentIndex(e.chainModeAuto ? 0 : 1);
+            m_minChainSpin->setValue(qBound(1, e.minChainLength, 200));
+            m_minChainSpin->setEnabled(!e.chainModeAuto);
             m_anchorX->setValue(e.anchorDx);
             m_anchorY->setValue(e.anchorDy);
             m_anchorLock->setChecked(e.anchorLocked);
@@ -960,6 +974,8 @@ void TemplateConfigDialog::onConfirm()
     entry.autoThreshold = m_autoChk->isChecked();
     entry.featureScale = m_apertureCombo->currentText().toInt();
     entry.speedScale = m_coarseSpin->value();
+    entry.chainModeAuto = (m_chainModeCombo->currentIndex() == 0);
+    entry.minChainLength = m_minChainSpin->value();
     entry.anchorDx = m_anchorX->value();
     entry.anchorDy = m_anchorY->value();
     entry.anchorLocked = m_anchorLock->isChecked();
@@ -980,6 +996,8 @@ void TemplateConfigDialog::onConfirm()
     m_node->setParam(QStringLiteral("autoEdgeThreshold"), entry.autoThreshold);
     m_node->setParam(QStringLiteral("featureScale"), entry.featureScale);
     m_node->setParam(QStringLiteral("speedScale"), entry.speedScale);
+    m_node->setParam(QStringLiteral("minChainLength"), entry.minChainLength);
+    m_node->setParam(QStringLiteral("chainMode"), entry.chainModeAuto);
 
     // VM 的「确定」直接关闭窗口，不再弹成功提示（结果在特征模板页的列表里可见）。
     m_hint->setText(QStringLiteral("已创建模板：%1").arg(entry.name));

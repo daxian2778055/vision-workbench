@@ -84,6 +84,8 @@ private:
     QCheckBox *m_autoChk = nullptr;
     QComboBox *m_apertureCombo = nullptr;
     QSpinBox *m_coarseSpin = nullptr;
+    QComboBox *m_chainModeCombo = nullptr;   /// VM「链长模式」自动/手动
+    QSpinBox *m_minChainSpin = nullptr;      /// VM「最小链长」
     QListWidget *m_list = nullptr;
     QLabel *m_hint = nullptr;
     QSpinBox *m_wandTol = nullptr;
