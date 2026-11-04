@@ -1018,6 +1018,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261104.6",
       "recorded_at": "2026-11-04",
       "recorded_note": "启动默认强制显示工具箱/图像显示/参数面板；特征模板页 创建/载入/训练模板 固定页首、模板参数表单移出；模板配置右栏按 VM 排序（列表→配置参数→匹配中心）并新增链长模式/最小链长；73/73 测试全绿"
+    },
+    {
+      "tag": "rc-20261104.7",
+      "commit": "21e9884a0b53e0e6a335b791a464cb99a2f62f7e",
+      "exe_md5": "ac051f3b2db21965029e7b1f1615a568",
+      "exe_bytes": 11099136,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261104.7",
+      "recorded_at": "2026-11-04",
+      "recorded_note": "模板匹配 UI 继续 1:1：模板配置图标工具条、模板存图/全部屏蔽开关、右栏 VM 顺序、基本参数 ROI 开关/单选钮/形状行、特征模板页两栏；73/73 测试全绿"
     }
   ],
   "legacy_backfilled": [
