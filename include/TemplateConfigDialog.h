@@ -22,6 +22,7 @@ class QComboBox;
 class QSpinBox;
 class QListWidget;
 class QLabel;
+class QPushButton;
 
 /// 「模板配置」窗（对齐 VisionMaster 4.4 的 创建/编辑模板 流程）：
 ///   左侧图像区直接框形状（矩形/多边形）→ 右侧配置参数（对比度阈值/阈值模式/特征尺度/速度尺度）
@@ -33,7 +34,8 @@ class TemplateConfigDialog : public QDialog
 public:
     /// editIndex >= 0 表示编辑已有模板（确定时原地更新），否则新增一条。
     explicit TemplateConfigDialog(OpencvTemplateMatchNode *node, int editIndex = -1,
-                                  QWidget *parent = nullptr);
+                                  QWidget *parent = nullptr,
+                                  bool startInMaskMode = false);
 
     /// 魔术棒取形（纯函数，便于无界面测试）：以 seed 为种子按容差泛洪，
     /// 取最大外轮廓并做多边形逼近；返回图像坐标顶点（<3 点表示失败）。
@@ -63,6 +65,8 @@ private slots:
     void onImageClicked(const QPointF &imagePos);
     void onClearShape();
     void onRoiEdited(const RoiShape &shape);
+    void onUndo();
+    void onRedo();
     void onPickOtherImage();
     void onPickSavePath();
     void onConfirm();
@@ -75,6 +79,19 @@ private:
     void applySuggestedParams();
     bool ensureSavePath(QString *path);
     cv::Mat cropTemplate() const;
+
+    /// 撤销/重做：形状、屏蔽、擦除点的整体快照（VM 工具条的撤销/重做按钮）
+    struct ShapeState {
+        QVector<RoiShape> shapes;
+        QVector<RoiShape> excludes;
+        QVector<RoiShape> erases;
+        RoiShape shape;
+    };
+    void pushShapeHistory();
+    void applyShapeHistory(const ShapeState &state);
+    void updateHistoryButtons();
+    /// 拖拽已有形状的手柄：更新列表里对应的那一块，而不是新增一块
+    void updateShapeFromHandle(const RoiShape &shape);
 
     OpencvTemplateMatchNode *m_node = nullptr;
     int m_editIndex = -1;
@@ -110,4 +127,9 @@ private:
     cv::Mat m_trainGray;      ///< 训练用灰度图（当前输入图或"选择其他图像"）
     QString m_trainLabel;     ///< 图上角标：输入源名/文件名
     QString m_savePath;       ///< 模板存图目标（空 = 确定时再问）
+
+    QVector<ShapeState> m_undoStates;
+    QVector<ShapeState> m_redoStates;
+    QPushButton *m_undoBtn = nullptr;
+    QPushButton *m_redoBtn = nullptr;
 };

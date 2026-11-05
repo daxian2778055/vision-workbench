@@ -54,6 +54,7 @@ AnnotationDialog::AnnotationDialog(NodeBase *node, const QString &annotationDir,
     connect(refreshBtn, &QPushButton::clicked, this, &AnnotationDialog::refreshClassList);
     connect(done, &QPushButton::clicked, this, &QDialog::accept);
     connect(m_view, &HalconWindow::roiEdited, this, &AnnotationDialog::onRoiEdited);
+    // 标注框不支持拖拽改（画完即存裁块），手柄信号不接，避免一次拖拽重复写标注。
 
     loadImage();
     refreshClassList();

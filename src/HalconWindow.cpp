@@ -777,7 +777,7 @@ void HalconWindow::mouseReleaseEvent(QMouseEvent *event)
 
     if (m_activeHandle != RoiHandle::None && event->button() == Qt::LeftButton) {
         m_activeHandle = RoiHandle::None;
-        emit roiEdited(m_roiShape);
+        emit roiHandleEdited(m_roiShape);
         setCursor(Qt::CrossCursor);
         update();
         return;

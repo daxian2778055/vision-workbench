@@ -15,6 +15,7 @@
 #include <QFocusEvent>
 #include <QApplication>
 #include <QPushButton>
+#include <QToolButton>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QRadioButton>
@@ -49,6 +50,8 @@ private slots:
     void testVmModuleWindowTabs();
     void testDrawRequestsMainCanvas();
     void testCanvasPickWritesRegionWithoutTraining();
+    void testTemplateConfigUndoRedo();
+    void testAllModuleWindowsArePureTabs();
 };
 
 void ModuleEditorTest::testParamEditTriggersDebouncedRecompute()
@@ -330,6 +333,13 @@ void ModuleEditorTest::testVmModuleWindowTabs()
             QVERIFY2(dlg.grab().save(snapshot + QStringLiteral(".feature.png")),
                      "特征模板页快照保存失败");
         }
+        // 运行参数页：确认去掉 roiCol/roiRow 后没有空行/重复 ROI 字段
+        if (tabs->count() > 2) {
+            tabs->setCurrentIndex(2);
+            QTest::qWait(80);
+            QVERIFY2(dlg.grab().save(snapshot + QStringLiteral(".run.png")),
+                     "运行参数页快照保存失败");
+        }
     }
 
     // 可选自检：模板配置窗（图标工具条 + 右栏）
@@ -359,6 +369,7 @@ void ModuleEditorTest::testDrawRequestsMainCanvas()
 
     QSignalSpy tmplSpy(&dlg, &ModuleEditorDialog::templateRoiPickRequested);
     QSignalSpy searchSpy(&dlg, &ModuleEditorDialog::searchRegionPickRequested);
+    QSignalSpy coordSpy(&dlg, &ModuleEditorDialog::coordinatePickRequested);
     QComboBox *shape = dlg.findChild<QComboBox *>(QStringLiteral("roiShapeCombo"));
     QVERIFY2(shape, "ROI 区域缺少形状下拉（旋转矩形/矩形）");
     QCOMPARE(shape->count(), 2);
@@ -393,6 +404,13 @@ void ModuleEditorTest::testDrawRequestsMainCanvas()
     polyBtn->click();
     QCOMPARE(searchSpy.count(), 2);
     QCOMPARE(searchSpy.at(1).at(1).toBool(), true);
+
+    // VM 同款：每个检测区域输入框右侧的取点按钮（0=左列 1=上行 2=宽度 3=高度）
+    QToolButton *pickWidth = dlg.findChild<QToolButton *>(QStringLiteral("searchPick2"));
+    QVERIFY2(pickWidth, "检测区域「宽度」缺少图像取点按钮");
+    pickWidth->click();
+    QCOMPARE(coordSpy.count(), 1);
+    QCOMPARE(coordSpy.at(0).at(1).toInt(), 2);
 }
 
 // 画布拾取 → 参数写回（与 UI 信号链互补）：直接调控制器，钉住
@@ -437,7 +455,23 @@ void ModuleEditorTest::testCanvasPickWritesRegionWithoutTraining()
     QCOMPARE(tmpl->getParam(QStringLiteral("searchRegionHeight")).toInt(), 160);
     QVERIFY(tmpl->getParam(QStringLiteral("searchRegionPolygon")).toString().isEmpty());
 
-    // ③ 检测区域：多边形 → 写点串，矩形宽高归零（多边形优先于矩形）
+    // ③ 单字段取点：宽度/高度按当前左列/上行计算
+    QVERIFY(controller.startCoordinatePick(node, 2));   // 宽度
+    RoiShape pointW;
+    pointW.type = RoiType::Point;
+    pointW.p1 = QPointF(250.0, 100.0);
+    QVERIFY(controller.writeRoiToNode(pointW) != nullptr);
+    QCOMPARE(tmpl->getParam(QStringLiteral("searchRegionWidth")).toInt(), 210);
+    QCOMPARE(tmpl->getParam(QStringLiteral("searchRegionCol")).toInt(), 40);
+
+    QVERIFY(controller.startCoordinatePick(node, 3));   // 高度
+    RoiShape pointH;
+    pointH.type = RoiType::Point;
+    pointH.p1 = QPointF(100.0, 200.0);
+    QVERIFY(controller.writeRoiToNode(pointH) != nullptr);
+    QCOMPARE(tmpl->getParam(QStringLiteral("searchRegionHeight")).toInt(), 170);
+
+    // ④ 检测区域：多边形 → 写点串，矩形宽高归零（多边形优先于矩形）
     QVERIFY(controller.startSearchRegionPick(node, /*polygon=*/true));
     RoiShape poly;
     poly.type = RoiType::Polygon;
@@ -446,6 +480,108 @@ void ModuleEditorTest::testCanvasPickWritesRegionWithoutTraining()
     QVERIFY(!tmpl->getParam(QStringLiteral("searchRegionPolygon")).toString().isEmpty());
     QCOMPARE(tmpl->getParam(QStringLiteral("searchRegionWidth")).toInt(), 0);
     QCOMPARE(tmpl->getParam(QStringLiteral("searchRegionHeight")).toInt(), 0);
+}
+
+// 模板配置工具条的撤销/重做：形状落下一块 → 撤销回到空 → 重做恢复。
+// VM 工具条这两个按钮是活的，旧版一直置灰。
+void ModuleEditorTest::testTemplateConfigUndoRedo()
+{
+    OpencvTemplateMatchNode node;
+    node.init();
+    TemplateConfigDialog cfg(&node);
+
+    QPushButton *undoBtn = nullptr;
+    QPushButton *redoBtn = nullptr;
+    for (QPushButton *b : cfg.findChildren<QPushButton *>()) {
+        if (b->toolTip() == QStringLiteral("撤销"))
+            undoBtn = b;
+        else if (b->toolTip() == QStringLiteral("重做"))
+            redoBtn = b;
+    }
+    QVERIFY2(undoBtn && redoBtn, "模板配置工具条缺少撤销/重做按钮");
+    QVERIFY2(!undoBtn->isEnabled(), "没有历史时撤销应置灰");
+    QVERIFY2(!redoBtn->isEnabled(), "没有历史时重做应置灰");
+
+    RoiShape rect;
+    rect.type = RoiType::Rect;
+    rect.p1 = QPointF(10, 10);
+    rect.p2 = QPointF(70, 60);
+    QVERIFY(QMetaObject::invokeMethod(&cfg, "onRoiEdited", Qt::DirectConnection,
+                                      Q_ARG(RoiShape, rect)));
+    QVERIFY2(undoBtn->isEnabled(), "落下一块形状后撤销应可用");
+
+    QVERIFY(QMetaObject::invokeMethod(&cfg, "onUndo", Qt::DirectConnection));
+    QVERIFY2(!undoBtn->isEnabled(), "撤销回初始状态后撤销应再次置灰");
+    QVERIFY2(redoBtn->isEnabled(), "撤销后重做应可用");
+
+    QVERIFY(QMetaObject::invokeMethod(&cfg, "onRedo", Qt::DirectConnection));
+    QVERIFY2(undoBtn->isEnabled(), "重做恢复后撤销应再次可用");
+    QVERIFY2(!redoBtn->isEnabled(), "重做到栈顶后重做应置灰");
+}
+
+// 纯页签窗（VM 口径）：所有算子都不再有内置图像区/工具条；
+// 通用 ROI/掩膜入口只发请求，实际绘制由主画布承接。
+void ModuleEditorTest::testAllModuleWindowsArePureTabs()
+{
+    FlowScene scene;
+    NodeBase *crop = scene.createNode(NodeBase::IMAGE_PROCESSING, QPointF(80, 80),
+                                      QStringLiteral("ROI裁剪"));
+    QVERIFY(crop);
+    ModuleEditorDialog dlg(crop);
+    QTabWidget *tabs = dlg.findChild<QTabWidget *>(QStringLiteral("vmTabs"));
+    QVERIFY2(tabs, "所有算子都应有 VM 四页签框架（非模板为三页）");
+    QCOMPARE(tabs->count(), 3);
+    QWidget *toolbarHost = dlg.findChild<QWidget *>(QStringLiteral("moduleToolbarHost"));
+    QVERIFY2(toolbarHost && toolbarHost->isHidden(), "模块窗不应再显示顶部工具条");
+    HalconWindow *view = dlg.findChild<HalconWindow *>();
+    QVERIFY2(view && view->isHidden(), "模块窗不应再内置图像区");
+
+    QPushButton *drawBtn = dlg.findChild<QPushButton *>(QStringLiteral("genericRoiDrawButton"));
+    QVERIFY2(drawBtn, "有几何 ROI 的算子应出现「ROI区域/绘制」入口");
+    QSignalSpy geoSpy(&dlg, &ModuleEditorDialog::geometryPickRequested);
+    drawBtn->click();
+    QCOMPARE(geoSpy.count(), 1);
+
+    // 可选自检：非模板窗纯页签快照（人工对照 VM 布局）
+    const QString snap = qEnvironmentVariable("VFP_UI_SNAPSHOT_PURETAB");
+    if (!snap.isEmpty())
+        QVERIFY2(dlg.grab().save(snap), qPrintable(QStringLiteral("快照保存失败：%1").arg(snap)));
+
+    // 掩膜：二值化支持 editMask，模块窗只发主画布编辑请求
+    NodeBase *thr = scene.createNode(NodeBase::IMAGE_PROCESSING, QPointF(320, 80),
+                                     QStringLiteral("二值化"));
+    QVERIFY(thr);
+    ModuleEditorDialog maskDlg(thr);
+    QPushButton *maskBtn = maskDlg.findChild<QPushButton *>(QStringLiteral("genericMaskEditButton"));
+    QVERIFY2(maskBtn, "支持掩膜的算子应出现「掩膜/编辑掩膜」入口");
+    QSignalSpy maskSpy(&maskDlg, &ModuleEditorDialog::maskEditRequested);
+    maskBtn->click();
+    QCOMPARE(maskSpy.count(), 1);
+
+    // 二值化类型切换 → 只显示该类型自己的参数（VM 各类型参数分组）
+    QComboBox *typeCombo = maskDlg.findChild<QComboBox *>(QStringLiteral("binaryType"));
+    QSpinBox *lowSpin = maskDlg.findChild<QSpinBox *>(QStringLiteral("lowThreshold"));
+    QSpinBox *kwSpin = maskDlg.findChild<QSpinBox *>(QStringLiteral("kernelWidth"));
+    QVERIFY2(typeCombo && lowSpin && kwSpin, "二值化运行参数控件缺失");
+    QVERIFY2(lowSpin->isHidden(), "默认均值二值化不应显示硬阈值参数");
+    QVERIFY2(!kwSpin->isHidden(), "默认均值二值化应显示滤波核参数");
+    typeCombo->setCurrentIndex(0);   // 硬阈值二值化
+    QApplication::processEvents();
+    QVERIFY2(!lowSpin->isHidden(), "硬阈值二值化应显示低阈值");
+    QVERIFY2(kwSpin->isHidden(), "硬阈值二值化不应显示均值滤波核");
+
+    const QString binarySnap = qEnvironmentVariable("VFP_UI_SNAPSHOT_BINARY");
+    if (!binarySnap.isEmpty())
+        QVERIFY2(maskDlg.grab().save(binarySnap),
+                 qPrintable(QStringLiteral("快照保存失败：%1").arg(binarySnap)));
+    const QString binaryRunSnap = qEnvironmentVariable("VFP_UI_SNAPSHOT_BINARY_RUN");
+    if (!binaryRunSnap.isEmpty()) {
+        if (QTabWidget *maskTabs = maskDlg.findChild<QTabWidget *>(QStringLiteral("vmTabs")))
+            maskTabs->setCurrentIndex(1);   // 运行参数页
+        QApplication::processEvents();
+        QVERIFY2(maskDlg.grab().save(binaryRunSnap),
+                 qPrintable(QStringLiteral("快照保存失败：%1").arg(binaryRunSnap)));
+    }
 }
 
 QTEST_MAIN(ModuleEditorTest)

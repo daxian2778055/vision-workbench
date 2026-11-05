@@ -5,6 +5,8 @@
 #include "AppLog.h"
 #include <opencv2/imgproc.hpp>
 #include <QWidget>
+#include <QRectF>
+#include <algorithm>
 
 OpencvMorphNode::OpencvMorphNode(QObject *parent) : HalconNode(parent)
 {
@@ -16,14 +18,34 @@ void OpencvMorphNode::init()
 {
     HalconNode::init();
     addOutputPort(QStringLiteral("结果图"), PortDataType::Image);
-    registerParams({
-        makeEnumParam(QStringLiteral("op"), 0, QStringList{"腐蚀", "膨胀", "开运算", "闭运算"},
-                      QStringLiteral("形态学操作")),
-        makeIntParam(QStringLiteral("kernelSize"), 3, 1, 31,
-                     QStringLiteral("核大小（奇数）")),
-        makeIntParam(QStringLiteral("iterations"), 1, 1, 10,
-                     QStringLiteral("迭代次数")),
-    });
+
+    // 字段名、顺序、默认值对齐 VM 4.4 形态学处理（IMVSImageMorphModuAlgorithmTab.xml）。
+    const QString runGroup = QStringLiteral("运行参数");
+    ParamSpecList specs;
+    auto addSpec = [&](ParamSpec spec, const QString &tip) {
+        spec.group = runGroup;
+        spec.tooltip = tip;
+        specs.append(spec);
+    };
+    addSpec(makeEnumParam(QStringLiteral("morphType"), 1,
+                          {QStringLiteral("膨胀"), QStringLiteral("腐蚀"),
+                           QStringLiteral("开"), QStringLiteral("闭")},
+                          QStringLiteral("形态学类型")),
+            QStringLiteral("膨胀/腐蚀/开/闭，对应 VM 的四种形态学处理"));
+    addSpec(makeEnumParam(QStringLiteral("morphShape"), 0,
+                          {QStringLiteral("矩形"), QStringLiteral("椭圆"), QStringLiteral("十字")},
+                          QStringLiteral("形态学形状")),
+            QStringLiteral("结构元的形状：矩形/椭圆/十字"));
+    addSpec(makeIntParam(QStringLiteral("iterations"), 1, 0, 10,
+                         QStringLiteral("迭代次数")),
+            QStringLiteral("对原图重复处理的次数；0 = 不处理"));
+    addSpec(makeIntParam(QStringLiteral("kernelWidth"), 3, 1, 51,
+                         QStringLiteral("核宽度")),
+            QStringLiteral("结构元宽度（像素）"));
+    addSpec(makeIntParam(QStringLiteral("kernelHeight"), 3, 1, 51,
+                         QStringLiteral("核高度")),
+            QStringLiteral("结构元高度（像素）"));
+    registerParams(specs);
 }
 
 void OpencvMorphNode::run(bool /*autoSwitch*/)
@@ -39,37 +61,66 @@ void OpencvMorphNode::run(bool /*autoSwitch*/)
             m_params["moduleStatus"] = false;
             return;
         }
-        if (mat.channels() == 3) {
+        if (mat.channels() == 3)
             cv::cvtColor(mat, mat, cv::COLOR_BGR2GRAY);
-        }
-        const int op = m_params.value(QStringLiteral("op"), 0).toInt();
-        const int ksize = m_params.value(QStringLiteral("kernelSize"), 3).toInt();
-        const int iters = m_params.value(QStringLiteral("iterations"), 1).toInt();
 
-        const int k = std::max(1, ksize | 1);  // 强制奇数
-        cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(k, k));
+        const int type = m_params.value(QStringLiteral("morphType"), 1).toInt();
+        const int shape = m_params.value(QStringLiteral("morphShape"), 0).toInt();
+        const int iterations = m_params.value(QStringLiteral("iterations"), 1).toInt();
+        const int kw = std::max(1, m_params.value(QStringLiteral("kernelWidth"), 3).toInt());
+        const int kh = std::max(1, m_params.value(QStringLiteral("kernelHeight"), 3).toInt());
 
-        cv::Mat out;
-        switch (op) {
-        case 1:
-            cv::dilate(mat, out, kernel, cv::Point(-1, -1), iters);
-            break;
-        case 2:
-            cv::morphologyEx(mat, out, cv::MORPH_OPEN, kernel, cv::Point(-1, -1), iters);
-            break;
-        case 3:
-            cv::morphologyEx(mat, out, cv::MORPH_CLOSE, kernel, cv::Point(-1, -1), iters);
-            break;
-        case 0:
-        default:
-            cv::erode(mat, out, kernel, cv::Point(-1, -1), iters);
-            break;
+        cv::Mat processed;
+        if (iterations <= 0) {
+            processed = mat.clone();   // VM 迭代次数 0 = 不处理
+        } else {
+            int shapeType = cv::MORPH_RECT;
+            if (shape == 1)
+                shapeType = cv::MORPH_ELLIPSE;
+            else if (shape == 2)
+                shapeType = cv::MORPH_CROSS;
+            const cv::Mat kernel = cv::getStructuringElement(shapeType, cv::Size(kw, kh));
+            switch (type) {
+            case 0:
+                cv::dilate(mat, processed, kernel, cv::Point(-1, -1), iterations);
+                break;
+            case 2:
+                cv::morphologyEx(mat, processed, cv::MORPH_OPEN, kernel, cv::Point(-1, -1), iterations);
+                break;
+            case 3:
+                cv::morphologyEx(mat, processed, cv::MORPH_CLOSE, kernel, cv::Point(-1, -1), iterations);
+                break;
+            case 1:
+            default:
+                cv::erode(mat, processed, kernel, cv::Point(-1, -1), iterations);
+                break;
+            }
         }
+
+        // ROI：矩形几何 ROI + 掩膜。ROI 外保留原图（VM 形态学没有「ROI外处理」开关）。
+        cv::Mat allowed(mat.size(), CV_8U, cv::Scalar(255));
+        const RoiShape roi = geometryRoi();
+        if (roi.type == RoiType::Rect) {
+            const QRectF box = QRectF(roi.p1, roi.p2).normalized();
+            if (box.width() > 1.0 && box.height() > 1.0) {
+                allowed.setTo(0);
+                cv::rectangle(allowed,
+                              cv::Rect(int(box.x()), int(box.y()),
+                                       int(box.width()), int(box.height())),
+                              cv::Scalar(255), cv::FILLED);
+            }
+        }
+        OpencvUtil::applyGrayMask(allowed, editMask());
+
+        cv::Mat outside;
+        cv::compare(allowed, 0, outside, cv::CMP_EQ);
+        cv::Mat output = processed.clone();
+        mat.copyTo(output, outside);   // ROI 外保留原图
 
         m_params["moduleStatus"] = true;
-        m_outputImage = m_inputImage;
+        m_outputImage = OpencvUtil::matToHimage(output);
         auto outObj = QSharedPointer<DataObject>::create();
-        outObj->setHImage(OpencvUtil::matToHimage(out));
+        outObj->setHImage(m_outputImage);
         setOutputData(1, outObj);
     } catch (const std::exception &e) {
         m_params[QStringLiteral("lastError")] =
@@ -92,4 +143,35 @@ QWidget *OpencvMorphNode::createParamPanel()
 void OpencvMorphNode::updateParamPanel(QWidget *panel)
 {
     updateAutoParamPanel(panel);
+}
+
+RoiShape OpencvMorphNode::geometryRoi() const
+{
+    const int row = m_params.value(QStringLiteral("roiRectRow"), 0).toInt();
+    const int col = m_params.value(QStringLiteral("roiRectCol"), 0).toInt();
+    const int width = m_params.value(QStringLiteral("roiRectWidth"), 0).toInt();
+    const int height = m_params.value(QStringLiteral("roiRectHeight"), 0).toInt();
+    RoiShape shape;
+    if (width <= 1 || height <= 1)
+        return shape;
+    shape.type = RoiType::Rect;
+    shape.p1 = QPointF(col, row);
+    shape.p2 = QPointF(col + width, row + height);
+    return shape;
+}
+
+void OpencvMorphNode::applyGeometryRoi(const RoiShape &shape)
+{
+    if (shape.type == RoiType::Rect) {
+        const QRectF box = QRectF(shape.p1, shape.p2).normalized();
+        setParam(QStringLiteral("roiRectRow"), int(box.y()));
+        setParam(QStringLiteral("roiRectCol"), int(box.x()));
+        setParam(QStringLiteral("roiRectWidth"), qMax(1, int(box.width())));
+        setParam(QStringLiteral("roiRectHeight"), qMax(1, int(box.height())));
+    } else if (shape.type == RoiType::None) {
+        setParam(QStringLiteral("roiRectRow"), 0);
+        setParam(QStringLiteral("roiRectCol"), 0);
+        setParam(QStringLiteral("roiRectWidth"), 0);
+        setParam(QStringLiteral("roiRectHeight"), 0);
+    }
 }

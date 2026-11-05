@@ -209,3 +209,82 @@ python tools\repo_hygiene.py
 - 未启动 VM 4.4 做人工点击比对；结论以官方帮助文字与当前源码为准。
 - 建议顺序：P0-1（防数据丢失）→ P0-2/P0-3（模块窗规则统一）→ P0-4（自动连接）→ P1-2/P1-3（结果区与流程栏）→ P1-4/P1-5/P1-6（画布缩放、工具条、菜单）→ 其余 P1/P2。
 - P0-2 与 P0-4 是“规则一致”的核心；只补功能而不统一规则，仍不能称为“整体面板对齐”。
+
+## 十二、2026-11-05 更新（框架纯页签 + 二值化试点）
+
+本轮按“先框架、再逐算子”的顺序落地，以下条目已不再是缺口：
+
+| 原编号 | 现状 |
+|---|---|
+| P0-2 模块配置页签只对模板生效 | 已闭合：`ModuleEditorDialog::rebuildVmTabs` 对**所有算子**建 基本参数/运行参数/结果显示 三页；模板类多一页「特征模板」。 |
+| P0-3 模板专属按钮泄漏 | 已闭合：训练/评估/体检/向导/搜索区域等按钮只对模板算子可见；模块窗顶部工具条整体隐藏。 |
+| P1-1 缺帮助入口 | 已闭合：顶部固定「?」按钮（不再随工具条隐藏）；底部「连续执行/执行/确定」，关窗=回滚。 |
+| P1-9 结果显示页缺三组配置 | 已闭合：结果判断 + 通用结果表（非模板显示输出项/值/类型/状态）+ 图像/文本显示配置。 |
+| P1-10 参数即时生效无取消 | 已闭合：打开时快照，取消回滚，确定提交一次重算。 |
+
+**框架统一（VM 纯页签窗）**：所有模块窗不再内置图像区与工具条；ROI 绘制/掩膜涂抹统一落在主画布
+（`ImageDisplayController::startGeometryPick/startMaskEdit`，`MainWindow::beginGeometryPick/beginMaskEdit`）。
+9 个带 ROI/掩膜的算子在「基本参数」页保留「ROI区域」「掩膜」入口，只发主画布请求。
+
+**二值化试点（OpencvThresholdNode ↔ IMVSBinaryModu）**：已补齐 15 项运行参数
+（ROI外处理、硬阈值/均值/高斯/Sauvola/自动、高低阈值、均值核、高斯核与标准差、比较类型、偏移、Sauvola 五项），
+类型切换动态隐藏无关参数；矩形 ROI + 掩膜 + ROI 外黑色/原图；默认值按 VM（均值二值化、低阈值 100）。
+腿：`NodeCoreTest::testThresholdVmModesAndRoi`（五种模式 + 高低阈值反向 + ROI 外处理）；
+`ModuleEditorTest::testAllModuleWindowsArePureTabs`（纯页签 + 参数动态显隐）。
+快照（build/ 不入库）：`ui_puretab.png`、`ui_binary.png`、`ui_binary_run.png`。
+
+**形态学（OpencvMorphNode ↔ IMVSImageMorphModu）**：5 项运行参数按 VM 对齐
+（形态学类型 膨胀/腐蚀/开/闭、形态学形状 矩形/椭圆/十字、迭代次数 0~10、核宽度/高度 1~51），
+默认腐蚀/矩形/1/3×3；ROI 外保留原图；矩形 ROI + 掩膜。
+腿：`NodeCoreTest::testMorphVmParamsAndRoi`（腐蚀/膨胀面积、宽高独立、三种结构元、迭代 0、ROI 外原图）。
+
+**滤波（BlurNode/MedianFilterNode ↔ IMVSImageFilterModu）**：
+- 模糊 = VM「高斯」类型：高斯滤波核 1~101，默认 3
+- 中值滤波 = VM「中值」类型：核宽度/高度 1~101，默认 3×3；方形奇数核走 OpenCV `medianBlur`，矩形核走自研直方图中值
+- 两者都支持矩形 ROI + 掩膜，ROI 外保留原图
+腿：`NodeCoreTest::testFilterVmParamsAndRoi`（高斯摊开单像素、方形/矩形中值去椒盐、ROI 外原图）。
+
+**增强与归一化（SharpenNode/ContrastStretchNode/HistogramEqualizeNode ↔ IMVSImageEnhanceModu / IMVSImageNormlizeModu）**：
+- 锐化 = VM「锐化」类型：锐化强度 0~1000（100=1.0，0=不锐化）、锐化核大小 1~51，默认 0/3
+- 对比度 = VM「对比度」类型：对比度系数 1~10000，默认 100（100=不变）
+- 直方图均衡 = VM「直方图均衡化」类型：无运行参数
+- 三者都支持矩形 ROI + 掩膜，ROI 外保留原图
+腿：`NodeCoreTest::testEnhanceVmParamsAndRoi`（锐化 0/边缘过冲、对比度 100/200、直方图均衡拉开范围、ROI 外原图）。
+
+**归一化与缩放（GrayStretchNode ↔ IMVSImageNormlizeModu；ResizeNode ↔ IMVSImageResizeModu）**：
+- 灰度拉伸改为 VM「均值标准差归一化」：均值 0~255 默认 128、标准差 0~255 默认 20；按 ROI/掩膜内统计量做标准化
+- 图像缩放改为 VM 输出宽高（8~65000，默认 800×800）+ 插值类型（最近邻/双线性/双三次）+ 抗混叠
+- 灰度拉伸支持矩形 ROI + 掩膜；缩放暂未接 ROI（VM 缩放的 ROI 语义待确认）
+腿：`NodeCoreTest::testNormalizeAndResizeVmParams`（均值/标准差归一化数值、ROI 外原图、缩放宽高/最近邻采样）。
+
+**几何变换（TranslateImageNode/OpencvRotateNode/MirrorNode ↔ IMVSAffineTransformModu）**：
+- 平移：X/Y 移动距离、插值（最近邻/双线性）、填充方式（常量/邻近复制）、填充值、锁定输出尺寸
+- 旋转：旋转角度 0~360、插值、填充方式/值、锁定输出尺寸
+- 镜像：镜像方向（水平/垂直/水平垂直）
+- 未锁定输出尺寸时画布按「原画布 ∪ 变换后包围盒」扩展；锁定时保持原尺寸
+腿：`NodeCoreTest::testAffineVmParams`（平移扩展/锁定+常量填充、三种镜像、0°/90° 旋转包围盒）。
+
+**Blob 批 1（OpencvBlobNode ↔ IMVSBlobFindModu）：阈值与连通域**
+- 阈值方式 6 档：不进行二值化 / 单阈值 / 双阈值 / 自动阈值 / 软阈值（固定）/ 软阈值（相对）
+- 极性：亮于背景 / 暗于背景；低阈值 100、高阈值 150（VM 默认）
+- 软阈值 7 项：固定低/高阈值、柔和度、低/高尾部比例、低/高阈值比例
+- 查找个数默认 100（1~20000）；孔洞填充面积、8/4 连通性保留
+- 支持矩形 ROI + 掩膜，ROI 外不参与 Blob 统计
+- 软阈值权重目前按 0.5 转为二值后做连通域（VM 的加权连通域精度待后续实现）
+腿：`NodeCoreTest::testBlobThresholdVmModes`（单阈值亮/暗极性、双阈值低<高与低>高、软阈值固定、ROI 限定）。
+
+**Blob 批 2（形状筛选）**：11 组筛选统一为 VM 的 enable + min/max
+（面积、外接宽、外接高、周长、短轴、长轴、圆形度、矩形度、质心偏移、轴比、box 角度）。
+圆形度按 VM 帮助改为 `面积 / (π × 质心到轮廓最大距离²)`；矩形度=面积/最小外接矩形面积；
+轴比=短轴/长轴；质心偏移=质心到最小外接矩形中心的距离；box 角度归一化到 [-90,90)。
+腿：`NodeCoreTest::testBlobShapeFilters`（方块/三角形矩形度、方块/细长矩形轴比、周长上下限）。
+
+**Blob 批 3（排序与结果判断）**
+- 13 种排序特征：面积、周长、圆形度、矩形度、质心X/Y、box 角度/宽/高、矩形左上X/Y、主轴角度、轴比
+- 排序方式：升序 / 降序 / 不排序（VM：0=升序，1=降序，2=不排序）
+- 结果判断 10 项：无目标判定 OK、Blob 数量检查、单个 Blob 面积检查、Blob 总面积检查
+- `moduleStatus` 由判断结果驱动，失败原因写入 `judgeReason`
+腿：`NodeCoreTest::testBlobSortAndJudgment`（面积降序+截断顺序、质心X升序、不排序、数量/面积/总面积 NG、无目标 OK 开关）。
+
+**下一步队列**：卡尺（IMVSCaliperModu）→ 直线/圆拟合 → 特征匹配 → 测量 → 识别 → 采集/标定/逻辑数据。
+VM 滤波的「均值/取反/边缘提取」暂未单独建节点（项目约束不扩算子目录），其中取反/边缘提取已有独立算子，后续按各自模块对齐。

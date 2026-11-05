@@ -68,8 +68,8 @@ private slots:
     void templateMatchOverlayShowsRegionAndTemplate();
     // VM「对比度阈值/阈值模式」对齐：参数必须真的改变参与打分的点
     void templateMatchEdgeThresholdTakesEffect();
-    // 模板对象：序列化往返 + 老 templatePath 迁移
-    void templateEntryRoundTripAndLegacyMigration();
+    // 模板对象：序列化往返 + 只有 templatePath 时的单模板模式
+    void templateEntryRoundTripAndSingleTemplateMode();
     // 模板列表驱动匹配：切 active 索引，命中必须跟着换模板
     void templateMatchUsesActiveTemplateFromList();
     // 多模板同时匹配：画布只有 B 时，开关打开后必须自动选中模板 B
@@ -1183,7 +1183,12 @@ void FeatureMatchTest::templateMatchMaskMovesBestHit()
     int nearLeft = 0, nearRight = 0;
     for (const QString &it : list0.split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
         const QStringList f = it.split(QLatin1Char(','));
-        QVERIFY(f.size() >= 3);                   // row,col,score[,angle,scale,prow,pcol]
+        // VM 结果表 7 字段契约：row,col,score,angle,scale,pointRow,pointCol
+        // 早先写成 >=3 是为了兼容老数据，但当前节点必须输出完整 7 项，否则叠加层
+        // 读不到角度/尺度/匹配点也照样通过——这里收紧为 7 项。
+        QVERIFY2(f.size() >= 7,
+                 qPrintable(QStringLiteral("matchList 应有 7 字段，实际 %1 项：%2")
+                                .arg(f.size()).arg(it)));
         const double row = f[0].toDouble();
         const double col = f[1].toDouble();
         if (qAbs(col - leftCx) <= 8.0 && qAbs(row - leftCy) <= 8.0) ++nearLeft;
@@ -1213,7 +1218,9 @@ void FeatureMatchTest::templateMatchMaskMovesBestHit()
     const QStringList items1 = list1.split(QLatin1Char(';'), Qt::SkipEmptyParts);
     QCOMPARE(items1.size(), 1);
     const QStringList f1 = items1.first().split(QLatin1Char(','));
-    QVERIFY(f1.size() >= 3);
+    QVERIFY2(f1.size() >= 7,
+             qPrintable(QStringLiteral("matchList 应有 7 字段，实际 %1 项：%2")
+                            .arg(f1.size()).arg(items1.first())));
     const double row1 = f1[0].toDouble();
     const double col1 = f1[1].toDouble();
     const double score1 = f1[2].toDouble();
@@ -1338,7 +1345,7 @@ void FeatureMatchTest::templateMatchEdgeThresholdTakesEffect()
     // 对比度阈值 = 特征点与背景的灰度差（VM 1~255）。这条低对比边灰度差 ≈ 10，
     // Sobel 响应 ≈ 40；阈值 5（Sobel 20）应保留、20（Sobel 80）应淘汰。
     // 阈值模式必须先切到手动（VM 默认是自动，自动会覆盖手填值）。
-    node.setParam(QStringLiteral("autoEdgeThreshold"), false);
+    node.setParam(QStringLiteral("autoContrastThreshold"), false);
     node.setParam(QStringLiteral("contrastThreshold"), 5);
     const int n20 = node.editorFeaturePoints().size();
     node.setParam(QStringLiteral("contrastThreshold"), 20);
@@ -1350,14 +1357,14 @@ void FeatureMatchTest::templateMatchEdgeThresholdTakesEffect()
 
     // 阈值模式=自动：按模板对比度自动生成，这条低对比边仍应被判为特征点
     node.setParam(QStringLiteral("contrastThreshold"), 255);
-    node.setParam(QStringLiteral("autoEdgeThreshold"), true);
+    node.setParam(QStringLiteral("autoContrastThreshold"), true);
     const int nAuto = node.editorFeaturePoints().size();
     qInfo("edge-threshold: auto -> %d 点", nAuto);
     QVERIFY2(nAuto > 0, "自动阈值模式没生效（点全被滤掉）");
 }
 
-// 模板对象：JSON 往返不丢字段；老 templatePath 能无痛迁移成一条模板记录。
-void FeatureMatchTest::templateEntryRoundTripAndLegacyMigration()
+// 模板对象：JSON 往返不丢字段；只有 templatePath（训练直存）时运行期合成一条模板记录。
+void FeatureMatchTest::templateEntryRoundTripAndSingleTemplateMode()
 {
     TemplateEntry e;
     e.name = QStringLiteral("工件A");
@@ -1387,21 +1394,16 @@ void FeatureMatchTest::templateEntryRoundTripAndLegacyMigration()
     QCOMPARE(back.speedScale, e.speedScale);
     QCOMPARE(back.minChainLength, e.minChainLength);
 
-    // 老方案：只有一个 templatePath → templates() 自动合成一条，migrate 后落库
+    // 单模板模式：只设 templatePath（训练模板直存）→ templates() 合成一条，只读不落库
     OpencvTemplateMatchNode node;
     node.init();
-    node.setParam(QStringLiteral("templatePath"), QStringLiteral("templates/legacy.png"));
+    node.setParam(QStringLiteral("templatePath"), QStringLiteral("templates/single.png"));
     node.setParam(QStringLiteral("contrastThreshold"), 44);
-    const QVector<TemplateEntry> legacy = node.templates();
-    QCOMPARE(legacy.size(), 1);
-    QCOMPARE(legacy.first().imagePath, QStringLiteral("templates/legacy.png"));
-    QCOMPARE(legacy.first().contrastThreshold, 44);
+    const QVector<TemplateEntry> single = node.templates();
+    QCOMPARE(single.size(), 1);
+    QCOMPARE(single.first().imagePath, QStringLiteral("templates/single.png"));
+    QCOMPARE(single.first().contrastThreshold, 44);
     QVERIFY(node.getParam(QStringLiteral("templates")).toString().isEmpty());   // 只读不写
-
-    node.migrateLegacyTemplate();
-    QVERIFY(!node.getParam(QStringLiteral("templates")).toString().isEmpty());
-    QCOMPARE(node.templates().size(), 1);
-    QCOMPARE(node.activeTemplateIndex(), 0);
 }
 
 // 模板列表驱动匹配：两个模板指向两张不同图，切 active 后命中位置必须跟着换。
@@ -1795,39 +1797,60 @@ void FeatureMatchTest::templateOutputsSearchMask()
     node.setParam(QStringLiteral("searchRegionRow"), 80);
     node.setParam(QStringLiteral("searchRegionWidth"), 300);
     node.setParam(QStringLiteral("searchRegionHeight"), 220);
-    node.setParam(QStringLiteral("outputMask"), true);
+    // VM 两个独立输出掩膜：检测区域 → 「检测区域掩膜」，ROI 区域 → 「掩膜」
+    node.setParam(QStringLiteral("roiCenterCol"), 244.0);
+    node.setParam(QStringLiteral("roiCenterRow"), 194.0);
+    node.setParam(QStringLiteral("roiWidth"), 128.0);
+    node.setParam(QStringLiteral("roiHeight"), 128.0);
+    node.setParam(QStringLiteral("roiAngle"), 0.0);
+    node.setParam(QStringLiteral("outputSearchMask"), true);
     node.setInputImage(OpencvUtil::matToHimage(canvas));
     node.run(false);
+
+    auto attached = [](const QSharedPointer<DataObject> &obj, const QString &name) {
+        if (!obj)
+            return QSharedPointer<DataObject>();
+        for (const auto &p : obj->attachedResults()) {
+            if (p.first == name)
+                return p.second;
+        }
+        return QSharedPointer<DataObject>();
+    };
 
     // 直接调用 run() 时结果挂在端口 1；聚合端口(0)由 process() 生成，这里验数据面
     const auto resData = node.getOutputData(1);
     QVERIFY2(resData, "匹配结果对象缺失");
-    QSharedPointer<DataObject> maskObj;
-    for (const auto &p : resData->attachedResults()) {
-        if (p.first == QStringLiteral("掩膜"))
-            maskObj = p.second;
-    }
-    QVERIFY2(maskObj && maskObj->getHImage().IsInitialized(),
-             "输出掩膜打开后，结果对象上应有「掩膜」子结果");
-    const cv::Mat mask = OpencvUtil::himageToMat(HImage(maskObj->getHImage()));
-    QCOMPARE(mask.cols, canvas.cols);
-    QCOMPARE(mask.rows, canvas.rows);
-    QVERIFY2(mask.at<uchar>(150, 150) != 0, "搜索区域内部应为白");
-    QVERIFY2(mask.at<uchar>(10, 10) == 0, "搜索区域外应为黑");
+    const auto searchMaskObj = attached(resData, QStringLiteral("检测区域掩膜"));
+    QVERIFY2(searchMaskObj && searchMaskObj->getHImage().IsInitialized(),
+             "检测区域输出掩膜打开后，结果对象上应有「检测区域掩膜」子结果");
+    const cv::Mat searchMask = OpencvUtil::himageToMat(HImage(searchMaskObj->getHImage()));
+    QCOMPARE(searchMask.cols, canvas.cols);
+    QCOMPARE(searchMask.rows, canvas.rows);
+    QVERIFY2(searchMask.at<uchar>(150, 150) != 0, "检测区域内部应为白");
+    QVERIFY2(searchMask.at<uchar>(10, 10) == 0, "检测区域外应为黑");
 
-    // 关掉后该子结果不应再带图
-    node.setParam(QStringLiteral("outputMask"), false);
+    // 关掉检测区域掩膜后该子结果不应再带图
+    node.setParam(QStringLiteral("outputSearchMask"), false);
     node.run(false);
     const auto resOff = node.getOutputData(1);
-    QSharedPointer<DataObject> maskOff;
-    if (resOff) {
-        for (const auto &p : resOff->attachedResults()) {
-            if (p.first == QStringLiteral("掩膜"))
-                maskOff = p.second;
-        }
-    }
-    QVERIFY2(!maskOff || !maskOff->getHImage().IsInitialized(),
-             "输出掩膜关闭后不应再产出掩膜图");
+    QVERIFY2(!attached(resOff, QStringLiteral("检测区域掩膜")),
+             "检测区域输出掩膜关闭后不应再产出掩膜图");
+
+    // ROI 区域掩膜：打开 outputMask → 子结果「掩膜」覆盖模板 ROI，而非搜索区域
+    node.setParam(QStringLiteral("outputMask"), true);
+    node.run(false);
+    const auto resRoi = node.getOutputData(1);
+    const auto roiMaskObj = attached(resRoi, QStringLiteral("掩膜"));
+    QVERIFY2(roiMaskObj && roiMaskObj->getHImage().IsInitialized(),
+             "ROI 输出掩膜打开后，结果对象上应有「掩膜」子结果");
+    const cv::Mat roiMask = OpencvUtil::himageToMat(HImage(roiMaskObj->getHImage()));
+    QVERIFY2(roiMask.at<uchar>(194, 244) != 0, "模板 ROI 内部应为白");
+    QVERIFY2(roiMask.at<uchar>(80, 350) == 0, "模板 ROI 外（仍在检测区域内）应为黑");
+    node.setParam(QStringLiteral("outputMask"), false);
+    node.run(false);
+    const auto resRoiOff = node.getOutputData(1);
+    QVERIFY2(!attached(resRoiOff, QStringLiteral("掩膜")),
+             "ROI 输出掩膜关闭后不应再产出掩膜图");
 }
 
 // 匹配中心（锚点）：默认在模板中心；配置偏移后，结果的「匹配点」必须整体平移过去。

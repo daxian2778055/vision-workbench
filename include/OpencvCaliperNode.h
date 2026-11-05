@@ -19,4 +19,8 @@ public:
     RoiType geometryRoiType() const override { return RoiType::Line; }
     RoiShape geometryRoi() const override;
     void applyGeometryRoi(const RoiShape &shape) override;
+
+private:
+    /// VM 参数条件显隐：官方多处注明「边缘模式设置为边缘对时，才有该参数」。
+    void applyParamVisibility(QWidget *panel);
 };

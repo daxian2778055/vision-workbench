@@ -48,6 +48,9 @@
 #include <QEvent>
 #include <QSettings>
 #include <QScreen>
+#include <QPainter>
+#include <QPixmap>
+#include <QIcon>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
@@ -60,6 +63,25 @@ namespace {
 QString geometryStorePath()
 {
     return QCoreApplication::applicationDirPath() + QStringLiteral("/module_editor.ini");
+}
+
+/// 检测区域每个输入框右侧的「图像取点」小图标（VM 同款：十字准星）。
+QIcon searchPickIcon()
+{
+    QPixmap pm(16, 16);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(QColor(QStringLiteral("#FFFFFF")));
+    pen.setWidthF(1.3);
+    p.setPen(pen);
+    p.drawEllipse(QPointF(8, 8), 4.0, 4.0);
+    p.drawLine(QPointF(8, 1), QPointF(8, 4));
+    p.drawLine(QPointF(8, 12), QPointF(8, 15));
+    p.drawLine(QPointF(1, 8), QPointF(4, 8));
+    p.drawLine(QPointF(12, 8), QPointF(15, 8));
+    p.end();
+    return QIcon(pm);
 }
 }
 
@@ -95,6 +117,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     // 工具条装进独立容器：模板匹配按 VM 只保留页签（下面的动作已在各页内提供），
     // 其它算子仍需要绘制/掩膜等入口，保留这一行。
     auto *toolbarHost = new QWidget(this);
+    toolbarHost->setObjectName(QStringLiteral("moduleToolbarHost"));
     auto *toolbar = new QHBoxLayout(toolbarHost);
     toolbar->setContentsMargins(0, 0, 0, 0);
     // P1-1：左上角帮助入口（对标 VM 模块窗的 ? 按钮）
@@ -103,7 +126,6 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     m_helpBtn->setText(QStringLiteral("?"));
     m_helpBtn->setToolTip(QStringLiteral("查看本算子的帮助说明"));
     m_helpBtn->setFixedSize(26, 26);
-    toolbar->addWidget(m_helpBtn);
     auto *execBtn = new QPushButton(QStringLiteral("执行算子"));
     auto *recomputeBtn = new QPushButton(QStringLiteral("重算下游"));
     recomputeBtn->setToolTip(QStringLiteral("参数改完后：作废本算子及其下游的缓存，只重跑这一段链路（不重跑无关分支）"));
@@ -202,10 +224,18 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     m_varRefMenu->setObjectName(QStringLiteral("varRefMenu"));
     m_varRefButton->setMenu(m_varRefMenu);
     connect(m_varRefMenu, &QMenu::aboutToShow, this, &ModuleEditorDialog::rebuildReferenceMenu);
-    toolbar->addWidget(m_varRefButton);
     toolbar->addWidget(fitBtn);
     toolbar->addStretch();
     root->addWidget(toolbarHost);
+
+    // VM 模块窗是纯页签窗：顶部只保留帮助入口；「变量引用」是参数订阅的等价入口，
+    // 与帮助同放一行，不占页签高度（旧版把它塞在长工具条里，模板窗隐藏工具条后入口就丢了）。
+    auto *topBar = new QHBoxLayout();
+    topBar->setContentsMargins(0, 0, 0, 0);
+    topBar->addWidget(m_helpBtn);
+    topBar->addWidget(m_varRefButton);
+    topBar->addStretch();
+    root->addLayout(topBar);
 
     m_hintLabel = new QLabel();
     m_hintLabel->setObjectName(QStringLiteral("paramHintLabel"));
@@ -305,12 +335,14 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
         if (m_view) {
             m_view->setMaskBrushRadius(v);
         }
+        emit maskBrushRadiusChanged(v);   // 画笔实际落在主画布
     });
     auto *maskEraseCheck = new QCheckBox(QStringLiteral("擦除"));
     maskEraseCheck->setToolTip(QStringLiteral("勾选后在图上拖拽即擦除掩膜；取消则涂抹保留"));
     connect(maskEraseCheck, &QCheckBox::toggled, this, [this](bool on) {
         if (m_view)
             m_view->setMaskPaintKeep(!on);
+        emit maskEraseModeChanged(on);   // 画笔实际落在主画布
     });
     bottom->addWidget(maskEraseCheck);
     bottom->addWidget(maskBrushLabel);
@@ -391,18 +423,15 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     // P0-2：结果显示是所有模块的通用页（非模板算子显示通用输出/状态/耗时）
     m_resultTable->setVisible(true);
 
-    // VM 4.4 模块窗是"纯页签"窗口（图 13 轮廓匹配：约 400×570，无内置图像区）；
-    // 模板图像/掩膜的绘制在独立的「模板配置」窗完成。因此模板匹配隐藏内置预览，
-    // 其余算子的 ROI 仍在本窗绘制（保留图像区）。
-    if (isTmpl) {
-        if (m_view)
-            m_view->setVisible(false);
-        if (m_splitter)
-            m_splitter->setSizes({0, 520});
-        // VM 模块窗没有顶部工具条：模板相关动作放在「特征模板」页，ROI 绘制在模板配置窗。
-        toolbarHost->setVisible(false);
-        resize(qMax(width(), 520), qMax(height(), 660));
-    }
+    // VM 4.4 模块窗是"纯页签"窗口（图 13 轮廓匹配：约 400×570，无内置图像区）。
+    // 所有算子统一：隐藏内置图像区与顶部工具条，ROI/掩膜绘制落在主画布；
+    // 模板匹配的模板框/屏蔽区仍在独立「模板配置」窗完成。
+    if (m_view)
+        m_view->setVisible(false);
+    if (m_splitter)
+        m_splitter->setSizes({0, 520});
+    toolbarHost->setVisible(false);
+    resize(qMax(width(), 520), qMax(height(), 660));
 
     if (hasGeom) {
         m_hintLabel->setText(QStringLiteral(
@@ -460,6 +489,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     connect(m_restoreDefaultsBtn, &QPushButton::clicked, this,
             &ModuleEditorDialog::restoreParamDefaults);
     connect(m_view, &HalconWindow::roiEdited, this, &ModuleEditorDialog::onRoiEdited);
+    connect(m_view, &HalconWindow::roiHandleEdited, this, &ModuleEditorDialog::onRoiEdited);
     connect(m_view, &HalconWindow::maskEdited, this, &ModuleEditorDialog::onMaskEdited);
 
     // 自动重算去抖：连续微调参数只触发一次重算
@@ -720,23 +750,25 @@ void ModuleEditorDialog::rebuildVmTabs()
         if (isTmpl) {
             // VM 模块窗没有这两项：禁用模块在画布上做，自动预览由底部「连续执行」承担。
             enabledCheck->setVisible(false);
-            for (QCheckBox *cb : basicPage->findChildren<QCheckBox *>()) {
-                if (cb->text().startsWith(QStringLiteral("自动预览")))
-                    cb->setVisible(false);
-            }
-            for (QLabel *lb : basicPage->findChildren<QLabel *>()) {
-                // 自动面板用的是全角括号「（参数修改后自动执行）」；按前缀半角匹配会漏掉。
-                if (lb->text().contains(QStringLiteral("参数修改后自动执行")))
-                    lb->setVisible(false);
-            }
+        } else {
+            basicLay->addWidget(enabledCheck);
+        }
+        // 「自动预览」与自动执行提示不是 VM 模块窗内容（连续执行按钮已承担该语义）。
+        for (QCheckBox *cb : basicPage->findChildren<QCheckBox *>()) {
+            if (cb->text().startsWith(QStringLiteral("自动预览")))
+                cb->setVisible(false);
+        }
+        for (QLabel *lb : basicPage->findChildren<QLabel *>()) {
+            if (lb->text().contains(QStringLiteral("参数修改后自动执行")))
+                lb->setVisible(false);
+        }
+        if (isTmpl) {
             if (m_hintLabel)
                 m_hintLabel->setVisible(false);   // 底部按钮行只留 VM 的三个按钮
             // VM 的参数组是"贴着内容"的：组框不吸收页面剩余高度，
             // 否则最后一个组会拉出一大块空白，整体看起来松散。
             for (QGroupBox *gb : basicPage->findChildren<QGroupBox *>())
                 gb->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
-        } else {
-            basicLay->addWidget(enabledCheck);
         }
     }
     basicLay->addStretch();
@@ -955,10 +987,67 @@ void ModuleEditorDialog::rebuildVmTabs()
         }
     }
 
+    // 非模板算子的通用 ROI / 掩膜入口（VM 模块窗是纯页签窗，绘制落在主画布）：
+    // 有几何 ROI 的算子出现「ROI区域」，可涂抹掩膜的算子出现「掩膜」。
+    if (!isTmpl) {
+        HalconNode *hn = halconNode();
+        int insertAt = qMax(0, basicLay->count() - 1);   // 插在底部 stretch 之前
+        if (hn && hn->geometryRoiType() != RoiType::None) {
+            auto *roiBox = new QGroupBox(QStringLiteral("ROI区域"), panel);
+            auto *roiForm = new QFormLayout(roiBox);
+            roiForm->setVerticalSpacing(4);
+            roiForm->setHorizontalSpacing(6);
+            roiForm->setFieldGrowthPolicy(QFormLayout::FieldsStayAtSizeHint);
+            roiForm->addRow(QStringLiteral("形状"),
+                            new QLabel(roiTypeText(hn->geometryRoiType()), roiBox));
+            auto *row = new QWidget(roiBox);
+            auto *lay = new QHBoxLayout(row);
+            lay->setContentsMargins(0, 0, 0, 0);
+            lay->setSpacing(4);
+            auto *drawBtn = new QPushButton(QStringLiteral("绘制"), row);
+            drawBtn->setObjectName(QStringLiteral("genericRoiDrawButton"));
+            drawBtn->setToolTip(QStringLiteral("在主画布上绘制本算子的几何 ROI（右键取消）"));
+            auto *clearBtn = new QPushButton(QStringLiteral("清除"), row);
+            clearBtn->setObjectName(QStringLiteral("genericRoiClearButton"));
+            clearBtn->setToolTip(QStringLiteral("清除本算子的几何 ROI"));
+            connect(drawBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onDrawGeometry);
+            connect(clearBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onClearGeometry);
+            lay->addWidget(drawBtn);
+            lay->addWidget(clearBtn);
+            lay->addStretch();
+            roiForm->addRow(row);
+            basicLay->insertWidget(insertAt++, roiBox);
+        }
+        if (hn && hn->supportsMaskEdit()) {
+            auto *maskBox = new QGroupBox(QStringLiteral("掩膜"), panel);
+            auto *maskForm = new QFormLayout(maskBox);
+            maskForm->setVerticalSpacing(4);
+            maskForm->setHorizontalSpacing(6);
+            maskForm->setFieldGrowthPolicy(QFormLayout::FieldsStayAtSizeHint);
+            auto *row = new QWidget(maskBox);
+            auto *lay = new QHBoxLayout(row);
+            lay->setContentsMargins(0, 0, 0, 0);
+            lay->setSpacing(4);
+            auto *editBtn = new QPushButton(QStringLiteral("编辑掩膜"), row);
+            editBtn->setObjectName(QStringLiteral("genericMaskEditButton"));
+            editBtn->setToolTip(QStringLiteral("在主画布上涂抹掩膜（左键保留、右键擦除）"));
+            auto *clearBtn = new QPushButton(QStringLiteral("清除掩膜"), row);
+            clearBtn->setObjectName(QStringLiteral("genericMaskClearButton"));
+            connect(editBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onEditMask);
+            connect(clearBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onClearMask);
+            lay->addWidget(editBtn);
+            lay->addWidget(clearBtn);
+            lay->addStretch();
+            maskForm->addRow(row);
+            basicLay->insertWidget(insertAt++, maskBox);
+        }
+    }
+
     // VM「基本参数 → ROI区域」：把自动面板里的数字下拉换成 VM 的开关/单选圆钮。
     // 搜索区域（检测区域）仍沿用自动面板的字段，只是标题改成 VM 的叫法。
     if (isTmpl && roiAutoBox) {
         QFormLayout *form = qobject_cast<QFormLayout *>(roiAutoBox->layout());
+        QMap<QString, int> searchRows;
         if (form) {
             for (int row = 0; row < form->rowCount(); ++row) {
                 QLayoutItem *labelItem = form->itemAt(row, QFormLayout::LabelRole);
@@ -966,9 +1055,11 @@ void ModuleEditorDialog::rebuildVmTabs()
                 if (!label)
                     continue;
                 const QString text = label->text();
-                // 标签可能带括号说明（"输出掩膜（…）"），用前缀匹配，避免漏隐藏后
-                // 检测区域里又出现一个同名复选框。
-                if (text.startsWith(QStringLiteral("输出掩膜"))
+                if (text.startsWith(QStringLiteral("搜索区域")))
+                    searchRows.insert(text, row);
+                // 只折叠旧「输出掩膜（把最终搜索区域…）」行；检测区域自己的
+                // 「输出掩膜（把此区域作为算子掩膜输入）」要保留（VM 截图同款）。
+                if (text.contains(QStringLiteral("最终搜索区域"))
                     || text == QStringLiteral("ROI区域类型") || text == QStringLiteral("ROI创建")) {
                     // 只 hide() 的话 QFormLayout 仍保留整行空位（组框会拖出一截空白）；
                     // setRowVisible 才是真正折叠该行（Qt 6.4+）。
@@ -980,6 +1071,48 @@ void ModuleEditorDialog::rebuildVmTabs()
                     form->setRowVisible(row, false);
                 }
             }
+
+            // VM 的每个检测区域输入框右侧都有一个「图像取点」按钮：单击后在主画布点一下，
+            // 把该字段写成点击位置/两点距离（宽度、高度按当前左列/上行算）。
+            auto addSearchPick = [&](const QString &labelText, int field, const QString &tip) {
+                const int row = searchRows.value(labelText, -1);
+                if (row < 0)
+                    return;
+                QLayoutItem *item = form->itemAt(row, QFormLayout::FieldRole);
+                QWidget *editor = item ? item->widget() : nullptr;
+                if (!editor)
+                    return;
+                // VM 的搜索区域数值框比通用参数框更宽（现场要在图上核对坐标，太窄看不清）
+                if (auto *spin = qobject_cast<QSpinBox *>(editor))
+                    spin->setMinimumWidth(160);
+                auto *wrap = new QWidget(roiAutoBox);
+                auto *lay = new QHBoxLayout(wrap);
+                lay->setContentsMargins(0, 0, 0, 0);
+                lay->setSpacing(2);
+                lay->addWidget(editor);          // 原输入框移入包裹层（objectName 不变，回填仍可查找）
+                auto *pick = new QToolButton(wrap);
+                pick->setObjectName(QStringLiteral("searchPick%1").arg(field));
+                pick->setIcon(searchPickIcon());
+                pick->setIconSize(QSize(14, 14));
+                pick->setFixedSize(18, 22);
+                pick->setStyleSheet(QStringLiteral(
+                    "QToolButton { background:#4A4A4A; border:1px solid #3A3A3A;"
+                    " border-radius:2px; }"
+                    "QToolButton:hover { background:#E76900; border-color:#E76900; }"));
+                pick->setToolTip(tip);
+                lay->addWidget(pick);
+                form->setWidget(row, QFormLayout::FieldRole, wrap);
+                connect(pick, &QToolButton::clicked, this,
+                        [this, field]() { emit coordinatePickRequested(m_node, field); });
+            };
+            addSearchPick(QStringLiteral("搜索区域左列"), 0,
+                          QStringLiteral("在图像上单击：把「左列」设为点击处 X"));
+            addSearchPick(QStringLiteral("搜索区域上行"), 1,
+                          QStringLiteral("在图像上单击：把「上行」设为点击处 Y"));
+            addSearchPick(QStringLiteral("搜索区域宽度"), 2,
+                          QStringLiteral("在图像上单击：宽度 = 点击处 X − 左列"));
+            addSearchPick(QStringLiteral("搜索区域高度"), 3,
+                          QStringLiteral("在图像上单击：高度 = 点击处 Y − 上行"));
         }
         roiAutoBox->setTitle(QStringLiteral("检测区域"));
 
@@ -1101,26 +1234,31 @@ void ModuleEditorDialog::rebuildVmTabs()
                 form->addRow(QStringLiteral("检测区域绘制"), searchRow);
         }
 
-        // VM 基本参数里还有「屏蔽区创建 / 屏蔽区 / 位置修正」三行。算法侧尚未实现，
-        // 先按 VM 布局放置并置灰，避免界面看起来缺一块（tooltip 明确说明未实现）。
+        // VM「屏蔽区创建 / 屏蔽区 / 位置修正」三行。
+        // 屏蔽区已经接入模板的 excludes（模板特征提取时会挖掉这些区域）：
+        // 绘制 = 打开模板配置窗并直接进屏蔽模式；屏蔽区按钮 = 同一入口（管理已有屏蔽）。
         auto *excludeDraw = new QRadioButton(QStringLiteral("绘制"), roiBox);
         auto *excludeInherit = new QRadioButton(QStringLiteral("继承"), roiBox);
-        excludeDraw->setEnabled(false);
+        excludeDraw->setToolTip(QStringLiteral("打开模板配置窗并进入屏蔽模式，画出不参与匹配的区域"));
         excludeInherit->setEnabled(false);
+        excludeInherit->setToolTip(QStringLiteral("继承上游屏蔽区：当前版本尚未接入"));
         auto *excludeRow = new QWidget(roiBox);
         auto *excludeLay = new QHBoxLayout(excludeRow);
         excludeLay->setContentsMargins(0, 0, 0, 0);
         excludeLay->addWidget(excludeDraw);
         excludeLay->addWidget(excludeInherit);
         excludeLay->addStretch();
-        excludeRow->setToolTip(QStringLiteral("屏蔽区创建：当前版本尚未实现"));
         roiForm->addRow(QStringLiteral("屏蔽区创建"), excludeRow);
+        connect(excludeDraw, &QRadioButton::toggled, this, [this](bool on) {
+            if (on)
+                onEditTemplateMask();
+        });
 
         auto *excludeBtn = new QToolButton(roiBox);
         excludeBtn->setText(QStringLiteral("屏蔽区"));
-        excludeBtn->setEnabled(false);
-        excludeBtn->setToolTip(QStringLiteral("屏蔽区：当前版本尚未实现"));
+        excludeBtn->setToolTip(QStringLiteral("编辑当前模板的屏蔽区（挖掉的区域不参与匹配）"));
         roiForm->addRow(QStringLiteral("屏蔽区"), excludeBtn);
+        connect(excludeBtn, &QToolButton::clicked, this, &ModuleEditorDialog::onEditTemplateMask);
 
         auto *fixSwitch = new QCheckBox(roiBox);
         fixSwitch->setEnabled(false);
@@ -2100,14 +2238,13 @@ void ModuleEditorDialog::setResultOverlay(const QVector<OverlayShape> &shapes)
 void ModuleEditorDialog::onDrawGeometry()
 {
     HalconNode *hn = halconNode();
-    if (!hn || !m_view)
+    if (!hn || hn->geometryRoiType() == RoiType::None) {
+        m_hintLabel->setText(QStringLiteral("当前算子没有可绘制的几何 ROI。"));
         return;
-    m_editTarget = 0;
-    if (m_targetGeomBtn) m_targetGeomBtn->setChecked(true);
-    if (m_targetSearchBtn) m_targetSearchBtn->setChecked(false);
-    m_view->setMaskEditable(false);
-    m_view->setRoiEditable(true, hn->geometryRoiType());
-    m_hintLabel->setText(QStringLiteral("请在图像上拖拽绘制；画完后可拖改。右键取消。"));
+    }
+    // VM 模块窗是纯页签窗：绘制落在主画布，由 MainWindow/ImageDisplayController 承接。
+    emit geometryPickRequested(m_node);
+    m_hintLabel->setText(QStringLiteral("请在主画布上拖拽绘制；画完后可拖角点/中心继续改。"));
 }
 
 void ModuleEditorDialog::onDrawTemplateRoi()
@@ -2249,11 +2386,13 @@ void ModuleEditorDialog::onClearGeometry()
 
 void ModuleEditorDialog::onEditMask()
 {
-    if (!m_view)
+    if (!halconNode() || !halconNode()->supportsMaskEdit()) {
+        m_hintLabel->setText(QStringLiteral("当前算子不支持掩膜编辑。"));
         return;
-    m_view->setRoiEditable(false);
-    m_view->setMaskEditable(true);
-    m_hintLabel->setText(QStringLiteral("掩膜：左键保留，右键擦除（品红区执行时忽略）。"));
+    }
+    // 模块窗没有内置图像区：掩膜画笔落在主画布。
+    emit maskEditRequested(m_node);
+    m_hintLabel->setText(QStringLiteral("请在主画布上涂抹掩膜：左键保留，右键擦除（品红区执行时忽略）。"));
 }
 
 void ModuleEditorDialog::onClearMask()
@@ -2586,7 +2725,7 @@ void ModuleEditorDialog::onTemplateSelected(int row)
     // 与老字段同步：run() 兜底路径、参数面板、其它读 templatePath 的代码都按当前模板走
     tmplNode->setParam(QStringLiteral("templatePath"), e.imagePath);
     tmplNode->setParam(QStringLiteral("contrastThreshold"), e.contrastThreshold);
-    tmplNode->setParam(QStringLiteral("autoEdgeThreshold"), e.autoThreshold);
+    tmplNode->setParam(QStringLiteral("autoContrastThreshold"), e.autoThreshold);
     tmplNode->setParam(QStringLiteral("featureScale"), e.featureScale);
     tmplNode->setParam(QStringLiteral("speedScale"), e.speedScale);
 
@@ -2624,6 +2763,16 @@ void ModuleEditorDialog::onNewTemplate()
 
 void ModuleEditorDialog::onEditTemplate()
 {
+    openTemplateConfig(false);
+}
+
+void ModuleEditorDialog::onEditTemplateMask()
+{
+    openTemplateConfig(true);
+}
+
+void ModuleEditorDialog::openTemplateConfig(bool maskMode)
+{
     auto *tmplNode = qobject_cast<OpencvTemplateMatchNode *>(m_node);
     if (!tmplNode || !m_templateList)
         return;
@@ -2632,7 +2781,7 @@ void ModuleEditorDialog::onEditTemplate()
         m_hintLabel->setText(QStringLiteral("先在列表里选中要编辑的模板。"));
         return;
     }
-    TemplateConfigDialog dlg(tmplNode, row, this);
+    TemplateConfigDialog dlg(tmplNode, row, this, maskMode);
     if (dlg.exec() != QDialog::Accepted)
         return;
     refreshTemplateList();
@@ -2640,7 +2789,8 @@ void ModuleEditorDialog::onEditTemplate()
     echoGeometry();
     if (QWidget *panel = m_paramHost->widget())
         tmplNode->updateParamPanel(panel);
-    m_hintLabel->setText(QStringLiteral("模板已更新。"));
+    m_hintLabel->setText(maskMode ? QStringLiteral("屏蔽区已更新。")
+                                  : QStringLiteral("模板已更新。"));
 }
 
 void ModuleEditorDialog::onDeleteTemplate()

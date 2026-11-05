@@ -49,6 +49,15 @@ signals:
     void searchRegionPickRequested(NodeBase *node, bool polygon);
     /// 请求在主画布上重画模板匹配的 ROI 区域（模板框；VM 的「ROI创建 = 绘制」）
     void templateRoiPickRequested(NodeBase *node, bool rotatedRect);
+    /// 请求在主画布上为检测区域的某个字段取点：0=左列 1=上行 2=宽度 3=高度
+    void coordinatePickRequested(NodeBase *node, int field);
+    /// 通用几何 ROI 绘制请求：模块窗是纯页签窗，绘制落在主画布
+    void geometryPickRequested(NodeBase *node);
+    /// 通用掩膜编辑请求：掩膜画笔落在主画布（module window 不再内置图像区）
+    void maskEditRequested(NodeBase *node);
+    /// 掩膜画笔半径 / 擦除模式变化：同步到主画布
+    void maskBrushRadiusChanged(int radius);
+    void maskEraseModeChanged(bool erase);
 
 private slots:
     void onDrawGeometry();
@@ -69,6 +78,7 @@ private slots:
     // ---- VM「特征模板」页对齐：模板列表（创建/编辑/删除）----
     void onNewTemplate();
     void onEditTemplate();
+    void onEditTemplateMask();
     void onDeleteTemplate();
     void onTemplateSelected(int row);
     void onEvaluateTemplate();
@@ -81,6 +91,8 @@ private:
     void loadImage();
     void rebuildParamPanel();
     void refreshTemplatePreview();
+    /// 打开模板配置窗（maskMode=true 直接进屏蔽模式，编辑当前模板的屏蔽区）
+    void openTemplateConfig(bool maskMode);
     /// 把节点的模板列表灌进左侧列表（当前模板高亮）
     void refreshTemplateList();
     /// VM 结果表口径：每个命中一行（中心/匹配点/角度/尺度/分数）

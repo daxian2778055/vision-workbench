@@ -1,4 +1,5 @@
 #include "LargeFileImageStore.h"
+#include "VmSharedText.h"
 
 #include <QDataStream>
 #include <QDateTime>
@@ -154,7 +155,7 @@ bool LargeFileImageStore::writePendingBatchLocked(QString *outPath, QString *err
         return false;
     }
     if (!QDir().mkpath(dir)) {
-        if (error) *error = QStringLiteral("无法创建目录：%1").arg(dir);
+        if (error) *error = VmSharedText::mkdirFailed(dir);
         return false;
     }
 

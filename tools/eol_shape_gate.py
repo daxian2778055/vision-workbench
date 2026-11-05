@@ -34,7 +34,14 @@ import sys
 # expected; what this number guards against is somebody rewriting line endings of existing files.
 # Re-frozen at 2026-10-30 (r19) 172 -> 177：新增 LF 文件 DnnNetCache.h/.cpp 与两个工具脚本，
 # 其余为本轮 Python text-mode 改写造成的漂移，已回正。该数只冻结「工具产出的 LF 文件个数」。
-EXPECTED_TOOL_WRITTEN = 177
+#
+# Re-frozen at 2026-11-05 177 -> 198：VM 4.4 对标批次（Blob 分析 / 仿射变换 / 模块窗与
+# 主画布对齐）由编辑工具以 LF 写出 tracked 文件，净增 21 个；各目录当前分布以本闸输出的
+# tool_written_by_dir 为准（不在注释里抄第二份、避免再次失真）。这正是本文件开头所说的
+# 「growth from new tool/test files is expected」。同批次里另有 4 个上一轮被工具写成 LF 的
+# 既有文件（OpencvBlobNode.h/.cpp、OpencvUtil.cpp、node_core_test.cpp）已回正 CRLF，
+# 因此没有把既有文件的行尾形状改掉。理由记录在此，供下一次读数变化时并排核对，而非默默改数。
+EXPECTED_TOOL_WRITTEN = 198
 TAG = "EOL"
 
 

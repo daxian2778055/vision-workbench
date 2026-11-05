@@ -83,6 +83,19 @@ public:
     /// 开始重画算子几何 ROI（模板匹配的模板框）：rotatedRect=true 旋转矩形，否则轴对齐矩形。
     /// 返回 false = 无画布或该节点没有几何 ROI。
     bool startTemplateRoiPick(NodeBase *node, bool rotatedRect = true);
+    /// 开始为检测区域字段取点：field 0=左列 1=上行 2=宽度 3=高度（VM 每个输入框右侧的取点按钮）。
+    /// 取点完成后按字段写入 searchRegion* 并保留矩形句柄可继续微调。
+    bool startCoordinatePick(NodeBase *node, int field);
+    /// 通用几何 ROI 重画：按节点声明的 geometryRoiType 切到对应绘制模式（矩形/旋转矩形/圆/线）。
+    /// VM 模块窗是纯页签窗，绘制入口在模块窗、落笔在主画布。
+    bool startGeometryPick(NodeBase *node);
+    /// 在主画布上编辑该节点的掩膜（左键保留/右键擦除）；返回 false = 无画布或节点不支持。
+    bool startMaskEdit(NodeBase *node);
+    /// 结束掩膜编辑（不写回；写回由 writeMaskBack 显式触发）。
+    void stopMaskEdit();
+    /// 掩膜编辑中把画布掩膜写回节点；返回 false = 当前没有掩膜编辑目标。
+    bool writeMaskBack();
+    bool maskEditActive() const { return m_maskEditNode != nullptr; }
     /// 画布 ROI 收笔：清状态 + 关 ROI 编辑 + 写回目标节点参数；返回目标节点（无目标/取消/未知类型为 nullptr）
     NodeBase *writeRoiToNode(const RoiShape &shape);
 
@@ -100,6 +113,11 @@ private:
     NodeBase *m_geometryRoiNode = nullptr;
     /// B3：主画布当前正在编辑搜索区域的节点
     NodeBase *m_searchRegionNode = nullptr;
+    /// 检测区域单字段取点的目标与字段（0=左列 1=上行 2=宽度 3=高度）
+    NodeBase *m_coordinatePickNode = nullptr;
+    int m_coordinatePickField = 0;
+    /// 主画布掩膜编辑目标（左键保留/右键擦除，只写节点 editMask）
+    NodeBase *m_maskEditNode = nullptr;
     std::function<FlowScene *()> m_sceneProvider;
     std::function<NodeBase *()> m_canvasSelectionProvider;
 };

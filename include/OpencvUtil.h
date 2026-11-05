@@ -36,6 +36,18 @@ bool requireGray8(const cv::Mat &mat, QString *why);
 /// 将灰度掩膜（白=保留）按最近邻缩放到 bin 尺寸后做按位与
 void applyGrayMask(cv::Mat &bin, const QImage &mask);
 
+/// 允许处理区域（255=允许）：矩形 ROI（宽高 <=0 表示全图）+ 编辑掩膜（白=允许）。
+/// 多个图像处理算子共用同一个 ROI/掩膜口径。
+cv::Mat allowedMask(const cv::Size &size, const cv::Rect &roiRect, const QImage &mask);
+
+/// ROI/掩膜外保留原图：把 processed 中 allowed=0 的像素替换为 src 的原值。
+void keepOriginalOutside(cv::Mat &processed, const cv::Mat &src, const cv::Mat &allowed);
+
+/// VM 仿射变换口径：锁定时输出保持原尺寸；不锁定时扩展画布容纳完整结果。
+/// interpIdx 0=最近邻 1=双线性；extensionType 0=常量填充 1=邻近复制。
+cv::Mat warpAffineVm(const cv::Mat &src, cv::Mat m, bool lockSize,
+                     int interpIdx, int extensionType, int fillValue);
+
 /// 对齐结果（节点直接把这些值写进参数供回显与排查）
 struct AlignInfo {
     bool applied = false;

@@ -1,4 +1,5 @@
 #include "AnomalyBaseline.h"
+#include "VmSharedText.h"
 
 #include <QDataStream>
 #include <QDir>
@@ -106,7 +107,7 @@ bool AnomalyBaseline::save(const QString &path, QString *error) const
         return fail(QStringLiteral("基线为空，无内容可保存"));
     const QFileInfo fi(path);
     if (!fi.dir().exists() && !QDir().mkpath(fi.absolutePath()))
-        return fail(QStringLiteral("无法创建目录：%1").arg(fi.absolutePath()));
+        return fail(VmSharedText::mkdirFailed(fi.absolutePath()));
 
     // 原子写：教学到一半断电留下半个基线，比没有基线更糟（下次推理会静默用坏数据）
     QSaveFile file(path);
@@ -270,7 +271,7 @@ bool AnomalyPcaModel::save(const QString &path, QString *error) const
         return fail(QStringLiteral("PCA 模型为空，无内容可保存"));
     const QFileInfo fi(path);
     if (!fi.dir().exists() && !QDir().mkpath(fi.absolutePath()))
-        return fail(QStringLiteral("无法创建目录：%1").arg(fi.absolutePath()));
+        return fail(VmSharedText::mkdirFailed(fi.absolutePath()));
 
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly))

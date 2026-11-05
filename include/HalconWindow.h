@@ -143,6 +143,9 @@ signals:
     void crosshairConfigsChanged();
     /// 用户完成 ROI 绘制时发出（图像坐标系）
     void roiEdited(const RoiShape &shape);
+    /// 拖拽已有 ROI 的句柄/整体移动后发出（与"画完新 ROI"的 roiEdited 区分，
+    /// 避免监听方把一次拖拽误当成新增一块形状）
+    void roiHandleEdited(const RoiShape &shape);
     void roiEditCanceled();
     void maskEdited();
     /// 非绘制状态下左键单击的图像坐标（魔术棒取点用）

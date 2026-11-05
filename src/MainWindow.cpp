@@ -294,6 +294,9 @@ MainWindow::MainWindow(QWidget *parent) :
 
             // 画布 ROI 绘制完成 → 写回测量节点参数
             connect(m_imageView, &HalconWindow::roiEdited, this, &MainWindow::handleRoiEdited);
+            // 拖拽已有 ROI 的手柄同样要写回参数（roiEdited 只表示"画完新 ROI"）
+            connect(m_imageView, &HalconWindow::roiHandleEdited, this, &MainWindow::handleRoiEdited);
+            connect(m_imageView, &HalconWindow::maskEdited, this, &MainWindow::handleMaskEdited);
 
             // 恢复两条十字辅助线（实装 4.4 口径：像素坐标/线宽/颜色/锁定）
             {
@@ -2399,13 +2402,17 @@ void MainWindow::openModuleEditor(NodeBase *node)
             return;
         }
     }
-    // 「一算子一窗」簿位在 ModuleEditorRegistry（词条切片 B 对话框族首抽）：命中经回调
-    // 复原窗（reloadFromNode + 前置），缺失经工厂建窗入簿；三类信号连接与变量引用注入、
-    // 加窗前置留窗侧（连接/展示序与原体一致——摘除连接先于窗侧连接发生）。
+    // 「一算子一窗」簿位在 ModuleEditorRegistry：命中回调只做复原/前置。
+    // 信号连接只在**首次建窗**时建立：重复打开同一个算子时若再 connect 一遍，
+    // 点一次「执行」会触发 N 次、点「确定」会重算 N 次（N = 打开次数）。
+    bool isNewEditor = false;
     ModuleEditorDialog *dlg =
         qobject_cast<ModuleEditorDialog *>(m_editors.editorFor(
             node,
-            [this, node]() -> QDialog * { return new ModuleEditorDialog(node, this); },
+            [this, node, &isNewEditor]() -> QDialog * {
+                isNewEditor = true;
+                return new ModuleEditorDialog(node, this);
+            },
             [](QWidget *window) {
                 if (auto *editor = qobject_cast<ModuleEditorDialog *>(window)) {
                     editor->reloadFromNode();
@@ -2415,6 +2422,13 @@ void MainWindow::openModuleEditor(NodeBase *node)
             }));
     if (!dlg)
         return;
+    if (!isNewEditor) {
+        // 已存在的窗：连接仍在（首次建窗时建的那一份），这里只刷新变量引用并前置
+        dlg->setVariableReferenceProvider([this]() { return buildVariableReferences(); });
+        dlg->show();
+        dlg->raise();
+        return;
+    }
     connect(dlg, &ModuleEditorDialog::executeRequested, this, [this, node]() {
         executeNodeOnce(node);
     });
@@ -2441,6 +2455,22 @@ void MainWindow::openModuleEditor(NodeBase *node)
     // 模块窗「ROI 区域绘制」→ 主画布画模板框（框完再由「训练模板」显式训练）
     connect(dlg, &ModuleEditorDialog::templateRoiPickRequested,
             this, &MainWindow::beginTemplateRoiPick);
+    // 检测区域每个输入框右侧的「取点」按钮 → 主画布单击取坐标
+    connect(dlg, &ModuleEditorDialog::coordinatePickRequested,
+            this, &MainWindow::beginCoordinatePick);
+    // 通用几何 ROI / 掩膜：模块窗是纯页签窗，绘制与涂抹都落在主画布
+    connect(dlg, &ModuleEditorDialog::geometryPickRequested,
+            this, &MainWindow::beginGeometryPick);
+    connect(dlg, &ModuleEditorDialog::maskEditRequested,
+            this, &MainWindow::beginMaskEdit);
+    connect(dlg, &ModuleEditorDialog::maskBrushRadiusChanged, this, [this](int radius) {
+        if (m_imageView)
+            m_imageView->setMaskBrushRadius(radius);
+    });
+    connect(dlg, &ModuleEditorDialog::maskEraseModeChanged, this, [this](bool erase) {
+        if (m_imageView)
+            m_imageView->setMaskPaintKeep(!erase);
+    });
     // 「变量引用」菜单：每次展开时按当前变量生成列表（上游结果 → 下游参数的一键联动）
     dlg->setVariableReferenceProvider([this]() { return buildVariableReferences(); });
     dlg->show();
@@ -5152,6 +5182,60 @@ void MainWindow::beginTemplateRoiPick(NodeBase *node, bool rotatedRect)
         editor->raise();
         editor->activateWindow();
     }
+}
+
+void MainWindow::beginCoordinatePick(NodeBase *node, int field)
+{
+    if (!prepareCanvasPick(node))
+        return;
+    if (!m_imageDisplay->startCoordinatePick(node, field)) {
+        ui->statusBar->showMessage(tr("该模块没有可绘制的检测区域"), 4000);
+        return;
+    }
+    ui->statusBar->showMessage(tr("请在图像上单击取点（写入检测区域参数）"), 8000);
+    if (QWidget *editor = m_editors.lookup(node)) {
+        editor->raise();
+        editor->activateWindow();
+    }
+}
+
+void MainWindow::beginGeometryPick(NodeBase *node)
+{
+    if (!prepareCanvasPick(node))
+        return;
+    if (!m_imageDisplay->startGeometryPick(node)) {
+        ui->statusBar->showMessage(tr("该模块没有可绘制的 ROI 区域"), 4000);
+        return;
+    }
+    ui->statusBar->showMessage(tr("请在图像上拖拽绘制 ROI（右键取消）"), 8000);
+    if (QWidget *editor = m_editors.lookup(node)) {
+        editor->raise();
+        editor->activateWindow();
+    }
+}
+
+void MainWindow::beginMaskEdit(NodeBase *node)
+{
+    if (!prepareCanvasPick(node))
+        return;
+    if (!m_imageDisplay->startMaskEdit(node)) {
+        ui->statusBar->showMessage(tr("该模块不支持掩膜编辑"), 4000);
+        return;
+    }
+    ui->statusBar->showMessage(tr("请在图像上涂抹掩膜：左键保留、右键擦除"), 8000);
+    if (QWidget *editor = m_editors.lookup(node)) {
+        editor->raise();
+        editor->activateWindow();
+    }
+}
+
+void MainWindow::handleMaskEdited()
+{
+    if (!m_imageDisplay || !m_imageDisplay->writeMaskBack())
+        return;
+    // 掩膜写入节点后，参数面板/画布状态不需要重建；执行时按新掩膜参与运算。
+    if (m_selectedNode)
+        showNodeParameters(m_selectedNode);
 }
 
 void MainWindow::handleRoiEdited(const RoiShape &shape)

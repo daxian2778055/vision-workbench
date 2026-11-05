@@ -15,6 +15,7 @@
 #include <QElapsedTimer>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QMap>
 #include <algorithm>
 #include <cmath>
 #include <utility>
@@ -113,10 +114,6 @@ QJsonObject TemplateEntry::toJson() const
     for (const RoiShape &s : list)
         arr.append(shapeToJsonObj(s));
     obj[QStringLiteral("shapes")] = arr;
-    // 老读取方只看 shape；保持它 = 第一块形状
-    obj[QStringLiteral("shape")] =
-        arr.isEmpty() ? QJsonObject{{QStringLiteral("type"), QStringLiteral("none")}}
-                      : arr.first().toObject();
     QJsonArray exArr;
     for (const RoiShape &s : excludes)
         exArr.append(shapeToJsonObj(s));
@@ -142,35 +139,21 @@ TemplateEntry TemplateEntry::fromJson(const QJsonObject &obj)
     TemplateEntry e;
     e.name = obj.value(QStringLiteral("name")).toString();
     e.imagePath = obj.value(QStringLiteral("image")).toString();
-    // 新格式：shapes 数组；老格式：单个 shape
+    // 模板形状只认 shapes 数组（不兼容旧单 shape 写法）
     for (const QJsonValue &v : obj.value(QStringLiteral("shapes")).toArray())
         if (v.isObject())
             e.shapes.append(shapeFromJsonObj(v.toObject()));
-    if (e.shapes.isEmpty()) {
-        const RoiShape s = shapeFromJsonObj(obj.value(QStringLiteral("shape")).toObject());
-        if (s.type != RoiType::None)
-            e.shapes.append(s);
-    }
     if (!e.shapes.isEmpty())
         e.shape = e.shapes.first();
     for (const QJsonValue &v : obj.value(QStringLiteral("excludes")).toArray())
         if (v.isObject())
             e.excludes.append(shapeFromJsonObj(v.toObject()));
     e.autoThreshold = obj.value(QStringLiteral("autoThreshold")).toBool(false);
-    // VM 口径字段；老 v1 JSON 只有 edgeThreshold/aperture/coarseLongSide，做一次迁移。
-    // 注意：老 edgeThreshold 是 Sobel 幅值，要 /4 换成灰度差才不改变老工程行为；
-    // 老 aperture 是 Sobel 核、老 coarseLongSide 是像素长边，与新量纲不同，一律按"不过滤/不稀疏"落地。
-    if (obj.contains(QStringLiteral("contrastThreshold")))
-        e.contrastThreshold = qBound(1, obj.value(QStringLiteral("contrastThreshold")).toInt(5), 255);
-    else
-        e.contrastThreshold =
-            qBound(1, int(obj.value(QStringLiteral("edgeThreshold")).toDouble(20.0) * 0.25 + 0.5), 255);
-    if (obj.contains(QStringLiteral("featureScale")))
-        e.featureScale = qBound(1, obj.value(QStringLiteral("featureScale")).toInt(1), 20);
-    else
-        e.featureScale = 1;                 // 老工程不稀疏（=原行为）
-    if (obj.contains(QStringLiteral("speedScale")))
-        e.speedScale = qBound(1, obj.value(QStringLiteral("speedScale")).toInt(3), 20);
+    // VM 口径字段：contrastThreshold / featureScale / speedScale 必须由 toJson 写入。
+    e.contrastThreshold =
+        qBound(1, obj.value(QStringLiteral("contrastThreshold")).toInt(5), 255);
+    e.featureScale = qBound(1, obj.value(QStringLiteral("featureScale")).toInt(1), 20);
+    e.speedScale = qBound(1, obj.value(QStringLiteral("speedScale")).toInt(3), 20);
     e.minChainLength = qBound(1, obj.value(QStringLiteral("minChainLength")).toInt(1), 200);
     e.chainModeAuto = obj.value(QStringLiteral("chainMode")).toBool(false);
     e.anchorDx = obj.value(QStringLiteral("anchorX")).toDouble(0.0);
@@ -443,6 +426,9 @@ void OpencvTemplateMatchNode::init()
         makeEnumParam(QStringLiteral("roiSource"), 0,
                       QStringList{QStringLiteral("绘制"), QStringLiteral("继承")},
                       QStringLiteral("ROI创建")),
+        // VM「检测区域」第一行：把检测区域本身作为掩膜输出（与 ROI 区域掩膜是两个独立开关）
+        makeBoolParam(QStringLiteral("outputSearchMask"), false,
+                      QStringLiteral("输出掩膜（把此区域作为算子掩膜输入）")),
         makeIntParam(QStringLiteral("scaleMode"), 0, 0, 1,
                      QStringLiteral("尺度模式：0=手动（scaleMin/Max/Step），1=自动按模板占比估范围")),
         // VM「结果显示 → 图像显示」：每一层可单独显隐（截图 4 的四个眼睛开关）
@@ -457,20 +443,16 @@ void OpencvTemplateMatchNode::init()
         makeIntParam(QStringLiteral("contrastThreshold"), 5, 1, 255,
                      QStringLiteral("对比度阈值（特征点与背景的灰度差，越大淘汰越多）"),
                      QStringLiteral("灰阶")),
-        makeBoolParam(QStringLiteral("autoEdgeThreshold"), false,
+        makeBoolParam(QStringLiteral("autoContrastThreshold"), false,
                       QStringLiteral("阈值模式：自动（按模板对比度自动生成）")),
         makeIntParam(QStringLiteral("featureScale"), 1, 1, 20,
                      QStringLiteral("特征尺度（金字塔底层粒度，越大特征点越稀疏；1 最精细）")),
         makeIntParam(QStringLiteral("speedScale"), 3, 1, 20,
                      QStringLiteral("速度尺度（金字塔顶层降采样倍率，越大越快越易漏检）")),
-        makeIntParam(QStringLiteral("roiRow"), 0, 0, 100000,
-                     QStringLiteral("模板区行（旧工程：左上；0=未设置）"), QStringLiteral("px")),
-        makeIntParam(QStringLiteral("roiCol"), 0, 0, 100000,
-                     QStringLiteral("模板区列（旧工程：左上）"), QStringLiteral("px")),
         makeIntParam(QStringLiteral("roiWidth"), 0, 0, 100000,
-                     QStringLiteral("模板区宽（0=自动中心50%）"), QStringLiteral("px")),
+                     QStringLiteral("模板框宽（0=未设置）"), QStringLiteral("px")),
         makeIntParam(QStringLiteral("roiHeight"), 0, 0, 100000,
-                     QStringLiteral("模板区高（0=自动）"), QStringLiteral("px")),
+                     QStringLiteral("模板框高（0=未设置）"), QStringLiteral("px")),
         makeDoubleParam(QStringLiteral("roiCenterCol"), 0.0, 0.0, 100000.0,
                         QStringLiteral("旋转框中心列"), QStringLiteral("px")),
         makeDoubleParam(QStringLiteral("roiCenterRow"), 0.0, 0.0, 100000.0,
@@ -524,12 +506,13 @@ void OpencvTemplateMatchNode::init()
             || n == QLatin1String("method"))
             s.group = QStringLiteral("特征模板");   // VM：模板源/匹配方式属于模板页，不在基本参数
 
-        else if (n == QLatin1String("outputMask") || n == QLatin1String("roiType")
+        else if (n == QLatin1String("outputMask") || n == QLatin1String("outputSearchMask")
+                 || n == QLatin1String("roiType")
                  || n == QLatin1String("roiSource")
                  || n.startsWith(QLatin1String("searchRegion")))
             s.group = QStringLiteral("ROI区域");
         else if (n == QLatin1String("scaleMode") || n == QLatin1String("contrastThreshold")
-                 || n == QLatin1String("autoEdgeThreshold")
+                 || n == QLatin1String("autoContrastThreshold")
                  || n == QLatin1String("featureScale")
                  || n == QLatin1String("speedScale")
                  || n == QLatin1String("minChainLength")
@@ -582,6 +565,7 @@ void OpencvTemplateMatchNode::init()
     {
         static const QStringList kRoiOrder = {
             QStringLiteral("outputMask"), QStringLiteral("roiType"), QStringLiteral("roiSource"),
+            QStringLiteral("outputSearchMask"),
             QStringLiteral("searchRegionCol"), QStringLiteral("searchRegionRow"),
             QStringLiteral("searchRegionWidth"), QStringLiteral("searchRegionHeight"),
             QStringLiteral("searchRegionPolygon"),
@@ -602,6 +586,83 @@ void OpencvTemplateMatchNode::init()
                          });
         for (int i = 0; i < roiPositions.size(); ++i)
             m_paramSpecs[roiPositions.at(i)] = roiSpecs.at(i);
+    }
+
+    // VM 参数名一律短标签；长解释移到 tooltip（面板不再被括号说明挤得松散）。
+    {
+        static const QMap<QString, QPair<QString, QString>> kLabelTips = {
+            {QStringLiteral("matchAllTemplates"), {QStringLiteral("多模板同时匹配"),
+                QStringLiteral("模板列表逐个跑完整流程，取最高分")}},
+            {QStringLiteral("maxOverlap"), {QStringLiteral("最大重叠率"),
+                QStringLiteral("0~100；两个命中的框重叠超过该值时只保留分数高的")}},
+            {QStringLiteral("minScore"), {QStringLiteral("最小匹配分数"),
+                QStringLiteral("分数低于此值的命中判为无效（0~1）")}},
+            {QStringLiteral("maxMatches"), {QStringLiteral("最大匹配个数"),
+                QStringLiteral("1=只输出最优；多件场景调大")}},
+            {QStringLiteral("polarity"), {QStringLiteral("匹配极性"),
+                QStringLiteral("1=考虑极性（默认）；0=忽略，亮标/暗标反色也能匹配")}},
+            {QStringLiteral("angleMin"), {QStringLiteral("搜索角度下限"),
+                QStringLiteral("模板允许的最小旋转角")}},
+            {QStringLiteral("angleMax"), {QStringLiteral("搜索角度上限"),
+                QStringLiteral("模板允许的最大旋转角")}},
+            {QStringLiteral("angleStep"), {QStringLiteral("搜索角度步进"),
+                QStringLiteral("角度采样间隔，越小越慢")}},
+            {QStringLiteral("scaleRangeType"), {QStringLiteral("尺度范围类型"),
+                QStringLiteral("0=整体（上下限）；1=X/Y 独立")}},
+            {QStringLiteral("scaleMin"), {QStringLiteral("搜索尺度下限"),
+                QStringLiteral("整体尺度范围下限（1=原尺寸）")}},
+            {QStringLiteral("scaleMax"), {QStringLiteral("搜索尺度上限"),
+                QStringLiteral("整体尺度范围上限（1=原尺寸）")}},
+            {QStringLiteral("scaleStep"), {QStringLiteral("搜索尺度步进"),
+                QStringLiteral("尺度采样间隔，越小越慢")}},
+            {QStringLiteral("scaleMinX"), {QStringLiteral("X 尺度下限"),
+                QStringLiteral("尺度范围类型=1 时生效")}},
+            {QStringLiteral("scaleMaxX"), {QStringLiteral("X 尺度上限"),
+                QStringLiteral("尺度范围类型=1 时生效")}},
+            {QStringLiteral("scaleMinY"), {QStringLiteral("Y 尺度下限"),
+                QStringLiteral("尺度范围类型=1 时生效")}},
+            {QStringLiteral("scaleMaxY"), {QStringLiteral("Y 尺度上限"),
+                QStringLiteral("尺度范围类型=1 时生效")}},
+            {QStringLiteral("sortType"), {QStringLiteral("排序类型"),
+                QStringLiteral("0=分数降序 1=角度降序 2=X 升序 3=Y 升序")}},
+            {QStringLiteral("thresholdType"), {QStringLiteral("阈值类型"),
+                QStringLiteral("0=自动（按目标图像）1=模板 2=手动")}},
+            {QStringLiteral("matchContrastThreshold"), {QStringLiteral("手动阈值"),
+                QStringLiteral("灰度差 1~255；阈值类型=手动时使用")}},
+            {QStringLiteral("extendThreshold"), {QStringLiteral("延拓阈值"),
+                QStringLiteral("目标被图像边缘截断时允许缺失的特征比例（%）")}},
+            {QStringLiteral("timeoutMs"), {QStringLiteral("超时控制"),
+                QStringLiteral("毫秒；0=不限制")}},
+            {QStringLiteral("writeFixtureName"), {QStringLiteral("位置修正写入"),
+                QStringLiteral("把本次匹配位置写给下游位置修正（空=不写）")}},
+            {QStringLiteral("roiWidth"), {QStringLiteral("模板框宽"),
+                QStringLiteral("0=未设置；在画布上框选后自动回填")}},
+            {QStringLiteral("roiHeight"), {QStringLiteral("模板框高"),
+                QStringLiteral("0=未设置；在画布上框选后自动回填")}},
+            {QStringLiteral("roiCenterCol"), {QStringLiteral("模板框中心X"),
+                QStringLiteral("旋转框中心的图像列坐标")}},
+            {QStringLiteral("roiCenterRow"), {QStringLiteral("模板框中心Y"),
+                QStringLiteral("旋转框中心的图像行坐标")}},
+            {QStringLiteral("roiAngle"), {QStringLiteral("模板框角度"),
+                QStringLiteral("旋转框角度（度，逆时针为正）")}},
+            {QStringLiteral("searchRegionCol"), {QStringLiteral("搜索区域左列"),
+                QStringLiteral("检测区域左上角 X；右侧准星按钮可在图上单击取点")}},
+            {QStringLiteral("searchRegionRow"), {QStringLiteral("搜索区域上行"),
+                QStringLiteral("检测区域左上角 Y；右侧准星按钮可在图上单击取点")}},
+            {QStringLiteral("searchRegionWidth"), {QStringLiteral("搜索区域宽度"),
+                QStringLiteral("检测区域宽度；右侧准星按钮单击处 X − 左列")}},
+            {QStringLiteral("searchRegionHeight"), {QStringLiteral("搜索区域高度"),
+                QStringLiteral("检测区域高度；右侧准星按钮单击处 Y − 上行")}},
+            {QStringLiteral("searchRegionPolygon"), {QStringLiteral("搜索区域多边形"),
+                QStringLiteral("空=按矩形；填 \"x,y x,y ...\" 时多边形优先")}},
+        };
+        for (auto &s : m_paramSpecs) {
+            const auto it = kLabelTips.constFind(s.name);
+            if (it != kLabelTips.constEnd()) {
+                s.label = it->first;
+                s.tooltip = it->second;
+            }
+        }
     }
 
     m_params[QStringLiteral("matchRow")] = 0.0;
@@ -1751,28 +1812,59 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         }
         m_outputImage = m_inputImage;
 
-        // 输出掩膜（VM 开关）：最终搜索区域/掩膜作为具名子结果，挂在主结果对象上
-        QSharedPointer<DataObject> maskOutObj;
+        // 输出掩膜（两个独立开关，VM 口径）：
+        //   · ROI 区域「输出掩膜」= 模板 ROI 的形状/图像掩膜
+        //   · 检测区域「输出掩膜（把此区域作为算子掩膜输入）」= 搜索区域掩膜
+        QSharedPointer<DataObject> roiMaskObj;
         if (m_params.value(QStringLiteral("outputMask"), false).toBool()) {
             cv::Mat maskOut;
             if (!roiMaskFull.empty()) {
                 maskOut = roiMaskFull;
             } else {
                 maskOut = cv::Mat::zeros(grayFull.size(), CV_8UC1);
-                if (searchPoly.size() >= 3) {
-                    std::vector<cv::Point> pts = searchPoly;
-                    for (cv::Point &p : pts) {
-                        p.x += searchRect.x;
-                        p.y += searchRect.y;
+                RoiShape roi = geometryRoi();
+                if (roi.type == RoiType::RotatedRect && roi.width > 1 && roi.height > 1) {
+                    const double rad = roi.angleDeg * CV_PI / 180.0;
+                    const double ca = std::cos(rad);
+                    const double sa = std::sin(rad);
+                    const double hw = roi.width * 0.5;
+                    const double hh = roi.height * 0.5;
+                    std::vector<cv::Point> pts;
+                    for (const auto &c : {std::pair<double, double>{-hw, -hh},
+                                          std::pair<double, double>{hw, -hh},
+                                          std::pair<double, double>{hw, hh},
+                                          std::pair<double, double>{-hw, hh}}) {
+                        pts.push_back(cv::Point(int(roi.p1.x() + c.first * ca - c.second * sa),
+                                                int(roi.p1.y() + c.first * sa + c.second * ca)));
                     }
                     cv::fillPoly(maskOut, std::vector<std::vector<cv::Point>>{pts},
                                  cv::Scalar(255));
-                } else {
-                    cv::rectangle(maskOut, searchRect, cv::Scalar(255), cv::FILLED);
+                } else if (roi.type == RoiType::Rect) {
+                    cv::rectangle(maskOut, cv::Rect(cv::Point(int(roi.p1.x()), int(roi.p1.y())),
+                                                    cv::Point(int(roi.p2.x()), int(roi.p2.y()))),
+                                  cv::Scalar(255), cv::FILLED);
                 }
             }
-            maskOutObj = QSharedPointer<DataObject>::create();
-            maskOutObj->setHImage(OpencvUtil::matToHimage(maskOut));
+            roiMaskObj = QSharedPointer<DataObject>::create();
+            roiMaskObj->setHImage(OpencvUtil::matToHimage(maskOut));
+        }
+
+        QSharedPointer<DataObject> searchMaskObj;
+        if (m_params.value(QStringLiteral("outputSearchMask"), false).toBool()) {
+            cv::Mat maskOut = cv::Mat::zeros(grayFull.size(), CV_8UC1);
+            if (searchPoly.size() >= 3) {
+                std::vector<cv::Point> pts = searchPoly;
+                for (cv::Point &p : pts) {
+                    p.x += searchRect.x;
+                    p.y += searchRect.y;
+                }
+                cv::fillPoly(maskOut, std::vector<std::vector<cv::Point>>{pts},
+                             cv::Scalar(255));
+            } else {
+                cv::rectangle(maskOut, searchRect, cv::Scalar(255), cv::FILLED);
+            }
+            searchMaskObj = QSharedPointer<DataObject>::create();
+            searchMaskObj->setHImage(OpencvUtil::matToHimage(maskOut));
         }
 
         MeasureResult res;
@@ -1787,8 +1879,10 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                                            bestScale, bestScale});
         auto resObj = QSharedPointer<DataObject>::create();
         resObj->setMeasureResult(res);
-        if (maskOutObj)
-            resObj->attachResult(QStringLiteral("掩膜"), maskOutObj);
+        if (roiMaskObj)
+            resObj->attachResult(QStringLiteral("掩膜"), roiMaskObj);
+        if (searchMaskObj)
+            resObj->attachResult(QStringLiteral("检测区域掩膜"), searchMaskObj);
         setOutputData(1, resObj);
     } catch (const std::exception &e) {
         VFP_DEBUG << "OpencvTemplateMatchNode error:" << e.what();
@@ -1824,15 +1918,9 @@ RoiShape OpencvTemplateMatchNode::geometryRoi() const
     s.width = w;
     s.height = h;
     s.angleDeg = m_params.value(QStringLiteral("roiAngle"), 0.0).toDouble();
-    const double cx = m_params.value(QStringLiteral("roiCenterCol"), 0.0).toDouble();
-    const double cy = m_params.value(QStringLiteral("roiCenterRow"), 0.0).toDouble();
-    if (cx != 0.0 || cy != 0.0) {
-        s.p1 = QPointF(cx, cy);
-    } else {
-        const double col = m_params.value(QStringLiteral("roiCol"), 0).toDouble();
-        const double row = m_params.value(QStringLiteral("roiRow"), 0).toDouble();
-        s.p1 = QPointF(col + w * 0.5, row + h * 0.5);
-    }
+    // 唯一几何表示：中心 + 宽高 + 角度（不再保留 roiCol/roiRow 旧左上角写法）
+    s.p1 = QPointF(m_params.value(QStringLiteral("roiCenterCol"), 0.0).toDouble(),
+                   m_params.value(QStringLiteral("roiCenterRow"), 0.0).toDouble());
     return s;
 }
 
@@ -1847,14 +1935,11 @@ void OpencvTemplateMatchNode::applyGeometryRoi(const RoiShape &shape)
         return;
     }
     if (shape.type == RoiType::RotatedRect && shape.width > 1 && shape.height > 1) {
-        const QRectF aabb = roiAxisAlignedBounds(shape);
         setParam(QStringLiteral("roiCenterCol"), shape.p1.x());
         setParam(QStringLiteral("roiCenterRow"), shape.p1.y());
         setParam(QStringLiteral("roiWidth"), qMax(1, int(shape.width + 0.5)));
         setParam(QStringLiteral("roiHeight"), qMax(1, int(shape.height + 0.5)));
         setParam(QStringLiteral("roiAngle"), shape.angleDeg);
-        setParam(QStringLiteral("roiCol"), int(aabb.x() + 0.5));
-        setParam(QStringLiteral("roiRow"), int(aabb.y() + 0.5));
         // 注意：这里不再自动把 trainFromImage 置 true。
         // VM 的流程是"先框区域 → 再点训练"；框完就自动训练会让用户以为训练按钮是摆设。
         return;
@@ -1863,12 +1948,10 @@ void OpencvTemplateMatchNode::applyGeometryRoi(const RoiShape &shape)
         const QRectF r = roiAxisAlignedBounds(shape);
         if (r.width() <= 1 || r.height() <= 1)
             return;
-        setParam(QStringLiteral("roiCol"), int(r.x() + 0.5));
-        setParam(QStringLiteral("roiRow"), int(r.y() + 0.5));
-        setParam(QStringLiteral("roiWidth"), qMax(1, int(r.width() + 0.5)));
-        setParam(QStringLiteral("roiHeight"), qMax(1, int(r.height() + 0.5)));
         setParam(QStringLiteral("roiCenterCol"), r.center().x());
         setParam(QStringLiteral("roiCenterRow"), r.center().y());
+        setParam(QStringLiteral("roiWidth"), qMax(1, int(r.width() + 0.5)));
+        setParam(QStringLiteral("roiHeight"), qMax(1, int(r.height() + 0.5)));
         setParam(QStringLiteral("roiAngle"), 0.0);
         // 训练由「训练模板」按钮显式触发（见 ModuleEditorDialog::onTrainTemplate）。
     }
@@ -1889,8 +1972,8 @@ QVector<TemplateEntry> OpencvTemplateMatchNode::templates() const
         }
     }
     if (out.isEmpty()) {
-        // 老方案：只有一个 templatePath。这里合成一条，让调用方永远拿到"至少一个模板"。
-        // 注意：不写回参数（migrateLegacyTemplate 才落库），避免只读路径改状态。
+        // 单模板模式：训练模板直接落盘到 templatePath、还没有模板列表时，运行时合成一条。
+        // 称呼已不再是"老方案兼容"：这是「训练模板」按钮的既定工作模式。
         const QString path =
             m_params.value(QStringLiteral("templatePath"), QString()).toString().trimmed();
         if (!path.isEmpty()) {
@@ -1898,16 +1981,10 @@ QVector<TemplateEntry> OpencvTemplateMatchNode::templates() const
             e.name = QFileInfo(path).fileName();
             e.imagePath = path;
             e.shape = geometryRoi();
-            e.contrastThreshold = qBound(
-                1, m_params.value(QStringLiteral("contrastThreshold"),
-                                  qMax(1, int(m_params.value(QStringLiteral("edgeThreshold"), 20.0)
-                                                  .toDouble()
-                                          * 0.25
-                                          + 0.5)))
-                       .toInt(),
-                255);
+            e.contrastThreshold =
+                qBound(1, m_params.value(QStringLiteral("contrastThreshold"), 5).toInt(), 255);
             e.autoThreshold =
-                m_params.value(QStringLiteral("autoEdgeThreshold"), false).toBool();
+                m_params.value(QStringLiteral("autoContrastThreshold"), false).toBool();
             e.featureScale =
                 qBound(1, m_params.value(QStringLiteral("featureScale"), 1).toInt(), 20);
             e.speedScale = qBound(1, m_params.value(QStringLiteral("speedScale"), 3).toInt(), 20);
@@ -1948,15 +2025,9 @@ TemplateEntry OpencvTemplateMatchNode::activeTemplate() const
     if (list.isEmpty()) {
         // 连 templatePath 都没有：返回一个"空模板"，调用方按原逻辑报"需要模板文件"
         TemplateEntry e;
-        e.contrastThreshold = qBound(
-            1, m_params.value(QStringLiteral("contrastThreshold"),
-                              qMax(1, int(m_params.value(QStringLiteral("edgeThreshold"), 20.0)
-                                              .toDouble()
-                                      * 0.25
-                                      + 0.5)))
-                   .toInt(),
-            255);
-        e.autoThreshold = m_params.value(QStringLiteral("autoEdgeThreshold"), false).toBool();
+        e.contrastThreshold =
+            qBound(1, m_params.value(QStringLiteral("contrastThreshold"), 5).toInt(), 255);
+        e.autoThreshold = m_params.value(QStringLiteral("autoContrastThreshold"), false).toBool();
         e.featureScale = qBound(1, m_params.value(QStringLiteral("featureScale"), 1).toInt(), 20);
         e.speedScale = qBound(1, m_params.value(QStringLiteral("speedScale"), 3).toInt(), 20);
         e.minChainLength =
@@ -1965,18 +2036,6 @@ TemplateEntry OpencvTemplateMatchNode::activeTemplate() const
         return e;
     }
     return list.at(activeTemplateIndex());
-}
-
-void OpencvTemplateMatchNode::migrateLegacyTemplate()
-{
-    if (!m_params.value(QStringLiteral("templates"), QString()).toString().trimmed().isEmpty())
-        return;
-    const QString path =
-        m_params.value(QStringLiteral("templatePath"), QString()).toString().trimmed();
-    if (path.isEmpty())
-        return;
-    setTemplates(templates());   // templates() 已按老参数合成一条
-    setActiveTemplateIndex(0);
 }
 
 double OpencvTemplateMatchNode::effectiveEdgeThresholdFor(const cv::Mat &tmpl, int aperture,
@@ -2115,7 +2174,7 @@ bool OpencvTemplateMatchNode::applySuggestedParams()
         return false;
     const ParamSuggestion s = suggestParams(tmpl);
     m_params[QStringLiteral("contrastThreshold")] = s.contrastThreshold;
-    m_params[QStringLiteral("autoEdgeThreshold")] = s.autoThreshold;
+    m_params[QStringLiteral("autoContrastThreshold")] = s.autoThreshold;
     m_params[QStringLiteral("featureScale")] = s.featureScale;
     m_params[QStringLiteral("speedScale")] = s.speedScale;
     m_params[QStringLiteral("minChainLength")] = s.minChainLength;

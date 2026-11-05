@@ -167,7 +167,7 @@ void OpencvAngleAreaTest::testBlobResultDepth()
     // 按面积降序、只保留 1 个 ⇒ 应留下 20x20 那个
     node.setParam(QStringLiteral("findNum"), 1);
     node.setParam(QStringLiteral("sortFeature"), 0);
-    node.setParam(QStringLiteral("sortMode"), 0);
+    node.setParam(QStringLiteral("sortMode"), 1);   // 降序（VM：1=降序）
     node.run();
 
     QVERIFY2(node.getParam(QStringLiteral("moduleStatus")).toBool(), "Blob 应执行成功");
@@ -191,7 +191,7 @@ void OpencvAngleAreaTest::testBlobResultDepth()
              "rect 的 [x,y,w,h] 应为 20x20 那个矩形的外接框");
 
     // 升序 ⇒ 应改为留下面积 100 的那个
-    node.setParam(QStringLiteral("sortMode"), 1);
+    node.setParam(QStringLiteral("sortMode"), 0);   // 升序（VM：0=升序）
     node.run();
     QCOMPARE(node.getParam(QStringLiteral("blobCount")).toInt(), 1);
     QVERIFY2(qAbs(node.getParam(QStringLiteral("maxBlobArea")).toDouble() - 100.0) < 1e-9,

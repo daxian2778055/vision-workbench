@@ -359,6 +359,7 @@ src/ModelCache.cpp
 set(HEADERS
     include/AppLog.h
     include/NodeResultFields.h   # U-18：判红原因字段的唯一口径（发布侧/作废侧共用谓词）
+    include/VmSharedText.h        # VM 对标批次共享 UI 文案（G-4 重复中文句闸）
     include/ProjectLoadNotes.h   # U-34：载入留痕接可见面的唯一接线
     include/FlowRuntimeStats.h
     include/StatisticsReport.h

@@ -187,7 +187,9 @@ void OpencvFeatureMatchNode::applyGeometryRoi(const RoiShape &shape)
     setParam(QStringLiteral("roiWidth"), qMax(1, int(w + 0.5)));
     setParam(QStringLiteral("roiHeight"), qMax(1, int(h + 0.5)));
     setParam(QStringLiteral("roiAngle"), ang);
-    setParam(QStringLiteral("trainFromImage"), true);
+    // 训练必须由模块窗的「训练模板」显式触发（与 OpencvTemplateMatchNode 口径一致）。
+    // 以前在这里自动置 trainFromImage=true，导致主画布上画/拖一次 ROI 就会在下一轮
+    // run() 里裁图并覆写模板文件，用户从未点过训练。
 }
 
 void OpencvFeatureMatchNode::run(bool /*autoSwitch*/)

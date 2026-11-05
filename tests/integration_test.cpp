@@ -1965,8 +1965,8 @@ void IntegrationTest::testEndToEndPipelineSmoke()
     QVERIFY(reader != nullptr);
     QVERIFY(threshold != nullptr);
     reader->setParam(QStringLiteral("filePath"), imagePath);
-    threshold->setParam(QStringLiteral("mode"), 0);      // 固定阈值
-    threshold->setParam(QStringLiteral("minVal"), 128);
+    threshold->setParam(QStringLiteral("binaryType"), 0);   // 硬阈值
+    threshold->setParam(QStringLiteral("lowThreshold"), 128);
     QVERIFY2(scene.createConnection(reader->outputPorts().first(),
                                     threshold->inputPorts().first(), true) != nullptr,
              "无法建立 读取图像->二值化 连线");
@@ -2089,8 +2089,8 @@ void IntegrationTest::testRecomputeDownstreamOnly()
     QVERIFY(readerB != nullptr);
     readerA->setParam(QStringLiteral("filePath"), imageA);
     readerB->setParam(QStringLiteral("filePath"), imageB);
-    thresholdA->setParam(QStringLiteral("mode"), 0);      // 固定阈值
-    thresholdA->setParam(QStringLiteral("minVal"), 128);
+    thresholdA->setParam(QStringLiteral("binaryType"), 0);   // 硬阈值
+    thresholdA->setParam(QStringLiteral("lowThreshold"), 128);
     QVERIFY2(scene.createConnection(readerA->outputPorts().first(),
                                     thresholdA->inputPorts().first(), true) != nullptr,
              "无法建立 读取图像->二值化 连线");

@@ -10,16 +10,11 @@
 
 #include "NodeRegistry.h"
 #include "NodeBase.h"
-#include "HalconNode.h"
 #include "DataObject.h"
 #include "Port.h"
 #include "FormulaNode.h"
 #include "OpencvTemplateMatchNode.h"
 #include "OpencvThresholdNode.h"
-#include "FlowScene.h"
-#include "ProjectManager.h"
-#include <QJsonArray>
-#include <QJsonObject>
 
 class SingleOutputPortTest : public QObject
 {
@@ -31,11 +26,9 @@ private slots:
     void testTemplateMatchOnlyOnePort();
     void testTemplateMatchSingleInputPort();
     void testTemplateResultJudgment();
-    void testLegacyInputConnectionMigratesToBinding();
     void testFoldedSubOutputsStillReachable();
     void testDataNodePrimaryValueOnSinglePort();
     void testDataObjectAttachMeasureKeepsImageSlot();
-    void testLegacyOutPortIndexMigratesToSinglePort();
 };
 
 void SingleOutputPortTest::testAllRegisteredToolsHaveOneOutputPort()
@@ -152,55 +145,6 @@ void SingleOutputPortTest::testTemplateResultJudgment()
     QVERIFY2(node.resultJudgmentOk(&reason), "无目标且勾选 OKWhenNumIsZero 应通过");
 }
 
-void SingleOutputPortTest::testLegacyInputConnectionMigratesToBinding()
-{
-    // 老方案把 ROI 掩膜接在模板匹配的第 2 个输入端口（targetPortIndex=1）。
-    // 单输入契约后该端口变成逻辑槽：载入时必须转成订阅绑定，不能静默丢线。
-    FlowScene scene;
-    NodeBase *src = scene.createNode(NodeBase::NodeType::IMAGE_PROCESSING,
-                                     QPointF(100, 100), QStringLiteral("二值化"));
-    QVERIFY(src);
-    NodeBase *tpl = scene.createNode(NodeBase::NodeType::IMAGE_PROCESSING,
-                                     QPointF(400, 100), QStringLiteral("模板匹配"));
-    QVERIFY2(tpl, "模板匹配算子应能从注册表创建");
-    QCOMPARE(tpl->property("vfpNodeTypeId").toString(), QStringLiteral("OpencvTemplateMatchNode"));
-    QCOMPARE(tpl->inputPorts().size(), 1);
-    // 先接一条合法主线，保证源节点能被执行到
-    QVERIFY(scene.createConnection(src->outputPorts().first(), tpl->inputPorts().first(), true));
-
-    ProjectManager pm;
-    QJsonObject root = pm.buildProjectJson({&scene});
-    QJsonArray scenes = root.value(QStringLiteral("scenes")).toArray();
-    QCOMPARE(scenes.size(), 1);
-    QJsonObject sc = scenes.at(0).toObject();
-    QJsonArray conns = sc.value(QStringLiteral("connections")).toArray();
-    QCOMPARE(conns.size(), 1);
-    QJsonObject legacy = conns.at(0).toObject();
-    legacy[QStringLiteral("targetPortIndex")] = 1;   // 旧方案：第 2 个输入（ROI 掩膜）
-    conns[0] = legacy;
-    sc[QStringLiteral("connections")] = conns;
-    scenes[0] = sc;
-    root[QStringLiteral("scenes")] = scenes;
-
-    ProjectManager loader;
-    QList<FlowScene *> opened;
-    QVERIFY2(loader.applyProjectJson(root, opened), "老方案应能载入");
-    QCOMPARE(opened.size(), 1);
-
-    FlowScene *loaded = opened.first();
-    NodeBase *loadedTpl = nullptr;
-    for (NodeBase *n : loaded->nodes()) {
-        if (n->property("vfpNodeTypeId").toString() == QLatin1String("OpencvTemplateMatchNode"))
-            loadedTpl = n;
-    }
-    QVERIFY(loadedTpl);
-    // 迁移结果：这条线不再作为连线存在，而是换成逻辑槽 1 的订阅绑定
-    QCOMPARE(loaded->connections().size(), 0);
-    QVERIFY(loadedTpl->hasInputBinding(1));
-    QCOMPARE(loadedTpl->inputBindings().value(1).sourceModuleId, src->moduleId());
-    qDeleteAll(opened);
-}
-
 void SingleOutputPortTest::testFoldedSubOutputsStillReachable()
 {
     OpencvThresholdNode node;
@@ -252,45 +196,6 @@ void SingleOutputPortTest::testDataObjectAttachMeasureKeepsImageSlot()
     bool ok = false;
     QCOMPARE(obj.primaryNumber(&ok), 12.5);
     QVERIFY(ok);
-}
-
-void SingleOutputPortTest::testLegacyOutPortIndexMigratesToSinglePort()
-{
-    // 老方案兼容：B1 之前保存的连线可能指向第 2..N 个输出（现在被折叠进唯一端口）。
-    // 载入时必须改接到端口 0，否则现场升级后整条线静默消失、结果全空。
-    FlowScene scene;
-    NodeBase *thr = scene.createNode(NodeBase::NodeType::IMAGE_PROCESSING,
-                                     QPointF(100, 100), QStringLiteral("二值化"));
-    QVERIFY2(thr, "二值化算子应能从注册表创建");
-    QCOMPARE(thr->property("vfpNodeTypeId").toString(), QStringLiteral("OpencvThresholdNode"));
-    QCOMPARE(thr->outputPorts().size(), 1);            // 已聚合
-    QCOMPARE(thr->logicalOutputPortCount(), 3);        // 输出 / 二值图 / 前景像素数
-
-    NodeBase *fml = scene.createNode(NodeBase::NodeType::IMAGE_PROCESSING,
-                                     QPointF(400, 100), QStringLiteral("公式计算"));
-    QVERIFY2(fml, "公式计算算子应能从注册表创建");
-    QVERIFY(scene.createConnection(thr->outputPorts().first(), fml->inputPorts().first(), true));
-
-    ProjectManager pm;
-    QJsonObject root = pm.buildProjectJson({&scene});
-    QJsonArray scenes = root.value(QStringLiteral("scenes")).toArray();
-    QCOMPARE(scenes.size(), 1);
-    QJsonObject sc = scenes.at(0).toObject();
-    QJsonArray conns = sc.value(QStringLiteral("connections")).toArray();
-    QCOMPARE(conns.size(), 1);
-    QJsonObject conn = conns.at(0).toObject();
-    conn[QStringLiteral("sourcePortIndex")] = 2;       // 模拟老方案里的旧端口号
-    conns[0] = conn;
-    sc[QStringLiteral("connections")] = conns;
-    scenes[0] = sc;
-    root[QStringLiteral("scenes")] = scenes;
-
-    ProjectManager loader;
-    QList<FlowScene *> opened;
-    QVERIFY2(loader.applyProjectJson(root, opened), "老方案应能载入");
-    QCOMPARE(opened.size(), 1);
-    QCOMPARE(opened.first()->connections().size(), 1);   // 线没断：已迁移到唯一端口
-    qDeleteAll(opened);
 }
 
 QTEST_MAIN(SingleOutputPortTest)

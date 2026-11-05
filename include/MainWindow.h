@@ -230,10 +230,18 @@ private:
     void beginSearchRegionPick(NodeBase *node, bool polygon);
     /// 模块窗「绘制」→ 主画布重画模板匹配的 ROI 区域（模板框）
     void beginTemplateRoiPick(NodeBase *node, bool rotatedRect);
+    /// 检测区域输入框右侧「取点」→ 主画布单击取坐标
+    void beginCoordinatePick(NodeBase *node, int field);
     /// 把主画布切到该节点的图像并保证图像窗口可见（两种绘制入口共用）
     bool prepareCanvasPick(NodeBase *node);
     /// ROI 绘制完成：写回节点参数
     void handleRoiEdited(const RoiShape &shape);
+    /// 模块窗「ROI区域/绘制」→ 主画布通用几何 ROI 拾取
+    void beginGeometryPick(NodeBase *node);
+    /// 模块窗「掩膜/编辑掩膜」→ 主画布掩膜涂抹
+    void beginMaskEdit(NodeBase *node);
+    /// 主画布掩膜画笔收笔：写回节点 editMask
+    void handleMaskEdited();
     /// 当前流程标签页对应的场景（无则 nullptr）。分组等画布操作按"当前流程"作用。
     FlowScene *currentFlowScene() const;
     /// 创建分组（FR1.9；Ctrl+G）：把当前流程里选中的算子框成一组

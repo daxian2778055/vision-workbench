@@ -202,6 +202,96 @@ void applyGrayMask(cv::Mat &bin, const QImage &mask)
     cv::bitwise_and(bin, resized, bin);
 }
 
+cv::Mat allowedMask(const cv::Size &size, const cv::Rect &roiRect, const QImage &mask)
+{
+    cv::Mat allowed(size, CV_8U, cv::Scalar(255));
+    if (roiRect.width > 0 && roiRect.height > 0) {
+        allowed.setTo(0);
+        cv::rectangle(allowed, roiRect, cv::Scalar(255), cv::FILLED);
+    }
+    applyGrayMask(allowed, mask);
+    return allowed;
+}
+
+void keepOriginalOutside(cv::Mat &processed, const cv::Mat &src, const cv::Mat &allowed)
+{
+    if (processed.empty() || src.empty() || allowed.empty()
+        || processed.size() != src.size() || allowed.size() != src.size()) {
+        return;
+    }
+    cv::Mat outside;
+    cv::compare(allowed, 0, outside, cv::CMP_EQ);
+    if (src.type() == processed.type()) {
+        src.copyTo(processed, outside);
+        return;
+    }
+
+    // 位深/通道不一致时不能直接 copyTo：OpenCV 会按 src 的 type 重新分配 processed，
+    // 只写掩膜命中的像素 → ROI 内已处理的结果变成未初始化内存（16 位相机图必现）。
+    // 先把原图按目标类型转好，再按掩膜拷回；无法安全转换时宁可保留 processed。
+    cv::Mat converted;
+    if (src.channels() != processed.channels()) {
+        if (src.channels() == 3 && processed.channels() == 1)
+            cv::cvtColor(src, converted, cv::COLOR_BGR2GRAY);
+        else if (src.channels() == 1 && processed.channels() == 3)
+            cv::cvtColor(src, converted, cv::COLOR_GRAY2BGR);
+        else
+            return;
+    } else {
+        converted = src;
+    }
+    if (converted.depth() != processed.depth()) {
+        // 16U↔8U 按 256 换算，其余深度按 convertTo 的饱和截断
+        const double scale =
+            (converted.depth() == CV_16U && processed.depth() == CV_8U)
+                ? 1.0 / 256.0
+                : ((converted.depth() == CV_8U && processed.depth() == CV_16U) ? 256.0 : 1.0);
+        converted.convertTo(converted, processed.depth(), scale);
+    }
+    if (converted.type() != processed.type() || converted.size() != processed.size())
+        return;
+    converted.copyTo(processed, outside);
+}
+
+cv::Mat warpAffineVm(const cv::Mat &src, cv::Mat m, bool lockSize,
+                     int interpIdx, int extensionType, int fillValue)
+{
+    if (src.empty())
+        return cv::Mat();
+    const int interp = (interpIdx == 0) ? cv::INTER_NEAREST : cv::INTER_LINEAR;
+    const int border = (extensionType == 1) ? cv::BORDER_REPLICATE : cv::BORDER_CONSTANT;
+    const cv::Scalar borderValue(fillValue);
+
+    cv::Size dsize = src.size();
+    if (!lockSize) {
+        const std::vector<cv::Point2f> corners = {
+            {0.0f, 0.0f},
+            {float(src.cols - 1), 0.0f},
+            {0.0f, float(src.rows - 1)},
+            {float(src.cols - 1), float(src.rows - 1)}
+        };
+        std::vector<cv::Point2f> moved;
+        cv::transform(corners, moved, m);
+        // 画布范围 = 原画布 ∪ 变换后画布：平移时保留原画布的空位，旋转时容纳完整结果。
+        moved.insert(moved.end(), corners.begin(), corners.end());
+        float minX = moved[0].x, maxX = moved[0].x;
+        float minY = moved[0].y, maxY = moved[0].y;
+        for (const auto &p : moved) {
+            minX = std::min(minX, p.x);
+            maxX = std::max(maxX, p.x);
+            minY = std::min(minY, p.y);
+            maxY = std::max(maxY, p.y);
+        }
+        m.at<double>(0, 2) -= minX;
+        m.at<double>(1, 2) -= minY;
+        dsize = cv::Size(int(std::ceil(maxX - minX)) + 1, int(std::ceil(maxY - minY)) + 1);
+    }
+
+    cv::Mat dst;
+    cv::warpAffine(src, dst, m, dsize, interp, border, borderValue);
+    return dst;
+}
+
 namespace {
 
 /// 旋转估计：**多角度试探 + 平移相关响应择优**，返回"当前图相对参考图"的旋转角（度），

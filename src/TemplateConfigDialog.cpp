@@ -203,7 +203,7 @@ static void makeToolButton(QPushButton *btn, const QString &glyph, const QString
 }   // namespace
 
 TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int editIndex,
-                                           QWidget *parent)
+                                           QWidget *parent, bool startInMaskMode)
     : QDialog(parent)
     , m_node(node)
     , m_editIndex(editIndex)
@@ -276,20 +276,22 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     makeToolButton(selectBtn, QStringLiteral("select"), QStringLiteral("选择"));
     makeToolButton(rotatedBtn, QStringLiteral("rotatedrect"), QStringLiteral("旋转矩形"));
 
-    auto *undoBtn = new QPushButton();
-    auto *redoBtn = new QPushButton();
+    m_undoBtn = new QPushButton();
+    m_redoBtn = new QPushButton();
     auto *zoomInBtn = new QPushButton();
     auto *zoomOutBtn = new QPushButton();
     auto *fitBtn = new QPushButton();
     auto *fullBtn = new QPushButton();
-    makeToolButton(undoBtn, QStringLiteral("undo"), QStringLiteral("撤销"));
-    makeToolButton(redoBtn, QStringLiteral("redo"), QStringLiteral("重做"));
+    makeToolButton(m_undoBtn, QStringLiteral("undo"), QStringLiteral("撤销"));
+    makeToolButton(m_redoBtn, QStringLiteral("redo"), QStringLiteral("重做"));
     makeToolButton(zoomInBtn, QStringLiteral("zoomin"), QStringLiteral("放大"));
     makeToolButton(zoomOutBtn, QStringLiteral("zoomout"), QStringLiteral("缩小"));
     makeToolButton(fitBtn, QStringLiteral("fit"), QStringLiteral("图像自适应"));
     makeToolButton(fullBtn, QStringLiteral("fullscreen"), QStringLiteral("全屏显示"));
-    undoBtn->setEnabled(false);   // 对话框暂无历史栈
-    redoBtn->setEnabled(false);
+    m_undoBtn->setEnabled(false);
+    m_redoBtn->setEnabled(false);
+    connect(m_undoBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onUndo);
+    connect(m_redoBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onRedo);
 
     auto *tools = new QHBoxLayout();
     tools->addWidget(selectBtn);
@@ -300,7 +302,7 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     }
     tools->addWidget(m_wandTol);
     for (QPushButton *b : {clearShapeBtn, delShapeBtn, splitBtn, scissorsBtn,
-                           maskModeBtn, eraseBtn, undoBtn, redoBtn}) {
+                           maskModeBtn, eraseBtn, m_undoBtn, m_redoBtn}) {
         tools->addWidget(b);
     }
     tools->addStretch();
@@ -526,6 +528,10 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
             refreshFeaturePreview();
             m_hint->setText(QStringLiteral("已恢复屏蔽前的形状。"));
         }
+        // 屏蔽前后形状集整体换了一份，旧撤销栈不再对应，直接作废避免"撤销到半套形状"。
+        m_undoStates.clear();
+        m_redoStates.clear();
+        updateHistoryButtons();
     });
     // VM：锁定后隐藏「图上取点」按钮（锁定=不允许再改匹配中心）
     connect(m_anchorLock, &QCheckBox::toggled, anchorPickBtn, [anchorPickBtn](bool locked) {
@@ -541,6 +547,8 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
         const int row = m_list->currentRow();
         if (row < 0)
             return;
+        if (row < m_shapes.size() || row - m_shapes.size() < m_excludes.size())
+            pushShapeHistory();
         if (row < m_shapes.size()) {
             m_shapes.removeAt(row);                       // 保留行
         } else if (row - m_shapes.size() < m_excludes.size()) {
@@ -572,6 +580,12 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     connect(okBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onConfirm);
     connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
     connect(m_view, &HalconWindow::roiEdited, this, &TemplateConfigDialog::onRoiEdited);
+    connect(m_view, &HalconWindow::roiHandleEdited, this, [this](const RoiShape &shape) {
+        if (shape.type == RoiType::None)
+            return;
+        pushShapeHistory();
+        updateShapeFromHandle(shape);
+    });
     connect(m_anchorLock, &QCheckBox::toggled, this, [this](bool on) {
         m_anchorX->setEnabled(!on);
         m_anchorY->setEnabled(!on);
@@ -631,8 +645,17 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
         refreshFeaturePreview();
     }
     refreshShapeList();
-    m_hint->setText(QStringLiteral(
-        "在图上拖出模板区域（矩形/多边形），右侧改参数；图上绿点 = 该模板参与打分的特征点。"));
+    if (startInMaskMode) {
+        // 从模块窗「屏蔽区」/「屏蔽区创建=绘制」进来：直接切到屏蔽模式，
+        // 画出的形状进屏蔽列表（挖掉，不参与匹配），而不是模板保留区。
+        m_maskMode = true;
+        maskModeBtn->setChecked(true);
+        m_hint->setText(QStringLiteral(
+            "屏蔽模式：画出的形状会从模板里挖掉（不参与匹配）；可继续用魔术棒/橡皮微调。"));
+    } else {
+        m_hint->setText(QStringLiteral(
+            "在图上拖出模板区域（矩形/多边形），右侧改参数；图上绿点 = 该模板参与打分的特征点。"));
+    }
 }
 
 void TemplateConfigDialog::onPickOtherImage()
@@ -849,6 +872,7 @@ void TemplateConfigDialog::onSplitShape()
 {
     if (m_shapes.isEmpty())
         return;
+    pushShapeHistory();
     const int row = m_list->currentRow();
     QVector<RoiShape> next;
     for (int i = 0; i < m_shapes.size(); ++i) {
@@ -890,6 +914,7 @@ void TemplateConfigDialog::onImageClicked(const QPointF &imagePos)
     if (m_eraseMode) {
         m_eraseMode = false;
         m_view->setCursor(Qt::ArrowCursor);
+        pushShapeHistory();
         RoiShape e;
         e.type = RoiType::Circle;
         e.p1 = imagePos;
@@ -930,8 +955,10 @@ void TemplateConfigDialog::onImageClicked(const QPointF &imagePos)
     }
 
     if (m_maskMode) {
+        pushShapeHistory();
         m_excludes = applyWand(m_excludes, m_trainGray, seed, m_wandTol->value(), m_wandAppend);
     } else {
+        pushShapeHistory();
         m_shapes = applyWand(m_shapes, m_trainGray, seed, m_wandTol->value(), m_wandAppend);
     }
     m_shape = m_shapes.isEmpty() ? RoiShape() : m_shapes.last();
@@ -955,6 +982,8 @@ void TemplateConfigDialog::onImageClicked(const QPointF &imagePos)
 
 void TemplateConfigDialog::onClearShape()
 {
+    if (!m_shapes.isEmpty() || !m_excludes.isEmpty())
+        pushShapeHistory();
     m_shape = RoiShape();
     m_shapes.clear();
     m_excludes.clear();
@@ -967,6 +996,7 @@ void TemplateConfigDialog::onRoiEdited(const RoiShape &shape)
 {
     if (shape.type == RoiType::None)
         return;
+    pushShapeHistory();
     // 屏蔽模式：这条形状进屏蔽列表（挖掉该区域），不进保留列表
     if (m_maskMode && shape.type != RoiType::Line) {
         m_excludes.append(shape);
@@ -1019,6 +1049,81 @@ void TemplateConfigDialog::onRoiEdited(const RoiShape &shape)
         applySuggestedParams();          // 第一块形状落下时给一次建议值
     m_hint->setText(QStringLiteral("已添加形状（共 %1 块）；可继续画下一块，或直接确定。")
                         .arg(m_shapes.size()));
+}
+
+void TemplateConfigDialog::pushShapeHistory()
+{
+    if (m_blockAllActive)
+        return;   // 「全部屏蔽」是临时显示态，不参与撤销
+    if (m_undoStates.size() >= 30)
+        m_undoStates.removeFirst();
+    m_undoStates.append(ShapeState{m_shapes, m_excludes, m_erases, m_shape});
+    m_redoStates.clear();
+    updateHistoryButtons();
+}
+
+void TemplateConfigDialog::applyShapeHistory(const ShapeState &state)
+{
+    m_shapes = state.shapes;
+    m_excludes = state.excludes;
+    m_erases = state.erases;
+    m_shape = state.shape;
+    m_view->setRoiEditable(false);
+    m_view->clearRoi();
+    if (m_shape.type != RoiType::None) {
+        m_view->setRoiShape(m_shape);
+        m_view->setRoiHandleEditEnabled(true);
+    }
+    refreshShapeList();
+    syncAutoParamsToUi();
+    refreshFeaturePreview();
+    updateHistoryButtons();
+}
+
+void TemplateConfigDialog::updateHistoryButtons()
+{
+    if (m_undoBtn)
+        m_undoBtn->setEnabled(!m_blockAllActive && !m_undoStates.isEmpty());
+    if (m_redoBtn)
+        m_redoBtn->setEnabled(!m_blockAllActive && !m_redoStates.isEmpty());
+}
+
+void TemplateConfigDialog::updateShapeFromHandle(const RoiShape &shape)
+{
+    const int row = m_list->currentRow();
+    if (row >= 0 && row < m_shapes.size()) {
+        m_shapes[row] = shape;
+    } else if (row >= m_shapes.size() && row - m_shapes.size() < m_excludes.size()) {
+        m_excludes[row - m_shapes.size()] = shape;
+    } else if (!m_shapes.isEmpty()) {
+        m_shapes[0] = shape;
+    } else if (!m_excludes.isEmpty()) {
+        m_excludes[0] = shape;
+    } else {
+        return;
+    }
+    m_shape = m_shapes.isEmpty() ? RoiShape() : m_shapes.first();
+    refreshShapeList();
+    refreshFeaturePreview();
+    m_hint->setText(QStringLiteral("已更新形状的位置/大小（不会新增副本）。"));
+}
+
+void TemplateConfigDialog::onUndo()
+{
+    if (m_blockAllActive || m_undoStates.isEmpty())
+        return;
+    m_redoStates.append(ShapeState{m_shapes, m_excludes, m_erases, m_shape});
+    applyShapeHistory(m_undoStates.takeLast());
+    m_hint->setText(QStringLiteral("已撤销上一步。"));
+}
+
+void TemplateConfigDialog::onRedo()
+{
+    if (m_blockAllActive || m_redoStates.isEmpty())
+        return;
+    m_undoStates.append(ShapeState{m_shapes, m_excludes, m_erases, m_shape});
+    applyShapeHistory(m_redoStates.takeLast());
+    m_hint->setText(QStringLiteral("已恢复到撤销前的状态。"));
 }
 
 void TemplateConfigDialog::refreshShapeList()
@@ -1253,7 +1358,7 @@ void TemplateConfigDialog::onConfirm()
     // 与老字段同步：run() 的兜底路径、面板显示、其它读取 templatePath 的代码都还有效
     m_node->setParam(QStringLiteral("templatePath"), savePath);
     m_node->setParam(QStringLiteral("contrastThreshold"), entry.contrastThreshold);
-    m_node->setParam(QStringLiteral("autoEdgeThreshold"), entry.autoThreshold);
+    m_node->setParam(QStringLiteral("autoContrastThreshold"), entry.autoThreshold);
     m_node->setParam(QStringLiteral("featureScale"), entry.featureScale);
     m_node->setParam(QStringLiteral("speedScale"), entry.speedScale);
     m_node->setParam(QStringLiteral("minChainLength"), entry.minChainLength);

@@ -80,8 +80,7 @@ Port *NodeBase::addInputPort(const QString &name, PortDataType dataType)
 
 int NodeBase::addInputSlot(const QString &name, PortDataType dataType)
 {
-    // 逻辑下标 = 已有真实端口数 + 已有逻辑槽数：与旧方案 targetPortIndex 同号，
-    // 老连线迁移时不需要另一张映射表。
+    // 逻辑下标 = 已有真实端口数 + 已有逻辑槽数（inputBindings 以此为键）。
     const int index = m_inputPorts.size() + m_inputSlots.size();
     InputSlot slot;
     slot.name = name;

@@ -25,15 +25,13 @@ struct TemplateEntry
     QVector<RoiShape> erases;           ///< type=Circle，p1=圆心，p2=圆周一点（半径）
     // ── VM「模板配置参数」官方口径（见 docs/VM4.4高精度匹配对齐规范.md）──
     // 注：VM 用图像金字塔顶层/底层；我们没有金字塔，按等效效果实现（在规范里注明）。
-    // 默认值刻意取"老方案等效"：阈值 5 灰度差 ≈ Sobel 20（原常量）、不稀疏、不过滤。
-    // VM 口径的 3/3/20 由「建模板时的自动建议」给（suggestParams），不动存量工程。
+    // 默认值：阈值 5 灰度差、不稀疏、不过滤；建模板时由 suggestParams 给 VM 口径建议值。
     int contrastThreshold = 5;          ///< 对比度阈值 1~255：特征点与背景的灰度差
     bool autoThreshold = false;         ///< 阈值模式：true=自动（按模板对比度自动生成）
     int featureScale = 1;               ///< 特征尺度 1~20（≤速度尺度）：特征点提取粒度，1 最精细
     int speedScale = 3;                 ///< 速度尺度 1~20：搜索降采样倍率，越大越快越易漏检
     int minChainLength = 1;             ///< 最小链长：特征链短于此长度不保留
     bool chainModeAuto = false;         ///< 链长模式：true=自动（按特征尺度给）
-    // 老字段（v1 JSON 兼容，fromJson 迁移到上面）：edgeThreshold/autoThreshold/aperture/coarseLongSide
 
     QJsonObject toJson() const;
     static TemplateEntry fromJson(const QJsonObject &obj);
@@ -76,7 +74,7 @@ public:
     double effectiveEdgeThreshold(const cv::Mat &tmpl, int aperture) const;
 
     // ---- 模板列表（VM 对齐）----
-    /// 解析 m_params["templates"]；空列表时用 templatePath 合成一条（老方案零迁移）。
+    /// 解析 m_params["templates"]；空列表时用 templatePath 合成一条（单模板训练模式）。
     QVector<TemplateEntry> templates() const;
     void setTemplates(const QVector<TemplateEntry> &entries);
     /// 当前生效的模板序号（越界自动夹取）
@@ -84,8 +82,6 @@ public:
     void setActiveTemplateIndex(int index);
     /// 当前生效的模板（列表为空时按节点参数合成一条，保证调用方永远拿到"一个模板"）
     TemplateEntry activeTemplate() const;
-    /// 老 templatePath → 模板列表的一次性迁移（幂等）
-    void migrateLegacyTemplate();
 
     /// 有效边缘阈值（显式传入本模板参数；run/可视化/对话框共用）
     static double effectiveEdgeThresholdFor(const cv::Mat &tmpl, int aperture,

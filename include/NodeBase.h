@@ -88,16 +88,12 @@ public:
     /// 与 addInputPort 的区别：**不在画布上生成输入点**，下游无法用连线接入；
     /// 数据由「订阅绑定」（setInputBinding）在执行前注入到同一个下标上。
     /// VM 4.4 的多图/多值输入正是这种形态（基本参数里订阅前序模块，而不是多画一个点）。
-    /// 约束：必须在全部真实输入端口 addInputPort 之后调用，返回值即该槽的逻辑下标，
-    /// 与旧方案的 targetPortIndex 保持一致（老连线按同号迁移）。
+    /// 约束：必须在全部真实输入端口 addInputPort 之后调用，返回值即该槽的逻辑下标
+    /// （inputBindings 以此为键；不在画布上生成输入点）。
     int addInputSlot(const QString &name, PortDataType dataType = PortDataType::Any);
     int inputSlotCount() const { return m_inputSlots.size(); }
-    /// 逻辑输入总数（真实端口 + 逻辑槽）：老方案端口号迁移的上界。
+    /// 逻辑输入总数（真实端口 + 逻辑槽）。
     int logicalInputPortCount() const { return m_inputPorts.size() + m_inputSlots.size(); }
-    /// 老方案输入端口号 → 新逻辑下标。默认同号；仅在"端口顺序被单输入契约重排"
-    /// 的算子覆写（如 CameraIoNode：旧 0=图像/1=值/2=执行 → 新 0=执行/1=值）。
-    /// 返回负值表示该旧端口在新形态下没有对应落点（由迁移方留痕删除）。
-    virtual int migrateLegacyInputPortIndex(int oldIndex) const { return oldIndex; }
 
     /// 输入订阅绑定：把某个逻辑槽绑定到场景内另一算子的输出端口（按模块号，方案存盘稳定）。
     /// 只允许绑定逻辑槽（下标 >= 真实端口数），真实端口仍由连线驱动。

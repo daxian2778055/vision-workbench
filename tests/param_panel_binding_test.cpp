@@ -2145,12 +2145,12 @@ void ParamPanelBindingTest::testOperatorsWithoutParamSpecsAreExactlyThisRoster()
     registerAllNodes();   // 注册表由这个调用填（不是静态自注册）⇒ 单跑本函数时必须自己填一次
 
     static const QStringList expected = {
-        QStringLiteral("BlurNode"), QStringLiteral("ClassifyNode"),
-        QStringLiteral("ColorConversionNode"), QStringLiteral("ContrastStretchNode"),
+        QStringLiteral("ClassifyNode"),
+        QStringLiteral("ColorConversionNode"),
         QStringLiteral("CounterNode"), QStringLiteral("DelayNode"),
         QStringLiteral("DistanceNode"), QStringLiteral("FilterNode"),
         QStringLiteral("FormatNode"), QStringLiteral("FormulaNode"),
-        QStringLiteral("GrayStretchNode"), QStringLiteral("HalconImageSourceNode"),
+        QStringLiteral("HalconImageSourceNode"),
         QStringLiteral("HistogramEqualizeNode"), QStringLiteral("ImageInvertNode"),
         QStringLiteral("ImageReadNode"), QStringLiteral("MvsImageSourceNode"),
         QStringLiteral("OpencvPixelStatsNode"), QStringLiteral("ProtocolParseNode"),
@@ -2259,7 +2259,7 @@ void ParamPanelBindingTest::testOperatorsWithoutParamSpecsAreExactlyThisRoster()
                                        " (see MISSING line above)").arg(missing.size())));
 
     // 空转闸：名单本身与分母都得对得上，否则"没红"不等于"拦得住"
-    QVERIFY2(expected.size() == 25,
+    QVERIFY2(expected.size() == 22,
              qPrintable(QStringLiteral("名单字面量自己变成 %1 条 ⇒ 本闸的基准已失效").arg(expected.size())));
     QVERIFY2(registry > 60,
              qPrintable(QStringLiteral("注册表只枚举到 %1 个算子 ⇒ 分母已失效").arg(registry)));
@@ -2442,7 +2442,7 @@ void ParamPanelBindingTest::testUnnamedFindChildSitesAreSingleCandidate()
                             .arg(panelsBuilt).arg(regs.size()).arg(panelFails.size())));
     // 249 → 256 → 269（2026-10-28）：再加 ObjectCountingNode 的 dnnBackend/resetOnStart/yoloLayout（+2026-10-29 补登记的 scale/swapRB/mean）与 DnnDetectNode 的 dnnBackend/yoloLayout（原在 registerParams 之外，P1-8 修好后真正上面板）
     // 284 → 288（2026-11-02）：模板匹配对齐 VM 配置参数，新增
-    // edgeThreshold / autoEdgeThreshold / edgeAperture / coarseLongSide 四个字段
+    // edgeThreshold / autoContrastThreshold / edgeAperture / coarseLongSide 四个字段
     // → 289：多模板同时匹配开关 matchAllTemplates
     // → 290：链长模式 minVisibleRatio（可见率门槛）
     // → 291：ROI 区域类型 roiType（0=图形 / 1=图像）
@@ -2459,8 +2459,37 @@ void ParamPanelBindingTest::testUnnamedFindChildSitesAreSingleCandidate()
     // → 350（2026-11-03 P1 下一批）：角度 +2（角度范围/线段显隐）、N点标定 +2（标定模型/最大RMS误差）、
     //        相机标定 +6（检测方式/亚像素窗口/最大重投影误差/固定主点/切向置零/固定K3）、
     //        TesseractOCR +3（版面模式/字符白名单/最低置信度）、DeepOCR +3（最短词长/最多词数/词间分隔符）
-    QVERIFY2(fieldSlots == 350,
-             qPrintable(QStringLiteral("字段槽位分母从 350 变成 %1 ⇒ 本闸口径已漂移，"
+    // → 351（2026-11-04）：模板匹配检测区域独立输出掩膜 outputSearchMask（VM「输出掩膜（把此区域…）」）
+    // → 349（2026-11-05）：不再兼容旧方案：删除模板匹配 roiRow/roiCol 旧左上角参数
+    //   （几何唯一表示 = roiCenterCol/Row + roiWidth/Height + roiAngle）；autoEdgeThreshold 更名 autoContrastThreshold
+    // → 362（2026-11-05）：二值化按 VM IMVSBinaryModu 补齐运行参数 15 项
+    //   （ROI外处理/二值化类型/高低阈值/均值核/高斯核与标准差/比较类型/偏移/Sauvola 五项），
+    //   旧 mode+minVal 两项删除（净 +13）
+    // → 364（2026-11-05）：形态学按 VM IMVSImageMorphModu 改为 5 项
+    //   （形态学类型/形态学形状/迭代次数/核宽/核高），旧 op+kernelSize+iterations 三项删除（净 +2）
+    // → 365（2026-11-05）：模糊改为 VM 滤波「高斯」类型（gaussKernelSize 1 项进自动面板）；
+    //   中值滤波改为核宽/核高 2 项（旧 radius+maskType 两项删除，净 0）
+    // → 366（2026-11-05）：对比度改为 VM 图像增强「对比度」类型（contrastFactor 1 项进自动面板）；
+    //   锐化改为 VM「锐化」2 项（sharpenStrength/sharpenKernelSize，旧 weight/maskSize 两项删除，净 0）；
+    //   直方图均衡无参数（净 +1）
+    // → 369（2026-11-05）：灰度拉伸改为 VM「均值标准差归一化」2 项（meanVal/stdVal，净 +2）；
+    //   图像缩放改为 VM 输出宽高+插值+抗混叠 4 项（旧 scaleX/scaleY/interpolation 3 项删除，净 +1）
+    // → 376（2026-11-05）：几何变换按 VM 仿射字段对齐：平移 2→6（+4）、旋转 2→5（+3）、镜像 1→1（净 0）
+    // → 383（2026-11-05）：Blob 阈值批：阈值方式 6 档 + 软阈值 7 项（净 +7）
+    // → 408（2026-11-05）：Blob 形状批：11 组筛选（面积/外接宽高/周长/长短轴/圆形度/矩形度/
+    //   质心偏移/轴比/box 角度）统一为 enable+min+max（净 +25）
+    // → 418（2026-11-05）：Blob 结果批：13 种排序特征 + 不排序 + 结果判断 10 项（净 +10）
+    // → 423（2026-11-05）：Blob 输出批：像素超界使能/最大超界像素、最大内接矩形输出数量、
+    //   轮廓输出使能、Blob 图像输出（净 +5）；inscribedRects 是结果串、不上面板故不计
+    // → 425（2026-11-05）：卡尺工具批：滤波尺寸、边缘1极性（净 +2）
+    // → 436（2026-11-05）：卡尺评分批：边缘对宽度 + 4 计分开关 + 曲线类型/x0/xc/x1/y0/y1（净 +11）；
+    //   edgeScores / avgScore 是结果字段、不上面板故不计
+    // → 441（2026-11-05）：卡尺位置批：位置/相对位置/归一位置/归一相对位置/灰度 5 个计分开关（净 +5）；
+    //   elapsedMs / edgePolarities / edgePositions / edgeGrays 是结果字段故不计
+    // → 442（2026-11-05）：卡尺投影方向批：projectionDirection（净 +1）
+    // → 443（2026-11-05）：卡尺模糊边缘批：blurEdge（净 +1）
+    QVERIFY2(fieldSlots == 443,
+             qPrintable(QStringLiteral("字段槽位分母从 443 变成 %1 ⇒ 本闸口径已漂移，"
                                        "先核对面板改动再把基准一起改").arg(fieldSlots)));
     QVERIFY2(badSlots.isEmpty(),
              qPrintable(QStringLiteral("U5-MULTI: %1 个字段槽位里同类型候选不止一个 ⇒ 站点 1 的无名 "
@@ -2678,8 +2707,6 @@ void ParamPanelBindingTest::testPendingSingleShotIsNotDetonatedByNextEventLoop()
         delete np.first;
     }
     QStringList expected = {QStringLiteral("ColorConversionNode/ColorConversionNode"),
-                            QStringLiteral("ContrastStretchNode/ContrastStretchNode"),
-                            QStringLiteral("GrayStretchNode/GrayStretchNode"),
                             QStringLiteral("HistogramEqualizeNode/HistogramEqualizeNode"),
                             QStringLiteral("ImageInvertNode/ImageInvertNode")};
     QStringList sortedActual = scheduled, sortedExpected = expected;

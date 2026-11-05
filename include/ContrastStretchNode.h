@@ -10,4 +10,10 @@ public:
     explicit ContrastStretchNode(QObject *parent = nullptr);
     void init() override;
     void run(bool autoSwitch = true) override;
+
+    bool supportsMaskEdit() const override { return true; }
+    /// VM 图像增强「对比度」：矩形 ROI（无 ROI 时全图；ROI 外保留原图）
+    RoiType geometryRoiType() const override { return RoiType::Rect; }
+    RoiShape geometryRoi() const override;
+    void applyGeometryRoi(const RoiShape &shape) override;
 };
