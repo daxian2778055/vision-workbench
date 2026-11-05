@@ -1054,6 +1054,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261104.10",
       "recorded_at": "2026-11-04",
       "recorded_note": "打开方案恢复设计态并显示工具箱/图像显示（右侧默认图像页，坏存档 0 宽面板自动修复）；ROI 区域「绘制」改为主画布画模板框，检测区域新增框选/多边形入口；框 ROI 不再自动训练，训练只由「训练模板」显式触发；模板配置工具条图标逐一区分（清除/删除/分割/剪刀/屏蔽/擦除不再同图）；基本参数按 VM 顺序并紧凑化；75/75 测试全绿"
+    },
+    {
+      "tag": "rc-20261105.1",
+      "commit": "2d3b1948f90d8dcf20647ebf0f41f2f68d3334f7",
+      "exe_md5": "156b0ba420ac1ed2c00a9ea5ba41a369",
+      "exe_bytes": 11347968,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261105.1",
+      "recorded_at": "2026-11-05",
+      "recorded_note": "VM 4.4 对标批次：Blob 度量修正（坐标 offset/二阶矩主轴角度/矩形度/软阈值/判红原因）+ Blob 输出四项；卡尺工具六批（滤波尺寸/极值检测/边缘1极性/排序/越界/评分系统/位置与灰度计分/模块结果字段/投影方向/条件显隐/模糊边缘）；共享文案头 + EOL 重冻结 198 + fieldSlots 443"
     }
   ],
   "legacy_backfilled": [
