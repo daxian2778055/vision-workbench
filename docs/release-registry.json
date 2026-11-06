@@ -1063,6 +1063,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261105.1",
       "recorded_at": "2026-11-05",
       "recorded_note": "VM 4.4 对标批次：Blob 度量修正（坐标 offset/二阶矩主轴角度/矩形度/软阈值/判红原因）+ Blob 输出四项；卡尺工具六批（滤波尺寸/极值检测/边缘1极性/排序/越界/评分系统/位置与灰度计分/模块结果字段/投影方向/条件显隐/模糊边缘）；共享文案头 + EOL 重冻结 198 + fieldSlots 443"
+    },
+    {
+      "tag": "rc-20261106.1",
+      "commit": "e91674520e49e6768ec9c18ad5871f60e0eba99d",
+      "exe_md5": "963bb9f3d032277891c4d80fae418871",
+      "exe_bytes": 11637760,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261106.1",
+      "recorded_at": "2026-11-06",
+      "recorded_note": "VM 4.4 对标：模块结果字段声明(resultDisplayFields)+统一结果判断(NodeBase::execute 入口/公共字段同源)+P0 状态位契约(m_resultNg 原子/轮首复位/判NG轮刷新缓存)；修复 != 恒通过与脏配置静默放行；ColorConversionNode 绕过统一入口修正；dup_cn 与 ci.ps1 并行 LNK1104 工程闸回正"
     }
   ],
   "legacy_backfilled": [
