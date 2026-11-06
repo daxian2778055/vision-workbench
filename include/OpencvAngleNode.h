@@ -14,4 +14,6 @@ public:
     void run(bool autoSwitch = true) override;
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;
+    /// VM「模块结果」展示口径：夹角/线长/线角/交点/平行
+    QVector<NodeResultField> resultDisplayFields() const override;
 };

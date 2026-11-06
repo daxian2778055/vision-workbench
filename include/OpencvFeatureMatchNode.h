@@ -15,6 +15,8 @@ public:
     void run(bool autoSwitch = true) override;
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;
+    /// VM「模块结果」展示口径：匹配点/分数/角度/尺度/特征点数
+    QVector<NodeResultField> resultDisplayFields() const override;
 
     RoiType geometryRoiType() const override { return RoiType::RotatedRect; }
     RoiShape geometryRoi() const override;

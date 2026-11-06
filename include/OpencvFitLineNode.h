@@ -13,6 +13,8 @@ public:
     void run(bool autoSwitch = true) override;
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;
+    /// VM「模块结果」展示口径：拟合角度/拟合点/参与点数
+    QVector<NodeResultField> resultDisplayFields() const override;
 
     /// 模块编辑器：在图上拖一个矩形只在区域内找轮廓（清除几何 = 回到全图）。
     /// 只把拟合点 (x0,y0) 平移回整图坐标——角度由方向向量决定，平移不影响，故无需换算。

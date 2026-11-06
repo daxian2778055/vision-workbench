@@ -20,6 +20,8 @@ public:
     void run(bool autoSwitch = true) override;
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;
+    /// VM「模块结果」展示口径：识别文本/置信度/文本长度/行数/词数
+    QVector<NodeResultField> resultDisplayFields() const override;
 
 private:
     tesseract::TessBaseAPI *m_api = nullptr;

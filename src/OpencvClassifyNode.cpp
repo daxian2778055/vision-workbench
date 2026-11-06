@@ -128,3 +128,15 @@ void OpencvClassifyNode::updateParamPanel(QWidget *panel)
 {
     updateAutoParamPanel(panel);
 }
+
+QVector<NodeResultField> OpencvClassifyNode::resultDisplayFields() const
+{
+    // VM「模块结果」口径：模块级 耗时/模块状态 + 类别编号/名称/置信度。
+    QVector<NodeResultField> fields = HalconNode::resultDisplayFields();
+    fields << resultValue(QStringLiteral("classId"), QStringLiteral("类别编号"),
+                          QString(), 0)
+           << resultValue(QStringLiteral("className"), QStringLiteral("类别名称"))
+           << resultValue(QStringLiteral("confidence"), QStringLiteral("置信度"),
+                          QString(), 4);
+    return fields;
+}

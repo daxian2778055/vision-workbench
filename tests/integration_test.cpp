@@ -49,6 +49,8 @@
 #include "Port.h"
 #include "Connection.h"
 #include "DataObject.h"
+#include "OpencvUtil.h"
+#include <opencv2/core.hpp>
 #include "ThreadSafeParams.h"
 #include "GlobalTriggerManager.h"
 #include <QElapsedTimer>
@@ -106,6 +108,7 @@ private slots:
 
     // 错误处理测试
     void testErrorHandling();
+    void testResultNgRoundPublishesFreshImage();
 
     // 性能测试
     void testExecutionTime();
@@ -5459,6 +5462,80 @@ void IntegrationTest::testWriteGateDoesNotInterruptRunningFlow()
     exec->stopExecution();
     exec->setFlowScene(nullptr);
     token.reset();
+}
+
+// P0：判 NG 但结果有效的轮次，仍要把**本轮**输出推给运行界面 / 刷进缓存。
+// 旧实现 `if (success)` 把 imageAvailable 一并挡住（且缓存不刷新），
+// 运行界面看到的是上一轮旧图；新实现用 `success || isResultNg()` 统一放行。
+void IntegrationTest::testResultNgRoundPublishesFreshImage()
+{
+    FlowScene scene;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
+    exec.setFlowName(QStringLiteral("RegressionResultNgFreshImage"));
+    exec.setFlowMode(FlowMode::Continuous);
+    exec.setLoopIntervalMs(0);
+
+    NodeBase *blob = scene.createNode(NodeBase::IMAGE_PROCESSING, QPointF(0, 0),
+                                      QStringLiteral("Blob分析"));
+    QVERIFY(blob != nullptr);
+    blob->setParam(QStringLiteral("okWhenNumIsZero"), true);   // Blob 自身判 OK
+
+    // 通用结果判断：引用**框架级公共字段** elapsedMs（不在节点参数表里，
+    // 由 NodeBase::execute() 自测耗时并经 commonResultFields 注入）。
+    // elapsedMs > 999999 恒不满足 ⇒ 每轮都判 NG 但结果有效。
+    QJsonObject cond;
+    cond.insert(QStringLiteral("param"), QStringLiteral("elapsedMs"));
+    cond.insert(QStringLiteral("op"), QStringLiteral(">"));
+    cond.insert(QStringLiteral("value"), QStringLiteral("999999"));
+    QJsonArray arr;
+    arr.append(cond);
+    blob->setParam(QStringLiteral("resJudgeMode"), 0);
+    blob->setParam(QStringLiteral("resJudgeConditions"),
+                   QJsonDocument(arr).toJson(QJsonDocument::Compact));
+
+    // 无上游连线时 propagateData 不会覆盖预留的输入端口数据
+    cv::Mat img(60, 60, CV_8UC1, cv::Scalar(0));
+    img(cv::Rect(20, 20, 20, 20)).setTo(cv::Scalar(255));
+    auto inputObj = QSharedPointer<DataObject>::create();
+    inputObj->setHImage(OpencvUtil::matToHimage(img));
+    blob->setInputData(0, inputObj);
+
+    exec.setFlowScene(&scene);
+    QSignalSpy imageSpy(&exec, &FlowExecutor::imageAvailable);
+    QSignalSpy executedSpy(&exec, &FlowExecutor::nodeExecuted);
+    QVERIFY2(imageSpy.isValid(), "imageAvailable 信号的元类型未注册，QSignalSpy 无法工作");
+
+    exec.startExecution();
+    // 判 NG 轮会让连续模式收口（只跑一轮即可观察），故只等首轮
+    const bool ran = QTest::qWaitFor([&]() { return executedSpy.count() >= 1; }, 5000);
+    exec.stopExecution();
+    exec.wait(3000);
+    QCoreApplication::processEvents();
+    exec.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+
+    QVERIFY2(ran, "连续模式未在 5 秒内跑出首轮");
+    // 确认 imageSpy 不是来自某一轮"成功"：必须观察到判 NG 的 nodeExecuted
+    bool sawNgExecution = false;
+    for (int i = 0; i < executedSpy.count(); ++i) {
+        const QList<QVariant> args = executedSpy.at(i);
+        if (args.size() >= 2 && !args.at(1).toBool()) {
+            sawNgExecution = true;
+            break;
+        }
+    }
+    QVERIFY2(sawNgExecution, "应至少观察到一轮判 NG 的 nodeExecuted");
+    QVERIFY2(!blob->getParam(QStringLiteral("moduleStatus")).toBool(),
+             "结果判断应判 NG");
+    QVERIFY2(blob->isResultNg(), "应为「判 NG 但结果有效」");
+    const QString judgeReason = blob->getParam(QStringLiteral("lastError")).toString();
+    QVERIFY2(judgeReason.contains(QStringLiteral("耗时")),
+             qPrintable(QStringLiteral("原因里应显示公共字段的中文名：%1").arg(judgeReason)));
+    QVERIFY2(!judgeReason.contains(QStringLiteral("缺少结果字段")),
+             "elapsedMs 必须从 commonFields 读到，不能报缺字段（判断与结果表同源）");
+    QVERIFY2(imageSpy.count() > 0,
+             "判 NG 轮也应把本轮图像推给运行界面，否则显示的是上一轮旧图");
 }
 
 QTEST_MAIN(IntegrationTest)

@@ -2,6 +2,14 @@
 #include "Port.h"
 #include "DataObject.h"
 
+#include <QElapsedTimer>
+#include <QHash>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
+#include <QMetaType>
+
 // 模块 ID 分配器：单调且**不回收**。
 // 回收复用会让"新节点"继承"旧节点"在执行器缓存里的输出变量表（S4：删 A 后新建 B 复用同号
 // → m_nodeOutputVars[号] 残留 → 结果错）。模块号是方案内 {模块号.参数名} 引用与配方键的
@@ -161,8 +169,159 @@ bool NodeBase::hasConnection() const
     return false;
 }
 
+QVariantMap NodeBase::commonResultFields(qint64 elapsedMs) const
+{
+    QVariantMap fields;
+    fields.insert(QStringLiteral("elapsedMs"), static_cast<double>(elapsedMs));
+    return fields;   // HalconNode 覆写后补 roiCenter* / roiWidth / roiHeight / roiAngle
+}
+
+bool NodeBase::evaluateResultJudgment(const QVariantMap &commonFields, QString *reason) const
+{
+    // 配置格式（ModuleEditorDialog「结果显示 → 结果判断」写入）：
+    // resJudgeConditions = [{"param":"maxGray","op":"<=","value":"200"}, ...]
+    // resJudgeMode：0 = 全部条件满足（AND，默认）/ 1 = 任一条件满足（OR）。
+    // 公共字段（elapsedMs / roi*）不在节点参数表里，由 commonFields 提供且优先。
+    auto paramValue = [&](const QString &key) -> QVariant {
+        if (commonFields.contains(key))
+            return commonFields.value(key);
+        return getParam(key);
+    };
+    const QString raw = paramValue(QStringLiteral("resJudgeConditions")).toString().trimmed();
+    if (raw.isEmpty())
+        return true;
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &parseError);
+    // 脏配置不能静默放行：条件根本没被解析就等于"没有判断"，产线会漏检。
+    if (parseError.error != QJsonParseError::NoError || !doc.isArray()) {
+        if (reason)
+            *reason = QStringLiteral("结果判断：条件配置格式错误（%1），无法判断")
+                          .arg(parseError.error == QJsonParseError::NoError
+                                   ? QStringLiteral("顶层不是数组")
+                                   : parseError.errorString());
+        return false;
+    }
+    const QJsonArray conditions = doc.array();
+    if (conditions.isEmpty())
+        return true;
+
+    // 结果字段显示名：与「当前结果」面板同一口径，原因里用中文名而不是参数键
+    QHash<QString, QString> labels;
+    for (const NodeResultField &field : resultDisplayFields())
+        labels.insert(field.key, field.label);
+
+    const bool orMode = paramValue(QStringLiteral("resJudgeMode")).toInt() == 1;
+    QString firstFailure;
+    bool anyPass = false;
+    int evaluated = 0;
+
+    for (const QJsonValue &value : conditions) {
+        // 坏条件/空字段名不能静默跳过：跳过等于该条件恒通过（尤其 OR 模式）。
+        if (!value.isObject()) {
+            ++evaluated;
+            if (firstFailure.isEmpty())
+                firstFailure = QStringLiteral("结果判断：第 %1 条条件格式错误（非对象）")
+                                   .arg(evaluated);
+            continue;
+        }
+        const QJsonObject condition = value.toObject();
+        const QString key = condition.value(QStringLiteral("param")).toString().trimmed();
+        if (key.isEmpty()) {
+            ++evaluated;
+            if (firstFailure.isEmpty())
+                firstFailure = QStringLiteral("结果判断：第 %1 条条件缺少字段名")
+                                   .arg(evaluated);
+            continue;
+        }
+        ++evaluated;
+        const QString op = condition.value(QStringLiteral("op")).toString().trimmed();
+        const QString expectedText = condition.value(QStringLiteral("value")).toString();
+        const QString label = labels.value(key, key);
+
+        auto fail = [&](const QString &why) {
+            if (firstFailure.isEmpty())
+                firstFailure = QStringLiteral("结果判断：%1（%2）").arg(why, label);
+        };
+
+        const QVariant actualVar = paramValue(key);
+        if (!actualVar.isValid() || actualVar.isNull()) {
+            fail(QStringLiteral("缺少结果字段 %1，无法判断").arg(key));
+            continue;
+        }
+
+        bool actualOk = false;
+        bool expectedOk = false;
+        double actual = actualVar.toDouble(&actualOk);
+        double expected = expectedText.toDouble(&expectedOk);
+        if (actualVar.typeId() == QMetaType::Bool) {
+            actual = actualVar.toBool() ? 1.0 : 0.0;
+            actualOk = true;
+        }
+
+        bool pass = false;
+        if (actualOk && expectedOk) {
+            if (op == QLatin1String(">="))
+                pass = actual >= expected;
+            else if (op == QLatin1String("<="))
+                pass = actual <= expected;
+            else if (op == QLatin1String(">"))
+                pass = actual > expected;
+            else if (op == QLatin1String("<"))
+                pass = actual < expected;
+            else if (op == QLatin1String("!="))
+                pass = actual != expected;
+            else
+                pass = actual == expected;   // 默认 ==
+        } else if (op == QLatin1String("==") || op == QLatin1String("!=")) {
+            // 文本比较：期望值或实际值为空时不算「不等」，否则 != 会 100% 放行 → 漏检。
+            const QString actualText = actualVar.toString();
+            if (expectedText.trimmed().isEmpty() || actualText.isEmpty()) {
+                fail(QStringLiteral("%1 缺少可比较的值，无法用 %2 比较（实际 '%3'，期望 '%4'）")
+                         .arg(key, op, actualText, expectedText));
+                continue;
+            }
+            const bool equal = actualText == expectedText;
+            pass = (op == QLatin1String("==")) ? equal : !equal;
+        } else {
+            fail(QStringLiteral("%1 不是数值，无法用 %2 比较（实际 %3）")
+                     .arg(key, op, actualVar.toString()));
+            continue;
+        }
+
+        if (pass) {
+            anyPass = true;
+        } else {
+            fail(QStringLiteral("%1 %2 %3，实际 %4")
+                     .arg(label, op, expectedText, actualVar.toString()));
+            if (!orMode)
+                break;   // AND：第一条不满足即可返回
+        }
+    }
+
+    if (evaluated == 0)
+        return true;
+    if (orMode) {
+        if (anyPass)
+            return true;
+        if (reason)
+            *reason = firstFailure.isEmpty()
+                          ? QStringLiteral("结果判断：所有条件均不满足")
+                          : firstFailure;
+        return false;
+    }
+    if (firstFailure.isEmpty())
+        return true;
+    if (reason)
+        *reason = firstFailure;
+    return false;
+}
+
 bool NodeBase::execute()
 {
+    // 每轮统一复位「判 NG 但结果有效」：这是所有节点执行的唯一入口，覆盖禁用、
+    // 自定义 process()、processDataOutputs() 等全部路径。未被本轮执行的节点另由
+    // FlowExecutor 的轮首遍历 / 跳过记录复位，避免上一轮 NG 跨轮残留（P0 状态位契约）。
+    setResultNg(false);
     // 禁用算子：跳过算法执行，视为通过（数据透传交由流程运行时处理）
     if (!m_enabled) {
         m_hasExecuted = true;
@@ -172,7 +331,28 @@ bool NodeBase::execute()
 
     try {
         m_hasExecuted = true;
+        QElapsedTimer nodeTimer;
+        nodeTimer.start();
         m_executionSuccess = process();
+        const qint64 elapsedMs = nodeTimer.elapsed();
+        m_lastElapsedMs.store(elapsedMs, std::memory_order_relaxed);
+
+        // VM「结果显示 → 结果判断」统一入口：
+        //  · 所有节点类型（HalconNode / 数据型 processDataOutputs / 自定义 process）都经过这里；
+        //  · 所有执行路径（流程执行、参数坞/模块编辑器「执行算子」）也都经过这里；
+        //  · 耗时与 ROI 等公共字段在此自测，和结果表快照用同一份 commonResultFields()，
+        //    判断依据不再与面板显示脱节。
+        // 不满足时判红但**结果有效**：保留已发布的输出，写原因，置 resultNg。
+        if (m_executionSuccess) {
+            QString judgeReason;
+            if (!evaluateResultJudgment(commonResultFields(elapsedMs), &judgeReason)) {
+                setParam(QStringLiteral("moduleStatus"), false);
+                if (!judgeReason.isEmpty())
+                    setParam(QStringLiteral("lastError"), judgeReason);
+                setResultNg(true);
+                m_executionSuccess = false;
+            }
+        }
 
         return m_executionSuccess;
     } catch (const std::exception &e) {

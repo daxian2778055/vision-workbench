@@ -81,3 +81,13 @@ void OpencvPixelStatsNode::updateParamPanel(QWidget *panel)
 {
     updateAutoParamPanel(panel);
 }
+
+QVector<NodeResultField> OpencvPixelStatsNode::resultDisplayFields() const
+{
+    // VM「模块结果」口径：模块级 耗时/模块状态 + 灰度统计三项。
+    QVector<NodeResultField> fields = HalconNode::resultDisplayFields();
+    fields << resultValue(QStringLiteral("minGray"), QStringLiteral("最小灰度"), QString(), 0)
+           << resultValue(QStringLiteral("maxGray"), QStringLiteral("最大灰度"), QString(), 0)
+           << resultValue(QStringLiteral("meanGray"), QStringLiteral("平均灰度"), QString(), 2);
+    return fields;
+}

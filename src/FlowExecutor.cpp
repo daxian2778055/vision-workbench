@@ -21,6 +21,7 @@
 #include "AppLog.h"
 #include <QRegularExpression>
 #include <QElapsedTimer>
+#include <QRectF>
 #include <limits>
 #include <functional>
 #include "AppDatabase.h"
@@ -213,6 +214,21 @@ const char *const kWorkerPhaseNames[] = {
     "轮末：统计后/发信号前",    // 8
     "轮末：信号后（节拍/回转）", // 9
 };
+
+/// 框架级「模块结果」公共字段：耗时由执行器统一给出（算子不必逐个计时），
+/// 矩形 ROI 的检测区域也由执行器按 geometryRoi() 统一回写。
+/// 具体算子的 resultDisplayFields() 只声明字段，不负责这些通用值。
+void injectCommonResultVars(NodeBase *node, qint64 elapsedMs, QVariantMap *vars)
+{
+    if (!node || !vars)
+        return;
+    // 与 NodeBase::execute() 里的「结果显示 → 结果判断」共用同一份字段取值：
+    // 否则条件引用的 elapsedMs / roi* 与「当前结果」面板显示的可能不是同一个值
+    // （旧实现在这里另算一份，卡尺又自己往 m_params 写了同名 roiCenterX）。
+    const QVariantMap common = node->commonResultFields(elapsedMs);
+    for (auto it = common.cbegin(); it != common.cend(); ++it)
+        vars->insert(it.key(), it.value());
+}
 } // namespace
 
 QString FlowExecutor::workerPhaseName() const
@@ -682,6 +698,11 @@ void FlowExecutor::run()
             emit executionStopped();   // 空场景同样需要终态信号（历史缺陷：静默退出，UI 卡"运行中"）
             break;
         }
+        // P0 状态位契约：每轮对本轮全部节点复位「判 NG 但结果有效」。
+        // executeNode()/NodeBase::execute() 只覆盖真正跑过的节点；禁用、分支跳过、
+        // 失败拦停后的后续节点根本不进这两处，上一轮 NG 会跨轮残留并被画布/结果字段读到。
+        for (NodeBase *n : nodes)
+            if (n) n->setResultNg(false);
 
         QList<NodeBase *> sortedNodes;
         {
@@ -1189,6 +1210,7 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
     m_lastNodeAborted = false;
     m_nodeRecordWritten = false;
     node->setRunAborted(false);   // 第三态复位（2026-10-28 P3-14）
+    node->setResultNg(false);     // 轮首统一复位（P0 状态位契约，与轮首遍历双保险）
 
     bool success = false;
     QElapsedTimer nodeTimer;
@@ -1232,8 +1254,13 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
 
         success = node->execute();
 
+        // 「本轮结果可用」：成功，或判 NG 但结果有效（结果判断类算子）。
+        // 后者同样要把本轮端口数据刷进缓存/变量/主图，否则下游 propagateData 缓存优先、
+        // {模块号.参数名} 引用都会拿到上一轮旧值（P0：判 NG 轮读陈旧数据）。
+        const bool resultUsable = success || node->isResultNg();
+
         // 收集输出变量（供后级 {模块号.参数名} 引用）
-        if (success) {
+        if (resultUsable) {
             collectNodeOutputVars(node);
         }
 
@@ -1241,7 +1268,7 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
         // 顺带把端口 0 的输出指针留在 nodeOut0：后面的数据库记录、全局变量写入与预览推送都要用
         // 同一份，不必各自再 getOutputData(0) 一次（每次都加锁 + 拷贝 QSharedPointer）。
         QSharedPointer<DataObject> nodeOut0;
-        if (success) {
+        if (resultUsable) {
             // S1 Stage 1（修整）：**临界区内不调用外部代码**——getOutputData()/setSourceInfo()/
             // fullName() 会触及节点 / 数据对象（可能还有场景）的其它锁。
             // （原担心的"GUI 侧 onSceneNodeRemoved 取同一把锁 → 成环"已在 Stage 1b 第 2 步消除：
@@ -1276,20 +1303,24 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
                     m_validOutputs[node] = true;
             }
         } else {
-            for (int p = 0; p < node->outputPorts().size(); ++p)
-                node->setOutputData(p, QSharedPointer<DataObject>());
-            {
-                // S1 Stage 1：失败/本轮无输出同样要清缓存（避免下游误用上一轮结果），同样入锁
-                //
-                // E2（2026-09-25 收口）：清空的同一处必须撤销 m_validOutputs。不变量（本轮起由
-                // IntegrationTest::testSkippedAndFailedNodesLoseReusableMark 钉住）：
-                // **凡整体清空某节点的输出端口 / 其 m_nodeData 条目，且本轮不再重跑该节点 ⇒ 同步撤销该位**。
-                // 今天无人读它（增量复用分支已回退，见 executeNode 内【待办·增量执行复用】那段注释），故属**潜伏**；
-                // 复用一恢复，陈旧"已有效"位就会让汇合节点原样读回上一件产品的数据。
-                QMutexLocker cacheLock(&m_graphCacheMutex);
-                m_nodeData[node].clear();
-                m_nodeOutputVars[node->moduleId()].clear();
-                m_validOutputs.remove(node);
+            // 判 NG 但结果有效（结果判断类算子）：保留输出端口与缓存，
+            // 让画布/结果面板显示红色结果；异常或执行失败仍按原逻辑清空。
+            if (!node->isResultNg()) {
+                for (int p = 0; p < node->outputPorts().size(); ++p)
+                    node->setOutputData(p, QSharedPointer<DataObject>());
+                {
+                    // S1 Stage 1：失败/本轮无输出同样要清缓存（避免下游误用上一轮结果），同样入锁
+                    //
+                    // E2（2026-09-25 收口）：清空的同一处必须撤销 m_validOutputs。不变量（本轮起由
+                    // IntegrationTest::testSkippedAndFailedNodesLoseReusableMark 钉住）：
+                    // **凡整体清空某节点的输出端口 / 其 m_nodeData 条目，且本轮不再重跑该节点 ⇒ 同步撤销该位**。
+                    // 今天无人读它（增量复用分支已回退，见 executeNode 内【待办·增量执行复用】那段注释），故属**潜伏**；
+                    // 复用一恢复，陈旧"已有效"位就会让汇合节点原样读回上一件产品的数据。
+                    QMutexLocker cacheLock(&m_graphCacheMutex);
+                    m_nodeData[node].clear();
+                    m_nodeOutputVars[node->moduleId()].clear();
+                    m_validOutputs.remove(node);
+                }
             }
         }
 
@@ -1325,11 +1356,25 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
                 const QHash<QString, QVariant> collected = m_nodeOutputVars.value(node->moduleId());
                 for (auto it = collected.cbegin(); it != collected.cend(); ++it)
                     vars.insert(it.key(), it.value());
+                // 框架级公共结果：耗时 + 矩形 ROI 检测区域（算子无需逐个重复计时/回写）
+                injectCommonResultVars(node, node->lastElapsedMs(), &vars);
             } else {
                 // U-18：判红轮把算子本轮写下的原因一起推出；只认口径键（include/NodeResultFields.h），
                 // 配置项与内部状态位不得冒充原因。现读节点而不读 m_nodeOutputVars：
                 // 上面失败分支已清空该表，读它只会拿到空。
                 const QList<QString> names = node->getAllParamNames();
+                // 判 NG 但结果有效：结果字段也一并推出（只推 spec 声明的键，配置参数不混入），
+                // 面板按「模块结果」口径渲染红色结果；异常/执行失败仍只推原因。
+                if (node->isResultNg()) {
+                    const QVector<NodeResultField> spec = node->resultDisplayFields();
+                    for (const NodeResultField &field : spec) {
+                        const QVariant v = node->getParam(field.key);
+                        if (v.isValid() && !v.isNull())
+                            vars.insert(field.key, v);
+                    }
+                    // 判 NG 但结果有效：公共结果字段也补上（红色结果里仍能看到耗时/检测区域）
+                    injectCommonResultVars(node, node->lastElapsedMs(), &vars);
+                }
                 for (const QString &k : names) {
                     if (!isNodeReasonKey(k))
                         continue;
@@ -1357,7 +1402,8 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
             const QString flowName = m_flowName.isEmpty() ? QStringLiteral("(未命名流程)") : m_flowName;
             QString resultVal;
             if (nodeOut0) {
-                resultVal = QStringLiteral("OK");
+                // 判 NG 但结果有效时也有本轮输出，DB 里不能记成 OK
+                resultVal = success ? QStringLiteral("OK") : QStringLiteral("NG");
             }
             // 不在这里直接落库：按轮缓冲，轮末用**单个事务**批量提交（见 run() 中的轮末刷新）。
             // 连续模式下"每节点一次自动提交"是主要固定开销（40 节点 = 40 次提交/轮）。
@@ -1370,8 +1416,9 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
             }
         }
 
-        // 运行界面推送：任意节点有图像输出即通知（按节点名查表）
-        if (success) {
+        // 运行界面推送：任意节点有图像输出即通知（按节点名查表）。
+        // 判 NG 但结果有效时也要推本轮图像，让运行界面看到红色结果那一帧（P0）。
+        if (resultUsable) {
             if (nodeOut0) {
                 HalconCpp::HImage img = nodeOut0->getHImage();
                 if (img.IsInitialized()) {
@@ -1421,7 +1468,7 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
         }
 
         // 仅拓扑末端节点发出 imageReady，避免整链重复刷新预览（与其它节点仍可经 nodeExecuted 更新状态）
-        if (success && isLastNode) {
+        if (resultUsable && isLastNode) {
             if (nodeOut0) {
                 HalconCpp::HImage image = nodeOut0->getHImage();
                 if (image.IsInitialized()) {
@@ -1603,6 +1650,9 @@ void FlowExecutor::clearNodeCachesOnException(NodeBase *node)
 {
     if (!node)
         return;
+    // 异常是"执行失败"，不是"判 NG 但结果有效"：标志必须复位，
+    // 否则端口已清空、缓存已清，后面却仍按 NG 语义推结果字段 / 保留旧标记。
+    node->setResultNg(false);
     // ① 清输出端口（与正常失败分支同口径，2026-10-25 复核 P3-1 残留）：只清 m_nodeData
     //    不够——propagateData 在没有缓存条目时会回落到 sourceNode->getOutputData(port)，
     //    于是下游仍能读到失败节点的旧/半成品输出（stopOnFailure=false 时下游会继续跑）。
@@ -2197,8 +2247,10 @@ void FlowExecutor::resetState()
     if (m_scene) {
         const QList<NodeBase *> all = m_scene->nodes();
         for (NodeBase *n : all) {
-            if (n)
+            if (n) {
                 n->onRoundStart();
+                n->setResultNg(false);
+            }
         }
     }
 }
@@ -2236,6 +2288,7 @@ void FlowExecutor::recordNodeSkipped(NodeBase *node, const QString &reason)
     }
     // 三态可视化：把"跳过"从统计数字变成 UI 可消费的事件（跨线程排队到界面线程）
     // 跳过 = 第三态（2026-10-28 P3-14）：画布琥珀表示"本轮未执行"，不是绿（成功）
+    node->setResultNg(false);   // 本轮跳过：不得沿用上一轮的 NG 态
     node->setRunAborted(true);
     emit nodeSkipped(node, reason);
 }

@@ -44,6 +44,8 @@ public:
     void run(bool autoSwitch = true) override;
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;
+    /// VM「模块结果」展示口径：分割目标数/掩膜面积/是否应用 Sigmoid
+    QVector<NodeResultField> resultDisplayFields() const override;
 
     /// 语义分割输出后处理：接受 [1,C,H,W] / [C,H,W] / [H,W]（C==1 时忽略 classIndex）。
     /// C == 1：useSigmoid 时先 sigmoid 再按 thresh 二值化（thresh=0.5 + sigmoid 等价于 logit > 0）；

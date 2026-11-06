@@ -218,6 +218,14 @@ void OpencvDefectNode::run(bool)
         m_params[QStringLiteral("defectCount")] = count;
         m_params[QStringLiteral("defectArea")] = totalArea;
         m_params["moduleStatus"] = !ng;
+        // 判 NG 但缺陷结果有效：保留输出与结果字段，面板按红色结果展示；
+        // 同时写原因，否则现场只看到红灯、不知道超了多少。
+        m_params[QStringLiteral("lastError")] =
+            ng ? QStringLiteral("缺陷总面积 %1 超过阈值 %2")
+                     .arg(totalArea)
+                     .arg(m_params.value(QStringLiteral("ngArea"), 50.0).toDouble())
+               : QString();
+        setResultNg(ng);
         m_outputImage = OpencvUtil::matToHimage(color);
 
         MeasureResult res;
@@ -250,6 +258,17 @@ QWidget *OpencvDefectNode::createParamPanel()
 void OpencvDefectNode::updateParamPanel(QWidget *panel)
 {
     updateAutoParamPanel(panel);
+}
+
+QVector<NodeResultField> OpencvDefectNode::resultDisplayFields() const
+{
+    // VM「模块结果」口径：模块级 耗时/模块状态 + 检测区域（矩形 ROI）+ 缺陷统计。
+    QVector<NodeResultField> fields = HalconNode::resultDisplayFields();
+    fields << resultValue(QStringLiteral("defectCount"), QStringLiteral("缺陷个数"),
+                          QString(), 0)
+           << resultValue(QStringLiteral("defectArea"), QStringLiteral("缺陷总面积"),
+                          QStringLiteral("px²"), 0);
+    return fields;
 }
 
 RoiShape OpencvDefectNode::geometryRoi() const

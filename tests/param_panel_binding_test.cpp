@@ -2488,8 +2488,20 @@ void ParamPanelBindingTest::testUnnamedFindChildSitesAreSingleCandidate()
     //   elapsedMs / edgePolarities / edgePositions / edgeGrays 是结果字段故不计
     // → 442（2026-11-05）：卡尺投影方向批：projectionDirection（净 +1）
     // → 443（2026-11-05）：卡尺模糊边缘批：blurEdge（净 +1）
-    QVERIFY2(fieldSlots == 443,
-             qPrintable(QStringLiteral("字段槽位分母从 443 变成 %1 ⇒ 本闸口径已漂移，"
+    // → 444（2026-11-05）：卡尺结果显示批：showCaliperEdge（净 +1）；
+    //   polarity / edge1Polarity 由 Int 改 Enum（槽位数不变），edgePoints / pairLines / roi* 是结果串故不计
+    // → 450（2026-11-05）：卡尺计分曲线批：双边计分（相对间距差）右曲线 6 项
+    //   curveTypeH/curveX0H/curveX1H/curveXCH/curveY0H/curveY1H（净 +6）；
+    //   curveXc 改名 curveXC、Y计分范围改 0~100 均不改变槽位数
+    // → 451（2026-11-05）：卡尺默认值对齐批：拆出 scorePairContrast（边缘对对比度，净 +1）；
+    //   edgeMode/maxCount/expectedPairWidth 默认值调整不改变槽位数
+    // → 499（2026-11-06）：卡尺每项独立曲线批：9 个计分项各 6 项（净 +54）、
+    //   相对间距差右曲线已有 6 项，旧共享左曲线 6 项删除 ⇒ 451 - 12 + 60 = 499
+    // → 517（2026-11-06）：卡尺结果判断批：数量/宽度/边缘点0X/0Y/边缘点1X/1Y
+    //   各 Enable+Low+High 共 18 项（净 +18）
+    // → 516（2026-11-06）：卡尺清理批：删除官方没有的 pairWidth 硬上限（净 -1）
+    QVERIFY2(fieldSlots == 516,
+             qPrintable(QStringLiteral("字段槽位分母从 516 变成 %1 ⇒ 本闸口径已漂移，"
                                        "先核对面板改动再把基准一起改").arg(fieldSlots)));
     QVERIFY2(badSlots.isEmpty(),
              qPrintable(QStringLiteral("U5-MULTI: %1 个字段槽位里同类型候选不止一个 ⇒ 站点 1 的无名 "

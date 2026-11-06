@@ -33,6 +33,8 @@
 #include "FlowScene.h"
 #include "NodeBase.h"
 #include "OpencvTemplateMatchNode.h"
+#include "OpencvPixelStatsNode.h"
+#include "DataObject.h"
 #include "OpencvUtil.h"
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
@@ -52,6 +54,8 @@ private slots:
     void testCanvasPickWritesRegionWithoutTraining();
     void testTemplateConfigUndoRedo();
     void testAllModuleWindowsArePureTabs();
+    void testResultOverlayUsesDisplayConfig();
+    void testModuleResultPageUsesResultFields();
 };
 
 void ModuleEditorTest::testParamEditTriggersDebouncedRecompute()
@@ -582,6 +586,129 @@ void ModuleEditorTest::testAllModuleWindowsArePureTabs()
         QVERIFY2(maskDlg.grab().save(binaryRunSnap),
                  qPrintable(QStringLiteral("快照保存失败：%1").arg(binaryRunSnap)));
     }
+}
+
+// 2026-11-06：VM「结果显示 → 图像显示/文本显示」真正作用到画布叠加层。
+// 老工程没有 resImage*/resText* 键时保持旧语义；一旦配置，颜色/透明度/线宽/四角文本都要生效。
+void ModuleEditorTest::testResultOverlayUsesDisplayConfig()
+{
+    OpencvPixelStatsNode node;
+    node.init();
+    node.setParam(QStringLiteral("minGray"), 3.0);
+    node.setParam(QStringLiteral("maxGray"), 40.0);
+    node.setParam(QStringLiteral("meanGray"), 12.5);
+    node.setParam(QStringLiteral("moduleStatus"), true);
+
+    node.setParam(QStringLiteral("resImageColor"), QStringLiteral("#FF0000"));
+    node.setParam(QStringLiteral("resImageOpacity"), 40);
+    node.setParam(QStringLiteral("resImageLineWidth"), 5);
+    node.setParam(QStringLiteral("resShowText"), true);
+    node.setParam(QStringLiteral("resTextContent"),
+                  QStringLiteral("{module}|{status}|{meanGray}"));
+    node.setParam(QStringLiteral("resTextColor"), QStringLiteral("#00FF00"));
+    node.setParam(QStringLiteral("resTextFontSize"), 20);
+    node.setParam(QStringLiteral("resTextOpacity"), 60);
+    node.setParam(QStringLiteral("resTextPosition"), 3);
+
+    MeasureResult line;
+    line.valid = true;
+    line.type = QStringLiteral("line");
+    line.point1 = QPointF(10.0, 20.0);
+    line.point2 = QPointF(110.0, 120.0);
+    auto data = QSharedPointer<DataObject>::create();
+    data->setMeasureResult(line);
+    node.setOutputData(0, data);
+
+    HalconWindow view;
+    ImageDisplayController controller(&view, nullptr);
+    // 执行器推送的结果快照：{elapsed} 只存在于 vars（节点参数表没有 elapsedMs）
+    controller.setResultVarsProvider([](NodeBase *n) {
+        QVariantMap vars;
+        vars.insert(QStringLiteral("meanGray"), 12.5);
+        vars.insert(QStringLiteral("elapsedMs"), 21.0);
+        if (n)
+            vars.insert(QStringLiteral("moduleStatus"),
+                        n->getParam(QStringLiteral("moduleStatus")));
+        return vars;
+    });
+
+    const QVector<OverlayShape> shapes = controller.collectOverlayFromNode(&node);
+    const OverlayShape *lineShape = nullptr;
+    const OverlayShape *textShape = nullptr;
+    for (const OverlayShape &s : shapes) {
+        if (s.type == OverlayShape::Type::Line)
+            lineShape = &s;
+        else if (s.type == OverlayShape::Type::Text && s.textPosition >= 0)
+            textShape = &s;
+    }
+    QVERIFY2(lineShape != nullptr, "结果线没有生成叠加图元");
+    QCOMPARE(lineShape->color, QColor(255, 0, 0));   // 「叠加颜色」
+    QCOMPARE(lineShape->lineWidth, 5);               // 「线宽」
+    QCOMPARE(lineShape->opacity, 40);                // 「透明度」
+
+    QVERIFY2(textShape != nullptr, "文本显示未生成四角文本图元");
+    QCOMPARE(textShape->textPosition, 3);            // 「位置」= 右下
+    QCOMPARE(textShape->fontSize, 20);               // 「字号」
+    QCOMPARE(textShape->opacity, 60);                // 「透明度」
+    QCOMPARE(textShape->color, QColor(0, 255, 0));   // 「颜色」
+    // {module}/{status}/{meanGray}：meanGray 按 resultDisplayFields 的 2 位精度渲染
+    QCOMPARE(textShape->text, QStringLiteral("灰度统计|OK|12.50"));
+
+    // {elapsed} 从执行器快照解析（节点参数表没有 elapsedMs，只能走 vars）
+    node.setParam(QStringLiteral("resTextContent"), QStringLiteral("{elapsed}ms"));
+    const QVector<OverlayShape> timed = controller.collectOverlayFromNode(&node);
+    const OverlayShape *timedText = nullptr;
+    for (const OverlayShape &s : timed) {
+        if (s.type == OverlayShape::Type::Text && s.textPosition >= 0)
+            timedText = &s;
+    }
+    QVERIFY(timedText != nullptr);
+    QCOMPARE(timedText->text, QStringLiteral("21ms"));
+
+    // 取消「显示结果图像」：结果图元整体不再绘制（灰度统计没有 ROI 参照，叠加应为空）
+    node.setParam(QStringLiteral("resShowImage"), false);
+    QVERIFY2(controller.collectOverlayFromNode(&node).isEmpty(),
+             "关闭「显示结果图像」后仍在画结果图元");
+}
+
+// 2026-11-06：非模板模块窗的「结果显示」页改按 resultDisplayFields() 渲染，
+// 与运行界面结果表同字段/名称/单位/精度；具名输出端口只在没有结果规范时兜底。
+void ModuleEditorTest::testModuleResultPageUsesResultFields()
+{
+    OpencvPixelStatsNode node;
+    node.init();
+    node.setParam(QStringLiteral("minGray"), 3.0);
+    node.setParam(QStringLiteral("maxGray"), 40.0);
+    node.setParam(QStringLiteral("meanGray"), 12.5);
+    node.setParam(QStringLiteral("moduleStatus"), true);
+
+    ModuleEditorDialog dlg(&node);
+    QTableWidget *table = dlg.findChild<QTableWidget *>(QStringLiteral("moduleResultTable"));
+    QVERIFY2(table != nullptr, "模块窗缺少结果表（objectName=moduleResultTable）");
+    QCOMPARE(table->columnCount(), 4);
+    QCOMPARE(table->horizontalHeaderItem(0)->text(), QStringLiteral("结果项"));
+    QCOMPARE(table->horizontalHeaderItem(2)->text(), QStringLiteral("单位"));
+
+    auto findRow = [table](const QString &label) {
+        for (int r = 0; r < table->rowCount(); ++r) {
+            if (table->item(r, 0) && table->item(r, 0)->text() == label)
+                return r;
+        }
+        return -1;
+    };
+    const int statusRow = findRow(QStringLiteral("模块状态"));
+    QVERIFY2(statusRow >= 0, "结果表没有「模块状态」行 ⇒ 仍在按具名输出渲染");
+    QCOMPARE(table->item(statusRow, 1)->text(), QStringLiteral("OK"));
+
+    const int meanRow = findRow(QStringLiteral("平均灰度"));
+    QVERIFY2(meanRow >= 0, "结果表缺少算子声明的「平均灰度」字段");
+    QCOMPARE(table->item(meanRow, 1)->text(), QStringLiteral("12.50"));   // 字段精度 2 位
+
+    // 耗时由执行器统一推送，模块窗不得再自行编造数值
+    const int elapsedRow = findRow(QStringLiteral("耗时"));
+    QVERIFY2(elapsedRow >= 0, "结果表缺少「耗时」行");
+    QCOMPARE(table->item(elapsedRow, 1)->text(), QStringLiteral("-"));
+    QCOMPARE(table->item(elapsedRow, 2)->text(), QStringLiteral("ms"));
 }
 
 QTEST_MAIN(ModuleEditorTest)

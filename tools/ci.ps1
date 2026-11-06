@@ -623,8 +623,16 @@ if (-not (Test-Path (Join-Path $BuildDir 'CMakeCache.txt'))) {
 Write-Step "Build ($Config)"
 $buildLog = Join-Path $RepoRoot 'ci-build.log'
 $buildTimer = [System.Diagnostics.Stopwatch]::StartNew()
-& cmake --build $BuildDir --config $Config -- /m /v:minimal 2>&1 | Tee-Object -FilePath $buildLog | Out-Null
+# vfp_core 先单独建：MSBuild /m 并行链接时，测试目标偶发在 vfp_core.lib 尚未写完
+# 就抢先打开它，报 LNK1104「无法打开 vfp_core.lib」（串行构建从不复现）。
+# 先串行建库、再并行建其余目标，既消除竞态又保留并行编译速度。
+& cmake --build $BuildDir --config $Config --target vfp_core -- /v:minimal 2>&1 |
+    Tee-Object -FilePath $buildLog | Out-Null
+$coreCode = $LASTEXITCODE
+& cmake --build $BuildDir --config $Config -- /m /v:minimal 2>&1 |
+    Tee-Object -FilePath $buildLog -Append | Out-Null
 $buildCode = $LASTEXITCODE
+if ($coreCode -ne 0) { $buildCode = $coreCode }
 $buildTimer.Stop()
 
 if ($buildCode -ne 0) {

@@ -415,6 +415,23 @@ void AnomalyDetectNode::updateParamPanel(QWidget *panel)
     updateAutoParamPanel(panel);
 }
 
+QVector<NodeResultField> AnomalyDetectNode::resultDisplayFields() const
+{
+    // VM「模块结果」口径：模块级 耗时/模块状态 + 检测区域（矩形 ROI）+ 异常统计。
+    QVector<NodeResultField> fields = HalconNode::resultDisplayFields();
+    fields << resultValue(QStringLiteral("anomalyCount"), QStringLiteral("异常个数"),
+                          QString(), 0)
+           << resultValue(QStringLiteral("anomalyArea"), QStringLiteral("异常面积"),
+                          QStringLiteral("px²"), 0)
+           << resultValue(QStringLiteral("scoreMax"), QStringLiteral("最高分数"),
+                          QString(), 4)
+           << resultValue(QStringLiteral("scoreMean"), QStringLiteral("平均分数"),
+                          QString(), 4)
+           << resultValue(QStringLiteral("sampleCount"), QStringLiteral("建模样本数"),
+                          QString(), 0);
+    return fields;
+}
+
 RoiShape AnomalyDetectNode::geometryRoi() const
 {
     RoiShape s;

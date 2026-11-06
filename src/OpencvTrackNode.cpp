@@ -149,3 +149,17 @@ void OpencvTrackNode::updateParamPanel(QWidget *panel)
 {
     updateAutoParamPanel(panel);
 }
+
+QVector<NodeResultField> OpencvTrackNode::resultDisplayFields() const
+{
+    // VM「模块结果」口径：模块级 耗时/模块状态 + 跟踪点/分数/丢失标记。
+    QVector<NodeResultField> fields = HalconNode::resultDisplayFields();
+    fields << resultValue(QStringLiteral("trackCol"), QStringLiteral("跟踪点X"),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("trackRow"), QStringLiteral("跟踪点Y"),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("trackScore"), QStringLiteral("跟踪分数"),
+                          QString(), 4)
+           << resultValue(QStringLiteral("trackLost"), QStringLiteral("目标丢失"));
+    return fields;
+}

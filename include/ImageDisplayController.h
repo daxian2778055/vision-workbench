@@ -4,6 +4,7 @@
 #include <QMap>
 #include <QString>
 #include <QVector>
+#include <QVariant>
 #include <functional>
 
 #include <halconcpp/HalconCpp.h>
@@ -34,6 +35,11 @@ public:
     void setSceneProvider(std::function<FlowScene *()> provider) { m_sceneProvider = std::move(provider); }
     void setCanvasSelectionProvider(std::function<NodeBase *()> provider)
     { m_canvasSelectionProvider = std::move(provider); }
+    /// 本轮结果变量提供者（FlowExecutor::nodeOutputsUpdated 的 vars 快照）。
+    /// VM「结果显示 → 文本显示」里的 {elapsed}/{结果键} 优先从这里取；
+    /// 未注入时回退读节点参数（结果类算子通常已把结果写回参数表）。
+    void setResultVarsProvider(std::function<QVariantMap(NodeBase *)> provider)
+    { m_resultVarsProvider = std::move(provider); }
     /// 双画面：副视图显示完整结果，主视图显示当前模块输入源（实装 4.4 语义）
     void setSecondaryView(HalconWindow *view) { m_secondaryView = view; }
     void setDualViewEnabled(bool on);
@@ -120,4 +126,5 @@ private:
     NodeBase *m_maskEditNode = nullptr;
     std::function<FlowScene *()> m_sceneProvider;
     std::function<NodeBase *()> m_canvasSelectionProvider;
+    std::function<QVariantMap(NodeBase *)> m_resultVarsProvider;
 };

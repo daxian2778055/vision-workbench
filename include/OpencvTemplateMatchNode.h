@@ -57,6 +57,8 @@ public:
     void runSingle(bool autoSwitch);
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;
+    /// VM 4.4「（高精度）匹配 → 模块结果」展示口径
+    QVector<NodeResultField> resultDisplayFields() const override;
 
     RoiType geometryRoiType() const override { return RoiType::RotatedRect; }
     RoiShape geometryRoi() const override;

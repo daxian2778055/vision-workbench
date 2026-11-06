@@ -159,6 +159,22 @@ void OpencvFitLineNode::updateParamPanel(QWidget *panel)
     updateAutoParamPanel(panel);
 }
 
+QVector<NodeResultField> OpencvFitLineNode::resultDisplayFields() const
+{
+    // VM「模块结果」口径：模块级 耗时/模块状态 + 检测区域（矩形 ROI）+ 拟合结果。
+    // 官方输出是直线起点/终点；本节点只拟合出「点 + 方向」，故按拟合点+角度展示。
+    QVector<NodeResultField> fields = HalconNode::resultDisplayFields();
+    fields << resultValue(QStringLiteral("fitAngle"), QStringLiteral("拟合角度"),
+                          QStringLiteral("°"), 3)
+           << resultValue(QStringLiteral("fitCol"), QStringLiteral("拟合点X"),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("fitRow"), QStringLiteral("拟合点Y"),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("fitPointCount"), QStringLiteral("参与点数"),
+                          QString(), 0);
+    return fields;
+}
+
 RoiShape OpencvFitLineNode::geometryRoi() const
 {
     RoiShape s;

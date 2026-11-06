@@ -219,6 +219,7 @@ void OpencvAngleAreaTest::testCaliperPairMode()
     node.setParam(QStringLiteral("halfWidth"), 20);
     node.setParam(QStringLiteral("step"), 5.0);
     node.setParam(QStringLiteral("threshold"), 30.0);
+    node.setParam(QStringLiteral("maxCount"), 1000);   // VM 默认最大结果数=1，本用例要看全量
 
     // 单边模式：每条剖面 2 条边缘
     node.setParam(QStringLiteral("edgeMode"), 0);
@@ -231,7 +232,6 @@ void OpencvAngleAreaTest::testCaliperPairMode()
 
     // 边对模式：上下边缘配成对，平均宽度≈20
     node.setParam(QStringLiteral("edgeMode"), 1);
-    node.setParam(QStringLiteral("pairWidth"), 30);
     node.run();
     const int pairCount = node.getParam(QStringLiteral("pairCount")).toInt();
     QVERIFY2(pairCount >= 15,

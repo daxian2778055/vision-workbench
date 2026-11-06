@@ -29,6 +29,12 @@ struct OverlayShape {
     QVector<QPointF> points;    /// Points: 点集
     QString text;               /// Text/Point: 标注文本
     QColor color {0, 255, 0};   /// 默认绿色
+    // ---- VM「结果显示 → 图像显示/文本显示」样式（2026-11-06）----
+    int lineWidth = 2;          ///< 线宽（视图像素，1~10）
+    int opacity = 100;          ///< 不透明度（0~100）
+    int fontSize = 0;           ///< 文本字号（视图像素）；0 = 跟随控件默认字体
+    /// 文本锚点：-1 = 跟随 p1（点/框旁标注）；0=左上 1=右上 2=左下 3=右下（画在显示图像四角）
+    int textPosition = -1;
 };
 Q_DECLARE_METATYPE(OverlayShape)
 

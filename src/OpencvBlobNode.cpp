@@ -1,5 +1,6 @@
 #include "OpencvBlobNode.h"
 #include "NodeResultFields.h"
+#include "VmSharedText.h"
 #include "OpencvUtil.h"
 #include "DataObject.h"
 #include "AppLog.h"
@@ -12,6 +13,7 @@
 #include <stdexcept>
 #include <vector>
 #include <QWidget>
+#include <QElapsedTimer>
 
 namespace {
 
@@ -448,10 +450,33 @@ void OpencvBlobNode::init()
     setParamDirect(QStringLiteral("maxBlobHeight"), 0.0);
     setParamDirect(QStringLiteral("otsuThreshold"), 0.0);
     setParamDirect(QStringLiteral("inscribedRects"), QString());
+    // ── VM「模块结果」展示用（结果字段，不上面板）──
+    setParamDirect(QStringLiteral("elapsedMs"), 0.0);
+    // 逐斑点数组：顺序 = 排序/截断后的最终保留集，各键第 i 项同属「斑点%1」组。
+    setParamDirect(QStringLiteral("blobStatuses"), QString());
+    setParamDirect(QStringLiteral("blobAreas"), QString());
+    setParamDirect(QStringLiteral("blobCentroids"), QString());
+    setParamDirect(QStringLiteral("blobCentroidXs"), QString());
+    setParamDirect(QStringLiteral("blobCentroidYs"), QString());
+    setParamDirect(QStringLiteral("blobMinRectWidths"), QString());
+    setParamDirect(QStringLiteral("blobMinRectHeights"), QString());
+    setParamDirect(QStringLiteral("blobBoxAngles"), QString());
+    setParamDirect(QStringLiteral("blobBboxCenterXs"), QString());
+    setParamDirect(QStringLiteral("blobBboxCenterYs"), QString());
+    setParamDirect(QStringLiteral("blobBboxWidths"), QString());
+    setParamDirect(QStringLiteral("blobBboxHeights"), QString());
+    setParamDirect(QStringLiteral("blobAxisAngles"), QString());
+    setParamDirect(QStringLiteral("blobPerimeters"), QString());
+    setParamDirect(QStringLiteral("blobLongAxes"), QString());
+    setParamDirect(QStringLiteral("blobShortAxes"), QString());
+    setParamDirect(QStringLiteral("blobCircularities"), QString());
+    setParamDirect(QStringLiteral("blobRectangularities"), QString());
 }
 
 void OpencvBlobNode::run(bool /*autoSwitch*/)
 {
+    QElapsedTimer runTimer;   // 官方模块结果「耗时（ms）」
+    runTimer.start();
     try {
         HImage input(m_inputImage);
         if (!input.IsInitialized()) {
@@ -854,6 +879,72 @@ void OpencvBlobNode::run(bool /*autoSwitch*/)
         m_params[QStringLiteral("maxBlobWidth")] = maxW;
         m_params[QStringLiteral("maxBlobHeight")] = maxH;
 
+        // VM「模块结果」逐斑点字段：按最终保留集（排序 + findNum 截断后）逐项对齐输出，
+        // 与「斑点%1」分组一一对应；只写结果字段，不参与筛选/判断。
+        // 未开任何形状筛选与排序时 measureShape 没跑过：这里对最终保留集补算，
+        // 保证周长/长轴/短轴/圆形度/矩形度/角度不是恒 0（工作量与保留斑点像素数成正比）。
+        if (!needShape) {
+            for (Candidate &c : candidates) {
+                const BlobShapeMetrics sm =
+                    measureShape(labels, c.label, stats.ptr<int>(c.label), c.cx, c.cy);
+                c.perimeter = sm.perimeter;
+                c.circularity = sm.circularity;
+                c.rectangularity = sm.rectangularity;
+                c.boxAngle = sm.boxAngle;
+                c.boxWidth = sm.boxWidth;
+                c.boxHeight = sm.boxHeight;
+                c.axisAngle = sm.axisAngle;
+                c.axisRatio = (sm.longAxis > 0.0) ? sm.shortAxis / sm.longAxis : 0.0;
+            }
+        }
+        QStringList statusTexts, areaTexts, centroidTexts, centroidXTexts, centroidYTexts;
+        QStringList minRectWidthTexts, minRectHeightTexts, boxAngleTexts;
+        QStringList bboxCenterXTexts, bboxCenterYTexts, bboxWidthTexts, bboxHeightTexts;
+        QStringList axisAngleTexts, perimeterTexts, longAxisTexts, shortAxisTexts;
+        QStringList circularityTexts, rectangularityTexts;
+        for (const Candidate &c : candidates) {
+            statusTexts << QStringLiteral("1");   // 单体状态：进入保留集即识别成功
+            areaTexts << QString::number(c.area);
+            centroidTexts << QStringLiteral("%1,%2")
+                                 .arg(c.cx, 0, 'f', 2).arg(c.cy, 0, 'f', 2);
+            centroidXTexts << QString::number(c.cx, 'f', 2);
+            centroidYTexts << QString::number(c.cy, 'f', 2);
+            // 最小外接矩形（VM「矩形宽度/矩形高度/角度」）：旋转矩形的长/短边与长边倾角
+            minRectWidthTexts << QString::number(c.boxWidth, 'f', 2);
+            minRectHeightTexts << QString::number(c.boxHeight, 'f', 2);
+            boxAngleTexts << QString::number(c.boxAngle, 'f', 3);
+            // Blob矩形框：轴对齐包围盒的中心点与宽高（官方另一组结果，勿与最小外接矩形混淆）。
+            // 中心取像素首末列/行的中点（与质心同为像素坐标口径；x+w 会把偶数宽的中心偏 0.5）。
+            bboxCenterXTexts << QString::number(c.x + (c.w - 1) * 0.5, 'f', 2);
+            bboxCenterYTexts << QString::number(c.y + (c.h - 1) * 0.5, 'f', 2);
+            bboxWidthTexts << QString::number(c.w);
+            bboxHeightTexts << QString::number(c.h);
+            axisAngleTexts << QString::number(c.axisAngle, 'f', 3);
+            perimeterTexts << QString::number(c.perimeter, 'f', 2);
+            longAxisTexts << QString::number(std::max(c.boxWidth, c.boxHeight), 'f', 2);
+            shortAxisTexts << QString::number(std::min(c.boxWidth, c.boxHeight), 'f', 2);
+            circularityTexts << QString::number(c.circularity, 'f', 4);
+            rectangularityTexts << QString::number(c.rectangularity, 'f', 4);
+        }
+        m_params[QStringLiteral("blobStatuses")] = statusTexts.join(QLatin1Char(','));
+        m_params[QStringLiteral("blobAreas")] = areaTexts.join(QLatin1Char(','));
+        m_params[QStringLiteral("blobCentroids")] = centroidTexts.join(QLatin1Char(';'));
+        m_params[QStringLiteral("blobCentroidXs")] = centroidXTexts.join(QLatin1Char(','));
+        m_params[QStringLiteral("blobCentroidYs")] = centroidYTexts.join(QLatin1Char(','));
+        m_params[QStringLiteral("blobMinRectWidths")] = minRectWidthTexts.join(QLatin1Char(','));
+        m_params[QStringLiteral("blobMinRectHeights")] = minRectHeightTexts.join(QLatin1Char(','));
+        m_params[QStringLiteral("blobBoxAngles")] = boxAngleTexts.join(QLatin1Char(','));
+        m_params[QStringLiteral("blobBboxCenterXs")] = bboxCenterXTexts.join(QLatin1Char(','));
+        m_params[QStringLiteral("blobBboxCenterYs")] = bboxCenterYTexts.join(QLatin1Char(','));
+        m_params[QStringLiteral("blobBboxWidths")] = bboxWidthTexts.join(QLatin1Char(','));
+        m_params[QStringLiteral("blobBboxHeights")] = bboxHeightTexts.join(QLatin1Char(','));
+        m_params[QStringLiteral("blobAxisAngles")] = axisAngleTexts.join(QLatin1Char(','));
+        m_params[QStringLiteral("blobPerimeters")] = perimeterTexts.join(QLatin1Char(','));
+        m_params[QStringLiteral("blobLongAxes")] = longAxisTexts.join(QLatin1Char(','));
+        m_params[QStringLiteral("blobShortAxes")] = shortAxisTexts.join(QLatin1Char(','));
+        m_params[QStringLiteral("blobCircularities")] = circularityTexts.join(QLatin1Char(','));
+        m_params[QStringLiteral("blobRectangularities")] = rectangularityTexts.join(QLatin1Char(','));
+
         // 结果判断（VM：无目标 OK / Blob 数量 / 单个 Blob 面积 / 总面积）
         bool judgeOk = true;
         QString judgeReason;
@@ -891,6 +982,8 @@ void OpencvBlobNode::run(bool /*autoSwitch*/)
         // 判 OK 时写空串可清掉上一轮残留。
         m_params[QStringLiteral("lastError")] = judgeReason;
         m_params["moduleStatus"] = judgeOk;
+        // 结果判断判 NG 但结果有效：保留输出端口，画布/结果面板显示红色结果
+        setResultNg(!judgeOk);
 
         // 标记图：**单遍扫描 + 标签查色**（2026-10-26 复核 P3：原实现对每个 blob 都扫一遍
         // 全图 = O(blob 数 × 像素数)，5MP 图 × 100 个 blob 就是 5 亿次比较，现场会明显卡顿）。
@@ -969,6 +1062,7 @@ void OpencvBlobNode::run(bool /*autoSwitch*/)
         } else {
             setOutputData(4, QSharedPointer<DataObject>());
         }
+        m_params[QStringLiteral("elapsedMs")] = static_cast<double>(runTimer.elapsed());
     } catch (const std::exception &e) {
         VFP_DEBUG << "OpencvBlobNode error:" << e.what();
         m_params[QStringLiteral("lastError")] = QString::fromUtf8(e.what());   // 原因到面板（2026-10-26）
@@ -1052,6 +1146,73 @@ void OpencvBlobNode::applyParamVisibility(QWidget *panel)
             continue;
         form->setRowVisible(row, visible.contains(name));
     }
+}
+
+QVector<NodeResultField> OpencvBlobNode::resultDisplayFields() const
+{
+    // 官方「模块结果」字段表（GUID-F5B9D37D「模块结果」节）逐项照抄：
+    // 模块级 耗时 / 模块状态 / Blob个数 / 总面积；逐斑点 单体状态 / 面积 / 质心点(X/Y) /
+    // 最小外接矩形(矩形宽度/矩形高度/角度) / Blob矩形框(X/Y/宽度/高度) / 主轴角度 /
+    // 周长 / 长轴 / 短轴 / 圆形度 / 矩形度。
+    // 官方还列有最小/最大灰度、对比度、最大内接矩形、分数等；本节点未计算这些量，
+    // 不在结果表里补空行（宁缺勿造）。配置参数一律不进结果表。
+    const QString group = QStringLiteral("斑点%1");
+
+    QVector<NodeResultField> fields;
+    fields << resultValue(QStringLiteral("elapsedMs"), QStringLiteral("耗时"),
+                          QStringLiteral("ms"), 0)
+           << resultStatus(QStringLiteral("moduleStatus"), QStringLiteral("模块状态"))
+           << resultValue(QStringLiteral("blobCount"), QStringLiteral("Blob个数"),
+                          QString(), 0)
+           << resultValue(QStringLiteral("totalBlobArea"), QStringLiteral("总面积"),
+                          QString(), 0)
+           << resultList(QStringLiteral("blobStatuses"), group, QStringLiteral("单体状态"),
+                         QString(), 0)
+           << resultList(QStringLiteral("blobAreas"), group, QStringLiteral("面积"),
+                         QString(), 0)
+           << resultPoint(QStringLiteral("blobCentroids"), group, QStringLiteral("质心点"), 2)
+           << resultList(QStringLiteral("blobCentroidXs"), group, QStringLiteral("质心X"),
+                         QStringLiteral("px"), 2)
+           << resultList(QStringLiteral("blobCentroidYs"), group, QStringLiteral("质心Y"),
+                         QStringLiteral("px"), 2)
+           << resultList(QStringLiteral("blobMinRectWidths"), group,
+                         QStringLiteral("矩形宽度"), QStringLiteral("px"), 2)
+           << resultList(QStringLiteral("blobMinRectHeights"), group,
+                         QStringLiteral("矩形高度"), QStringLiteral("px"), 2)
+           << resultList(QStringLiteral("blobBoxAngles"), group, QStringLiteral("角度"),
+                         QStringLiteral("°"), 3)
+           << resultList(QStringLiteral("blobBboxCenterXs"), group,
+                         QStringLiteral("Blob矩形框X"), QStringLiteral("px"), 2)
+           << resultList(QStringLiteral("blobBboxCenterYs"), group,
+                         QStringLiteral("Blob矩形框Y"), QStringLiteral("px"), 2)
+           << resultList(QStringLiteral("blobBboxWidths"), group,
+                         QStringLiteral("Blob矩形框宽度"), QStringLiteral("px"), 0)
+           << resultList(QStringLiteral("blobBboxHeights"), group,
+                         QStringLiteral("Blob矩形框高度"), QStringLiteral("px"), 0)
+           << resultList(QStringLiteral("blobAxisAngles"), group, QStringLiteral("主轴角度"),
+                         QStringLiteral("°"), 3)
+           << resultList(QStringLiteral("blobPerimeters"), group, QStringLiteral("周长"),
+                         QStringLiteral("px"), 2)
+           << resultList(QStringLiteral("blobLongAxes"), group, QStringLiteral("长轴"),
+                         QStringLiteral("px"), 2)
+           << resultList(QStringLiteral("blobShortAxes"), group, QStringLiteral("短轴"),
+                         QStringLiteral("px"), 2)
+           << resultList(QStringLiteral("blobCircularities"), group, QStringLiteral("圆形度"),
+                         QString(), 4)
+           << resultList(QStringLiteral("blobRectangularities"), group,
+                         QStringLiteral("矩形度"), QString(), 4)
+           // 官方「模块结果 → 检测区域」（值由 FlowExecutor 按 geometryRoi() 统一回写）
+           << resultValue(QStringLiteral("roiCenterX"), VmSharedText::roiCenterXLabel(),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("roiCenterY"), VmSharedText::roiCenterYLabel(),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("roiWidth"), QStringLiteral("检测区域宽度"),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("roiHeight"), QStringLiteral("检测区域高度"),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("roiAngle"), QStringLiteral("检测区域角度"),
+                          QStringLiteral("°"), 3);
+    return fields;
 }
 
 RoiShape OpencvBlobNode::geometryRoi() const

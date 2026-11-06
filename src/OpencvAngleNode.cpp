@@ -1,4 +1,5 @@
 #include "OpencvAngleNode.h"
+#include "NodeResultFields.h"
 #include "DataObject.h"
 #include <algorithm>
 #include <cmath>
@@ -168,4 +169,30 @@ QWidget *OpencvAngleNode::createParamPanel()
 void OpencvAngleNode::updateParamPanel(QWidget *panel)
 {
     updateAutoParamPanel(panel);
+}
+
+QVector<NodeResultField> OpencvAngleNode::resultDisplayFields() const
+{
+    // VM「模块结果」口径：夹角为主值，其余为线长/线角/交点/平行说明。
+    QVector<NodeResultField> fields = HalconNode::resultDisplayFields();
+    fields << resultValue(QStringLiteral("angle"), QStringLiteral("夹角"),
+                          QStringLiteral("°"), 3)
+           << resultValue(QStringLiteral("signedAngle"), QStringLiteral("有向夹角"),
+                          QStringLiteral("°"), 3)
+           << resultValue(QStringLiteral("angle360"), QStringLiteral("0~360°夹角"),
+                          QStringLiteral("°"), 3)
+           << resultValue(QStringLiteral("line1Length"), QStringLiteral("线段1长度"),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("line2Length"), QStringLiteral("线段2长度"),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("line1AngleDeg"), QStringLiteral("线段1角度"),
+                          QStringLiteral("°"), 3)
+           << resultValue(QStringLiteral("line2AngleDeg"), QStringLiteral("线段2角度"),
+                          QStringLiteral("°"), 3)
+           << resultValue(QStringLiteral("intersectionCol"), QStringLiteral("交点X"),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("intersectionRow"), QStringLiteral("交点Y"),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("parallel"), QStringLiteral("平行"));
+    return fields;
 }

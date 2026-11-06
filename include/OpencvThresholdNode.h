@@ -13,6 +13,8 @@ public:
     void run(bool autoSwitch = true) override;
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;
+    /// VM 4.4「图像二值化 → 模块结果」展示口径：耗时 / 模块状态 / 检测区域
+    QVector<NodeResultField> resultDisplayFields() const override;
 
     bool supportsMaskEdit() const override { return true; }
     /// VM 图像二值化「ROI区域」：矩形 ROI（无 ROI 时全图处理）

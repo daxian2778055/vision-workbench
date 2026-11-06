@@ -299,3 +299,34 @@ void OpencvCalibNode::updateParamPanel(QWidget *panel)
 {
     updateAutoParamPanel(panel);
 }
+
+QVector<NodeResultField> OpencvCalibNode::resultDisplayFields() const
+{
+    // VM「模块结果」口径：模块级 耗时/模块状态 + 标定状态/重投影误差/帧数/内参与畸变系数。
+    // 未完成标定时 calibFx 等键不存在，面板自动跳过，不补空行。
+    QVector<NodeResultField> fields = HalconNode::resultDisplayFields();
+    fields << resultValue(QStringLiteral("calibrated"), QStringLiteral("已标定"))
+           << resultValue(QStringLiteral("reprojectionError"), QStringLiteral("重投影误差"),
+                          QStringLiteral("px"), 4)
+           << resultValue(QStringLiteral("framesUsed"), QStringLiteral("标定帧数"),
+                          QString(), 0)
+           << resultValue(QStringLiteral("calibFx"), QStringLiteral("焦距X"),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("calibFy"), QStringLiteral("焦距Y"),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("calibCx"), QStringLiteral("主点X"),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("calibCy"), QStringLiteral("主点Y"),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("calibK1"), QStringLiteral("径向畸变K1"),
+                          QString(), 6)
+           << resultValue(QStringLiteral("calibK2"), QStringLiteral("径向畸变K2"),
+                          QString(), 6)
+           << resultValue(QStringLiteral("calibK3"), QStringLiteral("径向畸变K3"),
+                          QString(), 6)
+           << resultValue(QStringLiteral("calibP1"), QStringLiteral("切向畸变P1"),
+                          QString(), 6)
+           << resultValue(QStringLiteral("calibP2"), QStringLiteral("切向畸变P2"),
+                          QString(), 6);
+    return fields;
+}

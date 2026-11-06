@@ -89,3 +89,12 @@ void OpencvEdgeNode::updateParamPanel(QWidget *panel)
 {
     updateAutoParamPanel(panel);
 }
+
+QVector<NodeResultField> OpencvEdgeNode::resultDisplayFields() const
+{
+    // VM「模块结果」口径：模块级 耗时/模块状态 + 边缘像素数。
+    QVector<NodeResultField> fields = HalconNode::resultDisplayFields();
+    fields << resultValue(QStringLiteral("edgePixels"), QStringLiteral("边缘像素数"),
+                          QString(), 0);
+    return fields;
+}

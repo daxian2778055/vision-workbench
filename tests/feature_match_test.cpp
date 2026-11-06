@@ -56,6 +56,7 @@ private slots:
     // 模板匹配基准（r19）：现场 1500×1000 + 208px + 31 角度 = 16380ms/轮
     void templateMatchSearchIsFastEnough();
     void templateMatchFindsMultipleInstances();
+    void templateResultDisplaySpec();
     void searchBudgetCountsCombos();
     void templateMatchOnRealImage();
     void templateMatchAcrossFrames();
@@ -819,6 +820,109 @@ void FeatureMatchTest::templateMatchFindsMultipleInstances()
         }
         QVERIFY2(nearOk, qPrintable(QStringLiteral("实例位置不在任何真实中心附近：(%1, %2)").arg(col).arg(row)));
     }
+}
+
+// VM 匹配「模块结果」展示口径：官方字段顺序、配置参数不混入、逐目标数组与分组对齐。
+void FeatureMatchTest::templateResultDisplaySpec()
+{
+    const cv::Mat patch = makePatch();                      // 128×128 有纹理小块
+    cv::Mat big(1000, 1500, CV_8UC1, cv::Scalar(25));
+    const cv::Point center(300, 250);
+    patch.copyTo(big(cv::Rect(center.x - patch.cols / 2, center.y - patch.rows / 2,
+                              patch.cols, patch.rows)));
+
+    OpencvTemplateMatchNode node;
+    node.init();
+
+    // ① 规范：模块级 6 项 + 逐目标 13 项 + 检测区域 5 项，不含任何配置键
+    const QVector<NodeResultField> spec = node.resultDisplayFields();
+    QCOMPARE(int(spec.size()), 24);
+    QCOMPARE(spec.at(0).key, QStringLiteral("elapsedMs"));
+    QCOMPARE(spec.at(1).key, QStringLiteral("moduleStatus"));
+    QCOMPARE(spec.at(2).key, QStringLiteral("matchStatus"));
+    QCOMPARE(spec.at(3).key, QStringLiteral("matchCount"));
+    QCOMPARE(spec.at(4).key, QStringLiteral("matchTemplateIndex"));
+    QCOMPARE(spec.at(5).key, QStringLiteral("matchTemplateName"));
+    QCOMPARE(spec.at(6).key, QStringLiteral("matchBoxCenters"));
+    for (int i = 6; i <= 18; ++i)
+        QCOMPARE(spec.at(i).group, QStringLiteral("匹配%1"));
+    QCOMPARE(spec.at(19).key, QStringLiteral("searchCenterX"));
+    QCOMPARE(spec.at(23).key, QStringLiteral("searchAngle"));
+    for (const NodeResultField &f : spec) {
+        QVERIFY2(f.key != QStringLiteral("minScore")
+                     && f.key != QStringLiteral("maxMatches")
+                     && f.key != QStringLiteral("roiWidth")
+                     && f.key != QStringLiteral("searchRegionCol"),
+                 qPrintable(QStringLiteral("配置参数混进了模块结果规范：%1").arg(f.key)));
+    }
+
+    // ② 单目标匹配：逐目标数组长度 = 匹配个数，匹配框/匹配点/尺度/分数与命中一致
+    node.setParam(QStringLiteral("roiCenterCol"), double(center.x));
+    node.setParam(QStringLiteral("roiCenterRow"), double(center.y));
+    node.setParam(QStringLiteral("roiWidth"), double(patch.cols));
+    node.setParam(QStringLiteral("roiHeight"), double(patch.rows));
+    node.setParam(QStringLiteral("roiAngle"), 0.0);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("trainFromImage"), true);
+    node.setParam(QStringLiteral("minScore"), 0.5);
+    node.setParam(QStringLiteral("maxMatches"), 1);
+    node.setInputImage(OpencvUtil::matToHimage(big));
+    node.run(false);
+
+    QVERIFY2(node.getParam(QStringLiteral("moduleStatus")).toBool(), "单目标匹配执行失败");
+    QCOMPARE(node.getParam(QStringLiteral("matchStatus")).toInt(), 1);
+    QCOMPARE(node.getParam(QStringLiteral("matchCount")).toInt(), 1);
+
+    auto numbers = [&node](const char *key) {
+        QVector<double> out;
+        const QString text = node.getParam(QString::fromLatin1(key)).toString();
+        const QStringList parts = text.split(QLatin1Char(','), Qt::SkipEmptyParts);
+        for (const QString &p : parts)
+            out.push_back(p.toDouble());
+        return out;
+    };
+    const QVector<double> xs = numbers("matchBoxCenterXs");
+    const QVector<double> ys = numbers("matchBoxCenterYs");
+    const QVector<double> ws = numbers("matchBoxWidths");
+    const QVector<double> hs = numbers("matchBoxHeights");
+    const QVector<double> pxs = numbers("matchPointXs");
+    const QVector<double> pys = numbers("matchPointYs");
+    const QVector<double> scores = numbers("matchScores");
+    const QVector<double> scales = numbers("matchScales");
+    QCOMPARE(int(xs.size()), 1);
+    QCOMPARE(int(ys.size()), 1);
+    QCOMPARE(int(ws.size()), 1);
+    QCOMPARE(int(hs.size()), 1);
+    QCOMPARE(int(pxs.size()), 1);
+    QCOMPARE(int(pys.size()), 1);
+    QCOMPARE(int(scores.size()), 1);
+    QCOMPARE(int(scales.size()), 1);
+    const double dx = qAbs(xs.at(0) - double(center.x));
+    const double dy = qAbs(ys.at(0) - double(center.y));
+    const double dw = qAbs(ws.at(0) - double(patch.cols));
+    const double dh = qAbs(hs.at(0) - double(patch.rows));
+    const double dpx = qAbs(pxs.at(0) - xs.at(0));
+    const double dpy = qAbs(pys.at(0) - ys.at(0));
+    const double dScale = qAbs(scales.at(0) - 1.0);
+    const QString centerMsg = QStringLiteral("匹配框中心偏移：(%1, %2)")
+                                  .arg(xs.at(0)).arg(ys.at(0));
+    const QString sizeMsg = QStringLiteral("匹配框尺寸异常：%1×%2")
+                                .arg(ws.at(0)).arg(hs.at(0));
+    QVERIFY2(dx <= 2.0 && dy <= 2.0, qPrintable(centerMsg));
+    QVERIFY2(dw <= 2.0 && dh <= 2.0, qPrintable(sizeMsg));
+    // 默认锚点在模板中心 ⇒ 匹配点与匹配框中心重合
+    QVERIFY2(dpx <= 2.0 && dpy <= 2.0, "匹配点应与默认锚点（模板中心）重合");
+    QVERIFY2(scores.at(0) > 0.5, "匹配分数低于阈值");
+    QVERIFY2(dScale <= 0.05, "整体尺度应为 1.0 附近");
+
+    // ③ 检测区域：未设搜索 ROI ⇒ 整图（中心 750,500，宽高 1500×1000）
+    QCOMPARE(node.getParam(QStringLiteral("searchCenterX")).toDouble(), 750.0);
+    QCOMPARE(node.getParam(QStringLiteral("searchCenterY")).toDouble(), 500.0);
+    QCOMPARE(node.getParam(QStringLiteral("searchWidth")).toDouble(), 1500.0);
+    QCOMPARE(node.getParam(QStringLiteral("searchHeight")).toDouble(), 1000.0);
+    QCOMPARE(node.getParam(QStringLiteral("searchAngle")).toDouble(), 0.0);
 }
 
 

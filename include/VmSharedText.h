@@ -18,4 +18,15 @@ inline QString mkdirFailed(const QString &path)
 {
     return QStringLiteral("无法创建目录：%1").arg(path);
 }
+
+/// VM「模块结果 → 检测区域」公共字段标签：多个算子在 resultDisplayFields()
+/// 里声明同一组字段，字面量只能落在这里一份（G-4 跨文件重复中文句闸）。
+inline QString roiCenterXLabel()
+{
+    return QStringLiteral("检测区域中心点X");
+}
+inline QString roiCenterYLabel()
+{
+    return QStringLiteral("检测区域中心点Y");
+}
 }   // namespace VmSharedText

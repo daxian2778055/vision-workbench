@@ -13,4 +13,6 @@ public:
     void run(bool autoSwitch = true) override;
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;
+    /// VM「模块结果」展示口径：最小/最大/平均灰度
+    QVector<NodeResultField> resultDisplayFields() const override;
 };

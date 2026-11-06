@@ -418,6 +418,10 @@ void ObjectCountingNode::run(bool /*autoSwitch*/)
     if (!classWarn.isEmpty())
         note += QStringLiteral("\n") + classWarn;
     m_params[QStringLiteral("countNote")] = note;
+    // VM「模块结果」展示用（结果字段）：累计计数/本帧新增/在跟目标数
+    m_params[QStringLiteral("totalCount")] = m_totalCount;
+    m_params[QStringLiteral("addedThisFrame")] = added;
+    m_params[QStringLiteral("activeTracks")] = static_cast<int>(tracks.size());
     setParamDirect(QStringLiteral("moduleStatus"), true);
 }
 
@@ -429,4 +433,17 @@ QWidget *ObjectCountingNode::createParamPanel()
 void ObjectCountingNode::updateParamPanel(QWidget *panel)
 {
     updateAutoParamPanel(panel);
+}
+
+QVector<NodeResultField> ObjectCountingNode::resultDisplayFields() const
+{
+    // VM「模块结果」口径：模块级 耗时/模块状态 + 累计计数/本帧新增/在跟目标数。
+    QVector<NodeResultField> fields = HalconNode::resultDisplayFields();
+    fields << resultValue(QStringLiteral("totalCount"), QStringLiteral("累计计数"),
+                          QString(), 0)
+           << resultValue(QStringLiteral("addedThisFrame"), QStringLiteral("本帧新增"),
+                          QString(), 0)
+           << resultValue(QStringLiteral("activeTracks"), QStringLiteral("在跟目标数"),
+                          QString(), 0);
+    return fields;
 }

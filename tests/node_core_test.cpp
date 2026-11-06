@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QJsonObject>
 #include <QJsonDocument>
+#include <QJsonArray>
 
 // 节点头文件
 #include "OpencvThresholdNode.h"
@@ -13,6 +14,29 @@
 #include "OpencvEdgeNode.h"
 #include "OpencvBlobNode.h"
 #include "OpencvCaliperNode.h"
+#include "ColorConversionNode.h"
+#include "OpencvPixelStatsNode.h"
+#include "OpencvAngleNode.h"
+#include "OpencvFitLineNode.h"
+#include "OpencvFitCircleNode.h"
+#include "OpencvQrNode.h"
+#include "OpencvClassifyNode.h"
+#include "OpencvDefectNode.h"
+#include "OpencvFeatureMatchNode.h"
+#include "ZxingBarcodeNode.h"
+#include "TesseractOcrNode.h"
+#include "DeepOcrNode.h"
+#include "DnnInferNode.h"
+#include "DnnDetectNode.h"
+#include "DnnSegmentNode.h"
+#include "AnomalyDetectNode.h"
+#include "ObjectCountingNode.h"
+#include "OpencvTrainClassifierNode.h"
+#include "OpencvCalibNode.h"
+#include "OpencvTrackNode.h"
+#include "FeatureSearchNode.h"
+#include "DataObject.h"
+#include "ImageDisplayController.h"   // 判 NG 时叠加层改红的腿
 #include <QCheckBox>
 #include <QComboBox>
 #include <QFormLayout>
@@ -63,7 +87,10 @@ private slots:
     // 算子功能测试
     void testThresholdBasic();
     void testThresholdVmModesAndRoi();
+    void testThresholdResultDisplaySpec();
+    void testGenericResultJudgment();
     void testMorphVmParamsAndRoi();
+    void testMorphResultDisplaySpec();
     void testFilterVmParamsAndRoi();
     void testEnhanceVmParamsAndRoi();
     void testNormalizeAndResizeVmParams();
@@ -74,12 +101,18 @@ private slots:
     void testBlobShapeMetricsVm();
     void testVmRegressionGuards();
     void testBlobVmOutputAndBoundary();
+    void testBlobResultDisplaySpec();
+    void testRemainingResultDisplaySpecs();
     void testCaliperVmParams();
     void testCaliperScoring();
     void testCaliperPositionScoringAndResults();
     void testCaliperProjectionDirection();
     void testCaliperParamVisibility();
     void testCaliperBlurEdge();
+    void testResultNgRoundStartReset();
+    void testCustomExecuteStillJudged();
+    void testCaliperPairSelection();
+    void testCaliperJudgment();
     void testCropBasic();
     void testImageArithDivByZero();
     void testFormulaEvaluation();
@@ -385,6 +418,198 @@ void NodeCoreTest::testThresholdVmModesAndRoi()
     }
 }
 
+// VM 图像二值化「模块结果」展示口径：耗时 / 模块状态 / 检测区域，配置参数不混入。
+void NodeCoreTest::testThresholdResultDisplaySpec()
+{
+    OpencvThresholdNode node;
+    node.init();
+
+    const QVector<NodeResultField> spec = node.resultDisplayFields();
+    QCOMPARE(int(spec.size()), 7);
+    QCOMPARE(spec.at(0).key, QStringLiteral("elapsedMs"));
+    QCOMPARE(spec.at(0).label, QStringLiteral("耗时"));
+    QCOMPARE(spec.at(1).key, QStringLiteral("moduleStatus"));
+    QCOMPARE(spec.at(1).label, QStringLiteral("模块状态"));
+    QCOMPARE(spec.at(2).key, QStringLiteral("roiCenterX"));
+    QCOMPARE(spec.at(6).key, QStringLiteral("roiAngle"));
+    for (const NodeResultField &f : spec) {
+        QVERIFY2(f.key != QStringLiteral("binaryType")
+                     && f.key != QStringLiteral("lowThreshold")
+                     && f.key != QStringLiteral("roiRectRow")
+                     && f.key != QStringLiteral("nonRoiProcess"),
+                 qPrintable(QStringLiteral("配置参数混进了模块结果规范：%1").arg(f.key)));
+    }
+
+    // 硬阈值 + 矩形 ROI：ROI 内 10×10 白块 = 100 个前景像素；检测区域按连续坐标回显。
+    cv::Mat img(100, 100, CV_8UC1, cv::Scalar(0));
+    cv::rectangle(img, cv::Rect(30, 40, 10, 10), cv::Scalar(255), cv::FILLED);
+    node.setParam(QStringLiteral("binaryType"), 0);
+    node.setParam(QStringLiteral("lowThreshold"), 100);
+    node.setParam(QStringLiteral("highThreshold"), 255);
+    node.setParam(QStringLiteral("roiRectRow"), 30);
+    node.setParam(QStringLiteral("roiRectCol"), 20);
+    node.setParam(QStringLiteral("roiRectWidth"), 40);
+    node.setParam(QStringLiteral("roiRectHeight"), 50);
+    node.setInputImage(OpencvUtil::matToHimage(img));
+    node.run(false);
+
+    QVERIFY2(node.getParam(QStringLiteral("moduleStatus")).toBool(), "二值化用例执行失败");
+    QCOMPARE(node.getParam(QStringLiteral("foregroundPixels")).toInt(), 100);
+    QCOMPARE(node.getParam(QStringLiteral("roiCenterX")).toDouble(), 40.0);
+    QCOMPARE(node.getParam(QStringLiteral("roiCenterY")).toDouble(), 55.0);
+    QCOMPARE(node.getParam(QStringLiteral("roiWidth")).toDouble(), 40.0);
+    QCOMPARE(node.getParam(QStringLiteral("roiHeight")).toDouble(), 50.0);
+    QCOMPARE(node.getParam(QStringLiteral("roiAngle")).toDouble(), 0.0);
+}
+
+// VM「结果显示 → 结果判断」通用条件：AND/OR、结果字段取值、判 NG 保留输出并写原因。
+void NodeCoreTest::testGenericResultJudgment()
+{
+    OpencvPixelStatsNode node;
+    node.init();
+    cv::Mat img(10, 10, CV_8UC1, cv::Scalar(0));
+    img(cv::Rect(5, 0, 5, 10)).setTo(cv::Scalar(255));
+    node.setInputImage(OpencvUtil::matToHimage(img));
+    // process() 从输入端口取图（setInputImage 只服务直接 run() 的用例），补一份端口数据
+    auto inputObj = QSharedPointer<DataObject>::create();
+    inputObj->setHImage(OpencvUtil::matToHimage(img));
+    node.setInputData(0, inputObj);
+
+    auto condition = [](const QString &param, const QString &op, const QString &value) {
+        QJsonObject o;
+        o.insert(QStringLiteral("param"), param);
+        o.insert(QStringLiteral("op"), op);
+        o.insert(QStringLiteral("value"), value);
+        return o;
+    };
+    auto setConditions = [&node](int mode, const QJsonArray &conditions) {
+        node.setParam(QStringLiteral("resJudgeMode"), mode);
+        node.setParam(QStringLiteral("resJudgeConditions"),
+                      QJsonDocument(conditions).toJson(QJsonDocument::Compact));
+    };
+
+    // ① AND 全部满足 → OK
+    QJsonArray pass;
+    pass.append(condition(QStringLiteral("minGray"), QStringLiteral(">="), QStringLiteral("0")));
+    pass.append(condition(QStringLiteral("maxGray"), QStringLiteral("<="), QStringLiteral("255")));
+    setConditions(0, pass);
+    QVERIFY2(node.execute(), "AND 条件全部满足时应判 OK");
+    QVERIFY(node.getParam(QStringLiteral("moduleStatus")).toBool());
+    QVERIFY(node.getParam(QStringLiteral("lastError")).toString().isEmpty());
+
+    // ② AND 一条不满足 → NG，但结果有效（保留输出、写原因）
+    QJsonArray fail;
+    fail.append(condition(QStringLiteral("maxGray"), QStringLiteral("<="), QStringLiteral("200")));
+    setConditions(0, fail);
+    QVERIFY2(!node.execute(), "maxGray=255 不满足 <=200，应判 NG");
+    QVERIFY(!node.getParam(QStringLiteral("moduleStatus")).toBool());
+    QVERIFY2(node.isResultNg(), "结果判断 NG 应保留输出（resultNg）");
+    QVERIFY2(node.getParam(QStringLiteral("lastError")).toString().contains(
+                 QStringLiteral("结果判断")),
+             qPrintable(QStringLiteral("判红原因缺少结果判断说明：%1")
+                            .arg(node.getParam(QStringLiteral("lastError")).toString())));
+    QVERIFY2(node.getOutputData(0) != nullptr, "判 NG 但结果有效时输出必须保留");
+    QCOMPARE(node.getParam(QStringLiteral("maxGray")).toDouble(), 255.0);
+
+    // ③ OR 任一满足 → OK；全部不满足 → NG
+    QJsonArray orPass;
+    orPass.append(condition(QStringLiteral("minGray"), QStringLiteral(">="), QStringLiteral("10")));
+    orPass.append(condition(QStringLiteral("maxGray"), QStringLiteral(">="), QStringLiteral("250")));
+    setConditions(1, orPass);
+    QVERIFY2(node.execute(), "OR 任一条件满足时应判 OK");
+    QVERIFY2(!node.isResultNg(), "下一轮应复位 resultNg（否则上一轮红色残留）");
+
+    QJsonArray orFail;
+    orFail.append(condition(QStringLiteral("minGray"), QStringLiteral(">="), QStringLiteral("10")));
+    orFail.append(condition(QStringLiteral("maxGray"), QStringLiteral("<"), QStringLiteral("100")));
+    setConditions(1, orFail);
+    QVERIFY2(!node.execute(), "OR 全部不满足时应判 NG");
+    QVERIFY(node.isResultNg());
+
+    // ④ 清空条件 → 回到节点自身判断（OK）
+    node.setParam(QStringLiteral("resJudgeConditions"), QString());
+    QVERIFY2(node.execute(), "无通用判断条件时应恢复 OK");
+
+    QString reason;
+    // ⑤ 非法 JSON / 顶层非数组：旧实现 return true 静默放行，等于"没有判断"
+    node.setParam(QStringLiteral("resJudgeConditions"), QStringLiteral("{broken"));
+    reason.clear();
+    QVERIFY2(!node.evaluateGenericResultJudgment(&reason),
+             "非法 JSON 必须判 NG，不能静默当通过");
+    QVERIFY2(reason.contains(QStringLiteral("条件配置格式错误")), qPrintable(reason));
+
+    node.setParam(QStringLiteral("resJudgeConditions"), QStringLiteral("{\"a\":1}"));
+    reason.clear();
+    QVERIFY2(!node.evaluateGenericResultJudgment(&reason), "顶层非数组应判 NG");
+    QVERIFY2(reason.contains(QStringLiteral("顶层不是数组")), qPrintable(reason));
+
+    // ⑥ 坏条件/空字段名：旧实现 continue 跳过，等于该条件恒通过（OR 下尤其危险）
+    QJsonArray broken;
+    broken.append(QJsonValue(42));
+    broken.append(condition(QString(), QStringLiteral(">="), QStringLiteral("0")));
+    setConditions(0, broken);
+    reason.clear();
+    QVERIFY2(!node.evaluateGenericResultJudgment(&reason), "坏条件与空字段名应判 NG");
+    QVERIFY2(reason.contains(QStringLiteral("格式错误"))
+                 || reason.contains(QStringLiteral("缺少字段名")),
+             qPrintable(reason));
+
+    // ⑦ != 空值/空期望：旧实现 !equal 恒 true，产线漏检
+    QJsonArray neEmptyExpected;
+    neEmptyExpected.append(
+        condition(QStringLiteral("minGray"), QStringLiteral("!="), QString()));
+    setConditions(0, neEmptyExpected);
+    reason.clear();
+    QVERIFY2(!node.evaluateGenericResultJudgment(&reason),
+             "期望值为空时 != 不应恒通过");
+    QVERIFY2(reason.contains(QStringLiteral("缺少可比较的值")), qPrintable(reason));
+
+    node.setParam(QStringLiteral("emptyField"), QString());   // valid QVariant，但值为空串
+    QJsonArray neEmptyActual;
+    neEmptyActual.append(
+        condition(QStringLiteral("emptyField"), QStringLiteral("!="), QStringLiteral("abc")));
+    setConditions(0, neEmptyActual);
+    reason.clear();
+    QVERIFY2(!node.evaluateGenericResultJudgment(&reason),
+             "实际值为空串时 != 不应恒通过");
+
+    // ⑧ 正常的数值 != 仍应可用（避免修过头）
+    QJsonArray neOk;
+    neOk.append(condition(QStringLiteral("maxGray"), QStringLiteral("!="), QStringLiteral("1")));
+    setConditions(0, neOk);
+    reason.clear();
+    QVERIFY2(node.evaluateGenericResultJudgment(&reason), "正常的数值 != 仍应通过");
+
+    // ⑨ 框架级公共字段（elapsedMs / roi*）不在节点参数表里，由 NodeBase::execute()
+    //    通过 commonResultFields() 注入；判断与结果表快照共用同一份取值。
+    QVariantMap common;
+    common.insert(QStringLiteral("elapsedMs"), 12.0);
+    common.insert(QStringLiteral("roiCenterX"), 30.0);
+    QJsonArray commonPass;
+    commonPass.append(
+        condition(QStringLiteral("elapsedMs"), QStringLiteral("<"), QStringLiteral("1000")));
+    commonPass.append(
+        condition(QStringLiteral("roiCenterX"), QStringLiteral("=="), QStringLiteral("30")));
+    setConditions(0, commonPass);
+    QString commonReason;
+    QVERIFY2(node.evaluateResultJudgment(common, &commonReason), qPrintable(commonReason));
+
+    QJsonArray commonFail;
+    commonFail.append(
+        condition(QStringLiteral("elapsedMs"), QStringLiteral(">"), QStringLiteral("1000")));
+    setConditions(0, commonFail);
+    commonReason.clear();
+    QVERIFY2(!node.evaluateResultJudgment(common, &commonReason),
+             "公共字段条件不满足时应判 NG");
+    QVERIFY2(commonReason.contains(QStringLiteral("耗时"))
+                 || commonReason.contains(QStringLiteral("elapsedMs")),
+             qPrintable(QStringLiteral("原因里应显示公共字段的中文名：%1").arg(commonReason)));
+    QVERIFY2(!commonReason.contains(QStringLiteral("缺少结果字段")),
+             "elapsedMs 必须从 commonFields 读到，不能报缺字段");
+
+    node.setParam(QStringLiteral("resJudgeConditions"), QString());
+}
+
 // VM 形态学口径：膨胀/腐蚀/开/闭、三种结构元、宽高独立、迭代次数 0 = 不处理；ROI 外保留原图。
 void NodeCoreTest::testMorphVmParamsAndRoi()
 {
@@ -482,6 +707,44 @@ void NodeCoreTest::testMorphVmParamsAndRoi()
         QCOMPARE(int(out.at<uchar>(29, 35)), 255);    // ROI 内膨胀到 29
         QCOMPARE(int(out.at<uchar>(28, 35)), 0);      // ROI 外保留原图（原图是 0）
     }
+}
+
+// VM 形态学处理「模块结果」展示口径：耗时 / 模块状态 / 检测区域，配置参数不混入。
+void NodeCoreTest::testMorphResultDisplaySpec()
+{
+    OpencvMorphNode node;
+    node.init();
+
+    const QVector<NodeResultField> spec = node.resultDisplayFields();
+    QCOMPARE(int(spec.size()), 7);
+    QCOMPARE(spec.at(0).key, QStringLiteral("elapsedMs"));
+    QCOMPARE(spec.at(1).key, QStringLiteral("moduleStatus"));
+    QCOMPARE(spec.at(2).key, QStringLiteral("roiCenterX"));
+    QCOMPARE(spec.at(6).key, QStringLiteral("roiAngle"));
+    for (const NodeResultField &f : spec) {
+        QVERIFY2(f.key != QStringLiteral("morphType")
+                     && f.key != QStringLiteral("kernelWidth")
+                     && f.key != QStringLiteral("roiRectRow"),
+                 qPrintable(QStringLiteral("配置参数混进了模块结果规范：%1").arg(f.key)));
+    }
+
+    cv::Mat img(100, 100, CV_8UC1, cv::Scalar(0));
+    cv::rectangle(img, cv::Rect(30, 30, 10, 10), cv::Scalar(255), cv::FILLED);
+    node.setParam(QStringLiteral("morphType"), 0);
+    node.setParam(QStringLiteral("iterations"), 1);
+    node.setParam(QStringLiteral("roiRectRow"), 20);
+    node.setParam(QStringLiteral("roiRectCol"), 20);
+    node.setParam(QStringLiteral("roiRectWidth"), 20);
+    node.setParam(QStringLiteral("roiRectHeight"), 20);
+    node.setInputImage(OpencvUtil::matToHimage(img));
+    node.run(false);
+
+    QVERIFY2(node.getParam(QStringLiteral("moduleStatus")).toBool(), "形态学用例执行失败");
+    QCOMPARE(node.getParam(QStringLiteral("roiCenterX")).toDouble(), 30.0);
+    QCOMPARE(node.getParam(QStringLiteral("roiCenterY")).toDouble(), 30.0);
+    QCOMPARE(node.getParam(QStringLiteral("roiWidth")).toDouble(), 20.0);
+    QCOMPARE(node.getParam(QStringLiteral("roiHeight")).toDouble(), 20.0);
+    QCOMPARE(node.getParam(QStringLiteral("roiAngle")).toDouble(), 0.0);
 }
 
 // VM 滤波口径：高斯核/中值矩形核；ROI 外保留原图。
@@ -1341,6 +1604,287 @@ void NodeCoreTest::testBlobVmOutputAndBoundary()
     }
 }
 
+// VM Blob「模块结果」展示口径：官方字段顺序、配置参数不混入、逐斑点数组与分组一一对应。
+void NodeCoreTest::testBlobResultDisplaySpec()
+{
+    OpencvBlobNode blob;
+    blob.init();
+
+    // ① 规范：模块级 4 项 + 18 项逐斑点（斑点%1）+ 5 项检测区域，且不含任何配置键
+    const QVector<NodeResultField> spec = blob.resultDisplayFields();
+    QCOMPARE(int(spec.size()), 27);
+    QCOMPARE(spec.at(0).key, QStringLiteral("elapsedMs"));
+    QCOMPARE(spec.at(0).label, QStringLiteral("耗时"));
+    QCOMPARE(spec.at(0).unit, QStringLiteral("ms"));
+    QCOMPARE(spec.at(1).key, QStringLiteral("moduleStatus"));
+    QCOMPARE(spec.at(1).label, QStringLiteral("模块状态"));
+    QCOMPARE(spec.at(2).key, QStringLiteral("blobCount"));
+    QCOMPARE(spec.at(2).label, QStringLiteral("Blob个数"));
+    QCOMPARE(spec.at(3).key, QStringLiteral("totalBlobArea"));
+    QCOMPARE(spec.at(3).label, QStringLiteral("总面积"));
+    QCOMPARE(spec.at(4).key, QStringLiteral("blobStatuses"));
+    for (int i = 4; i < 22; ++i)   // 4 个模块级 + 18 个逐斑点，之后是 5 个检测区域字段
+        QCOMPARE(spec.at(i).group, QStringLiteral("斑点%1"));
+    for (const NodeResultField &f : spec) {
+        QVERIFY2(f.key != QStringLiteral("thresholdType")
+                     && f.key != QStringLiteral("lowThreshold")
+                     && f.key != QStringLiteral("roiRectRow")
+                     && f.key != QStringLiteral("showBlobBox"),
+                 qPrintable(QStringLiteral("配置参数混进了模块结果规范：%1").arg(f.key)));
+    }
+
+    // ② 逐斑点数组：两张横放矩形（20×10 与 10×10），不排序 ⇒ 数组顺序 = 连通域标签顺序
+    cv::Mat img(60, 60, CV_8UC1, cv::Scalar(0));
+    cv::rectangle(img, cv::Rect(10, 10, 20, 10), cv::Scalar(255), cv::FILLED);
+    cv::rectangle(img, cv::Rect(40, 20, 10, 10), cv::Scalar(255), cv::FILLED);
+    blob.setParam(QStringLiteral("thresholdType"), 1);
+    blob.setParam(QStringLiteral("lowThreshold"), 150);
+    blob.setParam(QStringLiteral("polarity"), 0);
+    blob.setParam(QStringLiteral("sortMode"), 2);   // 不排序
+    blob.setInputImage(OpencvUtil::matToHimage(img));
+    blob.run(false);
+    QVERIFY2(blob.getParam(QStringLiteral("moduleStatus")).toBool(), "Blob 用例执行失败");
+    QCOMPARE(blob.getParam(QStringLiteral("blobCount")).toInt(), 2);
+    QCOMPARE(blob.getParam(QStringLiteral("totalBlobArea")).toDouble(), 300.0);
+
+    auto text = [&blob](const char *key) {
+        return blob.getParam(QString::fromLatin1(key)).toString();
+    };
+    QCOMPARE(text("blobStatuses"), QStringLiteral("1,1"));
+    QCOMPARE(text("blobAreas"), QStringLiteral("200,100"));
+    QCOMPARE(text("blobCentroids"), QStringLiteral("19.50,14.50;44.50,24.50"));
+    QCOMPARE(text("blobCentroidXs"), QStringLiteral("19.50,44.50"));
+    QCOMPARE(text("blobCentroidYs"), QStringLiteral("14.50,24.50"));
+    QCOMPARE(text("blobBboxCenterXs"), QStringLiteral("19.50,44.50"));
+    QCOMPARE(text("blobBboxCenterYs"), QStringLiteral("14.50,24.50"));
+    QCOMPARE(text("blobBboxWidths"), QStringLiteral("20,10"));
+    QCOMPARE(text("blobBboxHeights"), QStringLiteral("10,10"));
+    QCOMPARE(text("blobRectangularities"), QStringLiteral("1.0000,1.0000"));
+
+    auto numbers = [&text](const char *key) {
+        QVector<double> out;
+        const QStringList parts =
+            text(key).split(QLatin1Char(','), Qt::SkipEmptyParts);
+        for (const QString &p : parts)
+            out.push_back(p.toDouble());
+        return out;
+    };
+    const QVector<double> perimeters = numbers("blobPerimeters");
+    const QVector<double> longAxes = numbers("blobLongAxes");
+    const QVector<double> shortAxes = numbers("blobShortAxes");
+    const QVector<double> angles = numbers("blobBoxAngles");
+    QCOMPARE(int(perimeters.size()), 2);
+    QCOMPARE(int(longAxes.size()), 2);
+    QCOMPARE(int(shortAxes.size()), 2);
+    QCOMPARE(int(angles.size()), 2);
+    QVERIFY2(perimeters.at(0) > 50.0 && perimeters.at(0) < 65.0,
+             qPrintable(QStringLiteral("20×10 矩形周长异常：%1").arg(perimeters.at(0))));
+    QVERIFY2(longAxes.at(0) > 18.0 && longAxes.at(0) < 21.0
+                 && shortAxes.at(0) > 8.0 && shortAxes.at(0) < 11.0,
+             qPrintable(QStringLiteral("20×10 长短轴异常：%1/%2")
+                            .arg(longAxes.at(0)).arg(shortAxes.at(0))));
+    for (double a : angles)
+        QVERIFY2(a >= -90.0 && a <= 90.0,
+                 qPrintable(QStringLiteral("角度越界（应 (-90,90]）：%1").arg(a)));
+    QVERIFY2(qAbs(longAxes.at(1) - 9.0) < 1.5 && qAbs(shortAxes.at(1) - 9.0) < 1.5,
+             qPrintable(QStringLiteral("10×10 长短轴异常：%1/%2")
+                            .arg(longAxes.at(1)).arg(shortAxes.at(1))));
+}
+
+// 其余算子的「模块结果」最低口径：HalconNode 默认 耗时/模块状态(+矩形 ROI 检测区域)，
+// 测量/识别类算子在默认口径上追加自己的结果字段；配置参数一律不出现。
+void NodeCoreTest::testRemainingResultDisplaySpecs()
+{
+    auto containsKey = [](const QVector<NodeResultField> &fields, const QString &key) {
+        for (const NodeResultField &f : fields) {
+            if (f.key == key)
+                return true;
+        }
+        return false;
+    };
+
+    // ① 默认口径：矩形 ROI 图像算子 = 7 项；无 ROI = 2 项
+    BlurNode blur;
+    blur.init();
+    const QVector<NodeResultField> blurSpec = blur.resultDisplayFields();
+    QCOMPARE(int(blurSpec.size()), 7);
+    QCOMPARE(blurSpec.at(0).key, QStringLiteral("elapsedMs"));
+    QCOMPARE(blurSpec.at(1).key, QStringLiteral("moduleStatus"));
+    QCOMPARE(blurSpec.at(2).key, QStringLiteral("roiCenterX"));
+    QCOMPARE(blurSpec.at(6).key, QStringLiteral("roiAngle"));
+    QVERIFY2(!containsKey(blurSpec, QStringLiteral("gaussKernelSize")),
+             "Blur 配置参数混进了结果规范");
+
+    MirrorNode mirror;
+    mirror.init();
+    QCOMPARE(int(mirror.resultDisplayFields().size()), 2);
+
+    // ② 灰度统计：结果字段 + 数值腿
+    OpencvPixelStatsNode stats;
+    stats.init();
+    const QVector<NodeResultField> statsSpec = stats.resultDisplayFields();
+    QCOMPARE(int(statsSpec.size()), 5);
+    QCOMPARE(statsSpec.at(2).key, QStringLiteral("minGray"));
+    QCOMPARE(statsSpec.at(4).key, QStringLiteral("meanGray"));
+    QVERIFY2(containsKey(statsSpec, QStringLiteral("minGray")), "灰度统计规范缺少 minGray");
+    {
+        cv::Mat gray(10, 10, CV_8UC1, cv::Scalar(0));
+        gray(cv::Rect(5, 0, 5, 10)).setTo(cv::Scalar(255));
+        stats.setInputImage(OpencvUtil::matToHimage(gray));
+        stats.run(false);
+        QVERIFY2(stats.getParam(QStringLiteral("moduleStatus")).toBool(), "灰度统计执行失败");
+        QCOMPARE(stats.getParam(QStringLiteral("minGray")).toDouble(), 0.0);
+        QCOMPARE(stats.getParam(QStringLiteral("maxGray")).toDouble(), 255.0);
+        QCOMPARE(stats.getParam(QStringLiteral("meanGray")).toDouble(), 127.5);
+    }
+
+    // ③ 角度测量：默认两条线（竖直 + 45° 斜线）→ 夹角 45°
+    OpencvAngleNode angle;
+    angle.init();
+    const QVector<NodeResultField> angleSpec = angle.resultDisplayFields();
+    QCOMPARE(int(angleSpec.size()), 12);
+    QVERIFY2(containsKey(angleSpec, QStringLiteral("angle")), "角度规范缺少夹角");
+    QVERIFY2(containsKey(angleSpec, QStringLiteral("parallel")), "角度规范缺少平行标记");
+    angle.run(false);
+    QVERIFY2(angle.getParam(QStringLiteral("moduleStatus")).toBool(), "角度测量执行失败");
+    QVERIFY2(qAbs(angle.getParam(QStringLiteral("angle")).toDouble() - 45.0) < 1e-6,
+             qPrintable(QStringLiteral("默认夹角应为 45°，实际 %1")
+                            .arg(angle.getParam(QStringLiteral("angle")).toDouble())));
+
+    // ④ 边缘检测 / 拟合 / 识别类：字段数量与关键键
+    OpencvEdgeNode edge;
+    edge.init();
+    const QVector<NodeResultField> edgeSpec = edge.resultDisplayFields();
+    QCOMPARE(int(edgeSpec.size()), 3);
+    QCOMPARE(edgeSpec.at(2).key, QStringLiteral("edgePixels"));
+
+    OpencvFitLineNode fitLine;
+    fitLine.init();
+    const QVector<NodeResultField> fitLineSpec = fitLine.resultDisplayFields();
+    QCOMPARE(int(fitLineSpec.size()), 11);
+    QVERIFY2(containsKey(fitLineSpec, QStringLiteral("fitAngle")), "直线拟合规范缺少角度");
+    QVERIFY2(containsKey(fitLineSpec, QStringLiteral("fitPointCount")), "直线拟合规范缺少点数");
+
+    OpencvFitCircleNode fitCircle;
+    fitCircle.init();
+    const QVector<NodeResultField> fitCircleSpec = fitCircle.resultDisplayFields();
+    QCOMPARE(int(fitCircleSpec.size()), 11);
+    QVERIFY2(containsKey(fitCircleSpec, QStringLiteral("fitRadius")), "圆拟合规范缺少半径");
+
+    OpencvQrNode qr;
+    qr.init();
+    const QVector<NodeResultField> qrSpec = qr.resultDisplayFields();
+    QCOMPARE(int(qrSpec.size()), 4);
+    QCOMPARE(qrSpec.at(2).key, QStringLiteral("qrText"));
+    QCOMPARE(qrSpec.at(3).key, QStringLiteral("decodeCount"));
+
+    OpencvClassifyNode classify;
+    classify.init();
+    const QVector<NodeResultField> classifySpec = classify.resultDisplayFields();
+    QCOMPARE(int(classifySpec.size()), 5);
+    QCOMPARE(classifySpec.at(2).key, QStringLiteral("classId"));
+    QCOMPARE(classifySpec.at(4).key, QStringLiteral("confidence"));
+
+    OpencvDefectNode defect;
+    defect.init();
+    const QVector<NodeResultField> defectSpec = defect.resultDisplayFields();
+    QCOMPARE(int(defectSpec.size()), 9);
+    QCOMPARE(defectSpec.at(7).key, QStringLiteral("defectCount"));
+    QCOMPARE(defectSpec.at(8).key, QStringLiteral("defectArea"));
+
+    OpencvFeatureMatchNode feature;
+    feature.init();
+    const QVector<NodeResultField> featureSpec = feature.resultDisplayFields();
+    QCOMPARE(int(featureSpec.size()), 11);
+    QVERIFY2(containsKey(featureSpec, QStringLiteral("matchScore")), "特征匹配规范缺少分数");
+    QVERIFY2(containsKey(featureSpec, QStringLiteral("inlierCount")), "特征匹配规范缺少内点数");
+
+    // ⑤ 识别 / 深度学习 / 标定 / 跟踪类：字段数量与关键键
+    ZxingBarcodeNode zxing;
+    zxing.init();
+    const QVector<NodeResultField> zxingSpec = zxing.resultDisplayFields();
+    QCOMPARE(int(zxingSpec.size()), 4);
+    QCOMPARE(zxingSpec.at(2).key, QStringLiteral("barcodeText"));
+    QCOMPARE(zxingSpec.at(3).key, QStringLiteral("barcodeFormat"));
+
+    TesseractOcrNode tess;
+    tess.init();
+    const QVector<NodeResultField> tessSpec = tess.resultDisplayFields();
+    QCOMPARE(int(tessSpec.size()), 7);
+    QCOMPARE(tessSpec.at(2).key, QStringLiteral("ocrText"));
+    QCOMPARE(tessSpec.at(6).key, QStringLiteral("ocrWordCount"));
+
+    DeepOcrNode deepOcr;
+    deepOcr.init();
+    const QVector<NodeResultField> deepOcrSpec = deepOcr.resultDisplayFields();
+    QCOMPARE(int(deepOcrSpec.size()), 7);
+    QVERIFY2(containsKey(deepOcrSpec, QStringLiteral("ocrConfidence")),
+             "DeepOCR 规范缺少置信度");
+
+    DnnInferNode dnnInfer;
+    dnnInfer.init();
+    const QVector<NodeResultField> dnnInferSpec = dnnInfer.resultDisplayFields();
+    QCOMPARE(int(dnnInferSpec.size()), 6);
+    QCOMPARE(dnnInferSpec.at(2).key, QStringLiteral("topClass"));
+    QCOMPARE(dnnInferSpec.at(5).key, QStringLiteral("topKClasses"));
+
+    DnnDetectNode dnnDetect;
+    dnnDetect.init();
+    const QVector<NodeResultField> dnnDetectSpec = dnnDetect.resultDisplayFields();
+    QCOMPARE(int(dnnDetectSpec.size()), 3);
+    QCOMPARE(dnnDetectSpec.at(2).key, QStringLiteral("detCount"));
+
+    DnnSegmentNode dnnSegment;
+    dnnSegment.init();
+    const QVector<NodeResultField> dnnSegmentSpec = dnnSegment.resultDisplayFields();
+    QCOMPARE(int(dnnSegmentSpec.size()), 5);
+    QCOMPARE(dnnSegmentSpec.at(2).key, QStringLiteral("segmentCount"));
+    QCOMPARE(dnnSegmentSpec.at(4).key, QStringLiteral("sigmoidApplied"));
+
+    AnomalyDetectNode anomaly;
+    anomaly.init();
+    const QVector<NodeResultField> anomalySpec = anomaly.resultDisplayFields();
+    QCOMPARE(int(anomalySpec.size()), 12);   // 7 公共（含矩形 ROI）+ 5 异常统计
+    QCOMPARE(anomalySpec.at(7).key, QStringLiteral("anomalyCount"));
+    QCOMPARE(anomalySpec.at(11).key, QStringLiteral("sampleCount"));
+
+    ObjectCountingNode counting;
+    counting.init();
+    const QVector<NodeResultField> countingSpec = counting.resultDisplayFields();
+    QCOMPARE(int(countingSpec.size()), 5);
+    QCOMPARE(countingSpec.at(2).key, QStringLiteral("totalCount"));
+    QCOMPARE(countingSpec.at(4).key, QStringLiteral("activeTracks"));
+
+    OpencvTrainClassifierNode train;
+    train.init();
+    const QVector<NodeResultField> trainSpec = train.resultDisplayFields();
+    QCOMPARE(int(trainSpec.size()), 6);
+    QCOMPARE(trainSpec.at(2).key, QStringLiteral("trainStatus"));
+    QCOMPARE(trainSpec.at(5).key, QStringLiteral("featDim"));
+
+    OpencvCalibNode calib;
+    calib.init();
+    const QVector<NodeResultField> calibSpec = calib.resultDisplayFields();
+    QCOMPARE(int(calibSpec.size()), 14);
+    QCOMPARE(calibSpec.at(2).key, QStringLiteral("calibrated"));
+    QCOMPARE(calibSpec.at(13).key, QStringLiteral("calibP2"));
+
+    OpencvTrackNode track;
+    track.init();
+    const QVector<NodeResultField> trackSpec = track.resultDisplayFields();
+    QCOMPARE(int(trackSpec.size()), 6);
+    QCOMPARE(trackSpec.at(2).key, QStringLiteral("trackCol"));
+    QCOMPARE(trackSpec.at(5).key, QStringLiteral("trackLost"));
+
+    FeatureSearchNode featureSearch;
+    featureSearch.init();
+    const QVector<NodeResultField> searchSpec = featureSearch.resultDisplayFields();
+    QCOMPARE(int(searchSpec.size()), 7);
+    QCOMPARE(searchSpec.at(2).key, QStringLiteral("hitCount"));
+    QCOMPARE(searchSpec.at(6).key, QStringLiteral("topInliers"));
+}
+
+
 // VM 卡尺工具（IMVSCaliperModu）对齐：滤波尺寸 / 边缘1极性 / 排序方式 / 越界填充。
 // 官方工作流：投影 → 一维差分滤波（滤波核可调）→ 局部极值 → 得分 → 亚像素边缘点。
 void NodeCoreTest::testCaliperVmParams()
@@ -1362,6 +1906,9 @@ void NodeCoreTest::testCaliperVmParams()
         // 阈值 60：真实阶跃 150 一定能过；随机噪声在 k=1 下相邻差常过 60，
         // 大核把噪声平均后梯度幅值降下来就过不了 —— 正是 VM「滤波尺寸 + 边缘阈值」的配合。
         c.setParam(QStringLiteral("threshold"), 60.0);
+        // VM 默认 EdgeMode=1（边缘对）、最大结果数=1；本用例主体按单边缘 + 全量输出
+        c.setParam(QStringLiteral("edgeMode"), 0);
+        c.setParam(QStringLiteral("maxCount"), 1000);
         c.setInputImage(OpencvUtil::matToHimage(img));
     };
     auto firstPoint = [](OpencvCaliperNode &c) -> QPointF {
@@ -1404,27 +1951,26 @@ void NodeCoreTest::testCaliperVmParams()
     }
 
     // ② 边缘1极性（边对模式）：约束第二条边后，边对数应明显变化
+    //    VM 枚举索引与官方 UI 顺序一致：0=从黑到白、1=从白到黑、2=任意极性
     {
         OpencvCaliperNode any;
         setup(any, baseImg(), 100.0);
         any.setParam(QStringLiteral("edgeMode"), 1);
-        any.setParam(QStringLiteral("pairWidth"), 30);
+        any.setParam(QStringLiteral("edge1Polarity"), 2);
         any.run(false);
         const int nAny = any.getParam(QStringLiteral("pairCount")).toInt();
 
         OpencvCaliperNode restricted;
         setup(restricted, baseImg(), 100.0);
         restricted.setParam(QStringLiteral("edgeMode"), 1);
-        restricted.setParam(QStringLiteral("pairWidth"), 30);
-        restricted.setParam(QStringLiteral("edge1Polarity"), 1);
+        restricted.setParam(QStringLiteral("edge1Polarity"), 0);
         restricted.run(false);
         const int nP1 = restricted.getParam(QStringLiteral("pairCount")).toInt();
 
         OpencvCaliperNode restricted2;
         setup(restricted2, baseImg(), 100.0);
         restricted2.setParam(QStringLiteral("edgeMode"), 1);
-        restricted2.setParam(QStringLiteral("pairWidth"), 30);
-        restricted2.setParam(QStringLiteral("edge1Polarity"), 2);
+        restricted2.setParam(QStringLiteral("edge1Polarity"), 1);
         restricted2.run(false);
         const int nP2 = restricted2.getParam(QStringLiteral("pairCount")).toInt();
         qInfo("caliper-edge1-polarity: any=%d p1=%d p2=%d", nAny, nP1, nP2);
@@ -1490,7 +2036,11 @@ void NodeCoreTest::testCaliperScoring()
         c.setParam(QStringLiteral("step"), 20.0);
         c.setParam(QStringLiteral("threshold"), 40.0);
         c.setParam(QStringLiteral("edgeMode"), 1);
-        c.setParam(QStringLiteral("pairWidth"), 200);   // 放宽硬上限，两种宽度都能配对
+        c.setParam(QStringLiteral("maxCount"), 1000);
+        // 每个子用例只启用自己验证的计分项，避免默认「间距差」干扰
+        c.setParam(QStringLiteral("scoreSpacingDiff"), false);
+        c.setParam(QStringLiteral("scoreContrast"), false);
+        c.setParam(QStringLiteral("scorePairContrast"), false);
         c.setInputImage(OpencvUtil::matToHimage(makeImg()));
     };
     auto widths = [](OpencvCaliperNode &c) -> QVector<double> {
@@ -1536,12 +2086,13 @@ void NodeCoreTest::testCaliperScoring()
                  "无计分项时分数只由对比度决定，两条亮带对比度相同 ⇒ 分数应相等");
     }
 
-    // ② 启用间距计分 + 边缘对宽度 20：宽度 20 的边对分数严格更高
+    // ② 启用间距差计分 + 边缘对宽度 20：宽度 20 的边对分数更高。
+    //    间距差输入 = |(距离−宽度)/宽度|，远距离候选偏差大、得分低，不会被选中。
     {
         OpencvCaliperNode c;
         setup(c);
         c.setParam(QStringLiteral("expectedPairWidth"), 20.0);
-        c.setParam(QStringLiteral("scoreSpacing"), true);
+        c.setParam(QStringLiteral("scoreSpacingDiff"), true);
         c.run(false);
         const QVector<double> w = widths(c);
         const QVector<double> s = scores(c);
@@ -1563,7 +2114,7 @@ void NodeCoreTest::testCaliperScoring()
         OpencvCaliperNode c;
         setup(c);
         c.setParam(QStringLiteral("expectedPairWidth"), 20.0);
-        c.setParam(QStringLiteral("scoreSpacing"), true);
+        c.setParam(QStringLiteral("scoreSpacingDiff"), true);
         c.setParam(QStringLiteral("maxCount"), 1);
         c.run(false);
         const QVector<double> w = widths(c);
@@ -1574,13 +2125,17 @@ void NodeCoreTest::testCaliperScoring()
                  "maxCount=1 应留下分数最高（宽度=期望宽度）的边对");
     }
 
-    // ④ 曲线类型反转（递增）：偏差大的反而分高 → maxCount=1 留下宽度 15 的边对
+    // ④ 间距曲线改「递减」：比值越小分越高 → maxCount=1 留下宽度 15 的边对。
+    //    间距输入 = 距离/边缘对宽度（理想 1）；递减曲线 X0=0/X1=1/XC=1 时
+    //    ratio=1.0 得 0 分、ratio=0.75 得 25 分。
     {
         OpencvCaliperNode c;
         setup(c);
         c.setParam(QStringLiteral("expectedPairWidth"), 20.0);
         c.setParam(QStringLiteral("scoreSpacing"), true);
-        c.setParam(QStringLiteral("curveType"), 0);
+        c.setParam(QStringLiteral("spacingCurve"), 1);
+        c.setParam(QStringLiteral("spacingX1"), 1.0);
+        c.setParam(QStringLiteral("spacingXC"), 1.0);
         c.setParam(QStringLiteral("maxCount"), 1);
         c.run(false);
         const QVector<double> w = widths(c);
@@ -1614,8 +2169,11 @@ void NodeCoreTest::testCaliperPositionScoringAndResults()
         c.setParam(QStringLiteral("step"), 20.0);
         c.setParam(QStringLiteral("threshold"), 40.0);
         c.setParam(QStringLiteral("edgeMode"), 1);
-        c.setParam(QStringLiteral("pairWidth"), 200);
         c.setParam(QStringLiteral("maxCount"), 1);
+        // 只验证位置类计分：关掉默认「间距差」与对比度，避免评分相乘后全部归零
+        c.setParam(QStringLiteral("scoreSpacingDiff"), false);
+        c.setParam(QStringLiteral("scoreContrast"), false);
+        c.setParam(QStringLiteral("scorePairContrast"), false);
         c.setInputImage(OpencvUtil::matToHimage(makeImg()));
     };
     auto firstPosition = [](OpencvCaliperNode &c) -> double {
@@ -1676,7 +2234,7 @@ void NodeCoreTest::testCaliperPositionScoringAndResults()
     {
         OpencvCaliperNode c;
         setup(c);
-        c.setParam(QStringLiteral("maxCount"), 0);
+        c.setParam(QStringLiteral("maxCount"), 1000);
         c.run(false);
         const int n = c.getParam(QStringLiteral("edgeCount")).toInt();
         const QStringList pol = c.getParam(QStringLiteral("edgePolarities")).toString()
@@ -1733,6 +2291,8 @@ void NodeCoreTest::testCaliperProjectionDirection()
         c.setParam(QStringLiteral("step"), 5.0);
         c.setParam(QStringLiteral("threshold"), 40.0);
         c.setParam(QStringLiteral("edgeMode"), 0);
+        c.setParam(QStringLiteral("maxCount"), 1000);
+        c.setParam(QStringLiteral("scoreContrast"), false);   // 本用例只看几何，不计分
         c.setParam(QStringLiteral("projectionDirection"), dir);
         c.setInputImage(OpencvUtil::matToHimage(img));
     };
@@ -1835,39 +2395,43 @@ void NodeCoreTest::testCaliperParamVisibility()
     QVERIFY(mode);
     QVERIFY(contrast);
     QVERIFY(panel->findChild<QWidget *>(QStringLiteral("edge1Polarity")));
-    QVERIFY(panel->findChild<QWidget *>(QStringLiteral("curveX0")));
+    QVERIFY(panel->findChild<QWidget *>(QStringLiteral("spacingDiffX0")));
 
-    // ① 单边缘（默认）：边对专属参数隐藏；计分全关时曲线参数也隐藏
-    QCOMPARE(mode->currentIndex(), 0);
-    QVERIFY2(rowIsHidden(QStringLiteral("edge1Polarity")), "单边缘模式不应显示边缘1极性");
-    QVERIFY2(rowIsHidden(QStringLiteral("expectedPairWidth")), "单边缘模式不应显示边缘对宽度");
-    QVERIFY2(rowIsHidden(QStringLiteral("scoreSpacing")), "单边缘模式不应显示间距计分");
-    QVERIFY2(rowIsHidden(QStringLiteral("curveX0")), "计分全关时不应显示曲线参数");
+    // 官方 XML 默认：EdgeMode=1（边缘对）、ContrastEnable=True（单边缘对比度）、
+    // ContrastPairEnable=False、SizeDiffNormEnable=True（间距差）。
+    QCOMPARE(mode->currentIndex(), 1);
 
-    // ② 切到边缘对：边对专属参数出现
-    mode->setCurrentIndex(1);
+    // ① 默认边缘对：边对专属参数可见；单边缘对比度隐藏、边缘对对比度可见
     QVERIFY2(!rowIsHidden(QStringLiteral("edge1Polarity")), "边缘对模式应显示边缘1极性");
     QVERIFY2(!rowIsHidden(QStringLiteral("expectedPairWidth")), "边缘对模式应显示边缘对宽度");
     QVERIFY2(!rowIsHidden(QStringLiteral("scoreSpacing")), "边缘对模式应显示间距计分");
+    QVERIFY2(rowIsHidden(QStringLiteral("scoreContrast")), "边缘对模式应隐藏单边缘对比度");
+    QVERIFY2(!rowIsHidden(QStringLiteral("scorePairContrast")), "边缘对模式应显示边缘对对比度");
+    // 默认「间距差」启用 ⇒ 它自己的曲线参数可见
+    QVERIFY2(!rowIsHidden(QStringLiteral("spacingDiffX0")), "默认间距差启用，应显示其曲线参数");
 
-    // ③ 官方：计分项名称随边缘模式变化
-    const QString pairLabel = labelText(QStringLiteral("scoreContrast"));
+    // ② 切到单边缘：边对专属参数隐藏；单边缘对比度出现、边缘对对比度隐藏
     mode->setCurrentIndex(0);
-    const QString singleLabel = labelText(QStringLiteral("scoreContrast"));
-    qInfo("caliper-visibility: pair='%s' single='%s'",
-          qPrintable(pairLabel), qPrintable(singleLabel));
-    QVERIFY2(pairLabel.contains(QStringLiteral("边缘对对比度")),
-             qPrintable(QStringLiteral("边缘对模式应叫「边缘对对比度」，实际 %1").arg(pairLabel)));
-    QVERIFY2(singleLabel.contains(QStringLiteral("对比度"))
-                 && !singleLabel.contains(QStringLiteral("边缘对")),
-             qPrintable(QStringLiteral("单边缘模式应叫「对比度」，实际 %1").arg(singleLabel)));
+    QVERIFY2(rowIsHidden(QStringLiteral("edge1Polarity")), "单边缘模式不应显示边缘1极性");
+    QVERIFY2(rowIsHidden(QStringLiteral("expectedPairWidth")), "单边缘模式不应显示边缘对宽度");
+    QVERIFY2(rowIsHidden(QStringLiteral("scoreSpacing")), "单边缘模式不应显示间距计分");
+    QVERIFY2(!rowIsHidden(QStringLiteral("scoreContrast")), "单边缘模式应显示对比度");
+    QVERIFY2(rowIsHidden(QStringLiteral("scorePairContrast")), "单边缘模式不应显示边缘对对比度");
+    QVERIFY2(rowIsHidden(QStringLiteral("spacingDiffX0")),
+             "单边缘模式不应显示间距差（pairOnly）的曲线参数");
 
-    // ④ 勾任一计分开关 → 曲线参数出现；取消 → 再隐藏
-    contrast->setChecked(true);
-    QVERIFY2(!rowIsHidden(QStringLiteral("curveX0")), "启用计分后应显示曲线参数");
-    QVERIFY(!rowIsHidden(QStringLiteral("curveType")));
+    // ③ 两个对比度开关的标签与官方 XML 一致（ContrastEnable / ContrastPairEnable）
+    QCOMPARE(labelText(QStringLiteral("scoreContrast")), QStringLiteral("对比度"));
+    QCOMPARE(labelText(QStringLiteral("scorePairContrast")), QStringLiteral("边缘对对比度"));
+
+    // ④ 单边缘下把适用的计分项全关 → 曲线参数隐藏；启用「位置」→ 重新出现
+    QCheckBox *position = panel->findChild<QCheckBox *>(QStringLiteral("scorePosition"));
+    QVERIFY(position);
     contrast->setChecked(false);
-    QVERIFY2(rowIsHidden(QStringLiteral("curveX0")), "关闭计分后曲线参数应重新隐藏");
+    QVERIFY2(rowIsHidden(QStringLiteral("contrastX0")), "对比度关闭后不应显示它的曲线参数");
+    position->setChecked(true);
+    QVERIFY2(!rowIsHidden(QStringLiteral("positionX0")), "启用位置计分后应显示它的曲线参数");
+    QVERIFY(!rowIsHidden(QStringLiteral("positionCurve")));
 
     // ⑤ updateParamPanel 之后显隐仍保持（面板恢复路径）
     node.updateParamPanel(panel.data());
@@ -1894,6 +2458,8 @@ void NodeCoreTest::testCaliperBlurEdge()
         c.setParam(QStringLiteral("step"), 10.0);
         c.setParam(QStringLiteral("threshold"), 50.0);
         c.setParam(QStringLiteral("edgeMode"), 0);
+        c.setParam(QStringLiteral("maxCount"), 1000);
+        c.setParam(QStringLiteral("scoreContrast"), false);   // 只看候选数量
         c.setParam(QStringLiteral("blurEdge"), blur);
         c.setInputImage(OpencvUtil::matToHimage(img));
         c.run(false);
@@ -1905,6 +2471,227 @@ void NodeCoreTest::testCaliperBlurEdge()
     qInfo("caliper-blur-edge: off=%d on=%d", nOff, nOn);
     QVERIFY2(nOff == 0, "对比度 30 < 阈值 50，关闭模糊边缘时不应检出");
     QVERIFY2(nOn > 0, "开启模糊边缘后应纳入更弱的候选");
+}
+
+// VM「边缘对」配对：官方未给算法，工程口径是「同剖面内异极性、全部候选对，
+// 按分数降序贪心、非重叠」。旧实现强制「原始序列相邻两条边」，一条夹在中间的噪声边
+// 就能把真实边对拆散。本用例专门钉住这一点。
+void NodeCoreTest::testCaliperPairSelection()
+{
+    // 亮带 x=90..110，内部再压一条暗线 x=100..102：
+    // 剖面边缘序列 = 上升(90) / 下降(100) / 上升(102) / 下降(110)。
+    // 真实边对是 (90,110) 宽 20；旧「相邻配对」只会得到 (90,100)=10 与 (102,110)=8。
+    cv::Mat img(200, 300, CV_8UC1, cv::Scalar(50));
+    cv::rectangle(img, cv::Rect(90, 0, 20, 200), cv::Scalar(200), cv::FILLED);
+    cv::rectangle(img, cv::Rect(100, 0, 2, 200), cv::Scalar(80), cv::FILLED);
+
+    OpencvCaliperNode c;
+    c.init();
+    c.setParam(QStringLiteral("row1"), 50.0);
+    c.setParam(QStringLiteral("col1"), 150.0);
+    c.setParam(QStringLiteral("row2"), 150.0);
+    c.setParam(QStringLiteral("col2"), 150.0);
+    c.setParam(QStringLiteral("halfWidth"), 100);
+    c.setParam(QStringLiteral("step"), 20.0);
+    c.setParam(QStringLiteral("threshold"), 40.0);
+    c.setParam(QStringLiteral("edgeMode"), 1);
+    c.setParam(QStringLiteral("maxCount"), 1000);
+    // 默认「间距差 + 边缘对宽度 10」会把宽 10/8 的噪声对排到最前，遮住真实宽 20 的边对；
+    // 本用例只验证配对策略，关掉计分让候选按对比度选优。
+    c.setParam(QStringLiteral("scoreSpacingDiff"), false);
+    c.setInputImage(OpencvUtil::matToHimage(img));
+    c.run(false);
+
+    QVector<double> widths;
+    if (auto obj = c.getOutputData(3)) {
+        const MeasureResult r = obj->getMeasureResult();
+        for (int i = 4; i < r.extraValues.size(); i += 5)
+            widths.append(r.extraValues[i]);
+    }
+    bool hasTruePair = false;
+    for (double w : widths)
+        hasTruePair = hasTruePair || qAbs(w - 20.0) <= 1.5;
+    qInfo("caliper-pair-selection: pairs=%d true20=%d", int(widths.size()), int(hasTruePair));
+    QVERIFY2(hasTruePair,
+             qPrintable(QStringLiteral("中间噪声边不应拆散真实边对（宽 20）：%1")
+                            .arg(widths.size())));
+}
+
+// VM「结果判断」：官方 XML 的数量判断 / 宽度判断 / 边缘点0X 判断。
+// 不满足时模块判 NG，原因写 judgeNote（*Note 口径，失败轮进结果面板）。
+void NodeCoreTest::testCaliperJudgment()
+{
+    cv::Mat img(200, 200, CV_8UC1, cv::Scalar(50));
+    cv::rectangle(img, cv::Rect(90, 0, 20, 200), cv::Scalar(200), cv::FILLED);
+
+    auto setup = [&img](OpencvCaliperNode &c) {
+        c.init();
+        c.setParam(QStringLiteral("row1"), 50.0);
+        c.setParam(QStringLiteral("col1"), 100.0);
+        c.setParam(QStringLiteral("row2"), 150.0);
+        c.setParam(QStringLiteral("col2"), 100.0);
+        c.setParam(QStringLiteral("halfWidth"), 30);
+        c.setParam(QStringLiteral("step"), 5.0);
+        c.setParam(QStringLiteral("threshold"), 60.0);
+        c.setParam(QStringLiteral("edgeMode"), 0);
+        c.setParam(QStringLiteral("maxCount"), 1000);
+        c.setParam(QStringLiteral("scoreContrast"), false);   // 不做分序，保持采集顺序
+        c.setInputImage(OpencvUtil::matToHimage(img));
+    };
+
+    // ① 数量判断：结果数 50，上限 10 → NG；上限 1000 → OK
+    {
+        OpencvCaliperNode c;
+        setup(c);
+        c.setParam(QStringLiteral("numLimitEnable"), true);
+        c.setParam(QStringLiteral("numLimitLow"), 1);
+        c.setParam(QStringLiteral("numLimitHigh"), 10);
+        c.run(false);
+        QVERIFY2(!c.getParam(QStringLiteral("moduleStatus")).toBool(), "数量超上限应判 NG");
+        QVERIFY2(c.getParam(QStringLiteral("judgeNote")).toString()
+                     .contains(QStringLiteral("数量判断失败")),
+                 qPrintable(c.getParam(QStringLiteral("judgeNote")).toString()));
+
+        OpencvCaliperNode ok;
+        setup(ok);
+        ok.setParam(QStringLiteral("numLimitEnable"), true);
+        ok.setParam(QStringLiteral("numLimitLow"), 1);
+        ok.setParam(QStringLiteral("numLimitHigh"), 1000);
+        ok.run(false);
+        QVERIFY2(ok.getParam(QStringLiteral("moduleStatus")).toBool(), "数量在范围内应判 OK");
+    }
+
+    // ①b 框架级：判 NG 走 execute 时也保留输出（画布/结果面板能看到红色结果）
+    {
+        OpencvCaliperNode c;
+        setup(c);
+        c.setParam(QStringLiteral("numLimitEnable"), true);
+        c.setParam(QStringLiteral("numLimitLow"), 1);
+        c.setParam(QStringLiteral("numLimitHigh"), 10);
+        auto imgObj = QSharedPointer<DataObject>::create();
+        imgObj->setHImage(OpencvUtil::matToHimage(img));
+        c.setInputData(0, imgObj);
+        QVERIFY2(!c.execute(), "判 NG 应返回失败");
+        QVERIFY2(c.isResultNg(), "应标记为「判 NG 但结果有效」");
+        QVERIFY2(c.getOutputData(1) != nullptr, "判 NG 后边缘点端口不应被清空");
+        QVERIFY2(c.getOutputData(1)->getMeasureResult().extraValues.size() > 0,
+                 "判 NG 后边缘点结果应仍然存在");
+
+        // VM 口径：判 NG 但结果有效时，画布结果叠加层应为红色（含边对连线/宽度文字）
+        ImageDisplayController ctrl(nullptr, nullptr, nullptr);
+        const QVector<OverlayShape> overlay = ctrl.collectOverlayFromNode(&c);
+        bool foundRed = false;
+        for (const OverlayShape &shape : overlay) {
+            if (shape.color.red() > 200 && shape.color.green() < 100)
+                foundRed = true;
+        }
+        QVERIFY2(foundRed, "判 NG 后叠加层应改为红色");
+    }
+
+    // ② 宽度判断（边对模式）：宽 20 不在 [30,40] → NG；[18,22] → OK
+    {
+        OpencvCaliperNode c;
+        setup(c);
+        c.setParam(QStringLiteral("edgeMode"), 1);
+        c.setParam(QStringLiteral("scoreSpacingDiff"), false);
+        c.setParam(QStringLiteral("edgeWidthLimitEnable"), true);
+        c.setParam(QStringLiteral("edgeWidthLimitLow"), 30);
+        c.setParam(QStringLiteral("edgeWidthLimitHigh"), 40);
+        c.run(false);
+        QVERIFY2(!c.getParam(QStringLiteral("moduleStatus")).toBool(), "边对宽度越界应判 NG");
+        QVERIFY2(c.getParam(QStringLiteral("judgeNote")).toString()
+                     .contains(QStringLiteral("宽度判断失败")),
+                 qPrintable(c.getParam(QStringLiteral("judgeNote")).toString()));
+
+        OpencvCaliperNode ok;
+        setup(ok);
+        ok.setParam(QStringLiteral("edgeMode"), 1);
+        ok.setParam(QStringLiteral("scoreSpacingDiff"), false);
+        ok.setParam(QStringLiteral("edgeWidthLimitEnable"), true);
+        ok.setParam(QStringLiteral("edgeWidthLimitLow"), 18);
+        ok.setParam(QStringLiteral("edgeWidthLimitHigh"), 22);
+        ok.run(false);
+        QVERIFY2(ok.getParam(QStringLiteral("moduleStatus")).toBool(), "宽度在范围内应判 OK");
+    }
+
+    // ③ 边缘点0X判断：首个边缘点在 x≈109.5，范围 [0,50] → NG；[100,120] → OK
+    {
+        OpencvCaliperNode c;
+        setup(c);
+        c.setParam(QStringLiteral("edge0PointXLimitEnable"), true);
+        c.setParam(QStringLiteral("edge0PointXLimitLow"), 0);
+        c.setParam(QStringLiteral("edge0PointXLimitHigh"), 50);
+        c.run(false);
+        QVERIFY2(!c.getParam(QStringLiteral("moduleStatus")).toBool(), "边缘点X越界应判 NG");
+        QVERIFY2(c.getParam(QStringLiteral("judgeNote")).toString()
+                     .contains(QStringLiteral("边缘点0X判断失败")),
+                 qPrintable(c.getParam(QStringLiteral("judgeNote")).toString()));
+
+        OpencvCaliperNode ok;
+        setup(ok);
+        ok.setParam(QStringLiteral("edge0PointXLimitEnable"), true);
+        ok.setParam(QStringLiteral("edge0PointXLimitLow"), 100);
+        ok.setParam(QStringLiteral("edge0PointXLimitHigh"), 120);
+        ok.run(false);
+        QVERIFY2(ok.getParam(QStringLiteral("moduleStatus")).toBool(), "边缘点X在范围内应判 OK");
+    }
+}
+
+// P0 状态位契约：轮首统一复位。
+// ① 禁用节点走 NodeBase::execute() 的早退分支，根本不调 process() —— 只有
+//    execute() 开头的复位能清掉上一轮 NG；
+// ② 数据型节点走 processDataOutputs()，也要复位；
+// ③ 状态位改为 std::atomic 后读写仍正常。
+void NodeCoreTest::testResultNgRoundStartReset()
+{
+    OpencvPixelStatsNode stats;
+    stats.init();
+    stats.setEnabled(false);
+    stats.setResultNg(true);
+    QVERIFY(stats.isResultNg());
+    QVERIFY2(stats.execute(), "禁用节点应视为通过");
+    QVERIFY2(!stats.isResultNg(),
+             "禁用节点不调 process()，必须在 NodeBase::execute() 轮首复位 NG");
+
+    FormulaNode formula;
+    formula.init();
+    formula.setResultNg(true);
+    formula.process();          // 走 processDataOutputs() 孪生路径
+    QVERIFY2(!formula.isResultNg(), "processDataOutputs() 路径同样要复位 NG");
+
+    stats.setResultNg(true);
+    QVERIFY(stats.isResultNg());
+    stats.setResultNg(false);
+    QVERIFY(!stats.isResultNg());
+}
+
+// 覆写过 execute() 的节点也必须走 NodeBase::execute() 的统一判断入口。
+// ColorConversionNode 曾直接 `return process()`，绕过判断、轮首复位与异常保护。
+void NodeCoreTest::testCustomExecuteStillJudged()
+{
+    ColorConversionNode node;
+    node.init();
+    // 必须是彩色图：该节点对灰度图会直接报"无需转换"判失败，判断就没机会跑
+    cv::Mat img(16, 16, CV_8UC3, cv::Scalar(80, 100, 120));
+    auto obj = QSharedPointer<DataObject>::create();
+    obj->setHImage(OpencvUtil::matToHimage(img));
+    node.setInputData(0, obj);
+
+    QJsonObject c;
+    c.insert(QStringLiteral("param"), QStringLiteral("elapsedMs"));
+    c.insert(QStringLiteral("op"), QStringLiteral("<"));
+    c.insert(QStringLiteral("value"), QStringLiteral("0"));   // 耗时恒 >= 0 ⇒ 恒不满足
+    QJsonArray arr;
+    arr.append(c);
+    node.setParam(QStringLiteral("resJudgeMode"), 0);
+    node.setParam(QStringLiteral("resJudgeConditions"),
+                  QJsonDocument(arr).toJson(QJsonDocument::Compact));
+
+    QVERIFY2(!node.execute(), "覆写 execute() 的节点也必须应用统一结果判断");
+    QVERIFY2(node.isResultNg(), "应判 NG 但结果有效");
+    QVERIFY2(node.getParam(QStringLiteral("lastError")).toString().contains(QStringLiteral("耗时")),
+             qPrintable(QStringLiteral("公共字段 elapsedMs 应可读：%1")
+                            .arg(node.getParam(QStringLiteral("lastError")).toString())));
 }
 
 QTEST_MAIN(NodeCoreTest)

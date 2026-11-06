@@ -19,6 +19,8 @@ public:
     void run(bool autoSwitch = true) override;
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;
+    /// VM「模块结果」展示口径：累计计数/本帧新增/在跟目标数
+    QVector<NodeResultField> resultDisplayFields() const override;
 
     /// 清零累计计数（换批次/换料时用；也可把 resetCounter 参数置 true 触发一次）
     void resetCounting();

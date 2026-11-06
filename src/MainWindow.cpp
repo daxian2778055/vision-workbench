@@ -342,6 +342,11 @@ MainWindow::MainWindow(QWidget *parent) :
                 return (idx >= 0 && idx < m_flowScenes.size()) ? m_flowScenes[idx] : nullptr;
             });
             m_imageDisplay->setCanvasSelectionProvider([this]() { return m_selectedNode; });
+            // VM「结果显示 → 文本显示」的 {elapsed}/{结果键}：读执行器最近一次推送的结果快照
+            // （耗时只存在于 vars 里，节点参数表没有 elapsedMs）。
+            m_imageDisplay->setResultVarsProvider([this](NodeBase *node) -> QVariantMap {
+                return node ? m_lastModuleVars.value(node->moduleId()) : QVariantMap();
+            });
 
             // ---- 图像显示工具栏：适应 / 100% / 放大 / 缩小 / 十字线 ----
             {
@@ -1425,7 +1430,10 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
         if (ex != m_executor || !node)
             return;
         if (auto *rt = m_auxPanels ? m_auxPanels->resultTablePanel() : nullptr) {
-            rt->setModuleResult(node->moduleId(), node->fullName(), ok, elapsedMs, vars);
+            // VM「模块结果」口径：算子自己声明结果字段（顺序/名称/单位/精度），
+            // 未声明的配置参数不再混进结果表；未对齐的算子返回空表，走旧平铺行为。
+            rt->setModuleResult(node->moduleId(), node->fullName(), ok, elapsedMs, vars,
+                                node->resultDisplayFields());
         }
         // 供「变量引用」菜单构造引用列表（UI 线程缓存，不读执行线程内部状态）
         // U-18：判红轮的快照现在带"原因"字段，那是给人看的出口内容（结果面板／CSV／报告），

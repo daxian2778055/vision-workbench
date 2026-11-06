@@ -21,6 +21,8 @@ public:
     void run(bool autoSwitch = true) override;
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;
+    /// VM「模块结果」展示口径：检测目标个数
+    QVector<NodeResultField> resultDisplayFields() const override;
 
     /// 解析 YOLO 网络输出（兼容 v5 [1,N,C] 与 v8 [1,C,N] 布局），置信过滤 + NMS，
     /// 并把框坐标从网络输入空间（inputSize×inputSize）letterbox 映射回原图坐标。

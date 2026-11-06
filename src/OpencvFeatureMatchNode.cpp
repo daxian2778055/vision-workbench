@@ -458,3 +458,28 @@ void OpencvFeatureMatchNode::updateParamPanel(QWidget *panel)
 {
     updateAutoParamPanel(panel);
 }
+
+QVector<NodeResultField> OpencvFeatureMatchNode::resultDisplayFields() const
+{
+    // VM「模块结果」口径：模块级 耗时/模块状态 + 匹配点/分数/角度/尺度 + 特征点统计。
+    QVector<NodeResultField> fields = HalconNode::resultDisplayFields();
+    fields << resultValue(QStringLiteral("matchCol"), QStringLiteral("匹配点X"),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("matchRow"), QStringLiteral("匹配点Y"),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("matchScore"), QStringLiteral("匹配分数"),
+                          QString(), 4)
+           << resultValue(QStringLiteral("matchAngle"), QStringLiteral("匹配角度"),
+                          QStringLiteral("°"), 3)
+           << resultValue(QStringLiteral("matchScale"), QStringLiteral("尺度"),
+                          QString(), 4)
+           << resultValue(QStringLiteral("templateKeypoints"), QStringLiteral("模板特征点数"),
+                          QString(), 0)
+           << resultValue(QStringLiteral("sceneKeypoints"), QStringLiteral("场景特征点数"),
+                          QString(), 0)
+           << resultValue(QStringLiteral("candidateMatches"), QStringLiteral("候选匹配数"),
+                          QString(), 0)
+           << resultValue(QStringLiteral("inlierCount"), QStringLiteral("内点数"),
+                          QString(), 0);
+    return fields;
+}

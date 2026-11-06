@@ -65,6 +65,7 @@ void OpencvQrNode::run(bool /*autoSwitch*/)
         const bool ok = !text.empty();
 
         m_params[QStringLiteral("qrText")] = QString::fromStdString(text);
+        m_params[QStringLiteral("decodeCount")] = ok ? 1 : 0;
         m_params["moduleStatus"] = ok;
         m_outputImage = m_inputImage;
 
@@ -94,4 +95,14 @@ QWidget *OpencvQrNode::createParamPanel()
 void OpencvQrNode::updateParamPanel(QWidget *panel)
 {
     updateAutoParamPanel(panel);
+}
+
+QVector<NodeResultField> OpencvQrNode::resultDisplayFields() const
+{
+    // VM「模块结果」口径：模块级 耗时/模块状态 + 解码内容/解码个数。
+    QVector<NodeResultField> fields = HalconNode::resultDisplayFields();
+    fields << resultValue(QStringLiteral("qrText"), QStringLiteral("解码内容"))
+           << resultValue(QStringLiteral("decodeCount"), QStringLiteral("解码个数"),
+                          QString(), 0);
+    return fields;
 }

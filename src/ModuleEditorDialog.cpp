@@ -40,6 +40,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSet>
 #include <QTimer>
 #include <QHeaderView>
 #include <QToolButton>
@@ -106,8 +107,9 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
             QRect avail;
             if (const QScreen *scr = QGuiApplication::primaryScreen())
                 avail = scr->availableGeometry();
-            resize(qMax(760, qMin(1100, avail.width() * 9 / 10)),
-                   qMax(540, qMin(720, avail.height() * 9 / 10)));
+            // VM 4.4 模块窗是窄栏工具窗（约 400×570），不是宽屏对话框。
+            resize(qMin(440, qMax(400, avail.width() - 40)),
+                   qMin(620, qMax(560, avail.height() - 80)));
         }
     }
 
@@ -281,6 +283,7 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
 
     // VM 结果表口径：每个命中一行，列 = 序号/中心X/中心Y/匹配点X/匹配点Y/角度/尺度X/尺度Y/分数
     m_resultTable = new QTableWidget(0, 10);
+    m_resultTable->setObjectName(QStringLiteral("moduleResultTable"));
     m_resultTable->setHorizontalHeaderLabels(
         {QStringLiteral("序号"), QStringLiteral("中心X"), QStringLiteral("中心Y"),
          QStringLiteral("匹配点X"), QStringLiteral("匹配点Y"), QStringLiteral("角度"),
@@ -431,7 +434,9 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     if (m_splitter)
         m_splitter->setSizes({0, 520});
     toolbarHost->setVisible(false);
-    resize(qMax(width(), 520), qMax(height(), 660));
+    // 存档几何可能是旧版大窗（历史上默认 760×720）；每次打开都收敛到 VM 窄栏工具窗范围，
+    // 保证现场看到的模块窗与 VM 一致。上限比 VM 略宽/高，给四页签留一点余量。
+    resize(qBound(420, width(), 540), qBound(560, height(), 760));
 
     if (hasGeom) {
         m_hintLabel->setText(QStringLiteral(
@@ -1647,7 +1652,34 @@ void ModuleEditorDialog::buildResultDisplayPage(QVBoxLayout *resLay)
             return;
         const int r = m_judgeTable->rowCount();
         m_judgeTable->insertRow(r);
-        const QStringList names = m_node ? m_node->getAllParamNames() : QStringList();
+        // VM 口径：条件只能落在**模块结果字段**上，不能拿配置参数做判断。
+        // 结果字段来自 resultDisplayFields()（与「当前结果」面板同一口径）；
+        // 文本类结果不支持数值比较，已有值时直接过滤掉。
+        QStringList names;
+        if (m_node) {
+            QSet<QString> seen;
+            for (const NodeResultField &field : m_node->resultDisplayFields()) {
+                if (field.kind != NodeResultField::Value)
+                    continue;
+                if (field.key == QStringLiteral("elapsedMs")
+                    || field.key == QStringLiteral("moduleStatus"))
+                    continue;
+                if (seen.contains(field.key))
+                    continue;
+                const QVariant current = m_node->getParam(field.key);
+                if (current.isValid() && !current.isNull()
+                    && current.typeId() != QMetaType::Bool) {
+                    bool numeric = false;
+                    current.toDouble(&numeric);
+                    if (!numeric)
+                        continue;
+                }
+                seen.insert(field.key);
+                names << field.key;
+            }
+            if (names.isEmpty())   // 非 HalconNode 或结果规范为空时兜底
+                names = m_node->getAllParamNames();
+        }
         m_judgeTable->setItem(r, 0, new QTableWidgetItem(names.value(0)));
         auto *opCombo = new QComboBox();
         opCombo->addItems({QStringLiteral(">="), QStringLiteral("<="), QStringLiteral(">"),
@@ -2609,11 +2641,57 @@ void ModuleEditorDialog::refreshResultTable()
     m_resultTable->setRowCount(0);
     auto *tmplNode = qobject_cast<OpencvTemplateMatchNode *>(m_node);
     if (!tmplNode) {
-        // P0-2：非模板算子也有「结果显示」——显示本算子具名输出的值/类型/状态。
+        // VM「模块结果」口径（2026-11-06）：优先按 resultDisplayFields() 渲染
+        //（与运行界面结果表同一份字段/名称/单位/精度），不再把"具名输出端口"当成结果项。
+        // 未声明结果规范的节点（NodeBase 默认空表）回退到旧的具名输出列表。
+        const QVector<NodeResultField> spec =
+            m_node ? m_node->resultDisplayFields() : QVector<NodeResultField>();
         m_resultTable->clear();
         m_resultTable->setColumnCount(4);
+        m_resultTable->setHorizontalHeaderLabels({QStringLiteral("结果项"), QStringLiteral("值"),
+                                                  QStringLiteral("单位"), QStringLiteral("状态")});
+        if (!spec.isEmpty()) {
+            int row = 0;
+            for (const NodeResultField &field : spec) {
+                // 分组字段属于"逐目标结果"，运行界面结果表按分组渲染；模块窗只列模块级单值/状态
+                if (field.key.isEmpty() || !field.group.isEmpty())
+                    continue;
+                const QVariant value = m_node->getParam(field.key);
+                const bool hasValue = value.isValid() && !value.isNull();
+                QString valueText = QStringLiteral("-");
+                QString statusText = hasValue ? QStringLiteral("有结果")
+                                              : QStringLiteral("尚未产生");
+                if (field.kind == NodeResultField::Status) {
+                    const bool ok = hasValue && value.toBool();
+                    valueText = ok ? QStringLiteral("OK") : QStringLiteral("NG");
+                } else if (hasValue) {
+                    if (value.typeId() == QMetaType::Bool) {
+                        valueText = value.toBool() ? QStringLiteral("true")
+                                                   : QStringLiteral("false");
+                    } else {
+                        bool numeric = false;
+                        const double number = value.toDouble(&numeric);
+                        if (numeric && value.typeId() != QMetaType::QString) {
+                            valueText = field.decimals >= 0
+                                            ? QString::number(number, 'f', field.decimals)
+                                            : QString::number(number, 'g', 10);
+                        } else {
+                            valueText = value.toString();
+                        }
+                    }
+                }
+                m_resultTable->insertRow(row);
+                m_resultTable->setItem(row, 0, new QTableWidgetItem(field.label));
+                m_resultTable->setItem(row, 1, new QTableWidgetItem(valueText));
+                m_resultTable->setItem(row, 2, new QTableWidgetItem(field.unit));
+                m_resultTable->setItem(row, 3, new QTableWidgetItem(statusText));
+                ++row;
+            }
+            return;
+        }
+        // 无结果规范：回退到具名输出列表（数据/通讯类节点）
         m_resultTable->setHorizontalHeaderLabels({QStringLiteral("输出项"), QStringLiteral("值"),
-                                                  QStringLiteral("类型"), QStringLiteral("状态")});
+                                                   QStringLiteral("类型"), QStringLiteral("状态")});
         const auto named = m_node ? m_node->namedOutputs() : QVector<QPair<QString, QSharedPointer<DataObject>>>();
         int row = 0;
         for (const auto &entry : named) {

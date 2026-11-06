@@ -465,8 +465,19 @@ void HalconWindow::paintEvent(QPaintEvent *event)
             auto toView = [&](const QPointF &p) {
                 return QPointF(m_imageOffsetX + p.x() * sx, m_imageOffsetY + p.y() * sy);
             };
+            const QRectF imageRect(m_imageOffsetX, m_imageOffsetY, imageWidth, imageHeight);
+            const QFont baseFont = painter.font();
             for (const OverlayShape &s : m_overlay) {
-                painter.setPen(QPen(s.color, 2));
+                // VM「结果显示」样式：每个图元独立的不透明度 / 线宽 / 字号（2026-11-06）
+                painter.setOpacity(qBound(0, s.opacity, 100) / 100.0);
+                if (s.fontSize > 0) {
+                    QFont f = baseFont;
+                    f.setPixelSize(s.fontSize);
+                    painter.setFont(f);
+                } else {
+                    painter.setFont(baseFont);
+                }
+                painter.setPen(QPen(s.color, qMax(1, s.lineWidth)));
                 switch (s.type) {
                 case OverlayShape::Type::Line:
                     painter.drawLine(toView(s.p1), toView(s.p2));
@@ -497,10 +508,21 @@ void HalconWindow::paintEvent(QPaintEvent *event)
                     }
                     break;
                 }
-                case OverlayShape::Type::Text:
+                case OverlayShape::Type::Text: {
                     painter.setPen(QPen(s.color, 1));
-                    painter.drawText(toView(s.p1), s.text);
+                    // 四角锚点（VM「结果显示 → 文本显示」的位置选项）：文字固定贴在显示图像角上；
+                    // -1 = 旧口径（跟随 p1），保持既有标注（缺陷面积/边对宽度…）的位置不变。
+                    if (s.textPosition >= 0 && s.textPosition <= 3) {
+                        const Qt::Alignment align =
+                            ((s.textPosition & 1) ? Qt::AlignRight : Qt::AlignLeft)
+                            | ((s.textPosition >= 2) ? Qt::AlignBottom : Qt::AlignTop);
+                        painter.drawText(imageRect.adjusted(8, 6, -8, -6),
+                                         align | Qt::TextWordWrap, s.text);
+                    } else {
+                        painter.drawText(toView(s.p1), s.text);
+                    }
                     break;
+                }
                 case OverlayShape::Type::RotatedRect: {
                     RoiShape rs;
                     rs.type = RoiType::RotatedRect;
@@ -523,6 +545,9 @@ void HalconWindow::paintEvent(QPaintEvent *event)
                 }
                 }
             }
+            // 图元样式只作用于叠加层，后续掩膜/ROI 仍用默认字体与全不透明
+            painter.setFont(baseFont);
+            painter.setOpacity(1.0);
         }
 
         // 掩膜覆盖层（排除区半透明品红）

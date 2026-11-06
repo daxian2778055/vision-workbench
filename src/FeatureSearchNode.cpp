@@ -183,6 +183,13 @@ void FeatureSearchNode::run(bool /*autoSwitch*/)
                              .arg(hits.first().score, 0, 'f', 3)
                              .arg(hits.first().goodMatches)
                              .arg(hits.first().inliers);
+    // VM「模块结果」展示用（结果字段）：命中个数与 Top1 明细
+    m_params[QStringLiteral("hitCount")] = static_cast<int>(hits.size());
+    m_params[QStringLiteral("topName")] = hits.isEmpty() ? QString() : hits.first().name;
+    m_params[QStringLiteral("topScore")] = hits.isEmpty() ? 0.0 : hits.first().score;
+    m_params[QStringLiteral("topMatches")] =
+        hits.isEmpty() ? 0 : hits.first().goodMatches;
+    m_params[QStringLiteral("topInliers")] = hits.isEmpty() ? 0 : hits.first().inliers;
     if (hits.isEmpty())
         m_params[QStringLiteral("lastError")] = m_params[QStringLiteral("searchNote")];
 
@@ -211,4 +218,20 @@ QWidget *FeatureSearchNode::createParamPanel()
 void FeatureSearchNode::updateParamPanel(QWidget *panel)
 {
     updateAutoParamPanel(panel);
+}
+
+QVector<NodeResultField> FeatureSearchNode::resultDisplayFields() const
+{
+    // VM「模块结果」口径：模块级 耗时/模块状态 + 命中个数/Top1 明细。
+    QVector<NodeResultField> fields = HalconNode::resultDisplayFields();
+    fields << resultValue(QStringLiteral("hitCount"), QStringLiteral("命中个数"),
+                          QString(), 0)
+           << resultValue(QStringLiteral("topName"), QStringLiteral("Top1名称"))
+           << resultValue(QStringLiteral("topScore"), QStringLiteral("Top1相似度"),
+                          QString(), 4)
+           << resultValue(QStringLiteral("topMatches"), QStringLiteral("Top1匹配点数"),
+                          QString(), 0)
+           << resultValue(QStringLiteral("topInliers"), QStringLiteral("Top1内点数"),
+                          QString(), 0);
+    return fields;
 }

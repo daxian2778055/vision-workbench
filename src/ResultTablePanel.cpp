@@ -21,6 +21,9 @@
 #include <QTableWidget>
 #include <QTextBrowser>
 #include <QSignalBlocker>
+#include <QSet>
+#include <QtNumeric>
+#include <functional>
 
 namespace {
 constexpr int kColName = 0;
@@ -29,7 +32,161 @@ constexpr int kColStatus = 2;
 constexpr int kColElapsed = 3;
 constexpr int kColSeq = 4;
 constexpr int kColTime = 5;
+
+/// 结果树子项：模块行仍参与表头排序，子项（结果字段/分组/原因）恒按创建顺序（=规范声明顺序）插入。
+/// QTreeWidget 开启排序后会对**所有层级**自动排序，会把「耗时/模块状态/边缘0…」的官方顺序打乱。
+class ResultTreeItem : public QTreeWidgetItem
+{
+public:
+    explicit ResultTreeItem(QTreeWidgetItem *parent)
+        : QTreeWidgetItem(parent), m_seq(++s_seq) {}
+
+    bool operator<(const QTreeWidgetItem &other) const override
+    {
+        if (const ResultTreeItem *o = dynamic_cast<const ResultTreeItem *>(&other))
+            return m_seq < o->m_seq;   // 子项：按声明顺序
+        return QTreeWidgetItem::operator<(other);   // 顶层模块行：按表头文本
+    }
+
+private:
+    quint64 m_seq;
+    static quint64 s_seq;
+};
+quint64 ResultTreeItem::s_seq = 0;
+
+/// 显示名 + 单位（VM「模块结果」把单位写在字段名后，如「耗时(ms)」）
+QString withUnit(const QString &label, const QString &unit)
+{
+    return unit.isEmpty() ? label : QStringLiteral("%1(%2)").arg(label, unit);
 }
+
+/// 单值格式化：bool 保持 true/false；数值按 decimals 定点，-1 用有效数字。
+QString formatScalar(const QVariant &v, int decimals)
+{
+    if (v.typeId() == QMetaType::Bool)
+        return v.toBool() ? QStringLiteral("true") : QStringLiteral("false");
+    const int type = v.metaType().id();
+    if (type == QMetaType::Double || type == QMetaType::Float) {
+        const double d = v.toDouble();
+        if (qIsNaN(d))
+            return QStringLiteral("NaN");
+        return decimals >= 0 ? QString::number(d, 'f', decimals) : QString::number(d, 'g', 10);
+    }
+    return v.toString();
+}
+
+/// 数组元素格式化（list/point/pairLine 三种口径）
+QString formatListItem(const NodeResultField &field, const QString &item)
+{
+    const int dec = field.decimals >= 0 ? field.decimals : 2;
+    switch (field.kind) {
+    case NodeResultField::PolarityItem: {
+        const int p = item.toInt();
+        if (p == 1) return QStringLiteral("从黑到白");
+        if (p == 2) return QStringLiteral("从白到黑");
+        if (p == 3) return QStringLiteral("任意极性");
+        return item;
+    }
+    case NodeResultField::PointItem: {
+        const QStringList xy = item.split(QLatin1Char(','));
+        if (xy.size() >= 2) {
+            return QStringLiteral("X=%1, Y=%2")
+                .arg(xy.at(0).toDouble(), 0, 'f', dec)
+                .arg(xy.at(1).toDouble(), 0, 'f', dec);
+        }
+        return item;
+    }
+    case NodeResultField::PairLineItem: {
+        const QStringList v = item.split(QLatin1Char(','));
+        if (v.size() >= 5) {
+            return QStringLiteral("起点(%1, %2) → 终点(%3, %4)，宽度=%5")
+                .arg(v.at(0).toDouble(), 0, 'f', dec)
+                .arg(v.at(1).toDouble(), 0, 'f', dec)
+                .arg(v.at(2).toDouble(), 0, 'f', dec)
+                .arg(v.at(3).toDouble(), 0, 'f', dec)
+                .arg(v.at(4).toDouble(), 0, 'f', dec);
+        }
+        return item;
+    }
+    default:
+        break;
+    }
+    bool ok = false;
+    const double d = item.toDouble(&ok);
+    if (ok && field.decimals >= 0)
+        return QString::number(d, 'f', field.decimals);
+    return item;
+}
+
+/// 历史摘要：组行折叠成「组名[子项=值; …]」，避免把整棵结果树平铺成一行巨串
+void collectSummary(QTreeWidgetItem *item, QStringList *out)
+{
+    for (int c = 0; c < item->childCount(); ++c) {
+        QTreeWidgetItem *child = item->child(c);
+        if (child->childCount() > 0) {
+            QStringList sub;
+            collectSummary(child, &sub);
+            out->append(QStringLiteral("%1[%2]").arg(child->text(kColName), sub.join(QStringLiteral("; "))));
+            continue;
+        }
+        const QString value = child->text(kColValue);
+        out->append(value.isEmpty() ? child->text(kColName)
+                                    : QStringLiteral("%1=%2").arg(child->text(kColName), value));
+    }
+}
+
+/// 按 NodeResultField 声明顺序渲染结果字段（VM「模块结果」口径）。
+/// 返回已经渲染过的键，供调用方补判红原因、避免重复。
+QSet<QString> renderResultFields(QTreeWidgetItem *row, const QVariantMap &vars,
+                                 const QVector<NodeResultField> &fields)
+{
+    QSet<QString> rendered;
+    QHash<QString, QTreeWidgetItem *> groups;   // 组标签 → 组行（同一序号的多个字段共用）
+    for (const NodeResultField &field : fields) {
+        if (!vars.contains(field.key))
+            continue;   // 失败轮没写到的字段不画空行（模块状态/原因由调用方补）
+        rendered.insert(field.key);
+        const QVariant value = vars.value(field.key);
+
+        if (field.kind == NodeResultField::Status) {
+            const bool ok = value.toBool();
+            auto *child = new ResultTreeItem(row);
+            child->setText(kColName, withUnit(field.label, field.unit));
+            child->setText(kColValue, ok ? QStringLiteral("OK") : QStringLiteral("NG"));
+            child->setForeground(kColValue, QBrush(ok ? QColor(0x1B, 0x7F, 0x37)
+                                                      : QColor(0xC0, 0x2B, 0x1D)));
+            continue;
+        }
+        if (field.kind == NodeResultField::Value) {
+            auto *child = new ResultTreeItem(row);
+            child->setText(kColName, withUnit(field.label, field.unit));
+            child->setText(kColValue, formatScalar(value, field.decimals));
+            continue;
+        }
+
+        // 逐结果字段：值本身就是列表（半角逗号或分号分隔）
+        const QChar sep = (field.kind == NodeResultField::PointItem
+                           || field.kind == NodeResultField::PairLineItem)
+                              ? QLatin1Char(';')
+                              : QLatin1Char(',');
+        const QStringList items = value.toString().split(sep, Qt::SkipEmptyParts);
+        for (int i = 0; i < items.size(); ++i) {
+            const QString groupLabel =
+                field.group.contains(QLatin1String("%1")) ? field.group.arg(i) : field.group;
+            QTreeWidgetItem *group = groups.value(groupLabel, nullptr);
+            if (!group) {
+                group = new ResultTreeItem(row);
+                group->setText(kColName, groupLabel);
+                groups.insert(groupLabel, group);
+            }
+            auto *child = new ResultTreeItem(group);
+            child->setText(kColName, withUnit(field.label, field.unit));
+            child->setText(kColValue, formatListItem(field, items.at(i)));
+        }
+    }
+    return rendered;
+}
+}   // namespace
 
 ResultTablePanel::ResultTablePanel(QWidget *parent)
     : QWidget(parent)
@@ -184,13 +341,24 @@ QString ResultTablePanel::toReportText(const QString &flowName) const
             lines << QStringLiteral("    - （无输出项）");
             continue;
         }
-        for (int c = 0; c < row->childCount(); ++c) {
-            QTreeWidgetItem *child = row->child(c);
-            const QString value = child->text(kColValue);
-            lines << (value.isEmpty()
-                          ? QStringLiteral("    - %1").arg(child->text(kColName))
-                          : QStringLiteral("    - %1 = %2").arg(child->text(kColName), value));
-        }
+        // 分组行（如「边缘0」）要连同子项一起打印，报告才能还原结果树
+        std::function<void(QTreeWidgetItem *, int)> dump = [&](QTreeWidgetItem *parent, int depth) {
+            const QString pad(QStringLiteral("    ") + QString(depth, QLatin1Char(' ')));
+            for (int c = 0; c < parent->childCount(); ++c) {
+                QTreeWidgetItem *item = parent->child(c);
+                if (item->childCount() > 0) {
+                    lines << QStringLiteral("%1- [%2]").arg(pad, item->text(kColName));
+                    dump(item, depth + 2);
+                    continue;
+                }
+                const QString value = item->text(kColValue);
+                lines << (value.isEmpty()
+                              ? QStringLiteral("%1- %2").arg(pad, item->text(kColName))
+                              : QStringLiteral("%1- %2 = %3")
+                                    .arg(pad, item->text(kColName), value));
+            }
+        };
+        dump(row, 0);
     }
     return lines.join(QLatin1Char('\n'));
 }
@@ -202,7 +370,8 @@ void ResultTablePanel::setHelpContent(const QString &html)
 }
 
 void ResultTablePanel::setModuleResult(int moduleId, const QString &moduleName, bool success,
-                                       qint64 elapsedMs, const QVariantMap &vars)
+                                       qint64 elapsedMs, const QVariantMap &vars,
+                                       const QVector<NodeResultField> &fields)
 {
     QTreeWidgetItem *row = m_rows.value(moduleId, nullptr);
     const bool isNew = (row == nullptr);
@@ -228,24 +397,40 @@ void ResultTablePanel::setModuleResult(int moduleId, const QString &moduleName, 
     // U-18：子项构建不再只在成功分支执行——判红轮执行器会把算子本轮写下的「原因」字段
     // （口径见 include/NodeResultFields.h）随快照推出，必须渲染出来；
     // 口径以外的字段仍为空，故下面按同一套格式化泛型遍历。
-    QStringList keys = vars.keys();
-    keys.sort();   // 名称排序，便于多轮之间对照
-    for (const QString &k : keys) {
-        const QVariant v = vars.value(k);
-        QString text;
-        if (v.typeId() == QMetaType::Bool)
-            text = v.toBool() ? QStringLiteral("true") : QStringLiteral("false");
-        else if (v.metaType().id() == QMetaType::Double || v.metaType().id() == QMetaType::Float)
-            text = QString::number(v.toDouble(), 'g', 10);
-        else
-            text = v.toString();
-        auto *child = new QTreeWidgetItem(row);
-        child->setText(kColName, k);
-        child->setText(kColValue, text);
+    if (!fields.isEmpty()) {
+        // VM「模块结果」口径：只按声明顺序渲染结果字段，配置参数不混进结果表
+        const QSet<QString> rendered = renderResultFields(row, vars, fields);
+        QStringList reasonKeys;
+        for (const QString &k : vars.keys()) {
+            if (isNodeReasonKey(k) && !rendered.contains(k))
+                reasonKeys << k;
+        }
+        reasonKeys.sort();
+        for (const QString &k : reasonKeys) {
+            auto *child = new ResultTreeItem(row);
+            child->setText(kColName, k);
+            child->setText(kColValue, formatScalar(vars.value(k), -1));
+        }
+    } else {
+        QStringList keys = vars.keys();
+        keys.sort();   // 名称排序，便于多轮之间对照
+        for (const QString &k : keys) {
+            const QVariant v = vars.value(k);
+            QString text;
+            if (v.typeId() == QMetaType::Bool)
+                text = v.toBool() ? QStringLiteral("true") : QStringLiteral("false");
+            else if (v.metaType().id() == QMetaType::Double || v.metaType().id() == QMetaType::Float)
+                text = QString::number(v.toDouble(), 'g', 10);
+            else
+                text = v.toString();
+            auto *child = new ResultTreeItem(row);
+            child->setText(kColName, k);
+            child->setText(kColValue, text);
+        }
     }
-    if (!success && keys.isEmpty()) {
+    if (!success && row->childCount() == 0) {
         // 本轮没人写下原因（基类守卫那几条不写）⇒ 保留占位，现场至少知道这行判红了且无原因可读
-        auto *child = new QTreeWidgetItem(row);
+        auto *child = new ResultTreeItem(row);
         child->setText(kColName, QStringLiteral("(执行失败，无输出)"));
     }
 
@@ -256,15 +441,13 @@ void ResultTablePanel::setModuleResult(int moduleId, const QString &moduleName, 
     }
     // P1-2：当前结果同步写入历史页（同轮同模块覆盖，避免重复）
     QStringList summary;
-    for (int c = 0; c < row->childCount(); ++c) {
-        QTreeWidgetItem *child = row->child(c);
-        const QString valueText = child->text(kColValue);
-        summary << (valueText.isEmpty() ? child->text(kColName)
-                                        : QStringLiteral("%1=%2").arg(child->text(kColName), valueText));
-    }
+    collectSummary(row, &summary);
+    QString summaryText = summary.join(QStringLiteral("; "));
+    if (summaryText.size() > 400)
+        summaryText = summaryText.left(399) + QStringLiteral("…");
     appendHistoryEntry(moduleId, row->text(kColName),
                        success ? QStringLiteral("成功") : QStringLiteral("失败"),
-                       elapsedMs, summary);
+                       elapsedMs, {summaryText});
     if (!m_filterText.isEmpty())
         applyFilter();   // 筛选生效期间新增的结果也要遵守筛选
     // 排序：Qt 只在「插入时」排序，而行文本是插入后才填的，所以这里按当前排序键显式重排；
@@ -293,7 +476,7 @@ void ResultTablePanel::setModuleSkipped(int moduleId, const QString &moduleName)
 
     const QList<QTreeWidgetItem *> old = row->takeChildren();
     qDeleteAll(old);
-    auto *child = new QTreeWidgetItem(row);
+    auto *child = new ResultTreeItem(row);
     child->setText(kColName, QStringLiteral("(本轮未执行：分支未激活或由循环调度)"));
     row->setExpanded(true);
     // P1-2：跳过也要进历史（现场排查"哪个算子没跑"需要跨轮对照）
@@ -334,19 +517,20 @@ void ResultTablePanel::applyFilter()
         return false;
     };
 
-    for (int i = 0; i < m_tree->topLevelItemCount(); ++i) {
-        QTreeWidgetItem *row = m_tree->topLevelItem(i);
-        const bool rowHit = matches(row);   // 模块行：名称/状态/耗时命中
+    // 结果字段可能带「边缘0」这类分组行（三层），筛选必须递归到叶子，
+    // 否则组行会被当成"无命中且无可见子项"整片隐藏。
+    std::function<bool(QTreeWidgetItem *, bool)> filterItem =
+        [&](QTreeWidgetItem *item, bool ancestorHit) -> bool {
+        const bool selfHit = ancestorHit || !filtering || matches(item);
         bool anyChildVisible = false;
-        for (int c = 0; c < row->childCount(); ++c) {
-            QTreeWidgetItem *child = row->child(c);
-            const bool visible = !filtering || rowHit || matches(child);
-            child->setHidden(!visible);
-            anyChildVisible = anyChildVisible || visible;
-        }
-        // 模块行：有子项时只要还有可见子项就保留；无子项时以自身命中为准
-        row->setHidden(filtering && !rowHit && !anyChildVisible);
-    }
+        for (int c = 0; c < item->childCount(); ++c)
+            anyChildVisible = filterItem(item->child(c), selfHit) || anyChildVisible;
+        const bool visible = selfHit || anyChildVisible;
+        item->setHidden(filtering && !visible);
+        return visible;
+    };
+    for (int i = 0; i < m_tree->topLevelItemCount(); ++i)
+        filterItem(m_tree->topLevelItem(i), false);
 }
 
 void ResultTablePanel::clearResults()
@@ -487,12 +671,24 @@ bool ResultTablePanel::exportCsv(const QString &path, QString *errorOut) const
                 << esc(time) << '\n';
             continue;
         }
-        for (int c = 0; c < row->childCount(); ++c) {
-            QTreeWidgetItem *child = row->child(c);
-            out << esc(module) << ',' << esc(child->text(kColName)) << ','
-                << esc(child->text(kColValue)) << ',' << esc(status) << ',' << esc(elapsed)
-                << ',' << esc(seq) << ',' << esc(time) << '\n';
-        }
+        // CSV 是扁平表：分组行的「组名 + 子项名」拼成输出项名（如「边缘0 极性」）
+        std::function<void(QTreeWidgetItem *, const QString &)> dump =
+            [&](QTreeWidgetItem *parent, const QString &prefix) {
+            for (int c = 0; c < parent->childCount(); ++c) {
+                QTreeWidgetItem *item = parent->child(c);
+                const QString name = prefix.isEmpty()
+                                         ? item->text(kColName)
+                                         : QStringLiteral("%1 %2").arg(prefix, item->text(kColName));
+                if (item->childCount() > 0) {
+                    dump(item, name);
+                    continue;
+                }
+                out << esc(module) << ',' << esc(name) << ',' << esc(item->text(kColValue)) << ','
+                    << esc(status) << ',' << esc(elapsed) << ',' << esc(seq) << ','
+                    << esc(time) << '\n';
+            }
+        };
+        dump(row, QString());
     }
 
     // 写失败要能报回调用方（2026-10-26 复核）：原先 close 后直接 return true，

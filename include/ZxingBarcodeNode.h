@@ -15,4 +15,6 @@ public:
     void run(bool autoSwitch = true) override;
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;
+    /// VM「模块结果」展示口径：条码内容/条码格式
+    QVector<NodeResultField> resultDisplayFields() const override;
 };

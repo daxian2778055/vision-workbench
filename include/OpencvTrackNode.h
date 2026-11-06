@@ -15,6 +15,8 @@ public:
     void run(bool autoSwitch = true) override;
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;
+    /// VM「模块结果」展示口径：跟踪点 X/Y、跟踪分数、丢失标记
+    QVector<NodeResultField> resultDisplayFields() const override;
 
 private:
     SimpleTracker::Tracker m_tracker;  /// 帧间跟踪器（模板匹配）

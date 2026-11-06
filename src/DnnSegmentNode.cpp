@@ -664,3 +664,15 @@ void DnnSegmentNode::updateParamPanel(QWidget *panel)
 {
     updateAutoParamPanel(panel);
 }
+
+QVector<NodeResultField> DnnSegmentNode::resultDisplayFields() const
+{
+    // VM「模块结果」口径：模块级 耗时/模块状态 + 分割目标数/掩膜面积/Sigmoid 标记。
+    QVector<NodeResultField> fields = HalconNode::resultDisplayFields();
+    fields << resultValue(QStringLiteral("segmentCount"), QStringLiteral("分割目标数"),
+                          QString(), 0)
+           << resultValue(QStringLiteral("maskArea"), QStringLiteral("掩膜面积"),
+                          QStringLiteral("px²"), 0)
+           << resultValue(QStringLiteral("sigmoidApplied"), QStringLiteral("应用Sigmoid"));
+    return fields;
+}

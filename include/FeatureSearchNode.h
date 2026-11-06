@@ -16,4 +16,6 @@ public:
     void run(bool autoSwitch) override;
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;
+    /// VM「模块结果」展示口径：命中个数/Top1 名称/相似度/匹配点数/内点数
+    QVector<NodeResultField> resultDisplayFields() const override;
 };

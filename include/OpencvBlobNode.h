@@ -34,6 +34,8 @@ public:
     void run(bool autoSwitch = true) override;
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;
+    /// VM 4.4「Blob分析 → 模块结果」展示口径：模块级 + 逐斑点分组字段
+    QVector<NodeResultField> resultDisplayFields() const override;
 
     bool supportsMaskEdit() const override { return true; }
     /// 单个连通域的形状度量（VM 口径）。labels 为 connectedComponentsWithStats 的标签图，

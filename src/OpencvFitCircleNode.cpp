@@ -151,6 +151,21 @@ void OpencvFitCircleNode::updateParamPanel(QWidget *panel)
     updateAutoParamPanel(panel);
 }
 
+QVector<NodeResultField> OpencvFitCircleNode::resultDisplayFields() const
+{
+    // VM「模块结果」口径：模块级 耗时/模块状态 + 检测区域（矩形 ROI）+ 圆心/半径/点数。
+    QVector<NodeResultField> fields = HalconNode::resultDisplayFields();
+    fields << resultValue(QStringLiteral("fitCol"), QStringLiteral("圆心X"),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("fitRow"), QStringLiteral("圆心Y"),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("fitRadius"), QStringLiteral("圆半径"),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("fitPointCount"), QStringLiteral("参与点数"),
+                          QString(), 0);
+    return fields;
+}
+
 RoiShape OpencvFitCircleNode::geometryRoi() const
 {
     RoiShape s;

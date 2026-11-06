@@ -15,6 +15,8 @@ public:
     void run(bool autoSwitch = true) override;
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;
+    /// VM「模块结果」口径：只声明结果字段（顺序/名称/单位/精度与官方字段表一致）
+    QVector<NodeResultField> resultDisplayFields() const override;
 
     RoiType geometryRoiType() const override { return RoiType::Line; }
     RoiShape geometryRoi() const override;

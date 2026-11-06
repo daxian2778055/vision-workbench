@@ -212,3 +212,19 @@ void DeepOcrNode::updateParamPanel(QWidget *panel)
 {
     updateAutoParamPanel(panel);
 }
+
+QVector<NodeResultField> DeepOcrNode::resultDisplayFields() const
+{
+    // VM「模块结果」口径：模块级 耗时/模块状态 + 识别文本/单词数/置信度。
+    QVector<NodeResultField> fields = HalconNode::resultDisplayFields();
+    fields << resultValue(QStringLiteral("ocrText"), QStringLiteral("识别文本"))
+           << resultValue(QStringLiteral("ocrCount"), QStringLiteral("单词数"),
+                          QString(), 0)
+           << resultValue(QStringLiteral("ocrConfidence"), QStringLiteral("置信度"),
+                          QString(), 4)
+           << resultValue(QStringLiteral("ocrAvgConfidence"), QStringLiteral("平均置信度"),
+                          QString(), 4)
+           << resultValue(QStringLiteral("ocrRawWordCount"), QStringLiteral("原始词数"),
+                          QString(), 0);
+    return fields;
+}

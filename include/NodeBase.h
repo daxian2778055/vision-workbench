@@ -7,8 +7,10 @@
 #include <QMap>
 #include <QJsonObject>
 #include <QVariant>
+#include <QVariantMap>
 #include <QSet>
 #include <QPair>
+#include <atomic>
 #include <QVector>
 #include <QSharedPointer>
 #include <QWidget>
@@ -21,6 +23,7 @@
 #include "ThreadSafeParams.h"   // 参数内核（立项书 P2 期段一：paramCore 虚钩子返回类型）
 #include "FlowRunContext.h"   // 归属上下文块（切片 C 立项书 P2c 期：算子侧改持它）
 #include "FlowExecutorToken.h"   // 生命周期令牌（切片 C P3c 期：残余面改持它的弱引用）
+#include "NodeResultFields.h"   // 结果字段展示口径（VM「模块结果」）
 
 #include <QSet>
 
@@ -52,6 +55,20 @@ public:
     virtual QVariant getParam(const QString &name) const = 0;
     /// 全部参数名（供全局变量输出等按名扫描）
     virtual QList<QString> getAllParamNames() const { return {}; }
+    /// 「当前结果」面板只显示这里声明过的结果字段（顺序/名称/单位/精度即官方口径）。
+    /// 默认空表 = 沿用旧行为（面板平铺全部参数）；对齐 VM 的算子覆写本函数。
+    virtual QVector<NodeResultField> resultDisplayFields() const { return {}; }
+
+    /// 框架级公共结果字段（耗时 / 矩形 ROI 检测区域）：「结果显示 → 结果判断」与
+    /// 结果表快照共用同一份取值，避免判断依据和面板显示不是同一个值。
+    /// 默认只给 elapsedMs；HalconNode 覆写补 roiCenter* / roiWidth / roiHeight / roiAngle。
+    virtual QVariantMap commonResultFields(qint64 elapsedMs) const;
+
+    /// VM「结果显示 → 结果判断」通用条件求值（对所有节点类型统一可用）。
+    /// commonFields 里的键优先于 getParam()：公共字段不在节点参数表里。
+    /// 返回 false 时 reason 给出第一条不满足条件（含字段名与实际值）。
+    bool evaluateResultJudgment(const QVariantMap &commonFields, QString *reason) const;
+
     virtual void drawResult() = 0;
 
     /// 新一次执行开始时的钩子（2026-10-28）：默认空实现。
@@ -168,6 +185,13 @@ protected:
     /// 并发，QMap 非线程安全，必须加锁防结构破坏
     mutable QMutex m_dataMutex;
     bool m_executionSuccess; // 执行状态，true表示成功，false表示失败
+    /// 业务判 NG（模块状态=失败）但输出结果仍有效（结果判断类算子）。
+    /// process() 与 FlowExecutor 据此保留输出端口；异常/执行失败仍按原逻辑清空。
+    /// 执行线程写、UI 线程读（collectOverlayFromNode 等），故用原子避免 data race。
+    std::atomic<bool> m_resultNg { false };
+    /// 本轮 process() 自测耗时：判断与结果表快照共用，避免执行器外层计时（含框架开销）
+    /// 与判断依据不是同一个值。执行线程写、UI/结果表读，故用原子。
+    std::atomic<qint64> m_lastElapsedMs { 0 };
     bool m_runAborted = false;   // 本轮被用户中止（2026-10-28 P3-14：第三态）
     bool m_hasExecuted; // 是否已经执行过
     bool m_enabled = true;   // 算子是否启用（禁用后运行时跳过）
@@ -180,6 +204,11 @@ public:
     int moduleId() const;
     QString fullName() const; // 包含模块号的完整名称
     bool executionSuccess() const; // 获取执行状态
+    /// 「判 NG 但结果有效」：结果判断（卡尺/Blob 等）不满足时仍保留输出，
+    /// 供画布和结果面板显示红色结果；异常/执行失败不走这条。
+    void setResultNg(bool on) { m_resultNg.store(on, std::memory_order_relaxed); }
+    bool isResultNg() const { return m_resultNg.load(std::memory_order_relaxed); }
+    qint64 lastElapsedMs() const { return m_lastElapsedMs.load(std::memory_order_relaxed); }
     /// 本轮是否被用户中止（与成功/失败并列的第三态；画布用琥珀色，
     /// 表示"没跑完"而不是"跑成功了"——2026-10-28 P3-14）
     bool executionAborted() const;

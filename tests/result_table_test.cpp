@@ -16,6 +16,7 @@ private slots:
     void testSortingAndFilter();
     void testReportText();
     void testFailureRowShowsReason();   // U-18：失败行必须显示算子留下的原因
+    void testResultFieldSpecDisplay();  // VM「模块结果」：只显示声明字段 + 分组/极性/单位/精度
 };
 
 void ResultTableTest::testInPlaceUpdateAndCsv()
@@ -206,7 +207,104 @@ void ResultTableTest::testFailureRowShowsReason()
              qPrintable(QStringLiteral("报告的原因行没有字段名：%1").arg(report)));
 }
 
-QTEST_MAIN(ResultTableTest)
+void ResultTableTest::testResultFieldSpecDisplay()
+{
+    ResultTablePanel panel;
+    auto *tree = panel.findChild<QTreeWidget *>();
+    QVERIFY2(tree != nullptr, "未找到结果树");
 
+    // vars 里同时放配置参数与结果字段：配置参数不得出现在「当前结果」
+    QVariantMap vars;
+    vars.insert(QStringLiteral("row1"), 50.0);
+    vars.insert(QStringLiteral("threshold"), 30.0);
+    vars.insert(QStringLiteral("elapsedMs"), 7.0);
+    vars.insert(QStringLiteral("moduleStatus"), true);
+    vars.insert(QStringLiteral("edgeCount"), 2);
+    vars.insert(QStringLiteral("edgeScores"), QStringLiteral("0.9512,0.4231"));
+    vars.insert(QStringLiteral("edgePolarities"), QStringLiteral("1,2"));
+    vars.insert(QStringLiteral("edgePositions"), QStringLiteral("1.25,-3.50"));
+    vars.insert(QStringLiteral("edgePoints"), QStringLiteral("100.00,50.00;120.00,50.00"));
+    vars.insert(QStringLiteral("edgeGrays"), QStringLiteral("180.0,90.0"));
+    vars.insert(QStringLiteral("lastError"), QStringLiteral("示例原因"));
+
+    // 与卡尺 resultDisplayFields() 同构的一小段规范
+    QVector<NodeResultField> fields;
+    fields << resultValue(QStringLiteral("elapsedMs"), QStringLiteral("耗时"),
+                          QStringLiteral("ms"), 0)
+           << resultStatus(QStringLiteral("moduleStatus"), QStringLiteral("模块状态"))
+           << resultValue(QStringLiteral("edgeCount"), QStringLiteral("边缘个数"), QString(), 0)
+           << resultList(QStringLiteral("edgeScores"), QStringLiteral("边缘%1"),
+                         QStringLiteral("分数"), QString(), 4)
+           << resultPolarity(QStringLiteral("edgePolarities"), QStringLiteral("边缘%1"),
+                             QStringLiteral("极性"))
+           << resultList(QStringLiteral("edgePositions"), QStringLiteral("边缘%1"),
+                         QStringLiteral("位置"), QStringLiteral("px"), 2)
+           << resultPoint(QStringLiteral("edgePoints"), QStringLiteral("边缘%1"),
+                          QStringLiteral("边缘点"), 2)
+           << resultList(QStringLiteral("edgeGrays"), QStringLiteral("边缘%1"),
+                         QStringLiteral("灰度"), QString(), 1);
+
+    panel.setModuleResult(5, QStringLiteral("卡尺测量"), true, 7, vars, fields);
+    QTreeWidgetItem *row = tree->topLevelItem(0);
+    QVERIFY2(row != nullptr, "结果行未进入表格");
+
+    auto childNamed = [](QTreeWidgetItem *parent, const QString &name) -> QTreeWidgetItem * {
+        for (int i = 0; i < parent->childCount(); ++i) {
+            if (parent->child(i)->text(0) == name)
+                return parent->child(i);
+        }
+        return nullptr;
+    };
+
+    // ① 模块级字段顺序 = 规范顺序；配置参数（row1/threshold）不出现
+    //    3 个单值 + 边缘0/边缘1 两个分组 + 规范外的判红原因 = 6
+    QCOMPARE(row->childCount(), 6);
+    QCOMPARE(row->child(0)->text(0), QStringLiteral("耗时(ms)"));
+    QCOMPARE(row->child(0)->text(1), QStringLiteral("7"));
+    QCOMPARE(row->child(1)->text(0), QStringLiteral("模块状态"));
+    QCOMPARE(row->child(1)->text(1), QStringLiteral("OK"));
+    QCOMPARE(row->child(2)->text(0), QStringLiteral("边缘个数"));
+    QCOMPARE(row->child(2)->text(1), QStringLiteral("2"));
+    QVERIFY2(childNamed(row, QStringLiteral("row1")) == nullptr, "配置参数混进了结果表");
+    QVERIFY2(childNamed(row, QStringLiteral("threshold")) == nullptr, "配置参数混进了结果表");
+
+    // ② 逐结果分组：同一序号的多字段合并到「边缘0/边缘1」
+    QTreeWidgetItem *edge0 = childNamed(row, QStringLiteral("边缘0"));
+    QVERIFY2(edge0 != nullptr, "缺少边缘0分组");
+    QCOMPARE(edge0->childCount(), 5);
+    QCOMPARE(edge0->child(0)->text(0), QStringLiteral("分数"));
+    QCOMPARE(edge0->child(0)->text(1), QStringLiteral("0.9512"));
+    QCOMPARE(edge0->child(1)->text(0), QStringLiteral("极性"));
+    QCOMPARE(edge0->child(1)->text(1), QStringLiteral("从黑到白"));   // 1
+    QCOMPARE(edge0->child(2)->text(0), QStringLiteral("位置(px)"));
+    QCOMPARE(edge0->child(2)->text(1), QStringLiteral("1.25"));
+    QCOMPARE(edge0->child(3)->text(1), QStringLiteral("X=100.00, Y=50.00"));
+    QCOMPARE(edge0->child(4)->text(1), QStringLiteral("180.0"));
+    QTreeWidgetItem *edge1 = childNamed(row, QStringLiteral("边缘1"));
+    QVERIFY2(edge1 != nullptr, "缺少边缘1分组");
+    QCOMPARE(edge1->child(1)->text(1), QStringLiteral("从白到黑"));   // 2
+
+    // ③ 判红原因即便不在规范里也要显示（U-18 口径不能因规范渲染而丢）
+    QCOMPARE(row->child(5)->text(0), QStringLiteral("lastError"));
+    QCOMPARE(row->child(5)->text(1), QStringLiteral("示例原因"));
+
+    // ④ CSV / 报告按「分组 子项」扁平化，现场留档能还原
+    QTemporaryDir dir;
+    QVERIFY2(dir.isValid(), "无法创建临时目录");
+    const QString csvPath = dir.filePath(QStringLiteral("spec.csv"));
+    QString err;
+    QVERIFY2(panel.exportCsv(csvPath, &err), qPrintable(err));
+    QFile csv(csvPath);
+    QVERIFY(csv.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QString csvText = QString::fromUtf8(csv.readAll());
+    csv.close();
+    QVERIFY2(csvText.contains(QStringLiteral("边缘0 分数")), qPrintable(csvText));
+    QVERIFY2(csvText.contains(QStringLiteral("从黑到白")), qPrintable(csvText));
+    const QString report = panel.toReportText(QStringLiteral("SpecFlow"));
+    QVERIFY2(report.contains(QStringLiteral("[边缘0]")), qPrintable(report));
+    QVERIFY2(report.contains(QStringLiteral("X=100.00, Y=50.00")), qPrintable(report));
+}
+
+QTEST_MAIN(ResultTableTest)
 // 源文件内定义 Q_OBJECT 类时，AUTOMOC 要求显式包含生成的 moc
 #include "result_table_test.moc"

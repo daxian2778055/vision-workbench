@@ -1,11 +1,13 @@
 #include "OpencvMorphNode.h"
 #include "NodeResultFields.h"
+#include "VmSharedText.h"
 #include "OpencvUtil.h"
 #include "DataObject.h"
 #include "AppLog.h"
 #include <opencv2/imgproc.hpp>
 #include <QWidget>
 #include <QRectF>
+#include <QElapsedTimer>
 #include <algorithm>
 
 OpencvMorphNode::OpencvMorphNode(QObject *parent) : HalconNode(parent)
@@ -46,10 +48,20 @@ void OpencvMorphNode::init()
                          QStringLiteral("核高度")),
             QStringLiteral("结构元高度（像素）"));
     registerParams(specs);
+
+    // VM「模块结果」展示用（结果字段，不上面板）
+    setParamDirect(QStringLiteral("elapsedMs"), 0.0);
+    setParamDirect(QStringLiteral("roiCenterX"), 0.0);
+    setParamDirect(QStringLiteral("roiCenterY"), 0.0);
+    setParamDirect(QStringLiteral("roiWidth"), 0.0);
+    setParamDirect(QStringLiteral("roiHeight"), 0.0);
+    setParamDirect(QStringLiteral("roiAngle"), 0.0);
 }
 
 void OpencvMorphNode::run(bool /*autoSwitch*/)
 {
+    QElapsedTimer runTimer;   // 官方模块结果「耗时（ms）」
+    runTimer.start();
     try {
         HImage input(m_inputImage);
         if (!input.IsInitialized()) {
@@ -118,10 +130,25 @@ void OpencvMorphNode::run(bool /*autoSwitch*/)
         mat.copyTo(output, outside);   // ROI 外保留原图
 
         m_params["moduleStatus"] = true;
+        // VM「模块结果 → 检测区域」：矩形 ROI 的中心/宽/高/角度（无 ROI 时置 0）。
+        if (roi.type == RoiType::Rect) {
+            const QRectF box = QRectF(roi.p1, roi.p2).normalized();
+            m_params[QStringLiteral("roiCenterX")] = box.x() + box.width() * 0.5;
+            m_params[QStringLiteral("roiCenterY")] = box.y() + box.height() * 0.5;
+            m_params[QStringLiteral("roiWidth")] = box.width();
+            m_params[QStringLiteral("roiHeight")] = box.height();
+        } else {
+            m_params[QStringLiteral("roiCenterX")] = 0.0;
+            m_params[QStringLiteral("roiCenterY")] = 0.0;
+            m_params[QStringLiteral("roiWidth")] = 0.0;
+            m_params[QStringLiteral("roiHeight")] = 0.0;
+        }
+        m_params[QStringLiteral("roiAngle")] = 0.0;   // 本节点只支持轴对齐矩形
         m_outputImage = OpencvUtil::matToHimage(output);
         auto outObj = QSharedPointer<DataObject>::create();
         outObj->setHImage(m_outputImage);
         setOutputData(1, outObj);
+        m_params[QStringLiteral("elapsedMs")] = static_cast<double>(runTimer.elapsed());
     } catch (const std::exception &e) {
         m_params[QStringLiteral("lastError")] =
             QString::fromUtf8(e.what());   // 原因到面板（2026-10-26）
@@ -143,6 +170,30 @@ QWidget *OpencvMorphNode::createParamPanel()
 void OpencvMorphNode::updateParamPanel(QWidget *panel)
 {
     updateAutoParamPanel(panel);
+}
+
+QVector<NodeResultField> OpencvMorphNode::resultDisplayFields() const
+{
+    // 官方「模块结果」字段表（GUID-40515844「模块结果」节）：
+    // 耗时 / 模块状态 / 输出图像 / 输出掩膜 / 检测区域。
+    // 输出图像与输出掩膜是 image 型，官方说明「模块结果处不显示任何数据」，故不列；
+    // 本节点只支持轴对齐矩形 ROI，检测区域按中心/宽/高/角度四项展示。
+    // 配置参数一律不进结果表。
+    return {
+        resultValue(QStringLiteral("elapsedMs"), QStringLiteral("耗时"),
+                    QStringLiteral("ms"), 0),
+        resultStatus(QStringLiteral("moduleStatus"), QStringLiteral("模块状态")),
+        resultValue(QStringLiteral("roiCenterX"), VmSharedText::roiCenterXLabel(),
+                    QStringLiteral("px"), 2),
+        resultValue(QStringLiteral("roiCenterY"), VmSharedText::roiCenterYLabel(),
+                    QStringLiteral("px"), 2),
+        resultValue(QStringLiteral("roiWidth"), QStringLiteral("检测区域宽度"),
+                    QStringLiteral("px"), 2),
+        resultValue(QStringLiteral("roiHeight"), QStringLiteral("检测区域高度"),
+                    QStringLiteral("px"), 2),
+        resultValue(QStringLiteral("roiAngle"), QStringLiteral("检测区域角度"),
+                    QStringLiteral("°"), 3)
+    };
 }
 
 RoiShape OpencvMorphNode::geometryRoi() const

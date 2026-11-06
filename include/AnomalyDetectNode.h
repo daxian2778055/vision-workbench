@@ -29,6 +29,8 @@ public:
     void run(bool autoSwitch = true) override;
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;
+    /// VM「模块结果」展示口径：异常个数/异常面积/最高与平均分数
+    QVector<NodeResultField> resultDisplayFields() const override;
 
     RoiType geometryRoiType() const override { return RoiType::Rect; }
     RoiShape geometryRoi() const override;

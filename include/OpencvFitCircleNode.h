@@ -13,6 +13,8 @@ public:
     void run(bool autoSwitch = true) override;
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;
+    /// VM「模块结果」展示口径：圆心/半径/参与点数
+    QVector<NodeResultField> resultDisplayFields() const override;
 
     /// 模块编辑器：在图上拖一个矩形只在区域内找轮廓（清除几何 = 回到全图）。
     /// 结果坐标会加回 ROI 偏移，因此对下游仍是整图坐标。

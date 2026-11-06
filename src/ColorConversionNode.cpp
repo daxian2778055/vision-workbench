@@ -462,7 +462,10 @@ void ColorConversionNode::displayImage()
 
 bool ColorConversionNode::execute()
 {
-    return process();
+    // 必须走基类：NodeBase::execute() 负责轮首复位 resultNg、异常保护、
+    // 本轮耗时自测，以及统一的「结果显示 → 结果判断」。
+    // 旧实现直接 return process() 会绕过以上全部（该节点配结果判断不生效、NG 态跨轮残留）。
+    return HalconNode::execute();
 }
 
 QString ColorConversionNode::name() const

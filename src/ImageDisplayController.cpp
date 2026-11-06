@@ -4,12 +4,15 @@
 #include "HalconNode.h"
 #include "FlowScene.h"
 #include "DataObject.h"
+#include "NodeResultFields.h"
+#include "GlobalVariableManager.h"
 #include "FindLineNode.h"
 #include "FindCircleNode.h"
 #include "CaliperMeasureNode.h"
 
 #include <QLabel>
 #include <QImage>
+#include <QRegularExpression>
 #include <cmath>
 
 using namespace HalconCpp;
@@ -122,12 +125,125 @@ bool showLayer(NodeBase *node, const char *name, bool def = true)
     const QVariant v = node->getParam(QString::fromUtf8(name));
     return v.isValid() ? v.toBool() : def;
 }
+
+/// 结果文本里的单值格式化：bool 保留 true/false；数值按字段精度（未声明精度用 6 位有效数字）。
+QString formatResultValue(const QVariant &value, int decimals)
+{
+    if (!value.isValid() || value.isNull())
+        return QStringLiteral("-");
+    if (value.typeId() == QMetaType::Bool)
+        return value.toBool() ? QStringLiteral("true") : QStringLiteral("false");
+    if (value.typeId() == QMetaType::QString)
+        return value.toString();
+    bool numeric = false;
+    const double number = value.toDouble(&numeric);
+    if (numeric)
+        return decimals >= 0 ? QString::number(number, 'f', decimals)
+                             : QString::number(number, 'g', 6);
+    return value.toString();
+}
+
+/// 结果键取值：执行器本轮快照优先，其次节点参数（结果类算子通常两者都有）。
+QVariant resultValueByName(NodeBase *node, const QString &key, const QVariantMap &vars)
+{
+    auto it = vars.constFind(key);
+    if (it != vars.constEnd() && it.value().isValid())
+        return it.value();
+    return node->getParam(key);
+}
+
+/// VM「结果显示 → 文本显示」占位符解析（2026-11-06）。
+/// 支持 {module} / {status} / {elapsed} / {global.变量名} / {结果键}；
+/// 解析不到的键**保持原样**（{key}），现场能一眼区分"变量名写错"和"值为空"。
+QString resolveResultText(NodeBase *node, const QString &content, const QVariantMap &vars)
+{
+    if (!node || content.isEmpty())
+        return content;
+
+    const QVector<NodeResultField> spec = node->resultDisplayFields();
+    auto decimalsOf = [&spec](const QString &key) {
+        for (const NodeResultField &field : spec) {
+            if (field.key == key)
+                return field.decimals;
+        }
+        return -1;
+    };
+
+    static const QRegularExpression placeholderRe(QStringLiteral(R"(\{([^{}]+)\})"));
+    QString out;
+    out.reserve(content.size());
+    int lastEnd = 0;
+    QRegularExpressionMatchIterator it = placeholderRe.globalMatch(content);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch match = it.next();
+        out += content.mid(lastEnd, match.capturedStart() - lastEnd);
+        const QString token = match.captured(1).trimmed();
+        bool resolved = true;
+        QString replacement;
+        if (token == QLatin1String("module")) {
+            replacement = node->name();
+        } else if (token == QLatin1String("status")) {
+            const QVariant ms = node->getParam(QStringLiteral("moduleStatus"));
+            replacement = (ms.isValid() && ms.toBool()) ? QStringLiteral("OK")
+                                                        : QStringLiteral("NG");
+        } else if (token == QLatin1String("elapsed")) {
+            replacement = formatResultValue(
+                resultValueByName(node, QStringLiteral("elapsedMs"), vars), 0);
+        } else if (token.startsWith(QLatin1String("global."))) {
+            const QString variableName = token.mid(7).trimmed();
+            GlobalVariableManager *gvm = GlobalVariableManager::instance();
+            if (gvm && gvm->variableExists(variableName))
+                replacement = formatResultValue(gvm->getVariable(variableName), -1);
+            else
+                resolved = false;
+        } else {
+            const QVariant value = resultValueByName(node, token, vars);
+            if (value.isValid() && !value.isNull())
+                replacement = formatResultValue(value, decimalsOf(token));
+            else
+                resolved = false;
+        }
+        out += resolved ? replacement : match.captured(0);
+        lastEnd = match.capturedEnd();
+    }
+    out += content.mid(lastEnd);
+    return out;
+}
 }   // namespace
 
 QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *node) const
 {
     QVector<OverlayShape> overlay;
     if (!node) return overlay;
+
+    // 本轮结果变量快照（{elapsed} 只在执行器推送的 vars 里，节点参数表没有该键）
+    const QVariantMap vars = m_resultVarsProvider ? m_resultVarsProvider(node) : QVariantMap();
+
+    // ── VM「结果显示 → 图像显示」（2026-11-06）：勾选/颜色/透明度/线宽真正作用到结果图元 ──
+    // 未注册这些键的老工程保持原语义（命中绿/未命中灰/判 NG 红），不会被默认值改写。
+    const QVariant showImageParam = node->getParam(QStringLiteral("resShowImage"));
+    const bool drawResultGraphics = !showImageParam.isValid() || showImageParam.toBool();
+    QColor configuredColor;
+    const QVariant colorParam = node->getParam(QStringLiteral("resImageColor"));
+    if (colorParam.isValid()) {
+        const QColor color(colorParam.toString());
+        if (color.isValid())
+            configuredColor = color;
+    }
+    const QVariant opacityParam = node->getParam(QStringLiteral("resImageOpacity"));
+    const int resultOpacity =
+        opacityParam.isValid() ? qBound(0, opacityParam.toInt(), 100) : 100;
+    const QVariant lineWidthParam = node->getParam(QStringLiteral("resImageLineWidth"));
+    const int resultLineWidth =
+        lineWidthParam.isValid() ? qBound(1, lineWidthParam.toInt(), 10) : 2;
+
+    // VM：模块判 NG 但结果有效时，结果叠加层显示为红色（而不是命中绿）。
+    // 只有「判 NG 且保留结果」的节点才染色；异常/执行失败没有结果可画。
+    // 红色是语义色，不随「叠加颜色」配置改变；配置色只作用于 OK 结果。
+    const QVariant ms = node->getParam(QStringLiteral("moduleStatus"));
+    const bool ng = ms.isValid() && !ms.toBool() && node->isResultNg();
+    const QColor resultColor =
+        ng ? QColor(255, 60, 60) : (configuredColor.isValid() ? configuredColor : QColor(0, 255, 0));
 
     // B1 统一输出：结果不再挂在端口 1..N，而是与图像同一个对象（附加结果表）。
     // 仍然兼容尚未聚合的节点（例如条件判断的分支端口 / 老插件）：端口 1..N 也扫一遍。
@@ -145,6 +261,10 @@ QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *n
                 results.append(mr);
         }
     }
+    // 「显示结果图像」未勾选：不画结果图元（ROI/检测区域等编辑参照仍保留，
+    // 它们属于搭建期的几何回显，不是模块结果）
+    if (!drawResultGraphics)
+        results.clear();
 
     for (const MeasureResult &mr : results) {
         // 未命中也画**灰框候选**（r19 批 A 第 3 步）：VM 的「总能找到，给出分数」——
@@ -153,7 +273,7 @@ QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *n
 
         OverlayShape s;
         // 命中绿框；未命中灰框候选（r19 批 A 第 3 步）
-        s.color = hit ? QColor(0, 255, 0) : QColor(170, 170, 170);
+        s.color = hit ? resultColor : QColor(170, 170, 170);
         if (mr.type == QLatin1String("line")) {
             s.type = OverlayShape::Type::Line;
             s.p1 = mr.point1;
@@ -234,30 +354,39 @@ QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *n
             s.text = QStringLiteral("缺陷面积=%1").arg(mr.value, 0, 'f', 0);
             s.color = QColor(255, 60, 60);
         } else if (mr.type == QLatin1String("caliper")) {
+            // VM「结果显示 → 图像显示」：边缘点可单独显隐
+            if (!showLayer(node, "showCaliperEdge"))
+                continue;
             s.type = OverlayShape::Type::Points;
             for (int i = 0; i + 1 < mr.extraValues.size(); i += 2) {
                 s.points.append(QPointF(mr.extraValues[i], mr.extraValues[i + 1]));
             }
         } else if (mr.type == QLatin1String("caliperPair")) {
-            // 卡尺边对：extraValues=[col1,row1,col2,row2,width,...]，每对画一条连线 + 宽度文字
+            // 卡尺边对：extraValues=[col1,row1,col2,row2,width,...]。
+            // VM 每个边对都标出自己的宽度（旧实现只在最后一个边对上写一次，
+            // 多边对时其余边对的宽度无处可读）。
             if (!showLayer(node, "showCaliperPair"))
                 continue;
-            double lastWidth = 0.0;
-            QPointF lastMid;
             for (int i = 0; i + 4 < mr.extraValues.size(); i += 5) {
                 OverlayShape link;
                 link.type = OverlayShape::Type::Line;
                 link.p1 = QPointF(mr.extraValues[i], mr.extraValues[i + 1]);
                 link.p2 = QPointF(mr.extraValues[i + 2], mr.extraValues[i + 3]);
-                link.color = QColor(0, 255, 0);
+                link.color = resultColor;
                 overlay.append(link);
-                lastWidth = mr.extraValues[i + 4];
-                lastMid = QPointF((link.p1.x() + link.p2.x()) * 0.5,
-                                  (link.p1.y() + link.p2.y()) * 0.5);
+
+                // 序号与「当前结果」的「边对0/边对1…」分组一一对应（0 起）
+                OverlayShape widthText;
+                widthText.type = OverlayShape::Type::Text;
+                widthText.p1 = QPointF((link.p1.x() + link.p2.x()) * 0.5,
+                                       (link.p1.y() + link.p2.y()) * 0.5);
+                widthText.text = QStringLiteral("边对%1 宽=%2")
+                                     .arg(i / 5)
+                                     .arg(mr.extraValues[i + 4], 0, 'f', 2);
+                widthText.color = resultColor;
+                overlay.append(widthText);
             }
-            s.type = OverlayShape::Type::Text;
-            s.p1 = lastMid;
-            s.text = QStringLiteral("边对宽=%1").arg(lastWidth, 0, 'f', 2);
+            continue;
         } else if (mr.type == QLatin1String("rect")) {
             // Blob 检测框：extraValues=[x,y,w,h]（图像坐标左上角 + 宽高），point1=质心
             if (!showLayer(node, "showBlobBox"))
@@ -282,7 +411,7 @@ QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *n
                 l1.type = OverlayShape::Type::Line;
                 l1.p1 = QPointF(mr.extraValues[0], mr.extraValues[1]);
                 l1.p2 = QPointF(mr.extraValues[2], mr.extraValues[3]);
-                l1.color = QColor(0, 255, 0);
+                l1.color = resultColor;
                 overlay.append(l1);
                 OverlayShape l2;
                 l2.type = OverlayShape::Type::Line;
@@ -312,6 +441,48 @@ QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *n
             s.text = QStringLiteral("%1=%2").arg(mr.valueName).arg(mr.value, 0, 'f', 3);
         }
         overlay.append(s);
+    }
+
+    // 结果图元统一套用「图像显示」的线宽/透明度；颜色按上面 resultColor 逐图元定
+    // （语义色——未命中灰、角度副线青、交点黄、缺陷红——不被配置色覆盖）
+    const int resultShapeCount = int(overlay.size());
+    for (int i = 0; i < resultShapeCount; ++i) {
+        overlay[i].lineWidth = resultLineWidth;
+        overlay[i].opacity = resultOpacity;
+    }
+
+    // ── VM「结果显示 → 文本显示」（2026-11-06）──
+    // 只有显式配置过（保存了 resShowText 或 resTextContent）才叠加：
+    // 老工程没有这些键，不能平白多出一行文字。
+    const QVariant showTextParam = node->getParam(QStringLiteral("resShowText"));
+    const QVariant contentParam = node->getParam(QStringLiteral("resTextContent"));
+    const bool textConfigured = showTextParam.isValid() || contentParam.isValid();
+    if (drawResultGraphics && textConfigured
+        && (!showTextParam.isValid() || showTextParam.toBool())) {
+        const QString content = contentParam.isValid()
+                                    ? contentParam.toString()
+                                    : QStringLiteral("{module}: {status}  {elapsed}ms");
+        const QString resolved = resolveResultText(node, content, vars);
+        if (!resolved.trimmed().isEmpty()) {
+            OverlayShape text;
+            text.type = OverlayShape::Type::Text;
+            text.text = resolved;
+            const QVariant pos = node->getParam(QStringLiteral("resTextPosition"));
+            text.textPosition = qBound(0, pos.isValid() ? pos.toInt() : 0, 3);
+            const QVariant textColor = node->getParam(QStringLiteral("resTextColor"));
+            if (textColor.isValid()) {
+                const QColor color(textColor.toString());
+                if (color.isValid())
+                    text.color = color;
+            } else {
+                text.color = QColor(255, 255, 255);   // VM 默认白字
+            }
+            const QVariant size = node->getParam(QStringLiteral("resTextFontSize"));
+            text.fontSize = size.isValid() ? qBound(8, size.toInt(), 48) : 14;
+            const QVariant alpha = node->getParam(QStringLiteral("resTextOpacity"));
+            text.opacity = alpha.isValid() ? qBound(0, alpha.toInt(), 100) : 100;
+            overlay.append(text);
+        }
     }
 
     // VM「结果显示 → 图像显示」各层可单独显隐（截图 4 的眼睛开关）

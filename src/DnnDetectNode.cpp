@@ -382,6 +382,15 @@ void DnnDetectNode::updateParamPanel(QWidget *panel)
     updateAutoParamPanel(panel);
 }
 
+QVector<NodeResultField> DnnDetectNode::resultDisplayFields() const
+{
+    // VM「模块结果」口径：模块级 耗时/模块状态 + 检测目标个数（框明细在 Measure 输出里）。
+    QVector<NodeResultField> fields = HalconNode::resultDisplayFields();
+    fields << resultValue(QStringLiteral("detCount"), QStringLiteral("检测目标数"),
+                          QString(), 0);
+    return fields;
+}
+
 QStringList DnnDetectNode::yoloLayoutLabels()
 {
     return QStringList{QStringLiteral("v8/v11（无 objectness）"),

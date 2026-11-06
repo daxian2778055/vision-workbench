@@ -192,3 +192,19 @@ void TesseractOcrNode::updateParamPanel(QWidget *panel)
 {
     updateAutoParamPanel(panel);
 }
+
+QVector<NodeResultField> TesseractOcrNode::resultDisplayFields() const
+{
+    // VM「模块结果」口径：模块级 耗时/模块状态 + 识别文本/置信度/长度/行数/词数。
+    QVector<NodeResultField> fields = HalconNode::resultDisplayFields();
+    fields << resultValue(QStringLiteral("ocrText"), QStringLiteral("识别文本"))
+           << resultValue(QStringLiteral("confidence"), QStringLiteral("置信度"),
+                          QString(), 4)
+           << resultValue(QStringLiteral("ocrTextLength"), QStringLiteral("文本长度"),
+                          QString(), 0)
+           << resultValue(QStringLiteral("ocrLineCount"), QStringLiteral("行数"),
+                          QString(), 0)
+           << resultValue(QStringLiteral("ocrWordCount"), QStringLiteral("词数"),
+                          QString(), 0);
+    return fields;
+}

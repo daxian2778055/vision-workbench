@@ -6,6 +6,8 @@
 - 复核范围：主界面布局、面板、流程搭建/运行操作、模块配置规则、结果显示、图像显示、菜单/工具栏/快捷键
 - 不在范围：模板匹配算法语义与参数正确性（见 [VM4.4对齐声明复核-20261102.md](VM4.4对齐声明复核-20261102.md)）
 - 复核方式：官方帮助逐页取证 + 源码逐行核对；未启动 VM 图形界面做像素级比对，也未修改代码
+- **阅读提示**：正文（第三～十一节）保留 2026-11-03 基线结论，不代表当前状态；已闭合项与剩余缺口以文末
+  [第十二节](#十二2026-11-05-更新框架纯页签--二值化试点) 和 [第十三节](#十三2026-11-06-更新结果显示三项配置落地) 为准。
 
 ## 一、结论
 
@@ -288,3 +290,49 @@ python tools\repo_hygiene.py
 
 **下一步队列**：卡尺（IMVSCaliperModu）→ 直线/圆拟合 → 特征匹配 → 测量 → 识别 → 采集/标定/逻辑数据。
 VM 滤波的「均值/取反/边缘提取」暂未单独建节点（项目约束不扩算子目录），其中取反/边缘提取已有独立算子，后续按各自模块对齐。
+
+## 十三、2026-11-06 更新（「结果显示」三项配置落地）
+
+本轮把「结果显示」页里此前**只写参数、无人消费**的配置接到实际显示链路，并统一模块窗结果页口径。
+
+| 原编号 | 现状 | 证据 |
+|---|---|---|
+| P1-9 结果显示页缺三组配置 | 已闭合（第三组“图像/文本显示”真正生效） | 见下 |
+| P0-2 模块配置页签规则 | 已闭合（所有算子三页签 + 模板多一页） | `ModuleEditorDialog::rebuildVmTabs`、`ModuleEditorTest::testAllModuleWindowsArePureTabs` |
+| P1-1 缺帮助入口/确定取消 | 已闭合 | 模块窗顶部「?」、底部「连续执行/执行/确定」，关窗回滚 |
+| P1-10 参数即时生效无取消 | 已闭合 | 打开快照、取消回滚、确定提交一次重算 |
+
+**① 图像显示（`resShowImage/resImageColor/resImageOpacity/resImageLineWidth`）**
+- `ImageDisplayController::collectOverlayFromNode` 读取四项配置：未勾选「显示结果图像」⇒ 不绘制结果图元
+  （ROI/检测区域等搭建期参照仍保留）；勾选后颜色作用于 OK 结果图元，透明度 0~100、线宽 1~10 逐图元生效。
+- 语义色不被配置色覆盖：判 NG 红、未命中灰、角度副线青、交点黄、缺陷红。
+- 老工程没有这些键时保持原行为（命中绿/未命中灰/判 NG 红），不会被默认值改写。
+- 绘制侧：`HalconWindow::paintEvent` 按 `OverlayShape::lineWidth/opacity/fontSize` 设置画笔与透明度。
+
+**② 文本显示（`resShowText/resTextContent/resTextColor/resTextFontSize/resTextOpacity/resTextPosition`）**
+- 文本按 `resTextPosition` 画在显示图像四角（0 左上 / 1 右上 / 2 左下 / 3 右下，8px 内边距）。
+- 内容支持占位符：`{module}` 模块名、`{status}` OK/NG、`{elapsed}` 本轮耗时(ms)、
+  `{global.变量名}` 全局变量、`{结果键}` 本轮结果值（按 resultDisplayFields 精度格式化）；
+  解析不到的键保持原样（`{key}`），便于区分“变量名写错”和“值为空”。
+- `{elapsed}`/结果键优先取执行器 `nodeOutputsUpdated` 推送的 vars 快照（`MainWindow` 注入 provider），
+  节点参数表没有 `elapsedMs`，未注入时回退读节点参数。
+- 只有显式保存过 `resShowText` 或 `resTextContent` 才叠加，老工程不会凭空多出一行文字。
+
+**③ 模块窗「结果显示」页结果表（非模板算子）**
+- `ModuleEditorDialog::refreshResultTable` 优先按 `resultDisplayFields()` 渲染（结果项/值/单位/状态），
+  与运行界面「当前结果」面板同一份字段、名称、单位、精度；分组字段（逐目标结果）留给运行界面分组表。
+- 没有结果规范的节点（`NodeBase::resultDisplayFields()` 默认空表）才回退到“具名输出端口”列表。
+- 表对象名 `moduleResultTable`，供 UI 测试定位。
+
+**新增腿（`ModuleEditorTest`）**
+- `testResultOverlayUsesDisplayConfig`：颜色/线宽/透明度、四角文本、占位符解析、`{elapsed}` 走快照、
+  关闭「显示结果图像」后结果图元不再出现。
+- `testModuleResultPageUsesResultFields`：结果表按规范渲染（模块状态 OK / 平均灰度 12.50 / 耗时 -）。
+
+**仍为缺口的条目（截至 2026-11-06）**
+- P1-2 结果显示区“当前/历史/帮助”三页与历史序号：结果表仍按模块覆盖本轮结果。
+- P1-6 菜单结构（设置/工具独立、文件菜单另存为/示例/导入流程）。
+- P1-8 运行中角色切换/注销。
+- P2-3 日志栏“最近一条可展开”；P2-7 参数查找三分层；P2-10 模块箱/表头命名与密度；
+  P2-12 帮助菜单补齐；P2-13 结果表执行序号/执行时间。
+- 未做像素级比对：本机 VM 4.4 图形界面未启动，以上以官方帮助文字 + 源码/测试为准。

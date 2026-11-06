@@ -28,6 +28,9 @@ public:
 
     virtual void init() override;
     virtual void run(bool autoSwitch = true) override;
+    /// VM「模块结果」默认口径：所有算子至少展示 耗时 / 模块状态；
+    /// 矩形 ROI 的算子再补「检测区域」中心/宽/高/角度（值由 FlowExecutor 统一回写）。
+    QVector<NodeResultField> resultDisplayFields() const override;
     /// B1 统一输出：第一个输出端口 = 唯一「输出」，第 2 个及以后只登记为具名子结果
     virtual Port *addOutputPort(const QString &name, PortDataType dataType = PortDataType::Image) override;
     bool aggregatesOutputPorts() const override { return true; }
@@ -65,6 +68,13 @@ public:
     virtual QJsonObject toJson() const override;
     virtual void fromJson(const QJsonObject &json) override;
     virtual bool process() override;
+    /// 框架级公共结果字段：在基类 elapsedMs 之上补矩形 ROI 的检测区域字段。
+    /// 判断与结果表快照共用同一份取值（FlowExecutor::injectCommonResultVars 同源）。
+    QVariantMap commonResultFields(qint64 elapsedMs) const override;
+    /// VM「结果显示 → 结果判断」通用条件（resJudgeMode + resJudgeConditions JSON）。
+    /// 兼容旧调用点：转发到 NodeBase::evaluateResultJudgment（空公共字段）。
+    /// 实际判断统一由 NodeBase::execute() 调用，见该函数。
+    bool evaluateGenericResultJudgment(QString *reason) const;
     virtual QWidget *createParamPanel() override;
     virtual void updateParamPanel(QWidget *panel) override;
     /// P2-8：把所有声明了默认值的参数恢复为默认值（不触发自动预览，由调用方决定何时重算）。

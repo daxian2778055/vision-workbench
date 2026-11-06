@@ -125,3 +125,17 @@ void OpencvTrainClassifierNode::updateParamPanel(QWidget *panel)
 {
     updateAutoParamPanel(panel);
 }
+
+QVector<NodeResultField> OpencvTrainClassifierNode::resultDisplayFields() const
+{
+    // VM「模块结果」口径：模块级 耗时/模块状态 + 训练状态/样本数/类别数/特征维度。
+    QVector<NodeResultField> fields = HalconNode::resultDisplayFields();
+    fields << resultValue(QStringLiteral("trainStatus"), QStringLiteral("训练状态"))
+           << resultValue(QStringLiteral("sampleCount"), QStringLiteral("样本数"),
+                          QString(), 0)
+           << resultValue(QStringLiteral("classCount"), QStringLiteral("类别数"),
+                          QString(), 0)
+           << resultValue(QStringLiteral("featDim"), QStringLiteral("特征维度"),
+                          QString(), 0);
+    return fields;
+}

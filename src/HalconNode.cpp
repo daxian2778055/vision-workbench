@@ -4,6 +4,7 @@
 #include <QBuffer>
 #include <QByteArray>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QStringList>
 #include <QIODevice>
 #include <QPointer>
@@ -31,7 +32,8 @@
 #include "FlowScene.h"
 #include "AppLog.h"
 #include "GlobalVariableManager.h"
-#include "NodeResultFields.h"   // U-18：原因字段的口径（作废侧与 FlowExecutor 发布侧同一个谓词）
+#include "NodeResultFields.h"
+#include "VmSharedText.h"   // U-18：原因字段的口径（作废侧与 FlowExecutor 发布侧同一个谓词）
 #include "ProjectPaths.h"   // 179 行：拾取落参把方案目录内的绝对拾取换相对形态
 #include <QMenu>
 
@@ -186,6 +188,31 @@ bool HalconNode::inputDataPresent(int portIndex) const
     // 所以误接到数据端口上的图像对象在这里就是无值 ⇒ 不算有效输入。
     const QVariant var = data->getData();
     return var.isValid() && !var.isNull();
+}
+
+QVector<NodeResultField> HalconNode::resultDisplayFields() const
+{
+    // VM「模块结果」最低口径：耗时 + 模块状态。具体算子（卡尺/Blob/匹配等）有自己的
+    // 结果字段表，覆写本方法；未覆写的图像处理类算子至少不再把配置参数平铺进结果表。
+    QVector<NodeResultField> fields;
+    fields << resultValue(QStringLiteral("elapsedMs"), QStringLiteral("耗时"),
+                          QStringLiteral("ms"), 0)
+           << resultStatus(QStringLiteral("moduleStatus"), QStringLiteral("模块状态"));
+    // 矩形 ROI 算子补官方「检测区域」四项（值由 FlowExecutor 在每轮结果里统一回写，
+    // 算子自身不必重复写 param；非矩形 ROI/无 ROI 的工具不声明这组字段）。
+    if (geometryRoiType() == RoiType::Rect) {
+        fields << resultValue(QStringLiteral("roiCenterX"), VmSharedText::roiCenterXLabel(),
+                              QStringLiteral("px"), 2)
+               << resultValue(QStringLiteral("roiCenterY"), VmSharedText::roiCenterYLabel(),
+                              QStringLiteral("px"), 2)
+               << resultValue(QStringLiteral("roiWidth"), QStringLiteral("检测区域宽度"),
+                              QStringLiteral("px"), 2)
+               << resultValue(QStringLiteral("roiHeight"), QStringLiteral("检测区域高度"),
+                              QStringLiteral("px"), 2)
+               << resultValue(QStringLiteral("roiAngle"), QStringLiteral("检测区域角度"),
+                              QStringLiteral("°"), 3);
+    }
+    return fields;
 }
 
 void HalconNode::run(bool autoSwitch)
@@ -551,6 +578,35 @@ HObject HalconNode::getOutputImage() const
     return m_outputImage;
 }
 
+QVariantMap HalconNode::commonResultFields(qint64 elapsedMs) const
+{
+    QVariantMap fields = NodeBase::commonResultFields(elapsedMs);
+    if (geometryRoiType() != RoiType::Rect)
+        return fields;
+    double cx = 0.0, cy = 0.0, w = 0.0, h = 0.0;
+    const RoiShape shape = geometryRoi();
+    if (shape.type == RoiType::Rect) {
+        const QRectF box = QRectF(shape.p1, shape.p2).normalized();
+        if (box.width() > 1.0 && box.height() > 1.0) {
+            cx = box.x() + box.width() * 0.5;
+            cy = box.y() + box.height() * 0.5;
+            w = box.width();
+            h = box.height();
+        }
+    }
+    fields.insert(QStringLiteral("roiCenterX"), cx);
+    fields.insert(QStringLiteral("roiCenterY"), cy);
+    fields.insert(QStringLiteral("roiWidth"), w);
+    fields.insert(QStringLiteral("roiHeight"), h);
+    fields.insert(QStringLiteral("roiAngle"), 0.0);
+    return fields;
+}
+
+bool HalconNode::evaluateGenericResultJudgment(QString *reason) const
+{
+    return evaluateResultJudgment(QVariantMap(), reason);
+}
+
 bool HalconNode::process()
 {
     try {
@@ -560,6 +616,7 @@ bool HalconNode::process()
         // B1：逻辑输出（m_outputData 的键）也要清——聚合后它们不在接口上，
         // 但同样是"上一轮的结果"，残留会被本轮合并进去。
         clearAllOutputData();
+        setResultNg(false);   // 每轮复位「判 NG 但结果有效」，只有 run() 显式声明才保留输出
         // U-18：同一处作废上一轮的原因字段——图像侧有 P1/P2 的清场，原因字段原来没人清，
         // 于是「本轮判红但没人写原因」时面板显示的还是上一轮的原因（闸 B 实测到这一形态）。
         invalidateReasonFields(m_params);
@@ -589,9 +646,16 @@ bool HalconNode::process()
         run();
 
         // 失败状态传播：子类 run() 在 catch 中设置 moduleStatus=false 时，
-        // 此处必须如实返回失败，避免上游把失败当成功继续传播
-        if (m_params.contains(QStringLiteral("moduleStatus"))
-            && !m_params[QStringLiteral("moduleStatus")].toBool()) {
+        // 此处必须如实返回失败，避免上游把失败当成功继续传播。
+        // 结果判断类算子（卡尺/Blob）判 NG 时结果仍然有效：保留输出并照常发布，
+        // 让画布/结果面板显示红色结果；异常或执行失败仍按原逻辑清空。
+        const bool moduleOk = !(m_params.contains(QStringLiteral("moduleStatus"))
+                                && !m_params[QStringLiteral("moduleStatus")].toBool());
+        // VM「结果显示 → 结果判断」通用条件已上移到 NodeBase::execute() 统一应用：
+        // 那里覆盖所有节点类型与所有执行路径，且能拿到本轮耗时/ROI 等公共字段。
+        // 此处只保留节点自带判断（卡尺/Blob/模板）的结果，不再重复判一次。
+        const bool judgedOk = moduleOk;
+        if (!judgedOk && !isResultNg()) {
             m_outputImage.Clear();
             // 失败清空全部输出，避免下游误用上一轮结果（P2）
             clearAllOutputData();
@@ -620,13 +684,13 @@ bool HalconNode::process()
         // ⇒ 契约翻转后这些路径一律判成功，末端节点拿到空图而整条流程显示绿灯，中间节点则把
         // 红灯甩给下一个图像消费者（报"缺输入图像"，与真实原因不符）。凡承诺吐图的节点，
         // 没有产出就是失败，不能靠逐个节点补写位。
-        if (requiresImageOutput() && !output.IsInitialized()) {
+        if (judgedOk && requiresImageOutput() && !output.IsInitialized()) {
             m_params[QStringLiteral("moduleStatus")] = false;
             clearAllOutputData();
             return false;
         }
         // B1：承诺出数据（结果/数值）的节点，本轮一个逻辑输出都没有同样判失败
-        if (requiresDataOutput()) {
+        if (judgedOk && requiresDataOutput()) {
             bool produced = false;
             {
                 QMutexLocker locker(&m_dataMutex);
@@ -654,8 +718,9 @@ bool HalconNode::process()
             setOutputData(0, QSharedPointer<DataObject>());
         }
 
-        return true;
+        return judgedOk;
     } catch (...) {
+        setResultNg(false);   // 异常不是"判 NG 但结果有效"：不得让标志残留
         m_params["moduleStatus"] = false;
         // r19 P2：现场只看到"红节点"、不知道原因——异常必须留下 lastError
         if (m_params.value(QStringLiteral("lastError")).toString().trimmed().isEmpty())
@@ -767,10 +832,13 @@ void HalconNode::publishAggregatedOutputs()
 
 bool HalconNode::processDataOutputs()
 {
+    // 数据型孪生路径同样要每轮复位，否则上一轮 NG 会跨轮残留（P0 状态位契约）
+    setResultNg(false);
     const auto clearAllOutputs = [this] {
         clearAllOutputData();
     };
     const auto failRound = [this, &clearAllOutputs] {
+        setResultNg(false);
         m_params[QStringLiteral("moduleStatus")] = false;
         clearAllOutputs();
         return false;
@@ -840,6 +908,7 @@ bool HalconNode::processDataOutputs()
         publishAggregatedOutputs();
         return true;
     } catch (...) {
+        setResultNg(false);   // 异常不是"判 NG 但结果有效"
         VFP_DEBUG << "数据型节点失败[抛出异常]" << name();
         m_params[QStringLiteral("moduleStatus")] = false;
         m_outputImage.Clear();
@@ -1552,5 +1621,4 @@ void HalconNode::updateAutoParamPanel(QWidget *panel)
         }
     }
 }
-
 

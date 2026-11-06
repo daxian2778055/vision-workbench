@@ -95,3 +95,12 @@ void ZxingBarcodeNode::updateParamPanel(QWidget *panel)
 {
     updateAutoParamPanel(panel);
 }
+
+QVector<NodeResultField> ZxingBarcodeNode::resultDisplayFields() const
+{
+    // VM「模块结果」口径：模块级 耗时/模块状态 + 条码内容/条码格式。
+    QVector<NodeResultField> fields = HalconNode::resultDisplayFields();
+    fields << resultValue(QStringLiteral("barcodeText"), QStringLiteral("条码内容"))
+           << resultValue(QStringLiteral("barcodeFormat"), QStringLiteral("条码格式"));
+    return fields;
+}

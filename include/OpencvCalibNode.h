@@ -17,6 +17,8 @@ public:
     void run(bool autoSwitch = true) override;
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;
+    /// VM「模块结果」展示口径：标定状态/重投影误差/内参
+    QVector<NodeResultField> resultDisplayFields() const override;
 
 private:
     /// 执行标定（cornerSets 已够帧数时调用）；返回是否成功

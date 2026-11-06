@@ -1,5 +1,6 @@
 #include "OpencvThresholdNode.h"
 #include "NodeResultFields.h"
+#include "VmSharedText.h"
 #include "OpencvUtil.h"
 #include "DataObject.h"
 #include "AppLog.h"
@@ -12,6 +13,7 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <QElapsedTimer>
 
 namespace {
 
@@ -120,10 +122,19 @@ void OpencvThresholdNode::init()
     registerParams(specs);
 
     m_params[QStringLiteral("foregroundPixels")] = 0;
+    // VM「模块结果」展示用（结果字段，不上面板）
+    setParamDirect(QStringLiteral("elapsedMs"), 0.0);
+    setParamDirect(QStringLiteral("roiCenterX"), 0.0);
+    setParamDirect(QStringLiteral("roiCenterY"), 0.0);
+    setParamDirect(QStringLiteral("roiWidth"), 0.0);
+    setParamDirect(QStringLiteral("roiHeight"), 0.0);
+    setParamDirect(QStringLiteral("roiAngle"), 0.0);
 }
 
 void OpencvThresholdNode::run(bool /*autoSwitch*/)
 {
+    QElapsedTimer runTimer;   // 官方模块结果「耗时（ms）」
+    runTimer.start();
     try {
         HImage input(m_inputImage);
         if (!input.IsInitialized()) {
@@ -254,6 +265,22 @@ void OpencvThresholdNode::run(bool /*autoSwitch*/)
         m_params[QStringLiteral("foregroundPixels")] = fg;
         m_params["moduleStatus"] = true;
 
+        // VM「模块结果 → 检测区域」：矩形 ROI 的中心/宽/高/角度（无 ROI 时置 0）。
+        // 本节点只支持轴对齐矩形，角度恒为 0；中心取矩形连续坐标中点（left+width/2）。
+        if (roi.type == RoiType::Rect) {
+            const QRectF box = QRectF(roi.p1, roi.p2).normalized();
+            m_params[QStringLiteral("roiCenterX")] = box.x() + box.width() * 0.5;
+            m_params[QStringLiteral("roiCenterY")] = box.y() + box.height() * 0.5;
+            m_params[QStringLiteral("roiWidth")] = box.width();
+            m_params[QStringLiteral("roiHeight")] = box.height();
+        } else {
+            m_params[QStringLiteral("roiCenterX")] = 0.0;
+            m_params[QStringLiteral("roiCenterY")] = 0.0;
+            m_params[QStringLiteral("roiWidth")] = 0.0;
+            m_params[QStringLiteral("roiHeight")] = 0.0;
+        }
+        m_params[QStringLiteral("roiAngle")] = 0.0;
+
         // 输出：主图=最终二值图（ROI 外按设置），子结果保留同图 + 前景像素数。
         m_outputImage = OpencvUtil::matToHimage(output);
         auto binObj = QSharedPointer<DataObject>::create();
@@ -262,6 +289,7 @@ void OpencvThresholdNode::run(bool /*autoSwitch*/)
         auto numObj = QSharedPointer<DataObject>::create();
         numObj->setValue(double(fg));
         setOutputData(2, numObj);
+        m_params[QStringLiteral("elapsedMs")] = static_cast<double>(runTimer.elapsed());
     } catch (const std::exception &e) {
         VFP_DEBUG << "OpencvThresholdNode error:" << e.what();
         m_params[QStringLiteral("lastError")] = QString::fromUtf8(e.what());   // 原因到面板（2026-10-26）
@@ -349,6 +377,30 @@ void OpencvThresholdNode::applyParamVisibility(QWidget *panel)
             continue;
         form->setRowVisible(row, visible.contains(name));
     }
+}
+
+QVector<NodeResultField> OpencvThresholdNode::resultDisplayFields() const
+{
+    // 官方「模块结果」字段表（GUID-DBCA7DED「模块结果」节）：
+    // 耗时 / 模块状态 / 输出图像 / 输出掩膜 / 检测区域。
+    // 输出图像与输出掩膜是 image 型，官方说明「模块结果处不显示任何数据」，故不列；
+    // 本节点只支持轴对齐矩形 ROI，检测区域按中心/宽/高/角度四项展示。
+    // 配置参数一律不进结果表。
+    return {
+        resultValue(QStringLiteral("elapsedMs"), QStringLiteral("耗时"),
+                    QStringLiteral("ms"), 0),
+        resultStatus(QStringLiteral("moduleStatus"), QStringLiteral("模块状态")),
+        resultValue(QStringLiteral("roiCenterX"), VmSharedText::roiCenterXLabel(),
+                    QStringLiteral("px"), 2),
+        resultValue(QStringLiteral("roiCenterY"), VmSharedText::roiCenterYLabel(),
+                    QStringLiteral("px"), 2),
+        resultValue(QStringLiteral("roiWidth"), QStringLiteral("检测区域宽度"),
+                    QStringLiteral("px"), 2),
+        resultValue(QStringLiteral("roiHeight"), QStringLiteral("检测区域高度"),
+                    QStringLiteral("px"), 2),
+        resultValue(QStringLiteral("roiAngle"), QStringLiteral("检测区域角度"),
+                    QStringLiteral("°"), 3)
+    };
 }
 
 RoiShape OpencvThresholdNode::geometryRoi() const

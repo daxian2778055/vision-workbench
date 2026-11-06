@@ -1,5 +1,6 @@
 #include "OpencvTemplateMatchNode.h"
 #include "NodeResultFields.h"
+#include "VmSharedText.h"
 #include "OpencvUtil.h"
 #include "ModelCache.h"
 #include "DataObject.h"
@@ -677,6 +678,27 @@ void OpencvTemplateMatchNode::init()
     m_params[QStringLiteral("matchTemplateIndex")] = -1;
     m_params[QStringLiteral("matchTemplateName")] = QString();
     m_params[QStringLiteral("trainStatus")] = QString();
+    // ── VM「模块结果」展示用（结果字段，不上面板）──
+    setParamDirect(QStringLiteral("elapsedMs"), 0.0);
+    setParamDirect(QStringLiteral("matchStatus"), 0);
+    setParamDirect(QStringLiteral("matchBoxCenters"), QString());
+    setParamDirect(QStringLiteral("matchBoxCenterXs"), QString());
+    setParamDirect(QStringLiteral("matchBoxCenterYs"), QString());
+    setParamDirect(QStringLiteral("matchBoxWidths"), QString());
+    setParamDirect(QStringLiteral("matchBoxHeights"), QString());
+    setParamDirect(QStringLiteral("matchBoxAngles"), QString());
+    setParamDirect(QStringLiteral("matchPoints"), QString());
+    setParamDirect(QStringLiteral("matchPointXs"), QString());
+    setParamDirect(QStringLiteral("matchPointYs"), QString());
+    setParamDirect(QStringLiteral("matchScales"), QString());
+    setParamDirect(QStringLiteral("matchScaleXs"), QString());
+    setParamDirect(QStringLiteral("matchScaleYs"), QString());
+    setParamDirect(QStringLiteral("matchScores"), QString());
+    setParamDirect(QStringLiteral("searchCenterX"), 0.0);
+    setParamDirect(QStringLiteral("searchCenterY"), 0.0);
+    setParamDirect(QStringLiteral("searchWidth"), 0.0);
+    setParamDirect(QStringLiteral("searchHeight"), 0.0);
+    setParamDirect(QStringLiteral("searchAngle"), 0.0);
 }
 
 cv::Mat OpencvTemplateMatchNode::extractTemplatePatch(const cv::Mat &gray, const RoiShape &roi)
@@ -886,6 +908,8 @@ void OpencvTemplateMatchNode::run(bool autoSwitch)
 
 void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
 {
+    QElapsedTimer runTimer;   // 官方模块结果「耗时（ms）」
+    runTimer.start();
     try {
         HImage input(m_inputImage);
         if (!input.IsInitialized()) {
@@ -1486,6 +1510,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         // VM「排序类型 / 最大重叠率」：先收集命中，最后统一排序 + 重叠过滤再格式化
         struct MatchHit {
             double row, col, score, angle, scale, prow, pcol;
+            double scaleY;   ///< XY 独立尺度模式下的 Y 向尺度（整体模式等于 scale）
         };
         QVector<MatchHit> hits;
         int matchCount = 0;
@@ -1672,7 +1697,8 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 const double sa = std::sin(rad);
                 const double pCol = centerX + ca * ax - sa * ay;
                 const double pRow = centerY + sa * ax + ca * ay;
-                hits.append({centerY, centerX, bestScore, bestAngle, bestScale, pRow, pCol});
+                hits.append({centerY, centerX, bestScore, bestAngle, bestScale, pRow, pCol,
+                             bestScaleY});
                 matchList << QStringLiteral("%1,%2,%3,%4,%5,%6,%7")
                                  .arg(centerY, 0, 'f', 1)
                                  .arg(centerX, 0, 'f', 1)
@@ -1757,9 +1783,59 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         }
         m_params[QStringLiteral("matchList")] = matchList.join(QLatin1Char(';'));
 
+        // VM「模块结果」逐匹配目标字段：按最终 hits（重叠过滤 + 排序后）逐项输出。
+        // 匹配框 = 模板矩形经尺度/角度变换后的外框：宽 = 模板宽×尺度X，高 = 模板高×尺度Y。
+        {
+            QStringList centers, centerXs, centerYs, widths, heights, angles;
+            QStringList points, pointXs, pointYs, scales, scaleXs, scaleYs, scores;
+            for (const MatchHit &h : hits) {
+                centers << QStringLiteral("%1,%2")
+                               .arg(h.col, 0, 'f', 2).arg(h.row, 0, 'f', 2);
+                centerXs << QString::number(h.col, 'f', 2);
+                centerYs << QString::number(h.row, 'f', 2);
+                widths << QString::number(tmplW * h.scale, 'f', 2);
+                heights << QString::number(tmplH * h.scaleY, 'f', 2);
+                angles << QString::number(h.angle, 'f', 2);
+                points << QStringLiteral("%1,%2")
+                              .arg(h.pcol, 0, 'f', 2).arg(h.prow, 0, 'f', 2);
+                pointXs << QString::number(h.pcol, 'f', 2);
+                pointYs << QString::number(h.prow, 'f', 2);
+                scales << QString::number(h.scale, 'f', 4);
+                scaleXs << QString::number(h.scale, 'f', 4);
+                scaleYs << QString::number(h.scaleY, 'f', 4);
+                scores << QString::number(h.score, 'f', 4);
+            }
+            m_params[QStringLiteral("matchBoxCenters")] = centers.join(QLatin1Char(';'));
+            m_params[QStringLiteral("matchBoxCenterXs")] = centerXs.join(QLatin1Char(','));
+            m_params[QStringLiteral("matchBoxCenterYs")] = centerYs.join(QLatin1Char(','));
+            m_params[QStringLiteral("matchBoxWidths")] = widths.join(QLatin1Char(','));
+            m_params[QStringLiteral("matchBoxHeights")] = heights.join(QLatin1Char(','));
+            m_params[QStringLiteral("matchBoxAngles")] = angles.join(QLatin1Char(','));
+            m_params[QStringLiteral("matchPoints")] = points.join(QLatin1Char(';'));
+            m_params[QStringLiteral("matchPointXs")] = pointXs.join(QLatin1Char(','));
+            m_params[QStringLiteral("matchPointYs")] = pointYs.join(QLatin1Char(','));
+            m_params[QStringLiteral("matchScales")] = scales.join(QLatin1Char(','));
+            m_params[QStringLiteral("matchScaleXs")] = scaleXs.join(QLatin1Char(','));
+            m_params[QStringLiteral("matchScaleYs")] = scaleYs.join(QLatin1Char(','));
+            m_params[QStringLiteral("matchScores")] = scores.join(QLatin1Char(','));
+            // 匹配状态只看"是否找到达标目标"，与模块状态（结果判断）分开
+            m_params[QStringLiteral("matchStatus")] =
+                (matchCount > 0 && mainScore >= minScore) ? 1 : 0;
+
+            // VM「模块结果 → 检测区域」：本轮实际搜索区域（无 ROI 时整图；多边形时取包围盒）
+            m_params[QStringLiteral("searchCenterX")] =
+                searchRect.x + searchRect.width * 0.5;
+            m_params[QStringLiteral("searchCenterY")] =
+                searchRect.y + searchRect.height * 0.5;
+            m_params[QStringLiteral("searchWidth")] = searchRect.width;
+            m_params[QStringLiteral("searchHeight")] = searchRect.height;
+            m_params[QStringLiteral("searchAngle")] = 0.0;
+        }
+
         if (bestScore < -1e8) {
             m_params[QStringLiteral("trainStatus")] = QStringLiteral("无有效搜索位姿（模板相对图像过大）");
             m_params["moduleStatus"] = false;
+            m_params[QStringLiteral("elapsedMs")] = static_cast<double>(runTimer.elapsed());
             m_outputImage = m_inputImage;
             setOutputData(1, QSharedPointer<DataObject>());
             return;
@@ -1804,6 +1880,9 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 QStringLiteral("匹配分数 %1 低于阈值 %2").arg(bestScore).arg(minScore);
         }
         m_params["moduleStatus"] = judgedOk;
+        // 判 NG 但匹配结果有效（分数/角度/尺度/匹配点已算出）：保留输出与结果字段，
+        // 结果面板按红色展示逐目标数据；执行异常/无模板仍走普通失败（结果不保留）。
+        setResultNg(!judgedOk);
         const QString fixtureName =
             m_params.value(QStringLiteral("writeFixtureName")).toString().trimmed();
         if (!fixtureName.isEmpty() && bestScore >= minScore) {
@@ -1884,6 +1963,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         if (searchMaskObj)
             resObj->attachResult(QStringLiteral("检测区域掩膜"), searchMaskObj);
         setOutputData(1, resObj);
+        m_params[QStringLiteral("elapsedMs")] = static_cast<double>(runTimer.elapsed());
     } catch (const std::exception &e) {
         VFP_DEBUG << "OpencvTemplateMatchNode error:" << e.what();
         m_params[QStringLiteral("lastError")] =
@@ -1905,6 +1985,64 @@ QWidget *OpencvTemplateMatchNode::createParamPanel()
 void OpencvTemplateMatchNode::updateParamPanel(QWidget *panel)
 {
     updateAutoParamPanel(panel);
+}
+
+QVector<NodeResultField> OpencvTemplateMatchNode::resultDisplayFields() const
+{
+    // 官方「模块结果」字段表（GUID-3EEB6D91「模块结果」节，轮廓匹配）：
+    // 耗时 / 模块状态 / 匹配状态 / 匹配个数 / 匹配模板编号 / 匹配模板名称 /
+    // 匹配框(中心点/X/Y/宽度/高度/角度) / 匹配点(X/Y) / 尺度(X/Y) / 分数 /
+    // 检测区域(中心点X/Y/宽度/高度/角度)。
+    // 官方另有「横切值」「匹配轮廓点个数/轮廓点集」：本节点未计算/不显示，按宁缺勿造不列；
+    // 配置参数一律不进结果表。
+    const QString group = QStringLiteral("匹配%1");
+
+    QVector<NodeResultField> fields;
+    fields << resultValue(QStringLiteral("elapsedMs"), QStringLiteral("耗时"),
+                          QStringLiteral("ms"), 0)
+           << resultStatus(QStringLiteral("moduleStatus"), QStringLiteral("模块状态"))
+           << resultValue(QStringLiteral("matchStatus"), QStringLiteral("匹配状态"),
+                          QString(), 0)
+           << resultValue(QStringLiteral("matchCount"), QStringLiteral("匹配个数"),
+                          QString(), 0)
+           << resultValue(QStringLiteral("matchTemplateIndex"), QStringLiteral("匹配模板编号"),
+                          QString(), 0)
+           << resultValue(QStringLiteral("matchTemplateName"), QStringLiteral("匹配模板名称"))
+           << resultPoint(QStringLiteral("matchBoxCenters"), group, QStringLiteral("匹配框中心"), 2)
+           << resultList(QStringLiteral("matchBoxCenterXs"), group, QStringLiteral("匹配框中心X"),
+                         QStringLiteral("px"), 2)
+           << resultList(QStringLiteral("matchBoxCenterYs"), group, QStringLiteral("匹配框中心Y"),
+                         QStringLiteral("px"), 2)
+           << resultList(QStringLiteral("matchBoxWidths"), group, QStringLiteral("匹配框宽度"),
+                         QStringLiteral("px"), 2)
+           << resultList(QStringLiteral("matchBoxHeights"), group, QStringLiteral("匹配框高度"),
+                         QStringLiteral("px"), 2)
+           << resultList(QStringLiteral("matchBoxAngles"), group, QStringLiteral("角度"),
+                         QStringLiteral("°"), 2)
+           << resultPoint(QStringLiteral("matchPoints"), group, QStringLiteral("匹配点"), 2)
+           << resultList(QStringLiteral("matchPointXs"), group, QStringLiteral("匹配点X"),
+                         QStringLiteral("px"), 2)
+           << resultList(QStringLiteral("matchPointYs"), group, QStringLiteral("匹配点Y"),
+                         QStringLiteral("px"), 2)
+           << resultList(QStringLiteral("matchScales"), group, QStringLiteral("尺度"),
+                         QString(), 4)
+           << resultList(QStringLiteral("matchScaleXs"), group, QStringLiteral("尺度X"),
+                         QString(), 4)
+           << resultList(QStringLiteral("matchScaleYs"), group, QStringLiteral("尺度Y"),
+                         QString(), 4)
+           << resultList(QStringLiteral("matchScores"), group, QStringLiteral("分数"),
+                         QString(), 4)
+           << resultValue(QStringLiteral("searchCenterX"), VmSharedText::roiCenterXLabel(),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("searchCenterY"), VmSharedText::roiCenterYLabel(),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("searchWidth"), QStringLiteral("检测区域宽度"),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("searchHeight"), QStringLiteral("检测区域高度"),
+                          QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("searchAngle"), QStringLiteral("检测区域角度"),
+                          QStringLiteral("°"), 3);
+    return fields;
 }
 
 RoiShape OpencvTemplateMatchNode::geometryRoi() const

@@ -4,6 +4,9 @@
 #include <QVariantMap>
 #include <QHash>
 #include <QStringList>
+#include <QVector>
+
+#include "NodeResultFields.h"
 
 class QTreeWidget;
 class QTreeWidgetItem;
@@ -24,8 +27,11 @@ public:
     explicit ResultTablePanel(QWidget *parent = nullptr);
 
     /// 用某模块的一次执行结果更新表格；同一模块重复调用只原地更新，不新增行沿用旧值。
+    /// fields 非空时按它声明的顺序/名称/单位/精度渲染（VM「模块结果」口径，只显示结果字段）；
+    /// 空表 = 旧行为（平铺 vars 全部键，供尚未对齐的算子）。
     void setModuleResult(int moduleId, const QString &moduleName, bool success,
-                         qint64 elapsedMs, const QVariantMap &vars);
+                         qint64 elapsedMs, const QVariantMap &vars,
+                         const QVector<NodeResultField> &fields = QVector<NodeResultField>());
     /// 标记某模块本轮被跳过（未激活分支 / 循环体调度）：状态列显示"跳过"（灰色），
     /// 与"失败"区分——现场排查"哪个算子没跑"靠它，而不是从"失败"里猜。
     void setModuleSkipped(int moduleId, const QString &moduleName);
