@@ -46,10 +46,13 @@ QString VisionWorkbenchStyle::globalWidgetsStylesheet()
         "QSplitter::handle:horizontal { width: 6px; }"
         "QSplitter::handle:vertical { height: 6px; }"
         "QTabWidget::pane { border: 1px solid #3c3c42; background: #252528; margin-top: -1px; }"
-        "QTabBar::tab { background: #2d2d32; color: #c8c8d0; padding: 8px 16px;"
-        "  border: 1px solid #3c3c42; margin-right: 2px; }"
-        "QTabBar::tab:selected { background: #1e4a62; color: #ffffff; border-bottom-color: #1e4a62; }"
-        "QTabBar::tab:hover { background: #3a3a42; }"
+        // 页签配色按 VM 4.4 实测（选中 ≈#5d6064、未选中 ≈#3b3e41、悬停 ≈#4a4d51）：
+        // VM 的页签是中性灰，不使用蓝色高亮，流程栏与图像区两处页签都按此口径。
+        "QTabBar { background: #3b3e41; }"
+        "QTabBar::tab { background: #3b3e41; color: #d6d8dc; padding: 8px 16px;"
+        "  border: 1px solid #4a4d51; margin-right: 2px; }"
+        "QTabBar::tab:selected { background: #5d6064; color: #ffffff; border-bottom-color: #5d6064; }"
+        "QTabBar::tab:hover { background: #4a4d51; }"
         "QTreeWidget { background: #252528; color: #d8d8e0;"
         "  border: 1px solid #3c3c42; alternate-background-color: #2a2a2f; outline: none; }"
         "QTreeWidget::item:hover { background: #3a4860; }"

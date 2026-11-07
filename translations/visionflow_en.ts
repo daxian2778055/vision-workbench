@@ -1585,6 +1585,86 @@ Until the password is changed, canvas and module editing, saving/exporting schem
         <source>出厂默认口令仍在使用：写操作已禁止，直到管理员口令被修改</source>
         <translation>The factory default password is still in use: write operations stay blocked until the administrator password is changed</translation>
     </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="6053"/>
+        <source>方案另存为</source>
+        <translation>Save Scheme As</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="6055"/>
+        <source>导入流程</source>
+        <translation>Import Flow</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="6057"/>
+        <source>打开示例</source>
+        <translation>Open Example</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="2036"/>
+        <source>帮助文档</source>
+        <translation>Help Documentation</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="2039"/>
+        <source>帮助文档（在线）</source>
+        <translation>Help Documentation (Online)</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="2059"/>
+        <source>更多支持</source>
+        <translation>More Support</translation>
+    </message>
+    <message>
+        <source>V社区</source>
+        <translation>V Community</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="5911"/>
+        <source>打开安装目录 examples/ 下的示例方案</source>
+        <translation>Open the example scheme bundled under the installation examples/ directory</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="4819"/>
+        <source>打开示例方案</source>
+        <translation>Open Example Scheme</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="4820"/>
+        <source>未找到内置示例方案：请确认安装目录下存在 examples/*.vfp。</source>
+        <translation>No built-in example scheme found: make sure examples/*.vfp exists in the installation directory.</translation>
+    </message>
+    <message>
+        <source>相机管理</source>
+        <translation>Camera Management</translation>
+    </message>
+    <message>
+        <source>权限设置</source>
+        <translation>Permissions</translation>
+    </message>
+    <message>
+        <source>导出算子代码</source>
+        <translation>Export Operator Code</translation>
+    </message>
+    <message>
+        <source>检测报表</source>
+        <translation>Inspection Report</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="1222"/>
+        <source>预览用户</source>
+        <translation>Preview User</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="1224"/>
+        <source>视觉方案工作台 - 界面预览（只读，未登录）</source>
+        <translation>Vision Flow Platform - UI Preview (read-only, not signed in)</translation>
+    </message>
+    <message>
+        <location filename="../src/MainWindow.cpp" line="1236"/>
+        <source>界面预览模式：只读、未登录；保存 / 打开方案 / 运行均已禁用</source>
+        <translation>Preview mode: read-only, not signed in; save / open scheme / run are disabled</translation>
+    </message>
 </context>
 <context>
     <name>ProjectManager</name>

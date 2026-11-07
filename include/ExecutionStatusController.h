@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QString>
 #include <QElapsedTimer>
+#include <QIcon>
 #include <functional>
 
 #include "FlowExecutor.h"   // ExecutionState / FlowMode
@@ -31,6 +32,9 @@ public:
     /// 注入受控控件（允许为空：无界面环境下只跑状态机）。pauseBtn 为「暂停/继续」切换按钮。
     void setControls(QAction *startAction, QAction *stopAction, QToolButton *singleShotBtn,
                      QToolButton *pauseBtn = nullptr);
+    /// 注入「暂停 / 继续」两枚图标：工具条图标化后按钮只显示图标，
+    /// 两态切换必须换图标（文字仍同步更新，仅供 tooltip/无障碍读取）。
+    void setPauseIcons(const QIcon &pauseIcon, const QIcon &resumeIcon);
     /// 注入"当前激活执行器"取值函数（按钮态与连续模式判定用）
     void setExecutorProvider(std::function<FlowExecutor *()> provider)
     { m_executorProvider = std::move(provider); }
@@ -66,6 +70,8 @@ private:
     QAction *m_stopAction = nullptr;
     QToolButton *m_singleShotBtn = nullptr;
     QToolButton *m_pauseBtn = nullptr;
+    QIcon m_pauseIcon;   ///< 运行中显示（暂停）
+    QIcon m_resumeIcon;  ///< 暂停中显示（继续）
     std::function<FlowExecutor *()> m_executorProvider;
     QElapsedTimer m_runTimer;
     qint64 m_lastRunMs = 0;

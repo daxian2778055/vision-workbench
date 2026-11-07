@@ -11,6 +11,7 @@ class QLineEdit;
 class QSpinBox;
 class QLabel;
 class QPushButton;
+class QCheckBox;
 class QScrollArea;
 class RuntimeDesignerCanvas;
 
@@ -43,6 +44,9 @@ private slots:
     void onColumnDel();
     // 控件复制
     void duplicateSelected();
+    // 控件层级（运行时后创建的控件盖住先创建的）
+    void raiseSelected();
+    void lowerSelected();
     // 撤销/重做（结构性操作）
     void undo();
     void redo();
@@ -87,6 +91,9 @@ private:
     QComboBox *m_bindKeyCombo = nullptr;
     QLineEdit *m_colorEdit = nullptr;
     QSpinBox *m_fontSpin = nullptr;
+    QCheckBox *m_visibleCheck = nullptr;   /// 运行时是否显示（隐藏控件仍留在设计画布上以便编辑）
+    QPushButton *m_raiseBtn = nullptr;     /// 上移一层
+    QPushButton *m_lowerBtn = nullptr;     /// 下移一层
     // 结果表格专用（列 = 下拉添加 / 列表删除）
     QListWidget *m_columnList = nullptr;
     QComboBox *m_columnSource = nullptr;

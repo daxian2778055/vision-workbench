@@ -18,10 +18,12 @@
 #include <QTime>
 #include <QDateTime>
 #include <QTabWidget>
+#include <QTabBar>   // setEmbeddedMode 需要隐藏内部页签栏
 #include <QTableWidget>
 #include <QTextBrowser>
 #include <QSignalBlocker>
 #include <QSet>
+#include <QCheckBox>
 #include <QtNumeric>
 #include <functional>
 
@@ -205,10 +207,20 @@ ResultTablePanel::ResultTablePanel(QWidget *parent)
     m_filter->setPlaceholderText(QStringLiteral("筛选：模块 / 输出项 / 值"));
     m_filter->setClearButtonEnabled(true);
     m_filter->setMaximumWidth(220);
+    // VM 4.4「结果显示区域」：当前结果默认只显示画布选中的模块；
+    // 取消勾选可回到"全部模块总览"（导出 CSV / 报告始终包含全部模块）。
+    m_followSelection = new QCheckBox(QStringLiteral("仅显示选中模块"), this);
+    m_followSelection->setObjectName(QStringLiteral("followSelectionCheck"));
+    m_followSelection->setToolTip(
+        QStringLiteral("VM 4.4 口径：当前结果只显示画布选中的模块；取消勾选可查看全部模块"));
+    // 会话内开关，不做持久化（默认 = VM 口径；避免测试与用户配置互相污染）
+    m_followSelectionEnabled = true;
+    m_followSelection->setChecked(m_followSelectionEnabled);
     bar->addWidget(clearBtn);
     bar->addWidget(exportBtn);
     bar->addWidget(reportBtn);
     bar->addWidget(m_filter);
+    bar->addWidget(m_followSelection);
     bar->addStretch();
     m_summary = new QLabel(QStringLiteral("暂无结果"), this);
     bar->addWidget(m_summary);
@@ -239,10 +251,10 @@ ResultTablePanel::ResultTablePanel(QWidget *parent)
     auto *historyPage = new QWidget(this);
     auto *historyLay = new QVBoxLayout(historyPage);
     historyLay->setContentsMargins(0, 0, 0, 0);
-    m_history = new QTableWidget(0, 6, historyPage);
+    // VM 4.4 底部结果显示区列：执行序号 / 时间 / 模块数据（模块名+状态+耗时+输出摘要合并）
+    m_history = new QTableWidget(0, 3, historyPage);
     m_history->setHorizontalHeaderLabels(
-        {QStringLiteral("轮次"), QStringLiteral("时间"), QStringLiteral("模块"),
-         QStringLiteral("状态"), QStringLiteral("耗时(ms)"), QStringLiteral("输出摘要")});
+        {QStringLiteral("执行序号"), QStringLiteral("时间"), QStringLiteral("模块数据")});
     m_history->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_history->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_history->setAlternatingRowColors(true);
@@ -272,11 +284,16 @@ ResultTablePanel::ResultTablePanel(QWidget *parent)
     m_tabs = new QTabWidget(this);
     m_tabs->addTab(currentPage, QStringLiteral("当前结果"));
     m_tabs->addTab(historyPage, QStringLiteral("历史结果"));
-    m_tabs->addTab(helpPage, QStringLiteral("帮助信息"));
+    // VM 4.4 底部结果区的页签文案是「历史结果 / 帮助」（不带“信息”后缀）
+    m_tabs->addTab(helpPage, QStringLiteral("帮助"));
     root->addWidget(m_tabs, 1);
 
     connect(clearBtn, &QPushButton::clicked, this, &ResultTablePanel::clearResults);
     connect(m_filter, &QLineEdit::textChanged, this, [this](const QString &t) { setFilterText(t); });
+    connect(m_followSelection, &QCheckBox::toggled, this, [this](bool on) {
+        m_followSelectionEnabled = on;
+        applyFilter();
+    });
     connect(exportBtn, &QPushButton::clicked, this, [this]() {
         const QString path = QFileDialog::getSaveFileName(this, QStringLiteral("导出结果"),
                                                           QStringLiteral("results.csv"),
@@ -381,6 +398,8 @@ void ResultTablePanel::setModuleResult(int moduleId, const QString &moduleName, 
     }
 
     row->setText(kColName, moduleName.isEmpty() ? QStringLiteral("模块 %1").arg(moduleId) : moduleName);
+    // 选中模块过滤用：行 → 模块号（排序只按文本，数据角色不受影响）
+    row->setData(kColName, Qt::UserRole, moduleId);
     row->setText(kColStatus, success ? QStringLiteral("成功") : QStringLiteral("失败"));
     row->setText(kColElapsed, QString::number(elapsedMs));
     // P2-13：执行序号（轮次）与执行时间（本模块结果落地时刻）
@@ -448,8 +467,8 @@ void ResultTablePanel::setModuleResult(int moduleId, const QString &moduleName, 
     appendHistoryEntry(moduleId, row->text(kColName),
                        success ? QStringLiteral("成功") : QStringLiteral("失败"),
                        elapsedMs, {summaryText});
-    if (!m_filterText.isEmpty())
-        applyFilter();   // 筛选生效期间新增的结果也要遵守筛选
+    // 文本筛选或「仅显示选中模块」生效时，新增结果也要遵守当前可见规则
+    applyFilter();
     // 排序：Qt 只在「插入时」排序，而行文本是插入后才填的，所以这里按当前排序键显式重排；
     // 否则新模块永远落在末尾，用户点了表头排序也会被新数据打乱。
     if (m_tree->isSortingEnabled() && m_tree->topLevelItemCount() > 1)
@@ -467,6 +486,7 @@ void ResultTablePanel::setModuleSkipped(int moduleId, const QString &moduleName)
     }
 
     row->setText(kColName, moduleName.isEmpty() ? QStringLiteral("模块 %1").arg(moduleId) : moduleName);
+    row->setData(kColName, Qt::UserRole, moduleId);   // 选中模块过滤用
     row->setText(kColStatus, QStringLiteral("跳过"));
     row->setForeground(kColStatus, QBrush(QColor(0x80, 0x80, 0x80)));   // 灰色：未执行 ≠ 失败
     row->setText(kColElapsed, QStringLiteral("-"));
@@ -485,8 +505,7 @@ void ResultTablePanel::setModuleSkipped(int moduleId, const QString &moduleName)
 
     if (isNew)
         m_tree->resizeColumnToContents(kColName);
-    if (!m_filterText.isEmpty())
-        applyFilter();
+    applyFilter();   // 文本筛选 / 仅显示选中模块同样作用于“跳过”行
     if (m_tree->isSortingEnabled() && m_tree->topLevelItemCount() > 1)
         m_tree->sortItems(m_tree->sortColumn(), m_tree->header()->sortIndicatorOrder());
     updateSummary();
@@ -529,8 +548,30 @@ void ResultTablePanel::applyFilter()
         item->setHidden(filtering && !visible);
         return visible;
     };
-    for (int i = 0; i < m_tree->topLevelItemCount(); ++i)
-        filterItem(m_tree->topLevelItem(i), false);
+    // VM 4.4：当前结果默认只显示画布选中的模块（顶层行级过滤，子项不再参与选中判断）
+    const bool followSelection = m_followSelectionEnabled && m_currentModuleId >= 0;
+    for (int i = 0; i < m_tree->topLevelItemCount(); ++i) {
+        QTreeWidgetItem *row = m_tree->topLevelItem(i);
+        if (followSelection
+            && row->data(kColName, Qt::UserRole).toInt() != m_currentModuleId) {
+            row->setHidden(true);
+            continue;
+        }
+        filterItem(row, false);
+    }
+
+    // 历史页同步按选中模块过滤（导出 CSV / 报告不读隐藏态，仍包含全部模块）
+    if (m_history) {
+        for (int r = 0; r < m_history->rowCount(); ++r) {
+            QTableWidgetItem *moduleItem = m_history->item(r, 2);
+            if (!moduleItem)
+                continue;
+            const bool match = !followSelection
+                               || moduleItem->data(Qt::UserRole).toInt() == m_currentModuleId;
+            m_history->setRowHidden(r, !match);
+        }
+    }
+    updateSummary();   // 选中/筛选变化后汇总也要跟着变（“共 N 个模块” vs “选中模块”）
 }
 
 void ResultTablePanel::clearResults()
@@ -558,6 +599,8 @@ void ResultTablePanel::setCurrentModule(int moduleId)
         return;
     m_tree->clearSelection();
     m_tree->setCurrentItem(nullptr);
+    // 先按选中模块套过滤（VM 口径：当前结果只显示选中模块），再定位可见行
+    applyFilter();
     if (moduleId < 0)
         return;
     if (QTreeWidgetItem *row = m_rows.value(moduleId, nullptr)) {
@@ -569,21 +612,85 @@ void ResultTablePanel::setCurrentModule(int moduleId)
     }
 }
 
+void ResultTablePanel::setFollowSelectionEnabled(bool on)
+{
+    if (m_followSelectionEnabled == on)
+        return;
+    m_followSelectionEnabled = on;
+    if (m_followSelection) {
+        const QSignalBlocker blocker(m_followSelection);   // 避免 toggled 再触发一次
+        m_followSelection->setChecked(on);
+    }
+    applyFilter();
+}
+
+void ResultTablePanel::setHistoryOnlySelection(bool historyOnly)
+{
+    if (!m_tabs || m_historyOnly == historyOnly)
+        return;
+    m_historyOnly = historyOnly;
+
+    // 页签顺序固定：0 = 当前结果 / 1 = 历史结果 / 2 = 帮助。
+    // 采集模块的输出是图像（已在预览区实时展示）、逻辑工具只产出流程走向，
+    // 官方结果区对它们只展示历史结果；其它模块恢复「当前 + 历史」双页。
+    // 注意：当前页可能被 setPageVisibility 配置为不显示（底部结果区），
+    // 这里只切换“允许显示”的页，不能把配置隐藏的页反手翻出来。
+    m_tabs->setTabVisible(0, m_showCurrentPage && !m_historyOnly);
+    if (historyOnly) {
+        if (m_showHistoryPage)
+            m_tabs->setCurrentIndex(1);
+        else if (m_showHelpPage)
+            m_tabs->setCurrentIndex(2);
+    } else if (m_showCurrentPage && m_tabs->currentIndex() != 2) {
+        // 从“仅历史”回到双页：默认落在当前结果；用户停在帮助页时不强行拽走
+        m_tabs->setCurrentIndex(0);
+    }
+}
+
+void ResultTablePanel::setPageVisibility(bool current, bool history, bool help)
+{
+    m_showCurrentPage = current;
+    m_showHistoryPage = history;
+    m_showHelpPage = help;
+    if (!m_tabs)
+        return;
+
+    m_tabs->setTabVisible(0, m_showCurrentPage && !m_historyOnly);
+    m_tabs->setTabVisible(1, m_showHistoryPage);
+    m_tabs->setTabVisible(2, m_showHelpPage);
+
+    // 当前页若被配置隐藏，落到第一个仍可见的页，避免出现“空页签容器”
+    if (!m_tabs->isTabVisible(m_tabs->currentIndex())) {
+        for (int i = 0; i < m_tabs->count(); ++i) {
+            if (m_tabs->isTabVisible(i)) {
+                m_tabs->setCurrentIndex(i);
+                break;
+            }
+        }
+    }
+}
+
+void ResultTablePanel::setEmbeddedMode(bool on)
+{
+    m_embedded = on;
+    if (m_tabs)
+        m_tabs->tabBar()->setVisible(!on);
+}
+
 void ResultTablePanel::appendHistoryEntry(int moduleId, const QString &moduleName,
                                           const QString &status, qint64 elapsedMs,
                                           const QStringList &values)
 {
-    Q_UNUSED(moduleId)
     if (!m_history)
         return;
 
-    // 同一轮内同一模块可能先"跳过"后被更新/重试：先删掉该轮同名旧行，保证一条
+    // 同一轮内同一模块可能先"跳过"后被更新/重试：按模块号删掉该轮旧行，保证一条
     const QString roundText = QString::number(m_runSequence);
     for (int r = m_history->rowCount() - 1; r >= 0; --r) {
         QTableWidgetItem *roundItem = m_history->item(r, 0);
         QTableWidgetItem *moduleItem = m_history->item(r, 2);
         if (roundItem && moduleItem && roundItem->text() == roundText
-            && moduleItem->text() == moduleName) {
+            && moduleItem->data(Qt::UserRole).toInt() == moduleId) {
             m_history->removeRow(r);
         }
     }
@@ -592,18 +699,32 @@ void ResultTablePanel::appendHistoryEntry(int moduleId, const QString &moduleNam
     m_history->setItem(0, 0, new QTableWidgetItem(roundText));
     m_history->setItem(0, 1, new QTableWidgetItem(
         QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz"))));
-    m_history->setItem(0, 2, new QTableWidgetItem(moduleName));
-    m_history->setItem(0, 3, new QTableWidgetItem(status));
-    m_history->setItem(0, 4, new QTableWidgetItem(
-        elapsedMs < 0 ? QStringLiteral("-") : QString::number(elapsedMs)));
-    m_history->setItem(0, 5, new QTableWidgetItem(values.join(QStringLiteral("; "))));
-
+    // 「模块数据」列：模块名（状态，耗时）+ 输出摘要（VM 三列结构把明细合并到这一列）
+    const QString elapsedText = elapsedMs < 0 ? QStringLiteral("-")
+                                              : QStringLiteral("%1 ms").arg(elapsedMs);
+    QString summary = values.join(QStringLiteral("; "));
+    if (summary.size() > 400)
+        summary = summary.left(399) + QStringLiteral("…");
+    QString dataText = QStringLiteral("%1（%2，%3）").arg(moduleName, status, elapsedText);
+    if (!summary.isEmpty())
+        dataText += QStringLiteral("  ") + summary;
+    auto *dataItem = new QTableWidgetItem(dataText);
+    dataItem->setData(Qt::UserRole, moduleId);   // 历史页按选中模块过滤用
+    dataItem->setToolTip(summary.isEmpty() ? dataText : summary);
+    m_history->setItem(0, 2, dataItem);
     if (status == QStringLiteral("成功"))
-        m_history->item(0, 3)->setForeground(QBrush(QColor(0x1B, 0x7F, 0x37)));
+        dataItem->setForeground(QBrush(QColor(0x1B, 0x7F, 0x37)));
     else if (status == QStringLiteral("失败"))
-        m_history->item(0, 3)->setForeground(QBrush(QColor(0xC0, 0x2B, 0x1D)));
+        dataItem->setForeground(QBrush(QColor(0xC0, 0x2B, 0x1D)));
     else
-        m_history->item(0, 3)->setForeground(QBrush(QColor(0x80, 0x80, 0x80)));
+        dataItem->setForeground(QBrush(QColor(0x80, 0x80, 0x80)));
+    // （旧 6 列历史单元格已合并为上面的「模块数据」列）
+
+
+
+
+
+
 
     // 历史上限：500 条，超出丢弃最旧（避免长时间运行内存无界增长）
     while (m_history->rowCount() > 500)
@@ -627,6 +748,16 @@ void ResultTablePanel::updateSummary()
     }
     if (total == 0) {
         m_summary->setText(QStringLiteral("暂无结果"));
+        return;
+    }
+    // 跟随选中时，汇总不再报“共 N 个模块”（表里只显示一个），改为明确说明当前视图
+    if (m_followSelectionEnabled && m_currentModuleId >= 0) {
+        if (!m_rows.contains(m_currentModuleId))
+            m_summary->setText(
+                QStringLiteral("选中模块暂无结果（其余 %1 个模块已隐藏）").arg(total));
+        else
+            m_summary->setText(QStringLiteral("选中模块结果 · 更新于 %1")
+                                   .arg(QTime::currentTime().toString(QStringLiteral("HH:mm:ss"))));
         return;
     }
     m_summary->setText(QStringLiteral("共 %1 个模块（失败 %2，跳过 %3） · 更新于 %4")

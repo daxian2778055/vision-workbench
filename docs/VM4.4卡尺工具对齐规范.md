@@ -34,7 +34,7 @@
 | 灰度 | 按边缘灰度或边缘对灰度均值计分 | `scoreGray` | ✅ 第三批补 |
 | 计分曲线 | 单边（递增/递减）与双边函数，`X0/X1/XC/Y0~Y1`（XML 命名：起点/X中点/终点/Y计分） | 每项独立：`contrast*/position*/spacing*/…` + 双边 `*H` | ✅ 第十一批：每项 6 参数，默认值照 XML |
 | **参数条件显隐** | 官方多处注明「**边缘模式设置为边缘对时，才有该参数**」（边缘1极性、边缘对宽度、归一位置、归一相对位置、间距、间距差、相对间距差）；「单边缘时该参数为**对比度**，边缘对时为**边缘对对比度**」 | `applyParamVisibility()` | ✅ 第五批补 |
-| 投影方向 | 矩形 ROI：纵向投影（投向矩形宽）/ 横向投影（投向矩形高）；扇环 ROI：径向 / 环向 | `projectionDirection` 0=横向（老行为）/ 1=纵向 | ✅ 矩形两向已做；扇环未做 |
+| 投影方向 | 矩形 ROI：纵向投影（投向矩形宽）/ 横向投影（投向矩形高）；扇环 ROI：径向 / 环向 | `projectionDirection` 0=横向（老行为）/ 1=纵向 | ✅ 矩形两向已做；扇环 ROI 用户决定不做 |
 | 模糊边缘 | 开启增强候选边缘点集提取能力，获取更多候选点集数，耗时增加明显 | `blurEdge` | ⚠️ 按描述实现（见 §三第六批） |
 | 计分方式 | 位置评分（绝对/相对/归一化位置）、间距评分（间距差/相对间距差/间距）、对比度评分（对比度/灰度）；单边/双边计分函数 | `score*` 9 个开关 + 总分 N 次方根 | ✅ 第二/三批补 |
 
@@ -93,7 +93,7 @@
 | 边缘点*X/Y | 端口 1 `MeasureResult.extraValues` | 逐结果 (col,row) |
 | 测量宽度 | `avgWidth` / 端口 3 `extraValues` | 平均 + 逐边对宽度 |
 | 直线*起点/终点 X/Y | 端口 3 `extraValues` | 逐边对 (col1,row1,col2,row2,width) |
-| 圆弧*（中心点/半径/角度） | — | 扇环 ROI 专用，未做（见 §四） |
+| 圆弧*（中心点/半径/角度） | — | 扇环 ROI 专用，用户决定不做（见 §四） |
 
 ### 第四批：投影方向（矩形 ROI）
 
@@ -174,7 +174,7 @@
 | 测量宽度 | `avgWidth/minWidth/maxWidth`（边对模式），单位 px |
 | 直线*起点/终点 | `pairLines`（`c1,r1,c2,r2,w;…`）→ 起点→终点+宽度 |
 | 检测区域 | `roiCenterX/Y`、`roiWidth/Height/Angle`（中心点/宽/高/角度） |
-| 圆弧* | 未做（扇环 ROI，见 §四） |
+| 圆弧* | 用户决定不做（扇环 ROI，见 §四） |
 
 实现：
 - 新增 `include/NodeResultFields.h` 的 `NodeResultField`（key/label/group/unit/decimals/kind）与
@@ -356,6 +356,20 @@ VM 是「模块变红但结果仍显示」；原框架在 `moduleStatus=false` �
 `execute()` 返回 false、`isResultNg()=true`、`getOutputData(1)` 非空且 `extraValues` 仍在；
 `collectOverlayFromNode` 产出的图元颜色为红色（R>200、G<100）。
 
+### 第七批：排序采集顺序与数值边界（P1 收口）
+
+| 项 | 实现 |
+|---|---|
+| 亚像素 clamp | `sub = qBound(m, m+0.5+0.5*(a0-a2)/denom, m+1)`，防二次项接近 0 时插值发散导致 `int(floor(sub))` 未定义、灰度外插、坐标溢出。**如实说明**：在 NMS 条件 `a1>=a0 && a1>a2` 下，令 `u=a1-a0>=0, v=a1-a2>0`，偏移 `=0.5*(u-v)/(u+v) ∈ (-0.5,0.5]`，即 `sub` 本就恒在 `(m,m+1]`；所以这是**防御性加固**，不会改变正常结果，不是修一个会复现的错值。 |
+| 采集顺序排序键 | `EdgeHit/PairHit` 增 `sigPos`（沿一维信号轴的亚像素位置）；`byAcquisitionPair/Edge` 由 `(profile, offset)` 改为 `(profile, sigPos)`。纵向投影时 `offset` 来自剖面法线位移、同剖面内恒定，用它会把边对贪心选优的残留顺序当成「方向正向」。 |
+| 单边分支恢复 | `sortType=0/3` 的单边分支也执行 `stable_sort(byAcquisitionEdge)`。此前只有边对分支恢复，`maxCount + 任一计分项` 会先按分数排序，「方向正向」实际输出分数顺序。 |
+| 参数边界 | `halfWidth/step/threshold/edgeMode` 用 `qBound` 夹到注册范围，防负向量 size 与 `L/step` 除零；`threshold` 回退 10→15、`edgeMode` 回退 0→1（`run` / `applyParamVisibility` / `resultDisplayFields` 三处），与 `registerParams` 默认值一致。 |
+
+**数值腿** `NodeCoreTest::testCaliperAcquisitionSortOrder`（`tests/node_core_test.cpp`）：
+- 单边 + 位置评分 + `maxCount=12` + `sortType=0`：12 个边缘点按 `(row↑, col↓)` 采集顺序（卡尺线竖直 ⇒ 法线朝 −x）
+- 纵向投影 + 边对贪心 + `sortType=0`：33 个边对，同剖面内按信号轴 y 递增
+- 所有边缘点坐标有限且不溢出图像（守住亚像素 clamp）
+
 **第一批数值腿** `NodeCoreTest::testCaliperVmParams`（`tests/node_core_test.cpp`）：
 - 滤波尺寸：固定椒盐噪声图、阈值 60 → `size1=50 / size5=43`（噪声被抑制，42 条真实边缘不丢）
 - 边缘1极性：亮带边对 `any=21 / 从黑到白=0 / 从白到黑=21`（两种固定极性互补覆盖全部边对）
@@ -365,7 +379,8 @@ VM 是「模块变红但结果仍显示」；原框架在 `moduleStatus=false` �
 ## 四、剩余差距（下一批）
 
 1. **模糊边缘的具体算法**：当前只做了「降低极值门槛」，未复刻官方的额外计算（见 §三第六批）。
-2. **扇环 ROI**（径向/环向投影，含「圆弧*」结果字段）：矩形 ROI 的纵向/横向投影已做，扇环几何未做（用户确认暂不做）。
+2. ~~**扇环 ROI**（径向/环向投影，含「圆弧*」结果字段）~~：**用户决定不做**（2026-11-07 明确排除）。
+   矩形 ROI 的纵向/横向投影已做，本工具只覆盖矩形 ROI；「圆弧*」结果字段随之不做。
 
 （第七批已关闭原第 8 条：结果字段口径与画布叠加样式已按官方字段表实现。
 第八批已关闭原第 2 条：计分曲线改为官方分段直线 + N 次方根合并。

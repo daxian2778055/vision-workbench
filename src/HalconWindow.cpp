@@ -419,7 +419,21 @@ void HalconWindow::paintEvent(QPaintEvent *event)
 {
     QWidget::paintEvent(event);
 
-    if (m_qImage) {
+    // 空态：VM 4.4 图像区同款透明棋盘格（实测 10px 格、#2d2d2d / #3c3c3c）。
+    // 有图时保持原有绘制路径不变；空态棋盘格只提示“当前无图像”，不影响缩放/叠加。
+    if (!m_qImage) {
+        QPainter painter(this);
+        constexpr int kCell = 10;
+        const QColor baseColor(0x2d, 0x2d, 0x2d);
+        const QColor alternateColor(0x3c, 0x3c, 0x3c);
+        painter.fillRect(rect(), baseColor);
+        for (int y = 0; y < height(); y += kCell) {
+            const int startX = ((y / kCell) & 1) ? kCell : 0;   // 奇数行错开一格形成棋盘
+            for (int x = startX; x < width(); x += kCell * 2)
+                painter.fillRect(x, y, kCell, kCell, alternateColor);
+        }
+        return;
+    } else {
         QPainter painter(this);
         painter.setRenderHint(QPainter::SmoothPixmapTransform);
 

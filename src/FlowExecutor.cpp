@@ -702,7 +702,7 @@ void FlowExecutor::run()
         // executeNode()/NodeBase::execute() 只覆盖真正跑过的节点；禁用、分支跳过、
         // 失败拦停后的后续节点根本不进这两处，上一轮 NG 会跨轮残留并被画布/结果字段读到。
         for (NodeBase *n : nodes)
-            if (n) n->setResultNg(false);
+            if (n) n->resetRoundState();
 
         QList<NodeBase *> sortedNodes;
         {
@@ -1210,7 +1210,7 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
     m_lastNodeAborted = false;
     m_nodeRecordWritten = false;
     node->setRunAborted(false);   // 第三态复位（2026-10-28 P3-14）
-    node->setResultNg(false);     // 轮首统一复位（P0 状态位契约，与轮首遍历双保险）
+    node->resetRoundState();     // 轮首统一复位（P0 状态位契约，与轮首遍历双保险）
 
     bool success = false;
     QElapsedTimer nodeTimer;
@@ -1652,7 +1652,7 @@ void FlowExecutor::clearNodeCachesOnException(NodeBase *node)
         return;
     // 异常是"执行失败"，不是"判 NG 但结果有效"：标志必须复位，
     // 否则端口已清空、缓存已清，后面却仍按 NG 语义推结果字段 / 保留旧标记。
-    node->setResultNg(false);
+    node->resetRoundState();
     // ① 清输出端口（与正常失败分支同口径，2026-10-25 复核 P3-1 残留）：只清 m_nodeData
     //    不够——propagateData 在没有缓存条目时会回落到 sourceNode->getOutputData(port)，
     //    于是下游仍能读到失败节点的旧/半成品输出（stopOnFailure=false 时下游会继续跑）。
@@ -2249,7 +2249,7 @@ void FlowExecutor::resetState()
         for (NodeBase *n : all) {
             if (n) {
                 n->onRoundStart();
-                n->setResultNg(false);
+                n->resetRoundState();
             }
         }
     }
@@ -2288,7 +2288,7 @@ void FlowExecutor::recordNodeSkipped(NodeBase *node, const QString &reason)
     }
     // 三态可视化：把"跳过"从统计数字变成 UI 可消费的事件（跨线程排队到界面线程）
     // 跳过 = 第三态（2026-10-28 P3-14）：画布琥珀表示"本轮未执行"，不是绿（成功）
-    node->setResultNg(false);   // 本轮跳过：不得沿用上一轮的 NG 态
+    node->resetRoundState();   // 本轮跳过：不得沿用上一轮的 NG 态
     node->setRunAborted(true);
     emit nodeSkipped(node, reason);
 }

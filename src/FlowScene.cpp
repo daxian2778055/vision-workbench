@@ -151,12 +151,14 @@ FlowScene::~FlowScene()
 
 void FlowScene::drawBackground(QPainter *painter, const QRectF &rect)
 {
-    const QColor bg(0x1e, 0x1e, 0x21);
-    const QColor gridLine(0x2c, 0x2c, 0x32);
+    // VM 4.4 流程画布实测（vm_main.png，y=300 逐像素扫描）：底色 #46474a，
+    // 叠加 #424245 的细网格（约 4px 间距）。原 #1e1e21 + 20px 网格比 VM 暗一档、网格也更疏。
+    const QColor bg(0x46, 0x47, 0x4a);
+    const QColor gridLine(0x42, 0x42, 0x45);
     painter->fillRect(rect, bg);
 
     painter->setPen(QPen(gridLine, 0));
-    constexpr qreal grid = 20.0;
+    constexpr qreal grid = 4.0;
     qreal x = std::floor(rect.left() / grid) * grid;
     while (x <= rect.right()) {
         painter->drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()));

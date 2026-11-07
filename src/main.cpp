@@ -403,7 +403,13 @@ int main(int argc, char *argv[])
         qRegisterMetaType<MeasureResult>("MeasureResult");
         qRegisterMetaType<QVector<double>>("QVector<double>");
 
-        MainWindow w;
+        // 界面预览模式（P1-6 菜单核对）：跳过登录、建立只读会话。
+        // 仅在显式传 --preview-ui 时启用；正常启动的鉴权路径完全不变。
+        const bool previewUi = a.arguments().contains(QStringLiteral("--preview-ui"));
+        if (previewUi)
+            qInfo("VisionFlowPlatform: preview UI mode (read-only, login skipped)");
+
+        MainWindow w(nullptr, previewUi);
         // 取消登录（A1-②）：MainWindow 构造期弹的登录框被取消/关闭 ⇒ 不建立会话，
         // 也就不该有主界面。历史实现会给一个 guest/Operator 免鉴权会话然后照常显示窗口。
         if (!w.loginAccepted()) {
@@ -413,8 +419,10 @@ int main(int argc, char *argv[])
         ActivateRequestFilter activateFilter(&w);
         a.installNativeEventFilter(&activateFilter);
         w.show();
-        // P2-1：欢迎页在主界面首帧之后弹出（配置了「启动时不再显示」则跳过）
-        QTimer::singleShot(0, &w, &MainWindow::maybeShowWelcomeOnStartup);
+        // P2-1：欢迎页在主界面首帧之后弹出（配置了「启动时不再显示」则跳过）；
+        // 预览模式不弹欢迎页（它是另一个需要点击的模态框，会挡住菜单核对）。
+        if (!previewUi)
+            QTimer::singleShot(0, &w, &MainWindow::maybeShowWelcomeOnStartup);
 
         int result = a.exec();
         a.removeNativeEventFilter(&activateFilter);

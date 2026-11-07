@@ -25,6 +25,8 @@
 #include "ManualPathResolver.h"   // 切片 B 手册解析族首抽：手册候选链与首读者胜出（判据见头件）
 #include "RoundVariableFeed.h"    // 切片 B 变量族首抽：变量域两出口装配（判据见头件）
 #include "NodeIconPalette.h"      // 切片 B 图标族首抽：类别色语义表与圆标合成（判据见头件）
+#include "CalibrationBoard.h"     // P2 工具菜单：标定板图案渲染与保存（纯数据面）
+#include "DiagnosticsCollector.h" // P2 工具菜单：异常信息收集报告生成与导出（纯数据面）
 #include "UpstreamWalk.h"         // 切片 B 图谱族首抽：输入端口上游闭包游走（判据见头件）
 #include "FindLineNode.h"
 #include "FindCircleNode.h"
@@ -110,6 +112,8 @@
 #include <QTimer>
 #include <QGraphicsView>
 #include <QPainter>
+#include <QPixmap>      // 模块箱分类图标（本地绘制，不依赖外部图标资源）
+#include <QPolygonF>
 #include <QDateTime>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
@@ -123,6 +127,8 @@
 #include <QScrollBar>
 #include <QStorageInfo>
 #include <QFileInfo>
+#include <QTableWidget>
+#include <QHeaderView>
 #include <QDesktopServices>
 #include <QUrl>
 #include <QSysInfo>
@@ -156,6 +162,9 @@ using namespace HalconCpp;
 #include <QCheckBox>
 #include <QLineEdit>
 #include <QLabel>
+#include <QPlainTextEdit>
+#include <QFontDatabase>
+#include <QTabBar>
 #include <QShortcut>
 #include <QSettings>
 #include <QMenu>
@@ -191,9 +200,443 @@ static_assert(static_cast<int>(FlowMode::Continuous) == 0
                   && static_cast<int>(FlowMode::HardwareTrigger) == 2,
               "FlowMode 顺序变更必须同步：组合框顺序 / scene->flowMode 持久化取值 / flowModeSuffix");
 
+/// 模块箱分类图标（实装 4.4）：24px 透明底线框字形，按分类语义区分。
+/// 只用 QPainter 本地绘制，不依赖外部图标资源（仓库内没有 VM 图标资产）。
+QIcon toolCategoryGlyph(const QString &group)
+{
+    QPixmap pixmap(24, 24);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    // VM 左侧模块箱资产实测：字形 24–28px、亮部 ≈#afb4b4、笔画约 2px
+    const QColor ink(0xb0, 0xb4, 0xb4);
+    painter.setPen(QPen(ink, 1.8));
+    painter.setBrush(Qt::NoBrush);
+
+    if (group == QStringLiteral("图像采集")) {
+        // 相机：机身 + 镜头 + 顶部取景凸起
+        painter.drawRoundedRect(QRectF(3, 8, 18, 12), 2, 2);
+        painter.drawEllipse(QPointF(12, 14), 3.2, 3.2);
+        painter.drawRect(QRectF(8, 5, 8, 3));
+    } else if (group == QStringLiteral("图像处理")) {
+        // 图像：画框 + 太阳 + 山形折线
+        painter.drawRect(QRectF(3.5, 4.5, 17, 15));
+        painter.drawEllipse(QPointF(8.5, 9.5), 1.7, 1.7);
+        painter.drawPolyline(QPolygonF() << QPointF(5, 17) << QPointF(10, 11.5)
+                                          << QPointF(14, 15) << QPointF(18.5, 10.5));
+    } else if (group == QStringLiteral("特征定位")) {
+        // 十字准星：圆环 + 四向刻度 + 中心点
+        painter.drawEllipse(QPointF(12, 12), 5.5, 5.5);
+        painter.drawLine(QPointF(12, 3), QPointF(12, 6.5));
+        painter.drawLine(QPointF(12, 17.5), QPointF(12, 21));
+        painter.drawLine(QPointF(3, 12), QPointF(6.5, 12));
+        painter.drawLine(QPointF(17.5, 12), QPointF(21, 12));
+        painter.setBrush(ink);
+        painter.drawEllipse(QPointF(12, 12), 1.2, 1.2);
+        painter.setBrush(Qt::NoBrush);
+    } else if (group == QStringLiteral("几何测量")) {
+        // 卡尺：横梁 + 两卡爪 + 刻度
+        painter.drawLine(QPointF(4, 6.5), QPointF(20, 6.5));
+        painter.drawLine(QPointF(6, 6.5), QPointF(6, 18));
+        painter.drawLine(QPointF(17, 6.5), QPointF(17, 18));
+        painter.drawLine(QPointF(6, 18), QPointF(17, 18));
+        painter.drawLine(QPointF(9, 6.5), QPointF(9, 10));
+        painter.drawLine(QPointF(12, 6.5), QPointF(12, 9));
+        painter.drawLine(QPointF(15, 6.5), QPointF(15, 10));
+    } else if (group == QStringLiteral("深度学习")) {
+        // 神经网络：三层节点 + 连线
+        const QPointF left[3] = {QPointF(4.5, 6), QPointF(4.5, 12), QPointF(4.5, 18)};
+        const QPointF mid[2] = {QPointF(12, 9), QPointF(12, 15)};
+        painter.drawEllipse(QPointF(19.5, 12), 1.8, 1.8);
+        for (int i = 0; i < 3; ++i) {
+            painter.drawEllipse(left[i], 1.8, 1.8);
+            painter.drawLine(left[i], mid[i / 2]);
+        }
+        for (int i = 0; i < 2; ++i) {
+            painter.drawEllipse(mid[i], 1.8, 1.8);
+            painter.drawLine(mid[i], QPointF(19.5, 12));
+        }
+    } else if (group == QStringLiteral("相机 IO")) {
+        // 芯片：方框 + 四向引脚
+        painter.drawRect(QRectF(6, 6, 12, 12));
+        for (int i = 0; i < 3; ++i) {
+            const qreal offset = 9 + i * 3;
+            painter.drawLine(QPointF(offset, 2.5), QPointF(offset, 6));
+            painter.drawLine(QPointF(offset, 18), QPointF(offset, 21.5));
+            painter.drawLine(QPointF(2.5, offset), QPointF(6, offset));
+            painter.drawLine(QPointF(18, offset), QPointF(21.5, offset));
+        }
+    } else if (group == QStringLiteral("标定")) {
+        // 标定板：棋盘格（两格填色）
+        painter.drawRect(QRectF(4, 4, 16, 16));
+        painter.drawLine(QPointF(4, 12), QPointF(20, 12));
+        painter.drawLine(QPointF(12, 4), QPointF(12, 20));
+        painter.setBrush(ink);
+        painter.drawRect(QRectF(12, 4, 8, 8));
+        painter.drawRect(QRectF(4, 12, 8, 8));
+        painter.setBrush(Qt::NoBrush);
+    } else if (group == QStringLiteral("识别")) {
+        // 条码：粗细不一的竖线
+        const qreal xs[] = {4, 6, 9, 12.5, 15.5, 18, 20.5};
+        for (int i = 0; i < 7; ++i) {
+            painter.setPen(QPen(ink, (i == 2 || i == 4) ? 2.2 : 1.2));
+            painter.drawLine(QPointF(xs[i], 5), QPointF(xs[i], 19));
+        }
+        painter.setPen(QPen(ink, 1.8));
+    } else if (group == QStringLiteral("跟踪")) {
+        // 轨迹：折线 + 箭头 + 起点圆
+        painter.drawPolyline(QPolygonF() << QPointF(4, 19) << QPointF(9, 13)
+                                          << QPointF(14, 15) << QPointF(19, 7));
+        painter.drawLine(QPointF(19, 7), QPointF(15.5, 7.5));
+        painter.drawLine(QPointF(19, 7), QPointF(18.2, 10.5));
+        painter.setBrush(ink);
+        painter.drawEllipse(QPointF(4, 19), 1.6, 1.6);
+        painter.setBrush(Qt::NoBrush);
+    } else if (group == QStringLiteral("逻辑与控制")) {
+        // 判定菱形 + 分支出口
+        painter.drawPolygon(QPolygonF() << QPointF(12, 3) << QPointF(21, 12)
+                                         << QPointF(12, 21) << QPointF(3, 12));
+        painter.drawLine(QPointF(21, 12), QPointF(23, 12));
+    } else if (group == QStringLiteral("结果输出")) {
+        // 输出：方框 + 出箭头
+        painter.drawRect(QRectF(3.5, 4.5, 10, 15));
+        painter.drawLine(QPointF(13.5, 12), QPointF(21, 12));
+        painter.drawLine(QPointF(21, 12), QPointF(17.5, 8.5));
+        painter.drawLine(QPointF(21, 12), QPointF(17.5, 15.5));
+    } else {
+        // 「全部模块」/未知分类：四宫格
+        painter.drawRect(QRectF(4, 4, 7, 7));
+        painter.drawRect(QRectF(13, 4, 7, 7));
+        painter.drawRect(QRectF(4, 13, 7, 7));
+        painter.drawRect(QRectF(13, 13, 7, 7));
+    }
+    return QIcon(pixmap);
+}
+
+/// 快捷工具条图标（实装 4.4）：与模块箱同风格的单色线框字形。
+enum class ToolGlyph {
+    New,
+    Open,
+    Save,
+    Undo,
+    Redo,
+    Lock,
+    Camera,
+    Variables,
+    Comm,
+    Trigger,
+    Script,
+    Start,
+    Stop,
+    SingleShot,
+    Step,
+    Pause,
+    Config,
+    RuntimeUi,
+    Search,
+    Fit,
+    ActualSize,
+    ZoomIn,
+    ZoomOut,
+    Crosshair,
+    Float,
+    DualView,
+    CrosshairConfig,
+    FullScreen,
+    Overlay,
+    LoopRun,
+    More
+};
+
+// 默认色/笔画取 VM 主工具条实测（亮部 ≈#c8c8c8、笔画 ≈1.5–2px）；
+// 图像工具条按自己的 VM 资产实测传入 #9a9a9a/2.0。
+QIcon toolbarGlyph(ToolGlyph glyph, const QColor &ink = QColor(0xc8, 0xc8, 0xc8),
+                   qreal penWidth = 1.7)
+{
+    QPixmap pixmap(24, 24);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(QPen(ink, penWidth));
+    painter.setBrush(Qt::NoBrush);
+
+    switch (glyph) {
+    case ToolGlyph::New: {
+        // 文档 + 右下角加号
+        painter.drawRect(QRectF(5, 3, 11, 16));
+        painter.drawLine(QPointF(8, 7), QPointF(13, 7));
+        painter.drawLine(QPointF(8, 10), QPointF(13, 10));
+        painter.drawLine(QPointF(17.5, 14), QPointF(17.5, 20));
+        painter.drawLine(QPointF(14.5, 17), QPointF(20.5, 17));
+        break;
+    }
+    case ToolGlyph::Open: {
+        // 打开文件夹：底面 + 翻盖
+        painter.drawPolyline(QPolygonF() << QPointF(3, 19) << QPointF(5, 9) << QPointF(10, 9)
+                                          << QPointF(11.5, 11) << QPointF(21, 11));
+        painter.drawLine(QPointF(3, 19), QPointF(19, 19));
+        painter.drawLine(QPointF(19, 19), QPointF(21, 11));
+        break;
+    }
+    case ToolGlyph::Save: {
+        // 软盘：外框 + 顶部翻盖 + 底部标签
+        painter.drawRect(QRectF(4, 4, 16, 16));
+        painter.drawRect(QRectF(8, 4, 8, 6));
+        painter.drawRect(QRectF(7, 13.5, 10, 6.5));
+        break;
+    }
+    case ToolGlyph::Undo:
+    case ToolGlyph::Redo: {
+        const bool undo = (glyph == ToolGlyph::Undo);
+        painter.save();
+        if (!undo) {
+            painter.translate(24, 0);
+            painter.scale(-1, 1);
+        }
+        QPainterPath path;
+        path.moveTo(20, 16);
+        path.cubicTo(18, 8, 10, 6, 6, 10);
+        painter.drawPath(path);
+        // 箭头指向左（重做镜像后指向右）
+        painter.drawLine(QPointF(6, 10), QPointF(10, 8));
+        painter.drawLine(QPointF(6, 10), QPointF(9.5, 13));
+        painter.restore();
+        break;
+    }
+    case ToolGlyph::Lock: {
+        // 锁体 + 锁梁
+        painter.drawRoundedRect(QRectF(6, 11, 12, 9), 2, 2);
+        QPainterPath shackle;
+        shackle.moveTo(8, 11);
+        shackle.lineTo(8, 8);
+        shackle.arcTo(QRectF(8, 4, 8, 8), 180, -180);
+        shackle.lineTo(16, 11);
+        painter.drawPath(shackle);
+        painter.setBrush(ink);
+        painter.drawEllipse(QPointF(12, 15), 1.4, 1.4);
+        painter.setBrush(Qt::NoBrush);
+        break;
+    }
+    case ToolGlyph::Camera: {
+        // 相机：机身 + 镜头 + 取景凸起
+        painter.drawRoundedRect(QRectF(3, 8, 18, 12), 2, 2);
+        painter.drawEllipse(QPointF(12, 14), 3.2, 3.2);
+        painter.drawRect(QRectF(8, 5, 8, 3));
+        break;
+    }
+    case ToolGlyph::Variables: {
+        // 变量：左右花括号 + 中间等号
+        painter.drawPolyline(QPolygonF() << QPointF(9, 4) << QPointF(6, 4) << QPointF(6, 11)
+                                          << QPointF(4.5, 12) << QPointF(6, 13) << QPointF(6, 20)
+                                          << QPointF(9, 20));
+        painter.drawPolyline(QPolygonF() << QPointF(15, 4) << QPointF(18, 4) << QPointF(18, 11)
+                                          << QPointF(19.5, 12) << QPointF(18, 13) << QPointF(18, 20)
+                                          << QPointF(15, 20));
+        painter.drawLine(QPointF(10, 11), QPointF(14, 11));
+        painter.drawLine(QPointF(10, 13), QPointF(14, 13));
+        break;
+    }
+    case ToolGlyph::Comm: {
+        // 通讯：地球（外圆 + 经线 + 赤道线）
+        painter.drawEllipse(QPointF(12, 12), 8, 8);
+        painter.drawEllipse(QPointF(12, 12), 3.8, 8);
+        painter.drawLine(QPointF(4, 12), QPointF(20, 12));
+        break;
+    }
+    case ToolGlyph::Trigger: {
+        // 闪电（触发）
+        painter.setBrush(ink);
+        painter.drawPolygon(QPolygonF() << QPointF(13, 2) << QPointF(6, 13) << QPointF(11, 13)
+                                         << QPointF(9, 22) << QPointF(18, 10) << QPointF(13, 10));
+        painter.setBrush(Qt::NoBrush);
+        break;
+    }
+    case ToolGlyph::Script: {
+        // 文档 + </>
+        painter.drawRect(QRectF(4, 3, 16, 18));
+        painter.drawPolyline(QPolygonF() << QPointF(10, 8) << QPointF(7, 12) << QPointF(10, 16));
+        painter.drawPolyline(QPolygonF() << QPointF(14, 8) << QPointF(17, 12) << QPointF(14, 16));
+        painter.drawLine(QPointF(13, 7), QPointF(11, 17));
+        break;
+    }
+    case ToolGlyph::Start: {
+        // 播放三角（实心）
+        painter.setBrush(ink);
+        painter.drawPolygon(QPolygonF() << QPointF(8, 5) << QPointF(19, 12) << QPointF(8, 19));
+        painter.setBrush(Qt::NoBrush);
+        break;
+    }
+    case ToolGlyph::Stop: {
+        // 停止方块（实心）
+        painter.setBrush(ink);
+        painter.drawRoundedRect(QRectF(6, 6, 12, 12), 2, 2);
+        painter.setBrush(Qt::NoBrush);
+        break;
+    }
+    case ToolGlyph::SingleShot: {
+        // 单次执行：环形箭头 + 中心点
+        QPainterPath arc;
+        arc.arcMoveTo(QRectF(5, 5, 14, 14), 60);
+        arc.arcTo(QRectF(5, 5, 14, 14), 60, 280);
+        painter.drawPath(arc);
+        painter.drawLine(QPointF(16.6, 5.6), QPointF(13.6, 5.2));
+        painter.drawLine(QPointF(16.6, 5.6), QPointF(16.2, 9.0));
+        painter.setBrush(ink);
+        painter.drawEllipse(QPointF(12, 12), 1.4, 1.4);
+        painter.setBrush(Qt::NoBrush);
+        break;
+    }
+    case ToolGlyph::LoopRun: {
+        // 循环运行：环形箭头 + 中心播放三角（VM 流程栏第二枚运行控制同形）
+        QPainterPath arc;
+        arc.arcMoveTo(QRectF(5, 5, 14, 14), 60);
+        arc.arcTo(QRectF(5, 5, 14, 14), 60, 280);
+        painter.drawPath(arc);
+        painter.drawLine(QPointF(16.6, 5.6), QPointF(13.6, 5.2));
+        painter.drawLine(QPointF(16.6, 5.6), QPointF(16.2, 9.0));
+        painter.setBrush(ink);
+        painter.drawPolygon(QPolygonF() << QPointF(9.5, 8.5) << QPointF(15.5, 12.0)
+                                        << QPointF(9.5, 15.5));
+        painter.setBrush(Qt::NoBrush);
+        break;
+    }
+    case ToolGlyph::More: {
+        // 更多：三点横排（收进次要视图操作的溢出菜单）
+        painter.setBrush(ink);
+        painter.drawEllipse(QPointF(7, 12), 1.5, 1.5);
+        painter.drawEllipse(QPointF(12, 12), 1.5, 1.5);
+        painter.drawEllipse(QPointF(17, 12), 1.5, 1.5);
+        painter.setBrush(Qt::NoBrush);
+        break;
+    }
+    case ToolGlyph::Step: {
+        // 单步：播放三角 + 竖向停止线（步进符号）
+        painter.setBrush(ink);
+        painter.drawPolygon(QPolygonF() << QPointF(6, 6) << QPointF(15, 12) << QPointF(6, 18));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawLine(QPointF(17.5, 5.5), QPointF(17.5, 18.5));
+        break;
+    }
+    case ToolGlyph::Pause: {
+        // 暂停：两条竖杠（实心）
+        painter.setBrush(ink);
+        painter.drawRoundedRect(QRectF(7, 5, 3.5, 14), 1, 1);
+        painter.drawRoundedRect(QRectF(13.5, 5, 3.5, 14), 1, 1);
+        painter.setBrush(Qt::NoBrush);
+        break;
+    }
+    case ToolGlyph::Config: {
+        // 综合配置：三行滑杆 + 旋钮
+        painter.drawLine(QPointF(3, 7), QPointF(21, 7));
+        painter.drawLine(QPointF(3, 12), QPointF(21, 12));
+        painter.drawLine(QPointF(3, 17), QPointF(21, 17));
+        painter.setBrush(ink);
+        painter.drawEllipse(QPointF(8, 7), 1.8, 1.8);
+        painter.drawEllipse(QPointF(15, 12), 1.8, 1.8);
+        painter.drawEllipse(QPointF(11, 17), 1.8, 1.8);
+        painter.setBrush(Qt::NoBrush);
+        break;
+    }
+    case ToolGlyph::RuntimeUi: {
+        // 运行界面：窗口 + 出箭头
+        painter.drawRect(QRectF(3, 5, 13, 14));
+        painter.drawLine(QPointF(15, 12), QPointF(21, 12));
+        painter.drawLine(QPointF(21, 12), QPointF(17.5, 8.5));
+        painter.drawLine(QPointF(21, 12), QPointF(17.5, 15.5));
+        break;
+    }
+    case ToolGlyph::Search: {
+        // 参数查找：放大镜
+        painter.drawEllipse(QPointF(10.5, 10), 5.5, 5.5);
+        painter.drawLine(QPointF(14.5, 14.5), QPointF(21, 21));
+        break;
+    }
+    case ToolGlyph::Fit: {
+        // 适应窗口：VM 资产是「2x2 视窗格」，左上格带内容纹理
+        painter.drawRect(QRectF(4, 4, 16, 16));
+        painter.drawLine(QPointF(12, 4), QPointF(12, 20));
+        painter.drawLine(QPointF(4, 12), QPointF(20, 12));
+        painter.fillRect(QRectF(5, 5, 6.5, 6.5), QColor(ink.red(), ink.green(), ink.blue(), 70));
+        break;
+    }
+    case ToolGlyph::ActualSize: {
+        // 1:1 实际像素：圆角外框 + 文字（与 VM 资产的方框内「1:1」一致）
+        painter.drawRoundedRect(QRectF(3, 4, 18, 16), 2, 2);
+        QFont font = painter.font();
+        font.setPixelSize(11);
+        font.setBold(true);
+        painter.setFont(font);
+        painter.drawText(QRectF(3, 4, 18, 16), Qt::AlignCenter, QStringLiteral("1:1"));
+        break;
+    }
+    case ToolGlyph::ZoomIn:
+    case ToolGlyph::ZoomOut: {
+        // 放大/缩小：放大镜 + 加/减
+        painter.drawEllipse(QPointF(10, 10), 6, 6);
+        painter.drawLine(QPointF(14.5, 14.5), QPointF(21, 21));
+        painter.drawLine(QPointF(7, 10), QPointF(13, 10));
+        if (glyph == ToolGlyph::ZoomIn)
+            painter.drawLine(QPointF(10, 7), QPointF(10, 13));
+        break;
+    }
+    case ToolGlyph::Crosshair: {
+        // 十字辅助线
+        painter.drawLine(QPointF(12, 4), QPointF(12, 20));
+        painter.drawLine(QPointF(4, 12), QPointF(20, 12));
+        painter.setBrush(ink);
+        painter.drawEllipse(QPointF(12, 12), 1.4, 1.4);
+        painter.setBrush(Qt::NoBrush);
+        break;
+    }
+    case ToolGlyph::Float: {
+        // 弹出窗口：窗口 + 右上出箭头
+        painter.drawRect(QRectF(4, 8, 12, 12));
+        painter.drawLine(QPointF(13, 4), QPointF(21, 4));
+        painter.drawLine(QPointF(21, 4), QPointF(21, 12));
+        painter.drawLine(QPointF(21, 4), QPointF(13, 12));
+        break;
+    }
+    case ToolGlyph::DualView: {
+        // 双画面：两个并排视窗
+        painter.drawRect(QRectF(2.5, 5, 9, 14));
+        painter.drawRect(QRectF(12.5, 5, 9, 14));
+        break;
+    }
+    case ToolGlyph::CrosshairConfig: {
+        // 十字线设置：十字线 + 四向手柄
+        painter.drawLine(QPointF(12, 7), QPointF(12, 17));
+        painter.drawLine(QPointF(7, 12), QPointF(17, 12));
+        painter.drawRect(QRectF(10, 3, 4, 4));
+        painter.drawRect(QRectF(10, 17, 4, 4));
+        painter.drawRect(QRectF(3, 10, 4, 4));
+        painter.drawRect(QRectF(17, 10, 4, 4));
+        break;
+    }
+    case ToolGlyph::FullScreen: {
+        // 全屏：四角括号
+        painter.drawLine(QPointF(4, 9), QPointF(4, 4));
+        painter.drawLine(QPointF(4, 4), QPointF(9, 4));
+        painter.drawLine(QPointF(15, 4), QPointF(20, 4));
+        painter.drawLine(QPointF(20, 4), QPointF(20, 9));
+        painter.drawLine(QPointF(20, 15), QPointF(20, 20));
+        painter.drawLine(QPointF(20, 20), QPointF(15, 20));
+        painter.drawLine(QPointF(9, 20), QPointF(4, 20));
+        painter.drawLine(QPointF(4, 20), QPointF(4, 15));
+        break;
+    }
+    case ToolGlyph::Overlay: {
+        // 叠加上游：两张错位叠放的图像
+        painter.drawRect(QRectF(3, 3, 13, 13));
+        painter.drawRect(QRectF(8, 8, 13, 13));
+        break;
+    }
+    }
+    return QIcon(pixmap);
+}
+
 }   // namespace
 
-MainWindow::MainWindow(QWidget *parent) :
+MainWindow::MainWindow(QWidget *parent, bool previewOnly) :
     QMainWindow(parent),
     ui(nullptr),
     m_executor(nullptr),
@@ -201,7 +644,8 @@ MainWindow::MainWindow(QWidget *parent) :
     m_projectManager(nullptr),
     m_flowModeCombo(nullptr),
     m_selectedNode(nullptr),
-    m_currentLanguage(Language::Chinese)
+    m_currentLanguage(Language::Chinese),
+    m_previewOnly(previewOnly)
 {
     VFP_DEBUG << "MainWindow constructor started";
     
@@ -272,13 +716,46 @@ MainWindow::MainWindow(QWidget *parent) :
 
         VFP_DEBUG << "setupUi completed";
         
+        // === 实装 4.4：右侧图像区双页签「流程图像 / 模块结果」 ===
+        // VM 把当前轮结果与图像放在同一区域、用页签切换；历史/帮助留在底部结果停靠面板。
+        QWidget *imagePage = nullptr;
+        {
+            QVBoxLayout *dockLayout = qobject_cast<QVBoxLayout *>(ui->imageDockContents->layout());
+            if (!dockLayout) {
+                dockLayout = new QVBoxLayout(ui->imageDockContents);
+            }
+            dockLayout->setContentsMargins(0, 0, 0, 0);
+            dockLayout->setSpacing(0);
+
+            m_imageAreaTabs = new QTabWidget(ui->imageDockContents);
+            // VM 页签按内容宽度排列（右侧留空），不把单个页签拉伸到整条页签栏
+            m_imageAreaTabs->tabBar()->setExpanding(false);
+            m_imageAreaTabs->setObjectName(QStringLiteral("imageAreaTabs"));
+            m_imageAreaTabs->setDocumentMode(true);
+
+            imagePage = new QWidget(m_imageAreaTabs);
+            auto *imagePageLayout = new QVBoxLayout(imagePage);
+            imagePageLayout->setContentsMargins(0, 0, 0, 0);
+            imagePageLayout->setSpacing(0);
+            m_imageAreaTabs->addTab(imagePage, tr("流程图像"));
+
+            m_moduleResultPanel = new ResultTablePanel(m_imageAreaTabs);
+            m_moduleResultPanel->setObjectName(QStringLiteral("moduleResultPanel"));
+            // 图像区只看当前轮结果；历史/帮助由底部结果区承担（同一份数据两处翻页会分叉）
+            m_moduleResultPanel->setPageVisibility(true, false, false);
+            m_moduleResultPanel->setEmbeddedMode(true);
+            m_imageAreaTabs->addTab(m_moduleResultPanel, tr("模块结果"));
+
+            dockLayout->addWidget(m_imageAreaTabs, 1);
+        }
+
         // 初始化图像视图
         VFP_DEBUG << "Creating HalconWindow";
         m_imageView = new HalconWindow(this);
-        if (m_imageView) {
-            QVBoxLayout *layout = qobject_cast<QVBoxLayout*>(ui->imageDockContents->layout());
+        if (m_imageView && imagePage) {
+            QVBoxLayout *layout = qobject_cast<QVBoxLayout*>(imagePage->layout());
             if (!layout) {
-                layout = new QVBoxLayout(ui->imageDockContents);
+                layout = new QVBoxLayout(imagePage);
             }
             layout->setContentsMargins(0, 0, 0, 0);
             layout->setSpacing(0);
@@ -385,48 +862,63 @@ MainWindow::MainWindow(QWidget *parent) :
                 imgTools->setObjectName(QStringLiteral("imageToolBar"));
                 imgTools->setMovable(false);
                 imgTools->setFloatable(false);
-                imgTools->setToolButtonStyle(Qt::ToolButtonTextOnly);
+                imgTools->setToolButtonStyle(Qt::ToolButtonIconOnly);
+                imgTools->setIconSize(QSize(18, 18));
                 imgTools->setStyleSheet(QStringLiteral(
-                    "QToolBar { background:#232333; border:none; spacing:4px; padding:2px 4px; }"
-                    "QToolButton { background-color:#2b2b3d; color:#d8d8d8; border:1px solid #4a4a6a;"
-                    " border-radius:4px; padding:3px 10px; font-size:12px; }"
-                    "QToolButton:hover { background-color:#3a3a55; }"
-                    "QToolButton:checked { background-color:#3a6ea5; color:white; border-color:#5a8ec5; }"
-                    "QToolButton:disabled { color:#666; border-color:#3a3a4a; }"));
+                    "QToolBar { background:#232333; border:none; spacing:2px; padding:2px 4px; }"
+                    "QToolButton { background:transparent; border:none; border-radius:4px; padding:4px; }"
+                    "QToolButton:hover { background:#2f2f45; }"
+                    "QToolButton:pressed { background:#3a6ea5; }"
+                    "QToolButton:checked { background:#2d4a66; }"));
 
-                auto addToolAct = [&](const QString &text, const char *objName) {
-                    QAction *a = imgTools->addAction(text);
+                // VM 图像区资产实测（vm_main.png）：图标 16–18px、颜色 ≈#999797、笔画 ≈2px。
+                // 尺寸 18px 已与实测一致；这里只把颜色与笔画向 VM 资产靠齐。
+                const QColor imageToolInk(0x9a, 0x9a, 0x9a);
+                auto addToolAct = [&](const QString &text, const char *objName,
+                                      ToolGlyph glyph) {
+                    QAction *a = imgTools->addAction(
+                        toolbarGlyph(glyph, imageToolInk, 2.0), text);
                     a->setObjectName(QString::fromLatin1(objName));
                     return a;
                 };
-                QAction *fitAct = addToolAct(QStringLiteral("\u9002\u5E94\u7A97\u53E3"), "imgFitBtn");
-                QAction *actualAct = addToolAct(QStringLiteral("100%"), "imgActualBtn");
-                QAction *zoomInAct = addToolAct(QStringLiteral("\u653E\u5927"), "imgZoomInBtn");
-                QAction *zoomOutAct = addToolAct(QStringLiteral("\u7F29\u5C0F"), "imgZoomOutBtn");
-                QAction *crossAct = addToolAct(QStringLiteral("\u5341\u5B57\u7EBF"), "imgCrossBtn");
+                // 顺序按 VM 实测（vm_imgtools_all.png）：适应 | 放大 缩小 1:1 弹出 | 其余扩展
+                // （前五项与 VM 同序同组，扩展项放在第二条分隔线之后）
+                QAction *fitAct = addToolAct(QStringLiteral("适应窗口"), "imgFitBtn", ToolGlyph::Fit);
+                imgTools->addSeparator();
+                QAction *zoomInAct = addToolAct(QStringLiteral("放大"), "imgZoomInBtn", ToolGlyph::ZoomIn);
+                QAction *zoomOutAct = addToolAct(QStringLiteral("缩小"), "imgZoomOutBtn", ToolGlyph::ZoomOut);
+                QAction *actualAct = addToolAct(QStringLiteral("100%"), "imgActualBtn", ToolGlyph::ActualSize);
+                QAction *floatAct = addToolAct(QStringLiteral("弹出"), "imgFloatBtn", ToolGlyph::Float);
+                imgTools->addSeparator();
+                QAction *crossAct = addToolAct(QStringLiteral("十字线"), "imgCrossBtn", ToolGlyph::Crosshair);
                 crossAct->setCheckable(true);
-                QAction *saveImgAct = addToolAct(QStringLiteral("\u4FDD\u5B58\u56FE\u50CF"), "imgSaveBtn");
-                QAction *floatAct = addToolAct(QStringLiteral("\u5F39\u51FA"), "imgFloatBtn");
-                QAction *dualAct = addToolAct(QStringLiteral("双画面"), "imgDualBtn");
+                QAction *saveImgAct = addToolAct(QStringLiteral("保存图像"), "imgSaveBtn", ToolGlyph::Save);
+                QAction *dualAct = addToolAct(QStringLiteral("双画面"), "imgDualBtn", ToolGlyph::DualView);
                 dualAct->setCheckable(true);
-                QAction *crossCfgAct = addToolAct(QStringLiteral("十字线设置"), "imgCrosshairCfgBtn");
-                QAction *fullAct = addToolAct(QStringLiteral("全屏"), "imgFullScreenBtn");
+                QAction *crossCfgAct = addToolAct(QStringLiteral("十字线设置"), "imgCrosshairCfgBtn", ToolGlyph::CrosshairConfig);
+                QAction *fullAct = addToolAct(QStringLiteral("全屏"), "imgFullScreenBtn", ToolGlyph::FullScreen);
 
                 m_overlayUpstreamBtn = new QToolButton(imgTools);
                 m_overlayUpstreamBtn->setObjectName(QStringLiteral("imgOverlayUpstreamBtn"));
                 m_overlayUpstreamBtn->setText(QStringLiteral("叠加图像"));
+                m_overlayUpstreamBtn->setIcon(
+                    toolbarGlyph(ToolGlyph::Overlay, QColor(0x9a, 0x9a, 0x9a), 2.0));
+                m_overlayUpstreamBtn->setIconSize(QSize(18, 18));
+                m_overlayUpstreamBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
                 m_overlayUpstreamBtn->setPopupMode(QToolButton::InstantPopup);
                 m_overlayUpstreamBtn->setStyleSheet(QStringLiteral(
-                    "QToolButton { background:#3a3a4a; color:#d8d8d8; border:1px solid #55556a;"
-                    " border-radius:3px; padding:2px 8px; }"
+                    "QToolButton { background:transparent; border:none; border-radius:4px; padding:4px; }"
+                    "QToolButton:hover { background:#2f2f45; }"
                     "QToolButton::menu-indicator { image:none; }"));
                 imgTools->addWidget(m_overlayUpstreamBtn);
                 imgBarLay->addStretch();
 
                 // 实装 4.4：图像叠加透明度可配（此前固定 50%）
-                auto *opacityLabel = new QLabel(tr("叠加透明度"), imgTools);
+                // 透明度属于显示参数，放在上方「图像源」行右侧：工具条改成图标后
+                // 不宜再塞自定义控件（窄 Dock 下会被裁掉，且控件不会进 » 溢出菜单）
+                auto *opacityLabel = new QLabel(tr("叠加透明度"), imgBar);
                 opacityLabel->setStyleSheet(QStringLiteral("color:#9fb3c8; font-size:12px;"));
-                m_overlayOpacitySpin = new QSpinBox(imgTools);
+                m_overlayOpacitySpin = new QSpinBox(imgBar);
                 m_overlayOpacitySpin->setObjectName(QStringLiteral("imgOverlayOpacitySpin"));
                 m_overlayOpacitySpin->setRange(0, 100);
                 m_overlayOpacitySpin->setSuffix(QStringLiteral(" %"));
@@ -435,8 +927,8 @@ MainWindow::MainWindow(QWidget *parent) :
                     0, opacitySettings.value(QStringLiteral("display/imageOverlayOpacity"), 50).toInt(), 100);
                 m_overlayOpacitySpin->setValue(opacity);
                 m_imageView->setHImageOverlayOpacity(opacity);
-                imgTools->addWidget(opacityLabel);
-                imgTools->addWidget(m_overlayOpacitySpin);
+                imgBarLay->addWidget(opacityLabel);
+                imgBarLay->addWidget(m_overlayOpacitySpin);
                 connect(m_overlayOpacitySpin, QOverload<int>::of(&QSpinBox::valueChanged),
                         this, [this](int value) {
                             m_imageView->setHImageOverlayOpacity(value);
@@ -539,6 +1031,36 @@ MainWindow::MainWindow(QWidget *parent) :
                         tr("多选当前模块/上游模块的输出图像，叠加显示在预览画面上"));
                 }
 
+                // VM 图像工具条只保留 5 枚主图标（适应 | 放大 缩小 1:1 弹出）；十字线/保存/双画面/
+                // 十字线设置/全屏收进「更多」菜单，避免 11 枚图标平铺占满图像区顶部（实测 VM 同区仅 5 枚）。
+                {
+                    QMenu *moreMenu = new QMenu(imgTools);
+                    moreMenu->addAction(crossAct);
+                    moreMenu->addAction(saveImgAct);
+                    moreMenu->addAction(dualAct);
+                    moreMenu->addAction(crossCfgAct);
+                    moreMenu->addAction(fullAct);
+                    for (QAction *act : {crossAct, saveImgAct, dualAct, crossCfgAct, fullAct})
+                        imgTools->removeAction(act);
+
+                    auto *moreBtn = new QToolButton(imgTools);
+                    moreBtn->setObjectName(QStringLiteral("imgMoreBtn"));
+                    moreBtn->setIcon(toolbarGlyph(ToolGlyph::More, imageToolInk, 2.0));
+                    moreBtn->setIconSize(QSize(18, 18));
+                    moreBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
+                    moreBtn->setPopupMode(QToolButton::InstantPopup);
+                    moreBtn->setToolTip(tr("更多视图操作（十字线 / 保存 / 双画面 / 全屏）"));
+                    moreBtn->setStyleSheet(QStringLiteral(
+                        "QToolButton { background:transparent; border:none; border-radius:4px; padding:4px; }"
+                        "QToolButton:hover { background:#2f2f45; }"
+                        "QToolButton::menu-indicator { image:none; }"));
+                    moreBtn->setMenu(moreMenu);
+                    imgTools->addWidget(moreBtn);
+                }
+
+                // 工具条单独一行：合并进「图像源」行时 QHBoxLayout 会挤压下拉框并把右端图标裁掉
+                //（实测 1366 宽下图像源下拉被压到箭头大小）。VM 的单行形态在窄 Dock 下不可靠，
+                // 保留两行 + QToolBar 自身 » 溢出更稳。
                 layout->insertWidget(0, imgBar, 0);
                 layout->insertWidget(1, imgTools, 0);
                 layout->setStretch(layout->indexOf(m_imageView), 1);
@@ -725,7 +1247,8 @@ MainWindow::MainWindow(QWidget *parent) :
                         });
             }
 
-            ui->imageDockContents->setStyleSheet(QStringLiteral(
+            // 只给「流程图像」页上底色：模块结果页沿用全局主题（否则树/按钮会被扁平化）
+            imagePage->setStyleSheet(QStringLiteral(
                 "QWidget { background-color: #252528; border: none; }"));
             VFP_DEBUG << "HalconWindow created and added to dock";
         }
@@ -750,48 +1273,191 @@ MainWindow::MainWindow(QWidget *parent) :
 
         VFP_DEBUG << "FlowExecutor created";
 
-        // ── 流程运行模式组合框（放在顶部主工具栏，确保用户一眼看到）──
+        // ── 顶部快捷工具条（VM 4.4 口径：单行图标 + 悬停提示；右侧保留运行模式与方案信息）──
         {
             QToolBar *mainToolBar = addToolBar(tr("流程控制"));
             mainToolBar->setObjectName("mainToolBar");
             mainToolBar->setMovable(false);
-            mainToolBar->setIconSize(QSize(20, 20));
+
+            // ── 实装 4.4：快捷工具条图标化（VM：单行图标 + 悬停提示）──
+            // 工具条用「图标代理动作」：图标只出现在工具条，菜单保持纯文字外观；
+            // 代理动作的 text/enabled 跟随源动作，权限收口与运行态禁用不会分叉。
+            mainToolBar->setToolButtonStyle(Qt::ToolButtonIconOnly);
+            mainToolBar->setIconSize(QSize(22, 22));
             mainToolBar->setStyleSheet(
-                "QToolBar {"
-                "  background-color: #1e1e2e;"
-                "  border-bottom: 1px solid #3a3a5c;"
-                "  spacing: 6px;"
-                "  padding: 2px 8px;"
-                "}"
-            );
+                "QToolBar { background-color:#1e1e2e; border-bottom:1px solid #3a3a5c;"
+                " spacing:2px; padding:2px 8px; }"
+                "QToolBar::separator { background:#3a3a4e; width:1px; margin:4px 6px; }"
+                "QToolButton { background:transparent; border:none; border-radius:4px; padding:4px; }"
+                "QToolButton:hover { background:#2f2f45; }"
+                "QToolButton:pressed { background:#3a6ea5; }"
+                "QToolButton:checked { background:#2d4a66; }");
 
-            // ── 文件操作：新建 / 打开 / 保存 ──
-            mainToolBar->addAction(ui->actionNew);
-            mainToolBar->addAction(ui->actionOpenScheme);
-            mainToolBar->addAction(ui->actionSaveScheme);
+            auto addToolbarProxy = [this, mainToolBar](QAction *source, const QIcon &icon,
+                                                       const QString &toolTip) {
+                if (!source)
+                    return;
+                QAction *proxy = new QAction(icon, source->text(), this);
+                proxy->setObjectName(QStringLiteral("toolbar_") + source->objectName());
+                proxy->setToolTip(toolTip);
+                proxy->setEnabled(source->isEnabled());
+                connect(proxy, &QAction::triggered, source, &QAction::trigger);
+                connect(source, &QAction::changed, proxy, [source, proxy]() {
+                    QString text = source->text();
+                    text.remove(QLatin1Char('&'));
+                    proxy->setText(text);
+                    proxy->setEnabled(source->isEnabled());
+                });
+                mainToolBar->addAction(proxy);
+            };
 
+            // 文件组（VM 工具条前段：保存 / 打开，新建紧随其后）
+            addToolbarProxy(ui->actionSaveScheme, toolbarGlyph(ToolGlyph::Save),
+                            tr("保存当前方案（Ctrl+S）"));
+            addToolbarProxy(ui->actionOpenScheme, toolbarGlyph(ToolGlyph::Open),
+                            tr("打开方案（Ctrl+O）"));
+            addToolbarProxy(ui->actionNew, toolbarGlyph(ToolGlyph::New),
+                            tr("新建方案（Ctrl+N）"));
             mainToolBar->addSeparator();
 
-            // 开始按钮
-            mainToolBar->addAction(ui->actionStartExecution);
-            // 停止按钮（补全 VM 4.4 的停止功能）
-            mainToolBar->addAction(ui->actionStopExecution);
+            // 编辑组：撤销 / 重做（带历史下拉）/ 锁定
+            m_undoAction = new QAction(tr("撤销"), this);
+            m_undoAction->setObjectName("undoAction");
+            m_undoAction->setIcon(toolbarGlyph(ToolGlyph::Undo));
+            m_undoAction->setToolTip(tr("撤销当前流程的上一步操作（Ctrl+Z）；点右侧箭头可选择回退到哪一步"));
+            connect(m_undoAction, &QAction::triggered, this, [this]() {
+                if (FlowScene *scene = currentFlowScene())
+                    scene->undo();
+            });
+
+            m_redoAction = new QAction(tr("重做"), this);
+            m_redoAction->setObjectName("redoAction");
+            m_redoAction->setIcon(toolbarGlyph(ToolGlyph::Redo));
+            m_redoAction->setToolTip(tr("重做当前流程的下一步操作（Ctrl+Y）；点右侧箭头可查看重做历史"));
+            connect(m_redoAction, &QAction::triggered, this, [this]() {
+                if (FlowScene *scene = currentFlowScene())
+                    scene->redo();
+            });
+
+            // P2-9：撤销/重做按钮带历史下拉（VM 口径：按钮 + 历史列表，而非只有快捷键）
+            {
+                auto *undoBtn = new QToolButton(mainToolBar);
+                undoBtn->setObjectName(QStringLiteral("undoHistoryButton"));
+                undoBtn->setDefaultAction(m_undoAction);
+                undoBtn->setPopupMode(QToolButton::MenuButtonPopup);
+                undoBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
+                undoBtn->setIconSize(QSize(22, 22));
+                auto *undoMenu = new QMenu(undoBtn);
+                connect(undoMenu, &QMenu::aboutToShow, this, [this, undoMenu]() {
+                    undoMenu->clear();
+                    FlowScene *scene = currentFlowScene();
+                    const QStringList texts = scene ? scene->undoHistoryTexts() : QStringList();
+                    if (texts.isEmpty()) {
+                        undoMenu->addAction(tr("没有可撤销的操作"))->setEnabled(false);
+                        return;
+                    }
+                    for (int i = 0; i < texts.size(); ++i) {
+                        QAction *act = undoMenu->addAction(texts.at(i));
+                        connect(act, &QAction::triggered, this, [this, i]() {
+                            FlowScene *s = currentFlowScene();
+                            if (!s)
+                                return;
+                            for (int step = 0; step <= i; ++step)
+                                s->undo();
+                        });
+                    }
+                });
+                undoBtn->setMenu(undoMenu);
+                mainToolBar->addWidget(undoBtn);
+
+                auto *redoBtn = new QToolButton(mainToolBar);
+                redoBtn->setObjectName(QStringLiteral("redoHistoryButton"));
+                redoBtn->setDefaultAction(m_redoAction);
+                redoBtn->setPopupMode(QToolButton::MenuButtonPopup);
+                redoBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
+                redoBtn->setIconSize(QSize(22, 22));
+                auto *redoMenu = new QMenu(redoBtn);
+                connect(redoMenu, &QMenu::aboutToShow, this, [this, redoMenu]() {
+                    redoMenu->clear();
+                    FlowScene *scene = currentFlowScene();
+                    const QStringList texts = scene ? scene->redoHistoryTexts() : QStringList();
+                    if (texts.isEmpty()) {
+                        redoMenu->addAction(tr("没有可重做的操作"))->setEnabled(false);
+                        return;
+                    }
+                    for (int i = 0; i < texts.size(); ++i) {
+                        QAction *act = redoMenu->addAction(texts.at(i));
+                        connect(act, &QAction::triggered, this, [this, i]() {
+                            FlowScene *s = currentFlowScene();
+                            if (!s)
+                                return;
+                            for (int step = 0; step <= i; ++step)
+                                s->redo();
+                        });
+                    }
+                });
+                redoBtn->setMenu(redoMenu);
+                mainToolBar->addWidget(redoBtn);
+            }
+
+            m_lockCanvasAction = mainToolBar->addAction(tr("锁定"));
+            m_lockCanvasAction->setObjectName("lockCanvasAction");
+            m_lockCanvasAction->setIcon(toolbarGlyph(ToolGlyph::Lock));
+            m_lockCanvasAction->setCheckable(true);
+            m_lockCanvasAction->setToolTip(tr("显式锁定当前流程的画布编辑（与运行期自动锁互不覆盖）"));
+            connect(m_lockCanvasAction, &QAction::triggered, this, [this](bool on) {
+                FlowScene *scene = currentFlowScene();
+                if (!scene) {
+                    m_lockCanvasAction->setChecked(false);
+                    return;
+                }
+                if (on) {
+                    const auto answer = QMessageBox::question(
+                        this, tr("锁定流程"),
+                        tr("锁定后当前流程无法移动/增删模块，确定锁定「%1」吗？").arg(scene->flowName()),
+                        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+                    if (answer != QMessageBox::Yes) {
+                        m_lockCanvasAction->setChecked(false);
+                        return;
+                    }
+                }
+                scene->setUserLocked(on);
+                logMessage(on ? tr("流程已锁定：%1").arg(scene->flowName())
+                              : tr("流程已解锁：%1").arg(scene->flowName()));
+            });
+            mainToolBar->addSeparator();
+
+            // 配置入口组：相机 / 变量 / 通讯 / 触发 / 脚本
+            addToolbarProxy(ui->actionCameraConfig, toolbarGlyph(ToolGlyph::Camera),
+                            tr("相机管理"));
+            addToolbarProxy(ui->actionGlobalVariables, toolbarGlyph(ToolGlyph::Variables),
+                            tr("全局变量"));
+            addToolbarProxy(ui->actionCommDevice, toolbarGlyph(ToolGlyph::Comm),
+                            tr("通信管理"));
+            addToolbarProxy(ui->actionGlobalTrigger, toolbarGlyph(ToolGlyph::Trigger),
+                            tr("全局触发"));
+            addToolbarProxy(ui->actionCodeExport, toolbarGlyph(ToolGlyph::Script),
+                            tr("导出算子代码"));
+            mainToolBar->addSeparator();
+
+            // 运行控制组（VM 口径：开始/停止为图标，单次/单步/暂停紧随其后）
+            addToolbarProxy(ui->actionStartExecution, toolbarGlyph(ToolGlyph::Start),
+                            tr("开始执行（F5）"));
+            addToolbarProxy(ui->actionStopExecution, toolbarGlyph(ToolGlyph::Stop),
+                            tr("停止执行（Shift+F5）"));
+            // 开始/停止的快捷键挂在源动作上；源动作不再直接进工具条，必须显式登记到窗口，
+            // 否则 F5 / Shift+F5 会随动作一起失效。
+            addAction(ui->actionStartExecution);
+            addAction(ui->actionStopExecution);
 
             // 单次执行按钮：软触发模式下运行一次，不影响流程模式设置
             m_singleShotBtn = new QToolButton();
             m_singleShotBtn->setObjectName("singleShotBtn");
             m_singleShotBtn->setText(tr("单次执行"));
+            m_singleShotBtn->setIcon(toolbarGlyph(ToolGlyph::SingleShot));
+            m_singleShotBtn->setIconSize(QSize(22, 22));
+            m_singleShotBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
             m_singleShotBtn->setToolTip(tr("以软触发方式运行当前流程一次"));
-            m_singleShotBtn->setStyleSheet(
-                "QToolButton {"
-                "  background-color: #2b2b3d; color: #e0e0e0;"
-                "  border: 1px solid #4a6a9c; border-radius: 4px;"
-                "  padding: 3px 10px; min-height: 24px;"
-                "  font-size: 13px;"
-                "}"
-                "QToolButton:hover { background-color: #3a3a55; }"
-                "QToolButton:disabled { color: #777; border-color: #444; }"
-            );
             mainToolBar->addWidget(m_singleShotBtn);
             connect(m_singleShotBtn, &QToolButton::clicked, this, &MainWindow::onSingleShotExecution);
 
@@ -799,17 +1465,10 @@ MainWindow::MainWindow(QWidget *parent) :
             m_stepBtn = new QToolButton();
             m_stepBtn->setObjectName("stepBtn");
             m_stepBtn->setText(tr("单步"));
+            m_stepBtn->setIcon(toolbarGlyph(ToolGlyph::Step));
+            m_stepBtn->setIconSize(QSize(22, 22));
+            m_stepBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
             m_stepBtn->setToolTip(tr("逐节点执行：每运行一个算子后暂停（可配合单次执行排查流程）"));
-            m_stepBtn->setStyleSheet(
-                "QToolButton {"
-                "  background-color: #2b2b3d; color: #e0e0e0;"
-                "  border: 1px solid #4a6a9c; border-radius: 4px;"
-                "  padding: 3px 10px; min-height: 24px;"
-                "  font-size: 13px;"
-                "}"
-                "QToolButton:hover { background-color: #3a3a55; }"
-                "QToolButton:disabled { color: #777; border-color: #444; }"
-            );
             mainToolBar->addWidget(m_stepBtn);
             connect(m_stepBtn, &QToolButton::clicked, this, [this]() {
                 if (!m_executor)
@@ -825,24 +1484,23 @@ MainWindow::MainWindow(QWidget *parent) :
                 m_executor->stepExecution();
             });
 
-            // 暂停/继续按钮：运行中→暂停；暂停中→继续（连续模式下的"启动后暂停切换"就靠它）
+            // 暂停/继续按钮：运行中→暂停；暂停中→继续（图标随状态切换，见 ExecutionStatusController）
             m_pauseBtn = new QToolButton();
             m_pauseBtn->setObjectName("pauseBtn");
             m_pauseBtn->setText(tr("暂停"));
+            m_pauseBtn->setIcon(toolbarGlyph(ToolGlyph::Pause));
+            m_pauseBtn->setIconSize(QSize(22, 22));
+            m_pauseBtn->setToolButtonStyle(Qt::ToolButtonIconOnly);
             m_pauseBtn->setToolTip(tr("暂停当前流程（不清输入缓存）；再按继续"));
-            m_pauseBtn->setStyleSheet(m_stepBtn->styleSheet());
             mainToolBar->addWidget(m_pauseBtn);
             connect(m_pauseBtn, &QToolButton::clicked, this, &MainWindow::onPauseResumeExecution);
-
-            // 分隔
             mainToolBar->addSeparator();
 
-            // 标签
+            // 运行模式选择器（VM 右上「运行模式」；这里保留下拉，切换仍即时生效）
             QLabel *modeLabel = new QLabel(QStringLiteral(" 流程模式: "));
             modeLabel->setStyleSheet("color: #c0c0c0; font-size: 13px;");
             mainToolBar->addWidget(modeLabel);
 
-            // 下拉框
             m_flowModeCombo = new QComboBox();
             m_flowModeCombo->setObjectName("flowModeCombo");
             m_flowModeCombo->addItem(tr("连续模式"),    static_cast<int>(FlowMode::Continuous));
@@ -871,124 +1529,23 @@ MainWindow::MainWindow(QWidget *parent) :
                 "}"
             );
             mainToolBar->addWidget(m_flowModeCombo);
-
-            // ── P1-5：快捷工具条补齐（VM 顶部工具有撤销/重做/锁定/相机/变量/触发/运行界面）──
             mainToolBar->addSeparator();
 
-            m_undoAction = new QAction(tr("撤销"), this);
-            m_undoAction->setObjectName("undoAction");
-            m_undoAction->setToolTip(tr("撤销当前流程的上一步操作（Ctrl+Z）；点右侧箭头可选择回退到哪一步"));
-            connect(m_undoAction, &QAction::triggered, this, [this]() {
-                if (FlowScene *scene = currentFlowScene())
-                    scene->undo();
-            });
-
-            m_redoAction = new QAction(tr("重做"), this);
-            m_redoAction->setObjectName("redoAction");
-            m_redoAction->setToolTip(tr("重做当前流程的下一步操作（Ctrl+Y）；点右侧箭头可查看重做历史"));
-            connect(m_redoAction, &QAction::triggered, this, [this]() {
-                if (FlowScene *scene = currentFlowScene())
-                    scene->redo();
-            });
-
-            // P2-9：撤销/重做按钮带历史下拉（VM 口径：按钮 + 历史列表，而非只有快捷键）
-            {
-                auto *undoBtn = new QToolButton(mainToolBar);
-                undoBtn->setObjectName(QStringLiteral("undoHistoryButton"));
-                undoBtn->setDefaultAction(m_undoAction);
-                undoBtn->setPopupMode(QToolButton::MenuButtonPopup);
-                auto *undoMenu = new QMenu(undoBtn);
-                connect(undoMenu, &QMenu::aboutToShow, this, [this, undoMenu]() {
-                    undoMenu->clear();
-                    FlowScene *scene = currentFlowScene();
-                    const QStringList texts = scene ? scene->undoHistoryTexts() : QStringList();
-                    if (texts.isEmpty()) {
-                        undoMenu->addAction(tr("没有可撤销的操作"))->setEnabled(false);
-                        return;
-                    }
-                    for (int i = 0; i < texts.size(); ++i) {
-                        QAction *act = undoMenu->addAction(texts.at(i));
-                        connect(act, &QAction::triggered, this, [this, i]() {
-                            FlowScene *s = currentFlowScene();
-                            if (!s)
-                                return;
-                            for (int step = 0; step <= i; ++step)
-                                s->undo();
-                        });
-                    }
-                });
-                undoBtn->setMenu(undoMenu);
-                mainToolBar->addWidget(undoBtn);
-
-                auto *redoBtn = new QToolButton(mainToolBar);
-                redoBtn->setObjectName(QStringLiteral("redoHistoryButton"));
-                redoBtn->setDefaultAction(m_redoAction);
-                redoBtn->setPopupMode(QToolButton::MenuButtonPopup);
-                auto *redoMenu = new QMenu(redoBtn);
-                connect(redoMenu, &QMenu::aboutToShow, this, [this, redoMenu]() {
-                    redoMenu->clear();
-                    FlowScene *scene = currentFlowScene();
-                    const QStringList texts = scene ? scene->redoHistoryTexts() : QStringList();
-                    if (texts.isEmpty()) {
-                        redoMenu->addAction(tr("没有可重做的操作"))->setEnabled(false);
-                        return;
-                    }
-                    for (int i = 0; i < texts.size(); ++i) {
-                        QAction *act = redoMenu->addAction(texts.at(i));
-                        connect(act, &QAction::triggered, this, [this, i]() {
-                            FlowScene *s = currentFlowScene();
-                            if (!s)
-                                return;
-                            for (int step = 0; step <= i; ++step)
-                                s->redo();
-                        });
-                    }
-                });
-                redoBtn->setMenu(redoMenu);
-                mainToolBar->addWidget(redoBtn);
-            }
-
-            m_lockCanvasAction = mainToolBar->addAction(tr("锁定"));
-            m_lockCanvasAction->setObjectName("lockCanvasAction");
-            m_lockCanvasAction->setCheckable(true);
-            m_lockCanvasAction->setToolTip(tr("显式锁定当前流程的画布编辑（与运行期自动锁互不覆盖）"));
-            connect(m_lockCanvasAction, &QAction::triggered, this, [this](bool on) {
-                FlowScene *scene = currentFlowScene();
-                if (!scene) {
-                    m_lockCanvasAction->setChecked(false);
-                    return;
-                }
-                if (on) {
-                    const auto answer = QMessageBox::question(
-                        this, tr("锁定流程"),
-                        tr("锁定后当前流程无法移动/增删模块，确定锁定「%1」吗？").arg(scene->flowName()),
-                        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-                    if (answer != QMessageBox::Yes) {
-                        m_lockCanvasAction->setChecked(false);
-                        return;
-                    }
-                }
-                scene->setUserLocked(on);
-                logMessage(on ? tr("流程已锁定：%1").arg(scene->flowName())
-                              : tr("流程已解锁：%1").arg(scene->flowName()));
-            });
-
-            mainToolBar->addAction(ui->actionCameraConfig);
-            mainToolBar->addAction(ui->actionGlobalVariables);
-            mainToolBar->addAction(ui->actionGlobalTrigger);
-            mainToolBar->addAction(ui->actionRuntimeDesigner);
-            // P2-11：综合配置入口（VM 快捷工具条口径）
+            // 综合入口组：综合配置 / 运行界面 / 参数查找
             {
                 QAction *comprehensiveAct = mainToolBar->addAction(tr("综合配置"));
                 comprehensiveAct->setObjectName(QStringLiteral("comprehensiveConfigAction"));
+                comprehensiveAct->setIcon(toolbarGlyph(ToolGlyph::Config));
                 comprehensiveAct->setToolTip(tr("集中配置：相机 / 通讯 / 触发 / 用户 / 数据与报表"));
                 connect(comprehensiveAct, &QAction::triggered, this,
                         &MainWindow::openComprehensiveConfig);
             }
-            if (ui->actionParameterSearch)
-                mainToolBar->addAction(ui->actionParameterSearch);   // 综合配置入口（参数查找）
-            if (ui->actionCodeExport)
-                mainToolBar->addAction(ui->actionCodeExport);         // 脚本/代码导出入口
+            addToolbarProxy(ui->actionRuntimeDesigner, toolbarGlyph(ToolGlyph::RuntimeUi),
+                            tr("运行界面设计"));
+            if (ui->actionParameterSearch) {
+                addToolbarProxy(ui->actionParameterSearch, toolbarGlyph(ToolGlyph::Search),
+                                tr("参数查找"));
+            }
 
             // P1-8：用户名/角色切换入口（保留登录审计，运行中可切换或注销）
             m_userButton = new QToolButton();
@@ -1041,6 +1598,20 @@ MainWindow::MainWindow(QWidget *parent) :
                 connect(m_resourceTimer, &QTimer::timeout, this, &MainWindow::refreshResourceUsage);
                 m_resourceTimer->start();
                 refreshResourceUsage();
+
+                // VM 顶部右侧「运行模式」：一键切换到自定义运行界面（操作员模式）。
+                // 用源动作做默认动作，可用态/文案跟随 actionRuntimeMode，不另建规则。
+                {
+                    auto *runModeBtn = new QToolButton(mainToolBar);
+                    runModeBtn->setObjectName(QStringLiteral("runModeButton"));
+                    runModeBtn->setDefaultAction(ui->actionRuntimeMode);
+                    runModeBtn->setIcon(toolbarGlyph(ToolGlyph::RuntimeUi));
+                    runModeBtn->setIconSize(QSize(16, 16));
+                    runModeBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+                    runModeBtn->setAutoRaise(true);
+                    runModeBtn->setToolTip(tr("切换到运行模式（自定义运行界面）"));
+                    mainToolBar->addWidget(runModeBtn);
+                }
             }
 
             // 模式切换逻辑 —— 保存到当前流程，同步执行器
@@ -1097,9 +1668,39 @@ MainWindow::MainWindow(QWidget *parent) :
         m_execStatus = new ExecutionStatusController(ui->statusBar, this);
         m_execStatus->setControls(ui->actionStartExecution, ui->actionStopExecution, m_singleShotBtn,
                                   m_pauseBtn);
+        // 工具条图标化：暂停/继续两态用图标表达（文字仍由控制器同步，仅供 tooltip/无障碍）
+        m_execStatus->setPauseIcons(toolbarGlyph(ToolGlyph::Pause), toolbarGlyph(ToolGlyph::Start));
         m_execStatus->setExecutorProvider([this]() { return m_executor; });
 
-        // 统一执行器信号连接（N3 富反馈统一）：首执行器不再直连（旧实现无门槛——后台跑首流程
+        // ---- P2：状态栏右侧「缩放百分比 + 版本号」（VM 4.4 状态栏口径）----
+        {
+            const QString statusLabelStyle =
+                QStringLiteral("QLabel { color:#9fb3c8; font-size:12px; padding:0 8px; }");
+            m_zoomStatusLabel = new QLabel(QStringLiteral("缩放 100%"), ui->statusBar);
+            m_zoomStatusLabel->setStyleSheet(statusLabelStyle);
+            m_zoomStatusLabel->setToolTip(tr("当前流程画布的缩放比例"));
+            ui->statusBar->addPermanentWidget(m_zoomStatusLabel);
+
+            // VM 显示「V4.4.0 Build20250516」；这里用构建注入的语义版本 + 构建日期
+            QString buildDate = QStringLiteral(VFP_BUILD_DATE);
+            buildDate.remove(QLatin1Char('-'));
+            m_versionStatusLabel = new QLabel(
+                QStringLiteral("V%1 Build%2")
+                    .arg(QStringLiteral(VFP_VERSION_STRING), buildDate), ui->statusBar);
+            m_versionStatusLabel->setStyleSheet(statusLabelStyle);
+            m_versionStatusLabel->setToolTip(QStringLiteral(VFP_VERSION_DISPLAY));
+            ui->statusBar->addPermanentWidget(m_versionStatusLabel);
+        }
+
+        // 空流程（启动/新建）时 VM 状态栏左侧常驻「等待添加模块」；这里用普通 addWidget
+        //（非 permanent），操作提示仍可临时覆盖它，行为与 VM 一致。
+        m_statusHintLabel = new QLabel(tr("等待添加模块"), ui->statusBar);
+        m_statusHintLabel->setObjectName(QStringLiteral("statusHintLabel"));
+        m_statusHintLabel->setStyleSheet(
+            QStringLiteral("QLabel { color:#b8b8c0; font-size:12px; padding:0 8px; }"));
+        ui->statusBar->addWidget(m_statusHintLabel);
+
+    // 统一执行器信号连接（N3 富反馈统一）：首执行器不再直连（旧实现无门槛——后台跑首流程
         // 会污染状态栏/结果表），与 executorForScene 新建的执行器走**同一套**连接（见
         // connectExecutorSignals）：全局 UI 按 ex == m_executor 门槛，流程域反馈按执行器自身场景。
         connectExecutorSignals(m_executor);
@@ -1209,9 +1810,32 @@ MainWindow::MainWindow(QWidget *parent) :
         m_flowTimeoutTimer->setSingleShot(true);
         connect(m_flowTimeoutTimer, &QTimer::timeout, this, &MainWindow::onFlowTimeout);
         
-        // Phase 4: 弹出登录对话框
-        VFP_DEBUG << "Showing login dialog";
-        {
+        // Phase 4: 登录 / 界面预览（--preview-ui）
+        if (m_previewOnly) {
+            // 预览模式跳过模态登录，但会话固定为**只读**：Viewer 角色（roleLevel 0）+ 写闸开启
+            // ⇒ 方案编辑/保存、用户管理、通信配置、发起运行在权限层全部被拒；
+            // 再显式禁用「打开方案 / 最近打开 / 开始 / 停止」，防止未登录读取本机方案。
+            // 正常启动（无 --preview-ui）完全不经过本分支。
+            VFP_DEBUG << "Preview UI mode: skip login, read-only session";
+            m_loginAccepted = true;
+            SessionManager *session = SessionManager::instance();
+            session->login(tr("预览用户"), QStringLiteral("Viewer"));
+            session->setWritesBlocked(true);
+            setWindowTitle(tr("视觉方案工作台 - 界面预览（只读，未登录）"));
+            updateUserButton();
+            applyPermissionRestrictions();
+            if (ui->actionOpenScheme)
+                ui->actionOpenScheme->setEnabled(false);
+            if (m_recentFiles && m_recentFiles->menu())
+                m_recentFiles->menu()->setEnabled(false);
+            if (ui->actionStartExecution)
+                ui->actionStartExecution->setEnabled(false);
+            if (ui->actionStopExecution)
+                ui->actionStopExecution->setEnabled(false);
+            ui->statusBar->showMessage(
+                tr("界面预览模式：只读、未登录；保存 / 打开方案 / 运行均已禁用"), 0);
+        } else {
+            VFP_DEBUG << "Showing login dialog";
             UserLoginDialog loginDialog(this);
             if (loginDialog.exec() != QDialog::Accepted) {
                 // A1-②：取消登录不再"默认以 Operator 身份进入"。
@@ -1241,20 +1865,116 @@ MainWindow::MainWindow(QWidget *parent) :
             // 出厂默认口令仍在使用 ⇒ 上写操作闸并强制改密（取代历史的"弹一次告警就放行"）
             enforceFactoryPasswordPolicy();
         }
-        VFP_DEBUG << "Login dialog completed";
+        VFP_DEBUG << (m_previewOnly ? "Preview UI ready" : "Login dialog completed");
         
         // 显示窗口
         setupSystemTray();
         VFP_DEBUG << "Showing MainWindow";
         show();
         VFP_DEBUG << "MainWindow shown";
-        
+
+        // 预览模式下的无人值守菜单快照：设置 VFP_MENU_SNAPSHOT_DIR 后，等首帧渲染完成
+        // 抓取菜单栏/顶层菜单并退出，供 CI 或人工核对菜单结构（不影响交互预览）。
+        if (m_previewOnly) {
+            const QString snapshotDir = qEnvironmentVariable("VFP_MENU_SNAPSHOT_DIR");
+            if (!snapshotDir.isEmpty()) {
+                QTimer::singleShot(300, this, [this, snapshotDir]() {
+                    captureMenuSnapshots(snapshotDir);
+                    QCoreApplication::quit();
+                });
+            }
+        }
+
         VFP_DEBUG << "MainWindow created successfully";
     } catch (const std::exception &e) {
         VFP_DEBUG << "Exception in MainWindow constructor:" << e.what();
     } catch (...) {
         VFP_DEBUG << "Unknown exception in MainWindow constructor";
     }
+}
+
+void MainWindow::captureMenuSnapshots(const QString &dirPath)
+{
+    QDir dir(dirPath);
+    if (!dir.exists() && !QDir().mkpath(dirPath)) {
+        VFP_DEBUG << "Menu snapshot: cannot create directory" << dirPath;
+        return;
+    }
+
+    // 可选：按指定尺寸出图（如 1366x768），便于与 VM 同尺寸逐屏比对
+    const QString sizeText = qEnvironmentVariable("VFP_UI_SNAPSHOT_SIZE");
+    if (!sizeText.isEmpty()) {
+        const QStringList wh = sizeText.split(QLatin1Char('x'), Qt::SkipEmptyParts);
+        if (wh.size() == 2) {
+            const int w = wh.at(0).toInt();
+            const int h = wh.at(1).toInt();
+            if (w > 200 && h > 200) {
+                resize(w, h);
+                QApplication::processEvents();
+                // 停靠比例按最终截图尺寸再套一次：applyDefaultDockSizes 在首帧时算的是
+                // 启动尺寸，先显示后 resize 会让「50% 图像区」停在旧窗口宽度对应的绝对像素。
+                applyDefaultDockSizes();
+                QApplication::processEvents();
+            }
+        }
+    }
+
+    // ① 文本结构：完整菜单树（含子菜单），便于逐项 diff，不受字体/分辨率影响
+    QStringList lines;
+    std::function<void(QMenu *, int)> dump = [&](QMenu *menu, int depth) {
+        if (!menu)
+            return;
+        const QString pad(depth * 2, QLatin1Char(' '));
+        for (QAction *action : menu->actions()) {
+            if (action->isSeparator()) {
+                lines << pad + QStringLiteral("---");
+                continue;
+            }
+            QString text = action->text();
+            text.remove(QLatin1Char('&'));
+            lines << pad + text
+                         + (action->isEnabled() ? QString() : QStringLiteral("  [disabled]"));
+            if (QMenu *sub = action->menu())
+                dump(sub, depth + 1);
+        }
+    };
+    for (QAction *top : ui->menuBar->actions()) {
+        if (!top)
+            continue;
+        QString text = top->text();
+        text.remove(QLatin1Char('&'));
+        lines << text;
+        if (QMenu *menu = top->menu())
+            dump(menu, 1);
+    }
+    QFile structureFile(dir.filePath(QStringLiteral("menu-structure.txt")));
+    if (structureFile.open(QIODevice::WriteOnly | QIODevice::Text))
+        structureFile.write(lines.join(QLatin1Char('\n')).toUtf8());
+
+    // ② 主窗口整体 + 菜单栏截图（布局核对用；菜单弹出前抓，避免被弹出菜单遮住）
+    grab().save(dir.filePath(QStringLiteral("window.png")));
+    ui->menuBar->grab().save(dir.filePath(QStringLiteral("menubar.png")));
+
+    // ③ 每个顶层菜单弹出后截图（屏幕外弹出避免占屏；抓完立即收起）
+    for (QAction *top : ui->menuBar->actions()) {
+        QMenu *menu = top ? top->menu() : nullptr;
+        if (!menu)
+            continue;
+        menu->ensurePolished();
+        menu->adjustSize();
+        menu->popup(QPoint(-10000, -10000));
+        QApplication::processEvents();
+        QString name = top->text();
+        name.remove(QLatin1Char('&'));
+        name.replace(QRegularExpression(QStringLiteral("[\\\\/:*?\"<>|]")),
+                     QStringLiteral("_"));
+        if (name.isEmpty())
+            name = QStringLiteral("menu");
+        menu->grab().save(dir.filePath(name + QStringLiteral(".png")));
+        menu->hide();
+        QApplication::processEvents();
+    }
+    VFP_DEBUG << "Menu snapshots saved to" << dirPath;
 }
 
 MainWindow::~MainWindow()
@@ -1418,10 +2138,10 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
         // 立刻重绘（2026-10-28 复核 P3）：第三态只置了节点标志，画布要等下次重绘才变色
         if (FlowScene *scene = currentFlowScene())
             scene->update();
-        auto *rt = m_auxPanels ? m_auxPanels->resultTablePanel() : nullptr;
-        if (!node || !rt)
+        if (!node)
             return;
-        rt->setModuleSkipped(node->moduleId(), node->fullName());
+        for (ResultTablePanel *rt : resultPanels())
+            rt->setModuleSkipped(node->moduleId(), node->fullName());
     });
 
     // ── 全局 UI：结果数据表 / 变量面板（节点执行后把该模块输出推到面板） ──
@@ -1429,7 +2149,7 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
             [this, ex](NodeBase *node, bool ok, qint64 elapsedMs, const QVariantMap &vars) {
         if (ex != m_executor || !node)
             return;
-        if (auto *rt = m_auxPanels ? m_auxPanels->resultTablePanel() : nullptr) {
+        for (ResultTablePanel *rt : resultPanels()) {
             // VM「模块结果」口径：算子自己声明结果字段（顺序/名称/单位/精度），
             // 未声明的配置参数不再混进结果表；未对齐的算子返回空表，走旧平铺行为。
             rt->setModuleResult(node->moduleId(), node->fullName(), ok, elapsedMs, vars,
@@ -1796,13 +2516,67 @@ void MainWindow::initActions()
     // 此前入口只有「编辑」菜单里的英文项 "Add Flow"，中文界面下很难发现。
     ui->actionAddFlow->setShortcut(QKeySequence(QStringLiteral("Ctrl+T")));
     ui->actionDeleteFlow->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+T")));
+    // 流程栏右侧：运行 / 循环运行 / 新建流程（按 VM 流程栏同区控制做成图标，2026-11-07）
+    // 运行按钮直接触发源动作，可用态跟随 actionStartExecution（权限/写闸/运行态规则不在此复制）。
     {
-        auto *addFlowBtn = new QToolButton(ui->flowTabs);
-        addFlowBtn->setText(QStringLiteral("＋ 新流程"));
+        auto *flowCorner = new QWidget(ui->flowTabs);
+        flowCorner->setObjectName(QStringLiteral("flowBarCorner"));
+        auto *cornerLay = new QHBoxLayout(flowCorner);
+        cornerLay->setContentsMargins(0, 0, 4, 0);
+        cornerLay->setSpacing(1);
+
+        const QColor flowInk(0xb8, 0xb8, 0xb8);
+        auto *runBtn = new QToolButton(flowCorner);
+        runBtn->setObjectName(QStringLiteral("flowRunBtn"));
+        runBtn->setIcon(toolbarGlyph(ToolGlyph::Start, flowInk, 1.6));
+        runBtn->setToolTip(tr("运行当前流程（F5）"));
+        auto *loopBtn = new QToolButton(flowCorner);
+        loopBtn->setObjectName(QStringLiteral("flowLoopRunBtn"));
+        loopBtn->setIcon(toolbarGlyph(ToolGlyph::LoopRun, flowInk, 1.6));
+        loopBtn->setToolTip(tr("连续运行当前流程（F6）"));
+        auto *addFlowBtn = new QToolButton(flowCorner);
+        addFlowBtn->setObjectName(QStringLiteral("flowAddBtn"));
+        addFlowBtn->setText(QStringLiteral("＋"));
         addFlowBtn->setToolTip(QStringLiteral("添加新流程（Ctrl+T）"));
+        QFont plusFont = addFlowBtn->font();
+        plusFont.setPointSizeF(plusFont.pointSizeF() + 3);
+        plusFont.setBold(true);
+        addFlowBtn->setFont(plusFont);
+
+        for (QToolButton *btn : {runBtn, loopBtn}) {
+            btn->setAutoRaise(true);
+            btn->setToolButtonStyle(Qt::ToolButtonIconOnly);
+            btn->setIconSize(QSize(16, 16));
+            btn->setFixedSize(24, 24);
+        }
         addFlowBtn->setAutoRaise(true);
+        addFlowBtn->setToolButtonStyle(Qt::ToolButtonTextOnly);
+        addFlowBtn->setFixedSize(24, 24);
+
+        connect(runBtn, &QToolButton::clicked, ui->actionStartExecution, &QAction::trigger);
+        connect(loopBtn, &QToolButton::clicked, this, [this]() {
+            // 与 F6 同义：先切连续模式，再开始执行
+            if (m_flowModeCombo) {
+                const int idx = m_flowModeCombo->findData(static_cast<int>(FlowMode::Continuous));
+                if (idx >= 0)
+                    m_flowModeCombo->setCurrentIndex(idx);
+            }
+            onStartExecution();
+        });
         connect(addFlowBtn, &QToolButton::clicked, this, &MainWindow::onAddFlowTab);
-        ui->flowTabs->setCornerWidget(addFlowBtn, Qt::TopRightCorner);
+
+        const auto syncRunButtons = [this, runBtn, loopBtn]() {
+            const bool enabled = ui->actionStartExecution->isEnabled();
+            runBtn->setEnabled(enabled);
+            loopBtn->setEnabled(enabled);
+        };
+        connect(ui->actionStartExecution, &QAction::changed, flowCorner, syncRunButtons);
+        syncRunButtons();
+
+        cornerLay->addWidget(runBtn);
+        cornerLay->addWidget(loopBtn);
+        cornerLay->addWidget(addFlowBtn);
+        ui->flowTabs->setCornerWidget(flowCorner, Qt::TopRightCorner);
     }
 
     // 撤销/重做（Ctrl+Z / Ctrl+Y，作用于当前流程标签页）
@@ -1912,27 +2686,19 @@ void MainWindow::initActions()
 
     // 帮助菜单（软件内查看操作手册）
     {
-        m_helpMenu = new QMenu(tr("帮助(&H)"), this);
+        m_helpMenu = new QMenu(tr("帮助"), this);
         ui->menuBar->addMenu(m_helpMenu);
-        QAction *manualAct = m_helpMenu->addAction(tr("使用手册(&M)"));
+        // 菜单顺序按 VM 4.4 实际界面（2026-11-07 逐屏截图核对）：
+        // 帮助文档 → 帮助文档（在线） → 版本信息 → 更多支持 → V社区 → 打开欢迎页；
+        // 本实现额外的自检/关于放在分隔线之后。
+        QAction *manualAct = m_helpMenu->addAction(tr("帮助文档"));
         manualAct->setShortcut(QKeySequence(Qt::Key_F1));
         connect(manualAct, &QAction::triggered, this, [this]() { openManualDialog(); });
-        QAction *envCheckAct = m_helpMenu->addAction(QStringLiteral("HALCON 图像层自检"));
-        connect(envCheckAct, &QAction::triggered, this, [this]() { runHalconEnvCheck(); });
-        m_helpMenu->addSeparator();
-        // P2-12：按 VM 帮助菜单补齐在线文档 / V 社区 / 版本信息 / 欢迎页入口
-        QAction *onlineDocAct = m_helpMenu->addAction(tr("在线文档"));
+        QAction *onlineDocAct = m_helpMenu->addAction(tr("帮助文档（在线）"));
         connect(onlineDocAct, &QAction::triggered, this, [this]() {
             const QUrl url(QStringLiteral("https://www.hikrobotics.com/cn/machinevision/service"));
             if (!QDesktopServices::openUrl(url))
-                QMessageBox::information(this, tr("在线文档"),
-                                         tr("无法打开浏览器，请手动访问：\n%1").arg(url.toString()));
-        });
-        QAction *communityAct = m_helpMenu->addAction(QStringLiteral("V 社区"));
-        connect(communityAct, &QAction::triggered, this, [this]() {
-            const QUrl url(QStringLiteral("https://www.v-club.com"));
-            if (!QDesktopServices::openUrl(url))
-                QMessageBox::information(this, QStringLiteral("V 社区"),
+                QMessageBox::information(this, tr("帮助文档（在线）"),
                                          tr("无法打开浏览器，请手动访问：\n%1").arg(url.toString()));
         });
         QAction *versionAct = m_helpMenu->addAction(tr("版本信息"));
@@ -1948,9 +2714,25 @@ void MainWindow::initActions()
                     .arg(QStringLiteral(VFP_VERSION_DISPLAY), QString::fromLatin1(qVersion()),
                          QSysInfo::prettyProductName()));
         });
+        QAction *supportAct = m_helpMenu->addAction(tr("更多支持"));
+        connect(supportAct, &QAction::triggered, this, [this]() {
+            const QUrl url(QStringLiteral("https://www.hikrobotics.com/"));
+            if (!QDesktopServices::openUrl(url))
+                QMessageBox::information(this, tr("更多支持"),
+                                         tr("无法打开浏览器，请手动访问：\n%1").arg(url.toString()));
+        });
+        QAction *communityAct = m_helpMenu->addAction(QStringLiteral("V社区"));
+        connect(communityAct, &QAction::triggered, this, [this]() {
+            const QUrl url(QStringLiteral("https://www.v-club.com"));
+            if (!QDesktopServices::openUrl(url))
+                QMessageBox::information(this, QStringLiteral("V社区"),
+                                         tr("无法打开浏览器，请手动访问：\n%1").arg(url.toString()));
+        });
         QAction *welcomeAct = m_helpMenu->addAction(tr("打开欢迎页"));
         connect(welcomeAct, &QAction::triggered, this, [this]() { showWelcomePage(); });
         m_helpMenu->addSeparator();
+        QAction *envCheckAct = m_helpMenu->addAction(QStringLiteral("HALCON 图像层自检"));
+        connect(envCheckAct, &QAction::triggered, this, [this]() { runHalconEnvCheck(); });
         QAction *aboutAct = m_helpMenu->addAction(tr("关于"));
         connect(aboutAct, &QAction::triggered, this, [this]() {
             // 版本串由 CMake 注入（cmake/Version.h.in）：版本号 + 提交短哈希 + 配置日期，
@@ -1972,6 +2754,9 @@ void MainWindow::hookFlowScene(FlowScene *scene)
     connect(scene, &FlowScene::nodeSelected, this, &MainWindow::onNodeSelected);
     connect(scene, &FlowScene::nodeAdded, this, &MainWindow::onNodeAdded);
     connect(scene, &FlowScene::nodeRemoved, this, &MainWindow::onNodeRemoved);
+    // 状态栏「等待添加模块 / 就绪」随模块增减刷新（与上方两个槽并挂，不改槽内职责）
+    connect(scene, &FlowScene::nodeAdded, this, [this]() { updateStatusHint(); });
+    connect(scene, &FlowScene::nodeRemoved, this, [this]() { updateStatusHint(); });
     // 撤销/重做按钮可用态跟随当前流程栈（P1-5）
     connect(scene, &FlowScene::undoAvailable, this, [this, scene](bool available) {
         if (m_undoAction && scene == currentFlowScene())
@@ -2048,6 +2833,11 @@ void MainWindow::createNewFlow()
         view->setDragMode(QGraphicsView::RubberBandDrag);
         view->setRubberBandSelectionMode(Qt::IntersectsItemShape);
         view->setFocusPolicy(Qt::StrongFocus);
+        // P2：状态栏缩放百分比只跟随当前流程画布（其它流程的缩放变化不串台）
+        connect(view, &FlowCanvasView::zoomPercentChanged, this, [this, view](int percent) {
+            if (m_zoomStatusLabel && view == canvasViewForScene(currentFlowScene()))
+                m_zoomStatusLabel->setText(tr("缩放 %1%").arg(percent));
+        });
         // 默认视图定位到左上角（延迟到布局完成后执行）
         QTimer::singleShot(0, this, [view]() {
             view->centerOn(0, 0);
@@ -2213,21 +3003,27 @@ void MainWindow::onNodeSelected(NodeBase *node)
         }
 
         // P1-2：结果区跟随画布选中（对标 VM：点哪个模块，结果区就切到哪个模块）。
-        // 首次选中即打开结果停靠面板（常驻结果区），之后只做高亮/滚动。
-        if (m_auxPanels) {
-            if (node) {
-                if (!m_auxPanels->resultTablePanel())
-                    openAuxPanel(QStringLiteral("resultTable"));
-                if (ResultTablePanel *rt = m_auxPanels->resultTablePanel()) {
-                    rt->setCurrentModule(node->moduleId());
-                    rt->setHelpContent(buildNodeHelpHtml(node));
-                }
-                if (QDockWidget *dock = m_auxPanels->resultTableDock())
-                    dock->show();
-            } else if (ResultTablePanel *rt = m_auxPanels->resultTablePanel()) {
+        // 图像区「模块结果」常驻显示当前轮结果，选中只做高亮/滚动，不再强弹底部面板。
+        if (node) {
+            for (ResultTablePanel *rt : resultPanels()) {
+                rt->setCurrentModule(node->moduleId());
+                rt->setHelpContent(buildNodeHelpHtml(node));
+            }
+            // 实装 4.4「结果显示区域」：采集 / 逻辑工具在**底部历史区**只展示历史结果；
+            // 图像区「模块结果」是当前轮结果视图，不参与该切换（否则该页会被整页隐藏）。
+            if (ResultTablePanel *history =
+                    m_auxPanels ? m_auxPanels->resultTablePanel() : nullptr) {
+                history->setHistoryOnlySelection(node->type() == NodeBase::IMAGE_ACQUISITION
+                                                 || node->type() == NodeBase::LOGIC);
+            }
+        } else {
+            for (ResultTablePanel *rt : resultPanels()) {
                 rt->setCurrentModule(-1);
                 rt->setHelpContent(buildNodeHelpHtml(nullptr));
             }
+            if (ResultTablePanel *history =
+                    m_auxPanels ? m_auxPanels->resultTablePanel() : nullptr)
+                history->setHistoryOnlySelection(false);
         }
         // P2-4：画布右下角角标显示选中模块的最近耗时
         updateCanvasSelectionElapsed(node);
@@ -2620,6 +3416,19 @@ void MainWindow::openAuxPanel(const QString &key)
     }
 }
 
+QVector<ResultTablePanel *> MainWindow::resultPanels() const
+{
+    QVector<ResultTablePanel *> panels;
+    // 图像区「模块结果」常驻（构造即创建）；底部结果表只在用户打开过之后存在。
+    if (m_moduleResultPanel)
+        panels.append(m_moduleResultPanel);
+    if (m_auxPanels) {
+        if (ResultTablePanel *rt = m_auxPanels->resultTablePanel())
+            panels.append(rt);
+    }
+    return panels;
+}
+
 void MainWindow::saveAuxPanelVisibility() const
 {
     // 显隐记录（QSettings 键名契约）由 AuxPanelManager 经 PanelVisibilityStore 完成
@@ -2906,12 +3715,12 @@ void MainWindow::onNodeRemoved(NodeBase *node)
         refreshImageSourceCombo(nullptr);
         refreshLocalImagePanel(nullptr);
         updateCanvasSelectionElapsed(nullptr);
-        if (m_auxPanels) {
-            if (ResultTablePanel *rt = m_auxPanels->resultTablePanel()) {
-                rt->setCurrentModule(-1);
-                rt->setHelpContent(buildNodeHelpHtml(nullptr));
-            }
+        for (ResultTablePanel *rt : resultPanels()) {
+            rt->setCurrentModule(-1);
+            rt->setHelpContent(buildNodeHelpHtml(nullptr));
         }
+        if (ResultTablePanel *history = m_auxPanels ? m_auxPanels->resultTablePanel() : nullptr)
+            history->setHistoryOnlySelection(false);
     } else {
         // 被删节点可能是当前选中节点的上游：图像源下拉/叠加候选里存的是它的裸指针，
         // 必须重建一次，否则下次展开/切换就会解引用已析构对象。
@@ -3016,6 +3825,9 @@ void MainWindow::onNewProject()
     if (m_auxPanels) {
         if (auto *rt = m_auxPanels->resultTablePanel())
             rt->clearResults();
+        // 图像区「模块结果」同样属于“上一方案”的数据，必须一起清
+        if (m_moduleResultPanel)
+            m_moduleResultPanel->clearResults();
     }
     m_lastModuleVars.clear();
 
@@ -3980,6 +4792,9 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
     if (m_auxPanels) {
         if (auto *rt = m_auxPanels->resultTablePanel())
             rt->clearResults();
+        // 图像区「模块结果」同样属于“上一方案”的数据，必须一起清
+        if (m_moduleResultPanel)
+            m_moduleResultPanel->clearResults();
     }
     m_lastModuleVars.clear();
 
@@ -4032,6 +4847,11 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
         view->setDragMode(QGraphicsView::RubberBandDrag);
         view->setRubberBandSelectionMode(Qt::IntersectsItemShape);
         view->setFocusPolicy(Qt::StrongFocus);
+        // P2：状态栏缩放百分比跟随当前流程画布
+        connect(view, &FlowCanvasView::zoomPercentChanged, this, [this, view](int percent) {
+            if (m_zoomStatusLabel && view == canvasViewForScene(currentFlowScene()))
+                m_zoomStatusLabel->setText(tr("缩放 %1%").arg(percent));
+        });
         ui->flowTabs->addTab(view, flowName + modeSuffix);   // 显示名与路由名一致，并标出该流程模式
 
         // 连接信号
@@ -4104,9 +4924,12 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
             ui->imageDock->raise();
         }
         // 旧存档可能把左侧工具箱拖成 0 宽（"看得见面板但点不到/看不见"），
-        // 打开方案时给一个可用的默认宽度；用户拖得比这更宽则保持不动。
-        if (ui->toolDock && !ui->toolDock->isFloating() && ui->toolDock->width() < 140)
-            resizeDocks({ui->toolDock}, {220}, Qt::Horizontal);
+        // 打开方案时给一个可用的默认宽度；收起态只保证图标竖条可见。
+        if (ui->toolDock && !ui->toolDock->isFloating()) {
+            const int wantWidth = m_toolBrowserExpanded ? 220 : 48;
+            if (ui->toolDock->width() < wantWidth)
+                resizeDocks({ui->toolDock}, {wantWidth}, Qt::Horizontal);
+        }
         if (ui->imageDock && !ui->imageDock->isFloating() && ui->imageDock->width() < 220)
             resizeDocks({ui->imageDock}, {qMax(360, width() / 3)}, Qt::Horizontal);
     }
@@ -4660,13 +5483,17 @@ void MainWindow::updateSchemeLabel(const QString &filePath)
     m_schemeLabel->setToolTip(filePath.isEmpty() ? tr("尚未保存到文件") : filePath);
 }
 
-void MainWindow::refreshResourceUsage()
-{
-    if (!m_resourceLabel)
-        return;
+namespace {
 
-    int cpuPercent = -1;
-    int memoryPercent = -1;
+/// 采样当前资源占用：CPU / 内存 / 指定目录所在卷的已用比例（-1 = 未获取）。
+/// 状态栏右上角与「异常信息收集」共用，避免两处采样口径分叉。
+void sampleResourceUsage(const QString &volumePath, int *cpuPercent, int *memoryPercent,
+                         int *diskPercent)
+{
+    *cpuPercent = -1;
+    *memoryPercent = -1;
+    *diskPercent = -1;
+
 #ifdef Q_OS_WIN
     // CPU：两次采样 GetSystemTimes 的差值（kernel 时间含 idle，故空闲 = idleDelta）
     static ULONGLONG prevIdle = 0, prevKernel = 0, prevUser = 0;
@@ -4677,7 +5504,7 @@ void MainWindow::refreshResourceUsage()
         const ULONGLONG total = (kernel + user) - (prevKernel + prevUser);
         const ULONGLONG idleDelta = idle - prevIdle;
         if (prevKernel != 0 && total > 0)
-            cpuPercent = static_cast<int>((total - idleDelta) * 100 / total);
+            *cpuPercent = static_cast<int>((total - idleDelta) * 100 / total);
         prevIdle = idle;
         prevKernel = kernel;
         prevUser = user;
@@ -4685,21 +5512,34 @@ void MainWindow::refreshResourceUsage()
     MEMORYSTATUSEX memStatus{};
     memStatus.dwLength = sizeof(memStatus);
     if (GlobalMemoryStatusEx(&memStatus))
-        memoryPercent = static_cast<int>(memStatus.dwMemoryLoad);
+        *memoryPercent = static_cast<int>(memStatus.dwMemoryLoad);
 #endif
 
-    // 磁盘：方案目录（未保存时用当前工作目录）所在卷的已用比例
-    QString schemePath = m_projectManager ? m_projectManager->lastFilePath() : QString();
+    // 磁盘：指定目录所在卷的已用比例（目录不存在时 QStorageInfo 自身返回无效）
+    QStorageInfo storage(volumePath);
+    storage.refresh();
+    if (storage.isValid() && storage.bytesTotal() > 0) {
+        const qint64 used = storage.bytesTotal() - storage.bytesAvailable();
+        *diskPercent = static_cast<int>(used * 100 / storage.bytesTotal());
+    }
+}
+
+} // namespace
+
+void MainWindow::refreshResourceUsage()
+{
+    if (!m_resourceLabel)
+        return;
+
+    // 磁盘统计口径：方案目录（未保存时用当前工作目录）所在卷
+    const QString schemePath = m_projectManager ? m_projectManager->lastFilePath() : QString();
     const QString volumePath = schemePath.isEmpty()
                                    ? QDir::currentPath()
                                    : QFileInfo(schemePath).absolutePath();
-    QStorageInfo storage(volumePath);
-    storage.refresh();
+    int cpuPercent = -1;
+    int memoryPercent = -1;
     int diskPercent = -1;
-    if (storage.isValid() && storage.bytesTotal() > 0) {
-        const qint64 used = storage.bytesTotal() - storage.bytesAvailable();
-        diskPercent = static_cast<int>(used * 100 / storage.bytesTotal());
-    }
+    sampleResourceUsage(volumePath, &cpuPercent, &memoryPercent, &diskPercent);
 
     // 运行策略·诊断模式（VM 4.4 手册 11.4）：任一资源占用过高时告警；普通模式静默
     if (m_resourceDiagnosticMode) {
@@ -4745,27 +5585,9 @@ void MainWindow::showWelcomePage()
     if (hadMainVisible)
         hide();
 
-    // 示例方案随安装目录分发：可执行目录及上级的 examples/ 都找一遍。
-    // 找不到时欢迎页不展示「打开示例方案」，避免一个点了只会报错的死按钮。
-    const QString exampleFile = []() -> QString {
-        const QString appDir = QApplication::applicationDirPath();
-        const QStringList candidates = {
-            QDir(appDir).filePath(QStringLiteral("examples")),
-            QDir(appDir).filePath(QStringLiteral("../examples")),
-            QDir(appDir).filePath(QStringLiteral("../../examples")),
-            QDir(QDir::currentPath()).filePath(QStringLiteral("examples")),
-        };
-        for (const QString &dirPath : candidates) {
-            QDir dir(dirPath);
-            if (!dir.exists())
-                continue;
-            const QStringList files = dir.entryList(QStringList() << QStringLiteral("*.vfp"),
-                                                    QDir::Files, QDir::Name);
-            if (!files.isEmpty())
-                return dir.absoluteFilePath(files.first());
-        }
-        return {};
-    }();
+    // 示例方案随安装目录分发；没有示例包时欢迎页不展示「打开示例方案」，
+    // 避免一个点了只会报错的死按钮。文件菜单的「打开示例方案…」共用同一份探测。
+    const QString exampleFile = bundledExamplePath();
 
     WelcomeDialog dialog(m_recentFiles ? m_recentFiles->files() : QStringList(), this,
                          !exampleFile.isEmpty());
@@ -4805,6 +5627,40 @@ void MainWindow::showWelcomePage()
     case WelcomeDialog::Action::None:
         break;
     }
+}
+
+QString MainWindow::bundledExamplePath() const
+{
+    // 示例方案随安装目录分发：可执行目录及上级的 examples/ 都找一遍。
+    const QString appDir = QApplication::applicationDirPath();
+    const QStringList candidates = {
+        QDir(appDir).filePath(QStringLiteral("examples")),
+        QDir(appDir).filePath(QStringLiteral("../examples")),
+        QDir(appDir).filePath(QStringLiteral("../../examples")),
+        QDir(QDir::currentPath()).filePath(QStringLiteral("examples")),
+    };
+    for (const QString &dirPath : candidates) {
+        QDir dir(dirPath);
+        if (!dir.exists())
+            continue;
+        const QStringList files = dir.entryList(QStringList() << QStringLiteral("*.vfp"),
+                                                QDir::Files, QDir::Name);
+        if (!files.isEmpty())
+            return dir.absoluteFilePath(files.first());
+    }
+    return {};
+}
+
+void MainWindow::onOpenExampleProject()
+{
+    // P1-6 文件菜单：直接载入示例方案（不隐藏主界面、不经过欢迎页）
+    const QString path = bundledExamplePath();
+    if (path.isEmpty()) {
+        QMessageBox::information(this, tr("打开示例方案"),
+                                 tr("未找到内置示例方案：请确认安装目录下存在 examples/*.vfp。"));
+        return;
+    }
+    loadProjectFile(path);
 }
 
 void MainWindow::openComprehensiveConfig()
@@ -4897,26 +5753,537 @@ void MainWindow::openComprehensiveConfig()
         auto *resetLayoutBtn = new QPushButton(tr("恢复默认停靠布局"));
         resetLayoutBtn->setMinimumHeight(38);
         uiGrid->addWidget(resetLayoutBtn, 2, 0, 1, 2);
-        connect(resetLayoutBtn, &QPushButton::clicked, this, [this]() {
-            addDockWidget(Qt::LeftDockWidgetArea, ui->toolDock);
-            // 流程编辑是中央控件（setupDockWidgets 里已从 dock 迁出），不要再把旧 flowDock 加回来
-            addDockWidget(Qt::RightDockWidgetArea, ui->imageDock);
-            addDockWidget(Qt::RightDockWidgetArea, ui->paramDock);
-            if (ui->imageDock && ui->paramDock) {
-                // 默认形态是右侧两个可切换子页面（FR4.3），不是上下/左右并排
-                tabifyDockWidget(ui->imageDock, ui->paramDock);
-                ui->imageDock->raise();
-            }
-            addDockWidget(Qt::BottomDockWidgetArea, ui->logDock);
-            m_dockLayoutRestored = false;   // 显式恢复默认布局：下次关闭时按新布局存档
-            applyDefaultDockSizes();
-        });
+        connect(resetLayoutBtn, &QPushButton::clicked, this, [this]() { resetDockLayout(); });
     }
 
     auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
     buttonBox->button(QDialogButtonBox::Close)->setText(tr("关闭"));
     connect(buttonBox, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     root->addWidget(buttonBox);
+
+    dialog.exec();
+}
+
+void MainWindow::resetDockLayout()
+{
+    addDockWidget(Qt::LeftDockWidgetArea, ui->toolDock);
+    // 流程编辑是中央控件（setupDockWidgets 里已从 dock 迁出），不要再把旧 flowDock 加回来
+    addDockWidget(Qt::RightDockWidgetArea, ui->imageDock);
+    addDockWidget(Qt::RightDockWidgetArea, ui->paramDock);
+    if (ui->imageDock && ui->paramDock) {
+        // 默认形态是右侧两个可切换子页面（FR4.3），不是上下/左右并排
+        tabifyDockWidget(ui->imageDock, ui->paramDock);
+        ui->imageDock->raise();
+    }
+    addDockWidget(Qt::BottomDockWidgetArea, ui->logDock);
+    // 结果区固定在图像区下方（与启动时的口径一致）
+    if (QDockWidget *resultDock = m_auxPanels ? m_auxPanels->resultTableDock() : nullptr) {
+        removeDockWidget(resultDock);
+        addDockWidget(Qt::RightDockWidgetArea, resultDock);
+        resultDock->show();
+    }
+    m_dockLayoutRestored = false;   // 显式恢复默认布局：下次关闭时按新布局存档
+    applyDefaultDockSizes();
+}
+
+void MainWindow::openSoftwareSettings()
+{
+    QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("softwareSettingsDialog"));
+    dialog.setWindowTitle(tr("软件设置"));
+    dialog.setMinimumWidth(480);
+    auto *root = new QVBoxLayout(&dialog);
+
+    auto *intro = new QLabel(
+        tr("软件级选项：即时生效并保存在本机配置（不写入当前方案文件）。"), &dialog);
+    intro->setWordWrap(true);
+    root->addWidget(intro);
+
+    auto *form = new QFormLayout();
+    form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+
+    // 启动
+    auto *welcomeCheck = new QCheckBox(tr("启动时显示欢迎页"), &dialog);
+    welcomeCheck->setChecked(
+        !QSettings().value(QStringLiteral("welcome/dontShow"), false).toBool());
+    connect(welcomeCheck, &QCheckBox::toggled, &dialog, [](bool on) {
+        QSettings().setValue(QStringLiteral("welcome/dontShow"), !on);
+    });
+    form->addRow(tr("启动"), welcomeCheck);
+
+    // 日志
+    auto *logCheck = new QCheckBox(tr("日志栏默认展开显示全量"), &dialog);
+    logCheck->setChecked(m_logExpanded);
+    connect(logCheck, &QCheckBox::toggled, this, [this](bool on) {
+        setLogExpanded(on);
+        QSettings().setValue(QStringLiteral("ui/logExpanded"), on);
+    });
+    form->addRow(tr("日志"), logCheck);
+
+    // 自动保存（0 = 关闭；即时生效）
+    auto *autoSaveSpin = new QSpinBox(&dialog);
+    autoSaveSpin->setRange(0, 3600);
+    autoSaveSpin->setSuffix(tr(" 秒"));
+    autoSaveSpin->setSpecialValueText(tr("关闭"));
+    autoSaveSpin->setValue(
+        QSettings().value(QStringLiteral("recovery/autoSaveIntervalSec"), 60).toInt());
+    autoSaveSpin->setToolTip(tr("0 = 关闭自动保存；关闭后仍保留关窗时的未保存确认"));
+    connect(autoSaveSpin, QOverload<int>::of(&QSpinBox::valueChanged), this,
+            [this](int seconds) {
+        QSettings().setValue(QStringLiteral("recovery/autoSaveIntervalSec"), seconds);
+        if (seconds <= 0) {
+            if (m_autoSaveTimer)
+                m_autoSaveTimer->stop();
+            return;
+        }
+        if (!m_autoSaveTimer) {
+            m_autoSaveTimer = new QTimer(this);
+            connect(m_autoSaveTimer, &QTimer::timeout, this, &MainWindow::autoSaveTick);
+        }
+        m_autoSaveTimer->start(seconds * 1000);
+    });
+    form->addRow(tr("自动保存"), autoSaveSpin);
+
+    // 崩溃恢复提示
+    auto *promptStartCheck = new QCheckBox(tr("启动时提示可恢复的未保存改动"), &dialog);
+    promptStartCheck->setChecked(
+        QSettings().value(QStringLiteral("recovery/promptOnStartup"), true).toBool());
+    connect(promptStartCheck, &QCheckBox::toggled, &dialog, [](bool on) {
+        QSettings().setValue(QStringLiteral("recovery/promptOnStartup"), on);
+    });
+    auto *promptCloseCheck = new QCheckBox(tr("关闭时提示未保存改动"), &dialog);
+    promptCloseCheck->setChecked(
+        QSettings().value(QStringLiteral("recovery/promptOnClose"), true).toBool());
+    connect(promptCloseCheck, &QCheckBox::toggled, &dialog, [](bool on) {
+        QSettings().setValue(QStringLiteral("recovery/promptOnClose"), on);
+    });
+    form->addRow(tr("崩溃恢复"), promptStartCheck);
+    form->addRow(promptCloseCheck);
+
+    // 资源诊断（超限告警）
+    auto *diagCheck = new QCheckBox(tr("资源诊断模式（CPU/内存/硬盘超限告警）"), &dialog);
+    diagCheck->setChecked(m_resourceDiagnosticMode);
+    connect(diagCheck, &QCheckBox::toggled, this, [this](bool on) {
+        m_resourceDiagnosticMode = on;
+        QSettings().setValue(QStringLiteral("flow/resourceDiagnosticMode"), on);
+        refreshResourceUsage();
+    });
+    form->addRow(tr("诊断"), diagCheck);
+
+    root->addLayout(form);
+    root->addStretch();
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    buttons->button(QDialogButtonBox::Close)->setText(tr("关闭"));
+    QPushButton *resetBtn =
+        buttons->addButton(tr("恢复默认停靠布局"), QDialogButtonBox::ResetRole);
+    connect(resetBtn, &QPushButton::clicked, this, [this]() { resetDockLayout(); });
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    root->addWidget(buttons);
+    dialog.exec();
+}
+
+void MainWindow::openSchemeSettings()
+{
+    QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("schemeSettingsDialog"));
+    dialog.setWindowTitle(tr("方案设置"));
+    dialog.setMinimumSize(540, 420);
+    auto *root = new QVBoxLayout(&dialog);
+
+    auto *infoTitle = new QLabel(tr("当前方案"), &dialog);
+    infoTitle->setStyleSheet(QStringLiteral("font-weight:bold;"));
+    root->addWidget(infoTitle);
+
+    auto *form = new QFormLayout();
+    const QString path = m_projectManager ? m_projectManager->lastFilePath() : QString();
+    auto *pathLabel = new QLabel(
+        path.isEmpty() ? tr("未命名方案（尚未保存）") : QDir::toNativeSeparators(path),
+        &dialog);
+    pathLabel->setWordWrap(true);
+    pathLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    form->addRow(tr("文件"), pathLabel);
+
+    int nodeCount = 0;
+    for (FlowScene *scene : qAsConst(m_flowScenes)) {
+        if (scene)
+            nodeCount += scene->nodes().size();
+    }
+    form->addRow(tr("流程"), new QLabel(tr("%1 个").arg(m_flowScenes.size()), &dialog));
+    form->addRow(tr("模块"), new QLabel(tr("%1 个").arg(nodeCount), &dialog));
+
+    const QFileInfo fileInfo(path);
+    form->addRow(tr("文件大小"),
+                 new QLabel(fileInfo.exists()
+                                ? tr("%1 KB").arg(QString::number(fileInfo.size() / 1024.0, 'f', 1))
+                                : tr("—"),
+                            &dialog));
+    form->addRow(tr("最后保存"),
+                 new QLabel(fileInfo.exists()
+                                ? fileInfo.lastModified().toString(
+                                      QStringLiteral("yyyy-MM-dd HH:mm:ss"))
+                                : tr("—"),
+                            &dialog));
+    root->addLayout(form);
+
+    root->addWidget(new QLabel(tr("流程与运行模式（切换请回流程栏）"), &dialog));
+    auto *table = new QTableWidget(static_cast<int>(m_flowScenes.size()), 2, &dialog);
+    table->setHorizontalHeaderLabels({tr("流程"), tr("运行模式")});
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table->setAlternatingRowColors(true);
+    table->verticalHeader()->setVisible(false);
+    table->horizontalHeader()->setStretchLastSection(true);
+    for (int i = 0; i < m_flowScenes.size(); ++i) {
+        FlowScene *scene = m_flowScenes.at(i);
+        const FlowMode mode = m_flowModes.value(scene, FlowMode::SoftwareTrigger);
+        const QString modeText = (mode == FlowMode::Continuous)
+                                     ? tr("连续模式")
+                                     : (mode == FlowMode::HardwareTrigger) ? tr("硬触发模式")
+                                                                           : tr("软触发模式");
+        table->setItem(
+            i, 0, new QTableWidgetItem(scene ? scene->flowName() : QStringLiteral("—")));
+        table->setItem(i, 1, new QTableWidgetItem(modeText));
+    }
+    root->addWidget(table, 1);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    buttons->button(QDialogButtonBox::Close)->setText(tr("关闭"));
+    auto addSchemeAction = [&](const QString &text, QAction *action) {
+        QPushButton *button = buttons->addButton(text, QDialogButtonBox::ActionRole);
+        if (!action) {
+            button->setEnabled(false);
+            return;
+        }
+        button->setEnabled(action->isEnabled());
+        connect(button, &QPushButton::clicked, action, &QAction::trigger);
+    };
+    addSchemeAction(tr("保存方案"), ui->actionSaveScheme);
+    addSchemeAction(tr("方案另存为"), m_actionSaveAs);
+    addSchemeAction(tr("导出加密/只读"), m_actionExportEncrypted);
+    addSchemeAction(tr("打包模型与依赖"), m_packModelsAct);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    root->addWidget(buttons);
+    dialog.exec();
+}
+
+void MainWindow::openCalibrationBoardDialog()
+{
+    QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("calibrationBoardDialog"));
+    dialog.setWindowTitle(tr("标定板生成"));
+    dialog.setMinimumWidth(560);
+    auto *root = new QVBoxLayout(&dialog);
+
+    auto *intro = new QLabel(
+        tr("按物理尺寸与打印 DPI 生成标定板图片。棋盘格的内角点数 = 方格数 - 1；"
+           "打印时请选 100% 比例，勿缩放。"),
+        &dialog);
+    intro->setWordWrap(true);
+    root->addWidget(intro);
+
+    auto *form = new QFormLayout();
+    form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+
+    auto *typeCombo = new QComboBox(&dialog);
+    typeCombo->addItem(tr("棋盘格"), static_cast<int>(CalibrationBoardType::Chessboard));
+    typeCombo->addItem(tr("圆点阵列"), static_cast<int>(CalibrationBoardType::CirclesGrid));
+    form->addRow(tr("图案类型"), typeCombo);
+
+    auto *xSpin = new QSpinBox(&dialog);
+    xSpin->setRange(3, 100);
+    xSpin->setValue(11);
+    form->addRow(tr("横向方格/圆点"), xSpin);
+
+    auto *ySpin = new QSpinBox(&dialog);
+    ySpin->setRange(3, 100);
+    ySpin->setValue(8);
+    form->addRow(tr("纵向方格/圆点"), ySpin);
+
+    auto *sizeSpin = new QDoubleSpinBox(&dialog);
+    sizeSpin->setRange(0.1, 1000.0);
+    sizeSpin->setDecimals(1);
+    sizeSpin->setValue(10.0);
+    sizeSpin->setSuffix(tr(" mm"));
+    sizeSpin->setToolTip(tr("棋盘格为方格边长；圆点板为相邻圆心间距"));
+    form->addRow(tr("格距"), sizeSpin);
+
+    auto *marginSpin = new QDoubleSpinBox(&dialog);
+    marginSpin->setRange(0.0, 1000.0);
+    marginSpin->setDecimals(1);
+    marginSpin->setValue(10.0);
+    marginSpin->setSuffix(tr(" mm"));
+    form->addRow(tr("四周留白"), marginSpin);
+
+    auto *dpiSpin = new QSpinBox(&dialog);
+    dpiSpin->setRange(72, 1200);
+    dpiSpin->setValue(300);
+    dpiSpin->setToolTip(tr("打印分辨率：激光打印机常用 300 / 600 DPI"));
+    form->addRow(tr("打印 DPI"), dpiSpin);
+
+    root->addLayout(form);
+
+    // 预览：固定画布尺寸，按整板比例缩放显示
+    auto *previewLabel = new QLabel(&dialog);
+    previewLabel->setObjectName(QStringLiteral("calibrationBoardPreview"));
+    previewLabel->setAlignment(Qt::AlignCenter);
+    previewLabel->setFixedSize(520, 280);
+    previewLabel->setFrameShape(QFrame::StyledPanel);
+    previewLabel->setFrameShadow(QFrame::Sunken);
+    previewLabel->setStyleSheet(QStringLiteral("background:#f0f0f0;"));
+    root->addWidget(previewLabel, 0, Qt::AlignHCenter);
+
+    auto *infoLabel = new QLabel(&dialog);
+    infoLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    root->addWidget(infoLabel);
+
+    auto *statusLabel = new QLabel(&dialog);
+    statusLabel->setStyleSheet(QStringLiteral("color:#2e7d32;"));
+    statusLabel->setWordWrap(true);
+    root->addWidget(statusLabel);
+
+    auto *errorLabel = new QLabel(&dialog);
+    errorLabel->setStyleSheet(QStringLiteral("color:#c62828;"));   // 红：参数错误直接可见
+    errorLabel->setWordWrap(true);
+    root->addWidget(errorLabel);
+
+    auto *buttons =
+        new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Close, &dialog);
+    QPushButton *saveButton = buttons->button(QDialogButtonBox::Save);
+    saveButton->setText(tr("生成并保存…"));
+    buttons->button(QDialogButtonBox::Close)->setText(tr("关闭"));
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    root->addWidget(buttons);
+
+    // 控件 → 参数规格（预览与保存共用的唯一装配点，避免两处取值口径分叉）
+    const auto buildSpec = [typeCombo, xSpin, ySpin, sizeSpin, marginSpin, dpiSpin]() {
+        CalibrationBoardSpec spec;
+        spec.type = static_cast<CalibrationBoardType>(typeCombo->currentData().toInt());
+        spec.squaresX = xSpin->value();
+        spec.squaresY = ySpin->value();
+        spec.squareSizeMm = sizeSpin->value();
+        spec.marginMm = marginSpin->value();
+        spec.dpi = dpiSpin->value();
+        return spec;
+    };
+
+    // 预览刷新：物理尺寸按整板 mm 标注；预览按等效 DPI 限制边长（几何比例与成品一致），
+    // 避免每次改参数都渲染整张大图卡住界面。
+    const auto refresh = [this, buildSpec, previewLabel, infoLabel, statusLabel, errorLabel,
+                          saveButton]() {
+        const CalibrationBoardSpec spec = buildSpec();
+        QString error;
+        const QSize fullSize = CalibrationBoard::pixelSize(spec, &error);
+        if (fullSize.isEmpty()) {
+            previewLabel->clear();
+            previewLabel->setText(tr("参数无效"));
+            infoLabel->clear();
+            statusLabel->clear();
+            errorLabel->setText(error);
+            saveButton->setEnabled(false);
+            return;
+        }
+
+        const double widthMm = spec.squaresX * spec.squareSizeMm + 2.0 * spec.marginMm;
+        const double heightMm = spec.squaresY * spec.squareSizeMm + 2.0 * spec.marginMm;
+        infoLabel->setText(tr("整板 %1 × %2 mm（%3 × %4 px）")
+                               .arg(QString::number(widthMm, 'f', 1),
+                                    QString::number(heightMm, 'f', 1))
+                               .arg(fullSize.width())
+                               .arg(fullSize.height()));
+        errorLabel->clear();
+        statusLabel->clear();
+        saveButton->setEnabled(true);
+
+        CalibrationBoardSpec previewSpec = spec;
+        const int longestEdge = qMax(fullSize.width(), fullSize.height());
+        const int previewLimit = 720;
+        if (longestEdge > previewLimit) {
+            // 等效 DPI 保底 72：极端大板预览略超 720 px，也比参数校验失败好
+            previewSpec.dpi = qMax(72, int(spec.dpi * double(previewLimit) / longestEdge));
+        }
+        const QImage preview = CalibrationBoard::render(previewSpec);
+        if (preview.isNull()) {
+            previewLabel->clear();
+            previewLabel->setText(tr("预览生成失败"));
+            return;
+        }
+        previewLabel->setPixmap(QPixmap::fromImage(preview).scaled(
+            500, 260, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    };
+
+    connect(typeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), &dialog,
+            [refresh](int) { refresh(); });
+    connect(xSpin, QOverload<int>::of(&QSpinBox::valueChanged), &dialog,
+            [refresh](int) { refresh(); });
+    connect(ySpin, QOverload<int>::of(&QSpinBox::valueChanged), &dialog,
+            [refresh](int) { refresh(); });
+    connect(sizeSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), &dialog,
+            [refresh](double) { refresh(); });
+    connect(marginSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), &dialog,
+            [refresh](double) { refresh(); });
+    connect(dpiSpin, QOverload<int>::of(&QSpinBox::valueChanged), &dialog,
+            [refresh](int) { refresh(); });
+
+    connect(saveButton, &QPushButton::clicked, &dialog,
+            [this, &dialog, buildSpec, statusLabel, errorLabel]() {
+        const CalibrationBoardSpec spec = buildSpec();
+        QString error;
+        const QSize size = CalibrationBoard::pixelSize(spec, &error);
+        if (size.isEmpty()) {
+            errorLabel->setText(error);
+            return;
+        }
+
+        // 默认文件名带上关键参数，多次生成并存时可一眼分辨
+        const QString typeName = (spec.type == CalibrationBoardType::Chessboard)
+                                     ? QStringLiteral("chessboard")
+                                     : QStringLiteral("circles");
+        const QString suggested = QStringLiteral("calibration_%1_%2x%3_%4mm_%5dpi.png")
+                                      .arg(typeName)
+                                      .arg(spec.squaresX)
+                                      .arg(spec.squaresY)
+                                      .arg(QString::number(spec.squareSizeMm, 'f', 1))
+                                      .arg(spec.dpi);
+        const QString lastDir =
+            QSettings().value(QStringLiteral("tools/calibrationBoardDir")).toString();
+        const QString startDir = lastDir.isEmpty() ? QDir::homePath() : lastDir;
+        const QString path = QFileDialog::getSaveFileName(
+            &dialog, tr("保存标定板"), QDir(startDir).filePath(suggested),
+            tr("图片 (*.png *.bmp *.tif *.tiff);;所有文件 (*)"));
+        if (path.isEmpty())
+            return;
+
+        if (!CalibrationBoard::save(path, spec, &error)) {
+            errorLabel->setText(error);
+            return;
+        }
+
+        QSettings().setValue(QStringLiteral("tools/calibrationBoardDir"),
+                             QFileInfo(path).absolutePath());
+        errorLabel->clear();
+        statusLabel->setText(tr("已保存：%1").arg(QDir::toNativeSeparators(path)));
+        logMessage(tr("标定板已保存：%1（%2 × %3 px）")
+                       .arg(QDir::toNativeSeparators(path))
+                       .arg(size.width())
+                       .arg(size.height()));
+    });
+
+    refresh();   // 打开即显示默认参数（11×8、10 mm、300 DPI）的预览
+    dialog.exec();
+}
+
+void MainWindow::openExceptionInfoDialog()
+{
+    // 采集诊断输入：全部为文本信息，不读取图像/模型/方案内容
+    DiagnosticsInput input;
+    input.appVersion = QStringLiteral(VFP_VERSION_DISPLAY);
+    input.osVersion = QStringLiteral("%1（%2 %3）")
+                          .arg(QSysInfo::prettyProductName(), QSysInfo::kernelType(),
+                               QSysInfo::kernelVersion());
+    input.qtVersion = QString::fromLatin1(qVersion());
+    input.cpuArchitecture = QSysInfo::currentCpuArchitecture();
+    input.appDir = QCoreApplication::applicationDirPath();
+    input.schemePath = m_projectManager ? m_projectManager->lastFilePath() : QString();
+    // 日志栏最多保留 2000 块：取末尾 200 行 / 2 万字符，足够定位又不至于让报告过大
+    input.logTail = DiagnosticsCollector::tailLines(ui->logTextEdit->toPlainText(), 200, 20000);
+
+    // HALCON 版本（运行时不可用时不阻断收集，报告标「未获取」）
+    try {
+        HTuple version;
+        GetSystem("version", &version);
+        if (version.Length() > 0)
+            input.halconVersion = QString::fromStdString(version[0].S().Text());
+    } catch (const HException &) {
+    }
+
+    const QString schemePath = m_projectManager ? m_projectManager->lastFilePath() : QString();
+    const QString volumePath =
+        schemePath.isEmpty() ? QDir::currentPath() : QFileInfo(schemePath).absolutePath();
+    int cpuPercent = -1;
+    int memoryPercent = -1;
+    int diskPercent = -1;
+    sampleResourceUsage(volumePath, &cpuPercent, &memoryPercent, &diskPercent);
+    input.cpuPercent = cpuPercent;
+    input.memoryPercent = memoryPercent;
+    input.diskPercent = diskPercent;
+
+    // 报告在打开时生成一次：预览与导出使用同一份快照，避免两次内容不一致
+    const QString report = DiagnosticsCollector::buildReport(input);
+
+    QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("exceptionInfoDialog"));
+    dialog.setWindowTitle(tr("异常信息收集"));
+    dialog.setMinimumSize(720, 520);
+    auto *root = new QVBoxLayout(&dialog);
+
+    auto *intro = new QLabel(
+        tr("以下信息用于技术支持定位问题，不包含图像、模型或方案内容。可复制或导出为文本文件。"),
+        &dialog);
+    intro->setWordWrap(true);
+    root->addWidget(intro);
+
+    auto *preview = new QPlainTextEdit(&dialog);
+    preview->setObjectName(QStringLiteral("exceptionInfoPreview"));
+    preview->setReadOnly(true);
+    preview->setPlainText(report);
+    preview->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    root->addWidget(preview, 1);
+
+    auto *statusLabel = new QLabel(&dialog);
+    statusLabel->setStyleSheet(QStringLiteral("color:#2e7d32;"));
+    statusLabel->setWordWrap(true);
+    root->addWidget(statusLabel);
+
+    auto *errorLabel = new QLabel(&dialog);
+    errorLabel->setStyleSheet(QStringLiteral("color:#c62828;"));
+    errorLabel->setWordWrap(true);
+    root->addWidget(errorLabel);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    buttons->button(QDialogButtonBox::Close)->setText(tr("关闭"));
+    QPushButton *copyButton =
+        buttons->addButton(tr("复制到剪贴板"), QDialogButtonBox::ActionRole);
+    QPushButton *exportButton = buttons->addButton(tr("导出…"), QDialogButtonBox::ActionRole);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    root->addWidget(buttons);
+
+    connect(copyButton, &QPushButton::clicked, &dialog,
+            [this, report, statusLabel, errorLabel]() {
+                QApplication::clipboard()->setText(report);
+                errorLabel->clear();
+                statusLabel->setText(tr("已复制到剪贴板"));
+            });
+
+    connect(exportButton, &QPushButton::clicked, &dialog,
+            [this, &dialog, report, statusLabel, errorLabel]() {
+                const QString lastDir =
+                    QSettings().value(QStringLiteral("tools/diagnosticsDir")).toString();
+                const QString startDir = lastDir.isEmpty() ? QDir::homePath() : lastDir;
+                const QString suggested =
+                    QStringLiteral("diagnostics_%1.txt")
+                        .arg(QDateTime::currentDateTime().toString(
+                            QStringLiteral("yyyyMMdd_HHmmss")));
+                QString path = QFileDialog::getSaveFileName(
+                    &dialog, tr("导出异常信息"), QDir(startDir).filePath(suggested),
+                    tr("文本文件 (*.txt);;所有文件 (*)"));
+                if (path.isEmpty())
+                    return;
+
+                QString error;
+                if (!DiagnosticsCollector::writeReport(path, report, &error)) {
+                    statusLabel->clear();
+                    errorLabel->setText(error);
+                    return;
+                }
+                if (QFileInfo(path).suffix().isEmpty())
+                    path += QStringLiteral(".txt");   // 与 writeReport 的补全口径一致
+                QSettings().setValue(QStringLiteral("tools/diagnosticsDir"),
+                                     QFileInfo(path).absolutePath());
+                errorLabel->clear();
+                statusLabel->setText(tr("已导出：%1").arg(QDir::toNativeSeparators(path)));
+                logMessage(tr("异常信息已导出：%1").arg(QDir::toNativeSeparators(path)));
+            });
 
     dialog.exec();
 }
@@ -4987,10 +6354,8 @@ void MainWindow::onExecutionStarted()
             m_flowTimeoutTimer->stop();
     }
     // P1-2：新的一轮开始 → 当前结果清空，历史页保留上一轮
-    if (m_auxPanels) {
-        if (ResultTablePanel *rt = m_auxPanels->resultTablePanel())
-            rt->beginRunRound();
-    }
+    for (ResultTablePanel *rt : resultPanels())
+        rt->beginRunRound();
     // P2-4：新轮开始清空模块耗时，画布角标进入「运行中」
     m_nodeElapsed.clear();
     if (FlowCanvasView *view = canvasViewForScene(currentFlowScene())) {
@@ -5348,12 +6713,12 @@ void MainWindow::onCurrentTabChanged(int index)
     showNodeParameters(nullptr);
     refreshLocalImagePanel(nullptr);
     updateCanvasSelectionElapsed(nullptr);
-    if (m_auxPanels) {
-        if (ResultTablePanel *rt = m_auxPanels->resultTablePanel()) {
-            rt->setCurrentModule(-1);
-            rt->setHelpContent(buildNodeHelpHtml(nullptr));
-        }
+    for (ResultTablePanel *rt : resultPanels()) {
+        rt->setCurrentModule(-1);
+        rt->setHelpContent(buildNodeHelpHtml(nullptr));
     }
+    if (ResultTablePanel *history = m_auxPanels ? m_auxPanels->resultTablePanel() : nullptr)
+        history->setHistoryOnlySelection(false);
 
     FlowScene *scene = m_flowScenes[index];
     // 一场景一执行器：切 tab 直接切换到该场景专属执行器（executorForScene 保证存在/自动创建），
@@ -5397,6 +6762,7 @@ void MainWindow::onCurrentTabChanged(int index)
     }
     updateEditLockForCurrentScene();
     syncCanvasLockAction();
+    updateZoomStatus();   // P2：切流程后状态栏缩放到新画布的真实值
 }
 
 
@@ -5406,10 +6772,54 @@ void MainWindow::setupToolLibrary()
     // 工具库由声明式注册表 NodeRegistry 自动生成
     VFP_DEBUG << "setupToolLibrary called (registry-driven)";
 
-    // 工具库顶部搜索框（仅创建一次）
+    // === 实装 4.4：模块箱形态改造（只做一次）===
+    // .ui 里是「搜索框 + 树」的竖排；这里改成 左侧常驻分类图标竖条 + 右侧可折叠列表。
+    // 收起态只占一条竖条（VM 图标条形态），点分类图标才展开对应模块列表。
+    if (!m_toolBrowserPanel && ui->toolDockContents) {
+        QLayout *oldLayout = ui->toolDockContents->layout();
+        m_toolBrowserPanel = new QWidget(ui->toolDockContents);
+        m_toolBrowserPanel->setObjectName(QStringLiteral("toolBrowserPanel"));
+        auto *browserLayout = new QVBoxLayout(m_toolBrowserPanel);
+        browserLayout->setContentsMargins(2, 2, 2, 2);
+        browserLayout->setSpacing(2);
+
+        if (oldLayout) {
+            // takeAt 后控件仍在 toolDockContents 名下；addWidget 会把它重新挂到列表面板
+            while (QLayoutItem *item = oldLayout->takeAt(0)) {
+                if (QWidget *w = item->widget())
+                    browserLayout->addWidget(w);
+                delete item;
+            }
+            delete oldLayout;
+            // ui->toolDockLayout 指向刚删掉的旧布局（悬挂），此后禁止再解引用
+            ui->toolDockLayout = nullptr;
+        } else {
+            browserLayout->addWidget(ui->toolLibrary);
+        }
+
+        m_toolCategoryBar = new QWidget(ui->toolDockContents);
+        m_toolCategoryBar->setObjectName(QStringLiteral("toolCategoryBar"));
+        m_toolCategoryBar->setFixedWidth(42);
+        m_toolCategoryBar->setStyleSheet(QStringLiteral(
+            "QWidget#toolCategoryBar { background:#232333; border-right:1px solid #3a3a4e; }"));
+        auto *catLayout = new QVBoxLayout(m_toolCategoryBar);
+        catLayout->setContentsMargins(3, 4, 3, 4);
+        catLayout->setSpacing(3);
+
+        auto *dockRoot = new QHBoxLayout(ui->toolDockContents);
+        dockRoot->setContentsMargins(0, 0, 0, 0);
+        dockRoot->setSpacing(0);
+        dockRoot->addWidget(m_toolCategoryBar, 0);
+        dockRoot->addWidget(m_toolBrowserPanel, 1);
+    }
+
+    QVBoxLayout *browserLayout =
+        m_toolBrowserPanel ? qobject_cast<QVBoxLayout *>(m_toolBrowserPanel->layout()) : nullptr;
+
+    // 工具库顶部搜索框（仅创建一次；parent 归列表面板，随折叠一起隐藏）
     QLineEdit *searchBox = ui->toolDockContents->findChild<QLineEdit *>(QStringLiteral("toolSearchEdit"));
     if (!searchBox) {
-        searchBox = new QLineEdit(ui->toolDockContents);
+        searchBox = new QLineEdit(m_toolBrowserPanel ? m_toolBrowserPanel : ui->toolDockContents);
         searchBox->setObjectName(QStringLiteral("toolSearchEdit"));
         searchBox->setPlaceholderText(QStringLiteral("搜索算子..."));
         searchBox->setClearButtonEnabled(true);
@@ -5421,13 +6831,15 @@ void MainWindow::setupToolLibrary()
             "}"
             "QLineEdit:focus { border-color: #3a6ea5; }"
         );
-        ui->toolDockLayout->insertWidget(0, searchBox);
+        if (browserLayout)
+            browserLayout->insertWidget(0, searchBox);
     }
 
     // 清空工具库
     ui->toolLibrary->clear();
     ui->toolLibrary->setHeaderHidden(true);
-    ui->toolLibrary->setMinimumWidth(200);
+    // 宽度由列表面板/Dock 决定；不再用树自身的最小宽度把折叠态撑宽
+    ui->toolLibrary->setMinimumWidth(0);
     ui->toolLibrary->setIndentation(20);
     ui->toolLibrary->setAnimated(true);
     ui->toolLibrary->setAlternatingRowColors(true);
@@ -5463,28 +6875,16 @@ void MainWindow::setupToolLibrary()
         groupItem->setExpanded(true);
     }
 
-    // 搜索过滤：隐藏不匹配的算子，空结果显示分组隐藏
+    // 搜索过滤：输入关键字时自动切回「全部模块」，否则搜索会被当前分类挡住
     connect(searchBox, &QLineEdit::textChanged, this, [this](const QString &text) {
-        const QString q = text.trimmed();
-        for (int gi = 0; gi < ui->toolLibrary->topLevelItemCount(); ++gi) {
-            QTreeWidgetItem *group = ui->toolLibrary->topLevelItem(gi);
-            int visible = 0;
-            for (int ci = 0; ci < group->childCount(); ++ci) {
-                QTreeWidgetItem *child = group->child(ci);
-                // 中文名/英文名/别名走 NodeRegistry::matchesSearchKeyword 那一枚唯一口径；
-                // 类型 id 那条"关键字至少两个字符"的规矩留在本处，Ctrl+F 那一侧不需要它。
-                const NodeRegistration *reg =
-                    NodeRegistry::instance().findById(child->data(0, Qt::UserRole).toString());
-                const bool match = q.isEmpty()
-                                   || child->text(0).contains(q, Qt::CaseInsensitive)
-                                   || (reg && NodeRegistry::matchesSearchKeyword(*reg, q))
-                                   || (q.size() >= 2 && child->data(0, Qt::UserRole).toString().contains(q, Qt::CaseInsensitive));
-                child->setHidden(!match);
-                if (match) ++visible;
+        if (!text.trimmed().isEmpty() && !m_toolActiveGroup.isEmpty()) {
+            m_toolActiveGroup.clear();
+            for (QToolButton *button : m_toolCategoryButtons) {
+                if (button)
+                    button->setChecked(false);
             }
-            group->setHidden(visible == 0);
-            if (visible > 0) group->setExpanded(true);
         }
+        applyToolLibraryFilter();
     });
 
     // 连接工具库的点击信号
@@ -5500,6 +6900,133 @@ void MainWindow::setupToolLibrary()
 
     // 为工具库添加拖拽事件过滤器
     ui->toolLibrary->viewport()->installEventFilter(this);
+
+    // 分类图标竖条（全部模块 + 各分组），默认收起为竖条
+    setupToolCategoryBar();
+    setToolBrowserExpanded(false);
+}
+
+void MainWindow::setupToolCategoryBar()
+{
+    if (!m_toolCategoryBar)
+        return;
+    QVBoxLayout *catLayout = qobject_cast<QVBoxLayout *>(m_toolCategoryBar->layout());
+    if (!catLayout)
+        return;
+
+    // 重建按钮（保留可重入：先清空旧按钮）
+    m_toolCategoryButtons.clear();
+    while (QLayoutItem *item = catLayout->takeAt(0)) {
+        if (QWidget *w = item->widget())
+            w->deleteLater();
+        delete item;
+    }
+
+    auto makeGroupButton = [&](const QString &group, const QString &label) {
+        auto *button = new QToolButton(m_toolCategoryBar);
+        button->setObjectName(group.isEmpty()
+                                  ? QStringLiteral("toolCategoryAll")
+                                  : QStringLiteral("toolCategory_%1").arg(group));
+        button->setProperty("toolGroup", group);
+        button->setCheckable(true);
+        button->setAutoRaise(true);
+        button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        button->setIconSize(QSize(24, 24));
+        button->setFixedSize(34, 34);
+        button->setIcon(toolCategoryGlyph(group));
+        button->setToolTip(label);
+        button->setAccessibleName(label);
+        button->setStyleSheet(QStringLiteral(
+            "QToolButton { background:transparent; border:none; border-radius:4px; }"
+            "QToolButton:hover { background:#2f2f45; }"
+            "QToolButton:checked { background:#2d4a66; }"));
+        catLayout->addWidget(button, 0, Qt::AlignHCenter);
+        m_toolCategoryButtons.append(button);
+        connect(button, &QToolButton::clicked, this, [this, group]() {
+            // 同一分类再次点击 = 收起（VM 图标条行为）
+            const bool sameGroup = m_toolBrowserExpanded && m_toolActiveGroup == group;
+            setToolBrowserExpanded(!sameGroup, sameGroup ? QString() : group);
+        });
+        return button;
+    };
+
+    makeGroupButton(QString(), tr("全部模块"));
+    auto &registry = NodeRegistry::instance();
+    for (const QString &group : registry.groups())
+        makeGroupButton(group, group);
+
+    catLayout->addStretch(1);
+}
+
+void MainWindow::setToolBrowserExpanded(bool expanded, const QString &group)
+{
+    if (!ui || !ui->toolDock || !m_toolBrowserPanel)
+        return;
+    m_toolBrowserExpanded = expanded;
+    if (expanded)
+        m_toolActiveGroup = group;
+
+    // 折叠时去掉 Dock 标题栏：VM 的模块箱竖条没有标题栏，默认标题栏会把最小宽度撑到 ~120px
+    const bool hasCustomTitleBar = ui->toolDock->titleBarWidget() != nullptr;
+    if (!expanded && !hasCustomTitleBar)
+        ui->toolDock->setTitleBarWidget(new QWidget(ui->toolDock));
+    else if (expanded && hasCustomTitleBar)
+        ui->toolDock->setTitleBarWidget(nullptr);
+
+    ui->toolDock->setMinimumWidth(expanded ? 200 : 48);
+    m_toolBrowserPanel->setVisible(expanded);
+    for (QToolButton *button : m_toolCategoryButtons) {
+        if (button)
+            button->setChecked(expanded && button->property("toolGroup").toString() == group);
+    }
+    applyToolLibraryFilter();
+
+    if (expanded && !group.isEmpty() && ui->toolLibrary) {
+        for (int i = 0; i < ui->toolLibrary->topLevelItemCount(); ++i) {
+            QTreeWidgetItem *groupItem = ui->toolLibrary->topLevelItem(i);
+            if (groupItem && groupItem->text(0) == group) {
+                groupItem->setExpanded(true);
+                ui->toolLibrary->scrollToItem(groupItem, QAbstractItemView::PositionAtTop);
+                break;
+            }
+        }
+    }
+    // 图标竖条 ~42px；展开时给列表一个可用宽度（用户之后仍可拖分隔条改）
+    resizeDocks({ui->toolDock}, {expanded ? 240 : 48}, Qt::Horizontal);
+}
+
+void MainWindow::applyToolLibraryFilter()
+{
+    if (!ui || !ui->toolLibrary)
+        return;
+    QLineEdit *searchBox =
+        ui->toolDockContents->findChild<QLineEdit *>(QStringLiteral("toolSearchEdit"));
+    const QString keyword = searchBox ? searchBox->text().trimmed() : QString();
+
+    for (int gi = 0; gi < ui->toolLibrary->topLevelItemCount(); ++gi) {
+        QTreeWidgetItem *group = ui->toolLibrary->topLevelItem(gi);
+        const bool groupAllowed =
+            m_toolActiveGroup.isEmpty() || group->text(0) == m_toolActiveGroup;
+        int visible = 0;
+        for (int ci = 0; ci < group->childCount(); ++ci) {
+            QTreeWidgetItem *child = group->child(ci);
+            // 中文名/英文名/别名走 NodeRegistry::matchesSearchKeyword 那一枚唯一口径；
+            // 类型 id 那条"关键字至少两个字符"的规矩留在本处，Ctrl+F 那一侧不需要它。
+            const NodeRegistration *reg =
+                NodeRegistry::instance().findById(child->data(0, Qt::UserRole).toString());
+            const bool match = keyword.isEmpty()
+                               || child->text(0).contains(keyword, Qt::CaseInsensitive)
+                               || (reg && NodeRegistry::matchesSearchKeyword(*reg, keyword))
+                               || (keyword.size() >= 2
+                                   && child->data(0, Qt::UserRole).toString().contains(
+                                       keyword, Qt::CaseInsensitive));
+            child->setHidden(!match);
+            if (match) ++visible;
+        }
+        group->setHidden(!groupAllowed || visible == 0);
+        if (groupAllowed && visible > 0)
+            group->setExpanded(true);
+    }
 }
 
 
@@ -5515,6 +7042,10 @@ void MainWindow::setupFlowEditor()
     
     // 连接标签页切换信号
     connect(ui->flowTabs, &QTabWidget::currentChanged, this, &MainWindow::onCurrentTabChanged);
+    // 流程页签按内容宽度排列（VM 流程栏页签只占文字宽度，单流程时不铺满整条栏）
+    ui->flowTabs->tabBar()->setExpanding(false);
+    // 切流程后状态栏提示按新场景的模块数刷新（onCurrentTabChanged 职责已重，不塞入其中）
+    connect(ui->flowTabs, &QTabWidget::currentChanged, this, [this](int) { updateStatusHint(); });
 
     // 标签页红色 X 关闭按钮
     connect(ui->flowTabs, &QTabWidget::tabCloseRequested, this, [this](int index) {
@@ -5617,9 +7148,25 @@ void MainWindow::setupDockWidgets()
         }
     }
 
+    // === 底部结果显示区（VM 4.4：常驻右侧图像区下方，页签 历史结果 / 帮助）===
+    // 结果面板一直由 AuxPanelManager 创建/喂数；这里提前建出并钉在右侧下方。
+    // 去掉标题栏与关闭/浮动能力：VM 的结果区是主界面的一部分，不是可关的辅助浮窗。
+    m_auxPanels->open(QStringLiteral("resultTable"));
+    if (QDockWidget *resultDock = m_auxPanels->resultTableDock()) {
+        resultDock->setFeatures(QDockWidget::NoDockWidgetFeatures);
+        resultDock->setAllowedAreas(Qt::RightDockWidgetArea);
+        if (!resultDock->titleBarWidget())
+            resultDock->setTitleBarWidget(new QWidget(resultDock));
+        resultDock->setMinimumHeight(120);
+        resultDock->show();
+    }
+
     // === 日志 (底) ===
     if (ui->logDock) {
         ui->logDock->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable);
+        // VM 日志栏没有独立标题行：用空标题控件隐藏标题栏，保留「最近日志 + 展开」紧凑行；
+        // 显隐仍可从「设置 → 面板显示」切换（关闭/浮动按钮不再是主入口）。
+        ui->logDock->setTitleBarWidget(new QWidget(ui->logDock));
         ui->logDock->setAllowedAreas(Qt::BottomDockWidgetArea | Qt::TopDockWidgetArea);
         addDockWidget(Qt::BottomDockWidgetArea, ui->logDock);
     }
@@ -5634,6 +7181,31 @@ void MainWindow::setupDockWidgets()
         m_runtimeViewDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
         m_runtimeViewDock->hide();
         addDockWidget(Qt::RightDockWidgetArea, m_runtimeViewDock);
+
+        // 运行模式是最大化浮窗，主界面菜单被挡住：标题栏放「返回设计模式」按钮，
+        // 操作员/调试人员不必再靠任务栏切回主窗口找菜单。
+        {
+            auto *runtimeBar = new QWidget(m_runtimeViewDock);
+            runtimeBar->setObjectName(QStringLiteral("runtimeDockTitleBar"));
+            runtimeBar->setStyleSheet(QStringLiteral(
+                "QWidget#runtimeDockTitleBar { background:#2d2d32; border-bottom:1px solid #1a1a1f; }"
+                "QLabel { color:#d8d8d8; font-size:13px; }"
+                "QToolButton { color:#d0d0d8; background:#3a5a7a; border:none;"
+                "  border-radius:4px; padding:4px 10px; }"
+                "QToolButton:hover { background:#4a6f95; }"));
+            auto *barLay = new QHBoxLayout(runtimeBar);
+            barLay->setContentsMargins(8, 3, 6, 3);
+            auto *barTitle = new QLabel(tr("运行界面"), runtimeBar);
+            auto *backBtn = new QToolButton(runtimeBar);
+            backBtn->setText(tr("返回设计模式"));
+            backBtn->setToolButtonStyle(Qt::ToolButtonTextOnly);
+            backBtn->setToolTip(tr("退出运行模式，返回设计界面"));
+            connect(backBtn, &QToolButton::clicked, this, &MainWindow::switchToDesignMode);
+            barLay->addWidget(barTitle);
+            barLay->addStretch();
+            barLay->addWidget(backBtn);
+            m_runtimeViewDock->setTitleBarWidget(runtimeBar);
+        }
 
         // 载入默认布局
         loadRuntimeInterfaceLayout();
@@ -5773,12 +7345,36 @@ void MainWindow::setupDockWidgets()
     // 恢复上次退出时打开的辅助面板（结果表 / 变量 / 性能统计 / 输出数据）
     restoreAuxPanelVisibility();
 
+    // 结果区常驻：旧存档里的"关闭/浮动"位置不再生效（VM 结果区固定在图像区下方）
+    if (QDockWidget *resultDock = m_auxPanels ? m_auxPanels->resultTableDock() : nullptr) {
+        if (resultDock->isFloating())
+            resultDock->setFloating(false);
+        removeDockWidget(resultDock);
+        addDockWidget(Qt::RightDockWidgetArea, resultDock);
+        resultDock->show();
+    }
+
     VFP_DEBUG << "setupDockWidgets completed";
 }
 
 void MainWindow::switchToDesignMode()
 {
     VFP_DEBUG << "Switching to Design Mode";
+    // 运行模式把「运行界面 / 图像显示」做成最大化浮窗；回设计态必须先把它们还原成停靠，
+    // 否则设计界面会被已经最大化的浮窗挡住（旧实现只 hide 运行视图，图像浮窗仍盖在主窗口上）。
+    if (m_runtimeViewDock) {
+        if (m_runtimeViewDock->isFullScreen() || m_runtimeViewDock->isMaximized())
+            m_runtimeViewDock->setWindowState(Qt::WindowNoState);
+        m_runtimeViewDock->hide();
+    }
+    if (ui->imageDock) {
+        if (ui->imageDock->isFullScreen() || ui->imageDock->isMaximized())
+            ui->imageDock->setWindowState(Qt::WindowNoState);
+        if (ui->imageDock->isFloating())
+            ui->imageDock->setFloating(false);
+    }
+    m_runtimeViewVisible = false;
+
     // 显示所有 dock widgets（图像显示是设计态主视图之一，不能漏）
     if (ui->toolDock) ui->toolDock->show();
     if (ui->imageDock) ui->imageDock->show();
@@ -5786,9 +7382,6 @@ void MainWindow::switchToDesignMode()
     if (ui->logDock) ui->logDock->show();
     // 右侧子页签默认停在图像显示（与启动默认一致）
     if (ui->imageDock) ui->imageDock->raise();
-
-    // 运行界面（自定义运行界面）仅在运行模式显示
-    if (m_runtimeViewDock) m_runtimeViewDock->hide();
 
     // 解锁画布编辑
     for (FlowScene *scene : m_flowScenes) {
@@ -5861,7 +7454,11 @@ void MainWindow::openRuntimeInterfaceDesigner()
     // 非模态：开着设计器也能继续操作主界面；「应用并进入运行模式」后刷新运行视图
     showAuxDialog(QStringLiteral("runtimeDesigner"), [this]() -> QDialog * {
         auto *dlg = new RuntimeInterfaceDesigner(allNodeFullNames(), this);
-        connect(dlg, &QDialog::accepted, this, &MainWindow::loadRuntimeInterfaceLayout);
+        // 「应用并进入运行模式」必须真的切模式：先刷新运行视图布局，再进入运行模式显示它。
+        connect(dlg, &QDialog::accepted, this, [this]() {
+            loadRuntimeInterfaceLayout();
+            switchToRuntimeMode();
+        });
         return dlg;
     });
 }
@@ -5900,16 +7497,17 @@ void MainWindow::setupSchemeMenu()
         onCloseFlowTab(currentIndex);
     });
 
-    // ── P1-6：菜单结构补齐（文件菜单补另存为/导入；新增设置、工具菜单）──
-    if (ui->menuFile) {
-        QAction *saveAsAct = ui->menuFile->addAction(QStringLiteral("另存为…"));
-        connect(saveAsAct, &QAction::triggered, this, [this]() { saveProjectInteractively(); });
-        QAction *importAct = ui->menuFile->addAction(QStringLiteral("导入流程…"));
-        connect(importAct, &QAction::triggered, this, &MainWindow::onImportSnippet);
-        ui->menuFile->addSeparator();
-        QAction *exportEncAct = ui->menuFile->addAction(QStringLiteral("导出加密方案…"));
-        connect(exportEncAct, &QAction::triggered, this, &MainWindow::onExportEncryptedProject);
-    }
+    // ── P1-6：文件菜单条目在这里只创建、由 reorganizeMenuBar() 统一按官方顺序重挂 ──
+    // 旧实现用 addAction 追加，实际显示顺序是「退出 → 导出加密 → 最近打开 → 另存为 → 导入」；
+    // 其中「导出加密」还和 m_actionExportEncrypted 重复调用了同一个槽。
+    // 文案与 VM 4.4 实际菜单（2026-11-07 逐屏截图）一致
+    m_actionSaveAs = new QAction(tr("方案另存为"), this);
+    connect(m_actionSaveAs, &QAction::triggered, this, [this]() { saveProjectInteractively(); });
+    m_actionImportFlow = new QAction(tr("导入流程"), this);
+    connect(m_actionImportFlow, &QAction::triggered, this, &MainWindow::onImportSnippet);
+    m_actionOpenExample = new QAction(tr("打开示例"), this);
+    m_actionOpenExample->setStatusTip(tr("打开安装目录 examples/ 下的示例方案"));
+    connect(m_actionOpenExample, &QAction::triggered, this, &MainWindow::onOpenExampleProject);
 
     // P0-1：最近删除恢复入口放在「编辑」菜单
     if (ui->menuEdit) {
@@ -5934,86 +7532,144 @@ void MainWindow::reorganizeMenuBar()
     // 实装 4.4 菜单栏：文件 / 设置 / 工具 / 系统 / 帮助。
     // 编辑、视图、通讯不再作为顶层：编辑入口收进「工具 → 编辑」，视图项分流到设置/工具，
     // 通讯全部收进「系统 → 通信管理」。
+    //
+    // QAction 可以同时属于多个 QMenu：搬到新菜单后必须从旧菜单摘除，否则同一个动作会在
+    // 「系统」和「工具」里重复出现（旧实现只 add 不 remove，实际菜单里全是重复项）。
+    auto moveAction = [](QMenu *target, QAction *action) {
+        if (!target || !action)
+            return;
+        const QList<QObject *> owners = action->associatedObjects();
+        for (QObject *obj : owners) {
+            if (QMenu *menu = qobject_cast<QMenu *>(obj); menu && menu != target)
+                menu->removeAction(action);
+        }
+        if (!target->actions().contains(action))
+            target->addAction(action);
+    };
+    // 搬走动作后原菜单会留下孤立分隔符（开头/连续/末尾），统一清理，
+    // 否则「系统」会变成一串空行。removeAction 不删除分隔符对象，只让它不再显示。
+    auto tidySeparators = [](QMenu *menu) {
+        if (!menu)
+            return;
+        QAction *previous = nullptr;
+        const QList<QAction *> actions = menu->actions();
+        for (QAction *action : actions) {
+            if (action->isSeparator() && (!previous || previous->isSeparator()))
+                menu->removeAction(action);
+            else
+                previous = action;
+        }
+        const QList<QAction *> remaining = menu->actions();
+        if (!remaining.isEmpty() && remaining.last()->isSeparator())
+            menu->removeAction(remaining.last());
+    };
+
     QMenu *settingsMenu = new QMenu(tr("设置"), this);
     QMenu *toolsMenu = new QMenu(tr("工具"), this);
-    QMenu *panelMenu = settingsMenu->addMenu(tr("面板显示"));
-    QMenu *runPolicyMenu = settingsMenu->addMenu(tr("运行策略"));
-    QMenu *editMenu = toolsMenu->addMenu(tr("编辑"));
 
-    // 文件：参数查找工具 / 导出算子代码 / 流程增删（实装 4.4 把这些放在“文件”）
+    // ── 文件（官方顺序：新建 / 打开 / 最近打开 / 打开示例 / 保存 / 另存为 /
+    //    导出加密 / 导出算子代码 / 导入流程 / 退出）──
+    // 旧条目先整体摘除（removeAction 不删除 QAction），再按官方顺序重挂。
     if (ui->menuFile) {
-        if (ui->actionParameterSearch)
-            ui->menuFile->addAction(ui->actionParameterSearch);
-        if (ui->actionCodeExport)
-            ui->menuFile->addAction(ui->actionCodeExport);
-        if (ui->actionAddFlow)
-            ui->menuFile->addAction(ui->actionAddFlow);
-        if (ui->actionDeleteFlow)
-            ui->menuFile->addAction(ui->actionDeleteFlow);
-    }
+        QMenu *file = ui->menuFile;
+        const QList<QAction *> oldActions = file->actions();
+        for (QAction *action : oldActions)
+            file->removeAction(action);
 
-    // 视图：面板显隐 → 设置；设计/运行模式与失败停止 → 运行策略；其余 → 工具
-    if (ui->menuView) {
-        if (ui->actionToggleToolDock)
-            panelMenu->addAction(ui->actionToggleToolDock);
-        if (ui->actionToggleParamDock)
-            panelMenu->addAction(ui->actionToggleParamDock);
-        if (ui->actionToggleImageDock)
-            panelMenu->addAction(ui->actionToggleImageDock);
-        if (ui->actionToggleLogDock)
-            panelMenu->addAction(ui->actionToggleLogDock);
-        if (ui->actionDesignMode)
-            runPolicyMenu->addAction(ui->actionDesignMode);
-        if (ui->actionRuntimeMode)
-            runPolicyMenu->addAction(ui->actionRuntimeMode);
-        if (ui->actionStopOnFailure)
-            runPolicyMenu->addAction(ui->actionStopOnFailure);
-        // 运行策略（VM 4.4 手册 11.4）：运行模式=普通/诊断；策略模式固定为耗时稳定
-        runPolicyMenu->addSeparator();
-        QAction *diagAct = runPolicyMenu->addAction(tr("资源诊断模式（超限告警）"));
-        diagAct->setObjectName(QStringLiteral("actionResourceDiagnosticMode"));
-        diagAct->setCheckable(true);
-        diagAct->setChecked(m_resourceDiagnosticMode);
-        connect(diagAct, &QAction::toggled, this, [this](bool on) {
-            m_resourceDiagnosticMode = on;
-            QSettings().setValue(QStringLiteral("flow/resourceDiagnosticMode"), on);
-            logMessage(on ? tr("已切换诊断模式：CPU/内存/硬盘占用过高时告警")
-                          : tr("已切换普通模式：资源占用过高时不告警"));
-        });
-        QAction *strategyAct =
-            runPolicyMenu->addAction(tr("策略模式：耗时稳定（每流程单线程串行执行）"));
-        strategyAct->setEnabled(false);
-        // 剩余视图动作（运行界面设计 / 结果表 / 统计报表）整体搬到“工具”
-        const QList<QAction *> remainingView = ui->menuView->actions();
-        for (QAction *action : remainingView)
-            toolsMenu->addAction(action);
-    }
-
-    // 系统：通信管理子菜单（原顶层“通讯”全部收进来）；工具类配置动作搬到“工具”
-    QMenu *commMenu = ui->menuSystem ? ui->menuSystem->addMenu(tr("通信管理")) : nullptr;
-    if (commMenu && ui->menuCommunication) {
-        const QList<QAction *> commActions = ui->menuCommunication->actions();
-        for (QAction *action : commActions)
-            commMenu->addAction(action);
-    }
-    if (ui->menuSystem) {
-        QAction *toolActions[] = {
-            ui->actionGlobalTrigger, ui->actionGlobalVariables, ui->actionCameraConfig,
-            ui->actionUserManagement, ui->actionRecipeManager, ui->actionAlarmHistory,
-            ui->actionInspectionResults, ui->actionReport
-        };
-        for (QAction *action : toolActions) {
-            if (action)
-                toolsMenu->addAction(action);
+        file->addAction(ui->actionNew);
+        file->addAction(ui->actionOpenScheme);
+        if (m_recentFiles && m_recentFiles->menu())
+            file->addMenu(m_recentFiles->menu());
+        if (m_actionOpenExample) {
+            // 没装示例包时置灰，而不是留一个点了只会报错的死入口
+            m_actionOpenExample->setEnabled(!bundledExamplePath().isEmpty());
+            file->addAction(m_actionOpenExample);
         }
+        file->addAction(ui->actionSaveScheme);
+        if (m_actionSaveAs)
+            file->addAction(m_actionSaveAs);
+        if (m_actionExportEncrypted)
+            file->addAction(m_actionExportEncrypted);
+        moveAction(file, ui->actionCodeExport);
+        if (m_actionImportFlow)
+            file->addAction(m_actionImportFlow);
+        file->addSeparator();
+        file->addAction(ui->actionExit);
     }
 
-    // 编辑：剩余动作（撤销/重做、分组、复制粘贴、片段导入导出、恢复删除流程）收进“工具 → 编辑”
+    // ── 设置（官方顺序：权限设置 / 软件设置 / 方案设置 / 运行策略 / 采集策略）──
+    moveAction(settingsMenu, ui->actionUserManagement);
+    settingsMenu->addSeparator();
+    QAction *softwareSettingsAct = settingsMenu->addAction(tr("软件设置…"));
+    softwareSettingsAct->setObjectName(QStringLiteral("actionSoftwareSettings"));
+    connect(softwareSettingsAct, &QAction::triggered, this, &MainWindow::openSoftwareSettings);
+    QAction *schemeSettingsAct = settingsMenu->addAction(tr("方案设置…"));
+    schemeSettingsAct->setObjectName(QStringLiteral("actionSchemeSettings"));
+    connect(schemeSettingsAct, &QAction::triggered, this, &MainWindow::openSchemeSettings);
+    settingsMenu->addSeparator();
+    QMenu *runPolicyMenu = settingsMenu->addMenu(tr("运行策略"));
+
+    // 面板显隐是 VM 设置菜单之外的补充入口，放在官方条目之后（见本函数末段）
+
+    // 视图：设计/运行模式与失败停止 → 设置 → 运行策略
+    moveAction(runPolicyMenu, ui->actionDesignMode);
+    moveAction(runPolicyMenu, ui->actionRuntimeMode);
+    moveAction(runPolicyMenu, ui->actionStopOnFailure);
+    // 运行策略（VM 4.4 手册 11.4）：运行模式=普通/诊断；策略模式固定为耗时稳定
+    runPolicyMenu->addSeparator();
+    QAction *diagAct = runPolicyMenu->addAction(tr("资源诊断模式（超限告警）"));
+    diagAct->setObjectName(QStringLiteral("actionResourceDiagnosticMode"));
+    diagAct->setCheckable(true);
+    diagAct->setChecked(m_resourceDiagnosticMode);
+    connect(diagAct, &QAction::toggled, this, [this](bool on) {
+        m_resourceDiagnosticMode = on;
+        QSettings().setValue(QStringLiteral("flow/resourceDiagnosticMode"), on);
+        logMessage(on ? tr("已切换诊断模式：CPU/内存/硬盘占用过高时告警")
+                      : tr("已切换普通模式：资源占用过高时不告警"));
+    });
+    QAction *strategyAct =
+        runPolicyMenu->addAction(tr("策略模式：耗时稳定（每流程单线程串行执行）"));
+    strategyAct->setEnabled(false);
+
+    // ── 工具（官方：标定配置引导 / 标定板生成 / 异常信息收集 / 参数查找工具）──
+    // 已实装「标定板生成」「异常信息收集」与「参数查找工具」；标定配置引导暂无对应功能，
+    // 按"不造死入口"原则暂不添加。
+    QAction *calibrationBoardAct = toolsMenu->addAction(tr("标定板生成…"));
+    calibrationBoardAct->setObjectName(QStringLiteral("actionCalibrationBoard"));
+    connect(calibrationBoardAct, &QAction::triggered, this,
+            &MainWindow::openCalibrationBoardDialog);
+    QAction *exceptionInfoAct = toolsMenu->addAction(tr("异常信息收集…"));
+    exceptionInfoAct->setObjectName(QStringLiteral("actionExceptionInfo"));
+    connect(exceptionInfoAct, &QAction::triggered, this,
+            &MainWindow::openExceptionInfoDialog);
+    moveAction(toolsMenu, ui->actionParameterSearch);
+
+    // 编辑：撤销/重做、分组、子流程、片段导入导出、恢复删除流程、流程增删
+    m_editMenu = toolsMenu->addMenu(tr("编辑"));
     if (ui->menuEdit) {
         const QList<QAction *> editActions = ui->menuEdit->actions();
         for (QAction *action : editActions)
-            editMenu->addAction(action);
+            moveAction(m_editMenu, action);
     }
+
+    // 视图剩余动作（运行界面设计 / 结果表 / 统计报表）→ 工具
+    if (ui->menuView) {
+        const QList<QAction *> viewActions = ui->menuView->actions();
+        for (QAction *action : viewActions)
+            moveAction(toolsMenu, action);
+    }
+
+    // 全局触发/变量与数据类入口归「工具」（VM 的全局触发/变量在工具条上，菜单无固定层级）
+    // 注意：actionReport（检测报表）留在「系统」的数据类入口里；
+    // 视图遗留的 actionStatisticsReport 才是「工具 → 统计报表」，两者不能同名堆在一起。
+    QAction *toolActions[] = {
+        ui->actionGlobalTrigger, ui->actionGlobalVariables, ui->actionRecipeManager,
+        ui->actionAlarmHistory, ui->actionInspectionResults
+    };
+    for (QAction *action : toolActions)
+        moveAction(toolsMenu, action);
+    // 模型打包（父目录/依赖收进方案）也是工程工具，不再留在「文件」
+    moveAction(toolsMenu, m_packModelsAct);
 
     // 工具：算子搜索 / 性能分析
     QAction *nodeSearchAct = toolsMenu->addAction(tr("算子搜索…"));
@@ -6024,9 +7680,9 @@ void MainWindow::reorganizeMenuBar()
     connect(perfAct, &QAction::triggered, this, &MainWindow::onOpenPerformancePanel);
 
     // 设置：采集策略（VM 4.4 手册 11.5：大文件存图）
-    QAction *acqStrategyAct = settingsMenu->addAction(tr("采集策略…"));
-    acqStrategyAct->setObjectName(QStringLiteral("actionAcquisitionStrategy"));
-    connect(acqStrategyAct, &QAction::triggered, this, [this]() {
+    m_actionAcquisitionStrategy = settingsMenu->addAction(tr("采集策略…"));
+    m_actionAcquisitionStrategy->setObjectName(QStringLiteral("actionAcquisitionStrategy"));
+    connect(m_actionAcquisitionStrategy, &QAction::triggered, this, [this]() {
         showAuxDialog(QStringLiteral("largeFileStore"), [this]() -> QDialog * {
             return new LargeFileStoreDialog(this);
         });
@@ -6037,6 +7693,49 @@ void MainWindow::reorganizeMenuBar()
     comprehensiveAct->setObjectName(QStringLiteral("actionComprehensiveConfig"));
     connect(comprehensiveAct, &QAction::triggered, this,
             &MainWindow::openComprehensiveConfig);
+
+    // 面板显隐（补充入口；VM 设置菜单本身没有此项，故放在官方条目之后）
+    QMenu *panelMenu = settingsMenu->addMenu(tr("面板显示"));
+    moveAction(panelMenu, ui->actionToggleToolDock);
+    moveAction(panelMenu, ui->actionToggleParamDock);
+    moveAction(panelMenu, ui->actionToggleImageDock);
+    moveAction(panelMenu, ui->actionToggleLogDock);
+
+    // ── 系统（官方顺序：日志 / 通信管理 / 相机管理）──
+    // 通信管理子菜单：原顶层「通讯」全部收进来
+    QMenu *commMenu = ui->menuSystem ? ui->menuSystem->addMenu(tr("通信管理")) : nullptr;
+    if (commMenu && ui->menuCommunication) {
+        const QList<QAction *> commActions = ui->menuCommunication->actions();
+        for (QAction *action : commActions)
+            moveAction(commMenu, action);
+    }
+    // 系统菜单按官方顺序重挂：日志 → 通信管理 → 相机管理；其余系统级入口（流程变量/
+    // 改密/AI 标注与训练等）保留在分隔线之后，不丢功能。
+    if (ui->menuSystem) {
+        QMenu *system = ui->menuSystem;
+        const QList<QAction *> remaining = system->actions();
+        for (QAction *action : remaining)
+            system->removeAction(action);
+
+        system->addAction(ui->actionOperationLog);
+        if (commMenu)
+            system->addMenu(commMenu);
+        system->addAction(ui->actionCameraConfig);
+
+        QList<QAction *> extras;
+        for (QAction *action : remaining) {
+            if (action->isSeparator() || action == ui->actionOperationLog
+                || action == ui->actionCameraConfig
+                || (commMenu && action == commMenu->menuAction()))
+                continue;
+            extras << action;
+        }
+        if (!extras.isEmpty()) {
+            system->addSeparator();
+            for (QAction *action : extras)
+                system->addAction(action);
+        }
+    }
 
     // 帮助：语言子菜单（实装 4.4 的“语言”位于帮助菜单内）
     if (m_helpMenu) {
@@ -6059,6 +7758,11 @@ void MainWindow::reorganizeMenuBar()
         else
             m_helpMenu->addMenu(langMenu);
     }
+
+    // 搬移完成后清理孤立分隔符（系统/工具/编辑是"接收搬入项"的菜单）
+    tidySeparators(ui->menuSystem);
+    tidySeparators(toolsMenu);
+    tidySeparators(m_editMenu);
 
     // 顶层重排：摘掉 编辑/视图/通讯，插入 设置/工具（在 系统 之前）
     if (ui->menuEdit)
@@ -6367,6 +8071,23 @@ void MainWindow::applyPermissionRestrictions()
             m_confirmScriptAct->setEnabled(false);
         if (m_packModelsAct)
             m_packModelsAct->setEnabled(false);   // P2-13：改活方案路径，未登录一律禁用
+        // 文件菜单的载入/写入类入口同样 fail-closed（未登录不得打开或覆盖本机方案）
+        if (ui->actionOpenScheme)
+            ui->actionOpenScheme->setEnabled(false);
+        if (m_actionSaveAs)
+            m_actionSaveAs->setEnabled(false);
+        if (m_actionExportEncrypted)
+            m_actionExportEncrypted->setEnabled(false);
+        if (m_actionImportFlow)
+            m_actionImportFlow->setEnabled(false);
+        if (m_recentFiles && m_recentFiles->menu())
+            m_recentFiles->menu()->setEnabled(false);
+        if (ui->actionCodeExport)
+            ui->actionCodeExport->setEnabled(false);
+        if (m_editMenu)
+            m_editMenu->setEnabled(false);
+        if (m_actionAcquisitionStrategy)
+            m_actionAcquisitionStrategy->setEnabled(false);
         return;
     }
 
@@ -6374,13 +8095,31 @@ void MainWindow::applyPermissionRestrictions()
     if (ui->actionUserManagement) {
         ui->actionUserManagement->setEnabled(session->canManageUsers());
     }
-    // 方案编辑/保存需 Engineer 以上
-    if (ui->actionSave && ui->actionLoad) {
-        bool canEdit = session->canEditScheme();
+    // 方案编辑/保存/载入需 Engineer 以上：同一判据覆盖文件菜单全部写入类入口
+    // （打开/最近打开/另存为/导出加密/导入流程），避免只灰了保存按钮而旁路仍可用。
+    const bool canEdit = session->canEditScheme();
+    if (ui->actionSave)
         ui->actionSave->setEnabled(canEdit);
+    if (ui->actionLoad)
         ui->actionLoad->setEnabled(canEdit);
+    if (ui->actionNew)
         ui->actionNew->setEnabled(canEdit);
-    }
+    if (ui->actionOpenScheme)
+        ui->actionOpenScheme->setEnabled(canEdit);
+    if (m_actionSaveAs)
+        m_actionSaveAs->setEnabled(canEdit);
+    if (m_actionExportEncrypted)
+        m_actionExportEncrypted->setEnabled(canEdit);
+    if (m_actionImportFlow)
+        m_actionImportFlow->setEnabled(canEdit);
+    if (m_recentFiles && m_recentFiles->menu())
+        m_recentFiles->menu()->setEnabled(canEdit);
+    if (ui->actionCodeExport)
+        ui->actionCodeExport->setEnabled(canEdit);
+    if (m_editMenu)
+        m_editMenu->setEnabled(canEdit);
+    if (m_actionAcquisitionStrategy)
+        m_actionAcquisitionStrategy->setEnabled(canEdit);
     // 脚本执行前确认是**整机**安全配置（关闭后影响本机所有会话），按 Engineer 及以上收口：
     // 操作员不能把产线的脚本护栏关掉（2026-10-25 复核 P2）。菜单项可能尚未建立（构造早期），
     // 空指针守卫兜住。
@@ -6702,6 +8441,26 @@ FlowCanvasView *MainWindow::canvasViewForScene(FlowScene *scene) const
             return canvas;
     }
     return nullptr;
+}
+
+void MainWindow::updateZoomStatus()
+{
+    if (!m_zoomStatusLabel)
+        return;
+    // 无流程（启动早期/全部关闭）时按 100% 显示，避免状态栏出现空白项
+    FlowCanvasView *view = canvasViewForScene(currentFlowScene());
+    const int percent = view ? view->zoomPercent() : 100;
+    m_zoomStatusLabel->setText(tr("缩放 %1%").arg(percent));
+}
+
+void MainWindow::updateStatusHint()
+{
+    if (!m_statusHintLabel)
+        return;
+    FlowScene *scene = currentFlowScene();
+    const int nodeCount = scene ? scene->nodes().size() : 0;
+    // VM 默认空流程提示；有模块后收敛为「就绪」（操作提示仍可由 showMessage 临时覆盖）
+    m_statusHintLabel->setText(nodeCount == 0 ? tr("等待添加模块") : tr("就绪"));
 }
 
 void MainWindow::showCrosshairSettings()
@@ -7034,9 +8793,9 @@ void MainWindow::onOpenPerformancePanel()
 
 void MainWindow::onOpenResultTable()
 {
-    // 打开结果数据表：一次运行后各模块的「输出项 / 数值 / 状态 / 耗时」
+    // 打开结果数据表：历史结果 / 帮助（当前轮结果常驻在图像区「模块结果」页）
     m_auxPanels->open(QStringLiteral("resultTable"));
-    logMessage(QStringLiteral("结果表已打开：运行流程后显示各模块的数值结果，可导出 CSV"));
+    logMessage(QStringLiteral("结果表已打开：查看历史结果与帮助；当前轮结果见右侧「模块结果」页"));
 }
 
 void MainWindow::onOpenOutputViewer()
@@ -7058,11 +8817,11 @@ void MainWindow::applyDefaultDockSizes()
 
     const int winH = qMax(height(), 720);
     const int winW = qMax(width(), 1100);
-    // 右侧（图像显示 / 参数配置 标签页）默认占窗口宽度约 35%，上限 760：
-    // 对标 VM 4.4 的“流程编辑为主视图”比例（左工具箱 ~200，中央流程 ~55%，右侧图像 ~35%）。
-    // 图像区工具行已改为 QToolBar（窄了自动进溢出菜单），不再用平铺按钮把最小宽度撑到 700+，
-    // 因此用户可以把分隔条继续往右拖大流程编辑区。
-    const int rightW = qBound(340, static_cast<int>(winW * 0.35), 760);
+    // 右侧（图像显示 / 参数配置 标签页）默认占窗口宽度约 50%：
+    // 实测 VM 4.4 默认分栏在 1366 宽下图像区左边界 ≈x=680（≈50%），流程区与图像区基本对半；
+    // 旧值 35% 是"工具箱展开"时的估算，与 VM 默认（工具箱收起为图标竖条）不符。
+    // 图像区工具行已改为 QToolBar（窄了自动进溢出菜单），不会再把流程画布挤成一条缝。
+    const int rightW = qBound(340, static_cast<int>(winW * 0.50), 1000);
     const int imageH = qBound(320, static_cast<int>(winH * 0.58), winH - 220);
     const int paramH = qBound(160, winH - imageH - 80, 360);
 
@@ -7083,14 +8842,20 @@ void MainWindow::applyDefaultDockSizes()
     if (ui->imageDock && !ui->imageDock->isFloating())
         resizeDocks({ui->imageDock}, {rightW}, Qt::Horizontal);
     if (ui->toolDock)
-        resizeDocks({ui->toolDock}, {200}, Qt::Horizontal);
+        resizeDocks({ui->toolDock}, {m_toolBrowserExpanded ? 200 : 48}, Qt::Horizontal);
     if (ui->logDock)
         resizeDocks({ui->logDock}, {120}, Qt::Vertical);
+    // 底部结果区（图像区下方常驻）：约窗口 1/4 高，夹在 140-240
+    if (QDockWidget *resultDock = m_auxPanels ? m_auxPanels->resultTableDock() : nullptr) {
+        if (!resultDock->isFloating())
+            resizeDocks({resultDock}, {qBound(140, winH / 4, 240)}, Qt::Vertical);
+    }
 }
 
 void MainWindow::showEvent(QShowEvent *event)
 {
     QMainWindow::showEvent(event);
+    updateStatusHint();   // 启动/再显示时按当前流程模块数刷新左侧提示
     static bool s_firstShow = true;
     if (s_firstShow) {
         s_firstShow = false;
@@ -7101,10 +8866,19 @@ void MainWindow::showEvent(QShowEvent *event)
             } else {
                 // 存档可能是"面板还在但被拖成 0 宽"的坏布局：启动时给一个可用宽度，
                 // 否则用户看到的是只有流程画布、工具箱/图像显示都不见了。
-                if (ui->toolDock && !ui->toolDock->isFloating() && ui->toolDock->width() < 140)
-                    resizeDocks({ui->toolDock}, {220}, Qt::Horizontal);
+                if (ui->toolDock && !ui->toolDock->isFloating()) {
+                    if (!m_toolBrowserExpanded)
+                        resizeDocks({ui->toolDock}, {48}, Qt::Horizontal);   // 收起态 = 图标竖条
+                    else if (ui->toolDock->width() < 140)
+                        resizeDocks({ui->toolDock}, {220}, Qt::Horizontal);
+                }
                 if (ui->imageDock && !ui->imageDock->isFloating() && ui->imageDock->width() < 220)
                     resizeDocks({ui->imageDock}, {qMax(360, width() / 3)}, Qt::Horizontal);
+                // 结果区常驻：旧存档可能把它拖成 0 高（含"关闭后显隐记录"），给一个可读高度
+                if (QDockWidget *resultDock = m_auxPanels ? m_auxPanels->resultTableDock() : nullptr) {
+                    if (!resultDock->isFloating() && resultDock->height() < 110)
+                        resizeDocks({resultDock}, {160}, Qt::Vertical);
+                }
             }
             // 崩溃恢复询问放在界面搭好之后：模态框不在 showEvent 里直接弹，避免挡住首帧
             checkRecoveryOnStartup();

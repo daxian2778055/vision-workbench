@@ -169,6 +169,40 @@ bool NodeBase::hasConnection() const
     return false;
 }
 
+NodeBase::ResultState NodeBase::resultState() const
+{
+    const quint32 s = m_resultState.load(std::memory_order_acquire);
+    ResultState r;
+    r.executed = (s & 1u) != 0;
+    r.moduleOk = (s & 2u) != 0;
+    r.resultNg = (s & 4u) != 0;
+    return r;
+}
+
+void NodeBase::resetRoundState()
+{
+    m_resultState.store(0u, std::memory_order_release);
+}
+
+void NodeBase::commitResultState(bool moduleOk)
+{
+    const quint32 ng = isResultNg() ? 4u : 0u;
+    m_resultState.store(1u | (moduleOk ? 2u : 0u) | ng, std::memory_order_release);
+}
+
+void NodeBase::setResultNg(bool on)
+{
+    // CAS 只改 NG 位：轮首/提交写入其它位时不会被覆盖
+    quint32 cur = m_resultState.load(std::memory_order_relaxed);
+    for (;;) {
+        const quint32 next = on ? (cur | 4u) : (cur & ~4u);
+        if (m_resultState.compare_exchange_weak(cur, next,
+                                                std::memory_order_release,
+                                                std::memory_order_relaxed))
+            return;
+    }
+}
+
 QVariantMap NodeBase::commonResultFields(qint64 elapsedMs) const
 {
     QVariantMap fields;
@@ -318,14 +352,16 @@ bool NodeBase::evaluateResultJudgment(const QVariantMap &commonFields, QString *
 
 bool NodeBase::execute()
 {
-    // 每轮统一复位「判 NG 但结果有效」：这是所有节点执行的唯一入口，覆盖禁用、
-    // 自定义 process()、processDataOutputs() 等全部路径。未被本轮执行的节点另由
-    // FlowExecutor 的轮首遍历 / 跳过记录复位，避免上一轮 NG 跨轮残留（P0 状态位契约）。
-    setResultNg(false);
+    // 每轮统一复位整轮结果状态（executed / moduleOk / resultNg 一起清）：这是所有节点
+    // 执行的唯一入口，覆盖禁用、自定义 process()、processDataOutputs() 等全部路径。
+    // 未被本轮执行的节点另由 FlowExecutor 的轮首遍历 / 跳过记录复位。
+    // 用单原子清整轮，UI 便不会在"轮首已复位 NG、参数表还是上一轮值"的窗口里读到矛盾态。
+    resetRoundState();
     // 禁用算子：跳过算法执行，视为通过（数据透传交由流程运行时处理）
     if (!m_enabled) {
         m_hasExecuted = true;
         m_executionSuccess = true;
+        commitResultState(true);
         return true;
     }
 
@@ -354,8 +390,16 @@ bool NodeBase::execute()
             }
         }
 
+        // 提交一致快照：UI 一次读到 executed / moduleOk / resultNg 三项
+        const QVariant ms = getParam(QStringLiteral("moduleStatus"));
+        const bool moduleOk = ms.isValid() ? ms.toBool() : m_executionSuccess;
+        commitResultState(m_executionSuccess && moduleOk);
         return m_executionSuccess;
     } catch (const std::exception &e) {
+        // 异常 = 执行失败、结果无效：先清 NG 位再提交（commitResultState 会保留 NG 位，
+        // 若节点在抛异常前置过「判 NG 但结果有效」，不清就会让已清空的输出继续按 NG 语义推送）
+        setResultNg(false);
+        commitResultState(false);   // 异常：本轮跑过但失败
         qWarning() << "Error executing node" << name() << ":" << e.what();
         // r19 P2：qWarning 只进日志，界面上的红节点没有原因——同时写 lastError
         if (getParam(QStringLiteral("lastError")).toString().trimmed().isEmpty())
@@ -365,6 +409,8 @@ bool NodeBase::execute()
         m_executionSuccess = false;
         return false;
     } catch (...) {
+        setResultNg(false);         // 同 std::exception 分支：异常时结果无效，NG 位必须清
+        commitResultState(false);   // 异常：本轮跑过但失败
         qWarning() << "Unknown error executing node" << name();
         if (getParam(QStringLiteral("lastError")).toString().trimmed().isEmpty())
             setParam(QStringLiteral("lastError"),

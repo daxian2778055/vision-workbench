@@ -109,6 +109,7 @@ private slots:
     // 错误处理测试
     void testErrorHandling();
     void testResultNgRoundPublishesFreshImage();
+    void testResultNgRoundRefreshesDownstream();
 
     // 性能测试
     void testExecutionTime();
@@ -2256,6 +2257,7 @@ void IntegrationTest::testRuntimeInterfaceMultiPageRoundTrip()
     RuntimeControl *img = p0->addControl(RuntimeControlType::ImageView, QRect(10, 10, 320, 240));
     img->bindType = QStringLiteral("node");
     img->bindKey = QStringLiteral("图像源1");
+    img->visible = false;   // 设计器「运行时可见」取消勾选 ⇒ 运行态跳过该控件
 
     RuntimeInterfacePage *p1 = layout.page(1);
     p1->pageName = QStringLiteral("IO页");
@@ -2278,6 +2280,8 @@ void IntegrationTest::testRuntimeInterfaceMultiPageRoundTrip()
     QCOMPARE(loaded.page(1)->pageName, QStringLiteral("IO页"));
     QCOMPARE(loaded.page(0)->controls.size(), 1);
     QCOMPARE(loaded.page(1)->controls.size(), 2);
+    QCOMPARE(loaded.page(0)->controls[0].visible, false);
+    QCOMPARE(loaded.page(1)->controls[0].visible, true);
 
     const RuntimeControl &lt = loaded.page(1)->controls[0];
     QCOMPARE(lt.type, RuntimeControlType::ResultTable);
@@ -5536,6 +5540,140 @@ void IntegrationTest::testResultNgRoundPublishesFreshImage()
              "elapsedMs 必须从 commonFields 读到，不能报缺字段（判断与结果表同源）");
     QVERIFY2(imageSpy.count() > 0,
              "判 NG 轮也应把本轮图像推给运行界面，否则显示的是上一轮旧图");
+}
+
+// P0：判 NG 但结果有效的轮次，结果快照与下游数据必须是**本轮**的，不能是上一轮旧值。
+// 第 1 轮 OK（blobCount=0）→ 第 2 轮换图 + 配恒 NG 条件（blobCount=1）。
+void IntegrationTest::testResultNgRoundRefreshesDownstream()
+{
+    FlowScene scene;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
+    exec.setFlowName(QStringLiteral("RegressionResultNgFreshDownstream"));
+    exec.setFlowMode(FlowMode::Continuous);
+    exec.setLoopIntervalMs(0);
+    exec.setStopOnFailure(false);   // 判 NG 不中断，才能观察第二轮
+
+    NodeBase *src = scene.createNode(NodeBase::IMAGE_PROCESSING, QPointF(0, 0),
+                                     QStringLiteral("Blob分析"));
+    NodeBase *sink = scene.createNode(NodeBase::LOGIC, QPointF(200, 0),
+                                      QStringLiteral("Delay"));
+    QVERIFY(src != nullptr);
+    QVERIFY(sink != nullptr);
+    src->setParam(QStringLiteral("okWhenNumIsZero"), true);   // 第一轮无 Blob 也判 OK
+    sink->setParam(QStringLiteral("delayMs"), 0);
+    QVERIFY2(scene.createConnection(src->outputPorts().first(),
+                                    sink->inputPorts().first(), true) != nullptr,
+             "无法建立 上游->下游 连线");
+
+    // 公式节点用 {模块号.blobCount} 引用上游输出：直接验证判 NG 轮的**参数引用缓存**
+    // 是否刷新到本轮值（旧实现 NG 轮不刷缓存，这里会算成上一轮的 0）。
+    NodeBase *formula = scene.createNode(NodeBase::LOGIC, QPointF(400, 0),
+                                         QStringLiteral("Formula"));
+    QVERIFY(formula != nullptr);
+    formula->setParam(QStringLiteral("expression"),
+                      QStringLiteral("{%1.blobCount} + 0").arg(src->moduleId()));
+    QVERIFY2(scene.createConnection(src->outputPorts().first(),
+                                    formula->inputPorts().first(), true) != nullptr,
+             "无法建立 上游->公式 连线");
+
+    auto makeInput = [](bool withBlob) {
+        cv::Mat m(60, 60, CV_8UC1, cv::Scalar(0));
+        if (withBlob)
+            m(cv::Rect(20, 20, 20, 20)).setTo(cv::Scalar(255));
+        auto o = QSharedPointer<DataObject>::create();
+        o->setHImage(OpencvUtil::matToHimage(m));
+        return o;
+    };
+    src->setInputData(0, makeInput(false));
+
+    exec.setFlowScene(&scene);
+    QSignalSpy outSpy(&exec, &FlowExecutor::nodeOutputsUpdated);
+    QVERIFY2(outSpy.isValid(), "nodeOutputsUpdated 的元类型未注册，QSignalSpy 无法工作");
+
+    int srcRounds = 0;
+    QList<bool> sinkHadInput;
+    QList<double> formulaValues;
+    const auto conn = QObject::connect(
+        &exec, &FlowExecutor::nodeExecuted, &exec,
+        [&](NodeBase *n, bool) {
+            if (n == sink) {
+                sinkHadInput.append(sink->getInputData(0) != nullptr);
+                return;
+            }
+            if (n == formula) {
+                bool ok = false;
+                const auto out = formula->getOutputData(0);
+                const double v = out ? out->primaryNumber(&ok) : 0.0;
+                formulaValues.append(ok ? v : 1e9);
+                // 等公式与下游都观察满两轮再收工，避免在公式跑完前就停掉流程
+                if (formulaValues.size() >= 2 && sinkHadInput.size() >= 2)
+                    exec.stopExecution();
+                return;
+            }
+            if (n != src)
+                return;
+            ++srcRounds;
+            if (srcRounds == 1) {
+                // 第 2 轮：换图让本轮结果不同，并配一条恒不满足的通用判断
+                src->setInputData(0, makeInput(true));
+                QJsonObject c;
+                c.insert(QStringLiteral("param"), QStringLiteral("blobCount"));
+                c.insert(QStringLiteral("op"), QStringLiteral(">"));
+                c.insert(QStringLiteral("value"), QStringLiteral("9999"));
+                QJsonArray a;
+                a.append(c);
+                src->setParam(QStringLiteral("resJudgeMode"), 0);
+                src->setParam(QStringLiteral("resJudgeConditions"),
+                              QJsonDocument(a).toJson(QJsonDocument::Compact));
+            }
+        },
+        Qt::DirectConnection);
+
+    exec.startExecution();
+    const bool done = QTest::qWaitFor(
+        [&]() { return srcRounds >= 2 && formulaValues.size() >= 2; }, 5000);
+    exec.stopExecution();
+    exec.wait(3000);
+    QObject::disconnect(conn);
+    exec.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+
+    QVERIFY2(done, "连续模式未在 5 秒内跑满两轮");
+    QVERIFY2(src->isResultNg(), "第二轮应为「判 NG 但结果有效」");
+
+    QList<QVariantMap> srcVars;
+    QList<bool> srcSuccess;
+    for (int i = 0; i < outSpy.count(); ++i) {
+        const QList<QVariant> args = outSpy.at(i);
+        if (args.size() < 4 || args.at(0).value<NodeBase *>() != src)
+            continue;
+        srcVars.append(args.at(3).toMap());
+        srcSuccess.append(args.at(1).toBool());
+    }
+    QVERIFY2(srcVars.size() >= 2, "应至少收到两轮上游结果快照");
+    const QVariantMap first = srcVars.at(0);
+    const QVariantMap second = srcVars.at(1);
+    qInfo("caliper-ng-downstream: round1 blobCount=%d / round2 blobCount=%d",
+          first.value(QStringLiteral("blobCount")).toInt(),
+          second.value(QStringLiteral("blobCount")).toInt());
+    QVERIFY2(!srcSuccess.at(1), "第二轮应判 NG");
+    QVERIFY2(first.value(QStringLiteral("blobCount")).toInt() == 0, "第一轮应为 0");
+    QVERIFY2(second.value(QStringLiteral("blobCount")).toInt() == 1,
+             "判 NG 轮的上游结果快照必须是本轮值 blobCount=1，不能沿用上一轮的 0");
+    QVERIFY2(!sinkHadInput.isEmpty() && sinkHadInput.last(),
+             "判 NG 轮下游仍应拿到本轮数据");
+
+    // 参数引用 {模块号.blobCount}：判 NG 轮必须解析到本轮值
+    QVERIFY2(formulaValues.size() >= 2, "公式节点应至少执行两轮");
+    qInfo("caliper-ng-downstream: formula round1=%.3f / round2=%.3f",
+          formulaValues.at(0), formulaValues.at(1));
+    QVERIFY2(std::fabs(formulaValues.at(0) - 0.0) < 1e-9,
+             qPrintable(QStringLiteral("第一轮引用值应为 0，实际 %1").arg(formulaValues.at(0))));
+    QVERIFY2(std::fabs(formulaValues.at(1) - 1.0) < 1e-9,
+             qPrintable(QStringLiteral("判 NG 轮的参数引用必须解析到本轮值 1（缓存已刷新），"
+                                       "实际 %1 —— 若是 0 说明下游读了上一轮")
+                            .arg(formulaValues.at(1))));
 }
 
 QTEST_MAIN(IntegrationTest)

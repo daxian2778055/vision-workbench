@@ -34,6 +34,7 @@ struct EdgeHit {
     double contrast = 0.0;
     double score = 0.0;    ///< VM 极值点评分（0~1）；无计分项时 = contrast/255
     double offset = 0.0;   ///< 相对投影区域中心沿法线的位移（位置评分输入）
+    double sigPos = 0.0;   ///< 沿**一维信号轴**的亚像素位置（方向正向排序键）
     double gray = 0.0;     ///< 边缘处灰度（灰度评分输入）
     int polarity = 3;      ///< 官方结果：1=从黑到白，2=从白到黑，3=任意极性
     bool rising = false;   /// true=沿法线方向由暗到亮（梯度为正）
@@ -50,6 +51,7 @@ struct PairHit {
     double contrast = 0.0;
     double score = 0.0;    ///< VM 极值点评分（0~1）
     double offset = 0.0;   ///< 边对中心相对投影区域中心沿法线的位移
+    double sigPos = 0.0;   ///< 边对中心沿一维信号轴的位置（方向正向排序键）
     double gray = 0.0;     ///< 两条边缘的灰度均值
     int polarity = 3;      ///< 首边极性（官方 1=黑到白 / 2=白到黑 / 3=任意）
     int profile = 0;
@@ -443,9 +445,12 @@ void OpencvCaliperNode::run(bool /*autoSwitch*/)
         const double c1 = m_params.value(QStringLiteral("col1"), 100.0).toDouble();
         const double r2 = m_params.value(QStringLiteral("row2"), 200.0).toDouble();
         const double c2 = m_params.value(QStringLiteral("col2"), 100.0).toDouble();
-        const int half = m_params.value(QStringLiteral("halfWidth"), 10).toInt();
-        const double step = m_params.value(QStringLiteral("step"), 5.0).toDouble();
-        const double thr = m_params.value(QStringLiteral("threshold"), 10.0).toDouble();
+        // 参数边界必须夹到注册范围：直接 toInt/toDouble 时，手工编辑过的方案或
+        // 参数引用解析出的越界值会让 std::vector 用负 size 构造、L/step 除零。
+        // 回退值也要与 registerParams 的默认值一致（threshold 15 / edgeMode 1）。
+        const int half = qBound(1, m_params.value(QStringLiteral("halfWidth"), 10).toInt(), 200);
+        const double step = qBound(1.0, m_params.value(QStringLiteral("step"), 5.0).toDouble(), 100.0);
+        const double thr = qBound(0.0, m_params.value(QStringLiteral("threshold"), 15.0).toDouble(), 255.0);
         // VM「模糊边缘」：官方说明是「增强候选边缘点集的提取能力，获取更多候选点集数」，
         // 未给具体算法。这里把极值门槛减半以纳入更弱的候选（默认关 = 老行为不变）。
         const bool blurEdge = m_params.value(QStringLiteral("blurEdge"), false).toBool();
@@ -455,7 +460,7 @@ void OpencvCaliperNode::run(bool /*autoSwitch*/)
         const int edge1Polarity = m_params.value(QStringLiteral("edge1Polarity"), 2).toInt();
         // VM「滤波尺寸」= 半核尺寸（XML HalfKernelSize，1~50，默认 2）：核宽 = 2*half+1。
         const int filterHalf = qBound(1, m_params.value(QStringLiteral("filterSize"), 2).toInt(), 50);
-        const int edgeMode = m_params.value(QStringLiteral("edgeMode"), 0).toInt();
+        const int edgeMode = qBound(0, m_params.value(QStringLiteral("edgeMode"), 1).toInt(), 1);
         const int projectionType = m_params.value(QStringLiteral("projectionType"), 0).toInt();
         const int profileWidth = m_params.value(QStringLiteral("profileWidth"), 1).toInt();
         const bool useSubpixel = m_params.value(QStringLiteral("subpixel"), true).toBool();
@@ -683,8 +688,14 @@ void OpencvCaliperNode::run(bool /*autoSwitch*/)
                 double sub = static_cast<double>(m) + 0.5;
                 if (useSubpixel) {
                     const double denom = a0 - 2 * a1 + a2;
-                    if (std::fabs(denom) > 1e-9)
-                        sub += 0.5 * (a0 - a2) / denom;
+                    if (std::fabs(denom) > 1e-9) {
+                        // 二次项接近 0 时抛物线插值会发散（平顶梯度 a0≈a1≈a2）。
+                        // 必须把亚像素位置夹在 [m, m+1] 这一个采样间隔内，否则 sub
+                        // 可达巨值 → int(floor(sub)) 未定义、灰度外插、边缘坐标溢出。
+                        sub = qBound(static_cast<double>(m),
+                                     sub + 0.5 * (a0 - a2) / denom,
+                                     static_cast<double>(m) + 1.0);
+                    }
                 }
 
                 const double offDist = (sub - sigHalf) * sigSpacing;
@@ -695,6 +706,7 @@ void OpencvCaliperNode::run(bool /*autoSwitch*/)
                 // 位置评分输入恒为「相对投影区域中心沿法线的位移」：
                 // 横向投影时信号就在法线上（offDist）；纵向投影时来自剖面位置（profOffset）。
                 hit.offset = longitudinal ? profOffset : offDist;
+                hit.sigPos = offDist;   // 方向正向排序：沿一维信号轴的位置
                 hit.polarity = rising ? 1 : 2;   // 官方结果：1=从黑到白，2=从白到黑
                 // 边缘处灰度：在亚像素位置对投影剖面做线性插值（灰度评分输入）
                 {
@@ -829,6 +841,7 @@ void OpencvCaliperNode::run(bool /*autoSwitch*/)
                         // 官方「如果是边缘对查找模式，则使用两个边缘的平均对比度作为评分因子」
                         cand.pair.contrast = (e1.contrast + e2.contrast) * 0.5;
                         cand.pair.offset = (e1.offset + e2.offset) * 0.5;
+                        cand.pair.sigPos = (e1.sigPos + e2.sigPos) * 0.5;
                         cand.pair.gray = (e1.gray + e2.gray) * 0.5;
                         cand.pair.polarity = e1.rising ? 1 : 2;
                         cand.pair.profile = e1.profile;
@@ -862,12 +875,14 @@ void OpencvCaliperNode::run(bool /*autoSwitch*/)
                 used[cand.profile][cand.second] = true;
                 pairs.push_back(cand.pair);
             }
-            // 恢复采集顺序：方向正向、未启用计分时的截断都按它（分数排序留给 sortType）
+            // 恢复采集顺序：方向正向、未启用计分时的截断都按它（分数排序留给 sortType）。
+            // 次键必须是一维信号轴位置 sigPos，不能用 offset：纵向投影时 offset 来自
+            // 剖面位置、同剖面内恒定，无法区分该剖面内的多条边。
             std::stable_sort(pairs.begin(), pairs.end(),
                              [](const PairHit &a, const PairHit &b) {
                                  if (a.profile != b.profile)
                                      return a.profile < b.profile;
-                                 return a.offset < b.offset;
+                                 return a.sigPos < b.sigPos;
                              });
         }
 
@@ -901,12 +916,19 @@ void OpencvCaliperNode::run(bool /*autoSwitch*/)
         // ② VM「排序方式」：决定最终输出顺序（0=方向正向、1=分数降序、2=分数升序、3=方向逆向）。
         //    边缘对的上一步是「按分数贪心选优」，所以方向正向必须显式恢复采集顺序；
         //    旧实现漏了这一步，启用 maxCount+计分时输出会残留分数顺序。
+        // 采集顺序 = 先剖面、再沿**一维信号轴**的位置。纵向投影时 offset 恒等于
+        // 剖面法线位移，同剖面内恒定，故次键必须用 sigPos。
+        auto byAcquisitionPair = [](const PairHit &a, const PairHit &b) {
+            if (a.profile != b.profile)
+                return a.profile < b.profile;
+            return a.sigPos < b.sigPos;
+        };
+        auto byAcquisitionEdge = [](const EdgeHit &a, const EdgeHit &b) {
+            if (a.profile != b.profile)
+                return a.profile < b.profile;
+            return a.sigPos < b.sigPos;
+        };
         if (edgeMode == 1) {
-            auto byAcquisition = [](const PairHit &a, const PairHit &b) {
-                if (a.profile != b.profile)
-                    return a.profile < b.profile;
-                return a.offset < b.offset;
-            };
             if (sortType == 1 || sortType == 2) {
                 const bool desc = (sortType == 1);
                 std::stable_sort(pairs.begin(), pairs.end(),
@@ -914,7 +936,7 @@ void OpencvCaliperNode::run(bool /*autoSwitch*/)
                                      return desc ? a.score > b.score : a.score < b.score;
                                  });
             } else {
-                std::stable_sort(pairs.begin(), pairs.end(), byAcquisition);
+                std::stable_sort(pairs.begin(), pairs.end(), byAcquisitionPair);
                 if (sortType == 3)
                     std::reverse(pairs.begin(), pairs.end());
             }
@@ -925,8 +947,12 @@ void OpencvCaliperNode::run(bool /*autoSwitch*/)
                                  [desc](const EdgeHit &a, const EdgeHit &b) {
                                      return desc ? a.score > b.score : a.score < b.score;
                                  });
-            } else if (sortType == 3) {
-                std::reverse(hits.begin(), hits.end());
+            } else {
+                // 单边同样要恢复：maxCount + 计分会先按分数排序，不恢复的话
+                // 「方向正向」实际输出的是分数顺序。
+                std::stable_sort(hits.begin(), hits.end(), byAcquisitionEdge);
+                if (sortType == 3)
+                    std::reverse(hits.begin(), hits.end());
             }
         }
 
@@ -1181,17 +1207,17 @@ void OpencvCaliperNode::applyParamVisibility(QWidget *panel)
     if (!panel)
         return;
 
-    auto enumIndex = [panel, this](const QString &name) -> int {
+    auto enumIndex = [panel, this](const QString &name, int fallback = 0) -> int {
         if (auto *c = panel->findChild<QComboBox *>(name))
             return c->currentIndex();
-        return m_params.value(name, 0).toInt();
+        return m_params.value(name, fallback).toInt();
     };
     auto boolValue = [panel, this](const QString &name) -> bool {
         if (auto *c = panel->findChild<QCheckBox *>(name))
             return c->isChecked();
         return m_params.value(name, false).toBool();
     };
-    const bool pairMode = (enumIndex(QStringLiteral("edgeMode")) == 1);
+    const bool pairMode = (enumIndex(QStringLiteral("edgeMode"), 1) == 1);
 
     static const QSet<QString> pairOnly {
         QStringLiteral("edge1Polarity"),
@@ -1300,7 +1326,7 @@ QVector<NodeResultField> OpencvCaliperNode::resultDisplayFields() const
     // 顺序：耗时 → 模块状态 → 边缘个数 → 分数 → 边缘*极性 → 边缘*位置 →
     //       边缘点*X/Y → 测量宽度 → 直线*起点/终点 → 检测区域。
     // 「当前结果」面板按本表渲染，配置参数不再混进结果表。
-    const bool pairMode = m_params.value(QStringLiteral("edgeMode"), 0).toInt() == 1;
+    const bool pairMode = m_params.value(QStringLiteral("edgeMode"), 1).toInt() == 1;
     const QString group = pairMode ? QStringLiteral("边对%1") : QStringLiteral("边缘%1");
 
     QVector<NodeResultField> fields;

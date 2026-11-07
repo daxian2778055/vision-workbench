@@ -27,6 +27,7 @@ class QCheckBox;
 class QSpinBox;
 class QComboBox;
 class QSystemTrayIcon;
+class QTabWidget;
 
 #include <halconcpp/HalconCpp.h>
 #include "HalconWindow.h"
@@ -79,7 +80,9 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 
 public:
-    MainWindow(QWidget *parent = nullptr);
+    /// previewOnly=true：跳过模态登录，建立**只读**预览会话（Viewer 角色 + 写闸开启），
+    /// 用于核对菜单/布局；保存、打开方案、运行均被禁用。正常启动保持 false。
+    MainWindow(QWidget *parent = nullptr, bool previewOnly = false);
     ~MainWindow();
 
     /// 构造函数内会弹登录框：取消/关闭登录即为 false。
@@ -142,6 +145,12 @@ private:
     /// 连接执行器信号到主窗口（状态栏/运行界面/参数面板）
     void connectExecutorSignals(FlowExecutor *ex);
     void setupToolLibrary();
+    /// 实装 4.4：模块箱「图标竖条 + 可展开列表」——竖条常驻，点分类图标展开对应模块列表
+    void setupToolCategoryBar();
+    /// 展开/折叠模块列表（group 为空 = 全部模块）；同一分类再次点击即折叠
+    void setToolBrowserExpanded(bool expanded, const QString &group = QString());
+    /// 按当前分类 + 搜索词刷新工具库可见性（分类过滤与搜索共用一个出口）
+    void applyToolLibraryFilter();
     void setupFlowEditor();
     void setupRightPanel();
     void setupDockWidgets();
@@ -183,6 +192,9 @@ private:
     void refreshImageSourceCombo(NodeBase *node);
     /// 打开/聚焦辅助面板（key: resultTable / variable / performance / outputData）
     void openAuxPanel(const QString &key);
+    /// 结果面板集合：图像区「模块结果」（常驻）＋ 底部结果表（用户打开后才存在）。
+    /// 所有结果喂给都走这里，避免「流程图像 / 模块结果」页签与底部历史看到两份数据。
+    QVector<ResultTablePanel *> resultPanels() const;
     /// 记住辅助面板的显隐（关闭时调用）
     void saveAuxPanelVisibility() const;
     /// 恢复上次退出时打开的辅助面板（懒创建，仅恢复显隐不恢复几何）
@@ -194,6 +206,10 @@ private:
     NodeBase *resolveDisplayNode(NodeBase *fallbackNode = nullptr) const;
     /// P2-4：当前流程对应的画布视图（用于耗时角标）
     FlowCanvasView *canvasViewForScene(FlowScene *scene) const;
+    /// P2：状态栏「缩放 xx%」跟随当前流程画布（VM 状态栏常驻项）
+    void updateZoomStatus();
+    /// P2：状态栏左侧常驻提示（空流程显示「等待添加模块」，与 VM 默认状态一致）
+    void updateStatusHint();
     /// P2-4：按选中模块刷新画布角标的「模块耗时」
     void updateCanvasSelectionElapsed(NodeBase *node);
     /// P2-6：图像区「本地图」区随选中 ImageReadNode 联动（非读图模块隐藏）
@@ -338,8 +354,22 @@ private:
     void openManualDialog();
     /// P2-1/P2-12：显示欢迎页（启动时按设置自动弹出；帮助菜单可随时再次打开）
     void showWelcomePage();
+    /// 安装目录 examples/ 下的首个 .vfp（未安装示例包返回空）
+    QString bundledExamplePath() const;
+    /// P1-6：文件菜单「打开示例方案」——直接载入内置示例（不经过欢迎页）
+    void onOpenExampleProject();
     /// P2-11：综合配置入口——把相机/通讯/触发/用户/报表等分散入口集中到一处
     void openComprehensiveConfig();
+    /// P2：设置菜单「软件设置」——软件级选项（欢迎页/日志/自动保存/崩溃提示/诊断），即时生效
+    void openSoftwareSettings();
+    /// P2：设置菜单「方案设置」——当前方案信息、流程模式清单与保存/导出/打包入口
+    void openSchemeSettings();
+    /// P2：工具菜单「标定板生成」——棋盘格/圆点标定板参数预览并保存为图片
+    void openCalibrationBoardDialog();
+    /// P2：工具菜单「异常信息收集」——汇总版本/环境/资源/最近日志并导出为文本
+    void openExceptionInfoDialog();
+    /// 恢复默认停靠布局（软件设置与综合配置共用；结果区固定在图像区下方）
+    void resetDockLayout();
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -350,6 +380,10 @@ protected:
     ProjectManager *m_projectManager;
     QList<FlowScene *> m_flowScenes;
     HalconWindow *m_imageView;
+    /// 实装 4.4：右侧图像区双页签「流程图像 / 模块结果」
+    QTabWidget *m_imageAreaTabs = nullptr;
+    /// 「模块结果」页：常驻的当前轮结果树（与底部结果区共享同一份喂给）
+    ResultTablePanel *m_moduleResultPanel = nullptr;
     /// P2-5：双画面副视图（与主视图独立缩放；默认隐藏）
     HalconWindow *m_imageView2 = nullptr;
     /// P2-5：叠加上游勾选集合
@@ -367,6 +401,12 @@ protected:
     QToolButton *m_localNextBtn = nullptr;
     QLabel *m_localIndexLabel = nullptr;
     QCheckBox *m_localAutoSwitch = nullptr;
+    /// 实装 4.4：模块箱分类图标竖条与可折叠列表面板（搜索框/模块树收进列表面板）
+    QWidget *m_toolCategoryBar = nullptr;
+    QWidget *m_toolBrowserPanel = nullptr;
+    QVector<QToolButton *> m_toolCategoryButtons;
+    QString m_toolActiveGroup;          ///< 当前分类（空 = 全部模块）
+    bool m_toolBrowserExpanded = false; ///< 模块列表是否展开（默认收起 = VM 图标竖条态）
     /// 图像显示路由与画布交互（显示决策/叠加/ROI 取点；逻辑见 ImageDisplayController）
     ImageDisplayController *m_imageDisplay = nullptr;
     FlowExecutor *m_executor;
@@ -403,6 +443,10 @@ protected:
     QAction *m_actionPasteSnippet = nullptr;
     QAction *m_actionExportSnippet = nullptr;
     QAction *m_actionExportEncrypted = nullptr;
+    /// P1-6 文件菜单：另存为 / 导入流程 / 打开示例（顺序由 reorganizeMenuBar 统一重排）
+    QAction *m_actionSaveAs = nullptr;
+    QAction *m_actionImportFlow = nullptr;
+    QAction *m_actionOpenExample = nullptr;
     QAction *m_actionImportSnippet = nullptr;
     QAction *m_actionDefineSubFlow = nullptr;   ///< FR15.10：把选中算子定义为命名子流程
     QAction *m_actionRemoveSubFlow = nullptr;   ///< FR15.10：删除子流程定义
@@ -413,6 +457,10 @@ protected:
     
     // 登录会话（A1-②）：默认 false —— 只有登录框 Accepted 的路径会置位
     bool m_loginAccepted = false;
+    /// 界面预览模式（--preview-ui）：跳过登录、只读会话；正常启动为 false
+    bool m_previewOnly = false;
+    /// 预览模式下的菜单快照（VFP_MENU_SNAPSHOT_DIR）；供无人值守核对菜单结构
+    void captureMenuSnapshots(const QString &dirPath);
 
     // ---- P0-1 流程删除保护：最近一次删除的快照（可恢复）----
     QJsonObject m_lastDeletedFlowJson;
@@ -431,6 +479,10 @@ protected:
     QAction *m_lockCanvasAction = nullptr;       ///< 可勾选：用户显式锁定当前流程
     QToolButton *m_userButton = nullptr;         ///< 右上角「用户：xxx [角色]」切换/注销
     QAction *m_restoreDeletedFlowAction = nullptr;
+    /// P1-6 菜单重排后的「工具 → 编辑」子菜单：权限收口要灰它（旧 ui->menuEdit 已不在菜单栏）
+    QMenu *m_editMenu = nullptr;
+    /// 设置 → 采集策略（大文件存图配置写入），随 canEditScheme 收口
+    QAction *m_actionAcquisitionStrategy = nullptr;
 
     // ---- P2-2/P2-3 顶栏信息与日志栏 ----
     QLabel *m_schemeLabel = nullptr;             ///< 顶栏「方案：xxx」
@@ -475,6 +527,11 @@ protected:
     // ---- 状态栏运行信息 ----
     /// 执行状态显示与按钮态（状态/耗时/触发计数 + 开始停止按钮；见 ExecutionStatusController）
     ExecutionStatusController *m_execStatus = nullptr;
+    /// P2：状态栏右侧「缩放 xx%」与版本号（VM 4.4 状态栏口径）
+    QLabel *m_zoomStatusLabel = nullptr;
+    QLabel *m_versionStatusLabel = nullptr;
+    /// P2：状态栏左侧提示（等待添加模块 / 就绪）
+    QLabel *m_statusHintLabel = nullptr;
     /// 「每轮结束自动上报发送事件」的合并标志：连续模式下 executionFinished 高频发出，
     /// 用它把同一 UI 事件循环周期内的多轮合并成一次上报（否则会淹没 UI 线程与设备）。
     bool m_sendEventFirePending = false;

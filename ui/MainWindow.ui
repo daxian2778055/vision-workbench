@@ -368,12 +368,12 @@
   </action>
   <action name="actionCameraConfig">
    <property name="text">
-    <string>MVS相机配置</string>
+    <string>相机管理</string>
    </property>
   </action>
   <action name="actionUserManagement">
    <property name="text">
-    <string>用户管理</string>
+    <string>权限设置</string>
    </property>
   </action>
   <action name="actionRecipeManager">
@@ -403,17 +403,17 @@
   </action>
   <action name="actionCodeExport">
    <property name="text">
-    <string>算子代码导出</string>
+    <string>导出算子代码</string>
    </property>
   </action>
   <action name="actionOperationLog">
    <property name="text">
-    <string>操作日志</string>
+    <string>日志</string>
    </property>
   </action>
   <action name="actionReport">
    <property name="text">
-    <string>统计报表</string>
+    <string>检测报表</string>
    </property>
   </action>
   <action name="actionStopOnFailure">

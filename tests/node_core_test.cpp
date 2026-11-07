@@ -111,6 +111,8 @@ private slots:
     void testCaliperBlurEdge();
     void testResultNgRoundStartReset();
     void testCustomExecuteStillJudged();
+    void testCaliperAcquisitionSortOrder();
+    void testResultStateSnapshot();
     void testCaliperPairSelection();
     void testCaliperJudgment();
     void testCropBasic();
@@ -2692,6 +2694,168 @@ void NodeCoreTest::testCustomExecuteStillJudged()
     QVERIFY2(node.getParam(QStringLiteral("lastError")).toString().contains(QStringLiteral("耗时")),
              qPrintable(QStringLiteral("公共字段 elapsedMs 应可读：%1")
                             .arg(node.getParam(QStringLiteral("lastError")).toString())));
+}
+
+// VM「排序方式=方向正向」必须在 maxCount 的分数截断 / 边对贪心配对之后**恢复采集顺序**。
+// 采集顺序 = 先剖面、再沿一维信号轴的位置（sigPos）；纵向投影时 offset 在同剖面内恒定，
+// 用 offset 当次键会把贪心残留顺序当成方向正向输出。
+void NodeCoreTest::testCaliperAcquisitionSortOrder()
+{
+    auto edgePoints = [](OpencvCaliperNode &c) -> QVector<QPointF> {
+        QVector<QPointF> pts;
+        auto obj = c.getOutputData(1);
+        if (!obj)
+            return pts;
+        const MeasureResult r = obj->getMeasureResult();
+        for (int i = 0; i + 1 < r.extraValues.size(); i += 2)
+            pts.append(QPointF(r.extraValues[i], r.extraValues[i + 1]));
+        return pts;
+    };
+    auto pairCenters = [](OpencvCaliperNode &c) -> QVector<QPointF> {
+        QVector<QPointF> pts;
+        auto obj = c.getOutputData(3);
+        if (!obj)
+            return pts;
+        const MeasureResult r = obj->getMeasureResult();
+        for (int i = 0; i + 4 < r.extraValues.size(); i += 5)
+            pts.append(QPointF((r.extraValues[i] + r.extraValues[i + 2]) * 0.5,
+                               (r.extraValues[i + 1] + r.extraValues[i + 3]) * 0.5));
+        return pts;
+    };
+
+    // ① 单边：3 个不同灰度的亮块 ⇒ 6 条强度不同的边缘；启用位置评分让分数互不相同
+    cv::Mat imgB(60, 200, CV_8UC1, cv::Scalar(30));
+    imgB(cv::Rect(40, 0, 20, 60)).setTo(100);
+    imgB(cv::Rect(100, 0, 20, 60)).setTo(160);
+    imgB(cv::Rect(160, 0, 20, 60)).setTo(220);
+    OpencvCaliperNode cB;
+    cB.init();
+    cB.setParam(QStringLiteral("row1"), 10.0);
+    cB.setParam(QStringLiteral("col1"), 110.0);
+    cB.setParam(QStringLiteral("row2"), 50.0);
+    cB.setParam(QStringLiteral("col2"), 110.0);
+    cB.setParam(QStringLiteral("halfWidth"), 100);
+    cB.setParam(QStringLiteral("step"), 10.0);
+    cB.setParam(QStringLiteral("threshold"), 20.0);
+    cB.setParam(QStringLiteral("edgeMode"), 0);
+    cB.setParam(QStringLiteral("projectionDirection"), 0);
+    cB.setParam(QStringLiteral("scorePosition"), true);
+    cB.setParam(QStringLiteral("maxCount"), 12);
+    cB.setParam(QStringLiteral("sortType"), 0);
+    cB.setInputImage(OpencvUtil::matToHimage(imgB));
+    cB.run(false);
+
+    const QVector<QPointF> ptsB = edgePoints(cB);
+    qInfo("caliper-acquisition single: points=%d", ptsB.size());
+    QVERIFY2(ptsB.size() >= 4, "单边模式应有足够多的边缘点用于检验顺序");
+    // 亚像素插值必须把位置夹在 [m, m+1]：二次项接近 0 时若不 clamp，
+    // sub 可达巨值 → floor(sub) 未定义、灰度外插、坐标溢出/NaN。
+    for (const QPointF &p : ptsB) {
+        QVERIFY2(std::isfinite(p.x()) && std::isfinite(p.y())
+                     && p.x() >= -2.0 && p.x() <= 202.0
+                     && p.y() >= -2.0 && p.y() <= 62.0,
+                 qPrintable(QStringLiteral("边缘点坐标应有限且不溢出图像：(%1,%2)")
+                                .arg(p.x()).arg(p.y())));
+    }
+    // 剖面沿卡尺线（row 递增）；卡尺线竖直 u=(0,1) ⇒ 法线 n=(-1,0) 朝 −x，
+    // 故同剖面内沿信号轴前进对应 col **递减**。采集顺序 = (row 递增, col 递减)。
+    for (int i = 1; i < ptsB.size(); ++i) {
+        const QPointF &a = ptsB.at(i - 1);
+        const QPointF &b = ptsB.at(i);
+        QVERIFY2(b.y() + 1e-6 >= a.y()
+                     && (qAbs(b.y() - a.y()) > 1e-6 || b.x() - 1e-6 <= a.x()),
+                 qPrintable(QStringLiteral("方向正向应按采集顺序 (row↑, col↓)，"
+                                          "第 %1 点 (%2,%3) → 第 %4 点 (%5,%6)")
+                                .arg(i - 1).arg(a.x()).arg(a.y())
+                                .arg(i).arg(b.x()).arg(b.y())));
+    }
+
+    // ② 纵向投影 + 边对：贪心配对会打乱生成顺序，组内必须按信号轴位置递增
+    cv::Mat imgC(200, 200, CV_8UC1, cv::Scalar(30));
+    imgC(cv::Rect(0, 60, 200, 15)).setTo(200);
+    imgC(cv::Rect(0, 90, 200, 15)).setTo(200);
+    imgC(cv::Rect(0, 120, 200, 15)).setTo(200);
+    OpencvCaliperNode cC;
+    cC.init();
+    cC.setParam(QStringLiteral("row1"), 50.0);
+    cC.setParam(QStringLiteral("col1"), 100.0);
+    cC.setParam(QStringLiteral("row2"), 150.0);
+    cC.setParam(QStringLiteral("col2"), 100.0);
+    cC.setParam(QStringLiteral("halfWidth"), 5);
+    cC.setParam(QStringLiteral("step"), 5.0);
+    cC.setParam(QStringLiteral("threshold"), 20.0);
+    cC.setParam(QStringLiteral("edgeMode"), 1);
+    cC.setParam(QStringLiteral("projectionDirection"), 1);   // 信号沿卡尺线（y）
+    // maxCount 注册下限是 1，setParam(0) 会被夹到 1；用大值表示"不截断"
+    cC.setParam(QStringLiteral("maxCount"), 1000);
+    cC.setParam(QStringLiteral("sortType"), 0);
+    cC.setInputImage(OpencvUtil::matToHimage(imgC));
+    cC.run(false);
+
+    const QVector<QPointF> pairsC = pairCenters(cC);
+    qInfo("caliper-acquisition longitudinal pairs: %d", pairsC.size());
+    QVERIFY2(pairsC.size() >= 4, "纵向投影应配出足够多的边对");
+    int sameProfileChecked = 0;
+    for (int i = 1; i < pairsC.size(); ++i) {
+        const QPointF &a = pairsC.at(i - 1);
+        const QPointF &b = pairsC.at(i);
+        if (qAbs(a.x() - b.x()) > 1e-6)
+            continue;   // 跨剖面，row 会回跳
+        ++sameProfileChecked;
+        QVERIFY2(b.y() + 1e-6 >= a.y(),
+                 qPrintable(QStringLiteral("同剖面内边对应按信号轴 y 递增："
+                                          "(%1,%2) → (%3,%4)")
+                                .arg(a.x()).arg(a.y()).arg(b.x()).arg(b.y())));
+    }
+    QVERIFY2(sameProfileChecked > 0, "应至少有一个剖面配出多条边对");
+}
+
+// 一轮执行结果必须能从**单个原子**读出一致快照：分别读 moduleStatus（参数表）与
+// isResultNg() 会在「轮首已复位 NG、参数表还是上一轮值」的窗口里拿到矛盾态。
+void NodeCoreTest::testResultStateSnapshot()
+{
+    OpencvPixelStatsNode node;
+    node.init();
+    cv::Mat img(10, 10, CV_8UC1, cv::Scalar(0));
+    img(cv::Rect(5, 0, 5, 10)).setTo(cv::Scalar(255));
+    auto obj = QSharedPointer<DataObject>::create();
+    obj->setHImage(OpencvUtil::matToHimage(img));
+    node.setInputData(0, obj);
+
+    NodeBase::ResultState s = node.resultState();
+    QVERIFY2(!s.executed, "未执行时 executed 应为 false");
+
+    node.setParam(QStringLiteral("resJudgeConditions"), QString());
+    QVERIFY2(node.execute(), "无条件配置应判 OK");
+    s = node.resultState();
+    QVERIFY(s.executed);
+    QVERIFY(s.moduleOk);
+    QVERIFY(!s.resultNg);
+    QVERIFY(!node.isResultNg());
+
+    QJsonObject cond;
+    cond.insert(QStringLiteral("param"), QStringLiteral("maxGray"));
+    cond.insert(QStringLiteral("op"), QStringLiteral(">"));
+    cond.insert(QStringLiteral("value"), QStringLiteral("9999"));
+    QJsonArray arr;
+    arr.append(cond);
+    node.setParam(QStringLiteral("resJudgeMode"), 0);
+    node.setParam(QStringLiteral("resJudgeConditions"),
+                  QJsonDocument(arr).toJson(QJsonDocument::Compact));
+    QVERIFY2(!node.execute(), "恒不满足条件应判 NG");
+    s = node.resultState();
+    QVERIFY(s.executed);
+    QVERIFY(!s.moduleOk);
+    QVERIFY(s.resultNg);
+    // 快照与分别读取必须一致（这正是原子快照要保证的）
+    QCOMPARE(s.resultNg, node.isResultNg());
+    QCOMPARE(s.moduleOk, node.getParam(QStringLiteral("moduleStatus")).toBool());
+
+    node.resetRoundState();   // 模拟被跳过/轮首遍历复位
+    s = node.resultState();
+    QVERIFY2(!s.executed, "轮首复位后本轮不应再被当作已执行");
+    QVERIFY(!s.resultNg);
+    QVERIFY(!s.moduleOk);
 }
 
 QTEST_MAIN(NodeCoreTest)

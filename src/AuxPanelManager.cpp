@@ -51,6 +51,9 @@ void AuxPanelManager::createResultTableIfNeeded()
     if (m_resultTablePanel)
         return;
     m_resultTablePanel = new ResultTablePanel(m_mainWindow);
+    // 实装 4.4 右侧分区：当前轮结果常驻在图像区「模块结果」页，
+    // 底部结果区只保留「历史结果 / 帮助」（页签结构与 VM 一致）。
+    m_resultTablePanel->setPageVisibility(false, true, true);
     m_resultTableDock = new QDockWidget(QStringLiteral("结果表"), m_mainWindow);
     m_resultTableDock->setObjectName(QStringLiteral("resultTableDock"));
     m_resultTableDock->setWidget(m_resultTablePanel);

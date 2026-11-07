@@ -4,6 +4,10 @@
 #include <QTemporaryDir>
 #include <QFile>
 #include <QTreeWidget>
+#include <QTabWidget>
+#include <QTabBar>
+#include <QTableWidget>
+#include <QCheckBox>
 
 #include "ResultTablePanel.h"
 
@@ -17,6 +21,9 @@ private slots:
     void testReportText();
     void testFailureRowShowsReason();   // U-18：失败行必须显示算子留下的原因
     void testResultFieldSpecDisplay();  // VM「模块结果」：只显示声明字段 + 分组/极性/单位/精度
+    void testHistoryOnlyTabs();         // 采集/逻辑工具选中时只展示历史结果（VM 结果显示区域）
+    void testFollowSelectionFilter();   // 当前/历史结果默认只显示画布选中的模块
+    void testPageVisibilitySplit();     // 图像区「模块结果」/ 底部结果区共用面板的页签裁剪
 };
 
 void ResultTableTest::testInPlaceUpdateAndCsv()
@@ -303,6 +310,152 @@ void ResultTableTest::testResultFieldSpecDisplay()
     const QString report = panel.toReportText(QStringLiteral("SpecFlow"));
     QVERIFY2(report.contains(QStringLiteral("[边缘0]")), qPrintable(report));
     QVERIFY2(report.contains(QStringLiteral("X=100.00, Y=50.00")), qPrintable(report));
+}
+
+// VM 4.4「结果显示区域」：选中采集 / 逻辑工具模块时只展示历史结果
+// （采集输出是图像、逻辑工具只产出流程走向，均无“需要实时关注的当前值”）。
+void ResultTableTest::testHistoryOnlyTabs()
+{
+    ResultTablePanel panel;
+    auto *tabs = panel.findChild<QTabWidget *>();
+    QVERIFY2(tabs != nullptr, "未找到结果区页签容器");
+    QCOMPARE(tabs->count(), 3);
+    QVERIFY2(tabs->isTabVisible(0), "默认应显示「当前结果」");
+    QVERIFY2(tabs->isTabVisible(1) && tabs->isTabVisible(2),
+             "「历史结果」「帮助信息」应常驻可见");
+
+    QVariantMap v;
+    v.insert(QStringLiteral("value"), 1.0);
+    panel.setModuleResult(7, QStringLiteral("采集模块"), true, 3, v);
+    QCOMPARE(panel.moduleCount(), 1);
+
+    // 选中采集/逻辑工具模块：隐藏当前结果并自动切到历史页
+    panel.setHistoryOnlySelection(true);
+    QVERIFY(panel.historyOnlySelection());
+    QVERIFY2(!tabs->isTabVisible(0), "采集/逻辑工具不应展示「当前结果」页");
+    QCOMPARE(tabs->currentIndex(), 1);
+    QVERIFY2(tabs->isTabVisible(2), "帮助页不应被隐藏");
+
+    // 切回普通模块：恢复双页并落在当前结果
+    panel.setHistoryOnlySelection(false);
+    QVERIFY(!panel.historyOnlySelection());
+    QVERIFY2(tabs->isTabVisible(0), "普通模块应恢复「当前结果」页");
+    QCOMPARE(tabs->currentIndex(), 0);
+    QCOMPARE(panel.moduleCount(), 1);   // 数据未丢
+
+    // 幂等：同一个模式下重复设置不把用户从帮助页拽走
+    tabs->setCurrentIndex(2);
+    panel.setHistoryOnlySelection(false);
+    QCOMPARE(tabs->currentIndex(), 2);
+}
+
+// VM 4.4 右侧分区：同一 ResultTablePanel 被两处复用——
+// 图像区「模块结果」只留当前结果（并隐藏内部页签栏），底部结果区只留历史/帮助。
+// 关键回归点：「只展示历史结果」的选中开关不能把底部被配置隐藏的当前页翻出来。
+void ResultTableTest::testPageVisibilitySplit()
+{
+    // ① 图像区「模块结果」：当前结果铺满，内部页签栏不占高度
+    {
+        ResultTablePanel panel;
+        auto *tabs = panel.findChild<QTabWidget *>();
+        QVERIFY2(tabs != nullptr, "未找到结果区页签容器");
+        panel.setPageVisibility(true, false, false);
+        panel.setEmbeddedMode(true);
+        QVERIFY2(tabs->isTabVisible(0), "模块结果页应保留当前结果");
+        QVERIFY2(!tabs->isTabVisible(1) && !tabs->isTabVisible(2),
+                 "图像区不应展示历史/帮助页");
+        QCOMPARE(tabs->currentIndex(), 0);
+        QVERIFY2(tabs->tabBar()->isHidden(), "嵌入模式应隐藏内部页签栏");
+    }
+
+    // ② 底部结果区：只留历史/帮助；采集/逻辑工具的「仅历史」开关不改变配置
+    {
+        ResultTablePanel panel;
+        auto *tabs = panel.findChild<QTabWidget *>();
+        QVERIFY2(tabs != nullptr, "未找到结果区页签容器");
+        panel.setPageVisibility(false, true, true);
+        QVERIFY2(!tabs->isTabVisible(0), "底部结果区不展示当前结果");
+        QVERIFY2(tabs->isTabVisible(1) && tabs->isTabVisible(2),
+                 "底部结果区应保留历史与帮助");
+        QCOMPARE(tabs->currentIndex(), 1);   // 当前页被裁剪 → 落到第一个可见页
+
+        panel.setHistoryOnlySelection(true);
+        QVERIFY2(!tabs->isTabVisible(0), "「仅历史」开关不得把配置隐藏的当前页翻出来");
+        QCOMPARE(tabs->currentIndex(), 1);
+        panel.setHistoryOnlySelection(false);
+        QVERIFY2(!tabs->isTabVisible(0), "恢复双页时也不得把配置隐藏的当前页翻出来");
+        QVERIFY2(tabs->isTabVisible(1), "历史页应保持可见");
+
+        // 数据照常可喂：被裁剪的只是显示，不影响结果/历史记录
+        QVariantMap v;
+        v.insert(QStringLiteral("value"), 2.0);
+        panel.setModuleResult(11, QStringLiteral("ModuleC"), true, 5, v);
+        QCOMPARE(panel.moduleCount(), 1);
+        QCOMPARE(panel.findChild<QTableWidget *>()->rowCount(), 1);
+    }
+}
+
+// VM 4.4：「当前结果 / 历史结果」随画布选中模块过滤（默认开启）。
+// 关闭后回到全部模块总览；导出 CSV / 报告始终包含全部模块。
+void ResultTableTest::testFollowSelectionFilter()
+{
+    ResultTablePanel panel;
+    auto *tree = panel.findChild<QTreeWidget *>();
+    auto *history = panel.findChild<QTableWidget *>();
+    auto *check = panel.findChild<QCheckBox *>(QStringLiteral("followSelectionCheck"));
+    QVERIFY2(tree && history && check, "结果面板缺少结果树/历史表/跟随选中开关");
+    QVERIFY2(panel.followSelectionEnabled(), "默认应按 VM 口径只显示选中模块");
+    QVERIFY(check->isChecked());
+
+    QVariantMap v;
+    v.insert(QStringLiteral("value"), 1.0);
+    panel.setModuleResult(8, QStringLiteral("ModuleA"), true, 10, v);
+    panel.setModuleResult(9, QStringLiteral("ModuleB"), true, 10, v);
+    auto rowOf = [tree](const QString &name) -> QTreeWidgetItem * {
+        for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+            if (tree->topLevelItem(i)->text(0) == name)
+                return tree->topLevelItem(i);
+        }
+        return nullptr;
+    };
+    QTreeWidgetItem *rowA = rowOf(QStringLiteral("ModuleA"));
+    QTreeWidgetItem *rowB = rowOf(QStringLiteral("ModuleB"));
+    QVERIFY(rowA && rowB);
+
+    // 未选中：全部可见
+    panel.setCurrentModule(-1);
+    QVERIFY2(!rowA->isHidden() && !rowB->isHidden(), "无选中时应显示全部模块");
+
+    // 选中 A：仅 A 可见（数据仍在，导出/报告不受影响）
+    panel.setCurrentModule(8);
+    QVERIFY2(!rowA->isHidden(), "选中模块自身应可见");
+    QVERIFY2(rowB->isHidden(), "未选中的模块行应隐藏");
+    QCOMPARE(panel.moduleCount(), 2);
+
+    // 历史页同样按选中模块过滤
+    QCOMPARE(history->rowCount(), 2);
+    auto historyVisible = [history](const QString &name) {
+        for (int r = 0; r < history->rowCount(); ++r) {
+            QTableWidgetItem *m = history->item(r, 2);
+            if (m && m->text().contains(name))
+                return !history->isRowHidden(r);
+        }
+        return false;
+    };
+    QVERIFY2(historyVisible(QStringLiteral("ModuleA")), "选中模块的历史应可见");
+    QVERIFY2(!historyVisible(QStringLiteral("ModuleB")), "未选中模块的历史应隐藏");
+
+    // 关闭跟随：恢复全部模块总览
+    panel.setFollowSelectionEnabled(false);
+    QVERIFY(!check->isChecked());
+    QVERIFY2(!rowB->isHidden(), "关闭跟随选中后应显示全部模块");
+    QVERIFY2(historyVisible(QStringLiteral("ModuleB")), "关闭跟随选中后历史也应恢复");
+
+    // 重新开启 + 取消选中：仍显示全部（没有选中对象时不做过滤）
+    panel.setFollowSelectionEnabled(true);
+    panel.setCurrentModule(-1);
+    QVERIFY2(!rowB->isHidden(), "无选中时不应按模块过滤");
+    QVERIFY2(historyVisible(QStringLiteral("ModuleB")), "无选中时历史不应过滤");
 }
 
 QTEST_MAIN(ResultTableTest)

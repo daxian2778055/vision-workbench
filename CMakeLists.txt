@@ -276,6 +276,8 @@ src/ModelCache.cpp
     src/ManualPathResolver.cpp
     src/RoundVariableFeed.cpp
     src/NodeIconPalette.cpp
+    src/CalibrationBoard.cpp   # 工具菜单「标定板生成」：棋盘格/圆点板渲染与保存（纯数据面）
+    src/DiagnosticsCollector.cpp   # 工具菜单「异常信息收集」：诊断报告生成与导出（纯数据面）
     src/UpstreamWalk.cpp
     src/RoiGeometry.cpp
     src/FixtureValidation.cpp
@@ -1415,6 +1417,24 @@ if(MSVC)
     vfp_configure_gui_test(NodeIconPaletteTest)
 endif()
 
+# 标定板生成面（P2 工具菜单）：mm+DPI → 像素尺寸、棋盘格/圆点板像素断言、保存往返。
+# 走真 QImage/QPainter 渲染腿，需 Qt6::Widgets（QTEST_MAIN 据此建 QApplication）。
+if(MSVC)
+    add_executable(calibration_board_test tests/calibration_board_test.cpp)
+    target_link_libraries(calibration_board_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    vfp_add_qtest(NAME CalibrationBoardTest TARGET calibration_board_test)
+    vfp_configure_gui_test(CalibrationBoardTest)
+endif()
+
+# 异常信息收集面（P2 工具菜单）：日志尾部裁剪、报告字段、UTF-8 导出往返与错误上下文。
+# 纯文本处理，但同样链接 vfp_core，需注入运行时 DLL 目录。
+if(MSVC)
+    add_executable(diagnostics_collector_test tests/diagnostics_collector_test.cpp)
+    target_link_libraries(diagnostics_collector_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    vfp_add_qtest(NAME DiagnosticsCollectorTest TARGET diagnostics_collector_test)
+    vfp_configure_gui_test(DiagnosticsCollectorTest)
+endif()
+
 # 图上游闭包游走面（词条切片 B 图谱族首抽，从 MainWindow 抽出）：
 # 输入端口连线递归上溯真图座（实点 + 手工 Connection，无场景无 HALCON 图）
 add_executable(upstream_walk_test tests/upstream_walk_test.cpp)
@@ -1523,6 +1543,7 @@ if(MSVC)
                   ProjectPathsTest FlowCachePurgeLedgerTest ExecutionControlPolicyTest
                   AuxDialogMenuRouterTest ModuleEditorRegistryTest UITranslatorTest
                   ManualPathResolverTest RoundVariableFeedTest NodeIconPaletteTest UpstreamWalkTest
+                  CalibrationBoardTest DiagnosticsCollectorTest
                   FlowExecutorOwnershipTest RoiGeometryTest FixtureValidationTest
                   FlowRunContextTest NodeRunContextTest FlowExecutorTokenTest
                   RegisterValueParseTest NodeStateBodyTest)

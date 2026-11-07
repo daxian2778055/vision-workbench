@@ -8,6 +8,7 @@
 #include <QSpinBox>
 #include <QLabel>
 #include <QPushButton>
+#include <QCheckBox>
 #include <QInputDialog>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
@@ -317,6 +318,18 @@ void DesignerControlFrame::paintEvent(QPaintEvent *event)
         const int g = 6;
         p.drawLine(width() - g, height() - 1, width() - 1, height() - g);
     }
+
+    // 运行时隐藏的控件：设计画布仍保留（可选中/编辑/恢复），用虚线框 + 角标明确提示，
+    // 避免"设计器看得见、运行态不显示"被误判为丢失控件。
+    if (!ctrl.visible) {
+        if (!selected) {
+            p.setPen(QPen(QColor(0x8a, 0x8a, 0x8a), 1, Qt::DashLine));
+            p.drawRect(rect().adjusted(0, 0, -1, -1));
+        }
+        p.setPen(QColor(0xd0, 0x8a, 0x3a));
+        p.drawText(QRect(6, 4, width() - 12, 18), Qt::AlignRight | Qt::AlignVCenter,
+                   QStringLiteral("运行时隐藏"));
+    }
 }
 
 void DesignerControlFrame::mousePressEvent(QMouseEvent *event)
@@ -511,6 +524,9 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     connect(dupBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::duplicateSelected);
     auto *dupShortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+D")), this);
     connect(dupShortcut, &QShortcut::activated, this, &RuntimeInterfaceDesigner::duplicateSelected);
+    // Delete 删除选中控件（属性输入框内按 Delete 仍由输入框处理，不会误删）
+    auto *deleteShortcut = new QShortcut(QKeySequence::Delete, this);
+    connect(deleteShortcut, &QShortcut::activated, this, &RuntimeInterfaceDesigner::deleteSelected);
 
     // 撤销/重做（结构性操作：加删控件/页/列、复制、清空）
     auto *undoShortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Z")), this);
@@ -537,7 +553,19 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     connect(vSpreadBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::onAlignVSpread);
 
     auto *canvasToolRow = new QHBoxLayout();
+    // 控件层级：运行时后创建者盖住先创建者；上移/下移改变控件在列表中的先后
+    m_raiseBtn = new QPushButton(QStringLiteral("上移一层"), canvasGroup);
+    m_lowerBtn = new QPushButton(QStringLiteral("下移一层"), canvasGroup);
+    for (QPushButton *b : {m_raiseBtn, m_lowerBtn}) {
+        b->setStyleSheet("QPushButton{background:#5a5a6a;color:white;border:none;border-radius:4px;padding:4px 8px;}");
+        b->setToolTip(QStringLiteral("调整控件叠放顺序（运行时后创建者在上）"));
+    }
+    connect(m_raiseBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::raiseSelected);
+    connect(m_lowerBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::lowerSelected);
+
     canvasToolRow->addStretch();
+    canvasToolRow->addWidget(m_raiseBtn);
+    canvasToolRow->addWidget(m_lowerBtn);
     canvasToolRow->addWidget(dupBtn);
     canvasToolRow->addWidget(delBtn);
     canvasToolRow->addWidget(clearBtn);
@@ -593,6 +621,9 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     });
 
     form->addRow(QStringLiteral("字号"), m_fontSpin);
+    m_visibleCheck = new QCheckBox(QStringLiteral("运行时显示该控件"), propGroup);
+    m_visibleCheck->setToolTip(QStringLiteral("取消勾选后控件仍保留在设计画布上，但运行界面不显示"));
+    form->addRow(QStringLiteral("可见"), m_visibleCheck);
     form->addRow(QStringLiteral("新列来源"), m_columnSource);
     form->addRow(QStringLiteral("已有列"), m_columnList);
     auto *colBtnRow = new QHBoxLayout();
@@ -665,6 +696,7 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     connect(m_colorEdit, &QLineEdit::textChanged, this, &RuntimeInterfaceDesigner::onPropertyEdited);
     connect(m_fontSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &RuntimeInterfaceDesigner::onPropertyEdited);
+    connect(m_visibleCheck, &QCheckBox::toggled, this, &RuntimeInterfaceDesigner::onPropertyEdited);
     connect(m_tableMaxRows, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &RuntimeInterfaceDesigner::onPropertyEdited);
     connect(m_bindTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -898,6 +930,28 @@ void RuntimeInterfaceDesigner::duplicateSelected()
     m_canvas->selectIndex(m_layout.currentPage()->controls.size() - 1);
 }
 
+void RuntimeInterfaceDesigner::raiseSelected()
+{
+    RuntimeInterfacePage *pg = m_layout.currentPage();
+    if (!pg || m_selected < 0 || m_selected >= pg->controls.size() - 1) return;
+    pushUndo();
+    pg->controls.swapItemsAt(m_selected, m_selected + 1);
+    ++m_selected;
+    m_canvas->rebuild();
+    m_canvas->selectIndex(m_selected);
+}
+
+void RuntimeInterfaceDesigner::lowerSelected()
+{
+    RuntimeInterfacePage *pg = m_layout.currentPage();
+    if (!pg || m_selected <= 0 || m_selected >= pg->controls.size()) return;
+    pushUndo();
+    pg->controls.swapItemsAt(m_selected, m_selected - 1);
+    --m_selected;
+    m_canvas->rebuild();
+    m_canvas->selectIndex(m_selected);
+}
+
 // ==================== 撤销/重做 ====================
 
 void RuntimeInterfaceDesigner::pushUndo()
@@ -1041,6 +1095,7 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
         m_titleEdit->setEnabled(false);
         m_colorEdit->setEnabled(false);
         m_fontSpin->setEnabled(false);
+        m_visibleCheck->setEnabled(false);
         m_bindTypeCombo->setEnabled(false);
         m_bindKeyCombo->setEnabled(false);
         m_columnSource->setEnabled(false);
@@ -1048,6 +1103,8 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
         m_columnAddBtn->setEnabled(false);
         m_columnDelBtn->setEnabled(false);
         m_tableMaxRows->setEnabled(false);
+        m_raiseBtn->setEnabled(false);
+        m_lowerBtn->setEnabled(false);
         m_typeLabel->setText(QStringLiteral("-"));
         m_updatingProps = false;
         return;
@@ -1056,6 +1113,14 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
     m_titleEdit->setEnabled(true);
     m_colorEdit->setEnabled(true);
     m_fontSpin->setEnabled(true);
+    m_visibleCheck->setEnabled(true);
+    m_visibleCheck->setChecked(ctrl->visible);
+
+    // 层级按钮：首控件不能下移、末控件不能上移
+    RuntimeInterfacePage *pg = m_layout.currentPage();
+    const int count = pg ? pg->controls.size() : 0;
+    m_raiseBtn->setEnabled(m_selected >= 0 && m_selected < count - 1);
+    m_lowerBtn->setEnabled(m_selected > 0 && m_selected < count);
 
     m_typeLabel->setText(runtimeControlTypeName(ctrl->type));
     m_titleEdit->setText(ctrl->title);
@@ -1131,6 +1196,7 @@ void RuntimeInterfaceDesigner::onPropertyEdited()
     ctrl->color = m_colorEdit->text().trimmed().isEmpty()
                       ? QStringLiteral("#3a6ea5") : m_colorEdit->text().trimmed();
     ctrl->fontSize = m_fontSpin->value();
+    ctrl->visible = m_visibleCheck->isChecked();
 
     if (ctrl->type == RuntimeControlType::ResultTable) {
         // 列由"＋添加列/－删除列"维护（见 onColumnAdd/onColumnDel），此处只同步行数

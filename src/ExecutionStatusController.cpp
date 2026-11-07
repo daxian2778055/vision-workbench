@@ -36,6 +36,14 @@ void ExecutionStatusController::setControls(QAction *startAction, QAction *stopA
     m_pauseBtn = pauseBtn;
 }
 
+void ExecutionStatusController::setPauseIcons(const QIcon &pauseIcon, const QIcon &resumeIcon)
+{
+    m_pauseIcon = pauseIcon;
+    m_resumeIcon = resumeIcon;
+    if (m_pauseBtn)
+        m_pauseBtn->setIcon(m_pauseIcon);
+}
+
 void ExecutionStatusController::updateButtons(ExecutionState state)
 {
     FlowExecutor *ex = m_executorProvider ? m_executorProvider() : nullptr;
@@ -58,6 +66,11 @@ void ExecutionStatusController::updateButtons(ExecutionState state)
         m_pauseBtn->setText(paused ? tr("继续") : tr("暂停"));
         m_pauseBtn->setToolTip(paused ? tr("继续执行（不清输入缓存）")
                                       : tr("暂停当前流程（不清输入缓存，再按继续）"));
+        // 工具条图标化后按钮不再显示文字：两态必须换图标，否则「继续」仍是暂停符号
+        if (paused && !m_resumeIcon.isNull())
+            m_pauseBtn->setIcon(m_resumeIcon);
+        else if (!paused && !m_pauseIcon.isNull())
+            m_pauseBtn->setIcon(m_pauseIcon);
     }
 }
 

@@ -17,8 +17,10 @@ const QColor kAccent(0x40, 0xa9, 0xff);      // 与调色板 Link 色一致
 const QColor kTitleColor(0xee, 0xee, 0xf2);
 const QColor kTaglineColor(0x9a, 0x9a, 0xa6);
 
-constexpr int kHeaderHeight = 44;
-constexpr int kMarkSize = 26;
+// 品牌栏高度按 VM 紧凑口径收窄（原 44px 会在菜单/工具条之外再多占一行；
+// VM 的品牌与菜单同排，流程栏紧随工具条。这里压到 32px 以减少流程区上方的空白）。
+constexpr int kHeaderHeight = 32;
+constexpr int kMarkSize = 20;
 constexpr int kHorizontalPadding = 12;
 constexpr int kMarkTextGap = 10;
 } // namespace

@@ -240,8 +240,10 @@ QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *n
     // VM：模块判 NG 但结果有效时，结果叠加层显示为红色（而不是命中绿）。
     // 只有「判 NG 且保留结果」的节点才染色；异常/执行失败没有结果可画。
     // 红色是语义色，不随「叠加颜色」配置改变；配置色只作用于 OK 结果。
-    const QVariant ms = node->getParam(QStringLiteral("moduleStatus"));
-    const bool ng = ms.isValid() && !ms.toBool() && node->isResultNg();
+    // 一次原子读整轮状态：分别读 moduleStatus（参数表）与 isResultNg() 会在
+    // 「轮首刚复位 NG、参数表还是上一轮值」的窗口里拿到矛盾态，导致染色错一轮。
+    const NodeBase::ResultState st = node->resultState();
+    const bool ng = st.executed && !st.moduleOk && st.resultNg;
     const QColor resultColor =
         ng ? QColor(255, 60, 60) : (configuredColor.isValid() ? configuredColor : QColor(0, 255, 0));
 

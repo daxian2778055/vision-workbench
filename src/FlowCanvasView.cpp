@@ -125,6 +125,10 @@ FlowCanvasView::FlowCanvasView(QGraphicsScene *scene, QWidget *parent)
 
     m_eagle = new FlowEagleEye(this);
     m_eagle->hide();
+    // VM 4.4 默认就显示右下角鹰眼缩略图（空场景也保留一块缩略图区域）；
+    // 用户仍可通过「鹰眼」按钮隐藏。
+    m_eagleBtn->setChecked(true);
+    setEagleEyeVisible(true);
 
     // 视图滚动/缩放后鹰眼方框跟随
     connect(horizontalScrollBar(), &QScrollBar::valueChanged, this, [this]() {

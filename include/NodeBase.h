@@ -185,10 +185,13 @@ protected:
     /// 并发，QMap 非线程安全，必须加锁防结构破坏
     mutable QMutex m_dataMutex;
     bool m_executionSuccess; // 执行状态，true表示成功，false表示失败
-    /// 业务判 NG（模块状态=失败）但输出结果仍有效（结果判断类算子）。
+    /// 一轮执行结果的**原子快照**（执行线程写、UI 线程读）。
+    /// 业务判 NG（moduleStatus=false）但输出结果仍有效（结果判断类算子）时，
     /// process() 与 FlowExecutor 据此保留输出端口；异常/执行失败仍按原逻辑清空。
-    /// 执行线程写、UI 线程读（collectOverlayFromNode 等），故用原子避免 data race。
-    std::atomic<bool> m_resultNg { false };
+    /// 打包成单个原子位，避免 UI 分别读参数表里的 moduleStatus 与本标志时拿到不同轮次的值
+    /// ——例如轮首刚复位 NG、参数表仍是上一轮的 false。
+    /// bit0 = 本轮已执行完（commit 过）/ bit1 = moduleStatus 为 OK / bit2 = resultNg。
+    std::atomic<quint32> m_resultState { 0 };
     /// 本轮 process() 自测耗时：判断与结果表快照共用，避免执行器外层计时（含框架开销）
     /// 与判断依据不是同一个值。执行线程写、UI/结果表读，故用原子。
     std::atomic<qint64> m_lastElapsedMs { 0 };
@@ -206,8 +209,21 @@ public:
     bool executionSuccess() const; // 获取执行状态
     /// 「判 NG 但结果有效」：结果判断（卡尺/Blob 等）不满足时仍保留输出，
     /// 供画布和结果面板显示红色结果；异常/执行失败不走这条。
-    void setResultNg(bool on) { m_resultNg.store(on, std::memory_order_relaxed); }
-    bool isResultNg() const { return m_resultNg.load(std::memory_order_relaxed); }
+    /// 本轮执行结果的一致快照：一次原子读出，供画布/结果表判定染色与状态。
+    struct ResultState {
+        bool executed = false;   ///< 本轮已执行并提交过结果
+        bool moduleOk = false;   ///< moduleStatus 为 OK
+        bool resultNg = false;   ///< 判 NG 但结果有效
+    };
+    ResultState resultState() const;
+    /// 轮首 / 跳过 / 异常：整轮状态作废（executed 也清掉，UI 不再按上一轮染色）
+    void resetRoundState();
+    /// 执行结束提交：从 m_resultState 保留 NG 位，写入 executed / moduleOk
+    void commitResultState(bool moduleOk);
+
+    /// 只改 NG 位（供 process()/execute() 内部置位），不影响其它位
+    void setResultNg(bool on);
+    bool isResultNg() const { return (m_resultState.load(std::memory_order_acquire) & 4u) != 0; }
     qint64 lastElapsedMs() const { return m_lastElapsedMs.load(std::memory_order_relaxed); }
     /// 本轮是否被用户中止（与成功/失败并列的第三态；画布用琥珀色，
     /// 表示"没跑完"而不是"跑成功了"——2026-10-28 P3-14）
