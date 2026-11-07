@@ -1081,6 +1081,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261107.1",
       "recorded_at": "2026-11-07",
       "recorded_note": "VM 4.4 对标：工具菜单补齐（标定板生成/异常信息收集）+ 第二批像素级对齐（默认 50% 分栏/中性灰页签/流程栏运行入口/图像工具条顺序与密度/空态棋盘格/画布配色与鹰眼/日志单行/状态栏「等待添加模块」）+ 运行界面编辑完善（运行时可见/上移下移一层/Delete/应用即进入运行模式/返回设计模式/顶栏运行模式）；全量 77/77 测试与文档门禁全绿"
+    },
+    {
+      "tag": "rc-20261107.2",
+      "commit": "2538a319cb503389de9b72d154033297f733700c",
+      "exe_md5": "744a984693726601f80d1a4eca429032",
+      "exe_bytes": 11769344,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261107.2",
+      "recorded_at": "2026-11-07",
+      "recorded_note": "审核 commit 6980a05 后修复：RuntimeInterfaceView 单页自删 UAF、CalibrationBoard 格距下溢、profileWidth 越界冻结、禁用节点状态残留；结果表 UTF-8/Inf/历史页筛选；主题调色板上移 main.cpp；BrandHeader 高分屏 logo；i18n 盲区 12 处改 tr()+ts 8 条；dup_cn 共享定义与 EOL 205 重冻结"
     }
   ],
   "legacy_backfilled": [
