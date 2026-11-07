@@ -12,6 +12,11 @@
 #include <QFileDialog>
 #include <QFile>
 #include <QTextStream>
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+#include <QStringConverter>
+#else
+#include <QTextCodec>
+#endif
 #include <QBrush>
 #include <QColor>
 #include <QMessageBox>
@@ -72,6 +77,8 @@ QString formatScalar(const QVariant &v, int decimals)
         const double d = v.toDouble();
         if (qIsNaN(d))
             return QStringLiteral("NaN");
+        if (qIsInf(d))
+            return d < 0 ? QStringLiteral("-Inf") : QStringLiteral("Inf");
         return decimals >= 0 ? QString::number(d, 'f', decimals) : QString::number(d, 'g', 10);
     }
     return v.toString();
@@ -434,17 +441,11 @@ void ResultTablePanel::setModuleResult(int moduleId, const QString &moduleName, 
         QStringList keys = vars.keys();
         keys.sort();   // 名称排序，便于多轮之间对照
         for (const QString &k : keys) {
-            const QVariant v = vars.value(k);
-            QString text;
-            if (v.typeId() == QMetaType::Bool)
-                text = v.toBool() ? QStringLiteral("true") : QStringLiteral("false");
-            else if (v.metaType().id() == QMetaType::Double || v.metaType().id() == QMetaType::Float)
-                text = QString::number(v.toDouble(), 'g', 10);
-            else
-                text = v.toString();
+            // 与「有字段声明」路径共用同一套格式化，避免 NaN/Inf/bool 在这里
+            // 漏处理（无效测量会导出 quiet_NaN / ±Inf）
             auto *child = new ResultTreeItem(row);
             child->setText(kColName, k);
-            child->setText(kColValue, text);
+            child->setText(kColValue, formatScalar(vars.value(k), -1));
         }
     }
     if (!success && row->childCount() == 0) {
@@ -560,14 +561,28 @@ void ResultTablePanel::applyFilter()
         filterItem(row, false);
     }
 
-    // 历史页同步按选中模块过滤（导出 CSV / 报告不读隐藏态，仍包含全部模块）
+    // 历史页同步按「选中模块 + 文本筛选」过滤（导出 CSV / 报告不读隐藏态，仍含全部模块）。
+    // 旧实现只看 followSelection，输入框写着「筛选：模块 / 输出项 / 值」却对历史页无效。
     if (m_history) {
         for (int r = 0; r < m_history->rowCount(); ++r) {
-            QTableWidgetItem *moduleItem = m_history->item(r, 2);
-            if (!moduleItem)
-                continue;
-            const bool match = !followSelection
-                               || moduleItem->data(Qt::UserRole).toInt() == m_currentModuleId;
+            bool match = true;
+            if (followSelection) {
+                const QTableWidgetItem *moduleItem = m_history->item(r, 2);
+                match = moduleItem
+                        && moduleItem->data(Qt::UserRole).toInt() == m_currentModuleId;
+            }
+            if (match && filtering) {
+                // 文本匹配扫该行所有列，与当前结果页用同一个 m_filterText
+                bool textHit = false;
+                for (int c = 0; c < m_history->columnCount(); ++c) {
+                    const QTableWidgetItem *cell = m_history->item(r, c);
+                    if (cell && cell->text().contains(m_filterText, Qt::CaseInsensitive)) {
+                        textHit = true;
+                        break;
+                    }
+                }
+                match = textHit;
+            }
             m_history->setRowHidden(r, !match);
         }
     }
@@ -782,7 +797,15 @@ bool ResultTablePanel::exportCsv(const QString &path, QString *errorOut) const
         return QStringLiteral("\"%1\"").arg(t);
     };
 
-    QTextStream out(&file);   // Qt6 默认 UTF-8
+    QTextStream out(&file);
+    // 显式设 UTF-8：只写 BOM 时，Qt5 / 非 UTF-8 locale 下 QTextStream 会按 locale
+    // 编码落盘，BOM 与中文内容不匹配，Excel 打开乱码。与 FlowExecutor 的批量记录
+    // 导出、InspectionResultDialog 的报表导出口径保持一致。
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    out.setEncoding(QStringConverter::Utf8);
+#else
+    out.setCodec("UTF-8");
+#endif
     out << QChar(0xFEFF);     // BOM：Excel 直接打开不乱码
     out << esc(QStringLiteral("模块")) << ',' << esc(QStringLiteral("输出项")) << ','
         << esc(QStringLiteral("值")) << ',' << esc(QStringLiteral("状态")) << ','

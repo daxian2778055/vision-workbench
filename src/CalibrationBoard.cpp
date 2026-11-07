@@ -1,4 +1,5 @@
 #include "CalibrationBoard.h"
+#include "VmSharedText.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -95,6 +96,16 @@ bool CalibrationBoard::validate(const CalibrationBoardSpec &spec, QString *error
                          .arg(kMinDpi)
                          .arg(kMaxDpi)
                          .arg(spec.dpi));
+        return false;
+    }
+
+    // 格距换算后必须至少 2 px：0.1 mm @ 72 dpi 会 qRound 到 0，棋盘格 drawRect
+    // 宽 0 生成全白图、圆点圆心全部重合，旧实现仍一路 validate/render/save 成功。
+    const int squarePx = toPixels(spec.squareSizeMm, spec.dpi);
+    if (squarePx < 2) {
+        setError(error, QStringLiteral("格距换算后不足 2 像素（%1 mm @ %2 dpi → %3 px）："
+                                       "请增大格距或 DPI")
+                             .arg(spec.squareSizeMm).arg(spec.dpi).arg(squarePx));
         return false;
     }
 
@@ -201,7 +212,7 @@ bool CalibrationBoard::save(const QString &filePath, const CalibrationBoardSpec 
     }
 
     if (!info.dir().exists()) {
-        setError(error, QStringLiteral("目标目录不存在：%1")
+        setError(error, VmSharedText::targetDirMissingFormat()
                              .arg(QDir::toNativeSeparators(info.absolutePath())));
         return false;
     }

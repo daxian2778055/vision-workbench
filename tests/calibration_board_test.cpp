@@ -204,6 +204,16 @@ void CalibrationBoardTest::testInvalidParamsRejected()
     tooSmall.dpi = 72;   // 整板 3 px，低于 16 px 下限
     cases.append(tooSmall);
 
+    // 格距换算下溢为 0（0.1mm@72dpi → qRound(0.283)=0），但大留白让整板
+    // 56×56 px 通过旧的尺寸上下限：旧实现会生成全白图/圆心全重合并「保存成功」
+    CalibrationBoardSpec zeroPitch = base();
+    zeroPitch.squaresX = 3;
+    zeroPitch.squaresY = 3;
+    zeroPitch.squareSizeMm = 0.1;
+    zeroPitch.marginMm = 10.0;
+    zeroPitch.dpi = 72;
+    cases.append(zeroPitch);
+
     for (const CalibrationBoardSpec &spec : cases) {
         QString error;
         QVERIFY2(!CalibrationBoard::validate(spec, &error),

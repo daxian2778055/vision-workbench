@@ -1,4 +1,5 @@
 #include "DiagnosticsCollector.h"
+#include "VmSharedText.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -70,7 +71,7 @@ QString DiagnosticsCollector::buildReport(const DiagnosticsInput &input)
     lines << QStringLiteral("[当前方案]");
     lines << QStringLiteral("路径: %1")
                  .arg(input.schemePath.trimmed().isEmpty()
-                          ? QStringLiteral("未命名方案（尚未保存）")
+                          ? VmSharedText::untitledProjectName()
                           : QDir::toNativeSeparators(input.schemePath));
     lines << QString();
     lines << QStringLiteral("[运行日志（最近记录，可能被截断）]");
@@ -99,7 +100,7 @@ bool DiagnosticsCollector::writeReport(const QString &filePath, const QString &r
         info.setFile(path);
     }
     if (!info.dir().exists()) {
-        setError(error, QStringLiteral("目标目录不存在：%1")
+        setError(error, VmSharedText::targetDirMissingFormat()
                              .arg(QDir::toNativeSeparators(info.absolutePath())));
         return false;
     }

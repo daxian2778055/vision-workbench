@@ -462,7 +462,8 @@ void OpencvCaliperNode::run(bool /*autoSwitch*/)
         const int filterHalf = qBound(1, m_params.value(QStringLiteral("filterSize"), 2).toInt(), 50);
         const int edgeMode = qBound(0, m_params.value(QStringLiteral("edgeMode"), 1).toInt(), 1);
         const int projectionType = m_params.value(QStringLiteral("projectionType"), 0).toInt();
-        const int profileWidth = m_params.value(QStringLiteral("profileWidth"), 1).toInt();
+        const int profileWidth =
+            qBound(1, m_params.value(QStringLiteral("profileWidth"), 1).toInt(), 101);
         const bool useSubpixel = m_params.value(QStringLiteral("subpixel"), true).toBool();
         const int maxCount = m_params.value(QStringLiteral("maxCount"), 1).toInt();
         const int sortType = m_params.value(QStringLiteral("sortType"), 0).toInt();

@@ -89,7 +89,13 @@ void RuntimeInterfaceView::rebuildWidgets()
             container = new QWidget();
             m_tabs->addTab(container, pg.pageName);
         } else {
-            container = this;
+            // 单页也必须用**独立**容器。旧实现直接把 this 当容器并 append 进
+            // m_pageContainers，下一次 setInterface() → clearWidgets() 会对视图自身
+            // deleteLater()，留下 MainWindow::m_runtimeView 非空野指针（UAF）。
+            // 设计器「应用并进入运行模式」同一事件里会连续调两次 setInterface。
+            auto *single = new QWidget(this);
+            single->setGeometry(rect());
+            container = single;
         }
         m_pageContainers.append(container);
 

@@ -1,5 +1,6 @@
 #include <QElapsedTimer>
 #include "MainWindow.h"
+#include "VmSharedText.h"
 #include "ResultTablePanel.h"
 #include "VariablePanel.h"
 #include "AuxPanelManager.h"
@@ -696,9 +697,8 @@ MainWindow::MainWindow(QWidget *parent, bool previewOnly) :
         setLogExpanded(m_logExpanded);
     }
 
-        if (auto *qa = qobject_cast<QApplication *>(QApplication::instance())) {
-            VisionWorkbenchStyle::applyFusionDarkPalette(qa);
-        }
+        // 全局调色板已上移到 main.cpp 的 QApplication 创建之后（早于任何控件构造），
+        // 这里只保留本窗口及子控件作用域的样式表，避免重复应用与深浅混杂。
         setStyleSheet(VisionWorkbenchStyle::globalWidgetsStylesheet());
 
         // === Dock widgets 布局设置 ===
@@ -5898,7 +5898,7 @@ void MainWindow::openSchemeSettings()
     auto *form = new QFormLayout();
     const QString path = m_projectManager ? m_projectManager->lastFilePath() : QString();
     auto *pathLabel = new QLabel(
-        path.isEmpty() ? tr("未命名方案（尚未保存）") : QDir::toNativeSeparators(path),
+        path.isEmpty() ? VmSharedText::untitledProjectName() : QDir::toNativeSeparators(path),
         &dialog);
     pathLabel->setWordWrap(true);
     pathLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);

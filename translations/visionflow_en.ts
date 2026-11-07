@@ -1819,4 +1819,39 @@ Until the password is changed, canvas and module editing, saving/exporting schem
     
     
 </context>
+<context>
+    <name>RuntimeInterfaceDesigner</name>
+    <message>
+        <source>上移一层</source>
+        <translation>Bring Forward</translation>
+    </message>
+    <message>
+        <source>下移一层</source>
+        <translation>Send Backward</translation>
+    </message>
+    <message>
+        <source>调整控件叠放顺序（运行时后创建者在上）</source>
+        <translation>Adjust control stacking order (later-created controls appear on top)</translation>
+    </message>
+    <message>
+        <source>保存布局</source>
+        <translation>Save Layout</translation>
+    </message>
+    <message>
+        <source>预览</source>
+        <translation>Preview</translation>
+    </message>
+    <message>
+        <source>加载布局</source>
+        <translation>Load Layout</translation>
+    </message>
+    <message>
+        <source>应用并进入运行模式</source>
+        <translation>Apply and Enter Run Mode</translation>
+    </message>
+    <message>
+        <source>按当前布局生成运行界面预览（不改动已保存的布局）</source>
+        <translation>Preview the runtime interface from the current layout (does not change the saved layout)</translation>
+    </message>
+</context>
 </TS>

@@ -1,6 +1,7 @@
 // 结果数据表验证：同一模块重复执行只原地更新（不新增行、不残留旧值）、失败模块可见、失败行显示
 // 算子留下的原因（U-18）、CSV 导出包含模块/输出项/值/状态/耗时。不 show() 窗口，可在无桌面的 CI 上稳定运行。
 #include <QtTest>
+#include <limits>
 #include <QTemporaryDir>
 #include <QFile>
 #include <QTreeWidget>
@@ -24,6 +25,8 @@ private slots:
     void testHistoryOnlyTabs();         // 采集/逻辑工具选中时只展示历史结果（VM 结果显示区域）
     void testFollowSelectionFilter();   // 当前/历史结果默认只显示画布选中的模块
     void testPageVisibilitySplit();     // 图像区「模块结果」/ 底部结果区共用面板的页签裁剪
+    void testSpecialFloatValues();      // 平铺分支的 NaN / ±Inf 必须与声明字段路径同口径
+    void testHistoryFilterFollowsText(); // 文本筛选必须同时作用于历史结果页
 };
 
 void ResultTableTest::testInPlaceUpdateAndCsv()
@@ -456,6 +459,61 @@ void ResultTableTest::testFollowSelectionFilter()
     panel.setCurrentModule(-1);
     QVERIFY2(!rowB->isHidden(), "无选中时不应按模块过滤");
     QVERIFY2(historyVisible(QStringLiteral("ModuleB")), "无选中时历史不应过滤");
+}
+
+// 未声明 resultDisplayFields() 的老算子走「旧平铺」分支，之前自己写格式化，
+// NaN/±Inf 会原样落进结果表/报告；修复后必须复用 formatScalar 的同一套口径。
+void ResultTableTest::testSpecialFloatValues()
+{
+    ResultTablePanel panel;
+    QVariantMap vars;
+    vars.insert(QStringLiteral("aNan"), std::numeric_limits<double>::quiet_NaN());
+    vars.insert(QStringLiteral("bPosInf"), std::numeric_limits<double>::infinity());
+    vars.insert(QStringLiteral("cNegInf"), -std::numeric_limits<double>::infinity());
+    vars.insert(QStringLiteral("dFlag"), true);
+    panel.setModuleResult(77, QStringLiteral("特殊值模块"), true, 1, vars);
+
+    const QString report = panel.toReportText(QStringLiteral("SpecialFlow"));
+    QVERIFY2(report.contains(QStringLiteral("NaN")),
+             qPrintable(QStringLiteral("平铺分支应显示 NaN：%1").arg(report)));
+    QVERIFY2(report.contains(QStringLiteral("Inf")),
+             qPrintable(QStringLiteral("平铺分支应显示 Inf：%1").arg(report)));
+    QVERIFY2(report.contains(QStringLiteral("-Inf")),
+             qPrintable(QStringLiteral("平铺分支应显示 -Inf：%1").arg(report)));
+    QVERIFY2(report.contains(QStringLiteral("true")), "bool 仍应显示 true/false");
+}
+
+// 输入框占位符写的是「筛选：模块 / 输出项 / 值」，旧实现却只对当前结果树生效，
+// 历史结果页纹丝不动。
+void ResultTableTest::testHistoryFilterFollowsText()
+{
+    ResultTablePanel panel;
+    auto *history = panel.findChild<QTableWidget *>();
+    QVERIFY2(history != nullptr, "未找到历史结果表");
+
+    QVariantMap v;
+    v.insert(QStringLiteral("value"), 1.0);
+    panel.setModuleResult(1, QStringLiteral("AlphaModule"), true, 10, v);
+    panel.setModuleResult(2, QStringLiteral("BetaModule"), true, 20, v);
+    const int total = history->rowCount();
+    QVERIFY2(total >= 2, "历史表应有两轮记录");
+
+    panel.setFilterText(QStringLiteral("Alpha"));
+    int visible = 0;
+    for (int r = 0; r < history->rowCount(); ++r) {
+        if (!history->isRowHidden(r))
+            ++visible;
+    }
+    QVERIFY2(visible >= 1, "命中的历史行应保留");
+    QVERIFY2(visible < total, "文本筛选必须同时作用于历史结果页");
+
+    panel.setFilterText(QString());
+    int restored = 0;
+    for (int r = 0; r < history->rowCount(); ++r) {
+        if (!history->isRowHidden(r))
+            ++restored;
+    }
+    QCOMPARE(restored, total);
 }
 
 QTEST_MAIN(ResultTableTest)

@@ -31,6 +31,8 @@
 #include "CounterNode.h"
 #include "FormatNode.h"
 #include "FormulaNode.h"
+#include "RuntimeInterfaceView.h"
+#include <QPointer>
 #include "ClassifyNode.h"
 #include "ProtocolParseNode.h"
 #include "HandEyeCalibNode.h"   // U-18：判红原因出口用真算子（手眼标定）作站点
@@ -110,6 +112,7 @@ private slots:
     void testErrorHandling();
     void testResultNgRoundPublishesFreshImage();
     void testResultNgRoundRefreshesDownstream();
+    void testRuntimeViewDoubleApplyKeepsAlive();
 
     // 性能测试
     void testExecutionTime();
@@ -5674,6 +5677,28 @@ void IntegrationTest::testResultNgRoundRefreshesDownstream()
              qPrintable(QStringLiteral("判 NG 轮的参数引用必须解析到本轮值 1（缓存已刷新），"
                                        "实际 %1 —— 若是 0 说明下游读了上一轮")
                             .arg(formulaValues.at(1))));
+}
+
+// P0：单页运行视图不能把 this 当页容器。旧实现 rebuildWidgets() 在单页时
+// container=this 并 append 到 m_pageContainers，第二次 setInterface() →
+// clearWidgets() 会对视图自身 deleteLater()，MainWindow 留下非空野指针。
+// 设计器「应用并进入运行模式」同一事件里恰好连续调两次 setInterface。
+void IntegrationTest::testRuntimeViewDoubleApplyKeepsAlive()
+{
+    RuntimeInterface layout;   // 默认 ensurePage() 至少 1 页 ⇒ 走单页分支
+    auto *view = new RuntimeInterfaceView();
+    QPointer<RuntimeInterfaceView> guard(view);
+    view->setInterface(layout);
+    view->setInterface(layout);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    QVERIFY2(!guard.isNull(),
+             "两次 setInterface 后视图仍应存活（单页容器不能是视图自身）");
+    // 第三次仍可正常重建，确认没有残留的悬空容器
+    guard->setInterface(layout);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    QVERIFY2(!guard.isNull(), "第三次 setInterface 后视图仍应存活");
+    delete view;
+    QVERIFY(guard.isNull());
 }
 
 QTEST_MAIN(IntegrationTest)

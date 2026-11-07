@@ -2856,6 +2856,20 @@ void NodeCoreTest::testResultStateSnapshot()
     QVERIFY2(!s.executed, "轮首复位后本轮不应再被当作已执行");
     QVERIFY(!s.resultNg);
     QVERIFY(!s.moduleOk);
+
+    // 禁用节点没跑 process()：本轮状态必须干净，不能挂上一轮 NG / 原因 / 耗时
+    node.setParam(QStringLiteral("moduleStatus"), false);
+    node.setParam(QStringLiteral("lastError"), QStringLiteral("上一轮判红原因"));
+    node.setEnabled(false);
+    QVERIFY2(node.execute(), "禁用节点应视为通过");
+    const NodeBase::ResultState disabled = node.resultState();
+    QVERIFY(disabled.executed);
+    QVERIFY(disabled.moduleOk);
+    QVERIFY(!disabled.resultNg);
+    QVERIFY2(node.lastElapsedMs() == 0, "禁用节点本轮耗时应为 0");
+    QVERIFY2(node.getParam(QStringLiteral("lastError")).toString().isEmpty(),
+             "禁用节点不应残留上一轮判红原因");
+    node.setEnabled(true);
 }
 
 QTEST_MAIN(NodeCoreTest)

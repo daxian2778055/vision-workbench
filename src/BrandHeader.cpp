@@ -132,12 +132,17 @@ void BrandHeader::paintEvent(QPaintEvent *event)
     const QRectF logoBox(cursorX, content.center().y() - kMarkSize / 2.0,
                          kMarkSize, kMarkSize);
     if (!m_logo.isNull()) {
-        const QPixmap scaled = m_logo.scaled(
-            QSize(kMarkSize * 3, kMarkSize),
+        // 按设备像素比放大后再标 DPR：旧实现直接按逻辑像素缩放，
+        // 高分屏（DPR=2）下 60×20 的图只有 60×20 物理像素 → logo 模糊。
+        const qreal dpr = devicePixelRatioF();
+        QPixmap scaled = m_logo.scaled(
+            QSize(qRound(kMarkSize * 3 * dpr), qRound(kMarkSize * dpr)),
             Qt::KeepAspectRatio, Qt::SmoothTransformation);
-        const QRectF target(logoBox.center().x() - scaled.width() / 2.0,
-                            logoBox.center().y() - scaled.height() / 2.0,
-                            scaled.width(), scaled.height());
+        scaled.setDevicePixelRatio(dpr);
+        const QSizeF logical(scaled.width() / dpr, scaled.height() / dpr);
+        const QRectF target(logoBox.center().x() - logical.width() / 2.0,
+                            logoBox.center().y() - logical.height() / 2.0,
+                            logical.width(), logical.height());
         painter.drawPixmap(target, scaled, QRectF(scaled.rect()));
         cursorX = target.right() + kMarkTextGap;
     } else {

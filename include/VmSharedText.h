@@ -29,4 +29,16 @@ inline QString roiCenterYLabel()
 {
     return QStringLiteral("检测区域中心点Y");
 }
+
+/// 导出类功能共用的错误/状态文案：CalibrationBoard、DiagnosticsCollector、
+/// MainWindow 三处都会用，字面量只在这里落一份（G-4 跨文件重复中文句闸）。
+/// 格式串：调用方继续 .arg(QDir::toNativeSeparators(...)) 补齐路径
+inline QString targetDirMissingFormat()
+{
+    return QStringLiteral("目标目录不存在：%1");
+}
+inline QString untitledProjectName()
+{
+    return QStringLiteral("未命名方案（尚未保存）");
+}
 }   // namespace VmSharedText

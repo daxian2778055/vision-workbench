@@ -554,11 +554,11 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
 
     auto *canvasToolRow = new QHBoxLayout();
     // 控件层级：运行时后创建者盖住先创建者；上移/下移改变控件在列表中的先后
-    m_raiseBtn = new QPushButton(QStringLiteral("上移一层"), canvasGroup);
-    m_lowerBtn = new QPushButton(QStringLiteral("下移一层"), canvasGroup);
+    m_raiseBtn = new QPushButton(tr("上移一层"), canvasGroup);
+    m_lowerBtn = new QPushButton(tr("下移一层"), canvasGroup);
     for (QPushButton *b : {m_raiseBtn, m_lowerBtn}) {
         b->setStyleSheet("QPushButton{background:#5a5a6a;color:white;border:none;border-radius:4px;padding:4px 8px;}");
-        b->setToolTip(QStringLiteral("调整控件叠放顺序（运行时后创建者在上）"));
+        b->setToolTip(tr("调整控件叠放顺序（运行时后创建者在上）"));
     }
     connect(m_raiseBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::raiseSelected);
     connect(m_lowerBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::lowerSelected);
@@ -642,16 +642,16 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     propGroup->setMaximumWidth(340);
 
     // ---- 底部按钮 ----
-    auto *saveBtn = new QPushButton(QStringLiteral("保存布局"), this);
-    auto *previewBtn = new QPushButton(QStringLiteral("预览"), this);
-    auto *loadBtn = new QPushButton(QStringLiteral("加载布局"), this);
-    auto *applyBtn = new QPushButton(QStringLiteral("应用并进入运行模式"), this);
-    previewBtn->setToolTip(QStringLiteral("按当前布局生成运行界面预览（不改动已保存的布局）"));
+    auto *saveBtn = new QPushButton(tr("保存布局"), this);
+    auto *previewBtn = new QPushButton(tr("预览"), this);
+    auto *loadBtn = new QPushButton(tr("加载布局"), this);
+    auto *applyBtn = new QPushButton(tr("应用并进入运行模式"), this);
+    previewBtn->setToolTip(tr("按当前布局生成运行界面预览（不改动已保存的布局）"));
     applyBtn->setStyleSheet("QPushButton{background:#3d9a5a;color:white;border:none;border-radius:4px;padding:8px 16px;font-weight:bold;}");
     connect(saveBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::saveLayout);
     connect(previewBtn, &QPushButton::clicked, this, [this]() {
         if (m_layout.pages.isEmpty()) {
-            QMessageBox::information(this, QStringLiteral("预览"),
+            QMessageBox::information(this, tr("预览"),
                                      QStringLiteral("当前没有可预览的布局"));
             return;
         }
@@ -845,10 +845,10 @@ void RuntimeInterfaceDesigner::saveLayout()
         QStringLiteral("JSON (*.json)"));
     if (path.isEmpty()) return;
     if (m_layout.saveToFile(path)) {
-        QMessageBox::information(this, QStringLiteral("保存布局"),
+        QMessageBox::information(this, tr("保存布局"),
                                  QStringLiteral("已保存到 %1").arg(path));
     } else {
-        QMessageBox::warning(this, QStringLiteral("保存布局"),
+        QMessageBox::warning(this, tr("保存布局"),
                              QStringLiteral("保存失败"));
     }
 }
@@ -868,7 +868,7 @@ void RuntimeInterfaceDesigner::loadLayout()
         m_canvas->setPage(m_layout.currentPage());
         refreshPropertyPanel();
     } else {
-        QMessageBox::warning(this, QStringLiteral("加载布局"),
+        QMessageBox::warning(this, tr("加载布局"),
                              QStringLiteral("加载失败，文件格式不正确"));
     }
 }

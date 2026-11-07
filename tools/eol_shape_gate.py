@@ -41,7 +41,15 @@ import sys
 # 「growth from new tool/test files is expected」。同批次里另有 4 个上一轮被工具写成 LF 的
 # 既有文件（OpencvBlobNode.h/.cpp、OpencvUtil.cpp、node_core_test.cpp）已回正 CRLF，
 # 因此没有把既有文件的行尾形状改掉。理由记录在此，供下一次读数变化时并排核对，而非默默改数。
-EXPECTED_TOOL_WRITTEN = 198
+#
+# Re-frozen at 2026-11-07 198 -> 205：用户 commit 6980a05（工具菜单补齐 + 第二批像素级对齐 +
+# 运行界面编辑）新增 7 个 tracked 文件（CalibrationBoard / DiagnosticsCollector /
+# RuntimeInterfaceDesigner 相关源码与两个新测试等），均由编辑工具以 LF 写出，
+# 故 tool_written 与 tracked 同时净增 7（702 -> 709 / 198 -> 205），差额完全对应，
+# 没有任何既有文件被改掉行尾形状。这正是本文件开头所说的
+# 「growth from new tool/test files is expected」。本轮修复（RuntimeInterfaceView /
+# CalibrationBoard / NodeBase / OpencvCaliperNode / VmSharedText）同样未做行尾归一。
+EXPECTED_TOOL_WRITTEN = 205
 TAG = "EOL"
 
 

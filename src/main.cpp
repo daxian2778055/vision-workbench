@@ -5,6 +5,7 @@
 #include "AppLog.h"
 #include "NodeSelfTest.h"
 #include "I18n.h"
+#include "VisionWorkbenchStyle.h"
 #include <QApplication>
 #include <QDebug>
 #include <QDir>
@@ -344,6 +345,11 @@ int main(int argc, char *argv[])
         SymInitialize(GetCurrentProcess(), nullptr, TRUE);
 
         QApplication a(argc, argv);
+
+        // 主题/调色板必须在**任何 QWidget 构造之前**应用。原先放在 MainWindow 构造
+        // 中途（此前已创建上百个控件），早建的控件拿不到新 palette，深浅混杂；
+        // 与翻译安装一样属于启动早期设置，故上移到这里。
+        VisionWorkbenchStyle::applyFusionDarkPalette(&a);
 
         // 国际化（G-P1-5）：在 MainWindow 构造前安装翻译，使 UI 在构建期即取翻译文本。
         I18n::installTranslators(a);

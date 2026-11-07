@@ -361,6 +361,11 @@ bool NodeBase::execute()
     if (!m_enabled) {
         m_hasExecuted = true;
         m_executionSuccess = true;
+        // 禁用节点没跑 process()：必须同步本轮状态，否则上一轮的 NG 原因、耗时和
+        // moduleStatus=false 会挂在这一轮「成功」行上（结果表/画布出现矛盾态）。
+        m_lastElapsedMs.store(0, std::memory_order_relaxed);
+        setParam(QStringLiteral("moduleStatus"), true);
+        setParam(QStringLiteral("lastError"), QString());
         commitResultState(true);
         return true;
     }
