@@ -1072,6 +1072,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261106.1",
       "recorded_at": "2026-11-06",
       "recorded_note": "VM 4.4 对标：模块结果字段声明(resultDisplayFields)+统一结果判断(NodeBase::execute 入口/公共字段同源)+P0 状态位契约(m_resultNg 原子/轮首复位/判NG轮刷新缓存)；修复 != 恒通过与脏配置静默放行；ColorConversionNode 绕过统一入口修正；dup_cn 与 ci.ps1 并行 LNK1104 工程闸回正"
+    },
+    {
+      "tag": "rc-20261107.1",
+      "commit": "6980a0514e1fbae81b7df991d1db674ddd2d85da",
+      "exe_md5": "fefc54d1fc15d610dee0bb86466925bc",
+      "exe_bytes": 11768320,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261107.1",
+      "recorded_at": "2026-11-07",
+      "recorded_note": "VM 4.4 对标：工具菜单补齐（标定板生成/异常信息收集）+ 第二批像素级对齐（默认 50% 分栏/中性灰页签/流程栏运行入口/图像工具条顺序与密度/空态棋盘格/画布配色与鹰眼/日志单行/状态栏「等待添加模块」）+ 运行界面编辑完善（运行时可见/上移下移一层/Delete/应用即进入运行模式/返回设计模式/顶栏运行模式）；全量 77/77 测试与文档门禁全绿"
     }
   ],
   "legacy_backfilled": [
