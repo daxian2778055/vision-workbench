@@ -16,20 +16,29 @@ DeepOcrNode::DeepOcrNode(QObject *parent) : HalconNode(parent)
 
 namespace {
 
-/// DeepOCR 引擎缓存（r19 P1-7）：每帧 CreateDeepOcr + ClearDlModel 是纯浪费。
-/// 引擎按 mode 缓存、进程内常驻（HTuple 持引用，节点析构不误伤）。
-HTuple cachedDeepOcr(const QString &mode, QString *error)
+/// DeepOCR 引擎互斥量。**必须由调用方持有到推理结束**：
+/// HALCON 的 DL 引擎句柄不保证线程安全，且 SetDeepOcrParam 会改写共享句柄；
+/// 只锁缓存查找、把 ApplyDeepOcr 放在锁外时，两个流程并发会同时操作同一引擎。
+QMutex &deepOcrMutex()
 {
-    static QMutex s_mu;
+    static QMutex mu;
+    return mu;
+}
+
+/// DeepOCR 引擎缓存（r19 P1-7）：每帧 CreateDeepOcr + ClearDlModel 是纯浪费。
+/// 缓存键为 mode|runtime —— 旧实现只按 mode 缓存，GPU/CPU 两个节点会共用同一
+/// 引擎并互相改写 runtime，导致配置随机失效。
+/// 调用方必须已持有 deepOcrMutex()。
+HTuple cachedDeepOcrUnlocked(const QString &mode, const QString &runtime)
+{
     static QMap<QString, HTuple> s_engines;
-    QMutexLocker<QMutex> locker(&s_mu);
-    QMap<QString, HTuple>::const_iterator it = s_engines.constFind(mode);
+    const QString key = mode + QLatin1Char('|') + runtime;
+    const auto it = s_engines.constFind(key);
     if (it != s_engines.constEnd())
         return it.value();
     HTuple ocrH;
     CreateDeepOcr(HTuple("mode"), HTuple(mode.toStdString().c_str()), &ocrH);
-    s_engines.insert(mode, ocrH);
-    Q_UNUSED(error)
+    s_engines.insert(key, ocrH);
     return ocrH;
 }
 
@@ -93,9 +102,13 @@ void DeepOcrNode::run(bool /*autoSwitch*/)
         const QString separator =
             m_params.value(QStringLiteral("joinSeparator"), QStringLiteral(" ")).toString();
 
+        // 「取引擎 + 推理」同一临界区：HALCON DL 引擎句柄不保证线程安全，
+        // 两个流程/页签并发跑 DeepOcr 时不能同时操作同一引擎。
+        // runtime 已在建引擎时设好（缓存键含 runtime），不再每帧改写共享句柄。
+        QMutexLocker<QMutex> engineLocker(&deepOcrMutex());
         HTuple ocrH;
         try {
-            ocrH = cachedDeepOcr(mode, nullptr);   // 每帧 Create 是纯浪费（r19 P1-7）
+            ocrH = cachedDeepOcrUnlocked(mode, runtime);
         } catch (const HException &e) {
             m_params[QStringLiteral("lastError")] =
                 QStringLiteral("DeepOCR 创建失败（需 HALCONROOT/dl 下的官方预训练模型）: %1")
@@ -103,11 +116,12 @@ void DeepOcrNode::run(bool /*autoSwitch*/)
             m_params["moduleStatus"] = false;
             return;
         }
-        // CPU 推理（无 GPU/cuBLAS 环境最稳）
+
+        // runtime 仍在每次推理前设置（保持原有行为），但已处于同一临界区内，
+        // 不会与其它流程并发改写同一引擎句柄。
         try {
             SetDeepOcrParam(ocrH, "runtime", HTuple(runtime.toStdString().c_str()));
         } catch (const HException &e) {
-            // 配置失败不中断流程，但记录原因便于定位（避免静默吞异常）
             m_params[QStringLiteral("lastError")] =
                 QStringLiteral("DeepOCR 设置 runtime 失败: %1")
                     .arg(QString::fromStdString(e.ErrorMessage().Text()));
@@ -136,6 +150,9 @@ void DeepOcrNode::run(bool /*autoSwitch*/)
         try {
             if (results.Length() > 0) {
                 const HDict d(results.H());
+                // 只有真的取到 word 数组才算"有结果"：旧实现把 haveResult 放在
+                // word 键判断之外，dict 缺 word 时输出空文本却 moduleStatus=true，
+                // 等于静默判 OK。
                 if (d.GetDictParam("key_exists", "word").I() == 1) {
                     const HTuple ws = d.GetDictTuple("word");
                     HTuple cs;
@@ -158,12 +175,19 @@ void DeepOcrNode::run(bool /*autoSwitch*/)
                     }
                     m_params[QStringLiteral("ocrConfidence")] = maxConf;
                 }
+                // 缺 word 键在 detection / auto 模式下可能是正常的（只返回检测框），
+                // 故维持原有「有返回即有效」口径，不在此判失败。
                 haveResult = true;
             }
-        } catch (const HException &) {
+        } catch (const HException &e) {
+            // 解析异常不能静默吞掉：否则现场只看到"识别为空"、查不到原因
+            m_params[QStringLiteral("lastError")] =
+                QStringLiteral("OCR 结果解析失败: %1")
+                    .arg(QString::fromStdString(e.ErrorMessage().Text()));
         }
         if (!haveResult) {
-            m_params[QStringLiteral("lastError")] = QStringLiteral("OCR 无返回结果");
+            if (m_params.value(QStringLiteral("lastError")).toString().isEmpty())
+                m_params[QStringLiteral("lastError")] = QStringLiteral("OCR 无返回结果");
             m_params["moduleStatus"] = false;
             return;
         }

@@ -103,12 +103,12 @@ public:
     FlowMode getFlowMode() const;
 
     /// 失败中断策略：节点执行失败时是否停止整个流程（默认 true，对标 VisionMaster）
-    void setStopOnFailure(bool on) { m_stopOnFailure = on; }
-    bool stopOnFailure() const { return m_stopOnFailure; }
+    void setStopOnFailure(bool on) { m_stopOnFailure.store(on, std::memory_order_relaxed); }
+    bool stopOnFailure() const { return m_stopOnFailure.load(std::memory_order_relaxed); }
 
     /// 流程名称（供全局触发识别）
-    void setFlowName(const QString &name) { m_flowName = name; }
-    QString flowName() const { return m_flowName; }
+    void setFlowName(const QString &name) { m_flowNameMutex.lock(); m_flowName = name; m_flowNameMutex.unlock(); }
+    QString flowName() const { m_flowNameMutex.lock(); const QString n = m_flowName; m_flowNameMutex.unlock(); return n; }
 
     /// 是否允许被外部触发（通讯/字符串/事件/手动）启动
     /// 硬触发模式下仅允许相机硬件触发帧门控执行，禁止外部触发
@@ -130,7 +130,7 @@ public:
     /// 可取消等待：等待 ms 毫秒，但若流程被停止/暂停会立即唤醒返回（供延时节点等阻塞算子取消等待，E4）
     bool interruptibleSleep(int ms);
     /// 连续/硬触发循环节拍间隔（ms），0 表示无额外限速（按相机/触发事件驱动，E6）
-    void setLoopIntervalMs(int ms) { m_loopIntervalMs = qMax(0, ms); }
+    void setLoopIntervalMs(int ms) { m_loopIntervalMs.store(qMax(0, ms), std::memory_order_relaxed); }
 
     // ---- 运行期统计（现场长跑诊断：轮次/耗时/失败/句柄/内存）----
     /// 取统计快照（线程安全；返回前会采样一次进程句柄数/内存，故资源字段为查询时刻值）
@@ -294,9 +294,9 @@ private:
     std::weak_ptr<class FlowExecutorToken> m_lifetimeToken;
     /// P3d 期（终局撤除）：收尾超时后的终态位。一旦置位不再清除——本体正在放弃路径上自删。
     std::atomic<bool> m_abandoned{false};
-    bool m_stopOnFailure = true;   /// 节点失败时停止流程（对标 VisionMaster 默认行为）
+    std::atomic<bool> m_stopOnFailure { true };   /// 节点失败时停止流程（对标 VisionMaster 默认行为）
     bool m_stepMode = false;       /// 单步执行模式（每执行一个节点后暂停）
-    int m_loopIntervalMs = 0;      /// 连续/硬触发循环节拍间隔（ms），0=无额外限速（E6）
+    std::atomic<int> m_loopIntervalMs { 0 };      /// 连续/硬触发循环节拍间隔（ms），0=无额外限速（E6）
     /// 运行期统计（跨轮累计）
     FlowRuntimeStats m_stats;
     mutable QMutex m_statsMutex;      /// 统计读写锁（执行线程写 / 界面线程读）
@@ -327,6 +327,7 @@ private:
     int m_pendingExternalRounds = 0;      /// 待补跑轮数（m_mutex 保护）
     quint64 m_droppedExternalRounds = 0;  /// 累计超界丢弃数（m_mutex 保护）
     QString m_flowName;            /// 流程名称
+    mutable QMutex m_flowNameMutex;   /// GUI 改名 / worker 每节点写库读取，必须加锁
     mutable QMutex m_mutex;
     QWaitCondition m_waitCondition;
     bool m_workerParked = false;   /// worker 是否真停进等待点（m_mutex 保护；executionParked 的信号源）

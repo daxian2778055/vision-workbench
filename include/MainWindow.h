@@ -364,6 +364,12 @@ private:
     void openSoftwareSettings();
     /// P2：设置菜单「方案设置」——当前方案信息、流程模式清单与保存/导出/打包入口
     void openSchemeSettings();
+    /// 工具菜单「标定配置引导」——静态/动态/映射三类选择与官方步骤引导
+    void openCalibrationWizardDialog();
+    /// queued 信号携带裸 NodeBase*：节点可能在事件派发前被删/关页签。
+    /// 槽首统一校验节点是否仍属于任一 FlowScene，迟到的事件直接丢弃，
+    /// 避免解引用已释放对象或把野指针写进 m_nodeElapsed。
+    bool isNodeLive(NodeBase *node, FlowScene *executorScene = nullptr) const;
     /// P2：工具菜单「标定板生成」——棋盘格/圆点标定板参数预览并保存为图片
     void openCalibrationBoardDialog();
     /// P2：工具菜单「异常信息收集」——汇总版本/环境/资源/最近日志并导出为文本

@@ -184,7 +184,7 @@ protected:
     /// 数据访问互斥：run 线程写（setInputData/setOutputData）与 GUI 线程读（getOutputData）
     /// 并发，QMap 非线程安全，必须加锁防结构破坏
     mutable QMutex m_dataMutex;
-    bool m_executionSuccess; // 执行状态，true表示成功，false表示失败
+    std::atomic<bool> m_executionSuccess { false }; // 执行状态，true表示成功，false表示失败
     /// 一轮执行结果的**原子快照**（执行线程写、UI 线程读）。
     /// 业务判 NG（moduleStatus=false）但输出结果仍有效（结果判断类算子）时，
     /// process() 与 FlowExecutor 据此保留输出端口；异常/执行失败仍按原逻辑清空。
@@ -195,9 +195,9 @@ protected:
     /// 本轮 process() 自测耗时：判断与结果表快照共用，避免执行器外层计时（含框架开销）
     /// 与判断依据不是同一个值。执行线程写、UI/结果表读，故用原子。
     std::atomic<qint64> m_lastElapsedMs { 0 };
-    bool m_runAborted = false;   // 本轮被用户中止（2026-10-28 P3-14：第三态）
-    bool m_hasExecuted; // 是否已经执行过
-    bool m_enabled = true;   // 算子是否启用（禁用后运行时跳过）
+    std::atomic<bool> m_runAborted { false };   // 本轮被用户中止（2026-10-28 P3-14：第三态）
+    std::atomic<bool> m_hasExecuted { false }; // 是否已经执行过
+    std::atomic<bool> m_enabled { true };   // 算子是否启用（禁用后运行时跳过）
     /// 身份状态体（切片 C 立项书 P2 期段一）：名字与模块号的非 QObject 共享载体。
     /// 壳持一份，快照捕获时快照列再持一份；壳与场景先亡后身份仍可读（§13.1 净收益）。
     /// 写入面只在停稳期（方案装载与重命名），并发面与拆分前裸读写一致，故不加锁。

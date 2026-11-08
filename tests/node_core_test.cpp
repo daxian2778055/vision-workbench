@@ -50,6 +50,8 @@
 #include "HistogramEqualizeNode.h"
 #include "GrayStretchNode.h"
 #include "ResizeNode.h"
+#include <QElapsedTimer>
+#include <QMetaType>
 #include "TranslateImageNode.h"
 #include "MirrorNode.h"
 #include "OpencvRotateNode.h"
@@ -115,6 +117,9 @@ private slots:
     void testResultStateSnapshot();
     void testCaliperPairSelection();
     void testCaliperJudgment();
+    void testStabilityGuards();
+    void testRuntimeParamNormalization();
+    void testAtomicNodeFlagsSerialization();
     void testCropBasic();
     void testImageArithDivByZero();
     void testFormulaEvaluation();
@@ -2870,6 +2875,139 @@ void NodeCoreTest::testResultStateSnapshot()
     QVERIFY2(node.getParam(QStringLiteral("lastError")).toString().isEmpty(),
              "禁用节点不应残留上一轮判红原因");
     node.setEnabled(true);
+}
+
+// 稳定性防线：参数脏值不得静默变 0、超大输出尺寸与超长 ROI 不得冻结/OOM。
+void NodeCoreTest::testStabilityGuards()
+{
+    // ① HalconNode::setParam 对转换失败的字符串回退声明默认值
+    ResizeNode resize;
+    resize.init();
+    resize.setParam(QStringLiteral("widthValue"), QStringLiteral("not-a-number"));
+    const QVariant w = resize.getParam(QStringLiteral("widthValue"));
+    QCOMPARE(w.toInt(), 800);
+    QVERIFY2(w.typeId() == QMetaType::Int,
+             "失败的字符串不应原样留在 Int 参数里（run() 会静默 toInt()=0）");
+
+    // ② Resize 像素总量封顶：注册上限 65000² 会申请约 12 GB
+    cv::Mat img(16, 16, CV_8UC1, cv::Scalar(80));
+    resize.setInputImage(OpencvUtil::matToHimage(img));
+    resize.setParam(QStringLiteral("widthValue"), 65000);
+    resize.setParam(QStringLiteral("heightValue"), 65000);
+    resize.run(false);
+    QVERIFY2(!resize.getParam(QStringLiteral("moduleStatus")).toBool(),
+             "65000×65000 应被像素总量封顶拦下");
+    QVERIFY2(resize.getParam(QStringLiteral("lastError")).toString().contains(QStringLiteral("过大")),
+             "封顶必须给出可读原因");
+
+    // ③ 卡尺超大 ROI 端点：端点夹到图像内 + K 封顶，不再产生十万级剖面
+    OpencvCaliperNode caliper;
+    caliper.init();
+    caliper.setParam(QStringLiteral("row1"), 0.0);
+    caliper.setParam(QStringLiteral("col1"), 0.0);
+    caliper.setParam(QStringLiteral("row2"), 100000.0);
+    caliper.setParam(QStringLiteral("col2"), 100000.0);
+    caliper.setParam(QStringLiteral("step"), 1.0);
+    caliper.setParam(QStringLiteral("halfWidth"), 10);
+    caliper.setInputImage(OpencvUtil::matToHimage(img));
+    QElapsedTimer timer;
+    timer.start();
+    caliper.run(false);
+    qInfo("caliper-stability: huge ROI elapsed=%lld ms", timer.elapsed());
+    QVERIFY2(timer.elapsed() < 5000,
+             qPrintable(QStringLiteral("超大 ROI 不应冻结执行线程（实际 %1 ms）")
+                            .arg(timer.elapsed())));
+}
+
+// 运行时参数归一化：用 setParamDirect 绕过 setParam 的范围钳制（模拟方案被手工
+// 编辑 / fromJson 直写 / 参数引用注入坏值），execute() 之后必须被夹回注册范围。
+template <class T>
+class ParamInjectProbe : public T
+{
+public:
+    void inject(const QString &key, const QVariant &value)
+    {
+        this->setParamDirect(key, value);
+    }
+};
+
+void NodeCoreTest::testRuntimeParamNormalization()
+{
+    cv::Mat img(16, 16, CV_8UC1, cv::Scalar(80));
+    const HalconCpp::HImage himage = OpencvUtil::matToHimage(img);
+
+    auto feed = [&himage](auto &probe) {
+        probe.init();
+        probe.setInputImage(himage);
+    };
+
+    // B3 形态学：iterations 注册 0..10，注入 20 亿
+    {
+        ParamInjectProbe<OpencvMorphNode> p;
+        feed(p);
+        p.inject(QStringLiteral("iterations"), 2000000000);
+        p.execute();
+        QCOMPARE(p.getParam(QStringLiteral("iterations")).toInt(), 10);
+    }
+    // B4 二值化：gaussSigma 注册 0.1..100，注入 1e300
+    {
+        ParamInjectProbe<OpencvThresholdNode> p;
+        feed(p);
+        p.inject(QStringLiteral("gaussSigma"), 1e300);
+        p.execute();
+        QCOMPARE(p.getParam(QStringLiteral("gaussSigma")).toDouble(), 100.0);
+    }
+    // B6 DNN 分割：inputWidth 注册 32..4096，注入 100000（否则 letter 分配 30 GB）
+    {
+        ParamInjectProbe<DnnSegmentNode> p;
+        feed(p);
+        p.inject(QStringLiteral("inputWidth"), 100000);
+        p.execute();
+        QCOMPARE(p.getParam(QStringLiteral("inputWidth")).toInt(), 4096);
+    }
+    // B9 拟合直线：maxContours 注册 1..1000，注入负值
+    {
+        ParamInjectProbe<OpencvFitLineNode> p;
+        feed(p);
+        p.inject(QStringLiteral("maxContours"), -1);
+        p.execute();
+        QCOMPARE(p.getParam(QStringLiteral("maxContours")).toInt(), 1);
+    }
+    // 脏字符串：必须回退声明默认值，且类型修正为 Double
+    {
+        ParamInjectProbe<OpencvCaliperNode> p;
+        feed(p);
+        p.inject(QStringLiteral("threshold"), QStringLiteral("dirty"));
+        p.execute();
+        const QVariant v = p.getParam(QStringLiteral("threshold"));
+        QVERIFY2(v.typeId() == QMetaType::Double, "脏字符串不得留在 Double 参数里");
+        QCOMPARE(v.toDouble(), 15.0);
+    }
+}
+
+// NodeBase 的 4 个执行状态位改为 std::atomic 后：读写仍正确，且 toJson / 三元
+// 表达式里的显式 .load() 不丢值（QJsonValue 不接受 atomic 的拷贝赋值）。
+void NodeCoreTest::testAtomicNodeFlagsSerialization()
+{
+    OpencvPixelStatsNode node;
+    node.init();
+    node.setEnabled(false);
+    QVERIFY(!node.isEnabled());
+    node.setEnabled(true);
+    QVERIFY(node.isEnabled());
+
+    const QJsonObject json = node.toJson();
+    QVERIFY2(json.contains(QStringLiteral("enabled")), "toJson 应写出 enabled");
+    QVERIFY2(json.value(QStringLiteral("enabled")).toBool(), "enabled 应为 true");
+    QVERIFY2(json.contains(QStringLiteral("executionSuccess")),
+             "toJson 应写出 executionSuccess（atomic 需显式 load）");
+
+    cv::Mat img(10, 10, CV_8UC1, cv::Scalar(80));
+    auto obj = QSharedPointer<DataObject>::create();
+    obj->setHImage(OpencvUtil::matToHimage(img));
+    node.setInputData(0, obj);
+    QVERIFY2(node.execute(), "原子化后节点仍应能正常执行");
+    QVERIFY2(node.resultState().executed, "执行后应提交状态快照");
 }
 
 QTEST_MAIN(NodeCoreTest)

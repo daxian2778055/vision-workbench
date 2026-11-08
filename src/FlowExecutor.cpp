@@ -57,10 +57,10 @@ FlowExecutor::FlowExecutor()
     connect(GlobalTriggerManager::instance(), &GlobalTriggerManager::triggerFired,
             this, [this](const QString &flowName, const QString &triggerSource) {
         Q_UNUSED(triggerSource)
-        if (m_flowName == flowName && m_runContext->state() == ExecutionState::Idle) {
+        if (this->flowName() == flowName && m_runContext->state() == ExecutionState::Idle) {
             // 硬触发模式禁止外部触发启动
             if (!canTriggerFromExternal()) {
-                VFP_DEBUG << "Flow" << m_flowName
+                VFP_DEBUG << "Flow" << this->flowName()
                           << "in hardware-trigger mode, external trigger ignored";
                 return;
             }
@@ -878,7 +878,7 @@ void FlowExecutor::run()
         } else {
         m_pendingResults.append(InspectionRecord{
             0,
-            m_flowName.isEmpty() ? QStringLiteral("(未命名流程)") : m_flowName,
+            this->flowName().isEmpty() ? QStringLiteral("(未命名流程)") : this->flowName(),
             kRoundSummaryNodeName,
             !m_roundHadFailure,
             m_roundHadFailure ? QStringLiteral("NG") : QStringLiteral("OK"),
@@ -1399,7 +1399,7 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
             // \u6570\u636E\u5E93\u5DF2\u521D\u59CB\u5316
             // 报表「流程」列必须是可读且跨会话稳定的流程名：此前写的是场景指针的十进制数字
             // （reinterpret_cast<quintptr>(m_scene)），报表里显示内存地址且每次运行都不同。
-            const QString flowName = m_flowName.isEmpty() ? QStringLiteral("(未命名流程)") : m_flowName;
+            const QString flowName = this->flowName().isEmpty() ? QStringLiteral("(未命名流程)") : this->flowName();
             QString resultVal;
             if (nodeOut0) {
                 // 判 NG 但结果有效时也有本轮输出，DB 里不能记成 OK
@@ -1672,7 +1672,7 @@ void FlowExecutor::clearNodeCachesOnException(NodeBase *node)
     // 全局变量 / imageReady 的直连槽都在其后），try 里已写过成功行，这里再补一行就会
     // 同轮同节点出现 OK+NG 两条（2026-10-25 复核 P3-2）。
     if (!m_nodeRecordWritten && !AppDatabase::instance()->databasePath().isEmpty()) {
-        const QString flowName = m_flowName.isEmpty() ? QStringLiteral("(未命名流程)") : m_flowName;
+        const QString flowName = this->flowName().isEmpty() ? QStringLiteral("(未命名流程)") : this->flowName();
         m_pendingResults.append(InspectionRecord{ 0, flowName, node->fullName(), false,
                                                   QString(), QDateTime() });
         AppDatabase::instance()->addAlarm(node->fullName(), QStringLiteral("Error"),

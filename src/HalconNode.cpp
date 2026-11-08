@@ -235,13 +235,17 @@ void HalconNode::setParam(const QString &name, const QVariant &value)
         if (spec.type == ParamType::Int) {
             bool ok = false;
             const int intValue = value.toInt(&ok);
-            if (ok)
-                normalized = qBound(spec.minValue.toInt(), intValue, spec.maxValue.toInt());
+            // 转换失败（参数引用解析成空串 / 非数值文本、通讯下发脏值）时不能把
+            // 字符串原样写进 Int 参数：run() 里 .toInt() 会静默变 0，可能触发
+            // 除零、负 vector size 或静默走错分支。回退到声明默认值。
+            normalized = ok ? qBound(spec.minValue.toInt(), intValue, spec.maxValue.toInt())
+                            : spec.defaultValue.toInt();
         } else if (spec.type == ParamType::Double) {
             bool ok = false;
             const double doubleValue = value.toDouble(&ok);
-            if (ok)
-                normalized = qBound(spec.minValue.toDouble(), doubleValue, spec.maxValue.toDouble());
+            normalized = ok ? qBound(spec.minValue.toDouble(), doubleValue,
+                                     spec.maxValue.toDouble())
+                            : spec.defaultValue.toDouble();
         }
         break;
     }
@@ -371,8 +375,8 @@ QJsonObject HalconNode::toJson() const
         {"height", m_size.height()}
     });
     json["moduleId"] = moduleId();
-    json["executionSuccess"] = m_executionSuccess;
-    json["enabled"] = m_enabled;
+    json["executionSuccess"] = m_executionSuccess.load(std::memory_order_relaxed);
+    json["enabled"] = m_enabled.load(std::memory_order_relaxed);
     
     // Add parameters（运行中保存方案也安全：snapshot 在锁内整体拷贝）
     QJsonObject params;
@@ -607,9 +611,39 @@ bool HalconNode::evaluateGenericResultJudgment(QString *reason) const
     return evaluateResultJudgment(QVariantMap(), reason);
 }
 
+void HalconNode::normalizeRuntimeParams()
+{
+    // setParam() 已按 ParamSpec 钳制，但仍有四条绕过路径：setParamDirect、
+    // fromJson 对未注册键原样写入、参数引用解析出的空串/非数值文本、
+    // 各节点直接 m_params[key] = ...。只要有一条漏过，run() 里的 .toInt()
+    // 就会静默变 0 或放行超大值（除零 / 负 vector size / 巨核 / 循环爆炸）。
+    // 这里在每轮算法执行前统一按声明范围收口，一次覆盖全部派生算子。
+    for (const ParamSpec &spec : m_paramSpecs) {
+        if (!spec.hasRange)
+            continue;
+        const QVariant cur = m_params.value(spec.name);
+        if (!cur.isValid())
+            continue;   // 从未写过，交给 run() 自己的默认值回退
+        if (spec.type == ParamType::Int) {
+            bool ok = false;
+            const int v = cur.toInt(&ok);
+            m_params.insert(spec.name,
+                            ok ? qBound(spec.minValue.toInt(), v, spec.maxValue.toInt())
+                               : spec.defaultValue.toInt());
+        } else if (spec.type == ParamType::Double) {
+            bool ok = false;
+            const double v = cur.toDouble(&ok);
+            m_params.insert(spec.name,
+                            ok ? qBound(spec.minValue.toDouble(), v, spec.maxValue.toDouble())
+                               : spec.defaultValue.toDouble());
+        }
+    }
+}
+
 bool HalconNode::process()
 {
     try {
+        normalizeRuntimeParams();   // 必须在任何算法读取参数之前
         // 每轮重新计算结果：先清空上一轮输出图像，避免本轮无有效结果时
         // 仍把上一轮图像作为输出发布给下游（P1）
         m_outputImage.Clear();
@@ -832,6 +866,7 @@ void HalconNode::publishAggregatedOutputs()
 
 bool HalconNode::processDataOutputs()
 {
+    normalizeRuntimeParams();   // 与 process() 同一道运行时参数防线
     // 数据型孪生路径同样要每轮复位，否则上一轮 NG 会跨轮残留（P0 状态位契约）
     setResultNg(false);
     const auto clearAllOutputs = [this] {

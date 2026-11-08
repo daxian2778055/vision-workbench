@@ -441,10 +441,13 @@ void OpencvCaliperNode::run(bool /*autoSwitch*/)
             cv::cvtColor(gray, gray, cv::COLOR_BGR2GRAY);
         }
 
-        const double r1 = m_params.value(QStringLiteral("row1"), 100.0).toDouble();
-        const double c1 = m_params.value(QStringLiteral("col1"), 100.0).toDouble();
-        const double r2 = m_params.value(QStringLiteral("row2"), 200.0).toDouble();
-        const double c2 = m_params.value(QStringLiteral("col2"), 100.0).toDouble();
+        // 端点只夹到注册范围（0..100000）。**不能**夹到图像尺寸内：越界采样由
+        // sampleGray 的边界复制处理，是既有几何语义；夹到小图边界会把默认端点
+        // 100..200 压成两点重合而误判失败。防循环爆炸交给下面的 K 封顶。
+        const double r1 = qBound(0.0, m_params.value(QStringLiteral("row1"), 100.0).toDouble(), 100000.0);
+        const double c1 = qBound(0.0, m_params.value(QStringLiteral("col1"), 100.0).toDouble(), 100000.0);
+        const double r2 = qBound(0.0, m_params.value(QStringLiteral("row2"), 200.0).toDouble(), 100000.0);
+        const double c2 = qBound(0.0, m_params.value(QStringLiteral("col2"), 100.0).toDouble(), 100000.0);
         // 参数边界必须夹到注册范围：直接 toInt/toDouble 时，手工编辑过的方案或
         // 参数引用解析出的越界值会让 std::vector 用负 size 构造、L/step 除零。
         // 回退值也要与 registerParams 的默认值一致（threshold 15 / edgeMode 1）。
@@ -553,7 +556,9 @@ void OpencvCaliperNode::run(bool /*autoSwitch*/)
         const double nx = -uy;      // 法线方向单位向量（边缘搜索方向）
         const double ny = ux;
 
-        const int K = std::max(1, static_cast<int>(L / step));
+        // 剖面总数封顶：端点已夹到图像内，但 step=1 + 大图仍可能产生上万剖面，
+    // 每剖面最多 401×101 次双线性采样 → 防御性封顶，正常参数远达不到。
+    const int K = qBound(1, static_cast<int>(L / step), 2048);
         const int M = half * 2 + 1; // 法线方向采样点数
         const int projHalf = std::max(0, (profileWidth - 1) / 2);   // 总采样数 = 2*projHalf+1 ≤ profileWidth
 

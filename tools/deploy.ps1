@@ -143,6 +143,25 @@ if (Test-Path $HalconBin) {
     Write-Warning "未找到 HALCON 运行时目录: $HalconBin"
 }
 
+# DeepOCR 预训练模型（.hdl）：CreateDeepOcr 从 %HALCONROOT%/dl 查找。
+# 只拷 DLL 不拷模型时，目标机即使能加载 halconcpp.dll，DeepOCR 仍会报
+# 「需 HALCONROOT/dl 下的官方预训练模型」。程序启动时已把 HALCONROOT 自举到
+# exe 目录，因此把模型放进 <包>/dl/ 即可免安装运行。
+Step "拷贝 DeepOCR 预训练模型"
+$halconDl = Join-Path $HalconRoot "dl"
+if (Test-Path $halconDl) {
+    $dstDl = Join-Path $OutDir "dl"
+    New-Item -ItemType Directory -Path $dstDl -Force | Out-Null
+    $models = Get-ChildItem $halconDl -Filter "*deep_ocr*.hdl" -ErrorAction SilentlyContinue
+    foreach ($m in $models) {
+        Copy-Item -Path $m.FullName -Destination $dstDl -Force
+    }
+    $mb = [math]::Round((($models | Measure-Object Length -Sum).Sum / 1MB), 0)
+    Write-Host "  -> 已拷贝 $($models.Count) 个 DeepOCR 模型（约 $mb MB）" -ForegroundColor Green
+} else {
+    Write-Warning "未找到 HALCON dl 目录: $halconDl（目标机 DeepOCR 将不可用）"
+}
+
 # HALCON License（若存在则一并拷贝，否则需在目标机配置 License）
 Step "拷贝 HALCON License"
 $halconLicenseDir = Join-Path $HalconRoot "license"
@@ -345,10 +364,12 @@ VisionFlowPlatform 部署说明
    - Windows 10/11 x64
    - 若使用 MVS 相机：目标机需安装"机器视觉工业相机客户端 MVS"，
      或至少具备 MVS 运行时 (MvCameraControl.dll 等，脚本已随包拷贝)。
-   - 若使用 HALCON 深度学习/DL 算子：
-        a. 目标机需安装 HALCON Runtime 或保证 halconcpp.dll 等与本包一致;
-        b. 必须配置 HALCON License（授权码或 License 服务器），
-           否则 HALCON 算子（含 DL）无法运行。
+   - 若使用 HALCON 深度学习/DeepOCR 算子：
+        a. **无需安装 HALCON**：包内自带 61 个 HALCON DLL，程序启动时把 HALCONROOT
+           自举到 exe 目录，从 <包>/dl/ 加载 DeepOCR 预训练模型；
+        b. 包内已带 dl/ 下的 DeepOCR 模型（约 214 MB，部署脚本负责拷贝，自检会校验）；
+        c. License 为可选：本机实测无 license 文件时 DeepOCR 仍可运行；若现场有正式
+           License，放进 <包>/license/ 即可（HALCON 会优先读取）。
    - 相机驱动：GigE 相机建议安装 MVS 附带的网卡驱动优化工具。
 
 3. 首次运行
@@ -379,7 +400,9 @@ if (-not $SkipVerify) {
     $mustHave = @('VisionFlowPlatform.exe', 'platforms\qwindows.dll', 'sqldrivers\qsqlite.dll',
                   'Qt6Core.dll', 'Qt6Sql.dll', 'Qt6Widgets.dll', 'Qt6Charts.dll', $OpenCvDllName,
                   'halconcpp.dll', 'MvCameraControl.dll', 'vcruntime140.dll', 'msvcp140.dll',
-                  'tessdata', 'license', 'data', 'logs', 'schemes')
+                  # dl 是 DeepOCR 预训练模型目录：只拷 DLL 不拷模型时，目标机 DeepOCR 会
+                  # 报「需 HALCONROOT/dl 下的官方预训练模型」，而开发机永远复现不了。
+                  'tessdata', 'dl', 'license', 'data', 'logs', 'schemes')
     foreach ($n in $mustHave) {
         if (-not (Test-Path (Join-Path $OutDir $n))) { $problems += "缺文件: $n" }
     }

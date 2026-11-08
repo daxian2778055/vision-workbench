@@ -113,6 +113,7 @@ private slots:
     void testResultNgRoundPublishesFreshImage();
     void testResultNgRoundRefreshesDownstream();
     void testRuntimeViewDoubleApplyKeepsAlive();
+    void testRemovedNodeLeavesSceneImmediately();
 
     // 性能测试
     void testExecutionTime();
@@ -5699,6 +5700,20 @@ void IntegrationTest::testRuntimeViewDoubleApplyKeepsAlive()
     QVERIFY2(!guard.isNull(), "第三次 setInterface 后视图仍应存活");
     delete view;
     QVERIFY(guard.isNull());
+}
+
+// queued 信号携带裸 NodeBase*：MainWindow::isNodeLive 靠「节点是否仍在场景的
+// nodes() 里」丢弃迟到事件。这里锁住守卫的判定基础——removeNode 后必须立刻消失。
+void IntegrationTest::testRemovedNodeLeavesSceneImmediately()
+{
+    FlowScene scene;
+    NodeBase *node = scene.createNode(NodeBase::LOGIC, QPointF(0, 0),
+                                      QStringLiteral("Delay"));
+    QVERIFY(node != nullptr);
+    QVERIFY2(scene.nodes().contains(node), "创建后节点应属于场景");
+    scene.removeNode(node);
+    QVERIFY2(!scene.nodes().contains(node),
+             "删除后节点必须立刻从 nodes() 消失，否则迟到事件会被误当成存活");
 }
 
 QTEST_MAIN(IntegrationTest)

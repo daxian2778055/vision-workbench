@@ -278,6 +278,8 @@ src/ModelCache.cpp
     src/NodeIconPalette.cpp
     src/CalibrationBoard.cpp   # 工具菜单「标定板生成」：棋盘格/圆点板渲染与保存（纯数据面）
     src/DiagnosticsCollector.cpp   # 工具菜单「异常信息收集」：诊断报告生成与导出（纯数据面）
+src/CalibrationWizard.cpp   # 工具菜单「标定配置引导」：静态/动态/映射三类引导规格（纯数据面）
+src/CalibrationWizardDialog.cpp   # 工具菜单「标定配置引导」：类型选择 + 官方步骤引导页
     src/UpstreamWalk.cpp
     src/RoiGeometry.cpp
     src/FixtureValidation.cpp
@@ -570,6 +572,8 @@ set(HEADERS
     include/ConnectionDragHelper.h
     include/HelpViewer.h
     include/ResultTablePanel.h
+    include/CalibrationWizard.h
+    include/CalibrationWizardDialog.h
     include/VariablePanel.h
     include/ModuleEditorDialog.h
     include/TemplateConfigDialog.h
@@ -1433,6 +1437,11 @@ if(MSVC)
     target_link_libraries(diagnostics_collector_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
     vfp_add_qtest(NAME DiagnosticsCollectorTest TARGET diagnostics_collector_test)
     vfp_configure_gui_test(DiagnosticsCollectorTest)
+
+    add_executable(calibration_wizard_test tests/calibration_wizard_test.cpp)
+    target_link_libraries(calibration_wizard_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    vfp_add_qtest(NAME CalibrationWizardTest TARGET calibration_wizard_test)
+    vfp_configure_gui_test(CalibrationWizardTest)
 endif()
 
 # 图上游闭包游走面（词条切片 B 图谱族首抽，从 MainWindow 抽出）：
@@ -1543,7 +1552,7 @@ if(MSVC)
                   ProjectPathsTest FlowCachePurgeLedgerTest ExecutionControlPolicyTest
                   AuxDialogMenuRouterTest ModuleEditorRegistryTest UITranslatorTest
                   ManualPathResolverTest RoundVariableFeedTest NodeIconPaletteTest UpstreamWalkTest
-                  CalibrationBoardTest DiagnosticsCollectorTest
+                  CalibrationBoardTest DiagnosticsCollectorTest CalibrationWizardTest
                   FlowExecutorOwnershipTest RoiGeometryTest FixtureValidationTest
                   FlowRunContextTest NodeRunContextTest FlowExecutorTokenTest
                   RegisterValueParseTest NodeStateBodyTest)

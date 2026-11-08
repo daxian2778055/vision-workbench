@@ -57,6 +57,18 @@ void ResizeNode::run(bool /*autoSwitch*/)
 
         const int width = qBound(8, m_params.value(QStringLiteral("widthValue"), 800).toInt(), 65000);
         const int height = qBound(8, m_params.value(QStringLiteral("heightValue"), 800).toInt(), 65000);
+        // 注册上限 65000×65000 会申请约 12 GB（3 通道），OpenCV 抛异常前就可能 OOM。
+        // 按像素总量封顶：正常参数远达不到该上限。
+        constexpr qint64 kMaxOutputPixels = 100000000;   // 1 亿像素 ≈ 300 MB（3 通道）
+        const qint64 pixels = static_cast<qint64>(width) * static_cast<qint64>(height);
+        if (pixels > kMaxOutputPixels) {
+            m_params["moduleStatus"] = false;
+            m_params[QStringLiteral("lastError")] =
+                QStringLiteral("输出尺寸过大（%1×%2）：像素总量上限 1 亿")
+                    .arg(width).arg(height);
+            m_outputImage.Clear();
+            return;
+        }
         const int interIdx = qBound(0, m_params.value(QStringLiteral("interType"), 1).toInt(), 2);
         const bool antiAliasing = m_params.value(QStringLiteral("antiAliasing"), false).toBool();
 

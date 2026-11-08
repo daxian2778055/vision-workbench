@@ -493,7 +493,7 @@ QJsonObject ColorConversionNode::toJson() const
     QJsonObject json = HalconNode::toJson();
     // 顶层键保留（老读取方兼容），值取自参数表（唯一来源）；executionSuccess 是执行结果，保持原样
     json["conversionType"] = QJsonValue::fromVariant(getParam(QStringLiteral("conversionType")));
-    json["executionSuccess"] = m_executionSuccess;
+    json["executionSuccess"] = m_executionSuccess.load(std::memory_order_relaxed);
     return json;
 }
 

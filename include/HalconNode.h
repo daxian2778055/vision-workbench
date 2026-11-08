@@ -93,6 +93,10 @@ public:
     void registerParams(const ParamSpecList &specs);
     /// 获取参数描述列表
     const ParamSpecList &paramSpecs() const { return m_paramSpecs; }
+    /// 每轮执行前按 ParamSpec 归一化运行时参数：覆盖 setParamDirect / fromJson /
+    /// 参数引用解析 / 直接写 m_params 等绕过 setParam 范围钳制的路径，
+    /// 避免越界值直达算法造成除零、负 vector size、巨核分配或循环爆炸。
+    void normalizeRuntimeParams();
     /// 依据 ParamSpec 自动生成参数面板（供未覆盖 createParamPanel 的算子使用）
     QWidget *createAutoParamPanel();
     /// 依据 ParamSpec 刷新参数面板控件值

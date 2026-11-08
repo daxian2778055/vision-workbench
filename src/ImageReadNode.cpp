@@ -410,7 +410,7 @@ QJsonObject ImageReadNode::toJson() const
     json["imageHeight"] = m_imageHeight;
     json["pixelFormat"] = m_pixelFormat;
     json["imageName"] = m_imageName;
-    json["executionSuccess"] = m_executionSuccess;
+    json["executionSuccess"] = m_executionSuccess.load(std::memory_order_relaxed);
     return json;
 }
 

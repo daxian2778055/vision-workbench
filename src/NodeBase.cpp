@@ -397,7 +397,8 @@ bool NodeBase::execute()
 
         // 提交一致快照：UI 一次读到 executed / moduleOk / resultNg 三项
         const QVariant ms = getParam(QStringLiteral("moduleStatus"));
-        const bool moduleOk = ms.isValid() ? ms.toBool() : m_executionSuccess;
+        const bool moduleOk = ms.isValid() ? ms.toBool()
+                                          : m_executionSuccess.load(std::memory_order_relaxed);
         commitResultState(m_executionSuccess && moduleOk);
         return m_executionSuccess;
     } catch (const std::exception &e) {

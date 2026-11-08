@@ -1,6 +1,7 @@
 #include <QElapsedTimer>
 #include "MainWindow.h"
 #include "VmSharedText.h"
+#include "CalibrationWizardDialog.h"
 #include "ResultTablePanel.h"
 #include "VariablePanel.h"
 #include "AuxPanelManager.h"
@@ -2133,7 +2134,7 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
     connect(ex, &FlowExecutor::nodeSkipped, this,
             [this, ex](NodeBase *node, const QString &reason) {
         Q_UNUSED(reason)
-        if (ex != m_executor)
+        if (ex != m_executor || !isNodeLive(node, ex->flowScene()))
             return;
         // 立刻重绘（2026-10-28 复核 P3）：第三态只置了节点标志，画布要等下次重绘才变色
         if (FlowScene *scene = currentFlowScene())
@@ -2147,7 +2148,7 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
     // ── 全局 UI：结果数据表 / 变量面板（节点执行后把该模块输出推到面板） ──
     connect(ex, &FlowExecutor::nodeOutputsUpdated, this,
             [this, ex](NodeBase *node, bool ok, qint64 elapsedMs, const QVariantMap &vars) {
-        if (ex != m_executor || !node)
+        if (ex != m_executor || !isNodeLive(node, ex->flowScene()))
             return;
         for (ResultTablePanel *rt : resultPanels()) {
             // VM「模块结果」口径：算子自己声明结果字段（顺序/名称/单位/精度），
@@ -2175,7 +2176,7 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
     // ── 全局 UI：末端图像 → 运行界面 + 图像显示 ──
     connect(ex, &FlowExecutor::imageReady, this,
             [this, ex](NodeBase *node, const HalconCpp::HImage &image) {
-        if (ex != m_executor || !node)
+        if (ex != m_executor || !isNodeLive(node, ex->flowScene()))
             return;
         // 运行界面图像控件转发（不受用户显示选择影响）
         if (m_runtimeView)
@@ -2194,7 +2195,7 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
     // ── 全局 UI：任意节点图像 → 运行界面按节点名推送（绑定中间节点控件可实时显示） ──
     connect(ex, &FlowExecutor::imageAvailable, this,
             [this, ex](NodeBase *node, const HalconCpp::HImage &image) {
-        if (ex != m_executor || !node)
+        if (ex != m_executor || !isNodeLive(node, ex->flowScene()))
             return;
         if (m_runtimeView)
             m_runtimeView->pushImage(node->fullName(), image);
@@ -2205,7 +2206,7 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
         // 流程域：日志（后台流程同样输出）
         logMessage(QStringLiteral("节点执行结果: %1").arg(success ? QStringLiteral("成功")
                                                                  : QStringLiteral("失败")));
-        if (!node)
+        if (!isNodeLive(node, ex->flowScene()))
             return;
         // 流程域：节点着色按执行器自身场景（旧实现只看当前标签页场景 → 后台流程无反馈/串场景）
         if (FlowScene *scene = ex->flowScene()) {
@@ -5967,6 +5968,17 @@ void MainWindow::openSchemeSettings()
     dialog.exec();
 }
 
+void MainWindow::openCalibrationWizardDialog()
+{
+    CalibrationWizardDialog dlg(this);
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+    const CalibrationWizardSpec spec = CalibrationWizard::specFor(dlg.selectedType());
+    logMessage(tr("标定配置引导：%1（%2 个引导步骤）")
+                   .arg(spec.name)
+                   .arg(spec.steps.size()));
+}
+
 void MainWindow::openCalibrationBoardDialog()
 {
     QDialog dialog(this);
@@ -6286,6 +6298,20 @@ void MainWindow::openExceptionInfoDialog()
             });
 
     dialog.exec();
+}
+
+bool MainWindow::isNodeLive(NodeBase *node, FlowScene *executorScene) const
+{
+    if (!node)
+        return false;
+    for (FlowScene *scene : m_flowScenes) {
+        if (scene && scene->nodes().contains(node))
+            return true;
+    }
+    // 后台流程的执行器场景可能不在页签列表里，别误杀它的正常反馈
+    if (executorScene && executorScene->nodes().contains(node))
+        return true;
+    return false;
 }
 
 void MainWindow::onNodeExecuted(NodeBase *executedNode, bool success)
@@ -7632,8 +7658,10 @@ void MainWindow::reorganizeMenuBar()
     strategyAct->setEnabled(false);
 
     // ── 工具（官方：标定配置引导 / 标定板生成 / 异常信息收集 / 参数查找工具）──
-    // 已实装「标定板生成」「异常信息收集」与「参数查找工具」；标定配置引导暂无对应功能，
-    // 按"不造死入口"原则暂不添加。
+    QAction *wizardAct = toolsMenu->addAction(tr("标定配置引导…"));
+    wizardAct->setObjectName(QStringLiteral("actionCalibrationWizard"));
+    connect(wizardAct, &QAction::triggered, this,
+            &MainWindow::openCalibrationWizardDialog);
     QAction *calibrationBoardAct = toolsMenu->addAction(tr("标定板生成…"));
     calibrationBoardAct->setObjectName(QStringLiteral("actionCalibrationBoard"));
     connect(calibrationBoardAct, &QAction::triggered, this,

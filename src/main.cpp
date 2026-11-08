@@ -346,6 +346,15 @@ int main(int argc, char *argv[])
 
         QApplication a(argc, argv);
 
+        // 便携部署自举：包内自带 HALCON 运行库（halconcpp.dll/halcon.dll）与
+        // dl/ 下的 DeepOCR 预训练模型。目标机未设 HALCONROOT 时指向 exe 所在目录，
+        // HALCON 就会从 <exe>/dl/ 找模型、从 <exe>/license/ 找授权文件 ——
+        // 现场无需安装 HALCON，双击即用。已显式设置的环境变量优先，不覆盖。
+        if (qEnvironmentVariableIsEmpty("HALCONROOT")) {
+            qputenv("HALCONROOT",
+                    QCoreApplication::applicationDirPath().toLocal8Bit());
+        }
+
         // 主题/调色板必须在**任何 QWidget 构造之前**应用。原先放在 MainWindow 构造
         // 中途（此前已创建上百个控件），早建的控件拿不到新 palette，深浅混杂；
         // 与翻译安装一样属于启动早期设置，故上移到这里。
