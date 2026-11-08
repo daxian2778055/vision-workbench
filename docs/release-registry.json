@@ -1135,6 +1135,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261108.6",
       "recorded_at": "2026-11-08",
       "recorded_note": "复核 P1 修复批：零词判绿链（DeepOCR recognition 无词判 NG + 自检 exit 语义）、模板极性 absdiff 把 -1 翻 +1 的假满分、Sobel 光圈 1..20 越界、单算子执行绕过 Running/Paused 闸、自检跳过单实例锁；并回退误杀 55 个节点的 NodeSelfTest FAIL 判据。实测：有字图 OK exit=0，纯白图 FAIL exit=1，节点自检 71 PASS/0 FAIL/3 SKIP"
+    },
+    {
+      "tag": "rc-20261108.8",
+      "commit": "40e9063bceccd7586274b7d8a2d0a6e2cdcfaf65",
+      "exe_md5": "e3f30a5e8e05f6a21e142adc13da4461",
+      "exe_bytes": 11817472,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261108.8",
+      "recorded_at": "2026-11-08",
+      "recorded_note": "部署门禁接 DeepOCR 真实推理（合成文字图，要求 exit=0 且含 [OK]）+ 修 D06/D07 两处文档行号漂移（参数壳 410-421、页签容器 698/addTab 1447-1451）。部署自检：关键文件 19/19、CRT 7/7、节点 71 PASS/0 FAIL/3 SKIP、DeepOCR 自检通过。其余 22 行 NOCANDELTA 为本几轮改 src 造成的引用窗口漂移，未贴进基线。"
     }
   ],
   "legacy_backfilled": [
