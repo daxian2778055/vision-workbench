@@ -1232,19 +1232,9 @@ void OpencvTemplateMatchNode::run(bool autoSwitch)
             merged = kept;
         }
 
-        // 排序类型（与单模板结果同口径）
+        // 排序类型（与单模板结果同口径；并列规则见 TemplateMatchSort）
         const int sortType = qBound(0, m_params.value(QStringLiteral("sortType"), 0).toInt(), 5);
-        std::stable_sort(merged.begin(), merged.end(),
-                         [sortType](const MultiHit &a, const MultiHit &b) {
-                             switch (sortType) {
-                             case 1: return a.angle > b.angle;
-                             case 2: return a.col < b.col;
-                             case 3: return a.row < b.row;
-                             case 4: return a.col != b.col ? a.col < b.col : a.row < b.row;
-                             case 5: return a.row != b.row ? a.row < b.row : a.col < b.col;
-                             default: return a.score > b.score;
-                             }
-                         });
+        TemplateMatchSort::stableSortByType(merged, sortType);
         // VM「最大匹配个数」：合并后的总数也要按上限截断。
         const int maxMatches =
             qBound(1, m_params.value(QStringLiteral("maxMatches"), 1).toInt(), 1000);
@@ -2653,21 +2643,12 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 hits = kept;
             }
         }
-        // VM「排序类型」：多目标结果的排序依据（默认按分数降序）
+        // VM「排序类型」：多目标结果的排序依据（默认按分数降序）。
+        // 案例 4/5 的并列规则（整数化后相同再按另一轴）在 TemplateMatchSort 单点定义。
         {
             const int sortType =
                 qBound(0, m_params.value(QStringLiteral("sortType"), 0).toInt(), 5);
-            std::stable_sort(hits.begin(), hits.end(),
-                             [sortType](const MatchHit &a, const MatchHit &b) {
-                                 switch (sortType) {
-                                 case 1: return a.angle > b.angle;
-                                 case 2: return a.col < b.col;
-                                 case 3: return a.row < b.row;
-                                 case 4: return a.col != b.col ? a.col < b.col : a.row < b.row;
-                                 case 5: return a.row != b.row ? a.row < b.row : a.col < b.col;
-                                 default: return a.score > b.score;
-                                 }
-                             });
+            TemplateMatchSort::stableSortByType(hits, sortType);
         }
         // 到这里 hits 已是最终结果（重叠过滤 + 排序后），matchCount 与之对齐
         m_params[QStringLiteral("matchCount")] = hits.size();

@@ -24,6 +24,8 @@
 #include "TemplateSearchBudget.h"
 #include "OpencvFeatureMatchNode.h"
 #include "OpencvTemplateMatchNode.h"
+
+#include <algorithm>
 #include "TemplateMatchNode.h"
 #include "OpencvUtil.h"
 #include "DataObject.h"
@@ -138,6 +140,8 @@ private slots:
     void templateFeatureScaleAndChainLengthFilterPoints();
     // VM 排序类型：多目标结果的排序依据必须生效
     void templateSortTypeOrdersMatchList();
+    // VM 排序并列规则：X/Y 整数化后相同才用另一轴兜底（P2-2）
+    void templateSortTypeIntegerizedTieBreak();
     // 屏蔽形状：最终掩膜 = 保留 − 屏蔽
     void templateExcludeShapesSubtractFromMask();
     // 运行参数尺度范围：只有显式 min/max 才生效（VM 没有"搜索尺度自动"）
@@ -3808,6 +3812,71 @@ void FeatureMatchTest::templateSortTypeOrdersMatchList()
     const QStringList rows2 =
         node.getParam(QStringLiteral("matchList")).toString().split(QLatin1Char(';'), Qt::SkipEmptyParts);
     QCOMPARE(rows2.size(), 2);
+
+    // P2-2：X 整数化相同 → 按 Y 升序（两个目标同列）
+    node.setParam(QStringLiteral("sortType"), 4);
+    node.run(false);
+    const QStringList rows4 =
+        node.getParam(QStringLiteral("matchList")).toString().split(QLatin1Char(';'), Qt::SkipEmptyParts);
+    QCOMPARE(rows4.size(), 2);
+    const double row4a = rows4.at(0).split(QLatin1Char(',')).at(0).toDouble();
+    const double row4b = rows4.at(1).split(QLatin1Char(',')).at(0).toDouble();
+    QVERIFY2(row4a < row4b,
+             qPrintable(QStringLiteral("X由小到大+Y兜底没生效：%1 / %2").arg(row4a).arg(row4b)));
+
+    // P2-2：Y 整数化相同 → 按 X 升序（同一行）
+    node.setParam(QStringLiteral("sortType"), 5);
+    node.run(false);
+    const QStringList rows5 =
+        node.getParam(QStringLiteral("matchList")).toString().split(QLatin1Char(';'), Qt::SkipEmptyParts);
+    QCOMPARE(rows5.size(), 2);
+    const double row5a = rows5.at(0).split(QLatin1Char(',')).at(0).toDouble();
+    const double row5b = rows5.at(1).split(QLatin1Char(',')).at(0).toDouble();
+    QVERIFY2(row5a < row5b, "Y由小到大排序没生效");
+}
+
+// VM「排序类型」并列规则（P2-2）：帮助页原文——「X由小到大，Y由小到大」是
+// 「按照匹配框中心点X轴坐标由小到大排序，当X坐标整数化后值相同时再按照Y轴坐标从小到大排序」，
+// Y 方向对称。旧实现用浮点不等比较，X 差 0.2 就轮不到 Y 兜底；本腿钉住整数桶口径。
+// 帮助页未定义「整数化」的取整方向，本实现取截断（TemplateMatchSort::integerized）。
+void FeatureMatchTest::templateSortTypeIntegerizedTieBreak()
+{
+    using TemplateMatchSort::Key;
+
+    // ① X 方向：a.x=100.2 / b.x=100.4 ⇒ 同一整数桶 100，按 Y 升序 b 在前
+    Key a; a.x = 100.2; a.y = 500.0; a.angle = 10.0; a.score = 0.9;
+    Key b; b.x = 100.4; b.y = 100.0; b.angle = 20.0; b.score = 0.8;
+    QVERIFY2(TemplateMatchSort::less(b, a, 4), "X 整数化相同应按 Y 升序");
+    QVERIFY2(!TemplateMatchSort::less(a, b, 4), "并列时比较必须反对称");
+    // 不同整数桶仍按 X 升序（99 < 100），即使 Y 更大
+    Key c; c.x = 99.8; c.y = 900.0; c.angle = 30.0; c.score = 0.7;
+    QVERIFY2(TemplateMatchSort::less(c, b, 4), "不同整数 X 桶应按 X 升序");
+
+    // ② Y 方向：d.y=200.2 / e.y=200.4 ⇒ 同一整数桶 200，按 X 升序 e 在前
+    Key d; d.x = 500.0; d.y = 200.2; d.angle = 0.0; d.score = 0.9;
+    Key e; e.x = 100.0; e.y = 200.4; e.angle = 0.0; e.score = 0.8;
+    QVERIFY2(TemplateMatchSort::less(e, d, 5), "Y 整数化相同应按 X 升序");
+    Key f; f.x = 900.0; f.y = 199.8; f.angle = 0.0; f.score = 0.7;
+    QVERIFY2(TemplateMatchSort::less(f, e, 5), "不同整数 Y 桶应按 Y 升序");
+
+    // ③ 其余四种排序保持原口径
+    QVERIFY2(TemplateMatchSort::less(a, b, 0), "按分数降序");
+    QVERIFY2(TemplateMatchSort::less(b, a, 1), "按角度降序");
+    QVERIFY2(TemplateMatchSort::less(a, b, 2), "按X升序（浮点）");
+    QVERIFY2(TemplateMatchSort::less(b, a, 3), "按Y升序（浮点）");
+
+    // ④ 整表排序：X 桶 99 → 100（桶内按 Y：b,e,a）→ 500 → 900
+    QVector<Key> keys{a, b, c, d, e, f};
+    std::stable_sort(keys.begin(), keys.end(), [](const Key &lhs, const Key &rhs) {
+        return TemplateMatchSort::less(lhs, rhs, 4);
+    });
+    QCOMPARE(int(keys.size()), 6);
+    QCOMPARE(keys.at(0).x, 99.8);
+    QCOMPARE(keys.at(1).x, 100.4);
+    QCOMPARE(keys.at(2).x, 100.0);
+    QCOMPARE(keys.at(3).x, 100.2);
+    QCOMPARE(keys.at(4).x, 500.0);
+    QCOMPARE(keys.at(5).x, 900.0);
 }
 
 // VM「全部搜索模式=关」语义：按模板列表顺序逐个试，达标即停。

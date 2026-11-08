@@ -2,7 +2,62 @@
 
 #include "HalconNode.h"
 #include <QJsonObject>
+#include <QVector>
+#include <algorithm>
 #include <opencv2/core.hpp>
+
+/// VM「排序类型」的并列规则（P2-2，帮助页原文）：
+///   「X由小到大，Y由小到大」= 按匹配框中心 X 升序，**X 坐标整数化后值相同**时按 Y 升序；
+///   「Y由小到大，X由小到大」= 按 Y 升序，**Y 坐标整数化后值相同**时按 X 升序。
+/// 帮助页没有定义「整数化」的取整方向；这里按 C++ 整数转换（截断）实现，坐标为图像非负坐标。
+/// 单模板逐目标与多模板合并两处排序都只走 stableSortByType 这一份比较口径。
+namespace TemplateMatchSort {
+
+struct Key
+{
+    double x = 0.0;      ///< 匹配框中心 X（列）
+    double y = 0.0;      ///< 匹配框中心 Y（行）
+    double angle = 0.0;  ///< 角度（度）
+    double score = 0.0;  ///< 匹配分数
+};
+
+inline int integerized(double v)
+{
+    return static_cast<int>(v);   // 截断；帮助页未定义取整方向
+}
+
+inline bool less(const Key &a, const Key &b, int sortType)
+{
+    switch (sortType) {
+    case 1: return a.angle > b.angle;
+    case 2: return a.x < b.x;
+    case 3: return a.y < b.y;
+    case 4: {
+        const int ax = integerized(a.x);
+        const int bx = integerized(b.x);
+        return ax != bx ? ax < bx : a.y < b.y;
+    }
+    case 5: {
+        const int ay = integerized(a.y);
+        const int by = integerized(b.y);
+        return ay != by ? ay < by : a.x < b.x;
+    }
+    default: return a.score > b.score;
+    }
+}
+
+/// 两个运行期排序站点共用的入口（MatchHit / MultiHit 都有 col,row,angle,score 字段）。
+template <typename Hit>
+inline void stableSortByType(QVector<Hit> &hits, int sortType)
+{
+    std::stable_sort(hits.begin(), hits.end(),
+                     [sortType](const Hit &a, const Hit &b) {
+                         return less(Key{a.col, a.row, a.angle, a.score},
+                                     Key{b.col, b.row, b.angle, b.score}, sortType);
+                     });
+}
+
+}   // namespace TemplateMatchSort
 
 /// 一个模板对象（VM「特征模板」页里的一行）。
 /// 为什么需要它：原来模板只是节点上的一个 templatePath 字符串——没有"创建/编辑/删除"、
