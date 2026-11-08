@@ -426,6 +426,9 @@ void OpencvTemplateMatchNode::init()
                      QStringLiteral("排序类型：0=按分数降序 1=按角度降序 2=按X升序 3=按Y升序 4=按X再Y 5=按Y再X")),
         makeIntParam(QStringLiteral("maxOverlap"), 50, 0, 100,
                      QStringLiteral("最大重叠率（0~100，默认 50；重叠超此值时丢低分目标）")),
+        // VM「多模板重叠率」：仅「全部搜索模式」开启时参与跨模板结果合并。
+        makeIntParam(QStringLiteral("multiTemplateOverlap"), 50, 0, 100,
+                     QStringLiteral("多模板重叠率（全部搜索模式：不同模板命中重叠超此值时只保留高分者）")),
         makeIntParam(QStringLiteral("extendThreshold"), 0, 0, 100,
                      QStringLiteral("延拓阈值（目标被图像边缘截断时允许缺失的特征比例 %）")),
         makeIntParam(QStringLiteral("timeoutMs"), 0, 0, 10000,
@@ -554,6 +557,7 @@ void OpencvTemplateMatchNode::init()
     {
         static const QStringList kRunOrder = {
             QStringLiteral("matchAllTemplates"), QStringLiteral("maxOverlap"),
+            QStringLiteral("multiTemplateOverlap"),
             QStringLiteral("minScore"), QStringLiteral("maxMatches"),
             QStringLiteral("polarity"),
             QStringLiteral("angleMin"), QStringLiteral("angleMax"),
@@ -620,6 +624,8 @@ void OpencvTemplateMatchNode::init()
                 QStringLiteral("模板列表逐个跑完整流程，取最高分")}},
             {QStringLiteral("maxOverlap"), {QStringLiteral("最大重叠率"),
                 QStringLiteral("0~100；两个命中的框重叠超过该值时只保留分数高的")}},
+            {QStringLiteral("multiTemplateOverlap"), {QStringLiteral("多模板重叠率"),
+                QStringLiteral("0~100；全部搜索模式下不同模板命中的目标重叠超此值时只保留高分者")}},
             {QStringLiteral("minScore"), {QStringLiteral("最小匹配分数"),
                 QStringLiteral("分数低于此值的命中判为无效（0~1）")}},
             {QStringLiteral("maxMatches"), {QStringLiteral("最大匹配个数"),
@@ -918,29 +924,299 @@ void OpencvTemplateMatchNode::run(bool autoSwitch)
     }
 
     const int savedIndex = activeTemplateIndex();
+    const double multiMinScore = m_params.value(QStringLiteral("minScore"), 0.5).toDouble();
+
+    // P0-2（VM「全部搜索模式」）：逐个模板跑完整流程，收集每个模板的命中，
+    // 再按「多模板重叠率」合并、按排序类型重排、按最大匹配个数截断。
+    // 逐目标结构：matchList = row,col,score,angle,scale,pointRow,pointCol；
+    // 宽/高、尺度 X/Y、横切值各有同序列表。
+    struct MultiHit {
+        double row = 0.0, col = 0.0, score = 0.0, angle = 0.0;
+        double scaleX = 1.0, scaleY = 1.0, cross = 0.0;
+        double pointRow = 0.0, pointCol = 0.0;
+        double width = 0.0, height = 0.0;
+        int templateIndex = -1;
+        QString templateName;
+    };
+    auto listOf = [](const QVariant &v) {
+        return v.toString().split(QLatin1Char(','), Qt::SkipEmptyParts);
+    };
+    auto captureHits = [&](int tmplIdx, const QString &tmplName) {
+        QVector<MultiHit> out;
+        const QStringList rows = m_params.value(QStringLiteral("matchList"))
+                                     .toString()
+                                     .split(QLatin1Char(';'), Qt::SkipEmptyParts);
+        if (rows.isEmpty())
+            return out;
+        const QStringList widths = listOf(m_params.value(QStringLiteral("matchBoxWidths")));
+        const QStringList heights = listOf(m_params.value(QStringLiteral("matchBoxHeights")));
+        const QStringList scaleXs = listOf(m_params.value(QStringLiteral("matchScaleXs")));
+        const QStringList scaleYs = listOf(m_params.value(QStringLiteral("matchScaleYs")));
+        const QStringList crosses = listOf(m_params.value(QStringLiteral("matchCrossAngles")));
+        for (int k = 0; k < rows.size(); ++k) {
+            const QStringList f = rows.at(k).split(QLatin1Char(','));
+            if (f.size() < 3)
+                continue;
+            MultiHit h;
+            h.row = f[0].toDouble();
+            h.col = f[1].toDouble();
+            h.score = f[2].toDouble();
+            // 首实例低于阈值时也会留在 matchList（单模板路径的既有行为），合并时要滤掉。
+            if (h.score < multiMinScore)
+                continue;
+            h.angle = f.size() >= 5 ? f[3].toDouble() : 0.0;
+            h.scaleX = k < scaleXs.size() ? scaleXs.at(k).toDouble()
+                                          : (f.size() >= 5 ? f[4].toDouble() : 1.0);
+            h.scaleY = k < scaleYs.size() ? scaleYs.at(k).toDouble() : h.scaleX;
+            h.cross = k < crosses.size() ? crosses.at(k).toDouble() : 0.0;
+            h.pointRow = f.size() >= 7 ? f[5].toDouble() : h.row;
+            h.pointCol = f.size() >= 7 ? f[6].toDouble() : h.col;
+            h.width = k < widths.size() ? widths.at(k).toDouble() : 0.0;
+            h.height = k < heights.size() ? heights.at(k).toDouble() : 0.0;
+            h.templateIndex = tmplIdx;
+            h.templateName = tmplName;
+            out.append(h);
+        }
+        return out;
+    };
+
+    QVector<MultiHit> allHits;
+    // 每个模板开始前清空逐目标结果：runSingle 的早退路径（模板缺失/尺寸无效）不会写这些键，
+    // 不清就会把上一个模板的命中误算到本模板名下。
+    auto resetMatchFields = [&]() {
+        static const char *keys[] = {
+            "matchList", "matchBoxCenters", "matchBoxCenterXs", "matchBoxCenterYs",
+            "matchBoxWidths", "matchBoxHeights", "matchBoxAngles", "matchPoints",
+            "matchPointXs", "matchPointYs", "matchScales", "matchScaleXs", "matchScaleYs",
+            "matchCrossAngles", "matchScores", "matchContourPointXs", "matchContourPointYs",
+            "matchTemplateName"};
+        for (const char *key : keys)
+            m_params[QString::fromLatin1(key)] = QString();
+        m_params[QStringLiteral("matchCount")] = 0;
+        m_params[QStringLiteral("matchCountBeforeOverlap")] = 0;
+        m_params[QStringLiteral("matchStatus")] = 0;
+        m_params[QStringLiteral("matchRow")] = 0.0;
+        m_params[QStringLiteral("matchCol")] = 0.0;
+        m_params[QStringLiteral("matchScore")] = 0.0;
+        m_params[QStringLiteral("matchAngle")] = 0.0;
+        m_params[QStringLiteral("matchScale")] = 1.0;
+        m_params[QStringLiteral("matchScaleX")] = 1.0;
+        m_params[QStringLiteral("matchScaleY")] = 1.0;
+        m_params[QStringLiteral("matchCrossAngle")] = 0.0;
+        m_params[QStringLiteral("matchPointRow")] = 0.0;
+        m_params[QStringLiteral("matchPointCol")] = 0.0;
+        m_params[QStringLiteral("matchContourCount")] = 0;
+        m_params[QStringLiteral("matchTemplateIndex")] = -1;
+    };
     double bestScore = -1e9;
     int bestIdx = -1;
     for (int i = 0; i < entries.size(); ++i) {
         m_params[QStringLiteral("templateIndex")] = i;
+        resetMatchFields();
         runSingle(autoSwitch);
         const double score = m_params.value(QStringLiteral("matchScore"), 0.0).toDouble();
         if (m_params.value(QStringLiteral("moduleStatus"), false).toBool() && score > bestScore) {
             bestScore = score;
             bestIdx = i;
         }
+        // moduleStatus 可能因角度/尺度判断失败而为假，但目标本身有效；
+        // 最终判定在合并后的结果上重做，所以这里按分数阈值收命中。
+        allHits += captureHits(i, entries.at(i).name);
     }
 
     if (bestIdx >= 0) {
         m_params[QStringLiteral("templateIndex")] = bestIdx;
-        runSingle(autoSwitch);            // 用命中模板再跑一次：结果/叠加/输出对象一次成型
-        m_params[QStringLiteral("matchTemplateIndex")] = bestIdx;
-        m_params[QStringLiteral("matchTemplateName")] = entries.at(bestIdx).name;
-    } else {
-        m_params[QStringLiteral("templateIndex")] = savedIndex;
-        m_params[QStringLiteral("matchTemplateIndex")] = -1;
-        m_params[QStringLiteral("matchTemplateName")] = QString();
-        m_params[QStringLiteral("moduleStatus")] = false;   // 失败原因保留最后一次模板的 lastError
+        resetMatchFields();
+        runSingle(autoSwitch);   // 最优模板重跑：主结果/掩膜/轮廓以它为基面
+        QVector<MultiHit> merged;
+        for (const MultiHit &h : allHits) {
+            if (h.templateIndex != bestIdx)   // 最优模板的旧捕获由重跑结果替代
+                merged.append(h);
+        }
+        merged += captureHits(bestIdx, entries.at(bestIdx).name);
+        const int beforeMultiOverlap = merged.size();
+
+        // VM「多模板重叠率」：不同模板命中的目标重叠率超过阈值时只保留高分者。
+        // 同模板内的重叠已由「最大重叠率」在 runSingle 内处理。
+        const double multiOverlap =
+            qBound(0, m_params.value(QStringLiteral("multiTemplateOverlap"), 50).toInt(), 100)
+            / 100.0;
+        if (multiOverlap < 1.0 && merged.size() > 1) {
+            std::stable_sort(merged.begin(), merged.end(),
+                             [](const MultiHit &a, const MultiHit &b) { return a.score > b.score; });
+            QVector<MultiHit> kept;
+            for (const MultiHit &h : merged) {
+                bool drop = false;
+                for (const MultiHit &k : kept) {
+                    if (k.templateIndex == h.templateIndex)
+                        continue;
+                    const double hw = qMax(4.0, h.width);
+                    const double hh = qMax(4.0, h.height);
+                    const double kw = qMax(4.0, k.width);
+                    const double kh = qMax(4.0, k.height);
+                    const double interW = qMax(0.0, (hw + kw) * 0.5 - qAbs(h.col - k.col));
+                    const double interH = qMax(0.0, (hh + kh) * 0.5 - qAbs(h.row - k.row));
+                    const double inter = interW * interH;
+                    const double minArea = qMin(hw * hh, kw * kh);
+                    if (minArea > 1.0 && inter / minArea > multiOverlap) {
+                        drop = true;
+                        break;
+                    }
+                }
+                if (!drop)
+                    kept.append(h);
+            }
+            merged = kept;
+        }
+
+        // 排序类型（与单模板结果同口径）
+        const int sortType = qBound(0, m_params.value(QStringLiteral("sortType"), 0).toInt(), 5);
+        std::stable_sort(merged.begin(), merged.end(),
+                         [sortType](const MultiHit &a, const MultiHit &b) {
+                             switch (sortType) {
+                             case 1: return a.angle > b.angle;
+                             case 2: return a.col < b.col;
+                             case 3: return a.row < b.row;
+                             case 4: return a.col != b.col ? a.col < b.col : a.row < b.row;
+                             case 5: return a.row != b.row ? a.row < b.row : a.col < b.col;
+                             default: return a.score > b.score;
+                             }
+                         });
+        // VM「最大匹配个数」：合并后的总数也要按上限截断。
+        const int maxMatches =
+            qBound(1, m_params.value(QStringLiteral("maxMatches"), 1).toInt(), 1000);
+        if (merged.size() > maxMatches)
+            merged.resize(maxMatches);
+
+        if (!merged.isEmpty()) {
+            QStringList matchList, centers, centerXs, centerYs, widths, heights, angles;
+            QStringList points, pointXs, pointYs, scales, scaleXs, scaleYs, scores, crosses;
+            for (const MultiHit &h : merged) {
+                matchList << QStringLiteral("%1,%2,%3,%4,%5,%6,%7")
+                                 .arg(h.row, 0, 'f', 1)
+                                 .arg(h.col, 0, 'f', 1)
+                                 .arg(h.score, 0, 'f', 3)
+                                 .arg(h.angle, 0, 'f', 2)
+                                 .arg(h.scaleX, 0, 'f', 4)
+                                 .arg(h.pointRow, 0, 'f', 1)
+                                 .arg(h.pointCol, 0, 'f', 1);
+                centers << QStringLiteral("%1,%2")
+                               .arg(h.col, 0, 'f', 2).arg(h.row, 0, 'f', 2);
+                centerXs << QString::number(h.col, 'f', 2);
+                centerYs << QString::number(h.row, 'f', 2);
+                widths << QString::number(h.width, 'f', 2);
+                heights << QString::number(h.height, 'f', 2);
+                angles << QString::number(h.angle, 'f', 2);
+                points << QStringLiteral("%1,%2")
+                              .arg(h.pointCol, 0, 'f', 2).arg(h.pointRow, 0, 'f', 2);
+                pointXs << QString::number(h.pointCol, 'f', 2);
+                pointYs << QString::number(h.pointRow, 'f', 2);
+                scales << QString::number(h.scaleX, 'f', 4);
+                scaleXs << QString::number(h.scaleX, 'f', 4);
+                scaleYs << QString::number(h.scaleY, 'f', 4);
+                scores << QString::number(h.score, 'f', 4);
+                crosses << QString::number(h.cross, 'f', 2);
+            }
+            m_params[QStringLiteral("matchList")] = matchList.join(QLatin1Char(';'));
+            m_params[QStringLiteral("matchBoxCenters")] = centers.join(QLatin1Char(';'));
+            m_params[QStringLiteral("matchBoxCenterXs")] = centerXs.join(QLatin1Char(','));
+            m_params[QStringLiteral("matchBoxCenterYs")] = centerYs.join(QLatin1Char(','));
+            m_params[QStringLiteral("matchBoxWidths")] = widths.join(QLatin1Char(','));
+            m_params[QStringLiteral("matchBoxHeights")] = heights.join(QLatin1Char(','));
+            m_params[QStringLiteral("matchBoxAngles")] = angles.join(QLatin1Char(','));
+            m_params[QStringLiteral("matchPoints")] = points.join(QLatin1Char(';'));
+            m_params[QStringLiteral("matchPointXs")] = pointXs.join(QLatin1Char(','));
+            m_params[QStringLiteral("matchPointYs")] = pointYs.join(QLatin1Char(','));
+            m_params[QStringLiteral("matchScales")] = scales.join(QLatin1Char(','));
+            m_params[QStringLiteral("matchScaleXs")] = scaleXs.join(QLatin1Char(','));
+            m_params[QStringLiteral("matchScaleYs")] = scaleYs.join(QLatin1Char(','));
+            m_params[QStringLiteral("matchCrossAngles")] = crosses.join(QLatin1Char(','));
+            m_params[QStringLiteral("matchScores")] = scores.join(QLatin1Char(','));
+            m_params[QStringLiteral("matchCount")] = merged.size();
+            m_params[QStringLiteral("matchCountBeforeOverlap")] = beforeMultiOverlap;
+
+            const MultiHit &mainHit = merged.first();
+            m_params[QStringLiteral("matchRow")] = mainHit.row;
+            m_params[QStringLiteral("matchCol")] = mainHit.col;
+            m_params[QStringLiteral("matchScore")] = mainHit.score;
+            m_params[QStringLiteral("matchAngle")] = mainHit.angle;
+            m_params[QStringLiteral("matchScale")] = mainHit.scaleX;
+            m_params[QStringLiteral("matchScaleX")] = mainHit.scaleX;
+            m_params[QStringLiteral("matchScaleY")] = mainHit.scaleY;
+            m_params[QStringLiteral("matchCrossAngle")] = mainHit.cross;
+            m_params[QStringLiteral("matchPointRow")] = mainHit.pointRow;
+            m_params[QStringLiteral("matchPointCol")] = mainHit.pointCol;
+            m_params[QStringLiteral("matchTemplateIndex")] = mainHit.templateIndex;
+            m_params[QStringLiteral("matchTemplateName")] = mainHit.templateName;
+            m_params[QStringLiteral("matchStatus")] = 1;
+
+            // 主结果对象按合并后的第一目标重建；掩膜等具名子结果从重跑对象上原样搬过来。
+            const QSharedPointer<DataObject> baseObj = getOutputData(1);
+            QVector<MeasureResult> baseResults;
+            QVector<QPair<QString, QSharedPointer<DataObject>>> baseAttached;
+            if (baseObj) {
+                baseResults = baseObj->measureResults();
+                baseAttached = baseObj->attachedResults();
+            }
+            double baseRow = 1e18, baseCol = 1e18;
+            if (!baseResults.isEmpty() && baseResults.first().extraValues.size() >= 2) {
+                baseRow = baseResults.first().extraValues[0];
+                baseCol = baseResults.first().extraValues[1];
+            }
+            const bool contourMatchesMain =
+                mainHit.templateIndex == bestIdx && qAbs(mainHit.row - baseRow) < 0.5
+                && qAbs(mainHit.col - baseCol) < 0.5;
+            MeasureResult mainRes;
+            mainRes.type = QStringLiteral("template");
+            mainRes.valueName = QStringLiteral("匹配得分");
+            mainRes.valid = (mainHit.score >= multiMinScore);
+            mainRes.value = mainHit.score;
+            mainRes.point1 = QPointF(mainHit.col, mainHit.row);
+            mainRes.extraValues = QVector<double>(
+                {mainHit.row, mainHit.col, mainHit.score, mainHit.angle, mainHit.scaleX,
+                 mainHit.width, mainHit.height, mainHit.pointRow, mainHit.pointCol,
+                 mainHit.scaleX, mainHit.scaleY, mainHit.cross});
+            auto mergedObj = QSharedPointer<DataObject>::create();
+            mergedObj->setMeasureResult(mainRes);
+            // 轮廓点集只代表「重跑模板 + 重跑主命中」；合并后主目标变了就作废。
+            if (contourMatchesMain) {
+                for (const MeasureResult &r : baseResults) {
+                    if (r.type == QLatin1String("contour"))
+                        mergedObj->attachMeasureResult(r);
+                }
+            }
+            for (const auto &att : baseAttached)
+                mergedObj->attachResult(att.first, att.second);
+            setOutputData(1, mergedObj);
+
+            // 结果判断基于合并后的 count/主结果重新跑一遍
+            bool judgedOk = (mainHit.score >= multiMinScore);
+            if (judgedOk) {
+                QString reason;
+                if (!resultJudgmentOk(&reason)) {
+                    judgedOk = false;
+                    if (!reason.isEmpty())
+                        m_params[QStringLiteral("lastError")] = reason;
+                } else {
+                    m_params[QStringLiteral("lastError")] = QString();
+                }
+            }
+            m_params[QStringLiteral("moduleStatus")] = judgedOk;
+            setResultNg(!judgedOk);
+            if (!contourMatchesMain) {
+                m_params[QStringLiteral("matchContourCount")] = 0;
+                m_params[QStringLiteral("matchContourPointXs")] = QString();
+                m_params[QStringLiteral("matchContourPointYs")] = QString();
+            }
+            return;
+        }
     }
+
+    // 全部模板都没命中
+    m_params[QStringLiteral("templateIndex")] = savedIndex;
+    m_params[QStringLiteral("matchTemplateIndex")] = -1;
+    m_params[QStringLiteral("matchTemplateName")] = QString();
+    m_params[QStringLiteral("moduleStatus")] = false;   // 失败原因保留最后一次模板的 lastError
 }
 
 void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)

@@ -76,6 +76,8 @@ private slots:
     void templateMatchUsesActiveTemplateFromList();
     // 多模板同时匹配：画布只有 B 时，开关打开后必须自动选中模板 B
     void templateMatchAllTemplatesPicksBest();
+    // 全部搜索模式：不同模板各自的目标必须合并输出；多模板重叠率控制重叠目标去留
+    void templateAllTemplatesMergesPerTarget();
     // 多边形/圆形模板：必须能抠出包围盒（此前多边形直接返回空 → 建模板必失败）
     void templateShapeExtractionSupportsPolygonAndCircle();
     // 魔术棒取形：泛洪出的多边形必须贴合目标区域
@@ -1698,6 +1700,118 @@ void FeatureMatchTest::templateMatchAllTemplatesPicksBest()
                             .arg(cxB).arg(cyB).arg(pcol).arg(prow)));
     QCOMPARE(sx, 1.0);
     QCOMPARE(sy, 1.0);
+}
+
+// P0-2（VM「全部搜索模式」）：逐个使用所有模板匹配并合并结果。
+// ① 两个不同尺寸的目标分别对应模板 A/B → 必须同时输出两个目标（旧实现只留最高分模板）；
+// ② 同一目标被两个模板同时命中 → 多模板重叠率生效：50 时只留高分，100 时都输出。
+void FeatureMatchTest::templateAllTemplatesMergesPerTarget()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const cv::Mat patchA = makePatch();                  // 128×128 高纹理
+    cv::Mat patchB(64, 64, CV_8UC1, cv::Scalar(20));
+    cv::circle(patchB, cv::Point(32, 32), 26, cv::Scalar(255), 5);
+    cv::line(patchB, cv::Point(6, 6), cv::Point(58, 58), cv::Scalar(220), 3);
+
+    const QString pathA = dir.filePath(QStringLiteral("a.png"));
+    const QString pathB = dir.filePath(QStringLiteral("b.png"));
+    QVERIFY(cv::imwrite(pathA.toStdString(), patchA));
+    QVERIFY(cv::imwrite(pathB.toStdString(), patchB));
+
+    cv::Mat canvas(400, 700, CV_8UC1, cv::Scalar(kCanvasBackground));
+    const cv::Rect boxA(100, 120, patchA.cols, patchA.rows);
+    const cv::Rect boxB(480, 150, patchB.cols, patchB.rows);
+    patchA.copyTo(canvas(boxA));
+    patchB.copyTo(canvas(boxB));
+    const double cxA = boxA.x + boxA.width / 2.0, cyA = boxA.y + boxA.height / 2.0;
+    const double cxB = boxB.x + boxB.width / 2.0, cyB = boxB.y + boxB.height / 2.0;
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.7);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("scaleMin"), 1.0);
+    node.setParam(QStringLiteral("scaleMax"), 1.0);
+    node.setParam(QStringLiteral("maxMatches"), 10);
+    node.setParam(QStringLiteral("maxOverlap"), 100);       // 模板内不做重叠抑制，便于观察
+    node.setParam(QStringLiteral("multiTemplateOverlap"), 50);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("searchRegionCol"), 0);
+    node.setParam(QStringLiteral("searchRegionRow"), 0);
+    node.setParam(QStringLiteral("searchRegionWidth"), canvas.cols);
+    node.setParam(QStringLiteral("searchRegionHeight"), canvas.rows);
+    node.setParam(QStringLiteral("matchAllTemplates"), true);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+
+    TemplateEntry ea;
+    ea.name = QStringLiteral("A");
+    ea.imagePath = pathA;
+    TemplateEntry eb;
+    eb.name = QStringLiteral("B");
+    eb.imagePath = pathB;
+    node.setTemplates({ea, eb});
+    node.setActiveTemplateIndex(0);
+
+    // ① 两类目标合并输出
+    node.run(false);
+    const int count = node.getParam(QStringLiteral("matchCount")).toInt();
+    const QStringList centers = node.getParam(QStringLiteral("matchBoxCenters"))
+                                    .toString()
+                                    .split(QLatin1Char(';'), Qt::SkipEmptyParts);
+    const QStringList widths = node.getParam(QStringLiteral("matchBoxWidths"))
+                                   .toString()
+                                   .split(QLatin1Char(','), Qt::SkipEmptyParts);
+    qInfo("multi-merge: count=%d centers=%s widths=%s", count,
+          qPrintable(centers.join(QStringLiteral(" | "))),
+          qPrintable(widths.join(QLatin1Char(','))));
+    QCOMPARE(count, 2);
+    QCOMPARE(centers.size(), 2);
+    bool gotA = false, gotB = false;
+    for (int k = 0; k < centers.size(); ++k) {
+        const QStringList c = centers.at(k).split(QLatin1Char(','));
+        if (c.size() != 2)
+            continue;
+        const double col = c[0].toDouble();
+        const double row = c[1].toDouble();
+        const double w = widths.value(k).toDouble();
+        if (qAbs(col - cxA) <= 3.0 && qAbs(row - cyA) <= 3.0 && qAbs(w - 128.0) <= 2.0)
+            gotA = true;
+        if (qAbs(col - cxB) <= 3.0 && qAbs(row - cyB) <= 3.0 && qAbs(w - 64.0) <= 2.0)
+            gotB = true;
+    }
+    QVERIFY2(gotA && gotB,
+             qPrintable(QStringLiteral("应同时输出 A(128) 与 B(64) 两个目标：%1")
+                            .arg(centers.join(QStringLiteral(" | ")))));
+
+    // ② 两个模板都命中同一目标：重叠率 50 → 只留高分；100 → 都保留
+    cv::Mat sameCanvas(300, 400, CV_8UC1, cv::Scalar(kCanvasBackground));
+    const cv::Rect sameBox(140, 90, patchA.cols, patchA.rows);
+    patchA.copyTo(sameCanvas(sameBox));
+    cv::Mat cropB = patchA(cv::Rect(16, 16, 96, 96)).clone();   // A 的中央子块
+    const QString pathC = dir.filePath(QStringLiteral("c.png"));
+    QVERIFY(cv::imwrite(pathC.toStdString(), cropB));
+    TemplateEntry ec;
+    ec.name = QStringLiteral("C");
+    ec.imagePath = pathC;
+    node.setTemplates({ea, ec});
+    node.setActiveTemplateIndex(0);
+    node.setInputImage(OpencvUtil::matToHimage(sameCanvas));
+
+    node.setParam(QStringLiteral("multiTemplateOverlap"), 50);
+    node.run(false);
+    const int overlapCount = node.getParam(QStringLiteral("matchCount")).toInt();
+    node.setParam(QStringLiteral("multiTemplateOverlap"), 100);
+    node.run(false);
+    const int keepAllCount = node.getParam(QStringLiteral("matchCount")).toInt();
+    qInfo("multi-overlap: overlap=50 count=%d, overlap=100 count=%d", overlapCount,
+          keepAllCount);
+    QCOMPARE(overlapCount, 1);
+    QCOMPARE(keepAllCount, 2);
 }
 
 // 多边形/圆形模板的形状抠图：以前 Polygon/Circle 落到 roiAxisAlignedBounds 返回空，
