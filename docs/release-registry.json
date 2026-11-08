@@ -1090,6 +1090,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261107.2",
       "recorded_at": "2026-11-07",
       "recorded_note": "审核 commit 6980a05 后修复：RuntimeInterfaceView 单页自删 UAF、CalibrationBoard 格距下溢、profileWidth 越界冻结、禁用节点状态残留；结果表 UTF-8/Inf/历史页筛选；主题调色板上移 main.cpp；BrandHeader 高分屏 logo；i18n 盲区 12 处改 tr()+ts 8 条；dup_cn 共享定义与 EOL 205 重冻结"
+    },
+    {
+      "tag": "rc-20261108.1",
+      "commit": "405f5766056b962687bf7885b7cfbeb63897d239",
+      "exe_md5": "f398eb8d84e1e0703f69bb7d94b9ec19",
+      "exe_bytes": 11800064,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261108.1",
+      "recorded_at": "2026-11-08",
+      "recorded_note": "稳定性四批收口（参数归一化/Resize 像素封顶/卡尺 K 封顶/状态位原子化/queued 裸指针守卫）+ DeepOCR 引擎并发与 runtime 缓存键加固 + 免安装 HALCON 部署（启动自举 HALCONROOT、随包 dl 模型 214MB、部署自检校验 dl）+ 标定配置引导第一批"
     }
   ],
   "legacy_backfilled": [
