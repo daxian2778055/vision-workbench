@@ -1108,6 +1108,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261108.2",
       "recorded_at": "2026-11-08",
       "recorded_note": "打包瘦身版：HALCON 运行库由全量 61 个/587MB 改为白名单 8 个/157MB（移出 Qt5*MVTec、*xl 变体、hdevengine、hAcq*、hio*、软件 GL、hAI2*、hcanvas）；移除 opencv_world4130d.dll（debug 版 126MB）；包体积 1485MB->813MB、文件数 222->154；实测清空 HALCONROOT 后 71 PASS/0 FAIL 含 DeepOcrNode"
+    },
+    {
+      "tag": "rc-20261108.3",
+      "commit": "3490f1267b878bfa3a80f5a6d77631be77303eae",
+      "exe_md5": "052c106392a9d1a829328d6b2cb448e8",
+      "exe_bytes": 11797504,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261108.3",
+      "recorded_at": "2026-11-08",
+      "recorded_note": "算法层去 HALCON：图像加法/乘法/顶帽/底帽改 OpenCV（cv::add/multiply/subtract 饱和语义 + morphologyEx 逐次开闭运算，避开 in-place 与 iterations 两个坑）；HalconImageSourceNode 摘注册（采集统一 MVS）。此后 HALCON 算法只剩 DeepOCR 一条链。包 813MB/154 文件，免安装自检 71 PASS/0 FAIL/3 SKIP"
     }
   ],
   "legacy_backfilled": [
