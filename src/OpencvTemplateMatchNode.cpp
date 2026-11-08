@@ -468,7 +468,7 @@ void collectSearchValues(double mn, double mx, double step, int maxCount, QVecto
 
 OpencvTemplateMatchNode::OpencvTemplateMatchNode(QObject *parent) : HalconNode(parent, false)
 {
-    setName(QStringLiteral("模板匹配"));
+    setName(QStringLiteral("高精度匹配"));
     m_type = SHAPE_ANALYSIS;
 }
 
@@ -488,8 +488,8 @@ void OpencvTemplateMatchNode::init()
                           QStringLiteral("模板图像文件 (png/bmp/jpg)")),
         makeBoolParam(QStringLiteral("trainFromImage"), false,
                       QStringLiteral("从图像 ROI 训练并保存模板（训练落盘后自动取消勾选）")),
-        makeIntParam(QStringLiteral("method"), 1, 0, 2,
-                     QStringLiteral("匹配方法：0=归一化平方差，1=归一化相关系数，2=边缘梯度")),
+        makeIntParam(QStringLiteral("method"), 2, 0, 2,
+                     QStringLiteral("匹配方式：0=灰度匹配（平方差）1=灰度匹配（相关系数）2=高精度匹配（边缘梯度）")),
         makeIntParam(QStringLiteral("polarity"), 1, 0, 1,
                      QStringLiteral("是否考虑极性：1=考虑（默认），0=忽略（亮标/暗标反色也能找到）")),
         makeIntParam(QStringLiteral("maxMatches"), 1, 1, 1000,
@@ -1635,7 +1635,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 ? m_params.value(QStringLiteral("templatePath"), QString()).toString()
                 : active.imagePath).trimmed();
         const bool train = m_params.value(QStringLiteral("trainFromImage"), false).toBool();
-        const int methodIdx = m_params.value(QStringLiteral("method"), 1).toInt();
+        const int methodIdx = m_params.value(QStringLiteral("method"), 2).toInt();
         const double minScore = m_params.value(QStringLiteral("minScore"), 0.5).toDouble();
         const int method = (methodIdx == 0) ? cv::TM_SQDIFF_NORMED : cv::TM_CCOEFF_NORMED;
 

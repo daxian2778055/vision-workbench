@@ -28,6 +28,7 @@
 #include "OpencvUtil.h"
 #include "DataObject.h"
 #include "FlowScene.h"
+#include "NodeRegistry.h"
 #include "ImageDisplayController.h"   // OverlayShape + collectOverlayFromNode
 #include "TemplateConfigDialog.h"     // 魔术棒取形（纯函数）
 #include <opencv2/core.hpp>
@@ -147,6 +148,8 @@ private slots:
     void templateMaskRegionExcludesCandidates();
     // VM「位置修正」按信息/按点/按坐标：把检测区域搬到运行点再匹配
     void templatePositionCorrectionMovesSearchRegion();
+    // VM 模块分类：本节点=高精度匹配（默认 method=2），旧名「模板匹配」保留别名
+    void templateVmModuleIdentityMatchesHelp();
 };
 
 namespace {
@@ -3569,6 +3572,27 @@ void FeatureMatchTest::templatePositionCorrectionMovesSearchRegion()
              qPrintable(QStringLiteral("多边形区域没有搬到运行点：命中列 %1").arg(polyCol)));
 }
 
+// VM 4.4 模块分类：模板匹配节点的显示名/注册分类对齐「高精度匹配」，
+// method 默认 2（GOC 边缘梯度），旧名「模板匹配」保留为别名（拖放/搜索/老夹具兼容）。
+void FeatureMatchTest::templateVmModuleIdentityMatchesHelp()
+{
+    OpencvTemplateMatchNode node;
+    node.init();
+    QCOMPARE(node.name(), QStringLiteral("高精度匹配"));
+    QCOMPARE(node.getParam(QStringLiteral("method")).toInt(), 2);
+
+    registerAllNodes();
+    const NodeRegistration *reg =
+        NodeRegistry::instance().findById(QStringLiteral("OpencvTemplateMatchNode"));
+    QVERIFY2(reg != nullptr, "OpencvTemplateMatchNode 未注册");
+    QCOMPARE(reg->displayName, QStringLiteral("高精度匹配"));
+    QCOMPARE(reg->englishName, QStringLiteral("High Precision Match"));
+    QCOMPARE(reg->group, QStringLiteral("特征定位"));
+    QVERIFY2(reg->aliases.contains(QStringLiteral("模板匹配")),
+             "旧名「模板匹配」必须保留为别名");
+    QCOMPARE(NodeRegistry::instance().findByName(QStringLiteral("模板匹配")), reg);
+}
+
 // VM「特征尺度 / 最小链长」（官方定义：特征尺度越大特征点越稀疏；链长小于最小链长的特征链不保留）。
 //   ① 特征尺度 1 → 5：点数必须明显下降（稀疏化真的生效）；
 //   ② 孤立噪点（单像素）在最小链长 5 下被丢弃，长线保留。
@@ -4137,6 +4161,11 @@ void FeatureMatchTest::templateVmDefaultsMatchHelp()
     const ParamSpec scaleMode = specOf(QStringLiteral("scaleMode"));
     QVERIFY2(!scaleMode.name.isEmpty(), "未注册 scaleMode");
     QCOMPARE(scaleMode.defaultValue.toInt(), 1);
+
+    // VM 模块分类：本节点开箱=高精度匹配（GOC），不是灰度 NCC
+    const ParamSpec method = specOf(QStringLiteral("method"));
+    QVERIFY2(!method.name.isEmpty(), "未注册 method");
+    QCOMPARE(method.defaultValue.toInt(), 2);
 
     const ParamSpec angleMin = specOf(QStringLiteral("angleMin"));
     const ParamSpec angleMax = specOf(QStringLiteral("angleMax"));

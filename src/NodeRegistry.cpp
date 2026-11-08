@@ -216,7 +216,7 @@ void registerAllNodes()
             NodeBase::SHAPE_ANALYSIS, "\u51E0\u4F55\u6D4B\u91CF");
     VFP_REG(OpencvFitCircleNode,  "OpencvFitCircleNode",  "圆拟合", "Fit Circle",
             NodeBase::SHAPE_ANALYSIS, "\u51E0\u4F55\u6D4B\u91CF");
-    VFP_REG(OpencvTemplateMatchNode,"OpencvTemplateMatchNode", "模板匹配", "Template Match",
+    VFP_REG(OpencvTemplateMatchNode,"OpencvTemplateMatchNode", "高精度匹配", "High Precision Match",
             NodeBase::SHAPE_ANALYSIS, "\u7279\u5F81\u5B9A\u4F4D");
     VFP_REG(OpencvFeatureMatchNode, "OpencvFeatureMatchNode", "特征匹配", "Feature Match",
             NodeBase::SHAPE_ANALYSIS, "\u7279\u5F81\u5B9A\u4F4D");
@@ -456,7 +456,7 @@ void registerAllNodes()
     r.setDescription(QStringLiteral("OpencvFitCircleNode"),
                      QStringLiteral("由点集拟合圆（圆心/半径）"));
     r.setDescription(QStringLiteral("OpencvTemplateMatchNode"),
-                     QStringLiteral("灰度模板匹配（ROI 教学或模板文件）"));
+                     QStringLiteral("高精度模板匹配（GOC 边缘梯度，默认；可切灰度匹配）"));
     r.setDescription(QStringLiteral("OpencvFeatureMatchNode"),
                      QStringLiteral("ORB/SIFT 特征点匹配与目标定位"));
     r.setDescription(QStringLiteral("FeatureSearchNode"),
@@ -575,7 +575,8 @@ void registerAllNodes()
     r.addAliases(QStringLiteral("OpencvFitCircleNode"),
                  {QStringLiteral("OpenCV圆拟合"), QStringLiteral("OpenCV Fit Circle")});
     r.addAliases(QStringLiteral("OpencvTemplateMatchNode"),
-                 {QStringLiteral("OpenCV模板匹配"), QStringLiteral("OpenCV Template Match")});
+                 {QStringLiteral("模板匹配"), QStringLiteral("OpenCV模板匹配"),
+                  QStringLiteral("OpenCV Template Match"), QStringLiteral("Template Match")});
     r.addAliases(QStringLiteral("OpencvFeatureMatchNode"),
                  {QStringLiteral("OpenCV特征匹配"), QStringLiteral("OpenCV Feature Match")});
     r.addAliases(QStringLiteral("OpencvDefectNode"),
