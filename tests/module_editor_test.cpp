@@ -970,9 +970,11 @@ void ModuleEditorTest::testTemplateRoiInheritAndMaskUiWritesParams()
     auto *maskDraw = dlg.findChild<QRadioButton *>(QStringLiteral("maskDrawRadio"));
     auto *drawMask = dlg.findChild<QPushButton *>(QStringLiteral("maskRegionDrawButton"));
     auto *clearMask = dlg.findChild<QPushButton *>(QStringLiteral("maskRegionClearButton"));
+    auto *fixCombo = dlg.findChild<QComboBox *>(QStringLiteral("positionCorrectCombo"));
     QVERIFY2(createInherit && inheritParam, "缺少 ROI继承/继承方式 单选");
     QVERIFY2(maskInherit && maskDraw, "缺少 屏蔽区创建 单选");
     QVERIFY2(drawMask && clearMask, "缺少 屏蔽区 绘制/清除按钮");
+    QVERIFY2(fixCombo, "缺少 位置修正方式 下拉");
 
     createInherit->setChecked(true);
     QCOMPARE(node.getParam(QStringLiteral("roiSource")).toInt(), 1);
@@ -993,6 +995,12 @@ void ModuleEditorTest::testTemplateRoiInheritAndMaskUiWritesParams()
     drawMask->click();
     QCOMPARE(maskSpy.count(), 1);
     QCOMPARE(maskSpy.at(0).at(0).value<NodeBase *>(), static_cast<NodeBase *>(&node));
+
+    QCOMPARE(fixCombo->currentIndex(), 0);          // 默认不启用
+    fixCombo->setCurrentIndex(3);                   // 按坐标
+    QCOMPARE(node.getParam(QStringLiteral("positionCorrectMode")).toInt(), 3);
+    fixCombo->setCurrentIndex(1);                   // 按信息
+    QCOMPARE(node.getParam(QStringLiteral("positionCorrectMode")).toInt(), 1);
 }
 
 QTEST_MAIN(ModuleEditorTest)

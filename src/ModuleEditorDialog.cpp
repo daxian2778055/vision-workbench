@@ -1079,7 +1079,8 @@ void ModuleEditorDialog::rebuildVmTabs()
                 if (text.contains(QStringLiteral("最终搜索区域"))
                     || text == QStringLiteral("ROI区域类型") || text == QStringLiteral("ROI创建")
                     || text.startsWith(QStringLiteral("继承方式"))
-                    || text == QStringLiteral("屏蔽区创建")) {
+                    || text == QStringLiteral("屏蔽区创建")
+                    || text == QStringLiteral("位置修正方式")) {
                     // 只 hide() 的话 QFormLayout 仍保留整行空位（组框会拖出一截空白）；
                     // setRowVisible 才是真正折叠该行（Qt 6.4+）。
                     label->hide();
@@ -1343,13 +1344,19 @@ void ModuleEditorDialog::rebuildVmTabs()
         roiForm->addRow(QStringLiteral("模板掩膜"), excludeBtn);
         connect(excludeBtn, &QToolButton::clicked, this, &ModuleEditorDialog::onEditTemplateMask);
 
-        auto *fixSwitch = new QCheckBox(roiBox);
-        fixSwitch->setEnabled(false);
-        fixSwitch->setStyleSheet(QStringLiteral(
-            "QCheckBox::indicator { width:34px; height:18px; border-radius:9px; background:#C9C9C9; }"
-            "QCheckBox::indicator:checked { background:#E76900; }"));
-        fixSwitch->setToolTip(QStringLiteral("位置修正：由位置修正模块提供，当前版本尚未接入"));
-        roiForm->addRow(QStringLiteral("位置修正"), fixSwitch);
+        // VM「位置修正」：基准点 = 模板 ROI 中心/角度；运行点来自 Fixture（按信息）
+        // 或 positionRunX/Y/Angle/ScaleX/Y（按点可订阅、按坐标手填）；只作用于绘制的检测区域。
+        auto *fixCombo = new QComboBox(roiBox);
+        fixCombo->setObjectName(QStringLiteral("positionCorrectCombo"));
+        fixCombo->addItems({QStringLiteral("不启用"), QStringLiteral("按信息"),
+                            QStringLiteral("按点"), QStringLiteral("按坐标")});
+        fixCombo->setCurrentIndex(qBound(0, m_node->getParam(QStringLiteral("positionCorrectMode")).toInt(), 3));
+        fixCombo->setToolTip(QStringLiteral(
+            "按信息=订阅 Fixture 位姿；按点=订阅运行点参数；"
+            "按坐标=手填；基准点取模板 ROI 中心/角度"));
+        roiForm->addRow(QStringLiteral("位置修正"), fixCombo);
+        connect(fixCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                [write](int index) { write(QStringLiteral("positionCorrectMode"), index); });
 
         const int insertAt = basicLay->indexOf(roiAutoBox);
         basicLay->insertWidget(insertAt >= 0 ? insertAt : 0, roiBox);

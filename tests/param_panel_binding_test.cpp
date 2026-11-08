@@ -2508,8 +2508,10 @@ void ParamPanelBindingTest::testUnnamedFindChildSitesAreSingleCandidate()
     // → 522（2026-11-08）：模板匹配噪点批：considerNoise（净 +1）
     // → 530（2026-11-08）：模板匹配 ROI 继承/屏蔽区批：roiInheritMode + roiInheritX/Y/Width/
     //   Height/Angle（净 +6）、maskSource + maskRegionPolygon（净 +2）
-    QVERIFY2(fieldSlots == 530,
-             qPrintable(QStringLiteral("字段槽位分母从 530 变成 %1 ⇒ 本闸口径已漂移，"
+    // → 537（2026-11-08）：模板匹配位置修正批：positionCorrectMode + positionFixtureName +
+    //   positionRunX/Y/Angle/ScaleX/ScaleY（净 +7）
+    QVERIFY2(fieldSlots == 537,
+             qPrintable(QStringLiteral("字段槽位分母从 537 变成 %1 ⇒ 本闸口径已漂移，"
                                        "先核对面板改动再把基准一起改").arg(fieldSlots)));
     QVERIFY2(badSlots.isEmpty(),
              qPrintable(QStringLiteral("U5-MULTI: %1 个字段槽位里同类型候选不止一个 ⇒ 站点 1 的无名 "

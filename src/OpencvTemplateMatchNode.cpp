@@ -631,6 +631,24 @@ void OpencvTemplateMatchNode::init()
     // 多条屏蔽区用 ';' 分隔；每条 "x1,y1 x2,y2 ..."（>=3 点）。
     makeStringParam(QStringLiteral("maskRegionPolygon"), QString(),
                     QStringLiteral("屏蔽区多边形（多条用 ; 分隔）")),
+    // VM「位置修正」（基本参数·图形类型）：基准点 = 模板 ROI 中心/角度，
+    // 运行点来自 Fixture（按信息）或 5 个可订阅参数（按点/按坐标）。
+    makeEnumParam(QStringLiteral("positionCorrectMode"), 0,
+                  QStringList{QStringLiteral("不启用"), QStringLiteral("按信息"),
+                              QStringLiteral("按点"), QStringLiteral("按坐标")},
+                  QStringLiteral("位置修正方式")),
+    makeStringParam(QStringLiteral("positionFixtureName"), QString(),
+                    QStringLiteral("位置修正 Fixture 名（按信息）")),
+    makeDoubleParam(QStringLiteral("positionRunX"), 0.0, -100000.0, 100000.0,
+                    QStringLiteral("运行点X"), QStringLiteral("px")),
+    makeDoubleParam(QStringLiteral("positionRunY"), 0.0, -100000.0, 100000.0,
+                    QStringLiteral("运行点Y"), QStringLiteral("px")),
+    makeDoubleParam(QStringLiteral("positionRunAngle"), 0.0, -180.0, 180.0,
+                    QStringLiteral("运行点角度"), QStringLiteral("°")),
+    makeDoubleParam(QStringLiteral("positionRunScaleX"), 1.0, 0.1, 10.0,
+                    QStringLiteral("运行点X尺度")),
+    makeDoubleParam(QStringLiteral("positionRunScaleY"), 1.0, 0.1, 10.0,
+                    QStringLiteral("运行点Y尺度")),
 });
 
     // VM 4.4 口径分组（对应工具窗四个页签）。此前所有参数都落在默认的「参数」一组里，
@@ -646,6 +664,9 @@ void OpencvTemplateMatchNode::init()
                  || n == QLatin1String("roiSource")
                  || n == QLatin1String("maskSource")
                  || n == QLatin1String("maskRegionPolygon")
+                 || n == QLatin1String("positionFixtureName")
+                 || n.startsWith(QLatin1String("positionCorrect"))
+                 || n.startsWith(QLatin1String("positionRun"))
                  || n.startsWith(QLatin1String("roiInherit"))
                  || n.startsWith(QLatin1String("searchRegion")))
             s.group = QStringLiteral("ROI区域");
@@ -1375,7 +1396,8 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         //   按参数：用 roiInheritX/Y/Width/Height/Angle（可在「参数订阅」里逐项订阅上游）；
         // 数据面取（不依赖场景图）：上游结果就在输入对象的 measureResults 里。
         int inheritCol = 0, inheritRow = 0, inheritW = 0, inheritH = 0;
-        if (m_params.value(QStringLiteral("roiSource"), 0).toInt() == 1) {
+        const int roiSource = m_params.value(QStringLiteral("roiSource"), 0).toInt();
+        if (roiSource == 1) {
             const int inheritMode =
                 qBound(0, m_params.value(QStringLiteral("roiInheritMode"), 0).toInt(), 1);
             if (inheritMode == 1) {
@@ -1450,7 +1472,61 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             }
         }
 
+        // VM「位置修正」：基准点取模板 ROI 中心/角度，运行点取 Fixture（按信息）
+        // 或 positionRunX/Y/Angle/ScaleX/Y（按点、按坐标）。只作用于「绘制」的检测区域：
+        // 继承区域本就来自当前图，再叠加会双重修正。
+        bool positionCorrect = false;
+        double pcBaseX = 0.0, pcBaseY = 0.0, pcBaseAngle = 0.0;
+        double pcRunX = 0.0, pcRunY = 0.0, pcRunAngle = 0.0;
+        double pcScaleX = 1.0, pcScaleY = 1.0;
+        const int pcMode = qBound(0, m_params.value(QStringLiteral("positionCorrectMode"), 0).toInt(), 3);
+        if (pcMode != 0 && roiSource == 0) {
+            pcBaseX = m_params.value(QStringLiteral("roiCenterCol"), 0.0).toDouble();
+            pcBaseY = m_params.value(QStringLiteral("roiCenterRow"), 0.0).toDouble();
+            pcBaseAngle = m_params.value(QStringLiteral("roiAngle"), 0.0).toDouble();
+            if (pcMode == 1) {
+                const QString fxName =
+                    m_params.value(QStringLiteral("positionFixtureName")).toString().trimmed();
+                FlowScene *fs = flowSceneRef();
+                const FlowFixture fx =
+                    (fs && !fxName.isEmpty()) ? fs->fixture(fxName) : FlowFixture();
+                if (fxName.isEmpty() || !fx.hasPose) {
+                    m_params[QStringLiteral("lastError")] = QStringLiteral(
+                        "位置修正=按信息，但 Fixture「%1」不存在或无匹配位姿（先跑前序匹配写入 Fixture）")
+                        .arg(fxName);
+                    m_params[QStringLiteral("moduleStatus")] = false;
+                    m_outputImage = m_inputImage;
+                    setOutputData(1, QSharedPointer<DataObject>());
+                    return;
+                }
+                pcRunX = fx.poseCol;
+                pcRunY = fx.poseRow;
+                pcRunAngle = fx.poseAngle;
+                pcScaleX = pcScaleY = fx.poseScale;
+            } else {
+                pcRunX = m_params.value(QStringLiteral("positionRunX"), 0.0).toDouble();
+                pcRunY = m_params.value(QStringLiteral("positionRunY"), 0.0).toDouble();
+                pcRunAngle = m_params.value(QStringLiteral("positionRunAngle"), 0.0).toDouble();
+                pcScaleX = m_params.value(QStringLiteral("positionRunScaleX"), 1.0).toDouble();
+                pcScaleY = m_params.value(QStringLiteral("positionRunScaleY"), 1.0).toDouble();
+            }
+            pcScaleX = qBound(0.01, pcScaleX, 100.0);
+            pcScaleY = qBound(0.01, pcScaleY, 100.0);
+            positionCorrect = true;
+        }
+        // 把基准图坐标的点映射到运行图：先变尺、再旋转（角度差为转量）。
+        auto pcMapPoint = [&](const QPointF &p) {
+            const double rad =
+                (pcRunAngle - pcBaseAngle) * 3.14159265358979323846 / 180.0;
+            const double ca = std::cos(rad);
+            const double sa = std::sin(rad);
+            const double dx = (p.x() - pcBaseX) * pcScaleX;
+            const double dy = (p.y() - pcBaseY) * pcScaleY;
+            return QPointF(pcRunX + ca * dx - sa * dy, pcRunY + sa * dx + ca * dy);
+        };
+
         cv::Rect searchRect(0, 0, gray.cols, gray.rows);
+        bool explicitSearchRect = false;
         {
             int rc = m_params.value(QStringLiteral("searchRegionCol"), 0).toInt();
             int rr = m_params.value(QStringLiteral("searchRegionRow"), 0).toInt();
@@ -1463,6 +1539,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 rh = inheritH;
             }
             if (rw > 2 && rh > 2) {
+                explicitSearchRect = true;
                 searchRect = cv::Rect(qBound(0, rc, gray.cols - 1),
                                      qBound(0, rr, gray.rows - 1),
                                      qMin(rw, gray.cols),
@@ -1471,6 +1548,39 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 if (searchRect.width > 2 && searchRect.height > 2)
                     gray = gray(searchRect);
             }
+        }
+
+        // 位置修正（矩形检测区域）：把四个角变换到运行点，取轴对齐外接框。
+        const QString polyTextPc =
+            m_params.value(QStringLiteral("searchRegionPolygon")).toString().trimmed();
+        if (positionCorrect && explicitSearchRect && polyTextPc.isEmpty()) {
+            const double x0 = searchRect.x, y0 = searchRect.y;
+            const double x1 = x0 + searchRect.width, y1 = y0 + searchRect.height;
+            const QPointF corners[4] = {pcMapPoint(QPointF(x0, y0)),
+                                        pcMapPoint(QPointF(x1, y0)),
+                                        pcMapPoint(QPointF(x1, y1)),
+                                        pcMapPoint(QPointF(x0, y1))};
+            double bx0 = 1e18, bx1 = -1e18, by0 = 1e18, by1 = -1e18;
+            for (const QPointF &c : corners) {
+                bx0 = qMin(bx0, c.x());
+                bx1 = qMax(bx1, c.x());
+                by0 = qMin(by0, c.y());
+                by1 = qMax(by1, c.y());
+            }
+            searchRect = cv::Rect(int(std::floor(bx0)), int(std::floor(by0)),
+                                  qMax(1, int(std::ceil(bx1 - bx0))),
+                                  qMax(1, int(std::ceil(by1 - by0))))
+                         & cv::Rect(0, 0, grayFull.cols, grayFull.rows);
+            if (searchRect.width > 2 && searchRect.height > 2)
+                gray = grayFull(searchRect);
+            else
+                gray = cv::Mat();
+        }
+        // 位置修正 + 多边形：多边形坐标可能被搬到原矩形区域之外，
+        // 因此先回到全图再裁。
+        if (positionCorrect && !polyTextPc.isEmpty()) {
+            searchRect = cv::Rect(0, 0, grayFull.cols, grayFull.rows);
+            gray = grayFull;
         }
 
         // 多边形搜索区域（r19）："x1,y1 x2,y2 ..."；>=3 点生效，优先于矩形
@@ -1485,8 +1595,13 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                     bool ok1 = false, ok2 = false;
                     const double x = xy[0].toDouble(&ok1);
                     const double y = xy[1].toDouble(&ok2);
-                    if (ok1 && ok2)
-                        searchPoly.push_back(cv::Point(int(x) - searchRect.x, int(y) - searchRect.y));
+                    if (ok1 && ok2) {
+                        QPointF pp(x, y);
+                        if (positionCorrect)
+                            pp = pcMapPoint(pp);
+                        searchPoly.push_back(cv::Point(int(pp.x()) - searchRect.x,
+                                                       int(pp.y()) - searchRect.y));
+                    }
                 }
             }
             if (searchPoly.size() >= 3) {

@@ -27,6 +27,7 @@
 #include "TemplateMatchNode.h"
 #include "OpencvUtil.h"
 #include "DataObject.h"
+#include "FlowScene.h"
 #include "ImageDisplayController.h"   // OverlayShape + collectOverlayFromNode
 #include "TemplateConfigDialog.h"     // 魔术棒取形（纯函数）
 #include <opencv2/core.hpp>
@@ -144,6 +145,8 @@ private slots:
     void templateRoiInheritByParamsControlsSearchRegion();
     // VM「屏蔽区创建=绘制/继承」：屏蔽区内的候选不检测（绘制多边形 / 订阅掩膜图）
     void templateMaskRegionExcludesCandidates();
+    // VM「位置修正」按信息/按点/按坐标：把检测区域搬到运行点再匹配
+    void templatePositionCorrectionMovesSearchRegion();
 };
 
 namespace {
@@ -3448,6 +3451,122 @@ void FeatureMatchTest::templateMaskRegionExcludesCandidates()
     QCOMPARE(inheritCount, 1);
     QVERIFY2(qAbs(inheritCol - (left.x + kTemplateSize / 2.0)) <= 3.0,
              qPrintable(QStringLiteral("继承屏蔽右侧后应只剩左侧，实际命中列 %1").arg(inheritCol)));
+}
+
+// VM「位置修正」（基本参数·图形类型）：基准点 = 模板 ROI 中心/角度，运行点来自
+// Fixture（按信息）或 5 个可订阅参数（按点/按坐标）；启用后把检测区域搬到运行点。
+// 画布：模板在基准位置 (150,150)，工件实际在 (414,314)（中心）；
+// 基准检测区域只盖住基准位置 → 不修正时找不到，修正后命中实际位置。
+void FeatureMatchTest::templatePositionCorrectionMovesSearchRegion()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const cv::Mat patch = makePatch();
+    const QString tpl = dir.filePath(QStringLiteral("position-correct.png"));
+    QVERIFY(cv::imwrite(tpl.toStdString(), patch));
+
+    cv::Mat canvas(600, 600, CV_8UC1, cv::Scalar(kCanvasBackground));
+    const cv::Rect target(350, 250, kTemplateSize, kTemplateSize);
+    patch.copyTo(canvas(target));
+    const double targetCx = target.x + kTemplateSize / 2.0;
+    const double targetCy = target.y + kTemplateSize / 2.0;
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.5);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("scaleMin"), 1.0);
+    node.setParam(QStringLiteral("scaleMax"), 1.0);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("templatePath"), tpl);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+    // 基准点 = 模板 ROI 中心（教学位置）
+    node.setParam(QStringLiteral("roiCenterCol"), 150.0);
+    node.setParam(QStringLiteral("roiCenterRow"), 150.0);
+    node.setParam(QStringLiteral("roiWidth"), kTemplateSize);
+    node.setParam(QStringLiteral("roiHeight"), kTemplateSize);
+    node.setParam(QStringLiteral("roiAngle"), 0.0);
+    // 基准检测区域：只覆盖基准位置
+    node.setParam(QStringLiteral("searchRegionCol"), 70);
+    node.setParam(QStringLiteral("searchRegionRow"), 70);
+    node.setParam(QStringLiteral("searchRegionWidth"), 160);
+    node.setParam(QStringLiteral("searchRegionHeight"), 160);
+
+    // ① 不启用：检测区域里没有工件
+    node.run(false);
+    const int offStatus = node.getParam(QStringLiteral("matchStatus")).toInt();
+    const bool offModule = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    qInfo("position-correct: off status=%d module=%d", offStatus, int(offModule));
+    QCOMPARE(offStatus, 0);
+    QCOMPARE(offModule, false);
+
+    // ② 按坐标：运行点=实际工件中心 → 检测区域搬到 (334,234)，命中
+    node.setParam(QStringLiteral("positionCorrectMode"), 3);
+    node.setParam(QStringLiteral("positionRunX"), targetCx);
+    node.setParam(QStringLiteral("positionRunY"), targetCy);
+    node.setParam(QStringLiteral("positionRunAngle"), 0.0);
+    node.setParam(QStringLiteral("positionRunScaleX"), 1.0);
+    node.setParam(QStringLiteral("positionRunScaleY"), 1.0);
+    node.run(false);
+    const double col = node.getParam(QStringLiteral("matchCol")).toDouble();
+    const double row = node.getParam(QStringLiteral("matchRow")).toDouble();
+    const double scx = node.getParam(QStringLiteral("searchCenterX")).toDouble();
+    const double scy = node.getParam(QStringLiteral("searchCenterY")).toDouble();
+    qInfo("position-correct: by-coord hit=(%.1f,%.1f) searchCenter=(%.1f,%.1f)", col, row, scx,
+          scy);
+    QVERIFY2(node.getParam(QStringLiteral("moduleStatus")).toBool(), "按坐标修正后应命中");
+    QVERIFY2(qAbs(col - targetCx) <= 3.0 && qAbs(row - targetCy) <= 3.0,
+             qPrintable(QStringLiteral("按坐标修正命中了 (%1,%2)，期望 (%3,%4)")
+                            .arg(col).arg(row).arg(targetCx).arg(targetCy)));
+    QVERIFY2(qAbs(scx - targetCx) <= 1.0 && qAbs(scy - targetCy) <= 1.0,
+             qPrintable(QStringLiteral("检测区域没有搬到运行点：中心 (%1,%2)").arg(scx).arg(scy)));
+
+    // ③ 按点：与按坐标同一条消费路径（按点在「参数订阅」里喂运行点）
+    node.setParam(QStringLiteral("positionCorrectMode"), 2);
+    node.run(false);
+    qInfo("position-correct: by-point status=%d col=%.1f",
+          node.getParam(QStringLiteral("matchStatus")).toInt(),
+          node.getParam(QStringLiteral("matchCol")).toDouble());
+    QVERIFY2(node.getParam(QStringLiteral("moduleStatus")).toBool(), "按点修正后应命中");
+
+    // ④ 按信息：Fixture 位姿即运行点
+    FlowScene scene;
+    scene.setFixturePose(QStringLiteral("fix-pos"), targetCy, targetCx, 0.0, 1.0);
+    node.setFlowSceneRef(&scene);
+    node.setParam(QStringLiteral("positionCorrectMode"), 1);
+    node.setParam(QStringLiteral("positionFixtureName"), QStringLiteral("fix-pos"));
+    node.run(false);
+    qInfo("position-correct: by-fixture status=%d col=%.1f",
+          node.getParam(QStringLiteral("matchStatus")).toInt(),
+          node.getParam(QStringLiteral("matchCol")).toDouble());
+    QVERIFY2(node.getParam(QStringLiteral("moduleStatus")).toBool(), "按信息修正后应命中");
+
+    // ⑤ 声明了按信息却没有可用 Fixture → 必须判红并给出原因，不能静默按未修正区域跑
+    node.setParam(QStringLiteral("positionFixtureName"), QStringLiteral("missing-fix"));
+    node.run(false);
+    const QString why = node.getParam(QStringLiteral("lastError")).toString();
+    qInfo("position-correct: missing-fixture module=%d why=%s",
+          int(node.getParam(QStringLiteral("moduleStatus")).toBool()), qPrintable(why));
+    QCOMPARE(node.getParam(QStringLiteral("moduleStatus")).toBool(), false);
+    QVERIFY2(why.contains(QStringLiteral("位置修正")), "缺少 Fixture 时必须给出可读原因");
+
+    // ⑥ 多边形检测区域同样要随位置修正搬移（不是只搬矩形）
+    node.setParam(QStringLiteral("positionCorrectMode"), 3);
+    node.setParam(QStringLiteral("positionFixtureName"), QString());
+    node.setParam(QStringLiteral("searchRegionWidth"), 0);
+    node.setParam(QStringLiteral("searchRegionHeight"), 0);
+    node.setParam(QStringLiteral("searchRegionPolygon"),
+                  QStringLiteral("70,70 230,70 230,230 70,230"));
+    node.run(false);
+    const double polyCol = node.getParam(QStringLiteral("matchCol")).toDouble();
+    qInfo("position-correct: polygon status=%d col=%.1f",
+          node.getParam(QStringLiteral("matchStatus")).toInt(), polyCol);
+    QVERIFY2(node.getParam(QStringLiteral("moduleStatus")).toBool(), "多边形区域修正后应命中");
+    QVERIFY2(qAbs(polyCol - targetCx) <= 3.0,
+             qPrintable(QStringLiteral("多边形区域没有搬到运行点：命中列 %1").arg(polyCol)));
 }
 
 // VM「特征尺度 / 最小链长」（官方定义：特征尺度越大特征点越稀疏；链长小于最小链长的特征链不保留）。
