@@ -116,6 +116,7 @@ private:
     bool m_wandAppend = false;     ///< 魔术棒+：取到的区域追加到现有形状
     bool m_anchorPickMode = false; ///< 匹配中心取点：图上单击设锚点
     bool m_eraseMode = false;      ///< 擦除轮廓点：图上单击擦掉该区域特征点
+    int m_eraseRadius = 20;        ///< 橡皮擦半径（VM：工具按钮右下角三角弹出滑块可调）
     QVector<RoiShape> m_erases;    ///< 擦除区域（圆）
 
     RoiShape m_shape;              ///< 主形状（=m_shapes.first()，老逻辑兼容）

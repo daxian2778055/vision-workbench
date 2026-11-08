@@ -28,9 +28,12 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMessageBox>
+#include <QMenu>
 #include <QPushButton>
+#include <QSlider>
 #include <QSpinBox>
 #include <QVBoxLayout>
+#include <QWidgetAction>
 #include <cmath>
 
 #include <opencv2/imgcodecs.hpp>
@@ -249,7 +252,7 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     auto *scissorsBtn = new QPushButton();
     auto *maskModeBtn = new QPushButton();
     maskModeBtn->setCheckable(true);
-    auto *eraseBtn = new QPushButton();
+    auto *eraseBtn = new QToolButton();
     makeToolButton(shapeRectBtn, QStringLiteral("rect"), QStringLiteral("矩形"));
     makeToolButton(shapePolyBtn, QStringLiteral("polygon"), QStringLiteral("多边形"));
     makeToolButton(shapeCircleBtn, QStringLiteral("circle"), QStringLiteral("圆形"));
@@ -261,7 +264,46 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     makeToolButton(splitBtn, QStringLiteral("scissors"), QStringLiteral("分割"));
     makeToolButton(scissorsBtn, QStringLiteral("cut"), QStringLiteral("剪刀"));
     makeToolButton(maskModeBtn, QStringLiteral("brush"), QStringLiteral("屏蔽模式"));
-    makeToolButton(eraseBtn, QStringLiteral("eraserdots"), QStringLiteral("擦除轮廓点"));
+    // VM「擦除轮廓点」：主按钮进入擦除模式；右下角三角弹出滑块调橡皮擦大小。
+    eraseBtn->setObjectName(QStringLiteral("eraseToolButton"));
+    eraseBtn->setIcon(vmToolIcon(QStringLiteral("eraserdots")));
+    eraseBtn->setIconSize(QSize(20, 20));
+    eraseBtn->setFixedSize(38, 26);
+    eraseBtn->setAutoRaise(true);
+    eraseBtn->setToolTip(QStringLiteral("擦除轮廓点（右下角三角可调橡皮擦大小）"));
+    eraseBtn->setAccessibleName(QStringLiteral("擦除轮廓点"));
+    eraseBtn->setPopupMode(QToolButton::MenuButtonPopup);
+    {
+        auto *eraseMenu = new QMenu(eraseBtn);
+        auto *erasePanel = new QWidget(eraseMenu);
+        erasePanel->setObjectName(QStringLiteral("eraseRadiusPanel"));
+        auto *panelLay = new QVBoxLayout(erasePanel);
+        panelLay->setContentsMargins(10, 8, 10, 8);
+        auto *sizeLabel = new QLabel(erasePanel);
+        sizeLabel->setObjectName(QStringLiteral("eraseRadiusLabel"));
+        auto *radiusSlider = new QSlider(Qt::Horizontal, erasePanel);
+        radiusSlider->setObjectName(QStringLiteral("eraseRadiusSlider"));
+        radiusSlider->setRange(2, 80);
+        radiusSlider->setValue(m_eraseRadius);
+        radiusSlider->setMinimumWidth(150);
+        auto updateEraseSize = [this, sizeLabel](int v) {
+            m_eraseRadius = v;
+            sizeLabel->setText(QStringLiteral("橡皮擦大小：%1 px").arg(v));
+            if (m_eraseMode) {
+                m_hint->setText(
+                    QStringLiteral("在图上单击擦掉该区域的特征点（半径 %1px）；擦掉的点不参与匹配。")
+                        .arg(v));
+            }
+        };
+        updateEraseSize(m_eraseRadius);
+        connect(radiusSlider, &QSlider::valueChanged, this, updateEraseSize);
+        panelLay->addWidget(sizeLabel);
+        panelLay->addWidget(radiusSlider);
+        auto *eraseAction = new QWidgetAction(eraseMenu);
+        eraseAction->setDefaultWidget(erasePanel);
+        eraseMenu->addAction(eraseAction);
+        eraseBtn->setMenu(eraseMenu);
+    }
     maskModeBtn->setToolTip(QStringLiteral(
         "勾上后画/取到的形状进「屏蔽」列表：从保留区里挖掉（logo/水印/背景）。"
         "屏蔽=保留 − 屏蔽；不画保留区时默认整块保留再挖。"));
@@ -302,7 +344,11 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     }
     tools->addWidget(m_wandTol);
     for (QPushButton *b : {clearShapeBtn, delShapeBtn, splitBtn, scissorsBtn,
-                           maskModeBtn, eraseBtn, m_undoBtn, m_redoBtn}) {
+                           maskModeBtn}) {
+        tools->addWidget(b);
+    }
+    tools->addWidget(eraseBtn);
+    for (QPushButton *b : {m_undoBtn, m_redoBtn}) {
         tools->addWidget(b);
     }
     tools->addStretch();
@@ -483,7 +529,7 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
         m_view->setCursor(Qt::CrossCursor);
         m_hint->setText(QStringLiteral("在图上单击设匹配中心位置。"));
     });
-    connect(eraseBtn, &QPushButton::clicked, this, [this]() {
+    connect(eraseBtn, &QToolButton::clicked, this, [this]() {
         m_eraseMode = true;
         m_anchorPickMode = false;
         m_wandMode = false;
@@ -491,8 +537,9 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
         m_view->setRoiFreehand(false);
         m_view->setRoiEditable(false);
         m_view->setCursor(Qt::PointingHandCursor);
-        m_hint->setText(QStringLiteral(
-            "在图上单击擦掉该区域的特征点（半径 20px）；擦掉的点不参与匹配。"));
+        m_hint->setText(
+            QStringLiteral("在图上单击擦掉该区域的特征点（半径 %1px）；擦掉的点不参与匹配。")
+                .arg(m_eraseRadius));
     });
     connect(selectBtn, &QPushButton::clicked, this, [this, maskModeBtn]() {
         m_wandMode = false;
@@ -970,7 +1017,7 @@ void TemplateConfigDialog::onImageClicked(const QPointF &imagePos)
         RoiShape e;
         e.type = RoiType::Circle;
         e.p1 = imagePos;
-        e.p2 = QPointF(imagePos.x() + 20.0, imagePos.y());   // 半径 20px
+        e.p2 = QPointF(imagePos.x() + m_eraseRadius, imagePos.y());
         m_erases.append(e);
         refreshFeaturePreview();
         m_hint->setText(QStringLiteral("已擦除 (%1, %2) 附近特征点（共 %3 个擦除区）")

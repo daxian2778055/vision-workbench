@@ -16,6 +16,7 @@
 #include <QApplication>
 #include <QPushButton>
 #include <QToolButton>
+#include <QSlider>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QListWidget>
@@ -63,6 +64,8 @@ private slots:
     void testTemplateListCheckAndReorder();
     void testTemplateConfigEnhanceCheckboxWritesEntry();
     void testTemplateConfigScaleModeWritesEntry();
+    // P2-3：橡皮擦大小滑块（VM 擦除轮廓点按钮右下角三角）
+    void testTemplateEraserRadiusSliderWritesEraseCircle();
     // P1-8：ROI「继承方式 / 屏蔽区创建」UI 写回参数 + 屏蔽区绘制请求
     void testTemplateRoiInheritAndMaskUiWritesParams();
 };
@@ -953,6 +956,73 @@ void ModuleEditorTest::testTemplateConfigScaleModeWritesEntry()
     QCOMPARE(back.first().scaleModeAuto, false);
     QCOMPARE(back.first().speedScale, 9);
     QCOMPARE(node.getParam(QStringLiteral("scaleMode")).toInt(), 0);
+}
+
+// P2-3：VM「擦除轮廓点」按钮右下角三角可弹滑块调橡皮擦大小。
+// 本腿钉住：默认 20px；滑块改成 40 后图上单击写出的擦除圆半径 = 40（p2 = p1 + 40）。
+void ModuleEditorTest::testTemplateEraserRadiusSliderWritesEraseCircle()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    cv::Mat tpl(100, 100, CV_8UC1, cv::Scalar(30));
+    cv::rectangle(tpl, cv::Rect(10, 10, 30, 80), cv::Scalar(220), 3);
+    cv::rectangle(tpl, cv::Rect(60, 10, 30, 80), cv::Scalar(180), 3);
+    const QString tplPath = dir.filePath(QStringLiteral("erase-ui.png"));
+    QVERIFY(cv::imwrite(tplPath.toStdString(), tpl));
+
+    cv::Mat canvas(200, 300, CV_8UC1, cv::Scalar(30));
+    tpl.copyTo(canvas(cv::Rect(100, 50, 100, 100)));
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+    TemplateEntry e;
+    e.name = QStringLiteral("ui-erase");
+    e.imagePath = tplPath;
+    RoiShape a;
+    a.type = RoiType::Rect;
+    a.p1 = QPointF(0, 0);
+    a.p2 = QPointF(100, 100);
+    e.shapes = {a};
+    e.shape = a;
+    node.setTemplates({e});
+    node.setActiveTemplateIndex(0);
+
+    TemplateConfigDialog dlg(&node, 0);
+    auto *slider = dlg.findChild<QSlider *>(QStringLiteral("eraseRadiusSlider"));
+    auto *eraseBtn = dlg.findChild<QToolButton *>(QStringLiteral("eraseToolButton"));
+    auto *sizeLabel = dlg.findChild<QLabel *>(QStringLiteral("eraseRadiusLabel"));
+    QVERIFY2(slider != nullptr, "未找到橡皮擦大小滑块 eraseRadiusSlider");
+    QVERIFY2(eraseBtn != nullptr, "未找到擦除轮廓点按钮 eraseToolButton");
+    QVERIFY2(sizeLabel != nullptr, "未找到橡皮擦大小标签 eraseRadiusLabel");
+    QCOMPARE(slider->value(), 20);   // 默认 20px（旧行为）
+    QVERIFY2(sizeLabel->text().contains(QStringLiteral("20")), qPrintable(sizeLabel->text()));
+
+    slider->setValue(40);
+    QVERIFY2(sizeLabel->text().contains(QStringLiteral("40")), qPrintable(sizeLabel->text()));
+
+    eraseBtn->click();   // 进入擦除模式
+    const bool invoked = QMetaObject::invokeMethod(
+        &dlg, "onImageClicked", Qt::DirectConnection, Q_ARG(QPointF, QPointF(60.0, 60.0)));
+    QVERIFY2(invoked, "onImageClicked 不是可调用槽");
+
+    QPushButton *okBtn = nullptr;
+    for (QPushButton *b : dlg.findChildren<QPushButton *>()) {
+        if (b->text() == QStringLiteral("确定")) {
+            okBtn = b;
+            break;
+        }
+    }
+    QVERIFY2(okBtn != nullptr, "未找到模板配置窗「确定」按钮");
+    okBtn->click();
+
+    const QVector<TemplateEntry> back = node.templates();
+    QCOMPARE(back.size(), 1);
+    const QVector<RoiShape> erases = back.first().erases;
+    QCOMPARE(erases.size(), 1);
+    QCOMPARE(erases.first().type, RoiType::Circle);
+    QCOMPARE(erases.first().p1, QPointF(60.0, 60.0));
+    QCOMPARE(erases.first().p2, QPointF(100.0, 60.0));   // 半径 = 滑块值 40
 }
 
 // P1-8：基本参数「继承方式 / 屏蔽区创建」的 UI 必须真的写回参数；屏蔽区绘制/清除两个按钮
