@@ -2733,6 +2733,14 @@ void ModuleEditorDialog::refreshResultTable()
     QStringList rows = tmplNode->getParam(QStringLiteral("matchList"))
                            .toString()
                            .split(QLatin1Char(';'), Qt::SkipEmptyParts);
+    // 每目标的尺度 X/Y 列表（与 matchList 同序）；matchList 只有单值尺度，XY 模式下
+    // 不能拿它当尺度 Y 用（P0-5：原实现直接把尺度 Y 复制成尺度 X）。
+    const QStringList scaleXs = tmplNode->getParam(QStringLiteral("matchScaleXs"))
+                                    .toString()
+                                    .split(QLatin1Char(','), Qt::SkipEmptyParts);
+    const QStringList scaleYs = tmplNode->getParam(QStringLiteral("matchScaleYs"))
+                                    .toString()
+                                    .split(QLatin1Char(','), Qt::SkipEmptyParts);
     if (rows.isEmpty() && tmplNode->getParam(QStringLiteral("matchScore")).toDouble() > 0.0) {
         // 没有 matchList（老工程/单结果）时用单结果参数合成一行，列序与 matchList 一致
         rows << QStringLiteral("%1,%2,%3,%4,%5,%6,%7")
@@ -2744,10 +2752,12 @@ void ModuleEditorDialog::refreshResultTable()
                     .arg(tmplNode->getParam(QStringLiteral("matchPointRow")).toDouble(), 0, 'f', 1)
                     .arg(tmplNode->getParam(QStringLiteral("matchPointCol")).toDouble(), 0, 'f', 1);
     }
+    int hitIndex = -1;
     for (const QString &line : rows) {
         const QStringList f = line.split(QLatin1Char(','));
         if (f.size() < 3)
             continue;
+        ++hitIndex;
         const int r = m_resultTable->rowCount();
         m_resultTable->insertRow(r);
         auto set = [&](int col, const QString &text) {
@@ -2759,8 +2769,12 @@ void ModuleEditorDialog::refreshResultTable()
         set(3, f.size() >= 7 ? f[6] : QStringLiteral("-"));   // 匹配点 X
         set(4, f.size() >= 7 ? f[5] : QStringLiteral("-"));   // 匹配点 Y
         set(5, f.size() >= 5 ? f[3] : QStringLiteral("-"));   // 角度
-        set(6, f.size() >= 5 ? f[4] : QStringLiteral("-"));   // 尺度 X
-        set(7, f.size() >= 5 ? f[4] : QStringLiteral("-"));   // 尺度 Y（当前等比例）
+        const QString scaleX = hitIndex < scaleXs.size()
+                                   ? scaleXs.at(hitIndex)
+                                   : (f.size() >= 5 ? f[4] : QStringLiteral("-"));
+        const QString scaleY = hitIndex < scaleYs.size() ? scaleYs.at(hitIndex) : scaleX;
+        set(6, scaleX);                                      // 尺度 X
+        set(7, scaleY);                                      // 尺度 Y（XY 模式独立）
         set(8, f[2]);                                        // 分数
         const QString tmplName =
             tmplNode->getParam(QStringLiteral("matchTemplateName")).toString();

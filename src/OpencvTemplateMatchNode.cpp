@@ -2040,8 +2040,10 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         // 坐标换算回原图（搜索区域裁剪过时）
         const double col = bestLoc.x + searchRect.x + bestCenterInWarp.x;
         const double row = bestLoc.y + searchRect.y + bestCenterInWarp.y;
+        // 匹配框宽高：X 用 scaleX、Y 用 scaleY（VM 模块结果；XY 模式下两者独立）。
+        // 旧实现两轴都用 bestScale ⇒ 非均匀目标（如 1.2×0.8）的高度被写成 1.2 倍。
         const double outW = tmplW * bestScale;
-        const double outH = tmplH * bestScale;
+        const double outH = tmplH * bestScaleY;
 
         m_params[QStringLiteral("matchRow")] = row + bestSubpix.y;
         m_params[QStringLiteral("matchCol")] = col + bestSubpix.x;

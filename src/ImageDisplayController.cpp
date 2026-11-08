@@ -300,8 +300,16 @@ QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *n
                 s.p1 = mr.point1;
                 s.text = QStringLiteral("score=%1").arg(mr.value, 0, 'f', 2);
             }
-            // 多目标（r19）：matchList 里除第一实例外，其余也画出来（同色同尺寸）
+            // 多目标（r19）：matchList 里除第一实例外，其余也画出来。
+            // 尺寸按每目标自己的宽/高列表取（XY 尺度模式下两轴独立，P0-5）；
+            // 老工程没有这两个列表时退回「按尺度比例缩放第一实例」的旧口径。
             const QString listText = node->getParam(QStringLiteral("matchList")).toString();
+            const QStringList boxWidths = node->getParam(QStringLiteral("matchBoxWidths"))
+                                              .toString()
+                                              .split(QLatin1Char(','), Qt::SkipEmptyParts);
+            const QStringList boxHeights = node->getParam(QStringLiteral("matchBoxHeights"))
+                                               .toString()
+                                               .split(QLatin1Char(','), Qt::SkipEmptyParts);
             if (!listText.isEmpty()) {
                 const QStringList items = listText.split(QLatin1Char(';'), Qt::SkipEmptyParts);
                 for (int k = 1; k < items.size(); ++k) {
@@ -316,8 +324,10 @@ QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *n
                     const double instScale = f.size() >= 7 ? f[4].toDouble() : 0.0;
                     const double baseScale = mr.extraValues.size() >= 5 ? mr.extraValues[4] : 0.0;
                     const double ratio = (instScale > 0.0 && baseScale > 0.0) ? instScale / baseScale : 1.0;
-                    extra.width = s.width * ratio;
-                    extra.height = s.height * ratio;
+                    const double w = k < boxWidths.size() ? boxWidths.at(k).toDouble() : 0.0;
+                    const double h = k < boxHeights.size() ? boxHeights.at(k).toDouble() : 0.0;
+                    extra.width = w > 0.0 ? w : s.width * ratio;
+                    extra.height = h > 0.0 ? h : s.height * ratio;
                     extra.angleDeg = instAngle;
                     extra.color = s.color;
                     extra.text = QStringLiteral("%1").arg(f[2].toDouble(), 0, 'f', 2);

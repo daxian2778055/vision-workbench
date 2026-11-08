@@ -57,6 +57,8 @@ private slots:
     void testResultOverlayUsesDisplayConfig();
     void testEditorNodePointerClearsOnDelete();
     void testModuleResultPageUsesResultFields();
+    // P0-5：结果表「尺度 Y」不得复制「尺度 X」（XY 模式两轴独立）
+    void testTemplateResultTableUsesPerTargetScaleY();
 };
 
 void ModuleEditorTest::testParamEditTriggersDebouncedRecompute()
@@ -731,6 +733,29 @@ void ModuleEditorTest::testEditorNodePointerClearsOnDelete()
     QVERIFY2(dlg.node() == nullptr,
              "节点删除后编辑器持有的节点必须自动置空（QPointer）；"
              "若仍非空，后续 m_node->execute() 就是 UAF");
+}
+
+// P0-5：模板匹配结果表的「尺度X / 尺度Y」必须分别取每目标自己的两个列表。
+// 旧实现把尺度 Y 直接复制成尺度 X，非均匀缩放目标在结果表里看不出 Y 向差异。
+void ModuleEditorTest::testTemplateResultTableUsesPerTargetScaleY()
+{
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("matchList"),
+                  QStringLiteral("200,200,0.900,0.00,1.0000,200,200;"
+                                 "300,400,0.800,0.00,0.6000,300,400"));
+    node.setParam(QStringLiteral("matchScaleXs"), QStringLiteral("1.0000,0.6000"));
+    node.setParam(QStringLiteral("matchScaleYs"), QStringLiteral("0.8000,1.3000"));
+
+    ModuleEditorDialog dlg(&node);
+    dlg.reloadFromNode();   // 构造函数已填过一次；这里显式重走公开入口，确保读的是当前参数表
+    auto *table = dlg.findChild<QTableWidget *>(QStringLiteral("moduleResultTable"));
+    QVERIFY2(table != nullptr, "未找到结果表 moduleResultTable");
+    QCOMPARE(table->rowCount(), 2);
+    QCOMPARE(table->item(0, 6)->text(), QStringLiteral("1.0000"));   // 尺度X
+    QCOMPARE(table->item(0, 7)->text(), QStringLiteral("0.8000"));   // 尺度Y
+    QCOMPARE(table->item(1, 6)->text(), QStringLiteral("0.6000"));
+    QCOMPARE(table->item(1, 7)->text(), QStringLiteral("1.3000"));
 }
 
 QTEST_MAIN(ModuleEditorTest)

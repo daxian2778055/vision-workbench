@@ -112,6 +112,8 @@ private slots:
     void templateCrossAngleSearchesSkew();
     // 是否获取轮廓 / 是否输出轮廓：显示与模块结果两条出口分别受控
     void templateContourTogglesFollowVm();
+    // 多目标叠加框按各自宽高绘制（XY 尺度两轴独立，P0-5）
+    void templateOverlayUsesPerTargetSize();
     // 擦除轮廓点：擦除区域内的特征点不参与匹配
     void templateErasesRemoveFeaturePoints();
     // 建模板后的参数建议：低对比给低阈值、大模板给大特征尺度
@@ -2097,6 +2099,59 @@ void FeatureMatchTest::templateContourTogglesFollowVm()
     QCOMPARE(countPointOverlays(ctrl.collectOverlayFromNode(&node)), 0);
 }
 
+// P0-5：多目标叠加框必须按每目标自己的宽/高绘制。XY 尺度模式下两轴独立，
+// 旧实现只按 matchList 的单值 scale 比例缩放第一实例，高会算成「宽比例 × 主框高」。
+void FeatureMatchTest::templateOverlayUsesPerTargetSize()
+{
+    OpencvTemplateMatchNode node;
+    node.init();
+    // 主目标框 150×100（scale 1.0）；第二目标 scale 0.6，但实际框 110×160（Y 反而更大）。
+    // 若仍用单一 scale 比例，第二框会被画成 90×60。
+    node.setParam(QStringLiteral("matchList"),
+                  QStringLiteral("200,200,0.900,0.00,1.0000,200,200;"
+                                 "400,300,0.800,0.00,0.6000,400,300"));
+    node.setParam(QStringLiteral("matchBoxWidths"), QStringLiteral("150,110"));
+    node.setParam(QStringLiteral("matchBoxHeights"), QStringLiteral("100,160"));
+
+    MeasureResult mainRes;
+    mainRes.type = QStringLiteral("template");
+    mainRes.valid = true;
+    mainRes.value = 0.9;
+    mainRes.point1 = QPointF(200, 200);
+    mainRes.extraValues = {200, 200, 0.9, 0.0, 1.0, 150, 100, 200, 200, 1.0, 1.0, 0.0};
+    auto mainObj = QSharedPointer<DataObject>::create();
+    mainObj->setMeasureResult(mainRes);
+    node.setOutputData(0, mainObj);
+
+    ImageDisplayController ctrl(nullptr, nullptr, nullptr);
+    const QVector<OverlayShape> overlay = ctrl.collectOverlayFromNode(&node);
+    QStringList shapeTypes;
+    for (const OverlayShape &s : overlay)
+        shapeTypes << QString::number(int(s.type));
+    qInfo("overlay-size: shapes=%d types=%s", int(overlay.size()),
+          qPrintable(shapeTypes.join(QLatin1Char(','))));
+    const OverlayShape *mainBox = nullptr;
+    const OverlayShape *extraBox = nullptr;
+    for (const OverlayShape &s : overlay) {
+        if (s.type != OverlayShape::Type::RotatedRect)
+            continue;
+        if (qAbs(s.p1.x() - 200.0) <= 0.5 && qAbs(s.p1.y() - 200.0) <= 0.5)
+            mainBox = &s;
+        if (qAbs(s.p1.x() - 300.0) <= 0.5 && qAbs(s.p1.y() - 400.0) <= 0.5)
+            extraBox = &s;
+    }
+    QVERIFY2(mainBox && extraBox, "画布上应画出两个匹配框");
+    qInfo("overlay-size: main=(%.1f x %.1f) extra=(%.1f x %.1f)", mainBox->width,
+          mainBox->height, extraBox->width, extraBox->height);
+    QVERIFY2(qAbs(mainBox->width - 150.0) <= 0.5 && qAbs(mainBox->height - 100.0) <= 0.5,
+             qPrintable(QStringLiteral("主目标框应为 150×100，实际 %1×%2")
+                            .arg(mainBox->width).arg(mainBox->height)));
+    QVERIFY2(qAbs(extraBox->width - 110.0) <= 0.5 && qAbs(extraBox->height - 160.0) <= 0.5,
+             qPrintable(QStringLiteral("第二目标框应取自己的宽高 110×160，实际 %1×%2"
+                                       "（90×60 说明仍按单一 scale 比例缩放）")
+                            .arg(extraBox->width).arg(extraBox->height)));
+}
+
 // 匹配中心（锚点）：默认在模板中心；配置偏移后，结果的「匹配点」必须整体平移过去。
 // 这条守的是"锚点真的参与了结果换算"，而不是只存在 JSON 里。
 void FeatureMatchTest::templateMatchAnchorOffsetsMatchPoint()
@@ -2851,6 +2906,36 @@ void FeatureMatchTest::templateScaleRangeXYFindsAnisotropicInstance()
     QVERIFY2(score1 > score0,
              qPrintable(QStringLiteral("XY 尺度范围的分数应高于整体范围：%1 vs %2")
                             .arg(score1).arg(score0)));
+
+    // P0-5：匹配框宽高 / 模块结果 extraValues 必须分别按 scaleX、scaleY 输出。
+    // 旧实现两轴都用 bestScale，非均匀目标（1.2×0.8）的高度会被写成 1.2 倍。
+    const double expectW = kTemplateSize * sx1;
+    const double expectH = kTemplateSize * sy1;
+    const QStringList boxW = node.getParam(QStringLiteral("matchBoxWidths"))
+                                 .toString()
+                                 .split(QLatin1Char(','), Qt::SkipEmptyParts);
+    const QStringList boxH = node.getParam(QStringLiteral("matchBoxHeights"))
+                                 .toString()
+                                 .split(QLatin1Char(','), Qt::SkipEmptyParts);
+    QCOMPARE(boxW.size(), 1);
+    QCOMPARE(boxH.size(), 1);
+    qInfo("scale-xy: box=(%.1f x %.1f) expect=(%.1f x %.1f)", boxW.first().toDouble(),
+          boxH.first().toDouble(), expectW, expectH);
+    QVERIFY2(qAbs(boxW.first().toDouble() - expectW) <= 1.0,
+             qPrintable(QStringLiteral("匹配框宽应用 scaleX：%1，期望 %2")
+                            .arg(boxW.first().toDouble()).arg(expectW)));
+    QVERIFY2(qAbs(boxH.first().toDouble() - expectH) <= 1.0,
+             qPrintable(QStringLiteral("匹配框高应用 scaleY：%1，期望 %2（若等于宽则仍用错轴）")
+                            .arg(boxH.first().toDouble()).arg(expectH)));
+    const auto resData = node.getOutputData(1);
+    QVERIFY2(resData && !resData->measureResults().isEmpty(), "匹配结果对象缺失");
+    const MeasureResult mr = resData->measureResults().first();
+    QVERIFY2(mr.extraValues.size() >= 7, "extraValues 项数不足");
+    QVERIFY2(qAbs(mr.extraValues[5] - expectW) <= 1.0
+                 && qAbs(mr.extraValues[6] - expectH) <= 1.0,
+             qPrintable(QStringLiteral("extraValues 框宽高应为 (%1,%2)，实际 (%3,%4)")
+                            .arg(expectW).arg(expectH)
+                            .arg(mr.extraValues[5]).arg(mr.extraValues[6])));
 }
 
 // VM「横切角度范围」（尺度范围 XY 页签）：目标沿 Y 轴向 X 轴倾斜（剪切）时，
