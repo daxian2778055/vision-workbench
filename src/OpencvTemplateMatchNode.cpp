@@ -398,8 +398,8 @@ void OpencvTemplateMatchNode::init()
                      QStringLiteral("匹配方法：0=归一化平方差，1=归一化相关系数，2=边缘梯度")),
         makeIntParam(QStringLiteral("polarity"), 1, 0, 1,
                      QStringLiteral("是否考虑极性：1=考虑（默认），0=忽略（亮标/暗标反色也能找到）")),
-        makeIntParam(QStringLiteral("maxMatches"), 1, 1, 16,
-                     QStringLiteral("最多匹配个数（1=只输出最优；多件场景调大）")),
+        makeIntParam(QStringLiteral("maxMatches"), 1, 1, 1000,
+                     QStringLiteral("最多匹配个数（1~1000，默认 1；多件场景调大）")),
         makeBoolParam(QStringLiteral("matchAllTemplates"), false,
                       QStringLiteral("多模板同时匹配（模板列表逐个跑，取最高分）")),
         makeIntParam(QStringLiteral("minChainLength"), 1, 1, 200,
@@ -418,7 +418,7 @@ void OpencvTemplateMatchNode::init()
         makeIntParam(QStringLiteral("extendThreshold"), 0, 0, 100,
                      QStringLiteral("延拓阈值（目标被图像边缘截断时允许缺失的特征比例 %）")),
         makeIntParam(QStringLiteral("timeoutMs"), 0, 0, 10000,
-                     QStringLiteral("超时控制（搜索超时毫秒数，0=关闭）")),
+                     QStringLiteral("超时控制（搜索超时毫秒数，0=关闭；超时不返回任何结果）")),
         makeEnumParam(QStringLiteral("roiType"), 0,
                       QStringList{QStringLiteral("图形类型"), QStringLiteral("图像类型")},
                       QStringLiteral("ROI区域类型")),
@@ -1552,7 +1552,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         // ① 粗搜：全部角度 × 尺度（粗图上跑）
         // 多目标（r19 批 A 续）：每轮抑制已找到的中心，最多 maxMatches 个
         const int maxMatches =
-            qBound(1, m_params.value(QStringLiteral("maxMatches"), 1).toInt(), 16);
+            qBound(1, m_params.value(QStringLiteral("maxMatches"), 1).toInt(), 1000);
         QStringList matchList;
         // VM「排序类型 / 最大重叠率」：先收集命中，最后统一排序 + 重叠过滤再格式化
         struct MatchHit {
@@ -1564,8 +1564,13 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         cv::Point mainLoc;
         double mainScore = -1e9, mainAngle = 0.0, mainScale = 1.0;
         cv::Point2f mainCenter;
+        // 官方口径（帮助页「超时控制」）：到点停止搜索，不返回任何搜索结果。
+        // 该标志跨实例保留：超时后不再找下一个目标，且已找到的部分结果整体作废。
+        bool searchTimedOut = false;
 
         for (int inst = 0; inst < maxMatches; ++inst) {
+            if (searchTimedOut)
+                break;
             bestScore = -1e9;
             bestLoc = cv::Point();
             bestAngle = 0.0;
@@ -1578,12 +1583,12 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             // 粗搜：全部角度 x 尺度（粗图上跑）
             rasterScale = 1.0 / qMax(1.0, coarseFactor);
             searchOrigin = cv::Point(0, 0);
-        bool searchTimedOut = false;
         for (const auto &sp : scalePairs) {
             if (searchTimedOut)
                 break;
             for (double angle : angles) {
-                // 超时控制（VM）：到点即停，保留已找到的最优
+                // 超时控制（VM 官方帮助）：到点停止搜索，不返回任何搜索结果；
+                // 本轮已找到的部分结果在实例循环结束后整体作废。
                 if (timeoutMs > 0 && searchTimer.elapsed() >= timeoutMs) {
                     searchTimedOut = true;
                     break;
@@ -1636,6 +1641,9 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 break;
         }
 
+        if (searchTimedOut)
+            break;   // 官方口径：超时后不进入精修、不产出任何结果
+
         // 粗搜坐标**无条件**换算回全分辨率（r19 P1-14 ①）：原来只在精修严格更好时才改写，
         // 分数持平/略低时把降采样像素当成全图坐标 → 位置偏 ≈coarseFactor（现场 3 倍）。
         if (coarseFactor > 1.0 && bestScore > -1e8) {
@@ -1649,7 +1657,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         }
 
         // ② 精修：全分辨率、最优姿态附近（角度 ±1 步 + 位置局部窗口）
-        if (coarseFactor > 1.0 && bestScore > -1e8) {
+        if (coarseFactor > 1.0 && bestScore > -1e8 && !searchTimedOut) {
             const int margin = qMax(24, int(qMax(tmplW, tmplH) * 0.6));
             const int cx = bestLoc.x;   // r19 P1-14 ①：bestLoc 已是全分辨率
             const int cy = bestLoc.y;
@@ -1703,6 +1711,10 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 const double stepA =
                     qMax(0.5, m_params.value(QStringLiteral("angleStep"), 2.0).toDouble());
                 for (int k = -1; k <= 1; ++k) {
+                    if (timeoutMs > 0 && searchTimer.elapsed() >= timeoutMs) {
+                        searchTimedOut = true;   // 精修阶段超时：同样整体作废
+                        break;
+                    }
                     const double angle = bestAngle + k * stepA;
                     if (angle < angles.first() - 1e-9 || angle > angles.last() + 1e-9)
                         continue;
@@ -1721,6 +1733,8 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             }
         }
 
+            if (searchTimedOut)
+                break;   // 精修阶段超时：不追加本轮命中
             if (bestScore < -1e8)
                 break;
             if (inst > 0 && bestScore < minScore)
@@ -1760,6 +1774,16 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                                               float(bestLoc.y + bestCenterInWarp.y)));
             if (bestScore < minScore)
                 break;                       // 第一实例也未达标：不再找更多
+        }
+
+        if (searchTimedOut) {
+            // 官方口径：超时「不返回任何搜索结果」。已找到的部分结果整体作废，
+            // 不能把粗搜残留的 bestScore 当结果输出。
+            hits.clear();
+            matchList.clear();
+            matchCount = 0;
+            foundCenters.clear();
+            bestScore = -1e9;
         }
 
         // 第一实例写回既有输出口径
@@ -1886,7 +1910,11 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         }
 
         if (bestScore < -1e8) {
-            m_params[QStringLiteral("trainStatus")] = QStringLiteral("无有效搜索位姿（模板相对图像过大）");
+            const QString why = searchTimedOut
+                                    ? QStringLiteral("搜索超时（未返回任何搜索结果）")
+                                    : QStringLiteral("无有效搜索位姿（模板相对图像过大）");
+            m_params[QStringLiteral("trainStatus")] = why;
+            m_params[QStringLiteral("lastError")] = why;
             m_params["moduleStatus"] = false;
             m_params[QStringLiteral("elapsedMs")] = static_cast<double>(runTimer.elapsed());
             m_outputImage = m_inputImage;

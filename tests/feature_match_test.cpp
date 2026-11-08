@@ -94,6 +94,8 @@ private slots:
     void templateMatchPointFollowsAnchorAtAngle();
     void templatePolarityZeroMatchesInvertedContrast();
     void templateMaskEditInvalidatesWarpCache();
+    void templateTimeoutReturnsNoResults();
+    void templateMaxMatchesAllowsVmRange();
     void templateFingerprintDistinguishesContent();
     void matchCountMatchesFilteredList();
     // 分割/剪刀：按连通域拆块、沿画线切开
@@ -2801,6 +2803,123 @@ void FeatureMatchTest::templateAnchorFollowsWarpRotation()
     const QPointF pScaled = OpencvTemplateMatchNode::mapAnchorToImage(100, 100, 90.0, 20, 0, 2.0);
     QVERIFY2(qAbs(pScaled.y() - 60.0) < 1e-9,
              qPrintable(QStringLiteral("90°+scale2 应到 row=60，实得 %1").arg(pScaled.y())));
+}
+
+// 官方帮助（高精度匹配·运行参数·超时控制）：「搜索时间达到超时时长算法将停止搜索，
+// 不返回任何搜索结果。」旧实现只跳出姿态循环、保留已找到的最优——超时后仍输出坐标。
+// 本腿锁住官方口径：超时后 matchCount=0、matchList 为空、模块判失败并给出超时原因。
+void FeatureMatchTest::templateTimeoutReturnsNoResults()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const cv::Mat patch = makePatch();
+    const QString tpl = dir.filePath(QStringLiteral("tpl.png"));
+    QVERIFY(cv::imwrite(tpl.toStdString(), patch));
+    const cv::Mat canvas = makeScene(patch, 0.0, 1.0, 200.0, 200.0);
+
+    auto runWithTimeout = [&](int timeoutMs) {
+        OpencvTemplateMatchNode node;
+        node.init();
+        node.setParam(QStringLiteral("method"), 1);
+        node.setParam(QStringLiteral("minScore"), 0.5);
+        node.setParam(QStringLiteral("angleMin"), -45.0);
+        node.setParam(QStringLiteral("angleMax"), 45.0);
+        node.setParam(QStringLiteral("angleStep"), 1.0);
+        node.setParam(QStringLiteral("scaleMin"), 1.0);
+        node.setParam(QStringLiteral("scaleMax"), 1.0);
+        node.setParam(QStringLiteral("timeoutMs"), timeoutMs);
+        node.setParam(QStringLiteral("trainFromImage"), false);
+        node.setParam(QStringLiteral("templatePath"), tpl);
+        node.setInputImage(OpencvUtil::matToHimage(canvas));
+        TemplateEntry e;
+        e.name = QStringLiteral("A");
+        e.imagePath = tpl;
+        node.setTemplates({e});
+        node.setActiveTemplateIndex(0);
+        node.run(false);
+        return std::make_tuple(node.getParam(QStringLiteral("moduleStatus")).toBool(),
+                               node.getParam(QStringLiteral("matchCount")).toInt(),
+                               node.getParam(QStringLiteral("matchList")).toString(),
+                               node.getParam(QStringLiteral("trainStatus")).toString(),
+                               node.getParam(QStringLiteral("lastError")).toString());
+    };
+
+    const auto control = runWithTimeout(0);
+    qInfo("timeout-leg: control ok=%d count=%d", int(std::get<0>(control)), std::get<1>(control));
+    QVERIFY2(std::get<0>(control) && std::get<1>(control) >= 1,
+             "对照组（timeout=0）必须能匹配，否则本腿证明不了超时行为");
+
+    const auto timedOut = runWithTimeout(20);
+    qInfo("timeout-leg: timeout ok=%d count=%d why=[%s]",
+          int(std::get<0>(timedOut)), std::get<1>(timedOut),
+          qPrintable(std::get<3>(timedOut)));
+    QVERIFY2(!std::get<0>(timedOut), "超时后不得判成功");
+    QCOMPARE(std::get<1>(timedOut), 0);
+    QVERIFY2(std::get<2>(timedOut).isEmpty(), "超时不得返回任何搜索结果（matchList 必须为空）");
+    QVERIFY2(std::get<3>(timedOut).contains(QStringLiteral("超时")) ||
+                 std::get<4>(timedOut).contains(QStringLiteral("超时")),
+             "超时失败必须给出可读原因");
+}
+
+// 官方帮助：最大匹配个数「默认值为 1，有效取值范围为 1~1000」。旧实现注册与运行时
+// 都钳在 16，超过 16 个目标就丢结果。本腿同时锁注册范围与运行期上限。
+void FeatureMatchTest::templateMaxMatchesAllowsVmRange()
+{
+    {
+        OpencvTemplateMatchNode node;
+        node.init();
+        bool found = false;
+        for (const ParamSpec &s : node.paramSpecs()) {
+            if (s.name != QStringLiteral("maxMatches"))
+                continue;
+            found = true;
+            QCOMPARE(s.minValue.toInt(), 1);
+            QCOMPARE(s.maxValue.toInt(), 1000);
+        }
+        QVERIFY2(found, "未注册 maxMatches 参数");
+    }
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    cv::Mat patch(32, 32, CV_8UC1, cv::Scalar(30));
+    cv::rectangle(patch, cv::Rect(6, 6, 20, 20), cv::Scalar(220), cv::FILLED);
+    cv::circle(patch, cv::Point(16, 16), 5, cv::Scalar(80), cv::FILLED);
+    const QString tpl = dir.filePath(QStringLiteral("tpl.png"));
+    QVERIFY(cv::imwrite(tpl.toStdString(), patch));
+
+    cv::Mat canvas(480, 640, CV_8UC1, cv::Scalar(kCanvasBackground));
+    int placed = 0;
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 5; ++c) {
+            patch.copyTo(canvas(cv::Rect(40 + c * 120, 40 + r * 100, 32, 32)));
+            ++placed;
+        }
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.6);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("scaleMin"), 1.0);
+    node.setParam(QStringLiteral("scaleMax"), 1.0);
+    node.setParam(QStringLiteral("maxMatches"), 30);   // 旧实现运行时钳到 16
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("templatePath"), tpl);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+    TemplateEntry e;
+    e.name = QStringLiteral("A");
+    e.imagePath = tpl;
+    node.setTemplates({e});
+    node.setActiveTemplateIndex(0);
+    node.run(false);
+
+    const bool ok = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    const int count = node.getParam(QStringLiteral("matchCount")).toInt();
+    qInfo("max-matches-leg: placed=%d count=%d ok=%d", placed, count, int(ok));
+    QVERIFY2(ok, "多目标用例应当匹配成功");
+    QCOMPARE(count, placed);
 }
 
 // 复核 P1-4：变形缓存的键原先只有「尺寸 + 路径」。同路径换图重训（尺寸往往不变）
