@@ -35,6 +35,7 @@
 #include <opencv2/features2d.hpp>
 #include <HalconCpp.h>
 #include <cmath>
+#include <tuple>
 #include <vector>
 
 class FeatureMatchTest : public QObject
@@ -90,6 +91,9 @@ private slots:
     // 匹配中心（锚点）偏移：匹配点必须跟着锚点走（VM 的「匹配中心 X/Y」）
     void templateMatchAnchorOffsetsMatchPoint();
     void templateAnchorFollowsWarpRotation();
+    void templateMatchPointFollowsAnchorAtAngle();
+    void templatePolarityZeroMatchesInvertedContrast();
+    void templateMaskEditInvalidatesWarpCache();
     void templateFingerprintDistinguishesContent();
     void matchCountMatchesFilteredList();
     // 分割/剪刀：按连通域拆块、沿画线切开
@@ -2016,6 +2020,194 @@ void FeatureMatchTest::templateMatchAnchorOffsetsMatchPoint()
     QCOMPARE(back.anchorDx, 32.0);
     QCOMPARE(back.anchorDy, -16.0);
     QVERIFY(back.anchorLocked);
+}
+
+// 复核 P1-2 残留（2026-11-08）：锚点旋转不只影响列表里的 pointRow/pointCol，
+// 主结果字段 matchPointRow/Col（结果表、结果判断、叠加十字线都读它）也必须与
+// warpTemplate 的矩阵同口径。本腿让匹配真的发生在 90°，锚点 (32,-16)：
+//   getRotationMatrix2D(90°) 的线性部分 = [0 1; -1 0] ⇒ 偏移变成 (-16,-32)，
+//   即匹配点 = 匹配框中心 + (-16,-32)；共轭公式会得到 (+16,+32)，每轴差 32px。
+void FeatureMatchTest::templateMatchPointFollowsAnchorAtAngle()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const cv::Mat patch = makePatch();
+    const QString tpl = dir.filePath(QStringLiteral("tpl.png"));
+    QVERIFY(cv::imwrite(tpl.toStdString(), patch));
+
+    const double cx = 200.0;
+    const double cy = 200.0;
+    const cv::Mat canvas = makeScene(patch, 90.0, 1.0, cx, cy);
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.5);
+    node.setParam(QStringLiteral("angleMin"), 90.0);
+    node.setParam(QStringLiteral("angleMax"), 90.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("templatePath"), tpl);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+
+    TemplateEntry e;
+    e.name = QStringLiteral("A");
+    e.imagePath = tpl;
+    e.anchorDx = 32.0;
+    e.anchorDy = -16.0;
+    e.anchorLocked = true;
+    node.setTemplates({e});
+    node.setActiveTemplateIndex(0);
+
+    node.run(false);
+    const bool ok = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    const double mcol = node.getParam(QStringLiteral("matchCol")).toDouble();
+    const double mrow = node.getParam(QStringLiteral("matchRow")).toDouble();
+    const double pcol = node.getParam(QStringLiteral("matchPointCol")).toDouble();
+    const double prow = node.getParam(QStringLiteral("matchPointRow")).toDouble();
+    qInfo("anchor-angle-leg: center=(%.1f,%.1f) point=(%.1f,%.1f)", mcol, mrow, pcol, prow);
+    QVERIFY2(ok, "90° 锚点用例应当匹配成功");
+    // 旋转+插值下中心会有 ~3px 的栅格误差；锚点断言用实际中心做基准，不受它影响。
+    QVERIFY2(qAbs(mcol - cx) <= 4.0 && qAbs(mrow - cy) <= 4.0,
+             qPrintable(QStringLiteral("匹配框中心应在 (%1,%2)，实际 (%3,%4)")
+                            .arg(cx).arg(cy).arg(mcol).arg(mrow)));
+    QVERIFY2(qAbs(pcol - (mcol - 16.0)) <= 2.0 && qAbs(prow - (mrow - 32.0)) <= 2.0,
+             qPrintable(QStringLiteral("90° 时匹配点应为中心+(-16,-32)（warpTemplate 同源），"
+                                       "实际 (%1,%2)，中心 (%3,%4)；若得到 (+16,+32) 说明用了共轭旋转")
+                            .arg(pcol).arg(prow).arg(mcol).arg(mrow)));
+}
+
+// 复核 P1-2（2026-11-08）：polarity=0 的契约是「忽略极性、两方向都试」（GOC 取 |score|）。
+// 用一张亮底暗块的图去匹配「暗底亮块」的模板：polarity=0 必须命中；polarity=1 必须判失败。
+// 旧实现用 score<0 判无效格，会把 GOC 的合法负分（反极性目标）一起压成 -1，
+// 于是 polarity=0 退化成与 polarity=1 等价——本腿就是锁住这个退化。
+void FeatureMatchTest::templatePolarityZeroMatchesInvertedContrast()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    cv::Mat tplImg(40, 40, CV_8UC1, cv::Scalar(30));
+    cv::rectangle(tplImg, cv::Rect(10, 10, 20, 20), cv::Scalar(220), cv::FILLED);
+    const QString tpl = dir.filePath(QStringLiteral("tpl.png"));
+    QVERIFY(cv::imwrite(tpl.toStdString(), tplImg));
+
+    cv::Mat canvas(200, 200, CV_8UC1, cv::Scalar(225));
+    cv::rectangle(canvas, cv::Rect(80, 80, 20, 20), cv::Scalar(30), cv::FILLED);
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 2);   // GOC：只有这条路径受 polarity 影响
+    node.setParam(QStringLiteral("minScore"), 0.5);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("scaleMin"), 1.0);
+    node.setParam(QStringLiteral("scaleMax"), 1.0);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("templatePath"), tpl);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+
+    TemplateEntry e;
+    e.name = QStringLiteral("A");
+    e.imagePath = tpl;
+    node.setTemplates({e});
+    node.setActiveTemplateIndex(0);
+
+    node.setParam(QStringLiteral("polarity"), 0);
+    node.run(false);
+    const bool okIgnore = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    const double scoreIgnore = node.getParam(QStringLiteral("matchScore")).toDouble();
+    const double col = node.getParam(QStringLiteral("matchCol")).toDouble();
+    const double row = node.getParam(QStringLiteral("matchRow")).toDouble();
+    qInfo("polarity-leg: ignore ok=%d score=%.3f center=(%.1f,%.1f)",
+          int(okIgnore), scoreIgnore, col, row);
+    QVERIFY2(okIgnore, qPrintable(QStringLiteral("polarity=0 应命中反极性目标，实际判红（score=%1）")
+                                      .arg(scoreIgnore)));
+    QVERIFY2(scoreIgnore >= 0.5,
+             qPrintable(QStringLiteral("polarity=0 的分数应取 |score|，实际 %1").arg(scoreIgnore)));
+    QVERIFY2(qAbs(col - 90.0) <= 2.0 && qAbs(row - 90.0) <= 2.0,
+             qPrintable(QStringLiteral("反极性目标中心应在 (90,90)，实际 (%1,%2)").arg(col).arg(row)));
+
+    node.setParam(QStringLiteral("polarity"), 1);
+    node.run(false);
+    const bool okExact = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    const double scoreExact = node.getParam(QStringLiteral("matchScore")).toDouble();
+    qInfo("polarity-leg: exact ok=%d score=%.3f", int(okExact), scoreExact);
+    QVERIFY2(!okExact, qPrintable(QStringLiteral("polarity=1 不应命中反极性目标（score=%1）")
+                                      .arg(scoreExact)));
+}
+
+// 复核 P2-1（2026-11-08）：形状掩膜每轮由当前图形/屏蔽重建，但变形缓存的键
+// 如果只含模板图指纹、不含掩膜内容，编辑图形/屏蔽后会复用旧掩膜的变形结果。
+// 同一节点连跑两次、同一模板同一角度，只改屏蔽区域（两次掩膜尺寸相同）：
+//   ① 屏蔽左半（只剩无特征的右半）→ 必须判失败；
+//   ② 屏蔽右半（左半特征保留）→ 必须命中。
+// 缓存键若不含掩膜内容，② 会复用 ① 的「右半掩膜」→ 仍然 n<16 判失败（本腿红）。
+void FeatureMatchTest::templateMaskEditInvalidatesWarpCache()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    cv::Mat tplImg(40, 40, CV_8UC1, cv::Scalar(30));
+    cv::rectangle(tplImg, cv::Rect(4, 4, 12, 12), cv::Scalar(220), cv::FILLED);
+    cv::rectangle(tplImg, cv::Rect(4, 24, 8, 8), cv::Scalar(180), cv::FILLED);
+    cv::circle(tplImg, cv::Point(12, 30), 6, cv::Scalar(200), cv::FILLED);
+    // 右半保持纯背景：屏蔽左半后可见点数不足，必然判失败。
+    const QString tpl = dir.filePath(QStringLiteral("tpl.png"));
+    QVERIFY(cv::imwrite(tpl.toStdString(), tplImg));
+
+    const cv::Mat canvas = makeScene(tplImg, 90.0, 1.0, 200.0, 200.0);
+
+    auto runWithExclude = [&](const cv::Rect &exclude) {
+        OpencvTemplateMatchNode node;
+        node.init();
+        // 形状掩膜只在 GOC（method=2）的评分路径生效；方法 0/1 不消费 shapeMask。
+        node.setParam(QStringLiteral("method"), 2);
+        node.setParam(QStringLiteral("minScore"), 0.5);
+        node.setParam(QStringLiteral("angleMin"), 90.0);
+        node.setParam(QStringLiteral("angleMax"), 90.0);
+        node.setParam(QStringLiteral("angleStep"), 2.0);
+        node.setParam(QStringLiteral("trainFromImage"), false);
+        node.setParam(QStringLiteral("templatePath"), tpl);
+        node.setInputImage(OpencvUtil::matToHimage(canvas));
+
+        RoiShape keep;
+        keep.type = RoiType::Rect;
+        keep.p1 = QPointF(0, 0);
+        keep.p2 = QPointF(40, 40);
+        RoiShape hole;
+        hole.type = RoiType::Rect;
+        hole.p1 = QPointF(exclude.x, exclude.y);
+        hole.p2 = QPointF(exclude.x + exclude.width, exclude.y + exclude.height);
+
+        TemplateEntry e;
+        e.name = QStringLiteral("A");
+        e.imagePath = tpl;
+        e.shapes = {keep};
+        e.excludes = {hole};
+        node.setTemplates({e});
+        node.setActiveTemplateIndex(0);
+        node.run(false);
+        return std::make_tuple(node.getParam(QStringLiteral("moduleStatus")).toBool(),
+                               node.getParam(QStringLiteral("matchCol")).toDouble(),
+                               node.getParam(QStringLiteral("matchRow")).toDouble(),
+                               node.getParam(QStringLiteral("matchScore")).toDouble());
+    };
+
+    // ① 屏蔽左半：可见的右半是纯背景 → 必须失败
+    const auto left = runWithExclude(cv::Rect(0, 0, 20, 40));
+    qInfo("mask-cache-leg: exclude-left ok=%d score=%.3f",
+          int(std::get<0>(left)), std::get<3>(left));
+    QVERIFY2(!std::get<0>(left), "屏蔽掉全部特征后不应命中（可见点不足）");
+
+    // ② 屏蔽右半：左半特征保留 → 必须命中，且中心回到 (200,200)
+    const auto right = runWithExclude(cv::Rect(20, 0, 20, 40));
+    qInfo("mask-cache-leg: exclude-right ok=%d center=(%.1f,%.1f) score=%.3f",
+          int(std::get<0>(right)), std::get<1>(right), std::get<2>(right), std::get<3>(right));
+    QVERIFY2(std::get<0>(right),
+             "改屏蔽区域后应立刻生效并命中；若仍失败，说明掩膜变形缓存键没有包含掩膜内容");
+    // 不钉绝对中心：只保留一半特征的模板在缺特征的那一轴上是退化的，
+    // 峰位会沿该轴漂移（实测 (194,175)）。本腿只锁「掩膜改动是否立刻生效」。
+    QVERIFY2(std::get<3>(right) >= 0.5,
+             qPrintable(QStringLiteral("改屏蔽后匹配分数应达标，实际 %1").arg(std::get<3>(right))));
 }
 
 // 模板形状的布尔编辑（VM 工具条上的「分割 / 剪刀」）：

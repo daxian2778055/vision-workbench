@@ -1234,6 +1234,11 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 shapeMask = shapesMask(shapeList, shapesBounds(all), active.excludes);
             }
         }
+        // 掩膜内容也必须进变形缓存键（复核 2026-11-08）：掩膜每轮由当前图形/屏蔽重建，
+        // 而 warpKeyBase 里的指纹只代表模板图；编辑图形或屏蔽后若键不变，会复用旧掩膜
+        // 的变形结果。每轮算一次（不是逐姿态），成本可忽略。
+        const quint64 shapeMaskFingerprint =
+            shapeMask.empty() ? 0 : templateFingerprint(shapeMask);
 
         // ROI 图像类型（VM 的「区域类型=图像类型」）：第二个图像输入当掩膜，
         // 白=允许、黑=排除。按粗搜栅格缩放，候选中心必须落在白区。
@@ -1343,9 +1348,19 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 cv::threshold(wmag, wm, edgeThreshold, 1.0, cv::THRESH_BINARY);
                 wm.convertTo(wm, CV_32F);
                 if (!shapeMask.empty()) {
-                    // 掩膜与模板同一套 warp（同一 keyBase + 角度/尺度），保证像素严格对齐
-                    const auto warpedMask = warpTemplateCached(
-                        shapeMask, warpKeyBase + QStringLiteral("#shapeMask"), angle, scaleX, scaleY);
+                    // 掩膜与模板同一套 warp，但**必须先缩到本次 base 的尺寸**：
+                    // 粗搜会把模板降采样（speedScale），而掩膜是全分辨率模板坐标；
+                    // 不跟着缩就会因尺寸不匹配被丢弃，粗搜阶段的排除区失效（2026-11-08 实测）。
+                    cv::Mat maskForBase = shapeMask;
+                    if (maskForBase.size() != base.size())
+                        cv::resize(maskForBase, maskForBase, base.size(), 0, 0, cv::INTER_NEAREST);
+                    const QString maskKey =
+                        QStringLiteral("#shapeMask:%1:%2x%3")
+                            .arg(shapeMaskFingerprint, 0, 16)
+                            .arg(base.cols)
+                            .arg(base.rows);
+                    const auto warpedMask =
+                        warpTemplateCached(maskForBase, warpKeyBase + maskKey, angle, scaleX, scaleY);
                     if (!warpedMask.first.empty() && warpedMask.first.size() == wm.size()) {
                         cv::Mat keep;
                         cv::threshold(warpedMask.first, keep, 127.0, 1.0, cv::THRESH_BINARY);
@@ -1369,14 +1384,21 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 cv::matchTemplate(curSearchStrong, wm, rv, cv::TM_CCORR);
                 // 可见率门槛：内部常量（非 VM 参数）。少于 40% 的模板边缘可见即判无效，
                 // 用来抗遮挡；VM 未暴露这一项，保持原写死值。
-                // 可见率门槛：内部常量（非 VM 参数）。少于 40% 的模板边缘可见即判无效，
-        // 用来抗遮挡；VM 未暴露这一项，保持原写死值。
-        // 2026-11-08 复核留记：曾怀疑 qMax(16.0, ...) 把下界钉死、使延拓阈值对小模板
-        // 失效，试图改成 qMax(1.0, qMin(16.0, 0.4*n))。实测被
-        // templateMinVisibleRatioControlsOcclusion 打回——该腿要求「38% 可见必须失败」，
-        // 说明 16 是**刻意的噪声下界**（小模板要求更高可见率防误检），不是几何 bug。
-        const double need = qMax(16.0, 0.4 * n);
+                // 2026-11-08 复核留记：曾怀疑 qMax(16.0, ...) 把下界钉死、使延拓阈值对小模板
+                // 失效，试图改成 qMax(1.0, qMin(16.0, 0.4*n))。实测被
+                // templateMinVisibleRatioControlsOcclusion 打回——该腿要求「38% 可见必须失败」，
+                // 说明 16 是**刻意的噪声下界**（小模板要求更高可见率防误检），不是几何 bug。
+                const double need = qMax(16.0, 0.4 * n);
                 cv::Mat scoreVis = (r1 + r2) / (rv + 1e-6f);   // cos(Δθ) 的和除以可见点数
+                // 极性忽略模式必须显式保存「无效格」掩膜（复核 2026-11-08）：GOC 的
+                // 有效分数就是 cos(Δθ) 的均值，反极性目标天然是负值——而 polarity=0
+                // 的语义正是把负分取绝对值（"两极性都试"）。事后用 scoreVis<0 反推
+                // 无效格，会把反极性目标一起压成 -1，polarity=0 退化成与 polarity=1 等价。
+                const bool ignorePolarity =
+                    m_params.value(QStringLiteral("polarity"), 1).toInt() == 0;
+                cv::Mat invalidMask;
+                if (ignorePolarity)
+                    invalidMask = (rv < need);
                 scoreVis.setTo(-1.0, rv < need);           // 无效处给 -1（不会被选为最优）
                 // 延拓阈值（VM）：目标被图像边缘截断时，缺失特征比例可放宽可见率门槛
                 if (extendRatio > 0.0 && !wm.empty()) {
@@ -1402,21 +1424,22 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                             const double relaxedNeed =
                                 qMax(16.0, 0.4 * n * (1.0 - extendRatio * outside));
                             const float v = rv.at<float>(yy, xx);
-                            if (v >= relaxedNeed)
+                            if (v >= relaxedNeed) {
                                 scoreVis.at<float>(yy, xx) =
                                     (r1.at<float>(yy, xx) + r2.at<float>(yy, xx)) / (v + 1e-6f);
+                                if (ignorePolarity)
+                                    invalidMask.at<uchar>(yy, xx) = 0;   // 延拓后重新有效
+                            }
                         }
                     }
                 }
-                if (m_params.value(QStringLiteral("polarity"), 1).toInt() == 0) {
-                    // 极性翻转只作用于**有效**位置（复核 P1-1）：上面把可见率不足的格子
-                    // 标记成 -1，而 absdiff(x, 0) 取的是 |x| —— -1 会变成 +1.0，让"看不见
-                    // 的特征"反而成为最高分；配合下方 bestScore>=0.95 提前收工，可读出
-                    // 1.0 的假命中。翻转后必须把无效位压回 -1。
+                if (ignorePolarity) {
+                    // 极性翻转只作用于**有效**位置（复核 2026-11-08）：invalidMask 是
+                    // 可见率（含延拓放宽后）不足的格子。用 score<0 反推会把反极性目标
+                    // 的合法负分一起压掉，所以这里只认显式掩膜。
                     cv::Mat flipped;
                     cv::absdiff(scoreVis, cv::Scalar(0), flipped);
-                    const cv::Mat invalid = (scoreVis < 0.0f);
-                    flipped.setTo(-1.0f, invalid);
+                    flipped.setTo(-1.0f, invalidMask);
                     scoreVis = flipped;
                 }
                 result = scoreVis;
@@ -1885,13 +1908,14 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         // VM 结果表口径：「匹配点」= 模板的匹配中心（锚点）落到场景里的位置。
         // 锚点默认在模板中心（anchorDx/Dy=0），可在模板配置窗里偏移并锁定。
         {
-            const double radA = bestAngle * 3.14159265358979323846 / 180.0;
-            const double caA = std::cos(radA);
-            const double saA = std::sin(radA);
-            const double hx = active.anchorDx * bestScale;
-            const double hy = active.anchorDy * bestScale;
-            m_params[QStringLiteral("matchPointCol")] = col + bestSubpix.x + caA * hx - saA * hy;
-            m_params[QStringLiteral("matchPointRow")] = row + bestSubpix.y + saA * hx + caA * hy;
+            // 与列表路径同一口径（复核 P1-2 残留）：主结果字段也必须走
+            // mapAnchorToImage，不能再用共轭矩阵，否则非零锚点+非零角度时
+            // 「匹配点 X/Y」与结果判断、叠加十字线一起镜像（差 2θ）。
+            const QPointF anchorPoint =
+                mapAnchorToImage(col + bestSubpix.x, row + bestSubpix.y, bestAngle,
+                                 active.anchorDx, active.anchorDy, bestScale);
+            m_params[QStringLiteral("matchPointCol")] = anchorPoint.x();
+            m_params[QStringLiteral("matchPointRow")] = anchorPoint.y();
             m_params[QStringLiteral("matchScaleX")] = bestScale;
             m_params[QStringLiteral("matchScaleY")] = bestScaleY;
         }

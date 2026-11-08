@@ -191,6 +191,61 @@ def selftest(repo):
                 problems.append("arm5_dead")
                 out("[ELW] selftest_arm5=FAIL(关相机不等排空后仍判绿)")
 
+    # 臂6/7：局部变量注册形态（2026-11-08 复核）——先收进变量再整表登记的两形必须判绿；
+    # 变量建了但没流进 registerParams 必须判红（防止判据被放宽成“写过 make*Param 就算”）。
+    good_node = """void XxxNode::init()
+{
+    ParamSpec spec = makeIntParam(QStringLiteral("scale"), 1, 1, 10, QStringLiteral("x"));
+    registerParams({spec});
+
+    ParamSpecList specs;
+    auto addSpec = [&](ParamSpec s, const QString &tip) {
+        s.tooltip = tip;
+        specs.append(s);
+    };
+    addSpec(makeIntParam(QStringLiteral("offset"), 0, -10, 10, tip), QStringLiteral("t"));
+    registerParams(specs);
+}
+
+void XxxNode::run(bool)
+{
+    const int a = m_params.value(QStringLiteral("scale"), 1).toInt();
+    const int b = m_params.value(QStringLiteral("offset"), 0).toInt();
+}
+"""
+    bad_node = """void YyyNode::init()
+{
+    ParamSpec spec = makeIntParam(QStringLiteral("orphan"), 1, 1, 10, QStringLiteral("x"));
+    registerParams({});
+}
+
+void YyyNode::run(bool)
+{
+    const int o = m_params.value(QStringLiteral("orphan"), 1).toInt();
+}
+"""
+    with tempfile.TemporaryDirectory(prefix="vfp_elw_st6_") as tmp:
+        os.makedirs(os.path.join(tmp, "src"))
+        with open(os.path.join(tmp, "src", "XxxNode.cpp"), "w", encoding="utf-8") as fh:
+            fh.write(good_node)
+        f6 = check_param_registration(tmp)
+        if f6:
+            problems.append("arm6_dead")
+            out("[ELW] selftest_arm6=FAIL(局部变量注册的合法形态仍被判红: %s)" % f6)
+        else:
+            out("[ELW] selftest_arm6=ok(局部变量注册两形均判绿)")
+
+    with tempfile.TemporaryDirectory(prefix="vfp_elw_st7_") as tmp:
+        os.makedirs(os.path.join(tmp, "src"))
+        with open(os.path.join(tmp, "src", "YyyNode.cpp"), "w", encoding="utf-8") as fh:
+            fh.write(bad_node)
+        f7 = check_param_registration(tmp)
+        if any("YyyNode.cpp" in x and "orphan" in x for x in f7):
+            out("[ELW] selftest_arm7=ok(局部 spec 未流入 registerParams 后判红)")
+        else:
+            problems.append("arm7_dead")
+            out("[ELW] selftest_arm7=FAIL(未注册的局部 spec 仍判绿：判据被放得太宽)")
+
     return problems
 
 
@@ -283,7 +338,9 @@ def check_param_registration(repo):
     "流程成功、计数 0"。这类缺陷读代码看不出来，但"读了没登记"可以静态比出来。
 
     判据（r15 收紧）：run() 里出现的每个 m_params 键，必须满足其一 ——
-      ① 出现在 registerParams({...}) 或 registerParam(make*Param("键", ...)) 的**实参**里。
+      ① 出现在 registerParams({...}) 或 registerParam(make*Param("键", ...)) 的**实参**里，
+         或经局部变量流入它们：`ParamSpec spec = make*Param("键", ...); registerParams({spec});`
+         与 `addSpec(make*Param("键", ...)); registerParams(specs);`（收集器 append 进已登记的表）。
          光有 make*Param 文本不算：r15 实测过"写在 registerParams 的 }); 之外、返回值被丢掉"，
          那种写法编译通过、面板上没有，旧判据却算它已登记（P1-8）；
       ② init 里用 sp.name = "键" 声明，且同一函数里确实 registerParam(sp)
@@ -326,10 +383,48 @@ def check_param_registration(repo):
             i += 1
         return code[open_idx:]
 
+    def balanced_braces(code, open_idx):
+        depth = 0
+        i = open_idx
+        while i < len(code):
+            if code[i] == "{":
+                depth += 1
+            elif code[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    return code[open_idx:i + 1]
+            i += 1
+        return code[open_idx:]
+
     def registered_keys(code):
         keys = set()
+        registered_ids = set()
         for m in reg_call.finditer(code):
-            keys |= set(decl.findall(balanced(code, m.end() - 1)))
+            block = balanced(code, m.end() - 1)
+            keys |= set(decl.findall(block))
+            registered_ids |= set(_re.findall(r'[A-Za-z_]\w*', block))
+        # 2026-11-08 复核：注册常写成「先收进局部变量再整表登记」的两形——
+        #   A. ParamSpec spec = make*Param("键", ...);  registerParams({spec});
+        #   B. ParamSpecList specs;
+        #      auto addSpec = [&](ParamSpec spec, ...) { specs.append(spec); };
+        #      addSpec(make*Param("键", ...), tip);  registerParams(specs);
+        # 旧判据只在 registerParams(...) 的**实参文本**里找 make*Param，变量形全部漏掉，
+        # 11 个 OpenCV 节点因此被误判。下面只承认真正流进 registerParams 的那个变量，
+        # 仍不承认裸 make*Param 文本（P1-8 形态）。
+        if registered_ids:
+            id_alt = "|".join(_re.escape(x) for x in sorted(registered_ids))
+            for m in _re.finditer(r'\b([A-Za-z_]\w*)\s*=\s*make\w+Param\s*\(\s*' + LIT, code):
+                if m.group(1) in registered_ids:
+                    keys.add(m.group(2))
+            for lm in _re.finditer(r'\b([A-Za-z_]\w*)\s*=\s*\[[^\]]*\]\s*\([^)]*\)\s*\{', code):
+                fn = lm.group(1)
+                body_block = balanced_braces(code, lm.end() - 1)
+                if not _re.search(r'\b(?:' + id_alt + r')\s*\.\s*(?:append|push_back)\s*\(',
+                                  body_block):
+                    continue
+                for cm in _re.finditer(
+                        r'\b' + _re.escape(fn) + r'\s*\(\s*make\w+Param\s*\(\s*' + LIT, code):
+                    keys.add(cm.group(1))
         # registerParam(sp) 只兜住 "sp.name = \"键\"; registerParam(sp);" 这种形态。
         # 2026-10-29 r16：这里原先对**整个 init 正文**跑 decl，等于"正文里出现过
         # make*Param(\"键\") 就算已登记"——P1-8 的形状换个文件就能溜过去。
@@ -400,6 +495,8 @@ def main():
     findings += check_param_registration(repo)
 
     out("[ELW-INV] findings=%d" % len(findings))
+    for _f in findings:
+        out("[ELW-INV-DETAIL] " + _f)
     if findings:
         out("[ELW-VERDICT] RED")
         return 1
