@@ -66,6 +66,8 @@ private slots:
     void testTemplateConfigScaleModeWritesEntry();
     // P2-3：橡皮擦大小滑块（VM 擦除轮廓点按钮右下角三角）
     void testTemplateEraserRadiusSliderWritesEraseCircle();
+    // P2-4：复制掩膜（右击/工具条），偏移 10px 且继承增强匹配勾选
+    void testTemplateConfigCopyMaskDuplicatesShape();
     // P1-8：ROI「继承方式 / 屏蔽区创建」UI 写回参数 + 屏蔽区绘制请求
     void testTemplateRoiInheritAndMaskUiWritesParams();
 };
@@ -1023,6 +1025,69 @@ void ModuleEditorTest::testTemplateEraserRadiusSliderWritesEraseCircle()
     QCOMPARE(erases.first().type, RoiType::Circle);
     QCOMPARE(erases.first().p1, QPointF(60.0, 60.0));
     QCOMPARE(erases.first().p2, QPointF(100.0, 60.0));   // 半径 = 滑块值 40
+}
+
+// P2-4：「复制掩膜」（VM 右击掩膜 → 复制）：工具条入口与右键菜单共用。
+// 本腿钉住：复制行紧跟原行、偏移 10px、继承原行的增强匹配勾选，确定后写进 shapes/enhancedShapes。
+void ModuleEditorTest::testTemplateConfigCopyMaskDuplicatesShape()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    cv::Mat tpl(100, 100, CV_8UC1, cv::Scalar(30));
+    cv::rectangle(tpl, cv::Rect(10, 10, 30, 80), cv::Scalar(220), 3);
+    cv::rectangle(tpl, cv::Rect(60, 10, 30, 80), cv::Scalar(180), 3);
+    const QString tplPath = dir.filePath(QStringLiteral("copy-ui.png"));
+    QVERIFY(cv::imwrite(tplPath.toStdString(), tpl));
+
+    cv::Mat canvas(200, 300, CV_8UC1, cv::Scalar(30));
+    tpl.copyTo(canvas(cv::Rect(100, 50, 100, 100)));
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+    TemplateEntry e;
+    e.name = QStringLiteral("ui-copy");
+    e.imagePath = tplPath;
+    RoiShape a;
+    a.type = RoiType::Rect;
+    a.p1 = QPointF(0, 0);
+    a.p2 = QPointF(50, 100);
+    e.shapes = {a};
+    e.shape = a;
+    node.setTemplates({e});
+    node.setActiveTemplateIndex(0);
+
+    TemplateConfigDialog dlg(&node, 0);
+    auto *list = dlg.findChild<QListWidget *>(QStringLiteral("templateShapeList"));
+    auto *copyBtn = dlg.findChild<QPushButton *>(QStringLiteral("copyMaskButton"));
+    QVERIFY2(list != nullptr, "未找到模板配置窗掩膜列表");
+    QVERIFY2(copyBtn != nullptr, "未找到「复制掩膜」按钮 copyMaskButton");
+    QCOMPARE(list->count(), 1);
+
+    list->setCurrentRow(0);
+    list->item(0)->setCheckState(Qt::Checked);   // 原行开增强匹配
+    copyBtn->click();
+    QCOMPARE(list->count(), 2);
+
+    QPushButton *okBtn = nullptr;
+    for (QPushButton *b : dlg.findChildren<QPushButton *>()) {
+        if (b->text() == QStringLiteral("确定")) {
+            okBtn = b;
+            break;
+        }
+    }
+    QVERIFY2(okBtn != nullptr, "未找到模板配置窗「确定」按钮");
+    okBtn->click();
+
+    const QVector<TemplateEntry> back = node.templates();
+    QCOMPARE(back.size(), 1);
+    const QVector<RoiShape> shapes = back.first().shapes;
+    QCOMPARE(shapes.size(), 2);
+    QCOMPARE(shapes.at(0).p1, QPointF(0.0, 0.0));
+    QCOMPARE(shapes.at(1).p1, QPointF(10.0, 10.0));    // 复制行偏移 10px
+    QCOMPARE(shapes.at(1).p2, QPointF(60.0, 110.0));
+    // 复制行继承原行的增强匹配勾选（索引 0/1 都在集合里）
+    QCOMPARE(back.first().enhancedShapes, QVector<int>({0, 1}));
 }
 
 // P1-8：基本参数「继承方式 / 屏蔽区创建」的 UI 必须真的写回参数；屏蔽区绘制/清除两个按钮

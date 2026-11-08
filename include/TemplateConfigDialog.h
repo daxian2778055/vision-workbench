@@ -67,6 +67,8 @@ private slots:
     void onRoiEdited(const RoiShape &shape);
     void onUndo();
     void onRedo();
+    /// 复制掩膜（VM：右击掩膜 → 复制；工具条同一入口）：复制当前行形状并偏移 10px
+    void copySelectedShape();
     void onPickOtherImage();
     void onPickSavePath();
     void onConfirm();

@@ -166,6 +166,10 @@ static QIcon vmToolIcon(const QString &kind)
         p.drawLine(QPointF(22, 22), QPointF(16, 22));
         p.drawLine(QPointF(6, 16), QPointF(6, 22));
         p.drawRect(10, 10, 8, 8);
+    } else if (kind == QLatin1String("copy")) {
+        // 复制掩膜：两张错位叠放的纸
+        p.drawRect(6, 5, 11, 14);
+        p.drawRect(12, 9, 11, 14);
     } else if (kind == QLatin1String("fullscreen")) {
         p.drawLine(QPointF(6, 12), QPointF(6, 6));
         p.drawLine(QPointF(6, 6), QPointF(12, 6));
@@ -201,6 +205,26 @@ static void makeToolButton(QPushButton *btn, const QString &glyph, const QString
     btn->setFlat(true);
     btn->setToolTip(name);
     btn->setAccessibleName(name);
+}
+
+/// 复制掩膜时的平移：矩形/旋转矩形/圆用 p1/p2，多边形用点集。
+static void translateShape(RoiShape &s, double dx, double dy)
+{
+    const QPointF d(dx, dy);
+    switch (s.type) {
+    case RoiType::Rect:
+    case RoiType::RotatedRect:
+    case RoiType::Circle:
+        s.p1 += d;
+        s.p2 += d;
+        break;
+    case RoiType::Polygon:
+        for (QPointF &p : s.points)
+            p += d;
+        break;
+    default:
+        break;
+    }
 }
 
 }   // namespace
@@ -248,6 +272,7 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     auto *shapeWandPlusBtn = new QPushButton();
     auto *clearShapeBtn = new QPushButton();
     auto *delShapeBtn = new QPushButton();
+    auto *copyShapeBtn = new QPushButton();
     auto *splitBtn = new QPushButton();
     auto *scissorsBtn = new QPushButton();
     auto *maskModeBtn = new QPushButton();
@@ -261,6 +286,8 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     makeToolButton(shapeWandPlusBtn, QStringLiteral("wandplus"), QStringLiteral("魔术棒+"));
     makeToolButton(clearShapeBtn, QStringLiteral("clear"), QStringLiteral("清除形状"));
     makeToolButton(delShapeBtn, QStringLiteral("delete"), QStringLiteral("删除选中"));
+    copyShapeBtn->setObjectName(QStringLiteral("copyMaskButton"));
+    makeToolButton(copyShapeBtn, QStringLiteral("copy"), QStringLiteral("复制掩膜"));
     makeToolButton(splitBtn, QStringLiteral("scissors"), QStringLiteral("分割"));
     makeToolButton(scissorsBtn, QStringLiteral("cut"), QStringLiteral("剪刀"));
     makeToolButton(maskModeBtn, QStringLiteral("brush"), QStringLiteral("屏蔽模式"));
@@ -343,7 +370,7 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
         tools->addWidget(b);
     }
     tools->addWidget(m_wandTol);
-    for (QPushButton *b : {clearShapeBtn, delShapeBtn, splitBtn, scissorsBtn,
+    for (QPushButton *b : {clearShapeBtn, delShapeBtn, copyShapeBtn, splitBtn, scissorsBtn,
                            maskModeBtn}) {
         tools->addWidget(b);
     }
@@ -380,6 +407,18 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     m_list->setMinimumHeight(160);
     m_list->setToolTip(QStringLiteral(
         "保留形状行的复选框 = VM「增强匹配」（仅高精度匹配）：该掩膜区域相似度要求更严"));
+    // VM：右击掩膜 → 复制（工具条「复制掩膜」是同一入口）
+    m_list->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_list, &QListWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
+        QListWidgetItem *item = m_list->itemAt(pos);
+        if (!item)
+            return;
+        m_list->setCurrentItem(item);
+        QMenu menu(this);
+        QAction *copyAct = menu.addAction(QStringLiteral("复制掩膜"));
+        if (menu.exec(m_list->viewport()->mapToGlobal(pos)) == copyAct)
+            copySelectedShape();
+    });
     rightLay->addWidget(m_list, 1);
 
     rightLay->addWidget(new QLabel(QStringLiteral("配置参数")));
@@ -607,6 +646,7 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
                             ? QStringLiteral("屏蔽模式：接下来画/取到的形状都进屏蔽列表（挖掉该区域）。")
                             : QStringLiteral("保留模式：接下来画/取到的形状进保留列表。"));
     });
+    connect(copyShapeBtn, &QPushButton::clicked, this, &TemplateConfigDialog::copySelectedShape);
     connect(delShapeBtn, &QPushButton::clicked, this, [this]() {
         const int row = m_list->currentRow();
         if (row < 0)
@@ -1238,6 +1278,40 @@ void TemplateConfigDialog::onRedo()
     m_undoStates.append(ShapeState{m_shapes, m_excludes, m_erases, m_shape, m_shapeEnhanced});
     applyShapeHistory(m_redoStates.takeLast());
     m_hint->setText(QStringLiteral("已恢复到撤销前的状态。"));
+}
+
+void TemplateConfigDialog::copySelectedShape()
+{
+    const int row = m_list->currentRow();
+    if (row < 0)
+        return;
+    if (row < m_shapes.size()) {
+        pushShapeHistory();
+        RoiShape copy = m_shapes.at(row);
+        translateShape(copy, 10.0, 10.0);
+        m_shapes.insert(row + 1, copy);
+        if (m_shapeEnhanced.size() != m_shapes.size() - 1)
+            m_shapeEnhanced.resize(m_shapes.size() - 1);
+        m_shapeEnhanced.insert(row + 1, m_shapeEnhanced.value(row, false));
+        m_shape = m_shapes.first();
+        refreshShapeList();
+        m_list->setCurrentRow(row + 1);
+        refreshFeaturePreview();
+        m_hint->setText(
+            QStringLiteral("已复制第 %1 块掩膜（偏移 10px），可拖动调整位置。").arg(row + 1));
+        return;
+    }
+    const int exRow = row - m_shapes.size();
+    if (exRow < 0 || exRow >= m_excludes.size())
+        return;
+    pushShapeHistory();
+    RoiShape copy = m_excludes.at(exRow);
+    translateShape(copy, 10.0, 10.0);
+    m_excludes.insert(exRow + 1, copy);
+    refreshShapeList();
+    m_list->setCurrentRow(row + 1);
+    refreshFeaturePreview();
+    m_hint->setText(QStringLiteral("已复制第 %1 块屏蔽掩膜（偏移 10px）。").arg(exRow + 1));
 }
 
 void TemplateConfigDialog::refreshShapeList()
