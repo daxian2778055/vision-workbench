@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QDialog>
+#include <QPointer>
 #include <QVector>
 #include <QMap>
 #include <QVariant>
@@ -146,7 +147,11 @@ private slots:
     void saveGeometryNow();
 
 private:
-    NodeBase *m_node = nullptr;
+    /// QPointer 而非裸指针（2026-11-08 复核）：编辑器窗口可能比节点活得久
+    /// （删掉节点时窗口还开着）。裸指针在对象析构后仍非空，8 处 `if (!m_node)`
+    /// 全部失效，随后 `m_node->execute()` 直接踩已释放内存。QPointer 在节点
+    /// 析构时自动置空，现有判空逻辑立刻生效。
+    QPointer<NodeBase> m_node;
     HalconWindow *m_view = nullptr;
     QScrollArea *m_paramHost = nullptr;
     QSplitter *m_splitter = nullptr;

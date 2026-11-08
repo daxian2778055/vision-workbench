@@ -122,8 +122,10 @@ void ParameterSearchDialog::buildTree()
             auto *nodeItem = new QTreeWidgetItem(flowItem);
             nodeItem->setText(0, node->fullName());
             nodeItem->setFirstColumnSpanned(true);
-            nodeItem->setData(0, Qt::UserRole, QVariant::fromValue<qulonglong>(
-                                                     reinterpret_cast<qulonglong>(node)));
+            // 只存模块号（int），**不存裸 NodeBase\***：搜索结果可能在弹出提示前
+            // 就已过期（节点被删），从 UserRole 还原指针再解引用就是 UAF。
+            // 2026-11-08 复核 P3 修复。
+            nodeItem->setData(0, Qt::UserRole, node->moduleId());
 
             // ---- 输入参数 ----
             auto *inputItem = new QTreeWidgetItem(nodeItem);
@@ -139,8 +141,7 @@ void ParameterSearchDialog::buildTree()
                 leaf->setText(1, port->name());
                 leaf->setText(2, QStringLiteral("—"));
                 leaf->setText(3, QStringLiteral("node->getInputData(%1)").arg(i));
-                leaf->setData(0, Qt::UserRole, QVariant::fromValue<qulonglong>(
-                                                 reinterpret_cast<qulonglong>(node)));
+                leaf->setData(0, Qt::UserRole, node->moduleId());
             }
 
             // ---- 输出参数 ----
@@ -157,8 +158,7 @@ void ParameterSearchDialog::buildTree()
                 leaf->setText(1, port->name());
                 leaf->setText(2, QStringLiteral("—"));
                 leaf->setText(3, QStringLiteral("node->getOutputData(%1)").arg(i));
-                leaf->setData(0, Qt::UserRole, QVariant::fromValue<qulonglong>(
-                                                 reinterpret_cast<qulonglong>(node)));
+                leaf->setData(0, Qt::UserRole, node->moduleId());
             }
 
             // ---- 运行参数 ----
@@ -181,8 +181,7 @@ void ParameterSearchDialog::buildTree()
                 leaf->setText(1, row.name);
                 leaf->setText(2, node->getParam(row.name).toString());
                 leaf->setText(3, QStringLiteral("node->getParam(\"%1\")").arg(row.name));
-                leaf->setData(0, Qt::UserRole, QVariant::fromValue<qulonglong>(
-                                                 reinterpret_cast<qulonglong>(node)));
+                leaf->setData(0, Qt::UserRole, node->moduleId());
             }
 
             if (inputItem->childCount() == 0)
@@ -265,13 +264,15 @@ void ParameterSearchDialog::onLocateNode()
         return;
     }
 
-    NodeBase *node = reinterpret_cast<NodeBase *>(
-        item->data(0, Qt::UserRole).toULongLong());
+    // 只读模块号，不解引用节点：搜索结果可能在弹提示前已过期（节点被删），
+    // 旧实现从 UserRole 还原裸 NodeBase* 再取 fullName()，就是 UAF。
+    // 模块名在构建结果时已写进树（nodeItem 的第 0 列），这里直接用。
+    const int moduleId = item->data(0, Qt::UserRole).toInt();
+    Q_UNUSED(moduleId)   // 当前「定位」只弹提示不跳转；保留模块号供后续跳转使用
     const QString nodeName = item->parent() && item->parent()->parent()
                                  ? item->parent()->parent()->text(0)
                                  : QString();
     QMessageBox::information(
         this, QStringLiteral("定位"),
-        QStringLiteral("已定位到模块: %1\n参数: %2")
-            .arg(node ? node->fullName() : nodeName, item->text(1)));
+        QStringLiteral("已定位到模块: %1\n参数: %2").arg(nodeName, item->text(1)));
 }

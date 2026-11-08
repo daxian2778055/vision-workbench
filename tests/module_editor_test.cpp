@@ -55,6 +55,7 @@ private slots:
     void testTemplateConfigUndoRedo();
     void testAllModuleWindowsArePureTabs();
     void testResultOverlayUsesDisplayConfig();
+    void testEditorNodePointerClearsOnDelete();
     void testModuleResultPageUsesResultFields();
 };
 
@@ -709,6 +710,27 @@ void ModuleEditorTest::testModuleResultPageUsesResultFields()
     QVERIFY2(elapsedRow >= 0, "结果表缺少「耗时」行");
     QCOMPARE(table->item(elapsedRow, 1)->text(), QStringLiteral("-"));
     QCOMPARE(table->item(elapsedRow, 2)->text(), QStringLiteral("ms"));
+}
+
+// 复核（扫描清单「删除节点时脏编辑器继续执行」）：编辑器窗口可能比节点活得久。
+// m_node 原是裸 NodeBase*，节点析构后指针仍非空 ⇒ 8 处 `if (!m_node)` 全部失效，
+// 随后的 m_node->execute() / 参数读写直接踩已释放内存。改成 QPointer 后，
+// 节点析构即自动置空，判空逻辑立刻生效。
+void ModuleEditorTest::testEditorNodePointerClearsOnDelete()
+{
+    FlowScene scene;
+    NodeBase *node = scene.createNode(NodeBase::IMAGE_PROCESSING, QPointF(40, 40),
+                                      QStringLiteral("OpenCV二值化"));
+    QVERIFY2(node != nullptr, "无法创建测试节点");
+
+    ModuleEditorDialog dlg(node);
+    QVERIFY2(dlg.node() == node, "构造后应持有该节点");
+
+    // 现场形态：删掉节点时模块配置窗还开着
+    scene.removeNode(node);
+    QVERIFY2(dlg.node() == nullptr,
+             "节点删除后编辑器持有的节点必须自动置空（QPointer）；"
+             "若仍非空，后续 m_node->execute() 就是 UAF");
 }
 
 QTEST_MAIN(ModuleEditorTest)
