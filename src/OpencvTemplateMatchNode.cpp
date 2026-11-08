@@ -1648,8 +1648,9 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                     cv::magnitude(sgx, sgy, smag);
                     cv::divide(sgx, smag + 1e-6f, curSearchCos);
                     cv::divide(sgy, smag + 1e-6f, curSearchSin);
-                    cv::threshold(smag, curSearchStrong, searchEdgeThreshold, 1.0, cv::THRESH_BINARY);
-            refineFeatureMask(curSearchStrong, minChain, featureScale);
+                    cv::threshold(smag, curSearchStrong, searchEdgeThreshold, 1.0,
+                                  cv::THRESH_BINARY);
+                    refineFeatureMask(curSearchStrong, minChain, featureScale);
                     curSearchStrong.convertTo(curSearchStrong, CV_32F);
                     cv::multiply(curSearchCos, curSearchStrong, curSearchCos);   // 分子分母同掩膜
                     cv::multiply(curSearchSin, curSearchStrong, curSearchSin);
