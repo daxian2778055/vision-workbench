@@ -88,6 +88,9 @@ public:
     /// 有效边缘阈值（显式传入本模板参数；run/可视化/对话框共用）
     static double effectiveEdgeThresholdFor(const cv::Mat &tmpl, int aperture,
                                             double manualThreshold, bool autoMode);
+    /// 模板内容指纹（FNV-1a，全像素）。导出是为了让测试锁住「内容变了缓存键就变」
+    /// 这条不变量（复核 P1-4）；生产代码只在变形缓存键里用。
+    static quint64 templateFingerprint(const cv::Mat &tmpl);
     /// 锚点（模板局部系偏移）→ 图像坐标（2026-11-08 复核 P1-2）。
     /// 必须与 warpTemplate 所用 cv::getRotationMatrix2D 的线性部分同一口径
     /// [cos sin; -sin cos]：模板就是按该矩阵旋转后再去匹配的；锚点若用共轭旋转

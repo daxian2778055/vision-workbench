@@ -90,6 +90,7 @@ private slots:
     // 匹配中心（锚点）偏移：匹配点必须跟着锚点走（VM 的「匹配中心 X/Y」）
     void templateMatchAnchorOffsetsMatchPoint();
     void templateAnchorFollowsWarpRotation();
+    void templateFingerprintDistinguishesContent();
     // 分割/剪刀：按连通域拆块、沿画线切开
     void templateSplitShapeByCut();
     // 继承 ROI：上游命中框当成搜索区域（框外的更优候选不许抢）
@@ -2607,6 +2608,31 @@ void FeatureMatchTest::templateAnchorFollowsWarpRotation()
     const QPointF pScaled = OpencvTemplateMatchNode::mapAnchorToImage(100, 100, 90.0, 20, 0, 2.0);
     QVERIFY2(qAbs(pScaled.y() - 60.0) < 1e-9,
              qPrintable(QStringLiteral("90°+scale2 应到 row=60，实得 %1").arg(pScaled.y())));
+}
+
+// 复核 P1-4：变形缓存的键原先只有「尺寸 + 路径」。同路径换图重训（尺寸往往不变）
+// 会命中上一张模板的旋转/缩放结果；路径为空时更糟——所有同尺寸内存模板共用 "mem"。
+// 这里锁住键里那个内容指纹的判定基础。
+void FeatureMatchTest::templateFingerprintDistinguishesContent()
+{
+    cv::Mat a(40, 40, CV_8UC1, cv::Scalar(50));
+    cv::rectangle(a, cv::Rect(10, 10, 20, 20), cv::Scalar(200), cv::FILLED);
+
+    const quint64 fa1 = OpencvTemplateMatchNode::templateFingerprint(a);
+    const quint64 fa2 = OpencvTemplateMatchNode::templateFingerprint(a.clone());
+    QCOMPARE(fa1, fa2);   // 同内容同指纹，缓存才能真的复用
+
+    cv::Mat b = a.clone();
+    b.at<uchar>(0, 0) = uchar(b.at<uchar>(0, 0) + 1);
+    QVERIFY2(OpencvTemplateMatchNode::templateFingerprint(b) != fa1,
+             "改一个像素指纹就必须变，否则同路径换图重训仍会命中旧变形");
+
+    cv::Mat c(40, 40, CV_8UC1, cv::Scalar(50));
+    cv::circle(c, cv::Point(20, 20), 15, cv::Scalar(200), cv::FILLED);
+    QVERIFY2(OpencvTemplateMatchNode::templateFingerprint(c) != fa1,
+             "同尺寸不同图形指纹必须不同（否则内存模板互相串味）");
+
+    QVERIFY(OpencvTemplateMatchNode::templateFingerprint(cv::Mat()) != 0);
 }
 
 QTEST_MAIN(FeatureMatchTest)

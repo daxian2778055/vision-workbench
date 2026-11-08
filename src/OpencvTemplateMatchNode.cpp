@@ -1268,12 +1268,16 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             }
         }
 
-        // 缓存键：模板身份（尺寸 + 路径）+ 角度 + 尺度
+        // 缓存键：模板身份（尺寸 + 路径 + **内容指纹**）+ 角度 + 尺度。
+        // 只放尺寸和路径不够（复核 P1-4）：同路径换图重训后尺寸往往不变，
+        // 键不变 ⇒ 命中上一张模板的变形结果；路径为空时更糟——所有同尺寸的
+        // 内存模板共用 "mem" 一个键，直接串味。指纹把这两种情况都区分开。
         const QString warpKeyBase =
-            QStringLiteral("%1x%2:%3")
+            QStringLiteral("%1x%2:%3:%4")
                 .arg(tmpl.cols)
                 .arg(tmpl.rows)
-                .arg(templatePath.isEmpty() ? QStringLiteral("mem") : templatePath);
+                .arg(templatePath.isEmpty() ? QStringLiteral("mem") : templatePath)
+                .arg(templateFingerprint(tmpl), 0, 16);
 
         double bestScore = -1e9;
         cv::Point bestLoc(0, 0);
@@ -2182,6 +2186,27 @@ TemplateEntry OpencvTemplateMatchNode::activeTemplate() const
         return e;
     }
     return list.at(activeTemplateIndex());
+}
+
+quint64 OpencvTemplateMatchNode::templateFingerprint(const cv::Mat &tmpl)
+{
+    // FNV-1a 全像素扫描。用途：变形缓存的键里必须含**内容**，不能只有「尺寸 + 路径」
+    // —— 同一路径换图重训、或两个同尺寸的内存模板，会共用同一个键并拿到上一张模板的
+    // 旋转/缩放结果（复核 P1-4）。模板通常几百像素边长，每帧一次全扫在微秒级，
+    // 相对匹配本身可忽略。
+    quint64 h = 1469598103934665603ull;   // FNV-1a offset basis
+    if (tmpl.empty())
+        return h;
+    const size_t rowBytes = size_t(tmpl.cols) * tmpl.elemSize();
+    for (int y = 0; y < tmpl.rows; ++y) {
+        const uchar *row = tmpl.ptr<uchar>(y);
+        for (size_t i = 0; i < rowBytes; ++i) {
+            h ^= quint64(row[i]);
+            h *= 1099511628211ull;        // FNV prime
+        }
+    }
+    h ^= quint64(tmpl.type());
+    return h;
 }
 
 QPointF OpencvTemplateMatchNode::mapAnchorToImage(double centerX, double centerY,
