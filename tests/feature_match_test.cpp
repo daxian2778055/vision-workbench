@@ -140,6 +140,10 @@ private slots:
     void templateScaleRangeFindsScaledInstance();
     // VM 模板配置「尺度模式」：只控制速度尺度自动/手动，与搜索尺度范围无关
     void templateScaleModeControlsSpeedScaleOnly();
+    // VM「继承方式=按参数」：继承中心 X/Y、宽/高、角度决定搜索区域（可用参数订阅喂值）
+    void templateRoiInheritByParamsControlsSearchRegion();
+    // VM「屏蔽区创建=绘制/继承」：屏蔽区内的候选不检测（绘制多边形 / 订阅掩膜图）
+    void templateMaskRegionExcludesCandidates();
 };
 
 namespace {
@@ -3312,6 +3316,138 @@ void FeatureMatchTest::templateScaleModeControlsSpeedScaleOnly()
     QCOMPARE(back.speedScale, 7);
     TemplateEntry dflt = TemplateEntry::fromJson(QJsonObject());
     QCOMPARE(dflt.scaleModeAuto, true);
+}
+
+// VM「ROI创建=继承 → 继承方式=按参数」：搜索区域由继承中心 X/Y、宽/高、角度决定；
+// 这 5 个参数在「参数订阅」表里可逐项订阅上游结果（本用例直接写值，验证消费侧）。
+void FeatureMatchTest::templateRoiInheritByParamsControlsSearchRegion()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const cv::Mat patch = makePatch();
+    const QString tpl = dir.filePath(QStringLiteral("inherit-by-params.png"));
+    QVERIFY(cv::imwrite(tpl.toStdString(), patch));
+
+    cv::Mat canvas(600, 600, CV_8UC1, cv::Scalar(kCanvasBackground));
+    const cv::Rect left(50, 60, kTemplateSize, kTemplateSize);
+    const cv::Rect right(360, 200, kTemplateSize, kTemplateSize);
+    patch.copyTo(canvas(left));
+    patch.copyTo(canvas(right));
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.5);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("scaleMin"), 1.0);
+    node.setParam(QStringLiteral("scaleMax"), 1.0);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("templatePath"), tpl);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+    node.setParam(QStringLiteral("roiSource"), 1);        // ROI创建=继承
+    node.setParam(QStringLiteral("roiInheritMode"), 1);   // 继承方式=按参数
+    node.setParam(QStringLiteral("roiInheritX"), right.x + kTemplateSize / 2.0);
+    node.setParam(QStringLiteral("roiInheritY"), right.y + kTemplateSize / 2.0);
+    node.setParam(QStringLiteral("roiInheritWidth"), 160.0);
+    node.setParam(QStringLiteral("roiInheritHeight"), 160.0);
+    node.setParam(QStringLiteral("roiInheritAngle"), 0.0);
+    node.run(false);
+    const double col = node.getParam(QStringLiteral("matchCol")).toDouble();
+    const double row = node.getParam(QStringLiteral("matchRow")).toDouble();
+    const double cx = right.x + kTemplateSize / 2.0;
+    const double cy = right.y + kTemplateSize / 2.0;
+    qInfo("inherit-params: hit=(%.1f,%.1f) expect=(%.1f,%.1f)", col, row, cx, cy);
+    QVERIFY2(node.getParam(QStringLiteral("moduleStatus")).toBool(),
+             "按参数继承覆盖右侧工件时应命中");
+    QVERIFY2(qAbs(col - cx) <= 3.0 && qAbs(row - cy) <= 3.0,
+             qPrintable(QStringLiteral("按参数继承没生效：命中 (%1,%2)，期望 (%3,%4)")
+                            .arg(col).arg(row).arg(cx).arg(cy)));
+
+    // 反向：继承中心挪到空白区（宽高有效）→ 搜索区域里没有目标，必须找不到。
+    // 若实现忽略 roiInherit* 而退回整图，这里会命中左侧工件 ⇒ 判红。
+    node.setParam(QStringLiteral("roiInheritX"), 150.0);
+    node.setParam(QStringLiteral("roiInheritY"), 430.0);
+    node.setParam(QStringLiteral("roiInheritWidth"), 200.0);
+    node.setParam(QStringLiteral("roiInheritHeight"), 160.0);
+    node.run(false);
+    qInfo("inherit-params: blank-region status=%d module=%d",
+          node.getParam(QStringLiteral("matchStatus")).toInt(),
+          int(node.getParam(QStringLiteral("moduleStatus")).toBool()));
+    QCOMPARE(node.getParam(QStringLiteral("matchStatus")).toInt(), 0);
+    QCOMPARE(node.getParam(QStringLiteral("moduleStatus")).toBool(), false);
+}
+
+// VM「屏蔽区创建」：屏蔽区（ROI 内不检测的区域）支持绘制多边形与继承上游 Region/掩膜图。
+// 画布放两个工件，maxMatches=2：
+//   基线 2 个 → 绘制屏蔽左侧 → 只剩右侧 → 继承掩膜图屏蔽右侧 → 只剩左侧。
+void FeatureMatchTest::templateMaskRegionExcludesCandidates()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const cv::Mat patch = makePatch();
+    const QString tpl = dir.filePath(QStringLiteral("mask-region.png"));
+    QVERIFY(cv::imwrite(tpl.toStdString(), patch));
+
+    cv::Mat canvas(300, 700, CV_8UC1, cv::Scalar(kCanvasBackground));
+    const cv::Rect left(60, 80, kTemplateSize, kTemplateSize);
+    const cv::Rect right(460, 80, kTemplateSize, kTemplateSize);
+    patch.copyTo(canvas(left));
+    patch.copyTo(canvas(right));
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.5);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("scaleMin"), 1.0);
+    node.setParam(QStringLiteral("scaleMax"), 1.0);
+    node.setParam(QStringLiteral("maxMatches"), 2);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("templatePath"), tpl);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+
+    node.run(false);
+    const int baseCount = node.getParam(QStringLiteral("matchCount")).toInt();
+    QCOMPARE(baseCount, 2);
+
+    // ① 绘制：多边形覆盖左侧工件（外扩 20px，避免边缘平移候选漏网）
+    const cv::Rect mleft(left.x - 20, left.y - 20, left.width + 40, left.height + 40);
+    const QString poly = QStringLiteral("%1,%2 %3,%2 %3,%4 %1,%4")
+                             .arg(mleft.x)
+                             .arg(mleft.y)
+                             .arg(mleft.x + mleft.width)
+                             .arg(mleft.y + mleft.height);
+    node.setParam(QStringLiteral("maskSource"), 0);
+    node.setParam(QStringLiteral("maskRegionPolygon"), poly);
+    node.run(false);
+    const int drawCount = node.getParam(QStringLiteral("matchCount")).toInt();
+    const double drawCol = node.getParam(QStringLiteral("matchCol")).toDouble();
+    qInfo("mask-region: base=%d drawn-left=%d col=%.1f", baseCount, drawCount, drawCol);
+    QCOMPARE(drawCount, 1);
+    QVERIFY2(qAbs(drawCol - (right.x + kTemplateSize / 2.0)) <= 3.0,
+             qPrintable(QStringLiteral("绘制屏蔽左侧后应只剩右侧，实际命中列 %1").arg(drawCol)));
+
+    // ② 继承：清掉绘制多边形，改订阅「屏蔽区」（slot 2），白=屏蔽；这里屏蔽右侧。
+    node.setParam(QStringLiteral("maskRegionPolygon"), QString());
+    node.setParam(QStringLiteral("maskSource"), 1);
+    cv::Mat maskMat(canvas.rows, canvas.cols, CV_8UC1, cv::Scalar(0));
+    cv::rectangle(maskMat,
+                  cv::Rect(right.x - 20, right.y - 20, right.width + 40, right.height + 40),
+                  cv::Scalar(255), cv::FILLED);
+    auto maskObj = QSharedPointer<DataObject>::create();
+    maskObj->setHImage(OpencvUtil::matToHimage(maskMat));
+    node.setInputData(2, maskObj);
+    node.run(false);
+    const int inheritCount = node.getParam(QStringLiteral("matchCount")).toInt();
+    const double inheritCol = node.getParam(QStringLiteral("matchCol")).toDouble();
+    qInfo("mask-region: inherited-right=%d col=%.1f", inheritCount, inheritCol);
+    QCOMPARE(inheritCount, 1);
+    QVERIFY2(qAbs(inheritCol - (left.x + kTemplateSize / 2.0)) <= 3.0,
+             qPrintable(QStringLiteral("继承屏蔽右侧后应只剩左侧，实际命中列 %1").arg(inheritCol)));
 }
 
 // VM「特征尺度 / 最小链长」（官方定义：特征尺度越大特征点越稀疏；链长小于最小链长的特征链不保留）。

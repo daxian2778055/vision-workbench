@@ -3264,6 +3264,9 @@ void MainWindow::openModuleEditor(NodeBase *node)
     // 模块窗「绘制检测区域」→ 主画布拾取（VM 的模块窗是纯参数窗，绘制在图像窗口完成）
     connect(dlg, &ModuleEditorDialog::searchRegionPickRequested,
             this, &MainWindow::beginSearchRegionPick);
+    // P1-8：模块窗「绘制屏蔽区」→ 主画布逐点绘制，追加到 maskRegionPolygon。
+    connect(dlg, &ModuleEditorDialog::maskRegionPickRequested,
+            this, &MainWindow::beginMaskRegionPick);
     // 模块窗「ROI 区域绘制」→ 主画布画模板框（框完再由「训练模板」显式训练）
     connect(dlg, &ModuleEditorDialog::templateRoiPickRequested,
             this, &MainWindow::beginTemplateRoiPick);
@@ -6605,6 +6608,23 @@ void MainWindow::beginTemplateRoiPick(NodeBase *node, bool rotatedRect)
         return;
     }
     ui->statusBar->showMessage(tr("请在图像上框定 ROI 区域；框完在「特征模板」页点「训练模板」"), 8000);
+    if (QWidget *editor = m_editors.lookup(node)) {
+        editor->raise();
+        editor->activateWindow();
+    }
+}
+
+void MainWindow::beginMaskRegionPick(NodeBase *node)
+{
+    if (!prepareCanvasPick(node))
+        return;
+    if (!m_imageDisplay->startMaskRegionPick(node)) {
+        ui->statusBar->showMessage(tr("该模块没有可绘制的屏蔽区"), 4000);
+        return;
+    }
+    ui->statusBar->showMessage(
+        tr("请在图像上逐点绘制屏蔽区：单击加点、双击完成、右键取消（可重复绘制多块）"), 8000);
+    // 模块窗保持在前：画布在右侧仍可点，画完能立刻看到参数回填
     if (QWidget *editor = m_editors.lookup(node)) {
         editor->raise();
         editor->activateWindow();

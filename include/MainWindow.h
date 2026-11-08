@@ -250,6 +250,8 @@ private:
     void startRoiPick(NodeBase *node);
     /// 模块窗「绘制」→ 主画布重画模板匹配的检测区域（polygon=true 逐点绘制）
     void beginSearchRegionPick(NodeBase *node, bool polygon);
+    /// P1-8：主画布绘制 ROI 级屏蔽区（每次追加一块多边形）
+    void beginMaskRegionPick(NodeBase *node);
     /// 模块窗「绘制」→ 主画布重画模板匹配的 ROI 区域（模板框）
     void beginTemplateRoiPick(NodeBase *node, bool rotatedRect);
     /// 检测区域输入框右侧「取点」→ 主画布单击取坐标

@@ -53,6 +53,8 @@ signals:
     void templateRoiPickRequested(NodeBase *node, bool rotatedRect);
     /// 请求在主画布上为检测区域的某个字段取点：0=左列 1=上行 2=宽度 3=高度
     void coordinatePickRequested(NodeBase *node, int field);
+    /// 请求在主画布上绘制 ROI 级屏蔽区（VM「屏蔽区创建=绘制」；可画多块）
+    void maskRegionPickRequested(NodeBase *node);
     /// 通用几何 ROI 绘制请求：模块窗是纯页签窗，绘制落在主画布
     void geometryPickRequested(NodeBase *node);
     /// 通用掩膜编辑请求：掩膜画笔落在主画布（module window 不再内置图像区）

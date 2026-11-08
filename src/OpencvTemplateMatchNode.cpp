@@ -103,6 +103,75 @@ RoiShape shapeFromJsonObj(const QJsonObject &s)
     return shape;
 }
 
+/// 屏蔽区多边形串："x1,y1 x2,y2 ..."；多条用 ';' 分隔（VM 屏蔽区可画多块）。
+QVector<RoiShape> maskPolygonsFromText(const QString &text)
+{
+    QVector<RoiShape> out;
+    for (const QString &chunk : text.split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
+        RoiShape s;
+        s.type = RoiType::Polygon;
+        for (const QString &pt : chunk.split(QLatin1Char(' '), Qt::SkipEmptyParts)) {
+            const QStringList xy = pt.split(QLatin1Char(','));
+            if (xy.size() != 2)
+                continue;
+            bool okX = false, okY = false;
+            const double x = xy[0].toDouble(&okX);
+            const double y = xy[1].toDouble(&okY);
+            if (okX && okY)
+                s.points.append(QPointF(x, y));
+        }
+        if (s.points.size() >= 3)
+            out.append(s);
+    }
+    return out;
+}
+
+/// 把订阅到的屏蔽区对象转成全图掩膜（8U，255=屏蔽）。支持 Region / 图像 /
+/// 具名子结果「掩膜」三种形态；取不到返回空（=没有屏蔽区）。
+cv::Mat maskRegionFromData(const QSharedPointer<DataObject> &data, const cv::Size &size,
+                           int depth = 0)
+{
+    if (!data || size.width <= 0 || size.height <= 0 || depth > 1)
+        return {};
+    if (data->getType() == DataObject::DataType::Region) {
+        try {
+            const HalconCpp::HRegion region = data->getHRegion();
+            if (region.IsInitialized()) {
+                cv::Mat m(size, CV_8UC1, cv::Scalar(0));
+                HalconCpp::HTuple rows, cols;
+                region.GetRegionPoints(&rows, &cols);
+                const Hlong n = rows.Length();
+                for (Hlong i = 0; i < n; ++i) {
+                    const Hlong y = rows[i].L();
+                    const Hlong x = cols[i].L();
+                    if (x >= 0 && y >= 0 && x < size.width && y < size.height)
+                        m.at<uchar>(int(y), int(x)) = 255;
+                }
+                return m;
+            }
+        } catch (const HalconCpp::HException &) {
+            // 不是 Region（或已失效）：继续尝试图像形态
+        }
+    }
+    if (data->getHImage().IsInitialized()) {
+        cv::Mat m = OpencvUtil::himageToMat(HImage(data->getHImage()));
+        if (!m.empty()) {
+            if (m.channels() == 3)
+                cv::cvtColor(m, m, cv::COLOR_BGR2GRAY);
+            if (m.size() != size)
+                cv::resize(m, m, size, 0, 0, cv::INTER_NEAREST);
+            cv::threshold(m, m, 0, 255, cv::THRESH_BINARY);   // 白=屏蔽
+            return m;
+        }
+    }
+    if (depth < 1) {
+        const QSharedPointer<DataObject> sub = data->attachedResult(QStringLiteral("掩膜"));
+        if (sub)
+            return maskRegionFromData(sub, size, depth + 1);
+    }
+    return {};
+}
+
 }   // namespace
 
 QJsonObject TemplateEntry::toJson() const
@@ -411,6 +480,8 @@ void OpencvTemplateMatchNode::init()
     // 因此这里只登记逻辑槽（下标 1，与老方案端口号一致），画布上始终只有 1 个输入点。
     // 数据由 FlowExecutor 在执行前按订阅绑定注入 m_inputData[1]。
     addInputSlot(QStringLiteral("掩膜图像"), PortDataType::Image);
+    // VM「屏蔽区创建=继承」：屏蔽区（Region 或白=屏蔽的掩膜图）同样走订阅，不占画布输入点。
+    addInputSlot(QStringLiteral("屏蔽区"), PortDataType::Any);
     addOutputPort(QStringLiteral("匹配结果"), PortDataType::Measure);
     registerParams({
         makeFilePathParam(QStringLiteral("templatePath"), QString(),
@@ -538,6 +609,28 @@ void OpencvTemplateMatchNode::init()
     // 搜索区域多边形（r19）："x1,y1 x2,y2 ..."，>=3 点生效，优先于矩形。
     makeStringParam(QStringLiteral("searchRegionPolygon"), QString(),
                     QStringLiteral("搜索区域多边形（空=矩形）")),
+    // VM「ROI创建=继承」的继承方式：按区域（上游命中框/区域）或按参数（X/Y/宽/高/角度，
+    // 可用「参数订阅」逐项订阅上游结果）。
+    makeEnumParam(QStringLiteral("roiInheritMode"), 0,
+                  QStringList{QStringLiteral("按区域"), QStringLiteral("按参数")},
+                  QStringLiteral("继承方式（继承时）")),
+    makeDoubleParam(QStringLiteral("roiInheritX"), 0.0, -100000.0, 100000.0,
+                    QStringLiteral("继承中心X（按参数）"), QStringLiteral("px")),
+    makeDoubleParam(QStringLiteral("roiInheritY"), 0.0, -100000.0, 100000.0,
+                    QStringLiteral("继承中心Y（按参数）"), QStringLiteral("px")),
+    makeDoubleParam(QStringLiteral("roiInheritWidth"), 0.0, 0.0, 100000.0,
+                    QStringLiteral("继承宽度（按参数，0=未设置）"), QStringLiteral("px")),
+    makeDoubleParam(QStringLiteral("roiInheritHeight"), 0.0, 0.0, 100000.0,
+                    QStringLiteral("继承高度（按参数，0=未设置）"), QStringLiteral("px")),
+    makeDoubleParam(QStringLiteral("roiInheritAngle"), 0.0, -180.0, 180.0,
+                    QStringLiteral("继承角度（按参数）"), QStringLiteral("°")),
+    // VM「屏蔽区创建」：绘制（本节点画屏蔽多边形）/ 继承（订阅上游屏蔽区 Region/掩膜图）。
+    makeEnumParam(QStringLiteral("maskSource"), 0,
+                  QStringList{QStringLiteral("绘制"), QStringLiteral("继承")},
+                  QStringLiteral("屏蔽区创建")),
+    // 多条屏蔽区用 ';' 分隔；每条 "x1,y1 x2,y2 ..."（>=3 点）。
+    makeStringParam(QStringLiteral("maskRegionPolygon"), QString(),
+                    QStringLiteral("屏蔽区多边形（多条用 ; 分隔）")),
 });
 
     // VM 4.4 口径分组（对应工具窗四个页签）。此前所有参数都落在默认的「参数」一组里，
@@ -551,6 +644,9 @@ void OpencvTemplateMatchNode::init()
         else if (n == QLatin1String("outputMask") || n == QLatin1String("outputSearchMask")
                  || n == QLatin1String("roiType")
                  || n == QLatin1String("roiSource")
+                 || n == QLatin1String("maskSource")
+                 || n == QLatin1String("maskRegionPolygon")
+                 || n.startsWith(QLatin1String("roiInherit"))
                  || n.startsWith(QLatin1String("searchRegion")))
             s.group = QStringLiteral("ROI区域");
         else if (n == QLatin1String("scaleMode") || n == QLatin1String("contrastThreshold")
@@ -1274,44 +1370,81 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         cv::Mat grayFull = gray;
         if (grayFull.channels() == 3)
             cv::cvtColor(grayFull, grayFull, cv::COLOR_BGR2GRAY);
-        // ROI 继承（VM「ROI 创建 = 继承」）：上游模板/特征命中框直接当搜索区域。
+        // ROI 继承（VM「ROI 创建 = 继承」）：继承方式 = 按区域 / 按参数。
+        //   按区域：上游模板/特征命中框直接当搜索区域（从输入对象 measureResults 取）；
+        //   按参数：用 roiInheritX/Y/Width/Height/Angle（可在「参数订阅」里逐项订阅上游）；
         // 数据面取（不依赖场景图）：上游结果就在输入对象的 measureResults 里。
         int inheritCol = 0, inheritRow = 0, inheritW = 0, inheritH = 0;
         if (m_params.value(QStringLiteral("roiSource"), 0).toInt() == 1) {
-            const QSharedPointer<DataObject> upstream = m_inputData.value(0);
-            if (upstream) {
-                for (const MeasureResult &mr : upstream->measureResults()) {
-                    if ((mr.type == QLatin1String("template")
-                         || mr.type == QLatin1String("feature"))
-                        && mr.extraValues.size() >= 7) {
-                        const double cx = mr.extraValues[1];
-                        const double cy = mr.extraValues[0];
-                        const double bw = mr.extraValues[5];
-                        const double bh = mr.extraValues[6];
-                        const double rad =
-                            mr.extraValues[3] * 3.14159265358979323846 / 180.0;
-                        const double ca = std::cos(rad);
-                        const double sa = std::sin(rad);
-                        const double corners[4][2] = {{-bw * 0.5, -bh * 0.5},
-                                                      {bw * 0.5, -bh * 0.5},
-                                                      {bw * 0.5, bh * 0.5},
-                                                      {-bw * 0.5, bh * 0.5}};
-                        double x0 = 1e18, x1 = -1e18, y0 = 1e18, y1 = -1e18;
-                        for (const auto &c : corners) {
-                            const double px = cx + ca * c[0] - sa * c[1];
-                            const double py = cy + sa * c[0] + ca * c[1];
-                            x0 = qMin(x0, px);
-                            x1 = qMax(x1, px);
-                            y0 = qMin(y0, py);
-                            y1 = qMax(y1, py);
+            const int inheritMode =
+                qBound(0, m_params.value(QStringLiteral("roiInheritMode"), 0).toInt(), 1);
+            if (inheritMode == 1) {
+                const double cx = m_params.value(QStringLiteral("roiInheritX"), 0.0).toDouble();
+                const double cy = m_params.value(QStringLiteral("roiInheritY"), 0.0).toDouble();
+                const double bw =
+                    m_params.value(QStringLiteral("roiInheritWidth"), 0.0).toDouble();
+                const double bh =
+                    m_params.value(QStringLiteral("roiInheritHeight"), 0.0).toDouble();
+                const double angleDeg =
+                    m_params.value(QStringLiteral("roiInheritAngle"), 0.0).toDouble();
+                if (bw > 2.0 && bh > 2.0) {
+                    const double rad = angleDeg * 3.14159265358979323846 / 180.0;
+                    const double ca = std::cos(rad);
+                    const double sa = std::sin(rad);
+                    const double corners[4][2] = {{-bw * 0.5, -bh * 0.5},
+                                                  {bw * 0.5, -bh * 0.5},
+                                                  {bw * 0.5, bh * 0.5},
+                                                  {-bw * 0.5, bh * 0.5}};
+                    double x0 = 1e18, x1 = -1e18, y0 = 1e18, y1 = -1e18;
+                    for (const auto &c : corners) {
+                        const double px = cx + ca * c[0] - sa * c[1];
+                        const double py = cy + sa * c[0] + ca * c[1];
+                        x0 = qMin(x0, px);
+                        x1 = qMax(x1, px);
+                        y0 = qMin(y0, py);
+                        y1 = qMax(y1, py);
+                    }
+                    inheritCol = int(x0);
+                    inheritRow = int(y0);
+                    inheritW = qMax(1, int(x1 - x0) + 1);
+                    inheritH = qMax(1, int(y1 - y0) + 1);
+                }
+            } else {
+                const QSharedPointer<DataObject> upstream = m_inputData.value(0);
+                if (upstream) {
+                    for (const MeasureResult &mr : upstream->measureResults()) {
+                        if ((mr.type == QLatin1String("template")
+                             || mr.type == QLatin1String("feature"))
+                            && mr.extraValues.size() >= 7) {
+                            const double cx = mr.extraValues[1];
+                            const double cy = mr.extraValues[0];
+                            const double bw = mr.extraValues[5];
+                            const double bh = mr.extraValues[6];
+                            const double rad =
+                                mr.extraValues[3] * 3.14159265358979323846 / 180.0;
+                            const double ca = std::cos(rad);
+                            const double sa = std::sin(rad);
+                            const double corners[4][2] = {{-bw * 0.5, -bh * 0.5},
+                                                          {bw * 0.5, -bh * 0.5},
+                                                          {bw * 0.5, bh * 0.5},
+                                                          {-bw * 0.5, bh * 0.5}};
+                            double x0 = 1e18, x1 = -1e18, y0 = 1e18, y1 = -1e18;
+                            for (const auto &c : corners) {
+                                const double px = cx + ca * c[0] - sa * c[1];
+                                const double py = cy + sa * c[0] + ca * c[1];
+                                x0 = qMin(x0, px);
+                                x1 = qMax(x1, px);
+                                y0 = qMin(y0, py);
+                                y1 = qMax(y1, py);
+                            }
+                            // 外扩 8px：上游框通常正好等于模板大小，不扩会因
+                            // "模板尺寸 >= 搜索区域" 被判无效，也留一点位置抖动余量
+                            inheritCol = int(x0) - 8;
+                            inheritRow = int(y0) - 8;
+                            inheritW = qMax(1, int(x1 - x0) + 16);
+                            inheritH = qMax(1, int(y1 - y0) + 16);
+                            break;
                         }
-                        // 外扩 8px：上游框通常正好等于模板大小，不扩会因
-                        // "模板尺寸 >= 搜索区域" 被判无效，也留一点位置抖动余量
-                        inheritCol = int(x0) - 8;
-                        inheritRow = int(y0) - 8;
-                        inheritW = qMax(1, int(x1 - x0) + 16);
-                        inheritH = qMax(1, int(y1 - y0) + 16);
-                        break;
                     }
                 }
             }
@@ -1657,6 +1790,52 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                         cv::resize(m(rr), roiMask, graySearch.size(), 0, 0, cv::INTER_NEAREST);
                         cv::threshold(roiMask, roiMask, 127, 255, cv::THRESH_BINARY);
                     }
+                }
+            }
+        }
+
+        // VM「屏蔽区创建」：绘制（maskRegionPolygon）/ 继承（逻辑槽 2 订阅 Region/掩膜图）。
+        // 语义：候选中心落在屏蔽区内的目标不检测；输出掩膜同步挖掉屏蔽区。
+        {
+            cv::Mat maskFull;
+            const int maskSource =
+                qBound(0, m_params.value(QStringLiteral("maskSource"), 0).toInt(), 1);
+            if (maskSource == 1) {
+                maskFull = maskRegionFromData(m_inputData.value(2), grayFull.size());
+            } else {
+                const QVector<RoiShape> polys = maskPolygonsFromText(
+                    m_params.value(QStringLiteral("maskRegionPolygon")).toString());
+                if (!polys.isEmpty())
+                    maskFull =
+                        shapesMask(polys, QRectF(0, 0, grayFull.cols, grayFull.rows));
+            }
+            if (!maskFull.empty()) {
+                if (maskFull.size() != grayFull.size())
+                    cv::resize(maskFull, maskFull, grayFull.size(), 0, 0, cv::INTER_NEAREST);
+                cv::threshold(maskFull, maskFull, 127, 255, cv::THRESH_BINARY);
+                const cv::Rect rr =
+                    searchRect & cv::Rect(0, 0, grayFull.cols, grayFull.rows);
+                cv::Mat maskCoarse;
+                if (rr.width > 2 && rr.height > 2) {
+                    cv::resize(maskFull(rr), maskCoarse, graySearch.size(), 0, 0,
+                               cv::INTER_NEAREST);
+                    cv::threshold(maskCoarse, maskCoarse, 127, 255, cv::THRESH_BINARY);
+                }
+                if (!maskCoarse.empty()) {
+                    cv::Mat keep;
+                    cv::bitwise_not(maskCoarse, keep);
+                    if (roiMask.empty()) {
+                        roiMask = keep;
+                    } else if (roiMask.size() == keep.size()) {
+                        cv::bitwise_and(roiMask, keep, roiMask);
+                    }
+                }
+                cv::Mat keepFull;
+                cv::bitwise_not(maskFull, keepFull);
+                if (roiMaskFull.empty()) {
+                    roiMaskFull = keepFull;
+                } else if (roiMaskFull.size() == keepFull.size()) {
+                    cv::bitwise_and(roiMaskFull, keepFull, roiMaskFull);
                 }
             }
         }

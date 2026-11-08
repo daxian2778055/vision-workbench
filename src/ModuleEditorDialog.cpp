@@ -942,7 +942,7 @@ void ModuleEditorDialog::rebuildVmTabs()
         const int logicalInputs = m_node->logicalInputPortCount();
         if (logicalInputs > realInputs) {
             const bool tmplNode = qobject_cast<OpencvTemplateMatchNode *>(m_node) != nullptr;
-            auto *box = new QGroupBox(tmplNode ? QStringLiteral("ROI掩膜图像（订阅）")
+            auto *box = new QGroupBox(tmplNode ? QStringLiteral("ROI 区域订阅（掩膜图像 / 屏蔽区）")
                                                : QStringLiteral("输入订阅"));
             auto *boxLay = new QVBoxLayout(box);
             boxLay->setContentsMargins(6, 6, 6, 6);
@@ -1077,7 +1077,9 @@ void ModuleEditorDialog::rebuildVmTabs()
                 // 只折叠旧「输出掩膜（把最终搜索区域…）」行；检测区域自己的
                 // 「输出掩膜（把此区域作为算子掩膜输入）」要保留（VM 截图同款）。
                 if (text.contains(QStringLiteral("最终搜索区域"))
-                    || text == QStringLiteral("ROI区域类型") || text == QStringLiteral("ROI创建")) {
+                    || text == QStringLiteral("ROI区域类型") || text == QStringLiteral("ROI创建")
+                    || text.startsWith(QStringLiteral("继承方式"))
+                    || text == QStringLiteral("屏蔽区创建")) {
                     // 只 hide() 的话 QFormLayout 仍保留整行空位（组框会拖出一截空白）；
                     // setRowVisible 才是真正折叠该行（Qt 6.4+）。
                     label->hide();
@@ -1180,7 +1182,9 @@ void ModuleEditorDialog::rebuildVmTabs()
 
         // ROI创建（VM 单选）
         auto *srcDraw = new QRadioButton(QStringLiteral("绘制"), roiBox);
+        srcDraw->setObjectName(QStringLiteral("roiCreateDrawRadio"));
         auto *srcInherit = new QRadioButton(QStringLiteral("继承"), roiBox);
+        srcInherit->setObjectName(QStringLiteral("roiCreateInheritRadio"));
         const int roiSource = m_node->getParam(QStringLiteral("roiSource")).toInt();
         (roiSource == 1 ? srcInherit : srcDraw)->setChecked(true);
         auto *srcRow = new QWidget(roiBox);
@@ -1199,6 +1203,37 @@ void ModuleEditorDialog::rebuildVmTabs()
                 write(QStringLiteral("roiSource"), 1);
         });
 
+        // 继承方式（VM：ROI创建=继承 时的「按区域 / 按参数」）。
+        auto *inheritRegion = new QRadioButton(QStringLiteral("按区域"), roiBox);
+        inheritRegion->setObjectName(QStringLiteral("roiInheritRegionRadio"));
+        auto *inheritParam = new QRadioButton(QStringLiteral("按参数"), roiBox);
+        inheritParam->setObjectName(QStringLiteral("roiInheritParamRadio"));
+        const int inheritMode = m_node->getParam(QStringLiteral("roiInheritMode")).toInt();
+        (inheritMode == 1 ? inheritParam : inheritRegion)->setChecked(true);
+        inheritRegion->setToolTip(QStringLiteral("订阅前序命中框/区域作为搜索区域"));
+        inheritParam->setToolTip(QStringLiteral(
+            "用继承中心 X/Y、宽/高、角度参数；可在「参数订阅」表逐项订阅上游结果"));
+        auto *inheritRow = new QWidget(roiBox);
+        auto *inheritLay = new QHBoxLayout(inheritRow);
+        inheritLay->setContentsMargins(0, 0, 0, 0);
+        inheritLay->addWidget(inheritRegion);
+        inheritLay->addWidget(inheritParam);
+        inheritLay->addStretch();
+        roiForm->addRow(QStringLiteral("继承方式"), inheritRow);
+        inheritRow->setVisible(roiSource == 1);
+        connect(srcDraw, &QRadioButton::toggled, inheritRow,
+                [inheritRow](bool on) { if (on) inheritRow->setVisible(false); });
+        connect(srcInherit, &QRadioButton::toggled, inheritRow,
+                [inheritRow](bool on) { if (on) inheritRow->setVisible(true); });
+        connect(inheritRegion, &QRadioButton::toggled, this, [write](bool on) {
+            if (on)
+                write(QStringLiteral("roiInheritMode"), 0);
+        });
+        connect(inheritParam, &QRadioButton::toggled, this, [write](bool on) {
+            if (on)
+                write(QStringLiteral("roiInheritMode"), 1);
+        });
+
         // 形状：VM 的 ROISelecter 是「旋转矩形 / 矩形」选择；「绘制」画的是训练用的 ROI 区域
         // （模板框）。检测区域的绘制入口在下面「检测区域」组内，两者语义不同，不能混用。
         auto *shapeRow = new QWidget(roiBox);
@@ -1211,6 +1246,7 @@ void ModuleEditorDialog::rebuildVmTabs()
         connect(shapeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
                 [this](int index) { m_roiShapeRotated = (index == 0); });
         auto *drawRoiBtn = new QPushButton(QStringLiteral("绘制"), shapeRow);
+        drawRoiBtn->setObjectName(QStringLiteral("templateRoiDrawButton"));
         drawRoiBtn->setToolTip(QStringLiteral("在主画布图像上框定 ROI 区域（模板框），框完点「训练模板」"));
         auto *clearRoiBtn = new QPushButton(QStringLiteral("清除"), shapeRow);
         clearRoiBtn->setToolTip(QStringLiteral("清除 ROI 区域（模板框）"));
@@ -1251,30 +1287,60 @@ void ModuleEditorDialog::rebuildVmTabs()
                 form->addRow(QStringLiteral("检测区域绘制"), searchRow);
         }
 
-        // VM「屏蔽区创建 / 屏蔽区 / 位置修正」三行。
-        // 屏蔽区已经接入模板的 excludes（模板特征提取时会挖掉这些区域）：
-        // 绘制 = 打开模板配置窗并直接进屏蔽模式；屏蔽区按钮 = 同一入口（管理已有屏蔽）。
-        auto *excludeDraw = new QRadioButton(QStringLiteral("绘制"), roiBox);
-        auto *excludeInherit = new QRadioButton(QStringLiteral("继承"), roiBox);
-        excludeDraw->setToolTip(QStringLiteral("打开模板配置窗并进入屏蔽模式，画出不参与匹配的区域"));
-        excludeInherit->setEnabled(false);
-        excludeInherit->setToolTip(QStringLiteral("继承上游屏蔽区：当前版本尚未接入"));
-        auto *excludeRow = new QWidget(roiBox);
-        auto *excludeLay = new QHBoxLayout(excludeRow);
-        excludeLay->setContentsMargins(0, 0, 0, 0);
-        excludeLay->addWidget(excludeDraw);
-        excludeLay->addWidget(excludeInherit);
-        excludeLay->addStretch();
-        roiForm->addRow(QStringLiteral("屏蔽区创建"), excludeRow);
-        connect(excludeDraw, &QRadioButton::toggled, this, [this](bool on) {
+        // VM「屏蔽区创建」：ROI 级运行期掩膜（与模板掩膜 TemplateEntry.excludes 不同）。
+        //   绘制 = 主画布上画多边形写入 maskRegionPolygon（可画多块，';' 分隔）；
+        //   继承 = 订阅逻辑槽「屏蔽区」，运行期把上游 Region/掩膜图当屏蔽区。
+        auto *maskDraw = new QRadioButton(QStringLiteral("绘制"), roiBox);
+        maskDraw->setObjectName(QStringLiteral("maskDrawRadio"));
+        auto *maskInherit = new QRadioButton(QStringLiteral("继承"), roiBox);
+        maskInherit->setObjectName(QStringLiteral("maskInheritRadio"));
+        const int maskSource = m_node->getParam(QStringLiteral("maskSource")).toInt();
+        (maskSource == 1 ? maskInherit : maskDraw)->setChecked(true);
+        maskDraw->setToolTip(QStringLiteral("在主画布上逐点绘制屏蔽区（双击完成；可画多块）"));
+        maskInherit->setToolTip(QStringLiteral("订阅前序模块的屏蔽区 Region / 掩膜图"));
+        auto *maskRow = new QWidget(roiBox);
+        auto *maskLay = new QHBoxLayout(maskRow);
+        maskLay->setContentsMargins(0, 0, 0, 0);
+        maskLay->addWidget(maskDraw);
+        maskLay->addWidget(maskInherit);
+        maskLay->addStretch();
+        roiForm->addRow(QStringLiteral("屏蔽区创建"), maskRow);
+        connect(maskDraw, &QRadioButton::toggled, this, [write](bool on) {
             if (on)
-                onEditTemplateMask();
+                write(QStringLiteral("maskSource"), 0);
+        });
+        connect(maskInherit, &QRadioButton::toggled, this, [write](bool on) {
+            if (on)
+                write(QStringLiteral("maskSource"), 1);
         });
 
+        auto *maskBtnRow = new QWidget(roiBox);
+        auto *maskBtnLay = new QHBoxLayout(maskBtnRow);
+        maskBtnLay->setContentsMargins(0, 0, 0, 0);
+        maskBtnLay->setSpacing(4);
+        auto *drawMaskBtn = new QPushButton(QStringLiteral("绘制"), maskBtnRow);
+        drawMaskBtn->setObjectName(QStringLiteral("maskRegionDrawButton"));
+        drawMaskBtn->setToolTip(QStringLiteral("在主画布上逐点绘制屏蔽区（双击完成，可画多块）"));
+        auto *clearMaskBtn = new QPushButton(QStringLiteral("清除"), maskBtnRow);
+        clearMaskBtn->setObjectName(QStringLiteral("maskRegionClearButton"));
+        clearMaskBtn->setToolTip(QStringLiteral("清除全部屏蔽区多边形"));
+        maskBtnLay->addWidget(drawMaskBtn);
+        maskBtnLay->addWidget(clearMaskBtn);
+        maskBtnLay->addStretch();
+        roiForm->addRow(QStringLiteral("屏蔽区"), maskBtnRow);
+        connect(drawMaskBtn, &QPushButton::clicked, this, [this]() {
+            if (m_node)
+                emit maskRegionPickRequested(m_node);
+        });
+        connect(clearMaskBtn, &QPushButton::clicked, this, [write]() {
+            write(QStringLiteral("maskRegionPolygon"), QString());
+        });
+
+        // 模板掩膜（TemplateEntry.excludes）：属于模板特征提取层，与上面的 ROI 屏蔽区不同。
         auto *excludeBtn = new QToolButton(roiBox);
-        excludeBtn->setText(QStringLiteral("屏蔽区"));
-        excludeBtn->setToolTip(QStringLiteral("编辑当前模板的屏蔽区（挖掉的区域不参与匹配）"));
-        roiForm->addRow(QStringLiteral("屏蔽区"), excludeBtn);
+        excludeBtn->setText(QStringLiteral("模板掩膜"));
+        excludeBtn->setToolTip(QStringLiteral("编辑当前模板的掩膜（挖掉的区域不参与模板特征提取）"));
+        roiForm->addRow(QStringLiteral("模板掩膜"), excludeBtn);
         connect(excludeBtn, &QToolButton::clicked, this, &ModuleEditorDialog::onEditTemplateMask);
 
         auto *fixSwitch = new QCheckBox(roiBox);
@@ -2394,6 +2460,32 @@ void ModuleEditorDialog::refreshSearchOverlay()
             e.p1 = pts.last();
             e.p2 = pts.first();
             e.color = QColor(0, 200, 255);
+            all.append(e);
+        }
+    }
+    // ROI 级屏蔽区（maskRegionPolygon，可多条 ';'）：红色闭合折线，和搜索区域区分开。
+    const QString maskText =
+        hn ? hn->getParam(QStringLiteral("maskRegionPolygon")).toString().trimmed() : QString();
+    for (const QString &chunk : maskText.split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
+        QVector<QPointF> pts;
+        for (const QString &it : chunk.split(QLatin1Char(' '), Qt::SkipEmptyParts)) {
+            const QStringList xy = it.split(QLatin1Char(','));
+            if (xy.size() != 2)
+                continue;
+            bool ok1 = false, ok2 = false;
+            const double x = xy[0].toDouble(&ok1);
+            const double y = xy[1].toDouble(&ok2);
+            if (ok1 && ok2)
+                pts.append(QPointF(x, y));
+        }
+        if (pts.size() < 3)
+            continue;
+        for (int i = 0; i < pts.size(); ++i) {
+            OverlayShape e;
+            e.type = OverlayShape::Type::Line;
+            e.p1 = pts[i];
+            e.p2 = pts[(i + 1) % pts.size()];
+            e.color = QColor(230, 80, 80);
             all.append(e);
         }
     }

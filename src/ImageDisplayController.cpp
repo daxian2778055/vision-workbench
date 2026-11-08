@@ -638,6 +638,8 @@ void ImageDisplayController::forgetNode(NodeBase *node)
         m_geometryRoiNode = nullptr;
     if (m_searchRegionNode == node)
         m_searchRegionNode = nullptr;
+    if (m_maskRegionNode == node)
+        m_maskRegionNode = nullptr;
     if (m_coordinatePickNode == node)
         m_coordinatePickNode = nullptr;
     const bool wasMaskEditing = (m_maskEditNode == node);
@@ -651,7 +653,7 @@ void ImageDisplayController::forgetNode(NodeBase *node)
     if (wasMaskEditing)
         m_imageView->setMaskImage(QImage());
     // 当前画布上的 ROI 正属于被删节点：收起句柄与模板特征点，避免继续对着悬垂数据编辑
-    if (!m_geometryRoiNode && !m_searchRegionNode) {
+    if (!m_geometryRoiNode && !m_searchRegionNode && !m_maskRegionNode) {
         m_imageView->setRoiHandleEditEnabled(false);
         m_imageView->setFeaturePoints({});
         m_imageView->clearRoi();
@@ -683,6 +685,7 @@ bool ImageDisplayController::showNodeGeometry(NodeBase *node, bool preferSearchR
         const double h = hn->getParam(QStringLiteral("searchRegionHeight")).toDouble();
         if (w > 1.0 && h > 1.0) {
             m_searchRegionNode = node;
+            m_maskRegionNode = nullptr;
             m_geometryRoiNode = nullptr;
             m_roiPickNode = nullptr;
             m_coordinatePickNode = nullptr;
@@ -700,6 +703,7 @@ bool ImageDisplayController::showNodeGeometry(NodeBase *node, bool preferSearchR
     }
     m_geometryRoiNode = node;
     m_searchRegionNode = nullptr;
+    m_maskRegionNode = nullptr;
     m_roiPickNode = nullptr;                 // 与"取点"互斥
     m_coordinatePickNode = nullptr;
     m_imageView->setRoiEditable(false);      // 只拖句柄，不进入重画模式
@@ -749,6 +753,7 @@ bool ImageDisplayController::startRoiPick(NodeBase *node)
     m_roiPickNode = node;
     m_geometryRoiNode = nullptr;             // 取点期间不再同时编辑几何
     m_searchRegionNode = nullptr;
+    m_maskRegionNode = nullptr;
     m_coordinatePickNode = nullptr;
     if (qobject_cast<FindCircleNode *>(node)) {
         m_imageView->setRoiEditable(true, RoiType::Circle);
@@ -766,11 +771,40 @@ bool ImageDisplayController::startSearchRegionPick(NodeBase *node, bool polygon)
     stopMaskEdit();
     m_roiPickNode = nullptr;
     m_geometryRoiNode = nullptr;
+    m_maskRegionNode = nullptr;
     m_searchRegionNode = node;
     m_coordinatePickNode = nullptr;
     m_imageView->setRoiColor(QColor(0, 200, 255));   // 青色 = 检测区域（绿框是模板）
     m_imageView->clearRoi();
     m_imageView->setRoiEditable(true, polygon ? RoiType::Polygon : RoiType::Rect);
+    return true;
+}
+
+bool ImageDisplayController::startMaskRegionPick(NodeBase *node)
+{
+    if (!m_imageView || !node)
+        return false;
+    HalconNode *hn = qobject_cast<HalconNode *>(node);
+    if (!hn)
+        return false;
+    bool hasParam = false;
+    for (const ParamSpec &s : hn->paramSpecs()) {
+        if (s.name == QLatin1String("maskRegionPolygon")) {
+            hasParam = true;
+            break;
+        }
+    }
+    if (!hasParam)
+        return false;
+    stopMaskEdit();
+    m_roiPickNode = nullptr;
+    m_geometryRoiNode = nullptr;
+    m_searchRegionNode = nullptr;
+    m_coordinatePickNode = nullptr;
+    m_maskRegionNode = node;
+    m_imageView->setRoiColor(QColor(230, 80, 80));   // 红色 = 屏蔽区
+    m_imageView->clearRoi();
+    m_imageView->setRoiEditable(true, RoiType::Polygon);
     return true;
 }
 
@@ -784,6 +818,7 @@ bool ImageDisplayController::startTemplateRoiPick(NodeBase *node, bool rotatedRe
     stopMaskEdit();
     m_roiPickNode = nullptr;
     m_searchRegionNode = nullptr;
+    m_maskRegionNode = nullptr;
     m_geometryRoiNode = node;
     m_coordinatePickNode = nullptr;
     m_imageView->setRoiColor(QColor(0, 200, 80));    // 绿色 = 模板框
@@ -799,6 +834,7 @@ bool ImageDisplayController::startCoordinatePick(NodeBase *node, int field)
     stopMaskEdit();
     m_roiPickNode = nullptr;
     m_geometryRoiNode = nullptr;
+    m_maskRegionNode = nullptr;
     m_searchRegionNode = node;
     m_coordinatePickNode = node;
     m_coordinatePickField = qBound(0, field, 3);
@@ -818,6 +854,7 @@ bool ImageDisplayController::startGeometryPick(NodeBase *node)
     stopMaskEdit();
     m_roiPickNode = nullptr;
     m_searchRegionNode = nullptr;
+    m_maskRegionNode = nullptr;
     m_coordinatePickNode = nullptr;
     m_geometryRoiNode = node;
     // ROI 坐标基于输入图像；先切到输入图，避免"输出图尺寸不同导致框错位"。
@@ -839,6 +876,7 @@ bool ImageDisplayController::startMaskEdit(NodeBase *node)
     m_roiPickNode = nullptr;
     m_geometryRoiNode = nullptr;
     m_searchRegionNode = nullptr;
+    m_maskRegionNode = nullptr;
     m_coordinatePickNode = nullptr;
     m_maskEditNode = node;
     showInputOnPrimary(node);   // 掩膜与输入图同尺寸、同坐标系
@@ -930,6 +968,31 @@ NodeBase *ImageDisplayController::writeRoiToNode(const RoiShape &shape)
             }
         }
         return node;
+    }
+
+    // P1-8：主画布绘制 ROI 级屏蔽区——每次画一块，追加到 maskRegionPolygon（';' 分隔）。
+    if (m_maskRegionNode && shape.type == RoiType::Polygon) {
+        HalconNode *hn = qobject_cast<HalconNode *>(m_maskRegionNode);
+        if (hn && shape.points.size() >= 3) {
+            if (FlowScene *fs = hn->flowSceneRef())
+                fs->recordUndo();
+            QStringList pts;
+            pts.reserve(shape.points.size());
+            for (const QPointF &p : shape.points)
+                pts << QStringLiteral("%1,%2").arg(int(p.x() + 0.5)).arg(int(p.y() + 0.5));
+            QString all =
+                hn->getParam(QStringLiteral("maskRegionPolygon")).toString().trimmed();
+            if (!all.isEmpty())
+                all += QLatin1Char(';');
+            all += pts.join(QLatin1Char(' '));
+            hn->setParam(QStringLiteral("maskRegionPolygon"), all);
+            if (m_imageView) {
+                m_imageView->setRoiEditable(false);
+                m_imageView->setRoiShape(shape);
+                m_imageView->setRoiHandleEditEnabled(false);
+            }
+        }
+        return hn;
     }
 
     // B3：主画布"搜索区域"编辑——多边形与矩形都写回 searchRegion*（只写参数，

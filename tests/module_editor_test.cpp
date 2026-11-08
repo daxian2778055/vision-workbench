@@ -63,6 +63,8 @@ private slots:
     void testTemplateListCheckAndReorder();
     void testTemplateConfigEnhanceCheckboxWritesEntry();
     void testTemplateConfigScaleModeWritesEntry();
+    // P1-8：ROI「继承方式 / 屏蔽区创建」UI 写回参数 + 屏蔽区绘制请求
+    void testTemplateRoiInheritAndMaskUiWritesParams();
 };
 
 void ModuleEditorTest::testParamEditTriggersDebouncedRecompute()
@@ -306,15 +308,16 @@ void ModuleEditorTest::testVmModuleWindowTabs()
     QVERIFY2(radios.contains(QStringLiteral("绘制")) && radios.contains(QStringLiteral("继承")),
              qPrintable(QStringLiteral("缺少 ROI 创建单选：%1").arg(radios.join(QStringLiteral("、")))));
 
-    // VM 基本参数的组顺序：图像输入 → ROI掩膜图像（订阅）→ ROI区域 → 检测区域。
-    // 之前订阅组被搬到 ROI 组下面，与 VM 截图不符（2026-11-04 现场对照）。
+    // VM 基本参数的组顺序：图像输入 → ROI 区域订阅 → ROI区域 → 检测区域。
+    // 之前订阅组被搬到 ROI 组下面，与 VM 截图不符（2026-11-04 现场对照）；
+    // P1-8 起订阅组同时容纳「掩膜图像 / 屏蔽区」两个逻辑槽。
     QStringList groupOrder;
     for (int i = 0; i < tabs->widget(0)->layout()->count(); ++i) {
         if (auto *gb = qobject_cast<QGroupBox *>(tabs->widget(0)->layout()->itemAt(i)->widget()))
             groupOrder << gb->title();
     }
     const int iInput = groupOrder.indexOf(QStringLiteral("图像输入"));
-    const int iSub = groupOrder.indexOf(QStringLiteral("ROI掩膜图像（订阅）"));
+    const int iSub = groupOrder.indexOf(QStringLiteral("ROI 区域订阅（掩膜图像 / 屏蔽区）"));
     const int iRoi = groupOrder.indexOf(QStringLiteral("ROI区域"));
     const int iDetect = groupOrder.indexOf(QStringLiteral("检测区域"));
     QVERIFY2(iInput >= 0 && iSub > iInput && iRoi > iSub && iDetect > iRoi,
@@ -385,13 +388,12 @@ void ModuleEditorTest::testDrawRequestsMainCanvas()
     QVERIFY2(shape, "ROI 区域缺少形状下拉（旋转矩形/矩形）");
     QCOMPARE(shape->count(), 2);
 
-    QPushButton *drawBtn = nullptr;
+    QPushButton *drawBtn =
+        dlg.findChild<QPushButton *>(QStringLiteral("templateRoiDrawButton"));
     QPushButton *boxBtn = nullptr;
     QPushButton *polyBtn = nullptr;
     for (QPushButton *b : dlg.findChildren<QPushButton *>()) {
-        if (b->text() == QStringLiteral("绘制"))
-            drawBtn = b;
-        else if (b->text() == QStringLiteral("框选"))
+        if (b->text() == QStringLiteral("框选"))
             boxBtn = b;
         else if (b->text() == QStringLiteral("多边形"))
             polyBtn = b;
@@ -491,6 +493,24 @@ void ModuleEditorTest::testCanvasPickWritesRegionWithoutTraining()
     QVERIFY(!tmpl->getParam(QStringLiteral("searchRegionPolygon")).toString().isEmpty());
     QCOMPARE(tmpl->getParam(QStringLiteral("searchRegionWidth")).toInt(), 0);
     QCOMPARE(tmpl->getParam(QStringLiteral("searchRegionHeight")).toInt(), 0);
+
+    // ⑤ ROI 级屏蔽区：主画布每画一块追加到 maskRegionPolygon（';' 分隔，不覆盖旧块）
+    QVERIFY(controller.startMaskRegionPick(node));
+    RoiShape maskOne;
+    maskOne.type = RoiType::Polygon;
+    maskOne.points = {QPointF(10.0, 10.0), QPointF(110.0, 10.0), QPointF(60.0, 90.0)};
+    QVERIFY(controller.writeRoiToNode(maskOne) != nullptr);
+    const QString firstMask = tmpl->getParam(QStringLiteral("maskRegionPolygon")).toString();
+    QVERIFY2(firstMask.contains(QStringLiteral("10,10")),
+             qPrintable(QStringLiteral("屏蔽区没有写回 maskRegionPolygon：%1").arg(firstMask)));
+    QVERIFY(controller.startMaskRegionPick(node));
+    RoiShape maskTwo;
+    maskTwo.type = RoiType::Polygon;
+    maskTwo.points = {QPointF(200.0, 200.0), QPointF(300.0, 200.0), QPointF(250.0, 280.0)};
+    QVERIFY(controller.writeRoiToNode(maskTwo) != nullptr);
+    const QString bothMasks = tmpl->getParam(QStringLiteral("maskRegionPolygon")).toString();
+    QVERIFY2(bothMasks.contains(QLatin1Char(';')) && bothMasks.contains(QStringLiteral("200,200")),
+             qPrintable(QStringLiteral("第二块屏蔽区没有追加：%1").arg(bothMasks)));
 }
 
 // 模板配置工具条的撤销/重做：形状落下一块 → 撤销回到空 → 重做恢复。
@@ -935,7 +955,46 @@ void ModuleEditorTest::testTemplateConfigScaleModeWritesEntry()
     QCOMPARE(node.getParam(QStringLiteral("scaleMode")).toInt(), 0);
 }
 
-QTEST_MAIN(ModuleEditorTest)
+// P1-8：基本参数「继承方式 / 屏蔽区创建」的 UI 必须真的写回参数；屏蔽区绘制/清除两个按钮
+// 分别发拾取请求、清空 maskRegionPolygon。
+void ModuleEditorTest::testTemplateRoiInheritAndMaskUiWritesParams()
+{
+    OpencvTemplateMatchNode node;
+    node.init();
+    ModuleEditorDialog dlg(&node);
+    QSignalSpy maskSpy(&dlg, &ModuleEditorDialog::maskRegionPickRequested);
 
+    auto *createInherit = dlg.findChild<QRadioButton *>(QStringLiteral("roiCreateInheritRadio"));
+    auto *inheritParam = dlg.findChild<QRadioButton *>(QStringLiteral("roiInheritParamRadio"));
+    auto *maskInherit = dlg.findChild<QRadioButton *>(QStringLiteral("maskInheritRadio"));
+    auto *maskDraw = dlg.findChild<QRadioButton *>(QStringLiteral("maskDrawRadio"));
+    auto *drawMask = dlg.findChild<QPushButton *>(QStringLiteral("maskRegionDrawButton"));
+    auto *clearMask = dlg.findChild<QPushButton *>(QStringLiteral("maskRegionClearButton"));
+    QVERIFY2(createInherit && inheritParam, "缺少 ROI继承/继承方式 单选");
+    QVERIFY2(maskInherit && maskDraw, "缺少 屏蔽区创建 单选");
+    QVERIFY2(drawMask && clearMask, "缺少 屏蔽区 绘制/清除按钮");
+
+    createInherit->setChecked(true);
+    QCOMPARE(node.getParam(QStringLiteral("roiSource")).toInt(), 1);
+    inheritParam->setChecked(true);
+    QCOMPARE(node.getParam(QStringLiteral("roiInheritMode")).toInt(), 1);
+
+    maskInherit->setChecked(true);
+    QCOMPARE(node.getParam(QStringLiteral("maskSource")).toInt(), 1);
+    maskDraw->setChecked(true);
+    QCOMPARE(node.getParam(QStringLiteral("maskSource")).toInt(), 0);
+
+    node.setParam(QStringLiteral("maskRegionPolygon"),
+                  QStringLiteral("0,0 10,0 10,10"));
+    clearMask->click();
+    QVERIFY2(node.getParam(QStringLiteral("maskRegionPolygon")).toString().isEmpty(),
+             "「清除」没有清空 maskRegionPolygon");
+
+    drawMask->click();
+    QCOMPARE(maskSpy.count(), 1);
+    QCOMPARE(maskSpy.at(0).at(0).value<NodeBase *>(), static_cast<NodeBase *>(&node));
+}
+
+QTEST_MAIN(ModuleEditorTest)
 // 源文件内定义 Q_OBJECT 类时，AUTOMOC 要求显式包含生成的 moc
 #include "module_editor_test.moc"

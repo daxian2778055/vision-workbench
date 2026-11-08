@@ -86,6 +86,8 @@ public:
     /// 开始在画布上重画模板匹配的「检测区域」：polygon=true 逐点绘制，否则矩形框选。
     /// VM 模块窗是纯参数窗，绘制落在主画布上；返回 false = 无画布或该节点没有检测区域参数。
     bool startSearchRegionPick(NodeBase *node, bool polygon = false);
+    /// 开始绘制 ROI 级屏蔽区（VM「屏蔽区创建=绘制」）：每次画一块，追加到 maskRegionPolygon。
+    bool startMaskRegionPick(NodeBase *node);
     /// 开始重画算子几何 ROI（模板匹配的模板框）：rotatedRect=true 旋转矩形，否则轴对齐矩形。
     /// 返回 false = 无画布或该节点没有几何 ROI。
     bool startTemplateRoiPick(NodeBase *node, bool rotatedRect = true);
@@ -119,6 +121,8 @@ private:
     NodeBase *m_geometryRoiNode = nullptr;
     /// B3：主画布当前正在编辑搜索区域的节点
     NodeBase *m_searchRegionNode = nullptr;
+    /// P1-8：主画布当前正在绘制 ROI 级屏蔽区的节点
+    NodeBase *m_maskRegionNode = nullptr;
     /// 检测区域单字段取点的目标与字段（0=左列 1=上行 2=宽度 3=高度）
     NodeBase *m_coordinatePickNode = nullptr;
     int m_coordinatePickField = 0;

@@ -106,8 +106,10 @@ void SingleOutputPortTest::testTemplateMatchSingleInputPort()
     node.init();
     QCOMPARE(node.inputPorts().size(), 1);
     QCOMPARE(node.inputPorts().first()->name(), QStringLiteral("输入图像"));
-    QCOMPARE(node.logicalInputPortCount(), 2);          // 真实输入 0 + 逻辑槽 1
+    QCOMPARE(node.logicalInputPortCount(), 3);          // 真实输入 0 + 逻辑槽 1/2
     QCOMPARE(node.inputSlotName(1), QStringLiteral("掩膜图像"));
+    // P1-8「屏蔽区创建=继承」：屏蔽区同样走订阅（Region/掩膜图），不占画布输入点
+    QCOMPARE(node.inputSlotName(2), QStringLiteral("屏蔽区"));
 
     // 真实端口不接受订阅绑定（只允许逻辑槽，防止绕过连线语义）
     node.setInputBinding(0, 42, 0);
@@ -116,6 +118,9 @@ void SingleOutputPortTest::testTemplateMatchSingleInputPort()
     node.setInputBinding(1, 42, 0);
     QVERIFY(node.hasInputBinding(1));
     QCOMPARE(node.inputBindings().value(1).sourceModuleId, 42);
+    node.setInputBinding(2, 43, 0);
+    QVERIFY(node.hasInputBinding(2));
+    QCOMPARE(node.inputBindings().value(2).sourceModuleId, 43);
 }
 
 void SingleOutputPortTest::testTemplateResultJudgment()
