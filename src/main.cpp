@@ -24,6 +24,7 @@
 #include "HalconEnvCheck.h"
 #include <exception>
 #include <csignal>
+#include <cstring>
 #include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
 #include <windows.h>
@@ -315,7 +316,21 @@ int main(int argc, char *argv[])
     const UINT activateMsg = RegisterWindowMessageW(L"VisionFlowPlatform.Activate");
     ActivateRequestFilter::setActivateMessage(activateMsg);
 
-    if (!instanceLock.tryLock(100)) {
+    // 自检模式（--selftest-nodes / --selftest-deepocr）是命令行工具：不建窗、不抢前台，
+    // 而且**可能正要在软件运行时执行**。旧顺序把单实例锁放在自检分支之前，导致
+    // 软件开着时跑自检直接 return 1 —— 与"自检失败"同码，部署脚本无法区分。
+    // 这里用 argv 直接判断（QCoreApplication 尚未构造，不能用 arguments()）。
+    bool selftestMode = false;
+    for (int i = 1; i < argc; ++i) {
+        const char *a = argv[i];
+        if (a && (std::strcmp(a, "--selftest-nodes") == 0
+                  || std::strcmp(a, "--selftest-deepocr") == 0)) {
+            selftestMode = true;
+            break;
+        }
+    }
+
+    if (!selftestMode && !instanceLock.tryLock(100)) {
         // 已有一个实例在运行：把它的窗口提到前台，然后自己退出（不再弹需要点确认的框）。
         // ⚠ 该分支必须先于 QApplication（要在最早期挡住多开），因此**不能用 QMessageBox**：在
         // QApplication 之前构造任何 QWidget 都会触发 Qt fail-fast（0xC0000409 静默崩溃，

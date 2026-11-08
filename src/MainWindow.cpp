@@ -3567,6 +3567,21 @@ void MainWindow::executeNodeOnce(NodeBase *node)
         logMessage(tr("写闸开启期间不受理单算子执行：出厂默认口令仍在使用（改密后恢复）"));
         return;
     }
+    // 与 recomputeDownstream 同口径（复核 P1-5）：流程 Running/Paused 时单算子执行会在
+    // GUI 线程与执行线程并发读写同一节点的参数表、输出 Mat 与 HALCON 句柄。原先这里
+    // 只靠 runWithBusyFeedback 防 GUI 侧重入，拦不住"流程正在跑 + 用户点执行"。
+    {
+        const int stateIdx = ui->flowTabs->currentIndex();
+        if (stateIdx >= 0 && stateIdx < m_flowScenes.size()) {
+            if (FlowExecutor *sceneExec = executorForScene(m_flowScenes[stateIdx])) {
+                const ExecutionState st = sceneExec->getState();
+                if (st == ExecutionState::Running || st == ExecutionState::Paused) {
+                    logMessage(tr("流程正在运行（或暂停）中，已取消「执行算子」；请先停止流程"));
+                    return;
+                }
+            }
+        }
+    }
     bool success = false;
     if (!runWithBusyFeedback(QStringLiteral("正在执行 %1…").arg(node->fullName()), false,
                              [this, node, &success]() {

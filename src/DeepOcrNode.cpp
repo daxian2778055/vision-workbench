@@ -181,9 +181,25 @@ void DeepOcrNode::run(bool /*autoSwitch*/)
                     }
                     m_params[QStringLiteral("ocrConfidence")] = maxConf;
                 }
-                // 缺 word 键在 detection / auto 模式下可能是正常的（只返回检测框），
-                // 故维持原有「有返回即有效」口径，不在此判失败。
-                haveResult = true;
+                // 零词不能判绿（2026-11-08 复核 P1）：空白图也会让 HALCON 返回非空
+                // dict，旧实现无条件 haveResult=true ⇒ moduleStatus=true ⇒ 自检 [OK]、
+                // 部署门禁 0 FAIL，形成"一个字都读不出也算通过"的假绿链。
+                // 正确口径：recognition 模式必须有词；detection/auto 只做检测，
+                // 没有 word 数组属正常。
+                const bool hasWordKey = (d.GetDictParam("key_exists", "word").I() == 1);
+                if (hasWordKey) {
+                    // rawWordCount 是**过滤前**的词数：有字但被 minConfidence/minWordLength
+                    // 过滤掉属于用户自设阈值的正常结果，不算失败。
+                    haveResult = (rawWordCount > 0);
+                    if (!haveResult)
+                        m_params[QStringLiteral("lastError")] =
+                            QStringLiteral("未识别到文字（word 数组为空）");
+                } else if (mode == QStringLiteral("recognition")) {
+                    m_params[QStringLiteral("lastError")] =
+                        QStringLiteral("recognition 模式未返回 word 数组");
+                } else {
+                    haveResult = true;   // detection / auto：只返回检测结果，属正常
+                }
             }
         } catch (const HException &e) {
             // 解析异常不能静默吞掉：否则现场只看到"识别为空"、查不到原因

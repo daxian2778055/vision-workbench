@@ -1398,8 +1398,17 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                         }
                     }
                 }
-                if (m_params.value(QStringLiteral("polarity"), 1).toInt() == 0)
-                    cv::absdiff(scoreVis, cv::Scalar(0), scoreVis);
+                if (m_params.value(QStringLiteral("polarity"), 1).toInt() == 0) {
+                    // 极性翻转只作用于**有效**位置（复核 P1-1）：上面把可见率不足的格子
+                    // 标记成 -1，而 absdiff(x, 0) 取的是 |x| —— -1 会变成 +1.0，让"看不见
+                    // 的特征"反而成为最高分；配合下方 bestScore>=0.95 提前收工，可读出
+                    // 1.0 的假命中。翻转后必须把无效位压回 -1。
+                    cv::Mat flipped;
+                    cv::absdiff(scoreVis, cv::Scalar(0), flipped);
+                    const cv::Mat invalid = (scoreVis < 0.0f);
+                    flipped.setTo(-1.0f, invalid);
+                    scoreVis = flipped;
+                }
                 result = scoreVis;
             } else {
                 cv::matchTemplate(search, warped, result, method);
@@ -2179,6 +2188,12 @@ TemplateEntry OpencvTemplateMatchNode::activeTemplate() const
 double OpencvTemplateMatchNode::effectiveEdgeThresholdFor(const cv::Mat &tmpl, int aperture,
                                                           double manualGrayDiff, bool autoMode)
 {
+    // aperture 来自参数窗「特征尺度 1~20」下拉，直接当 Sobel 的 ksize 会让 OpenCV
+    // 抛异常（ksize 只接受 1/3/5/7 这类奇数，2/4/6 直接报错，而自动阈值默认开启，
+    // 打开参数窗即可触发）。这里是所有调用方的汇合点，统一钳位成合法奇数，
+    // 与另一处 qBound(3, aperture, 7) | 1 的口径保持一致。
+    aperture = qBound(3, aperture, 7) | 1;
+
     // 入参是 VM 口径的「灰度差」(1~255)；Sobel(ksize=3) 的阶跃响应 = 4×灰度差，
     // 统一在这里换算，调用方都按灰度差传值。
     const double manual = manualGrayDiff * 4.0;

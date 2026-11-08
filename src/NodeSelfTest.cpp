@@ -82,11 +82,23 @@ int runNodeSelfTest()
             t.start();
             node->run();
             const qint64 ms = t.elapsed();
-            status = QStringLiteral("OK    %1（%2 端口，%3 ms）")
-                         .arg(id)
-                         .arg(node->inputPorts().size() + node->outputPorts().size())
-                         .arg(ms);
-            ++pass;
+            // 空输入走 run() 是"只验证不抛异常"，但那只证明没崩、不证明算法出结果。
+            // 若节点**显式**写了 moduleStatus=false，说明它自己判定失败（例如 OCR 一个
+            // 字都没读出来）——这种必须计入 FAIL，否则部署门禁会放过"从没成功过"的算子。
+            const QVariant msVal = node->getParam(QStringLiteral("moduleStatus"));
+            if (msVal.isValid() && !msVal.toBool()) {
+                const QString reason = node->getParam(QStringLiteral("lastError")).toString();
+                status = QStringLiteral("FAIL  %1（节点自判失败：%2）")
+                             .arg(id, reason.isEmpty() ? QStringLiteral("未给出原因") : reason);
+                failList << id;
+                ++fail;
+            } else {
+                status = QStringLiteral("OK    %1（%2 端口，%3 ms）")
+                             .arg(id)
+                             .arg(node->inputPorts().size() + node->outputPorts().size())
+                             .arg(ms);
+                ++pass;
+            }
         } catch (const std::exception &e) {
             status = QStringLiteral("FAIL  %1（异常: %2）").arg(id, QString::fromLocal8Bit(e.what()));
             failList << id;
