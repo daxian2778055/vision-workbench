@@ -1,5 +1,6 @@
 #include <QElapsedTimer>
 #include "MainWindow.h"
+#include "FocusGuard.h"
 #include "VmSharedText.h"
 #include "CalibrationWizardDialog.h"
 #include "ResultTablePanel.h"
@@ -2596,6 +2597,12 @@ void MainWindow::initActions()
     });
     auto *deleteShortcut = new QShortcut(QKeySequence::Delete, this);
     connect(deleteShortcut, &QShortcut::activated, this, [currentScene]() {
+        // 焦点在可编辑控件里时，Delete 是文本编辑操作，不能拿去删节点
+        // （2026-11-08 复核）：QShortcut 默认 WindowShortcut 上下文，会劫持
+        // 参数面板 QLineEdit / 结果表 QTextEdit / 数值框里的删除键——用户在
+        // 输入框里按 Delete，画布上选中的节点就被删了。
+        if (isTextEditingFocus())
+            return;
         if (FlowScene *s = currentScene()) s->deleteSelectedItems();
     });
 
@@ -6313,6 +6320,12 @@ void MainWindow::openExceptionInfoDialog()
             });
 
     dialog.exec();
+}
+
+bool MainWindow::isTextEditingFocus()
+{
+    // 判定集中在 FocusGuard（header-only，便于单测），这里只转调。
+    return FocusGuard::isTextEditingFocus();
 }
 
 bool MainWindow::isNodeLive(NodeBase *node, FlowScene *executorScene) const

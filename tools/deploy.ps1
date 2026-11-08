@@ -385,7 +385,8 @@ VisionFlowPlatform 部署说明
    - 若使用 MVS 相机：目标机需安装"机器视觉工业相机客户端 MVS"，
      或至少具备 MVS 运行时 (MvCameraControl.dll 等，脚本已随包拷贝)。
    - 若使用 HALCON 深度学习/DeepOCR 算子：
-        a. **无需安装 HALCON**：包内自带 61 个 HALCON DLL，程序启动时把 HALCONROOT
+        a. **无需安装 HALCON**：包内自带白名单 8 个 HALCON DLL（halcon/halconcpp/
+          halcondl/halconc/libiomp5md/libcrypto/libssl/d3dcompiler_47），程序启动时把 HALCONROOT
            自举到 exe 目录，从 <包>/dl/ 加载 DeepOCR 预训练模型；
         b. 包内已带 dl/ 下的 DeepOCR 模型（约 214 MB，部署脚本负责拷贝，自检会校验）；
         c. License 为可选：本机实测无 license 文件时 DeepOCR 仍可运行；若现场有正式

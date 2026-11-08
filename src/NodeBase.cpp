@@ -304,8 +304,16 @@ bool NodeBase::evaluateResultJudgment(const QVariantMap &commonFields, QString *
                 pass = actual < expected;
             else if (op == QLatin1String("!="))
                 pass = actual != expected;
-            else
-                pass = actual == expected;   // 默认 ==
+            else if (op.isEmpty() || op == QLatin1String("=="))
+                pass = actual == expected;   // 空运算符兼容旧方案：按 == 处理
+            else {
+                // 未知运算符不能静默按 == 处理（2026-11-08 复核）：拼错（"=>"）、
+                // 或用了不支持的算子（如 contains）时，旧实现会变成「等于」比较，
+                // 结果静默错判且没有任何提示。这里显式判失败并给出可用清单。
+                fail(QStringLiteral("%1 的判断方式 '%2' 不受支持（可用 >= <= > < == !=）")
+                         .arg(key, op));
+                continue;
+            }
         } else if (op == QLatin1String("==") || op == QLatin1String("!=")) {
             // 文本比较：期望值或实际值为空时不算「不等」，否则 != 会 100% 放行 → 漏检。
             const QString actualText = actualVar.toString();

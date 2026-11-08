@@ -6,6 +6,12 @@
 #include "YoloAnnotation.h"
 #include "RuntimeInterface.h"
 #include "ExportWriteCheck.h"
+#include "FocusGuard.h"
+
+#include <QLineEdit>
+#include <QPlainTextEdit>
+#include <QSpinBox>
+#include <QTextEdit>
 
 #include <QDir>
 #include <QFile>
@@ -24,6 +30,7 @@ class UiGuardsTest : public QObject
     Q_OBJECT
 private slots:
     void annotationLabelAcceptsSafeNames();
+    void deleteShortcutIgnoredWhileEditingText();
     void annotationLabelRejectsTraversalAndSeparators();
     void annotationClassDirStaysUnderRoot();
     void annotationClassDirRejectsEscape();
@@ -377,6 +384,37 @@ void UiGuardsTest::annotationDialogRollsBackWhenSaveFails()
         if (l->text().contains(QStringLiteral("撤回")))
             sawRollback = true;
     QVERIFY2(sawRollback, "状态栏没有说明已撤回");
+}
+
+// 复核（扫描清单「设计器 Delete 快捷键劫持文本编辑」）：主窗口 Delete 用
+// QShortcut 默认的 WindowShortcut 上下文，只要窗口激活、任何子控件收到 Delete 都会
+// 触发——在参数面板输入框里按 Delete 想删字符，画布上选中的节点却被删了。
+// 这条腿锁住焦点判定：可编辑控件里必须拦，普通控件里必须放行。
+void UiGuardsTest::deleteShortcutIgnoredWhileEditingText()
+{
+    // 离屏环境下 setFocus() 不生效，所以测纯判定 isTextEditingWidget；
+    // isTextEditingFocus 只是它加一层 QApplication::focusWidget()。
+    QLineEdit edit;
+    QVERIFY2(FocusGuard::isTextEditingWidget(&edit), "输入框里按 Delete 不能删节点");
+
+    QTextEdit text;
+    QVERIFY2(FocusGuard::isTextEditingWidget(&text), "文本域同理");
+
+    QPlainTextEdit plainText;
+    QVERIFY2(FocusGuard::isTextEditingWidget(&plainText), "纯文本域同理");
+
+    QSpinBox spin;
+    QVERIFY2(FocusGuard::isTextEditingWidget(&spin), "数值框同理");
+
+    QComboBox combo;
+    combo.setEditable(true);
+    QVERIFY2(FocusGuard::isTextEditingWidget(&combo), "可编辑下拉框同理");
+
+    QWidget plain;
+    QVERIFY2(!FocusGuard::isTextEditingWidget(&plain),
+             "普通控件里按 Delete 应正常删节点，不能一律拦截");
+    QVERIFY2(!FocusGuard::isTextEditingWidget(nullptr),
+             "空指针不应崩，也不应算作文本编辑");
 }
 
 QTEST_MAIN(UiGuardsTest)

@@ -576,6 +576,26 @@ void NodeCoreTest::testGenericResultJudgment()
              "期望值为空时 != 不应恒通过");
     QVERIFY2(reason.contains(QStringLiteral("缺少可比较的值")), qPrintable(reason));
 
+    // ⑧ 未知运算符不得静默按 == 处理（2026-11-08 复核）：数值分支原先只认
+    // >= <= > < !=，其余一律落到 else pass = actual == expected —— 把 contains、
+    // 拼错的 "=>"、或空串之外任何值都当成"等于"比较，静默错判且无提示。
+    QJsonArray unknownOp;
+    unknownOp.append(condition(QStringLiteral("minGray"), QStringLiteral("contains"),
+                               QStringLiteral("1")));
+    setConditions(0, unknownOp);
+    reason.clear();
+    QVERIFY2(!node.evaluateGenericResultJudgment(&reason),
+             "不支持的运算符必须判 NG，不能静默按 == 比较");
+    QVERIFY2(reason.contains(QStringLiteral("不受支持")), qPrintable(reason));
+
+    // ⑨ 空运算符仍按 == 兼容：旧方案里可能存空串，这条改动不能让它回归成判 NG
+    QJsonArray emptyOp;
+    emptyOp.append(condition(QStringLiteral("minGray"), QString(), QStringLiteral("80")));
+    setConditions(0, emptyOp);
+    reason.clear();
+    node.evaluateGenericResultJudgment(&reason);
+    QVERIFY2(!reason.contains(QStringLiteral("不受支持")), qPrintable(reason));
+
     node.setParam(QStringLiteral("emptyField"), QString());   // valid QVariant，但值为空串
     QJsonArray neEmptyActual;
     neEmptyActual.append(

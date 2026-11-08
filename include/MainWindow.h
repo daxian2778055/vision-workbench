@@ -80,6 +80,12 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 
 public:
+    /// 当前焦点是否落在可编辑控件里（输入框/文本域/数值框/下拉框）。
+    /// 用途：主窗口的 Delete 快捷键是 WindowShortcut 上下文，会劫持这些控件里的
+    /// 删除键——用户在参数面板输入框里按 Delete，画布上选中的节点就被删了
+    /// （2026-11-08 复核）。导出为静态函数是为了让腿能测，不必构造 MainWindow。
+    static bool isTextEditingFocus();
+
     /// previewOnly=true：跳过模态登录，建立**只读**预览会话（Viewer 角色 + 写闸开启），
     /// 用于核对菜单/布局；保存、打开方案、运行均被禁用。正常启动保持 false。
     MainWindow(QWidget *parent = nullptr, bool previewOnly = false);

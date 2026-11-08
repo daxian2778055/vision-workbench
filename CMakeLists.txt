@@ -576,6 +576,7 @@ set(HEADERS
     include/CalibrationWizard.h
     include/CalibrationWizardDialog.h
     include/DeepOcrSelfTest.h
+    include/FocusGuard.h
     include/VariablePanel.h
     include/ModuleEditorDialog.h
     include/TemplateConfigDialog.h
