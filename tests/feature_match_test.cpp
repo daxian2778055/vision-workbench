@@ -96,6 +96,8 @@ private slots:
     void templateMaskEditInvalidatesWarpCache();
     void templateTimeoutReturnsNoResults();
     void templateMaxMatchesAllowsVmRange();
+    // VM 出厂默认与量程：minScore 0.5 / 角度 ±45 / 尺度 0.1~10.0
+    void templateVmDefaultsMatchHelp();
     void templateFingerprintDistinguishesContent();
     void matchCountMatchesFilteredList();
     // 分割/剪刀：按连通域拆块、沿画线切开
@@ -3224,6 +3226,47 @@ void FeatureMatchTest::templateMaxMatchesAllowsVmRange()
     qInfo("max-matches-leg: placed=%d count=%d ok=%d", placed, count, int(ok));
     QVERIFY2(ok, "多目标用例应当匹配成功");
     QCOMPARE(count, placed);
+}
+
+// VM 4.4 高精度匹配出厂默认/量程（帮助页）：最小匹配分数 0.5；角度范围 -45~45；
+// 尺度范围 1.00~1.00、有效值 0.1~10.0。锁住参数壳，避免后续又被老方案默认值带回去。
+void FeatureMatchTest::templateVmDefaultsMatchHelp()
+{
+    OpencvTemplateMatchNode node;
+    node.init();
+
+    auto specOf = [&node](const QString &name) {
+        for (const ParamSpec &s : node.paramSpecs())
+            if (s.name == name)
+                return s;
+        return ParamSpec();
+    };
+
+    const ParamSpec minScore = specOf(QStringLiteral("minScore"));
+    QVERIFY2(!minScore.name.isEmpty(), "未注册 minScore");
+    QCOMPARE(minScore.defaultValue.toDouble(), 0.5);
+
+    const ParamSpec angleMin = specOf(QStringLiteral("angleMin"));
+    const ParamSpec angleMax = specOf(QStringLiteral("angleMax"));
+    QVERIFY2(!angleMin.name.isEmpty() && !angleMax.name.isEmpty(), "未注册角度范围");
+    QCOMPARE(angleMin.defaultValue.toDouble(), -45.0);
+    QCOMPARE(angleMax.defaultValue.toDouble(), 45.0);
+
+    for (const char *name : {"scaleMin", "scaleMax", "scaleMinX", "scaleMaxX",
+                             "scaleMinY", "scaleMaxY"}) {
+        const ParamSpec s = specOf(QString::fromLatin1(name));
+        QVERIFY2(!s.name.isEmpty(), qPrintable(QStringLiteral("未注册 %1").arg(name)));
+        QVERIFY2(s.hasRange, qPrintable(QStringLiteral("%1 应声明量程").arg(name)));
+        QCOMPARE(s.minValue.toDouble(), 0.1);
+        QCOMPARE(s.maxValue.toDouble(), 10.0);
+    }
+
+    // 程序化写入也必须按量程钳制（面板、通讯下发、保存载入共用这一入口）
+    node.setParam(QStringLiteral("scaleMin"), 0.05);
+    node.setParam(QStringLiteral("scaleMax"), 20.0);
+    QCOMPARE(node.getParam(QStringLiteral("scaleMin")).toDouble(), 0.1);
+    QCOMPARE(node.getParam(QStringLiteral("scaleMax")).toDouble(), 10.0);
+    QCOMPARE(node.getParam(QStringLiteral("minScore")).toDouble(), 0.5);
 }
 
 // 复核 P1-4：变形缓存的键原先只有「尺寸 + 路径」。同路径换图重训（尺寸往往不变）

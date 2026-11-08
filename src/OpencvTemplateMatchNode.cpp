@@ -454,7 +454,7 @@ void OpencvTemplateMatchNode::init()
         makeBoolParam(QStringLiteral("showMatchResult"), true, QStringLiteral("显示匹配结果")),
         makeBoolParam(QStringLiteral("showMatchPoint"), true, QStringLiteral("显示匹配点")),
         makeBoolParam(QStringLiteral("showFeaturePoints"), true, QStringLiteral("显示特征点")),
-        makeDoubleParam(QStringLiteral("minScore"), 0.6, 0.0, 1.0,
+        makeDoubleParam(QStringLiteral("minScore"), 0.5, 0.0, 1.0,
                         QStringLiteral("最低匹配度")),
         // VM「配置参数」对齐（2026-11-02）：把原先写死的边缘参数放出来。
         // 默认值 = 原常量，老方案行为逐字节不变。
@@ -477,27 +477,27 @@ void OpencvTemplateMatchNode::init()
                         QStringLiteral("旋转框中心行"), QStringLiteral("px")),
         makeDoubleParam(QStringLiteral("roiAngle"), 0.0, -180.0, 180.0,
                         QStringLiteral("模板框角度"), QStringLiteral("°")),
-        makeDoubleParam(QStringLiteral("angleMin"), -30.0, -180.0, 180.0,
+        makeDoubleParam(QStringLiteral("angleMin"), -45.0, -180.0, 180.0,
                         QStringLiteral("搜索角度下限"), QStringLiteral("°")),
-        makeDoubleParam(QStringLiteral("angleMax"), 30.0, -180.0, 180.0,
+        makeDoubleParam(QStringLiteral("angleMax"), 45.0, -180.0, 180.0,
                         QStringLiteral("搜索角度上限"), QStringLiteral("°")),
         makeDoubleParam(QStringLiteral("angleStep"), 2.0, 0.5, 45.0,
                         QStringLiteral("搜索角度步进"), QStringLiteral("°")),
-        makeDoubleParam(QStringLiteral("scaleMin"), 1.0, 0.3, 3.0,
+        makeDoubleParam(QStringLiteral("scaleMin"), 1.0, 0.1, 10.0,
                         QStringLiteral("搜索尺度下限")),
-        makeDoubleParam(QStringLiteral("scaleMax"), 1.0, 0.3, 3.0,
+        makeDoubleParam(QStringLiteral("scaleMax"), 1.0, 0.1, 10.0,
                         QStringLiteral("搜索尺度上限")),
         makeDoubleParam(QStringLiteral("scaleStep"), 0.05, 0.01, 0.5,
                         QStringLiteral("搜索尺度步进")),
         makeIntParam(QStringLiteral("scaleRangeType"), 0, 0, 1,
                      QStringLiteral("尺度范围类型：0=整体（scaleMin/Max），1=XY（X/Y 独立）")),
-        makeDoubleParam(QStringLiteral("scaleMinX"), 1.0, 0.3, 3.0,
+        makeDoubleParam(QStringLiteral("scaleMinX"), 1.0, 0.1, 10.0,
                         QStringLiteral("X 尺度起（scaleRangeType=1）")),
-        makeDoubleParam(QStringLiteral("scaleMaxX"), 1.0, 0.3, 3.0,
+        makeDoubleParam(QStringLiteral("scaleMaxX"), 1.0, 0.1, 10.0,
                         QStringLiteral("X 尺度止（scaleRangeType=1）")),
-        makeDoubleParam(QStringLiteral("scaleMinY"), 1.0, 0.3, 3.0,
+        makeDoubleParam(QStringLiteral("scaleMinY"), 1.0, 0.1, 10.0,
                         QStringLiteral("Y 尺度起（scaleRangeType=1）")),
-        makeDoubleParam(QStringLiteral("scaleMaxY"), 1.0, 0.3, 3.0,
+        makeDoubleParam(QStringLiteral("scaleMaxY"), 1.0, 0.1, 10.0,
                         QStringLiteral("Y 尺度止（scaleRangeType=1）")),
         // VM「尺度范围XY → 横切角度范围」：默认 0~0（只搜无横切目标），有效 -45~45。
         makeDoubleParam(QStringLiteral("crossAngleMin"), 0.0, -45.0, 45.0,
@@ -1074,7 +1074,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 : active.imagePath).trimmed();
         const bool train = m_params.value(QStringLiteral("trainFromImage"), false).toBool();
         const int methodIdx = m_params.value(QStringLiteral("method"), 1).toInt();
-        const double minScore = m_params.value(QStringLiteral("minScore"), 0.6).toDouble();
+        const double minScore = m_params.value(QStringLiteral("minScore"), 0.5).toDouble();
         const int method = (methodIdx == 0) ? cv::TM_SQDIFF_NORMED : cv::TM_CCOEFF_NORMED;
 
         cv::Mat tmpl;
@@ -1198,8 +1198,8 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
 
         QVector<double> angles;
         QVector<double> scales;
-        collectSearchValues(m_params.value(QStringLiteral("angleMin"), -30.0).toDouble(),
-                            m_params.value(QStringLiteral("angleMax"), 30.0).toDouble(),
+        collectSearchValues(m_params.value(QStringLiteral("angleMin"), -45.0).toDouble(),
+                            m_params.value(QStringLiteral("angleMax"), 45.0).toDouble(),
                             m_params.value(QStringLiteral("angleStep"), 2.0).toDouble(),
                             90, angles);
         double sMin = m_params.value(QStringLiteral("scaleMin"), 1.0).toDouble();
