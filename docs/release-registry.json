@@ -1117,6 +1117,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261108.3",
       "recorded_at": "2026-11-08",
       "recorded_note": "算法层去 HALCON：图像加法/乘法/顶帽/底帽改 OpenCV（cv::add/multiply/subtract 饱和语义 + morphologyEx 逐次开闭运算，避开 in-place 与 iterations 两个坑）；HalconImageSourceNode 摘注册（采集统一 MVS）。此后 HALCON 算法只剩 DeepOCR 一条链。包 813MB/154 文件，免安装自检 71 PASS/0 FAIL/3 SKIP"
+    },
+    {
+      "tag": "rc-20261108.4",
+      "commit": "17748f5d951457d5d80c06b441fe0d2535eefc8b",
+      "exe_md5": "110833e08e3e67d014aba7fff8e83b44",
+      "exe_bytes": 11816448,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261108.4",
+      "recorded_at": "2026-11-08",
+      "recorded_note": "新增 --selftest-deepocr 现场自检（单图/目录/CSV）；修复 recognition 模式置信度缺失被当 0 导致默认参数下永远读不到字的真 BUG；免安装实测 DeepOCR 识别出 HELLO12345（502ms）。包 813MB/154 文件，自检 71 PASS/0 FAIL/3 SKIP"
     }
   ],
   "legacy_backfilled": [
