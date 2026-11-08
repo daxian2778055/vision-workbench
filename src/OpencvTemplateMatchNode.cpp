@@ -424,6 +424,9 @@ void OpencvTemplateMatchNode::init()
                      QStringLiteral("阈值类型：0=自动（按目标图像）1=模板 2=手动")),
         makeIntParam(QStringLiteral("matchContrastThreshold"), 5, 1, 255,
                      QStringLiteral("手动阈值（灰度差 1~255，阈值类型=手动时用）")),
+        // VM「是否考虑噪点」：搜索图里不在边缘链上的特征点（毛刺）参与评分，评分降低。
+        makeBoolParam(QStringLiteral("considerNoise"), false,
+                      QStringLiteral("是否考虑噪点（开启后匹配图中不在边缘链上的特征点会降低评分）")),
         makeIntParam(QStringLiteral("sortType"), 0, 0, 5,
                      QStringLiteral("排序类型：0=按分数降序 1=按角度降序 2=按X升序 3=按Y升序 4=按X再Y 5=按Y再X")),
         makeIntParam(QStringLiteral("maxOverlap"), 50, 0, 100,
@@ -570,6 +573,7 @@ void OpencvTemplateMatchNode::init()
             QStringLiteral("crossAngleMin"), QStringLiteral("crossAngleMax"),
             QStringLiteral("sortType"),
             QStringLiteral("thresholdType"), QStringLiteral("matchContrastThreshold"),
+            QStringLiteral("considerNoise"),
             QStringLiteral("extendThreshold"), QStringLiteral("timeoutMs"),
             QStringLiteral("getContour"), QStringLiteral("outputContour"),
             QStringLiteral("writeFixtureName"),
@@ -666,6 +670,8 @@ void OpencvTemplateMatchNode::init()
                 QStringLiteral("0=自动（按目标图像）1=模板 2=手动")}},
             {QStringLiteral("matchContrastThreshold"), {QStringLiteral("手动阈值"),
                 QStringLiteral("灰度差 1~255；阈值类型=手动时使用")}},
+            {QStringLiteral("considerNoise"), {QStringLiteral("是否考虑噪点"),
+                QStringLiteral("开启后匹配图中不在边缘链上的特征点（毛刺）会降低评分；默认关闭")}},
             {QStringLiteral("extendThreshold"), {QStringLiteral("延拓阈值"),
                 QStringLiteral("目标被图像边缘截断时允许缺失的特征比例（%）")}},
             {QStringLiteral("timeoutMs"), {QStringLiteral("超时控制"),
@@ -1657,6 +1663,9 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         // 画布只显示匹配框（官方帮助：关闭则不显示特征点、可降低匹配耗时）。
         const bool getContour = m_params.value(QStringLiteral("getContour"), true).toBool();
         const bool outputContour = m_params.value(QStringLiteral("outputContour"), false).toBool();
+        // VM「是否考虑噪点」：只作用于 GOC（method=2）的评分；默认关，旧行为逐字节不变。
+        const bool considerNoise =
+            m_params.value(QStringLiteral("considerNoise"), false).toBool();
         QVector<QPointF> contourLocal;
         if (getContour) {
             // featurePointsForPatch 返回图像坐标（按 ROI 落位）；这里反算回模板局部系，
@@ -1841,6 +1850,24 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                     cv::absdiff(scoreVis, cv::Scalar(0), flipped);
                     flipped.setTo(-1.0f, invalidMask);
                     scoreVis = flipped;
+                }
+                if (considerNoise) {
+                    // VM「是否考虑噪点」（帮助页只给语义、未给公式）：搜索图里未被模板特征点
+                    // 解释的强边缘像素视为毛刺/噪点。噪点率 = 这些像素数 / 模板特征点数，
+                    // 评分按 score/(1+噪点率) 衰减（单调、不改符号）；-1 哨兵格不参与。
+                    cv::Mat dilated;
+                    cv::dilate(wm, dilated,
+                               cv::getStructuringElement(cv::MORPH_RECT, cv::Size(5, 5)));
+                    cv::Mat noiseMask = cv::Mat::ones(dilated.size(), CV_32F) - dilated;
+                    cv::Mat noiseCount;
+                    cv::matchTemplate(curSearchStrong, noiseMask, noiseCount, cv::TM_CCORR);
+                    cv::Mat denom;
+                    cv::divide(noiseCount, cv::Scalar(n + 1e-6), denom);
+                    denom = denom + 1.0;
+                    cv::Mat penalized;
+                    cv::divide(scoreVis, denom, penalized);
+                    cv::Mat valid = (scoreVis > -0.5f);
+                    penalized.copyTo(scoreVis, valid);
                 }
                 result = scoreVis;
             } else {

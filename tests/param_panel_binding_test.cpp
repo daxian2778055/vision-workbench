@@ -2505,8 +2505,9 @@ void ParamPanelBindingTest::testUnnamedFindChildSitesAreSingleCandidate()
     // → 518（2026-11-08）：模板匹配横切角度范围批：crossAngleMin/crossAngleMax（净 +2）
     // → 520（2026-11-08）：模板匹配轮廓开关批：getContour/outputContour（净 +2）
     // → 521（2026-11-08）：模板匹配多模板合并批：multiTemplateOverlap（净 +1）
-    QVERIFY2(fieldSlots == 521,
-             qPrintable(QStringLiteral("字段槽位分母从 521 变成 %1 ⇒ 本闸口径已漂移，"
+    // → 522（2026-11-08）：模板匹配噪点批：considerNoise（净 +1）
+    QVERIFY2(fieldSlots == 522,
+             qPrintable(QStringLiteral("字段槽位分母从 522 变成 %1 ⇒ 本闸口径已漂移，"
                                        "先核对面板改动再把基准一起改").arg(fieldSlots)));
     QVERIFY2(badSlots.isEmpty(),
              qPrintable(QStringLiteral("U5-MULTI: %1 个字段槽位里同类型候选不止一个 ⇒ 站点 1 的无名 "

@@ -80,6 +80,8 @@ private slots:
     void templateAllTemplatesMergesPerTarget();
     // VM「勾选模板 / 模板排序」：未勾选不参与匹配；列表顺序决定未开全部搜索模式时的优先顺序
     void templateCheckedTemplatesControlSearch();
+    // VM「是否考虑噪点」：开启后搜索图毛刺（未被模板特征点解释的强边缘）拉低评分
+    void templateNoiseConsiderationLowersScore();
     // 多边形/圆形模板：必须能抠出包围盒（此前多边形直接返回空 → 建模板必失败）
     void templateShapeExtractionSupportsPolygonAndCircle();
     // 魔术棒取形：泛洪出的多边形必须贴合目标区域
@@ -1962,6 +1964,81 @@ void FeatureMatchTest::templateCheckedTemplatesControlSearch()
           node.getParam(QStringLiteral("trainFromImage")).toBool());
     QVERIFY2(trainStatus.contains(QStringLiteral("已训练")), qPrintable(trainStatus));
     QCOMPARE(node.getParam(QStringLiteral("trainFromImage")).toBool(), false);
+}
+
+// P1-5（VM「是否考虑噪点」）：开启后，匹配图中不在边缘链上的特征点（毛刺）会让评分降低。
+// 夹具用「空心方框」模板：模板特征只在四周轮廓，框内是平坦区；在目标框内画几条强边缘毛刺，
+// 它们不会被模板特征点解释。同一张毛刺图开/关 considerNoise 对比分数；干净图作对照，
+// 证明下降来自毛刺而不是开关本身的常数惩罚。
+void FeatureMatchTest::templateNoiseConsiderationLowersScore()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    cv::Mat tplImg(100, 100, CV_8UC1, cv::Scalar(30));
+    cv::rectangle(tplImg, cv::Rect(10, 10, 80, 80), cv::Scalar(220), 3);
+    const QString tplPath = dir.filePath(QStringLiteral("hollow.png"));
+    QVERIFY(cv::imwrite(tplPath.toStdString(), tplImg));
+
+    // 画布底色 = 模板底色（30）：贴片边界不产生模板外的新边缘，干净图才是"零噪点"基线。
+    cv::Mat clean(400, 400, CV_8UC1, cv::Scalar(30));
+    const cv::Rect targetBox(100, 100, 100, 100);
+    tplImg.copyTo(clean(targetBox));
+    const double cx = targetBox.x + targetBox.width / 2.0;
+    const double cy = targetBox.y + targetBox.height / 2.0;
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    QCOMPARE(node.getParam(QStringLiteral("considerNoise")).toBool(), false);   // VM 默认关
+    node.setParam(QStringLiteral("method"), 2);                                  // 噪点只作用于 GOC
+    node.setParam(QStringLiteral("minScore"), 0.3);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("scaleMin"), 1.0);
+    node.setParam(QStringLiteral("scaleMax"), 1.0);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("templatePath"), tplPath);
+    TemplateEntry e;
+    e.name = QStringLiteral("hollow");
+    e.imagePath = tplPath;
+    node.setTemplates({e});
+    node.setActiveTemplateIndex(0);
+
+    auto runOnce = [&](const cv::Mat &img, bool considerNoise) {
+        node.setParam(QStringLiteral("considerNoise"), considerNoise);
+        node.setInputImage(OpencvUtil::matToHimage(img));
+        node.run(false);
+        return QPair<double, double>(node.getParam(QStringLiteral("matchScore")).toDouble(),
+                                     node.getParam(QStringLiteral("matchCol")).toDouble());
+    };
+
+    const double cleanOff = runOnce(clean, false).first;
+    const double cleanOn = runOnce(clean, true).first;
+
+    // 毛刺：目标框内两条强边缘，模板里没有对应特征（框内本是平坦区）
+    cv::Mat burred = clean.clone();
+    cv::line(burred, cv::Point(135, 135), cv::Point(165, 165), cv::Scalar(255), 3);
+    cv::line(burred, cv::Point(160, 130), cv::Point(160, 170), cv::Scalar(255), 3);
+    const auto burrOffPair = runOnce(burred, false);
+    const auto burrOnPair = runOnce(burred, true);
+    const double burrOff = burrOffPair.first;
+    const double burrOn = burrOnPair.first;
+    qInfo("noise-leg: cleanOff=%.4f cleanOn=%.4f burrOff=%.4f burrOn=%.4f col=%.1f",
+          cleanOff, cleanOn, burrOff, burrOn, burrOnPair.second);
+
+    QVERIFY2(qAbs(burrOnPair.second - cx) <= 3.0,
+             qPrintable(QStringLiteral("毛刺图命中列应仍在 %1 附近，实际 %2")
+                            .arg(cx).arg(burrOnPair.second)));
+    QVERIFY2(cleanOn >= cleanOff - 0.02,
+             qPrintable(QStringLiteral("干净图开启噪点不应明显掉分：off=%1 on=%2")
+                            .arg(cleanOff).arg(cleanOn)));
+    QVERIFY2(burrOn < burrOff - 0.05,
+             qPrintable(QStringLiteral("开启噪点后毛刺图评分必须明显下降：off=%1 on=%2")
+                            .arg(burrOff).arg(burrOn)));
+    QVERIFY2((burrOff - burrOn) > (cleanOff - cleanOn),
+             qPrintable(QStringLiteral("毛刺图的评分降幅应大于干净图：burr=%1 clean=%2")
+                            .arg(burrOff - burrOn).arg(cleanOff - cleanOn)));
 }
 
 // 多边形/圆形模板的形状抠图：以前 Polygon/Circle 落到 roiAxisAlignedBounds 返回空，
