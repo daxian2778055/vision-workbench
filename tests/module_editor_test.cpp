@@ -62,6 +62,7 @@ private slots:
     void testTemplateResultTableUsesPerTargetScaleY();
     void testTemplateListCheckAndReorder();
     void testTemplateConfigEnhanceCheckboxWritesEntry();
+    void testTemplateConfigScaleModeWritesEntry();
 };
 
 void ModuleEditorTest::testParamEditTriggersDebouncedRecompute()
@@ -872,6 +873,66 @@ void ModuleEditorTest::testTemplateConfigEnhanceCheckboxWritesEntry()
     const QVector<TemplateEntry> back = node.templates();
     QCOMPARE(back.size(), 1);
     QCOMPARE(back.first().enhancedShapes, QVector<int>({0}));
+}
+
+// VM 模板配置「尺度模式」（默认自动）：配置窗下拉必须写回 TemplateEntry.scaleModeAuto，
+// 并同步节点参数 scaleMode；自动时速度尺度输入框不可改（VM 同款）。
+void ModuleEditorTest::testTemplateConfigScaleModeWritesEntry()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    cv::Mat tpl(100, 100, CV_8UC1, cv::Scalar(30));
+    cv::rectangle(tpl, cv::Rect(10, 10, 30, 80), cv::Scalar(220), 3);
+    cv::rectangle(tpl, cv::Rect(60, 10, 30, 80), cv::Scalar(180), 3);
+    const QString tplPath = dir.filePath(QStringLiteral("scale-ui.png"));
+    QVERIFY(cv::imwrite(tplPath.toStdString(), tpl));
+
+    cv::Mat canvas(200, 300, CV_8UC1, cv::Scalar(30));
+    tpl.copyTo(canvas(cv::Rect(100, 50, 100, 100)));
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+    TemplateEntry e;
+    e.name = QStringLiteral("ui-scale");
+    e.imagePath = tplPath;
+    e.scaleModeAuto = true;
+    RoiShape a;
+    a.type = RoiType::Rect;
+    a.p1 = QPointF(0, 0);
+    a.p2 = QPointF(100, 100);
+    e.shapes = {a};
+    e.shape = a;
+    node.setTemplates({e});
+    node.setActiveTemplateIndex(0);
+
+    TemplateConfigDialog dlg(&node, 0);
+    auto *mode = dlg.findChild<QComboBox *>(QStringLiteral("templateScaleModeCombo"));
+    auto *speed = dlg.findChild<QSpinBox *>(QStringLiteral("templateSpeedScaleSpin"));
+    QVERIFY2(mode != nullptr, "未找到模板配置窗尺度模式下拉 templateScaleModeCombo");
+    QVERIFY2(speed != nullptr, "未找到模板配置窗速度尺度输入框 templateSpeedScaleSpin");
+    QCOMPARE(mode->currentIndex(), 0);          // 默认自动
+    QVERIFY2(!speed->isEnabled(), "尺度模式=自动时速度尺度不可改（VM 同款）");
+
+    mode->setCurrentIndex(1);                    // 切手动
+    QVERIFY2(speed->isEnabled(), "尺度模式=手动时速度尺度应可改");
+    speed->setValue(9);
+
+    QPushButton *okBtn = nullptr;
+    for (QPushButton *b : dlg.findChildren<QPushButton *>()) {
+        if (b->text() == QStringLiteral("确定")) {
+            okBtn = b;
+            break;
+        }
+    }
+    QVERIFY2(okBtn != nullptr, "未找到模板配置窗「确定」按钮");
+    okBtn->click();
+
+    const QVector<TemplateEntry> back = node.templates();
+    QCOMPARE(back.size(), 1);
+    QCOMPARE(back.first().scaleModeAuto, false);
+    QCOMPARE(back.first().speedScale, 9);
+    QCOMPARE(node.getParam(QStringLiteral("scaleMode")).toInt(), 0);
 }
 
 QTEST_MAIN(ModuleEditorTest)

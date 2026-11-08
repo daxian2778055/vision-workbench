@@ -136,8 +136,10 @@ private slots:
     void templateSortTypeOrdersMatchList();
     // 屏蔽形状：最终掩膜 = 保留 − 屏蔽
     void templateExcludeShapesSubtractFromMask();
-    // 尺度模式=自动：按模板占比估出搜索范围，能命中 1.15 倍实例
+    // 运行参数尺度范围：只有显式 min/max 才生效（VM 没有"搜索尺度自动"）
     void templateScaleRangeFindsScaledInstance();
+    // VM 模板配置「尺度模式」：只控制速度尺度自动/手动，与搜索尺度范围无关
+    void templateScaleModeControlsSpeedScaleOnly();
 };
 
 namespace {
@@ -3145,10 +3147,11 @@ void FeatureMatchTest::templateExcludeShapesSubtractFromMask()
     QCOMPARE(back.shapes.size(), 1);
 }
 
-// 尺度模式（VM 配置参数最后一项）：自动 = 按模板占搜索区的比例估出尺度范围。
+// 运行参数「尺度范围」（VM）：只有显式 min/max 参与搜索；不存在"搜索尺度自动"。
 // 画布上放一个 1.15 倍的实例：
-//   scaleMode=0（手动，scaleMin=Max=1）→ 只能按 1.0 找，分数低、尺度=1；
-//   scaleMode=1 → 自动把范围扩到 ~0.77..1.3，命中 ≈1.15 的实例且分数更高。
+//   尺度范围 1.0 → 只能按 1.0 找，分数低、尺度=1；
+//   尺度范围 0.8~1.3 → 命中 ≈1.15 的实例且分数更高；
+//   再把范围收回 1.0 并把 scaleMode 置 1（模板尺度自动）→ 不得扩大搜索范围。
 void FeatureMatchTest::templateScaleRangeFindsScaledInstance()
 {
     QTemporaryDir dir;
@@ -3206,6 +3209,109 @@ void FeatureMatchTest::templateScaleRangeFindsScaledInstance()
     QVERIFY2(qAbs(col - cx) <= 3.0 && qAbs(row - cy) <= 3.0,
              qPrintable(QStringLiteral("命中位置应在 (%1,%2)，实际 (%3,%4)")
                             .arg(cx).arg(cy).arg(col).arg(row)));
+
+    // scaleMode 是模板配置的「尺度模式」（速度尺度自动/手动），不得再扩大搜索尺度范围：
+    // 范围收回 1.0 后即使 scaleMode=1，也只能按 1.0 搜。
+    node.setParam(QStringLiteral("scaleMin"), 1.0);
+    node.setParam(QStringLiteral("scaleMax"), 1.0);
+    node.setParam(QStringLiteral("scaleMode"), 1);
+    node.run(false);
+    const double k2 = node.getParam(QStringLiteral("matchScale")).toDouble();
+    const double s2 = node.getParam(QStringLiteral("matchScore")).toDouble();
+    qInfo("scale-range: auto-flag k=%.2f score=%.3f", k2, s2);
+    QVERIFY2(qAbs(k2 - 1.0) < 1e-6,
+             qPrintable(QStringLiteral("VM 没有搜索尺度自动：scaleMode=1 时尺度必须仍为 1.0，实际 %1")
+                            .arg(k2)));
+    QVERIFY2(s2 < s1,
+             qPrintable(QStringLiteral("范围 1.0 的分数应低于覆盖 1.15 的范围：%1 vs %2")
+                            .arg(s2).arg(s1)));
+}
+
+// VM 模板配置「尺度模式」（默认自动）：只决定速度尺度（粗搜降采样倍率）怎么来，
+// 与运行参数「尺度范围」无关。这里锁四件事：
+//   ① 模板条目自动 → 800px 图自动值 = qBound(2, round(800/640), 20) = 2，忽略 speedScale=10；
+//   ② 模板条目手动 → 用 speedScale=10；粗搜倍率必须是 10（真实进入粗搜路径）；
+//   ③ 无模板列表时节点参数 scaleMode 决定合成的模板条目（0=手动10 / 1=自动2）；
+//   ④ JSON 往返：显式 false 保留手动，缺键按 VM 默认自动。
+void FeatureMatchTest::templateScaleModeControlsSpeedScaleOnly()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const cv::Mat patch = makePatch();
+    const QString tpl = dir.filePath(QStringLiteral("scale-mode.png"));
+    QVERIFY(cv::imwrite(tpl.toStdString(), patch));
+
+    cv::Mat canvas(600, 800, CV_8UC1, cv::Scalar(kCanvasBackground));
+    patch.copyTo(canvas(cv::Rect(300, 200, patch.cols, patch.rows)));
+
+    TemplateEntry autoEntry;
+    autoEntry.name = QStringLiteral("auto");
+    autoEntry.imagePath = tpl;
+    autoEntry.scaleModeAuto = true;
+    autoEntry.speedScale = 10;          // 自动模式下必须被忽略
+    TemplateEntry manualEntry = autoEntry;
+    manualEntry.name = QStringLiteral("manual");
+    manualEntry.scaleModeAuto = false;
+
+    OpencvTemplateMatchNode autoNode;
+    autoNode.init();
+    autoNode.setParam(QStringLiteral("method"), 1);
+    autoNode.setParam(QStringLiteral("angleMin"), -2.0);
+    autoNode.setParam(QStringLiteral("angleMax"), 0.0);
+    autoNode.setParam(QStringLiteral("angleStep"), 2.0);
+    autoNode.setParam(QStringLiteral("scaleMin"), 1.0);
+    autoNode.setParam(QStringLiteral("scaleMax"), 1.0);
+    autoNode.setInputImage(OpencvUtil::matToHimage(canvas));
+    autoNode.setTemplates({autoEntry});
+    autoNode.setActiveTemplateIndex(0);
+    autoNode.run(false);
+    const int autoSpeed = autoNode.getParam(QStringLiteral("matchSpeedScale")).toInt();
+    const double autoCoarse = autoNode.getParam(QStringLiteral("matchCoarseFactor")).toDouble();
+
+    autoNode.setTemplates({manualEntry});
+    autoNode.setActiveTemplateIndex(0);
+    autoNode.run(false);
+    const int manualSpeed = autoNode.getParam(QStringLiteral("matchSpeedScale")).toInt();
+    const double manualCoarse = autoNode.getParam(QStringLiteral("matchCoarseFactor")).toDouble();
+    qInfo("scale-mode: auto speed=%d coarse=%.0f | manual speed=%d coarse=%.0f", autoSpeed,
+          autoCoarse, manualSpeed, manualCoarse);
+
+    QCOMPARE(autoSpeed, 2);
+    QCOMPARE(autoCoarse, 2.0);
+    QCOMPARE(manualSpeed, 10);
+    QCOMPARE(manualCoarse, 10.0);
+
+    // ③ 无模板列表：节点参数 scaleMode 必须真的作用到合成模板条目
+    OpencvTemplateMatchNode legacy;
+    legacy.init();
+    legacy.setParam(QStringLiteral("method"), 1);
+    legacy.setParam(QStringLiteral("angleMin"), -2.0);
+    legacy.setParam(QStringLiteral("angleMax"), 0.0);
+    legacy.setParam(QStringLiteral("angleStep"), 2.0);
+    legacy.setParam(QStringLiteral("scaleMin"), 1.0);
+    legacy.setParam(QStringLiteral("scaleMax"), 1.0);
+    legacy.setParam(QStringLiteral("speedScale"), 10);
+    legacy.setParam(QStringLiteral("scaleMode"), 0);          // 手动
+    legacy.setParam(QStringLiteral("templatePath"), tpl);
+    legacy.setInputImage(OpencvUtil::matToHimage(canvas));
+    legacy.run(false);
+    const int legacyManual = legacy.getParam(QStringLiteral("matchSpeedScale")).toInt();
+    legacy.setParam(QStringLiteral("scaleMode"), 1);          // 自动
+    legacy.run(false);
+    const int legacyAuto = legacy.getParam(QStringLiteral("matchSpeedScale")).toInt();
+    qInfo("scale-mode: node-param manual=%d auto=%d", legacyManual, legacyAuto);
+    QCOMPARE(legacyManual, 10);
+    QCOMPARE(legacyAuto, 2);
+
+    // ④ JSON 往返
+    TemplateEntry e;
+    e.speedScale = 7;
+    e.scaleModeAuto = false;
+    const TemplateEntry back = TemplateEntry::fromJson(e.toJson());
+    QCOMPARE(back.scaleModeAuto, false);
+    QCOMPARE(back.speedScale, 7);
+    TemplateEntry dflt = TemplateEntry::fromJson(QJsonObject());
+    QCOMPARE(dflt.scaleModeAuto, true);
 }
 
 // VM「特征尺度 / 最小链长」（官方定义：特征尺度越大特征点越稀疏；链长小于最小链长的特征链不保留）。
@@ -3771,6 +3877,11 @@ void FeatureMatchTest::templateVmDefaultsMatchHelp()
     const ParamSpec minScore = specOf(QStringLiteral("minScore"));
     QVERIFY2(!minScore.name.isEmpty(), "未注册 minScore");
     QCOMPARE(minScore.defaultValue.toDouble(), 0.5);
+
+    // VM 模板配置「尺度模式」默认自动（只作用于速度尺度）
+    const ParamSpec scaleMode = specOf(QStringLiteral("scaleMode"));
+    QVERIFY2(!scaleMode.name.isEmpty(), "未注册 scaleMode");
+    QCOMPARE(scaleMode.defaultValue.toInt(), 1);
 
     const ParamSpec angleMin = specOf(QStringLiteral("angleMin"));
     const ParamSpec angleMax = specOf(QStringLiteral("angleMax"));

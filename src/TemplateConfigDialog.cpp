@@ -346,10 +346,20 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
         row->addWidget(w);
         form->addLayout(row);
     };
+    m_scaleModeCombo = new QComboBox();
+    m_scaleModeCombo->setObjectName(QStringLiteral("templateScaleModeCombo"));
+    m_scaleModeCombo->addItems({QStringLiteral("自动"), QStringLiteral("手动")});
+    m_scaleModeCombo->setToolTip(QStringLiteral(
+        "VM「尺度模式」：自动时按图像大小定速度尺度；手动时用下面的速度尺度。默认自动。"));
+    makeRow(QStringLiteral("尺度模式"), m_scaleModeCombo);
     m_coarseSpin = new QSpinBox();
+    m_coarseSpin->setObjectName(QStringLiteral("templateSpeedScaleSpin"));
     m_coarseSpin->setRange(1, 20);         // VM：速度尺度 1~20（金字塔顶层降采样倍率）
     m_coarseSpin->setValue(3);
+    m_coarseSpin->setEnabled(false);       // 尺度模式=自动时不可改（VM 同款）
     makeRow(QStringLiteral("速度尺度"), m_coarseSpin);
+    connect(m_scaleModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int index) { m_coarseSpin->setEnabled(index == 1); });
     m_apertureCombo = new QComboBox();
     for (int i = 1; i <= 20; ++i)          // VM：特征尺度 1~20，1 最精细
         m_apertureCombo->addItem(QString::number(i));
@@ -644,6 +654,8 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
             m_autoChk->setChecked(e.autoThreshold);
             m_apertureCombo->setCurrentText(QString::number(qBound(1, e.featureScale, 20)));
             m_coarseSpin->setValue(qBound(1, e.speedScale, 20));
+            m_scaleModeCombo->setCurrentIndex(e.scaleModeAuto ? 0 : 1);
+            m_coarseSpin->setEnabled(!e.scaleModeAuto);
             m_chainModeCombo->setCurrentIndex(e.chainModeAuto ? 0 : 1);
             m_minChainSpin->setValue(qBound(1, e.minChainLength, 200));
             m_minChainSpin->setEnabled(!e.chainModeAuto);
@@ -1273,7 +1285,8 @@ void TemplateConfigDialog::applySuggestedParams()
     if (!m_autoChk->isChecked())
         m_edgeSpin->setValue(s.contrastThreshold);
     m_hint->setText(QStringLiteral(
-        "已按模板自动给出建议参数：对比度阈值 %1 / 特征尺度 %2 / 速度尺度 %3（可再调）。")
+        "已按模板自动给出建议参数：对比度阈值 %1 / 特征尺度 %2 / 速度尺度 %3"
+        "（尺度模式=自动时速度尺度由图像大小决定；切到手动才用这个数）。")
                         .arg(s.contrastThreshold)
                         .arg(s.featureScale)
                         .arg(s.speedScale));
@@ -1402,6 +1415,7 @@ void TemplateConfigDialog::onConfirm()
     entry.autoThreshold = m_autoChk->isChecked();
     entry.featureScale = m_apertureCombo->currentText().toInt();
     entry.speedScale = m_coarseSpin->value();
+    entry.scaleModeAuto = (m_scaleModeCombo->currentIndex() == 0);
     entry.chainModeAuto = (m_chainModeCombo->currentIndex() == 0);
     entry.minChainLength = m_minChainSpin->value();
     entry.anchorDx = m_anchorX->value();
@@ -1428,6 +1442,7 @@ void TemplateConfigDialog::onConfirm()
     m_node->setParam(QStringLiteral("autoContrastThreshold"), entry.autoThreshold);
     m_node->setParam(QStringLiteral("featureScale"), entry.featureScale);
     m_node->setParam(QStringLiteral("speedScale"), entry.speedScale);
+    m_node->setParam(QStringLiteral("scaleMode"), entry.scaleModeAuto ? 1 : 0);
     m_node->setParam(QStringLiteral("minChainLength"), entry.minChainLength);
     m_node->setParam(QStringLiteral("chainMode"), entry.chainModeAuto);
 

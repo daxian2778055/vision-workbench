@@ -35,6 +35,9 @@ struct TemplateEntry
     bool autoThreshold = false;         ///< 阈值模式：true=自动（按模板对比度自动生成）
     int featureScale = 1;               ///< 特征尺度 1~20（≤速度尺度）：特征点提取粒度，1 最精细
     int speedScale = 3;                 ///< 速度尺度 1~20：搜索降采样倍率，越大越快越易漏检
+    /// 尺度模式（VM 模板配置，默认自动）：true=自动（按图像大小定速度尺度，忽略 speedScale）；
+    /// false=手动（用 speedScale）。注意与运行参数的尺度范围无关——VM 没有搜索尺度自动。
+    bool scaleModeAuto = true;
     int minChainLength = 1;             ///< 最小链长：特征链短于此长度不保留
     bool chainModeAuto = false;         ///< 链长模式：true=自动（按特征尺度给）
 

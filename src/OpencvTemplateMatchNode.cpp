@@ -124,6 +124,7 @@ QJsonObject TemplateEntry::toJson() const
     obj[QStringLiteral("autoThreshold")] = autoThreshold;
     obj[QStringLiteral("featureScale")] = featureScale;
     obj[QStringLiteral("speedScale")] = speedScale;
+    obj[QStringLiteral("scaleMode")] = scaleModeAuto;
     obj[QStringLiteral("minChainLength")] = minChainLength;
     obj[QStringLiteral("chainMode")] = chainModeAuto;
     obj[QStringLiteral("anchorX")] = anchorDx;
@@ -161,6 +162,8 @@ TemplateEntry TemplateEntry::fromJson(const QJsonObject &obj)
         qBound(1, obj.value(QStringLiteral("contrastThreshold")).toInt(5), 255);
     e.featureScale = qBound(1, obj.value(QStringLiteral("featureScale")).toInt(1), 20);
     e.speedScale = qBound(1, obj.value(QStringLiteral("speedScale")).toInt(3), 20);
+    // 尺度模式：旧模板缺该键 → 按 VM 默认自动（项目未上线，不做旧值兼容）。
+    e.scaleModeAuto = obj.value(QStringLiteral("scaleMode")).toBool(true);
     e.minChainLength = qBound(1, obj.value(QStringLiteral("minChainLength")).toInt(1), 200);
     e.chainModeAuto = obj.value(QStringLiteral("chainMode")).toBool(false);
     e.anchorDx = obj.value(QStringLiteral("anchorX")).toDouble(0.0);
@@ -462,8 +465,9 @@ void OpencvTemplateMatchNode::init()
         // VM「检测区域」第一行：把检测区域本身作为掩膜输出（与 ROI 区域掩膜是两个独立开关）
         makeBoolParam(QStringLiteral("outputSearchMask"), false,
                       QStringLiteral("输出掩膜（把此区域作为算子掩膜输入）")),
-        makeIntParam(QStringLiteral("scaleMode"), 0, 0, 1,
-                     QStringLiteral("尺度模式：0=手动（scaleMin/Max/Step），1=自动按模板占比估范围")),
+        // VM「尺度模式」只作用于模板配置的速度尺度（默认自动）；搜索尺度范围只有显式 min/max。
+        makeIntParam(QStringLiteral("scaleMode"), 1, 0, 1,
+                     QStringLiteral("尺度模式：0=手动（用速度尺度）1=自动（按图像大小定速度尺度）")),
         // VM「结果显示 → 图像显示」：每一层可单独显隐（截图 4 的四个眼睛开关）
         makeBoolParam(QStringLiteral("showSearchRegion"), true, QStringLiteral("显示检测区域")),
         makeBoolParam(QStringLiteral("showMatchResult"), true, QStringLiteral("显示匹配结果")),
@@ -734,6 +738,9 @@ void OpencvTemplateMatchNode::init()
     m_params[QStringLiteral("trainStatus")] = QString();
     // ── VM「模块结果」展示用（结果字段，不上面板）──
     setParamDirect(QStringLiteral("elapsedMs"), 0.0);
+    // 内部读数（不上结果表）：本轮实际生效的速度尺度与粗搜倍率，用于区分自动/手动。
+    setParamDirect(QStringLiteral("matchSpeedScale"), 0);
+    setParamDirect(QStringLiteral("matchCoarseFactor"), 0.0);
     setParamDirect(QStringLiteral("matchStatus"), 0);
     setParamDirect(QStringLiteral("matchBoxCenters"), QString());
     setParamDirect(QStringLiteral("matchBoxCenterXs"), QString());
@@ -1470,7 +1477,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         // 对比度阈值(1~255) = 特征点与背景的灰度差；Sobel(ksize=3) 阶跃响应 = 4×灰度差。
         // 最小链长 = 特征链最短点数，短于此的链在建模时丢弃。
         int speedScale = qBound(1, active.speedScale, 20);
-        if (m_params.value(QStringLiteral("scaleMode"), 1).toInt() == 1) {
+        if (active.scaleModeAuto) {
             // 自动：让粗搜降采样后长边约 640px（≈老版本 coarseLongSide=480 的档位），
             // 再粗位置误差就会超过精修窗口，现场会看到"整体偏一截"。
             speedScale =
@@ -1512,16 +1519,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         double sMin = m_params.value(QStringLiteral("scaleMin"), 1.0).toDouble();
         double sMax = m_params.value(QStringLiteral("scaleMax"), 1.0).toDouble();
         double sStep = m_params.value(QStringLiteral("scaleStep"), 0.05).toDouble();
-        if (m_params.value(QStringLiteral("scaleMode"), 0).toInt() == 1) {
-            // 尺度模式=自动（VM）：模板占搜索区越大，能缩放的空间越小。
-            // 覆盖 >25% 只留 ±10%；否则 ±30%（缩小侧与放大侧等幅度），步长 = 跨度/6。
-            const double tArea = double(tmpl.cols) * double(tmpl.rows);
-            const double sArea = double(gray.cols) * double(gray.rows);
-            const double span = (sArea > 1.0 && tArea / sArea > 0.25) ? 0.10 : 0.30;
-            sMin = 1.0 / (1.0 + span);
-            sMax = 1.0 + span;
-            sStep = (sMax - sMin) / 6.0;
-        }
+        // VM 运行参数只有显式尺度范围（默认 1.00~1.00）；尺度模式属于模板配置，只管速度尺度。
         collectSearchValues(sMin, sMax, sStep, 16, scales);
 
         // 尺度范围类型（VM）：0=整体（scaleMin/Max），1=XY（X/Y 独立缩放）
@@ -1578,6 +1576,8 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         // 速度尺度 = 粗搜降采样倍率（1=不降采样）；VM：值越大越快越易漏检
         const double coarseFactor = (singleIdentity || speedScale <= 1) ? 1.0
                                                                         : double(speedScale);
+        m_params[QStringLiteral("matchSpeedScale")] = speedScale;
+        m_params[QStringLiteral("matchCoarseFactor")] = coarseFactor;
         cv::Mat graySearch = gray;
         cv::Mat tmplSearch = tmpl;
         if (coarseFactor > 1.0) {
@@ -2759,6 +2759,8 @@ QVector<TemplateEntry> OpencvTemplateMatchNode::templates() const
             e.featureScale =
                 qBound(1, m_params.value(QStringLiteral("featureScale"), 1).toInt(), 20);
             e.speedScale = qBound(1, m_params.value(QStringLiteral("speedScale"), 3).toInt(), 20);
+            e.scaleModeAuto =
+                m_params.value(QStringLiteral("scaleMode"), 1).toInt() == 1;
             e.minChainLength =
                 qBound(1, m_params.value(QStringLiteral("minChainLength"), 1).toInt(), 200);
             e.chainModeAuto = m_params.value(QStringLiteral("chainMode"), false).toBool();
@@ -2801,6 +2803,7 @@ TemplateEntry OpencvTemplateMatchNode::activeTemplate() const
         e.autoThreshold = m_params.value(QStringLiteral("autoContrastThreshold"), false).toBool();
         e.featureScale = qBound(1, m_params.value(QStringLiteral("featureScale"), 1).toInt(), 20);
         e.speedScale = qBound(1, m_params.value(QStringLiteral("speedScale"), 3).toInt(), 20);
+        e.scaleModeAuto = m_params.value(QStringLiteral("scaleMode"), 1).toInt() == 1;
         e.minChainLength =
             qBound(1, m_params.value(QStringLiteral("minChainLength"), 1).toInt(), 200);
         e.chainModeAuto = m_params.value(QStringLiteral("chainMode"), false).toBool();

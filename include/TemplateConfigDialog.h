@@ -101,6 +101,7 @@ private:
     QDoubleSpinBox *m_edgeSpin = nullptr;
     QCheckBox *m_autoChk = nullptr;
     QComboBox *m_apertureCombo = nullptr;
+    QComboBox *m_scaleModeCombo = nullptr;   /// VM「尺度模式」自动/手动（只作用于速度尺度）
     QSpinBox *m_coarseSpin = nullptr;
     QComboBox *m_chainModeCombo = nullptr;   /// VM「链长模式」自动/手动
     QSpinBox *m_minChainSpin = nullptr;      /// VM「最小链长」
