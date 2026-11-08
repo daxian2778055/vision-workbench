@@ -1556,8 +1556,16 @@ void FlowExecutor::releaseRoundOutputsOverBudget()
 {
     // 每节点每端口只留最后一份（不是泄漏），但「图像节点数 × 单帧大小」会到百 MB 级：
     // 5MP RGB ≈ 15MB，10 个图像节点 ≈ 150MB，在轮与轮之间驻留。
-    // 安全性：节点执行前本来就会清自己的输出（见 run 里 m_nodeData[node].clear()），
-    // 下游只在轮内消费；界面显示拿的是 HImage 引用计数副本，清表不影响它。
+    //
+    // ⚠ 边界（2026-11-08 复核，勿误读）：这里只删**执行器侧** m_nodeData 的引用，
+    // **不会真正释放图像内存** —— NodeBase::setOutputData 会把同一份 QSharedPointer
+    // 存进节点的 m_outputData，节点仍持有一份。
+    // 为什么不去清节点那份：ImageDisplayController::displayNodeOutput 的唯一图像来源
+    // 就是 node->getOutputData(0)（见 ImageDisplayController.cpp:99-102），清掉它会让
+    // 用户切回该节点时看到空白画面。所以本函数的实际作用是「按预算丢掉执行器侧的
+    // 冗余引用、缩短下一轮重填前的引用链」，而不是释放内存。
+    // 真正回收发生在下一轮节点执行前（run 里 m_nodeData[node].clear()）与节点自身
+    // m_outputData.clear()（HalconNode.cpp:774）。
     constexpr qint64 kBudgetBytes = 64LL * 1024 * 1024;
     qint64 total = 0;
     QList<QPair<NodeBase *, int>> images;   // (节点, 端口)
