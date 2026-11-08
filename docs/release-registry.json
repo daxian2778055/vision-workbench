@@ -1162,6 +1162,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261108.10",
       "recorded_at": "2026-11-08",
       "recorded_note": "修 P1-4 变形缓存键：加入模板内容指纹（FNV-1a），解决同路径换图重训与同尺寸内存模板串味；腿 templateFingerprintDistinguishesContent。含 rc-20261108.9 的 P1-2 锚点旋转修复。"
+    },
+    {
+      "tag": "rc-20261108.11",
+      "commit": "62c684ee160c1ec06bb314c6046b75d992ce793e",
+      "exe_md5": "e8906cc308ec3181fa17a96ec3534996",
+      "exe_bytes": 11822080,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261108.11",
+      "recorded_at": "2026-11-08",
+      "recorded_note": "扫描清单取证三条：ParameterSearchDialog 裸指针存 UserRole 改 moduleId（真 UAF）；ModuleEditorDialog::m_node 改 QPointer（真风险，含改坏自证腿）；RuntimeInterfaceView 单页容器确认已修（误报）。含 rc-20261108.10 的 P1-4 变形缓存键。"
     }
   ],
   "legacy_backfilled": [
