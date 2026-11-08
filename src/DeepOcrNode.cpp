@@ -156,22 +156,28 @@ void DeepOcrNode::run(bool /*autoSwitch*/)
                 if (d.GetDictParam("key_exists", "word").I() == 1) {
                     const HTuple ws = d.GetDictTuple("word");
                     HTuple cs;
-                    double maxConf = 0.0;
-                    if (d.GetDictParam("key_exists", "confidence").I() == 1) {
+                    if (d.GetDictParam("key_exists", "confidence").I() == 1)
                         cs = d.GetDictTuple("confidence");
-                    }
+                    // 「结果里没有置信度」≠「置信度为 0」：recognition 模式的返回实测
+                    // 不含 confidence 键，旧实现把缺失值当 0.0，再被默认 minConfidence=0.3
+                    // 全部过滤掉 ⇒ 默认参数下永远读不到字（只有显式传 0.0 才出文本）。
+                    // 现在：没有置信度就不过滤，并把 avg/max 置 0 表示"不可用"。
+                    const bool hasConfidence = (cs.Length() == ws.Length()) && (ws.Length() > 0);
+                    double maxConf = 0.0;
                     for (Hlong i = 0; i < ws.Length(); ++i) {
                         QString w = QString::fromStdString(ws[i].S().Text());
                         if (w.isEmpty()) continue;
                         ++rawWordCount;
-                        const double c = (cs.Length() > i) ? cs[i].D() : 0.0;
-                        if (c < minConf) continue;
+                        const double c = hasConfidence ? cs[i].D() : 0.0;
+                        if (hasConfidence && c < minConf) continue;
                         if (minWordLength > 0 && w.size() < minWordLength) continue;
                         if (maxWords > 0 && words.size() >= maxWords) continue;
                         words << w;
-                        confSum += c;
-                        ++confN;
-                        maxConf = (c > maxConf) ? c : maxConf;
+                        if (hasConfidence) {
+                            confSum += c;
+                            ++confN;
+                            maxConf = (c > maxConf) ? c : maxConf;
+                        }
                     }
                     m_params[QStringLiteral("ocrConfidence")] = maxConf;
                 }

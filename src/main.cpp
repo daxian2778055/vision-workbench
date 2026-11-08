@@ -4,6 +4,7 @@
 #include "DataObject.h"
 #include "AppLog.h"
 #include "NodeSelfTest.h"
+#include "DeepOcrSelfTest.h"
 #include "I18n.h"
 #include "VisionWorkbenchStyle.h"
 #include <QApplication>
@@ -362,6 +363,55 @@ int main(int argc, char *argv[])
 
         // 国际化（G-P1-5）：在 MainWindow 构造前安装翻译，使 UI 在构建期即取翻译文本。
         I18n::installTranslators(a);
+
+        // DeepOCR 现场自检：换机部署后一条命令验证「HALCON 运行时 + dl/ 预训练模型 +
+        // 识别结果」，不建库、不起 UI。放在 --selftest-nodes 之前，避免无谓地建自检库。
+        if (a.arguments().contains(QStringLiteral("--selftest-deepocr"))) {
+            const QStringList args = a.arguments();
+            const int idx = args.indexOf(QStringLiteral("--selftest-deepocr"));
+            const auto argAfter = [&args](const QString &key) -> QString {
+                const int i = args.indexOf(key);
+                return (i >= 0 && i + 1 < args.size()) ? args.at(i + 1) : QString();
+            };
+            const QString target =
+                (idx + 1 < args.size() && !args.at(idx + 1).startsWith(QLatin1Char('-')))
+                    ? args.at(idx + 1)
+                    : QDir::currentPath();
+            // 默认 recognition(2)：实测 auto/detection 只返回检测结果、不含 word 数组，
+            // 当前解析逻辑下拿不到识别文本，自检要的是"能读到字"这条最关键的证据。
+            const QString modeText = argAfter(QStringLiteral("--mode"));
+            const int mode = modeText.isEmpty() ? 2 : modeText.toInt();
+            const QString minConfText = argAfter(QStringLiteral("--min-conf"));
+            const double minConf = minConfText.isEmpty() ? 0.3 : minConfText.toDouble();
+            const QStringList images = DeepOcrSelfTest::collectImages(target);
+            QTextStream out(stdout);
+            if (images.isEmpty()) {
+                out << "未找到可测图片: " << target << Qt::endl;
+                return 2;
+            }
+            out << "DeepOCR 自检: " << images.size() << " 张，mode=" << mode
+                << "（0=auto/1=detection/2=recognition），minConfidence=" << minConf
+                << Qt::endl;
+            const QVector<DeepOcrSelfTest::ImageResult> results =
+                DeepOcrSelfTest::runAll(images, mode, minConf);
+            out << DeepOcrSelfTest::formatReport(results) << Qt::endl;
+            const QString csvPath = argAfter(QStringLiteral("--csv"));
+            if (!csvPath.isEmpty()) {
+                QFile csv(csvPath);
+                if (csv.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                    QTextStream ts(&csv);
+                    ts.setEncoding(QStringConverter::Utf8);
+                    ts << QChar(0xFEFF) << DeepOcrSelfTest::formatCsv(results) << Qt::endl;
+                    out << "CSV 已写出: " << csvPath << Qt::endl;
+                } else {
+                    out << "CSV 写出失败: " << csvPath << Qt::endl;
+                }
+            }
+            bool allOk = true;
+            for (const DeepOcrSelfTest::ImageResult &r : results)
+                allOk = allOk && r.ok;
+            return allOk ? 0 : 1;
+        }
 
         // 节点自检模式：遍历全部注册节点实例化+init+空输入运行，输出报告后退出
         if (a.arguments().contains(QStringLiteral("--selftest-nodes"))) {
