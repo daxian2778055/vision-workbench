@@ -1189,6 +1189,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261108.13",
       "recorded_at": "2026-11-08",
       "recorded_note": "模板引擎清单取证三条：延拓阈值与 boxFilter 半核两处经测试打回确认误报（已回退并留记），matchCount 过滤前写入为真缺陷（改为过滤后写 hits.size()，另存 matchCountBeforeOverlap）；该修复的腿只锁不变量、抓不住改坏，已在腿内声明。含 rc-20261108.12 的未知运算符与 Delete 快捷键修复。"
+    },
+    {
+      "tag": "rc-20261108.14",
+      "commit": "93e5ad60bca1aebd2a6a29e366038ea20c14ca4f",
+      "exe_md5": "3fc0ac1627d130ce77ff730362653860",
+      "exe_bytes": 11821568,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261108.14",
+      "recorded_at": "2026-11-08",
+      "recorded_note": "新增 docs/扫描清单取证结论-20261108.md（P1/P2 逐条登记：真缺陷已修 7、待改 1、误报 6、未取证 5，含两处我先改后被测试打回的留记）；修精修段一处缩进。含 rc-20261108.13 的 matchCount 修复。"
     }
   ],
   "legacy_backfilled": [
