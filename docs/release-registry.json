@@ -1099,6 +1099,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261108.1",
       "recorded_at": "2026-11-08",
       "recorded_note": "稳定性四批收口（参数归一化/Resize 像素封顶/卡尺 K 封顶/状态位原子化/queued 裸指针守卫）+ DeepOCR 引擎并发与 runtime 缓存键加固 + 免安装 HALCON 部署（启动自举 HALCONROOT、随包 dl 模型 214MB、部署自检校验 dl）+ 标定配置引导第一批"
+    },
+    {
+      "tag": "rc-20261108.2",
+      "commit": "5c77a2e77bf70b63ae3f3cc1217718c4f5162fbd",
+      "exe_md5": "baab720cf5fb3ff09f662e89b8a74b24",
+      "exe_bytes": 11800064,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261108.2",
+      "recorded_at": "2026-11-08",
+      "recorded_note": "打包瘦身版：HALCON 运行库由全量 61 个/587MB 改为白名单 8 个/157MB（移出 Qt5*MVTec、*xl 变体、hdevengine、hAcq*、hio*、软件 GL、hAI2*、hcanvas）；移除 opencv_world4130d.dll（debug 版 126MB）；包体积 1485MB->813MB、文件数 222->154；实测清空 HALCONROOT 后 71 PASS/0 FAIL 含 DeepOcrNode"
     }
   ],
   "legacy_backfilled": [
