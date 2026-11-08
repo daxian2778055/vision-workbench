@@ -1369,7 +1369,13 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 cv::matchTemplate(curSearchStrong, wm, rv, cv::TM_CCORR);
                 // 可见率门槛：内部常量（非 VM 参数）。少于 40% 的模板边缘可见即判无效，
                 // 用来抗遮挡；VM 未暴露这一项，保持原写死值。
-                const double need = qMax(16.0, 0.4 * n);
+                // 可见率门槛：内部常量（非 VM 参数）。少于 40% 的模板边缘可见即判无效，
+        // 用来抗遮挡；VM 未暴露这一项，保持原写死值。
+        // 2026-11-08 复核留记：曾怀疑 qMax(16.0, ...) 把下界钉死、使延拓阈值对小模板
+        // 失效，试图改成 qMax(1.0, qMin(16.0, 0.4*n))。实测被
+        // templateMinVisibleRatioControlsOcclusion 打回——该腿要求「38% 可见必须失败」，
+        // 说明 16 是**刻意的噪声下界**（小模板要求更高可见率防误检），不是几何 bug。
+        const double need = qMax(16.0, 0.4 * n);
                 cv::Mat scoreVis = (r1 + r2) / (rv + 1e-6f);   // cos(Δθ) 的和除以可见点数
                 scoreVis.setTo(-1.0, rv < need);           // 无效处给 -1（不会被选为最优）
                 // 延拓阈值（VM）：目标被图像边缘截断时，缺失特征比例可放宽可见率门槛
@@ -1425,6 +1431,11 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 cv::boxFilter(grayF, mean, CV_32F, warped.size());
                 cv::boxFilter(sqF, meanSq, CV_32F, warped.size());
                 cv::Mat var = meanSq - mean.mul(mean);
+                // 2026-11-08 复核留记：曾怀疑 boxFilter 是中心对齐、与 matchTemplate 的
+                // 左上角对齐差 (w/2,h/2)，试图把 ROI 偏移到 var(w/2,h/2)。实测被
+                // templateMatchOnRealImage（位置从 (1040,1430) 偏到 (905,186)）和
+                // templateMatchMaskMovesBestHit（掩膜失效、多认一个目标）打回——
+                // 原写法与 boxFilter 的中心对齐是配套正确的，不是半核错位。
                 cv::Mat varROI = var(cv::Rect(0, 0, result.cols, result.rows));
                 cv::Scalar tMean, tStd;
                 cv::meanStdDev(warped, tMean, tStd);
@@ -1735,7 +1746,10 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             bestScale = mainScale;
             bestCenterInWarp = mainCenter;
         }
-        m_params[QStringLiteral("matchCount")] = matchCount;
+        // matchCount 必须等重叠过滤 + 排序**之后**再写（2026-11-08 复核）：
+        // 原位置在过滤前就写死，而 matchList / matchBox* 都是按过滤后的 hits 重建，
+        // 于是「匹配数量」与「匹配列表条数」对不上（例如显示 5 个、列表只有 3 条）。
+        m_params[QStringLiteral("matchCountBeforeOverlap")] = matchCount;
         // VM「最大重叠率」：重叠超阈值时舍弃得分较低的目标（先按分数降序处理，保高分）
         {
             const double maxOverlap =
@@ -1782,6 +1796,9 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                                  }
                              });
         }
+        // 到这里 hits 已是最终结果（重叠过滤 + 排序后），matchCount 与之对齐
+        m_params[QStringLiteral("matchCount")] = hits.size();
+
         matchList.clear();
         for (const MatchHit &h : hits) {
             matchList << QStringLiteral("%1,%2,%3,%4,%5,%6,%7")

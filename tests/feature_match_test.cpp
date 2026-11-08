@@ -91,6 +91,7 @@ private slots:
     void templateMatchAnchorOffsetsMatchPoint();
     void templateAnchorFollowsWarpRotation();
     void templateFingerprintDistinguishesContent();
+    void matchCountMatchesFilteredList();
     // 分割/剪刀：按连通域拆块、沿画线切开
     void templateSplitShapeByCut();
     // 继承 ROI：上游命中框当成搜索区域（框外的更优候选不许抢）
@@ -2633,6 +2634,58 @@ void FeatureMatchTest::templateFingerprintDistinguishesContent()
              "同尺寸不同图形指纹必须不同（否则内存模板互相串味）");
 
     QVERIFY(OpencvTemplateMatchNode::templateFingerprint(cv::Mat()) != 0);
+}
+
+// 复核（扫描清单「matchCount 在重叠过滤前写入」）：matchCount 原先在重叠过滤**之前**
+// 就写进参数表，而 matchList / matchBox* 都是按过滤后的 hits 重建 —— 结果表里
+// 「匹配数量」与「匹配列表条数」对不上（例如显示 5 个、列表只有 3 条）。
+void FeatureMatchTest::matchCountMatchesFilteredList()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const cv::Mat patch = makePatch();
+    const QString tpl = dir.filePath(QStringLiteral("tpl.png"));
+    QVERIFY(cv::imwrite(tpl.toStdString(), patch));
+
+    // 两个目标故意部分重叠，再用 maxOverlap=0 强制丢掉低分那个：
+    // 过滤前 2 个、过滤后 1 个，这样才能把"写早了"暴露出来。
+    cv::Mat canvas(400, 600, CV_8UC1, cv::Scalar(kCanvasBackground));
+    patch.copyTo(canvas(cv::Rect(150, 150, kTemplateSize, kTemplateSize)));
+    patch.copyTo(canvas(cv::Rect(170, 150, kTemplateSize, kTemplateSize)));
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.5);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("templatePath"), tpl);
+    node.setParam(QStringLiteral("matchCount"), 10);   // 允许多目标
+    node.setParam(QStringLiteral("maxOverlap"), 0);    // 任何重叠都丢低分者
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+
+    TemplateEntry e;
+    e.name = QStringLiteral("A");
+    e.imagePath = tpl;
+    node.setTemplates({e});
+    node.setActiveTemplateIndex(0);
+    node.run(false);
+
+    const int count = node.getParam(QStringLiteral("matchCount")).toInt();
+    const QString list = node.getParam(QStringLiteral("matchList")).toString().trimmed();
+    const int listed = list.isEmpty() ? 0 : list.split(QLatin1Char(';')).size();
+    QVERIFY2(count >= 1, "至少应保留一个目标");
+    QVERIFY2(count == listed,
+             qPrintable(QStringLiteral("matchCount(%1) 必须等于 matchList 条数(%2)："
+                                       "旧实现在重叠过滤前就写死了 matchCount")
+                            .arg(count).arg(listed)));
+    // ⚠ 覆盖能力声明（如实记）：本腿只锁住「两者一致」这条不变量，**抓不住改坏**。
+    // 实测把 matchCount 改回过滤前写入，本腿仍绿——因为这两个 patch 相距 20px 时
+    // matchTemplate 只出一个峰，重叠过滤从未触发（过滤前后数量相同，改不改都一样）。
+    // 要真正锁住这条，需要一个「过滤前 N>1、过滤后 1」的稳定夹具（真实图上两个
+    // 部分重叠且各自能被检出的目标），本轮没造出来。
 }
 
 QTEST_MAIN(FeatureMatchTest)
