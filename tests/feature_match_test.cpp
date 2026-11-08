@@ -89,6 +89,7 @@ private slots:
     void templateOutputsSearchMask();
     // 匹配中心（锚点）偏移：匹配点必须跟着锚点走（VM 的「匹配中心 X/Y」）
     void templateMatchAnchorOffsetsMatchPoint();
+    void templateAnchorFollowsWarpRotation();
     // 分割/剪刀：按连通域拆块、沿画线切开
     void templateSplitShapeByCut();
     // 继承 ROI：上游命中框当成搜索区域（框外的更优候选不许抢）
@@ -2563,6 +2564,49 @@ void FeatureMatchTest::templateErasesRemoveFeaturePoints()
     QCOMPARE(back.erases.first().type, RoiType::Circle);
     QCOMPARE(back.erases.first().p1, bigErase.p1);
     QCOMPARE(back.erases.first().p2, bigErase.p2);
+}
+
+// 复核 P1-2：锚点（模板局部系偏移）→ 图像坐标，必须与 warpTemplate 所用
+// cv::getRotationMatrix2D 的线性部分同源。原实现用了共轭旋转 [cos -sin; sin cos]，
+// 角度非 0 时匹配点相对中心整体镜像（差 2θ）。默认锚点为 (0,0) 时两种公式退化为
+// 同一点，所以这个缺陷只能靠非零锚点 + 非零角度暴露。
+void FeatureMatchTest::templateAnchorFollowsWarpRotation()
+{
+    // 0°：锚点 (20,0) 落在中心右侧
+    const QPointF p0 = OpencvTemplateMatchNode::mapAnchorToImage(100, 100, 0.0, 20, 0, 1.0);
+    QVERIFY2(qAbs(p0.x() - 120.0) < 1e-9 && qAbs(p0.y() - 100.0) < 1e-9,
+             qPrintable(QStringLiteral("0° 应到 (120,100)，实得 (%1,%2)").arg(p0.x()).arg(p0.y())));
+
+    // 90°：getRotationMatrix2D(90°) = [0 1; -1 0] ⇒ (20,0) → (0,-20)（y 向下坐标系里向上）
+    const QPointF p90 = OpencvTemplateMatchNode::mapAnchorToImage(100, 100, 90.0, 20, 0, 1.0);
+    QVERIFY2(qAbs(p90.x() - 100.0) < 1e-9,
+             qPrintable(QStringLiteral("90° 时 col 应仍是中心 100，实得 %1").arg(p90.x())));
+    QVERIFY2(qAbs(p90.y() - 80.0) < 1e-9,
+             qPrintable(QStringLiteral("90° 时 row 应在中心上方 20px（80），实得 %1"
+                                       "（若为 120 说明用的是共轭旋转，差 2θ）").arg(p90.y())));
+
+    // 与 OpenCV 矩阵逐点对齐：防未来又被换成另一套公式
+    const cv::Point2f center(100.f, 100.f);
+    for (const double ang : {0.0, 30.0, 90.0, 180.0, -45.0}) {
+        const cv::Mat M = cv::getRotationMatrix2D(center, ang, 1.0);
+        const QPointF got =
+            OpencvTemplateMatchNode::mapAnchorToImage(100, 100, ang, 17, -23, 1.0);
+        // anchor 是相对模板中心的偏移量，所以期望是「线性部分作用在偏移上，再加中心」。
+        // 不能直接用完整 M（它的平移项是"绕 center 旋转绝对点"的口径，会把 center 再算一遍）。
+        const double wantX =
+            center.x + M.at<double>(0, 0) * 17.0 + M.at<double>(0, 1) * (-23.0);
+        const double wantY =
+            center.y + M.at<double>(1, 0) * 17.0 + M.at<double>(1, 1) * (-23.0);
+        QVERIFY2(qAbs(got.x() - wantX) < 1e-6 && qAbs(got.y() - wantY) < 1e-6,
+                 qPrintable(QStringLiteral("angle=%1: got(%2,%3) want(%4,%5)")
+                                .arg(ang).arg(got.x()).arg(got.y()).arg(wantX).arg(wantY)));
+    }
+
+    // 缩放在旋转之前（与 warpTemplate 里 M.at(0,0)*=scaleX 的顺序一致）：
+    // (20,0)×2=(40,0) 再转 90° → (0,-40) → (100,60)
+    const QPointF pScaled = OpencvTemplateMatchNode::mapAnchorToImage(100, 100, 90.0, 20, 0, 2.0);
+    QVERIFY2(qAbs(pScaled.y() - 60.0) < 1e-9,
+             qPrintable(QStringLiteral("90°+scale2 应到 row=60，实得 %1").arg(pScaled.y())));
 }
 
 QTEST_MAIN(FeatureMatchTest)

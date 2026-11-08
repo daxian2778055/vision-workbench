@@ -88,6 +88,13 @@ public:
     /// 有效边缘阈值（显式传入本模板参数；run/可视化/对话框共用）
     static double effectiveEdgeThresholdFor(const cv::Mat &tmpl, int aperture,
                                             double manualThreshold, bool autoMode);
+    /// 锚点（模板局部系偏移）→ 图像坐标（2026-11-08 复核 P1-2）。
+    /// 必须与 warpTemplate 所用 cv::getRotationMatrix2D 的线性部分同一口径
+    /// [cos sin; -sin cos]：模板就是按该矩阵旋转后再去匹配的；锚点若用共轭旋转
+    /// [cos -sin; sin cos]，角度非 0 时匹配点会相对中心整体镜像（差 2θ）。
+    /// 缩放在旋转之前应用（与 warpTemplate 里 M.at(0,0)*=scaleX 的顺序一致）。
+    static QPointF mapAnchorToImage(double centerX, double centerY, double angleDeg,
+                                    double anchorDx, double anchorDy, double scale);
     /// 模板块 → 图像坐标的强梯度点（对话框预览与编辑器共用同一映射）。
     /// mask 非空且尺寸与模板块一致时，掩膜外（值为 0）的点被跳过。
     static QVector<QPointF> featurePointsForPatch(const cv::Mat &tmpl, const RoiShape &roi,

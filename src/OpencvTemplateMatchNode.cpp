@@ -1698,14 +1698,13 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 // 字段：row,col,score,angle,scale,pointRow,pointCol —— 前 3 项保持老顺序。
                 const double centerX = bestLoc.x + bestCenterInWarp.x + searchRect.x;
                 const double centerY = bestLoc.y + bestCenterInWarp.y + searchRect.y;
-                // 匹配点 = 锚点（模板中心 + 配置的偏移）缩放旋转后的落点
-                const double ax = active.anchorDx * bestScale;
-                const double ay = active.anchorDy * bestScale;
-                const double rad = bestAngle * 3.14159265358979323846 / 180.0;
-                const double ca = std::cos(rad);
-                const double sa = std::sin(rad);
-                const double pCol = centerX + ca * ax - sa * ay;
-                const double pRow = centerY + sa * ax + ca * ay;
+                // 匹配点 = 锚点（模板中心 + 配置的偏移）缩放旋转后的落点。
+                // 统一走 mapAnchorToImage，与 warpTemplate 的旋转矩阵同源（复核 P1-2）。
+                const QPointF anchorPoint = mapAnchorToImage(centerX, centerY, bestAngle,
+                                                             active.anchorDx, active.anchorDy,
+                                                             bestScale);
+                const double pCol = anchorPoint.x();
+                const double pRow = anchorPoint.y();
                 hits.append({centerY, centerX, bestScore, bestAngle, bestScale, pRow, pCol,
                              bestScaleY});
                 matchList << QStringLiteral("%1,%2,%3,%4,%5,%6,%7")
@@ -2183,6 +2182,22 @@ TemplateEntry OpencvTemplateMatchNode::activeTemplate() const
         return e;
     }
     return list.at(activeTemplateIndex());
+}
+
+QPointF OpencvTemplateMatchNode::mapAnchorToImage(double centerX, double centerY,
+                                                 double angleDeg, double anchorDx,
+                                                 double anchorDy, double scale)
+{
+    // 与 warpTemplate 同源的线性部分：cv::getRotationMatrix2D(center, angle, 1.0)
+    // 返回的 2×2 是 [cos sin; -sin cos]。锚点偏移（模板局部系）必须经**同一个**
+    // 矩阵映射，否则角度非 0 时匹配点相对中心镜像（复核 P1-2，差 2θ）。
+    const double rad = angleDeg * 3.14159265358979323846 / 180.0;
+    const double ca = std::cos(rad);
+    const double sa = std::sin(rad);
+    const double ax = anchorDx * scale;
+    const double ay = anchorDy * scale;
+    return QPointF(centerX + ca * ax + sa * ay,    // x = col
+                   centerY - sa * ax + ca * ay);   // y = row
 }
 
 double OpencvTemplateMatchNode::effectiveEdgeThresholdFor(const cv::Mat &tmpl, int aperture,
