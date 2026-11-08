@@ -57,6 +57,8 @@ private slots:
     void testTemplateConfigUndoRedo();
     void testAllModuleWindowsArePureTabs();
     void testResultOverlayUsesDisplayConfig();
+    // P2-6：文本显示 OK/NG 双色 + 位置 X/Y 的 UI 写回与预设互斥
+    void testResultTextOkNgAndXyControls();
     void testEditorNodePointerClearsOnDelete();
     void testModuleResultPageUsesResultFields();
     // P0-5：结果表「尺度 Y」不得复制「尺度 X」（XY 模式两轴独立）
@@ -697,10 +699,69 @@ void ModuleEditorTest::testResultOverlayUsesDisplayConfig()
     QVERIFY(timedText != nullptr);
     QCOMPARE(timedText->text, QStringLiteral("21ms"));
 
+    // P2-6：OK颜色/NG颜色 按模块状态取色（老工程只有 resTextColor 时仍走上面的回退）
+    node.setParam(QStringLiteral("resTextContent"), QStringLiteral("{status}"));
+    node.setParam(QStringLiteral("resTextColorOk"), QStringLiteral("#00FF00"));
+    node.setParam(QStringLiteral("resTextColorNg"), QStringLiteral("#FF0000"));
+    node.setParam(QStringLiteral("moduleStatus"), false);
+    const QVector<OverlayShape> ngShapes = controller.collectOverlayFromNode(&node);
+    const OverlayShape *ngText = nullptr;
+    for (const OverlayShape &s : ngShapes) {
+        if (s.type == OverlayShape::Type::Text && s.textPosition >= 0)
+            ngText = &s;
+    }
+    QVERIFY2(ngText != nullptr, "NG 状态文本缺失");
+    QCOMPARE(ngText->text, QStringLiteral("NG"));
+    QCOMPARE(ngText->color, QColor(255, 0, 0));   // NG颜色
+
+    // P2-6：位置X/位置Y 生效时按图像坐标锚定（textPosition=-1 复用 p1 分支）
+    node.setParam(QStringLiteral("resTextPosX"), 30.0);
+    node.setParam(QStringLiteral("resTextPosY"), 40.0);
+    const QVector<OverlayShape> xyShapes = controller.collectOverlayFromNode(&node);
+    const OverlayShape *xyText = nullptr;
+    for (const OverlayShape &s : xyShapes) {
+        if (s.type == OverlayShape::Type::Text && s.p1 == QPointF(30.0, 40.0))
+            xyText = &s;
+    }
+    QVERIFY2(xyText != nullptr, "位置X/Y 未生效");
+    QCOMPARE(xyText->textPosition, -1);           // 按 p1 锚点，而非四角预设
+
     // 取消「显示结果图像」：结果图元整体不再绘制（灰度统计没有 ROI 参照，叠加应为空）
     node.setParam(QStringLiteral("resShowImage"), false);
     QVERIFY2(controller.collectOverlayFromNode(&node).isEmpty(),
              "关闭「显示结果图像」后仍在画结果图元");
+}
+
+// P2-6：文本显示 UI 的 OK/NG 双色 + 位置 X/Y 必须写回参数；选四角预设时清掉 X/Y，
+// 否则 X/Y 会静默压过预设（用户会以为下拉没生效）。
+void ModuleEditorTest::testResultTextOkNgAndXyControls()
+{
+    OpencvPixelStatsNode node;
+    node.init();
+    ModuleEditorDialog dlg(&node);
+    auto *okBtn = dlg.findChild<QPushButton *>(QStringLiteral("resultTextOkBtn"));
+    auto *ngBtn = dlg.findChild<QPushButton *>(QStringLiteral("resultTextNgBtn"));
+    auto *posX = dlg.findChild<QDoubleSpinBox *>(QStringLiteral("resultTextPosXSpin"));
+    auto *posY = dlg.findChild<QDoubleSpinBox *>(QStringLiteral("resultTextPosYSpin"));
+    auto *posCombo = dlg.findChild<QComboBox *>(QStringLiteral("resultTextPosCombo"));
+    QVERIFY2(okBtn != nullptr, "未找到 OK 颜色按钮 resultTextOkBtn");
+    QVERIFY2(ngBtn != nullptr, "未找到 NG 颜色按钮 resultTextNgBtn");
+    QVERIFY2(posX != nullptr && posY != nullptr, "未找到位置 X/Y 输入框");
+    QVERIFY2(posCombo != nullptr, "未找到位置预设下拉");
+    QCOMPARE(posX->value(), -1.0);   // 默认用四角预设
+    QCOMPARE(posY->value(), -1.0);
+
+    posX->setValue(25.0);
+    posY->setValue(35.0);
+    QCOMPARE(node.getParam(QStringLiteral("resTextPosX")).toDouble(), 25.0);
+    QCOMPARE(node.getParam(QStringLiteral("resTextPosY")).toDouble(), 35.0);
+
+    posCombo->setCurrentIndex(2);
+    QCOMPARE(posX->value(), -1.0);
+    QCOMPARE(posY->value(), -1.0);
+    QCOMPARE(node.getParam(QStringLiteral("resTextPosX")).toDouble(), -1.0);
+    QCOMPARE(node.getParam(QStringLiteral("resTextPosY")).toDouble(), -1.0);
+    QCOMPARE(node.getParam(QStringLiteral("resTextPosition")).toInt(), 2);
 }
 
 // 2026-11-06：非模板模块窗的「结果显示」页改按 resultDisplayFields() 渲染，

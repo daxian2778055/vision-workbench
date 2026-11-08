@@ -1697,6 +1697,9 @@ void ModuleEditorDialog::buildResultDisplayPage(QVBoxLayout *resLay)
     auto strParam = [this](const QString &key, const QString &def) {
         return m_node->getAllParamNames().contains(key) ? m_node->getParam(key).toString() : def;
     };
+    auto doubleParam = [this](const QString &key, double def) {
+        return m_node->getAllParamNames().contains(key) ? m_node->getParam(key).toDouble() : def;
+    };
 
     // ① 结果判断（VM「结果显示」页）：全部/任一条件 + 条件表
     auto *judgeGroup = new QGroupBox(QStringLiteral("结果判断"));
@@ -1944,13 +1947,31 @@ void ModuleEditorDialog::buildResultDisplayPage(QVBoxLayout *resLay)
     textLay->addLayout(textRow);
 
     auto *textStyleRow = new QHBoxLayout();
-    textStyleRow->addWidget(new QLabel(QStringLiteral("颜色:")));
-    m_resultTextColor = strParam(QStringLiteral("resTextColor"), QStringLiteral("#FFFFFF"));
+    auto styleColorButton = [](QPushButton *btn, const QString &color) {
+        btn->setText(color);
+        btn->setFixedWidth(86);
+        btn->setStyleSheet(
+            QStringLiteral("background-color:%1; color:%2;")
+                .arg(color, QColor(color).lightness() > 128 ? QStringLiteral("#000")
+                                                            : QStringLiteral("#fff")));
+    };
+    textStyleRow->addWidget(new QLabel(QStringLiteral("OK颜色:")));
+    // 旧工程只有 resTextColor（单色）：OK/NG 都回退到它，保持旧观感
+    const QString legacyColor = strParam(QStringLiteral("resTextColor"), QString());
+    m_resultTextColor = strParam(QStringLiteral("resTextColorOk"),
+                                 legacyColor.isEmpty() ? QStringLiteral("#1B7F37") : legacyColor);
     m_resultTextColorBtn = new QPushButton(m_resultTextColor);
-    m_resultTextColorBtn->setFixedWidth(110);
-    m_resultTextColorBtn->setStyleSheet(
-        QStringLiteral("background-color:%1; color:#000;").arg(m_resultTextColor));
+    m_resultTextColorBtn->setObjectName(QStringLiteral("resultTextOkBtn"));
+    styleColorButton(m_resultTextColorBtn, m_resultTextColor);
     textStyleRow->addWidget(m_resultTextColorBtn);
+    textStyleRow->addSpacing(8);
+    textStyleRow->addWidget(new QLabel(QStringLiteral("NG颜色:")));
+    m_resultTextColorNg = strParam(QStringLiteral("resTextColorNg"),
+                                   legacyColor.isEmpty() ? QStringLiteral("#C02B1D") : legacyColor);
+    m_resultTextColorNgBtn = new QPushButton(m_resultTextColorNg);
+    m_resultTextColorNgBtn->setObjectName(QStringLiteral("resultTextNgBtn"));
+    styleColorButton(m_resultTextColorNgBtn, m_resultTextColorNg);
+    textStyleRow->addWidget(m_resultTextColorNgBtn);
     textStyleRow->addSpacing(12);
     textStyleRow->addWidget(new QLabel(QStringLiteral("字号:")));
     m_resultTextSizeSpin = new QSpinBox();
@@ -1970,10 +1991,28 @@ void ModuleEditorDialog::buildResultDisplayPage(QVBoxLayout *resLay)
     auto *textPosRow = new QHBoxLayout();
     textPosRow->addWidget(new QLabel(QStringLiteral("位置:")));
     m_resultTextPosCombo = new QComboBox();
+    m_resultTextPosCombo->setObjectName(QStringLiteral("resultTextPosCombo"));
     m_resultTextPosCombo->addItems({QStringLiteral("左上"), QStringLiteral("右上"),
                                     QStringLiteral("左下"), QStringLiteral("右下")});
     m_resultTextPosCombo->setCurrentIndex(intParam(QStringLiteral("resTextPosition"), 0) & 3);
     textPosRow->addWidget(m_resultTextPosCombo);
+    textPosRow->addSpacing(8);
+    textPosRow->addWidget(new QLabel(QStringLiteral("位置X:")));
+    m_resultTextPosXSpin = new QDoubleSpinBox();
+    m_resultTextPosXSpin->setObjectName(QStringLiteral("resultTextPosXSpin"));
+    m_resultTextPosXSpin->setRange(-1.0, 100000.0);
+    m_resultTextPosXSpin->setDecimals(1);
+    m_resultTextPosXSpin->setSpecialValueText(QStringLiteral("预设"));
+    m_resultTextPosXSpin->setValue(doubleParam(QStringLiteral("resTextPosX"), -1.0));
+    textPosRow->addWidget(m_resultTextPosXSpin);
+    textPosRow->addWidget(new QLabel(QStringLiteral("位置Y:")));
+    m_resultTextPosYSpin = new QDoubleSpinBox();
+    m_resultTextPosYSpin->setObjectName(QStringLiteral("resultTextPosYSpin"));
+    m_resultTextPosYSpin->setRange(-1.0, 100000.0);
+    m_resultTextPosYSpin->setDecimals(1);
+    m_resultTextPosYSpin->setSpecialValueText(QStringLiteral("预设"));
+    m_resultTextPosYSpin->setValue(doubleParam(QStringLiteral("resTextPosY"), -1.0));
+    textPosRow->addWidget(m_resultTextPosYSpin);
     textPosRow->addStretch();
     textLay->addLayout(textPosRow);
     resLay->addWidget(textGroup);
@@ -1987,7 +2026,7 @@ void ModuleEditorDialog::buildResultDisplayPage(QVBoxLayout *resLay)
     });
     connect(m_resultTextColorBtn, &QPushButton::clicked, this, [this, writeParam]() {
         const QColor color = QColorDialog::getColor(QColor(m_resultTextColor), this,
-                                                    QStringLiteral("选择文本颜色"));
+                                                    QStringLiteral("选择 OK 颜色"));
         if (!color.isValid())
             return;
         m_resultTextColor = color.name(QColor::HexRgb).toUpper();
@@ -1996,14 +2035,46 @@ void ModuleEditorDialog::buildResultDisplayPage(QVBoxLayout *resLay)
             QStringLiteral("background-color:%1; color:%2;")
                 .arg(m_resultTextColor,
                      color.lightness() > 128 ? QStringLiteral("#000") : QStringLiteral("#fff")));
+        writeParam(QStringLiteral("resTextColorOk"), m_resultTextColor);
+        // 兼容旧读取方（只有 resTextColor 的工程/报表）
         writeParam(QStringLiteral("resTextColor"), m_resultTextColor);
+    });
+    connect(m_resultTextColorNgBtn, &QPushButton::clicked, this, [this, writeParam]() {
+        const QColor color = QColorDialog::getColor(QColor(m_resultTextColorNg), this,
+                                                    QStringLiteral("选择 NG 颜色"));
+        if (!color.isValid())
+            return;
+        m_resultTextColorNg = color.name(QColor::HexRgb).toUpper();
+        m_resultTextColorNgBtn->setText(m_resultTextColorNg);
+        m_resultTextColorNgBtn->setStyleSheet(
+            QStringLiteral("background-color:%1; color:%2;")
+                .arg(m_resultTextColorNg,
+                     color.lightness() > 128 ? QStringLiteral("#000") : QStringLiteral("#fff")));
+        writeParam(QStringLiteral("resTextColorNg"), m_resultTextColorNg);
     });
     connect(m_resultTextSizeSpin, QOverload<int>::of(&QSpinBox::valueChanged), this,
             [writeParam](int v) { writeParam(QStringLiteral("resTextFontSize"), v); });
     connect(m_resultTextOpacitySpin, QOverload<int>::of(&QSpinBox::valueChanged), this,
             [writeParam](int v) { writeParam(QStringLiteral("resTextOpacity"), v); });
     connect(m_resultTextPosCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
-            [writeParam](int index) { writeParam(QStringLiteral("resTextPosition"), index); });
+            [this, writeParam](int index) {
+                writeParam(QStringLiteral("resTextPosition"), index);
+                // 选了四角预设就清掉 X/Y（否则 X/Y 会静默压过预设，用户以为下拉没生效）
+                if (m_resultTextPosXSpin && m_resultTextPosXSpin->value() != -1.0) {
+                    QSignalBlocker blockX(m_resultTextPosXSpin);
+                    m_resultTextPosXSpin->setValue(-1.0);
+                    writeParam(QStringLiteral("resTextPosX"), -1.0);
+                }
+                if (m_resultTextPosYSpin && m_resultTextPosYSpin->value() != -1.0) {
+                    QSignalBlocker blockY(m_resultTextPosYSpin);
+                    m_resultTextPosYSpin->setValue(-1.0);
+                    writeParam(QStringLiteral("resTextPosY"), -1.0);
+                }
+            });
+    connect(m_resultTextPosXSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+            [writeParam](double v) { writeParam(QStringLiteral("resTextPosX"), v); });
+    connect(m_resultTextPosYSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+            [writeParam](double v) { writeParam(QStringLiteral("resTextPosY"), v); });
 }
 
 void ModuleEditorDialog::persistJudgeConditions()

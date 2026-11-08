@@ -24,6 +24,7 @@ class QSplitter;
 class QTabWidget;
 class QComboBox;
 class QSpinBox;
+class QDoubleSpinBox;
 class QLineEdit;
 class QVBoxLayout;
 
@@ -213,9 +214,13 @@ private:
     QCheckBox *m_showResultTextCheck = nullptr;
     QLineEdit *m_resultTextEdit = nullptr;
     QPushButton *m_resultTextColorBtn = nullptr;
+    QPushButton *m_resultTextColorNgBtn = nullptr;
     QSpinBox *m_resultTextSizeSpin = nullptr;
     QSpinBox *m_resultTextOpacitySpin = nullptr;
     QComboBox *m_resultTextPosCombo = nullptr;
+    QDoubleSpinBox *m_resultTextPosXSpin = nullptr;
+    QDoubleSpinBox *m_resultTextPosYSpin = nullptr;
     QString m_resultImageColor = QStringLiteral("#00C8FF");
     QString m_resultTextColor = QStringLiteral("#FFFFFF");
+    QString m_resultTextColorNg = QStringLiteral("#C02B1D");
 };

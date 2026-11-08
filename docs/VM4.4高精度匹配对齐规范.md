@@ -77,6 +77,7 @@
 ### 4. 结果显示
 - **结果判断**：忽略匹配个数 / 数量判断 / 角度判断 / 尺度判断（开关）——✅ 模板匹配页固定条件表 `resJudge<Key>Enable/Low/High`（Num/Angle/Scale/ScaleX/ScaleY/Score/PointX/PointY/BoxX/BoxY）+「无目标时判定 OK」`resJudgeOkWhenZero`；多条件全部满足才 OK；「忽略匹配个数」= 关闭「匹配数量」条件
 - **图像显示**（各带显隐开关 + 样式编辑）：检测区域 / 匹配结果 / 匹配点 / 匹配检出点
+- **文本显示**（官方字段逐项落地）：内容 `resTextContent`（占位符 {module}/{status}/{elapsed}/{结果键}/{global.变量}）、OK颜色 `resTextColorOk` / NG颜色 `resTextColorNg`（按模块状态取色；旧工程只有 `resTextColor` 时回退单色）、字号 `resTextFontSize`（8~48）、透明度 `resTextOpacity`（0~100）、位置X/Y `resTextPosX`/`resTextPosY`（图像坐标，文字左上角；≥0 时优先，否则用四角预设 `resTextPosition`）
 - **模块结果**（官方 GUID-11F05391，逐项落地）：
   - 模块级：耗时(ms) / 模块状态 / 匹配状态 / 匹配个数 / 匹配模板编号 / 匹配模板名称
   - 逐目标（组「匹配%1」）：匹配框中心(point)/中心X/中心Y/宽度/高度/角度、匹配点(point)/X/Y、尺度/尺度X/尺度Y、横切值、分数、轮廓点X/Y

@@ -489,16 +489,32 @@ QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *n
             OverlayShape text;
             text.type = OverlayShape::Type::Text;
             text.text = resolved;
-            const QVariant pos = node->getParam(QStringLiteral("resTextPosition"));
-            text.textPosition = qBound(0, pos.isValid() ? pos.toInt() : 0, 3);
-            const QVariant textColor = node->getParam(QStringLiteral("resTextColor"));
-            if (textColor.isValid()) {
-                const QColor color(textColor.toString());
-                if (color.isValid())
-                    text.color = color;
+            // VM「文本显示 → 位置X/位置Y」：文字左上角在图像中的坐标（负值/缺省 = 用四角预设）
+            const QVariant posX = node->getParam(QStringLiteral("resTextPosX"));
+            const QVariant posY = node->getParam(QStringLiteral("resTextPosY"));
+            const bool xyPosition = posX.isValid() && posY.isValid()
+                                    && posX.toDouble() >= 0.0 && posY.toDouble() >= 0.0;
+            if (xyPosition) {
+                text.p1 = QPointF(posX.toDouble(), posY.toDouble());
+                text.textPosition = -1;   // -1 = 按 p1 锚点画（图像坐标）
             } else {
-                text.color = QColor(255, 255, 255);   // VM 默认白字
+                const QVariant pos = node->getParam(QStringLiteral("resTextPosition"));
+                text.textPosition = qBound(0, pos.isValid() ? pos.toInt() : 0, 3);
             }
+            // VM「文本显示 → OK颜色/NG颜色」：按模块状态取色；老工程只有 resTextColor 时回退单色
+            const bool okState =
+                resultValueByName(node, QStringLiteral("moduleStatus"), vars).toBool();
+            auto colorOf = [](const QVariant &v) {
+                if (!v.isValid())
+                    return QColor();
+                const QColor c(v.toString());
+                return c.isValid() ? c : QColor();
+            };
+            QColor textColor = okState ? colorOf(node->getParam(QStringLiteral("resTextColorOk")))
+                                       : colorOf(node->getParam(QStringLiteral("resTextColorNg")));
+            if (!textColor.isValid())
+                textColor = colorOf(node->getParam(QStringLiteral("resTextColor")));
+            text.color = textColor.isValid() ? textColor : QColor(255, 255, 255);   // VM 默认白字
             const QVariant size = node->getParam(QStringLiteral("resTextFontSize"));
             text.fontSize = size.isValid() ? qBound(8, size.toInt(), 48) : 14;
             const QVariant alpha = node->getParam(QStringLiteral("resTextOpacity"));
