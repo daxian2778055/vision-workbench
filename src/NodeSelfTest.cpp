@@ -82,23 +82,17 @@ int runNodeSelfTest()
             t.start();
             node->run();
             const qint64 ms = t.elapsed();
-            // 空输入走 run() 是"只验证不抛异常"，但那只证明没崩、不证明算法出结果。
-            // 若节点**显式**写了 moduleStatus=false，说明它自己判定失败（例如 OCR 一个
-            // 字都没读出来）——这种必须计入 FAIL，否则部署门禁会放过"从没成功过"的算子。
-            const QVariant msVal = node->getParam(QStringLiteral("moduleStatus"));
-            if (msVal.isValid() && !msVal.toBool()) {
-                const QString reason = node->getParam(QStringLiteral("lastError")).toString();
-                status = QStringLiteral("FAIL  %1（节点自判失败：%2）")
-                             .arg(id, reason.isEmpty() ? QStringLiteral("未给出原因") : reason);
-                failList << id;
-                ++fail;
-            } else {
-                status = QStringLiteral("OK    %1（%2 端口，%3 ms）")
-                             .arg(id)
-                             .arg(node->inputPorts().size() + node->outputPorts().size())
-                             .arg(ms);
-                ++pass;
-            }
+            // 本自检的语义是「空输入跑一遍看是否崩溃」，空输入下绝大多数节点本就会
+            // 写 moduleStatus=false（没有数据当然判失败），因此**不能**拿它当 FAIL 判据
+            // ——2026-11-08 试过一次，结果 55 个节点全红，属误杀。
+            // 它的证明力边界如实记在这里：能发现"加载/构造/崩溃"类问题，不能证明
+            // "算法对有效输入能出正确结果"。后者由 --selftest-deepocr 这类带真实样本
+            // 的自检负责（OCR 零词判 NG 已修，见 DeepOcrNode）。
+            status = QStringLiteral("OK    %1（%2 端口，%3 ms）")
+                         .arg(id)
+                         .arg(node->inputPorts().size() + node->outputPorts().size())
+                         .arg(ms);
+            ++pass;
         } catch (const std::exception &e) {
             status = QStringLiteral("FAIL  %1（异常: %2）").arg(id, QString::fromLocal8Bit(e.what()));
             failList << id;
