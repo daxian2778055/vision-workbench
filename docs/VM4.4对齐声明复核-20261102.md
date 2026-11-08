@@ -69,7 +69,7 @@
 | 编号 | 位置 | 现状 | 应改为 |
 |---|---|---|---|
 | D-1 | `docs/模板匹配进度与交接.md:10`、`:89`–`:91`；`docs/release-registry.json:978`–`:984` | 写「VM 4.4 对齐全部闭合」「VM 4.4 对齐缺口表已全部闭合」 | 按本报告结论改为「主要工程化项已落地；官方语义仍有 P0/P1 缺口，见 `docs/VM4.4对齐声明复核-20261102.md`」 |
-| D-2 | `docs/模板匹配进度与交接.md:14` | 面板槽位基准写 298 | 测试现值是 310（`tests/param_panel_binding_test.cpp:2456`）；应按测试读数改为 310，并保留 298→310 的变更说明 |
+| D-2 | `docs/模板匹配进度与交接.md:14` | 面板槽位基准写 298 | 测试现值是 310（`tests/param_panel_binding_test.cpp` 的槽位统计断言；不引行号——该文件用例持续增长，行号必腐）；应按测试读数改为 310，并保留 298→310 的变更说明 |
 | D-3 | `docs/VM4.4高精度匹配对齐规范.md:52` 与 `:57` | 同一「最大重叠率」在 52 行写「未做」，57 行写「已做（交叠/较小框面积）」 | 统一为「参数已存在；计算口径与官方不一致（交叠/两框面积和），待修」，并删掉重复行 |
 | D-4 | `docs/VM4.4高精度匹配对齐规范.md:56` | 写「超时到点停止搜索，保留已找到的最优」 | 官方是「不返回任何搜索结果」；当前实现是保留最优，属 P0-1，不可写成对齐 |
 | D-5 | `docs/VM4.4高精度匹配对齐规范.md:57` | 写最大重叠率「按交叠/较小框面积计」并标已做 | 官方是「交叠/两个重叠目标的总面积」；当前实现与官方相反，属 P0-3 |
@@ -88,7 +88,7 @@
 | 多目标搜索框架（1~16） | `FeatureMatchTest::templateMatchFindsMultipleInstances`；`src/OpencvTemplateMatchNode.cpp:1237`–`:1431` |
 | 图形即参数、搜索区域矩形/多边形、结果叠加 | `FeatureMatchTest::templateMatchOverlayShowsRegionAndTemplate`、`templateMatchMaskMovesBestHit`；`src/ImageDisplayController.cpp` |
 | 模板对象、创建/编辑/删除、active 切换、全部模板取最优 | `FeatureMatchTest::templateEntryRoundTripAndLegacyMigration`、`templateMatchUsesActiveTemplateFromList`、`templateMatchAllTemplatesPicksBest` |
-| 结果表、匹配点、角度、分数 | `src/ModuleEditorDialog.cpp:189`–`:195`、`:1265`–`:1271`（尺度 Y 见 P0-5） |
+| 结果表、匹配点、角度、分数 | `addAction` / `addActionFor`（`src/ModuleEditorDialog.cpp:189-195`）、`:1265`–`:1271`（尺度 Y 见 P0-5） |
 | 输出掩膜、图像型 ROI、简化继承 ROI | `FeatureMatchTest::templateOutputsSearchMask`、`templateImageTypeRoiLimitsCandidates`、`templateInheritsUpstreamBoxAsSearchRegion` |
 | 匹配中心（锚点）+ 锁定 | `FeatureMatchTest::templateMatchAnchorOffsetsMatchPoint` |
 | 多形状模板、屏蔽形状（保留−屏蔽） | `FeatureMatchTest::templateMultiShapeEntryAndMask`、`templateExcludeShapesSubtractFromMask` |
