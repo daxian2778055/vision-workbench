@@ -560,8 +560,8 @@ if (-not $SkipVerify) {
             } else {
                 $ocrOutText = $oout.Result
                 if ($op.ExitCode -ne 0) {
-                    $problems += ('DeepOCR 自检未通过（exit=' + $op.ExitCode
-                                  + '）：模型不可加载或识别不出字')
+                    $problems += ('DeepOCR 自检未通过（exit=' + $op.ExitCode +
+                                  '）：模型不可加载或识别不出字')
                 } elseif ($ocrOutText -notmatch '\[OK\]') {
                     $problems += 'DeepOCR 自检输出中没有 [OK] 行'
                 } else {
