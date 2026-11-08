@@ -1126,6 +1126,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261108.4",
       "recorded_at": "2026-11-08",
       "recorded_note": "新增 --selftest-deepocr 现场自检（单图/目录/CSV）；修复 recognition 模式置信度缺失被当 0 导致默认参数下永远读不到字的真 BUG；免安装实测 DeepOCR 识别出 HELLO12345（502ms）。包 813MB/154 文件，自检 71 PASS/0 FAIL/3 SKIP"
+    },
+    {
+      "tag": "rc-20261108.6",
+      "commit": "700e1baff69a6c29281f0ac92cf6c504aae54028",
+      "exe_md5": "bba70cc04a6ec7eb3dfbec8ac2e4cf7c",
+      "exe_bytes": 11817472,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261108.6",
+      "recorded_at": "2026-11-08",
+      "recorded_note": "复核 P1 修复批：零词判绿链（DeepOCR recognition 无词判 NG + 自检 exit 语义）、模板极性 absdiff 把 -1 翻 +1 的假满分、Sobel 光圈 1..20 越界、单算子执行绕过 Running/Paused 闸、自检跳过单实例锁；并回退误杀 55 个节点的 NodeSelfTest FAIL 判据。实测：有字图 OK exit=0，纯白图 FAIL exit=1，节点自检 71 PASS/0 FAIL/3 SKIP"
     }
   ],
   "legacy_backfilled": [
