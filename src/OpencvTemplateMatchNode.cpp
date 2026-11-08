@@ -881,6 +881,14 @@ void OpencvTemplateMatchNode::init()
     setParamDirect(QStringLiteral("searchWidth"), 0.0);
     setParamDirect(QStringLiteral("searchHeight"), 0.0);
     setParamDirect(QStringLiteral("searchAngle"), 0.0);
+    // VM「模块结果 → 屏蔽区多边形 / 输出掩膜」：每轮由 runSingle 重写
+    setParamDirect(QStringLiteral("maskPolygonCount"), 0);
+    setParamDirect(QStringLiteral("maskPolygonPoints"), QString());
+    setParamDirect(QStringLiteral("maskPolygonXs"), QString());
+    setParamDirect(QStringLiteral("maskPolygonYs"), QString());
+    setParamDirect(QStringLiteral("outMaskWidth"), 0);
+    setParamDirect(QStringLiteral("outMaskHeight"), 0);
+    setParamDirect(QStringLiteral("outMaskPixelFormat"), 0);
 }
 
 cv::Mat OpencvTemplateMatchNode::extractTemplatePatch(const cv::Mat &gray, const RoiShape &roi)
@@ -1911,8 +1919,11 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
 
         // VM「屏蔽区创建」：绘制（maskRegionPolygon）/ 继承（逻辑槽 2 订阅 Region/掩膜图）。
         // 语义：候选中心落在屏蔽区内的目标不检测；输出掩膜同步挖掉屏蔽区。
+        cv::Mat maskRegionFull;   // 原图尺寸屏蔽区（输出掩膜扣掉）
         {
             cv::Mat maskFull;
+            QStringList polyPoints, polyXs, polyYs;
+            int polyCount = 0;
             const int maskSource =
                 qBound(0, m_params.value(QStringLiteral("maskSource"), 0).toInt(), 1);
             if (maskSource == 1) {
@@ -1920,14 +1931,34 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             } else {
                 const QVector<RoiShape> polys = maskPolygonsFromText(
                     m_params.value(QStringLiteral("maskRegionPolygon")).toString());
-                if (!polys.isEmpty())
+                if (!polys.isEmpty()) {
                     maskFull =
                         shapesMask(polys, QRectF(0, 0, grayFull.cols, grayFull.rows));
+                    // VM「模块结果 → 屏蔽区多边形 → 多边形点数/点集/点X/Y」：
+                    // 顶点取绘制串的图像坐标（多条屏蔽区合计点数）。
+                    for (const RoiShape &poly : polys) {
+                        for (const QPointF &pt : poly.points) {
+                            polyPoints << QStringLiteral("%1,%2")
+                                              .arg(pt.x(), 0, 'f', 2)
+                                              .arg(pt.y(), 0, 'f', 2);
+                            polyXs << QString::number(pt.x(), 'f', 2);
+                            polyYs << QString::number(pt.y(), 'f', 2);
+                            ++polyCount;
+                        }
+                    }
+                }
             }
+            // 每条出口都写：无绘制屏蔽区时点数=0，避免上一轮的多边形留在结果表里。
+            m_params[QStringLiteral("maskPolygonCount")] = polyCount;
+            m_params[QStringLiteral("maskPolygonPoints")] =
+                polyPoints.join(QLatin1Char(';'));
+            m_params[QStringLiteral("maskPolygonXs")] = polyXs.join(QLatin1Char(','));
+            m_params[QStringLiteral("maskPolygonYs")] = polyYs.join(QLatin1Char(','));
             if (!maskFull.empty()) {
                 if (maskFull.size() != grayFull.size())
                     cv::resize(maskFull, maskFull, grayFull.size(), 0, 0, cv::INTER_NEAREST);
                 cv::threshold(maskFull, maskFull, 127, 255, cv::THRESH_BINARY);
+                maskRegionFull = maskFull;
                 const cv::Rect rr =
                     searchRect & cv::Rect(0, 0, grayFull.cols, grayFull.rows);
                 cv::Mat maskCoarse;
@@ -2833,22 +2864,35 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             roiMaskObj->setHImage(OpencvUtil::matToHimage(maskOut));
         }
 
+        // VM「模块结果 → 输出掩膜」：检测区域掩膜 − 屏蔽区（官方：根据检测区域和屏蔽区域
+        // 计算出的二值图）。宽度/高度/像素格式是模块结果固定字段，每轮都写；
+        // 图像本身只在「输出掩膜（把此区域作为算子掩膜输入）」打开时挂具名子结果。
+        cv::Mat matchMaskFull = cv::Mat::zeros(grayFull.size(), CV_8UC1);
+        if (searchPoly.size() >= 3) {
+            std::vector<cv::Point> pts = searchPoly;
+            for (cv::Point &p : pts) {
+                p.x += searchRect.x;
+                p.y += searchRect.y;
+            }
+            cv::fillPoly(matchMaskFull, std::vector<std::vector<cv::Point>>{pts},
+                         cv::Scalar(255));
+        } else {
+            cv::rectangle(matchMaskFull, searchRect, cv::Scalar(255), cv::FILLED);
+        }
+        if (!maskRegionFull.empty() && maskRegionFull.size() == matchMaskFull.size()) {
+            cv::Mat keep;
+            cv::bitwise_not(maskRegionFull, keep);
+            cv::bitwise_and(matchMaskFull, keep, matchMaskFull);
+        }
+        m_params[QStringLiteral("outMaskWidth")] = matchMaskFull.cols;
+        m_params[QStringLiteral("outMaskHeight")] = matchMaskFull.rows;
+        // 17301505 = VM/HALCON 的 Mono8 像素格式编号（帮助页「一般为17301505，表示Mono8格式」）
+        m_params[QStringLiteral("outMaskPixelFormat")] = 17301505;
+
         QSharedPointer<DataObject> searchMaskObj;
         if (m_params.value(QStringLiteral("outputSearchMask"), false).toBool()) {
-            cv::Mat maskOut = cv::Mat::zeros(grayFull.size(), CV_8UC1);
-            if (searchPoly.size() >= 3) {
-                std::vector<cv::Point> pts = searchPoly;
-                for (cv::Point &p : pts) {
-                    p.x += searchRect.x;
-                    p.y += searchRect.y;
-                }
-                cv::fillPoly(maskOut, std::vector<std::vector<cv::Point>>{pts},
-                             cv::Scalar(255));
-            } else {
-                cv::rectangle(maskOut, searchRect, cv::Scalar(255), cv::FILLED);
-            }
             searchMaskObj = QSharedPointer<DataObject>::create();
-            searchMaskObj->setHImage(OpencvUtil::matToHimage(maskOut));
+            searchMaskObj->setHImage(OpencvUtil::matToHimage(matchMaskFull));
         }
 
         MeasureResult res;
@@ -2908,13 +2952,17 @@ void OpencvTemplateMatchNode::updateParamPanel(QWidget *panel)
 
 QVector<NodeResultField> OpencvTemplateMatchNode::resultDisplayFields() const
 {
-    // 官方「模块结果」字段表（GUID-3EEB6D91「模块结果」节，轮廓匹配）：
+    // 官方「模块结果」字段表（GUID-11F05391「模块结果」节，高精度匹配）：
     // 耗时 / 模块状态 / 匹配状态 / 匹配个数 / 匹配模板编号 / 匹配模板名称 /
-    // 匹配框(中心点/X/Y/宽度/高度/角度) / 匹配点(X/Y) / 尺度(X/Y) / 分数 /
-    // 检测区域(中心点X/Y/宽度/高度/角度)。
-    // 官方另有「匹配轮廓点个数/轮廓点集」：本节点未计算/不显示，按宁缺勿造不列；
-    // 配置参数一律不进结果表。横切值（2026-11-08 1:1 对齐）已计算，按逐目标列表输出。
+    // 匹配框(box：中心点/X/Y/宽度/高度/角度) / 匹配点(X/Y) / 尺度(X/Y) / 分数 /
+    // 检测区域(box：中心点X/Y/宽度/高度/角度) / 匹配轮廓信息(pointset，官方注明不显示) /
+    // 匹配轮廓点个数 / 屏蔽区多边形(polygo：点数/点集/点X/Y) /
+    // 输出掩膜(image：宽度/高度/像素格式)。
+    // box/polygo 是官方结果树的父节点，数值都在子项里：本表用同一组子字段表达，
+    // 不另造「匹配框」聚合值；图像类结果（输出掩膜图像、轮廓 pointset）不画数值行，
+    // 图像本身走输出对象上的具名子结果。配置参数一律不进结果表。
     const QString group = QStringLiteral("匹配%1");
+    const QString maskGroup = QStringLiteral("屏蔽区多边形");
 
     QVector<NodeResultField> fields;
     fields << resultValue(QStringLiteral("elapsedMs"), QStringLiteral("耗时"),
@@ -2968,7 +3016,21 @@ QVector<NodeResultField> OpencvTemplateMatchNode::resultDisplayFields() const
            << resultList(QStringLiteral("matchContourPointXs"), group,
                          QStringLiteral("轮廓点X"), QStringLiteral("px"), 2)
            << resultList(QStringLiteral("matchContourPointYs"), group,
-                         QStringLiteral("轮廓点Y"), QStringLiteral("px"), 2);
+                         QStringLiteral("轮廓点Y"), QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("maskPolygonCount"), QStringLiteral("多边形点数"),
+                          QString(), 0)
+           << resultPoint(QStringLiteral("maskPolygonPoints"), maskGroup,
+                          QStringLiteral("多边形点集"), 2)
+           << resultList(QStringLiteral("maskPolygonXs"), maskGroup,
+                         QStringLiteral("多边形点X"), QStringLiteral("px"), 2)
+           << resultList(QStringLiteral("maskPolygonYs"), maskGroup,
+                         QStringLiteral("多边形点Y"), QStringLiteral("px"), 2)
+           << resultValue(QStringLiteral("outMaskWidth"), QStringLiteral("输出掩膜宽度"),
+                          QStringLiteral("px"), 0)
+           << resultValue(QStringLiteral("outMaskHeight"), QStringLiteral("输出掩膜高度"),
+                          QStringLiteral("px"), 0)
+           << resultValue(QStringLiteral("outMaskPixelFormat"),
+                          QStringLiteral("输出掩膜像素格式"), QString(), 0);
     return fields;
 }
 

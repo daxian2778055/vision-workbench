@@ -100,6 +100,8 @@ private slots:
     void templateImageTypeRoiLimitsCandidates();
     // 输出掩膜：开关打开后唯一端口上应带一张与搜索区域一致的掩膜图
     void templateOutputsSearchMask();
+    // 屏蔽区多边形结果 + 输出掩膜宽高/像素格式（VM 模块结果补齐）
+    void templateMaskPolygonAndOutputMaskResults();
     // 匹配中心（锚点）偏移：匹配点必须跟着锚点走（VM 的「匹配中心 X/Y」）
     void templateMatchAnchorOffsetsMatchPoint();
     void templateAnchorFollowsWarpRotation();
@@ -873,9 +875,10 @@ void FeatureMatchTest::templateResultDisplaySpec()
     OpencvTemplateMatchNode node;
     node.init();
 
-    // ① 规范：模块级 6 项 + 逐目标 14 项 + 检测区域 5 项 + 轮廓 3 项，不含任何配置键
+    // ① 规范：模块级 6 项 + 逐目标 14 项 + 检测区域 5 项 + 轮廓 3 项
+    //    + 屏蔽区多边形 4 项 + 输出掩膜 3 项，不含任何配置键
     const QVector<NodeResultField> spec = node.resultDisplayFields();
-    QCOMPARE(int(spec.size()), 28);
+    QCOMPARE(int(spec.size()), 35);
     QCOMPARE(spec.at(0).key, QStringLiteral("elapsedMs"));
     QCOMPARE(spec.at(1).key, QStringLiteral("moduleStatus"));
     QCOMPARE(spec.at(2).key, QStringLiteral("matchStatus"));
@@ -894,6 +897,15 @@ void FeatureMatchTest::templateResultDisplaySpec()
     QCOMPARE(spec.at(27).key, QStringLiteral("matchContourPointYs"));
     for (int i = 26; i <= 27; ++i)
         QCOMPARE(spec.at(i).group, QStringLiteral("匹配%1"));
+    QCOMPARE(spec.at(28).key, QStringLiteral("maskPolygonCount"));
+    QCOMPARE(spec.at(29).key, QStringLiteral("maskPolygonPoints"));
+    QCOMPARE(spec.at(30).key, QStringLiteral("maskPolygonXs"));
+    QCOMPARE(spec.at(31).key, QStringLiteral("maskPolygonYs"));
+    for (int i = 29; i <= 31; ++i)
+        QCOMPARE(spec.at(i).group, QStringLiteral("屏蔽区多边形"));
+    QCOMPARE(spec.at(32).key, QStringLiteral("outMaskWidth"));
+    QCOMPARE(spec.at(33).key, QStringLiteral("outMaskHeight"));
+    QCOMPARE(spec.at(34).key, QStringLiteral("outMaskPixelFormat"));
     for (const NodeResultField &f : spec) {
         QVERIFY2(f.key != QStringLiteral("minScore")
                      && f.key != QStringLiteral("maxMatches")
@@ -2503,6 +2515,10 @@ void FeatureMatchTest::templateOutputsSearchMask()
     const auto resOff = node.getOutputData(1);
     QVERIFY2(!attached(resOff, QStringLiteral("检测区域掩膜")),
              "检测区域输出掩膜关闭后不应再产出掩膜图");
+    // 但「输出掩膜宽度/高度/像素格式」是 VM 模块结果的固定字段，与开关无关
+    QCOMPARE(node.getParam(QStringLiteral("outMaskWidth")).toInt(), canvas.cols);
+    QCOMPARE(node.getParam(QStringLiteral("outMaskHeight")).toInt(), canvas.rows);
+    QCOMPARE(node.getParam(QStringLiteral("outMaskPixelFormat")).toInt(), 17301505);
 
     // ROI 区域掩膜：打开 outputMask → 子结果「掩膜」覆盖模板 ROI，而非搜索区域
     node.setParam(QStringLiteral("outputMask"), true);
@@ -2519,6 +2535,114 @@ void FeatureMatchTest::templateOutputsSearchMask()
     const auto resRoiOff = node.getOutputData(1);
     QVERIFY2(!attached(resRoiOff, QStringLiteral("掩膜")),
              "ROI 输出掩膜关闭后不应再产出掩膜图");
+}
+
+// VM「模块结果 → 屏蔽区多边形 / 输出掩膜」（高精度匹配，GUID-11F05391）：
+//   屏蔽区多边形 = 绘制串的顶点（多边形点数/点集/点X/Y）；
+//   输出掩膜 = 检测区域 − 屏蔽区，宽高/像素格式（17301505=Mono8）为固定字段。
+// 三条腿：① 绘制屏蔽区：顶点逐项回读 + 掩膜图上挖洞；② 清空绘制：点数归零、掩膜恢复；
+// ③ 继承屏蔽区：多边形点数=0，但继承掩膜同样从输出掩膜里扣掉。
+void FeatureMatchTest::templateMaskPolygonAndOutputMaskResults()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const cv::Mat patch = makePatch();
+    const QString tpl = dir.filePath(QStringLiteral("tpl.png"));
+    QVERIFY(cv::imwrite(tpl.toStdString(), patch));
+
+    cv::Mat canvas(400, 500, CV_8UC1, cv::Scalar(kCanvasBackground));
+    patch.copyTo(canvas(cv::Rect(180, 130, kTemplateSize, kTemplateSize)));
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.5);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("templatePath"), tpl);
+    node.setParam(QStringLiteral("searchRegionCol"), 100);
+    node.setParam(QStringLiteral("searchRegionRow"), 80);
+    node.setParam(QStringLiteral("searchRegionWidth"), 300);
+    node.setParam(QStringLiteral("searchRegionHeight"), 220);
+    node.setParam(QStringLiteral("outputSearchMask"), true);
+    // 屏蔽区多边形（图像坐标，x,y）：右下角一块，不盖住模板中心 (244,194)
+    node.setParam(QStringLiteral("maskRegionPolygon"),
+                  QStringLiteral("300,250 420,250 420,350 300,350"));
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+    node.run(false);
+
+    auto attached = [](const QSharedPointer<DataObject> &obj, const QString &name) {
+        if (!obj)
+            return QSharedPointer<DataObject>();
+        for (const auto &p : obj->attachedResults()) {
+            if (p.first == name)
+                return p.second;
+        }
+        return QSharedPointer<DataObject>();
+    };
+
+    QVERIFY2(node.getParam(QStringLiteral("moduleStatus")).toBool(), "带屏蔽区的匹配应命中");
+
+    // ① 绘制屏蔽区：多边形点数/点集/点X/Y 与绘制串逐项一致
+    QCOMPARE(node.getParam(QStringLiteral("maskPolygonCount")).toInt(), 4);
+    const QString pointText =
+        node.getParam(QStringLiteral("maskPolygonPoints")).toString();
+    const QStringList pointItems =
+        pointText.split(QLatin1Char(';'), Qt::SkipEmptyParts);
+    QCOMPARE(pointItems.size(), 4);
+    QCOMPARE(pointItems.at(0), QStringLiteral("300.00,250.00"));
+    QCOMPARE(pointItems.at(2), QStringLiteral("420.00,350.00"));
+    const QStringList xs =
+        node.getParam(QStringLiteral("maskPolygonXs")).toString().split(QLatin1Char(','));
+    const QStringList ys =
+        node.getParam(QStringLiteral("maskPolygonYs")).toString().split(QLatin1Char(','));
+    QCOMPARE(xs.size(), 4);
+    QCOMPARE(ys.size(), 4);
+    QCOMPARE(xs.at(1).toDouble(), 420.0);
+    QCOMPARE(ys.at(3).toDouble(), 350.0);
+
+    // 输出掩膜固定字段 + 图上挖洞
+    QCOMPARE(node.getParam(QStringLiteral("outMaskWidth")).toInt(), canvas.cols);
+    QCOMPARE(node.getParam(QStringLiteral("outMaskHeight")).toInt(), canvas.rows);
+    QCOMPARE(node.getParam(QStringLiteral("outMaskPixelFormat")).toInt(), 17301505);
+    const auto maskObj = attached(node.getOutputData(1), QStringLiteral("检测区域掩膜"));
+    QVERIFY2(maskObj && maskObj->getHImage().IsInitialized(), "输出掩膜子结果缺失");
+    const cv::Mat mask = OpencvUtil::himageToMat(HImage(maskObj->getHImage()));
+    QCOMPARE(mask.at<uchar>(150, 150), uchar(255));   // 检测区域内、屏蔽区外
+    QCOMPARE(mask.at<uchar>(280, 360), uchar(0));     // 检测区域内、屏蔽区内
+    QCOMPARE(mask.at<uchar>(10, 10), uchar(0));       // 检测区域外
+
+    // ② 清空绘制屏蔽区：点数归零、掩膜恢复成完整检测区域
+    node.setParam(QStringLiteral("maskRegionPolygon"), QString());
+    node.run(false);
+    QCOMPARE(node.getParam(QStringLiteral("maskPolygonCount")).toInt(), 0);
+    QCOMPARE(node.getParam(QStringLiteral("maskPolygonPoints")).toString(), QString());
+    const auto maskClearObj = attached(node.getOutputData(1), QStringLiteral("检测区域掩膜"));
+    QVERIFY2(maskClearObj, "清空屏蔽区后输出掩膜子结果不应消失");
+    const cv::Mat maskClear =
+        OpencvUtil::himageToMat(HImage(maskClearObj->getHImage()));
+    QCOMPARE(maskClear.at<uchar>(280, 360), uchar(255));
+
+    // ③ 继承屏蔽区：多边形点数保持 0（官方字段描述的是「绘制的屏蔽区多边形」），
+    //    但继承掩膜图的白区同样从输出掩膜里扣掉
+    cv::Mat inherited(canvas.rows, canvas.cols, CV_8UC1, cv::Scalar(0));
+    cv::rectangle(inherited, cv::Rect(250, 120, 150, 120), cv::Scalar(255), cv::FILLED);
+    auto maskData = QSharedPointer<DataObject>::create();
+    maskData->setHImage(OpencvUtil::matToHimage(inherited));
+    node.setParam(QStringLiteral("maskSource"), 1);
+    node.setInputData(2, maskData);
+    node.run(false);
+    QVERIFY2(node.getParam(QStringLiteral("moduleStatus")).toBool(),
+             "继承屏蔽区不应挡住模板中心 (244,194)");
+    QCOMPARE(node.getParam(QStringLiteral("maskPolygonCount")).toInt(), 0);
+    const auto maskInheritObj = attached(node.getOutputData(1), QStringLiteral("检测区域掩膜"));
+    QVERIFY2(maskInheritObj, "继承屏蔽区时输出掩膜子结果缺失");
+    const cv::Mat maskInherit =
+        OpencvUtil::himageToMat(HImage(maskInheritObj->getHImage()));
+    QCOMPARE(maskInherit.at<uchar>(150, 150), uchar(255));  // 检测区域内、继承屏蔽区外
+    QCOMPARE(maskInherit.at<uchar>(200, 300), uchar(0));    // 检测区域内、继承屏蔽区内
 }
 
 // VM「是否获取轮廓 / 是否输出轮廓」（高精度匹配·运行参数）：

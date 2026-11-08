@@ -22,6 +22,7 @@ private slots:
     void testReportText();
     void testFailureRowShowsReason();   // U-18：失败行必须显示算子留下的原因
     void testResultFieldSpecDisplay();  // VM「模块结果」：只显示声明字段 + 分组/极性/单位/精度
+    void testFixedGroupFieldDisplay();  // 固定分组（屏蔽区多边形）：多个点/顶点字段共用一组行
     void testHistoryOnlyTabs();         // 采集/逻辑工具选中时只展示历史结果（VM 结果显示区域）
     void testFollowSelectionFilter();   // 当前/历史结果默认只显示画布选中的模块
     void testPageVisibilitySplit();     // 图像区「模块结果」/ 底部结果区共用面板的页签裁剪
@@ -313,6 +314,50 @@ void ResultTableTest::testResultFieldSpecDisplay()
     const QString report = panel.toReportText(QStringLiteral("SpecFlow"));
     QVERIFY2(report.contains(QStringLiteral("[边缘0]")), qPrintable(report));
     QVERIFY2(report.contains(QStringLiteral("X=100.00, Y=50.00")), qPrintable(report));
+}
+
+// P1-11：官方「屏蔽区多边形」是不按目标下标的固定分组——点集与点X/Y 共用一行组头。
+// 组标签不含 %1 时只建一行；点集按分号切、X/Y 按逗号切，组内顺序 = 规范声明顺序。
+void ResultTableTest::testFixedGroupFieldDisplay()
+{
+    ResultTablePanel panel;
+    auto *tree = panel.findChild<QTreeWidget *>();
+    QVERIFY2(tree != nullptr, "未找到结果树");
+
+    QVariantMap vars;
+    vars.insert(QStringLiteral("maskPolygonCount"), 3);
+    vars.insert(QStringLiteral("maskPolygonPoints"),
+                QStringLiteral("300.00,250.00;420.00,250.00;420.00,350.00"));
+    vars.insert(QStringLiteral("maskPolygonXs"), QStringLiteral("300.00,420.00,420.00"));
+    vars.insert(QStringLiteral("maskPolygonYs"), QStringLiteral("250.00,250.00,350.00"));
+
+    QVector<NodeResultField> fields;
+    fields << resultValue(QStringLiteral("maskPolygonCount"), QStringLiteral("多边形点数"),
+                          QString(), 0)
+           << resultPoint(QStringLiteral("maskPolygonPoints"),
+                          QStringLiteral("屏蔽区多边形"), QStringLiteral("多边形点集"), 2)
+           << resultList(QStringLiteral("maskPolygonXs"),
+                         QStringLiteral("屏蔽区多边形"), QStringLiteral("多边形点X"),
+                         QStringLiteral("px"), 2)
+           << resultList(QStringLiteral("maskPolygonYs"),
+                         QStringLiteral("屏蔽区多边形"), QStringLiteral("多边形点Y"),
+                         QStringLiteral("px"), 2);
+
+    panel.setModuleResult(1, QStringLiteral("高精度匹配"), true, 5, vars, fields);
+    QTreeWidgetItem *row = tree->topLevelItem(0);
+    QVERIFY2(row != nullptr, "结果行未进入表格");
+    QCOMPARE(row->childCount(), 2);   // 多边形点数 + 屏蔽区多边形分组（组头只出现一次）
+    QCOMPARE(row->child(0)->text(0), QStringLiteral("多边形点数"));
+    QCOMPARE(row->child(0)->text(1), QStringLiteral("3"));
+    QTreeWidgetItem *group = row->child(1);
+    QCOMPARE(group->text(0), QStringLiteral("屏蔽区多边形"));
+    QCOMPARE(group->childCount(), 9);   // 3 点集 + 3 点X + 3 点Y
+    QCOMPARE(group->child(0)->text(1), QStringLiteral("X=300.00, Y=250.00"));
+    QCOMPARE(group->child(2)->text(1), QStringLiteral("X=420.00, Y=350.00"));
+    QCOMPARE(group->child(3)->text(0), QStringLiteral("多边形点X(px)"));
+    QCOMPARE(group->child(3)->text(1), QStringLiteral("300.00"));
+    QCOMPARE(group->child(6)->text(0), QStringLiteral("多边形点Y(px)"));
+    QCOMPARE(group->child(6)->text(1), QStringLiteral("250.00"));
 }
 
 // VM 4.4「结果显示区域」：选中采集 / 逻辑工具模块时只展示历史结果
