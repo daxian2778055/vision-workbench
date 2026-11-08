@@ -59,7 +59,8 @@ cv::Mat makePart(int w = 64, int h = 64)
 const QHash<QString, QString> kNeedsDeviceOrIo = {
     {QStringLiteral("ImageReadNode"), QStringLiteral("读磁盘文件")},
     {QStringLiteral("MvsImageSourceNode"), QStringLiteral("需 MVS 相机")},
-    {QStringLiteral("HalconImageSourceNode"), QStringLiteral("需采集设备")},
+    // HalconImageSourceNode 已于 2026-11-08 移除注册（采集统一走 MVS），从跳过清单同步删除：
+    // 保留会造成"跳过清单里有、注册表里没有"的 stale 项。
     {QStringLiteral("CameraIoNode"), QStringLiteral("需相机/GPIO 设备")},
     {QStringLiteral("SendDataNode"), QStringLiteral("需通讯对端")},
     {QStringLiteral("ReceiveDataNode"), QStringLiteral("需通讯对端（会等待）")},

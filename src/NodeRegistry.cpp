@@ -119,8 +119,11 @@ void registerAllNodes()
             NodeBase::IMAGE_ACQUISITION, "\u56FE\u50CF\u91C7\u96C6");
     VFP_REG(MvsImageSourceNode,   "MvsImageSourceNode",   "MVS\u56FE\u50CF\u6E90", "MVS Source",
             NodeBase::IMAGE_ACQUISITION, "\u56FE\u50CF\u91C7\u96C6");
-    VFP_REG(HalconImageSourceNode,"HalconImageSourceNode","Halcon\u56FE\u50CF\u6E90", "Halcon Source",
-            NodeBase::IMAGE_ACQUISITION, "\u56FE\u50CF\u91C7\u96C6");
+    // HalconImageSourceNode 已移除注册（2026-11-08）：本平台采集统一走海康 MVS
+    //（MvsImageSourceNode），HALCON 采集插件（hAcq*）已不在打包白名单里，
+    // 注册这条只会让用户选到一个跑不起来的空入口。代码保留，需要时恢复本行即可。
+    // VFP_REG(HalconImageSourceNode,"HalconImageSourceNode","Halcon\u56FE\u50CF\u6E90", "Halcon Source",
+    //         NodeBase::IMAGE_ACQUISITION, "\u56FE\u50CF\u91C7\u96C6");
 
     // ===== 图像处理 =====
     VFP_REG(ColorConversionNode,  "ColorConversionNode",  "\u989C\u8272\u8F6C\u6362", "Color Conversion",

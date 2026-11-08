@@ -50,6 +50,10 @@
 #include "HistogramEqualizeNode.h"
 #include "GrayStretchNode.h"
 #include "ResizeNode.h"
+#include "ImageAddNode.h"
+#include "ImageMulNode.h"
+#include "TopHatNode.h"
+#include "BottomHatNode.h"
 #include <QElapsedTimer>
 #include <QMetaType>
 #include "TranslateImageNode.h"
@@ -120,6 +124,7 @@ private slots:
     void testStabilityGuards();
     void testRuntimeParamNormalization();
     void testAtomicNodeFlagsSerialization();
+    void testImageArithAndHatOpenCv();
     void testCropBasic();
     void testImageArithDivByZero();
     void testFormulaEvaluation();
@@ -3008,6 +3013,77 @@ void NodeCoreTest::testAtomicNodeFlagsSerialization()
     node.setInputData(0, obj);
     QVERIFY2(node.execute(), "原子化后节点仍应能正常执行");
     QVERIFY2(node.resultState().executed, "执行后应提交状态快照");
+}
+
+// 4 个节点由 HALCON 算法改为 OpenCV 实现后的数值回归：饱和语义与形态学结构必须与
+// 原实现一致（顶帽/底帽特意保持"逐次开/闭运算"结构，而不是 morphologyEx 的 iterations）。
+void NodeCoreTest::testImageArithAndHatOpenCv()
+{
+    cv::Mat src(2, 2, CV_8UC1);
+    src.at<uchar>(0, 0) = 10;
+    src.at<uchar>(0, 1) = 200;
+    src.at<uchar>(1, 0) = 250;
+    src.at<uchar>(1, 1) = 0;
+    const HalconCpp::HImage himg = OpencvUtil::matToHimage(src);
+
+    // ① 图像加法：255 饱和（与 HALCON AddImage 的字节饱和一致）
+    {
+        ImageAddNode node;
+        node.init();
+        node.setParam(QStringLiteral("value"), 100.0);
+        node.setInputImage(himg);
+        node.run(false);
+        const cv::Mat out = OpencvUtil::himageToMat(node.getOutputImage());
+        QVERIFY2(!out.empty(), "图像加法应产出图像");
+        QCOMPARE(static_cast<int>(out.at<uchar>(0, 0)), 110);
+        QCOMPARE(static_cast<int>(out.at<uchar>(0, 1)), 255);   // 200+100 饱和
+        QCOMPARE(static_cast<int>(out.at<uchar>(1, 0)), 255);   // 250+100 饱和
+    }
+    // ② 图像乘法：255 饱和
+    {
+        ImageMulNode node;
+        node.init();
+        node.setParam(QStringLiteral("value"), 2.0);
+        node.setInputImage(himg);
+        node.run(false);
+        const cv::Mat out = OpencvUtil::himageToMat(node.getOutputImage());
+        QVERIFY2(!out.empty(), "图像乘法应产出图像");
+        QCOMPARE(static_cast<int>(out.at<uchar>(0, 0)), 20);
+        QCOMPARE(static_cast<int>(out.at<uchar>(0, 1)), 255);   // 200*2 饱和
+        QCOMPARE(static_cast<int>(out.at<uchar>(1, 0)), 255);   // 250*2 饱和
+    }
+    // ③ 顶帽：平坦背景应归零，孤立亮点保留 原值-背景
+    {
+        TopHatNode node;
+        node.init();
+        node.setParam(QStringLiteral("maskWidth"), 3);
+        node.setParam(QStringLiteral("maskHeight"), 3);
+        node.setParam(QStringLiteral("iterations"), 1);
+        cv::Mat src2(10, 10, CV_8UC1, cv::Scalar(50));
+        src2.at<uchar>(5, 5) = 200;
+        node.setInputImage(OpencvUtil::matToHimage(src2));
+        node.run(false);
+        const cv::Mat out = OpencvUtil::himageToMat(node.getOutputImage());
+        QVERIFY2(!out.empty(), "顶帽应产出图像");
+        QCOMPARE(static_cast<int>(out.at<uchar>(1, 1)), 0);      // 平坦区 → 0
+        QCOMPARE(static_cast<int>(out.at<uchar>(5, 5)), 150);    // 200 - 50
+    }
+    // ④ 底帽：平坦背景应归零，孤立暗点保留
+    {
+        BottomHatNode node;
+        node.init();
+        node.setParam(QStringLiteral("maskWidth"), 3);
+        node.setParam(QStringLiteral("maskHeight"), 3);
+        node.setParam(QStringLiteral("iterations"), 1);
+        cv::Mat src3(10, 10, CV_8UC1, cv::Scalar(200));
+        src3.at<uchar>(5, 5) = 50;
+        node.setInputImage(OpencvUtil::matToHimage(src3));
+        node.run(false);
+        const cv::Mat out = OpencvUtil::himageToMat(node.getOutputImage());
+        QVERIFY2(!out.empty(), "底帽应产出图像");
+        QCOMPARE(static_cast<int>(out.at<uchar>(1, 1)), 0);      // 平坦区 → 0
+        QCOMPARE(static_cast<int>(out.at<uchar>(5, 5)), 150);    // 200 - 50
+    }
 }
 
 QTEST_MAIN(NodeCoreTest)

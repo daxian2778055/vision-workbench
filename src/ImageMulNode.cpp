@@ -1,17 +1,8 @@
 #include "ImageMulNode.h"
 #include "DataObject.h"
+#include "OpencvUtil.h"
 
 using namespace HalconCpp;
-
-static HImage makeConstantImageLike(const HImage &proto, double value)
-{
-    HTuple w, h;
-    GetImageSize(proto, &w, &h);
-    HImage zeros, res;
-    GenImageConst(&zeros, "byte", w, h);
-    AddImage(zeros, zeros, &res, 1.0, value);
-    return res;
-}
 
 ImageMulNode::ImageMulNode(QObject *parent) : HalconNode(parent)
 {
@@ -32,18 +23,32 @@ void ImageMulNode::init()
 
 void ImageMulNode::run(bool)
 {
-    try {
-        if (!m_inputImage.IsInitialized()) return;
-        const double v = m_params.value(QStringLiteral("value"), 1.0).toDouble();
-        HObject result;
-        if (m_inputData.contains(1) && m_inputData[1] && m_inputData[1]->getHImage().IsInitialized()) {
-            MultImage(HImage(m_inputImage), m_inputData[1]->getHImage(), &result, 1.0, 0.0);
-        } else {
-            HImage constImg = makeConstantImageLike(HImage(m_inputImage), v);
-            MultImage(HImage(m_inputImage), constImg, &result, 1.0, 0.0);
-        }
-        m_outputImage = result;
-    } catch (const HException &) {
+    // 纯 OpenCV 实现（2026-11-08）：逐像素乘法，cv::multiply 对整数类型同样是
+    // 饱和运算（saturate_cast），与 HALCON MultImage 的类型饱和语义一致。
+    if (!m_inputImage.IsInitialized()) {
         m_outputImage.Clear();
+        return;
     }
+    const cv::Mat src = OpencvUtil::himageToMat(m_inputImage);
+    if (src.empty()) {
+        m_outputImage.Clear();
+        return;
+    }
+    const double v = m_params.value(QStringLiteral("value"), 1.0).toDouble();
+    const bool hasSecond = m_inputData.contains(1) && m_inputData[1]
+                           && m_inputData[1]->getHImage().IsInitialized();
+    cv::Mat dst;
+    if (hasSecond) {
+        cv::Mat other = OpencvUtil::himageToMat(m_inputData[1]->getHImage());
+        if (other.empty() || other.size() != src.size()) {
+            m_outputImage.Clear();
+            return;
+        }
+        if (other.type() != src.type())
+            other.convertTo(other, src.type());
+        cv::multiply(src, other, dst);   // 饱和
+    } else {
+        cv::multiply(src, cv::Scalar::all(v), dst);
+    }
+    m_outputImage = OpencvUtil::matToHimage(dst);
 }

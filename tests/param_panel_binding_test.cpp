@@ -2109,7 +2109,8 @@ void ParamPanelBindingTest::testLoadPathClampsOutOfRangeSpecValues()
 
 // ── T14（U-8 本轮，推进计划 §3.22）：把「哪些算子一个参数声明都不发」立成显式名单闸 ──
 // 契约：注册表里每个 HalconNode 走完 init() 之后 paramSpecs() 为空的**集合**，必须与下面这份
-//      25 条名单**集合相等**（比的是集合，不比注册顺序）：
+//      24 条名单**集合相等**（比的是集合，不比注册顺序；2026-11-08 因 HalconImageSourceNode
+//      摘注册由 25 条减为 24 条）：
 //   ① 名单外新冒出来的不发声明算子（＝新增算子忘了 registerParams，或故意只发一条都算没有）⇒ extra ⇒ 红；
 //   ② 名单里的算子开始发声明了（口径变了 ⇒ 名单该由人改，不该由红悄悄吞掉）⇒ missing ⇒ 红；
 //   ③ 名单自己写错／写漏被 ①② 双向覆盖，不另设第三判。
@@ -2150,7 +2151,8 @@ void ParamPanelBindingTest::testOperatorsWithoutParamSpecsAreExactlyThisRoster()
         QStringLiteral("CounterNode"), QStringLiteral("DelayNode"),
         QStringLiteral("DistanceNode"), QStringLiteral("FilterNode"),
         QStringLiteral("FormatNode"), QStringLiteral("FormulaNode"),
-        QStringLiteral("HalconImageSourceNode"),
+        // HalconImageSourceNode 已于 2026-11-08 移除注册（采集统一走 MVS，HALCON 采集插件
+    // 不在打包白名单里）⇒ 名册同步删掉，否则 missing 判红。类本身仍保留在代码里。
         QStringLiteral("HistogramEqualizeNode"), QStringLiteral("ImageInvertNode"),
         QStringLiteral("ImageReadNode"), QStringLiteral("MvsImageSourceNode"),
         QStringLiteral("OpencvPixelStatsNode"), QStringLiteral("ProtocolParseNode"),
@@ -2259,7 +2261,7 @@ void ParamPanelBindingTest::testOperatorsWithoutParamSpecsAreExactlyThisRoster()
                                        " (see MISSING line above)").arg(missing.size())));
 
     // 空转闸：名单本身与分母都得对得上，否则"没红"不等于"拦得住"
-    QVERIFY2(expected.size() == 22,
+    QVERIFY2(expected.size() == 21,
              qPrintable(QStringLiteral("名单字面量自己变成 %1 条 ⇒ 本闸的基准已失效").arg(expected.size())));
     QVERIFY2(registry > 60,
              qPrintable(QStringLiteral("注册表只枚举到 %1 个算子 ⇒ 分母已失效").arg(registry)));

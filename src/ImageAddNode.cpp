@@ -1,17 +1,8 @@
 #include "ImageAddNode.h"
 #include "DataObject.h"
+#include "OpencvUtil.h"
 
 using namespace HalconCpp;
-
-static HImage makeConstantImageLike(const HImage &proto, double value)
-{
-    HTuple w, h;
-    GetImageSize(proto, &w, &h);
-    HImage zeros, res;
-    GenImageConst(&zeros, "byte", w, h);
-    AddImage(zeros, zeros, &res, 1.0, value);
-    return res;
-}
 
 ImageAddNode::ImageAddNode(QObject *parent) : HalconNode(parent)
 {
@@ -32,21 +23,34 @@ void ImageAddNode::init()
 
 void ImageAddNode::run(bool)
 {
-    try {
-        if (!m_inputImage.IsInitialized()) return;
-        const double v = m_params.value(QStringLiteral("value"), 0.0).toDouble();
-        HObject result;
-        if (m_inputData.contains(1) && m_inputData[1] && m_inputData[1]->getHImage().IsInitialized()) {
-            AddImage(HImage(m_inputImage), m_inputData[1]->getHImage(), &result, 1.0, 0.0);
-        } else {
-            // 未接第二输入时与**常量图**相加（2026-10-26 复核 P3）：原来写
-            // AddImage(I, I, 1.0, v) = 2I+v，与参数标签"加数"不符（整幅亮一倍）。
-            // 常量图构造 makeConstantImageLike 早就在本文件里，之前没被用。
-            AddImage(HImage(m_inputImage), makeConstantImageLike(HImage(m_inputImage), v),
-                     &result, 1.0, 0.0);
-        }
-        m_outputImage = result;
-    } catch (const HException &) {
+    // 纯 OpenCV 实现（2026-11-08）：本节点原先调 HALCON AddImage，但它是纯粹的
+    // 逐像素相加，cv::add 对 CV_8U/CV_16U 同样是**饱和**运算，与 HALCON 的类型
+    // 饱和语义一致，因此不再需要 HALCON 算法依赖。
+    if (!m_inputImage.IsInitialized()) {
         m_outputImage.Clear();
+        return;
     }
+    const cv::Mat src = OpencvUtil::himageToMat(m_inputImage);
+    if (src.empty()) {
+        m_outputImage.Clear();
+        return;
+    }
+    const double v = m_params.value(QStringLiteral("value"), 0.0).toDouble();
+    const bool hasSecond = m_inputData.contains(1) && m_inputData[1]
+                           && m_inputData[1]->getHImage().IsInitialized();
+    cv::Mat dst;
+    if (hasSecond) {
+        cv::Mat other = OpencvUtil::himageToMat(m_inputData[1]->getHImage());
+        if (other.empty() || other.size() != src.size()) {
+            m_outputImage.Clear();
+            return;
+        }
+        if (other.type() != src.type())
+            other.convertTo(other, src.type());
+        cv::add(src, other, dst);   // 饱和
+    } else {
+        // 未接第二输入：与常量相加（保持 2026-10-26 复核 P3 的语义 —— 不是 2I+v）
+        cv::add(src, cv::Scalar::all(v), dst);
+    }
+    m_outputImage = OpencvUtil::matToHimage(dst);
 }
