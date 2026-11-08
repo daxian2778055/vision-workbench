@@ -1153,6 +1153,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261108.9",
       "recorded_at": "2026-11-08",
       "recorded_note": "修 P1-2 锚点旋转共轭矩阵（差 2θ）：抽 mapAnchorToImage 静态函数，线性部分改为与 warpTemplate 同源的 [cos sin; -sin cos]，缩放在旋转之前；腿 templateAnchorFollowsWarpRotation 含改坏自证。含 rc-20261108.8 的部署门禁接 DeepOCR 与文档引用可校验化（宿主 nocand GREEN）。"
+    },
+    {
+      "tag": "rc-20261108.10",
+      "commit": "73cdb965108a985a5bb45ca28ca7b115b64fb156",
+      "exe_md5": "90d791944665f7a825d7c080b6d71a8d",
+      "exe_bytes": 11819520,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261108.10",
+      "recorded_at": "2026-11-08",
+      "recorded_note": "修 P1-4 变形缓存键：加入模板内容指纹（FNV-1a），解决同路径换图重训与同尺寸内存模板串味；腿 templateFingerprintDistinguishesContent。含 rc-20261108.9 的 P1-2 锚点旋转修复。"
     }
   ],
   "legacy_backfilled": [
