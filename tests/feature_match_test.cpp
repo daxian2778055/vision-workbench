@@ -78,6 +78,8 @@ private slots:
     void templateMatchAllTemplatesPicksBest();
     // 全部搜索模式：不同模板各自的目标必须合并输出；多模板重叠率控制重叠目标去留
     void templateAllTemplatesMergesPerTarget();
+    // VM「勾选模板 / 模板排序」：未勾选不参与匹配；列表顺序决定未开全部搜索模式时的优先顺序
+    void templateCheckedTemplatesControlSearch();
     // 多边形/圆形模板：必须能抠出包围盒（此前多边形直接返回空 → 建模板必失败）
     void templateShapeExtractionSupportsPolygonAndCircle();
     // 魔术棒取形：泛洪出的多边形必须贴合目标区域
@@ -1812,6 +1814,154 @@ void FeatureMatchTest::templateAllTemplatesMergesPerTarget()
           keepAllCount);
     QCOMPARE(overlapCount, 1);
     QCOMPARE(keepAllCount, 2);
+}
+
+// P1-3（VM「特征模板」）：勾选模板 + 模板排序。
+// ① 未勾选不参与匹配；② 列表顺序 = 未开全部搜索模式时的优先顺序；
+// ③ 全部搜索模式也只合并勾选集合；④ 一个都没勾选时判失败且不沿用上一轮结果。
+void FeatureMatchTest::templateCheckedTemplatesControlSearch()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const cv::Mat patchA = makePatch();                  // 128×128 高纹理
+    cv::Mat patchB(64, 64, CV_8UC1, cv::Scalar(20));
+    cv::circle(patchB, cv::Point(32, 32), 26, cv::Scalar(255), 5);
+    cv::line(patchB, cv::Point(6, 6), cv::Point(58, 58), cv::Scalar(220), 3);
+
+    const QString pathA = dir.filePath(QStringLiteral("a.png"));
+    const QString pathB = dir.filePath(QStringLiteral("b.png"));
+    QVERIFY(cv::imwrite(pathA.toStdString(), patchA));
+    QVERIFY(cv::imwrite(pathB.toStdString(), patchB));
+
+    cv::Mat canvas(400, 700, CV_8UC1, cv::Scalar(kCanvasBackground));
+    const cv::Rect boxA(100, 120, patchA.cols, patchA.rows);
+    const cv::Rect boxB(480, 150, patchB.cols, patchB.rows);
+    patchA.copyTo(canvas(boxA));
+    patchB.copyTo(canvas(boxB));
+    const double cxA = boxA.x + boxA.width / 2.0, cyA = boxA.y + boxA.height / 2.0;
+    const double cxB = boxB.x + boxB.width / 2.0, cyB = boxB.y + boxB.height / 2.0;
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.7);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("scaleMin"), 1.0);
+    node.setParam(QStringLiteral("scaleMax"), 1.0);
+    node.setParam(QStringLiteral("maxMatches"), 10);
+    node.setParam(QStringLiteral("maxOverlap"), 100);
+    node.setParam(QStringLiteral("multiTemplateOverlap"), 100);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("searchRegionCol"), 0);
+    node.setParam(QStringLiteral("searchRegionRow"), 0);
+    node.setParam(QStringLiteral("searchRegionWidth"), canvas.cols);
+    node.setParam(QStringLiteral("searchRegionHeight"), canvas.rows);
+    node.setParam(QStringLiteral("matchAllTemplates"), false);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+
+    TemplateEntry ea;
+    ea.name = QStringLiteral("A");
+    ea.imagePath = pathA;
+    TemplateEntry eb;
+    eb.name = QStringLiteral("B");
+    eb.imagePath = pathB;
+
+    // 序列化：enabled 往返；旧工程缺该键时默认勾选（否则老流程会突然全不参与匹配）
+    {
+        TemplateEntry off = ea;
+        off.enabled = false;
+        QVERIFY(!TemplateEntry::fromJson(off.toJson()).enabled);
+        QJsonObject legacy = ea.toJson();
+        legacy.remove(QStringLiteral("enabled"));
+        QVERIFY(TemplateEntry::fromJson(legacy).enabled);
+    }
+
+    node.setTemplates({ea, eb});
+    node.setActiveTemplateIndex(0);
+
+    // ① 列表 [A,B] 按顺序试 → 先命中 A 就停
+    node.run(false);
+    qInfo("checked-order: idx=%d col=%.1f row=%.1f count=%d",
+          node.getParam(QStringLiteral("matchTemplateIndex")).toInt(),
+          node.getParam(QStringLiteral("matchCol")).toDouble(),
+          node.getParam(QStringLiteral("matchRow")).toDouble(),
+          node.getParam(QStringLiteral("matchCount")).toInt());
+    QCOMPARE(node.getParam(QStringLiteral("matchTemplateIndex")).toInt(), 0);
+    QCOMPARE(node.getParam(QStringLiteral("matchCount")).toInt(), 1);
+    QVERIFY(qAbs(node.getParam(QStringLiteral("matchCol")).toDouble() - cxA) <= 3.0);
+    QVERIFY(qAbs(node.getParam(QStringLiteral("matchRow")).toDouble() - cyA) <= 3.0);
+
+    // ② 取消勾选 A → 只剩 B 参与匹配（A 的目标明明在画面里）
+    QVector<TemplateEntry> list = node.templates();
+    list[0].enabled = false;
+    node.setTemplates(list);
+    node.run(false);
+    qInfo("checked-filter: idx=%d col=%.1f row=%.1f count=%d",
+          node.getParam(QStringLiteral("matchTemplateIndex")).toInt(),
+          node.getParam(QStringLiteral("matchCol")).toDouble(),
+          node.getParam(QStringLiteral("matchRow")).toDouble(),
+          node.getParam(QStringLiteral("matchCount")).toInt());
+    QCOMPARE(node.getParam(QStringLiteral("matchTemplateIndex")).toInt(), 1);
+    QVERIFY(qAbs(node.getParam(QStringLiteral("matchCol")).toDouble() - cxB) <= 3.0);
+    QVERIFY(qAbs(node.getParam(QStringLiteral("matchRow")).toDouble() - cyB) <= 3.0);
+
+    // ③ 排序：列表换成 [B,A] → 未开全部搜索模式时先试 B（交换列表顺序 = VM 上移/下移）
+    list[0].enabled = true;
+    list[1].enabled = true;
+    list.swapItemsAt(0, 1);
+    node.setTemplates(list);
+    node.setActiveTemplateIndex(0);
+    node.run(false);
+    qInfo("checked-swap: first=%s idx=%d col=%.1f row=%.1f",
+          qPrintable(node.templates().at(0).name),
+          node.getParam(QStringLiteral("matchTemplateIndex")).toInt(),
+          node.getParam(QStringLiteral("matchCol")).toDouble(),
+          node.getParam(QStringLiteral("matchRow")).toDouble());
+    QCOMPARE(node.getParam(QStringLiteral("matchTemplateIndex")).toInt(), 0);
+    QVERIFY(qAbs(node.getParam(QStringLiteral("matchCol")).toDouble() - cxB) <= 3.0);
+
+    // ④ 全部搜索模式：两个都勾选 → 两个目标都输出
+    node.setParam(QStringLiteral("matchAllTemplates"), true);
+    node.run(false);
+    qInfo("checked-all: count=%d", node.getParam(QStringLiteral("matchCount")).toInt());
+    QCOMPARE(node.getParam(QStringLiteral("matchCount")).toInt(), 2);
+
+    // ⑤ 全部搜索模式 + 取消勾选 A → 只剩 B 的目标
+    list = node.templates();
+    list[1].enabled = false;   // 此时列表 [B,A]
+    node.setTemplates(list);
+    node.run(false);
+    qInfo("checked-all-disabledA: idx=%d count=%d col=%.1f row=%.1f",
+          node.getParam(QStringLiteral("matchTemplateIndex")).toInt(),
+          node.getParam(QStringLiteral("matchCount")).toInt(),
+          node.getParam(QStringLiteral("matchCol")).toDouble(),
+          node.getParam(QStringLiteral("matchRow")).toDouble());
+    QCOMPARE(node.getParam(QStringLiteral("matchCount")).toInt(), 1);
+    QVERIFY(qAbs(node.getParam(QStringLiteral("matchCol")).toDouble() - cxB) <= 3.0);
+
+    // ⑥ 一个都没勾选 → 判失败、结果清空、原因可读
+    list[0].enabled = false;
+    node.setTemplates(list);
+    node.run(false);
+    const QString noneError = node.getParam(QStringLiteral("lastError")).toString();
+    qInfo("checked-none: status=%d count=%d error=%s",
+          node.getParam(QStringLiteral("moduleStatus")).toInt(),
+          node.getParam(QStringLiteral("matchCount")).toInt(), qPrintable(noneError));
+    QCOMPARE(node.getParam(QStringLiteral("moduleStatus")).toBool(), false);
+    QCOMPARE(node.getParam(QStringLiteral("matchCount")).toInt(), 0);
+    QVERIFY2(noneError.contains(QStringLiteral("没有勾选")), qPrintable(noneError));
+
+    // ⑦ 勾选只约束匹配：「训练模板」在全部未勾选时仍必须执行（训练是创建模板，不是匹配）
+    node.setParam(QStringLiteral("trainFromImage"), true);
+    node.run(false);
+    const QString trainStatus = node.getParam(QStringLiteral("trainStatus")).toString();
+    qInfo("checked-train: status=%s trainFromImage=%d", qPrintable(trainStatus),
+          node.getParam(QStringLiteral("trainFromImage")).toBool());
+    QVERIFY2(trainStatus.contains(QStringLiteral("已训练")), qPrintable(trainStatus));
+    QCOMPARE(node.getParam(QStringLiteral("trainFromImage")).toBool(), false);
 }
 
 // 多边形/圆形模板的形状抠图：以前 Polygon/Circle 落到 roiAxisAlignedBounds 返回空，

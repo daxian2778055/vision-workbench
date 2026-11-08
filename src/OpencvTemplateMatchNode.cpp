@@ -110,6 +110,7 @@ QJsonObject TemplateEntry::toJson() const
     QJsonObject obj;
     obj[QStringLiteral("name")] = name;
     obj[QStringLiteral("image")] = imagePath;
+    obj[QStringLiteral("enabled")] = enabled;
     const QVector<RoiShape> list = allShapes();
     QJsonArray arr;
     for (const RoiShape &s : list)
@@ -140,6 +141,7 @@ TemplateEntry TemplateEntry::fromJson(const QJsonObject &obj)
     TemplateEntry e;
     e.name = obj.value(QStringLiteral("name")).toString();
     e.imagePath = obj.value(QStringLiteral("image")).toString();
+    e.enabled = obj.value(QStringLiteral("enabled")).toBool(true);
     // 模板形状只认 shapes 数组（不兼容旧单 shape 写法）
     for (const QJsonValue &v : obj.value(QStringLiteral("shapes")).toArray())
         if (v.isObject())
@@ -896,18 +898,61 @@ void OpencvTemplateMatchNode::run(bool autoSwitch)
     // 代价：N 个模板 ≈ N 倍匹配时间（2~3 个模板在 100~500ms 量级，可接受）。
     const QVector<TemplateEntry> entries = templates();
     const bool train = m_params.value(QStringLiteral("trainFromImage"), false).toBool();
+    // VM「勾选模板」：只有勾选的模板参与匹配（旧工程无 enabled 键 → 默认勾选）。
+    // 排序（上移/下移）直接改列表顺序；未开全部搜索模式时按该顺序逐个试。
+    QVector<int> enabledIndices;
+    for (int i = 0; i < entries.size(); ++i) {
+        // 勾选只约束匹配；「训练模板」是创建模板的动作，训练模式下全部模板都参与（保持旧行为）。
+        if (entries.at(i).enabled || train)
+            enabledIndices.append(i);
+    }
+    // 逐目标结果每个模板开始前必须清空：runSingle 的早退路径（模板缺失/尺寸无效）
+    // 不会写这些键，不清就会把上一个模板的命中误算到本模板名下。
+    auto resetMatchFields = [&]() {
+        static const char *keys[] = {
+            "matchList", "matchBoxCenters", "matchBoxCenterXs", "matchBoxCenterYs",
+            "matchBoxWidths", "matchBoxHeights", "matchBoxAngles", "matchPoints",
+            "matchPointXs", "matchPointYs", "matchScales", "matchScaleXs", "matchScaleYs",
+            "matchCrossAngles", "matchScores", "matchContourPointXs", "matchContourPointYs",
+            "matchTemplateName"};
+        for (const char *key : keys)
+            m_params[QString::fromLatin1(key)] = QString();
+        m_params[QStringLiteral("matchCount")] = 0;
+        m_params[QStringLiteral("matchCountBeforeOverlap")] = 0;
+        m_params[QStringLiteral("matchStatus")] = 0;
+        m_params[QStringLiteral("matchRow")] = 0.0;
+        m_params[QStringLiteral("matchCol")] = 0.0;
+        m_params[QStringLiteral("matchScore")] = 0.0;
+        m_params[QStringLiteral("matchAngle")] = 0.0;
+        m_params[QStringLiteral("matchScale")] = 1.0;
+        m_params[QStringLiteral("matchScaleX")] = 1.0;
+        m_params[QStringLiteral("matchScaleY")] = 1.0;
+        m_params[QStringLiteral("matchCrossAngle")] = 0.0;
+        m_params[QStringLiteral("matchPointRow")] = 0.0;
+        m_params[QStringLiteral("matchPointCol")] = 0.0;
+        m_params[QStringLiteral("matchContourCount")] = 0;
+        m_params[QStringLiteral("matchTemplateIndex")] = -1;
+    };
+    if (!entries.isEmpty() && enabledIndices.isEmpty()) {
+        resetMatchFields();
+        m_params[QStringLiteral("lastError")] =
+            QStringLiteral("没有勾选任何模板：先在「特征模板」页勾选至少一个模板");
+        m_params[QStringLiteral("moduleStatus")] = false;
+        m_outputImage = m_inputImage;
+        setOutputData(1, QSharedPointer<DataObject>());
+        return;
+    }
     const bool matchAll =
-        entries.size() > 1 && !train
+        enabledIndices.size() > 1 && !train
         && m_params.value(QStringLiteral("matchAllTemplates"), false).toBool();
     if (!matchAll) {
-        // VM「全部搜索模式=关」：按模板列表顺序逐个试，达标即停。
-        // 此前只用 active 模板，VM 是按排序优先级依次尝试。
+        // VM「全部搜索模式=关」：按模板列表顺序逐个试（跳过未勾选的），达标即停。
         if (entries.isEmpty()) {
             runSingle(autoSwitch);
             return;
         }
         const int savedIndex = activeTemplateIndex();
-        for (int i = 0; i < entries.size(); ++i) {
+        for (int i : enabledIndices) {
             m_params[QStringLiteral("templateIndex")] = i;
             runSingle(autoSwitch);
             if (m_params.value(QStringLiteral("moduleStatus"), false).toBool()) {
@@ -981,36 +1026,9 @@ void OpencvTemplateMatchNode::run(bool autoSwitch)
     };
 
     QVector<MultiHit> allHits;
-    // 每个模板开始前清空逐目标结果：runSingle 的早退路径（模板缺失/尺寸无效）不会写这些键，
-    // 不清就会把上一个模板的命中误算到本模板名下。
-    auto resetMatchFields = [&]() {
-        static const char *keys[] = {
-            "matchList", "matchBoxCenters", "matchBoxCenterXs", "matchBoxCenterYs",
-            "matchBoxWidths", "matchBoxHeights", "matchBoxAngles", "matchPoints",
-            "matchPointXs", "matchPointYs", "matchScales", "matchScaleXs", "matchScaleYs",
-            "matchCrossAngles", "matchScores", "matchContourPointXs", "matchContourPointYs",
-            "matchTemplateName"};
-        for (const char *key : keys)
-            m_params[QString::fromLatin1(key)] = QString();
-        m_params[QStringLiteral("matchCount")] = 0;
-        m_params[QStringLiteral("matchCountBeforeOverlap")] = 0;
-        m_params[QStringLiteral("matchStatus")] = 0;
-        m_params[QStringLiteral("matchRow")] = 0.0;
-        m_params[QStringLiteral("matchCol")] = 0.0;
-        m_params[QStringLiteral("matchScore")] = 0.0;
-        m_params[QStringLiteral("matchAngle")] = 0.0;
-        m_params[QStringLiteral("matchScale")] = 1.0;
-        m_params[QStringLiteral("matchScaleX")] = 1.0;
-        m_params[QStringLiteral("matchScaleY")] = 1.0;
-        m_params[QStringLiteral("matchCrossAngle")] = 0.0;
-        m_params[QStringLiteral("matchPointRow")] = 0.0;
-        m_params[QStringLiteral("matchPointCol")] = 0.0;
-        m_params[QStringLiteral("matchContourCount")] = 0;
-        m_params[QStringLiteral("matchTemplateIndex")] = -1;
-    };
     double bestScore = -1e9;
     int bestIdx = -1;
-    for (int i = 0; i < entries.size(); ++i) {
+    for (int i : enabledIndices) {
         m_params[QStringLiteral("templateIndex")] = i;
         resetMatchFields();
         runSingle(autoSwitch);

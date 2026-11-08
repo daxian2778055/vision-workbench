@@ -18,6 +18,7 @@
 #include <QToolButton>
 #include <QTabWidget>
 #include <QTableWidget>
+#include <QListWidget>
 #include <QRadioButton>
 #include <QSignalSpy>
 #include <QComboBox>
@@ -59,6 +60,7 @@ private slots:
     void testModuleResultPageUsesResultFields();
     // P0-5：结果表「尺度 Y」不得复制「尺度 X」（XY 模式两轴独立）
     void testTemplateResultTableUsesPerTargetScaleY();
+    void testTemplateListCheckAndReorder();
 };
 
 void ModuleEditorTest::testParamEditTriggersDebouncedRecompute()
@@ -756,6 +758,61 @@ void ModuleEditorTest::testTemplateResultTableUsesPerTargetScaleY()
     QCOMPARE(table->item(0, 7)->text(), QStringLiteral("0.8000"));   // 尺度Y
     QCOMPARE(table->item(1, 6)->text(), QStringLiteral("0.6000"));
     QCOMPARE(table->item(1, 7)->text(), QStringLiteral("1.3000"));
+}
+
+// P1-3（VM「特征模板」页）：勾选模板 + 上移/下移。
+// 复选框状态必须写回 TemplateEntry.enabled（运行时按它过滤）；
+// 排序必须同时改列表顺序与当前模板序号，且刷新后勾选状态不丢。
+void ModuleEditorTest::testTemplateListCheckAndReorder()
+{
+    OpencvTemplateMatchNode node;
+    node.init();
+    TemplateEntry a;
+    a.name = QStringLiteral("A");
+    a.imagePath = QStringLiteral("a.png");
+    TemplateEntry b;
+    b.name = QStringLiteral("B");
+    b.imagePath = QStringLiteral("b.png");
+    node.setTemplates({a, b});
+    node.setActiveTemplateIndex(0);
+
+    ModuleEditorDialog dlg(&node);
+    dlg.reloadFromNode();
+    auto *list = dlg.findChild<QListWidget *>(QStringLiteral("templateList"));
+    QVERIFY2(list != nullptr, "未找到模板列表 templateList");
+    QCOMPARE(list->count(), 2);
+    QCOMPARE(list->item(0)->text(), QStringLiteral("A"));
+    QCOMPARE(list->item(0)->checkState(), Qt::Checked);
+    QCOMPARE(list->item(1)->checkState(), Qt::Checked);
+
+    // 取消勾选 A → 写回节点；再勾回
+    list->item(0)->setCheckState(Qt::Unchecked);
+    QVERIFY(!node.templates().at(0).enabled);
+    QVERIFY(node.templates().at(1).enabled);
+    list->item(0)->setCheckState(Qt::Checked);
+    QVERIFY(node.templates().at(0).enabled);
+
+    // 选中 B 后上移 → 列表变 [B,A]，当前模板跟着 B 走到第 0 位
+    list->setCurrentRow(1);
+    QCOMPARE(node.activeTemplateIndex(), 1);
+    auto *up = dlg.findChild<QPushButton *>(QStringLiteral("templateMoveUpButton"));
+    QVERIFY2(up != nullptr, "未找到上移按钮 templateMoveUpButton");
+    up->click();
+    QCOMPARE(node.templates().at(0).name, QStringLiteral("B"));
+    QCOMPARE(node.templates().at(1).name, QStringLiteral("A"));
+    QCOMPARE(node.activeTemplateIndex(), 0);
+    QCOMPARE(list->currentRow(), 0);
+    QCOMPARE(list->item(0)->text(), QStringLiteral("B"));
+    QCOMPARE(list->item(0)->checkState(), Qt::Checked);   // 重排后勾选状态不丢
+
+    // 再下移 → 回到 [A,B]，当前模板跟回第 1 位
+    auto *down = dlg.findChild<QPushButton *>(QStringLiteral("templateMoveDownButton"));
+    QVERIFY2(down != nullptr, "未找到下移按钮 templateMoveDownButton");
+    down->click();
+    QCOMPARE(node.templates().at(0).name, QStringLiteral("A"));
+    QCOMPARE(node.templates().at(1).name, QStringLiteral("B"));
+    QCOMPARE(node.activeTemplateIndex(), 1);
+    QCOMPARE(list->currentRow(), 1);
 }
 
 QTEST_MAIN(ModuleEditorTest)

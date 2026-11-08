@@ -14,6 +14,7 @@ class QLabel;
 class QScrollArea;
 class QCheckBox;
 class QListWidget;
+class QListWidgetItem;
 class QPushButton;
 class QTableWidget;
 class QTimer;
@@ -82,6 +83,11 @@ private slots:
     void onEditTemplateMask();
     void onDeleteTemplate();
     void onTemplateSelected(int row);
+    /// VM「勾选模板」：复选框切换即写回 enabled（未勾选不参与匹配）
+    void onTemplateItemChanged(QListWidgetItem *item);
+    /// VM「模板排序」：上移/下移当前模板（未开全部搜索模式时按此顺序逐个试）
+    void onMoveTemplateUp();
+    void onMoveTemplateDown();
     void onEvaluateTemplate();
     void onCheckBudget();
     void onWizardGuide();
@@ -96,6 +102,8 @@ private:
     void openTemplateConfig(bool maskMode);
     /// 把节点的模板列表灌进左侧列表（当前模板高亮）
     void refreshTemplateList();
+    /// 交换当前模板与相邻行（delta = -1 上移 / +1 下移），顺序写回节点
+    void moveCurrentTemplate(int delta);
     /// VM 结果表口径：每个命中一行（中心/匹配点/角度/尺度/分数）
     void refreshResultTable();
     /// VM 4.4 工具窗四页签：把参数分组框/模板列表/结果表归位（所有算子通用；模板页仅模板算子）
@@ -164,6 +172,8 @@ private:
     QPushButton *m_tmplLoadBtn = nullptr;         /// VM「特征模板」页：载入（本地模板图像）
     QPushButton *m_trainTmplBtn = nullptr;        /// 训练模板（可见入口，不再藏在「模板工具」菜单里）
     QPushButton *m_tmplEditBtn = nullptr;
+    QPushButton *m_tmplUpBtn = nullptr;            /// 模板排序：上移
+    QPushButton *m_tmplDownBtn = nullptr;          /// 模板排序：下移
     QPushButton *m_tmplDelBtn = nullptr;
     QCheckBox *m_autoRecomputeCheck = nullptr;   /// 「自动重算」开关
     QTimer *m_autoRecomputeTimer = nullptr;      /// 去抖定时器

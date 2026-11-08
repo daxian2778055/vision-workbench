@@ -11,6 +11,8 @@ struct TemplateEntry
 {
     QString name;                       ///< 显示名（默认取文件名）
     QString imagePath;                  ///< 模板图路径（相对项目目录或绝对）
+    /// VM「勾选模板」：未勾选的模板不参与匹配（旧工程缺该键 → 默认勾选）。
+    bool enabled = true;
     RoiShape shape;                     ///< 主形状（=shapes.first()，老字段兼容）
     /// 全部形状（VM 一个模板可由多块形状组成）。空 = 回退 shape。
     QVector<RoiShape> shapes;

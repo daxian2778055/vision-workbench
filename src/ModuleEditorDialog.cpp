@@ -270,14 +270,22 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
     m_tmplNewBtn = new QPushButton(QStringLiteral("创建"));
     m_tmplLoadBtn = new QPushButton(QStringLiteral("载入"));
     m_tmplEditBtn = new QPushButton(QStringLiteral("编辑模板"));
+    m_tmplUpBtn = new QPushButton(QStringLiteral("上移"));
+    m_tmplDownBtn = new QPushButton(QStringLiteral("下移"));
     m_tmplDelBtn = new QPushButton(QStringLiteral("删除所有模板"));
+    m_tmplUpBtn->setObjectName(QStringLiteral("templateMoveUpButton"));
+    m_tmplDownBtn->setObjectName(QStringLiteral("templateMoveDownButton"));
     m_tmplNewBtn->setToolTip(QStringLiteral("打开「模板配置」窗：在图上框形状、调参数、确定即创建"));
     m_tmplLoadBtn->setToolTip(QStringLiteral("从本地图像载入一个模板（VM「特征模板」页的载入）"));
     m_tmplEditBtn->setToolTip(QStringLiteral("编辑列表里选中的模板（原地更新）"));
+    m_tmplUpBtn->setToolTip(QStringLiteral("把选中的模板上移一位（未开全部搜索模式时优先试靠前的模板）"));
+    m_tmplDownBtn->setToolTip(QStringLiteral("把选中的模板下移一位"));
     m_tmplDelBtn->setToolTip(QStringLiteral("清空该算子的模板列表（文件不删）"));
     tmplBtns->addWidget(m_tmplNewBtn);
     tmplBtns->addWidget(m_tmplLoadBtn);
     tmplBtns->addWidget(m_tmplEditBtn);
+    tmplBtns->addWidget(m_tmplUpBtn);
+    tmplBtns->addWidget(m_tmplDownBtn);
     tmplBtns->addWidget(m_tmplDelBtn);
     rightLay->addLayout(tmplBtns);
 
@@ -476,9 +484,13 @@ ModuleEditorDialog::ModuleEditorDialog(NodeBase *node, QWidget *parent)
         scheduleAutoRecompute();
     });
     connect(m_tmplEditBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onEditTemplate);
+    connect(m_tmplUpBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onMoveTemplateUp);
+    connect(m_tmplDownBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onMoveTemplateDown);
     connect(m_tmplDelBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onDeleteTemplate);
     connect(m_templateList, &QListWidget::currentRowChanged, this,
             &ModuleEditorDialog::onTemplateSelected);
+    connect(m_templateList, &QListWidget::itemChanged, this,
+            &ModuleEditorDialog::onTemplateItemChanged);
     connect(clearGeomBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onClearGeometry);
     connect(maskBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onEditMask);
     connect(clearMaskBtn, &QPushButton::clicked, this, &ModuleEditorDialog::onClearMask);
@@ -2796,7 +2808,12 @@ void ModuleEditorDialog::refreshTemplateList()
     const QVector<TemplateEntry> entries = tmplNode->templates();
     for (const TemplateEntry &e : entries) {
         const QString name = e.name.trimmed().isEmpty() ? QFileInfo(e.imagePath).fileName() : e.name;
-        m_templateList->addItem(name);
+        auto *item = new QListWidgetItem(name, m_templateList);
+        // VM「勾选模板」：复选框 = 是否参与匹配；勾选顺序即列表顺序。
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(e.enabled ? Qt::Checked : Qt::Unchecked);
+        item->setToolTip(e.enabled ? QStringLiteral("已勾选：参与匹配")
+                                   : QStringLiteral("未勾选：不参与匹配"));
     }
     const int active = tmplNode->activeTemplateIndex();
     if (active >= 0 && active < m_templateList->count())
@@ -2835,6 +2852,93 @@ void ModuleEditorDialog::onTemplateSelected(int row)
     m_hintLabel->setText(QStringLiteral("当前模板：%1").arg(m_templateList->currentItem()
                                                               ? m_templateList->currentItem()->text()
                                                               : QString()));
+}
+
+void ModuleEditorDialog::onTemplateItemChanged(QListWidgetItem *item)
+{
+    if (!item || !m_templateList)
+        return;
+    auto *tmplNode = qobject_cast<OpencvTemplateMatchNode *>(m_node);
+    if (!tmplNode)
+        return;
+    const int row = m_templateList->row(item);
+    QVector<TemplateEntry> entries = tmplNode->templates();
+    if (row < 0 || row >= entries.size())
+        return;
+    const bool enabled = item->checkState() == Qt::Checked;
+    if (entries.at(row).enabled == enabled)
+        return;   // 刷新列表时程序化设置勾选状态，不算用户操作
+    entries[row].enabled = enabled;
+    tmplNode->setTemplates(entries);
+    m_paramsDirty = true;
+    scheduleAutoRecompute();
+
+    int enabledCount = 0;
+    for (const TemplateEntry &e : entries) {
+        if (e.enabled)
+            ++enabledCount;
+    }
+    const QString name = entries.at(row).name.trimmed().isEmpty()
+                             ? QFileInfo(entries.at(row).imagePath).fileName()
+                             : entries.at(row).name;
+    if (enabledCount == 0) {
+        m_hintLabel->setText(
+            QStringLiteral("已取消勾选「%1」：当前没有勾选任何模板，匹配会判失败。").arg(name));
+    } else {
+        m_hintLabel->setText(enabled
+                                 ? QStringLiteral("已勾选「%1」（参与匹配，共 %2 个）")
+                                       .arg(name).arg(enabledCount)
+                                 : QStringLiteral("已取消勾选「%1」（不参与匹配，其余 %2 个仍生效）")
+                                       .arg(name).arg(enabledCount));
+    }
+}
+
+void ModuleEditorDialog::onMoveTemplateUp()
+{
+    moveCurrentTemplate(-1);
+}
+
+void ModuleEditorDialog::onMoveTemplateDown()
+{
+    moveCurrentTemplate(1);
+}
+
+void ModuleEditorDialog::moveCurrentTemplate(int delta)
+{
+    auto *tmplNode = qobject_cast<OpencvTemplateMatchNode *>(m_node);
+    if (!tmplNode || !m_templateList)
+        return;
+    const int row = m_templateList->currentRow();
+    QVector<TemplateEntry> entries = tmplNode->templates();
+    const int target = row + delta;
+    if (row < 0 || row >= entries.size()) {
+        m_hintLabel->setText(QStringLiteral("先在列表里选中要排序的模板。"));
+        return;
+    }
+    if (target < 0 || target >= entries.size()) {
+        m_hintLabel->setText(delta < 0 ? QStringLiteral("已经在列表顶部。")
+                                       : QStringLiteral("已经在列表底部。"));
+        return;
+    }
+    entries.swapItemsAt(row, target);
+    // 当前模板跟着被移动的条目走（active 序号就是列表下标）
+    const int active = tmplNode->activeTemplateIndex();
+    if (active == row)
+        tmplNode->setActiveTemplateIndex(target);
+    else if (active == target)
+        tmplNode->setActiveTemplateIndex(row);
+    tmplNode->setTemplates(entries);
+    refreshTemplateList();
+    m_templateList->setCurrentRow(target);
+    m_paramsDirty = true;
+    scheduleAutoRecompute();
+
+    const TemplateEntry &moved = entries.at(target);
+    const QString name =
+        moved.name.trimmed().isEmpty() ? QFileInfo(moved.imagePath).fileName() : moved.name;
+    m_hintLabel->setText(QStringLiteral("模板顺序已调整：「%1」移到第 %2 位。")
+                             .arg(name)
+                             .arg(target + 1));
 }
 
 void ModuleEditorDialog::onNewTemplate()
