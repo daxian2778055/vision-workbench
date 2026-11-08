@@ -1171,6 +1171,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261108.11",
       "recorded_at": "2026-11-08",
       "recorded_note": "扫描清单取证三条：ParameterSearchDialog 裸指针存 UserRole 改 moduleId（真 UAF）；ModuleEditorDialog::m_node 改 QPointer（真风险，含改坏自证腿）；RuntimeInterfaceView 单页容器确认已修（误报）。含 rc-20261108.10 的 P1-4 变形缓存键。"
+    },
+    {
+      "tag": "rc-20261108.12",
+      "commit": "43b2b7d287f6405fe175d1f77c5bcefeb155d957",
+      "exe_md5": "c21976db262afed53a2fe334f381289c",
+      "exe_bytes": 11822592,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261108.12",
+      "recorded_at": "2026-11-08",
+      "recorded_note": "扫描清单取证续：修结果判断未知运算符静默按等于比较（空运算符仍兼容）、修主窗口 Delete 快捷键劫持文本编辑（新增 FocusGuard）；取证确认轮末内存释放无效但本轮不改；改正 deploy 说明里过期的 61 DLL。含 rc-20261108.11 的两处 UAF 修复。"
     }
   ],
   "legacy_backfilled": [
