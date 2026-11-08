@@ -134,11 +134,30 @@ if (Test-Path -LiteralPath $QmSrcDir) {
 # ============================================================
 Step "拷贝 HALCON 运行时 DLL"
 if (Test-Path $HalconBin) {
-    # 核心运行时 + 算子库全部拷贝，保证 OCR/DataCode2D/DL 等依赖可用
-    Copy-Item -Path (Join-Path $HalconBin "*.dll") -Destination $OutDir -Force
-    Copy-Item -Path (Join-Path $HalconBin "*.exe") -Destination $OutDir -Force -ErrorAction SilentlyContinue
-    $halconDllCount = (Get-ChildItem (Join-Path $HalconBin "*.dll")).Count
-    Write-Host "  -> 已拷贝 $halconDllCount 个 HALCON DLL" -ForegroundColor Green
+    # 白名单拷贝（实测依据见 docs/离线可用性说明.md §7）：本平台真正用到 HALCON
+    # 算法的只有 DeepOCR，实测这 8 个 DLL 即可让 --selftest-nodes 全绿
+    # （71 PASS / 0 FAIL，含 OK DeepOcrNode）。全量 61 个共 587 MB，白名单约 157 MB。
+    # 排除项与理由：Qt5*MVTec（含 WebEngine 96.8 MB，本平台是 Qt6）、*xl.dll（大图
+    # 变体 148 MB）、hdevenginecpp*（HDevelop 引擎 54.5 MB，不执行 HDevelop 程序）、
+    # hAcq*（采集插件 46.4 MB，我们用 MVS）、hio*/uastack（OPC UA/Profibus）、
+    # opengl32sw/libGLESv2/libEGL（软件 GL 兜底）、hAI2*（TensorRT/OpenVINO 加载器）、
+    # hcanvas。若将来启用 HALCON 采集或 HDevelop 引擎，需把对应 DLL 加回本清单。
+    $halconNeeded = @(
+        'halcon.dll', 'halconcpp.dll', 'halcondl.dll', 'halconc.dll',
+        'libiomp5md.dll', 'libcrypto-3-x64.dll', 'libssl-3-x64.dll', 'd3dcompiler_47.dll'
+    )
+    $copied = 0
+    foreach ($n in $halconNeeded) {
+        $src = Join-Path $HalconBin $n
+        if (Test-Path $src) {
+            Copy-Item -Path $src -Destination $OutDir -Force
+            $copied++
+        } else {
+            Write-Warning "HALCON 白名单 DLL 缺失: $n"
+        }
+    }
+    $halconDllCount = $copied
+    Write-Host "  -> 已拷贝 $copied/$($halconNeeded.Count) 个 HALCON DLL（白名单）" -ForegroundColor Green
 } else {
     Write-Warning "未找到 HALCON 运行时目录: $HalconBin"
 }
@@ -195,7 +214,8 @@ Step "拷贝 OpenCV 运行时 DLL"
 $OpenCvDllName = "opencv_world4130.dll"
 if (Test-Path $OpenCVBin) {
     Copy-Item -Path (Join-Path $OpenCVBin $OpenCvDllName) -Destination $OutDir -Force
-    Copy-Item -Path (Join-Path $OpenCVBin "opencv_world4130d.dll") -Destination $OutDir -Force -ErrorAction SilentlyContinue
+    # 不再拷 opencv_world4130d.dll（debug 版，126 MB）：生产包只装 Release 版。
+# 现场若出现"缺 opencv_world4130d.dll"说明有人在拿 debug 版 exe 跑，属于用错包。
     Write-Host "  -> $OpenCvDllName 已拷贝" -ForegroundColor Green
 } else {
     Write-Warning "未找到 OpenCV 运行时目录: $OpenCVBin（OpenCV 节点不可用，其余功能不受影响）"
@@ -399,7 +419,7 @@ if (-not $SkipVerify) {
     # Qt6Charts.dll: 统计报表（P1-11）用 Qt Charts 画趋势/分布图，缺它则报表打不开
     $mustHave = @('VisionFlowPlatform.exe', 'platforms\qwindows.dll', 'sqldrivers\qsqlite.dll',
                   'Qt6Core.dll', 'Qt6Sql.dll', 'Qt6Widgets.dll', 'Qt6Charts.dll', $OpenCvDllName,
-                  'halconcpp.dll', 'MvCameraControl.dll', 'vcruntime140.dll', 'msvcp140.dll',
+                  'halconcpp.dll', 'halcondl.dll', 'MvCameraControl.dll', 'vcruntime140.dll', 'msvcp140.dll',
                   # dl 是 DeepOCR 预训练模型目录：只拷 DLL 不拷模型时，目标机 DeepOCR 会
                   # 报「需 HALCONROOT/dl 下的官方预训练模型」，而开发机永远复现不了。
                   'tessdata', 'dl', 'license', 'data', 'logs', 'schemes')
