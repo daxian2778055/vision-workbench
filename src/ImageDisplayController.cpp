@@ -339,6 +339,16 @@ QVector<OverlayShape> ImageDisplayController::collectOverlayFromNode(NodeBase *n
                 anchor.color = s.color;
                 overlay.append(anchor);
             }
+        } else if (mr.type == QLatin1String("contour")) {
+            // VM「是否获取轮廓」：模板轮廓特征点在每个命中位姿下的落点。
+            // 结果对象里是 [x,y,x,y,...]；「显示特征点」层关闭时只保留匹配框。
+            if (!showLayer(node, "showFeaturePoints"))
+                continue;
+            s.type = OverlayShape::Type::Points;
+            for (int i = 0; i + 1 < mr.extraValues.size(); i += 2)
+                s.points.append(QPointF(mr.extraValues[i], mr.extraValues[i + 1]));
+            if (s.points.isEmpty())
+                continue;
         } else if (mr.type == QLatin1String("defect")) {
             for (int i = 0; i + 3 < mr.extraValues.size(); i += 4) {
                 OverlayShape box;

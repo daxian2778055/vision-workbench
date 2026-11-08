@@ -270,9 +270,10 @@ void refineFeatureMask(cv::Mat &bin, int minChain, int featureScale)
 }
 
 cv::Mat warpTemplate(const cv::Mat &tmpl, double angleDeg, double scaleX, double scaleY,
-                     cv::Point2f *centerOut)
+                     double crossAngleDeg, cv::Point2f *centerOut)
 {
-    if (qAbs(angleDeg) < 1e-6 && qAbs(scaleX - 1.0) < 1e-6 && qAbs(scaleY - 1.0) < 1e-6) {
+    if (qAbs(angleDeg) < 1e-6 && qAbs(scaleX - 1.0) < 1e-6 && qAbs(scaleY - 1.0) < 1e-6
+        && qAbs(crossAngleDeg) < 1e-6) {
         if (centerOut)
             *centerOut = cv::Point2f(tmpl.cols * 0.5f, tmpl.rows * 0.5f);
         return tmpl;
@@ -284,6 +285,13 @@ cv::Mat warpTemplate(const cv::Mat &tmpl, double angleDeg, double scaleX, double
     M.at<double>(0, 1) *= scaleY;
     M.at<double>(1, 0) *= scaleX;
     M.at<double>(1, 1) *= scaleY;
+    // 横切角度（VM 官方「横切角度范围」）：目标 Y 轴向 X 轴倾斜的剪切角。
+    // 在模板局部系、缩放之后应用 H = [[1, tanθ], [0, 1]] ⇒ M = R·S·H。
+    if (qAbs(crossAngleDeg) > 1e-9) {
+        const double t = std::tan(crossAngleDeg * 3.14159265358979323846 / 180.0);
+        M.at<double>(0, 1) += M.at<double>(0, 0) * t;
+        M.at<double>(1, 1) += M.at<double>(1, 0) * t;
+    }
     // 平移必须按缩放后的矩阵重算（否则 scale≠1 时中心会偏）
     {
         const double a = M.at<double>(0, 0), b = M.at<double>(0, 1);
@@ -307,24 +315,27 @@ cv::Mat warpTemplate(const cv::Mat &tmpl, double angleDeg, double scaleX, double
 }
 namespace {
 
-/// 旋转/缩放后的模板缓存（模板不变时跨帧复用；LRU 32 条）。
-/// 连 centerInWarp 一起缓存——它由 warpTemplate 按旋转后的包围盒算出，不能事后猜。
+/// 旋转/缩放/横切后的模板缓存（模板不变时跨帧复用；LRU 32 条）。
+/// 连 centerInWarp 一起缓存——它由 warpTemplate 按变换后的包围盒算出，不能事后猜。
 std::pair<cv::Mat, cv::Point2f> warpTemplateCached(const cv::Mat &tmpl, const QString &keyBase,
-                                                   double angle, double scaleX, double scaleY)
+                                                   double angle, double scaleX, double scaleY,
+                                                   double crossAngle)
 {
-        // 恒等快路径（r19）：角度 0、尺度 1 时直接用原模板 —— warpAffine 即便
+        // 恒等快路径（r19）：角度 0、尺度 1、横切 0 时直接用原模板 —— warpAffine 即便
         // 恒等变换也会重采样，导致自匹配到不了 1.0、位置偏约 2px。
-        if (qAbs(angle) < 1e-6 && qAbs(scaleX - 1.0) < 1e-6 && qAbs(scaleY - 1.0) < 1e-6) {
+        if (qAbs(angle) < 1e-6 && qAbs(scaleX - 1.0) < 1e-6 && qAbs(scaleY - 1.0) < 1e-6
+            && qAbs(crossAngle) < 1e-6) {
             return {tmpl, cv::Point2f(float(tmpl.cols) * 0.5f, float(tmpl.rows) * 0.5f)};
         }
 
     static QMutex mu;
     static QHash<QString, std::pair<cv::Mat, cv::Point2f>> cache;
     static QStringList order;
-    const QString key = keyBase + QStringLiteral("|%1|%2|%3")
+    const QString key = keyBase + QStringLiteral("|%1|%2|%3|%4")
                                        .arg(angle, 0, 'f', 3)
                                        .arg(scaleX, 0, 'f', 3)
-                                       .arg(scaleY, 0, 'f', 3);
+                                       .arg(scaleY, 0, 'f', 3)
+                                       .arg(crossAngle, 0, 'f', 3);
     {
         QMutexLocker<QMutex> locker(&mu);
         auto it = cache.constFind(key);
@@ -335,7 +346,7 @@ std::pair<cv::Mat, cv::Point2f> warpTemplateCached(const cv::Mat &tmpl, const QS
         }
     }
     cv::Point2f c;
-    cv::Mat warped = warpTemplate(tmpl, angle, scaleX, scaleY, &c);
+    cv::Mat warped = warpTemplate(tmpl, angle, scaleX, scaleY, crossAngle, &c);
     {
         QMutexLocker<QMutex> locker(&mu);
         cache.insert(key, {warped, c});
@@ -419,6 +430,12 @@ void OpencvTemplateMatchNode::init()
                      QStringLiteral("延拓阈值（目标被图像边缘截断时允许缺失的特征比例 %）")),
         makeIntParam(QStringLiteral("timeoutMs"), 0, 0, 10000,
                      QStringLiteral("超时控制（搜索超时毫秒数，0=关闭；超时不返回任何结果）")),
+        // VM「是否获取轮廓 / 是否输出轮廓」（高精度匹配·运行参数）：
+        // 获取=计算模板轮廓特征点并在画布上显示（关闭只显示匹配框）；输出=把轮廓点写进模块结果。
+        makeBoolParam(QStringLiteral("getContour"), true,
+                      QStringLiteral("是否获取轮廓（开启则计算并显示轮廓特征点；关闭只显示匹配框）")),
+        makeBoolParam(QStringLiteral("outputContour"), false,
+                      QStringLiteral("是否输出轮廓（打开则在模块结果中输出轮廓点；依赖是否获取轮廓）")),
         makeEnumParam(QStringLiteral("roiType"), 0,
                       QStringList{QStringLiteral("图形类型"), QStringLiteral("图像类型")},
                       QStringLiteral("ROI区域类型")),
@@ -482,6 +499,11 @@ void OpencvTemplateMatchNode::init()
                         QStringLiteral("Y 尺度起（scaleRangeType=1）")),
         makeDoubleParam(QStringLiteral("scaleMaxY"), 1.0, 0.3, 3.0,
                         QStringLiteral("Y 尺度止（scaleRangeType=1）")),
+        // VM「尺度范围XY → 横切角度范围」：默认 0~0（只搜无横切目标），有效 -45~45。
+        makeDoubleParam(QStringLiteral("crossAngleMin"), 0.0, -45.0, 45.0,
+                        QStringLiteral("横切角度下限（scaleRangeType=1）"), QStringLiteral("°")),
+        makeDoubleParam(QStringLiteral("crossAngleMax"), 0.0, -45.0, 45.0,
+                        QStringLiteral("横切角度上限（scaleRangeType=1）"), QStringLiteral("°")),
         makeStringParam(QStringLiteral("writeFixtureName"), QString(),
                         QStringLiteral("匹配位姿写入 Fixture 名（空=不写）")),
         // 搜索区域（r19 批 A 第 2 步）：匹配只在这个矩形内搜——既是 VM 的「检测区域」，
@@ -539,9 +561,11 @@ void OpencvTemplateMatchNode::init()
             QStringLiteral("scaleMin"), QStringLiteral("scaleMax"), QStringLiteral("scaleStep"),
             QStringLiteral("scaleMinX"), QStringLiteral("scaleMaxX"),
             QStringLiteral("scaleMinY"), QStringLiteral("scaleMaxY"),
+            QStringLiteral("crossAngleMin"), QStringLiteral("crossAngleMax"),
             QStringLiteral("sortType"),
             QStringLiteral("thresholdType"), QStringLiteral("matchContrastThreshold"),
             QStringLiteral("extendThreshold"), QStringLiteral("timeoutMs"),
+            QStringLiteral("getContour"), QStringLiteral("outputContour"),
             QStringLiteral("writeFixtureName"),
         };
         QVector<ParamSpec> runSpecs;
@@ -624,6 +648,10 @@ void OpencvTemplateMatchNode::init()
                 QStringLiteral("尺度范围类型=1 时生效")}},
             {QStringLiteral("scaleMaxY"), {QStringLiteral("Y 尺度上限"),
                 QStringLiteral("尺度范围类型=1 时生效")}},
+            {QStringLiteral("crossAngleMin"), {QStringLiteral("横切角度下限"),
+                QStringLiteral("尺度范围类型=1 时生效；目标 Y 轴向 X 轴倾斜的剪切角（-45~45°）")}},
+            {QStringLiteral("crossAngleMax"), {QStringLiteral("横切角度上限"),
+                QStringLiteral("尺度范围类型=1 时生效；目标 Y 轴向 X 轴倾斜的剪切角（-45~45°）")}},
             {QStringLiteral("sortType"), {QStringLiteral("排序类型"),
                 QStringLiteral("0=分数降序 1=角度降序 2=X 升序 3=Y 升序")}},
             {QStringLiteral("thresholdType"), {QStringLiteral("阈值类型"),
@@ -634,6 +662,10 @@ void OpencvTemplateMatchNode::init()
                 QStringLiteral("目标被图像边缘截断时允许缺失的特征比例（%）")}},
             {QStringLiteral("timeoutMs"), {QStringLiteral("超时控制"),
                 QStringLiteral("毫秒；0=不限制")}},
+            {QStringLiteral("getContour"), {QStringLiteral("是否获取轮廓"),
+                QStringLiteral("开启则计算并显示模板轮廓特征点；关闭只显示匹配框，可降低匹配耗时")}},
+            {QStringLiteral("outputContour"), {QStringLiteral("是否输出轮廓"),
+                QStringLiteral("打开则在模块结果中输出轮廓点（个数/X/Y）；关闭则不输出")}},
             {QStringLiteral("writeFixtureName"), {QStringLiteral("位置修正写入"),
                 QStringLiteral("把本次匹配位置写给下游位置修正（空=不写）")}},
             {QStringLiteral("roiWidth"), {QStringLiteral("模板框宽"),
@@ -675,6 +707,7 @@ void OpencvTemplateMatchNode::init()
     m_params[QStringLiteral("matchPointCol")] = 0.0;
     m_params[QStringLiteral("matchScaleX")] = 1.0;
     m_params[QStringLiteral("matchScaleY")] = 1.0;
+    m_params[QStringLiteral("matchCrossAngle")] = 0.0;
     m_params[QStringLiteral("matchTemplateIndex")] = -1;
     m_params[QStringLiteral("matchTemplateName")] = QString();
     m_params[QStringLiteral("trainStatus")] = QString();
@@ -693,7 +726,11 @@ void OpencvTemplateMatchNode::init()
     setParamDirect(QStringLiteral("matchScales"), QString());
     setParamDirect(QStringLiteral("matchScaleXs"), QString());
     setParamDirect(QStringLiteral("matchScaleYs"), QString());
+    setParamDirect(QStringLiteral("matchCrossAngles"), QString());
     setParamDirect(QStringLiteral("matchScores"), QString());
+    setParamDirect(QStringLiteral("matchContourCount"), 0);
+    setParamDirect(QStringLiteral("matchContourPointXs"), QString());
+    setParamDirect(QStringLiteral("matchContourPointYs"), QString());
     setParamDirect(QStringLiteral("searchCenterX"), 0.0);
     setParamDirect(QStringLiteral("searchCenterY"), 0.0);
     setParamDirect(QStringLiteral("searchWidth"), 0.0);
@@ -1198,10 +1235,35 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 scalePairs.append({s, s});
         }
 
+        // VM「尺度范围XY → 横切角度范围」：只在 XY 尺度模式下参与搜索；
+        // 默认 0~0 表示只搜无横切目标，与旧行为逐字节一致。
+        QVector<double> crossAngles;
+        crossAngles.append(0.0);
+        if (m_params.value(QStringLiteral("scaleRangeType"), 0).toInt() == 1) {
+            QVector<double> cs;
+            const double cStep =
+                qMax(0.5, m_params.value(QStringLiteral("angleStep"), 2.0).toDouble());
+            collectSearchValues(m_params.value(QStringLiteral("crossAngleMin"), 0.0).toDouble(),
+                                m_params.value(QStringLiteral("crossAngleMax"), 0.0).toDouble(),
+                                cStep, 16, cs);
+            if (!cs.isEmpty())
+                crossAngles = cs;
+        }
+
+        struct PosePair {
+            double scaleX, scaleY, cross;
+        };
+        QVector<PosePair> posePairs;
+        posePairs.reserve(scalePairs.size() * crossAngles.size());
+        for (const auto &sp : scalePairs)
+            for (double c : crossAngles)
+                posePairs.append({sp.first, sp.second, c});
+
         const bool singleIdentity = (angles.size() == 1 && qAbs(angles.first()) < 1e-6
-                                     && scalePairs.size() == 1
-                                     && qAbs(scalePairs.first().first - 1.0) < 1e-6
-                                     && qAbs(scalePairs.first().second - 1.0) < 1e-6);
+                                     && posePairs.size() == 1
+                                     && qAbs(posePairs.first().scaleX - 1.0) < 1e-6
+                                     && qAbs(posePairs.first().scaleY - 1.0) < 1e-6
+                                     && qAbs(posePairs.first().cross) < 1e-6);
 
         // ── 粗到细搜索（r19：对齐 VisionMaster 的做法） ──
         // 实测：1500×1000 + 208px 模板 + 31 角度，全分辨率穷举 ≈16 秒。
@@ -1289,12 +1351,54 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         double bestAngle = 0.0;
         double bestScale = 1.0;       // = bestScaleX（VM matchScale）
         double bestScaleY = 1.0;
+        double bestCross = 0.0;       // VM「横切值」：Y 轴向 X 轴倾斜角
         cv::Point2f bestCenterInWarp(tmpl.cols * 0.5f, tmpl.rows * 0.5f);
         cv::Point2f bestCoarseCenter;   // 粗搜栅格下的中心（多目标抑制用）
         cv::Point2f bestSubpix;         // 亚像素偏移（r19 收尾）
         cv::Point2f subpixTmp;
         const double tmplW = tmpl.cols;
         const double tmplH = tmpl.rows;
+
+        // VM「是否获取轮廓」：提取模板轮廓特征点（模板局部坐标）。关闭时跳过提取，
+        // 画布只显示匹配框（官方帮助：关闭则不显示特征点、可降低匹配耗时）。
+        const bool getContour = m_params.value(QStringLiteral("getContour"), true).toBool();
+        const bool outputContour = m_params.value(QStringLiteral("outputContour"), false).toBool();
+        QVector<QPointF> contourLocal;
+        if (getContour) {
+            // featurePointsForPatch 返回图像坐标（按 ROI 落位）；这里反算回模板局部系，
+            // 命中后再用 R·S·H 映射到每个目标的实际位姿。
+            const RoiShape tmplRoi = geometryRoi();
+            const QVector<QPointF> imgPts =
+                featurePointsForPatch(tmpl, tmplRoi, edgeThreshold, sobelKsize, shapeMask,
+                                      featureScale, minChain, active.erases);
+            const bool axisAligned =
+                (tmplRoi.type != RoiType::RotatedRect) || qAbs(tmplRoi.angleDeg) < 1e-6;
+            const QRectF shapeBox = roiAxisAlignedBounds(tmplRoi);
+            const double roiCx = axisAligned ? shapeBox.center().x() : tmplRoi.p1.x();
+            const double roiCy = axisAligned ? shapeBox.center().y() : tmplRoi.p1.y();
+            const int x0 = int(std::floor(roiCx - tmplW * 0.5 + 0.5));
+            const int y0 = int(std::floor(roiCy - tmplH * 0.5 + 0.5));
+            const double roiRad = tmplRoi.angleDeg * 3.14159265358979323846 / 180.0;
+            const double roiCa = std::cos(roiRad);
+            const double roiSa = std::sin(roiRad);
+            contourLocal.reserve(imgPts.size());
+            for (const QPointF &p : imgPts) {
+                if (axisAligned) {
+                    contourLocal.append(QPointF(p.x() - x0, p.y() - y0));
+                } else {
+                    const double dx = p.x() - roiCx;
+                    const double dy = p.y() - roiCy;
+                    const double lx = roiCa * dx + roiSa * dy;
+                    const double ly = -roiSa * dx + roiCa * dy;
+                    contourLocal.append(QPointF(lx + tmplW * 0.5 - 0.5,
+                                                ly + tmplH * 0.5 - 0.5));
+                }
+            }
+        }
+        // 每轮先清空模块结果里的轮廓字段：本轮没命中/没开输出时不得留上一轮的点。
+        m_params[QStringLiteral("matchContourCount")] = 0;
+        m_params[QStringLiteral("matchContourPointXs")] = QString();
+        m_params[QStringLiteral("matchContourPointYs")] = QString();
 
         // 多边形按当前搜索栅格换算（r19 P1-14 ②）：粗搜是降采样图、精修是子窗口，
         // 两者与原图的点不是同一栅格，不能直接拿裁剪后的点去过滤。
@@ -1326,10 +1430,11 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
 
         // 单姿态 + 单尺度时保留原有的"低方差区域抑制"（避免纹理空白处高分）
         auto evalOne = [&](const cv::Mat &search, const cv::Mat &base, double angle,
-                           double scaleX, double scaleY,
+                           double scaleX, double scaleY, double crossAngle,
                            cv::Point *locOut, cv::Point2f *centerOut,
                            cv::Point2f *subpixOut = nullptr) -> double {
-            const auto warpedPair = warpTemplateCached(base, warpKeyBase, angle, scaleX, scaleY);
+            const auto warpedPair =
+                warpTemplateCached(base, warpKeyBase, angle, scaleX, scaleY, crossAngle);
             const cv::Mat &warped = warpedPair.first;
             if (warped.empty() || warped.cols >= search.cols || warped.rows >= search.rows)
                 return -1e9;
@@ -1360,7 +1465,8 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                             .arg(base.cols)
                             .arg(base.rows);
                     const auto warpedMask =
-                        warpTemplateCached(maskForBase, warpKeyBase + maskKey, angle, scaleX, scaleY);
+                        warpTemplateCached(maskForBase, warpKeyBase + maskKey, angle, scaleX, scaleY,
+                                           crossAngle);
                     if (!warpedMask.first.empty() && warpedMask.first.size() == wm.size()) {
                         cv::Mat keep;
                         cv::threshold(warpedMask.first, keep, 127.0, 1.0, cv::THRESH_BINARY);
@@ -1558,11 +1664,13 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         struct MatchHit {
             double row, col, score, angle, scale, prow, pcol;
             double scaleY;   ///< XY 独立尺度模式下的 Y 向尺度（整体模式等于 scale）
+            double cross;    ///< 横切角（度；整体尺度模式下恒为 0）
         };
         QVector<MatchHit> hits;
         int matchCount = 0;
         cv::Point mainLoc;
-        double mainScore = -1e9, mainAngle = 0.0, mainScale = 1.0;
+        double mainScore = -1e9, mainAngle = 0.0, mainScale = 1.0, mainCross = 0.0;
+        double mainScaleY = 1.0;   // 主命中的 Y 尺度（XY 模式下与 mainScale 不同）
         cv::Point2f mainCenter;
         // 官方口径（帮助页「超时控制」）：到点停止搜索，不返回任何搜索结果。
         // 该标志跨实例保留：超时后不再找下一个目标，且已找到的部分结果整体作废。
@@ -1576,6 +1684,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             bestAngle = 0.0;
             bestScale = 1.0;
             bestScaleY = 1.0;
+            bestCross = 0.0;
             bestCenterInWarp = cv::Point2f();
             bestCoarseCenter = cv::Point2f();
             bestSubpix = cv::Point2f();
@@ -1583,7 +1692,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             // 粗搜：全部角度 x 尺度（粗图上跑）
             rasterScale = 1.0 / qMax(1.0, coarseFactor);
             searchOrigin = cv::Point(0, 0);
-        for (const auto &sp : scalePairs) {
+        for (const auto &sp : posePairs) {
             if (searchTimedOut)
                 break;
             for (double angle : angles) {
@@ -1621,14 +1730,15 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 curSearchSin = curSearchSin.mul(keep);
             }
         }
-                const double sc = evalOne(coarseSearchImg, coarseTmplImg, angle, sp.first, sp.second,
-                                         &loc, &centerInWarp, &subpixTmp);
+                const double sc = evalOne(coarseSearchImg, coarseTmplImg, angle, sp.scaleX,
+                                          sp.scaleY, sp.cross, &loc, &centerInWarp, &subpixTmp);
                 if (sc > bestScore) {
                     bestScore = sc;
                     bestLoc = loc;
                     bestAngle = angle;
-                    bestScale = sp.first;
-                    bestScaleY = sp.second;
+                    bestScale = sp.scaleX;
+                    bestScaleY = sp.scaleY;
+                    bestCross = sp.cross;
                     bestCenterInWarp = centerInWarp;
                     bestSubpix = subpixTmp;
                     bestCoarseCenter = cv::Point2f(loc.x + centerInWarp.x,
@@ -1721,8 +1831,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                     cv::Point loc;
                     cv::Point2f centerInWarp;
                     const double sc = evalOne(refineWin, refineTmpl, angle, bestScale, bestScaleY,
-                                         &loc, &centerInWarp,
-                                         &subpixTmp);
+                                              bestCross, &loc, &centerInWarp, &subpixTmp);
                     if (sc > bestScore) {
                         bestScore = sc;
                         bestLoc = cv::Point(x0 + loc.x, y0 + loc.y);
@@ -1744,6 +1853,8 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 mainScore = bestScore;
                 mainAngle = bestAngle;
                 mainScale = bestScale;
+                mainScaleY = bestScaleY;
+                mainCross = bestCross;
                 mainCenter = bestCenterInWarp;
             }
             {
@@ -1755,11 +1866,11 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 // 统一走 mapAnchorToImage，与 warpTemplate 的旋转矩阵同源（复核 P1-2）。
                 const QPointF anchorPoint = mapAnchorToImage(centerX, centerY, bestAngle,
                                                              active.anchorDx, active.anchorDy,
-                                                             bestScale);
+                                                             bestScale, bestCross);
                 const double pCol = anchorPoint.x();
                 const double pRow = anchorPoint.y();
                 hits.append({centerY, centerX, bestScore, bestAngle, bestScale, pRow, pCol,
-                             bestScaleY});
+                             bestScaleY, bestCross});
                 matchList << QStringLiteral("%1,%2,%3,%4,%5,%6,%7")
                                  .arg(centerY, 0, 'f', 1)
                                  .arg(centerX, 0, 'f', 1)
@@ -1792,6 +1903,8 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             bestScore = mainScore;
             bestAngle = mainAngle;
             bestScale = mainScale;
+            bestScaleY = mainScaleY;
+            bestCross = mainCross;
             bestCenterInWarp = mainCenter;
         }
         // matchCount 必须等重叠过滤 + 排序**之后**再写（2026-11-08 复核）：
@@ -1864,7 +1977,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         // 匹配框 = 模板矩形经尺度/角度变换后的外框：宽 = 模板宽×尺度X，高 = 模板高×尺度Y。
         {
             QStringList centers, centerXs, centerYs, widths, heights, angles;
-            QStringList points, pointXs, pointYs, scales, scaleXs, scaleYs, scores;
+            QStringList points, pointXs, pointYs, scales, scaleXs, scaleYs, scores, crosses;
             for (const MatchHit &h : hits) {
                 centers << QStringLiteral("%1,%2")
                                .arg(h.col, 0, 'f', 2).arg(h.row, 0, 'f', 2);
@@ -1881,6 +1994,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 scaleXs << QString::number(h.scale, 'f', 4);
                 scaleYs << QString::number(h.scaleY, 'f', 4);
                 scores << QString::number(h.score, 'f', 4);
+                crosses << QString::number(h.cross, 'f', 2);
             }
             m_params[QStringLiteral("matchBoxCenters")] = centers.join(QLatin1Char(';'));
             m_params[QStringLiteral("matchBoxCenterXs")] = centerXs.join(QLatin1Char(','));
@@ -1894,6 +2008,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             m_params[QStringLiteral("matchScales")] = scales.join(QLatin1Char(','));
             m_params[QStringLiteral("matchScaleXs")] = scaleXs.join(QLatin1Char(','));
             m_params[QStringLiteral("matchScaleYs")] = scaleYs.join(QLatin1Char(','));
+            m_params[QStringLiteral("matchCrossAngles")] = crosses.join(QLatin1Char(','));
             m_params[QStringLiteral("matchScores")] = scores.join(QLatin1Char(','));
             // 匹配状态只看"是否找到达标目标"，与模块状态（结果判断）分开
             m_params[QStringLiteral("matchStatus")] =
@@ -1941,11 +2056,36 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             // 「匹配点 X/Y」与结果判断、叠加十字线一起镜像（差 2θ）。
             const QPointF anchorPoint =
                 mapAnchorToImage(col + bestSubpix.x, row + bestSubpix.y, bestAngle,
-                                 active.anchorDx, active.anchorDy, bestScale);
+                                 active.anchorDx, active.anchorDy, bestScale, bestCross);
             m_params[QStringLiteral("matchPointCol")] = anchorPoint.x();
             m_params[QStringLiteral("matchPointRow")] = anchorPoint.y();
             m_params[QStringLiteral("matchScaleX")] = bestScale;
             m_params[QStringLiteral("matchScaleY")] = bestScaleY;
+            m_params[QStringLiteral("matchCrossAngle")] = bestCross;
+        }
+        // VM「是否输出轮廓」：主命中的匹配轮廓点集（图像坐标）。点源是模板局部坐标，
+        // 经与打分同一套 R·S·H 映射落到实际位姿；只输出主目标（逐目标点集暂不展开）。
+        QVector<QPointF> contourImage;
+        if (getContour && !contourLocal.isEmpty()) {
+            contourImage.reserve(contourLocal.size());
+            for (const QPointF &p : contourLocal) {
+                contourImage.append(
+                    mapTemplatePoint(col + bestSubpix.x, row + bestSubpix.y, bestAngle,
+                                     p.x() - tmplW * 0.5, p.y() - tmplH * 0.5, bestScale,
+                                     bestScaleY, bestCross));
+            }
+            if (outputContour) {
+                QStringList xs, ys;
+                xs.reserve(contourImage.size());
+                ys.reserve(contourImage.size());
+                for (const QPointF &p : contourImage) {
+                    xs << QString::number(p.x(), 'f', 2);
+                    ys << QString::number(p.y(), 'f', 2);
+                }
+                m_params[QStringLiteral("matchContourCount")] = contourImage.size();
+                m_params[QStringLiteral("matchContourPointXs")] = xs.join(QLatin1Char(','));
+                m_params[QStringLiteral("matchContourPointYs")] = ys.join(QLatin1Char(','));
+            }
         }
         bool judgedOk = (bestScore >= minScore);
         if (judgedOk) {
@@ -2037,9 +2177,23 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         res.extraValues = QVector<double>({row, col, bestScore, bestAngle, bestScale, outW, outH,
                                            m_params.value(QStringLiteral("matchPointRow")).toDouble(),
                                            m_params.value(QStringLiteral("matchPointCol")).toDouble(),
-                                           bestScale, bestScale});
+                                           bestScale, bestScaleY, bestCross});
         auto resObj = QSharedPointer<DataObject>::create();
         resObj->setMeasureResult(res);
+        // VM「是否获取轮廓」：轮廓点集作为独立结果交给叠加层（默认不显示的特征点层）。
+        // 放在独立 MeasureResult 里而不是模块结果字段——「是否输出轮廓」只控制后者。
+        if (getContour && !contourImage.isEmpty()) {
+            MeasureResult contourRes;
+            contourRes.type = QStringLiteral("contour");
+            contourRes.valueName = QStringLiteral("匹配轮廓点");
+            contourRes.valid = (bestScore >= minScore);
+            contourRes.value = contourImage.size();
+            contourRes.extraValues.reserve(contourImage.size() * 2);
+            for (const QPointF &p : contourImage) {
+                contourRes.extraValues << p.x() << p.y();
+            }
+            resObj->attachMeasureResult(contourRes);
+        }
         if (roiMaskObj)
             resObj->attachResult(QStringLiteral("掩膜"), roiMaskObj);
         if (searchMaskObj)
@@ -2075,8 +2229,8 @@ QVector<NodeResultField> OpencvTemplateMatchNode::resultDisplayFields() const
     // 耗时 / 模块状态 / 匹配状态 / 匹配个数 / 匹配模板编号 / 匹配模板名称 /
     // 匹配框(中心点/X/Y/宽度/高度/角度) / 匹配点(X/Y) / 尺度(X/Y) / 分数 /
     // 检测区域(中心点X/Y/宽度/高度/角度)。
-    // 官方另有「横切值」「匹配轮廓点个数/轮廓点集」：本节点未计算/不显示，按宁缺勿造不列；
-    // 配置参数一律不进结果表。
+    // 官方另有「匹配轮廓点个数/轮廓点集」：本节点未计算/不显示，按宁缺勿造不列；
+    // 配置参数一律不进结果表。横切值（2026-11-08 1:1 对齐）已计算，按逐目标列表输出。
     const QString group = QStringLiteral("匹配%1");
 
     QVector<NodeResultField> fields;
@@ -2112,6 +2266,8 @@ QVector<NodeResultField> OpencvTemplateMatchNode::resultDisplayFields() const
                          QString(), 4)
            << resultList(QStringLiteral("matchScaleYs"), group, QStringLiteral("尺度Y"),
                          QString(), 4)
+           << resultList(QStringLiteral("matchCrossAngles"), group, QStringLiteral("横切值"),
+                         QStringLiteral("°"), 2)
            << resultList(QStringLiteral("matchScores"), group, QStringLiteral("分数"),
                          QString(), 4)
            << resultValue(QStringLiteral("searchCenterX"), VmSharedText::roiCenterXLabel(),
@@ -2123,7 +2279,13 @@ QVector<NodeResultField> OpencvTemplateMatchNode::resultDisplayFields() const
            << resultValue(QStringLiteral("searchHeight"), QStringLiteral("检测区域高度"),
                           QStringLiteral("px"), 2)
            << resultValue(QStringLiteral("searchAngle"), QStringLiteral("检测区域角度"),
-                          QStringLiteral("°"), 3);
+                          QStringLiteral("°"), 3)
+           << resultValue(QStringLiteral("matchContourCount"), QStringLiteral("匹配轮廓点个数"),
+                          QString(), 0)
+           << resultList(QStringLiteral("matchContourPointXs"), group,
+                         QStringLiteral("轮廓点X"), QStringLiteral("px"), 2)
+           << resultList(QStringLiteral("matchContourPointYs"), group,
+                         QStringLiteral("轮廓点Y"), QStringLiteral("px"), 2);
     return fields;
 }
 
@@ -2281,16 +2443,29 @@ quint64 OpencvTemplateMatchNode::templateFingerprint(const cv::Mat &tmpl)
 
 QPointF OpencvTemplateMatchNode::mapAnchorToImage(double centerX, double centerY,
                                                  double angleDeg, double anchorDx,
-                                                 double anchorDy, double scale)
+                                                 double anchorDy, double scale,
+                                                 double crossAngleDeg)
+{
+    // 锚点即"相对模板中心的偏移"，与轮廓点共用同一映射（M = R·S·H）。
+    return mapTemplatePoint(centerX, centerY, angleDeg, anchorDx, anchorDy, scale, scale,
+                            crossAngleDeg);
+}
+
+QPointF OpencvTemplateMatchNode::mapTemplatePoint(double centerX, double centerY,
+                                                  double angleDeg, double dx, double dy,
+                                                  double scaleX, double scaleY,
+                                                  double crossAngleDeg)
 {
     // 与 warpTemplate 同源的线性部分：cv::getRotationMatrix2D(center, angle, 1.0)
-    // 返回的 2×2 是 [cos sin; -sin cos]。锚点偏移（模板局部系）必须经**同一个**
-    // 矩阵映射，否则角度非 0 时匹配点相对中心镜像（复核 P1-2，差 2θ）。
+    // 返回的 2×2 是 [cos sin; -sin cos]。模板局部点必须经**同一个**矩阵映射，
+    // 否则角度非 0 时轮廓点相对中心镜像（差 2θ）。
     const double rad = angleDeg * 3.14159265358979323846 / 180.0;
     const double ca = std::cos(rad);
     const double sa = std::sin(rad);
-    const double ax = anchorDx * scale;
-    const double ay = anchorDy * scale;
+    // M = R·S·H：横切先把局部偏移 (dx,dy) 变成 (dx + tanθ·dy, dy)，再缩放、再旋转。
+    const double t = std::tan(crossAngleDeg * 3.14159265358979323846 / 180.0);
+    const double ax = (dx + t * dy) * scaleX;
+    const double ay = dy * scaleY;
     return QPointF(centerX + ca * ax + sa * ay,    // x = col
                    centerY - sa * ax + ca * ay);   // y = row
 }

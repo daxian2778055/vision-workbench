@@ -95,9 +95,16 @@ public:
     /// 必须与 warpTemplate 所用 cv::getRotationMatrix2D 的线性部分同一口径
     /// [cos sin; -sin cos]：模板就是按该矩阵旋转后再去匹配的；锚点若用共轭旋转
     /// [cos -sin; sin cos]，角度非 0 时匹配点会相对中心整体镜像（差 2θ）。
-    /// 缩放在旋转之前应用（与 warpTemplate 里 M.at(0,0)*=scaleX 的顺序一致）。
+    /// 缩放在旋转之前应用（与 warpTemplate 里 M.at(0,0)*=scaleX 的顺序一致）；
+    /// 横切角以 H=[[1,tanθ],[0,1]] 先作用于模板局部系（M = R·S·H）。
     static QPointF mapAnchorToImage(double centerX, double centerY, double angleDeg,
-                                    double anchorDx, double anchorDy, double scale);
+                                    double anchorDx, double anchorDy, double scale,
+                                    double crossAngleDeg = 0.0);
+    /// 模板局部偏移（相对模板中心，单位=模板块像素）→ 图像坐标（轮廓点显示/输出用；
+    /// 与 warpTemplate 的 M = R·S·H 同源）。dx/dy 由调用方按"点 - 模板中心"算出。
+    static QPointF mapTemplatePoint(double centerX, double centerY, double angleDeg,
+                                    double dx, double dy, double scaleX,
+                                    double scaleY, double crossAngleDeg = 0.0);
     /// 模板块 → 图像坐标的强梯度点（对话框预览与编辑器共用同一映射）。
     /// mask 非空且尺寸与模板块一致时，掩膜外（值为 0）的点被跳过。
     static QVector<QPointF> featurePointsForPatch(const cv::Mat &tmpl, const RoiShape &roi,

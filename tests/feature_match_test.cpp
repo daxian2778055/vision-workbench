@@ -108,6 +108,10 @@ private slots:
     void templateSequentialMatchStopsAtFirstHit();
     // 尺度范围 XY：X/Y 独立缩放（scaleRangeType=1）
     void templateScaleRangeXYFindsAnisotropicInstance();
+    // 横切角度范围：目标 Y 轴向 X 轴倾斜时，搜索横切角才能命中
+    void templateCrossAngleSearchesSkew();
+    // 是否获取轮廓 / 是否输出轮廓：显示与模块结果两条出口分别受控
+    void templateContourTogglesFollowVm();
     // 擦除轮廓点：擦除区域内的特征点不参与匹配
     void templateErasesRemoveFeaturePoints();
     // 建模板后的参数建议：低对比给低阈值、大模板给大特征尺度
@@ -843,9 +847,9 @@ void FeatureMatchTest::templateResultDisplaySpec()
     OpencvTemplateMatchNode node;
     node.init();
 
-    // ① 规范：模块级 6 项 + 逐目标 13 项 + 检测区域 5 项，不含任何配置键
+    // ① 规范：模块级 6 项 + 逐目标 14 项 + 检测区域 5 项 + 轮廓 3 项，不含任何配置键
     const QVector<NodeResultField> spec = node.resultDisplayFields();
-    QCOMPARE(int(spec.size()), 24);
+    QCOMPARE(int(spec.size()), 28);
     QCOMPARE(spec.at(0).key, QStringLiteral("elapsedMs"));
     QCOMPARE(spec.at(1).key, QStringLiteral("moduleStatus"));
     QCOMPARE(spec.at(2).key, QStringLiteral("matchStatus"));
@@ -853,14 +857,23 @@ void FeatureMatchTest::templateResultDisplaySpec()
     QCOMPARE(spec.at(4).key, QStringLiteral("matchTemplateIndex"));
     QCOMPARE(spec.at(5).key, QStringLiteral("matchTemplateName"));
     QCOMPARE(spec.at(6).key, QStringLiteral("matchBoxCenters"));
-    for (int i = 6; i <= 18; ++i)
+    for (int i = 6; i <= 19; ++i)
         QCOMPARE(spec.at(i).group, QStringLiteral("匹配%1"));
-    QCOMPARE(spec.at(19).key, QStringLiteral("searchCenterX"));
-    QCOMPARE(spec.at(23).key, QStringLiteral("searchAngle"));
+    QCOMPARE(spec.at(18).key, QStringLiteral("matchCrossAngles"));
+    QCOMPARE(spec.at(19).key, QStringLiteral("matchScores"));
+    QCOMPARE(spec.at(20).key, QStringLiteral("searchCenterX"));
+    QCOMPARE(spec.at(24).key, QStringLiteral("searchAngle"));
+    QCOMPARE(spec.at(25).key, QStringLiteral("matchContourCount"));
+    QCOMPARE(spec.at(26).key, QStringLiteral("matchContourPointXs"));
+    QCOMPARE(spec.at(27).key, QStringLiteral("matchContourPointYs"));
+    for (int i = 26; i <= 27; ++i)
+        QCOMPARE(spec.at(i).group, QStringLiteral("匹配%1"));
     for (const NodeResultField &f : spec) {
         QVERIFY2(f.key != QStringLiteral("minScore")
                      && f.key != QStringLiteral("maxMatches")
                      && f.key != QStringLiteral("roiWidth")
+                     && f.key != QStringLiteral("getContour")
+                     && f.key != QStringLiteral("outputContour")
                      && f.key != QStringLiteral("searchRegionCol"),
                  qPrintable(QStringLiteral("配置参数混进了模块结果规范：%1").arg(f.key)));
     }
@@ -1966,6 +1979,124 @@ void FeatureMatchTest::templateOutputsSearchMask()
              "ROI 输出掩膜关闭后不应再产出掩膜图");
 }
 
+// VM「是否获取轮廓 / 是否输出轮廓」（高精度匹配·运行参数）：
+//   获取=计算模板轮廓特征点并显示（关闭只显示匹配框）；输出=把轮廓点写进模块结果。
+// 本腿同时钉住三条边界：① 默认（获取开/输出关）只给叠加层、模块结果字段为空；
+// ② 输出开 → matchContourCount/X/Y 与轮廓结果一致，且点落在匹配框内；
+// ③ 获取关 → 既无轮廓结果也无模块结果（输出开也没用，依赖获取）。
+void FeatureMatchTest::templateContourTogglesFollowVm()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const cv::Mat patch = makePatch();
+    const QString tpl = dir.filePath(QStringLiteral("tpl.png"));
+    QVERIFY(cv::imwrite(tpl.toStdString(), patch));
+
+    const cv::Mat canvas = makeScene(patch, 0.0, 1.0, 300.0, 250.0);
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.5);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("templatePath"), tpl);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+
+    auto contourResult = [](const QSharedPointer<DataObject> &obj) {
+        if (!obj)
+            return MeasureResult();
+        for (const MeasureResult &mr : obj->measureResults()) {
+            if (mr.type == QLatin1String("contour"))
+                return mr;
+        }
+        return MeasureResult();
+    };
+    auto countPointOverlays = [](const QVector<OverlayShape> &overlay) {
+        int points = 0;
+        for (const OverlayShape &s : overlay) {
+            if (s.type == OverlayShape::Type::Points)
+                points += int(s.points.size());
+        }
+        return points;
+    };
+
+    ImageDisplayController ctrl(nullptr, nullptr, nullptr);
+    // 直接调 run() 时结果在逻辑端口 1；生产路径由 process() 聚合成端口 0 的单对象。
+    // 这里照生产口径把本轮的测量结果合并到端口 0，再让叠加层去画。
+    auto mergeToMainPort = [&node](const QSharedPointer<DataObject> &src) {
+        auto merged = QSharedPointer<DataObject>::create();
+        if (src) {
+            for (const MeasureResult &mr : src->measureResults())
+                merged->attachMeasureResult(mr);
+        }
+        node.setOutputData(0, merged);
+    };
+
+    // ① 默认：获取开、输出关 → 轮廓只给叠加层，模块结果字段必须为空
+    node.run(false);
+    const auto res0 = node.getOutputData(1);
+    const MeasureResult contour0 = contourResult(res0);
+    const int count0 = node.getParam(QStringLiteral("matchContourCount")).toInt();
+    mergeToMainPort(res0);
+    const int overlay0 = countPointOverlays(ctrl.collectOverlayFromNode(&node));
+    qInfo("contour: default resultPoints=%d fieldCount=%d overlayPoints=%d",
+          int(contour0.extraValues.size() / 2), count0, overlay0);
+    QVERIFY2(contour0.extraValues.size() >= 4,
+             "默认（获取轮廓开）结果对象应携带轮廓点集");
+    QCOMPARE(count0, 0);
+    QVERIFY2(node.getParam(QStringLiteral("matchContourPointXs")).toString().isEmpty(),
+             "输出轮廓关闭时模块结果不应写轮廓点");
+    QVERIFY2(overlay0 > 0, "获取轮廓开启时画布上应显示轮廓点");
+
+    // ② 输出开：模块结果与轮廓结果一致，且点都落在匹配框内
+    node.setParam(QStringLiteral("outputContour"), true);
+    node.run(false);
+    const auto res1 = node.getOutputData(1);
+    const MeasureResult contour1 = contourResult(res1);
+    const int count1 = node.getParam(QStringLiteral("matchContourCount")).toInt();
+    const QString xs = node.getParam(QStringLiteral("matchContourPointXs")).toString();
+    const QString ys = node.getParam(QStringLiteral("matchContourPointYs")).toString();
+    const QStringList xsList = xs.split(QLatin1Char(','), Qt::SkipEmptyParts);
+    const QStringList ysList = ys.split(QLatin1Char(','), Qt::SkipEmptyParts);
+    const double matchCol = node.getParam(QStringLiteral("matchCol")).toDouble();
+    const double matchRow = node.getParam(QStringLiteral("matchRow")).toDouble();
+    qInfo("contour: output-on count=%d resultPoints=%d match=(%.1f,%.1f)",
+          count1, int(contour1.extraValues.size() / 2), matchCol, matchRow);
+    mergeToMainPort(res1);
+    QVERIFY2(countPointOverlays(ctrl.collectOverlayFromNode(&node)) > 0,
+             "输出轮廓打开时画布仍应显示轮廓点");
+    QVERIFY2(count1 > 0, "输出轮廓打开后 matchContourCount 应大于 0");
+    QCOMPARE(count1, int(contour1.extraValues.size() / 2));
+    QCOMPARE(xsList.size(), count1);
+    QCOMPARE(ysList.size(), count1);
+    for (int i = 0; i < count1; ++i) {
+        const double x = xsList.at(i).toDouble();
+        const double y = ysList.at(i).toDouble();
+        // 模板轮廓点按命中位姿映射后应落在匹配框内（半宽/半高 + 亚像素余量）
+        QVERIFY2(qAbs(x - matchCol) <= kTemplateSize * 0.5 + 6.0
+                     && qAbs(y - matchRow) <= kTemplateSize * 0.5 + 6.0,
+                 qPrintable(QStringLiteral("轮廓点 (%1,%2) 越出匹配框（中心 %3,%4）")
+                                .arg(x).arg(y).arg(matchCol).arg(matchRow)));
+    }
+
+    // ③ 获取关：即使输出开，也没有轮廓结果与模块结果（只显示匹配框）
+    node.setParam(QStringLiteral("getContour"), false);
+    node.run(false);
+    const auto res2 = node.getOutputData(1);
+    const MeasureResult contour2 = contourResult(res2);
+    const int count2 = node.getParam(QStringLiteral("matchContourCount")).toInt();
+    QVERIFY2(contour2.extraValues.isEmpty(),
+             "获取轮廓关闭后不应再产出轮廓结果（叠加层只画匹配框）");
+    QCOMPARE(count2, 0);
+    QVERIFY2(node.getParam(QStringLiteral("matchContourPointXs")).toString().isEmpty(),
+             "获取轮廓关闭后模块结果不应写轮廓点");
+    mergeToMainPort(res2);
+    QCOMPARE(countPointOverlays(ctrl.collectOverlayFromNode(&node)), 0);
+}
+
 // 匹配中心（锚点）：默认在模板中心；配置偏移后，结果的「匹配点」必须整体平移过去。
 // 这条守的是"锚点真的参与了结果换算"，而不是只存在 JSON 里。
 void FeatureMatchTest::templateMatchAnchorOffsetsMatchPoint()
@@ -2720,6 +2851,94 @@ void FeatureMatchTest::templateScaleRangeXYFindsAnisotropicInstance()
     QVERIFY2(score1 > score0,
              qPrintable(QStringLiteral("XY 尺度范围的分数应高于整体范围：%1 vs %2")
                             .arg(score1).arg(score0)));
+}
+
+// VM「横切角度范围」（尺度范围 XY 页签）：目标沿 Y 轴向 X 轴倾斜（剪切）时，
+// 只搜无横切应匹配得差；给出 20° 横切范围后应命中并如实报出横切值。
+// 场景侧剪切与节点 warpTemplate 同一口径（H=[[1,tanθ],[0,1]]，贴片中心落在 (cx,cy)）。
+void FeatureMatchTest::templateCrossAngleSearchesSkew()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const cv::Mat patch = makePatch();
+    const QString tpl = dir.filePath(QStringLiteral("tpl.png"));
+    QVERIFY(cv::imwrite(tpl.toStdString(), patch));
+
+    const double crossDeg = 20.0;
+    const int canvasW = 500, canvasH = 400;
+    const double cx = 250.0, cy = 200.0;
+    cv::Mat canvas(canvasH, canvasW, CV_8UC1, cv::Scalar(kCanvasBackground));
+    {
+        const double t = std::tan(crossDeg * 3.14159265358979323846 / 180.0);
+        cv::Mat M = cv::Mat::eye(2, 3, CV_64F);
+        M.at<double>(0, 1) = t;
+        const cv::Point2f pc(patch.cols * 0.5f, patch.rows * 0.5f);
+        M.at<double>(0, 2) = cx - (M.at<double>(0, 0) * pc.x + M.at<double>(0, 1) * pc.y);
+        M.at<double>(1, 2) = cy - (M.at<double>(1, 0) * pc.x + M.at<double>(1, 1) * pc.y);
+        cv::warpAffine(patch, canvas, M, canvas.size(), cv::INTER_LINEAR,
+                       cv::BORDER_CONSTANT, cv::Scalar(kCanvasBackground));
+    }
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.2);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("scaleRangeType"), 1);
+    node.setParam(QStringLiteral("scaleMinX"), 1.0);
+    node.setParam(QStringLiteral("scaleMaxX"), 1.0);
+    node.setParam(QStringLiteral("scaleMinY"), 1.0);
+    node.setParam(QStringLiteral("scaleMaxY"), 1.0);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("templatePath"), tpl);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+
+    // ① 不搜横切：正的模板对剪切目标，分数应明显更低
+    node.setParam(QStringLiteral("crossAngleMin"), 0.0);
+    node.setParam(QStringLiteral("crossAngleMax"), 0.0);
+    node.run(false);
+    const double score0 = node.getParam(QStringLiteral("matchScore")).toDouble();
+    const double cross0 = node.getParam(QStringLiteral("matchCrossAngle")).toDouble();
+
+    // ② 只搜 20° 横切：应命中并报出横切值
+    node.setParam(QStringLiteral("crossAngleMin"), crossDeg);
+    node.setParam(QStringLiteral("crossAngleMax"), crossDeg);
+    node.run(false);
+    const double score20 = node.getParam(QStringLiteral("matchScore")).toDouble();
+    const double cross20 = node.getParam(QStringLiteral("matchCrossAngle")).toDouble();
+    const QString crossList = node.getParam(QStringLiteral("matchCrossAngles")).toString();
+    const double col = node.getParam(QStringLiteral("matchCol")).toDouble();
+    const double row = node.getParam(QStringLiteral("matchRow")).toDouble();
+    qInfo("cross-angle: score0=%.3f (cross=%.2f) score20=%.3f (cross=%.2f) at (%.1f,%.1f) list=%s",
+          score0, cross0, score20, cross20, col, row, qPrintable(crossList));
+
+    QVERIFY2(qAbs(cross0) < 1e-6,
+             qPrintable(QStringLiteral("未开横切搜索时横切值应为 0，实际 %1").arg(cross0)));
+    QVERIFY2(score20 > score0 + 0.05,
+             qPrintable(QStringLiteral("20° 横切搜索应明显优于 0°：%1 vs %2")
+                            .arg(score20).arg(score0)));
+    QVERIFY2(qAbs(cross20 - crossDeg) < 0.01,
+             qPrintable(QStringLiteral("横切值应≈%1，实际 %2").arg(crossDeg).arg(cross20)));
+    const QStringList crossItems = crossList.split(QLatin1Char(','), Qt::SkipEmptyParts);
+    QCOMPARE(crossItems.size(), 1);
+    QVERIFY2(qAbs(crossItems.first().toDouble() - crossDeg) < 0.01,
+             qPrintable(QStringLiteral("matchCrossAngles 应报 %1，实际 %2")
+                            .arg(crossDeg).arg(crossList)));
+    QVERIFY2(qAbs(col - cx) <= 4.0 && qAbs(row - cy) <= 4.0,
+             qPrintable(QStringLiteral("命中位置应≈(%1,%2)，实际 (%3,%4)")
+                            .arg(cx).arg(cy).arg(col).arg(row)));
+
+    // ③ 整体尺度模式不参与横切搜索（VM 该参数在「尺度范围 XY」页签下）
+    node.setParam(QStringLiteral("scaleRangeType"), 0);
+    node.setParam(QStringLiteral("scaleMin"), 1.0);
+    node.setParam(QStringLiteral("scaleMax"), 1.0);
+    node.run(false);
+    const double crossUniform = node.getParam(QStringLiteral("matchCrossAngle")).toDouble();
+    qInfo("cross-angle: uniform-mode cross=%.2f", crossUniform);
+    QVERIFY2(qAbs(crossUniform) < 1e-6,
+             qPrintable(QStringLiteral("整体尺度模式不应搜索横切，实际 %1").arg(crossUniform)));
 }
 
 // 擦除轮廓点（VM「擦除轮廓点」）：擦除区域内的特征点不参与匹配。
