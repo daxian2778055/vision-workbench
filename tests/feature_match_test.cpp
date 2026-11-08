@@ -82,6 +82,8 @@ private slots:
     void templateCheckedTemplatesControlSearch();
     // VM「是否考虑噪点」：开启后搜索图毛刺（未被模板特征点解释的强边缘）拉低评分
     void templateNoiseConsiderationLowersScore();
+    // VM「结果显示 → 结果判断」：数量/角度/尺度多条件全部满足才 OK
+    void templateResultJudgmentHonorsVmConditions();
     // 多边形/圆形模板：必须能抠出包围盒（此前多边形直接返回空 → 建模板必失败）
     void templateShapeExtractionSupportsPolygonAndCircle();
     // 魔术棒取形：泛洪出的多边形必须贴合目标区域
@@ -2039,6 +2041,96 @@ void FeatureMatchTest::templateNoiseConsiderationLowersScore()
     QVERIFY2((burrOff - burrOn) > (cleanOff - cleanOn),
              qPrintable(QStringLiteral("毛刺图的评分降幅应大于干净图：burr=%1 clean=%2")
                             .arg(burrOff - burrOn).arg(cleanOff - cleanOn)));
+}
+
+// P1-7（VM「结果显示 → 结果判断」）：多个判断条件全部满足才输出 OK。
+// 模板匹配页的固定条件表用 resJudge<Key>Enable/Low/High；本腿锁三件事：
+//   ① 角度/尺度/数量条件各自能把 moduleStatus 判红，且原因可读；
+//   ② 判 NG 时 matchStatus 仍为 1（目标找到了，只是不满足产线判定）——
+//      这条口径与「匹配失败」分开，下游不能把 NG 当成没找到；
+//   ③ 多条件同时启用时是 AND（一条越界即 NG，全部在范围内才 OK）。
+void FeatureMatchTest::templateResultJudgmentHonorsVmConditions()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const cv::Mat patch = makePatch();
+    const QString tplPath = dir.filePath(QStringLiteral("judge.png"));
+    QVERIFY(cv::imwrite(tplPath.toStdString(), patch));
+
+    cv::Mat canvas(400, 400, CV_8UC1, cv::Scalar(kCanvasBackground));
+    const cv::Rect box(100, 120, patch.cols, patch.rows);
+    patch.copyTo(canvas(box));
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.7);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("scaleMin"), 1.0);
+    node.setParam(QStringLiteral("scaleMax"), 1.0);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("templatePath"), tplPath);
+    TemplateEntry e;
+    e.name = QStringLiteral("judge");
+    e.imagePath = tplPath;
+    node.setTemplates({e});
+    node.setActiveTemplateIndex(0);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+
+    auto runAndRead = [&]() {
+        node.run(false);
+        return node.getParam(QStringLiteral("moduleStatus")).toBool();
+    };
+
+    QVERIFY2(runAndRead(), "基线（未启用任何判断条件）应 OK");
+    QCOMPARE(node.getParam(QStringLiteral("matchStatus")).toInt(), 1);
+    QCOMPARE(node.getParam(QStringLiteral("matchCount")).toInt(), 1);
+
+    // ① 角度条件：实际角度 0，限定 [10,20] 必须 NG；原因含「角度」
+    node.setParam(QStringLiteral("resJudgeAngleEnable"), true);
+    node.setParam(QStringLiteral("resJudgeAngleLow"), 10.0);
+    node.setParam(QStringLiteral("resJudgeAngleHigh"), 20.0);
+    QVERIFY2(!runAndRead(), "角度 0 不在 [10,20] 内应判 NG");
+    QString reason = node.getParam(QStringLiteral("lastError")).toString();
+    QVERIFY2(reason.contains(QStringLiteral("角度")), qPrintable(reason));
+    QCOMPARE(node.getParam(QStringLiteral("matchStatus")).toInt(), 1);   // 找到目标 ≠ 判定 OK
+    QCOMPARE(node.getParam(QStringLiteral("matchCount")).toInt(), 1);
+
+    // 角度放回范围内 → OK
+    node.setParam(QStringLiteral("resJudgeAngleLow"), -1.0);
+    node.setParam(QStringLiteral("resJudgeAngleHigh"), 1.0);
+    QVERIFY2(runAndRead(), "角度 0 在 [-1,1] 内应 OK");
+
+    // ② 尺度条件：实际尺度 1，限定 [0.5,0.9] 必须 NG；原因含「尺度」
+    node.setParam(QStringLiteral("resJudgeScaleEnable"), true);
+    node.setParam(QStringLiteral("resJudgeScaleLow"), 0.5);
+    node.setParam(QStringLiteral("resJudgeScaleHigh"), 0.9);
+    QVERIFY2(!runAndRead(), "尺度 1.0 不在 [0.5,0.9] 内应判 NG");
+    reason = node.getParam(QStringLiteral("lastError")).toString();
+    QVERIFY2(reason.contains(QStringLiteral("尺度")), qPrintable(reason));
+
+    node.setParam(QStringLiteral("resJudgeScaleLow"), 0.99);
+    node.setParam(QStringLiteral("resJudgeScaleHigh"), 1.01);
+    QVERIFY2(runAndRead(), "尺度 1.0 在 [0.99,1.01] 内应 OK");
+
+    // ③ 数量条件：只有 1 个目标，限定 [2,5] 必须 NG；原因含「匹配数量」
+    node.setParam(QStringLiteral("resJudgeNumEnable"), true);
+    node.setParam(QStringLiteral("resJudgeNumLow"), 2.0);
+    node.setParam(QStringLiteral("resJudgeNumHigh"), 5.0);
+    QVERIFY2(!runAndRead(), "数量 1 不在 [2,5] 内应判 NG");
+    reason = node.getParam(QStringLiteral("lastError")).toString();
+    QVERIFY2(reason.contains(QStringLiteral("匹配数量")), qPrintable(reason));
+
+    // 三个条件同时启用：数量在范围内、角度/尺度通过 → OK（AND 全满足）
+    node.setParam(QStringLiteral("resJudgeNumLow"), 1.0);
+    node.setParam(QStringLiteral("resJudgeNumHigh"), 1.0);
+    QVERIFY2(runAndRead(), "数量=1 且角度/尺度均在范围内应 OK");
+
+    // 任一条件越界即 NG（把数量改回 [2,5]，其余仍通过）
+    node.setParam(QStringLiteral("resJudgeNumLow"), 2.0);
+    QVERIFY2(!runAndRead(), "多条件里只要数量越界就应 NG");
 }
 
 // 多边形/圆形模板的形状抠图：以前 Polygon/Circle 落到 roiAxisAlignedBounds 返回空，

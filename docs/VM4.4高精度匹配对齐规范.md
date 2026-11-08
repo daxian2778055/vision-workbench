@@ -64,7 +64,7 @@
 | 是否输出轮廓 | 打开则在模块结果中输出轮廓；关闭则不输出 | ✅ `outputContour`（默认关）：打开输出 `matchContourCount` / `matchContourPointXs` / `matchContourPointYs`（依赖「是否获取轮廓」） |
 
 ### 4. 结果显示
-- **结果判断**：忽略匹配个数 / 数量判断 / 角度判断 / 尺度判断（开关）
+- **结果判断**：忽略匹配个数 / 数量判断 / 角度判断 / 尺度判断（开关）——✅ 模板匹配页固定条件表 `resJudge<Key>Enable/Low/High`（Num/Angle/Scale/ScaleX/ScaleY/Score/PointX/PointY/BoxX/BoxY）+「无目标时判定 OK」`resJudgeOkWhenZero`；多条件全部满足才 OK；「忽略匹配个数」= 关闭「匹配数量」条件
 - **图像显示**（各带显隐开关 + 样式编辑）：检测区域 / 匹配结果 / 匹配点 / 匹配检出点
 - **模块结果**：匹配轮廓点个数 / 轮廓点X / 轮廓点Y（由 `outputContour` 控制是否输出；点集随命中位姿变换）
 - **逐目标尺寸**：匹配框宽度 = 模板宽 × 尺度X、高度 = 模板高 × 尺度Y；结果表「尺度X / 尺度Y」分别取 `matchScaleXs` / `matchScaleYs`，多目标叠加框取 `matchBoxWidths` / `matchBoxHeights`（XY 模式两轴独立）
