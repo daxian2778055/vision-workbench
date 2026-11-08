@@ -73,7 +73,8 @@
 - 当前实现：
   - `src/ModuleEditorDialog.cpp:428-456`：所有节点都会调用 `rebuildVmTabs`。
   - `src/ModuleEditorDialog.cpp:464`：函数首行即 `qobject_cast<OpencvTemplateMatchNode *>`，非模板直接 `return`。
-  - `src/ModuleEditorDialog.cpp:475-525`：四页签、模板页、结果表全部在该分支内创建。
+  - `m_vmTabs` 容器见 `src/ModuleEditorDialog.cpp:698`，四个 `addTab`（基本参数 / 特征模板（仅模板类）/ 运行参数 / 结果显示）见 `:1447`–`:1451`。
+    **2026-11-08 更正**：原引用 `:475-525` 实为信号连接与 `scheduleAutoRecompute` 定时器，并非页签创建处。
   - `src/ModuleEditorDialog.cpp:279`：`m_resultTable->setVisible(isTmpl)`，非模板模块窗口没有结果表。
 - 影响：除模板匹配外的所有算子仍是平铺长表单，参数分组、运行参数、结果显示没有统一位置；这与“规则一致”直接冲突，也是现场培训成本最高的差异之一。
 - 建议：把页签重建提升为所有节点的通用规则：按 `ParamSpec.group` 映射到基本/运行/结果显示；模板类节点额外增加“特征模板”页；结果表对所有节点可见（至少输出值/状态/耗时）。

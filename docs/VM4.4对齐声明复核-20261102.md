@@ -92,8 +92,8 @@
 | 输出掩膜、图像型 ROI、简化继承 ROI | `FeatureMatchTest::templateOutputsSearchMask`、`templateImageTypeRoiLimitsCandidates`、`templateInheritsUpstreamBoxAsSearchRegion` |
 | 匹配中心（锚点）+ 锁定 | `FeatureMatchTest::templateMatchAnchorOffsetsMatchPoint` |
 | 多形状模板、屏蔽形状（保留−屏蔽） | `FeatureMatchTest::templateMultiShapeEntryAndMask`、`templateExcludeShapesSubtractFromMask` |
-| 阈值类型 3 项、排序类型 6 项、最大重叠率/延拓/超时的参数壳 | `src/OpencvTemplateMatchNode.cpp:377`–`:388`；语义问题见 P0/P1 |
-| 四页签（基本参数/特征模板/运行参数/结果显示） | `src/ModuleEditorDialog.cpp:522`–`:525` |
+| 阈值类型 3 项、排序类型 6 项、最大重叠率/延拓/超时的参数壳 | `makeIntParam` 系列（`thresholdType` / `matchContrastThreshold` / `sortType` / `maxOverlap` / `extendThreshold` / `timeoutMs`）见 `src/OpencvTemplateMatchNode.cpp:410`–`:421`；语义问题见 P0/P1。**2026-11-08 更正**：原引用 `:377`–`:388` 实为构造函数与 `init()` 头部（`setName` / `addInputSlot`），不含参数壳 |
+| 四页签（基本参数/特征模板/运行参数/结果显示） | `m_vmTabs` 容器见 `src/ModuleEditorDialog.cpp:698`，四个 `addTab` 见 `:1447`–`:1451`。**2026-11-08 更正**：原引用 `:522`–`:525` 不成立 |
 | 尺度 XY 的搜索能力（只验证分数/尺度参数） | `FeatureMatchTest::templateScaleRangeXYFindsAnisotropicInstance`（输出字段问题见 P0-5） |
 | 擦除轮廓点（固定半径） | `FeatureMatchTest::templateErasesRemoveFeaturePoints`（可调半径见 P2-3） |
 | 建模板后的参数自动建议 | `FeatureMatchTest::templateSuggestParamsFollowsTemplate` |

@@ -521,6 +521,65 @@ if (-not $SkipVerify) {
         $problems += '未生成自检报告'
     }
 
+    # 9.3b DeepOCR 真实推理自检（2026-11-08 复核 P2）：只 Test-Path dl 挡不住
+    # 「空目录 / 坏模型 / 缺依赖」——那三种情况 OCR 一个字都读不出，包照样出得去。
+    # 这里生成一张合成文字图跑真实推理，要求 exit=0 且输出含 [OK]。
+    $ocrPng = Join-Path $env:TEMP ("vfp_ocr_probe_" + [guid]::NewGuid().ToString("N") + ".png")
+    if (-not (Test-Path (Join-Path $OutDir 'dl'))) {
+        $problems += 'DeepOCR 自检无法执行：包内缺 dl/ 模型目录'
+    } else {
+        $ocrOk = $false
+        $ocrOutText = ''
+        try {
+            Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+            $bmp = New-Object System.Drawing.Bitmap 420, 140
+            $gfx = [System.Drawing.Graphics]::FromImage($bmp)
+            try {
+                $gfx.Clear([System.Drawing.Color]::White)
+                $font = New-Object System.Drawing.Font('Arial', 36)
+                $gfx.DrawString('HELLO 12345', $font, [System.Drawing.Brushes]::Black, 20, 40)
+            } finally {
+                $gfx.Dispose()
+            }
+            $bmp.Save($ocrPng, [System.Drawing.Imaging.ImageFormat]::Png)
+            $bmp.Dispose()
+
+            $opsi = New-Object System.Diagnostics.ProcessStartInfo
+            $opsi.FileName = Join-Path $OutDir 'VisionFlowPlatform.exe'
+            $opsi.Arguments = '--selftest-deepocr "' + $ocrPng + '"'
+            $opsi.WorkingDirectory = $OutDir
+            $opsi.UseShellExecute = $false
+            $opsi.RedirectStandardError = $true
+            $opsi.RedirectStandardOutput = $true
+            $op = [System.Diagnostics.Process]::Start($opsi)
+            $oerr = $op.StandardError.ReadToEndAsync()
+            $oout = $op.StandardOutput.ReadToEndAsync()
+            if (-not $op.WaitForExit(180000)) {
+                $op.Kill()
+                $problems += 'DeepOCR 自检超时（>3 分钟）'
+            } else {
+                $ocrOutText = $oout.Result
+                if ($op.ExitCode -ne 0) {
+                    $problems += ('DeepOCR 自检未通过（exit=' + $op.ExitCode
+                                  + '）：模型不可加载或识别不出字')
+                } elseif ($ocrOutText -notmatch '\[OK\]') {
+                    $problems += 'DeepOCR 自检输出中没有 [OK] 行'
+                } else {
+                    $ocrOk = $true
+                    Write-Host '  DeepOCR 自检: 通过（合成图识别成功）' -ForegroundColor Green
+                }
+            }
+        } catch {
+            # 打包机没有 System.Drawing 时不算失败，但必须让人看见"这项没验"
+            Write-Warning ('DeepOCR 自检未能执行（生成测试图失败）: ' + $_)
+        } finally {
+            Remove-Item -LiteralPath $ocrPng -ErrorAction SilentlyContinue
+        }
+        if (-not $ocrOk -and $ocrOutText) {
+            Write-Host ('  DeepOCR 输出: ' + ($ocrOutText -replace "`r?`n", ' | ')) -ForegroundColor Yellow
+        }
+    }
+
     # 9.4 docs 白名单：内部台账/复核件不得随客户包分发（2026-10-23 实测泄漏，白名单见 Step 6）
     $leakedDocs = @(Get-ChildItem -LiteralPath (Join-Path $OutDir 'docs') -File -ErrorAction SilentlyContinue |
         Where-Object { $docsToShip -notcontains $_.Name } | ForEach-Object { $_.Name })
