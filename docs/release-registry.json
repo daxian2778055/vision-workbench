@@ -1180,6 +1180,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261108.12",
       "recorded_at": "2026-11-08",
       "recorded_note": "扫描清单取证续：修结果判断未知运算符静默按等于比较（空运算符仍兼容）、修主窗口 Delete 快捷键劫持文本编辑（新增 FocusGuard）；取证确认轮末内存释放无效但本轮不改；改正 deploy 说明里过期的 61 DLL。含 rc-20261108.11 的两处 UAF 修复。"
+    },
+    {
+      "tag": "rc-20261108.13",
+      "commit": "58b93e4387624facf2644384f020c36cd975f4d8",
+      "exe_md5": "297da489e9da382567847a5c901783e4",
+      "exe_bytes": 11821568,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261108.13",
+      "recorded_at": "2026-11-08",
+      "recorded_note": "模板引擎清单取证三条：延拓阈值与 boxFilter 半核两处经测试打回确认误报（已回退并留记），matchCount 过滤前写入为真缺陷（改为过滤后写 hits.size()，另存 matchCountBeforeOverlap）；该修复的腿只锁不变量、抓不住改坏，已在腿内声明。含 rc-20261108.12 的未知运算符与 Delete 快捷键修复。"
     }
   ],
   "legacy_backfilled": [
