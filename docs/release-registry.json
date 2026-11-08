@@ -1198,6 +1198,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261108.14",
       "recorded_at": "2026-11-08",
       "recorded_note": "新增 docs/扫描清单取证结论-20261108.md（P1/P2 逐条登记：真缺陷已修 7、待改 1、误报 6、未取证 5，含两处我先改后被测试打回的留记）；修精修段一处缩进。含 rc-20261108.13 的 matchCount 修复。"
+    },
+    {
+      "tag": "rc-20261108.15",
+      "commit": "233247c2c0253945ba81a72ffe143d0c342521bd",
+      "exe_md5": "33b2967c92ad17fa609deb7280399168",
+      "exe_bytes": 11821568,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261108.15",
+      "recorded_at": "2026-11-08",
+      "recorded_note": "轮末内存释放取证后判定不改逻辑（清节点那份会让切节点显示空白），只修正 FlowExecutor 里误导性注释；取证结论文档 19 条全部有结论、无待查项。含 rc-20261108.14 的扫描清单取证。"
     }
   ],
   "legacy_backfilled": [
