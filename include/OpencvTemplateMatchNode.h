@@ -25,6 +25,9 @@ struct TemplateEntry
     bool anchorLocked = false;          ///< 仅约束编辑器里的 X/Y 输入框（锁定后不可改）
     /// 擦除轮廓点区域（VM「擦除轮廓点」）：圆形区域内的特征点不参与匹配。
     QVector<RoiShape> erases;           ///< type=Circle，p1=圆心，p2=圆周一点（半径）
+    /// VM「增强匹配」（仅高精度匹配）：这些下标对应的形状（shapes 下标）匹配要求更严——
+    /// 该区域内的局部分数会作为整体分数的上限。空 = 全部按普通匹配。
+    QVector<int> enhancedShapes;
     // ── VM「模板配置参数」官方口径（见 docs/VM4.4高精度匹配对齐规范.md）──
     // 注：VM 用图像金字塔顶层/底层；我们没有金字塔，按等效效果实现（在规范里注明）。
     // 默认值：阈值 5 灰度差、不稀疏、不过滤；建模板时由 suggestParams 给 VM 口径建议值。

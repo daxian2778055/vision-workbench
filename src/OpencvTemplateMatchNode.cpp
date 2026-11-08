@@ -133,6 +133,10 @@ QJsonObject TemplateEntry::toJson() const
     for (const RoiShape &s : erases)
         eraseArr.append(shapeToJsonObj(s));
     obj[QStringLiteral("erases")] = eraseArr;
+    QJsonArray enhArr;
+    for (int idx : enhancedShapes)
+        enhArr.append(idx);
+    obj[QStringLiteral("enhancedShapes")] = enhArr;
     return obj;
 }
 
@@ -165,6 +169,9 @@ TemplateEntry TemplateEntry::fromJson(const QJsonObject &obj)
     for (const QJsonValue &v : obj.value(QStringLiteral("erases")).toArray())
         if (v.isObject())
             e.erases.append(shapeFromJsonObj(v.toObject()));
+    for (const QJsonValue &v : obj.value(QStringLiteral("enhancedShapes")).toArray())
+        if (v.isDouble())
+            e.enhancedShapes.append(v.toInt());
     return e;
 }
 
@@ -1602,6 +1609,25 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         const quint64 shapeMaskFingerprint =
             shapeMask.empty() ? 0 : templateFingerprint(shapeMask);
 
+        // VM「增强匹配」（仅高精度匹配）：被勾选的掩膜各自生成一张局部掩膜，评分时用该区域
+        // 的局部分数给整体分数封顶（帮助页未给公式；语义 = 该区域相似度要求更严）。
+        QVector<cv::Mat> enhancedMasks;
+        if (methodIdx == 2 && !active.enhancedShapes.isEmpty()) {
+            const QVector<RoiShape> shapeList = active.allShapes();
+            QVector<RoiShape> all = shapeList;
+            all += active.excludes;
+            const QRectF bounds = shapesBounds(all);
+            QVector<int> seenIdx;
+            for (int idx : active.enhancedShapes) {
+                if (idx < 0 || idx >= shapeList.size() || seenIdx.contains(idx))
+                    continue;
+                seenIdx.append(idx);
+                cv::Mat m = shapesMask({shapeList.at(idx)}, bounds, active.excludes);
+                if (!m.empty())
+                    enhancedMasks.append(m);
+            }
+        }
+
         // ROI 图像类型（VM 的「区域类型=图像类型」）：第二个图像输入当掩膜，
         // 白=允许、黑=排除。按粗搜栅格缩放，候选中心必须落在白区。
         cv::Mat roiMask;
@@ -1850,6 +1876,46 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                     cv::absdiff(scoreVis, cv::Scalar(0), flipped);
                     flipped.setTo(-1.0f, invalidMask);
                     scoreVis = flipped;
+                }
+                for (const cv::Mat &enhMaskSrc : enhancedMasks) {
+                    // 掩膜与模板同一套 warp；粗搜会改 base 尺寸，先缩到 base 再变形。
+                    cv::Mat maskForBase = enhMaskSrc;
+                    if (maskForBase.size() != base.size())
+                        cv::resize(maskForBase, maskForBase, base.size(), 0, 0,
+                                   cv::INTER_NEAREST);
+                    const QString enhKey =
+                        warpKeyBase
+                        + QStringLiteral("#enh:%1:%2x%3")
+                              .arg(templateFingerprint(enhMaskSrc), 0, 16)
+                              .arg(base.cols)
+                              .arg(base.rows);
+                    const auto warpedEnh =
+                        warpTemplateCached(maskForBase, enhKey, angle, scaleX, scaleY, crossAngle);
+                    if (warpedEnh.first.empty() || warpedEnh.first.size() != wm.size())
+                        continue;
+                    cv::Mat keep;
+                    cv::threshold(warpedEnh.first, keep, 127.0, 1.0, cv::THRESH_BINARY);
+                    keep.convertTo(keep, CV_32F);
+                    cv::Mat localWm = wm.mul(keep);
+                    const double localN = cv::sum(localWm)[0];
+                    if (localN < 16.0)
+                        continue;   // 该掩膜特征太少，增强无从谈起（不误伤整体匹配）
+                    cv::Mat localCos = wc.mul(keep);
+                    cv::Mat localSin = ws.mul(keep);
+                    cv::Mat lr1, lr2, lrv;
+                    cv::matchTemplate(curSearchCos, localCos, lr1, cv::TM_CCORR);
+                    cv::matchTemplate(curSearchSin, localSin, lr2, cv::TM_CCORR);
+                    cv::matchTemplate(curSearchStrong, localWm, lrv, cv::TM_CCORR);
+                    const double localNeed = qMax(16.0, 0.4 * localN);
+                    cv::Mat localScore = (lr1 + lr2) / (lrv + 1e-6f);
+                    if (ignorePolarity) {
+                        cv::Mat flippedLocal;
+                        cv::absdiff(localScore, cv::Scalar(0), flippedLocal);
+                        localScore = flippedLocal;
+                    }
+                    // 增强区域不可见/特征点没落在搜索边缘上 ⇒ 该区域相似度不达标，压到 0。
+                    localScore.setTo(0.0f, lrv < localNeed);
+                    cv::min(scoreVis, localScore, scoreVis);
                 }
                 if (considerNoise) {
                     // VM「是否考虑噪点」（帮助页只给语义、未给公式）：搜索图里未被模板特征点

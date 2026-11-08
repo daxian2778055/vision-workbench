@@ -330,7 +330,10 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
     // VM 模板配置窗右栏：列表在上（占满纵向），配置参数在下，匹配中心在底。
     rightLay->addWidget(new QLabel(QStringLiteral("列表")));
     m_list = new QListWidget();
+    m_list->setObjectName(QStringLiteral("templateShapeList"));
     m_list->setMinimumHeight(160);
+    m_list->setToolTip(QStringLiteral(
+        "保留形状行的复选框 = VM「增强匹配」（仅高精度匹配）：该掩膜区域相似度要求更严"));
     rightLay->addWidget(m_list, 1);
 
     rightLay->addWidget(new QLabel(QStringLiteral("配置参数")));
@@ -501,8 +504,10 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
             // VM「全部屏蔽」开关：先暂存当前形状，再清空画面进入刷绘模式
             m_blockedShapes = m_shapes;
             m_blockedExcludes = m_excludes;
+            m_blockedShapeEnhanced = m_shapeEnhanced;
             m_blockAllActive = true;
             m_shapes.clear();
+            m_shapeEnhanced.clear();
             m_excludes.clear();
             m_shape = RoiShape();
             m_anchorX->setValue(0.0);
@@ -520,8 +525,10 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
         } else if (m_blockAllActive) {
             m_shapes = m_blockedShapes;
             m_excludes = m_blockedExcludes;
+            m_shapeEnhanced = m_blockedShapeEnhanced;
             m_blockedShapes.clear();
             m_blockedExcludes.clear();
+            m_blockedShapeEnhanced.clear();
             m_blockAllActive = false;
             m_shape = m_shapes.isEmpty() ? RoiShape() : m_shapes.first();
             refreshShapeList();
@@ -551,6 +558,8 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
             pushShapeHistory();
         if (row < m_shapes.size()) {
             m_shapes.removeAt(row);                       // 保留行
+            if (row < m_shapeEnhanced.size())
+                m_shapeEnhanced.removeAt(row);
         } else if (row - m_shapes.size() < m_excludes.size()) {
             m_excludes.removeAt(row - m_shapes.size());   // 屏蔽行
         } else {
@@ -576,6 +585,24 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
             return;
         }
         m_view->setRoiHandleEditEnabled(true);
+    });
+    // VM「增强匹配」（仅高精度匹配）：掩膜行的复选框切换 → 写回 m_shapeEnhanced。
+    connect(m_list, &QListWidget::itemChanged, this, [this](QListWidgetItem *item) {
+        if (!item)
+            return;
+        const int row = m_list->row(item);
+        if (row < 0 || row >= m_shapes.size())
+            return;   // 屏蔽行没有复选框
+        const bool on = item->checkState() == Qt::Checked;
+        if (m_shapeEnhanced.value(row, false) == on)
+            return;   // 刷新列表时的程序化设置
+        pushShapeHistory();
+        if (m_shapeEnhanced.size() != m_shapes.size())
+            m_shapeEnhanced.resize(m_shapes.size());
+        m_shapeEnhanced[row] = on;
+        m_hint->setText(
+            on ? QStringLiteral("已开启增强匹配：第 %1 块掩膜的相似度要求更严。").arg(row + 1)
+               : QStringLiteral("已关闭增强匹配：第 %1 块掩膜按普通要求匹配。").arg(row + 1));
     });
     connect(okBtn, &QPushButton::clicked, this, &TemplateConfigDialog::onConfirm);
     connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
@@ -606,6 +633,11 @@ TemplateConfigDialog::TemplateConfigDialog(OpencvTemplateMatchNode *node, int ed
             m_erases = e.erases;
             m_shapes = e.allShapes();
             m_excludes = e.excludes;
+            m_shapeEnhanced = QVector<bool>(m_shapes.size(), false);
+            for (int idx : e.enhancedShapes) {
+                if (idx >= 0 && idx < m_shapeEnhanced.size())
+                    m_shapeEnhanced[idx] = true;
+            }
             m_shape = m_shapes.isEmpty() ? RoiShape() : m_shapes.first();
             m_savePath = e.imagePath;
             m_edgeSpin->setValue(e.contrastThreshold);
@@ -875,19 +907,27 @@ void TemplateConfigDialog::onSplitShape()
     pushShapeHistory();
     const int row = m_list->currentRow();
     QVector<RoiShape> next;
+    QVector<bool> nextEnh;
     for (int i = 0; i < m_shapes.size(); ++i) {
+        const bool enhanced = m_shapeEnhanced.value(i, false);
         if (row >= 0 && i != row) {
             next.append(m_shapes.at(i));          // 只拆选中的那块
+            nextEnh.append(enhanced);
             continue;
         }
         const QVector<RoiShape> parts = splitShape(m_shapes.at(i));
-        if (parts.size() >= 2)
+        if (parts.size() >= 2) {
             next += parts;
-        else
+            for (int k = 0; k < parts.size(); ++k)
+                nextEnh.append(enhanced);         // 增强属性跟着被拆的掩膜走
+        } else {
             next.append(m_shapes.at(i));          // 拆不开（本来就是一块）就原样保留
+            nextEnh.append(enhanced);
+        }
     }
     const int before = m_shapes.size();
     m_shapes = next;
+    m_shapeEnhanced = nextEnh;
     m_shape = m_shapes.isEmpty() ? RoiShape() : m_shapes.first();
     refreshShapeList();
     refreshFeaturePreview();
@@ -960,6 +1000,10 @@ void TemplateConfigDialog::onImageClicked(const QPointF &imagePos)
     } else {
         pushShapeHistory();
         m_shapes = applyWand(m_shapes, m_trainGray, seed, m_wandTol->value(), m_wandAppend);
+        if (m_wandAppend)
+            m_shapeEnhanced.resize(m_shapes.size());   // 追加：保留已有勾选
+        else
+            m_shapeEnhanced = QVector<bool>(m_shapes.size(), false);   // 替换：旧勾选作废
     }
     m_shape = m_shapes.isEmpty() ? RoiShape() : m_shapes.last();
     if (m_shape.type == RoiType::None && !m_excludes.isEmpty())
@@ -986,6 +1030,7 @@ void TemplateConfigDialog::onClearShape()
         pushShapeHistory();
     m_shape = RoiShape();
     m_shapes.clear();
+    m_shapeEnhanced.clear();
     m_excludes.clear();
     m_view->clearRoi();
     m_view->setFeaturePoints({});
@@ -1014,19 +1059,27 @@ void TemplateConfigDialog::onRoiEdited(const RoiShape &shape)
         m_cutMode = false;
         const int row = m_list->currentRow();
         QVector<RoiShape> next;
+        QVector<bool> nextEnh;
         for (int i = 0; i < m_shapes.size(); ++i) {
+            const bool enhanced = m_shapeEnhanced.value(i, false);
             if (row >= 0 && i != row) {
                 next.append(m_shapes.at(i));
+                nextEnh.append(enhanced);
                 continue;
             }
             const QVector<RoiShape> parts =
                 splitShape(m_shapes.at(i), shape.p1, shape.p2, true);
-            if (parts.size() >= 2)
+            if (parts.size() >= 2) {
                 next += parts;
-            else
+                for (int k = 0; k < parts.size(); ++k)
+                    nextEnh.append(enhanced);
+            } else {
                 next.append(m_shapes.at(i));   // 线没穿过，形状不变
+                nextEnh.append(enhanced);
+            }
         }
         m_shapes = next;
+        m_shapeEnhanced = nextEnh;
         m_shape = m_shapes.isEmpty() ? RoiShape() : m_shapes.first();
         m_view->setRoiEditable(false);
         m_view->setRoiColor(QColor(0, 200, 255));
@@ -1039,6 +1092,7 @@ void TemplateConfigDialog::onRoiEdited(const RoiShape &shape)
         return;
     }
     m_shapes.append(shape);          // 多形状：每次画完追加一块，不清掉之前的
+    m_shapeEnhanced.append(false);   // 新掩膜默认不增强
     m_shape = m_shapes.first();
     m_view->setRoiEditable(false);
     m_view->setRoiHandleEditEnabled(true);
@@ -1057,7 +1111,7 @@ void TemplateConfigDialog::pushShapeHistory()
         return;   // 「全部屏蔽」是临时显示态，不参与撤销
     if (m_undoStates.size() >= 30)
         m_undoStates.removeFirst();
-    m_undoStates.append(ShapeState{m_shapes, m_excludes, m_erases, m_shape});
+    m_undoStates.append(ShapeState{m_shapes, m_excludes, m_erases, m_shape, m_shapeEnhanced});
     m_redoStates.clear();
     updateHistoryButtons();
 }
@@ -1068,6 +1122,7 @@ void TemplateConfigDialog::applyShapeHistory(const ShapeState &state)
     m_excludes = state.excludes;
     m_erases = state.erases;
     m_shape = state.shape;
+    m_shapeEnhanced = state.enhanced;
     m_view->setRoiEditable(false);
     m_view->clearRoi();
     if (m_shape.type != RoiType::None) {
@@ -1112,7 +1167,7 @@ void TemplateConfigDialog::onUndo()
 {
     if (m_blockAllActive || m_undoStates.isEmpty())
         return;
-    m_redoStates.append(ShapeState{m_shapes, m_excludes, m_erases, m_shape});
+    m_redoStates.append(ShapeState{m_shapes, m_excludes, m_erases, m_shape, m_shapeEnhanced});
     applyShapeHistory(m_undoStates.takeLast());
     m_hint->setText(QStringLiteral("已撤销上一步。"));
 }
@@ -1121,13 +1176,14 @@ void TemplateConfigDialog::onRedo()
 {
     if (m_blockAllActive || m_redoStates.isEmpty())
         return;
-    m_undoStates.append(ShapeState{m_shapes, m_excludes, m_erases, m_shape});
+    m_undoStates.append(ShapeState{m_shapes, m_excludes, m_erases, m_shape, m_shapeEnhanced});
     applyShapeHistory(m_redoStates.takeLast());
     m_hint->setText(QStringLiteral("已恢复到撤销前的状态。"));
 }
 
 void TemplateConfigDialog::refreshShapeList()
 {
+    m_list->blockSignals(true);
     m_list->clear();
     auto describe = [](const RoiShape &s) -> QString {
         if (s.type == RoiType::Rect) {
@@ -1156,14 +1212,21 @@ void TemplateConfigDialog::refreshShapeList()
     };
     for (int i = 0; i < m_shapes.size(); ++i) {
         const QString t = describe(m_shapes.at(i));
-        if (!t.isEmpty())
-            m_list->addItem(QStringLiteral("%1. %2").arg(i + 1).arg(t));
+        if (t.isEmpty())
+            continue;
+        auto *item = new QListWidgetItem(QStringLiteral("%1. %2").arg(i + 1).arg(t));
+        // VM「增强匹配」：每块保留掩膜一个开关（仅高精度匹配参与评分）。
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(m_shapeEnhanced.value(i, false) ? Qt::Checked : Qt::Unchecked);
+        item->setToolTip(QStringLiteral("勾选 = 增强匹配：该掩膜区域的相似度要求更严（仅高精度匹配）"));
+        m_list->addItem(item);
     }
     for (int i = 0; i < m_excludes.size(); ++i) {
         const QString t = describe(m_excludes.at(i));
         if (!t.isEmpty())
             m_list->addItem(QStringLiteral("屏蔽%1. %2").arg(i + 1).arg(t));
     }
+    m_list->blockSignals(false);
 }
 
 cv::Mat TemplateConfigDialog::cropTemplate() const
@@ -1345,6 +1408,10 @@ void TemplateConfigDialog::onConfirm()
     entry.anchorDy = m_anchorY->value();
     entry.anchorLocked = m_anchorLock->isChecked();
     entry.erases = m_erases;
+    for (int i = 0; i < m_shapeEnhanced.size() && i < entry.shapes.size(); ++i) {
+        if (m_shapeEnhanced.at(i))
+            entry.enhancedShapes.append(i);
+    }
 
     QVector<TemplateEntry> entries = m_node->templates();
     if (m_editIndex >= 0 && m_editIndex < entries.size())

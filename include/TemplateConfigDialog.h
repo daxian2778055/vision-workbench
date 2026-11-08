@@ -86,6 +86,7 @@ private:
         QVector<RoiShape> excludes;
         QVector<RoiShape> erases;
         RoiShape shape;
+        QVector<bool> enhanced;   ///< 与 shapes 同序：VM「增强匹配」勾选
     };
     void pushShapeHistory();
     void applyShapeHistory(const ShapeState &state);
@@ -118,11 +119,13 @@ private:
 
     RoiShape m_shape;              ///< 主形状（=m_shapes.first()，老逻辑兼容）
     QVector<RoiShape> m_shapes;    ///< 保留形状（一个模板可由多块组成）
+    QVector<bool> m_shapeEnhanced; ///< 与 m_shapes 同序：VM「增强匹配」（仅高精度匹配）
     QVector<RoiShape> m_excludes;  ///< 屏蔽形状（保留区里挖掉的 logo/水印/背景）
     bool m_maskMode = false;       ///< 屏蔽模式：新画的形状进 m_excludes
     /// 「全部屏蔽」开关：开启时临时清空形状/匹配中心，关闭时恢复（VM 同款开关语义）
     QVector<RoiShape> m_blockedShapes;
     QVector<RoiShape> m_blockedExcludes;
+    QVector<bool> m_blockedShapeEnhanced;
     bool m_blockAllActive = false;
     cv::Mat m_trainGray;      ///< 训练用灰度图（当前输入图或"选择其他图像"）
     QString m_trainLabel;     ///< 图上角标：输入源名/文件名

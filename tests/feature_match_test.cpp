@@ -84,6 +84,8 @@ private slots:
     void templateNoiseConsiderationLowersScore();
     // VM「结果显示 → 结果判断」：数量/角度/尺度多条件全部满足才 OK
     void templateResultJudgmentHonorsVmConditions();
+    // VM「增强匹配」（仅高精度匹配）：被勾选的掩膜区域用局部分数给整体分数封顶
+    void templateEnhanceMatchTightensFlaggedMask();
     // 多边形/圆形模板：必须能抠出包围盒（此前多边形直接返回空 → 建模板必失败）
     void templateShapeExtractionSupportsPolygonAndCircle();
     // 魔术棒取形：泛洪出的多边形必须贴合目标区域
@@ -2131,6 +2133,97 @@ void FeatureMatchTest::templateResultJudgmentHonorsVmConditions()
     // 任一条件越界即 NG（把数量改回 [2,5]，其余仍通过）
     node.setParam(QStringLiteral("resJudgeNumLow"), 2.0);
     QVERIFY2(!runAndRead(), "多条件里只要数量越界就应 NG");
+}
+
+// P1-9（VM「增强匹配」，仅高精度匹配）：被勾选的掩膜区域相似度要求更严。
+// 夹具：模板由左右两块掩膜组成，画面右侧工件被替换成另一套边缘。
+//  ① 不增强：整体分数只按全模板平均；
+//  ② 增强右侧（坏区域）：整体分数被右侧局部分数封顶 → 明显下降；
+//  ③ 增强左侧（好区域）：分数不应明显变化（对照组，证明不是开关本身的常数惩罚）；
+//  ④ 越界索引：忽略，与不增强一致；
+//  ⑤ enhancedShapes JSON 往返。
+void FeatureMatchTest::templateEnhanceMatchTightensFlaggedMask()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    cv::Mat left = makePatch();
+    cv::resize(left, left, cv::Size(60, 60), 0, 0, cv::INTER_AREA);
+    cv::Mat right(60, 60, CV_8UC1, cv::Scalar(30));
+    cv::circle(right, cv::Point(30, 30), 22, cv::Scalar(230), 4);
+    cv::line(right, cv::Point(10, 50), cv::Point(50, 10), cv::Scalar(200), 3);
+    cv::Mat tpl(60, 120, CV_8UC1, cv::Scalar(30));
+    left.copyTo(tpl(cv::Rect(0, 0, 60, 60)));
+    right.copyTo(tpl(cv::Rect(60, 0, 60, 60)));
+    const QString tplPath = dir.filePath(QStringLiteral("enh.png"));
+    QVERIFY(cv::imwrite(tplPath.toStdString(), tpl));
+
+    cv::Mat canvas(300, 400, CV_8UC1, cv::Scalar(30));
+    const cv::Rect target(100, 100, 120, 60);
+    tpl.copyTo(canvas(target));
+    // 右侧换成另一套边缘（可见但方向/形状不匹配）→ 局部分数低
+    cv::Rect rightBox(160, 100, 60, 60);
+    canvas(rightBox).setTo(80);
+    cv::rectangle(canvas, cv::Rect(166, 106, 48, 48), cv::Scalar(200), 3);
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 2);   // 增强匹配仅作用于 GOC
+    node.setParam(QStringLiteral("minScore"), 0.1);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("scaleMin"), 1.0);
+    node.setParam(QStringLiteral("scaleMax"), 1.0);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("templatePath"), tplPath);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+
+    TemplateEntry e;
+    e.name = QStringLiteral("two-masks");
+    e.imagePath = tplPath;
+    RoiShape l;
+    l.type = RoiType::Rect;
+    l.p1 = QPointF(0, 0);
+    l.p2 = QPointF(60, 60);
+    RoiShape r;
+    r.type = RoiType::Rect;
+    r.p1 = QPointF(60, 0);
+    r.p2 = QPointF(120, 60);
+    e.shapes = {l, r};
+    e.shape = l;
+    node.setTemplates({e});
+    node.setActiveTemplateIndex(0);
+
+    auto runWithEnhanced = [&](QVector<int> idx) {
+        TemplateEntry cur = e;
+        cur.enhancedShapes = idx;
+        node.setTemplates({cur});
+        node.setActiveTemplateIndex(0);
+        node.run(false);
+        return QPair<double, double>(node.getParam(QStringLiteral("matchScore")).toDouble(),
+                                     node.getParam(QStringLiteral("matchCol")).toDouble());
+    };
+
+    const double base = runWithEnhanced({}).first;
+    const double bad = runWithEnhanced({1}).first;   // 右侧坏区域
+    const double good = runWithEnhanced({0}).first;  // 左侧好区域（对照）
+    const double oob = runWithEnhanced({99}).first;  // 越界索引应忽略
+    qInfo("enhance-leg: base=%.4f badRight=%.4f goodLeft=%.4f outOfRange=%.4f",
+          base, bad, good, oob);
+
+    QVERIFY2(bad < base - 0.05,
+             qPrintable(QStringLiteral("增强坏掩膜后分数必须明显下降：base=%1 bad=%2")
+                            .arg(base).arg(bad)));
+    QVERIFY2(qAbs(good - base) <= 0.02,
+             qPrintable(QStringLiteral("增强好掩膜不应明显掉分：base=%1 good=%2")
+                            .arg(base).arg(good)));
+    QVERIFY2(qAbs(oob - base) <= 0.02,
+             qPrintable(QStringLiteral("越界掩膜索引应被忽略：base=%1 oob=%2")
+                            .arg(base).arg(oob)));
+
+    e.enhancedShapes = {0, 1};
+    QCOMPARE(TemplateEntry::fromJson(e.toJson()).enhancedShapes, QVector<int>({0, 1}));
 }
 
 // 多边形/圆形模板的形状抠图：以前 Polygon/Circle 落到 roiAxisAlignedBounds 返回空，
