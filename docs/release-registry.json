@@ -1279,6 +1279,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261109.8",
       "recorded_at": "2026-11-09",
       "recorded_note": "B1c 收口：控件区官方三组分组（组标题不可选、控件类型走 UserRole）、模板库（存为/应用模板落盘 runtime_templates）、属性编辑进撤销栈（600ms 防抖合并）。适配按钮与固定栏入口需 B2 模型，未放占位。"
+    },
+    {
+      "tag": "rc-20261109.9",
+      "commit": "5e2b6b0ce8ce2d28e7e09a6b4a26ee247defea6d",
+      "exe_md5": "fc5c8ff9936db9c211675f5dc38a2e74",
+      "exe_bytes": 12030976,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261109.9",
+      "recorded_at": "2026-11-09",
+      "recorded_note": "B2-1：按钮动作表（RuntimeAction 多行，类型/方法/参数），旧布局 bindType=action+bindKey 自动迁移成一行；设计器数据源改「配置」按钮 + 数据源配置弹窗（三列表格可增删）；运行视图优先取第一行 exec 动作。界面链接/参数写入/方案切换/重置的运行期执行未接。"
     }
   ],
   "legacy_backfilled": [
