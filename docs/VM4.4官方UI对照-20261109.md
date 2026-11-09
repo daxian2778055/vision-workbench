@@ -331,8 +331,21 @@ TCP 客户端 / TCP 服务端 / UDP / 串口 / 汇川 H2U / 基恩士 KV / 松�
 > 踩坑记录：`drawBar` 的形参原本叫 `slots`，而 `slots` 是 Qt 的关键字宏（展开为空），
 > 导致 `qMax(1, )` 语法错误。Qt 项目里别用 `slots`/`signals`/`emit` 当变量名。
 
+### B2-3d 已落地（2026-11-09）：控件右键菜单
+
+官方 9.1 工具条注写明「删除、撤销、重做、图层位置也支持在选中控件后通过鼠标右键实现」，
+而且**复制粘贴只支持 `Ctrl+C`/`Ctrl+V`**（所以右键菜单里刻意不放复制粘贴，避免与官方口径冲突）。
+
+- `DesignerControlFrame::contextMenuEvent` → 先 `selectIndex(m_index)` 再 emit
+  `RuntimeDesignerCanvas::controlContextMenu(index, globalPos)`（friend 关系允许发受保护 signal）。
+- 设计器侧 `onControlContextMenu` 建菜单：**删除** / **撤销**（按栈空置灰）/ **重做** /
+  **图层位置**子菜单（置于顶层 / 上一层 / 下一层 / 置于底层，按首末位置置灰）。
+- 腿 `designerControlRightClickEmitsContextMenu`：右键**第二个**控件必须上报索引 1（不是 0）、
+  携带全局坐标、且右键即选中。这两点最容易做错——不先选中就会把菜单作用到上一个控件上。
+  `UiGuardsTest` **34 passed**。
+
 **仍待做**：Tab页容器（需要「控件归属某个 Tab 控件」的父引用，比固定栏多一层）；
-设计器右键菜单；导出工程包。
+导出工程包（需要把当前方案文件路径串进设计器，且要先定「工程包」到底包含什么）。
 
 ---
 

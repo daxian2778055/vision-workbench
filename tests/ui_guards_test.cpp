@@ -66,6 +66,7 @@ void canvasConfigAndBarsRoundTrip();
 void zoneGeometryScalesCanvasButNotBars();
 void zoneAtCanvasPointMapsBarsAndCanvas();
 void designerCanvasBarCoordinatesRoundTrip();
+void designerControlRightClickEmitsContextMenu();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -1088,6 +1089,41 @@ void UiGuardsTest::designerCanvasBarCoordinatesRoundTrip()
     const QRect clamped = canvas.toStoredRect(left, QRect(-50, -50, 30, 20));
     QVERIFY2(clamped.left() >= 0 && clamped.top() >= 0,
              "局部坐标被钳到非负，避免拖到栏外后存负数");
+}
+
+// 官方 9.1 工具条注：删除/撤销/重做/图层位置支持鼠标右键。
+// 这里锁住两件容易做错的事：右键必须上报**被点的那个**控件索引，
+// 且必须先把它设为当前选中（否则菜单会作用到上一个选中的控件上）。
+void UiGuardsTest::designerControlRightClickEmitsContextMenu()
+{
+    RuntimeInterfacePage page;
+    RuntimeDesignerCanvas canvas;
+    canvas.setCanvasSize(QSize(600, 400));
+    canvas.setPage(&page);
+    page.addControl(RuntimeControlType::Button, QRect(10, 10, 100, 40));
+    page.addControl(RuntimeControlType::TextLabel, QRect(200, 200, 100, 40));
+    canvas.rebuild();
+
+    const QList<DesignerControlFrame *> frames = canvas.findChildren<DesignerControlFrame *>();
+    QCOMPARE(frames.size(), 2);
+
+    DesignerControlFrame *target = nullptr;
+    for (DesignerControlFrame *f : frames) {
+        if (f->geometry() == QRect(200, 200, 100, 40)) {
+            target = f;
+            break;
+        }
+    }
+    QVERIFY2(target, "没找到第二个控件的框");
+
+    QSignalSpy spy(&canvas, &RuntimeDesignerCanvas::controlContextMenu);
+    QContextMenuEvent ev(QContextMenuEvent::Mouse, QPoint(5, 5), QPoint(500, 500));
+    QApplication::sendEvent(target, &ev);
+
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(0).toInt(), 1);            // 第二个控件，不是第一个
+    QCOMPARE(spy.at(0).at(1).toPoint(), QPoint(500, 500));
+    QCOMPARE(canvas.selectedIndex(), 1);             // 右键即选中
 }
 
 QTEST_MAIN(UiGuardsTest)

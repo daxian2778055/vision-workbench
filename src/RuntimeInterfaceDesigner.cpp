@@ -34,6 +34,8 @@
 #include <QJsonParseError>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QContextMenuEvent>
+#include <QMenu>
 
 namespace {
 /// 控件库拖放用的 Qt 内建 item-model MIME（QListWidget 开启 drag 后自带）
@@ -575,6 +577,16 @@ void DesignerControlFrame::mouseReleaseEvent(QMouseEvent *event)
     }
 }
 
+void DesignerControlFrame::contextMenuEvent(QContextMenuEvent *event)
+{
+    // 官方 9.1 工具条注：删除 / 撤销 / 重做 / 图层位置支持鼠标右键。
+    // 先把被点的控件设为当前选中，否则右键菜单会作用到上一个选中的控件上。
+    m_canvas->selectIndex(m_index);
+    // friend 关系允许访问受保护的 signal
+    emit m_canvas->controlContextMenu(m_index, event->globalPos());
+    event->accept();
+}
+
 void DesignerControlFrame::keyPressEvent(QKeyEvent *event)
 {
     // 方向键微调 1px，Shift+方向键 10px
@@ -724,7 +736,9 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     m_canvas = new RuntimeDesignerCanvas(m_canvasScroll);
     setCanvasPage();
     connect(m_canvas, &RuntimeDesignerCanvas::paletteDropped,
-    this, &RuntimeInterfaceDesigner::addControlAt);
+            this, &RuntimeInterfaceDesigner::addControlAt);
+    connect(m_canvas, &RuntimeDesignerCanvas::controlContextMenu,
+            this, &RuntimeInterfaceDesigner::onControlContextMenu);
     m_canvasScroll->setWidget(m_canvas);
     m_canvasScroll->setWidgetResizable(true);
     m_canvasScroll->setStyleSheet("QScrollArea{background:#1a1a20;border:1px solid #3a3a4a;}");
@@ -1195,6 +1209,42 @@ void RuntimeInterfaceDesigner::addCurrentPaletteControl()
 {
     if (!m_palette) return;
     addControlByRow(m_palette->currentRow());
+}
+
+void RuntimeInterfaceDesigner::onControlContextMenu(int index, const QPoint &globalPos)
+{
+    RuntimeInterfacePage *pg = m_layout.currentPage();
+    if (!pg || index < 0 || index >= pg->controls.size()) return;
+    m_selected = index;   // 右键即选中，避免菜单作用到上一个控件
+
+    const int count = pg->controls.size();
+    QMenu menu(this);
+    QAction *delAct = menu.addAction(QStringLiteral("删除"));
+    menu.addSeparator();
+    QAction *undoAct = menu.addAction(QStringLiteral("撤销"));
+    QAction *redoAct = menu.addAction(QStringLiteral("重做"));
+    undoAct->setEnabled(!m_undoStack.isEmpty());
+    redoAct->setEnabled(!m_redoStack.isEmpty());
+    menu.addSeparator();
+    QMenu *layerMenu = menu.addMenu(QStringLiteral("图层位置"));
+    QAction *topAct = layerMenu->addAction(QStringLiteral("置于顶层"));
+    QAction *upAct = layerMenu->addAction(QStringLiteral("上一层"));
+    QAction *downAct = layerMenu->addAction(QStringLiteral("下一层"));
+    QAction *bottomAct = layerMenu->addAction(QStringLiteral("置于底层"));
+    topAct->setEnabled(index < count - 1);
+    upAct->setEnabled(index < count - 1);
+    downAct->setEnabled(index > 0);
+    bottomAct->setEnabled(index > 0);
+
+    QAction *chosen = menu.exec(globalPos);
+    if (!chosen) return;
+    if (chosen == delAct) deleteSelected();
+    else if (chosen == undoAct) undo();
+    else if (chosen == redoAct) redo();
+    else if (chosen == topAct) raiseToTop();
+    else if (chosen == upAct) raiseSelected();
+    else if (chosen == downAct) lowerSelected();
+    else if (chosen == bottomAct) lowerToBottom();
 }
 
 void RuntimeInterfaceDesigner::addControlAt(const QPoint &pos)

@@ -18,6 +18,7 @@ class QFormLayout;
 class QDoubleSpinBox;
 class QDragEnterEvent;
 class QDropEvent;
+class QContextMenuEvent;
 class RuntimeDesignerCanvas;
 
 /// 自定义运行界面设计器（对齐 VisionMaster 4.4 运行界面设计；多页 + 结果表格 + IO 状态）
@@ -55,6 +56,8 @@ private slots:
     void configureButtonActions();
     /// 控件库拖放到画布：pos 为画布坐标（官方 9.2.2「按住左键移动到编辑区松开」）
     void addControlAt(const QPoint &pos);
+    /// 控件右键菜单（官方 9.1：删除 / 撤销 / 重做 / 图层位置）
+    void onControlContextMenu(int index, const QPoint &globalPos);
     // 控件层级（官方工具条 4 档：顶层 / 上一层 / 底层 / 下一层）
     void raiseSelected();
     void lowerSelected();
@@ -186,6 +189,8 @@ signals:
     void controlSelected(int index);
     /// 控件库条目被拖放到画布（行类型由设计器按 m_palette->currentRow() 取）
     void paletteDropped(const QPoint &pos);
+    /// 控件上右键（官方 9.1：删除/撤销/重做/图层位置支持右键操作）
+    void controlContextMenu(int index, const QPoint &globalPos);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -219,6 +224,7 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
+    void contextMenuEvent(QContextMenuEvent *event) override;
 
 private:
     RuntimeDesignerCanvas *m_canvas;
