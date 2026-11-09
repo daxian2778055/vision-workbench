@@ -117,6 +117,7 @@ private slots:
     void templateFingerprintDistinguishesContent();
     void matchCountMatchesFilteredList();
     void templateAnchorUsesScaleYInXYMode();
+    void templateCurrentResultFollowsSortType();
     // 分割/剪刀：按连通域拆块、沿画线切开
     void templateSplitShapeByCut();
     // 继承 ROI：上游命中框当成搜索区域（框外的更优候选不许抢）
@@ -4488,6 +4489,62 @@ void FeatureMatchTest::templateAnchorUsesScaleYInXYMode()
     QVERIFY2(qAbs(r.x() - 110.0) < 1e-6 && qAbs(r.y() - 100.0) < 1e-6,
              qPrintable(QStringLiteral("90° + XY 尺度应到 (110,100)，实得 (%1,%2)")
                             .arg(r.x()).arg(r.y())));
+}
+
+// 官方（VM4.4高精度匹配对齐规范.md:68）：排序类型是「当前结果」的排序依据。
+// 主标量字段 / matchScore / MeasureResult 必须与 matchList 第一行是同一目标。
+// 旧实现恒取第一实例（最高分），sortType != 0 时与列表首行错位。
+// 这里刻意让「最高分目标在下方、按Y升序首条在上方」，改坏必红。
+void FeatureMatchTest::templateCurrentResultFollowsSortType()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const cv::Mat patch = makePatch();
+    const QString tpl = dir.filePath(QStringLiteral("tpl.png"));
+    QVERIFY(cv::imwrite(tpl.toStdString(), patch));
+
+    cv::Mat canvas(500, 400, CV_8UC1, cv::Scalar(kCanvasBackground));
+    cv::Mat upper = patch.clone();
+    // 上方目标轻微缺损 ⇒ 分数略低；下方目标完整 ⇒ 第一实例（最高分）在下方
+    upper(cv::Rect(0, 0, 4, 4)).setTo(kCanvasBackground);
+    upper.copyTo(canvas(cv::Rect(60, 60, kTemplateSize, kTemplateSize)));
+    patch.copyTo(canvas(cv::Rect(60, 300, kTemplateSize, kTemplateSize)));
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.5);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("angleStep"), 2.0);
+    node.setParam(QStringLiteral("maxMatches"), 2);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("templatePath"), tpl);
+    node.setParam(QStringLiteral("sortType"), 3);        // 按Y由小到大 ⇒ 首条在上方
+    node.setParam(QStringLiteral("searchRegionCol"), 0);
+    node.setParam(QStringLiteral("searchRegionRow"), 0);
+    node.setParam(QStringLiteral("searchRegionWidth"), canvas.cols);
+    node.setParam(QStringLiteral("searchRegionHeight"), canvas.rows);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+    node.run(false);
+
+    const QStringList rows = node.getParam(QStringLiteral("matchList"))
+                                 .toString().split(QLatin1Char(';'), Qt::SkipEmptyParts);
+    QVERIFY2(rows.size() >= 2,
+             qPrintable(QStringLiteral("需要两个命中才能验证排序口径，实得 %1").arg(rows.size())));
+    const QStringList first = rows.at(0).split(QLatin1Char(','));
+    const double firstRow = first.at(0).toDouble();
+    const double firstScore = first.at(2).toDouble();
+    const double mainRow = node.getParam(QStringLiteral("matchRow")).toDouble();
+    const double mainScore = node.getParam(QStringLiteral("matchScore")).toDouble();
+
+    QVERIFY2(qAbs(mainRow - firstRow) <= 1.5,
+             qPrintable(QStringLiteral("「当前结果」应跟随排序后首条：matchRow=%1，"
+                                       "列表首行 row=%2（旧实现会取最高分的下方目标）")
+                            .arg(mainRow).arg(firstRow)));
+    QVERIFY2(qAbs(mainScore - firstScore) < 0.02,
+             qPrintable(QStringLiteral("matchScore=%1 应与列表首行分数 %2 同源")
+                            .arg(mainScore).arg(firstScore)));
 }
 
 QTEST_MAIN(FeatureMatchTest)

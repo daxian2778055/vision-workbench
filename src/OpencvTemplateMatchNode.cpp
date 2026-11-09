@@ -2370,6 +2370,9 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             double row, col, score, angle, scale, prow, pcol;
             double scaleY;   ///< XY 独立尺度模式下的 Y 向尺度（整体模式等于 scale）
             double cross;    ///< 横切角（度；整体尺度模式下恒为 0）
+            /// 该命中自身的亚像素偏移。主结果字段要跟随排序后的首条命中，
+            /// 不能只留第一实例的 bestSubpix（2026-11-09 口径对齐）。
+            double subpixX = 0.0, subpixY = 0.0;
         };
         QVector<MatchHit> hits;
         int matchCount = 0;
@@ -2575,7 +2578,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 const double pCol = anchorPoint.x();
                 const double pRow = anchorPoint.y();
                 hits.append({centerY, centerX, bestScore, bestAngle, bestScale, pRow, pCol,
-                             bestScaleY, bestCross});
+                             bestScaleY, bestCross, bestSubpix.x, bestSubpix.y});
                 matchList << QStringLiteral("%1,%2,%3,%4,%5,%6,%7")
                                  .arg(centerY, 0, 'f', 1)
                                  .arg(centerX, 0, 'f', 1)
@@ -2737,19 +2740,33 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             return;
         }
 
-        // 坐标换算回原图（搜索区域裁剪过时）
-        const double col = bestLoc.x + searchRect.x + bestCenterInWarp.x;
-        const double row = bestLoc.y + searchRect.y + bestCenterInWarp.y;
+        // 官方口径（VM4.4高精度匹配对齐规范.md:68）：排序类型是「当前结果」的排序依据
+        // ⇒ 主标量字段 / 结果判断 / MeasureResult 必须与 matchList 第一行是同一目标。
+        // 原实现恒取「第一实例」（最高分），sortType != 0 时会与列表首行错位；多模板
+        // 合并路径早用 merged.first() 重写主字段，这里补齐单模板路径（2026-11-09）。
+        // hits.first().row/col 与下面 bestLoc 的表达式完全同源，故默认 sortType=0
+        // 时行为零变化；亚像素也随命中一起存进 MatchHit，不再只留第一实例。
+        const MatchHit *current = hits.isEmpty() ? nullptr : &hits.first();
+        const double col = current ? current->col
+                                   : bestLoc.x + searchRect.x + bestCenterInWarp.x;
+        const double row = current ? current->row
+                                   : bestLoc.y + searchRect.y + bestCenterInWarp.y;
+        const double subX = current ? current->subpixX : bestSubpix.x;
+        const double subY = current ? current->subpixY : bestSubpix.y;
+        const double curScore = current ? current->score : bestScore;
+        const double curAngle = current ? current->angle : bestAngle;
+        const double curScale = current ? current->scale : bestScale;
+        const double curScaleY = current ? current->scaleY : bestScaleY;
+        const double curCross = current ? current->cross : bestCross;
         // 匹配框宽高：X 用 scaleX、Y 用 scaleY（VM 模块结果；XY 模式下两者独立）。
-        // 旧实现两轴都用 bestScale ⇒ 非均匀目标（如 1.2×0.8）的高度被写成 1.2 倍。
-        const double outW = tmplW * bestScale;
-        const double outH = tmplH * bestScaleY;
+        const double outW = tmplW * curScale;
+        const double outH = tmplH * curScaleY;
 
-        m_params[QStringLiteral("matchRow")] = row + bestSubpix.y;
-        m_params[QStringLiteral("matchCol")] = col + bestSubpix.x;
-        m_params[QStringLiteral("matchScore")] = bestScore;
-        m_params[QStringLiteral("matchAngle")] = bestAngle;
-        m_params[QStringLiteral("matchScale")] = bestScale;
+        m_params[QStringLiteral("matchRow")] = row + subY;
+        m_params[QStringLiteral("matchCol")] = col + subX;
+        m_params[QStringLiteral("matchScore")] = curScore;
+        m_params[QStringLiteral("matchAngle")] = curAngle;
+        m_params[QStringLiteral("matchScale")] = curScale;
         // VM 结果表口径：「匹配点」= 模板的匹配中心（锚点）落到场景里的位置。
         // 锚点默认在模板中心（anchorDx/Dy=0），可在模板配置窗里偏移并锁定。
         {
@@ -2757,14 +2774,14 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             // mapAnchorToImage，不能再用共轭矩阵，否则非零锚点+非零角度时
             // 「匹配点 X/Y」与结果判断、叠加十字线一起镜像（差 2θ）。
             const QPointF anchorPoint =
-                mapAnchorToImage(col + bestSubpix.x, row + bestSubpix.y, bestAngle,
-                                 active.anchorDx, active.anchorDy, bestScale, bestCross,
-                                 bestScaleY);
+                mapAnchorToImage(col + subX, row + subY, curAngle,
+                                 active.anchorDx, active.anchorDy, curScale, curCross,
+                                 curScaleY);
             m_params[QStringLiteral("matchPointCol")] = anchorPoint.x();
             m_params[QStringLiteral("matchPointRow")] = anchorPoint.y();
-            m_params[QStringLiteral("matchScaleX")] = bestScale;
-            m_params[QStringLiteral("matchScaleY")] = bestScaleY;
-            m_params[QStringLiteral("matchCrossAngle")] = bestCross;
+            m_params[QStringLiteral("matchScaleX")] = curScale;
+            m_params[QStringLiteral("matchScaleY")] = curScaleY;
+            m_params[QStringLiteral("matchCrossAngle")] = curCross;
         }
         // VM「是否输出轮廓」：主命中的匹配轮廓点集（图像坐标）。点源是模板局部坐标，
         // 经与打分同一套 R·S·H 映射落到实际位姿；只输出主目标（逐目标点集暂不展开）。
@@ -2773,9 +2790,9 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             contourImage.reserve(contourLocal.size());
             for (const QPointF &p : contourLocal) {
                 contourImage.append(
-                    mapTemplatePoint(col + bestSubpix.x, row + bestSubpix.y, bestAngle,
-                                     p.x() - tmplW * 0.5, p.y() - tmplH * 0.5, bestScale,
-                                     bestScaleY, bestCross));
+                    mapTemplatePoint(col + subX, row + subY, curAngle,
+                                     p.x() - tmplW * 0.5, p.y() - tmplH * 0.5, curScale,
+                                     curScaleY, curCross));
             }
             if (outputContour) {
                 QStringList xs, ys;
@@ -2887,13 +2904,14 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         MeasureResult res;
         res.type = QStringLiteral("template");
         res.valueName = QStringLiteral("匹配得分");
-        res.valid = (bestScore >= minScore);
-        res.value = bestScore;
+        // 与主标量字段同源：MeasureResult 也描述「当前结果」（排序后首条命中）
+        res.valid = (curScore >= minScore);
+        res.value = curScore;
         res.point1 = QPointF(col, row);
-        res.extraValues = QVector<double>({row, col, bestScore, bestAngle, bestScale, outW, outH,
+        res.extraValues = QVector<double>({row, col, curScore, curAngle, curScale, outW, outH,
                                            m_params.value(QStringLiteral("matchPointRow")).toDouble(),
                                            m_params.value(QStringLiteral("matchPointCol")).toDouble(),
-                                           bestScale, bestScaleY, bestCross});
+                                           curScale, curScaleY, curCross});
         auto resObj = QSharedPointer<DataObject>::create();
         resObj->setMeasureResult(res);
         // VM「是否获取轮廓」：轮廓点集作为独立结果交给叠加层（默认不显示的特征点层）。
