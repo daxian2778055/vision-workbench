@@ -90,6 +90,9 @@ void lineChartRuntimeAppendsBoundSamplesAndTrims();
 void multiLineChartSharesOneChartAndAppends();
 void pieChartUpdatesSliceValues();
 void chartTypesRoundTrip();
+// B1：画布尺寸「按比例适配」纯函数 + 设计器画布/固定栏配置入口
+void canvasScalingHelperScalesCanvasControls();
+void designerExposesCanvasAndBarConfig();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -1728,6 +1731,46 @@ void UiGuardsTest::designerInnerTabEditFilter()
     // 对话框必须暴露「编辑内层Tab」选择器（objectName 定位）
     RuntimeInterfaceDesigner dlg(QStringList{QStringLiteral("模块1")});
     QVERIFY(dlg.findChild<QComboBox *>(QStringLiteral("designerEditInnerTabCombo")));
+}
+
+// B1：画布尺寸「按比例适配」——只缩放画布区控件，固定栏控件 1:1 不动；
+// 尺寸非正或相等时不改任何几何（返回 false）。
+void UiGuardsTest::canvasScalingHelperScalesCanvasControls()
+{
+    RuntimeInterfacePage page;
+    RuntimeControl a;
+    a.type = RuntimeControlType::TextLabel;
+    a.zone = RuntimeZone::Canvas;
+    a.geometry = QRect(100, 100, 200, 100);
+    page.controls.append(a);
+    RuntimeControl b;
+    b.type = RuntimeControlType::TextLabel;
+    b.zone = RuntimeZone::TopBar;
+    b.geometry = QRect(10, 10, 50, 20);
+    page.controls.append(b);
+
+    QVERIFY(scaleCanvasControls(page, QSize(800, 600), QSize(1600, 1200)));
+    QCOMPARE(page.controls.at(0).geometry, QRect(200, 200, 400, 200));
+    QCOMPARE(page.controls.at(1).geometry, QRect(10, 10, 50, 20));   // 固定栏 1:1
+
+    RuntimeInterfacePage same = page;
+    QVERIFY(!scaleCanvasControls(same, QSize(1600, 1200), QSize(1600, 1200)));
+    QCOMPARE(same.controls.at(0).geometry, page.controls.at(0).geometry);  // 无改动
+    QVERIFY(!scaleCanvasControls(same, QSize(0, 0), QSize(1600, 1200)));
+}
+
+// B1：设计器必须暴露画布尺寸输入 + 「按比例适配」勾选 + 应用按钮 + 四向固定栏厚度
+void UiGuardsTest::designerExposesCanvasAndBarConfig()
+{
+    RuntimeInterfaceDesigner dlg(QStringList{QStringLiteral("模块1")});
+    QVERIFY(dlg.findChild<QSpinBox *>(QStringLiteral("designerCanvasWidthSpin")));
+    QVERIFY(dlg.findChild<QSpinBox *>(QStringLiteral("designerCanvasHeightSpin")));
+    QVERIFY(dlg.findChild<QCheckBox *>(QStringLiteral("designerCanvasScaleCheck")));
+    QVERIFY(dlg.findChild<QPushButton *>(QStringLiteral("designerCanvasApplyBtn")));
+    QVERIFY(dlg.findChild<QSpinBox *>(QStringLiteral("designerBarTopSpin")));
+    QVERIFY(dlg.findChild<QSpinBox *>(QStringLiteral("designerBarBottomSpin")));
+    QVERIFY(dlg.findChild<QSpinBox *>(QStringLiteral("designerBarLeftSpin")));
+    QVERIFY(dlg.findChild<QSpinBox *>(QStringLiteral("designerBarRightSpin")));
 }
 
 QTEST_MAIN(UiGuardsTest)

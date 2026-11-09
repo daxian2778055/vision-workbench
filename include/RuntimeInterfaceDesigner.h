@@ -99,6 +99,12 @@ private:
     void setCanvasPage();
     /// 刷新「编辑内层Tab」选择器（随页/内层 Tab 变化重建候选并回选画布当前目标）
     void refreshEditInnerTabCombo();
+    /// 刷新画布尺寸 / 固定栏厚度输入框（随画布配置或切页变化，不触发写回）
+    void refreshCanvasConfigControls();
+    /// 「应用画布尺寸」：按勾选等比缩放画布区控件后改画布尺寸并重建
+    void applyCanvasSize();
+    /// 固定栏厚度写回当前页（四个 spin 共用一个入口，只留一个撤销点）
+    void onBarThicknessChanged();
     void populateBindKeyCombo();
     void refreshPropertyPanel();
     void refreshPageList();
@@ -122,6 +128,16 @@ private:
     QScrollArea *m_canvasScroll = nullptr;
     /// 编辑内层Tab选择器（-1 = 全部画布；仅当前页启用内层 Tab 时可用）
     QComboBox *m_editInnerTabCombo = nullptr;
+    // 画布尺寸 + 固定栏厚度（官方 9.1/9.3；B1「按比例适配」）
+    QSpinBox *m_canvasWidthSpin = nullptr;
+    QSpinBox *m_canvasHeightSpin = nullptr;
+    QCheckBox *m_canvasScaleCheck = nullptr;
+    QSpinBox *m_barTopSpin = nullptr;
+    QSpinBox *m_barBottomSpin = nullptr;
+    QSpinBox *m_barLeftSpin = nullptr;
+    QSpinBox *m_barRightSpin = nullptr;
+    /// refreshCanvasConfigControls() 播种期间置真：拦掉 valueChanged 写回，避免四个撤销点
+    bool m_updatingCanvasConfig = false;
 
     // 属性面板
     QLineEdit *m_titleEdit = nullptr;

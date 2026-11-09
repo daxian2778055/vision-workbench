@@ -170,6 +170,81 @@ void RuntimeInterfaceDesigner::setCanvasPage()
     m_canvas->setCanvasSize(QSize(m_layout.canvas.width, m_layout.canvas.height));
     m_canvas->setPage(m_layout.currentPage());
     refreshEditInnerTabCombo();
+    refreshCanvasConfigControls();
+}
+
+void RuntimeInterfaceDesigner::refreshCanvasConfigControls()
+{
+    m_updatingCanvasConfig = true;
+    if (m_canvasWidthSpin) {
+        QSignalBlocker block(m_canvasWidthSpin);
+        m_canvasWidthSpin->setValue(qBound(m_canvasWidthSpin->minimum(),
+                                           m_layout.canvas.width,
+                                           m_canvasWidthSpin->maximum()));
+    }
+    if (m_canvasHeightSpin) {
+        QSignalBlocker block(m_canvasHeightSpin);
+        m_canvasHeightSpin->setValue(qBound(m_canvasHeightSpin->minimum(),
+                                            m_layout.canvas.height,
+                                            m_canvasHeightSpin->maximum()));
+    }
+    // 固定栏厚度是页级字段：没有当前页时显示 0
+    RuntimeInterfacePage *pg = m_layout.currentPage();
+    const int top = pg ? pg->topBarHeight : 0;
+    const int bottom = pg ? pg->bottomBarHeight : 0;
+    const int left = pg ? pg->leftBarWidth : 0;
+    const int right = pg ? pg->rightBarWidth : 0;
+    struct SpinSeed { QSpinBox *spin; int value; };
+    const SpinSeed seeds[] = {{m_barTopSpin, top}, {m_barBottomSpin, bottom},
+                              {m_barLeftSpin, left}, {m_barRightSpin, right}};
+    for (const SpinSeed &s : seeds) {
+        if (!s.spin) continue;
+        QSignalBlocker block(s.spin);
+        s.spin->setValue(qBound(s.spin->minimum(), s.value, s.spin->maximum()));
+    }
+    m_updatingCanvasConfig = false;
+}
+
+void RuntimeInterfaceDesigner::applyCanvasSize()
+{
+    if (!m_canvasWidthSpin || !m_canvasHeightSpin) return;
+    const int newW = m_canvasWidthSpin->value();
+    const int newH = m_canvasHeightSpin->value();
+    const QSize oldSize(m_layout.canvas.width, m_layout.canvas.height);
+    // 非法或没变化：不建撤销点、不重建画布
+    if (newW <= 0 || newH <= 0) return;
+    if (newW == oldSize.width() && newH == oldSize.height()) return;
+
+    pushUndo();
+    if (m_canvasScaleCheck && m_canvasScaleCheck->isChecked()) {
+        if (RuntimeInterfacePage *pg = m_layout.currentPage())
+            scaleCanvasControls(*pg, oldSize, QSize(newW, newH));
+    }
+    m_layout.canvas.width = newW;
+    m_layout.canvas.height = newH;
+    setCanvasPage();
+}
+
+void RuntimeInterfaceDesigner::onBarThicknessChanged()
+{
+    if (m_updatingCanvasConfig) return;
+    RuntimeInterfacePage *pg = m_layout.currentPage();
+    if (!pg) return;
+    const int top = m_barTopSpin ? m_barTopSpin->value() : pg->topBarHeight;
+    const int bottom = m_barBottomSpin ? m_barBottomSpin->value() : pg->bottomBarHeight;
+    const int left = m_barLeftSpin ? m_barLeftSpin->value() : pg->leftBarWidth;
+    const int right = m_barRightSpin ? m_barRightSpin->value() : pg->rightBarWidth;
+    // 值没变（或只是被 refresh 播种）不建撤销点
+    if (top == pg->topBarHeight && bottom == pg->bottomBarHeight
+        && left == pg->leftBarWidth && right == pg->rightBarWidth) {
+        return;
+    }
+    pushUndo();
+    pg->topBarHeight = top;
+    pg->bottomBarHeight = bottom;
+    pg->leftBarWidth = left;
+    pg->rightBarWidth = right;
+    setCanvasPage();
 }
 
 void RuntimeInterfaceDesigner::refreshEditInnerTabCombo()
@@ -984,12 +1059,71 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
         m_canvas->setEditInnerTab(m_editInnerTabCombo->currentData().toInt());
     });
 
+    // 画布尺寸 + 「按比例适配控件」（官方 9.3.1 画布基础配置；B1 补齐设计器入口）
+    auto *canvasSizeRow = new QHBoxLayout();
+    canvasSizeRow->addWidget(new QLabel(QStringLiteral("画布尺寸："), canvasGroup));
+    m_canvasWidthSpin = new QSpinBox(canvasGroup);
+    m_canvasWidthSpin->setObjectName(QStringLiteral("designerCanvasWidthSpin"));
+    m_canvasWidthSpin->setRange(200, 8000);
+    m_canvasWidthSpin->setToolTip(QStringLiteral("画布宽度（像素）"));
+    canvasSizeRow->addWidget(m_canvasWidthSpin);
+    canvasSizeRow->addWidget(new QLabel(QStringLiteral("×"), canvasGroup));
+    m_canvasHeightSpin = new QSpinBox(canvasGroup);
+    m_canvasHeightSpin->setObjectName(QStringLiteral("designerCanvasHeightSpin"));
+    m_canvasHeightSpin->setRange(200, 8000);
+    m_canvasHeightSpin->setToolTip(QStringLiteral("画布高度（像素）"));
+    canvasSizeRow->addWidget(m_canvasHeightSpin);
+    m_canvasScaleCheck = new QCheckBox(QStringLiteral("按比例适配控件"), canvasGroup);
+    m_canvasScaleCheck->setObjectName(QStringLiteral("designerCanvasScaleCheck"));
+    m_canvasScaleCheck->setChecked(true);
+    m_canvasScaleCheck->setToolTip(QStringLiteral("改画布尺寸时按新旧尺寸比例缩放画布区控件（固定栏控件 1:1 不动）"));
+    canvasSizeRow->addWidget(m_canvasScaleCheck);
+    auto *applyCanvasBtn = new QPushButton(QStringLiteral("应用画布尺寸"), canvasGroup);
+    applyCanvasBtn->setObjectName(QStringLiteral("designerCanvasApplyBtn"));
+    applyCanvasBtn->setStyleSheet("QPushButton{background:#3a6ea5;color:white;border:none;border-radius:4px;padding:4px 8px;}");
+    connect(applyCanvasBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::applyCanvasSize);
+    canvasSizeRow->addWidget(applyCanvasBtn);
+    canvasSizeRow->addStretch();
+
+    // 固定栏厚度（官方 9.1 四向固定栏；页级字段，运行期 1:1 不缩放）
+    auto *barRow = new QHBoxLayout();
+    barRow->addWidget(new QLabel(QStringLiteral("固定栏：上"), canvasGroup));
+    m_barTopSpin = new QSpinBox(canvasGroup);
+    m_barTopSpin->setObjectName(QStringLiteral("designerBarTopSpin"));
+    m_barTopSpin->setRange(0, 300);
+    barRow->addWidget(m_barTopSpin);
+    barRow->addWidget(new QLabel(QStringLiteral("下"), canvasGroup));
+    m_barBottomSpin = new QSpinBox(canvasGroup);
+    m_barBottomSpin->setObjectName(QStringLiteral("designerBarBottomSpin"));
+    m_barBottomSpin->setRange(0, 300);
+    barRow->addWidget(m_barBottomSpin);
+    barRow->addWidget(new QLabel(QStringLiteral("左"), canvasGroup));
+    m_barLeftSpin = new QSpinBox(canvasGroup);
+    m_barLeftSpin->setObjectName(QStringLiteral("designerBarLeftSpin"));
+    m_barLeftSpin->setRange(0, 300);
+    barRow->addWidget(m_barLeftSpin);
+    barRow->addWidget(new QLabel(QStringLiteral("右"), canvasGroup));
+    m_barRightSpin = new QSpinBox(canvasGroup);
+    m_barRightSpin->setObjectName(QStringLiteral("designerBarRightSpin"));
+    m_barRightSpin->setRange(0, 300);
+    barRow->addWidget(m_barRightSpin);
+    const QString barTip = QStringLiteral("固定栏厚度（像素，运行期 1:1 不缩放；应用到当前页）");
+    for (QSpinBox *s : {m_barTopSpin, m_barBottomSpin, m_barLeftSpin, m_barRightSpin}) {
+        s->setToolTip(barTip);
+        connect(s, QOverload<int>::of(&QSpinBox::valueChanged),
+                this, [this](int) { onBarThicknessChanged(); });
+    }
+    barRow->addStretch();
+
     auto *canvasLay = new QVBoxLayout(canvasGroup);
     canvasLay->addLayout(editTabRow);
+    canvasLay->addLayout(canvasSizeRow);
+    canvasLay->addLayout(barRow);
     canvasLay->addWidget(m_canvasScroll, 1);
     canvasLay->addLayout(alignRow);
     canvasLay->addLayout(canvasToolRow);
     refreshEditInnerTabCombo();
+    refreshCanvasConfigControls();
 
     // ---- 右侧：属性面板 ----
     // 官方实机（选中「图像」控件）是 4 个可折叠分组：标识 / 数据源 / 布局 / 外观。

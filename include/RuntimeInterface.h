@@ -195,6 +195,10 @@ struct RuntimeInterfacePage
     bool fromJson(const QJsonObject &json);
 };
 
+/// 按画布尺寸变化等比缩放一页里「画布区」控件的存储几何（固定栏控件 1:1 不动）。
+/// oldSize/newSize 任一非正或相等时返回 false 且不改动。
+bool scaleCanvasControls(RuntimeInterfacePage &page, const QSize &oldSize, const QSize &newSize);
+
 /// 运行界面：多页集合（运行时按 Tab 切换）
 class RuntimeInterface
 {

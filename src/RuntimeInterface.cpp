@@ -92,6 +92,25 @@ RuntimeZone zoneAtCanvasPoint(const RuntimeInterfacePage &page, const QSize &can
     return RuntimeZone::Canvas;
 }
 
+bool scaleCanvasControls(RuntimeInterfacePage &page, const QSize &oldSize, const QSize &newSize)
+{
+    if (oldSize.width() <= 0 || oldSize.height() <= 0) return false;
+    if (newSize.width() <= 0 || newSize.height() <= 0) return false;
+    if (oldSize == newSize) return false;
+
+    const double sx = double(newSize.width()) / double(oldSize.width());
+    const double sy = double(newSize.height()) / double(oldSize.height());
+    for (RuntimeControl &ctrl : page.controls) {
+        // 固定栏控件按像素 1:1 绘制，画布尺寸变化不影响它们
+        if (ctrl.zone != RuntimeZone::Canvas) continue;
+        const QRect g = ctrl.geometry;
+        ctrl.geometry = QRect(qRound(g.x() * sx), qRound(g.y() * sy),
+                              qMax(40, qRound(g.width() * sx)),
+                              qMax(24, qRound(g.height() * sy)));
+    }
+    return true;
+}
+
 bool parseParamActionTarget(const QString &method, const QString &param,
                             QString *nodeName, QString *paramKey, QVariant *value)
 {
