@@ -1261,6 +1261,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261109.6",
       "recorded_at": "2026-11-09",
       "recorded_note": "B1b：按第三张 VM4.4 实机截图把运行界面设计器属性区改为标识/数据源/布局/外观四分组，对齐扩到官方 6 种+分布 2 种、图层扩到 4 档，含结构与几何行为腿。叠加 rc-20261109.5 的官方 UI 对照文档与拖放/Ctrl+C/V。"
+    },
+    {
+      "tag": "rc-20261109.7",
+      "commit": "e72625161088ecef6eb87e3f0b9cc3dbf17477fe",
+      "exe_md5": "3a19e48eea7c733acfe587d00cb04f7c",
+      "exe_bytes": 12012032,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261109.7",
+      "recorded_at": "2026-11-09",
+      "recorded_note": "B1c：按按钮实机截图补齐外观字段（bold/bgColor/borderColor/pressedColor，序列化只在非默认时写出、读取用默认值保证旧布局外观不变），设计器外观组与运行视图按钮渲染同步消费。按钮「数据源配置」动作表留 B2。"
     }
   ],
   "legacy_backfilled": [
