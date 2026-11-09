@@ -820,20 +820,8 @@ if(VFP_BUILD_TESTS)
     if(MSVC)
         target_compile_options(dnn_infer_test PRIVATE /utf-8)
     endif()
-    # 官方预训练 .hdl 模型端到端推理验证（Dl* 推理节点同款链路）
-    add_executable(dl_cls_probe tests/dl_cls_probe.cpp)
-    target_include_directories(dl_cls_probe PRIVATE ${HALCON_INCLUDE_DIRS})
-    target_link_libraries(dl_cls_probe PRIVATE ${HALCON_LIBRARIES})
-    if(MSVC)
-        target_compile_options(dl_cls_probe PRIVATE /utf-8)
-    endif()
-    # HALCON DL 与 OpenCV DNN 可用性诊断
-    add_executable(halcon_dl_probe tests/halcon_dl_probe.cpp)
-    target_include_directories(halcon_dl_probe PRIVATE ${HALCON_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
-    target_link_libraries(halcon_dl_probe PRIVATE ${HALCON_LIBRARIES} ${OpenCV_LIBS})
-    if(MSVC)
-        target_compile_options(halcon_dl_probe PRIVATE /utf-8)
-    endif()
+    # 注：HALCON 深度学习只保留 DeepOCR（产品约定，见 VisionIntegrationPolicy.h）。
+    # 其他 HALCON DL（ReadDlModel/ApplyDlModel 分类检测、TrainDlModelBatch）不建探针。
     # OCR/条码/测量 替换版可用性诊断
     add_executable(halcon_ocr_barcode_probe tests/halcon_ocr_barcode_probe.cpp)
     target_include_directories(halcon_ocr_barcode_probe PRIVATE ${HALCON_INCLUDE_DIRS})
@@ -848,7 +836,7 @@ if(VFP_BUILD_TESTS)
     if(MSVC)
         target_compile_options(halcon_deepocr_probe PRIVATE /utf-8)
     endif()
-    # XLD 轮廓 + DL 训练/推理 附加能力探针（run_env_check.bat [4/4]）
+    # XLD 轮廓 + DeepOCR 附加能力探针（HALCON DL 只保留 DeepOCR）
     add_executable(halcon_extra_probe tests/halcon_extra_probe.cpp)
     target_include_directories(halcon_extra_probe PRIVATE ${HALCON_INCLUDE_DIRS})
     target_link_libraries(halcon_extra_probe PRIVATE ${HALCON_LIBRARIES})
@@ -860,16 +848,6 @@ if(MSVC)
 endif()
 
 if(MSVC)
-endif()
-
-if(MSVC)
-    add_executable(hde_train_probe tests/hde_train_probe.cpp)
-    target_include_directories(hde_train_probe PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/tests ${HALCON_INCLUDE_DIRS}
-        ${HALCON_ROOT}/include/hdevengine)
-    target_link_libraries(hde_train_probe PRIVATE
-        ${HALCON_ROOT}/lib/x64-win64/hdevenginecpp.lib ${HALCON_LIBRARIES})
-    target_compile_options(hde_train_probe PRIVATE /utf-8)
 endif()
 
 if(MSVC)

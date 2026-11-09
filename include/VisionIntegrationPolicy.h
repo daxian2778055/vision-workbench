@@ -18,6 +18,9 @@
  * · 日常图像算法（二值化、形态学、Blob、边缘、拟合、卡尺、模板匹配、缺陷、
  *   标定、DNN 等）一律走 OpenCV。不要再按「HALCON 正统 / OpenCV 替代」双轨描述。
  * · HALCON 算法仅保留 DeepOCR（CreateDeepOcr / ApplyDeepOcr）。
+ * · HALCON 深度学习也只保留 DeepOCR：不提供、不保留其他 HALCON DL（ReadDlModel /
+ *   ApplyDlModel 分类与检测、TrainDlModelBatch、HDevEngine 训练）的节点或探针；
+ *   其余深度学习任务统一走 OpenCV DNN / ONNX 或外部训练。
  * · 未注册的 HALCON 区域 / 测量 / 形状匹配源码可留在仓库，但不得重新挂到工具库。
  *
  * 三、基类说明

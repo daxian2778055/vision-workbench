@@ -1,6 +1,7 @@
-// HALCON 附加能力探针：XLD 轮廓系列 + 深度学习训练/推理 + DeepOCR
+// HALCON 附加能力探针：XLD 轮廓系列 + DeepOCR
 // 覆盖应用仍在使用的 XLD 可视化算子（GenRectangle2ContourXld 等）与
-// 唯一保留 HALCON 原生的 DL 主链路（ReadDlModel/ApplyDlModel/TrainDlModelBatch）
+// **唯一保留的 HALCON DL 能力 DeepOCR**（CreateDeepOcr/ApplyDeepOcr）。
+// 其他 HALCON DL（ReadDlModel/ApplyDlModel 分类/检测、TrainDlModelBatch）不提供、不探测。
 // 用法：halcon_extra_probe.exe [--summary]
 //   退出码 0 = 无意外失败（已知限制与 SKIP 不算失败）
 //   退出码 1 = 存在不在已知清单内的意外失败
@@ -32,7 +33,6 @@ static bool isKnownFail(const char *name)
     static const char *kKnown[] = {
         "XLD SplitContoursXld",
         "XLD PaintXld 绘制",
-        "DL 训练 TrainDlModelBatch",
         "DeepOCR 创建+推理",
     };
     for (size_t i = 0; i < sizeof(kKnown) / sizeof(kKnown[0]); ++i)
@@ -47,8 +47,6 @@ static const char *knownReplacement(const char *name)
         return "应用未使用该算子；拆分由 OpenCV 轮廓处理替代";
     if (std::strcmp(name, "XLD PaintXld 绘制") == 0)
         return "绘制位置偏移约1像素且目标行半强度，仅影响标注外观，不影响检测结果";
-    if (std::strcmp(name, "DL 训练 TrainDlModelBatch") == 0)
-        return "替换版运行时已裁剪 DLDataset 数据准备算子（DLL 无导出），训练链路不可用；\n            训练请用 OpenCV分类器训练 或外部训练导出 ONNX";
     if (std::strcmp(name, "DeepOCR 创建+推理") == 0)
         return "DeepOCR 已实测可用（平台内新增 HALCON DeepOCR 节点，CPU 推理）";
     return nullptr;
@@ -305,151 +303,13 @@ static void testXld()
     }
 }
 
-// ================= 深度学习训练 =================
-static void testDlTrain()
-{
-    out("--- DL 训练（合成数据，CPU）---\n");
-    try {
-        HTuple model;
-        HTuple emptyParam;
-        CreateDict(&emptyParam);
-        CreateDlModelDetection("pretrained_dl_classifier_compact", 1, emptyParam, &model);
-        out("  CreateDlModelDetection OK\n");
-
-        SetDlModelParam(model, "image_width", 64);
-        SetDlModelParam(model, "image_height", 64);
-        SetDlModelParam(model, "runtime", "cpu");
-        SetDlModelParam(model, "batch_size", 2);
-
-        // 2 个合成样本（64x64 含 16x16 方块）——手工构造完整字段
-        std::vector<HDict> samples;
-        HTuple batch;
-        for (int i = 0; i < 2; ++i) {
-            HImage img = makeImg(64, 200);
-            const int r1 = 8 + i * 4, c1 = 8 + i * 4;
-            HDict sample;
-            sample.SetDictObject(img, "image");
-            sample.SetDictTuple("bbox", HTuple(double(r1)).Append(double(c1))
-                                            .Append(double(r1 + 16)).Append(double(c1 + 16)));
-            HTuple cls, ig;
-            cls.Append(0);
-            ig.Append(0);
-            sample.SetDictTuple("bbox_class", cls);
-            sample.SetDictTuple("bbox_label", "block");
-            sample.SetDictTuple("bbox_ignore", ig);
-            sample.SetDictTuple("image_id", i);
-            sample.SetDictTuple("split", "train");
-            sample.SetDictTuple("ignore", 0);
-            samples.push_back(sample);
-            batch.Append(HTuple(samples.back()));
-        }
-        out("  样本批次构造完成（8 样本）\n");
-
-        HTuple trainResult;
-        TrainDlModelBatch(model, batch, &trainResult);
-        REPORT(true, "DL 训练 TrainDlModelBatch", "训练完成（CPU，2 iterations）");
-
-        // 训练后推理验证（dict 保持存活）
-        try {
-            HTuple inferBatch;
-            HDict d;
-            d.SetDictObject(makeImg(64, 200), "image");
-            inferBatch.Append(HTuple(d));
-            HTuple results;
-            ApplyDlModel(model, inferBatch, HTuple(), &results);
-            REPORT(results.Length() == 1, "DL 训练后推理 ApplyDlModel",
-                   (std::string("结果数=") + std::to_string(results.Length())).c_str());
-        } catch (const HException &e) {
-            REPORT(false, "DL 训练后推理 ApplyDlModel", e.ErrorMessage().TextA());
-        }
-        ClearDlModel(model);
-    } catch (const HException &e) {
-        REPORT(false, "DL 训练 TrainDlModelBatch", e.ErrorMessage().TextA());
-    }
-}
-
-// ================= 深度学习推理（预训练模型） =================
-static void testDlInfer()
+// ================= DeepOCR（HALCON DL 唯一保留项） =================
+static void testDeepOcr()
 {
     const char *base = "D:/Program Files/MVTec/HALCON-24.11-Progress-Steady/dl/";
-    out("--- DL 推理（预训练模型）---\n");
+    out("--- DeepOCR ---");
 
-    const char *clsModel = "pretrained_dl_classifier_compact.hdl";
-    std::string clsPath = std::string(base) + clsModel;
-    if (!fileExists(clsPath.c_str())) {
-        REPORT_SKIP("DL 分类推理", (std::string("模型缺失: ") + clsPath).c_str());
-    } else {
-        try {
-            HTuple model;
-            ReadDlModel(clsPath.c_str(), &model);
-            out("  [diag] ReadDlModel OK\n");
-            try {
-                SetDlModelParam(model, "device", "cpu");
-                out("  [diag] SetDlModelParam device OK\n");
-            } catch (const HException &e) {
-                out("  [diag] SetDlModelParam device 不支持: %s（继续尝试推理）\n",
-                    e.ErrorMessage().TextA());
-            }
-            HTuple typeV;
-            GetDlModelParam(model, "type", &typeV);
-            out("  [diag] 模型类型=%s\n", typeV.S().TextA());
-            try {
-                HTuple dev;
-                GetDlModelParam(model, "device", &dev);
-                out("  [diag] device=%s\n", dev.S().TextA());
-            } catch (const HException &e) {
-                out("  [diag] GetDlModelParam device 不可读: %s\n", e.ErrorMessage().TextA());
-            }
-            try {
-                SetDlModelParam(model, "runtime", "cpu");
-                out("  [diag] SetDlModelParam runtime=cpu OK\n");
-            } catch (const HException &e) {
-                out("  [diag] SetDlModelParam runtime=cpu 不支持: %s\n", e.ErrorMessage().TextA());
-            }
-            // 1) 空 batch（验证 Outputs 参数与引擎可用性）
-            HTuple r0;
-            ApplyDlModel(model, HTuple(), HTuple(), &r0);
-            out("  [diag] 空 batch OK, results=%d\n", r0.Length());
-            // 2) 单元素空 dict
-            try {
-                HTuple b1;
-                HTuple e1;
-                CreateDict(&e1);
-                b1.Append(e1);
-                HTuple r1;
-                ApplyDlModel(model, b1, HTuple(), &r1);
-                out("  [diag] 空 dict 元素 OK, results=%d\n", r1.Length());
-            } catch (const HException &e) {
-                out("  [diag] 空 dict 元素 EXC: %s\n", e.ErrorMessage().TextA());
-            }
-            // 3) 带 image 的 dict（按模型期望尺寸/通道/类型构造）
-            HTuple mw, mh, mc;
-            GetDlModelParam(model, "image_width", &mw);
-            GetDlModelParam(model, "image_height", &mh);
-            GetDlModelParam(model, "image_num_channels", &mc);
-            out("  [diag] 模型输入 %s x %s, %s 通道\n",
-                mw.ToString().TextA(), mh.ToString().TextA(), mc.ToString().TextA());
-            HTuple inferBatch;
-            HDict d;
-            const int w = mw.I(), h = mh.I();
-            HImage imgIn = (mc.I() == 3) ? makeImg3(w, 200) : makeImg(w, 200);
-            HObject imgReal;
-            ConvertImageType(imgIn, &imgReal, "real");
-            d.SetDictObject(HImage(imgReal), "image");
-            inferBatch.Append(HTuple(d));
-            out("  [diag] batch len=%d\n", inferBatch.Length());
-            HTuple results;
-            ApplyDlModel(model, inferBatch, HTuple(), &results);
-            bool ok = results.Length() == 1;
-            REPORT(ok, "DL 分类推理 ApplyDlModel",
-                   (std::string("结果数=") + std::to_string(results.Length())).c_str());
-            ClearDlModel(model);
-        } catch (const HException &e) {
-            REPORT(false, "DL 分类推理 ApplyDlModel", e.ErrorMessage().TextA());
-        }
-    }
-
-    // DeepOCR（应用未使用，仅能力验证）
+    // DeepOCR 是产品内唯一保留的 HALCON DL 能力（DeepOcrNode）。
     const char *detModel = "pretrained_deep_ocr_detection.hdl";
     const char *recModel = "pretrained_deep_ocr_recognition.hdl";
     std::string detPath = std::string(base) + detModel;
@@ -493,8 +353,7 @@ int main(int argc, char **argv)
     }
 
     testXld();
-    testDlTrain();
-    testDlInfer();
+    testDeepOcr();
 
     std::printf("\n==== 汇总: %d PASS / %d FAIL / %d SKIP ====\n", g_pass, g_fail, g_skip);
 

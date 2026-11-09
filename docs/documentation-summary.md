@@ -31,7 +31,7 @@
 | **性能优化指南** | `docs/performance-optimization-guide.md` | 内存、算法、UI、通信优化 |
 | **安全开发指南** | `docs/security-development-guide.md` | 输入验证、内存安全、网络安全 |
 | **国际化支持指南** | `docs/internationalization-guide.md` | 多语言支持和翻译管理 |
-| **深度学习集成指南** | `docs/深度学习集成指南.md` | HALCON DL 与 OpenCV DNN：模型准备、三个实测陷阱、参数速查 |
+| **深度学习集成指南** | `docs/深度学习集成指南.md` | HALCON 仅 DeepOCR + OpenCV DNN：模型准备、三个实测陷阱、参数速查 |
 | **离线可用性说明** | `docs/离线可用性说明.md` | 无外网环境的依赖清单与一键部署自检 |
 | **长稳与文档对账** | `docs/长稳与文档对账.md` | 72h 长跑流程（`tools/soak.ps1`）与文档对账机制（`tools/doc_check.ps1`） |
 | **统计报表说明** | `docs/统计报表说明.md` | 良率口径、趋势/NG 分布、CSV/HTML/PNG 导出（视图 → 统计报表） |

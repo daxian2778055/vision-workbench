@@ -15,7 +15,7 @@
 | 规则文件 | 路径 | 说明 |
 |---------|------|------|
 | OpenCV 使用规范 | `.cursor/rules/opencv-patterns.mdc` | OpenCV 集成开发规范 |
-| 深度学习规范 | `.cursor/rules/deep-learning.mdc` | HALCON DL 和 OpenCV DNN 集成 |
+| 深度学习规范 | `.cursor/rules/deep-learning.mdc` | HALCON 仅 DeepOCR + OpenCV DNN 集成 |
 | 测试规范 | `.cursor/rules/testing.mdc` | Qt Test 测试方法和规范 |
 
 ### 2. SKILLS 创建
