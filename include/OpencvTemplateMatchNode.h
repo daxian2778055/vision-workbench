@@ -171,6 +171,14 @@ public:
     static QPointF mapTemplatePoint(double centerX, double centerY, double angleDeg,
                                     double dx, double dy, double scaleX,
                                     double scaleY, double crossAngleDeg = 0.0);
+    /// 按 min/max/step 枚举搜索姿态，最多 maxCount 个（超出时均匀重采样）。
+    /// 导出为静态是为了让腿能锁住 maxCount<=1 不产生 inf/nan 步长（2026-11-09）。
+    static void collectSearchValues(double mn, double mx, double step, int maxCount,
+                                    QVector<double> &out);
+    /// 外部掩膜可能是 CV_16U/CV_32F/3 通道；统一成 CV_8UC1 的 0/255 二值图，
+    /// 避免与其它 CV_8U 掩膜 bitwise_and 时触发 OpenCV 类型断言（2026-11-09）。
+    /// 不支持的通道数返回空 Mat。导出为静态便于腿直接测纯函数。
+    static cv::Mat normalizeMaskTo8U(const cv::Mat &src);
     /// 模板块 → 图像坐标的强梯度点（对话框预览与编辑器共用同一映射）。
     /// mask 非空且尺寸与模板块一致时，掩膜外（值为 0）的点被跳过。
     static QVector<QPointF> featurePointsForPatch(const cv::Mat &tmpl, const RoiShape &roi,

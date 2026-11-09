@@ -118,6 +118,8 @@ private slots:
     void matchCountMatchesFilteredList();
     void templateAnchorUsesScaleYInXYMode();
     void templateCurrentResultFollowsSortType();
+    void templateSearchValuesHandlesTinyMaxCount();
+    void templateImageTypeRoiAccepts16BitMask();
     // 分割/剪刀：按连通域拆块、沿画线切开
     void templateSplitShapeByCut();
     // 继承 ROI：上游命中框当成搜索区域（框外的更优候选不许抢）
@@ -4545,6 +4547,66 @@ void FeatureMatchTest::templateCurrentResultFollowsSortType()
     QVERIFY2(qAbs(mainScore - firstScore) < 0.02,
              qPrintable(QStringLiteral("matchScore=%1 应与列表首行分数 %2 同源")
                             .arg(mainScore).arg(firstScore)));
+}
+
+// 2026-11-09 复核：collectSearchValues 在 n > maxCount 时用 (mx-mn)/(maxCount-1)
+// 重算步长；maxCount 为 0/1 时除零或得负步长，产生 inf/乱值。产品当前调用点传
+// 90 或 16 不可达，但辅助函数不该留这个坑。钳到至少 2 点后正好取两个端点。
+void FeatureMatchTest::templateSearchValuesHandlesTinyMaxCount()
+{
+    for (int maxCount : {0, 1, 2}) {
+        QVector<double> out;
+        OpencvTemplateMatchNode::collectSearchValues(-10.0, 10.0, 1.0, maxCount, out);
+        QVERIFY2(out.size() >= 2,
+                 qPrintable(QStringLiteral("maxCount=%1 应至少给出 2 个采样点，实得 %2")
+                                .arg(maxCount).arg(out.size())));
+        for (double v : out) {
+            QVERIFY2(std::isfinite(v),
+                     qPrintable(QStringLiteral("maxCount=%1 产生了 inf/nan 步长").arg(maxCount)));
+        }
+        QVERIFY2(qAbs(out.first() - (-10.0)) < 1e-9 && qAbs(out.last() - 10.0) < 1e-9,
+                 qPrintable(QStringLiteral("maxCount=%1 应覆盖两个端点").arg(maxCount)));
+        for (int i = 1; i < out.size(); ++i)
+            QVERIFY2(out[i] > out[i - 1],
+                     qPrintable(QStringLiteral("maxCount=%1 采样步长必须为正").arg(maxCount)));
+    }
+    // 正常量程不受影响
+    QVector<double> normal;
+    OpencvTemplateMatchNode::collectSearchValues(0.0, 9.0, 1.0, 90, normal);
+    QCOMPARE(normal.size(), 10);
+}
+
+// 2026-11-09 复核：图像型 ROI 掩膜若来自 uint2/CV_16U 或 real/CV_32F，
+// maskRegionFromData 原先只做 cv::threshold（保持原深度），后续与 CV_8U 掩膜
+// bitwise_and 会触发 OpenCV 类型断言。这里直接测归一化的纯函数，不依赖
+// OpencvUtil 的 16 位 HALCON 往返（那属于另一层）。
+void FeatureMatchTest::templateImageTypeRoiAccepts16BitMask()
+{
+    cv::Mat m16(40, 40, CV_16UC1, cv::Scalar(0));
+    cv::rectangle(m16, cv::Rect(10, 10, 10, 10), cv::Scalar(65535), cv::FILLED);
+    const cv::Mat a = OpencvTemplateMatchNode::normalizeMaskTo8U(m16);
+    QVERIFY2(a.type() == CV_8UC1, "16U 掩膜必须归一成 CV_8UC1");
+    QCOMPARE(a.size(), m16.size());
+    QCOMPARE(static_cast<int>(a.at<uchar>(15, 15)), 255);
+    QCOMPARE(static_cast<int>(a.at<uchar>(0, 0)), 0);
+
+    cv::Mat m32(20, 20, CV_32FC1, cv::Scalar(0.0f));
+    m32(cv::Rect(5, 5, 5, 5)).setTo(1.0f);
+    const cv::Mat b = OpencvTemplateMatchNode::normalizeMaskTo8U(m32);
+    QVERIFY2(b.type() == CV_8UC1, "32F 掩膜必须归一成 CV_8UC1");
+    QCOMPARE(static_cast<int>(b.at<uchar>(7, 7)), 255);
+    QCOMPARE(static_cast<int>(b.at<uchar>(0, 0)), 0);
+
+    cv::Mat rgb(10, 10, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::rectangle(rgb, cv::Rect(2, 2, 4, 4), cv::Scalar(255, 255, 255), cv::FILLED);
+    const cv::Mat c = OpencvTemplateMatchNode::normalizeMaskTo8U(rgb);
+    QVERIFY2(c.type() == CV_8UC1, "3 通道掩膜必须转成单通道");
+    QCOMPARE(static_cast<int>(c.at<uchar>(3, 3)), 255);
+
+    QVERIFY2(OpencvTemplateMatchNode::normalizeMaskTo8U(
+                 cv::Mat(10, 10, CV_8UC4, cv::Scalar::all(0))).empty(),
+             "不支持的通道数应返回空，交给调用方按无掩膜处理");
+    QVERIFY(OpencvTemplateMatchNode::normalizeMaskTo8U(cv::Mat()).empty());
 }
 
 QTEST_MAIN(FeatureMatchTest)

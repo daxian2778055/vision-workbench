@@ -150,18 +150,21 @@ cv::Mat maskRegionFromData(const QSharedPointer<DataObject> &data, const cv::Siz
                 return m;
             }
         } catch (const HalconCpp::HException &) {
-            // 不是 Region（或已失效）：继续尝试图像形态
+            // 有意的降级路径（2026-11-09 复核澄清）：Region 句柄失效或本就不是
+            // Region 时，下面仍会尝试「图像形态」和具名子结果「掩膜」。本函数是纯
+            // 转换工具、没有节点上下文，且降级成功后不算错误，故不写 lastError；
+            // 三种形态全失败才由调用方按「无掩膜」处理（返回空 Mat）。
         }
     }
     if (data->getHImage().IsInitialized()) {
-        cv::Mat m = OpencvUtil::himageToMat(HImage(data->getHImage()));
+        // himageToMat 会保留 HALCON 的 16U/32F 深度；下游把本掩膜与别的 CV_8U
+        // 掩膜 bitwise_and 时，OpenCV 会因类型不一致直接断言。统一成 CV_8UC1。
+        cv::Mat m = OpencvTemplateMatchNode::normalizeMaskTo8U(
+            OpencvUtil::himageToMat(HImage(data->getHImage())));
         if (!m.empty()) {
-            if (m.channels() == 3)
-                cv::cvtColor(m, m, cv::COLOR_BGR2GRAY);
             if (m.size() != size)
                 cv::resize(m, m, size, 0, 0, cv::INTER_NEAREST);
-            cv::threshold(m, m, 0, 255, cv::THRESH_BINARY);   // 白=屏蔽
-            return m;
+            return m;   // 白=屏蔽
         }
     }
     if (depth < 1) {
@@ -443,8 +446,35 @@ std::pair<cv::Mat, cv::Point2f> warpTemplateCached(const cv::Mat &tmpl, const QS
 
 }   // namespace
 
+} // namespace  （提前关闭：collectSearchValues 已导出为类静态方法，必须在全局定义）
 
-void collectSearchValues(double mn, double mx, double step, int maxCount, QVector<double> &out)
+
+cv::Mat OpencvTemplateMatchNode::normalizeMaskTo8U(const cv::Mat &src)
+{
+    if (src.empty())
+        return {};
+    cv::Mat m = src;
+    if (m.channels() == 3)
+        cv::cvtColor(m, m, cv::COLOR_BGR2GRAY);
+    else if (m.channels() != 1)
+        return {};
+    if (m.depth() != CV_8U) {
+        double minV = 0.0, maxV = 0.0;
+        cv::minMaxLoc(m, &minV, &maxV);
+        // 值域超过 255 的（如 uint2 的 65535）按比例压到 0..255；
+        // 否则直接截断即可，threshold(>0) 仍能把非零区变白。
+        if (maxV > 255.0)
+            m.convertTo(m, CV_8U, 255.0 / maxV);
+        else
+            m.convertTo(m, CV_8U);
+    }
+    cv::Mat bin;
+    cv::threshold(m, bin, 0, 255, cv::THRESH_BINARY);
+    return bin;
+}
+
+void OpencvTemplateMatchNode::collectSearchValues(double mn, double mx, double step,
+                                                   int maxCount, QVector<double> &out)
 {
     if (mx < mn)
         std::swap(mn, mx);
@@ -456,6 +486,10 @@ void collectSearchValues(double mn, double mx, double step, int maxCount, QVecto
     if (n < 1)
         n = 1;
     if (n > maxCount) {
+        // maxCount 为 0/1 时 (maxCount - 1) 是 0（或负数），除出来是 inf/负数步长。
+        // 当前产品调用点传 90 或 16 不会触发，但辅助函数不该留这个坑
+        // （2026-11-09 复核）：钳到至少 2 个点，正好取两个端点。
+        maxCount = qMax(2, maxCount);
         step = (mx - mn) / double(maxCount - 1);
         n = maxCount;
     }
@@ -463,8 +497,6 @@ void collectSearchValues(double mn, double mx, double step, int maxCount, QVecto
     for (int i = 0; i < n; ++i)
         out.append(mn + step * i);
 }
-
-} // namespace
 
 OpencvTemplateMatchNode::OpencvTemplateMatchNode(QObject *parent) : HalconNode(parent, false)
 {
