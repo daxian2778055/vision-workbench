@@ -235,6 +235,13 @@ QJsonObject RuntimeInterfacePage::toJson() const
     for (const RuntimeControl &c : controls)
         arr.append(controlToJson(c));
     root["controls"] = arr;
+    // 固定栏（0 = 无该方向固定栏）
+    QJsonObject bars;
+    bars["top"] = topBarHeight;
+    bars["bottom"] = bottomBarHeight;
+    bars["left"] = leftBarWidth;
+    bars["right"] = rightBarWidth;
+    root["bars"] = bars;
     return root;
 }
 
@@ -243,6 +250,11 @@ bool RuntimeInterfacePage::fromJson(const QJsonObject &json)
     if (!json.contains("controls")) return false;
     controls.clear();
     pageName = json["pageName"].toString(QStringLiteral("页面1"));
+    const QJsonObject bars = json["bars"].toObject();
+    topBarHeight = bars["top"].toInt(0);
+    bottomBarHeight = bars["bottom"].toInt(0);
+    leftBarWidth = bars["left"].toInt(0);
+    rightBarWidth = bars["right"].toInt(0);
     const QJsonArray arr = json["controls"].toArray();
     for (const QJsonValue &v : arr) {
         const QJsonObject o = v.toObject();
@@ -310,6 +322,14 @@ QJsonObject RuntimeInterface::toJson() const
         pageArr.append(p.toJson());
     root["pages"] = pageArr;
     root["currentPage"] = currentPageIndex;
+    // 画布（所有页共用一块画布）
+    QJsonObject cv;
+    cv["width"] = canvas.width;
+    cv["height"] = canvas.height;
+    cv["showGrid"] = canvas.showGrid;
+    cv["gridColor"] = canvas.gridColor;
+    cv["bgColor"] = canvas.bgColor;
+    root["canvas"] = cv;
     return root;
 }
 
@@ -327,6 +347,14 @@ bool RuntimeInterface::fromJson(const QJsonObject &json)
             pages.append(p);
     }
     currentPageIndex = json["currentPage"].toInt(0);
+    const QJsonObject cv = json["canvas"].toObject();
+    canvas.width = cv["width"].toInt(1200);
+    canvas.height = cv["height"].toInt(760);
+    if (canvas.width < 200) canvas.width = 200;
+    if (canvas.height < 150) canvas.height = 150;
+    canvas.showGrid = cv["showGrid"].toBool(false);
+    canvas.gridColor = cv["gridColor"].toString(QStringLiteral("#1e1e1e"));
+    canvas.bgColor = cv["bgColor"].toString(QStringLiteral("#383838"));
     ensurePage();
     return !pages.isEmpty();
 }

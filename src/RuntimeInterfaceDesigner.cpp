@@ -96,6 +96,21 @@ void RuntimeDesignerCanvas::setPage(RuntimeInterfacePage *page)
     rebuild();
 }
 
+void RuntimeDesignerCanvas::setCanvasSize(const QSize &size)
+{
+    if (!size.isValid() || size.isEmpty()) return;
+    setFixedSize(size);
+    rebuild();
+}
+
+void RuntimeInterfaceDesigner::setCanvasPage()
+{
+    if (!m_canvas) return;
+    // 先按画布配置定尺寸，再挂页（setPage 内部会 rebuild）
+    m_canvas->setCanvasSize(QSize(m_layout.canvas.width, m_layout.canvas.height));
+    m_canvas->setPage(m_layout.currentPage());
+}
+
 void RuntimeDesignerCanvas::rebuild()
 {
     for (QWidget *w : m_frames) {
@@ -613,7 +628,7 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     auto *canvasGroup = new QGroupBox(QStringLiteral("画布"), this);
     m_canvasScroll = new QScrollArea(canvasGroup);
     m_canvas = new RuntimeDesignerCanvas(m_canvasScroll);
-    m_canvas->setPage(m_layout.currentPage());
+    setCanvasPage();
     connect(m_canvas, &RuntimeDesignerCanvas::paletteDropped,
     this, &RuntimeInterfaceDesigner::addControlAt);
     m_canvasScroll->setWidget(m_canvas);
@@ -1017,7 +1032,7 @@ void RuntimeInterfaceDesigner::addPage()
     m_layout.currentPageIndex = m_layout.addPage();
     refreshPageList();
     m_selected = -1;
-    m_canvas->setPage(m_layout.currentPage());
+    setCanvasPage();
     refreshPropertyPanel();
 }
 
@@ -1036,7 +1051,7 @@ void RuntimeInterfaceDesigner::removePage()
     m_layout.removePage(m_layout.currentPageIndex);
     refreshPageList();
     m_selected = -1;
-    m_canvas->setPage(m_layout.currentPage());
+    setCanvasPage();
     refreshPropertyPanel();
 }
 
@@ -1059,7 +1074,7 @@ void RuntimeInterfaceDesigner::onPageSelected(int index)
     if (index < 0 || index >= m_layout.pages.size()) return;
     m_layout.currentPageIndex = index;
     m_selected = -1;
-    m_canvas->setPage(m_layout.currentPage());
+    setCanvasPage();
     refreshPropertyPanel();
 }
 
@@ -1191,7 +1206,7 @@ void RuntimeInterfaceDesigner::loadLayout()
         m_layout.ensurePage();
         m_selected = -1;
         refreshPageList();
-        m_canvas->setPage(m_layout.currentPage());
+        setCanvasPage();
         refreshPropertyPanel();
     } else {
         QMessageBox::warning(this, tr("加载布局"),
@@ -1316,7 +1331,7 @@ void RuntimeInterfaceDesigner::afterRestore()
     m_layout.ensurePage();
     m_selected = -1;
     refreshPageList();
-    m_canvas->setPage(m_layout.currentPage());
+    setCanvasPage();
     refreshPropertyPanel();
 }
 
@@ -1349,7 +1364,7 @@ void RuntimeInterfaceDesigner::duplicatePage()
     m_layout.currentPageIndex = m_layout.pages.size() - 1;
     refreshPageList();
     m_selected = -1;
-    m_canvas->setPage(m_layout.currentPage());
+    setCanvasPage();
     refreshPropertyPanel();
 }
 
@@ -1574,7 +1589,7 @@ void RuntimeInterfaceDesigner::applyTemplate()
     m_layout = loaded;
     m_layout.ensurePage();
     m_selected = -1;
-    m_canvas->setPage(m_layout.currentPage());
+    setCanvasPage();
     refreshPageList();
     refreshPropertyPanel();
 }

@@ -62,6 +62,7 @@ void switchControlRoundTripsAndSeedsWithoutWriteBack();
 void comboBoxRoundTripsAndSeedsWithoutWriteBack();
 void paramActionTargetParsesNodeKeyValue();
 void imageAndClockControlsRoundTripAndRender();
+void canvasConfigAndBarsRoundTrip();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -913,6 +914,52 @@ void UiGuardsTest::imageAndClockControlsRoundTripAndRender()
     }
     QVERIFY2(sawBrokenImageHint, "图片路径无效时应给出可读提示，而不是空白");
     QVERIFY2(sawClockText, "世界时钟应显示 yyyy-MM-dd HH:mm:ss 形式的时间");
+}
+
+// B2-3a 画布配置与固定栏（官方 9.3.1 画布可配置 + 9.1 四向固定栏）。
+void UiGuardsTest::canvasConfigAndBarsRoundTrip()
+{
+    RuntimeInterface layout;
+    layout.ensurePage();
+    layout.canvas.width = 800;
+    layout.canvas.height = 500;
+    layout.canvas.showGrid = true;
+    layout.canvas.gridColor = QStringLiteral("#112233");
+    layout.canvas.bgColor = QStringLiteral("#445566");
+    layout.page(0)->topBarHeight = 60;
+    layout.page(0)->bottomBarHeight = 40;
+    layout.page(0)->leftBarWidth = 120;
+    layout.page(0)->rightBarWidth = 0;
+
+    RuntimeInterface back;
+    QVERIFY(back.fromJson(layout.toJson()));
+    QCOMPARE(back.canvas.width, 800);
+    QCOMPARE(back.canvas.height, 500);
+    QVERIFY(back.canvas.showGrid);
+    QCOMPARE(back.canvas.gridColor, QStringLiteral("#112233"));
+    QCOMPARE(back.canvas.bgColor, QStringLiteral("#445566"));
+    QCOMPARE(back.page(0)->topBarHeight, 60);
+    QCOMPARE(back.page(0)->bottomBarHeight, 40);
+    QCOMPARE(back.page(0)->leftBarWidth, 120);
+    QCOMPARE(back.page(0)->rightBarWidth, 0);
+
+    // 默认值：新建布局仍是 1200×760、无固定栏
+    RuntimeInterface fresh;
+    fresh.ensurePage();
+    QCOMPARE(fresh.canvas.width, 1200);
+    QCOMPARE(fresh.canvas.height, 760);
+    QCOMPARE(fresh.page(0)->topBarHeight, 0);
+
+    // 异常值钳制：过小的画布被抬到可编辑下限
+    QJsonObject tiny = layout.toJson();
+    QJsonObject cv = tiny[QStringLiteral("canvas")].toObject();
+    cv[QStringLiteral("width")] = 10;
+    cv[QStringLiteral("height")] = 10;
+    tiny[QStringLiteral("canvas")] = cv;
+    RuntimeInterface clamped;
+    QVERIFY(clamped.fromJson(tiny));
+    QVERIFY2(clamped.canvas.width >= 200 && clamped.canvas.height >= 150,
+             "画布尺寸过小应被钳制到可编辑下限");
 }
 
 QTEST_MAIN(UiGuardsTest)

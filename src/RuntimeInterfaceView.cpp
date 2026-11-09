@@ -37,6 +37,8 @@ void RuntimeInterfaceView::setInterface(const RuntimeInterface &layout)
     clearWidgets();
     m_current = layout;
     m_current.ensurePage();
+    // 缩放基准改为布局里的画布配置（原先硬编码 1200×760，画布尺寸改了也不生效）
+    m_designSize = QSize(m_current.canvas.width, m_current.canvas.height);
     rebuildWidgets();
     // currentPageIndex 此前只存不用（盘点发现），这里让运行态默认页真正生效
     if (m_tabs && m_tabs->count() > 0)
@@ -787,7 +789,8 @@ void RuntimeInterfaceView::paintEvent(QPaintEvent *event)
 
 QRect RuntimeInterfaceView::scaledGeometry(const QRect &g) const
 {
-    // 设计画布 1200×760 → 当前窗口，等比映射；小控件给最小尺寸保护
+    // 设计画布（默认 1200×760，可由布局 canvas 配置覆盖）→ 当前窗口，等比映射；
+    // 小控件给最小尺寸保护
     const double sx = double(width()) / qMax(1, m_designSize.width());
     const double sy = double(height()) / qMax(1, m_designSize.height());
     return QRect(qRound(g.x() * sx), qRound(g.y() * sy),

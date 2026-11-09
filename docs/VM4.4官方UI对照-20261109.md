@@ -275,6 +275,28 @@ TCP 客户端 / TCP 服务端 / UDP / 串口 / 汇川 H2U / 基恩士 KV / 松�
 并入 **B2-3** 一起做。当前已有顶层多页 `QTabWidget`，页内二级 Tab 待补。
 **界面日志**未做：需要接主界面日志管道，价值中等，遇现场需求再补。
 
+### B2-3a 已落地（2026-11-09）：画布配置 + 固定栏字段
+
+> 前置变化：用户明确「项目还没上线，无需做任何兼容旧项目的设计」，
+> 因此同批清掉了 `fromJson` 的旧单页格式兼容与按钮动作的 `bindKey` 迁移，
+> 并把专门测兼容的腿改成「旧格式必须被拒绝」——反过来防止兼容层被偷偷加回。
+
+- **模型**：`RuntimeInterface` 增 `RuntimeCanvasConfig canvas`（宽/高/显示网格/网格色/背景色，
+  对应第二张截图的画布属性）；`RuntimeInterfacePage` 增四向固定栏厚度
+  （`topBarHeight/bottomBarHeight/leftBarWidth/rightBarWidth`，0 = 该方向无固定栏）。
+- **序列化**：`canvas` 与每页 `bars` 全量写出；读取时缺键用默认值（防御性解析，
+  不是版本兼容）；画布宽高钳到 200×150 下限，避免出现不可编辑的画布。
+- **真正生效**（不是只存不用）：
+  - 设计器画布由 `setFixedSize(1200,760)` 改为按 `canvas` 配置设尺寸，
+    8 处 `setPage` 调用收成 `setCanvasPage()` 一个入口；
+  - 运行视图的缩放基准 `m_designSize` 原先硬编码 `{1200,760}` 从未更新，
+    改为 `setInterface()` 时取 `layout.canvas`。
+- 腿 `canvasConfigAndBarsRoundTrip`：画布五项 + 四向固定栏往返、新建默认 1200×760 无固定栏、
+  过小画布被钳制；`UiGuardsTest` **30 passed**。
+
+**B2-3b 待做**：固定栏分割模板、控件归属（画布/上下左右固定栏/Tab页）、
+设计器与运行视图的固定栏渲染。这批才动"控件落在哪个区域"的语义。
+
 ---
 
 ## 4. 与旧自评的差异（重要）

@@ -86,6 +86,8 @@ private slots:
 
 private:
     void rebuildCanvas();
+    /// 按 m_layout.canvas 设画布尺寸并挂当前页（原先 8 处重复 setPage）
+    void setCanvasPage();
     void populateBindKeyCombo();
     void refreshPropertyPanel();
     void refreshPageList();
@@ -163,6 +165,8 @@ public:
 
     explicit RuntimeDesignerCanvas(QWidget *parent = nullptr);
     void setPage(RuntimeInterfacePage *page);
+    /// 画布逻辑尺寸（官方 9.3.1 画布可配置；默认 1200×760）
+    void setCanvasSize(const QSize &size);
     void rebuild();
     void selectIndex(int index);
     void selectIndex(int index, bool additive);   /// additive=true 时切换多选

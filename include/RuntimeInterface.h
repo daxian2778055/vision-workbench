@@ -99,11 +99,27 @@ struct RuntimeControl {
 bool parseParamActionTarget(const QString &method, const QString &param,
                             QString *nodeName, QString *paramKey, QVariant *value);
 
-/// 运行界面单页：控件集合 + JSON 序列化
+/// 画布配置（官方 9.3.1「画布默认为单画面，可配置基础配置与布局分割样式」；
+/// 第二张实机截图的画布属性为 显示网格 / 网格颜色 / 背景）
+struct RuntimeCanvasConfig {
+    int width = 1200;
+    int height = 760;
+    bool showGrid = false;
+    QString gridColor = QStringLiteral("#1e1e1e");
+    QString bgColor = QStringLiteral("#383838");
+};
+
+/// 运行界面单页：控件集合 + 固定栏 + JSON 序列化
 struct RuntimeInterfacePage
 {
     QString pageName = QStringLiteral("页面1");
     QList<RuntimeControl> controls;
+    /// 固定栏厚度（官方 9.1 工具条「设置是否增加顶部/底部/左侧/右侧固定栏」，可多选）。
+    /// 0 = 该方向没有固定栏。分割模板与控件归属是下一步（B2-3b）。
+    int topBarHeight = 0;
+    int bottomBarHeight = 0;
+    int leftBarWidth = 0;
+    int rightBarWidth = 0;
 
     RuntimeControl *addControl(RuntimeControlType type, const QRect &geo);
     void removeControl(int index);
@@ -122,6 +138,7 @@ public:
 
     QList<RuntimeInterfacePage> pages;
     int currentPageIndex = 0;    /// 运行时默认显示页索引
+    RuntimeCanvasConfig canvas;  /// 画布尺寸与外观（所有页共用一块画布）
 
     /// 保证至少一页（空布局也有一页可编辑）
     void ensurePage();
