@@ -1171,6 +1171,7 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     QFormLayout *fAppear = makeSection(QStringLiteral("外观"));
 
     m_titleEdit = new QLineEdit(propGroup);
+    m_titleEdit->setObjectName(QStringLiteral("designerTitleEdit"));
     m_typeLabel = new QLabel(QStringLiteral("-"), propGroup);
     m_bindTypeCombo = new QComboBox(propGroup);
     m_bindKeyCombo = new QComboBox(propGroup);
@@ -2004,7 +2005,16 @@ void RuntimeInterfaceDesigner::onGeometryEditFinished()
 
 void RuntimeInterfaceDesigner::pushUndo()
 {
-    m_undoStack.append(m_layout);          // QList 值语义，整体深拷贝
+    m_undoStack.append(m_layout);          // 快照与 m_layout 暂时共享页数组（写时复制）
+    // 让快照立即自持一份页数组与每页的控件数组。属性编辑 / 列编辑 / 图层调整等路径都是
+    // 在 pushUndo() 之前抓到页或控件指针、之后才写回；若快照仍共享同一块存储，写回会
+    // 同时改到快照，撤销「撤不掉」这次编辑（属性撤销的回归用例已钉住）。注意写时复制是
+    // 两层的：pages.detach() 只复制页对象，页里的 controls 仍是共享数组，而裸控件指针
+    // 写回不经过 QList 访问器、不会触发 detach，所以每页的 controls 也要 detach。
+    // detach 快照而不是 m_layout，是为了让预先抓到的指针继续指向 m_layout 原地址。
+    m_undoStack.last().pages.detach();
+    for (RuntimeInterfacePage &page : m_undoStack.last().pages)
+        page.controls.detach();
     while (m_undoStack.size() > 50)
         m_undoStack.removeFirst();
     m_redoStack.clear();                   // 新操作截断重做分支

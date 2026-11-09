@@ -95,6 +95,8 @@ void canvasScalingHelperScalesCanvasControls();
 void designerExposesCanvasAndBarConfig();
 // B1 末项：设计器的几何编辑（拖动/缩放/方向键）必须进撤销栈（一次手势一枚改前快照）
 void designerGeometryEditPushesUndo();
+// B1 回归：属性编辑的撤销点必须停在「改之前」（快照不得与当前布局共享页数组）
+void designerPropertyEditUndoRestoresValue();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -1863,6 +1865,70 @@ void UiGuardsTest::designerGeometryEditPushesUndo()
     afterUndo = canvas->findChildren<DesignerControlFrame *>();
     QVERIFY2(!afterUndo.isEmpty(), "撤销后画布上没有控件框");
     QCOMPARE(afterUndo.first()->geometry(), g0);
+}
+
+// B1 回归：属性编辑也走 pushUndo() + 改前抓到的控件指针写回。QList 写时复制下，
+// 快照若与 m_layout 共享页数组，写回会同时改到快照 ⇒ 撤销「撤不掉」这次编辑。
+// 这里用真实的标题输入框走一遍：改标题 → 撤销必须回到旧标题 → 重做必须再回来。
+void UiGuardsTest::designerPropertyEditUndoRestoresValue()
+{
+    RuntimeInterfaceDesigner dlg(QStringList{QStringLiteral("模块1")});
+
+    QListWidget *palette = nullptr;
+    for (QListWidget *lw : dlg.findChildren<QListWidget *>()) {
+        if (lw->dragEnabled() && lw->count() >= 7) {
+            palette = lw;
+            break;
+        }
+    }
+    QVERIFY2(palette, "没找到控件库");
+    int row = -1;
+    for (int i = 0; i < palette->count(); ++i) {
+        if (palette->item(i)->data(Qt::UserRole).isValid()) {
+            row = i;
+            break;
+        }
+    }
+    QVERIFY2(row >= 0, "控件库里没有可添加的控件条目");
+    palette->setCurrentRow(row);
+    QVERIFY2(QMetaObject::invokeMethod(&dlg, "addControlAt", Qt::DirectConnection,
+                                       Q_ARG(QPoint, QPoint(120, 120))),
+             "addControlAt 调用失败");
+
+    auto *canvas = dlg.findChild<RuntimeDesignerCanvas *>();
+    QVERIFY(canvas);
+    const QList<DesignerControlFrame *> frames = canvas->findChildren<DesignerControlFrame *>();
+    QVERIFY2(!frames.isEmpty(), "画布上没有控件框");
+    DesignerControlFrame *frame = frames.first();
+
+    // 点选（不挪动，不建撤销点）→ 属性面板填上该控件
+    QTest::mousePress(frame, Qt::LeftButton, Qt::NoModifier, QPoint(6, 6));
+    QTest::mouseRelease(frame, Qt::LeftButton, Qt::NoModifier, QPoint(6, 6));
+
+    auto *titleEdit = dlg.findChild<QLineEdit *>(QStringLiteral("designerTitleEdit"));
+    QVERIFY2(titleEdit, "没找到属性面板的标题输入框");
+
+    auto titleOf = [&dlg]() {
+        const RuntimeInterface &layout = dlg.resultInterface();
+        if (layout.pages.isEmpty() || layout.pages.first().controls.isEmpty())
+            return QString();
+        return layout.pages.first().controls.first().title;
+    };
+    const QString before = titleOf();
+    const int depth0 = dlg.undoDepth();
+    QVERIFY2(!before.isEmpty(), "控件初始标题为空，无法区分改前改后");
+
+    const QString edited = QStringLiteral("联调标题");
+    titleEdit->setText(edited);
+    QCOMPARE(titleOf(), edited);
+    QCOMPARE(dlg.undoDepth(), depth0 + 1);
+
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "undo", Qt::DirectConnection));
+    QCOMPARE(titleOf(), before);          // 撤销必须回到改前，不能停在 edited
+    QCOMPARE(dlg.undoDepth(), depth0);
+
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "redo", Qt::DirectConnection));
+    QCOMPARE(titleOf(), edited);
 }
 
 QTEST_MAIN(UiGuardsTest)
