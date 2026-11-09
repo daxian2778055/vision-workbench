@@ -1270,6 +1270,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261109.7",
       "recorded_at": "2026-11-09",
       "recorded_note": "B1c：按按钮实机截图补齐外观字段（bold/bgColor/borderColor/pressedColor，序列化只在非默认时写出、读取用默认值保证旧布局外观不变），设计器外观组与运行视图按钮渲染同步消费。按钮「数据源配置」动作表留 B2。"
+    },
+    {
+      "tag": "rc-20261109.8",
+      "commit": "21e2f736bccc8691181f53b1d500cde5494fba6f",
+      "exe_md5": "e1db51a5fef5716b88ff726c1d4e0c76",
+      "exe_bytes": 12018688,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261109.8",
+      "recorded_at": "2026-11-09",
+      "recorded_note": "B1c 收口：控件区官方三组分组（组标题不可选、控件类型走 UserRole）、模板库（存为/应用模板落盘 runtime_templates）、属性编辑进撤销栈（600ms 防抖合并）。适配按钮与固定栏入口需 B2 模型，未放占位。"
     }
   ],
   "legacy_backfilled": [
