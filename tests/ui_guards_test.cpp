@@ -64,6 +64,8 @@ void paramActionTargetParsesNodeKeyValue();
 void imageAndClockControlsRoundTripAndRender();
 void canvasConfigAndBarsRoundTrip();
 void zoneGeometryScalesCanvasButNotBars();
+void zoneAtCanvasPointMapsBarsAndCanvas();
+void designerCanvasBarCoordinatesRoundTrip();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -1008,6 +1010,84 @@ void UiGuardsTest::zoneGeometryScalesCanvasButNotBars()
              "画布区控件宽度应随窗口缩小");
     const QRect barAgain = view.controlGeometry(bar);
     QCOMPARE(barAgain.size(), QSize(80, 40));   // 固定栏控件尺寸不随窗口变
+}
+
+// B2-3c：落点 → 所属区域 + 区域局部坐标。横条优先（角落归上/下栏），
+// 画布区坐标要扣掉栏厚（与运行视图 controlGeometry 的 Canvas 分支同口径）。
+void UiGuardsTest::zoneAtCanvasPointMapsBarsAndCanvas()
+{
+    RuntimeInterfacePage page;
+    page.topBarHeight = 60;
+    page.bottomBarHeight = 40;
+    page.leftBarWidth = 100;
+    page.rightBarWidth = 80;
+    const QSize cs(1000, 600);
+    QPoint local;
+
+    QVERIFY(zoneAtCanvasPoint(page, cs, QPoint(500, 10), &local) == RuntimeZone::TopBar);
+    QCOMPARE(local, QPoint(500, 10));
+
+    QVERIFY(zoneAtCanvasPoint(page, cs, QPoint(500, 590), &local) == RuntimeZone::BottomBar);
+    QCOMPARE(local, QPoint(500, 30));      // 590 - (600-40)
+
+    QVERIFY(zoneAtCanvasPoint(page, cs, QPoint(10, 300), &local) == RuntimeZone::LeftBar);
+    QCOMPARE(local, QPoint(10, 240));      // 300 - 60
+
+    QVERIFY(zoneAtCanvasPoint(page, cs, QPoint(990, 300), &local) == RuntimeZone::RightBar);
+    QCOMPARE(local, QPoint(70, 240));      // 990 - (1000-80)
+
+    QVERIFY(zoneAtCanvasPoint(page, cs, QPoint(500, 300), &local) == RuntimeZone::Canvas);
+    QCOMPARE(local, QPoint(400, 240));     // 扣掉 leftW/topH
+
+    // 左上角落：横条优先，归顶部栏而不是左栏
+    QVERIFY2(zoneAtCanvasPoint(page, cs, QPoint(10, 10), &local) == RuntimeZone::TopBar,
+             "四个角落应归横向固定栏（与视觉一致）");
+    QCOMPARE(local, QPoint(10, 10));
+
+    // 没有固定栏时一律归画布，且局部坐标 = 绝对坐标
+    RuntimeInterfacePage bare;
+    QVERIFY(zoneAtCanvasPoint(bare, cs, QPoint(0, 0), &local) == RuntimeZone::Canvas);
+    QCOMPARE(local, QPoint(0, 0));
+
+    // 入参 local 可为空（只要区域判定时不该崩）
+    QVERIFY(zoneAtCanvasPoint(page, cs, QPoint(500, 10), nullptr) == RuntimeZone::TopBar);
+}
+
+// B2-3c：设计器里控件存储坐标（区域局部）与画布绝对坐标必须能互逆，
+// 否则固定栏里的控件一拖动就会写坏 geometry。
+void UiGuardsTest::designerCanvasBarCoordinatesRoundTrip()
+{
+    RuntimeInterfacePage page;
+    page.topBarHeight = 60;
+    page.leftBarWidth = 100;
+
+    RuntimeDesignerCanvas canvas;
+    canvas.setCanvasSize(QSize(1000, 600));
+    canvas.setPage(&page);
+
+    RuntimeControl top;
+    top.type = RuntimeControlType::TextLabel;
+    top.zone = RuntimeZone::TopBar;
+    top.geometry = QRect(10, 5, 80, 40);
+    QCOMPARE(canvas.toCanvasRect(top), QRect(10, 5, 80, 40));   // 顶栏原点即画布原点
+    QCOMPARE(canvas.toStoredRect(top, QRect(10, 5, 80, 40)), QRect(10, 5, 80, 40));
+
+    RuntimeControl left = top;
+    left.zone = RuntimeZone::LeftBar;
+    left.geometry = QRect(3, 4, 50, 30);
+    QCOMPARE(canvas.toCanvasRect(left), QRect(3, 64, 50, 30));  // 平移 (0, topH)
+    QCOMPARE(canvas.toStoredRect(left, QRect(3, 64, 50, 30)), QRect(3, 4, 50, 30));
+
+    RuntimeControl body = top;
+    body.zone = RuntimeZone::Canvas;
+    body.geometry = QRect(7, 8, 100, 50);
+    QCOMPARE(canvas.toCanvasRect(body), QRect(107, 68, 100, 50));   // 平移 (leftW, topH)
+    QCOMPARE(canvas.toStoredRect(body, QRect(107, 68, 100, 50)), QRect(7, 8, 100, 50));
+
+    // 写回时不允许负坐标（拖到栏外应停在 0，而不是存负数）
+    const QRect clamped = canvas.toStoredRect(left, QRect(-50, -50, 30, 20));
+    QVERIFY2(clamped.left() >= 0 && clamped.top() >= 0,
+             "局部坐标被钳到非负，避免拖到栏外后存负数");
 }
 
 QTEST_MAIN(UiGuardsTest)

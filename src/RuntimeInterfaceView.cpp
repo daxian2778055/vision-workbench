@@ -764,6 +764,30 @@ void RuntimeInterfaceView::updateStatusLight(QLabel *light, const RuntimeControl
 
 void RuntimeInterfaceView::paintEvent(QPaintEvent *event)
 {
+    // 固定栏底色：先于子控件绘制，作为栏区域的视觉底板（官方 9.1 固定栏）
+    {
+        RuntimeInterfacePage *pg = m_current.page(m_current.currentPageIndex);
+        const int topH = pg ? qMax(0, pg->topBarHeight) : 0;
+        const int botH = pg ? qMax(0, pg->bottomBarHeight) : 0;
+        const int leftW = pg ? qMax(0, pg->leftBarWidth) : 0;
+        const int rightW = pg ? qMax(0, pg->rightBarWidth) : 0;
+        if (topH || botH || leftW || rightW) {
+            QPainter p(this);
+            p.fillRect(QRect(0, 0, width(), topH), QColor(0x1e, 0x1e, 0x26));
+            p.fillRect(QRect(0, height() - botH, width(), botH), QColor(0x1e, 0x1e, 0x26));
+            p.fillRect(QRect(0, topH, leftW, qMax(0, height() - topH - botH)),
+                       QColor(0x1e, 0x1e, 0x26));
+            p.fillRect(QRect(width() - rightW, topH, rightW,
+                             qMax(0, height() - topH - botH)),
+                       QColor(0x1e, 0x1e, 0x26));
+            p.setPen(QColor(0x3a, 0x3a, 0x4a));
+            if (topH) p.drawLine(0, topH - 1, width(), topH - 1);
+            if (botH) p.drawLine(0, height() - botH, width(), height() - botH);
+            if (leftW) p.drawLine(leftW - 1, topH, leftW - 1, height() - botH);
+            if (rightW) p.drawLine(width() - rightW, topH, width() - rightW, height() - botH);
+        }
+    }
+
     if (!m_staleBindings.isEmpty()) {
         QPainter p(this);
         p.setPen(QColor(220, 40, 40));

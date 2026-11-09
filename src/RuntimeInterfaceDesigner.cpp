@@ -103,6 +103,46 @@ void RuntimeDesignerCanvas::setCanvasSize(const QSize &size)
     rebuild();
 }
 
+QRect RuntimeDesignerCanvas::toCanvasRect(const RuntimeControl &ctrl) const
+{
+    if (!m_layout) return ctrl.geometry;
+    const int topH = qMax(0, m_layout->topBarHeight);
+    const int botH = qMax(0, m_layout->bottomBarHeight);
+    const int leftW = qMax(0, m_layout->leftBarWidth);
+    const int rightW = qMax(0, m_layout->rightBarWidth);
+    QPoint off;
+    switch (ctrl.zone) {
+    case RuntimeZone::TopBar:    off = QPoint(0, 0); break;
+    case RuntimeZone::BottomBar: off = QPoint(0, height() - botH); break;
+    case RuntimeZone::LeftBar:   off = QPoint(0, topH); break;
+    case RuntimeZone::RightBar:  off = QPoint(width() - rightW, topH); break;
+    case RuntimeZone::Canvas:    off = QPoint(leftW, topH); break;
+    }
+    return ctrl.geometry.translated(off);
+}
+
+QRect RuntimeDesignerCanvas::toStoredRect(const RuntimeControl &ctrl,
+                                          const QRect &canvasRect) const
+{
+    if (!m_layout) return canvasRect;
+    const int topH = qMax(0, m_layout->topBarHeight);
+    const int botH = qMax(0, m_layout->bottomBarHeight);
+    const int leftW = qMax(0, m_layout->leftBarWidth);
+    const int rightW = qMax(0, m_layout->rightBarWidth);
+    QPoint off;
+    switch (ctrl.zone) {
+    case RuntimeZone::TopBar:    off = QPoint(0, 0); break;
+    case RuntimeZone::BottomBar: off = QPoint(0, height() - botH); break;
+    case RuntimeZone::LeftBar:   off = QPoint(0, topH); break;
+    case RuntimeZone::RightBar:  off = QPoint(width() - rightW, topH); break;
+    case RuntimeZone::Canvas:    off = QPoint(leftW, topH); break;
+    }
+    QRect g = canvasRect.translated(-off);
+    g.moveLeft(qMax(0, g.left()));
+    g.moveTop(qMax(0, g.top()));
+    return g;
+}
+
 void RuntimeInterfaceDesigner::setCanvasPage()
 {
     if (!m_canvas) return;
@@ -124,7 +164,7 @@ void RuntimeDesignerCanvas::rebuild()
     if (!m_layout) return;
     for (int i = 0; i < m_layout->controls.size(); ++i) {
         auto *frame = new DesignerControlFrame(this, i);
-        frame->setGeometry(m_layout->controls[i].geometry);
+        frame->setGeometry(toCanvasRect(m_layout->controls[i]));
         frame->show();
         m_frames.append(frame);
     }
@@ -185,7 +225,7 @@ void RuntimeDesignerCanvas::alignSelected(AlignMode mode)
             default: return;
             }
             m_frames[idx[k]]->setGeometry(g);
-            m_layout->controls[idx[k]].geometry = g;
+            m_layout->controls[idx[k]].geometry = toStoredRect(m_layout->controls[idx[k]], g);
             m_frames[idx[k]]->update();
         }
         return;
@@ -217,7 +257,7 @@ void RuntimeDesignerCanvas::refreshControl(int index)
 {
     if (!m_layout) return;
     if (index < 0 || index >= m_frames.size()) return;
-    m_frames[index]->setGeometry(m_layout->controls[index].geometry);
+    m_frames[index]->setGeometry(toCanvasRect(m_layout->controls[index]));
     m_frames[index]->update();
 }
 
@@ -227,19 +267,71 @@ void RuntimeDesignerCanvas::paintEvent(QPaintEvent *event)
     QPainter p(this);
     p.fillRect(rect(), QColor(0x1a, 0x1a, 0x20));
 
-    // 网格背景
+    const RuntimeInterfacePage *pg = m_layout;
+    const int topH = pg ? qMax(0, pg->topBarHeight) : 0;
+    const int botH = pg ? qMax(0, pg->bottomBarHeight) : 0;
+    const int leftW = pg ? qMax(0, pg->leftBarWidth) : 0;
+    const int rightW = pg ? qMax(0, pg->rightBarWidth) : 0;
+    const QRect canvasRect(leftW, topH, qMax(1, width() - leftW - rightW),
+                           qMax(1, height() - topH - botH));
+
+    // 网格只画在画布区：固定栏不是自由摆放区，视觉上要和画布分开
+    p.save();
+    p.setClipRect(canvasRect);
     p.setPen(QPen(QColor(0x28, 0x28, 0x32), 1));
     const int grid = 20;
-    for (int x = 0; x <= width(); x += grid) {
-        p.drawLine(x, 0, x, height());
-    }
-    for (int y = 0; y <= height(); y += grid) {
-        p.drawLine(0, y, width(), y);
-    }
+    for (int x = canvasRect.left(); x <= canvasRect.right(); x += grid)
+        p.drawLine(x, canvasRect.top(), x, canvasRect.bottom());
+    for (int y = canvasRect.top(); y <= canvasRect.bottom(); y += grid)
+        p.drawLine(canvasRect.left(), y, canvasRect.right(), y);
+    p.restore();
+
+    // 固定栏：底板 + 边框 + 分割格 + 标签（官方 9.1「顶部/底部/左侧/右侧固定栏」）
+    // 注意：形参不能叫 slots——它是 Qt 的关键字宏（展开为空），会导致 qMax(1, ) 语法错误
+    auto drawBar = [&p](const QRect &r, int slotCount, bool verticalSplit, const QString &name) {
+        if (r.width() <= 0 || r.height() <= 0) return;
+        p.fillRect(r, QColor(0x24, 0x24, 0x2e));
+        p.setPen(QPen(QColor(0x44, 0x46, 0x58), 1, Qt::DashLine));
+        p.drawRect(r.adjusted(0, 0, -1, -1));
+        p.setPen(QPen(QColor(0x44, 0x46, 0x58), 1, Qt::DotLine));
+        const int n = qMax(1, slotCount);
+        for (int i = 1; i < n; ++i) {
+            if (verticalSplit) {
+                const int x = r.left() + r.width() * i / n;
+                p.drawLine(x, r.top(), x, r.bottom());
+            } else {
+                const int y = r.top() + r.height() * i / n;
+                p.drawLine(r.left(), y, r.right(), y);
+            }
+        }
+        QFont f = p.font();
+        f.setPointSizeF(8.0);
+        p.setFont(f);
+        p.setPen(QColor(0x8a, 0x8e, 0x9c));
+        p.drawText(r.adjusted(4, 1, -4, -1), Qt::AlignLeft | Qt::AlignTop,
+                   n > 1 ? QStringLiteral("%1 ×%2").arg(name).arg(n) : name);
+    };
+    drawBar(QRect(0, 0, width(), topH), pg ? pg->topBarSlots : 1, true,
+            QStringLiteral("顶部固定栏"));
+    drawBar(QRect(0, height() - botH, width(), botH), pg ? pg->bottomBarSlots : 1, true,
+            QStringLiteral("底部固定栏"));
+    drawBar(QRect(0, topH, leftW, qMax(0, height() - topH - botH)),
+            pg ? pg->leftBarSlots : 1, false, QStringLiteral("左侧固定栏"));
+    drawBar(QRect(width() - rightW, topH, rightW, qMax(0, height() - topH - botH)),
+            pg ? pg->rightBarSlots : 1, false, QStringLiteral("右侧固定栏"));
+
+    // 画布区边框（明确「随窗口缩放的部分」边界）
+    p.setPen(QPen(QColor(0x3a, 0x6e, 0xa5), 1));
+    p.drawRect(canvasRect.adjusted(0, 0, -1, -1));
 
     // 页面提示
+    QFont hf = p.font();
+    hf.setPointSizeF(8.0);
+    p.setFont(hf);
     p.setPen(QColor(0x60, 0x64, 0x72));
-    p.drawText(10, height() - 10, QStringLiteral("画布 1200×760 · 拖动控件移动，右下角缩放"));
+    p.drawText(canvasRect.adjusted(6, 0, -6, -6), Qt::AlignLeft | Qt::AlignBottom,
+               QStringLiteral("画布 %1×%2 · 拖动移动，右下角缩放")
+                   .arg(width()).arg(height()));
 }
 
 // ==================== DesignerControlFrame ====================
@@ -467,7 +559,8 @@ void DesignerControlFrame::mouseMoveEvent(QMouseEvent *event)
     if (m_canvas->m_layout) {
         for (int i : m_canvas->m_selectedSet) {
             if (i >= 0 && i < m_canvas->m_frames.size() && i < m_canvas->m_layout->controls.size())
-                m_canvas->m_layout->controls[i].geometry = m_canvas->m_frames[i]->geometry();
+                m_canvas->m_layout->controls[i].geometry = m_canvas->toStoredRect(
+                    m_canvas->m_layout->controls[i], m_canvas->m_frames[i]->geometry());
         }
     }
     event->accept();
@@ -499,7 +592,8 @@ void DesignerControlFrame::keyPressEvent(QKeyEvent *event)
     g.moveTop(qMax(0, g.top()));
     setGeometry(g);
     if (m_canvas->m_layout && m_index >= 0 && m_index < m_canvas->m_layout->controls.size())
-        m_canvas->m_layout->controls[m_index].geometry = g;
+        m_canvas->m_layout->controls[m_index].geometry =
+            m_canvas->toStoredRect(m_canvas->m_layout->controls[m_index], g);
     event->accept();
 }
 
@@ -1126,15 +1220,46 @@ if (type == RuntimeControlType::ValueDisplay){ geo.setHeight(90); }
 if (type == RuntimeControlType::ResultTable){ geo.setWidth(460); geo.setHeight(260); }
 if (type == RuntimeControlType::IoStatus)   { geo.setWidth(260); geo.setHeight(80); }
 
-// 拖放：控件左上角落在松手位置（略作钳制，别让控件跑到画布外）。
+// 拖放：按落点判定所属区域（官方 9.1 固定栏），再在该区域的坐标系里定位。
+// 画布区坐标相对画布区左上角、随窗口缩放；固定栏坐标相对本栏左上角、1:1 不缩放。
+RuntimeZone zone = RuntimeZone::Canvas;
 if (!dropPos.isNull()) {
-const QSize canvasSize = m_canvas ? m_canvas->size() : QSize(1200, 760);
-geo.moveLeft(qBound(0, dropPos.x(), qMax(0, canvasSize.width() - geo.width())));
-geo.moveTop(qBound(0, dropPos.y(), qMax(0, canvasSize.height() - geo.height())));
+    RuntimeInterfacePage *pg = m_layout.currentPage();
+    const QSize canvasSize = m_canvas ? m_canvas->size() : QSize(1200, 760);
+    const int topH = qMax(0, pg->topBarHeight);
+    const int botH = qMax(0, pg->bottomBarHeight);
+    const int leftW = qMax(0, pg->leftBarWidth);
+    const int rightW = qMax(0, pg->rightBarWidth);
+
+    QPoint local;
+    zone = zoneAtCanvasPoint(*pg, canvasSize, dropPos, &local);
+    QSize areaSize;
+    switch (zone) {
+    case RuntimeZone::TopBar:    areaSize = QSize(canvasSize.width(), topH); break;
+    case RuntimeZone::BottomBar: areaSize = QSize(canvasSize.width(), botH); break;
+    case RuntimeZone::LeftBar:
+        areaSize = QSize(leftW, qMax(0, canvasSize.height() - topH - botH));
+        break;
+    case RuntimeZone::RightBar:
+        areaSize = QSize(rightW, qMax(0, canvasSize.height() - topH - botH));
+        break;
+    case RuntimeZone::Canvas:
+        areaSize = QSize(qMax(0, canvasSize.width() - leftW - rightW),
+                         qMax(0, canvasSize.height() - topH - botH));
+        break;
+    }
+    // 固定栏通常很窄/很矮：先把控件尺寸压进区域，再定位，否则会溢出栏外
+    if (areaSize.width() > 0)
+        geo.setWidth(qMin(geo.width(), areaSize.width()));
+    if (areaSize.height() > 0)
+        geo.setHeight(qMin(geo.height(), areaSize.height()));
+    geo.moveLeft(qBound(0, local.x(), qMax(0, areaSize.width() - geo.width())));
+    geo.moveTop(qBound(0, local.y(), qMax(0, areaSize.height() - geo.height())));
 }
 
 pushUndo();
 RuntimeControl *ctrl = m_layout.currentPage()->addControl(type, geo);
+ctrl->zone = zone;
 m_canvas->rebuild();
 const int idx = m_layout.currentPage()->indexOf(ctrl);
 if (idx >= 0) m_canvas->selectIndex(idx);

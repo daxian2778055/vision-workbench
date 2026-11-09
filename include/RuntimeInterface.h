@@ -106,6 +106,17 @@ struct RuntimeControl {
     }
 };
 
+struct RuntimeInterfacePage;   // 前置声明：下面的区域映射函数只用到它的四向栏厚度
+
+/// 设计画布坐标 → 所属区域 + 该区域内的局部坐标（官方 9.1 四向固定栏）。
+/// canvasSize 是整块画布尺寸（含固定栏）；pt 为画布绝对坐标。
+/// 顺序：上/下/左/右依次判定，重叠角落归上/下（横条优先，与视觉一致）。
+RuntimeZone zoneAtCanvasPoint(const RuntimeInterfacePage &page, const QSize &canvasSize,
+                              const QPoint &pt, QPoint *local = nullptr);
+
+/// 区域的中文名（设计器提示与日志用）
+QString runtimeZoneName(RuntimeZone zone);
+
 /// 解析按钮动作表里 `param`（参数配置）一行的目标：
 ///   method = 节点完整名，param = "参数键=值"
 /// 值先按数值解析（int/float 参数），失败则按字符串（枚举/模式参数）。

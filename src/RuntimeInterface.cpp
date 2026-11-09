@@ -40,6 +40,50 @@ bool runtimeControlTypeFromName(const QString &name, RuntimeControlType &out)
     return false;
 }
 
+QString runtimeZoneName(RuntimeZone zone)
+{
+    switch (zone) {
+    case RuntimeZone::Canvas:    return QStringLiteral("画布");
+    case RuntimeZone::TopBar:    return QStringLiteral("顶部固定栏");
+    case RuntimeZone::BottomBar: return QStringLiteral("底部固定栏");
+    case RuntimeZone::LeftBar:   return QStringLiteral("左侧固定栏");
+    case RuntimeZone::RightBar:  return QStringLiteral("右侧固定栏");
+    }
+    return QStringLiteral("画布");
+}
+
+RuntimeZone zoneAtCanvasPoint(const RuntimeInterfacePage &page, const QSize &canvasSize,
+                              const QPoint &pt, QPoint *local)
+{
+    const int top = qMax(0, page.topBarHeight);
+    const int bottom = qMax(0, page.bottomBarHeight);
+    const int left = qMax(0, page.leftBarWidth);
+    const int right = qMax(0, page.rightBarWidth);
+    const int w = qMax(1, canvasSize.width());
+    const int h = qMax(1, canvasSize.height());
+
+    // 横条优先：顶部/底部整条覆盖，四个角落也归横条（与视觉一致）
+    if (top > 0 && pt.y() < top) {
+        if (local) *local = pt;
+        return RuntimeZone::TopBar;
+    }
+    if (bottom > 0 && pt.y() >= h - bottom) {
+        if (local) *local = QPoint(pt.x(), pt.y() - (h - bottom));
+        return RuntimeZone::BottomBar;
+    }
+    if (left > 0 && pt.x() < left) {
+        if (local) *local = QPoint(pt.x(), pt.y() - top);
+        return RuntimeZone::LeftBar;
+    }
+    if (right > 0 && pt.x() >= w - right) {
+        if (local) *local = QPoint(pt.x() - (w - right), pt.y() - top);
+        return RuntimeZone::RightBar;
+    }
+    // 画布区：坐标相对画布区左上角（与 controlGeometry 的 Canvas 分支同口径）
+    if (local) *local = QPoint(pt.x() - left, pt.y() - top);
+    return RuntimeZone::Canvas;
+}
+
 bool parseParamActionTarget(const QString &method, const QString &param,
                             QString *nodeName, QString *paramKey, QVariant *value)
 {

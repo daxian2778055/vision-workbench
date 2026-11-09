@@ -170,6 +170,11 @@ public:
     void setPage(RuntimeInterfacePage *page);
     /// 画布逻辑尺寸（官方 9.3.1 画布可配置；默认 1200×760）
     void setCanvasSize(const QSize &size);
+
+    /// 控件存储坐标（画布区/固定栏各自的局部坐标）→ 画布绝对坐标（设计器 1:1 显示用）
+    QRect toCanvasRect(const RuntimeControl &ctrl) const;
+    /// 画布绝对坐标 → 该控件所属区域的局部坐标（拖动/缩放后写回用）
+    QRect toStoredRect(const RuntimeControl &ctrl, const QRect &canvasRect) const;
     void rebuild();
     void selectIndex(int index);
     void selectIndex(int index, bool additive);   /// additive=true 时切换多选
