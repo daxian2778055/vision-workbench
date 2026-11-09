@@ -271,6 +271,44 @@ TCP 客户端 / TCP 服务端 / UDP / 串口 / 汇川 H2U / 基恩士 KV / 松�
   UiGuardsTest 47 passed；ctest -C Release 79/79；tools/ci.ps1 exit 0。
 - **仍未做**：几何编辑撤销（要「改前快照」，属交互层补强）。
 
+### B1e 已落地（2026-11-09）：设计器几何编辑撤销
+
+> 对 B1c「B1 仍未做……**几何编辑撤销**」与 B1d「仍未做：几何编辑撤销」两句的就地更正
+>（原文保留）：该项已在本批落地，不再挂账。
+
+- **手势口径**：画布新增 `geometryEditStarted/Finished` 信号；拖动、右下角缩放、方向键
+  微调在改动前拷一份快照，结束时与当前布局比对——只点选不挪动不入栈；按住方向键的
+  自动重复不算新手势，一次手势一枚撤销点（与属性编辑的 600ms 合并互补）。
+- **修真实缺陷**：画布存的是指向 `m_layout.pages` 内部的页指针；布局被复制进撤销栈后，
+  QList 写时复制会在下一次非 const 访问时换块，指针落到**快照**上——拖动写回写进快照，
+  撤销点建不出来。修法：结构性改动后统一走 `rebuildCanvas()` 重绑当前页（9 处站点），
+  快照侧显式 `pages.detach()`。
+- **腿**：`designerGeometryEditPushesUndo`——拖动 1 次入栈 +1、点击不挪动不入栈、
+  方向键 +1px 且入栈 +1、两次撤销逐枚回退到原位；`UiGuardsTest` **48 passed**。
+- **改坏自证**：把 `geometryEditFinished` 发信号改成永不发 ⇒ 该用例判红
+  （2 passed, 1 failed），还原后 48/48。
+- **门禁**：ctest -C Release **80/80**；tools/ci.ps1 **exit 0**；dupcn 57 GREEN、
+  文档锚 33/33、repo hygiene OK。
+
+### B1f 已落地（2026-11-09）：属性/列/图层编辑撤销的真实修复
+
+> 对 B1c「属性编辑进撤销栈：600ms 防抖合并」的就地更正（原文保留）：合并机制存在，
+> 但撤销点存的是「改后」状态（写时复制两层只处理了第一层），实际撤不掉这次编辑。
+
+- **真因**：`pushUndo()` 的快照与当前布局共享 `pages`；即使 detach 了 `pages`，页里的
+  `controls` 仍是共享数组。属性编辑、列编辑、图层调整都在 pushUndo **之前**抓到裸
+  `RuntimeControl*` / 页指针，之后经该指针写回不经过 QList 访问器、不触发 detach ⇒
+  写回同时改到快照，撤销只能撤到「已改」状态。
+- **修法**：`pushUndo()` 里 `pages.detach()` 之后逐页 `controls.detach()`，快照两层都
+  自持；`m_layout` 原地址不变，预先抓到的页/控件指针与画布指针都不失效。
+- **腿**：`designerPropertyEditUndoRestoresValue`——画布加控件→选中→真实标题输入框改值：
+  入栈 +1、撤销回到旧标题、重做回到新标题。改前实测判红（Actual=联调标题，
+  Expected=图像显示）；修后 `UiGuardsTest` **49 passed**。
+- **改坏自证两臂**：两层 detach 全关 → 3 passed/1 failed（几何腿仍绿，证明该腿咬的是
+  本修法）；只关第二层 `controls.detach()` → 2 passed/1 failed；还原后 49/49。
+- **门禁**：ctest -C Release **80/80**；tools/ci.ps1 **exit 0**；dupcn 57 GREEN、
+  文档锚 33/33。
+
 ### B4-1 已落地（2026-11-09）
 
 - **左导航形态**：通信管理由顶部 4 页 QTabWidget 改为官方「左侧 6 项导航 + 右侧堆叠页」：
