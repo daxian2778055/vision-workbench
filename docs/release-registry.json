@@ -1243,6 +1243,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261109.4",
       "recorded_at": "2026-11-09",
       "recorded_note": "现场验证工具补强：--selftest-deepocr 递归子目录/--limit/丰富汇总/失败明细/CSV 相对路径与 mode 列/按模式区分提示；tools/soak.ps1 自动定位最新 rc 包 DLL + -CsvPath/-SampleSeconds 出句柄与工作集采样 CSV。端到端实测：含子目录 2 张样本，有字 OK、空白 FAIL、exit=1、CSV 正确；soak 短跑 3372 轮/0 失败/句柄 Δ0。"
+    },
+    {
+      "tag": "rc-20261109.5",
+      "commit": "a95d0409e74d4de9fd3504e0c479f4726badc8ae",
+      "exe_md5": "0c305636aaaa1e147557a4bcf94dc724",
+      "exe_bytes": 11998720,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261109.5",
+      "recorded_at": "2026-11-09",
+      "recorded_note": "新增 docs/VM4.4官方UI对照-20261109.md（基于本机实装 VM4.4.2 官方用户手册 PDF 第5.2/第9章与 GateWay 模块清单的权威 1:1 对照，含 B1-B5 分批顺序）；B1a 实施运行界面设计器控件库→画布拖放与 Ctrl+C/V 剪贴板（含腿）。用户口径：通讯协议不增加，FINS 为唯一将来可加项。"
     }
   ],
   "legacy_backfilled": [
