@@ -14,6 +14,7 @@ QString runtimeControlTypeName(RuntimeControlType type)
     case RuntimeControlType::Button:       return QStringLiteral("按钮");
     case RuntimeControlType::ResultTable:  return QStringLiteral("结果表格");
     case RuntimeControlType::IoStatus:     return QStringLiteral("IO状态");
+    case RuntimeControlType::ParamSetting: return QStringLiteral("参数设置");
     }
     return QStringLiteral("未知");
 }
@@ -27,6 +28,7 @@ bool runtimeControlTypeFromName(const QString &name, RuntimeControlType &out)
     if (name == QStringLiteral("按钮"))     { out = RuntimeControlType::Button; return true; }
     if (name == QStringLiteral("结果表格")) { out = RuntimeControlType::ResultTable; return true; }
     if (name == QStringLiteral("IO状态"))   { out = RuntimeControlType::IoStatus; return true; }
+    if (name == QStringLiteral("参数设置")) { out = RuntimeControlType::ParamSetting; return true; }
     return false;
 }
 
@@ -53,6 +55,11 @@ static QJsonObject controlToJson(const RuntimeControl &c)
     geo["w"] = c.geometry.width();
     geo["h"] = c.geometry.height();
     o["geometry"] = geo;
+    if (c.type == RuntimeControlType::ParamSetting) {
+        if (!c.paramKey.isEmpty()) o["paramKey"] = c.paramKey;
+        o["paramMin"] = c.paramMin;
+        o["paramMax"] = c.paramMax;
+    }
     // 按钮动作表：只在有内容时写出，旧方案不膨胀
     if (c.type == RuntimeControlType::Button && !c.actions.isEmpty()) {
         QJsonArray acts;
@@ -120,6 +127,13 @@ static RuntimeControl controlFromJson(const QJsonObject &o, RuntimeControlType t
             a.method = ctrl.bindKey;
             ctrl.actions.append(a);
         }
+    }
+
+    if (ctrl.type == RuntimeControlType::ParamSetting) {
+        ctrl.paramKey = o["paramKey"].toString();
+        ctrl.paramMin = o["paramMin"].toDouble(0.0);
+        ctrl.paramMax = o["paramMax"].toDouble(100.0);
+        if (ctrl.paramMax <= ctrl.paramMin) ctrl.paramMax = ctrl.paramMin + 1.0;
     }
 
     if (ctrl.type == RuntimeControlType::ResultTable) {

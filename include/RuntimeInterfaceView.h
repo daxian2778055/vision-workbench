@@ -42,6 +42,10 @@ public:
     /// 切到指定名称的页面（官方「界面链接」动作用）；找不到则忽略。
     void showPage(const QString &pageName);
 
+    /// 参数设置控件回填当前值：key = "节点完整名|参数键"。
+    /// 回填时不触发 parameterChangeRequested（QSignalBlocker），避免写回循环。
+    void setParameterValues(const QHash<QString, double> &values);
+
     /// 提供当前流程的节点名（2026-10-27）：配合"绑定失效红显"。
     /// 设计器与运行态共用 RuntimeInterface::staleBindings 判据，避免两边口径不一。
     void setKnownNodeNames(const QStringList &names);
@@ -53,6 +57,9 @@ signals:
     /// commandType: ui / param / scheme / exec / reset；exec 仍由上面的旧信号处理。
     void runtimeActionTriggered(const QString &commandType, const QString &method,
                                 const QString &param);
+    /// 参数设置控件（官方 9.3）：nodeName + paramKey 定位节点参数，value 为新值。
+    void parameterChangeRequested(const QString &nodeName, const QString &paramKey,
+                                  double value);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -64,6 +71,7 @@ private slots:
 
 private:
     QStringList m_knownNodeNames;   /// 已知节点名（绑定体检用）
+    QHash<QString, double> m_paramValues;   /// 参数设置回填值，"节点完整名|参数键" → 值
     QStringList m_staleBindings;    /// 失效绑定（绘制在页面顶部）
     QRect scaledGeometry(const QRect &g) const;
     void rebuildWidgets();

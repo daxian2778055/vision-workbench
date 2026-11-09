@@ -25,6 +25,7 @@
 #include <QPushButton>
 #include <QShortcut>
 #include <QTabWidget>
+#include <QDoubleSpinBox>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QFileInfo>
@@ -54,6 +55,7 @@ void runtimeControlAppearanceRoundTripsAndStaysCompatible();
 void runtimeDesignerPaletteGroupedByOfficialSections();
 void buttonActionsMigrateAndRoundTrip();
 void runtimeViewHonorsCurrentPageAndActionTable();
+void paramSettingControlRoundTripsAndSeedsWithoutWriteBack();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -714,6 +716,52 @@ void UiGuardsTest::runtimeViewHonorsCurrentPageAndActionTable()
     QCOMPARE(spy.at(0).at(0).toString(), QStringLiteral("scheme"));
     QCOMPARE(spy.at(0).at(1).toString(), QStringLiteral("save"));
     QCOMPARE(spy.at(1).at(0).toString(), QStringLiteral("reset"));
+}
+
+// B3-1 参数设置控件（官方 9.3）：订阅节点 int/float 参数。
+void UiGuardsTest::paramSettingControlRoundTripsAndSeedsWithoutWriteBack()
+{
+    RuntimeInterfacePage page;
+    RuntimeControl *c = page.addControl(RuntimeControlType::ParamSetting,
+                                        QRect(0, 0, 200, 60));
+    QVERIFY(c);
+    c->bindKey = QStringLiteral("曝光模块");
+    c->paramKey = QStringLiteral("exposure");
+    c->paramMin = 0.5;
+    c->paramMax = 50.0;
+
+    RuntimeInterfacePage back;
+    QVERIFY(back.fromJson(page.toJson()));
+    const RuntimeControl &r = back.controls.first();
+    QCOMPARE(r.paramKey, QStringLiteral("exposure"));
+    QCOMPARE(r.paramMin, 0.5);
+    QCOMPARE(r.paramMax, 50.0);
+
+    RuntimeInterface layout;
+    layout.ensurePage();
+    layout.page(0)->controls.append(r);
+    RuntimeInterfaceView view;
+    QSignalSpy spy(&view, &RuntimeInterfaceView::parameterChangeRequested);
+    view.setInterface(layout);
+
+    auto *spin = view.findChild<QDoubleSpinBox *>();
+    QVERIFY2(spin, "参数设置控件应渲染出数值框");
+    QCOMPARE(spin->minimum(), 0.5);
+    QCOMPARE(spin->maximum(), 50.0);
+
+    // 回填当前值：不应对节点产生写回
+    QHash<QString, double> seeds;
+    seeds.insert(QStringLiteral("曝光模块|exposure"), 12.5);
+    view.setParameterValues(seeds);
+    QCOMPARE(spin->value(), 12.5);
+    QCOMPARE(spy.count(), 0);
+
+    // 用户改值才触发一次写入请求
+    spin->setValue(20.0);
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(0).toString(), QStringLiteral("曝光模块"));
+    QCOMPARE(spy.at(0).at(1).toString(), QStringLiteral("exposure"));
+    QCOMPARE(spy.at(0).at(2).toDouble(), 20.0);
 }
 
 QTEST_MAIN(UiGuardsTest)

@@ -7328,7 +7328,24 @@ void MainWindow::setupDockWidgets()
                         logMessage(tr("运行界面按钮：参数配置动作尚未接线（%1 = %2）")
                                        .arg(method, param));
                     }
-                });
+                    });
+
+                    // 参数设置控件（B3-1，官方 9.3）：运行界面直接改节点 int/float 参数
+                    connect(m_runtimeView, &RuntimeInterfaceView::parameterChangeRequested, this,
+                    [this](const QString &nodeName, const QString &paramKey, double value) {
+                    if (nodeName.isEmpty() || paramKey.isEmpty()) return;
+                    FlowScene *scene = currentFlowScene();
+                    if (!scene) return;
+                    for (NodeBase *n : scene->nodes()) {
+                        if (n->fullName() != nodeName) continue;
+                        n->setParam(paramKey, value);
+                        logMessage(tr("运行界面修改参数：%1.%2 = %3")
+                                       .arg(nodeName, paramKey)
+                                       .arg(value, 0, 'g', 6));
+                        return;
+                    }
+                    logMessage(tr("运行界面修改参数失败：找不到节点 %1").arg(nodeName));
+                    });
 
         // 全局变量变化 → 运行界面实时更新
         connect(GlobalVariableManager::instance(), &GlobalVariableManager::variableChanged,
@@ -7567,6 +7584,26 @@ void MainWindow::loadRuntimeInterfaceLayout()
         // 绑定失效红显（2026-10-27）：把当前流程节点名喂给视图做体检，
         // 失效绑定会以红字列在页面顶部（与设计器共用 staleBindings 判据）
         m_runtimeView->setKnownNodeNames(allNodeFullNames());
+
+        // 参数设置控件回填当前值（2026-11-09）：不回填的话运行界面会显示下限，
+        // 让人误以为参数被改成了那个值。回填走 QSignalBlocker，不会反向写节点。
+        QHash<QString, double> seeds;
+        FlowScene *scene = currentFlowScene();
+        if (scene) {
+            for (const RuntimeInterfacePage &pg : layout.pages) {
+                for (const RuntimeControl &c : pg.controls) {
+                    if (c.type != RuntimeControlType::ParamSetting) continue;
+                    if (c.bindKey.isEmpty() || c.paramKey.isEmpty()) continue;
+                    for (NodeBase *n : scene->nodes()) {
+                        if (n->fullName() != c.bindKey) continue;
+                        seeds.insert(c.bindKey + QLatin1Char('|') + c.paramKey,
+                                     n->getParam(c.paramKey).toDouble());
+                        break;
+                    }
+                }
+            }
+        }
+        m_runtimeView->setParameterValues(seeds);
     }
 }
 

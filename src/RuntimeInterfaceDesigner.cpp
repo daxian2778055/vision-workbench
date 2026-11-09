@@ -7,6 +7,7 @@
 #include <QComboBox>
 #include <QLineEdit>
 #include <QSpinBox>
+#include <QDoubleSpinBox>
 #include <QLabel>
 #include <QPushButton>
 #include <QCheckBox>
@@ -559,6 +560,7 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
             { "基础", "文本框",   RuntimeControlType::TextLabel },
             { "基础", "信号灯",   RuntimeControlType::StatusLight },
             { "基础", "按钮",     RuntimeControlType::Button },
+            { "基础", "参数设置", RuntimeControlType::ParamSetting },
             { "图表", "表格",     RuntimeControlType::ResultTable },
             { "其它", "IO状态",   RuntimeControlType::IoStatus },
         };
@@ -754,6 +756,25 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     fData->addRow(QStringLiteral("数据源"), m_actionConfigBtn);
     fData->addRow(QStringLiteral("绑定方式"), m_bindTypeCombo);
     fData->addRow(QStringLiteral("绑定对象"), m_bindKeyCombo);
+    // 参数设置控件：参数名 + 数值范围（仅该类型显示）
+    m_paramKeyEdit = new QLineEdit(propGroup);
+    m_paramKeyEdit->setPlaceholderText(QStringLiteral("节点参数键，如 exposure"));
+    fData->addRow(QStringLiteral("参数名"), m_paramKeyEdit);
+    auto *rangeHost = new QWidget(propGroup);
+    auto *rangeRow = new QHBoxLayout(rangeHost);
+    rangeRow->setContentsMargins(0, 0, 0, 0);
+    m_paramMinSpin = new QDoubleSpinBox(rangeHost);
+    m_paramMaxSpin = new QDoubleSpinBox(rangeHost);
+    for (QDoubleSpinBox *s : {m_paramMinSpin, m_paramMaxSpin}) {
+        s->setRange(-1e9, 1e9);
+        s->setDecimals(3);
+    }
+    m_paramMaxSpin->setValue(100.0);
+    rangeRow->addWidget(m_paramMinSpin);
+    rangeRow->addWidget(new QLabel(QStringLiteral("~"), rangeHost));
+    rangeRow->addWidget(m_paramMaxSpin);
+    m_paramRangeHost = rangeHost;
+    fData->addRow(QStringLiteral("取值范围"), rangeHost);
     fData->addRow(QStringLiteral("新列来源"), m_columnSource);
     fData->addRow(QStringLiteral("已有列"), m_columnList);
     auto *colBtnRow = new QHBoxLayout();
@@ -903,6 +924,14 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     for (QLineEdit *e : {m_bgColorEdit, m_borderColorEdit, m_pressedColorEdit}) {
         if (e)
             connect(e, &QLineEdit::textChanged, this, &RuntimeInterfaceDesigner::onPropertyEdited);
+    }
+    if (m_paramKeyEdit)
+        connect(m_paramKeyEdit, &QLineEdit::textChanged,
+                this, &RuntimeInterfaceDesigner::onPropertyEdited);
+    for (QDoubleSpinBox *s : {m_paramMinSpin, m_paramMaxSpin}) {
+        if (s)
+            connect(s, &QDoubleSpinBox::valueChanged,
+                    this, &RuntimeInterfaceDesigner::onPropertyEdited);
     }
     connect(m_tableMaxRows, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &RuntimeInterfaceDesigner::onPropertyEdited);
@@ -1512,7 +1541,10 @@ void RuntimeInterfaceDesigner::populateBindKeyCombo()
     RuntimeControl *ctrl = selectedControl();
     if (!ctrl) { m_bindKeyCombo->clear(); return; }
 
-    const QString bindType = m_bindTypeCombo->currentData().toString();
+    // 参数设置固定绑节点（绑定方式行被隐藏，combo 里可能没有值）
+    const QString bindType = (ctrl->type == RuntimeControlType::ParamSetting)
+                                 ? QStringLiteral("node")
+                                 : m_bindTypeCombo->currentData().toString();
     m_bindKeyCombo->clear();
     m_bindKeyCombo->addItem(QStringLiteral("(无)"), QString());
 
@@ -1616,11 +1648,18 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
 
     // 官方：按钮的数据源只有「配置」按钮；其它控件保持绑定方式/对象两行
     const bool isButton = (ctrl->type == RuntimeControlType::Button);
+    const bool isParam = (ctrl->type == RuntimeControlType::ParamSetting);
     if (m_dataForm && m_actionConfigBtn) {
         m_dataForm->setRowVisible(m_actionConfigBtn, isButton);
-        m_dataForm->setRowVisible(m_bindTypeCombo, !isButton);
+        // 参数设置固定绑节点，所以只藏「绑定方式」，仍需「绑定对象」选节点
+        m_dataForm->setRowVisible(m_bindTypeCombo, !isButton && !isParam);
         m_dataForm->setRowVisible(m_bindKeyCombo, !isButton);
+        if (m_paramKeyEdit) m_dataForm->setRowVisible(m_paramKeyEdit, isParam);
+        if (m_paramRangeHost) m_dataForm->setRowVisible(m_paramRangeHost, isParam);
     }
+    if (m_paramKeyEdit) m_paramKeyEdit->setText(ctrl->paramKey);
+    if (m_paramMinSpin) m_paramMinSpin->setValue(ctrl->paramMin);
+    if (m_paramMaxSpin) m_paramMaxSpin->setValue(ctrl->paramMax);
 
     const bool isTable = (ctrl->type == RuntimeControlType::ResultTable);
     const bool isIo = (ctrl->type == RuntimeControlType::IoStatus);
@@ -1704,6 +1743,14 @@ void RuntimeInterfaceDesigner::onPropertyEdited()
     ctrl->borderColor = m_borderColorEdit ? m_borderColorEdit->text().trimmed() : QString();
     ctrl->pressedColor = m_pressedColorEdit ? m_pressedColorEdit->text().trimmed() : QString();
     ctrl->visible = m_visibleCheck->isChecked();
+    if (ctrl->type == RuntimeControlType::ParamSetting) {
+        ctrl->bindType = QStringLiteral("node");   // 参数设置固定绑节点
+        ctrl->bindKey = m_bindKeyCombo->currentData().toString();
+        if (m_paramKeyEdit) ctrl->paramKey = m_paramKeyEdit->text().trimmed();
+        if (m_paramMinSpin) ctrl->paramMin = m_paramMinSpin->value();
+        if (m_paramMaxSpin) ctrl->paramMax = m_paramMaxSpin->value();
+        if (ctrl->paramMax <= ctrl->paramMin) ctrl->paramMax = ctrl->paramMin + 1.0;
+    }
 
     if (ctrl->type == RuntimeControlType::ResultTable) {
         // 列由"＋添加列/－删除列"维护（见 onColumnAdd/onColumnDel），此处只同步行数

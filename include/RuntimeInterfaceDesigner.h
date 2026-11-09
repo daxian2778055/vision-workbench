@@ -15,6 +15,7 @@ class QCheckBox;
 class QScrollArea;
 class QTimer;
 class QFormLayout;
+class QDoubleSpinBox;
 class QDragEnterEvent;
 class QDropEvent;
 class RuntimeDesignerCanvas;
@@ -123,6 +124,11 @@ QLabel *m_geometryLabel = nullptr;   /// 布局组只读显示尺寸/位置（�
     /// 官方按钮「数据源」是一个「配置」按钮（打开动作表）；非按钮控件隐藏该行
     QPushButton *m_actionConfigBtn = nullptr;
     QFormLayout *m_dataForm = nullptr;   /// 数据源分组，用于按控件类型切行可见性
+    // 参数设置控件（官方 9.3）：订阅节点 int/float 参数
+    QLineEdit *m_paramKeyEdit = nullptr;
+    QDoubleSpinBox *m_paramMinSpin = nullptr;
+    QDoubleSpinBox *m_paramMaxSpin = nullptr;
+    QWidget *m_paramRangeHost = nullptr;   /// 取值范围整行的容器（按类型隐藏）
     QCheckBox *m_visibleCheck = nullptr;   /// 运行时是否显示（隐藏控件仍留在设计画布上以便编辑）
     QPushButton *m_raiseBtn = nullptr;     /// 上移一层
     QPushButton *m_lowerBtn = nullptr;     /// 下移一层

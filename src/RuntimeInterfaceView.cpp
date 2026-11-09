@@ -10,6 +10,8 @@
 #include <QResizeEvent>
 #include <QMetaType>
 #include <QTabWidget>
+#include <QDoubleSpinBox>
+#include <QSignalBlocker>
 #include <QTableWidget>
 #include <QHeaderView>
 #include <QTimer>
@@ -35,6 +37,21 @@ void RuntimeInterfaceView::setInterface(const RuntimeInterface &layout)
     if (m_tabs && m_tabs->count() > 0)
         m_tabs->setCurrentIndex(qBound(0, m_current.currentPageIndex, m_tabs->count() - 1));
     update();
+}
+
+void RuntimeInterfaceView::setParameterValues(const QHash<QString, double> &values)
+{
+    m_paramValues = values;
+    // 已建出的参数框直接刷新；回填不触发写回（否则会反向写节点参数）
+    for (QDoubleSpinBox *spin : findChildren<QDoubleSpinBox *>()) {
+        const QString node = spin->property("vfpNode").toString();
+        const QString key = spin->property("vfpParam").toString();
+        if (node.isEmpty() || key.isEmpty()) continue;
+        const QString id = node + QLatin1Char('|') + key;
+        if (!values.contains(id)) continue;
+        QSignalBlocker block(spin);
+        spin->setValue(values.value(id));
+    }
 }
 
 void RuntimeInterfaceView::showPage(const QString &pageName)
@@ -285,6 +302,39 @@ QWidget *RuntimeInterfaceView::createControlWidget(const RuntimeControl &ctrl)
                 emit actionTriggered(first.method);
         });
         return btn;
+    }
+    case RuntimeControlType::ParamSetting: {
+        // 官方 9.3：参数设置控件订阅模块 int/float 参数，运行界面直接改。
+        auto *host = new QWidget();
+        auto *lay = new QVBoxLayout(host);
+        lay->setContentsMargins(8, 4, 8, 4);
+        lay->setSpacing(2);
+        auto *title = new QLabel(ctrl.displayTitle(), host);
+        title->setStyleSheet(QStringLiteral("font-size: 11px; color: #8a8a9a;"));
+        lay->addWidget(title);
+
+        auto *spin = new QDoubleSpinBox(host);
+        spin->setRange(ctrl.paramMin, ctrl.paramMax);
+        spin->setDecimals(3);
+        spin->setKeyboardTracking(false);   // 只在回车/失焦提交，避免每敲一键都写参数
+        spin->setProperty("vfpNode", ctrl.bindKey);
+        spin->setProperty("vfpParam", ctrl.paramKey);
+        const double seed = m_paramValues.value(
+            ctrl.bindKey + QLatin1Char('|') + ctrl.paramKey, ctrl.paramMin);
+        {
+            QSignalBlocker block(spin);     // 初值不应触发写回
+            spin->setValue(seed);
+        }
+        const QString nodeName = ctrl.bindKey;
+        const QString paramKey = ctrl.paramKey;
+        connect(spin, &QDoubleSpinBox::valueChanged, this,
+                [this, nodeName, paramKey](double v) {
+                    emit parameterChangeRequested(nodeName, paramKey, v);
+                });
+        lay->addWidget(spin, 1);
+        host->setStyleSheet(QStringLiteral(
+            "QWidget { background-color: #22222a; border: 1px solid #3a3a5c; border-radius: 4px; }"));
+        return host;
     }
     case RuntimeControlType::ResultTable:
         return createTableWidget(ctrl);

@@ -17,7 +17,8 @@ enum class RuntimeControlType {
     StatusLight,  /// 状态灯：绑定布尔/字符串全局变量（OK=绿，NG/False=红）
     Button,       /// 按钮：触发流程动作（开始/停止/单次/触发流程）
     ResultTable,  /// 结果表格：多列历史结果（列绑定全局变量/节点输出，按轮提交行）
-    IoStatus      /// IO 状态：直绑相机 IO 节点（成功=灯，值/错误=文本）
+    IoStatus,     /// IO 状态：直绑相机 IO 节点（成功=灯，值/错误=文本）
+    ParamSetting  /// 参数设置：订阅节点 int/float 参数，运行界面直接改（官方 9.3）
 };
 
 /// 结果表格列（ResultTable 专用）
@@ -55,6 +56,11 @@ struct RuntimeControl {
     /// Button 专用动作表（官方「数据源配置」弹窗，可多行）。
     /// 旧布局只有 bindType="action" + bindKey，加载时自动合成一行，不丢配置。
     QList<RuntimeAction> actions;
+    /// ParamSetting 专用（官方 9.3「订阅模块 int/float 参数」）：
+    /// bindKey = 节点完整名，paramKey = 该节点参数键，paramMin/Max 供运行界面数值框钳制。
+    QString paramKey;
+    double paramMin = 0.0;
+    double paramMax = 100.0;
 
     QString displayTitle() const
     {
