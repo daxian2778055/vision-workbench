@@ -461,6 +461,7 @@ void DesignerControlFrame::paintEvent(QPaintEvent *event)
         p.drawText(btnRect, Qt::AlignCenter, ctrl.displayTitle());
         break;
     }
+    case RuntimeControlType::MultiLineChart:   // 多数据线图与线图阵列共用预览
     case RuntimeControlType::LineChart: {
         // 线图阵列预览：每个数据源一张小图（官方：执行次数 vs 当前值）
         p.setPen(QPen(QColor(0x3a, 0x3a, 0x4a), 1));
@@ -500,6 +501,43 @@ void DesignerControlFrame::paintEvent(QPaintEvent *event)
                 poly << QPointF(x, y);
             }
             p.drawPolyline(poly);
+        }
+        break;
+    }
+    case RuntimeControlType::PieChart: {
+        // 饼图预览：按系列数均分圆（真实占比在运行态按当前值计算）
+        p.setPen(QPen(QColor(0x3a, 0x3a, 0x4a), 1));
+        p.setBrush(QColor(ctrl.chartBgColor.isEmpty() ? QStringLiteral("#1e1e24")
+                                                      : ctrl.chartBgColor));
+        p.drawRect(body);
+        p.setBrush(Qt::NoBrush);
+        if (ctrl.showChartTitle) {
+            p.setPen(QColor(0xd8, 0xd8, 0xe0));
+            p.drawText(QRect(body.left() + 6, body.top() + 3, body.width() - 12, 18),
+                       Qt::AlignLeft | Qt::AlignVCenter,
+                       ctrl.chartTitle.isEmpty() ? ctrl.displayTitle() : ctrl.chartTitle);
+        }
+        const QRect pieArea = body.adjusted(8, ctrl.showChartTitle ? 24 : 6, -8, -8);
+        const int d = qMax(12, qMin(pieArea.width(), pieArea.height()));
+        const QRect pieRect(pieArea.center().x() - d / 2, pieArea.center().y() - d / 2, d, d);
+        const int n = ctrl.chartSeries.size();
+        if (n <= 0) {
+            p.setPen(QPen(QColor(0x4a, 0x4e, 0x5a), 2));
+            p.drawEllipse(pieRect);
+            p.setPen(QColor(0x8a, 0x8e, 0x9c));
+            p.drawText(pieRect, Qt::AlignCenter, QStringLiteral("未配置数据系列"));
+        } else {
+            p.setPen(QPen(QColor(0x1e, 0x1e, 0x24), 1));
+            int start = 90 * 16;   // drawPie 角度单位 = 1/16 度
+            for (int i = 0; i < n; ++i) {
+                QColor c(ctrl.chartSeries.at(i).color);
+                if (!c.isValid()) c = QColor(QStringLiteral("#4FC3F7"));
+                p.setBrush(c);
+                // 末块吃掉整除余量，保证拼满 360 度无缝隙
+                const int span = (i == n - 1) ? (90 * 16 + 360 * 16 - start) : (360 * 16 / n);
+                p.drawPie(pieRect, start, span);
+                start += span;
+            }
         }
         break;
     }
@@ -760,6 +798,8 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
             { "布局", "Tab页",    RuntimeControlType::TabPage },
             { "图表", "表格",     RuntimeControlType::ResultTable },
             { "图表", "线图阵列", RuntimeControlType::LineChart },
+            { "图表", "多数据线图", RuntimeControlType::MultiLineChart },
+            { "图表", "饼图", RuntimeControlType::PieChart },
             { "其它", "IO状态",   RuntimeControlType::IoStatus },
             { "其它", "图片",     RuntimeControlType::ImageAsset },
             { "其它", "世界时钟", RuntimeControlType::WorldClock },
@@ -1031,13 +1071,10 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     m_zoneCombo->addItem(QStringLiteral("左侧固定栏"), int(RuntimeZone::LeftBar));
     m_zoneCombo->addItem(QStringLiteral("右侧固定栏"), int(RuntimeZone::RightBar));
     fLayout->addRow(QStringLiteral("所属区域"), m_zoneCombo);
-    m_zoneSlotSpin = new QSpinBox(propGroup);
-    m_zoneSlotSpin->setRange(0, 31);
-    m_zoneSlotSpin->setToolTip(QStringLiteral("固定栏内第几格（栏被分割成多格时用）"));
-    fLayout->addRow(QStringLiteral("栏内格序号"), m_zoneSlotSpin);
     // 内层 Tab 归属（仅当前页启用了内层 Tab 时显示）
     m_innerTabCombo = new QComboBox(propGroup);
     fLayout->addRow(QStringLiteral("内层Tab"), m_innerTabCombo);
+    m_innerTabLabel = qobject_cast<QLabel *>(fLayout->labelForField(m_innerTabCombo));
     auto *layoutHint = new QLabel(
         QStringLiteral("官方的自动填充、T/B/L/R 边距与九宫格对齐待布局模型扩展（B2）"),
         propGroup);
@@ -1235,9 +1272,6 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
                 this, &RuntimeInterfaceDesigner::onPropertyEdited);
     if (m_zoneCombo)
         connect(m_zoneCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                this, &RuntimeInterfaceDesigner::onPropertyEdited);
-    if (m_zoneSlotSpin)
-        connect(m_zoneSlotSpin, QOverload<int>::of(&QSpinBox::valueChanged),
                 this, &RuntimeInterfaceDesigner::onPropertyEdited);
     if (m_innerTabCombo)
         connect(m_innerTabCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -1439,7 +1473,9 @@ if (type == RuntimeControlType::Button)     { geo.setWidth(160); geo.setHeight(4
 if (type == RuntimeControlType::TextLabel)  { geo.setWidth(240); geo.setHeight(60); }
 if (type == RuntimeControlType::ValueDisplay){ geo.setHeight(90); }
 if (type == RuntimeControlType::ResultTable){ geo.setWidth(460); geo.setHeight(260); }
-if (type == RuntimeControlType::LineChart){ geo.setWidth(420); geo.setHeight(300); }
+if (type == RuntimeControlType::LineChart
+    || type == RuntimeControlType::MultiLineChart
+    || type == RuntimeControlType::PieChart){ geo.setWidth(420); geo.setHeight(300); }
 if (type == RuntimeControlType::IoStatus)   { geo.setWidth(260); geo.setHeight(80); }
 
 // 拖放：按落点判定所属区域（官方 9.1 固定栏），再在该区域的坐标系里定位。
@@ -1628,7 +1664,10 @@ void RuntimeInterfaceDesigner::onColumnDel()
 void RuntimeInterfaceDesigner::onChartSeriesAdd()
 {
     RuntimeControl *ctrl = selectedControl();
-    if (!ctrl || ctrl->type != RuntimeControlType::LineChart || !m_chartSource) return;
+    if (!ctrl || !m_chartSource) return;
+    if (ctrl->type != RuntimeControlType::LineChart
+        && ctrl->type != RuntimeControlType::MultiLineChart
+        && ctrl->type != RuntimeControlType::PieChart) return;
     const QString src = m_chartSource->currentText().trimmed();
     if (src.isEmpty()) return;
     ChartSeries series;
@@ -1658,7 +1697,10 @@ void RuntimeInterfaceDesigner::onChartSeriesAdd()
 void RuntimeInterfaceDesigner::onChartSeriesDel()
 {
     RuntimeControl *ctrl = selectedControl();
-    if (!ctrl || ctrl->type != RuntimeControlType::LineChart || !m_chartSeriesList) return;
+    if (!ctrl || !m_chartSeriesList) return;
+    if (ctrl->type != RuntimeControlType::LineChart
+        && ctrl->type != RuntimeControlType::MultiLineChart
+        && ctrl->type != RuntimeControlType::PieChart) return;
     const int row = m_chartSeriesList->currentRow();
     if (row < 0 || row >= ctrl->chartSeries.size()) return;
     pushUndo();
@@ -2158,12 +2200,12 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
         const int zi = m_zoneCombo->findData(int(ctrl->zone));
         m_zoneCombo->setCurrentIndex(zi >= 0 ? zi : 0);
     }
-    if (m_zoneSlotSpin) m_zoneSlotSpin->setValue(ctrl->zoneSlot);
 
     // 内层 Tab：当前页未启用时整行隐藏；启用时列「不在 Tab」+ 各标签
     if (m_innerTabCombo) {
         const bool hasTabs = pg && !pg->innerTabNames.isEmpty();
         m_innerTabCombo->setVisible(hasTabs);
+        if (m_innerTabLabel) m_innerTabLabel->setVisible(hasTabs);
         if (hasTabs) {
             m_innerTabCombo->clear();
             m_innerTabCombo->addItem(QStringLiteral("不在 Tab 内"), -1);
@@ -2204,7 +2246,9 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
 
     // 线图阵列：分组只在选中该类型时出现；数据系列来源 = 全局变量 + 节点输出
     if (m_chartGroup) {
-        const bool isChart = ctrl->type == RuntimeControlType::LineChart;
+        const bool isChart = ctrl->type == RuntimeControlType::LineChart
+                             || ctrl->type == RuntimeControlType::MultiLineChart
+                             || ctrl->type == RuntimeControlType::PieChart;
         m_chartGroup->setVisible(isChart);
         m_chartGroup->setEnabled(isChart);
         if (isChart) {
@@ -2289,13 +2333,18 @@ void RuntimeInterfaceDesigner::onPropertyEdited()
     // 所属区域对所有控件生效
     if (m_zoneCombo) {
         const int z = m_zoneCombo->currentData().toInt();
-        if (z >= 0 && z <= int(RuntimeZone::RightBar))
+        if (z >= 0 && z <= int(RuntimeZone::RightBar) && z != int(ctrl->zone)) {
+            // 换区时按「画布绝对位置不变」重映射存储坐标，控件不在画布上跳位
+            const QRect canvasRect = m_canvas ? m_canvas->toCanvasRect(*ctrl) : ctrl->geometry;
             ctrl->zone = RuntimeZone(z);
+            if (m_canvas) ctrl->geometry = m_canvas->toStoredRect(*ctrl, canvasRect);
+        }
     }
-    if (m_zoneSlotSpin) ctrl->zoneSlot = m_zoneSlotSpin->value();
     if (m_innerTabCombo && m_innerTabCombo->isVisible())
         ctrl->innerTab = m_innerTabCombo->currentData().toInt();
-    if (ctrl->type == RuntimeControlType::LineChart && m_chartGroup) {
+    if ((ctrl->type == RuntimeControlType::LineChart
+         || ctrl->type == RuntimeControlType::MultiLineChart
+         || ctrl->type == RuntimeControlType::PieChart) && m_chartGroup) {
         ctrl->chartTitle = m_chartTitleEdit ? m_chartTitleEdit->text() : QString();
         if (m_chartShowTitleCheck) ctrl->showChartTitle = m_chartShowTitleCheck->isChecked();
         if (m_chartHistorySpin) ctrl->chartHistoryLimit = m_chartHistorySpin->value();

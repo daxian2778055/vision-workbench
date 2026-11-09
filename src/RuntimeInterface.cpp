@@ -21,6 +21,8 @@ QString runtimeControlTypeName(RuntimeControlType type)
     case RuntimeControlType::ImageAsset: return QStringLiteral("图片");
     case RuntimeControlType::WorldClock: return QStringLiteral("世界时钟");
     case RuntimeControlType::LineChart:  return QStringLiteral("线图阵列");
+    case RuntimeControlType::MultiLineChart: return QStringLiteral("多数据线图");
+    case RuntimeControlType::PieChart:   return QStringLiteral("饼图");
     }
     return QStringLiteral("未知");
 }
@@ -41,6 +43,8 @@ bool runtimeControlTypeFromName(const QString &name, RuntimeControlType &out)
     if (name == QStringLiteral("图片"))     { out = RuntimeControlType::ImageAsset; return true; }
     if (name == QStringLiteral("世界时钟")) { out = RuntimeControlType::WorldClock; return true; }
     if (name == QStringLiteral("线图阵列")) { out = RuntimeControlType::LineChart; return true; }
+    if (name == QStringLiteral("多数据线图")) { out = RuntimeControlType::MultiLineChart; return true; }
+    if (name == QStringLiteral("饼图")) { out = RuntimeControlType::PieChart; return true; }
     return false;
 }
 
@@ -138,7 +142,6 @@ static QJsonObject controlToJson(const RuntimeControl &c)
     }
     // 所属区域（默认画布，只在非默认时写出）
     if (c.zone != RuntimeZone::Canvas) o["zone"] = int(c.zone);
-    if (c.zoneSlot != 0) o["zoneSlot"] = c.zoneSlot;
     if (c.innerTab >= 0) o["innerTab"] = c.innerTab;
     if (c.type == RuntimeControlType::ImageAsset && !c.imagePath.isEmpty())
         o["imagePath"] = c.imagePath;
@@ -177,7 +180,9 @@ static QJsonObject controlToJson(const RuntimeControl &c)
         o["columns"] = cols;
         o["maxRows"] = c.maxRows;
     }
-    if (c.type == RuntimeControlType::LineChart) {
+    if (c.type == RuntimeControlType::LineChart
+        || c.type == RuntimeControlType::MultiLineChart
+        || c.type == RuntimeControlType::PieChart) {
         QJsonArray seriesArr;
         for (const ChartSeries &s : c.chartSeries) {
             QJsonObject so;
@@ -247,7 +252,6 @@ static RuntimeControl controlFromJson(const QJsonObject &o, RuntimeControlType t
     ctrl.zone = (zoneRaw >= 0 && zoneRaw <= int(RuntimeZone::RightBar))
                     ? RuntimeZone(zoneRaw)
                     : RuntimeZone::Canvas;
-    ctrl.zoneSlot = qMax(0, o["zoneSlot"].toInt(0));
     if (ctrl.type == RuntimeControlType::ImageAsset)
         ctrl.imagePath = o["imagePath"].toString();
     if (ctrl.type == RuntimeControlType::WorldClock)
@@ -271,7 +275,9 @@ static RuntimeControl controlFromJson(const QJsonObject &o, RuntimeControlType t
         ctrl.maxRows = o["maxRows"].toInt(100);
         if (ctrl.maxRows < 1) ctrl.maxRows = 1;
     }
-    if (ctrl.type == RuntimeControlType::LineChart) {
+    if (ctrl.type == RuntimeControlType::LineChart
+        || ctrl.type == RuntimeControlType::MultiLineChart
+        || ctrl.type == RuntimeControlType::PieChart) {
         const QJsonArray seriesArr = o["chartSeries"].toArray();
         for (const QJsonValue &sv : seriesArr) {
             const QJsonObject so = sv.toObject();

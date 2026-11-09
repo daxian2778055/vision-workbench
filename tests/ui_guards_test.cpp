@@ -44,6 +44,8 @@
 #include <QtCharts/QChartView>
 #include <QtCharts/QLineSeries>
 #include <QtCharts/QValueAxis>
+#include <QtCharts/QPieSeries>
+#include <QtCharts/QPieSlice>
 
 class UiGuardsTest : public QObject
 {
@@ -83,6 +85,9 @@ void runtimeViewResizeKeepsZoneAndInnerTabGeometry();
 void runtimeViewPageSwitchKeepsPerPageInnerTab();
 void lineChartRoundTripsSeriesAndClamps();
 void lineChartRuntimeAppendsBoundSamplesAndTrims();
+void multiLineChartSharesOneChartAndAppends();
+void pieChartUpdatesSliceValues();
+void chartTypesRoundTrip();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -993,19 +998,17 @@ void UiGuardsTest::zoneGeometryScalesCanvasButNotBars()
     layout.page(0)->leftBarWidth = 100;
     layout.page(0)->topBarSlots = 3;
 
-    // zone / zoneSlot / 格数往返
+    // zone / 格数往返
     RuntimeControl bar;
     bar.type = RuntimeControlType::TextLabel;
     bar.geometry = QRect(10, 10, 80, 40);
     bar.zone = RuntimeZone::TopBar;
-    bar.zoneSlot = 2;
     layout.page(0)->controls.append(bar);
 
     RuntimeInterface back;
     QVERIFY(back.fromJson(layout.toJson()));
     QCOMPARE(back.page(0)->topBarSlots, 3);
     QCOMPARE(back.page(0)->controls.first().zone, RuntimeZone::TopBar);
-    QCOMPARE(back.page(0)->controls.first().zoneSlot, 2);
 
     // 与设计画布同尺寸：画布区 1:1
     RuntimeInterfaceView view;
@@ -1533,6 +1536,127 @@ void UiGuardsTest::lineChartRuntimeAppendsBoundSamplesAndTrims()
     QVERIFY(axisX);
     QCOMPARE(axisX->min(), 4.0);
     QCOMPARE(axisX->max(), 6.0);
+}
+
+// 多数据线图（官方 9.3 图表）：多系列同绘一张图，各系列独立累计执行次数。
+void UiGuardsTest::multiLineChartSharesOneChartAndAppends()
+{
+    RuntimeInterface layout;
+    layout.ensurePage();
+    RuntimeControl chart;
+    chart.type = RuntimeControlType::MultiLineChart;
+    chart.geometry = QRect(10, 10, 420, 300);
+    ChartSeries g;
+    g.name = QStringLiteral("甲");
+    g.bindType = QStringLiteral("global");
+    g.bindKey = QStringLiteral("a");
+    chart.chartSeries.append(g);
+    ChartSeries n;
+    n.name = QStringLiteral("乙");
+    n.bindType = QStringLiteral("node");
+    n.bindKey = QStringLiteral("n");
+    chart.chartSeries.append(n);
+    layout.page(0)->controls.append(chart);
+
+    RuntimeInterfaceView view;
+    view.resize(900, 600);
+    view.setInterface(layout);
+
+    QWidget *panel = view.findChild<QWidget *>(QStringLiteral("RuntimeMultiLineChart"));
+    QVERIFY2(panel, "运行态必须建出多数据线图面板");
+    QCOMPARE(panel->findChildren<QChartView *>().size(), 1);   // 只有一张共享图
+    QChartView *v = view.findChild<QChartView *>(QStringLiteral("RuntimeMultiLineChartView0"));
+    QVERIFY(v);
+    QCOMPARE(v->chart()->series().size(), 2);
+    QLineSeries *s0 = mainLineSeries(v);
+    auto *s1 = qobject_cast<QLineSeries *>(v->chart()->series().at(1));
+    QVERIFY(s0 && s1);
+
+    view.updateVariable(QStringLiteral("a"), 3.0);
+    view.updateNodeOutput(QStringLiteral("n"), 5.0);
+    QCOMPARE(s0->points().size(), 1);
+    QCOMPARE(s0->points().at(0).y(), 3.0);
+    QCOMPARE(s1->points().size(), 1);
+    QCOMPARE(s1->points().at(0).y(), 5.0);
+
+    view.updateVariable(QStringLiteral("a"), 7.0);
+    QCOMPARE(s0->points().size(), 2);
+    QCOMPARE(s0->points().at(1).y(), 7.0);
+    QCOMPARE(s1->points().size(), 1);   // 未绑定的系列不受影响
+}
+
+// 饼图（官方 9.3 图表）：每个数据源一个扇区，喂数更新最新当前值（占比随之变化）。
+void UiGuardsTest::pieChartUpdatesSliceValues()
+{
+    RuntimeInterface layout;
+    layout.ensurePage();
+    RuntimeControl chart;
+    chart.type = RuntimeControlType::PieChart;
+    chart.geometry = QRect(10, 10, 420, 300);
+    ChartSeries a;
+    a.name = QStringLiteral("甲");
+    a.bindType = QStringLiteral("global");
+    a.bindKey = QStringLiteral("a");
+    chart.chartSeries.append(a);
+    ChartSeries b;
+    b.name = QStringLiteral("乙");
+    b.bindType = QStringLiteral("global");
+    b.bindKey = QStringLiteral("b");
+    chart.chartSeries.append(b);
+    layout.page(0)->controls.append(chart);
+
+    RuntimeInterfaceView view;
+    view.resize(900, 600);
+    view.setInterface(layout);
+
+    QChartView *v = view.findChild<QChartView *>(QStringLiteral("RuntimePieChartView0"));
+    QVERIFY2(v, "运行态必须建出饼图视图");
+    QVERIFY(!v->chart()->series().isEmpty());
+    auto *pie = qobject_cast<QPieSeries *>(v->chart()->series().first());
+    QVERIFY(pie);
+    QCOMPARE(pie->slices().size(), 2);
+
+    view.updateVariable(QStringLiteral("a"), 30.0);
+    view.updateVariable(QStringLiteral("b"), 10.0);
+    QVERIFY(qFuzzyCompare(pie->slices().at(0)->value(), 30.0));
+    QVERIFY(qFuzzyCompare(pie->slices().at(1)->value(), 10.0));
+}
+
+// 新增两类图表的 JSON 往返：类型与数据系列/标题都要原样保留。
+void UiGuardsTest::chartTypesRoundTrip()
+{
+    const RuntimeControlType types[] = {RuntimeControlType::MultiLineChart,
+                                        RuntimeControlType::PieChart};
+    for (RuntimeControlType type : types) {
+        RuntimeInterfacePage page;
+        RuntimeControl c;
+        c.type = type;
+        c.chartTitle = QStringLiteral("图表标题");
+        ChartSeries s;
+        s.name = QStringLiteral("系列甲");
+        s.bindType = QStringLiteral("global");
+        s.bindKey = QStringLiteral("a");
+        s.color = QStringLiteral("#ff8800");
+        c.chartSeries.append(s);
+        ChartSeries t;
+        t.name = QStringLiteral("系列乙");
+        t.bindType = QStringLiteral("node");
+        t.bindKey = QStringLiteral("流程/结果");
+        c.chartSeries.append(t);
+        page.controls.append(c);
+
+        RuntimeInterfacePage back;
+        QVERIFY(back.fromJson(page.toJson()));
+        QCOMPARE(back.controls.size(), 1);
+        const RuntimeControl &bc = back.controls.at(0);
+        QCOMPARE(bc.type, type);
+        QCOMPARE(bc.chartTitle, QStringLiteral("图表标题"));
+        QCOMPARE(bc.chartSeries.size(), 2);
+        QCOMPARE(bc.chartSeries.at(0).bindKey, QStringLiteral("a"));
+        QCOMPARE(bc.chartSeries.at(0).color, QStringLiteral("#ff8800"));
+        QCOMPARE(bc.chartSeries.at(1).bindType, QStringLiteral("node"));
+        QCOMPARE(bc.chartSeries.at(1).bindKey, QStringLiteral("流程/结果"));
+    }
 }
 
 QTEST_MAIN(UiGuardsTest)

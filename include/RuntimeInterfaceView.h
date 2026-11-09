@@ -93,7 +93,7 @@ private:
     void onCurrentPageChanged(int index);
     /// 按当前内层标签显隐控件（只作用于当前页；其它页照常，切页自然生效）
     void applyInnerTabVisibility();
-    /// 把一次执行的值追加到匹配的线图阵列数据系列（只接受 int/float/bool）
+    /// 把一次执行的值追加到匹配的图表数据系列（线图/多数据线图/饼图；只接受 int/float/bool）
     void updateCharts(const QString &bindType, const QString &key, const QVariant &value);
     /// 在当前页顶部建内层标签条（页未启用内层 Tab 时什么都不做）
     void buildInnerTabBar(QWidget *container, const RuntimeInterfacePage &pg);
@@ -106,7 +106,6 @@ private:
     QWidget *createIoStatusWidget(const RuntimeControl &ctrl);
     void updateValueLabel(QLabel *label, const RuntimeControl &ctrl, const QVariant &value);
     void updateStatusLight(QLabel *light, const RuntimeControl &ctrl, const QVariant &value);
-    void feedTables(const RuntimeControl &ctrl, const QVariant &value);
     static QString cellText(const QVariant &value);
 
     RuntimeInterface m_current;

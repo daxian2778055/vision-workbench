@@ -29,15 +29,26 @@
 #include <QtCharts/QChart>
 #include <QtCharts/QLineSeries>
 #include <QtCharts/QValueAxis>
+#include <QtCharts/QPieSeries>
+#include <QtCharts/QPieSlice>
 
 namespace {
+/// 图表控件公共接口：updateCharts 按此多态喂数，不再认 objectName。
+class RuntimeChartBase : public QWidget
+{
+public:
+    explicit RuntimeChartBase(QWidget *parent = nullptr) : QWidget(parent) {}
+    virtual int seriesCount() const = 0;
+    virtual void appendSample(int index, double value) = 0;
+};
+
 /// 线图阵列控件（官方 9.3 图表）：每个数据源一张线图，横轴=执行次数，纵轴=当前值。
 /// Qt Charts 只在本文件使用，对外仍是普通 QWidget（objectName=RuntimeLineChart）。
-class RuntimeChartPanel : public QWidget
+class RuntimeChartPanel : public RuntimeChartBase
 {
 public:
     explicit RuntimeChartPanel(const RuntimeControl &ctrl, QWidget *parent = nullptr)
-        : QWidget(parent), m_ctrl(ctrl)
+        : RuntimeChartBase(parent), m_ctrl(ctrl)
     {
         setObjectName(QStringLiteral("RuntimeLineChart"));
         const QColor bg(ctrl.chartBgColor);
@@ -122,9 +133,9 @@ public:
         }
     }
 
-    int seriesCount() const { return m_lines.size(); }
+    int seriesCount() const override { return m_lines.size(); }
 
-    void appendSample(int index, double value)
+    void appendSample(int index, double value) override
     {
         if (index < 0 || index >= m_lines.size())
             return;
@@ -172,6 +183,194 @@ private:
     QVector<QVector<QPointF>> m_points;
     QVector<QLineSeries *> m_upper;
     QVector<QLineSeries *> m_lower;
+};
+
+/// 多数据线图控件（官方 9.3 图表）：多个数据源同绘一张线图，共享执行次数横轴。
+class RuntimeMultiLinePanel : public RuntimeChartBase
+{
+public:
+    explicit RuntimeMultiLinePanel(const RuntimeControl &ctrl, QWidget *parent = nullptr)
+        : RuntimeChartBase(parent), m_ctrl(ctrl)
+    {
+        setObjectName(QStringLiteral("RuntimeMultiLineChart"));
+        const QColor bg(ctrl.chartBgColor);
+        const QColor axisColor = QColor(ctrl.chartAxisColor).isValid()
+                                     ? QColor(ctrl.chartAxisColor)
+                                     : QColor(QStringLiteral("#9aa0b0"));
+        setStyleSheet(QStringLiteral("background:%1;").arg(
+            bg.isValid() ? bg.name() : QStringLiteral("#1e1e24")));
+        auto *lay = new QVBoxLayout(this);
+        lay->setContentsMargins(0, 0, 0, 0);
+        lay->setSpacing(2);
+        if (ctrl.showChartTitle) {
+            auto *title = new QLabel(
+                ctrl.chartTitle.isEmpty() ? ctrl.displayTitle() : ctrl.chartTitle, this);
+            title->setObjectName(QStringLiteral("RuntimeChartTitle"));
+            title->setStyleSheet(QStringLiteral("color:%1; font-size:11px; font-weight:bold;"
+                                                " padding:2px 4px;")
+                                     .arg(axisColor.name()));
+            lay->addWidget(title);
+        }
+        auto *chart = new QChart();
+        chart->setBackgroundVisible(false);
+        chart->legend()->setVisible(!ctrl.chartSeries.isEmpty());
+        chart->legend()->setLabelColor(axisColor);
+        m_axisX = new QValueAxis(chart);
+        m_axisX->setRange(0, qMax(9, ctrl.chartHistoryLimit - 1));
+        m_axisX->setLabelsColor(axisColor);
+        m_axisX->setTitleText(QStringLiteral("执行次数"));
+        chart->addAxis(m_axisX, Qt::AlignBottom);
+        m_axisY = new QValueAxis(chart);
+        m_axisY->setRange(0, 100);
+        m_axisY->setLabelsColor(axisColor);
+        chart->addAxis(m_axisY, Qt::AlignLeft);
+        for (const ChartSeries &series : ctrl.chartSeries) {
+            auto *line = new QLineSeries(chart);
+            line->setName(series.name.isEmpty() ? series.bindKey : series.name);
+            QPen pen(QColor(series.color));
+            pen.setWidth(2);
+            line->setPen(pen);
+            chart->addSeries(line);
+            line->attachAxis(m_axisX);
+            line->attachAxis(m_axisY);
+            m_lines.append(line);
+            m_points.append(QVector<QPointF>());
+            m_lastX.append(-1.0);   // 首点 x=0，与线图阵列口径一致
+        }
+        auto *view = new QChartView(chart, this);
+        view->setObjectName(QStringLiteral("RuntimeMultiLineChartView0"));
+        view->setRenderHint(QPainter::Antialiasing);
+        view->setMinimumHeight(48);
+        lay->addWidget(view, 1);
+        if (ctrl.chartSeries.isEmpty()) {
+            auto *hint = new QLabel(QStringLiteral("未配置数据系列"), this);
+            hint->setAlignment(Qt::AlignCenter);
+            hint->setStyleSheet(QStringLiteral("color:#8a8a9a;"));
+            lay->addWidget(hint);
+        }
+    }
+
+    int seriesCount() const override { return m_lines.size(); }
+
+    void appendSample(int index, double value) override
+    {
+        if (index < 0 || index >= m_lines.size())
+            return;
+        QVector<QPointF> &pts = m_points[index];
+        const double x = m_lastX[index] + 1.0;   // 该系列的绝对执行次数
+        m_lastX[index] = x;
+        pts.append(QPointF(x, value));
+        const int limit = qBound(1, m_ctrl.chartHistoryLimit, 1000);
+        while (pts.size() > limit)
+            pts.removeFirst();
+        m_lines[index]->replace(pts);
+        updateAxes();
+    }
+
+private:
+    /// 共享坐标轴自动量程：Y 取全部系列数据（含上下限）包络，X 取 [最早首点, 最晚末点]
+    void updateAxes()
+    {
+        double lo = 0.0, hi = 0.0;
+        bool hasY = false;
+        double x0 = 0.0, x1 = 0.0;
+        bool hasX = false;
+        for (int i = 0; i < m_points.size(); ++i) {
+            const ChartSeries &series = m_ctrl.chartSeries.at(i);
+            if (series.showLimits) {
+                if (!hasY) { lo = series.lower; hi = series.upper; hasY = true; }
+                else { lo = qMin(lo, series.lower); hi = qMax(hi, series.upper); }
+            }
+            const QVector<QPointF> &pts = m_points.at(i);
+            if (pts.isEmpty()) continue;
+            if (!hasX) { x0 = pts.first().x(); x1 = pts.last().x(); hasX = true; }
+            else { x0 = qMin(x0, pts.first().x()); x1 = qMax(x1, pts.last().x()); }
+            for (const QPointF &p : pts) {
+                if (!hasY) { lo = p.y(); hi = p.y(); hasY = true; }
+                else { lo = qMin(lo, p.y()); hi = qMax(hi, p.y()); }
+            }
+        }
+        if (!hasY) { lo = 0.0; hi = 100.0; }
+        if (qAbs(hi - lo) < 1e-9) { lo -= 1.0; hi += 1.0; }
+        const double pad = (hi - lo) * 0.1;
+        m_axisY->setRange(lo - pad, hi + pad);
+        if (!hasX) { x0 = 0.0; x1 = qMax(9, m_ctrl.chartHistoryLimit - 1); }
+        m_axisX->setRange(x0, qMax(x0 + 1.0, x1));
+    }
+
+    RuntimeControl m_ctrl;
+    QVector<QLineSeries *> m_lines;
+    QVector<QVector<QPointF>> m_points;
+    QVector<double> m_lastX;
+    QValueAxis *m_axisX = nullptr;
+    QValueAxis *m_axisY = nullptr;
+};
+
+/// 饼图控件（官方 9.3 图表）：各数据源最新当前值占整体的比例。
+class RuntimePiePanel : public RuntimeChartBase
+{
+public:
+    explicit RuntimePiePanel(const RuntimeControl &ctrl, QWidget *parent = nullptr)
+        : RuntimeChartBase(parent)
+    {
+        setObjectName(QStringLiteral("RuntimePieChart"));
+        const QColor bg(ctrl.chartBgColor);
+        const QColor axisColor = QColor(ctrl.chartAxisColor).isValid()
+                                     ? QColor(ctrl.chartAxisColor)
+                                     : QColor(QStringLiteral("#9aa0b0"));
+        setStyleSheet(QStringLiteral("background:%1;").arg(
+            bg.isValid() ? bg.name() : QStringLiteral("#1e1e24")));
+        auto *lay = new QVBoxLayout(this);
+        lay->setContentsMargins(0, 0, 0, 0);
+        lay->setSpacing(2);
+        if (ctrl.showChartTitle) {
+            auto *title = new QLabel(
+                ctrl.chartTitle.isEmpty() ? ctrl.displayTitle() : ctrl.chartTitle, this);
+            title->setObjectName(QStringLiteral("RuntimeChartTitle"));
+            title->setStyleSheet(QStringLiteral("color:%1; font-size:11px; font-weight:bold;"
+                                                " padding:2px 4px;")
+                                     .arg(axisColor.name()));
+            lay->addWidget(title);
+        }
+        auto *chart = new QChart();
+        chart->setBackgroundVisible(false);
+        chart->legend()->setVisible(!ctrl.chartSeries.isEmpty());
+        chart->legend()->setLabelColor(axisColor);
+        m_pie = new QPieSeries(chart);
+        for (const ChartSeries &series : ctrl.chartSeries) {
+            QPieSlice *slice = m_pie->append(
+                series.name.isEmpty() ? series.bindKey : series.name, 0.0);
+            slice->setColor(QColor(series.color));
+            slice->setLabelVisible(true);
+            slice->setLabelColor(axisColor);
+            m_slices.append(slice);
+        }
+        chart->addSeries(m_pie);
+        auto *view = new QChartView(chart, this);
+        view->setObjectName(QStringLiteral("RuntimePieChartView0"));
+        view->setRenderHint(QPainter::Antialiasing);
+        view->setMinimumHeight(48);
+        lay->addWidget(view, 1);
+        if (ctrl.chartSeries.isEmpty()) {
+            auto *hint = new QLabel(QStringLiteral("未配置数据系列"), this);
+            hint->setAlignment(Qt::AlignCenter);
+            hint->setStyleSheet(QStringLiteral("color:#8a8a9a;"));
+            lay->addWidget(hint);
+        }
+    }
+
+    int seriesCount() const override { return m_slices.size(); }
+
+    void appendSample(int index, double value) override
+    {
+        if (index < 0 || index >= m_slices.size())
+            return;
+        m_slices[index]->setValue(value);   // 饼图只显示最新当前值的占比
+    }
+
+private:
+    QPieSeries *m_pie = nullptr;
+    QVector<QPieSlice *> m_slices;
 };
 }   // namespace
 
@@ -726,6 +925,10 @@ QWidget *RuntimeInterfaceView::createControlWidget(const RuntimeControl &ctrl)
     }
     case RuntimeControlType::LineChart:
         return new RuntimeChartPanel(ctrl);
+    case RuntimeControlType::MultiLineChart:
+        return new RuntimeMultiLinePanel(ctrl);
+    case RuntimeControlType::PieChart:
+        return new RuntimePiePanel(ctrl);
     case RuntimeControlType::ResultTable:
         return createTableWidget(ctrl);
     case RuntimeControlType::IoStatus:
@@ -925,12 +1128,11 @@ void RuntimeInterfaceView::updateCharts(const QString &bindType, const QString &
     if (typeId == QMetaType::Bool)
         sample = value.toBool() ? 1.0 : 0.0;
     for (int i = 0; i < m_widgets.size() && i < m_widgetCtrls.size(); ++i) {
-        if (m_widgets.at(i)->objectName() != QLatin1String("RuntimeLineChart"))
-            continue;
+        auto *panel = dynamic_cast<RuntimeChartBase *>(m_widgets.at(i));
+        if (!panel) continue;
         const RuntimeControl *ctrl = m_widgetCtrls.at(i);
         if (!ctrl)
             continue;
-        auto *panel = static_cast<RuntimeChartPanel *>(m_widgets.at(i));
         for (int s = 0; s < ctrl->chartSeries.size() && s < panel->seriesCount(); ++s) {
             const ChartSeries &series = ctrl->chartSeries.at(s);
             if (series.bindType == bindType && series.bindKey == key)

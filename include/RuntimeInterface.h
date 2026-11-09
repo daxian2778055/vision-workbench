@@ -25,7 +25,9 @@ enum class RuntimeControlType {
                   /// 拖入即启用，不产生控件对象，因此不会有"子控件指向已删容器"的孤儿问题
     ImageAsset,   /// 图片：显示本地图片（官方 9.3「图片控件可添加本地图片」）
     WorldClock,   /// 世界时钟：显示所选时区当前时间（官方 9.3）
-    LineChart     /// 线图阵列：执行次数 vs 当前值，每个数据源一张线图（官方 9.3 图表）
+    LineChart,    /// 线图阵列：执行次数 vs 当前值，每个数据源一张线图（官方 9.3 图表）
+    MultiLineChart, /// 多数据线图：多个数据源同绘一张线图（官方 9.3 图表）
+    PieChart      /// 饼图：各数据源当前值占整体的比例（官方 9.3 图表）
 };
 
 /// 结果表格列（ResultTable 专用）
@@ -98,9 +100,9 @@ struct RuntimeControl {
     /// >=0 = 落在该页 innerTabNames 的第 N 个 Tab（越界时按 -1 处理，见 fromJson）。
     /// 刻意不存"父容器引用"：页级内层 Tab 只有名字列表，删标签不会留下悬空指向。
     int innerTab = -1;
-    /// 线图阵列（官方 9.3 图表）：每个数据源一张线图，横轴=执行次数，纵轴=当前值
+    /// 图表（官方 9.3）：线图阵列每源一图 / 多数据线图同绘一图 / 饼图按当前值占比
     QVector<ChartSeries> chartSeries;
-    int chartHistoryLimit = 30;   ///< 官方「最新执行数据条数」
+    int chartHistoryLimit = 30;   ///< 官方「最新执行数据条数」（线图类）
     QString chartTitle;           ///< 空 = 用控件标题
     bool showChartTitle = true;   ///< 官方「显示标题栏」
     QString chartBgColor = QStringLiteral("#1e1e24");
@@ -108,8 +110,6 @@ struct RuntimeControl {
     /// 所属区域（官方固定栏）。geometry 的坐标系随区域而定：
     /// Canvas → 相对画布区左上角、随窗口缩放；固定栏 → 相对该栏左上角、1:1 不缩放。
     RuntimeZone zone = RuntimeZone::Canvas;
-    /// 固定栏内的分割格序号（0 起）。栏被切成 N 格时，控件落在第 zoneSlot 格。
-    int zoneSlot = 0;
 
     QString displayTitle() const
     {
@@ -127,6 +127,8 @@ struct RuntimeControl {
         case RuntimeControlType::ResultTable:  return QStringLiteral("结果表格");
         case RuntimeControlType::IoStatus:     return QStringLiteral("IO状态");
         case RuntimeControlType::LineChart:   return QStringLiteral("线图阵列");
+        case RuntimeControlType::MultiLineChart: return QStringLiteral("多数据线图");
+        case RuntimeControlType::PieChart:    return QStringLiteral("饼图");
         }
         return QStringLiteral("控件");
     }

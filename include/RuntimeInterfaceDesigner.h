@@ -146,11 +146,11 @@ QLabel *m_geometryLabel = nullptr;   /// 布局组只读显示尺寸/位置（�
     QSpinBox *m_tzOffsetSpin = nullptr;
     QWidget *m_imageHost = nullptr;    /// 图片路径整行容器（按类型隐藏）
     QWidget *m_tzHost = nullptr;       /// 时区偏移整行容器
-    // 所属区域（官方固定栏）：画布 / 上 / 下 / 左 / 右 + 栏内格序号
+    // 所属区域（官方固定栏）：画布 / 上 / 下 / 左 / 右
     QComboBox *m_zoneCombo = nullptr;
-    QSpinBox *m_zoneSlotSpin = nullptr;
     /// 内层 Tab 归属（仅当当前页启用了内层 Tab 时显示）
     QComboBox *m_innerTabCombo = nullptr;
+    QLabel *m_innerTabLabel = nullptr;   /// 内层Tab行标签（随组合框一起隐藏）
     QCheckBox *m_visibleCheck = nullptr;   /// 运行时是否显示（隐藏控件仍留在设计画布上以便编辑）
     QPushButton *m_raiseBtn = nullptr;     /// 上移一层
     QPushButton *m_lowerBtn = nullptr;     /// 下移一层
