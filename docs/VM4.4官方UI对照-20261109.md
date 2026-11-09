@@ -294,8 +294,23 @@ TCP 客户端 / TCP 服务端 / UDP / 串口 / 汇川 H2U / 基恩士 KV / 松�
 - 腿 `canvasConfigAndBarsRoundTrip`：画布五项 + 四向固定栏往返、新建默认 1200×760 无固定栏、
   过小画布被钳制；`UiGuardsTest` **30 passed**。
 
-**B2-3b 待做**：固定栏分割模板、控件归属（画布/上下左右固定栏/Tab页）、
-设计器与运行视图的固定栏渲染。这批才动"控件落在哪个区域"的语义。
+### B2-3b 已落地（2026-11-09）：控件区域归属
+
+- **模型**：`RuntimeControl` 增 `RuntimeZone zone`（Canvas / TopBar / BottomBar / LeftBar /
+  RightBar）与 `zoneSlot`；每页增四个 `*BarSlots` 分割格数（至少 1 格，防零格栏）。
+- **关键语义**：`geometry` 的坐标系随区域而定——
+  **画布区**相对画布区左上角、随窗口等比缩放；**固定栏**相对该栏左上角、**1:1 不缩放**
+  （官方固定栏厚度固定，跟着缩会变形）。
+- **运行视图**：新增 `controlGeometry()`（导出为 public 以便直接测）——
+  先按四向固定栏把窗口切成「栏 + 画布区」，画布区按 `canvas` 减去栏厚后的比例映射，
+  固定栏控件原样平移。原 `scaledGeometry` 只服务画布区，保留不动。
+- **设计器**：属性面板「布局」组增「所属区域」下拉与「栏内格序号」。
+- 腿 `zoneGeometryScalesCanvasButNotBars`：zone/zoneSlot/格数往返；
+  同尺寸下固定栏控件 1:1；窗口缩到 600×400 时固定栏控件尺寸不变
+  （仍 80×40）而画布区控件缩小。`UiGuardsTest` **31 passed**。
+
+**B2-3c 待做**：设计器画布上把固定栏区域画出来（分隔线 + 格标签）并支持拖放时按落点判定 zone；
+Tab页容器（同一套归属机制）；运行视图绘制栏背景。
 
 ---
 

@@ -169,7 +169,7 @@ void RuntimeInterfaceView::rebuildWidgets()
 
             QWidget *w = createControlWidget(ctrl);
             if (!w) continue;
-            w->setGeometry(scaledGeometry(ctrl.geometry));
+            w->setGeometry(controlGeometry(ctrl));
             w->setParent(container);
             w->show();
             m_widgets.append(w);
@@ -785,6 +785,40 @@ void RuntimeInterfaceView::paintEvent(QPaintEvent *event)
         p.drawText(rect(), Qt::AlignCenter,
                    QStringLiteral("未配置自定义运行界面\n请通过「视图 → 运行界面设计」添加控件"));
     }
+}
+
+QRect RuntimeInterfaceView::controlGeometry(const RuntimeControl &ctrl)
+{
+    RuntimeInterfacePage *pg = m_current.page(m_current.currentPageIndex);
+    const int topH = pg ? pg->topBarHeight : 0;
+    const int botH = pg ? pg->bottomBarHeight : 0;
+    const int leftW = pg ? pg->leftBarWidth : 0;
+    const int rightW = pg ? pg->rightBarWidth : 0;
+    const QRect g = ctrl.geometry;
+
+    // 固定栏：厚度固定，控件按 1:1 相对该栏左上角摆放（不参与缩放）
+    switch (ctrl.zone) {
+    case RuntimeZone::TopBar:
+        return QRect(QPoint(0, 0) + g.topLeft(), g.size());
+    case RuntimeZone::BottomBar:
+        return QRect(QPoint(0, height() - botH) + g.topLeft(), g.size());
+    case RuntimeZone::LeftBar:
+        return QRect(QPoint(0, topH) + g.topLeft(), g.size());
+    case RuntimeZone::RightBar:
+        return QRect(QPoint(width() - rightW, topH) + g.topLeft(), g.size());
+    case RuntimeZone::Canvas:
+        break;
+    }
+
+    // 画布区：扣掉四向固定栏后等比缩放
+    const QRect canvasRect(leftW, topH, qMax(1, width() - leftW - rightW),
+                           qMax(1, height() - topH - botH));
+    const int designW = qMax(1, m_designSize.width() - leftW - rightW);
+    const int designH = qMax(1, m_designSize.height() - topH - botH);
+    const double sx = double(canvasRect.width()) / designW;
+    const double sy = double(canvasRect.height()) / designH;
+    return QRect(canvasRect.x() + qRound(g.x() * sx), canvasRect.y() + qRound(g.y() * sy),
+                 qMax(40, qRound(g.width() * sx)), qMax(24, qRound(g.height() * sy)));
 }
 
 QRect RuntimeInterfaceView::scaledGeometry(const QRect &g) const

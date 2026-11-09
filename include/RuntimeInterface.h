@@ -32,6 +32,15 @@ struct ResultColumn {
     QString bindKey;     /// 全局变量名 / 节点完整名
 };
 
+/// 控件所属区域（官方 9.1 工具条可增加上/下/左/右固定栏；画布是默认区域）
+enum class RuntimeZone {
+    Canvas = 0,   /// 画布主区域（随窗口缩放）
+    TopBar,       /// 顶部固定栏（固定厚度，1:1 不缩放）
+    BottomBar,    /// 底部固定栏
+    LeftBar,      /// 左侧固定栏
+    RightBar      /// 右侧固定栏
+};
+
 /// 按钮「数据源配置」的一行动作（官方实机截图：触发命令类型 | 方法 | 输入参数）
 struct RuntimeAction {
     QString commandType;   /// "ui" 界面链接 / "param" 参数配置 / "scheme" 方案 / "exec" 执行 / "reset" 重置
@@ -71,6 +80,11 @@ struct RuntimeControl {
     QString imagePath;
     /// WorldClock 专用：相对 UTC 的分钟偏移（如 +480 = UTC+8）
     int timeZoneOffsetMinutes = 480;
+    /// 所属区域（官方固定栏）。geometry 的坐标系随区域而定：
+    /// Canvas → 相对画布区左上角、随窗口缩放；固定栏 → 相对该栏左上角、1:1 不缩放。
+    RuntimeZone zone = RuntimeZone::Canvas;
+    /// 固定栏内的分割格序号（0 起）。栏被切成 N 格时，控件落在第 zoneSlot 格。
+    int zoneSlot = 0;
 
     QString displayTitle() const
     {
@@ -120,6 +134,12 @@ struct RuntimeInterfacePage
     int bottomBarHeight = 0;
     int leftBarWidth = 0;
     int rightBarWidth = 0;
+    /// 各固定栏的分割格数（官方 9.3.1「固定栏可设置分割模板」）。
+    /// 栏厚度为 0 时格数无意义，但保留默认 1 便于直接开启固定栏。
+    int topBarSlots = 1;
+    int bottomBarSlots = 1;
+    int leftBarSlots = 1;
+    int rightBarSlots = 1;
 
     RuntimeControl *addControl(RuntimeControlType type, const QRect &geo);
     void removeControl(int index);

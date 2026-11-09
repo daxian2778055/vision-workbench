@@ -88,6 +88,9 @@ static QJsonObject controlToJson(const RuntimeControl &c)
         || c.type == RuntimeControlType::ComboBox) {
         if (!c.paramKey.isEmpty()) o["paramKey"] = c.paramKey;
     }
+    // 所属区域（默认画布，只在非默认时写出）
+    if (c.zone != RuntimeZone::Canvas) o["zone"] = int(c.zone);
+    if (c.zoneSlot != 0) o["zoneSlot"] = c.zoneSlot;
     if (c.type == RuntimeControlType::ImageAsset && !c.imagePath.isEmpty())
         o["imagePath"] = c.imagePath;
     if (c.type == RuntimeControlType::WorldClock)
@@ -170,6 +173,11 @@ static RuntimeControl controlFromJson(const QJsonObject &o, RuntimeControlType t
         const QJsonArray opts = o["comboOptions"].toArray();
         for (const QJsonValue &v : opts) ctrl.comboOptions << v.toString();
     }
+    const int zoneRaw = o["zone"].toInt(0);
+    ctrl.zone = (zoneRaw >= 0 && zoneRaw <= int(RuntimeZone::RightBar))
+                    ? RuntimeZone(zoneRaw)
+                    : RuntimeZone::Canvas;
+    ctrl.zoneSlot = qMax(0, o["zoneSlot"].toInt(0));
     if (ctrl.type == RuntimeControlType::ImageAsset)
         ctrl.imagePath = o["imagePath"].toString();
     if (ctrl.type == RuntimeControlType::WorldClock)
@@ -235,12 +243,16 @@ QJsonObject RuntimeInterfacePage::toJson() const
     for (const RuntimeControl &c : controls)
         arr.append(controlToJson(c));
     root["controls"] = arr;
-    // 固定栏（0 = 无该方向固定栏）
+    // 固定栏（0 = 无该方向固定栏）+ 各栏分割格数
     QJsonObject bars;
     bars["top"] = topBarHeight;
     bars["bottom"] = bottomBarHeight;
     bars["left"] = leftBarWidth;
     bars["right"] = rightBarWidth;
+    bars["topSlots"] = topBarSlots;
+    bars["bottomSlots"] = bottomBarSlots;
+    bars["leftSlots"] = leftBarSlots;
+    bars["rightSlots"] = rightBarSlots;
     root["bars"] = bars;
     return root;
 }
@@ -255,6 +267,11 @@ bool RuntimeInterfacePage::fromJson(const QJsonObject &json)
     bottomBarHeight = bars["bottom"].toInt(0);
     leftBarWidth = bars["left"].toInt(0);
     rightBarWidth = bars["right"].toInt(0);
+    // 分割格数至少 1 格，避免除零与"零格栏"
+    topBarSlots = qMax(1, bars["topSlots"].toInt(1));
+    bottomBarSlots = qMax(1, bars["bottomSlots"].toInt(1));
+    leftBarSlots = qMax(1, bars["leftSlots"].toInt(1));
+    rightBarSlots = qMax(1, bars["rightSlots"].toInt(1));
     const QJsonArray arr = json["controls"].toArray();
     for (const QJsonValue &v : arr) {
         const QJsonObject o = v.toObject();

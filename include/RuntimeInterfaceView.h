@@ -48,6 +48,10 @@ public:
     /// 组合框回填：key = "节点完整名|参数键"，value 为应选中的候选文本。
     void setComboSelections(const QHash<QString, QString> &selections);
 
+    /// 按控件所属区域算实际位置（纯计算，导出便于直接测）：
+    /// 画布区扣掉四向固定栏后等比缩放；固定栏厚度固定、控件 1:1 不缩放。
+    QRect controlGeometry(const RuntimeControl &ctrl);
+
     /// 提供当前流程的节点名（2026-10-27）：配合"绑定失效红显"。
     /// 设计器与运行态共用 RuntimeInterface::staleBindings 判据，避免两边口径不一。
     void setKnownNodeNames(const QStringList &names);

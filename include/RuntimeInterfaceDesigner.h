@@ -137,6 +137,9 @@ QLabel *m_geometryLabel = nullptr;   /// 布局组只读显示尺寸/位置（�
     QSpinBox *m_tzOffsetSpin = nullptr;
     QWidget *m_imageHost = nullptr;    /// 图片路径整行容器（按类型隐藏）
     QWidget *m_tzHost = nullptr;       /// 时区偏移整行容器
+    // 所属区域（官方固定栏）：画布 / 上 / 下 / 左 / 右 + 栏内格序号
+    QComboBox *m_zoneCombo = nullptr;
+    QSpinBox *m_zoneSlotSpin = nullptr;
     QCheckBox *m_visibleCheck = nullptr;   /// 运行时是否显示（隐藏控件仍留在设计画布上以便编辑）
     QPushButton *m_raiseBtn = nullptr;     /// 上移一层
     QPushButton *m_lowerBtn = nullptr;     /// 下移一层

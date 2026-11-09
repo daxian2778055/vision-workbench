@@ -839,6 +839,19 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     m_geometryLabel = new QLabel(QStringLiteral("-"), propGroup);
     m_geometryLabel->setStyleSheet("color:#c8c8d0;");
     fLayout->addRow(QStringLiteral("尺寸 / 位置"), m_geometryLabel);
+
+    // 所属区域（官方 9.1 固定栏）：画布区随窗口缩放，固定栏 1:1 不缩放
+    m_zoneCombo = new QComboBox(propGroup);
+    m_zoneCombo->addItem(QStringLiteral("画布"), int(RuntimeZone::Canvas));
+    m_zoneCombo->addItem(QStringLiteral("顶部固定栏"), int(RuntimeZone::TopBar));
+    m_zoneCombo->addItem(QStringLiteral("底部固定栏"), int(RuntimeZone::BottomBar));
+    m_zoneCombo->addItem(QStringLiteral("左侧固定栏"), int(RuntimeZone::LeftBar));
+    m_zoneCombo->addItem(QStringLiteral("右侧固定栏"), int(RuntimeZone::RightBar));
+    fLayout->addRow(QStringLiteral("所属区域"), m_zoneCombo);
+    m_zoneSlotSpin = new QSpinBox(propGroup);
+    m_zoneSlotSpin->setRange(0, 31);
+    m_zoneSlotSpin->setToolTip(QStringLiteral("固定栏内第几格（栏被分割成多格时用）"));
+    fLayout->addRow(QStringLiteral("栏内格序号"), m_zoneSlotSpin);
     auto *layoutHint = new QLabel(
         QStringLiteral("官方的自动填充、T/B/L/R 边距与九宫格对齐待布局模型扩展（B2）"),
         propGroup);
@@ -987,6 +1000,12 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
                 this, &RuntimeInterfaceDesigner::onPropertyEdited);
     if (m_tzOffsetSpin)
         connect(m_tzOffsetSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+                this, &RuntimeInterfaceDesigner::onPropertyEdited);
+    if (m_zoneCombo)
+        connect(m_zoneCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, &RuntimeInterfaceDesigner::onPropertyEdited);
+    if (m_zoneSlotSpin)
+        connect(m_zoneSlotSpin, QOverload<int>::of(&QSpinBox::valueChanged),
                 this, &RuntimeInterfaceDesigner::onPropertyEdited);
     for (QDoubleSpinBox *s : {m_paramMinSpin, m_paramMaxSpin}) {
         if (s)
@@ -1733,6 +1752,11 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
     if (m_tzHost) m_tzHost->setVisible(isClock);
     if (m_imagePathEdit) m_imagePathEdit->setText(ctrl->imagePath);
     if (m_tzOffsetSpin) m_tzOffsetSpin->setValue(ctrl->timeZoneOffsetMinutes);
+    if (m_zoneCombo) {
+        const int zi = m_zoneCombo->findData(int(ctrl->zone));
+        m_zoneCombo->setCurrentIndex(zi >= 0 ? zi : 0);
+    }
+    if (m_zoneSlotSpin) m_zoneSlotSpin->setValue(ctrl->zoneSlot);
     if (m_paramKeyEdit) m_paramKeyEdit->setText(ctrl->paramKey);
     if (m_paramMinSpin) m_paramMinSpin->setValue(ctrl->paramMin);
     if (m_paramMaxSpin) m_paramMaxSpin->setValue(ctrl->paramMax);
@@ -1819,6 +1843,14 @@ void RuntimeInterfaceDesigner::onPropertyEdited()
     ctrl->borderColor = m_borderColorEdit ? m_borderColorEdit->text().trimmed() : QString();
     ctrl->pressedColor = m_pressedColorEdit ? m_pressedColorEdit->text().trimmed() : QString();
     ctrl->visible = m_visibleCheck->isChecked();
+    // 所属区域对所有控件生效
+    if (m_zoneCombo) {
+        const int z = m_zoneCombo->currentData().toInt();
+        if (z >= 0 && z <= int(RuntimeZone::RightBar))
+            ctrl->zone = RuntimeZone(z);
+    }
+    if (m_zoneSlotSpin) ctrl->zoneSlot = m_zoneSlotSpin->value();
+
     if (ctrl->type == RuntimeControlType::ParamSetting) {
         ctrl->bindType = QStringLiteral("node");   // 参数设置固定绑节点
         ctrl->bindKey = m_bindKeyCombo->currentData().toString();

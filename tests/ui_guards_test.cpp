@@ -63,6 +63,7 @@ void comboBoxRoundTripsAndSeedsWithoutWriteBack();
 void paramActionTargetParsesNodeKeyValue();
 void imageAndClockControlsRoundTripAndRender();
 void canvasConfigAndBarsRoundTrip();
+void zoneGeometryScalesCanvasButNotBars();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -960,6 +961,53 @@ void UiGuardsTest::canvasConfigAndBarsRoundTrip()
     QVERIFY(clamped.fromJson(tiny));
     QVERIFY2(clamped.canvas.width >= 200 && clamped.canvas.height >= 150,
              "画布尺寸过小应被钳制到可编辑下限");
+}
+
+// B2-3b 区域归属（官方 9.1 固定栏）：画布区随窗口缩放，固定栏 1:1 不缩放。
+void UiGuardsTest::zoneGeometryScalesCanvasButNotBars()
+{
+    RuntimeInterface layout;
+    layout.ensurePage();
+    layout.canvas.width = 1000;
+    layout.canvas.height = 600;
+    layout.page(0)->topBarHeight = 60;
+    layout.page(0)->leftBarWidth = 100;
+    layout.page(0)->topBarSlots = 3;
+
+    // zone / zoneSlot / 格数往返
+    RuntimeControl bar;
+    bar.type = RuntimeControlType::TextLabel;
+    bar.geometry = QRect(10, 10, 80, 40);
+    bar.zone = RuntimeZone::TopBar;
+    bar.zoneSlot = 2;
+    layout.page(0)->controls.append(bar);
+
+    RuntimeInterface back;
+    QVERIFY(back.fromJson(layout.toJson()));
+    QCOMPARE(back.page(0)->topBarSlots, 3);
+    QCOMPARE(back.page(0)->controls.first().zone, RuntimeZone::TopBar);
+    QCOMPARE(back.page(0)->controls.first().zoneSlot, 2);
+
+    // 与设计画布同尺寸：画布区 1:1
+    RuntimeInterfaceView view;
+    view.resize(1000, 600);
+    view.setInterface(layout);
+    const QRect barRect = view.controlGeometry(back.page(0)->controls.first());
+    QCOMPARE(barRect, QRect(10, 10, 80, 40));   // 固定栏 1:1
+
+    // 窗口缩到一半：固定栏尺寸不变，画布区控件减半
+    RuntimeControl canvasCtrl = bar;
+    canvasCtrl.zone = RuntimeZone::Canvas;
+    canvasCtrl.geometry = QRect(100, 100, 200, 100);
+    view.resize(600, 400);   // 画布区 = 600-100 × 400-60 = 500×340
+    const QRect scaled = view.controlGeometry(canvasCtrl);
+    // 设计画布区 = 1000-100 × 600-60 = 900×540；缩放 = 500/900 ≈ 0.5556
+    QVERIFY2(scaled.x() > canvasCtrl.geometry.x() / 2,
+             qPrintable(QStringLiteral("画布区控件应缩到约 55%%，实得 x=%1").arg(scaled.x())));
+    QVERIFY2(scaled.width() < canvasCtrl.geometry.width(),
+             "画布区控件宽度应随窗口缩小");
+    const QRect barAgain = view.controlGeometry(bar);
+    QCOMPARE(barAgain.size(), QSize(80, 40));   // 固定栏控件尺寸不随窗口变
 }
 
 QTEST_MAIN(UiGuardsTest)
