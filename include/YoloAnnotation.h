@@ -6,10 +6,15 @@
 #include <QStringList>
 #include <QVector>
 
+#include <QDir>
 #include <QFile>
-#include <QRegularExpression>
 #include <QFileInfo>
+#include <QHash>
+#include <QImage>
+#include <QRegularExpression>
 #include <QTextStream>
+#include <QXmlStreamReader>
+#include <QXmlStreamWriter>
 
 #include <algorithm>
 #include <cmath>
@@ -154,5 +159,234 @@ public:
             ts << n << '\n';
         ts.flush();
         return ts.status() == QTextStream::Ok;
+    }
+
+    /// 图像扩展名（VOC 互导与标注器共用一份）
+    static QStringList imageFilters()
+    {
+        return {QStringLiteral("*.jpg"), QStringLiteral("*.jpeg"),
+                QStringLiteral("*.png"), QStringLiteral("*.bmp"),
+                QStringLiteral("*.tif"), QStringLiteral("*.tiff")};
+    }
+
+    /// 从 Pascal VOC XML 导入到同目录的 YOLO txt（2026-11-09）。
+    /// 目录约定：图像在 dir/，标注在 dir/Annotations/<同名>.xml，类别表 dir/classes.txt。
+    /// XML 里出现的新类名会追加到 classes.txt（addedClasses 返回追加项）。
+    /// 返回 false 仅表示目录/标注集不可用；单个坏文件计入 skippedFiles、不中断整批。
+    static bool importVoc(const QString &dir, int *importedImages = nullptr,
+                          int *skippedFiles = nullptr, QStringList *addedClasses = nullptr,
+                          QString *error = nullptr)
+    {
+        if (importedImages) *importedImages = 0;
+        if (skippedFiles) *skippedFiles = 0;
+        if (addedClasses) addedClasses->clear();
+        const QDir root(dir);
+        const QDir ann(root.filePath(QStringLiteral("Annotations")));
+        if (!root.exists() || !ann.exists()) {
+            if (error)
+                *error = QStringLiteral("缺少 Annotations 目录：%1").arg(ann.absolutePath());
+            return false;
+        }
+        const QFileInfoList xmls = ann.entryInfoList({QStringLiteral("*.xml")},
+                                                    QDir::Files, QDir::Name);
+        if (xmls.isEmpty()) {
+            if (error) *error = QStringLiteral("Annotations 目录里没有 .xml");
+            return false;
+        }
+
+        QStringList classes = loadClasses(dir);
+        QHash<QString, int> classIds;
+        for (int i = 0; i < classes.size(); ++i)
+            classIds.insert(classes.at(i), i);
+
+        int ok = 0;
+        int skipped = 0;
+        bool classesDirty = false;
+        for (const QFileInfo &xf : xmls) {
+            QFile f(xf.absoluteFilePath());
+            if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                ++skipped;
+                continue;
+            }
+            QXmlStreamReader xml(&f);
+            QString imageName;
+            int imgW = 0;
+            int imgH = 0;
+            QVector<YoloBoxLabel> labels;
+            bool inObject = false;
+            bool hasBox = false;
+            QString objName;
+            double xmin = 0, ymin = 0, xmax = 0, ymax = 0;
+            while (!xml.atEnd()) {
+                xml.readNext();
+                if (xml.isStartElement()) {
+                    const QStringView n = xml.name();
+                    if (n == QLatin1String("filename")) {
+                        imageName = xml.readElementText().trimmed();
+                    } else if (n == QLatin1String("width")) {
+                        imgW = xml.readElementText().toInt();
+                    } else if (n == QLatin1String("height")) {
+                        imgH = xml.readElementText().toInt();
+                    } else if (n == QLatin1String("object")) {
+                        inObject = true;
+                        hasBox = false;
+                        objName.clear();
+                        xmin = ymin = xmax = ymax = 0;
+                    } else if (inObject && n == QLatin1String("name")) {
+                        objName = xml.readElementText().trimmed();
+                    } else if (inObject && n == QLatin1String("xmin")) {
+                        xmin = xml.readElementText().toDouble();
+                        hasBox = true;
+                    } else if (inObject && n == QLatin1String("ymin")) {
+                        ymin = xml.readElementText().toDouble();
+                    } else if (inObject && n == QLatin1String("xmax")) {
+                        xmax = xml.readElementText().toDouble();
+                    } else if (inObject && n == QLatin1String("ymax")) {
+                        ymax = xml.readElementText().toDouble();
+                    }
+                } else if (xml.isEndElement() && xml.name() == QLatin1String("object")) {
+                    if (!objName.isEmpty() && hasBox && imgW > 0 && imgH > 0) {
+                        int id = classIds.value(objName, -1);
+                        if (id < 0) {
+                            id = classes.size();
+                            classes.append(objName);
+                            classIds.insert(objName, id);
+                            if (addedClasses) addedClasses->append(objName);
+                            classesDirty = true;
+                        }
+                        // VOC 坐标是 1 基且含端点；转成像素矩形后统一走 fromPixels 裁剪
+                        const QRectF px(xmin - 1.0, ymin - 1.0,
+                                        std::max(0.0, xmax - xmin + 1.0),
+                                        std::max(0.0, ymax - ymin + 1.0));
+                        YoloBoxLabel b;
+                        if (YoloBoxLabel::fromPixels(px, imgW, imgH, id, &b))
+                            labels.append(b);
+                    }
+                    inObject = false;
+                }
+            }
+            if (xml.hasError()) {
+                ++skipped;
+                continue;
+            }
+            QString imgPath;
+            if (!imageName.isEmpty()) {
+                const QString cand = root.filePath(QFileInfo(imageName).fileName());
+                if (QFileInfo::exists(cand)) imgPath = cand;
+            }
+            if (imgPath.isEmpty()) {
+                const QString base = xf.completeBaseName();
+                for (const QString &filter : imageFilters()) {
+                    const QString cand = root.filePath(base + filter.mid(1));   // ".jpg"
+                    if (QFileInfo::exists(cand)) {
+                        imgPath = cand;
+                        break;
+                    }
+                }
+            }
+            if (imgPath.isEmpty()) {
+                ++skipped;
+                continue;
+            }
+            if (!save(imgPath, labels)) {
+                ++skipped;
+                continue;
+            }
+            ++ok;
+        }
+        if (classesDirty) saveClasses(dir, classes);
+        if (importedImages) *importedImages = ok;
+        if (skippedFiles) *skippedFiles = skipped;
+        return true;
+    }
+
+    /// 导出为 Pascal VOC XML（dir/Annotations/<同名>.xml）。没有 txt 的图跳过（skippedFiles）。
+    /// 已有 XML 会被覆盖；返回 false 仅表示目录/classes.txt 不可用。
+    static bool exportVoc(const QString &dir, int *exportedImages = nullptr,
+                          int *skippedFiles = nullptr, QString *error = nullptr)
+    {
+        if (exportedImages) *exportedImages = 0;
+        if (skippedFiles) *skippedFiles = 0;
+        const QDir root(dir);
+        if (!root.exists()) {
+            if (error) *error = QStringLiteral("目录不存在：%1").arg(dir);
+            return false;
+        }
+        const QStringList classes = loadClasses(dir);
+        if (classes.isEmpty()) {
+            if (error) *error = QStringLiteral("classes.txt 缺失或为空");
+            return false;
+        }
+        if (!root.mkpath(QStringLiteral("Annotations"))) {
+            if (error) *error = QStringLiteral("无法创建 Annotations 目录");
+            return false;
+        }
+        const QFileInfoList images = root.entryInfoList(imageFilters(), QDir::Files, QDir::Name);
+        int ok = 0;
+        int skipped = 0;
+        for (const QFileInfo &img : images) {
+            const QString txt = labelPath(img.absoluteFilePath());
+            if (!QFileInfo::exists(txt)) {   // 没标注过 ≠ 空标注
+                ++skipped;
+                continue;
+            }
+            QImage image(img.absoluteFilePath());
+            if (image.isNull()) {
+                ++skipped;
+                continue;
+            }
+            int bad = 0;
+            const QVector<YoloBoxLabel> labels = load(img.absoluteFilePath(), &bad);
+            QFile f(root.filePath(QStringLiteral("Annotations/") + img.completeBaseName()
+                                  + QStringLiteral(".xml")));
+            if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+                ++skipped;
+                continue;
+            }
+            QXmlStreamWriter xml(&f);
+            xml.setAutoFormatting(true);
+            xml.writeStartDocument();
+            xml.writeStartElement(QStringLiteral("annotation"));
+            xml.writeTextElement(QStringLiteral("folder"), root.dirName());
+            xml.writeTextElement(QStringLiteral("filename"), img.fileName());
+            xml.writeStartElement(QStringLiteral("size"));
+            xml.writeTextElement(QStringLiteral("width"), QString::number(image.width()));
+            xml.writeTextElement(QStringLiteral("height"), QString::number(image.height()));
+            xml.writeTextElement(QStringLiteral("depth"), QString::number(image.depth() / 8));
+            xml.writeEndElement();   // size
+            xml.writeTextElement(QStringLiteral("segmented"), QStringLiteral("0"));
+            for (const YoloBoxLabel &b : labels) {
+                const QRectF px = b.toPixels(image.width(), image.height());
+                const int xmin = qBound(1, int(std::floor(px.left())) + 1, image.width());
+                const int ymin = qBound(1, int(std::floor(px.top())) + 1, image.height());
+                const int xmax = qBound(xmin, int(std::ceil(px.right())), image.width());
+                const int ymax = qBound(ymin, int(std::ceil(px.bottom())), image.height());
+                xml.writeStartElement(QStringLiteral("object"));
+                xml.writeTextElement(QStringLiteral("name"),
+                                     classes.value(b.classId, QString::number(b.classId)));
+                xml.writeTextElement(QStringLiteral("pose"), QStringLiteral("Unspecified"));
+                xml.writeTextElement(QStringLiteral("truncated"), QStringLiteral("0"));
+                xml.writeTextElement(QStringLiteral("difficult"), QStringLiteral("0"));
+                xml.writeStartElement(QStringLiteral("bndbox"));
+                xml.writeTextElement(QStringLiteral("xmin"), QString::number(xmin));
+                xml.writeTextElement(QStringLiteral("ymin"), QString::number(ymin));
+                xml.writeTextElement(QStringLiteral("xmax"), QString::number(xmax));
+                xml.writeTextElement(QStringLiteral("ymax"), QString::number(ymax));
+                xml.writeEndElement();   // bndbox
+                xml.writeEndElement();   // object
+            }
+            xml.writeEndElement();   // annotation
+            xml.writeEndDocument();
+            const bool writeOk = !xml.hasError() && f.error() == QFileDevice::NoError;
+            f.close();
+            if (!writeOk || f.error() != QFileDevice::NoError) {
+                ++skipped;
+                continue;
+            }
+            ++ok;
+        }
+        if (exportedImages) *exportedImages = ok;
+        if (skippedFiles) *skippedFiles = skipped;
+        return true;
     }
 };

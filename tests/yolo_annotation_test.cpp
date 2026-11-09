@@ -3,6 +3,9 @@
 #include "YoloAnnotation.h"
 
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QImage>
 #include <QTemporaryDir>
 #include <QtTest/QtTest>
 
@@ -18,6 +21,10 @@ private slots:
     void emptyFileMeansNoObjects();
     void classesRoundTrip();
     void tabSeparatedAndNegativeClassId();
+    // 2026-11-09：与 Pascal VOC 标注工具互导（外部训练数据准备）
+    void vocExportImportRoundTrip();
+    void vocImportAddsUnknownClass();
+    void vocRejectsMissingAnnotationsAndSkipsUnlabeled();
 };
 
 void YoloAnnotationTest::pixelToNormalizedRoundTrip()
@@ -142,6 +149,123 @@ void YoloAnnotationTest::tabSeparatedAndNegativeClassId()
     const auto back = YoloAnnotation::load(img, &bad);
     QCOMPARE(back.size(), 1);
     QCOMPARE(bad, 1);
+}
+
+void YoloAnnotationTest::vocExportImportRoundTrip()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    const QString dir = tmp.path();
+    QVERIFY(YoloAnnotation::saveClasses(dir, {QStringLiteral("cat"), QStringLiteral("dog")}));
+
+    QImage img(100, 80, QImage::Format_RGB32);
+    img.fill(Qt::black);
+    const QString imgPath = dir + QStringLiteral("/a.png");
+    QVERIFY(img.save(imgPath));
+
+    QVector<YoloBoxLabel> labels;
+    YoloBoxLabel b0;
+    YoloBoxLabel b1;
+    QVERIFY(YoloBoxLabel::fromPixels(QRectF(10, 10, 20, 10), 100, 80, 0, &b0));
+    QVERIFY(YoloBoxLabel::fromPixels(QRectF(50, 40, 30, 20), 100, 80, 1, &b1));
+    labels << b0 << b1;
+    QVERIFY(YoloAnnotation::save(imgPath, labels));
+
+    int exported = 0;
+    int skipped = 0;
+    QString error;
+    QVERIFY2(YoloAnnotation::exportVoc(dir, &exported, &skipped, &error), qPrintable(error));
+    QCOMPARE(exported, 1);
+    QCOMPARE(skipped, 0);
+    QVERIFY(QFileInfo::exists(dir + QStringLiteral("/Annotations/a.xml")));
+
+    // 删掉 YOLO txt 后从 XML 导回：坐标/类别必须一一对上
+    QVERIFY(QFile::remove(YoloAnnotation::labelPath(imgPath)));
+    int imported = 0;
+    QStringList added;
+    QVERIFY2(YoloAnnotation::importVoc(dir, &imported, &skipped, &added, &error),
+             qPrintable(error));
+    QCOMPARE(imported, 1);
+    QCOMPARE(skipped, 0);
+    QVERIFY2(added.isEmpty(), "已有类别不应被重复追加");
+
+    const QVector<YoloBoxLabel> back = YoloAnnotation::load(imgPath);
+    QCOMPARE(back.size(), 2);
+    QCOMPARE(back.at(0).classId, 0);
+    QVERIFY(qAbs(back.at(0).x - 0.10) < 1e-6);
+    QVERIFY(qAbs(back.at(0).y - 0.125) < 1e-6);
+    QVERIFY(qAbs(back.at(0).w - 0.20) < 1e-6);
+    QVERIFY(qAbs(back.at(0).h - 0.125) < 1e-6);
+    QCOMPARE(back.at(1).classId, 1);
+    QVERIFY(qAbs(back.at(1).x - 0.50) < 1e-6);
+    QVERIFY(qAbs(back.at(1).y - 0.50) < 1e-6);
+    QVERIFY(qAbs(back.at(1).w - 0.30) < 1e-6);
+    QVERIFY(qAbs(back.at(1).h - 0.25) < 1e-6);
+}
+
+void YoloAnnotationTest::vocImportAddsUnknownClass()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    const QString dir = tmp.path();
+    QVERIFY(YoloAnnotation::saveClasses(dir, {QStringLiteral("cat")}));
+    QImage img(100, 80, QImage::Format_RGB32);
+    img.fill(Qt::black);
+    QVERIFY(img.save(dir + QStringLiteral("/a.png")));
+    QVERIFY(QDir(dir).mkpath(QStringLiteral("Annotations")));
+
+    QFile xmlFile(dir + QStringLiteral("/Annotations/a.xml"));
+    QVERIFY(xmlFile.open(QIODevice::WriteOnly | QIODevice::Text));
+    xmlFile.write("<annotation><filename>a.png</filename>"
+                  "<size><width>100</width><height>80</height><depth>3</depth></size>"
+                  "<object><name>bird</name>"
+                  "<bndbox><xmin>11</xmin><ymin>11</ymin><xmax>30</xmax><ymax>20</ymax></bndbox>"
+                  "</object></annotation>");
+    xmlFile.close();
+
+    int imported = 0;
+    int skipped = 0;
+    QStringList added;
+    QString error;
+    QVERIFY2(YoloAnnotation::importVoc(dir, &imported, &skipped, &added, &error),
+             qPrintable(error));
+    QCOMPARE(imported, 1);
+    QCOMPARE(skipped, 0);
+    QCOMPARE(added, QStringList{QStringLiteral("bird")});
+    QCOMPARE(YoloAnnotation::loadClasses(dir),
+             (QStringList{QStringLiteral("cat"), QStringLiteral("bird")}));
+    const QVector<YoloBoxLabel> back = YoloAnnotation::load(dir + QStringLiteral("/a.png"));
+    QCOMPARE(back.size(), 1);
+    QCOMPARE(back.at(0).classId, 1);
+}
+
+void YoloAnnotationTest::vocRejectsMissingAnnotationsAndSkipsUnlabeled()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    const QString dir = tmp.path();
+    int imported = 0;
+    int skipped = 0;
+    QString error;
+    QVERIFY2(!YoloAnnotation::importVoc(dir, &imported, &skipped, nullptr, &error),
+             "没有 Annotations 目录却返回成功");
+    QVERIFY2(!error.isEmpty(), "失败没有可读原因");
+
+    // 导出：只标注了 a.png，b.png 没有 txt → 跳过；没有 classes.txt → 整体失败
+    QImage img(40, 40, QImage::Format_RGB32);
+    img.fill(Qt::black);
+    QVERIFY(img.save(dir + QStringLiteral("/a.png")));
+    QVERIFY(img.save(dir + QStringLiteral("/b.png")));
+    QVERIFY(YoloAnnotation::save(dir + QStringLiteral("/a.png"), {}));
+    int exported = 0;
+    QVERIFY2(!YoloAnnotation::exportVoc(dir, &exported, &skipped, &error),
+             "缺 classes.txt 却导出成功");
+    QVERIFY(YoloAnnotation::saveClasses(dir, {QStringLiteral("x")}));
+    QVERIFY2(YoloAnnotation::exportVoc(dir, &exported, &skipped, &error), qPrintable(error));
+    QCOMPARE(exported, 1);
+    QCOMPARE(skipped, 1);
+    QVERIFY(QFileInfo::exists(dir + QStringLiteral("/Annotations/a.xml")));
+    QVERIFY(!QFileInfo::exists(dir + QStringLiteral("/Annotations/b.xml")));
 }
 
 QTEST_MAIN(YoloAnnotationTest)

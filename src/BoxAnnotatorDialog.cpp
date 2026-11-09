@@ -159,6 +159,54 @@ BoxAnnotatorDialog::BoxAnnotatorDialog(const QString &dir, QWidget *parent) : QD
     auto *chooseBtn = new QPushButton(QStringLiteral("选择数据集目录…"));
     connect(chooseBtn, &QPushButton::clicked, this, &BoxAnnotatorDialog::onChooseDir);
     dirRow->addWidget(chooseBtn);
+
+    // 官方标注工具普遍能吐/吃 Pascal VOC；导入导出都落在 <目录>/Annotations（2026-11-09）
+    auto *importVocBtn = new QPushButton(QStringLiteral("导入 VOC"));
+    importVocBtn->setObjectName(QStringLiteral("annotatorImportVoc"));
+    importVocBtn->setToolTip(QStringLiteral("把 <目录>/Annotations/*.xml 导入为同名 YOLO txt"));
+    connect(importVocBtn, &QPushButton::clicked, this, [this]() {
+        if (m_dir.isEmpty()) {
+            m_status->setText(QStringLiteral("先选择数据集目录"));
+            return;
+        }
+        if (!saveCurrentImage()) return;
+        int imported = 0;
+        int skipped = 0;
+        QStringList added;
+        QString error;
+        if (!YoloAnnotation::importVoc(m_dir, &imported, &skipped, &added, &error)) {
+            m_status->setText(error);
+            return;
+        }
+        QString msg = QStringLiteral("VOC 导入：成功 %1 张，跳过 %2 张")
+                          .arg(imported).arg(skipped);
+        if (!added.isEmpty())
+            msg += QStringLiteral("；新增类别：%1").arg(added.join(QStringLiteral(",")));
+        m_status->setText(msg);
+        if (imported > 0) reloadImages();
+    });
+    dirRow->addWidget(importVocBtn);
+
+    auto *exportVocBtn = new QPushButton(QStringLiteral("导出 VOC"));
+    exportVocBtn->setObjectName(QStringLiteral("annotatorExportVoc"));
+    exportVocBtn->setToolTip(QStringLiteral("把当前 YOLO txt 导出为 <目录>/Annotations/*.xml"));
+    connect(exportVocBtn, &QPushButton::clicked, this, [this]() {
+        if (m_dir.isEmpty()) {
+            m_status->setText(QStringLiteral("先选择数据集目录"));
+            return;
+        }
+        if (!saveCurrentImage()) return;
+        int exported = 0;
+        int skipped = 0;
+        QString error;
+        if (!YoloAnnotation::exportVoc(m_dir, &exported, &skipped, &error)) {
+            m_status->setText(error);
+            return;
+        }
+        m_status->setText(QStringLiteral("VOC 导出：成功 %1 张，跳过 %2 张（无标注/读图失败）")
+                              .arg(exported).arg(skipped));
+    });
+    dirRow->addWidget(exportVocBtn);
     root->addLayout(dirRow);
 
     auto *split = new QSplitter(Qt::Horizontal);
