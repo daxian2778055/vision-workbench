@@ -22,6 +22,7 @@
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QShortcut>
+#include <QTimer>
 #include <QApplication>
 #include <QClipboard>
 #include <QMimeData>
@@ -35,6 +36,18 @@ namespace {
 const char *kItemModelMime = "application/x-qabstractitemmodeldatalist";
 /// 剪贴板里放单个控件的序列化 JSON（官方 9.1 工具条注：复制粘贴仅 Ctrl+C / Ctrl+V）
 const char *kControlMime = "application/x-vfp-runtime-control";
+
+/// 控件库条目 → 控件类型（组标题的 UserRole 为空，返回 false）
+bool paletteTypeOf(const QListWidgetItem *item, RuntimeControlType *out)
+{
+    if (!item || !out) return false;
+    const QVariant v = item->data(Qt::UserRole);
+    if (!v.isValid()) return false;
+    const int t = v.toInt();
+    if (t < 0 || t > int(RuntimeControlType::IoStatus)) return false;
+    *out = RuntimeControlType(t);
+    return true;
+}
 }   // namespace
 #include <QShortcut>
 #include <QColorDialog>
@@ -489,6 +502,11 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     m_layout.loadFromFile(defaultLayoutPath());
     m_layout.ensurePage();
 
+    // 属性编辑撤销合并：600ms 内的连续输入只压一次快照
+    m_propUndoTimer = new QTimer(this);
+    m_propUndoTimer->setSingleShot(true);
+    m_propUndoTimer->setInterval(600);
+
     // ---- 左上：页面管理 ----
     auto *pageGroup = new QGroupBox(QStringLiteral("页面"), this);
     m_pageList = new QListWidget(pageGroup);
@@ -527,21 +545,50 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     // ---- 左下：控件面板 ----
     auto *paletteGroup = new QGroupBox(QStringLiteral("控件库"), this);
     m_palette = new QListWidget(paletteGroup);
-    const QStringList types = {
-        QStringLiteral("图像显示"), QStringLiteral("数值显示"),
-        QStringLiteral("文本标签"), QStringLiteral("状态灯"), QStringLiteral("按钮"),
-        QStringLiteral("结果表格"), QStringLiteral("IO状态")
-    };
-    m_palette->addItems(types);
-    m_palette->setCurrentRow(0);
+    // 官方 9.3 控件区按「基础 / 布局 / 图表 / 其它」分组，组标题右侧可折叠。
+    // 这里只列**已实现**的控件（不放假条目），未实现的等 B3 逐种补齐；
+    // 类型不再靠行号推断——行号里有不可选的组标题，改用 Qt::UserRole 存枚举。
+    {
+        struct PaletteItem { const char *group; const char *label; RuntimeControlType type; };
+        const PaletteItem items[] = {
+            { "基础", "图像",     RuntimeControlType::ImageView },
+            { "基础", "字符设置", RuntimeControlType::ValueDisplay },
+            { "基础", "文本框",   RuntimeControlType::TextLabel },
+            { "基础", "信号灯",   RuntimeControlType::StatusLight },
+            { "基础", "按钮",     RuntimeControlType::Button },
+            { "图表", "表格",     RuntimeControlType::ResultTable },
+            { "其它", "IO状态",   RuntimeControlType::IoStatus },
+        };
+        QString lastGroup;
+        for (const PaletteItem &pi : items) {
+            const QString group = QString::fromUtf8(pi.group);
+            if (group != lastGroup) {
+                auto *header = new QListWidgetItem(group, m_palette);
+                header->setFlags(Qt::NoItemFlags);
+                header->setData(Qt::UserRole, QVariant());   // 组标题不是控件
+                QFont hf = header->font();
+                hf.setBold(true);
+                header->setFont(hf);
+                header->setBackground(QColor(0x2a, 0x2a, 0x34));
+                header->setForeground(QColor(0x9a, 0x9e, 0xac));
+                lastGroup = group;
+            }
+            auto *it = new QListWidgetItem(QString::fromUtf8(pi.label), m_palette);
+            it->setData(Qt::UserRole, int(pi.type));
+            it->setFlags(it->flags() | Qt::ItemIsDragEnabled);
+        }
+    }
+    // 选中第一个真正的控件（跳过组标题）
+    for (int i = 0; i < m_palette->count(); ++i) {
+        if (m_palette->item(i)->data(Qt::UserRole).isValid()) {
+            m_palette->setCurrentRow(i);
+            break;
+        }
+    }
     m_palette->setMaximumWidth(160);
     // 官方 9.2.2 的拖放添加：保留原有「添加控件按钮 / 双击」两条路径，另开拖拽。
     m_palette->setDragEnabled(true);
     m_palette->setDragDropMode(QAbstractItemView::DragOnly);
-    for (int i = 0; i < m_palette->count(); ++i) {
-    QListWidgetItem *it = m_palette->item(i);
-    it->setFlags(it->flags() | Qt::ItemIsDragEnabled);
-    }
 
     auto *addBtn = new QPushButton(QStringLiteral("添加控件"), paletteGroup);
     addBtn->setStyleSheet("QPushButton{background:#3a6ea5;color:white;border:none;border-radius:4px;padding:6px;}");
@@ -800,10 +847,20 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     connect(loadBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::loadLayout);
     connect(applyBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::applyAndClose);
 
+    // 模板（官方 9.1 工具条：应用已保存模板 / 把当前设计另存为模板）
+    auto *tplSaveBtn = new QPushButton(tr("存为模板"), this);
+    auto *tplApplyBtn = new QPushButton(tr("应用模板"), this);
+    tplSaveBtn->setToolTip(tr("把当前设计保存到运行界面模板库（可复用）"));
+    tplApplyBtn->setToolTip(tr("从模板库加载一套已保存的运行界面"));
+    connect(tplSaveBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::saveAsTemplate);
+    connect(tplApplyBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::applyTemplate);
+
     auto *btnRow = new QHBoxLayout();
     btnRow->addWidget(saveBtn);
     btnRow->addWidget(previewBtn);
     btnRow->addWidget(loadBtn);
+    btnRow->addWidget(tplSaveBtn);
+    btnRow->addWidget(tplApplyBtn);
     btnRow->addStretch();
     btnRow->addWidget(applyBtn);
 
@@ -923,29 +980,24 @@ void RuntimeInterfaceDesigner::onPageSelected(int index)
 
 void RuntimeInterfaceDesigner::addCurrentPaletteControl()
 {
-addControlByRow(m_palette ? m_palette->currentRow() : 0);
+    if (!m_palette) return;
+    addControlByRow(m_palette->currentRow());
 }
 
 void RuntimeInterfaceDesigner::addControlAt(const QPoint &pos)
 {
-addControlByRow(m_palette ? m_palette->currentRow() : 0, pos);
+    if (!m_palette) return;
+    addControlByRow(m_palette->currentRow(), pos);
 }
 
 void RuntimeInterfaceDesigner::addControlByRow(int row, const QPoint &dropPos)
 {
-RuntimeControlType type;
-switch (row) {
-case 0: type = RuntimeControlType::ImageView; break;
-case 1: type = RuntimeControlType::ValueDisplay; break;
-case 2: type = RuntimeControlType::TextLabel; break;
-case 3: type = RuntimeControlType::StatusLight; break;
-case 4: type = RuntimeControlType::Button; break;
-case 5: type = RuntimeControlType::ResultTable; break;
-case 6: type = RuntimeControlType::IoStatus; break;
-default: return;
-}
+    // 控件库有组标题（不可选、UserRole 为空），类型不能按行号推断
+    RuntimeControlType type;
+    if (!paletteTypeOf(m_palette ? m_palette->item(row) : nullptr, &type))
+        return;
 
-const int n = m_layout.currentPage()->controls.size();
+    const int n = m_layout.currentPage()->controls.size();
 const int cascade = (n % 8) * 24;
 QRect geo(40 + cascade, 40 + cascade, 300, 190);
 if (type == RuntimeControlType::StatusLight) geo.setHeight(70);
@@ -1253,6 +1305,61 @@ void RuntimeInterfaceDesigner::onControlSelected(int index)
     refreshPropertyPanel();
 }
 
+namespace {
+QString runtimeTemplateDir()
+{
+    return QCoreApplication::applicationDirPath() + QStringLiteral("/runtime_templates");
+}
+}   // namespace
+
+void RuntimeInterfaceDesigner::saveAsTemplate()
+{
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, tr("存为模板"), tr("模板名称："),
+                                               QLineEdit::Normal, QString(), &ok).trimmed();
+    if (!ok || name.isEmpty()) return;
+    QDir dir(runtimeTemplateDir());
+    if (!dir.exists() && !QDir().mkpath(dir.absolutePath())) {
+        QMessageBox::warning(this, tr("存为模板"),
+                             tr("无法创建模板目录：%1").arg(dir.absolutePath()));
+        return;
+    }
+    const QString path = dir.filePath(name + QStringLiteral(".json"));
+    if (!m_layout.saveToFile(path)) {
+        QMessageBox::warning(this, tr("存为模板"), tr("写入失败：%1").arg(path));
+        return;
+    }
+    QMessageBox::information(this, tr("存为模板"), tr("已保存到：%1").arg(path));
+}
+
+void RuntimeInterfaceDesigner::applyTemplate()
+{
+    QDir dir(runtimeTemplateDir());
+    const QStringList files =
+        dir.entryList(QStringList{QStringLiteral("*.json")}, QDir::Files, QDir::Name);
+    if (files.isEmpty()) {
+        QMessageBox::information(this, tr("应用模板"),
+                                 tr("模板库为空：%1").arg(dir.absolutePath()));
+        return;
+    }
+    bool ok = false;
+    const QString chosen = QInputDialog::getItem(this, tr("应用模板"), tr("选择模板："),
+                                                 files, 0, false, &ok);
+    if (!ok || chosen.isEmpty()) return;
+    RuntimeInterface loaded;
+    if (!loaded.loadFromFile(dir.filePath(chosen))) {
+        QMessageBox::warning(this, tr("应用模板"), tr("模板读取失败：%1").arg(chosen));
+        return;
+    }
+    pushUndo();
+    m_layout = loaded;
+    m_layout.ensurePage();
+    m_selected = -1;
+    m_canvas->setPage(m_layout.currentPage());
+    refreshPageList();
+    refreshPropertyPanel();
+}
+
 void RuntimeInterfaceDesigner::populateBindKeyCombo()
 {
     RuntimeControl *ctrl = selectedControl();
@@ -1424,6 +1531,13 @@ void RuntimeInterfaceDesigner::onPropertyEdited()
     if (m_updatingProps) return;
     RuntimeControl *ctrl = selectedControl();
     if (!ctrl) return;
+
+    // 属性编辑也进撤销栈（此前只有结构性操作可撤销）。600ms 内的连续输入
+    // 合并为一个撤销点，避免拖字号/改颜色时把栈冲满。
+    if (m_propUndoTimer && !m_propUndoTimer->isActive()) {
+        pushUndo();          // 此时 ctrl 尚未被下面的代码改写，快照是「改之前」
+        m_propUndoTimer->start();
+    }
 
     ctrl->title = m_titleEdit->text().trimmed();
     ctrl->color = m_colorEdit->text().trimmed().isEmpty()

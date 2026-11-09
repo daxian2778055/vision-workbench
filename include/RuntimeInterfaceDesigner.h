@@ -13,6 +13,7 @@ class QLabel;
 class QPushButton;
 class QCheckBox;
 class QScrollArea;
+class QTimer;
 class QDragEnterEvent;
 class QDropEvent;
 class RuntimeDesignerCanvas;
@@ -75,6 +76,9 @@ private slots:
     void movePageDown();
     void renamePage();
     void onPageSelected(int index);
+    // 模板（官方 9.1 工具条：选择已保存模板应用 / 把当前设计另存为模板）
+    void saveAsTemplate();
+    void applyTemplate();
 
 private:
     void rebuildCanvas();
@@ -92,6 +96,8 @@ private:
     QStringList m_nodeNames;
     QList<RuntimeInterface> m_undoStack;   /// 结构性操作快照（值语义深拷贝）
     QList<RuntimeInterface> m_redoStack;
+    /// 属性编辑的撤销合并定时器：600ms 内的连续输入只留一个撤销点
+    QTimer *m_propUndoTimer = nullptr;
 
     QListWidget *m_pageList = nullptr;
     QListWidget *m_palette = nullptr;

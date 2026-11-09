@@ -49,6 +49,7 @@ void runtimeDesignerHasOfficialDragAndClipboard();
 void runtimeDesignerHasOfficialSectionsAndAlign();
 void runtimeDesignerAlignHCenterAndRight();
 void runtimeControlAppearanceRoundTripsAndStaysCompatible();
+void runtimeDesignerPaletteGroupedByOfficialSections();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -554,6 +555,52 @@ void UiGuardsTest::runtimeControlAppearanceRoundTripsAndStaysCompatible()
     QVERIFY2(!o.bold, "旧布局不该被补成加粗");
     QVERIFY2(o.bgColor.isEmpty() && o.borderColor.isEmpty() && o.pressedColor.isEmpty(),
              "旧布局的三个颜色必须为空（空 = 不绘制，外观与旧版一致）");
+}
+
+// 官方 9.3 控件区按「基础 / 布局 / 图表 / 其它」分组；组标题不可选、不可拖，
+// 控件类型靠 UserRole 而不是行号（行号里有组标题）。
+void UiGuardsTest::runtimeDesignerPaletteGroupedByOfficialSections()
+{
+    RuntimeInterfaceDesigner dlg(QStringList{QStringLiteral("模块1")});
+    QListWidget *palette = nullptr;
+    for (QListWidget *lw : dlg.findChildren<QListWidget *>()) {
+        if (lw->dragEnabled() && lw->count() >= 7) {
+            palette = lw;
+            break;
+        }
+    }
+    QVERIFY2(palette, "没找到控件库");
+
+    QStringList headers, controls;
+    for (int i = 0; i < palette->count(); ++i) {
+        QListWidgetItem *it = palette->item(i);
+        if (!it->data(Qt::UserRole).isValid())
+            headers << it->text();
+        else
+            controls << it->text();
+    }
+    for (const QString &h : {QStringLiteral("基础"), QStringLiteral("图表"), QStringLiteral("其它")})
+        QVERIFY2(headers.contains(h), qPrintable(QStringLiteral("缺控件分组：%1").arg(h)));
+    for (const QString &c : {QStringLiteral("图像"), QStringLiteral("按钮"),
+                             QStringLiteral("表格"), QStringLiteral("IO状态")})
+        QVERIFY2(controls.contains(c), qPrintable(QStringLiteral("缺控件条目：%1").arg(c)));
+
+    int headerCount = 0;
+    for (int i = 0; i < palette->count(); ++i) {
+        QListWidgetItem *it = palette->item(i);
+        if (it->data(Qt::UserRole).isValid()) continue;
+        ++headerCount;
+        QVERIFY2(!(it->flags() & Qt::ItemIsSelectable),
+                 "组标题必须不可选，否则会被当成控件添加");
+        QVERIFY2(!(it->flags() & Qt::ItemIsDragEnabled), "组标题必须不可拖");
+    }
+    QVERIFY2(headerCount == headers.size(), "组标题计数应与识别到的一致");
+
+    QStringList labels;
+    for (QPushButton *b : dlg.findChildren<QPushButton *>())
+        labels << b->text();
+    for (const QString &t : {QStringLiteral("存为模板"), QStringLiteral("应用模板")})
+        QVERIFY2(labels.contains(t), qPrintable(QStringLiteral("缺模板入口：%1").arg(t)));
 }
 
 QTEST_MAIN(UiGuardsTest)
