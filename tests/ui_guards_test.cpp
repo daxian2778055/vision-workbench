@@ -50,6 +50,7 @@ void runtimeDesignerHasOfficialSectionsAndAlign();
 void runtimeDesignerAlignHCenterAndRight();
 void runtimeControlAppearanceRoundTripsAndStaysCompatible();
 void runtimeDesignerPaletteGroupedByOfficialSections();
+void buttonActionsMigrateAndRoundTrip();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -601,6 +602,62 @@ void UiGuardsTest::runtimeDesignerPaletteGroupedByOfficialSections()
         labels << b->text();
     for (const QString &t : {QStringLiteral("存为模板"), QStringLiteral("应用模板")})
         QVERIFY2(labels.contains(t), qPrintable(QStringLiteral("缺模板入口：%1").arg(t)));
+}
+
+// 官方按钮「数据源配置」：动作表可多行（类型/方法/参数）。
+// 旧布局只有 bindType="action" + bindKey 单动作，加载后必须自动合成一行，配置不丢。
+void UiGuardsTest::buttonActionsMigrateAndRoundTrip()
+{
+    // 1) 旧布局迁移
+    {
+        RuntimeInterfacePage page;
+        RuntimeControl *c = page.addControl(RuntimeControlType::Button, QRect(0, 0, 100, 40));
+        QVERIFY(c);
+        c->bindType = QStringLiteral("action");
+        c->bindKey = QStringLiteral("start");
+        QVERIFY(c->actions.isEmpty());
+
+        const QJsonObject json = page.toJson();
+        RuntimeInterfacePage back;
+        QVERIFY(back.fromJson(json));
+        const RuntimeControl &r = back.controls.first();
+        QCOMPARE(r.actions.size(), 1);
+        QCOMPARE(r.actions.first().commandType, QStringLiteral("exec"));
+        QCOMPARE(r.actions.first().method, QStringLiteral("start"));
+    }
+
+    // 2) 多行动作往返
+    {
+        RuntimeInterfacePage page;
+        RuntimeControl *c = page.addControl(RuntimeControlType::Button, QRect(0, 0, 100, 40));
+        QVERIFY(c);
+        RuntimeAction a1;
+        a1.commandType = QStringLiteral("exec");
+        a1.method = QStringLiteral("single");
+        RuntimeAction a2;
+        a2.commandType = QStringLiteral("param");
+        a2.method = QStringLiteral("曝光");
+        a2.param = QStringLiteral("12.5");
+        c->actions = {a1, a2};
+
+        RuntimeInterfacePage back;
+        QVERIFY(back.fromJson(page.toJson()));
+        const RuntimeControl &r = back.controls.first();
+        QCOMPARE(r.actions.size(), 2);
+        QCOMPARE(r.actions.at(1).commandType, QStringLiteral("param"));
+        QCOMPARE(r.actions.at(1).method, QStringLiteral("曝光"));
+        QCOMPARE(r.actions.at(1).param, QStringLiteral("12.5"));
+    }
+
+    // 3) 设计器里按钮必须露出「配置」入口
+    {
+        RuntimeInterfaceDesigner dlg(QStringList{QStringLiteral("模块1")});
+        QStringList labels;
+        for (QPushButton *b : dlg.findChildren<QPushButton *>())
+            labels << b->text();
+        QVERIFY2(labels.contains(QStringLiteral("配置")),
+                 "按钮的数据源应是「配置」按钮（官方实机口径）");
+    }
 }
 
 QTEST_MAIN(UiGuardsTest)

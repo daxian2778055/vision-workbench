@@ -23,6 +23,9 @@
 #include <QKeyEvent>
 #include <QShortcut>
 #include <QTimer>
+#include <QTableWidget>
+#include <QHeaderView>
+#include <QDialogButtonBox>
 #include <QApplication>
 #include <QClipboard>
 #include <QMimeData>
@@ -741,6 +744,14 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     fIdentity->addRow(QStringLiteral("类型"), m_typeLabel);
     fIdentity->addRow(QStringLiteral("标题"), m_titleEdit);
 
+    // 官方：按钮的「数据源」是一个「配置」按钮（打开动作表）；其它控件仍是绑定方式/对象
+    m_dataForm = fData;
+    m_actionConfigBtn = new QPushButton(QStringLiteral("配置"), propGroup);
+    m_actionConfigBtn->setToolTip(
+        QStringLiteral("配置按钮的触发命令（触发命令类型 / 方法 / 输入参数）"));
+    connect(m_actionConfigBtn, &QPushButton::clicked,
+            this, &RuntimeInterfaceDesigner::configureButtonActions);
+    fData->addRow(QStringLiteral("数据源"), m_actionConfigBtn);
     fData->addRow(QStringLiteral("绑定方式"), m_bindTypeCombo);
     fData->addRow(QStringLiteral("绑定对象"), m_bindKeyCombo);
     fData->addRow(QStringLiteral("新列来源"), m_columnSource);
@@ -1332,6 +1343,142 @@ void RuntimeInterfaceDesigner::saveAsTemplate()
     QMessageBox::information(this, tr("存为模板"), tr("已保存到：%1").arg(path));
 }
 
+// 官方实机（第五张截图）：按钮的「数据源」是一个「配置」按钮，点开是
+// 「数据源配置」对话框——三列动作表：触发命令类型 | 方法 | 输入参数，行尾可删。
+// 类型下拉：界面链接 / 参数配置 / 方案 / 执行 / 重置。
+// 说明：官方各类型下的精确方法清单未取证到，方法列做成**可编辑下拉**，
+// 预填现有能力（执行类沿用 start/stop/single/trigger），也允许手填。
+void RuntimeInterfaceDesigner::configureButtonActions()
+{
+    RuntimeControl *ctrl = selectedControl();
+    if (!ctrl || ctrl->type != RuntimeControlType::Button) return;
+
+    QDialog dlg(this);
+    dlg.setWindowTitle(tr("数据源配置"));
+    dlg.resize(680, 420);
+    auto *lay = new QVBoxLayout(&dlg);
+
+    auto *table = new QTableWidget(0, 3, &dlg);
+    table->setHorizontalHeaderLabels({tr("触发命令类型"), tr("方法"), tr("输入参数")});
+    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    table->verticalHeader()->setVisible(false);
+    table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    lay->addWidget(table, 1);
+
+    const auto methodsFor = [this](const QString &type) -> QStringList {
+        if (type == QLatin1String("exec"))
+            return {QStringLiteral("start"), QStringLiteral("stop"),
+                    QStringLiteral("single"), QStringLiteral("trigger")};
+        if (type == QLatin1String("ui")) {
+            QStringList pages;
+            for (const RuntimeInterfacePage &p : m_layout.pages) pages << p.pageName;
+            return pages;
+        }
+        if (type == QLatin1String("param")) {
+            QStringList names;
+            const auto vars = GlobalVariableManager::instance()->variables();
+            for (auto it = vars.constBegin(); it != vars.constEnd(); ++it)
+                names << it.key();
+            return names;
+        }
+        if (type == QLatin1String("scheme"))
+            return {QStringLiteral("save"), QStringLiteral("load"), QStringLiteral("switch")};
+        if (type == QLatin1String("reset"))
+            return {QStringLiteral("counter"), QStringLiteral("statistics")};
+        return {};
+    };
+
+    const auto addRow = [&table, methodsFor](const RuntimeAction &a) {
+        const int row = table->rowCount();
+        table->insertRow(row);
+        auto *typeCombo = new QComboBox(table);
+        typeCombo->addItem(tr("界面链接"), QStringLiteral("ui"));
+        typeCombo->addItem(tr("参数配置"), QStringLiteral("param"));
+        typeCombo->addItem(tr("方案"), QStringLiteral("scheme"));
+        typeCombo->addItem(tr("执行"), QStringLiteral("exec"));
+        typeCombo->addItem(tr("重置"), QStringLiteral("reset"));
+        const QString want = a.commandType.isEmpty() ? QStringLiteral("exec") : a.commandType;
+        const int ti = typeCombo->findData(want);
+        typeCombo->setCurrentIndex(ti >= 0 ? ti : 3);
+
+        auto *methodCombo = new QComboBox(table);
+        methodCombo->setEditable(true);
+        methodCombo->addItems(methodsFor(want));
+        methodCombo->setCurrentText(a.method);
+        // 类型变了就把方法候选换掉，用户已填的内容保留
+        QObject::connect(typeCombo, &QComboBox::currentIndexChanged, methodCombo,
+                         [typeCombo, methodCombo, methodsFor]() {
+                             const QString cur = methodCombo->currentText();
+                             methodCombo->clear();
+                             methodCombo->addItems(methodsFor(typeCombo->currentData().toString()));
+                             methodCombo->setCurrentText(cur);
+                         });
+        table->setCellWidget(row, 0, typeCombo);
+        table->setCellWidget(row, 1, methodCombo);
+        table->setItem(row, 2, new QTableWidgetItem(a.param));
+    };
+
+    for (const RuntimeAction &a : ctrl->actions) addRow(a);
+    if (table->rowCount() == 0) {
+        RuntimeAction a;
+        a.commandType = QStringLiteral("exec");
+        a.method = QStringLiteral("start");
+        addRow(a);
+    }
+
+    auto *btnRow = new QHBoxLayout();
+    auto *addBtn = new QPushButton(tr("＋添加一行"), &dlg);
+    auto *delBtn = new QPushButton(tr("－删除选中行"), &dlg);
+    btnRow->addWidget(addBtn);
+    btnRow->addWidget(delBtn);
+    btnRow->addStretch();
+    lay->addLayout(btnRow);
+    connect(addBtn, &QPushButton::clicked, &dlg, [&table, &addRow]() {
+        RuntimeAction a;
+        a.commandType = QStringLiteral("exec");
+        a.method = QStringLiteral("start");
+        addRow(a);
+    });
+    connect(delBtn, &QPushButton::clicked, &dlg, [&table]() {
+        const int row = table->currentRow();
+        if (row >= 0) table->removeRow(row);
+    });
+
+    auto *box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    box->button(QDialogButtonBox::Ok)->setText(tr("确定"));
+    box->button(QDialogButtonBox::Cancel)->setText(tr("取消"));
+    lay->addWidget(box);
+    connect(box, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(box, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+
+    if (dlg.exec() != QDialog::Accepted) return;
+
+    QList<RuntimeAction> collected;
+    for (int row = 0; row < table->rowCount(); ++row) {
+        auto *typeCombo = qobject_cast<QComboBox *>(table->cellWidget(row, 0));
+        auto *methodCombo = qobject_cast<QComboBox *>(table->cellWidget(row, 1));
+        auto *paramItem = table->item(row, 2);
+        if (!typeCombo || !methodCombo) continue;
+        RuntimeAction a;
+        a.commandType = typeCombo->currentData().toString();
+        a.method = methodCombo->currentText().trimmed();
+        a.param = paramItem ? paramItem->text().trimmed() : QString();
+        if (a.commandType.isEmpty()) continue;
+        collected.append(a);
+    }
+
+    pushUndo();
+    ctrl->actions = collected;
+    // 兼顾旧字段：第一行动作同步写回 bindKey，保证旧读取路径（actionTriggered）仍可用
+    if (!collected.isEmpty() && collected.first().commandType == QLatin1String("exec")) {
+        ctrl->bindType = QStringLiteral("action");
+        ctrl->bindKey = collected.first().method;
+    }
+    refreshPropertyPanel();
+}
+
 void RuntimeInterfaceDesigner::applyTemplate()
 {
     QDir dir(runtimeTemplateDir());
@@ -1466,6 +1613,14 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
     if (m_bgColorEdit) m_bgColorEdit->setText(ctrl->bgColor);
     if (m_borderColorEdit) m_borderColorEdit->setText(ctrl->borderColor);
     if (m_pressedColorEdit) m_pressedColorEdit->setText(ctrl->pressedColor);
+
+    // 官方：按钮的数据源只有「配置」按钮；其它控件保持绑定方式/对象两行
+    const bool isButton = (ctrl->type == RuntimeControlType::Button);
+    if (m_dataForm && m_actionConfigBtn) {
+        m_dataForm->setRowVisible(m_actionConfigBtn, isButton);
+        m_dataForm->setRowVisible(m_bindTypeCombo, !isButton);
+        m_dataForm->setRowVisible(m_bindKeyCombo, !isButton);
+    }
 
     const bool isTable = (ctrl->type == RuntimeControlType::ResultTable);
     const bool isIo = (ctrl->type == RuntimeControlType::IoStatus);

@@ -254,7 +254,14 @@ QWidget *RuntimeInterfaceView::createControlWidget(const RuntimeControl &ctrl)
             .arg(bg, border).arg(ctrl.fontSize)
             .arg(ctrl.bold ? QStringLiteral("bold") : QStringLiteral("normal"))
             .arg(pressed));
-        const QString actionId = ctrl.bindKey;
+        // 官方动作表：优先取第一行动作；只有「执行」类能沿用现有 actionTriggered
+        // 分发（start/stop/single/trigger）。没有动作表时回落旧的 bindKey，保持兼容。
+        QString actionId = ctrl.bindKey;
+        if (!ctrl.actions.isEmpty()) {
+            const RuntimeAction &first = ctrl.actions.first();
+            if (first.commandType == QLatin1String("exec") && !first.method.isEmpty())
+                actionId = first.method;
+        }
         connect(btn, &QPushButton::clicked, this, [this, actionId]() {
             emit actionTriggered(actionId);
         });

@@ -27,6 +27,13 @@ struct ResultColumn {
     QString bindKey;     /// 全局变量名 / 节点完整名
 };
 
+/// 按钮「数据源配置」的一行动作（官方实机截图：触发命令类型 | 方法 | 输入参数）
+struct RuntimeAction {
+    QString commandType;   /// "ui" 界面链接 / "param" 参数配置 / "scheme" 方案 / "exec" 执行 / "reset" 重置
+    QString method;        /// 方法（随命令类型变化；"exec" 时沿用 start/stop/single/trigger）
+    QString param;         /// 输入参数（页面名 / 参数名 / 方案名，可空）
+};
+
 /// 运行界面控件描述
 struct RuntimeControl {
     RuntimeControlType type = RuntimeControlType::TextLabel;
@@ -45,6 +52,9 @@ struct RuntimeControl {
     bool visible = true;    /// 是否显示
     QList<ResultColumn> columns; /// ResultTable 专用：列配置
     int maxRows = 100;      /// ResultTable 专用：最大保留行数（环形覆盖）
+    /// Button 专用动作表（官方「数据源配置」弹窗，可多行）。
+    /// 旧布局只有 bindType="action" + bindKey，加载时自动合成一行，不丢配置。
+    QList<RuntimeAction> actions;
 
     QString displayTitle() const
     {

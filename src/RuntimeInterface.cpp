@@ -53,6 +53,18 @@ static QJsonObject controlToJson(const RuntimeControl &c)
     geo["w"] = c.geometry.width();
     geo["h"] = c.geometry.height();
     o["geometry"] = geo;
+    // 按钮动作表：只在有内容时写出，旧方案不膨胀
+    if (c.type == RuntimeControlType::Button && !c.actions.isEmpty()) {
+        QJsonArray acts;
+        for (const RuntimeAction &a : c.actions) {
+            QJsonObject ao;
+            ao["commandType"] = a.commandType;
+            ao["method"] = a.method;
+            ao["param"] = a.param;
+            acts.append(ao);
+        }
+        o["actions"] = acts;
+    }
     if (c.type == RuntimeControlType::ResultTable) {
         QJsonArray cols;
         for (const ResultColumn &col : c.columns) {
@@ -87,6 +99,28 @@ static RuntimeControl controlFromJson(const QJsonObject &o, RuntimeControlType t
     const QJsonObject geo = o["geometry"].toObject();
     ctrl.geometry = QRect(geo["x"].toInt(20), geo["y"].toInt(20),
                           geo["w"].toInt(240), geo["h"].toInt(160));
+
+    if (ctrl.type == RuntimeControlType::Button) {
+        const QJsonArray acts = o["actions"].toArray();
+        for (const QJsonValue &av : acts) {
+            const QJsonObject ao = av.toObject();
+            RuntimeAction a;
+            a.commandType = ao["commandType"].toString();
+            a.method = ao["method"].toString();
+            a.param = ao["param"].toString();
+            if (a.commandType.isEmpty()) continue;
+            ctrl.actions.append(a);
+        }
+        // 旧布局迁移：此前按钮只有 bindType="action" + bindKey 单动作，
+        // 加载时合成为「执行 / <原动作>」一行，配置不丢。
+        if (ctrl.actions.isEmpty() && ctrl.bindType == QStringLiteral("action")
+            && !ctrl.bindKey.isEmpty()) {
+            RuntimeAction a;
+            a.commandType = QStringLiteral("exec");
+            a.method = ctrl.bindKey;
+            ctrl.actions.append(a);
+        }
+    }
 
     if (ctrl.type == RuntimeControlType::ResultTable) {
         const QJsonArray cols = o["columns"].toArray();
