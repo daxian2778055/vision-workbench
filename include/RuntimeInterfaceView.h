@@ -87,6 +87,10 @@ private:
     QHash<QString, QString> m_comboSelections;   /// 组合框回填，"节点完整名|参数键" → 选中文本
     /// 页内二级 Tab（官方 9.3「Tab页」，页级实现）：当前选中的内层标签
     int m_innerTab = 0;
+    /// 每页各自记住选中的内层标签（页索引 → 标签索引），切页不串台
+    QHash<int, int> m_innerTabByPage;
+    /// 多页 QTabWidget 切页：同步 currentPageIndex 并按该页内层 Tab 刷新
+    void onCurrentPageChanged(int index);
     /// 按当前内层标签显隐控件（只作用于当前页；其它页照常，切页自然生效）
     void applyInnerTabVisibility();
     /// 把一次执行的值追加到匹配的线图阵列数据系列（只接受 int/float/bool）
@@ -94,7 +98,6 @@ private:
     /// 在当前页顶部建内层标签条（页未启用内层 Tab 时什么都不做）
     void buildInnerTabBar(QWidget *container, const RuntimeInterfacePage &pg);
     QStringList m_staleBindings;    /// 失效绑定（绘制在页面顶部）
-    QRect scaledGeometry(const QRect &g) const;
     void rebuildWidgets();
     void clearWidgets();
     QWidget *createControlWidget(const RuntimeControl &ctrl);

@@ -120,9 +120,9 @@ QRect RuntimeDesignerCanvas::toCanvasRect(const RuntimeControl &ctrl) const
     case RuntimeZone::RightBar:  off = QPoint(width() - rightW, topH); break;
     case RuntimeZone::Canvas:    off = QPoint(leftW, topH); break;
     }
-    // 页内二级 Tab：内容区在标签条下方，归属 Tab 的控件整体下移一条标签高度
-    if (ctrl.zone == RuntimeZone::Canvas && ctrl.innerTab >= 0
-        && !m_layout->innerTabNames.isEmpty())
+    // 页内二级 Tab：标签条占画布区顶部一条，画布控件（无论是否归属 Tab）
+    // 整体下移一条标签高度，与运行态 controlGeometry 口径一致
+    if (ctrl.zone == RuntimeZone::Canvas && !m_layout->innerTabNames.isEmpty())
         off.ry() += m_layout->innerTabHeight;
     return ctrl.geometry.translated(off);
 }
@@ -143,9 +143,8 @@ QRect RuntimeDesignerCanvas::toStoredRect(const RuntimeControl &ctrl,
     case RuntimeZone::RightBar:  off = QPoint(width() - rightW, topH); break;
     case RuntimeZone::Canvas:    off = QPoint(leftW, topH); break;
     }
-    // 与 toCanvasRect 对称：Tab 内容区的控件要先减掉标签条高度
-    if (ctrl.zone == RuntimeZone::Canvas && ctrl.innerTab >= 0
-        && !m_layout->innerTabNames.isEmpty())
+    // 与 toCanvasRect 对称：画布控件写回前先减掉标签条高度
+    if (ctrl.zone == RuntimeZone::Canvas && !m_layout->innerTabNames.isEmpty())
         off.ry() += m_layout->innerTabHeight;
     QRect g = canvasRect.translated(-off);
     g.moveLeft(qMax(0, g.left()));

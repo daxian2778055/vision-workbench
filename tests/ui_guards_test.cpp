@@ -30,6 +30,7 @@
 #include <QPushButton>
 #include <QShortcut>
 #include <QTabWidget>
+#include <QResizeEvent>
 #include <QDoubleSpinBox>
 #include <QCheckBox>
 #include <QComboBox>
@@ -78,6 +79,8 @@ void designerCanvasBarCoordinatesRoundTrip();
 void designerControlRightClickEmitsContextMenu();
 void innerTabsRoundTripAndClampOrphans();
 void innerTabStripOffsetsDesignerAndRuntime();
+void runtimeViewResizeKeepsZoneAndInnerTabGeometry();
+void runtimeViewPageSwitchKeepsPerPageInnerTab();
 void lineChartRoundTripsSeriesAndClamps();
 void lineChartRuntimeAppendsBoundSamplesAndTrims();
     void staleBindingsIgnoresValidAndUnbound();
@@ -1198,9 +1201,11 @@ void UiGuardsTest::innerTabStripOffsetsDesignerAndRuntime()
     QCOMPARE(canvas.toCanvasRect(c), QRect(10, 50, 100, 40));            // y + 40
     QCOMPARE(canvas.toStoredRect(c, QRect(10, 50, 100, 40)), QRect(10, 10, 100, 40));
 
-    // 不在 Tab 内的控件不下移
+    // 不在 Tab 内的画布控件同样下移：标签条占的是整个画布区顶部，
+    // 设计器与运行态必须同口径（否则同一控件两端差一条标签高度）
     c.innerTab = -1;
-    QCOMPARE(canvas.toCanvasRect(c), QRect(10, 10, 100, 40));
+    QCOMPARE(canvas.toCanvasRect(c), QRect(10, 50, 100, 40));
+    QCOMPARE(canvas.toStoredRect(c, QRect(10, 50, 100, 40)), QRect(10, 10, 100, 40));
 
     // 运行视图：画布区顶部让出标签条，1:1 时控件 y 应是 40
     RuntimeInterface layout;
@@ -1221,6 +1226,130 @@ void UiGuardsTest::innerTabStripOffsetsDesignerAndRuntime()
     view.setInterface(layout);
     const QRect g = view.controlGeometry(pg->controls.first());
     QCOMPARE(g.y(), 40);
+}
+
+// B2-3 回归：窗口缩放必须仍走区域/内层 Tab 映射。
+// 旧实现 resizeEvent 用纯画布缩放，固定栏控件会被放大、Tab 内容控件会丢掉标签条偏移。
+void UiGuardsTest::runtimeViewResizeKeepsZoneAndInnerTabGeometry()
+{
+    RuntimeInterface layout;
+    layout.ensurePage();
+    layout.canvas.width = 800;
+    layout.canvas.height = 600;
+    RuntimeInterfacePage *pg = layout.page(0);
+    pg->topBarHeight = 60;
+    pg->innerTabNames = QStringList{QStringLiteral("A"), QStringLiteral("B")};
+    pg->innerTabHeight = 40;
+    RuntimeControl top;
+    top.type = RuntimeControlType::Button;
+    top.title = QStringLiteral("顶栏按钮");
+    top.zone = RuntimeZone::TopBar;
+    top.geometry = QRect(10, 10, 100, 40);
+    pg->controls.append(top);
+    RuntimeControl body;
+    body.type = RuntimeControlType::Button;
+    body.title = QStringLiteral("画布按钮");
+    body.zone = RuntimeZone::Canvas;
+    body.innerTab = 0;
+    body.geometry = QRect(0, 0, 100, 50);
+    pg->controls.append(body);
+
+    RuntimeInterfaceView view;
+    view.resize(800, 600);
+    view.setInterface(layout);
+
+    QPushButton *topBtn = nullptr;
+    QPushButton *bodyBtn = nullptr;
+    for (QPushButton *b : view.findChildren<QPushButton *>()) {
+        if (b->text() == QStringLiteral("顶栏按钮")) topBtn = b;
+        else if (b->text() == QStringLiteral("画布按钮")) bodyBtn = b;
+    }
+    QVERIFY(topBtn && bodyBtn);
+    QCOMPARE(topBtn->geometry(), view.controlGeometry(top));
+    QCOMPARE(bodyBtn->geometry(), view.controlGeometry(body));
+
+    // 放大窗口后仍须与 controlGeometry 一致（固定栏 1:1、画布扣栏+标签条缩放）
+    view.resize(1600, 1200);
+    QResizeEvent ev(QSize(1600, 1200), QSize(800, 600));
+    QApplication::sendEvent(&view, &ev);
+    QCOMPARE(topBtn->geometry(), view.controlGeometry(top));
+    QCOMPARE(bodyBtn->geometry(), view.controlGeometry(body));
+    QCOMPARE(topBtn->geometry().topLeft(), QPoint(10, 10));   // 固定栏不缩放
+    QCOMPARE(bodyBtn->geometry().y(), 100);                   // top60 + 标签条40
+}
+
+// B2-3 回归：多页切换时按「该页自己」的内层 Tab 建条/显隐，并记住每页的选择。
+// 旧实现只在 setInterface 的当前页建条，切页不刷新，m_innerTab 还是全局单值。
+void UiGuardsTest::runtimeViewPageSwitchKeepsPerPageInnerTab()
+{
+    RuntimeInterface layout;
+    layout.ensurePage();
+    layout.page(0)->pageName = QStringLiteral("页一");
+    layout.addPage();
+    layout.page(1)->pageName = QStringLiteral("页二");
+    layout.currentPageIndex = 0;
+    for (int pi = 0; pi < 2; ++pi) {
+        RuntimeInterfacePage *pg = layout.page(pi);
+        pg->innerTabNames = QStringList{QStringLiteral("甲"), QStringLiteral("乙")};
+        pg->innerTabHeight = 30;
+        pg->defaultInnerTab = pi;          // 页一默认甲(0)，页二默认乙(1)
+        RuntimeControl *a = pg->addControl(RuntimeControlType::TextLabel, QRect(0, 0, 80, 30));
+        QVERIFY(a);
+        a->title = QStringLiteral("控件甲");
+        a->innerTab = 0;
+        RuntimeControl *b = pg->addControl(RuntimeControlType::TextLabel, QRect(0, 40, 80, 30));
+        QVERIFY(b);
+        b->title = QStringLiteral("控件乙");
+        b->innerTab = 1;
+    }
+
+    RuntimeInterfaceView view;
+    view.resize(800, 600);
+    view.setInterface(layout);
+    auto *tabs = view.findChild<QTabWidget *>();
+    QVERIFY(tabs);
+    QCOMPARE(tabs->currentIndex(), 0);
+
+    auto barOf = [&](int i) -> QWidget * {
+        return tabs->widget(i)->findChild<QWidget *>(QStringLiteral("RuntimeInnerTabBar"));
+    };
+    auto labelVisible = [&](int i, const QString &text) -> bool {
+        // 显隐作用在宿主控件上；view 未 show，isVisible 会因祖先隐藏恒 false，
+        // 故看宿主自身 isHidden（applyInnerTabVisibility 正是 setVisible 宿主）
+        const QList<QLabel *> labels = tabs->widget(i)->findChildren<QLabel *>();
+        for (QLabel *l : labels)
+            if (l->text() == text)
+                return l->parentWidget() && !l->parentWidget()->isHidden();
+        return false;
+    };
+
+    // 初始页一：默认甲可见、乙隐藏
+    QVERIFY(barOf(0));
+    QVERIFY(labelVisible(0, QStringLiteral("控件甲")));
+    QVERIFY(!labelVisible(0, QStringLiteral("控件乙")));
+
+    // 切到页二：必须建出页二自己的标签条，并按页二默认(乙)显隐
+    tabs->setCurrentIndex(1);
+    QVERIFY2(barOf(1), "切页后必须为该页建/刷新内层标签条");
+    QVERIFY(!labelVisible(1, QStringLiteral("控件甲")));
+    QVERIFY(labelVisible(1, QStringLiteral("控件乙")));
+
+    // 在页二手动选「甲」，切走再切回应记住页二自己的选择（不被页一覆盖）
+    QPushButton *tabA = nullptr;
+    for (QPushButton *b : barOf(1)->findChildren<QPushButton *>())
+        if (b->property("vfpTabIdx").toInt() == 0) tabA = b;
+    QVERIFY(tabA);
+    tabA->click();
+    QVERIFY(labelVisible(1, QStringLiteral("控件甲")));
+    QVERIFY(!labelVisible(1, QStringLiteral("控件乙")));
+
+    tabs->setCurrentIndex(0);
+    QVERIFY(labelVisible(0, QStringLiteral("控件甲")));   // 页一仍是自己的默认甲
+    tabs->setCurrentIndex(1);
+    QVERIFY(labelVisible(1, QStringLiteral("控件甲")));   // 页二记住手动选的甲
+    QVERIFY(!labelVisible(1, QStringLiteral("控件乙")));
+    QCOMPARE(tabs->widget(1)->findChildren<QWidget *>(
+                 QStringLiteral("RuntimeInnerTabBar")).size(), 1);   // 不重复建条
 }
 
 // 线图阵列（官方 9.3 图表）：每系列一张线图，JSON 形状与钳制都要能往返。

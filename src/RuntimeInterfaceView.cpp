@@ -191,23 +191,16 @@ void RuntimeInterfaceView::setInterface(const RuntimeInterface &layout)
     clearWidgets();
     m_current = layout;
     m_current.ensurePage();
+    m_current.currentPageIndex = qBound(0, m_current.currentPageIndex,
+                                        m_current.pages.size() - 1);
     // 缩放基准改为布局里的画布配置（原先硬编码 1200×760，画布尺寸改了也不生效）
     m_designSize = QSize(m_current.canvas.width, m_current.canvas.height);
     rebuildWidgets();
     // currentPageIndex 此前只存不用（盘点发现），这里让运行态默认页真正生效
     if (m_tabs && m_tabs->count() > 0)
-        m_tabs->setCurrentIndex(qBound(0, m_current.currentPageIndex, m_tabs->count() - 1));
-
-    // 页内二级 Tab：建标签条 + 按默认标签显隐
-    if (RuntimeInterfacePage *pg = m_current.page(m_current.currentPageIndex)) {
-        if (!pg->innerTabNames.isEmpty()) {
-            m_innerTab = qBound(0, pg->defaultInnerTab, pg->innerTabNames.size() - 1);
-            QWidget *container = m_pageContainers.value(m_current.currentPageIndex);
-            if (container)
-                buildInnerTabBar(container, *pg);
-            applyInnerTabVisibility();
-        }
-    }
+        m_tabs->setCurrentIndex(m_current.currentPageIndex);
+    // 单页没有 QTabWidget 信号，统一走同一入口建内层标签条 + 显隐
+    onCurrentPageChanged(m_current.currentPageIndex);
     update();
 }
 
@@ -252,6 +245,24 @@ void RuntimeInterfaceView::setComboSelections(const QHash<QString, QString> &sel
     }
 }
 
+void RuntimeInterfaceView::onCurrentPageChanged(int index)
+{
+    if (index < 0 || index >= m_current.pages.size()) return;
+    m_current.currentPageIndex = index;
+    RuntimeInterfacePage *pg = m_current.page(index);
+    if (pg && !pg->innerTabNames.isEmpty()) {
+        // 每页记住自己的选择；首次进入用该页默认标签
+        m_innerTab = m_innerTabByPage.value(
+            index, qBound(0, pg->defaultInnerTab, pg->innerTabNames.size() - 1));
+        QWidget *container = m_pageContainers.value(index);
+        if (container)
+            buildInnerTabBar(container, *pg);
+    } else {
+        m_innerTab = 0;
+    }
+    applyInnerTabVisibility();
+}
+
 void RuntimeInterfaceView::buildInnerTabBar(QWidget *container, const RuntimeInterfacePage &pg)
 {
     if (!container || pg.innerTabNames.isEmpty()) return;
@@ -261,10 +272,20 @@ void RuntimeInterfaceView::buildInnerTabBar(QWidget *container, const RuntimeInt
     const int leftW = cur ? qMax(0, cur->leftBarWidth) : 0;
     const int rightW = cur ? qMax(0, cur->rightBarWidth) : 0;
     const int stripH = qMax(16, pg.innerTabHeight);
+    const QRect barGeo(leftW, topH, qMax(1, width() - leftW - rightW), stripH);
+
+    // 已建过（切页回来 / resize 刷新）：只更新几何与选中态，不重复建条
+    if (QWidget *existing =
+            container->findChild<QWidget *>(QStringLiteral("RuntimeInnerTabBar"))) {
+        existing->setGeometry(barGeo);
+        for (QPushButton *b : existing->findChildren<QPushButton *>())
+            b->setChecked(b->property("vfpTabIdx").toInt() == m_innerTab);
+        return;
+    }
 
     auto *bar = new QWidget(container);
     bar->setObjectName(QStringLiteral("RuntimeInnerTabBar"));
-    bar->setGeometry(leftW, topH, qMax(1, width() - leftW - rightW), stripH);
+    bar->setGeometry(barGeo);
     bar->setStyleSheet(QStringLiteral("background:#1c1c24;"));
     auto *lay = new QHBoxLayout(bar);
     lay->setContentsMargins(0, 0, 0, 0);
@@ -279,6 +300,7 @@ void RuntimeInterfaceView::buildInnerTabBar(QWidget *container, const RuntimeInt
             "QPushButton:checked { background:#2e2e3c; color:#d8d8e0; }"));
         const int idx = i;
         connect(b, &QPushButton::clicked, this, [this, idx, bar]() {
+            m_innerTabByPage[m_current.currentPageIndex] = idx;
             m_innerTab = idx;
             for (QPushButton *sibling : bar->findChildren<QPushButton *>())
                 sibling->setChecked(sibling->property("vfpTabIdx").toInt() == idx);
@@ -332,6 +354,8 @@ void RuntimeInterfaceView::clearWidgets()
         c->deleteLater();
     }
     m_pageContainers.clear();
+    m_innerTabByPage.clear();
+    m_innerTab = 0;
     m_widgets.clear();
     m_widgetCtrls.clear();
     m_imageViews.clear();
@@ -452,6 +476,14 @@ void RuntimeInterfaceView::rebuildWidgets()
                 }
             }
         }
+    }
+
+    // 多页：切页时同步 currentPageIndex 并按该页自己的内层 Tab 刷新。
+    // 连接放在所有页容器建好之后，避免 addTab 触发的首次 currentChanged
+    // 在容器尚未登记时跑进来。
+    if (m_tabs) {
+        connect(m_tabs, &QTabWidget::currentChanged,
+                this, &RuntimeInterfaceView::onCurrentPageChanged);
     }
 
     // 初始值：全局变量
@@ -1102,26 +1134,22 @@ QRect RuntimeInterfaceView::controlGeometry(const RuntimeControl &ctrl)
                  qMax(40, qRound(g.width() * sx)), qMax(24, qRound(g.height() * sy)));
 }
 
-QRect RuntimeInterfaceView::scaledGeometry(const QRect &g) const
-{
-    // 设计画布（默认 1200×760，可由布局 canvas 配置覆盖）→ 当前窗口，等比映射；
-    // 小控件给最小尺寸保护
-    const double sx = double(width()) / qMax(1, m_designSize.width());
-    const double sy = double(height()) / qMax(1, m_designSize.height());
-    return QRect(qRound(g.x() * sx), qRound(g.y() * sy),
-                 qMax(40, qRound(g.width() * sx)),
-                 qMax(24, qRound(g.height() * sy)));
-}
-
 void RuntimeInterfaceView::resizeEvent(QResizeEvent *event)
 {
     QWidget::resizeEvent(event);
     if (m_tabs)
         m_tabs->setGeometry(rect());
-    // 控件按设计基准等比缩放（大屏/小屏不跑版）
+    // 与 rebuild 同一套映射：固定栏 1:1、画布扣栏缩放、内层 Tab 让出标签条。
+    // 旧实现 resize 走纯画布缩放，一次 resize 就把区域/Tab 偏移打回原形。
     for (int i = 0; i < m_widgets.size() && i < m_widgetCtrls.size(); ++i) {
         if (m_widgets[i] && m_widgetCtrls[i])
-            m_widgets[i]->setGeometry(scaledGeometry(m_widgetCtrls[i]->geometry));
+            m_widgets[i]->setGeometry(controlGeometry(*m_widgetCtrls[i]));
+    }
+    // 标签条宽度随窗口刷新（buildInnerTabBar 对已存在的条只更新几何/选中态）
+    if (RuntimeInterfacePage *pg = m_current.page(m_current.currentPageIndex)) {
+        QWidget *container = m_pageContainers.value(m_current.currentPageIndex);
+        if (container && !pg->innerTabNames.isEmpty())
+            buildInnerTabBar(container, *pg);
     }
 }
 
