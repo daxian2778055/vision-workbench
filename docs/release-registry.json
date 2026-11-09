@@ -1216,6 +1216,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261109.1",
       "recorded_at": "2026-11-09",
       "recorded_note": "审核用户 21 个 VM4.4 1:1 对齐提交：修 XY 尺度锚点丢 scaleY、重叠过滤高度用错轴、matchStatus 用过滤前计数、evalOne 空指针、无效腿参数名；加固 RoundAbort 时序腿（2 秒窗口 + atomic）与回正 5 个文件行尾；新增 docs/代码审核结论-20261109.md。既有 P1/P2 修复点全部未回退。"
+    },
+    {
+      "tag": "rc-20261109.2",
+      "commit": "7f11257cb902f8b4a8e6df1457032d2798f85728",
+      "exe_md5": "2deda0230546757275dc9695d3ecd980",
+      "exe_bytes": 11988480,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261109.2",
+      "recorded_at": "2026-11-09",
+      "recorded_note": "按官方口径定案：排序类型决定「当前结果」，主标量字段/结果判断/MeasureResult 跟随排序后首条命中（MatchHit 增补亚像素，默认 sortType=0 行为零变化）；腿 templateCurrentResultFollowsSortType 含改坏自证。含 rc-20261109.1 的审核修复 6 项。"
     }
   ],
   "legacy_backfilled": [
