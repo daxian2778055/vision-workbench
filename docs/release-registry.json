@@ -1315,6 +1315,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261109.12",
       "recorded_at": "2026-11-09",
       "recorded_note": "B3-2：开关控制控件（订阅节点 bool 参数，QCheckBox 渲染，回填复用 setParameterValues 以 0/1 承载且不回写；MainWindow 按真实 bool 类型 setParam）。"
+    },
+    {
+      "tag": "rc-20261109.13",
+      "commit": "51823ffb43a3949b8f497a36edcfc0a810380672",
+      "exe_md5": "a2dcfd914b2dba35be605bab6ecf551b",
+      "exe_bytes": 12059648,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261109.13",
+      "recorded_at": "2026-11-09",
+      "recorded_note": "B3-3：组合框控件（comboOptions 候选值，QComboBox 渲染，setComboSelections 按字符串回填且不回写，MainWindow 按字符串 setParam）。"
     }
   ],
   "legacy_backfilled": [
