@@ -15,6 +15,11 @@ namespace DeepOcrSelfTest {
 
 struct ImageResult {
     QString path;
+    /// 相对根目录的路径（递归子目录后 CSV 用它避免同名文件混淆；空则用 fileName）
+    QString relativePath;
+    /// 本次推理的模式（0=auto / 1=detection / 2=recognition）。报告要按它给提示，
+    /// 否则在已经是 recognition 时还建议「改 --mode 2」会误导（复核 P1-6 残留）。
+    int mode = -1;
     bool ok = false;
     QString text;
     int wordCount = 0;
@@ -24,7 +29,9 @@ struct ImageResult {
     QString error;
 };
 
-/// path 是文件 → 单个；是目录 → 递归常见图片扩展名（按名字排序，最多 maxCount 张）
+/// path 是文件 → 单个；是目录 → **递归子目录**收集常见图片扩展名
+/// （按全路径排序，最多 maxCount 张）。现场样本常按批次放子目录，
+/// 旧实现只扫一层且注释写「递归」，属行为与文档不符（2026-11-09 复核）。
 QStringList collectImages(const QString &path, int maxCount = 200);
 
 /// 跑单张：mode 0=auto / 1=detection / 2=recognition（与节点参数一致）

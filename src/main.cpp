@@ -398,17 +398,26 @@ int main(int argc, char *argv[])
             const int mode = modeText.isEmpty() ? 2 : modeText.toInt();
             const QString minConfText = argAfter(QStringLiteral("--min-conf"));
             const double minConf = minConfText.isEmpty() ? 0.3 : minConfText.toDouble();
-            const QStringList images = DeepOcrSelfTest::collectImages(target);
+            // --limit：批量样本很多时可先跑前 N 张冒个头（默认 200 防止误扫超大目录）
+            const QString limitText = argAfter(QStringLiteral("--limit"));
+            const int limit = limitText.isEmpty() ? 200 : qMax(1, limitText.toInt());
+            const QStringList images = DeepOcrSelfTest::collectImages(target, limit);
             QTextStream out(stdout);
             if (images.isEmpty()) {
                 out << "未找到可测图片: " << target << Qt::endl;
                 return 2;
             }
-            out << "DeepOCR 自检: " << images.size() << " 张，mode=" << mode
+            out << "DeepOCR 自检: " << images.size() << " 张（目录含子目录递归，上限 "
+                << limit << "），mode=" << mode
                 << "（0=auto/1=detection/2=recognition），minConfidence=" << minConf
                 << Qt::endl;
-            const QVector<DeepOcrSelfTest::ImageResult> results =
+            QVector<DeepOcrSelfTest::ImageResult> results =
                 DeepOcrSelfTest::runAll(images, mode, minConf);
+            // 递归后不同子目录可能同名，CSV 用相对根目录的路径区分
+            const QDir rootDir(QFileInfo(target).isDir() ? target
+                                                         : QFileInfo(target).absolutePath());
+            for (DeepOcrSelfTest::ImageResult &r : results)
+                r.relativePath = rootDir.relativeFilePath(r.path);
             out << DeepOcrSelfTest::formatReport(results) << Qt::endl;
             const QString csvPath = argAfter(QStringLiteral("--csv"));
             if (!csvPath.isEmpty()) {
