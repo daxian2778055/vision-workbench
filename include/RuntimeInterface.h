@@ -21,6 +21,8 @@ enum class RuntimeControlType {
     ParamSetting, /// 参数设置：订阅节点 int/float 参数，运行界面直接改（官方 9.3）
     SwitchControl, /// 开关控制：订阅节点 bool 参数，运行界面控制其是否启用（官方 9.3）
     ComboBox,     /// 组合框：在候选值之间切换（切换配方/模式，官方 9.3）
+    TabPage,      /// Tab页：页内二级分组（官方 9.3）；实现为**页级**内层 Tab，
+                  /// 拖入即启用，不产生控件对象，因此不会有"子控件指向已删容器"的孤儿问题
     ImageAsset,   /// 图片：显示本地图片（官方 9.3「图片控件可添加本地图片」）
     WorldClock    /// 世界时钟：显示所选时区当前时间（官方 9.3）
 };
@@ -80,6 +82,10 @@ struct RuntimeControl {
     QString imagePath;
     /// WorldClock 专用：相对 UTC 的分钟偏移（如 +480 = UTC+8）
     int timeZoneOffsetMinutes = 480;
+    /// 页内二级 Tab 归属：-1 = 不在任何内层 Tab 里；
+    /// >=0 = 落在该页 innerTabNames 的第 N 个 Tab（越界时按 -1 处理，见 fromJson）。
+    /// 刻意不存"父容器引用"：页级内层 Tab 只有名字列表，删标签不会留下悬空指向。
+    int innerTab = -1;
     /// 所属区域（官方固定栏）。geometry 的坐标系随区域而定：
     /// Canvas → 相对画布区左上角、随窗口缩放；固定栏 → 相对该栏左上角、1:1 不缩放。
     RuntimeZone zone = RuntimeZone::Canvas;
@@ -151,6 +157,12 @@ struct RuntimeInterfacePage
     int bottomBarSlots = 1;
     int leftBarSlots = 1;
     int rightBarSlots = 1;
+    /// 页内二级 Tab（官方 9.3「Tab页」）：空 = 未启用。启用后画布区顶部让出
+    /// innerTabHeight 像素给标签条，innerTab >= 0 的控件按 Tab 切换显示。
+    QStringList innerTabNames;
+    int innerTabHeight = 36;
+    /// 运行时默认选中的内层 Tab（越界按 0 处理）
+    int defaultInnerTab = 0;
 
     RuntimeControl *addControl(RuntimeControlType type, const QRect &geo);
     void removeControl(int index);

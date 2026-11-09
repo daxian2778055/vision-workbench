@@ -43,6 +43,17 @@ void RuntimeInterfaceView::setInterface(const RuntimeInterface &layout)
     // currentPageIndex 此前只存不用（盘点发现），这里让运行态默认页真正生效
     if (m_tabs && m_tabs->count() > 0)
         m_tabs->setCurrentIndex(qBound(0, m_current.currentPageIndex, m_tabs->count() - 1));
+
+    // 页内二级 Tab：建标签条 + 按默认标签显隐
+    if (RuntimeInterfacePage *pg = m_current.page(m_current.currentPageIndex)) {
+        if (!pg->innerTabNames.isEmpty()) {
+            m_innerTab = qBound(0, pg->defaultInnerTab, pg->innerTabNames.size() - 1);
+            QWidget *container = m_pageContainers.value(m_current.currentPageIndex);
+            if (container)
+                buildInnerTabBar(container, *pg);
+            applyInnerTabVisibility();
+        }
+    }
     update();
 }
 
@@ -84,6 +95,60 @@ void RuntimeInterfaceView::setComboSelections(const QHash<QString, QString> &sel
         if (idx < 0) continue;
         QSignalBlocker block(combo);   // 回填不触发写回
         combo->setCurrentIndex(idx);
+    }
+}
+
+void RuntimeInterfaceView::buildInnerTabBar(QWidget *container, const RuntimeInterfacePage &pg)
+{
+    if (!container || pg.innerTabNames.isEmpty()) return;
+    RuntimeInterfacePage *cur = m_current.page(m_current.currentPageIndex);
+    const int topH = cur ? qMax(0, cur->topBarHeight) : 0;
+    const int botH = cur ? qMax(0, cur->bottomBarHeight) : 0;
+    const int leftW = cur ? qMax(0, cur->leftBarWidth) : 0;
+    const int rightW = cur ? qMax(0, cur->rightBarWidth) : 0;
+    const int stripH = qMax(16, pg.innerTabHeight);
+
+    auto *bar = new QWidget(container);
+    bar->setObjectName(QStringLiteral("RuntimeInnerTabBar"));
+    bar->setGeometry(leftW, topH, qMax(1, width() - leftW - rightW), stripH);
+    bar->setStyleSheet(QStringLiteral("background:#1c1c24;"));
+    auto *lay = new QHBoxLayout(bar);
+    lay->setContentsMargins(0, 0, 0, 0);
+    lay->setSpacing(0);
+    for (int i = 0; i < pg.innerTabNames.size(); ++i) {
+        auto *b = new QPushButton(pg.innerTabNames.at(i), bar);
+        b->setCheckable(true);
+        b->setChecked(i == m_innerTab);
+        b->setStyleSheet(QStringLiteral(
+            "QPushButton { background:#1c1c24; color:#8a8e9c; border:none;"
+            " border-right:1px solid #3a3a4a; padding:4px 12px; }"
+            "QPushButton:checked { background:#2e2e3c; color:#d8d8e0; }"));
+        const int idx = i;
+        connect(b, &QPushButton::clicked, this, [this, idx, bar]() {
+            m_innerTab = idx;
+            for (QPushButton *sibling : bar->findChildren<QPushButton *>())
+                sibling->setChecked(sibling->property("vfpTabIdx").toInt() == idx);
+            applyInnerTabVisibility();
+        });
+        b->setProperty("vfpTabIdx", i);
+        lay->addWidget(b);
+    }
+    lay->addStretch();
+    bar->show();
+    bar->raise();
+}
+
+void RuntimeInterfaceView::applyInnerTabVisibility()
+{
+    QWidget *container = m_pageContainers.value(m_current.currentPageIndex);
+    if (!container) return;
+    for (int i = 0; i < m_widgets.size() && i < m_widgetCtrls.size(); ++i) {
+        QWidget *w = m_widgets.at(i);
+        const RuntimeControl *ctrl = m_widgetCtrls.at(i);
+        if (!w || !ctrl) continue;
+        if (w->parentWidget() != container) continue;   // 只动当前页的控件
+        const bool match = (ctrl->innerTab < 0 || ctrl->innerTab == m_innerTab);
+        w->setVisible(match && ctrl->visible);
     }
 }
 
@@ -835,10 +900,16 @@ QRect RuntimeInterfaceView::controlGeometry(const RuntimeControl &ctrl)
     }
 
     // 画布区：扣掉四向固定栏后等比缩放
-    const QRect canvasRect(leftW, topH, qMax(1, width() - leftW - rightW),
-                           qMax(1, height() - topH - botH));
-    const int designW = qMax(1, m_designSize.width() - leftW - rightW);
-    const int designH = qMax(1, m_designSize.height() - topH - botH);
+    QRect canvasRect(leftW, topH, qMax(1, width() - leftW - rightW),
+                     qMax(1, height() - topH - botH));
+    int designW = qMax(1, m_designSize.width() - leftW - rightW);
+    int designH = qMax(1, m_designSize.height() - topH - botH);
+    // 页内二级 Tab：标签条占画布区顶部一条，内容区相应让出高度
+    if (pg && !pg->innerTabNames.isEmpty()) {
+        canvasRect.setTop(canvasRect.top() + pg->innerTabHeight);
+        canvasRect.setHeight(qMax(1, canvasRect.height() - pg->innerTabHeight));
+        designH = qMax(1, designH - pg->innerTabHeight);
+    }
     const double sx = double(canvasRect.width()) / designW;
     const double sy = double(canvasRect.height()) / designH;
     return QRect(canvasRect.x() + qRound(g.x() * sx), canvasRect.y() + qRound(g.y() * sy),

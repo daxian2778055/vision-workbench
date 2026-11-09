@@ -67,6 +67,8 @@ void zoneGeometryScalesCanvasButNotBars();
 void zoneAtCanvasPointMapsBarsAndCanvas();
 void designerCanvasBarCoordinatesRoundTrip();
 void designerControlRightClickEmitsContextMenu();
+void innerTabsRoundTripAndClampOrphans();
+void innerTabStripOffsetsDesignerAndRuntime();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -1124,6 +1126,90 @@ void UiGuardsTest::designerControlRightClickEmitsContextMenu()
     QCOMPARE(spy.at(0).at(0).toInt(), 1);            // 第二个控件，不是第一个
     QCOMPARE(spy.at(0).at(1).toPoint(), QPoint(500, 500));
     QCOMPARE(canvas.selectedIndex(), 1);             // 右键即选中
+}
+
+// B2-3e 页内二级 Tab（官方 9.3「Tab页」，页级实现）：
+// 序列化往返 + 越界归属退回画布。后者是页级方案相对"容器控件"的关键优势：
+// 删标签不会留下指向已删容器的悬空引用，退化行为是可定义的。
+void UiGuardsTest::innerTabsRoundTripAndClampOrphans()
+{
+    RuntimeInterfacePage page;
+    page.innerTabNames = QStringList{QStringLiteral("参数"), QStringLiteral("结果")};
+    page.innerTabHeight = 40;
+    page.defaultInnerTab = 1;
+    RuntimeControl *a = page.addControl(RuntimeControlType::TextLabel, QRect(0, 0, 100, 40));
+    QVERIFY(a);
+    a->innerTab = 1;
+    RuntimeControl *b = page.addControl(RuntimeControlType::TextLabel, QRect(0, 100, 100, 40));
+    QVERIFY(b);
+    b->innerTab = -1;
+
+    RuntimeInterfacePage back;
+    QVERIFY(back.fromJson(page.toJson()));
+    QCOMPARE(back.innerTabNames.size(), 2);
+    QCOMPARE(back.innerTabNames.at(1), QStringLiteral("结果"));
+    QCOMPARE(back.innerTabHeight, 40);
+    QCOMPARE(back.defaultInnerTab, 1);
+    QCOMPARE(back.controls.at(0).innerTab, 1);
+    QCOMPARE(back.controls.at(1).innerTab, -1);
+
+    // 手改 JSON 把归属改成越界值（模拟"标签被删少"）：加载时必须退回 -1
+    QJsonObject json = page.toJson();
+    QJsonArray arr = json[QStringLiteral("controls")].toArray();
+    QJsonObject c0 = arr.at(0).toObject();
+    c0[QStringLiteral("innerTab")] = 9;
+    arr.replace(0, c0);
+    json[QStringLiteral("controls")] = arr;
+
+    RuntimeInterfacePage clamped;
+    QVERIFY(clamped.fromJson(json));
+    QVERIFY2(clamped.controls.at(0).innerTab == -1,
+             "越界的 Tab 归属必须退回画布(-1)，不能留下指向不存在标签的控件");
+}
+
+// 标签条占据画布区顶部一条：设计器与运行视图的坐标都要让出这个高度，
+// 否则 Tab 里的控件会压在标签条上。
+void UiGuardsTest::innerTabStripOffsetsDesignerAndRuntime()
+{
+    RuntimeInterfacePage page;
+    page.innerTabNames = QStringList{QStringLiteral("A"), QStringLiteral("B")};
+    page.innerTabHeight = 40;
+
+    // 设计器：Tab 内控件显示时下移一条标签高度，写回时再减回来
+    RuntimeDesignerCanvas canvas;
+    canvas.setCanvasSize(QSize(600, 400));
+    canvas.setPage(&page);
+    RuntimeControl c;
+    c.type = RuntimeControlType::TextLabel;
+    c.zone = RuntimeZone::Canvas;
+    c.innerTab = 0;
+    c.geometry = QRect(10, 10, 100, 40);
+    QCOMPARE(canvas.toCanvasRect(c), QRect(10, 50, 100, 40));            // y + 40
+    QCOMPARE(canvas.toStoredRect(c, QRect(10, 50, 100, 40)), QRect(10, 10, 100, 40));
+
+    // 不在 Tab 内的控件不下移
+    c.innerTab = -1;
+    QCOMPARE(canvas.toCanvasRect(c), QRect(10, 10, 100, 40));
+
+    // 运行视图：画布区顶部让出标签条，1:1 时控件 y 应是 40
+    RuntimeInterface layout;
+    layout.ensurePage();
+    layout.canvas.width = 800;
+    layout.canvas.height = 600;
+    RuntimeInterfacePage *pg = layout.page(0);
+    pg->innerTabNames = page.innerTabNames;
+    pg->innerTabHeight = 40;
+    RuntimeControl body;
+    body.type = RuntimeControlType::TextLabel;
+    body.geometry = QRect(0, 0, 100, 50);
+    body.zone = RuntimeZone::Canvas;
+    pg->controls.append(body);
+
+    RuntimeInterfaceView view;
+    view.resize(800, 600);
+    view.setInterface(layout);
+    const QRect g = view.controlGeometry(pg->controls.first());
+    QCOMPARE(g.y(), 40);
 }
 
 QTEST_MAIN(UiGuardsTest)

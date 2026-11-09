@@ -120,6 +120,10 @@ QRect RuntimeDesignerCanvas::toCanvasRect(const RuntimeControl &ctrl) const
     case RuntimeZone::RightBar:  off = QPoint(width() - rightW, topH); break;
     case RuntimeZone::Canvas:    off = QPoint(leftW, topH); break;
     }
+    // 页内二级 Tab：内容区在标签条下方，归属 Tab 的控件整体下移一条标签高度
+    if (ctrl.zone == RuntimeZone::Canvas && ctrl.innerTab >= 0
+        && !m_layout->innerTabNames.isEmpty())
+        off.ry() += m_layout->innerTabHeight;
     return ctrl.geometry.translated(off);
 }
 
@@ -139,6 +143,10 @@ QRect RuntimeDesignerCanvas::toStoredRect(const RuntimeControl &ctrl,
     case RuntimeZone::RightBar:  off = QPoint(width() - rightW, topH); break;
     case RuntimeZone::Canvas:    off = QPoint(leftW, topH); break;
     }
+    // 与 toCanvasRect 对称：Tab 内容区的控件要先减掉标签条高度
+    if (ctrl.zone == RuntimeZone::Canvas && ctrl.innerTab >= 0
+        && !m_layout->innerTabNames.isEmpty())
+        off.ry() += m_layout->innerTabHeight;
     QRect g = canvasRect.translated(-off);
     g.moveLeft(qMax(0, g.left()));
     g.moveTop(qMax(0, g.top()));
@@ -334,6 +342,30 @@ void RuntimeDesignerCanvas::paintEvent(QPaintEvent *event)
     p.drawText(canvasRect.adjusted(6, 0, -6, -6), Qt::AlignLeft | Qt::AlignBottom,
                QStringLiteral("画布 %1×%2 · 拖动移动，右下角缩放")
                    .arg(width()).arg(height()));
+
+    // 页内二级 Tab 标签条（官方 9.3「Tab页」）
+    if (pg && !pg->innerTabNames.isEmpty()) {
+        const int stripH = qMin(pg->innerTabHeight, canvasRect.height());
+        if (stripH > 0) {
+            const QRect strip(canvasRect.left(), canvasRect.top(), canvasRect.width(), stripH);
+            p.fillRect(strip, QColor(0x1c, 0x1c, 0x24));
+            const int n = pg->innerTabNames.size();
+            const int tabW = qMax(1, strip.width() / qMax(1, n));
+            for (int i = 0; i < n; ++i) {
+                const QRect r(strip.left() + i * tabW, strip.top(), tabW, stripH);
+                const bool active = (i == pg->defaultInnerTab);
+                if (active) p.fillRect(r, QColor(0x2e, 0x2e, 0x3c));
+                p.setPen(QColor(0x44, 0x46, 0x58));
+                p.drawRect(r.adjusted(0, 0, -1, -1));
+                p.setPen(active ? QColor(0xd8, 0xd8, 0xe0) : QColor(0x8a, 0x8e, 0x9c));
+                p.drawText(r, Qt::AlignCenter, pg->innerTabNames.at(i));
+            }
+            p.setPen(QColor(0x4a, 0x4c, 0x5a));
+            p.drawText(QRect(canvasRect.left(), strip.bottom() + 2, canvasRect.width(), 16),
+                       Qt::AlignHCenter | Qt::AlignTop,
+                       QStringLiteral("↓ Tab 内容区：「内层Tab」设了标签的控件显示在这里"));
+        }
+    }
 }
 
 // ==================== DesignerControlFrame ====================
@@ -684,6 +716,7 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
             { "基础", "参数设置", RuntimeControlType::ParamSetting },
             { "基础", "开关控制", RuntimeControlType::SwitchControl },
             { "布局", "组合框",   RuntimeControlType::ComboBox },
+            { "布局", "Tab页",    RuntimeControlType::TabPage },
             { "图表", "表格",     RuntimeControlType::ResultTable },
             { "其它", "IO状态",   RuntimeControlType::IoStatus },
             { "其它", "图片",     RuntimeControlType::ImageAsset },
@@ -960,6 +993,9 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     m_zoneSlotSpin->setRange(0, 31);
     m_zoneSlotSpin->setToolTip(QStringLiteral("固定栏内第几格（栏被分割成多格时用）"));
     fLayout->addRow(QStringLiteral("栏内格序号"), m_zoneSlotSpin);
+    // 内层 Tab 归属（仅当前页启用了内层 Tab 时显示）
+    m_innerTabCombo = new QComboBox(propGroup);
+    fLayout->addRow(QStringLiteral("内层Tab"), m_innerTabCombo);
     auto *layoutHint = new QLabel(
         QStringLiteral("官方的自动填充、T/B/L/R 边距与九宫格对齐待布局模型扩展（B2）"),
         propGroup);
@@ -1115,6 +1151,9 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     if (m_zoneSlotSpin)
         connect(m_zoneSlotSpin, QOverload<int>::of(&QSpinBox::valueChanged),
                 this, &RuntimeInterfaceDesigner::onPropertyEdited);
+    if (m_innerTabCombo)
+        connect(m_innerTabCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, &RuntimeInterfaceDesigner::onPropertyEdited);
     for (QDoubleSpinBox *s : {m_paramMinSpin, m_paramMaxSpin}) {
         if (s)
             connect(s, &QDoubleSpinBox::valueChanged,
@@ -1211,6 +1250,43 @@ void RuntimeInterfaceDesigner::addCurrentPaletteControl()
     addControlByRow(m_palette->currentRow());
 }
 
+void RuntimeInterfaceDesigner::enableInnerTabs()
+{
+    RuntimeInterfacePage *pg = m_layout.currentPage();
+    if (!pg) return;
+    const QString current = pg->innerTabNames.isEmpty()
+                                ? QStringLiteral("参数,结果")
+                                : pg->innerTabNames.join(QLatin1Char(','));
+    bool ok = false;
+    const QString text = QInputDialog::getText(
+        this, tr("页内 Tab"),
+        tr("标签名称（逗号分隔；清空 = 关闭内层 Tab）："), QLineEdit::Normal, current, &ok);
+    if (!ok) return;
+
+    QStringList names;
+    const QStringList raw = text.split(QLatin1Char(','), Qt::SkipEmptyParts);
+    for (const QString &s : raw) {
+        const QString t = s.trimmed();
+        if (!t.isEmpty()) names << t;
+    }
+
+    pushUndo();
+    pg->innerTabNames = names;
+    if (names.isEmpty()) {
+        // 关闭内层 Tab：控件全部退回画布（不留悬空归属）
+        for (RuntimeControl &c : pg->controls) c.innerTab = -1;
+        pg->defaultInnerTab = 0;
+    } else if (pg->defaultInnerTab >= names.size()) {
+        pg->defaultInnerTab = 0;
+    }
+    // 越界归属同样退回画布
+    for (RuntimeControl &c : pg->controls) {
+        if (c.innerTab >= names.size()) c.innerTab = -1;
+    }
+    setCanvasPage();
+    refreshPropertyPanel();
+}
+
 void RuntimeInterfaceDesigner::onControlContextMenu(int index, const QPoint &globalPos)
 {
     RuntimeInterfacePage *pg = m_layout.currentPage();
@@ -1259,6 +1335,13 @@ void RuntimeInterfaceDesigner::addControlByRow(int row, const QPoint &dropPos)
     RuntimeControlType type;
     if (!paletteTypeOf(m_palette ? m_palette->item(row) : nullptr, &type))
         return;
+
+    // Tab页是**页级**能力：拖入即启用当前页的内层 Tab，不创建控件对象。
+    // 这样不会出现"子控件指向已删容器"的悬空引用，退化行为也可定义。
+    if (type == RuntimeControlType::TabPage) {
+        enableInnerTabs();
+        return;
+    }
 
     const int n = m_layout.currentPage()->controls.size();
 const int cascade = (n % 8) * 24;
@@ -1932,6 +2015,20 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
         m_zoneCombo->setCurrentIndex(zi >= 0 ? zi : 0);
     }
     if (m_zoneSlotSpin) m_zoneSlotSpin->setValue(ctrl->zoneSlot);
+
+    // 内层 Tab：当前页未启用时整行隐藏；启用时列「不在 Tab」+ 各标签
+    if (m_innerTabCombo) {
+        const bool hasTabs = pg && !pg->innerTabNames.isEmpty();
+        m_innerTabCombo->setVisible(hasTabs);
+        if (hasTabs) {
+            m_innerTabCombo->clear();
+            m_innerTabCombo->addItem(QStringLiteral("不在 Tab 内"), -1);
+            for (int i = 0; i < pg->innerTabNames.size(); ++i)
+                m_innerTabCombo->addItem(pg->innerTabNames.at(i), i);
+            const int idx = m_innerTabCombo->findData(ctrl->innerTab);
+            m_innerTabCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+        }
+    }
     if (m_paramKeyEdit) m_paramKeyEdit->setText(ctrl->paramKey);
     if (m_paramMinSpin) m_paramMinSpin->setValue(ctrl->paramMin);
     if (m_paramMaxSpin) m_paramMaxSpin->setValue(ctrl->paramMax);
@@ -2025,6 +2122,8 @@ void RuntimeInterfaceDesigner::onPropertyEdited()
             ctrl->zone = RuntimeZone(z);
     }
     if (m_zoneSlotSpin) ctrl->zoneSlot = m_zoneSlotSpin->value();
+    if (m_innerTabCombo && m_innerTabCombo->isVisible())
+        ctrl->innerTab = m_innerTabCombo->currentData().toInt();
 
     if (ctrl->type == RuntimeControlType::ParamSetting) {
         ctrl->bindType = QStringLiteral("node");   // 参数设置固定绑节点

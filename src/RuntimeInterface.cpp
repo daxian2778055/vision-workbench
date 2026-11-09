@@ -17,6 +17,7 @@ QString runtimeControlTypeName(RuntimeControlType type)
     case RuntimeControlType::ParamSetting: return QStringLiteral("参数设置");
     case RuntimeControlType::SwitchControl: return QStringLiteral("开关控制");
     case RuntimeControlType::ComboBox: return QStringLiteral("组合框");
+    case RuntimeControlType::TabPage:  return QStringLiteral("Tab页");
     case RuntimeControlType::ImageAsset: return QStringLiteral("图片");
     case RuntimeControlType::WorldClock: return QStringLiteral("世界时钟");
     }
@@ -35,6 +36,7 @@ bool runtimeControlTypeFromName(const QString &name, RuntimeControlType &out)
     if (name == QStringLiteral("参数设置")) { out = RuntimeControlType::ParamSetting; return true; }
     if (name == QStringLiteral("开关控制")) { out = RuntimeControlType::SwitchControl; return true; }
     if (name == QStringLiteral("组合框"))   { out = RuntimeControlType::ComboBox; return true; }
+    if (name == QStringLiteral("Tab页"))    { out = RuntimeControlType::TabPage; return true; }
     if (name == QStringLiteral("图片"))     { out = RuntimeControlType::ImageAsset; return true; }
     if (name == QStringLiteral("世界时钟")) { out = RuntimeControlType::WorldClock; return true; }
     return false;
@@ -135,6 +137,7 @@ static QJsonObject controlToJson(const RuntimeControl &c)
     // 所属区域（默认画布，只在非默认时写出）
     if (c.zone != RuntimeZone::Canvas) o["zone"] = int(c.zone);
     if (c.zoneSlot != 0) o["zoneSlot"] = c.zoneSlot;
+    if (c.innerTab >= 0) o["innerTab"] = c.innerTab;
     if (c.type == RuntimeControlType::ImageAsset && !c.imagePath.isEmpty())
         o["imagePath"] = c.imagePath;
     if (c.type == RuntimeControlType::WorldClock)
@@ -217,6 +220,7 @@ static RuntimeControl controlFromJson(const QJsonObject &o, RuntimeControlType t
         const QJsonArray opts = o["comboOptions"].toArray();
         for (const QJsonValue &v : opts) ctrl.comboOptions << v.toString();
     }
+    ctrl.innerTab = qMax(-1, o["innerTab"].toInt(-1));
     const int zoneRaw = o["zone"].toInt(0);
     ctrl.zone = (zoneRaw >= 0 && zoneRaw <= int(RuntimeZone::RightBar))
                     ? RuntimeZone(zoneRaw)
@@ -298,6 +302,16 @@ QJsonObject RuntimeInterfacePage::toJson() const
     bars["leftSlots"] = leftBarSlots;
     bars["rightSlots"] = rightBarSlots;
     root["bars"] = bars;
+    // 页内二级 Tab（空 = 未启用）
+    if (!innerTabNames.isEmpty()) {
+        QJsonArray tabs;
+        for (const QString &n : innerTabNames) tabs.append(n);
+        QJsonObject t;
+        t["names"] = tabs;
+        t["height"] = innerTabHeight;
+        t["default"] = defaultInnerTab;
+        root["innerTabs"] = t;
+    }
     return root;
 }
 
@@ -316,6 +330,18 @@ bool RuntimeInterfacePage::fromJson(const QJsonObject &json)
     bottomBarSlots = qMax(1, bars["bottomSlots"].toInt(1));
     leftBarSlots = qMax(1, bars["leftSlots"].toInt(1));
     rightBarSlots = qMax(1, bars["rightSlots"].toInt(1));
+
+    // 页内二级 Tab：名字列表空即未启用
+    innerTabNames.clear();
+    const QJsonObject tabs = json["innerTabs"].toObject();
+    for (const QJsonValue &v : tabs["names"].toArray()) {
+        const QString n = v.toString();
+        if (!n.isEmpty()) innerTabNames << n;
+    }
+    innerTabHeight = qMax(16, tabs["height"].toInt(36));
+    defaultInnerTab = qMax(0, tabs["default"].toInt(0));
+    if (defaultInnerTab >= innerTabNames.size()) defaultInnerTab = 0;
+
     const QJsonArray arr = json["controls"].toArray();
     for (const QJsonValue &v : arr) {
         const QJsonObject o = v.toObject();
@@ -323,6 +349,12 @@ bool RuntimeInterfacePage::fromJson(const QJsonObject &json)
         if (!runtimeControlTypeFromName(o["type"].toString(), type))
             continue;
         controls.append(controlFromJson(o, type));
+    }
+    // 越界的 Tab 归属退回 -1（画布）：删标签/少标签不会留下指向不存在 Tab 的控件。
+    // 这是页级方案（无父引用）相对"容器控件"的关键优势——退化行为是可定义的。
+    for (RuntimeControl &c : controls) {
+        if (c.innerTab >= innerTabNames.size())
+            c.innerTab = -1;
     }
     return true;
 }

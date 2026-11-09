@@ -58,6 +58,8 @@ private slots:
     void addControlAt(const QPoint &pos);
     /// 控件右键菜单（官方 9.1：删除 / 撤销 / 重做 / 图层位置）
     void onControlContextMenu(int index, const QPoint &globalPos);
+    /// 启用/关闭当前页的内层 Tab（官方 9.3「Tab页」，页级实现）
+    void enableInnerTabs();
     // 控件层级（官方工具条 4 档：顶层 / 上一层 / 底层 / 下一层）
     void raiseSelected();
     void lowerSelected();
@@ -143,6 +145,8 @@ QLabel *m_geometryLabel = nullptr;   /// 布局组只读显示尺寸/位置（�
     // 所属区域（官方固定栏）：画布 / 上 / 下 / 左 / 右 + 栏内格序号
     QComboBox *m_zoneCombo = nullptr;
     QSpinBox *m_zoneSlotSpin = nullptr;
+    /// 内层 Tab 归属（仅当当前页启用了内层 Tab 时显示）
+    QComboBox *m_innerTabCombo = nullptr;
     QCheckBox *m_visibleCheck = nullptr;   /// 运行时是否显示（隐藏控件仍留在设计画布上以便编辑）
     QPushButton *m_raiseBtn = nullptr;     /// 上移一层
     QPushButton *m_lowerBtn = nullptr;     /// 下移一层

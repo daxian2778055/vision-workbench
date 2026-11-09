@@ -85,6 +85,12 @@ private:
     QStringList m_knownNodeNames;   /// 已知节点名（绑定体检用）
     QHash<QString, double> m_paramValues;   /// 参数设置回填值，"节点完整名|参数键" → 值
     QHash<QString, QString> m_comboSelections;   /// 组合框回填，"节点完整名|参数键" → 选中文本
+    /// 页内二级 Tab（官方 9.3「Tab页」，页级实现）：当前选中的内层标签
+    int m_innerTab = 0;
+    /// 按当前内层标签显隐控件（只作用于当前页；其它页照常，切页自然生效）
+    void applyInnerTabVisibility();
+    /// 在当前页顶部建内层标签条（页未启用内层 Tab 时什么都不做）
+    void buildInnerTabBar(QWidget *container, const RuntimeInterfacePage &pg);
     QStringList m_staleBindings;    /// 失效绑定（绘制在页面顶部）
     QRect scaledGeometry(const QRect &g) const;
     void rebuildWidgets();
