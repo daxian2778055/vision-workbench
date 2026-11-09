@@ -1288,6 +1288,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261109.9",
       "recorded_at": "2026-11-09",
       "recorded_note": "B2-1：按钮动作表（RuntimeAction 多行，类型/方法/参数），旧布局 bindType=action+bindKey 自动迁移成一行；设计器数据源改「配置」按钮 + 数据源配置弹窗（三列表格可增删）；运行视图优先取第一行 exec 动作。界面链接/参数写入/方案切换/重置的运行期执行未接。"
+    },
+    {
+      "tag": "rc-20261109.10",
+      "commit": "dd5c33cad81516ae476a4de4d767ec464ec4ed8e",
+      "exe_md5": "31da0ed4fe25137fd444c31bda721c96",
+      "exe_bytes": 12034560,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261109.10",
+      "recorded_at": "2026-11-09",
+      "recorded_note": "B2-2：动作表接执行链（reset→resetRuntimeStats、scheme→保存/加载方案、ui→showPage 切页），exec 仍走旧信号避免重复起跑；顺带修 currentPageIndex 只存不用。param 动作未接线。"
     }
   ],
   "legacy_backfilled": [
