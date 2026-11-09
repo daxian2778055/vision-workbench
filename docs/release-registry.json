@@ -1252,6 +1252,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261109.5",
       "recorded_at": "2026-11-09",
       "recorded_note": "新增 docs/VM4.4官方UI对照-20261109.md（基于本机实装 VM4.4.2 官方用户手册 PDF 第5.2/第9章与 GateWay 模块清单的权威 1:1 对照，含 B1-B5 分批顺序）；B1a 实施运行界面设计器控件库→画布拖放与 Ctrl+C/V 剪贴板（含腿）。用户口径：通讯协议不增加，FINS 为唯一将来可加项。"
+    },
+    {
+      "tag": "rc-20261109.6",
+      "commit": "96f582552114d5eaa932fae8c7d605583b15f3fe",
+      "exe_md5": "e91c612beb4d68c1fb955a07337e27ca",
+      "exe_bytes": 12004352,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261109.6",
+      "recorded_at": "2026-11-09",
+      "recorded_note": "B1b：按第三张 VM4.4 实机截图把运行界面设计器属性区改为标识/数据源/布局/外观四分组，对齐扩到官方 6 种+分布 2 种、图层扩到 4 档，含结构与几何行为腿。叠加 rc-20261109.5 的官方 UI 对照文档与拖放/Ctrl+C/V。"
     }
   ],
   "legacy_backfilled": [
