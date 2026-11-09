@@ -1234,6 +1234,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261109.3",
       "recorded_at": "2026-11-09",
       "recorded_note": "收口 3 条纯代码加固：collectSearchValues maxCount<=1 除零（导出为类静态方法+腿）、图像型 ROI 掩膜 normalizeMaskTo8U 统一 CV_8UC1（16U/32F/RGB 腿）、Region→图像空 catch 属有意降级已澄清。含 rc-20261109.2 的官方当前结果口径定案。"
+    },
+    {
+      "tag": "rc-20261109.4",
+      "commit": "cbdb7e64310030a5a37d76f98f8bbae366871aad",
+      "exe_md5": "802ad2f8a2ae1b85e0759fe3bc29985c",
+      "exe_bytes": 11993600,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261109.4",
+      "recorded_at": "2026-11-09",
+      "recorded_note": "现场验证工具补强：--selftest-deepocr 递归子目录/--limit/丰富汇总/失败明细/CSV 相对路径与 mode 列/按模式区分提示；tools/soak.ps1 自动定位最新 rc 包 DLL + -CsvPath/-SampleSeconds 出句柄与工作集采样 CSV。端到端实测：含子目录 2 张样本，有字 OK、空白 FAIL、exit=1、CSV 正确；soak 短跑 3372 轮/0 失败/句柄 Δ0。"
     }
   ],
   "legacy_backfilled": [
