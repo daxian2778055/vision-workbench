@@ -136,13 +136,22 @@ void RuntimeDesignerCanvas::alignSelected(AlignMode mode)
         rects.append(m_frames[i]->geometry());
     }
 
-    if (mode == AlignLeft || mode == AlignTop) {
-        int target = INT_MAX;
-        for (const QRect &r : rects)
-            target = qMin(target, mode == AlignLeft ? r.left() : r.top());
+    // 官方 9.1：以选中控件组成的**区域**为基准做对齐
+    QRect bound = rects.first();
+    for (const QRect &r : rects) bound |= r;
+
+    if (mode != AlignHSpread && mode != AlignVSpread) {
         for (int k = 0; k < idx.size(); ++k) {
             QRect g = rects[k];
-            if (mode == AlignLeft) g.moveLeft(target); else g.moveTop(target);
+            switch (mode) {
+            case AlignLeft:    g.moveLeft(bound.left()); break;
+            case AlignHCenter: g.moveLeft(bound.center().x() - g.width() / 2); break;
+            case AlignRight:   g.moveRight(bound.right()); break;
+            case AlignTop:     g.moveTop(bound.top()); break;
+            case AlignVCenter: g.moveTop(bound.center().y() - g.height() / 2); break;
+            case AlignBottom:  g.moveBottom(bound.bottom()); break;
+            default: return;
+            }
             m_frames[idx[k]]->setGeometry(g);
             m_layout->controls[idx[k]].geometry = g;
             m_frames[idx[k]]->update();
@@ -150,7 +159,8 @@ void RuntimeDesignerCanvas::alignSelected(AlignMode mode)
         return;
     }
 
-    // 均分：按坐标排序，首尾固定，中间等距
+    // 分布：官方要求选中 3 个以上才起作用；按坐标排序，首尾固定，中间等距
+    if (idx.size() < 3) return;
     QList<QPair<int, int>> order;   // (排序键, 选中序号)
     for (int k = 0; k < idx.size(); ++k)
         order.append({ mode == AlignHSpread ? rects[k].left() : rects[k].top(), k });
@@ -158,7 +168,7 @@ void RuntimeDesignerCanvas::alignSelected(AlignMode mode)
     const int n = order.size();
     const int firstKey = order.first().first;
     const int lastKey = order.last().first;
-    if (n < 3 || lastKey == firstKey) return;   // 无可分配间隙
+    if (lastKey == firstKey) return;   // 无可分配间隙
     const double step = double(lastKey - firstKey) / (n - 1);
     for (int rank = 1; rank < n - 1; ++rank) {
         const int k = order[rank].second;
@@ -584,37 +594,51 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     connect(redoShortcut, &QShortcut::activated, this, &RuntimeInterfaceDesigner::redo);
 
     // 批量对齐（Ctrl+点击选 2 个以上后点用）
+    // 官方 9.1：对齐 6 种（左/水平居中/右/顶/垂直居中/底）+ 分布 2 种（水平/垂直，需 ≥3 个）
     auto *alignRow = new QHBoxLayout();
-    auto *alignLeftBtn = new QPushButton(QStringLiteral("左对齐"), canvasGroup);
-    auto *alignTopBtn = new QPushButton(QStringLiteral("顶对齐"), canvasGroup);
-    auto *hSpreadBtn = new QPushButton(QStringLiteral("横均分"), canvasGroup);
-    auto *vSpreadBtn = new QPushButton(QStringLiteral("纵均分"), canvasGroup);
-    for (QPushButton *b : { alignLeftBtn, alignTopBtn, hSpreadBtn, vSpreadBtn })
-        b->setStyleSheet("QPushButton{background:#5a5a6a;color:white;border:none;border-radius:4px;padding:4px 8px;}");
-    alignRow->addWidget(alignLeftBtn);
-    alignRow->addWidget(alignTopBtn);
-    alignRow->addWidget(hSpreadBtn);
-    alignRow->addWidget(vSpreadBtn);
+    const QString alignStyle =
+        QStringLiteral("QPushButton{background:#5a5a6a;color:white;border:none;border-radius:3px;padding:3px 6px;}");
+    struct AlignBtn { const char *label; void (RuntimeInterfaceDesigner::*slot)(); bool spread; };
+    const AlignBtn alignDefs[] = {
+        { "左对齐", &RuntimeInterfaceDesigner::onAlignLeft, false },
+        { "水平居中", &RuntimeInterfaceDesigner::onAlignHCenter, false },
+        { "右对齐", &RuntimeInterfaceDesigner::onAlignRight, false },
+        { "顶对齐", &RuntimeInterfaceDesigner::onAlignTop, false },
+        { "垂直居中", &RuntimeInterfaceDesigner::onAlignVCenter, false },
+        { "底对齐", &RuntimeInterfaceDesigner::onAlignBottom, false },
+        { "水平分布", &RuntimeInterfaceDesigner::onAlignHSpread, true },
+        { "垂直分布", &RuntimeInterfaceDesigner::onAlignVSpread, true },
+    };
+    for (const AlignBtn &def : alignDefs) {
+        auto *b = new QPushButton(QString::fromUtf8(def.label), canvasGroup);
+        b->setStyleSheet(alignStyle);
+        if (def.spread) b->setToolTip(QStringLiteral("需选中 3 个以上控件"));
+        alignRow->addWidget(b);
+        connect(b, &QPushButton::clicked, this, def.slot);
+    }
     alignRow->addStretch();
-    connect(alignLeftBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::onAlignLeft);
-    connect(alignTopBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::onAlignTop);
-    connect(hSpreadBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::onAlignHSpread);
-    connect(vSpreadBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::onAlignVSpread);
 
     auto *canvasToolRow = new QHBoxLayout();
     // 控件层级：运行时后创建者盖住先创建者；上移/下移改变控件在列表中的先后
+    // 官方工具条 4 档：顶层 / 上一层 / 底层 / 下一层
     m_raiseBtn = new QPushButton(tr("上移一层"), canvasGroup);
     m_lowerBtn = new QPushButton(tr("下移一层"), canvasGroup);
-    for (QPushButton *b : {m_raiseBtn, m_lowerBtn}) {
+    auto *toTopBtn = new QPushButton(tr("置于顶层"), canvasGroup);
+    auto *toBottomBtn = new QPushButton(tr("置于底层"), canvasGroup);
+    for (QPushButton *b : {m_raiseBtn, m_lowerBtn, toTopBtn, toBottomBtn}) {
         b->setStyleSheet("QPushButton{background:#5a5a6a;color:white;border:none;border-radius:4px;padding:4px 8px;}");
         b->setToolTip(tr("调整控件叠放顺序（运行时后创建者在上）"));
     }
     connect(m_raiseBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::raiseSelected);
     connect(m_lowerBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::lowerSelected);
+    connect(toTopBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::raiseToTop);
+    connect(toBottomBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::lowerToBottom);
 
     canvasToolRow->addStretch();
-    canvasToolRow->addWidget(m_raiseBtn);
+    canvasToolRow->addWidget(toBottomBtn);
     canvasToolRow->addWidget(m_lowerBtn);
+    canvasToolRow->addWidget(m_raiseBtn);
+    canvasToolRow->addWidget(toTopBtn);
     canvasToolRow->addWidget(dupBtn);
     canvasToolRow->addWidget(delBtn);
     canvasToolRow->addWidget(clearBtn);
@@ -625,8 +649,24 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     canvasLay->addLayout(canvasToolRow);
 
     // ---- 右侧：属性面板 ----
-    auto *propGroup = new QGroupBox(QStringLiteral("属性"), this);
-    auto *form = new QFormLayout(propGroup);
+    // 官方实机（选中「图像」控件）是 4 个可折叠分组：标识 / 数据源 / 布局 / 外观。
+    // 手册 9.3 文字写「三大类」，以截图为准。B1 只对齐分组结构；布局组的
+    // 自动填充、T/B/L/R 边距、九宫格对齐要扩展 RuntimeControl 模型，归 B2。
+    auto *propGroup = new QGroupBox(QStringLiteral("基础设置"), this);
+    auto *propOuter = new QVBoxLayout();
+    auto makeSection = [this, propOuter](const QString &name) -> QFormLayout * {
+    auto *box = new QGroupBox(name, this);
+    box->setStyleSheet("QGroupBox{font-weight:bold;border:none;border-bottom:1px solid #3a3a4a;"
+    "padding-top:6px;margin-top:2px;}");
+    auto *f = new QFormLayout(box);
+    f->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    propOuter->addWidget(box);
+    return f;
+    };
+    QFormLayout *fIdentity = makeSection(QStringLiteral("标识"));
+    QFormLayout *fData = makeSection(QStringLiteral("数据源"));
+    QFormLayout *fLayout = makeSection(QStringLiteral("布局"));
+    QFormLayout *fAppear = makeSection(QStringLiteral("外观"));
 
     m_titleEdit = new QLineEdit(propGroup);
     m_typeLabel = new QLabel(QStringLiteral("-"), propGroup);
@@ -651,10 +691,30 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     connect(m_columnList, &QListWidget::itemDoubleClicked, this,
             [this](QListWidgetItem *) { onColumnDel(); });
 
-    form->addRow(QStringLiteral("标题"), m_titleEdit);
-    form->addRow(QStringLiteral("类型"), m_typeLabel);
-    form->addRow(QStringLiteral("绑定方式"), m_bindTypeCombo);
-    form->addRow(QStringLiteral("绑定对象"), m_bindKeyCombo);
+    fIdentity->addRow(QStringLiteral("类型"), m_typeLabel);
+    fIdentity->addRow(QStringLiteral("标题"), m_titleEdit);
+
+    fData->addRow(QStringLiteral("绑定方式"), m_bindTypeCombo);
+    fData->addRow(QStringLiteral("绑定对象"), m_bindKeyCombo);
+    fData->addRow(QStringLiteral("新列来源"), m_columnSource);
+    fData->addRow(QStringLiteral("已有列"), m_columnList);
+    auto *colBtnRow = new QHBoxLayout();
+    colBtnRow->addWidget(m_columnAddBtn);
+    colBtnRow->addWidget(m_columnDelBtn);
+    fData->addRow(QString(), colBtnRow);
+    fData->addRow(QStringLiteral("最大行数"), m_tableMaxRows);
+
+    // 布局：官方有自动填充 / 尺寸 / 边距 T·B·L·R + 同步 / 九宫格对齐。
+    // B1 先给出只读尺寸与位置（拖放/拖动后实时刷新），可编辑字段随 B2 模型扩展补上。
+    m_geometryLabel = new QLabel(QStringLiteral("-"), propGroup);
+    m_geometryLabel->setStyleSheet("color:#c8c8d0;");
+    fLayout->addRow(QStringLiteral("尺寸 / 位置"), m_geometryLabel);
+    auto *layoutHint = new QLabel(
+        QStringLiteral("官方的自动填充、T/B/L/R 边距与九宫格对齐待布局模型扩展（B2）"),
+        propGroup);
+    layoutHint->setWordWrap(true);
+    layoutHint->setStyleSheet("color:#8a8a9a;font-size:11px;");
+    fLayout->addRow(layoutHint);
 
     // 颜色：取色器 + Hex 输入
     auto *colorRow = new QHBoxLayout();
@@ -662,32 +722,30 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     auto *colorPick = new QPushButton(QStringLiteral("选色"), propGroup);
     colorPick->setFixedWidth(44);
     colorRow->addWidget(colorPick);
-    form->addRow(QStringLiteral("颜色"), colorRow);
+    fAppear->addRow(QStringLiteral("颜色"), colorRow);
     connect(colorPick, &QPushButton::clicked, this, [this]() {
         const QColor c = QColorDialog::getColor(QColor(m_colorEdit->text()),
                                                 this, QStringLiteral("选择颜色"));
         if (c.isValid()) m_colorEdit->setText(c.name());
     });
-
-    form->addRow(QStringLiteral("字号"), m_fontSpin);
+    fAppear->addRow(QStringLiteral("字号"), m_fontSpin);
     m_visibleCheck = new QCheckBox(QStringLiteral("运行时显示该控件"), propGroup);
     m_visibleCheck->setToolTip(QStringLiteral("取消勾选后控件仍保留在设计画布上，但运行界面不显示"));
-    form->addRow(QStringLiteral("可见"), m_visibleCheck);
-    form->addRow(QStringLiteral("新列来源"), m_columnSource);
-    form->addRow(QStringLiteral("已有列"), m_columnList);
-    auto *colBtnRow = new QHBoxLayout();
-    colBtnRow->addWidget(m_columnAddBtn);
-    colBtnRow->addWidget(m_columnDelBtn);
-    form->addRow(QString(), colBtnRow);
-    form->addRow(QStringLiteral("最大行数"), m_tableMaxRows);
+    fAppear->addRow(QStringLiteral("可见"), m_visibleCheck);
 
     auto *propHint = new QLabel(QStringLiteral("绑定方式说明:\n· 全局变量: 实时显示全局变量值\n· 节点输出: 绑定流程中算子的输出\n· 动作: 按钮点击触发的流程操作\n· 表格列: 每轮把各列当前值提交为一行\n  格式: 变量名,变量名 或 节点:模块完整名\n· IO状态: 绑定相机IO控制节点\n  灯=执行成功, 文本=线值/错误"), propGroup);
     propHint->setWordWrap(true);
     propHint->setStyleSheet("color:#8a8a9a;font-size:11px;");
+    propOuter->addWidget(propHint);
+    propOuter->addStretch();
+    auto *propHost = new QWidget(propGroup);
+    propHost->setLayout(propOuter);
+    auto *propScroll = new QScrollArea(propGroup);
+    propScroll->setWidget(propHost);
+    propScroll->setWidgetResizable(true);
+    propScroll->setFrameShape(QFrame::NoFrame);
     auto *propLay = new QVBoxLayout(propGroup);
-    propLay->addLayout(form);
-    propLay->addWidget(propHint);
-    propLay->addStretch();
+    propLay->addWidget(propScroll);
     propGroup->setMaximumWidth(340);
 
     // ---- 底部按钮 ----
@@ -1051,6 +1109,29 @@ void RuntimeInterfaceDesigner::lowerSelected()
     m_canvas->selectIndex(m_selected);
 }
 
+// 官方工具条 4 档中的顶层 / 底层：把选中控件直接移到列表首尾
+void RuntimeInterfaceDesigner::raiseToTop()
+{
+    RuntimeInterfacePage *pg = m_layout.currentPage();
+    if (!pg || m_selected < 0 || m_selected >= pg->controls.size() - 1) return;
+    pushUndo();
+    pg->controls.append(pg->controls.takeAt(m_selected));
+    m_selected = pg->controls.size() - 1;
+    m_canvas->rebuild();
+    m_canvas->selectIndex(m_selected);
+}
+
+void RuntimeInterfaceDesigner::lowerToBottom()
+{
+    RuntimeInterfacePage *pg = m_layout.currentPage();
+    if (!pg || m_selected <= 0 || m_selected >= pg->controls.size()) return;
+    pushUndo();
+    pg->controls.prepend(pg->controls.takeAt(m_selected));
+    m_selected = 0;
+    m_canvas->rebuild();
+    m_canvas->selectIndex(m_selected);
+}
+
 // ==================== 撤销/重做 ====================
 
 void RuntimeInterfaceDesigner::pushUndo()
@@ -1126,7 +1207,11 @@ void RuntimeInterfaceDesigner::movePageDown()
 // ==================== 批量对齐 ====================
 
 void RuntimeInterfaceDesigner::onAlignLeft()   { m_canvas->alignSelected(RuntimeDesignerCanvas::AlignLeft); }
+void RuntimeInterfaceDesigner::onAlignHCenter(){ m_canvas->alignSelected(RuntimeDesignerCanvas::AlignHCenter); }
+void RuntimeInterfaceDesigner::onAlignRight()  { m_canvas->alignSelected(RuntimeDesignerCanvas::AlignRight); }
 void RuntimeInterfaceDesigner::onAlignTop()    { m_canvas->alignSelected(RuntimeDesignerCanvas::AlignTop); }
+void RuntimeInterfaceDesigner::onAlignVCenter(){ m_canvas->alignSelected(RuntimeDesignerCanvas::AlignVCenter); }
+void RuntimeInterfaceDesigner::onAlignBottom() { m_canvas->alignSelected(RuntimeDesignerCanvas::AlignBottom); }
 void RuntimeInterfaceDesigner::onAlignHSpread(){ m_canvas->alignSelected(RuntimeDesignerCanvas::AlignHSpread); }
 void RuntimeInterfaceDesigner::onAlignVSpread(){ m_canvas->alignSelected(RuntimeDesignerCanvas::AlignVSpread); }
 
@@ -1205,9 +1290,10 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
         m_raiseBtn->setEnabled(false);
         m_lowerBtn->setEnabled(false);
         m_typeLabel->setText(QStringLiteral("-"));
+        if (m_geometryLabel) m_geometryLabel->setText(QStringLiteral("-"));
         m_updatingProps = false;
         return;
-    }
+        }
 
     m_titleEdit->setEnabled(true);
     m_colorEdit->setEnabled(true);
@@ -1222,6 +1308,12 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
     m_lowerBtn->setEnabled(m_selected > 0 && m_selected < count);
 
     m_typeLabel->setText(runtimeControlTypeName(ctrl->type));
+    if (m_geometryLabel) {
+        const QRect g = ctrl->geometry;
+        m_geometryLabel->setText(QStringLiteral("%1 × %2  @ (%3, %4)")
+                                     .arg(g.width()).arg(g.height())
+                                     .arg(g.x()).arg(g.y()));
+    }
     m_titleEdit->setText(ctrl->title);
     m_colorEdit->setText(ctrl->color);
     m_fontSpin->setValue(ctrl->fontSize);

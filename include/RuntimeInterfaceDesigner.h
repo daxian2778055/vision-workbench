@@ -50,15 +50,21 @@ private slots:
     void pasteControl();
     /// 控件库拖放到画布：pos 为画布坐标（官方 9.2.2「按住左键移动到编辑区松开」）
     void addControlAt(const QPoint &pos);
-    // 控件层级（运行时后创建的控件盖住先创建的）
+    // 控件层级（官方工具条 4 档：顶层 / 上一层 / 底层 / 下一层）
     void raiseSelected();
     void lowerSelected();
+    void raiseToTop();
+    void lowerToBottom();
     // 撤销/重做（结构性操作）
     void undo();
     void redo();
-    // 多选批量对齐
+    // 多选批量对齐（官方 6 种：左/水平居中/右/顶/垂直居中/底；分布 2 种）
     void onAlignLeft();
+    void onAlignHCenter();
+    void onAlignRight();
     void onAlignTop();
+    void onAlignVCenter();
+    void onAlignBottom();
     void onAlignHSpread();
     void onAlignVSpread();
     // 多页管理
@@ -95,6 +101,7 @@ private:
     // 属性面板
     QLineEdit *m_titleEdit = nullptr;
     QLabel *m_typeLabel = nullptr;
+QLabel *m_geometryLabel = nullptr;   /// 布局组只读显示尺寸/位置（官方 T/B/L/R 待 B2）
     QComboBox *m_bindTypeCombo = nullptr;
     QComboBox *m_bindKeyCombo = nullptr;
     QLineEdit *m_colorEdit = nullptr;
@@ -120,7 +127,10 @@ class RuntimeDesignerCanvas : public QWidget
     Q_OBJECT
 
 public:
-    enum AlignMode { AlignLeft, AlignTop, AlignHSpread, AlignVSpread };
+    /// 官方 9.1 工具条：对齐 6 种（多选 ≥2）、分布 2 种（多选 ≥3）
+    enum AlignMode { AlignLeft, AlignHCenter, AlignRight,
+                     AlignTop, AlignVCenter, AlignBottom,
+                     AlignHSpread, AlignVSpread };
 
     explicit RuntimeDesignerCanvas(QWidget *parent = nullptr);
     void setPage(RuntimeInterfacePage *page);

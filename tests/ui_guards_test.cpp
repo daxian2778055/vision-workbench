@@ -20,6 +20,8 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QAbstractItemView>
+#include <QGroupBox>
+#include <QPushButton>
 #include <QShortcut>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -44,6 +46,8 @@ private slots:
     void finishTextExportSucceedsOnWritableFile();
     void staleBindingsFindsMissingTargets();
 void runtimeDesignerHasOfficialDragAndClipboard();
+void runtimeDesignerHasOfficialSectionsAndAlign();
+void runtimeDesignerAlignHCenterAndRight();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -453,6 +457,61 @@ void UiGuardsTest::runtimeDesignerHasOfficialDragAndClipboard()
         if (s->key() == QKeySequence(QKeySequence::Paste)) hasPaste = true;
     }
     QVERIFY2(hasCopy && hasPaste, "官方复制粘贴仅 Ctrl+C / Ctrl+V，两个快捷键都要在");
+}
+
+// 官方实机（第三张截图）：属性区是 标识/数据源/布局/外观 四个分组；
+// 工具条对齐 6 种 + 分布 2 种，图层 4 档。
+void UiGuardsTest::runtimeDesignerHasOfficialSectionsAndAlign()
+{
+    RuntimeInterfaceDesigner dlg(QStringList{QStringLiteral("模块1")});
+    QStringList sections;
+    for (QGroupBox *gb : dlg.findChildren<QGroupBox *>())
+        sections << gb->title();
+    for (const QString &s : {QStringLiteral("标识"), QStringLiteral("数据源"),
+                             QStringLiteral("布局"), QStringLiteral("外观")}) {
+        QVERIFY2(sections.contains(s),
+                 qPrintable(QStringLiteral("属性区缺官方分组：%1").arg(s)));
+    }
+
+    QStringList labels;
+    for (QPushButton *b : dlg.findChildren<QPushButton *>())
+        labels << b->text();
+    for (const QString &s : {QStringLiteral("左对齐"), QStringLiteral("水平居中"),
+                             QStringLiteral("右对齐"), QStringLiteral("顶对齐"),
+                             QStringLiteral("垂直居中"), QStringLiteral("底对齐"),
+                             QStringLiteral("水平分布"), QStringLiteral("垂直分布")}) {
+        QVERIFY2(labels.contains(s),
+                 qPrintable(QStringLiteral("缺官方对齐/分布按钮：%1").arg(s)));
+    }
+    for (const QString &s : {QStringLiteral("置于顶层"), QStringLiteral("上移一层"),
+                             QStringLiteral("下移一层"), QStringLiteral("置于底层")}) {
+        QVERIFY2(labels.contains(s),
+                 qPrintable(QStringLiteral("缺官方图层档位：%1").arg(s)));
+    }
+}
+
+// 新增的水平居中 / 右对齐要按「选中区域」为基准（官方 9.1），不能只做左对齐。
+void UiGuardsTest::runtimeDesignerAlignHCenterAndRight()
+{
+    RuntimeInterfacePage page;
+    page.addControl(RuntimeControlType::Button, QRect(0, 0, 100, 50));
+    page.addControl(RuntimeControlType::Button, QRect(200, 40, 60, 50));
+    RuntimeDesignerCanvas canvas;
+    canvas.setPage(&page);
+    canvas.selectIndex(0);
+    canvas.selectIndex(1, true);
+
+    canvas.alignSelected(RuntimeDesignerCanvas::AlignHCenter);
+    const QRect a = page.controls.at(0).geometry;
+    const QRect b = page.controls.at(1).geometry;
+    QCOMPARE(a.center().x(), b.center().x());
+    // 选中区域 [0,260] 的中心约 130；QRect::right() = left+width-1 会带来 1px 约定差
+    QVERIFY2(qAbs(a.center().x() - 130) <= 2,
+             qPrintable(QStringLiteral("水平居中应对齐选中区域中心，实得 %1")
+                            .arg(a.center().x())));
+
+    canvas.alignSelected(RuntimeDesignerCanvas::AlignRight);
+    QCOMPARE(page.controls.at(0).geometry.right(), page.controls.at(1).geometry.right());
 }
 
 QTEST_MAIN(UiGuardsTest)
