@@ -728,7 +728,33 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
                                                 this, QStringLiteral("选择颜色"));
         if (c.isValid()) m_colorEdit->setText(c.name());
     });
-    fAppear->addRow(QStringLiteral("字号"), m_fontSpin);
+    // 官方「字体」是「大小 + 字形」组合；这里拆成字号 + 加粗，行为等价
+    auto *fontRow = new QHBoxLayout();
+    fontRow->addWidget(m_fontSpin, 1);
+    m_boldCheck = new QCheckBox(QStringLiteral("加粗"), propGroup);
+    fontRow->addWidget(m_boldCheck);
+    fAppear->addRow(QStringLiteral("字体"), fontRow);
+
+    // 官方三个颜色字段：背景 / 边框颜色 / 点击颜色。留空 = 不绘制，保持旧外观。
+    auto makeColorRow = [this, propGroup](QLineEdit *&edit) {
+        auto *row = new QHBoxLayout();
+        edit = new QLineEdit(propGroup);
+        edit->setPlaceholderText(QStringLiteral("留空 = 默认"));
+        row->addWidget(edit, 1);
+        auto *pick = new QPushButton(QStringLiteral("选色"), propGroup);
+        pick->setFixedWidth(44);
+        row->addWidget(pick);
+        connect(pick, &QPushButton::clicked, this, [this, edit]() {
+            const QColor c = QColorDialog::getColor(QColor(edit->text()),
+                                                    this, QStringLiteral("选择颜色"));
+            if (c.isValid()) edit->setText(c.name());
+        });
+        return row;
+    };
+    fAppear->addRow(QStringLiteral("背景"), makeColorRow(m_bgColorEdit));
+    fAppear->addRow(QStringLiteral("边框颜色"), makeColorRow(m_borderColorEdit));
+    fAppear->addRow(QStringLiteral("点击颜色"), makeColorRow(m_pressedColorEdit));
+
     m_visibleCheck = new QCheckBox(QStringLiteral("运行时显示该控件"), propGroup);
     m_visibleCheck->setToolTip(QStringLiteral("取消勾选后控件仍保留在设计画布上，但运行界面不显示"));
     fAppear->addRow(QStringLiteral("可见"), m_visibleCheck);
@@ -804,6 +830,12 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     connect(m_fontSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &RuntimeInterfaceDesigner::onPropertyEdited);
     connect(m_visibleCheck, &QCheckBox::toggled, this, &RuntimeInterfaceDesigner::onPropertyEdited);
+    if (m_boldCheck)
+        connect(m_boldCheck, &QCheckBox::toggled, this, &RuntimeInterfaceDesigner::onPropertyEdited);
+    for (QLineEdit *e : {m_bgColorEdit, m_borderColorEdit, m_pressedColorEdit}) {
+        if (e)
+            connect(e, &QLineEdit::textChanged, this, &RuntimeInterfaceDesigner::onPropertyEdited);
+    }
     connect(m_tableMaxRows, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &RuntimeInterfaceDesigner::onPropertyEdited);
     connect(m_bindTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -1280,6 +1312,12 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
         m_colorEdit->setEnabled(false);
         m_fontSpin->setEnabled(false);
         m_visibleCheck->setEnabled(false);
+        for (QWidget *w : {static_cast<QWidget *>(m_boldCheck),
+                           static_cast<QWidget *>(m_bgColorEdit),
+                           static_cast<QWidget *>(m_borderColorEdit),
+                           static_cast<QWidget *>(m_pressedColorEdit)}) {
+            if (w) w->setEnabled(false);
+        }
         m_bindTypeCombo->setEnabled(false);
         m_bindKeyCombo->setEnabled(false);
         m_columnSource->setEnabled(false);
@@ -1317,6 +1355,10 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
     m_titleEdit->setText(ctrl->title);
     m_colorEdit->setText(ctrl->color);
     m_fontSpin->setValue(ctrl->fontSize);
+    if (m_boldCheck) m_boldCheck->setChecked(ctrl->bold);
+    if (m_bgColorEdit) m_bgColorEdit->setText(ctrl->bgColor);
+    if (m_borderColorEdit) m_borderColorEdit->setText(ctrl->borderColor);
+    if (m_pressedColorEdit) m_pressedColorEdit->setText(ctrl->pressedColor);
 
     const bool isTable = (ctrl->type == RuntimeControlType::ResultTable);
     const bool isIo = (ctrl->type == RuntimeControlType::IoStatus);
@@ -1387,6 +1429,11 @@ void RuntimeInterfaceDesigner::onPropertyEdited()
     ctrl->color = m_colorEdit->text().trimmed().isEmpty()
                       ? QStringLiteral("#3a6ea5") : m_colorEdit->text().trimmed();
     ctrl->fontSize = m_fontSpin->value();
+    // 官方外观分组（2026-11-09）：字形加粗 + 背景 / 边框 / 点击色
+    ctrl->bold = m_boldCheck && m_boldCheck->isChecked();
+    ctrl->bgColor = m_bgColorEdit ? m_bgColorEdit->text().trimmed() : QString();
+    ctrl->borderColor = m_borderColorEdit ? m_borderColorEdit->text().trimmed() : QString();
+    ctrl->pressedColor = m_pressedColorEdit ? m_pressedColorEdit->text().trimmed() : QString();
     ctrl->visible = m_visibleCheck->isChecked();
 
     if (ctrl->type == RuntimeControlType::ResultTable) {

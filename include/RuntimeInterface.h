@@ -36,6 +36,12 @@ struct RuntimeControl {
     QString bindType;       /// "global" 全局变量 / "node" 节点输出 / "action" 动作 / "" 无
     QString color = QStringLiteral("#3a6ea5"); /// 控件主色（前景/灯色）
     int fontSize = 16;      /// 字体大小
+    /// 官方外观分组（2026-11-09 按实机截图补齐）：字体「字形：加粗」+ 背景/边框/点击色。
+    /// 三个颜色默认空串 = 不绘制/继承，保证旧布局外观完全不变。
+    bool bold = false;
+    QString bgColor;        /// 背景色（空 = 不绘制）
+    QString borderColor;    /// 边框色（空 = 不绘制）
+    QString pressedColor;   /// 按钮按下色（空 = 继承主色）
     bool visible = true;    /// 是否显示
     QList<ResultColumn> columns; /// ResultTable 专用：列配置
     int maxRows = 100;      /// ResultTable 专用：最大保留行数（环形覆盖）

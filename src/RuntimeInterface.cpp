@@ -41,6 +41,11 @@ static QJsonObject controlToJson(const RuntimeControl &c)
     o["bindKey"] = c.bindKey;
     o["color"] = c.color;
     o["fontSize"] = c.fontSize;
+    // 外观扩展（2026-11-09）：只在非默认时写出，旧布局文件不膨胀
+    if (c.bold) o["bold"] = true;
+    if (!c.bgColor.isEmpty()) o["bgColor"] = c.bgColor;
+    if (!c.borderColor.isEmpty()) o["borderColor"] = c.borderColor;
+    if (!c.pressedColor.isEmpty()) o["pressedColor"] = c.pressedColor;
     o["visible"] = c.visible;
     QJsonObject geo;
     geo["x"] = c.geometry.x();
@@ -72,6 +77,11 @@ static RuntimeControl controlFromJson(const QJsonObject &o, RuntimeControlType t
     ctrl.bindKey = o["bindKey"].toString();
     ctrl.color = o["color"].toString(QStringLiteral("#3a6ea5"));
     ctrl.fontSize = o["fontSize"].toInt(16);
+    // 外观扩展：旧布局没有这些键，默认值 = 不绘制/不加粗 ⇒ 外观与旧版一致
+    ctrl.bold = o["bold"].toBool(false);
+    ctrl.bgColor = o["bgColor"].toString();
+    ctrl.borderColor = o["borderColor"].toString();
+    ctrl.pressedColor = o["pressedColor"].toString();
     ctrl.visible = o["visible"].toBool(true);
 
     const QJsonObject geo = o["geometry"].toObject();

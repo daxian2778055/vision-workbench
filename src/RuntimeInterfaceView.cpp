@@ -237,12 +237,23 @@ QWidget *RuntimeInterfaceView::createControlWidget(const RuntimeControl &ctrl)
     }
     case RuntimeControlType::Button: {
         auto *btn = new QPushButton(ctrl.displayTitle(), nullptr);
+        // 官方外观分组（2026-11-09）：背景 / 边框颜色 / 点击颜色 / 字形加粗。
+        // 空值 = 保持旧外观（背景取主色、无边框、按压色沿用默认），旧布局零变化。
+        const QString bg = ctrl.bgColor.isEmpty() ? ctrl.color : ctrl.bgColor;
+        const QString pressed = ctrl.pressedColor.isEmpty()
+                                    ? QStringLiteral("#2c4a75")
+                                    : ctrl.pressedColor;
+        const QString border = ctrl.borderColor.isEmpty()
+                                   ? QStringLiteral("none")
+                                   : QStringLiteral("1px solid %1").arg(ctrl.borderColor);
         btn->setStyleSheet(QStringLiteral(
-            "QPushButton { background-color: %1; color: white; border: none;"
-            "  border-radius: 4px; font-size: %2px; }"
+            "QPushButton { background-color: %1; color: white; border: %2;"
+            "  border-radius: 4px; font-size: %3px; font-weight: %4; }"
             "QPushButton:hover { background-color: #4a6a9c; }"
-            "QPushButton:pressed { background-color: #2c4a75; }")
-            .arg(ctrl.color).arg(ctrl.fontSize));
+            "QPushButton:pressed { background-color: %5; }")
+            .arg(bg, border).arg(ctrl.fontSize)
+            .arg(ctrl.bold ? QStringLiteral("bold") : QStringLiteral("normal"))
+            .arg(pressed));
         const QString actionId = ctrl.bindKey;
         connect(btn, &QPushButton::clicked, this, [this, actionId]() {
             emit actionTriggered(actionId);

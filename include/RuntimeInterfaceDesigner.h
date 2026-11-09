@@ -106,6 +106,11 @@ QLabel *m_geometryLabel = nullptr;   /// 布局组只读显示尺寸/位置（�
     QComboBox *m_bindKeyCombo = nullptr;
     QLineEdit *m_colorEdit = nullptr;
     QSpinBox *m_fontSpin = nullptr;
+    // 官方外观分组（2026-11-09 按实机截图补）：字形加粗 + 背景 / 边框 / 点击色
+    QCheckBox *m_boldCheck = nullptr;
+    QLineEdit *m_bgColorEdit = nullptr;
+    QLineEdit *m_borderColorEdit = nullptr;
+    QLineEdit *m_pressedColorEdit = nullptr;
     QCheckBox *m_visibleCheck = nullptr;   /// 运行时是否显示（隐藏控件仍留在设计画布上以便编辑）
     QPushButton *m_raiseBtn = nullptr;     /// 上移一层
     QPushButton *m_lowerBtn = nullptr;     /// 下移一层

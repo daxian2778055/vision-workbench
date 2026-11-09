@@ -48,6 +48,7 @@ private slots:
 void runtimeDesignerHasOfficialDragAndClipboard();
 void runtimeDesignerHasOfficialSectionsAndAlign();
 void runtimeDesignerAlignHCenterAndRight();
+void runtimeControlAppearanceRoundTripsAndStaysCompatible();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -512,6 +513,47 @@ void UiGuardsTest::runtimeDesignerAlignHCenterAndRight()
 
     canvas.alignSelected(RuntimeDesignerCanvas::AlignRight);
     QCOMPARE(page.controls.at(0).geometry.right(), page.controls.at(1).geometry.right());
+}
+
+// 官方外观分组（2026-11-09 实机截图）：显示文本 / 字体（大小+加粗）/ 字体颜色 /
+// 背景 / 边框颜色 / 点击颜色。新字段必须能往返，且旧布局（无这些键）加载后外观不变。
+void UiGuardsTest::runtimeControlAppearanceRoundTripsAndStaysCompatible()
+{
+    RuntimeInterfacePage page;
+    RuntimeControl *c = page.addControl(RuntimeControlType::Button, QRect(10, 20, 100, 40));
+    QVERIFY(c);
+    c->bold = true;
+    c->bgColor = QStringLiteral("#FF565657");
+    c->borderColor = QStringLiteral("#FF272727");
+    c->pressedColor = QStringLiteral("#FF769000");
+
+    const QJsonObject json = page.toJson();
+    RuntimeInterfacePage back;
+    QVERIFY(back.fromJson(json));
+    QCOMPARE(back.controls.size(), 1);
+    const RuntimeControl &r = back.controls.first();
+    QVERIFY2(r.bold, "字形加粗要能往返");
+    QCOMPARE(r.bgColor, QStringLiteral("#FF565657"));
+    QCOMPARE(r.borderColor, QStringLiteral("#FF272727"));
+    QCOMPARE(r.pressedColor, QStringLiteral("#FF769000"));
+
+    // 模拟旧布局：把这些键删掉，加载后应回到「不绘制/不加粗」的默认外观
+    QJsonObject legacy = json;
+    QJsonArray arr = legacy[QStringLiteral("controls")].toArray();
+    QJsonObject ctl = arr.at(0).toObject();
+    ctl.remove(QStringLiteral("bold"));
+    ctl.remove(QStringLiteral("bgColor"));
+    ctl.remove(QStringLiteral("borderColor"));
+    ctl.remove(QStringLiteral("pressedColor"));
+    arr.replace(0, ctl);
+    legacy[QStringLiteral("controls")] = arr;
+
+    RuntimeInterfacePage old;
+    QVERIFY(old.fromJson(legacy));
+    const RuntimeControl &o = old.controls.first();
+    QVERIFY2(!o.bold, "旧布局不该被补成加粗");
+    QVERIFY2(o.bgColor.isEmpty() && o.borderColor.isEmpty() && o.pressedColor.isEmpty(),
+             "旧布局的三个颜色必须为空（空 = 不绘制，外观与旧版一致）");
 }
 
 QTEST_MAIN(UiGuardsTest)
