@@ -1297,6 +1297,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261109.10",
       "recorded_at": "2026-11-09",
       "recorded_note": "B2-2：动作表接执行链（reset→resetRuntimeStats、scheme→保存/加载方案、ui→showPage 切页），exec 仍走旧信号避免重复起跑；顺带修 currentPageIndex 只存不用。param 动作未接线。"
+    },
+    {
+      "tag": "rc-20261109.11",
+      "commit": "6d29b02238fb913672b9753260068b9ddeddbd1a",
+      "exe_md5": "2c954bf57826105af64c168a0e3d89ac",
+      "exe_bytes": 12045824,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261109.11",
+      "recorded_at": "2026-11-09",
+      "recorded_note": "B3-1：参数设置控件（订阅节点 int/float 参数，运行界面 QDoubleSpinBox 直接改；带当前值回填且回填不写回）。控件库基础组新增该项。"
     }
   ],
   "legacy_backfilled": [
