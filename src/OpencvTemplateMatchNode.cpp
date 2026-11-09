@@ -2341,7 +2341,10 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                     dy = 0.5f * (vu - vd) / denY;
                 *subpixOut = cv::Point2f(qBound(-1.f, dx, 1.f), qBound(-1.f, dy, 1.f));
             }
-            *locOut = (methodIdx == 0) ? minLoc : maxLoc;
+            // 上面的 if (locOut) 只管住了亚像素块（没有大括号），这一行原本无条件执行；
+            // 将来任何 locOut=nullptr 的调用都会空指针崩溃（2026-11-09 审核）。
+            if (locOut)
+                *locOut = (methodIdx == 0) ? minLoc : maxLoc;
             if (centerOut)
                 *centerOut = warpedPair.second;
             return (methodIdx == 0) ? (1.0 - minVal) : maxVal;
@@ -2568,7 +2571,7 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                 // 统一走 mapAnchorToImage，与 warpTemplate 的旋转矩阵同源（复核 P1-2）。
                 const QPointF anchorPoint = mapAnchorToImage(centerX, centerY, bestAngle,
                                                              active.anchorDx, active.anchorDy,
-                                                             bestScale, bestCross);
+                                                             bestScale, bestCross, bestScaleY);
                 const double pCol = anchorPoint.x();
                 const double pRow = anchorPoint.y();
                 hits.append({centerY, centerX, bestScore, bestAngle, bestScale, pRow, pCol,
@@ -2622,12 +2625,14 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                                  [](const MatchHit &a, const MatchHit &b) { return a.score > b.score; });
                 QVector<MatchHit> kept;
                 for (const MatchHit &h : hits) {
+                    // XY 尺度模式下高度必须乘 scaleY（2026-11-09 审核）：两轴都用 scale
+                    // 会让重叠率分子/面积算错，可能误删或误留命中；输出框宽高已是正确口径。
                     const double hw = qMax(4.0, tmplW * h.scale);
-                    const double hh = qMax(4.0, tmplH * h.scale);
+                    const double hh = qMax(4.0, tmplH * h.scaleY);
                     bool drop = false;
                     for (const MatchHit &k : kept) {
                         const double kw = qMax(4.0, tmplW * k.scale);
-                        const double kh = qMax(4.0, tmplH * k.scale);
+                        const double kh = qMax(4.0, tmplH * k.scaleY);
                         const double interW = qMax(0.0, (hw + kw) * 0.5 - qAbs(h.col - k.col));
                         const double interH = qMax(0.0, (hh + kh) * 0.5 - qAbs(h.row - k.row));
                         const double inter = interW * interH;
@@ -2704,8 +2709,10 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             m_params[QStringLiteral("matchCrossAngles")] = crosses.join(QLatin1Char(','));
             m_params[QStringLiteral("matchScores")] = scores.join(QLatin1Char(','));
             // 匹配状态只看"是否找到达标目标"，与模块状态（结果判断）分开
+            // 用**最终 hits** 判定，不用过滤前的局部 matchCount：重叠过滤把列表清空时
+            // 不能仍报「找到目标」（2026-11-09 审核）。主标量字段仍取第一实例，口径见下。
             m_params[QStringLiteral("matchStatus")] =
-                (matchCount > 0 && mainScore >= minScore) ? 1 : 0;
+                (!hits.isEmpty() && mainScore >= minScore) ? 1 : 0;
 
             // VM「模块结果 → 检测区域」：本轮实际搜索区域（无 ROI 时整图；多边形时取包围盒）
             m_params[QStringLiteral("searchCenterX")] =
@@ -2751,7 +2758,8 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
             // 「匹配点 X/Y」与结果判断、叠加十字线一起镜像（差 2θ）。
             const QPointF anchorPoint =
                 mapAnchorToImage(col + bestSubpix.x, row + bestSubpix.y, bestAngle,
-                                 active.anchorDx, active.anchorDy, bestScale, bestCross);
+                                 active.anchorDx, active.anchorDy, bestScale, bestCross,
+                                 bestScaleY);
             m_params[QStringLiteral("matchPointCol")] = anchorPoint.x();
             m_params[QStringLiteral("matchPointRow")] = anchorPoint.y();
             m_params[QStringLiteral("matchScaleX")] = bestScale;
@@ -3173,10 +3181,13 @@ quint64 OpencvTemplateMatchNode::templateFingerprint(const cv::Mat &tmpl)
 QPointF OpencvTemplateMatchNode::mapAnchorToImage(double centerX, double centerY,
                                                  double angleDeg, double anchorDx,
                                                  double anchorDy, double scale,
-                                                 double crossAngleDeg)
+                                                 double crossAngleDeg, double scaleY)
 {
     // 锚点即"相对模板中心的偏移"，与轮廓点共用同一映射（M = R·S·H）。
-    return mapTemplatePoint(centerX, centerY, angleDeg, anchorDx, anchorDy, scale, scale,
+    // scaleY < 0 是"单尺度"哨兵（兼容旧调用与几何腿）；XY 尺度模式下调用方
+    // 传 bestScaleY，否则匹配点 Y 方向偏移会错用 X 尺度。
+    const double sy = scaleY < 0.0 ? scale : scaleY;
+    return mapTemplatePoint(centerX, centerY, angleDeg, anchorDx, anchorDy, scale, sy,
                             crossAngleDeg);
 }
 

@@ -160,9 +160,12 @@ public:
     /// [cos -sin; sin cos]，角度非 0 时匹配点会相对中心整体镜像（差 2θ）。
     /// 缩放在旋转之前应用（与 warpTemplate 里 M.at(0,0)*=scaleX 的顺序一致）；
     /// 横切角以 H=[[1,tanθ],[0,1]] 先作用于模板局部系（M = R·S·H）。
+    /// scaleY 传 -1（默认）表示与 scale 相同（兼容单尺度调用与几何腿）；
+    /// XY 尺度模式（scaleX != scaleY）下必须显式传 bestScaleY，否则锚点/匹配点
+    /// 的 Y 方向偏移会用错尺度（2026-11-09 审核发现）。
     static QPointF mapAnchorToImage(double centerX, double centerY, double angleDeg,
                                     double anchorDx, double anchorDy, double scale,
-                                    double crossAngleDeg = 0.0);
+                                    double crossAngleDeg = 0.0, double scaleY = -1.0);
     /// 模板局部偏移（相对模板中心，单位=模板块像素）→ 图像坐标（轮廓点显示/输出用；
     /// 与 warpTemplate 的 M = R·S·H 同源）。dx/dy 由调用方按"点 - 模板中心"算出。
     static QPointF mapTemplatePoint(double centerX, double centerY, double angleDeg,

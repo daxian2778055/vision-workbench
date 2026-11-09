@@ -116,6 +116,7 @@ private slots:
     void templateVmDefaultsMatchHelp();
     void templateFingerprintDistinguishesContent();
     void matchCountMatchesFilteredList();
+    void templateAnchorUsesScaleYInXYMode();
     // 分割/剪刀：按连通域拆块、沿画线切开
     void templateSplitShapeByCut();
     // 继承 ROI：上游命中框当成搜索区域（框外的更优候选不许抢）
@@ -4434,7 +4435,8 @@ void FeatureMatchTest::matchCountMatchesFilteredList()
     node.setParam(QStringLiteral("angleStep"), 2.0);
     node.setParam(QStringLiteral("trainFromImage"), false);
     node.setParam(QStringLiteral("templatePath"), tpl);
-    node.setParam(QStringLiteral("matchCount"), 10);   // 允许多目标
+    node.setParam(QStringLiteral("maxMatches"), 10);   // 允许多目标（注册键名是 maxMatches，
+                                                        // 不是 matchCount；matchCount 是输出字段）
     node.setParam(QStringLiteral("maxOverlap"), 0);    // 任何重叠都丢低分者
     node.setInputImage(OpencvUtil::matToHimage(canvas));
 
@@ -4458,6 +4460,34 @@ void FeatureMatchTest::matchCountMatchesFilteredList()
     // matchTemplate 只出一个峰，重叠过滤从未触发（过滤前后数量相同，改不改都一样）。
     // 要真正锁住这条，需要一个「过滤前 N>1、过滤后 1」的稳定夹具（真实图上两个
     // 部分重叠且各自能被检出的目标），本轮没造出来。
+}
+
+// 2026-11-09 审核发现：XY 尺度模式（scaleX != scaleY）下 mapAnchorToImage 曾把
+// scale 同时用在两轴，锚点/匹配点的 Y 方向偏移用错尺度。轮廓映射已用 scaleY，
+// 锚点必须同口径。这里用角度 0 + 锚点 (0,20) 做纯尺度验证。
+void FeatureMatchTest::templateAnchorUsesScaleYInXYMode()
+{
+    const QPointF p = OpencvTemplateMatchNode::mapAnchorToImage(
+        100.0, 100.0, 0.0, 0.0, 20.0, 2.0, 0.0, 0.5);
+    QVERIFY2(qAbs(p.x() - 100.0) < 1e-9,
+             qPrintable(QStringLiteral("dx=0 时 col 应仍是 100，实得 %1").arg(p.x())));
+    QVERIFY2(qAbs(p.y() - 110.0) < 1e-9,
+             qPrintable(QStringLiteral("dy=20 × scaleY=0.5 应到 row=110，实得 %1"
+                                       "（若为 140 说明 Y 轴错用了 scaleX=2）").arg(p.y())));
+
+    // 单尺度哨兵：不传 scaleY 时两轴相同，既有几何腿不受影响
+    const QPointF q = OpencvTemplateMatchNode::mapAnchorToImage(
+        100.0, 100.0, 0.0, 0.0, 20.0, 2.0);
+    QVERIFY2(qAbs(q.y() - 140.0) < 1e-9,
+             qPrintable(QStringLiteral("单尺度哨兵应给 row=140，实得 %1").arg(q.y())));
+
+    // 非零角度下也必须按 scaleY 缩放 Y 分量：90° 时 ay=20×0.5=10，
+    // [cos sin; -sin cos] 把 (0,10) 映射到 (10,0) ⇒ (110,100)
+    const QPointF r = OpencvTemplateMatchNode::mapAnchorToImage(
+        100.0, 100.0, 90.0, 0.0, 20.0, 2.0, 0.0, 0.5);
+    QVERIFY2(qAbs(r.x() - 110.0) < 1e-6 && qAbs(r.y() - 100.0) < 1e-6,
+             qPrintable(QStringLiteral("90° + XY 尺度应到 (110,100)，实得 (%1,%2)")
+                            .arg(r.x()).arg(r.y())));
 }
 
 QTEST_MAIN(FeatureMatchTest)

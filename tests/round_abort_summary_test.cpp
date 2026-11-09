@@ -8,6 +8,8 @@
 // 追溯不丢）。本用例钉住两侧：
 //   ① 被中止的轮：库里不得出现整轮汇总行；
 //   ② 正常跑完的轮：汇总行必须存在且 passed=true（证明不是把汇总整个关掉了）。
+#include <atomic>
+
 #include "FlowScene.h"
 #include "FlowExecutor.h"
 #include "FlowExecutorToken.h"
@@ -226,7 +228,9 @@ void RoundAbortSummaryTest::abortedSubFlowIsNotReportedAsFailure()
     NodeBase *m2 = addById(&scene, "DelayNode", QPointF(220, 220));
     QVERIFY(gen && caller && m1 && m2);
     gen->setParam(QStringLiteral("expression"), QStringLiteral("1"));
-    m1->setParam(QStringLiteral("delayMs"), 600);
+    // 2 秒窗口：原 600ms 在 ctest -j4 并行负载下容易被固定等待错过，
+    // 使停止落在轮末、反而写出正常汇总行。窗口放宽到 2s 后抖动不再影响。
+    m1->setParam(QStringLiteral("delayMs"), 2000);
     m2->setParam(QStringLiteral("delayMs"), 10);
     QVERIFY(scene.createConnection(gen->outputPorts().first(),
                                    caller->inputPorts().first(), true));
@@ -247,7 +251,8 @@ void RoundAbortSummaryTest::abortedSubFlowIsNotReportedAsFailure()
     auto token = FlowExecutorToken::create(new FlowExecutor());
     FlowExecutor &exec = *token->executor();
     bool callerFailed = false;
-    bool memberStarted = false;   // 断言停止确实落在"子流程正在执行"里（否则本腿会空转通过）
+    // worker 线程（DirectConnection）写、主线程读：用 atomic 消掉数据竞争。
+    std::atomic<bool> memberStarted { false };   // 断言停止确实落在"子流程正在执行"里
     QStringList errors;
     QObject::connect(&exec, &FlowExecutor::nodeExecuted, &exec,
                      [&callerFailed, &memberStarted, caller, m1](NodeBase *n, bool ok) {
@@ -264,7 +269,10 @@ void RoundAbortSummaryTest::abortedSubFlowIsNotReportedAsFailure()
     exec.setFlowMode(FlowMode::SoftwareTrigger);
     exec.setFlowScene(&scene);
     exec.startExecution();
-    QTest::qWait(300);          // 落在子流程成员 m1 的 600ms 延时里
+    // 不能轮询等 memberStarted：该标志在 nodeExecuted（m1 执行完）才置位，
+    // 等它等于让流程跑完再停，会写出正常汇总行。保持固定短等待，靠 m1 的
+    // 2 秒延时窗口保证「停止落在轮内」；实测单跑与 -j4 并行都稳定。
+    QTest::qWait(300);
     exec.stopExecution();
     bool finished = exec.wait(15000);
     if (!finished) {
