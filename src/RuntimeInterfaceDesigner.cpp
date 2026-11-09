@@ -163,6 +163,16 @@ QRect RuntimeDesignerCanvas::toStoredRect(const RuntimeControl &ctrl,
     return g;
 }
 
+void RuntimeInterfaceDesigner::rebuildCanvas()
+{
+    if (!m_canvas) return;
+    // 画布存的是 RuntimeInterfacePage*（指向 m_layout.pages 内部）。m_layout 被复制进
+    // 撤销栈后，Qt 容器的写时复制会在下一次非 const 访问时把页数组换块——画布里的旧指针
+    // 就落到撤销栈那份**快照**上：重建出来是改前的页，拖动/方向键的几何写回也写进快照，
+    // 撤销点因此永远建不出来。所以结构性改动之后必须重新绑一次当前页再重建。
+    m_canvas->setPage(m_layout.currentPage());
+}
+
 void RuntimeInterfaceDesigner::setCanvasPage()
 {
     if (!m_canvas) return;
@@ -727,6 +737,8 @@ void DesignerControlFrame::mousePressEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton) {
         m_canvas->selectIndex(m_index, event->modifiers() & Qt::ControlModifier);
+        // 改前快照必须在几何被改动之前记下（点选也算手势开始，结束时比对无变化则不建撤销点）
+        emit m_canvas->geometryEditStarted();
         const QPoint local = event->pos();
         // 右下角 14px 区域 = 缩放
         if (local.x() >= width() - 14 && local.y() >= height() - 14) {
@@ -792,8 +804,12 @@ void DesignerControlFrame::mouseMoveEvent(QMouseEvent *event)
 void DesignerControlFrame::mouseReleaseEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton) {
+        // 只有真的拖过/缩放过才结束一次手势（否则点了空白处也会触发一次收尾）
+        const bool wasEditing = m_dragging || m_resizing;
         m_dragging = false;
         m_resizing = false;
+        if (wasEditing)
+            emit m_canvas->geometryEditFinished();
         event->accept();
     }
 }
@@ -820,6 +836,9 @@ void DesignerControlFrame::keyPressEvent(QKeyEvent *event)
     case Qt::Key_Down:  dy =  step; break;
     default: QWidget::keyPressEvent(event); return;
     }
+    // 自动重复（按住方向键）不算新手势：只有首次按键建一枚撤销点
+    const bool record = !event->isAutoRepeat();
+    if (record) emit m_canvas->geometryEditStarted();
     QRect g = geometry().translated(dx, dy);
     g.moveLeft(qMax(0, g.left()));
     g.moveTop(qMax(0, g.top()));
@@ -827,6 +846,7 @@ void DesignerControlFrame::keyPressEvent(QKeyEvent *event)
     if (m_canvas->m_layout && m_index >= 0 && m_index < m_canvas->m_layout->controls.size())
         m_canvas->m_layout->controls[m_index].geometry =
             m_canvas->toStoredRect(m_canvas->m_layout->controls[m_index], g);
+    if (record) emit m_canvas->geometryEditFinished();
     event->accept();
 }
 
@@ -959,6 +979,11 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     auto *canvasGroup = new QGroupBox(QStringLiteral("画布"), this);
     m_canvasScroll = new QScrollArea(canvasGroup);
     m_canvas = new RuntimeDesignerCanvas(m_canvasScroll);
+    // 几何编辑（拖动 / 右下角缩放 / 方向键）走「改前快照」撤销：一次手势只入栈一枚
+    connect(m_canvas, &RuntimeDesignerCanvas::geometryEditStarted,
+            this, &RuntimeInterfaceDesigner::onGeometryEditStarted);
+    connect(m_canvas, &RuntimeDesignerCanvas::geometryEditFinished,
+            this, &RuntimeInterfaceDesigner::onGeometryEditFinished);
     setCanvasPage();
     connect(m_canvas, &RuntimeDesignerCanvas::paletteDropped,
             this, &RuntimeInterfaceDesigner::addControlAt);
@@ -1702,7 +1727,7 @@ if (!dropPos.isNull()) {
 pushUndo();
 RuntimeControl *ctrl = m_layout.currentPage()->addControl(type, geo);
 ctrl->zone = zone;
-m_canvas->rebuild();
+rebuildCanvas();
 const int idx = m_layout.currentPage()->indexOf(ctrl);
 if (idx >= 0) m_canvas->selectIndex(idx);
 }
@@ -1737,7 +1762,7 @@ RuntimeControl copy = tmp.controls.first();
 copy.geometry.translate(24, 24);   // 与 Ctrl+D 一致的级联偏移
 pushUndo();
 m_layout.currentPage()->controls.append(copy);
-m_canvas->rebuild();
+rebuildCanvas();
 m_canvas->selectIndex(m_layout.currentPage()->controls.size() - 1);
 }
 
@@ -1747,7 +1772,7 @@ void RuntimeInterfaceDesigner::deleteSelected()
     pushUndo();
     m_layout.currentPage()->removeControl(m_selected);
     m_selected = -1;
-    m_canvas->rebuild();
+    rebuildCanvas();
     refreshPropertyPanel();
 }
 
@@ -1761,7 +1786,7 @@ void RuntimeInterfaceDesigner::clearAll()
     pushUndo();
     pg->clear();
     m_selected = -1;
-    m_canvas->rebuild();
+    rebuildCanvas();
     refreshPropertyPanel();
 }
 
@@ -1901,7 +1926,7 @@ void RuntimeInterfaceDesigner::duplicateSelected()
     copy.geometry = copy.geometry.translated(24, 24);   // 级联偏移避免完全重叠
     pushUndo();
     m_layout.currentPage()->controls.append(copy);
-    m_canvas->rebuild();
+    rebuildCanvas();
     m_canvas->selectIndex(m_layout.currentPage()->controls.size() - 1);
 }
 
@@ -1912,7 +1937,7 @@ void RuntimeInterfaceDesigner::raiseSelected()
     pushUndo();
     pg->controls.swapItemsAt(m_selected, m_selected + 1);
     ++m_selected;
-    m_canvas->rebuild();
+    rebuildCanvas();
     m_canvas->selectIndex(m_selected);
 }
 
@@ -1923,7 +1948,7 @@ void RuntimeInterfaceDesigner::lowerSelected()
     pushUndo();
     pg->controls.swapItemsAt(m_selected, m_selected - 1);
     --m_selected;
-    m_canvas->rebuild();
+    rebuildCanvas();
     m_canvas->selectIndex(m_selected);
 }
 
@@ -1935,7 +1960,7 @@ void RuntimeInterfaceDesigner::raiseToTop()
     pushUndo();
     pg->controls.append(pg->controls.takeAt(m_selected));
     m_selected = pg->controls.size() - 1;
-    m_canvas->rebuild();
+    rebuildCanvas();
     m_canvas->selectIndex(m_selected);
 }
 
@@ -1946,11 +1971,36 @@ void RuntimeInterfaceDesigner::lowerToBottom()
     pushUndo();
     pg->controls.prepend(pg->controls.takeAt(m_selected));
     m_selected = 0;
-    m_canvas->rebuild();
+    rebuildCanvas();
     m_canvas->selectIndex(m_selected);
 }
 
 // ==================== 撤销/重做 ====================
+
+// 几何手势的「改前快照」：开始时深拷贝一份，结束时只在几何真的变了才入栈。
+// 这样拖动 / 右下角缩放 / 方向键微调都进同一个撤销栈，一次手势一枚撤销点。
+void RuntimeInterfaceDesigner::onGeometryEditStarted()
+{
+    if (m_geometryEditActive) return;   // 手势嵌套（多选同步移动等）只记最外层
+    m_geometryUndoBefore = m_layout;    // QList/结构体值语义拷贝
+    // QList 是写时复制：上面这行仍与 m_layout 共享同一块页存储。拖动时的几何写回会
+    // 顺带改到共享页，快照于是跟着变（结束时比对「没变」⇒ 撤销点永远建不出来）。
+    // 强制 detach 成真副本，快照才停在改前状态。
+    m_geometryUndoBefore.pages.detach();
+    m_geometryEditActive = true;
+}
+
+void RuntimeInterfaceDesigner::onGeometryEditFinished()
+{
+    if (!m_geometryEditActive) return;
+    m_geometryEditActive = false;
+    if (m_geometryUndoBefore.toJson() == m_layout.toJson())
+        return;                         // 只点选没挪动：不建撤销点
+    m_undoStack.append(m_geometryUndoBefore);
+    while (m_undoStack.size() > 50)
+        m_undoStack.removeFirst();
+    m_redoStack.clear();                // 新操作截断重做分支（与 pushUndo 同口径）
+}
 
 void RuntimeInterfaceDesigner::pushUndo()
 {

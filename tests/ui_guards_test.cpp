@@ -93,6 +93,8 @@ void chartTypesRoundTrip();
 // B1：画布尺寸「按比例适配」纯函数 + 设计器画布/固定栏配置入口
 void canvasScalingHelperScalesCanvasControls();
 void designerExposesCanvasAndBarConfig();
+// B1 末项：设计器的几何编辑（拖动/缩放/方向键）必须进撤销栈（一次手势一枚改前快照）
+void designerGeometryEditPushesUndo();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -1771,6 +1773,96 @@ void UiGuardsTest::designerExposesCanvasAndBarConfig()
     QVERIFY(dlg.findChild<QSpinBox *>(QStringLiteral("designerBarBottomSpin")));
     QVERIFY(dlg.findChild<QSpinBox *>(QStringLiteral("designerBarLeftSpin")));
     QVERIFY(dlg.findChild<QSpinBox *>(QStringLiteral("designerBarRightSpin")));
+}
+
+// B1 末项：几何编辑（拖动 / 右下角缩放 / 方向键微调）此前绕过撤销栈。
+// 这里锁住三件事：一次手势只入栈一枚「改前快照」、只点选不挪动不入栈、
+// 方向键首次按键入栈（自动重复不算新手势）。
+void UiGuardsTest::designerGeometryEditPushesUndo()
+{
+    RuntimeInterfaceDesigner dlg(QStringList{QStringLiteral("模块1")});
+
+    // 控件库：挑带 Qt::UserRole（真控件条目，不是分组标题）的第一行并选中
+    QListWidget *palette = nullptr;
+    for (QListWidget *lw : dlg.findChildren<QListWidget *>()) {
+        if (lw->dragEnabled() && lw->count() >= 7) {
+            palette = lw;
+            break;
+        }
+    }
+    QVERIFY2(palette, "没找到控件库");
+    int row = -1;
+    for (int i = 0; i < palette->count(); ++i) {
+        if (palette->item(i)->data(Qt::UserRole).isValid()) {
+            row = i;
+            break;
+        }
+    }
+    QVERIFY2(row >= 0, "控件库里没有可添加的控件条目");
+    palette->setCurrentRow(row);
+
+    // 私有槽按名调用：走设计器自己的添加流程（含 pushUndo / rebuild / selectIndex）
+    QVERIFY2(QMetaObject::invokeMethod(&dlg, "addControlAt", Qt::DirectConnection,
+                                       Q_ARG(QPoint, QPoint(120, 120))),
+             "addControlAt 调用失败");
+
+    auto *canvas = dlg.findChild<RuntimeDesignerCanvas *>();
+    QVERIFY(canvas);
+    const QList<DesignerControlFrame *> frames = canvas->findChildren<DesignerControlFrame *>();
+    QVERIFY2(!frames.isEmpty(), "画布上没有控件框");
+    DesignerControlFrame *frame = frames.first();
+
+    QSignalSpy startedSpy(canvas, &RuntimeDesignerCanvas::geometryEditStarted);
+    QSignalSpy finishedSpy(canvas, &RuntimeDesignerCanvas::geometryEditFinished);
+    QVERIFY2(startedSpy.isValid() && finishedSpy.isValid(), "几何手势信号未声明");
+
+    const int depth0 = dlg.undoDepth();
+    const QRect g0 = frame->geometry();
+
+    // 1) 真拖动：按下 → 移动 → 松开 = 恰好一枚撤销点
+    QTest::mousePress(frame, Qt::LeftButton, Qt::NoModifier, QPoint(6, 6));
+    QTest::mouseMove(frame, QPoint(66, 46));
+    bool manualMove = false;
+    if (frame->geometry() == g0) {
+        // 本环境下 QTest::mouseMove 没把「按住左键」的移动送到控件：手动补一条
+        manualMove = true;
+        const QPoint to(66, 46);
+        QMouseEvent move(QEvent::MouseMove, to, frame->mapToGlobal(to),
+                         Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(frame, &move);
+    }
+    QTest::mouseRelease(frame, Qt::LeftButton, Qt::NoModifier, QPoint(66, 46));
+    QVERIFY2(frame->geometry() != g0, "拖动没有改变控件几何（模拟未生效）");
+    QCOMPARE(dlg.undoDepth(), depth0 + 1);
+    QCOMPARE(startedSpy.count(), 1);    // 一次拖动 = 一次 started + 一次 finished
+    QCOMPARE(finishedSpy.count(), 1);
+    qInfo("designerGeometryEditPushesUndo: drag path = %s",
+          manualMove ? "manual QMouseEvent" : "QTest::mouseMove");
+
+    // 2) 只点选不挪动：不得新增撤销点
+    QTest::mousePress(frame, Qt::LeftButton, Qt::NoModifier, QPoint(6, 6));
+    QTest::mouseRelease(frame, Qt::LeftButton, Qt::NoModifier, QPoint(6, 6));
+    QCOMPARE(dlg.undoDepth(), depth0 + 1);
+
+    // 3) 方向键微调 1px：首次按键建一枚撤销点
+    frame->setFocus();
+    const QRect g1 = frame->geometry();
+    QTest::keyClick(frame, Qt::Key_Right);
+    QCOMPARE(dlg.undoDepth(), depth0 + 2);
+    QVERIFY2(frame->geometry().left() >= g1.left() + 1, "方向键没有移动控件");
+
+    // 4) 撤销逐枚回退：证明入栈的是「改前」快照而不是改后
+    //    第一枚 = 方向键之前（拖动后），第二枚 = 拖动之前
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "undo", Qt::DirectConnection));
+    QCOMPARE(dlg.undoDepth(), depth0 + 1);
+    QList<DesignerControlFrame *> afterUndo = canvas->findChildren<DesignerControlFrame *>();
+    QVERIFY2(!afterUndo.isEmpty(), "撤销后画布上没有控件框");
+    QCOMPARE(afterUndo.first()->geometry(), g1);
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "undo", Qt::DirectConnection));
+    QCOMPARE(dlg.undoDepth(), depth0);
+    afterUndo = canvas->findChildren<DesignerControlFrame *>();
+    QVERIFY2(!afterUndo.isEmpty(), "撤销后画布上没有控件框");
+    QCOMPARE(afterUndo.first()->geometry(), g0);
 }
 
 QTEST_MAIN(UiGuardsTest)

@@ -36,6 +36,8 @@ public:
     const RuntimeInterface &resultInterface() const { return m_layout; }
     /// 默认布局文件路径（应用目录下）
     static QString defaultLayoutPath();
+    /// 撤销栈深度（回归测试 / 现场诊断用）
+    int undoDepth() const { return m_undoStack.size(); }
 
 private slots:
     void addCurrentPaletteControl();
@@ -72,6 +74,9 @@ private slots:
     // 撤销/重做（结构性操作）
     void undo();
     void redo();
+    /// 几何编辑（拖动/缩放/方向键）手势的开始/结束：一次手势只入栈一枚「改前快照」
+    void onGeometryEditStarted();
+    void onGeometryEditFinished();
     // 多选批量对齐（官方 6 种：左/水平居中/右/顶/垂直居中/底；分布 2 种）
     void onAlignLeft();
     void onAlignHCenter();
@@ -119,6 +124,9 @@ private:
     QStringList m_nodeNames;
     QList<RuntimeInterface> m_undoStack;   /// 结构性操作快照（值语义深拷贝）
     QList<RuntimeInterface> m_redoStack;
+    /// 几何手势的「改前快照」：手势开始时拷一份，结束时与当前布局比对后再入栈
+    RuntimeInterface m_geometryUndoBefore;
+    bool m_geometryEditActive = false;
     /// 属性编辑的撤销合并定时器：600ms 内的连续输入只留一个撤销点
     QTimer *m_propUndoTimer = nullptr;
 
@@ -233,6 +241,9 @@ signals:
     void paletteDropped(const QPoint &pos);
     /// 控件上右键（官方 9.1：删除/撤销/重做/图层位置支持右键操作）
     void controlContextMenu(int index, const QPoint &globalPos);
+    /// 几何编辑（拖动/缩放/方向键）开始/结束：设计器据此记录「改前快照」
+    void geometryEditStarted();
+    void geometryEditFinished();
 
 protected:
     void paintEvent(QPaintEvent *event) override;
