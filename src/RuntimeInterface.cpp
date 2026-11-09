@@ -159,15 +159,6 @@ static RuntimeControl controlFromJson(const QJsonObject &o, RuntimeControlType t
             if (a.commandType.isEmpty()) continue;
             ctrl.actions.append(a);
         }
-        // 旧布局迁移：此前按钮只有 bindType="action" + bindKey 单动作，
-        // 加载时合成为「执行 / <原动作>」一行，配置不丢。
-        if (ctrl.actions.isEmpty() && ctrl.bindType == QStringLiteral("action")
-            && !ctrl.bindKey.isEmpty()) {
-            RuntimeAction a;
-            a.commandType = QStringLiteral("exec");
-            a.method = ctrl.bindKey;
-            ctrl.actions.append(a);
-        }
     }
 
     if (ctrl.type == RuntimeControlType::ParamSetting
@@ -327,27 +318,17 @@ bool RuntimeInterface::fromJson(const QJsonObject &json)
     pages.clear();
     currentPageIndex = 0;
 
-    if (json.contains("pages")) {
-        // 新多页格式
-        const QJsonArray pageArr = json["pages"].toArray();
-        for (const QJsonValue &v : pageArr) {
-            RuntimeInterfacePage p;
-            if (p.fromJson(v.toObject()))
-                pages.append(p);
-        }
-        currentPageIndex = json["currentPage"].toInt(0);
-        ensurePage();
-        return !pages.isEmpty();
+    // 项目未上线，只保留当前多页格式，不做旧单页格式兼容（2026-11-09 用户口径）
+    if (!json.contains("pages")) return false;
+    const QJsonArray pageArr = json["pages"].toArray();
+    for (const QJsonValue &v : pageArr) {
+        RuntimeInterfacePage p;
+        if (p.fromJson(v.toObject()))
+            pages.append(p);
     }
-
-    // 旧单页格式：整体包成一页（零迁移）
-    if (!json.contains("controls")) return false;
-    RuntimeInterfacePage p;
-    if (!p.fromJson(json)) return false;
-    if (p.pageName == QStringLiteral("页面1"))
-        p.pageName = json["pageName"].toString(QStringLiteral("运行界面"));
-    pages.append(p);
-    return true;
+    currentPageIndex = json["currentPage"].toInt(0);
+    ensurePage();
+    return !pages.isEmpty();
 }
 
 bool RuntimeInterface::saveToFile(const QString &fileName) const

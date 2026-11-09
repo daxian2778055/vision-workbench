@@ -55,7 +55,7 @@ void runtimeDesignerHasOfficialSectionsAndAlign();
 void runtimeDesignerAlignHCenterAndRight();
 void runtimeControlAppearanceRoundTripsAndStaysCompatible();
 void runtimeDesignerPaletteGroupedByOfficialSections();
-void buttonActionsMigrateAndRoundTrip();
+void buttonActionsRoundTrip();
 void runtimeViewHonorsCurrentPageAndActionTable();
 void paramSettingControlRoundTripsAndSeedsWithoutWriteBack();
 void switchControlRoundTripsAndSeedsWithoutWriteBack();
@@ -616,28 +616,10 @@ void UiGuardsTest::runtimeDesignerPaletteGroupedByOfficialSections()
 }
 
 // 官方按钮「数据源配置」：动作表可多行（类型/方法/参数）。
-// 旧布局只有 bindType="action" + bindKey 单动作，加载后必须自动合成一行，配置不丢。
-void UiGuardsTest::buttonActionsMigrateAndRoundTrip()
+// 项目未上线，不做旧 bindKey 单动作的迁移（2026-11-09 用户口径）。
+void UiGuardsTest::buttonActionsRoundTrip()
 {
-    // 1) 旧布局迁移
-    {
-        RuntimeInterfacePage page;
-        RuntimeControl *c = page.addControl(RuntimeControlType::Button, QRect(0, 0, 100, 40));
-        QVERIFY(c);
-        c->bindType = QStringLiteral("action");
-        c->bindKey = QStringLiteral("start");
-        QVERIFY(c->actions.isEmpty());
-
-        const QJsonObject json = page.toJson();
-        RuntimeInterfacePage back;
-        QVERIFY(back.fromJson(json));
-        const RuntimeControl &r = back.controls.first();
-        QCOMPARE(r.actions.size(), 1);
-        QCOMPARE(r.actions.first().commandType, QStringLiteral("exec"));
-        QCOMPARE(r.actions.first().method, QStringLiteral("start"));
-    }
-
-    // 2) 多行动作往返
+    // 1) 多行动作往返
     {
         RuntimeInterfacePage page;
         RuntimeControl *c = page.addControl(RuntimeControlType::Button, QRect(0, 0, 100, 40));
@@ -660,7 +642,7 @@ void UiGuardsTest::buttonActionsMigrateAndRoundTrip()
         QCOMPARE(r.actions.at(1).param, QStringLiteral("12.5"));
     }
 
-    // 3) 设计器里按钮必须露出「配置」入口
+    // 2) 设计器里按钮必须露出「配置」入口
     {
         RuntimeInterfaceDesigner dlg(QStringList{QStringLiteral("模块1")});
         QStringList labels;

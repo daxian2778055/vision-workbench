@@ -155,7 +155,7 @@ private slots:
 
     // 运行界面（多页/结果表格/IO状态）
     void testRuntimeInterfaceMultiPageRoundTrip();
-    void testRuntimeInterfaceLegacyCompat();
+    void testRuntimeInterfaceRejectsLegacyFormat();
     void testRuntimeControlTypeNames();
 
     // 并发/锁纪律回归（把已修的锁用用例钉死）
@@ -2310,9 +2310,10 @@ void IntegrationTest::testRuntimeInterfaceMultiPageRoundTrip()
     QCOMPARE(fromFile.totalControlCount(), 3);
 }
 
-void IntegrationTest::testRuntimeInterfaceLegacyCompat()
+void IntegrationTest::testRuntimeInterfaceRejectsLegacyFormat()
 {
-    // 旧单页格式（无 pages 键）必须零迁移加载为一页
+    // 项目未上线（2026-11-09 用户口径）：不做旧单页格式兼容。
+    // 缺 pages 键的旧格式必须被拒绝——这条腿反过来防止有人再偷偷加回兼容层。
     QJsonObject ctrl;
     ctrl["type"] = QStringLiteral("状态灯");
     ctrl["title"] = QStringLiteral("OK灯");
@@ -2329,21 +2330,22 @@ void IntegrationTest::testRuntimeInterfaceLegacyCompat()
     legacy["controls"] = QJsonArray{ ctrl };
 
     RuntimeInterface loaded;
-    QVERIFY(loaded.fromJson(legacy));
-    QCOMPARE(loaded.pages.size(), 1);
-    QCOMPARE(loaded.page(0)->pageName, QStringLiteral("运行界面"));
-    QCOMPARE(loaded.page(0)->controls.size(), 1);
-    QCOMPARE(loaded.page(0)->controls[0].type, RuntimeControlType::StatusLight);
-    QCOMPARE(loaded.page(0)->controls[0].bindKey, QStringLiteral("判定结果"));
-    QCOMPARE(loaded.page(0)->controls[0].geometry, QRect(5, 6, 200, 60));
+    QVERIFY2(!loaded.fromJson(legacy), "旧单页格式（无 pages 键）应被拒绝");
 
-    // 旧格式加载后再次保存应升级为多页格式且内容不变
-    const QJsonObject upgraded = loaded.toJson();
-    QVERIFY(upgraded.contains(QStringLiteral("pages")));
+    // 当前格式往返正常
+    RuntimeInterface cur;
+    cur.ensurePage();
+    cur.page(0)->pageName = QStringLiteral("运行界面");
+    cur.page(0)->controls.append(
+        RuntimeControl{RuntimeControlType::StatusLight, QStringLiteral("OK灯"),
+                       QRect(5, 6, 200, 60)});
     RuntimeInterface again;
-    QVERIFY(again.fromJson(upgraded));
+    QVERIFY(again.fromJson(cur.toJson()));
+    QCOMPARE(again.pages.size(), 1);
+    QCOMPARE(again.page(0)->pageName, QStringLiteral("运行界面"));
     QCOMPARE(again.page(0)->controls.size(), 1);
     QCOMPARE(again.page(0)->controls[0].type, RuntimeControlType::StatusLight);
+    QCOMPARE(again.page(0)->controls[0].geometry, QRect(5, 6, 200, 60));
 }
 
 void IntegrationTest::testRuntimeControlTypeNames()
