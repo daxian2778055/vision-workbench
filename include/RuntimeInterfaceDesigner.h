@@ -13,6 +13,8 @@ class QLabel;
 class QPushButton;
 class QCheckBox;
 class QScrollArea;
+class QDragEnterEvent;
+class QDropEvent;
 class RuntimeDesignerCanvas;
 
 /// 自定义运行界面设计器（对齐 VisionMaster 4.4 运行界面设计；多页 + 结果表格 + IO 状态）
@@ -42,8 +44,12 @@ private slots:
     // 结果表格列交互
     void onColumnAdd();
     void onColumnDel();
-    // 控件复制
+    // 控件复制（Ctrl+D 原位级联；Ctrl+C / Ctrl+V 走官方剪贴板语义）
     void duplicateSelected();
+    void copySelected();
+    void pasteControl();
+    /// 控件库拖放到画布：pos 为画布坐标（官方 9.2.2「按住左键移动到编辑区松开」）
+    void addControlAt(const QPoint &pos);
     // 控件层级（运行时后创建的控件盖住先创建的）
     void raiseSelected();
     void lowerSelected();
@@ -73,6 +79,8 @@ private:
     void afterRestore();
     void movePage(int delta);
     RuntimeControl *selectedControl();
+    /// 按控件库行号添加；dropPos 非空时以它为中心放控件
+    void addControlByRow(int row, const QPoint &dropPos = QPoint());
 
     RuntimeInterface m_layout;
     QStringList m_nodeNames;
@@ -125,9 +133,13 @@ public:
 
 signals:
     void controlSelected(int index);
+    /// 控件库条目被拖放到画布（行类型由设计器按 m_palette->currentRow() 取）
+    void paletteDropped(const QPoint &pos);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
 
 public:
     /// 刷新指定控件（属性修改后调用）

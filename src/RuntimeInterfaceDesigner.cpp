@@ -1,6 +1,7 @@
 #include "RuntimeInterfaceDesigner.h"
 #include "RuntimeInterfaceView.h"
 #include "GlobalVariableManager.h"
+#include "FocusGuard.h"
 
 #include <QListWidget>
 #include <QComboBox>
@@ -21,6 +22,21 @@
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QShortcut>
+#include <QApplication>
+#include <QClipboard>
+#include <QMimeData>
+#include <QJsonDocument>
+#include <QJsonParseError>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+
+namespace {
+/// 控件库拖放用的 Qt 内建 item-model MIME（QListWidget 开启 drag 后自带）
+const char *kItemModelMime = "application/x-qabstractitemmodeldatalist";
+/// 剪贴板里放单个控件的序列化 JSON（官方 9.1 工具条注：复制粘贴仅 Ctrl+C / Ctrl+V）
+const char *kControlMime = "application/x-vfp-runtime-control";
+}   // namespace
+#include <QShortcut>
 #include <QColorDialog>
 #include <QMessageBox>
 #include <algorithm>
@@ -33,10 +49,28 @@
 // ==================== RuntimeDesignerCanvas ====================
 
 RuntimeDesignerCanvas::RuntimeDesignerCanvas(QWidget *parent)
-    : QWidget(parent)
+: QWidget(parent)
 {
-    setFixedSize(1200, 760);
-    setMouseTracking(true);
+setFixedSize(1200, 760);
+setMouseTracking(true);
+// 官方 9.2.2：控件库条目可按住左键拖入预览及编辑区后松开完成添加。
+setAcceptDrops(true);
+}
+
+void RuntimeDesignerCanvas::dragEnterEvent(QDragEnterEvent *event)
+{
+if (event->mimeData() && event->mimeData()->hasFormat(QLatin1String(kItemModelMime)))
+event->acceptProposedAction();
+}
+
+void RuntimeDesignerCanvas::dropEvent(QDropEvent *event)
+{
+if (!event->mimeData() || !event->mimeData()->hasFormat(QLatin1String(kItemModelMime)))
+return;
+event->acceptProposedAction();
+// 行号由设计器从 m_palette->currentRow() 取（QListWidget 拖动时会把该项设为 current），
+// 不去解析 Qt 内部 item-model MIME，避免依赖私有格式。
+emit paletteDropped(event->position().toPoint());
 }
 
 void RuntimeDesignerCanvas::setPage(RuntimeInterfacePage *page)
@@ -491,6 +525,13 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     m_palette->addItems(types);
     m_palette->setCurrentRow(0);
     m_palette->setMaximumWidth(160);
+    // 官方 9.2.2 的拖放添加：保留原有「添加控件按钮 / 双击」两条路径，另开拖拽。
+    m_palette->setDragEnabled(true);
+    m_palette->setDragDropMode(QAbstractItemView::DragOnly);
+    for (int i = 0; i < m_palette->count(); ++i) {
+    QListWidgetItem *it = m_palette->item(i);
+    it->setFlags(it->flags() | Qt::ItemIsDragEnabled);
+    }
 
     auto *addBtn = new QPushButton(QStringLiteral("添加控件"), paletteGroup);
     addBtn->setStyleSheet("QPushButton{background:#3a6ea5;color:white;border:none;border-radius:4px;padding:6px;}");
@@ -507,6 +548,8 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     m_canvasScroll = new QScrollArea(canvasGroup);
     m_canvas = new RuntimeDesignerCanvas(m_canvasScroll);
     m_canvas->setPage(m_layout.currentPage());
+    connect(m_canvas, &RuntimeDesignerCanvas::paletteDropped,
+    this, &RuntimeInterfaceDesigner::addControlAt);
     m_canvasScroll->setWidget(m_canvas);
     m_canvasScroll->setWidgetResizable(true);
     m_canvasScroll->setStyleSheet("QScrollArea{background:#1a1a20;border:1px solid #3a3a4a;}");
@@ -524,6 +567,12 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     connect(dupBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::duplicateSelected);
     auto *dupShortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+D")), this);
     connect(dupShortcut, &QShortcut::activated, this, &RuntimeInterfaceDesigner::duplicateSelected);
+    // 官方 9.1 工具条注：复制粘贴仅支持 Ctrl+C / Ctrl+V。快捷键是 WindowShortcut 上下文，
+    // 焦点在输入框内时由 FocusGuard 让位给文本编辑，不抢输入框的复制粘贴。
+    auto *copyShortcut = new QShortcut(QKeySequence::Copy, this);
+    connect(copyShortcut, &QShortcut::activated, this, &RuntimeInterfaceDesigner::copySelected);
+    auto *pasteShortcut = new QShortcut(QKeySequence::Paste, this);
+    connect(pasteShortcut, &QShortcut::activated, this, &RuntimeInterfaceDesigner::pasteControl);
     // Delete 删除选中控件（属性输入框内按 Delete 仍由输入框处理，不会误删）
     auto *deleteShortcut = new QShortcut(QKeySequence::Delete, this);
     connect(deleteShortcut, &QShortcut::activated, this, &RuntimeInterfaceDesigner::deleteSelected);
@@ -784,34 +833,84 @@ void RuntimeInterfaceDesigner::onPageSelected(int index)
 
 void RuntimeInterfaceDesigner::addCurrentPaletteControl()
 {
-    const int row = m_palette->currentRow();
-    RuntimeControlType type;
-    switch (row) {
-    case 0: type = RuntimeControlType::ImageView; break;
-    case 1: type = RuntimeControlType::ValueDisplay; break;
-    case 2: type = RuntimeControlType::TextLabel; break;
-    case 3: type = RuntimeControlType::StatusLight; break;
-    case 4: type = RuntimeControlType::Button; break;
-    case 5: type = RuntimeControlType::ResultTable; break;
-    case 6: type = RuntimeControlType::IoStatus; break;
-    default: return;
-    }
+addControlByRow(m_palette ? m_palette->currentRow() : 0);
+}
 
-    const int n = m_layout.currentPage()->controls.size();
-    const int cascade = (n % 8) * 24;
-    QRect geo(40 + cascade, 40 + cascade, 300, 190);
-    if (type == RuntimeControlType::StatusLight) geo.setHeight(70);
-    if (type == RuntimeControlType::Button)     { geo.setWidth(160); geo.setHeight(48); }
-    if (type == RuntimeControlType::TextLabel)  { geo.setWidth(240); geo.setHeight(60); }
-    if (type == RuntimeControlType::ValueDisplay){ geo.setHeight(90); }
-    if (type == RuntimeControlType::ResultTable){ geo.setWidth(460); geo.setHeight(260); }
-    if (type == RuntimeControlType::IoStatus)   { geo.setWidth(260); geo.setHeight(80); }
+void RuntimeInterfaceDesigner::addControlAt(const QPoint &pos)
+{
+addControlByRow(m_palette ? m_palette->currentRow() : 0, pos);
+}
 
-    pushUndo();
-    RuntimeControl *ctrl = m_layout.currentPage()->addControl(type, geo);
-    m_canvas->rebuild();
-    const int idx = m_layout.currentPage()->indexOf(ctrl);
-    if (idx >= 0) m_canvas->selectIndex(idx);
+void RuntimeInterfaceDesigner::addControlByRow(int row, const QPoint &dropPos)
+{
+RuntimeControlType type;
+switch (row) {
+case 0: type = RuntimeControlType::ImageView; break;
+case 1: type = RuntimeControlType::ValueDisplay; break;
+case 2: type = RuntimeControlType::TextLabel; break;
+case 3: type = RuntimeControlType::StatusLight; break;
+case 4: type = RuntimeControlType::Button; break;
+case 5: type = RuntimeControlType::ResultTable; break;
+case 6: type = RuntimeControlType::IoStatus; break;
+default: return;
+}
+
+const int n = m_layout.currentPage()->controls.size();
+const int cascade = (n % 8) * 24;
+QRect geo(40 + cascade, 40 + cascade, 300, 190);
+if (type == RuntimeControlType::StatusLight) geo.setHeight(70);
+if (type == RuntimeControlType::Button)     { geo.setWidth(160); geo.setHeight(48); }
+if (type == RuntimeControlType::TextLabel)  { geo.setWidth(240); geo.setHeight(60); }
+if (type == RuntimeControlType::ValueDisplay){ geo.setHeight(90); }
+if (type == RuntimeControlType::ResultTable){ geo.setWidth(460); geo.setHeight(260); }
+if (type == RuntimeControlType::IoStatus)   { geo.setWidth(260); geo.setHeight(80); }
+
+// 拖放：控件左上角落在松手位置（略作钳制，别让控件跑到画布外）。
+if (!dropPos.isNull()) {
+const QSize canvasSize = m_canvas ? m_canvas->size() : QSize(1200, 760);
+geo.moveLeft(qBound(0, dropPos.x(), qMax(0, canvasSize.width() - geo.width())));
+geo.moveTop(qBound(0, dropPos.y(), qMax(0, canvasSize.height() - geo.height())));
+}
+
+pushUndo();
+RuntimeControl *ctrl = m_layout.currentPage()->addControl(type, geo);
+m_canvas->rebuild();
+const int idx = m_layout.currentPage()->indexOf(ctrl);
+if (idx >= 0) m_canvas->selectIndex(idx);
+}
+
+void RuntimeInterfaceDesigner::copySelected()
+{
+// 输入框内的 Ctrl+C 归文本编辑，不抢
+if (FocusGuard::isTextEditingWidget(QApplication::focusWidget())) return;
+RuntimeControl *ctrl = selectedControl();
+if (!ctrl) return;
+// 复用 RuntimeInterfacePage 的序列化：单控件临时页 → JSON → 自定义 MIME。
+RuntimeInterfacePage tmp;
+tmp.controls.append(*ctrl);
+const QByteArray data = QJsonDocument(tmp.toJson()).toJson(QJsonDocument::Compact);
+auto *mime = new QMimeData();
+mime->setData(QLatin1String(kControlMime), data);
+QApplication::clipboard()->setMimeData(mime);
+}
+
+void RuntimeInterfaceDesigner::pasteControl()
+{
+if (FocusGuard::isTextEditingWidget(QApplication::focusWidget())) return;
+const QMimeData *mime = QApplication::clipboard()->mimeData();
+if (!mime || !mime->hasFormat(QLatin1String(kControlMime))) return;
+QJsonParseError err;
+const QJsonDocument doc =
+QJsonDocument::fromJson(mime->data(QLatin1String(kControlMime)), &err);
+if (err.error != QJsonParseError::NoError || !doc.isObject()) return;
+RuntimeInterfacePage tmp;
+if (!tmp.fromJson(doc.object()) || tmp.controls.isEmpty()) return;
+RuntimeControl copy = tmp.controls.first();
+copy.geometry.translate(24, 24);   // 与 Ctrl+D 一致的级联偏移
+pushUndo();
+m_layout.currentPage()->controls.append(copy);
+m_canvas->rebuild();
+m_canvas->selectIndex(m_layout.currentPage()->controls.size() - 1);
 }
 
 void RuntimeInterfaceDesigner::deleteSelected()

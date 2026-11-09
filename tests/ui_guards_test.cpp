@@ -7,6 +7,7 @@
 #include "RuntimeInterface.h"
 #include "ExportWriteCheck.h"
 #include "FocusGuard.h"
+#include "RuntimeInterfaceDesigner.h"
 
 #include <QLineEdit>
 #include <QPlainTextEdit>
@@ -18,6 +19,8 @@
 #include <QImage>
 #include <QLabel>
 #include <QListWidget>
+#include <QAbstractItemView>
+#include <QShortcut>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QFileInfo>
@@ -40,6 +43,7 @@ private slots:
     void annotationClassDirRejectsJunctionEscape();
     void finishTextExportSucceedsOnWritableFile();
     void staleBindingsFindsMissingTargets();
+void runtimeDesignerHasOfficialDragAndClipboard();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -415,6 +419,40 @@ void UiGuardsTest::deleteShortcutIgnoredWhileEditingText()
              "普通控件里按 Delete 应正常删节点，不能一律拦截");
     QVERIFY2(!FocusGuard::isTextEditingWidget(nullptr),
              "空指针不应崩，也不应算作文本编辑");
+}
+
+// VM4.4 官方手册 9.1 / 9.2.2（本机 PDF 页 182-183）：
+// 控件库可拖入预览编辑区；复制粘贴仅 Ctrl+C / Ctrl+V。
+// 这三条结构性事实不用真拖鼠标也能锁住，防止后续重构把开关关掉。
+void UiGuardsTest::runtimeDesignerHasOfficialDragAndClipboard()
+{
+    RuntimeInterfaceDesigner dlg(QStringList{QStringLiteral("模块1")});
+
+    bool paletteDraggable = false;
+    for (QListWidget *lw : dlg.findChildren<QListWidget *>()) {
+        if (lw->count() >= 7 && lw->dragEnabled()
+            && lw->dragDropMode() == QAbstractItemView::DragOnly) {
+            paletteDraggable = true;
+            break;
+        }
+    }
+    QVERIFY2(paletteDraggable, "控件库必须 dragEnabled + DragOnly（官方 9.2.2 拖放添加）");
+
+    bool canvasAcceptsDrop = false;
+    for (QWidget *w : dlg.findChildren<QWidget *>()) {
+        if (w->acceptDrops() && w->size() == QSize(1200, 760)) {
+            canvasAcceptsDrop = true;
+            break;
+        }
+    }
+    QVERIFY2(canvasAcceptsDrop, "预览编辑区画布必须 acceptDrops()");
+
+    bool hasCopy = false, hasPaste = false;
+    for (QShortcut *s : dlg.findChildren<QShortcut *>()) {
+        if (s->key() == QKeySequence(QKeySequence::Copy)) hasCopy = true;
+        if (s->key() == QKeySequence(QKeySequence::Paste)) hasPaste = true;
+    }
+    QVERIFY2(hasCopy && hasPaste, "官方复制粘贴仅 Ctrl+C / Ctrl+V，两个快捷键都要在");
 }
 
 QTEST_MAIN(UiGuardsTest)
