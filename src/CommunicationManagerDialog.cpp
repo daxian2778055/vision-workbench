@@ -9,6 +9,7 @@
 #include "SendEvent.h"
 #include "CommEventEditDialogs.h"
 #include "CommDeviceConfigDialog.h"
+#include "CommMonitorDialog.h"
 #include "HeartbeatManager.h"
 #include "AppLog.h"
 #include <QVBoxLayout>
@@ -24,6 +25,8 @@
 #include <QDateTime>
 #include <QColor>
 #include <QTimer>
+#include <QListWidget>
+#include <QStackedWidget>
 
 CommunicationManagerDialog::CommunicationManagerDialog(QWidget *parent)
     : QDialog(parent)
@@ -47,13 +50,37 @@ void CommunicationManagerDialog::setupUI()
 
     auto *mainLayout = new QVBoxLayout(this);
 
-    auto *tabs = new QTabWidget();
-    setupDeviceTab(tabs);
-    setupReceiveEventTab(tabs);
-    setupSendEventTab(tabs);
-    setupHeartbeatTab(tabs);
+    // VM4.4 形态：左侧导航 + 右侧堆叠页（原顶部 QTabWidget 重构为左侧导航）
+    auto *bodyLayout = new QHBoxLayout();
+    m_navList = new QListWidget();
+    m_navList->setObjectName(QStringLiteral("commNavList"));   // 供回归测试按名定位
+    m_navList->setFixedWidth(150);
+    m_pageStack = new QStackedWidget();
+    m_pageStack->setObjectName(QStringLiteral("commPageStack"));
+    bodyLayout->addWidget(m_navList);
+    bodyLayout->addWidget(m_pageStack, 1);
+    mainLayout->addLayout(bodyLayout, 1);
 
-    mainLayout->addWidget(tabs);
+    // 页面添加顺序必须与导航项顺序严格一致（索引一一对应）
+    setupDeviceTab(m_pageStack);          // 0 通信设备（默认页，既有测试依赖）
+    setupControllerTab(m_pageStack);      // 1 控制器列表
+    setupReceiveEventTab(m_pageStack);    // 2 接收事件
+    setupSendEventTab(m_pageStack);       // 3 发送事件
+    setupHeartbeatTab(m_pageStack);       // 4 心跳
+    setupMonitorTab(m_pageStack);         // 5 收发监视
+
+    const QStringList navTitles{
+        QStringLiteral("\u901A\u4FE1\u8BBE\u5907"),
+        QStringLiteral("\u63A7\u5236\u5668\u5217\u8868"),
+        QStringLiteral("\u63A5\u6536\u4E8B\u4EF6"),
+        QStringLiteral("\u53D1\u9001\u4E8B\u4EF6"),
+        QStringLiteral("\u5FC3\u8DF3"),
+        QStringLiteral("\u6536\u53D1\u76D1\u89C6")
+    };
+    m_navList->addItems(navTitles);
+    connect(m_navList, &QListWidget::currentRowChanged,
+            m_pageStack, &QStackedWidget::setCurrentIndex);
+    m_navList->setCurrentRow(0);   // 与 stack 默认页一致：设备页默认可见
 
     auto *btnLayout = new QHBoxLayout();
     m_closeBtn = new QPushButton(QStringLiteral("\u5173\u95ED"));
@@ -64,12 +91,13 @@ void CommunicationManagerDialog::setupUI()
 
     connect(m_closeBtn, &QPushButton::clicked, this, &QDialog::accept);
 
-    QTabWidget *t = tabs; Q_UNUSED(t)
+    // 建页即填一次（表为空时就是空表；构造末尾的 refreshDeviceTable 还会再同步一次）
+    refreshControllerTable();
 }
 
 // ==================== Device Tab ====================
 
-void CommunicationManagerDialog::setupDeviceTab(QTabWidget *tabs)
+void CommunicationManagerDialog::setupDeviceTab(QStackedWidget *stack)
 {
     auto *tab = new QWidget();
     auto *layout = new QVBoxLayout(tab);
@@ -124,7 +152,42 @@ void CommunicationManagerDialog::setupDeviceTab(QTabWidget *tabs)
     connect(CommunicationManager::instance(), &CommunicationManager::deviceDisconnected, this,
             [this](const QString &) { scheduleDeviceTableRefresh(); });
 
-    tabs->addTab(tab, QStringLiteral("\u8BBE\u5907\u7BA1\u7406"));
+    stack->addWidget(tab);
+}
+
+// ==================== Controller List Page ====================
+
+void CommunicationManagerDialog::setupControllerTab(QStackedWidget *stack)
+{
+    auto *tab = new QWidget();
+    auto *layout = new QVBoxLayout(tab);
+
+    auto *label = new QLabel(QStringLiteral("<b>\u63A7\u5236\u5668\u5217\u8868</b>"));
+    label->setStyleSheet("font-size: 13px;");
+    layout->addWidget(label);
+
+    auto *hint = new QLabel(QStringLiteral(
+        "\u5F53\u524D\u63A7\u5236\u5668\u5217\u8868\u7531\u901A\u4FE1\u8BBE\u5907\u6D3E\u751F\uFF1B"
+        "\u72EC\u7ACB\u63A7\u5236\u5668\u6A21\u578B\u5F85\u63A5\u5165\u3002"));
+    hint->setWordWrap(true);
+    hint->setStyleSheet("color: gray; font-size: 11px;");
+    layout->addWidget(hint);
+
+    m_controllerTable = new QTableWidget();
+    m_controllerTable->setObjectName(QStringLiteral("controllerTable"));   // 供回归测试按名定位
+    m_controllerTable->setColumnCount(3);
+    m_controllerTable->setHorizontalHeaderLabels({
+        QStringLiteral("\u63A7\u5236\u5668"),
+        QStringLiteral("\u7C7B\u578B"),
+        QStringLiteral("\u72B6\u6001")
+    });
+    m_controllerTable->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_controllerTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_controllerTable->setEditTriggers(QAbstractItemView::NoEditTriggers);   // 只读
+    m_controllerTable->horizontalHeader()->setStretchLastSection(true);
+    layout->addWidget(m_controllerTable);
+
+    stack->addWidget(tab);
 }
 
 void CommunicationManagerDialog::refreshDeviceTable()
@@ -245,6 +308,31 @@ void CommunicationManagerDialog::refreshDeviceTable()
             }
         }
     }
+
+    // 设备数据是控制器列表的唯一来源：设备表每次重建后同步控制器页
+    refreshControllerTable();
+}
+
+void CommunicationManagerDialog::refreshControllerTable()
+{
+    // 建页顺序/析构时可能尚未存在；表不存在时安全返回
+    if (!m_controllerTable) return;
+
+    m_controllerTable->setRowCount(0);
+    auto *cm = CommunicationManager::instance();
+    for (const QString &name : cm->deviceNames()) {
+        const CommDeviceInfo info = cm->deviceInfo(name);
+        const int row = m_controllerTable->rowCount();
+        m_controllerTable->insertRow(row);
+        m_controllerTable->setItem(row, 0, new QTableWidgetItem(name));
+        m_controllerTable->setItem(row, 1, new QTableWidgetItem(info.type));
+        auto *statusItem = new QTableWidgetItem(
+            info.isConnected ? QStringLiteral("\u5DF2\u8FDE\u63A5")
+                             : QStringLiteral("\u672A\u8FDE\u63A5"));
+        statusItem->setForeground(info.isConnected ? QColor(0, 128, 0) : Qt::gray);
+        m_controllerTable->setItem(row, 2, statusItem);
+    }
+    m_controllerTable->resizeColumnsToContents();
 }
 
 void CommunicationManagerDialog::scheduleDeviceTableRefresh()
@@ -503,7 +591,7 @@ void CommunicationManagerDialog::onReadRegisters()
 
 // ==================== Receive Event Tab ====================
 
-void CommunicationManagerDialog::setupReceiveEventTab(QTabWidget *tabs)
+void CommunicationManagerDialog::setupReceiveEventTab(QStackedWidget *stack)
 {
     auto *tab = new QWidget();
     auto *layout = new QVBoxLayout(tab);
@@ -549,7 +637,7 @@ void CommunicationManagerDialog::setupReceiveEventTab(QTabWidget *tabs)
     connect(m_removeReceiveEventBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onRemoveReceiveEvent);
     connect(m_editReceiveEventBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onEditReceiveEvent);
 
-    tabs->addTab(tab, QStringLiteral("\u63A5\u6536\u4E8B\u4EF6"));
+    stack->addWidget(tab);
 }
 
 void CommunicationManagerDialog::refreshReceiveEventTable()
@@ -676,7 +764,7 @@ void CommunicationManagerDialog::onEditReceiveEvent()
 
 // ==================== Send Event Tab ====================
 
-void CommunicationManagerDialog::setupSendEventTab(QTabWidget *tabs)
+void CommunicationManagerDialog::setupSendEventTab(QStackedWidget *stack)
 {
     auto *tab = new QWidget();
     auto *layout = new QVBoxLayout(tab);
@@ -722,7 +810,7 @@ void CommunicationManagerDialog::setupSendEventTab(QTabWidget *tabs)
     connect(m_removeSendEventBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onRemoveSendEvent);
     connect(m_editSendEventBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onEditSendEvent);
 
-    tabs->addTab(tab, QStringLiteral("\u53D1\u9001\u4E8B\u4EF6"));
+    stack->addWidget(tab);
 }
 
 void CommunicationManagerDialog::refreshSendEventTable()
@@ -823,7 +911,7 @@ void CommunicationManagerDialog::onEditSendEvent()
 
 // ==================== Heartbeat Tab ====================
 
-void CommunicationManagerDialog::setupHeartbeatTab(QTabWidget *tabs)
+void CommunicationManagerDialog::setupHeartbeatTab(QStackedWidget *stack)
 {
     auto *tab = new QWidget();
     auto *layout = new QVBoxLayout(tab);
@@ -866,7 +954,31 @@ void CommunicationManagerDialog::setupHeartbeatTab(QTabWidget *tabs)
     connect(m_addHeartbeatBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onAddHeartbeat);
     connect(m_removeHeartbeatBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onRemoveHeartbeat);
 
-    tabs->addTab(tab, QStringLiteral("\u5FC3\u8DF3\u7BA1\u7406"));
+    stack->addWidget(tab);
+}
+
+// ==================== Communication Monitor Page ====================
+
+void CommunicationManagerDialog::setupMonitorTab(QStackedWidget *stack)
+{
+    auto *tab = new QWidget();
+    auto *layout = new QVBoxLayout(tab);
+
+    auto *label = new QLabel(QStringLiteral("<b>\u6536\u53D1\u76D1\u89C6</b>"));
+    label->setStyleSheet("font-size: 13px;");
+    layout->addWidget(label);
+
+    // 并入既有监视 UI（CommMonitorDialog 自订阅 CommunicationManager 的收发/状态信号），
+    // 不另造占位表；Qt::Widget 去掉顶层对话框壳后作为普通子控件嵌进本页。
+    m_monitorDialog = new CommMonitorDialog(tab);
+    m_monitorDialog->setWindowFlags(Qt::Widget);
+    m_monitorDialog->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    // 监视窗构造时自带 820x560 最小尺寸；内嵌后不把管理对话框的最小尺寸顶大
+    m_monitorDialog->setMinimumSize(0, 0);
+    m_monitorDialog->show();   // setWindowFlags 会隐藏控件，需显式恢复可见
+    layout->addWidget(m_monitorDialog);
+
+    stack->addWidget(tab);
 }
 
 void CommunicationManagerDialog::refreshHeartbeatTable()

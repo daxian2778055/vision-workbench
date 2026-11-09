@@ -1,7 +1,8 @@
 #pragma once
 
 #include <QDialog>
-#include <QTabWidget>
+#include <QListWidget>
+#include <QStackedWidget>
 #include <QTableWidget>
 #include <QPushButton>
 #include <QLineEdit>
@@ -13,8 +14,10 @@
 #include <QHBoxLayout>
 
 class ModbusNode; // 前向声明
+class CommMonitorDialog; // 收发监视页内嵌实例
 
-/// 通信管理对话框 — 集成设备管理 + 接收事件 + 发送事件 + 心跳
+/// 通信管理对话框 — 左侧导航 + 堆叠页：
+/// 通信设备 / 控制器列表 / 接收事件 / 发送事件 / 心跳 / 收发监视
 class CommunicationManagerDialog : public QDialog
 {
     Q_OBJECT
@@ -50,16 +53,30 @@ private slots:
 
 private:
     void setupUI();
-    void setupDeviceTab(QTabWidget *tabs);
-    void setupReceiveEventTab(QTabWidget *tabs);
-    void setupSendEventTab(QTabWidget *tabs);
-    void setupHeartbeatTab(QTabWidget *tabs);
+    void setupDeviceTab(QStackedWidget *stack);
+    void setupControllerTab(QStackedWidget *stack);
+    void setupReceiveEventTab(QStackedWidget *stack);
+    void setupSendEventTab(QStackedWidget *stack);
+    void setupHeartbeatTab(QStackedWidget *stack);
+    void setupMonitorTab(QStackedWidget *stack);
+    /// 控制器列表由设备数据派生（独立控制器模型尚未接入）；表未建时安全返回
+    void refreshControllerTable();
     /// 合并式异步刷新设备表：deviceConnected/deviceDisconnected 只挂起一次重建，
     /// 等当前调用栈展开后再执行（避免在 openDevice/closeDevice 栈内同步重建导致的悬空指针）
     void scheduleDeviceTableRefresh();
 
+    // 左侧导航 + 右侧页栈
+    QListWidget *m_navList = nullptr;
+    QStackedWidget *m_pageStack = nullptr;
+
     // Device tab
     QTableWidget *m_deviceTable;
+
+    // 控制器列表页（由通信设备派生）
+    QTableWidget *m_controllerTable = nullptr;
+
+    // 收发监视页（内嵌 CommMonitorDialog）
+    CommMonitorDialog *m_monitorDialog = nullptr;
     QPushButton *m_addDeviceBtn, *m_removeDeviceBtn, *m_configBtn, *m_readBtn;
 
     // Receive event tab

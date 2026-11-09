@@ -7,6 +7,8 @@
 #include <QtTest>
 #include <QPushButton>
 #include <QTableWidget>
+#include <QListWidget>
+#include <QStackedWidget>
 #include <QSignalSpy>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -118,6 +120,8 @@ private slots:
 
     // 通讯健壮性回归（点连接开关 UAF / 组帧重入 / 断线脏半帧 / 配置键保留 / 发送事件往返）
     void testDialogToggleConnection();
+    // VM4.4 UI B4：通信管理左侧导航 + 堆叠页（6 项）结构回归
+    void testCommunicationManagerLeftNav();
     void testFrameAssemblerReentrancy();
     void testDisconnectClearsFrameBuffer();
     void testConfigDialogPreservesUnmanagedKeys();
@@ -1279,6 +1283,38 @@ void CommWritebackTest::testDialogToggleConnection()
 
     dlg.close();
     QVERIFY(cm->removeDevice(QStringLiteral("SIM_DLG")));
+}
+
+void CommWritebackTest::testCommunicationManagerLeftNav()
+{
+    CommunicationManagerDialog dlg;
+    auto *nav = dlg.findChild<QListWidget *>(QStringLiteral("commNavList"));
+    QVERIFY(nav);
+    QCOMPARE(nav->count(), 6);
+    const QStringList want{QStringLiteral("通信设备"), QStringLiteral("控制器列表"),
+                           QStringLiteral("接收事件"), QStringLiteral("发送事件"),
+                           QStringLiteral("心跳"), QStringLiteral("收发监视")};
+    for (int i = 0; i < want.size(); ++i)
+        QCOMPARE(nav->item(i)->text(), want.at(i));
+
+    auto *stack = dlg.findChild<QStackedWidget *>(QStringLiteral("commPageStack"));
+    QVERIFY(stack);
+    QCOMPARE(stack->count(), 6);
+    QCOMPARE(stack->currentIndex(), 0);   // 设备页默认（既有测试依赖）
+
+    nav->setCurrentRow(2);
+    QCOMPARE(stack->currentIndex(), 2);
+    nav->setCurrentRow(5);
+    QCOMPARE(stack->currentIndex(), 5);
+
+    // 既有回归依赖的设备表仍在
+    QVERIFY(dlg.findChild<QTableWidget *>(QStringLiteral("deviceTable")));
+    // 控制器列表页的只读表
+    auto *controller = dlg.findChild<QTableWidget *>(QStringLiteral("controllerTable"));
+    QVERIFY(controller);
+    QCOMPARE(controller->columnCount(), 3);
+    QCOMPARE(controller->editTriggers(),
+             QAbstractItemView::EditTriggers(QAbstractItemView::NoEditTriggers));
 }
 
 void CommWritebackTest::testFrameAssemblerReentrancy()
