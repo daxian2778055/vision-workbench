@@ -285,6 +285,23 @@ TCP 客户端 / TCP 服务端 / UDP / 串口 / 汇川 H2U / 基恩士 KV / 松�
   判红后还原。ui_guards_test 47、comm_writeback_test 52、ctest 79/79、ci exit 0。
 - **暂缓**：gtd 导入导出（格式未定）、FINS TCP/UDP（需真机）。
 
+### B5-1 已落地（2026-11-09）
+
+> 对上条「FINS TCP/UDP（需真机）」的就地更正（原文保留）：FINS 是公开协议（Omron W342），
+> 协议帧、节点与回环用例均可离线完成；「真机」只适用于最终现场联调，不应作为实现前置。
+
+- **实现**：FinsFrame 纯编解码（FINS/TCP 头、节点地址请求/响应、帧发送、FINS 帧头、
+  Memory Area Read/Write 0101/0102；区域码按 W342 为「区域码字节+00」，DM=82 00；
+  值大端，int16/uint16/int32/uint32/float）+ FinsCommNode（FINS/TCP 握手/按长度切帧、
+  FINS/UDP 裸报文、寄存器轮询、writeRegister、超时/自动重连）。
+- **接线**：CommunicationManager 新增 "FINS TCP"/"FINS UDP" 设备类型（大小写不敏感），
+  透传目标 IP/端口（默认 7920，VM 模块默认）/轮询/超时/重连/节点号/寄存器表。
+- **腿**：fins_test 8 条——节点地址请求 20 字节、读写帧字节级、值往返大端、
+  TCP 回环握手+读+写、UDP 回环读；改坏臂（区域码退回 00 82）判红后还原。
+  ctest -C Release 80/80、tools/ci.ps1 exit 0。
+- **仍未做**：参数面板（当前经设备配置 JSON/代码下发）；真机联调（现场步骤）。
+- **gtd 导入导出**：仍暂缓（格式未定）。
+
 ### B3 控件补齐进度（2026-11-09）
 
 | 控件 | 状态 | 说明 |
