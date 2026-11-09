@@ -15,6 +15,7 @@ QString runtimeControlTypeName(RuntimeControlType type)
     case RuntimeControlType::ResultTable:  return QStringLiteral("结果表格");
     case RuntimeControlType::IoStatus:     return QStringLiteral("IO状态");
     case RuntimeControlType::ParamSetting: return QStringLiteral("参数设置");
+    case RuntimeControlType::SwitchControl: return QStringLiteral("开关控制");
     }
     return QStringLiteral("未知");
 }
@@ -29,6 +30,7 @@ bool runtimeControlTypeFromName(const QString &name, RuntimeControlType &out)
     if (name == QStringLiteral("结果表格")) { out = RuntimeControlType::ResultTable; return true; }
     if (name == QStringLiteral("IO状态"))   { out = RuntimeControlType::IoStatus; return true; }
     if (name == QStringLiteral("参数设置")) { out = RuntimeControlType::ParamSetting; return true; }
+    if (name == QStringLiteral("开关控制")) { out = RuntimeControlType::SwitchControl; return true; }
     return false;
 }
 
@@ -55,8 +57,12 @@ static QJsonObject controlToJson(const RuntimeControl &c)
     geo["w"] = c.geometry.width();
     geo["h"] = c.geometry.height();
     o["geometry"] = geo;
-    if (c.type == RuntimeControlType::ParamSetting) {
+    // 参数设置与开关控制都靠 paramKey 定位节点参数
+    if (c.type == RuntimeControlType::ParamSetting
+        || c.type == RuntimeControlType::SwitchControl) {
         if (!c.paramKey.isEmpty()) o["paramKey"] = c.paramKey;
+    }
+    if (c.type == RuntimeControlType::ParamSetting) {
         o["paramMin"] = c.paramMin;
         o["paramMax"] = c.paramMax;
     }
@@ -129,8 +135,11 @@ static RuntimeControl controlFromJson(const QJsonObject &o, RuntimeControlType t
         }
     }
 
-    if (ctrl.type == RuntimeControlType::ParamSetting) {
+    if (ctrl.type == RuntimeControlType::ParamSetting
+        || ctrl.type == RuntimeControlType::SwitchControl) {
         ctrl.paramKey = o["paramKey"].toString();
+    }
+    if (ctrl.type == RuntimeControlType::ParamSetting) {
         ctrl.paramMin = o["paramMin"].toDouble(0.0);
         ctrl.paramMax = o["paramMax"].toDouble(100.0);
         if (ctrl.paramMax <= ctrl.paramMin) ctrl.paramMax = ctrl.paramMin + 1.0;

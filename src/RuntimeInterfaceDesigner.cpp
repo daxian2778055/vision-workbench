@@ -561,6 +561,7 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
             { "基础", "信号灯",   RuntimeControlType::StatusLight },
             { "基础", "按钮",     RuntimeControlType::Button },
             { "基础", "参数设置", RuntimeControlType::ParamSetting },
+            { "基础", "开关控制", RuntimeControlType::SwitchControl },
             { "图表", "表格",     RuntimeControlType::ResultTable },
             { "其它", "IO状态",   RuntimeControlType::IoStatus },
         };
@@ -1542,7 +1543,8 @@ void RuntimeInterfaceDesigner::populateBindKeyCombo()
     if (!ctrl) { m_bindKeyCombo->clear(); return; }
 
     // 参数设置固定绑节点（绑定方式行被隐藏，combo 里可能没有值）
-    const QString bindType = (ctrl->type == RuntimeControlType::ParamSetting)
+    const QString bindType = (ctrl->type == RuntimeControlType::ParamSetting
+                              || ctrl->type == RuntimeControlType::SwitchControl)
                                  ? QStringLiteral("node")
                                  : m_bindTypeCombo->currentData().toString();
     m_bindKeyCombo->clear();
@@ -1649,12 +1651,14 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
     // 官方：按钮的数据源只有「配置」按钮；其它控件保持绑定方式/对象两行
     const bool isButton = (ctrl->type == RuntimeControlType::Button);
     const bool isParam = (ctrl->type == RuntimeControlType::ParamSetting);
+    const bool isSwitch = (ctrl->type == RuntimeControlType::SwitchControl);
     if (m_dataForm && m_actionConfigBtn) {
         m_dataForm->setRowVisible(m_actionConfigBtn, isButton);
-        // 参数设置固定绑节点，所以只藏「绑定方式」，仍需「绑定对象」选节点
-        m_dataForm->setRowVisible(m_bindTypeCombo, !isButton && !isParam);
+        // 参数设置/开关控制固定绑节点，只藏「绑定方式」，仍需「绑定对象」选节点
+        m_dataForm->setRowVisible(m_bindTypeCombo, !isButton && !isParam && !isSwitch);
         m_dataForm->setRowVisible(m_bindKeyCombo, !isButton);
-        if (m_paramKeyEdit) m_dataForm->setRowVisible(m_paramKeyEdit, isParam);
+        if (m_paramKeyEdit) m_dataForm->setRowVisible(m_paramKeyEdit, isParam || isSwitch);
+        // bool 参数没有取值范围
         if (m_paramRangeHost) m_dataForm->setRowVisible(m_paramRangeHost, isParam);
     }
     if (m_paramKeyEdit) m_paramKeyEdit->setText(ctrl->paramKey);
@@ -1750,6 +1754,10 @@ void RuntimeInterfaceDesigner::onPropertyEdited()
         if (m_paramMinSpin) ctrl->paramMin = m_paramMinSpin->value();
         if (m_paramMaxSpin) ctrl->paramMax = m_paramMaxSpin->value();
         if (ctrl->paramMax <= ctrl->paramMin) ctrl->paramMax = ctrl->paramMin + 1.0;
+    } else if (ctrl->type == RuntimeControlType::SwitchControl) {
+        ctrl->bindType = QStringLiteral("node");   // 开关控制同样固定绑节点
+        ctrl->bindKey = m_bindKeyCombo->currentData().toString();
+        if (m_paramKeyEdit) ctrl->paramKey = m_paramKeyEdit->text().trimmed();
     }
 
     if (ctrl->type == RuntimeControlType::ResultTable) {

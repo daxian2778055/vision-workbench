@@ -26,6 +26,7 @@
 #include <QShortcut>
 #include <QTabWidget>
 #include <QDoubleSpinBox>
+#include <QCheckBox>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QFileInfo>
@@ -56,6 +57,7 @@ void runtimeDesignerPaletteGroupedByOfficialSections();
 void buttonActionsMigrateAndRoundTrip();
 void runtimeViewHonorsCurrentPageAndActionTable();
 void paramSettingControlRoundTripsAndSeedsWithoutWriteBack();
+void switchControlRoundTripsAndSeedsWithoutWriteBack();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -762,6 +764,48 @@ void UiGuardsTest::paramSettingControlRoundTripsAndSeedsWithoutWriteBack()
     QCOMPARE(spy.at(0).at(0).toString(), QStringLiteral("曝光模块"));
     QCOMPARE(spy.at(0).at(1).toString(), QStringLiteral("exposure"));
     QCOMPARE(spy.at(0).at(2).toDouble(), 20.0);
+}
+
+// B3-2 开关控制（官方 9.3）：订阅节点 bool 参数，控制其是否启用。
+void UiGuardsTest::switchControlRoundTripsAndSeedsWithoutWriteBack()
+{
+    RuntimeInterfacePage page;
+    RuntimeControl *c = page.addControl(RuntimeControlType::SwitchControl,
+                                        QRect(0, 0, 200, 60));
+    QVERIFY(c);
+    c->bindKey = QStringLiteral("预处理模块");
+    c->paramKey = QStringLiteral("enable");
+
+    RuntimeInterfacePage back;
+    QVERIFY(back.fromJson(page.toJson()));
+    const RuntimeControl &r = back.controls.first();
+    QCOMPARE(r.type, RuntimeControlType::SwitchControl);
+    QCOMPARE(r.paramKey, QStringLiteral("enable"));
+
+    RuntimeInterface layout;
+    layout.ensurePage();
+    layout.page(0)->controls.append(r);
+    RuntimeInterfaceView view;
+    QSignalSpy spy(&view, &RuntimeInterfaceView::switchChangeRequested);
+    view.setInterface(layout);
+
+    auto *box = view.findChild<QCheckBox *>();
+    QVERIFY2(box, "开关控制应渲染出勾选框");
+    QVERIFY2(!box->isChecked(), "无回填时默认应为关");
+
+    // 回填「开」：不应产生写回
+    QHash<QString, double> seeds;
+    seeds.insert(QStringLiteral("预处理模块|enable"), 1.0);
+    view.setParameterValues(seeds);
+    QVERIFY2(box->isChecked(), "回填 1.0 应显示为开");
+    QCOMPARE(spy.count(), 0);
+
+    // 用户拨动才触发
+    box->setChecked(false);
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(0).toString(), QStringLiteral("预处理模块"));
+    QCOMPARE(spy.at(0).at(1).toString(), QStringLiteral("enable"));
+    QCOMPARE(spy.at(0).at(2).toBool(), false);
 }
 
 QTEST_MAIN(UiGuardsTest)

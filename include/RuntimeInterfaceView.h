@@ -60,6 +60,9 @@ signals:
     /// 参数设置控件（官方 9.3）：nodeName + paramKey 定位节点参数，value 为新值。
     void parameterChangeRequested(const QString &nodeName, const QString &paramKey,
                                   double value);
+    /// 开关控制（官方 9.3）：订阅节点 bool 参数，控制其是否启用。
+    void switchChangeRequested(const QString &nodeName, const QString &paramKey,
+                               bool enabled);
 
 protected:
     void paintEvent(QPaintEvent *event) override;

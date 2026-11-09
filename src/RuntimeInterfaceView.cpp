@@ -11,6 +11,7 @@
 #include <QMetaType>
 #include <QTabWidget>
 #include <QDoubleSpinBox>
+#include <QCheckBox>
 #include <QSignalBlocker>
 #include <QTableWidget>
 #include <QHeaderView>
@@ -51,6 +52,16 @@ void RuntimeInterfaceView::setParameterValues(const QHash<QString, double> &valu
         if (!values.contains(id)) continue;
         QSignalBlocker block(spin);
         spin->setValue(values.value(id));
+    }
+    // 开关控制复用同一份回填表：bool 以 0/1 承载
+    for (QCheckBox *box : findChildren<QCheckBox *>()) {
+        const QString node = box->property("vfpNode").toString();
+        const QString key = box->property("vfpParam").toString();
+        if (node.isEmpty() || key.isEmpty()) continue;
+        const QString id = node + QLatin1Char('|') + key;
+        if (!values.contains(id)) continue;
+        QSignalBlocker block(box);
+        box->setChecked(values.value(id) != 0.0);
     }
 }
 
@@ -332,6 +343,35 @@ QWidget *RuntimeInterfaceView::createControlWidget(const RuntimeControl &ctrl)
                     emit parameterChangeRequested(nodeName, paramKey, v);
                 });
         lay->addWidget(spin, 1);
+        host->setStyleSheet(QStringLiteral(
+            "QWidget { background-color: #22222a; border: 1px solid #3a3a5c; border-radius: 4px; }"));
+        return host;
+    }
+    case RuntimeControlType::SwitchControl: {
+        // 官方 9.3：开关控制订阅模块 bool 参数，运行界面控制其是否启用。
+        auto *host = new QWidget();
+        auto *lay = new QVBoxLayout(host);
+        lay->setContentsMargins(8, 4, 8, 4);
+        lay->setSpacing(2);
+        auto *title = new QLabel(ctrl.displayTitle(), host);
+        title->setStyleSheet(QStringLiteral("font-size: 11px; color: #8a8a9a;"));
+        lay->addWidget(title);
+
+        auto *box = new QCheckBox(host);
+        box->setProperty("vfpNode", ctrl.bindKey);
+        box->setProperty("vfpParam", ctrl.paramKey);
+        const QString id = ctrl.bindKey + QLatin1Char('|') + ctrl.paramKey;
+        {
+            QSignalBlocker block(box);   // 回填不触发写回
+            box->setChecked(m_paramValues.value(id, 0.0) != 0.0);
+        }
+        const QString nodeName = ctrl.bindKey;
+        const QString paramKey = ctrl.paramKey;
+        connect(box, &QCheckBox::toggled, this,
+                [this, nodeName, paramKey](bool on) {
+                    emit switchChangeRequested(nodeName, paramKey, on);
+                });
+        lay->addWidget(box, 1);
         host->setStyleSheet(QStringLiteral(
             "QWidget { background-color: #22222a; border: 1px solid #3a3a5c; border-radius: 4px; }"));
         return host;

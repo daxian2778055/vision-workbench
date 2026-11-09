@@ -7347,6 +7347,23 @@ void MainWindow::setupDockWidgets()
                     logMessage(tr("运行界面修改参数失败：找不到节点 %1").arg(nodeName));
                     });
 
+                    // 开关控制（B3-2，官方 9.3）：bool 参数按真实类型写回
+                    connect(m_runtimeView, &RuntimeInterfaceView::switchChangeRequested, this,
+                    [this](const QString &nodeName, const QString &paramKey, bool enabled) {
+                    if (nodeName.isEmpty() || paramKey.isEmpty()) return;
+                    FlowScene *scene = currentFlowScene();
+                    if (!scene) return;
+                    for (NodeBase *n : scene->nodes()) {
+                        if (n->fullName() != nodeName) continue;
+                        n->setParam(paramKey, enabled);
+                        logMessage(tr("运行界面开关：%1.%2 = %3")
+                                       .arg(nodeName, paramKey,
+                                            enabled ? tr("开") : tr("关")));
+                        return;
+                    }
+                    logMessage(tr("运行界面开关失败：找不到节点 %1").arg(nodeName));
+                    });
+
         // 全局变量变化 → 运行界面实时更新
         connect(GlobalVariableManager::instance(), &GlobalVariableManager::variableChanged,
                 m_runtimeView, &RuntimeInterfaceView::updateVariable);
@@ -7592,7 +7609,10 @@ void MainWindow::loadRuntimeInterfaceLayout()
         if (scene) {
             for (const RuntimeInterfacePage &pg : layout.pages) {
                 for (const RuntimeControl &c : pg.controls) {
-                    if (c.type != RuntimeControlType::ParamSetting) continue;
+                    // 参数设置与开关控制都要回填（bool 以 0/1 承载）
+                    if (c.type != RuntimeControlType::ParamSetting
+                        && c.type != RuntimeControlType::SwitchControl)
+                        continue;
                     if (c.bindKey.isEmpty() || c.paramKey.isEmpty()) continue;
                     for (NodeBase *n : scene->nodes()) {
                         if (n->fullName() != c.bindKey) continue;

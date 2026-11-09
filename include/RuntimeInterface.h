@@ -18,7 +18,8 @@ enum class RuntimeControlType {
     Button,       /// 按钮：触发流程动作（开始/停止/单次/触发流程）
     ResultTable,  /// 结果表格：多列历史结果（列绑定全局变量/节点输出，按轮提交行）
     IoStatus,     /// IO 状态：直绑相机 IO 节点（成功=灯，值/错误=文本）
-    ParamSetting  /// 参数设置：订阅节点 int/float 参数，运行界面直接改（官方 9.3）
+    ParamSetting, /// 参数设置：订阅节点 int/float 参数，运行界面直接改（官方 9.3）
+    SwitchControl /// 开关控制：订阅节点 bool 参数，运行界面控制其是否启用（官方 9.3）
 };
 
 /// 结果表格列（ResultTable 专用）
