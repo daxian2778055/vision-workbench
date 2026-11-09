@@ -7307,7 +7307,28 @@ void MainWindow::setupDockWidgets()
                     m_executor->startExecution();
             }
             logMessage(QStringLiteral("运行界面按钮触发: %1").arg(actionId));
-        });
+            });
+
+            // 官方动作表（B2-2）：exec 类由上面的旧连接处理，这里只分派其余类型，
+            // 否则同一行 exec 会被处理两次（起跑动作重复下发）。
+            connect(m_runtimeView, &RuntimeInterfaceView::runtimeActionTriggered, this,
+                [this](const QString &type, const QString &method, const QString &param) {
+                    if (type == QLatin1String("exec")) return;
+                    if (type == QLatin1String("reset")) {
+                        m_executor->resetRuntimeStats();
+                        logMessage(tr("运行界面按钮：已清零运行统计"));
+                    } else if (type == QLatin1String("scheme")) {
+                        if (method == QLatin1String("save")) onSaveProject();
+                        else if (method == QLatin1String("load")) onLoadProject();
+                        else logMessage(tr("运行界面按钮：方案动作「%1」未接线").arg(method));
+                    } else if (type == QLatin1String("ui")) {
+                        m_runtimeView->showPage(method.isEmpty() ? param : method);
+                    } else if (type == QLatin1String("param")) {
+                        // 写算子参数还是写全局变量尚未确定，先如实提示而不是静默忽略
+                        logMessage(tr("运行界面按钮：参数配置动作尚未接线（%1 = %2）")
+                                       .arg(method, param));
+                    }
+                });
 
         // 全局变量变化 → 运行界面实时更新
         connect(GlobalVariableManager::instance(), &GlobalVariableManager::variableChanged,

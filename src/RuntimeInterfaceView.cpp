@@ -31,7 +31,21 @@ void RuntimeInterfaceView::setInterface(const RuntimeInterface &layout)
     m_current = layout;
     m_current.ensurePage();
     rebuildWidgets();
+    // currentPageIndex 此前只存不用（盘点发现），这里让运行态默认页真正生效
+    if (m_tabs && m_tabs->count() > 0)
+        m_tabs->setCurrentIndex(qBound(0, m_current.currentPageIndex, m_tabs->count() - 1));
     update();
+}
+
+void RuntimeInterfaceView::showPage(const QString &pageName)
+{
+    if (!m_tabs || pageName.isEmpty()) return;
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        if (m_tabs->tabText(i) == pageName) {
+            m_tabs->setCurrentIndex(i);
+            return;
+        }
+    }
 }
 
 void RuntimeInterfaceView::clearWidgets()
@@ -254,16 +268,21 @@ QWidget *RuntimeInterfaceView::createControlWidget(const RuntimeControl &ctrl)
             .arg(bg, border).arg(ctrl.fontSize)
             .arg(ctrl.bold ? QStringLiteral("bold") : QStringLiteral("normal"))
             .arg(pressed));
-        // 官方动作表：优先取第一行动作；只有「执行」类能沿用现有 actionTriggered
-        // 分发（start/stop/single/trigger）。没有动作表时回落旧的 bindKey，保持兼容。
-        QString actionId = ctrl.bindKey;
-        if (!ctrl.actions.isEmpty()) {
-            const RuntimeAction &first = ctrl.actions.first();
+        // 官方动作表：逐行上报给 MainWindow 分发。exec 类仍发旧 actionTriggered
+        // （新信号侧对 exec 直接忽略，避免起跑被执行两次）；
+        // 没有动作表时回落旧的 bindKey，保持旧方案可用。
+        const QList<RuntimeAction> acts = ctrl.actions;
+        const QString legacyId = ctrl.bindKey;
+        connect(btn, &QPushButton::clicked, this, [this, acts, legacyId]() {
+            if (acts.isEmpty()) {
+                emit actionTriggered(legacyId);
+                return;
+            }
+            for (const RuntimeAction &a : acts)
+                emit runtimeActionTriggered(a.commandType, a.method, a.param);
+            const RuntimeAction &first = acts.first();
             if (first.commandType == QLatin1String("exec") && !first.method.isEmpty())
-                actionId = first.method;
-        }
-        connect(btn, &QPushButton::clicked, this, [this, actionId]() {
-            emit actionTriggered(actionId);
+                emit actionTriggered(first.method);
         });
         return btn;
     }

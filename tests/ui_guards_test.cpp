@@ -5,6 +5,7 @@
 #include "BoxAnnotatorDialog.h"
 #include "YoloAnnotation.h"
 #include "RuntimeInterface.h"
+#include "RuntimeInterfaceView.h"
 #include "ExportWriteCheck.h"
 #include "FocusGuard.h"
 #include "RuntimeInterfaceDesigner.h"
@@ -23,6 +24,7 @@
 #include <QGroupBox>
 #include <QPushButton>
 #include <QShortcut>
+#include <QTabWidget>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QFileInfo>
@@ -51,6 +53,7 @@ void runtimeDesignerAlignHCenterAndRight();
 void runtimeControlAppearanceRoundTripsAndStaysCompatible();
 void runtimeDesignerPaletteGroupedByOfficialSections();
 void buttonActionsMigrateAndRoundTrip();
+void runtimeViewHonorsCurrentPageAndActionTable();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -658,6 +661,59 @@ void UiGuardsTest::buttonActionsMigrateAndRoundTrip()
         QVERIFY2(labels.contains(QStringLiteral("配置")),
                  "按钮的数据源应是「配置」按钮（官方实机口径）");
     }
+}
+
+// B2-2：currentPageIndex 生效、showPage 按页名切页、动作表逐行上报。
+void UiGuardsTest::runtimeViewHonorsCurrentPageAndActionTable()
+{
+    RuntimeInterface layout;
+    layout.ensurePage();
+    layout.page(0)->pageName = QStringLiteral("页面1");
+    layout.addPage();
+    layout.page(1)->pageName = QStringLiteral("页面2");
+    layout.currentPageIndex = 1;
+
+    RuntimeInterfaceView view;
+    view.setInterface(layout);
+    auto *tabs = view.findChild<QTabWidget *>();
+    QVERIFY2(tabs, "多页应建出 QTabWidget");
+    QCOMPARE(tabs->count(), 2);
+    QVERIFY2(tabs->currentIndex() == 1,
+             "currentPageIndex 必须真正生效（此前只存不用）");
+
+    view.showPage(QStringLiteral("页面1"));
+    QCOMPARE(tabs->currentIndex(), 0);
+    view.showPage(QStringLiteral("不存在的页"));   // 找不到应静默忽略
+    QCOMPARE(tabs->currentIndex(), 0);
+
+    // 动作表：点击按钮应逐行上报
+    RuntimeControl *c = layout.page(0)->addControl(RuntimeControlType::Button,
+                                                   QRect(10, 10, 120, 40));
+    QVERIFY(c);
+    c->title = QStringLiteral("测试按钮");
+    RuntimeAction a1;
+    a1.commandType = QStringLiteral("scheme");
+    a1.method = QStringLiteral("save");
+    RuntimeAction a2;
+    a2.commandType = QStringLiteral("reset");
+    a2.method = QStringLiteral("counter");
+    c->actions = {a1, a2};
+    view.setInterface(layout);
+
+    QSignalSpy spy(&view, &RuntimeInterfaceView::runtimeActionTriggered);
+    QPushButton *btn = nullptr;
+    for (QPushButton *b : view.findChildren<QPushButton *>()) {
+        if (b->text() == QStringLiteral("测试按钮")) {
+            btn = b;
+            break;
+        }
+    }
+    QVERIFY2(btn, "没找到运行视图里的按钮");
+    btn->click();
+    QCOMPARE(spy.count(), 2);
+    QCOMPARE(spy.at(0).at(0).toString(), QStringLiteral("scheme"));
+    QCOMPARE(spy.at(0).at(1).toString(), QStringLiteral("save"));
+    QCOMPARE(spy.at(1).at(0).toString(), QStringLiteral("reset"));
 }
 
 QTEST_MAIN(UiGuardsTest)

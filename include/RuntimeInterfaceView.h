@@ -39,6 +39,9 @@ public:
     /// 控件数量（用于判断是否已配置运行界面）
     int controlCount() const { return m_current.totalControlCount(); }
 
+    /// 切到指定名称的页面（官方「界面链接」动作用）；找不到则忽略。
+    void showPage(const QString &pageName);
+
     /// 提供当前流程的节点名（2026-10-27）：配合"绑定失效红显"。
     /// 设计器与运行态共用 RuntimeInterface::staleBindings 判据，避免两边口径不一。
     void setKnownNodeNames(const QStringList &names);
@@ -46,6 +49,10 @@ public:
 signals:
     /// 按钮动作触发：actionId 为 "start"/"stop"/"single"/"trigger:<流程名>"
     void actionTriggered(const QString &actionId);
+    /// 官方动作表（B2-1）：逐行上报命令类型 / 方法 / 输入参数。
+    /// commandType: ui / param / scheme / exec / reset；exec 仍由上面的旧信号处理。
+    void runtimeActionTriggered(const QString &commandType, const QString &method,
+                                const QString &param);
 
 protected:
     void paintEvent(QPaintEvent *event) override;

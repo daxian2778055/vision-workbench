@@ -145,8 +145,20 @@ TCP 客户端 / TCP 服务端 / UDP / 串口 / 汇川 H2U / 基恩士 KV / 松�
 **已知限度（需现场核对）**：官方各命令类型下的**精确方法清单未取证到**，
 方法列做成**可编辑下拉**——`exec` 预填现有 4 个动作，`ui` 预填页面名，
 `param` 预填全局变量名，`scheme`/`reset` 给合理默认，允许手填。
-界面链接跳页、参数写入、方案切换、计数器重置的**运行期执行**尚未接，
-当前只有 `exec` 类真正生效。
+
+### B2-2 已落地（2026-11-09）：动作表接执行链
+
+- `RuntimeInterfaceView` 新增信号 `runtimeActionTriggered(commandType, method, param)`，
+  按钮点击时**逐行上报**；`exec` 类仍发旧 `actionTriggered`（新信号侧对 exec 直接 return，
+  避免起跑动作被执行两次）。无动作表时回落旧 `bindKey`。
+- `MainWindow` 分派非 exec 类型：
+  - `reset` → `FlowExecutor::resetRuntimeStats()`（现成公开接口）
+  - `scheme` → `save` 走 `onSaveProject()`、`load` 走 `onLoadProject()`，其它值明确记日志
+  - `ui` → `RuntimeInterfaceView::showPage(pageName)`（按 Tab 页名切换）
+  - `param` → **未接线**，如实记日志（写算子参数还是写全局变量尚未定）
+- 顺带修掉盘点发现的 `currentPageIndex` 只存不用：`setInterface()` 重建后按其设默认页。
+- 腿 `runtimeViewHonorsCurrentPageAndActionTable` 覆盖默认页生效、`showPage` 切换与
+  不存在页静默忽略、动作表点击逐行上报（`QSignalSpy`）；`UiGuardsTest` **24 passed**。
 
 画布本身也有属性（第二张截图右侧「基础设置 / 外观」）：
 显示网格、网格颜色（`#FF1E1E1E`）、背景（`#FF383838`）。
