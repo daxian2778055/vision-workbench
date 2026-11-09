@@ -60,6 +60,7 @@ void runtimeViewHonorsCurrentPageAndActionTable();
 void paramSettingControlRoundTripsAndSeedsWithoutWriteBack();
 void switchControlRoundTripsAndSeedsWithoutWriteBack();
 void comboBoxRoundTripsAndSeedsWithoutWriteBack();
+void paramActionTargetParsesNodeKeyValue();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -853,6 +854,45 @@ void UiGuardsTest::comboBoxRoundTripsAndSeedsWithoutWriteBack()
     QCOMPARE(spy.at(0).at(0).toString(), QStringLiteral("配方模块"));
     QCOMPARE(spy.at(0).at(1).toString(), QStringLiteral("recipe"));
     QCOMPARE(spy.at(0).at(2).toString(), QStringLiteral("配方C"));
+}
+
+// B2-2 补口：param 动作的目标解析（method=节点全名，param="参数键=值"）。
+void UiGuardsTest::paramActionTargetParsesNodeKeyValue()
+{
+    QString node, key;
+    QVariant value;
+
+    // 数值参数
+    QVERIFY(parseParamActionTarget(QStringLiteral("曝光模块"),
+                                   QStringLiteral("exposure=12.5"), &node, &key, &value));
+    QCOMPARE(node, QStringLiteral("曝光模块"));
+    QCOMPARE(key, QStringLiteral("exposure"));
+    QCOMPARE(value.userType(), QMetaType::Double);
+    QCOMPARE(value.toDouble(), 12.5);
+
+    // 字符串参数（枚举/模式）
+    QVERIFY(parseParamActionTarget(QStringLiteral("配方模块"),
+                                   QStringLiteral("mode=配方B"), &node, &key, &value));
+    QCOMPARE(value.userType(), QMetaType::QString);
+    QCOMPARE(value.toString(), QStringLiteral("配方B"));
+
+    // 前后空白应被裁掉
+    QVERIFY(parseParamActionTarget(QStringLiteral("  模块1  "),
+                                   QStringLiteral("  thr = 80 "), &node, &key, &value));
+    QCOMPARE(node, QStringLiteral("模块1"));
+    QCOMPARE(key, QStringLiteral("thr"));
+    QCOMPARE(value.toDouble(), 80.0);
+
+    // 格式错误：无 '=' / 参数键为空 / 节点为空
+    QVERIFY2(!parseParamActionTarget(QStringLiteral("模块1"), QStringLiteral("exposure"),
+                                     &node, &key, &value),
+             "缺 '=' 必须拒绝");
+    QVERIFY2(!parseParamActionTarget(QStringLiteral("模块1"), QStringLiteral("=12"),
+                                     &node, &key, &value),
+             "参数键为空必须拒绝");
+    QVERIFY2(!parseParamActionTarget(QStringLiteral("  "), QStringLiteral("a=1"),
+                                     &node, &key, &value),
+             "节点为空必须拒绝");
 }
 
 QTEST_MAIN(UiGuardsTest)

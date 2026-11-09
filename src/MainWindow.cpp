@@ -7324,9 +7324,24 @@ void MainWindow::setupDockWidgets()
                     } else if (type == QLatin1String("ui")) {
                         m_runtimeView->showPage(method.isEmpty() ? param : method);
                     } else if (type == QLatin1String("param")) {
-                        // 写算子参数还是写全局变量尚未确定，先如实提示而不是静默忽略
-                        logMessage(tr("运行界面按钮：参数配置动作尚未接线（%1 = %2）")
-                                       .arg(method, param));
+                        // method = 目标节点全名，param = "参数键=值"
+                        QString nodeName, paramKey;
+                        QVariant value;
+                        if (!parseParamActionTarget(method, param, &nodeName, &paramKey, &value)) {
+                            logMessage(tr("运行界面参数动作格式错误：「%1」，应为 节点.参数=值")
+                                           .arg(param));
+                            return;
+                        }
+                        FlowScene *scene = currentFlowScene();
+                        if (!scene) return;
+                        for (NodeBase *n : scene->nodes()) {
+                            if (n->fullName() != nodeName) continue;
+                            n->setParam(paramKey, value);
+                            logMessage(tr("运行界面参数动作：%1.%2 = %3")
+                                           .arg(nodeName, paramKey, value.toString()));
+                            return;
+                        }
+                        logMessage(tr("运行界面参数动作失败：找不到节点 %1").arg(nodeName));
                     }
                     });
 

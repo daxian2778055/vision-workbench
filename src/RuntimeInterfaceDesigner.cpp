@@ -1415,11 +1415,9 @@ void RuntimeInterfaceDesigner::configureButtonActions()
             return pages;
         }
         if (type == QLatin1String("param")) {
-            QStringList names;
-            const auto vars = GlobalVariableManager::instance()->variables();
-            for (auto it = vars.constBegin(); it != vars.constEnd(); ++it)
-                names << it.key();
-            return names;
+            // 参数配置动作：方法列选**目标节点**，输入参数列填「参数键=值」
+            // （官方动作表只有三列，节点信息放方法列最贴近原形态）
+            return m_nodeNames;
         }
         if (type == QLatin1String("scheme"))
             return {QStringLiteral("save"), QStringLiteral("load"), QStringLiteral("switch")};

@@ -36,6 +36,25 @@ bool runtimeControlTypeFromName(const QString &name, RuntimeControlType &out)
     return false;
 }
 
+bool parseParamActionTarget(const QString &method, const QString &param,
+                            QString *nodeName, QString *paramKey, QVariant *value)
+{
+    const QString node = method.trimmed();
+    if (node.isEmpty()) return false;
+    const int eq = param.indexOf(QLatin1Char('='));
+    if (eq <= 0) return false;          // 没有 '=' 或参数键为空
+    const QString key = param.left(eq).trimmed();
+    if (key.isEmpty()) return false;
+    const QString raw = param.mid(eq + 1).trimmed();
+
+    bool ok = false;
+    const double asNum = raw.toDouble(&ok);
+    if (nodeName) *nodeName = node;
+    if (paramKey) *paramKey = key;
+    if (value) *value = ok ? QVariant(asNum) : QVariant(raw);
+    return true;
+}
+
 // ==================== RuntimeControl JSON ====================
 
 static QJsonObject controlToJson(const RuntimeControl &c)

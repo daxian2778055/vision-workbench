@@ -155,7 +155,9 @@ TCP 客户端 / TCP 服务端 / UDP / 串口 / 汇川 H2U / 基恩士 KV / 松�
   - `reset` → `FlowExecutor::resetRuntimeStats()`（现成公开接口）
   - `scheme` → `save` 走 `onSaveProject()`、`load` 走 `onLoadProject()`，其它值明确记日志
   - `ui` → `RuntimeInterfaceView::showPage(pageName)`（按 Tab 页名切换）
-  - `param` → **未接线**，如实记日志（写算子参数还是写全局变量尚未定）
+  - `param` → 已接线（B3 之后补）：`method` = 目标节点全名，`输入参数` = `参数键=值`；
+    值按数值优先解析、失败按字符串。格式错/找不到节点均明确记日志。解析逻辑抽成
+    `parseParamActionTarget()` 纯函数并配腿（`paramActionTargetParsesNodeKeyValue`）。
 - 顺带修掉盘点发现的 `currentPageIndex` 只存不用：`setInterface()` 重建后按其设默认页。
 - 腿 `runtimeViewHonorsCurrentPageAndActionTable` 覆盖默认页生效、`showPage` 切换与
   不存在页静默忽略、动作表点击逐行上报（`QSignalSpy`）；`UiGuardsTest` **24 passed**。

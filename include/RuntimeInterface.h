@@ -86,6 +86,13 @@ struct RuntimeControl {
     }
 };
 
+/// 解析按钮动作表里 `param`（参数配置）一行的目标：
+///   method = 节点完整名，param = "参数键=值"
+/// 值先按数值解析（int/float 参数），失败则按字符串（枚举/模式参数）。
+/// key 为空或缺 '=' 返回 false。
+bool parseParamActionTarget(const QString &method, const QString &param,
+                            QString *nodeName, QString *paramKey, QVariant *value);
+
 /// 运行界面单页：控件集合 + JSON 序列化
 struct RuntimeInterfacePage
 {
