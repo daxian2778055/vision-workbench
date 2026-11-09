@@ -1306,6 +1306,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261109.11",
       "recorded_at": "2026-11-09",
       "recorded_note": "B3-1：参数设置控件（订阅节点 int/float 参数，运行界面 QDoubleSpinBox 直接改；带当前值回填且回填不写回）。控件库基础组新增该项。"
+    },
+    {
+      "tag": "rc-20261109.12",
+      "commit": "9d161f785b303214b5d81a9bceef91a883490a93",
+      "exe_md5": "601db66af8de83d0f7b584a155e4f391",
+      "exe_bytes": 12050432,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261109.12",
+      "recorded_at": "2026-11-09",
+      "recorded_note": "B3-2：开关控制控件（订阅节点 bool 参数，QCheckBox 渲染，回填复用 setParameterValues 以 0/1 承载且不回写；MainWindow 按真实 bool 类型 setParam）。"
     }
   ],
   "legacy_backfilled": [
