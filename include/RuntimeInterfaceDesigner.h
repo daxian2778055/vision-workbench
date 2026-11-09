@@ -20,6 +20,7 @@ class QDragEnterEvent;
 class QDropEvent;
 class QContextMenuEvent;
 class QGroupBox;
+class QTableWidget;
 class RuntimeDesignerCanvas;
 
 /// 自定义运行界面设计器（对齐 VisionMaster 4.4 运行界面设计；多页 + 结果表格 + IO 状态）
@@ -64,6 +65,10 @@ private slots:
     /// 线图阵列：添加/删除一条数据系列
     void onChartSeriesAdd();
     void onChartSeriesDel();
+    /// 条件信号灯：增删条件 / 条件表单元格改值
+    void onLightCondAdd();
+    void onLightCondDel();
+    void onLightCondChanged(int row, int column);
     /// 启用/关闭当前页的内层 Tab（官方 9.3「Tab页」，页级实现）
     void enableInnerTabs();
     // 控件层级（官方工具条 4 档：顶层 / 上一层 / 底层 / 下一层）
@@ -199,6 +204,12 @@ QLabel *m_geometryLabel = nullptr;   /// 布局组只读显示尺寸/位置（�
     QListWidget *m_chartSeriesList = nullptr;
     QPushButton *m_chartSeriesAddBtn = nullptr;
     QPushButton *m_chartSeriesDelBtn = nullptr;
+    // 设置变量 / OK-NG / 条件信号灯（官方 9.3 基础组）
+    QComboBox *m_bindKey2Combo = nullptr;        ///< OK/NG 的 NG 绑定键（仅该类型显示）
+    QGroupBox *m_lightCondGroup = nullptr;       ///< 条件信号灯条件表
+    QTableWidget *m_lightCondTable = nullptr;
+    QPushButton *m_lightCondAddBtn = nullptr;
+    QPushButton *m_lightCondDelBtn = nullptr;
 
     int m_selected = -1;
     bool m_updatingProps = false;

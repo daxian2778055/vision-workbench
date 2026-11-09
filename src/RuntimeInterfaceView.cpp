@@ -18,6 +18,7 @@
 #include <QDoubleSpinBox>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QLineEdit>
 #include <QDateTime>
 #include <QPixmap>
 #include <QTimer>
@@ -697,6 +698,22 @@ void RuntimeInterfaceView::rebuildWidgets()
         if (ctrl.bindType == "global" && gv->variableExists(ctrl.bindKey))
             updateVariable(ctrl.bindKey, gv->getVariable(ctrl.bindKey));
     }
+    // OK/NG 双路初值 + 条件信号灯初值（全局变量绑定）
+    for (int i = 0; i < m_widgets.size() && i < m_widgetCtrls.size(); ++i) {
+        const RuntimeControl *ctrl = m_widgetCtrls.at(i);
+        if (!ctrl) continue;
+        if (ctrl->type == RuntimeControlType::OkNgCount) {
+            if (!ctrl->bindKey.isEmpty() && gv->variableExists(ctrl->bindKey))
+                updateVariable(ctrl->bindKey, gv->getVariable(ctrl->bindKey));
+            if (!ctrl->bindKey2.isEmpty() && gv->variableExists(ctrl->bindKey2))
+                updateVariable(ctrl->bindKey2, gv->getVariable(ctrl->bindKey2));
+        } else if (ctrl->type == RuntimeControlType::ConditionalLight
+                   && (ctrl->bindType.isEmpty()
+                       || ctrl->bindType == QLatin1String("global"))
+                   && !ctrl->bindKey.isEmpty() && gv->variableExists(ctrl->bindKey)) {
+            updateVariable(ctrl->bindKey, gv->getVariable(ctrl->bindKey));
+        }
+    }
 }
 
 QWidget *RuntimeInterfaceView::createControlWidget(const RuntimeControl &ctrl)
@@ -923,6 +940,170 @@ QWidget *RuntimeInterfaceView::createControlWidget(const RuntimeControl &ctrl)
         timer->start();
         return label;
     }
+    case RuntimeControlType::SetVariable: {
+        // 官方 9.3「设置变量」：运行界面把全局变量写成指定值
+        auto *host = new QWidget();
+        auto *lay = new QVBoxLayout(host);
+        lay->setContentsMargins(8, 4, 8, 4);
+        lay->setSpacing(2);
+        auto *title = new QLabel(ctrl.displayTitle(), host);
+        title->setStyleSheet(QStringLiteral("font-size: 11px; color: #8a8a9a;"));
+        lay->addWidget(title);
+
+        auto *current = new QLabel(QStringLiteral("--"), host);
+        current->setObjectName(QStringLiteral("RuntimeSetterCurrent"));
+        current->setStyleSheet(QStringLiteral("font-size: 11px; color: #c0c0cc;"));
+        lay->addWidget(current);
+
+        auto *row = new QHBoxLayout();
+        auto *edit = new QLineEdit(host);
+        edit->setObjectName(QStringLiteral("RuntimeSetterEdit"));
+        edit->setProperty("vfpGlobal", ctrl.bindKey);
+        auto *apply = new QPushButton(QStringLiteral("写入"), host);
+        apply->setObjectName(QStringLiteral("RuntimeSetterApply"));
+        apply->setStyleSheet(QStringLiteral(
+            "QPushButton { background-color: %1; color: white; border: none;"
+            "  border-radius: 3px; padding: 3px 10px; }").arg(ctrl.color));
+        row->addWidget(edit, 1);
+        row->addWidget(apply);
+        lay->addLayout(row);
+
+        const QString globalName = ctrl.bindKey;
+        auto commit = [current, edit, globalName]() {
+            auto *gv = GlobalVariableManager::instance();
+            if (globalName.isEmpty() || !gv->variableExists(globalName)) {
+                current->setText(QStringLiteral("变量不存在：%1")
+                                     .arg(globalName.isEmpty() ? QStringLiteral("(未绑定)")
+                                                               : globalName));
+                return;
+            }
+            const QString text = edit->text().trimmed();
+            QVariant value;
+            bool ok = true;
+            switch (gv->getVariableType(globalName)) {
+            case GlobalVariableManager::IntType: {
+                const int v = text.toInt(&ok);
+                value = v;
+                break;
+            }
+            case GlobalVariableManager::FloatType: {
+                const double v = text.toDouble(&ok);
+                value = v;
+                break;
+            }
+            case GlobalVariableManager::BoolType: {
+                const QString t = text.toLower();
+                const bool isTrue = (t == QLatin1String("true") || t == QLatin1String("1")
+                                     || t == QLatin1String("on") || t == QStringLiteral("是"));
+                const bool isFalse = (t == QLatin1String("false") || t == QLatin1String("0")
+                                      || t == QLatin1String("off") || t == QStringLiteral("否"));
+                ok = isTrue || isFalse;
+                value = isTrue;
+                break;
+            }
+            case GlobalVariableManager::StringType:
+                value = text;
+                break;
+            }
+            if (!ok) {
+                current->setText(QStringLiteral("输入无效：%1").arg(text));
+                return;
+            }
+            if (gv->setVariable(globalName, value))
+                current->setText(QStringLiteral("当前值：%1").arg(RuntimeInterfaceView::cellText(value)));
+            else
+                current->setText(QStringLiteral("写入失败：%1").arg(globalName));
+        };
+        connect(apply, &QPushButton::clicked, host, commit);
+        connect(edit, &QLineEdit::returnPressed, host, commit);
+
+        auto *gv = GlobalVariableManager::instance();
+        if (!globalName.isEmpty() && gv->variableExists(globalName)) {
+            const QVariant v = gv->getVariable(globalName);
+            current->setText(QStringLiteral("当前值：%1").arg(cellText(v)));
+            edit->setText(v.toString());
+        } else if (!globalName.isEmpty()) {
+            current->setText(QStringLiteral("变量不存在：%1").arg(globalName));
+        }
+        host->setStyleSheet(QStringLiteral(
+            "QWidget { background-color: #22222a; border: 1px solid #3a3a5c; border-radius: 4px; }"));
+        return host;
+    }
+    case RuntimeControlType::RunControl: {
+        // 官方 9.3「运行控制」：开始 / 停止 / 单次，直接触发流程动作
+        auto *host = new QWidget();
+        auto *lay = new QHBoxLayout(host);
+        lay->setContentsMargins(4, 4, 4, 4);
+        lay->setSpacing(6);
+        const QString ids[3] = {QStringLiteral("start"), QStringLiteral("stop"),
+                                QStringLiteral("single")};
+        const QString names[3] = {QStringLiteral("开始"), QStringLiteral("停止"),
+                                  QStringLiteral("单次")};
+        const QString objects[3] = {QStringLiteral("RuntimeRunStart"),
+                                    QStringLiteral("RuntimeRunStop"),
+                                    QStringLiteral("RuntimeRunSingle")};
+        for (int i = 0; i < 3; ++i) {
+            auto *b = new QPushButton(names[i], host);
+            b->setObjectName(objects[i]);
+            const QString bg = (i == 1) ? QStringLiteral("#b04a4a") : ctrl.color;
+            b->setStyleSheet(QStringLiteral(
+                "QPushButton { background-color: %1; color: white; border: none;"
+                "  border-radius: 4px; font-size: %2px; padding: 4px 10px; }")
+                .arg(bg).arg(qMax(9, ctrl.fontSize - 4)));
+            const QString id = ids[i];
+            connect(b, &QPushButton::clicked, this,
+                    [this, id]() { emit actionTriggered(id); });
+            lay->addWidget(b, 1);
+        }
+        host->setStyleSheet(QStringLiteral(
+            "QWidget { background-color: #22222a; border: 1px solid #3a3a5c; border-radius: 4px; }"));
+        return host;
+    }
+    case RuntimeControlType::OkNgCount: {
+        // 官方 9.3「OK/NG」：两路计数（bindKey=OK，bindKey2=NG，均绑全局变量）
+        auto *host = new QWidget();
+        auto *lay = new QHBoxLayout(host);
+        lay->setContentsMargins(4, 4, 4, 4);
+        lay->setSpacing(6);
+        auto makeSide = [host](const QString &objectName, const QString &caption,
+                               const QString &color, const QString &globalName) {
+            auto *box = new QLabel(caption + QStringLiteral("\n--"), host);
+            box->setObjectName(objectName);
+            box->setAlignment(Qt::AlignCenter);
+            box->setStyleSheet(QStringLiteral(
+                "QLabel { background:#20262a; color:%1; font-size:18px; font-weight:bold;"
+                " border:1px solid #3a3a5c; border-radius:4px; }").arg(color));
+            box->setProperty("vfpGlobal", globalName);
+            return box;
+        };
+        lay->addWidget(makeSide(QStringLiteral("RuntimeOkValue"), QStringLiteral("OK"),
+                                QStringLiteral("#3db97a"), ctrl.bindKey), 1);
+        lay->addWidget(makeSide(QStringLiteral("RuntimeNgValue"), QStringLiteral("NG"),
+                                QStringLiteral("#e74c4c"), ctrl.bindKey2), 1);
+        return host;
+    }
+    case RuntimeControlType::ConditionalLight: {
+        // 官方 9.3「条件信号灯」：按数值条件切换灯色与文本
+        auto *host = new QWidget();
+        auto *lay = new QHBoxLayout(host);
+        lay->setContentsMargins(8, 4, 8, 4);
+        lay->setSpacing(8);
+        auto *light = new QLabel(host);
+        light->setObjectName(QStringLiteral("RuntimeCondLight"));
+        light->setFixedSize(26, 26);
+        light->setStyleSheet(QStringLiteral("background-color: %1; border-radius: 13px;")
+                                 .arg(ctrl.color));
+        auto *text = new QLabel(ctrl.displayTitle(), host);
+        text->setObjectName(QStringLiteral("RuntimeCondText"));
+        text->setWordWrap(true);
+        text->setStyleSheet(QStringLiteral("font-size: %1px; color: #e0e0e0;")
+                                .arg(ctrl.fontSize));
+        lay->addWidget(light);
+        lay->addWidget(text, 1);
+        host->setStyleSheet(QStringLiteral(
+            "QWidget { background-color: #22222a; border: 1px solid #3a3a5c; border-radius: 4px; }"));
+        return host;
+    }
     case RuntimeControlType::LineChart:
         return new RuntimeChartPanel(ctrl);
     case RuntimeControlType::MultiLineChart:
@@ -1050,6 +1231,47 @@ QString RuntimeInterfaceView::cellText(const QVariant &value)
     }
 }
 
+namespace {
+bool lightConditionMatches(const LightCondition &cond, double value)
+{
+    switch (cond.op) {
+    case 0: return value >= cond.threshold;
+    case 1: return value > cond.threshold;
+    case 2: return value <= cond.threshold;
+    case 3: return value < cond.threshold;
+    case 4: return value == cond.threshold;
+    case 5: return value != cond.threshold;
+    default: return false;
+    }
+}
+
+/// 条件信号灯求值：按顺序取首个满足的条件；都不满足则用控件主色与标题。
+void applyConditionalLight(QLabel *light, QLabel *text, const RuntimeControl &ctrl,
+                           const QVariant &value)
+{
+    bool ok = false;
+    double v = value.toDouble(&ok);
+    if (!ok && value.metaType().id() == QMetaType::Bool) {
+        v = value.toBool() ? 1.0 : 0.0;
+        ok = true;
+    }
+    QString color = ctrl.color;
+    QString label = ctrl.displayTitle();
+    if (ok) {
+        for (const LightCondition &cond : ctrl.lightConditions) {
+            if (!lightConditionMatches(cond, v)) continue;
+            if (QColor(cond.color).isValid()) color = cond.color;
+            if (!cond.text.isEmpty()) label = cond.text;
+            break;
+        }
+    }
+    if (light)
+        light->setStyleSheet(QStringLiteral("background-color: %1; border-radius: 13px;")
+                                 .arg(color));
+    if (text) text->setText(label);
+}
+}   // namespace
+
 void RuntimeInterfaceView::updateVariable(const QString &name, const QVariant &value)
 {
     // 数值控件
@@ -1076,6 +1298,38 @@ void RuntimeInterfaceView::updateVariable(const QString &name, const QVariant &v
                     if (m_tableTimers[t]) m_tableTimers[t]->start();
                 }
             }
+        }
+    }
+    // OK/NG、条件信号灯、设置变量回显（按控件扫描，类型各异不另建索引表）
+    for (int i = 0; i < m_widgets.size() && i < m_widgetCtrls.size(); ++i) {
+        const RuntimeControl *ctrl = m_widgetCtrls.at(i);
+        if (!ctrl) continue;
+        if (ctrl->type == RuntimeControlType::OkNgCount) {
+            if (ctrl->bindKey == name) {
+                if (auto *ok = m_widgets.at(i)->findChild<QLabel *>(
+                        QStringLiteral("RuntimeOkValue")))
+                    ok->setText(QStringLiteral("OK\n%1").arg(cellText(value)));
+            }
+            if (!ctrl->bindKey2.isEmpty() && ctrl->bindKey2 == name) {
+                if (auto *ng = m_widgets.at(i)->findChild<QLabel *>(
+                        QStringLiteral("RuntimeNgValue")))
+                    ng->setText(QStringLiteral("NG\n%1").arg(cellText(value)));
+            }
+        } else if (ctrl->type == RuntimeControlType::ConditionalLight
+                   && (ctrl->bindType.isEmpty()
+                       || ctrl->bindType == QLatin1String("global"))
+                   && ctrl->bindKey == name) {
+            applyConditionalLight(
+                m_widgets.at(i)->findChild<QLabel *>(QStringLiteral("RuntimeCondLight")),
+                m_widgets.at(i)->findChild<QLabel *>(QStringLiteral("RuntimeCondText")),
+                *ctrl, value);
+        } else if (ctrl->type == RuntimeControlType::SetVariable
+                   && (ctrl->bindType.isEmpty()
+                       || ctrl->bindType == QLatin1String("global"))
+                   && ctrl->bindKey == name) {
+            if (auto *cur = m_widgets.at(i)->findChild<QLabel *>(
+                    QStringLiteral("RuntimeSetterCurrent")))
+                cur->setText(QStringLiteral("当前值：%1").arg(cellText(value)));
         }
     }
     updateCharts(QStringLiteral("global"), name, value);
@@ -1110,6 +1364,16 @@ void RuntimeInterfaceView::updateNodeOutput(const QString &nodeFullName, const Q
                 }
             }
         }
+    }
+    // 条件信号灯（节点输出绑定）
+    for (int i = 0; i < m_widgets.size() && i < m_widgetCtrls.size(); ++i) {
+        const RuntimeControl *ctrl = m_widgetCtrls.at(i);
+        if (!ctrl || ctrl->type != RuntimeControlType::ConditionalLight) continue;
+        if (ctrl->bindType != QLatin1String("node") || ctrl->bindKey != nodeFullName) continue;
+        applyConditionalLight(
+            m_widgets.at(i)->findChild<QLabel *>(QStringLiteral("RuntimeCondLight")),
+            m_widgets.at(i)->findChild<QLabel *>(QStringLiteral("RuntimeCondText")),
+            *ctrl, value);
     }
     updateCharts(QStringLiteral("node"), nodeFullName, value);
 }

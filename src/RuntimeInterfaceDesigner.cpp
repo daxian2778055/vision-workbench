@@ -50,7 +50,9 @@ bool paletteTypeOf(const QListWidgetItem *item, RuntimeControlType *out)
     const QVariant v = item->data(Qt::UserRole);
     if (!v.isValid()) return false;
     const int t = v.toInt();
-    if (t < 0 || t > int(RuntimeControlType::IoStatus)) return false;
+    // 上界必须跟住枚举最后一项：旧实现停在 IoStatus，导致参数设置/图表等
+    // 后加类型在「添加控件」按钮与双击路径里被静默丢弃。
+    if (t < 0 || t > int(RuntimeControlType::ConditionalLight)) return false;
     *out = RuntimeControlType(t);
     return true;
 }
@@ -711,6 +713,85 @@ void DesignerControlFrame::paintEvent(QPaintEvent *event)
                    QStringLiteral("%1\n%2").arg(ctrl.displayTitle(), ctrl.bindKey));
         break;
     }
+    case RuntimeControlType::SetVariable: {
+        p.setPen(QColor(0x8a, 0x9e, 0xc0));
+        p.drawText(QRect(body.left(), body.top(), body.width(), 18),
+                   Qt::AlignLeft | Qt::AlignVCenter,
+                   QStringLiteral("写入：%1").arg(ctrl.bindKey.isEmpty()
+                                                    ? QStringLiteral("(未绑定)")
+                                                    : ctrl.bindKey));
+        const int editH = qMax(18, qMin(26, body.height() - 26));
+        QRect edit(body.left(), body.top() + 22, qMax(40, body.width() - 70), editH);
+        p.setPen(QPen(QColor(0x3a, 0x3a, 0x4a), 1));
+        p.setBrush(QColor(0x17, 0x17, 0x1c));
+        p.drawRect(edit);
+        QRect btn(edit.right() + 6, edit.top(), 60, edit.height());
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(ctrl.color));
+        p.drawRoundedRect(btn, 3, 3);
+        p.setPen(Qt::white);
+        p.drawText(btn, Qt::AlignCenter, QStringLiteral("写入"));
+        break;
+    }
+    case RuntimeControlType::RunControl: {
+        const QString names[3] = {QStringLiteral("开始"), QStringLiteral("停止"),
+                                  QStringLiteral("单次")};
+        const int gap = 6;
+        const int w = qMax(30, (body.width() - gap * 2) / 3);
+        for (int i = 0; i < 3; ++i) {
+            const QRect b(body.left() + i * (w + gap), body.top() + 2, w,
+                          qMax(18, body.height() - 4));
+            p.setPen(Qt::NoPen);
+            p.setBrush(QColor(i == 1 ? QStringLiteral("#b04a4a") : ctrl.color));
+            p.drawRoundedRect(b, 4, 4);
+            p.setPen(Qt::white);
+            p.drawText(b, Qt::AlignCenter, names[i]);
+        }
+        break;
+    }
+    case RuntimeControlType::OkNgCount: {
+        const int half = body.width() / 2;
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0x22, 0x2a, 0x22));
+        p.drawRoundedRect(QRect(body.left(), body.top(), half - 4, body.height()), 4, 4);
+        p.setBrush(QColor(0x2e, 0x20, 0x20));
+        p.drawRoundedRect(QRect(body.left() + half + 4, body.top(), half - 4,
+                                body.height()), 4, 4);
+        QFont f = p.font();
+        f.setPointSizeF(11);
+        f.setBold(true);
+        p.setFont(f);
+        p.setPen(QColor(0x3d, 0xb9, 0x7a));
+        p.drawText(QRect(body.left(), body.top(), half - 4, body.height()),
+                   Qt::AlignCenter, QStringLiteral("OK\n0"));
+        p.setPen(QColor(0xe7, 0x4c, 0x4c));
+        p.drawText(QRect(body.left() + half + 4, body.top(), half - 4, body.height()),
+                   Qt::AlignCenter, QStringLiteral("NG\n0"));
+        break;
+    }
+    case RuntimeControlType::ConditionalLight: {
+        const int r = qMin(16, body.height() / 2 - 4);
+        QPoint c(body.left() + r + 4, body.center().y());
+        QColor color(ctrl.color);
+        QString text = ctrl.displayTitle();
+        if (!ctrl.lightConditions.isEmpty()) {
+            const LightCondition &first = ctrl.lightConditions.first();
+            if (QColor(first.color).isValid()) color = QColor(first.color);
+            if (!first.text.isEmpty()) text = first.text;
+        }
+        p.setPen(Qt::NoPen);
+        p.setBrush(color);
+        p.drawEllipse(c, r, r);
+        p.setPen(QColor(0x9a, 0x9e, 0xac));
+        QFont clFont = p.font();
+        clFont.setPointSizeF(10);
+        p.setFont(clFont);
+        p.drawText(QRect(c.x() + r + 6, body.top(), body.right() - c.x() - r - 6,
+                         body.height()),
+                   Qt::AlignLeft | Qt::AlignVCenter,
+                   QStringLiteral("%1（%2 条条件）").arg(text).arg(ctrl.lightConditions.size()));
+        break;
+    }
     }
 
     // 缩放指示（右下角）
@@ -924,6 +1005,10 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
             { "基础", "按钮",     RuntimeControlType::Button },
             { "基础", "参数设置", RuntimeControlType::ParamSetting },
             { "基础", "开关控制", RuntimeControlType::SwitchControl },
+            { "基础", "设置变量", RuntimeControlType::SetVariable },
+            { "基础", "条件信号灯", RuntimeControlType::ConditionalLight },
+            { "基础", "运行控制", RuntimeControlType::RunControl },
+            { "基础", "OK/NG",    RuntimeControlType::OkNgCount },
             { "布局", "组合框",   RuntimeControlType::ComboBox },
             { "布局", "Tab页",    RuntimeControlType::TabPage },
             { "图表", "表格",     RuntimeControlType::ResultTable },
@@ -1205,8 +1290,18 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     connect(m_actionConfigBtn, &QPushButton::clicked,
             this, &RuntimeInterfaceDesigner::configureButtonActions);
     fData->addRow(QStringLiteral("数据源"), m_actionConfigBtn);
+    m_bindTypeCombo->setObjectName(QStringLiteral("designerBindTypeCombo"));
+    m_bindKeyCombo->setObjectName(QStringLiteral("designerBindKeyCombo"));
     fData->addRow(QStringLiteral("绑定方式"), m_bindTypeCombo);
     fData->addRow(QStringLiteral("绑定对象"), m_bindKeyCombo);
+    // OK/NG：第二路绑定（NG）。只有该控件显示这一行。
+    m_bindKey2Combo = new QComboBox(propGroup);
+    m_bindKey2Combo->setObjectName(QStringLiteral("designerBindKey2Combo"));
+    m_bindKey2Combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_bindKey2Combo->setMinimumContentsLength(12);
+    fData->addRow(QStringLiteral("NG绑定"), m_bindKey2Combo);
+    connect(m_bindKey2Combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int) { onPropertyEdited(); });
     // 参数设置控件：参数名 + 数值范围（仅该类型显示）
     m_paramKeyEdit = new QLineEdit(propGroup);
     m_paramKeyEdit->setPlaceholderText(QStringLiteral("节点参数键，如 exposure"));
@@ -1379,6 +1474,35 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
             this, &RuntimeInterfaceDesigner::onPropertyEdited);
     connect(m_chartAxisEdit, &QLineEdit::textEdited,
             this, &RuntimeInterfaceDesigner::onPropertyEdited);
+
+    // 条件信号灯（官方 9.3）：条件表 = 条件 / 阈值 / 颜色 / 文本
+    m_lightCondGroup = new QGroupBox(QStringLiteral("条件信号灯"), this);
+    m_lightCondGroup->setObjectName(QStringLiteral("designerLightCondGroup"));
+    auto *condForm = new QFormLayout(m_lightCondGroup);
+    m_lightCondTable = new QTableWidget(0, 4, m_lightCondGroup);
+    m_lightCondTable->setObjectName(QStringLiteral("designerLightCondTable"));
+    m_lightCondTable->setHorizontalHeaderLabels(
+        {QStringLiteral("条件"), QStringLiteral("阈值"),
+         QStringLiteral("颜色"), QStringLiteral("文本")});
+    m_lightCondTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    m_lightCondTable->verticalHeader()->setVisible(false);
+    m_lightCondTable->setMaximumHeight(140);
+    m_lightCondAddBtn = new QPushButton(QStringLiteral("＋添加条件"), m_lightCondGroup);
+    m_lightCondAddBtn->setObjectName(QStringLiteral("designerLightCondAdd"));
+    m_lightCondDelBtn = new QPushButton(QStringLiteral("－删除条件"), m_lightCondGroup);
+    m_lightCondDelBtn->setObjectName(QStringLiteral("designerLightCondDel"));
+    condForm->addRow(m_lightCondTable);
+    auto *condBtnRow = new QHBoxLayout();
+    condBtnRow->addWidget(m_lightCondAddBtn);
+    condBtnRow->addWidget(m_lightCondDelBtn);
+    condForm->addRow(condBtnRow);
+    propOuter->addWidget(m_lightCondGroup);
+    connect(m_lightCondAddBtn, &QPushButton::clicked,
+            this, &RuntimeInterfaceDesigner::onLightCondAdd);
+    connect(m_lightCondDelBtn, &QPushButton::clicked,
+            this, &RuntimeInterfaceDesigner::onLightCondDel);
+    connect(m_lightCondTable, &QTableWidget::cellChanged,
+            this, &RuntimeInterfaceDesigner::onLightCondChanged);
 
     auto *propHint = new QLabel(QStringLiteral("绑定方式说明:\n· 全局变量: 实时显示全局变量值\n· 节点输出: 绑定流程中算子的输出\n· 动作: 按钮点击触发的流程操作\n· 表格列: 每轮把各列当前值提交为一行\n  格式: 变量名,变量名 或 节点:模块完整名\n· IO状态: 绑定相机IO控制节点\n  灯=执行成功, 文本=线值/错误"), propGroup);
     propHint->setWordWrap(true);
@@ -1687,6 +1811,10 @@ if (type == RuntimeControlType::LineChart
     || type == RuntimeControlType::MultiLineChart
     || type == RuntimeControlType::PieChart){ geo.setWidth(420); geo.setHeight(300); }
 if (type == RuntimeControlType::IoStatus)   { geo.setWidth(260); geo.setHeight(80); }
+if (type == RuntimeControlType::SetVariable)      { geo.setWidth(300); geo.setHeight(96); }
+if (type == RuntimeControlType::RunControl)       { geo.setWidth(320); geo.setHeight(56); }
+if (type == RuntimeControlType::OkNgCount)        { geo.setWidth(320); geo.setHeight(110); }
+if (type == RuntimeControlType::ConditionalLight) { geo.setWidth(260); geo.setHeight(80); }
 
 // 拖放：按落点判定所属区域（官方 9.1 固定栏），再在该区域的坐标系里定位。
 // 画布区坐标相对画布区左上角、随窗口缩放；固定栏坐标相对本栏左上角、1:1 不缩放。
@@ -1728,6 +1856,24 @@ if (!dropPos.isNull()) {
 pushUndo();
 RuntimeControl *ctrl = m_layout.currentPage()->addControl(type, geo);
 ctrl->zone = zone;
+if (type == RuntimeControlType::SetVariable || type == RuntimeControlType::OkNgCount
+    || type == RuntimeControlType::ConditionalLight) {
+    ctrl->bindType = QStringLiteral("global");
+}
+// 条件信号灯开箱即用：值 >= 1 绿 OK，否则红 NG（设计器属性里可增删改）
+if (type == RuntimeControlType::ConditionalLight) {
+    LightCondition ok;
+    ok.op = 0;
+    ok.threshold = 1.0;
+    ok.color = QStringLiteral("#3db97a");
+    ok.text = QStringLiteral("OK");
+    LightCondition ng;
+    ng.op = 3;
+    ng.threshold = 1.0;
+    ng.color = QStringLiteral("#e74c4c");
+    ng.text = QStringLiteral("NG");
+    ctrl->lightConditions << ok << ng;
+}
 rebuildCanvas();
 const int idx = m_layout.currentPage()->indexOf(ctrl);
 if (idx >= 0) m_canvas->selectIndex(idx);
@@ -1916,6 +2062,64 @@ void RuntimeInterfaceDesigner::onChartSeriesDel()
     pushUndo();
     ctrl->chartSeries.removeAt(row);
     refreshPropertyPanel();
+    m_canvas->refreshControl(m_selected);
+}
+
+// 条件信号灯：条件列表的增删改。写回前先入撤销栈（与属性编辑共用 600ms 合并窗口）。
+void RuntimeInterfaceDesigner::onLightCondAdd()
+{
+    RuntimeControl *ctrl = selectedControl();
+    if (!ctrl || ctrl->type != RuntimeControlType::ConditionalLight) return;
+    pushUndo();
+    LightCondition lc;
+    lc.op = 0;
+    lc.threshold = 1.0;
+    lc.color = QStringLiteral("#e7c04c");
+    lc.text = QStringLiteral("条件%1").arg(ctrl->lightConditions.size() + 1);
+    ctrl->lightConditions.append(lc);
+    refreshPropertyPanel();
+    m_canvas->refreshControl(m_selected);
+}
+
+void RuntimeInterfaceDesigner::onLightCondDel()
+{
+    RuntimeControl *ctrl = selectedControl();
+    if (!ctrl || ctrl->type != RuntimeControlType::ConditionalLight || !m_lightCondTable) return;
+    const int row = m_lightCondTable->currentRow();
+    if (row < 0 || row >= ctrl->lightConditions.size()) return;
+    pushUndo();
+    ctrl->lightConditions.removeAt(row);
+    refreshPropertyPanel();
+    m_canvas->refreshControl(m_selected);
+}
+
+void RuntimeInterfaceDesigner::onLightCondChanged(int row, int column)
+{
+    if (m_updatingProps) return;   // 刷新播种期间不写回
+    RuntimeControl *ctrl = selectedControl();
+    if (!ctrl || ctrl->type != RuntimeControlType::ConditionalLight || !m_lightCondTable) return;
+    if (row < 0 || row >= ctrl->lightConditions.size()) return;
+    if (m_propUndoTimer && !m_propUndoTimer->isActive()) {
+        pushUndo();
+        m_propUndoTimer->start();
+    }
+    LightCondition &lc = ctrl->lightConditions[row];
+    if (column == 0) {
+        if (auto *op = qobject_cast<QComboBox *>(m_lightCondTable->cellWidget(row, 0)))
+            lc.op = qBound(0, op->currentData().toInt(), 5);
+    } else if (column == 1) {
+        bool ok = false;
+        QTableWidgetItem *it = m_lightCondTable->item(row, 1);
+        const double v = it ? it->text().toDouble(&ok) : 0.0;
+        if (ok) lc.threshold = v;   // 非法输入不写，保留旧阈值
+    } else if (column == 2) {
+        QTableWidgetItem *it = m_lightCondTable->item(row, 2);
+        const QString c = it ? it->text().trimmed() : QString();
+        if (QColor(c).isValid()) lc.color = c;
+    } else if (column == 3) {
+        QTableWidgetItem *it = m_lightCondTable->item(row, 3);
+        lc.text = it ? it->text() : QString();
+    }
     m_canvas->refreshControl(m_selected);
 }
 
@@ -2298,7 +2502,10 @@ void RuntimeInterfaceDesigner::populateBindKeyCombo()
                               || ctrl->type == RuntimeControlType::SwitchControl
                               || ctrl->type == RuntimeControlType::ComboBox)
                                  ? QStringLiteral("node")
-                                 : m_bindTypeCombo->currentData().toString();
+                                 : (ctrl->type == RuntimeControlType::SetVariable
+                                    || ctrl->type == RuntimeControlType::OkNgCount)
+                                       ? QStringLiteral("global")
+                                       : m_bindTypeCombo->currentData().toString();
     m_bindKeyCombo->clear();
     m_bindKeyCombo->addItem(QStringLiteral("(无)"), QString());
 
@@ -2378,6 +2585,9 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
             if (w) w->setEnabled(false);
         }
         if (m_chartGroup) m_chartGroup->setVisible(false);
+        if (m_lightCondGroup) m_lightCondGroup->setVisible(false);
+        if (m_bindKey2Combo && m_dataForm)
+            m_dataForm->setRowVisible(m_bindKey2Combo, false);
         m_raiseBtn->setEnabled(false);
         m_lowerBtn->setEnabled(false);
         m_typeLabel->setText(QStringLiteral("-"));
@@ -2418,12 +2628,18 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
     const bool isParam = (ctrl->type == RuntimeControlType::ParamSetting);
     const bool isSwitch = (ctrl->type == RuntimeControlType::SwitchControl);
     const bool isCombo = (ctrl->type == RuntimeControlType::ComboBox);
+    const bool isSetter = (ctrl->type == RuntimeControlType::SetVariable);
+    const bool isRun = (ctrl->type == RuntimeControlType::RunControl);
+    const bool isOkNg = (ctrl->type == RuntimeControlType::OkNgCount);
+    const bool isCondLight = (ctrl->type == RuntimeControlType::ConditionalLight);
     if (m_dataForm && m_actionConfigBtn) {
         m_dataForm->setRowVisible(m_actionConfigBtn, isButton);
-        // 参数设置/开关控制/组合框固定绑节点，只藏「绑定方式」，仍需「绑定对象」选节点
+        // 参数设置/开关控制/组合框固定绑节点、设置变量/OK-NG 固定绑全局，只藏「绑定方式」
         m_dataForm->setRowVisible(m_bindTypeCombo,
-                                  !isButton && !isParam && !isSwitch && !isCombo);
-        m_dataForm->setRowVisible(m_bindKeyCombo, !isButton);
+                                  !isButton && !isParam && !isSwitch && !isCombo
+                                      && !isSetter && !isOkNg && !isRun);
+        m_dataForm->setRowVisible(m_bindKeyCombo, !isButton && !isRun);
+        if (m_bindKey2Combo) m_dataForm->setRowVisible(m_bindKey2Combo, isOkNg);
         if (m_paramKeyEdit)
             m_dataForm->setRowVisible(m_paramKeyEdit, isParam || isSwitch || isCombo);
         // bool 参数没有取值范围；组合框改填候选值
@@ -2488,6 +2704,50 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
         m_tableMaxRows->setValue(ctrl->maxRows);
     }
 
+    // OK/NG 第二路绑定：来源与主绑定一致（全局变量）
+    if (m_bindKey2Combo) {
+        m_bindKey2Combo->clear();
+        if (isOkNg) {
+            m_bindKey2Combo->addItem(QStringLiteral("(无)"), QString());
+            const auto vars2 = GlobalVariableManager::instance()->variables();
+            for (auto it = vars2.constBegin(); it != vars2.constEnd(); ++it)
+                m_bindKey2Combo->addItem(it.key(), it.key());
+            int i2 = m_bindKey2Combo->findData(ctrl->bindKey2);
+            if (i2 < 0 && !ctrl->bindKey2.isEmpty()) {
+                m_bindKey2Combo->addItem(
+                    QStringLiteral("（已失效：%1）").arg(ctrl->bindKey2), ctrl->bindKey2);
+                i2 = m_bindKey2Combo->count() - 1;
+            }
+            m_bindKey2Combo->setCurrentIndex(i2 >= 0 ? i2 : 0);
+        }
+    }
+
+    // 条件信号灯：条件表只在选中该类型时出现
+    if (m_lightCondGroup) {
+        m_lightCondGroup->setVisible(isCondLight);
+        m_lightCondGroup->setEnabled(isCondLight);
+        if (isCondLight) {
+            m_lightCondTable->setRowCount(ctrl->lightConditions.size());
+            for (int r = 0; r < ctrl->lightConditions.size(); ++r) {
+                const LightCondition &lc = ctrl->lightConditions.at(r);
+                auto *op = new QComboBox(m_lightCondTable);
+                const QString opNames[6] = {QStringLiteral(">="), QStringLiteral(">"),
+                                            QStringLiteral("<="), QStringLiteral("<"),
+                                            QStringLiteral("=="), QStringLiteral("!=")};
+                for (int i = 0; i < 6; ++i)
+                    op->addItem(opNames[i], i);
+                op->setCurrentIndex(qBound(0, lc.op, 5));
+                m_lightCondTable->setCellWidget(r, 0, op);
+                connect(op, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                        this, [this, r](int) { onLightCondChanged(r, 0); });
+                m_lightCondTable->setItem(r, 1, new QTableWidgetItem(
+                    QString::number(lc.threshold, 'g', 10)));
+                m_lightCondTable->setItem(r, 2, new QTableWidgetItem(lc.color));
+                m_lightCondTable->setItem(r, 3, new QTableWidgetItem(lc.text));
+            }
+        }
+    }
+
     // 线图阵列：分组只在选中该类型时出现；数据系列来源 = 全局变量 + 节点输出
     if (m_chartGroup) {
         const bool isChart = ctrl->type == RuntimeControlType::LineChart
@@ -2527,12 +2787,22 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
         m_bindTypeCombo->setEnabled(true);
         m_bindKeyCombo->setEnabled(true);
         m_bindTypeCombo->addItem(QStringLiteral("节点输出"), QStringLiteral("node"));
-    } else if (ctrl->type == RuntimeControlType::ValueDisplay ||
-               ctrl->type == RuntimeControlType::StatusLight) {
+    } else if (ctrl->type == RuntimeControlType::ValueDisplay
+               || ctrl->type == RuntimeControlType::StatusLight || isCondLight) {
         m_bindTypeCombo->setEnabled(true);
         m_bindKeyCombo->setEnabled(true);
         m_bindTypeCombo->addItem(QStringLiteral("全局变量"), QStringLiteral("global"));
         m_bindTypeCombo->addItem(QStringLiteral("节点输出"), QStringLiteral("node"));
+    } else if (isSetter || isOkNg) {
+        // 设置变量 / OK-NG 固定绑全局变量
+        m_bindTypeCombo->setEnabled(false);
+        m_bindKeyCombo->setEnabled(true);
+        m_bindTypeCombo->addItem(QStringLiteral("全局变量"), QStringLiteral("global"));
+    } else if (isRun) {
+        // 运行控制不含数据绑定（开始 / 停止 / 单次直接发动作）
+        m_bindTypeCombo->setEnabled(false);
+        m_bindKeyCombo->setEnabled(false);
+        m_bindTypeCombo->addItem(QStringLiteral("(运行控制)"), QString());
     } else if (isTable) {
         // 表格用列配置，不用整体绑定
         m_bindTypeCombo->setEnabled(false);
@@ -2627,6 +2897,10 @@ void RuntimeInterfaceDesigner::onPropertyEdited()
             }
         }
     }
+
+    // OK/NG 第二路绑定（条件表走 onLightCondChanged，不在这里写）
+    if (ctrl->type == RuntimeControlType::OkNgCount && m_bindKey2Combo)
+        ctrl->bindKey2 = m_bindKey2Combo->currentData().toString();
 
     if (ctrl->type == RuntimeControlType::ResultTable) {
         // 列由"＋添加列/－删除列"维护（见 onColumnAdd/onColumnDel），此处只同步行数

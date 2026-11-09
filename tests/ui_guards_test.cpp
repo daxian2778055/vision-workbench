@@ -14,6 +14,7 @@
 #include "ExportWriteCheck.h"
 #include "FocusGuard.h"
 #include "RuntimeInterfaceDesigner.h"
+#include "GlobalVariableManager.h"
 
 #include <QLineEdit>
 #include <QPlainTextEdit>
@@ -34,6 +35,7 @@
 #include <QDoubleSpinBox>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QTableWidget>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QFileInfo>
@@ -97,6 +99,13 @@ void designerExposesCanvasAndBarConfig();
 void designerGeometryEditPushesUndo();
 // B1 回归：属性编辑的撤销点必须停在「改之前」（快照不得与当前布局共享页数组）
 void designerPropertyEditUndoRestoresValue();
+// B3-2：设置变量 / 运行控制 / OK-NG / 条件信号灯
+void designerPaletteAddsNewAndPreviouslyBlockedControls();
+void runtimeSetVariableWritesTypedGlobal();
+void runtimeRunControlEmitsActions();
+void runtimeOkNgAndConditionalLightUpdate();
+void b3NewControlsRoundTrip();
+void designerB3PropertyPanelsWork();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -1929,6 +1938,271 @@ void UiGuardsTest::designerPropertyEditUndoRestoresValue()
 
     QVERIFY(QMetaObject::invokeMethod(&dlg, "redo", Qt::DirectConnection));
     QCOMPARE(titleOf(), edited);
+}
+
+// B3-2：控件库条目必须都能走「添加控件」路径。旧实现 paletteTypeOf 的上界停在
+// IoStatus，参数设置/图表等后加类型全被静默丢弃；这里点名新 4 类 + 两个旧的后加类型。
+void UiGuardsTest::designerPaletteAddsNewAndPreviouslyBlockedControls()
+{
+    RuntimeInterfaceDesigner dlg(QStringList{QStringLiteral("模块1")});
+    QListWidget *palette = nullptr;
+    for (QListWidget *lw : dlg.findChildren<QListWidget *>()) {
+        if (lw->dragEnabled() && lw->count() >= 7) {
+            palette = lw;
+            break;
+        }
+    }
+    QVERIFY2(palette, "没找到控件库");
+
+    auto rowOf = [palette](const QString &label) {
+        for (int i = 0; i < palette->count(); ++i) {
+            QListWidgetItem *it = palette->item(i);
+            if (it->data(Qt::UserRole).isValid() && it->text() == label) return i;
+        }
+        return -1;
+    };
+    const QStringList names = {QStringLiteral("设置变量"), QStringLiteral("运行控制"),
+                               QStringLiteral("OK/NG"), QStringLiteral("条件信号灯"),
+                               QStringLiteral("参数设置"), QStringLiteral("线图阵列")};
+    for (const QString &name : names) {
+        const int row = rowOf(name);
+        QVERIFY2(row >= 0, qPrintable(QStringLiteral("控件库缺条目：%1").arg(name)));
+        palette->setCurrentRow(row);
+        const int before = dlg.resultInterface().totalControlCount();
+        QVERIFY2(QMetaObject::invokeMethod(&dlg, "addCurrentPaletteControl",
+                                           Qt::DirectConnection),
+                 qPrintable(QStringLiteral("添加控件调用失败：%1").arg(name)));
+        QCOMPARE(dlg.resultInterface().totalControlCount(), before + 1);
+    }
+}
+
+void UiGuardsTest::runtimeSetVariableWritesTypedGlobal()
+{
+    auto *gv = GlobalVariableManager::instance();
+    const QString name = QStringLiteral("UT_B3_SET_INT");
+    gv->removeVariable(name);
+    QVERIFY(gv->addVariable(name, GlobalVariableManager::IntType, 0));
+
+    RuntimeInterface layout;
+    auto *ctrl = layout.currentPage()->addControl(
+        RuntimeControlType::SetVariable, QRect(20, 20, 300, 96));
+    ctrl->bindType = QStringLiteral("global");
+    ctrl->bindKey = name;
+
+    RuntimeInterfaceView view;
+    view.setInterface(layout);
+    auto *edit = view.findChild<QLineEdit *>(QStringLiteral("RuntimeSetterEdit"));
+    auto *apply = view.findChild<QPushButton *>(QStringLiteral("RuntimeSetterApply"));
+    auto *current = view.findChild<QLabel *>(QStringLiteral("RuntimeSetterCurrent"));
+    QVERIFY2(edit && apply && current, "设置变量控件缺输入/按钮/回显");
+
+    edit->setText(QStringLiteral("42"));
+    apply->click();
+    QCOMPARE(gv->getVariable(name).toInt(), 42);
+    QVERIFY2(current->text().contains(QStringLiteral("42")), "写入后当前值未回显");
+
+    // 非法整数：不得写入，且给出可读提示
+    edit->setText(QStringLiteral("abc"));
+    apply->click();
+    QCOMPARE(gv->getVariable(name).toInt(), 42);
+    QVERIFY2(current->text().contains(QStringLiteral("输入无效")), "非法输入未提示");
+
+    gv->removeVariable(name);
+}
+
+void UiGuardsTest::runtimeRunControlEmitsActions()
+{
+    RuntimeInterface layout;
+    layout.currentPage()->addControl(RuntimeControlType::RunControl,
+                                     QRect(20, 20, 320, 56));
+    RuntimeInterfaceView view;
+    view.setInterface(layout);
+
+    QSignalSpy spy(&view, &RuntimeInterfaceView::actionTriggered);
+    QVERIFY(spy.isValid());
+    auto *start = view.findChild<QPushButton *>(QStringLiteral("RuntimeRunStart"));
+    auto *stop = view.findChild<QPushButton *>(QStringLiteral("RuntimeRunStop"));
+    auto *single = view.findChild<QPushButton *>(QStringLiteral("RuntimeRunSingle"));
+    QVERIFY2(start && stop && single, "运行控制缺开始/停止/单次按钮");
+    start->click();
+    stop->click();
+    single->click();
+    QCOMPARE(spy.count(), 3);
+    QCOMPARE(spy.at(0).at(0).toString(), QStringLiteral("start"));
+    QCOMPARE(spy.at(1).at(0).toString(), QStringLiteral("stop"));
+    QCOMPARE(spy.at(2).at(0).toString(), QStringLiteral("single"));
+}
+
+void UiGuardsTest::runtimeOkNgAndConditionalLightUpdate()
+{
+    auto *gv = GlobalVariableManager::instance();
+    const QString okName = QStringLiteral("UT_B3_OK");
+    const QString ngName = QStringLiteral("UT_B3_NG");
+    const QString scoreName = QStringLiteral("UT_B3_SCORE");
+    gv->removeVariable(okName);
+    gv->removeVariable(ngName);
+    gv->removeVariable(scoreName);
+    QVERIFY(gv->addVariable(okName, GlobalVariableManager::IntType, 3));
+    QVERIFY(gv->addVariable(ngName, GlobalVariableManager::IntType, 2));
+    QVERIFY(gv->addVariable(scoreName, GlobalVariableManager::FloatType, 5.0));
+
+    RuntimeInterface layout;
+    auto *okng = layout.currentPage()->addControl(RuntimeControlType::OkNgCount,
+                                                  QRect(20, 20, 320, 110));
+    okng->bindType = QStringLiteral("global");
+    okng->bindKey = okName;
+    okng->bindKey2 = ngName;
+    auto *cond = layout.currentPage()->addControl(RuntimeControlType::ConditionalLight,
+                                                  QRect(20, 150, 260, 80));
+    cond->bindType = QStringLiteral("global");
+    cond->bindKey = scoreName;
+    LightCondition pass;
+    pass.op = 0;
+    pass.threshold = 10.0;
+    pass.color = QStringLiteral("#3db97a");
+    pass.text = QStringLiteral("PASS");
+    LightCondition fail;
+    fail.op = 3;
+    fail.threshold = 10.0;
+    fail.color = QStringLiteral("#e74c4c");
+    fail.text = QStringLiteral("FAIL");
+    cond->lightConditions << pass << fail;
+
+    RuntimeInterfaceView view;
+    view.setInterface(layout);
+    auto *okLabel = view.findChild<QLabel *>(QStringLiteral("RuntimeOkValue"));
+    auto *ngLabel = view.findChild<QLabel *>(QStringLiteral("RuntimeNgValue"));
+    auto *condLight = view.findChild<QLabel *>(QStringLiteral("RuntimeCondLight"));
+    auto *condText = view.findChild<QLabel *>(QStringLiteral("RuntimeCondText"));
+    QVERIFY2(okLabel && ngLabel && condLight && condText, "OK/NG 或条件信号灯控件缺失");
+
+    // 初值播种：OK=3、NG=2、score=5 → FAIL/红
+    QVERIFY2(okLabel->text().contains(QStringLiteral("3")), "OK 初值未播种");
+    QVERIFY2(ngLabel->text().contains(QStringLiteral("2")), "NG 初值未播种");
+    QCOMPARE(condText->text(), QStringLiteral("FAIL"));
+    QVERIFY2(condLight->styleSheet().contains(QStringLiteral("#e74c4c")), "低值未取红");
+
+    view.updateVariable(scoreName, 12.5);
+    QCOMPARE(condText->text(), QStringLiteral("PASS"));
+    QVERIFY2(condLight->styleSheet().contains(QStringLiteral("#3db97a")), "高值未取绿");
+
+    view.updateVariable(okName, 7);
+    QVERIFY2(okLabel->text().contains(QStringLiteral("7")), "OK 更新未生效");
+
+    gv->removeVariable(okName);
+    gv->removeVariable(ngName);
+    gv->removeVariable(scoreName);
+}
+
+void UiGuardsTest::b3NewControlsRoundTrip()
+{
+    // 类型名映射：枚举每一项都必须能按名字往返（新增类型漏映射会在这里判红）
+    for (int i = 0; i <= int(RuntimeControlType::ConditionalLight); ++i) {
+        const auto type = RuntimeControlType(i);
+        RuntimeControlType back = RuntimeControlType::TextLabel;
+        QVERIFY2(runtimeControlTypeFromName(runtimeControlTypeName(type), back),
+                 qPrintable(QStringLiteral("类型名无法回读：%1").arg(i)));
+        QCOMPARE(int(back), i);
+    }
+
+    RuntimeInterfacePage page;
+    auto *setter = page.addControl(RuntimeControlType::SetVariable, QRect(0, 0, 300, 96));
+    setter->bindType = QStringLiteral("global");
+    setter->bindKey = QStringLiteral("v_target");
+    auto *run = page.addControl(RuntimeControlType::RunControl, QRect(0, 100, 320, 56));
+    run->title = QStringLiteral("产线控制");
+    auto *okng = page.addControl(RuntimeControlType::OkNgCount, QRect(0, 160, 320, 110));
+    okng->bindKey = QStringLiteral("cnt_ok");
+    okng->bindKey2 = QStringLiteral("cnt_ng");
+    auto *cond = page.addControl(RuntimeControlType::ConditionalLight, QRect(0, 280, 260, 80));
+    cond->bindType = QStringLiteral("node");
+    cond->bindKey = QStringLiteral("模块1.检测");
+    LightCondition c1;
+    c1.op = 1;
+    c1.threshold = 10.0;
+    c1.color = QStringLiteral("#112233");
+    c1.text = QStringLiteral("PASS");
+    LightCondition c2;
+    c2.op = 2;
+    c2.threshold = 0.0;
+    c2.color = QStringLiteral("#445566");
+    c2.text = QStringLiteral("LOW");
+    cond->lightConditions << c1 << c2;
+
+    RuntimeInterfacePage page2;
+    QVERIFY(page2.fromJson(page.toJson()));
+    QCOMPARE(page2.controls.size(), 4);
+    QCOMPARE(page2.controls.at(0).type, RuntimeControlType::SetVariable);
+    QCOMPARE(page2.controls.at(0).bindKey, QStringLiteral("v_target"));
+    QCOMPARE(page2.controls.at(1).type, RuntimeControlType::RunControl);
+    QCOMPARE(page2.controls.at(1).title, QStringLiteral("产线控制"));
+    QCOMPARE(page2.controls.at(2).type, RuntimeControlType::OkNgCount);
+    QCOMPARE(page2.controls.at(2).bindKey2, QStringLiteral("cnt_ng"));
+    QCOMPARE(page2.controls.at(3).type, RuntimeControlType::ConditionalLight);
+    QCOMPARE(page2.controls.at(3).bindType, QStringLiteral("node"));
+    QCOMPARE(page2.controls.at(3).lightConditions.size(), 2);
+    QCOMPARE(page2.controls.at(3).lightConditions.at(0).op, 1);
+    QCOMPARE(page2.controls.at(3).lightConditions.at(0).threshold, 10.0);
+    QCOMPARE(page2.controls.at(3).lightConditions.at(0).color, QStringLiteral("#112233"));
+    QCOMPARE(page2.controls.at(3).lightConditions.at(1).text, QStringLiteral("LOW"));
+}
+
+// B3-2 设计器属性面板：条件信号灯条件表可增删、OK/NG 第二绑定可写回，且两组按类型互斥显示。
+void UiGuardsTest::designerB3PropertyPanelsWork()
+{
+    auto *gv = GlobalVariableManager::instance();
+    const QString ngName = QStringLiteral("UT_B3_NG_BIND");
+    gv->removeVariable(ngName);
+    QVERIFY(gv->addVariable(ngName, GlobalVariableManager::IntType, 0));
+
+    RuntimeInterfaceDesigner dlg(QStringList{QStringLiteral("模块1")});
+    QListWidget *palette = nullptr;
+    for (QListWidget *lw : dlg.findChildren<QListWidget *>()) {
+        if (lw->dragEnabled() && lw->count() >= 7) {
+            palette = lw;
+            break;
+        }
+    }
+    QVERIFY2(palette, "没找到控件库");
+    auto addByName = [&dlg, palette](const QString &name) {
+        for (int i = 0; i < palette->count(); ++i) {
+            QListWidgetItem *it = palette->item(i);
+            if (it->data(Qt::UserRole).isValid() && it->text() == name) {
+                palette->setCurrentRow(i);
+                return QMetaObject::invokeMethod(&dlg, "addCurrentPaletteControl",
+                                                 Qt::DirectConnection);
+            }
+        }
+        return false;
+    };
+
+    QVERIFY(addByName(QStringLiteral("条件信号灯")));
+    auto *table = dlg.findChild<QTableWidget *>(QStringLiteral("designerLightCondTable"));
+    auto *addBtn = dlg.findChild<QPushButton *>(QStringLiteral("designerLightCondAdd"));
+    auto *delBtn = dlg.findChild<QPushButton *>(QStringLiteral("designerLightCondDel"));
+    auto *group = dlg.findChild<QGroupBox *>(QStringLiteral("designerLightCondGroup"));
+    QVERIFY2(table && addBtn && delBtn && group, "条件信号灯属性控件缺失");
+    QCOMPARE(table->rowCount(), 2);   // 新建时预置 >=1 绿 / <1 红
+    QVERIFY2(!group->isHidden(), "选中条件信号灯时条件表应显示");
+    addBtn->click();
+    QCOMPARE(dlg.resultInterface().pages.first().controls.first().lightConditions.size(), 3);
+    table->selectRow(2);
+    delBtn->click();
+    QCOMPARE(dlg.resultInterface().pages.first().controls.first().lightConditions.size(), 2);
+
+    // 切到 OK/NG：条件表应隐藏，NG 绑定行可用并能写回
+    QVERIFY(addByName(QStringLiteral("OK/NG")));
+    QVERIFY2(group->isHidden(), "选中 OK/NG 时条件表应隐藏");
+    auto *ngCombo = dlg.findChild<QComboBox *>(QStringLiteral("designerBindKey2Combo"));
+    QVERIFY2(ngCombo, "没找到 NG 绑定组合框");
+    const int idx = ngCombo->findData(ngName);
+    QVERIFY2(idx >= 0, "NG 绑定组合框未列出全局变量");
+    ngCombo->setCurrentIndex(idx);
+    const auto &page = dlg.resultInterface().pages.first();
+    QCOMPARE(page.controls.size(), 2);
+    QCOMPARE(page.controls.last().bindKey2, ngName);
+
+    gv->removeVariable(ngName);
 }
 
 QTEST_MAIN(UiGuardsTest)

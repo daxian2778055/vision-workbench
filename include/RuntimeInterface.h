@@ -27,7 +27,19 @@ enum class RuntimeControlType {
     WorldClock,   /// 世界时钟：显示所选时区当前时间（官方 9.3）
     LineChart,    /// 线图阵列：执行次数 vs 当前值，每个数据源一张线图（官方 9.3 图表）
     MultiLineChart, /// 多数据线图：多个数据源同绘一张线图（官方 9.3 图表）
-    PieChart      /// 饼图：各数据源当前值占整体的比例（官方 9.3 图表）
+    PieChart,     /// 饼图：各数据源当前值占整体的比例（官方 9.3 图表）
+    SetVariable,  /// 设置变量：运行界面把全局变量写成指定值（官方 9.3 基础组）
+    RunControl,   /// 运行控制：开始 / 停止 / 单次执行（官方 9.3 基础组）
+    OkNgCount,    /// OK/NG：双路计数显示（官方 9.3 基础组）
+    ConditionalLight /// 条件信号灯：按数值条件切换灯色与文本（官方 9.3 基础组）
+};
+
+/// 条件信号灯的一条条件（官方 9.3）：按列表顺序求值，首个满足的条件生效
+struct LightCondition {
+    int op = 0;            /// 0 >= / 1 > / 2 <= / 3 < / 4 == / 5 !=
+    double threshold = 0.0;
+    QString color = QStringLiteral("#3db97a");
+    QString text;          /// 满足时的显示文本（空 = 沿用控件标题）
 };
 
 /// 结果表格列（ResultTable 专用）
@@ -100,6 +112,10 @@ struct RuntimeControl {
     /// >=0 = 落在该页 innerTabNames 的第 N 个 Tab（越界时按 -1 处理，见 fromJson）。
     /// 刻意不存"父容器引用"：页级内层 Tab 只有名字列表，删标签不会留下悬空指向。
     int innerTab = -1;
+    /// OkNgCount 专用：NG 绑定键（bindKey 存 OK）。两者都按全局变量处理。
+    QString bindKey2;
+    /// ConditionalLight 专用：按顺序求值，首个满足的条件生效
+    QList<LightCondition> lightConditions;
     /// 图表（官方 9.3）：线图阵列每源一图 / 多数据线图同绘一图 / 饼图按当前值占比
     QVector<ChartSeries> chartSeries;
     int chartHistoryLimit = 30;   ///< 官方「最新执行数据条数」（线图类）
@@ -126,9 +142,19 @@ struct RuntimeControl {
         case RuntimeControlType::Button:       return QStringLiteral("按钮");
         case RuntimeControlType::ResultTable:  return QStringLiteral("结果表格");
         case RuntimeControlType::IoStatus:     return QStringLiteral("IO状态");
+        case RuntimeControlType::ParamSetting: return QStringLiteral("参数设置");
+        case RuntimeControlType::SwitchControl: return QStringLiteral("开关控制");
+        case RuntimeControlType::ComboBox:    return QStringLiteral("组合框");
+        case RuntimeControlType::TabPage:     return QStringLiteral("Tab页");
+        case RuntimeControlType::ImageAsset:  return QStringLiteral("图片");
+        case RuntimeControlType::WorldClock:  return QStringLiteral("世界时钟");
         case RuntimeControlType::LineChart:   return QStringLiteral("线图阵列");
         case RuntimeControlType::MultiLineChart: return QStringLiteral("多数据线图");
         case RuntimeControlType::PieChart:    return QStringLiteral("饼图");
+        case RuntimeControlType::SetVariable: return QStringLiteral("设置变量");
+        case RuntimeControlType::RunControl:  return QStringLiteral("运行控制");
+        case RuntimeControlType::OkNgCount:   return QStringLiteral("OK/NG");
+        case RuntimeControlType::ConditionalLight: return QStringLiteral("条件信号灯");
         }
         return QStringLiteral("控件");
     }

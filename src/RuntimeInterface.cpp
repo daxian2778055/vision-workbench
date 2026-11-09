@@ -23,6 +23,10 @@ QString runtimeControlTypeName(RuntimeControlType type)
     case RuntimeControlType::LineChart:  return QStringLiteral("线图阵列");
     case RuntimeControlType::MultiLineChart: return QStringLiteral("多数据线图");
     case RuntimeControlType::PieChart:   return QStringLiteral("饼图");
+    case RuntimeControlType::SetVariable: return QStringLiteral("设置变量");
+    case RuntimeControlType::RunControl:  return QStringLiteral("运行控制");
+    case RuntimeControlType::OkNgCount:   return QStringLiteral("OK/NG");
+    case RuntimeControlType::ConditionalLight: return QStringLiteral("条件信号灯");
     }
     return QStringLiteral("未知");
 }
@@ -45,6 +49,10 @@ bool runtimeControlTypeFromName(const QString &name, RuntimeControlType &out)
     if (name == QStringLiteral("线图阵列")) { out = RuntimeControlType::LineChart; return true; }
     if (name == QStringLiteral("多数据线图")) { out = RuntimeControlType::MultiLineChart; return true; }
     if (name == QStringLiteral("饼图")) { out = RuntimeControlType::PieChart; return true; }
+    if (name == QStringLiteral("设置变量")) { out = RuntimeControlType::SetVariable; return true; }
+    if (name == QStringLiteral("运行控制")) { out = RuntimeControlType::RunControl; return true; }
+    if (name == QStringLiteral("OK/NG")) { out = RuntimeControlType::OkNgCount; return true; }
+    if (name == QStringLiteral("条件信号灯")) { out = RuntimeControlType::ConditionalLight; return true; }
     return false;
 }
 
@@ -175,6 +183,20 @@ static QJsonObject controlToJson(const RuntimeControl &c)
         o["paramMin"] = c.paramMin;
         o["paramMax"] = c.paramMax;
     }
+    if (c.type == RuntimeControlType::OkNgCount && !c.bindKey2.isEmpty())
+        o["bindKey2"] = c.bindKey2;
+    if (c.type == RuntimeControlType::ConditionalLight) {
+        QJsonArray conds;
+        for (const LightCondition &lc : c.lightConditions) {
+            QJsonObject co;
+            co["op"] = lc.op;
+            co["threshold"] = lc.threshold;
+            co["color"] = lc.color;
+            co["text"] = lc.text;
+            conds.append(co);
+        }
+        o["lightConditions"] = conds;
+    }
     // 按钮动作表：只在有内容时写出，旧方案不膨胀
     if (c.type == RuntimeControlType::Button && !c.actions.isEmpty()) {
         QJsonArray acts;
@@ -279,6 +301,22 @@ static RuntimeControl controlFromJson(const QJsonObject &o, RuntimeControlType t
         ctrl.paramMin = o["paramMin"].toDouble(0.0);
         ctrl.paramMax = o["paramMax"].toDouble(100.0);
         if (ctrl.paramMax <= ctrl.paramMin) ctrl.paramMax = ctrl.paramMin + 1.0;
+    }
+    if (ctrl.type == RuntimeControlType::OkNgCount)
+        ctrl.bindKey2 = o["bindKey2"].toString();
+    if (ctrl.type == RuntimeControlType::ConditionalLight) {
+        const QJsonArray conds = o["lightConditions"].toArray();
+        for (const QJsonValue &cv : conds) {
+            const QJsonObject co = cv.toObject();
+            LightCondition lc;
+            lc.op = qBound(0, co["op"].toInt(0), 5);
+            lc.threshold = co["threshold"].toDouble(0.0);
+            if (!qIsFinite(lc.threshold)) lc.threshold = 0.0;
+            lc.color = co["color"].toString(QStringLiteral("#3db97a"));
+            lc.text = co["text"].toString();
+            ctrl.lightConditions.append(lc);
+            if (ctrl.lightConditions.size() >= 64) break;
+        }
     }
 
     if (ctrl.type == RuntimeControlType::ResultTable) {
