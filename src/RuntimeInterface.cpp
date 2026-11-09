@@ -17,6 +17,8 @@ QString runtimeControlTypeName(RuntimeControlType type)
     case RuntimeControlType::ParamSetting: return QStringLiteral("参数设置");
     case RuntimeControlType::SwitchControl: return QStringLiteral("开关控制");
     case RuntimeControlType::ComboBox: return QStringLiteral("组合框");
+    case RuntimeControlType::ImageAsset: return QStringLiteral("图片");
+    case RuntimeControlType::WorldClock: return QStringLiteral("世界时钟");
     }
     return QStringLiteral("未知");
 }
@@ -33,6 +35,8 @@ bool runtimeControlTypeFromName(const QString &name, RuntimeControlType &out)
     if (name == QStringLiteral("参数设置")) { out = RuntimeControlType::ParamSetting; return true; }
     if (name == QStringLiteral("开关控制")) { out = RuntimeControlType::SwitchControl; return true; }
     if (name == QStringLiteral("组合框"))   { out = RuntimeControlType::ComboBox; return true; }
+    if (name == QStringLiteral("图片"))     { out = RuntimeControlType::ImageAsset; return true; }
+    if (name == QStringLiteral("世界时钟")) { out = RuntimeControlType::WorldClock; return true; }
     return false;
 }
 
@@ -84,6 +88,10 @@ static QJsonObject controlToJson(const RuntimeControl &c)
         || c.type == RuntimeControlType::ComboBox) {
         if (!c.paramKey.isEmpty()) o["paramKey"] = c.paramKey;
     }
+    if (c.type == RuntimeControlType::ImageAsset && !c.imagePath.isEmpty())
+        o["imagePath"] = c.imagePath;
+    if (c.type == RuntimeControlType::WorldClock)
+        o["timeZoneOffsetMinutes"] = c.timeZoneOffsetMinutes;
     if (c.type == RuntimeControlType::ComboBox && !c.comboOptions.isEmpty()) {
         QJsonArray opts;
         for (const QString &s : c.comboOptions) opts.append(s);
@@ -171,6 +179,10 @@ static RuntimeControl controlFromJson(const QJsonObject &o, RuntimeControlType t
         const QJsonArray opts = o["comboOptions"].toArray();
         for (const QJsonValue &v : opts) ctrl.comboOptions << v.toString();
     }
+    if (ctrl.type == RuntimeControlType::ImageAsset)
+        ctrl.imagePath = o["imagePath"].toString();
+    if (ctrl.type == RuntimeControlType::WorldClock)
+        ctrl.timeZoneOffsetMinutes = o["timeZoneOffsetMinutes"].toInt(480);
     if (ctrl.type == RuntimeControlType::ParamSetting) {
         ctrl.paramMin = o["paramMin"].toDouble(0.0);
         ctrl.paramMax = o["paramMax"].toDouble(100.0);

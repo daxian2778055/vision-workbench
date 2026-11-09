@@ -565,6 +565,8 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
             { "布局", "组合框",   RuntimeControlType::ComboBox },
             { "图表", "表格",     RuntimeControlType::ResultTable },
             { "其它", "IO状态",   RuntimeControlType::IoStatus },
+            { "其它", "图片",     RuntimeControlType::ImageAsset },
+            { "其它", "世界时钟", RuntimeControlType::WorldClock },
         };
         QString lastGroup;
         for (const PaletteItem &pi : items) {
@@ -781,6 +783,34 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     m_comboOptionsEdit = new QLineEdit(propGroup);
     m_comboOptionsEdit->setPlaceholderText(QStringLiteral("候选值，逗号分隔，如 配方A,配方B"));
     fData->addRow(QStringLiteral("候选值"), m_comboOptionsEdit);
+
+    // 图片（官方 9.3）：本地图片路径 + 浏览
+    auto *imageHost = new QWidget(propGroup);
+    auto *imageRow = new QHBoxLayout(imageHost);
+    imageRow->setContentsMargins(0, 0, 0, 0);
+    m_imagePathEdit = new QLineEdit(imageHost);
+    m_imagePathEdit->setPlaceholderText(QStringLiteral("本地图片路径"));
+    auto *browseBtn = new QPushButton(QStringLiteral("…"), imageHost);
+    browseBtn->setFixedWidth(28);
+    imageRow->addWidget(m_imagePathEdit, 1);
+    imageRow->addWidget(browseBtn);
+    m_imageHost = imageHost;
+    fAppear->addRow(QStringLiteral("图片"), imageHost);
+    connect(browseBtn, &QPushButton::clicked, this, [this]() {
+        const QString f = QFileDialog::getOpenFileName(
+            this, tr("选择图片"), QString(),
+            QStringLiteral("图片 (*.png *.jpg *.jpeg *.bmp)"));
+        if (!f.isEmpty() && m_imagePathEdit) m_imagePathEdit->setText(f);
+    });
+
+    // 世界时钟（官方 9.3）：相对 UTC 的分钟偏移
+    m_tzOffsetSpin = new QSpinBox(propGroup);
+    m_tzOffsetSpin->setRange(-720, 840);
+    m_tzOffsetSpin->setSingleStep(60);
+    m_tzOffsetSpin->setValue(480);
+    m_tzOffsetSpin->setSuffix(QStringLiteral(" 分钟（+480 = UTC+8）"));
+    m_tzHost = m_tzOffsetSpin;   // 直接隐藏 spin 自身（整行只有一个控件）
+    fAppear->addRow(QStringLiteral("时区偏移"), m_tzOffsetSpin);
     fData->addRow(QStringLiteral("新列来源"), m_columnSource);
     fData->addRow(QStringLiteral("已有列"), m_columnList);
     auto *colBtnRow = new QHBoxLayout();
@@ -936,6 +966,12 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
                 this, &RuntimeInterfaceDesigner::onPropertyEdited);
     if (m_comboOptionsEdit)
         connect(m_comboOptionsEdit, &QLineEdit::textChanged,
+                this, &RuntimeInterfaceDesigner::onPropertyEdited);
+    if (m_imagePathEdit)
+        connect(m_imagePathEdit, &QLineEdit::textChanged,
+                this, &RuntimeInterfaceDesigner::onPropertyEdited);
+    if (m_tzOffsetSpin)
+        connect(m_tzOffsetSpin, QOverload<int>::of(&QSpinBox::valueChanged),
                 this, &RuntimeInterfaceDesigner::onPropertyEdited);
     for (QDoubleSpinBox *s : {m_paramMinSpin, m_paramMaxSpin}) {
         if (s)
@@ -1674,6 +1710,14 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
     }
     if (m_comboOptionsEdit)
         m_comboOptionsEdit->setText(ctrl->comboOptions.join(QStringLiteral(",")));
+
+    // 图片 / 世界时钟（官方 9.3）：只在该类型时显示对应行
+    const bool isImage = (ctrl->type == RuntimeControlType::ImageAsset);
+    const bool isClock = (ctrl->type == RuntimeControlType::WorldClock);
+    if (m_imageHost) m_imageHost->setVisible(isImage);
+    if (m_tzHost) m_tzHost->setVisible(isClock);
+    if (m_imagePathEdit) m_imagePathEdit->setText(ctrl->imagePath);
+    if (m_tzOffsetSpin) m_tzOffsetSpin->setValue(ctrl->timeZoneOffsetMinutes);
     if (m_paramKeyEdit) m_paramKeyEdit->setText(ctrl->paramKey);
     if (m_paramMinSpin) m_paramMinSpin->setValue(ctrl->paramMin);
     if (m_paramMaxSpin) m_paramMaxSpin->setValue(ctrl->paramMax);
@@ -1771,6 +1815,10 @@ void RuntimeInterfaceDesigner::onPropertyEdited()
         ctrl->bindType = QStringLiteral("node");   // 开关控制同样固定绑节点
         ctrl->bindKey = m_bindKeyCombo->currentData().toString();
         if (m_paramKeyEdit) ctrl->paramKey = m_paramKeyEdit->text().trimmed();
+    } else if (ctrl->type == RuntimeControlType::ImageAsset) {
+        if (m_imagePathEdit) ctrl->imagePath = m_imagePathEdit->text().trimmed();
+    } else if (ctrl->type == RuntimeControlType::WorldClock) {
+        if (m_tzOffsetSpin) ctrl->timeZoneOffsetMinutes = m_tzOffsetSpin->value();
     } else if (ctrl->type == RuntimeControlType::ComboBox) {
         ctrl->bindType = QStringLiteral("node");
         ctrl->bindKey = m_bindKeyCombo->currentData().toString();

@@ -20,7 +20,9 @@ enum class RuntimeControlType {
     IoStatus,     /// IO 状态：直绑相机 IO 节点（成功=灯，值/错误=文本）
     ParamSetting, /// 参数设置：订阅节点 int/float 参数，运行界面直接改（官方 9.3）
     SwitchControl, /// 开关控制：订阅节点 bool 参数，运行界面控制其是否启用（官方 9.3）
-    ComboBox      /// 组合框：在候选值之间切换（切换配方/模式，官方 9.3）
+    ComboBox,     /// 组合框：在候选值之间切换（切换配方/模式，官方 9.3）
+    ImageAsset,   /// 图片：显示本地图片（官方 9.3「图片控件可添加本地图片」）
+    WorldClock    /// 世界时钟：显示所选时区当前时间（官方 9.3）
 };
 
 /// 结果表格列（ResultTable 专用）
@@ -65,6 +67,10 @@ struct RuntimeControl {
     double paramMax = 100.0;
     /// ComboBox 专用：候选值（显示即值）。选中后按字符串写入 paramKey。
     QStringList comboOptions;
+    /// ImageAsset 专用：本地图片路径（空 = 显示占位提示）
+    QString imagePath;
+    /// WorldClock 专用：相对 UTC 的分钟偏移（如 +480 = UTC+8）
+    int timeZoneOffsetMinutes = 480;
 
     QString displayTitle() const
     {

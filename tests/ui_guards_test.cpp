@@ -61,6 +61,7 @@ void paramSettingControlRoundTripsAndSeedsWithoutWriteBack();
 void switchControlRoundTripsAndSeedsWithoutWriteBack();
 void comboBoxRoundTripsAndSeedsWithoutWriteBack();
 void paramActionTargetParsesNodeKeyValue();
+void imageAndClockControlsRoundTripAndRender();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -893,6 +894,43 @@ void UiGuardsTest::paramActionTargetParsesNodeKeyValue()
     QVERIFY2(!parseParamActionTarget(QStringLiteral("  "), QStringLiteral("a=1"),
                                      &node, &key, &value),
              "节点为空必须拒绝");
+}
+
+// B3-4 图片 / 世界时钟（官方 9.3）：纯展示控件，序列化往返 + 渲染形态。
+void UiGuardsTest::imageAndClockControlsRoundTripAndRender()
+{
+    RuntimeInterfacePage page;
+    RuntimeControl *img = page.addControl(RuntimeControlType::ImageAsset,
+                                          QRect(0, 0, 200, 100));
+    QVERIFY(img);
+    img->imagePath = QStringLiteral("/no/such/file.png");
+    RuntimeControl *clk = page.addControl(RuntimeControlType::WorldClock,
+                                          QRect(0, 110, 260, 60));
+    QVERIFY(clk);
+    clk->timeZoneOffsetMinutes = 540;   // UTC+9
+
+    RuntimeInterfacePage back;
+    QVERIFY(back.fromJson(page.toJson()));
+    QCOMPARE(back.controls.size(), 2);
+    QCOMPARE(back.controls.at(0).imagePath, QStringLiteral("/no/such/file.png"));
+    QCOMPARE(back.controls.at(1).timeZoneOffsetMinutes, 540);
+
+    RuntimeInterface layout;
+    layout.ensurePage();
+    layout.page(0)->controls = back.controls;
+    RuntimeInterfaceView view;
+    view.setInterface(layout);
+
+    bool sawBrokenImageHint = false;
+    bool sawClockText = false;
+    const QRegularExpression clockRe(
+        QStringLiteral("^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$"));
+    for (QLabel *l : view.findChildren<QLabel *>()) {
+        if (l->text().contains(QStringLiteral("图片无法加载"))) sawBrokenImageHint = true;
+        if (clockRe.match(l->text()).hasMatch()) sawClockText = true;
+    }
+    QVERIFY2(sawBrokenImageHint, "图片路径无效时应给出可读提示，而不是空白");
+    QVERIFY2(sawClockText, "世界时钟应显示 yyyy-MM-dd HH:mm:ss 形式的时间");
 }
 
 QTEST_MAIN(UiGuardsTest)

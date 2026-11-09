@@ -13,6 +13,9 @@
 #include <QDoubleSpinBox>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDateTime>
+#include <QPixmap>
+#include <QTimer>
 #include <QSignalBlocker>
 #include <QTableWidget>
 #include <QHeaderView>
@@ -424,6 +427,49 @@ QWidget *RuntimeInterfaceView::createControlWidget(const RuntimeControl &ctrl)
         host->setStyleSheet(QStringLiteral(
             "QWidget { background-color: #22222a; border: 1px solid #3a3a5c; border-radius: 4px; }"));
         return host;
+    }
+    case RuntimeControlType::ImageAsset: {
+        // 官方 9.3：图片控件可添加本地图片在运行界面上显示
+        auto *label = new QLabel();
+        label->setAlignment(Qt::AlignCenter);
+        if (ctrl.imagePath.isEmpty()) {
+            label->setText(QStringLiteral("（未设置图片）"));
+            label->setStyleSheet(QStringLiteral(
+                "color:#8a8a9a; background:#22222a; border:1px dashed #3a3a5c;"));
+            return label;
+        }
+        const QPixmap pm(ctrl.imagePath);
+        if (pm.isNull()) {
+            label->setText(QStringLiteral("图片无法加载：%1").arg(ctrl.imagePath));
+            label->setWordWrap(true);
+            label->setStyleSheet(QStringLiteral(
+                "color:#d08a3a; background:#22222a; border:1px solid #3a3a5c;"));
+            return label;
+        }
+        label->setPixmap(pm.scaled(ctrl.geometry.size(), Qt::KeepAspectRatio,
+                                   Qt::SmoothTransformation));
+        label->setStyleSheet(QStringLiteral("background:#17171c;"));
+        return label;
+    }
+    case RuntimeControlType::WorldClock: {
+        // 官方 9.3：世界时钟实时显示所选时区当前时间
+        auto *label = new QLabel();
+        label->setAlignment(Qt::AlignCenter);
+        label->setStyleSheet(QStringLiteral("color:%1; font-size:%2px; background:#22222a;"
+                                            " border:1px solid #3a3a5c; border-radius:4px;")
+                                 .arg(ctrl.color).arg(ctrl.fontSize));
+        const int offsetMin = ctrl.timeZoneOffsetMinutes;
+        auto tick = [label, offsetMin]() {
+            label->setText(QDateTime::currentDateTimeUtc()
+                               .addSecs(offsetMin * 60)
+                               .toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")));
+        };
+        tick();
+        auto *timer = new QTimer(label);   // parent = label：控件销毁时定时器一起销毁
+        timer->setInterval(1000);
+        QObject::connect(timer, &QTimer::timeout, label, tick);
+        timer->start();
+        return label;
     }
     case RuntimeControlType::ResultTable:
         return createTableWidget(ctrl);
