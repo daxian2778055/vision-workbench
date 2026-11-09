@@ -8,9 +8,17 @@
 //   FINS 帧 = ICF RSV GCT DNA DA1 DA2 SNA SA1 SA2 SID（10 字节）+ 命令码(2) + 参数区。
 //   存储区字代码：DM=82 / CIO=B0 / WR=B1 / HR=B2 / AR=B3，报文里写作「区域码字节 + 0x00」（DM -> 82 00）。
 #include <QtTest>
+#include <QCheckBox>
+#include <QComboBox>
 #include <QHostAddress>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QLineEdit>
 #include <QNetworkDatagram>
+#include <QPushButton>
 #include <QSignalSpy>
+#include <QSpinBox>
+#include <QTableWidget>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QUdpSocket>
@@ -19,6 +27,7 @@
 
 #include "CommunicationNodeBase.h"
 #include "FinsCommNode.h"
+#include "FinsConfigDialog.h"
 #include "FinsFrame.h"
 
 namespace {
@@ -134,6 +143,7 @@ private slots:
     void loopbackFinsTcpRead();
     void loopbackFinsTcpWrite();
     void loopbackFinsUdpRead();
+    void finsConfigDialogRoundTrip();
 };
 
 void FinsTest::codecNodeAddressRequestBytes()
@@ -457,6 +467,142 @@ void FinsTest::loopbackFinsUdpRead()
     QVERIFY(!node.isConnected());
 }
 
-QTEST_GUILESS_MAIN(FinsTest)
+void FinsTest::finsConfigDialogRoundTrip()
+{
+    // B5-2：配置对话框字段往返。initial 里故意用与默认值全不相同的取值，
+    // 一旦某个控件没接上 setConfig/config 就能从读数直接看出来。
+    QJsonObject regA;
+    regA[QStringLiteral("area")] = QStringLiteral("DM");
+    regA[QStringLiteral("address")] = 100;
+    regA[QStringLiteral("dataType")] = QStringLiteral("uint16");
+    regA[QStringLiteral("accessMode")] = QStringLiteral("Read");
+    regA[QStringLiteral("enabled")] = true;
+    regA[QStringLiteral("description")] = QStringLiteral("描述A");
+
+    QJsonObject regB;
+    regB[QStringLiteral("area")] = QStringLiteral("WR");
+    regB[QStringLiteral("address")] = 200;
+    regB[QStringLiteral("dataType")] = QStringLiteral("float");
+    regB[QStringLiteral("accessMode")] = QStringLiteral("ReadWrite");
+    regB[QStringLiteral("enabled")] = false;
+    regB[QStringLiteral("description")] = QStringLiteral("描述B");
+
+    QJsonObject initial;
+    initial[QStringLiteral("targetIp")] = QStringLiteral("192.168.0.10");
+    initial[QStringLiteral("targetPort")] = 9600;
+    initial[QStringLiteral("pollInterval")] = 100;
+    initial[QStringLiteral("timeoutMs")] = 800;
+    initial[QStringLiteral("autoReconnect")] = false;
+    initial[QStringLiteral("reconnectInterval")] = 2000;
+    initial[QStringLiteral("localNode")] = 3;
+    initial[QStringLiteral("remoteNode")] = 7;
+    initial[QStringLiteral("registers")] = QJsonArray{regA, regB};
+
+    FinsConfigDialog dlg(QStringLiteral("FINS TCP"), initial);
+    QCOMPARE(dlg.windowTitle(), QStringLiteral("FINS TCP 配置"));
+
+    auto *ipEdit = dlg.findChild<QLineEdit *>(QStringLiteral("finsTargetIpEdit"));
+    QVERIFY(ipEdit);
+    QCOMPARE(ipEdit->text(), QStringLiteral("192.168.0.10"));
+    auto *portSpin = dlg.findChild<QSpinBox *>(QStringLiteral("finsTargetPortSpin"));
+    QVERIFY(portSpin);
+    QCOMPARE(portSpin->value(), 9600);
+    auto *pollSpin = dlg.findChild<QSpinBox *>(QStringLiteral("finsPollSpin"));
+    QVERIFY(pollSpin);
+    QCOMPARE(pollSpin->value(), 100);
+    auto *timeoutSpin = dlg.findChild<QSpinBox *>(QStringLiteral("finsTimeoutSpin"));
+    QVERIFY(timeoutSpin);
+    QCOMPARE(timeoutSpin->value(), 800);
+    auto *autoCheck = dlg.findChild<QCheckBox *>(QStringLiteral("finsAutoReconnectCheck"));
+    QVERIFY(autoCheck);
+    QVERIFY(!autoCheck->isChecked());
+    auto *reconnectSpin = dlg.findChild<QSpinBox *>(QStringLiteral("finsReconnectSpin"));
+    QVERIFY(reconnectSpin);
+    QCOMPARE(reconnectSpin->value(), 2000);
+    auto *localSpin = dlg.findChild<QSpinBox *>(QStringLiteral("finsLocalNodeSpin"));
+    QVERIFY(localSpin);
+    QCOMPARE(localSpin->value(), 3);
+    auto *remoteSpin = dlg.findChild<QSpinBox *>(QStringLiteral("finsRemoteNodeSpin"));
+    QVERIFY(remoteSpin);
+    QCOMPARE(remoteSpin->value(), 7);
+
+    auto *table = dlg.findChild<QTableWidget *>(QStringLiteral("finsRegisterTable"));
+    QVERIFY(table);
+    QCOMPARE(table->rowCount(), 2);
+
+    // config() 回读：标量同名同值，寄存器逐项对照（键名必须与工厂读取的一致）
+    const QJsonObject back = dlg.config();
+    QCOMPARE(back.value(QStringLiteral("targetIp")).toString(),
+             QStringLiteral("192.168.0.10"));
+    QCOMPARE(back.value(QStringLiteral("targetPort")).toInt(), 9600);
+    QCOMPARE(back.value(QStringLiteral("pollInterval")).toInt(), 100);
+    QCOMPARE(back.value(QStringLiteral("timeoutMs")).toInt(), 800);
+    QCOMPARE(back.value(QStringLiteral("autoReconnect")).toBool(true), false);
+    QCOMPARE(back.value(QStringLiteral("reconnectInterval")).toInt(), 2000);
+    QCOMPARE(back.value(QStringLiteral("localNode")).toInt(), 3);
+    QCOMPARE(back.value(QStringLiteral("remoteNode")).toInt(), 7);
+    QJsonArray regs = back.value(QStringLiteral("registers")).toArray();
+    QCOMPARE(int(regs.size()), 2);
+    const QJsonObject r0 = regs.at(0).toObject();
+    QCOMPARE(r0.value(QStringLiteral("area")).toString(), QStringLiteral("DM"));
+    QCOMPARE(r0.value(QStringLiteral("address")).toInt(), 100);
+    QCOMPARE(r0.value(QStringLiteral("dataType")).toString(), QStringLiteral("uint16"));
+    QCOMPARE(r0.value(QStringLiteral("accessMode")).toString(), QStringLiteral("Read"));
+    QCOMPARE(r0.value(QStringLiteral("enabled")).toBool(false), true);
+    QCOMPARE(r0.value(QStringLiteral("description")).toString(), QStringLiteral("描述A"));
+    const QJsonObject r1 = regs.at(1).toObject();
+    QCOMPARE(r1.value(QStringLiteral("area")).toString(), QStringLiteral("WR"));
+    QCOMPARE(r1.value(QStringLiteral("address")).toInt(), 200);
+    QCOMPARE(r1.value(QStringLiteral("dataType")).toString(), QStringLiteral("float"));
+    QCOMPARE(r1.value(QStringLiteral("accessMode")).toString(), QStringLiteral("ReadWrite"));
+    QCOMPARE(r1.value(QStringLiteral("enabled")).toBool(true), false);
+
+    // 添加一行 → 3 项；选中末行删除 → 回到 2 项
+    auto *addBtn = dlg.findChild<QPushButton *>(QStringLiteral("finsAddRegisterBtn"));
+    QVERIFY(addBtn);
+    addBtn->click();
+    QCOMPARE(table->rowCount(), 3);
+    QCOMPARE(int(dlg.config().value(QStringLiteral("registers")).toArray().size()), 3);
+    table->setCurrentCell(table->rowCount() - 1, 0);
+    auto *removeBtn = dlg.findChild<QPushButton *>(QStringLiteral("finsRemoveRegisterBtn"));
+    QVERIFY(removeBtn);
+    removeBtn->click();
+    QCOMPARE(table->rowCount(), 2);
+    QCOMPARE(int(dlg.config().value(QStringLiteral("registers")).toArray().size()), 2);
+
+    // 空 initial：全部落到与 FinsCommNode::init() 相同的默认值，寄存器表为空
+    FinsConfigDialog defaults(QStringLiteral("FINS UDP"), QJsonObject());
+    QCOMPARE(defaults.windowTitle(), QStringLiteral("FINS UDP 配置"));
+    auto *defIp = defaults.findChild<QLineEdit *>(QStringLiteral("finsTargetIpEdit"));
+    QVERIFY(defIp);
+    QCOMPARE(defIp->text(), QStringLiteral("127.0.0.1"));
+    auto *defPort = defaults.findChild<QSpinBox *>(QStringLiteral("finsTargetPortSpin"));
+    QVERIFY(defPort);
+    QCOMPARE(defPort->value(), 7920);
+    auto *defPoll = defaults.findChild<QSpinBox *>(QStringLiteral("finsPollSpin"));
+    QVERIFY(defPoll);
+    QCOMPARE(defPoll->value(), 500);
+    auto *defTimeout = defaults.findChild<QSpinBox *>(QStringLiteral("finsTimeoutSpin"));
+    QVERIFY(defTimeout);
+    QCOMPARE(defTimeout->value(), 1000);
+    auto *defAuto = defaults.findChild<QCheckBox *>(QStringLiteral("finsAutoReconnectCheck"));
+    QVERIFY(defAuto);
+    QVERIFY(defAuto->isChecked());
+    auto *defReconnect = defaults.findChild<QSpinBox *>(QStringLiteral("finsReconnectSpin"));
+    QVERIFY(defReconnect);
+    QCOMPARE(defReconnect->value(), 3000);
+    auto *defLocal = defaults.findChild<QSpinBox *>(QStringLiteral("finsLocalNodeSpin"));
+    QVERIFY(defLocal);
+    QCOMPARE(defLocal->value(), 0);
+    auto *defRemote = defaults.findChild<QSpinBox *>(QStringLiteral("finsRemoteNodeSpin"));
+    QVERIFY(defRemote);
+    QCOMPARE(defRemote->value(), 0);
+    auto *defTable = defaults.findChild<QTableWidget *>(QStringLiteral("finsRegisterTable"));
+    QVERIFY(defTable);
+    QCOMPARE(defTable->rowCount(), 0);
+    QCOMPARE(int(defaults.config().value(QStringLiteral("registers")).toArray().size()), 0);
+}
+
+QTEST_MAIN(FinsTest)
 
 #include "fins_test.moc"

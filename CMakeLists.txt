@@ -242,6 +242,7 @@ src/ModelCache.cpp
     src/ModbusNode.cpp
     src/FinsFrame.cpp
     src/FinsCommNode.cpp
+    src/FinsConfigDialog.cpp
     src/ModbusConfigDialog.cpp
     src/PlcCommNode.cpp
     src/PlcConfigDialog.cpp
@@ -486,6 +487,7 @@ set(HEADERS
     include/ModbusNode.h
     include/FinsFrame.h
     include/FinsCommNode.h
+    include/FinsConfigDialog.h
     include/ModbusConfigDialog.h
     include/PlcCommNode.h
     include/PlcConfigDialog.h
@@ -1367,10 +1369,12 @@ endif()
 
 # Omron FINS（VM 4.4 B5-1）：协议编解码逐字节 + 本机回环（QTcpServer / QUdpSocket 模拟 PLC）
 # 的节点地址握手、读轮询与寄存器值上报。不连真机（真机口径留现场联调）。
+# B5-2 起同套件还覆盖 FINS 配置对话框的字段往返（QTEST_MAIN 需要 QApplication ⇒ Widgets）。
 if(MSVC)
     add_executable(fins_test tests/fins_test.cpp)
-    target_link_libraries(fins_test PRIVATE vfp_core Qt6::Test)
+    target_link_libraries(fins_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
     vfp_add_qtest(NAME FinsTest TARGET fins_test)
+    vfp_configure_gui_test(FinsTest)
 endif()
 
 # 通信监听地址解析（177 行）：纯解析器行为面（不碰网络）——空参=默认全网卡、

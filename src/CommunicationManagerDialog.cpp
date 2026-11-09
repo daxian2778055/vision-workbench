@@ -3,6 +3,7 @@
 #include "CommunicationNodeBase.h"
 #include "ModbusNode.h"
 #include "ModbusConfigDialog.h"
+#include "FinsConfigDialog.h"
 #include "PlcCommNode.h"
 #include "PlcConfigDialog.h"
 #include "ReceiveEvent.h"
@@ -421,7 +422,9 @@ void CommunicationManagerDialog::onAddDevice()
         QStringLiteral("\u4E32\u53E3"),
         QStringLiteral("Modbus"),
         QStringLiteral("PLC"),
-        QStringLiteral("UDP")
+        QStringLiteral("UDP"),
+        QStringLiteral("FINS TCP"),
+        QStringLiteral("FINS UDP")
     };
 
     bool ok = false;
@@ -464,6 +467,11 @@ void CommunicationManagerDialog::onAddDevice()
     } else if (type == QStringLiteral("PLC")) {
         PlcConfigDialog dlg(QStringLiteral("PLC\u914D\u7F6E - %1").arg(name), nullptr, this);
         dlg.setConfig(config);
+        if (dlg.exec() != QDialog::Accepted) return;
+        config = dlg.config();
+    } else if (type == QStringLiteral("FINS TCP") || type == QStringLiteral("FINS UDP")) {
+        // B5-2：两个传输面共用一套字段；空 config 进对话框即全默认值（127.0.0.1:7920）
+        FinsConfigDialog dlg(type, config, this);
         if (dlg.exec() != QDialog::Accepted) return;
         config = dlg.config();
     }
@@ -545,6 +553,16 @@ void CommunicationManagerDialog::onConfigDevice()
         if (dlg.exec() == QDialog::Accepted) {
             QJsonObject newConfig = dlg.config();
             // N13：同 Modbus——断开移入 Accepted 分支（取消不掉线），应用后按原状态恢复连接。
+            if (wasConnected) cm->closeDevice(name);
+            cm->removeDevice(name);
+            cm->addDevice(name, info.type, newConfig);
+            if (wasConnected) cm->openDevice(name);
+        }
+    } else if (info.type == QStringLiteral("FINS TCP") || info.type == QStringLiteral("FINS UDP")) {
+        // B5-2：与 Modbus/PLC 同款 remove+add（寄存器表长度/节点号都可能变，不能就地改参数）
+        FinsConfigDialog dlg(info.type, info.config, this);
+        if (dlg.exec() == QDialog::Accepted) {
+            QJsonObject newConfig = dlg.config();
             if (wasConnected) cm->closeDevice(name);
             cm->removeDevice(name);
             cm->addDevice(name, info.type, newConfig);
