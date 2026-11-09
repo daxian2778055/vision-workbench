@@ -562,6 +562,7 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
             { "基础", "按钮",     RuntimeControlType::Button },
             { "基础", "参数设置", RuntimeControlType::ParamSetting },
             { "基础", "开关控制", RuntimeControlType::SwitchControl },
+            { "布局", "组合框",   RuntimeControlType::ComboBox },
             { "图表", "表格",     RuntimeControlType::ResultTable },
             { "其它", "IO状态",   RuntimeControlType::IoStatus },
         };
@@ -776,6 +777,10 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     rangeRow->addWidget(m_paramMaxSpin);
     m_paramRangeHost = rangeHost;
     fData->addRow(QStringLiteral("取值范围"), rangeHost);
+    // 组合框候选值（仅该类型显示）
+    m_comboOptionsEdit = new QLineEdit(propGroup);
+    m_comboOptionsEdit->setPlaceholderText(QStringLiteral("候选值，逗号分隔，如 配方A,配方B"));
+    fData->addRow(QStringLiteral("候选值"), m_comboOptionsEdit);
     fData->addRow(QStringLiteral("新列来源"), m_columnSource);
     fData->addRow(QStringLiteral("已有列"), m_columnList);
     auto *colBtnRow = new QHBoxLayout();
@@ -928,6 +933,9 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     }
     if (m_paramKeyEdit)
         connect(m_paramKeyEdit, &QLineEdit::textChanged,
+                this, &RuntimeInterfaceDesigner::onPropertyEdited);
+    if (m_comboOptionsEdit)
+        connect(m_comboOptionsEdit, &QLineEdit::textChanged,
                 this, &RuntimeInterfaceDesigner::onPropertyEdited);
     for (QDoubleSpinBox *s : {m_paramMinSpin, m_paramMaxSpin}) {
         if (s)
@@ -1544,7 +1552,8 @@ void RuntimeInterfaceDesigner::populateBindKeyCombo()
 
     // 参数设置固定绑节点（绑定方式行被隐藏，combo 里可能没有值）
     const QString bindType = (ctrl->type == RuntimeControlType::ParamSetting
-                              || ctrl->type == RuntimeControlType::SwitchControl)
+                              || ctrl->type == RuntimeControlType::SwitchControl
+                              || ctrl->type == RuntimeControlType::ComboBox)
                                  ? QStringLiteral("node")
                                  : m_bindTypeCombo->currentData().toString();
     m_bindKeyCombo->clear();
@@ -1652,15 +1661,21 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
     const bool isButton = (ctrl->type == RuntimeControlType::Button);
     const bool isParam = (ctrl->type == RuntimeControlType::ParamSetting);
     const bool isSwitch = (ctrl->type == RuntimeControlType::SwitchControl);
+    const bool isCombo = (ctrl->type == RuntimeControlType::ComboBox);
     if (m_dataForm && m_actionConfigBtn) {
         m_dataForm->setRowVisible(m_actionConfigBtn, isButton);
-        // 参数设置/开关控制固定绑节点，只藏「绑定方式」，仍需「绑定对象」选节点
-        m_dataForm->setRowVisible(m_bindTypeCombo, !isButton && !isParam && !isSwitch);
+        // 参数设置/开关控制/组合框固定绑节点，只藏「绑定方式」，仍需「绑定对象」选节点
+        m_dataForm->setRowVisible(m_bindTypeCombo,
+                                  !isButton && !isParam && !isSwitch && !isCombo);
         m_dataForm->setRowVisible(m_bindKeyCombo, !isButton);
-        if (m_paramKeyEdit) m_dataForm->setRowVisible(m_paramKeyEdit, isParam || isSwitch);
-        // bool 参数没有取值范围
+        if (m_paramKeyEdit)
+            m_dataForm->setRowVisible(m_paramKeyEdit, isParam || isSwitch || isCombo);
+        // bool 参数没有取值范围；组合框改填候选值
         if (m_paramRangeHost) m_dataForm->setRowVisible(m_paramRangeHost, isParam);
+        if (m_comboOptionsEdit) m_dataForm->setRowVisible(m_comboOptionsEdit, isCombo);
     }
+    if (m_comboOptionsEdit)
+        m_comboOptionsEdit->setText(ctrl->comboOptions.join(QStringLiteral(",")));
     if (m_paramKeyEdit) m_paramKeyEdit->setText(ctrl->paramKey);
     if (m_paramMinSpin) m_paramMinSpin->setValue(ctrl->paramMin);
     if (m_paramMaxSpin) m_paramMaxSpin->setValue(ctrl->paramMax);
@@ -1758,6 +1773,19 @@ void RuntimeInterfaceDesigner::onPropertyEdited()
         ctrl->bindType = QStringLiteral("node");   // 开关控制同样固定绑节点
         ctrl->bindKey = m_bindKeyCombo->currentData().toString();
         if (m_paramKeyEdit) ctrl->paramKey = m_paramKeyEdit->text().trimmed();
+    } else if (ctrl->type == RuntimeControlType::ComboBox) {
+        ctrl->bindType = QStringLiteral("node");
+        ctrl->bindKey = m_bindKeyCombo->currentData().toString();
+        if (m_paramKeyEdit) ctrl->paramKey = m_paramKeyEdit->text().trimmed();
+        if (m_comboOptionsEdit) {
+            ctrl->comboOptions.clear();
+            const QStringList raw = m_comboOptionsEdit->text().split(
+                QLatin1Char(','), Qt::SkipEmptyParts);
+            for (const QString &s : raw) {
+                const QString t = s.trimmed();
+                if (!t.isEmpty()) ctrl->comboOptions << t;
+            }
+        }
     }
 
     if (ctrl->type == RuntimeControlType::ResultTable) {

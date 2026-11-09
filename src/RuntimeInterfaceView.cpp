@@ -12,6 +12,7 @@
 #include <QTabWidget>
 #include <QDoubleSpinBox>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QSignalBlocker>
 #include <QTableWidget>
 #include <QHeaderView>
@@ -62,6 +63,22 @@ void RuntimeInterfaceView::setParameterValues(const QHash<QString, double> &valu
         if (!values.contains(id)) continue;
         QSignalBlocker block(box);
         box->setChecked(values.value(id) != 0.0);
+    }
+}
+
+void RuntimeInterfaceView::setComboSelections(const QHash<QString, QString> &selections)
+{
+    m_comboSelections = selections;
+    for (QComboBox *combo : findChildren<QComboBox *>()) {
+        const QString node = combo->property("vfpNode").toString();
+        const QString key = combo->property("vfpParam").toString();
+        if (node.isEmpty() || key.isEmpty()) continue;
+        const QString id = node + QLatin1Char('|') + key;
+        if (!selections.contains(id)) continue;
+        const int idx = combo->findText(selections.value(id));
+        if (idx < 0) continue;
+        QSignalBlocker block(combo);   // 回填不触发写回
+        combo->setCurrentIndex(idx);
     }
 }
 
@@ -372,6 +389,38 @@ QWidget *RuntimeInterfaceView::createControlWidget(const RuntimeControl &ctrl)
                     emit switchChangeRequested(nodeName, paramKey, on);
                 });
         lay->addWidget(box, 1);
+        host->setStyleSheet(QStringLiteral(
+            "QWidget { background-color: #22222a; border: 1px solid #3a3a5c; border-radius: 4px; }"));
+        return host;
+    }
+    case RuntimeControlType::ComboBox: {
+        // 官方 9.3：组合框在候选值之间切换（切配方/模式）
+        auto *host = new QWidget();
+        auto *lay = new QVBoxLayout(host);
+        lay->setContentsMargins(8, 4, 8, 4);
+        lay->setSpacing(2);
+        auto *title = new QLabel(ctrl.displayTitle(), host);
+        title->setStyleSheet(QStringLiteral("font-size: 11px; color: #8a8a9a;"));
+        lay->addWidget(title);
+
+        auto *combo = new QComboBox(host);
+        combo->addItems(ctrl.comboOptions);
+        combo->setProperty("vfpNode", ctrl.bindKey);
+        combo->setProperty("vfpParam", ctrl.paramKey);
+        const QString id = ctrl.bindKey + QLatin1Char('|') + ctrl.paramKey;
+        {
+            QSignalBlocker block(combo);   // 回填不触发写回
+            const int idx = combo->findText(m_comboSelections.value(id));
+            if (idx >= 0) combo->setCurrentIndex(idx);
+        }
+        const QString nodeName = ctrl.bindKey;
+        const QString paramKey = ctrl.paramKey;
+        connect(combo, &QComboBox::currentTextChanged, this,
+                [this, nodeName, paramKey](const QString &text) {
+                    if (text.isEmpty()) return;
+                    emit comboChangeRequested(nodeName, paramKey, text);
+                });
+        lay->addWidget(combo, 1);
         host->setStyleSheet(QStringLiteral(
             "QWidget { background-color: #22222a; border: 1px solid #3a3a5c; border-radius: 4px; }"));
         return host;

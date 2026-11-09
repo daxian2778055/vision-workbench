@@ -16,6 +16,7 @@ QString runtimeControlTypeName(RuntimeControlType type)
     case RuntimeControlType::IoStatus:     return QStringLiteral("IO状态");
     case RuntimeControlType::ParamSetting: return QStringLiteral("参数设置");
     case RuntimeControlType::SwitchControl: return QStringLiteral("开关控制");
+    case RuntimeControlType::ComboBox: return QStringLiteral("组合框");
     }
     return QStringLiteral("未知");
 }
@@ -31,6 +32,7 @@ bool runtimeControlTypeFromName(const QString &name, RuntimeControlType &out)
     if (name == QStringLiteral("IO状态"))   { out = RuntimeControlType::IoStatus; return true; }
     if (name == QStringLiteral("参数设置")) { out = RuntimeControlType::ParamSetting; return true; }
     if (name == QStringLiteral("开关控制")) { out = RuntimeControlType::SwitchControl; return true; }
+    if (name == QStringLiteral("组合框"))   { out = RuntimeControlType::ComboBox; return true; }
     return false;
 }
 
@@ -57,10 +59,16 @@ static QJsonObject controlToJson(const RuntimeControl &c)
     geo["w"] = c.geometry.width();
     geo["h"] = c.geometry.height();
     o["geometry"] = geo;
-    // 参数设置与开关控制都靠 paramKey 定位节点参数
+    // 参数设置 / 开关控制 / 组合框都靠 paramKey 定位节点参数
     if (c.type == RuntimeControlType::ParamSetting
-        || c.type == RuntimeControlType::SwitchControl) {
+        || c.type == RuntimeControlType::SwitchControl
+        || c.type == RuntimeControlType::ComboBox) {
         if (!c.paramKey.isEmpty()) o["paramKey"] = c.paramKey;
+    }
+    if (c.type == RuntimeControlType::ComboBox && !c.comboOptions.isEmpty()) {
+        QJsonArray opts;
+        for (const QString &s : c.comboOptions) opts.append(s);
+        o["comboOptions"] = opts;
     }
     if (c.type == RuntimeControlType::ParamSetting) {
         o["paramMin"] = c.paramMin;
@@ -136,8 +144,13 @@ static RuntimeControl controlFromJson(const QJsonObject &o, RuntimeControlType t
     }
 
     if (ctrl.type == RuntimeControlType::ParamSetting
-        || ctrl.type == RuntimeControlType::SwitchControl) {
+        || ctrl.type == RuntimeControlType::SwitchControl
+        || ctrl.type == RuntimeControlType::ComboBox) {
         ctrl.paramKey = o["paramKey"].toString();
+    }
+    if (ctrl.type == RuntimeControlType::ComboBox) {
+        const QJsonArray opts = o["comboOptions"].toArray();
+        for (const QJsonValue &v : opts) ctrl.comboOptions << v.toString();
     }
     if (ctrl.type == RuntimeControlType::ParamSetting) {
         ctrl.paramMin = o["paramMin"].toDouble(0.0);

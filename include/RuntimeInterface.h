@@ -19,7 +19,8 @@ enum class RuntimeControlType {
     ResultTable,  /// 结果表格：多列历史结果（列绑定全局变量/节点输出，按轮提交行）
     IoStatus,     /// IO 状态：直绑相机 IO 节点（成功=灯，值/错误=文本）
     ParamSetting, /// 参数设置：订阅节点 int/float 参数，运行界面直接改（官方 9.3）
-    SwitchControl /// 开关控制：订阅节点 bool 参数，运行界面控制其是否启用（官方 9.3）
+    SwitchControl, /// 开关控制：订阅节点 bool 参数，运行界面控制其是否启用（官方 9.3）
+    ComboBox      /// 组合框：在候选值之间切换（切换配方/模式，官方 9.3）
 };
 
 /// 结果表格列（ResultTable 专用）
@@ -62,6 +63,8 @@ struct RuntimeControl {
     QString paramKey;
     double paramMin = 0.0;
     double paramMax = 100.0;
+    /// ComboBox 专用：候选值（显示即值）。选中后按字符串写入 paramKey。
+    QStringList comboOptions;
 
     QString displayTitle() const
     {

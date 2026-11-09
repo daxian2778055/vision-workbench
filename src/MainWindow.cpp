@@ -7364,6 +7364,22 @@ void MainWindow::setupDockWidgets()
                     logMessage(tr("运行界面开关失败：找不到节点 %1").arg(nodeName));
                     });
 
+                    // 组合框（B3-3，官方 9.3）：在候选值之间切换，按字符串写入参数
+                    connect(m_runtimeView, &RuntimeInterfaceView::comboChangeRequested, this,
+                    [this](const QString &nodeName, const QString &paramKey, const QString &text) {
+                    if (nodeName.isEmpty() || paramKey.isEmpty()) return;
+                    FlowScene *scene = currentFlowScene();
+                    if (!scene) return;
+                    for (NodeBase *n : scene->nodes()) {
+                        if (n->fullName() != nodeName) continue;
+                        n->setParam(paramKey, text);
+                        logMessage(tr("运行界面组合框：%1.%2 = %3")
+                                       .arg(nodeName, paramKey, text));
+                        return;
+                    }
+                    logMessage(tr("运行界面组合框失败：找不到节点 %1").arg(nodeName));
+                    });
+
         // 全局变量变化 → 运行界面实时更新
         connect(GlobalVariableManager::instance(), &GlobalVariableManager::variableChanged,
                 m_runtimeView, &RuntimeInterfaceView::updateVariable);
@@ -7605,25 +7621,30 @@ void MainWindow::loadRuntimeInterfaceLayout()
         // 参数设置控件回填当前值（2026-11-09）：不回填的话运行界面会显示下限，
         // 让人误以为参数被改成了那个值。回填走 QSignalBlocker，不会反向写节点。
         QHash<QString, double> seeds;
+        QHash<QString, QString> combos;
         FlowScene *scene = currentFlowScene();
         if (scene) {
             for (const RuntimeInterfacePage &pg : layout.pages) {
                 for (const RuntimeControl &c : pg.controls) {
-                    // 参数设置与开关控制都要回填（bool 以 0/1 承载）
-                    if (c.type != RuntimeControlType::ParamSetting
-                        && c.type != RuntimeControlType::SwitchControl)
-                        continue;
                     if (c.bindKey.isEmpty() || c.paramKey.isEmpty()) continue;
+                    const QString id = c.bindKey + QLatin1Char('|') + c.paramKey;
                     for (NodeBase *n : scene->nodes()) {
                         if (n->fullName() != c.bindKey) continue;
-                        seeds.insert(c.bindKey + QLatin1Char('|') + c.paramKey,
-                                     n->getParam(c.paramKey).toDouble());
+                        const QVariant cur = n->getParam(c.paramKey);
+                        // 参数设置与开关控制按数值回填（bool 以 0/1 承载）
+                        if (c.type == RuntimeControlType::ParamSetting
+                            || c.type == RuntimeControlType::SwitchControl)
+                            seeds.insert(id, cur.toDouble());
+                        // 组合框按字符串回填，供 findText 选中
+                        else if (c.type == RuntimeControlType::ComboBox)
+                            combos.insert(id, cur.toString());
                         break;
                     }
                 }
             }
         }
         m_runtimeView->setParameterValues(seeds);
+        m_runtimeView->setComboSelections(combos);
     }
 }
 

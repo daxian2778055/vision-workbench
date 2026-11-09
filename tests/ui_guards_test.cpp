@@ -27,6 +27,7 @@
 #include <QTabWidget>
 #include <QDoubleSpinBox>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QFileInfo>
@@ -58,6 +59,7 @@ void buttonActionsMigrateAndRoundTrip();
 void runtimeViewHonorsCurrentPageAndActionTable();
 void paramSettingControlRoundTripsAndSeedsWithoutWriteBack();
 void switchControlRoundTripsAndSeedsWithoutWriteBack();
+void comboBoxRoundTripsAndSeedsWithoutWriteBack();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -806,6 +808,51 @@ void UiGuardsTest::switchControlRoundTripsAndSeedsWithoutWriteBack()
     QCOMPARE(spy.at(0).at(0).toString(), QStringLiteral("预处理模块"));
     QCOMPARE(spy.at(0).at(1).toString(), QStringLiteral("enable"));
     QCOMPARE(spy.at(0).at(2).toBool(), false);
+}
+
+// B3-3 组合框（官方 9.3）：在候选值之间切换，按字符串写入参数。
+void UiGuardsTest::comboBoxRoundTripsAndSeedsWithoutWriteBack()
+{
+    RuntimeInterfacePage page;
+    RuntimeControl *c = page.addControl(RuntimeControlType::ComboBox, QRect(0, 0, 220, 60));
+    QVERIFY(c);
+    c->bindKey = QStringLiteral("配方模块");
+    c->paramKey = QStringLiteral("recipe");
+    c->comboOptions = QStringList{QStringLiteral("配方A"), QStringLiteral("配方B"),
+                                  QStringLiteral("配方C")};
+
+    RuntimeInterfacePage back;
+    QVERIFY(back.fromJson(page.toJson()));
+    const RuntimeControl &r = back.controls.first();
+    QCOMPARE(r.type, RuntimeControlType::ComboBox);
+    QCOMPARE(r.paramKey, QStringLiteral("recipe"));
+    QCOMPARE(r.comboOptions.size(), 3);
+    QCOMPARE(r.comboOptions.at(2), QStringLiteral("配方C"));
+
+    RuntimeInterface layout;
+    layout.ensurePage();
+    layout.page(0)->controls.append(r);
+    RuntimeInterfaceView view;
+    QSignalSpy spy(&view, &RuntimeInterfaceView::comboChangeRequested);
+    view.setInterface(layout);
+
+    auto *combo = view.findChild<QComboBox *>();
+    QVERIFY2(combo, "组合框控件应渲染出下拉框");
+    QCOMPARE(combo->count(), 3);
+
+    // 回填「配方B」：应选中且不触发写回
+    QHash<QString, QString> sel;
+    sel.insert(QStringLiteral("配方模块|recipe"), QStringLiteral("配方B"));
+    view.setComboSelections(sel);
+    QCOMPARE(combo->currentText(), QStringLiteral("配方B"));
+    QCOMPARE(spy.count(), 0);
+
+    // 用户切换才触发
+    combo->setCurrentText(QStringLiteral("配方C"));
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(0).toString(), QStringLiteral("配方模块"));
+    QCOMPARE(spy.at(0).at(1).toString(), QStringLiteral("recipe"));
+    QCOMPARE(spy.at(0).at(2).toString(), QStringLiteral("配方C"));
 }
 
 QTEST_MAIN(UiGuardsTest)

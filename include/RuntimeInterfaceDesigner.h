@@ -129,6 +129,7 @@ QLabel *m_geometryLabel = nullptr;   /// 布局组只读显示尺寸/位置（�
     QDoubleSpinBox *m_paramMinSpin = nullptr;
     QDoubleSpinBox *m_paramMaxSpin = nullptr;
     QWidget *m_paramRangeHost = nullptr;   /// 取值范围整行的容器（按类型隐藏）
+    QLineEdit *m_comboOptionsEdit = nullptr;   /// 组合框候选值（逗号分隔，仅该类型显示）
     QCheckBox *m_visibleCheck = nullptr;   /// 运行时是否显示（隐藏控件仍留在设计画布上以便编辑）
     QPushButton *m_raiseBtn = nullptr;     /// 上移一层
     QPushButton *m_lowerBtn = nullptr;     /// 下移一层
