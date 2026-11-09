@@ -97,6 +97,8 @@ private:
     void rebuildCanvas();
     /// 按 m_layout.canvas 设画布尺寸并挂当前页（原先 8 处重复 setPage）
     void setCanvasPage();
+    /// 刷新「编辑内层Tab」选择器（随页/内层 Tab 变化重建候选并回选画布当前目标）
+    void refreshEditInnerTabCombo();
     void populateBindKeyCombo();
     void refreshPropertyPanel();
     void refreshPageList();
@@ -118,6 +120,8 @@ private:
     QListWidget *m_palette = nullptr;
     RuntimeDesignerCanvas *m_canvas = nullptr;
     QScrollArea *m_canvasScroll = nullptr;
+    /// 编辑内层Tab选择器（-1 = 全部画布；仅当前页启用内层 Tab 时可用）
+    QComboBox *m_editInnerTabCombo = nullptr;
 
     // 属性面板
     QLineEdit *m_titleEdit = nullptr;
@@ -192,6 +196,9 @@ public:
     void setPage(RuntimeInterfacePage *page);
     /// 画布逻辑尺寸（官方 9.3.1 画布可配置；默认 1200×760）
     void setCanvasSize(const QSize &size);
+    /// 聚焦编辑某个内层 Tab（-1 = 全部画布；越界钳制，变更后重建画布）
+    void setEditInnerTab(int idx);
+    int editInnerTab() const { return m_editInnerTab; }
 
     /// 控件存储坐标（画布区/固定栏各自的局部坐标）→ 画布绝对坐标（设计器 1:1 显示用）
     QRect toCanvasRect(const RuntimeControl &ctrl) const;
@@ -223,6 +230,7 @@ public:
 private:
     RuntimeInterfacePage *m_layout = nullptr;
     QList<QWidget *> m_frames;
+    int m_editInnerTab = -1;      /// 正在编辑的内层 Tab（-1 = 显示全部控件）
     int m_selected = -1;          /// 最后选中（属性面板目标）
     QList<int> m_selectedSet;     /// 选中集合（多选）
 

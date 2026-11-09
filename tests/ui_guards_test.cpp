@@ -79,10 +79,12 @@ void zoneGeometryScalesCanvasButNotBars();
 void zoneAtCanvasPointMapsBarsAndCanvas();
 void designerCanvasBarCoordinatesRoundTrip();
 void designerControlRightClickEmitsContextMenu();
+void designerInnerTabEditFilter();
 void innerTabsRoundTripAndClampOrphans();
 void innerTabStripOffsetsDesignerAndRuntime();
 void runtimeViewResizeKeepsZoneAndInnerTabGeometry();
 void runtimeViewPageSwitchKeepsPerPageInnerTab();
+void multiPageGeometryUsesPageContainerBase();
 void lineChartRoundTripsSeriesAndClamps();
 void lineChartRuntimeAppendsBoundSamplesAndTrims();
 void multiLineChartSharesOneChartAndAppends();
@@ -1355,6 +1357,36 @@ void UiGuardsTest::runtimeViewPageSwitchKeepsPerPageInnerTab()
                  QStringLiteral("RuntimeInnerTabBar")).size(), 1);   // 不重复建条
 }
 
+// 多页几何回归：页容器因标签条占位而小于视图时，画布映射必须以页容器尺寸为基，
+// 否则控件按视图尺寸缩放会整体偏移/越界（单页容器铺满视图，行为不变）。
+void UiGuardsTest::multiPageGeometryUsesPageContainerBase()
+{
+    RuntimeInterface layout;
+    layout.ensurePage();
+    layout.page(0)->pageName = QStringLiteral("页一");
+    layout.addPage();
+    layout.page(1)->pageName = QStringLiteral("页二");
+    layout.currentPageIndex = 0;
+    layout.canvas.width = 800;
+    layout.canvas.height = 600;
+    RuntimeControl ctrl;
+    ctrl.type = RuntimeControlType::TextLabel;
+    ctrl.zone = RuntimeZone::Canvas;
+    ctrl.geometry = QRect(0, 560, 100, 40);
+    layout.page(0)->controls.append(ctrl);
+    RuntimeInterfaceView view;
+    view.resize(800, 600);
+    view.setInterface(layout);
+    auto *tabs = view.findChild<QTabWidget *>();
+    QVERIFY(tabs);
+    QWidget *c0 = tabs->widget(0);
+    QVERIFY(c0);
+    c0->resize(700, 500);   // 模拟多页页容器因标签条占位而小于视图
+    const QRect g = view.controlGeometry(ctrl);
+    QVERIFY2(g.bottom() <= c0->height(),
+             "多页画布映射必须以页容器尺寸为基，控件不得超出页容器");
+}
+
 // 线图阵列（官方 9.3 图表）：每系列一张线图，JSON 形状与钳制都要能往返。
 void UiGuardsTest::lineChartRoundTripsSeriesAndClamps()
 {
@@ -1657,6 +1689,45 @@ void UiGuardsTest::chartTypesRoundTrip()
         QCOMPARE(bc.chartSeries.at(1).bindType, QStringLiteral("node"));
         QCOMPARE(bc.chartSeries.at(1).bindKey, QStringLiteral("流程/结果"));
     }
+}
+
+// 设计器内层 Tab 编辑聚焦：画布只显示选中 Tab 的控件 + 不归属 Tab 的画布控件；
+// -1（全部画布）恢复全显。画布未 show，显隐要看 isHidden 而非 isVisible。
+void UiGuardsTest::designerInnerTabEditFilter()
+{
+    RuntimeInterfacePage page;
+    page.innerTabNames = QStringList{QStringLiteral("A"), QStringLiteral("B")};
+    page.innerTabHeight = 30;
+    RuntimeControl *a = page.addControl(RuntimeControlType::TextLabel, QRect(0, 0, 80, 30));
+    a->innerTab = 0;
+    RuntimeControl *b = page.addControl(RuntimeControlType::TextLabel, QRect(0, 60, 80, 30));
+    b->innerTab = 1;
+    RuntimeControl *c = page.addControl(RuntimeControlType::TextLabel, QRect(0, 120, 80, 30));
+    c->innerTab = -1;
+    RuntimeDesignerCanvas canvas;
+    canvas.setCanvasSize(QSize(600, 400));
+    canvas.setPage(&page);
+    canvas.rebuild();
+    const QList<DesignerControlFrame *> frames = canvas.findChildren<DesignerControlFrame *>();
+    QCOMPARE(frames.size(), 3);
+    // rebuild() 销毁旧框重建新框：每次取画布当前子控件计数（旧框已脱离画布）
+    auto hiddenCount = [&]() {
+        int n = 0;
+        const QList<DesignerControlFrame *> cur = canvas.findChildren<DesignerControlFrame *>();
+        for (DesignerControlFrame *f : cur) if (f->isHidden()) ++n;
+        return n;
+    };
+    QCOMPARE(hiddenCount(), 0);          // 默认全部可见
+    canvas.setEditInnerTab(0);
+    QCOMPARE(hiddenCount(), 1);          // 只隐藏归属 B 的那个
+    canvas.setEditInnerTab(1);
+    QCOMPARE(hiddenCount(), 1);          // 只隐藏归属 A 的那个
+    canvas.setEditInnerTab(-1);
+    QCOMPARE(hiddenCount(), 0);          // 恢复全部
+
+    // 对话框必须暴露「编辑内层Tab」选择器（objectName 定位）
+    RuntimeInterfaceDesigner dlg(QStringList{QStringLiteral("模块1")});
+    QVERIFY(dlg.findChild<QComboBox *>(QStringLiteral("designerEditInnerTabCombo")));
 }
 
 QTEST_MAIN(UiGuardsTest)

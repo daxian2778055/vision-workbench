@@ -471,7 +471,7 @@ void RuntimeInterfaceView::buildInnerTabBar(QWidget *container, const RuntimeInt
     const int leftW = cur ? qMax(0, cur->leftBarWidth) : 0;
     const int rightW = cur ? qMax(0, cur->rightBarWidth) : 0;
     const int stripH = qMax(16, pg.innerTabHeight);
-    const QRect barGeo(leftW, topH, qMax(1, width() - leftW - rightW), stripH);
+    const QRect barGeo(leftW, topH, qMax(1, container->width() - leftW - rightW), stripH);
 
     // 已建过（切页回来 / resize 刷新）：只更新几何与选中态，不重复建条
     if (QWidget *existing =
@@ -1296,6 +1296,16 @@ void RuntimeInterfaceView::paintEvent(QPaintEvent *event)
     }
 }
 
+QSize RuntimeInterfaceView::pageBaseSize() const
+{
+    if (m_tabs) {
+        QWidget *c = m_pageContainers.value(m_current.currentPageIndex);
+        if (c && !c->size().isEmpty())
+            return c->size();
+    }
+    return size();
+}
+
 QRect RuntimeInterfaceView::controlGeometry(const RuntimeControl &ctrl)
 {
     RuntimeInterfacePage *pg = m_current.page(m_current.currentPageIndex);
@@ -1304,24 +1314,25 @@ QRect RuntimeInterfaceView::controlGeometry(const RuntimeControl &ctrl)
     const int leftW = pg ? pg->leftBarWidth : 0;
     const int rightW = pg ? pg->rightBarWidth : 0;
     const QRect g = ctrl.geometry;
+    const QSize base = pageBaseSize();
 
     // 固定栏：厚度固定，控件按 1:1 相对该栏左上角摆放（不参与缩放）
     switch (ctrl.zone) {
     case RuntimeZone::TopBar:
         return QRect(QPoint(0, 0) + g.topLeft(), g.size());
     case RuntimeZone::BottomBar:
-        return QRect(QPoint(0, height() - botH) + g.topLeft(), g.size());
+        return QRect(QPoint(0, base.height() - botH) + g.topLeft(), g.size());
     case RuntimeZone::LeftBar:
         return QRect(QPoint(0, topH) + g.topLeft(), g.size());
     case RuntimeZone::RightBar:
-        return QRect(QPoint(width() - rightW, topH) + g.topLeft(), g.size());
+        return QRect(QPoint(base.width() - rightW, topH) + g.topLeft(), g.size());
     case RuntimeZone::Canvas:
         break;
     }
 
     // 画布区：扣掉四向固定栏后等比缩放
-    QRect canvasRect(leftW, topH, qMax(1, width() - leftW - rightW),
-                     qMax(1, height() - topH - botH));
+    QRect canvasRect(leftW, topH, qMax(1, base.width() - leftW - rightW),
+                     qMax(1, base.height() - topH - botH));
     int designW = qMax(1, m_designSize.width() - leftW - rightW);
     int designH = qMax(1, m_designSize.height() - topH - botH);
     // 页内二级 Tab：标签条占画布区顶部一条，内容区相应让出高度

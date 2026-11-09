@@ -98,6 +98,17 @@ void RuntimeDesignerCanvas::setPage(RuntimeInterfacePage *page)
     rebuild();
 }
 
+void RuntimeDesignerCanvas::setEditInnerTab(int idx)
+{
+    if (m_layout)
+        idx = qBound(-1, idx, m_layout->innerTabNames.size() - 1);
+    else
+        idx = -1;
+    if (idx == m_editInnerTab) return;
+    m_editInnerTab = idx;
+    rebuild();
+}
+
 void RuntimeDesignerCanvas::setCanvasSize(const QSize &size)
 {
     if (!size.isValid() || size.isEmpty()) return;
@@ -158,6 +169,27 @@ void RuntimeInterfaceDesigner::setCanvasPage()
     // 先按画布配置定尺寸，再挂页（setPage 内部会 rebuild）
     m_canvas->setCanvasSize(QSize(m_layout.canvas.width, m_layout.canvas.height));
     m_canvas->setPage(m_layout.currentPage());
+    refreshEditInnerTabCombo();
+}
+
+void RuntimeInterfaceDesigner::refreshEditInnerTabCombo()
+{
+    if (!m_editInnerTabCombo || !m_canvas) return;
+    RuntimeInterfacePage *pg = m_layout.currentPage();
+    {
+        QSignalBlocker block(m_editInnerTabCombo);   // 重建候选不触发写回
+        m_editInnerTabCombo->clear();
+        m_editInnerTabCombo->addItem(QStringLiteral("全部画布"), -1);
+        if (pg) {
+            for (int i = 0; i < pg->innerTabNames.size(); ++i)
+                m_editInnerTabCombo->addItem(pg->innerTabNames.at(i), i);
+        }
+        m_editInnerTabCombo->setEnabled(pg && !pg->innerTabNames.isEmpty());
+        // 回选画布当前的编辑目标；不在候选里（切页/关 Tab）则退回「全部画布」
+        const int cur = m_editInnerTabCombo->findData(m_canvas->editInnerTab());
+        m_editInnerTabCombo->setCurrentIndex(cur >= 0 ? cur : 0);
+    }
+    m_canvas->setEditInnerTab(m_editInnerTabCombo->currentData().toInt());
 }
 
 void RuntimeDesignerCanvas::rebuild()
@@ -174,7 +206,10 @@ void RuntimeDesignerCanvas::rebuild()
     for (int i = 0; i < m_layout->controls.size(); ++i) {
         auto *frame = new DesignerControlFrame(this, i);
         frame->setGeometry(toCanvasRect(m_layout->controls[i]));
-        frame->show();
+        // 编辑聚焦：只看选中内层 Tab 的控件 + 不归属任何 Tab 的画布控件
+        const RuntimeControl &c = m_layout->controls[i];
+        const bool show = (m_editInnerTab < 0) || (c.innerTab < 0) || (c.innerTab == m_editInnerTab);
+        frame->setVisible(show);
         m_frames.append(frame);
     }
     update();
@@ -937,10 +972,24 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     canvasToolRow->addWidget(delBtn);
     canvasToolRow->addWidget(clearBtn);
 
+    // 编辑内层Tab：聚焦当前页某个内层标签的控件（「全部画布」= 不过滤）
+    auto *editTabRow = new QHBoxLayout();
+    editTabRow->addWidget(new QLabel(QStringLiteral("编辑内层Tab："), canvasGroup));
+    m_editInnerTabCombo = new QComboBox(canvasGroup);
+    m_editInnerTabCombo->setObjectName(QStringLiteral("designerEditInnerTabCombo"));
+    editTabRow->addWidget(m_editInnerTabCombo);
+    editTabRow->addStretch();
+    connect(m_editInnerTabCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int) {
+        m_canvas->setEditInnerTab(m_editInnerTabCombo->currentData().toInt());
+    });
+
     auto *canvasLay = new QVBoxLayout(canvasGroup);
+    canvasLay->addLayout(editTabRow);
     canvasLay->addWidget(m_canvasScroll, 1);
     canvasLay->addLayout(alignRow);
     canvasLay->addLayout(canvasToolRow);
+    refreshEditInnerTabCombo();
 
     // ---- 右侧：属性面板 ----
     // 官方实机（选中「图像」控件）是 4 个可折叠分组：标识 / 数据源 / 布局 / 外观。
@@ -1407,6 +1456,7 @@ void RuntimeInterfaceDesigner::enableInnerTabs()
     }
     setCanvasPage();
     refreshPropertyPanel();
+    refreshEditInnerTabCombo();
 }
 
 void RuntimeInterfaceDesigner::onControlContextMenu(int index, const QPoint &globalPos)

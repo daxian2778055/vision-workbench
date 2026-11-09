@@ -97,6 +97,8 @@ private:
     void updateCharts(const QString &bindType, const QString &key, const QVariant &value);
     /// 在当前页顶部建内层标签条（页未启用内层 Tab 时什么都不做）
     void buildInnerTabBar(QWidget *container, const RuntimeInterfacePage &pg);
+    /// 几何基准尺寸：多页取当前页容器（标签条占位后小于视图）；单页即视图自身
+    QSize pageBaseSize() const;
     QStringList m_staleBindings;    /// 失效绑定（绘制在页面顶部）
     void rebuildWidgets();
     void clearWidgets();
