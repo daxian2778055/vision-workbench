@@ -1225,6 +1225,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261109.2",
       "recorded_at": "2026-11-09",
       "recorded_note": "按官方口径定案：排序类型决定「当前结果」，主标量字段/结果判断/MeasureResult 跟随排序后首条命中（MatchHit 增补亚像素，默认 sortType=0 行为零变化）；腿 templateCurrentResultFollowsSortType 含改坏自证。含 rc-20261109.1 的审核修复 6 项。"
+    },
+    {
+      "tag": "rc-20261109.3",
+      "commit": "c11add170f40d9c75af8178fd868e7de6912687c",
+      "exe_md5": "9612169757f4c5f3c8685db3405cae3d",
+      "exe_bytes": 11988480,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261109.3",
+      "recorded_at": "2026-11-09",
+      "recorded_note": "收口 3 条纯代码加固：collectSearchValues maxCount<=1 除零（导出为类静态方法+腿）、图像型 ROI 掩膜 normalizeMaskTo8U 统一 CV_8UC1（16U/32F/RGB 腿）、Region→图像空 catch 属有意降级已澄清。含 rc-20261109.2 的官方当前结果口径定案。"
     }
   ],
   "legacy_backfilled": [
