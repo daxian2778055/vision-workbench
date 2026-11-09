@@ -20,6 +20,7 @@ QString runtimeControlTypeName(RuntimeControlType type)
     case RuntimeControlType::TabPage:  return QStringLiteral("Tab页");
     case RuntimeControlType::ImageAsset: return QStringLiteral("图片");
     case RuntimeControlType::WorldClock: return QStringLiteral("世界时钟");
+    case RuntimeControlType::LineChart:  return QStringLiteral("线图阵列");
     }
     return QStringLiteral("未知");
 }
@@ -39,6 +40,7 @@ bool runtimeControlTypeFromName(const QString &name, RuntimeControlType &out)
     if (name == QStringLiteral("Tab页"))    { out = RuntimeControlType::TabPage; return true; }
     if (name == QStringLiteral("图片"))     { out = RuntimeControlType::ImageAsset; return true; }
     if (name == QStringLiteral("世界时钟")) { out = RuntimeControlType::WorldClock; return true; }
+    if (name == QStringLiteral("线图阵列")) { out = RuntimeControlType::LineChart; return true; }
     return false;
 }
 
@@ -175,6 +177,26 @@ static QJsonObject controlToJson(const RuntimeControl &c)
         o["columns"] = cols;
         o["maxRows"] = c.maxRows;
     }
+    if (c.type == RuntimeControlType::LineChart) {
+        QJsonArray seriesArr;
+        for (const ChartSeries &s : c.chartSeries) {
+            QJsonObject so;
+            so["name"] = s.name;
+            so["bindType"] = s.bindType;
+            so["bindKey"] = s.bindKey;
+            so["color"] = s.color;
+            so["showLimits"] = s.showLimits;
+            so["lower"] = s.lower;
+            so["upper"] = s.upper;
+            seriesArr.append(so);
+        }
+        o["chartSeries"] = seriesArr;
+        o["chartHistoryLimit"] = c.chartHistoryLimit;
+        o["chartTitle"] = c.chartTitle;
+        o["showChartTitle"] = c.showChartTitle;
+        o["chartBgColor"] = c.chartBgColor;
+        o["chartAxisColor"] = c.chartAxisColor;
+    }
     return o;
 }
 
@@ -248,6 +270,28 @@ static RuntimeControl controlFromJson(const QJsonObject &o, RuntimeControlType t
         }
         ctrl.maxRows = o["maxRows"].toInt(100);
         if (ctrl.maxRows < 1) ctrl.maxRows = 1;
+    }
+    if (ctrl.type == RuntimeControlType::LineChart) {
+        const QJsonArray seriesArr = o["chartSeries"].toArray();
+        for (const QJsonValue &sv : seriesArr) {
+            const QJsonObject so = sv.toObject();
+            ChartSeries s;
+            s.bindType = so["bindType"].toString(QStringLiteral("global"));
+            s.bindKey = so["bindKey"].toString();
+            if (s.bindKey.isEmpty()) continue;
+            s.name = so["name"].toString(s.bindKey);
+            s.color = so["color"].toString(QStringLiteral("#4FC3F7"));
+            s.showLimits = so["showLimits"].toBool(false);
+            s.lower = so["lower"].toDouble(0.0);
+            s.upper = so["upper"].toDouble(100.0);
+            if (s.upper <= s.lower) s.upper = s.lower + 1.0;
+            ctrl.chartSeries.append(s);
+        }
+        ctrl.chartHistoryLimit = qBound(1, o["chartHistoryLimit"].toInt(30), 1000);
+        ctrl.chartTitle = o["chartTitle"].toString();
+        ctrl.showChartTitle = o["showChartTitle"].toBool(true);
+        ctrl.chartBgColor = o["chartBgColor"].toString(QStringLiteral("#1e1e24"));
+        ctrl.chartAxisColor = o["chartAxisColor"].toString(QStringLiteral("#9aa0b0"));
     }
     return ctrl;
 }

@@ -19,6 +19,7 @@ class QDoubleSpinBox;
 class QDragEnterEvent;
 class QDropEvent;
 class QContextMenuEvent;
+class QGroupBox;
 class RuntimeDesignerCanvas;
 
 /// 自定义运行界面设计器（对齐 VisionMaster 4.4 运行界面设计；多页 + 结果表格 + IO 状态）
@@ -58,6 +59,9 @@ private slots:
     void addControlAt(const QPoint &pos);
     /// 控件右键菜单（官方 9.1：删除 / 撤销 / 重做 / 图层位置）
     void onControlContextMenu(int index, const QPoint &globalPos);
+    /// 线图阵列：添加/删除一条数据系列
+    void onChartSeriesAdd();
+    void onChartSeriesDel();
     /// 启用/关闭当前页的内层 Tab（官方 9.3「Tab页」，页级实现）
     void enableInnerTabs();
     // 控件层级（官方工具条 4 档：顶层 / 上一层 / 底层 / 下一层）
@@ -156,6 +160,17 @@ QLabel *m_geometryLabel = nullptr;   /// 布局组只读显示尺寸/位置（�
     QPushButton *m_columnAddBtn = nullptr;
     QPushButton *m_columnDelBtn = nullptr;
     QSpinBox *m_tableMaxRows = nullptr;
+    // 线图阵列专用（官方 9.3 图表）：数据系列 + 标题/标题栏/最新执行条数/颜色
+    QGroupBox *m_chartGroup = nullptr;
+    QLineEdit *m_chartTitleEdit = nullptr;
+    QCheckBox *m_chartShowTitleCheck = nullptr;
+    QSpinBox *m_chartHistorySpin = nullptr;
+    QLineEdit *m_chartBgEdit = nullptr;
+    QLineEdit *m_chartAxisEdit = nullptr;
+    QComboBox *m_chartSource = nullptr;
+    QListWidget *m_chartSeriesList = nullptr;
+    QPushButton *m_chartSeriesAddBtn = nullptr;
+    QPushButton *m_chartSeriesDelBtn = nullptr;
 
     int m_selected = -1;
     bool m_updatingProps = false;

@@ -462,6 +462,48 @@ void DesignerControlFrame::paintEvent(QPaintEvent *event)
         p.drawText(btnRect, Qt::AlignCenter, ctrl.displayTitle());
         break;
     }
+    case RuntimeControlType::LineChart: {
+        // 线图阵列预览：每个数据源一张小图（官方：执行次数 vs 当前值）
+        p.setPen(QPen(QColor(0x3a, 0x3a, 0x4a), 1));
+        p.setBrush(QColor(ctrl.chartBgColor.isEmpty() ? QStringLiteral("#1e1e24")
+                                                      : ctrl.chartBgColor));
+        p.drawRect(body);
+        p.setBrush(Qt::NoBrush);
+        if (ctrl.showChartTitle) {
+            p.setPen(QColor(0xd8, 0xd8, 0xe0));
+            p.drawText(QRect(body.left() + 6, body.top() + 3, body.width() - 12, 18),
+                       Qt::AlignLeft | Qt::AlignVCenter,
+                       ctrl.chartTitle.isEmpty() ? ctrl.displayTitle() : ctrl.chartTitle);
+        }
+        const int n = qMax(1, ctrl.chartSeries.size());
+        const int gap = 6;
+        const int plotTop = body.top() + (ctrl.showChartTitle ? 24 : 6);
+        const int plotH = qMax(12, (body.bottom() - plotTop - gap * (n - 1)) / n);
+        for (int i = 0; i < n; ++i) {
+            const QRect plot(body.left() + 8, plotTop + i * (plotH + gap),
+                             qMax(20, body.width() - 16), plotH);
+            p.setPen(QPen(QColor(0x3a, 0x3a, 0x4a), 1));
+            p.drawRect(plot);
+            const QString name = ctrl.chartSeries.isEmpty()
+                                     ? QStringLiteral("未配置数据系列")
+                                     : ctrl.chartSeries.at(i).name;
+            p.setPen(QColor(0x8a, 0x8e, 0x9c));
+            p.drawText(plot.adjusted(4, 1, -4, -1), Qt::AlignLeft | Qt::AlignTop, name);
+            QColor line = ctrl.chartSeries.isEmpty() ? QColor(QStringLiteral("#4FC3F7"))
+                                                     : QColor(ctrl.chartSeries.at(i).color);
+            if (!line.isValid()) line = QColor(QStringLiteral("#4FC3F7"));
+            p.setPen(QPen(line, 2));
+            QPolygonF poly;
+            for (int k = 0; k <= 10; ++k) {
+                const double x = plot.left() + 4 + (plot.width() - 8) * k / 10.0;
+                const double y = plot.center().y()
+                                 + (((k * 7 + i * 11) % 17) - 8) * plot.height() / 40.0;
+                poly << QPointF(x, y);
+            }
+            p.drawPolyline(poly);
+        }
+        break;
+    }
     case RuntimeControlType::ResultTable: {
         // 表格预览：表头 + 两行网格
         p.setPen(QPen(QColor(0x3a, 0x3a, 0x4a), 1));
@@ -718,6 +760,7 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
             { "布局", "组合框",   RuntimeControlType::ComboBox },
             { "布局", "Tab页",    RuntimeControlType::TabPage },
             { "图表", "表格",     RuntimeControlType::ResultTable },
+            { "图表", "线图阵列", RuntimeControlType::LineChart },
             { "其它", "IO状态",   RuntimeControlType::IoStatus },
             { "其它", "图片",     RuntimeControlType::ImageAsset },
             { "其它", "世界时钟", RuntimeControlType::WorldClock },
@@ -1046,6 +1089,52 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     m_visibleCheck->setToolTip(QStringLiteral("取消勾选后控件仍保留在设计画布上，但运行界面不显示"));
     fAppear->addRow(QStringLiteral("可见"), m_visibleCheck);
 
+    // 线图阵列（官方 9.3 图表）：数据系列 + 外观
+    m_chartGroup = new QGroupBox(QStringLiteral("线图阵列"), this);
+    auto *chartForm = new QFormLayout(m_chartGroup);
+    m_chartTitleEdit = new QLineEdit(m_chartGroup);
+    m_chartTitleEdit->setPlaceholderText(QStringLiteral("空 = 用控件标题"));
+    m_chartShowTitleCheck = new QCheckBox(QStringLiteral("显示标题栏"), m_chartGroup);
+    m_chartHistorySpin = new QSpinBox(m_chartGroup);
+    m_chartHistorySpin->setRange(1, 1000);
+    m_chartHistorySpin->setValue(30);
+    m_chartHistorySpin->setToolTip(QStringLiteral("官方「最新执行数据条数」：只保留最近 N 次执行"));
+    m_chartBgEdit = new QLineEdit(m_chartGroup);
+    m_chartAxisEdit = new QLineEdit(m_chartGroup);
+    m_chartSource = new QComboBox(m_chartGroup);
+    m_chartSource->setMinimumContentsLength(12);
+    m_chartSource->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_chartSeriesList = new QListWidget(m_chartGroup);
+    m_chartSeriesList->setMaximumHeight(90);
+    m_chartSeriesAddBtn = new QPushButton(QStringLiteral("＋添加系列"), m_chartGroup);
+    m_chartSeriesDelBtn = new QPushButton(QStringLiteral("－删除系列"), m_chartGroup);
+    chartForm->addRow(QStringLiteral("标题"), m_chartTitleEdit);
+    chartForm->addRow(QString(), m_chartShowTitleCheck);
+    chartForm->addRow(QStringLiteral("最新执行条数"), m_chartHistorySpin);
+    chartForm->addRow(QStringLiteral("背景色"), m_chartBgEdit);
+    chartForm->addRow(QStringLiteral("坐标轴颜色"), m_chartAxisEdit);
+    chartForm->addRow(QStringLiteral("新系列来源"), m_chartSource);
+    chartForm->addRow(QStringLiteral("已有系列"), m_chartSeriesList);
+    auto *chartBtnRow = new QHBoxLayout();
+    chartBtnRow->addWidget(m_chartSeriesAddBtn);
+    chartBtnRow->addWidget(m_chartSeriesDelBtn);
+    chartForm->addRow(QString(), chartBtnRow);
+    propOuter->addWidget(m_chartGroup);
+    connect(m_chartSeriesAddBtn, &QPushButton::clicked,
+            this, &RuntimeInterfaceDesigner::onChartSeriesAdd);
+    connect(m_chartSeriesDelBtn, &QPushButton::clicked,
+            this, &RuntimeInterfaceDesigner::onChartSeriesDel);
+    connect(m_chartTitleEdit, &QLineEdit::textEdited,
+            this, &RuntimeInterfaceDesigner::onPropertyEdited);
+    connect(m_chartShowTitleCheck, &QCheckBox::toggled,
+            this, &RuntimeInterfaceDesigner::onPropertyEdited);
+    connect(m_chartHistorySpin, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, &RuntimeInterfaceDesigner::onPropertyEdited);
+    connect(m_chartBgEdit, &QLineEdit::textEdited,
+            this, &RuntimeInterfaceDesigner::onPropertyEdited);
+    connect(m_chartAxisEdit, &QLineEdit::textEdited,
+            this, &RuntimeInterfaceDesigner::onPropertyEdited);
+
     auto *propHint = new QLabel(QStringLiteral("绑定方式说明:\n· 全局变量: 实时显示全局变量值\n· 节点输出: 绑定流程中算子的输出\n· 动作: 按钮点击触发的流程操作\n· 表格列: 每轮把各列当前值提交为一行\n  格式: 变量名,变量名 或 节点:模块完整名\n· IO状态: 绑定相机IO控制节点\n  灯=执行成功, 文本=线值/错误"), propGroup);
     propHint->setWordWrap(true);
     propHint->setStyleSheet("color:#8a8a9a;font-size:11px;");
@@ -1351,6 +1440,7 @@ if (type == RuntimeControlType::Button)     { geo.setWidth(160); geo.setHeight(4
 if (type == RuntimeControlType::TextLabel)  { geo.setWidth(240); geo.setHeight(60); }
 if (type == RuntimeControlType::ValueDisplay){ geo.setHeight(90); }
 if (type == RuntimeControlType::ResultTable){ geo.setWidth(460); geo.setHeight(260); }
+if (type == RuntimeControlType::LineChart){ geo.setWidth(420); geo.setHeight(300); }
 if (type == RuntimeControlType::IoStatus)   { geo.setWidth(260); geo.setHeight(80); }
 
 // 拖放：按落点判定所属区域（官方 9.1 固定栏），再在该区域的坐标系里定位。
@@ -1532,6 +1622,48 @@ void RuntimeInterfaceDesigner::onColumnDel()
     if (row < 0 || row >= ctrl->columns.size()) return;
     pushUndo();
     ctrl->columns.removeAt(row);
+    refreshPropertyPanel();
+    m_canvas->refreshControl(m_selected);
+}
+
+void RuntimeInterfaceDesigner::onChartSeriesAdd()
+{
+    RuntimeControl *ctrl = selectedControl();
+    if (!ctrl || ctrl->type != RuntimeControlType::LineChart || !m_chartSource) return;
+    const QString src = m_chartSource->currentText().trimmed();
+    if (src.isEmpty()) return;
+    ChartSeries series;
+    if (src.startsWith(QStringLiteral("节点:"))) {
+        series.bindType = QStringLiteral("node");
+        series.bindKey = src.mid(3).trimmed();
+    } else {
+        series.bindType = QStringLiteral("global");
+        series.bindKey = src;
+    }
+    if (series.bindKey.isEmpty()) return;
+    for (const ChartSeries &existing : ctrl->chartSeries) {
+        if (existing.bindKey == series.bindKey && existing.bindType == series.bindType)
+            return;
+    }
+    pushUndo();
+    static const char *kColors[] = {"#4FC3F7", "#FFB74D", "#81C784",
+                                    "#E57373", "#BA68C8", "#4DD0E1"};
+    series.name = series.bindKey;
+    series.color = QString::fromLatin1(
+        kColors[ctrl->chartSeries.size() % int(sizeof(kColors) / sizeof(kColors[0]))]);
+    ctrl->chartSeries.append(series);
+    refreshPropertyPanel();
+    m_canvas->refreshControl(m_selected);
+}
+
+void RuntimeInterfaceDesigner::onChartSeriesDel()
+{
+    RuntimeControl *ctrl = selectedControl();
+    if (!ctrl || ctrl->type != RuntimeControlType::LineChart || !m_chartSeriesList) return;
+    const int row = m_chartSeriesList->currentRow();
+    if (row < 0 || row >= ctrl->chartSeries.size()) return;
+    pushUndo();
+    ctrl->chartSeries.removeAt(row);
     refreshPropertyPanel();
     m_canvas->refreshControl(m_selected);
 }
@@ -1948,6 +2080,19 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
         m_columnAddBtn->setEnabled(false);
         m_columnDelBtn->setEnabled(false);
         m_tableMaxRows->setEnabled(false);
+        for (QWidget *w : {static_cast<QWidget *>(m_chartGroup),
+                           static_cast<QWidget *>(m_chartTitleEdit),
+                           static_cast<QWidget *>(m_chartShowTitleCheck),
+                           static_cast<QWidget *>(m_chartHistorySpin),
+                           static_cast<QWidget *>(m_chartBgEdit),
+                           static_cast<QWidget *>(m_chartAxisEdit),
+                           static_cast<QWidget *>(m_chartSource),
+                           static_cast<QWidget *>(m_chartSeriesList),
+                           static_cast<QWidget *>(m_chartSeriesAddBtn),
+                           static_cast<QWidget *>(m_chartSeriesDelBtn)}) {
+            if (w) w->setEnabled(false);
+        }
+        if (m_chartGroup) m_chartGroup->setVisible(false);
         m_raiseBtn->setEnabled(false);
         m_lowerBtn->setEnabled(false);
         m_typeLabel->setText(QStringLiteral("-"));
@@ -2058,6 +2203,33 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
         m_tableMaxRows->setValue(ctrl->maxRows);
     }
 
+    // 线图阵列：分组只在选中该类型时出现；数据系列来源 = 全局变量 + 节点输出
+    if (m_chartGroup) {
+        const bool isChart = ctrl->type == RuntimeControlType::LineChart;
+        m_chartGroup->setVisible(isChart);
+        m_chartGroup->setEnabled(isChart);
+        if (isChart) {
+            m_chartTitleEdit->setText(ctrl->chartTitle);
+            m_chartShowTitleCheck->setChecked(ctrl->showChartTitle);
+            m_chartHistorySpin->setValue(ctrl->chartHistoryLimit);
+            m_chartBgEdit->setText(ctrl->chartBgColor);
+            m_chartAxisEdit->setText(ctrl->chartAxisColor);
+            m_chartSource->clear();
+            const auto vars = GlobalVariableManager::instance()->variables();
+            for (auto it = vars.constBegin(); it != vars.constEnd(); ++it)
+                m_chartSource->addItem(it.key());
+            for (const QString &nn : m_nodeNames)
+                m_chartSource->addItem(QStringLiteral("节点:%1").arg(nn));
+            m_chartSeriesList->clear();
+            for (const ChartSeries &cs : ctrl->chartSeries) {
+                const QString tag = cs.bindType == QStringLiteral("node")
+                                        ? QStringLiteral("节点:%1").arg(cs.bindKey)
+                                        : QStringLiteral("变量:%1").arg(cs.bindKey);
+                m_chartSeriesList->addItem(QStringLiteral("%1  ←  %2").arg(cs.name, tag));
+            }
+        }
+    }
+
     // 绑定方式选项
     m_bindTypeCombo->clear();
     if (ctrl->type == RuntimeControlType::Button) {
@@ -2124,6 +2296,15 @@ void RuntimeInterfaceDesigner::onPropertyEdited()
     if (m_zoneSlotSpin) ctrl->zoneSlot = m_zoneSlotSpin->value();
     if (m_innerTabCombo && m_innerTabCombo->isVisible())
         ctrl->innerTab = m_innerTabCombo->currentData().toInt();
+    if (ctrl->type == RuntimeControlType::LineChart && m_chartGroup) {
+        ctrl->chartTitle = m_chartTitleEdit ? m_chartTitleEdit->text() : QString();
+        if (m_chartShowTitleCheck) ctrl->showChartTitle = m_chartShowTitleCheck->isChecked();
+        if (m_chartHistorySpin) ctrl->chartHistoryLimit = m_chartHistorySpin->value();
+        if (m_chartBgEdit && !m_chartBgEdit->text().trimmed().isEmpty())
+            ctrl->chartBgColor = m_chartBgEdit->text().trimmed();
+        if (m_chartAxisEdit && !m_chartAxisEdit->text().trimmed().isEmpty())
+            ctrl->chartAxisColor = m_chartAxisEdit->text().trimmed();
+    }
 
     if (ctrl->type == RuntimeControlType::ParamSetting) {
         ctrl->bindType = QStringLiteral("node");   // 参数设置固定绑节点

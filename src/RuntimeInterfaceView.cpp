@@ -1,3 +1,8 @@
+#ifdef _WIN32
+#  ifndef NOMINMAX
+#    define NOMINMAX   // windows.h 的 min/max 宏会打断 QtCharts 的 qreal min() 声明
+#  endif
+#endif
 #include "RuntimeInterfaceView.h"
 #include "HalconWindow.h"
 #include "GlobalVariableManager.h"
@@ -20,6 +25,155 @@
 #include <QTableWidget>
 #include <QHeaderView>
 #include <QTimer>
+#include <QtCharts/QChartView>
+#include <QtCharts/QChart>
+#include <QtCharts/QLineSeries>
+#include <QtCharts/QValueAxis>
+
+namespace {
+/// 线图阵列控件（官方 9.3 图表）：每个数据源一张线图，横轴=执行次数，纵轴=当前值。
+/// Qt Charts 只在本文件使用，对外仍是普通 QWidget（objectName=RuntimeLineChart）。
+class RuntimeChartPanel : public QWidget
+{
+public:
+    explicit RuntimeChartPanel(const RuntimeControl &ctrl, QWidget *parent = nullptr)
+        : QWidget(parent), m_ctrl(ctrl)
+    {
+        setObjectName(QStringLiteral("RuntimeLineChart"));
+        const QColor bg(ctrl.chartBgColor);
+        const QColor axisColor = QColor(ctrl.chartAxisColor).isValid()
+                                     ? QColor(ctrl.chartAxisColor)
+                                     : QColor(QStringLiteral("#9aa0b0"));
+        setStyleSheet(QStringLiteral("background:%1;").arg(
+            bg.isValid() ? bg.name() : QStringLiteral("#1e1e24")));
+        auto *lay = new QVBoxLayout(this);
+        lay->setContentsMargins(0, 0, 0, 0);
+        lay->setSpacing(2);
+        if (ctrl.showChartTitle) {
+            auto *title = new QLabel(
+                ctrl.chartTitle.isEmpty() ? ctrl.displayTitle() : ctrl.chartTitle, this);
+            title->setObjectName(QStringLiteral("RuntimeChartTitle"));
+            title->setStyleSheet(QStringLiteral("color:%1; font-size:11px; font-weight:bold;"
+                                                " padding:2px 4px;")
+                                     .arg(axisColor.name()));
+            lay->addWidget(title);
+        }
+        for (int i = 0; i < ctrl.chartSeries.size(); ++i) {
+            const ChartSeries &series = ctrl.chartSeries.at(i);
+            auto *name = new QLabel(
+                series.name.isEmpty() ? series.bindKey : series.name, this);
+            name->setObjectName(QStringLiteral("RuntimeLineChartName%1").arg(i));
+            name->setStyleSheet(QStringLiteral("color:%1; font-size:10px; padding:0 4px;")
+                                    .arg(axisColor.name()));
+            lay->addWidget(name);
+            auto *chart = new QChart();
+            chart->setBackgroundVisible(false);
+            chart->legend()->hide();
+            auto *line = new QLineSeries(chart);
+            QPen pen(QColor(series.color));
+            pen.setWidth(2);
+            line->setPen(pen);
+            chart->addSeries(line);
+            auto *axisX = new QValueAxis(chart);
+            axisX->setRange(0, qMax(9, ctrl.chartHistoryLimit - 1));
+            axisX->setLabelsColor(axisColor);
+            axisX->setTitleText(QStringLiteral("执行次数"));
+            chart->addAxis(axisX, Qt::AlignBottom);
+            line->attachAxis(axisX);
+            auto *axisY = new QValueAxis(chart);
+            axisY->setRange(0, 100);
+            axisY->setLabelsColor(axisColor);
+            chart->addAxis(axisY, Qt::AlignLeft);
+            line->attachAxis(axisY);
+            auto *view = new QChartView(chart, this);
+            view->setObjectName(QStringLiteral("RuntimeLineChartView%1").arg(i));
+            view->setRenderHint(QPainter::Antialiasing);
+            view->setMinimumHeight(48);
+            lay->addWidget(view, 1);
+            m_lines.append(line);
+            m_axesX.append(axisX);
+            m_axesY.append(axisY);
+            m_points.append(QVector<QPointF>());
+            QLineSeries *upper = nullptr;
+            QLineSeries *lower = nullptr;
+            if (series.showLimits) {
+                QPen limitPen(QColor(series.color));
+                limitPen.setStyle(Qt::DashLine);
+                limitPen.setWidth(1);
+                upper = new QLineSeries(chart);
+                upper->setPen(limitPen);
+                chart->addSeries(upper);
+                upper->attachAxis(axisX);
+                upper->attachAxis(axisY);
+                lower = new QLineSeries(chart);
+                lower->setPen(limitPen);
+                chart->addSeries(lower);
+                lower->attachAxis(axisX);
+                lower->attachAxis(axisY);
+            }
+            m_upper.append(upper);
+            m_lower.append(lower);
+        }
+        if (ctrl.chartSeries.isEmpty()) {
+            auto *hint = new QLabel(QStringLiteral("未配置数据系列"), this);
+            hint->setAlignment(Qt::AlignCenter);
+            hint->setStyleSheet(QStringLiteral("color:#8a8a9a;"));
+            lay->addWidget(hint);
+        }
+    }
+
+    int seriesCount() const { return m_lines.size(); }
+
+    void appendSample(int index, double value)
+    {
+        if (index < 0 || index >= m_lines.size())
+            return;
+        QVector<QPointF> &pts = m_points[index];
+        const double x = pts.isEmpty() ? 0.0 : pts.last().x() + 1.0;
+        pts.append(QPointF(x, value));
+        const int limit = qBound(1, m_ctrl.chartHistoryLimit, 1000);
+        while (pts.size() > limit)
+            pts.removeFirst();
+        m_lines[index]->replace(pts);
+
+        const ChartSeries &series = m_ctrl.chartSeries.at(index);
+        double lo = pts.first().y();
+        double hi = pts.first().y();
+        for (const QPointF &p : pts) {
+            lo = qMin(lo, p.y());
+            hi = qMax(hi, p.y());
+        }
+        if (series.showLimits) {
+            lo = qMin(lo, series.lower);
+            hi = qMax(hi, series.upper);
+        }
+        if (qAbs(hi - lo) < 1e-9) {
+            lo -= 1.0;
+            hi += 1.0;
+        }
+        const double pad = (hi - lo) * 0.1;
+        m_axesY[index]->setRange(lo - pad, hi + pad);
+        const double x0 = pts.first().x();
+        const double x1 = qMax(x0 + 1.0, pts.last().x());
+        m_axesX[index]->setRange(x0, x1);
+        if (series.showLimits && m_upper[index] && m_lower[index]) {
+            m_upper[index]->replace(QVector<QPointF>{QPointF(x0, series.upper),
+                                                     QPointF(x1, series.upper)});
+            m_lower[index]->replace(QVector<QPointF>{QPointF(x0, series.lower),
+                                                     QPointF(x1, series.lower)});
+        }
+    }
+
+private:
+    RuntimeControl m_ctrl;
+    QVector<QLineSeries *> m_lines;
+    QVector<QValueAxis *> m_axesX;
+    QVector<QValueAxis *> m_axesY;
+    QVector<QVector<QPointF>> m_points;
+    QVector<QLineSeries *> m_upper;
+    QVector<QLineSeries *> m_lower;
+};
+}   // namespace
 
 RuntimeInterfaceView::RuntimeInterfaceView(QWidget *parent)
     : QWidget(parent)
@@ -538,6 +692,8 @@ QWidget *RuntimeInterfaceView::createControlWidget(const RuntimeControl &ctrl)
         timer->start();
         return label;
     }
+    case RuntimeControlType::LineChart:
+        return new RuntimeChartPanel(ctrl);
     case RuntimeControlType::ResultTable:
         return createTableWidget(ctrl);
     case RuntimeControlType::IoStatus:
@@ -687,6 +843,7 @@ void RuntimeInterfaceView::updateVariable(const QString &name, const QVariant &v
             }
         }
     }
+    updateCharts(QStringLiteral("global"), name, value);
 }
 
 void RuntimeInterfaceView::updateNodeOutput(const QString &nodeFullName, const QVariant &value)
@@ -717,6 +874,35 @@ void RuntimeInterfaceView::updateNodeOutput(const QString &nodeFullName, const Q
                     if (m_tableTimers[t]) m_tableTimers[t]->start();
                 }
             }
+        }
+    }
+    updateCharts(QStringLiteral("node"), nodeFullName, value);
+}
+
+void RuntimeInterfaceView::updateCharts(const QString &bindType, const QString &key,
+                                        const QVariant &value)
+{
+    const int typeId = value.metaType().id();
+    if (typeId != QMetaType::Int && typeId != QMetaType::UInt
+        && typeId != QMetaType::LongLong && typeId != QMetaType::ULongLong
+        && typeId != QMetaType::Double && typeId != QMetaType::Float
+        && typeId != QMetaType::Bool) {
+        return;   // 官方图表数据只接受 int/float
+    }
+    double sample = value.toDouble();
+    if (typeId == QMetaType::Bool)
+        sample = value.toBool() ? 1.0 : 0.0;
+    for (int i = 0; i < m_widgets.size() && i < m_widgetCtrls.size(); ++i) {
+        if (m_widgets.at(i)->objectName() != QLatin1String("RuntimeLineChart"))
+            continue;
+        const RuntimeControl *ctrl = m_widgetCtrls.at(i);
+        if (!ctrl)
+            continue;
+        auto *panel = static_cast<RuntimeChartPanel *>(m_widgets.at(i));
+        for (int s = 0; s < ctrl->chartSeries.size() && s < panel->seriesCount(); ++s) {
+            const ChartSeries &series = ctrl->chartSeries.at(s);
+            if (series.bindType == bindType && series.bindKey == key)
+                panel->appendSample(s, sample);
         }
     }
 }

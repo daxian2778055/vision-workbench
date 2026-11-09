@@ -1,3 +1,8 @@
+#ifdef _WIN32
+#  ifndef NOMINMAX
+#    define NOMINMAX   // 同上：windows.h 的 min/max 宏会打断 QtCharts 头
+#  endif
+#endif
 // 两项 UI 侧守卫的自动化腿（2026-10-26 复核要求补腿）：
 //   1) 标注类别名白名单——`..\..\x` 这类名字能把样本写到标注目录之外（活路径，P2 修复）；
 //   2) 导出写检查——open() 成功不代表写成功，写完必须 flush + 查状态。
@@ -34,6 +39,10 @@
 #include <QProcess>
 #include <QTextStream>
 #include <QtTest/QtTest>
+#include <QtCharts/QChart>
+#include <QtCharts/QChartView>
+#include <QtCharts/QLineSeries>
+#include <QtCharts/QValueAxis>
 
 class UiGuardsTest : public QObject
 {
@@ -69,6 +78,8 @@ void designerCanvasBarCoordinatesRoundTrip();
 void designerControlRightClickEmitsContextMenu();
 void innerTabsRoundTripAndClampOrphans();
 void innerTabStripOffsetsDesignerAndRuntime();
+void lineChartRoundTripsSeriesAndClamps();
+void lineChartRuntimeAppendsBoundSamplesAndTrims();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -1210,6 +1221,189 @@ void UiGuardsTest::innerTabStripOffsetsDesignerAndRuntime()
     view.setInterface(layout);
     const QRect g = view.controlGeometry(pg->controls.first());
     QCOMPARE(g.y(), 40);
+}
+
+// 线图阵列（官方 9.3 图表）：每系列一张线图，JSON 形状与钳制都要能往返。
+void UiGuardsTest::lineChartRoundTripsSeriesAndClamps()
+{
+    RuntimeInterfacePage page;
+    RuntimeControl c;
+    c.type = RuntimeControlType::LineChart;
+    c.title = QStringLiteral("趋势");
+    c.chartHistoryLimit = 40;
+    c.chartTitle = QStringLiteral("执行趋势");
+    c.showChartTitle = true;
+    c.chartBgColor = QStringLiteral("#101018");
+    c.chartAxisColor = QStringLiteral("#c0c0d0");
+    ChartSeries a;
+    a.name = QStringLiteral("压力");
+    a.bindType = QStringLiteral("global");
+    a.bindKey = QStringLiteral("pressure");
+    a.color = QStringLiteral("#ff8800");
+    a.showLimits = true;
+    a.lower = 5.0;
+    a.upper = 9.0;
+    c.chartSeries.append(a);
+    ChartSeries b;
+    b.name = QStringLiteral("结果");
+    b.bindType = QStringLiteral("node");
+    b.bindKey = QStringLiteral("流程/结果");
+    c.chartSeries.append(b);
+    page.controls.append(c);
+
+    RuntimeInterfacePage back;
+    QVERIFY(back.fromJson(page.toJson()));
+    const RuntimeControl &bc = back.controls.at(0);
+    QCOMPARE(bc.type, RuntimeControlType::LineChart);
+    QCOMPARE(bc.chartSeries.size(), 2);
+    QCOMPARE(bc.chartSeries.at(0).name, QStringLiteral("压力"));
+    QCOMPARE(bc.chartSeries.at(0).bindType, QStringLiteral("global"));
+    QCOMPARE(bc.chartSeries.at(0).bindKey, QStringLiteral("pressure"));
+    QCOMPARE(bc.chartSeries.at(0).color, QStringLiteral("#ff8800"));
+    QVERIFY(bc.chartSeries.at(0).showLimits);
+    QCOMPARE(bc.chartSeries.at(0).lower, 5.0);
+    QCOMPARE(bc.chartSeries.at(0).upper, 9.0);
+    QCOMPARE(bc.chartSeries.at(1).bindType, QStringLiteral("node"));
+    QCOMPARE(bc.chartSeries.at(1).bindKey, QStringLiteral("流程/结果"));
+    QCOMPARE(bc.chartTitle, QStringLiteral("执行趋势"));
+    QVERIFY(bc.showChartTitle);
+    QCOMPARE(bc.chartBgColor, QStringLiteral("#101018"));
+    QCOMPARE(bc.chartAxisColor, QStringLiteral("#c0c0d0"));
+    QCOMPARE(bc.chartHistoryLimit, 40);
+
+    // 手改 JSON：超界历史条数钳到 1000；upper<=lower 自动拉开；
+    // 空绑定的系列没有数据来源，载入时丢弃而不是留一张空图。
+    QJsonObject json = page.toJson();
+    QJsonArray controls = json[QStringLiteral("controls")].toArray();
+    QJsonObject co = controls.at(0).toObject();
+    co[QStringLiteral("chartHistoryLimit")] = 5000;
+    QJsonArray seriesArr = co[QStringLiteral("chartSeries")].toArray();
+    QJsonObject s0 = seriesArr.at(0).toObject();
+    s0[QStringLiteral("upper")] = 1.0;
+    seriesArr.replace(0, s0);
+    QJsonObject orphan;
+    orphan[QStringLiteral("name")] = QStringLiteral("空系列");
+    orphan[QStringLiteral("bindType")] = QStringLiteral("global");
+    orphan[QStringLiteral("bindKey")] = QString();
+    seriesArr.append(orphan);
+    co[QStringLiteral("chartSeries")] = seriesArr;
+    controls.replace(0, co);
+    json[QStringLiteral("controls")] = controls;
+
+    RuntimeInterfacePage clamped;
+    QVERIFY(clamped.fromJson(json));
+    const RuntimeControl &cc = clamped.controls.at(0);
+    QCOMPARE(cc.chartHistoryLimit, 1000);
+    QCOMPARE(cc.chartSeries.size(), 2);
+    QCOMPARE(cc.chartSeries.at(0).upper, 6.0);
+}
+
+static QLineSeries *mainLineSeries(QChartView *view)
+{
+    if (!view) return nullptr;
+    const QList<QAbstractSeries *> all = view->chart()->series();
+    return all.isEmpty() ? nullptr : qobject_cast<QLineSeries *>(all.first());
+}
+
+// 运行期数据入口：全局变量/节点输出按 bindKey 精确匹配，非数值忽略，
+// 历史条数裁剪后横轴保留绝对执行次数（官方：执行次数 vs 当前值）。
+void UiGuardsTest::lineChartRuntimeAppendsBoundSamplesAndTrims()
+{
+    RuntimeInterface layout;
+    layout.ensurePage();
+    layout.canvas.width = 900;
+    layout.canvas.height = 600;
+    RuntimeInterfacePage *pg = layout.page(0);
+    QVERIFY(pg);
+    RuntimeControl chart;
+    chart.type = RuntimeControlType::LineChart;
+    chart.geometry = QRect(10, 10, 420, 300);
+    chart.chartHistoryLimit = 3;
+    chart.chartTitle = QStringLiteral("监控趋势");
+    chart.showChartTitle = true;
+    ChartSeries g;
+    g.name = QStringLiteral("压力");
+    g.bindType = QStringLiteral("global");
+    g.bindKey = QStringLiteral("pressure");
+    g.color = QStringLiteral("#ff0000");
+    chart.chartSeries.append(g);
+    ChartSeries n;
+    n.name = QStringLiteral("节点值");
+    n.bindType = QStringLiteral("node");
+    n.bindKey = QStringLiteral("流程/节点");
+    n.showLimits = true;
+    n.lower = 10.0;
+    n.upper = 20.0;
+    chart.chartSeries.append(n);
+    ChartSeries other;
+    other.name = QStringLiteral("其他");
+    other.bindType = QStringLiteral("global");
+    other.bindKey = QStringLiteral("other");
+    chart.chartSeries.append(other);
+    pg->controls.append(chart);
+
+    RuntimeInterfaceView view;
+    view.resize(900, 600);
+    view.setInterface(layout);
+
+    QVERIFY2(view.findChild<QWidget *>(QStringLiteral("RuntimeLineChart")),
+             "运行态必须建出线图阵列面板");
+    QChartView *v0 = view.findChild<QChartView *>(QStringLiteral("RuntimeLineChartView0"));
+    QChartView *v1 = view.findChild<QChartView *>(QStringLiteral("RuntimeLineChartView1"));
+    QChartView *v2 = view.findChild<QChartView *>(QStringLiteral("RuntimeLineChartView2"));
+    QVERIFY(v0 && v1 && v2);
+    QLabel *title = view.findChild<QLabel *>(QStringLiteral("RuntimeChartTitle"));
+    QVERIFY2(title, "showChartTitle=true 时要有标题行");
+    QCOMPARE(title->text(), QStringLiteral("监控趋势"));
+    QLabel *name0 = view.findChild<QLabel *>(QStringLiteral("RuntimeLineChartName0"));
+    QVERIFY(name0);
+    QCOMPARE(name0->text(), QStringLiteral("压力"));
+
+    QLineSeries *s0 = mainLineSeries(v0);
+    QLineSeries *s1 = mainLineSeries(v1);
+    QLineSeries *s2 = mainLineSeries(v2);
+    QVERIFY(s0 && s1 && s2);
+
+    view.updateVariable(QStringLiteral("pressure"), 5.0);
+    view.updateVariable(QStringLiteral("pressure"), 7.0);
+    view.updateVariable(QStringLiteral("other"), 99.0);
+    view.updateNodeOutput(QStringLiteral("流程/节点"), 15.0);
+    view.updateVariable(QStringLiteral("pressure"), QVariant(QStringLiteral("abc")));
+    view.updateNodeOutput(QStringLiteral("流程/节点"), true);
+
+    const QList<QPointF> p0 = s0->points();
+    QCOMPARE(p0.size(), 2);
+    QCOMPARE(p0.at(1).y(), 7.0);
+    const QList<QPointF> p1 = s1->points();
+    QCOMPARE(p1.size(), 2);
+    QCOMPARE(p1.at(0).y(), 15.0);
+    QCOMPARE(p1.at(1).y(), 1.0);   // bool 以 1/0 进入图表
+    const QList<QPointF> p2 = s2->points();
+    QCOMPARE(p2.size(), 1);
+    QCOMPARE(p2.at(0).y(), 99.0);
+
+    // 上下限参与纵轴范围：即使数据 15 在限内，上限 20 也必须可见
+    const QList<QAbstractAxis *> axesY = v1->chart()->axes(Qt::Vertical);
+    QVERIFY(!axesY.isEmpty());
+    auto *axisY = qobject_cast<QValueAxis *>(axesY.first());
+    QVERIFY(axisY);
+    QVERIFY(axisY->min() <= 10.0);
+    QVERIFY(axisY->max() >= 20.0);
+
+    // 历史条数：超过上限裁掉最旧点，横轴保留绝对执行次数
+    for (int i = 0; i < 5; ++i)
+        view.updateVariable(QStringLiteral("pressure"), 100.0 + i);
+    const QList<QPointF> trimmed = s0->points();
+    QCOMPARE(trimmed.size(), 3);
+    QCOMPARE(trimmed.at(0).x(), 4.0);
+    QCOMPARE(trimmed.at(2).x(), 6.0);
+    QCOMPARE(trimmed.at(2).y(), 104.0);
+    const QList<QAbstractAxis *> axesX = v0->chart()->axes(Qt::Horizontal);
+    QVERIFY(!axesX.isEmpty());
+    auto *axisX = qobject_cast<QValueAxis *>(axesX.first());
+    QVERIFY(axisX);
+    QCOMPARE(axisX->min(), 4.0);
+    QCOMPARE(axisX->max(), 6.0);
 }
 
 QTEST_MAIN(UiGuardsTest)

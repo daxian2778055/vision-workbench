@@ -24,7 +24,8 @@ enum class RuntimeControlType {
     TabPage,      /// Tab页：页内二级分组（官方 9.3）；实现为**页级**内层 Tab，
                   /// 拖入即启用，不产生控件对象，因此不会有"子控件指向已删容器"的孤儿问题
     ImageAsset,   /// 图片：显示本地图片（官方 9.3「图片控件可添加本地图片」）
-    WorldClock    /// 世界时钟：显示所选时区当前时间（官方 9.3）
+    WorldClock,   /// 世界时钟：显示所选时区当前时间（官方 9.3）
+    LineChart     /// 线图阵列：执行次数 vs 当前值，每个数据源一张线图（官方 9.3 图表）
 };
 
 /// 结果表格列（ResultTable 专用）
@@ -32,6 +33,17 @@ struct ResultColumn {
     QString header;      /// 列标题
     QString bindType;    /// "global" 全局变量 / "node" 节点输出
     QString bindKey;     /// 全局变量名 / 节点完整名
+};
+
+/// 线图阵列的一条数据（官方：数据类型 int/float、数据源、名称、默认颜色、上下限）
+struct ChartSeries {
+    QString name;        /// 显示名（默认 = 绑定键）
+    QString bindType;    /// "global" / "node"
+    QString bindKey;     /// 全局变量名 / 节点完整名
+    QString color = QStringLiteral("#4FC3F7");
+    bool showLimits = false;
+    double lower = 0.0;
+    double upper = 100.0;
 };
 
 /// 控件所属区域（官方 9.1 工具条可增加上/下/左/右固定栏；画布是默认区域）
@@ -86,6 +98,13 @@ struct RuntimeControl {
     /// >=0 = 落在该页 innerTabNames 的第 N 个 Tab（越界时按 -1 处理，见 fromJson）。
     /// 刻意不存"父容器引用"：页级内层 Tab 只有名字列表，删标签不会留下悬空指向。
     int innerTab = -1;
+    /// 线图阵列（官方 9.3 图表）：每个数据源一张线图，横轴=执行次数，纵轴=当前值
+    QVector<ChartSeries> chartSeries;
+    int chartHistoryLimit = 30;   ///< 官方「最新执行数据条数」
+    QString chartTitle;           ///< 空 = 用控件标题
+    bool showChartTitle = true;   ///< 官方「显示标题栏」
+    QString chartBgColor = QStringLiteral("#1e1e24");
+    QString chartAxisColor = QStringLiteral("#9aa0b0");
     /// 所属区域（官方固定栏）。geometry 的坐标系随区域而定：
     /// Canvas → 相对画布区左上角、随窗口缩放；固定栏 → 相对该栏左上角、1:1 不缩放。
     RuntimeZone zone = RuntimeZone::Canvas;
@@ -107,6 +126,7 @@ struct RuntimeControl {
         case RuntimeControlType::Button:       return QStringLiteral("按钮");
         case RuntimeControlType::ResultTable:  return QStringLiteral("结果表格");
         case RuntimeControlType::IoStatus:     return QStringLiteral("IO状态");
+        case RuntimeControlType::LineChart:   return QStringLiteral("线图阵列");
         }
         return QStringLiteral("控件");
     }
