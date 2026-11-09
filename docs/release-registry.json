@@ -1207,6 +1207,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261108.15",
       "recorded_at": "2026-11-08",
       "recorded_note": "轮末内存释放取证后判定不改逻辑（清节点那份会让切节点显示空白），只修正 FlowExecutor 里误导性注释；取证结论文档 19 条全部有结论、无待查项。含 rc-20261108.14 的扫描清单取证。"
+    },
+    {
+      "tag": "rc-20261109.1",
+      "commit": "af201e186dfe531e9b0ed297f0fb552fceb2455e",
+      "exe_md5": "7e10a6f9ff544628f2856b2538f67250",
+      "exe_bytes": 11986432,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261109.1",
+      "recorded_at": "2026-11-09",
+      "recorded_note": "审核用户 21 个 VM4.4 1:1 对齐提交：修 XY 尺度锚点丢 scaleY、重叠过滤高度用错轴、matchStatus 用过滤前计数、evalOne 空指针、无效腿参数名；加固 RoundAbort 时序腿（2 秒窗口 + atomic）与回正 5 个文件行尾；新增 docs/代码审核结论-20261109.md。既有 P1/P2 修复点全部未回退。"
     }
   ],
   "legacy_backfilled": [
