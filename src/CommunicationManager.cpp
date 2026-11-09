@@ -6,6 +6,7 @@
 #include "TcpCommNode.h"
 #include "ModbusNode.h" // provides ModbusRegisterItem
 #include "PlcCommNode.h"
+#include "FinsCommNode.h" // VM 4.4 B5-1：Omron FINS/TCP + FINS/UDP（寄存器表同 Modbus 口径）
 #include "ReceiveEvent.h"
 #include "SendEvent.h"
 #include "AppLog.h"
@@ -310,6 +311,50 @@ bool CommunicationManager::createDeviceNode(const QString &name, const QString &
             plc->setRegisters(regs);
         }
         node = plc;
+    } else if (type.compare(QStringLiteral("FINS TCP"), Qt::CaseInsensitive) == 0
+               || type.compare(QStringLiteral("FINS UDP"), Qt::CaseInsensitive) == 0) {
+        // VM 4.4 B5-1：Omron FINS 通信。类型串大小写不敏感（"FINS TCP" / "Fins TCP" 同义）；
+        // 两个传输面共用同一套参数与寄存器表，仅构造参数不同。
+        const FinsCommNode::Transport transport =
+            (type.compare(QStringLiteral("FINS UDP"), Qt::CaseInsensitive) == 0)
+                ? FinsCommNode::FinsUdp
+                : FinsCommNode::FinsTcp;
+        FinsCommNode *fins = new FinsCommNode(transport, this);
+        fins->init();
+        if (config.contains(QStringLiteral("targetIp")))
+            fins->setParam(QStringLiteral("targetIp"), config[QStringLiteral("targetIp")].toString());
+        if (config.contains(QStringLiteral("targetPort")))
+            fins->setParam(QStringLiteral("targetPort"), config[QStringLiteral("targetPort")].toInt());
+        if (config.contains(QStringLiteral("pollInterval")))
+            fins->setParam(QStringLiteral("pollInterval"), config[QStringLiteral("pollInterval")].toInt());
+        if (config.contains(QStringLiteral("timeoutMs")))
+            fins->setParam(QStringLiteral("timeoutMs"), config[QStringLiteral("timeoutMs")].toInt());
+        if (config.contains(QStringLiteral("autoReconnect")))
+            fins->setParam(QStringLiteral("autoReconnect"), config[QStringLiteral("autoReconnect")].toBool());
+        if (config.contains(QStringLiteral("reconnectInterval")))
+            fins->setParam(QStringLiteral("reconnectInterval"), config[QStringLiteral("reconnectInterval")].toInt());
+        if (config.contains(QStringLiteral("localNode")))
+            fins->setParam(QStringLiteral("localNode"), config[QStringLiteral("localNode")].toInt());
+        if (config.contains(QStringLiteral("remoteNode")))
+            fins->setParam(QStringLiteral("remoteNode"), config[QStringLiteral("remoteNode")].toInt());
+        // 加载寄存器表格（area/address/dataType/accessMode/enabled/description，与 Modbus 同形）
+        if (config.contains(QStringLiteral("registers"))) {
+            QList<FinsRegisterItem> regs;
+            const QJsonArray regsArr = config[QStringLiteral("registers")].toArray();
+            for (const auto &v : regsArr) {
+                const QJsonObject ro = v.toObject();
+                FinsRegisterItem r;
+                r.area = ro[QStringLiteral("area")].toString(QStringLiteral("DM"));
+                r.address = ro[QStringLiteral("address")].toInt();
+                r.dataType = ro[QStringLiteral("dataType")].toString(QStringLiteral("int16"));
+                r.accessMode = ro[QStringLiteral("accessMode")].toString(QStringLiteral("Read"));
+                r.enabled = ro[QStringLiteral("enabled")].toBool(true);
+                r.description = ro[QStringLiteral("description")].toString();
+                regs.append(r);
+            }
+            fins->setRegisters(regs);
+        }
+        node = fins;
     }
 
     if (!node)

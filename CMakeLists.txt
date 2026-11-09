@@ -240,6 +240,8 @@ src/ModelCache.cpp
     src/CommDeviceConfigDialog.cpp
     src/TcpCommNode.cpp
     src/ModbusNode.cpp
+    src/FinsFrame.cpp
+    src/FinsCommNode.cpp
     src/ModbusConfigDialog.cpp
     src/PlcCommNode.cpp
     src/PlcConfigDialog.cpp
@@ -482,6 +484,8 @@ set(HEADERS
     include/CommDeviceConfigDialog.h
     include/TcpCommNode.h
     include/ModbusNode.h
+    include/FinsFrame.h
+    include/FinsCommNode.h
     include/ModbusConfigDialog.h
     include/PlcCommNode.h
     include/PlcConfigDialog.h
@@ -1361,6 +1365,14 @@ if(MSVC)
     vfp_add_qtest(NAME CommWritebackTest TARGET comm_writeback_test)
 endif()
 
+# Omron FINS（VM 4.4 B5-1）：协议编解码逐字节 + 本机回环（QTcpServer / QUdpSocket 模拟 PLC）
+# 的节点地址握手、读轮询与寄存器值上报。不连真机（真机口径留现场联调）。
+if(MSVC)
+    add_executable(fins_test tests/fins_test.cpp)
+    target_link_libraries(fins_test PRIVATE vfp_core Qt6::Test)
+    vfp_add_qtest(NAME FinsTest TARGET fins_test)
+endif()
+
 # 通信监听地址解析（177 行）：纯解析器行为面（不碰网络）——空参=默认全网卡、
 # 显式 IP 字面量直通、非法配置拒绝（不静默回落）、主机名不解析
 add_executable(comm_bind_test tests/comm_bind_test.cpp)
@@ -1563,7 +1575,7 @@ if(MSVC)
                   CalibrationBoardTest DiagnosticsCollectorTest CalibrationWizardTest DeepOcrToolTest
                   FlowExecutorOwnershipTest RoiGeometryTest FixtureValidationTest
                   FlowRunContextTest NodeRunContextTest FlowExecutorTokenTest
-                  RegisterValueParseTest NodeStateBodyTest)
+                  RegisterValueParseTest NodeStateBodyTest FinsTest)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
         # path_list_prepend 由 CMake 负责插入并处理平台路径分隔符，避免在
         # ENVIRONMENT 值里嵌套分号导致列表被错误拆分
