@@ -418,7 +418,38 @@ TCP 客户端 / TCP 服务端 / UDP / 串口 / 汇川 H2U / 基恩士 KV / 松�
   全套 61 绿；改坏自证分三支：build/b43c_arms.py（A 隐藏失效 / B 清空失效 / C 补齐循环失效）、
   b43c_arms2.py（D 不进全屏）、b43c_arms3.py（E 空白行计入配置 + F 对照），五臂判红、对照臂绿。
   ctest 80/80、ci exit 0。
-- **仍开放**：Modbus 配置对话框接入同一工具条（控件已成共用件，接线量小）。
+- **仍开放**：Modbus 配置对话框接入同一工具条（控件已成共用件，接线量小）。（B4-3d 已闭合，见下节；另把两枚新源文件由 LF 回正 CRLF，EOL 冻结计数回到 205）
+
+
+### B4-3d 已落地（2026-11-10）：Modbus 寄存器工具条接入（共用 RegisterSpaceBar）
+
+> 手册 5.2.2 地址空间操作与 5.2.1 同形：本批把 B4-3c 的共用控件接到 Modbus 配置对话框，
+> 行为口径与 PLC 侧保持一致。
+
+- **节点**：ModbusNode::syncRegistersNow()（与 PLC 同派发：从站号取参数表、宽度按数据类型、
+  请求未发出立即回滚队列）；值经既有读取回填「当前值」列。
+- **对话框**：ModbusConfigDialog 挂 RegisterSpaceBar（objectName modbusRegisterSpaceBar），
+  首地址/个数补齐、隐藏空白行、清空、最大化（主窗口全屏 + Esc）、发送测试均复用控件；
+  空白行不计入设备配置（保存时跳过；注释按共用件头注口径落地），双击空白地址行就地补配置控件。
+- **文案去重**：PLC/Modbus 两侧的状态提示（未连接未发起读取 / 已发起 N 条读取 /
+  测试地址无效 / 测试值无效 / 已发送测试写入 / 未发出）收进 RegisterSpaceBar 的具名 helper，
+  单一来源；此前两侧各写一份触发 dup-cn 闸 5 ADDED。收口后基线保持
+  sentences=57 / added=0 / count=0 / gone=0（DUPCN verdict=GREEN）。
+- **腿**：comm_writeback_test::testModbusRegisterToolbar（start=200 count=3：补齐 3 行且去重、
+  隐藏/显示空白行、空白行不计配置 + 双击后计入、同步未连接可见、发送测试未发出可见、
+  全屏 + Esc、清空）。全套 62 绿；改坏自证 build/b43d_arms.py 三臂
+  （G1 空白行计入配置 / G2 同步撤连接守卫 / G3 发送测试恒成功）均判红；
+  build/b43d_arms2.py 为只改注释对照臂：首跑 rc=0 三绿但脚本按 F_ 前缀识别对照臂误报 RED
+  （b43d_arms2_stdout.txt 原文保留），修识别后重跑 b43d_arms2b_stdout.txt
+  判 control rc=0 expect_green=True、VERDICT=GREEN。ctest 80/80、ci exit 0。
+- **自审拦截**：文案去重重写时 PLC 侧曾把 `if (!okVal)` 守卫吞掉（无条件置「测试值无效」
+  后仍按 0 值写入）；提交前逐行口审 diff 发现并修复，两条工具条用例各补一腿
+  （测试值填 abc → 状态须停在「测试值无效」）。改坏自证 build/b43d_arms3.py 三臂：
+  H 在 PLC 重建该缺陷 / I 在 Modbus 同形 → 两臂均判红；J 只改注释对照臂
+  rc=0、Totals 3 passed 0 failed，VERDICT=GREEN（b43d_arms3_stdout.txt）；
+  修复后单跑两用例各 3 passed、comm 全套 62 passed。
+- **字节**：RegisterSpaceBar.h/.cpp 为 B4-3c 由编辑工具以 LF 写出，本批回正 CRLF；
+  EOL-SHAPE 冻结计数 207 → 205（expected=205 offenders=0 verdict=GREEN）。
 
 
 ### B5-1 已落地（2026-11-09）

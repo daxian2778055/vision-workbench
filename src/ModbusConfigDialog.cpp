@@ -1,5 +1,6 @@
 #include "ModbusConfigDialog.h"
 #include "ModbusNode.h"
+#include "RegisterSpaceBar.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
@@ -218,6 +219,33 @@ void ModbusConfigDialog::setupUI()
             this, &ModbusConfigDialog::onCellDoubleClicked);
 
     regLayout->addWidget(m_registerTable);
+
+    // VM 5.2.1 官方寄存器工具条（与 PLC 对话框同一控件）
+    m_spaceBar = new RegisterSpaceBar(m_registerTable, regGroup, this, regGroup);
+    m_spaceBar->setObjectName(QStringLiteral("modbusRegisterSpaceBar"));
+    regLayout->insertWidget(1, m_spaceBar);
+    connect(m_spaceBar, &RegisterSpaceBar::syncRequested, this, [this]() {
+        if (!m_modbusNode || !m_modbusNode->isConnected()) {
+            m_spaceBar->showNotConnectedStatus();
+            return;
+        }
+        m_spaceBar->showSyncIssuedStatus(m_modbusNode->syncRegistersNow());
+    });
+    connect(m_spaceBar, &RegisterSpaceBar::testSendRequested, this,
+            [this](const QString &addressText, const QString &valueText) {
+        if (!m_modbusNode) {
+            m_spaceBar->showNoNodeStatus();
+            return;
+        }
+        bool okAddr = false;
+        const int addr = addressText.toInt(&okAddr);
+        bool okVal = false;
+        const double value = valueText.toDouble(&okVal);
+        if (!okAddr) { m_spaceBar->showInvalidAddressStatus(); return; }
+        if (!okVal) { m_spaceBar->showInvalidValueStatus(); return; }
+        if (m_modbusNode->writeRegister(addr, value)) m_spaceBar->showTestSentStatus(addr, value);
+        else m_spaceBar->showTestNotSentStatus();
+    });
 
     // 按钮行
     auto *btnLayout = new QHBoxLayout();
@@ -495,6 +523,7 @@ void ModbusConfigDialog::loadConfigToForm(const QJsonObject &config)
     }
 
     refreshRoleUi();
+    if (m_spaceBar) m_spaceBar->refreshAddressChoices();
     refreshToggleSwitch();
 }
 
@@ -529,6 +558,9 @@ QJsonObject ModbusConfigDialog::buildConfigFromForm() const
 
     QJsonArray regsArr;
     for (int row = 0; row < m_registerTable->rowCount(); ++row) {
+        // 地址空间空白行（见 RegisterSpaceBar 头注）不计入配置
+        if (!qobject_cast<QComboBox *>(m_registerTable->cellWidget(row, 1)))
+            continue;
         QJsonObject ro;
         auto *addrItem = m_registerTable->item(row, 0);
         if (addrItem) ro[QStringLiteral("address")] = addrItem->text().toInt();
@@ -560,12 +592,8 @@ QJsonObject ModbusConfigDialog::buildConfigFromForm() const
     return cfg;
 }
 
-void ModbusConfigDialog::onAddRegister()
+void ModbusConfigDialog::configureRow(int row)
 {
-    int row = m_registerTable->rowCount();
-    m_registerTable->insertRow(row);
-    m_registerTable->setItem(row, 0, new QTableWidgetItem(QString::number(row * 10)));
-
     auto *typeCombo = new QComboBox();
     typeCombo->addItems({QStringLiteral("int16"), QStringLiteral("uint16"),
                          QStringLiteral("int32"), QStringLiteral("float")});
@@ -597,6 +625,14 @@ void ModbusConfigDialog::onAddRegister()
     m_registerTable->setItem(row, 6, enableItem);
 }
 
+void ModbusConfigDialog::onAddRegister()
+{
+    int row = m_registerTable->rowCount();
+    m_registerTable->insertRow(row);
+    m_registerTable->setItem(row, 0, new QTableWidgetItem(QString::number(row * 10)));
+    configureRow(row);
+}
+
 void ModbusConfigDialog::onRemoveRegister()
 {
     int row = m_registerTable->currentRow();
@@ -605,6 +641,10 @@ void ModbusConfigDialog::onRemoveRegister()
 
 void ModbusConfigDialog::onCellDoubleClicked(int row, int column)
 {
+    if (column <= 1 && !qobject_cast<QComboBox *>(m_registerTable->cellWidget(row, 1))) {
+        configureRow(row);   // 空白地址行：就地补配置控件
+        return;
+    }
     // 仅在当前值列(4)且已连接时才触发写入
     if (column != 4) return;
     if (!m_modbusNode) return;

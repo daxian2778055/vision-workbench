@@ -34,6 +34,15 @@ public:
     /// 发送测试地址下拉按当前表格重建（保留已选地址）
     void refreshAddressChoices();
 
+    // ---- 状态行共用口径（PLC/Modbus 两个宿主共用，避免跨文件重复文案）----
+    void showNotConnectedStatus();
+    void showSyncIssuedStatus(int count);
+    void showNoNodeStatus();
+    void showInvalidAddressStatus();
+    void showInvalidValueStatus();
+    void showTestSentStatus(int address, double value);
+    void showTestNotSentStatus();
+
 signals:
     void syncRequested();
     void testSendRequested(const QString &address, const QString &value);

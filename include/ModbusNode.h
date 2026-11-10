@@ -85,6 +85,10 @@ public:
     double registerCurrentValue(int address) const;
     QString registerDisplayValue(int address) const;
 
+    /// 数据同步（VM 5.2.1 寄存器工具条）：对全部已启用寄存器立即发起一轮读取，
+    /// 值经 registerCurrentValueChanged 回传；返回已发出的读请求数（未连接返回 0）。
+    int syncRegistersNow();
+
     /// 当前角色
     Role role() const { return m_role; }
     void setRole(Role role);

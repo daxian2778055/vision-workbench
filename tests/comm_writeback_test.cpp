@@ -145,6 +145,7 @@ private slots:
     void testResponseConfigDialogApply();
     // VM4.4 B4-3c：PLC 寄存器官方工具条（首地址/个数/同步/发送测试/最大化/空白行/清空）
     void testPlcRegisterToolbar();
+    void testModbusRegisterToolbar();
     void testFrameAssemblerReentrancy();
     void testDisconnectClearsFrameBuffer();
     void testConfigDialogPreservesUnmanagedKeys();
@@ -3181,6 +3182,11 @@ void CommWritebackTest::testPlcRegisterToolbar()
     dlg.findChild<QPushButton *>(QStringLiteral("regSpaceTestSend"))->click();
     QVERIFY(status->text().contains(QStringLiteral("\u672A\u53D1\u51FA")));
 
+    // 测试值非法 → 就地拒绝（不得按 0 值落到「未发出」路径）
+    valueEdit->setText(QStringLiteral("abc"));
+    dlg.findChild<QPushButton *>(QStringLiteral("regSpaceTestSend"))->click();
+    QVERIFY(status->text().contains(QStringLiteral("测试值无效")));
+
     // 最大化：地址空间容器移入全屏窗口；Esc 还原
     auto *maxBtn = dlg.findChild<QPushButton *>(QStringLiteral("regSpaceMax"));
     maxBtn->click();
@@ -3193,6 +3199,55 @@ void CommWritebackTest::testPlcRegisterToolbar()
     bar->clearRows();
     QCOMPARE(table->rowCount(), 0);
     QCOMPARE(dlg.config().value(QStringLiteral("registers")).toArray().size(), 0);
+}
+
+void CommWritebackTest::testModbusRegisterToolbar()
+{
+    // Modbus 配置对话框接入同一寄存器工具条（与 PLC 同一控件与同一判据）
+    ModbusNode node;
+    ModbusConfigDialog dlg(QStringLiteral("Modbus配置"), &node);   // 未连接
+    auto *bar = dlg.findChild<RegisterSpaceBar *>(QStringLiteral("modbusRegisterSpaceBar"));
+    auto *table = dlg.findChild<QTableWidget *>();
+    QVERIFY(bar && table);
+
+    auto *start = dlg.findChild<QSpinBox *>(QStringLiteral("regSpaceStart"));
+    auto *count = dlg.findChild<QSpinBox *>(QStringLiteral("regSpaceCount"));
+    start->setValue(200);
+    count->setValue(3);
+    QCOMPARE(bar->addAddressesInSpace(), 3);
+    QCOMPARE(table->rowCount(), 3);
+    QCOMPARE(table->item(0, 0)->text(), QStringLiteral("200"));
+    QCOMPARE(bar->setBlankRowsHidden(true), 3);
+    bar->setBlankRowsHidden(false);
+
+    QCOMPARE(dlg.config().value(QStringLiteral("registers")).toArray().size(), 0);
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "onCellDoubleClicked",
+                                      Q_ARG(int, 0), Q_ARG(int, 1)));
+    QCOMPARE(dlg.config().value(QStringLiteral("registers")).toArray().size(), 1);
+
+    auto *status = dlg.findChild<QLabel *>(QStringLiteral("regSpaceStatus"));
+    dlg.findChild<QPushButton *>(QStringLiteral("regSpaceSync"))->click();
+    QVERIFY(status->text().contains(QStringLiteral("未连接")));
+    QCOMPARE(node.syncRegistersNow(), 0);
+
+    auto *valueEdit = dlg.findChild<QLineEdit *>(QStringLiteral("regSpaceTestValue"));
+    valueEdit->setText(QStringLiteral("7"));
+    dlg.findChild<QPushButton *>(QStringLiteral("regSpaceTestSend"))->click();
+    QVERIFY(status->text().contains(QStringLiteral("未发出")));
+
+    // 测试值非法 → 就地拒绝（不得按 0 值落到「未发出」路径）
+    valueEdit->setText(QStringLiteral("abc"));
+    dlg.findChild<QPushButton *>(QStringLiteral("regSpaceTestSend"))->click();
+    QVERIFY(status->text().contains(QStringLiteral("测试值无效")));
+
+    dlg.findChild<QPushButton *>(QStringLiteral("regSpaceMax"))->click();
+    QVERIFY(bar->isMaximized());
+    QVERIFY2(dlg.window()->isFullScreen(), "最大化未真正进全屏");
+    QTest::keyClick(dlg.window(), Qt::Key_Escape);
+    QVERIFY(!bar->isMaximized());
+
+    bar->clearRows();
+    QCOMPARE(table->rowCount(), 0);
 }
 
 QTEST_MAIN(CommWritebackTest)

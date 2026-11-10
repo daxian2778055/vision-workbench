@@ -141,28 +141,25 @@ void PlcConfigDialog::setupUI()
     regLayout->insertWidget(1, m_spaceBar);   // infoLabel 之下、表格之上
     connect(m_spaceBar, &RegisterSpaceBar::syncRequested, this, [this]() {
         if (!m_plcNode || !m_plcNode->isConnected()) {
-            m_spaceBar->setStatus(QStringLiteral("\u672A\u8FDE\u63A5\uFF0C\u672A\u53D1\u8D77\u8BFB\u53D6"));
+            m_spaceBar->showNotConnectedStatus();
             return;
         }
-        const int n = m_plcNode->syncRegistersNow();
-        m_spaceBar->setStatus(QStringLiteral("\u5DF2\u53D1\u8D77 %1 \u6761\u8BFB\u53D6").arg(n));
+        m_spaceBar->showSyncIssuedStatus(m_plcNode->syncRegistersNow());
     });
     connect(m_spaceBar, &RegisterSpaceBar::testSendRequested, this,
             [this](const QString &addressText, const QString &valueText) {
         if (!m_plcNode) {
-            m_spaceBar->setStatus(QStringLiteral("\u5C1A\u672A\u5173\u8054\u901A\u4FE1\u8282\u70B9"));
+            m_spaceBar->showNoNodeStatus();
             return;
         }
         bool okAddr = false;
         const int addr = addressText.toInt(&okAddr);
         bool okVal = false;
         const double value = valueText.toDouble(&okVal);
-        if (!okAddr) { m_spaceBar->setStatus(QStringLiteral("\u6D4B\u8BD5\u5730\u5740\u65E0\u6548")); return; }
-        if (!okVal) { m_spaceBar->setStatus(QStringLiteral("\u6D4B\u8BD5\u503C\u65E0\u6548")); return; }
-        const bool sent = m_plcNode->writeRegister(addr, value);
-        m_spaceBar->setStatus(sent
-            ? QStringLiteral("\u5DF2\u53D1\u9001\u6D4B\u8BD5\u5199\u5165 %1 = %2").arg(addr).arg(value)
-            : QStringLiteral("\u53D1\u9001\u6D4B\u8BD5\u672A\u53D1\u51FA\uFF08\u672A\u8FDE\u63A5\u6216\u5730\u5740\u672A\u914D\u7F6E\uFF09"));
+        if (!okAddr) { m_spaceBar->showInvalidAddressStatus(); return; }
+        if (!okVal) { m_spaceBar->showInvalidValueStatus(); return; }
+        if (m_plcNode->writeRegister(addr, value)) m_spaceBar->showTestSentStatus(addr, value);
+        else m_spaceBar->showTestNotSentStatus();
     });
 
     auto *btnLayout = new QHBoxLayout();

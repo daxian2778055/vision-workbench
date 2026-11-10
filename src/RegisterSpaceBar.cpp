@@ -151,6 +151,41 @@ void RegisterSpaceBar::setStatus(const QString &text)
     m_statusLabel->setText(text);
 }
 
+void RegisterSpaceBar::showNotConnectedStatus()
+{
+    setStatus(QStringLiteral("未连接，未发起读取"));
+}
+
+void RegisterSpaceBar::showSyncIssuedStatus(int count)
+{
+    setStatus(QStringLiteral("已发起 %1 条读取").arg(count));
+}
+
+void RegisterSpaceBar::showNoNodeStatus()
+{
+    setStatus(QStringLiteral("尚未关联通信节点"));
+}
+
+void RegisterSpaceBar::showInvalidAddressStatus()
+{
+    setStatus(QStringLiteral("测试地址无效"));
+}
+
+void RegisterSpaceBar::showInvalidValueStatus()
+{
+    setStatus(QStringLiteral("测试值无效"));
+}
+
+void RegisterSpaceBar::showTestSentStatus(int address, double value)
+{
+    setStatus(QStringLiteral("已发送测试写入 %1 = %2").arg(address).arg(value));
+}
+
+void RegisterSpaceBar::showTestNotSentStatus()
+{
+    setStatus(QStringLiteral("发送测试未发出（未连接或地址未配置）"));
+}
+
 void RegisterSpaceBar::refreshAddressChoices()
 {
     const QString keep = m_testAddrCombo->currentText();

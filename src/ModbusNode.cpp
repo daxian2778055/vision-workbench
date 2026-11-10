@@ -586,6 +586,32 @@ QVariant ModbusNode::getParam(const QString &name) const
 
 // ---- 轮询 ----
 
+int ModbusNode::syncRegistersNow()
+{
+    if (!m_connected || !m_modbus) return 0;
+    // 与 onPollTimeout 同一派发口径：从站号取参数表、宽度按数据类型折算、
+    // 请求未发出立即回滚队列条目（不留永久非空的 pendingQueue）
+    const int slaveAddress = getParam(QStringLiteral("slaveAddress")).toInt();
+    int issued = 0;
+    for (int idx = 0; idx < m_registers.size(); ++idx) {
+        const auto &reg = m_registers[idx];
+        if (!reg.enabled) continue;
+        const int wordCount = RegisterByteOrder::wordCountForType(reg.dataType);
+        PendingRead pr;
+        pr.slaveAddr = slaveAddress;
+        pr.regAddr = reg.address;
+        pr.count = wordCount;
+        pr.regIndex = idx;
+        m_pendingQueue.append(pr);
+        if (!readRegister(slaveAddress, reg.address, wordCount)) {
+            m_pendingQueue.removeLast();
+            continue;
+        }
+        ++issued;
+    }
+    return issued;
+}
+
 void ModbusNode::startPolling()
 {
     if (!m_pollTimer) return;
