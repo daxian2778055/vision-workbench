@@ -26,6 +26,7 @@
 #include <QGroupBox>
 #include <QLabel>
 #include <QFile>
+#include <QSaveFile>
 #include <QFileDialog>
 #include <QJsonDocument>
 #include <QJsonArray>
@@ -199,12 +200,15 @@ bool CommunicationManagerDialog::exportGtdTo(const QString &path)
     root[QStringLiteral("globalTriggers")] = GlobalTriggerManager::instance()->toJson();
     root[QStringLiteral("heartbeat")] = HeartbeatManager::instance()->toJson();
 
-    QFile f(path);
-    if (!f.open(QIODevice::WriteOnly))
+    // 原子写 + 检查实际写入字节：QFile::write 成功不代表落盘成功，
+    // 半截的 gtd 会反过来让「导入」把现场配置清掉（2026-11-10 审核）。
+    QSaveFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text))
         return false;
-    f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-    f.close();
-    return true;
+    const QByteArray bytes = QJsonDocument(root).toJson(QJsonDocument::Indented);
+    if (f.write(bytes) != bytes.size())
+        return false;
+    return f.commit();
 }
 
 void CommunicationManagerDialog::onImportGtd()
@@ -213,6 +217,14 @@ void CommunicationManagerDialog::onImportGtd()
         this, QStringLiteral("导入通信配置"), QString(),
         QStringLiteral("通信配置 (*.gtd);;所有文件 (*)"));
     if (path.isEmpty()) return;
+    // 导入是整包覆盖：先确认，避免误点一次就抹掉现场全部通信配置
+    if (QMessageBox::question(
+            this, QStringLiteral("导入通信配置"),
+            QStringLiteral("导入会整包覆盖当前的通信设备、接收/发送事件、触发配置、"
+                           "响应配置与心跳设置。\n确定继续？"),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
+        != QMessageBox::Yes)
+        return;
     if (!importGtdFrom(path)) {
         QMessageBox::warning(this, QStringLiteral("导入失败"),
                              QStringLiteral("文件不是有效的 gtd（JSON）通信配置。"));
@@ -239,12 +251,28 @@ bool CommunicationManagerDialog::importGtdFrom(const QString &path)
     if (root.value(QStringLiteral("format")).toString()
         != QStringLiteral("visionflow-communication"))
         return false;
+    // 完整性校验（2026-11-10 审核）：旧版只校验 format，半残文件
+    // {"format":"visionflow-communication"} 会通过，随后 fromJson({}) 无条件清空
+    // 设备/接收事件/发送事件/响应配置，GlobalTrigger/Heartbeat 同样被清空
+    // ⇒ 用户点一次「导入」就静默丢掉全部现场通信配置。
+    if (root.value(QStringLiteral("version")).toInt(0) != 1)
+        return false;
+    const QJsonObject comm = root.value(QStringLiteral("communication")).toObject();
+    const QJsonObject triggers = root.value(QStringLiteral("globalTriggers")).toObject();
+    const QJsonObject heartbeat = root.value(QStringLiteral("heartbeat")).toObject();
+    const auto hasArray = [](const QJsonObject &o, const QString &key) {
+        return o.contains(key) && o.value(key).isArray();
+    };
+    if (!hasArray(comm, QStringLiteral("devices"))
+        || !hasArray(comm, QStringLiteral("receiveEvents"))
+        || !hasArray(comm, QStringLiteral("sendEvents"))
+        || !hasArray(triggers, QStringLiteral("triggers"))
+        || !hasArray(heartbeat, QStringLiteral("heartbeats")))
+        return false;
 
-    CommunicationManager::instance()->fromJson(
-        root.value(QStringLiteral("communication")).toObject());
-    GlobalTriggerManager::instance()->fromJson(
-        root.value(QStringLiteral("globalTriggers")).toObject(), &m_gtdImportRejected);
-    HeartbeatManager::instance()->fromJson(root.value(QStringLiteral("heartbeat")).toObject());
+    CommunicationManager::instance()->fromJson(comm);
+    GlobalTriggerManager::instance()->fromJson(triggers, &m_gtdImportRejected);
+    HeartbeatManager::instance()->fromJson(heartbeat);
 
     refreshDeviceTable();
     refreshReceiveEventTable();

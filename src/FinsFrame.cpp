@@ -61,15 +61,19 @@ QByteArray tcpHeader(quint32 command, quint32 errorCode, const QByteArray &data)
 bool parseTcpHeader(const QByteArray &buf, quint32 *length, quint32 *command,
                     quint32 *errorCode, int *headerBytes)
 {
-    if (buf.size() < 20)
+    // 16 字节（magic4 + 长度4 + 命令4 + 错误码4）就能拆出帧头。
+    // 旧实现要求 20 字节、且要求「长度 ≤ 当前缓冲 - 4」，把**正常分片**也判成
+    // 解析失败；调用方随即清空整段缓冲，真机 TCP 分片下会永久失步（2026-11-10 审核）。
+    if (buf.size() < 16)
         return false;
     if (buf.at(0) != 'F' || buf.at(1) != 'I' || buf.at(2) != 'N' || buf.at(3) != 'S')
         return false;
     const quint32 len = readU32(buf, 4);
     if (len < 8)
         return false;
-    // 长度必须能被现有缓冲容纳：length 本身不含 8 字节前缀（FINS + 长度字段）
-    if (len > quint32(buf.size() - 4))
+    // 只校验长度上界（防损坏/恶意长度让接收端无限等或吃满内存）；
+    // 「数据是否已收齐」交给调用方用 headerBytes 与缓冲长度比较。
+    if (len > 1024u * 1024u)
         return false;
     if (length)
         *length = len;

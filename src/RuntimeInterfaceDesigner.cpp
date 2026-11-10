@@ -45,6 +45,20 @@ const char *kItemModelMime = "application/x-qabstractitemmodeldatalist";
 const char *kControlMime = "application/x-vfp-runtime-control";
 
 /// 控件库条目 → 控件类型（组标题的 UserRole 为空，返回 false）
+/// 让一份撤销/重做快照彻底自持。Qt 隐式共享是**三层**：
+/// RuntimeInterface.pages → page.controls → 以及子界面 subPages 里的页与控件。
+/// B1f 已修前两层；2026-11-10 审核发现 effectivePage() 会返回 subPages 元素的裸指针，
+/// 在 pushUndo() 之后经它写回会同样污染快照（子界面编辑撤销失效）。
+void detachLayoutSnapshot(RuntimeInterface &snap)
+{
+    snap.pages.detach();
+    for (RuntimeInterfacePage &page : snap.pages)
+        page.controls.detach();
+    snap.subPages.detach();
+    for (auto it = snap.subPages.begin(); it != snap.subPages.end(); ++it)
+        it.value().controls.detach();
+}
+
 bool paletteTypeOf(const QListWidgetItem *item, RuntimeControlType *out)
 {
     if (!item || !out) return false;
@@ -2879,9 +2893,7 @@ void RuntimeInterfaceDesigner::pushUndo()
     // 两层的：pages.detach() 只复制页对象，页里的 controls 仍是共享数组，而裸控件指针
     // 写回不经过 QList 访问器、不会触发 detach，所以每页的 controls 也要 detach。
     // detach 快照而不是 m_layout，是为了让预先抓到的指针继续指向 m_layout 原地址。
-    m_undoStack.last().pages.detach();
-    for (RuntimeInterfacePage &page : m_undoStack.last().pages)
-        page.controls.detach();
+    detachLayoutSnapshot(m_undoStack.last());
     while (m_undoStack.size() > 50)
         m_undoStack.removeFirst();
     m_redoStack.clear();                   // 新操作截断重做分支
@@ -2899,6 +2911,12 @@ void RuntimeInterfaceDesigner::afterRestore()
 void RuntimeInterfaceDesigner::undo()
 {
     if (m_undoStack.isEmpty()) return;
+    // 挂起中的 600ms 属性合并窗口若在撤销后再触发，会把刚恢复的状态又压成
+    // 一枚"改前快照"，导致撤销栈错乱（2026-11-10 审核）。
+    if (m_propUndoTimer) m_propUndoTimer->stop();
+    // 不在这里 detach：快照在 pushUndo() 入栈时已经由 detachLayoutSnapshot()
+    // 彻底自持，取出时无需再做。实测在 undo 路径重复 detach 会触发访问违规
+    // （2026-11-10 审核轮对照实验：去掉该句后单腿连跑 5/5 通过）。
     m_redoStack.append(m_layout);
     m_layout = m_undoStack.takeLast();
     afterRestore();
@@ -2907,6 +2925,8 @@ void RuntimeInterfaceDesigner::undo()
 void RuntimeInterfaceDesigner::redo()
 {
     if (m_redoStack.isEmpty()) return;
+    if (m_propUndoTimer) m_propUndoTimer->stop();
+    // 同 undo()：入栈前已自持，这里不重复 detach
     m_undoStack.append(m_layout);
     m_layout = m_redoStack.takeLast();
     afterRestore();

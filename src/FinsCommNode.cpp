@@ -249,8 +249,9 @@ void FinsCommNode::onTcpReadyRead()
         quint32 err = 0;
         int headerBytes = 0;
         if (!Fins::parseTcpHeader(m_rxBuffer, &len, &cmd, &err, &headerBytes)) {
-            // 够 20 字节却拆不开 = 脏帧：丢弃整段，否则缓冲会永久卡住、后续真帧全被吞
-            if (m_rxBuffer.size() >= 20) {
+            // 不足 16 字节 = 正常半包，保留缓冲等后续数据；
+            // 已有完整帧头却拆不开（magic 错 / 长度非法）才是脏帧，需丢弃整段。
+            if (m_rxBuffer.size() >= kTcpHeaderBytes) {
                 emit communicationError(QStringLiteral(
                     "FINS/TCP 帧头非法（magic 或长度不符），已丢弃 %1 字节").arg(m_rxBuffer.size()));
                 m_rxBuffer.clear();

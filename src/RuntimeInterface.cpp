@@ -335,8 +335,12 @@ static QJsonObject controlToJson(const RuntimeControl &c)
         o["idleFgColor"] = c.idleFgColor;
         o["busyBgColor"] = c.busyBgColor;
         o["busyFgColor"] = c.busyFgColor;
-        o["cornerRadius"] = c.cornerRadius;
     }
+    // 圆角半径由运行状态与子界面共用（官方外观组）。旧实现只在 RunStatus 分支
+    // 写出，子界面里设的圆角保存后变回 0（2026-11-10 审核）。
+    if (c.type == RuntimeControlType::RunStatus
+        || c.type == RuntimeControlType::SubInterface)
+        o["cornerRadius"] = c.cornerRadius;
     if (c.type == RuntimeControlType::UiLog) {
         o["logShowTitle"] = c.logShowTitle;
         o["logMaxLines"] = c.logMaxLines;
@@ -521,8 +525,10 @@ static RuntimeControl controlFromJson(const QJsonObject &o, RuntimeControlType t
         ctrl.idleFgColor = o["idleFgColor"].toString(QStringLiteral("#d0d0d8"));
         ctrl.busyBgColor = o["busyBgColor"].toString(QStringLiteral("#3db97a"));
         ctrl.busyFgColor = o["busyFgColor"].toString(QStringLiteral("#ffffff"));
-        ctrl.cornerRadius = qBound(0, o["cornerRadius"].toInt(0), 40);
     }
+    if (ctrl.type == RuntimeControlType::RunStatus
+        || ctrl.type == RuntimeControlType::SubInterface)
+        ctrl.cornerRadius = qBound(0, o["cornerRadius"].toInt(0), 40);
     if (ctrl.type == RuntimeControlType::UiLog) {
         ctrl.logShowTitle = o["logShowTitle"].toBool(true);
         ctrl.logMaxLines = qBound(10, o["logMaxLines"].toInt(500), 5000);

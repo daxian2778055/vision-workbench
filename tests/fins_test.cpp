@@ -193,20 +193,30 @@ void FinsTest::codecNodeAddressRequestBytes()
     QCOMPARE(serverNode, quint32(2));
     QVERIFY(!Fins::parseNodeAddressResponse(resp.mid(16, 7), &clientNode, &serverNode));
 
-    // 过短 / magic 不符 / 长度字段越界：一律拒绝
-    QVERIFY(!Fins::parseTcpHeader(QByteArray(19, '\0'), &length, &command, &errorCode,
+    // 不足 16 字节帧头 / magic 不符 / 长度非法：一律拒绝
+    QVERIFY(!Fins::parseTcpHeader(QByteArray(10, '\0'), &length, &command, &errorCode,
                                   &headerBytes));
     QByteArray badMagic = resp;
     badMagic[0] = 'X';
     QVERIFY(!Fins::parseTcpHeader(badMagic, &length, &command, &errorCode, &headerBytes));
     QByteArray overLen = resp;
-    overLen[7] = char(0x20);   // 声称 length = 32 > 24 - 4
+    // 长度超过 1MB 上界才拒绝。仅比当前缓冲大是**正常分片**，不该拒
+    overLen[4] = char(0x00); overLen[5] = char(0x10);
+    overLen[6] = char(0x00); overLen[7] = char(0x01);   // 0x00100001
     QVERIFY(!Fins::parseTcpHeader(overLen, &length, &command, &errorCode, &headerBytes));
     QByteArray tinyLen = resp;
     tinyLen[7] = char(0x04);   // length = 4 < 8（连命令+错误码都不够）
     QVERIFY(!Fins::parseTcpHeader(tinyLen, &length, &command, &errorCode, &headerBytes));
-    // 短 1 字节仍能拆出帧头，headerBytes 会大于缓冲：调用方须以 headerBytes <= size 判半包
-    //（FinsCommNode 就是这么切帧的；口径同任务书 length <= buf.size()-4）。
+
+    // 2026-11-10 审核：只收到 16 字节帧头（数据未到）必须能解析，
+    // headerBytes 指明整帧长度，由调用方判断「还没收齐」。
+    // 旧实现要求 20 字节且长度 ≤ 缓冲-4，把这种正常分片判成脏帧清空缓冲，
+    // 真机 TCP 分片下会永久失步。
+    QVERIFY(Fins::parseTcpHeader(resp.left(16), &length, &command, &errorCode,
+                                 &headerBytes));
+    QCOMPARE(headerBytes, 24);
+    QVERIFY2(headerBytes > 16, "headerBytes 必须大于当前缓冲，调用方才知道还要等数据");
+    // 短 1 字节（数据未收齐）同样解析成功
     QVERIFY(Fins::parseTcpHeader(resp.left(23), &length, &command, &errorCode, &headerBytes));
     QCOMPARE(headerBytes, 24);
 }

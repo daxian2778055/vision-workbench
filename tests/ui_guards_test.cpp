@@ -111,6 +111,7 @@ void runtimeTextEntryComboFormatsAndColors();
 void subInterfacePagesRoundTripAndDepth();
 void b3NewControlsRoundTrip();
 void designerB3PropertyPanelsWork();
+void subInterfaceCornerRadiusRoundTrips();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -2601,6 +2602,38 @@ void UiGuardsTest::designerB3PropertyPanelsWork()
     QVERIFY2(!dlg.resultInterface().subPages.contains(subId), "删除子界面后孤儿子页未清理");
 
     gv->removeVariable(ngName);
+}
+
+// 2026-11-10 审核：设计器可编辑子界面圆角、运行视图会用它，但 toJson/fromJson
+// 只在 RunStatus 分支读写 cornerRadius ⇒ 子界面圆角保存后变回 0。
+void UiGuardsTest::subInterfaceCornerRadiusRoundTrips()
+{
+    RuntimeInterfacePage page;
+    RuntimeControl *sub = page.addControl(RuntimeControlType::SubInterface,
+                                          QRect(0, 0, 200, 100));
+    QVERIFY(sub);
+    sub->cornerRadius = 12;
+
+    RuntimeInterfacePage back;
+    QVERIFY(back.fromJson(page.toJson()));
+    QVERIFY2(back.controls.first().cornerRadius == 12,
+             qPrintable(QStringLiteral("子界面圆角保存后丢失，实得 %1")
+                            .arg(back.controls.first().cornerRadius)));
+
+    // 运行状态仍保持原有钳制口径
+    RuntimeInterfacePage page2;
+    RuntimeControl *status = page2.addControl(RuntimeControlType::RunStatus,
+                                              QRect(0, 0, 200, 60));
+    QVERIFY(status);
+    QJsonObject j = page2.toJson();
+    QJsonArray arr = j[QStringLiteral("controls")].toArray();
+    QJsonObject c = arr.at(0).toObject();
+    c[QStringLiteral("cornerRadius")] = 999;
+    arr.replace(0, c);
+    j[QStringLiteral("controls")] = arr;
+    RuntimeInterfacePage clamped;
+    QVERIFY(clamped.fromJson(j));
+    QCOMPARE(clamped.controls.first().cornerRadius, 40);
 }
 
 QTEST_MAIN(UiGuardsTest)

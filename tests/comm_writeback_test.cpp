@@ -3458,6 +3458,33 @@ void CommWritebackTest::testCommunicationGtdExportImport()
                  "非法 gtd 破坏了现有配置");
     }
 
+    // 2026-11-10 审核：半残 gtd 必须在动任何现场配置**之前**被拒。
+    // 旧版只校验 format，{"format":"..."} 会通过，随后 fromJson({}) 无条件清空
+    // 设备/事件/响应/触发/心跳，用户点一次导入就静默丢光配置。
+    const QStringList halfPayloads = {
+        QStringLiteral("{\"format\":\"visionflow-communication\"}"),
+        QStringLiteral("{\"format\":\"visionflow-communication\",\"version\":99}"),
+        QStringLiteral("{\"format\":\"visionflow-communication\",\"version\":1}"),
+        QStringLiteral("{\"format\":\"visionflow-communication\",\"version\":1,"
+                       "\"communication\":{\"devices\":{}},"
+                       "\"globalTriggers\":{\"triggers\":[]},"
+                       "\"heartbeat\":{\"heartbeats\":[]}}"),
+    };
+    for (int i = 0; i < halfPayloads.size(); ++i) {
+        const QString p = dir.filePath(QStringLiteral("half_%1.gtd").arg(i));
+        QFile f(p);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write(halfPayloads.at(i).toUtf8());
+        f.close();
+        bool halfOk = true;
+        QVERIFY(QMetaObject::invokeMethod(&dlg, "importGtdFrom", Qt::DirectConnection,
+                                          Q_RETURN_ARG(bool, halfOk), Q_ARG(QString, p)));
+        QVERIFY2(!halfOk,
+                 qPrintable(QStringLiteral("半残 gtd #%1 未被拒收").arg(i)));
+        QVERIFY2(cm->hasDevice(QStringLiteral("GTD_DEV")),
+                 qPrintable(QStringLiteral("半残 gtd #%1 清空了现有设备").arg(i)));
+    }
+
     // 右侧「通信参数」：选中设备 → 显示其名称与配置键；未选中保持提示
     auto *table = dlg.findChild<QTableWidget *>(QStringLiteral("deviceTable"));
     QVERIFY(table);
