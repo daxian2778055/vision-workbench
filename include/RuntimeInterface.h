@@ -34,7 +34,8 @@ enum class RuntimeControlType {
     ConditionalLight, /// 条件信号灯：按数值条件切换灯色与文本（官方 9.3 基础组）
     MultiImage,   /// 多图像：同一控件内并排显示多路图像（官方「多图像」）
     RunStatus,    /// 运行状态：显示全流程/单一流程的运行中与停止运行（官方「运行状态」）
-    UiLog         /// 界面日志：实时显示软件日志（官方「界面日志」）
+    UiLog,        /// 界面日志：实时显示软件日志（官方「界面日志」）
+    TextEntryCombo /// 文本框组合：多行「字符信息 + 数据绑定 + 数据类型 + 颜色编辑」
 };
 
 /// 多图像的一个画面（官方：画面名称 + 图像源）
@@ -54,6 +55,29 @@ struct LightCondition {
     QString color = QStringLiteral("#3db97a");
     QString text;          /// 满足时的显示文本（空 = 沿用控件标题）
 };
+
+/// 文本框组合的一行（官方：字符信息 / 数据绑定 / 数据类型 / 数据源 / 颜色编辑）
+struct TextEntryItem {
+    QString text;          /// 未绑定 = 静态文本；绑定后 = 描述前缀或格式串
+    QString bindType;      /// "global" / "node" / ""（无绑定）
+    QString bindKey;
+    int dataType = 0;      /// 0=string / 1=int / 2=float（官方只此三型）
+    QString format;        /// 空 = 按类型默认；string 认 %s、int 认 %Nd（N 位补零）、float 认 %1.Nf
+    QString color = QStringLiteral("#d8d8e0");
+    /// 颜色编辑：按列表顺序取首个命中；int/float 用 threshold 数值比较，
+    /// string 只用 op 4（==）/5（!=），比较值放在 text 里。
+    QList<LightCondition> colorConditions;
+};
+
+/// 文本框组合一行的显示文本（bound=false 时直接返回描述前缀）。
+/// 绑定值按 dataType + format 格式化；格式化语法不合用时退回“前缀 + 原值”，不吞值。
+QString formatTextEntry(const TextEntryItem &item, const QVariant &value, bool bound);
+
+/// 文本框组合一行的显示颜色（首个命中的颜色条件；无命中用 item.color）
+QString textEntryDisplayColor(const TextEntryItem &item, const QVariant &value, bool bound);
+
+/// 文本框组合空行占位文案（设计器预览与运行视图共用，避免两处漂移）
+QString textEntryEmptyText();
 
 /// 结果表格列（ResultTable 专用）
 struct ResultColumn {
@@ -149,6 +173,15 @@ struct RuntimeControl {
     QString logRowBgColor = QStringLiteral("#17171c");
     QString logAltRowBgColor = QStringLiteral("#1c1c22");
     QString logFontColor = QStringLiteral("#d8d8e0");
+    /// TextEntryCombo 专用（官方「文本框组合」）：每行一条数据；
+    /// 阵列 0=纵向 / 1=横向，间距 0–40 像素。
+    QList<TextEntryItem> textEntries;
+    int textEntryOrientation = 0;
+    int textEntrySpacing = 4;
+    bool showTextEntryTitle = true;
+    QString textEntryBgColor;        /// 空 = 不绘制背景
+    QString textEntryBorderColor;    /// 空 = 不绘制边框
+    QString textEntryHeaderBgColor = QStringLiteral("#20262a");
     /// 图表（官方 9.3）：线图阵列每源一图 / 多数据线图同绘一图 / 饼图按当前值占比
     QVector<ChartSeries> chartSeries;
     int chartHistoryLimit = 30;   ///< 官方「最新执行数据条数」（线图类）
@@ -191,6 +224,7 @@ struct RuntimeControl {
         case RuntimeControlType::MultiImage:  return QStringLiteral("多图像");
         case RuntimeControlType::RunStatus:   return QStringLiteral("运行状态");
         case RuntimeControlType::UiLog:       return QStringLiteral("界面日志");
+        case RuntimeControlType::TextEntryCombo: return QStringLiteral("文本框组合");
         }
         return QStringLiteral("控件");
     }

@@ -53,7 +53,7 @@ bool paletteTypeOf(const QListWidgetItem *item, RuntimeControlType *out)
     const int t = v.toInt();
     // 上界必须跟住枚举最后一项：旧实现停在 IoStatus，导致参数设置/图表等
     // 后加类型在「添加控件」按钮与双击路径里被静默丢弃。
-    if (t < 0 || t > int(RuntimeControlType::UiLog)) return false;
+    if (t < 0 || t > int(RuntimeControlType::TextEntryCombo)) return false;
     *out = RuntimeControlType(t);
     return true;
 }
@@ -849,6 +849,33 @@ void DesignerControlFrame::paintEvent(QPaintEvent *event)
                    QStringLiteral("日志…\n日志…\n日志…"));
         break;
     }
+    case RuntimeControlType::TextEntryCombo: {
+        p.setPen(QPen(QColor(0x3a, 0x3a, 0x4a), 1));
+        p.setBrush(ctrl.textEntryBgColor.isEmpty() ? QColor(0x1c, 0x1c, 0x22)
+                                                   : QColor(ctrl.textEntryBgColor));
+        p.drawRect(body);
+        int top = body.top();
+        if (ctrl.showTextEntryTitle) {
+            p.setBrush(QColor(ctrl.textEntryHeaderBgColor));
+            p.drawRect(QRect(body.left(), body.top(), body.width(), 20));
+            p.setPen(QColor(0xd8, 0xd8, 0xe0));
+            p.drawText(QRect(body.left() + 6, body.top(), body.width() - 12, 20),
+                       Qt::AlignLeft | Qt::AlignVCenter, ctrl.displayTitle());
+            top += 22;
+        }
+        const QList<TextEntryItem> entries = ctrl.textEntries;
+        const int n = qMax(1, entries.size());
+        for (int i = 0; i < n; ++i) {
+            if (top + 18 > body.bottom()) break;
+            const TextEntryItem e = entries.value(i);
+            const QString shown = e.text.isEmpty() ? textEntryEmptyText() : e.text;
+            p.setPen(QColor(e.color));
+            p.drawText(QRect(body.left() + 6, top, body.width() - 12, 18),
+                       Qt::AlignLeft | Qt::AlignVCenter, shown);
+            top += 18 + ctrl.textEntrySpacing;
+        }
+        break;
+    }
     }
 
     // 缩放指示（右下角）
@@ -1059,6 +1086,7 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
             { "基础", "多图像",   RuntimeControlType::MultiImage },
             { "基础", "字符设置", RuntimeControlType::ValueDisplay },
             { "基础", "文本框",   RuntimeControlType::TextLabel },
+            { "基础", "文本框组合", RuntimeControlType::TextEntryCombo },
             { "基础", "信号灯",   RuntimeControlType::StatusLight },
             { "基础", "按钮",     RuntimeControlType::Button },
             { "基础", "参数设置", RuntimeControlType::ParamSetting },
@@ -1681,6 +1709,150 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
         });
     }
 
+    // 文本框组合（官方「控件配置参考」）：每行字符信息/数据源/类型/格式/颜色 + 颜色条件
+    m_textEntryGroup = new QGroupBox(QStringLiteral("文本框组合"), this);
+    m_textEntryGroup->setObjectName(QStringLiteral("designerTextEntryGroup"));
+    {
+        auto *teForm = new QFormLayout(m_textEntryGroup);
+        m_textEntryOrientation = new QComboBox(m_textEntryGroup);
+        m_textEntryOrientation->setObjectName(QStringLiteral("designerTextEntryOrientation"));
+        m_textEntryOrientation->addItem(QStringLiteral("纵向"), 0);
+        m_textEntryOrientation->addItem(QStringLiteral("横向"), 1);
+        m_textEntrySpacing = new QSpinBox(m_textEntryGroup);
+        m_textEntrySpacing->setObjectName(QStringLiteral("designerTextEntrySpacing"));
+        m_textEntrySpacing->setRange(0, 40);
+        m_textEntryShowTitle = new QCheckBox(QStringLiteral("显示标题栏"), m_textEntryGroup);
+        m_textEntryShowTitle->setObjectName(QStringLiteral("designerTextEntryShowTitle"));
+        m_textEntryTable = new QTableWidget(0, 5, m_textEntryGroup);
+        m_textEntryTable->setObjectName(QStringLiteral("designerTextEntryTable"));
+        m_textEntryTable->setHorizontalHeaderLabels(
+            {QStringLiteral("字符信息"), QStringLiteral("数据源"),
+             QStringLiteral("数据类型"), QStringLiteral("格式"), QStringLiteral("颜色")});
+        m_textEntryTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+        m_textEntryTable->verticalHeader()->setVisible(false);
+        m_textEntryTable->setMaximumHeight(150);
+        m_textEntryAddBtn = new QPushButton(QStringLiteral("＋添加行"), m_textEntryGroup);
+        m_textEntryAddBtn->setObjectName(QStringLiteral("designerTextEntryAdd"));
+        m_textEntryDelBtn = new QPushButton(QStringLiteral("－删除行"), m_textEntryGroup);
+        m_textEntryDelBtn->setObjectName(QStringLiteral("designerTextEntryDel"));
+        m_textEntryCondTable = new QTableWidget(0, 3, m_textEntryGroup);
+        m_textEntryCondTable->setObjectName(QStringLiteral("designerTextEntryCondTable"));
+        m_textEntryCondTable->setHorizontalHeaderLabels(
+            {QStringLiteral("条件"), QStringLiteral("比较值"), QStringLiteral("颜色")});
+        m_textEntryCondTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+        m_textEntryCondTable->verticalHeader()->setVisible(false);
+        m_textEntryCondTable->setMaximumHeight(110);
+        m_textEntryCondAddBtn = new QPushButton(QStringLiteral("＋添加条件"), m_textEntryGroup);
+        m_textEntryCondAddBtn->setObjectName(QStringLiteral("designerTextEntryCondAdd"));
+        m_textEntryCondDelBtn = new QPushButton(QStringLiteral("－删除条件"), m_textEntryGroup);
+        m_textEntryCondDelBtn->setObjectName(QStringLiteral("designerTextEntryCondDel"));
+        teForm->addRow(QStringLiteral("阵列方式"), m_textEntryOrientation);
+        teForm->addRow(QStringLiteral("间距"), m_textEntrySpacing);
+        teForm->addRow(QString(), m_textEntryShowTitle);
+        teForm->addRow(m_textEntryTable);
+        auto *teBtnRow = new QHBoxLayout();
+        teBtnRow->addWidget(m_textEntryAddBtn);
+        teBtnRow->addWidget(m_textEntryDelBtn);
+        teForm->addRow(QString(), teBtnRow);
+        teForm->addRow(new QLabel(QStringLiteral("颜色编辑（选中行）"), m_textEntryGroup));
+        teForm->addRow(m_textEntryCondTable);
+        auto *teCondBtnRow = new QHBoxLayout();
+        teCondBtnRow->addWidget(m_textEntryCondAddBtn);
+        teCondBtnRow->addWidget(m_textEntryCondDelBtn);
+        teForm->addRow(QString(), teCondBtnRow);
+        propOuter->addWidget(m_textEntryGroup);
+        connect(m_textEntryOrientation, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, [this](int) {
+            if (m_updatingProps) return;
+            RuntimeControl *c = selectedControl();
+            if (!c || c->type != RuntimeControlType::TextEntryCombo) return;
+            c->textEntryOrientation = m_textEntryOrientation->currentData().toInt();
+            rebuildCanvas();
+        });
+        connect(m_textEntrySpacing, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int v) {
+            if (m_updatingProps) return;
+            RuntimeControl *c = selectedControl();
+            if (!c || c->type != RuntimeControlType::TextEntryCombo) return;
+            c->textEntrySpacing = v;
+            rebuildCanvas();
+        });
+        connect(m_textEntryShowTitle, &QCheckBox::toggled, this, [this](bool on) {
+            if (m_updatingProps) return;
+            RuntimeControl *c = selectedControl();
+            if (!c || c->type != RuntimeControlType::TextEntryCombo) return;
+            c->showTextEntryTitle = on;
+            rebuildCanvas();
+        });
+        connect(m_textEntryAddBtn, &QPushButton::clicked, this, [this] {
+            RuntimeControl *c = selectedControl();
+            if (!c || c->type != RuntimeControlType::TextEntryCombo) return;
+            pushUndo();
+            TextEntryItem e;
+            e.text = QStringLiteral("文本%1").arg(c->textEntries.size() + 1);
+            c->textEntries.append(e);
+            refreshPropertyPanel();
+            rebuildCanvas();
+        });
+        connect(m_textEntryDelBtn, &QPushButton::clicked, this, [this] {
+            RuntimeControl *c = selectedControl();
+            if (!c || c->type != RuntimeControlType::TextEntryCombo) return;
+            const int row = m_textEntryTable->currentRow();
+            if (row < 0 || row >= c->textEntries.size()) return;
+            pushUndo();
+            c->textEntries.removeAt(row);
+            m_textEntryCondRow = qMin(m_textEntryCondRow, c->textEntries.size() - 1);
+            refreshPropertyPanel();
+            rebuildCanvas();
+        });
+        connect(m_textEntryTable, &QTableWidget::itemSelectionChanged, this, [this] {
+            if (m_updatingProps) return;
+            m_textEntryCondRow = m_textEntryTable->currentRow();
+            refreshTextEntryCondTable();
+        });
+        connect(m_textEntryTable, &QTableWidget::cellChanged, this, [this](int row, int col) {
+            if (m_updatingProps) return;
+            RuntimeControl *c = selectedControl();
+            if (!c || c->type != RuntimeControlType::TextEntryCombo) return;
+            if (row < 0 || row >= c->textEntries.size()) return;
+            TextEntryItem &e = c->textEntries[row];
+            if (col == 0) {
+                if (auto *it = m_textEntryTable->item(row, 0)) e.text = it->text();
+            } else if (col == 3) {
+                if (auto *it = m_textEntryTable->item(row, 3)) e.format = it->text();
+            } else if (col == 4) {
+                if (auto *it = m_textEntryTable->item(row, 4)) e.color = it->text();
+            }
+            rebuildCanvas();
+        });
+        connect(m_textEntryCondAddBtn, &QPushButton::clicked, this, [this] {
+            RuntimeControl *c = selectedControl();
+            if (!c || c->type != RuntimeControlType::TextEntryCombo) return;
+            const int row = m_textEntryCondRow;
+            if (row < 0 || row >= c->textEntries.size()) return;
+            pushUndo();
+            LightCondition lc;
+            lc.op = 4;
+            lc.color = QStringLiteral("#ff6b6b");
+            c->textEntries[row].colorConditions.append(lc);
+            refreshTextEntryCondTable();
+            rebuildCanvas();
+        });
+        connect(m_textEntryCondDelBtn, &QPushButton::clicked, this, [this] {
+            RuntimeControl *c = selectedControl();
+            if (!c || c->type != RuntimeControlType::TextEntryCombo) return;
+            const int row = m_textEntryCondRow;
+            if (row < 0 || row >= c->textEntries.size()) return;
+            const int condRow = m_textEntryCondTable->currentRow();
+            if (condRow < 0 || condRow >= c->textEntries[row].colorConditions.size()) return;
+            pushUndo();
+            c->textEntries[row].colorConditions.removeAt(condRow);
+            refreshTextEntryCondTable();
+            rebuildCanvas();
+        });
+        connect(m_textEntryCondTable, &QTableWidget::cellChanged,
+                this, &RuntimeInterfaceDesigner::onTextEntryCondChanged);
+    }
+
     auto *propHint = new QLabel(QStringLiteral("绑定方式说明:\n· 全局变量: 实时显示全局变量值\n· 节点输出: 绑定流程中算子的输出\n· 动作: 按钮点击触发的流程操作\n· 表格列: 每轮把各列当前值提交为一行\n  格式: 变量名,变量名 或 节点:模块完整名\n· IO状态: 绑定相机IO控制节点\n  灯=执行成功, 文本=线值/错误"), propGroup);
     propHint->setWordWrap(true);
     propHint->setStyleSheet("color:#8a8a9a;font-size:11px;");
@@ -1995,6 +2167,7 @@ if (type == RuntimeControlType::ConditionalLight) { geo.setWidth(260); geo.setHe
 if (type == RuntimeControlType::MultiImage)       { geo.setWidth(440); geo.setHeight(300); }
 if (type == RuntimeControlType::RunStatus)        { geo.setWidth(240); geo.setHeight(80); }
 if (type == RuntimeControlType::UiLog)            { geo.setWidth(440); geo.setHeight(220); }
+if (type == RuntimeControlType::TextEntryCombo)   { geo.setWidth(360); geo.setHeight(160); }
 
 // 拖放：按落点判定所属区域（官方 9.1 固定栏），再在该区域的坐标系里定位。
 // 画布区坐标相对画布区左上角、随窗口缩放；固定栏坐标相对本栏左上角、1:1 不缩放。
@@ -2066,6 +2239,14 @@ if (type == RuntimeControlType::MultiImage) {
 if (type == RuntimeControlType::RunStatus) {
     ctrl->statusSource = QStringLiteral("all");
     ctrl->bindType.clear();
+}
+// 文本框组合：默认两行静态文本（官方先加数据行再配数据源/格式）
+if (type == RuntimeControlType::TextEntryCombo) {
+    for (int i = 0; i < 2; ++i) {
+        TextEntryItem e;
+        e.text = QStringLiteral("文本%1").arg(i + 1);
+        ctrl->textEntries.append(e);
+    }
 }
 rebuildCanvas();
 const int idx = m_layout.currentPage()->indexOf(ctrl);
@@ -2314,6 +2495,143 @@ void RuntimeInterfaceDesigner::onLightCondChanged(int row, int column)
         lc.text = it ? it->text() : QString();
     }
     m_canvas->refreshControl(m_selected);
+}
+
+// 文本框组合：行表 / 所选行的颜色条件表。两张表都用 m_updatingProps 挡住播种期写回。
+void RuntimeInterfaceDesigner::refreshTextEntryRows()
+{
+    RuntimeControl *ctrl = selectedControl();
+    if (!ctrl || !m_textEntryTable) return;
+    const bool old = m_updatingProps;
+    m_updatingProps = true;
+    m_textEntryTable->setRowCount(ctrl->textEntries.size());
+    for (int i = 0; i < ctrl->textEntries.size(); ++i) {
+        const TextEntryItem &e = ctrl->textEntries.at(i);
+        m_textEntryTable->setItem(i, 0, new QTableWidgetItem(e.text));
+        auto *bind = new QComboBox(m_textEntryTable);
+        bind->addItem(QStringLiteral("(无)"), QString());
+        const auto vars = GlobalVariableManager::instance()->variables();
+        for (auto it = vars.constBegin(); it != vars.constEnd(); ++it)
+            bind->addItem(QStringLiteral("变量:%1").arg(it.key()),
+                          QStringLiteral("global:%1").arg(it.key()));
+        for (const QString &nn : m_nodeNames)
+            bind->addItem(QStringLiteral("节点:%1").arg(nn),
+                          QStringLiteral("node:%1").arg(nn));
+        const QString cur = e.bindType.isEmpty() || e.bindKey.isEmpty()
+                                ? QString()
+                                : e.bindType + QLatin1Char(':') + e.bindKey;
+        int bi = bind->findData(cur);
+        if (bi < 0 && !cur.isEmpty()) {
+            bind->addItem(QStringLiteral("（已失效：%1）").arg(e.bindKey), cur);
+            bi = bind->count() - 1;
+        }
+        bind->setCurrentIndex(bi >= 0 ? bi : 0);
+        m_textEntryTable->setCellWidget(i, 1, bind);
+        connect(bind, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, [this, i, bind](int) {
+            if (m_updatingProps) return;
+            RuntimeControl *c = selectedControl();
+            if (!c || c->type != RuntimeControlType::TextEntryCombo) return;
+            if (i >= c->textEntries.size()) return;
+            const QString data = bind->currentData().toString();
+            const int sep = data.indexOf(QLatin1Char(':'));
+            c->textEntries[i].bindType = sep > 0 ? data.left(sep) : QString();
+            c->textEntries[i].bindKey = sep > 0 ? data.mid(sep + 1) : QString();
+            rebuildCanvas();
+        });
+        auto *type = new QComboBox(m_textEntryTable);
+        type->addItem(QStringLiteral("字符串"), 0);
+        type->addItem(QStringLiteral("整数"), 1);
+        type->addItem(QStringLiteral("浮点"), 2);
+        type->setCurrentIndex(qBound(0, e.dataType, 2));
+        m_textEntryTable->setCellWidget(i, 2, type);
+        connect(type, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, [this, i, type](int) {
+            if (m_updatingProps) return;
+            RuntimeControl *c = selectedControl();
+            if (!c || c->type != RuntimeControlType::TextEntryCombo) return;
+            if (i >= c->textEntries.size()) return;
+            c->textEntries[i].dataType = type->currentData().toInt();
+            refreshTextEntryCondTable();   // 比较值语义随类型切换
+            rebuildCanvas();
+        });
+        m_textEntryTable->setItem(i, 3, new QTableWidgetItem(e.format));
+        m_textEntryTable->setItem(i, 4, new QTableWidgetItem(e.color));
+    }
+    if (m_textEntryCondRow >= ctrl->textEntries.size())
+        m_textEntryCondRow = ctrl->textEntries.size() - 1;
+    if (m_textEntryCondRow >= 0)
+        m_textEntryTable->selectRow(m_textEntryCondRow);
+    m_updatingProps = old;
+    refreshTextEntryCondTable();
+}
+
+void RuntimeInterfaceDesigner::refreshTextEntryCondTable()
+{
+    RuntimeControl *ctrl = selectedControl();
+    if (!ctrl || !m_textEntryCondTable) return;
+    const bool old = m_updatingProps;
+    m_updatingProps = true;
+    const int row = m_textEntryCondRow;
+    if (row < 0 || row >= ctrl->textEntries.size()) {
+        m_textEntryCondTable->setRowCount(0);
+        m_updatingProps = old;
+        return;
+    }
+    const TextEntryItem &e = ctrl->textEntries.at(row);
+    m_textEntryCondTable->setRowCount(e.colorConditions.size());
+    for (int r = 0; r < e.colorConditions.size(); ++r) {
+        const LightCondition &lc = e.colorConditions.at(r);
+        auto *op = new QComboBox(m_textEntryCondTable);
+        const QString opNames[6] = {QStringLiteral(">="), QStringLiteral(">"),
+                                    QStringLiteral("<="), QStringLiteral("<"),
+                                    QStringLiteral("=="), QStringLiteral("!=")};
+        for (int i = 0; i < 6; ++i) op->addItem(opNames[i], i);
+        op->setCurrentIndex(qBound(0, lc.op, 5));
+        m_textEntryCondTable->setCellWidget(r, 0, op);
+        connect(op, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, [this, r](int) { onTextEntryCondChanged(r, 0); });
+        const QString cmp = e.dataType == 0 ? lc.text
+                                            : QString::number(lc.threshold, 'g', 10);
+        m_textEntryCondTable->setItem(r, 1, new QTableWidgetItem(cmp));
+        m_textEntryCondTable->setItem(r, 2, new QTableWidgetItem(lc.color));
+    }
+    m_updatingProps = old;
+}
+
+void RuntimeInterfaceDesigner::onTextEntryCondChanged(int row, int column)
+{
+    if (m_updatingProps) return;
+    RuntimeControl *ctrl = selectedControl();
+    if (!ctrl || ctrl->type != RuntimeControlType::TextEntryCombo || !m_textEntryCondTable)
+        return;
+    const int entryRow = m_textEntryCondRow;
+    if (entryRow < 0 || entryRow >= ctrl->textEntries.size()) return;
+    TextEntryItem &e = ctrl->textEntries[entryRow];
+    if (row < 0 || row >= e.colorConditions.size()) return;
+    if (m_propUndoTimer && !m_propUndoTimer->isActive()) {
+        pushUndo();
+        m_propUndoTimer->start();
+    }
+    LightCondition &lc = e.colorConditions[row];
+    if (column == 0) {
+        if (auto *op = qobject_cast<QComboBox *>(m_textEntryCondTable->cellWidget(row, 0)))
+            lc.op = qBound(0, op->currentData().toInt(), 5);
+    } else if (column == 1) {
+        QTableWidgetItem *it = m_textEntryCondTable->item(row, 1);
+        if (e.dataType == 0) {
+            lc.text = it ? it->text() : QString();
+        } else {
+            bool ok = false;
+            const double v = it ? it->text().toDouble(&ok) : 0.0;
+            if (ok) lc.threshold = v;
+        }
+    } else if (column == 2) {
+        QTableWidgetItem *it = m_textEntryCondTable->item(row, 2);
+        const QString c = it ? it->text().trimmed() : QString();
+        if (QColor(c).isValid()) lc.color = c;
+    }
+    rebuildCanvas();
 }
 
 void RuntimeInterfaceDesigner::duplicateSelected()
@@ -2782,6 +3100,7 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
         if (m_multiGroup) m_multiGroup->setVisible(false);
         if (m_statusGroup) m_statusGroup->setVisible(false);
         if (m_logGroup) m_logGroup->setVisible(false);
+        if (m_textEntryGroup) m_textEntryGroup->setVisible(false);
         if (m_bindKey2Combo && m_dataForm)
             m_dataForm->setRowVisible(m_bindKey2Combo, false);
         m_raiseBtn->setEnabled(false);
@@ -2831,15 +3150,17 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
     const bool isMulti = (ctrl->type == RuntimeControlType::MultiImage);
     const bool isStatus = (ctrl->type == RuntimeControlType::RunStatus);
     const bool isLog = (ctrl->type == RuntimeControlType::UiLog);
+    const bool isTextEntry = (ctrl->type == RuntimeControlType::TextEntryCombo);
     if (m_dataForm && m_actionConfigBtn) {
         m_dataForm->setRowVisible(m_actionConfigBtn, isButton);
         // 参数设置/开关控制/组合框固定绑节点、设置变量/OK-NG 固定绑全局，只藏「绑定方式」
         m_dataForm->setRowVisible(m_bindTypeCombo,
                                   !isButton && !isParam && !isSwitch && !isCombo
                                       && !isSetter && !isOkNg && !isRun
-                                      && !isMulti && !isStatus && !isLog);
+                                      && !isMulti && !isStatus && !isLog && !isTextEntry);
         m_dataForm->setRowVisible(m_bindKeyCombo,
-                                  !isButton && !isRun && !isMulti && !isStatus && !isLog);
+                                  !isButton && !isRun && !isMulti && !isStatus && !isLog
+                                      && !isTextEntry);
         if (m_bindKey2Combo) m_dataForm->setRowVisible(m_bindKey2Combo, isOkNg);
         if (m_paramKeyEdit)
             m_dataForm->setRowVisible(m_paramKeyEdit, isParam || isSwitch || isCombo);
@@ -3015,6 +3336,19 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
         if (isLog) {
             m_logShowTitle->setChecked(ctrl->logShowTitle);
             m_logMaxLines->setValue(ctrl->logMaxLines);
+        }
+    }
+    if (m_textEntryGroup) {
+        m_textEntryGroup->setVisible(isTextEntry);
+        m_textEntryGroup->setEnabled(isTextEntry);
+        if (isTextEntry) {
+            const int oi = m_textEntryOrientation->findData(ctrl->textEntryOrientation);
+            m_textEntryOrientation->setCurrentIndex(oi >= 0 ? oi : 0);
+            m_textEntrySpacing->setValue(ctrl->textEntrySpacing);
+            m_textEntryShowTitle->setChecked(ctrl->showTextEntryTitle);
+            if (m_textEntryCondRow < 0 && !ctrl->textEntries.isEmpty())
+                m_textEntryCondRow = 0;
+            refreshTextEntryRows();
         }
     }
 

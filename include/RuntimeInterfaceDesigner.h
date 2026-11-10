@@ -107,6 +107,10 @@ private:
     void rebuildCanvas();
     /// 按 m_layout.canvas 设画布尺寸并挂当前页（原先 8 处重复 setPage）
     void setCanvasPage();
+    /// 文本框组合：重建「行」表与所选行的颜色条件表；条件表改值写回
+    void refreshTextEntryRows();
+    void refreshTextEntryCondTable();
+    void onTextEntryCondChanged(int row, int column);
     /// 刷新「编辑内层Tab」选择器（随页/内层 Tab 变化重建候选并回选画布当前目标）
     void refreshEditInnerTabCombo();
     /// 刷新画布尺寸 / 固定栏厚度输入框（随画布配置或切页变化，不触发写回）
@@ -221,6 +225,18 @@ QLabel *m_geometryLabel = nullptr;   /// 布局组只读显示尺寸/位置（�
     QGroupBox *m_logGroup = nullptr;
     QCheckBox *m_logShowTitle = nullptr;
     QSpinBox *m_logMaxLines = nullptr;
+    // 文本框组合（官方「控件配置参考」）
+    QGroupBox *m_textEntryGroup = nullptr;
+    QComboBox *m_textEntryOrientation = nullptr;
+    QSpinBox *m_textEntrySpacing = nullptr;
+    QCheckBox *m_textEntryShowTitle = nullptr;
+    QTableWidget *m_textEntryTable = nullptr;
+    QPushButton *m_textEntryAddBtn = nullptr;
+    QPushButton *m_textEntryDelBtn = nullptr;
+    QTableWidget *m_textEntryCondTable = nullptr;
+    QPushButton *m_textEntryCondAddBtn = nullptr;
+    QPushButton *m_textEntryCondDelBtn = nullptr;
+    int m_textEntryCondRow = -1;   ///< 条件表当前编辑的条目下标
 
     int m_selected = -1;
     bool m_updatingProps = false;

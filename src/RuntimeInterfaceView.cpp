@@ -584,6 +584,10 @@ void RuntimeInterfaceView::clearWidgets()
     m_nodeMultiImageMap.clear();
     m_statusLabels.clear();
     m_statusCtrls.clear();
+    m_textEntryLabels.clear();
+    m_textEntryCtrls.clear();
+    m_textEntryRows.clear();
+    m_nodeTextEntryMap.clear();
     if (m_statusTimer) m_statusTimer->stop();
 }
 
@@ -708,6 +712,20 @@ void RuntimeInterfaceView::rebuildWidgets()
                     m_statusCtrls.append(&ctrl);
                 }
             }
+            // 登记文本框组合（每行一个标签）
+            else if (ctrl.type == RuntimeControlType::TextEntryCombo) {
+                for (int i = 0; i < ctrl.textEntries.size(); ++i) {
+                    auto *lbl = w->findChild<QLabel *>(
+                        QStringLiteral("RuntimeTextEntry_%1").arg(i));
+                    if (!lbl) continue;
+                    m_textEntryLabels.append(lbl);
+                    m_textEntryCtrls.append(&ctrl);
+                    m_textEntryRows.append(i);
+                    const TextEntryItem &e = ctrl.textEntries.at(i);
+                    if (e.bindType == QLatin1String("node") && !e.bindKey.isEmpty())
+                        m_nodeTextEntryMap[e.bindKey].append(m_textEntryLabels.size() - 1);
+                }
+            }
         }
     }
 
@@ -740,6 +758,13 @@ void RuntimeInterfaceView::rebuildWidgets()
         const RuntimeControl &ctrl = *m_lightCtrls[k];
         if (ctrl.bindType == "global" && gv->variableExists(ctrl.bindKey))
             updateVariable(ctrl.bindKey, gv->getVariable(ctrl.bindKey));
+    }
+    // 文本框组合每行初值（全局变量绑定；节点输出由上游推送）
+    for (int k = 0; k < m_textEntryLabels.size(); ++k) {
+        const RuntimeControl &ctrl = *m_textEntryCtrls[k];
+        const TextEntryItem e = ctrl.textEntries.value(m_textEntryRows[k]);
+        if (e.bindType == "global" && gv->variableExists(e.bindKey))
+            updateTextEntryRow(k, gv->getVariable(e.bindKey));
     }
     // OK/NG 双路初值 + 条件信号灯初值（全局变量绑定）
     for (int i = 0; i < m_widgets.size() && i < m_widgetCtrls.size(); ++i) {
@@ -1232,6 +1257,43 @@ QWidget *RuntimeInterfaceView::createControlWidget(const RuntimeControl &ctrl)
         lay->addWidget(table, 1);
         return host;
     }
+    case RuntimeControlType::TextEntryCombo: {
+        auto *host = new QWidget();
+        QBoxLayout *lay = ctrl.textEntryOrientation == 1
+                              ? static_cast<QBoxLayout *>(new QHBoxLayout(host))
+                              : static_cast<QBoxLayout *>(new QVBoxLayout(host));
+        lay->setContentsMargins(4, 4, 4, 4);
+        lay->setSpacing(qMax(0, ctrl.textEntrySpacing));
+        if (ctrl.showTextEntryTitle) {
+            auto *title = new QLabel(ctrl.displayTitle(), host);
+            title->setStyleSheet(QStringLiteral(
+                "QLabel { background-color: %1; color: #d8d8e0; padding: 2px 8px;"
+                " font-size: 11px; }").arg(ctrl.textEntryHeaderBgColor));
+            lay->addWidget(title);
+        }
+        const int n = qMax(1, ctrl.textEntries.size());
+        for (int i = 0; i < n; ++i) {
+            const bool hasEntry = i < ctrl.textEntries.size();
+            auto *row = new QLabel(host);
+            row->setObjectName(QStringLiteral("RuntimeTextEntry_%1").arg(i));
+            row->setWordWrap(true);
+            if (hasEntry) {
+                const TextEntryItem &e = ctrl.textEntries.at(i);
+                row->setText(e.text.isEmpty() ? textEntryEmptyText() : e.text);
+                row->setStyleSheet(QStringLiteral("QLabel { color: %1; }").arg(e.color));
+            } else {
+                row->setText(textEntryEmptyText());
+            }
+            lay->addWidget(row, ctrl.textEntryOrientation == 1 ? 0 : 1);
+        }
+        QString sheet;
+        if (!ctrl.textEntryBgColor.isEmpty())
+            sheet += QStringLiteral("background-color: %1;").arg(ctrl.textEntryBgColor);
+        if (!ctrl.textEntryBorderColor.isEmpty())
+            sheet += QStringLiteral("border: 1px solid %1;").arg(ctrl.textEntryBorderColor);
+        if (!sheet.isEmpty()) host->setStyleSheet(QStringLiteral("QWidget { %1 }").arg(sheet));
+        return host;
+    }
     case RuntimeControlType::LineChart:
         return new RuntimeChartPanel(ctrl);
     case RuntimeControlType::MultiLineChart:
@@ -1460,6 +1522,13 @@ void RuntimeInterfaceView::updateVariable(const QString &name, const QVariant &v
                 cur->setText(QStringLiteral("当前值：%1").arg(cellText(value)));
         }
     }
+    // 文本框组合（全局变量绑定的行）
+    for (int k = 0; k < m_textEntryLabels.size(); ++k) {
+        const RuntimeControl &ctrl = *m_textEntryCtrls[k];
+        const TextEntryItem e = ctrl.textEntries.value(m_textEntryRows[k]);
+        if (e.bindType == QLatin1String("global") && e.bindKey == name)
+            updateTextEntryRow(k, value);
+    }
     updateCharts(QStringLiteral("global"), name, value);
 }
 
@@ -1502,6 +1571,12 @@ void RuntimeInterfaceView::updateNodeOutput(const QString &nodeFullName, const Q
             m_widgets.at(i)->findChild<QLabel *>(QStringLiteral("RuntimeCondLight")),
             m_widgets.at(i)->findChild<QLabel *>(QStringLiteral("RuntimeCondText")),
             *ctrl, value);
+    }
+    const auto tit = m_nodeTextEntryMap.constFind(nodeFullName);
+    if (tit != m_nodeTextEntryMap.constEnd()) {
+        for (int k : tit.value()) {
+            if (k >= 0 && k < m_textEntryLabels.size()) updateTextEntryRow(k, value);
+        }
     }
     updateCharts(QStringLiteral("node"), nodeFullName, value);
 }
@@ -1661,6 +1736,19 @@ void RuntimeInterfaceView::updateValueLabel(QLabel *label, const RuntimeControl 
     label->setText(cellText(value));
     label->setStyleSheet(QStringLiteral("font-size: %1px; font-weight: bold; color: %2;")
                              .arg(ctrl.fontSize).arg(ctrl.color));
+}
+
+void RuntimeInterfaceView::updateTextEntryRow(int index, const QVariant &value)
+{
+    if (index < 0 || index >= m_textEntryLabels.size() || index >= m_textEntryCtrls.size())
+        return;
+    QLabel *label = m_textEntryLabels.at(index);
+    const RuntimeControl &ctrl = *m_textEntryCtrls.at(index);
+    const TextEntryItem e = ctrl.textEntries.value(m_textEntryRows.value(index));
+    const bool bound = !e.bindType.isEmpty() && !e.bindKey.isEmpty();
+    label->setText(formatTextEntry(e, value, bound));
+    label->setStyleSheet(QStringLiteral("QLabel { color: %1; }")
+                             .arg(textEntryDisplayColor(e, value, bound)));
 }
 
 void RuntimeInterfaceView::updateStatusLight(QLabel *light, const RuntimeControl &ctrl, const QVariant &value)

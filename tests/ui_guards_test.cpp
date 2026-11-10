@@ -107,6 +107,7 @@ void runtimeSetVariableWritesTypedGlobal();
 void runtimeRunControlEmitsActions();
 void runtimeOkNgAndConditionalLightUpdate();
 void runtimeMultiImageRunStatusAndUiLog();
+void runtimeTextEntryComboFormatsAndColors();
 void b3NewControlsRoundTrip();
 void designerB3PropertyPanelsWork();
     void staleBindingsIgnoresValidAndUnbound();
@@ -1967,7 +1968,7 @@ void UiGuardsTest::designerPaletteAddsNewAndPreviouslyBlockedControls()
     const QStringList names = {QStringLiteral("设置变量"), QStringLiteral("运行控制"),
                                QStringLiteral("OK/NG"), QStringLiteral("条件信号灯"),
                                QStringLiteral("多图像"), QStringLiteral("运行状态"),
-                               QStringLiteral("界面日志"),
+                               QStringLiteral("界面日志"), QStringLiteral("文本框组合"),
                                QStringLiteral("参数设置"), QStringLiteral("线图阵列")};
     for (const QString &name : names) {
         const int row = rowOf(name);
@@ -2161,10 +2162,113 @@ void UiGuardsTest::runtimeMultiImageRunStatusAndUiLog()
              "空画面表未退化出占位画面");
 }
 
+void UiGuardsTest::runtimeTextEntryComboFormatsAndColors()
+{
+    // 官方格式化语法：string=%s；int=%0d、%5d 按位补零；float=%1.Nf 小数位
+    TextEntryItem s;
+    s.text = QStringLiteral("状态：");
+    QCOMPARE(formatTextEntry(s, QVariant(QStringLiteral("OK")), true),
+             QStringLiteral("状态：OK"));
+    s.text.clear();
+    s.format = QStringLiteral("值=%s");
+    QCOMPARE(formatTextEntry(s, QStringLiteral("OK"), true), QStringLiteral("值=OK"));
+    TextEntryItem i;
+    i.dataType = 1;
+    QCOMPARE(formatTextEntry(i, 42, true), QStringLiteral("42"));
+    i.format = QStringLiteral("%5d");
+    QCOMPARE(formatTextEntry(i, 600, true), QStringLiteral("00600"));
+    TextEntryItem f;
+    f.dataType = 2;
+    QCOMPARE(formatTextEntry(f, 3.14159, true), QStringLiteral("3.142"));
+    f.format = QStringLiteral("%1.1f");
+    QCOMPARE(formatTextEntry(f, 3.16, true), QStringLiteral("3.2"));
+    // 未绑定：永远显示静态文本
+    QCOMPARE(formatTextEntry(f, 1.0, false), QString());
+
+    // 颜色条件：按顺序首个命中；string 只认 == / !=
+    TextEntryItem c;
+    c.dataType = 0;
+    c.color = QStringLiteral("#112233");
+    LightCondition ng;
+    ng.op = 4;
+    ng.text = QStringLiteral("NG");
+    ng.color = QStringLiteral("#ff0000");
+    LightCondition ok;
+    ok.op = 4;
+    ok.text = QStringLiteral("OK");
+    ok.color = QStringLiteral("#00ff00");
+    c.colorConditions << ng << ok;
+    QCOMPARE(textEntryDisplayColor(c, QStringLiteral("NG"), true), QStringLiteral("#ff0000"));
+    QCOMPARE(textEntryDisplayColor(c, QStringLiteral("OK"), true), QStringLiteral("#00ff00"));
+    QCOMPARE(textEntryDisplayColor(c, QStringLiteral("??"), true), QStringLiteral("#112233"));
+
+    // 运行视图：整数行按 %5d 补零 + 阈值变红；节点行按字符串条件变红
+    auto *gv = GlobalVariableManager::instance();
+    const QString varName = QStringLiteral("UT_B3_TE_VALUE");
+    gv->removeVariable(varName);
+    QVERIFY(gv->addVariable(varName, GlobalVariableManager::IntType, 0));
+
+    RuntimeInterface layout;
+    auto *te = layout.currentPage()->addControl(RuntimeControlType::TextEntryCombo,
+                                                QRect(10, 10, 360, 160));
+    te->textEntries.clear();
+    TextEntryItem e0;
+    e0.text = QStringLiteral("计数：");
+    e0.bindType = QStringLiteral("global");
+    e0.bindKey = varName;
+    e0.dataType = 1;
+    e0.format = QStringLiteral("%5d");
+    LightCondition big;
+    big.op = 0;
+    big.threshold = 10.0;
+    big.color = QStringLiteral("#ff0000");
+    e0.colorConditions << big;
+    TextEntryItem e1;
+    e1.text = QStringLiteral("状态：");
+    e1.bindType = QStringLiteral("node");
+    e1.bindKey = QStringLiteral("模块1.状态");
+    e1.dataType = 0;
+    LightCondition bad;
+    bad.op = 4;
+    bad.text = QStringLiteral("NG");
+    bad.color = QStringLiteral("#ff0000");
+    e1.colorConditions << bad;
+    te->textEntries << e0 << e1;
+
+    RuntimeInterfaceView view;
+    view.setInterface(layout);
+    auto *r0 = view.findChild<QLabel *>(QStringLiteral("RuntimeTextEntry_0"));
+    auto *r1 = view.findChild<QLabel *>(QStringLiteral("RuntimeTextEntry_1"));
+    QVERIFY2(r0 && r1, "文本框组合行标签未按数量创建");
+    // 初值播种：变量创建时是 0，所以建面即按 %5d 显示 00000
+    QCOMPARE(r0->text(), QStringLiteral("计数：00000"));
+    view.updateVariable(varName, 42);
+    QCOMPARE(r0->text(), QStringLiteral("计数：00042"));
+    QVERIFY2(r0->styleSheet().contains(QStringLiteral("#ff0000")), "数值条件未生效");
+    view.updateVariable(varName, 7);
+    QCOMPARE(r0->text(), QStringLiteral("计数：00007"));
+    QVERIFY2(!r0->styleSheet().contains(QStringLiteral("#ff0000")), "数值条件未撤销");
+
+    view.updateNodeOutput(QStringLiteral("模块1.状态"), QStringLiteral("OK"));
+    QCOMPARE(r1->text(), QStringLiteral("状态：OK"));
+    view.updateNodeOutput(QStringLiteral("模块1.状态"), QStringLiteral("NG"));
+    QCOMPARE(r1->text(), QStringLiteral("状态：NG"));
+    QVERIFY2(r1->styleSheet().contains(QStringLiteral("#ff0000")), "字符串条件未生效");
+
+    // 失效绑定体检覆盖每一行
+    const QStringList stale = layout.staleBindings({}, {QStringLiteral("别的模块")});
+    QVERIFY2(stale.contains(QStringLiteral("global:") + varName),
+             "文本框组合全局绑定未参与体检");
+    QVERIFY2(stale.contains(QStringLiteral("node:模块1.状态")),
+             "文本框组合节点绑定未参与体检");
+
+    gv->removeVariable(varName);
+}
+
 void UiGuardsTest::b3NewControlsRoundTrip()
 {
     // 类型名映射：枚举每一项都必须能按名字往返（新增类型漏映射会在这里判红）
-    for (int i = 0; i <= int(RuntimeControlType::UiLog); ++i) {
+    for (int i = 0; i <= int(RuntimeControlType::TextEntryCombo); ++i) {
         const auto type = RuntimeControlType(i);
         RuntimeControlType back = RuntimeControlType::TextLabel;
         QVERIFY2(runtimeControlTypeFromName(runtimeControlTypeName(type), back),
@@ -2214,9 +2318,34 @@ void UiGuardsTest::b3NewControlsRoundTrip()
     uilog->logMaxLines = 200;
     uilog->logAltRowBgColor = QStringLiteral("#123456");
 
+    // B3-4a：文本框组合（每行数据源/类型/格式/颜色条件）
+    auto *te = page.addControl(RuntimeControlType::TextEntryCombo, QRect(0, 1040, 360, 160));
+    te->textEntryOrientation = 1;
+    te->textEntrySpacing = 12;
+    te->showTextEntryTitle = false;
+    te->textEntryBgColor = QStringLiteral("#101010");
+    TextEntryItem teA;
+    teA.text = QStringLiteral("计数：");
+    teA.bindType = QStringLiteral("global");
+    teA.bindKey = QStringLiteral("v_target");
+    teA.dataType = 1;
+    teA.format = QStringLiteral("%5d");
+    teA.color = QStringLiteral("#abcdef");
+    LightCondition teRule;
+    teRule.op = 0;
+    teRule.threshold = 10.0;
+    teRule.color = QStringLiteral("#ff0000");
+    teA.colorConditions << teRule;
+    TextEntryItem teB;
+    teB.text = QStringLiteral("状态：");
+    teB.bindType = QStringLiteral("node");
+    teB.bindKey = QStringLiteral("模块1.检测");
+    teB.dataType = 0;
+    te->textEntries << teA << teB;
+
     RuntimeInterfacePage page2;
     QVERIFY(page2.fromJson(page.toJson()));
-    QCOMPARE(page2.controls.size(), 7);
+    QCOMPARE(page2.controls.size(), 8);
     QCOMPARE(page2.controls.at(0).type, RuntimeControlType::SetVariable);
     QCOMPARE(page2.controls.at(0).bindKey, QStringLiteral("v_target"));
     QCOMPARE(page2.controls.at(1).type, RuntimeControlType::RunControl);
@@ -2243,6 +2372,20 @@ void UiGuardsTest::b3NewControlsRoundTrip()
     QCOMPARE(page2.controls.at(6).logShowTitle, false);
     QCOMPARE(page2.controls.at(6).logMaxLines, 200);
     QCOMPARE(page2.controls.at(6).logAltRowBgColor, QStringLiteral("#123456"));
+    QCOMPARE(page2.controls.at(7).type, RuntimeControlType::TextEntryCombo);
+    QCOMPARE(page2.controls.at(7).textEntryOrientation, 1);
+    QCOMPARE(page2.controls.at(7).textEntrySpacing, 12);
+    QCOMPARE(page2.controls.at(7).showTextEntryTitle, false);
+    QCOMPARE(page2.controls.at(7).textEntryBgColor, QStringLiteral("#101010"));
+    QCOMPARE(page2.controls.at(7).textEntries.size(), 2);
+    QCOMPARE(page2.controls.at(7).textEntries.at(0).bindKey, QStringLiteral("v_target"));
+    QCOMPARE(page2.controls.at(7).textEntries.at(0).dataType, 1);
+    QCOMPARE(page2.controls.at(7).textEntries.at(0).format, QStringLiteral("%5d"));
+    QCOMPARE(page2.controls.at(7).textEntries.at(0).color, QStringLiteral("#abcdef"));
+    QCOMPARE(page2.controls.at(7).textEntries.at(0).colorConditions.size(), 1);
+    QCOMPARE(page2.controls.at(7).textEntries.at(0).colorConditions.at(0).threshold, 10.0);
+    QCOMPARE(page2.controls.at(7).textEntries.at(1).bindType, QStringLiteral("node"));
+    QCOMPARE(page2.controls.at(7).textEntries.at(1).bindKey, QStringLiteral("模块1.检测"));
 }
 
 // B3-2 设计器属性面板：条件信号灯条件表可增删、OK/NG 第二绑定可写回，且两组按类型互斥显示。
@@ -2299,6 +2442,24 @@ void UiGuardsTest::designerB3PropertyPanelsWork()
     const auto &page = dlg.resultInterface().pages.first();
     QCOMPARE(page.controls.size(), 2);
     QCOMPARE(page.controls.last().bindKey2, ngName);
+
+    // 文本框组合：属性组按类型显示，行表可增行，绑定组合框可写回
+    QVERIFY(addByName(QStringLiteral("文本框组合")));
+    auto *teGroup = dlg.findChild<QGroupBox *>(QStringLiteral("designerTextEntryGroup"));
+    auto *teTable = dlg.findChild<QTableWidget *>(QStringLiteral("designerTextEntryTable"));
+    auto *teAdd = dlg.findChild<QPushButton *>(QStringLiteral("designerTextEntryAdd"));
+    QVERIFY2(teGroup && teTable && teAdd, "文本框组合属性控件缺失");
+    QVERIFY2(!teGroup->isHidden(), "选中文本框组合时属性组应显示");
+    QCOMPARE(teTable->rowCount(), 2);
+    teAdd->click();
+    QCOMPARE(dlg.resultInterface().pages.first().controls.last().textEntries.size(), 3);
+    auto *teBind = qobject_cast<QComboBox *>(teTable->cellWidget(0, 1));
+    QVERIFY2(teBind, "文本框组合绑定组合框缺失");
+    const int teVi = teBind->findData(QStringLiteral("global:") + ngName);
+    QVERIFY2(teVi >= 0, "文本框组合绑定组合框未列出全局变量");
+    teBind->setCurrentIndex(teVi);
+    QCOMPARE(dlg.resultInterface().pages.first().controls.last().textEntries.at(0).bindKey,
+             ngName);
 
     gv->removeVariable(ngName);
 }

@@ -149,4 +149,10 @@ private:
     QList<QLabel *> m_statusLabels;
     QList<const RuntimeControl *> m_statusCtrls;
     QTimer *m_statusTimer = nullptr;
+    // 文本框组合（官方「文本框组合」）：每行一个标签，各自绑定变量/节点并支持颜色条件
+    QList<QLabel *> m_textEntryLabels;
+    QList<const RuntimeControl *> m_textEntryCtrls;
+    QList<int> m_textEntryRows;
+    QMap<QString, QList<int>> m_nodeTextEntryMap;
+    void updateTextEntryRow(int index, const QVariant &value);
 };

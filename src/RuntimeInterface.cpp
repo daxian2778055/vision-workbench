@@ -3,6 +3,7 @@
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonArray>
+#include <QRegularExpression>
 
 QString runtimeControlTypeName(RuntimeControlType type)
 {
@@ -30,6 +31,7 @@ QString runtimeControlTypeName(RuntimeControlType type)
     case RuntimeControlType::MultiImage:  return QStringLiteral("多图像");
     case RuntimeControlType::RunStatus:   return QStringLiteral("运行状态");
     case RuntimeControlType::UiLog:       return QStringLiteral("界面日志");
+    case RuntimeControlType::TextEntryCombo: return QStringLiteral("文本框组合");
     }
     return QStringLiteral("未知");
 }
@@ -39,6 +41,107 @@ QString multiImagePanelName(const QList<MultiImagePanel> &panels, int index)
     const int i = qMax(0, index);
     const QString name = panels.value(i).name;
     return name.isEmpty() ? QStringLiteral("画面%1").arg(i + 1) : name;
+}
+
+namespace {
+QString defaultTextEntryFormat(int dataType)
+{
+    switch (dataType) {
+    case 1: return QStringLiteral("%0d");
+    case 2: return QStringLiteral("%1.3f");
+    default: return QStringLiteral("%s");
+    }
+}
+
+/// 反向格式化：把 fmt 里的数字进制/宽度/d 模式换成实际数字；没有模式就前缀化。
+QString formatIntWithPattern(const QString &fmt, qlonglong v)
+{
+    static const QRegularExpression re(QStringLiteral("%(\\d*)d"));
+    const QRegularExpressionMatch m = re.match(fmt);
+    if (!m.hasMatch()) return fmt + QString::number(v);
+    QString num = QString::number(v);
+    const int width = m.captured(1).toInt();
+    if (width > 0 && num.length() < width)
+        num = QString(width - num.length(), QLatin1Char('0')) + num;
+    QString out = fmt;
+    out.replace(m.capturedStart(), m.capturedLength(), num);
+    return out;
+}
+
+QString formatFloatWithPattern(const QString &fmt, double v)
+{
+    static const QRegularExpression re(QStringLiteral("%(?:1)?\\.(\\d+)f"));
+    const QRegularExpressionMatch m = re.match(fmt);
+    if (!m.hasMatch()) return fmt + QString::number(v, 'f', 3);
+    const int prec = qBound(0, m.captured(1).toInt(), 12);
+    QString out = fmt;
+    out.replace(m.capturedStart(), m.capturedLength(),
+                QString::number(v, 'f', prec));
+    return out;
+}
+} // namespace
+
+QString formatTextEntry(const TextEntryItem &item, const QVariant &value, bool bound)
+{
+    if (!bound) return item.text;
+    const QString prefix = item.text;
+    const QString fmt = item.format.isEmpty()
+                            ? defaultTextEntryFormat(item.dataType)
+                            : item.format;
+    QString body;
+    if (item.dataType == 1) {
+        bool ok = false;
+        const qlonglong n = value.toLongLong(&ok);
+        body = ok ? formatIntWithPattern(fmt, n) : fmt + value.toString();
+    } else if (item.dataType == 2) {
+        bool ok = false;
+        const double d = value.toDouble(&ok);
+        body = ok ? formatFloatWithPattern(fmt, d) : fmt + value.toString();
+    } else {
+        const QString s = value.toString();
+        const int pos = fmt.indexOf(QStringLiteral("%s"));
+        if (pos >= 0) {
+            body = fmt;
+            body.replace(pos, 2, s);
+        } else {
+            body = fmt + s;
+        }
+    }
+    return prefix + body;
+}
+
+QString textEntryEmptyText()
+{
+    return QStringLiteral("（未设置字符信息）");
+}
+
+QString textEntryDisplayColor(const TextEntryItem &item, const QVariant &value, bool bound)
+{
+    if (!bound) return item.color;
+    const QString s = value.toString();
+    bool numOk = false;
+    const double v = value.toDouble(&numOk);
+    for (const LightCondition &c : item.colorConditions) {
+        if (item.dataType == 0) {
+            // 官方：string 型仅支持 == / !=
+            if (c.op == 4 && s == c.text) return c.color;
+            if (c.op == 5 && s != c.text) return c.color;
+            continue;
+        }
+        if (!numOk) continue;
+        bool hit = false;
+        switch (c.op) {
+        case 0: hit = v >= c.threshold; break;
+        case 1: hit = v > c.threshold; break;
+        case 2: hit = v <= c.threshold; break;
+        case 3: hit = v < c.threshold; break;
+        case 4: hit = v == c.threshold; break;
+        case 5: hit = v != c.threshold; break;
+        default: break;
+        }
+        if (hit) return c.color;
+    }
+    return item.color;
 }
 
 bool runtimeControlTypeFromName(const QString &name, RuntimeControlType &out)
@@ -66,6 +169,7 @@ bool runtimeControlTypeFromName(const QString &name, RuntimeControlType &out)
     if (name == QStringLiteral("多图像"))   { out = RuntimeControlType::MultiImage; return true; }
     if (name == QStringLiteral("运行状态")) { out = RuntimeControlType::RunStatus; return true; }
     if (name == QStringLiteral("界面日志")) { out = RuntimeControlType::UiLog; return true; }
+    if (name == QStringLiteral("文本框组合")) { out = RuntimeControlType::TextEntryCombo; return true; }
     return false;
 }
 
@@ -238,6 +342,36 @@ static QJsonObject controlToJson(const RuntimeControl &c)
         o["logAltRowBgColor"] = c.logAltRowBgColor;
         o["logFontColor"] = c.logFontColor;
     }
+    if (c.type == RuntimeControlType::TextEntryCombo) {
+        QJsonArray entries;
+        for (const TextEntryItem &e : c.textEntries) {
+            QJsonObject eo;
+            eo["text"] = e.text;
+            eo["bindType"] = e.bindType;
+            eo["bindKey"] = e.bindKey;
+            eo["dataType"] = e.dataType;
+            eo["format"] = e.format;
+            eo["color"] = e.color;
+            QJsonArray conds;
+            for (const LightCondition &lc : e.colorConditions) {
+                QJsonObject co;
+                co["op"] = lc.op;
+                co["threshold"] = lc.threshold;
+                co["color"] = lc.color;
+                co["text"] = lc.text;
+                conds.append(co);
+            }
+            eo["colorConditions"] = conds;
+            entries.append(eo);
+        }
+        o["textEntries"] = entries;
+        o["textEntryOrientation"] = c.textEntryOrientation;
+        o["textEntrySpacing"] = c.textEntrySpacing;
+        o["showTextEntryTitle"] = c.showTextEntryTitle;
+        o["textEntryBgColor"] = c.textEntryBgColor;
+        o["textEntryBorderColor"] = c.textEntryBorderColor;
+        o["textEntryHeaderBgColor"] = c.textEntryHeaderBgColor;
+    }
     // 按钮动作表：只在有内容时写出，旧方案不膨胀
     if (c.type == RuntimeControlType::Button && !c.actions.isEmpty()) {
         QJsonArray acts;
@@ -388,6 +522,39 @@ static RuntimeControl controlFromJson(const QJsonObject &o, RuntimeControlType t
         ctrl.logRowBgColor = o["logRowBgColor"].toString(QStringLiteral("#17171c"));
         ctrl.logAltRowBgColor = o["logAltRowBgColor"].toString(QStringLiteral("#1c1c22"));
         ctrl.logFontColor = o["logFontColor"].toString(QStringLiteral("#d8d8e0"));
+    }
+    if (ctrl.type == RuntimeControlType::TextEntryCombo) {
+        const QJsonArray entries = o["textEntries"].toArray();
+        for (int i = 0; i < entries.size() && i < 64; ++i) {
+            const QJsonObject eo = entries.at(i).toObject();
+            TextEntryItem e;
+            e.text = eo["text"].toString();
+            e.bindType = eo["bindType"].toString();
+            e.bindKey = eo["bindKey"].toString();
+            e.dataType = qBound(0, eo["dataType"].toInt(0), 2);
+            e.format = eo["format"].toString();
+            e.color = eo["color"].toString(QStringLiteral("#d8d8e0"));
+            const QJsonArray conds = eo["colorConditions"].toArray();
+            for (const QJsonValue &cv : conds) {
+                if (e.colorConditions.size() >= 32) break;
+                const QJsonObject co = cv.toObject();
+                LightCondition lc;
+                lc.op = qBound(0, co["op"].toInt(0), 5);
+                lc.threshold = co["threshold"].toDouble(0.0);
+                if (!qIsFinite(lc.threshold)) lc.threshold = 0.0;
+                lc.color = co["color"].toString(QStringLiteral("#3db97a"));
+                lc.text = co["text"].toString();
+                e.colorConditions.append(lc);
+            }
+            ctrl.textEntries.append(e);
+        }
+        ctrl.textEntryOrientation = qBound(0, o["textEntryOrientation"].toInt(0), 1);
+        ctrl.textEntrySpacing = qBound(0, o["textEntrySpacing"].toInt(4), 40);
+        ctrl.showTextEntryTitle = o["showTextEntryTitle"].toBool(true);
+        ctrl.textEntryBgColor = o["textEntryBgColor"].toString();
+        ctrl.textEntryBorderColor = o["textEntryBorderColor"].toString();
+        ctrl.textEntryHeaderBgColor =
+            o["textEntryHeaderBgColor"].toString(QStringLiteral("#20262a"));
     }
 
     if (ctrl.type == RuntimeControlType::ResultTable) {
@@ -663,6 +830,17 @@ QStringList RuntimeInterface::staleBindings(const QSet<QString> &globals,
                     for (const MultiImagePanel &p : c.imagePanels)
                         if (!p.bindKey.isEmpty() && !nodes.contains(p.bindKey))
                             bad << QStringLiteral("node:%1").arg(p.bindKey);
+                }
+            }
+            // 文本框组合：每行可各自绑全局变量/节点输出
+            if (c.type == RuntimeControlType::TextEntryCombo) {
+                for (const TextEntryItem &e : c.textEntries) {
+                    if (e.bindKey.isEmpty()) continue;
+                    if (e.bindType == QLatin1String("global") && !globals.contains(e.bindKey))
+                        bad << QStringLiteral("global:%1").arg(e.bindKey);
+                    else if (e.bindType == QLatin1String("node") && !nodes.isEmpty()
+                             && !nodes.contains(e.bindKey))
+                        bad << QStringLiteral("node:%1").arg(e.bindKey);
                 }
             }
             if (c.bindKey.isEmpty() || c.bindType.isEmpty())
