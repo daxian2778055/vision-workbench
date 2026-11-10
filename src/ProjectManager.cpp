@@ -13,6 +13,7 @@
 #include "CalibrationManager.h"
 #include "AppLog.h"
 #include "SessionManager.h"
+#include "RuntimeInterface.h"
 #include <QFile>
 #include <QDir>
 #include <QFileInfo>
@@ -503,14 +504,23 @@ void ProjectManager::applyGlobalsFromJson(const QJsonObject &root)
             // 校验必须是合法 JSON 对象再落盘：损坏/伪造内容不得覆盖全局布局文件
             // （历史实现不校验直写——坏数据会把运行界面变成空窗/乱版）
             const QJsonDocument layoutDoc = QJsonDocument::fromJson(layout.toUtf8());
-            if (layoutDoc.isObject()) {
+            // 只判 isObject 不够（2026-11-10）：版本过高、引用成环、嵌套超深或
+            // 结构损坏的布局会覆盖全局布局文件，下次启动运行界面直接是坏版。
+            // 用 RuntimeInterface 自己的版本/结构契约做真校验，通过才落盘。
+            RuntimeInterface layoutCheck;
+            if (layoutDoc.isObject() && layoutCheck.fromJson(layoutDoc.object())) {
                 QSaveFile layoutFile(runtimeLayoutPath());
                 if (layoutFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
                     layoutFile.write(layout.toUtf8());
                     layoutFile.commit();
                 }
             } else {
-                reportLoadNote(QStringLiteral("方案内 runtimeLayout 不是合法 JSON 对象，已忽略（不覆盖现有布局）"));
+                const QString why = layoutCheck.lastLoadWarning().isEmpty()
+                    ? QStringLiteral("不是当前版本支持的合法布局")
+                    : layoutCheck.lastLoadWarning();
+                reportLoadNote(
+                    QStringLiteral("方案内 runtimeLayout 校验未通过（%1），已忽略（不覆盖现有布局）")
+                        .arg(why));
             }
         }
     }

@@ -341,10 +341,27 @@ public:
     /// 失效键以 "global:<键>" / "node:<键>" 形式返回，便于定位到具体控件来源。
     QStringList staleBindings(const QSet<QString> &globals, const QSet<QString> &nodes) const;
 
+    /// 运行界面布局文件当前结构版本，与方案文件 ProjectManager::kProjectSchemaVersion
+    /// 同级：写出时带上、读入时高于本值拒收，避免新版本文件被旧程序静默读坏。
+    static constexpr int kLayoutSchemaVersion = 2;
+    /// 子界面最大嵌套层数（官方口径 3 层；超深直接拒收，防递归展开失控）
+    static constexpr int kMaxSubPageDepth = 3;
+
+    /// 最近一次 fromJson 的诊断（版本不匹配 / 环 / 超深 / 悬空引用被清理），空 = 无问题
+    QString lastLoadWarning() const { return m_loadWarning; }
+
+    /// 结构自检：悬空 subPageId 就地清空（可修复，记入 warning）；
+    /// 引用环或超深返回 false（致命，调用方应拒收文件）。
+    bool validateStructure();
+
     QJsonObject toJson() const;
-    bool fromJson(const QJsonObject &json);   /// 兼容旧单页格式
+    /// 校验版本与结构后才填充本对象；任何失败都**不改动现有状态**。
+    bool fromJson(const QJsonObject &json);
     bool saveToFile(const QString &fileName) const;
     bool loadFromFile(const QString &fileName);
+
+private:
+    QString m_loadWarning;
 };
 
 /// 控件类型 → 中文名

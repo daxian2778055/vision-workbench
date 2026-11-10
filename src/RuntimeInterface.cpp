@@ -874,17 +874,93 @@ QJsonObject RuntimeInterface::toJson() const
     cv["gridColor"] = canvas.gridColor;
     cv["bgColor"] = canvas.bgColor;
     root["canvas"] = cv;
+    // 版本契约（2026-11-10）：与方案文件同级，便于诊断与未来演进
+    root["schemaVersion"] = kLayoutSchemaVersion;
     return root;
+}
+
+bool RuntimeInterface::validateStructure()
+{
+    // ① 悬空 subPageId：指向不存在的子页。清空即可（运行时不再显示空白子界面），
+    //    属可修复问题，记入 warning 让调用方能提示。
+    int dangling = 0;
+    auto fixPage = [this, &dangling](RuntimeInterfacePage &p) {
+        for (RuntimeControl &c : p.controls) {
+            if (c.type == RuntimeControlType::SubInterface
+                && !c.subPageId.isEmpty() && !subPages.contains(c.subPageId)) {
+                c.subPageId.clear();
+                ++dangling;
+            }
+        }
+    };
+    for (RuntimeInterfacePage &p : pages) fixPage(p);
+    for (auto it = subPages.begin(); it != subPages.end(); ++it) fixPage(it.value());
+    if (dangling > 0)
+        m_loadWarning = QStringLiteral("已清理 %1 处指向不存在子界面的引用").arg(dangling);
+
+    // ② 环 / 超深：显式栈 DFS，路径集合判环、深度上限判超深、展开数上限防爆。
+    //    环会让子界面递归展开永不终止，超深会拖垮运行界面，两者都拒收文件。
+    struct Node { QString id; int depth; QSet<QString> path; };
+    QList<Node> todo;
+    const auto collect = [&todo](const RuntimeInterfacePage &p) {
+        for (const RuntimeControl &c : p.controls) {
+            if (c.type == RuntimeControlType::SubInterface && !c.subPageId.isEmpty()) {
+                QSet<QString> path;
+                path.insert(c.subPageId);
+                todo.append({c.subPageId, 1, path});
+            }
+        }
+    };
+    for (const RuntimeInterfacePage &p : pages) collect(p);
+
+    for (int head = 0; head < todo.size(); ++head) {
+        if (todo.size() > 4096) {
+            m_loadWarning = QStringLiteral("子界面引用图过于复杂，已拒绝加载");
+            return false;
+        }
+        const Node n = todo.at(head);
+        if (n.depth > kMaxSubPageDepth) {
+            m_loadWarning = QStringLiteral("子界面嵌套超过 %1 层，已拒绝加载")
+                                .arg(kMaxSubPageDepth);
+            return false;
+        }
+        const auto it = subPages.constFind(n.id);
+        if (it == subPages.constEnd()) continue;
+        for (const RuntimeControl &c : it.value().controls) {
+            if (c.type != RuntimeControlType::SubInterface || c.subPageId.isEmpty())
+                continue;
+            if (n.path.contains(c.subPageId)) {
+                m_loadWarning = QStringLiteral("子界面引用成环（%1），已拒绝加载")
+                                    .arg(c.subPageId);
+                return false;
+            }
+            QSet<QString> path = n.path;
+            path.insert(c.subPageId);
+            todo.append({c.subPageId, n.depth + 1, path});
+        }
+    }
+    return true;
 }
 
 bool RuntimeInterface::fromJson(const QJsonObject &json)
 {
+    // 版本检查放在**任何状态改动之前**：高版本文件直接拒收且不破坏现有布局。
+    // 缺键按 1 处理（防御性解析，不是版本兼容——本仓不做旧项目兼容）。
+    const int version = json.value(QStringLiteral("schemaVersion")).toInt(1);
+    if (version > kLayoutSchemaVersion) {
+        m_loadWarning = QStringLiteral("运行界面布局版本 %1 高于本程序支持的 %2，已拒绝加载")
+                            .arg(version).arg(kLayoutSchemaVersion);
+        return false;
+    }
+    m_loadWarning.clear();
+
     pages.clear();
     subPages.clear();
     currentPageIndex = 0;
 
     // 项目未上线，只保留当前多页格式，不做旧单页格式兼容（2026-11-09 用户口径）
-    if (!json.contains("pages")) return false;
+    if (!json.contains("pages") || !json.value(QStringLiteral("pages")).isArray())
+        return false;
     const QJsonArray pageArr = json["pages"].toArray();
     for (const QJsonValue &v : pageArr) {
         RuntimeInterfacePage p;
@@ -906,6 +982,16 @@ bool RuntimeInterface::fromJson(const QJsonObject &json)
     canvas.showGrid = cv["showGrid"].toBool(false);
     canvas.gridColor = cv["gridColor"].toString(QStringLiteral("#1e1e1e"));
     canvas.bgColor = cv["bgColor"].toString(QStringLiteral("#383838"));
+
+    // 结构自检：环/超深是致命错误，绝不能带着这样的引用图进入运行期。
+    // 清成可编辑空布局（而不是保留半初始化状态），warning 说明原因。
+    if (!validateStructure()) {
+        pages.clear();
+        subPages.clear();
+        currentPageIndex = 0;
+        ensurePage();
+        return false;
+    }
     ensurePage();
     return !pages.isEmpty();
 }

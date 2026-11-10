@@ -113,6 +113,7 @@ void b3NewControlsRoundTrip();
 void designerB3PropertyPanelsWork();
 void subInterfaceCornerRadiusRoundTrips();
 void designerAlignCanBeUndone();
+void layoutSchemaContractRejectsFutureVersionsAndBadSubPageGraphs();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -2687,6 +2688,95 @@ void UiGuardsTest::designerAlignCanBeUndone()
         canvas->findChildren<DesignerControlFrame *>();
     QVERIFY2(afterUndo.size() >= 2, "撤销后控件数量不对");
     QCOMPARE(afterUndo.at(1)->geometry(), secondBefore);
+}
+
+// 2026-11-10 框架契约：方案文件早有 schemaVersion + 高版本拒收，运行界面布局
+// 却只检查 contains("pages")。这里钉住布局文件的版本契约与子界面引用图校验：
+// 高版本/环/超深必须拒收，悬空引用可修复但要留痕。
+void UiGuardsTest::layoutSchemaContractRejectsFutureVersionsAndBadSubPageGraphs()
+{
+    RuntimeInterface base;
+    base.ensurePage();
+    base.page(0)->pageName = QStringLiteral("保留页");
+    QCOMPARE(base.toJson().value(QStringLiteral("schemaVersion")).toInt(),
+             RuntimeInterface::kLayoutSchemaVersion);
+
+    // ① 高版本文件：拒收且**不改现有状态**（版本检查在清空之前）
+    QJsonObject future = base.toJson();
+    future[QStringLiteral("schemaVersion")] = RuntimeInterface::kLayoutSchemaVersion + 99;
+    QVERIFY2(!base.fromJson(future), "高于支持版本的布局必须拒收");
+    QCOMPARE(base.page(0)->pageName, QStringLiteral("保留页"));
+    QVERIFY2(base.lastLoadWarning().contains(QStringLiteral("高于")),
+             "拒收原因要能诊断");
+
+    // ② pages 不是数组：拒收
+    QJsonObject notArray = base.toJson();
+    notArray[QStringLiteral("pages")] = QJsonValue(42);
+    QVERIFY(!base.fromJson(notArray));
+
+    // ③ 子界面引用成环：拒收（否则运行期递归展开永不终止）
+    RuntimeInterface ring;
+    ring.ensurePage();
+    const QString a = ring.createSubPage(QStringLiteral("A"));
+    const QString b = ring.createSubPage(QStringLiteral("B"));
+    RuntimeControl ref;
+    ref.type = RuntimeControlType::SubInterface;
+    ref.subPageId = a;
+    ring.page(0)->controls.append(ref);
+    RuntimeControl refB = ref;
+    refB.subPageId = b;
+    QVERIFY(ring.subPage(a));
+    ring.subPage(a)->controls.append(refB);
+    RuntimeControl refBack = ref;
+    QVERIFY(ring.subPage(b));
+    ring.subPage(b)->controls.append(refBack);   // B -> A，成环
+    RuntimeInterface loadedRing;
+    QVERIFY2(!loadedRing.fromJson(ring.toJson()), "引用成环必须拒收");
+    QVERIFY2(loadedRing.lastLoadWarning().contains(QStringLiteral("成环")),
+             "环的拒收原因要能诊断");
+
+    // ④ 嵌套超深：超过 kMaxSubPageDepth 拒收
+    RuntimeInterface deep;
+    deep.ensurePage();
+    QString prev;
+    for (int i = 0; i <= RuntimeInterface::kMaxSubPageDepth; ++i) {
+        const QString id = deep.createSubPage(QStringLiteral("P%1").arg(i));
+        RuntimeControl link;
+        link.type = RuntimeControlType::SubInterface;
+        link.subPageId = id;
+        if (prev.isEmpty())
+            deep.page(0)->controls.append(link);
+        else
+            deep.subPage(prev)->controls.append(link);
+        prev = id;
+    }
+    RuntimeInterface loadedDeep;
+    QVERIFY2(!loadedDeep.fromJson(deep.toJson()), "超深嵌套必须拒收");
+    QVERIFY2(loadedDeep.lastLoadWarning().contains(QStringLiteral("超过")),
+             "超深的拒收原因要能诊断");
+
+    // ⑤ 悬空 subPageId：可修复 —— 清空并留 warning，不删用户控件
+    RuntimeInterface dangling;
+    dangling.ensurePage();
+    RuntimeControl bad;
+    bad.type = RuntimeControlType::SubInterface;
+    bad.subPageId = QStringLiteral("no_such_sub");
+    dangling.page(0)->controls.append(bad);
+    RuntimeInterface fixed;
+    QVERIFY(fixed.fromJson(dangling.toJson()));
+    QCOMPARE(fixed.page(0)->controls.size(), 1);
+    QVERIFY2(fixed.page(0)->controls.first().subPageId.isEmpty(),
+             "悬空引用必须被清空");
+    QVERIFY2(fixed.lastLoadWarning().contains(QStringLiteral("已清理")),
+             "自动修复也要留痕，不能静默改用户布局");
+
+    // ⑥ 正常文件往返无 warning
+    RuntimeInterface clean;
+    clean.ensurePage();
+    RuntimeInterface reload;
+    QVERIFY(reload.fromJson(clean.toJson()));
+    QVERIFY2(reload.lastLoadWarning().isEmpty(),
+             "正常布局不该产生诊断信息");
 }
 
 QTEST_MAIN(UiGuardsTest)
