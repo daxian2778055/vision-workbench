@@ -322,6 +322,7 @@ src/DeepOcrSelfTest.cpp   # --selftest-deepocr：换机后验证 HALCON 运行�
     src/UiLogBus.cpp
     src/CommunicationManagerDialog.cpp
     src/CommMonitorDialog.cpp
+    src/CommMonitorPane.cpp
     src/ReceiveEvent.cpp
     src/SendEvent.cpp
     src/HeartbeatManager.cpp
@@ -559,6 +560,7 @@ set(HEADERS
     include/CommunicationManager.h
     include/CommunicationManagerDialog.h
     include/CommMonitorDialog.h
+    include/CommMonitorPane.h
     include/UiLogBus.h
     include/ReceiveEvent.h
     include/SendEvent.h
@@ -636,7 +638,7 @@ add_library(vfp_core OBJECT
 
 # AUTOMOC 对新增 Q_OBJECT 头偶发不扫（2026-10-27 实测）：把头显式列进目标源，
 # 强制生成 moc_FeatureSearchNode.cpp。
-target_sources(vfp_core PRIVATE include/FeatureSearchNode.h include/FeatureLibraryDialog.h include/TrainingWizardDialog.h include/ObjectCountingNode.h include/BoxAnnotatorDialog.h include/TrainingRunnerDialog.h include/TrainingRunner.h)
+target_sources(vfp_core PRIVATE include/FeatureSearchNode.h include/FeatureLibraryDialog.h include/TrainingWizardDialog.h include/ObjectCountingNode.h include/BoxAnnotatorDialog.h include/TrainingRunnerDialog.h include/TrainingRunner.h include/CommMonitorPane.h)
 # 构建顺序：Version.h 必须在该库编译任何源文件之前刷新（P1-3）
 add_dependencies(vfp_core vfp_version_header)
 

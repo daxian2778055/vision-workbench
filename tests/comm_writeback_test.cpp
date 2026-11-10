@@ -54,6 +54,7 @@
 #include "ReceiveEvent.h"
 #include "SendEvent.h"
 #include "CommResponseManager.h"
+#include "CommMonitorPane.h"
 #include "RegisterSpaceBar.h"
 #include "CommunicationNodeBase.h"
 #include "CommunicationManagerDialog.h"
@@ -194,6 +195,8 @@ private slots:
     void deviceRemovalCleansReferencesButRecreateKeepsThem();
     // 2026-11-10 审核：终态补全后需边沿去重，否则一次停止连发多个 IDLE
     void responseFlowStateIsEdgeTriggered();
+    // 2026-11-10：官方 5.2 设备管理页右下的收发数据区（内嵌而非独立对话框）
+    void communicationDialogEmbedsMonitorPane();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -3630,6 +3633,67 @@ void CommWritebackTest::responseFlowStateIsEdgeTriggered()
     QCOMPARE(spy.count(), 4);
 
     cm->setResponseConfig(QJsonObject());
+}
+
+// 2026-11-10：官方 5.2 设备管理页右下应有 Tab「接收数据 / 发送数据」+ 大数据区 +
+// 「16 进制显示」+「清空」+ 发送输入与按钮。此前只有独立监视器对话框，主窗口这块是空的。
+void CommWritebackTest::communicationDialogEmbedsMonitorPane()
+{
+    CommunicationManagerDialog dlg;
+    auto *pane = dlg.findChild<CommMonitorPane *>(QStringLiteral("commMonitorPane"));
+    QVERIFY2(pane, "通信管理主窗口必须内嵌收发数据区（不是只有独立对话框）");
+
+    auto *tabs = pane->findChild<QTabWidget *>(QStringLiteral("commPaneTabs"));
+    QVERIFY(tabs);
+    QCOMPARE(tabs->count(), 2);
+    QCOMPARE(tabs->tabText(0), QStringLiteral("\u63A5\u6536\u6570\u636E"));
+    QCOMPARE(tabs->tabText(1), QStringLiteral("\u53D1\u9001\u6570\u636E"));
+
+    auto *hex = pane->findChild<QCheckBox *>(QStringLiteral("commPaneHexCheck"));
+    auto *clear = pane->findChild<QPushButton *>(QStringLiteral("commPaneClear"));
+    auto *send = pane->findChild<QPushButton *>(QStringLiteral("commPaneSend"));
+    auto *edit = pane->findChild<QLineEdit *>(QStringLiteral("commPaneSendEdit"));
+    QVERIFY(hex);
+    QVERIFY(clear);
+    QVERIFY(send);
+    QVERIFY(edit);
+    QVERIFY2(!send->isEnabled() && !edit->isEnabled(),
+             "未选择设备时手动发送必须禁用");
+
+    // 直接驱动公开槽（无需真 socket）；200ms 节流后用 QTRY 等待重绘
+    pane->onDataReceived(QStringLiteral("PANE_DEV"), QByteArrayLiteral("PING"));
+    pane->onDataSent(QStringLiteral("PANE_DEV"), QByteArrayLiteral("PONG"));
+    QTRY_VERIFY_WITH_TIMEOUT(pane->receiveText().contains(QStringLiteral("PING")), 1500);
+    QVERIFY2(pane->sendText().contains(QStringLiteral("PONG")),
+             "发送数据页要显示已发报文");
+    QVERIFY2(!pane->receiveText().contains(QStringLiteral("PONG")),
+             "收发两页不能混在一起");
+
+    // 16 进制开关：已有记录立即重绘成 hex，不用等下一次节流
+    hex->setChecked(true);
+    QVERIFY2(pane->receiveText().contains(QStringLiteral("50 49 4E 47")),
+             "16 进制模式应显示 PING 的字节序列");
+    QVERIFY2(pane->sendText().contains(QStringLiteral("50 4F 4E 47")),
+             "发送页同样按 hex 重绘");
+
+    // 清空：两页都归零
+    clear->click();
+    QVERIFY(pane->receiveText().isEmpty());
+    QVERIFY(pane->sendText().isEmpty());
+
+    // 目标设备联动：设置后发送控件启用；设备不存在时发送失败不误清输入框
+    pane->setTargetDevice(QStringLiteral("PANE_NO_DEVICE"));
+    QCOMPARE(pane->targetDevice(), QStringLiteral("PANE_NO_DEVICE"));
+    QVERIFY(send->isEnabled());
+    QVERIFY(edit->isEnabled());
+    hex->setChecked(false);
+    edit->setText(QStringLiteral("HELLO"));
+    send->click();
+    QVERIFY2(edit->text() == QStringLiteral("HELLO"),
+             "发送失败（设备不存在）时不应清空输入");
+
+    pane->setTargetDevice(QString());
+    QVERIFY(!send->isEnabled());
 }
 
 QTEST_MAIN(CommWritebackTest)

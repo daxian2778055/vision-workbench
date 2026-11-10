@@ -15,13 +15,15 @@
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 
+class CommMonitorPane;  // 设备管理页右下内嵌的收发数据区（官方 5.2 形态）
 class ModbusNode; // 前向声明
 class GlobalTriggerDialog; // 触发配置页内嵌（全局触发）
 
 /// 通信管理对话框 — 左侧导航 + 堆叠页（VM 5.2 官方六项）：
 /// 设备管理（含控制器列表）/ 接收事件 / 发送事件 / 触发配置（全局触发）/
 /// 响应配置（方案加载·流程控制·相机响应）/ 心跳管理。
-/// 收发监视不在导航内（官方为独立窗口，主菜单入口仍可用）。
+/// 收发监视不占导航项：官方形态的收发数据区已内嵌在设备管理页右下（CommMonitorPane）；
+/// 独立的 CommMonitorDialog 保留为带设备统计的增强视图，主菜单入口仍可用。
 class CommunicationManagerDialog : public QDialog
 {
     Q_OBJECT
@@ -123,6 +125,8 @@ private:
 
     // 设备管理页右侧「通信参数」摘要（VM 布局：左列表 + 右参数）
     QLabel *m_paramSummary = nullptr;
+    /// 右侧下方的收发数据区（Tab 收/发 + Hex + 清空 + 手动发送）
+    CommMonitorPane *m_monitorPane = nullptr;
     QPushButton *m_exportGtdBtn = nullptr;
     QPushButton *m_importGtdBtn = nullptr;
 

@@ -12,6 +12,7 @@
 #include "CommEventEditDialogs.h"
 #include "CommDeviceConfigDialog.h"
 #include "CommMonitorDialog.h"
+#include "CommMonitorPane.h"
 #include "HeartbeatManager.h"
 #include "GlobalTriggerManager.h"
 #include "AppLog.h"
@@ -122,8 +123,17 @@ void CommunicationManagerDialog::loadResponseConfigToUi()
 
 void CommunicationManagerDialog::updateParamSummary()
 {
+    // 右下收发数据区的手动发送目标跟随当前选中的通信设备
+    //（即使摘要控件尚未建好，这一步也要做）
+    const int selectedRow = m_deviceTable ? m_deviceTable->currentRow() : -1;
+    if (m_monitorPane) {
+        m_monitorPane->setTargetDevice(
+            selectedRow >= 0 && m_deviceTable->item(selectedRow, 0)
+                ? m_deviceTable->item(selectedRow, 0)->text()
+                : QString());
+    }
     if (!m_paramSummary) return;
-    const int devRow = m_deviceTable ? m_deviceTable->currentRow() : -1;
+    const int devRow = selectedRow;
     if (devRow >= 0 && m_deviceTable->item(devRow, 0)) {
         const QString name = m_deviceTable->item(devRow, 0)->text();
         const CommDeviceInfo info = CommunicationManager::instance()->deviceInfo(name);
@@ -430,7 +440,13 @@ void CommunicationManagerDialog::setupDeviceTab(QStackedWidget *stack)
         "\u5728\u5DE6\u4FA7\u9009\u62E9\u8BBE\u5907\u540E\uFF0C\u8FD9\u91CC\u663E\u793A\u5176\u901A\u4FE1\u53C2\u6570\uFF1B\n"
         "\u70B9\u51FB\u300C\u914D\u7F6E\u300D\u4FEE\u6539\u53C2\u6570\u3002"));
     rightLayout->addWidget(m_paramSummary);
-    rightLayout->addStretch();
+
+    // VM 5.2 官方设备管理页右下：Tab「接收数据 / 发送数据」+ 大数据区 +
+    // 「16 进制显示」+「清空」+ 手动发送。此前只有独立监视器对话框，
+    // 主窗口这一块是空的，与官方形态不符（2026-11-10 补齐）。
+    m_monitorPane = new CommMonitorPane(rightBox);
+    m_monitorPane->setObjectName(QStringLiteral("commMonitorPane"));
+    rightLayout->addWidget(m_monitorPane, 1);
 
     body->addWidget(left, 3);
     body->addWidget(rightBox, 2);
