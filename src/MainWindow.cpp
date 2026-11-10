@@ -2072,70 +2072,89 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
 {
     if (!ex) return;
 
+    // U-20（2026-11-10）：执行器由 FlowExecutorToken（shared_ptr）持有，终局撤除路径下
+    // 可能先于本函数注册的排队回调销毁（信号已 post、对象已回收）。sender 销毁会断开连接，
+    // 但**不会取消已排队的 functor 调用**，所以 lambda 不能捕获裸 ex。
+    // 统一用 QPointer 守卫：各 lambda 首行判空，体内只经 exGuard 访问。
+    QPointer<FlowExecutor> exGuard(ex);
+
     // ── 全局 UI：运行状态 → 状态栏（状态/耗时/触发计数） ──
-    connect(ex, &FlowExecutor::executionStarted, this, [this, ex]() {
-        if (ex == m_executor) onExecutionStarted();
+    connect(ex, &FlowExecutor::executionStarted, this, [this, exGuard]() {
+        if (!exGuard) return;
+        if (exGuard.data() == m_executor) onExecutionStarted();
     });
     // VM 5.2.5 流程控制响应：忙碌=开始、空闲=结束（不按当前激活流程过滤：后台流程状态同样要上报）。
     // 旧实现只在 executionFinished 发 IDLE，手动停止 / 运行错误 / 终局撤除时 PLC 会
     // 一直停在 BUSY（2026-11-10 审核）。统一用 reportIdle 覆盖全部终态，
     // 重复终态由 CommResponseManager 的边沿去重吞掉。
-    auto reportIdle = [ex]() {
-        FlowScene *s = ex->flowScene();
+    auto reportIdle = [exGuard]() {
+        if (!exGuard) return;
+        FlowScene *s = exGuard->flowScene();
         CommResponseManager::instance()->handleFlowState(
             s ? s->flowName() : QString(), false);
     };
-    connect(ex, &FlowExecutor::executionStarted, this, [ex]() {
-        FlowScene *s = ex->flowScene();
+    connect(ex, &FlowExecutor::executionStarted, this, [exGuard]() {
+        if (!exGuard) return;
+        FlowScene *s = exGuard->flowScene();
         CommResponseManager::instance()->handleFlowState(s ? s->flowName() : QString(), true);
     });
     connect(ex, &FlowExecutor::executionFinished, this, [reportIdle]() {
         reportIdle();
     });
-    connect(ex, &FlowExecutor::executionStopped, this, [this, ex, reportIdle]() {
-        if (ex == m_executor) onExecutionStopped();
+    connect(ex, &FlowExecutor::executionStopped, this, [this, exGuard, reportIdle]() {
+        if (!exGuard) return;
+        if (exGuard.data() == m_executor) onExecutionStopped();
         reportIdle();
     });
-    connect(ex, &FlowExecutor::executionFinished, this, [this, ex]() {
-        if (ex == m_executor) onExecutionFinished();
+    connect(ex, &FlowExecutor::executionFinished, this, [this, exGuard]() {
+        if (!exGuard) return;
+        if (exGuard.data() == m_executor) onExecutionFinished();
     });
     // 良率目标报警：**不按"当前激活流程"过滤**——后台流程的轮次同样要参与判定，
     // 否则多流程并发时报警会漏（哪条流程超差都得报）。节流在 checkYieldTarget 内部。
-    connect(ex, &FlowExecutor::executionFinished, this, [this, ex]() {
-        checkYieldTarget(ex);
+    connect(ex, &FlowExecutor::executionFinished, this, [this, exGuard]() {
+        if (!exGuard) return;
+        checkYieldTarget(exGuard.data());
     });
 
     // ── 图编辑锁（S1 / Phase B 小步）：按执行器自身场景更新，不按"当前激活流程"——
     //    后台流程暂停停稳/恢复时若漏更新，就会出现"后台正在跑却可编辑"的漏洞。
     //    · executionParked：worker 真停进等待点（当前节点已跑完）→ 解锁，可安全改图
     //    · executionResumed：恢复执行 → 立即加锁（否则暂停中改完图点继续，运行中仍是可编辑）
-    connect(ex, &FlowExecutor::executionParked, this, [this, ex]() {
-        if (FlowScene *s = ex->flowScene())
+    connect(ex, &FlowExecutor::executionParked, this, [this, exGuard]() {
+        if (!exGuard) return;
+        if (FlowScene *s = exGuard->flowScene())
             s->setEditLocked(SessionManager::instance()->canvasEditShouldBeLocked(
-                !ex->allowsGraphEditing()));
+                !exGuard->allowsGraphEditing()));
         // 停稳暂停已允许改图（2026-10-29 r16 P2-13）：菜单要跟着解锁
         applyPermissionRestrictions();
     });
-    connect(ex, &FlowExecutor::executionResumed, this, [this, ex]() {
-        if (FlowScene *s = ex->flowScene())
+    connect(ex, &FlowExecutor::executionResumed, this, [this, exGuard]() {
+        if (!exGuard) return;
+        if (FlowScene *s = exGuard->flowScene())
             s->setEditLocked(SessionManager::instance()->canvasEditShouldBeLocked(
-                !ex->allowsGraphEditing()));
+                !exGuard->allowsGraphEditing()));
         // 恢复执行立刻再锁上
         applyPermissionRestrictions();
     });
     // 运行控制的状态反馈：暂停请求已受理 / 真停稳 / 已继续（ex == m_executor 门槛，避免后台流程
     // 污染当前状态栏与按钮态）
-    connect(ex, &FlowExecutor::executionPaused, this, [this, ex]() {
-        if (ex == m_executor && m_execStatus) m_execStatus->onPaused();
+    connect(ex, &FlowExecutor::executionPaused, this, [this, exGuard]() {
+        if (!exGuard) return;
+        if (exGuard.data() == m_executor && m_execStatus) m_execStatus->onPaused();
     });
-    connect(ex, &FlowExecutor::executionParked, this, [this, ex]() {
-        if (ex == m_executor && m_execStatus) m_execStatus->onParked();
+    connect(ex, &FlowExecutor::executionParked, this, [this, exGuard]() {
+        if (!exGuard) return;
+        if (exGuard.data() == m_executor && m_execStatus) m_execStatus->onParked();
     });
-    connect(ex, &FlowExecutor::executionResumed, this, [this, ex]() {
-        if (ex == m_executor && m_execStatus) m_execStatus->onResumed();
+    connect(ex, &FlowExecutor::executionResumed, this, [this, exGuard]() {
+        if (!exGuard) return;
+        if (exGuard.data() == m_executor && m_execStatus) m_execStatus->onResumed();
     });
-    connect(ex, &FlowExecutor::executionError, this, [this, ex, reportIdle](const QString &err) {
-        if (ex == m_executor) onExecutionError(err);
+    connect(ex, &FlowExecutor::executionError, this,
+            [this, exGuard, reportIdle](const QString &err) {
+        if (!exGuard) return;
+        if (exGuard.data() == m_executor) onExecutionError(err);
         else logMessage(QStringLiteral("流程错误: %1").arg(err));
         reportIdle();   // 错误也是终态：不能让 PLC 卡在 BUSY
     });
@@ -2144,8 +2163,9 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
     // 日志直接记 payload（原因串自带语境：令牌收尾超时与终态处置），避免与控制器
     // 的状态栏提示句形成同句双份。
     connect(ex, &FlowExecutor::executionAbandoned, this,
-            [this, ex, reportIdle](const QString &why) {
-        if (ex == m_executor && m_execStatus) m_execStatus->onAbandoned(why);
+            [this, exGuard, reportIdle](const QString &why) {
+        if (!exGuard) return;
+        if (exGuard.data() == m_executor && m_execStatus) m_execStatus->onAbandoned(why);
         logMessage(why);
         reportIdle();   // 终局撤除同样要回到 IDLE
     });
@@ -2153,9 +2173,10 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
     // ── 全局 UI：运行模式变更 → 刷新所有场景 MVS 节点的像素格式可用性 ──
     // （⑤a：旧实现在构造函数只内联连首执行器，新/后台流程的模式切换不刷新；
     // 统一在此连接，按 ex == m_executor 门槛，保证仅当前激活流程刷新 UI。）
-    connect(ex, &FlowExecutor::flowModeChanged, this, [this, ex](int mode) {
+    connect(ex, &FlowExecutor::flowModeChanged, this, [this, exGuard](int mode) {
         Q_UNUSED(mode)
-        if (ex != m_executor)
+        if (!exGuard) return;
+        if (exGuard.data() != m_executor)
             return;
         for (FlowScene *scene : m_flowScenes) {
             for (NodeBase *node : scene->nodes()) {
@@ -2167,9 +2188,10 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
 
     // ── 全局 UI：跳过三态（未激活分支 / 循环体调度的节点标"跳过"） ──
     connect(ex, &FlowExecutor::nodeSkipped, this,
-            [this, ex](NodeBase *node, const QString &reason) {
+            [this, exGuard](NodeBase *node, const QString &reason) {
         Q_UNUSED(reason)
-        if (ex != m_executor || !isNodeLive(node, ex->flowScene()))
+        if (!exGuard) return;
+        if (exGuard.data() != m_executor || !isNodeLive(node, exGuard->flowScene()))
             return;
         // 立刻重绘（2026-10-28 复核 P3）：第三态只置了节点标志，画布要等下次重绘才变色
         if (FlowScene *scene = currentFlowScene())
@@ -2182,8 +2204,9 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
 
     // ── 全局 UI：结果数据表 / 变量面板（节点执行后把该模块输出推到面板） ──
     connect(ex, &FlowExecutor::nodeOutputsUpdated, this,
-            [this, ex](NodeBase *node, bool ok, qint64 elapsedMs, const QVariantMap &vars) {
-        if (ex != m_executor || !isNodeLive(node, ex->flowScene()))
+            [this, exGuard](NodeBase *node, bool ok, qint64 elapsedMs, const QVariantMap &vars) {
+        if (!exGuard) return;
+        if (exGuard.data() != m_executor || !isNodeLive(node, exGuard->flowScene()))
             return;
         for (ResultTablePanel *rt : resultPanels()) {
             // VM「模块结果」口径：算子自己声明结果字段（顺序/名称/单位/精度），
@@ -2210,8 +2233,9 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
 
     // ── 全局 UI：末端图像 → 运行界面 + 图像显示 ──
     connect(ex, &FlowExecutor::imageReady, this,
-            [this, ex](NodeBase *node, const HalconCpp::HImage &image) {
-        if (ex != m_executor || !isNodeLive(node, ex->flowScene()))
+            [this, exGuard](NodeBase *node, const HalconCpp::HImage &image) {
+        if (!exGuard) return;
+        if (exGuard.data() != m_executor || !isNodeLive(node, exGuard->flowScene()))
             return;
         // 运行界面图像控件转发（不受用户显示选择影响）
         if (m_runtimeView)
@@ -2229,28 +2253,30 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
 
     // ── 全局 UI：任意节点图像 → 运行界面按节点名推送（绑定中间节点控件可实时显示） ──
     connect(ex, &FlowExecutor::imageAvailable, this,
-            [this, ex](NodeBase *node, const HalconCpp::HImage &image) {
-        if (ex != m_executor || !isNodeLive(node, ex->flowScene()))
+            [this, exGuard](NodeBase *node, const HalconCpp::HImage &image) {
+        if (!exGuard) return;
+        if (exGuard.data() != m_executor || !isNodeLive(node, exGuard->flowScene()))
             return;
         if (m_runtimeView)
             RuntimeInterfaceView::broadcastImage(node->fullName(), image);
     });
 
     // ── 逐节点反馈 ──
-    connect(ex, &FlowExecutor::nodeExecuted, this, [this, ex](NodeBase *node, bool success) {
+    connect(ex, &FlowExecutor::nodeExecuted, this, [this, exGuard](NodeBase *node, bool success) {
         // 流程域：日志（后台流程同样输出）
         logMessage(QStringLiteral("节点执行结果: %1").arg(success ? QStringLiteral("成功")
                                                                  : QStringLiteral("失败")));
-        if (!isNodeLive(node, ex->flowScene()))
+        if (!exGuard) return;
+        if (!isNodeLive(node, exGuard->flowScene()))
             return;
         // 流程域：节点着色按执行器自身场景（旧实现只看当前标签页场景 → 后台流程无反馈/串场景）
-        if (FlowScene *scene = ex->flowScene()) {
+        if (FlowScene *scene = exGuard->flowScene()) {
             if (NodeGraphicsItem *item = scene->getGraphicsItemForNode(node))
                 item->update();
         }
 
         // 全局 UI 部分只在"失败为假 且 当前激活流程"时更新
-        if (!success || ex != m_executor)
+        if (!success || exGuard.data() != m_executor)
             return;
 
         // 参数面板：显示最新输出参数（选中节点）
