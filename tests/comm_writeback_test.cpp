@@ -192,6 +192,8 @@ private slots:
     void serialPortSurvivesPortError();
     // 2026-11-10 审核：设备删除清理悬空引用，但「改配置 remove+add 重建」必须保留
     void deviceRemovalCleansReferencesButRecreateKeepsThem();
+    // 2026-11-10 审核：终态补全后需边沿去重，否则一次停止连发多个 IDLE
+    void responseFlowStateIsEdgeTriggered();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -3571,6 +3573,62 @@ void CommWritebackTest::deviceRemovalCleansReferencesButRecreateKeepsThem()
 
     // 清场
     hb->unregisterHeartbeat(QStringLiteral("REF_NEW"));
+    cm->setResponseConfig(QJsonObject());
+}
+
+// 2026-11-10 审核：补全 stopped / error / abandoned 终态后，一次停止可能连发
+// 多个终态信号。handleFlowState 必须是边沿语义：重复同状态不上报、从没忙碌过
+// 不凭空发 IDLE，且下一轮能重新进入忙碌。同时验证 responseSent 会带失败标志，
+// 这样 MainWindow 的日志接线才有东西可显示。
+void CommWritebackTest::responseFlowStateIsEdgeTriggered()
+{
+    auto *cm = CommunicationManager::instance();
+    auto *rt = CommResponseManager::instance();
+
+    QJsonObject flow;
+    flow[QStringLiteral("enabled")] = true;
+    // 故意用不存在的设备：sendData 失败但仍会 emit responseSent(..., false)，
+    // 既能数发送次数，又能验证失败标志确实上报。
+    flow[QStringLiteral("device")] = QStringLiteral("RESP_EDGE_NO_DEVICE");
+    flow[QStringLiteral("separator")] = QStringLiteral(",");
+    flow[QStringLiteral("idleContent")] = QStringLiteral("IDLE");
+    flow[QStringLiteral("busyContent")] = QStringLiteral("BUSY");
+    QJsonObject cfg;
+    cfg[QStringLiteral("flowControl")] = flow;
+    cm->setResponseConfig(cfg);
+
+    QSignalSpy spy(rt, &CommResponseManager::responseSent);
+    QVERIFY(spy.isValid());
+    const QString flowName = QStringLiteral("流程_EDGE");
+
+    rt->handleFlowState(flowName, false);   // 从没忙碌过 → 不该凭空发 IDLE
+    QCOMPARE(spy.count(), 0);
+
+    rt->handleFlowState(flowName, true);
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(1).toByteArray(),
+             QStringLiteral("BUSY,%1").arg(flowName).toUtf8());
+    QCOMPARE(spy.at(0).at(2).toBool(), false);   // 设备不存在，失败要如实上报
+
+    rt->handleFlowState(flowName, true);   // 重复 BUSY → 吞掉
+    QCOMPARE(spy.count(), 1);
+
+    rt->handleFlowState(flowName, false);  // 第一个终态 → IDLE
+    QCOMPARE(spy.count(), 2);
+    QCOMPARE(spy.at(1).at(1).toByteArray(),
+             QStringLiteral("IDLE,%1").arg(flowName).toUtf8());
+
+    // 模拟一次停止连发 stopped + finished + error：只应有一条 IDLE
+    rt->handleFlowState(flowName, false);
+    rt->handleFlowState(flowName, false);
+    QCOMPARE(spy.count(), 2);
+
+    // 下一轮能重新进忙碌
+    rt->handleFlowState(flowName, true);
+    QCOMPARE(spy.count(), 3);
+    rt->handleFlowState(flowName, false);
+    QCOMPARE(spy.count(), 4);
+
     cm->setResponseConfig(QJsonObject());
 }
 

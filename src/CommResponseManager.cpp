@@ -62,6 +62,17 @@ void CommResponseManager::handleFlowState(const QString &flowName, bool busy)
     const QJsonObject sec = cfg.value(QStringLiteral("flowControl")).toObject();
     if (!sec.value(QStringLiteral("enabled")).toBool())
         return;
+    // 边沿语义（2026-11-10 审核）：同一个流程重复的同状态不上报。
+    // 补全 stopped / error / abandoned 终态后，一次停止可能连发多个终态信号，
+    // 不去重会让 PLC 连收多条 IDLE；从没进过忙碌态的终态也不该凭空发 IDLE。
+    if (busy) {
+        if (m_busyFlows.contains(flowName))
+            return;
+        m_busyFlows.insert(flowName);
+    } else {
+        if (!m_busyFlows.remove(flowName))
+            return;
+    }
     const QString content = sec.value(busy ? QStringLiteral("busyContent")
                                            : QStringLiteral("idleContent")).toString();
     const QString sep = sec.value(QStringLiteral("separator")).toString();

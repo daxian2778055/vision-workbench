@@ -1678,6 +1678,16 @@ MainWindow::MainWindow(QWidget *parent, bool previewOnly) :
         m_execStatus->setPauseIcons(toolbarGlyph(ToolGlyph::Pause), toolbarGlyph(ToolGlyph::Start));
         m_execStatus->setExecutorProvider([this]() { return m_executor; });
 
+        // VM 5.2.5 响应配置：发送结果要在主窗口日志栏可见。此前 responseSent 全仓只有
+        // emit 没有接收者，发送失败仅 VFP_DEBUG，现场完全看不出来（2026-11-10 审核）。
+        // 只记失败，避免每轮成功响应刷屏；同样走 logMessage 以同步到运行界面「界面日志」。
+        connect(CommResponseManager::instance(), &CommResponseManager::responseSent,
+                this, [this](const QString &device, const QByteArray &, bool ok) {
+                    if (!ok)
+                        logMessage(QStringLiteral("通信响应发送失败：设备 %1 不存在或未连接")
+                                       .arg(device));
+                });
+
         // ---- P2：状态栏右侧「缩放百分比 + 版本号」（VM 4.4 状态栏口径）----
         {
             const QString statusLabelStyle =
@@ -2066,17 +2076,25 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
     connect(ex, &FlowExecutor::executionStarted, this, [this, ex]() {
         if (ex == m_executor) onExecutionStarted();
     });
-    // VM 5.2.5 流程控制响应：忙碌=开始、空闲=结束（不按当前激活流程过滤：后台流程状态同样要上报）
+    // VM 5.2.5 流程控制响应：忙碌=开始、空闲=结束（不按当前激活流程过滤：后台流程状态同样要上报）。
+    // 旧实现只在 executionFinished 发 IDLE，手动停止 / 运行错误 / 终局撤除时 PLC 会
+    // 一直停在 BUSY（2026-11-10 审核）。统一用 reportIdle 覆盖全部终态，
+    // 重复终态由 CommResponseManager 的边沿去重吞掉。
+    auto reportIdle = [ex]() {
+        FlowScene *s = ex->flowScene();
+        CommResponseManager::instance()->handleFlowState(
+            s ? s->flowName() : QString(), false);
+    };
     connect(ex, &FlowExecutor::executionStarted, this, [ex]() {
         FlowScene *s = ex->flowScene();
         CommResponseManager::instance()->handleFlowState(s ? s->flowName() : QString(), true);
     });
-    connect(ex, &FlowExecutor::executionFinished, this, [ex]() {
-        FlowScene *s = ex->flowScene();
-        CommResponseManager::instance()->handleFlowState(s ? s->flowName() : QString(), false);
+    connect(ex, &FlowExecutor::executionFinished, this, [reportIdle]() {
+        reportIdle();
     });
-    connect(ex, &FlowExecutor::executionStopped, this, [this, ex]() {
+    connect(ex, &FlowExecutor::executionStopped, this, [this, ex, reportIdle]() {
         if (ex == m_executor) onExecutionStopped();
+        reportIdle();
     });
     connect(ex, &FlowExecutor::executionFinished, this, [this, ex]() {
         if (ex == m_executor) onExecutionFinished();
@@ -2116,17 +2134,20 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
     connect(ex, &FlowExecutor::executionResumed, this, [this, ex]() {
         if (ex == m_executor && m_execStatus) m_execStatus->onResumed();
     });
-    connect(ex, &FlowExecutor::executionError, this, [this, ex](const QString &err) {
+    connect(ex, &FlowExecutor::executionError, this, [this, ex, reportIdle](const QString &err) {
         if (ex == m_executor) onExecutionError(err);
         else logMessage(QStringLiteral("流程错误: %1").arg(err));
+        reportIdle();   // 错误也是终态：不能让 PLC 卡在 BUSY
     });
     // P3d（终局撤除）：令牌收尾超时 ⇒ 可观测终态。专用信号不走 executionStopped——
     // 后者会解锁图，而此刻被放弃的工作线程可能仍在跑；这里只更新状态栏与按钮态。
     // 日志直接记 payload（原因串自带语境：令牌收尾超时与终态处置），避免与控制器
     // 的状态栏提示句形成同句双份。
-    connect(ex, &FlowExecutor::executionAbandoned, this, [this, ex](const QString &why) {
+    connect(ex, &FlowExecutor::executionAbandoned, this,
+            [this, ex, reportIdle](const QString &why) {
         if (ex == m_executor && m_execStatus) m_execStatus->onAbandoned(why);
         logMessage(why);
+        reportIdle();   // 终局撤除同样要回到 IDLE
     });
 
     // ── 全局 UI：运行模式变更 → 刷新所有场景 MVS 节点的像素格式可用性 ──

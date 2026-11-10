@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QJsonObject>
+#include <QSet>
 #include <QString>
 
 /// VM 5.2.5 响应配置运行期：方案加载 / 流程控制 / 相机响应 → 向指定通信设备发送指定内容。
@@ -31,4 +32,8 @@ private:
     /// 读 section["device"] 并发送（空设备/未连接只留痕，不伪造成功）
     void sendResponse(const QJsonObject &section, const QByteArray &payload);
     static QByteArray terminator(const QJsonObject &section);
+
+    /// 当前处于忙碌态的流程名。流程状态是**边沿**语义：补了 stopped/error/abandoned
+    /// 终态后，一次停止可能连发多个终态信号，必须去重否则 PLC 收到多条 IDLE。
+    QSet<QString> m_busyFlows;
 };
