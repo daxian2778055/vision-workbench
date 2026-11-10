@@ -628,6 +628,16 @@ CommunicationNodeBase *CommunicationManager::deviceNode(const QString &name) con
     return m_devices.value(name, nullptr);
 }
 
+bool CommunicationManager::isDataUploadEnabled(const QString &deviceName) const
+{
+    CommunicationNodeBase *node = deviceNode(deviceName);
+    // 设备不存在时视为启用：调用方多为"数据到达后的消费判定"，
+    // 未知设备不该被静默改写为“不上传”（事件路径也不依赖本判定）。
+    if (!node) return true;
+    const QVariant v = node->getParam(QStringLiteral("dataUpload"));
+    return v.isValid() ? v.toBool() : true;
+}
+
 bool CommunicationManager::openDevice(const QString &name)
 {
     // 锁内只取指针；openConnection 会同步 emit connectionOpened，必须在锁外执行

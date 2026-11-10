@@ -171,6 +171,11 @@ void GlobalTriggerManager::onDataReceived(const QString &deviceName, const QByte
 {
     QString text = QString::fromUtf8(data).trimmed();
 
+    // 手册 5.2.1 数据上传：未启用时设备数据不上传软件——字符串触发（含方案自动切换）
+    // 不受理；同页明示「无论该参数是否启用，不影响接收事件」，故下方事件解析段照常执行。
+    const bool uploadEnabled =
+        CommunicationManager::instance()->isDataUploadEnabled(deviceName);
+
     // 1. 字符串触发：锁内定位首个匹配并拷贝必要信息，锁外再受理/计数，避免长任务持锁
     bool matched = false;
     QString flowName;
@@ -181,7 +186,7 @@ void GlobalTriggerManager::onDataReceived(const QString &deviceName, const QByte
     // P3c：令牌强引用副本——锁内取出、出锁后持它调用（路由期间本体不会被收尾）。
     std::shared_ptr<FlowExecutorToken> routeToken;
 
-    {
+    if (uploadEnabled) {
         QMutexLocker locker(&m_mutex);
         for (auto it = m_stringTriggers.constBegin(); it != m_stringTriggers.constEnd(); ++it) {
             const TriggerEntry &entry = it.value();

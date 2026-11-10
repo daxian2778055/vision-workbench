@@ -54,6 +54,11 @@ public:
     /// 获取设备的通信节点实例
     CommunicationNodeBase *deviceNode(const QString &name) const;
 
+    /// 数据上传（VM 5.2.1「完全一致的参数」）：设备数据是否上传给软件
+    /// （显示/全局脚本/字符串触发/方案自动切换）。未启用时接收事件仍照常解析。
+    /// 节点参数 dataUpload 缺省按 true（存量配置无该键 = 保持历史行为）。
+    bool isDataUploadEnabled(const QString &deviceName) const;
+
     // ---- 接收事件管理 ----
     QStringList receiveEventIds() const;
     ReceiveEvent *receiveEvent(const QString &id) const;

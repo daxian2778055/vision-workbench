@@ -93,7 +93,18 @@ void CommDeviceConfigDialog::addFrameRows(QFormLayout *form, const QJsonObject &
     m_frameTermEdit->setPlaceholderText(QStringLiteral("自定义结束符，支持转义：\\r \\n \\t \\xHH"));
     m_frameTermEdit->setToolTip(QStringLiteral("帧结束符，支持转义：\\r \\n \\t \\xHH"));
 
-    // 官方「完全一致的参数」（手册 5.2.1）：自动重连 / 接收结束符。
+    // 官方「完全一致的参数」（手册 5.2.1）：数据上传 / 自动重连 / 接收结束符。
+    // 数据上传：启用时设备数据上传给软件（显示/全局脚本/字符串触发/方案自动切换）；
+    // 未启用时不上传，但不影响接收事件（手册原文明示）。存量配置无该键按启用处理。
+    m_dataUploadCheck = new QCheckBox(QStringLiteral("接收数据上传到软件"), host);
+    m_dataUploadCheck->setObjectName(QStringLiteral("commDataUpload"));
+    m_dataUploadCheck->setChecked(
+        initial.value(QStringLiteral("dataUpload")).toBool(true));
+    m_dataUploadCheck->setToolTip(QStringLiteral(
+        "启用后，设备接收的数据上传给软件：界面显示、全局脚本、字符串触发、方案自动切换等。\n"
+        "未启用时数据不上传；无论是否启用，接收事件仍按规则解析设备数据。"));
+    form->addRow(QStringLiteral("数据上传"), m_dataUploadCheck);
+
     m_autoReconnectCheck = new QCheckBox(QStringLiteral("断线后自动重连"), host);
     m_autoReconnectCheck->setObjectName(QStringLiteral("commAutoReconnect"));
     m_autoReconnectCheck->setChecked(
@@ -279,6 +290,8 @@ void CommDeviceConfigDialog::onAccept()
     // 组帧参数（三类通用）：0/空 = 不启用（行为与历史一致）
     m_config[QStringLiteral("frameTimeoutMs")] =
         m_frameTimeoutSpin ? m_frameTimeoutSpin->value() : 0;
+    if (m_dataUploadCheck)
+        m_config[QStringLiteral("dataUpload")] = m_dataUploadCheck->isChecked();
     if (m_autoReconnectCheck)
         m_config[QStringLiteral("autoReconnect")] = m_autoReconnectCheck->isChecked();
     // 接收结束符 → 历史 frameTerminator 键：不启用=空；标准选项=转义串；自定义=输入框。

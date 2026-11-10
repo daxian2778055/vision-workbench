@@ -108,6 +108,10 @@ void ReceiveDataNode::onDataReceived(const QString &deviceName, const QByteArray
 
     if (deviceName != boundDevice) return;
 
+    // 手册 5.2.1 数据上传：未启用时设备数据不上传软件——本算子属软件数据消费端，整帧忽略。
+    // （接收事件不受该开关影响，其解析在 GlobalTriggerManager 的另一段路径里。）
+    if (!CommunicationManager::instance()->isDataUploadEnabled(deviceName)) return;
+
     QString text = QString::fromUtf8(data).trimmed();
     if (text.isEmpty()) return;
 

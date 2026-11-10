@@ -38,6 +38,7 @@
 #include "ModbusNode.h"
 #include "PlcCommNode.h"
 #include "NodeBase.h"
+#include "ReceiveDataNode.h"
 #include "NodeTemplateStore.h"
 #include "RecipeManager.h"
 #include "NodeRegistry.h"
@@ -146,6 +147,8 @@ private slots:
     // VM4.4 B4-3c：PLC 寄存器官方工具条（首地址/个数/同步/发送测试/最大化/空白行/清空）
     void testPlcRegisterToolbar();
     void testModbusRegisterToolbar();
+    // B4-3e：数据上传开关（手册 5.2.1「完全一致的参数」第三项）
+    void testDataUploadSwitch();
     void testFrameAssemblerReentrancy();
     void testDisconnectClearsFrameBuffer();
     void testConfigDialogPreservesUnmanagedKeys();
@@ -3248,6 +3251,95 @@ void CommWritebackTest::testModbusRegisterToolbar()
 
     bar->clearRows();
     QCOMPARE(table->rowCount(), 0);
+}
+
+void CommWritebackTest::testDataUploadSwitch()
+{
+    // 手册 5.2.1「完全一致的参数·数据上传」：未启用时设备数据不上传软件
+    // （界面显示/全局脚本/字符串触发/方案自动切换不受理），但同页明示
+    // 「无论该参数是否启用，不影响接收事件」。
+    // ① 配置对话框：默认勾选（存量配置无键=启用）；取消勾选后落 dataUpload=false；播种回显。
+    {
+        CommDeviceConfigDialog defaults(QStringLiteral("TCP"), QJsonObject(), nullptr);
+        auto *check = defaults.findChild<QCheckBox *>(QStringLiteral("commDataUpload"));
+        QVERIFY2(check != nullptr, "配置对话框缺少数据上传勾选");
+        QVERIFY2(check->isChecked(), "数据上传默认应为启用（存量配置无该键）");
+
+        QJsonObject seeded;
+        seeded[QStringLiteral("dataUpload")] = false;
+        CommDeviceConfigDialog offDlg(QStringLiteral("TCP"), seeded, nullptr);
+        auto *off = offDlg.findChild<QCheckBox *>(QStringLiteral("commDataUpload"));
+        QVERIFY(off && !off->isChecked());                  // 播种回显
+        QVERIFY(QMetaObject::invokeMethod(&offDlg, "onAccept", Qt::DirectConnection));
+        QCOMPARE(offDlg.config().value(QStringLiteral("dataUpload")).toBool(true), false);
+
+        CommDeviceConfigDialog onDlg(QStringLiteral("TCP"), QJsonObject(), nullptr);
+        QVERIFY(QMetaObject::invokeMethod(&onDlg, "onAccept", Qt::DirectConnection));
+        QCOMPARE(onDlg.config().value(QStringLiteral("dataUpload")).toBool(false), true);
+    }
+
+    // ② 运行时门控：同一台 TCP 设备（dataUpload=false）→ 字符串触发不受理、
+    //    接收事件照常触发、接收数据算子不缓存；打开上传后字符串触发恢复受理。
+    QTcpServer server;
+    QTcpSocket *peer = nullptr;
+    server.listen(QHostAddress::LocalHost, 0);
+    QVERIFY2(server.isListening(), qPrintable(server.errorString()));
+    QObject::connect(&server, &QTcpServer::newConnection, &server,
+                     [&server, &peer]() { peer = server.nextPendingConnection(); });
+
+    auto *cm = CommunicationManager::instance();
+    auto *gtm = GlobalTriggerManager::instance();
+    QJsonObject cfg = tcpClientConfig(server.serverPort());
+    cfg[QStringLiteral("dataUpload")] = false;
+    cfg[QStringLiteral("frameTerminator")] = QStringLiteral("\\r\\n");   // 本地回环下按整帧判定
+    QVERIFY(cm->addDevice(QStringLiteral("SIM_UPLOAD"), QStringLiteral("TCP"), cfg));
+    QVERIFY(!cm->isDataUploadEnabled(QStringLiteral("SIM_UPLOAD")));
+    QVERIFY(cm->isDataUploadEnabled(QStringLiteral("SIM_UPLOAD_DEF")));   // 未知设备=启用
+    QVERIFY(cm->openDevice(QStringLiteral("SIM_UPLOAD")));
+    QTRY_VERIFY_WITH_TIMEOUT(peer != nullptr, 3000);
+
+    QSignalSpy firedSpy(gtm, &GlobalTriggerManager::triggerFired);
+    QVERIFY(gtm->setStringTrigger(QStringLiteral("UP"), QStringLiteral("FlowUpload")));
+    auto *ev = new TextProtocolReceiveEvent(QStringLiteral("EV_UP"),
+                                            QStringLiteral("SIM_UPLOAD"));
+    ev->setDelimiter(QStringLiteral(","));
+    QVERIFY(cm->addReceiveEvent(ev));
+    QVERIFY(gtm->setEventTrigger(QStringLiteral("EV_UP"), QStringLiteral("FlowEvent")));
+
+    ReceiveDataNode receiver;
+    receiver.init();
+    receiver.setParam(QStringLiteral("deviceName"), QStringLiteral("SIM_UPLOAD"));
+    QSignalSpy rxSpy(cm, &CommunicationManager::dataReceived);
+
+    // 上传关闭：字符串触发不得受理；接收事件必须照常触发；接收算子不缓存
+    peer->write("UP,1\r\n");
+    peer->flush();
+    QTRY_VERIFY_WITH_TIMEOUT(rxSpy.count() >= 1, 3000);
+    QTest::qWait(150);   // 给（不应发生的）字符串触发留时间窗
+    QCOMPARE(firedSpy.count(), 1);
+    QCOMPARE(firedSpy.at(0).at(0).toString(), QStringLiteral("FlowEvent"));
+    QCOMPARE(receiver.getParam(QStringLiteral("lastData")).toString(), QString());
+
+    // 打开上传（热更新参数表）：同一格式的数据现在由字符串触发受理，
+    // 接收事件按“匹配即返回”的既有语义不再二次触发；接收算子缓存数据。
+    auto *node = cm->deviceNode(QStringLiteral("SIM_UPLOAD"));
+    QVERIFY(node != nullptr);
+    node->setParam(QStringLiteral("dataUpload"), true);
+    QVERIFY(cm->isDataUploadEnabled(QStringLiteral("SIM_UPLOAD")));
+
+    const int before = firedSpy.count();
+    peer->write("UP,2\r\n");
+    peer->flush();
+    QTRY_VERIFY_WITH_TIMEOUT(firedSpy.count() > before, 3000);
+    QCOMPARE(firedSpy.last().at(0).toString(), QStringLiteral("FlowUpload"));
+    QCOMPARE(receiver.getParam(QStringLiteral("lastData")).toString(),
+             QStringLiteral("UP,2"));
+
+    gtm->removeEventTrigger(QStringLiteral("EV_UP"));
+    cm->removeReceiveEvent(QStringLiteral("EV_UP"));
+    gtm->removeStringTrigger(QStringLiteral("UP"));
+    QVERIFY(cm->closeDevice(QStringLiteral("SIM_UPLOAD")));
+    QVERIFY(cm->removeDevice(QStringLiteral("SIM_UPLOAD")));
 }
 
 QTEST_MAIN(CommWritebackTest)
