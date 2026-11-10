@@ -80,6 +80,8 @@ protected:
 private slots:
     /// 结果表格待提交行落表（150ms 合并窗口，约等于按轮一行）
     void commitTableRows();
+    /// 运行状态轮询：把全流程/单一流程的运行中状态刷到控件
+    void updateRunStatusLabels();
 
 private:
     QStringList m_knownNodeNames;   /// 已知节点名（绑定体检用）
@@ -138,4 +140,13 @@ private:
     QMap<QString, QList<int>> m_nodeValueMap;    /// 节点名 -> 数值控件位置
     QMap<QString, QList<int>> m_nodeLightMap;    /// 节点名 -> 状态灯控件位置
     QMap<QString, QList<int>> m_nodeIoMap;       /// 节点名 -> IO 状态控件位置
+
+    // 多图像（官方「多图像」）：每画面一个 HalconWindow，按节点图像源推送
+    QList<HalconWindow *> m_multiViews;
+    QList<const RuntimeControl *> m_multiCtrls;
+    QMap<QString, QList<int>> m_nodeMultiImageMap;
+    // 运行状态（官方「运行状态」）：500ms 轮询流程执行器状态
+    QList<QLabel *> m_statusLabels;
+    QList<const RuntimeControl *> m_statusCtrls;
+    QTimer *m_statusTimer = nullptr;
 };

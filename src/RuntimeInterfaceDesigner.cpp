@@ -1,6 +1,7 @@
 #include "RuntimeInterfaceDesigner.h"
 #include "RuntimeInterfaceView.h"
 #include "GlobalVariableManager.h"
+#include "GlobalTriggerManager.h"
 #include "FocusGuard.h"
 
 #include <QListWidget>
@@ -52,7 +53,7 @@ bool paletteTypeOf(const QListWidgetItem *item, RuntimeControlType *out)
     const int t = v.toInt();
     // 上界必须跟住枚举最后一项：旧实现停在 IoStatus，导致参数设置/图表等
     // 后加类型在「添加控件」按钮与双击路径里被静默丢弃。
-    if (t < 0 || t > int(RuntimeControlType::ConditionalLight)) return false;
+    if (t < 0 || t > int(RuntimeControlType::UiLog)) return false;
     *out = RuntimeControlType(t);
     return true;
 }
@@ -792,6 +793,62 @@ void DesignerControlFrame::paintEvent(QPaintEvent *event)
                    QStringLiteral("%1（%2 条条件）").arg(text).arg(ctrl.lightConditions.size()));
         break;
     }
+    case RuntimeControlType::MultiImage: {
+        p.setPen(QPen(QColor(0x3a, 0x3a, 0x4a), 1));
+        p.setBrush(QColor(0x11, 0x11, 0x14));
+        p.drawRect(body);
+        const int n = qMax(1, ctrl.imagePanels.size());
+        int cols = n, rows = 1;
+        if (ctrl.multiImageLayout == 1) { cols = 1; rows = n; }
+        else if (ctrl.multiImageLayout == 2) {
+            cols = qMax(1, (n + 1) / 2);
+            rows = qMax(1, (n + cols - 1) / cols);
+        }
+        const int cw = qMax(10, body.width() / cols);
+        const int chh = qMax(10, body.height() / rows);
+        for (int i = 0; i < n; ++i) {
+            const QRect cell(body.left() + (i % cols) * cw, body.top() + (i / cols) * chh,
+                             qMax(8, cw - 4), qMax(8, chh - 4));
+            p.setPen(QPen(QColor(0x2e, 0x2e, 0x3a), 1));
+            p.setBrush(Qt::NoBrush);
+            p.drawRect(cell);
+            // 空画面表（手工 JSON / addControl 直建）退化成单个占位画面，不越界取名字
+            const QString nm = multiImagePanelName(ctrl.imagePanels, i);
+            p.setPen(QColor(0x8a, 0x8e, 0x9c));
+            p.drawText(cell.adjusted(3, 2, -3, -2), Qt::AlignLeft | Qt::AlignTop, nm);
+        }
+        break;
+    }
+    case RuntimeControlType::RunStatus: {
+        p.setPen(QPen(QColor(0x3a, 0x3a, 0x4a), 1));
+        p.setBrush(QColor(ctrl.idleBgColor));
+        p.drawRoundedRect(body, ctrl.cornerRadius, ctrl.cornerRadius);
+        p.setPen(QColor(ctrl.idleFgColor));
+        p.drawText(body, Qt::AlignCenter,
+                   ctrl.statusSource == QLatin1String("flow")
+                       ? QStringLiteral("停止运行 · %1").arg(ctrl.statusFlow)
+                       : QStringLiteral("停止运行 · 全流程"));
+        break;
+    }
+    case RuntimeControlType::UiLog: {
+        p.setPen(QPen(QColor(0x3a, 0x3a, 0x4a), 1));
+        p.setBrush(QColor(ctrl.logRowBgColor));
+        p.drawRect(body);
+        int top = body.top();
+        if (ctrl.logShowTitle) {
+            p.setBrush(QColor(ctrl.logHeaderBgColor));
+            p.drawRect(QRect(body.left(), body.top(), body.width(), 20));
+            p.setPen(QColor(ctrl.logFontColor));
+            p.drawText(QRect(body.left() + 6, body.top(), body.width() - 12, 20),
+                       Qt::AlignLeft | Qt::AlignVCenter, ctrl.displayTitle());
+            top += 22;
+        }
+        p.setPen(QColor(0x8a, 0x8e, 0x9c));
+        p.drawText(QRect(body.left() + 6, top, body.width() - 12, body.bottom() - top),
+                   Qt::AlignLeft | Qt::AlignTop,
+                   QStringLiteral("日志…\n日志…\n日志…"));
+        break;
+    }
     }
 
     // 缩放指示（右下角）
@@ -999,6 +1056,7 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
         struct PaletteItem { const char *group; const char *label; RuntimeControlType type; };
         const PaletteItem items[] = {
             { "基础", "图像",     RuntimeControlType::ImageView },
+            { "基础", "多图像",   RuntimeControlType::MultiImage },
             { "基础", "字符设置", RuntimeControlType::ValueDisplay },
             { "基础", "文本框",   RuntimeControlType::TextLabel },
             { "基础", "信号灯",   RuntimeControlType::StatusLight },
@@ -1008,7 +1066,9 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
             { "基础", "设置变量", RuntimeControlType::SetVariable },
             { "基础", "条件信号灯", RuntimeControlType::ConditionalLight },
             { "基础", "运行控制", RuntimeControlType::RunControl },
+            { "基础", "运行状态", RuntimeControlType::RunStatus },
             { "基础", "OK/NG",    RuntimeControlType::OkNgCount },
+            { "基础", "界面日志", RuntimeControlType::UiLog },
             { "布局", "组合框",   RuntimeControlType::ComboBox },
             { "布局", "Tab页",    RuntimeControlType::TabPage },
             { "图表", "表格",     RuntimeControlType::ResultTable },
@@ -1504,6 +1564,123 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     connect(m_lightCondTable, &QTableWidget::cellChanged,
             this, &RuntimeInterfaceDesigner::onLightCondChanged);
 
+    // 多图像 / 运行状态 / 界面日志（官方「控件配置参考」）
+    m_multiGroup = new QGroupBox(QStringLiteral("多图像"), this);
+    m_multiGroup->setObjectName(QStringLiteral("designerMultiImageGroup"));
+    {
+        auto *multiForm = new QFormLayout(m_multiGroup);
+        m_multiCount = new QSpinBox(m_multiGroup);
+        m_multiCount->setObjectName(QStringLiteral("designerMultiImageCount"));
+        m_multiCount->setRange(1, 6);
+        m_multiLayout = new QComboBox(m_multiGroup);
+        m_multiLayout->setObjectName(QStringLiteral("designerMultiImageLayout"));
+        m_multiLayout->addItem(QStringLiteral("横向"), 0);
+        m_multiLayout->addItem(QStringLiteral("纵向"), 1);
+        m_multiLayout->addItem(QStringLiteral("网格"), 2);
+        m_multiTable = new QTableWidget(0, 2, m_multiGroup);
+        m_multiTable->setObjectName(QStringLiteral("designerMultiImageTable"));
+        m_multiTable->setHorizontalHeaderLabels(
+            {QStringLiteral("画面名称"), QStringLiteral("图像源")});
+        m_multiTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+        m_multiTable->verticalHeader()->setVisible(false);
+        m_multiTable->setMaximumHeight(150);
+        multiForm->addRow(QStringLiteral("画面数量"), m_multiCount);
+        multiForm->addRow(QStringLiteral("布局"), m_multiLayout);
+        multiForm->addRow(m_multiTable);
+        propOuter->addWidget(m_multiGroup);
+        connect(m_multiCount, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int n) {
+            if (m_updatingProps) return;
+            RuntimeControl *c = selectedControl();
+            if (!c || c->type != RuntimeControlType::MultiImage) return;
+            while (c->imagePanels.size() > n) c->imagePanels.removeLast();
+            while (c->imagePanels.size() < n) {
+                MultiImagePanel p;
+                p.name = QStringLiteral("画面%1").arg(c->imagePanels.size() + 1);
+                c->imagePanels.append(p);
+            }
+            refreshPropertyPanel();
+            rebuildCanvas();
+        });
+        connect(m_multiLayout, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
+            if (m_updatingProps) return;
+            RuntimeControl *c = selectedControl();
+            if (!c || c->type != RuntimeControlType::MultiImage) return;
+            c->multiImageLayout = m_multiLayout->currentData().toInt();
+            rebuildCanvas();
+        });
+        connect(m_multiTable, &QTableWidget::cellChanged, this, [this](int row, int col) {
+            if (m_updatingProps || col != 0) return;
+            RuntimeControl *c = selectedControl();
+            if (!c || c->type != RuntimeControlType::MultiImage) return;
+            if (row < 0 || row >= c->imagePanels.size()) return;
+            if (auto *it = m_multiTable->item(row, 0))
+                c->imagePanels[row].name = it->text();
+            rebuildCanvas();
+        });
+    }
+
+    m_statusGroup = new QGroupBox(QStringLiteral("运行状态"), this);
+    m_statusGroup->setObjectName(QStringLiteral("designerRunStatusGroup"));
+    {
+        auto *statusForm = new QFormLayout(m_statusGroup);
+        m_statusSource = new QComboBox(m_statusGroup);
+        m_statusSource->setObjectName(QStringLiteral("designerRunStatusSource"));
+        m_statusRadius = new QSpinBox(m_statusGroup);
+        m_statusRadius->setObjectName(QStringLiteral("designerRunStatusRadius"));
+        m_statusRadius->setRange(0, 40);
+        statusForm->addRow(QStringLiteral("数据源"), m_statusSource);
+        statusForm->addRow(QStringLiteral("圆角半径"), m_statusRadius);
+        propOuter->addWidget(m_statusGroup);
+        connect(m_statusSource, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
+            if (m_updatingProps) return;
+            RuntimeControl *c = selectedControl();
+            if (!c || c->type != RuntimeControlType::RunStatus) return;
+            const QString data = m_statusSource->currentData().toString();
+            if (data == QLatin1String("all")) {
+                c->statusSource = QStringLiteral("all");
+                c->statusFlow.clear();
+            } else {
+                c->statusSource = QStringLiteral("flow");
+                c->statusFlow = data;
+            }
+            rebuildCanvas();
+        });
+        connect(m_statusRadius, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int v) {
+            if (m_updatingProps) return;
+            RuntimeControl *c = selectedControl();
+            if (!c || c->type != RuntimeControlType::RunStatus) return;
+            c->cornerRadius = v;
+            rebuildCanvas();
+        });
+    }
+
+    m_logGroup = new QGroupBox(QStringLiteral("界面日志"), this);
+    m_logGroup->setObjectName(QStringLiteral("designerUiLogGroup"));
+    {
+        auto *logForm = new QFormLayout(m_logGroup);
+        m_logShowTitle = new QCheckBox(QStringLiteral("显示标题栏"), m_logGroup);
+        m_logShowTitle->setObjectName(QStringLiteral("designerUiLogShowTitle"));
+        m_logMaxLines = new QSpinBox(m_logGroup);
+        m_logMaxLines->setObjectName(QStringLiteral("designerUiLogMaxLines"));
+        m_logMaxLines->setRange(10, 5000);
+        logForm->addRow(QString(), m_logShowTitle);
+        logForm->addRow(QStringLiteral("最大行数"), m_logMaxLines);
+        propOuter->addWidget(m_logGroup);
+        connect(m_logShowTitle, &QCheckBox::toggled, this, [this](bool on) {
+            if (m_updatingProps) return;
+            RuntimeControl *c = selectedControl();
+            if (!c || c->type != RuntimeControlType::UiLog) return;
+            c->logShowTitle = on;
+            rebuildCanvas();
+        });
+        connect(m_logMaxLines, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int v) {
+            if (m_updatingProps) return;
+            RuntimeControl *c = selectedControl();
+            if (!c || c->type != RuntimeControlType::UiLog) return;
+            c->logMaxLines = v;
+        });
+    }
+
     auto *propHint = new QLabel(QStringLiteral("绑定方式说明:\n· 全局变量: 实时显示全局变量值\n· 节点输出: 绑定流程中算子的输出\n· 动作: 按钮点击触发的流程操作\n· 表格列: 每轮把各列当前值提交为一行\n  格式: 变量名,变量名 或 节点:模块完整名\n· IO状态: 绑定相机IO控制节点\n  灯=执行成功, 文本=线值/错误"), propGroup);
     propHint->setWordWrap(true);
     propHint->setStyleSheet("color:#8a8a9a;font-size:11px;");
@@ -1815,6 +1992,9 @@ if (type == RuntimeControlType::SetVariable)      { geo.setWidth(300); geo.setHe
 if (type == RuntimeControlType::RunControl)       { geo.setWidth(320); geo.setHeight(56); }
 if (type == RuntimeControlType::OkNgCount)        { geo.setWidth(320); geo.setHeight(110); }
 if (type == RuntimeControlType::ConditionalLight) { geo.setWidth(260); geo.setHeight(80); }
+if (type == RuntimeControlType::MultiImage)       { geo.setWidth(440); geo.setHeight(300); }
+if (type == RuntimeControlType::RunStatus)        { geo.setWidth(240); geo.setHeight(80); }
+if (type == RuntimeControlType::UiLog)            { geo.setWidth(440); geo.setHeight(220); }
 
 // 拖放：按落点判定所属区域（官方 9.1 固定栏），再在该区域的坐标系里定位。
 // 画布区坐标相对画布区左上角、随窗口缩放；固定栏坐标相对本栏左上角、1:1 不缩放。
@@ -1873,6 +2053,19 @@ if (type == RuntimeControlType::ConditionalLight) {
     ng.color = QStringLiteral("#e74c4c");
     ng.text = QStringLiteral("NG");
     ctrl->lightConditions << ok << ng;
+}
+// 多图像开箱即用：默认两个画面（官方推荐先设画面数量再配数据源）
+if (type == RuntimeControlType::MultiImage) {
+    for (int i = 0; i < 2; ++i) {
+        MultiImagePanel p;
+        p.name = QStringLiteral("画面%1").arg(i + 1);
+        ctrl->imagePanels.append(p);
+    }
+}
+// 运行状态：默认看全流程（单一流程时在属性面板选流程名）
+if (type == RuntimeControlType::RunStatus) {
+    ctrl->statusSource = QStringLiteral("all");
+    ctrl->bindType.clear();
 }
 rebuildCanvas();
 const int idx = m_layout.currentPage()->indexOf(ctrl);
@@ -2586,6 +2779,9 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
         }
         if (m_chartGroup) m_chartGroup->setVisible(false);
         if (m_lightCondGroup) m_lightCondGroup->setVisible(false);
+        if (m_multiGroup) m_multiGroup->setVisible(false);
+        if (m_statusGroup) m_statusGroup->setVisible(false);
+        if (m_logGroup) m_logGroup->setVisible(false);
         if (m_bindKey2Combo && m_dataForm)
             m_dataForm->setRowVisible(m_bindKey2Combo, false);
         m_raiseBtn->setEnabled(false);
@@ -2632,13 +2828,18 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
     const bool isRun = (ctrl->type == RuntimeControlType::RunControl);
     const bool isOkNg = (ctrl->type == RuntimeControlType::OkNgCount);
     const bool isCondLight = (ctrl->type == RuntimeControlType::ConditionalLight);
+    const bool isMulti = (ctrl->type == RuntimeControlType::MultiImage);
+    const bool isStatus = (ctrl->type == RuntimeControlType::RunStatus);
+    const bool isLog = (ctrl->type == RuntimeControlType::UiLog);
     if (m_dataForm && m_actionConfigBtn) {
         m_dataForm->setRowVisible(m_actionConfigBtn, isButton);
         // 参数设置/开关控制/组合框固定绑节点、设置变量/OK-NG 固定绑全局，只藏「绑定方式」
         m_dataForm->setRowVisible(m_bindTypeCombo,
                                   !isButton && !isParam && !isSwitch && !isCombo
-                                      && !isSetter && !isOkNg && !isRun);
-        m_dataForm->setRowVisible(m_bindKeyCombo, !isButton && !isRun);
+                                      && !isSetter && !isOkNg && !isRun
+                                      && !isMulti && !isStatus && !isLog);
+        m_dataForm->setRowVisible(m_bindKeyCombo,
+                                  !isButton && !isRun && !isMulti && !isStatus && !isLog);
         if (m_bindKey2Combo) m_dataForm->setRowVisible(m_bindKey2Combo, isOkNg);
         if (m_paramKeyEdit)
             m_dataForm->setRowVisible(m_paramKeyEdit, isParam || isSwitch || isCombo);
@@ -2745,6 +2946,75 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
                 m_lightCondTable->setItem(r, 2, new QTableWidgetItem(lc.color));
                 m_lightCondTable->setItem(r, 3, new QTableWidgetItem(lc.text));
             }
+        }
+    }
+
+    // 多图像 / 运行状态 / 界面日志（官方「控件配置参考」）
+    if (m_multiGroup) {
+        m_multiGroup->setVisible(isMulti);
+        m_multiGroup->setEnabled(isMulti);
+        if (isMulti) {
+            const int n = qMax(1, ctrl->imagePanels.size());
+            m_multiCount->setValue(n);
+            const int li = m_multiLayout->findData(ctrl->multiImageLayout);
+            m_multiLayout->setCurrentIndex(li >= 0 ? li : 0);
+            m_multiTable->setRowCount(n);
+            for (int i = 0; i < n; ++i) {
+                m_multiTable->setItem(
+                    i, 0, new QTableWidgetItem(multiImagePanelName(ctrl->imagePanels, i)));
+                auto *combo = new QComboBox(m_multiTable);
+                combo->addItem(QStringLiteral("(无)"), QString());
+                for (const QString &nn : m_nodeNames)
+                    combo->addItem(nn, nn);
+                const QString key = ctrl->imagePanels.value(i).bindKey;
+                int idx = combo->findData(key);
+                if (idx < 0 && !key.isEmpty()) {
+                    combo->addItem(QStringLiteral("（已失效：%1）").arg(key), key);
+                    idx = combo->count() - 1;
+                }
+                combo->setCurrentIndex(idx >= 0 ? idx : 0);
+                m_multiTable->setCellWidget(i, 1, combo);
+                connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                        this, [this, i, combo](int) {
+                    if (m_updatingProps) return;
+                    RuntimeControl *c2 = selectedControl();
+                    if (!c2 || c2->type != RuntimeControlType::MultiImage) return;
+                    if (i >= c2->imagePanels.size()) return;
+                    c2->imagePanels[i].bindKey = combo->currentData().toString();
+                    rebuildCanvas();
+                });
+            }
+        }
+    }
+    if (m_statusGroup) {
+        m_statusGroup->setVisible(isStatus);
+        m_statusGroup->setEnabled(isStatus);
+        if (isStatus) {
+            m_statusSource->clear();
+            m_statusSource->addItem(QStringLiteral("全流程"), QStringLiteral("all"));
+            for (const QString &f : GlobalTriggerManager::instance()->registeredFlowNames())
+                m_statusSource->addItem(f, f);
+            int idx = 0;
+            if (ctrl->statusSource == QLatin1String("flow")) {
+                const int fi = m_statusSource->findData(ctrl->statusFlow);
+                if (fi < 0 && !ctrl->statusFlow.isEmpty()) {
+                    m_statusSource->addItem(
+                        QStringLiteral("（已失效：%1）").arg(ctrl->statusFlow), ctrl->statusFlow);
+                    idx = m_statusSource->count() - 1;
+                } else {
+                    idx = fi >= 0 ? fi : 0;
+                }
+            }
+            m_statusSource->setCurrentIndex(idx);
+            m_statusRadius->setValue(ctrl->cornerRadius);
+        }
+    }
+    if (m_logGroup) {
+        m_logGroup->setVisible(isLog);
+        m_logGroup->setEnabled(isLog);
+        if (isLog) {
+            m_logShowTitle->setChecked(ctrl->logShowTitle);
+            m_logMaxLines->setValue(ctrl->logMaxLines);
         }
     }
 

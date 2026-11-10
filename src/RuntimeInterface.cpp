@@ -27,8 +27,18 @@ QString runtimeControlTypeName(RuntimeControlType type)
     case RuntimeControlType::RunControl:  return QStringLiteral("运行控制");
     case RuntimeControlType::OkNgCount:   return QStringLiteral("OK/NG");
     case RuntimeControlType::ConditionalLight: return QStringLiteral("条件信号灯");
+    case RuntimeControlType::MultiImage:  return QStringLiteral("多图像");
+    case RuntimeControlType::RunStatus:   return QStringLiteral("运行状态");
+    case RuntimeControlType::UiLog:       return QStringLiteral("界面日志");
     }
     return QStringLiteral("未知");
+}
+
+QString multiImagePanelName(const QList<MultiImagePanel> &panels, int index)
+{
+    const int i = qMax(0, index);
+    const QString name = panels.value(i).name;
+    return name.isEmpty() ? QStringLiteral("画面%1").arg(i + 1) : name;
 }
 
 bool runtimeControlTypeFromName(const QString &name, RuntimeControlType &out)
@@ -53,6 +63,9 @@ bool runtimeControlTypeFromName(const QString &name, RuntimeControlType &out)
     if (name == QStringLiteral("运行控制")) { out = RuntimeControlType::RunControl; return true; }
     if (name == QStringLiteral("OK/NG")) { out = RuntimeControlType::OkNgCount; return true; }
     if (name == QStringLiteral("条件信号灯")) { out = RuntimeControlType::ConditionalLight; return true; }
+    if (name == QStringLiteral("多图像"))   { out = RuntimeControlType::MultiImage; return true; }
+    if (name == QStringLiteral("运行状态")) { out = RuntimeControlType::RunStatus; return true; }
+    if (name == QStringLiteral("界面日志")) { out = RuntimeControlType::UiLog; return true; }
     return false;
 }
 
@@ -197,6 +210,34 @@ static QJsonObject controlToJson(const RuntimeControl &c)
         }
         o["lightConditions"] = conds;
     }
+    if (c.type == RuntimeControlType::MultiImage) {
+        QJsonArray panels;
+        for (const MultiImagePanel &p : c.imagePanels) {
+            QJsonObject po;
+            po["name"] = p.name;
+            po["bindKey"] = p.bindKey;
+            panels.append(po);
+        }
+        o["imagePanels"] = panels;
+        o["multiImageLayout"] = c.multiImageLayout;
+    }
+    if (c.type == RuntimeControlType::RunStatus) {
+        o["statusSource"] = c.statusSource;
+        o["statusFlow"] = c.statusFlow;
+        o["idleBgColor"] = c.idleBgColor;
+        o["idleFgColor"] = c.idleFgColor;
+        o["busyBgColor"] = c.busyBgColor;
+        o["busyFgColor"] = c.busyFgColor;
+        o["cornerRadius"] = c.cornerRadius;
+    }
+    if (c.type == RuntimeControlType::UiLog) {
+        o["logShowTitle"] = c.logShowTitle;
+        o["logMaxLines"] = c.logMaxLines;
+        o["logHeaderBgColor"] = c.logHeaderBgColor;
+        o["logRowBgColor"] = c.logRowBgColor;
+        o["logAltRowBgColor"] = c.logAltRowBgColor;
+        o["logFontColor"] = c.logFontColor;
+    }
     // 按钮动作表：只在有内容时写出，旧方案不膨胀
     if (c.type == RuntimeControlType::Button && !c.actions.isEmpty()) {
         QJsonArray acts;
@@ -317,6 +358,36 @@ static RuntimeControl controlFromJson(const QJsonObject &o, RuntimeControlType t
             ctrl.lightConditions.append(lc);
             if (ctrl.lightConditions.size() >= 64) break;
         }
+    }
+    if (ctrl.type == RuntimeControlType::MultiImage) {
+        const QJsonArray panels = o["imagePanels"].toArray();
+        for (int i = 0; i < panels.size() && i < 16; ++i) {
+            const QJsonObject po = panels.at(i).toObject();
+            MultiImagePanel p;
+            p.name = po["name"].toString(QStringLiteral("画面%1").arg(i + 1));
+            p.bindKey = po["bindKey"].toString();
+            ctrl.imagePanels.append(p);
+        }
+        ctrl.multiImageLayout = qBound(0, o["multiImageLayout"].toInt(0), 2);
+    }
+    if (ctrl.type == RuntimeControlType::RunStatus) {
+        ctrl.statusSource = o["statusSource"].toString(QStringLiteral("all"))
+                                    == QLatin1String("flow")
+                                ? QStringLiteral("flow") : QStringLiteral("all");
+        ctrl.statusFlow = o["statusFlow"].toString();
+        ctrl.idleBgColor = o["idleBgColor"].toString(QStringLiteral("#4a4a52"));
+        ctrl.idleFgColor = o["idleFgColor"].toString(QStringLiteral("#d0d0d8"));
+        ctrl.busyBgColor = o["busyBgColor"].toString(QStringLiteral("#3db97a"));
+        ctrl.busyFgColor = o["busyFgColor"].toString(QStringLiteral("#ffffff"));
+        ctrl.cornerRadius = qBound(0, o["cornerRadius"].toInt(0), 40);
+    }
+    if (ctrl.type == RuntimeControlType::UiLog) {
+        ctrl.logShowTitle = o["logShowTitle"].toBool(true);
+        ctrl.logMaxLines = qBound(10, o["logMaxLines"].toInt(500), 5000);
+        ctrl.logHeaderBgColor = o["logHeaderBgColor"].toString(QStringLiteral("#20262a"));
+        ctrl.logRowBgColor = o["logRowBgColor"].toString(QStringLiteral("#17171c"));
+        ctrl.logAltRowBgColor = o["logAltRowBgColor"].toString(QStringLiteral("#1c1c22"));
+        ctrl.logFontColor = o["logFontColor"].toString(QStringLiteral("#d8d8e0"));
     }
 
     if (ctrl.type == RuntimeControlType::ResultTable) {
@@ -586,6 +657,14 @@ QStringList RuntimeInterface::staleBindings(const QSet<QString> &globals,
     QStringList bad;
     for (const RuntimeInterfacePage &page : pages) {
         for (const RuntimeControl &c : page.controls) {
+            // 多图像：每画面各自绑一个节点图像源
+            if (c.type == RuntimeControlType::MultiImage) {
+                if (!nodes.isEmpty()) {
+                    for (const MultiImagePanel &p : c.imagePanels)
+                        if (!p.bindKey.isEmpty() && !nodes.contains(p.bindKey))
+                            bad << QStringLiteral("node:%1").arg(p.bindKey);
+                }
+            }
             if (c.bindKey.isEmpty() || c.bindType.isEmpty())
                 continue;
             if (c.bindType == QLatin1String("global") && !globals.contains(c.bindKey))

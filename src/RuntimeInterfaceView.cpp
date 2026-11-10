@@ -6,8 +6,12 @@
 #include "RuntimeInterfaceView.h"
 #include "HalconWindow.h"
 #include "GlobalVariableManager.h"
+#include "GlobalTriggerManager.h"
+#include "FlowExecutor.h"
+#include "UiLogBus.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QGridLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <QPainter>
@@ -575,6 +579,12 @@ void RuntimeInterfaceView::clearWidgets()
     m_nodeValueMap.clear();
     m_nodeLightMap.clear();
     m_nodeIoMap.clear();
+    m_multiViews.clear();
+    m_multiCtrls.clear();
+    m_nodeMultiImageMap.clear();
+    m_statusLabels.clear();
+    m_statusCtrls.clear();
+    if (m_statusTimer) m_statusTimer->stop();
 }
 
 void RuntimeInterfaceView::rebuildWidgets()
@@ -675,8 +685,41 @@ void RuntimeInterfaceView::rebuildWidgets()
                         m_nodeIoMap[ctrl.bindKey].append(m_ioLights.size() - 1);
                 }
             }
+            // 登记多图像（每画面一个 HalconWindow）
+            else if (ctrl.type == RuntimeControlType::MultiImage) {
+                for (int i = 0; i < ctrl.imagePanels.size(); ++i) {
+                    auto *hw = w->findChild<HalconWindow *>(
+                        QStringLiteral("RuntimeMultiImage_%1").arg(i));
+                    if (!hw) continue;
+                    m_multiViews.append(hw);
+                    m_multiCtrls.append(&ctrl);
+                    const QString key = ctrl.imagePanels.at(i).bindKey;
+                    if (!key.isEmpty())
+                        m_nodeMultiImageMap[key].append(m_multiViews.size() - 1);
+                }
+            }
+            // 登记运行状态：控件根本身就是 QLabel，findChild 不含自身，需先试根
+            else if (ctrl.type == RuntimeControlType::RunStatus) {
+                auto *lbl = qobject_cast<QLabel *>(w);
+                if (!lbl)
+                    lbl = w->findChild<QLabel *>(QStringLiteral("RuntimeRunStatusLabel"));
+                if (lbl) {
+                    m_statusLabels.append(lbl);
+                    m_statusCtrls.append(&ctrl);
+                }
+            }
         }
     }
+
+    // 运行状态：500ms 轮询执行器状态（无控件时不空转）
+    if (!m_statusTimer) {
+        m_statusTimer = new QTimer(this);
+        m_statusTimer->setInterval(500);
+        connect(m_statusTimer, &QTimer::timeout,
+                this, &RuntimeInterfaceView::updateRunStatusLabels);
+    }
+    if (m_statusLabels.isEmpty()) m_statusTimer->stop();
+    else { m_statusTimer->start(); updateRunStatusLabels(); }
 
     // 多页：切页时同步 currentPageIndex 并按该页自己的内层 Tab 刷新。
     // 连接放在所有页容器建好之后，避免 addTab 触发的首次 currentChanged
@@ -1104,6 +1147,91 @@ QWidget *RuntimeInterfaceView::createControlWidget(const RuntimeControl &ctrl)
             "QWidget { background-color: #22222a; border: 1px solid #3a3a5c; border-radius: 4px; }"));
         return host;
     }
+    case RuntimeControlType::MultiImage: {
+        auto *host = new QWidget();
+        auto *grid = new QGridLayout(host);
+        grid->setContentsMargins(2, 2, 2, 2);
+        grid->setSpacing(2);
+        const int n = qMax(1, ctrl.imagePanels.size());
+        int cols = n;
+        if (ctrl.multiImageLayout == 1) cols = 1;
+        else if (ctrl.multiImageLayout == 2) cols = qMax(1, (n + 1) / 2);
+        for (int i = 0; i < n; ++i) {
+            auto *cell = new QWidget(host);
+            auto *cl = new QVBoxLayout(cell);
+            cl->setContentsMargins(0, 0, 0, 0);
+            cl->setSpacing(0);
+            // 空画面表（手工 JSON / addControl 直建）退化成单个占位画面，不越界取名字
+            const QString name = multiImagePanelName(ctrl.imagePanels, i);
+            auto *title = new QLabel(name, cell);
+            title->setStyleSheet(QStringLiteral(
+                "QLabel { background-color: rgba(30,30,46,220); color: #d8d8e0;"
+                " padding: 1px 6px; font-size: 11px; }"));
+            auto *hw = new HalconWindow(cell);
+            hw->setObjectName(QStringLiteral("RuntimeMultiImage_%1").arg(i));
+            cl->addWidget(title);
+            cl->addWidget(hw, 1);
+            grid->addWidget(cell, i / cols, i % cols);
+        }
+        host->setStyleSheet(QStringLiteral(
+            "QWidget { background-color: #1e1e21; border: 1px solid #3a3a5c; }"));
+        return host;
+    }
+    case RuntimeControlType::RunStatus: {
+        auto *label = new QLabel(QStringLiteral("停止运行"), nullptr);
+        label->setObjectName(QStringLiteral("RuntimeRunStatusLabel"));
+        label->setAlignment(Qt::AlignCenter);
+        label->setStyleSheet(QStringLiteral(
+            "QLabel { background-color: %1; color: %2; font-size: %3px; font-weight: bold;"
+            " border: 1px solid #3a3a5c; border-radius: %4px; }")
+            .arg(ctrl.idleBgColor, ctrl.idleFgColor)
+            .arg(ctrl.fontSize).arg(ctrl.cornerRadius));
+        return label;
+    }
+    case RuntimeControlType::UiLog: {
+        auto *host = new QWidget();
+        auto *lay = new QVBoxLayout(host);
+        lay->setContentsMargins(0, 0, 0, 0);
+        lay->setSpacing(0);
+        if (ctrl.logShowTitle) {
+            auto *title = new QLabel(ctrl.displayTitle(), host);
+            title->setStyleSheet(QStringLiteral(
+                "QLabel { background-color: %1; color: %2; padding: 2px 8px; font-size: 11px; }")
+                .arg(ctrl.logHeaderBgColor, ctrl.logFontColor));
+            lay->addWidget(title);
+        }
+        auto *table = new QTableWidget(0, 1, host);
+        table->setObjectName(QStringLiteral("RuntimeUiLogTable"));
+        table->setHorizontalHeaderLabels({QStringLiteral("日志")});
+        table->verticalHeader()->setVisible(false);
+        table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        table->setSelectionMode(QAbstractItemView::NoSelection);
+        table->setAlternatingRowColors(true);
+        table->horizontalHeader()->setStyleSheet(QStringLiteral(
+            "QHeaderView::section { background-color: %1; color: %2; border: none; }")
+            .arg(ctrl.logHeaderBgColor, ctrl.logFontColor));
+        table->setStyleSheet(QStringLiteral(
+            "QTableWidget { background-color: %1; alternate-background-color: %2;"
+            " color: %3; border: 1px solid #3a3a5c; font-size: 11px; }")
+            .arg(ctrl.logRowBgColor, ctrl.logAltRowBgColor, ctrl.logFontColor));
+        for (const QString &line : UiLogBus::instance()->recent(ctrl.logMaxLines)) {
+            const int r = table->rowCount();
+            table->insertRow(r);
+            table->setItem(r, 0, new QTableWidgetItem(line));
+        }
+        const int maxLines = qMax(10, ctrl.logMaxLines);
+        connect(UiLogBus::instance(), &UiLogBus::messageLogged, table,
+                [table, maxLines](const QString &msg) {
+            const int r = table->rowCount();
+            table->insertRow(r);
+            table->setItem(r, 0, new QTableWidgetItem(msg));
+            while (table->rowCount() > maxLines)
+                table->removeRow(0);
+            table->scrollToBottom();
+        });
+        lay->addWidget(table, 1);
+        return host;
+    }
     case RuntimeControlType::LineChart:
         return new RuntimeChartPanel(ctrl);
     case RuntimeControlType::MultiLineChart:
@@ -1477,13 +1605,53 @@ void RuntimeInterfaceView::commitTableRows()
 
 void RuntimeInterfaceView::pushImage(const QString &nodeFullName, const HalconCpp::HImage &image)
 {
-    const auto it = m_nodeImageMap.constFind(nodeFullName);
-    if (it == m_nodeImageMap.constEnd()) return;
     if (!image.IsInitialized()) return;
-    for (int vi : it.value()) {
-        if (vi < 0 || vi >= m_imageViews.size()) continue;
-        // S6：合并式推送（latest wins）——高频轮次下避免 UI 线程逐帧深拷贝转换而积压
-        m_imageViews[vi]->requestImage(image, nodeFullName);
+    const auto it = m_nodeImageMap.constFind(nodeFullName);
+    if (it != m_nodeImageMap.constEnd()) {
+        for (int vi : it.value()) {
+            if (vi < 0 || vi >= m_imageViews.size()) continue;
+            // S6：合并式推送（latest wins）——高频轮次下避免 UI 线程逐帧深拷贝转换而积压
+            m_imageViews[vi]->requestImage(image, nodeFullName);
+        }
+    }
+    // 多图像：同一节点可同时供给多个画面
+    const auto mit = m_nodeMultiImageMap.constFind(nodeFullName);
+    if (mit != m_nodeMultiImageMap.constEnd()) {
+        for (int vi : mit.value()) {
+            if (vi < 0 || vi >= m_multiViews.size()) continue;
+            m_multiViews[vi]->requestImage(image, nodeFullName);
+        }
+    }
+}
+
+void RuntimeInterfaceView::updateRunStatusLabels()
+{
+    if (m_statusLabels.isEmpty()) return;
+    auto *gtm = GlobalTriggerManager::instance();
+    for (int i = 0; i < m_statusCtrls.size() && i < m_statusLabels.size(); ++i) {
+        const RuntimeControl &ctrl = *m_statusCtrls[i];
+        auto busyState = [](ExecutionState st) {
+            return st == ExecutionState::Running || st == ExecutionState::Paused;
+        };
+        bool busy = false;
+        if (ctrl.statusSource == QLatin1String("flow") && !ctrl.statusFlow.isEmpty()) {
+            if (FlowExecutor *ex = gtm->executorForFlow(ctrl.statusFlow))
+                busy = busyState(ex->getState());
+        } else {
+            for (const QString &flow : gtm->registeredFlowNames()) {
+                if (FlowExecutor *ex = gtm->executorForFlow(flow)) {
+                    if (busyState(ex->getState())) { busy = true; break; }
+                }
+            }
+        }
+        QLabel *label = m_statusLabels[i];
+        label->setText(busy ? QStringLiteral("运行中") : QStringLiteral("停止运行"));
+        label->setStyleSheet(QStringLiteral(
+            "QLabel { background-color: %1; color: %2; font-size: %3px; font-weight: bold;"
+            " border: 1px solid #3a3a5c; border-radius: %4px; }")
+            .arg(busy ? ctrl.busyBgColor : ctrl.idleBgColor,
+                 busy ? ctrl.busyFgColor : ctrl.idleFgColor)
+            .arg(ctrl.fontSize).arg(ctrl.cornerRadius));
     }
 }
 

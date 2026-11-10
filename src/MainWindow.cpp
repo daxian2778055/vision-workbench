@@ -181,6 +181,7 @@ using namespace HalconCpp;
 #include <QDockWidget>
 #include <QSizePolicy>
 #include "AppLog.h"
+#include "UiLogBus.h"
 
 namespace {
 
@@ -5474,6 +5475,8 @@ void MainWindow::onSwitchLanguage()
 
 void MainWindow::logMessage(const QString &message)
 {
+    // 运行界面「界面日志」控件订阅同一日志流（手册：实时显示软件的日志信息）
+    UiLogBus::instance()->publish(message);
     ui->logTextEdit->appendPlainText(QString("[%1] %2").arg(QDateTime::currentDateTime().toString()).arg(message));
     // 折叠态下始终把视口滚到最新一行（否则"最近一条"看不到）
     if (!m_logExpanded && ui->logTextEdit->verticalScrollBar())

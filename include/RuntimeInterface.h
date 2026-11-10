@@ -31,8 +31,21 @@ enum class RuntimeControlType {
     SetVariable,  /// 设置变量：运行界面把全局变量写成指定值（官方 9.3 基础组）
     RunControl,   /// 运行控制：开始 / 停止 / 单次执行（官方 9.3 基础组）
     OkNgCount,    /// OK/NG：双路计数显示（官方 9.3 基础组）
-    ConditionalLight /// 条件信号灯：按数值条件切换灯色与文本（官方 9.3 基础组）
+    ConditionalLight, /// 条件信号灯：按数值条件切换灯色与文本（官方 9.3 基础组）
+    MultiImage,   /// 多图像：同一控件内并排显示多路图像（官方「多图像」）
+    RunStatus,    /// 运行状态：显示全流程/单一流程的运行中与停止运行（官方「运行状态」）
+    UiLog         /// 界面日志：实时显示软件日志（官方「界面日志」）
 };
+
+/// 多图像的一个画面（官方：画面名称 + 图像源）
+struct MultiImagePanel {
+    QString name;
+    QString bindKey;   /// 图像源 = 节点完整名（与 ImageView 同一绑定口径）
+};
+
+/// 多图像画面的显示名：画面表为空或某画面未命名时退化成「画面N」。
+/// 越界索引返回占位名而不是越界读（空画面表 = 单占位画面）。
+QString multiImagePanelName(const QList<MultiImagePanel> &panels, int index);
 
 /// 条件信号灯的一条条件（官方 9.3）：按列表顺序求值，首个满足的条件生效
 struct LightCondition {
@@ -116,6 +129,26 @@ struct RuntimeControl {
     QString bindKey2;
     /// ConditionalLight 专用：按顺序求值，首个满足的条件生效
     QList<LightCondition> lightConditions;
+    /// MultiImage 专用（官方「多图像」）：画面数量由列表长度决定；
+    /// 布局 0=横向 / 1=纵向 / 2=网格。每画面一个节点图像源。
+    QList<MultiImagePanel> imagePanels;
+    int multiImageLayout = 0;
+    /// RunStatus 专用（官方「运行状态」）：statusSource = "all" 全流程 / "flow" 单一流程；
+    /// 忙碌 = 该流程（或任一流程）处于 Running/Paused。空/停 = 空闲显示。
+    QString statusSource = QStringLiteral("all");
+    QString statusFlow;
+    QString idleBgColor = QStringLiteral("#4a4a52");
+    QString idleFgColor = QStringLiteral("#d0d0d8");
+    QString busyBgColor = QStringLiteral("#3db97a");
+    QString busyFgColor = QStringLiteral("#ffffff");
+    int cornerRadius = 0;
+    /// UiLog 专用（官方「界面日志」）：标题栏开关与最大保留行数
+    bool logShowTitle = true;
+    int logMaxLines = 500;
+    QString logHeaderBgColor = QStringLiteral("#20262a");
+    QString logRowBgColor = QStringLiteral("#17171c");
+    QString logAltRowBgColor = QStringLiteral("#1c1c22");
+    QString logFontColor = QStringLiteral("#d8d8e0");
     /// 图表（官方 9.3）：线图阵列每源一图 / 多数据线图同绘一图 / 饼图按当前值占比
     QVector<ChartSeries> chartSeries;
     int chartHistoryLimit = 30;   ///< 官方「最新执行数据条数」（线图类）
@@ -155,6 +188,9 @@ struct RuntimeControl {
         case RuntimeControlType::RunControl:  return QStringLiteral("运行控制");
         case RuntimeControlType::OkNgCount:   return QStringLiteral("OK/NG");
         case RuntimeControlType::ConditionalLight: return QStringLiteral("条件信号灯");
+        case RuntimeControlType::MultiImage:  return QStringLiteral("多图像");
+        case RuntimeControlType::RunStatus:   return QStringLiteral("运行状态");
+        case RuntimeControlType::UiLog:       return QStringLiteral("界面日志");
         }
         return QStringLiteral("控件");
     }

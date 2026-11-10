@@ -11,6 +11,8 @@
 #include "YoloAnnotation.h"
 #include "RuntimeInterface.h"
 #include "RuntimeInterfaceView.h"
+#include "HalconWindow.h"
+#include "UiLogBus.h"
 #include "ExportWriteCheck.h"
 #include "FocusGuard.h"
 #include "RuntimeInterfaceDesigner.h"
@@ -104,6 +106,7 @@ void designerPaletteAddsNewAndPreviouslyBlockedControls();
 void runtimeSetVariableWritesTypedGlobal();
 void runtimeRunControlEmitsActions();
 void runtimeOkNgAndConditionalLightUpdate();
+void runtimeMultiImageRunStatusAndUiLog();
 void b3NewControlsRoundTrip();
 void designerB3PropertyPanelsWork();
     void staleBindingsIgnoresValidAndUnbound();
@@ -1963,6 +1966,8 @@ void UiGuardsTest::designerPaletteAddsNewAndPreviouslyBlockedControls()
     };
     const QStringList names = {QStringLiteral("设置变量"), QStringLiteral("运行控制"),
                                QStringLiteral("OK/NG"), QStringLiteral("条件信号灯"),
+                               QStringLiteral("多图像"), QStringLiteral("运行状态"),
+                               QStringLiteral("界面日志"),
                                QStringLiteral("参数设置"), QStringLiteral("线图阵列")};
     for (const QString &name : names) {
         const int row = rowOf(name);
@@ -2094,10 +2099,72 @@ void UiGuardsTest::runtimeOkNgAndConditionalLightUpdate()
     gv->removeVariable(scoreName);
 }
 
+void UiGuardsTest::runtimeMultiImageRunStatusAndUiLog()
+{
+    // B3-3：多图像（每画面一个窗口）、运行状态（空闲文本 + 轮询入口）、界面日志（订阅日志总线）
+    RuntimeInterface layout;
+    auto *multi = layout.currentPage()->addControl(RuntimeControlType::MultiImage,
+                                                   QRect(20, 20, 440, 300));
+    multi->multiImageLayout = 0;
+    MultiImagePanel p1;
+    p1.name = QStringLiteral("画面甲");
+    p1.bindKey = QStringLiteral("模块1.图像源");
+    MultiImagePanel p2;
+    p2.name = QStringLiteral("画面乙");
+    multi->imagePanels << p1 << p2;
+    auto *status = layout.currentPage()->addControl(RuntimeControlType::RunStatus,
+                                                    QRect(20, 340, 240, 80));
+    status->statusSource = QStringLiteral("all");
+    auto *uilog = layout.currentPage()->addControl(RuntimeControlType::UiLog,
+                                                   QRect(20, 440, 440, 220));
+    uilog->logShowTitle = true;
+    uilog->logMaxLines = 50;
+
+    RuntimeInterfaceView view;
+    view.setInterface(layout);
+    auto *m0 = view.findChild<HalconWindow *>(QStringLiteral("RuntimeMultiImage_0"));
+    auto *m1 = view.findChild<HalconWindow *>(QStringLiteral("RuntimeMultiImage_1"));
+    QVERIFY2(m0 && m1, "多图像画面未按数量创建");
+    auto *statusLabel = view.findChild<QLabel *>(QStringLiteral("RuntimeRunStatusLabel"));
+    QVERIFY2(statusLabel, "运行状态控件缺失");
+    QCOMPARE(statusLabel->text(), QStringLiteral("停止运行"));
+    // 轮询入口确实登记了控件：人为改字后触发一次刷新必须被刷回
+    statusLabel->setText(QStringLiteral("STALE"));
+    QVERIFY(QMetaObject::invokeMethod(&view, "updateRunStatusLabels", Qt::DirectConnection));
+    QCOMPARE(statusLabel->text(), QStringLiteral("停止运行"));
+
+    auto *logTable = view.findChild<QTableWidget *>(QStringLiteral("RuntimeUiLogTable"));
+    QVERIFY2(logTable, "界面日志控件缺失");
+    const int before = logTable->rowCount();
+    UiLogBus::instance()->publish(QStringLiteral("UT_B3_UI_LOG_LINE"));
+    QCOMPARE(logTable->rowCount(), before + 1);
+    QVERIFY2(logTable->item(logTable->rowCount() - 1, 0)->text().contains(
+                 QStringLiteral("UT_B3_UI_LOG_LINE")), "日志未实时追加");
+
+    // 绑定体检：多图像画面的图像源也要参与失效判定
+    const QStringList stale = layout.staleBindings({}, {QStringLiteral("别的模块")});
+    QVERIFY2(stale.contains(QStringLiteral("node:模块1.图像源")),
+             "多图像画面绑定未参与体检");
+
+    // 边界：空画面表 / 未命名画面都要退回占位名，不能越界读
+    const QList<MultiImagePanel> emptyPanels;
+    QCOMPARE(multiImagePanelName(emptyPanels, 0), QStringLiteral("画面1"));
+    QCOMPARE(multiImagePanelName(emptyPanels, 3), QStringLiteral("画面4"));
+    QCOMPARE(multiImagePanelName(emptyPanels, -1), QStringLiteral("画面1"));
+    MultiImagePanel unnamed;
+    QCOMPARE(multiImagePanelName(QList<MultiImagePanel>{unnamed}, 0), QStringLiteral("画面1"));
+    RuntimeInterface emptyMulti;
+    emptyMulti.currentPage()->addControl(RuntimeControlType::MultiImage, QRect(0, 0, 240, 160));
+    RuntimeInterfaceView emptyView;
+    emptyView.setInterface(emptyMulti);
+    QVERIFY2(emptyView.findChild<HalconWindow *>(QStringLiteral("RuntimeMultiImage_0")),
+             "空画面表未退化出占位画面");
+}
+
 void UiGuardsTest::b3NewControlsRoundTrip()
 {
     // 类型名映射：枚举每一项都必须能按名字往返（新增类型漏映射会在这里判红）
-    for (int i = 0; i <= int(RuntimeControlType::ConditionalLight); ++i) {
+    for (int i = 0; i <= int(RuntimeControlType::UiLog); ++i) {
         const auto type = RuntimeControlType(i);
         RuntimeControlType back = RuntimeControlType::TextLabel;
         QVERIFY2(runtimeControlTypeFromName(runtimeControlTypeName(type), back),
@@ -2129,9 +2196,27 @@ void UiGuardsTest::b3NewControlsRoundTrip()
     c2.text = QStringLiteral("LOW");
     cond->lightConditions << c1 << c2;
 
+    // B3-3：多图像 / 运行状态 / 界面日志（官方「控件配置参考」）
+    auto *multi = page.addControl(RuntimeControlType::MultiImage, QRect(0, 380, 440, 300));
+    multi->multiImageLayout = 2;
+    MultiImagePanel mp1;
+    mp1.name = QStringLiteral("相机A");
+    mp1.bindKey = QStringLiteral("模块1.图像源");
+    MultiImagePanel mp2;
+    mp2.name = QStringLiteral("相机B");
+    multi->imagePanels << mp1 << mp2;
+    auto *status = page.addControl(RuntimeControlType::RunStatus, QRect(0, 700, 240, 80));
+    status->statusSource = QStringLiteral("flow");
+    status->statusFlow = QStringLiteral("流程1");
+    status->cornerRadius = 8;
+    auto *uilog = page.addControl(RuntimeControlType::UiLog, QRect(0, 800, 440, 220));
+    uilog->logShowTitle = false;
+    uilog->logMaxLines = 200;
+    uilog->logAltRowBgColor = QStringLiteral("#123456");
+
     RuntimeInterfacePage page2;
     QVERIFY(page2.fromJson(page.toJson()));
-    QCOMPARE(page2.controls.size(), 4);
+    QCOMPARE(page2.controls.size(), 7);
     QCOMPARE(page2.controls.at(0).type, RuntimeControlType::SetVariable);
     QCOMPARE(page2.controls.at(0).bindKey, QStringLiteral("v_target"));
     QCOMPARE(page2.controls.at(1).type, RuntimeControlType::RunControl);
@@ -2145,6 +2230,19 @@ void UiGuardsTest::b3NewControlsRoundTrip()
     QCOMPARE(page2.controls.at(3).lightConditions.at(0).threshold, 10.0);
     QCOMPARE(page2.controls.at(3).lightConditions.at(0).color, QStringLiteral("#112233"));
     QCOMPARE(page2.controls.at(3).lightConditions.at(1).text, QStringLiteral("LOW"));
+    QCOMPARE(page2.controls.at(4).type, RuntimeControlType::MultiImage);
+    QCOMPARE(page2.controls.at(4).multiImageLayout, 2);
+    QCOMPARE(page2.controls.at(4).imagePanels.size(), 2);
+    QCOMPARE(page2.controls.at(4).imagePanels.at(0).name, QStringLiteral("相机A"));
+    QCOMPARE(page2.controls.at(4).imagePanels.at(0).bindKey, QStringLiteral("模块1.图像源"));
+    QCOMPARE(page2.controls.at(5).type, RuntimeControlType::RunStatus);
+    QCOMPARE(page2.controls.at(5).statusSource, QStringLiteral("flow"));
+    QCOMPARE(page2.controls.at(5).statusFlow, QStringLiteral("流程1"));
+    QCOMPARE(page2.controls.at(5).cornerRadius, 8);
+    QCOMPARE(page2.controls.at(6).type, RuntimeControlType::UiLog);
+    QCOMPARE(page2.controls.at(6).logShowTitle, false);
+    QCOMPARE(page2.controls.at(6).logMaxLines, 200);
+    QCOMPARE(page2.controls.at(6).logAltRowBgColor, QStringLiteral("#123456"));
 }
 
 // B3-2 设计器属性面板：条件信号灯条件表可增删、OK/NG 第二绑定可写回，且两组按类型互斥显示。

@@ -210,6 +210,17 @@ QLabel *m_geometryLabel = nullptr;   /// 布局组只读显示尺寸/位置（�
     QTableWidget *m_lightCondTable = nullptr;
     QPushButton *m_lightCondAddBtn = nullptr;
     QPushButton *m_lightCondDelBtn = nullptr;
+    // 多图像 / 运行状态 / 界面日志（官方「控件配置参考」）
+    QGroupBox *m_multiGroup = nullptr;
+    QSpinBox *m_multiCount = nullptr;
+    QComboBox *m_multiLayout = nullptr;
+    QTableWidget *m_multiTable = nullptr;
+    QGroupBox *m_statusGroup = nullptr;
+    QComboBox *m_statusSource = nullptr;
+    QSpinBox *m_statusRadius = nullptr;
+    QGroupBox *m_logGroup = nullptr;
+    QCheckBox *m_logShowTitle = nullptr;
+    QSpinBox *m_logMaxLines = nullptr;
 
     int m_selected = -1;
     bool m_updatingProps = false;

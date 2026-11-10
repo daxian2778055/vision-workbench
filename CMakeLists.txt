@@ -319,6 +319,7 @@ src/DeepOcrSelfTest.cpp   # --selftest-deepocr：换机后验证 HALCON 运行�
     src/RecordNode.cpp
     # Communication architecture refactor
     src/CommunicationManager.cpp
+    src/UiLogBus.cpp
     src/CommunicationManagerDialog.cpp
     src/CommMonitorDialog.cpp
     src/ReceiveEvent.cpp
@@ -558,6 +559,7 @@ set(HEADERS
     include/CommunicationManager.h
     include/CommunicationManagerDialog.h
     include/CommMonitorDialog.h
+    include/UiLogBus.h
     include/ReceiveEvent.h
     include/SendEvent.h
     include/HeartbeatManager.h
