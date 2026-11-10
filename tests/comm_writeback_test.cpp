@@ -18,6 +18,11 @@
 #include <QUdpSocket>
 #include <QJsonObject>
 #include <QTemporaryDir>
+#include <QMenu>
+#include <QAction>
+#include <QApplication>
+#include <QInputDialog>
+#include <QTimer>
 
 #include "SerialCommNode.h"
 #include <QSerialPort>
@@ -125,6 +130,11 @@ private slots:
     void testDialogToggleConnection();
     // VM4.4 UI B4：通信管理左侧导航 + 堆叠页（6 项）结构回归
     void testCommunicationManagerLeftNav();
+    // VM4.4 UI B4-3a：设备/事件右键重命名（连带引用跟随 + 四表菜单 + 组帧缓冲迁移）
+    void testRenameDeviceFollowsReferences();
+    void testRenameEventsFollowTriggers();
+    void testRenameDeviceFrameBufferFollows();
+    void testDialogContextMenuRename();
     void testFrameAssemblerReentrancy();
     void testDisconnectClearsFrameBuffer();
     void testConfigDialogPreservesUnmanagedKeys();
@@ -2668,6 +2678,268 @@ void CommWritebackTest::pendingSendDrainsToZero()
         QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
 
     QCOMPARE(CommunicationNodeBase::pendingSendCount(flow), before);
+}
+
+void CommWritebackTest::testRenameDeviceFollowsReferences()
+{
+    // VM 5.2.1：设备列表右键重命名。连接保留；接收/发送事件绑定、心跳条目跟随；
+    // 改名后到达的数据必须挂新名（信号转发若仍捕获建节点时的旧名即判红）。
+    QTcpServer plc;
+    QTcpSocket *peer = nullptr;
+    plc.listen(QHostAddress::LocalHost, 0);
+    QVERIFY2(plc.isListening(), qPrintable(plc.errorString()));
+    QObject::connect(&plc, &QTcpServer::newConnection, &plc,
+                     [&plc, &peer]() { peer = plc.nextPendingConnection(); });
+
+    auto *cm = CommunicationManager::instance();
+    auto *hb = HeartbeatManager::instance();
+    QVERIFY(cm->addDevice(QStringLiteral("REN_OLD"), QStringLiteral("TCP"),
+                          tcpClientConfig(plc.serverPort())));
+    QVERIFY(cm->openDevice(QStringLiteral("REN_OLD")));
+    QTRY_VERIFY_WITH_TIMEOUT(peer != nullptr, 3000);
+
+    auto *rx = new TextProtocolReceiveEvent(QStringLiteral("REN_RX"), QStringLiteral("REN_OLD"));
+    rx->setDelimiter(QStringLiteral(","));
+    QVERIFY(cm->addReceiveEvent(rx));
+    auto *tx = new TextDirectSendEvent(QStringLiteral("REN_TX"), QStringLiteral("REN_OLD"));
+    QVERIFY(cm->addSendEvent(tx));
+    QVERIFY(hb->registerHeartbeat(QStringLiteral("REN_OLD"), 60000));
+
+    QSignalSpy renamedSpy(cm, &CommunicationManager::deviceRenamed);
+    QSignalSpy dataSpy(cm, &CommunicationManager::dataReceived);
+    QVERIFY(cm->renameDevice(QStringLiteral("REN_OLD"), QStringLiteral("REN_NEW")));
+    QCOMPARE(renamedSpy.count(), 1);
+    QCOMPARE(renamedSpy.at(0).at(0).toString(), QStringLiteral("REN_OLD"));
+    QCOMPARE(renamedSpy.at(0).at(1).toString(), QStringLiteral("REN_NEW"));
+
+    QVERIFY(cm->hasDevice(QStringLiteral("REN_NEW")));
+    QVERIFY(!cm->hasDevice(QStringLiteral("REN_OLD")));
+    QVERIFY(cm->deviceInfo(QStringLiteral("REN_NEW")).isConnected);   // 连接不被打断
+    QCOMPARE(cm->deviceNode(QStringLiteral("REN_NEW"))->deviceName(), QStringLiteral("REN_NEW"));
+    QCOMPARE(rx->deviceName(), QStringLiteral("REN_NEW"));
+    QCOMPARE(tx->deviceName(), QStringLiteral("REN_NEW"));
+    bool hbFollowed = false;
+    for (const HeartbeatEntry &e : hb->entries())
+        if (e.deviceName == QStringLiteral("REN_NEW")) hbFollowed = true;
+    QVERIFY2(hbFollowed, "心跳条目未跟随设备重命名");
+
+    // 改名后对端发数据：必须按新名转发（旧名捕获的 lambda 会在这里露馅）
+    peer->write("PING\r\n");
+    peer->flush();
+    QTRY_VERIFY_WITH_TIMEOUT(dataSpy.count() >= 1, 3000);
+    QCOMPARE(dataSpy.last().at(0).toString(), QStringLiteral("REN_NEW"));
+
+    // 拒收面：空名 / 同名 / 旧名不存在 / 新名被占用
+    QVERIFY(!cm->renameDevice(QStringLiteral("REN_NEW"), QStringLiteral("   ")));
+    QVERIFY(!cm->renameDevice(QStringLiteral("REN_NEW"), QStringLiteral("REN_NEW")));
+    QVERIFY(!cm->renameDevice(QStringLiteral("NO_SUCH_DEV"), QStringLiteral("X")));
+    QVERIFY(cm->addDevice(QStringLiteral("REN_OCCUPIED"), QStringLiteral("TCP"),
+                          tcpClientConfig(plc.serverPort())));
+    QVERIFY(!cm->renameDevice(QStringLiteral("REN_NEW"), QStringLiteral("REN_OCCUPIED")));
+    // 新名两端空白被修剪
+    QVERIFY(cm->renameDevice(QStringLiteral("REN_NEW"), QStringLiteral("  REN_TRIM  ")));
+    QVERIFY(cm->hasDevice(QStringLiteral("REN_TRIM")));
+
+    hb->unregisterHeartbeat(QStringLiteral("REN_TRIM"));
+    cm->removeReceiveEvent(QStringLiteral("REN_RX"));
+    cm->removeSendEvent(QStringLiteral("REN_TX"));
+    QVERIFY(cm->removeDevice(QStringLiteral("REN_TRIM")));
+    QVERIFY(cm->removeDevice(QStringLiteral("REN_OCCUPIED")));
+}
+
+void CommWritebackTest::testRenameEventsFollowTriggers()
+{
+    // VM 5.2.2/5.2.3：事件列表右键重命名。事件触发映射跟随（条目 id/目标流程不变），
+    // 序列化按新 id 落盘；拒收面与设备同款。
+    auto *cm = CommunicationManager::instance();
+    auto *gtm = GlobalTriggerManager::instance();
+    QVERIFY(cm->addDevice(QStringLiteral("EVT_DEV"), QStringLiteral("TCP"),
+                          tcpClientConfig(1)));   // 不打开连接，仅登记
+
+    auto *rx = new TextProtocolReceiveEvent(QStringLiteral("EVT_OLD"), QStringLiteral("EVT_DEV"));
+    QVERIFY(cm->addReceiveEvent(rx));
+    QVERIFY(gtm->setEventTrigger(QStringLiteral("EVT_OLD"), QStringLiteral("FlowEvt")));
+
+    QSignalSpy rxRenamed(cm, &CommunicationManager::receiveEventRenamed);
+    QVERIFY(cm->renameReceiveEvent(QStringLiteral("EVT_OLD"), QStringLiteral("EVT_NEW")));
+    QCOMPARE(rxRenamed.count(), 1);
+    QVERIFY(cm->receiveEvent(QStringLiteral("EVT_NEW")) != nullptr);
+    QVERIFY(cm->receiveEvent(QStringLiteral("EVT_OLD")) == nullptr);
+    QCOMPARE(cm->receiveEvent(QStringLiteral("EVT_NEW"))->eventId(), QStringLiteral("EVT_NEW"));
+    QCOMPARE(gtm->flowForEventTrigger(QStringLiteral("EVT_NEW")), QStringLiteral("FlowEvt"));
+    QVERIFY(gtm->flowForEventTrigger(QStringLiteral("EVT_OLD")).isEmpty());
+
+    // 落盘面：toJson 里只有新 id（旧 id 不得残留）
+    const QJsonArray recvArr = cm->toJson().value(QStringLiteral("receiveEvents")).toArray();
+    bool newInJson = false, oldInJson = false;
+    for (const QJsonValue &v : recvArr) {
+        const QString id = v.toObject().value(QStringLiteral("id")).toString();
+        if (id == QStringLiteral("EVT_NEW")) newInJson = true;
+        if (id == QStringLiteral("EVT_OLD")) oldInJson = true;
+    }
+    QVERIFY2(newInJson, "toJson 未含新事件 id");
+    QVERIFY2(!oldInJson, "toJson 残留旧事件 id");
+
+    // 发送事件同款
+    auto *tx = new TextDirectSendEvent(QStringLiteral("SEND_OLD"), QStringLiteral("EVT_DEV"));
+    QVERIFY(cm->addSendEvent(tx));
+    QVERIFY(cm->renameSendEvent(QStringLiteral("SEND_OLD"), QStringLiteral("SEND_NEW")));
+    QVERIFY(cm->sendEvent(QStringLiteral("SEND_NEW")) != nullptr);
+    QVERIFY(cm->sendEvent(QStringLiteral("SEND_OLD")) == nullptr);
+    QCOMPARE(cm->sendEvent(QStringLiteral("SEND_NEW"))->eventId(), QStringLiteral("SEND_NEW"));
+
+    // 拒收面：空 / 同名 / 不存在 / 同类型占用
+    auto *rx2 = new TextProtocolReceiveEvent(QStringLiteral("EVT_OTHER"), QStringLiteral("EVT_DEV"));
+    QVERIFY(cm->addReceiveEvent(rx2));
+    QVERIFY(!cm->renameReceiveEvent(QStringLiteral("EVT_NEW"), QStringLiteral("")));
+    QVERIFY(!cm->renameReceiveEvent(QStringLiteral("EVT_NEW"), QStringLiteral("EVT_NEW")));
+    QVERIFY(!cm->renameReceiveEvent(QStringLiteral("NO_SUCH_EVT"), QStringLiteral("X")));
+    QVERIFY(!cm->renameReceiveEvent(QStringLiteral("EVT_NEW"), QStringLiteral("EVT_OTHER")));
+    QVERIFY(!cm->renameSendEvent(QStringLiteral("SEND_NEW"), QStringLiteral("SEND_NEW")));
+    QVERIFY(!cm->renameSendEvent(QStringLiteral("NO_SUCH_EVT"), QStringLiteral("X")));
+
+    gtm->removeEventTrigger(QStringLiteral("EVT_NEW"));
+    cm->removeReceiveEvent(QStringLiteral("EVT_NEW"));
+    cm->removeReceiveEvent(QStringLiteral("EVT_OTHER"));
+    cm->removeSendEvent(QStringLiteral("SEND_NEW"));
+    QVERIFY(cm->removeDevice(QStringLiteral("EVT_DEV")));
+}
+
+void CommWritebackTest::testRenameDeviceFrameBufferFollows()
+{
+    // 组帧超时路径：半帧已入缓冲、静默定时器在跑时重命名——缓冲随名迁移，
+    // 旧定时器（回调捕获旧名）停掉换新，超时后剩余半帧必须按新名出帧。
+    QTcpServer plc;
+    QTcpSocket *peer = nullptr;
+    plc.listen(QHostAddress::LocalHost, 0);
+    QVERIFY2(plc.isListening(), qPrintable(plc.errorString()));
+    QObject::connect(&plc, &QTcpServer::newConnection, &plc,
+                     [&plc, &peer]() { peer = plc.nextPendingConnection(); });
+
+    auto *cm = CommunicationManager::instance();
+    QJsonObject cfg = tcpClientConfig(plc.serverPort());
+    cfg[QStringLiteral("frameTimeoutMs")] = 150;
+    QVERIFY(cm->addDevice(QStringLiteral("FR_OLD"), QStringLiteral("TCP"), cfg));
+    QVERIFY(cm->openDevice(QStringLiteral("FR_OLD")));
+    QTRY_VERIFY_WITH_TIMEOUT(peer != nullptr, 3000);
+
+    QSignalSpy dataSpy(cm, &CommunicationManager::dataReceived);
+    peer->write("HALF");   // 无结束符：进缓冲等静默超时
+    peer->flush();
+    QTest::qWait(30);      // 让数据进缓冲（但远未到 150ms 超时）
+    QVERIFY(cm->renameDevice(QStringLiteral("FR_OLD"), QStringLiteral("FR_NEW")));
+
+    QTRY_VERIFY_WITH_TIMEOUT(dataSpy.count() >= 1, 3000);
+    QCOMPARE(dataSpy.last().at(0).toString(), QStringLiteral("FR_NEW"));
+    QCOMPARE(dataSpy.last().at(1).toByteArray(), QByteArrayLiteral("HALF"));
+
+    QVERIFY(cm->removeDevice(QStringLiteral("FR_NEW")));
+}
+
+void CommWritebackTest::testDialogContextMenuRename()
+{
+    // 四张表（设备/控制器/接收事件/发送事件）右键菜单形态 + 重命名落表联动。
+    auto *cm = CommunicationManager::instance();
+    QVERIFY(cm->addDevice(QStringLiteral("CTX_DEV"), QStringLiteral("TCP"), tcpClientConfig(1)));
+    auto *rx = new TextProtocolReceiveEvent(QStringLiteral("CTX_RX"), QStringLiteral("CTX_DEV"));
+    QVERIFY(cm->addReceiveEvent(rx));
+    auto *tx = new TextDirectSendEvent(QStringLiteral("CTX_TX"), QStringLiteral("CTX_DEV"));
+    QVERIFY(cm->addSendEvent(tx));
+
+    CommunicationManagerDialog dlg;
+    QMetaObject::invokeMethod(&dlg, "refreshDeviceTable");
+    QMetaObject::invokeMethod(&dlg, "refreshReceiveEventTable");
+    QMetaObject::invokeMethod(&dlg, "refreshSendEventTable");
+
+    auto *devTable = dlg.findChild<QTableWidget *>(QStringLiteral("deviceTable"));
+    auto *ctlTable = dlg.findChild<QTableWidget *>(QStringLiteral("controllerTable"));
+    auto *rxTable = dlg.findChild<QTableWidget *>(QStringLiteral("receiveEventTable"));
+    auto *txTable = dlg.findChild<QTableWidget *>(QStringLiteral("sendEventTable"));
+    QVERIFY(devTable && ctlTable && rxTable && txTable);
+    QCOMPARE(devTable->contextMenuPolicy(), Qt::CustomContextMenu);
+    QCOMPARE(ctlTable->contextMenuPolicy(), Qt::CustomContextMenu);
+    QCOMPARE(rxTable->contextMenuPolicy(), Qt::CustomContextMenu);
+    QCOMPARE(txTable->contextMenuPolicy(), Qt::CustomContextMenu);
+
+    // 无模态应用入口：设备改名 → 设备表/控制器表/事件表设备列全部跟随
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "applyDeviceRename",
+                                      Q_ARG(QString, QStringLiteral("CTX_DEV")),
+                                      Q_ARG(QString, QStringLiteral("CTX_DEV2"))));
+    QVERIFY(cm->hasDevice(QStringLiteral("CTX_DEV2")));
+    auto findRow = [](QTableWidget *t, const QString &text, int col) {
+        for (int r = 0; r < t->rowCount(); ++r)
+            if (t->item(r, col) && t->item(r, col)->text() == text) return r;
+        return -1;
+    };
+    QVERIFY(findRow(devTable, QStringLiteral("CTX_DEV2"), 0) >= 0);
+    QVERIFY(findRow(devTable, QStringLiteral("CTX_DEV"), 0) < 0);
+    QVERIFY(findRow(ctlTable, QStringLiteral("CTX_DEV2"), 0) >= 0);
+    const int rxRow = findRow(rxTable, QStringLiteral("CTX_RX"), 0);
+    QVERIFY(rxRow >= 0);
+    QCOMPARE(rxTable->item(rxRow, 2)->text(), QStringLiteral("CTX_DEV2"));
+
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "applyReceiveEventRename",
+                                      Q_ARG(QString, QStringLiteral("CTX_RX")),
+                                      Q_ARG(QString, QStringLiteral("CTX_RX2"))));
+    QVERIFY(findRow(rxTable, QStringLiteral("CTX_RX2"), 0) >= 0);
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "applySendEventRename",
+                                      Q_ARG(QString, QStringLiteral("CTX_TX")),
+                                      Q_ARG(QString, QStringLiteral("CTX_TX2"))));
+    QVERIFY(findRow(txTable, QStringLiteral("CTX_TX2"), 0) >= 0);
+
+    // 真菜单 golden path：右键 → 菜单恰有「重命名/删除」两项 → 点重命名 →
+    // 输入框自动填新名 → 设备真的改名（嵌套事件循环里用定时器驱动两个模态件）
+    dlg.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&dlg));
+    const int devRow = findRow(devTable, QStringLiteral("CTX_DEV2"), 0);
+    QVERIFY(devRow >= 0);
+    devTable->setCurrentCell(devRow, 0);
+    bool menuSeen = false;
+    QTimer::singleShot(0, &dlg, [&]() {
+        auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+        if (!menu) return;
+        auto *ren = menu->findChild<QAction *>(QStringLiteral("commCtxRename"));
+        auto *del = menu->findChild<QAction *>(QStringLiteral("commCtxDelete"));
+        menuSeen = ren && del && menu->actions().size() == 2
+                   && ren->text() == QStringLiteral("重命名")
+                   && del->text() == QStringLiteral("删除");
+        if (!ren) { menu->close(); return; }
+        // 输入框的激活是异步的：0ms 单发可能赶在 activeModalWidget 就绪之前。
+        // 用 20ms 轮询 topLevelWidgets 找可见的 QInputDialog，填名后 accept；
+        // 5 秒兜底 reject，避免自动化失手时挂死嵌套事件循环。
+        auto *fillTimer = new QTimer(&dlg);
+        fillTimer->setInterval(20);
+        auto ticks = QSharedPointer<int>::create(0);
+        QObject::connect(fillTimer, &QTimer::timeout, &dlg, [&, fillTimer, ticks]() {
+            for (QWidget *w : QApplication::topLevelWidgets()) {
+                auto *input = qobject_cast<QInputDialog *>(w);
+                if (!input || !input->isVisible()) continue;
+                input->setTextValue(QStringLiteral("CTX_MENU_NEW"));
+                input->accept();
+                fillTimer->stop();
+                fillTimer->deleteLater();
+                return;
+            }
+            if (++(*ticks) > 250) {
+                for (QWidget *w : QApplication::topLevelWidgets())
+                    if (auto *input = qobject_cast<QInputDialog *>(w)) input->reject();
+                fillTimer->stop();
+                fillTimer->deleteLater();
+            }
+        });
+        fillTimer->start();
+        // 用真实鼠标事件点菜单项（programmatic trigger 在焦点抖动时 exec 可能已返回空）
+        QTest::mouseClick(menu, Qt::LeftButton, Qt::NoModifier,
+                          menu->actionGeometry(ren).center());
+    });
+    const QPoint pos = devTable->visualItemRect(devTable->item(devRow, 0)).center();
+    QMetaObject::invokeMethod(&dlg, "onDeviceContextMenu", Q_ARG(QPoint, pos));
+    QVERIFY2(menuSeen, "右键菜单未弹出或动作文案/数量不符");
+    QVERIFY2(cm->hasDevice(QStringLiteral("CTX_MENU_NEW")), "菜单重命名 golden path 未落地");
+
+    cm->removeReceiveEvent(QStringLiteral("CTX_RX2"));
+    cm->removeSendEvent(QStringLiteral("CTX_TX2"));
+    QVERIFY(cm->removeDevice(QStringLiteral("CTX_MENU_NEW")));
 }
 
 QTEST_MAIN(CommWritebackTest)

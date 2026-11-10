@@ -35,6 +35,8 @@ CommMonitorDialog::CommMonitorDialog(QWidget *parent)
             this, &CommMonitorDialog::onDeviceAdded);
     connect(mgr, &CommunicationManager::deviceRemoved,
             this, &CommMonitorDialog::onDeviceRemoved);
+    connect(mgr, &CommunicationManager::deviceRenamed,
+            this, &CommMonitorDialog::onDeviceRenamed);
 
     // 初始化已有设备
     const QStringList names = mgr->deviceNames();
@@ -251,6 +253,23 @@ void CommMonitorDialog::onDeviceRemoved(const QString &name)
             m_deviceTable->removeRow(row);
         }
     }
+}
+
+void CommMonitorDialog::onDeviceRenamed(const QString &oldName, const QString &newName)
+{
+    if (!m_stats.contains(oldName)) return;
+    // 统计与历史日志随名迁移：改名后到达的数据按新名入表，不丢行也不开新行
+    m_stats[newName] = m_stats.take(oldName);
+    const int idx = m_deviceOrder.indexOf(oldName);
+    if (idx >= 0) m_deviceOrder[idx] = newName;
+    for (int row = 0; row < m_deviceTable->rowCount(); ++row) {
+        auto *item = m_deviceTable->item(row, 0);
+        if (item && item->text() == oldName) {
+            item->setText(newName);
+            break;
+        }
+    }
+    refreshDetailView();
 }
 
 void CommMonitorDialog::appendLog(const QString &deviceName, const QString &direction,

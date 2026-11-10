@@ -9,6 +9,8 @@
 #include "FinsCommNode.h" // VM 4.4 B5-1：Omron FINS/TCP + FINS/UDP（寄存器表同 Modbus 口径）
 #include "ReceiveEvent.h"
 #include "SendEvent.h"
+#include "GlobalTriggerManager.h"
+#include "HeartbeatManager.h"
 #include "AppLog.h"
 #include <QJsonDocument>
 #include <QFile>
@@ -143,6 +145,53 @@ bool CommunicationManager::removeDevice(const QString &name)
     m_frameBuffers.remove(name);
 
     emit deviceRemoved(name);
+    return true;
+}
+
+bool CommunicationManager::renameDevice(const QString &oldName, const QString &newName)
+{
+    const QString trimmed = newName.trimmed();
+    if (trimmed.isEmpty() || trimmed == oldName) return false;
+
+    CommunicationNodeBase *node = nullptr;
+    QList<ReceiveEvent *> rxEvents;
+    QList<SendEvent *> txEvents;
+    {
+        QMutexLocker locker(&m_mutex);
+        if (!m_deviceInfos.contains(oldName) || m_deviceInfos.contains(trimmed))
+            return false;
+        node = m_devices.take(oldName);
+        m_devices[trimmed] = node;
+        CommDeviceInfo info = m_deviceInfos.take(oldName);
+        info.name = trimmed;
+        m_deviceInfos[trimmed] = info;
+        // 锁内只取指针快照；事件字段的写入放到锁外（与 setEnabled 同款既有口径）
+        for (ReceiveEvent *ev : m_receiveEvents)
+            if (ev && ev->deviceName() == oldName) rxEvents.append(ev);
+        for (SendEvent *ev : m_sendEvents)
+            if (ev && ev->deviceName() == oldName) txEvents.append(ev);
+    }
+
+    if (node) node->setDeviceName(trimmed);
+    for (ReceiveEvent *ev : rxEvents) ev->setDeviceName(trimmed);
+    for (SendEvent *ev : txEvents) ev->setDeviceName(trimmed);
+    HeartbeatManager::instance()->renameDevice(oldName, trimmed);
+
+    // 组帧缓冲随名迁移；旧定时器回调捕获的是旧名，停旧建新（剩余半帧继续按新名超时出帧）
+    if (m_frameBuffers.contains(oldName))
+        m_frameBuffers[trimmed] = m_frameBuffers.take(oldName);
+    if (QTimer *t = m_frameTimers.take(oldName)) {
+        t->stop();
+        t->deleteLater();
+    }
+    if (node && !m_frameBuffers.value(trimmed).isEmpty()) {
+        const int timeoutMs = node->getParam(QStringLiteral("frameTimeoutMs")).toInt();
+        if (timeoutMs > 0)
+            startFrameTimer(trimmed, timeoutMs);
+    }
+
+    emit deviceRenamed(oldName, trimmed);
+    VFP_DEBUG << "Communication device renamed:" << oldName << "->" << trimmed;
     return true;
 }
 
@@ -416,14 +465,16 @@ bool CommunicationManager::createDeviceNode(const QString &name, const QString &
 
     {
         // Forward data received signals（经帧组装：配置了组帧则按帧转发，未配置则原样转发）
-        connect(node, &CommunicationNodeBase::dataReceived, this, [this, name](const QByteArray &data) {
-            feedFrameAssembler(name, data);
+        // 捕获 node 而非建节点时的名字：重命名后 deviceName() 即新名，转发不挂旧名。
+        connect(node, &CommunicationNodeBase::dataReceived, this, [this, node](const QByteArray &data) {
+            feedFrameAssembler(node->deviceName(), data);
         });
 
         // 注意：这两个槽会在 openDevice/closeDevice（可能仍处于外层调用栈）中被同步触发，
         // 因此锁内只做状态更新，emit 放到锁外；且用 find 而非 operator[]，
         // 避免设备已被 removeDevice 移除后又被 [] 重新插入“复活”。
-        connect(node, &CommunicationNodeBase::connectionOpened, this, [this, name]() {
+        connect(node, &CommunicationNodeBase::connectionOpened, this, [this, node]() {
+            const QString name = node->deviceName();
             {
                 QMutexLocker locker(&m_mutex);
                 auto it = m_deviceInfos.find(name);
@@ -434,7 +485,8 @@ bool CommunicationManager::createDeviceNode(const QString &name, const QString &
             emit deviceConnected(name);
         });
 
-        connect(node, &CommunicationNodeBase::connectionClosed, this, [this, name]() {
+        connect(node, &CommunicationNodeBase::connectionClosed, this, [this, node]() {
+            const QString name = node->deviceName();
             {
                 QMutexLocker locker(&m_mutex);
                 auto it = m_deviceInfos.find(name);
@@ -452,26 +504,27 @@ bool CommunicationManager::createDeviceNode(const QString &name, const QString &
 
         // Forward register value changes
         connect(node, &CommunicationNodeBase::registerValueChanged, this,
-                [this, name](int address, const QByteArray &value, const QString &dataType) {
+                [this, node](int address, const QByteArray &value, const QString &dataType) {
+            Q_UNUSED(dataType)
             // 发出通信设备收到的原始数据（供字符串触发和接收事件系统使用）
             QByteArray fullData;
             QDataStream stream(&fullData, QIODevice::WriteOnly);
             stream << address;
             fullData.append(value);
-            emit dataReceived(name, fullData);
+            emit dataReceived(node->deviceName(), fullData);
         });
 
         // Forward PLC register changes
         if (auto *plc = qobject_cast<PlcCommNode *>(node)) {
             connect(plc, &PlcCommNode::plcRegisterChanged, this,
-                    [this, name](const QString &, int address,
+                    [this, node](const QString &, int address,
                                  const QByteArray &value, const QString &dataType) {
-                Q_UNUSED(dataType);
+                Q_UNUSED(dataType)
                 QByteArray fullData;
                 QDataStream stream(&fullData, QIODevice::WriteOnly);
                 stream << address;
                 fullData.append(value);
-                emit dataReceived(name, fullData);
+                emit dataReceived(node->deviceName(), fullData);
             });
         }
     }
@@ -544,25 +597,29 @@ void CommunicationManager::feedFrameAssembler(const QString &deviceName, const Q
     m_frameBuffers[deviceName] = buf;   // 先落缓冲（此时状态已是最终态），后发帧
 
     // ② 帧超时兜底：静默 timeoutMs 后把剩余数据整体当一帧（对端不发结束符时使用）
-    if (timeoutMs > 0) {
-        QTimer *t = m_frameTimers.value(deviceName, nullptr);
-        if (!t) {
-            t = new QTimer(this);
-            t->setSingleShot(true);
-            m_frameTimers.insert(deviceName, t);
-            connect(t, &QTimer::timeout, this, [this, deviceName]() {
-                const QByteArray frame = m_frameBuffers.value(deviceName);
-                if (frame.isEmpty())
-                    return;
-                m_frameBuffers.remove(deviceName);
-                emit dataReceived(deviceName, frame);
-            });
-        }
-        t->start(timeoutMs);   // 每来一块数据重置静默计时
-    }
+    if (timeoutMs > 0)
+        startFrameTimer(deviceName, timeoutMs);
 
     for (const QByteArray &frame : frames)
         emit dataReceived(deviceName, frame);
+}
+
+void CommunicationManager::startFrameTimer(const QString &deviceName, int timeoutMs)
+{
+    QTimer *t = m_frameTimers.value(deviceName, nullptr);
+    if (!t) {
+        t = new QTimer(this);
+        t->setSingleShot(true);
+        m_frameTimers.insert(deviceName, t);
+        connect(t, &QTimer::timeout, this, [this, deviceName]() {
+            const QByteArray frame = m_frameBuffers.value(deviceName);
+            if (frame.isEmpty())
+                return;
+            m_frameBuffers.remove(deviceName);
+            emit dataReceived(deviceName, frame);
+        });
+    }
+    t->start(timeoutMs);   // 每来一块数据重置静默计时
 }
 
 CommunicationNodeBase *CommunicationManager::deviceNode(const QString &name) const
@@ -663,6 +720,24 @@ bool CommunicationManager::removeReceiveEvent(const QString &id)
     return true;
 }
 
+bool CommunicationManager::renameReceiveEvent(const QString &oldId, const QString &newId)
+{
+    const QString trimmed = newId.trimmed();
+    if (trimmed.isEmpty() || trimmed == oldId) return false;
+    ReceiveEvent *ev = nullptr;
+    {
+        QMutexLocker locker(&m_mutex);
+        if (!m_receiveEvents.contains(oldId) || m_receiveEvents.contains(trimmed))
+            return false;
+        ev = m_receiveEvents.take(oldId);
+        m_receiveEvents[trimmed] = ev;
+    }
+    ev->setEventId(trimmed);
+    GlobalTriggerManager::instance()->renameEventTrigger(oldId, trimmed);
+    emit receiveEventRenamed(oldId, trimmed);
+    return true;
+}
+
 // ---- Send Event Management ----
 
 QStringList CommunicationManager::sendEventIds() const
@@ -726,6 +801,23 @@ bool CommunicationManager::removeSendEvent(const QString &id)
     }
     if (ev) ev->deleteLater();
     emit sendEventRemoved(id);
+    return true;
+}
+
+bool CommunicationManager::renameSendEvent(const QString &oldId, const QString &newId)
+{
+    const QString trimmed = newId.trimmed();
+    if (trimmed.isEmpty() || trimmed == oldId) return false;
+    SendEvent *ev = nullptr;
+    {
+        QMutexLocker locker(&m_mutex);
+        if (!m_sendEvents.contains(oldId) || m_sendEvents.contains(trimmed))
+            return false;
+        ev = m_sendEvents.take(oldId);
+        m_sendEvents[trimmed] = ev;
+    }
+    ev->setEventId(trimmed);
+    emit sendEventRenamed(oldId, trimmed);
     return true;
 }
 

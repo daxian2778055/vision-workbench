@@ -139,6 +139,20 @@ bool GlobalTriggerManager::removeEventTrigger(const QString &eventId)
     return true;
 }
 
+void GlobalTriggerManager::renameEventTrigger(const QString &oldEventId, const QString &newEventId)
+{
+    if (oldEventId.isEmpty() || newEventId.isEmpty() || oldEventId == newEventId) return;
+
+    QMutexLocker locker(&m_mutex);
+    auto it = m_eventTriggers.find(oldEventId);
+    if (it == m_eventTriggers.end()) return;
+    TriggerEntry entry = it.value();
+    m_eventTriggers.erase(it);
+    entry.triggerSource = newEventId;
+    m_eventTriggers[newEventId] = entry;
+    m_allTriggers[entry.id] = entry;   // 条目 id 与目标流程不变，仅触发源换名
+}
+
 QString GlobalTriggerManager::flowForEventTrigger(const QString &eventId) const
 {
     QMutexLocker locker(&m_mutex);

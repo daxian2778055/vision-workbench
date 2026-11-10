@@ -52,6 +52,16 @@ void HeartbeatManager::unregisterHeartbeat(const QString &deviceName)
     m_entries.remove(deviceName);
 }
 
+bool HeartbeatManager::renameDevice(const QString &oldName, const QString &newName)
+{
+    if (oldName == newName || !m_entries.contains(oldName) || m_entries.contains(newName))
+        return false;
+    HeartbeatEntry entry = m_entries.take(oldName);
+    entry.deviceName = newName;
+    m_entries[newName] = entry;
+    return true;
+}
+
 void HeartbeatManager::startAll()
 {
     for (auto &entry : m_entries) {

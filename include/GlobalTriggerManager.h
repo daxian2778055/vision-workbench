@@ -48,6 +48,8 @@ public:
     bool setEventTrigger(const QString &eventId, const QString &flowName);
     bool removeEventTrigger(const QString &eventId);
     QString flowForEventTrigger(const QString &eventId) const;
+    /// 接收事件被重命名时跟随映射（条目 id 与目标流程不变，仅触发源换名）；无映射则无操作。
+    void renameEventTrigger(const QString &oldEventId, const QString &newEventId);
 
     // ---- 触发执行 ----
     /// 通信数据到达时调用：依次尝试匹配字符串触发和接收事件触发

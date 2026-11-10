@@ -28,6 +28,8 @@
 #include <QTimer>
 #include <QListWidget>
 #include <QStackedWidget>
+#include <QMenu>
+#include <QAction>
 
 CommunicationManagerDialog::CommunicationManagerDialog(QWidget *parent)
     : QDialog(parent)
@@ -37,6 +39,21 @@ CommunicationManagerDialog::CommunicationManagerDialog(QWidget *parent)
     refreshReceiveEventTable();
     refreshSendEventTable();
     refreshHeartbeatTable();
+
+    // 重命名可能来自本对话框之外（测试/脚本/其它入口）：信号驱动各表同步，
+    // 设备表重建时内部会连带刷新控制器页
+    auto *cm = CommunicationManager::instance();
+    connect(cm, &CommunicationManager::deviceRenamed, this,
+            [this](const QString &, const QString &) {
+        refreshDeviceTable();
+        refreshReceiveEventTable();
+        refreshSendEventTable();
+        refreshHeartbeatTable();
+    });
+    connect(cm, &CommunicationManager::receiveEventRenamed, this,
+            [this](const QString &, const QString &) { refreshReceiveEventTable(); });
+    connect(cm, &CommunicationManager::sendEventRenamed, this,
+            [this](const QString &, const QString &) { refreshSendEventTable(); });
 }
 
 CommunicationManagerDialog::~CommunicationManagerDialog()
@@ -143,6 +160,11 @@ void CommunicationManagerDialog::setupDeviceTab(QStackedWidget *stack)
     connect(m_configBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onConfigDevice);
     connect(m_readBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onReadRegisters);
 
+    // VM 5.2.1：设备列表右键 → 重命名 / 删除
+    m_deviceTable->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_deviceTable, &QTableWidget::customContextMenuRequested,
+            this, &CommunicationManagerDialog::onDeviceContextMenu);
+
     // 连接状态实时刷新：自动重连/对端断开/重连成功都会更新表格。
     // 关键：必须**异步合并**刷新——openDevice/closeDevice 会同步 emit
     // deviceConnected/deviceDisconnected，若在信号里同步重建表格，
@@ -187,6 +209,11 @@ void CommunicationManagerDialog::setupControllerTab(QStackedWidget *stack)
     m_controllerTable->setEditTriggers(QAbstractItemView::NoEditTriggers);   // 只读
     m_controllerTable->horizontalHeader()->setStretchLastSection(true);
     layout->addWidget(m_controllerTable);
+
+    // VM 5.2.1：控制器列表右键 → 重命名 / 删除（控制器由设备派生，操作落到底层设备）
+    m_controllerTable->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_controllerTable, &QTableWidget::customContextMenuRequested,
+            this, &CommunicationManagerDialog::onControllerContextMenu);
 
     stack->addWidget(tab);
 }
@@ -627,6 +654,7 @@ void CommunicationManagerDialog::setupReceiveEventTab(QStackedWidget *stack)
     layout->addWidget(infoLabel);
 
     m_receiveEventTable = new QTableWidget();
+    m_receiveEventTable->setObjectName(QStringLiteral("receiveEventTable"));   // 供回归测试按名定位
     m_receiveEventTable->setColumnCount(5);
     m_receiveEventTable->setHorizontalHeaderLabels({
         QStringLiteral("\u4E8B\u4EF6ID"),
@@ -654,6 +682,11 @@ void CommunicationManagerDialog::setupReceiveEventTab(QStackedWidget *stack)
     connect(m_addReceiveEventBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onAddReceiveEvent);
     connect(m_removeReceiveEventBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onRemoveReceiveEvent);
     connect(m_editReceiveEventBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onEditReceiveEvent);
+
+    // VM 5.2.2：接收事件列表右键 → 重命名 / 删除
+    m_receiveEventTable->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_receiveEventTable, &QTableWidget::customContextMenuRequested,
+            this, &CommunicationManagerDialog::onReceiveEventContextMenu);
 
     stack->addWidget(tab);
 }
@@ -801,6 +834,7 @@ void CommunicationManagerDialog::setupSendEventTab(QStackedWidget *stack)
     layout->addWidget(tmplInfo);
 
     m_sendEventTable = new QTableWidget();
+    m_sendEventTable->setObjectName(QStringLiteral("sendEventTable"));   // 供回归测试按名定位
     m_sendEventTable->setColumnCount(4);
     m_sendEventTable->setHorizontalHeaderLabels({
         QStringLiteral("\u4E8B\u4EF6ID"),
@@ -827,6 +861,11 @@ void CommunicationManagerDialog::setupSendEventTab(QStackedWidget *stack)
     connect(m_addSendEventBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onAddSendEvent);
     connect(m_removeSendEventBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onRemoveSendEvent);
     connect(m_editSendEventBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onEditSendEvent);
+
+    // VM 5.2.3：发送事件列表右键 → 重命名 / 删除
+    m_sendEventTable->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_sendEventTable, &QTableWidget::customContextMenuRequested,
+            this, &CommunicationManagerDialog::onSendEventContextMenu);
 
     stack->addWidget(tab);
 }
@@ -1052,4 +1091,150 @@ void CommunicationManagerDialog::onRemoveHeartbeat()
     QString device = m_heartbeatTable->item(row, 0)->text();
     HeartbeatManager::instance()->unregisterHeartbeat(device);
     refreshHeartbeatTable();
+}
+
+// ==================== 右键菜单（VM 5.2：重命名 / 删除） ====================
+
+int CommunicationManagerDialog::execRowContextMenu(QTableWidget *table, const QPoint &pos)
+{
+    QTableWidgetItem *item = table->itemAt(pos);
+    if (!item) return 0;
+    table->setCurrentCell(item->row(), 0);
+
+    QMenu menu(this);
+    auto *renameAct = menu.addAction(QStringLiteral("\u91CD\u547D\u540D"));
+    renameAct->setObjectName(QStringLiteral("commCtxRename"));
+    auto *deleteAct = menu.addAction(QStringLiteral("\u5220\u9664"));
+    deleteAct->setObjectName(QStringLiteral("commCtxDelete"));
+    QAction *chosen = menu.exec(table->viewport()->mapToGlobal(pos));
+    if (chosen == renameAct) return 1;
+    if (chosen == deleteAct) return 2;
+    return 0;
+}
+
+void CommunicationManagerDialog::onDeviceContextMenu(const QPoint &pos)
+{
+    const int choice = execRowContextMenu(m_deviceTable, pos);
+    if (choice == 1) {
+        const int row = m_deviceTable->currentRow();
+        if (row >= 0 && m_deviceTable->item(row, 0))
+            promptAndApplyDeviceRename(m_deviceTable->item(row, 0)->text());
+    } else if (choice == 2) {
+        onRemoveDevice();
+    }
+}
+
+void CommunicationManagerDialog::onControllerContextMenu(const QPoint &pos)
+{
+    const int choice = execRowContextMenu(m_controllerTable, pos);
+    if (choice == 0) return;
+    const int row = m_controllerTable->currentRow();
+    if (row < 0 || !m_controllerTable->item(row, 0)) return;
+    const QString name = m_controllerTable->item(row, 0)->text();
+    if (choice == 1) {
+        promptAndApplyDeviceRename(name);
+    } else {
+        selectDeviceRowByName(name);
+        onRemoveDevice();
+    }
+}
+
+void CommunicationManagerDialog::onReceiveEventContextMenu(const QPoint &pos)
+{
+    const int choice = execRowContextMenu(m_receiveEventTable, pos);
+    if (choice == 1) {
+        const int row = m_receiveEventTable->currentRow();
+        if (row >= 0 && m_receiveEventTable->item(row, 0))
+            promptAndApplyReceiveEventRename(m_receiveEventTable->item(row, 0)->text());
+    } else if (choice == 2) {
+        onRemoveReceiveEvent();
+    }
+}
+
+void CommunicationManagerDialog::onSendEventContextMenu(const QPoint &pos)
+{
+    const int choice = execRowContextMenu(m_sendEventTable, pos);
+    if (choice == 1) {
+        const int row = m_sendEventTable->currentRow();
+        if (row >= 0 && m_sendEventTable->item(row, 0))
+            promptAndApplySendEventRename(m_sendEventTable->item(row, 0)->text());
+    } else if (choice == 2) {
+        onRemoveSendEvent();
+    }
+}
+
+void CommunicationManagerDialog::selectDeviceRowByName(const QString &name)
+{
+    for (int r = 0; r < m_deviceTable->rowCount(); ++r) {
+        if (m_deviceTable->item(r, 0) && m_deviceTable->item(r, 0)->text() == name) {
+            m_deviceTable->setCurrentCell(r, 0);
+            return;
+        }
+    }
+}
+
+bool CommunicationManagerDialog::promptAndApplyDeviceRename(const QString &oldName)
+{
+    bool ok = false;
+    const QString newName = QInputDialog::getText(this,
+        QStringLiteral("\u91CD\u547D\u540D"),
+        QStringLiteral("\u65B0\u540D\u79F0:"),
+        QLineEdit::Normal, oldName, &ok);
+    if (!ok) return false;
+    return applyDeviceRename(oldName, newName);
+}
+
+bool CommunicationManagerDialog::promptAndApplyReceiveEventRename(const QString &oldId)
+{
+    bool ok = false;
+    const QString newId = QInputDialog::getText(this,
+        QStringLiteral("\u91CD\u547D\u540D"),
+        QStringLiteral("\u65B0\u540D\u79F0:"),
+        QLineEdit::Normal, oldId, &ok);
+    if (!ok) return false;
+    return applyReceiveEventRename(oldId, newId);
+}
+
+bool CommunicationManagerDialog::promptAndApplySendEventRename(const QString &oldId)
+{
+    bool ok = false;
+    const QString newId = QInputDialog::getText(this,
+        QStringLiteral("\u91CD\u547D\u540D"),
+        QStringLiteral("\u65B0\u540D\u79F0:"),
+        QLineEdit::Normal, oldId, &ok);
+    if (!ok) return false;
+    return applySendEventRename(oldId, newId);
+}
+
+bool CommunicationManagerDialog::applyDeviceRename(const QString &oldName, const QString &newName)
+{
+    if (!CommunicationManager::instance()->renameDevice(oldName, newName)) {
+        QMessageBox::warning(this, QStringLiteral("\u91CD\u547D\u540D"),
+            QStringLiteral("\u91CD\u547D\u540D\u5931\u8D25\uFF1A\u540D\u79F0\u4E3A\u7A7A\u3001"
+                           "\u4E0E\u539F\u540D\u76F8\u540C\u6216\u65B0\u540D\u79F0\u5DF2\u88AB\u5360\u7528\u3002"));
+        return false;
+    }
+    return true;   // 各表刷新由 deviceRenamed 信号驱动（构造期已接）
+}
+
+bool CommunicationManagerDialog::applyReceiveEventRename(const QString &oldId, const QString &newId)
+{
+    if (!CommunicationManager::instance()->renameReceiveEvent(oldId, newId)) {
+        QMessageBox::warning(this, QStringLiteral("\u91CD\u547D\u540D"),
+            QStringLiteral("\u91CD\u547D\u540D\u5931\u8D25\uFF1A\u540D\u79F0\u4E3A\u7A7A\u3001"
+                           "\u4E0E\u539F\u540D\u76F8\u540C\u6216\u65B0\u540D\u79F0\u5DF2\u88AB\u5360\u7528\u3002"));
+        return false;
+    }
+    return true;
+}
+
+bool CommunicationManagerDialog::applySendEventRename(const QString &oldId, const QString &newId)
+{
+    if (!CommunicationManager::instance()->renameSendEvent(oldId, newId)) {
+        QMessageBox::warning(this, QStringLiteral("\u91CD\u547D\u540D"),
+            QStringLiteral("\u91CD\u547D\u540D\u5931\u8D25\uFF1A\u540D\u79F0\u4E3A\u7A7A\u3001"
+                           "\u4E0E\u539F\u540D\u76F8\u540C\u6216\u65B0\u540D\u79F0\u5DF2\u88AB\u5360\u7528\u3002"));
+        return false;
+    }
+    return true;
 }

@@ -34,6 +34,16 @@ private slots:
     void onConfigDevice();
     void onReadRegisters();
 
+    // VM 5.2.1 右键菜单（设备/控制器/接收事件/发送事件四张表：重命名 + 删除）
+    void onDeviceContextMenu(const QPoint &pos);
+    void onControllerContextMenu(const QPoint &pos);
+    void onReceiveEventContextMenu(const QPoint &pos);
+    void onSendEventContextMenu(const QPoint &pos);
+    /// 无模态应用入口（供右键菜单与回归测试直接驱动）；失败弹提示并返回 false
+    bool applyDeviceRename(const QString &oldName, const QString &newName);
+    bool applyReceiveEventRename(const QString &oldId, const QString &newId);
+    bool applySendEventRename(const QString &oldId, const QString &newId);
+
     // 接收事件 Tab
     void onAddReceiveEvent();
     void onRemoveReceiveEvent();
@@ -64,6 +74,15 @@ private:
     /// 合并式异步刷新设备表：deviceConnected/deviceDisconnected 只挂起一次重建，
     /// 等当前调用栈展开后再执行（避免在 openDevice/closeDevice 栈内同步重建导致的悬空指针）
     void scheduleDeviceTableRefresh();
+    /// 右键菜单公共件：重命名/删除两个动作（objectName 供测试定位）；
+    /// 返回 0=未选/取消，1=重命名，2=删除（不返回 QAction 指针：菜单出栈即销毁）
+    int execRowContextMenu(QTableWidget *table, const QPoint &pos);
+    /// 弹输入框收集新名并应用；取消返回 false
+    bool promptAndApplyDeviceRename(const QString &oldName);
+    bool promptAndApplyReceiveEventRename(const QString &oldId);
+    bool promptAndApplySendEventRename(const QString &oldId);
+    /// 在设备表中按名选中行（控制器页的删除/重命名复用设备页入口）
+    void selectDeviceRowByName(const QString &name);
 
     // 左侧导航 + 右侧页栈
     QListWidget *m_navList = nullptr;

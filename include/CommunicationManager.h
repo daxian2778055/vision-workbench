@@ -43,6 +43,11 @@ public:
     /// 移除通信设备
     bool removeDevice(const QString &name);
 
+    /// 重命名通信设备（VM 5.2.1：设备列表右键→重命名）。连接与节点参数原样保留；
+    /// 连带引用跟随：接收/发送事件的绑定设备、心跳条目、组帧缓冲与定时器、事件触发映射。
+    /// 旧名不存在 / 新名为空（去空白后）/ 新名与旧名相同 / 新名已被占用 → false。
+    bool renameDevice(const QString &oldName, const QString &newName);
+
     /// 更新设备配置记录（热更新参数后调用，保证方案保存的是最新配置；不触碰节点）
     bool updateDeviceConfig(const QString &name, const QJsonObject &config);
 
@@ -54,6 +59,9 @@ public:
     ReceiveEvent *receiveEvent(const QString &id) const;
     bool addReceiveEvent(ReceiveEvent *event);
     bool removeReceiveEvent(const QString &id);
+    /// 重命名接收事件（VM：事件列表右键→重命名）；全局触发里的事件触发映射跟随。
+    /// 校验口径同 renameDevice。
+    bool renameReceiveEvent(const QString &oldId, const QString &newId);
 
     // ---- 发送事件管理 ----
     QStringList sendEventIds() const;
@@ -68,6 +76,8 @@ public:
     /// 线程约束同 fireSendEvent：先取 ID 快照，再在锁外逐个调用（不持锁碰节点方法）。
     int fireEnabledSendEvents(const QVariant &data = QVariant());
     bool removeSendEvent(const QString &id);
+    /// 重命名发送事件（VM：事件列表右键→重命名）；校验口径同 renameDevice。
+    bool renameSendEvent(const QString &oldId, const QString &newId);
 
     // ---- 序列化 ----
     QJsonObject toJson() const;
@@ -85,6 +95,9 @@ signals:
     /// 方案载入时某条设备无法建立（未知类型/构造失败）：载入面据此汇总提示，不留无声丢失
     void deviceLoadFailed(const QString &name, const QString &type, const QString &reason);
     void deviceRemoved(const QString &name);
+    void deviceRenamed(const QString &oldName, const QString &newName);
+    void receiveEventRenamed(const QString &oldId, const QString &newId);
+    void sendEventRenamed(const QString &oldId, const QString &newId);
     void deviceConnected(const QString &name);
     void deviceDisconnected(const QString &name);
     void dataReceived(const QString &deviceName, const QByteArray &data);
@@ -107,6 +120,9 @@ private:
     /// 按设备节点的参数 frameTimeoutMs（静默即一帧）/ frameTerminator（结束符，支持 \r\n 等转义）
     /// 切帧后再转发；两个参数都未配置时行为与历史完全一致（原样转发）。
     void feedFrameAssembler(const QString &deviceName, const QByteArray &data);
+    /// 组帧静默定时器（不存在则建，回调按设备名取缓冲）；每次调用重置计时。
+    /// 重命名后旧定时器回调仍捕获旧名，须停旧建新——与 feedFrameAssembler 共用此入口。
+    void startFrameTimer(const QString &deviceName, int timeoutMs);
     /// "\r\n" → CRLF 字节（支持 \r \n \t \0 \\ \xHH）
     static QByteArray decodeEscapes(const QString &text);
 

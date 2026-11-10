@@ -25,6 +25,7 @@ private slots:
     void onDeviceDisconnected(const QString &name);
     void onDeviceAdded(const QString &name, const QString &type);
     void onDeviceRemoved(const QString &name);
+    void onDeviceRenamed(const QString &oldName, const QString &newName);
     void onDeviceSelectionChanged();
     void onClearLog();
     void onClearStats();

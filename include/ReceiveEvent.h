@@ -24,6 +24,9 @@ public:
 
     QString eventId() const { return m_eventId; }
     QString deviceName() const { return m_deviceName; }
+    /// 重命名入口（仅 CommunicationManager::rename* 调用；跨线程读取面与 setEnabled 同款既有口径）
+    void setEventId(const QString &id) { m_eventId = id; }
+    void setDeviceName(const QString &name) { m_deviceName = name; }
     EventType eventType() const { return m_eventType; }
     bool enabled() const { return m_enabled; }
     void setEnabled(bool e) { m_enabled = e; }

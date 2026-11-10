@@ -36,6 +36,9 @@ public:
     /// 注销心跳
     void unregisterHeartbeat(const QString &deviceName);
 
+    /// 设备重命名时跟随条目（间隔/内容/启用态保留）；旧名无条目或新名已占用 → false。
+    bool renameDevice(const QString &oldName, const QString &newName);
+
     /// 启动/停止所有心跳
     void startAll();
     void stopAll();

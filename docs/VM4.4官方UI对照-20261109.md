@@ -353,7 +353,28 @@ TCP 客户端 / TCP 服务端 / UDP / 串口 / 汇川 H2U / 基恩士 KV / 松�
   开/关/自定义三态落键）；改坏臂（忽略结束符控件）判红后还原。comm_writeback_test 53、
   ctest 80/80、ci exit 0。
 - **仍开放（B4-3）**：数据上传开关、导航六项（触发/响应配置页）、控制器独立模型、
-  gtd 导入导出、设备右键重命名、PLC 寄存器官方工具条。
+  gtd 导入导出、设备右键重命名、PLC 寄存器官方工具条。（B4-3a 已闭合其中「设备右键重命名」，见下节）
+
+### B4-3a 已落地（2026-11-10）：设备/事件右键重命名与删除
+
+> 手册 5.2.1/5.2.2/5.2.3：设备列表、控制器列表、接收/发送事件列表选中后右键可重命名/删除。
+> 此前四张表均无右键菜单，设备改名只能删了重建（事件/心跳绑定随之丢失）。
+
+- **管理器 API**：CommunicationManager::renameDevice / renameReceiveEvent / renameSendEvent。
+  设备改名保留连接与节点参数，连带引用跟随：接收/发送事件绑定、心跳条目（HeartbeatManager::renameDevice）、
+  组帧缓冲与静默定时器（停旧建新，剩余半帧按新名超时出帧）、事件触发映射
+  （GlobalTriggerManager::renameEventTrigger，条目 id 与目标流程不变）。拒收：空名/同名/旧名不存在/新名占用。
+- **关键修**：节点信号转发 lambda 原捕获建节点时的名字（改名后数据仍挂旧名）；改为捕获节点指针、
+  发送时读 node->deviceName()。监视窗 CommMonitorDialog 同步改名（统计与历史日志随名迁移，不丢行）。
+- **UI**：四张表 CustomContextMenu + 「重命名/删除」两动作（objectName commCtxRename/commCtxDelete）；
+  控制器页操作落到底层设备；删除复用既有确认流程。对话框接 deviceRenamed/*EventRenamed 信号刷新各表。
+- **腿**：comm_writeback_test 新增 4 条（引用跟随+改名后数据挂新名、事件改名跟随触发+toJson 新 id、
+  半帧缓冲迁移超时出帧、四表菜单形态+无模态改名落表+真菜单 golden path）。菜单自动化用真实鼠标事件
+  （programmatic trigger 在桌面焦点抖动下 5 跑 3 红；改 mouseClick 后 6/6 绿，单跑 ≈0.7s）。
+  改坏自证 build/b43a_arms.py 五臂：撤 setDeviceName / 撤事件跟随 / 撤缓冲迁移 / 撤菜单策略均判红，
+  只差注释对照臂绿。comm_writeback_test 57、ctest 80/80、ci exit 0。
+- **仍开放（B4-3 余项）**：数据上传开关、导航六项（触发/响应配置页）、控制器独立模型、
+  gtd 导入导出、PLC 寄存器官方工具条。
 
 ### B5-1 已落地（2026-11-09）
 
