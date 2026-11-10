@@ -8,6 +8,7 @@
 #include <QVariant>
 #include <QSet>
 #include <QStringList>
+#include <QHash>
 
 /// 运行界面控件类型（对齐 VisionMaster 4.4 运行界面元素）
 enum class RuntimeControlType {
@@ -35,7 +36,8 @@ enum class RuntimeControlType {
     MultiImage,   /// 多图像：同一控件内并排显示多路图像（官方「多图像」）
     RunStatus,    /// 运行状态：显示全流程/单一流程的运行中与停止运行（官方「运行状态」）
     UiLog,        /// 界面日志：实时显示软件日志（官方「界面日志」）
-    TextEntryCombo /// 文本框组合：多行「字符信息 + 数据绑定 + 数据类型 + 颜色编辑」
+    TextEntryCombo, /// 文本框组合：多行「字符信息 + 数据绑定 + 数据类型 + 颜色编辑」
+    SubInterface  /// 子界面：点击弹出新的运行界面窗口（官方「子界面」，最多嵌套 3 层）
 };
 
 /// 多图像的一个画面（官方：画面名称 + 图像源）
@@ -182,6 +184,11 @@ struct RuntimeControl {
     QString textEntryBgColor;        /// 空 = 不绘制背景
     QString textEntryBorderColor;    /// 空 = 不绘制边框
     QString textEntryHeaderBgColor = QStringLiteral("#20262a");
+    /// SubInterface 专用（官方「子界面」）：页面存在 RuntimeInterface::subPages，
+    /// 控件只持 id（不内嵌页面 ⇒ 撤销快照、复制控件都不会共享/自包含页面数据）。
+    QString subPageId;
+    QString subPassword;             /// 空 = 打开不需要密码
+    bool subIconVisible = true;      /// 官方「显示图标」
     /// 图表（官方 9.3）：线图阵列每源一图 / 多数据线图同绘一图 / 饼图按当前值占比
     QVector<ChartSeries> chartSeries;
     int chartHistoryLimit = 30;   ///< 官方「最新执行数据条数」（线图类）
@@ -225,6 +232,7 @@ struct RuntimeControl {
         case RuntimeControlType::RunStatus:   return QStringLiteral("运行状态");
         case RuntimeControlType::UiLog:       return QStringLiteral("界面日志");
         case RuntimeControlType::TextEntryCombo: return QStringLiteral("文本框组合");
+        case RuntimeControlType::SubInterface: return QStringLiteral("子界面");
         }
         return QStringLiteral("控件");
     }
@@ -302,6 +310,9 @@ public:
     RuntimeInterface() { ensurePage(); }
 
     QList<RuntimeInterfacePage> pages;
+    /// 子界面页表（官方「子界面」）：控件用 subPageId 引用，避免控件自包含页面。
+    /// 键为 "subN"；删除控件时只删除无其它引用的页（复制控件会共享同一页）。
+    QHash<QString, RuntimeInterfacePage> subPages;
     int currentPageIndex = 0;    /// 运行时默认显示页索引
     RuntimeCanvasConfig canvas;  /// 画布尺寸与外观（所有页共用一块画布）
 
@@ -312,6 +323,18 @@ public:
     int addPage();                  /// 新增页，返回索引
     void removePage(int index);     /// 删除页（至少保留一页）
     int totalControlCount() const;  /// 全部页控件总数（判断是否已配置）
+
+    /// 新建一个空子界面页并返回其 id（"subN" 递增，避开已有键）。
+    QString createSubPage(const QString &pageName = QString());
+    /// 按 id 取子界面页（不存在返回 nullptr）。
+    RuntimeInterfacePage *subPage(const QString &id);
+    /// 子界面嵌套深度：根页 = 0，一级子界面 = 1……未知 id 返回 -1。
+    /// 用 BFS 从根页沿控件引用计算，带 visited 防环。
+    int subPageDepth(const QString &id) const;
+    /// 某子界面页是否仍被任一页/子页的 SubInterface 控件引用。
+    bool subPageReferenced(const QString &id) const;
+    /// 无引用时删除该子页（有引用时保留，返回 false）。
+    bool removeSubPageIfUnused(const QString &id);
 
     /// 绑定体检（2026-10-27）：返回**失效**的绑定键（找不到对应全局变量/节点）。
     /// 设计器与运行视图共用同一判据——否则会出现"设计器看得见、运行态红一片"或反过来。

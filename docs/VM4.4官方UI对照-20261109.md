@@ -376,6 +376,37 @@ TCP 客户端 / TCP 服务端 / UDP / 串口 / 汇川 H2U / 基恩士 KV / 松�
   逐臂还原后 **VERDICT=GREEN**（build/b34_arms_stdout.txt）。
 - **门禁**：ctest -C Release **80/80**；dupcn 57 GREEN；EOL 205 GREEN。
 
+### B3-4b 已落地（2026-11-10）：子界面
+
+- **页模型（引用式，不内嵌）**：子界面页统一存 `RuntimeInterface::subPages`（id → 页），
+  控件只持 `subPageId`。复制/粘贴、撤销快照只带 id，不复制整页内容；`createSubPage`
+  生成 `subN` 并避让冲突；共享引用（多控件指向同一子页）时删页被拒，最后一个引用消失后
+  `removeSubPageIfUnused` 清理并**级联**清理其下级不再被引用的子页。
+- **嵌套深度**：`subPageDepth` 从所有根页做 BFS（深度 1..N，visited 防环）；不可达孤儿页
+  与不存在的 id 返回 -1。设计器进入子页前与运行态弹窗前都按「≤3 层」拦截。
+- **设计器**：控件库「基础」新增「子界面」，新建时自动建同 id 子页；属性面板 = 编辑子界面
+  （进入后画布切到该子页并显示提示条、页管理禁用；返回按钮退出）/ 密码 / 显示图标 / 圆角；
+  删除控件或清空页时级联清理不再被引用的子页。
+- **运行态**：点击子界面按钮按 `subPageId` 取页；`subPassword` 非空时先校验密码，错误或取消
+  不打开子窗口；子窗口为非模态 `QDialog`（`WA_DeleteOnClose`），内嵌独立 `RuntimeInterfaceView`，
+  层级 +1；到第 3 层再点给出「最多嵌套 3 层」提示。页被删时给出可读提示而不是空白。
+- **数据流（广播注册表）**：新增 `RuntimeInterfaceView::liveViews()`（构造登记 / 析构注销），
+  主界面数据推送改走 `broadcastImage` / `broadcastNodeOutput` / `broadcastNodePortMap` /
+  `broadcastVariable`；主视图、运行态子窗口与多页共用同一条数据流，子窗口不再收不到实时值。
+- **序列化**：接口级 `"subPages"` 对象（id → 页 JSON）与控件三字段
+  （`subPageId` / `subPassword` / `subIconVisible`）全量往返；`staleBindings` 对子页内
+  控件同样体检，不因藏在子页里而漏报。
+- **腿**：新增 `subInterfacePagesRoundTripAndDepth`（深度 1/2/3 与 -1、共享引用拒删、
+  级联清理、JSON 往返、子页绑定体检、运行弹窗层级 +1、广播注册表两视图同收）；
+  `b3NewControlsRoundTrip` 扩到 9 控件；设计器用例补子界面属性组 / 进入-返回 / 孤儿清理；
+  `UiGuardsTest` **58 passed**。
+- **改坏自证 9 臂**：A 深度 BFS 忽略嵌套 / B 未引用判据忽略引用 / C 序列化丢子页表 /
+  D 运行弹窗不升层级 / E 控件库上界退回文本框组合 / F 设计器删除不清理孤儿页 /
+  G 广播注册表空转 / I 绑定体检跳过子页 / H 只改注释对照；前八臂判红、H 绿，逐臂还原后
+  **VERDICT=GREEN**（build/b34b_arms_log.txt）。
+- **门禁**：ctest -C Release **80/80**；dupcn 57 GREEN；EOL 205 GREEN；文档锚 33/33；
+  tools/ci.ps1 **exit 0**。
+
 ### B4-1 已落地（2026-11-09）
 
 - **左导航形态**：通信管理由顶部 4 页 QTabWidget 改为官方「左侧 6 项导航 + 右侧堆叠页」：
@@ -602,6 +633,10 @@ TCP 客户端 / TCP 服务端 / UDP / 串口 / 汇川 H2U / 基恩士 KV / 松�
 
 > 2026-11-10 就地更正（原文保留）：文本框组合（B3-4a）落地后现为
 > **23 种官方命名控件**；按官方 24 项计仅差 **子界面** 1 种（嵌套运行界面，另批）。
+
+> 2026-11-10 就地更正（原文保留）：子界面（B3-4b）落地后现为
+> **24 种官方命名控件**，B3 控件库补齐完成；Tab页按下方口径并入 **B2-3**（容器层级），
+> 不计入 B3 的 24 项。
 
 **Tab页未做且不入 B3**：官方「Tab页 = 多个组合框控件的组合，一个组合框对应一个 Tab页」
 本质是**容器层级**（控件归属某个 Tab），要改布局模型，与固定栏同风险，

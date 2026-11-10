@@ -53,7 +53,7 @@ bool paletteTypeOf(const QListWidgetItem *item, RuntimeControlType *out)
     const int t = v.toInt();
     // 上界必须跟住枚举最后一项：旧实现停在 IoStatus，导致参数设置/图表等
     // 后加类型在「添加控件」按钮与双击路径里被静默丢弃。
-    if (t < 0 || t > int(RuntimeControlType::TextEntryCombo)) return false;
+    if (t < 0 || t > int(RuntimeControlType::SubInterface)) return false;
     *out = RuntimeControlType(t);
     return true;
 }
@@ -173,7 +173,7 @@ void RuntimeInterfaceDesigner::rebuildCanvas()
     // 撤销栈后，Qt 容器的写时复制会在下一次非 const 访问时把页数组换块——画布里的旧指针
     // 就落到撤销栈那份**快照**上：重建出来是改前的页，拖动/方向键的几何写回也写进快照，
     // 撤销点因此永远建不出来。所以结构性改动之后必须重新绑一次当前页再重建。
-    m_canvas->setPage(m_layout.currentPage());
+    m_canvas->setPage(effectivePage());
 }
 
 void RuntimeInterfaceDesigner::setCanvasPage()
@@ -181,7 +181,7 @@ void RuntimeInterfaceDesigner::setCanvasPage()
     if (!m_canvas) return;
     // 先按画布配置定尺寸，再挂页（setPage 内部会 rebuild）
     m_canvas->setCanvasSize(QSize(m_layout.canvas.width, m_layout.canvas.height));
-    m_canvas->setPage(m_layout.currentPage());
+    m_canvas->setPage(effectivePage());
     refreshEditInnerTabCombo();
     refreshCanvasConfigControls();
 }
@@ -202,7 +202,7 @@ void RuntimeInterfaceDesigner::refreshCanvasConfigControls()
                                             m_canvasHeightSpin->maximum()));
     }
     // 固定栏厚度是页级字段：没有当前页时显示 0
-    RuntimeInterfacePage *pg = m_layout.currentPage();
+    RuntimeInterfacePage *pg = effectivePage();
     const int top = pg ? pg->topBarHeight : 0;
     const int bottom = pg ? pg->bottomBarHeight : 0;
     const int left = pg ? pg->leftBarWidth : 0;
@@ -230,7 +230,7 @@ void RuntimeInterfaceDesigner::applyCanvasSize()
 
     pushUndo();
     if (m_canvasScaleCheck && m_canvasScaleCheck->isChecked()) {
-        if (RuntimeInterfacePage *pg = m_layout.currentPage())
+        if (RuntimeInterfacePage *pg = effectivePage())
             scaleCanvasControls(*pg, oldSize, QSize(newW, newH));
     }
     m_layout.canvas.width = newW;
@@ -241,7 +241,7 @@ void RuntimeInterfaceDesigner::applyCanvasSize()
 void RuntimeInterfaceDesigner::onBarThicknessChanged()
 {
     if (m_updatingCanvasConfig) return;
-    RuntimeInterfacePage *pg = m_layout.currentPage();
+    RuntimeInterfacePage *pg = effectivePage();
     if (!pg) return;
     const int top = m_barTopSpin ? m_barTopSpin->value() : pg->topBarHeight;
     const int bottom = m_barBottomSpin ? m_barBottomSpin->value() : pg->bottomBarHeight;
@@ -263,7 +263,7 @@ void RuntimeInterfaceDesigner::onBarThicknessChanged()
 void RuntimeInterfaceDesigner::refreshEditInnerTabCombo()
 {
     if (!m_editInnerTabCombo || !m_canvas) return;
-    RuntimeInterfacePage *pg = m_layout.currentPage();
+    RuntimeInterfacePage *pg = effectivePage();
     {
         QSignalBlocker block(m_editInnerTabCombo);   // 重建候选不触发写回
         m_editInnerTabCombo->clear();
@@ -876,6 +876,17 @@ void DesignerControlFrame::paintEvent(QPaintEvent *event)
         }
         break;
     }
+    case RuntimeControlType::SubInterface: {
+        p.setPen(QPen(QColor(ctrl.borderColor.isEmpty() ? QStringLiteral("#3a3a5c")
+                                                       : ctrl.borderColor), 1));
+        p.setBrush(QColor(ctrl.bgColor.isEmpty() ? QStringLiteral("#2a2a33") : ctrl.bgColor));
+        p.drawRoundedRect(body, ctrl.cornerRadius, ctrl.cornerRadius);
+        p.setPen(QColor(ctrl.color));
+        const QString label = (ctrl.subIconVisible ? QStringLiteral("▣  ") : QString())
+                              + ctrl.displayTitle();
+        p.drawText(body, Qt::AlignCenter, label);
+        break;
+    }
     }
 
     // 缩放指示（右下角）
@@ -1040,6 +1051,8 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
 
     // ---- 左上：页面管理 ----
     auto *pageGroup = new QGroupBox(QStringLiteral("页面"), this);
+    pageGroup->setObjectName(QStringLiteral("designerPageGroup"));
+    m_pageGroup = pageGroup;
     m_pageList = new QListWidget(pageGroup);
     m_pageList->setMaximumHeight(110);
     auto *pageBtnRow = new QHBoxLayout();
@@ -1087,6 +1100,7 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
             { "基础", "字符设置", RuntimeControlType::ValueDisplay },
             { "基础", "文本框",   RuntimeControlType::TextLabel },
             { "基础", "文本框组合", RuntimeControlType::TextEntryCombo },
+            { "基础", "子界面",   RuntimeControlType::SubInterface },
             { "基础", "信号灯",   RuntimeControlType::StatusLight },
             { "基础", "按钮",     RuntimeControlType::Button },
             { "基础", "参数设置", RuntimeControlType::ParamSetting },
@@ -1313,10 +1327,36 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     }
     barRow->addStretch();
 
+    // 子界面编辑态提示条（官方「编辑子界面」：编辑区切换为子界面）
+    m_subEditBanner = new QWidget(canvasGroup);
+    m_subEditBanner->setObjectName(QStringLiteral("designerSubEditBanner"));
+    auto *subBannerLay = new QHBoxLayout(m_subEditBanner);
+    subBannerLay->setContentsMargins(0, 0, 0, 0);
+    m_subEditLabel = new QLabel(m_subEditBanner);
+    m_subEditLabel->setStyleSheet(
+        QStringLiteral("QLabel{color:#e7c04c;font-weight:bold;}"));
+    m_subBackBtn = new QPushButton(QStringLiteral("返回主界面"), m_subEditBanner);
+    m_subBackBtn->setObjectName(QStringLiteral("designerSubBackBtn"));
+    m_subBackBtn->setStyleSheet(
+        QStringLiteral("QPushButton{background:#3a6ea5;color:white;border:none;"
+                       "border-radius:3px;padding:3px 8px;}"));
+    connect(m_subBackBtn, &QPushButton::clicked, this, [this] {
+        m_editingSubPageId.clear();
+        m_selected = -1;
+        updateSubEditUi();
+        refreshPageList();
+        rebuildCanvas();
+        refreshPropertyPanel();
+    });
+    subBannerLay->addWidget(m_subEditLabel, 1);
+    subBannerLay->addWidget(m_subBackBtn);
+    m_subEditBanner->setVisible(false);
+
     auto *canvasLay = new QVBoxLayout(canvasGroup);
     canvasLay->addLayout(editTabRow);
     canvasLay->addLayout(canvasSizeRow);
     canvasLay->addLayout(barRow);
+    canvasLay->addWidget(m_subEditBanner);
     canvasLay->addWidget(m_canvasScroll, 1);
     canvasLay->addLayout(alignRow);
     canvasLay->addLayout(canvasToolRow);
@@ -1853,6 +1893,73 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
                 this, &RuntimeInterfaceDesigner::onTextEntryCondChanged);
     }
 
+    // 子界面（官方「子界面」）：数据源 = 编辑子界面 / 密码；外观 = 字符信息/圆角/显示图标
+    m_subGroup = new QGroupBox(QStringLiteral("子界面"), this);
+    m_subGroup->setObjectName(QStringLiteral("designerSubInterfaceGroup"));
+    {
+        auto *subForm = new QFormLayout(m_subGroup);
+        m_subEditBtn = new QPushButton(QStringLiteral("编辑子界面"), m_subGroup);
+        m_subEditBtn->setObjectName(QStringLiteral("designerSubEditBtn"));
+        m_subPasswordEdit = new QLineEdit(m_subGroup);
+        m_subPasswordEdit->setObjectName(QStringLiteral("designerSubPassword"));
+        m_subPasswordEdit->setEchoMode(QLineEdit::Password);
+        m_subPasswordEdit->setPlaceholderText(QStringLiteral("留空 = 打开无需密码"));
+        m_subIconCheck = new QCheckBox(QStringLiteral("显示图标"), m_subGroup);
+        m_subIconCheck->setObjectName(QStringLiteral("designerSubIcon"));
+        m_subRadius = new QSpinBox(m_subGroup);
+        m_subRadius->setObjectName(QStringLiteral("designerSubRadius"));
+        m_subRadius->setRange(0, 40);
+        subForm->addRow(m_subEditBtn);
+        subForm->addRow(QStringLiteral("密码"), m_subPasswordEdit);
+        subForm->addRow(QString(), m_subIconCheck);
+        subForm->addRow(QStringLiteral("圆角半径"), m_subRadius);
+        propOuter->addWidget(m_subGroup);
+        connect(m_subEditBtn, &QPushButton::clicked, this, [this] {
+            RuntimeControl *c = selectedControl();
+            if (!c || c->type != RuntimeControlType::SubInterface) return;
+            if (m_editingSubPageId == c->subPageId) {
+                m_editingSubPageId.clear();
+            } else {
+                int depth = m_editingSubPageId.isEmpty()
+                                ? 0
+                                : qMax(0, m_layout.subPageDepth(m_editingSubPageId));
+                if (depth >= 3) {
+                    QMessageBox::information(this, QStringLiteral("子界面"),
+                                             QStringLiteral("最多嵌套 3 层子界面。"));
+                    return;
+                }
+                if (!m_layout.subPage(c->subPageId))
+                    c->subPageId = m_layout.createSubPage(c->title);
+                m_editingSubPageId = c->subPageId;
+            }
+            m_selected = -1;
+            updateSubEditUi();
+            refreshPageList();
+            rebuildCanvas();
+            refreshPropertyPanel();
+        });
+        connect(m_subPasswordEdit, &QLineEdit::textEdited, this, [this](const QString &text) {
+            if (m_updatingProps) return;
+            RuntimeControl *c = selectedControl();
+            if (!c || c->type != RuntimeControlType::SubInterface) return;
+            c->subPassword = text;
+        });
+        connect(m_subIconCheck, &QCheckBox::toggled, this, [this](bool on) {
+            if (m_updatingProps) return;
+            RuntimeControl *c = selectedControl();
+            if (!c || c->type != RuntimeControlType::SubInterface) return;
+            c->subIconVisible = on;
+            rebuildCanvas();
+        });
+        connect(m_subRadius, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int v) {
+            if (m_updatingProps) return;
+            RuntimeControl *c = selectedControl();
+            if (!c || c->type != RuntimeControlType::SubInterface) return;
+            c->cornerRadius = v;
+            rebuildCanvas();
+        });
+    }
+
     auto *propHint = new QLabel(QStringLiteral("绑定方式说明:\n· 全局变量: 实时显示全局变量值\n· 节点输出: 绑定流程中算子的输出\n· 动作: 按钮点击触发的流程操作\n· 表格列: 每轮把各列当前值提交为一行\n  格式: 变量名,变量名 或 节点:模块完整名\n· IO状态: 绑定相机IO控制节点\n  灯=执行成功, 文本=线值/错误"), propGroup);
     propHint->setWordWrap(true);
     propHint->setStyleSheet("color:#8a8a9a;font-size:11px;");
@@ -1977,9 +2084,33 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     onControlSelected(-1);
 }
 
+RuntimeInterfacePage *RuntimeInterfaceDesigner::effectivePage()
+{
+    if (!m_editingSubPageId.isEmpty()) {
+        if (RuntimeInterfacePage *p = m_layout.subPage(m_editingSubPageId))
+            return p;
+        m_editingSubPageId.clear();   // 页被撤销/删除后回退到根页
+        updateSubEditUi();
+    }
+    return m_layout.currentPage();
+}
+
+void RuntimeInterfaceDesigner::updateSubEditUi()
+{
+    const bool editing = !m_editingSubPageId.isEmpty();
+    if (m_subEditBanner) m_subEditBanner->setVisible(editing);
+    if (m_subEditLabel) {
+        RuntimeInterfacePage *p = editing ? m_layout.subPage(m_editingSubPageId) : nullptr;
+        m_subEditLabel->setText(
+            QStringLiteral("正在编辑子界面：%1（先「返回主界面」再关闭设计器）")
+                .arg(p ? p->pageName : m_editingSubPageId));
+    }
+    if (m_pageGroup) m_pageGroup->setEnabled(!editing);
+}
+
 RuntimeControl *RuntimeInterfaceDesigner::selectedControl()
 {
-    RuntimeInterfacePage *pg = m_layout.currentPage();
+    RuntimeInterfacePage *pg = effectivePage();
     if (!pg) return nullptr;
     if (m_selected < 0 || m_selected >= pg->controls.size()) return nullptr;
     return &pg->controls[m_selected];
@@ -2056,7 +2187,7 @@ void RuntimeInterfaceDesigner::addCurrentPaletteControl()
 
 void RuntimeInterfaceDesigner::enableInnerTabs()
 {
-    RuntimeInterfacePage *pg = m_layout.currentPage();
+    RuntimeInterfacePage *pg = effectivePage();
     if (!pg) return;
     const QString current = pg->innerTabNames.isEmpty()
                                 ? QStringLiteral("参数,结果")
@@ -2094,7 +2225,7 @@ void RuntimeInterfaceDesigner::enableInnerTabs()
 
 void RuntimeInterfaceDesigner::onControlContextMenu(int index, const QPoint &globalPos)
 {
-    RuntimeInterfacePage *pg = m_layout.currentPage();
+    RuntimeInterfacePage *pg = effectivePage();
     if (!pg || index < 0 || index >= pg->controls.size()) return;
     m_selected = index;   // 右键即选中，避免菜单作用到上一个控件
 
@@ -2148,7 +2279,7 @@ void RuntimeInterfaceDesigner::addControlByRow(int row, const QPoint &dropPos)
         return;
     }
 
-    const int n = m_layout.currentPage()->controls.size();
+    const int n = effectivePage()->controls.size();
 const int cascade = (n % 8) * 24;
 QRect geo(40 + cascade, 40 + cascade, 300, 190);
 if (type == RuntimeControlType::StatusLight) geo.setHeight(70);
@@ -2168,12 +2299,13 @@ if (type == RuntimeControlType::MultiImage)       { geo.setWidth(440); geo.setHe
 if (type == RuntimeControlType::RunStatus)        { geo.setWidth(240); geo.setHeight(80); }
 if (type == RuntimeControlType::UiLog)            { geo.setWidth(440); geo.setHeight(220); }
 if (type == RuntimeControlType::TextEntryCombo)   { geo.setWidth(360); geo.setHeight(160); }
+if (type == RuntimeControlType::SubInterface)     { geo.setWidth(200); geo.setHeight(80); }
 
 // 拖放：按落点判定所属区域（官方 9.1 固定栏），再在该区域的坐标系里定位。
 // 画布区坐标相对画布区左上角、随窗口缩放；固定栏坐标相对本栏左上角、1:1 不缩放。
 RuntimeZone zone = RuntimeZone::Canvas;
 if (!dropPos.isNull()) {
-    RuntimeInterfacePage *pg = m_layout.currentPage();
+    RuntimeInterfacePage *pg = effectivePage();
     const QSize canvasSize = m_canvas ? m_canvas->size() : QSize(1200, 760);
     const int topH = qMax(0, pg->topBarHeight);
     const int botH = qMax(0, pg->bottomBarHeight);
@@ -2207,7 +2339,7 @@ if (!dropPos.isNull()) {
 }
 
 pushUndo();
-RuntimeControl *ctrl = m_layout.currentPage()->addControl(type, geo);
+RuntimeControl *ctrl = effectivePage()->addControl(type, geo);
 ctrl->zone = zone;
 if (type == RuntimeControlType::SetVariable || type == RuntimeControlType::OkNgCount
     || type == RuntimeControlType::ConditionalLight) {
@@ -2248,8 +2380,15 @@ if (type == RuntimeControlType::TextEntryCombo) {
         ctrl->textEntries.append(e);
     }
 }
+// 子界面：新建独立子页，控件只存 id（页在 RuntimeInterface::subPages）
+if (type == RuntimeControlType::SubInterface) {
+    ctrl->subPageId = m_layout.createSubPage(ctrl->title);
+    ctrl->cornerRadius = 8;
+    ctrl->bgColor = QStringLiteral("#2a2a33");
+    ctrl->borderColor = QStringLiteral("#3a3a5c");
+}
 rebuildCanvas();
-const int idx = m_layout.currentPage()->indexOf(ctrl);
+const int idx = effectivePage()->indexOf(ctrl);
 if (idx >= 0) m_canvas->selectIndex(idx);
 }
 
@@ -2282,16 +2421,22 @@ if (!tmp.fromJson(doc.object()) || tmp.controls.isEmpty()) return;
 RuntimeControl copy = tmp.controls.first();
 copy.geometry.translate(24, 24);   // 与 Ctrl+D 一致的级联偏移
 pushUndo();
-m_layout.currentPage()->controls.append(copy);
+effectivePage()->controls.append(copy);
 rebuildCanvas();
-m_canvas->selectIndex(m_layout.currentPage()->controls.size() - 1);
+m_canvas->selectIndex(effectivePage()->controls.size() - 1);
 }
 
 void RuntimeInterfaceDesigner::deleteSelected()
 {
     if (m_selected < 0) return;
+    RuntimeInterfacePage *pg = effectivePage();
+    if (!pg || m_selected >= pg->controls.size()) return;
+    const QString subId = pg->controls.at(m_selected).type == RuntimeControlType::SubInterface
+                              ? pg->controls.at(m_selected).subPageId
+                              : QString();
     pushUndo();
-    m_layout.currentPage()->removeControl(m_selected);
+    pg->removeControl(m_selected);
+    if (!subId.isEmpty()) m_layout.removeSubPageIfUnused(subId);
     m_selected = -1;
     rebuildCanvas();
     refreshPropertyPanel();
@@ -2299,13 +2444,20 @@ void RuntimeInterfaceDesigner::deleteSelected()
 
 void RuntimeInterfaceDesigner::clearAll()
 {
-    RuntimeInterfacePage *pg = m_layout.currentPage();
+    RuntimeInterfacePage *pg = effectivePage();
     if (!pg || pg->controls.isEmpty()) return;
     if (QMessageBox::question(this, QStringLiteral("清空本页"),
                               QStringLiteral("确定清空当前页全部控件？")) != QMessageBox::Yes)
         return;
     pushUndo();
+    QStringList subIds;
+    for (const RuntimeControl &c : pg->controls) {
+        if (c.type == RuntimeControlType::SubInterface && !c.subPageId.isEmpty())
+            subIds << c.subPageId;
+    }
     pg->clear();
+    for (const QString &sid : subIds)
+        m_layout.removeSubPageIfUnused(sid);
     m_selected = -1;
     rebuildCanvas();
     refreshPropertyPanel();
@@ -2641,14 +2793,14 @@ void RuntimeInterfaceDesigner::duplicateSelected()
     RuntimeControl copy = *ctrl;
     copy.geometry = copy.geometry.translated(24, 24);   // 级联偏移避免完全重叠
     pushUndo();
-    m_layout.currentPage()->controls.append(copy);
+    effectivePage()->controls.append(copy);
     rebuildCanvas();
-    m_canvas->selectIndex(m_layout.currentPage()->controls.size() - 1);
+    m_canvas->selectIndex(effectivePage()->controls.size() - 1);
 }
 
 void RuntimeInterfaceDesigner::raiseSelected()
 {
-    RuntimeInterfacePage *pg = m_layout.currentPage();
+    RuntimeInterfacePage *pg = effectivePage();
     if (!pg || m_selected < 0 || m_selected >= pg->controls.size() - 1) return;
     pushUndo();
     pg->controls.swapItemsAt(m_selected, m_selected + 1);
@@ -2659,7 +2811,7 @@ void RuntimeInterfaceDesigner::raiseSelected()
 
 void RuntimeInterfaceDesigner::lowerSelected()
 {
-    RuntimeInterfacePage *pg = m_layout.currentPage();
+    RuntimeInterfacePage *pg = effectivePage();
     if (!pg || m_selected <= 0 || m_selected >= pg->controls.size()) return;
     pushUndo();
     pg->controls.swapItemsAt(m_selected, m_selected - 1);
@@ -2671,7 +2823,7 @@ void RuntimeInterfaceDesigner::lowerSelected()
 // 官方工具条 4 档中的顶层 / 底层：把选中控件直接移到列表首尾
 void RuntimeInterfaceDesigner::raiseToTop()
 {
-    RuntimeInterfacePage *pg = m_layout.currentPage();
+    RuntimeInterfacePage *pg = effectivePage();
     if (!pg || m_selected < 0 || m_selected >= pg->controls.size() - 1) return;
     pushUndo();
     pg->controls.append(pg->controls.takeAt(m_selected));
@@ -2682,7 +2834,7 @@ void RuntimeInterfaceDesigner::raiseToTop()
 
 void RuntimeInterfaceDesigner::lowerToBottom()
 {
-    RuntimeInterfacePage *pg = m_layout.currentPage();
+    RuntimeInterfacePage *pg = effectivePage();
     if (!pg || m_selected <= 0 || m_selected >= pg->controls.size()) return;
     pushUndo();
     pg->controls.prepend(pg->controls.takeAt(m_selected));
@@ -3101,6 +3253,7 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
         if (m_statusGroup) m_statusGroup->setVisible(false);
         if (m_logGroup) m_logGroup->setVisible(false);
         if (m_textEntryGroup) m_textEntryGroup->setVisible(false);
+        if (m_subGroup) m_subGroup->setVisible(false);
         if (m_bindKey2Combo && m_dataForm)
             m_dataForm->setRowVisible(m_bindKey2Combo, false);
         m_raiseBtn->setEnabled(false);
@@ -3118,7 +3271,7 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
     m_visibleCheck->setChecked(ctrl->visible);
 
     // 层级按钮：首控件不能下移、末控件不能上移
-    RuntimeInterfacePage *pg = m_layout.currentPage();
+    RuntimeInterfacePage *pg = effectivePage();
     const int count = pg ? pg->controls.size() : 0;
     m_raiseBtn->setEnabled(m_selected >= 0 && m_selected < count - 1);
     m_lowerBtn->setEnabled(m_selected > 0 && m_selected < count);
@@ -3151,16 +3304,18 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
     const bool isStatus = (ctrl->type == RuntimeControlType::RunStatus);
     const bool isLog = (ctrl->type == RuntimeControlType::UiLog);
     const bool isTextEntry = (ctrl->type == RuntimeControlType::TextEntryCombo);
+    const bool isSub = (ctrl->type == RuntimeControlType::SubInterface);
     if (m_dataForm && m_actionConfigBtn) {
         m_dataForm->setRowVisible(m_actionConfigBtn, isButton);
         // 参数设置/开关控制/组合框固定绑节点、设置变量/OK-NG 固定绑全局，只藏「绑定方式」
         m_dataForm->setRowVisible(m_bindTypeCombo,
                                   !isButton && !isParam && !isSwitch && !isCombo
                                       && !isSetter && !isOkNg && !isRun
-                                      && !isMulti && !isStatus && !isLog && !isTextEntry);
+                                      && !isMulti && !isStatus && !isLog && !isTextEntry
+                                      && !isSub);
         m_dataForm->setRowVisible(m_bindKeyCombo,
                                   !isButton && !isRun && !isMulti && !isStatus && !isLog
-                                      && !isTextEntry);
+                                      && !isTextEntry && !isSub);
         if (m_bindKey2Combo) m_dataForm->setRowVisible(m_bindKey2Combo, isOkNg);
         if (m_paramKeyEdit)
             m_dataForm->setRowVisible(m_paramKeyEdit, isParam || isSwitch || isCombo);
@@ -3351,6 +3506,19 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
             refreshTextEntryRows();
         }
     }
+    if (m_subGroup) {
+        m_subGroup->setVisible(isSub);
+        m_subGroup->setEnabled(isSub);
+        if (isSub) {
+            m_subEditBtn->setText(m_editingSubPageId == ctrl->subPageId
+                                      ? QStringLiteral("返回主界面")
+                                      : QStringLiteral("编辑子界面"));
+            m_subPasswordEdit->setText(ctrl->subPassword);
+            m_subIconCheck->setChecked(ctrl->subIconVisible);
+            m_subRadius->setValue(ctrl->cornerRadius);
+        }
+    }
+    updateSubEditUi();
 
     // 线图阵列：分组只在选中该类型时出现；数据系列来源 = 全局变量 + 节点输出
     if (m_chartGroup) {

@@ -4,6 +4,7 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QRegularExpression>
+#include <QPair>
 
 QString runtimeControlTypeName(RuntimeControlType type)
 {
@@ -32,6 +33,7 @@ QString runtimeControlTypeName(RuntimeControlType type)
     case RuntimeControlType::RunStatus:   return QStringLiteral("运行状态");
     case RuntimeControlType::UiLog:       return QStringLiteral("界面日志");
     case RuntimeControlType::TextEntryCombo: return QStringLiteral("文本框组合");
+    case RuntimeControlType::SubInterface: return QStringLiteral("子界面");
     }
     return QStringLiteral("未知");
 }
@@ -170,6 +172,7 @@ bool runtimeControlTypeFromName(const QString &name, RuntimeControlType &out)
     if (name == QStringLiteral("运行状态")) { out = RuntimeControlType::RunStatus; return true; }
     if (name == QStringLiteral("界面日志")) { out = RuntimeControlType::UiLog; return true; }
     if (name == QStringLiteral("文本框组合")) { out = RuntimeControlType::TextEntryCombo; return true; }
+    if (name == QStringLiteral("子界面"))   { out = RuntimeControlType::SubInterface; return true; }
     return false;
 }
 
@@ -372,6 +375,11 @@ static QJsonObject controlToJson(const RuntimeControl &c)
         o["textEntryBorderColor"] = c.textEntryBorderColor;
         o["textEntryHeaderBgColor"] = c.textEntryHeaderBgColor;
     }
+    if (c.type == RuntimeControlType::SubInterface) {
+        o["subPageId"] = c.subPageId;
+        o["subPassword"] = c.subPassword;
+        o["subIconVisible"] = c.subIconVisible;
+    }
     // 按钮动作表：只在有内容时写出，旧方案不膨胀
     if (c.type == RuntimeControlType::Button && !c.actions.isEmpty()) {
         QJsonArray acts;
@@ -555,6 +563,11 @@ static RuntimeControl controlFromJson(const QJsonObject &o, RuntimeControlType t
         ctrl.textEntryBorderColor = o["textEntryBorderColor"].toString();
         ctrl.textEntryHeaderBgColor =
             o["textEntryHeaderBgColor"].toString(QStringLiteral("#20262a"));
+    }
+    if (ctrl.type == RuntimeControlType::SubInterface) {
+        ctrl.subPageId = o["subPageId"].toString();
+        ctrl.subPassword = o["subPassword"].toString();
+        ctrl.subIconVisible = o["subIconVisible"].toBool(true);
     }
 
     if (ctrl.type == RuntimeControlType::ResultTable) {
@@ -742,6 +755,10 @@ void RuntimeInterface::removePage(int index)
     pages.removeAt(index);
     if (currentPageIndex >= pages.size())
         currentPageIndex = pages.size() - 1;
+    // 删页后清理不再被引用的子界面（级联）
+    const QStringList subIds = subPages.keys();
+    for (const QString &sid : subIds)
+        removeSubPageIfUnused(sid);
 }
 
 int RuntimeInterface::totalControlCount() const
@@ -752,6 +769,85 @@ int RuntimeInterface::totalControlCount() const
     return n;
 }
 
+QString RuntimeInterface::createSubPage(const QString &pageName)
+{
+    int n = 1;
+    QString id;
+    do {
+        id = QStringLiteral("sub%1").arg(n++);
+    } while (subPages.contains(id));
+    RuntimeInterfacePage p;
+    p.pageName = pageName.isEmpty()
+                     ? QStringLiteral("子界面%1").arg(subPages.size() + 1)
+                     : pageName;
+    subPages.insert(id, p);
+    return id;
+}
+
+RuntimeInterfacePage *RuntimeInterface::subPage(const QString &id)
+{
+    auto it = subPages.find(id);
+    return it == subPages.end() ? nullptr : &it.value();
+}
+
+int RuntimeInterface::subPageDepth(const QString &id) const
+{
+    if (!subPages.contains(id)) return -1;
+    QSet<QString> seen;
+    QList<QPair<QString, int>> queue;   // 子页 id, 深度
+    for (const RuntimeInterfacePage &p : pages) {
+        for (const RuntimeControl &c : p.controls) {
+            if (c.type == RuntimeControlType::SubInterface && subPages.contains(c.subPageId))
+                queue.append({c.subPageId, 1});
+        }
+    }
+    for (int head = 0; head < queue.size(); ++head) {
+        const QString cur = queue.at(head).first;
+        const int depth = queue.at(head).second;
+        if (seen.contains(cur)) continue;
+        seen.insert(cur);
+        if (cur == id) return depth;
+        const auto it = subPages.constFind(cur);
+        if (it == subPages.constEnd()) continue;
+        for (const RuntimeControl &c : it.value().controls) {
+            if (c.type == RuntimeControlType::SubInterface && !c.subPageId.isEmpty())
+                queue.append({c.subPageId, depth + 1});
+        }
+    }
+    return -1;   // 存在但不可从根页到达（孤儿页）
+}
+
+bool RuntimeInterface::subPageReferenced(const QString &id) const
+{
+    auto referencedBy = [&id](const RuntimeInterfacePage &p) {
+        for (const RuntimeControl &c : p.controls) {
+            if (c.type == RuntimeControlType::SubInterface && c.subPageId == id)
+                return true;
+        }
+        return false;
+    };
+    for (const RuntimeInterfacePage &p : pages)
+        if (referencedBy(p)) return true;
+    for (const RuntimeInterfacePage &p : subPages)
+        if (referencedBy(p)) return true;
+    return false;
+}
+
+bool RuntimeInterface::removeSubPageIfUnused(const QString &id)
+{
+    if (!subPages.contains(id)) return false;
+    if (subPageReferenced(id)) return false;
+    QStringList children;
+    for (const RuntimeControl &c : subPages.value(id).controls) {
+        if (c.type == RuntimeControlType::SubInterface && !c.subPageId.isEmpty())
+            children << c.subPageId;
+    }
+    subPages.remove(id);
+    for (const QString &child : children)
+        removeSubPageIfUnused(child);   // 级联清理不再被引用的子页
+    return true;
+}
+
 QJsonObject RuntimeInterface::toJson() const
 {
     QJsonObject root;
@@ -759,6 +855,10 @@ QJsonObject RuntimeInterface::toJson() const
     for (const RuntimeInterfacePage &p : pages)
         pageArr.append(p.toJson());
     root["pages"] = pageArr;
+    QJsonObject subObj;
+    for (auto it = subPages.constBegin(); it != subPages.constEnd(); ++it)
+        subObj.insert(it.key(), it.value().toJson());
+    root["subPages"] = subObj;
     root["currentPage"] = currentPageIndex;
     // 画布（所有页共用一块画布）
     QJsonObject cv;
@@ -774,6 +874,7 @@ QJsonObject RuntimeInterface::toJson() const
 bool RuntimeInterface::fromJson(const QJsonObject &json)
 {
     pages.clear();
+    subPages.clear();
     currentPageIndex = 0;
 
     // 项目未上线，只保留当前多页格式，不做旧单页格式兼容（2026-11-09 用户口径）
@@ -785,6 +886,12 @@ bool RuntimeInterface::fromJson(const QJsonObject &json)
             pages.append(p);
     }
     currentPageIndex = json["currentPage"].toInt(0);
+    const QJsonObject subObj = json["subPages"].toObject();
+    for (auto it = subObj.constBegin(); it != subObj.constEnd(); ++it) {
+        RuntimeInterfacePage p;
+        if (p.fromJson(it.value().toObject()))
+            subPages.insert(it.key(), p);
+    }
     const QJsonObject cv = json["canvas"].toObject();
     canvas.width = cv["width"].toInt(1200);
     canvas.height = cv["height"].toInt(760);
@@ -822,7 +929,7 @@ QStringList RuntimeInterface::staleBindings(const QSet<QString> &globals,
                                             const QSet<QString> &nodes) const
 {
     QStringList bad;
-    for (const RuntimeInterfacePage &page : pages) {
+    auto scanPage = [&](const RuntimeInterfacePage &page) {
         for (const RuntimeControl &c : page.controls) {
             // 多图像：每画面各自绑一个节点图像源
             if (c.type == RuntimeControlType::MultiImage) {
@@ -853,7 +960,11 @@ QStringList RuntimeInterface::staleBindings(const QSet<QString> &globals,
                      && !nodes.contains(c.bindKey))
                 bad << QStringLiteral("node:%1").arg(c.bindKey);
         }
-    }
+    };
+    for (const RuntimeInterfacePage &page : pages)
+        scanPage(page);
+    for (const RuntimeInterfacePage &page : subPages)
+        scanPage(page);   // 子界面里的绑定同样参与体检
     bad.removeDuplicates();
     return bad;
 }

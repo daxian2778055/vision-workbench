@@ -111,6 +111,9 @@ private:
     void refreshTextEntryRows();
     void refreshTextEntryCondTable();
     void onTextEntryCondChanged(int row, int column);
+    /// 当前编辑页：子界面编辑态返回 subPages[id]，否则根当前页。
+    RuntimeInterfacePage *effectivePage();
+    void updateSubEditUi();
     /// 刷新「编辑内层Tab」选择器（随页/内层 Tab 变化重建候选并回选画布当前目标）
     void refreshEditInnerTabCombo();
     /// 刷新画布尺寸 / 固定栏厚度输入框（随画布配置或切页变化，不触发写回）
@@ -237,6 +240,17 @@ QLabel *m_geometryLabel = nullptr;   /// 布局组只读显示尺寸/位置（�
     QPushButton *m_textEntryCondAddBtn = nullptr;
     QPushButton *m_textEntryCondDelBtn = nullptr;
     int m_textEntryCondRow = -1;   ///< 条件表当前编辑的条目下标
+    // 子界面（官方「子界面」）：页存在 RuntimeInterface::subPages，控件只持 id
+    QGroupBox *m_pageGroup = nullptr;            ///< 子界面编辑时禁用页管理
+    QWidget *m_subEditBanner = nullptr;          ///< 画布上方「正在编辑子界面」条
+    QLabel *m_subEditLabel = nullptr;
+    QPushButton *m_subBackBtn = nullptr;
+    QGroupBox *m_subGroup = nullptr;
+    QPushButton *m_subEditBtn = nullptr;
+    QLineEdit *m_subPasswordEdit = nullptr;
+    QCheckBox *m_subIconCheck = nullptr;
+    QSpinBox *m_subRadius = nullptr;
+    QString m_editingSubPageId;                  ///< 空 = 编辑根页
 
     int m_selected = -1;
     bool m_updatingProps = false;

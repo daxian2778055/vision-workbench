@@ -30,6 +30,9 @@
 #include <QTableWidget>
 #include <QHeaderView>
 #include <QTimer>
+#include <QInputDialog>
+#include <QMessageBox>
+#include <QDialog>
 #include <QtCharts/QChartView>
 #include <QtCharts/QChart>
 #include <QtCharts/QLineSeries>
@@ -388,6 +391,44 @@ RuntimeInterfaceView::RuntimeInterfaceView(QWidget *parent)
         "QLabel { color: #e0e0e0; }"
     ));
     setMinimumSize(400, 300);
+    liveViews().append(this);
+}
+
+RuntimeInterfaceView::~RuntimeInterfaceView()
+{
+    liveViews().removeAll(this);
+}
+
+QList<RuntimeInterfaceView *> &RuntimeInterfaceView::liveViews()
+{
+    static QList<RuntimeInterfaceView *> views;
+    return views;
+}
+
+void RuntimeInterfaceView::broadcastVariable(const QString &name, const QVariant &value)
+{
+    for (RuntimeInterfaceView *v : liveViews())
+        if (v) v->updateVariable(name, value);
+}
+
+void RuntimeInterfaceView::broadcastNodeOutput(const QString &nodeFullName, const QVariant &value)
+{
+    for (RuntimeInterfaceView *v : liveViews())
+        if (v) v->updateNodeOutput(nodeFullName, value);
+}
+
+void RuntimeInterfaceView::broadcastNodePortMap(const QString &nodeFullName,
+                                                const QVariantMap &ports)
+{
+    for (RuntimeInterfaceView *v : liveViews())
+        if (v) v->updateNodePortMap(nodeFullName, ports);
+}
+
+void RuntimeInterfaceView::broadcastImage(const QString &nodeFullName,
+                                          const HalconCpp::HImage &image)
+{
+    for (RuntimeInterfaceView *v : liveViews())
+        if (v) v->pushImage(nodeFullName, image);
 }
 
 void RuntimeInterfaceView::setInterface(const RuntimeInterface &layout)
@@ -1293,6 +1334,62 @@ QWidget *RuntimeInterfaceView::createControlWidget(const RuntimeControl &ctrl)
             sheet += QStringLiteral("border: 1px solid %1;").arg(ctrl.textEntryBorderColor);
         if (!sheet.isEmpty()) host->setStyleSheet(QStringLiteral("QWidget { %1 }").arg(sheet));
         return host;
+    }
+    case RuntimeControlType::SubInterface: {
+        auto *btn = new QPushButton(ctrl.displayTitle());
+        btn->setObjectName(QStringLiteral("RuntimeSubInterfaceButton"));
+        if (ctrl.subIconVisible) btn->setText(QStringLiteral("▣  ") + ctrl.displayTitle());
+        btn->setStyleSheet(QStringLiteral(
+            "QPushButton { background-color: %1; color: %2; font-size: %3px;"
+            " border: 1px solid %4; border-radius: %5px; }"
+            "QPushButton:pressed { background-color: %6; }")
+            .arg(ctrl.bgColor.isEmpty() ? QStringLiteral("#2a2a33") : ctrl.bgColor,
+                 ctrl.color)
+            .arg(ctrl.fontSize)
+            .arg(ctrl.borderColor.isEmpty() ? QStringLiteral("#3a3a5c") : ctrl.borderColor)
+            .arg(ctrl.cornerRadius)
+            .arg(ctrl.pressedColor.isEmpty() ? QStringLiteral("#3a3a5c") : ctrl.pressedColor));
+        const QString subId = ctrl.subPageId;
+        const QString subPwd = ctrl.subPassword;
+        const QString subTitle = ctrl.displayTitle();
+        connect(btn, &QPushButton::clicked, this, [this, subId, subPwd, subTitle] {
+            if (m_subLevel >= 3) {
+                QMessageBox::warning(this, QStringLiteral("子界面"),
+                                     QStringLiteral("运行界面最多嵌套 3 层子界面。"));
+                return;
+            }
+            RuntimeInterfacePage *pg = m_current.subPage(subId);
+            if (!pg) {
+                QMessageBox::warning(this, QStringLiteral("子界面"),
+                                     QStringLiteral("子界面页不存在（可能已被删除）。"));
+                return;
+            }
+            if (!subPwd.isEmpty()) {
+                bool ok = false;
+                const QString input = QInputDialog::getText(
+                    this, QStringLiteral("子界面密码"), QStringLiteral("请输入密码："),
+                    QLineEdit::Password, QString(), &ok);
+                if (!ok || input != subPwd) return;
+            }
+            RuntimeInterface sub;
+            sub.pages = {*pg};
+            sub.subPages = m_current.subPages;
+            sub.canvas = m_current.canvas;
+            auto *dlg = new QDialog(this);
+            dlg->setAttribute(Qt::WA_DeleteOnClose);
+            dlg->setWindowTitle(subTitle);
+            dlg->resize(qMin(1100, qMax(640, m_current.canvas.width)),
+                        qMin(820, qMax(480, m_current.canvas.height)));
+            auto *lay = new QVBoxLayout(dlg);
+            lay->setContentsMargins(0, 0, 0, 0);
+            auto *view = new RuntimeInterfaceView(dlg);
+            view->setSubLevel(m_subLevel + 1);
+            view->setKnownNodeNames(m_knownNodeNames);
+            view->setInterface(sub);
+            lay->addWidget(view);
+            dlg->show();
+        });
+        return btn;
     }
     case RuntimeControlType::LineChart:
         return new RuntimeChartPanel(ctrl);

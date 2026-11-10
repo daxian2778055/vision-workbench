@@ -2194,7 +2194,7 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
             return;
         // 运行界面图像控件转发（不受用户显示选择影响）
         if (m_runtimeView)
-            m_runtimeView->pushImage(node->fullName(), image);
+            RuntimeInterfaceView::broadcastImage(node->fullName(), image);
         // 如果用户已通过下拉框或画布选择了一个算子，imageReady 不覆盖
         NodeBase *target = resolveDisplayNode();
         if (target != node && target != nullptr) {
@@ -2212,7 +2212,7 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
         if (ex != m_executor || !isNodeLive(node, ex->flowScene()))
             return;
         if (m_runtimeView)
-            m_runtimeView->pushImage(node->fullName(), image);
+            RuntimeInterfaceView::broadcastImage(node->fullName(), image);
     });
 
     // ── 逐节点反馈 ──
@@ -2302,11 +2302,11 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
                 if (v.isValid()) {
                     portMap.insert(named.at(pi).first, v);
                     if (pi == 0)
-                        m_runtimeView->updateNodeOutput(node->fullName(), v);
+                        RuntimeInterfaceView::broadcastNodeOutput(node->fullName(), v);
                 }
             }
             if (!portMap.isEmpty())
-                m_runtimeView->updateNodePortMap(node->fullName(), portMap);
+                RuntimeInterfaceView::broadcastNodePortMap(node->fullName(), portMap);
         }
     });
 }
@@ -7414,7 +7414,9 @@ void MainWindow::setupDockWidgets()
 
         // 全局变量变化 → 运行界面实时更新
         connect(GlobalVariableManager::instance(), &GlobalVariableManager::variableChanged,
-                m_runtimeView, &RuntimeInterfaceView::updateVariable);
+                this, [](const QString &name, const QVariant &value) {
+                    RuntimeInterfaceView::broadcastVariable(name, value);
+                });
 
         // F11：运行界面全屏（dock 浮动 + 无边框全屏；现场大屏直接投全屏，再按 F11 还原）
         auto *runtimeFsShortcut = new QShortcut(QKeySequence(QStringLiteral("F11")), this);

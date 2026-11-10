@@ -23,6 +23,16 @@ class RuntimeInterfaceView : public QWidget
 
 public:
     explicit RuntimeInterfaceView(QWidget *parent = nullptr);
+    ~RuntimeInterfaceView() override;
+
+    /// 广播到所有运行视图（主界面 + 子界面弹窗），保证子窗口与主界面同源实时。
+    static void broadcastVariable(const QString &name, const QVariant &value);
+    static void broadcastNodeOutput(const QString &nodeFullName, const QVariant &value);
+    static void broadcastNodePortMap(const QString &nodeFullName, const QVariantMap &ports);
+    static void broadcastImage(const QString &nodeFullName, const HalconCpp::HImage &image);
+    /// 子界面嵌套层级：根视图 0；弹窗 = 父层级 + 1，超过 3 层拒绝继续打开。
+    void setSubLevel(int level) { m_subLevel = qMax(0, level); }
+    int subLevel() const { return m_subLevel; }
 
     /// 载入布局并重建控件（设计器应用/进入运行模式时调用）
     void setInterface(const RuntimeInterface &layout);
@@ -155,4 +165,6 @@ private:
     QList<int> m_textEntryRows;
     QMap<QString, QList<int>> m_nodeTextEntryMap;
     void updateTextEntryRow(int index, const QVariant &value);
+    static QList<RuntimeInterfaceView *> &liveViews();
+    int m_subLevel = 0;
 };

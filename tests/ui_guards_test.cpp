@@ -108,6 +108,7 @@ void runtimeRunControlEmitsActions();
 void runtimeOkNgAndConditionalLightUpdate();
 void runtimeMultiImageRunStatusAndUiLog();
 void runtimeTextEntryComboFormatsAndColors();
+void subInterfacePagesRoundTripAndDepth();
 void b3NewControlsRoundTrip();
 void designerB3PropertyPanelsWork();
     void staleBindingsIgnoresValidAndUnbound();
@@ -1969,6 +1970,7 @@ void UiGuardsTest::designerPaletteAddsNewAndPreviouslyBlockedControls()
                                QStringLiteral("OK/NG"), QStringLiteral("条件信号灯"),
                                QStringLiteral("多图像"), QStringLiteral("运行状态"),
                                QStringLiteral("界面日志"), QStringLiteral("文本框组合"),
+                               QStringLiteral("子界面"),
                                QStringLiteral("参数设置"), QStringLiteral("线图阵列")};
     for (const QString &name : names) {
         const int row = rowOf(name);
@@ -2265,10 +2267,112 @@ void UiGuardsTest::runtimeTextEntryComboFormatsAndColors()
     gv->removeVariable(varName);
 }
 
+void UiGuardsTest::subInterfacePagesRoundTripAndDepth()
+{
+    // 模型：子界面页存 subPages，控件只持 id；深度 BFS 从根页算，带 visited 防环
+    RuntimeInterface iface;
+    auto *root = iface.currentPage();
+    const QString subA = iface.createSubPage(QStringLiteral("明细页"));
+    QVERIFY(!subA.isEmpty());
+    auto *rootCtrl = root->addControl(RuntimeControlType::SubInterface, QRect(10, 10, 200, 80));
+    rootCtrl->subPageId = subA;
+    rootCtrl->subPassword = QStringLiteral("1234");
+    rootCtrl->subIconVisible = false;
+    QCOMPARE(iface.subPageDepth(subA), 1);
+    QVERIFY(iface.subPage(subA));
+
+    auto *inner = iface.subPage(subA);
+    auto *innerText = inner->addControl(RuntimeControlType::ValueDisplay, QRect(0, 0, 100, 40));
+    innerText->bindType = QStringLiteral("global");
+    innerText->bindKey = QStringLiteral("UT_SUB_MISS");
+    const QString subB = iface.createSubPage(QStringLiteral("二级"));
+    auto *c2 = inner->addControl(RuntimeControlType::SubInterface, QRect(0, 50, 200, 80));
+    c2->subPageId = subB;
+    QCOMPARE(iface.subPageDepth(subB), 2);
+    const QString subC = iface.createSubPage(QStringLiteral("三级"));
+    auto *c3 = iface.subPage(subB)->addControl(RuntimeControlType::SubInterface,
+                                              QRect(0, 50, 200, 80));
+    c3->subPageId = subC;
+    QCOMPARE(iface.subPageDepth(subC), 3);
+    QCOMPARE(iface.subPageDepth(QStringLiteral("nope")), -1);
+
+    // 共享引用：还有其它控件引用时删页必须被拒
+    auto *dup = root->addControl(RuntimeControlType::SubInterface, QRect(10, 100, 200, 80));
+    dup->subPageId = subA;
+    QVERIFY(iface.subPageReferenced(subA));
+    root->removeControl(1);   // 删共享引用之一
+    QVERIFY2(!iface.removeSubPageIfUnused(subA), "仍被引用时子页不得删除");
+    root->removeControl(0);   // 最后一个引用
+    QVERIFY(iface.removeSubPageIfUnused(subA));
+    QVERIFY(!iface.subPage(subA));
+    QVERIFY2(!iface.subPage(subB), "子页删除后其下级子页未被级联清理");
+    QVERIFY(!iface.subPage(subC));
+
+    // JSON：整包往返保留子页内容与控件字段
+    RuntimeInterface j;
+    const QString jid = j.createSubPage(QStringLiteral("子页"));
+    auto *jc = j.currentPage()->addControl(RuntimeControlType::SubInterface,
+                                           QRect(0, 0, 200, 80));
+    jc->subPageId = jid;
+    jc->subPassword = QStringLiteral("pw");
+    jc->subIconVisible = false;
+    auto *jv = j.subPage(jid)->addControl(RuntimeControlType::ValueDisplay,
+                                          QRect(0, 0, 100, 40));
+    jv->bindType = QStringLiteral("global");
+    jv->bindKey = QStringLiteral("UT_SUB_MISS");
+    RuntimeInterface j2;
+    QVERIFY(j2.fromJson(j.toJson()));
+    QVERIFY(j2.subPage(jid));
+    QCOMPARE(j2.subPage(jid)->controls.size(), 1);
+    QCOMPARE(j2.subPageDepth(jid), 1);
+    QCOMPARE(j2.currentPage()->controls.first().subPageId, jid);
+    QCOMPARE(j2.currentPage()->controls.first().subPassword, QStringLiteral("pw"));
+    QCOMPARE(j2.currentPage()->controls.first().subIconVisible, false);
+    QVERIFY2(j2.staleBindings({}, {}).contains(QStringLiteral("global:UT_SUB_MISS")),
+             "子界面内的绑定未参与体检");
+
+    // 运行视图：点击子界面按钮弹出新窗口，层级 +1；无密码时不再拦
+    j2.currentPage()->controls.first().subPassword.clear();
+    RuntimeInterfaceView view;
+    view.setInterface(j2);
+    auto *btn = view.findChild<QPushButton *>(QStringLiteral("RuntimeSubInterfaceButton"));
+    QVERIFY2(btn, "子界面按钮缺失");
+    btn->click();
+    RuntimeInterfaceView *subView = nullptr;
+    for (QWidget *w : QApplication::topLevelWidgets()) {
+        auto *v = w->findChild<RuntimeInterfaceView *>(QStringLiteral("RuntimeInterfaceView"));
+        if (v && v != &view) {
+            subView = v;
+            break;
+        }
+    }
+    QVERIFY2(subView, "点击子界面未弹出子窗口");
+    QCOMPARE(subView->subLevel(), 1);
+    subView->window()->close();
+    QCoreApplication::processEvents();
+
+    // 广播注册表：主视图与子窗口共享同一数据流（MainWindow 只调广播入口）
+    RuntimeInterface bcast;
+    auto *bctrl = bcast.currentPage()->addControl(RuntimeControlType::ValueDisplay,
+                                                  QRect(0, 0, 120, 40));
+    bctrl->bindType = QStringLiteral("global");
+    bctrl->bindKey = QStringLiteral("UT_BCAST");
+    RuntimeInterfaceView bv1;
+    RuntimeInterfaceView bv2;
+    bv1.setInterface(bcast);
+    bv2.setInterface(bcast);
+    RuntimeInterfaceView::broadcastVariable(QStringLiteral("UT_BCAST"), 5);
+    auto *bl1 = bv1.findChild<QLabel *>(QStringLiteral("RuntimeValueLabel"));
+    auto *bl2 = bv2.findChild<QLabel *>(QStringLiteral("RuntimeValueLabel"));
+    QVERIFY2(bl1 && bl2, "数值控件缺失");
+    QCOMPARE(bl1->text(), QStringLiteral("5"));
+    QCOMPARE(bl2->text(), QStringLiteral("5"));
+}
+
 void UiGuardsTest::b3NewControlsRoundTrip()
 {
     // 类型名映射：枚举每一项都必须能按名字往返（新增类型漏映射会在这里判红）
-    for (int i = 0; i <= int(RuntimeControlType::TextEntryCombo); ++i) {
+    for (int i = 0; i <= int(RuntimeControlType::SubInterface); ++i) {
         const auto type = RuntimeControlType(i);
         RuntimeControlType back = RuntimeControlType::TextLabel;
         QVERIFY2(runtimeControlTypeFromName(runtimeControlTypeName(type), back),
@@ -2343,9 +2447,15 @@ void UiGuardsTest::b3NewControlsRoundTrip()
     teB.dataType = 0;
     te->textEntries << teA << teB;
 
+    // B3-4b：子界面（控件只存 id/密码/显示图标；页表在 RuntimeInterface 级）
+    auto *sub = page.addControl(RuntimeControlType::SubInterface, QRect(0, 1240, 200, 80));
+    sub->subPageId = QStringLiteral("sub7");
+    sub->subPassword = QStringLiteral("pw7");
+    sub->subIconVisible = false;
+
     RuntimeInterfacePage page2;
     QVERIFY(page2.fromJson(page.toJson()));
-    QCOMPARE(page2.controls.size(), 8);
+    QCOMPARE(page2.controls.size(), 9);
     QCOMPARE(page2.controls.at(0).type, RuntimeControlType::SetVariable);
     QCOMPARE(page2.controls.at(0).bindKey, QStringLiteral("v_target"));
     QCOMPARE(page2.controls.at(1).type, RuntimeControlType::RunControl);
@@ -2386,6 +2496,10 @@ void UiGuardsTest::b3NewControlsRoundTrip()
     QCOMPARE(page2.controls.at(7).textEntries.at(0).colorConditions.at(0).threshold, 10.0);
     QCOMPARE(page2.controls.at(7).textEntries.at(1).bindType, QStringLiteral("node"));
     QCOMPARE(page2.controls.at(7).textEntries.at(1).bindKey, QStringLiteral("模块1.检测"));
+    QCOMPARE(page2.controls.at(8).type, RuntimeControlType::SubInterface);
+    QCOMPARE(page2.controls.at(8).subPageId, QStringLiteral("sub7"));
+    QCOMPARE(page2.controls.at(8).subPassword, QStringLiteral("pw7"));
+    QCOMPARE(page2.controls.at(8).subIconVisible, false);
 }
 
 // B3-2 设计器属性面板：条件信号灯条件表可增删、OK/NG 第二绑定可写回，且两组按类型互斥显示。
@@ -2460,6 +2574,31 @@ void UiGuardsTest::designerB3PropertyPanelsWork()
     teBind->setCurrentIndex(teVi);
     QCOMPARE(dlg.resultInterface().pages.first().controls.last().textEntries.at(0).bindKey,
              ngName);
+
+    // 子界面：属性组显示、编辑态提示条与页管理禁用、返回恢复、删除后清理孤儿子页
+    QVERIFY(addByName(QStringLiteral("子界面")));
+    auto *subGroup = dlg.findChild<QGroupBox *>(QStringLiteral("designerSubInterfaceGroup"));
+    auto *subEdit = dlg.findChild<QPushButton *>(QStringLiteral("designerSubEditBtn"));
+    auto *subBanner = dlg.findChild<QWidget *>(QStringLiteral("designerSubEditBanner"));
+    auto *subPageGroup = dlg.findChild<QGroupBox *>(QStringLiteral("designerPageGroup"));
+    QVERIFY2(subGroup && subEdit && subBanner && subPageGroup, "子界面属性控件缺失");
+    QVERIFY2(!subGroup->isHidden(), "选中子界面时属性组应显示");
+    const QString subId = dlg.resultInterface().pages.first().controls.last().subPageId;
+    QVERIFY(!subId.isEmpty());
+    QVERIFY(dlg.resultInterface().subPages.contains(subId));
+    auto *subBack = dlg.findChild<QPushButton *>(QStringLiteral("designerSubBackBtn"));
+    QVERIFY2(subBack, "子界面返回按钮缺失");
+    subEdit->click();
+    QVERIFY2(!subBanner->isHidden(), "编辑子界面时未显示提示条");
+    QVERIFY2(!subPageGroup->isEnabled(), "编辑子界面时页管理应禁用");
+    subBack->click();
+    QVERIFY2(subBanner->isHidden(), "返回主界面后提示条未隐藏");
+    QVERIFY(subPageGroup->isEnabled());
+    auto *canvas = dlg.findChild<RuntimeDesignerCanvas *>();
+    QVERIFY(canvas);
+    canvas->selectIndex(dlg.resultInterface().pages.first().controls.size() - 1);
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "deleteSelected", Qt::DirectConnection));
+    QVERIFY2(!dlg.resultInterface().subPages.contains(subId), "删除子界面后孤儿子页未清理");
 
     gv->removeVariable(ngName);
 }
