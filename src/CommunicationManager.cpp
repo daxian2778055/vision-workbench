@@ -119,7 +119,7 @@ bool CommunicationManager::updateDeviceConfig(const QString &name, const QJsonOb
     return true;
 }
 
-bool CommunicationManager::removeDevice(const QString &name)
+bool CommunicationManager::removeDevice(const QString &name, bool cleanupReferences)
 {
     CommunicationNodeBase *node = nullptr;
     {
@@ -143,6 +143,40 @@ bool CommunicationManager::removeDevice(const QString &name)
         t->deleteLater();
     }
     m_frameBuffers.remove(name);
+
+    // 仅「用户主动删除」才清理按设备名索引的引用（2026-11-10 审核）。
+    // 改配置时的 remove+add 同名重建走 cleanupReferences=false，否则每改一次
+    // 设备参数都会连带删光该设备的事件/心跳/响应配置。
+    if (cleanupReferences) {
+        HeartbeatManager::instance()->unregisterHeartbeat(name);
+
+        QStringList rxIds, txIds;
+        {
+            QMutexLocker locker(&m_mutex);
+            for (auto it = m_receiveEvents.constBegin(); it != m_receiveEvents.constEnd(); ++it)
+                if (it.value() && it.value()->deviceName() == name) rxIds << it.key();
+            for (auto it = m_sendEvents.constBegin(); it != m_sendEvents.constEnd(); ++it)
+                if (it.value() && it.value()->deviceName() == name) txIds << it.key();
+        }
+        // 锁外调用：removeXxxEvent 内部会再次取锁
+        for (const QString &id : rxIds) removeReceiveEvent(id);
+        for (const QString &id : txIds) removeSendEvent(id);
+
+        // 响应配置：只把指向该设备的 device 清空，保留内容/延时/使能等其余字段，
+        // 用户只需重选设备，不必重填整页。
+        QJsonObject resp = m_responseConfig;
+        const QStringList sections = {QStringLiteral("schemeLoad"),
+                                      QStringLiteral("flowControl"),
+                                      QStringLiteral("cameraResponse")};
+        for (const QString &key : sections) {
+            QJsonObject sec = resp.value(key).toObject();
+            if (sec.value(QStringLiteral("device")).toString() == name) {
+                sec[QStringLiteral("device")] = QString();
+                resp[key] = sec;
+            }
+        }
+        m_responseConfig = resp;
+    }
 
     emit deviceRemoved(name);
     return true;
@@ -176,6 +210,24 @@ bool CommunicationManager::renameDevice(const QString &oldName, const QString &n
     for (ReceiveEvent *ev : rxEvents) ev->setDeviceName(trimmed);
     for (SendEvent *ev : txEvents) ev->setDeviceName(trimmed);
     HeartbeatManager::instance()->renameDevice(oldName, trimmed);
+
+    // 响应配置里的设备选择同样跟随改名（2026-11-10 审核）：原实现只跟了
+    // 节点/事件/心跳/帧缓冲，schemeLoad/flowControl/cameraResponse 仍指旧名，
+    // 重命名后响应发送会静默失败（sendResponse 查不到设备只留 debug 痕）。
+    {
+        QJsonObject resp = m_responseConfig;
+        const QStringList sections = {QStringLiteral("schemeLoad"),
+                                      QStringLiteral("flowControl"),
+                                      QStringLiteral("cameraResponse")};
+        for (const QString &key : sections) {
+            QJsonObject sec = resp.value(key).toObject();
+            if (sec.value(QStringLiteral("device")).toString() == oldName) {
+                sec[QStringLiteral("device")] = trimmed;
+                resp[key] = sec;
+            }
+        }
+        m_responseConfig = resp;
+    }
 
     // 组帧缓冲随名迁移；旧定时器回调捕获的是旧名，停旧建新（剩余半帧继续按新名超时出帧）
     if (m_frameBuffers.contains(oldName))

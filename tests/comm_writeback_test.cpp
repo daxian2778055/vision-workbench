@@ -190,6 +190,8 @@ private slots:
     void serialPortLivesInItsOwnThread();
     // r19 复核：串口报错后常驻端口不能丢——丢了 openConnection 拿 nullptr，重连永远失败
     void serialPortSurvivesPortError();
+    // 2026-11-10 审核：设备删除清理悬空引用，但「改配置 remove+add 重建」必须保留
+    void deviceRemovalCleansReferencesButRecreateKeepsThem();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -3505,6 +3507,70 @@ void CommWritebackTest::testCommunicationGtdExportImport()
     cm->removeReceiveEvent(QStringLiteral("GTD_RX"));
     cm->removeSendEvent(QStringLiteral("GTD_TX"));
     cm->removeDevice(QStringLiteral("GTD_DEV"));
+    cm->setResponseConfig(QJsonObject());
+}
+
+// 2026-11-10 审核：用户主动删除设备要清理按设备名索引的引用（事件/心跳/响应配置）；
+// 但「改配置 remove+add 同名重建」走默认参数，必须原样保留这些引用——否则
+// 用户每改一次设备参数就会连带删光该设备的事件、心跳与响应配置。
+void CommWritebackTest::deviceRemovalCleansReferencesButRecreateKeepsThem()
+{
+    auto *cm = CommunicationManager::instance();
+    auto *hb = HeartbeatManager::instance();
+    const QString dev = QStringLiteral("REF_DEV");
+
+    QVERIFY(cm->addDevice(dev, QStringLiteral("TCP"), tcpClientConfig(1)));
+    auto *rx = new TextProtocolReceiveEvent(QStringLiteral("REF_RX"), dev);
+    rx->setDelimiter(QStringLiteral(","));
+    QVERIFY(cm->addReceiveEvent(rx));
+    QVERIFY(cm->addSendEvent(new TextDirectSendEvent(QStringLiteral("REF_TX"), dev)));
+    QVERIFY(hb->registerHeartbeat(dev, 60000, QStringLiteral("A"), QStringLiteral("B")));
+    QJsonObject scheme;
+    scheme[QStringLiteral("enabled")] = true;
+    scheme[QStringLiteral("content")] = QStringLiteral("PAYLOAD");
+    scheme[QStringLiteral("device")] = dev;
+    QJsonObject resp;
+    resp[QStringLiteral("schemeLoad")] = scheme;
+    cm->setResponseConfig(resp);
+
+    // ① 重建模式（默认 cleanupReferences=false）：引用必须全在
+    QVERIFY(cm->removeDevice(dev));
+    QVERIFY(cm->addDevice(dev, QStringLiteral("TCP"), tcpClientConfig(1)));
+    QVERIFY2(cm->receiveEvent(QStringLiteral("REF_RX")) != nullptr,
+             "改配置重建后接收事件被误删");
+    QVERIFY2(cm->sendEvent(QStringLiteral("REF_TX")) != nullptr,
+             "改配置重建后发送事件被误删");
+    bool hbKept = false;
+    for (const HeartbeatEntry &e : hb->entries())
+        if (e.deviceName == dev) hbKept = true;
+    QVERIFY2(hbKept, "改配置重建后心跳被误删");
+    QCOMPARE(cm->responseConfig().value(QStringLiteral("schemeLoad"))
+                 .toObject().value(QStringLiteral("device")).toString(), dev);
+
+    // ② 重命名：响应配置里的 device 必须跟随（否则响应发送静默失败）
+    QVERIFY(cm->renameDevice(dev, QStringLiteral("REF_NEW")));
+    QCOMPARE(cm->responseConfig().value(QStringLiteral("schemeLoad"))
+                 .toObject().value(QStringLiteral("device")).toString(),
+             QStringLiteral("REF_NEW"));
+
+    // ③ 用户主动删除：清理全部悬空引用，但保留响应配置的其它字段
+    QVERIFY(cm->removeDevice(QStringLiteral("REF_NEW"), true));
+    QVERIFY(!cm->hasDevice(QStringLiteral("REF_NEW")));
+    QVERIFY(cm->receiveEvent(QStringLiteral("REF_RX")) == nullptr);
+    QVERIFY(cm->sendEvent(QStringLiteral("REF_TX")) == nullptr);
+    bool hbLeft = false;
+    for (const HeartbeatEntry &e : hb->entries())
+        if (e.deviceName == QStringLiteral("REF_NEW")) hbLeft = true;
+    QVERIFY2(!hbLeft, "设备删除后心跳仍在按旧名发帧");
+    const QJsonObject after = cm->responseConfig()
+                                  .value(QStringLiteral("schemeLoad")).toObject();
+    QVERIFY2(after.value(QStringLiteral("device")).toString().isEmpty(),
+             "设备删除后响应配置仍指向已删设备");
+    QCOMPARE(after.value(QStringLiteral("content")).toString(),
+             QStringLiteral("PAYLOAD"));   // 其余字段保留，用户只需重选设备
+
+    // 清场
+    hb->unregisterHeartbeat(QStringLiteral("REF_NEW"));
     cm->setResponseConfig(QJsonObject());
 }
 

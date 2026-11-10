@@ -41,7 +41,10 @@ public:
     bool addDevice(const QString &name, const QString &type, const QJsonObject &config);
 
     /// 移除通信设备
-    bool removeDevice(const QString &name);
+    /// cleanupReferences=false（默认）用于「改配置时 remove+add 同名重建」，
+    /// 必须保留引用该设备的接收/发送事件、心跳与响应配置；
+    /// 仅用户在设备列表里主动删除时才传 true，清理这些悬空引用。
+    bool removeDevice(const QString &name, bool cleanupReferences = false);
 
     /// 重命名通信设备（VM 5.2.1：设备列表右键→重命名）。连接与节点参数原样保留；
     /// 连带引用跟随：接收/发送事件的绑定设备、心跳条目、组帧缓冲与定时器、事件触发映射。

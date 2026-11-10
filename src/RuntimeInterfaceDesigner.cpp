@@ -2500,6 +2500,11 @@ void RuntimeInterfaceDesigner::loadLayout()
     if (path.isEmpty()) return;
     RuntimeInterface tmp;
     if (tmp.loadFromFile(path)) {
+        // 换了整套布局后，旧快照指向的是另一套页/控件，撤销回去既无意义也可能
+        // 引用已不存在的页（2026-11-10 审核）。停掉挂起的合并窗口并清栈。
+        if (m_propUndoTimer) m_propUndoTimer->stop();
+        m_undoStack.clear();
+        m_redoStack.clear();
         m_layout = tmp;
         m_layout.ensurePage();
         m_selected = -1;
@@ -2971,14 +2976,63 @@ void RuntimeInterfaceDesigner::movePageDown()
 
 // ==================== 批量对齐 ====================
 
-void RuntimeInterfaceDesigner::onAlignLeft()   { m_canvas->alignSelected(RuntimeDesignerCanvas::AlignLeft); }
-void RuntimeInterfaceDesigner::onAlignHCenter(){ m_canvas->alignSelected(RuntimeDesignerCanvas::AlignHCenter); }
-void RuntimeInterfaceDesigner::onAlignRight()  { m_canvas->alignSelected(RuntimeDesignerCanvas::AlignRight); }
-void RuntimeInterfaceDesigner::onAlignTop()    { m_canvas->alignSelected(RuntimeDesignerCanvas::AlignTop); }
-void RuntimeInterfaceDesigner::onAlignVCenter(){ m_canvas->alignSelected(RuntimeDesignerCanvas::AlignVCenter); }
-void RuntimeInterfaceDesigner::onAlignBottom() { m_canvas->alignSelected(RuntimeDesignerCanvas::AlignBottom); }
-void RuntimeInterfaceDesigner::onAlignHSpread(){ m_canvas->alignSelected(RuntimeDesignerCanvas::AlignHSpread); }
-void RuntimeInterfaceDesigner::onAlignVSpread(){ m_canvas->alignSelected(RuntimeDesignerCanvas::AlignVSpread); }
+// 2026-11-10 审核：对齐/分布原本不压撤销快照，用户一键排完就没法回退。
+// 少于 2 个选中时 alignSelected 本身什么都不做，这里也别白压一枚空快照。
+void RuntimeInterfaceDesigner::onAlignLeft()
+{
+    if (m_canvas->selectedSet().size() < 2) return;
+    pushUndo();
+    m_canvas->alignSelected(RuntimeDesignerCanvas::AlignLeft);
+}
+
+void RuntimeInterfaceDesigner::onAlignHCenter()
+{
+    if (m_canvas->selectedSet().size() < 2) return;
+    pushUndo();
+    m_canvas->alignSelected(RuntimeDesignerCanvas::AlignHCenter);
+}
+
+void RuntimeInterfaceDesigner::onAlignRight()
+{
+    if (m_canvas->selectedSet().size() < 2) return;
+    pushUndo();
+    m_canvas->alignSelected(RuntimeDesignerCanvas::AlignRight);
+}
+
+void RuntimeInterfaceDesigner::onAlignTop()
+{
+    if (m_canvas->selectedSet().size() < 2) return;
+    pushUndo();
+    m_canvas->alignSelected(RuntimeDesignerCanvas::AlignTop);
+}
+
+void RuntimeInterfaceDesigner::onAlignVCenter()
+{
+    if (m_canvas->selectedSet().size() < 2) return;
+    pushUndo();
+    m_canvas->alignSelected(RuntimeDesignerCanvas::AlignVCenter);
+}
+
+void RuntimeInterfaceDesigner::onAlignBottom()
+{
+    if (m_canvas->selectedSet().size() < 2) return;
+    pushUndo();
+    m_canvas->alignSelected(RuntimeDesignerCanvas::AlignBottom);
+}
+
+void RuntimeInterfaceDesigner::onAlignHSpread()
+{
+    if (m_canvas->selectedSet().size() < 2) return;
+    pushUndo();
+    m_canvas->alignSelected(RuntimeDesignerCanvas::AlignHSpread);
+}
+
+void RuntimeInterfaceDesigner::onAlignVSpread()
+{
+    if (m_canvas->selectedSet().size() < 2) return;
+    pushUndo();
+    m_canvas->alignSelected(RuntimeDesignerCanvas::AlignVSpread);
+}
 
 void RuntimeInterfaceDesigner::onControlSelected(int index)
 {

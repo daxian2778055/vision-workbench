@@ -806,9 +806,12 @@ void CommunicationManagerDialog::onRemoveDevice()
     }
     QString name = m_deviceTable->item(row, 0)->text();
     if (QMessageBox::question(this, QStringLiteral("\u786E\u8BA4"),
-        QStringLiteral("\u786E\u5B9A\u8981\u5220\u9664\u8BBE\u5907 %1 \u5417\uFF1F").arg(name))
+        QStringLiteral("\u786E\u5B9A\u8981\u5220\u9664\u8BBE\u5907 %1 \u5417\uFF1F\n"
+                       "\u540C\u65F6\u4F1A\u5220\u9664\u5F15\u7528\u8BE5\u8BBE\u5907\u7684\u63A5\u6536/\u53D1\u9001\u4E8B\u4EF6\u4E0E\u5FC3\u8DF3\u914D\u7F6E\uFF0C"
+                       "\u5E76\u6E05\u7A7A\u54CD\u5E94\u914D\u7F6E\u91CC\u7684\u8BBE\u5907\u9009\u62E9\u3002").arg(name))
         == QMessageBox::Yes) {
-        CommunicationManager::instance()->removeDevice(name);
+        // true = 用户主动删除，清理悬空引用；改配置时的 remove+add 重建走默认 false
+        CommunicationManager::instance()->removeDevice(name, true);
         refreshDeviceTable();
     }
 }

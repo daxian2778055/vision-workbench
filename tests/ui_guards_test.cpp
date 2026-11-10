@@ -112,6 +112,7 @@ void subInterfacePagesRoundTripAndDepth();
 void b3NewControlsRoundTrip();
 void designerB3PropertyPanelsWork();
 void subInterfaceCornerRadiusRoundTrips();
+void designerAlignCanBeUndone();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
     // r15 P1-9：切图保存必须写到「上一张」
@@ -2634,6 +2635,58 @@ void UiGuardsTest::subInterfaceCornerRadiusRoundTrips()
     RuntimeInterfacePage clamped;
     QVERIFY(clamped.fromJson(j));
     QCOMPARE(clamped.controls.first().cornerRadius, 40);
+}
+
+// 2026-11-10 审核：对齐/分布原本不压撤销快照，一键排完就没法回退；
+// 且少于 2 个选中时不该白压一枚空快照。
+void UiGuardsTest::designerAlignCanBeUndone()
+{
+    RuntimeInterfaceDesigner dlg(QStringList{QStringLiteral("模块1")});
+    auto *canvas = dlg.findChild<RuntimeDesignerCanvas *>();
+    QVERIFY(canvas);
+
+    QListWidget *palette = nullptr;
+    for (QListWidget *lw : dlg.findChildren<QListWidget *>()) {
+        if (lw->dragEnabled() && lw->count() >= 7) { palette = lw; break; }
+    }
+    QVERIFY(palette);
+    int row = -1;
+    for (int i = 0; i < palette->count(); ++i) {
+        if (palette->item(i)->data(Qt::UserRole).isValid()) { row = i; break; }
+    }
+    QVERIFY(row >= 0);
+    palette->setCurrentRow(row);
+
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "addControlAt", Qt::DirectConnection,
+                                      Q_ARG(QPoint, QPoint(30, 30))));
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "addControlAt", Qt::DirectConnection,
+                                      Q_ARG(QPoint, QPoint(300, 200))));
+
+    const QList<DesignerControlFrame *> frames = canvas->findChildren<DesignerControlFrame *>();
+    QVERIFY2(frames.size() >= 2, "画布上需要两个控件");
+    const QRect firstBefore = frames.at(0)->geometry();
+    const QRect secondBefore = frames.at(1)->geometry();
+    QVERIFY2(firstBefore.left() != secondBefore.left(), "两个控件初始 left 必须不同");
+
+    // 单选：对齐不生效、几何不动
+    canvas->selectIndex(0);
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "onAlignLeft", Qt::DirectConnection));
+    QCOMPARE(frames.at(0)->geometry(), firstBefore);
+
+    // 多选：左对齐生效
+    canvas->selectIndex(0);
+    canvas->selectIndex(1, true);
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "onAlignLeft", Qt::DirectConnection));
+    QCOMPARE(frames.at(0)->geometry().left(), frames.at(1)->geometry().left());
+    QVERIFY2(frames.at(1)->geometry().left() != secondBefore.left(),
+             "对齐没有改变第二个控件位置，本腿会空转通过");
+
+    // 撤销恢复到对齐前
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "undo", Qt::DirectConnection));
+    const QList<DesignerControlFrame *> afterUndo =
+        canvas->findChildren<DesignerControlFrame *>();
+    QVERIFY2(afterUndo.size() >= 2, "撤销后控件数量不对");
+    QCOMPARE(afterUndo.at(1)->geometry(), secondBefore);
 }
 
 QTEST_MAIN(UiGuardsTest)
