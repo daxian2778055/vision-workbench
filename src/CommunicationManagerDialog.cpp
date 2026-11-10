@@ -13,6 +13,7 @@
 #include "CommDeviceConfigDialog.h"
 #include "CommMonitorDialog.h"
 #include "HeartbeatManager.h"
+#include "GlobalTriggerManager.h"
 #include "AppLog.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -24,6 +25,10 @@
 #include <QSpinBox>
 #include <QGroupBox>
 #include <QLabel>
+#include <QFile>
+#include <QFileDialog>
+#include <QJsonDocument>
+#include <QJsonArray>
 #include <QDateTime>
 #include <QColor>
 #include <QTimer>
@@ -44,46 +49,7 @@ CommunicationManagerDialog::CommunicationManagerDialog(QWidget *parent)
     refreshResponseDeviceCombos();
 
     // 响应配置页回显：把已保存的配置灌回控件（阻断信号，避免回显本身触发覆盖写）
-    {
-        auto *cm = CommunicationManager::instance();
-        const QJsonObject root = cm->responseConfig();
-        const QJsonObject scheme = root.value(QStringLiteral("schemeLoad")).toObject();
-        const QJsonObject flow = root.value(QStringLiteral("flowControl")).toObject();
-        const QJsonObject camera = root.value(QStringLiteral("cameraResponse")).toObject();
-        const QList<QWidget *> all{m_respSchemeEnable, m_respSchemeDevice, m_respSchemeDelay,
-                                   m_respSchemeTerm, m_respSchemeContent,
-                                   m_respFlowEnable, m_respFlowDevice, m_respFlowTerm,
-                                   m_respFlowSep, m_respFlowIdle, m_respFlowBusy,
-                                   m_respCameraEnable, m_respCameraDevice, m_respCameraSep,
-                                   m_respCameraOn, m_respCameraOff};
-        for (QWidget *w : all) w->blockSignals(true);
-        m_respSchemeEnable->setChecked(scheme.value(QStringLiteral("enabled")).toBool());
-        if (!scheme.value(QStringLiteral("device")).toString().isEmpty())
-            m_respSchemeDevice->setCurrentText(scheme.value(QStringLiteral("device")).toString());
-        m_respSchemeDelay->setValue(scheme.value(QStringLiteral("delaySec")).toInt());
-        if (!scheme.value(QStringLiteral("terminator")).toString().isEmpty())
-            m_respSchemeTerm->setCurrentText(scheme.value(QStringLiteral("terminator")).toString());
-        m_respSchemeContent->setText(scheme.value(QStringLiteral("content")).toString());
-
-        m_respFlowEnable->setChecked(flow.value(QStringLiteral("enabled")).toBool());
-        if (!flow.value(QStringLiteral("device")).toString().isEmpty())
-            m_respFlowDevice->setCurrentText(flow.value(QStringLiteral("device")).toString());
-        if (!flow.value(QStringLiteral("terminator")).toString().isEmpty())
-            m_respFlowTerm->setCurrentText(flow.value(QStringLiteral("terminator")).toString());
-        if (!flow.value(QStringLiteral("separator")).toString().isEmpty())
-            m_respFlowSep->setCurrentText(flow.value(QStringLiteral("separator")).toString());
-        m_respFlowIdle->setText(flow.value(QStringLiteral("idleContent")).toString());
-        m_respFlowBusy->setText(flow.value(QStringLiteral("busyContent")).toString());
-
-        m_respCameraEnable->setChecked(camera.value(QStringLiteral("enabled")).toBool());
-        if (!camera.value(QStringLiteral("device")).toString().isEmpty())
-            m_respCameraDevice->setCurrentText(camera.value(QStringLiteral("device")).toString());
-        if (!camera.value(QStringLiteral("separator")).toString().isEmpty())
-            m_respCameraSep->setCurrentText(camera.value(QStringLiteral("separator")).toString());
-        m_respCameraOn->setText(camera.value(QStringLiteral("connectedContent")).toString());
-        m_respCameraOff->setText(camera.value(QStringLiteral("disconnectedContent")).toString());
-        for (QWidget *w : all) w->blockSignals(false);
-    }
+    loadResponseConfigToUi();
 
     // 重命名可能来自本对话框之外（测试/脚本/其它入口）：信号驱动各表同步，
     // 设备表重建时内部会连带刷新控制器页
@@ -110,6 +76,186 @@ CommunicationManagerDialog::~CommunicationManagerDialog()
 {
 }
 
+void CommunicationManagerDialog::loadResponseConfigToUi()
+{
+    auto *cm = CommunicationManager::instance();
+    const QJsonObject root = cm->responseConfig();
+    const QJsonObject scheme = root.value(QStringLiteral("schemeLoad")).toObject();
+    const QJsonObject flow = root.value(QStringLiteral("flowControl")).toObject();
+    const QJsonObject camera = root.value(QStringLiteral("cameraResponse")).toObject();
+    const QList<QWidget *> all{m_respSchemeEnable, m_respSchemeDevice, m_respSchemeDelay,
+                               m_respSchemeTerm, m_respSchemeContent,
+                               m_respFlowEnable, m_respFlowDevice, m_respFlowTerm,
+                               m_respFlowSep, m_respFlowIdle, m_respFlowBusy,
+                               m_respCameraEnable, m_respCameraDevice, m_respCameraSep,
+                               m_respCameraOn, m_respCameraOff};
+    if (!m_respSchemeEnable) return;   // 响应页尚未建（构造早期防御）
+    for (QWidget *w : all) w->blockSignals(true);
+    m_respSchemeEnable->setChecked(scheme.value(QStringLiteral("enabled")).toBool());
+    if (!scheme.value(QStringLiteral("device")).toString().isEmpty())
+        m_respSchemeDevice->setCurrentText(scheme.value(QStringLiteral("device")).toString());
+    m_respSchemeDelay->setValue(scheme.value(QStringLiteral("delaySec")).toInt());
+    if (!scheme.value(QStringLiteral("terminator")).toString().isEmpty())
+        m_respSchemeTerm->setCurrentText(scheme.value(QStringLiteral("terminator")).toString());
+    m_respSchemeContent->setText(scheme.value(QStringLiteral("content")).toString());
+
+    m_respFlowEnable->setChecked(flow.value(QStringLiteral("enabled")).toBool());
+    if (!flow.value(QStringLiteral("device")).toString().isEmpty())
+        m_respFlowDevice->setCurrentText(flow.value(QStringLiteral("device")).toString());
+    if (!flow.value(QStringLiteral("terminator")).toString().isEmpty())
+        m_respFlowTerm->setCurrentText(flow.value(QStringLiteral("terminator")).toString());
+    if (!flow.value(QStringLiteral("separator")).toString().isEmpty())
+        m_respFlowSep->setCurrentText(flow.value(QStringLiteral("separator")).toString());
+    m_respFlowIdle->setText(flow.value(QStringLiteral("idleContent")).toString());
+    m_respFlowBusy->setText(flow.value(QStringLiteral("busyContent")).toString());
+
+    m_respCameraEnable->setChecked(camera.value(QStringLiteral("enabled")).toBool());
+    if (!camera.value(QStringLiteral("device")).toString().isEmpty())
+        m_respCameraDevice->setCurrentText(camera.value(QStringLiteral("device")).toString());
+    if (!camera.value(QStringLiteral("separator")).toString().isEmpty())
+        m_respCameraSep->setCurrentText(camera.value(QStringLiteral("separator")).toString());
+    m_respCameraOn->setText(camera.value(QStringLiteral("connectedContent")).toString());
+    m_respCameraOff->setText(camera.value(QStringLiteral("disconnectedContent")).toString());
+    for (QWidget *w : all) w->blockSignals(false);
+}
+
+void CommunicationManagerDialog::updateParamSummary()
+{
+    if (!m_paramSummary) return;
+    const int devRow = m_deviceTable ? m_deviceTable->currentRow() : -1;
+    if (devRow >= 0 && m_deviceTable->item(devRow, 0)) {
+        const QString name = m_deviceTable->item(devRow, 0)->text();
+        const CommDeviceInfo info = CommunicationManager::instance()->deviceInfo(name);
+        QStringList lines;
+        lines << QStringLiteral("<b>%1</b>").arg(name.toHtmlEscaped());
+        lines << QStringLiteral("类型：%1").arg(info.type.toHtmlEscaped());
+        lines << QStringLiteral("状态：%1")
+                     .arg(info.isConnected ? QStringLiteral("已连接") : QStringLiteral("未连接"));
+        // 常用键按官方语义顺序；其余键按字母序补齐（配置是自由 JSON）
+        const QStringList order{
+            QStringLiteral("mode"), QStringLiteral("serverIp"), QStringLiteral("port"),
+            QStringLiteral("bindAddress"), QStringLiteral("localPort"),
+            QStringLiteral("remoteIp"), QStringLiteral("remotePort"),
+            QStringLiteral("serialPort"), QStringLiteral("baud"),
+            QStringLiteral("slaveAddress"), QStringLiteral("pollInterval"),
+            QStringLiteral("dataUpload"), QStringLiteral("autoReconnect"),
+            QStringLiteral("frameTerminator"), QStringLiteral("frameTimeoutMs")};
+        const QStringList keys = info.config.keys();
+        QStringList printed;
+        for (const QString &k : order) {
+            if (!info.config.contains(k)) continue;
+            printed << k;
+            const QJsonValue v = info.config.value(k);
+            const QString text = v.isBool() ? (v.toBool() ? QStringLiteral("是") : QStringLiteral("否"))
+                                            : v.toVariant().toString();
+            lines << QStringLiteral("%1：%2").arg(k, text.toHtmlEscaped());
+        }
+        for (const QString &k : keys) {
+            if (printed.contains(k)) continue;
+            lines << QStringLiteral("%1：%2").arg(k, info.config.value(k).toVariant().toString().toHtmlEscaped());
+        }
+        m_paramSummary->setText(lines.join(QStringLiteral("<br>")));
+        return;
+    }
+    const int ctlRow = m_controllerTable ? m_controllerTable->currentRow() : -1;
+    if (ctlRow >= 0 && m_controllerTable->item(ctlRow, 0)) {
+        QStringList lines;
+        lines << QStringLiteral("<b>%1</b>（控制器）")
+                     .arg(m_controllerTable->item(ctlRow, 0)->text().toHtmlEscaped());
+        if (m_controllerTable->item(ctlRow, 1))
+            lines << QStringLiteral("类型：%1")
+                         .arg(m_controllerTable->item(ctlRow, 1)->text().toHtmlEscaped());
+        if (m_controllerTable->item(ctlRow, 2))
+            lines << QStringLiteral("状态：%1")
+                         .arg(m_controllerTable->item(ctlRow, 2)->text().toHtmlEscaped());
+        lines << QStringLiteral("说明：控制器列表随通信设备派生（独立控制器模型按拍板不做）。");
+        m_paramSummary->setText(lines.join(QStringLiteral("<br>")));
+        return;
+    }
+    m_paramSummary->setText(QStringLiteral(
+        "未选中设备。\n\n在左侧选择设备后，这里显示其通信参数；\n点击「配置」修改参数。"));
+}
+
+// ==================== gtd import / export ====================
+
+void CommunicationManagerDialog::onExportGtd()
+{
+    const QString path = QFileDialog::getSaveFileName(
+        this, QStringLiteral("导出通信配置"),
+        QStringLiteral("通信配置.gtd"),
+        QStringLiteral("通信配置 (*.gtd);;所有文件 (*)"));
+    if (path.isEmpty()) return;
+    if (!exportGtdTo(path))
+        QMessageBox::warning(this, QStringLiteral("导出失败"),
+                             QStringLiteral("无法写入 gtd 文件：%1").arg(path));
+}
+
+bool CommunicationManagerDialog::exportGtdTo(const QString &path)
+{
+    QJsonObject root;
+    root[QStringLiteral("format")] = QStringLiteral("visionflow-communication");
+    root[QStringLiteral("version")] = 1;
+    root[QStringLiteral("communication")] = CommunicationManager::instance()->toJson();
+    root[QStringLiteral("globalTriggers")] = GlobalTriggerManager::instance()->toJson();
+    root[QStringLiteral("heartbeat")] = HeartbeatManager::instance()->toJson();
+
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly))
+        return false;
+    f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    f.close();
+    return true;
+}
+
+void CommunicationManagerDialog::onImportGtd()
+{
+    const QString path = QFileDialog::getOpenFileName(
+        this, QStringLiteral("导入通信配置"), QString(),
+        QStringLiteral("通信配置 (*.gtd);;所有文件 (*)"));
+    if (path.isEmpty()) return;
+    if (!importGtdFrom(path)) {
+        QMessageBox::warning(this, QStringLiteral("导入失败"),
+                             QStringLiteral("文件不是有效的 gtd（JSON）通信配置。"));
+        return;
+    }
+    if (!m_gtdImportRejected.isEmpty())
+        QMessageBox::information(this, QStringLiteral("导入完成"),
+                                 QStringLiteral("部分触发条目未导入：\n")
+                                     + m_gtdImportRejected.join("\n"));
+}
+
+bool CommunicationManagerDialog::importGtdFrom(const QString &path)
+{
+    m_gtdImportRejected.clear();
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly))
+        return false;
+    QJsonParseError err{};
+    const QJsonDocument doc = QJsonDocument::fromJson(f.readAll(), &err);
+    f.close();
+    if (err.error != QJsonParseError::NoError || !doc.isObject())
+        return false;
+    const QJsonObject root = doc.object();
+    if (root.value(QStringLiteral("format")).toString()
+        != QStringLiteral("visionflow-communication"))
+        return false;
+
+    CommunicationManager::instance()->fromJson(
+        root.value(QStringLiteral("communication")).toObject());
+    GlobalTriggerManager::instance()->fromJson(
+        root.value(QStringLiteral("globalTriggers")).toObject(), &m_gtdImportRejected);
+    HeartbeatManager::instance()->fromJson(root.value(QStringLiteral("heartbeat")).toObject());
+
+    refreshDeviceTable();
+    refreshReceiveEventTable();
+    refreshSendEventTable();
+    refreshHeartbeatTable();
+    refreshResponseDeviceCombos();
+    loadResponseConfigToUi();
+    if (m_triggerDialog) m_triggerDialog->refreshTriggerTable();
+    return true;
+}
+
 void CommunicationManagerDialog::setupUI()
 {
     setWindowTitle(QStringLiteral("\u901A\u4FE1\u7BA1\u7406"));
@@ -117,6 +263,23 @@ void CommunicationManagerDialog::setupUI()
     setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
 
     auto *mainLayout = new QVBoxLayout(this);
+
+    // VM 5.2：窗口右上角「导出 / 导入」——通信管理中的所有配置以 gtd 文件交换
+    auto *gtdRow = new QHBoxLayout();
+    gtdRow->addStretch();
+    m_exportGtdBtn = new QPushButton(QStringLiteral("\u5BFC\u51FA gtd"));
+    m_exportGtdBtn->setObjectName(QStringLiteral("commGtdExport"));
+    m_exportGtdBtn->setToolTip(QStringLiteral(
+        "把设备/接收事件/发送事件/触发/心跳/响应配置导出为 gtd 文件（VM 同位置图标）"));
+    m_importGtdBtn = new QPushButton(QStringLiteral("\u5BFC\u5165 gtd"));
+    m_importGtdBtn->setObjectName(QStringLiteral("commGtdImport"));
+    m_importGtdBtn->setToolTip(QStringLiteral(
+        "从 gtd 文件导入整包通信配置（覆盖当前配置）"));
+    gtdRow->addWidget(m_exportGtdBtn);
+    gtdRow->addWidget(m_importGtdBtn);
+    mainLayout->addLayout(gtdRow);
+    connect(m_exportGtdBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onExportGtd);
+    connect(m_importGtdBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onImportGtd);
 
     // VM4.4 形态：左侧导航 + 右侧堆叠页（原顶部 QTabWidget 重构为左侧导航）
     auto *bodyLayout = new QHBoxLayout();
@@ -168,11 +331,28 @@ void CommunicationManagerDialog::setupUI()
 void CommunicationManagerDialog::setupDeviceTab(QStackedWidget *stack)
 {
     auto *tab = new QWidget();
-    auto *layout = new QVBoxLayout(tab);
+    auto *pageLayout = new QVBoxLayout(tab);
 
     auto *label = new QLabel(QStringLiteral("<b>\u8BBE\u5907\u7BA1\u7406</b>"));
     label->setStyleSheet("font-size: 13px;");
-    layout->addWidget(label);
+    pageLayout->addWidget(label);
+
+    // VM 官方布局（手册「设备管理」页）：左列「通信设备列表 + 控制器列表」，
+    // 右列「通信参数」——未选中时为空，选中后显示该设备的参数摘要。
+    auto *body = new QHBoxLayout();
+    auto *left = new QWidget();
+    auto *leftLayout = new QVBoxLayout(left);
+    leftLayout->setContentsMargins(0, 0, 0, 0);
+
+    auto *devHeader = new QHBoxLayout();
+    devHeader->addWidget(new QLabel(QStringLiteral("<b>\u901A\u4FE1\u8BBE\u5907\u5217\u8868</b>")));
+    devHeader->addStretch();
+    m_addDeviceBtn = new QPushButton(QStringLiteral("+"));
+    m_addDeviceBtn->setObjectName(QStringLiteral("commAddDevice"));
+    m_addDeviceBtn->setFixedWidth(28);
+    m_addDeviceBtn->setToolTip(QStringLiteral("\u6DFB\u52A0\u901A\u4FE1\u8BBE\u5907"));
+    devHeader->addWidget(m_addDeviceBtn);
+    leftLayout->addLayout(devHeader);
 
     // 设备表格 — 5 列：名称 / 类型 / 连接开关 / 配置 / 寄存器实时值
     m_deviceTable = new QTableWidget();
@@ -190,28 +370,55 @@ void CommunicationManagerDialog::setupDeviceTab(QStackedWidget *stack)
     m_deviceTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_deviceTable->horizontalHeader()->setStretchLastSection(true);
     m_deviceTable->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
-    layout->addWidget(m_deviceTable);
+    leftLayout->addWidget(m_deviceTable, 1);
 
     auto *btnLayout = new QHBoxLayout();
-    m_addDeviceBtn = new QPushButton(QStringLiteral("\u6DFB\u52A0\u8BBE\u5907"));
     m_removeDeviceBtn = new QPushButton(QStringLiteral("\u5220\u9664\u8BBE\u5907"));
     m_configBtn = new QPushButton(QStringLiteral("\u914D\u7F6E"));
     m_readBtn = new QPushButton(QStringLiteral("\u5237\u65B0\u5BC4\u5B58\u5668"));
 
-    btnLayout->addWidget(m_addDeviceBtn);
     btnLayout->addWidget(m_removeDeviceBtn);
     btnLayout->addWidget(m_configBtn);
     btnLayout->addWidget(m_readBtn);
     btnLayout->addStretch();
-    layout->addLayout(btnLayout);
+    leftLayout->addLayout(btnLayout);
 
     connect(m_addDeviceBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onAddDevice);
     connect(m_removeDeviceBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onRemoveDevice);
     connect(m_configBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onConfigDevice);
     connect(m_readBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onReadRegisters);
 
-    // VM 5.2.1：控制器列表并进设备管理页（官方布局：设备表在上、控制器列表在下）
-    buildControllerSection(layout);
+    // VM 5.2.1：控制器列表并进设备管理页（官方布局：设备列表在上、控制器列表在下）
+    buildControllerSection(leftLayout);
+
+    auto *rightBox = new QGroupBox(QStringLiteral("\u901A\u4FE1\u53C2\u6570"));
+    auto *rightLayout = new QVBoxLayout(rightBox);
+    m_paramSummary = new QLabel();
+    m_paramSummary->setObjectName(QStringLiteral("commParamSummary"));
+    m_paramSummary->setWordWrap(true);
+    m_paramSummary->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+    m_paramSummary->setText(QStringLiteral(
+        "\u672A\u9009\u4E2D\u8BBE\u5907\u3002\n\n"
+        "\u5728\u5DE6\u4FA7\u9009\u62E9\u8BBE\u5907\u540E\uFF0C\u8FD9\u91CC\u663E\u793A\u5176\u901A\u4FE1\u53C2\u6570\uFF1B\n"
+        "\u70B9\u51FB\u300C\u914D\u7F6E\u300D\u4FEE\u6539\u53C2\u6570\u3002"));
+    rightLayout->addWidget(m_paramSummary);
+    rightLayout->addStretch();
+
+    body->addWidget(left, 3);
+    body->addWidget(rightBox, 2);
+    pageLayout->addLayout(body, 1);
+
+    // 选中行切换 → 右侧参数摘要跟随
+    connect(m_deviceTable, &QTableWidget::currentCellChanged, this,
+            [this](int, int, int, int) { updateParamSummary(); });
+    connect(m_controllerTable, &QTableWidget::currentCellChanged, this,
+            [this](int, int, int, int) {
+        if (m_controllerTable->currentRow() >= 0) {
+            m_deviceTable->clearSelection();
+            m_deviceTable->setCurrentCell(-1, -1);
+        }
+        updateParamSummary();
+    });
 
     // VM 5.2.1：设备列表右键 → 重命名 / 删除
     m_deviceTable->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -410,6 +617,7 @@ void CommunicationManagerDialog::refreshControllerTable()
         m_controllerTable->setItem(row, 2, statusItem);
     }
     m_controllerTable->resizeColumnsToContents();
+    updateParamSummary();
 }
 
 void CommunicationManagerDialog::scheduleDeviceTableRefresh()

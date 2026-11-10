@@ -41,6 +41,12 @@ private slots:
     void refreshDeviceTable();
     void onConfigDevice();
     void onReadRegisters();
+    /// gtd 导入/导出（VM 5.2：窗口右上角图标，整包通信配置）
+    void onExportGtd();
+    void onImportGtd();
+    /// 无模态入口（供按钮与回归测试直接驱动）；失败经 QMessageBox 上报
+    bool exportGtdTo(const QString &path);
+    bool importGtdFrom(const QString &path);
 
     // VM 5.2.1 右键菜单（设备/控制器/接收事件/发送事件四张表：重命名 + 删除）
     void onDeviceContextMenu(const QPoint &pos);
@@ -85,6 +91,13 @@ private:
     void refreshControllerTable();
     /// 响应配置页设备下拉按当前设备表重建（保留已选设备）
     void refreshResponseDeviceCombos();
+    /// 响应配置页回显（导入 gtd 后也走这里）
+    void loadResponseConfigToUi();
+    /// 设备管理页右侧「通信参数」摘要（随选中行刷新）
+    void updateParamSummary();
+
+    /// gtd 导入时被触发前缀歧义闸拒收的条目（按钮入口据此提示；测试可直读）
+    QStringList m_gtdImportRejected;
     /// 合并式异步刷新设备表：deviceConnected/deviceDisconnected 只挂起一次重建，
     /// 等当前调用栈展开后再执行（避免在 openDevice/closeDevice 栈内同步重建导致的悬空指针）
     void scheduleDeviceTableRefresh();
@@ -107,6 +120,11 @@ private:
 
     // 控制器列表（并进设备管理页；由通信设备派生）
     QTableWidget *m_controllerTable = nullptr;
+
+    // 设备管理页右侧「通信参数」摘要（VM 布局：左列表 + 右参数）
+    QLabel *m_paramSummary = nullptr;
+    QPushButton *m_exportGtdBtn = nullptr;
+    QPushButton *m_importGtdBtn = nullptr;
 
     // 触发配置页（内嵌全局触发对话框）
     GlobalTriggerDialog *m_triggerDialog = nullptr;

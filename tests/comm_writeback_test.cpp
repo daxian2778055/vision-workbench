@@ -25,6 +25,7 @@
 #include <QTimer>
 #include <QSpinBox>
 #include <QGroupBox>
+#include <QFileInfo>
 
 #include "SerialCommNode.h"
 #include <QSerialPort>
@@ -149,6 +150,8 @@ private slots:
     void testModbusRegisterToolbar();
     // B4-3e：数据上传开关（手册 5.2.1「完全一致的参数」第三项）
     void testDataUploadSwitch();
+    // B4-3f：设备管理页官方布局（左列表+右通信参数）+ gtd 导入导出
+    void testCommunicationGtdExportImport();
     void testFrameAssemblerReentrancy();
     void testDisconnectClearsFrameBuffer();
     void testConfigDialogPreservesUnmanagedKeys();
@@ -3340,6 +3343,142 @@ void CommWritebackTest::testDataUploadSwitch()
     gtm->removeStringTrigger(QStringLiteral("UP"));
     QVERIFY(cm->closeDevice(QStringLiteral("SIM_UPLOAD")));
     QVERIFY(cm->removeDevice(QStringLiteral("SIM_UPLOAD")));
+}
+
+void CommWritebackTest::testCommunicationGtdExportImport()
+{
+    // VM 5.2「通信管理」：窗口右上角图标把通信管理中的所有配置以 gtd 文件导入/导出；
+    // 设备管理页为左「通信设备列表」+ 右「通信参数」布局。
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("comm.gtd"));
+    auto *cm = CommunicationManager::instance();
+    auto *gtm = GlobalTriggerManager::instance();
+    auto *hb = HeartbeatManager::instance();
+
+    // 先建对话框再配触发：内嵌触发表初始为空，导入后必须显式刷新才可见
+    CommunicationManagerDialog dlg;
+
+    QVERIFY(cm->addDevice(QStringLiteral("GTD_DEV"), QStringLiteral("TCP"),
+                          tcpClientConfig(1)));
+    auto *rx = new TextProtocolReceiveEvent(QStringLiteral("GTD_RX"),
+                                            QStringLiteral("GTD_DEV"));
+    rx->setDelimiter(QStringLiteral(","));
+    QVERIFY(cm->addReceiveEvent(rx));
+    auto *tx = new TextDirectSendEvent(QStringLiteral("GTD_TX"),
+                                       QStringLiteral("GTD_DEV"));
+    QVERIFY(cm->addSendEvent(tx));
+    QVERIFY(gtm->setStringTrigger(QStringLiteral("GTDG"), QStringLiteral("FlowG")));
+    QVERIFY(hb->registerHeartbeat(QStringLiteral("GTD_DEV"), 500,
+                                  QStringLiteral("HB_A"), QStringLiteral("HB_B")));
+    QJsonObject resp;
+    QJsonObject scheme;
+    scheme[QStringLiteral("enabled")] = true;
+    scheme[QStringLiteral("delaySec")] = 7;
+    resp[QStringLiteral("schemeLoad")] = scheme;
+    cm->setResponseConfig(resp);
+
+    QVERIFY2(dlg.findChild<QPushButton *>(QStringLiteral("commGtdExport")),
+             "缺少 gtd 导出入口");
+    QVERIFY2(dlg.findChild<QPushButton *>(QStringLiteral("commGtdImport")),
+             "缺少 gtd 导入入口");
+    auto *summary = dlg.findChild<QLabel *>(QStringLiteral("commParamSummary"));
+    QVERIFY2(summary != nullptr, "缺少右侧「通信参数」摘要");
+
+    bool ok = false;
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "exportGtdTo", Qt::DirectConnection,
+                                      Q_RETURN_ARG(bool, ok), Q_ARG(QString, path)));
+    QVERIFY(ok);
+    QVERIFY(QFileInfo(path).size() > 0);
+
+    // 导出的 gtd 必须覆盖三类顶层配置
+    {
+        QFile f(path);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        const QJsonObject root = QJsonDocument::fromJson(f.readAll()).object();
+        QCOMPARE(root.value(QStringLiteral("format")).toString(),
+                 QStringLiteral("visionflow-communication"));
+        QVERIFY(root.contains(QStringLiteral("communication")));
+        QVERIFY(root.contains(QStringLiteral("globalTriggers")));
+        QVERIFY(root.contains(QStringLiteral("heartbeat")));
+    }
+
+    // 破坏现场后导入恢复（fromJson 为整体替换语义）
+    QVERIFY(cm->removeReceiveEvent(QStringLiteral("GTD_RX")));
+    QVERIFY(cm->removeSendEvent(QStringLiteral("GTD_TX")));
+    gtm->removeStringTrigger(QStringLiteral("GTDG"));
+    hb->unregisterHeartbeat(QStringLiteral("GTD_DEV"));
+    cm->setResponseConfig(QJsonObject());
+    QVERIFY(cm->removeDevice(QStringLiteral("GTD_DEV")));
+    QVERIFY(!cm->hasDevice(QStringLiteral("GTD_DEV")));
+
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "importGtdFrom", Qt::DirectConnection,
+                                      Q_RETURN_ARG(bool, ok), Q_ARG(QString, path)));
+    QVERIFY(ok);
+    QVERIFY(cm->hasDevice(QStringLiteral("GTD_DEV")));
+    QVERIFY(cm->receiveEvent(QStringLiteral("GTD_RX")) != nullptr);
+    QVERIFY(cm->sendEvent(QStringLiteral("GTD_TX")) != nullptr);
+    QCOMPARE(gtm->flowForStringTrigger(QStringLiteral("GTDG")), QStringLiteral("FlowG"));
+    QCOMPARE(cm->responseConfig().value(QStringLiteral("schemeLoad"))
+                 .toObject().value(QStringLiteral("delaySec")).toInt(), 7);
+    QVERIFY(!hb->entries().isEmpty());
+
+    // 导入后内嵌触发表必须刷新（对话框在触发创建之前构造，表原为空）
+    auto *trigTable = dlg.findChild<QTableWidget *>(QStringLiteral("globalTriggerTable"));
+    QVERIFY(trigTable);
+    bool sawTrigger = false;
+    for (int r = 0; r < trigTable->rowCount() && !sawTrigger; ++r)
+        for (int c = 0; c < trigTable->columnCount(); ++c)
+            if (trigTable->item(r, c)
+                && trigTable->item(r, c)->text().contains(QStringLiteral("GTDG"))) {
+                sawTrigger = true;
+                break;
+            }
+    QVERIFY2(sawTrigger, "导入后内嵌触发表未刷新");
+
+    // 非法文件：非 JSON / 缺 format 标识都必须拒收，且不改动现场
+    const QString badJson = dir.filePath(QStringLiteral("bad_json.gtd"));
+    {
+        QFile f(badJson);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("{not json");
+    }
+    const QString badFormat = dir.filePath(QStringLiteral("bad_format.gtd"));
+    {
+        QFile f(badFormat);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("{\"format\":\"other\"}");
+    }
+    for (const QString &bad : {badJson, badFormat}) {
+        bool badOk = true;
+        QVERIFY(QMetaObject::invokeMethod(&dlg, "importGtdFrom", Qt::DirectConnection,
+                                          Q_RETURN_ARG(bool, badOk), Q_ARG(QString, bad)));
+        QVERIFY2(!badOk, "非法 gtd 未被拒收");
+        QVERIFY2(cm->hasDevice(QStringLiteral("GTD_DEV")),
+                 "非法 gtd 破坏了现有配置");
+    }
+
+    // 右侧「通信参数」：选中设备 → 显示其名称与配置键；未选中保持提示
+    auto *table = dlg.findChild<QTableWidget *>(QStringLiteral("deviceTable"));
+    QVERIFY(table);
+    int row = -1;
+    for (int r = 0; r < table->rowCount(); ++r)
+        if (table->item(r, 0) && table->item(r, 0)->text() == QStringLiteral("GTD_DEV"))
+            row = r;
+    QVERIFY(row >= 0);
+    table->setCurrentCell(row, 0);
+    QVERIFY(summary->text().contains(QStringLiteral("GTD_DEV")));
+    QVERIFY(summary->text().contains(QStringLiteral("serverIp")));
+    table->setCurrentCell(-1, -1);
+    QVERIFY(summary->text().contains(QStringLiteral("未选中设备")));
+
+    // 清场
+    gtm->removeStringTrigger(QStringLiteral("GTDG"));
+    hb->unregisterHeartbeat(QStringLiteral("GTD_DEV"));
+    cm->removeReceiveEvent(QStringLiteral("GTD_RX"));
+    cm->removeSendEvent(QStringLiteral("GTD_TX"));
+    cm->removeDevice(QStringLiteral("GTD_DEV"));
+    cm->setResponseConfig(QJsonObject());
 }
 
 QTEST_MAIN(CommWritebackTest)

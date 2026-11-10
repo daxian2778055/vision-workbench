@@ -16,12 +16,15 @@ public:
     explicit GlobalTriggerDialog(QWidget *parent = nullptr);
     ~GlobalTriggerDialog() override;
 
+public slots:
+    /// 外部导入/重载触发配置后刷新表（gtd 导入用）
+    void refreshTriggerTable();
+
 private slots:
     void onAddStringTrigger();
     void onAddEventTrigger();
     void onRemoveTrigger();
     void onApply();
-    void refreshTriggerTable();
 
 private:
     void setupUI();
