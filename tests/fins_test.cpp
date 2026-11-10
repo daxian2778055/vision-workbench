@@ -76,6 +76,52 @@ quint16 requestMc(const QByteArray &finsFrame)
     return quint16((quint8(finsFrame.at(10)) << 8) | quint8(finsFrame.at(11)));
 }
 
+// ---- mock 侧独立的 FINS/TCP 帧头解析与构造 ----
+// 刻意**不调用 Fins::***（被测函数）：否则组包/拆包口径一旦写错，mock 会跟着一起错，
+// 回环腿仍然全绿，形成「实现 + 测试 + 桩」自证闭环（2026-11-10 审核）。
+// 这里按公开报文格式逐字节独立实现，只用于模拟 PLC，不参与产品代码。
+quint32 readBe32(const QByteArray &b, int off)
+{
+    return (quint32(quint8(b.at(off))) << 24)
+         | (quint32(quint8(b.at(off + 1))) << 16)
+         | (quint32(quint8(b.at(off + 2))) << 8)
+         | quint32(quint8(b.at(off + 3)));
+}
+
+void appendBe32(QByteArray &out, quint32 v)
+{
+    out.append(char(quint8(v >> 24)));
+    out.append(char(quint8(v >> 16)));
+    out.append(char(quint8(v >> 8)));
+    out.append(char(quint8(v)));
+}
+
+/// 返回整帧字节数（length + 8）；帧头不足/magic 错/长度非法返回 false
+bool mockParseTcpFrame(const QByteArray &buf, quint32 *length, quint32 *command,
+                       quint32 *errorCode, int *totalBytes)
+{
+    if (buf.size() < 16 || buf.left(4) != QByteArray("FINS", 4))
+        return false;
+    const quint32 len = readBe32(buf, 4);
+    if (len < 8 || len > 1024u * 1024u)
+        return false;
+    if (length) *length = len;
+    if (command) *command = readBe32(buf, 8);
+    if (errorCode) *errorCode = readBe32(buf, 12);
+    if (totalBytes) *totalBytes = int(len) + 8;
+    return true;
+}
+
+QByteArray mockTcpFrame(quint32 command, quint32 errorCode, const QByteArray &data)
+{
+    QByteArray out("FINS", 4);
+    appendBe32(out, quint32(8 + data.size()));   // 长度 = 命令+错误码+data
+    appendBe32(out, command);
+    appendBe32(out, errorCode);
+    out.append(data);
+    return out;
+}
+
 /// 起一个 FINS/TCP 回环服务端（节点地址握手 + Memory Area Read/Write 全应答）。
 /// 返回监听端口；listen 失败返回 0。观测值全部写进 state。
 quint16 startFinsTcpServer(QTcpServer &server, const std::shared_ptr<LoopState> &state)
@@ -93,34 +139,37 @@ quint16 startFinsTcpServer(QTcpServer &server, const std::shared_ptr<LoopState> 
                 quint32 command = 0;
                 quint32 errorCode = 0;
                 int headerBytes = 0;
-                if (!Fins::parseTcpHeader(state->buffer, &length, &command, &errorCode,
-                                          &headerBytes))
+                if (!mockParseTcpFrame(state->buffer, &length, &command, &errorCode,
+                                       &headerBytes))
                     break;
                 if (headerBytes > state->buffer.size())
                     break;   // 半包
-                const QByteArray data = state->buffer.mid(16, int(length) - 8);
+                const QByteArray frame = state->buffer.left(headerBytes);
+                const QByteArray data = frame.mid(16, int(length) - 8);
                 state->buffer.remove(0, headerBytes);
 
                 if (command == 0x00000000u) {          // 节点地址请求
+                    // 保存**收到的原文**：旧版用 Fins::tcpHeader 重建观测值，
+                    // 等于用被测函数造出「收到的数据」，拆包错了也看不出来。
                     if (state->nodeAddrRequest.isEmpty())
-                        state->nodeAddrRequest = Fins::tcpHeader(command, errorCode, data);
+                        state->nodeAddrRequest = frame;
                     // 节点地址响应：客户端节点 = 1，服务端（PLC）节点 = 2
                     QByteArray payload;
                     payload.append(char(0x00)).append(char(0x00))
                         .append(char(0x00)).append(char(0x01));
                     payload.append(char(0x00)).append(char(0x00))
                         .append(char(0x00)).append(char(0x02));
-                    cli->write(Fins::tcpHeader(0x00000001u, 0u, payload));
+                    cli->write(mockTcpFrame(0x00000001u, 0u, payload));
                     cli->flush();
                 } else if (command == 0x00000002u) {   // 帧发送：FINS 帧本体
                     if (requestMc(data) == 0x0102u) {
                         state->lastWriteFrame = data;
                         ++state->writeFrameCount;
-                        cli->write(Fins::frameSend(finsWriteResponse(data)));
+                        cli->write(mockTcpFrame(0x00000002u, 0u, finsWriteResponse(data)));
                     } else {
                         state->lastFinsFrame = data;
                         ++state->finsFrameCount;
-                        cli->write(Fins::frameSend(finsReadResponse(data)));
+                        cli->write(mockTcpFrame(0x00000002u, 0u, finsReadResponse(data)));
                     }
                     cli->flush();
                 }
@@ -172,8 +221,9 @@ void FinsTest::codecNodeAddressRequestBytes()
     QCOMPARE(req.mid(16), QByteArray(4, '\0'));
 
     // 帧头拆分：length = 8 + data.size()；整帧 = length + 8（= 16 字节头 + data）
+    // 输入由 mock 侧独立实现构造，不用被测的 Fins::tcpHeader 自造自拆
     const QByteArray resp =
-        Fins::tcpHeader(0x00000001u, 0u, QByteArray::fromHex("0000000100000002"));
+        mockTcpFrame(0x00000001u, 0u, QByteArray::fromHex("0000000100000002"));
     quint32 length = 0;
     quint32 command = 0xFFFFFFFFu;
     quint32 errorCode = 0xFFFFFFFFu;
@@ -349,7 +399,9 @@ void FinsTest::loopbackFinsTcpRead()
     QTRY_VERIFY_WITH_TIMEOUT(valueSpy.count() >= 1, 3000);
 
     // 握手请求逐字节 = codec 里的 28 字节节点地址请求
-    QCOMPARE(state->nodeAddrRequest, Fins::nodeAddressRequest());
+    // 观测值是收到的原文、期望按 W342 独立硬编码（20 字节），两边都不调用被测函数
+    QCOMPARE(state->nodeAddrRequest,
+             QByteArray::fromHex("46494e530000000c000000000000000000000000"));
     // 轮询已发出，且节点号取自握手：DA1 = 服务端 2，SA1 = 本机 1
     QVERIFY(state->finsFrameCount >= 1);
     QCOMPARE(state->lastFinsFrame.size(), 18);
@@ -402,10 +454,14 @@ void FinsTest::loopbackFinsTcpWrite()
     // 写 DM100 = 0x1234（20 字节）：MC=0102，节点号取自握手（DA1=2 / SA1=1）
     QVERIFY(node.writeRegister(100, 0x1234));
     QTRY_VERIFY_WITH_TIMEOUT(state->writeFrameCount >= 1, 3000);
-    const QByteArray expected = Fins::command(
-        0x0102u, 2, 1,
-        Fins::writeMemoryParams(Fins::DM, 100, 1, QByteArray::fromHex("1234")));
-    QCOMPARE(state->lastWriteFrame, expected);
+    // 期望按 W342 逐字节独立硬编码，刻意不调用 Fins::command / writeMemoryParams：
+    //   80 00 02 00 02 00 00 01 00 00  (ICF..SID；DA1=2/SA1=1 来自握手响应)
+    //   01 02                          (MC：Memory Area Write)
+    //   82 00 00 64 00 01 12 34       (DM100 / 1 字 / 值 0x1234，全部大端)
+    const QByteArray expectedWrite = QByteArray::fromHex(
+        "80000200020000010000" "0102" "8200006400011234");
+    QCOMPARE(expectedWrite.size(), 20);
+    QCOMPARE(state->lastWriteFrame, expectedWrite);
     QCOMPARE(state->lastWriteFrame.size(), 20);
 
     // 未登记地址：请求不发出，且原因经 communicationError 上报（不静默返回 false）
