@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QSharedPointer>
+#include <QPointer>
 #include <QFileDialog>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -643,20 +644,25 @@ QWidget *ImageReadNode::createParamPanel()
     }
     
     // 连接缩略图更新信号（接收者上下文=thumbnailLayout：面板销毁即断开，不能再拿着已释放的布局）
+    // U-20 补强（2026-11-10）：context 只保护了 thumbnailLayout，**节点 this 可能先于面板销毁**
+    // （FlowScene::removeNode），而 singleShot 已排队的 lambda 不会被 sender 销毁取消。
+    // 与 ColorConversionNode.cpp / HalconNode.cpp 同款加 QPointer selfGuard。
     connect(this, &ImageReadNode::thumbnailUpdated, thumbnailLayout, [this, thumbnailLayout]() {
+        QPointer<ImageReadNode> selfGuard(this);
         // 延迟更新缩略图，避免在事件处理中修改UI
-        // 上下文对象=thumbnailLayout：面板销毁后这条定时器不该再解引用它（推进计划 §3.26 U-20）
-        QTimer::singleShot(0, thumbnailLayout, [this, thumbnailLayout]() {
-            updateThumbnails(thumbnailLayout);
+        QTimer::singleShot(0, thumbnailLayout, [selfGuard, thumbnailLayout]() {
+            if (!selfGuard) return;
+            selfGuard->updateThumbnails(thumbnailLayout);
         });
     });
-    
+
     // 连接参数面板显示信号，确保参数面板显示时能正确更新缩略图（接收者上下文=thumbnailLayout，同上 U-20）
     connect(this, &ImageReadNode::thumbnailUpdated, thumbnailLayout, [this, thumbnailLayout]() {
-        // 确保在参数面板显示时能正确更新缩略图
         if (thumbnailLayout) {
-            QTimer::singleShot(0, thumbnailLayout, [this, thumbnailLayout]() {
-                updateThumbnails(thumbnailLayout);
+            QPointer<ImageReadNode> selfGuard(this);
+            QTimer::singleShot(0, thumbnailLayout, [selfGuard, thumbnailLayout]() {
+                if (!selfGuard) return;
+                selfGuard->updateThumbnails(thumbnailLayout);
             });
         }
     });

@@ -1546,7 +1546,11 @@ QWidget *MvsImageSourceNode::createParamPanel()
     refillCameraCombo(m_cameraName);
 
     // 初始检测相机
+    // U-20 补强（2026-11-10）：context=panel 只保护面板，节点可能先被 removeNode 销毁；
+    // 本文件后台任务早已用 QPointer 保护节点，此处漏了守卫。
+    QPointer<MvsImageSourceNode> selfGuard(this);
     QTimer::singleShot(500, panel, [=]() {
+        if (!selfGuard) return;
         QStringList cameras = getAvailableCameras();
         if (!cameras.isEmpty()) {
             refillCameraCombo(m_cameraName);

@@ -518,14 +518,17 @@ bool CommunicationManager::createDeviceNode(const QString &name, const QString &
     {
         // Forward data received signals（经帧组装：配置了组帧则按帧转发，未配置则原样转发）
         // 捕获 node 而非建节点时的名字：重命名后 deviceName() 即新名，转发不挂旧名。
-        connect(node, &CommunicationNodeBase::dataReceived, this, [this, node](const QByteArray &data) {
+        // U-20（2026-11-10）：context 用 node 而非长寿命单例 this —— removeDevice 里
+        // node 会 deleteLater，context=node 时连接与已排队的回调都随节点一起取消，
+        // 否则排队中的 lambda 仍会解引用裸 node。
+        connect(node, &CommunicationNodeBase::dataReceived, node, [this, node](const QByteArray &data) {
             feedFrameAssembler(node->deviceName(), data);
         });
 
         // 注意：这两个槽会在 openDevice/closeDevice（可能仍处于外层调用栈）中被同步触发，
         // 因此锁内只做状态更新，emit 放到锁外；且用 find 而非 operator[]，
         // 避免设备已被 removeDevice 移除后又被 [] 重新插入“复活”。
-        connect(node, &CommunicationNodeBase::connectionOpened, this, [this, node]() {
+        connect(node, &CommunicationNodeBase::connectionOpened, node, [this, node]() {
             const QString name = node->deviceName();
             {
                 QMutexLocker locker(&m_mutex);
@@ -537,7 +540,7 @@ bool CommunicationManager::createDeviceNode(const QString &name, const QString &
             emit deviceConnected(name);
         });
 
-        connect(node, &CommunicationNodeBase::connectionClosed, this, [this, node]() {
+        connect(node, &CommunicationNodeBase::connectionClosed, node, [this, node]() {
             const QString name = node->deviceName();
             {
                 QMutexLocker locker(&m_mutex);

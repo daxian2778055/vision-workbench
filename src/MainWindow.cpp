@@ -2881,7 +2881,9 @@ void MainWindow::createNewFlow()
                 m_zoomStatusLabel->setText(tr("缩放 %1%").arg(percent));
         });
         // 默认视图定位到左上角（延迟到布局完成后执行）
-        QTimer::singleShot(0, this, [view]() {
+        // U-20（2026-11-10）：context 必须是被捕获的 view 本身，不能用长寿命的 MainWindow——
+        // 流程页关闭时 view 被 removeTab 后立即 delete，MainWindow 不会取消这条排队定时器。
+        QTimer::singleShot(0, view, [view]() {
             view->centerOn(0, 0);
         });
         // 分配全局唯一流程名：扫描 GTM 已注册名，返回首个空闲"流程 N"。避免删除流程后

@@ -1105,36 +1105,45 @@ QWidget *HalconImageSourceNode::createParamPanel()
     });
     
     // 相机检测和刷新逻辑
+    // U-20 补强（2026-11-10）：原实现工作线程 lambda 直接调成员函数
+    // detectCamerasInThread()，queued 回调的 context 只是 combo 却调用
+    // getSelectedCamera()（成员函数且带锁）——节点先于面板销毁即 UAF。
+    // 改为：GUI 线程先取好选中相机；工作线程与 queued 回调都用 QPointer 守卫；
+    // queued 回调只碰 combo 与值捕获的数据，完全不触碰节点。
     auto refreshCameras = [=]() {
         cameraSelectCombo->clear();
         cameraSelectCombo->addItem("正在检测相机...");
         cameraSelectCombo->setEnabled(false);
-        
-        QThreadPool::globalInstance()->start([=]() {
+
+        QPointer<HalconImageSourceNode> selfGuard(this);
+        QPointer<QComboBox> comboGuard(cameraSelectCombo);
+        // 检测期间 combo 被禁用，启动时取值与回调里取值等价
+        const QString selectedCamera = getSelectedCamera();
+
+        QThreadPool::globalInstance()->start([selfGuard, comboGuard, selectedCamera]() {
+            if (!selfGuard || !comboGuard) return;   // 节点或面板已销毁
             try {
-                QStringList detectedCameras = detectCamerasInThread();
-                
-                QMetaObject::invokeMethod(cameraSelectCombo, [=]() {
-                    QSignalBlocker blocker(cameraSelectCombo);
-                    cameraSelectCombo->clear();
-                    
-                    if (detectedCameras.isEmpty()) {
-                        cameraSelectCombo->addItem("未检测到相机");
-                        cameraSelectCombo->setEnabled(false);
-                    } else {
-                        cameraSelectCombo->setEnabled(true);
-                        for (const QString &camera : detectedCameras) {
-                            cameraSelectCombo->addItem(camera);
+                QStringList detectedCameras = selfGuard->detectCamerasInThread();
+
+                QMetaObject::invokeMethod(comboGuard.data(),
+                    [comboGuard, detectedCameras, selectedCamera]() {
+                        if (!comboGuard) return;
+                        QComboBox *combo = comboGuard.data();
+                        QSignalBlocker blocker(combo);
+                        combo->clear();
+
+                        if (detectedCameras.isEmpty()) {
+                            combo->addItem("未检测到相机");
+                            combo->setEnabled(false);
+                        } else {
+                            combo->setEnabled(true);
+                            for (const QString &camera : detectedCameras)
+                                combo->addItem(camera);
+                            const int index = combo->findText(selectedCamera);
+                            if (index >= 0)
+                                combo->setCurrentIndex(index);
                         }
-                        
-                        // 恢复当前选中的相机
-                        QString currentCamera = getSelectedCamera();
-                        int index = cameraSelectCombo->findText(currentCamera);
-                        if (index >= 0) {
-                            cameraSelectCombo->setCurrentIndex(index);
-                        }
-                    }
-                }, Qt::QueuedConnection);
+                    }, Qt::QueuedConnection);
             } catch (std::exception &e) {
                 VFP_DEBUG << "Exception in refresh camera list:" << e.what();
             } catch (...) {

@@ -136,6 +136,51 @@ def scan_single_shot():
     return sites
 
 
+THIS_CAPTURE_RE = re.compile(r"^\[[^\]]*\bthis\b")
+
+
+def scan_unguarded_this_capture():
+    """U-20 blind spot (2026-11-10): the context object protects the *receiver*,
+    not everything the lambda captured. A lambda that explicitly captures raw
+    ``this`` can still dereference a node destroyed before the timer fired
+    (FlowScene::removeNode deletes the node while its param panel is still open).
+
+    Mechanical rule, no semantic guessing about ``[=]`` (which would cause a flood
+    of false positives): report a site only when
+      * the lambda capture list explicitly contains ``this``, AND
+      * the context argument is not ``this`` itself (otherwise death cancels the timer), AND
+      * the lambda body contains no QPointer / selfGuard / Guard sentinel.
+    """
+    bad = []
+    for name in sorted(os.listdir(SRC)):
+        if not name.endswith((".cpp", ".h")):
+            continue
+        text = io.open(os.path.join(SRC, name), encoding="utf-8", errors="replace").read()
+        lines = text.split("\n")
+        for m in CALL_RE.finditer(text):
+            open_at = m.end() - 1
+            line_no = text.count("\n", 0, m.start()) + 1
+            paren_line = text.count("\n", 0, open_at)
+            call_text, balanced = call_text_from(
+                lines, paren_line, open_at - (text.rfind("\n", 0, open_at) + 1))
+            if not balanced:
+                continue        # primary scan already judges this UNRES / red
+            args = top_level_args(call_text)
+            if len(args) < 3:
+                continue
+            context = args[1].strip()
+            lam = args[2]
+            head = lam.split("(", 1)[0].strip()
+            if not THIS_CAPTURE_RE.search(head):
+                continue
+            if context == "this":
+                continue
+            if any(s in lam for s in ("QPointer", "selfGuard", "Guard")):
+                continue
+            bad.append((name, line_no, context, preview(lam)))
+    return bad
+
+
 def live_registry_classes():
     lines = io.open(os.path.join(SRC, "NodeRegistry.cpp"), encoding="utf-8", errors="replace").read().split("\n")
     # Same rule as doc_check.ps1 (U-9): a commented-out VFP_REG line is not a registration.
@@ -169,6 +214,7 @@ def main():
     sites = scan_single_shot()
     no_ctx = [s for s in sites if s[4]]
     unresolved = [s for s in sites if s[5]]
+    unguarded = scan_unguarded_this_capture()
     print("SINGLESHOT total=%d with_context=%d no_context=%d"
           % (len(sites), len(sites) - len(no_ctx) - len(unresolved), len(no_ctx)))
     if unresolved:
@@ -185,14 +231,22 @@ def main():
           % (len(classes), len(defined), len(base_only) - len(non_halcon), len(non_halcon)))
     print("  BASE_ONLY %s" % ",".join(sorted(set(base_only) - set(non_halcon))))
 
+    print("SINGLESHOT-CAPTURE unguarded_raw_this=%d" % len(unguarded))
+    for name, ln, context, head in unguarded:
+        print("  MISMATCH %s:%d context=%r lambda=%r" % (name, ln, context, head))
+
     if no_ctx:
         print("FAIL: %d singleShot site(s) still lack a context object" % len(no_ctx))
     if unresolved:
         print("FAIL: %d singleShot site(s) could not be classified "
               "(parentheses unbalanced by EOF or fewer than 2 arguments)" % len(unresolved))
-    if no_ctx or unresolved:
+    if unguarded:
+        print("FAIL: %d singleShot site(s) capture raw `this` with a different "
+              "context and no QPointer guard" % len(unguarded))
+    if no_ctx or unresolved or unguarded:
         return 1
-    print("OK: every singleShot call site is bound to a context object")
+    print("OK: every singleShot call site is bound to a context object "
+          "and no raw `this` capture is left unguarded")
     return 0
 
 
