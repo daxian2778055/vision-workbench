@@ -854,7 +854,23 @@ QJsonObject CommunicationManager::toJson() const
     }
     root[QStringLiteral("sendEvents")] = sendArr;
 
+    // 响应配置（VM 5.2.5）：随方案保存；空对象不落键（老方案字节不变）
+    if (!m_responseConfig.isEmpty())
+        root[QStringLiteral("responseConfig")] = m_responseConfig;
+
     return root;
+}
+
+QJsonObject CommunicationManager::responseConfig() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_responseConfig;
+}
+
+void CommunicationManager::setResponseConfig(const QJsonObject &cfg)
+{
+    QMutexLocker locker(&m_mutex);
+    m_responseConfig = cfg;
 }
 
 void CommunicationManager::fromJson(const QJsonObject &json)
@@ -947,6 +963,12 @@ void CommunicationManager::fromJson(const QJsonObject &json)
                 m_sendEvents[id] = ev;
             }
         }
+    }
+
+    // 响应配置（VM 5.2.5）：老方案无此键 → 空对象（各子项按未启用处理）
+    {
+        QMutexLocker locker(&m_mutex);
+        m_responseConfig = json.value(QStringLiteral("responseConfig")).toObject();
     }
 }
 

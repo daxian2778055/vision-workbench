@@ -72,6 +72,7 @@
 #include "CommunicationManager.h"
 #include "CommunicationManagerDialog.h"
 #include "CommMonitorDialog.h"
+#include "CommResponseManager.h"
 #include "GlobalTriggerManager.h"
 #include "GlobalTriggerDialog.h"
 #include "SessionManager.h"
@@ -718,6 +719,8 @@ MainWindow::MainWindow(QWidget *parent, bool previewOnly) :
 
         VFP_DEBUG << "setupUi completed";
         
+        // VM 5.2.5：响应配置运行期常驻（构造函数即接上相机状态信号，后续方案载入/流程启停直接调用）
+        CommResponseManager::instance();
         // === 实装 4.4：右侧图像区双页签「流程图像 / 模块结果」 ===
         // VM 把当前轮结果与图像放在同一区域、用页签切换；历史/帮助留在底部结果停靠面板。
         QWidget *imagePage = nullptr;
@@ -2061,6 +2064,15 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
     // ── 全局 UI：运行状态 → 状态栏（状态/耗时/触发计数） ──
     connect(ex, &FlowExecutor::executionStarted, this, [this, ex]() {
         if (ex == m_executor) onExecutionStarted();
+    });
+    // VM 5.2.5 流程控制响应：忙碌=开始、空闲=结束（不按当前激活流程过滤：后台流程状态同样要上报）
+    connect(ex, &FlowExecutor::executionStarted, this, [ex]() {
+        FlowScene *s = ex->flowScene();
+        CommResponseManager::instance()->handleFlowState(s ? s->flowName() : QString(), true);
+    });
+    connect(ex, &FlowExecutor::executionFinished, this, [ex]() {
+        FlowScene *s = ex->flowScene();
+        CommResponseManager::instance()->handleFlowState(s ? s->flowName() : QString(), false);
     });
     connect(ex, &FlowExecutor::executionStopped, this, [this, ex]() {
         if (ex == m_executor) onExecutionStopped();
@@ -4836,6 +4848,8 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
     }
 
     logMessage(tr("项目加载成功"));
+    // VM 5.2.5 响应配置：方案加载成功 → 通知外部通信设备（配置含延迟时走定时器）
+    CommResponseManager::instance()->notifySchemeLoaded();
     // P2-2：顶栏方案名跟随载入文件名（崩溃恢复也显示来源方案名）
     updateSchemeLabel(fileName);
     if (!recoveryRestore)

@@ -326,6 +326,7 @@ src/DeepOcrSelfTest.cpp   # --selftest-deepocr：换机后验证 HALCON 运行�
     src/HeartbeatManager.cpp
     src/GlobalTriggerManager.cpp
     src/GlobalTriggerDialog.cpp
+    src/CommResponseManager.cpp
     # Phase 6: 系统级
     src/SessionManager.cpp
     src/FactoryPasswordGuard.cpp
@@ -561,6 +562,7 @@ set(HEADERS
     include/HeartbeatManager.h
     include/GlobalTriggerManager.h
     include/GlobalTriggerDialog.h
+    include/CommResponseManager.h
     # Phase 6: 系统级
     include/SessionManager.h
     include/OperationLogDialog.h

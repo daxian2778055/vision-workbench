@@ -48,6 +48,7 @@ void GlobalTriggerDialog::setupUI()
     mainLayout->addWidget(m_infoLabel);
 
     m_triggerTable = new QTableWidget();
+    m_triggerTable->setObjectName(QStringLiteral("globalTriggerTable"));   // 供回归测试按名定位
     m_triggerTable->setColumnCount(5);
     m_triggerTable->setHorizontalHeaderLabels({
         QStringLiteral("\u89E6\u53D1\u540D\u79F0"),
@@ -73,6 +74,7 @@ void GlobalTriggerDialog::setupUI()
     btnLayout->addStretch();
 
     m_closeBtn = new QPushButton(QStringLiteral("\u5173\u95ED"));
+    m_closeBtn->setObjectName(QStringLiteral("globalTriggerCloseBtn"));
     btnLayout->addWidget(m_closeBtn);
     mainLayout->addLayout(btnLayout);
 

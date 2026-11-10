@@ -85,6 +85,14 @@ public:
     bool loadFromFile(const QString &path);
     bool saveToFile(const QString &path);
 
+    // ---- 响应配置（VM 5.2.5：方案加载 / 流程控制 / 相机响应）----
+    /// 配置本体随方案保存（root["responseConfig"]）；运行期由 CommResponseManager 读取组装。
+    QJsonObject responseConfig() const;
+    void setResponseConfig(const QJsonObject &cfg);
+
+    /// 转义解码（\r \n \t \0 \\ \xHH）：响应配置的结束符与组帧共用同一口径。
+    static QByteArray decodeEscapes(const QString &text);
+
     // ---- 操作 ----
     bool openDevice(const QString &name);
     bool closeDevice(const QString &name);
@@ -123,8 +131,9 @@ private:
     /// 组帧静默定时器（不存在则建，回调按设备名取缓冲）；每次调用重置计时。
     /// 重命名后旧定时器回调仍捕获旧名，须停旧建新——与 feedFrameAssembler 共用此入口。
     void startFrameTimer(const QString &deviceName, int timeoutMs);
-    /// "\r\n" → CRLF 字节（支持 \r \n \t \0 \\ \xHH）
-    static QByteArray decodeEscapes(const QString &text);
+
+    /// 响应配置（仅界面线程读写；命名字段见 Dialog 的 setResponseConfig 组装处）
+    QJsonObject m_responseConfig;
 
     /// 帧组装缓冲（仅 UI 线程访问：数据从节点 dataReceived 信号进入）
     QHash<QString, QByteArray> m_frameBuffers;

@@ -23,6 +23,8 @@
 #include <QApplication>
 #include <QInputDialog>
 #include <QTimer>
+#include <QSpinBox>
+#include <QGroupBox>
 
 #include "SerialCommNode.h"
 #include <QSerialPort>
@@ -49,6 +51,7 @@
 #include "DynThresholdNode.h"
 #include "ReceiveEvent.h"
 #include "SendEvent.h"
+#include "CommResponseManager.h"
 #include "CommunicationNodeBase.h"
 #include "CommunicationManagerDialog.h"
 #include "CommDeviceConfigDialog.h"
@@ -135,6 +138,10 @@ private slots:
     void testRenameEventsFollowTriggers();
     void testRenameDeviceFrameBufferFollows();
     void testDialogContextMenuRename();
+    // VM4.4 B4-3b：导航六项（设备管理并控制器/触发配置/响应配置/心跳管理）+ 响应配置运行期
+    void testResponseConfigSchemeLoad();
+    void testResponseConfigFlowAndCamera();
+    void testResponseConfigDialogApply();
     void testFrameAssemblerReentrancy();
     void testDisconnectClearsFrameBuffer();
     void testConfigDialogPreservesUnmanagedKeys();
@@ -1305,30 +1312,48 @@ void CommWritebackTest::testCommunicationManagerLeftNav()
     auto *nav = dlg.findChild<QListWidget *>(QStringLiteral("commNavList"));
     QVERIFY(nav);
     QCOMPARE(nav->count(), 6);
-    const QStringList want{QStringLiteral("通信设备"), QStringLiteral("控制器列表"),
-                           QStringLiteral("接收事件"), QStringLiteral("发送事件"),
-                           QStringLiteral("心跳"), QStringLiteral("收发监视")};
+    // VM 5.2 官方六项：设备管理 / 接收事件 / 发送事件 / 触发配置 / 响应配置 / 心跳管理
+    const QStringList want{QStringLiteral("设备管理"), QStringLiteral("接收事件"),
+                           QStringLiteral("发送事件"), QStringLiteral("触发配置"),
+                           QStringLiteral("响应配置"), QStringLiteral("心跳管理")};
     for (int i = 0; i < want.size(); ++i)
         QCOMPARE(nav->item(i)->text(), want.at(i));
 
     auto *stack = dlg.findChild<QStackedWidget *>(QStringLiteral("commPageStack"));
     QVERIFY(stack);
     QCOMPARE(stack->count(), 6);
-    QCOMPARE(stack->currentIndex(), 0);   // 设备页默认（既有测试依赖）
+    QCOMPARE(stack->currentIndex(), 0);   // 设备管理默认（既有测试依赖）
 
-    nav->setCurrentRow(2);
-    QCOMPARE(stack->currentIndex(), 2);
+    nav->setCurrentRow(3);
+    QCOMPARE(stack->currentIndex(), 3);
     nav->setCurrentRow(5);
     QCOMPARE(stack->currentIndex(), 5);
 
-    // 既有回归依赖的设备表仍在
-    QVERIFY(dlg.findChild<QTableWidget *>(QStringLiteral("deviceTable")));
-    // 控制器列表页的只读表
+    // 既有回归依赖的设备表仍在，且与控制器列表同属「设备管理」页（官方布局）
+    auto *deviceTable = dlg.findChild<QTableWidget *>(QStringLiteral("deviceTable"));
+    QVERIFY(deviceTable);
     auto *controller = dlg.findChild<QTableWidget *>(QStringLiteral("controllerTable"));
     QVERIFY(controller);
+    QVERIFY2(stack->widget(0)->isAncestorOf(deviceTable), "设备表不在设备管理页");
+    QVERIFY2(stack->widget(0)->isAncestorOf(controller), "控制器列表未并进设备管理页");
     QCOMPARE(controller->columnCount(), 3);
     QCOMPARE(controller->editTriggers(),
              QAbstractItemView::EditTriggers(QAbstractItemView::NoEditTriggers));
+
+    // 触发配置页：内嵌全局触发对话框（含触发表），不是占位页
+    QVERIFY2(stack->widget(3)->findChild<QWidget *>(QStringLiteral("commTriggerConfig")),
+             "触发配置页未内嵌全局触发");
+    QVERIFY(stack->widget(3)->findChild<QTableWidget *>(QStringLiteral("globalTriggerTable")));
+
+    // 响应配置页：三组控件齐全
+    QVERIFY2(stack->widget(4)->findChild<QCheckBox *>(QStringLiteral("respSchemeLoadEnable")),
+             "响应配置缺少方案加载组");
+    QVERIFY(stack->widget(4)->findChild<QCheckBox *>(QStringLiteral("respFlowEnable")));
+    QVERIFY(stack->widget(4)->findChild<QCheckBox *>(QStringLiteral("respCameraEnable")));
+
+    // 心跳管理页
+    QVERIFY2(stack->widget(5)->findChild<QTableWidget *>(QStringLiteral("heartbeatTable")),
+             "心跳管理页表缺失");
 }
 
 void CommWritebackTest::testFrameAssemblerReentrancy()
@@ -2940,6 +2965,167 @@ void CommWritebackTest::testDialogContextMenuRename()
     cm->removeReceiveEvent(QStringLiteral("CTX_RX2"));
     cm->removeSendEvent(QStringLiteral("CTX_TX2"));
     QVERIFY(cm->removeDevice(QStringLiteral("CTX_MENU_NEW")));
+}
+
+void CommWritebackTest::testResponseConfigSchemeLoad()
+{
+    // VM 5.2.5 方案加载响应：配置开启 + 延迟 0 + 结束符 \r\n → 载入成功后发「内容\r\n」
+    QTcpServer plc;
+    QByteArray received;
+    startSimulatedPlc(plc, received);
+    QVERIFY2(plc.isListening(), qPrintable(plc.errorString()));
+
+    auto *cm = CommunicationManager::instance();
+    QVERIFY(cm->addDevice(QStringLiteral("RESP_SIM"), QStringLiteral("TCP"),
+                          tcpClientConfig(plc.serverPort())));
+    QVERIFY(cm->openDevice(QStringLiteral("RESP_SIM")));
+    QTRY_VERIFY_WITH_TIMEOUT(cm->deviceInfo(QStringLiteral("RESP_SIM")).isConnected, 3000);
+
+    QJsonObject root;
+    QJsonObject scheme;
+    scheme[QStringLiteral("enabled")] = true;
+    scheme[QStringLiteral("device")] = QStringLiteral("RESP_SIM");
+    scheme[QStringLiteral("delaySec")] = 0;
+    scheme[QStringLiteral("terminator")] = QStringLiteral("\\r\\n");
+    scheme[QStringLiteral("content")] = QStringLiteral("LOADED");
+    root[QStringLiteral("schemeLoad")] = scheme;
+    cm->setResponseConfig(root);
+
+    CommResponseManager::instance()->notifySchemeLoaded();
+    QTRY_VERIFY_WITH_TIMEOUT(received.contains("LOADED\r\n"), 3000);
+
+    // 持久化面：toJson 带 responseConfig，且字段原样
+    const QJsonObject saved = cm->toJson().value(QStringLiteral("responseConfig")).toObject();
+    QCOMPARE(saved.value(QStringLiteral("schemeLoad")).toObject()
+                 .value(QStringLiteral("content")).toString(),
+             QStringLiteral("LOADED"));
+
+    // 关闭后不得再发（判据反向）
+    const int before = received.size();
+    QJsonObject off;
+    QJsonObject offScheme;
+    offScheme[QStringLiteral("enabled")] = false;
+    off[QStringLiteral("schemeLoad")] = offScheme;
+    cm->setResponseConfig(off);
+    CommResponseManager::instance()->notifySchemeLoaded();
+    QTest::qWait(120);
+    QCOMPARE(received.size(), before);
+
+    cm->setResponseConfig(QJsonObject());
+    QVERIFY(cm->closeDevice(QStringLiteral("RESP_SIM")));
+    QVERIFY(cm->removeDevice(QStringLiteral("RESP_SIM")));
+}
+
+void CommWritebackTest::testResponseConfigFlowAndCamera()
+{
+    // VM 5.2.5 流程控制/相机响应：报文 = 内容 + 分隔符 + 流程名/相机名 + 结束符
+    QTcpServer plc;
+    QByteArray received;
+    startSimulatedPlc(plc, received);
+    QVERIFY2(plc.isListening(), qPrintable(plc.errorString()));
+
+    auto *cm = CommunicationManager::instance();
+    QVERIFY(cm->addDevice(QStringLiteral("RESP_FC"), QStringLiteral("TCP"),
+                          tcpClientConfig(plc.serverPort())));
+    QVERIFY(cm->openDevice(QStringLiteral("RESP_FC")));
+    QTRY_VERIFY_WITH_TIMEOUT(cm->deviceInfo(QStringLiteral("RESP_FC")).isConnected, 3000);
+
+    QJsonObject root;
+    QJsonObject flow;
+    flow[QStringLiteral("enabled")] = true;
+    flow[QStringLiteral("device")] = QStringLiteral("RESP_FC");
+    flow[QStringLiteral("terminator")] = QStringLiteral("\\r\\n");
+    flow[QStringLiteral("separator")] = QStringLiteral(",");
+    flow[QStringLiteral("idleContent")] = QStringLiteral("IDLE");
+    flow[QStringLiteral("busyContent")] = QStringLiteral("BUSY");
+    root[QStringLiteral("flowControl")] = flow;
+    QJsonObject camera;
+    camera[QStringLiteral("enabled")] = true;
+    camera[QStringLiteral("device")] = QStringLiteral("RESP_FC");
+    camera[QStringLiteral("separator")] = QStringLiteral("|");
+    camera[QStringLiteral("connectedContent")] = QStringLiteral("CAM_ON");
+    camera[QStringLiteral("disconnectedContent")] = QStringLiteral("CAM_OFF");
+    root[QStringLiteral("cameraResponse")] = camera;
+    cm->setResponseConfig(root);
+
+    auto *rt = CommResponseManager::instance();
+    rt->handleFlowState(QStringLiteral("流程 1"), true);
+    QTRY_VERIFY_WITH_TIMEOUT(received.contains(QStringLiteral("BUSY,流程 1\r\n").toUtf8()), 3000);
+    rt->handleFlowState(QStringLiteral("流程 1"), false);
+    QTRY_VERIFY_WITH_TIMEOUT(received.contains(QStringLiteral("IDLE,流程 1\r\n").toUtf8()), 3000);
+    rt->handleCameraState(QStringLiteral("CamA"), true);
+    QTRY_VERIFY_WITH_TIMEOUT(received.contains(QByteArrayLiteral("CAM_ON|CamA")), 3000);
+    rt->handleCameraState(QStringLiteral("CamA"), false);
+    QTRY_VERIFY_WITH_TIMEOUT(received.contains(QByteArrayLiteral("CAM_OFF|CamA")), 3000);
+
+    cm->setResponseConfig(QJsonObject());
+    QVERIFY(cm->closeDevice(QStringLiteral("RESP_FC")));
+    QVERIFY(cm->removeDevice(QStringLiteral("RESP_FC")));
+}
+
+void CommWritebackTest::testResponseConfigDialogApply()
+{
+    // 响应配置页：控件值 → CommunicationManager::responseConfig()（随方案保存）
+    auto *cm = CommunicationManager::instance();
+    QVERIFY(cm->addDevice(QStringLiteral("RESP_UI"), QStringLiteral("TCP"), tcpClientConfig(1)));
+
+    // 先写一份配置：新开对话框必须回显（判据同时覆盖"保存→重开"往返）
+    QJsonObject root;
+    QJsonObject scheme;
+    scheme[QStringLiteral("enabled")] = true;
+    scheme[QStringLiteral("device")] = QStringLiteral("RESP_UI");
+    scheme[QStringLiteral("delaySec")] = 2;
+    scheme[QStringLiteral("terminator")] = QStringLiteral("\\n");
+    scheme[QStringLiteral("content")] = QStringLiteral("OLD");
+    root[QStringLiteral("schemeLoad")] = scheme;
+    cm->setResponseConfig(root);
+
+    CommunicationManagerDialog dlg;
+    auto *enable = dlg.findChild<QCheckBox *>(QStringLiteral("respSchemeLoadEnable"));
+    auto *device = dlg.findChild<QComboBox *>(QStringLiteral("respSchemeLoadDevice"));
+    auto *delay = dlg.findChild<QSpinBox *>(QStringLiteral("respSchemeLoadDelay"));
+    auto *term = dlg.findChild<QComboBox *>(QStringLiteral("respSchemeLoadTerm"));
+    auto *content = dlg.findChild<QLineEdit *>(QStringLiteral("respSchemeLoadContent"));
+    auto *flowEnable = dlg.findChild<QCheckBox *>(QStringLiteral("respFlowEnable"));
+    auto *flowBusy = dlg.findChild<QLineEdit *>(QStringLiteral("respFlowBusy"));
+    auto *camEnable = dlg.findChild<QCheckBox *>(QStringLiteral("respCameraEnable"));
+    QVERIFY(enable && device && delay && term && content && flowEnable && flowBusy && camEnable);
+
+    // 回显
+    QVERIFY(enable->isChecked());
+    QCOMPARE(device->currentText(), QStringLiteral("RESP_UI"));
+    QCOMPARE(delay->value(), 2);
+    QCOMPARE(term->currentText(), QStringLiteral("\\n"));
+    QCOMPARE(content->text(), QStringLiteral("OLD"));
+
+    // 改值 → apply → 落配置
+    enable->setChecked(true);
+    device->setCurrentText(QStringLiteral("RESP_UI"));
+    content->setText(QStringLiteral("HELLO"));
+    delay->setValue(5);
+    term->setCurrentText(QStringLiteral("\\r\\n"));
+    flowEnable->setChecked(true);
+    flowBusy->setText(QStringLiteral("BUSY!"));
+    camEnable->setChecked(true);
+    dlg.applyResponseConfig();
+
+    const QJsonObject cfg = cm->responseConfig();
+    const QJsonObject s = cfg.value(QStringLiteral("schemeLoad")).toObject();
+    QCOMPARE(s.value(QStringLiteral("content")).toString(), QStringLiteral("HELLO"));
+    QCOMPARE(s.value(QStringLiteral("delaySec")).toInt(), 5);
+    QCOMPARE(s.value(QStringLiteral("terminator")).toString(), QStringLiteral("\\r\\n"));
+    QCOMPARE(s.value(QStringLiteral("device")).toString(), QStringLiteral("RESP_UI"));
+    QVERIFY(s.value(QStringLiteral("enabled")).toBool());
+    QVERIFY(cfg.value(QStringLiteral("flowControl")).toObject()
+                .value(QStringLiteral("enabled")).toBool());
+    QCOMPARE(cfg.value(QStringLiteral("flowControl")).toObject()
+                 .value(QStringLiteral("busyContent")).toString(),
+             QStringLiteral("BUSY!"));
+    QVERIFY(cfg.value(QStringLiteral("cameraResponse")).toObject()
+                .value(QStringLiteral("enabled")).toBool());
+
+    cm->setResponseConfig(QJsonObject());
+    QVERIFY(cm->removeDevice(QStringLiteral("RESP_UI")));
 }
 
 QTEST_MAIN(CommWritebackTest)

@@ -1,6 +1,7 @@
 #include "CommunicationManagerDialog.h"
 #include "CommunicationManager.h"
 #include "CommunicationNodeBase.h"
+#include "GlobalTriggerDialog.h"
 #include "ModbusNode.h"
 #include "ModbusConfigDialog.h"
 #include "FinsConfigDialog.h"
@@ -30,6 +31,7 @@
 #include <QStackedWidget>
 #include <QMenu>
 #include <QAction>
+#include <QSignalBlocker>
 
 CommunicationManagerDialog::CommunicationManagerDialog(QWidget *parent)
     : QDialog(parent)
@@ -39,6 +41,49 @@ CommunicationManagerDialog::CommunicationManagerDialog(QWidget *parent)
     refreshReceiveEventTable();
     refreshSendEventTable();
     refreshHeartbeatTable();
+    refreshResponseDeviceCombos();
+
+    // 响应配置页回显：把已保存的配置灌回控件（阻断信号，避免回显本身触发覆盖写）
+    {
+        auto *cm = CommunicationManager::instance();
+        const QJsonObject root = cm->responseConfig();
+        const QJsonObject scheme = root.value(QStringLiteral("schemeLoad")).toObject();
+        const QJsonObject flow = root.value(QStringLiteral("flowControl")).toObject();
+        const QJsonObject camera = root.value(QStringLiteral("cameraResponse")).toObject();
+        const QList<QWidget *> all{m_respSchemeEnable, m_respSchemeDevice, m_respSchemeDelay,
+                                   m_respSchemeTerm, m_respSchemeContent,
+                                   m_respFlowEnable, m_respFlowDevice, m_respFlowTerm,
+                                   m_respFlowSep, m_respFlowIdle, m_respFlowBusy,
+                                   m_respCameraEnable, m_respCameraDevice, m_respCameraSep,
+                                   m_respCameraOn, m_respCameraOff};
+        for (QWidget *w : all) w->blockSignals(true);
+        m_respSchemeEnable->setChecked(scheme.value(QStringLiteral("enabled")).toBool());
+        if (!scheme.value(QStringLiteral("device")).toString().isEmpty())
+            m_respSchemeDevice->setCurrentText(scheme.value(QStringLiteral("device")).toString());
+        m_respSchemeDelay->setValue(scheme.value(QStringLiteral("delaySec")).toInt());
+        if (!scheme.value(QStringLiteral("terminator")).toString().isEmpty())
+            m_respSchemeTerm->setCurrentText(scheme.value(QStringLiteral("terminator")).toString());
+        m_respSchemeContent->setText(scheme.value(QStringLiteral("content")).toString());
+
+        m_respFlowEnable->setChecked(flow.value(QStringLiteral("enabled")).toBool());
+        if (!flow.value(QStringLiteral("device")).toString().isEmpty())
+            m_respFlowDevice->setCurrentText(flow.value(QStringLiteral("device")).toString());
+        if (!flow.value(QStringLiteral("terminator")).toString().isEmpty())
+            m_respFlowTerm->setCurrentText(flow.value(QStringLiteral("terminator")).toString());
+        if (!flow.value(QStringLiteral("separator")).toString().isEmpty())
+            m_respFlowSep->setCurrentText(flow.value(QStringLiteral("separator")).toString());
+        m_respFlowIdle->setText(flow.value(QStringLiteral("idleContent")).toString());
+        m_respFlowBusy->setText(flow.value(QStringLiteral("busyContent")).toString());
+
+        m_respCameraEnable->setChecked(camera.value(QStringLiteral("enabled")).toBool());
+        if (!camera.value(QStringLiteral("device")).toString().isEmpty())
+            m_respCameraDevice->setCurrentText(camera.value(QStringLiteral("device")).toString());
+        if (!camera.value(QStringLiteral("separator")).toString().isEmpty())
+            m_respCameraSep->setCurrentText(camera.value(QStringLiteral("separator")).toString());
+        m_respCameraOn->setText(camera.value(QStringLiteral("connectedContent")).toString());
+        m_respCameraOff->setText(camera.value(QStringLiteral("disconnectedContent")).toString());
+        for (QWidget *w : all) w->blockSignals(false);
+    }
 
     // 重命名可能来自本对话框之外（测试/脚本/其它入口）：信号驱动各表同步，
     // 设备表重建时内部会连带刷新控制器页
@@ -49,7 +94,12 @@ CommunicationManagerDialog::CommunicationManagerDialog(QWidget *parent)
         refreshReceiveEventTable();
         refreshSendEventTable();
         refreshHeartbeatTable();
+        refreshResponseDeviceCombos();
     });
+    connect(cm, &CommunicationManager::deviceAdded, this,
+            [this](const QString &, const QString &) { refreshResponseDeviceCombos(); });
+    connect(cm, &CommunicationManager::deviceRemoved, this,
+            [this](const QString &) { refreshResponseDeviceCombos(); });
     connect(cm, &CommunicationManager::receiveEventRenamed, this,
             [this](const QString &, const QString &) { refreshReceiveEventTable(); });
     connect(cm, &CommunicationManager::sendEventRenamed, this,
@@ -79,21 +129,21 @@ void CommunicationManagerDialog::setupUI()
     bodyLayout->addWidget(m_pageStack, 1);
     mainLayout->addLayout(bodyLayout, 1);
 
-    // 页面添加顺序必须与导航项顺序严格一致（索引一一对应）
-    setupDeviceTab(m_pageStack);          // 0 通信设备（默认页，既有测试依赖）
-    setupControllerTab(m_pageStack);      // 1 控制器列表
-    setupReceiveEventTab(m_pageStack);    // 2 接收事件
-    setupSendEventTab(m_pageStack);       // 3 发送事件
-    setupHeartbeatTab(m_pageStack);       // 4 心跳
-    setupMonitorTab(m_pageStack);         // 5 收发监视
+    // 页面添加顺序必须与导航项顺序严格一致（索引一一对应；VM 5.2 官方六项）
+    setupDeviceTab(m_pageStack);          // 0 设备管理（含控制器列表；默认页，既有测试依赖）
+    setupReceiveEventTab(m_pageStack);    // 1 接收事件
+    setupSendEventTab(m_pageStack);       // 2 发送事件
+    setupTriggerTab(m_pageStack);         // 3 触发配置（全局触发）
+    setupResponseTab(m_pageStack);        // 4 响应配置
+    setupHeartbeatTab(m_pageStack);       // 5 心跳管理
 
     const QStringList navTitles{
-        QStringLiteral("\u901A\u4FE1\u8BBE\u5907"),
-        QStringLiteral("\u63A7\u5236\u5668\u5217\u8868"),
+        QStringLiteral("\u8BBE\u5907\u7BA1\u7406"),
         QStringLiteral("\u63A5\u6536\u4E8B\u4EF6"),
         QStringLiteral("\u53D1\u9001\u4E8B\u4EF6"),
-        QStringLiteral("\u5FC3\u8DF3"),
-        QStringLiteral("\u6536\u53D1\u76D1\u89C6")
+        QStringLiteral("\u89E6\u53D1\u914D\u7F6E"),
+        QStringLiteral("\u54CD\u5E94\u914D\u7F6E"),
+        QStringLiteral("\u5FC3\u8DF3\u7BA1\u7406")
     };
     m_navList->addItems(navTitles);
     connect(m_navList, &QListWidget::currentRowChanged,
@@ -160,6 +210,9 @@ void CommunicationManagerDialog::setupDeviceTab(QStackedWidget *stack)
     connect(m_configBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onConfigDevice);
     connect(m_readBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onReadRegisters);
 
+    // VM 5.2.1：控制器列表并进设备管理页（官方布局：设备表在上、控制器列表在下）
+    buildControllerSection(layout);
+
     // VM 5.2.1：设备列表右键 → 重命名 / 删除
     m_deviceTable->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_deviceTable, &QTableWidget::customContextMenuRequested,
@@ -180,11 +233,8 @@ void CommunicationManagerDialog::setupDeviceTab(QStackedWidget *stack)
 
 // ==================== Controller List Page ====================
 
-void CommunicationManagerDialog::setupControllerTab(QStackedWidget *stack)
+void CommunicationManagerDialog::buildControllerSection(QVBoxLayout *layout)
 {
-    auto *tab = new QWidget();
-    auto *layout = new QVBoxLayout(tab);
-
     auto *label = new QLabel(QStringLiteral("<b>\u63A7\u5236\u5668\u5217\u8868</b>"));
     label->setStyleSheet("font-size: 13px;");
     layout->addWidget(label);
@@ -208,14 +258,13 @@ void CommunicationManagerDialog::setupControllerTab(QStackedWidget *stack)
     m_controllerTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_controllerTable->setEditTriggers(QAbstractItemView::NoEditTriggers);   // 只读
     m_controllerTable->horizontalHeader()->setStretchLastSection(true);
+    m_controllerTable->setMaximumHeight(150);
     layout->addWidget(m_controllerTable);
 
     // VM 5.2.1：控制器列表右键 → 重命名 / 删除（控制器由设备派生，操作落到底层设备）
     m_controllerTable->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_controllerTable, &QTableWidget::customContextMenuRequested,
             this, &CommunicationManagerDialog::onControllerContextMenu);
-
-    stack->addWidget(tab);
 }
 
 void CommunicationManagerDialog::refreshDeviceTable()
@@ -636,6 +685,200 @@ void CommunicationManagerDialog::onReadRegisters()
 
 // ==================== Receive Event Tab ====================
 
+void CommunicationManagerDialog::setupTriggerTab(QStackedWidget *stack)
+{
+    auto *tab = new QWidget();
+    auto *layout = new QVBoxLayout(tab);
+
+    auto *label = new QLabel(QStringLiteral("<b>\u89E6\u53D1\u914D\u7F6E\uFF08\u5168\u5C40\u89E6\u53D1\uFF09</b>"));
+    label->setStyleSheet("font-size: 13px;");
+    layout->addWidget(label);
+
+    // 内嵌既有全局触发配置（字符串触发 / 事件触发 → 流程映射），与主菜单入口共用同一管理器
+    m_triggerDialog = new GlobalTriggerDialog(tab);
+    m_triggerDialog->setObjectName(QStringLiteral("commTriggerConfig"));
+    m_triggerDialog->setWindowFlags(Qt::Widget);
+    m_triggerDialog->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    m_triggerDialog->setMinimumSize(0, 0);
+    m_triggerDialog->show();   // setWindowFlags 会隐藏控件，需显式恢复可见
+    // 内嵌形态无「关闭」语义：该按钮绑定 accept()，点了会把整页藏掉
+    if (auto *closeBtn = m_triggerDialog->findChild<QPushButton *>(
+            QStringLiteral("globalTriggerCloseBtn")))
+        closeBtn->hide();
+    layout->addWidget(m_triggerDialog);
+
+    stack->addWidget(tab);
+}
+
+void CommunicationManagerDialog::setupResponseTab(QStackedWidget *stack)
+{
+    auto *tab = new QWidget();
+    auto *layout = new QVBoxLayout(tab);
+
+    auto *label = new QLabel(QStringLiteral("<b>\u54CD\u5E94\u914D\u7F6E</b>"));
+    label->setStyleSheet("font-size: 13px;");
+    layout->addWidget(label);
+    auto *hint = new QLabel(QStringLiteral(
+        "\u8BBE\u7F6E\u5B8C\u6210\u5373\u751F\u6548\uFF08\u968F\u65B9\u6848\u4FDD\u5B58\uFF09\u3002"
+        "\u6D41\u7A0B\u72B6\u6001\u62A5\u6587 = \u5185\u5BB9 + \u5206\u9694\u7B26 + \u6D41\u7A0B\u540D\uFF1B"
+        "\u76F8\u673A\u62A5\u6587 = \u5185\u5BB9 + \u5206\u9694\u7B26 + \u76F8\u673A\u540D\u3002"));
+    hint->setWordWrap(true);
+    hint->setStyleSheet("color: gray; font-size: 11px;");
+    layout->addWidget(hint);
+
+    auto makeTermCombo = [this](QWidget *host, const QString &objName, const QString &def) {
+        auto *combo = new QComboBox(host);
+        combo->setObjectName(objName);
+        combo->setEditable(true);
+        combo->addItems({QStringLiteral("\\r"), QStringLiteral("\\n"), QStringLiteral("\\r\\n")});
+        combo->setCurrentText(def);
+        connect(combo, &QComboBox::currentTextChanged, this, [this](const QString &) {
+            applyResponseConfig();
+        });
+        return combo;
+    };
+    auto makeDeviceCombo = [this](QWidget *host, const QString &objName) {
+        auto *combo = new QComboBox(host);
+        combo->setObjectName(objName);
+        combo->setMinimumWidth(140);
+        connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, [this](int) { applyResponseConfig(); });
+        return combo;
+    };
+
+    // ── 方案加载 ──
+    auto *schemeGroup = new QGroupBox(QStringLiteral("\u65B9\u6848\u52A0\u8F7D"), tab);
+    schemeGroup->setObjectName(QStringLiteral("respSchemeLoadGroup"));
+    auto *schemeForm = new QFormLayout(schemeGroup);
+    m_respSchemeEnable = new QCheckBox(QStringLiteral("\u542F\u7528"), schemeGroup);
+    m_respSchemeEnable->setObjectName(QStringLiteral("respSchemeLoadEnable"));
+    schemeForm->addRow(m_respSchemeEnable);
+    m_respSchemeDevice = makeDeviceCombo(schemeGroup, QStringLiteral("respSchemeLoadDevice"));
+    schemeForm->addRow(QStringLiteral("\u901A\u4FE1\u8BBE\u5907"), m_respSchemeDevice);
+    m_respSchemeDelay = new QSpinBox(schemeGroup);
+    m_respSchemeDelay->setObjectName(QStringLiteral("respSchemeLoadDelay"));
+    m_respSchemeDelay->setRange(0, 60);
+    m_respSchemeDelay->setSuffix(QStringLiteral(" s"));
+    schemeForm->addRow(QStringLiteral("\u901A\u4FE1\u8D85\u65F6\u65F6\u95F4"), m_respSchemeDelay);
+    m_respSchemeTerm = makeTermCombo(schemeGroup, QStringLiteral("respSchemeLoadTerm"),
+                                     QStringLiteral("\\r\\n"));
+    schemeForm->addRow(QStringLiteral("\u7ED3\u675F\u7B26"), m_respSchemeTerm);
+    m_respSchemeContent = new QLineEdit(schemeGroup);
+    m_respSchemeContent->setObjectName(QStringLiteral("respSchemeLoadContent"));
+    m_respSchemeContent->setPlaceholderText(QStringLiteral("\u89E6\u53D1\u5B57\u7B26"));
+    schemeForm->addRow(QStringLiteral("\u89E6\u53D1\u5B57\u7B26"), m_respSchemeContent);
+    connect(m_respSchemeEnable, &QCheckBox::toggled, this, [this](bool) { applyResponseConfig(); });
+    connect(m_respSchemeDelay, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, [this](int) { applyResponseConfig(); });
+    connect(m_respSchemeContent, &QLineEdit::textChanged,
+            this, [this](const QString &) { applyResponseConfig(); });
+    layout->addWidget(schemeGroup);
+
+    // ── 流程控制 ──
+    auto *flowGroup = new QGroupBox(QStringLiteral("\u6D41\u7A0B\u63A7\u5236"), tab);
+    flowGroup->setObjectName(QStringLiteral("respFlowGroup"));
+    auto *flowForm = new QFormLayout(flowGroup);
+    m_respFlowEnable = new QCheckBox(QStringLiteral("\u542F\u7528"), flowGroup);
+    m_respFlowEnable->setObjectName(QStringLiteral("respFlowEnable"));
+    flowForm->addRow(m_respFlowEnable);
+    m_respFlowDevice = makeDeviceCombo(flowGroup, QStringLiteral("respFlowDevice"));
+    flowForm->addRow(QStringLiteral("\u901A\u4FE1\u8BBE\u5907"), m_respFlowDevice);
+    m_respFlowTerm = makeTermCombo(flowGroup, QStringLiteral("respFlowTerm"), QStringLiteral("\\r\\n"));
+    flowForm->addRow(QStringLiteral("\u7ED3\u675F\u7B26"), m_respFlowTerm);
+    m_respFlowSep = makeTermCombo(flowGroup, QStringLiteral("respFlowSep"), QStringLiteral(","));
+    flowForm->addRow(QStringLiteral("\u5206\u9694\u7B26"), m_respFlowSep);
+    m_respFlowIdle = new QLineEdit(flowGroup);
+    m_respFlowIdle->setObjectName(QStringLiteral("respFlowIdle"));
+    flowForm->addRow(QStringLiteral("\u7A7A\u95F2\u65F6\u89E6\u53D1"), m_respFlowIdle);
+    m_respFlowBusy = new QLineEdit(flowGroup);
+    m_respFlowBusy->setObjectName(QStringLiteral("respFlowBusy"));
+    flowForm->addRow(QStringLiteral("\u5FD9\u788C\u65F6\u89E6\u53D1"), m_respFlowBusy);
+    connect(m_respFlowEnable, &QCheckBox::toggled, this, [this](bool) { applyResponseConfig(); });
+    connect(m_respFlowIdle, &QLineEdit::textChanged,
+            this, [this](const QString &) { applyResponseConfig(); });
+    connect(m_respFlowBusy, &QLineEdit::textChanged,
+            this, [this](const QString &) { applyResponseConfig(); });
+    layout->addWidget(flowGroup);
+
+    // ── 相机响应 ──
+    auto *camGroup = new QGroupBox(QStringLiteral("\u76F8\u673A\u54CD\u5E94\u914D\u7F6E"), tab);
+    camGroup->setObjectName(QStringLiteral("respCameraGroup"));
+    auto *camForm = new QFormLayout(camGroup);
+    m_respCameraEnable = new QCheckBox(QStringLiteral("\u542F\u7528"), camGroup);
+    m_respCameraEnable->setObjectName(QStringLiteral("respCameraEnable"));
+    camForm->addRow(m_respCameraEnable);
+    m_respCameraDevice = makeDeviceCombo(camGroup, QStringLiteral("respCameraDevice"));
+    camForm->addRow(QStringLiteral("\u901A\u4FE1\u8BBE\u5907"), m_respCameraDevice);
+    m_respCameraSep = makeTermCombo(camGroup, QStringLiteral("respCameraSep"), QStringLiteral(","));
+    camForm->addRow(QStringLiteral("\u5206\u9694\u7B26"), m_respCameraSep);
+    m_respCameraOn = new QLineEdit(camGroup);
+    m_respCameraOn->setObjectName(QStringLiteral("respCameraOn"));
+    camForm->addRow(QStringLiteral("\u8FDE\u63A5\u65F6\u89E6\u53D1"), m_respCameraOn);
+    m_respCameraOff = new QLineEdit(camGroup);
+    m_respCameraOff->setObjectName(QStringLiteral("respCameraOff"));
+    camForm->addRow(QStringLiteral("\u6389\u7EBF\u65F6\u89E6\u53D1"), m_respCameraOff);
+    connect(m_respCameraEnable, &QCheckBox::toggled, this, [this](bool) { applyResponseConfig(); });
+    connect(m_respCameraOn, &QLineEdit::textChanged,
+            this, [this](const QString &) { applyResponseConfig(); });
+    connect(m_respCameraOff, &QLineEdit::textChanged,
+            this, [this](const QString &) { applyResponseConfig(); });
+    layout->addWidget(camGroup);
+    layout->addStretch();
+
+    stack->addWidget(tab);
+}
+
+void CommunicationManagerDialog::refreshResponseDeviceCombos()
+{
+    if (!m_respSchemeDevice) return;   // 建页之前调用：安全的空操作
+    auto *cm = CommunicationManager::instance();
+    const QStringList devices = cm->deviceNames();
+    const QList<QComboBox *> combos{m_respSchemeDevice, m_respFlowDevice, m_respCameraDevice};
+    for (QComboBox *combo : combos) {
+        const QString keep = combo->currentText();
+        QSignalBlocker blocker(combo);   // 重建不下发"用户改动"，避免把空选择写回配置
+        combo->clear();
+        combo->addItems(devices);
+        const int idx = combo->findText(keep);
+        if (idx >= 0) combo->setCurrentIndex(idx);
+        else if (!devices.isEmpty()) combo->setCurrentIndex(0);
+    }
+}
+
+void CommunicationManagerDialog::applyResponseConfig()
+{
+    if (!m_respSchemeEnable || !m_respFlowEnable || !m_respCameraEnable) return;
+    auto *cm = CommunicationManager::instance();
+
+    QJsonObject root = cm->responseConfig();
+    QJsonObject scheme;
+    scheme[QStringLiteral("enabled")] = m_respSchemeEnable->isChecked();
+    scheme[QStringLiteral("device")] = m_respSchemeDevice->currentText();
+    scheme[QStringLiteral("delaySec")] = m_respSchemeDelay->value();
+    scheme[QStringLiteral("terminator")] = m_respSchemeTerm->currentText();
+    scheme[QStringLiteral("content")] = m_respSchemeContent->text();
+    root[QStringLiteral("schemeLoad")] = scheme;
+
+    QJsonObject flow;
+    flow[QStringLiteral("enabled")] = m_respFlowEnable->isChecked();
+    flow[QStringLiteral("device")] = m_respFlowDevice->currentText();
+    flow[QStringLiteral("terminator")] = m_respFlowTerm->currentText();
+    flow[QStringLiteral("separator")] = m_respFlowSep->currentText();
+    flow[QStringLiteral("idleContent")] = m_respFlowIdle->text();
+    flow[QStringLiteral("busyContent")] = m_respFlowBusy->text();
+    root[QStringLiteral("flowControl")] = flow;
+
+    QJsonObject camera;
+    camera[QStringLiteral("enabled")] = m_respCameraEnable->isChecked();
+    camera[QStringLiteral("device")] = m_respCameraDevice->currentText();
+    camera[QStringLiteral("separator")] = m_respCameraSep->currentText();
+    camera[QStringLiteral("connectedContent")] = m_respCameraOn->text();
+    camera[QStringLiteral("disconnectedContent")] = m_respCameraOff->text();
+    root[QStringLiteral("cameraResponse")] = camera;
+
+    cm->setResponseConfig(root);
+}
+
 void CommunicationManagerDialog::setupReceiveEventTab(QStackedWidget *stack)
 {
     auto *tab = new QWidget();
@@ -986,6 +1229,7 @@ void CommunicationManagerDialog::setupHeartbeatTab(QStackedWidget *stack)
     layout->addWidget(infoLabel);
 
     m_heartbeatTable = new QTableWidget();
+    m_heartbeatTable->setObjectName(QStringLiteral("heartbeatTable"));   // 供回归测试按名定位
     m_heartbeatTable->setColumnCount(5);
     m_heartbeatTable->setHorizontalHeaderLabels({
         QStringLiteral("\u8BBE\u5907"),
@@ -1016,27 +1260,6 @@ void CommunicationManagerDialog::setupHeartbeatTab(QStackedWidget *stack)
 
 // ==================== Communication Monitor Page ====================
 
-void CommunicationManagerDialog::setupMonitorTab(QStackedWidget *stack)
-{
-    auto *tab = new QWidget();
-    auto *layout = new QVBoxLayout(tab);
-
-    auto *label = new QLabel(QStringLiteral("<b>\u6536\u53D1\u76D1\u89C6</b>"));
-    label->setStyleSheet("font-size: 13px;");
-    layout->addWidget(label);
-
-    // 并入既有监视 UI（CommMonitorDialog 自订阅 CommunicationManager 的收发/状态信号），
-    // 不另造占位表；Qt::Widget 去掉顶层对话框壳后作为普通子控件嵌进本页。
-    m_monitorDialog = new CommMonitorDialog(tab);
-    m_monitorDialog->setWindowFlags(Qt::Widget);
-    m_monitorDialog->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    // 监视窗构造时自带 820x560 最小尺寸；内嵌后不把管理对话框的最小尺寸顶大
-    m_monitorDialog->setMinimumSize(0, 0);
-    m_monitorDialog->show();   // setWindowFlags 会隐藏控件，需显式恢复可见
-    layout->addWidget(m_monitorDialog);
-
-    stack->addWidget(tab);
-}
 
 void CommunicationManagerDialog::refreshHeartbeatTable()
 {
