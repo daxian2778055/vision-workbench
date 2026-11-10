@@ -1,9 +1,11 @@
 #include "CommDeviceConfigDialog.h"
 
 #include <QVBoxLayout>
+#include <QHBoxLayout>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QLabel>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QLineEdit>
 #include <QSpinBox>
@@ -87,11 +89,57 @@ void CommDeviceConfigDialog::addFrameRows(QFormLayout *form, const QJsonObject &
         "0 = 不启用。静默超过该毫秒数即认为一帧结束（治理粘包/半包：\n"
         "对端连续发多帧或一帧被拆开时，保证按帧触发而不是按到达块触发）"));
     m_frameTermEdit = new QLineEdit(host);
-    m_frameTermEdit->setText(initial.value(QStringLiteral("frameTerminator")).toString());
-    m_frameTermEdit->setPlaceholderText(QStringLiteral("如 \\r\\n（留空 = 不按结束符切帧）"));
+    m_frameTermEdit->setObjectName(QStringLiteral("commRxTermCustom"));
+    m_frameTermEdit->setPlaceholderText(QStringLiteral("自定义结束符，支持转义：\\r \\n \\t \\xHH"));
     m_frameTermEdit->setToolTip(QStringLiteral("帧结束符，支持转义：\\r \\n \\t \\xHH"));
+
+    // 官方「完全一致的参数」（手册 5.2.1）：自动重连 / 接收结束符。
+    m_autoReconnectCheck = new QCheckBox(QStringLiteral("断线后自动重连"), host);
+    m_autoReconnectCheck->setObjectName(QStringLiteral("commAutoReconnect"));
+    m_autoReconnectCheck->setChecked(
+        initial.value(QStringLiteral("autoReconnect")).toBool(true));
+    form->addRow(QStringLiteral("自动重连"), m_autoReconnectCheck);
+
+    // 接收结束符：开关 + 官方四选项（\r / \n / \r\n / 自定义）。
+    // 与历史 frameTerminator 键互转：空=不启用；等于三个标准值=对应选项；其余=自定义。
+    const QString term = initial.value(QStringLiteral("frameTerminator")).toString();
+    m_rxTermCheck = new QCheckBox(QStringLiteral("按结束符分割接收数据"), host);
+    m_rxTermCheck->setObjectName(QStringLiteral("commRxTermEnable"));
+    m_rxTermCombo = new QComboBox(host);
+    m_rxTermCombo->setObjectName(QStringLiteral("commRxTermMode"));
+    m_rxTermCombo->addItem(QStringLiteral("\\r"), QStringLiteral("\\r"));
+    m_rxTermCombo->addItem(QStringLiteral("\\n"), QStringLiteral("\\n"));
+    m_rxTermCombo->addItem(QStringLiteral("\\r\\n"), QStringLiteral("\\r\\n"));
+    m_rxTermCombo->addItem(QStringLiteral("自定义"), QString());
+    int modeIdx = m_rxTermCombo->findData(term);
+    if (term.isEmpty()) {
+        m_rxTermCheck->setChecked(false);
+        m_rxTermCombo->setCurrentIndex(0);
+    } else if (modeIdx >= 0 && modeIdx < 3) {
+        m_rxTermCheck->setChecked(true);
+        m_rxTermCombo->setCurrentIndex(modeIdx);
+    } else {
+        m_rxTermCheck->setChecked(true);
+        m_rxTermCombo->setCurrentIndex(3);
+        m_frameTermEdit->setText(term);
+    }
+    auto syncTermEnabled = [this]() {
+        const bool on = m_rxTermCheck->isChecked();
+        m_rxTermCombo->setEnabled(on);
+        m_frameTermEdit->setEnabled(on && m_rxTermCombo->currentIndex() == 3);
+    };
+    connect(m_rxTermCheck, &QCheckBox::toggled, this, [syncTermEnabled](bool) { syncTermEnabled(); });
+    connect(m_rxTermCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [syncTermEnabled](int) { syncTermEnabled(); });
+    syncTermEnabled();
+    auto *termHost = new QWidget(host);
+    auto *termRow = new QHBoxLayout(termHost);
+    termRow->setContentsMargins(0, 0, 0, 0);
+    termRow->addWidget(m_rxTermCombo);
+    termRow->addWidget(m_frameTermEdit, 1);
+    form->addRow(QStringLiteral("接收结束符"), termHost);
+    form->addRow(QString(), m_rxTermCheck);
     form->addRow(QStringLiteral("组帧超时(ms)"), m_frameTimeoutSpin);
-    form->addRow(QStringLiteral("帧结束符"), m_frameTermEdit);
 }
 
 void CommDeviceConfigDialog::buildSerialForm(const QJsonObject &initial)
@@ -231,7 +279,17 @@ void CommDeviceConfigDialog::onAccept()
     // 组帧参数（三类通用）：0/空 = 不启用（行为与历史一致）
     m_config[QStringLiteral("frameTimeoutMs")] =
         m_frameTimeoutSpin ? m_frameTimeoutSpin->value() : 0;
-    m_config[QStringLiteral("frameTerminator")] =
-        m_frameTermEdit ? m_frameTermEdit->text() : QString();
+    if (m_autoReconnectCheck)
+        m_config[QStringLiteral("autoReconnect")] = m_autoReconnectCheck->isChecked();
+    // 接收结束符 → 历史 frameTerminator 键：不启用=空；标准选项=转义串；自定义=输入框。
+    QString term;
+    if (m_rxTermCheck && m_rxTermCheck->isChecked()) {
+        const int idx = m_rxTermCombo ? m_rxTermCombo->currentIndex() : 0;
+        if (idx == 3)
+            term = m_frameTermEdit ? m_frameTermEdit->text() : QString();
+        else if (m_rxTermCombo)
+            term = m_rxTermCombo->currentData().toString();
+    }
+    m_config[QStringLiteral("frameTerminator")] = term;
     accept();
 }

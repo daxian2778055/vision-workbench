@@ -6,6 +6,9 @@
 // 显式 127.0.0.1 —— 收紧后留空即未配置、从站拒启动（生产侧同口径：配置面必须显式给地址）。
 #include <QtTest>
 #include <QPushButton>
+#include <QCheckBox>
+#include <QComboBox>
+#include <QLineEdit>
 #include <QTableWidget>
 #include <QListWidget>
 #include <QStackedWidget>
@@ -125,6 +128,7 @@ private slots:
     void testFrameAssemblerReentrancy();
     void testDisconnectClearsFrameBuffer();
     void testConfigDialogPreservesUnmanagedKeys();
+    void testConfigDialogOfficialRxTermAndReconnect();
     void testSendEventsSurviveSaveLoad();
     // C 类回归：接收事件按设备过滤（A 设备数据不得触发 B 设备的事件）
     void testReceiveEventFiltersByDevice();
@@ -1400,6 +1404,46 @@ void CommWritebackTest::testDisconnectClearsFrameBuffer()
 
     QVERIFY(cm->closeDevice(QStringLiteral("SIM_CLEAN")));
     QVERIFY(cm->removeDevice(QStringLiteral("SIM_CLEAN")));
+}
+
+void CommWritebackTest::testConfigDialogOfficialRxTermAndReconnect()
+{
+    // VM4.4 手册 5.2.1「完全一致的参数」：自动重连 / 接收结束符(\r \n \r\n 自定义)。
+    // 钉住：官方控件 ↔ 历史 autoReconnect / frameTerminator 键互转，且不启用=空串。
+    QJsonObject initial = tcpClientConfig(15504);
+    initial[QStringLiteral("autoReconnect")] = false;
+    initial[QStringLiteral("frameTerminator")] = QStringLiteral("\\r\\n");
+
+    CommDeviceConfigDialog dlg(QStringLiteral("TCP"), initial, nullptr);
+    auto *reconnect = dlg.findChild<QCheckBox *>(QStringLiteral("commAutoReconnect"));
+    auto *rxEnable = dlg.findChild<QCheckBox *>(QStringLiteral("commRxTermEnable"));
+    auto *rxMode = dlg.findChild<QComboBox *>(QStringLiteral("commRxTermMode"));
+    auto *rxCustom = dlg.findChild<QLineEdit *>(QStringLiteral("commRxTermCustom"));
+    QVERIFY2(reconnect && rxEnable && rxMode && rxCustom, "官方通用参数控件缺失");
+
+    // 播种：autoReconnect=false 回显；frameTerminator=\r\n → 启用且选中第 3 项
+    QCOMPARE(reconnect->isChecked(), false);
+    QCOMPARE(rxEnable->isChecked(), true);
+    QCOMPARE(rxMode->currentIndex(), 2);
+
+    reconnect->setChecked(true);
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "onAccept", Qt::DirectConnection));
+    QCOMPARE(dlg.config().value(QStringLiteral("autoReconnect")).toBool(), true);
+    QCOMPARE(dlg.config().value(QStringLiteral("frameTerminator")).toString(),
+             QStringLiteral("\\r\\n"));
+
+    // 关闭接收结束符 → frameTerminator 必须为空（不切帧）
+    rxEnable->setChecked(false);
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "onAccept", Qt::DirectConnection));
+    QCOMPARE(dlg.config().value(QStringLiteral("frameTerminator")).toString(), QString());
+
+    // 自定义结束符 → 原样落键
+    rxEnable->setChecked(true);
+    rxMode->setCurrentIndex(3);
+    rxCustom->setText(QStringLiteral("\\x03"));
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "onAccept", Qt::DirectConnection));
+    QCOMPARE(dlg.config().value(QStringLiteral("frameTerminator")).toString(),
+             QStringLiteral("\\x03"));
 }
 
 void CommWritebackTest::testConfigDialogPreservesUnmanagedKeys()

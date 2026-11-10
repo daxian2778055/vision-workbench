@@ -6,6 +6,7 @@
 class QComboBox;
 class QLineEdit;
 class QSpinBox;
+class QCheckBox;
 class QFormLayout;
 
 /// 通信设备配置对话框（单页表单，替代"连续弹窗"）：
@@ -52,4 +53,8 @@ private:
     // 组帧（三类通用）
     QSpinBox *m_frameTimeoutSpin = nullptr;
     QLineEdit *m_frameTermEdit = nullptr;
+    // 官方「完全一致的参数」（手册 5.2.1）：自动重连 / 接收结束符(开关+\r/\n/\r\n/自定义)
+    QCheckBox *m_autoReconnectCheck = nullptr;
+    QCheckBox *m_rxTermCheck = nullptr;
+    QComboBox *m_rxTermCombo = nullptr;
 };
