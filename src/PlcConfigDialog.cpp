@@ -1,6 +1,7 @@
 #include "PlcConfigDialog.h"
 #include "PlcCommNode.h"
 #include "ModbusNode.h"  // ModbusRegisterItem
+#include "RegisterSpaceBar.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFormLayout>
@@ -133,6 +134,36 @@ void PlcConfigDialog::setupUI()
             this, &PlcConfigDialog::onCellDoubleClicked);
 
     regLayout->addWidget(m_registerTable);
+
+    // VM 5.2.1 官方寄存器工具条：首地址/个数/添加地址 | 数据同步 | 发送测试 | 最大化/空白行/清空
+    m_spaceBar = new RegisterSpaceBar(m_registerTable, regGroup, this, regGroup);
+    m_spaceBar->setObjectName(QStringLiteral("plcRegisterSpaceBar"));
+    regLayout->insertWidget(1, m_spaceBar);   // infoLabel 之下、表格之上
+    connect(m_spaceBar, &RegisterSpaceBar::syncRequested, this, [this]() {
+        if (!m_plcNode || !m_plcNode->isConnected()) {
+            m_spaceBar->setStatus(QStringLiteral("\u672A\u8FDE\u63A5\uFF0C\u672A\u53D1\u8D77\u8BFB\u53D6"));
+            return;
+        }
+        const int n = m_plcNode->syncRegistersNow();
+        m_spaceBar->setStatus(QStringLiteral("\u5DF2\u53D1\u8D77 %1 \u6761\u8BFB\u53D6").arg(n));
+    });
+    connect(m_spaceBar, &RegisterSpaceBar::testSendRequested, this,
+            [this](const QString &addressText, const QString &valueText) {
+        if (!m_plcNode) {
+            m_spaceBar->setStatus(QStringLiteral("\u5C1A\u672A\u5173\u8054\u901A\u4FE1\u8282\u70B9"));
+            return;
+        }
+        bool okAddr = false;
+        const int addr = addressText.toInt(&okAddr);
+        bool okVal = false;
+        const double value = valueText.toDouble(&okVal);
+        if (!okAddr) { m_spaceBar->setStatus(QStringLiteral("\u6D4B\u8BD5\u5730\u5740\u65E0\u6548")); return; }
+        if (!okVal) { m_spaceBar->setStatus(QStringLiteral("\u6D4B\u8BD5\u503C\u65E0\u6548")); return; }
+        const bool sent = m_plcNode->writeRegister(addr, value);
+        m_spaceBar->setStatus(sent
+            ? QStringLiteral("\u5DF2\u53D1\u9001\u6D4B\u8BD5\u5199\u5165 %1 = %2").arg(addr).arg(value)
+            : QStringLiteral("\u53D1\u9001\u6D4B\u8BD5\u672A\u53D1\u51FA\uFF08\u672A\u8FDE\u63A5\u6216\u5730\u5740\u672A\u914D\u7F6E\uFF09"));
+    });
 
     auto *btnLayout = new QHBoxLayout();
     auto *addBtn = new QPushButton(QStringLiteral("\u6DFB\u52A0\u5BC4\u5B58\u5668"));
@@ -316,6 +347,7 @@ void PlcConfigDialog::loadConfigToForm(const QJsonObject &config)
         m_registerTable->setItem(row, 6, enableItem);
     }
 
+    if (m_spaceBar) m_spaceBar->refreshAddressChoices();
     refreshToggleSwitch();
 }
 
@@ -333,6 +365,9 @@ QJsonObject PlcConfigDialog::buildConfigFromForm() const
 
     QJsonArray regsArr;
     for (int row = 0; row < m_registerTable->rowCount(); ++row) {
+        // 空白地址行（工具条只补了地址、尚未配置类型）不计入配置
+        if (!qobject_cast<QComboBox *>(m_registerTable->cellWidget(row, 1)))
+            continue;
         QJsonObject ro;
         auto *addrItem = m_registerTable->item(row, 0);
         if (addrItem) ro[QStringLiteral("address")] = addrItem->text().toInt();
@@ -364,12 +399,8 @@ QJsonObject PlcConfigDialog::buildConfigFromForm() const
     return cfg;
 }
 
-void PlcConfigDialog::onAddRegister()
+void PlcConfigDialog::configureRow(int row)
 {
-    int row = m_registerTable->rowCount();
-    m_registerTable->insertRow(row);
-    m_registerTable->setItem(row, 0, new QTableWidgetItem(QString::number(row * 10)));
-
     auto *typeCombo = new QComboBox();
     typeCombo->addItems({QStringLiteral("int16"), QStringLiteral("uint16"),
                          QStringLiteral("int32"), QStringLiteral("float")});
@@ -398,6 +429,14 @@ void PlcConfigDialog::onAddRegister()
     m_registerTable->setItem(row, 6, enableItem);
 }
 
+void PlcConfigDialog::onAddRegister()
+{
+    int row = m_registerTable->rowCount();
+    m_registerTable->insertRow(row);
+    m_registerTable->setItem(row, 0, new QTableWidgetItem(QString::number(row * 10)));
+    configureRow(row);
+}
+
 void PlcConfigDialog::onRemoveRegister()
 {
     int row = m_registerTable->currentRow();
@@ -406,6 +445,10 @@ void PlcConfigDialog::onRemoveRegister()
 
 void PlcConfigDialog::onCellDoubleClicked(int row, int column)
 {
+    if (column <= 1 && !qobject_cast<QComboBox *>(m_registerTable->cellWidget(row, 1))) {
+        configureRow(row);   // 空白地址行：就地补配置控件（官方"选择地址→添加地址"的落点）
+        return;
+    }
     if (column != 4) return;
     if (!m_plcNode) return;
 

@@ -52,6 +52,7 @@
 #include "ReceiveEvent.h"
 #include "SendEvent.h"
 #include "CommResponseManager.h"
+#include "RegisterSpaceBar.h"
 #include "CommunicationNodeBase.h"
 #include "CommunicationManagerDialog.h"
 #include "CommDeviceConfigDialog.h"
@@ -142,6 +143,8 @@ private slots:
     void testResponseConfigSchemeLoad();
     void testResponseConfigFlowAndCamera();
     void testResponseConfigDialogApply();
+    // VM4.4 B4-3c：PLC 寄存器官方工具条（首地址/个数/同步/发送测试/最大化/空白行/清空）
+    void testPlcRegisterToolbar();
     void testFrameAssemblerReentrancy();
     void testDisconnectClearsFrameBuffer();
     void testConfigDialogPreservesUnmanagedKeys();
@@ -3126,6 +3129,70 @@ void CommWritebackTest::testResponseConfigDialogApply()
 
     cm->setResponseConfig(QJsonObject());
     QVERIFY(cm->removeDevice(QStringLiteral("RESP_UI")));
+}
+
+void CommWritebackTest::testPlcRegisterToolbar()
+{
+    // VM 5.2.1 寄存器工具条：首地址/个数补齐空白地址行、隐藏空白行、清空、
+    // 最大化 Esc 退出、发送测试/数据同步的失败路径可见；空白行不计入配置。
+    PlcCommNode plc;
+    PlcConfigDialog dlg(QStringLiteral("PLC\u914D\u7F6E"), &plc);   // 未连接
+    auto *bar = dlg.findChild<RegisterSpaceBar *>(QStringLiteral("plcRegisterSpaceBar"));
+    auto *table = dlg.findChild<QTableWidget *>();
+    QVERIFY(bar && table);
+    for (const char *name : {"regSpaceStart", "regSpaceCount", "regSpaceAdd", "regSpaceSync",
+                             "regSpaceTestAddr", "regSpaceTestValue", "regSpaceTestSend",
+                             "regSpaceMax", "regSpaceBlankToggle", "regSpaceClear",
+                             "regSpaceStatus"}) {
+        QVERIFY2(dlg.findChild<QWidget *>(QString::fromLatin1(name)) != nullptr, name);
+    }
+
+    auto *start = dlg.findChild<QSpinBox *>(QStringLiteral("regSpaceStart"));
+    auto *count = dlg.findChild<QSpinBox *>(QStringLiteral("regSpaceCount"));
+    start->setValue(100);
+    count->setValue(4);
+    QCOMPARE(bar->addAddressesInSpace(), 4);
+    QCOMPARE(table->rowCount(), 4);
+    QCOMPARE(table->item(0, 0)->text(), QStringLiteral("100"));
+    QCOMPARE(bar->addAddressesInSpace(), 0);   // 重复补齐不叠加
+
+    // 空白行隐藏/显示
+    QCOMPARE(bar->setBlankRowsHidden(true), 4);
+    QVERIFY(table->isRowHidden(0));
+    bar->setBlankRowsHidden(false);
+    QVERIFY(!table->isRowHidden(0));
+
+    // 空白行（只有地址）不计入配置；双击补配置后就计入
+    QCOMPARE(dlg.config().value(QStringLiteral("registers")).toArray().size(), 0);
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "onCellDoubleClicked",
+                                      Q_ARG(int, 0), Q_ARG(int, 1)));
+    QCOMPARE(dlg.config().value(QStringLiteral("registers")).toArray().size(), 1);
+
+    // 数据同步：未连接 → 状态可见且不发读取
+    auto *syncBtn = dlg.findChild<QPushButton *>(QStringLiteral("regSpaceSync"));
+    auto *status = dlg.findChild<QLabel *>(QStringLiteral("regSpaceStatus"));
+    syncBtn->click();
+    QVERIFY(status->text().contains(QStringLiteral("\u672A\u8FDE\u63A5")));
+    QCOMPARE(plc.syncRegistersNow(), 0);   // 节点级同一判据
+
+    // 发送测试：未连接 → 明确失败文案（不伪造成功）
+    auto *valueEdit = dlg.findChild<QLineEdit *>(QStringLiteral("regSpaceTestValue"));
+    valueEdit->setText(QStringLiteral("42"));
+    dlg.findChild<QPushButton *>(QStringLiteral("regSpaceTestSend"))->click();
+    QVERIFY(status->text().contains(QStringLiteral("\u672A\u53D1\u51FA")));
+
+    // 最大化：地址空间容器移入全屏窗口；Esc 还原
+    auto *maxBtn = dlg.findChild<QPushButton *>(QStringLiteral("regSpaceMax"));
+    maxBtn->click();
+    QVERIFY(bar->isMaximized());
+    QVERIFY2(dlg.window()->isFullScreen(), "最大化未真正进全屏");
+    QTest::keyClick(dlg.window(), Qt::Key_Escape);
+    QVERIFY(!bar->isMaximized());
+
+    // 清空
+    bar->clearRows();
+    QCOMPARE(table->rowCount(), 0);
+    QCOMPARE(dlg.config().value(QStringLiteral("registers")).toArray().size(), 0);
 }
 
 QTEST_MAIN(CommWritebackTest)

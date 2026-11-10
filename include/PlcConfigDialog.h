@@ -10,6 +10,7 @@
 #include <QJsonObject>
 
 class PlcCommNode; /// 前向声明，用于实时数据通信
+class RegisterSpaceBar; /// VM 5.2.1 寄存器工具条（首地址/个数/同步/发送测试/最大化/空白行/清空）
 
 /// PLC 设备配置对话框 — 品牌、连接参数、自动重连、轮询、寄存器表格
 class PlcConfigDialog : public QDialog
@@ -38,6 +39,8 @@ private:
     void setupUI();
     QJsonObject buildConfigFromForm() const;
     void loadConfigToForm(const QJsonObject &config);
+    /// 空白地址行（工具条生成、仅地址列）就地补配置控件；已配置行不动
+    void configureRow(int row);
     int registerAddressForRow(int row) const;
     void connectToNodeLiveUpdates();
     void refreshToggleSwitch();
@@ -53,6 +56,7 @@ private:
     QSpinBox *m_reconnectInterval = nullptr;
     QSpinBox *m_pollInterval = nullptr;
     QTableWidget *m_registerTable = nullptr;
+    RegisterSpaceBar *m_spaceBar = nullptr;
     QPushButton *m_writeBtn = nullptr;
     QPushButton *m_toggleSwitch = nullptr;
 
