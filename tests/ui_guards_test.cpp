@@ -84,6 +84,7 @@ void zoneAtCanvasPointMapsBarsAndCanvas();
 void designerCanvasBarCoordinatesRoundTrip();
 void designerControlRightClickEmitsContextMenu();
 void subPasswordIsHashedAndVerified();
+void designerPanelEditsAreUndoable();
 void designerInnerTabEditFilter();
 void innerTabsRoundTripAndClampOrphans();
 void innerTabStripOffsetsDesignerAndRuntime();
@@ -2798,8 +2799,13 @@ void UiGuardsTest::subPasswordIsHashedAndVerified()
     const QString h = hashSubPassword(QStringLiteral("abc"));
     QVERIFY(!h.isEmpty());
     QVERIFY2(isHashedSubPassword(h), "hashSubPassword 必须产出可识别的摘要格式");
-    QVERIFY2(!h.contains(QStringLiteral("abc")), "摘要里不能包含明文");
     QVERIFY2(h != QStringLiteral("abc"), "不能把明文当摘要存回去");
+    // 「摘要里不含明文」要用**不含十六进制字符**的密码来断言：
+    // 摘要串本身是 hex，像 "abc" 这种合法 hex 子串完全可能偶然出现，
+    // 用它断言会变成概率性红（写这条腿时就撞上过）。
+    const QString plainNonHex = QStringLiteral("zzz-not-hex");
+    const QString hNonHex = hashSubPassword(plainNonHex);
+    QVERIFY2(!hNonHex.contains(plainNonHex), "摘要里不能出现明文密码");
 
     // ② 随机盐：同一密码两次哈希不相同
     const QString h2 = hashSubPassword(QStringLiteral("abc"));
@@ -2857,6 +2863,50 @@ void UiGuardsTest::subPasswordIsHashedAndVerified()
     QCOMPARE(back.controls.first().subPassword, stored);
     QVERIFY(verifySubPassword(QStringLiteral("legacyPwd"),
                               back.controls.first().subPassword));
+}
+
+// 属性面板里 15 处 lambda 直接改控件字段却不进撤销栈（2026-11-11 审核）。
+// 这里用「子界面圆角」这个最典型的漏网点验证：面板改完必须能撤销回去。
+void UiGuardsTest::designerPanelEditsAreUndoable()
+{
+    RuntimeInterfaceDesigner dlg(QStringList{QStringLiteral("模块1")});
+
+    QListWidget *palette = nullptr;
+    for (QListWidget *lw : dlg.findChildren<QListWidget *>()) {
+        if (lw->dragEnabled() && lw->count() >= 7) { palette = lw; break; }
+    }
+    QVERIFY(palette);
+
+    int row = -1;
+    for (int i = 0; i < palette->count(); ++i) {
+        QListWidgetItem *it = palette->item(i);
+        if (!it->data(Qt::UserRole).isValid()) continue;   // 组标题不是控件
+        if (it->text().contains(QStringLiteral("子界面"))) { row = i; break; }
+    }
+    QVERIFY2(row >= 0, "控件库缺少「子界面」条目，本腿会空转");
+    palette->setCurrentRow(row);
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "addControlAt", Qt::DirectConnection,
+                                      Q_ARG(QPoint, QPoint(20, 20))));
+
+    auto *canvas = dlg.findChild<RuntimeDesignerCanvas *>();
+    QVERIFY(canvas);
+    canvas->selectIndex(0);
+    QVERIFY2(dlg.controlsForTest().size() == 1, "应已添加一个控件");
+    // 基准取控件自身默认值（子界面默认圆角不是 0），不能写死 0
+    const int baseRadius = dlg.controlsForTest().first().cornerRadius;
+
+    auto *spin = dlg.findChild<QSpinBox *>(QStringLiteral("designerSubRadius"));
+    QVERIFY2(spin, "找不到子界面圆角输入框");
+    const int target = (baseRadius == 24) ? 8 : 24;   // 保证与基准不同且落在 0..40
+    spin->setValue(target);
+    QVERIFY2(dlg.controlsForTest().first().cornerRadius == target,
+             "面板改圆角没有写回控件，本腿会空转通过");
+
+    // 撤销：必须回到基准值。若 markPropertyEdit 没在改前压快照，这里仍是 target。
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "undo", Qt::DirectConnection));
+    const QList<RuntimeControl> after = dlg.controlsForTest();
+    QVERIFY2(!after.isEmpty(), "撤销后控件不该消失");
+    QCOMPARE(after.first().cornerRadius, baseRadius);
 }
 
 QTEST_MAIN(UiGuardsTest)

@@ -126,6 +126,17 @@ private:
     void refreshPropertyPanel();
     void refreshPageList();
     void pushUndo();
+    /// 属性面板里的「直接改控件字段」统一入口（2026-11-11）：
+    /// 压一次撤销点（600ms 内合并，拖数字框只留一个）。此前 15 处 lambda 各自
+    /// 改字段却不进撤销栈，等于面板上一半的编辑无法回退。
+    void markPropertyEdit();
+
+public:
+    /// 只读：主页控件副本（回归测试断言面板编辑是否真能撤销用，不参与产品流程；
+    /// 与 serialIoThreadForTest 等既有测试钩子同风格）
+    QList<RuntimeControl> controlsForTest() const;
+
+private:
     void afterRestore();
     void movePage(int delta);
     RuntimeControl *selectedControl();

@@ -1672,6 +1672,7 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
         propOuter->addWidget(m_multiGroup);
         connect(m_multiCount, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int n) {
             if (m_updatingProps) return;
+            markPropertyEdit();   // 面板编辑统一压撤销点（600ms 合并）
             RuntimeControl *c = selectedControl();
             if (!c || c->type != RuntimeControlType::MultiImage) return;
             while (c->imagePanels.size() > n) c->imagePanels.removeLast();
@@ -1685,6 +1686,7 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
         });
         connect(m_multiLayout, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
             if (m_updatingProps) return;
+            markPropertyEdit();   // 面板编辑统一压撤销点（600ms 合并）
             RuntimeControl *c = selectedControl();
             if (!c || c->type != RuntimeControlType::MultiImage) return;
             c->multiImageLayout = m_multiLayout->currentData().toInt();
@@ -1715,6 +1717,7 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
         propOuter->addWidget(m_statusGroup);
         connect(m_statusSource, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
             if (m_updatingProps) return;
+            markPropertyEdit();   // 面板编辑统一压撤销点（600ms 合并）
             RuntimeControl *c = selectedControl();
             if (!c || c->type != RuntimeControlType::RunStatus) return;
             const QString data = m_statusSource->currentData().toString();
@@ -1729,6 +1732,7 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
         });
         connect(m_statusRadius, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int v) {
             if (m_updatingProps) return;
+            markPropertyEdit();   // 面板编辑统一压撤销点（600ms 合并）
             RuntimeControl *c = selectedControl();
             if (!c || c->type != RuntimeControlType::RunStatus) return;
             c->cornerRadius = v;
@@ -1750,6 +1754,7 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
         propOuter->addWidget(m_logGroup);
         connect(m_logShowTitle, &QCheckBox::toggled, this, [this](bool on) {
             if (m_updatingProps) return;
+            markPropertyEdit();   // 面板编辑统一压撤销点（600ms 合并）
             RuntimeControl *c = selectedControl();
             if (!c || c->type != RuntimeControlType::UiLog) return;
             c->logShowTitle = on;
@@ -1757,6 +1762,7 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
         });
         connect(m_logMaxLines, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int v) {
             if (m_updatingProps) return;
+            markPropertyEdit();   // 面板编辑统一压撤销点（600ms 合并）
             RuntimeControl *c = selectedControl();
             if (!c || c->type != RuntimeControlType::UiLog) return;
             c->logMaxLines = v;
@@ -1818,6 +1824,7 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
         connect(m_textEntryOrientation, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [this](int) {
             if (m_updatingProps) return;
+            markPropertyEdit();   // 面板编辑统一压撤销点（600ms 合并）
             RuntimeControl *c = selectedControl();
             if (!c || c->type != RuntimeControlType::TextEntryCombo) return;
             c->textEntryOrientation = m_textEntryOrientation->currentData().toInt();
@@ -1825,6 +1832,7 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
         });
         connect(m_textEntrySpacing, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int v) {
             if (m_updatingProps) return;
+            markPropertyEdit();   // 面板编辑统一压撤销点（600ms 合并）
             RuntimeControl *c = selectedControl();
             if (!c || c->type != RuntimeControlType::TextEntryCombo) return;
             c->textEntrySpacing = v;
@@ -1832,6 +1840,7 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
         });
         connect(m_textEntryShowTitle, &QCheckBox::toggled, this, [this](bool on) {
             if (m_updatingProps) return;
+            markPropertyEdit();   // 面板编辑统一压撤销点（600ms 合并）
             RuntimeControl *c = selectedControl();
             if (!c || c->type != RuntimeControlType::TextEntryCombo) return;
             c->showTextEntryTitle = on;
@@ -1865,6 +1874,7 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
         });
         connect(m_textEntryTable, &QTableWidget::cellChanged, this, [this](int row, int col) {
             if (m_updatingProps) return;
+            markPropertyEdit();   // 面板编辑统一压撤销点（600ms 合并）
             RuntimeControl *c = selectedControl();
             if (!c || c->type != RuntimeControlType::TextEntryCombo) return;
             if (row < 0 || row >= c->textEntries.size()) return;
@@ -1965,11 +1975,11 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
         // 一个字符时就哈希一次，密码会变成「最后一个字符的摘要」。
         connect(m_subPasswordEdit, &QLineEdit::editingFinished, this, [this]() {
             if (m_updatingProps) return;
+            markPropertyEdit();   // 面板编辑统一压撤销点（600ms 合并）
             RuntimeControl *c = selectedControl();
             if (!c || c->type != RuntimeControlType::SubInterface) return;
             const QString text = m_subPasswordEdit->text();
             if (text.isEmpty()) return;   // 留空 = 不修改（取消密码用「清除」）
-            pushUndo();
             c->subPassword = hashSubPassword(text);
             m_subPasswordEdit->clear();   // 明文不留在界面上
             m_subPasswordEdit->setPlaceholderText(
@@ -1986,6 +1996,7 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
         });
         connect(m_subIconCheck, &QCheckBox::toggled, this, [this](bool on) {
             if (m_updatingProps) return;
+            markPropertyEdit();   // 面板编辑统一压撤销点（600ms 合并）
             RuntimeControl *c = selectedControl();
             if (!c || c->type != RuntimeControlType::SubInterface) return;
             c->subIconVisible = on;
@@ -1993,6 +2004,7 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
         });
         connect(m_subRadius, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int v) {
             if (m_updatingProps) return;
+            markPropertyEdit();   // 面板编辑统一压撤销点（600ms 合并）
             RuntimeControl *c = selectedControl();
             if (!c || c->type != RuntimeControlType::SubInterface) return;
             c->cornerRadius = v;
@@ -2727,6 +2739,7 @@ void RuntimeInterfaceDesigner::refreshTextEntryRows()
         connect(bind, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [this, i, bind](int) {
             if (m_updatingProps) return;
+            markPropertyEdit();   // 面板编辑统一压撤销点（600ms 合并）
             RuntimeControl *c = selectedControl();
             if (!c || c->type != RuntimeControlType::TextEntryCombo) return;
             if (i >= c->textEntries.size()) return;
@@ -2745,6 +2758,7 @@ void RuntimeInterfaceDesigner::refreshTextEntryRows()
         connect(type, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [this, i, type](int) {
             if (m_updatingProps) return;
+            markPropertyEdit();   // 面板编辑统一压撤销点（600ms 合并）
             RuntimeControl *c = selectedControl();
             if (!c || c->type != RuntimeControlType::TextEntryCombo) return;
             if (i >= c->textEntries.size()) return;
@@ -2928,6 +2942,22 @@ void RuntimeInterfaceDesigner::pushUndo()
     while (m_undoStack.size() > 50)
         m_undoStack.removeFirst();
     m_redoStack.clear();                   // 新操作截断重做分支
+}
+
+QList<RuntimeControl> RuntimeInterfaceDesigner::controlsForTest() const
+{
+    return m_layout.pages.isEmpty() ? QList<RuntimeControl>()
+                                    : m_layout.pages.first().controls;
+}
+
+void RuntimeInterfaceDesigner::markPropertyEdit()
+{
+    // 与 onPropertyEdited 同款 600ms 合并：拖数字框/连点下拉只留一个撤销点。
+    // 注意必须在**字段被改写之前**调用，否则快照里已是新值，撤销等于没撤。
+    if (m_propUndoTimer && !m_propUndoTimer->isActive()) {
+        pushUndo();
+        m_propUndoTimer->start();
+    }
 }
 
 void RuntimeInterfaceDesigner::afterRestore()
