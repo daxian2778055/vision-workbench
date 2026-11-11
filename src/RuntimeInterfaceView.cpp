@@ -1369,7 +1369,8 @@ QWidget *RuntimeInterfaceView::createControlWidget(const RuntimeControl &ctrl)
                 const QString input = QInputDialog::getText(
                     this, QStringLiteral("子界面密码"), QStringLiteral("请输入密码："),
                     QLineEdit::Password, QString(), &ok);
-                if (!ok || input != subPwd) return;
+                // 常量时间校验摘要（2026-11-11）：布局文件里已不存明文密码
+                if (!ok || !verifySubPassword(input, subPwd)) return;
             }
             RuntimeInterface sub;
             sub.pages = {*pg};

@@ -238,6 +238,15 @@ struct RuntimeControl {
     }
 };
 
+/// 子界面密码（2026-11-11）：布局文件里只存派生摘要，不存明文。
+/// 存储格式 "pbkdf2$<iterations>$<saltHex>$<hashHex>"；空串 = 打开不需要密码。
+/// 项目未上线，格式直接改；读入时把已存的明文就地升级为摘要，已有布局不会失效。
+QString hashSubPassword(const QString &plain);
+/// 常量时间校验（长度不同也不提前返回，避免用耗时泄露匹配长度）
+bool verifySubPassword(const QString &plain, const QString &stored);
+/// stored 是否已是摘要格式
+bool isHashedSubPassword(const QString &stored);
+
 struct RuntimeInterfacePage;   // 前置声明：下面的区域映射函数只用到它的四向栏厚度
 
 /// 设计画布坐标 → 所属区域 + 该区域内的局部坐标（官方 9.1 四向固定栏）。

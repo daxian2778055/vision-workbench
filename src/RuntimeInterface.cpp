@@ -4,6 +4,8 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QRegularExpression>
+#include <QCryptographicHash>
+#include <QRandomGenerator>
 #include <QPair>
 
 QString runtimeControlTypeName(RuntimeControlType type)
@@ -174,6 +176,70 @@ bool runtimeControlTypeFromName(const QString &name, RuntimeControlType &out)
     if (name == QStringLiteral("文本框组合")) { out = RuntimeControlType::TextEntryCombo; return true; }
     if (name == QStringLiteral("子界面"))   { out = RuntimeControlType::SubInterface; return true; }
     return false;
+}
+
+namespace {
+/// 迭代次数：单次校验约 5~10 ms，人工输入无感，但让离线暴力破解成本高一个量级。
+constexpr int kSubPasswordIterations = 20000;
+
+/// 定长比较：长度不同也不提前 return，避免用耗时泄露「前缀匹配了多少字节」。
+bool constantTimeEquals(const QByteArray &a, const QByteArray &b)
+{
+    unsigned char diff = (a.size() == b.size()) ? 0 : 1;
+    const int n = qMin(a.size(), b.size());
+    for (int i = 0; i < n; ++i)
+        diff |= static_cast<unsigned char>(a.at(i)) ^ static_cast<unsigned char>(b.at(i));
+    return diff == 0;
+}
+
+QByteArray deriveSubPasswordKey(const QString &plain, const QByteArray &salt, int iterations)
+{
+    QByteArray key = QCryptographicHash::hash(salt + plain.toUtf8(), QCryptographicHash::Sha256);
+    for (int i = 0; i < iterations; ++i)
+        key = QCryptographicHash::hash(key + salt, QCryptographicHash::Sha256);
+    return key;
+}
+}   // namespace
+
+bool isHashedSubPassword(const QString &stored)
+{
+    return stored.startsWith(QStringLiteral("pbkdf2$"));
+}
+
+QString hashSubPassword(const QString &plain)
+{
+    if (plain.isEmpty()) return QString();
+    // 随机盐：同一密码两次哈希结果不同，避免「两个子界面密码相同」被人一眼看出
+    QByteArray salt;
+    salt.resize(16);
+    for (int i = 0; i < salt.size(); ++i)
+        salt[i] = char(QRandomGenerator::global()->bounded(256));
+    const QByteArray key = deriveSubPasswordKey(plain, salt, kSubPasswordIterations);
+    return QStringLiteral("pbkdf2$%1$%2$%3")
+        .arg(kSubPasswordIterations)
+        .arg(QString::fromLatin1(salt.toHex()))
+        .arg(QString::fromLatin1(key.toHex()));
+}
+
+bool verifySubPassword(const QString &plain, const QString &stored)
+{
+    if (stored.isEmpty()) return true;   // 未设置密码：直接放行
+    if (!isHashedSubPassword(stored)) {
+        // 兜底：fromJson 已把明文升级为摘要，正常走不到这里；
+        // 仍按定长比较，不因长度差异提前返回。
+        return constantTimeEquals(plain.toUtf8(), stored.toUtf8());
+    }
+    const QStringList parts = stored.split(QLatin1Char('$'));
+    if (parts.size() != 4) return false;
+    bool ok = false;
+    const int iterations = parts.at(1).toInt(&ok);
+    // 上界防止有人手改布局文件塞个 1e9 让打开子界面卡死
+    if (!ok || iterations <= 0 || iterations > 1000000) return false;
+    const QByteArray salt = QByteArray::fromHex(parts.at(2).toLatin1());
+    const QByteArray want = QByteArray::fromHex(parts.at(3).toLatin1());
+    if (salt.isEmpty() || want.isEmpty()) return false;
+    const QByteArray got = deriveSubPasswordKey(plain, salt, iterations);
+    return constantTimeEquals(got, want);
 }
 
 QString runtimeZoneName(RuntimeZone zone)
@@ -573,6 +639,10 @@ static RuntimeControl controlFromJson(const QJsonObject &o, RuntimeControlType t
     if (ctrl.type == RuntimeControlType::SubInterface) {
         ctrl.subPageId = o["subPageId"].toString();
         ctrl.subPassword = o["subPassword"].toString();
+    // 明文密码就地升级为摘要（2026-11-11）：格式改成摘要存储后，用户已有布局里的
+    // 密码仍然有效，只是此后写回的文件里不再出现明文。
+    if (!ctrl.subPassword.isEmpty() && !isHashedSubPassword(ctrl.subPassword))
+        ctrl.subPassword = hashSubPassword(ctrl.subPassword);
         ctrl.subIconVisible = o["subIconVisible"].toBool(true);
     }
 

@@ -1918,13 +1918,22 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
         m_subPasswordEdit->setObjectName(QStringLiteral("designerSubPassword"));
         m_subPasswordEdit->setEchoMode(QLineEdit::Password);
         m_subPasswordEdit->setPlaceholderText(QStringLiteral("留空 = 打开无需密码"));
+        // 密码只以摘要保存（2026-11-11）：输入框**永远不显示已存摘要**，
+        // 留空 = 不修改；要取消密码点「清除」。
+        auto *subPwdClear = new QPushButton(QStringLiteral("清除"), m_subGroup);
+        subPwdClear->setObjectName(QStringLiteral("designerSubPasswordClear"));
+        auto *subPwdHost = new QWidget(m_subGroup);
+        auto *subPwdRow = new QHBoxLayout(subPwdHost);
+        subPwdRow->setContentsMargins(0, 0, 0, 0);
+        subPwdRow->addWidget(m_subPasswordEdit, 1);
+        subPwdRow->addWidget(subPwdClear);
         m_subIconCheck = new QCheckBox(QStringLiteral("显示图标"), m_subGroup);
         m_subIconCheck->setObjectName(QStringLiteral("designerSubIcon"));
         m_subRadius = new QSpinBox(m_subGroup);
         m_subRadius->setObjectName(QStringLiteral("designerSubRadius"));
         m_subRadius->setRange(0, 40);
         subForm->addRow(m_subEditBtn);
-        subForm->addRow(QStringLiteral("密码"), m_subPasswordEdit);
+        subForm->addRow(QStringLiteral("密码"), subPwdHost);
         subForm->addRow(QString(), m_subIconCheck);
         subForm->addRow(QStringLiteral("圆角半径"), m_subRadius);
         propOuter->addWidget(m_subGroup);
@@ -1952,11 +1961,28 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
             rebuildCanvas();
             refreshPropertyPanel();
         });
-        connect(m_subPasswordEdit, &QLineEdit::textEdited, this, [this](const QString &text) {
+        // 密码只在编辑结束时哈希一次（2026-11-11）：用 textEdited 会在用户每敲
+        // 一个字符时就哈希一次，密码会变成「最后一个字符的摘要」。
+        connect(m_subPasswordEdit, &QLineEdit::editingFinished, this, [this]() {
             if (m_updatingProps) return;
             RuntimeControl *c = selectedControl();
             if (!c || c->type != RuntimeControlType::SubInterface) return;
-            c->subPassword = text;
+            const QString text = m_subPasswordEdit->text();
+            if (text.isEmpty()) return;   // 留空 = 不修改（取消密码用「清除」）
+            pushUndo();
+            c->subPassword = hashSubPassword(text);
+            m_subPasswordEdit->clear();   // 明文不留在界面上
+            m_subPasswordEdit->setPlaceholderText(
+                QStringLiteral("已设置（输入新密码可替换）"));
+        });
+        connect(subPwdClear, &QPushButton::clicked, this, [this]() {
+            RuntimeControl *c = selectedControl();
+            if (!c || c->type != RuntimeControlType::SubInterface) return;
+            if (c->subPassword.isEmpty()) return;
+            pushUndo();
+            c->subPassword.clear();
+            m_subPasswordEdit->clear();
+            m_subPasswordEdit->setPlaceholderText(QStringLiteral("留空 = 打开无需密码"));
         });
         connect(m_subIconCheck, &QCheckBox::toggled, this, [this](bool on) {
             if (m_updatingProps) return;
@@ -3587,7 +3613,11 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
             m_subEditBtn->setText(m_editingSubPageId == ctrl->subPageId
                                       ? QStringLiteral("返回主界面")
                                       : QStringLiteral("编辑子界面"));
-            m_subPasswordEdit->setText(ctrl->subPassword);
+            // 摘要不回显到输入框；只用占位提示告诉用户「已设置」
+            m_subPasswordEdit->clear();
+            m_subPasswordEdit->setPlaceholderText(ctrl->subPassword.isEmpty()
+                ? QStringLiteral("留空 = 打开无需密码")
+                : QStringLiteral("已设置（输入新密码可替换）"));
             m_subIconCheck->setChecked(ctrl->subIconVisible);
             m_subRadius->setValue(ctrl->cornerRadius);
         }

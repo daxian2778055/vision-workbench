@@ -83,6 +83,7 @@ void zoneGeometryScalesCanvasButNotBars();
 void zoneAtCanvasPointMapsBarsAndCanvas();
 void designerCanvasBarCoordinatesRoundTrip();
 void designerControlRightClickEmitsContextMenu();
+void subPasswordIsHashedAndVerified();
 void designerInnerTabEditFilter();
 void innerTabsRoundTripAndClampOrphans();
 void innerTabStripOffsetsDesignerAndRuntime();
@@ -2329,7 +2330,12 @@ void UiGuardsTest::subInterfacePagesRoundTripAndDepth()
     QCOMPARE(j2.subPage(jid)->controls.size(), 1);
     QCOMPARE(j2.subPageDepth(jid), 1);
     QCOMPARE(j2.currentPage()->controls.first().subPageId, jid);
-    QCOMPARE(j2.currentPage()->controls.first().subPassword, QStringLiteral("pw"));
+    // 密码改为摘要存储（2026-11-11）：不再比对明文，而是比对「摘要可校验」
+    QVERIFY2(isHashedSubPassword(j2.currentPage()->controls.first().subPassword),
+             "子界面密码必须存成摘要，不能落明文");
+    QVERIFY2(verifySubPassword(QStringLiteral("pw"),
+                               j2.currentPage()->controls.first().subPassword),
+             "摘要必须能被原密码校验通过");
     QCOMPARE(j2.currentPage()->controls.first().subIconVisible, false);
     QVERIFY2(j2.staleBindings({}, {}).contains(QStringLiteral("global:UT_SUB_MISS")),
              "子界面内的绑定未参与体检");
@@ -2501,7 +2507,11 @@ void UiGuardsTest::b3NewControlsRoundTrip()
     QCOMPARE(page2.controls.at(7).textEntries.at(1).bindKey, QStringLiteral("模块1.检测"));
     QCOMPARE(page2.controls.at(8).type, RuntimeControlType::SubInterface);
     QCOMPARE(page2.controls.at(8).subPageId, QStringLiteral("sub7"));
-    QCOMPARE(page2.controls.at(8).subPassword, QStringLiteral("pw7"));
+    // 同上：只断言摘要可校验，不断言明文
+    QVERIFY2(isHashedSubPassword(page2.controls.at(8).subPassword),
+             "子界面密码必须存成摘要");
+    QVERIFY2(verifySubPassword(QStringLiteral("pw7"), page2.controls.at(8).subPassword),
+             "摘要必须能被原密码校验通过");
     QCOMPARE(page2.controls.at(8).subIconVisible, false);
 }
 
@@ -2777,6 +2787,76 @@ void UiGuardsTest::layoutSchemaContractRejectsFutureVersionsAndBadSubPageGraphs(
     QVERIFY(reload.fromJson(clean.toJson()));
     QVERIFY2(reload.lastLoadWarning().isEmpty(),
              "正常布局不该产生诊断信息");
+}
+
+// 子界面密码（2026-11-11）：布局里只存派生摘要，不存明文；校验走常量时间比较。
+// 项目未上线，格式直接改，但读入时要把已存的明文就地升级——否则用户自己已有的
+// 布局会打不开子界面。
+void UiGuardsTest::subPasswordIsHashedAndVerified()
+{
+    // ① 摘要格式：不以明文出现、可识别为摘要
+    const QString h = hashSubPassword(QStringLiteral("abc"));
+    QVERIFY(!h.isEmpty());
+    QVERIFY2(isHashedSubPassword(h), "hashSubPassword 必须产出可识别的摘要格式");
+    QVERIFY2(!h.contains(QStringLiteral("abc")), "摘要里不能包含明文");
+    QVERIFY2(h != QStringLiteral("abc"), "不能把明文当摘要存回去");
+
+    // ② 随机盐：同一密码两次哈希不相同
+    const QString h2 = hashSubPassword(QStringLiteral("abc"));
+    QVERIFY2(h != h2, "两次哈希必须不同（随机盐），否则相同密码可被识别");
+
+    // ③ 正确/错误密码
+    QVERIFY(verifySubPassword(QStringLiteral("abc"), h));
+    QVERIFY(!verifySubPassword(QStringLiteral("abd"), h));
+    QVERIFY(!verifySubPassword(QString(), h));
+    QVERIFY(!verifySubPassword(QStringLiteral("abcd"), h));
+
+    // ④ 未设置密码：任何输入都放行
+    QVERIFY(verifySubPassword(QStringLiteral("whatever"), QString()));
+
+    // ⑤ 摘要被篡改（改一位）必须失败
+    QString tampered = h;
+    tampered[tampered.size() - 1] =
+        (tampered.at(tampered.size() - 1) == QLatin1Char('0')) ? QLatin1Char('1')
+                                                              : QLatin1Char('0');
+    QVERIFY2(!verifySubPassword(QStringLiteral("abc"), tampered),
+             "摘要被改动后仍校验通过，说明没有真正比对");
+
+    // ⑥ 迭代次数被改成天文数字：拒绝而不是卡死
+    const QString bomb =
+        QStringLiteral("pbkdf2$1000000000$00112233445566778899aabbccddeeff$"
+                       "00112233445566778899aabbccddeeff");
+    QVERIFY2(!verifySubPassword(QStringLiteral("abc"), bomb),
+             "迭代次数超上界必须直接拒绝，否则打开子界面会卡死");
+
+    // ⑦ 明文迁移：老布局里存的是明文，fromJson 之后应转成摘要且旧密码仍可用
+    RuntimeInterfacePage page;
+    RuntimeControl *sub = page.addControl(RuntimeControlType::SubInterface,
+                                          QRect(0, 0, 200, 100));
+    QVERIFY(sub);
+    QJsonObject json = page.toJson();
+    QJsonArray arr = json[QStringLiteral("controls")].toArray();
+    QJsonObject c = arr.at(0).toObject();
+    c[QStringLiteral("subPassword")] = QStringLiteral("legacyPwd");
+    arr.replace(0, c);
+    json[QStringLiteral("controls")] = arr;
+
+    RuntimeInterfacePage migrated;
+    QVERIFY(migrated.fromJson(json));
+    const QString stored = migrated.controls.first().subPassword;
+    QVERIFY2(isHashedSubPassword(stored), "读入时必须把明文密码升级为摘要");
+    QVERIFY2(!stored.contains(QStringLiteral("legacyPwd")),
+             "迁移后文件里不能残留明文");
+    QVERIFY2(verifySubPassword(QStringLiteral("legacyPwd"), stored),
+             "迁移后旧密码必须仍然可用，否则用户自己的布局会打不开");
+    QVERIFY(!verifySubPassword(QStringLiteral("wrong"), stored));
+
+    // ⑧ 布局往返：摘要串原样保留
+    RuntimeInterfacePage back;
+    QVERIFY(back.fromJson(migrated.toJson()));
+    QCOMPARE(back.controls.first().subPassword, stored);
+    QVERIFY(verifySubPassword(QStringLiteral("legacyPwd"),
+                              back.controls.first().subPassword));
 }
 
 QTEST_MAIN(UiGuardsTest)
