@@ -51,6 +51,12 @@
 #include <QtCharts/QPieSeries>
 #include <QtCharts/QPieSlice>
 
+#include <atomic>
+#include <QMessageBox>
+#include <QDialogButtonBox>
+#include <QInputDialog>
+#include <QThread>
+
 class UiGuardsTest : public QObject
 {
     Q_OBJECT
@@ -2377,7 +2383,189 @@ void UiGuardsTest::subInterfacePagesRoundTripAndDepth()
     QVERIFY2(bl1 && bl2, "数值控件缺失");
     QCOMPARE(bl1->text(), QStringLiteral("5"));
     QCOMPARE(bl2->text(), QStringLiteral("5"));
+
+    // ── B3 运行期牙 ①：subLevel=3 时再点击子界面按钮必须弹 warning 并拒开第 4 层
+    // （覆盖 RuntimeInterfaceView.cpp:1356 的 m_subLevel >= 3 分支；原先只测到 level=1 弹出）
+    // 子页深度从根页（currentPage）算：D1=1, D2=2, D3=3, D4=4；validateStructure 会在
+    // 保存时拒绝 depth>3，但**运行期点击**走的是 RuntimeInterfaceView 的 m_subLevel>=3
+    // 闸——必须有一个挂在 depth=3 页上的按钮指向 D4，才有得点。
+    {
+        RuntimeInterface depthIf;
+        const QString d1 = depthIf.createSubPage(QStringLiteral("D1"));
+        auto *c1 = depthIf.currentPage()->addControl(RuntimeControlType::SubInterface,
+                                                     QRect(0, 0, 200, 80));
+        c1->subPageId = d1;
+        const QString d2 = depthIf.createSubPage(QStringLiteral("D2"));
+        depthIf.subPage(d1)->addControl(RuntimeControlType::SubInterface, QRect(0, 0, 200, 80))
+            ->subPageId = d2;
+        const QString d3 = depthIf.createSubPage(QStringLiteral("D3"));
+        depthIf.subPage(d2)->addControl(RuntimeControlType::SubInterface, QRect(0, 0, 200, 80))
+            ->subPageId = d3;
+        // D4 挂在 D3 下：按钮位于 subLevel=3 的视图里，目标 depth=4（超过 validateStructure
+        // 上界，但 m_subLevel>=3 闸必须在 validateStructure 之前拦住 → 不依赖 validateStructure）。
+        const QString d4 = depthIf.createSubPage(QStringLiteral("D4"));
+        depthIf.subPage(d3)->addControl(RuntimeControlType::SubInterface, QRect(0, 0, 200, 80))
+            ->subPageId = d4;
+
+        RuntimeInterfaceView dv;
+        dv.setInterface(depthIf);
+        auto *b1 = dv.findChild<QPushButton *>(QStringLiteral("RuntimeSubInterfaceButton"));
+        QVERIFY(b1);
+        b1->click();
+        QCoreApplication::processEvents();
+        RuntimeInterfaceView *lv1 = nullptr;
+        for (QWidget *w : QApplication::topLevelWidgets()) {
+            lv1 = w->findChild<RuntimeInterfaceView *>(QStringLiteral("RuntimeInterfaceView"));
+            if (lv1 && lv1 != &dv) break;
+        }
+        QVERIFY2(lv1 && lv1->subLevel() == 1, "第 1 层未弹出");
+        auto *b2 = lv1->findChild<QPushButton *>(QStringLiteral("RuntimeSubInterfaceButton"));
+        QVERIFY(b2);
+        b2->click();
+        QCoreApplication::processEvents();
+        RuntimeInterfaceView *lv2 = nullptr;
+        for (QWidget *w : QApplication::topLevelWidgets()) {
+            lv2 = w->findChild<RuntimeInterfaceView *>(QStringLiteral("RuntimeInterfaceView"));
+            if (lv2 && lv2 != &dv && lv2 != lv1) break;
+        }
+        QVERIFY2(lv2 && lv2->subLevel() == 2, "第 2 层未弹出");
+        auto *b3 = lv2->findChild<QPushButton *>(QStringLiteral("RuntimeSubInterfaceButton"));
+        QVERIFY(b3);
+        b3->click();
+        QCoreApplication::processEvents();
+        RuntimeInterfaceView *lv3 = nullptr;
+        for (QWidget *w : QApplication::topLevelWidgets()) {
+            lv3 = w->findChild<RuntimeInterfaceView *>(QStringLiteral("RuntimeInterfaceView"));
+            if (lv3 && lv3 != &dv && lv3 != lv1 && lv3 != lv2) break;
+        }
+        QVERIFY2(lv3 && lv3->subLevel() == 3, "第 3 层未弹出");
+
+        // 第 4 次点击：必须被 m_subLevel>=3 分支拦截；任何时刻都不得存在 subLevel==4 的视图
+        auto *b4 = lv3->findChild<QPushButton *>(QStringLiteral("RuntimeSubInterfaceButton"));
+        QVERIFY2(b4, "第 3 层里必须有指向第 4 层的按钮");
+        // 异步关掉即将弹出的 QMessageBox：QMessageBox::warning 是 modal，会让 click() 阻塞；
+        // 用 QTimer 在主事件循环里把它拒掉，按钮调用栈才能 return。
+        QTimer::singleShot(100, lv3, [lv3]() {
+            for (QWidget *w : QApplication::topLevelWidgets()) {
+                auto *mb = qobject_cast<QMessageBox *>(w);
+                if (mb && mb->isVisible()) {
+                    mb->defaultButton()->click();
+                    return;
+                }
+            }
+        });
+        b4->click();
+        QCoreApplication::processEvents();
+        bool foundLv4 = false;
+        for (QWidget *w : QApplication::topLevelWidgets()) {
+            auto *v = w->findChild<RuntimeInterfaceView *>(QStringLiteral("RuntimeInterfaceView"));
+            if (v && v->subLevel() == 4) { foundLv4 = true; break; }
+        }
+        QVERIFY2(!foundLv4, "第 4 层子界面被弹出：m_subLevel>=3 闸失效");
+
+        // 收口（DeleteOnClose + 级联）
+        lv1->window()->close();
+        QCoreApplication::processEvents();
+    }
+
+    // ── B3 运行期牙 ②：密码保护子界面必须弹 QInputDialog 并走 verifySubPassword
+    // （覆盖 RuntimeInterfaceView.cpp:1367-1373；原先密码路径没被测试覆盖）
+    {
+        RuntimeInterface pwIf;
+        const QString ps = pwIf.createSubPage(QStringLiteral("Secret"));
+        auto *pc = pwIf.currentPage()->addControl(RuntimeControlType::SubInterface,
+                                                  QRect(0, 0, 200, 80));
+        pc->subPageId = ps;
+        pc->subPassword = hashSubPassword(QStringLiteral("secret7"));   // 摘要存储
+        // 把布局喂给视图
+        RuntimeInterface pwv2;
+        QVERIFY(pwv2.fromJson(pwIf.toJson()));
+        RuntimeInterfaceView pv;
+        pv.setInterface(pwv2);
+        auto *pbtn = pv.findChild<QPushButton *>(QStringLiteral("RuntimeSubInterfaceButton"));
+        QVERIFY2(pbtn, "密码子界面按钮缺失");
+        QVERIFY2(isHashedSubPassword(pwv2.currentPage()->controls.first().subPassword),
+                 "载入后子界面密码必须是摘要");
+
+        // ── 错密码：弹输入框 → 输错 → 不得弹出子视图
+        std::atomic<bool> wrongDone{false};
+        QThread *wrongWorker = QThread::create([&wrongDone]() {
+            QTest::qWait(200);
+            for (QWidget *w : QApplication::topLevelWidgets()) {
+                auto *dlg = qobject_cast<QInputDialog *>(w);
+                if (dlg && dlg->isVisible()) {
+                    dlg->setTextValue(QStringLiteral("wrong"));
+                    dlg->findChild<QPushButton *>("QDialogButtonBox") ? void() : void();
+                    // 通过 accept 按钮点击：先找 QDialogButtonBox 再点它的 OK
+                    auto *box = dlg->findChild<QDialogButtonBox *>();
+                    if (box) {
+                        for (QAbstractButton *b : box->buttons()) {
+                            if (box->buttonRole(b) == QDialogButtonBox::AcceptRole) {
+                                b->click();
+                                break;
+                            }
+                        }
+                    }
+                    wrongDone.store(true);
+                    return;
+                }
+            }
+            wrongDone.store(true);
+        });
+        wrongWorker->start();
+        pbtn->click();
+        wrongWorker->wait();
+        delete wrongWorker;
+        QCoreApplication::processEvents();
+        QVERIFY(wrongDone.load());
+        bool foundPwSub = false;
+        for (QWidget *w : QApplication::topLevelWidgets()) {
+            auto *v = w->findChild<RuntimeInterfaceView *>(QStringLiteral("RuntimeInterfaceView"));
+            if (v && v != &pv) { foundPwSub = true; break; }
+        }
+        QVERIFY2(!foundPwSub, "错密码后子视图仍被打开：verifySubPassword 闸失效");
+
+        // ── 对密码：弹输入框 → 输对 → 子视图必须弹出
+        std::atomic<bool> rightDone{false};
+        QThread *rightWorker = QThread::create([&rightDone]() {
+            QTest::qWait(200);
+            for (QWidget *w : QApplication::topLevelWidgets()) {
+                auto *dlg = qobject_cast<QInputDialog *>(w);
+                if (dlg && dlg->isVisible()) {
+                    dlg->setTextValue(QStringLiteral("secret7"));
+                    auto *box = dlg->findChild<QDialogButtonBox *>();
+                    if (box) {
+                        for (QAbstractButton *b : box->buttons()) {
+                            if (box->buttonRole(b) == QDialogButtonBox::AcceptRole) {
+                                b->click();
+                                break;
+                            }
+                        }
+                    }
+                    rightDone.store(true);
+                    return;
+                }
+            }
+            rightDone.store(true);
+        });
+        rightWorker->start();
+        pbtn->click();
+        rightWorker->wait();
+        delete rightWorker;
+        QCoreApplication::processEvents();
+        QVERIFY(rightDone.load());
+        RuntimeInterfaceView *pwSub = nullptr;
+        for (QWidget *w : QApplication::topLevelWidgets()) {
+            auto *v = w->findChild<RuntimeInterfaceView *>(QStringLiteral("RuntimeInterfaceView"));
+            if (v && v != &pv) { pwSub = v; break; }
+        }
+        QVERIFY2(pwSub, "对密码后子视图未弹出：密码验证路径失效");
+        QCOMPARE(pwSub->subLevel(), 1);
+        pwSub->window()->close();
+        QCoreApplication::processEvents();
+    }
 }
+
 
 void UiGuardsTest::b3NewControlsRoundTrip()
 {
@@ -2827,6 +3015,15 @@ void UiGuardsTest::subPasswordIsHashedAndVerified()
                                                               : QLatin1Char('0');
     QVERIFY2(!verifySubPassword(QStringLiteral("abc"), tampered),
              "摘要被改动后仍校验通过，说明没有真正比对");
+
+    // ⑤b B3 加固：摘要被**截短/拉长**也必须失败（constantTimeEquals 必须按 qMax 扫完，
+    // 不得用 qMin 让长度差漏过；这条牙专门咬"长度不齐"这条边，防止有人篡改摘要长度绕过）。
+    QString shortened = h.left(h.size() - 4);   // 截短 4 字节
+    QString lengthened = h + QStringLiteral("0000");   // 拉长 4 字节
+    QVERIFY2(!verifySubPassword(QStringLiteral("abc"), shortened),
+             "摘要被截短后仍校验通过：constantTimeEquals 的 qMax 失效");
+    QVERIFY2(!verifySubPassword(QStringLiteral("abc"), lengthened),
+             "摘要被拉长后仍校验通过：constantTimeEquals 的 qMax 失效");
 
     // ⑥ 迭代次数被改成天文数字：拒绝而不是卡死
     const QString bomb =

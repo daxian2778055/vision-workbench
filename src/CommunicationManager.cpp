@@ -561,6 +561,9 @@ bool CommunicationManager::createDeviceNode(const QString &name, const QString &
         connect(node, &CommunicationNodeBase::registerValueChanged, this,
                 [this, node](int address, const QByteArray &value, const QString &dataType) {
             Q_UNUSED(dataType)
+            // B4-3 寄存器级上传：dataUpload 关闭时，原始寄存器数据也不得冒泡到
+            // 下游（字符串触发/接收事件/脚本订阅）。与设备级闸同口径，按 deviceName 判定。
+            if (!isDataUploadEnabled(node->deviceName())) return;
             // 发出通信设备收到的原始数据（供字符串触发和接收事件系统使用）
             QByteArray fullData;
             QDataStream stream(&fullData, QIODevice::WriteOnly);
@@ -575,6 +578,7 @@ bool CommunicationManager::createDeviceNode(const QString &name, const QString &
                     [this, node](const QString &, int address,
                                  const QByteArray &value, const QString &dataType) {
                 Q_UNUSED(dataType)
+                if (!isDataUploadEnabled(node->deviceName())) return;   // B4-3 寄存器级上传
                 QByteArray fullData;
                 QDataStream stream(&fullData, QIODevice::WriteOnly);
                 stream << address;

@@ -6,6 +6,8 @@
 #include <QModbusTcpClient>
 #include <QTimer>
 #include <QJsonArray>
+#include <QMutex>
+#include <QRecursiveMutex>
 
 /// PLC 通信节点 — 基于 Modbus TCP 实现（绝大多数 PLC 均支持 Modbus TCP）
 /// 支持品牌：Siemens S7-1200/1500、Mitsubishi、Omron、Keyence、Panasonic 等
@@ -109,4 +111,10 @@ private:
         int regIndex;
     };
     QList<PendingRead> m_pendingQueue;
+
+    // B4-3 轮询互斥：m_registers / m_pendingQueue / m_currentRegIdx 的唯一写锁。
+    // 保护面只到"查表+改队列"，不跨 Modbus I/O（持锁期间不许阻塞网络）。
+    // Recursive：回调里 onPollTimeout→readRegister→finished-handler 在同一线程链上
+    // 会二次进入，用非递归锁会自己打死。
+    mutable QRecursiveMutex m_pollMutex;
 };

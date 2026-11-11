@@ -13,6 +13,7 @@
 #include <QSignalBlocker>
 #include <QJsonObject>
 #include <QDataStream>
+#include <QMutexLocker>
 
 PlcCommNode::PlcCommNode(QObject *parent) : CommunicationNodeBase(parent)
 {
@@ -88,7 +89,10 @@ void PlcCommNode::closeConnection()
 {
     m_userClosed = true;   // S1：抑制自动重连"复活"
     stopPolling();
-    m_pendingQueue.clear();
+    {
+        QMutexLocker locker(&m_pollMutex);
+        m_pendingQueue.clear();
+    }
     if (m_reconnectTimer) m_reconnectTimer->stop();
 
     // 只在"确实连过"时上报断开（S-2：判据统一为 m_everReallyConnected，同 ModbusNode；
@@ -116,9 +120,12 @@ bool PlcCommNode::isConnected() const
 
 void PlcCommNode::reportReadFailure(const QString &text)
 {
-    if (text == m_lastReadError)
-        return;   // 同一故障只报一次；恢复后再犯会重新报
-    m_lastReadError = text;
+    {
+        QMutexLocker locker(&m_pollMutex);
+        if (text == m_lastReadError)
+            return;   // 同一故障只报一次；恢复后再犯会重新报
+        m_lastReadError = text;
+    }
     setParam(QStringLiteral("lastError"), text);
     emit communicationError(text);
 }
@@ -153,6 +160,7 @@ QVariant PlcCommNode::getParam(const QString &name) const
 
 void PlcCommNode::setRegisters(const QList<ModbusRegisterItem> &regs)
 {
+    QMutexLocker locker(&m_pollMutex);
     m_registers = regs;
     m_currentRegIdx = 0;
 }
@@ -163,8 +171,11 @@ bool PlcCommNode::writeRegister(int address, double value)
     // 保证与读路径归一化往返对称（S3）。
     QString dataType = QStringLiteral("int16");
     QString byteOrder = QStringLiteral("ABCD");
-    for (const auto &r : m_registers) {
-        if (r.address == address) { dataType = r.dataType; byteOrder = r.byteOrder; break; }
+    {
+        QMutexLocker locker(&m_pollMutex);
+        for (const auto &r : m_registers) {
+            if (r.address == address) { dataType = r.dataType; byteOrder = r.byteOrder; break; }
+        }
     }
     QVector<quint16> words;
     if (!RegisterByteOrder::disassembleValueToWords(value, dataType, byteOrder, words) || words.isEmpty())
@@ -217,13 +228,16 @@ void PlcCommNode::verifyWrittenValue(int address, double expected, const QString
         if (reply->error() == QModbusDevice::NoError) {
                 // 只在"确实有读失败待复位"时清 lastError（r19 复核 P3）：
         // 无差别清会把最近一次**写**失败的文本也抹掉，诊断偏乐观。
-        if (!m_lastReadError.isEmpty()) {
-            // 只有 lastError 仍是那条读失败文本时才清（r19 复核 P3）：
-            // 否则"读失败→写失败→读成功"会把写失败的文本一起抹掉。
-            if (getParam(QStringLiteral("lastError")).toString() == m_lastReadError)
-                setParam(QStringLiteral("lastError"), QString());
-            m_lastReadError.clear();
-        }
+            {
+                QMutexLocker locker(&m_pollMutex);
+                if (!m_lastReadError.isEmpty()) {
+                    // 只有 lastError 仍是那条读失败文本时才清（r19 复核 P3）：
+                    // 否则"读失败→写失败→读成功"会把写失败的文本一起抹掉。
+                    if (getParam(QStringLiteral("lastError")).toString() == m_lastReadError)
+                        setParam(QStringLiteral("lastError"), QString());
+                    m_lastReadError.clear();
+                }
+            }
             const QModbusDataUnit du = reply->result();
             QVector<quint16> words;
             words.reserve(du.valueCount());
@@ -253,6 +267,7 @@ void PlcCommNode::verifyWrittenValue(int address, double expected, const QString
 
 double PlcCommNode::registerCurrentValue(int address) const
 {
+    QMutexLocker locker(&m_pollMutex);
     for (const auto &r : m_registers) {
         if (r.address == address) return r.currentValue;
     }
@@ -261,6 +276,7 @@ double PlcCommNode::registerCurrentValue(int address) const
 
 QString PlcCommNode::registerDisplayValue(int address) const
 {
+    QMutexLocker locker(&m_pollMutex);
     for (const auto &r : m_registers) {
         if (r.address == address) return r.displayValue;
     }
@@ -275,6 +291,7 @@ int PlcCommNode::syncRegistersNow()
     // 与 onPollTimeout 同一派发口径：从站号取参数表、宽度按数据类型折算、
     // 请求未发出立即回滚队列条目（不留永久非空的 pendingQueue）
     const int slaveAddress = getParam(QStringLiteral("slaveAddress")).toInt();
+    QMutexLocker locker(&m_pollMutex);
     int issued = 0;
     for (int idx = 0; idx < m_registers.size(); ++idx) {
         const auto &reg = m_registers[idx];
@@ -298,6 +315,7 @@ int PlcCommNode::syncRegistersNow()
 void PlcCommNode::startPolling()
 {
     if (!m_pollTimer) return;
+    QMutexLocker locker(&m_pollMutex);
     m_currentRegIdx = 0;
     m_pollTimer->setInterval(getParam(QStringLiteral("pollInterval")).toInt());   // 参数表唯一来源
     m_pollTimer->start();
@@ -310,6 +328,7 @@ void PlcCommNode::stopPolling()
 
 void PlcCommNode::onPollTimeout()
 {
+    QMutexLocker locker(&m_pollMutex);
     if (!m_connected || !m_modbus || m_registers.isEmpty()) return;
     if (!m_pendingQueue.isEmpty()) return;
 
@@ -363,43 +382,65 @@ bool PlcCommNode::readRegister(int slaveAddr, int regAddr, int count)
 
     auto handler = [this, reply, regAddr]() {
                 int regIndex = -1;
-                for (int i = 0; i < m_pendingQueue.size(); ++i) {
-                    if (m_pendingQueue[i].regAddr == regAddr) {
-                        regIndex = m_pendingQueue[i].regIndex;
-                        m_pendingQueue.removeAt(i);
-                        break;
+                {
+                    QMutexLocker locker(&m_pollMutex);
+                    for (int i = 0; i < m_pendingQueue.size(); ++i) {
+                        if (m_pendingQueue[i].regAddr == regAddr) {
+                            regIndex = m_pendingQueue[i].regIndex;
+                            m_pendingQueue.removeAt(i);
+                            break;
+                        }
                     }
                 }
 
                 if (reply->error() == QModbusDevice::NoError) {
                 // 只在"确实有读失败待复位"时清 lastError（r19 复核 P3）：
         // 无差别清会把最近一次**写**失败的文本也抹掉，诊断偏乐观。
-        if (!m_lastReadError.isEmpty()) {
-            // 只有 lastError 仍是那条读失败文本时才清（r19 复核 P3）：
-            // 否则"读失败→写失败→读成功"会把写失败的文本一起抹掉。
-            if (getParam(QStringLiteral("lastError")).toString() == m_lastReadError)
-                setParam(QStringLiteral("lastError"), QString());
-            m_lastReadError.clear();
-        }
+                    {
+                        QMutexLocker locker(&m_pollMutex);
+                        if (!m_lastReadError.isEmpty()) {
+                            // 只有 lastError 仍是那条读失败文本时才清（r19 复核 P3）：
+                            // 否则"读失败→写失败→读成功"会把写失败的文本一起抹掉。
+                            if (getParam(QStringLiteral("lastError")).toString() == m_lastReadError)
+                                setParam(QStringLiteral("lastError"), QString());
+                            m_lastReadError.clear();
+                        }
+                    }
                     const QModbusDataUnit unit = reply->result();
                     const QVector<quint16> values = unit.values();
 
-                    if (!values.isEmpty() && regIndex >= 0 && regIndex < m_registers.size()) {
-                        auto &reg = m_registers[regIndex];
-
-                        // 用统一工具归一化（与写路径 disassemble 配对，往返对称，S3）
-                        QByteArray raw = RegisterByteOrder::assembleRegisterBytes(values, reg.byteOrder);
-
-                        double parsed = RegisterByteOrder::parseRawToValue(raw, reg.dataType, reg.byteOrder);
-                        reg.currentValue = parsed;
-                        reg.displayValue = QString::number(parsed, 'f',
-                            reg.dataType == QStringLiteral("float") ? 4 : 0);
-                        emit registerCurrentValueChanged(reg.address, parsed, reg.displayValue);
-
-                        if (!reg.hasLastValue || raw != reg.lastRaw) {
-                            reg.lastRaw = raw;
-                            reg.hasLastValue = true;
-                            emit plcRegisterChanged(m_deviceName, reg.address, raw, reg.dataType);
+                    if (!values.isEmpty()) {
+                        // 持锁期间只做查表+改字段；emit 放锁外避免下游同步回调死锁
+                        int address = -1;
+                        double parsed = 0.0;
+                        QString display;
+                        QByteArray raw;
+                        QString dataType;
+                        bool shouldEmitChanged = false;
+                        {
+                            QMutexLocker locker(&m_pollMutex);
+                            if (regIndex >= 0 && regIndex < m_registers.size()) {
+                                auto &reg = m_registers[regIndex];
+                                // 用统一工具归一化（与写路径 disassemble 配对，往返对称，S3）
+                                raw = RegisterByteOrder::assembleRegisterBytes(values, reg.byteOrder);
+                                parsed = RegisterByteOrder::parseRawToValue(raw, reg.dataType, reg.byteOrder);
+                                reg.currentValue = parsed;
+                                reg.displayValue = QString::number(parsed, 'f',
+                                    reg.dataType == QStringLiteral("float") ? 4 : 0);
+                                address = reg.address;
+                                display = reg.displayValue;
+                                dataType = reg.dataType;
+                                if (!reg.hasLastValue || raw != reg.lastRaw) {
+                                    reg.lastRaw = raw;
+                                    reg.hasLastValue = true;
+                                    shouldEmitChanged = true;
+                                }
+                            }
+                        }
+                        if (address >= 0) {
+                            emit registerCurrentValueChanged(address, parsed, display);
+                            if (shouldEmitChanged)
+                                emit plcRegisterChanged(m_deviceName, address, raw, dataType);
                         }
                     }
                 } else {
@@ -456,15 +497,18 @@ QJsonObject PlcCommNode::toJson() const
     obj[QStringLiteral("pollInterval")] = QJsonValue::fromVariant(getParam(QStringLiteral("pollInterval")));
 
     QJsonArray regsArr;
-    for (const auto &r : m_registers) {
-        QJsonObject ro;
-        ro[QStringLiteral("address")] = r.address;
-        ro[QStringLiteral("dataType")] = r.dataType;
-        ro[QStringLiteral("byteOrder")] = r.byteOrder;
-        ro[QStringLiteral("accessMode")] = r.accessMode;
-        ro[QStringLiteral("enabled")] = r.enabled;
-        ro[QStringLiteral("description")] = r.description;
-        regsArr.append(ro);
+    {
+        QMutexLocker locker(&m_pollMutex);
+        for (const auto &r : m_registers) {
+            QJsonObject ro;
+            ro[QStringLiteral("address")] = r.address;
+            ro[QStringLiteral("dataType")] = r.dataType;
+            ro[QStringLiteral("byteOrder")] = r.byteOrder;
+            ro[QStringLiteral("accessMode")] = r.accessMode;
+            ro[QStringLiteral("enabled")] = r.enabled;
+            ro[QStringLiteral("description")] = r.description;
+            regsArr.append(ro);
+        }
     }
     obj[QStringLiteral("registers")] = regsArr;
     return obj;
@@ -495,7 +539,7 @@ void PlcCommNode::fromJson(const QJsonObject &json)
                  json.value(QStringLiteral("slaveAddress")).toInt(1));
     }
 
-    m_registers.clear();
+    QList<ModbusRegisterItem> loaded;
     QJsonArray regsArr = json[QStringLiteral("registers")].toArray();
     for (const auto &v : regsArr) {
         QJsonObject ro = v.toObject();
@@ -506,7 +550,13 @@ void PlcCommNode::fromJson(const QJsonObject &json)
         r.accessMode = ro[QStringLiteral("accessMode")].toString(QStringLiteral("Read"));
         r.enabled = ro[QStringLiteral("enabled")].toBool(true);
         r.description = ro[QStringLiteral("description")].toString();
-        m_registers.append(r);
+        loaded.append(r);
+    }
+    {
+        QMutexLocker locker(&m_pollMutex);
+        m_registers = loaded;
+        m_currentRegIdx = 0;
+        m_pendingQueue.clear();
     }
 
     // 收口说明：原先这里把 5 个成员"成套回写"进 m_params（"成员 = 唯一来源"的旧做法）；

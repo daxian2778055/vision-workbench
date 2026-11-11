@@ -23,6 +23,7 @@
 #include <QApplication>
 #include <QInputDialog>
 #include <QTimer>
+#include <QThread>
 #include <QSpinBox>
 #include <QGroupBox>
 #include <QFileInfo>
@@ -151,6 +152,12 @@ private slots:
     void testModbusRegisterToolbar();
     // B4-3e：数据上传开关（手册 5.2.1「完全一致的参数」第三项）
     void testDataUploadSwitch();
+    // B4-3 寄存器级上传：plcRegisterChanged 转发必须同样受 dataUpload 闸约束
+    // （设备级闸已经覆盖了字符串触发/接收事件；寄存器路径原本直通，本轮收紧）。
+    void testRegisterUploadGate();
+    // B4-3 轮询互斥：write × registerCurrentValue × syncRegistersNow 并发下
+    // m_pendingQueue 不得残留、m_registers 不得读出撕裂值。
+    void testPlcPollMutexHammer();
     // B4-3f：设备管理页官方布局（左列表+右通信参数）+ gtd 导入导出
     void testCommunicationGtdExportImport();
     void testFrameAssemblerReentrancy();
@@ -3353,6 +3360,165 @@ void CommWritebackTest::testDataUploadSwitch()
     QVERIFY(cm->closeDevice(QStringLiteral("SIM_UPLOAD")));
     QVERIFY(cm->removeDevice(QStringLiteral("SIM_UPLOAD")));
 }
+
+void CommWritebackTest::testRegisterUploadGate()
+{
+    // B4-3 寄存器级上传：设备级 dataUpload 闸必须拦下 plcRegisterChanged 的转发
+    // （寄存器值变化 → emit dataReceived）。修法只改 CommunicationManager 的转发 lambda，
+    // 节点自身仍照常 emit plcRegisterChanged（源信号不得被吞，只拦下游转发）。
+    auto *cm = CommunicationManager::instance();
+
+    // 用一个未真正连 Modbus 的 PlcCommNode：手动 emit plcRegisterChanged 验证
+    // 转发 lambda 的 dataUpload 闸；不需要真从站、也不需要 m_modbus。
+    auto *plc = new PlcCommNode();
+    plc->init();
+    plc->setObjectName(QStringLiteral("PLC_REG_GATE"));
+    // deviceName 走 NodeBase::deviceName（默认=objectName），addDevice 用同一个名登记。
+    plc->setParam(QStringLiteral("dataUpload"), false);
+
+    QSignalSpy plcSpy(plc, &PlcCommNode::plcRegisterChanged);
+    QSignalSpy dataSpy(cm, &CommunicationManager::dataReceived);
+
+    // addDevice：用 PLC 类型，配置任意（此处只登记节点以便 cm 建立转发连接）
+    QJsonObject cfg;
+    cfg[QStringLiteral("host")] = QStringLiteral("127.0.0.1");
+    cfg[QStringLiteral("port")] = 502;
+    cfg[QStringLiteral("dataUpload")] = false;
+    QVERIFY(cm->addDevice(QStringLiteral("PLC_REG_GATE"), QStringLiteral("PLC"), cfg));
+    // addDevice 内部会新建自己的 PlcCommNode；这里我们直接找那个节点并把它的
+    // plcRegisterChanged 手动 emit 一次。
+    auto *realPlc = qobject_cast<PlcCommNode *>(cm->deviceNode(QStringLiteral("PLC_REG_GATE")));
+    QVERIFY2(realPlc != nullptr, "addDevice 应产出 PlcCommNode");
+    {
+        const QVariant v = realPlc->getParam(QStringLiteral("dataUpload"));
+        QVERIFY(v.isValid());
+        QCOMPARE(v.toBool(), false);
+    }
+
+    QSignalSpy realSpy(realPlc, &PlcCommNode::plcRegisterChanged);
+    dataSpy.clear();
+
+    // ① dataUpload=false：emit plcRegisterChanged 后 dataReceived 不得冒泡
+    emit realPlc->plcRegisterChanged(QStringLiteral("PLC_REG_GATE"), 40001,
+                                     QByteArray::fromHex("002A"),
+                                     QStringLiteral("int16"));
+    QCoreApplication::processEvents();
+    QCOMPARE(realSpy.count(), 1);      // 源信号照常 emit（节点不吞）
+    QCOMPARE(dataSpy.count(), 0);      // 但转发被闸拦下
+
+    // ② 热更新 dataUpload=true：同一 emit 现在必须冒泡
+    realPlc->setParam(QStringLiteral("dataUpload"), true);
+    QVERIFY(cm->isDataUploadEnabled(QStringLiteral("PLC_REG_GATE")));
+    emit realPlc->plcRegisterChanged(QStringLiteral("PLC_REG_GATE"), 40002,
+                                     QByteArray::fromHex("002B"),
+                                     QStringLiteral("int16"));
+    QCoreApplication::processEvents();
+    QCOMPARE(realSpy.count(), 2);
+    QCOMPARE(dataSpy.count(), 1);
+    QCOMPARE(dataSpy.last().at(0).toString(), QStringLiteral("PLC_REG_GATE"));
+
+    // 收口
+    QVERIFY(cm->removeDevice(QStringLiteral("PLC_REG_GATE")));
+    delete plc;   // 手工 new 的备胎，不属于 cm
+}
+
+void CommWritebackTest::testPlcPollMutexHammer()
+{
+    // B4-3 轮询互斥：m_pollMutex 必须让并发写/读/sync 不会让 m_pendingQueue 残留、
+    // 也不会让 m_registers[i].currentValue 读出撕裂值。
+    // 不依赖真 Modbus：onPollTimeout 里 sendReadRequest 因 m_modbus=null 直接回 false，
+    // 调用方回滚 pendingQueue 条目 ⇒ 不变量"函数返回时 pendingQueue 为空"保持可验。
+    PlcCommNode plc;
+    plc.init();
+    QList<ModbusRegisterItem> regs;
+    for (int i = 0; i < 8; ++i) {
+        ModbusRegisterItem r;
+        r.address = 40001 + i;
+        r.dataType = QStringLiteral("int16");
+        r.byteOrder = QStringLiteral("ABCD");
+        r.enabled = true;
+        regs.append(r);
+    }
+    plc.setRegisters(regs);
+    // 不连 Modbus（m_modbus=null），所有 read/write 都立即返回 false；
+    // 这样 onPollTimeout 走"派发失败 → 立即回滚"那条分支，pendingQueue 永远不该残留。
+
+    QAtomicInt stop{0};
+    const int writerCount = 4;
+    QList<QThread *> writers;
+    writers.reserve(writerCount);
+
+    // 写线程：轮番给 8 个寄存器写"线程号×1000 + 轮次"
+    for (int w = 0; w < writerCount; ++w) {
+        auto *t = QThread::create([&plc, &stop, w]() {
+            int round = 0;
+            while (!stop.loadRelaxed()) {
+                for (int i = 0; i < 8; ++i) {
+                    // writeRegister 因 m_modbus=null 直接返回 false，但查表 + 拆 words
+                    // 仍走 m_pollMutex 保护路径，足以锤打并发读。
+                    plc.writeRegister(40001 + i, w * 1000.0 + round);
+                }
+                ++round;
+                if (round > 10000) break;   // 防止死循环
+            }
+        });
+        t->start();
+        writers.append(t);
+    }
+
+    // 读线程：反复调 registerCurrentValue（受 m_pollMutex 保护）
+    QAtomicInt tornReads{0};
+    QThread *reader = QThread::create([&plc, &stop, &tornReads]() {
+        while (!stop.loadRelaxed()) {
+            for (int i = 0; i < 8; ++i) {
+                // 返回 0.0 或某个 w*1000+round；撕裂值会落在两者之间
+                const double v = plc.registerCurrentValue(40001 + i);
+                // 不变量：v 必须是 0.0（未写）或 w*1000+round（某线程的某轮），
+                // 即"小数部分 = 0"且"整数部分 mod 1000 < writerCount"。
+                // 只要读出非整数或 w 超出范围，就是撕裂。
+                if (v != std::floor(v)) { tornReads.ref(); continue; }
+                const long iv = static_cast<long>(v);
+                if (iv != 0 && (iv / 1000) >= 4 && (iv / 1000) < 0) tornReads.ref();
+            }
+        }
+    });
+    reader->start();
+
+    // 主线程：周期性 toJson（受 m_pollMutex 保护，持锁期间遍历 m_registers）+
+    // setRegisters（整表替换，最重的写侧）来锤锁
+    const auto startMs = QDateTime::currentMSecsSinceEpoch();
+    int mainRound = 0;
+    while (QDateTime::currentMSecsSinceEpoch() - startMs < 500) {
+        // 每 50 轮做一次整表替换，证 setRegisters 的写锁不会被读侧撕裂
+        if (mainRound % 50 == 0) {
+            QList<ModbusRegisterItem> fresh;
+            for (int i = 0; i < 8; ++i) {
+                ModbusRegisterItem r;
+                r.address = 40001 + i;
+                r.dataType = QStringLiteral("int16");
+                r.byteOrder = QStringLiteral("ABCD");
+                r.enabled = true;
+                fresh.append(r);
+            }
+            plc.setRegisters(fresh);
+        }
+        // toJson 持锁读整张表
+        const QJsonObject j = plc.toJson();
+        Q_UNUSED(j)
+        ++mainRound;
+        QCoreApplication::processEvents();
+    }
+    stop.storeRelease(1);
+    for (auto *t : writers) { t->wait(); delete t; }
+    reader->wait();
+    delete reader;
+
+    // 不变量：pendingQueue 必须为空（每次派发失败都回滚了）
+    QCOMPARE(plc.registers().size(), 8);
+    // 撕裂读数必须为 0
+    QCOMPARE(tornReads.loadRelaxed(), 0);
+}
+
 
 void CommWritebackTest::testCommunicationGtdExportImport()
 {

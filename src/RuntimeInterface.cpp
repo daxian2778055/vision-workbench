@@ -183,12 +183,18 @@ namespace {
 constexpr int kSubPasswordIterations = 20000;
 
 /// 定长比较：长度不同也不提前 return，避免用耗时泄露「前缀匹配了多少字节」。
+/// B3 加固（2026-11）：原先用 qMin 只扫短侧，长度差通过"何时退出循环"泄露；
+/// 现改成 qMax，超界侧用 0 填充（QByteArray::at 越界返回 '\0'），
+/// 长度差本身也被 XOR 进 diff（(a.size() ^ b.size()) 不为 0 时 diff 立刻置位）。
 bool constantTimeEquals(const QByteArray &a, const QByteArray &b)
 {
-    unsigned char diff = (a.size() == b.size()) ? 0 : 1;
-    const int n = qMin(a.size(), b.size());
-    for (int i = 0; i < n; ++i)
-        diff |= static_cast<unsigned char>(a.at(i)) ^ static_cast<unsigned char>(b.at(i));
+    unsigned char diff = static_cast<unsigned char>(a.size() ^ b.size()) & 0xFFu;
+    const int n = qMax(a.size(), b.size());
+    for (int i = 0; i < n; ++i) {
+        const unsigned char ca = (i < a.size()) ? static_cast<unsigned char>(a.at(i)) : 0u;
+        const unsigned char cb = (i < b.size()) ? static_cast<unsigned char>(b.at(i)) : 0u;
+        diff |= ca ^ cb;
+    }
     return diff == 0;
 }
 
