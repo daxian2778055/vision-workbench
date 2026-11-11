@@ -2146,6 +2146,7 @@ void ParamPanelBindingTest::testOperatorsWithoutParamSpecsAreExactlyThisRoster()
     registerAllNodes();   // 注册表由这个调用填（不是静态自注册）⇒ 单跑本函数时必须自己填一次
 
     static const QStringList expected = {
+        QStringLiteral("ChannelMergeNode"),
         QStringLiteral("ClassifyNode"),
         QStringLiteral("ColorConversionNode"),
         QStringLiteral("CounterNode"), QStringLiteral("DelayNode"),
@@ -2261,7 +2262,7 @@ void ParamPanelBindingTest::testOperatorsWithoutParamSpecsAreExactlyThisRoster()
                                        " (see MISSING line above)").arg(missing.size())));
 
     // 空转闸：名单本身与分母都得对得上，否则"没红"不等于"拦得住"
-    QVERIFY2(expected.size() == 21,
+    QVERIFY2(expected.size() == 22,
              qPrintable(QStringLiteral("名单字面量自己变成 %1 条 ⇒ 本闸的基准已失效").arg(expected.size())));
     QVERIFY2(registry > 60,
              qPrintable(QStringLiteral("注册表只枚举到 %1 个算子 ⇒ 分母已失效").arg(registry)));
@@ -2510,8 +2511,9 @@ void ParamPanelBindingTest::testUnnamedFindChildSitesAreSingleCandidate()
     //   Height/Angle（净 +6）、maskSource + maskRegionPolygon（净 +2）
     // → 537（2026-11-08）：模板匹配位置修正批：positionCorrectMode + positionFixtureName +
     //   positionRunX/Y/Angle/ScaleX/ScaleY（净 +7）
-    QVERIFY2(fieldSlots == 537,
-             qPrintable(QStringLiteral("字段槽位分母从 537 变成 %1 ⇒ 本闸口径已漂移，"
+    // → 538（2026-11-11）：新增 ChannelSplitNode：colorSpace（净 +1）
+    QVERIFY2(fieldSlots == 538,
+             qPrintable(QStringLiteral("字段槽位分母从 538 变成 %1 ⇒ 本闸口径已漂移，"
                                        "先核对面板改动再把基准一起改").arg(fieldSlots)));
     QVERIFY2(badSlots.isEmpty(),
              qPrintable(QStringLiteral("U5-MULTI: %1 个字段槽位里同类型候选不止一个 ⇒ 站点 1 的无名 "

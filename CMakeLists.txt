@@ -200,6 +200,8 @@ src/ModelCache.cpp
     src/DynThresholdNode.cpp
     src/CropNode.cpp
     src/ConvertImageNode.cpp
+    src/ChannelSplitNode.cpp
+    src/ChannelMergeNode.cpp
     src/PixelStatsNode.cpp
     src/CornerNode.cpp
     src/EdgePointsNode.cpp
@@ -451,6 +453,8 @@ set(HEADERS
     include/DynThresholdNode.h
     include/CropNode.h
     include/ConvertImageNode.h
+    include/ChannelSplitNode.h
+    include/ChannelMergeNode.h
     include/PixelStatsNode.h
     include/CornerNode.h
     include/EdgePointsNode.h

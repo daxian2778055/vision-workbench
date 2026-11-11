@@ -36,6 +36,8 @@
 #include "OpencvTrackNode.h"
 #include "FeatureSearchNode.h"
 #include "DataObject.h"
+#include "ChannelSplitNode.h"
+#include "ChannelMergeNode.h"
 #include "ImageDisplayController.h"   // 判 NG 时叠加层改红的腿
 #include <QCheckBox>
 #include <QComboBox>
@@ -129,6 +131,7 @@ private slots:
     void testImageArithDivByZero();
     void testFormulaEvaluation();
     void testImageReadAddSingleLocalFile();
+    void testChannelSplitAndMergeRoundtrip();
 
 private:
     void compareParams(HalconNode *node1, HalconNode *node2, const QStringList &excludeKeys = {});
@@ -3103,6 +3106,164 @@ void NodeCoreTest::testImageArithAndHatOpenCv()
         QVERIFY2(!out.empty(), "底帽应产出图像");
         QCOMPARE(static_cast<int>(out.at<uchar>(1, 1)), 0);      // 平坦区 → 0
         QCOMPARE(static_cast<int>(out.at<uchar>(5, 5)), 150);    // 200 - 50
+    }
+}
+
+// 通道分割/合并（VM「图像分割」类对标）：split → merge 往返字节级相等 + 边界判失败
+void NodeCoreTest::testChannelSplitAndMergeRoundtrip()
+{
+    // ① RGB split：3 通道输入产出 3 个单通道，第 4 端口空
+    {
+        cv::Mat rgb(8, 8, CV_8UC3);
+        for (int r = 0; r < 8; ++r) {
+            for (int c = 0; c < 8; ++c) {
+                // BGR 顺序：B=10, G=20, R=30
+                rgb.at<cv::Vec3b>(r, c) = cv::Vec3b(10, 20, 30);
+            }
+        }
+
+        ChannelSplitNode split;
+        split.init();
+        auto obj = QSharedPointer<DataObject>::create();
+        obj->setHImage(OpencvUtil::matToHimage(rgb));
+        split.setInputData(0, obj);
+        QVERIFY2(split.execute(), "RGB split 应成功");
+        QCOMPARE(split.logicalOutputPortCount(), 4);
+
+        const auto ch0 = split.getOutputData(0);
+        const auto ch1 = split.getOutputData(1);
+        const auto ch2 = split.getOutputData(2);
+        const auto ch3 = split.getOutputData(3);
+        QVERIFY(ch0 && ch0->getHImage().IsInitialized());
+        QVERIFY(ch1 && ch1->getHImage().IsInitialized());
+        QVERIFY(ch2 && ch2->getHImage().IsInitialized());
+        QVERIFY2(!ch3, "RGB 只有 3 通道 ⇒ 端口 3 应为空");
+
+        const cv::Mat m0 = OpencvUtil::himageToMat(ch0->getHImage());
+        const cv::Mat m1 = OpencvUtil::himageToMat(ch1->getHImage());
+        const cv::Mat m2 = OpencvUtil::himageToMat(ch2->getHImage());
+        QCOMPARE(m0.channels(), 1);
+        // HALCON AccessChannel 按 HALCON 内部通道序（RGB 优先），不按 OpenCV BGR 序。
+        // 这里只钉"3 个值组成的集合 = {10, 20, 30}"，具体哪一端口拿哪一值不跨平台稳定。
+        QVector<int> got = {
+            static_cast<int>(m0.at<uchar>(0, 0)),
+            static_cast<int>(m1.at<uchar>(0, 0)),
+            static_cast<int>(m2.at<uchar>(0, 0))
+        };
+        std::sort(got.begin(), got.end());
+        const QVector<int> expected = {10, 20, 30};
+        QCOMPARE(got, expected);
+
+        // 往返：merge(split(rgb)) 字节级相等
+        ChannelMergeNode merge;
+        merge.init();
+        merge.setInputData(0, ch0);
+        merge.setInputData(1, ch1);
+        merge.setInputData(2, ch2);
+        QVERIFY2(merge.execute(), "3 通道 merge 应成功");
+
+        const auto merged = merge.getOutputData(0);
+        QVERIFY(merged && merged->getHImage().IsInitialized());
+        const cv::Mat round = OpencvUtil::himageToMat(merged->getHImage());
+        QCOMPARE(round.channels(), 3);
+        QCOMPARE(round.rows, rgb.rows);
+        QCOMPARE(round.cols, rgb.cols);
+        for (int r = 0; r < 8; ++r) {
+            for (int c = 0; c < 8; ++c) {
+                QCOMPARE(round.at<cv::Vec3b>(r, c), rgb.at<cv::Vec3b>(r, c));
+            }
+        }
+    }
+
+    // ② 2 通道往返（Compose2 路径）
+    {
+        cv::Mat gray1(4, 4, CV_8UC1, cv::Scalar(77));
+        cv::Mat gray2(4, 4, CV_8UC1, cv::Scalar(199));
+
+        ChannelMergeNode merge2;
+        merge2.init();
+        auto o1 = QSharedPointer<DataObject>::create();
+        auto o2 = QSharedPointer<DataObject>::create();
+        o1->setHImage(OpencvUtil::matToHimage(gray1));
+        o2->setHImage(OpencvUtil::matToHimage(gray2));
+        merge2.setInputData(0, o1);
+        merge2.setInputData(1, o2);
+        QVERIFY2(merge2.execute(), "2 通道 merge 应成功");
+
+        const auto merged2 = merge2.getOutputData(0);
+        QVERIFY(merged2);
+        // OpencvUtil::himageToMat 只支持 1/3 通道，这里通过 HALCON 逐通道读取验证
+        HImage merged2Img = merged2->getHImage();
+        QVERIFY(merged2Img.IsInitialized());
+        HTuple nch2;
+        CountChannels(merged2Img, &nch2);
+        QCOMPARE(nch2.I(), 2);
+        const cv::Mat c0 = OpencvUtil::himageToMat(merged2Img.AccessChannel(1));
+        const cv::Mat c1 = OpencvUtil::himageToMat(merged2Img.AccessChannel(2));
+        QCOMPARE(c0.channels(), 1);
+        QCOMPARE(c1.channels(), 1);
+        QCOMPARE(static_cast<int>(c0.at<uchar>(0, 0)), 77);
+        QCOMPARE(static_cast<int>(c1.at<uchar>(0, 0)), 199);
+
+        // 再 split：应回到两个单通道
+        ChannelSplitNode split2;
+        split2.init();
+        split2.setInputData(0, merged2);
+        QVERIFY2(split2.execute(), "2 通道 split 应成功");
+        const cv::Mat s0 = OpencvUtil::himageToMat(split2.getOutputData(0)->getHImage());
+        const cv::Mat s1 = OpencvUtil::himageToMat(split2.getOutputData(1)->getHImage());
+        QCOMPARE(s0.channels(), 1);
+        QCOMPARE(s1.channels(), 1);
+        QCOMPARE(static_cast<int>(s0.at<uchar>(0, 0)), 77);
+        QCOMPARE(static_cast<int>(s1.at<uchar>(0, 0)), 199);
+        QVERIFY(!split2.getOutputData(2));
+    }
+
+    // ③ HSV 路径：只验证 colorSpace=1 能正常跑 + 输出 H/S/V 3 个单通道
+    {
+        cv::Mat rgb(4, 4, CV_8UC3, cv::Scalar(255, 0, 0));   // 纯蓝（BGR）
+        ChannelSplitNode splitH;
+        splitH.init();
+        splitH.setParam(QStringLiteral("colorSpace"), 1);     // HSV
+        auto obj = QSharedPointer<DataObject>::create();
+        obj->setHImage(OpencvUtil::matToHimage(rgb));
+        splitH.setInputData(0, obj);
+        QVERIFY2(splitH.execute(), "HSV split 应成功");
+        QVERIFY(splitH.getOutputData(0));
+        QVERIFY(splitH.getOutputData(1));
+        QVERIFY(splitH.getOutputData(2));
+        QVERIFY(!splitH.getOutputData(3));
+    }
+
+    // ④ 灰度输入：split 按"实际通道数"产出 1 个单通道（端口 1-3 空）
+    {
+        ChannelSplitNode splitG;
+        splitG.init();
+        auto gray = QSharedPointer<DataObject>::create();
+        gray->setHImage(OpencvUtil::matToHimage(cv::Mat(4, 4, CV_8UC1, cv::Scalar(128))));
+        splitG.setInputData(0, gray);
+        QVERIFY2(splitG.execute(), "灰度 split 应成功（产出 1 通道）");
+        QVERIFY(splitG.getOutputData(0));
+        QVERIFY2(!splitG.getOutputData(1), "灰度只有 1 通道 ⇒ 端口 1-3 必须空");
+        QVERIFY(!splitG.getOutputData(2));
+        QVERIFY(!splitG.getOutputData(3));
+    }
+
+    // ⑤ 负向：空输入必须判失败
+    {
+        ChannelSplitNode splitE;
+        splitE.init();
+        QVERIFY2(!splitE.execute(), "空输入 split 必须判失败");
+    }
+
+    // ⑥ 负向：merge 只接一个通道必须判失败（不静默退化）
+    {
+        ChannelMergeNode merge;
+        merge.init();
+        auto only1 = QSharedPointer<DataObject>::create();
+        only1->setHImage(OpencvUtil::matToHimage(cv::Mat(4, 4, CV_8UC1, cv::Scalar(100))));
+        merge.setInputData(0, only1);
+        QVERIFY2(!merge.execute(), "ChannelMerge 只接一个通道必须判失败");
     }
 }
 

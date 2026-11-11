@@ -104,6 +104,8 @@
 #include "TesseractOcrNode.h"
 #include "FeatureSearchNode.h"
 #include "ObjectCountingNode.h"
+#include "ChannelSplitNode.h"
+#include "ChannelMergeNode.h"
 
 // 简洁注册宏：id=调色板ID，ch/en=中英文名，cat=分类，grp=工具库分组，T=工厂类
 #define VFP_REG(T, id, ch, en, cat, grp) \
@@ -185,6 +187,13 @@ void registerAllNodes()
     VFP_REG(ImageDivNode,         "ImageDivNode",         "\u56FE\u50CF\u9664\u6CD5", "Divide Image",
             NodeBase::IMAGE_PROCESSING, "\u56FE\u50CF\u5904\u7406");
     VFP_REG(ImageInvertNode,      "ImageInvertNode",      "\u56FE\u50CF\u6C42\u53CD", "Invert Image",
+            NodeBase::IMAGE_PROCESSING, "\u56FE\u50CF\u5904\u7406");
+
+    // ===== 图像处理：通道分割/合并（SplitCombination）=====
+    // 对标 VM 4.4 SplitCombination 类目；本仓此前为空，用 OpenCV + HALCON AccessChannel 组合实现
+    VFP_REG(ChannelSplitNode,     "ChannelSplitNode",     "\u901A\u9053\u5206\u5272", "Channel Split",
+            NodeBase::IMAGE_PROCESSING, "\u56FE\u50CF\u5904\u7406");
+    VFP_REG(ChannelMergeNode,     "ChannelMergeNode",     "\u901A\u9053\u5408\u5E76", "Channel Merge",
             NodeBase::IMAGE_PROCESSING, "\u56FE\u50CF\u5904\u7406");
 
     // ===== 图像处理：二值化/裁剪/转换 =====
@@ -448,6 +457,10 @@ void registerAllNodes()
                      QStringLiteral("腐蚀/膨胀/开/闭等形态学运算"));
     r.setDescription(QStringLiteral("ConvertImageNode"),
                      QStringLiteral("图像数据类型/通道数转换"));
+    r.setDescription(QStringLiteral("ChannelSplitNode"),
+                     QStringLiteral("多通道图像拆成独立单通道（RGB 或 HSV，按 colorSpace 参数）"));
+    r.setDescription(QStringLiteral("ChannelMergeNode"),
+                     QStringLiteral("2～4 个单通道灰度合并成多通道图像"));
 
     r.setDescription(QStringLiteral("OpencvEdgeNode"),
                      QStringLiteral("Canny/Sobel 边缘检测"));
@@ -603,6 +616,12 @@ void registerAllNodes()
                  {QStringLiteral("OpenCV二维码解码"), QStringLiteral("OpenCV QR Decode")});
     r.addAliases(QStringLiteral("OpencvTrackNode"),
                  {QStringLiteral("OpenCV目标跟踪"), QStringLiteral("OpenCV Object Track")});
+    r.addAliases(QStringLiteral("ChannelSplitNode"),
+                 {QStringLiteral("通道拆分"), QStringLiteral("分通道"),
+                  QStringLiteral("Channel Split"), QStringLiteral("Split Channel")});
+    r.addAliases(QStringLiteral("ChannelMergeNode"),
+                 {QStringLiteral("通道组合"), QStringLiteral("合成通道"),
+                  QStringLiteral("Channel Merge"), QStringLiteral("Compose Channel")});
 }
 
 #undef VFP_REG
