@@ -45,9 +45,9 @@
            MainWindow::addNode no longer checks it, a hardcoded "Admin" audit operator
            reappeared under src/, or the camera task ledger / closeCamera drain guard was
            bypassed (tools/wiring_checks.py)
-      19 = a persisted layout field is read back but never written, so the value silently
+      19 = a persisted field is read back but never written, so the value silently
            disappears on the next save/load round trip
-           (tools/layout_field_pairing_gate.py)
+           (tools/layout_field_pairing_gate.py -- layout and comm config)
 
     Note: this script is intentionally ASCII-only, and therefore carries no UTF-8 BOM
     (PowerShell 5.1 only needs a BOM when a .ps1 contains non-ASCII text). The two-sided
@@ -276,18 +276,21 @@ if ($dupCode -ne 0) {
 }
 Write-Ok "duplicated Chinese sentence baseline OK ($hygieneExe)"
 
-# -------------------------------------- 1g-2. layout persistence field pairing
+# -------------------------------------- 1g-2. persisted field pairing
 # Numbered 1g-2 on purpose: it sits right after 1g because both are static baselines that need no
 # build artifact, and renumbering 1h..1l would churn the steps the geometry check pins.
-# Why it runs here: the runtime-interface layout is persisted by hand-written toJson/fromJson
-# pairs with no schema, so a field can be written on save and never read back -- the value then
-# disappears the next time the layout loads. Two defects of exactly that shape were found by hand
-# (cornerRadius was written only inside the RunStatus branch although the designer lets
+# Why it runs here: persisted state is written by hand-written toJson/fromJson pairs with no
+# schema, so a field can be written on save and never read back -- the value then disappears the
+# next time it loads. Two defects of exactly that shape were found by hand in the runtime-interface
+# layout (cornerRadius was written only inside the RunStatus branch although the designer lets
 # SubInterface set it; subPassword was stored in plaintext while the reader compared it with !=).
-# The pair check compares writer and reader key sets mechanically, so a newly added field that
-# forgets one side stops the build here instead of shipping a silent data loss.
+# The gate covers both groups: the layout (control / page / whole interface) and the comm config
+# (devices, receive+send events, heartbeats, global triggers), because the second one is what a
+# site notices first -- a receive event that loses its device name stops firing after a reload.
+# It compares writer and reader key sets mechanically, so a newly added field that forgets one
+# side stops the build here instead of shipping a silent data loss.
 # Must never be a silent skip: any non-zero = exit 19.
-Write-Step "Layout persistence field pairing"
+Write-Step "Persisted field pairing (layout + comm)"
 $pairLog = Join-Path $RepoRoot 'ci-layout-fields.log'
 $pairArgs = $hygienePre + @('tools/layout_field_pairing_gate.py')
 & $hygieneExe @pairArgs 2>&1 | Tee-Object -FilePath $pairLog | Out-Null
