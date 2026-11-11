@@ -75,8 +75,9 @@ RegisterSpaceBar::RegisterSpaceBar(QTableWidget *table, QWidget *space,
     row->addWidget(m_statusLabel);
 
     connect(addBtn, &QPushButton::clicked, this, [this]() {
-        const int n = addAddressesInSpace();
-        setStatus(QStringLiteral("\u5DF2\u8865\u9F50 %1 \u4E2A\u5730\u5740").arg(n));
+        // 状态提示由 addAddressesInSpace 内部统一给出（含越界跳过数量），
+        // 这里再覆盖一次会把「跳过 N 个越界地址」这条信息抹掉。
+        addAddressesInSpace();
     });
     connect(syncBtn, &QPushButton::clicked, this, [this]() { emit syncRequested(); });
     connect(testBtn, &QPushButton::clicked, this, [this]() {
@@ -107,19 +108,46 @@ int RegisterSpaceBar::addAddressesInSpace()
     for (int r = 0; r < m_table->rowCount(); ++r)
         if (auto *it = m_table->item(r, 0)) existing.insert(it->text().toInt());
 
+    // 16 位寄存器地址空间是 0..65535（2026-11-11）：`start + i` 不钳上界时，
+    // 首地址 65532 + 8 个会产出 65539，而协议层按 quint16 打包 → 越界值回绕到低地址，
+    // 等于往**错误的寄存器**写值。现场表现是「明明写 65539，结果改坏了 3 号寄存器」，
+    // 极难反查。这里跳过越界项，且跳过数量必须在状态栏说清——静默少加同样是坑。
+    constexpr int kMaxRegisterAddress = 65535;
+    // Qt 的 QTableWidget::setItem 在列不存在时会**静默丢弃**该 item：表格若还是 0 列，
+    // 下面每行都 insertRow 成功、setItem 全被丢掉，added 却照数上报 —— 状态栏说
+    // 「已补齐 6 个地址」而表里一行都没有（2026-11-11 实测：夹具表格未设列即复现）。
+    // 这里补一列自愈，保证 added 与实际可见行数一致。
+    if (m_table->columnCount() == 0)
+        m_table->setColumnCount(1);
     int added = 0;
+    int skipped = 0;
     const int start = m_startSpin->value();
     for (int i = 0; i < m_countSpin->value(); ++i) {
         const int addr = start + i;
+        if (addr > kMaxRegisterAddress) {
+            ++skipped;
+            continue;
+        }
         if (existing.contains(addr)) continue;
         const int row = m_table->rowCount();
         m_table->insertRow(row);
         auto *addrItem = new QTableWidgetItem(QString::number(addr));
         addrItem->setFlags(addrItem->flags() & ~Qt::ItemIsEditable);
         m_table->setItem(row, 0, addrItem);   // 其余列留空 = 空白行（未配置）
+        // m_blankHidden 此前**只写不读**（纯摆设）：新行天生就是空白行，
+        // 隐藏态要跟着保持，否则「隐藏空白行」开着却越添加越多可见空白行。
+        if (m_blankHidden)
+            m_table->setRowHidden(row, true);
         ++added;
     }
     if (added > 0) emit rowsChanged();
+
+    if (skipped > 0) {
+        setStatus(QStringLiteral("已补齐 %1 个地址；地址空间到 %2 为止，跳过 %3 个越界地址")
+                      .arg(added).arg(kMaxRegisterAddress).arg(skipped));
+    } else {
+        setStatus(QStringLiteral("已补齐 %1 个地址").arg(added));
+    }
     return added;
 }
 

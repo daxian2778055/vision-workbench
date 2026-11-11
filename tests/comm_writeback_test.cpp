@@ -197,6 +197,8 @@ private slots:
     void responseFlowStateIsEdgeTriggered();
     // 2026-11-10：官方 5.2 设备管理页右下的收发数据区（内嵌而非独立对话框）
     void communicationDialogEmbedsMonitorPane();
+    // 2026-11-11：16 位寄存器地址空间上界，以及「隐藏空白行」是否真的生效
+    void registerSpaceBarClampsAddressSpace();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -3694,6 +3696,54 @@ void CommWritebackTest::communicationDialogEmbedsMonitorPane()
 
     pane->setTargetDevice(QString());
     QVERIFY(!send->isEnabled());
+}
+
+// 2026-11-11 审核：寄存器地址是 16 位。`start + i` 不钳上界时会产出 65536+ 的地址，
+// 而协议层按 quint16 打包 → 越界值回绕到低地址，等于往**错误的寄存器**写值。
+// 同时验「隐藏空白行」不再只写不读（m_blankHidden 曾是纯摆设）。
+void CommWritebackTest::registerSpaceBarClampsAddressSpace()
+{
+    // 构造签名是 (表, 可最大化容器, 容器原父控件)；表由调用方持有，不在 bar 内部
+    QWidget home;
+    auto *homeLayout = new QVBoxLayout(&home);
+    auto *space = new QWidget(&home);
+    homeLayout->addWidget(space);
+    auto *table = new QTableWidget(space);
+    table->setColumnCount(2);   // 真实场景列由通信管理对话框建好
+    RegisterSpaceBar bar(table, space, &home);
+
+    auto *start = bar.findChild<QSpinBox *>(QStringLiteral("regSpaceStart"));
+    auto *count = bar.findChild<QSpinBox *>(QStringLiteral("regSpaceCount"));
+    QVERIFY(start);
+    QVERIFY(count);
+
+    // ① 16 位地址空间：65530 + 8 里只有 6 个合法，另 2 个必须被跳过而不是回绕
+    start->setValue(65530);
+    count->setValue(8);
+    QCOMPARE(bar.addAddressesInSpace(), 6);
+    QCOMPARE(table->rowCount(), 6);
+    QVERIFY(table->item(0, 0));
+    QVERIFY(table->item(5, 0));
+    QCOMPARE(table->item(0, 0)->text().toInt(), 65530);
+    QCOMPARE(table->item(5, 0)->text().toInt(), 65535);
+    for (int r = 0; r < table->rowCount(); ++r) {
+        if (!table->item(r, 0))
+            continue;
+        const int addr = table->item(r, 0)->text().toInt();
+        QVERIFY2(addr <= 65535,
+                 qPrintable(QStringLiteral("地址越界未钳制：%1").arg(addr)));
+    }
+
+    // ② 隐藏空白行必须对**新增**行也生效，否则开关形同虚设
+    //    （m_blankHidden 曾经只写不读，纯摆设）
+    table->setRowCount(0);
+    bar.setBlankRowsHidden(true);
+    start->setValue(0);
+    count->setValue(4);
+    QCOMPARE(bar.addAddressesInSpace(), 4);
+    QCOMPARE(table->rowCount(), 4);
+    QVERIFY2(table->isRowHidden(0),
+             "隐藏空白行开启后，新增的空白行也必须隐藏");
 }
 
 QTEST_MAIN(CommWritebackTest)
