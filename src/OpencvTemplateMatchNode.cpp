@@ -1249,11 +1249,11 @@ void OpencvTemplateMatchNode::run(bool autoSwitch)
                     const double hh = qMax(4.0, h.height);
                     const double kw = qMax(4.0, k.width);
                     const double kh = qMax(4.0, k.height);
-                    const double interW = qMax(0.0, (hw + kw) * 0.5 - qAbs(h.col - k.col));
-                    const double interH = qMax(0.0, (hh + kh) * 0.5 - qAbs(h.row - k.row));
-                    const double inter = interW * interH;
-                    const double minArea = qMin(hw * hh, kw * kh);
-                    if (minArea > 1.0 && inter / minArea > multiOverlap) {
+                    const cv::Rect2d hBox(h.col - hw * 0.5, h.row - hh * 0.5, hw, hh);
+                    const cv::Rect2d kBox(k.col - kw * 0.5, k.row - kh * 0.5, kw, kh);
+                    const double inter = (hBox & kBox).area();
+                    const double unionArea = hBox.area() + kBox.area() - inter;
+                    if (inter / unionArea > multiOverlap) {
                         drop = true;
                         break;
                     }
@@ -2668,11 +2668,11 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
                     for (const MatchHit &k : kept) {
                         const double kw = qMax(4.0, tmplW * k.scale);
                         const double kh = qMax(4.0, tmplH * k.scaleY);
-                        const double interW = qMax(0.0, (hw + kw) * 0.5 - qAbs(h.col - k.col));
-                        const double interH = qMax(0.0, (hh + kh) * 0.5 - qAbs(h.row - k.row));
-                        const double inter = interW * interH;
-                        const double minArea = qMin(hw * hh, kw * kh);
-                        if (minArea > 1.0 && inter / minArea > maxOverlap) {
+                        const cv::Rect2d hBox(h.col - hw * 0.5, h.row - hh * 0.5, hw, hh);
+                        const cv::Rect2d kBox(k.col - kw * 0.5, k.row - kh * 0.5, kw, kh);
+                        const double inter = (hBox & kBox).area();
+                        const double unionArea = hBox.area() + kBox.area() - inter;
+                        if (inter / unionArea > maxOverlap) {
                             drop = true;
                             break;
                         }

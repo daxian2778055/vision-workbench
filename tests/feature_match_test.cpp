@@ -82,6 +82,10 @@ private slots:
     void templateMatchAllTemplatesPicksBest();
     // 全部搜索模式：不同模板各自的目标必须合并输出；多模板重叠率控制重叠目标去留
     void templateAllTemplatesMergesPerTarget();
+    void templateSingleOverlapUsesIou_data();
+    void templateSingleOverlapUsesIou();
+    void templateMultiOverlapUsesIou_data();
+    void templateMultiOverlapUsesIou();
     // VM「勾选模板 / 模板排序」：未勾选不参与匹配；列表顺序决定未开全部搜索模式时的优先顺序
     void templateCheckedTemplatesControlSearch();
     // VM「是否考虑噪点」：开启后搜索图毛刺（未被模板特征点解释的强边缘）拉低评分
@@ -1852,6 +1856,148 @@ void FeatureMatchTest::templateAllTemplatesMergesPerTarget()
           keepAllCount);
     QCOMPARE(overlapCount, 1);
     QCOMPARE(keepAllCount, 2);
+}
+
+void FeatureMatchTest::templateSingleOverlapUsesIou_data()
+{
+    QTest::addColumn<int>("spacing");
+    QTest::addColumn<int>("threshold");
+    QTest::addColumn<int>("expectedCount");
+    QTest::newRow("overlap-disabled") << 80 << 100 << 2;
+    QTest::newRow("iou-not-smaller-area") << 80 << 30 << 2;
+    QTest::newRow("above-threshold") << 80 << 20 << 1;
+    QTest::newRow("zero-threshold") << 80 << 0 << 1;
+    QTest::newRow("touching-at-zero") << 128 << 0 << 2;
+    QTest::newRow("separated-at-zero") << 160 << 0 << 2;
+}
+
+void FeatureMatchTest::templateSingleOverlapUsesIou()
+{
+    QFETCH(int, spacing);
+    QFETCH(int, threshold);
+    QFETCH(int, expectedCount);
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    cv::Mat patch(128, 128, CV_8UC1, cv::Scalar(kCanvasBackground));
+    cv::RNG rng(20261111);
+    cv::Mat texture = patch(cv::Rect(52, 32, 24, 64));
+    rng.fill(texture, cv::RNG::UNIFORM, 40, 255);
+    const QString path = dir.filePath(QStringLiteral("padded.png"));
+    QVERIFY(cv::imwrite(path.toStdString(), patch));
+    cv::Mat canvas(300, 500, CV_8UC1, cv::Scalar(kCanvasBackground));
+    // Only padding overlaps; spacing exceeds the 0.6 * 128 early peak-suppression radius.
+    patch.copyTo(canvas(cv::Rect(60, 80, 128, 128)));
+    patch.copyTo(canvas(cv::Rect(60 + spacing, 80, 128, 128)));
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.95);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("scaleMin"), 1.0);
+    node.setParam(QStringLiteral("scaleMax"), 1.0);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("templatePath"), path);
+    node.setParam(QStringLiteral("maxMatches"), 2);
+    node.setParam(QStringLiteral("sortType"), 2);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+    node.setParam(QStringLiteral("maxOverlap"), 100);
+    node.run(false);
+    QVERIFY(node.getParam(QStringLiteral("moduleStatus")).toBool());
+    QCOMPARE(node.getParam(QStringLiteral("matchCountBeforeOverlap")).toInt(), 2);
+    QCOMPARE(node.getParam(QStringLiteral("matchCount")).toInt(), 2);
+    const QStringList baseline = node.getParam(QStringLiteral("matchList")).toString()
+                                     .split(QLatin1Char(';'), Qt::SkipEmptyParts);
+    QCOMPARE(baseline.size(), 2);
+    for (int i = 0; i < baseline.size(); ++i) {
+        const QStringList hit = baseline.at(i).split(QLatin1Char(','));
+        QCOMPARE(hit.size(), 7);
+        QCOMPARE(hit[0].toDouble(), 144.0);
+        QCOMPARE(hit[1].toDouble(), double(124 + i * spacing));
+    }
+    node.setParam(QStringLiteral("maxOverlap"), threshold);
+    node.run(false);
+    QVERIFY(node.getParam(QStringLiteral("moduleStatus")).toBool());
+    QCOMPARE(node.getParam(QStringLiteral("matchCountBeforeOverlap")).toInt(), 2);
+    QCOMPARE(node.getParam(QStringLiteral("matchCount")).toInt(), expectedCount);
+    QCOMPARE(node.getParam(QStringLiteral("matchList")).toString()
+                 .split(QLatin1Char(';'), Qt::SkipEmptyParts).size(), expectedCount);
+}
+
+void FeatureMatchTest::templateMultiOverlapUsesIou_data()
+{
+    QTest::addColumn<int>("cropWidth");
+    QTest::addColumn<int>("cropHeight");
+    QTest::addColumn<int>("threshold");
+    QTest::addColumn<int>("expectedCount");
+    QTest::newRow("contained-disabled") << 96 << 96 << 100 << 2;
+    QTest::newRow("contained-above-threshold") << 96 << 96 << 56 << 1;
+    QTest::newRow("contained-below-threshold") << 96 << 96 << 57 << 2;
+    QTest::newRow("half-width-equal-threshold") << 64 << 128 << 50 << 2;
+    QTest::newRow("half-height-equal-threshold") << 128 << 64 << 50 << 2;
+    QTest::newRow("half-width-above-threshold") << 64 << 128 << 49 << 1;
+    QTest::newRow("identical-below-100") << 128 << 128 << 99 << 1;
+    QTest::newRow("identical-at-100") << 128 << 128 << 100 << 2;
+}
+
+void FeatureMatchTest::templateMultiOverlapUsesIou()
+{
+    QFETCH(int, cropWidth);
+    QFETCH(int, cropHeight);
+    QFETCH(int, threshold);
+    QFETCH(int, expectedCount);
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const cv::Mat patch = makePatch();
+    const cv::Mat crop = patch(cv::Rect((128 - cropWidth) / 2, (128 - cropHeight) / 2,
+                                       cropWidth, cropHeight)).clone();
+    const QString pathA = dir.filePath(QStringLiteral("full.png"));
+    const QString pathB = dir.filePath(QStringLiteral("crop.png"));
+    QVERIFY(cv::imwrite(pathA.toStdString(), patch));
+    QVERIFY(cv::imwrite(pathB.toStdString(), crop));
+    cv::Mat canvas(300, 400, CV_8UC1, cv::Scalar(kCanvasBackground));
+    patch.copyTo(canvas(cv::Rect(140, 90, 128, 128)));
+
+    OpencvTemplateMatchNode node;
+    node.init();
+    node.setParam(QStringLiteral("method"), 1);
+    node.setParam(QStringLiteral("minScore"), 0.95);
+    node.setParam(QStringLiteral("angleMin"), 0.0);
+    node.setParam(QStringLiteral("angleMax"), 0.0);
+    node.setParam(QStringLiteral("scaleMin"), 1.0);
+    node.setParam(QStringLiteral("scaleMax"), 1.0);
+    node.setParam(QStringLiteral("trainFromImage"), false);
+    node.setParam(QStringLiteral("maxMatches"), 2);
+    node.setParam(QStringLiteral("maxOverlap"), 100);
+    node.setParam(QStringLiteral("matchAllTemplates"), true);
+    TemplateEntry a, b;
+    a.name = QStringLiteral("full");
+    a.imagePath = pathA;
+    b.name = QStringLiteral("crop");
+    b.imagePath = pathB;
+    node.setTemplates({a, b});
+    node.setActiveTemplateIndex(0);
+    node.setInputImage(OpencvUtil::matToHimage(canvas));
+    node.setParam(QStringLiteral("multiTemplateOverlap"), 100);
+    node.run(false);
+    QVERIFY(node.getParam(QStringLiteral("moduleStatus")).toBool());
+    QCOMPARE(node.getParam(QStringLiteral("matchCount")).toInt(), 2);
+    const QStringList centers = node.getParam(QStringLiteral("matchBoxCenters")).toString()
+                                    .split(QLatin1Char(';'), Qt::SkipEmptyParts);
+    QCOMPARE(centers.size(), 2);
+    for (const QString &center : centers) {
+        const QStringList coordinates = center.split(QLatin1Char(','));
+        QCOMPARE(coordinates.size(), 2);
+        QCOMPARE(coordinates[0].toDouble(), 204.0);
+        QCOMPARE(coordinates[1].toDouble(), 154.0);
+    }
+    node.setParam(QStringLiteral("multiTemplateOverlap"), threshold);
+    node.run(false);
+    QVERIFY(node.getParam(QStringLiteral("moduleStatus")).toBool());
+    QCOMPARE(node.getParam(QStringLiteral("matchCount")).toInt(), expectedCount);
+    QCOMPARE(node.getParam(QStringLiteral("matchList")).toString()
+                 .split(QLatin1Char(';'), Qt::SkipEmptyParts).size(), expectedCount);
 }
 
 // P1-3（VM「特征模板」）：勾选模板 + 模板排序。
