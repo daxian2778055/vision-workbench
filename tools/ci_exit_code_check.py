@@ -56,6 +56,7 @@ EXPECTED_STEPS = [
     "Documentation anchors",
     "Dangling-timer site inventory",
     "Duplicated Chinese sentence baseline",
+    "Layout persistence field pairing",
     "Source-line citation roster baseline",
     "Host exit-code geometry self-check",
     "Ledger growth split trigger",
@@ -79,6 +80,7 @@ GATE_CODE_OF_STEP = [
     ("Documentation anchors", "7"),
     ("Dangling-timer site inventory", "8"),
     ("Duplicated Chinese sentence baseline", "9"),
+    ("Layout persistence field pairing", "19"),
     ("Source-line citation roster baseline", "10"),
     ("Host exit-code geometry self-check", "11"),
     ("Ledger growth split trigger", "12"),
@@ -95,7 +97,7 @@ GATE_CODE_OF_STEP = [
 # code fires from exactly one place.
 FROZEN_GATE_COUNTS = {
     "3": 2, "4": 1, "5": 1, "6": 1, "7": 1, "8": 1, "9": 1, "10": 1, "11": 1, "12": 1, "13": 1,
-    "14": 1, "15": 1, "16": 1, "17": 1, "18": 1,
+    "14": 1, "15": 1, "16": 1, "17": 1, "18": 1, "19": 1,
 }
 SHARED_CODES = ("0", "1", "2", "3")
 

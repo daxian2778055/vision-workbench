@@ -45,6 +45,9 @@
            MainWindow::addNode no longer checks it, a hardcoded "Admin" audit operator
            reappeared under src/, or the camera task ledger / closeCamera drain guard was
            bypassed (tools/wiring_checks.py)
+      19 = a persisted layout field is read back but never written, so the value silently
+           disappears on the next save/load round trip
+           (tools/layout_field_pairing_gate.py)
 
     Note: this script is intentionally ASCII-only, and therefore carries no UTF-8 BOM
     (PowerShell 5.1 only needs a BOM when a .ps1 contains non-ASCII text). The two-sided
@@ -272,6 +275,33 @@ if ($dupCode -ne 0) {
     exit 9
 }
 Write-Ok "duplicated Chinese sentence baseline OK ($hygieneExe)"
+
+# -------------------------------------- 1g-2. layout persistence field pairing
+# Numbered 1g-2 on purpose: it sits right after 1g because both are static baselines that need no
+# build artifact, and renumbering 1h..1l would churn the steps the geometry check pins.
+# Why it runs here: the runtime-interface layout is persisted by hand-written toJson/fromJson
+# pairs with no schema, so a field can be written on save and never read back -- the value then
+# disappears the next time the layout loads. Two defects of exactly that shape were found by hand
+# (cornerRadius was written only inside the RunStatus branch although the designer lets
+# SubInterface set it; subPassword was stored in plaintext while the reader compared it with !=).
+# The pair check compares writer and reader key sets mechanically, so a newly added field that
+# forgets one side stops the build here instead of shipping a silent data loss.
+# Must never be a silent skip: any non-zero = exit 19.
+Write-Step "Layout persistence field pairing"
+$pairLog = Join-Path $RepoRoot 'ci-layout-fields.log'
+$pairArgs = $hygienePre + @('tools/layout_field_pairing_gate.py')
+& $hygieneExe @pairArgs 2>&1 | Tee-Object -FilePath $pairLog | Out-Null
+$pairCode = $LASTEXITCODE
+
+$pairLines = @(Get-Content $pairLog -ErrorAction SilentlyContinue)
+if ($pairLines.Count -eq 0) { Write-Host '  (layout_field_pairing_gate.py produced no output)' }
+foreach ($line in $pairLines) { Write-Host "  $line" }
+if ($pairCode -ne 0) {
+    Write-Err "layout persistence field pairing broken (exit $pairCode) via '$hygieneExe'; see $pairLog"
+    Pop-Location
+    exit 19
+}
+Write-Ok "layout persistence field pairing OK ($hygieneExe)"
 
 # -------------------------------------- 1h. source-line citation roster baseline
 # Why it runs here: the gap plan cites production source lines by number. U-38 turned that
