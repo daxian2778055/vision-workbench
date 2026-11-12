@@ -1324,6 +1324,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261109.13",
       "recorded_at": "2026-11-09",
       "recorded_note": "B3-3：组合框控件（comboOptions 候选值，QComboBox 渲染，setComboSelections 按字符串回填且不回写，MainWindow 按字符串 setParam）。"
+    },
+    {
+      "tag": "rc-20261112.1",
+      "commit": "2e2a74bfd83f54caf23dee0f062cd345d8216be7",
+      "exe_md5": "0468564366125c4cb96b89cf3e57a2f9",
+      "exe_bytes": 12909056,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261112.1",
+      "recorded_at": "2026-11-12",
+      "recorded_note": "rc-20261109.13 之后 59 个提交的累积发版包。框架稳定性：5 处 singleShot 捕获错配与19 处裸 FlowExecutor* 加 QPointer 守卫、脚本审批与执行器 wait 互等改为两段有界等待并fail-closed；安全：子界面密码改摘要存储加常量时间校验；一致性：属性面板 15 处编辑统一走 markPropertyEdit、新增持久化字段成对性闸（布局+通信共 12 对，退出码 19）；算法：圆拟合剔除基准改留一法、下限按 minPoints 保底、残差覆盖全部有效输入点；测试：修 RoundAbortSummaryTest 断言语义并新增 nodeExecutionStarted 信号消除墙钟等待。部署自检 76 PASS / 0 FAIL / 3 SKIP，DeepOCR 合成图识别通过，exe 内嵌 HEAD 版本 yes。"
     }
   ],
   "legacy_backfilled": [
