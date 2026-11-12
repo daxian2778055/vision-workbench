@@ -21,9 +21,8 @@
 
 #include <QtTest/QtTest>
 #include <QCoreApplication>
-#include <QDir>
-#include <QFile>
 #include <QPointF>
+#include <QTemporaryDir>
 
 class RoundAbortSummaryTest : public QObject
 {
@@ -39,6 +38,17 @@ private slots:
     // P2-A/P2-B（2026-10-25 复核第二批）：真失败不当中止；局部执行不污染下一轮
     void subFlowNestedLoopFailureIsStillNg();
     void localExecutionFailureDoesNotPoisonNextRound();
+
+private:
+    /// 每次运行独占一个临时目录（2026-11-12）：旧实现用固定的
+    /// QDir::tempPath()/round_abort_summary_test.db，Windows 上若 SQLite 句柄未释放，
+    /// QFile::remove 会静默失败，上一轮的汇总行残留；而 summaryRows 用
+    /// addDays(-1) 的窗口会把它们一起查出来 ⇒ -j4 下低频偶发红。
+    QTemporaryDir m_tempDir;
+    QString dbPath() const
+    {
+        return m_tempDir.filePath(QStringLiteral("round_abort.db"));
+    }
 };
 
 namespace {
@@ -65,17 +75,14 @@ int summaryRows(const QDateTime &from, const QDateTime &to)
     return n;
 }
 
-QString dbPath()
-{
-    return QDir::tempPath() + QStringLiteral("/round_abort_summary_test.db");
-}
-
 } // namespace
 
 void RoundAbortSummaryTest::initTestCase()
 {
     registerAllNodes();
-    QFile::remove(dbPath());
+    QVERIFY2(m_tempDir.isValid(), "无法为本次运行创建唯一的临时数据库目录");
+    // 不再 QFile::remove：目录是本次运行独占的，且析构时自动清理，
+    // 从根上排除「上一轮 DB 残留 + Windows 文件占用导致删不掉」的干扰。
     QVERIFY2(AppDatabase::instance()->initialize(dbPath()),
              qPrintable(AppDatabase::instance()->lastDatabaseError()));
 }
@@ -83,7 +90,7 @@ void RoundAbortSummaryTest::initTestCase()
 void RoundAbortSummaryTest::cleanupTestCase()
 {
     AppDatabase::instance()->initialize(QString());
-    QFile::remove(dbPath());
+    // m_tempDir 析构时自动删除整个唯一目录，不需要显式 remove
 }
 
 void RoundAbortSummaryTest::abortedRoundHasNoSummaryRow()
@@ -101,12 +108,15 @@ void RoundAbortSummaryTest::abortedRoundHasNoSummaryRow()
 
     auto token = FlowExecutorToken::create(new FlowExecutor());
     FlowExecutor &exec = *token->executor();
-    bool slowRan = false;   // 断言停止确实落在"轮内"（否则本腿会空转通过）
-    QObject::connect(&exec, &FlowExecutor::nodeExecuted, &exec,
-                     [&slowRan, slow](NodeBase *n, bool) {
-                         if (n == slow)
-                             slowRan = true;
-                     },
+    // 2026-11-12 flaky 根因：旧版监听 nodeExecuted（节点**执行完**才 emit）置
+    // slowRan，可本腿验证的是「停止落在轮内、节点还在跑」——stop 越成功，
+    // slowRan 越可能是 false，断言语义自相矛盾。build/Testing 里两次失败日志
+    // 都指向这一条（'slowRan' returned FALSE），高负载下稳定翻车。
+    // 改为监听 executionStarted：整轮启动、在第一个节点之前 emit，不受中止影响；
+    // DirectConnection 在工作线程写、主线程读，用 atomic 消掉数据竞争。
+    std::atomic_bool roundStarted{false};
+    QObject::connect(&exec, &FlowExecutor::executionStarted, &exec,
+                     [&roundStarted]() { roundStarted.store(true); },
                      Qt::DirectConnection);
     const int beforeRows = summaryRows(QDateTime::currentDateTime().addDays(-1),
                                        QDateTime::currentDateTime().addSecs(60));
@@ -114,7 +124,10 @@ void RoundAbortSummaryTest::abortedRoundHasNoSummaryRow()
     exec.setFlowMode(FlowMode::SoftwareTrigger);
     exec.setFlowScene(&scene);
     exec.startExecution();
-    QTest::qWait(500);          // 0.5s < 2s：停止落在轮内
+    // 先确定性等整轮启动：消掉「启动延迟」对 500ms 窗口的侵蚀，
+    // 同时这一句本身承担「防空转」职责（流程真的启动过才继续）。
+    QTRY_VERIFY_WITH_TIMEOUT(roundStarted.load(), 5000);
+    QTest::qWait(500);          // 0.5s < 2s：此时 slow 仍在延时中，stop 落在轮内
     exec.stopExecution();
     bool finished = exec.wait(15000);
     if (!finished) {
@@ -124,7 +137,8 @@ void RoundAbortSummaryTest::abortedRoundHasNoSummaryRow()
     exec.setFlowScene(nullptr);
     QCoreApplication::processEvents();
 
-    QVERIFY2(slowRan, "延时算子没跑起来：本腿没验到'轮内中止'这条路径");
+    // 不再断言 slowRan（见上方注释：它与「轮内中止」语义相反）。
+    // 上面的 QTRY 已保证流程确实启动过，本腿不会空转。
     // 差分断言：这一轮不得新增整轮汇总行（绝对值会被其它用例/残留干扰）
     const int afterRows = summaryRows(QDateTime::currentDateTime().addDays(-1),
                                       QDateTime::currentDateTime().addSecs(60));
@@ -191,11 +205,11 @@ void RoundAbortSummaryTest::abortedLoopAtTailHasNoSummaryRow()
     auto token = FlowExecutorToken::create(new FlowExecutor());
     FlowExecutor &exec = *token->executor();
     // 断言停止确实落在轮内（否则"没有汇总"可能只是因为压根没跑）
-    bool bodyStarted = false;
+    std::atomic_bool bodyStarted{false};   // 同上：工作线程写、主线程读
     QObject::connect(&exec, &FlowExecutor::nodeExecuted, &exec,
                      [&bodyStarted, body](NodeBase *n, bool) {
                          if (n == body)
-                             bodyStarted = true;
+                             bodyStarted.store(true);
                      },
                      Qt::DirectConnection);
     exec.setFlowName(QStringLiteral("loopAbortFlow"));
@@ -214,7 +228,7 @@ void RoundAbortSummaryTest::abortedLoopAtTailHasNoSummaryRow()
 
     const int after = summaryRows(QDateTime::currentDateTime().addDays(-1),
                                   QDateTime::currentDateTime().addSecs(60));
-    QVERIFY2(bodyStarted, "循环体没跑起来：本腿没验到'轮内中止'这条路径");
+    QVERIFY2(bodyStarted.load(), "循环体没跑起来：本腿没验到'轮内中止'这条路径");
     QCOMPARE(after, before);   // 中止轮不得写汇总行
 }
 
@@ -250,7 +264,7 @@ void RoundAbortSummaryTest::abortedSubFlowIsNotReportedAsFailure()
 
     auto token = FlowExecutorToken::create(new FlowExecutor());
     FlowExecutor &exec = *token->executor();
-    bool callerFailed = false;
+    std::atomic_bool callerFailed{false};   // 工作线程写、主线程读
     // worker 线程（DirectConnection）写、主线程读：用 atomic 消掉数据竞争。
     std::atomic<bool> memberStarted { false };   // 断言停止确实落在"子流程正在执行"里
     QStringList errors;
@@ -259,7 +273,7 @@ void RoundAbortSummaryTest::abortedSubFlowIsNotReportedAsFailure()
                          if (n == m1)
                              memberStarted = true;
                          if (n == caller && !ok)
-                             callerFailed = true;
+                             callerFailed.store(true);
                      },
                      Qt::DirectConnection);
     QObject::connect(&exec, &FlowExecutor::executionError, &exec,
@@ -284,7 +298,7 @@ void RoundAbortSummaryTest::abortedSubFlowIsNotReportedAsFailure()
 
     QVERIFY2(memberStarted, "子流程成员没跑起来：本腿没验到'轮内中止'这条路径");
     // 中止不得报成节点失败，也不得出现"节点 … 执行失败"的错误
-    QVERIFY2(!callerFailed, "子流程被中止时调用点被记成执行失败（P2-1 残留）");
+    QVERIFY2(!callerFailed.load(), "子流程被中止时调用点被记成执行失败（P2-1 残留）");
     for (const QString &e : errors) {
         QVERIFY2(!e.contains(QStringLiteral("执行失败")),
                  qPrintable(QStringLiteral("中止被报成了执行失败：%1").arg(e)));
@@ -340,7 +354,7 @@ void RoundAbortSummaryTest::subFlowNestedLoopFailureIsStillNg()
 
     auto token = FlowExecutorToken::create(new FlowExecutor());
     FlowExecutor &exec = *token->executor();
-    bool callerFailed = false;
+    std::atomic_bool callerFailed{false};   // 工作线程写、主线程读
     QHash<QString, bool> nodeStates;   // 诊断：每个节点最后一次 nodeExecuted
     QStringList errors;
     QObject::connect(&exec, &FlowExecutor::nodeExecuted, &exec,
@@ -348,7 +362,7 @@ void RoundAbortSummaryTest::subFlowNestedLoopFailureIsStillNg()
                          if (n)
                              nodeStates.insert(n->fullName(), ok);
                          if (n == caller && !ok)
-                             callerFailed = true;
+                             callerFailed.store(true);
                      },
                      Qt::DirectConnection);
     QObject::connect(&exec, &FlowExecutor::executionError, &exec,
@@ -374,7 +388,7 @@ void RoundAbortSummaryTest::subFlowNestedLoopFailureIsStillNg()
         QStringList stateList;
         for (auto it = nodeStates.constBegin(); it != nodeStates.constEnd(); ++it)
             stateList << (it.key() + QLatin1String("=") + (it.value() ? "ok" : "fail"));
-        QVERIFY2(callerFailed,
+        QVERIFY2(callerFailed.load(),
                  qPrintable(QStringLiteral("子流程内循环体失败时调用点没有判失败（P2-A）"
                                            " finished=%1 nodes=[%2] errors=[%3]")
                                 .arg(finished ? 1 : 0)
