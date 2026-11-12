@@ -173,6 +173,8 @@ private slots:
     void testCoordinateSubscriptionParsesText();
     void testCoordinateSubscriptionRejectsMismatchedSeries();
     void testNonFiniteSubscribedPointsDoNotPoisonCircleFit();
+    void testCircleRejectionKeepsInnerPointsAndHonestResidual();
+    void testCircleRejectionCannotBypassMinPoints();
     void testInputModeConflictsAreReported();
 };
 
@@ -684,6 +686,81 @@ void FitPointSourcingTest::testNonFiniteSubscribedPointsDoNotPoisonCircleFit()
     QVERIFY2(qAbs(col - 100.0) < 1.0 && qAbs(row - 100.0) < 1.0,
              "圆心应仍为 (100,100)");
     QVERIFY2(qAbs(radius - 20.0) < 1.0, "半径应仍为 20");
+}
+
+// 2026-11-12：圆保持 minEnclosingCircle 口径，但旧的剔除基准 |r_p - radius|
+// 对圆内合法采样点系统性偏大 —— 剔除会优先删圆内点而不是真正撑大半径的远点；
+// 且残差只统计保留点，剔得越多越好看。这条腿同时钉住「剔对点」与「指标诚实」。
+void FitPointSourcingTest::testCircleRejectionKeepsInnerPointsAndHonestResidual()
+{
+    constexpr double kPi = 3.14159265358979323846;
+    QVector<QPointF> pts = circlePoints(100.0, 100.0, 20.0, 64);
+    for (int i = 0; i < 6; ++i) {          // 圆内的合法采样点（不该被当成离群点）
+        const double a = 2.0 * kPi * i / 6.0;
+        pts.append(QPointF(100.0 + 8.0 * std::cos(a), 100.0 + 8.0 * std::sin(a)));
+    }
+    pts.append(QPointF(180.0, 100.0));      // 真正撑大外接圆的远点
+
+    QVector<double> xs;
+    QVector<double> ys;
+    for (const QPointF &p : pts) {
+        xs.append(p.x());
+        ys.append(p.y());
+    }
+
+    OpencvFitCircleNode node;
+    node.init();
+    node.setParam(QStringLiteral("minPoints"), 10);
+    node.setParam(QStringLiteral("rejectPoints"), 1);
+    node.setParam(QStringLiteral("rejectDistance"), 1.0);
+    node.setParam(QStringLiteral("inputMode"), 1);
+    node.setInputData(OpencvFitCircleNode::kPointXSlot, makeNumberArray(xs));
+    node.setInputData(OpencvFitCircleNode::kPointYSlot, makeNumberArray(ys));
+    node.setInputBinding(OpencvFitCircleNode::kPointXSlot, 42, 0);
+    node.setInputBinding(OpencvFitCircleNode::kPointYSlot, 42, 0);
+
+    QVERIFY(node.execute());
+    QCOMPARE(node.getParam(QStringLiteral("fitRejectedCount")).toInt(), 1);
+    QVERIFY2(qAbs(node.getParam(QStringLiteral("fitRadius")).toDouble() - 20.0) < 1.0,
+             "剔除远点后外接圆半径应回到 20");
+    const QStringList mask =
+        node.getParam(QStringLiteral("fitPointMask")).toString().split(',');
+    QCOMPARE(mask.size(), pts.size());
+    QCOMPARE(mask.count(QStringLiteral("0")), 1);
+    QCOMPARE(mask.last(), QStringLiteral("0"));   // 只有远点被剔，6 个圆内点仍是 1
+    QVERIFY2(node.getParam(QStringLiteral("fitResidual")).toDouble() > 1.0,
+             "残差必须计入被剔的远点，不能被剔除刷成 0");
+}
+
+// 2026-11-12：旧代码剔除下限写死 usable.size()-3，完全绕过 minPoints，
+// 能剔到剩 3 点（任意 3 点定一个圆、残差恒 0）报出「完美拟合」的假成功。
+void FitPointSourcingTest::testCircleRejectionCannotBypassMinPoints()
+{
+    QVector<QPointF> pts = circlePoints(100.0, 100.0, 20.0, 12);
+    for (int i = 0; i < 8; ++i)            // 一堆远点，旧判据会连圆上点一起剔
+        pts.append(QPointF(170.0 + i, 100.0 + i));
+
+    QVector<double> xs;
+    QVector<double> ys;
+    for (const QPointF &p : pts) {
+        xs.append(p.x());
+        ys.append(p.y());
+    }
+
+    OpencvFitCircleNode node;
+    node.init();
+    node.setParam(QStringLiteral("minPoints"), 10);
+    node.setParam(QStringLiteral("rejectPoints"), 100);
+    node.setParam(QStringLiteral("rejectDistance"), 0.5);
+    node.setParam(QStringLiteral("inputMode"), 1);
+    node.setInputData(OpencvFitCircleNode::kPointXSlot, makeNumberArray(xs));
+    node.setInputData(OpencvFitCircleNode::kPointYSlot, makeNumberArray(ys));
+    node.setInputBinding(OpencvFitCircleNode::kPointXSlot, 42, 0);
+    node.setInputBinding(OpencvFitCircleNode::kPointYSlot, 42, 0);
+
+    QVERIFY(node.execute());
+    QVERIFY2(node.getParam(QStringLiteral("fitPointCount")).toInt() >= 10,
+             "剔除后参与拟合的点数不能低于 minPoints（旧代码能剔到剩 3 点）");
 }
 
 QTEST_MAIN(FitPointSourcingTest)

@@ -8,6 +8,7 @@
 #include <QWidget>
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 #include <utility>
 #include <vector>
 
@@ -27,17 +28,24 @@ struct CircleChoice
     QVector<bool> usedMask;
 };
 
-/// 用一组点拟合最小外接圆：
-/// 先按整组求初拟合圆，把径向距离超过 rejectDistance 的点剔掉（最多 rejectPoints 个），
-/// 再用剩余点重拟合。默认 0/0 = 不剔除，保持原行为。
+/// 用一组点拟合最小外接圆（口径见 §15.5：圆保持 minEnclosingCircle，不换最小二乘）。
+///
+/// 2026-11-12 修三处与口径无关的真缺陷：
+/// ① 剔除基准：外接圆语义下所有点都在圆内/圆上，旧的 |r_p - radius| 对圆内合法
+///    采样点系统性偏大，剔除会优先删掉圆内点而不是真正撑大半径的远点。改为
+///    「移除该点后外接圆半径缩小多少」的留一法判据。
+/// ② 剔除下限：旧代码写死 usable.size()-3，完全绕过 minPoints 约束，能剔到
+///    剩 3 点（任意 3 点定一个圆、残差恒 0）报出「完美拟合」的假成功。
+/// ③ 残差统计：旧代码只统计保留点，剔得越多残差越小，fitResidual 变成可以
+///    自己刷出来的假读数；改为覆盖剔除前的全部有效输入点。
+///
+/// 默认 0/0 = 不剔除，数值与旧版一致。
 CircleChoice fitCircleGroup(const QVector<QPointF> &points, int needPoints,
                             int rejectPoints, double rejectDistance)
 {
     CircleChoice choice;
-    // 非有限点（NaN/Inf）必须在进入 OpenCV 之前滤掉（2026-11-12 审核）：
-    // cv::minEnclosingCircle 遇到 NaN 会产出 NaN 圆心/半径，而旧代码用
-    // points.size() 判退化，把坏点也算作有效点，退化检查形同虚设。
-    // usedMask 仍按输入点下标一一对应，被滤掉的点保持 false，下游可看出未参与拟合。
+    // 非有限点（NaN/Inf）必须在进入 OpenCV 之前滤掉；usedMask 仍按输入下标对应，
+    // 被滤掉的点保持 false，下游可看出未参与拟合。
     std::vector<cv::Point2f> usable;
     QVector<int> usableIndex;   // usable 里每个点在本组输入点中的下标
     usable.reserve(points.size());
@@ -53,42 +61,73 @@ CircleChoice fitCircleGroup(const QVector<QPointF> &points, int needPoints,
     if (usable.size() < needPoints || usable.size() < 3)
         return choice;
 
-    if (rejectPoints > 0 && rejectDistance > 0.0 && usable.size() > 3) {
+    // 残差对剔除前的全部有效点计算（③）
+    const std::vector<cv::Point2f> evalPoints = usable;
+    // 剔除后必须仍满足 minPoints（②）；参数下限是 5，故不会退化到 3 点
+    const size_t minKept = static_cast<size_t>(needPoints);
+
+    if (rejectPoints > 0 && rejectDistance > 0.0 && usable.size() > minKept) {
         cv::Point2f initialCenter;
         float initialRadius = 0.0f;
         cv::minEnclosingCircle(usable, initialCenter, initialRadius);
+        if (initialRadius > 0.0f) {
+            // 只有最外侧的点可能撑大外接圆：先按到圆心距离降序取有限候选，
+            // 再逐个做留一拟合，避免 O(n^2) 全扫（①）。
+            std::vector<size_t> order(usable.size());
+            std::iota(order.begin(), order.end(), size_t(0));
+            const size_t candidateCap = std::min<size_t>(
+                usable.size(), std::max<size_t>(size_t(rejectPoints) * 3, 8));
+            std::partial_sort(order.begin(), order.begin() + candidateCap, order.end(),
+                [&](size_t a, size_t b) {
+                    return std::hypot(usable[a].x - initialCenter.x,
+                                      usable[a].y - initialCenter.y)
+                         > std::hypot(usable[b].x - initialCenter.x,
+                                      usable[b].y - initialCenter.y);
+                });
 
-        std::vector<std::pair<double, size_t>> outliers;
-        for (size_t k = 0; k < usable.size(); ++k) {
-            const double dx = usable[k].x - initialCenter.x;
-            const double dy = usable[k].y - initialCenter.y;
-            const double residual = std::fabs(std::hypot(dx, dy) - initialRadius);
-            if (residual > rejectDistance)
-                outliers.emplace_back(residual, k);
-        }
-        if (!outliers.empty()) {
-            std::sort(outliers.begin(), outliers.end(),
-                      [](const auto &a, const auto &b) { return a.first > b.first; });
-            const size_t maxRemove = std::min({size_t(rejectPoints), outliers.size(),
-                                               usable.size() - 3});
-            std::vector<bool> removed(usable.size(), false);
-            for (size_t k = 0; k < maxRemove; ++k)
-                removed[outliers[k].second] = true;
-            std::vector<cv::Point2f> kept;
-            QVector<int> keptIndex;
-            kept.reserve(usable.size() - maxRemove);
-            keptIndex.reserve(static_cast<int>(usable.size() - maxRemove));
-            for (size_t k = 0; k < usable.size(); ++k) {
-                if (!removed[k]) {
-                    kept.push_back(usable[k]);
-                    keptIndex.append(usableIndex.at(static_cast<int>(k)));
-                }
+            std::vector<std::pair<double, size_t>> outliers;
+            for (size_t c = 0; c < candidateCap; ++c) {
+                const size_t k = order[c];
+                std::vector<cv::Point2f> without;
+                without.reserve(usable.size() - 1);
+                for (size_t j = 0; j < usable.size(); ++j)
+                    if (j != k) without.push_back(usable[j]);
+                if (without.size() < 3) break;
+                cv::Point2f c2;
+                float r2 = 0.0f;
+                cv::minEnclosingCircle(without, c2, r2);
+                const double shrink = double(initialRadius) - double(r2);
+                if (shrink > rejectDistance)
+                    outliers.emplace_back(shrink, k);
             }
-            usable.swap(kept);
-            usableIndex = keptIndex;
-            choice.rejectedPoints = static_cast<int>(maxRemove);
+            if (!outliers.empty()) {
+                std::sort(outliers.begin(), outliers.end(),
+                          [](const auto &a, const auto &b) { return a.first > b.first; });
+                const size_t maxRemove = std::min({size_t(rejectPoints), outliers.size(),
+                                                   usable.size() - minKept});
+                std::vector<bool> removed(usable.size(), false);
+                for (size_t k = 0; k < maxRemove; ++k)
+                    removed[outliers[k].second] = true;
+                std::vector<cv::Point2f> kept;
+                QVector<int> keptIndex;
+                kept.reserve(usable.size() - maxRemove);
+                keptIndex.reserve(static_cast<int>(usable.size() - maxRemove));
+                for (size_t k = 0; k < usable.size(); ++k) {
+                    if (!removed[k]) {
+                        kept.push_back(usable[k]);
+                        keptIndex.append(usableIndex.at(static_cast<int>(k)));
+                    }
+                }
+                usable.swap(kept);
+                usableIndex = keptIndex;
+                choice.rejectedPoints = static_cast<int>(maxRemove);
+            }
         }
     }
+
+    // 剔除后重新检查：不能因为剔除而绕过 minPoints 约束
+    if (usable.size() < minKept)
+        return choice;
 
     cv::Point2f center;
     float radius = 0.0f;
@@ -97,7 +136,7 @@ CircleChoice fitCircleGroup(const QVector<QPointF> &points, int needPoints,
         return choice;
 
     double sumSquares = 0.0;
-    for (const cv::Point2f &point : usable) {
+    for (const cv::Point2f &point : evalPoints) {
         const double distance = std::hypot(point.x - center.x, point.y - center.y);
         const double residual = distance - radius;
         sumSquares += residual * residual;
@@ -107,7 +146,8 @@ CircleChoice fitCircleGroup(const QVector<QPointF> &points, int needPoints,
     choice.col = center.x;
     choice.row = center.y;
     choice.radius = radius;
-    choice.residual = usable.empty() ? 0.0 : std::sqrt(sumSquares / usable.size());
+    choice.residual = evalPoints.empty() ? 0.0
+                        : std::sqrt(sumSquares / evalPoints.size());
     choice.usedPoints = static_cast<int>(usable.size());
     choice.usedMask = QVector<bool>(points.size(), false);
     for (int index : usableIndex)
