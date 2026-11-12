@@ -1252,6 +1252,12 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
         for (int p = 0; p < node->logicalOutputPortCount(); ++p)
             node->setOutputData(p, QSharedPointer<DataObject>());
 
+        // 节点即将执行（2026-11-12）：给需要确定性时机的订阅方一个「开始前」钩子。
+        // 只传指针；参数此刻仍是本轮解析值，订阅方不应读参数（见头文件声明）。
+        // 放在 execute() 之前而非 executeNode() 入口，是为了保证参数解析、输出清空
+        // 都已完成，订阅方看到的就是「马上要跑这个节点」。
+        emit nodeExecutionStarted(node);
+
         success = node->execute();
 
         // 「本轮结果可用」：成功，或判 NG 但结果有效（结果判断类算子）。

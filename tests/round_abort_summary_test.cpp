@@ -108,15 +108,17 @@ void RoundAbortSummaryTest::abortedRoundHasNoSummaryRow()
 
     auto token = FlowExecutorToken::create(new FlowExecutor());
     FlowExecutor &exec = *token->executor();
-    // 2026-11-12 flaky 根因：旧版监听 nodeExecuted（节点**执行完**才 emit）置
-    // slowRan，可本腿验证的是「停止落在轮内、节点还在跑」——stop 越成功，
-    // slowRan 越可能是 false，断言语义自相矛盾。build/Testing 里两次失败日志
-    // 都指向这一条（'slowRan' returned FALSE），高负载下稳定翻车。
-    // 改为监听 executionStarted：整轮启动、在第一个节点之前 emit，不受中止影响；
+    // 2026-11-12：等产品侧新增的 nodeExecutionStarted（节点即将执行、在
+    // node->execute() 之前 emit），而不是靠 qWait 猜「节点是否已经在跑」。
+    // 旧版先监听 nodeExecuted（执行完才 emit）再盲等 500ms，断言语义自相矛盾；
+    // 上一批改成整轮启动 + 500ms 仍留着墙钟窗口，本批彻底去掉。
     // DirectConnection 在工作线程写、主线程读，用 atomic 消掉数据竞争。
-    std::atomic_bool roundStarted{false};
-    QObject::connect(&exec, &FlowExecutor::executionStarted, &exec,
-                     [&roundStarted]() { roundStarted.store(true); },
+    std::atomic_bool slowStarted{false};
+    QObject::connect(&exec, &FlowExecutor::nodeExecutionStarted, &exec,
+                     [&slowStarted, slow](NodeBase *n) {
+                         if (n == slow)
+                             slowStarted.store(true);
+                     },
                      Qt::DirectConnection);
     const int beforeRows = summaryRows(QDateTime::currentDateTime().addDays(-1),
                                        QDateTime::currentDateTime().addSecs(60));
@@ -124,10 +126,9 @@ void RoundAbortSummaryTest::abortedRoundHasNoSummaryRow()
     exec.setFlowMode(FlowMode::SoftwareTrigger);
     exec.setFlowScene(&scene);
     exec.startExecution();
-    // 先确定性等整轮启动：消掉「启动延迟」对 500ms 窗口的侵蚀，
-    // 同时这一句本身承担「防空转」职责（流程真的启动过才继续）。
-    QTRY_VERIFY_WITH_TIMEOUT(roundStarted.load(), 5000);
-    QTest::qWait(500);          // 0.5s < 2s：此时 slow 仍在延时中，stop 落在轮内
+    // slow 刚进入 2s 延时、尚未执行完 ⇒ stop 必然落在轮内。
+    // 这一句同时承担「防空转」职责（节点真的开始执行过才继续）。
+    QTRY_VERIFY_WITH_TIMEOUT(slowStarted.load(), 5000);
     exec.stopExecution();
     bool finished = exec.wait(15000);
     if (!finished) {
@@ -137,8 +138,7 @@ void RoundAbortSummaryTest::abortedRoundHasNoSummaryRow()
     exec.setFlowScene(nullptr);
     QCoreApplication::processEvents();
 
-    // 不再断言 slowRan（见上方注释：它与「轮内中止」语义相反）。
-    // 上面的 QTRY 已保证流程确实启动过，本腿不会空转。
+    // 上面的 QTRY 已保证 slow 节点确实开始执行过，本腿不会空转。
     // 差分断言：这一轮不得新增整轮汇总行（绝对值会被其它用例/残留干扰）
     const int afterRows = summaryRows(QDateTime::currentDateTime().addDays(-1),
                                       QDateTime::currentDateTime().addSecs(60));
@@ -205,9 +205,10 @@ void RoundAbortSummaryTest::abortedLoopAtTailHasNoSummaryRow()
     auto token = FlowExecutorToken::create(new FlowExecutor());
     FlowExecutor &exec = *token->executor();
     // 断言停止确实落在轮内（否则"没有汇总"可能只是因为压根没跑）
-    std::atomic_bool bodyStarted{false};   // 同上：工作线程写、主线程读
-    QObject::connect(&exec, &FlowExecutor::nodeExecuted, &exec,
-                     [&bodyStarted, body](NodeBase *n, bool) {
+    // 等循环体**开始执行**（nodeExecutionStarted），不再靠 300ms 墙钟窗口
+    std::atomic_bool bodyStarted{false};   // 工作线程写、主线程读
+    QObject::connect(&exec, &FlowExecutor::nodeExecutionStarted, &exec,
+                     [&bodyStarted, body](NodeBase *n) {
                          if (n == body)
                              bodyStarted.store(true);
                      },
@@ -216,7 +217,8 @@ void RoundAbortSummaryTest::abortedLoopAtTailHasNoSummaryRow()
     exec.setFlowMode(FlowMode::SoftwareTrigger);
     exec.setFlowScene(&scene);
     exec.startExecution();
-    QTest::qWait(300);          // 落在第一轮迭代的 600ms 延时里
+    // body 刚进入 600ms 延时、尚未执行完 ⇒ stop 落在第一轮迭代内
+    QTRY_VERIFY_WITH_TIMEOUT(bodyStarted.load(), 5000);
     exec.stopExecution();
     bool finished = exec.wait(15000);
     if (!finished) {
@@ -228,7 +230,7 @@ void RoundAbortSummaryTest::abortedLoopAtTailHasNoSummaryRow()
 
     const int after = summaryRows(QDateTime::currentDateTime().addDays(-1),
                                   QDateTime::currentDateTime().addSecs(60));
-    QVERIFY2(bodyStarted.load(), "循环体没跑起来：本腿没验到'轮内中止'这条路径");
+    // 上面的 QTRY 已保证循环体确实开始执行过，本腿不会空转
     QCOMPARE(after, before);   // 中止轮不得写汇总行
 }
 
@@ -266,12 +268,19 @@ void RoundAbortSummaryTest::abortedSubFlowIsNotReportedAsFailure()
     FlowExecutor &exec = *token->executor();
     std::atomic_bool callerFailed{false};   // 工作线程写、主线程读
     // worker 线程（DirectConnection）写、主线程读：用 atomic 消掉数据竞争。
-    std::atomic<bool> memberStarted { false };   // 断言停止确实落在"子流程正在执行"里
+    // memberStarted 改挂 nodeExecutionStarted（m1 **开始执行**）：
+    // 旧版挂在 nodeExecuted（执行完才 emit），所以注释里才写「不能轮询等它、
+    // 只能靠 300ms 墙钟窗口」——那个限制随新信号消失。
+    std::atomic<bool> memberStarted { false };   // 停止确实落在"子流程正在执行"里
     QStringList errors;
-    QObject::connect(&exec, &FlowExecutor::nodeExecuted, &exec,
-                     [&callerFailed, &memberStarted, caller, m1](NodeBase *n, bool ok) {
+    QObject::connect(&exec, &FlowExecutor::nodeExecutionStarted, &exec,
+                     [&memberStarted, m1](NodeBase *n) {
                          if (n == m1)
-                             memberStarted = true;
+                             memberStarted.store(true);
+                     },
+                     Qt::DirectConnection);
+    QObject::connect(&exec, &FlowExecutor::nodeExecuted, &exec,
+                     [&callerFailed, caller](NodeBase *n, bool ok) {
                          if (n == caller && !ok)
                              callerFailed.store(true);
                      },
@@ -283,10 +292,8 @@ void RoundAbortSummaryTest::abortedSubFlowIsNotReportedAsFailure()
     exec.setFlowMode(FlowMode::SoftwareTrigger);
     exec.setFlowScene(&scene);
     exec.startExecution();
-    // 不能轮询等 memberStarted：该标志在 nodeExecuted（m1 执行完）才置位，
-    // 等它等于让流程跑完再停，会写出正常汇总行。保持固定短等待，靠 m1 的
-    // 2 秒延时窗口保证「停止落在轮内」；实测单跑与 -j4 并行都稳定。
-    QTest::qWait(300);
+    // m1 刚进入 2s 延时、尚未执行完 ⇒ stop 落在子流程执行中（完全确定性）
+    QTRY_VERIFY_WITH_TIMEOUT(memberStarted.load(), 5000);
     exec.stopExecution();
     bool finished = exec.wait(15000);
     if (!finished) {
@@ -296,7 +303,7 @@ void RoundAbortSummaryTest::abortedSubFlowIsNotReportedAsFailure()
     exec.setFlowScene(nullptr);
     QCoreApplication::processEvents();
 
-    QVERIFY2(memberStarted, "子流程成员没跑起来：本腿没验到'轮内中止'这条路径");
+    // 上面的 QTRY 已保证子流程成员确实开始执行过，本腿不会空转
     // 中止不得报成节点失败，也不得出现"节点 … 执行失败"的错误
     QVERIFY2(!callerFailed.load(), "子流程被中止时调用点被记成执行失败（P2-1 残留）");
     for (const QString &e : errors) {

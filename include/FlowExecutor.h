@@ -176,6 +176,13 @@ signals:
     /// P3d 期（终局撤除）：令牌收尾超时——已放弃强杀，执行器进入可观测终态，进程继续。
     /// **不要**用本信号替代 executionStopped：后者会解锁图，而此刻工作线程可能仍在跑。
     void executionAbandoned(const QString &reason);
+    /// 节点即将执行：在 node->execute() 之前 emit（参数引用解析与输出清空之后）。
+    /// 只传节点指针，供需要「节点确实开始执行」这一**确定性时机**的订阅方使用
+    /// （例如中止类回归测试，避免靠 qWait 猜节点是否已进入执行）。
+    /// 订阅方不得在此槽内读取节点参数：此刻参数仍是本轮解析值，尚未经
+    /// ParamRefRestorer 还原（与 nodeExecuted 的时序约束不同）。
+    /// 与 nodeExecuted 的区别：后者在节点执行完、参数还原之后才发。
+    void nodeExecutionStarted(NodeBase *node);
     void nodeExecuted(NodeBase *node, bool success);
     void executionFinished();
     void imageReady(NodeBase *node, const HalconCpp::HImage &image);
