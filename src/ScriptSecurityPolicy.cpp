@@ -22,10 +22,13 @@
 #include <QTextCursor>
 #include <QFont>
 #include <QThread>
+#include <QMutexLocker>
+#include <QWaitCondition>
 #include <QProcess>
 #include <QElapsedTimer>
 #include <QStringList>
 #include <algorithm>
+#include <memory>
 #include <vector>
 
 #if defined(Q_OS_WIN)
@@ -211,6 +214,24 @@ bool showScriptConfirmationOnGuiThread(const QString &language, const QString &s
 
     return dlg.exec() == QDialog::Accepted;
 }
+
+/// 跨线程审批的等待握手（2026-11-12）：worker 先等 GUI「接手」，再等「用户决定」。
+/// 必须分两段——只等一次的话，用户认真看脚本超过超时时间就会被误判成 GUI 卡死。
+struct ApprovalHandshake
+{
+    QMutex mutex;
+    QWaitCondition cond;
+    bool taken = false;      ///< GUI 已开始处理（弹窗已经建在 GUI 线程上）
+    bool done = false;       ///< 用户已作出决定
+    bool accepted = false;
+    bool abandoned = false;  ///< worker 已放弃（超时/流程已停），GUI 见到就别再弹窗骚扰
+};
+
+/// GUI 必须在此时间内接手审批。超过说明 GUI 线程被阻塞——典型场景是
+/// MainWindow 卡在 FlowExecutor::wait()（有 6 处，最长 15s，QThread::wait 不泵事件）。
+constexpr int kGuiTakeoverTimeoutMs = 500;
+/// 用户阅读脚本可能很久，这是兜底上限，不是交互预期。
+constexpr int kUserDecisionTimeoutMs = 300000;
 }   // namespace
 
 bool ScriptSecurityPolicy::scriptApproved(const QString &language, const QString &script) const
@@ -241,13 +262,50 @@ bool ScriptSecurityPolicy::requestConfirmation(const QString &language, const QS
         return true;   // 无 QApplication（如测试环境）：不弹窗直接放行
     }
 
-    // 本函数会从执行线程调用（ScriptNode::run），而 QWidget 必须在其所属 GUI 线程创建：
-    // 非 GUI 线程时阻塞式切回主线程弹窗并取回结果（默认拒绝语义不变）。
+    // 本函数会从执行线程调用（ScriptNode::run），而 QWidget 必须在其所属 GUI 线程创建。
+    //
+    // 2026-11-12 修死锁：旧实现用 Qt::BlockingQueuedConnection 无超时等待。GUI 线程若此刻
+    // 正阻塞在 FlowExecutor::wait()（MainWindow 有 6 处，最长 15s；QThread::wait 不泵事件），
+    // 它既不会处理这条投递、也不会显示弹窗 ⇒ 工作线程永远等不到返回。现场表现是
+    // 「流程未能在 N 秒内停止」——因为弹窗根本没出现，用户看不到任何可操作的东西。
+    //
+    // 改为 queued 投递 + **两段有界等待**：
+    //   ① GUI 接手（kGuiTakeoverTimeoutMs）：超时即说明 GUI 被阻塞 ⇒ fail-closed；
+    //   ② 用户决定（kUserDecisionTimeoutMs 兜底）：GUI 已接手后用户看多久都行。
+    // 任何超时都按「拒绝」处理，绝不放行；拒绝不写同意缓存，下一轮仍会重新询问。
     bool accepted = false;
     if (QThread::currentThread() != app->thread()) {
-        QMetaObject::invokeMethod(app, [&accepted, &language, &script]() {
-            accepted = showScriptConfirmationOnGuiThread(language, script);
-        }, Qt::BlockingQueuedConnection);
+        auto hs = std::make_shared<ApprovalHandshake>();
+        QMetaObject::invokeMethod(app, [hs, language, script]() {
+            {
+                QMutexLocker locker(&hs->mutex);
+                if (hs->abandoned)
+                    return;   // worker 已放弃，别弹一个没人等的窗
+                hs->taken = true;
+            }
+            hs->cond.wakeAll();   // 通知 worker：GUI 已接手，可以去等用户了
+            const bool ok = showScriptConfirmationOnGuiThread(language, script);
+            {
+                QMutexLocker locker(&hs->mutex);
+                hs->accepted = ok;
+                hs->done = true;
+            }
+            hs->cond.wakeAll();   // 通知 worker：用户已决定
+        }, Qt::QueuedConnection);
+
+        QMutexLocker locker(&hs->mutex);
+        if (!hs->cond.wait(&hs->mutex, kGuiTakeoverTimeoutMs) || !hs->taken) {
+            hs->abandoned = true;
+            qWarning() << "[ScriptSecurityPolicy] GUI 线程在" << kGuiTakeoverTimeoutMs
+                       << "ms 内未接管脚本审批（很可能正阻塞在 FlowExecutor::wait），"
+                          "本次按拒绝处理（fail-closed）";
+            return false;
+        }
+        while (!hs->done) {
+            if (!hs->cond.wait(&hs->mutex, kUserDecisionTimeoutMs))
+                break;   // 兜底超时：同样按拒绝处理
+        }
+        accepted = hs->done && hs->accepted;
     } else {
         accepted = showScriptConfirmationOnGuiThread(language, script);
     }

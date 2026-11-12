@@ -1341,7 +1341,8 @@ endif()
 # 脚本执行安全策略单元测试（语言白名单 / 解释器隔离 / 环境清理 / 审计 / 总开关）
 if(MSVC)
     add_executable(script_security_test tests/script_security_test.cpp)
-    target_link_libraries(script_security_test PRIVATE vfp_core Qt6::Test)
+    # Qt6::Widgets 显式显链：审批死锁腿需要 QApplication（2026-11-12）
+target_link_libraries(script_security_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
     vfp_add_qtest(NAME ScriptSecurityPolicyTest TARGET script_security_test)
 endif()
 

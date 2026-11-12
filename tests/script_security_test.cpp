@@ -1,13 +1,17 @@
 #include "ScriptSecurityPolicy.h"
 
 #include <QtTest/QtTest>
+#include <QApplication>
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QFile>
 #include <QFileInfo>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QSettings>
 #include <QTemporaryDir>
+#include <QThread>
+#include <atomic>
 
 /// ScriptSecurityPolicy 行为验证
 ///
@@ -38,6 +42,8 @@ private slots:
     // 放在套件末尾：defaults 腿要 load() 重灌全局状态，重灌面只对来到它后面的腿负责。
     void requireConfirmation_defaultsOn();
     void approvalProof_sessionOncePerContent();
+    // 2026-11-12：GUI 线程阻塞时审批必须有界返回（旧版 BlockingQueuedConnection 会互等挂死）
+    void approvalFailsClosedWhenGuiThreadBlocked();
 };
 
 void ScriptSecurityPolicyTest::initTestCase()
@@ -291,6 +297,51 @@ void ScriptSecurityPolicyTest::approvalProof_sessionOncePerContent()
     p.setRequireConfirmation(savedConfirm);
 }
 
-QTEST_GUILESS_MAIN(ScriptSecurityPolicyTest)
+// 2026-11-12：由 QTEST_GUILESS_MAIN 改为 QTEST_MAIN。
+// 原因：requestConfirmation 的跨线程审批路径只在存在 QApplication 时才走
+// （guiless 下 qobject_cast<QApplication*> 为空，直接「无头放行」），
+// 而「GUI 被阻塞时审批不能让整窗挂死」正是必须验证的行为。
+// 其余 9 条腿都不依赖 GUI，改后照常通过；CMake 侧已显式链 Qt6::Widgets。
+// 2026-11-12：旧实现用 Qt::BlockingQueuedConnection 无超时等 GUI 弹窗。GUI 线程若正阻塞在
+// FlowExecutor::wait()（MainWindow 有 6 处，最长 15s；QThread::wait 不泵事件），投递过去的
+// 弹窗根本不会执行，执行线程永远等不到返回——现场表现是「流程未能在 N 秒内停止」，
+// 而用户看不到任何可操作的东西。
+// 这条腿把 GUI 线程按住 1.5s（远超 500ms 接管超时），验证审批有界返回且 fail-closed。
+void ScriptSecurityPolicyTest::approvalFailsClosedWhenGuiThreadBlocked()
+{
+    auto *app = qobject_cast<QApplication *>(QCoreApplication::instance());
+    QVERIFY2(app, "本套件未创建 QApplication，无法验证 GUI 线程审批路径");
+
+    ScriptSecurityPolicy &policy = ScriptSecurityPolicy::instance();
+    const bool saved = policy.requireConfirmation();
+    policy.setRequireConfirmation(true);
+
+    // 唯一内容：确保走「未缓存」路径，不被前面的会话级同意命中
+    const QString script = QStringLiteral("print('approval-timeout-probe-%1')")
+                               .arg(QDateTime::currentMSecsSinceEpoch());
+
+    std::atomic_bool returned { false };
+    std::atomic_bool accepted { true };
+    QThread *worker = QThread::create([&policy, &returned, &accepted, script]() {
+        accepted.store(policy.requestConfirmation(QStringLiteral("Python"), script));
+        returned.store(true);
+    });
+    worker->start();
+
+    // 阻塞 GUI 线程（本线程），模拟卡在 FlowExecutor::wait() 里
+    QThread::msleep(1500);
+    const bool didReturn = returned.load();
+    const bool wasAccepted = accepted.load();
+    // 先收线程再断言：避免断言失败提前 return 时留下未 join 的线程
+    worker->wait(5000);
+    delete worker;
+
+    policy.setRequireConfirmation(saved);
+
+    QVERIFY2(didReturn, "GUI 线程阻塞时审批必须超时返回，不能无限等（会挂死整窗）");
+    QVERIFY2(!wasAccepted, "接管超时必须 fail-closed（拒绝脚本），不能放行");
+}
+
+QTEST_MAIN(ScriptSecurityPolicyTest)
 
 #include "script_security_test.moc"
