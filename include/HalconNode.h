@@ -89,6 +89,9 @@ public:
     // ---- 声明式参数系统 ----
     /// 注册单个参数描述（默认值会自动写入 m_params）
     void registerParam(const ParamSpec &spec);
+    /// 补充参数说明（参数面板 tooltip 与「帮助信息」页共用）；参数名不存在时忽略。
+    /// 用于 registerParams 之后再补说明，避免每个节点重复抄整份 ParamSpec。
+    void setParamTooltip(const QString &name, const QString &tooltip);
     /// 批量注册参数描述
     void registerParams(const ParamSpecList &specs);
     /// 获取参数描述列表

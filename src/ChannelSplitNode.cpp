@@ -68,9 +68,24 @@ bool ChannelSplitNode::process()
 
         const int colorSpace = getParam(QStringLiteral("colorSpace")).toInt();
 
+        // HSV 需要恰好 3 通道，且 OpencvUtil::himageToMat 只支持 1/3 通道
+        // （2026-11-12 审核）。旧条件 `ch >= 3` 会把 4 通道也放进转换分支，
+        // himageToMat 返回空 Mat 后 workImage 保持原图 —— 参数说 HSV、实际输出
+        // RGB，且完全不报错。超过 kMaxChannels 也不能静默截断。
+        if (colorSpace == 1 && ch != 3) {
+            VFP_DEBUG << "ChannelSplitNode: HSV requires exactly 3 channels, got" << ch;
+            m_params[QStringLiteral("moduleStatus")] = false;
+            return false;
+        }
+        if (ch > kMaxChannels) {
+            VFP_DEBUG << "ChannelSplitNode: too many channels:" << ch;
+            m_params[QStringLiteral("moduleStatus")] = false;
+            return false;
+        }
+
         // HSV 模式用 OpenCV（HALCON TransFromRgb 的 H 通道有已知计算偏差）
         HImage workImage = inputImage;
-        if (colorSpace == 1 && ch >= 3) {
+        if (colorSpace == 1) {
             cv::Mat src = OpencvUtil::himageToMat(inputImage);
             if (!src.empty() && src.channels() >= 3) {
                 cv::Mat hsv;

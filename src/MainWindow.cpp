@@ -3383,7 +3383,7 @@ QString MainWindow::buildNodeHelpHtml(NodeBase *node) const
     html += QStringLiteral("<p><b>输入端口</b></p><ul>");
     const QList<Port *> inputs = node->inputPorts();
     if (inputs.isEmpty()) {
-        html += QStringLiteral("<li>无</li>");
+        html += HelpViewer::emptyListEntry();
     } else {
         for (Port *port : inputs) {
             QString text = port->name().toHtmlEscaped();
@@ -3403,7 +3403,7 @@ QString MainWindow::buildNodeHelpHtml(NodeBase *node) const
     html += QStringLiteral("<p><b>输出端口</b></p><ul>");
     const QList<Port *> outputs = node->outputPorts();
     if (outputs.isEmpty()) {
-        html += QStringLiteral("<li>无</li>");
+        html += HelpViewer::emptyListEntry();
     } else {
         for (Port *port : outputs)
             html += QStringLiteral("<li>%1</li>").arg(port->name().toHtmlEscaped());
@@ -3413,23 +3413,64 @@ QString MainWindow::buildNodeHelpHtml(NodeBase *node) const
     if (auto *halcon = qobject_cast<HalconNode *>(node)) {
         const ParamSpecList &specs = halcon->paramSpecs();
         if (!specs.isEmpty()) {
-            html += QStringLiteral("<p><b>运行参数</b></p><ul>");
-            int shown = 0;
+            // 参数说明按「参数 / 当前值 / 取值范围（含默认）」三列展开，且不再截断 12 项：
+            // 旧版只列前 12 项且没有范围/默认值，现场对着帮助页无法核对"该填多少"。
+            html += QStringLiteral(
+                "<p><b>运行参数</b></p>"
+                "<table border='1' cellspacing='0' cellpadding='3' width='100%'>"
+                "<tr><th align='left'>参数</th><th align='left'>当前值</th>"
+                "<th align='left'>取值范围 / 默认</th><th align='left'>说明</th></tr>");
             for (const ParamSpec &spec : specs) {
                 const QString label = spec.label.isEmpty() ? spec.name : spec.label;
-                html += QStringLiteral("<li>%1 = %2</li>")
-                            .arg(label.toHtmlEscaped(),
-                                 halcon->getParam(spec.name).toString().toHtmlEscaped());
-                if (++shown >= 12) {
-                    if (specs.size() > shown)
-                        html += QStringLiteral("<li>…（共 %1 项，完整参数见模块配置窗）</li>")
-                                    .arg(specs.size());
-                    break;
+                QString current = halcon->getParam(spec.name).toString();
+                if (spec.type == ParamType::Enum && !spec.enumValues.isEmpty()) {
+                    // 枚举参数存的是索引：显示文本而不是裸数字，否则帮助页与面板对不上
+                    current = HelpViewer::enumValueText(spec.enumValues,
+                                                        halcon->getParam(spec.name).toInt());
                 }
+                if (!spec.unit.isEmpty() && !current.isEmpty())
+                    current += QLatin1Char(' ') + spec.unit;
+
+                QString range;
+                if (spec.hasRange) {
+                    range = QStringLiteral("%1 ~ %2")
+                                .arg(spec.minValue.toString(), spec.maxValue.toString());
+                }
+                const QString def = spec.defaultValue.toString();
+                if (!def.isEmpty())
+                    range += range.isEmpty() ? QStringLiteral("默认 %1").arg(def)
+                                             : QStringLiteral("，默认 %1").arg(def);
+                if (range.isEmpty())
+                    range = QStringLiteral("—");
+
+                html += QStringLiteral("<tr><td>%1</td><td>%2</td><td>%3</td><td>%4</td></tr>")
+                            .arg(label.toHtmlEscaped(), current.toHtmlEscaped(),
+                                 range.toHtmlEscaped(), spec.tooltip.toHtmlEscaped());
+            }
+            html += QStringLiteral("</table>");
+        }
+
+        // 结果字段：与「模块结果」页签同源（resultDisplayFields），说明该模块会产出哪些结果，
+        // 便于在运行界面里绑定。分组型（逐点/逐目标）只给名称，不展开逐项。
+        const QVector<NodeResultField> fields = node->resultDisplayFields();
+        if (!fields.isEmpty()) {
+            html += QStringLiteral("<p><b>结果字段</b></p><ul>");
+            for (const NodeResultField &field : fields) {
+                QString text = field.label.toHtmlEscaped();
+                if (!field.unit.isEmpty())
+                    text += QStringLiteral("（%1）").arg(field.unit.toHtmlEscaped());
+                if (!field.group.isEmpty())
+                    text += QStringLiteral(" — 逐项：%1").arg(field.group.toHtmlEscaped());
+                if (field.kind == NodeResultField::Status)
+                    text += QStringLiteral(" — OK/NG");
+                html += QStringLiteral("<li>%1</li>").arg(text);
             }
             html += QStringLiteral("</ul>");
         }
     }
+
+    html += QStringLiteral(
+        "<p style='color:#888'>提示：参数在模块配置窗中修改后立即生效；按 F1 打开完整使用手册。</p>");
 
     return html;
 }

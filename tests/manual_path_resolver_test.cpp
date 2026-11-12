@@ -32,6 +32,7 @@ private slots:
     void testResolveFirstReadableWins();      // 首个存在且可读者胜出（红臂靶腿）
     void testResolveNotReadableSkips();       // 目录形跳过、后位读者胜出
     void testResolveEmptyWhenNoneReadable();  // 全不可读 → 空串
+    void testQrcFallbackPathIsReallyReadable();  // 兜底不是死路径
 };
 
 void ManualPathResolverTest::testCandidateChainOrderAndPaths()
@@ -41,7 +42,7 @@ void ManualPathResolverTest::testCandidateChainOrderAndPaths()
         QStringLiteral("/base/dir/docs/用户操作手册.md"),
         QStringLiteral("docs/用户操作手册.md"),
         QStringLiteral("/base/dir/用户操作手册.md"),
-        QStringLiteral(":/用户操作手册.md"),
+        QStringLiteral(":/docs/用户操作手册.md"),
     }));
 }
 
@@ -82,6 +83,19 @@ void ManualPathResolverTest::testResolveEmptyWhenNoneReadable()
         QStringLiteral("c:/definitely/not/here/manual-two.md"),
     });
     QVERIFY(ManualPathResolver::resolveMarkdown(paths).isEmpty());
+}
+
+// 2026-11-12 审核：旧候选链末位写 :/用户操作手册.md，而 CMake 生成物里的 qrc alias
+// 是 docs/用户操作手册.md。原来的字符串腿只比文本，看不出这个资源**根本打不开**，
+// 于是「嵌入资源兜底」长期是死路径。这条腿直接向 Qt 资源系统要文件。
+void ManualPathResolverTest::testQrcFallbackPathIsReallyReadable()
+{
+    const QString p = ManualPathResolver::candidatePaths(QString()).last();
+    QVERIFY2(QFile::exists(p),
+             qPrintable(QStringLiteral("qrc 兜底路径打不开：%1").arg(p)));
+    QFile f(p);
+    QVERIFY(f.open(QIODevice::ReadOnly | QIODevice::Text));
+    QVERIFY2(!f.readAll().isEmpty(), "qrc 手册内容为空");
 }
 
 QTEST_MAIN(ManualPathResolverTest)

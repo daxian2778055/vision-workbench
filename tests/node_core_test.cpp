@@ -132,6 +132,10 @@ private slots:
     void testFormulaEvaluation();
     void testImageReadAddSingleLocalFile();
     void testChannelSplitAndMergeRoundtrip();
+    void testFitRoiBoundary_data();
+    void testFitRoiBoundary();
+    void testFitFailureClearsResults_data();
+    void testFitFailureClearsResults();
 
 private:
     void compareParams(HalconNode *node1, HalconNode *node2, const QStringList &excludeKeys = {});
@@ -1796,15 +1800,21 @@ void NodeCoreTest::testRemainingResultDisplaySpecs()
     OpencvFitLineNode fitLine;
     fitLine.init();
     const QVector<NodeResultField> fitLineSpec = fitLine.resultDisplayFields();
-    QCOMPARE(int(fitLineSpec.size()), 11);
+    QCOMPARE(int(fitLineSpec.size()), 14);
     QVERIFY2(containsKey(fitLineSpec, QStringLiteral("fitAngle")), "直线拟合规范缺少角度");
-    QVERIFY2(containsKey(fitLineSpec, QStringLiteral("fitPointCount")), "直线拟合规范缺少点数");
+    QVERIFY2(containsKey(fitLineSpec, QStringLiteral("fitInputCount")), "直线拟合规范缺少拟合点数");
+    QVERIFY2(containsKey(fitLineSpec, QStringLiteral("fitResidual")), "直线拟合规范缺少残差");
+    QVERIFY2(containsKey(fitLineSpec, QStringLiteral("fitStatus")), "直线拟合规范缺少拟合状态");
+    QVERIFY2(containsKey(fitLineSpec, QStringLiteral("fitMatchedCount")), "直线拟合规范缺少匹配点数");
 
     OpencvFitCircleNode fitCircle;
     fitCircle.init();
     const QVector<NodeResultField> fitCircleSpec = fitCircle.resultDisplayFields();
-    QCOMPARE(int(fitCircleSpec.size()), 11);
+    QCOMPARE(int(fitCircleSpec.size()), 16);
     QVERIFY2(containsKey(fitCircleSpec, QStringLiteral("fitRadius")), "圆拟合规范缺少半径");
+    QVERIFY2(containsKey(fitCircleSpec, QStringLiteral("fitResidual")), "圆拟合规范缺少残差");
+    QVERIFY2(containsKey(fitCircleSpec, QStringLiteral("fitStartAngle")), "圆拟合规范缺少起始角度");
+    QVERIFY2(containsKey(fitCircleSpec, QStringLiteral("fitAngleRange")), "圆拟合规范缺少角度范围");
 
     OpencvQrNode qr;
     qr.init();
@@ -3110,6 +3120,153 @@ void NodeCoreTest::testImageArithAndHatOpenCv()
 }
 
 // 通道分割/合并（VM「图像分割」类对标）：split → merge 往返字节级相等 + 边界判失败
+void NodeCoreTest::testFitRoiBoundary_data()
+{
+    QTest::addColumn<bool>("circle");
+    QTest::addColumn<QRect>("roi");
+    QTest::addColumn<bool>("expectedOk");
+    for (bool circle : {false, true}) {
+        const QByteArray prefix = circle ? "circle-" : "line-";
+        QTest::newRow((prefix + "full-image").constData()) << circle << QRect(0, 0, 0, 0) << true;
+        QTest::newRow((prefix + "zero-width").constData()) << circle << QRect(400, 400, 0, 50) << true;
+        QTest::newRow((prefix + "zero-height").constData()) << circle << QRect(400, 400, 50, 0) << true;
+        QTest::newRow((prefix + "inside").constData()) << circle << QRect(130, 100, 90, 100) << true;
+        QTest::newRow((prefix + "clip-right").constData()) << circle << QRect(130, 100, 300, 100) << true;
+        QTest::newRow((prefix + "clip-bottom").constData()) << circle << QRect(130, 100, 90, 300) << true;
+        QTest::newRow((prefix + "clip-both").constData()) << circle << QRect(130, 100, 300, 300) << true;
+        QTest::newRow((prefix + "outside-right").constData()) << circle << QRect(400, 100, 50, 50) << false;
+        QTest::newRow((prefix + "outside-bottom").constData()) << circle << QRect(130, 400, 50, 50) << false;
+        QTest::newRow((prefix + "touch-right").constData()) << circle << QRect(320, 100, 50, 50) << false;
+        QTest::newRow((prefix + "touch-bottom").constData()) << circle << QRect(130, 240, 50, 50) << false;
+    }
+}
+
+void NodeCoreTest::testFitRoiBoundary()
+{
+    QFETCH(bool, circle);
+    QFETCH(QRect, roi);
+    QFETCH(bool, expectedOk);
+    QScopedPointer<HalconNode> node(circle ? static_cast<HalconNode *>(new OpencvFitCircleNode)
+                                          : static_cast<HalconNode *>(new OpencvFitLineNode));
+    node->init();
+    cv::Mat image(240, 320, CV_8UC1, cv::Scalar(0));
+    if (circle)
+        cv::circle(image, cv::Point(170, 140), 20, cv::Scalar(255), 1);
+    else
+        cv::line(image, cv::Point(150, 120), cv::Point(190, 160), cv::Scalar(255), 1);
+    if (expectedOk && roi.width() > 0 && roi.height() > 0)
+        cv::circle(image, cv::Point(55, 50), 40, cv::Scalar(255), 1);
+    auto input = QSharedPointer<DataObject>::create();
+    input->setHImage(OpencvUtil::matToHimage(image));
+    node->setInputData(0, input);
+    node->setParam(QStringLiteral("roiCol"), 130);
+    node->setParam(QStringLiteral("roiRow"), 100);
+    node->setParam(QStringLiteral("roiWidth"), 90);
+    node->setParam(QStringLiteral("roiHeight"), 100);
+    QVERIFY(node->execute());
+    QVERIFY(node->getOutputData(0));
+    QVERIFY(node->getOutputData(0)->hasMeasureResult());
+    QVERIFY(qAbs(node->getParam(QStringLiteral("fitCol")).toDouble() - 170.0) < 1.0);
+    QVERIFY(qAbs(node->getParam(QStringLiteral("fitRow")).toDouble() - 140.0) < 1.0);
+
+    node->setParam(QStringLiteral("roiCol"), roi.x());
+    node->setParam(QStringLiteral("roiRow"), roi.y());
+    node->setParam(QStringLiteral("roiWidth"), roi.width());
+    node->setParam(QStringLiteral("roiHeight"), roi.height());
+    QCOMPARE(node->execute(), expectedOk);
+    QCOMPARE(node->getParam(QStringLiteral("moduleStatus")).toBool(), expectedOk);
+    if (expectedOk) {
+        const auto output = node->getOutputData(0);
+        QVERIFY(output && output->hasMeasureResult());
+        const QVector<MeasureResult> results = output->measureResults();
+        QCOMPARE(results.size(), 1);
+        QVERIFY(results.first().valid);
+        QVERIFY(qAbs(node->getParam(QStringLiteral("fitCol")).toDouble() - 170.0) < 1.0);
+        QVERIFY(qAbs(node->getParam(QStringLiteral("fitRow")).toDouble() - 140.0) < 1.0);
+        QVERIFY(qAbs(results.first().value - (circle ? 20.0 : 45.0)) < 1.0);
+        const QPointF center = circle ? results.first().point1
+                                     : (results.first().point1 + results.first().point2) * 0.5;
+        QVERIFY(qAbs(center.x() - 170.0) < 1.0);
+        QVERIFY(qAbs(center.y() - 140.0) < 1.0);
+        QVERIFY(node->getParam(QStringLiteral("fitPointCount")).toInt() > 0);
+        QVERIFY(node->getParam(QStringLiteral("lastError")).toString().isEmpty());
+    } else {
+        QVERIFY(!node->getOutputData(0));
+        QVERIFY(!node->getOutputData(1));
+        QVERIFY(node->getParam(QStringLiteral("lastError")).toString().contains(QStringLiteral("ROI")));
+        QCOMPARE(node->getParam(QStringLiteral("fitCol")).toDouble(), 0.0);
+        QCOMPARE(node->getParam(QStringLiteral("fitRow")).toDouble(), 0.0);
+        QCOMPARE(node->getParam(QStringLiteral("fitPointCount")).toInt(), 0);
+        QCOMPARE(node->getParam(circle ? QStringLiteral("fitRadius") : QStringLiteral("fitAngle")).toDouble(), 0.0);
+        node->applyGeometryRoi(RoiShape());
+        QVERIFY(node->execute());
+        QVERIFY(node->getOutputData(0)->hasMeasureResult());
+        QVERIFY(node->getParam(QStringLiteral("lastError")).toString().isEmpty());
+    }
+}
+
+void NodeCoreTest::testFitFailureClearsResults_data()
+{
+    QTest::addColumn<bool>("circle");
+    QTest::addColumn<int>("failure");
+    for (bool circle : {false, true}) {
+        const QByteArray prefix = circle ? "circle-" : "line-";
+        QTest::newRow((prefix + "missing-image").constData()) << circle << 0;
+        QTest::newRow((prefix + "no-contour").constData()) << circle << 1;
+        QTest::newRow((prefix + "too-few-points").constData()) << circle << 2;
+        QTest::newRow((prefix + "unsupported-image-type").constData()) << circle << 3;
+    }
+}
+
+void NodeCoreTest::testFitFailureClearsResults()
+{
+    QFETCH(bool, circle);
+    QFETCH(int, failure);
+    QScopedPointer<HalconNode> node(circle ? static_cast<HalconNode *>(new OpencvFitCircleNode)
+                                          : static_cast<HalconNode *>(new OpencvFitLineNode));
+    node->init();
+    cv::Mat image(240, 320, CV_8UC1, cv::Scalar(0));
+    if (circle)
+        cv::circle(image, cv::Point(170, 140), 20, cv::Scalar(255), 1);
+    else
+        cv::line(image, cv::Point(150, 120), cv::Point(190, 160), cv::Scalar(255), 1);
+    auto input = QSharedPointer<DataObject>::create();
+    input->setHImage(OpencvUtil::matToHimage(image));
+    node->setInputData(0, input);
+    QVERIFY(node->execute());
+    QVERIFY(node->getOutputData(0)->hasMeasureResult());
+    QVERIFY(node->getParam(QStringLiteral("fitCol")).toDouble() > 0.0);
+    QVERIFY(node->getParam(QStringLiteral("fitRow")).toDouble() > 0.0);
+    QVERIFY(node->getParam(QStringLiteral("fitPointCount")).toInt() > 0);
+    const QString shapeKey = circle ? QStringLiteral("fitRadius") : QStringLiteral("fitAngle");
+    QVERIFY(node->getParam(shapeKey).toDouble() > 0.0);
+
+    if (failure == 0) {
+        node->setInputData(0, {});
+    } else if (failure == 2) {
+        node->setParam(QStringLiteral("minPoints"), 100000);
+    } else {
+        cv::Mat badImage(240, 320, failure == 3 ? CV_16UC1 : CV_8UC1, cv::Scalar(0));
+        auto badInput = QSharedPointer<DataObject>::create();
+        badInput->setHImage(OpencvUtil::matToHimage(badImage));
+        node->setInputData(0, badInput);
+    }
+    QVERIFY(!node->execute());
+    QVERIFY(!node->getParam(QStringLiteral("moduleStatus")).toBool());
+    QVERIFY(!node->getOutputData(0));
+    QVERIFY(!node->getOutputData(1));
+    QCOMPARE(node->getParam(QStringLiteral("fitCol")).toDouble(), 0.0);
+    QCOMPARE(node->getParam(QStringLiteral("fitRow")).toDouble(), 0.0);
+    QCOMPARE(node->getParam(QStringLiteral("fitPointCount")).toInt(), 0);
+    QCOMPARE(node->getParam(shapeKey).toDouble(), 0.0);
+
+    node->setInputData(0, input);
+    node->setParam(QStringLiteral("minPoints"), circle ? 10 : 20);
+    QVERIFY(node->execute());
+    QVERIFY(node->getOutputData(0)->hasMeasureResult());
+    QVERIFY(node->getParam(QStringLiteral("lastError")).toString().isEmpty());
+}
+
 void NodeCoreTest::testChannelSplitAndMergeRoundtrip()
 {
     // ① RGB split：3 通道输入产出 3 个单通道，第 4 端口空
@@ -3264,6 +3421,43 @@ void NodeCoreTest::testChannelSplitAndMergeRoundtrip()
         only1->setHImage(OpencvUtil::matToHimage(cv::Mat(4, 4, CV_8UC1, cv::Scalar(100))));
         merge.setInputData(0, only1);
         QVERIFY2(!merge.execute(), "ChannelMerge 只接一个通道必须判失败");
+    }
+
+    // ⑥ HSV 只接受恰好 3 通道（2026-11-12 审核）：旧实现 `ch >= 3` 会把 4 通道
+    //    也放进转换分支，而 himageToMat 只支持 1/3 通道 ⇒ 返回空 Mat 后 workImage
+    //    保持原图，参数说 HSV、实际输出 RGB 且完全不报错。
+    {
+        ChannelMergeNode merge4;
+        merge4.init();
+        for (int i = 0; i < 4; ++i) {
+            auto ch = QSharedPointer<DataObject>::create();
+            ch->setHImage(OpencvUtil::matToHimage(
+                cv::Mat(4, 4, CV_8UC1, cv::Scalar(50 + i * 10))));
+            merge4.setInputData(i, ch);
+        }
+        QVERIFY2(merge4.execute(), "造 4 通道图应成功");
+        const auto four = merge4.getOutputData(0);
+        QVERIFY(four && four->getHImage().IsInitialized());
+
+        ChannelSplitNode split4;
+        split4.init();
+        split4.setParam(QStringLiteral("colorSpace"), 1);   // HSV
+        split4.setInputData(0, four);
+        QVERIFY2(!split4.execute(), "4 通道 HSV 必须明确失败，不能静默按 RGB 输出");
+        QVERIFY2(!split4.getParam(QStringLiteral("moduleStatus")).toBool(),
+                 "失败时 moduleStatus 必须为 false");
+    }
+
+    // 回归臂：3 通道 HSV 仍要成功，别把正常路径一起关掉
+    {
+        cv::Mat rgb(8, 8, CV_8UC3, cv::Scalar(10, 20, 30));
+        ChannelSplitNode ok;
+        ok.init();
+        ok.setParam(QStringLiteral("colorSpace"), 1);
+        auto obj = QSharedPointer<DataObject>::create();
+        obj->setHImage(OpencvUtil::matToHimage(rgb));
+        ok.setInputData(0, obj);
+        QVERIFY2(ok.execute(), "3 通道 HSV 应仍成功");
     }
 }
 

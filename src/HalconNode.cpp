@@ -816,6 +816,12 @@ void HalconNode::publishAggregatedOutputs()
         merged->setHImage(image);
 
     if (primary) {
+        // 主结果是 XLD/Region 时，图标数据在 m_hObject 而不是 m_data —— 聚合对象必须
+        // 一并带上，否则端口 0 上只有类型声明、取不到轮廓/区域：下游连线与「输入订阅」
+        // 读的都是端口 0，会拿到一个空对象。
+        const HalconCpp::HObject iconic = primary->getHObject();
+        if (iconic.IsInitialized())
+            merged->setHObject(iconic);
         // 主结果：保留原类型/原值 —— 老的 getData()/getType() 读取者行为不变
         merged->setData(primary->getData());
         merged->setType(primary->getType());
@@ -1168,6 +1174,16 @@ void HalconNode::registerParams(const ParamSpecList &specs)
 {
     for (const auto &s : specs)
         registerParam(s);
+}
+
+void HalconNode::setParamTooltip(const QString &name, const QString &tooltip)
+{
+    for (ParamSpec &spec : m_paramSpecs) {
+        if (spec.name == name) {
+            spec.tooltip = tooltip;
+            return;
+        }
+    }
 }
 
 static QWidget *makeParamEditor(const ParamSpec &spec, QVariant &outInit)

@@ -49,7 +49,24 @@ import sys
 # 没有任何既有文件被改掉行尾形状。这正是本文件开头所说的
 # 「growth from new tool/test files is expected」。本轮修复（RuntimeInterfaceView /
 # CalibrationBoard / NodeBase / OpencvCaliperNode / VmSharedText）同样未做行尾归一。
-EXPECTED_TOOL_WRITTEN = 205
+#
+# Re-frozen at 2026-11-11 205 -> 207：先于本轮改动，HEAD 相比冻结点 6980a05 已新增 29 个
+# tracked 文件，其中以 LF 落盘的有 include/ChannelMergeNode.h、include/ChannelSplitNode.h、
+# include/CommResponseManager.h、src/ChannelMergeNode.cpp、src/ChannelSplitNode.cpp、
+# src/CommResponseManager.cpp、tests/fins_test.cpp（7 个），同期另有若干既有文件回正 CRLF，
+# 净增 2。本轮（拟合点集订阅 + 初始化类型）自身改写的 4 个既有文件
+# （include/OpencvFitLineNode.h、include/OpencvFitCircleNode.h、src/OpencvFitLineNode.cpp、
+# src/OpencvFitCircleNode.cpp）已按本闸口径回正 CRLF，没有把既有文件留在 LF；本轮新增的
+# include/FitPointSource.h、src/FitPointSource.cpp、tests/fit_point_sourcing_test.cpp 尚未被
+# git 跟踪，因此不计入本次读数（下次冻结时自然计入）。
+#
+# Re-frozen at 2026-11-12 207 -> 222：上一段预告的「下次冻结」到了。本轮把此前
+# 15 个未跟踪的新文件 git add 进版本控制后，git ls-files --eol 首次看到它们，
+# 且全部以 LF 落盘（抽查 7 个 CRLF=0），故 tool_written 净增恰好 15
+# （207 -> 222）、tracked 同步 738 -> 753，差额一一对应，没有任何既有文件被改掉
+# 行尾形状。这 15 个是：3 个几何测量节点的 .h/.cpp（6）、FitRobust/FitPointSource
+# 的 .h/.cpp（4）、以及 5 个新测试文件。判据口径未变，只重冻结读数。
+EXPECTED_TOOL_WRITTEN = 222
 TAG = "EOL"
 
 
@@ -73,13 +90,9 @@ def main(argv):
         # not fall back to reporting the frozen one.
         say("[%s-SHAPE] could not read git ls-files --eol (rc=%d), so the shape is unreadable "
             "here, which is not the frozen shape" % (TAG, proc.returncode))
-        # tool_written listing (2026-10-29): when the count drifts, name the files
-        # instead of making the reviewer guess. Only printed on mismatch.
-        if len(tool_written) != EXPECTED_TOOL_WRITTEN:
-            say("[%s-SHAPE] tool_written listing (%d):" % (TAG, len(tool_written)))
-            for _rel in sorted(tool_written):
-                say("[%s-SHAPE]   %s" % (TAG, _rel))
-
+        # 这里曾试图列出 tool_written 文件名，但该变量在下面的解析循环才定义 ——
+        # git 读失败时必然抛 UnboundLocalError，导致承诺的 RED 行和 archive 都写不出来
+        # （2026-11-12 审核）。读不到数据时本来也列不出文件名，直接判红即可。
         say("[%s-SHAPE] tracked=-1 tool_written=-1 expected=%d offenders=-1 verdict=RED"
             % (TAG, EXPECTED_TOOL_WRITTEN))
         return _finish(said, archive, 1)

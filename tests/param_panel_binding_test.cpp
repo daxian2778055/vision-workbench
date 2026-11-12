@@ -2512,8 +2512,18 @@ void ParamPanelBindingTest::testUnnamedFindChildSitesAreSingleCandidate()
     // → 537（2026-11-08）：模板匹配位置修正批：positionCorrectMode + positionFixtureName +
     //   positionRunX/Y/Angle/ScaleX/ScaleY（净 +7）
     // → 538（2026-11-11）：新增 ChannelSplitNode：colorSpace（净 +1）
-    QVERIFY2(fieldSlots == 538,
-             qPrintable(QStringLiteral("字段槽位分母从 538 变成 %1 ⇒ 本闸口径已漂移，"
+    // → 547（2026-11-11）：拟合稳健参数批：直线拟合 weightFunc/maxIterations/rejectPoints/
+    //   rejectDistance/angleConstrained/expectedAngle/angleTolerance（净 +7）、
+    //   圆拟合 rejectPoints/rejectDistance（净 +2）
+    // → 549（2026-11-11）：拟合点集订阅/初始化类型批：直线拟合 + 圆拟合各新增 initType（净 +2）
+    // → 551（2026-11-11）：拟合输入方式批：直线拟合 + 圆拟合各新增 inputMode（净 +2）
+    // → 561（2026-11-11）：新增 LineLineMeasureNode：sourceMode + 8 个坐标 + angleRange（净 +10）
+    // → 569（2026-11-11）：新增 LineCircleMeasureNode：sourceMode + 4 个直线坐标 + 3 个圆参数（净 +8）
+    // → 576（2026-11-11）：新增 CircleCircleMeasureNode：sourceMode + 6 个圆心/半径（净 +7）
+    // → 577（2026-11-11）：LineLineMeasureNode 补 lineInputMode（净 +1）
+    // → 578（2026-11-11）：LineCircleMeasureNode 补 lineInputMode（净 +1）
+    QVERIFY2(fieldSlots == 578,
+             qPrintable(QStringLiteral("字段槽位分母从 578 变成 %1 ⇒ 本闸口径已漂移，"
                                        "先核对面板改动再把基准一起改").arg(fieldSlots)));
     QVERIFY2(badSlots.isEmpty(),
              qPrintable(QStringLiteral("U5-MULTI: %1 个字段槽位里同类型候选不止一个 ⇒ 站点 1 的无名 "

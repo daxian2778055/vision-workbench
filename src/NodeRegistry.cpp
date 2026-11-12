@@ -39,6 +39,9 @@
 #include "PointLineDistanceNode.h"
 #include "PointCircleDistanceNode.h"
 #include "DistanceMeasureNode.h"
+#include "LineLineMeasureNode.h"
+#include "LineCircleMeasureNode.h"
+#include "CircleCircleMeasureNode.h"
 #include "PositionCorrectNode.h"
 #include "CoordinateTransformNode.h"
 #include "DataCode2DNode.h"
@@ -333,6 +336,12 @@ void registerAllNodes()
             NodeBase::MEASUREMENT, "\u51E0\u4F55\u6D4B\u91CF");
     VFP_REG(DistanceMeasureNode,  "DistanceMeasureNode",  "\u4E24\u70B9\u8DDD\u79BB", "Distance PP",
             NodeBase::MEASUREMENT, "\u51E0\u4F55\u6D4B\u91CF");
+    VFP_REG(LineLineMeasureNode,  "LineLineMeasureNode",  "\u7EBF\u7EBF\u6D4B\u91CF", "Line-Line Measure",
+            NodeBase::MEASUREMENT, "\u51E0\u4F55\u6D4B\u91CF");
+    VFP_REG(LineCircleMeasureNode,"LineCircleMeasureNode","\u7EBF\u5706\u6D4B\u91CF", "Line-Circle Measure",
+            NodeBase::MEASUREMENT, "\u51E0\u4F55\u6D4B\u91CF");
+    VFP_REG(CircleCircleMeasureNode,"CircleCircleMeasureNode","\u5706\u5706\u6D4B\u91CF", "Circle-Circle Measure",
+            NodeBase::MEASUREMENT, "\u51E0\u4F55\u6D4B\u91CF");
     VFP_REG(PositionCorrectNode,  "PositionCorrectNode",  "\u4F4D\u7F6E\u4FEE\u6B63", "Position Correct",
             NodeBase::MEASUREMENT, "\u51E0\u4F55\u6D4B\u91CF");
     VFP_REG(CoordinateTransformNode, "CoordinateTransformNode", "\u5750\u6807\u7CFB\u53D8\u6362", "Coordinate Transform",
@@ -490,6 +499,12 @@ void registerAllNodes()
                      QStringLiteral("点到圆心距离（可含半径修正）"));
     r.setDescription(QStringLiteral("DistanceMeasureNode"),
                      QStringLiteral("两点欧氏距离"));
+    r.setDescription(QStringLiteral("LineLineMeasureNode"),
+                     QStringLiteral("两条直线的交点、夹角与绝对距离（订阅或坐标绘制）"));
+    r.setDescription(QStringLiteral("LineCircleMeasureNode"),
+                     QStringLiteral("直线与圆的交点、圆心垂足与圆心到直线距离"));
+    r.setDescription(QStringLiteral("CircleCircleMeasureNode"),
+                     QStringLiteral("两圆的交点、圆心距与位置关系（内含/内切/相交/外切/外离）"));
     r.setDescription(QStringLiteral("DistanceNode"),
                      QStringLiteral("两点距离测量（通用）"));
     r.setDescription(QStringLiteral("PositionCorrectNode"),
@@ -598,6 +613,15 @@ void registerAllNodes()
                  {QStringLiteral("OpenCV卡尺测量"), QStringLiteral("OpenCV Caliper")});
     r.addAliases(QStringLiteral("OpencvAngleNode"),
                  {QStringLiteral("OpenCV角度测量"), QStringLiteral("OpenCV Angle Measure")});
+    r.addAliases(QStringLiteral("LineLineMeasureNode"),
+                 {QStringLiteral("线线夹角"), QStringLiteral("两线夹角"),
+                  QStringLiteral("Line Line Measure"), QStringLiteral("LineIntersection")});
+    r.addAliases(QStringLiteral("LineCircleMeasureNode"),
+                 {QStringLiteral("线圆交点"), QStringLiteral("直线与圆"),
+                  QStringLiteral("Line Circle Measure"), QStringLiteral("LineCircleIntersection")});
+    r.addAliases(QStringLiteral("CircleCircleMeasureNode"),
+                 {QStringLiteral("圆圆交点"), QStringLiteral("两圆位置关系"),
+                  QStringLiteral("Circle Circle Measure"), QStringLiteral("CircleIntersection")});
     r.addAliases(QStringLiteral("DnnDetectNode"),
                  {QStringLiteral("OpenCV目标检测"), QStringLiteral("OpenCV YOLO"), QStringLiteral("ONNX检测")});
     r.addAliases(QStringLiteral("DnnSegmentNode"),

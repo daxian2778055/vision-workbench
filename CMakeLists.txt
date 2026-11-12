@@ -212,6 +212,9 @@ src/ModelCache.cpp
     src/PointLineDistanceNode.cpp
     src/PointCircleDistanceNode.cpp
     src/DistanceMeasureNode.cpp
+    src/LineLineMeasureNode.cpp   # 线线测量：交点/夹角/绝对距离（订阅或坐标绘制；纯几何）
+    src/LineCircleMeasureNode.cpp # 线圆测量：交点/垂足/圆心到直线距离（纯几何）
+    src/CircleCircleMeasureNode.cpp # 圆圆测量：交点/圆心距/位置关系（纯几何）
     src/PositionCorrectNode.cpp
     src/CoordinateTransformNode.cpp
     src/DataCode2DNode.cpp
@@ -283,6 +286,8 @@ src/ModelCache.cpp
     src/NodeIconPalette.cpp
     src/CalibrationBoard.cpp   # 工具菜单「标定板生成」：棋盘格/圆点板渲染与保存（纯数据面）
     src/DiagnosticsCollector.cpp   # 工具菜单「异常信息收集」：诊断报告生成与导出（纯数据面）
+    src/FitRobust.cpp   # 直线稳健拟合（权重函数/剔除点/角度约束；纯数据面）
+src/FitPointSource.cpp   # 拟合点集订阅：XLD/Region/Point/卡尺点集 → 分组点集（订阅优先，不回退图像）
 src/CalibrationWizard.cpp   # 工具菜单「标定配置引导」：静态/动态/映射三类引导规格（纯数据面）
 src/CalibrationWizardDialog.cpp   # 工具菜单「标定配置引导」：类型选择 + 官方步骤引导页
 src/DeepOcrSelfTest.cpp   # --selftest-deepocr：换机后验证 HALCON 运行时 + dl 模型 + 识别结果
@@ -395,6 +400,8 @@ set(HEADERS
     include/OpencvEdgeNode.h
     include/OpencvFitLineNode.h
     include/OpencvFitCircleNode.h
+    include/FitRobust.h
+    include/FitPointSource.h
     include/OpencvTemplateMatchNode.h
     include/OpencvFeatureMatchNode.h
     include/OpencvDefectNode.h
@@ -463,6 +470,9 @@ set(HEADERS
     include/FindCircleNode.h
     include/AngleMeasureNode.h
     include/PointLineDistanceNode.h
+    include/LineLineMeasureNode.h
+    include/LineCircleMeasureNode.h
+    include/CircleCircleMeasureNode.h
     include/PointCircleDistanceNode.h
     include/DistanceMeasureNode.h
     include/PositionCorrectNode.h
@@ -1457,6 +1467,40 @@ if(MSVC)
     vfp_add_qtest(NAME DeepOcrToolTest TARGET deepocr_selftest_test)
     vfp_configure_gui_test(DeepOcrToolTest)
 endif()
+
+# 图像/文本纯数据面无 GUI 依赖，只链 Core + Test
+add_executable(fit_robust_test tests/fit_robust_test.cpp)
+target_link_libraries(fit_robust_test PRIVATE vfp_core Qt6::Test)
+vfp_add_qtest(NAME FitRobustTest TARGET fit_robust_test)
+# FitRobust.cpp 被并进 unity 单元后与 MVS 相机源同 obj ⇒ 启动即需 MvCameraControl.dll。
+# 与 SingleOutputPortTest 同一套注入（dist/VisionFlowPlatform 进 PATH），否则干净环境 0xc0000135。
+set_tests_properties(FitRobustTest PROPERTIES
+    ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${CMAKE_CURRENT_SOURCE_DIR}/dist/VisionFlowPlatform")
+
+# 拟合点集订阅 + 初始化类型（VM「图形生成 → 直线/圆」）：订阅优先、不回退图像、XLD/Region/
+# Point/卡尺点集四种载体、全局法 vs 局部最优的选点差异。
+add_executable(fit_point_sourcing_test tests/fit_point_sourcing_test.cpp)
+target_link_libraries(fit_point_sourcing_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+vfp_add_qtest(NAME FitPointSourcingTest TARGET fit_point_sourcing_test)
+vfp_configure_gui_test(FitPointSourcingTest)
+
+# 线线测量（VM「几何测量 → 线线测量」）：绘制/订阅两条直线，交点、夹角、带符号角度、绝对距离。
+add_executable(line_line_measure_test tests/line_line_measure_test.cpp)
+target_link_libraries(line_line_measure_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+vfp_add_qtest(NAME LineLineMeasureTest TARGET line_line_measure_test)
+vfp_configure_gui_test(LineLineMeasureTest)
+
+# 线圆测量（VM「几何测量 → 线圆测量」）：相离/相切/相交三类交点、垂足与圆心到直线距离。
+add_executable(line_circle_measure_test tests/line_circle_measure_test.cpp)
+target_link_libraries(line_circle_measure_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+vfp_add_qtest(NAME LineCircleMeasureTest TARGET line_circle_measure_test)
+vfp_configure_gui_test(LineCircleMeasureTest)
+
+# 圆圆测量（VM「几何测量 → 圆圆测量」）：五档位置关系、0/1/2 个交点、圆心距。
+add_executable(circle_circle_measure_test tests/circle_circle_measure_test.cpp)
+target_link_libraries(circle_circle_measure_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+vfp_add_qtest(NAME CircleCircleMeasureTest TARGET circle_circle_measure_test)
+vfp_configure_gui_test(CircleCircleMeasureTest)
 
 # 图上游闭包游走面（词条切片 B 图谱族首抽，从 MainWindow 抽出）：
 # 输入端口连线递归上溯真图座（实点 + 手工 Connection，无场景无 HALCON 图）
