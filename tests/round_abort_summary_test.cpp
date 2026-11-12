@@ -21,7 +21,11 @@
 
 #include <QtTest/QtTest>
 #include <QCoreApplication>
+#include <QHash>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QPointF>
+#include <QStringList>
 #include <QTemporaryDir>
 
 class RoundAbortSummaryTest : public QObject
@@ -74,6 +78,42 @@ int summaryRows(const QDateTime &from, const QDateTime &to)
     }
     return n;
 }
+
+/// 工作线程（DirectConnection）写、主线程读的线程安全诊断容器（2026-11-12）。
+/// 旧实现直接在工作线程写 QStringList / QHash、主线程遍历，没有显式同步——
+/// 虽然现有 wait() 调用让写大多先于读，但结构上是数据竞争（UB）。
+/// 读侧用一次 snapshot() 取本地副本，后续断言只读快照，不持锁跑 QVERIFY。
+class ConcurrentDiag final
+{
+public:
+    void addError(const QString &error)
+    {
+        QMutexLocker locker(&m_mutex);
+        m_errors.append(error);
+    }
+
+    void setNodeState(const QString &name, bool ok)
+    {
+        QMutexLocker locker(&m_mutex);
+        m_nodeStates.insert(name, ok);
+    }
+
+    struct Snapshot {
+        QStringList errors;
+        QHash<QString, bool> nodeStates;
+    };
+
+    Snapshot snapshot() const
+    {
+        QMutexLocker locker(&m_mutex);
+        return Snapshot{ m_errors, m_nodeStates };
+    }
+
+private:
+    mutable QMutex m_mutex;
+    QStringList m_errors;
+    QHash<QString, bool> m_nodeStates;
+};
 
 } // namespace
 
@@ -272,7 +312,7 @@ void RoundAbortSummaryTest::abortedSubFlowIsNotReportedAsFailure()
     // 旧版挂在 nodeExecuted（执行完才 emit），所以注释里才写「不能轮询等它、
     // 只能靠 300ms 墙钟窗口」——那个限制随新信号消失。
     std::atomic<bool> memberStarted { false };   // 停止确实落在"子流程正在执行"里
-    QStringList errors;
+    ConcurrentDiag diag;   // 工作线程写、主线程读快照
     QObject::connect(&exec, &FlowExecutor::nodeExecutionStarted, &exec,
                      [&memberStarted, m1](NodeBase *n) {
                          if (n == m1)
@@ -286,7 +326,7 @@ void RoundAbortSummaryTest::abortedSubFlowIsNotReportedAsFailure()
                      },
                      Qt::DirectConnection);
     QObject::connect(&exec, &FlowExecutor::executionError, &exec,
-                     [&errors](const QString &e) { errors << e; }, Qt::DirectConnection);
+                     [&diag](const QString &e) { diag.addError(e); }, Qt::DirectConnection);
 
     exec.setFlowName(QStringLiteral("subAbortFlow"));
     exec.setFlowMode(FlowMode::SoftwareTrigger);
@@ -306,7 +346,8 @@ void RoundAbortSummaryTest::abortedSubFlowIsNotReportedAsFailure()
     // 上面的 QTRY 已保证子流程成员确实开始执行过，本腿不会空转
     // 中止不得报成节点失败，也不得出现"节点 … 执行失败"的错误
     QVERIFY2(!callerFailed.load(), "子流程被中止时调用点被记成执行失败（P2-1 残留）");
-    for (const QString &e : errors) {
+    const auto diagSnap = diag.snapshot();
+    for (const QString &e : diagSnap.errors) {
         QVERIFY2(!e.contains(QStringLiteral("执行失败")),
                  qPrintable(QStringLiteral("中止被报成了执行失败：%1").arg(e)));
     }
@@ -362,18 +403,17 @@ void RoundAbortSummaryTest::subFlowNestedLoopFailureIsStillNg()
     auto token = FlowExecutorToken::create(new FlowExecutor());
     FlowExecutor &exec = *token->executor();
     std::atomic_bool callerFailed{false};   // 工作线程写、主线程读
-    QHash<QString, bool> nodeStates;   // 诊断：每个节点最后一次 nodeExecuted
-    QStringList errors;
+    ConcurrentDiag diag;   // 线程安全：工作线程写、主线程读快照
     QObject::connect(&exec, &FlowExecutor::nodeExecuted, &exec,
-                     [&callerFailed, &nodeStates, caller](NodeBase *n, bool ok) {
+                     [&callerFailed, &diag, caller](NodeBase *n, bool ok) {
                          if (n)
-                             nodeStates.insert(n->fullName(), ok);
+                             diag.setNodeState(n->fullName(), ok);
                          if (n == caller && !ok)
                              callerFailed.store(true);
                      },
                      Qt::DirectConnection);
     QObject::connect(&exec, &FlowExecutor::executionError, &exec,
-                     [&errors](const QString &e) { errors << e; }, Qt::DirectConnection);
+                     [&diag](const QString &e) { diag.addError(e); }, Qt::DirectConnection);
 
     const int before = summaryRows(QDateTime::currentDateTime().addDays(-1),
                                    QDateTime::currentDateTime().addSecs(60));
@@ -391,36 +431,40 @@ void RoundAbortSummaryTest::subFlowNestedLoopFailureIsStillNg()
 
     // 真失败：调用点判失败、写 NG 汇总（不得被当成中止而跳过汇总/调用点变绿）
     {
+        // 一次加锁取快照，后续断言只读本地副本，不持锁跑 QVERIFY
+        const auto diagSnap = diag.snapshot();
         // 诊断：把每个节点最后一次 nodeExecuted 打出来（谁绿谁红一目了然）
         QStringList stateList;
-        for (auto it = nodeStates.constBegin(); it != nodeStates.constEnd(); ++it)
+        for (auto it = diagSnap.nodeStates.constBegin();
+             it != diagSnap.nodeStates.constEnd(); ++it)
             stateList << (it.key() + QLatin1String("=") + (it.value() ? "ok" : "fail"));
         QVERIFY2(callerFailed.load(),
                  qPrintable(QStringLiteral("子流程内循环体失败时调用点没有判失败（P2-A）"
                                            " finished=%1 nodes=[%2] errors=[%3]")
                                 .arg(finished ? 1 : 0)
                                 .arg(stateList.join(QStringLiteral(" , ")))
-                                .arg(errors.join(QStringLiteral(" | ")))));
+                                .arg(diagSnap.errors.join(QStringLiteral(" | ")))));
 
         // 本腿必须真的走到"嵌套循环体失败"这条路径（2026-10-25 复核 P3-3）：
         // 若内部循环体又被判成"定义损坏"，调用点同样失败、同样写 NG —— 上面那两条断言
         // 照样绿，等于没钉住 P2-A × P3-8 的冲突修复。这里用"循环体节点真的执行过"+
         // "错误里是循环体失败而不是定义损坏"两条把它钉死。
-        QVERIFY2(nodeStates.contains(bad->fullName()),
+        QVERIFY2(diagSnap.nodeStates.contains(bad->fullName()),
                  qPrintable(QStringLiteral("循环体节点没执行（多半又被判成定义损坏）：nodes=[%1]")
                                 .arg(stateList.join(QStringLiteral(" , ")))));
         bool sawBrokenDef = false;
-        for (const QString &e : errors) {
+        for (const QString &e : diagSnap.errors) {
             if (e.contains(QStringLiteral("定义损坏")))
                 sawBrokenDef = true;
         }
         QVERIFY2(!sawBrokenDef,
                  qPrintable(QStringLiteral("定义被判成损坏，本腿没验到嵌套循环路径：%1")
-                                .arg(errors.join(QStringLiteral(" | ")))));
+                                .arg(diagSnap.errors.join(QStringLiteral(" | ")))));
         // 循环**体内**的节点必须真的执行过且判失败（说明失败确实来自那次嵌套执行）。
         // 注意循环节点本身在子流程里是 executeLoop 直接调度的，不走 executeNode，故不发
         // nodeExecuted——不能拿它当判据。
-        QVERIFY2(nodeStates.contains(bad->fullName()) && !nodeStates.value(bad->fullName()),
+        QVERIFY2(diagSnap.nodeStates.contains(bad->fullName())
+                     && !diagSnap.nodeStates.value(bad->fullName()),
                  qPrintable(QStringLiteral("循环体节点没有执行/没判失败：nodes=[%1]")
                                 .arg(stateList.join(QStringLiteral(" , ")))));
     }
