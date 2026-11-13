@@ -13,6 +13,8 @@
 #include "CommDeviceConfigDialog.h"
 #include "CommMonitorDialog.h"
 #include "CommMonitorPane.h"
+#include "VmWidgets.h"
+#include "VmDeviceCreateDialog.h"
 #include "HeartbeatManager.h"
 #include "GlobalTriggerManager.h"
 #include "AppLog.h"
@@ -178,34 +180,8 @@ public:
     }
 };
 
-/// VM 的小滑块开关。仍是 QPushButton（checkable），
-/// 这样 refreshDeviceTable 的 connect 与测试里的 qobject_cast / mouseClick 都不用改。
-class VmSwitch final : public QPushButton
-{
-public:
-    explicit VmSwitch(QWidget *parent = nullptr) : QPushButton(parent)
-    {
-        setCheckable(true);
-        setFixedSize(44, 24);
-        setText(QString());
-        setCursor(Qt::PointingHandCursor);
-    }
-
-protected:
-    void paintEvent(QPaintEvent *) override
-    {
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing, true);
-        const bool on = isChecked();
-        p.setPen(Qt::NoPen);
-        p.setBrush(on ? kVmOrange : QColor("#d8d8d8"));
-        p.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 11, 11);
-        p.setBrush(Qt::white);
-        const int d = 18;
-        const int x = on ? width() - d - 3 : 3;
-        p.drawEllipse(x, (height() - d) / 2, d, d);
-    }
-};
+// VmSwitch 已提取到 include/VmWidgets.h：创建设备弹窗也要用同款滑块，
+// 两处各写一份会让形态慢慢漂移。
 
 }   // namespace
 
@@ -1139,67 +1115,19 @@ void CommunicationManagerDialog::onToggleConnection(int row)
 
 void CommunicationManagerDialog::onAddDevice()
 {
-    // Device type selection
-    QStringList types = {
-        QStringLiteral("TCP"),
-        QStringLiteral("\u4E32\u53E3"),
-        QStringLiteral("Modbus"),
-        QStringLiteral("PLC"),
-        QStringLiteral("UDP"),
-        QStringLiteral("FINS TCP"),
-        QStringLiteral("FINS UDP")
-    };
+    // VM4.4（2026-11-13）：官方点「+」只弹一个「设备管理」窗口——
+    // 协议类型 + 设备名称 + 通信参数 + 右下「创建」。旧实现是两个连续
+    // QInputDialog 再按类型弹四个不同的配置窗，共三段，操作性与官方差别最大。
+    // 四个专用配置对话框全部保留给「配置」入口（寄存器表等高级参数）。
+    VmDeviceCreateDialog dlg(this);
+    if (dlg.exec() != QDialog::Accepted) return;
 
-    bool ok = false;
-    QString type = QInputDialog::getItem(this,
-        QStringLiteral("\u6DFB\u52A0\u8BBE\u5907"),
-        QStringLiteral("\u8BBE\u5907\u7C7B\u578B:"),
-        types, 0, false, &ok);
-    if (!ok) return;
+    const QString type = dlg.deviceType();
+    const QString name = dlg.deviceName();
+    if (type.isEmpty() || name.isEmpty()) return;
+    const QJsonObject config = dlg.config();
 
-    QString name = QInputDialog::getText(this,
-        QStringLiteral("\u8BBE\u5907\u540D\u79F0"),
-        QStringLiteral("\u8BF7\u8F93\u5165\u8BBE\u5907\u540D\u79F0:"),
-        QLineEdit::Normal,
-        type + QStringLiteral("_") + QString::number(QDateTime::currentMSecsSinceEpoch() % 10000),
-        &ok);
-    if (!ok || name.trimmed().isEmpty()) return;
-
-    QJsonObject config;
-
-    if (type == QStringLiteral("TCP")) {
-        CommDeviceConfigDialog dlg(type, config, this);
-        if (dlg.exec() != QDialog::Accepted) return;
-        config = dlg.config();
-
-    } else if (type == QStringLiteral("\u4E32\u53E3")) {
-        CommDeviceConfigDialog dlg(QStringLiteral("Serial"), config, this);
-        if (dlg.exec() != QDialog::Accepted) return;
-        config = dlg.config();
-
-    } else if (type == QStringLiteral("Modbus")) {
-        // 新增 Modbus 设备时，先创建设备再打开配置
-        ModbusConfigDialog dlg(QStringLiteral("Modbus\u914D\u7F6E - %1").arg(name), nullptr, this);
-        dlg.setConfig(config);
-        if (dlg.exec() != QDialog::Accepted) return;
-        config = dlg.config();
-    } else if (type == QStringLiteral("UDP")) {
-        CommDeviceConfigDialog dlg(type, config, this);
-        if (dlg.exec() != QDialog::Accepted) return;
-        config = dlg.config();
-    } else if (type == QStringLiteral("PLC")) {
-        PlcConfigDialog dlg(QStringLiteral("PLC\u914D\u7F6E - %1").arg(name), nullptr, this);
-        dlg.setConfig(config);
-        if (dlg.exec() != QDialog::Accepted) return;
-        config = dlg.config();
-    } else if (type == QStringLiteral("FINS TCP") || type == QStringLiteral("FINS UDP")) {
-        // B5-2：两个传输面共用一套字段；空 config 进对话框即全默认值（127.0.0.1:7920）
-        FinsConfigDialog dlg(type, config, this);
-        if (dlg.exec() != QDialog::Accepted) return;
-        config = dlg.config();
-    }
-
-    if (CommunicationManager::instance()->addDevice(name.trimmed(), type, config)) {
+    if (CommunicationManager::instance()->addDevice(name, type, config)) {
         refreshDeviceTable();
     } else {
         QMessageBox::warning(this, QStringLiteral("\u5931\u8D25"),

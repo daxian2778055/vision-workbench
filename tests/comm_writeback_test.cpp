@@ -24,6 +24,8 @@
 #include <QMenu>
 #include <QAction>
 #include <QApplication>
+#include <QPointer>
+#include <QComboBox>
 #include <QInputDialog>
 #include <QTimer>
 #include <QThread>
@@ -62,6 +64,7 @@
 #include "RegisterSpaceBar.h"
 #include "CommunicationNodeBase.h"
 #include "CommunicationManagerDialog.h"
+#include "VmDeviceCreateDialog.h"
 #include "CommDeviceConfigDialog.h"
 #include "ModbusConfigDialog.h"
 #include "PlcConfigDialog.h"
@@ -212,6 +215,10 @@ private slots:
     // 2026-11-13：VM4.4 形态——通信参数内联编辑，改动即时写回（不再点配置弹窗）
     void communicationDialogInlineParamsWriteBack();
     void communicationDialogMatchesVmLayout();
+    // 2026-11-13：创建设备从「两个 QInputDialog + 专用配置窗」三段式改为单窗口
+    void vmCreateDialogIsSingleWindow();
+    void vmCreateDialogBuildsConfigPerType();
+    void commAddDeviceOpensSingleVmDialog();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -4016,6 +4023,98 @@ void CommWritebackTest::communicationDialogMatchesVmLayout()
              "缺少内联通信参数表单");
     QVERIFY2(dlg.findChild<QLineEdit *>(QStringLiteral("commParamIp0")),
              "缺少目标 IP 四段输入");
+}
+
+// 2026-11-13：创建设备窗口的形态契约（VM 截图 2 / 5）——
+// 协议类型、设备名称、通信参数、创建按钮都在**同一个**窗口里。
+void CommWritebackTest::vmCreateDialogIsSingleWindow()
+{
+    VmDeviceCreateDialog dlg;
+    QVERIFY2(dlg.findChild<QWidget *>(QStringLiteral("vmDevTitleBar")),
+             "缺少 VM 深色标题栏");
+    QWidget *proto = dlg.protocolGroupForTest();
+    QWidget *param = dlg.paramGroupForTest();
+    QVERIFY(proto);
+    QVERIFY(param);
+    auto *typeCombo = dlg.findChild<QComboBox *>(QStringLiteral("vmDevTypeCombo"));
+    auto *nameEdit = dlg.findChild<QLineEdit *>(QStringLiteral("vmDevNameEdit"));
+    auto *createBtn = dlg.findChild<QPushButton *>(QStringLiteral("vmDevCreateBtn"));
+    QVERIFY(typeCombo);
+    QVERIFY(nameEdit);
+    QVERIFY(createBtn);
+    QVERIFY2(proto->isAncestorOf(typeCombo) && proto->isAncestorOf(nameEdit),
+             "协议类型与设备名称必须在同一个「通信协议」分组里");
+    QVERIFY2(param->isAncestorOf(dlg.findChild<QWidget *>(QStringLiteral("vmDevIp0"))),
+             "通信参数必须在同一窗口的「通信参数」分组里");
+    QCOMPARE(typeCombo->count(), 7);
+    QVERIFY2(!nameEdit->text().isEmpty(), "官方默认带出设备名称");
+    QVERIFY2(createBtn->isEnabled(), "名称非空时「创建」应可用");
+
+    nameEdit->clear();
+    QVERIFY2(!createBtn->isEnabled(), "名称为空时「创建」必须禁用（官方是灰按钮）");
+}
+
+// 按协议类型生成节点真正消费的 config 键——创建出来必须能用，不能只是好看。
+void CommWritebackTest::vmCreateDialogBuildsConfigPerType()
+{
+    VmDeviceCreateDialog dlg;
+    auto *combo = dlg.findChild<QComboBox *>(QStringLiteral("vmDevTypeCombo"));
+    QVERIFY(combo);
+
+    combo->setCurrentIndex(0);   // TCP 客户端（截图 2）
+    QCOMPARE(dlg.deviceType(), QStringLiteral("TCP"));
+    QJsonObject c = dlg.config();
+    QCOMPARE(c.value(QStringLiteral("mode")).toString(), QStringLiteral("Client"));
+    QCOMPARE(c.value(QStringLiteral("serverIp")).toString(), QStringLiteral("127.0.0.1"));
+    QCOMPARE(c.value(QStringLiteral("port")).toInt(), 7920);
+    QVERIFY(c.contains(QStringLiteral("dataUpload")));
+    QVERIFY(c.contains(QStringLiteral("autoReconnect")));
+
+    combo->setCurrentIndex(2);   // ModBus 通信（截图 5）
+    QCOMPARE(dlg.deviceType(), QStringLiteral("Modbus"));
+    c = dlg.config();
+    QCOMPARE(c.value(QStringLiteral("host")).toString(), QStringLiteral("127.0.0.1"));
+    QCOMPARE(c.value(QStringLiteral("port")).toInt(), 502);
+    QCOMPARE(c.value(QStringLiteral("connectionType")).toString(),
+             QStringLiteral("TcpClient"));
+    QVERIFY(c.value(QStringLiteral("pollInterval")).toInt() > 0);
+    QVERIFY2(c.value(QStringLiteral("registers")).isArray(),
+             "寄存器表应有空数组初值，创建后可在「配置」里补");
+
+    combo->setCurrentIndex(1);   // 串口
+    QCOMPARE(dlg.deviceType(), QStringLiteral("\u4E32\u53E3"));
+    c = dlg.config();
+    QVERIFY2(!c.value(QStringLiteral("portName")).toString().isEmpty(),
+             "串口必须生成 portName");
+    QVERIFY2(c.value(QStringLiteral("baudRate")).toInt() > 0, "串口必须生成 baudRate");
+    QVERIFY2(!c.contains(QStringLiteral("serverIp")), "串口不该生成 TCP 的 serverIp");
+}
+
+// 最关键的操作性回归：点「+」只弹一个 VmDeviceCreateDialog，
+// 不再出现两个连续 QInputDialog + 专用配置窗的三段式。
+void CommWritebackTest::commAddDeviceOpensSingleVmDialog()
+{
+    CommunicationManagerDialog dlg;
+    bool foundVmDialog = false;
+    QStringList seen;
+    // 不能用 QPointer 把窗口带回主流程：onAddDevice 返回时局部对话框析构，
+    // QPointer 会自动置空。只记录「当时看到了什么」这个事实。
+    // activeModalWidget() 在无边框嵌套循环里不一定拿得到，改为遍历顶层窗口。
+    QTimer::singleShot(50, &dlg, [&foundVmDialog, &seen]() {
+        for (QWidget *w : QApplication::topLevelWidgets()) {
+            seen << QString::fromUtf8(w->metaObject()->className());
+            if (auto *vm = qobject_cast<VmDeviceCreateDialog *>(w)) {
+                foundVmDialog = true;
+                vm->reject();   // 自动关掉，避免 exec() 阻塞本腿
+            }
+        }
+    });
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "onAddDevice", Qt::DirectConnection));
+    QVERIFY2(foundVmDialog, qPrintable(QStringLiteral(
+        "点「+」没有弹出 VmDeviceCreateDialog；当时顶层窗口=[%1]")
+        .arg(seen.join(QStringLiteral(" , ")))));
+    QVERIFY2(!seen.contains(QStringLiteral("QInputDialog")),
+             "创建设备仍在弹 QInputDialog，说明三段式没被消灭");
 }
 
 QTEST_MAIN(CommWritebackTest)

@@ -328,6 +328,7 @@ src/DeepOcrSelfTest.cpp   # --selftest-deepocr：换机后验证 HALCON 运行�
     src/CommunicationManager.cpp
     src/UiLogBus.cpp
     src/CommunicationManagerDialog.cpp
+    src/VmDeviceCreateDialog.cpp
     src/CommMonitorDialog.cpp
     src/CommMonitorPane.cpp
     src/ReceiveEvent.cpp
@@ -501,6 +502,8 @@ set(HEADERS
     include/UdpCommNode.h
     include/CommEventEditDialogs.h
     include/CommDeviceConfigDialog.h
+    include/VmDeviceCreateDialog.h
+    include/VmWidgets.h
     include/TcpCommNode.h
     include/ModbusNode.h
     include/FinsFrame.h
