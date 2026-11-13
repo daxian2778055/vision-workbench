@@ -39,6 +39,175 @@
 #include <QMenu>
 #include <QAction>
 #include <QSignalBlocker>
+#include <QStyledItemDelegate>
+#include <QPainter>
+#include <QMouseEvent>
+#include <QLineEdit>
+#include <QCheckBox>
+#include <QSpinBox>
+#include <QListView>
+#include <QIcon>
+#include <QGridLayout>
+#include <QIntValidator>
+#include <QFrame>
+#include <cmath>
+
+namespace {
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VM4.4 通信管理形态复刻（2026-11-13）
+//
+// 截图口径：深灰顶栏 + 92px 图标导航（图标在上、文字在下、选中橙色）、
+// 设备列表是「序号 + 名称 + 小字类型 + 右侧开关」的卡片、右侧参数内联编辑。
+// 这些是纯呈现件：不改变 CommunicationManager 的数据模型，也不替换既有控件，
+// 否则 comm_writeback_test 里对 deviceTable / cellWidget(0,2) 的真实点击会失效。
+// ─────────────────────────────────────────────────────────────────────────────
+
+const QColor kVmOrange("#f26b21");
+
+enum class NavIconKind { Device, Receive, Send, Trigger, Response, Heartbeat };
+
+/// 线性简笔图标（32×32）。不引入 qrc：项目出包时资源清单固定，新增资源会动登记。
+QPixmap makeNavIcon(NavIconKind kind, const QColor &color)
+{
+    QPixmap pm(32, 32);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(color, 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+    p.setPen(pen);
+    p.setBrush(Qt::NoBrush);
+
+    switch (kind) {
+    case NavIconKind::Device:                 // 两台叠放的显示器
+        p.drawRoundedRect(2, 4, 19, 14, 2, 2);
+        p.drawLine(11, 18, 11, 22);
+        p.drawLine(6, 22, 17, 22);
+        p.drawRoundedRect(12, 10, 18, 14, 2, 2);
+        p.drawLine(21, 24, 21, 27);
+        p.drawLine(16, 27, 26, 27);
+        break;
+    case NavIconKind::Receive:                // 文件 + 向右箭头（接收）
+        p.drawRect(5, 4, 18, 24);
+        p.drawLine(5, 4, 17, 4);
+        p.drawLine(17, 4, 23, 10);
+        p.drawLine(23, 10, 23, 12);
+        p.drawLine(9, 17, 19, 17);
+        p.drawLine(16, 14, 19, 17);
+        p.drawLine(16, 20, 19, 17);
+        break;
+    case NavIconKind::Send:                   // 文件 + 向左箭头（发送）
+        p.drawRect(5, 4, 18, 24);
+        p.drawLine(5, 4, 17, 4);
+        p.drawLine(17, 4, 23, 10);
+        p.drawLine(23, 10, 23, 12);
+        p.drawLine(9, 17, 19, 17);
+        p.drawLine(12, 14, 9, 17);
+        p.drawLine(12, 20, 9, 17);
+        break;
+    case NavIconKind::Trigger:                // 齿轮（简化为圆 + 六齿）
+        p.drawEllipse(9, 9, 14, 14);
+        p.drawEllipse(14, 14, 4, 4);
+        for (int i = 0; i < 8; ++i) {
+            const double a = i * 3.14159265358979323846 / 4.0;
+            p.drawLine(QPointF(16 + 8 * std::cos(a), 16 + 8 * std::sin(a)),
+                       QPointF(16 + 11 * std::cos(a), 16 + 11 * std::sin(a)));
+        }
+        break;
+    case NavIconKind::Response:               // 沙漏 / 响应
+        p.drawLine(7, 5, 25, 5);
+        p.drawLine(7, 27, 25, 27);
+        p.drawLine(9, 6, 16, 16);
+        p.drawLine(23, 6, 16, 16);
+        p.drawLine(9, 26, 16, 16);
+        p.drawLine(23, 26, 16, 16);
+        break;
+    case NavIconKind::Heartbeat:              // 设备 + 小齿轮
+        p.drawRect(4, 7, 18, 15);
+        p.drawLine(4, 12, 22, 12);
+        p.drawEllipse(19, 17, 10, 10);
+        p.drawEllipse(22, 20, 4, 4);
+        break;
+    }
+    p.end();
+    return pm;
+}
+
+/// 设备列表卡片：序号 + 名称（大字）、类型（小字）、选中态浅橙底 + 2px 橙色下划线。
+/// 只画第 0 列；第 2 列仍是 cellWidget 的开关按钮，测试的真实点击路径不变。
+class DeviceCardDelegate final : public QStyledItemDelegate
+{
+public:
+    explicit DeviceCardDelegate(QObject *parent = nullptr)
+        : QStyledItemDelegate(parent) {}
+
+    void paint(QPainter *painter, const QStyleOptionViewItem &option,
+               const QModelIndex &index) const override
+    {
+        const QRect r = option.rect;
+        const bool selected = (option.state & QStyle::State_Selected);
+        painter->save();
+        painter->fillRect(r, selected ? QColor("#fff2e9") : QColor("#ffffff"));
+        if (selected) {
+            painter->fillRect(QRect(r.left(), r.bottom() - 2, r.width(), 2), kVmOrange);
+        } else {
+            painter->setPen(QColor("#ededed"));
+            painter->drawLine(r.left(), r.bottom(), r.right(), r.bottom());
+        }
+        const QString name = index.data(Qt::DisplayRole).toString();
+        const QString type = index.data(Qt::UserRole).toString();
+        QFont f = option.font;
+        f.setPointSize(option.font.pointSize() + 1);
+        painter->setFont(f);
+        painter->setPen(selected ? QColor("#e8611a") : QColor("#333333"));
+        painter->drawText(QRect(r.left() + 12, r.top() + 7, r.width() - 18, 22),
+                          Qt::AlignLeft | Qt::AlignVCenter,
+                          QStringLiteral("%1  %2").arg(index.row() + 1).arg(name));
+        QFont smallFont = option.font;   // 不能用 small：Windows SDK 有 #define small char
+        smallFont.setPointSize(qMax(8, option.font.pointSize() - 1));
+        painter->setFont(smallFont);
+        painter->setPen(QColor("#999999"));
+        painter->drawText(QRect(r.left() + 12, r.top() + 29, r.width() - 18, 16),
+                          Qt::AlignLeft | Qt::AlignVCenter, type);
+        painter->restore();
+    }
+
+    QSize sizeHint(const QStyleOptionViewItem &, const QModelIndex &) const override
+    {
+        return QSize(200, 56);
+    }
+};
+
+/// VM 的小滑块开关。仍是 QPushButton（checkable），
+/// 这样 refreshDeviceTable 的 connect 与测试里的 qobject_cast / mouseClick 都不用改。
+class VmSwitch final : public QPushButton
+{
+public:
+    explicit VmSwitch(QWidget *parent = nullptr) : QPushButton(parent)
+    {
+        setCheckable(true);
+        setFixedSize(44, 24);
+        setText(QString());
+        setCursor(Qt::PointingHandCursor);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        const bool on = isChecked();
+        p.setPen(Qt::NoPen);
+        p.setBrush(on ? kVmOrange : QColor("#d8d8d8"));
+        p.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 11, 11);
+        p.setBrush(Qt::white);
+        const int d = 18;
+        const int x = on ? width() - d - 3 : 3;
+        p.drawEllipse(x, (height() - d) / 2, d, d);
+    }
+};
+
+}   // namespace
 
 CommunicationManagerDialog::CommunicationManagerDialog(QWidget *parent)
     : QDialog(parent)
@@ -124,7 +293,7 @@ void CommunicationManagerDialog::loadResponseConfigToUi()
 void CommunicationManagerDialog::updateParamSummary()
 {
     // 右下收发数据区的手动发送目标跟随当前选中的通信设备
-    //（即使摘要控件尚未建好，这一步也要做）
+    //（即使参数控件尚未建好，这一步也要做）
     const int selectedRow = m_deviceTable ? m_deviceTable->currentRow() : -1;
     if (m_monitorPane) {
         m_monitorPane->setTargetDevice(
@@ -132,59 +301,90 @@ void CommunicationManagerDialog::updateParamSummary()
                 ? m_deviceTable->item(selectedRow, 0)->text()
                 : QString());
     }
+
+    // VM 形态：参数就在右侧内联编辑，只有选中真实通信设备时才可用。
+    const bool hasDevice = (selectedRow >= 0 && m_deviceTable->item(selectedRow, 0));
+    if (m_paramForm) m_paramForm->setEnabled(hasDevice);
     if (!m_paramSummary) return;
-    const int devRow = selectedRow;
-    if (devRow >= 0 && m_deviceTable->item(devRow, 0)) {
-        const QString name = m_deviceTable->item(devRow, 0)->text();
+
+    if (hasDevice) {
+        const QString name = m_deviceTable->item(selectedRow, 0)->text();
         const CommDeviceInfo info = CommunicationManager::instance()->deviceInfo(name);
-        QStringList lines;
-        lines << QStringLiteral("<b>%1</b>").arg(name.toHtmlEscaped());
-        lines << QStringLiteral("类型：%1").arg(info.type.toHtmlEscaped());
-        lines << QStringLiteral("状态：%1")
-                     .arg(info.isConnected ? QStringLiteral("已连接") : QStringLiteral("未连接"));
-        // 常用键按官方语义顺序；其余键按字母序补齐（配置是自由 JSON）
-        const QStringList order{
-            QStringLiteral("mode"), QStringLiteral("serverIp"), QStringLiteral("port"),
-            QStringLiteral("bindAddress"), QStringLiteral("localPort"),
-            QStringLiteral("remoteIp"), QStringLiteral("remotePort"),
-            QStringLiteral("serialPort"), QStringLiteral("baud"),
-            QStringLiteral("slaveAddress"), QStringLiteral("pollInterval"),
-            QStringLiteral("dataUpload"), QStringLiteral("autoReconnect"),
-            QStringLiteral("frameTerminator"), QStringLiteral("frameTimeoutMs")};
-        const QStringList keys = info.config.keys();
-        QStringList printed;
-        for (const QString &k : order) {
-            if (!info.config.contains(k)) continue;
-            printed << k;
-            const QJsonValue v = info.config.value(k);
-            const QString text = v.isBool() ? (v.toBool() ? QStringLiteral("是") : QStringLiteral("否"))
-                                            : v.toVariant().toString();
-            lines << QStringLiteral("%1：%2").arg(k, text.toHtmlEscaped());
-        }
-        for (const QString &k : keys) {
-            if (printed.contains(k)) continue;
-            lines << QStringLiteral("%1：%2").arg(k, info.config.value(k).toVariant().toString().toHtmlEscaped());
-        }
-        m_paramSummary->setText(lines.join(QStringLiteral("<br>")));
+        syncInlineParamsFromSelection(info);
+        m_paramSummary->setText(QStringLiteral("%1  \u00B7  %2  \u00B7  %3")
+            .arg(name, info.type,
+                 info.isConnected ? QStringLiteral("\u5DF2\u8FDE\u63A5")
+                                  : QStringLiteral("\u672A\u8FDE\u63A5")));
         return;
     }
     const int ctlRow = m_controllerTable ? m_controllerTable->currentRow() : -1;
     if (ctlRow >= 0 && m_controllerTable->item(ctlRow, 0)) {
-        QStringList lines;
-        lines << QStringLiteral("<b>%1</b>（控制器）")
-                     .arg(m_controllerTable->item(ctlRow, 0)->text().toHtmlEscaped());
-        if (m_controllerTable->item(ctlRow, 1))
-            lines << QStringLiteral("类型：%1")
-                         .arg(m_controllerTable->item(ctlRow, 1)->text().toHtmlEscaped());
-        if (m_controllerTable->item(ctlRow, 2))
-            lines << QStringLiteral("状态：%1")
-                         .arg(m_controllerTable->item(ctlRow, 2)->text().toHtmlEscaped());
-        lines << QStringLiteral("说明：控制器列表随通信设备派生（独立控制器模型按拍板不做）。");
-        m_paramSummary->setText(lines.join(QStringLiteral("<br>")));
+        m_paramSummary->setText(QStringLiteral(
+            "\u63A7\u5236\u5668\u5217\u8868\u7531\u901A\u4FE1\u8BBE\u5907\u6D3E\u751F"));
         return;
     }
-    m_paramSummary->setText(QStringLiteral(
-        "未选中设备。\n\n在左侧选择设备后，这里显示其通信参数；\n点击「配置」修改参数。"));
+    m_paramSummary->setText(QStringLiteral("\u672A\u9009\u4E2D\u8BBE\u5907"));
+}
+
+void CommunicationManagerDialog::syncInlineParamsFromSelection(const CommDeviceInfo &info)
+{
+    if (!m_paramForm) return;
+    // 回显期间所有 setChecked/setValue 都会发信号，用守卫让写回直接返回。
+    m_inlineLoading = true;
+    const QString ip = info.config.value(QStringLiteral("serverIp"))
+                           .toString(QStringLiteral("127.0.0.1"));
+    const QStringList parts = ip.split(QLatin1Char('.'));
+    for (int i = 0; i < 4; ++i) {
+        if (m_ipEdits[i])
+            m_ipEdits[i]->setText(parts.value(i, QStringLiteral("0")));
+    }
+    if (m_inlinePort)
+        m_inlinePort->setValue(info.config.value(QStringLiteral("port")).toInt(502));
+    if (m_inlineDataUpload)
+        m_inlineDataUpload->setChecked(
+            info.config.value(QStringLiteral("dataUpload")).toBool(true));
+    if (m_inlineAutoReconnect)
+        m_inlineAutoReconnect->setChecked(
+            info.config.value(QStringLiteral("autoReconnect")).toBool(true));
+    if (m_inlineRxTerm)
+        m_inlineRxTerm->setChecked(
+            !info.config.value(QStringLiteral("frameTerminator")).toString().isEmpty());
+    m_inlineLoading = false;
+}
+
+void CommunicationManagerDialog::applyInlineParamChange()
+{
+    if (m_inlineLoading || !m_paramForm || !m_paramForm->isEnabled()) return;
+    const int row = m_deviceTable ? m_deviceTable->currentRow() : -1;
+    if (row < 0 || !m_deviceTable->item(row, 0)) return;
+
+    const QString name = m_deviceTable->item(row, 0)->text();
+    auto *cm = CommunicationManager::instance();
+    QJsonObject cfg = cm->deviceInfo(name).config;
+
+    // 四段都填了才写 IP：编辑到一半的 "127..0.1" 不能覆盖原配置。
+    bool complete = true;
+    QStringList segs;
+    for (int i = 0; i < 4; ++i) {
+        const QString seg = m_ipEdits[i] ? m_ipEdits[i]->text().trimmed() : QString();
+        if (seg.isEmpty()) complete = false;
+        segs << seg;
+    }
+    if (complete)
+        cfg[QStringLiteral("serverIp")] = segs.join(QLatin1Char('.'));
+    if (m_inlinePort)
+        cfg[QStringLiteral("port")] = m_inlinePort->value();
+    if (m_inlineDataUpload)
+        cfg[QStringLiteral("dataUpload")] = m_inlineDataUpload->isChecked();
+    if (m_inlineAutoReconnect)
+        cfg[QStringLiteral("autoReconnect")] = m_inlineAutoReconnect->isChecked();
+    if (m_inlineRxTerm)
+        cfg[QStringLiteral("frameTerminator")] =
+            m_inlineRxTerm->isChecked() ? QStringLiteral("\r\n") : QString();
+
+    cm->updateDeviceConfig(name, cfg);
+    if (m_paramSummary)
+        m_paramSummary->setText(QStringLiteral("\u53C2\u6570\u5DF2\u5373\u65F6\u4FDD\u5B58"));
 }
 
 // ==================== gtd import / export ====================
@@ -297,33 +497,90 @@ bool CommunicationManagerDialog::importGtdFrom(const QString &path)
 void CommunicationManagerDialog::setupUI()
 {
     setWindowTitle(QStringLiteral("\u901A\u4FE1\u7BA1\u7406"));
-    setMinimumSize(750, 500);
-    setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
+    setMinimumSize(980, 620);
+    // VM4.4 截图：深灰自定义标题栏、右上角两个图标 + 关闭，没有系统标题栏。
+    // 用 FramelessWindowHint 才能让顶栏真正贴边；拖动在三个 mouse*Event 里自己实现。
+    setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint);
 
     auto *mainLayout = new QVBoxLayout(this);
+    mainLayout->setContentsMargins(0, 0, 0, 0);
+    mainLayout->setSpacing(0);
 
-    // VM 5.2：窗口右上角「导出 / 导入」——通信管理中的所有配置以 gtd 文件交换
-    auto *gtdRow = new QHBoxLayout();
-    gtdRow->addStretch();
-    m_exportGtdBtn = new QPushButton(QStringLiteral("\u5BFC\u51FA gtd"));
-    m_exportGtdBtn->setObjectName(QStringLiteral("commGtdExport"));
-    m_exportGtdBtn->setToolTip(QStringLiteral(
-        "把设备/接收事件/发送事件/触发/心跳/响应配置导出为 gtd 文件（VM 同位置图标）"));
-    m_importGtdBtn = new QPushButton(QStringLiteral("\u5BFC\u5165 gtd"));
-    m_importGtdBtn->setObjectName(QStringLiteral("commGtdImport"));
-    m_importGtdBtn->setToolTip(QStringLiteral(
-        "从 gtd 文件导入整包通信配置（覆盖当前配置）"));
-    gtdRow->addWidget(m_exportGtdBtn);
-    gtdRow->addWidget(m_importGtdBtn);
-    mainLayout->addLayout(gtdRow);
+    // ─────────────── 自定义顶栏 ───────────────
+    m_titleBar = new QWidget(this);
+    m_titleBar->setObjectName(QStringLiteral("commTitleBar"));
+    m_titleBar->setFixedHeight(34);
+    m_titleBar->setStyleSheet(QStringLiteral(
+        "QWidget#commTitleBar { background-color: #2b2b2b; }"));
+    auto *titleRow = new QHBoxLayout(m_titleBar);
+    titleRow->setContentsMargins(12, 0, 6, 0);
+    titleRow->setSpacing(8);
+
+    auto *titleText = new QLabel(
+        QStringLiteral("\u901A\u4FE1\u7BA1\u7406"), m_titleBar);
+    titleText->setStyleSheet(QStringLiteral(
+        "color: #ffffff; font-size: 13px; font-weight: bold;"));
+    auto *helpMark = new QLabel(QStringLiteral("?"), m_titleBar);
+    helpMark->setFixedSize(16, 16);
+    helpMark->setAlignment(Qt::AlignCenter);
+    helpMark->setStyleSheet(QStringLiteral(
+        "color: #ffffff; background-color: #f26b21; border-radius: 8px; font-weight: bold;"));
+    titleRow->addWidget(titleText);
+    titleRow->addWidget(helpMark);
+    titleRow->addStretch();
+
+    auto makeTitleButton = [this](const QString &objectName, const QString &tip,
+                                  const QString &glyph) {
+        auto *b = new QPushButton(glyph, m_titleBar);
+        b->setObjectName(objectName);
+        b->setToolTip(tip);
+        b->setFixedSize(30, 26);
+        b->setStyleSheet(QStringLiteral(
+            "QPushButton { color: #d8d8d8; background: transparent; border: none; font-size: 16px; }"
+            "QPushButton:hover { color: #ffffff; background-color: #444444; }"));
+        return b;
+    };
+    m_exportGtdBtn = makeTitleButton(QStringLiteral("commGtdExport"),
+        QStringLiteral("把设备/接收事件/发送事件/触发/心跳/响应配置导出为 gtd 文件（VM 同位置图标）"),
+        QStringLiteral("\u21A7"));
+    m_importGtdBtn = makeTitleButton(QStringLiteral("commGtdImport"),
+        QStringLiteral("从 gtd 文件导入整包通信配置（覆盖当前配置）"),
+        QStringLiteral("\u21A5"));
+    m_closeBtn = makeTitleButton(QStringLiteral("commCloseBtn"),
+        QStringLiteral("\u5173\u95ED"), QStringLiteral("\u00D7"));
+    titleRow->addWidget(m_exportGtdBtn);
+    titleRow->addWidget(m_importGtdBtn);
+    titleRow->addWidget(m_closeBtn);
+    mainLayout->addWidget(m_titleBar);
+
     connect(m_exportGtdBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onExportGtd);
     connect(m_importGtdBtn, &QPushButton::clicked, this, &CommunicationManagerDialog::onImportGtd);
+    connect(m_closeBtn, &QPushButton::clicked, this, &QDialog::accept);
 
-    // VM4.4 形态：左侧导航 + 右侧堆叠页（原顶部 QTabWidget 重构为左侧导航）
+    // ─────────────── 主体：左图标导航 + 右堆叠页 ───────────────
     auto *bodyLayout = new QHBoxLayout();
+    bodyLayout->setContentsMargins(0, 0, 0, 0);
+    bodyLayout->setSpacing(0);
+
     m_navList = new QListWidget();
     m_navList->setObjectName(QStringLiteral("commNavList"));   // 供回归测试按名定位
-    m_navList->setFixedWidth(150);
+    m_navList->setFixedWidth(92);
+    // IconMode 让图标在上、文字在下——正是截图里的形态；六项文案与索引都不变。
+    m_navList->setViewMode(QListView::IconMode);
+    m_navList->setIconSize(QSize(32, 32));
+    m_navList->setGridSize(QSize(90, 84));
+    m_navList->setMovement(QListView::Static);
+    m_navList->setResizeMode(QListView::Adjust);
+    m_navList->setUniformItemSizes(true);
+    m_navList->setSpacing(0);
+    m_navList->setStyleSheet(QStringLiteral(
+        "QListWidget#commNavList { background-color: #f1f1f1; border: none; "
+        "border-right: 1px solid #dddddd; }"
+        "QListWidget#commNavList::item { color: #555555; background-color: #f1f1f1; "
+        "border-bottom: 1px solid #e5e5e5; }"
+        "QListWidget#commNavList::item:selected { color: #f26b21; background-color: #ffffff; "
+        "border-left: 3px solid #f26b21; }"));
+
     m_pageStack = new QStackedWidget();
     m_pageStack->setObjectName(QStringLiteral("commPageStack"));
     bodyLayout->addWidget(m_navList);
@@ -347,21 +604,52 @@ void CommunicationManagerDialog::setupUI()
         QStringLiteral("\u5FC3\u8DF3\u7BA1\u7406")
     };
     m_navList->addItems(navTitles);
-    connect(m_navList, &QListWidget::currentRowChanged,
-            m_pageStack, &QStackedWidget::setCurrentIndex);
+    for (int i = 0; i < m_navList->count(); ++i) {
+        QListWidgetItem *item = m_navList->item(i);
+        item->setTextAlignment(Qt::AlignHCenter | Qt::AlignBottom);
+        item->setIcon(QIcon(makeNavIcon(static_cast<NavIconKind>(i), QColor("#8a8a8a"))));
+    }
+    connect(m_navList, &QListWidget::currentRowChanged, this, [this](int row) {
+        if (row >= 0 && row < m_pageStack->count())
+            m_pageStack->setCurrentIndex(row);
+        // 选中项图标也转橙，未选中转灰（QSS 只管得了文字与背景）
+        for (int i = 0; i < m_navList->count(); ++i) {
+            m_navList->item(i)->setIcon(QIcon(makeNavIcon(
+                static_cast<NavIconKind>(i),
+                i == row ? kVmOrange : QColor("#8a8a8a"))));
+        }
+    });
     m_navList->setCurrentRow(0);   // 与 stack 默认页一致：设备页默认可见
-
-    auto *btnLayout = new QHBoxLayout();
-    m_closeBtn = new QPushButton(QStringLiteral("\u5173\u95ED"));
-    m_closeBtn->setMinimumHeight(30);
-    btnLayout->addStretch();
-    btnLayout->addWidget(m_closeBtn);
-    mainLayout->addLayout(btnLayout);
-
-    connect(m_closeBtn, &QPushButton::clicked, this, &QDialog::accept);
 
     // 建页即填一次（表为空时就是空表；构造末尾的 refreshDeviceTable 还会再同步一次）
     refreshControllerTable();
+}
+
+void CommunicationManagerDialog::mousePressEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton && m_titleBar
+        && m_titleBar->geometry().contains(event->pos())) {
+        m_dragPos = event->globalPosition().toPoint() - frameGeometry().topLeft();
+        event->accept();
+        return;
+    }
+    QDialog::mousePressEvent(event);
+}
+
+void CommunicationManagerDialog::mouseMoveEvent(QMouseEvent *event)
+{
+    if ((event->buttons() & Qt::LeftButton) && !m_dragPos.isNull()) {
+        move(event->globalPosition().toPoint() - m_dragPos);
+        event->accept();
+        return;
+    }
+    QDialog::mouseMoveEvent(event);
+}
+
+void CommunicationManagerDialog::mouseReleaseEvent(QMouseEvent *event)
+{
+    m_dragPos = QPoint();
+    QDialog::mouseReleaseEvent(event);
 }
 
 // ==================== Device Tab ====================
@@ -370,31 +658,43 @@ void CommunicationManagerDialog::setupDeviceTab(QStackedWidget *stack)
 {
     auto *tab = new QWidget();
     auto *pageLayout = new QVBoxLayout(tab);
+    pageLayout->setContentsMargins(0, 0, 0, 0);
+    pageLayout->setSpacing(0);
 
-    auto *label = new QLabel(QStringLiteral("<b>\u8BBE\u5907\u7BA1\u7406</b>"));
-    label->setStyleSheet("font-size: 13px;");
-    pageLayout->addWidget(label);
-
-    // VM 官方布局（手册「设备管理」页）：左列「通信设备列表 + 控制器列表」，
-    // 右列「通信参数」——未选中时为空，选中后显示该设备的参数摘要。
+    // VM4.4 截图：三栏 = 92px 图标导航(setupUI) / 240px 设备列表 / 剩余参数区。
     auto *body = new QHBoxLayout();
+    body->setContentsMargins(0, 0, 0, 0);
+    body->setSpacing(0);
+
+    // ─────────────── 左列：通信设备列表（卡片）+ 控制器列表 ───────────────
     auto *left = new QWidget();
+    left->setFixedWidth(240);
+    left->setStyleSheet(QStringLiteral("QWidget { background-color: #fafafa; }"));
     auto *leftLayout = new QVBoxLayout(left);
-    leftLayout->setContentsMargins(0, 0, 0, 0);
+    leftLayout->setContentsMargins(12, 14, 10, 10);
+    leftLayout->setSpacing(8);
 
     auto *devHeader = new QHBoxLayout();
-    devHeader->addWidget(new QLabel(QStringLiteral("<b>\u901A\u4FE1\u8BBE\u5907\u5217\u8868</b>")));
+    auto *devTitle = new QLabel(
+        QStringLiteral("\u901A\u4FE1\u8BBE\u5907\u5217\u8868"), left);
+    devTitle->setStyleSheet(QStringLiteral("font-size: 12px; color: #333333;"));
+    devHeader->addWidget(devTitle);
     devHeader->addStretch();
     m_addDeviceBtn = new QPushButton(QStringLiteral("+"));
     m_addDeviceBtn->setObjectName(QStringLiteral("commAddDevice"));
-    m_addDeviceBtn->setFixedWidth(28);
+    m_addDeviceBtn->setFixedSize(22, 22);
     m_addDeviceBtn->setToolTip(QStringLiteral("\u6DFB\u52A0\u901A\u4FE1\u8BBE\u5907"));
+    m_addDeviceBtn->setStyleSheet(QStringLiteral(
+        "QPushButton { color: #f26b21; border: 1px solid #f26b21; background: #ffffff; "
+        "font-size: 15px; font-weight: bold; }"
+        "QPushButton:hover { background-color: #fff2e9; }"));
     devHeader->addWidget(m_addDeviceBtn);
     leftLayout->addLayout(devHeader);
 
-    // 设备表格 — 5 列：名称 / 类型 / 连接开关 / 配置 / 寄存器实时值
+    // 仍是 QTableWidget（既有回归按名定位、且要真实点击 cellWidget(0,2)），
+    // 但隐藏表头/网格/多余列，第 0 列委托绘制成 VM 卡片，第 2 列放小滑块开关。
     m_deviceTable = new QTableWidget();
-    m_deviceTable->setObjectName(QStringLiteral("deviceTable"));  // 供回归测试按名定位
+    m_deviceTable->setObjectName(QStringLiteral("deviceTable"));
     m_deviceTable->setColumnCount(5);
     m_deviceTable->setHorizontalHeaderLabels({
         QStringLiteral("\u8BBE\u5907\u540D\u79F0"),
@@ -406,18 +706,40 @@ void CommunicationManagerDialog::setupDeviceTab(QStackedWidget *stack)
     m_deviceTable->setSelectionMode(QAbstractItemView::SingleSelection);
     m_deviceTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_deviceTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_deviceTable->horizontalHeader()->setStretchLastSection(true);
-    m_deviceTable->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    m_deviceTable->horizontalHeader()->setVisible(false);
+    m_deviceTable->verticalHeader()->setVisible(false);
+    m_deviceTable->verticalHeader()->setDefaultSectionSize(56);
+    m_deviceTable->setShowGrid(false);
+    m_deviceTable->setFrameShape(QFrame::NoFrame);
+    m_deviceTable->setFocusPolicy(Qt::NoFocus);
+    m_deviceTable->setStyleSheet(QStringLiteral(
+        "QTableWidget { background-color: #fafafa; border: none; }"
+        "QTableWidget::item { border: none; }"));
+    m_deviceTable->setItemDelegateForColumn(0, new DeviceCardDelegate(m_deviceTable));
+    m_deviceTable->horizontalHeader()->setStretchLastSection(false);
+    m_deviceTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    m_deviceTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Fixed);
+    m_deviceTable->setColumnWidth(2, 56);
+    m_deviceTable->setColumnHidden(1, true);
+    m_deviceTable->setColumnHidden(3, true);
+    m_deviceTable->setColumnHidden(4, true);
     leftLayout->addWidget(m_deviceTable, 1);
 
+    // VM 用右键做重命名/删除，但高级参数（串口/UDP/FINS 专属字段）仍需入口，
+    // 保留为左列底部的紧凑次要按钮，不占主视觉。
     auto *btnLayout = new QHBoxLayout();
+    btnLayout->setSpacing(4);
     m_removeDeviceBtn = new QPushButton(QStringLiteral("\u5220\u9664\u8BBE\u5907"));
     m_configBtn = new QPushButton(QStringLiteral("\u914D\u7F6E"));
     m_readBtn = new QPushButton(QStringLiteral("\u5237\u65B0\u5BC4\u5B58\u5668"));
-
-    btnLayout->addWidget(m_removeDeviceBtn);
-    btnLayout->addWidget(m_configBtn);
-    btnLayout->addWidget(m_readBtn);
+    for (QPushButton *b : { m_removeDeviceBtn, m_configBtn, m_readBtn }) {
+        b->setMaximumHeight(24);
+        b->setStyleSheet(QStringLiteral(
+            "QPushButton { color: #666666; border: 1px solid #d5d5d5; background: #ffffff; "
+            "font-size: 11px; padding: 2px 6px; }"
+            "QPushButton:hover { color: #f26b21; border-color: #f26b21; }"));
+        btnLayout->addWidget(b);
+    }
     btnLayout->addStretch();
     leftLayout->addLayout(btnLayout);
 
@@ -429,30 +751,115 @@ void CommunicationManagerDialog::setupDeviceTab(QStackedWidget *stack)
     // VM 5.2.1：控制器列表并进设备管理页（官方布局：设备列表在上、控制器列表在下）
     buildControllerSection(leftLayout);
 
-    auto *rightBox = new QGroupBox(QStringLiteral("\u901A\u4FE1\u53C2\u6570"));
-    auto *rightLayout = new QVBoxLayout(rightBox);
-    m_paramSummary = new QLabel();
+    // ─────────────── 右列：内联可编辑通信参数 + 收发数据区 ───────────────
+    auto *right = new QWidget();
+    right->setStyleSheet(QStringLiteral("QWidget { background-color: #ffffff; }"));
+    auto *rightLayout = new QVBoxLayout(right);
+    rightLayout->setContentsMargins(16, 14, 14, 12);
+    rightLayout->setSpacing(8);
+
+    auto *paramTitle = new QLabel(
+        QStringLiteral("\u901A\u4FE1\u53C2\u6570"), right);
+    paramTitle->setStyleSheet(QStringLiteral(
+        "font-size: 13px; color: #333333; font-weight: bold;"));
+    rightLayout->addWidget(paramTitle);
+
+    // 官方没有「点配置弹窗」这一步：参数就在右侧直接改，改动即时写回。
+    m_paramForm = new QWidget(right);
+    m_paramForm->setObjectName(QStringLiteral("commParamForm"));
+    auto *form = new QGridLayout(m_paramForm);
+    form->setContentsMargins(0, 6, 0, 6);
+    form->setHorizontalSpacing(12);
+    form->setVerticalSpacing(12);
+
+    auto fieldLabel = [](const QString &text, QWidget *parent) {
+        auto *l = new QLabel(text, parent);
+        l->setStyleSheet(QStringLiteral("color: #555555; font-size: 12px;"));
+        l->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        return l;
+    };
+
+    auto *ipHost = new QWidget(m_paramForm);
+    auto *ipRow = new QHBoxLayout(ipHost);
+    ipRow->setContentsMargins(0, 0, 0, 0);
+    ipRow->setSpacing(0);
+    for (int i = 0; i < 4; ++i) {
+        m_ipEdits[i] = new QLineEdit(ipHost);
+        m_ipEdits[i]->setObjectName(QStringLiteral("commParamIp%1").arg(i));
+        m_ipEdits[i]->setFixedWidth(46);
+        m_ipEdits[i]->setMaxLength(3);
+        m_ipEdits[i]->setAlignment(Qt::AlignCenter);
+        m_ipEdits[i]->setValidator(new QIntValidator(0, 255, m_ipEdits[i]));
+        m_ipEdits[i]->setStyleSheet(QStringLiteral(
+            "QLineEdit { border: 1px solid #cfcfcf; padding: 3px; }"));
+        ipRow->addWidget(m_ipEdits[i]);
+        if (i < 3) {
+            auto *dot = new QLabel(QStringLiteral("."), ipHost);
+            dot->setFixedWidth(9);
+            dot->setAlignment(Qt::AlignCenter);
+            ipRow->addWidget(dot);
+        }
+    }
+    ipRow->addStretch();
+
+    form->addWidget(fieldLabel(QStringLiteral("\u76EE\u6807IP"), m_paramForm), 0, 0);
+    form->addWidget(ipHost, 0, 1);
+    form->addWidget(fieldLabel(QStringLiteral("\u76EE\u6807\u7AEF\u53E3"), m_paramForm), 0, 2);
+    m_inlinePort = new QSpinBox(m_paramForm);
+    m_inlinePort->setObjectName(QStringLiteral("commParamPort"));
+    m_inlinePort->setRange(1, 65535);
+    m_inlinePort->setFixedWidth(110);
+    form->addWidget(m_inlinePort, 0, 3);
+
+    m_inlineDataUpload = new VmSwitch(m_paramForm);
+    m_inlineDataUpload->setObjectName(QStringLiteral("commParamDataUpload"));
+    m_inlineAutoReconnect = new VmSwitch(m_paramForm);
+    m_inlineAutoReconnect->setObjectName(QStringLiteral("commParamAutoReconnect"));
+    m_inlineRxTerm = new VmSwitch(m_paramForm);
+    m_inlineRxTerm->setObjectName(QStringLiteral("commParamRxTerm"));
+
+    form->addWidget(fieldLabel(QStringLiteral("\u6570\u636E\u4E0A\u4F20"), m_paramForm), 1, 0);
+    form->addWidget(m_inlineDataUpload, 1, 1, Qt::AlignLeft);
+    form->addWidget(fieldLabel(QStringLiteral("\u81EA\u52A8\u91CD\u8FDE"), m_paramForm), 1, 2);
+    form->addWidget(m_inlineAutoReconnect, 1, 3, Qt::AlignLeft);
+    form->addWidget(fieldLabel(QStringLiteral("\u63A5\u6536\u7ED3\u675F\u7B26"), m_paramForm), 2, 0);
+    form->addWidget(m_inlineRxTerm, 2, 1, Qt::AlignLeft);
+    form->setColumnStretch(1, 1);
+    m_paramForm->setEnabled(false);   // 未选中设备时不可编辑
+    rightLayout->addWidget(m_paramForm);
+
+    for (int i = 0; i < 4; ++i) {
+        // editingFinished（回车/失焦）而非 textChanged：逐字符写回会把
+        // "127.0.0.1" 编到一半就存成残缺 IP，也会打断输入焦点。
+        connect(m_ipEdits[i], &QLineEdit::editingFinished, this,
+                &CommunicationManagerDialog::applyInlineParamChange);
+    }
+    connect(m_inlinePort, &QSpinBox::valueChanged, this,
+            [this](int) { applyInlineParamChange(); });
+    for (QAbstractButton *sw : { m_inlineDataUpload, m_inlineAutoReconnect, m_inlineRxTerm }) {
+        connect(sw, &QAbstractButton::toggled, this,
+                [this](bool) { applyInlineParamChange(); });
+    }
+
+    // 保留既有 commParamSummary 契约；现在只作一行状态提示，不再是参数正文。
+    m_paramSummary = new QLabel(right);
     m_paramSummary->setObjectName(QStringLiteral("commParamSummary"));
     m_paramSummary->setWordWrap(true);
-    m_paramSummary->setAlignment(Qt::AlignTop | Qt::AlignLeft);
-    m_paramSummary->setText(QStringLiteral(
-        "\u672A\u9009\u4E2D\u8BBE\u5907\u3002\n\n"
-        "\u5728\u5DE6\u4FA7\u9009\u62E9\u8BBE\u5907\u540E\uFF0C\u8FD9\u91CC\u663E\u793A\u5176\u901A\u4FE1\u53C2\u6570\uFF1B\n"
-        "\u70B9\u51FB\u300C\u914D\u7F6E\u300D\u4FEE\u6539\u53C2\u6570\u3002"));
+    m_paramSummary->setStyleSheet(QStringLiteral("color: #888888; font-size: 11px;"));
+    m_paramSummary->setText(QStringLiteral("\u672A\u9009\u4E2D\u8BBE\u5907"));
     rightLayout->addWidget(m_paramSummary);
 
     // VM 5.2 官方设备管理页右下：Tab「接收数据 / 发送数据」+ 大数据区 +
-    // 「16 进制显示」+「清空」+ 手动发送。此前只有独立监视器对话框，
-    // 主窗口这一块是空的，与官方形态不符（2026-11-10 补齐）。
-    m_monitorPane = new CommMonitorPane(rightBox);
+    // 「16 进制显示」+「清空」+ 手动发送（内嵌形态此前已补齐）。
+    m_monitorPane = new CommMonitorPane(right);
     m_monitorPane->setObjectName(QStringLiteral("commMonitorPane"));
     rightLayout->addWidget(m_monitorPane, 1);
 
-    body->addWidget(left, 3);
-    body->addWidget(rightBox, 2);
+    body->addWidget(left);
+    body->addWidget(right, 1);
     pageLayout->addLayout(body, 1);
 
-    // 选中行切换 → 右侧参数摘要跟随
+    // 选中行切换 → 右侧内联参数回显 + 收发区目标设备跟随
     connect(m_deviceTable, &QTableWidget::currentCellChanged, this,
             [this](int, int, int, int) { updateParamSummary(); });
     connect(m_controllerTable, &QTableWidget::currentCellChanged, this,
@@ -534,43 +941,31 @@ void CommunicationManagerDialog::refreshDeviceTable()
         CommDeviceInfo info = cm->deviceInfo(name);
         int row = m_deviceTable->rowCount();
         m_deviceTable->insertRow(row);
-        m_deviceTable->setItem(row, 0, new QTableWidgetItem(name));
+        auto *nameItem = new QTableWidgetItem(name);
+        nameItem->setData(Qt::UserRole, info.type);   // 卡片委托画第二行小字
+        m_deviceTable->setItem(row, 0, nameItem);
         m_deviceTable->setItem(row, 1, new QTableWidgetItem(info.type));
 
-        // 列 2: 连接切换开关（QPushButton 风格化为开关样式）
-        auto *toggleBtn = new QPushButton();
-        toggleBtn->setCheckable(true);
-        toggleBtn->setMinimumWidth(80);
-        toggleBtn->setMaximumHeight(28);
+        // 列 2：VM 小滑块开关。仍是 checkable QPushButton，既有回归对
+        // cellWidget(0,2) 的 qobject_cast 与 QTest::mouseClick 都不变。
+        auto *toggleBtn = new VmSwitch();
+        toggleBtn->setChecked(info.isConnected);
 
-        // 判断是否为 Modbus 服务器角色
         bool isModbusServer = false;
         if (info.type == QStringLiteral("Modbus")) {
             auto *mn = qobject_cast<ModbusNode *>(cm->deviceNode(name));
             if (mn) isModbusServer = (mn->role() == ModbusNode::MODBUS_SERVER);
         }
-        QString onText = isModbusServer ? QStringLiteral("\u2714 \u670D\u52A1\u5668\u5DF2\u542F\u52A8")
-                                        : QStringLiteral("\u2714 \u5DF2\u8FDE\u63A5");
-        QString offText = isModbusServer ? QStringLiteral("\u25B6 \u542F\u52A8\u670D\u52A1\u5668")
-                                         : QStringLiteral("\u25B6 \u672A\u8FDE\u63A5");
-
-        if (info.isConnected) {
-            toggleBtn->setChecked(true);
-            toggleBtn->setText(onText);
-            toggleBtn->setStyleSheet(
-                "QPushButton { background-color: #4CAF50; color: white; border: none; "
-                "border-radius: 4px; padding: 4px 12px; font-weight: bold; }"
-                "QPushButton:hover { background-color: #45a049; }");
+        if (isModbusServer) {
+            toggleBtn->setToolTip(info.isConnected
+                ? QStringLiteral("\u670D\u52A1\u5668\u5DF2\u542F\u52A8")
+                : QStringLiteral("\u542F\u52A8\u670D\u52A1\u5668"));
         } else {
-            toggleBtn->setChecked(false);
-            toggleBtn->setText(offText);
-            toggleBtn->setStyleSheet(
-                "QPushButton { background-color: #f44336; color: white; border: none; "
-                "border-radius: 4px; padding: 4px 12px; font-weight: bold; }"
-                "QPushButton:hover { background-color: #da190b; }"
-                "QPushButton:checked { background-color: #4CAF50; }");
+            toggleBtn->setToolTip(info.isConnected
+                ? QStringLiteral("\u5DF2\u8FDE\u63A5\uFF0C\u70B9\u51FB\u65AD\u5F00")
+                : QStringLiteral("\u672A\u8FDE\u63A5\uFF0C\u70B9\u51FB\u8FDE\u63A5"));
         }
-        connect(toggleBtn, &QPushButton::clicked, this, [this, toggleBtn, name, row]() {
+        connect(toggleBtn, &QPushButton::clicked, this, [this, row]() {
             onToggleConnection(row);
         });
         m_deviceTable->setCellWidget(row, 2, toggleBtn);

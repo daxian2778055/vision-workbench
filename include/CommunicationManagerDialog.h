@@ -9,11 +9,16 @@
 #include <QComboBox>
 #include <QSpinBox>
 #include <QCheckBox>
+#include <QAbstractButton>
 #include <QLabel>
 #include <QGroupBox>
 #include <QPlainTextEdit>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
+#include <QPoint>
+
+class QMouseEvent;
+struct CommDeviceInfo;
 
 class CommMonitorPane;  // 设备管理页右下内嵌的收发数据区（官方 5.2 形态）
 class ModbusNode; // 前向声明
@@ -34,6 +39,12 @@ public:
     /// 响应配置页「应用」：把控件值写成 CommunicationManager::responseConfig()（随方案保存）。
     /// 修改任一控件自动调用；回归测试按名直接驱动。
     void applyResponseConfig();
+
+protected:
+    /// 无边框顶栏拖动（VM 4.4 形态：自定义深灰标题栏，没有系统标题栏可拖）
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
 
 private slots:
     // 设备管理 Tab
@@ -95,8 +106,12 @@ private:
     void refreshResponseDeviceCombos();
     /// 响应配置页回显（导入 gtd 后也走这里）
     void loadResponseConfigToUi();
-    /// 设备管理页右侧「通信参数」摘要（随选中行刷新）
+    /// 设备管理页右侧「通信参数」摘要（随选中行刷新）+ 回显内联编辑表单
     void updateParamSummary();
+    /// 内联表单改动 → 立即写回 CommunicationManager::updateDeviceConfig
+    void applyInlineParamChange();
+    /// 选中变化时把设备配置灌进内联表单（阻断信号，避免回显触发写回）
+    void syncInlineParamsFromSelection(const CommDeviceInfo &info);
 
     /// gtd 导入时被触发前缀歧义闸拒收的条目（按钮入口据此提示；测试可直读）
     QStringList m_gtdImportRejected;
@@ -123,8 +138,20 @@ private:
     // 控制器列表（并进设备管理页；由通信设备派生）
     QTableWidget *m_controllerTable = nullptr;
 
-    // 设备管理页右侧「通信参数」摘要（VM 布局：左列表 + 右参数）
-    QLabel *m_paramSummary = nullptr;
+    // 设备管理页右侧「通信参数」（VM 布局：左卡片列表 + 右内联可编辑参数）
+    QLabel *m_paramSummary = nullptr;   // 保留：既有回归按 commParamSummary 定位，现作状态行
+    QWidget *m_paramForm = nullptr;     // objectName = commParamForm
+    QLineEdit *m_ipEdits[4] = { nullptr, nullptr, nullptr, nullptr };
+    QSpinBox *m_inlinePort = nullptr;
+    QAbstractButton *m_inlineDataUpload = nullptr;
+    QAbstractButton *m_inlineAutoReconnect = nullptr;
+    QAbstractButton *m_inlineRxTerm = nullptr;
+    /// 回显期间的守卫：true 时 applyInlineParamChange 直接返回，避免自触发写回
+    bool m_inlineLoading = false;
+
+    // VM 形态自定义顶栏
+    QWidget *m_titleBar = nullptr;
+    QPoint m_dragPos;
     /// 右侧下方的收发数据区（Tab 收/发 + Hex + 清空 + 手动发送）
     CommMonitorPane *m_monitorPane = nullptr;
     QPushButton *m_exportGtdBtn = nullptr;

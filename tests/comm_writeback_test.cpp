@@ -6,11 +6,14 @@
 // 显式 127.0.0.1 —— 收紧后留空即未配置、从站拒启动（生产侧同口径：配置面必须显式给地址）。
 #include <QtTest>
 #include <QPushButton>
+#include <QAbstractButton>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QLineEdit>
 #include <QTableWidget>
 #include <QListWidget>
+#include <QListView>
+#include <QHeaderView>
 #include <QStackedWidget>
 #include <QSignalSpy>
 #include <QTcpServer>
@@ -206,6 +209,9 @@ private slots:
     void communicationDialogEmbedsMonitorPane();
     // 2026-11-11：16 位寄存器地址空间上界，以及「隐藏空白行」是否真的生效
     void registerSpaceBarClampsAddressSpace();
+    // 2026-11-13：VM4.4 形态——通信参数内联编辑，改动即时写回（不再点配置弹窗）
+    void communicationDialogInlineParamsWriteBack();
+    void communicationDialogMatchesVmLayout();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -3670,9 +3676,18 @@ void CommWritebackTest::testCommunicationGtdExportImport()
     QVERIFY(row >= 0);
     table->setCurrentCell(row, 0);
     QVERIFY(summary->text().contains(QStringLiteral("GTD_DEV")));
-    QVERIFY(summary->text().contains(QStringLiteral("serverIp")));
+    // VM4.4 形态（2026-11-13）：参数由「只读摘要」改为右侧内联可编辑表单，
+    // 摘要退化为状态行。这里验证表单确实按选中设备回显了配置——
+    // 比「摘要文本里出现 serverIp」更贴近真实操作性，也防「表单建了却不填值」。
+    auto *paramForm = dlg.findChild<QWidget *>(QStringLiteral("commParamForm"));
+    QVERIFY2(paramForm, "缺少内联通信参数表单");
+    QVERIFY2(paramForm->isEnabled(), "选中设备后参数表单必须可编辑");
+    auto *ip0 = dlg.findChild<QLineEdit *>(QStringLiteral("commParamIp0"));
+    QVERIFY2(ip0, "缺少目标 IP 段");
+    QVERIFY2(!ip0->text().isEmpty(), "选中设备后必须回显 IP");
     table->setCurrentCell(-1, -1);
     QVERIFY(summary->text().contains(QStringLiteral("未选中设备")));
+    QVERIFY2(paramForm && !paramForm->isEnabled(), "取消选中后参数表单必须禁用");
 
     // 清场
     gtm->removeStringTrigger(QStringLiteral("GTDG"));
@@ -3910,6 +3925,97 @@ void CommWritebackTest::registerSpaceBarClampsAddressSpace()
     QCOMPARE(table->rowCount(), 4);
     QVERIFY2(table->isRowHidden(0),
              "隐藏空白行开启后，新增的空白行也必须隐藏");
+}
+
+// 2026-11-13：VM4.4 的操作性核心——选中设备后参数**直接在右侧改**，
+// 不再「点配置 → 弹窗 → 确定」；改动必须即时落到 CommunicationManager 的设备配置。
+void CommWritebackTest::communicationDialogInlineParamsWriteBack()
+{
+    auto *cm = CommunicationManager::instance();
+    QJsonObject cfg = tcpClientConfig(1);
+    cfg[QStringLiteral("serverIp")] = QStringLiteral("127.0.0.1");
+    cfg[QStringLiteral("port")] = 7920;
+    cfg[QStringLiteral("dataUpload")] = true;
+    QVERIFY2(cm->addDevice(QStringLiteral("INLINE_DEV"), QStringLiteral("TCP"), cfg),
+             "创建内联参数测试设备失败");
+
+    CommunicationManagerDialog dlg;
+    auto *table = dlg.findChild<QTableWidget *>(QStringLiteral("deviceTable"));
+    QVERIFY(table);
+    int row = -1;
+    for (int r = 0; r < table->rowCount(); ++r) {
+        if (table->item(r, 0)
+            && table->item(r, 0)->text() == QStringLiteral("INLINE_DEV")) {
+            row = r;
+            break;
+        }
+    }
+    QVERIFY2(row >= 0, "设备卡片列表里找不到新建设备");
+    table->setCurrentCell(row, 0);
+
+    // ① 选中后表单回显（不是空壳）
+    auto *port = dlg.findChild<QSpinBox *>(QStringLiteral("commParamPort"));
+    auto *ip0 = dlg.findChild<QLineEdit *>(QStringLiteral("commParamIp0"));
+    QVERIFY(port);
+    QVERIFY(ip0);
+    QCOMPARE(port->value(), 7920);
+    QCOMPARE(ip0->text(), QStringLiteral("127"));
+
+    // ② 改端口 → valueChanged 即时写回，无需任何「确定」
+    port->setValue(8100);
+    QCOMPARE(cm->deviceInfo(QStringLiteral("INLINE_DEV"))
+                 .config.value(QStringLiteral("port")).toInt(), 8100);
+
+    // ③ 拨开关 → toggled 即时写回
+    auto *upload = dlg.findChild<QAbstractButton *>(
+        QStringLiteral("commParamDataUpload"));
+    QVERIFY(upload);
+    const bool before = cm->deviceInfo(QStringLiteral("INLINE_DEV"))
+                            .config.value(QStringLiteral("dataUpload")).toBool();
+    upload->toggle();
+    QCOMPARE(cm->deviceInfo(QStringLiteral("INLINE_DEV"))
+                 .config.value(QStringLiteral("dataUpload")).toBool(), !before);
+
+    QVERIFY(cm->removeDevice(QStringLiteral("INLINE_DEV")));
+}
+
+// 2026-11-13：把 VM4.4 截图的形态落成契约，防止以后被改回「表格 + 只读摘要 + 弹窗」。
+void CommWritebackTest::communicationDialogMatchesVmLayout()
+{
+    CommunicationManagerDialog dlg;
+
+    // ① 深灰自定义顶栏，导入/导出/关闭都在条上（VM 右上角只有三个图标）
+    auto *titleBar = dlg.findChild<QWidget *>(QStringLiteral("commTitleBar"));
+    QVERIFY2(titleBar, "缺少 VM 形态自定义顶栏");
+    auto *exportBtn = dlg.findChild<QPushButton *>(QStringLiteral("commGtdExport"));
+    auto *closeBtn = dlg.findChild<QPushButton *>(QStringLiteral("commCloseBtn"));
+    QVERIFY(exportBtn);
+    QVERIFY(closeBtn);
+    QVERIFY2(titleBar->isAncestorOf(exportBtn), "gtd 导出入口应在自定义顶栏上");
+    QVERIFY2(titleBar->isAncestorOf(closeBtn), "关闭按钮应在自定义顶栏上");
+
+    // ② 左侧导航：图标在上、文字在下（IconMode），32px 图标
+    auto *nav = dlg.findChild<QListWidget *>(QStringLiteral("commNavList"));
+    QVERIFY(nav);
+    QCOMPARE(nav->viewMode(), QListView::IconMode);
+    QCOMPARE(nav->iconSize(), QSize(32, 32));
+    QVERIFY2(!nav->item(0)->icon().isNull(), "导航项必须有图标");
+
+    // ③ 设备列表：卡片形态而非 Excel 表格
+    auto *table = dlg.findChild<QTableWidget *>(QStringLiteral("deviceTable"));
+    QVERIFY(table);
+    QVERIFY2(table->horizontalHeader()->isHidden(), "卡片列表不应显示表头");
+    QVERIFY2(table->verticalHeader()->isHidden(), "卡片列表不应显示行号列");
+    QVERIFY2(!table->showGrid(), "卡片列表不应显示网格线");
+    QVERIFY2(table->isColumnHidden(1) && table->isColumnHidden(3)
+                 && table->isColumnHidden(4), "卡片列表只应保留名称列与开关列");
+    QCOMPARE(table->verticalHeader()->defaultSectionSize(), 56);
+
+    // ④ 右侧是内联可编辑表单，不是只读摘要
+    QVERIFY2(dlg.findChild<QWidget *>(QStringLiteral("commParamForm")),
+             "缺少内联通信参数表单");
+    QVERIFY2(dlg.findChild<QLineEdit *>(QStringLiteral("commParamIp0")),
+             "缺少目标 IP 四段输入");
 }
 
 QTEST_MAIN(CommWritebackTest)
