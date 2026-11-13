@@ -20,7 +20,8 @@
 class QMouseEvent;
 struct CommDeviceInfo;
 
-class CommMonitorPane;  // 设备管理页右下内嵌的收发数据区（官方 5.2 形态）
+class CommMonitorPane;
+class RegisterSpaceBar;  // 设备管理页右下内嵌的收发数据区（官方 5.2 形态）
 class ModbusNode; // 前向声明
 class GlobalTriggerDialog; // 触发配置页内嵌（全局触发）
 
@@ -112,6 +113,12 @@ private:
     void applyInlineParamChange();
     /// 选中变化时把设备配置灌进内联表单（阻断信号，避免回显触发写回）
     void syncInlineParamsFromSelection(const CommDeviceInfo &info);
+    /// VM4.4 截图 4：地址空间只在寄存器类协议（Modbus/PLC/FINS）下出现
+    void applyRegisterSpaceVisibility(const QString &deviceType);
+    /// 把 config["registers"] 灌进 7 列配置表并刷新矩阵
+    void loadRegistersIntoSpace(const QJsonObject &config);
+    /// 10 列矩阵预览：列 0-9、行首地址按配置表最小地址对齐，已配置地址着橙色
+    void refreshAddressGrid();
 
     /// gtd 导入时被触发前缀歧义闸拒收的条目（按钮入口据此提示；测试可直读）
     QStringList m_gtdImportRejected;
@@ -148,6 +155,12 @@ private:
     QAbstractButton *m_inlineRxTerm = nullptr;
     /// 回显期间的守卫：true 时 applyInlineParamChange 直接返回，避免自触发写回
     bool m_inlineLoading = false;
+
+    // VM4.4 截图 4「地址空间」：工具条 + 10 列矩阵预览 + 7 列寄存器配置表
+    QWidget *m_registerSpace = nullptr;        // objectName commRegisterSpace
+    QTableWidget *m_registerTable = nullptr;   // RegisterSpaceBar 操作的数据表
+    QTableWidget *m_addressGrid = nullptr;     // 只读矩阵预览
+    RegisterSpaceBar *m_spaceBar = nullptr;
 
     // VM 形态自定义顶栏
     QWidget *m_titleBar = nullptr;

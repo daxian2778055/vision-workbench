@@ -26,6 +26,8 @@
 #include <QApplication>
 #include <QPointer>
 #include <QComboBox>
+#include <QColor>
+#include <QJsonArray>
 #include <QInputDialog>
 #include <QTimer>
 #include <QThread>
@@ -219,6 +221,8 @@ private slots:
     void vmCreateDialogIsSingleWindow();
     void vmCreateDialogBuildsConfigPerType();
     void commAddDeviceOpensSingleVmDialog();
+    // 2026-11-13：截图 4 地址空间（按协议显隐 + 10 列矩阵 + 工具条联动）
+    void commAddressSpaceAppearsForRegisterProtocols();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -4115,6 +4119,85 @@ void CommWritebackTest::commAddDeviceOpensSingleVmDialog()
         .arg(seen.join(QStringLiteral(" , ")))));
     QVERIFY2(!seen.contains(QStringLiteral("QInputDialog")),
              "创建设备仍在弹 QInputDialog，说明三段式没被消灭");
+}
+
+// 2026-11-13：VM4.4 截图 4「地址空间」——只在 Modbus/PLC/FINS 下出现，
+// 10 列矩阵（列 0-9、行 0/10/20…）标注已配置地址，工具条加地址后矩阵要跟着刷新。
+void CommWritebackTest::commAddressSpaceAppearsForRegisterProtocols()
+{
+    auto *cm = CommunicationManager::instance();
+    QVERIFY(cm->addDevice(QStringLiteral("SPACE_TCP"),
+                          QStringLiteral("TCP"), tcpClientConfig(1)));
+
+    QJsonArray regs;
+    for (int addr : { 0, 11, 25 }) {
+        QJsonObject r;
+        r[QStringLiteral("address")] = addr;
+        r[QStringLiteral("dataType")] = QStringLiteral("Int16");
+        r[QStringLiteral("accessMode")] = QStringLiteral("ReadOnly");
+        r[QStringLiteral("description")] = QStringLiteral("probe");
+        regs.append(r);
+    }
+    QJsonObject modbusCfg;
+    modbusCfg[QStringLiteral("host")] = QStringLiteral("127.0.0.1");
+    modbusCfg[QStringLiteral("port")] = 502;
+    modbusCfg[QStringLiteral("registers")] = regs;
+    QVERIFY(cm->addDevice(QStringLiteral("SPACE_MODBUS"),
+                          QStringLiteral("Modbus"), modbusCfg));
+
+    CommunicationManagerDialog dlg;
+    auto *table = dlg.findChild<QTableWidget *>(QStringLiteral("deviceTable"));
+    QVERIFY(table);
+    auto selectDevice = [table](const QString &name) {
+        for (int r = 0; r < table->rowCount(); ++r) {
+            if (table->item(r, 0) && table->item(r, 0)->text() == name) {
+                table->setCurrentCell(r, 0);
+                return true;
+            }
+        }
+        return false;
+    };
+
+    auto *space = dlg.findChild<QWidget *>(QStringLiteral("commRegisterSpace"));
+    auto *grid = dlg.findChild<QTableWidget *>(QStringLiteral("commAddressGrid"));
+    auto *cfgTable = dlg.findChild<QTableWidget *>(QStringLiteral("commRegisterTable"));
+    auto *bar = dlg.findChild<RegisterSpaceBar *>(QStringLiteral("commRegisterSpaceBar"));
+    QVERIFY(space);
+    QVERIFY(grid);
+    QVERIFY(cfgTable);
+    QVERIFY(bar);
+    QCOMPARE(grid->columnCount(), 10);
+    QCOMPARE(grid->rowCount(), 5);
+    QCOMPARE(cfgTable->columnCount(), 7);
+
+    // ① TCP 设备不显示地址空间
+    QVERIFY2(selectDevice(QStringLiteral("SPACE_TCP")), "找不到 TCP 测试设备");
+    QVERIFY2(space->isHidden(), "TCP 设备不应展开地址空间");
+
+    // ② Modbus 设备展开，寄存器被载入，矩阵对应格子着橙色
+    QVERIFY2(selectDevice(QStringLiteral("SPACE_MODBUS")), "找不到 Modbus 测试设备");
+    QVERIFY2(!space->isHidden(), "Modbus 设备应展开地址空间");
+    QCOMPARE(cfgTable->rowCount(), 3);
+    const QColor marked(QStringLiteral("#f26b21"));
+    QVERIFY(grid->item(0, 0));
+    QCOMPARE(grid->item(0, 0)->background().color(), marked);   // 地址 0
+    QVERIFY(grid->item(1, 1));
+    QCOMPARE(grid->item(1, 1)->background().color(), marked);   // 地址 11
+    QVERIFY(grid->item(2, 5));
+    QCOMPARE(grid->item(2, 5)->background().color(), marked);   // 地址 25
+    QVERIFY(grid->item(0, 1));
+    QCOMPARE(grid->item(0, 1)->background().color(), QColor(QStringLiteral("#ffffff")));
+
+    // ③ 工具条补齐地址 → rowsChanged 必须让矩阵跟着刷新（不是死视图）
+    const int before = cfgTable->rowCount();
+    const int added = bar->addAddressesInSpace();
+    QVERIFY2(added > 0, "工具条没有补齐任何地址");
+    QCOMPARE(cfgTable->rowCount(), before + added);
+    QVERIFY(grid->item(0, 2));
+    QCOMPARE(grid->item(0, 2)->background().color(), marked);   // 新补的 2 号地址
+
+    QVERIFY(cm->removeDevice(QStringLiteral("SPACE_TCP")));
+    QVERIFY(cm->removeDevice(QStringLiteral("SPACE_MODBUS")));
 }
 
 QTEST_MAIN(CommWritebackTest)

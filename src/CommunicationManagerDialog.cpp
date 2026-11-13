@@ -15,6 +15,7 @@
 #include "CommMonitorPane.h"
 #include "VmWidgets.h"
 #include "VmDeviceCreateDialog.h"
+#include "RegisterSpaceBar.h"
 #include "HeartbeatManager.h"
 #include "GlobalTriggerManager.h"
 #include "AppLog.h"
@@ -51,6 +52,7 @@
 #include <QIcon>
 #include <QGridLayout>
 #include <QIntValidator>
+#include <QJsonArray>
 #include <QFrame>
 #include <cmath>
 
@@ -287,12 +289,16 @@ void CommunicationManagerDialog::updateParamSummary()
         const QString name = m_deviceTable->item(selectedRow, 0)->text();
         const CommDeviceInfo info = CommunicationManager::instance()->deviceInfo(name);
         syncInlineParamsFromSelection(info);
+        // 截图 4：Modbus / PLC / FINS 选中时才展开地址空间，并载入该设备的寄存器表
+        applyRegisterSpaceVisibility(info.type);
+        loadRegistersIntoSpace(info.config);
         m_paramSummary->setText(QStringLiteral("%1  \u00B7  %2  \u00B7  %3")
             .arg(name, info.type,
                  info.isConnected ? QStringLiteral("\u5DF2\u8FDE\u63A5")
                                   : QStringLiteral("\u672A\u8FDE\u63A5")));
         return;
     }
+    applyRegisterSpaceVisibility(QString());   // 未选中设备 / 选中控制器都收起地址空间
     const int ctlRow = m_controllerTable ? m_controllerTable->currentRow() : -1;
     if (ctlRow >= 0 && m_controllerTable->item(ctlRow, 0)) {
         m_paramSummary->setText(QStringLiteral(
@@ -361,6 +367,89 @@ void CommunicationManagerDialog::applyInlineParamChange()
     cm->updateDeviceConfig(name, cfg);
     if (m_paramSummary)
         m_paramSummary->setText(QStringLiteral("\u53C2\u6570\u5DF2\u5373\u65F6\u4FDD\u5B58"));
+}
+
+void CommunicationManagerDialog::applyRegisterSpaceVisibility(const QString &deviceType)
+{
+    const bool show = (deviceType == QStringLiteral("Modbus")
+                       || deviceType == QStringLiteral("PLC")
+                       || deviceType.startsWith(QStringLiteral("FINS")));
+    if (m_registerSpace)
+        m_registerSpace->setVisible(show);
+}
+
+void CommunicationManagerDialog::loadRegistersIntoSpace(const QJsonObject &config)
+{
+    if (!m_registerTable) return;
+    m_registerTable->setRowCount(0);
+    const QJsonArray regs = config.value(QStringLiteral("registers")).toArray();
+    for (const QJsonValue &v : regs) {
+        const QJsonObject o = v.toObject();
+        const int row = m_registerTable->rowCount();
+        m_registerTable->insertRow(row);
+        m_registerTable->setItem(row, 0, new QTableWidgetItem(
+            QString::number(o.value(QStringLiteral("address")).toInt())));
+        m_registerTable->setItem(row, 1, new QTableWidgetItem(
+            o.value(QStringLiteral("dataType")).toString(QStringLiteral("Int16"))));
+        m_registerTable->setItem(row, 3, new QTableWidgetItem(
+            o.value(QStringLiteral("accessMode")).toString(QStringLiteral("ReadOnly"))));
+        m_registerTable->setItem(row, 5, new QTableWidgetItem(
+            o.value(QStringLiteral("description")).toString()));
+    }
+    refreshAddressGrid();
+}
+
+void CommunicationManagerDialog::refreshAddressGrid()
+{
+    if (!m_addressGrid || !m_registerTable) return;
+
+    // 起始地址 = 配置表里最小地址向下对齐到 10；无数据时从 0 开始。
+    int base = 0;
+    bool have = false;
+    for (int r = 0; r < m_registerTable->rowCount(); ++r) {
+        auto *it = m_registerTable->item(r, 0);
+        if (!it) continue;
+        bool ok = false;
+        const int a = it->text().toInt(&ok);
+        if (ok && (!have || a < base)) { base = a; have = true; }
+    }
+    base = (base / 10) * 10;
+
+    for (int r = 0; r < m_addressGrid->rowCount(); ++r) {
+        for (int c = 0; c < m_addressGrid->columnCount(); ++c) {
+            QTableWidgetItem *cell = m_addressGrid->item(r, c);
+            if (!cell) {
+                cell = new QTableWidgetItem();
+                m_addressGrid->setItem(r, c, cell);
+            }
+            cell->setText(QString::number(base + r * 10 + c));
+            cell->setBackground(QColor(QStringLiteral("#ffffff")));
+            cell->setForeground(QColor(QStringLiteral("#bbbbbb")));
+            cell->setTextAlignment(Qt::AlignCenter);
+        }
+    }
+    QStringList rowHeads;
+    for (int r = 0; r < m_addressGrid->rowCount(); ++r)
+        rowHeads << QString::number(base + r * 10);
+    m_addressGrid->setVerticalHeaderLabels(rowHeads);
+
+    // 已配置的地址着橙色（读/写/关联三色图例由工具条状态行承担，这里先统一橙）
+    for (int r = 0; r < m_registerTable->rowCount(); ++r) {
+        auto *it = m_registerTable->item(r, 0);
+        if (!it) continue;
+        bool ok = false;
+        const int a = it->text().toInt(&ok);
+        if (!ok) continue;
+        const int rr = (a - base) / 10;
+        const int cc = (a - base) % 10;
+        if (rr >= 0 && rr < m_addressGrid->rowCount()
+            && cc >= 0 && cc < m_addressGrid->columnCount()) {
+            if (auto *cell = m_addressGrid->item(rr, cc)) {
+                cell->setBackground(QColor(QStringLiteral("#f26b21")));
+                cell->setForeground(Qt::white);
+            }
+        }
+    }
 }
 
 // ==================== gtd import / export ====================
@@ -824,6 +913,84 @@ void CommunicationManagerDialog::setupDeviceTab(QStackedWidget *stack)
     m_paramSummary->setStyleSheet(QStringLiteral("color: #888888; font-size: 11px;"));
     m_paramSummary->setText(QStringLiteral("\u672A\u9009\u4E2D\u8BBE\u5907"));
     rightLayout->addWidget(m_paramSummary);
+
+    // ── VM4.4 截图 4「地址空间」：仅寄存器类协议（Modbus/PLC/FINS）显示 ──
+    // 工具条 RegisterSpaceBar 已在 ModbusConfigDialog / PlcConfigDialog 落地，
+    // 这里复用同一控件：它操作 7 列配置表；上方再叠一个 10 列矩阵预览做可视化。
+    m_registerSpace = new QGroupBox(
+        QStringLiteral("\u5730\u5740\u7A7A\u95F4"), right);
+    m_registerSpace->setObjectName(QStringLiteral("commRegisterSpace"));
+    auto *spaceLayout = new QVBoxLayout(m_registerSpace);
+    spaceLayout->setContentsMargins(8, 12, 8, 8);
+    spaceLayout->setSpacing(6);
+
+    // 10 列矩阵：列头 0-9，行头 0/10/20…，已配置地址着橙色（截图 4 的识别特征）
+    m_addressGrid = new QTableWidget(5, 10, m_registerSpace);
+    m_addressGrid->setObjectName(QStringLiteral("commAddressGrid"));
+    QStringList colHeads;
+    for (int c = 0; c < 10; ++c) colHeads << QString::number(c);
+    m_addressGrid->setHorizontalHeaderLabels(colHeads);
+    m_addressGrid->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_addressGrid->setSelectionMode(QAbstractItemView::NoSelection);
+    m_addressGrid->setFixedHeight(126);
+    m_addressGrid->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    m_addressGrid->verticalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    m_addressGrid->setStyleSheet(QStringLiteral(
+        "QTableWidget { gridline-color: #e3e3e3; }"));
+    spaceLayout->addWidget(m_addressGrid);
+
+    // 7 列配置表：与两个专用配置对话框同款，RegisterSpaceBar 的首地址/个数/清空都写在它上面
+    m_registerTable = new QTableWidget(0, 7, m_registerSpace);
+    m_registerTable->setObjectName(QStringLiteral("commRegisterTable"));
+    m_registerTable->setHorizontalHeaderLabels({
+        QStringLiteral("\u5BC4\u5B58\u5668\u5730\u5740"),
+        QStringLiteral("\u6570\u636E\u7C7B\u578B"),
+        QStringLiteral("\u5B57\u8282\u987A\u5E8F"),
+        QStringLiteral("\u8BBF\u95EE\u6A21\u5F0F"),
+        QStringLiteral("\u5F53\u524D\u503C"),
+        QStringLiteral("\u63CF\u8FF0"),
+        QStringLiteral("\u542F\u7528")
+    });
+    m_registerTable->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    m_registerTable->setMinimumHeight(110);
+    spaceLayout->addWidget(m_registerTable, 1);
+
+    // spaceHome = right（其 QVBoxLayout 供最大化时还原），与两个专用对话框的接法一致
+    m_spaceBar = new RegisterSpaceBar(m_registerTable, m_registerSpace,
+                                      right, m_registerSpace);
+    m_spaceBar->setObjectName(QStringLiteral("commRegisterSpaceBar"));
+    spaceLayout->insertWidget(0, m_spaceBar);
+    connect(m_spaceBar, &RegisterSpaceBar::rowsChanged,
+            this, &CommunicationManagerDialog::refreshAddressGrid);
+    connect(m_spaceBar, &RegisterSpaceBar::syncRequested, this, [this]() {
+        const int row = m_deviceTable ? m_deviceTable->currentRow() : -1;
+        const QString name = (row >= 0 && m_deviceTable->item(row, 0))
+            ? m_deviceTable->item(row, 0)->text() : QString();
+        auto *mn = name.isEmpty() ? nullptr
+            : qobject_cast<ModbusNode *>(CommunicationManager::instance()->deviceNode(name));
+        if (!mn) { m_spaceBar->showNoNodeStatus(); return; }
+        if (!mn->isConnected()) { m_spaceBar->showNotConnectedStatus(); return; }
+        m_spaceBar->showSyncIssuedStatus(mn->syncRegistersNow());
+    });
+    connect(m_spaceBar, &RegisterSpaceBar::testSendRequested, this,
+            [this](const QString &addressText, const QString &valueText) {
+        bool okAddr = false, okVal = false;
+        const int addr = addressText.toInt(&okAddr);
+        const double value = valueText.toDouble(&okVal);
+        if (!okAddr) { m_spaceBar->showInvalidAddressStatus(); return; }
+        if (!okVal) { m_spaceBar->showInvalidValueStatus(); return; }
+        const int row = m_deviceTable ? m_deviceTable->currentRow() : -1;
+        const QString name = (row >= 0 && m_deviceTable->item(row, 0))
+            ? m_deviceTable->item(row, 0)->text() : QString();
+        auto *mn = name.isEmpty() ? nullptr
+            : qobject_cast<ModbusNode *>(CommunicationManager::instance()->deviceNode(name));
+        if (!mn) { m_spaceBar->showNoNodeStatus(); return; }
+        if (mn->writeRegister(addr, value)) m_spaceBar->showTestSentStatus(addr, value);
+        else m_spaceBar->showTestNotSentStatus();
+    });
+
+    m_registerSpace->setVisible(false);
+    rightLayout->addWidget(m_registerSpace, 1);
 
     // VM 5.2 官方设备管理页右下：Tab「接收数据 / 发送数据」+ 大数据区 +
     // 「16 进制显示」+「清空」+ 手动发送（内嵌形态此前已补齐）。
