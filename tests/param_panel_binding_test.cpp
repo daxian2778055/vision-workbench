@@ -2522,8 +2522,9 @@ void ParamPanelBindingTest::testUnnamedFindChildSitesAreSingleCandidate()
     // → 576（2026-11-11）：新增 CircleCircleMeasureNode：sourceMode + 6 个圆心/半径（净 +7）
     // → 577（2026-11-11）：LineLineMeasureNode 补 lineInputMode（净 +1）
     // → 578（2026-11-11）：LineCircleMeasureNode 补 lineInputMode（净 +1）
-    QVERIFY2(fieldSlots == 578,
-             qPrintable(QStringLiteral("字段槽位分母从 578 变成 %1 ⇒ 本闸口径已漂移，"
+    // → 579（2026-11-17）：DistanceMeasureNode 补官方「点点测量」angleRange（净 +1）
+    QVERIFY2(fieldSlots == 579,
+             qPrintable(QStringLiteral("字段槽位分母从 579 变成 %1 ⇒ 本闸口径已漂移，"
                                        "先核对面板改动再把基准一起改").arg(fieldSlots)));
     QVERIFY2(badSlots.isEmpty(),
              qPrintable(QStringLiteral("U5-MULTI: %1 个字段槽位里同类型候选不止一个 ⇒ 站点 1 的无名 "

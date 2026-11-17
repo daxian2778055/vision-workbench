@@ -16,6 +16,7 @@
 #include <opencv2/core.hpp>
 
 #include "LineLineMeasureNode.h"
+#include "DistanceMeasureNode.h"
 #include "DataObject.h"
 #include "OpencvUtil.h"
 
@@ -78,6 +79,8 @@ private slots:
     void testResultFieldSpec();
     void testPointSubscriptionBuildsLines();
     void testPointSubscriptionNeedsFourPointsAndRejectsConflicts();
+    // 2026-11-17：本机帮助取证后补齐官方「点点测量 → 角度」字段
+    void testDistanceMeasureExposesOfficialAngle();
 };
 
 void LineLineMeasureTest::testDefaultDrawModeIntersectsAtRightAngle()
@@ -286,6 +289,42 @@ void LineLineMeasureTest::testPointSubscriptionNeedsFourPointsAndRejectsConflict
     QVERIFY(!reverse.execute());
     QVERIFY2(reverse.getParam(QStringLiteral("lastError")).toString().contains(QStringLiteral("按线")),
              qPrintable(reverse.getParam(QStringLiteral("lastError")).toString()));
+}
+
+// VM4.4 本机帮助 GUID-352A1EEE…「点点测量」明确给出：角度 = 两点连线与水平线夹角，
+// 顺时针为正，输出范围可选 -90°~90° 或 -180°~180°（旧台账写「官方未确认」是过时的）。
+void LineLineMeasureTest::testDistanceMeasureExposesOfficialAngle()
+{
+    DistanceMeasureNode node;
+    node.init();
+    node.setInputData(0, makeGrayImage());   // 几何节点绘制模式仍要求图像
+
+    // (行,列) (100,100) -> (200,200)：向右下，顺时针 45°
+    node.setParam(QStringLiteral("p1Row"), 100.0);
+    node.setParam(QStringLiteral("p1Col"), 100.0);
+    node.setParam(QStringLiteral("p2Row"), 200.0);
+    node.setParam(QStringLiteral("p2Col"), 200.0);
+    QVERIFY(node.execute());
+    QVERIFY(qAbs(node.getParam(QStringLiteral("lineAngle")).toDouble() - 45.0) < 1e-9);
+
+    // 反向 (-135°)：默认 -90~90 应折回 45°
+    node.setParam(QStringLiteral("p2Row"), 0.0);
+    node.setParam(QStringLiteral("p2Col"), 0.0);
+    QVERIFY(node.execute());
+    QVERIFY(qAbs(node.getParam(QStringLiteral("lineAngle")).toDouble() - 45.0) < 1e-9);
+
+    // 官方第二档 -180~180：保留 -135°
+    node.setParam(QStringLiteral("angleRange"), 1);
+    QVERIFY(node.execute());
+    QVERIFY(qAbs(node.getParam(QStringLiteral("lineAngle")).toDouble() + 135.0) < 1e-9);
+
+    // 结果表必须暴露该字段，否则界面上看不到（只写 m_params 不算落地）
+    bool exposed = false;
+    for (const NodeResultField &f : node.resultDisplayFields()) {
+        if (f.key == QStringLiteral("lineAngle"))
+            exposed = true;
+    }
+    QVERIFY2(exposed, "官方角度字段未进入结果表");
 }
 
 QTEST_MAIN(LineLineMeasureTest)
