@@ -17,6 +17,8 @@
 #include "FocusGuard.h"
 #include "RuntimeInterfaceDesigner.h"
 #include "GlobalVariableManager.h"
+#include "HelpViewer.h"
+#include <QPointer>
 
 #include <QLineEdit>
 #include <QPlainTextEdit>
@@ -128,6 +130,7 @@ void layoutSchemaContractRejectsFutureVersionsAndBadSubPageGraphs();
     void annotationDialogDoesNotTruncateOnOpen();
     void annotationDialogSwitchSavesToPreviousImage();
     void annotationDialogRollsBackWhenSaveFails();
+    void helpViewerDeletesOnClose();
 };
 
 void UiGuardsTest::annotationLabelAcceptsSafeNames()
@@ -3104,6 +3107,17 @@ void UiGuardsTest::designerPanelEditsAreUndoable()
     const QList<RuntimeControl> after = dlg.controlsForTest();
     QVERIFY2(!after.isEmpty(), "撤销后控件不该消失");
     QCOMPARE(after.first().cornerRadius, baseRadius);
+}
+
+// 2026-11-17 P0-1：帮助窗关窗即销毁，MainWindow 侧用 QPointer 持有。
+void UiGuardsTest::helpViewerDeletesOnClose()
+{
+    // 不能用栈对象测 WA_DeleteOnClose：close 时会 delete this 造成二次析构。
+    QPointer<HelpViewer> viewer = new HelpViewer;
+    QVERIFY2(viewer->testAttribute(Qt::WA_DeleteOnClose),
+             "帮助窗必须关窗即销毁，否则主窗口一直握着旧实例");
+    delete viewer.data();
+    QVERIFY(viewer.isNull());
 }
 
 QTEST_MAIN(UiGuardsTest)

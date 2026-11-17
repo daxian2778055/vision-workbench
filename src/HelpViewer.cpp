@@ -14,14 +14,14 @@
 #include <QDialogButtonBox>
 
 // 静态帮助文档内容缓存
-QMap<QString, QString> HelpViewer::s_helpContents;
-
 HelpViewer::HelpViewer(QWidget *parent)
     : QDialog(parent)
 {
     setWindowTitle(QStringLiteral("算子帮助文档"));
     setMinimumSize(600, 500);
     resize(700, 600);
+    // 关窗即销毁：MainWindow 侧用 QPointer 持有，避免关闭后仍握着裸指针反复复用。
+    setAttribute(Qt::WA_DeleteOnClose, true);
 
     // 设置样式
     setStyleSheet(
@@ -132,25 +132,14 @@ void HelpViewer::showHelpForNodeId(const QString &nodeId)
     activateWindow();
 }
 
-void HelpViewer::registerHelpContent(const QString &nodeId, const QString &htmlContent)
-{
-    s_helpContents[nodeId] = htmlContent;
-}
-
 void HelpViewer::loadHelpContent(const QString &nodeId)
 {
     const NodeRegistration *reg = NodeRegistry::instance().findById(nodeId);
     const QString title = QStringLiteral("算子帮助：%1")
                               .arg(reg ? reg->displayName : nodeId);
 
-    // 查找已注册的帮助内容
-    if (s_helpContents.contains(nodeId)) {
-        m_textBrowser->setHtml(s_helpContents[nodeId]);
-        m_titleLabel->setText(title);
-        return;
-    }
-
-    // 使用默认帮助内容
+    // 原先这里有一段静态帮助内容缓存（registerHelpContent / s_helpContents），
+    // 但全仓没有任何调用者注册过内容 —— 缓存永远为空，是死代码。已整体移除。
     QString defaultContent = createDefaultHelpContent(nodeId);
     m_textBrowser->setHtml(defaultContent);
     m_titleLabel->setText(title);

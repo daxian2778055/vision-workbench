@@ -7,7 +7,6 @@
 #include <QPushButton>
 #include <QLabel>
 #include <QLineEdit>
-#include <QMap>
 #include <QStringList>
 
 class NodeBase;
@@ -26,9 +25,6 @@ public:
 
     /// 显示指定节点类型ID的帮助文档
     void showHelpForNodeId(const QString &nodeId);
-
-    /// 注册帮助文档内容
-    static void registerHelpContent(const QString &nodeId, const QString &htmlContent);
 
     /// 帮助 HTML 的空列表占位项（主界面帮助页与算子帮助窗共用一份，避免两处各写一遍）
     static QString emptyListEntry();
@@ -54,7 +50,4 @@ private:
     QLineEdit *m_searchEdit = nullptr;
     QLabel *m_titleLabel = nullptr;
     QString m_currentNodeId;
-
-    /// 帮助文档内容缓存（静态，全局共享）
-    static QMap<QString, QString> s_helpContents;
 };

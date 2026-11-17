@@ -12,6 +12,7 @@
 #include <QHash>
 #include <QSet>
 #include <QShowEvent>
+#include <QPointer>
 #include <QJsonObject>
 #include <functional>
 #include <memory>
@@ -573,7 +574,7 @@ protected:
     /// P2-4：最近一轮各模块耗时（画布选中模块角标；节点执行后被覆盖）
     QHash<NodeBase *, qint64> m_nodeElapsed;
     NodeSearchWidget *m_nodeSearchWidget = nullptr;      // 算子搜索控件
-    HelpViewer *m_helpViewer = nullptr;                  // 算子帮助文档查看器
+    QPointer<HelpViewer> m_helpViewer;                   // WA_DeleteOnClose：关窗后自动置空
     /// 模块编辑器登记簿（「一算子一窗」；词条切片 B 对话框族首抽——命中刷新/缺失建窗/摘除归簿）
     ModuleEditorRegistry m_editors;
 };
