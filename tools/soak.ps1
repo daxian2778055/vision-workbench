@@ -69,6 +69,10 @@ Write-Host "========================================" -ForegroundColor Cyan
 $env:VFP_SOAK_SECONDS  = "$seconds"
 $env:VFP_SOAK_PROGRESS = $ProgressPath
 $env:VFP_SOAK_REPORT   = $ReportPath
+# QTest default 300000 ms function timeout qFatal()s long runs and exits with
+# 0xC0000409 (looks like a crash but it is only the test watchdog). Scale it to
+# this run length + 30 min; otherwise the default 72h soak can never finish.
+$env:QTEST_FUNCTION_TIMEOUT = [string](($seconds + 1800) * 1000)
 # The test binary needs Qt + HALCON + OpenCV DLLs. Point PATH at the deployed folder (which carries all
 # of them) exactly like the CMake test environment does - otherwise the process dies with 0xC0000135
 # (STATUS_DLL_NOT_FOUND) and the report is never produced (hit for real in the first version).
@@ -96,6 +100,9 @@ $psi.FileName = $TestExe
 $psi.Arguments = "-o `"$testLog`,txt`""
 $psi.WorkingDirectory = $RepoRoot
 $psi.UseShellExecute = $false
+# Pass it explicitly to the child: $env: only changes the parent, and
+# ProcessStartInfo does not reliably inherit it in this host.
+$psi.EnvironmentVariables["QTEST_FUNCTION_TIMEOUT"] = [string](($seconds + 1800) * 1000)
 $p = [System.Diagnostics.Process]::Start($psi)
 
 $timeoutMs = [int][math]::Min(($seconds + 1800) * 1000, [int]::MaxValue)   # +30 min tail allowance

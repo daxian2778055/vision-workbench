@@ -49,6 +49,19 @@
 class SoakTest : public QObject
 {
     Q_OBJECT
+public:
+    // QTest 默认 300000 ms 函数超时会把长跑 qFatal("Test function timed out")
+    // 并以 0xC0000409 fail-fast 退出——看起来像产品崩溃，实际只是测试 watchdog。
+    // 按 VFP_SOAK_SECONDS + 30min 余量放大；在 QTEST_MAIN 的 initMain 钩子里设置，
+    // 比从外部进程继承环境变量可靠（2026-11-17 实测外部设置在两条路径上都无效）。
+    static void initMain()
+    {
+        bool ok = false;
+        const qint64 secs = qEnvironmentVariable("VFP_SOAK_SECONDS").toLongLong(&ok);
+        if (ok && secs > 0)
+            qputenv("QTEST_FUNCTION_TIMEOUT", QByteArray::number((secs + 1800) * 1000));
+    }
+
 private slots:
     void testContinuousSoak();
 };
