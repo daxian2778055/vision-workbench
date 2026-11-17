@@ -395,6 +395,9 @@ void CommunicationManagerDialog::loadRegistersIntoSpace(const QJsonObject &confi
             o.value(QStringLiteral("accessMode")).toString(QStringLiteral("ReadOnly"))));
         m_registerTable->setItem(row, 5, new QTableWidgetItem(
             o.value(QStringLiteral("description")).toString()));
+        const bool enabled = o.value(QStringLiteral("enabled")).toBool(true);
+        m_registerTable->setItem(row, 6, new QTableWidgetItem(
+            enabled ? QStringLiteral("\u542F\u7528") : QStringLiteral("\u7981\u7528")));
     }
     refreshAddressGrid();
 }
@@ -433,7 +436,13 @@ void CommunicationManagerDialog::refreshAddressGrid()
         rowHeads << QString::number(base + r * 10);
     m_addressGrid->setVerticalHeaderLabels(rowHeads);
 
-    // 已配置的地址着橙色（读/写/关联三色图例由工具条状态行承担，这里先统一橙）
+    // 三色口径（2026-11-17）：官方帮助只明确了「读轮询取启用且 Read/ReadWrite，
+    // Write 仅写回」，没有给矩阵颜色的精确定义。这里按现有字段定自洽口径并在图例写明：
+    //   绿 #4CAF50 = 启用 + Read/ReadWrite（会被轮询）
+    //   橙 #f26b21 = ReadWrite（可写）
+    //   青 #2196F3 = 启用但 Write（只写，被写操作关联）
+    //   白         = 未配置 / 禁用
+    // 判定优先级：ReadWrite 优先显橙（同时具备轮询与可写，写能力更重要）。
     for (int r = 0; r < m_registerTable->rowCount(); ++r) {
         auto *it = m_registerTable->item(r, 0);
         if (!it) continue;
@@ -442,13 +451,26 @@ void CommunicationManagerDialog::refreshAddressGrid()
         if (!ok) continue;
         const int rr = (a - base) / 10;
         const int cc = (a - base) % 10;
-        if (rr >= 0 && rr < m_addressGrid->rowCount()
-            && cc >= 0 && cc < m_addressGrid->columnCount()) {
-            if (auto *cell = m_addressGrid->item(rr, cc)) {
-                cell->setBackground(QColor(QStringLiteral("#f26b21")));
-                cell->setForeground(Qt::white);
-            }
-        }
+        if (rr < 0 || rr >= m_addressGrid->rowCount()
+            || cc < 0 || cc >= m_addressGrid->columnCount())
+            continue;
+        auto *cell = m_addressGrid->item(rr, cc);
+        if (!cell) continue;
+
+        const QString mode = m_registerTable->item(r, 3)
+            ? m_registerTable->item(r, 3)->text() : QString();
+        const bool enabled = !m_registerTable->item(r, 6)
+            || m_registerTable->item(r, 6)->text() != QStringLiteral("\u7981\u7528");
+        QString fill;
+        if (!enabled) fill = QStringLiteral("#ffffff");
+        else if (mode == QStringLiteral("ReadWrite")) fill = QStringLiteral("#f26b21");
+        else if (mode == QStringLiteral("Read")) fill = QStringLiteral("#4CAF50");
+        else if (mode == QStringLiteral("Write")) fill = QStringLiteral("#2196F3");
+        else fill = QStringLiteral("#ffffff");   // 工具条新加的空白行
+
+        cell->setBackground(QColor(fill));
+        cell->setForeground(fill == QStringLiteral("#ffffff")
+            ? QColor(QStringLiteral("#bbbbbb")) : QColor(Qt::white));
     }
 }
 
@@ -954,6 +976,25 @@ void CommunicationManagerDialog::setupDeviceTab(QStackedWidget *stack)
     m_registerTable->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
     m_registerTable->setMinimumHeight(110);
     spaceLayout->addWidget(m_registerTable, 1);
+
+    // 三色图例：矩阵的颜色口径必须能在界面上直接读到，否则现场只能猜。
+    auto *legend = new QHBoxLayout();
+    legend->setContentsMargins(0, 2, 0, 0);
+    legend->setSpacing(4);
+    auto addLegendItem = [this, legend](const QString &text, const QString &color) {
+        auto *swatch = new QLabel(m_registerSpace);
+        swatch->setFixedSize(12, 12);
+        swatch->setStyleSheet(QStringLiteral(
+            "background-color: %1; border: 1px solid #aaaaaa;").arg(color));
+        legend->addWidget(swatch);
+        legend->addWidget(new QLabel(text, m_registerSpace));
+        legend->addSpacing(10);
+    };
+    addLegendItem(QStringLiteral("\u8F6E\u8BE2"), QStringLiteral("#4CAF50"));
+    addLegendItem(QStringLiteral("\u8BFB/\u5199"), QStringLiteral("#f26b21"));
+    addLegendItem(QStringLiteral("\u5173\u8054"), QStringLiteral("#2196F3"));
+    legend->addStretch();
+    spaceLayout->addLayout(legend);
 
     // spaceHome = right（其 QVBoxLayout 供最大化时还原），与两个专用对话框的接法一致
     m_spaceBar = new RegisterSpaceBar(m_registerTable, m_registerSpace,

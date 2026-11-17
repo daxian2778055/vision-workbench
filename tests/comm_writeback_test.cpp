@@ -4130,11 +4130,15 @@ void CommWritebackTest::commAddressSpaceAppearsForRegisterProtocols()
                           QStringLiteral("TCP"), tcpClientConfig(1)));
 
     QJsonArray regs;
+    const QString modes[] = { QStringLiteral("Read"), QStringLiteral("ReadWrite"),
+                              QStringLiteral("Write") };
+    int modeIndex = 0;
     for (int addr : { 0, 11, 25 }) {
         QJsonObject r;
         r[QStringLiteral("address")] = addr;
         r[QStringLiteral("dataType")] = QStringLiteral("Int16");
-        r[QStringLiteral("accessMode")] = QStringLiteral("ReadOnly");
+        r[QStringLiteral("accessMode")] = modes[modeIndex++];
+        r[QStringLiteral("enabled")] = true;
         r[QStringLiteral("description")] = QStringLiteral("probe");
         regs.append(r);
     }
@@ -4178,13 +4182,14 @@ void CommWritebackTest::commAddressSpaceAppearsForRegisterProtocols()
     QVERIFY2(selectDevice(QStringLiteral("SPACE_MODBUS")), "找不到 Modbus 测试设备");
     QVERIFY2(!space->isHidden(), "Modbus 设备应展开地址空间");
     QCOMPARE(cfgTable->rowCount(), 3);
-    const QColor marked(QStringLiteral("#f26b21"));
+    // 三色口径（2026-11-17 自定并写进图例）：绿=轮询(Read)、橙=读/写(ReadWrite)、
+    // 青=关联(Write 只写)、白=未配置。必须逐色断言，否则「统一涂一个色」也会过。
     QVERIFY(grid->item(0, 0));
-    QCOMPARE(grid->item(0, 0)->background().color(), marked);   // 地址 0
+    QCOMPARE(grid->item(0, 0)->background().color(), QColor(QStringLiteral("#4CAF50")));
     QVERIFY(grid->item(1, 1));
-    QCOMPARE(grid->item(1, 1)->background().color(), marked);   // 地址 11
+    QCOMPARE(grid->item(1, 1)->background().color(), QColor(QStringLiteral("#f26b21")));
     QVERIFY(grid->item(2, 5));
-    QCOMPARE(grid->item(2, 5)->background().color(), marked);   // 地址 25
+    QCOMPARE(grid->item(2, 5)->background().color(), QColor(QStringLiteral("#2196F3")));
     QVERIFY(grid->item(0, 1));
     QCOMPARE(grid->item(0, 1)->background().color(), QColor(QStringLiteral("#ffffff")));
 
@@ -4194,7 +4199,8 @@ void CommWritebackTest::commAddressSpaceAppearsForRegisterProtocols()
     QVERIFY2(added > 0, "工具条没有补齐任何地址");
     QCOMPARE(cfgTable->rowCount(), before + added);
     QVERIFY(grid->item(0, 2));
-    QCOMPARE(grid->item(0, 2)->background().color(), marked);   // 新补的 2 号地址
+    QCOMPARE(grid->item(0, 2)->background().color(), QColor(QStringLiteral("#ffffff")));
+    // 工具条补的是「只有地址」的空白行，没有 accessMode，不该冒充已配置地址
 
     QVERIFY(cm->removeDevice(QStringLiteral("SPACE_TCP")));
     QVERIFY(cm->removeDevice(QStringLiteral("SPACE_MODBUS")));
