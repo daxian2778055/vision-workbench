@@ -1333,6 +1333,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261112.1",
       "recorded_at": "2026-11-12",
       "recorded_note": "rc-20261109.13 之后 59 个提交的累积发版包。框架稳定性：5 处 singleShot 捕获错配与19 处裸 FlowExecutor* 加 QPointer 守卫、脚本审批与执行器 wait 互等改为两段有界等待并fail-closed；安全：子界面密码改摘要存储加常量时间校验；一致性：属性面板 15 处编辑统一走 markPropertyEdit、新增持久化字段成对性闸（布局+通信共 12 对，退出码 19）；算法：圆拟合剔除基准改留一法、下限按 minPoints 保底、残差覆盖全部有效输入点；测试：修 RoundAbortSummaryTest 断言语义并新增 nodeExecutionStarted 信号消除墙钟等待。部署自检 76 PASS / 0 FAIL / 3 SKIP，DeepOCR 合成图识别通过，exe 内嵌 HEAD 版本 yes。"
+    },
+    {
+      "tag": "rc-20261117",
+      "commit": "5e26d3d668397461dd8e093396dfd437bbaf220a",
+      "exe_md5": "70d8ea373d160932aba7b11361ef056b",
+      "exe_bytes": 12981248,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261117",
+      "recorded_at": "2026-11-17",
+      "recorded_note": "rc-20261112.1 之后 4 个提交的累积发版包：14 个零测试算子补审并修 4 条判绿/失败不记账缺陷（UDP 目标端口校验与发送失败记账、AreaNode 无区域判红、DataCode2D 空串判红）；HelpViewer 关窗自毁与 QPointer 守卫、销死 registerHelpContent 缓存；soak_test initMain 修 QTest 300s 函数超时误判并完成 30 分钟 407613 轮 0 失败长稳；P0-4 出包/回滚全隔离演练。部署自检 76 PASS / 0 FAIL / 3 SKIP，DeepOCR 合成图识别通过，exe 内嵌 HEAD 版本 yes。"
     }
   ],
   "legacy_backfilled": [
