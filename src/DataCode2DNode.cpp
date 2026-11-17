@@ -58,11 +58,14 @@ void DataCode2DNode::run(bool)
             for (int i = 0; i < decodedStrings.Length(); ++i)
                 lines << QString::fromStdString(decodedStrings[i].S().Text());
             result = lines.join(QStringLiteral("\n"));
-        } else {
-            result = QStringLiteral("未识别到二维码");
-            // 未识别到内容判红（2026-10-26：与 Ocr/Barcode/ZXing/Tesseract 统一口径）
+        }
+        // 只数 decodedStrings 个数不够：码符号被检出但内容解码为空时 Length()>0
+        // 而元素全是空串，旧实现把空串当有效码值判绿。与 Ocr/Barcode 的
+        // 「空结果判红」口径统一。
+        if (result.trimmed().isEmpty()) {
+            result = QStringLiteral("未识别到二维码内容");
             m_params[QStringLiteral("lastError")] = result;
-            m_params["moduleStatus"] = false;
+            m_params[QStringLiteral("moduleStatus")] = false;
         }
 
         auto strObj = QSharedPointer<DataObject>::create();
@@ -76,9 +79,11 @@ void DataCode2DNode::run(bool)
 
         /* 释放由 modelGuard 在离开作用域时完成（RAII，异常路径同样覆盖） */
         m_outputImage = m_inputImage;
-    } catch (const HException &) {
+    } catch (const HException &e) {
         m_outputImage.Clear();
         setOutputData(1, QSharedPointer<DataObject>());
         setOutputData(2, QSharedPointer<DataObject>());
+        m_params[QStringLiteral("lastError")] = QString::fromLocal8Bit(e.ErrorMessage().TextA());
+        m_params[QStringLiteral("moduleStatus")] = false;
     }
 }

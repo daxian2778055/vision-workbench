@@ -67,6 +67,7 @@
 #include "CommunicationNodeBase.h"
 #include "CommunicationManagerDialog.h"
 #include "VmDeviceCreateDialog.h"
+#include "UdpCommNode.h"
 #include "CommDeviceConfigDialog.h"
 #include "ModbusConfigDialog.h"
 #include "PlcConfigDialog.h"
@@ -223,6 +224,8 @@ private slots:
     void commAddDeviceOpensSingleVmDialog();
     // 2026-11-13：截图 4 地址空间（按协议显隐 + 10 列矩阵 + 工具条联动）
     void commAddressSpaceAppearsForRegisterProtocols();
+    // 2026-11-17 盲区补审：UDP 发送失败必须计入 sendWriteFailureCount
+    void udpSendFailureIsCounted();
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -4204,6 +4207,48 @@ void CommWritebackTest::commAddressSpaceAppearsForRegisterProtocols()
 
     QVERIFY(cm->removeDevice(QStringLiteral("SPACE_TCP")));
     QVERIFY(cm->removeDevice(QStringLiteral("SPACE_MODBUS")));
+}
+
+// 2026-11-17 盲区补审：此前 UdpCommNode 从未被任何测试提及。
+// sendData() 入队即返回 true，真正的写在 onSendRequested；若那条路径静默丢弃，
+// 报文没发出但本轮判绿。这里钉住两种丢弃都必须计入 sendWriteFailureCount。
+void CommWritebackTest::udpSendFailureIsCounted()
+{
+    auto invokeSend = [](UdpCommNode &node) {
+        return QMetaObject::invokeMethod(&node, "onSendRequested", Qt::DirectConnection,
+                                         Q_ARG(QByteArray, QByteArray("x")));
+    };
+
+    // ① 已绑定但没配目标 IP：旧实现只 emit communicationError，不记账 ⇒ 整轮判绿
+    CommunicationNodeBase::resetSendWriteFailureCount();
+    {
+        UdpCommNode node;
+        node.init();
+        node.setParam(QStringLiteral("localPort"), 15621);
+        node.setParam(QStringLiteral("bindAddress"), QStringLiteral("127.0.0.1"));
+        QVERIFY2(node.openConnection(), "UDP 本地绑定失败");
+        node.setParam(QStringLiteral("remoteIp"), QString());
+        QVERIFY(invokeSend(node));
+        QCOMPARE(CommunicationNodeBase::sendWriteFailureCount(), 1);
+    }
+
+    // ② 目标端口越界：旧实现 static_cast<quint16>(99999)=34463，
+    //    writeDatagram 成功还写 lastSent ⇒ 假成功。必须在转换前挡住并记账。
+    CommunicationNodeBase::resetSendWriteFailureCount();
+    {
+        UdpCommNode node;
+        node.init();
+        node.setParam(QStringLiteral("localPort"), 15622);
+        node.setParam(QStringLiteral("bindAddress"), QStringLiteral("127.0.0.1"));
+        QVERIFY2(node.openConnection(), "UDP 本地绑定失败");
+        node.setParam(QStringLiteral("remoteIp"), QStringLiteral("127.0.0.1"));
+        node.setParam(QStringLiteral("remotePort"), 99999);
+        QVERIFY(invokeSend(node));
+        QCOMPARE(CommunicationNodeBase::sendWriteFailureCount(), 1);
+        QVERIFY2(node.getParam(QStringLiteral("lastSent")).toString().isEmpty(),
+                 "越界端口不得写 lastSent 伪装成功");
+    }
+    CommunicationNodeBase::resetSendWriteFailureCount();
 }
 
 QTEST_MAIN(CommWritebackTest)

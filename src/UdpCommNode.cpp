@@ -160,11 +160,25 @@ void UdpCommNode::onSendRequested(const QByteArray &data)
     }
     const QString ip = m_params.value(QStringLiteral("remoteIp")).toString().trimmed();
     if (ip.isEmpty()) {
-        emit communicationError(QStringLiteral("UDP 未配置目标 IP（仅接收模式不可发送）"));
+        // 调用方已从 sendData() 拿到成功，这里再静默丢弃就是「假发送成功」。
+        // 必须与未连接/写失败走同一记账路径，FlowExecutor 才会按失败计数判 NG。
+        const QString reason = QStringLiteral("UDP 未配置目标 IP（仅接收模式不可发送）");
+        noteSendWriteFailure(reason);
+        emit communicationError(reason);
         return;
     }
-    const quint16 port =
-        static_cast<quint16>(m_params.value(QStringLiteral("remotePort"), 8000).toInt());
+    // 本地端口在 init() 已校验 0~65535，目标端口此前直接 static_cast<quint16>
+    // 会把 99999 静默回绕成 34463：writeDatagram 成功、lastSent 被写、整轮判绿，
+    // 但下位机根本收不到。方案文件/程序化 setParam 能绕过 SpinBox，必须这里挡住。
+    const int rawPort = m_params.value(QStringLiteral("remotePort"), 8000).toInt();
+    if (rawPort < 0 || rawPort > 65535) {
+        const QString reason =
+            QStringLiteral("UDP 目标端口 %1 非法（应在 0~65535）").arg(rawPort);
+        noteSendWriteFailure(reason);
+        emit communicationError(reason);
+        return;
+    }
+    const quint16 port = static_cast<quint16>(rawPort);
     const qint64 written =
         m_socket->writeDatagram(data, QHostAddress(ip), port);
     if (written < 0) {

@@ -48,14 +48,18 @@ void AreaNode::run(bool /*autoSwitch*/)
         const int nc = static_cast<int>(nObj.D());
 
         if (nc <= 0) {
-            HObject canvas;
-            GenImageConst(&canvas, "byte", w, h);
+            // 未测到有效区域不是「面积=0 的成功测量」。输出全黑图 + 0.0 且判绿，
+            // 会把「没找到」伪装成「找到了 0 面积」传给下游（与 Barcode/Ocr/
+            // DataCode2D 的未识别判红口径一致）。判红并清空输出。
+            m_params[QStringLiteral("lastError")] =
+                QStringLiteral("未测到有效区域（没有面积 ≥10 的连通域）");
+            m_params[QStringLiteral("moduleStatus")] = false;
             m_params[QStringLiteral("totalArea")] = 0.0;
-            m_outputImage = canvas;
-            auto zeroObj = QSharedPointer<DataObject>::create();
-            zeroObj->setValue(0.0);
-            setOutputData(1, zeroObj);
-        } else {
+            m_outputImage.Clear();
+            setOutputData(1, QSharedPointer<DataObject>());
+            return;
+        }
+        {
             HObject united, bin;
             Union1(selected, &united);
             HTuple areaSum, rr, cc;
@@ -73,6 +77,9 @@ void AreaNode::run(bool /*autoSwitch*/)
         }
     } catch (const HException &e) {
         m_outputImage.Clear();
+        setOutputData(1, QSharedPointer<DataObject>());
+        m_params[QStringLiteral("lastError")] = QString::fromLocal8Bit(e.ErrorMessage().TextA());
+        m_params[QStringLiteral("moduleStatus")] = false;
     }
 }
 
