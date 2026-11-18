@@ -2,9 +2,13 @@
 
 #include <QtConcurrent>
 
+#include <QApplication>
+#include <QClipboard>
 #include <QComboBox>
 #include <QDir>
+#include <QDirIterator>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -116,6 +120,39 @@ TrainingRunnerDialog::TrainingRunnerDialog(QWidget *parent) : QDialog(parent)
     m_commandPreview->setMaximumHeight(70);
     root->addWidget(m_commandPreview);
 
+    // ── 导出 ONNX 命令（只生成不执行：环境是否有 onnx 由训练机决定） ──
+    auto *exportHead = new QHBoxLayout();
+    exportHead->addWidget(new QLabel(QStringLiteral("导出 ONNX 命令（在训练机上执行）：")));
+    exportHead->addStretch();
+    auto *copyExportBtn = new QPushButton(QStringLiteral("复制导出命令"));
+    connect(copyExportBtn, &QPushButton::clicked, this, &TrainingRunnerDialog::onCopyExportCommand);
+    exportHead->addWidget(copyExportBtn);
+    root->addLayout(exportHead);
+    m_exportPreview = new QPlainTextEdit();
+    m_exportPreview->setReadOnly(true);
+    m_exportPreview->setMaximumHeight(56);
+    root->addWidget(m_exportPreview);
+
+    // ── 训练产物 → 回填节点（闭环的最后一环） ──
+    auto *artifactHead = new QHBoxLayout();
+    artifactHead->addWidget(new QLabel(QStringLiteral("训练产物：")));
+    m_artifactLabel = new QLabel(QStringLiteral("尚未发现 ONNX 模型"));
+    m_artifactLabel->setWordWrap(true);
+    artifactHead->addWidget(m_artifactLabel, 1);
+    auto *chooseOnnx = new QPushButton(QStringLiteral("选择 ONNX…"));
+    connect(chooseOnnx, &QPushButton::clicked, this, &TrainingRunnerDialog::onChooseOnnx);
+    artifactHead->addWidget(chooseOnnx);
+    root->addLayout(artifactHead);
+    auto *applyRow = new QHBoxLayout();
+    m_detectBtn = new QPushButton(QStringLiteral("插入 ONNX目标检测"));
+    m_countBtn = new QPushButton(QStringLiteral("插入 流水线计数"));
+    connect(m_detectBtn, &QPushButton::clicked, this, &TrainingRunnerDialog::onApplyDetect);
+    connect(m_countBtn, &QPushButton::clicked, this, &TrainingRunnerDialog::onApplyCounting);
+    applyRow->addWidget(m_detectBtn);
+    applyRow->addWidget(m_countBtn);
+    applyRow->addStretch();
+    root->addLayout(applyRow);
+
     // ── 按钮 ──
     auto *btns = new QHBoxLayout();
     m_startBtn = new QPushButton(QStringLiteral("开始训练"));
@@ -144,14 +181,21 @@ TrainingRunnerDialog::TrainingRunnerDialog(QWidget *parent) : QDialog(parent)
     connect(m_runner, &TrainingRunner::finished, this, [this](bool ok, const QString &msg) {
         appendLog(QStringLiteral("[结束] %1").arg(msg));
         setRunning(false);
+        refreshArtifacts();
+        // 进程 exit=0 不等于训练成功（TrainingRunner.h 的既有口径）：用产物存在性说话
+        if (m_lastOnnx.isEmpty()) {
+            appendLog(ok ? QStringLiteral("[注意] 进程正常结束但未发现 ONNX：训练只产出权重，"
+                                          "请在训练机上执行上方导出命令后再回填节点")
+                         : QStringLiteral("[注意] 训练没有正常结束，先看日志里的最后一条错误"));
+        } else {
+            appendLog(QStringLiteral("[产物] 已发现 ONNX：%1").arg(m_lastOnnx));
+        }
         // 用户已请求关闭 → 收尾后自动关窗（2026-10-29）：文案说「会自动关闭」就真关
         if (m_closeRequested) {
             m_closeRequested = false;
             accept();
             return;
         }
-        if (!ok)
-            appendLog(QStringLiteral("[注意] 训练没有正常结束，先看日志里的最后一条错误"));
     });
 
     loadSettings();
@@ -159,6 +203,9 @@ TrainingRunnerDialog::TrainingRunnerDialog(QWidget *parent) : QDialog(parent)
     m_python->setText(m_python->text().isEmpty()
                           ? QStringLiteral("C:\\YOLOX\\.venv\\Scripts\\python.exe")
                           : m_python->text());
+    // 无产物前不允许回填（构造期不扫描目录，避免大目录拖慢开窗）
+    m_detectBtn->setEnabled(false);
+    m_countBtn->setEnabled(false);
 }
 
 void TrainingRunnerDialog::loadSettings()
@@ -169,6 +216,13 @@ void TrainingRunnerDialog::loadSettings()
     m_expOrWeights->setText(s.value(QStringLiteral("train/exp")).toString());
     m_dataYaml->setText(s.value(QStringLiteral("train/data")).toString());
     m_trainer->setCurrentIndex(s.value(QStringLiteral("train/trainer"), 0).toInt());
+    // 超参也落 QSettings（此前只存 5 个键，现场每次重开都要重填 epochs/imgsz/batch）
+    m_ckpt->setText(s.value(QStringLiteral("train/ckpt")).toString());
+    m_extra->setText(s.value(QStringLiteral("train/extra")).toString());
+    m_epochs->setValue(s.value(QStringLiteral("train/epochs"), 100).toInt());
+    m_imgsz->setValue(s.value(QStringLiteral("train/imgsz"), 640).toInt());
+    m_batch->setValue(s.value(QStringLiteral("train/batch"), 8).toInt());
+    m_device->setCurrentIndex(s.value(QStringLiteral("train/device"), 0).toInt());
 }
 
 void TrainingRunnerDialog::saveSettings()
@@ -179,6 +233,12 @@ void TrainingRunnerDialog::saveSettings()
     s.setValue(QStringLiteral("train/exp"), m_expOrWeights->text().trimmed());
     s.setValue(QStringLiteral("train/data"), m_dataYaml->text().trimmed());
     s.setValue(QStringLiteral("train/trainer"), m_trainer->currentIndex());
+    s.setValue(QStringLiteral("train/ckpt"), m_ckpt->text().trimmed());
+    s.setValue(QStringLiteral("train/extra"), m_extra->text().trimmed());
+    s.setValue(QStringLiteral("train/epochs"), m_epochs->value());
+    s.setValue(QStringLiteral("train/imgsz"), m_imgsz->value());
+    s.setValue(QStringLiteral("train/batch"), m_batch->value());
+    s.setValue(QStringLiteral("train/device"), m_device->currentIndex());
 }
 
 void TrainingRunnerDialog::onBrowsePython()
@@ -345,6 +405,7 @@ void TrainingRunnerDialog::refreshCommand()
                                               : QStringLiteral(" ") + a;
     }
     m_commandPreview->setPlainText(text);
+    m_exportPreview->setPlainText(buildExportCommand());
     const bool yolox = (m_trainer->currentIndex() == 0);
     m_expOrWeights->setPlaceholderText(
         yolox ? QStringLiteral("exps/default/yolox_s.py")
@@ -389,6 +450,129 @@ void TrainingRunnerDialog::reject()
         return;
     }
     QDialog::reject();
+}
+
+QString TrainingRunnerDialog::buildExportCommand() const
+{
+    const QString python = m_python->text().trimmed();
+    const int imgsz = m_imgsz->value();
+    if (m_trainer->currentIndex() == 0) {
+        // YOLOX：用 exp + ckpt 导出，默认权重路径与官方输出一致
+        const QString exp = m_expOrWeights->text().trimmed().isEmpty()
+                                ? QStringLiteral("exps/default/yolox_s.py")
+                                : m_expOrWeights->text().trimmed();
+        QString ckpt = m_ckpt->text().trimmed();
+        if (ckpt.isEmpty())
+            ckpt = QStringLiteral("YOLOX_outputs/yolox_s/best_ckpt.pth");
+        return QStringLiteral("%1 -m yolox.tools.export_onnx -f \"%2\" -c \"%3\" "
+                              "--output-name best.onnx --opset 12 --input-size %4,%5")
+            .arg(python, exp, ckpt, QString::number(imgsz), QString::number(imgsz));
+    }
+    // Ultralytics：训练只产出权重，按默认路径生成 export 命令，训练机上可直接复制执行
+    QString weights = m_ckpt->text().trimmed();
+    if (weights.isEmpty())
+        weights = QStringLiteral("runs/detect/train/weights/best.pt");
+    return QStringLiteral("%1 -c \"from ultralytics import YOLO; "
+                          "YOLO(r'%2').export(format='onnx', imgsz=%3, opset=12)\"")
+        .arg(python, weights, QString::number(imgsz));
+}
+
+QString TrainingRunnerDialog::discoverOnnx() const
+{
+    const QString work = m_yoloxDir->text().trimmed();
+    if (work.isEmpty() || !QDir(work).exists())
+        return QString();
+    QDirIterator it(work, QStringList{QStringLiteral("*.onnx")},
+                    QDir::Files, QDirIterator::Subdirectories);
+    QString best;
+    qint64 bestMtime = -1;
+    int scanned = 0;
+    while (it.hasNext() && scanned < 5000) {
+        const QString path = it.next();
+        const QFileInfo fi(path);
+        if (!fi.isFile())
+            continue;
+        ++scanned;
+        const qint64 mt = fi.lastModified().toMSecsSinceEpoch();
+        if (mt > bestMtime) {
+            bestMtime = mt;
+            best = QDir::toNativeSeparators(path);
+        }
+    }
+    return best;
+}
+
+QString TrainingRunnerDialog::resolveClasses(const QString &modelPath) const
+{
+    if (modelPath.isEmpty())
+        return QString();
+    const QString near = QFileInfo(modelPath).absolutePath() + QStringLiteral("/classes.txt");
+    if (QFileInfo::exists(near))
+        return QDir::toNativeSeparators(near);
+    const QString yaml = m_dataYaml->text().trimmed();
+    if (!yaml.isEmpty()) {
+        const QString fromYaml = QFileInfo(yaml).absolutePath() + QStringLiteral("/classes.txt");
+        if (QFileInfo::exists(fromYaml))
+            return QDir::toNativeSeparators(fromYaml);
+    }
+    return QString();
+}
+
+void TrainingRunnerDialog::refreshArtifacts()
+{
+    m_lastOnnx = discoverOnnx();
+    m_lastClasses = resolveClasses(m_lastOnnx);
+    const bool ready = !m_lastOnnx.isEmpty();
+    m_detectBtn->setEnabled(ready);
+    m_countBtn->setEnabled(ready);
+    if (!ready) {
+        m_artifactLabel->setText(QStringLiteral("尚未发现 ONNX（训练只产出权重，需先导出）"));
+        return;
+    }
+    m_artifactLabel->setText(m_lastOnnx
+        + (m_lastClasses.isEmpty()
+               ? QStringLiteral("\n未找到 classes.txt（类别将显示为数字）")
+               : QStringLiteral("\n类别表：%1").arg(m_lastClasses)));
+}
+
+void TrainingRunnerDialog::onChooseOnnx()
+{
+    const QString path = QFileDialog::getOpenFileName(
+        this, QStringLiteral("选择 ONNX 模型"), m_yoloxDir->text().trimmed(),
+        QStringLiteral("ONNX 模型 (*.onnx)"));
+    if (path.isEmpty())
+        return;
+    m_lastOnnx = QDir::toNativeSeparators(path);
+    m_lastClasses = resolveClasses(m_lastOnnx);
+    m_detectBtn->setEnabled(true);
+    m_countBtn->setEnabled(true);
+    m_artifactLabel->setText(m_lastOnnx
+        + (m_lastClasses.isEmpty()
+               ? QStringLiteral("\n未找到 classes.txt（类别将显示为数字）")
+               : QStringLiteral("\n类别表：%1").arg(m_lastClasses)));
+    appendLog(QStringLiteral("[产物] 已选择 ONNX：%1").arg(m_lastOnnx));
+}
+
+void TrainingRunnerDialog::onCopyExportCommand()
+{
+    QApplication::clipboard()->setText(m_exportPreview->toPlainText());
+    appendLog(QStringLiteral("[提示] 导出命令已复制到剪贴板"));
+}
+
+void TrainingRunnerDialog::onApplyDetect()
+{
+    if (m_lastOnnx.isEmpty())
+        return;
+    emit applyModelRequested(QStringLiteral("DnnDetectNode"), m_lastOnnx, m_lastClasses);
+    appendLog(QStringLiteral("[提示] 已请求插入 ONNX目标检测（画布锁定时会失败，请看状态栏）"));
+}
+
+void TrainingRunnerDialog::onApplyCounting()
+{
+    if (m_lastOnnx.isEmpty())
+        return;
+    emit applyModelRequested(QStringLiteral("ObjectCountingNode"), m_lastOnnx, m_lastClasses);
+    appendLog(QStringLiteral("[提示] 已请求插入 流水线计数（画布锁定时会失败，请看状态栏）"));
 }
 
 void TrainingRunnerDialog::appendLog(const QString &line)

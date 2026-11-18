@@ -39,10 +39,23 @@ private slots:
     void onStart();
     void onCancel();
     void refreshCommand();
+    void onChooseOnnx();
+    void onCopyExportCommand();
+    void onApplyDetect();
+    void onApplyCounting();
+
+signals:
+    /// 训练产物回填：请求主窗口插入算子并预填模型/类别路径（nodeType 为注册名）
+    void applyModelRequested(const QString &nodeType, const QString &modelPath,
+                             const QString &classesPath);
 
 private:
     QString buildProgram() const;
     QStringList buildArgs() const;
+    QString buildExportCommand() const;
+    QString discoverOnnx() const;
+    QString resolveClasses(const QString &modelPath) const;
+    void refreshArtifacts();
     void appendLog(const QString &line);
     void setRunning(bool on);
     void loadSettings();
@@ -65,6 +78,12 @@ private:
     QPushButton *m_startBtn = nullptr;
     QPushButton *m_cancelBtn = nullptr;
     QPushButton *m_probeBtn = nullptr;
+    QPlainTextEdit *m_exportPreview = nullptr;   /// 导出 ONNX 命令（只读，可复制）
+    QLabel *m_artifactLabel = nullptr;           /// 训练产物路径摘要
+    QPushButton *m_detectBtn = nullptr;          /// 插入 ONNX目标检测 并回填
+    QPushButton *m_countBtn = nullptr;           /// 插入 流水线计数 并回填
+    QString m_lastOnnx;                          /// 最近一次发现/手工选择的 ONNX
+    QString m_lastClasses;                       /// 对应 classes.txt（可为空）
     TrainingRunner *m_runner = nullptr;
     /// 环境探测放到后台（2026-10-29 复核 P3-1）：probe 里 waitForFinished 默认 20 秒，
     /// 在界面线程同步等会让窗口像卡死。

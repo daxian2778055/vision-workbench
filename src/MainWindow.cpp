@@ -8221,6 +8221,30 @@ void MainWindow::setupSystemMenu()
         connect(ui->menuSystem->addAction(QStringLiteral("训练…")), &QAction::triggered,
                 this, [this]() {
                     TrainingRunnerDialog dlg(this);
+                    // 训练产物回填（2026-11-18）：复用训练向导同款 insertNode 范式，
+                    // 把 best.onnx + classes.txt 直接灌进检测/计数节点，省去手填路径。
+                    QObject::connect(&dlg, &TrainingRunnerDialog::applyModelRequested,
+                                     this, [this](const QString &nodeType,
+                                                  const QString &modelPath,
+                                                  const QString &classesPath) {
+                        FlowScene *scene = nullptr;
+                        const int idx = ui->flowTabs ? ui->flowTabs->currentIndex() : -1;
+                        if (idx >= 0 && idx < m_flowScenes.size())
+                            scene = m_flowScenes[idx];
+                        const int before = scene ? scene->nodes().size() : 0;
+                        addNode(nodeType);
+                        if (!scene || scene->nodes().size() <= before) {
+                            statusBar()->showMessage(
+                                QStringLiteral("插入节点失败（画布已锁定？）"), 8000);
+                            return;
+                        }
+                        NodeBase *node = scene->nodes().last();
+                        node->setParam(QStringLiteral("modelPath"), modelPath);
+                        node->setParam(QStringLiteral("classNamesPath"), classesPath);
+                        statusBar()->showMessage(
+                            QStringLiteral("已插入 %1 并回填训练模型：%2")
+                                .arg(nodeType).arg(modelPath), 8000);
+                    });
                     dlg.exec();
                 });
         // 打包模型与依赖（2026-10-28）：把 onnx/classes.txt 等外部文件收进方案目录，

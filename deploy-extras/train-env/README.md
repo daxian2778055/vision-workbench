@@ -76,13 +76,18 @@ git clone https://github.com/Megvii-BaseDetection/YOLOX.git C:\YOLOX
 
 1. 主程序 → 系统 →「检测框标注…」：标注数据集（写出 `图片同名.txt`，YOLO 格式）
 2. 主程序 → 系统 →「训练」：选数据集、填 epochs/imgsz、点开始（需要本环境已装好）
-3. 训练完成 → 导出 ONNX（界面会给出命令，也可自己跑）：
+3. 训练完成 → 导出 ONNX：训练对话框的「导出 ONNX 命令」区会按所选训练器（YOLOX / Ultralytics）
+   生成对应命令，点「复制导出命令」到训练机执行。也可自己跑：
    ```powershell
    .\.venv\Scripts\python.exe -m yolox.tools.export_onnx -f exps\default\yolox_s.py ^
        -c runs\...\best_ckpt.pth --output-name best.onnx --opset 12 --input-size 640,640
    ```
-4. 主程序 → 文件 →「打包模型与依赖…」：把 `best.onnx` 与 `classes.txt` 收进方案
-5. 拷方案到产线机 → 仿真跑通 → 上线
+4. 回主程序 →「训练」对话框：产物区会显示发现的 ONNX（也可「选择 ONNX…」手工指定），
+   点「插入 ONNX目标检测」或「插入 流水线计数」即自动把 `best.onnx` + `classes.txt`
+   回填到新节点的 `modelPath` / `classNamesPath`，不必手填路径。
+   > 训练只产出权重：进程 exit=0 但未发现 ONNX 时，对话框会明确提示先执行第 3 步。
+5. 主程序 → 文件 →「打包模型与依赖…」：把 `best.onnx` 与 `classes.txt` 收进方案
+6. 拷方案到产线机 → 仿真跑通 → 上线
 
 ## 7. 常见问题
 
