@@ -225,6 +225,17 @@ CommunicationManagerDialog::~CommunicationManagerDialog()
 {
 }
 
+void CommunicationManagerDialog::setCurrentPage(int page)
+{
+    if (!m_navList) return;
+    const int n = m_navList->count();
+    if (page < 0 || page >= n) return;
+    QSignalBlocker blocker(m_navList);
+    m_navList->setCurrentRow(page);
+    if (m_pageStack && m_pageStack->currentIndex() != page)
+        m_pageStack->setCurrentIndex(page);
+}
+
 void CommunicationManagerDialog::loadResponseConfigToUi()
 {
     auto *cm = CommunicationManager::instance();
@@ -381,6 +392,9 @@ void CommunicationManagerDialog::applyRegisterSpaceVisibility(const QString &dev
 void CommunicationManagerDialog::loadRegistersIntoSpace(const QJsonObject &config)
 {
     if (!m_registerTable) return;
+    // 回显期间禁止 cellChanged 反写，否则一张空表会把原配置抹掉
+    m_loadingRegisters = true;
+    QSignalBlocker blocker(m_registerTable);
     m_registerTable->setRowCount(0);
     const QJsonArray regs = config.value(QStringLiteral("registers")).toArray();
     for (const QJsonValue &v : regs) {
@@ -392,14 +406,47 @@ void CommunicationManagerDialog::loadRegistersIntoSpace(const QJsonObject &confi
         m_registerTable->setItem(row, 1, new QTableWidgetItem(
             o.value(QStringLiteral("dataType")).toString(QStringLiteral("Int16"))));
         m_registerTable->setItem(row, 3, new QTableWidgetItem(
-            o.value(QStringLiteral("accessMode")).toString(QStringLiteral("ReadOnly"))));
+            o.value(QStringLiteral("accessMode")).toString(QStringLiteral("Read"))));
         m_registerTable->setItem(row, 5, new QTableWidgetItem(
             o.value(QStringLiteral("description")).toString()));
         const bool enabled = o.value(QStringLiteral("enabled")).toBool(true);
         m_registerTable->setItem(row, 6, new QTableWidgetItem(
             enabled ? QStringLiteral("\u542F\u7528") : QStringLiteral("\u7981\u7528")));
     }
+    m_loadingRegisters = false;
     refreshAddressGrid();
+}
+
+void CommunicationManagerDialog::persistRegistersFromSpace()
+{
+    if (m_loadingRegisters || !m_registerTable) return;
+    const int row = m_deviceTable ? m_deviceTable->currentRow() : -1;
+    if (row < 0 || !m_deviceTable->item(row, 0)) return;
+    const QString name = m_deviceTable->item(row, 0)->text();
+    auto *cm = CommunicationManager::instance();
+    QJsonObject cfg = cm->deviceInfo(name).config;
+    QJsonArray regs;
+    for (int r = 0; r < m_registerTable->rowCount(); ++r) {
+        auto *addr = m_registerTable->item(r, 0);
+        if (!addr || addr->text().trimmed().isEmpty()) continue;
+        bool ok = false;
+        const int a = addr->text().toInt(&ok);
+        if (!ok) continue;
+        auto cellText = [this, r](int col) {
+            auto *it = m_registerTable->item(r, col);
+            return it ? it->text() : QString();
+        };
+        QJsonObject o;
+        o[QStringLiteral("address")] = a;
+        o[QStringLiteral("dataType")] = cellText(1);
+        o[QStringLiteral("accessMode")] = cellText(3);
+        o[QStringLiteral("description")] = cellText(5);
+        o[QStringLiteral("enabled")] =
+            cellText(6) != QStringLiteral("\u7981\u7528");
+        regs.append(o);
+    }
+    cfg[QStringLiteral("registers")] = regs;
+    cm->updateDeviceConfig(name, cfg);
 }
 
 void CommunicationManagerDialog::refreshAddressGrid()
@@ -1001,8 +1048,14 @@ void CommunicationManagerDialog::setupDeviceTab(QStackedWidget *stack)
                                       right, m_registerSpace);
     m_spaceBar->setObjectName(QStringLiteral("commRegisterSpaceBar"));
     spaceLayout->insertWidget(0, m_spaceBar);
-    connect(m_spaceBar, &RegisterSpaceBar::rowsChanged,
-            this, &CommunicationManagerDialog::refreshAddressGrid);
+    connect(m_spaceBar, &RegisterSpaceBar::rowsChanged, this, [this]() {
+        refreshAddressGrid();
+        persistRegistersFromSpace();   // 工具条加地址/清空后立即落盘，切设备不丢
+    });
+    connect(m_registerTable, &QTableWidget::cellChanged, this, [this]() {
+        refreshAddressGrid();
+        persistRegistersFromSpace();
+    });
     connect(m_spaceBar, &RegisterSpaceBar::syncRequested, this, [this]() {
         const int row = m_deviceTable ? m_deviceTable->currentRow() : -1;
         const QString name = (row >= 0 && m_deviceTable->item(row, 0))
@@ -1463,7 +1516,7 @@ void CommunicationManagerDialog::onReadRegisters()
     // 打开 ModbusConfigDialog 查询实时值（只读模式）
     CommDeviceInfo info = cm->deviceInfo(name);
     ModbusConfigDialog dlg(QStringLiteral("Modbus\u5BC4\u5B58\u5668\u76D1\u63A7 - %1").arg(name),
-                           modbusNode, this);
+                           modbusNode, this, true);
     dlg.setConfig(info.config);
     dlg.exec();
     // 用户关闭对话框即可

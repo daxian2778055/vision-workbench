@@ -562,7 +562,8 @@ protected:
     /// 非模态打开主功能窗口：已开着就前置激活（不重复开），关闭后自动销毁。
     /// 主功能窗口一律非模态——打开任一窗口都不影响主界面及其它窗口的操作
     /// （历史行为是 exec() 模态，打开通讯管理后主界面完全不可用）。
-    void showAuxDialog(const QString &key, const std::function<QDialog *()> &create);
+    void showAuxDialog(const QString &key, const std::function<QDialog *()> &create,
+                       const std::function<void(QDialog *)> &onShown = {});
 
     // ---- 新增组件 ----
     /// 辅助面板与辅助窗口（结果表/变量/性能/输出数据四类懒创建面板 + 非模态对话框统一入口）

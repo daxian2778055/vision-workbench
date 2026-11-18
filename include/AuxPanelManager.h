@@ -42,8 +42,10 @@ public:
     void saveVisibility() const;
     void restoreVisibility();
 
-    /// 非模态打开辅助窗口：已开着就前置激活（不重复开），关闭后自动销毁
-    void showDialog(const QString &key, const std::function<QDialog *()> &create);
+    /// 非模态打开辅助窗口：已开着就前置激活（不重复开），关闭后自动销毁。
+    /// onShown 在新建与复用两条路径上都会调用，供同键多入口的对话框按入口切页。
+    void showDialog(const QString &key, const std::function<QDialog *()> &create,
+                    const std::function<void(QDialog *)> &onShown = {});
 
 private:
     void createResultTableIfNeeded();

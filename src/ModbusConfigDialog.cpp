@@ -17,8 +17,9 @@
 
 ModbusConfigDialog::ModbusConfigDialog(const QString &title,
                                        ModbusNode *node,
-                                       QWidget *parent)
-    : QDialog(parent), m_modbusNode(node)
+                                       QWidget *parent,
+                                       bool readOnly)
+    : QDialog(parent), m_modbusNode(node), m_readOnly(readOnly)
 {
     setWindowTitle(title);
     setMinimumSize(850, 600);
@@ -258,6 +259,14 @@ void ModbusConfigDialog::setupUI()
     btnLayout->addWidget(m_writeBtn);
     btnLayout->addStretch();
     regLayout->addLayout(btnLayout);
+    // 监控模式：只许看实时值，隐藏写/增删/连接切换，避免"关掉什么都不保存"的错觉
+    if (m_readOnly) {
+        addBtn->setVisible(false);
+        removeBtn->setVisible(false);
+        m_writeBtn->setVisible(false);
+        if (m_spaceBar) m_spaceBar->setVisible(false);
+        m_toggleSwitch->setVisible(false);
+    }
 
     connect(addBtn, &QPushButton::clicked, this, &ModbusConfigDialog::onAddRegister);
     connect(removeBtn, &QPushButton::clicked, this, &ModbusConfigDialog::onRemoveRegister);
@@ -269,8 +278,10 @@ void ModbusConfigDialog::setupUI()
     mainLayout->addWidget(regGroup);
 
     // ===== 确认/取消 =====
-    auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-    connect(buttonBox, &QDialogButtonBox::accepted, this, &ModbusConfigDialog::onAccept);
+    auto *buttonBox = new QDialogButtonBox(
+        m_readOnly ? QDialogButtonBox::Close : (QDialogButtonBox::Ok | QDialogButtonBox::Cancel));
+    if (!m_readOnly)
+        connect(buttonBox, &QDialogButtonBox::accepted, this, &ModbusConfigDialog::onAccept);
     connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
     mainLayout->addWidget(buttonBox);
 

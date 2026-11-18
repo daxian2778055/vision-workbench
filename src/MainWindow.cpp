@@ -1789,8 +1789,9 @@ MainWindow::MainWindow(QWidget *parent, bool previewOnly) :
         // 菜单对话框路由面（词条切片 B 第二抽）：展示钩子即 showAuxDialog 的转发
         // （AuxPanelManager 同键复用/关闭即销毁/非模态语义不动，契约见该类头件与普查面段三）。
         m_menuRouter.setShow([this](const QString &key,
-                                    const AuxDialogMenuRouter::DialogFactory &factory) {
-            showAuxDialog(key, factory);
+                                    const AuxDialogMenuRouter::DialogFactory &factory,
+                                    const AuxDialogMenuRouter::DialogShown &onShown) {
+            showAuxDialog(key, factory, onShown);
         });
 
         VFP_DEBUG << "Calling setupCommunicationMenu";
@@ -8088,10 +8089,11 @@ void MainWindow::reorganizeMenuBar()
     }
 }
 
-void MainWindow::showAuxDialog(const QString &key, const std::function<QDialog *()> &create)
+void MainWindow::showAuxDialog(const QString &key, const std::function<QDialog *()> &create,
+                               const std::function<void(QDialog *)> &onShown)
 {
     // 统一委托 AuxPanelManager：同 key 复用、关闭即销毁（非模态，不阻塞主界面）
-    m_auxPanels->showDialog(key, create);
+    m_auxPanels->showDialog(key, create, onShown);
 }
 
 void MainWindow::setupCommunicationMenu()
@@ -8104,14 +8106,22 @@ void MainWindow::setupCommunicationMenu()
     // 动作 → 对话框键的路由经 AuxDialogMenuRouter（词条切片 B 第二抽）：四枚设备/事件
     // 动作同键 commManager（共用一个管理器现窗），只读监视另键 commMonitor。
     auto showCommManager = [this]() -> QDialog * { return new CommunicationManagerDialog(this); };
+    // 四个入口同键复用同一现窗，但必须按入口停到对应页（此前永远停在设备管理页，
+    // 用户点「接收事件/发送事件/心跳」看到的还是设备表——现场反馈的 UI 错位）。
+    auto goPage = [](int page) -> std::function<void(QDialog *)> {
+        return [page](QDialog *dlg) {
+            if (auto *mgr = qobject_cast<CommunicationManagerDialog *>(dlg))
+                mgr->setCurrentPage(page);
+        };
+    };
     m_menuRouter.toDialog(ui->actionCommDevice, this, QStringLiteral("commManager"),
-                          showCommManager);
+                          showCommManager, goPage(0));
     m_menuRouter.toDialog(ui->actionCommReceiveEvent, this, QStringLiteral("commManager"),
-                          showCommManager);
+                          showCommManager, goPage(1));
     m_menuRouter.toDialog(ui->actionCommSendEvent, this, QStringLiteral("commManager"),
-                          showCommManager);
+                          showCommManager, goPage(2));
     m_menuRouter.toDialog(ui->actionCommHeartbeat, this, QStringLiteral("commManager"),
-                          showCommManager);
+                          showCommManager, goPage(5));
     m_menuRouter.toDialog(ui->actionCommMonitor, this, QStringLiteral("commMonitor"),
                           [this]() -> QDialog * { return new CommMonitorDialog(this); });
 }

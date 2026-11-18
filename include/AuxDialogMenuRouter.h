@@ -24,7 +24,10 @@ class FlowScene;
 class AuxDialogMenuRouter final {
 public:
     using DialogFactory = std::function<QDialog *()>;
-    using ShowDialog = std::function<void(const QString &key, const DialogFactory &factory)>;
+    /// 展示后钩子：同键复用现窗时也能按入口切页（新建/复用两条路径都会调用）
+    using DialogShown = std::function<void(QDialog *)>;
+    using ShowDialog = std::function<void(const QString &key, const DialogFactory &factory,
+                                          const DialogShown &onShown)>;
     using ScenesProvider = std::function<QList<FlowScene *>()>;
     using SceneProvider = std::function<FlowScene *()>;
     using SceneMissing = std::function<void()>;
@@ -40,6 +43,9 @@ public:
     /// 固定键直路由（连接生命周期随 context；动作触发即走钩子）
     void toDialog(QAction *action, QObject *context, const QString &key,
                   const DialogFactory &make);
+    /// 同键路由 + 展示后钩子（用于同一对话框按入口切页；键仍原样透传）
+    void toDialog(QAction *action, QObject *context, const QString &key,
+                  const DialogFactory &make, const DialogShown &onShown);
 
     /// 多场景路由：列表在触发当下快照入工厂闭包（原体在工厂闭包内现取，同步展示链内两刻同瞬）
     void toScenesDialog(QAction *action, QObject *context, const QString &key,

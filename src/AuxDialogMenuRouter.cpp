@@ -15,7 +15,16 @@ void AuxDialogMenuRouter::toDialog(QAction *action, QObject *context, const QStr
 {
     const ShowDialog show = m_show;
     QObject::connect(action, &QAction::triggered, context, [show, key, make]() {
-        show(key, make);
+        show(key, make, {});
+    });
+}
+
+void AuxDialogMenuRouter::toDialog(QAction *action, QObject *context, const QString &key,
+                                   const DialogFactory &make, const DialogShown &onShown)
+{
+    const ShowDialog show = m_show;
+    QObject::connect(action, &QAction::triggered, context, [show, key, make, onShown]() {
+        show(key, make, onShown);   // 新建/复用两条路径的回调统一由 AuxPanelManager 触发
     });
 }
 
@@ -26,7 +35,7 @@ void AuxDialogMenuRouter::toScenesDialog(QAction *action, QObject *context, cons
     const ShowDialog show = m_show;
     QObject::connect(action, &QAction::triggered, context, [show, key, scenes, make]() {
         const QList<FlowScene *> list = scenes();   // 触发当下取列表
-        show(key, [list, make]() { return make(list); });
+        show(key, [list, make]() { return make(list); }, {});
     });
 }
 
@@ -43,7 +52,7 @@ void AuxDialogMenuRouter::toFlowSceneDialog(QAction *action, QObject *context, c
             onMissing();                            // 缺失先报回调、不进展示（原体静默早退位）
             return;
         }
-        show(key, [scene, make]() { return make(scene); });
+        show(key, [scene, make]() { return make(scene); }, {});
     });
 }
 

@@ -19,7 +19,9 @@ class ModbusConfigDialog : public QDialog
 public:
     explicit ModbusConfigDialog(const QString &title,
                                 ModbusNode *node = nullptr, ///< 关联的 Modbus 节点（用于实时数据）
-                                QWidget *parent = nullptr);
+                                QWidget *parent = nullptr,
+                                bool readOnly = false);   ///< 监控模式：只看实时值，不许写/改配置
+    bool isReadOnly() const { return m_readOnly; }
 
     void setConfig(const QJsonObject &config);
     QJsonObject config() const;
@@ -89,4 +91,5 @@ private:
     QPushButton *m_toggleSwitch = nullptr; ///< 连接切换开关（服务器：开启服务器 / 客户端：连接服务器）
 
     ModbusNode *m_modbusNode = nullptr; ///< 用于实时显示和写入
+    bool m_readOnly = false;  ///< 监控模式：隐藏连接/写入/增删/确定等改变设备状态的入口
 };

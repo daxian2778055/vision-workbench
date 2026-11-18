@@ -126,12 +126,14 @@ void AuxPanelManager::restoreVisibility()
     }
 }
 
-void AuxPanelManager::showDialog(const QString &key, const std::function<QDialog *()> &create)
+void AuxPanelManager::showDialog(const QString &key, const std::function<QDialog *()> &create,
+                                 const std::function<void(QDialog *)> &onShown)
 {
     if (QDialog *existing = m_auxDialogs.value(key, nullptr)) {
         existing->show();
         existing->raise();
         existing->activateWindow();
+        if (onShown) onShown(existing);   // 复用现窗也要按本次入口切页
         return;
     }
     QDialog *dlg = create();
@@ -143,4 +145,5 @@ void AuxPanelManager::showDialog(const QString &key, const std::function<QDialog
     dlg->show();   // 非模态：不阻塞主界面与其它已开窗口
     dlg->raise();
     dlg->activateWindow();
+    if (onShown) onShown(dlg);
 }

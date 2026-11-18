@@ -41,6 +41,10 @@ public:
     /// 修改任一控件自动调用；回归测试按名直接驱动。
     void applyResponseConfig();
 
+    /// 左侧导航目标页（0 设备管理 / 1 接收事件 / 2 发送事件 / 3 触发配置 /
+    /// 4 响应配置 / 5 心跳）。菜单四入口共用本对话框，必须按入口停到对应页。
+    void setCurrentPage(int page);
+
 protected:
     /// 无边框顶栏拖动（VM 4.4 形态：自定义深灰标题栏，没有系统标题栏可拖）
     void mousePressEvent(QMouseEvent *event) override;
@@ -117,8 +121,12 @@ private:
     void applyRegisterSpaceVisibility(const QString &deviceType);
     /// 把 config["registers"] 灌进 7 列配置表并刷新矩阵
     void loadRegistersIntoSpace(const QJsonObject &config);
+    /// 把当前 7 列寄存器表写回选中设备的 config["registers"]（防"改了就丢"）
+    void persistRegistersFromSpace();
     /// 10 列矩阵预览：列 0-9、行首地址按配置表最小地址对齐，已配置地址着橙色
     void refreshAddressGrid();
+    /// 回显/导入期间禁止 persist 反写，避免把空表覆盖原配置
+    bool m_loadingRegisters = false;
 
     /// gtd 导入时被触发前缀歧义闸拒收的条目（按钮入口据此提示；测试可直读）
     QStringList m_gtdImportRejected;

@@ -4205,6 +4205,16 @@ void CommWritebackTest::commAddressSpaceAppearsForRegisterProtocols()
     QCOMPARE(grid->item(0, 2)->background().color(), QColor(QStringLiteral("#ffffff")));
     // 工具条补的是「只有地址」的空白行，没有 accessMode，不该冒充已配置地址
 
+    // ④ 2026-11-18：工具条改动必须即时写回 config["registers"]，
+    //    否则切一下设备或自动重连异步刷新就把新增行冲掉。
+    QCOMPARE(cm->deviceInfo(QStringLiteral("SPACE_MODBUS")).config
+                 .value(QStringLiteral("registers")).toArray().size(),
+             before + added);
+    // 切走再切回，表仍保留新增行（不是从旧 config 回显成 3 行）
+    QVERIFY(selectDevice(QStringLiteral("SPACE_TCP")));
+    QVERIFY(selectDevice(QStringLiteral("SPACE_MODBUS")));
+    QCOMPARE(cfgTable->rowCount(), before + added);
+
     QVERIFY(cm->removeDevice(QStringLiteral("SPACE_TCP")));
     QVERIFY(cm->removeDevice(QStringLiteral("SPACE_MODBUS")));
 }

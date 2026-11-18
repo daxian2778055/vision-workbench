@@ -20,13 +20,16 @@ struct Probe {
     QList<QList<FlowScene *>> makeListArg;
     int missingReports = 0;
     AuxDialogMenuRouter::DialogFactory lastFactory;
+    int shownHooks = 0;   // 展示钩子收到 onShown 的次数（同键多入口切页靠它）
 };
 
 AuxDialogMenuRouter::ShowDialog probeHook(Probe &p)
 {
-    return [&p](const QString &key, const AuxDialogMenuRouter::DialogFactory &factory) {
+    return [&p](const QString &key, const AuxDialogMenuRouter::DialogFactory &factory,
+                const AuxDialogMenuRouter::DialogShown &onShown) {
         p.shownKeys.append(key);
         p.lastFactory = factory;   // 钩子不调工厂：未展示不建窗（懒构造钉在此压）
+        if (onShown) ++p.shownHooks;
     };
 }
 
@@ -59,6 +62,7 @@ private slots:
     void testScenesSnapshotAtTriggerHandoff(); // 列表触发当下快照，工厂收同一份
     void testSceneGuardMissing();            // 缺场景：先报回调、不进展示、不建窗
     void testSceneGuardPresentHandsOff();    // 在场景：进展示，工厂收到同一场景指针
+    void testPerEntryPageHookIsPassed();     // 同键多入口：各自的切页钩子随触发进入展示钩子
 };
 
 void AuxDialogMenuRouterTest::testFixedKeyDialogRouting()
@@ -95,6 +99,27 @@ void AuxDialogMenuRouterTest::testFixedKeyDialogRouting()
     QVERIFY(probe.lastFactory);
     delete probe.lastFactory();
     QCOMPARE(probe.factoryBuilds, 1);
+}
+
+void AuxDialogMenuRouterTest::testPerEntryPageHookIsPassed()
+{
+    Probe probe;
+    AuxDialogMenuRouter router(probeHook(probe));
+    QAction receive(this);
+    QAction heartbeat(this);
+
+    // 探针钩子记下最后收到的 onShown；两入口同键但钩子应各自携带目标页
+    const AuxDialogMenuRouter::DialogFactory factory = countingSceneFactory(probe);
+    router.toDialog(&receive, this, QStringLiteral("commManager"), factory,
+                    [](QDialog *) {});
+    router.toDialog(&heartbeat, this, QStringLiteral("commManager"), factory,
+                    [](QDialog *) {});
+    receive.trigger();
+    heartbeat.trigger();
+    QCOMPARE(probe.shownKeys.size(), 2);
+    QCOMPARE(probe.shownKeys.at(0), QStringLiteral("commManager"));
+    QCOMPARE(probe.shownKeys.at(1), QStringLiteral("commManager"));
+    QCOMPARE(probe.shownHooks, 2);   // 两个入口的切页钩子都随路由传进展示钩子
 }
 
 void AuxDialogMenuRouterTest::testSystemTableKeysAndLazyBuilds()
