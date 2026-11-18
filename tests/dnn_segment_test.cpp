@@ -12,6 +12,8 @@
 #include <QTemporaryDir>
 #include <QProcess>
 #include <QFileInfo>
+#include <QLabel>
+#include <QWidget>
 
 #include "DnnSegmentNode.h"
 #include "OpencvUtil.h"
@@ -36,6 +38,7 @@ private slots:
     void testEndToEndOnnxSemantic();       // 最小 ONNX 模型端到端（语义路径，需 python + onnx）
     void testEndToEndLetterboxNonSquare(); // 端到端：非等比方图，钉住 letterbox 逆映射（裁灰边 + 缩放）
     void testEndToEndOnnxInstance();       // 端到端：YOLO-Seg 双输出，实例路径 + 按框裁剪
+    void testPreviewPanelShowsOutput();    // 参数面板掩膜缩略图：无输出提示 / 有输出显图
 };
 
 // 4D 张量寻址：部分 OpenCV 版本不再提供 4 下标 at 重载，统一用 ptr(两下标) + 线性下标
@@ -638,6 +641,32 @@ void DnnSegmentTest::testEndToEndOnnxInstance()
     const cv::Mat visMat = OpencvUtil::himageToMat(vis->getHImage());
     QVERIFY(!visMat.empty());
     QCOMPARE(visMat.size(), img.size());
+}
+
+void DnnSegmentTest::testPreviewPanelShowsOutput()
+{
+    DnnSegmentNode node;
+    node.init();
+    QWidget *panel = node.createParamPanel();
+    QVERIFY(panel);
+    QLabel *preview = panel->findChild<QLabel *>(QStringLiteral("maskPreviewLabel"));
+    QVERIFY2(preview, "分割参数面板缺少掩膜预览标签");
+
+    // 未运行：只有提示文字，不能残留上一次的图
+    node.updateParamPanel(panel);
+    QVERIFY2(preview->text().contains(QStringLiteral("运行节点后")),
+             qPrintable(preview->text()));
+    QVERIFY(preview->pixmap().isNull());
+
+    // 造一张叠加图塞进输出端口 4：预览必须真的转成 pixmap（不依赖外部模型文件）
+    cv::Mat vis(32, 48, CV_8UC3, cv::Scalar(40, 80, 120));
+    auto obj = QSharedPointer<DataObject>::create();
+    obj->setHImage(OpencvUtil::matToHimage(vis));
+    node.setOutputData(4, obj);
+    node.updateParamPanel(panel);
+    QVERIFY2(!preview->pixmap().isNull(), "有输出图却没生成预览 pixmap");
+    QVERIFY2(preview->pixmap().size().width() <= 320 && preview->pixmap().size().height() <= 240,
+             "预览未缩放到面板尺寸");
 }
 
 QTEST_MAIN(DnnSegmentTest)

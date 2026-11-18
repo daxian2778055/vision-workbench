@@ -8,6 +8,10 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QTextStream>
+#include <QLabel>
+#include <QImage>
+#include <QPixmap>
+#include <QVBoxLayout>
 #include <opencv2/imgproc.hpp>
 #include <cmath>
 #include <algorithm>
@@ -15,6 +19,44 @@
 
 
 namespace {
+
+/// HImage → QImage（仅 byte 单/三通道；与 OutputDataViewer::displayImageData 同一取指针口径）。
+/// 用于模块参数面板内的掩膜缩略图：HALCON 指针指向内部缓冲，必须 .copy() 后才能交给 UI。
+static QImage hImageToPreview(const HalconCpp::HImage &image)
+{
+    QImage preview;
+    try {
+        if (!image.IsInitialized()) return preview;
+        if (image.CountChannels().I() == 1) {
+            HalconCpp::HTuple ptr, type, w, h;
+            HalconCpp::GetImagePointer1(image, &ptr, &type, &w, &h);
+            if (QString::fromLatin1(type.S().Text()) == QLatin1String("byte") && w.I() > 0 && h.I() > 0) {
+                preview = QImage(reinterpret_cast<const uchar *>(ptr.L()), w.I(), h.I(),
+                                 w.I(), QImage::Format_Grayscale8).copy();
+            }
+        } else if (image.CountChannels().I() == 3) {
+            HalconCpp::HTuple pr, pg, pb, type, w, h;
+            HalconCpp::GetImagePointer3(image, &pr, &pg, &pb, &type, &w, &h);
+            if (QString::fromLatin1(type.S().Text()) == QLatin1String("byte") && w.I() > 0 && h.I() > 0) {
+                const int iw = w.I(), ih = h.I();
+                preview = QImage(iw, ih, QImage::Format_RGB888);
+                const uchar *r = reinterpret_cast<const uchar *>(pr.L());
+                const uchar *g = reinterpret_cast<const uchar *>(pg.L());
+                const uchar *b = reinterpret_cast<const uchar *>(pb.L());
+                for (int y = 0; y < ih; ++y) {
+                    uchar *out = preview.scanLine(y);
+                    for (int x = 0; x < iw; ++x) {
+                        out[x * 3 + 0] = r[y * iw + x];
+                        out[x * 3 + 1] = g[y * iw + x];
+                        out[x * 3 + 2] = b[y * iw + x];
+                    }
+                }
+            }
+        }
+    } catch (const HalconCpp::HException &) {
+    }
+    return preview;
+}
 
 /// 把"网络输入空间"的掩膜逆映射回原图尺寸。
 /// keepRatio（letterbox）时必须**先裁掉灰边**再缩放：预处理把原图按 s = min(W/w, H/h) 缩放后
@@ -657,12 +699,47 @@ void DnnSegmentNode::run(bool /*autoSwitch*/)
 
 QWidget *DnnSegmentNode::createParamPanel()
 {
-    return createAutoParamPanel();
+    QWidget *panel = createAutoParamPanel();
+    // 必须是 panel 的**直属**子控件：ModuleEditorDialog::rebuildVmTabs() 只按直属子控件分页，
+    // 若套一层容器，参数 GroupBox 会变成孙控件、整组参数挤进「基本参数」页。
+    auto *preview = new QLabel(panel);
+    preview->setObjectName(QStringLiteral("maskPreviewLabel"));
+    preview->setAlignment(Qt::AlignCenter);
+    preview->setMinimumSize(320, 240);
+    preview->setWordWrap(true);
+    preview->setStyleSheet(QStringLiteral("border: 1px solid #444; background-color: #1e1e21;"));
+    preview->setText(QStringLiteral("运行节点后显示分割预览"));
+    if (auto *lay = qobject_cast<QVBoxLayout *>(panel->layout()))
+        lay->addWidget(preview);
+    return panel;
 }
 
 void DnnSegmentNode::updateParamPanel(QWidget *panel)
 {
     updateAutoParamPanel(panel);
+    if (!panel) return;
+    // rebuildVmTabs 会把预览标签 reparent 到「基本参数」页，故递归查找（非 DirectChildrenOnly）
+    QLabel *preview = panel->findChild<QLabel *>(QStringLiteral("maskPreviewLabel"));
+    if (!preview) return;
+    QImage img;
+    try {
+        auto overlay = getOutputData(4);
+        if (overlay)
+            img = hImageToPreview(overlay->getHImage());
+        if (img.isNull()) {
+            HalconCpp::HImage mask(getOutputImage());
+            img = hImageToPreview(mask);
+        }
+    } catch (const HalconCpp::HException &) {
+    }
+    if (img.isNull()) {
+        preview->setText(QStringLiteral("运行节点后显示分割预览"));
+        preview->setToolTip(QString());
+    } else {
+        preview->setPixmap(QPixmap::fromImage(img).scaled(
+            320, 240, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        preview->setToolTip(QStringLiteral("叠加图（原图+掩膜+轮廓）；无叠加图时显示掩膜"));
+    }
 }
 
 QVector<NodeResultField> DnnSegmentNode::resultDisplayFields() const
