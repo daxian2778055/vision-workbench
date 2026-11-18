@@ -7607,6 +7607,18 @@ void MainWindow::setupDockWidgets()
     // 否则 show(paramDock) 会把参数页抬到前面，现场看到的就是"图像显示没了"。
     if (ui->imageDock)
         ui->imageDock->raise();
+    // 菜单勾选态必须与上面的强制 show 对齐（2026-11-18 现场反馈）：
+    // restoreState 把存档中"已关闭"的 dock 隐藏时会经 visibilityChanged 把 QAction 置为未勾选，
+    // 而 tabbed dock 的 show() 在"已视为非隐藏"时可能不发 visibilityChanged —— 结果面板明明
+    // 显示着、设置→面板显示里却是空的。这里显式回写并阻断信号，避免 setChecked 再触发 setVisible。
+    {
+        const QSignalBlocker bTool(ui->actionToggleToolDock);
+        const QSignalBlocker bImage(ui->actionToggleImageDock);
+        if (ui->actionToggleToolDock)
+            ui->actionToggleToolDock->setChecked(true);
+        if (ui->actionToggleImageDock)
+            ui->actionToggleImageDock->setChecked(true);
+    }
     // 流程编辑已迁到中央控件：旧存档即使带 flowDock 也不让它重新露出来
     if (ui->flowDock)
         ui->flowDock->hide();
