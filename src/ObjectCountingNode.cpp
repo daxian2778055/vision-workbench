@@ -425,6 +425,41 @@ void ObjectCountingNode::run(bool /*autoSwitch*/)
     setParamDirect(QStringLiteral("moduleStatus"), true);
 }
 
+RoiShape ObjectCountingNode::geometryRoi() const
+{
+    RoiShape s;
+    const int ax = m_params.value(QStringLiteral("lineA_x"), 0).toInt();
+    const int ay = m_params.value(QStringLiteral("lineA_y"), 0).toInt();
+    const int bx = m_params.value(QStringLiteral("lineB_x"), 0).toInt();
+    const int by = m_params.value(QStringLiteral("lineB_y"), 0).toInt();
+    // 两端重合 = 未设置/已清除：退化线本就无效，不在画布上画
+    if (ax == bx && ay == by)
+        return s;
+    s.type = RoiType::Line;
+    s.p1 = QPointF(ax, ay);
+    s.p2 = QPointF(bx, by);
+    return s;
+}
+
+void ObjectCountingNode::applyGeometryRoi(const RoiShape &shape)
+{
+    // 清除几何：四个坐标归零（几何回显与 run() 的退化线判红口径一致）
+    if (shape.type == RoiType::None) {
+        setParam(QStringLiteral("lineA_x"), 0);
+        setParam(QStringLiteral("lineA_y"), 0);
+        setParam(QStringLiteral("lineB_x"), 0);
+        setParam(QStringLiteral("lineB_y"), 0);
+        return;
+    }
+    if (shape.type != RoiType::Line)
+        return;
+    // setParam 会触发 triggerDelayedPreview()，无需额外接线即可刷新画布
+    setParam(QStringLiteral("lineA_x"), qRound(shape.p1.x()));
+    setParam(QStringLiteral("lineA_y"), qRound(shape.p1.y()));
+    setParam(QStringLiteral("lineB_x"), qRound(shape.p2.x()));
+    setParam(QStringLiteral("lineB_y"), qRound(shape.p2.y()));
+}
+
 QWidget *ObjectCountingNode::createParamPanel()
 {
     return createAutoParamPanel();

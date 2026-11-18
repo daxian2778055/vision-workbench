@@ -22,6 +22,13 @@ public:
     /// VM「模块结果」展示口径：累计计数/本帧新增/在跟目标数
     QVector<NodeResultField> resultDisplayFields() const override;
 
+    /// 计数线 = 两个端点（lineA_x/y、lineB_x/y）。补上这三个虚函数后，
+    /// 模块编辑器的「ROI区域」页签会自动出现绘制/清除按钮，主画布可直接拖端点，
+    /// 拖完经 writeRoiToNode → applyGeometryRoi 写回参数并触发预览。
+    RoiType geometryRoiType() const override { return RoiType::Line; }
+    RoiShape geometryRoi() const override;
+    void applyGeometryRoi(const RoiShape &shape) override;
+
     /// 清零累计计数（换批次/换料时用；也可把 resetCounter 参数置 true 触发一次）
     void resetCounting();
 

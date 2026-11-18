@@ -27,6 +27,7 @@ private slots:
     void differentClassesDoNotStealIdentity();
     void nodeReportsMissingModel();
     void nodeReportsDegenerateLine();
+    void countingLineGeometryRoundTrips();
     void nodeResetsCounterOnRequest();
     void yoloLayoutV8AndV5BothDecode();
     void dnnParamsAreRegistered();
@@ -164,6 +165,47 @@ void ObjectCountingTest::nodeReportsDegenerateLine()
     QVERIFY2(!node.getParam(QStringLiteral("moduleStatus")).toBool(), "退化线却判绿");
     QVERIFY2(node.getParam(QStringLiteral("lastError")).toString().contains(QStringLiteral("计数线")),
              qPrintable(node.getParam(QStringLiteral("lastError")).toString()));
+}
+
+void ObjectCountingTest::countingLineGeometryRoundTrips()
+{
+    ObjectCountingNode node;
+    node.init();
+    QCOMPARE(node.geometryRoiType(), RoiType::Line);
+
+    // 默认竖直线 (200,0)→(200,480) 应回显为 Line
+    RoiShape shown = node.geometryRoi();
+    QCOMPARE(shown.type, RoiType::Line);
+    QCOMPARE(shown.p1, QPointF(200, 0));
+    QCOMPARE(shown.p2, QPointF(200, 480));
+
+    // 画布拖线 → 写回四个参数 → 回显同步
+    RoiShape drawn;
+    drawn.type = RoiType::Line;
+    drawn.p1 = QPointF(12, 34);
+    drawn.p2 = QPointF(56, 78);
+    node.applyGeometryRoi(drawn);
+    QCOMPARE(node.getParam(QStringLiteral("lineA_x")).toInt(), 12);
+    QCOMPARE(node.getParam(QStringLiteral("lineA_y")).toInt(), 34);
+    QCOMPARE(node.getParam(QStringLiteral("lineB_x")).toInt(), 56);
+    QCOMPARE(node.getParam(QStringLiteral("lineB_y")).toInt(), 78);
+    QCOMPARE(node.geometryRoi().p1, QPointF(12, 34));
+    QCOMPARE(node.geometryRoi().p2, QPointF(56, 78));
+
+    // 非线形状不得写入（避免误拖其它 ROI 把计数线改坏）
+    RoiShape wrong;
+    wrong.type = RoiType::Rect;
+    wrong.p1 = QPointF(999, 999);
+    node.applyGeometryRoi(wrong);
+    QCOMPARE(node.getParam(QStringLiteral("lineA_x")).toInt(), 12);
+
+    // 清除几何 → 四值归零，回显 None（与 run() 的退化线判红一致）
+    RoiShape cleared;
+    cleared.type = RoiType::None;
+    node.applyGeometryRoi(cleared);
+    QCOMPARE(node.getParam(QStringLiteral("lineA_x")).toInt(), 0);
+    QCOMPARE(node.getParam(QStringLiteral("lineB_y")).toInt(), 0);
+    QCOMPARE(node.geometryRoi().type, RoiType::None);
 }
 
 void ObjectCountingTest::nodeResetsCounterOnRequest()
