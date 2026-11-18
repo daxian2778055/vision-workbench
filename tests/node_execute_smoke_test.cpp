@@ -65,6 +65,7 @@ const QHash<QString, QString> kNeedsDeviceOrIo = {
     {QStringLiteral("SendDataNode"), QStringLiteral("需通讯对端")},
     {QStringLiteral("ReceiveDataNode"), QStringLiteral("需通讯对端（会等待）")},
     {QStringLiteral("WriteFileNode"), QStringLiteral("写盘副作用")},
+    {QStringLiteral("OutputImageNode"), QStringLiteral("写盘副作用")},
     {QStringLiteral("ScriptNode"), QStringLiteral("启动外部解释器（超时/环境相关）")},
 };
 

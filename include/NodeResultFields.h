@@ -20,8 +20,9 @@ inline QString unknownExceptionReason()
 }
 
 /// 规则：键 == "lastError" 或以 "Note" 结尾。
-/// 依据（2026-11-17 重测的写侧站点表，共 274 处）：lastError 195 / *Note 45 / trainStatus 34。
-/// 本次 +3 来自算子盲区补审：AreaNode 无区域判红与 catch、DataCode2DNode 空串判红与 catch。
+/// 依据（2026-11-18 重测的写侧站点表，共 284 处）：lastError 205 / *Note 45 / trainStatus 34。
+/// 2026-11-18 的 +10 来自新增 OutputImageNode：保存路径/目录/写盘失败与三处 catch 均写原因。
+/// 上一次 +3 来自算子盲区补审：AreaNode 无区域判红与 catch、DataCode2DNode 空串判红与 catch。
 /// 数字一律以 `python tools/reason_key_sites.py` 的输出为准（`--check` 会与本注释比对，
 /// 不一致退出 1）——早先写"一次性脚本、不入库"导致数值无法复现，已改成入库脚本。
 /// 旧记（原文照抄）：共 84 处：lastError 50 / calibNote 24 / matchNote 4 /

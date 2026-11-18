@@ -134,6 +134,11 @@ bool LargeFileImageStore::append(const cv::Mat &image, const QString &sourceName
     return true;
 }
 
+QString LargeFileImageStore::failureMessage(const QString &why)
+{
+    return QStringLiteral("大文件存图失败：%1").arg(why);
+}
+
 int LargeFileImageStore::flush()
 {
     QMutexLocker locker(&m_mutex);

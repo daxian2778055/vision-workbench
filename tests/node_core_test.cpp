@@ -36,11 +36,15 @@
 #include "OpencvTrackNode.h"
 #include "FeatureSearchNode.h"
 #include "DataObject.h"
+#include "OutputImageNode.h"
+#include "NodeRegistry.h"
 #include "ChannelSplitNode.h"
 #include "ChannelMergeNode.h"
 #include "ImageDisplayController.h"   // 判 NG 时叠加层改红的腿
 #include <QCheckBox>
 #include <QComboBox>
+#include <QFileInfo>
+#include <opencv2/imgcodecs.hpp>
 #include <QFormLayout>
 #include <QLabel>
 #include <QScopedPointer>
@@ -132,6 +136,7 @@ private slots:
     void testFormulaEvaluation();
     void testImageReadAddSingleLocalFile();
     void testChannelSplitAndMergeRoundtrip();
+    void testOutputImageSavesByRule();
     void testFitRoiBoundary_data();
     void testFitRoiBoundary();
     void testFitFailureClearsResults_data();
@@ -3459,6 +3464,64 @@ void NodeCoreTest::testChannelSplitAndMergeRoundtrip()
         ok.setInputData(0, obj);
         QVERIFY2(ok.execute(), "3 通道 HSV 应仍成功");
     }
+}
+
+void NodeCoreTest::testOutputImageSavesByRule()
+{
+    // 独立测试进程不经过 MainWindow/NodeFactory，注册表需自行填充
+    registerAllNodes();
+    // 注册：图像采集分组 + IMAGE_ACQUISITION 分类
+    const auto *reg = NodeRegistry::instance().findById(QStringLiteral("OutputImageNode"));
+    QVERIFY2(reg, "输出图像节点未注册");
+    QCOMPARE(reg->displayName, QStringLiteral("输出图像"));
+    QCOMPARE(int(reg->category), int(NodeBase::IMAGE_ACQUISITION));
+    QCOMPARE(reg->group, QStringLiteral("图像采集"));
+
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    OutputImageNode node;
+    node.init();
+    node.setParam(QStringLiteral("saveDir"), tmp.path());
+    node.setParam(QStringLiteral("namePattern"), QStringLiteral("snap"));
+    node.setParam(QStringLiteral("format"), 0);   // png
+    node.setParam(QStringLiteral("overwrite"), false);
+
+    cv::Mat img(8, 6, CV_8UC3, cv::Scalar(12, 34, 56));
+    // 基类 process() 会从 m_inputData[0] 同步输入图，必须走端口而不是 setInputImage
+    auto imgObj = QSharedPointer<DataObject>::create();
+    imgObj->setHImage(OpencvUtil::matToHimage(img));
+    node.setInputData(0, imgObj);
+    QVERIFY2(node.execute(), qPrintable(node.getParam(QStringLiteral("lastError")).toString()));
+    QVERIFY(node.getParam(QStringLiteral("moduleStatus")).toBool());
+    const QString first = node.getParam(QStringLiteral("lastSavedPath")).toString();
+    QVERIFY2(QFileInfo::exists(first), qPrintable(first));
+    QVERIFY2(first.endsWith(QStringLiteral("snap_001.png")), qPrintable(first));
+    // 像素往返：必须真的写出图像，而不是只记了个路径
+    const cv::Mat back = cv::imread(first.toStdString());
+    QVERIFY2(!back.empty(), "写出的 PNG 读不回来");
+    QCOMPARE(back.size(), img.size());
+
+    // 第二次运行同名不覆盖：自动加序号
+    node.execute();
+    const QString second = node.getParam(QStringLiteral("lastSavedPath")).toString();
+    QVERIFY2(second.endsWith(QStringLiteral("snap_002.png")), qPrintable(second));
+    QVERIFY(first != second);
+
+    // 覆盖模式：固定在基准名 snap.png 上反复写（不带自动序号）
+    node.setParam(QStringLiteral("overwrite"), true);
+    node.execute();
+    const QString overwritePath = node.getParam(QStringLiteral("lastSavedPath")).toString();
+    QVERIFY2(overwritePath.endsWith(QStringLiteral("snap.png")), qPrintable(overwritePath));
+    node.execute();
+    QCOMPARE(node.getParam(QStringLiteral("lastSavedPath")).toString(), overwritePath);
+
+    // 无输入图必须判红，不能留下旧的成功状态
+    OutputImageNode empty;
+    empty.init();
+    empty.setParam(QStringLiteral("saveDir"), tmp.path());
+    empty.execute();
+    QVERIFY2(!empty.getParam(QStringLiteral("moduleStatus")).toBool(), "无输入图却判绿");
+    QVERIFY2(!empty.getParam(QStringLiteral("lastError")).toString().isEmpty(), "无输入图没有原因");
 }
 
 QTEST_MAIN(NodeCoreTest)

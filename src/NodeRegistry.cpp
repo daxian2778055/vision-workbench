@@ -62,6 +62,7 @@
 #include "LoopNode.h"
 #include "DisplaySinkNode.h"
 #include "WriteFileNode.h"
+#include "OutputImageNode.h"
 #include "ScriptNode.h"
 #include "ReceiveDataNode.h"
 #include "SendDataNode.h"
@@ -123,6 +124,8 @@ void registerAllNodes()
     VFP_REG(ImageReadNode,        "ImageReadNode",        "\u8BFB\u53D6\u56FE\u50CF", "Read Image",
             NodeBase::IMAGE_ACQUISITION, "\u56FE\u50CF\u91C7\u96C6");
     VFP_REG(MvsImageSourceNode,   "MvsImageSourceNode",   "MVS\u56FE\u50CF\u6E90", "MVS Source",
+            NodeBase::IMAGE_ACQUISITION, "\u56FE\u50CF\u91C7\u96C6");
+    VFP_REG(OutputImageNode,      "OutputImageNode",      "\u8F93\u51FA\u56FE\u50CF", "Output Image",
             NodeBase::IMAGE_ACQUISITION, "\u56FE\u50CF\u91C7\u96C6");
     // HalconImageSourceNode 已移除注册（2026-11-08）：本平台采集统一走海康 MVS
     //（MvsImageSourceNode），HALCON 采集插件（hAcq*）已不在打包白名单里，
@@ -419,6 +422,8 @@ void registerAllNodes()
                      QStringLiteral("读取本地图像文件或文件夹（支持单图/多图轮换）"));
     r.setDescription(QStringLiteral("MvsImageSourceNode"),
                      QStringLiteral("海康 MVS 相机取图（支持软触发/硬触发）"));
+    r.setDescription(QStringLiteral("OutputImageNode"),
+                     QStringLiteral("把输入图像按命名规则保存到硬盘（支持大文件存图策略）"));
     r.setDescription(QStringLiteral("HalconImageSourceNode"),
                      QStringLiteral("HALCON 采集接口取图（需 HALCON 采集设备）"));
 

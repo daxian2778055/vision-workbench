@@ -2523,15 +2523,16 @@ void ParamPanelBindingTest::testUnnamedFindChildSitesAreSingleCandidate()
     // → 577（2026-11-11）：LineLineMeasureNode 补 lineInputMode（净 +1）
     // → 578（2026-11-11）：LineCircleMeasureNode 补 lineInputMode（净 +1）
     // → 579（2026-11-17）：DistanceMeasureNode 补官方「点点测量」angleRange（净 +1）
-    QVERIFY2(fieldSlots == 579,
-             qPrintable(QStringLiteral("字段槽位分母从 579 变成 %1 ⇒ 本闸口径已漂移，"
+    // → 583（2026-11-18）：新增 OutputImageNode：saveDir/namePattern/format/overwrite（净 +4）
+    QVERIFY2(fieldSlots == 583,
+             qPrintable(QStringLiteral("字段槽位分母从 583 变成 %1 ⇒ 本闸口径已漂移，"
                                        "先核对面板改动再把基准一起改").arg(fieldSlots)));
     QVERIFY2(badSlots.isEmpty(),
              qPrintable(QStringLiteral("U5-MULTI: %1 个字段槽位里同类型候选不止一个 ⇒ 站点 1 的无名 "
                                         "findChild 会取到错控件（明细见上方 [U5-T15-AB]）\n%2")
                             .arg(badSlots.size()).arg(badSlots.join(QStringLiteral("\n")))));
-    QVERIFY2(fpReadings.size() == 15,
-             qPrintable(QStringLiteral("FilePath 声明从 13 条变成 %1 条 ⇒ 乙 的分母已漂移").arg(fpReadings.size())));
+    QVERIFY2(fpReadings.size() == 16,
+             qPrintable(QStringLiteral("FilePath 声明从 16 条变成 %1 条 ⇒ 乙 的分母已漂移").arg(fpReadings.size())));
     QVERIFY2(fpBad.isEmpty(),
              qPrintable(QStringLiteral("U5-FPSITE: %1 条 FilePath 站点的无名 findChild 命中的不是该参数"
                                         "自己的浏览按钮（明细见上方 [U5-T15-AB]）\n%2")

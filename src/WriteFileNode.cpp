@@ -44,7 +44,7 @@ void WriteFileNode::run(bool /*autoSwitch*/)
             QString why;
             if (!store->append(src, fullName(), &batchFile, &why)) {
                 m_params[QStringLiteral("lastError")] =
-                    QStringLiteral("大文件存图失败：%1").arg(why);
+                    LargeFileImageStore::failureMessage(why);
                 m_outputImage.Clear();
                 return;
             }

@@ -230,6 +230,7 @@ src/ModelCache.cpp
     src/LoopNode.cpp
     src/DisplaySinkNode.cpp
     src/WriteFileNode.cpp
+    src/OutputImageNode.cpp
     src/LargeFileImageStore.cpp
     src/LargeFileStoreDialog.cpp
     src/TemplateMatchNode.cpp
@@ -491,6 +492,7 @@ set(HEADERS
     include/LoopNode.h
     include/DisplaySinkNode.h
     include/WriteFileNode.h
+    include/OutputImageNode.h
     include/TemplateMatchNode.h
     include/CalibrationNode.h
     include/OcrNode.h

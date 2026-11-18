@@ -42,6 +42,9 @@ public:
     /// 立即把未满一批写入磁盘；返回本次写出的文件数（0 = 无待写数据）
     int flush();
 
+    /// 大文件存图失败的统一原因文案（存图节点共用，避免跨文件重复字面量）
+    static QString failureMessage(const QString &why);
+
     /// 读取 .dat（解包工具与测试共用）
     static bool readBatch(const QString &path, QVector<LargeImageEntry> *entries,
                           QString *error);
