@@ -196,6 +196,25 @@ void I18nTest::englishQmLoadsAndTranslates()
                             "restore it under System -> Script safety: confirm scripts before "
                             "running"));
 
+    // P1 第二笔（2026-11-19）：主框架硬编码中文补翻，英文模式不得再冒中文
+    QCOMPARE(QCoreApplication::translate("MainWindow", " 流程模式: "), QStringLiteral(" Flow Mode: "));
+    QCOMPARE(QCoreApplication::translate("MainWindow", "V社区"), QStringLiteral("V-Club"));
+    QCOMPARE(QCoreApplication::translate("MainWindow", "恢复最近删除的流程"),
+             QStringLiteral("Restore Last Deleted Flow"));
+    QCOMPARE(QCoreApplication::translate("MainWindow", "计算后端"), QStringLiteral("Compute Backend"));
+    QCOMPARE(QCoreApplication::translate("MainWindow", "自动（有 OpenCL 就用）"),
+             QStringLiteral("Auto (use OpenCL when available)"));
+    QCOMPARE(QCoreApplication::translate("MainWindow", "打包模型与依赖…"),
+             QStringLiteral("Package Models and Dependencies..."));
+    QCOMPARE(QCoreApplication::translate("MainWindow", "已切换至运行模式"),
+             QStringLiteral("Switched to Run Mode"));
+    QCOMPARE(QCoreApplication::translate("MainWindow", "软触发模式"),
+             QStringLiteral("Software Trigger Mode"));
+    // 工具库分组名（新增 ToolGroup 上下文，注册表 group 仍是中文键）
+    QCOMPARE(QCoreApplication::translate("ToolGroup", "图像采集"), QStringLiteral("Image Acquisition"));
+    QCOMPARE(QCoreApplication::translate("ToolGroup", "图像处理"), QStringLiteral("Image Processing"));
+    QCOMPARE(QCoreApplication::translate("ToolGroup", "深度学习"), QStringLiteral("Deep Learning"));
+
     // 未翻译的源文（如本测试未抽取到的字符串）应保持源文，不影响中文模式
     QCOMPARE(QCoreApplication::translate("MainWindow", "未抽取的占位文本123"),
              QStringLiteral("未抽取的占位文本123"));

@@ -190,12 +190,12 @@ QString flowModeSuffix(FlowMode mode)
 {
     switch (mode) {
     case FlowMode::Continuous:
-        return QStringLiteral(" [连续]");
+        return QCoreApplication::translate("MainWindow", " [连续]");
     case FlowMode::HardwareTrigger:
-        return QStringLiteral(" [硬触发]");
+        return QCoreApplication::translate("MainWindow", " [硬触发]");
     case FlowMode::SoftwareTrigger:
     default:
-        return QStringLiteral(" [软触发]");
+        return QCoreApplication::translate("MainWindow", " [软触发]");
     }
 }
 
@@ -204,6 +204,13 @@ static_assert(static_cast<int>(FlowMode::Continuous) == 0
                   && static_cast<int>(FlowMode::SoftwareTrigger) == 1
                   && static_cast<int>(FlowMode::HardwareTrigger) == 2,
               "FlowMode 顺序变更必须同步：组合框顺序 / scene->flowMode 持久化取值 / flowModeSuffix");
+
+/// 工具库分组显示名：注册表 group 是中文键（图标/查找都依赖它），显示时按当前语言翻译。
+/// 分组名是运行时变量，lupdate 抓不到，英文词条手工登记在 apply_en_translations.py。
+static QString toolGroupDisplayName(const QString &group)
+{
+    return QCoreApplication::translate("ToolGroup", group.toUtf8().constData());
+}
 
 /// 模块箱分类图标（实装 4.4）：24px 透明底线框字形，按分类语义区分。
 /// 只用 QPainter 本地绘制，不依赖外部图标资源（仓库内没有 VM 图标资产）。
@@ -1503,7 +1510,7 @@ MainWindow::MainWindow(QWidget *parent, bool previewOnly) :
             mainToolBar->addSeparator();
 
             // 运行模式选择器（VM 右上「运行模式」；这里保留下拉，切换仍即时生效）
-            QLabel *modeLabel = new QLabel(QStringLiteral(" 流程模式: "));
+            QLabel *modeLabel = new QLabel(tr(" 流程模式: "));
             modeLabel->setStyleSheet("color: #c0c0c0; font-size: 13px;");
             mainToolBar->addWidget(modeLabel);
 
@@ -1514,7 +1521,7 @@ MainWindow::MainWindow(QWidget *parent, bool previewOnly) :
             m_flowModeCombo->addItem(tr("硬触发模式"),  static_cast<int>(FlowMode::HardwareTrigger));
             m_flowModeCombo->setCurrentIndex(1); // 默认软触发模式
             m_flowModeCombo->setMinimumWidth(130);
-            m_flowModeCombo->setToolTip(QStringLiteral(
+            m_flowModeCombo->setToolTip(tr(
                 "连续模式：切换到该模式后自动循环执行流程\n"
                 "软触发模式：需手动点击「开始执行」运行一次流程\n"
                 "硬触发模式：仅相机硬件触发时自动执行一次"
@@ -1651,13 +1658,13 @@ MainWindow::MainWindow(QWidget *parent, bool previewOnly) :
                 // 入口，也不理解为什么停止后起不来（开始按钮还被"仅软触发可用"规则禁用）。
                 switch (mode) {
                 case FlowMode::Continuous:
-                    logMessage(QStringLiteral("已切换为连续模式：点「开始执行」开始循环运行，运行中可用「暂停」"));
+                    logMessage(tr("已切换为连续模式：点「开始执行」开始循环运行，运行中可用「暂停」"));
                     break;
                 case FlowMode::SoftwareTrigger:
-                    logMessage(QStringLiteral("已切换为软触发模式：点「开始执行」运行一次流程"));
+                    logMessage(tr("已切换为软触发模式：点「开始执行」运行一次流程"));
                     break;
                 case FlowMode::HardwareTrigger:
-                    logMessage(QStringLiteral("已切换为硬触发模式：点「开始执行」进入等待，相机每来一帧执行一次"));
+                    logMessage(tr("已切换为硬触发模式：点「开始执行」进入等待，相机每来一帧执行一次"));
                     break;
                 }
                 // 按钮态单一来源：开始/停止/单次执行可用性由 ExecutionStatusController 统一决定，
@@ -2630,7 +2637,7 @@ void MainWindow::initActions()
         auto *addFlowBtn = new QToolButton(flowCorner);
         addFlowBtn->setObjectName(QStringLiteral("flowAddBtn"));
         addFlowBtn->setText(QStringLiteral("＋"));
-        addFlowBtn->setToolTip(QStringLiteral("添加新流程（Ctrl+T）"));
+        addFlowBtn->setToolTip(tr("添加新流程（Ctrl+T）"));
         QFont plusFont = addFlowBtn->font();
         plusFont.setPointSizeF(plusFont.pointSizeF() + 3);
         plusFont.setBold(true);
@@ -2820,11 +2827,11 @@ void MainWindow::initActions()
                 QMessageBox::information(this, tr("更多支持"),
                                          tr("无法打开浏览器，请手动访问：\n%1").arg(url.toString()));
         });
-        QAction *communityAct = m_helpMenu->addAction(QStringLiteral("V社区"));
+        QAction *communityAct = m_helpMenu->addAction(tr("V社区"));
         connect(communityAct, &QAction::triggered, this, [this]() {
             const QUrl url(QStringLiteral("https://www.v-club.com"));
             if (!QDesktopServices::openUrl(url))
-                QMessageBox::information(this, QStringLiteral("V社区"),
+                QMessageBox::information(this, tr("V社区"),
                                          tr("无法打开浏览器，请手动访问：\n%1").arg(url.toString()));
         });
         QAction *welcomeAct = m_helpMenu->addAction(tr("打开欢迎页"));
@@ -5279,18 +5286,18 @@ bool MainWindow::confirmDeleteFlow(FlowScene *scene, int index)
     FlowExecutor *ex = executorForScene(scene);
     const bool running = ex && ex->isRunning();
 
-    QMessageBox box(QMessageBox::Question, QStringLiteral("删除流程"),
-                    QStringLiteral("确定删除流程「%1」吗？\n\n"
-                                   "该流程包含 %2 个模块。\n"
-                                   "删除后可通过「编辑 → 恢复最近删除的流程」找回；"
-                                   "若方案尚未保存，保存后该流程不会出现在方案文件中。%3")
+    QMessageBox box(QMessageBox::Question, tr("删除流程"),
+                    tr("确定删除流程「%1」吗？\n\n"
+                       "该流程包含 %2 个模块。\n"
+                       "删除后可通过「编辑 → 恢复最近删除的流程」找回；"
+                       "若方案尚未保存，保存后该流程不会出现在方案文件中。%3")
                         .arg(flowName)
                         .arg(moduleCount)
-                        .arg(running ? QStringLiteral("\n\n注意：该流程正在运行，删除会先停止执行。")
+                        .arg(running ? tr("\n\n注意：该流程正在运行，删除会先停止执行。")
                                      : QString()),
                     QMessageBox::NoButton, this);
-    QPushButton *deleteBtn = box.addButton(QStringLiteral("删除流程"), QMessageBox::DestructiveRole);
-    QPushButton *cancelBtn = box.addButton(QStringLiteral("取消"), QMessageBox::RejectRole);
+    QPushButton *deleteBtn = box.addButton(tr("删除流程"), QMessageBox::DestructiveRole);
+    QPushButton *cancelBtn = box.addButton(tr("取消"), QMessageBox::RejectRole);
     box.setDefaultButton(cancelBtn);
     box.exec();
     if (box.clickedButton() != deleteBtn)
@@ -5310,8 +5317,8 @@ bool MainWindow::confirmDeleteFlow(FlowScene *scene, int index)
 void MainWindow::restoreLastDeletedFlow()
 {
     if (m_lastDeletedFlowJson.isEmpty()) {
-        QMessageBox::information(this, QStringLiteral("恢复最近删除的流程"),
-                                 QStringLiteral("没有可恢复的已删除流程。"));
+        QMessageBox::information(this, tr("恢复最近删除的流程"),
+                                 tr("没有可恢复的已删除流程。"));
         return;
     }
     ProjectManager *pm = projectManager();
@@ -5344,7 +5351,7 @@ void MainWindow::restoreLastDeletedFlow()
     m_lastDeletedFlowJson = QJsonObject();
     if (m_restoreDeletedFlowAction)
         m_restoreDeletedFlowAction->setEnabled(false);
-    logMessage(QStringLiteral("已恢复最近删除的流程「%1」").arg(name));
+    logMessage(tr("已恢复最近删除的流程「%1」").arg(name));
 }
 
 void MainWindow::showFlowTabContextMenu(const QPoint &pos)
@@ -5957,6 +5964,22 @@ void MainWindow::resetDockLayout()
         removeDockWidget(resultDock);
         addDockWidget(Qt::RightDockWidgetArea, resultDock);
         resultDock->show();
+    }
+    // 恢复默认布局 = 四个面板都可见，菜单勾选必须同步（P1 第二笔）：
+    // 只 addDockWidget/show 不会发 visibilityChanged（tabbed dock 的既有坑），显式回写。
+    if (ui->toolDock) ui->toolDock->show();
+    if (ui->imageDock) ui->imageDock->show();
+    if (ui->paramDock) ui->paramDock->show();
+    if (ui->logDock) ui->logDock->show();
+    {
+        const QSignalBlocker bTool(ui->actionToggleToolDock);
+        const QSignalBlocker bImage(ui->actionToggleImageDock);
+        const QSignalBlocker bParam(ui->actionToggleParamDock);
+        const QSignalBlocker bLog(ui->actionToggleLogDock);
+        if (ui->actionToggleToolDock) ui->actionToggleToolDock->setChecked(true);
+        if (ui->actionToggleImageDock) ui->actionToggleImageDock->setChecked(true);
+        if (ui->actionToggleParamDock) ui->actionToggleParamDock->setChecked(true);
+        if (ui->actionToggleLogDock) ui->actionToggleLogDock->setChecked(true);
     }
     m_dockLayoutRestored = false;   // 显式恢复默认布局：下次关闭时按新布局存档
     applyDefaultDockSizes();
@@ -6982,9 +7005,9 @@ void MainWindow::onCurrentTabChanged(int index)
         ui->flowTabs->setTabText(index, base + suffix);
 
         // 状态栏提示
-        static const char *modeNames[] = { "连续模式", "软触发模式", "硬触发模式" };
-        const char *modeName = (mi >= 0 && mi < 3) ? modeNames[mi] : "未知";
-        ui->statusBar->showMessage(QStringLiteral("流程 %1 — %2").arg(index + 1).arg(modeName), 5000);
+        const QString modeNames[] = { tr("连续模式"), tr("软触发模式"), tr("硬触发模式") };
+        const QString modeName = (mi >= 0 && mi < 3) ? modeNames[mi] : tr("未知");
+        ui->statusBar->showMessage(tr("流程 %1 — %2").arg(index + 1).arg(modeName), 5000);
     }
     updateEditLockForCurrentScene();
     syncCanvasLockAction();
@@ -7047,7 +7070,7 @@ void MainWindow::setupToolLibrary()
     if (!searchBox) {
         searchBox = new QLineEdit(m_toolBrowserPanel ? m_toolBrowserPanel : ui->toolDockContents);
         searchBox->setObjectName(QStringLiteral("toolSearchEdit"));
-        searchBox->setPlaceholderText(QStringLiteral("搜索算子..."));
+        searchBox->setPlaceholderText(tr("搜索算子..."));
         searchBox->setClearButtonEnabled(true);
         searchBox->setStyleSheet(
             "QLineEdit {"
@@ -7076,11 +7099,14 @@ void MainWindow::setupToolLibrary()
     // 按分组生成树
     for (const QString &group : registry.groups()) {
         QTreeWidgetItem *groupItem = new QTreeWidgetItem(ui->toolLibrary);
-        groupItem->setText(0, group);
+        groupItem->setText(0, toolGroupDisplayName(group));
 
         for (const NodeRegistration *reg : registry.byGroup(group)) {
             auto *item = new QTreeWidgetItem(groupItem);
-            item->setText(0, reg->displayName);
+            // 注册表 displayName 是中文、englishName 已就位；按当前语言选，搜索/创建仍走 id
+            const bool english = I18n::currentLanguage() == I18n::Language::English;
+            item->setText(0, english && !reg->englishName.isEmpty()
+                                 ? reg->englishName : reg->displayName);
             item->setData(0, Qt::UserRole, reg->id);
             if (!reg->description.isEmpty()) {
                 item->setToolTip(0, reg->description);
@@ -7722,7 +7748,7 @@ void MainWindow::switchToDesignMode()
         }
     }
     
-    logMessage(QStringLiteral("已切换至设计模式"));
+    logMessage(tr("已切换至设计模式"));
 }
 
 void MainWindow::switchToRuntimeMode()
@@ -7763,7 +7789,7 @@ void MainWindow::switchToRuntimeMode()
         }
     }
     
-    logMessage(QStringLiteral("已切换至运行模式"));
+    logMessage(tr("已切换至运行模式"));
 }
 
 QStringList MainWindow::allNodeFullNames() const
@@ -7868,7 +7894,7 @@ void MainWindow::setupSchemeMenu()
     // P0-1：最近删除恢复入口放在「编辑」菜单
     if (ui->menuEdit) {
         ui->menuEdit->addSeparator();
-        m_restoreDeletedFlowAction = ui->menuEdit->addAction(QStringLiteral("恢复最近删除的流程"));
+        m_restoreDeletedFlowAction = ui->menuEdit->addAction(tr("恢复最近删除的流程"));
         m_restoreDeletedFlowAction->setEnabled(!m_lastDeletedFlowJson.isEmpty());
         connect(m_restoreDeletedFlowAction, &QAction::triggered,
                 this, &MainWindow::restoreLastDeletedFlow);
@@ -8189,7 +8215,7 @@ void MainWindow::setupSystemMenu()
                           [this]() -> QDialog * { return new GlobalVariableDialog(this); });
 
     if (ui->menuSystem) {
-        QAction *flowVarAct = ui->menuSystem->addAction(QStringLiteral("流程变量 / Fixture…"));
+        QAction *flowVarAct = ui->menuSystem->addAction(tr("流程变量 / Fixture…"));
         // 缺场景原体静默早退（无声无提示）：onMissing 给空操作，语义原样入路由面
         m_menuRouter.toFlowSceneDialog(
             flowVarAct, this, QStringLiteral("flowVariable"),
@@ -8199,7 +8225,7 @@ void MainWindow::setupSystemMenu()
 
     if (ui->menuSystem) {
         QAction *retireAct = ui->menuSystem->addAction(
-            QStringLiteral("修改管理员口令（解除写操作禁止）…"));
+            tr("修改管理员口令（解除写操作禁止）…"));
         // 该项刻意不受角色/写闸限制：它就是解除闸的唯一入口；
         // 而改密前必须填对当前出厂口令，非持有者点了也改不动任何东西。
         retireAct->setEnabled(true);
@@ -8218,23 +8244,23 @@ void MainWindow::setupSystemMenu()
         //   ③ 关闭状态要留痕：落 operation_logs + 启动时状态栏提示（只有勾选看不出关着）。
         ScriptSecurityPolicy &policy = ScriptSecurityPolicy::instance();
         m_confirmScriptAct = ui->menuSystem->addAction(
-            QStringLiteral("脚本安全：执行前确认脚本（取消勾选则直接执行）"));
+            tr("脚本安全：执行前确认脚本（取消勾选则直接执行）"));
         m_confirmScriptAct->setCheckable(true);
         // 计算后端（2026-10-27）：T-API 透明加速，现场要能关掉（驱动异常回退）并看得见。
         // 这是性能设置不是安全设置，不落审计，但切换后状态栏显示当前实际后端。
         {
-            auto *backendMenu = ui->menuSystem->addMenu(QStringLiteral("计算后端"));
+            auto *backendMenu = ui->menuSystem->addMenu(tr("计算后端"));
             auto *grp = new QActionGroup(backendMenu);
             grp->setExclusive(true);
             const auto mode = ComputeBackend::instance().mode();
-            struct Item { const char *text; ComputeBackend::Mode m; };
+            struct Item { QString text; ComputeBackend::Mode m; };
             const Item items[] = {
-                {"自动（有 OpenCL 就用）", ComputeBackend::Mode::Auto},
-                {"强制 OpenCL", ComputeBackend::Mode::OpenCL},
-                {"仅 CPU", ComputeBackend::Mode::Cpu},
+                {tr("自动（有 OpenCL 就用）"), ComputeBackend::Mode::Auto},
+                {tr("强制 OpenCL"), ComputeBackend::Mode::OpenCL},
+                {tr("仅 CPU"), ComputeBackend::Mode::Cpu},
             };
             for (const Item &it : items) {
-                auto *act = backendMenu->addAction(QString::fromUtf8(it.text));
+                auto *act = backendMenu->addAction(it.text);
                 act->setCheckable(true);
                 act->setActionGroup(grp);
                 act->setChecked(it.m == mode);
@@ -8246,13 +8272,13 @@ void MainWindow::setupSystemMenu()
             }
         }
         // 特征库管理（2026-10-27）：现场要看得到库里有什么——浏览/预览/删除/清空
-        connect(ui->menuSystem->addAction(QStringLiteral("特征库管理…")), &QAction::triggered,
+        connect(ui->menuSystem->addAction(tr("特征库管理…")), &QAction::triggered,
                 this, [this]() {
                     FeatureLibraryDialog dlg(this);
                     dlg.exec();
                 });
         // 训练向导（2026-10-27）：数据集装配 → 训练 → 评估 → 发布，一条链走完
-        connect(ui->menuSystem->addAction(QStringLiteral("训练向导…")), &QAction::triggered,
+        connect(ui->menuSystem->addAction(tr("训练向导…")), &QAction::triggered,
                 this, [this]() {
                     TrainingWizardDialog dlg(this);
                     // 一键发布为算子（2026-10-27）：把"插预设节点"能力注入向导；
@@ -8265,28 +8291,28 @@ void MainWindow::setupSystemMenu()
                         const int before = scene ? scene->nodes().size() : 0;
                         addNode(nodeType);
                         if (!scene || scene->nodes().size() <= before) {
-                            statusBar()->showMessage(QStringLiteral("插入节点失败（画布已锁定？）"), 8000);
+                            statusBar()->showMessage(tr("插入节点失败（画布已锁定？）"), 8000);
                             return false;
                         }
                         NodeBase *node = scene->nodes().last();
                         for (auto it = params.begin(); it != params.end(); ++it)
                             node->setParam(it.key(), it.value().toVariant());
                         statusBar()->showMessage(
-                            QStringLiteral("已插入 %1 并预填 %2 个参数").arg(nodeType).arg(params.size()), 8000);
+                            tr("已插入 %1 并预填 %2 个参数").arg(nodeType).arg(params.size()), 8000);
                         return true;
                     };
                     dlg.exec();
                 });
         // 检测框标注（2026-10-28）：画框 → 同名 YOLO txt（cls cx cy w h 归一化），
         // Ultralytics / YOLOX 直接能吃，不需要再导出。
-        connect(ui->menuSystem->addAction(QStringLiteral("检测框标注…")), &QAction::triggered,
+        connect(ui->menuSystem->addAction(tr("检测框标注…")), &QAction::triggered,
                 this, [this]() {
                     BoxAnnotatorDialog dlg(this);
                     dlg.exec();
                 });
         // 训练（2026-10-29）：调用外部训练环境（YOLOX/Ultralytics）。
         // 环境不在本机时装不了就明说——产线机永远不需要它。
-        connect(ui->menuSystem->addAction(QStringLiteral("训练…")), &QAction::triggered,
+        connect(ui->menuSystem->addAction(tr("训练…")), &QAction::triggered,
                 this, [this]() {
                     TrainingRunnerDialog dlg(this);
                     // 训练产物回填（2026-11-18）：复用训练向导同款 insertNode 范式，
@@ -8303,14 +8329,14 @@ void MainWindow::setupSystemMenu()
                         addNode(nodeType);
                         if (!scene || scene->nodes().size() <= before) {
                             statusBar()->showMessage(
-                                QStringLiteral("插入节点失败（画布已锁定？）"), 8000);
+                                tr("插入节点失败（画布已锁定？）"), 8000);
                             return;
                         }
                         NodeBase *node = scene->nodes().last();
                         node->setParam(QStringLiteral("modelPath"), modelPath);
                         node->setParam(QStringLiteral("classNamesPath"), classesPath);
                         statusBar()->showMessage(
-                            QStringLiteral("已插入 %1 并回填训练模型：%2")
+                            tr("已插入 %1 并回填训练模型：%2")
                                 .arg(nodeType).arg(modelPath), 8000);
                     });
                     dlg.exec();
@@ -8318,20 +8344,20 @@ void MainWindow::setupSystemMenu()
         // 打包模型与依赖（2026-10-28）：把 onnx/classes.txt 等外部文件收进方案目录，
         // 换机器拷方案就能跑——显式动作，不在保存时偷偷搬用户文件。
         // 让用户选方案目录（MainWindow 没有公开的"当前方案路径"，选目录比猜更明确）。
-        m_packModelsAct = ui->menuFile->addAction(QStringLiteral("打包模型与依赖…"));
+        m_packModelsAct = ui->menuFile->addAction(tr("打包模型与依赖…"));
         connect(m_packModelsAct, &QAction::triggered, this, [this]() {
             // 入口再查一次（2026-10-29 r15 P2-13）：菜单可能在运行开始前就已打开
             auto *sess = SessionManager::instance();
             if (!sess->canEditScheme()
                 || (m_executor && !m_executor->allowsGraphEditing())) {
                 QMessageBox::warning(
-                    this, QStringLiteral("暂时不能打包"),
-                    QStringLiteral("流程正在运行，或写操作被禁止。\n"
-                                   "停止后重试；出厂口令未改时请先改密。"));
+                    this, tr("暂时不能打包"),
+                    tr("流程正在运行，或写操作被禁止。\n"
+                       "停止后重试；出厂口令未改时请先改密。"));
                 return;
             }
                     const QString dir = QFileDialog::getExistingDirectory(
-                        this, QStringLiteral("选择方案目录（依赖将收进 <目录>/assets/）"));
+                        this, tr("选择方案目录（依赖将收进 <目录>/assets/）"));
                     if (dir.isEmpty())
                         return;
                     // 选目录用的是嵌套事件循环（2026-10-29 r16 P2-13）：这段时间里外部触发
@@ -8339,23 +8365,23 @@ void MainWindow::setupSystemMenu()
                     if (!SessionManager::instance()->canEditScheme()
                         || (m_executor && !m_executor->allowsGraphEditing())) {
                         QMessageBox::warning(
-                            this, QStringLiteral("暂时不能打包"),
-                            QStringLiteral("等待选择目录期间流程已开始运行。\n停止后再试。"));
+                            this, tr("暂时不能打包"),
+                            tr("等待选择目录期间流程已开始运行。\n停止后再试。"));
                         return;
                     }
                     const QString scheme = dir + QStringLiteral("/scheme.vfp");
                     const ProjectPackager::Result r = ProjectPackager::pack(currentFlowScene(), scheme);
                     if (!r.ok) {
-                        QMessageBox::warning(this, QStringLiteral("打包失败"), r.error);
+                        QMessageBox::warning(this, tr("打包失败"), r.error);
                         return;
                     }
                     QString msg = r.copied.isEmpty()
-                                      ? QStringLiteral("没有需要打包的外部依赖")
-                                      : QStringLiteral("已打包 %1 个依赖到 assets/：\n%2\n\n"
-                                                       "节点参数已改为相对路径，请保存方案以生效。")
+                                      ? tr("没有需要打包的外部依赖")
+                                      : tr("已打包 %1 个依赖到 assets/：\n%2\n\n"
+                                           "节点参数已改为相对路径，请保存方案以生效。")
                                             .arg(r.copied.size())
                                             .arg(r.copied.join(QStringLiteral("\n")));
-                    QMessageBox::information(this, QStringLiteral("打包完成"), msg);
+                    QMessageBox::information(this, tr("打包完成"), msg);
                 });
         m_confirmScriptAct->setChecked(policy.requireConfirmation());
         m_menuRouter.direct(m_confirmScriptAct, this, [this]() {

@@ -509,6 +509,14 @@ void UiGuardsTest::mainWindowP1ClosureGuards()
     const int check = src.indexOf(QStringLiteral("actionToggleParamDock->setChecked(true)"));
     QVERIFY2(show >= 0 && check > show,
              "paramDock 强制 show 后必须回写菜单勾选态（与 tool/image 同口径）");
+
+    // ④ 恢复默认布局：四个 panel 的勾选必须一并回写（与启动同口径）
+    const int resetFn = src.indexOf(QStringLiteral("void MainWindow::resetDockLayout"));
+    QVERIFY(resetFn >= 0);
+    const int nextFn = src.indexOf(QStringLiteral("void MainWindow::openSoftwareSettings"), resetFn);
+    const QString reset = src.mid(resetFn, nextFn - resetFn);
+    QVERIFY2(reset.contains(QStringLiteral("actionToggleLogDock->setChecked(true)")),
+             "恢复默认布局必须同步 logDock 勾选（同 tool/image/param 口径）");
 }
 
 void UiGuardsTest::deleteShortcutIgnoredWhileEditingText()

@@ -296,6 +296,82 @@ EN = {
     "流程继续执行，双击托盘图标可恢复主界面。": "The flow continues; double-click the tray icon to restore the main window.",
     "已进入后台运行：流程继续执行": "Running in background: the flow continues",
     "系统托盘不可用，无法进入后台运行": "System tray is unavailable; cannot run in background",
+    # P1 第二笔：主框架硬编码中文补翻（2026-11-19）
+    " 流程模式: ": " Flow Mode: ",
+    "连续模式：切换到该模式后自动循环执行流程\n软触发模式：需手动点击「开始执行」运行一次流程\n硬触发模式：仅相机硬件触发时自动执行一次":
+        "Continuous: loops the flow automatically after switching\n"
+        "Software trigger: click Start to run the flow once\n"
+        "Hardware trigger: runs once per camera hardware trigger",
+    "添加新流程（Ctrl+T）": "Add Flow (Ctrl+T)",
+    "V社区": "V-Club",
+    " [连续]": " [Continuous]",
+    " [硬触发]": " [Hardware]",
+    " [软触发]": " [Software]",
+    "删除流程": "Delete Flow",
+    "确定删除流程「%1」吗？\n\n该流程包含 %2 个模块。\n删除后可通过「编辑 → 恢复最近删除的流程」找回；若方案尚未保存，保存后该流程不会出现在方案文件中。%3":
+        "Delete flow \"%1\"?\n\nIt contains %2 module(s).\n"
+        "You can restore it via Edit → Restore Last Deleted Flow;\n"
+        "if the scheme has not been saved, the flow will not appear in the scheme file. %3",
+    "\n\n注意：该流程正在运行，删除会先停止执行。": "\n\nNote: the flow is running; deletion stops execution first.",
+    "取消": "Cancel",
+    "恢复最近删除的流程": "Restore Last Deleted Flow",
+    "没有可恢复的已删除流程。": "No deleted flow to restore.",
+    "已恢复最近删除的流程「%1」": "Restored deleted flow \"%1\"",
+    "已切换为连续模式：点「开始执行」开始循环运行，运行中可用「暂停」":
+        "Switched to Continuous: click Start to begin looping; Pause is available while running",
+    "已切换为软触发模式：点「开始执行」运行一次流程":
+        "Switched to Software Trigger: click Start to run the flow once",
+    "已切换为硬触发模式：点「开始执行」进入等待，相机每来一帧执行一次":
+        "Switched to Hardware Trigger: click Start to enter waiting; one run per camera frame",
+    "搜索算子...": "Search operators...",
+    "流程变量 / Fixture…": "Flow Variables / Fixture...",
+    "修改管理员口令（解除写操作禁止）…": "Change Admin Password (unlock write operations)...",
+    "脚本安全：执行前确认脚本（取消勾选则直接执行）":
+        "Script Security: confirm before execution (uncheck to run directly)",
+    "计算后端": "Compute Backend",
+    "自动（有 OpenCL 就用）": "Auto (use OpenCL when available)",
+    "强制 OpenCL": "Force OpenCL",
+    "仅 CPU": "CPU Only",
+    "特征库管理…": "Feature Library...",
+    "训练向导…": "Training Wizard...",
+    "检测框标注…": "Box Annotation...",
+    "训练…": "Train...",
+    "插入节点失败（画布已锁定？）": "Failed to insert node (canvas locked?)",
+    "已插入 %1 并预填 %2 个参数": "Inserted %1 and prefilled %2 parameter(s)",
+    "已插入 %1 并回填训练模型：%2": "Inserted %1 and filled training model: %2",
+    "打包模型与依赖…": "Package Models and Dependencies...",
+    "暂时不能打包": "Cannot package now",
+    "流程正在运行，或写操作被禁止。\n停止后重试；出厂口令未改时请先改密。":
+        "A flow is running or write operations are blocked.\n"
+        "Stop and retry; change the factory password first if unchanged.",
+    "选择方案目录（依赖将收进 <目录>/assets/）":
+        "Select scheme directory (dependencies go to <dir>/assets/)",
+    "等待选择目录期间流程已开始运行。\n停止后再试。":
+        "A flow started while waiting for the directory. Stop and retry.",
+    "打包失败": "Packaging failed",
+    "没有需要打包的外部依赖": "No external dependencies to package",
+    "已打包 %1 个依赖到 assets/：\n%2\n\n节点参数已改为相对路径，请保存方案以生效。":
+        "Packaged %1 dependency/ies into assets/:\n%2\n\n"
+        "Node parameters now use relative paths; save the scheme to apply.",
+    "打包完成": "Packaging complete",
+    "已切换至设计模式": "Switched to Design Mode",
+    "已切换至运行模式": "Switched to Run Mode",
+    "连续模式": "Continuous Mode",
+    "软触发模式": "Software Trigger Mode",
+    "硬触发模式": "Hardware Trigger Mode",
+    "未知": "Unknown",
+    "流程 %1 — %2": "Flow %1 - %2",
+    # 工具库分组名（ToolGroup 上下文；注册表 group 仍是中文键）
+    "图像采集": "Image Acquisition",
+    "图像处理": "Image Processing",
+    "特征定位": "Feature Location",
+    "几何测量": "Geometry Measurement",
+    "标定": "Calibration",
+    "识别": "Recognition",
+    "跟踪": "Tracking",
+    "逻辑与控制": "Logic and Control",
+    "结果输出": "Result Output",
+    "深度学习": "Deep Learning",
 }
 
 

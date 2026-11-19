@@ -1617,7 +1617,7 @@ Until the password is changed, canvas and module editing, saving/exporting schem
     </message>
     <message>
         <source>V社区</source>
-        <translation>V Community</translation>
+        <translation>V-Club</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="5911"/>
@@ -1664,6 +1664,202 @@ Until the password is changed, canvas and module editing, saving/exporting schem
         <location filename="../src/MainWindow.cpp" line="1236"/>
         <source>界面预览模式：只读、未登录；保存 / 打开方案 / 运行均已禁用</source>
         <translation>Preview mode: read-only, not signed in; save / open scheme / run are disabled</translation>
+    </message>
+    <message>
+        <source> 流程模式: </source>
+        <translation> Flow Mode: </translation>
+    </message>
+    <message>
+        <source>连续模式：切换到该模式后自动循环执行流程
+软触发模式：需手动点击「开始执行」运行一次流程
+硬触发模式：仅相机硬件触发时自动执行一次</source>
+        <translation>Continuous: loops the flow automatically after switching
+Software trigger: click Start to run the flow once
+Hardware trigger: runs once per camera hardware trigger</translation>
+    </message>
+    <message>
+        <source>添加新流程（Ctrl+T）</source>
+        <translation>Add Flow (Ctrl+T)</translation>
+    </message>
+    <message>
+        <source> [连续]</source>
+        <translation> [Continuous]</translation>
+    </message>
+    <message>
+        <source> [硬触发]</source>
+        <translation> [Hardware]</translation>
+    </message>
+    <message>
+        <source> [软触发]</source>
+        <translation> [Software]</translation>
+    </message>
+    <message>
+        <source>删除流程</source>
+        <translation>Delete Flow</translation>
+    </message>
+    <message>
+        <source>确定删除流程「%1」吗？
+
+该流程包含 %2 个模块。
+删除后可通过「编辑 → 恢复最近删除的流程」找回；若方案尚未保存，保存后该流程不会出现在方案文件中。%3</source>
+        <translation>Delete flow "%1"?
+
+It contains %2 module(s).
+You can restore it via Edit → Restore Last Deleted Flow;
+if the scheme has not been saved, the flow will not appear in the scheme file. %3</translation>
+    </message>
+    <message>
+        <source>
+
+注意：该流程正在运行，删除会先停止执行。</source>
+        <translation>
+
+Note: the flow is running; deletion stops execution first.</translation>
+    </message>
+    <message>
+        <source>恢复最近删除的流程</source>
+        <translation>Restore Last Deleted Flow</translation>
+    </message>
+    <message>
+        <source>没有可恢复的已删除流程。</source>
+        <translation>No deleted flow to restore.</translation>
+    </message>
+    <message>
+        <source>已恢复最近删除的流程「%1」</source>
+        <translation>Restored deleted flow "%1"</translation>
+    </message>
+    <message>
+        <source>已切换为连续模式：点「开始执行」开始循环运行，运行中可用「暂停」</source>
+        <translation>Switched to Continuous: click Start to begin looping; Pause is available while running</translation>
+    </message>
+    <message>
+        <source>已切换为软触发模式：点「开始执行」运行一次流程</source>
+        <translation>Switched to Software Trigger: click Start to run the flow once</translation>
+    </message>
+    <message>
+        <source>已切换为硬触发模式：点「开始执行」进入等待，相机每来一帧执行一次</source>
+        <translation>Switched to Hardware Trigger: click Start to enter waiting; one run per camera frame</translation>
+    </message>
+    <message>
+        <source>搜索算子...</source>
+        <translation>Search operators...</translation>
+    </message>
+    <message>
+        <source>流程变量 / Fixture…</source>
+        <translation>Flow Variables / Fixture...</translation>
+    </message>
+    <message>
+        <source>修改管理员口令（解除写操作禁止）…</source>
+        <translation>Change Admin Password (unlock write operations)...</translation>
+    </message>
+    <message>
+        <source>脚本安全：执行前确认脚本（取消勾选则直接执行）</source>
+        <translation>Script Security: confirm before execution (uncheck to run directly)</translation>
+    </message>
+    <message>
+        <source>计算后端</source>
+        <translation>Compute Backend</translation>
+    </message>
+    <message>
+        <source>自动（有 OpenCL 就用）</source>
+        <translation>Auto (use OpenCL when available)</translation>
+    </message>
+    <message>
+        <source>强制 OpenCL</source>
+        <translation>Force OpenCL</translation>
+    </message>
+    <message>
+        <source>仅 CPU</source>
+        <translation>CPU Only</translation>
+    </message>
+    <message>
+        <source>特征库管理…</source>
+        <translation>Feature Library...</translation>
+    </message>
+    <message>
+        <source>训练向导…</source>
+        <translation>Training Wizard...</translation>
+    </message>
+    <message>
+        <source>检测框标注…</source>
+        <translation>Box Annotation...</translation>
+    </message>
+    <message>
+        <source>训练…</source>
+        <translation>Train...</translation>
+    </message>
+    <message>
+        <source>插入节点失败（画布已锁定？）</source>
+        <translation>Failed to insert node (canvas locked?)</translation>
+    </message>
+    <message>
+        <source>已插入 %1 并预填 %2 个参数</source>
+        <translation>Inserted %1 and prefilled %2 parameter(s)</translation>
+    </message>
+    <message>
+        <source>已插入 %1 并回填训练模型：%2</source>
+        <translation>Inserted %1 and filled training model: %2</translation>
+    </message>
+    <message>
+        <source>打包模型与依赖…</source>
+        <translation>Package Models and Dependencies...</translation>
+    </message>
+    <message>
+        <source>暂时不能打包</source>
+        <translation>Cannot package now</translation>
+    </message>
+    <message>
+        <source>流程正在运行，或写操作被禁止。
+停止后重试；出厂口令未改时请先改密。</source>
+        <translation>A flow is running or write operations are blocked.
+Stop and retry; change the factory password first if unchanged.</translation>
+    </message>
+    <message>
+        <source>选择方案目录（依赖将收进 &lt;目录&gt;/assets/）</source>
+        <translation>Select scheme directory (dependencies go to &lt;dir&gt;/assets/)</translation>
+    </message>
+    <message>
+        <source>等待选择目录期间流程已开始运行。
+停止后再试。</source>
+        <translation>A flow started while waiting for the directory. Stop and retry.</translation>
+    </message>
+    <message>
+        <source>打包失败</source>
+        <translation>Packaging failed</translation>
+    </message>
+    <message>
+        <source>没有需要打包的外部依赖</source>
+        <translation>No external dependencies to package</translation>
+    </message>
+    <message>
+        <source>已打包 %1 个依赖到 assets/：
+%2
+
+节点参数已改为相对路径，请保存方案以生效。</source>
+        <translation>Packaged %1 dependency/ies into assets/:
+%2
+
+Node parameters now use relative paths; save the scheme to apply.</translation>
+    </message>
+    <message>
+        <source>打包完成</source>
+        <translation>Packaging complete</translation>
+    </message>
+    <message>
+        <source>已切换至设计模式</source>
+        <translation>Switched to Design Mode</translation>
+    </message>
+    <message>
+        <source>已切换至运行模式</source>
+        <translation>Switched to Run Mode</translation>
+    </message>
+    <message>
+        <source>未知</source>
+        <translation>Unknown</translation>
+    </message>
+    <message>
+        <source>流程 %1 — %2</source>
+        <translation>Flow %1 - %2</translation>
     </message>
 </context>
 <context>
@@ -1852,6 +2048,49 @@ Until the password is changed, canvas and module editing, saving/exporting schem
     <message>
         <source>按当前布局生成运行界面预览（不改动已保存的布局）</source>
         <translation>Preview the runtime interface from the current layout (does not change the saved layout)</translation>
+    </message>
+</context>
+<context>
+    <name>ToolGroup</name>
+    <message>
+        <source>图像采集</source>
+        <translation>Image Acquisition</translation>
+    </message>
+    <message>
+        <source>图像处理</source>
+        <translation>Image Processing</translation>
+    </message>
+    <message>
+        <source>特征定位</source>
+        <translation>Feature Location</translation>
+    </message>
+    <message>
+        <source>几何测量</source>
+        <translation>Geometry Measurement</translation>
+    </message>
+    <message>
+        <source>标定</source>
+        <translation>Calibration</translation>
+    </message>
+    <message>
+        <source>识别</source>
+        <translation>Recognition</translation>
+    </message>
+    <message>
+        <source>跟踪</source>
+        <translation>Tracking</translation>
+    </message>
+    <message>
+        <source>逻辑与控制</source>
+        <translation>Logic and Control</translation>
+    </message>
+    <message>
+        <source>结果输出</source>
+        <translation>Result Output</translation>
+    </message>
+    <message>
+        <source>深度学习</source>
+        <translation>Deep Learning</translation>
     </message>
 </context>
 </TS>
