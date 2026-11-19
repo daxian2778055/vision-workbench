@@ -2361,8 +2361,8 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
-    // 未保存确认必须最先做：取消关闭时不得已经产生副作用（清恢复现场/停相机/落面板配置）
-    if (!confirmCloseWithUnsavedChanges()) {
+    // 切换语言：switchLanguage 已经做过未保存/运行中确认，此处不再问第二遍
+    if (!m_restartAfterClose && !confirmCloseWithUnsavedChanges()) {
         VFP_DEBUG << "closeEvent: 用户在\"未保存修改\"确认中选择取消，本次关闭被忽略";
         event->ignore();
         return;
@@ -2394,6 +2394,27 @@ void MainWindow::closeEvent(QCloseEvent *event)
     VFP_DEBUG << "closeEvent: 关闭主窗口，保存面板显隐并清理相机…";
     // 记住辅助面板显隐，下次启动时恢复（避免每次重启都要重新打开结果表/变量面板）
     saveAuxPanelVisibility();
+    // 存档前归一化 dock：运行态会把工具箱 close、图像/运行界面设为最大化浮窗，
+    // 原样存档会让下次启动继承一副"只有浮窗"的坏布局（2026-11-19 P1）。
+    // 这里只做几何/显隐复位，不改画布锁、不写"已切设计态"日志——用户仍在运行态，
+    // 只是存档用的是设计态布局（与 switchToDesignMode 的复位口径一致）。
+    if (m_runtimeViewDock) {
+        if (m_runtimeViewDock->isFullScreen() || m_runtimeViewDock->isMaximized())
+            m_runtimeViewDock->setWindowState(Qt::WindowNoState);
+        m_runtimeViewDock->hide();
+    }
+    if (ui->imageDock) {
+        if (ui->imageDock->isFullScreen() || ui->imageDock->isMaximized())
+            ui->imageDock->setWindowState(Qt::WindowNoState);
+        if (ui->imageDock->isFloating())
+            ui->imageDock->setFloating(false);
+    }
+    if (ui->toolDock) ui->toolDock->show();
+    if (ui->imageDock) ui->imageDock->show();
+    if (ui->paramDock) ui->paramDock->show();
+    if (ui->logDock) ui->logDock->show();
+    if (ui->imageDock) ui->imageDock->raise();
+    if (ui->flowDock) ui->flowDock->hide();
     // 记住停靠布局：用户拖过的左右占比/面板位置下次启动原样恢复
     QSettings().setValue(QStringLiteral("ui/mainWindowState2"), saveState());
     cleanupCameras();
@@ -2401,6 +2422,15 @@ void MainWindow::closeEvent(QCloseEvent *event)
     if (m_trayIcon)
         m_trayIcon->hide();   // 正常退出时摘掉托盘图标，避免残留
     QMainWindow::closeEvent(event);
+    // 切换语言：旧实例已完整收尾（存档/停相机/flush 都做完），现在才起新实例
+    if (m_restartAfterClose) {
+        m_restartAfterClose = false;
+        const QString path = QApplication::applicationFilePath();
+        QStringList args = QApplication::arguments();
+        if (!args.isEmpty())
+            args.removeFirst(); // 去掉程序自身路径
+        QProcess::startDetached(path, args);
+    }
 }
 
 bool MainWindow::anyFlowRunning() const
@@ -4330,16 +4360,28 @@ void MainWindow::switchLanguage(I18n::Language lang)
 {
     if (lang == I18n::currentLanguage())
         return; // 与当前一致，无需重启
+    // 必须先过关闭确认再启动新实例（2026-11-19 P1）：原先先 startDetached 再 quit，
+    // 而确认框在 closeEvent 里——用户点"取消关闭"时新实例已经起来，留下双实例。
+    if (!confirmCloseWithUnsavedChanges())
+        return;
+    if (m_trayIcon && anyFlowRunning()) {
+        QMessageBox box(QMessageBox::Question, tr("后台运行"),
+                        tr("切换语言需要重启，检测到流程正在运行。是否停止运行并重启？"),
+                        QMessageBox::NoButton, this);
+        QPushButton *restartBtn = box.addButton(tr("停止运行并重启"), QMessageBox::AcceptRole);
+        box.addButton(QMessageBox::Cancel);
+        box.setDefaultButton(restartBtn);
+        box.exec();
+        if (box.clickedButton() != restartBtn)
+            return;
+    }
     I18n::setLanguage(lang);
     QMessageBox::information(this, tr("语言"), tr("语言设置将在重启后生效。"));
-    // Qt Widgets 大多在构造期取翻译文本，动态切换需逐个处理 LanguageChange；
-    // 对工业软件最稳妥的做法是保存后重启应用，确保整棵 UI 树统一翻译。
-    const QString path = QApplication::applicationFilePath();
-    QStringList args = QApplication::arguments();
-    if (!args.isEmpty())
-        args.removeFirst(); // 去掉程序自身路径
-    QProcess::startDetached(path, args);
-    QApplication::quit();
+    // 走正常 close() 路径：closeEvent 里已经做过确认，这里只标记"确认已过 + 关完重启"，
+    // 其余清理/存档/停相机全部复用 closeEvent，不复制第二份（复制两份迟早漂移）。
+    m_forceQuit = true;             // 跳过 closeEvent 里重复的运行中询问
+    m_restartAfterClose = true;     // closeEvent 收尾后启动新实例
+    close();
 }
 
 void MainWindow::onExportEncryptedProject()
@@ -6861,15 +6903,6 @@ void MainWindow::onCurrentTabChanged(int index)
     if (index < 0 || index >= m_flowScenes.size())
         return;
 
-    // P2-5：切换流程后旧的「叠加图像」节点指针不再属于当前场景
-    m_overlayNodes.clear();
-    if (m_imageView)
-        m_imageView->clearHImageOverlays();
-    if (m_imageView2)
-        m_imageView2->clearHImageOverlays();
-    // 图像源下拉按当前场景重置（等新场景选中节点后再填充）
-    refreshImageSourceCombo(nullptr);
-
     // 运行/暂停中禁止切换流程：执行器绑定的是正在执行的场景，重绑会让"本轮还在
     // 遍历旧场景节点、下一轮就去执行新场景"（现场表现为"切一下 tab 流程乱跑"），
     // 多流程并发下还可能让同一批节点被两个执行器同时执行。
@@ -6885,6 +6918,17 @@ void MainWindow::onCurrentTabChanged(int index)
             return;
         }
     }
+
+    // P2-5：切换流程后旧的「叠加图像」节点指针不再属于当前场景。
+    // 必须在上面的"运行中禁止切页"守卫之后清——否则被回退的页签状态先被抹掉，
+    // 用户点了一下切不动，叠加/选中/参数却全没了（2026-11-19 P1 现场审查）。
+    m_overlayNodes.clear();
+    if (m_imageView)
+        m_imageView->clearHImageOverlays();
+    if (m_imageView2)
+        m_imageView2->clearHImageOverlays();
+    // 图像源下拉按当前场景重置（等新场景选中节点后再填充）
+    refreshImageSourceCombo(nullptr);
 
     // 选区/参数/本地图/耗时角标都按“当前场景”语义：切页签后旧场景的节点不再是选中项。
     // 不清理会让 m_selectedNode / m_localImageNode 继续指向旧场景节点（旧场景随后被关闭时
@@ -7615,10 +7659,13 @@ void MainWindow::setupDockWidgets()
     {
         const QSignalBlocker bTool(ui->actionToggleToolDock);
         const QSignalBlocker bImage(ui->actionToggleImageDock);
+        const QSignalBlocker bParam(ui->actionToggleParamDock);
         if (ui->actionToggleToolDock)
             ui->actionToggleToolDock->setChecked(true);
         if (ui->actionToggleImageDock)
             ui->actionToggleImageDock->setChecked(true);
+        if (ui->actionToggleParamDock)
+            ui->actionToggleParamDock->setChecked(true);   // 同为强制 show 的面板，勾选一并回写
     }
     // 流程编辑已迁到中央控件：旧存档即使带 flowDock 也不让它重新露出来
     if (ui->flowDock)
@@ -7798,8 +7845,7 @@ void MainWindow::setupSchemeMenu()
     connect(ui->actionNew, &QAction::triggered, this, &MainWindow::onNewProject);
     connect(ui->actionSave, &QAction::triggered, this, &MainWindow::onSaveProject);
     connect(ui->actionLoad, &QAction::triggered, this, &MainWindow::onLoadProject);
-    connect(ui->actionExit, &QAction::triggered, this, &MainWindow::onExit);
-    
+
     // 连接编辑菜单动作
     connect(ui->actionAddFlow, &QAction::triggered, this, &MainWindow::onAddFlowTab);
     connect(ui->actionDeleteFlow, &QAction::triggered, this, [this]() {

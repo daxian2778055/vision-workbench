@@ -515,6 +515,8 @@ protected:
     // ---- 后台运行（VM 4.4：关闭时询问是否保持后台运行）----
     QSystemTrayIcon *m_trayIcon = nullptr;
     bool m_forceQuit = false;                    ///< 托盘「退出软件」置位，跳过后台运行询问
+    /// 切换语言：确认已过，closeEvent 收尾后启动新实例（避免"先起新进程后询问"的双实例）
+    bool m_restartAfterClose = false;
     /// 已从 QSettings 恢复过停靠布局 ⇒ 首帧不再套用默认比例（否则用户拖过的占比被覆盖）
     bool m_dockLayoutRestored = false;
 

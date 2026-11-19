@@ -74,6 +74,7 @@ private slots:
     void annotationClassDirRejectsJunctionEscape();
     void finishTextExportSucceedsOnWritableFile();
     void staleBindingsFindsMissingTargets();
+void mainWindowP1ClosureGuards();       // 语言重启确认序 / 切页清理序 / dock 勾选回写（源码守卫）
 void runtimeDesignerHasOfficialDragAndClipboard();
 void runtimeDesignerHasOfficialSectionsAndAlign();
 void runtimeDesignerAlignHCenterAndRight();
@@ -475,6 +476,41 @@ void UiGuardsTest::annotationDialogRollsBackWhenSaveFails()
 // QShortcut 默认的 WindowShortcut 上下文，只要窗口激活、任何子控件收到 Delete 都会
 // 触发——在参数面板输入框里按 Delete 想删字符，画布上选中的节点却被删了。
 // 这条腿锁住焦点判定：可编辑控件里必须拦，普通控件里必须放行。
+void UiGuardsTest::mainWindowP1ClosureGuards()
+{
+    // MainWindow 太重无法在 CI 实例化；按项目既有静态守卫惯例读源码钉三处顺序不变量。
+    QFile f(QStringLiteral(SRC_DIR "/src/MainWindow.cpp"));
+    QVERIFY2(f.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 MainWindow.cpp");
+    const QString src = QString::fromUtf8(f.readAll());
+    f.close();
+
+    // ① 语言切换：必须先确认再起新进程（双实例缺陷），且复用 closeEvent 收尾
+    const int langFn = src.indexOf(QStringLiteral("void MainWindow::switchLanguage"));
+    QVERIFY(langFn >= 0);
+    const int langBody = src.indexOf(QStringLiteral("void MainWindow::onExportEncryptedProject"),
+                                     langFn);   // 下一个函数定义即本函数末尾
+    QVERIFY(langBody > langFn);
+    const QString lang = src.mid(langFn, langBody - langFn);
+    const int confirm = lang.indexOf(QStringLiteral("confirmCloseWithUnsavedChanges"));
+    const int spawn = lang.indexOf(QStringLiteral("close();"));
+    QVERIFY2(confirm >= 0 && spawn > confirm,
+             "语言切换必须先过未保存确认再触发关闭/重启，否则取消关闭时双实例");
+
+    // ② 切页：运行中禁止切页的守卫必须早于 m_overlayNodes.clear()
+    const int tabFn = src.indexOf(QStringLiteral("void MainWindow::onCurrentTabChanged"));
+    QVERIFY(tabFn >= 0);
+    const QString tab = src.mid(tabFn, 2500);
+    QVERIFY2(tab.indexOf(QStringLiteral("m_overlayNodes.clear()"))
+                 > tab.indexOf(QStringLiteral("ExecutionState::Running")),
+             "切页必须先在守卫里拒绝运行中切换，再清叠加/选中/参数");
+
+    // ③ 启动 dock 回写：paramDock 与 tool/image 一样强制 show 且勾选回写
+    const int show = src.indexOf(QStringLiteral("ui->paramDock->show()"), 7000);
+    const int check = src.indexOf(QStringLiteral("actionToggleParamDock->setChecked(true)"));
+    QVERIFY2(show >= 0 && check > show,
+             "paramDock 强制 show 后必须回写菜单勾选态（与 tool/image 同口径）");
+}
+
 void UiGuardsTest::deleteShortcutIgnoredWhileEditingText()
 {
     // 离屏环境下 setFocus() 不生效，所以测纯判定 isTextEditingWidget；

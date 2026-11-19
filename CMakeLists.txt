@@ -1283,6 +1283,10 @@ endif()
 if(MSVC)
     add_executable(ui_guards_test tests/ui_guards_test.cpp)
     target_link_libraries(ui_guards_test PRIVATE vfp_core Qt6::Test Qt6::Widgets)
+    # P1 静态守卫腿要读 src/MainWindow.cpp（MainWindow 太重无法在 CI 实例化）
+    file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}" VFP_UI_GUARD_SRC_DIR)
+    target_compile_definitions(ui_guards_test PRIVATE
+        SRC_DIR="${VFP_UI_GUARD_SRC_DIR}")
     vfp_add_qtest(NAME UiGuardsTest TARGET ui_guards_test)
     vfp_configure_gui_test(UiGuardsTest)
 endif()
