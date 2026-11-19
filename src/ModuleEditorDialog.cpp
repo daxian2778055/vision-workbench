@@ -581,7 +581,12 @@ void ModuleEditorDialog::restoreParams()
     // 参数回滚后，图形 ROI/搜索框/结果表也要回到基线
     echoGeometry();
     refreshTemplatePreview();
+    refreshTemplateList();
     refreshResultTable();
+    // P3：结果判断条件表是参数驱动的动态控件，取消回滚时必须一起回填，
+    // 否则参数表已回到快照值、界面上显示的还是用户刚改的条件。
+    if (m_judgeTable)
+        loadJudgeConditions();
     refreshParamHooks();
 }
 
@@ -624,6 +629,10 @@ void ModuleEditorDialog::reloadFromNode()
     refreshTemplatePreview();
     refreshTemplateList();
     refreshResultTable();
+    // P3：结果判断页的条件表也是参数驱动的动态控件，外部改参后必须一起回填，
+    // 否则自动重算后用户看到的还是旧条件（此前只有自动面板控件会更新）。
+    if (m_judgeTable)
+        loadJudgeConditions();
     // 程序化回填参数不应触发自动重算（否则会与用户操作形成回路）
     m_paramHookBusy = true;
     if (QWidget *panel = m_paramHost->widget())
@@ -2105,6 +2114,7 @@ void ModuleEditorDialog::persistJudgeConditions()
                          QJsonDocument(conditions).toJson(QJsonDocument::Compact));
     m_paramHookBusy = false;
     m_paramsDirty = true;
+    scheduleAutoRecompute();   // P3：改判断条件也要立即看到结果变化（此前只写参数不重算）
 }
 
 void ModuleEditorDialog::loadJudgeConditions()
@@ -2153,6 +2163,11 @@ void ModuleEditorDialog::installParamHooks(QWidget *panel)
         { "QAbstractButton",  "toggled(bool)" },          // QCheckBox / QRadioButton
         { "QSlider",          "valueChanged(int)" },      // 注意：不含 QScrollBar
         { "QLineEdit",        "editingFinished()" },
+        // P3：多行文本改动、FilePath 浏览按钮选完文件都会改参数，但既不是 editingFinished
+        // 也不在白名单 ⇒ 参数已变却没标脏、不触发自动重算。补这两类（只挂 QPushButton，
+        // 不挂 QAbstractButton::clicked，避免 QCheckBox 点击与 toggled 双触发）。
+        { "QPlainTextEdit",   "textChanged()" },
+        { "QPushButton",      "clicked(bool)" },
     };
 
     const QList<QWidget *> widgets = panel->findChildren<QWidget *>();

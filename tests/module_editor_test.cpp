@@ -9,6 +9,7 @@
 #include <QDoubleSpinBox>
 #include <QCheckBox>
 #include <QLineEdit>
+#include <QPlainTextEdit>
 #include <QLabel>
 #include <QMenu>
 #include <QAction>
@@ -49,6 +50,7 @@ class ModuleEditorTest : public QObject
 
 private slots:
     void testParamEditTriggersDebouncedRecompute();
+    void testPlainTextEditAlsoTriggersRecompute();   // P3：多行文本改动也要标脏+重算
     void testVariableReferenceInsert();
     void testTeachingButtonLeavesMatchMode();
     void testVmModuleWindowTabs();
@@ -124,6 +126,34 @@ void ModuleEditorTest::testParamEditTriggersDebouncedRecompute()
     spin->setValue(7);
     QTest::qWait(700);
     QCOMPARE(autoRequests, 2);
+}
+
+void ModuleEditorTest::testPlainTextEditAlsoTriggersRecompute()
+{
+    FlowScene scene;
+    NodeBase *node = scene.createNode(NodeBase::IMAGE_PROCESSING, QPointF(120, 120),
+                                      QStringLiteral("OpenCV二值化"));
+    QVERIFY(node);
+    ModuleEditorDialog dlg(node);
+    int requests = 0;
+    QObject::connect(&dlg, &ModuleEditorDialog::autoRecomputeRequested, &dlg,
+                     [&requests]() { ++requests; }, Qt::DirectConnection);
+
+    auto *host = dlg.findChild<QScrollArea *>();
+    QVERIFY(host && host->widget());
+    auto *edit = new QPlainTextEdit(host->widget());
+    dlg.refreshParamHooks();   // 新控件要重新挂钩
+
+    auto *toggle = dlg.findChild<QCheckBox *>(QStringLiteral("autoRecomputeCheck"));
+    QVERIFY(toggle);
+    toggle->setChecked(true);
+
+    // P3 修前：hook 白名单没有 QPlainTextEdit，改多行参数不会标脏/重算
+    edit->setPlainText(QStringLiteral("line1"));
+    QTest::qWait(700);
+    QVERIFY2(requests == 1, "多行文本改动未触发自动重算（应对齐其它参数控件）");
+
+    delete edit;
 }
 
 void ModuleEditorTest::testVariableReferenceInsert()

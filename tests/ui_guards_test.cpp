@@ -76,6 +76,7 @@ private slots:
     void staleBindingsFindsMissingTargets();
 void mainWindowP1ClosureGuards();       // 语言重启确认序 / 切页清理序 / dock 勾选回写（源码守卫）
 void p2CanvasEditGuards();              // Delete 删连线 / 右键进撤销 / 撤销焦点守卫（源码守卫）
+void p3ModuleEditorGuards();            // 多行/浏览按钮标脏、判断条件重算、回滚回填（源码守卫）
 void runtimeDesignerHasOfficialDragAndClipboard();
 void runtimeDesignerHasOfficialSectionsAndAlign();
 void runtimeDesignerAlignHCenterAndRight();
@@ -551,6 +552,41 @@ void UiGuardsTest::p2CanvasEditGuards()
              "Ctrl+Z/Y 必须与 Delete 一样有文本编辑焦点守卫");
     QVERIFY2(main.contains(QStringLiteral("QKeySequence::Find")),
              "算子搜索提示写了 Ctrl+F，必须真有该快捷键");
+}
+
+void UiGuardsTest::p3ModuleEditorGuards()
+{
+    QFile f(QStringLiteral(SRC_DIR "/src/ModuleEditorDialog.cpp"));
+    QVERIFY2(f.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 ModuleEditorDialog.cpp");
+    const QString src = QString::fromUtf8(f.readAll());
+    f.close();
+
+    // ① hook 白名单必须含多行文本与按钮（P3：改了参数却没标脏/重算）
+    const int hooks = src.indexOf(QStringLiteral("static const struct { const char *base; const char *sig; } kHooks"));
+    QVERIFY(hooks >= 0);
+    const QString hookBody = src.mid(hooks, 900);
+    QVERIFY2(hookBody.contains(QStringLiteral("QPlainTextEdit")),
+             "多行文本编辑必须挂钩标脏");
+    QVERIFY2(hookBody.contains(QStringLiteral("QPushButton")),
+             "FilePath 浏览按钮选完文件必须挂钩标脏");
+
+    // ② 判断条件变更后必须请求重算
+    const int persist = src.indexOf(QStringLiteral("void ModuleEditorDialog::persistJudgeConditions"));
+    QVERIFY(persist >= 0);
+    const int next = src.indexOf(QStringLiteral("void ModuleEditorDialog::loadJudgeConditions"), persist);
+    const QString body = src.mid(persist, next - persist);
+    QVERIFY2(body.contains(QStringLiteral("scheduleAutoRecompute")),
+             "改结果判断条件后必须触发自动重算");
+
+    // ③ 取消回滚与外部回填都要刷新判断条件表（动态控件不能只回填自动面板）
+    const int restore = src.indexOf(QStringLiteral("void ModuleEditorDialog::restoreParams"));
+    const int restoreEnd = src.indexOf(QStringLiteral("void ModuleEditorDialog::resizeEvent"), restore);
+    QVERIFY2(src.mid(restore, restoreEnd - restore).contains(QStringLiteral("loadJudgeConditions")),
+             "取消回滚必须回填结果判断条件表");
+    const int reload = src.indexOf(QStringLiteral("void ModuleEditorDialog::reloadFromNode"));
+    const int reloadEnd = src.indexOf(QStringLiteral("void ModuleEditorDialog::loadImage"), reload);
+    QVERIFY2(src.mid(reload, reloadEnd - reload).contains(QStringLiteral("loadJudgeConditions")),
+             "外部改参回填必须刷新结果判断条件表");
 }
 
 void UiGuardsTest::deleteShortcutIgnoredWhileEditingText()
