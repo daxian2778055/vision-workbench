@@ -41,5 +41,6 @@ private:
     NodeBase *m_node;
     QMap<Port *, PortGraphicsItem *> m_portItems;
     QRectF m_boundingRect;
-    QPointF m_pressPos;   /// 鼠标按下时的位置（移动撤销判断）
+    QPointF m_pressPos;        /// 鼠标按下时的位置（移动撤销判断）
+    bool m_pushedMoveUndo = false;  /// 按下时是否已预压"移动前"撤销快照
 };

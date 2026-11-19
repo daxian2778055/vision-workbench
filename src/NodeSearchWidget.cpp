@@ -2,6 +2,8 @@
 #include "FlowScene.h"
 #include "NodeBase.h"
 #include "NodeRegistry.h"
+#include "NodeGraphicsItem.h"
+#include <QGraphicsView>
 #include <QKeyEvent>
 #include <QApplication>
 
@@ -214,11 +216,15 @@ void NodeSearchWidget::onSearchResultClicked(int row)
     if (!item) return;
 
     NodeBase *node = reinterpret_cast<NodeBase*>(item->data(Qt::UserRole).toULongLong());
-    if (node) {
-        // 高亮节点但不关闭搜索框
-        if (m_flowScene) {
-            // TODO: 高亮节点
+    if (node && m_flowScene) {
+        // 单击即选中并居中（不关闭搜索框，便于连续查看多个结果）；双击才关闭。
+        if (NodeGraphicsItem *gi = m_flowScene->getGraphicsItemForNode(node)) {
+            m_flowScene->clearSelection();
+            gi->setSelected(true);
+            for (QGraphicsView *v : m_flowScene->views())
+                v->centerOn(gi);
         }
+        emit nodeSelected(node);
     }
 }
 

@@ -41,6 +41,7 @@ private slots:
     // scene holds exactly one node, so a count()==1 cannot tell "matched" from "matched
     // everything". This leg pins the other direction.
     void testCtrlFRejectsUnknownKeyword();
+    void testSearchResultClickEmitsNodeSelected();   // P2：单击结果必须发定位信号
 
 private:
     void makeSearchWithThresholdNode(FlowScene *scene, NodeSearchWidget **searchOut,
@@ -279,6 +280,34 @@ void NodeSearchTest::testCtrlFRejectsUnknownKeyword()
         edit->setText(kw);
         QTRY_COMPARE(results->count(), 0);
     }
+    delete search;
+}
+
+void NodeSearchTest::testSearchResultClickEmitsNodeSelected()
+{
+    FlowScene scene;
+    NodeBase *node = nullptr;
+    NodeSearchWidget *search = nullptr;
+    makeSearchWithThresholdNode(&scene, &search, &node);
+    QVERIFY(search && node);
+    auto *edit = search->findChild<QLineEdit *>();
+    auto *results = search->findChild<QListWidget *>();
+    QVERIFY(edit && results);
+
+    int emitted = 0;
+    NodeBase *got = nullptr;
+    QObject::connect(search, &NodeSearchWidget::nodeSelected, search,
+                     [&](NodeBase *n) { ++emitted; got = n; });
+
+    edit->setText(QStringLiteral("Threshold"));
+    QTRY_VERIFY(results->count() > 0);
+    results->setCurrentRow(-1);   // 先清掉 performSearch 自动选中的第 0 行
+    emitted = 0; got = nullptr;
+    // 点选结果行（currentRowChanged → onSearchResultClicked）：旧实现只有 TODO，不发定位信号（P2 修）
+    results->setCurrentRow(0);
+    QCOMPARE(emitted, 1);
+    QCOMPARE(got, node);
+
     delete search;
 }
 

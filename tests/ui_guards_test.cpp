@@ -75,6 +75,7 @@ private slots:
     void finishTextExportSucceedsOnWritableFile();
     void staleBindingsFindsMissingTargets();
 void mainWindowP1ClosureGuards();       // 语言重启确认序 / 切页清理序 / dock 勾选回写（源码守卫）
+void p2CanvasEditGuards();              // Delete 删连线 / 右键进撤销 / 撤销焦点守卫（源码守卫）
 void runtimeDesignerHasOfficialDragAndClipboard();
 void runtimeDesignerHasOfficialSectionsAndAlign();
 void runtimeDesignerAlignHCenterAndRight();
@@ -517,6 +518,39 @@ void UiGuardsTest::mainWindowP1ClosureGuards()
     const QString reset = src.mid(resetFn, nextFn - resetFn);
     QVERIFY2(reset.contains(QStringLiteral("actionToggleLogDock->setChecked(true)")),
              "恢复默认布局必须同步 logDock 勾选（同 tool/image/param 口径）");
+}
+
+void UiGuardsTest::p2CanvasEditGuards()
+{
+    QFile f(QStringLiteral(SRC_DIR "/src/FlowScene.cpp"));
+    QVERIFY2(f.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 FlowScene.cpp");
+    const QString flow = QString::fromUtf8(f.readAll());
+    f.close();
+    const int del = flow.indexOf(QStringLiteral("void FlowScene::deleteSelectedItems"));
+    QVERIFY(del >= 0);
+    const QString delBody = flow.mid(del, 1800);
+    QVERIFY2(delBody.contains(QStringLiteral("ConnectionGraphicsItem"))
+                 && delBody.contains(QStringLiteral("removeConnection")),
+             "Delete 必须能删选中的连线（不能只靠右键菜单）");
+
+    QFile g(QStringLiteral(SRC_DIR "/src/NodeGraphicsItem.cpp"));
+    QVERIFY2(g.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 NodeGraphicsItem.cpp");
+    const QString nodeSrc = QString::fromUtf8(g.readAll());
+    g.close();
+    QVERIFY2(nodeSrc.count(QStringLiteral("scene->recordUndo()")) >= 4,
+             "重命名/粘贴参数/启停/禁用上游四类右键编辑必须进撤销栈");
+
+    QFile m(QStringLiteral(SRC_DIR "/src/MainWindow.cpp"));
+    QVERIFY2(m.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 MainWindow.cpp");
+    const QString main = QString::fromUtf8(m.readAll());
+    m.close();
+    const int undoFn = main.indexOf(QStringLiteral("QKeySequence::Undo"));
+    QVERIFY(undoFn >= 0);
+    const QString undoBody = main.mid(undoFn, 900);
+    QVERIFY2(undoBody.contains(QStringLiteral("isTextEditingFocus")),
+             "Ctrl+Z/Y 必须与 Delete 一样有文本编辑焦点守卫");
+    QVERIFY2(main.contains(QStringLiteral("QKeySequence::Find")),
+             "算子搜索提示写了 Ctrl+F，必须真有该快捷键");
 }
 
 void UiGuardsTest::deleteShortcutIgnoredWhileEditingText()

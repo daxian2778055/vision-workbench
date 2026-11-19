@@ -197,6 +197,15 @@ void NodeGraphicsItem::updatePorts()
 void NodeGraphicsItem::mousePressEvent(QGraphicsSceneMouseEvent *event)
 {
     m_pressPos = pos();
+    m_pushedMoveUndo = false;
+    // 两阶段撤销：按下时先把"移动前"快照压栈；松开若没真移动则丢弃（P2：
+    // 旧实现在松开后 recordUndo，压的是"移动后"快照 ⇒ 第一次 Ctrl+Z 毫无效果）。
+    if (FlowScene *scene = dynamic_cast<FlowScene *>(this->scene())) {
+        if (!scene->isEditLocked()) {
+            scene->pushUndoSnapshot(scene->currentSceneSnapshot());
+            m_pushedMoveUndo = true;
+        }
+    }
     QGraphicsItem::mousePressEvent(event);
 }
 
@@ -216,15 +225,18 @@ void NodeGraphicsItem::mouseMoveEvent(QGraphicsSceneMouseEvent *event)
 void NodeGraphicsItem::mouseReleaseEvent(QGraphicsSceneMouseEvent *event)
 {
     QGraphicsItem::mouseReleaseEvent(event);
-    // 移动结束：位置发生变化时记录撤销快照（移动过程中不记录）
+    // 移动结束：保留按下时压入的"移动前"快照；没真移动则丢弃，避免空撤销步
     if ((pos() - m_pressPos).manhattanLength() > 1.0) {
         if (FlowScene *scene = dynamic_cast<FlowScene *>(this->scene())) {
-            scene->recordUndo();
             // 该算子若属于某个分组：框体要跟着收拢/长大，否则拖完算子后组框与成员就对不上了
             if (NodeGroupItem *group = scene->groupOfNode(m_node))
                 group->fitToMembers();
         }
+    } else if (m_pushedMoveUndo) {
+        if (FlowScene *scene = dynamic_cast<FlowScene *>(this->scene()))
+            scene->dropLastUndoSnapshot();
     }
+    m_pushedMoveUndo = false;
 }
 
 void NodeGraphicsItem::mouseDoubleClickEvent(QGraphicsSceneMouseEvent *event)
@@ -339,6 +351,7 @@ void NodeGraphicsItem::contextMenuEvent(QGraphicsSceneContextMenuEvent *event)
             nullptr, QStringLiteral("重命名算子"),
             QStringLiteral("新名称:"), QLineEdit::Normal, m_node->name(), &ok);
         if (ok && !newName.trimmed().isEmpty()) {
+            scene->recordUndo();   // 重命名也要能 Ctrl+Z 撤销（P2）
             m_node->setName(newName.trimmed());
             update();
         }
@@ -354,6 +367,7 @@ void NodeGraphicsItem::contextMenuEvent(QGraphicsSceneContextMenuEvent *event)
     } else if (selectedAction == pasteParamsAction && !locked && !s_copiedParams.isEmpty()) {
         QJsonObject json = m_node->toJson();
         json.insert(QStringLiteral("params"), s_copiedParams);
+        scene->recordUndo();   // 粘贴参数纳入撤销栈（P2）
         m_node->fromJson(json);
         update();
     } else if (selectedAction == saveTemplateAction && !locked) {
@@ -385,9 +399,11 @@ void NodeGraphicsItem::contextMenuEvent(QGraphicsSceneContextMenuEvent *event)
             }
         }
     } else if (selectedAction == toggleAction && !locked) {
+        scene->recordUndo();   // 单节点启停纳入撤销栈（P2）
         m_node->setEnabled(!m_node->isEnabled());
         update();
     } else if (selectedAction == disableUpstreamAction && !locked) {
+        scene->recordUndo();   // 批量禁用上游纳入撤销栈（P2）
         for (NodeBase *node : collectUpstreamNodes(m_node)) {
             node->setEnabled(false);
         }

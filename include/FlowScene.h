@@ -163,6 +163,12 @@ public:
     // ---- 撤销/重做（快照式，覆盖节点增删/连线增删/节点移动） ----
     /// 记录当前场景状态到撤销栈（结构变化前调用）
     void recordUndo();
+    /// 取当前场景快照（不进栈）；供"按下时先留旧状态、松开确认移动后再压栈"这类两阶段操作
+    QJsonObject currentSceneSnapshot() const;
+    /// 压入一份外部快照（与 currentSceneSnapshot 配对），用于节点移动的"移动前"撤销点
+    void pushUndoSnapshot(const QJsonObject &snapshot);
+    /// 丢弃栈顶快照（按下时预压、松开发现没移动则撤销这次预压）
+    void dropLastUndoSnapshot();
     /// 批量编辑：期间内的 createConnection / removeNode 等不再各自记录撤销
     /// （由调用方在批量开始前记录一次）⇒ "一次操作 = 一步撤销"（片段粘贴这类多步动作必用）。
     /// 必须成对调用；FlowSnippet::insert 内部已按对使用。

@@ -54,6 +54,7 @@ private slots:
     void testMultipleCollapsedGroupsVisibility();
     void testModuleIdRestoredOnLoad();
     void testNodeMoveUndoConvention();
+    void testTwoPhaseMoveUndoRestoresInOneStep();   // P2：移动前快照一次撤销即复原
 };
 
 namespace {
@@ -498,6 +499,37 @@ void NodeGroupTest::testNodeMoveUndoConvention()
     NodeBase *afterSecondUndo = scene.nodeByModuleId(testedId);
     QVERIFY(afterSecondUndo);
     QCOMPARE(afterSecondUndo->position(), origin);             // 第二次才回到原位
+}
+
+void NodeGroupTest::testTwoPhaseMoveUndoRestoresInOneStep()
+{
+    // P2 修复：节点移动的正确撤销口径 = 按下时压"移动前"快照，松开确认移动后保留。
+    // 这里直接驱动新增的两阶段 API（不构造鼠标事件），钉住"一次撤销即回原位"。
+    FlowScene scene;
+    NodeBase *tested = addNode(&scene, QStringLiteral("Delay"), QPointF(100, 100));
+    QVERIFY(tested);
+    const int testedId = tested->moduleId();
+    NodeBase *scratch = addNode(&scene, QStringLiteral("Delay"), QPointF(500, 500));
+    QVERIFY(scratch);
+    const QPointF origin = tested->position();
+
+    const QJsonObject beforeMove = scene.currentSceneSnapshot();
+    scene.pushUndoSnapshot(beforeMove);    // 模拟 mousePressEvent
+    NodeGraphicsItem *item = scene.getGraphicsItemForNode(tested);
+    QVERIFY(item);
+    item->setPos(QPointF(500, 400));
+    item->syncNodeGeometry();              // 模拟 mouseReleaseEvent：保留快照，不再 recordUndo
+
+    QVERIFY(scene.undo());
+    NodeBase *after = scene.nodeByModuleId(testedId);
+    QVERIFY(after);
+    QCOMPARE(after->position(), origin);   // 第一次撤销就回原位
+
+    // 无移动的点击不得留空撤销步
+    const int depth = scene.undoDepth();
+    scene.pushUndoSnapshot(scene.currentSceneSnapshot());
+    scene.dropLastUndoSnapshot();
+    QCOMPARE(scene.undoDepth(), depth);
 }
 
 void NodeGroupTest::testCollapseHidesMembersAndExpandRestores()

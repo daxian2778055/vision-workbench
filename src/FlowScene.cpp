@@ -449,6 +449,32 @@ void FlowScene::recordUndo()
     emit redoAvailable(false);
 }
 
+QJsonObject FlowScene::currentSceneSnapshot() const
+{
+    ProjectManager pm;
+    return pm.sceneToJson(const_cast<FlowScene *>(this));
+}
+
+void FlowScene::pushUndoSnapshot(const QJsonObject &snapshot)
+{
+    if (m_restoring || isEditLocked() || m_undoBatch > 0 || snapshot.isEmpty())
+        return;
+    m_undoStack.append(snapshot);
+    if (m_undoStack.size() > kUndoLimit)
+        m_undoStack.removeFirst();
+    m_redoStack.clear();
+    emit undoAvailable(true);
+    emit redoAvailable(false);
+}
+
+void FlowScene::dropLastUndoSnapshot()
+{
+    if (m_undoStack.isEmpty())
+        return;
+    m_undoStack.removeLast();
+    emit undoAvailable(!m_undoStack.isEmpty());
+}
+
 void FlowScene::clearUndoHistory()
 {
     // 恢复快照时不清：restoreSnapshot → sceneFromJson 走的是同一条路，而 undo() 正是
@@ -758,6 +784,10 @@ void FlowScene::dropEvent(QGraphicsSceneDragDropEvent *event)
 
     NodeBase *added = createNode(type, event->scenePos(), nodeName);
     if (added) {
+        // 拖入后立即选中新节点：与粘贴路径一致，用户不必再点一次才能改参数（P2）
+        clearSelection();
+        if (NodeGraphicsItem *newItem = getGraphicsItemForNode(added))
+            newItem->setSelected(true);
         // P0-4（对标 VM「搭建入门级方案」）：拖入模块与已有模块**对齐**时自动连线。
         // 对齐判据：水平串联要求竖直中心差 ≤ 20px 且左边缘距已有模块右边缘 0~64px；
         // 竖直串联要求水平中心差 ≤ 20px 且上边缘距已有模块下边缘 0~64px。
@@ -925,16 +955,24 @@ void FlowScene::deleteSelectedItems()
     const auto nodes = selectedNodes();
     QList<CommentGraphicsItem *> comments;
     QList<NodeGroupItem *> groups;
+    QList<MyConnection *> connections;
     for (QGraphicsItem *it : selectedItems()) {
         if (auto *c = dynamic_cast<CommentGraphicsItem *>(it))
             comments.append(c);
         else if (auto *g = dynamic_cast<NodeGroupItem *>(it))
             groups.append(g);
+        else if (auto *cn = dynamic_cast<ConnectionGraphicsItem *>(it)) {
+            if (cn->connection())
+                connections.append(cn->connection());   // Delete 也能删连线（此前只能右键）
+        }
     }
-    if (nodes.isEmpty() && comments.isEmpty() && groups.isEmpty())
+    if (nodes.isEmpty() && comments.isEmpty() && groups.isEmpty() && connections.isEmpty())
         return;
     recordUndo();
     ++m_undoBatch;
+    // 先删连线再删节点：removeNode 会连带删掉与之相连的连线，避免重复删同一对象
+    for (MyConnection *cn : connections)
+        removeConnection(cn);
     for (NodeBase *n : nodes)
         removeNode(n);
     for (CommentGraphicsItem *c : comments)

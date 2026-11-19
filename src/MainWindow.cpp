@@ -2687,10 +2687,15 @@ void MainWindow::initActions()
     };
     auto *undoShortcut = new QShortcut(QKeySequence::Undo, this);
     connect(undoShortcut, &QShortcut::activated, this, [currentScene]() {
+        // 与 Delete 同口径：文本编辑控件里的 Ctrl+Z 属于输入框撤销，不能连带撤销流程（P2）
+        if (isTextEditingFocus())
+            return;
         if (FlowScene *s = currentScene()) s->undo();
     });
     auto *redoShortcut = new QShortcut(QKeySequence::Redo, this);
     connect(redoShortcut, &QShortcut::activated, this, [currentScene]() {
+        if (isTextEditingFocus())
+            return;
         if (FlowScene *s = currentScene()) s->redo();
     });
     auto *deleteShortcut = new QShortcut(QKeySequence::Delete, this);
@@ -3024,7 +3029,9 @@ void MainWindow::addNode(const QString &nodeType)
 
         NodeBase *node = nullptr;
 
-        const QPointF pos(100, 100);
+        // 双击建节点按已有节点数阶梯偏移，避免连续双击多个算子全叠在 (100,100)（P2）
+        const int stagger = currentFlowScene() ? currentFlowScene()->nodes().size() : 0;
+        const QPointF pos(100 + (stagger % 8) * 28, 100 + (stagger % 8) * 24);
         NodeBase::NodeType nt = NodeBase::IMAGE_ACQUISITION;
         QString createName;
         if (NodeFactory::resolvePaletteToolId(nodeType, nt, createName)) {
@@ -8058,6 +8065,7 @@ void MainWindow::reorganizeMenuBar()
     // 工具：算子搜索 / 性能分析
     QAction *nodeSearchAct = toolsMenu->addAction(tr("算子搜索…"));
     nodeSearchAct->setObjectName(QStringLiteral("actionNodeSearch"));
+    nodeSearchAct->setShortcut(QKeySequence::Find);   // Ctrl+F：与搜索框提示一致（P2）
     connect(nodeSearchAct, &QAction::triggered, this, &MainWindow::onOpenNodeSearch);
     QAction *perfAct = toolsMenu->addAction(tr("性能分析"));
     perfAct->setObjectName(QStringLiteral("actionPerformancePanel"));
@@ -9184,6 +9192,22 @@ void MainWindow::onOpenNodeSearch()
     // 打开节点搜索对话框
     if (!m_nodeSearchWidget) {
         m_nodeSearchWidget = new NodeSearchWidget(this);
+        // 搜索结果双击/回车后必须真的定位到画布：选中图形 + 居中 + 联动参数面板。
+        // 原实现只 emit nodeSelected 但无人连接，用户点了搜索结果什么也不会发生（P2）。
+        QObject::connect(m_nodeSearchWidget, &NodeSearchWidget::nodeSelected, this,
+                         [this](NodeBase *node) {
+            if (!node) return;
+            FlowScene *scene = currentFlowScene();
+            if (!scene) return;
+            NodeGraphicsItem *item = scene->getGraphicsItemForNode(node);
+            if (item) {
+                scene->clearSelection();
+                item->setSelected(true);
+                for (QGraphicsView *v : scene->views())
+                    v->centerOn(item);
+            }
+            onNodeSelected(node);
+        });
     }
 
     // 设置当前流程场景
