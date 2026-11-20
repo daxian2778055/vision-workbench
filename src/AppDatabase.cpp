@@ -531,6 +531,22 @@ QList<AlarmRecord> AppDatabase::queryAlarms(const QDateTime &from, const QDateTi
     return records;
 }
 
+bool AppDatabase::clearAlarms()
+{
+    WriteLock locker(&s_writeMutex);
+    const QSqlDatabase db = threadDatabase();
+    if (!db.isOpen()) {
+        noteFailure(QStringLiteral("clearAlarms"), db, QStringLiteral("数据库未打开"));
+        return false;
+    }
+    QSqlQuery q(db);
+    if (!q.exec(QStringLiteral("DELETE FROM alarms"))) {
+        noteFailure(QStringLiteral("clearAlarms"), db, q.lastError().text());
+        return false;
+    }
+    return true;
+}
+
 // ---- Inspection results ----
 
 bool AppDatabase::saveInspectionResults(const QList<InspectionRecord> &records)

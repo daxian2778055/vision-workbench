@@ -2232,11 +2232,14 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
         m_nodeElapsed.insert(node, elapsedMs);
         if (m_selectedNode == node)
             updateCanvasSelectionElapsed(node);
-        // 变量面板只列可引用的值：失败节点本轮没有可引用输出
-        if (auto *vp = m_auxPanels ? m_auxPanels->variablePanel() : nullptr) {
-            if (ok)
-                vp->setModuleVars(node->moduleId(), node->fullName(), vars);
-        }
+        // 变量面板只列可引用的值：失败轮也推空表，清掉上一轮残留值（P8：
+        // 结果表已判红、变量面板却还显示上一轮成功值，现场会误以为本轮有输出）
+        if (auto *vp = m_auxPanels ? m_auxPanels->variablePanel() : nullptr)
+            vp->setModuleVars(node->moduleId(), node->fullName(), ok ? vars : QVariantMap());
+        // P8：输出查看器的 onNodeExecuted 全仓没有任何 connect，导致打开着也永不随执行更新。
+        // 这里补上唯一的生产调用点（节点输出信号已在 GUI 线程，直接调即可）。
+        if (auto *ov = m_auxPanels ? m_auxPanels->outputDataViewer() : nullptr)
+            ov->onNodeExecuted(node, ok);
     });
 
     // ── 全局 UI：末端图像 → 运行界面 + 图像显示 ──

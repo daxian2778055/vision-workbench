@@ -63,6 +63,8 @@ public:
     int addAlarm(const QString &module, const QString &level, const QString &message);
     QList<AlarmRecord> queryAlarms(const QDateTime &from, const QDateTime &to,
                                    int limit = 500) const;
+    /// 清空全部报警记录（P8：报警历史"清空"必须真删库，否则重开又全部回来）
+    bool clearAlarms();
 
     // ---- \u68C0\u6D4B\u7ED3\u679C ----
     bool saveInspectionResult(const QString &flowName, const QString &nodeName,

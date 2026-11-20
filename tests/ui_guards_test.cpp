@@ -81,6 +81,7 @@ void p4CommDomainGuards();              // 工具条按协议分发、内联焦�
 void p5CameraGuards();                  // 像素格式局部更新、设备占用闸、刷新按钮回填、状态指示（源码守卫）
 void p6RuntimeDesignerGuards();         // bindType 保留、保存失败、撤销覆盖、切态询问（源码守卫）
 void p7TrainingToolGuards();            // 命令预览刷新、产物限定目录、异常退出、标注类别/清空确认（源码守卫）
+void p8DataPanelGuards();               // 输出查看器 setNode/连接、报警真删、汇总可见行、CSV 转义（源码守卫）
 void runtimeDesignerHasOfficialDragAndClipboard();
 void runtimeDesignerHasOfficialSectionsAndAlign();
 void runtimeDesignerAlignHCenterAndRight();
@@ -766,6 +767,64 @@ void UiGuardsTest::p7TrainingToolGuards()
              "清空本图（立即写空 txt）按钮点击必须先确认，但确认不能进槽（会阻塞程序化调用）");
     QVERIFY2(ann.contains(QStringLiteral("YoloAnnotation::imageFilters()")),
              "标注器图像过滤必须与 VOC 工具链一致");
+}
+
+void UiGuardsTest::p8DataPanelGuards()
+{
+    // ① 输出查看器 setNode 先 clear 再设指针；状态标签复位；失败按 namedOutputs 清
+    QFile v(QStringLiteral(SRC_DIR "/src/OutputDataViewer.cpp"));
+    QVERIFY2(v.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 OutputDataViewer.cpp");
+    const QString viewer = QString::fromUtf8(v.readAll());
+    v.close();
+    const int sn = viewer.indexOf(QStringLiteral("void OutputDataViewer::setNode"));
+    QVERIFY2(viewer.mid(sn, 300).indexOf(QStringLiteral("clear()"))
+             < viewer.mid(sn, 300).indexOf(QStringLiteral("m_currentNode = node")),
+             "setNode 必须先 clear 再设指针，否则 clear 会把刚设的节点抹掉");
+    const int clr = viewer.indexOf(QStringLiteral("void OutputDataViewer::clear"));
+    QVERIFY2(viewer.mid(clr, 400).contains(QStringLiteral("m_statusLabel")),
+             "clear 必须复位状态标签与样式");
+    const int fail = viewer.indexOf(QStringLiteral("void OutputDataViewer::onNodeExecuted"));
+    QVERIFY2(viewer.mid(fail, 900).contains(QStringLiteral("namedOutputs")),
+             "失败清数据必须按 namedOutputs 页签数量，与建页签口径一致");
+
+    // ② MainWidow 有 onNodeExecuted 生产调用点
+    QFile mw(QStringLiteral(SRC_DIR "/src/MainWindow.cpp"));
+    QVERIFY2(mw.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 MainWindow.cpp");
+    const QString main = QString::fromUtf8(mw.readAll());
+    mw.close();
+    QVERIFY2(main.contains(QStringLiteral("ov->onNodeExecuted(node, ok)")),
+             "输出查看器必须有执行结果更新入口，否则打开着也不刷新");
+
+    // ③ 报警历史真删库
+    QFile a(QStringLiteral(SRC_DIR "/src/AlarmHistoryDialog.cpp"));
+    QVERIFY2(a.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 AlarmHistoryDialog.cpp");
+    const QString alarm = QString::fromUtf8(a.readAll());
+    a.close();
+    QVERIFY2(alarm.contains(QStringLiteral("clearAlarms")),
+             "报警历史清空必须真删数据库，不能只清表格 UI");
+
+    // ④ 结果表：clearResults 清历史 + 汇总只算可见行
+    QFile rt(QStringLiteral(SRC_DIR "/src/ResultTablePanel.cpp"));
+    QVERIFY2(rt.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 ResultTablePanel.cpp");
+    const QString result = QString::fromUtf8(rt.readAll());
+    rt.close();
+    const int cr = result.indexOf(QStringLiteral("void ResultTablePanel::clearResults"));
+    QVERIFY2(result.mid(cr, 400).contains(QStringLiteral("m_history")),
+             "清结果时必须同步清历史表");
+    const int us = result.indexOf(QStringLiteral("void ResultTablePanel::updateSummary"));
+    QVERIFY2(result.mid(us, 700).contains(QStringLiteral("isHidden")),
+             "汇总必须跳过筛选隐藏行");
+
+    // ⑤ CSV 导出写后检查
+    QFile pf(QStringLiteral(SRC_DIR "/src/PerformancePanel.cpp"));
+    QVERIFY2(pf.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 PerformancePanel.cpp");
+    const QString perf = QString::fromUtf8(pf.readAll());
+    pf.close();
+    const int ex = perf.indexOf(QStringLiteral("void PerformancePanel::exportToCsv"));
+    const int exEnd = perf.indexOf(QStringLiteral("void PerformancePanel::"), ex + 10);
+    const QString exp = perf.mid(ex, exEnd - ex);
+    QVERIFY2(exp.contains(QStringLiteral("QTextStream::Ok")) && exp.contains(QStringLiteral("csv(")),
+             "性能 CSV 必须转义字段并检查写后状态");
 }
 
 void UiGuardsTest::deleteShortcutIgnoredWhileEditingText()

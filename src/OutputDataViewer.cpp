@@ -21,10 +21,10 @@ OutputDataViewer::OutputDataViewer(QWidget *parent)
 
 void OutputDataViewer::setNode(NodeBase *node)
 {
-    if (m_currentNode == node) return;
+    if (m_currentNode == node && m_tabWidget->count() > 0) return;
 
+    clear();   // P7/P8：先清再设——clear() 会把 m_currentNode 置空，顺序反了刚设的就被抹掉
     m_currentNode = node;
-    clear();
 
     if (!node) {
         m_nodeNameLabel->setText(QStringLiteral("未选择节点"));
@@ -65,6 +65,11 @@ void OutputDataViewer::clear()
     m_tabWidget->clear();
     m_portWidgets.clear();
     m_currentNode = nullptr;
+    // P8：状态标签与样式也要复位，否则切到新节点还挂着上一节点的红色"执行失败"
+    if (m_statusLabel) {
+        m_statusLabel->clear();
+        m_statusLabel->setStyleSheet(QString());
+    }
 }
 
 void OutputDataViewer::refresh()
@@ -90,8 +95,10 @@ void OutputDataViewer::onNodeExecuted(NodeBase *node, bool success)
     } else {
         // 失败轮必须清掉上一轮的端口数据（2026-10-26 复核 P3）：原来只改状态标签，
         // 界面上还挂着上一轮的图像与数值，与"本轮失败"直接矛盾。
-        const QList<Port *> ports = m_currentNode->outputPorts();
-        for (int i = 0; i < ports.size(); ++i)
+        // P8：页签来自 namedOutputs()（含 attachedResults 附加结果），必须用同一份清单清，
+        // 否则附加页签还挂着上一轮数据。与 setNode 建页签的口径一致。
+        const int portCount = m_currentNode->namedOutputs().size();
+        for (int i = 0; i < portCount; ++i)
             updatePortData(i, QSharedPointer<DataObject>());
         const QString why = m_currentNode->getParam(QStringLiteral("lastError")).toString();
         m_statusLabel->setText(why.isEmpty() ? QStringLiteral("执行失败")

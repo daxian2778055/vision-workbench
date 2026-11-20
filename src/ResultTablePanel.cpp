@@ -593,6 +593,10 @@ void ResultTablePanel::clearResults()
 {
     m_tree->clear();
     m_rows.clear();
+    // P8：历史页跨流程/新建流程必须一起清，否则上一方案的历史残留（主窗口在
+    // 新流程/载入流程时调的就是本函数）
+    if (m_history)
+        m_history->setRowCount(0);
     updateSummary();
 }
 
@@ -754,8 +758,12 @@ void ResultTablePanel::updateSummary()
     int failed = 0;
     int skipped = 0;
     for (int i = 0; i < m_tree->topLevelItemCount(); ++i) {
+        QTreeWidgetItem *item = m_tree->topLevelItem(i);
+        // P8：筛选隐藏的行不能计入汇总，否则"共 N 个/失败 X"与可见表格对不上
+        if (item->isHidden())
+            continue;
         ++total;
-        const QString st = m_tree->topLevelItem(i)->text(kColStatus);
+        const QString st = item->text(kColStatus);
         if (st == QStringLiteral("失败"))
             ++failed;
         else if (st == QStringLiteral("跳过"))

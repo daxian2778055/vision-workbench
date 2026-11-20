@@ -195,10 +195,24 @@ void ReportDialog::onExport()
     // 显示成乱码（结果表与检测记录两处导出已经这么做了，这里补齐一致）。
     out << QChar(0xFEFF);
     out << QStringLiteral("\u6D41\u7A0B,\u603B\u6570,\u901A\u8FC7,\u5931\u8D25\n");
+    // P8：流程名可能含逗号/引号/换行，必须转义；否则导出的 CSV 列错位
     for (const auto &s : m_stats) {
-        out << s.flowName << ',' << s.total << ',' << s.passed << ',' << s.failed << '\n';
+        QString name = s.flowName;
+        if (name.contains(QLatin1Char('"')) || name.contains(QLatin1Char(','))
+            || name.contains(QLatin1Char('\n'))) {
+            name.replace(QLatin1Char('"'), QStringLiteral("\"\""));
+            name = QLatin1Char('"') + name + QLatin1Char('"');
+        }
+        out << name << ',' << s.total << ',' << s.passed << ',' << s.failed << '\n';
     }
+    out.flush();
+    const bool writeOk = (out.status() == QTextStream::Ok);
     file.close();
+    if (!writeOk) {
+        QMessageBox::warning(this, QStringLiteral("\u5931\u8D25"),
+            QStringLiteral("\u5199\u5165\u62A5\u8868\u65F6\u51FA\u9519\uFF0C\u6587\u4EF6\u53EF\u80FD\u4E0D\u5B8C\u6574"));
+        return;
+    }
     QMessageBox::information(this, QStringLiteral("\u63D0\u793A"),
         QStringLiteral("\u5DF2\u5BFC\u51FA\u5230: %1").arg(path));
 }

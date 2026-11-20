@@ -128,7 +128,12 @@ void PerformancePanel::onNodeExecutionTime(NodeBase *node, qint64 elapsedMs)
 
     NodeStats &stats = m_nodeStats[node];
     stats.nodeName = node->name();
-    stats.nodeType = QString::number(static_cast<int>(node->type()));
+    // P8：表头是"类型"，此前却显示整数枚举值；改为可读分类名
+    static const char *kTypeNames[] = {"图像采集", "图像处理", "形状分析", "测量", "逻辑", "输出"};
+    const int ti = static_cast<int>(node->type());
+    stats.nodeType = (ti >= 0 && ti < 6)
+                         ? QString::fromUtf8(kTypeNames[ti])
+                         : QString::number(ti);
     stats.executionCount++;
     stats.totalTime += elapsedMs;
     stats.minTime = qMin(stats.minTime, elapsedMs);
@@ -238,11 +243,21 @@ void PerformancePanel::exportToCsv(const QString &filePath)
     // 写入表头
     stream << QStringLiteral("算子名称,类型,执行次数,总耗时(ms),平均耗时(ms),最小耗时(ms),最大耗时(ms)\n");
 
+    // P8：CSV 字段必须转义（算子名可能含逗号/引号/换行），否则列结构被破坏
+    auto csv = [](const QString &s) {
+        QString v = s;
+        if (v.contains(QLatin1Char('"')) || v.contains(QLatin1Char(','))
+            || v.contains(QLatin1Char('\n'))) {
+            v.replace(QLatin1Char('"'), QStringLiteral("\"\""));
+            v = QLatin1Char('"') + v + QLatin1Char('"');
+        }
+        return v;
+    };
     // 写入数据
     for (auto it = m_nodeStats.begin(); it != m_nodeStats.end(); ++it) {
         const NodeStats &stats = it.value();
-        stream << stats.nodeName << ","
-               << stats.nodeType << ","
+        stream << csv(stats.nodeName) << ","
+               << csv(stats.nodeType) << ","
                << stats.executionCount << ","
                << stats.totalTime << ","
                << QString::number(stats.averageTime(), 'f', 2) << ","
@@ -259,7 +274,14 @@ void PerformancePanel::exportToCsv(const QString &filePath)
                << "," << record.second << "\n";
     }
 
+    stream.flush();
+    const bool writeOk = (stream.status() == QTextStream::Ok);
     file.close();
+    if (!writeOk) {
+        QMessageBox::warning(this, QStringLiteral("导出失败"),
+                             QStringLiteral("写入性能数据时出错，文件可能不完整: %1").arg(filePath));
+        return;
+    }
     QMessageBox::information(this, QStringLiteral("导出成功"),
                            QStringLiteral("性能数据已导出到: %1").arg(filePath));
 }

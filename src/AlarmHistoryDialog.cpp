@@ -94,6 +94,12 @@ void AlarmHistoryDialog::onClear()
     if (QMessageBox::question(this, QStringLiteral("\u786E\u8BA4"),
                               QStringLiteral("\u786E\u5B9A\u8981\u6E05\u7A7A\u62A5\u8B66\u5386\u53F2\u5417\uFF1F"))
         == QMessageBox::Yes) {
+        // P8：此前只清表格 UI、不删数据库，刷新/重开后全部报警又回来——假清空
+        if (!AppDatabase::instance()->clearAlarms()) {
+            QMessageBox::warning(this, QStringLiteral("\u5931\u8D25"),
+                                 QStringLiteral("\u6E05\u7A7A\u62A5\u8B66\u6570\u636E\u5E93\u5931\u8D25"));
+            return;
+        }
         m_alarmTable->setRowCount(0);
         QMessageBox::information(this, QStringLiteral("\u63D0\u793A"), QStringLiteral("\u62A5\u8B66\u5386\u53F2\u5DF2\u6E05\u7A7A"));
     }

@@ -28,6 +28,7 @@ private slots:
     void testPageVisibilitySplit();     // 图像区「模块结果」/ 底部结果区共用面板的页签裁剪
     void testSpecialFloatValues();      // 平铺分支的 NaN / ±Inf 必须与声明字段路径同口径
     void testHistoryFilterFollowsText(); // 文本筛选必须同时作用于历史结果页
+    void testClearResultsAlsoClearsHistory(); // P8：新建/载入流程清结果时历史不能残留
 };
 
 void ResultTableTest::testInPlaceUpdateAndCsv()
@@ -559,6 +560,23 @@ void ResultTableTest::testHistoryFilterFollowsText()
             ++restored;
     }
     QCOMPARE(restored, total);
+}
+
+void ResultTableTest::testClearResultsAlsoClearsHistory()
+{
+    ResultTablePanel panel;
+    QVariantMap vars;
+    vars.insert(QStringLiteral("v"), 1);
+    panel.setModuleResult(1, QStringLiteral("模块A"), true, 5, vars);
+    panel.setModuleResult(2, QStringLiteral("模块B"), false, 7, QVariantMap());
+    auto *history = panel.findChild<QTableWidget *>();
+    // 历史表是唯一的 QTableWidget（主结果是 QTreeWidget）
+    QVERIFY(history);
+    const int before = history->rowCount();
+    QVERIFY2(before >= 2, "前置条件：应写入 2 条历史");
+
+    panel.clearResults();
+    QCOMPARE(history->rowCount(), 0);   // P8：此前只清当前结果树，历史残留上一方案
 }
 
 QTEST_MAIN(ResultTableTest)
