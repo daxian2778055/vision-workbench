@@ -7734,6 +7734,23 @@ void MainWindow::setupDockWidgets()
 
 void MainWindow::switchToDesignMode()
 {
+    // P6：运行中切回设计态原本只隐藏运行界面，流程仍在后台跑、广播仍推给隐藏的 view，
+    // 用户误以为已停止。明确询问：停止运行再切（安全）或保持运行（应急调试）。
+    if (anyFlowRunning()) {
+        QMessageBox box(QMessageBox::Question, tr("流程正在运行"),
+                        tr("切换到设计模式后运行界面将不可见，但流程仍在后台执行。"
+                           "是否先停止所有流程？"),
+                        QMessageBox::NoButton, this);
+        QPushButton *stopBtn = box.addButton(tr("停止并切换"), QMessageBox::AcceptRole);
+        QPushButton *keepBtn = box.addButton(tr("保持运行切换"), QMessageBox::ActionRole);
+        box.addButton(QMessageBox::Cancel);
+        box.setDefaultButton(stopBtn);
+        box.exec();
+        if (box.clickedButton() == stopBtn)
+            onStopExecution();
+        else if (box.clickedButton() != keepBtn)
+            return;
+    }
     VFP_DEBUG << "Switching to Design Mode";
     // 运行模式把「运行界面 / 图像显示」做成最大化浮窗；回设计态必须先把它们还原成停靠，
     // 否则设计界面会被已经最大化的浮窗挡住（旧实现只 hide 运行视图，图像浮窗仍盖在主窗口上）。

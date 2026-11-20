@@ -79,6 +79,7 @@ void p2CanvasEditGuards();              // Delete 删连线 / 右键进撤销 / 
 void p3ModuleEditorGuards();            // 多行/浏览按钮标脏、判断条件重算、回滚回填（源码守卫）
 void p4CommDomainGuards();              // 工具条按协议分发、内联焦点守卫、配置失败回滚、空指针（源码守卫）
 void p5CameraGuards();                  // 像素格式局部更新、设备占用闸、刷新按钮回填、状态指示（源码守卫）
+void p6RuntimeDesignerGuards();         // bindType 保留、保存失败、撤销覆盖、切态询问（源码守卫）
 void runtimeDesignerHasOfficialDragAndClipboard();
 void runtimeDesignerHasOfficialSectionsAndAlign();
 void runtimeDesignerAlignHCenterAndRight();
@@ -666,6 +667,61 @@ void UiGuardsTest::p5CameraGuards()
     QVERIFY2(node.contains(QStringLiteral("cameraStateLabel"))
              && node.contains(QStringLiteral("cameraStatusChanged")),
              "MVS 面板必须有相机连接状态指示并跟随状态信号");
+}
+
+void UiGuardsTest::p6RuntimeDesignerGuards()
+{
+    QFile f(QStringLiteral(SRC_DIR "/src/RuntimeInterfaceDesigner.cpp"));
+    QVERIFY2(f.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 RuntimeInterfaceDesigner.cpp");
+    const QString src = QString::fromUtf8(f.readAll());
+    f.close();
+
+    // ① 参数设置类控件 bindType 不被空下拉覆盖
+    const int fn = src.indexOf(QStringLiteral("void RuntimeInterfaceDesigner::onPropertyEdited"));
+    const int next = src.indexOf(QStringLiteral("void RuntimeInterfaceDesigner::"), fn + 10);
+    const QString body = src.mid(fn, next - fn);
+    QVERIFY2(body.contains(QStringLiteral("RuntimeControlType::ParamSetting"))
+             && body.contains(QStringLiteral("return;")),
+             "参数设置类控件写回后必须提前返回，不能用空 bindTypeCombo 覆盖 node");
+
+    // ② applyAndClose 检查保存失败
+    const int apply = src.indexOf(QStringLiteral("void RuntimeInterfaceDesigner::applyAndClose"));
+    QVERIFY2(src.mid(apply, 400).contains(QStringLiteral("saveToFile"))
+             && src.mid(apply, 400).contains(QStringLiteral("QMessageBox")),
+             "应用并关闭必须检查写盘失败并提示，不能吞掉错误");
+
+    // ③ 页重排/页改名进撤销栈
+    const int mv = src.indexOf(QStringLiteral("void RuntimeInterfaceDesigner::movePage"));
+    QVERIFY2(src.mid(mv, 350).contains(QStringLiteral("pushUndo")),
+             "页重排必须进撤销栈");
+    const int rn = src.indexOf(QStringLiteral("void RuntimeInterfaceDesigner::renamePage"));
+    QVERIFY2(src.mid(rn, 800).contains(QStringLiteral("pushUndo")),
+             "页改名必须进撤销栈");
+
+    // ④ 多图像名称/绑定编辑进撤销
+    QVERIFY2(src.count(QStringLiteral("markPropertyEdit();   // P6")) >= 2,
+             "多图像画面名与绑定编辑都要进属性撤销栈");
+
+    // ⑤ fromJson 失败不改状态（RuntimeInterface.cpp）
+    QFile r(QStringLiteral(SRC_DIR "/src/RuntimeInterface.cpp"));
+    QVERIFY2(r.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 RuntimeInterface.cpp");
+    const QString ri = QString::fromUtf8(r.readAll());
+    r.close();
+    const int lj = ri.indexOf(QStringLiteral("bool RuntimeInterface::fromJson"));
+    const int ljEnd = ri.indexOf(QStringLiteral("bool RuntimeInterface::saveToFile"), lj);
+    const QString ljBody = ri.mid(lj, ljEnd - lj);
+    QVERIFY2(ljBody.contains(QStringLiteral("RuntimeInterface parsed"))
+             && ljBody.contains(QStringLiteral("pages.swap")),
+             "fromJson 必须解析到临时对象、成功后才交换，失败不破坏现有布局");
+
+    // ⑥ 运行中切设计态有询问
+    QFile m(QStringLiteral(SRC_DIR "/src/MainWindow.cpp"));
+    QVERIFY2(m.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 MainWindow.cpp");
+    const QString mw = QString::fromUtf8(m.readAll());
+    m.close();
+    const int sd = mw.indexOf(QStringLiteral("void MainWindow::switchToDesignMode"));
+    QVERIFY2(mw.mid(sd, 900).contains(QStringLiteral("anyFlowRunning")),
+             "运行中切设计态必须先询问停止/保持运行");
 }
 
 void UiGuardsTest::deleteShortcutIgnoredWhileEditingText()

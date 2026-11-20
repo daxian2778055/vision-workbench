@@ -7,6 +7,7 @@
 #include <QCryptographicHash>
 #include <QRandomGenerator>
 #include <QPair>
+#include <utility>
 
 QString runtimeControlTypeName(RuntimeControlType type)
 {
@@ -1030,9 +1031,12 @@ bool RuntimeInterface::fromJson(const QJsonObject &json)
     }
     m_loadWarning.clear();
 
-    pages.clear();
-    subPages.clear();
-    currentPageIndex = 0;
+    // P6：契约是"任何失败都不改动现有状态"。全部解析到临时对象，成功后再交换；
+    // 原实现先 pages.clear() 再校验，失败时把调用对象的布局破坏成空。
+    RuntimeInterface parsed;
+    // 默认构造自带一页保底；解析前必须清掉，否则加载的页会被追加到保底页后面多出一页
+    parsed.pages.clear();
+    parsed.subPages.clear();
 
     // 项目未上线，只保留当前多页格式，不做旧单页格式兼容（2026-11-09 用户口径）
     if (!json.contains("pages") || !json.value(QStringLiteral("pages")).isArray())
@@ -1041,35 +1045,41 @@ bool RuntimeInterface::fromJson(const QJsonObject &json)
     for (const QJsonValue &v : pageArr) {
         RuntimeInterfacePage p;
         if (p.fromJson(v.toObject()))
-            pages.append(p);
+            parsed.pages.append(p);
     }
-    currentPageIndex = json["currentPage"].toInt(0);
+    parsed.currentPageIndex = json["currentPage"].toInt(0);
     const QJsonObject subObj = json["subPages"].toObject();
     for (auto it = subObj.constBegin(); it != subObj.constEnd(); ++it) {
         RuntimeInterfacePage p;
         if (p.fromJson(it.value().toObject()))
-            subPages.insert(it.key(), p);
+            parsed.subPages.insert(it.key(), p);
     }
     const QJsonObject cv = json["canvas"].toObject();
-    canvas.width = cv["width"].toInt(1200);
-    canvas.height = cv["height"].toInt(760);
-    if (canvas.width < 200) canvas.width = 200;
-    if (canvas.height < 150) canvas.height = 150;
-    canvas.showGrid = cv["showGrid"].toBool(false);
-    canvas.gridColor = cv["gridColor"].toString(QStringLiteral("#1e1e1e"));
-    canvas.bgColor = cv["bgColor"].toString(QStringLiteral("#383838"));
+    parsed.canvas.width = cv["width"].toInt(1200);
+    parsed.canvas.height = cv["height"].toInt(760);
+    if (parsed.canvas.width < 200) parsed.canvas.width = 200;
+    if (parsed.canvas.height < 150) parsed.canvas.height = 150;
+    parsed.canvas.showGrid = cv["showGrid"].toBool(false);
+    parsed.canvas.gridColor = cv["gridColor"].toString(QStringLiteral("#1e1e1e"));
+    parsed.canvas.bgColor = cv["bgColor"].toString(QStringLiteral("#383838"));
 
-    // 结构自检：环/超深是致命错误，绝不能带着这样的引用图进入运行期。
-    // 清成可编辑空布局（而不是保留半初始化状态），warning 说明原因。
-    if (!validateStructure()) {
-        pages.clear();
-        subPages.clear();
-        currentPageIndex = 0;
-        ensurePage();
+    // 结构自检：环/超深是致命错误，绝不能带着这样的引用图进入运行期
+    if (!parsed.validateStructure()) {
+        m_loadWarning = parsed.m_loadWarning.isEmpty()
+                            ? QStringLiteral("运行界面布局结构校验失败（成环或层级过深）")
+                            : parsed.m_loadWarning;
         return false;
     }
-    ensurePage();
-    return !pages.isEmpty();
+    parsed.ensurePage();
+    if (parsed.pages.isEmpty())
+        return false;
+    pages.swap(parsed.pages);
+    subPages.swap(parsed.subPages);
+    std::swap(currentPageIndex, parsed.currentPageIndex);
+    canvas = parsed.canvas;
+    // 可修复问题（悬空引用清理）的 warning 由 validateStructure 记在 parsed 上，成功后要传递
+    m_loadWarning = parsed.m_loadWarning;
+    return true;
 }
 
 bool RuntimeInterface::saveToFile(const QString &fileName) const

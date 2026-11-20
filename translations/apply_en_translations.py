@@ -378,6 +378,16 @@ EN = {
         "A flow is running. Changing camera binding or parameters may disrupt image capture. "
         "Stop the flow first if possible. Open camera management anyway?",
     "仍然打开": "Open Anyway",
+    # P6：设计态切换与保存失败
+    "停止并切换": "Stop and Switch",
+    "保持运行切换": "Switch Keeping Running",
+    "切换到设计模式后运行界面将不可见，但流程仍在后台执行。是否先停止所有流程？":
+        "After switching to Design Mode the runtime screen will be hidden, but flows keep "
+        "running in the background. Stop all flows first?",
+    "保存失败": "Save Failed",
+    "运行界面布局写入失败（%1）。\n请检查程序目录是否可写；设计器保持打开，修改未丢失。":
+        "Failed to write the runtime layout (%1).\n"
+        "Check that the program directory is writable; the designer stays open and edits are kept.",
 }
 
 

@@ -1873,6 +1873,28 @@ Node parameters now use relative paths; save the scheme to apply.</translation>
         <source>仍然打开</source>
         <translation>Open Anyway</translation>
     </message>
+    <message>
+        <source>停止并切换</source>
+        <translation>Stop and Switch</translation>
+    </message>
+    <message>
+        <source>保持运行切换</source>
+        <translation>Switch Keeping Running</translation>
+    </message>
+    <message>
+        <source>切换到设计模式后运行界面将不可见，但流程仍在后台执行。是否先停止所有流程？</source>
+        <translation>After switching to Design Mode the runtime screen will be hidden, but flows keep running in the background. Stop all flows first?</translation>
+    </message>
+    <message>
+        <source>保存失败</source>
+        <translation>Save Failed</translation>
+    </message>
+    <message>
+        <source>运行界面布局写入失败（%1）。
+请检查程序目录是否可写；设计器保持打开，修改未丢失。</source>
+        <translation>Failed to write the runtime layout (%1).
+Check that the program directory is writable; the designer stays open and edits are kept.</translation>
+    </message>
 </context>
 <context>
     <name>ProjectManager</name>

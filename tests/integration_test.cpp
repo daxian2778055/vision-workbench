@@ -155,6 +155,7 @@ private slots:
 
     // 运行界面（多页/结果表格/IO状态）
     void testRuntimeInterfaceMultiPageRoundTrip();
+    void testRuntimeInterfaceFromJsonFailureKeepsState();   // P6：失败加载不得破坏现有布局
     void testRuntimeInterfaceRejectsLegacyFormat();
     void testRuntimeControlTypeNames();
 
@@ -2245,6 +2246,32 @@ void IntegrationTest::testAppContainerSandboxLaunch()
     QVERIFY2(imported, qPrintable(runError));
     QVERIFY2(out.contains(QStringLiteral("ac-import-ok")),
              qPrintable(QStringLiteral("容器内解释器/import 失败: out=%1 err=%2").arg(out, err)));
+}
+
+void IntegrationTest::testRuntimeInterfaceFromJsonFailureKeepsState()
+{
+    RuntimeInterface layout;
+    layout.page(0)->pageName = QStringLiteral("原始页");
+    layout.page(0)->addControl(RuntimeControlType::ValueDisplay, QRect(5, 5, 100, 40));
+    const int beforePages = layout.pages.size();
+    const int beforeControls = layout.page(0)->controls.size();
+    const QString beforeName = layout.page(0)->pageName;
+
+    // ① 版本过高：早就该不改状态
+    QJsonObject tooNew;
+    tooNew[QStringLiteral("schemaVersion")] = 9999;
+    QVERIFY(!layout.fromJson(tooNew));
+    QCOMPARE(layout.pages.size(), beforePages);
+    QCOMPARE(layout.page(0)->controls.size(), beforeControls);
+    QCOMPARE(layout.page(0)->pageName, beforeName);
+
+    // ② 缺 pages：P6 修前会先 pages.clear() 再拒收，把现有布局清空
+    QJsonObject missing;
+    missing[QStringLiteral("schemaVersion")] = 1;
+    QVERIFY(!layout.fromJson(missing));
+    QCOMPARE(layout.pages.size(), beforePages);
+    QCOMPARE(layout.page(0)->controls.size(), beforeControls);
+    QCOMPARE(layout.page(0)->pageName, beforeName);
 }
 
 void IntegrationTest::testRuntimeInterfaceMultiPageRoundTrip()

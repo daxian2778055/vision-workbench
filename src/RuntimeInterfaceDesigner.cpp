@@ -1697,8 +1697,11 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
             RuntimeControl *c = selectedControl();
             if (!c || c->type != RuntimeControlType::MultiImage) return;
             if (row < 0 || row >= c->imagePanels.size()) return;
-            if (auto *it = m_multiTable->item(row, 0))
+            if (auto *it = m_multiTable->item(row, 0)) {
+                if (c->imagePanels[row].name == it->text()) return;
+                markPropertyEdit();   // P6：多图像画面名编辑纳入属性撤销栈
                 c->imagePanels[row].name = it->text();
+            }
             rebuildCanvas();
         });
     }
@@ -2217,7 +2220,10 @@ void RuntimeInterfaceDesigner::renamePage()
                                                QStringLiteral("页面名称:"), QLineEdit::Normal,
                                                pg->pageName, &ok);
     if (!ok) return;
-    pg->pageName = name.trimmed().isEmpty() ? pg->pageName : name.trimmed();
+    const QString finalName = name.trimmed().isEmpty() ? pg->pageName : name.trimmed();
+    if (finalName == pg->pageName) return;
+    pushUndo();   // P6：页改名纳入撤销栈（按钮动作的页名引用也随快照回退）
+    pg->pageName = finalName;
     refreshPageList();
 }
 
@@ -2557,7 +2563,14 @@ void RuntimeInterfaceDesigner::loadLayout()
 
 void RuntimeInterfaceDesigner::applyAndClose()
 {
-    m_layout.saveToFile(defaultLayoutPath());
+    // P6：写盘失败不能被吞掉否则设计器已关、运行态还是旧布局且无任何提示
+    if (!m_layout.saveToFile(defaultLayoutPath())) {
+        QMessageBox::warning(this, QStringLiteral("保存失败"),
+                             QStringLiteral("运行界面布局写入失败（%1）。\n"
+                                            "请检查程序目录是否可写；设计器保持打开，"
+                                            "修改未丢失。").arg(defaultLayoutPath()));
+        return;
+    }
     accept();
 }
 
@@ -3015,6 +3028,7 @@ void RuntimeInterfaceDesigner::movePage(int delta)
     const int n = m_layout.pages.size();
     const int target = m_layout.currentPageIndex + delta;
     if (n <= 1 || target < 0 || target >= n) return;
+    pushUndo();   // P6：页重排是结构变更，必须能 Ctrl+Z 撤销
     m_layout.pages.swapItemsAt(m_layout.currentPageIndex, target);
     m_layout.currentPageIndex = target;
     refreshPageList();                     // currentRowChanged → onPageSelected 重挂画布
@@ -3586,7 +3600,10 @@ void RuntimeInterfaceDesigner::refreshPropertyPanel()
                     RuntimeControl *c2 = selectedControl();
                     if (!c2 || c2->type != RuntimeControlType::MultiImage) return;
                     if (i >= c2->imagePanels.size()) return;
-                    c2->imagePanels[i].bindKey = combo->currentData().toString();
+                    const QString newKey = combo->currentData().toString();
+                    if (c2->imagePanels[i].bindKey == newKey) return;
+                    markPropertyEdit();   // P6：多图像画面绑定编辑纳入属性撤销栈
+                    c2->imagePanels[i].bindKey = newKey;
                     rebuildCanvas();
                 });
             }
@@ -3811,6 +3828,16 @@ void RuntimeInterfaceDesigner::onPropertyEdited()
     if (ctrl->type == RuntimeControlType::ResultTable) {
         // 列由"＋添加列/－删除列"维护（见 onColumnAdd/onColumnDel），此处只同步行数
         ctrl->maxRows = m_tableMaxRows->value();
+        m_canvas->refreshControl(m_selected);
+        return;
+    }
+
+    // P6：ParamSetting/Switch/ComboBox 在上面已固定 bindType="node" 并写了 bindKey。
+    // refreshPropertyPanel 不给这三类填 m_bindTypeCombo（落空下拉），若继续走通用覆盖会把
+    // "node" 冲成空串 → 绑定体检 staleBindings 永失效。这里直接保留已写好的值。
+    if (ctrl->type == RuntimeControlType::ParamSetting
+        || ctrl->type == RuntimeControlType::SwitchControl
+        || ctrl->type == RuntimeControlType::ComboBox) {
         m_canvas->refreshControl(m_selected);
         return;
     }
