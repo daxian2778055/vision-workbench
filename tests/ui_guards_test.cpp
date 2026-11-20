@@ -80,6 +80,7 @@ void p3ModuleEditorGuards();            // 多行/浏览按钮标脏、判断条
 void p4CommDomainGuards();              // 工具条按协议分发、内联焦点守卫、配置失败回滚、空指针（源码守卫）
 void p5CameraGuards();                  // 像素格式局部更新、设备占用闸、刷新按钮回填、状态指示（源码守卫）
 void p6RuntimeDesignerGuards();         // bindType 保留、保存失败、撤销覆盖、切态询问（源码守卫）
+void p7TrainingToolGuards();            // 命令预览刷新、产物限定目录、异常退出、标注类别/清空确认（源码守卫）
 void runtimeDesignerHasOfficialDragAndClipboard();
 void runtimeDesignerHasOfficialSectionsAndAlign();
 void runtimeDesignerAlignHCenterAndRight();
@@ -722,6 +723,49 @@ void UiGuardsTest::p6RuntimeDesignerGuards()
     const int sd = mw.indexOf(QStringLiteral("void MainWindow::switchToDesignMode"));
     QVERIFY2(mw.mid(sd, 900).contains(QStringLiteral("anyFlowRunning")),
              "运行中切设计态必须先询问停止/保持运行");
+}
+
+void UiGuardsTest::p7TrainingToolGuards()
+{
+    QFile t(QStringLiteral(SRC_DIR "/src/TrainingRunnerDialog.cpp"));
+    QVERIFY2(t.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 TrainingRunnerDialog.cpp");
+    const QString tr = QString::fromUtf8(t.readAll());
+    t.close();
+    // ① 命令预览随所有参数控件刷新
+    QVERIFY2(tr.count(QStringLiteral("&TrainingRunnerDialog::refreshCommand")) >= 6,
+             "训练参数控件变化必须刷新命令预览（看到=执行）");
+    // ② Python 改动使环境结论失效
+    QVERIFY2(tr.contains(QStringLiteral("m_envOk = false")),
+             "改 Python 路径后环境探测结论必须失效");
+    // ③ 产物发现限定输出目录 + best*.onnx，且有重新扫描按钮
+    const int dis = tr.indexOf(QStringLiteral("QString TrainingRunnerDialog::discoverOnnx"));
+    const int disEnd = tr.indexOf(QStringLiteral("QString TrainingRunnerDialog::resolveClasses"), dis);
+    QVERIFY2(tr.mid(dis, disEnd - dis).contains(QStringLiteral("YOLOX_outputs"))
+             && tr.mid(dis, disEnd - dis).contains(QStringLiteral("best*.onnx")),
+             "产物发现只能扫训练输出目录的 best*.onnx，不能把历史模型误报为本次产物");
+    QVERIFY2(tr.contains(QStringLiteral("重新扫描")),
+             "执行导出命令后应有重新扫描产物的入口");
+
+    // ④ 异常退出区分
+    QFile r(QStringLiteral(SRC_DIR "/src/TrainingRunner.cpp"));
+    QVERIFY2(r.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 TrainingRunner.cpp");
+    const QString runner = QString::fromUtf8(r.readAll());
+    r.close();
+    QVERIFY2(runner.contains(QStringLiteral("CrashExit")),
+             "训练进程异常退出必须有独立提示");
+
+    // ⑤ 标注器：清空确认 + 类别下拉改选中框 + 图像过滤统一
+    QFile b(QStringLiteral(SRC_DIR "/src/BoxAnnotatorDialog.cpp"));
+    QVERIFY2(b.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 BoxAnnotatorDialog.cpp");
+    const QString ann = QString::fromUtf8(b.readAll());
+    b.close();
+    QVERIFY2(ann.contains(QStringLiteral("onClassComboChanged")),
+             "选中已有框后切类别必须改该框，不能只能删了重画");
+    const int clr = ann.indexOf(QStringLiteral("m_clearBtn = new QPushButton"));
+    QVERIFY2(ann.mid(clr, 600).contains(QStringLiteral("QMessageBox::question")),
+             "清空本图（立即写空 txt）按钮点击必须先确认，但确认不能进槽（会阻塞程序化调用）");
+    QVERIFY2(ann.contains(QStringLiteral("YoloAnnotation::imageFilters()")),
+             "标注器图像过滤必须与 VOC 工具链一致");
 }
 
 void UiGuardsTest::deleteShortcutIgnoredWhileEditingText()

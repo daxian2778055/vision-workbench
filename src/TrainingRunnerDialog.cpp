@@ -52,6 +52,11 @@ TrainingRunnerDialog::TrainingRunnerDialog(QWidget *parent) : QDialog(parent)
                          QStringLiteral("Ultralytics YOLOv8/v11（AGPL）")});
     connect(m_trainer, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &TrainingRunnerDialog::refreshCommand);
+    // P7：命令预览读的是下面所有这些控件，任一改动都必须刷新——否则"看到的命令"和
+    // "实际执行的命令"不一致（此前只有训练器下拉变了才刷新）。
+    auto refreshOnEdit = [this](QLineEdit *ed) {
+        connect(ed, &QLineEdit::textChanged, this, &TrainingRunnerDialog::refreshCommand);
+    };
     form->addRow(QStringLiteral("训练器"), m_trainer);
 
     auto *yoloxRow = new QHBoxLayout();
@@ -139,6 +144,15 @@ TrainingRunnerDialog::TrainingRunnerDialog(QWidget *parent) : QDialog(parent)
     m_artifactLabel = new QLabel(QStringLiteral("尚未发现 ONNX 模型"));
     m_artifactLabel->setWordWrap(true);
     artifactHead->addWidget(m_artifactLabel, 1);
+    // P7：在训练机上手动执行导出命令后，用户需要能重新扫描产物而不必重训或手工选文件
+    auto *rescanBtn = new QPushButton(QStringLiteral("重新扫描"));
+    connect(rescanBtn, &QPushButton::clicked, this, [this]() {
+        refreshArtifacts();
+        appendLog(m_lastOnnx.isEmpty()
+                      ? QStringLiteral("[产物] 仍未发现 best*.onnx（检查 runs/ 或 YOLOX_outputs/）")
+                      : QStringLiteral("[产物] 已发现：%1").arg(m_lastOnnx));
+    });
+    artifactHead->addWidget(rescanBtn);
     auto *chooseOnnx = new QPushButton(QStringLiteral("选择 ONNX…"));
     connect(chooseOnnx, &QPushButton::clicked, this, &TrainingRunnerDialog::onChooseOnnx);
     artifactHead->addWidget(chooseOnnx);
@@ -199,10 +213,34 @@ TrainingRunnerDialog::TrainingRunnerDialog(QWidget *parent) : QDialog(parent)
     });
 
     loadSettings();
-    refreshCommand();
     m_python->setText(m_python->text().isEmpty()
                           ? QStringLiteral("C:\\YOLOX\\.venv\\Scripts\\python.exe")
                           : m_python->text());
+
+    // P7：所有参与 buildProgram/buildArgs/buildExportCommand 的控件都接刷新，
+    // 放在 loadSettings 之后避免初始化阶段的无效刷新。
+    refreshOnEdit(m_python);
+    refreshOnEdit(m_yoloxDir);
+    refreshOnEdit(m_expOrWeights);
+    refreshOnEdit(m_ckpt);
+    refreshOnEdit(m_extra);
+    connect(m_epochs, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, &TrainingRunnerDialog::refreshCommand);
+    connect(m_imgsz, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, &TrainingRunnerDialog::refreshCommand);
+    connect(m_batch, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, &TrainingRunnerDialog::refreshCommand);
+    connect(m_device, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &TrainingRunnerDialog::refreshCommand);
+    // P7：Python 路径一改，环境探测结论立即失效（此前探测绿了以后改成无效路径仍可开训）
+    connect(m_python, &QLineEdit::textChanged, this, [this]() {
+        m_envOk = false;
+        if (m_envLabel) {
+            m_envLabel->setText(QStringLiteral("Python 路径已修改，请重新检测环境"));
+            m_envLabel->setStyleSheet(QStringLiteral("color: #FF9800;"));
+        }
+    });
+    refreshCommand();
     // 无产物前不允许回填（构造期不扫描目录，避免大目录拖慢开窗）
     m_detectBtn->setEnabled(false);
     m_countBtn->setEnabled(false);
@@ -482,21 +520,32 @@ QString TrainingRunnerDialog::discoverOnnx() const
     const QString work = m_yoloxDir->text().trimmed();
     if (work.isEmpty() || !QDir(work).exists())
         return QString();
-    QDirIterator it(work, QStringList{QStringLiteral("*.onnx")},
-                    QDir::Files, QDirIterator::Subdirectories);
+    // P7：只认训练产物目录 runs/（Ultralytics）与 YOLOX_outputs/（YOLOX）下的
+    // best*.onnx。此前递归全目录扫任意 *.onnx，会把工作目录里的历史/无关模型当成
+    // 本次训练产物，训练失败时误报"已发现 ONNX"。
+    QStringList roots;
+    for (const QString &sub : {QStringLiteral("runs"), QStringLiteral("YOLOX_outputs")}) {
+        const QString dir = QDir(work).filePath(sub);
+        if (QDir(dir).exists())
+            roots << dir;
+    }
     QString best;
     qint64 bestMtime = -1;
     int scanned = 0;
-    while (it.hasNext() && scanned < 5000) {
-        const QString path = it.next();
-        const QFileInfo fi(path);
-        if (!fi.isFile())
-            continue;
-        ++scanned;
-        const qint64 mt = fi.lastModified().toMSecsSinceEpoch();
-        if (mt > bestMtime) {
-            bestMtime = mt;
-            best = QDir::toNativeSeparators(path);
+    for (const QString &root : roots) {
+        QDirIterator it(root, QStringList{QStringLiteral("best*.onnx")},
+                        QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext() && scanned < 5000) {
+            const QString path = it.next();
+            const QFileInfo fi(path);
+            if (!fi.isFile())
+                continue;
+            ++scanned;
+            const qint64 mt = fi.lastModified().toMSecsSinceEpoch();
+            if (mt > bestMtime) {
+                bestMtime = mt;
+                best = QDir::toNativeSeparators(path);
+            }
         }
     }
     return best;

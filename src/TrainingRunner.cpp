@@ -94,9 +94,14 @@ void TrainingRunner::start(const QString &program, const QStringList &args, cons
                     m_killTimer->stop();   // 本趟结束，别让强杀定时器留到下一趟
                 m_killTarget.clear();
                 const bool ok = (status == QProcess::NormalExit && code == 0);
+                // P7：异常退出（崩溃/被系统杀掉）与正常非零退出必须区分，现场才能诊断
                 const QString msg = m_cancelRequested
                                         ? QStringLiteral("已取消（进程已终止）")
-                                        : QStringLiteral("进程结束：exit=%1").arg(code);
+                                        : (status == QProcess::CrashExit
+                                               ? QStringLiteral("异常退出：训练进程崩溃或被系统终止（exit=%1）").arg(code)
+                                               : (code != 0
+                                                      ? QStringLiteral("训练失败：进程返回非零 exit=%1").arg(code)
+                                                      : QStringLiteral("进程正常结束：exit=0")));
                 emit finished(ok && !m_cancelRequested, msg);
             });
 

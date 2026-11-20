@@ -224,6 +224,9 @@ BoxAnnotatorDialog::BoxAnnotatorDialog(const QString &dir, QWidget *parent) : QD
     auto *rightLayout = new QVBoxLayout(right);
     rightLayout->addWidget(new QLabel(QStringLiteral("类别")));
     m_classCombo = new QComboBox();
+    // P7：选中已有框后切类别直接改该框（此前下拉完全没连接，只能删了重画）
+    connect(m_classCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &BoxAnnotatorDialog::onClassComboChanged);
     rightLayout->addWidget(m_classCombo);
     rightLayout->addWidget(new QLabel(QStringLiteral("本图标注")));
     m_boxList = new QListWidget();
@@ -236,7 +239,19 @@ BoxAnnotatorDialog::BoxAnnotatorDialog(const QString &dir, QWidget *parent) : QD
     connect(saveBtn, &QPushButton::clicked, this, &BoxAnnotatorDialog::saveCurrentImage);
     rightLayout->addWidget(saveBtn);
     m_clearBtn = new QPushButton(QStringLiteral("清空本图"));
-    connect(m_clearBtn, &QPushButton::clicked, this, &BoxAnnotatorDialog::onClearImage);
+    // P7：确认放在"用户点按钮"这一层，不放进 onClearImage 槽——测试/程序化调用
+    // 该槽（如保存失败回滚用例）不应被无头环境的模态框阻塞。
+    connect(m_clearBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_boxes.isEmpty()
+            && QMessageBox::question(this, QStringLiteral("清空确认"),
+                                     QStringLiteral("确定清空本图的全部 %1 个标注框吗？\n"
+                                                    "此操作会立即写入磁盘，界面不可撤销。")
+                                         .arg(m_boxes.size()),
+                                     QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
+                   != QMessageBox::Yes)
+            return;
+        onClearImage();
+    });
     rightLayout->addWidget(m_clearBtn);
     right->setMinimumWidth(240);
     split->addWidget(right);
@@ -281,8 +296,9 @@ void BoxAnnotatorDialog::reloadImages()
         m_classCombo->addItem(n);
 
     const QDir dir(m_dir);
-    const QStringList filters{QStringLiteral("*.png"), QStringLiteral("*.jpg"),
-                              QStringLiteral("*.jpeg"), QStringLiteral("*.bmp")};
+    // P7：与 YoloAnnotation::imageFilters() 对齐——VOC 导入/导出认 tif/tiff，
+    // 标注器列表却看不到它们，导致这些图无法标注（此前只列 png/jpg/jpeg/bmp）。
+    const QStringList filters{YoloAnnotation::imageFilters()};
     m_images = dir.entryList(filters, QDir::Files, QDir::Name);
     for (const QString &name : m_images)
         m_imageList->addItem(name);
@@ -428,6 +444,32 @@ void BoxAnnotatorDialog::onBoxSelected(int index)
     if (m_boxList && m_boxList->currentRow() != index && index >= 0
         && index < m_boxList->count())
         m_boxList->setCurrentRow(index);
+}
+
+void BoxAnnotatorDialog::onClassComboChanged(int index)
+{
+    if (index < 0 || !m_classCombo || index >= m_classCombo->count())
+        return;
+    const int row = m_boxList ? m_boxList->currentRow() : -1;
+    const int sel = (row >= 0 && row < m_boxes.size()) ? row : m_canvas->selectedIndex();
+    if (sel < 0 || sel >= m_boxes.size())
+        return;   // 没有选中框：只是切换"新框默认类别"，不改已有标注
+    const QString cls = m_classCombo->itemText(index);
+    const int newId = index;   // classes.txt 行序即 classId（reloadImages 按序 addItem）
+    if (cls.isEmpty() || m_boxes[sel].classId == newId)
+        return;
+    const QVector<YoloBoxLabel> snapshot = m_boxes;
+    m_boxes[sel].classId = newId;
+    m_canvas->setBoxes(m_boxes, m_classNames);
+    refreshBoxList();
+    if (!saveCurrentImage()) {
+        m_boxes = snapshot;
+        m_canvas->setBoxes(m_boxes, m_classNames);
+        refreshBoxList();
+        m_status->setText(QStringLiteral("保存失败，已撤回这次类别修改：%1").arg(m_currentPath));
+    } else {
+        m_status->setText(QStringLiteral("已将选中框类别改为「%1」").arg(cls));
+    }
 }
 
 void BoxAnnotatorDialog::onDeleteBox()

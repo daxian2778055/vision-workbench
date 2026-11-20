@@ -73,6 +73,7 @@ private slots:
     void onImageChanged(int row);
     void onBoxDrawn(const QRectF &px, bool shift);
     void onBoxSelected(int index);
+    void onClassComboChanged(int index);   ///< P7：选中已有框时切类别，直接改该框类别
     void onDeleteBox();
     void onClearImage();
 
