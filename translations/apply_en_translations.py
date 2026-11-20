@@ -372,6 +372,12 @@ EN = {
     "逻辑与控制": "Logic and Control",
     "结果输出": "Result Output",
     "深度学习": "Deep Learning",
+    # P5：相机管理中运行态软警告
+    "流程正在运行": "Flow Is Running",
+    "有流程正在运行。修改相机绑定或参数可能导致取图异常。建议先停止流程再修改。是否继续打开相机管理？":
+        "A flow is running. Changing camera binding or parameters may disrupt image capture. "
+        "Stop the flow first if possible. Open camera management anyway?",
+    "仍然打开": "Open Anyway",
 }
 
 

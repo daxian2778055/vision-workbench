@@ -4764,6 +4764,19 @@ void MainWindow::onExit()
 
 void MainWindow::onManageGlobalCameras()
 {
+    // P5：运行中改相机映射/参数会影响正在取图的节点——软提示（不硬拦，现场可能需要热切换）
+    if (anyFlowRunning()) {
+        QMessageBox box(QMessageBox::Warning, tr("流程正在运行"),
+                        tr("有流程正在运行。修改相机绑定或参数可能导致取图异常。"
+                           "建议先停止流程再修改。是否继续打开相机管理？"),
+                        QMessageBox::NoButton, this);
+        QPushButton *yes = box.addButton(tr("仍然打开"), QMessageBox::AcceptRole);
+        box.addButton(QMessageBox::Cancel);
+        box.setDefaultButton(yes);
+        box.exec();
+        if (box.clickedButton() != yes)
+            return;
+    }
     // 管理全局相机（非模态：开着相机管理也能继续操作主界面）
     showAuxDialog(QStringLiteral("globalCameras"), [this]() -> QDialog * {
         auto *dlg = new GlobalCameraDialog(this);

@@ -25,6 +25,8 @@ private slots:
     void closeAllowedAfterLastConsumerLeaves();
     // r19 P1-4：同一句柄的 SDK 调用必须串行（并发取图是 UB）
     void sdkMutexIsPerHandle();
+    void pixelFormatCacheKeepsOtherParams();   // P5：像素格式回填不得重置曝光/增益/帧率
+    void deviceBindingRejectsDuplicate();       // P5：同一物理设备不能被两台相机同时绑定
 };
 
 namespace {
@@ -100,6 +102,47 @@ void GlobalCameraConsumerGateTest::sdkMutexIsPerHandle()
     a.join();
     b.join();
     QCOMPARE(int(overlaps), 0);   // 同一句柄的临界区从不重叠
+}
+
+void GlobalCameraConsumerGateTest::pixelFormatCacheKeepsOtherParams()
+{
+    auto *m = GlobalCameraManager::instance();
+    // 先造一份"非默认"的参数快照（默认曝光 10000/增益 0/帧率 30）
+    CameraParams full;
+    full.exposureTime = 4567.0;
+    full.gain = 12.5;
+    full.frameRate = 60.0;
+    full.triggerMode = QStringLiteral("On");
+    full.triggerSource = QStringLiteral("Software");
+    m->updateCameraCache(kCam, full);
+
+    // P5 修前：MVS 用只填 pixelFormat 的默认 CameraParams 整体覆盖 → 全被重置
+    m->updateCameraPixelFormatCache(kCam, QStringLiteral("Mono10Packed"));
+    const CameraParams after = m->cameras().value(kCam).params;
+    QCOMPARE(after.pixelFormat, QStringLiteral("Mono10Packed"));
+    QVERIFY2(qAbs(after.exposureTime - 4567.0) < 1e-6, "像素格式回填把曝光重置了");
+    QVERIFY2(qAbs(after.gain - 12.5) < 1e-6, "像素格式回填把增益重置了");
+    QVERIFY2(qAbs(after.frameRate - 60.0) < 1e-6, "像素格式回填把帧率重置了");
+    QCOMPARE(after.triggerMode, QStringLiteral("On"));
+    QCOMPARE(after.triggerSource, QStringLiteral("Software"));
+}
+
+void GlobalCameraConsumerGateTest::deviceBindingRejectsDuplicate()
+{
+    auto *m = GlobalCameraManager::instance();
+    // 用两个默认相机（Camera1/Camera2）验证占用闸
+    const QString other = QStringLiteral("Camera2");
+    const QString dev = QStringLiteral("GigE: TEST-CAM (IP: 192.168.1.99)");
+    // 先清掉两相机原有绑定，避免测试间互相污染
+    m->setCameraDevice(kCam, QString());
+    m->setCameraDevice(other, QString());
+    QVERIFY(m->setCameraDevice(kCam, dev));
+    QVERIFY2(!m->setCameraDevice(other, dev), "同一物理设备被两台相机绑定，UI 的[已被占用]只是装饰");
+    // 同相机重复设同一设备允许（绑定刷新路径）
+    QVERIFY(m->setCameraDevice(kCam, dev));
+    // 清理
+    m->setCameraDevice(kCam, QString());
+    m->setCameraDevice(other, QString());
 }
 
 QTEST_MAIN(GlobalCameraConsumerGateTest)

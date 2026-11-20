@@ -191,16 +191,37 @@ bool GlobalCameraManager::setCameraParams(const QString &cameraName, const Camer
     }
     if (hCamera) {
         int nRet = 0;
+        bool allOk = true;
         nRet = MV_CC_SetFloatValue(hCamera, "ExposureTime", static_cast<float>(params.exposureTime));
-        if (nRet != MV_OK) VFP_DEBUG << "设置曝光时间到设备失败，错误码:" << nRet;
+        if (nRet != MV_OK) { allOk = false; VFP_DEBUG << "设置曝光时间到设备失败，错误码:" << nRet; }
         nRet = MV_CC_SetFloatValue(hCamera, "Gain", static_cast<float>(params.gain));
-        if (nRet != MV_OK) VFP_DEBUG << "设置增益到设备失败，错误码:" << nRet;
+        if (nRet != MV_OK) { allOk = false; VFP_DEBUG << "设置增益到设备失败，错误码:" << nRet; }
         nRet = MV_CC_SetFloatValue(hCamera, "AcquisitionFrameRate", static_cast<float>(params.frameRate));
         if (nRet != MV_OK) VFP_DEBUG << "设置帧率到设备失败（部分相机不支持）:" << nRet;
 
+        // P5：触发模式/触发源原先 UI 收集了但根本没写硬件；readCameraParams 会读它们，
+        // 用户改下拉点应用却毫无效果。按字符串的枚举语义下发（与 MVS 节点同口径）。
+        const unsigned int modeVal = (params.triggerMode == QStringLiteral("On"))
+                                         ? MV_TRIGGER_MODE_ON : MV_TRIGGER_MODE_OFF;
+        nRet = MV_CC_SetEnumValue(hCamera, "TriggerMode", modeVal);
+        if (nRet != MV_OK) VFP_DEBUG << "设置触发模式失败（部分相机只读）:" << nRet;
+        if (params.triggerMode == QStringLiteral("On")) {
+            unsigned int srcVal = MV_TRIGGER_SOURCE_LINE0;
+            if (params.triggerSource == QStringLiteral("Software"))
+                srcVal = MV_TRIGGER_SOURCE_SOFTWARE;
+            else if (params.triggerSource == QStringLiteral("Line1"))
+                srcVal = MV_TRIGGER_SOURCE_LINE1;
+            else if (params.triggerSource == QStringLiteral("Line2"))
+                srcVal = MV_TRIGGER_SOURCE_LINE2;
+            else if (params.triggerSource == QStringLiteral("Line3"))
+                srcVal = MV_TRIGGER_SOURCE_LINE3;
+            nRet = MV_CC_SetEnumValue(hCamera, "TriggerSource", srcVal);
+            if (nRet != MV_OK) VFP_DEBUG << "设置触发源失败:" << nRet;
+        }
         VFP_DEBUG << "相机参数已写入物理设备:" << cameraName;
+        return allOk;   // P5：真实返回 SDK 结果，不再恒 true 骗"应用成功"
     }
-    return true;
+    return false;   // P5：相机未打开 ≠ 参数应用成功
 }
 
 bool GlobalCameraManager::setCameraParams(const QString &cameraName, double exposureTime, double gain, double frameRate, const QString &pixelFormat)
@@ -271,6 +292,14 @@ bool GlobalCameraManager::setCameraDevice(const QString &cameraName, const QStri
         if (!m_cameras.contains(cameraName)) {
             return false;
         }
+        // P5：UI 上 "[已被占用]" 原先只是装饰——同一物理设备会被多个相机绑定/打开。
+        // 真正拒绝重复绑定（允许同名重复设置，便于刷新时回写同一台）。
+        if (!deviceName.isEmpty()) {
+            for (auto it = m_cameras.constBegin(); it != m_cameras.constEnd(); ++it) {
+                if (it.key() != cameraName && it.value().deviceName == deviceName)
+                    return false;
+            }
+        }
         m_cameras[cameraName].deviceName = deviceName;
     }
     emit cameraChanged(cameraName, deviceName);
@@ -334,6 +363,17 @@ void GlobalCameraManager::updateCameraCache(const QString &cameraName, const Cam
     if (m_cameras.contains(cameraName)) {
         m_cameras[cameraName].params = params;
         VFP_DEBUG << "更新相机缓存:" << cameraName << "pixelFormat =" << params.pixelFormat;
+    }
+}
+
+void GlobalCameraManager::updateCameraPixelFormatCache(const QString &cameraName,
+                                                       const QString &pixelFormat)
+{
+    QMutexLocker locker(&m_mutex);
+    auto it = m_cameras.find(cameraName);
+    if (it != m_cameras.end()) {
+        it->params.pixelFormat = pixelFormat;   // 其余字段原样保留（P5）
+        VFP_DEBUG << "更新相机像素格式缓存:" << cameraName << pixelFormat;
     }
 }
 
@@ -657,9 +697,19 @@ bool GlobalCameraManager::openCamera(const QString &cameraName)
         // 开始采集
         nRet = MV_CC_StartGrabbing(hCamera);
         if (nRet != MV_OK) {
+            // P5：采集没起来就不能报"已打开"——UI 显示已打开但取图必失败。
+            // 与 MVS 节点 openCameraInThread 对同一情况的处理对齐：拆句柄、报失败。
             VFP_DEBUG << "开始采集失败，错误码:" << nRet;
+            MV_CC_CloseDevice(hCamera);
+            MV_CC_DestroyHandle(hCamera);
+            {
+                QMutexLocker locker(&m_mutex);
+                m_cameraHandles.remove(cameraName);
+            }
+            emit cameraStatusChanged(cameraName, false);
+            return false;
         }
-        
+
         VFP_DEBUG << "相机打开成功:" << cameraName;
         emit cameraStatusChanged(cameraName, true);
         

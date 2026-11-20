@@ -1861,6 +1861,18 @@ Node parameters now use relative paths; save the scheme to apply.</translation>
         <source>流程 %1 — %2</source>
         <translation>Flow %1 - %2</translation>
     </message>
+    <message>
+        <source>流程正在运行</source>
+        <translation>Flow Is Running</translation>
+    </message>
+    <message>
+        <source>有流程正在运行。修改相机绑定或参数可能导致取图异常。建议先停止流程再修改。是否继续打开相机管理？</source>
+        <translation>A flow is running. Changing camera binding or parameters may disrupt image capture. Stop the flow first if possible. Open camera management anyway?</translation>
+    </message>
+    <message>
+        <source>仍然打开</source>
+        <translation>Open Anyway</translation>
+    </message>
 </context>
 <context>
     <name>ProjectManager</name>

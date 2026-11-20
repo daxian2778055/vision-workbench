@@ -127,6 +127,10 @@ public:
     /// 仅更新内存缓存（不写入硬件），避免重复 StopGrabbing/StartGrabbing
     void updateCameraCache(const QString &cameraName, const CameraParams &params);
 
+    /// 只更新像素格式一个字段（P5：MVS 节点应用像素格式时，不能用一份只填了
+    /// pixelFormat 的默认 CameraParams 整体覆盖缓存，否则曝光/增益/帧率被重置成默认值）
+    void updateCameraPixelFormatCache(const QString &cameraName, const QString &pixelFormat);
+
     /// 写入像素格式到硬件（使用整数枚举值，最可靠）
     /// 已在内部处理 StopGrabbing/StartGrabbing
     static bool writePixelFormatValue(void *hCamera, unsigned int enumValue);

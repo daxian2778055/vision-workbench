@@ -78,6 +78,7 @@ void mainWindowP1ClosureGuards();       // 语言重启确认序 / 切页清理�
 void p2CanvasEditGuards();              // Delete 删连线 / 右键进撤销 / 撤销焦点守卫（源码守卫）
 void p3ModuleEditorGuards();            // 多行/浏览按钮标脏、判断条件重算、回滚回填（源码守卫）
 void p4CommDomainGuards();              // 工具条按协议分发、内联焦点守卫、配置失败回滚、空指针（源码守卫）
+void p5CameraGuards();                  // 像素格式局部更新、设备占用闸、刷新按钮回填、状态指示（源码守卫）
 void runtimeDesignerHasOfficialDragAndClipboard();
 void runtimeDesignerHasOfficialSectionsAndAlign();
 void runtimeDesignerAlignHCenterAndRight();
@@ -635,6 +636,36 @@ void UiGuardsTest::p4CommDomainGuards()
              "收发条目必须在接收时就记录时间戳，不能在渲染时才取");
     QVERIFY2(monitor.contains(QStringLiteral("输入无效")),
              "Hex 手动发送遇到非法字符必须明确提示，不能静默丢弃");
+}
+
+void UiGuardsTest::p5CameraGuards()
+{
+    QFile g(QStringLiteral(SRC_DIR "/src/GlobalCameraManager.cpp"));
+    QVERIFY2(g.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 GlobalCameraManager.cpp");
+    const QString mgr = QString::fromUtf8(g.readAll());
+    g.close();
+    // ① 像素格式只改一个字段，不能用默认 CameraParams 整体覆盖
+    const int pf = mgr.indexOf(QStringLiteral("void GlobalCameraManager::updateCameraPixelFormatCache"));
+    QVERIFY(pf >= 0);
+    QVERIFY2(mgr.mid(pf, 400).contains(QStringLiteral("params.pixelFormat = pixelFormat")),
+             "像素格式缓存更新必须只改该字段，保留曝光/增益/帧率");
+    // ② 设置设备真检查占用
+    const int bind = mgr.indexOf(QStringLiteral("bool GlobalCameraManager::setCameraDevice"));
+    QVERIFY2(mgr.mid(bind, 700).contains(QStringLiteral("deviceName ==")),
+             "setCameraDevice 必须拒绝同一物理设备被多相机绑定");
+
+    QFile n(QStringLiteral(SRC_DIR "/src/MvsImageSourceNode.cpp"));
+    QVERIFY2(n.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 MvsImageSourceNode.cpp");
+    const QString node = QString::fromUtf8(n.readAll());
+    n.close();
+    // ③ 刷新按钮真正回填列表（不是只改按钮文字）
+    const int det = node.indexOf(QStringLiteral("detectButton, &QPushButton::clicked"));
+    QVERIFY2(node.mid(det, 700).contains(QStringLiteral("refillCameraCombo")),
+             "刷新相机按钮必须重新枚举并回填，不能只恢复按钮文字");
+    // ④ 面板有相机状态指示并跟随信号
+    QVERIFY2(node.contains(QStringLiteral("cameraStateLabel"))
+             && node.contains(QStringLiteral("cameraStatusChanged")),
+             "MVS 面板必须有相机连接状态指示并跟随状态信号");
 }
 
 void UiGuardsTest::deleteShortcutIgnoredWhileEditingText()

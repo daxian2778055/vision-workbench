@@ -960,14 +960,14 @@ void MvsImageSourceNode::applyCameraParamsInThread()
                     m_outputPixelFormat = appliedPixelFormat;
                 }
 
-                // 更新全局相机缓存
+                // 更新全局相机缓存：只改 pixelFormat（P5：原实现用默认 CameraParams 整体覆盖，
+                // 会把曝光/增益/帧率/触发源全部冲成默认值）
                 {
                     QMutexLocker locker(&m_mutex);
                     QString globalName = m_globalCameraName;
                     if (!globalName.isEmpty()) {
-                        CameraParams cachedParams;
-                        cachedParams.pixelFormat = appliedPixelFormat;
-                        GlobalCameraManager::instance()->updateCameraCache(globalName, cachedParams);
+                        GlobalCameraManager::instance()->updateCameraPixelFormatCache(
+                            globalName, appliedPixelFormat);
                     }
                 }
 
@@ -1265,6 +1265,27 @@ QWidget *MvsImageSourceNode::createParamPanel()
     layout->addWidget(cameraLabel);
     layout->addWidget(cameraCombo);
 
+    // P5：连接状态指示——断线/开关相机此前在面板上零反馈，用户只能从日志猜。
+    QLabel *cameraStateLabel = new QLabel();
+    cameraStateLabel->setObjectName(QStringLiteral("cameraStateLabel"));
+    auto refreshCameraStateLabel = [this, cameraStateLabel]() {
+        const bool opened = m_cameraOpened && m_hCamera;
+        cameraStateLabel->setText(opened ? QStringLiteral("\u25CF \u76F8\u673A\u5DF2\u8FDE\u63A5")
+                                         : QStringLiteral("\u25CB \u76F8\u673A\u672A\u8FDE\u63A5"));
+        cameraStateLabel->setStyleSheet(opened ? QStringLiteral("color: #4CAF50;")
+                                               : QStringLiteral("color: #F44336;"));
+    };
+    refreshCameraStateLabel();
+    layout->addWidget(cameraStateLabel);
+    // cameraChanged 是 manager 的信号（全局相机名/设备绑定变化）；本节点还有自己的
+    // cameraStatusChanged（connect/disconnect 结果）。两者都刷标签。
+    QObject::connect(GlobalCameraManager::instance(), &GlobalCameraManager::cameraStatusChanged,
+                     panel, [this, refreshCameraStateLabel](const QString &name, bool) {
+        if (name == m_globalCameraName) refreshCameraStateLabel();
+    });
+    QObject::connect(this, &MvsImageSourceNode::cameraStatusChanged, panel,
+                     [refreshCameraStateLabel]() { refreshCameraStateLabel(); });
+
     auto refillCameraCombo = [cameraCombo, this](const QString &trySelect) {
         cameraCombo->clear();
         QStringList cameras = getAvailableCameras();
@@ -1511,12 +1532,15 @@ QWidget *MvsImageSourceNode::createParamPanel()
         }
     });
 
-    // 刷新相机检测
+    // 刷新相机检测（P5：旧实现起了后台任务却丢弃结果，3 秒后只把按钮文字改回去，
+    // 列表根本不更新。用户主动点刷新，同步枚举 + 立即回填，短暂忙碌是可接受的）
     connect(detectButton, &QPushButton::clicked, panel, [=]() {
         detectButton->setEnabled(false);
         detectButton->setText(QStringLiteral("\u6B63\u5728\u68C0\u6D4B\u2026"));
-        QThreadPool::globalInstance()->start(new CameraOperationTask(this, CameraOperationTask::DetectCameras));
-        QTimer::singleShot(3000, detectButton, [=]() {
+        QPointer<MvsImageSourceNode> selfGuard(this);
+        QTimer::singleShot(0, panel, [=]() {
+            if (!selfGuard) return;
+            refillCameraCombo(m_cameraName);   // 真正重新枚举并回填下拉
             detectButton->setEnabled(true);
             detectButton->setText(QStringLiteral("\u5237\u65B0\u76F8\u673A\u5217\u8868"));
         });

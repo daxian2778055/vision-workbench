@@ -246,7 +246,11 @@ void GlobalCameraDialog::onCameraSelectionChanged(int index)
 void GlobalCameraDialog::onBindDevice()
 {
     QString cameraName = m_cameraListCombo->currentData().toString();
-    QString deviceName = m_deviceComboBox->currentText();
+    // P5：设备下拉的显示文本被 refreshDeviceList 加了 " [当前相机]/[已被占用]" 后缀，
+    // 真实设备名存在 itemData 里。用 currentText 绑定会把后缀当设备名 → 相机永远打不开。
+    QString deviceName = m_deviceComboBox->currentData().toString();
+    if (deviceName.isEmpty())
+        deviceName = m_deviceComboBox->currentText();   // 兼容未设 data 的旧项
     
     if (deviceName.isEmpty() || deviceName == "无可用设备") {
         QMessageBox::warning(this, "警告", "请选择一个设备");
@@ -430,17 +434,21 @@ void GlobalCameraDialog::onApplyParams()
     params.triggerMode = m_triggerModeComboBox->currentText();
     params.triggerSource = m_triggerSourceComboBox->currentText();
     
-    // 写入参数（写入前先写入像素格式，直接使用整数枚举值确保写入正确）
     void *hCamera = manager->getCameraHandle(cameraName);
+
+    // 设置参数（含内存缓存更新）
+    // P5：像素格式/曝光/增益失败必须让用户知道，不再无条件报"应用成功"
+    bool pixelFormatOk = true;
     if (hCamera) {
         unsigned int pfVal = static_cast<unsigned int>(m_pixelFormatComboBox->currentData().toULongLong());
-        if (pfVal != 0) {
-            GlobalCameraManager::writePixelFormatValue(hCamera, pfVal);
-        }
+        if (pfVal != 0)
+            pixelFormatOk = GlobalCameraManager::writePixelFormatValue(hCamera, pfVal);
     }
-    
-    // 设置参数（含内存缓存更新）
-    manager->setCameraParams(cameraName, params);
-    
-    emit logMessage(QString("%1 参数应用成功").arg(cameraName));
+    const bool paramsOk = manager->setCameraParams(cameraName, params);
+    if (pixelFormatOk && paramsOk)
+        emit logMessage(QString("%1 参数应用成功").arg(cameraName));
+    else
+        QMessageBox::warning(this, QStringLiteral("警告"),
+                             QStringLiteral("部分参数写入设备失败，请检查相机是否支持该设置。\n"
+                                            "内存缓存已更新，当前显示值可能与实际硬件不一致。"));
 }
