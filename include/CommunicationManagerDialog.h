@@ -94,6 +94,10 @@ private slots:
     void refreshHeartbeatTable();
 
 private:
+    /// 配置变更后重建设备节点：失败时用原配置回滚并明确报错，避免"删了旧、建不出新"丢设备
+    bool rebuildDeviceWithConfig(const QString &name, const QString &type,
+                                 const QJsonObject &newConfig, const QJsonObject &oldConfig,
+                                 bool wasConnected);
     void setupUI();
     void setupDeviceTab(QStackedWidget *stack);
     /// 控制器列表并进设备管理页（官方：控制器列表在设备管理内）；由设备数据派生

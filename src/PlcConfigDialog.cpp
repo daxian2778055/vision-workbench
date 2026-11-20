@@ -259,7 +259,8 @@ void PlcConfigDialog::updateRegisterValue(int address, double value, const QStri
     for (int row = 0; row < m_registerTable->rowCount(); ++row) {
         if (registerAddressForRow(row) == address) {
             QTableWidgetItem *valueItem = m_registerTable->item(row, 4);
-            if (valueItem) valueItem->setText(displayText);
+            if (!valueItem) continue;   // P4：空白行没有值列 item，防止空指针
+            valueItem->setText(displayText);
             valueItem->setBackground(QColor(220, 255, 220));
             QTimer::singleShot(300, this, [this, row]() {
                 QTableWidgetItem *vi = m_registerTable->item(row, 4);

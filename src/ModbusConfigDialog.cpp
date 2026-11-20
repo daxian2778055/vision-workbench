@@ -405,9 +405,10 @@ void ModbusConfigDialog::updateRegisterValue(int address, double value, const QS
     for (int row = 0; row < m_registerTable->rowCount(); ++row) {
         if (registerAddressForRow(row) == address) {
             QTableWidgetItem *valueItem = m_registerTable->item(row, 4);
-            if (valueItem) {
-                valueItem->setText(displayText);
-            }
+            // P4：工具条生成的"只有地址"空白行没有第 4 列 item；nil 时不能解引用
+            if (!valueItem)
+                continue;
+            valueItem->setText(displayText);
             // 根据值变化高亮闪烁提示
             valueItem->setBackground(QColor(220, 255, 220)); // 浅绿色闪烁
             // 用定时器恢复背景色

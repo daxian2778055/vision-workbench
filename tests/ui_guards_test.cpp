@@ -77,6 +77,7 @@ private slots:
 void mainWindowP1ClosureGuards();       // 语言重启确认序 / 切页清理序 / dock 勾选回写（源码守卫）
 void p2CanvasEditGuards();              // Delete 删连线 / 右键进撤销 / 撤销焦点守卫（源码守卫）
 void p3ModuleEditorGuards();            // 多行/浏览按钮标脏、判断条件重算、回滚回填（源码守卫）
+void p4CommDomainGuards();              // 工具条按协议分发、内联焦点守卫、配置失败回滚、空指针（源码守卫）
 void runtimeDesignerHasOfficialDragAndClipboard();
 void runtimeDesignerHasOfficialSectionsAndAlign();
 void runtimeDesignerAlignHCenterAndRight();
@@ -587,6 +588,53 @@ void UiGuardsTest::p3ModuleEditorGuards()
     const int reloadEnd = src.indexOf(QStringLiteral("void ModuleEditorDialog::loadImage"), reload);
     QVERIFY2(src.mid(reload, reloadEnd - reload).contains(QStringLiteral("loadJudgeConditions")),
              "外部改参回填必须刷新结果判断条件表");
+}
+
+void UiGuardsTest::p4CommDomainGuards()
+{
+    QFile f(QStringLiteral(SRC_DIR "/src/CommunicationManagerDialog.cpp"));
+    QVERIFY2(f.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 CommunicationManagerDialog.cpp");
+    const QString src = QString::fromUtf8(f.readAll());
+    f.close();
+
+    // ① 地址空间工具条按协议分发：sync 认 Modbus+PLC、test 认 Modbus+PLC+FINS
+    const int sync = src.indexOf(QStringLiteral("RegisterSpaceBar::syncRequested"));
+    QVERIFY(sync >= 0);
+    const QString syncBody = src.mid(sync, 900);
+    QVERIFY2(syncBody.contains(QStringLiteral("PlcCommNode")),
+             "数据同步必须支持 PLC，不能对所有非 Modbus 都报无节点");
+    const int test = src.indexOf(QStringLiteral("RegisterSpaceBar::testSendRequested"));
+    QVERIFY2(src.mid(test, 1200).contains(QStringLiteral("FinsCommNode")),
+             "发送测试必须支持 FINS");
+
+    // ② 内联参数回显有焦点守卫（异步刷新不得吞正在输入的 IP）
+    const int fn = src.indexOf(QStringLiteral("void CommunicationManagerDialog::syncInlineParamsFromSelection"));
+    const int fnEnd = src.indexOf(QStringLiteral("void CommunicationManagerDialog::applyInlineParamChange"), fn);
+    QVERIFY2(src.mid(fn, fnEnd - fn).contains(QStringLiteral("focusWidget")),
+             "内联参数回显必须检查焦点，避免异步刷新覆盖正在编辑的内容");
+
+    // ③ 配置写回失败有回滚助手，且三处都调用
+    QVERIFY2(src.contains(QStringLiteral("rebuildDeviceWithConfig")),
+             "设备配置写回必须有失败回滚助手");
+    QVERIFY2(src.count(QStringLiteral("rebuildDeviceWithConfig(")) >= 4,
+             "Modbus/PLC/FINS 三处配置写回都应走原子重建");
+
+    // ④ 重复事件/心跳添加有返回值检查
+    QVERIFY2(src.contains(QStringLiteral("addReceiveEvent(ev)")) &&
+             src.contains(QStringLiteral("addSendEvent(ev)")),
+             "事件添加的返回值必须被检查，否则重复 ID 假成功");
+    QVERIFY2(src.contains(QStringLiteral("registerHeartbeat(device, interval)")),
+             "心跳添加必须检查重复注册");
+
+    // ⑤ 收发区：时间戳接收时取、Hex 非法输入要提示
+    QFile m(QStringLiteral(SRC_DIR "/src/CommMonitorPane.cpp"));
+    QVERIFY2(m.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 CommMonitorPane.cpp");
+    const QString monitor = QString::fromUtf8(m.readAll());
+    m.close();
+    QVERIFY2(monitor.contains(QStringLiteral("list.append({device, data,")),
+             "收发条目必须在接收时就记录时间戳，不能在渲染时才取");
+    QVERIFY2(monitor.contains(QStringLiteral("输入无效")),
+             "Hex 手动发送遇到非法字符必须明确提示，不能静默丢弃");
 }
 
 void UiGuardsTest::deleteShortcutIgnoredWhileEditingText()

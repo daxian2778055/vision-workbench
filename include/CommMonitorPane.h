@@ -47,9 +47,11 @@ private:
     struct Entry {
         QString device;
         QByteArray data;
+        QString time;   ///< P4：接收当下取时；200ms 节流后渲染时才取会让突发帧共享同一时间
     };
 
-    static QString formatLine(const QString &device, const QByteArray &data, bool hex);
+    static QString formatLine(const QString &device, const QByteArray &data,
+                              const QString &time, bool hex);
     void push(QVector<Entry> &list, const QString &device, const QByteArray &data);
     void render(QPlainTextEdit *view, const QVector<Entry> &list, bool hex) const;
 

@@ -3,6 +3,7 @@
 #include "CommunicationNodeBase.h"
 #include "GlobalTriggerDialog.h"
 #include "ModbusNode.h"
+#include "FinsCommNode.h"   // P4：地址空间工具条对 FINS 也要给出明确结论，不能冒充 Modbus
 #include "ModbusConfigDialog.h"
 #include "FinsConfigDialog.h"
 #include "PlcCommNode.h"
@@ -45,6 +46,7 @@
 #include <QStyledItemDelegate>
 #include <QPainter>
 #include <QMouseEvent>
+#include <QApplication>
 #include <QLineEdit>
 #include <QCheckBox>
 #include <QSpinBox>
@@ -322,6 +324,16 @@ void CommunicationManagerDialog::updateParamSummary()
 void CommunicationManagerDialog::syncInlineParamsFromSelection(const CommDeviceInfo &info)
 {
     if (!m_paramForm) return;
+    // P4：设备连接/断开触发的异步刷新链会走到这里。若用户正在编辑内联 IP/端口，
+    // 无条件 setText/setValue 会把尚未失焦、尚未提交的输入静默覆盖掉。有编辑焦点则本次跳过回显。
+    QWidget *focus = QApplication::focusWidget();
+    if (focus) {
+        for (QLineEdit *ed : m_ipEdits) {
+            if (ed && ed == focus) return;
+        }
+        if (m_inlinePort && (m_inlinePort == focus || m_inlinePort->isAncestorOf(focus)))
+            return;
+    }
     // 回显期间所有 setChecked/setValue 都会发信号，用守卫让写回直接返回。
     m_inlineLoading = true;
     const QString ip = info.config.value(QStringLiteral("serverIp"))
@@ -1060,11 +1072,18 @@ void CommunicationManagerDialog::setupDeviceTab(QStackedWidget *stack)
         const int row = m_deviceTable ? m_deviceTable->currentRow() : -1;
         const QString name = (row >= 0 && m_deviceTable->item(row, 0))
             ? m_deviceTable->item(row, 0)->text() : QString();
-        auto *mn = name.isEmpty() ? nullptr
-            : qobject_cast<ModbusNode *>(CommunicationManager::instance()->deviceNode(name));
-        if (!mn) { m_spaceBar->showNoNodeStatus(); return; }
-        if (!mn->isConnected()) { m_spaceBar->showNotConnectedStatus(); return; }
-        m_spaceBar->showSyncIssuedStatus(mn->syncRegistersNow());
+        CommunicationNodeBase *conn = name.isEmpty() ? nullptr
+                                                      : CommunicationManager::instance()->deviceNode(name);
+        if (!conn) { m_spaceBar->showNoNodeStatus(); return; }
+        if (!conn->isConnected()) { m_spaceBar->showNotConnectedStatus(); return; }
+        // P4：PLC 有同样的同步 API，FINS 没有——按类型分发，别对所有非 Modbus 都报"无节点"
+        if (auto *mn = dynamic_cast<ModbusNode *>(conn)) {
+            m_spaceBar->showSyncIssuedStatus(mn->syncRegistersNow());
+        } else if (auto *pn = dynamic_cast<PlcCommNode *>(conn)) {
+            m_spaceBar->showSyncIssuedStatus(pn->syncRegistersNow());
+        } else {
+            m_spaceBar->setStatus(QStringLiteral("该协议不支持数据同步"));
+        }
     });
     connect(m_spaceBar, &RegisterSpaceBar::testSendRequested, this,
             [this](const QString &addressText, const QString &valueText) {
@@ -1076,10 +1095,17 @@ void CommunicationManagerDialog::setupDeviceTab(QStackedWidget *stack)
         const int row = m_deviceTable ? m_deviceTable->currentRow() : -1;
         const QString name = (row >= 0 && m_deviceTable->item(row, 0))
             ? m_deviceTable->item(row, 0)->text() : QString();
-        auto *mn = name.isEmpty() ? nullptr
-            : qobject_cast<ModbusNode *>(CommunicationManager::instance()->deviceNode(name));
-        if (!mn) { m_spaceBar->showNoNodeStatus(); return; }
-        if (mn->writeRegister(addr, value)) m_spaceBar->showTestSentStatus(addr, value);
+        CommunicationNodeBase *conn = name.isEmpty() ? nullptr
+                                                      : CommunicationManager::instance()->deviceNode(name);
+        if (!conn) { m_spaceBar->showNoNodeStatus(); return; }
+        bool sent = false;
+        if (auto *mn = dynamic_cast<ModbusNode *>(conn))
+            sent = mn->writeRegister(addr, value);
+        else if (auto *pn = dynamic_cast<PlcCommNode *>(conn))
+            sent = pn->writeRegister(addr, value);
+        else if (auto *fn = dynamic_cast<FinsCommNode *>(conn))
+            sent = fn->writeRegister(addr, value);
+        if (sent) m_spaceBar->showTestSentStatus(addr, value);
         else m_spaceBar->showTestNotSentStatus();
     });
 
@@ -1416,6 +1442,33 @@ void CommunicationManagerDialog::onRemoveDevice()
     }
 }
 
+bool CommunicationManagerDialog::rebuildDeviceWithConfig(const QString &name, const QString &type,
+                                                         const QJsonObject &newConfig,
+                                                         const QJsonObject &oldConfig,
+                                                         bool wasConnected)
+{
+    auto *cm = CommunicationManager::instance();
+    if (wasConnected)
+        cm->closeDevice(name);
+    cm->removeDevice(name);
+    if (!cm->addDevice(name, type, newConfig)) {
+        // 回滚：新配置建不出来（类型/构造失败）时必须把原设备放回去，否则设备从列表永久消失
+        cm->addDevice(name, type, oldConfig);
+        if (wasConnected)
+            cm->openDevice(name);
+        QMessageBox::warning(this, QStringLiteral("配置失败"),
+                             QStringLiteral("设备「%1」的新配置无法创建节点，已恢复原配置。\n"
+                                            "请检查参数（地址/端口/串口号等）后重试。").arg(name));
+        return false;
+    }
+    if (wasConnected && !cm->openDevice(name)) {
+        QMessageBox::warning(this, QStringLiteral("连接失败"),
+                             QStringLiteral("设备「%1」配置已保存，但按原连接状态重开失败。\n"
+                                            "请检查设备是否在线，或手动打开连接。").arg(name));
+    }
+    return true;
+}
+
 void CommunicationManagerDialog::onConfigDevice()
 {
     int row = m_deviceTable->currentRow();
@@ -1438,11 +1491,7 @@ void CommunicationManagerDialog::onConfigDevice()
             QJsonObject newConfig = dlg.config();
             // N13：断开必须放在 Accepted 分支内——旧实现在弹窗之前就 closeDevice，
             // 用户点"取消"也会白白掉线；且应用后需按原状态恢复，否则删重建后永久离线。
-            if (wasConnected) cm->closeDevice(name);
-            // 更新设备配置（移除旧的 + 重新创建设备节点）
-            cm->removeDevice(name);
-            cm->addDevice(name, info.type, newConfig);
-            if (wasConnected) cm->openDevice(name);
+            rebuildDeviceWithConfig(name, info.type, newConfig, info.config, wasConnected);
         }
     } else if (info.type == QStringLiteral("TCP") || info.type == QStringLiteral("UDP")
                || info.type == QStringLiteral("\u4E32\u53E3") || info.type == QStringLiteral("Serial")) {
@@ -1468,20 +1517,14 @@ void CommunicationManagerDialog::onConfigDevice()
         if (dlg.exec() == QDialog::Accepted) {
             QJsonObject newConfig = dlg.config();
             // N13：同 Modbus——断开移入 Accepted 分支（取消不掉线），应用后按原状态恢复连接。
-            if (wasConnected) cm->closeDevice(name);
-            cm->removeDevice(name);
-            cm->addDevice(name, info.type, newConfig);
-            if (wasConnected) cm->openDevice(name);
+            rebuildDeviceWithConfig(name, info.type, newConfig, info.config, wasConnected);
         }
     } else if (info.type == QStringLiteral("FINS TCP") || info.type == QStringLiteral("FINS UDP")) {
         // B5-2：与 Modbus/PLC 同款 remove+add（寄存器表长度/节点号都可能变，不能就地改参数）
         FinsConfigDialog dlg(info.type, info.config, this);
         if (dlg.exec() == QDialog::Accepted) {
             QJsonObject newConfig = dlg.config();
-            if (wasConnected) cm->closeDevice(name);
-            cm->removeDevice(name);
-            cm->addDevice(name, info.type, newConfig);
-            if (wasConnected) cm->openDevice(name);
+            rebuildDeviceWithConfig(name, info.type, newConfig, info.config, wasConnected);
         }
     } else {
         QMessageBox::information(this, QStringLiteral("\u63D0\u793A"),
@@ -1867,7 +1910,13 @@ void CommunicationManagerDialog::onAddReceiveEvent()
     }
 
     if (ev) {
-        CommunicationManager::instance()->addReceiveEvent(ev);
+        // P4：重复 ID 时管理器返回 false，旧实现无条件刷新造成"假成功"，且新建对象无主
+        if (!CommunicationManager::instance()->addReceiveEvent(ev)) {
+            QMessageBox::warning(this, QStringLiteral("添加失败"),
+                                 QStringLiteral("接收事件 ID「%1」已存在。").arg(id.trimmed()));
+            delete ev;
+            return;
+        }
         refreshReceiveEventTable();
     }
 }
@@ -2020,7 +2069,13 @@ void CommunicationManagerDialog::onAddSendEvent()
     }
 
     if (ev) {
-        CommunicationManager::instance()->addSendEvent(ev);
+        // P4：同接收事件——重复 ID 必须提示，不能假成功
+        if (!CommunicationManager::instance()->addSendEvent(ev)) {
+            QMessageBox::warning(this, QStringLiteral("添加失败"),
+                                 QStringLiteral("发送事件 ID「%1」已存在。").arg(id.trimmed()));
+            delete ev;
+            return;
+        }
         refreshSendEventTable();
     }
 }
@@ -2141,7 +2196,12 @@ void CommunicationManagerDialog::onAddHeartbeat()
         QStringLiteral("\u95F4\u9694(ms):"), 1000, 500, 60000, 100, &ok);
     if (!ok) return;
 
-    HeartbeatManager::instance()->registerHeartbeat(device, interval);
+    // P4：重复设备注册返回 false；旧实现仍继续 start，会重置既有心跳的相位却提示"新增成功"
+    if (!HeartbeatManager::instance()->registerHeartbeat(device, interval)) {
+        QMessageBox::warning(this, QStringLiteral("添加失败"),
+                             QStringLiteral("设备「%1」已有心跳配置，请勿重复添加。").arg(device));
+        return;
+    }
     HeartbeatManager::instance()->startHeartbeat(device);
     refreshHeartbeatTable();
 }

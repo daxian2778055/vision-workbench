@@ -7,6 +7,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QTabWidget>
@@ -101,9 +102,9 @@ QString CommMonitorPane::sendText() const
     return m_txView ? m_txView->toPlainText() : QString();
 }
 
-QString CommMonitorPane::formatLine(const QString &device, const QByteArray &data, bool hex)
+QString CommMonitorPane::formatLine(const QString &device, const QByteArray &data,
+                                    const QString &ts, bool hex)
 {
-    const QString ts = QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz"));
     QString body;
     if (hex) {
         body = data.isEmpty() ? QStringLiteral("(empty)")
@@ -118,7 +119,8 @@ QString CommMonitorPane::formatLine(const QString &device, const QByteArray &dat
 void CommMonitorPane::push(QVector<Entry> &list, const QString &device,
                            const QByteArray &data)
 {
-    list.append({device, data});
+    list.append({device, data,
+                 QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz"))});
     while (list.size() > kMaxLines)
         list.removeFirst();
     m_dirty = true;
@@ -132,7 +134,7 @@ void CommMonitorPane::render(QPlainTextEdit *view, const QVector<Entry> &list, b
     QStringList lines;
     lines.reserve(list.size());
     for (const Entry &e : list)
-        lines << formatLine(e.device, e.data, hex);
+        lines << formatLine(e.device, e.data, e.time, hex);
     view->setPlainText(lines.join(QLatin1Char('\n')));
     QTextCursor cursor = view->textCursor();
     cursor.movePosition(QTextCursor::End);
@@ -180,8 +182,27 @@ void CommMonitorPane::onSend()
 
     QByteArray data;
     if (m_hexCheck && m_hexCheck->isChecked()) {
-        data = QByteArray::fromHex(text.toLatin1());
-        if (data.isEmpty()) return;   // 非法十六进制串不发送
+        // P4：fromHex 会静默跳过非法字符、奇数长度截尾；先严格校验再发，失败要明确说
+        const QString compact = text;
+        bool valid = true;
+        int nibbles = 0;
+        for (QChar ch : compact) {
+            if (ch.isSpace())
+                continue;
+            const ushort u = ch.unicode();
+            const bool hex = (u >= '0' && u <= '9') || (u >= 'a' && u <= 'f')
+                             || (u >= 'A' && u <= 'F');
+            if (!hex) { valid = false; break; }
+            ++nibbles;
+        }
+        if (!valid || nibbles == 0 || (nibbles % 2) != 0) {
+            QMessageBox::warning(this, QStringLiteral("输入无效"),
+                                 QStringLiteral("16 进制内容必须是成对的 0-9/A-F（可用空格分隔），"
+                                                "当前输入无法解析，未发送。"));
+            return;
+        }
+        data = QByteArray::fromHex(compact.toLatin1());
+        if (data.isEmpty()) return;
     } else {
         data = text.toUtf8();
     }
