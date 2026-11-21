@@ -294,7 +294,14 @@ public:
             }
             ++ok;
         }
-        if (classesDirty) saveClasses(dir, classes);
+        if (classesDirty && !saveClasses(dir, classes)) {
+            // P10 校验批：不静默失败——类别 ID 已写进 YOLO txt 但 classes.txt 没落地，
+            // 训练时会把 ID 解释错。记入 error（导入仍算成功，但必须让用户看见）。
+            const QString why = QStringLiteral("classes.txt 写入失败，新增类别未持久化");
+            if (error && !error->isEmpty()) *error += QStringLiteral("；");
+            if (error) *error += why;
+            else qWarning() << why;
+        }
         if (importedImages) *importedImages = ok;
         if (skippedFiles) *skippedFiles = skipped;
         return true;

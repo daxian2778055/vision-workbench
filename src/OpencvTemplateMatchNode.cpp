@@ -476,9 +476,23 @@ cv::Mat OpencvTemplateMatchNode::normalizeMaskTo8U(const cv::Mat &src)
 void OpencvTemplateMatchNode::collectSearchValues(double mn, double mx, double step,
                                                    int maxCount, QVector<double> &out)
 {
-    if (mx < mn)
+    QStringList ignored;
+    collectSearchValues(mn, mx, step, maxCount, out, ignored);
+}
+
+void OpencvTemplateMatchNode::collectSearchValues(double mn, double mx, double step,
+                                                   int maxCount, QVector<double> &out,
+                                                   QStringList &warnings)
+{
+    // P10 校验批：补 warning 输出——此前 min>max、step<=0 都被静默纠正，用户不知道
+    // 自己填错了，只看到搜索结果和预期不符。
+    if (mx < mn) {
+        warnings << QStringLiteral("下限大于上限，已自动交换");
         std::swap(mn, mx);
+    }
     if (step <= 1e-9 || qAbs(mx - mn) < 1e-9) {
+        if (step <= 1e-9)
+            warnings << QStringLiteral("步长非法，已按单点搜索");
         out.append((mn + mx) * 0.5);
         return;
     }
@@ -489,6 +503,7 @@ void OpencvTemplateMatchNode::collectSearchValues(double mn, double mx, double s
         // maxCount 为 0/1 时 (maxCount - 1) 是 0（或负数），除出来是 inf/负数步长。
         // 当前产品调用点传 90 或 16 不会触发，但辅助函数不该留这个坑
         // （2026-11-09 复核）：钳到至少 2 个点，正好取两个端点。
+        warnings << QStringLiteral("搜索点数超过上限，已均匀重采样");
         maxCount = qMax(2, maxCount);
         step = (mx - mn) / double(maxCount - 1);
         n = maxCount;
@@ -1790,15 +1805,23 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
 
         QVector<double> angles;
         QVector<double> scales;
+        // P10 校验批：收集被静默纠正的搜索参数，写进 searchNote 让用户看得见
+        QStringList rangesWarnings;
         collectSearchValues(m_params.value(QStringLiteral("angleMin"), -45.0).toDouble(),
                             m_params.value(QStringLiteral("angleMax"), 45.0).toDouble(),
                             m_params.value(QStringLiteral("angleStep"), 2.0).toDouble(),
-                            90, angles);
+                            90, angles, rangesWarnings);
         double sMin = m_params.value(QStringLiteral("scaleMin"), 1.0).toDouble();
         double sMax = m_params.value(QStringLiteral("scaleMax"), 1.0).toDouble();
         double sStep = m_params.value(QStringLiteral("scaleStep"), 0.05).toDouble();
         // VM 运行参数只有显式尺度范围（默认 1.00~1.00）；尺度模式属于模板配置，只管速度尺度。
-        collectSearchValues(sMin, sMax, sStep, 16, scales);
+        collectSearchValues(sMin, sMax, sStep, 16, scales, rangesWarnings);
+        if (!rangesWarnings.isEmpty()) {
+            const QString note = QStringLiteral("搜索参数已自动纠正：%1")
+                                     .arg(rangesWarnings.join(QStringLiteral("；")));
+            m_params[QStringLiteral("searchNote")] = note;
+            VFP_DEBUG << note;
+        }
 
         // 尺度范围类型（VM）：0=整体（scaleMin/Max），1=XY（X/Y 独立缩放）
         QVector<QPair<double, double>> scalePairs;

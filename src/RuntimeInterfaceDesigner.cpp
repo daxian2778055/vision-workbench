@@ -1418,8 +1418,24 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     m_tableMaxRows->setRange(1, 10000);
     connect(m_columnAddBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::onColumnAdd);
     connect(m_columnDelBtn, &QPushButton::clicked, this, &RuntimeInterfaceDesigner::onColumnDel);
-    connect(m_columnList, &QListWidget::itemDoubleClicked, this,
-            [this](QListWidgetItem *) { onColumnDel(); });
+    // P10 校验批：双击列改表头（原来双击=删除，与"- 删除"按钮重复，而 header 字段
+    // 有序列化却没有任何编辑入口——只能手改文件）
+    connect(m_columnList, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *item) {
+        RuntimeControl *ctrl = selectedControl();
+        if (!ctrl || ctrl->type != RuntimeControlType::ResultTable || !item) return;
+        const int row = m_columnList->row(item);
+        if (row < 0 || row >= ctrl->columns.size()) return;
+        bool ok = false;
+        const QString name = QInputDialog::getText(
+            this, tr("编辑表头"), tr("列标题:"), QLineEdit::Normal,
+            ctrl->columns[row].header, &ok);
+        if (!ok || name.trimmed().isEmpty() || name.trimmed() == ctrl->columns[row].header)
+            return;
+        pushUndo();
+        ctrl->columns[row].header = name.trimmed();
+        refreshPropertyPanel();
+        m_canvas->refreshControl(m_selected);
+    });
 
     fIdentity->addRow(QStringLiteral("类型"), m_typeLabel);
     fIdentity->addRow(QStringLiteral("标题"), m_titleEdit);
@@ -1588,6 +1604,23 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
     m_chartSource->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     m_chartSeriesList = new QListWidget(m_chartGroup);
     m_chartSeriesList->setMaximumHeight(90);
+    // P10 校验批：双击系列改名称（此前 name 固定为绑定键，有序列化无编辑入口）
+    connect(m_chartSeriesList, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *item) {
+        RuntimeControl *ctrl = selectedControl();
+        if (!ctrl || !item) return;
+        const int row = m_chartSeriesList->row(item);
+        if (row < 0 || row >= ctrl->chartSeries.size()) return;
+        bool ok = false;
+        const QString name = QInputDialog::getText(
+            this, tr("编辑系列名"), tr("系列名称:"), QLineEdit::Normal,
+            ctrl->chartSeries[row].name, &ok);
+        if (!ok || name.trimmed().isEmpty() || name.trimmed() == ctrl->chartSeries[row].name)
+            return;
+        pushUndo();
+        ctrl->chartSeries[row].name = name.trimmed();
+        refreshPropertyPanel();
+        m_canvas->refreshControl(m_selected);
+    });
     m_chartSeriesAddBtn = new QPushButton(QStringLiteral("＋添加系列"), m_chartGroup);
     m_chartSeriesDelBtn = new QPushButton(QStringLiteral("－删除系列"), m_chartGroup);
     chartForm->addRow(QStringLiteral("标题"), m_chartTitleEdit);
@@ -2049,6 +2082,9 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
         previewDialog.resize(960, 620);
         auto *layout = new QVBoxLayout(&previewDialog);
         auto *view = new RuntimeInterfaceView(&previewDialog);
+        // P10 校验批：预览与真实运行同上绑定体检——不设 knownNames 时 staleBindings 恒空，
+        // 预览里看不到"绑定失效"红字，与运行态观感不一致
+        view->setKnownNodeNames(m_nodeNames);
         view->setInterface(m_layout);
         layout->addWidget(view);
         previewDialog.exec();

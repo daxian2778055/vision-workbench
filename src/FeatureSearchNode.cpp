@@ -114,6 +114,13 @@ void FeatureSearchNode::run(bool /*autoSwitch*/)
         if (name.isEmpty())
             name = QStringLiteral("sample_%1")
                        .arg(QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyyMMdd_hhmmss_zzz")));
+        // P10 校验批：同名样本此前悄悄入库，按名检索时静默取最新一条，旧样本白占空间。
+        // 改为拒绝同名并说明（用户可换名或先删旧样本）。
+        if (AppDatabase::instance()->loadFeatureSampleByName(name).isValid()) {
+            m_params[QStringLiteral("lastError")] =
+                QStringLiteral("同名特征样本「%1」已存在，请换名或先删除旧样本").arg(name);
+            return;
+        }
         // 缩略图存 PNG（图库管理界面预览用，2026-10-27）
         QByteArray png;
         {

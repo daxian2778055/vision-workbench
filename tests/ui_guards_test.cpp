@@ -85,6 +85,7 @@ void p8DataPanelGuards();               // 输出查看器 setNode/连接、报�
 void p9SystemGuards();                  // 角色闸、载入中止回滚、多流程打包（源码守卫）
 void p10CrossCutGuards();               // 会话信号有消费者、裸指针 QPointer 兜底、标题 tr（源码守卫）
 void f1DataPanelFollowupGuards();       // flush 三态、序号持久化、坏文件防护、查询上限提示、耗时有界
+void f2ValidationGuards();              // 搜索参数告警、同名拒绝、VOC 写失败、表头/系列编辑、预览红字
 void runtimeDesignerHasOfficialDragAndClipboard();
 void runtimeDesignerHasOfficialSectionsAndAlign();
 void runtimeDesignerAlignHCenterAndRight();
@@ -936,6 +937,45 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     pf.close();
     QVERIFY2(perf.contains(QStringLiteral("kMaxFlowTimes")),
              "流程耗时历史必须有界，防止连续运行无界增长");
+}
+
+void UiGuardsTest::f2ValidationGuards()
+{
+    // ① 模板搜索参数告警
+    QFile t(QStringLiteral(SRC_DIR "/src/OpencvTemplateMatchNode.cpp"));
+    QVERIFY2(t.open(QIODevice::ReadOnly | QIODevice::Text), "打不开模板匹配节点");
+    const QString tmpl = QString::fromUtf8(t.readAll());
+    t.close();
+    QVERIFY2(tmpl.contains(QStringLiteral("下限大于上限，已自动交换"))
+             && tmpl.contains(QStringLiteral("步长非法")),
+             "搜索参数被静默纠正必须有告警");
+
+    // ② 特征库同名拒绝
+    QFile fs(QStringLiteral(SRC_DIR "/src/FeatureSearchNode.cpp"));
+    QVERIFY2(fs.open(QIODevice::ReadOnly | QIODevice::Text), "打不开特征节点");
+    const QString feat = QString::fromUtf8(fs.readAll());
+    fs.close();
+    QVERIFY2(feat.contains(QStringLiteral("loadFeatureSampleByName"))
+             && feat.contains(QStringLiteral("同名特征样本")),
+             "特征入库必须拒绝同名样本，不能静默取最新");
+
+    // ③ VOC classes.txt 写失败不静默
+    QFile y(QStringLiteral(SRC_DIR "/include/YoloAnnotation.h"));
+    QVERIFY2(y.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 YoloAnnotation.h");
+    const QString yolo = QString::fromUtf8(y.readAll());
+    y.close();
+    QVERIFY2(yolo.contains(QStringLiteral("classes.txt 写入失败")),
+             "VOC 导入新增类别写 classes.txt 失败必须提示");
+
+    // ④ 设计器表头/系列名可编辑 + 预览红字
+    QFile d(QStringLiteral(SRC_DIR "/src/RuntimeInterfaceDesigner.cpp"));
+    QVERIFY2(d.open(QIODevice::ReadOnly | QIODevice::Text), "打不开设计器");
+    const QString des = QString::fromUtf8(d.readAll());
+    d.close();
+    QVERIFY2(des.contains(QStringLiteral("编辑表头")) && des.contains(QStringLiteral("编辑系列名")),
+             "表头与系列名有序列化但无编辑入口必须补齐");
+    QVERIFY2(des.contains(QStringLiteral("view->setKnownNodeNames(m_nodeNames)")),
+             "预览必须做绑定失效体检，与运行态一致");
 }
 
 void UiGuardsTest::deleteShortcutIgnoredWhileEditingText()

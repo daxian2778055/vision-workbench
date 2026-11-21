@@ -4720,6 +4720,23 @@ void FeatureMatchTest::templateSearchValuesHandlesTinyMaxCount()
     QVector<double> normal;
     OpencvTemplateMatchNode::collectSearchValues(0.0, 9.0, 1.0, 90, normal);
     QCOMPARE(normal.size(), 10);
+
+    // P10 校验批：被静默纠正的参数必须有 warning（此前用户完全看不到）
+    QStringList warnings;
+    QVector<double> swapped;
+    OpencvTemplateMatchNode::collectSearchValues(10.0, -10.0, 1.0, 90, swapped, warnings);
+    QVERIFY2(warnings.contains(QStringLiteral("下限大于上限，已自动交换")),
+             "min>max 必须给出告警");
+    warnings.clear();
+    QVector<double> badStep;
+    OpencvTemplateMatchNode::collectSearchValues(0.0, 10.0, 0.0, 90, badStep, warnings);
+    QVERIFY2(warnings.contains(QStringLiteral("步长非法，已按单点搜索")),
+             "step<=0 必须给出告警");
+    warnings.clear();
+    QVector<double> capped;
+    OpencvTemplateMatchNode::collectSearchValues(0.0, 1000.0, 1.0, 10, capped, warnings);
+    QVERIFY2(warnings.contains(QStringLiteral("搜索点数超过上限，已均匀重采样")),
+             "采样超限必须给出告警");
 }
 
 // 2026-11-09 复核：图像型 ROI 掩膜若来自 uint2/CV_16U 或 real/CV_32F，

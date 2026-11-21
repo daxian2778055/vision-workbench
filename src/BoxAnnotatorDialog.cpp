@@ -182,6 +182,9 @@ BoxAnnotatorDialog::BoxAnnotatorDialog(const QString &dir, QWidget *parent) : QD
                           .arg(imported).arg(skipped);
         if (!added.isEmpty())
             msg += QStringLiteral("；新增类别：%1").arg(added.join(QStringLiteral(",")));
+        // P10 校验批：importVoc 返回 true 但 error 非空 = 部分失败（classes.txt 没写进去），必须显示
+        if (!error.isEmpty())
+            msg += QStringLiteral("；警告：%1").arg(error);
         m_status->setText(msg);
         if (imported > 0) reloadImages();
     });

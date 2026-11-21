@@ -175,6 +175,9 @@ public:
     /// 导出为静态是为了让腿能锁住 maxCount<=1 不产生 inf/nan 步长（2026-11-09）。
     static void collectSearchValues(double mn, double mx, double step, int maxCount,
                                     QVector<double> &out);
+    /// P10 校验批：同上，但把"被静默纠正"的情形写入 warning（参数面板/用户提示用）
+    static void collectSearchValues(double mn, double mx, double step, int maxCount,
+                                    QVector<double> &out, QStringList &warnings);
     /// 外部掩膜可能是 CV_16U/CV_32F/3 通道；统一成 CV_8UC1 的 0/255 二值图，
     /// 避免与其它 CV_8U 掩膜 bitwise_and 时触发 OpenCV 类型断言（2026-11-09）。
     /// 不支持的通道数返回空 Mat。导出为静态便于腿直接测纯函数。
