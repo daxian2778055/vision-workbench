@@ -83,6 +83,7 @@ void p6RuntimeDesignerGuards();         // bindType 保留、保存失败、撤�
 void p7TrainingToolGuards();            // 命令预览刷新、产物限定目录、异常退出、标注类别/清空确认（源码守卫）
 void p8DataPanelGuards();               // 输出查看器 setNode/连接、报警真删、汇总可见行、CSV 转义（源码守卫）
 void p9SystemGuards();                  // 角色闸、载入中止回滚、多流程打包（源码守卫）
+void p10CrossCutGuards();               // 会话信号有消费者、裸指针 QPointer 兜底、标题 tr（源码守卫）
 void runtimeDesignerHasOfficialDragAndClipboard();
 void runtimeDesignerHasOfficialSectionsAndAlign();
 void runtimeDesignerAlignHCenterAndRight();
@@ -861,6 +862,42 @@ void UiGuardsTest::p9SystemGuards()
     pp.close();
     QVERIFY2(pack.contains(QStringLiteral("pack(const QList<FlowScene *> &scenes")),
              "打包器必须有多场景重载");
+}
+
+void UiGuardsTest::p10CrossCutGuards()
+{
+    // ① 会话/写闸信号必须有消费者（此前有 emit 无连接）
+    QFile mw(QStringLiteral(SRC_DIR "/src/MainWindow.cpp"));
+    QVERIFY2(mw.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 MainWindow.cpp");
+    const QString main = QString::fromUtf8(mw.readAll());
+    mw.close();
+    QVERIFY2(main.contains(QStringLiteral("&SessionManager::sessionChanged"))
+             && main.contains(QStringLiteral("&SessionManager::writesLockChanged")),
+             "会话/写闸信号必须有消费者，否则动态权限变更不生效");
+    QVERIFY2(!main.contains(QStringLiteral("setWindowTitle(QStringLiteral(\"视觉方案工作台")),
+             "窗口标题必须 tr()，英文模式不能冒中文");
+
+    // ② 裸指针兜底
+    QFile cm(QStringLiteral(SRC_DIR "/include/CommunicationManagerDialog.h"));
+    QVERIFY2(cm.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 CommunicationManagerDialog.h");
+    const QString comm = QString::fromUtf8(cm.readAll());
+    cm.close();
+    QVERIFY2(comm.contains(QStringLiteral("QPointer<GlobalTriggerDialog> m_triggerDialog")),
+             "内嵌触发对话框成员必须 QPointer 兜底");
+
+    QFile er(QStringLiteral(SRC_DIR "/include/ModuleEditorRegistry.h"));
+    QVERIFY2(er.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 ModuleEditorRegistry.h");
+    const QString reg = QString::fromUtf8(er.readAll());
+    er.close();
+    QVERIFY2(reg.contains(QStringLiteral("QPointer<QDialog>> m_editors")),
+             "编辑器登记簿必须弱引用兜底");
+
+    // ③ 右键转发信号（FlowScene::request*）的 emit 信号必须有消费者
+    // 这些是普通转发方法，真正 emit 的是 nodeHelpRequested 等
+    QVERIFY2(main.contains(QStringLiteral("&FlowScene::nodeHelpRequested"))
+             && main.contains(QStringLiteral("&FlowScene::nodeOutputDataRequested"))
+             && main.contains(QStringLiteral("&FlowScene::executeToHereRequested")),
+             "右键菜单转发的信号必须有消费者，否则菜单项点了没反应");
 }
 
 void UiGuardsTest::deleteShortcutIgnoredWhileEditingText()

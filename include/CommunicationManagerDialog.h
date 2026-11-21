@@ -10,6 +10,7 @@
 #include <QSpinBox>
 #include <QCheckBox>
 #include <QAbstractButton>
+#include <QPointer>
 #include <QLabel>
 #include <QGroupBox>
 #include <QPlainTextEdit>
@@ -183,7 +184,8 @@ private:
     QPushButton *m_importGtdBtn = nullptr;
 
     // 触发配置页（内嵌全局触发对话框）
-    GlobalTriggerDialog *m_triggerDialog = nullptr;
+    // P10：QPointer 兜底——布局托管虽在，外部销毁路径无归零时也不悬垂
+    QPointer<GlobalTriggerDialog> m_triggerDialog;
 
     // 响应配置页（VM 5.2.5）
     QCheckBox *m_respSchemeEnable = nullptr;

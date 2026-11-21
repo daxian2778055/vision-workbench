@@ -688,7 +688,7 @@ Please change the password immediately via "System -&gt; User Management".</tran
     <message>
         <location filename="../src/MainWindow.cpp" line="2107"/>
         <source>（菜单：系统 → 修改管理员口令）</source>
-        <translation>(menu: System -&gt; Change administrator password)</translation>
+        <translation> (Menu: System → Change Administrator Password)</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="2108"/>
@@ -1573,7 +1573,7 @@ Until the password is changed, canvas and module editing, saving/exporting schem
     <message>
         <location filename="../src/MainWindow.cpp" line="6296"/>
         <source>写操作已被禁止：出厂默认口令仍在使用（「系统 → 修改管理员口令」可解除）</source>
-        <translation>Write operations are blocked: the factory default password is still in use (clear it via System -&gt; Change administrator password)</translation>
+        <translation>Write operations are blocked: the factory default password is still in use (change it via System → Change Administrator Password to unlock)</translation>
     </message>
     <message>
         <location filename="../src/MainWindow.cpp" line="6300"/>
@@ -1895,6 +1895,10 @@ Node parameters now use relative paths; save the scheme to apply.</translation>
         <translation>Failed to write the runtime layout (%1).
 Check that the program directory is writable; the designer stays open and edits are kept.</translation>
     </message>
+    <message>
+        <source>视觉方案工作台</source>
+        <translation>Vision Workbench</translation>
+    </message>
 </context>
 <context>
     <name>ProjectManager</name>
@@ -2061,7 +2065,7 @@ Check that the program directory is writable; the designer stays open and edits 
     </message>
     <message>
         <source>调整控件叠放顺序（运行时后创建者在上）</source>
-        <translation>Adjust control stacking order (later-created controls appear on top)</translation>
+        <translation>Adjust control stacking order (later-created controls are on top at runtime)</translation>
     </message>
     <message>
         <source>保存布局</source>

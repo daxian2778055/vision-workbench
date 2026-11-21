@@ -388,6 +388,32 @@ EN = {
     "运行界面布局写入失败（%1）。\n请检查程序目录是否可写；设计器保持打开，修改未丢失。":
         "Failed to write the runtime layout (%1).\n"
         "Check that the program directory is writable; the designer stays open and edits are kept.",
+    # P10：窗口标题
+    "视觉方案工作台": "Vision Workbench",
+    "视觉方案工作台 - %1 [%2]": "Vision Workbench - %1 [%2]",
+    # P10：TS 已有译文但字典缺键的高影响站点（菜单/按钮/标题）
+    "方案另存为": "Save Scheme As",
+    "导入流程": "Import Flow",
+    "打开示例": "Open Example",
+    "帮助文档": "Help Documentation",
+    "帮助文档（在线）": "Help Documentation (Online)",
+    "更多支持": "More Support",
+    "修改管理员口令": "Change administrator password",
+    "相机管理": "Camera Management",
+    "导出算子代码": "Export Operator Code",
+    "写操作已被禁止：出厂默认口令仍在使用（「系统 → 修改管理员口令」可解除）":
+        "Write operations are blocked: the factory default password is still in use "
+        "(change it via System → Change Administrator Password to unlock)",
+    "（菜单：系统 → 修改管理员口令）": " (Menu: System → Change Administrator Password)",
+    "保存布局": "Save Layout",
+    "加载布局": "Load Layout",
+    "预览": "Preview",
+    "应用并进入运行模式": "Apply and Enter Run Mode",
+    "当前没有可预览的布局": "No layout available to preview",
+    "上移一层": "Bring Forward",
+    "下移一层": "Send Backward",
+    "调整控件叠放顺序（运行时后创建者在上）":
+        "Adjust control stacking order (later-created controls are on top at runtime)",
 }
 
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QHash>
+#include <QPointer>
 #include <functional>
 
 class QDialog;
@@ -31,5 +32,5 @@ public:
     QDialog *lookup(NodeBase *node) const;
 
 private:
-    QHash<NodeBase *, QDialog *> m_editors;
+    QHash<NodeBase *, QPointer<QDialog>> m_editors;   // P10：弱引用兜底，新工厂漏设 WA_DeleteOnClose 也不悬垂
 };

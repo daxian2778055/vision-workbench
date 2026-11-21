@@ -1874,9 +1874,23 @@ MainWindow::MainWindow(QWidget *parent, bool previewOnly) :
             const QString role = loginDialog.loggedInRole();
             SessionManager::instance()->login(user, role);
             VFP_DEBUG << "User logged in:" << user << "Role:" << role;
-            setWindowTitle(QStringLiteral("视觉方案工作台 - %1 [%2]").arg(user, role));
+            setWindowTitle(tr("视觉方案工作台 - %1 [%2]").arg(user, role));
             updateUserButton();
             applyPermissionRestrictions();
+            // P10：会话/写闸信号此前有 emit 无消费者，权限只靠显式调用维持——任何绕过
+            // 调用点的动态变更都会让菜单滞后。接上后登录/切用户/闸变都会自动重算。
+            if (!m_sessionSignalsConnected) {
+                m_sessionSignalsConnected = true;
+                auto *session = SessionManager::instance();
+                connect(session, &SessionManager::sessionChanged, this,
+                        [this](const QString &user, const QString &role) {
+                    setWindowTitle(tr("视觉方案工作台 - %1 [%2]").arg(user, role));
+                    updateUserButton();
+                    applyPermissionRestrictions();
+                });
+                connect(session, &SessionManager::writesLockChanged, this,
+                        [this]() { applyPermissionRestrictions(); });
+            }
             // 脚本确认处于关闭态时的提示：**登录后**才写状态栏（构造期写会在窗口出现前过期）。
             // 写闸开启时这条会被合并进写闸的常驻提示，这里不再单独写（避免互相顶掉）。
             if (!ScriptSecurityPolicy::instance().requireConfirmation()
@@ -5588,7 +5602,8 @@ void MainWindow::switchUser()
     const QString user = loginDialog.loggedInUser();
     const QString role = loginDialog.loggedInRole();
     SessionManager::instance()->login(user, role);
-    setWindowTitle(QStringLiteral("视觉方案工作台 - %1 [%2]").arg(user, role));
+    // 会话信号已接上，标题/按钮/权限由 sessionChanged 自动刷新；显式调用保持兼容
+    setWindowTitle(tr("视觉方案工作台 - %1 [%2]").arg(user, role));
     updateUserButton();
     applyPermissionRestrictions();
     logMessage(QStringLiteral("已切换用户：%1 [%2]").arg(user, role));
@@ -5621,7 +5636,7 @@ void MainWindow::logoutUser()
     SessionManager::instance()->login(loginDialog.loggedInUser(), loginDialog.loggedInRole());
     const QString user = loginDialog.loggedInUser();
     const QString role = loginDialog.loggedInRole();
-    setWindowTitle(QStringLiteral("视觉方案工作台 - %1 [%2]").arg(user, role));
+    setWindowTitle(tr("视觉方案工作台 - %1 [%2]").arg(user, role));
     updateUserButton();
     applyPermissionRestrictions();
     logMessage(QStringLiteral("用户已登录：%1 [%2]").arg(user, role));
@@ -8706,7 +8721,7 @@ void MainWindow::enforceFactoryPasswordPolicy()
             // 「系统 → 修改管理员口令」刻意不受会话约束（setupSystemMenu 处 setEnabled(true)），
             // 退登后也能直接把闸解掉，不存在把用户锁死在无法解锁位置的问题。
             session->logout();
-            setWindowTitle(QStringLiteral("视觉方案工作台"));
+            setWindowTitle(tr("视觉方案工作台"));
             applyPermissionRestrictions();
             logMessage(tr("放弃修改出厂口令：本次会话已结束，写闸保持禁止（重新登录后继续）"));
             break;

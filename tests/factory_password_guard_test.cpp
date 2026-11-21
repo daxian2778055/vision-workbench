@@ -36,6 +36,7 @@ private slots:
     void saveProject_refusedWhileWritesBlocked();
     void exportEncryptedProject_refusedWhileWritesBlocked();
     void writeGateRefusal_isTheSinglePredicate();
+    void sessionSignals_emittedOnLoginLogoutAndGate();   // P10：会话/写闸信号必须发出
     void userTableWrites_refusedWhileWritesBlocked();
     void retire_unlocksWritesOnSuccess();
     void saveProject_allowedAfterRetire();
@@ -58,6 +59,31 @@ void FactoryPasswordGuardTest::initTestCase()
     // 三态之后这句才真正是「前提」：读不通的话本套件的断言全部失去夹具，必须当场停在这里。
     QVERIFY2(AppDatabase::instance()->adminPasswordState() == AdminPasswordState::InUse,
              "新建库应读得出出厂口令在用（否则本套件的断言全部失去前提）");
+}
+
+void FactoryPasswordGuardTest::sessionSignals_emittedOnLoginLogoutAndGate()
+{
+    auto *s = SessionManager::instance();
+    s->logout();
+    s->setWritesBlocked(false);   // 确保初态干净，下面的置位才会真发信号
+    QSignalSpy sessionSpy(s, &SessionManager::sessionChanged);
+    QSignalSpy gateSpy(s, &SessionManager::writesLockChanged);
+    QVERIFY(sessionSpy.isValid());
+    QVERIFY(gateSpy.isValid());
+
+    s->login(QStringLiteral("u10"), QStringLiteral("Engineer"));
+    QCOMPARE(sessionSpy.count(), 1);
+    QCOMPARE(sessionSpy.at(0).at(0).toString(), QStringLiteral("u10"));
+    s->logout();
+    QCOMPARE(sessionSpy.count(), 2);
+    s->setWritesBlocked(true);
+    QCOMPARE(gateSpy.count(), 1);
+    s->setWritesBlocked(false);
+    QCOMPARE(gateSpy.count(), 2);
+
+    // 恢复干净状态，避免影响后续用例
+    s->setWritesBlocked(false);
+    s->logout();
 }
 
 void FactoryPasswordGuardTest::writesLock_disablesConfigPermissionsEvenForAdmin()

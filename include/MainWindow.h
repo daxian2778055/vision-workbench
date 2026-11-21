@@ -517,6 +517,8 @@ protected:
     bool m_forceQuit = false;                    ///< 托盘「退出软件」置位，跳过后台运行询问
     /// 切换语言：确认已过，closeEvent 收尾后启动新实例（避免"先起新进程后询问"的双实例）
     bool m_restartAfterClose = false;
+    /// P10：会话/写闸信号只接一次（登录路径可能多次进入）
+    bool m_sessionSignalsConnected = false;
     /// 已从 QSettings 恢复过停靠布局 ⇒ 首帧不再套用默认比例（否则用户拖过的占比被覆盖）
     bool m_dockLayoutRestored = false;
 
