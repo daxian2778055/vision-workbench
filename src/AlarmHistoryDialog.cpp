@@ -111,7 +111,11 @@ void AlarmHistoryDialog::refreshAlarms()
     QDateTime from = m_fromDateTime->dateTime();
     QDateTime to = m_toDateTime->dateTime();
 
-    auto alarms = AppDatabase::instance()->queryAlarms(from, to);
+    // P10：默认上限 500，此前静默截断。多查 1 条做"是否还有更多"的判定。
+    auto alarms = AppDatabase::instance()->queryAlarms(from, to, 501);
+    const bool truncated = alarms.size() > 500;
+    if (truncated)
+        alarms.removeLast();
     for (const auto &a : alarms) {
         int row = m_alarmTable->rowCount();
         m_alarmTable->insertRow(row);
@@ -131,4 +135,7 @@ void AlarmHistoryDialog::refreshAlarms()
         m_alarmTable->setItem(row, 4, msgItem);
     }
     m_alarmTable->resizeColumnsToContents();
+    // P10：截断时明确提示，避免用户以为看到的是全部记录
+    setWindowTitle(truncated ? QStringLiteral("报警历史（仅显示最近 500 条，请缩小时间范围）")
+                             : QStringLiteral("报警历史"));
 }

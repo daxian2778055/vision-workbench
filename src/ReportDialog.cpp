@@ -92,8 +92,12 @@ void ReportDialog::setupUI()
 void ReportDialog::refreshStats()
 {
     m_stats.clear();
+    // P10：10 万条上限此前静默截断（对比统计报表有提示）；多查 1 条判定并在表格上方标注
     auto results = AppDatabase::instance()->queryResults(
-        m_fromDateTime->dateTime(), m_toDateTime->dateTime(), 100000);
+        m_fromDateTime->dateTime(), m_toDateTime->dateTime(), 100001);
+    const bool truncated = results.size() > 100000;
+    if (truncated)
+        results.removeLast();
 
     QMap<QString, FlowStat> map;
     for (const auto &r : results) {
@@ -114,6 +118,9 @@ void ReportDialog::refreshStats()
         m_statTable->setItem(row, 2, new QTableWidgetItem(QString::number(s.passed)));
         m_statTable->setItem(row, 3, new QTableWidgetItem(QString::number(s.failed)));
     }
+    // P10：截断时标题栏提示
+    setWindowTitle(truncated ? QStringLiteral("检测报表（统计已截断至 10 万条，请缩小时间范围）")
+                             : QStringLiteral("检测报表"));
     update(); // 触发重绘图表
 }
 

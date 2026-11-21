@@ -84,6 +84,7 @@ void p7TrainingToolGuards();            // 命令预览刷新、产物限定目�
 void p8DataPanelGuards();               // 输出查看器 setNode/连接、报警真删、汇总可见行、CSV 转义（源码守卫）
 void p9SystemGuards();                  // 角色闸、载入中止回滚、多流程打包（源码守卫）
 void p10CrossCutGuards();               // 会话信号有消费者、裸指针 QPointer 兜底、标题 tr（源码守卫）
+void f1DataPanelFollowupGuards();       // flush 三态、序号持久化、坏文件防护、查询上限提示、耗时有界
 void runtimeDesignerHasOfficialDragAndClipboard();
 void runtimeDesignerHasOfficialSectionsAndAlign();
 void runtimeDesignerAlignHCenterAndRight();
@@ -898,6 +899,43 @@ void UiGuardsTest::p10CrossCutGuards()
              && main.contains(QStringLiteral("&FlowScene::nodeOutputDataRequested"))
              && main.contains(QStringLiteral("&FlowScene::executeToHereRequested")),
              "右键菜单转发的信号必须有消费者，否则菜单项点了没反应");
+}
+
+void UiGuardsTest::f1DataPanelFollowupGuards()
+{
+    QFile lf(QStringLiteral(SRC_DIR "/src/LargeFileImageStore.cpp"));
+    QVERIFY2(lf.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 LargeFileImageStore.cpp");
+    const QString store = QString::fromUtf8(lf.readAll());
+    lf.close();
+    QVERIFY2(store.contains(QStringLiteral("FlushResult::NothingToFlush"))
+             && store.contains(QStringLiteral("FlushResult::Failed")),
+             "flush 必须区分无数据/成功/失败三态");
+    QVERIFY2(store.contains(QStringLiteral("acq/largeFileBatchSeq")),
+             "批次序号必须持久化，重启同秒不撞名");
+    QVERIFY2(store.contains(QStringLiteral("kMaxEntryBytes")),
+             "坏文件声明超大长度必须在分配前拒绝");
+
+    // 查询上限提示（三处）
+    for (const char *file : {"src/AlarmHistoryDialog.cpp", "src/InspectionResultDialog.cpp"}) {
+        QFile f(QStringLiteral(SRC_DIR "/") + QString::fromLatin1(file));
+        QVERIFY2(f.open(QIODevice::ReadOnly | QIODevice::Text), "打不开查询对话框");
+        const QString src = QString::fromUtf8(f.readAll());
+        f.close();
+        QVERIFY2(src.contains(QStringLiteral("truncated")) && src.contains(QStringLiteral("500")),
+                 "查询对话框必须提示 500 条截断");
+    }
+    QFile rp(QStringLiteral(SRC_DIR "/src/ReportDialog.cpp"));
+    QVERIFY2(rp.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 ReportDialog.cpp");
+    QVERIFY2(QString::fromUtf8(rp.readAll()).contains(QStringLiteral("truncated")),
+             "检测报表 10 万条截断必须提示");
+
+    // 性能面板耗时历史有界
+    QFile pf(QStringLiteral(SRC_DIR "/src/PerformancePanel.cpp"));
+    QVERIFY2(pf.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 PerformancePanel.cpp");
+    const QString perf = QString::fromUtf8(pf.readAll());
+    pf.close();
+    QVERIFY2(perf.contains(QStringLiteral("kMaxFlowTimes")),
+             "流程耗时历史必须有界，防止连续运行无界增长");
 }
 
 void UiGuardsTest::deleteShortcutIgnoredWhileEditingText()

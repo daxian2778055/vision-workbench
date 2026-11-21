@@ -147,6 +147,10 @@ void PerformancePanel::onNodeExecutionTime(NodeBase *node, qint64 elapsedMs)
 void PerformancePanel::onFlowExecutionTime(qint64 totalMs)
 {
     m_flowTimes.append({QDateTime::currentMSecsSinceEpoch(), totalMs});
+    // P10：连续模式长时间运行无界增长会吃内存；保留最近 5000 轮（导出/显示足够）
+    constexpr int kMaxFlowTimes = 5000;
+    if (m_flowTimes.size() > kMaxFlowTimes)
+        m_flowTimes.remove(0, m_flowTimes.size() - kMaxFlowTimes);
     m_flowTimeLabel->setText(QStringLiteral("流程总耗时: %1 ms").arg(totalMs));
 }
 

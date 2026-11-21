@@ -14,6 +14,7 @@
 namespace {
 constexpr char kMagic[8] = {'V', 'F', 'P', 'I', 'M', 'G', '0', '1'};
 constexpr int kMaxEntries = 100000;   ///< 防坏文件：条目数上界
+constexpr int kMaxEntryBytes = 64 * 1024 * 1024;  ///< P10：单张 PNG 上界，防坏文件声明超大长度触发巨量分配
 /// 单批内存预算：batchSize 可能被设成很大（现场常见 1000+），5MP 彩色图 PNG 单张可达数 MB，
 /// 只按张数攒批会把内存吃光。超过预算就提前落盘（批次文件略小，但不会 OOM）。
 constexpr qint64 kMaxPendingBytes = 256LL * 1024 * 1024;
@@ -26,6 +27,8 @@ LargeFileImageStore::LargeFileImageStore()
     m_settings.directory = s.value(QStringLiteral("acq/largeFileDirectory"), QString()).toString();
     m_settings.batchSize =
         qBound(1, s.value(QStringLiteral("acq/largeFileBatchSize"), 100).toInt(), 10000);
+    // P10：批次序号持久化——重启同秒落盘不撞名（此前 m_batchSeq 恒从 0 起）
+    m_batchSeq = qBound(0, s.value(QStringLiteral("acq/largeFileBatchSeq"), 0).toInt(), 9999);
 }
 
 LargeFileImageStore *LargeFileImageStore::instance()
@@ -88,6 +91,7 @@ void LargeFileImageStore::persistSettings() const
     s.setValue(QStringLiteral("acq/largeFileEnabled"), m_settings.enabled);
     s.setValue(QStringLiteral("acq/largeFileDirectory"), m_settings.directory);
     s.setValue(QStringLiteral("acq/largeFileBatchSize"), m_settings.batchSize);
+    s.setValue(QStringLiteral("acq/largeFileBatchSeq"), m_batchSeq);
 }
 
 bool LargeFileImageStore::append(const cv::Mat &image, const QString &sourceName,
@@ -139,15 +143,17 @@ QString LargeFileImageStore::failureMessage(const QString &why)
     return QStringLiteral("大文件存图失败：%1").arg(why);
 }
 
-int LargeFileImageStore::flush()
+LargeFileImageStore::FlushResult LargeFileImageStore::flush(QString *error)
 {
     QMutexLocker locker(&m_mutex);
     if (m_pending.isEmpty())
-        return 0;
+        return FlushResult::NothingToFlush;
     QString path, why;
-    if (!writePendingBatchLocked(&path, &why))
-        return 0;
-    return 1;
+    if (!writePendingBatchLocked(&path, &why)) {
+        if (error) *error = why;
+        return FlushResult::Failed;
+    }
+    return FlushResult::Written;
 }
 
 bool LargeFileImageStore::writePendingBatchLocked(QString *outPath, QString *error)
@@ -202,6 +208,8 @@ bool LargeFileImageStore::writePendingBatchLocked(QString *outPath, QString *err
     m_pending.clear();
     m_pendingBytes = 0;
     ++m_batchSeq;
+    // P10：序号即时落盘，重启同秒再写从下一个号起（不依赖用户改设置才 persist）
+    QSettings().setValue(QStringLiteral("acq/largeFileBatchSeq"), m_batchSeq);
     if (outPath) *outPath = finalPath;
     return true;
 }
@@ -231,11 +239,23 @@ bool LargeFileImageStore::readBatch(const QString &path, QVector<LargeImageEntry
     QVector<LargeImageEntry> result;
     result.reserve(static_cast<int>(count));
     for (quint32 i = 0; i < count; ++i) {
+        // P10：QByteArray 的 >> 会按文件里声明的长度直接分配，坏文件可让 4 字节长度
+        // 声明成几 GB ⇒ 巨量分配/崩溃。读前先查长度上界（QByteArray 序列化 = quint32 + 数据）。
+        auto readBounded = [&in](QByteArray *out, int limit) -> bool {
+            quint32 len = 0;
+            in >> len;
+            if (in.status() != QDataStream::Ok || len > static_cast<quint32>(limit))
+                return false;
+            out->resize(static_cast<int>(len));
+            if (len > 0 && in.readRawData(out->data(), static_cast<int>(len))
+                               != static_cast<int>(len))
+                return false;
+            return true;
+        };
         QByteArray name;
         QByteArray data;
-        in >> name >> data;
-        if (in.status() != QDataStream::Ok || data.isEmpty()) {
-            if (error) *error = QStringLiteral("第 %1 条数据损坏").arg(i + 1);
+        if (!readBounded(&name, 4096) || !readBounded(&data, kMaxEntryBytes) || data.isEmpty()) {
+            if (error) *error = QStringLiteral("第 %1 条数据损坏或超出大小上限").arg(i + 1);
             return false;
         }
         LargeImageEntry entry;

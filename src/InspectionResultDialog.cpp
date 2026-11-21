@@ -147,7 +147,11 @@ void InspectionResultDialog::refreshResults()
     QDateTime from = m_fromDateTime->dateTime();
     QDateTime to = m_toDateTime->dateTime();
 
-    auto results = AppDatabase::instance()->queryResults(from, to);
+    // P10：探测 500 条上限，截断时提示（多查 1 条判定）
+    auto results = AppDatabase::instance()->queryResults(from, to, 501);
+    const bool truncated = results.size() > 500;
+    if (truncated)
+        results.removeLast();
 
     // Apply flow filter if set
     QString flowFilter = m_flowFilter->text().trimmed();
@@ -171,4 +175,6 @@ void InspectionResultDialog::refreshResults()
         m_resultTable->setItem(row, 5, new QTableWidgetItem(r.value));
     }
     m_resultTable->resizeColumnsToContents();
+    setWindowTitle(truncated ? QStringLiteral("检查明细（仅显示最近 500 条，请缩小时间范围）")
+                             : QStringLiteral("检查明细"));
 }

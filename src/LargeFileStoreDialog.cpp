@@ -92,9 +92,17 @@ LargeFileStoreDialog::LargeFileStoreDialog(QWidget *parent) : QDialog(parent)
     });
     connect(flushBtn, &QPushButton::clicked, this, [this]() {
         applySettings();
-        if (LargeFileImageStore::instance()->flush() > 0)
+        // P10：区分"无数据/写成功/写失败"——此前三者都静默，用户不知道是否真的落盘
+        QString flushError;
+        const auto result = LargeFileImageStore::instance()->flush(&flushError);
+        if (result == LargeFileImageStore::FlushResult::Written)
             QMessageBox::information(this, QStringLiteral("采集策略"),
                                      QStringLiteral("当前批次已写入磁盘。"));
+        else if (result == LargeFileImageStore::FlushResult::Failed)
+            QMessageBox::warning(this, QStringLiteral("写入失败"), flushError);
+        else
+            QMessageBox::information(this, QStringLiteral("采集策略"),
+                                     QStringLiteral("当前没有待写入的图像。"));
         refreshPendingLabel();
         refreshBatchList();
     });
@@ -187,6 +195,26 @@ void LargeFileStoreDialog::extractSelected()
         this, QStringLiteral("选择解包输出目录"), QFileInfo(path).absolutePath());
     if (outDir.isEmpty())
         return;
+    // P10：解包会按 <序号>_<名称>.png 写文件，不确认可能静默覆盖已有产物
+    QVector<LargeImageEntry> probe;
+    QString probeError;
+    if (LargeFileImageStore::readBatch(path, &probe, &probeError)) {
+        int existing = 0;
+        for (int i = 0; i < probe.size(); ++i) {
+            QString base = QFileInfo(probe[i].name).fileName();
+            if (base.isEmpty()) base = QStringLiteral("image");
+            const QString outPath = QDir(outDir).filePath(
+                QStringLiteral("%1_%2.png").arg(i + 1, 4, 10, QLatin1Char('0')).arg(base));
+            if (QFileInfo::exists(outPath))
+                ++existing;
+        }
+        if (existing > 0
+            && QMessageBox::question(this, QStringLiteral("覆盖确认"),
+                   QStringLiteral("输出目录已有 %1 个同名 PNG，解包会覆盖它们。是否继续？")
+                       .arg(existing),
+                   QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+            return;
+    }
     QString error;
     const int count = LargeFileImageStore::extractBatch(path, outDir, &error);
     if (count <= 0 || !error.isEmpty()) {
