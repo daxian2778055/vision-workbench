@@ -25,4 +25,6 @@ public:
     /// schemeFilePath：方案的 .vfp 文件路径（用它的目录作为方案根）；
     /// 依赖统一放进 <schemeDir>/assets/，同名不同源自动加 _2/_3 后缀。
     static Result pack(FlowScene *scene, const QString &schemeFilePath);
+    /// P9：多流程方案要把所有页的依赖都收进来；单场景重载保持兼容（内部转调本重载）
+    static Result pack(const QList<FlowScene *> &scenes, const QString &schemeFilePath);
 };

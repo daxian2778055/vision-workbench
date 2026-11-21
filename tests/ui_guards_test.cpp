@@ -82,6 +82,7 @@ void p5CameraGuards();                  // 像素格式局部更新、设备占�
 void p6RuntimeDesignerGuards();         // bindType 保留、保存失败、撤销覆盖、切态询问（源码守卫）
 void p7TrainingToolGuards();            // 命令预览刷新、产物限定目录、异常退出、标注类别/清空确认（源码守卫）
 void p8DataPanelGuards();               // 输出查看器 setNode/连接、报警真删、汇总可见行、CSV 转义（源码守卫）
+void p9SystemGuards();                  // 角色闸、载入中止回滚、多流程打包（源码守卫）
 void runtimeDesignerHasOfficialDragAndClipboard();
 void runtimeDesignerHasOfficialSectionsAndAlign();
 void runtimeDesignerAlignHCenterAndRight();
@@ -825,6 +826,41 @@ void UiGuardsTest::p8DataPanelGuards()
     const QString exp = perf.mid(ex, exEnd - ex);
     QVERIFY2(exp.contains(QStringLiteral("QTextStream::Ok")) && exp.contains(QStringLiteral("csv(")),
              "性能 CSV 必须转义字段并检查写后状态");
+}
+
+void UiGuardsTest::p9SystemGuards()
+{
+    // ① 角色闸：画布编辑锁含角色判据；模块编辑入口查 canEditScheme
+    QFile s(QStringLiteral(SRC_DIR "/include/SessionManager.h"));
+    QVERIFY2(s.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 SessionManager.h");
+    const QString sess = QString::fromUtf8(s.readAll());
+    s.close();
+    const int lock = sess.indexOf(QStringLiteral("canvasEditShouldBeLocked"));
+    QVERIFY2(sess.mid(lock, 450).contains(QStringLiteral("canEditScheme")),
+             "画布编辑锁必须并入角色判据，堵住 Operator 从画布绕过菜单禁用");
+
+    QFile mw(QStringLiteral(SRC_DIR "/src/MainWindow.cpp"));
+    QVERIFY2(mw.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 MainWindow.cpp");
+    const QString main = QString::fromUtf8(mw.readAll());
+    mw.close();
+    const int me = main.indexOf(QStringLiteral("void MainWindow::openModuleEditor"));
+    QVERIFY2(main.mid(me, 800).contains(QStringLiteral("canEditScheme")),
+             "模块编辑入口必须查角色权限");
+
+    // ② 载入中止回滚元数据
+    QVERIFY2(main.contains(QStringLiteral("const QString prevFilePath = pm->lastFilePath()"))
+             && main.contains(QStringLiteral("pm->setLastFilePath(prevFilePath)")),
+             "执行器停止超时的中止分支必须回滚 lastFilePath");
+
+    // ③ 多流程打包
+    const int pk = main.indexOf(QStringLiteral("ProjectPackager::pack(m_flowScenes"));
+    QVERIFY2(pk >= 0, "打包必须覆盖所有流程页，不能只打当前页");
+    QFile pp(QStringLiteral(SRC_DIR "/src/ProjectPackager.cpp"));
+    QVERIFY2(pp.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 ProjectPackager.cpp");
+    const QString pack = QString::fromUtf8(pp.readAll());
+    pp.close();
+    QVERIFY2(pack.contains(QStringLiteral("pack(const QList<FlowScene *> &scenes")),
+             "打包器必须有多场景重载");
 }
 
 void UiGuardsTest::deleteShortcutIgnoredWhileEditingText()

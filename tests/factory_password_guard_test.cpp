@@ -190,6 +190,13 @@ void FactoryPasswordGuardTest::writeGateRefusal_isTheSinglePredicate()
              "P0 组合判据：闸解除且流程未跑，画布照常可编辑");
     QVERIFY2(s->canvasEditShouldBeLocked(true),
              "P0 组合判据：闸解除但流程在跑，仍按运行态锁图");
+
+    // P9：Operator 角色必须锁画布（此前只靠菜单禁用，画布双击/右键/工具库加节点能绕过）
+    s->login(QStringLiteral("op"), QStringLiteral("Operator"));
+    QVERIFY2(!s->canEditScheme(), "Operator 不应有编辑方案的权限");
+    QVERIFY2(s->canvasEditShouldBeLocked(false),
+             "P9：Operator 登录后即使闸未开、流程没跑，画布也必须锁——堵住菜单禁用后的旁路");
+    s->logout();
 }
 
 // W-1①：闸此前只管方案文件；用户管理只灰菜单，而改密弹框一直宣称"用户管理已被禁止"

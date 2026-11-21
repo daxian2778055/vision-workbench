@@ -869,7 +869,7 @@ MainWindow::MainWindow(QWidget *parent, bool previewOnly) :
                             m_imageDisplay->displayNodeOutput(selected);
                         });
 
-                // 工具行改用 QToolBar：窗口/图像区变窄时自动收进“»”溢出菜单，
+                // 工具行改用 QToolBar：窗口/图像区变窄时自动收进"»"溢出菜单，
                 // 不再像平铺按钮那样把图像区最小宽度撑到 700+（中央流程画布因此被挤成一条缝）。
                 auto *imgTools = new QToolBar(ui->imageDockContents);
                 imgTools->setObjectName(QStringLiteral("imageToolBar"));
@@ -2786,7 +2786,7 @@ void MainWindow::initActions()
     connect(m_actionDissolveGroup, &QAction::triggered, this, &MainWindow::onDissolveGroup);
     connect(m_actionToggleGroup, &QAction::triggered, this, &MainWindow::onToggleGroupCollapse);
 
-    // 语言入口在菜单收敛时挂到「帮助 → 语言」（实装 4.4 菜单栏没有独立顶层“语言”）。
+    // 语言入口在菜单收敛时挂到「帮助 → 语言」（实装 4.4 菜单栏没有独立顶层"语言"）。
 
     // 执行控制
     connect(ui->actionStartExecution, &QAction::triggered, this, &MainWindow::onStartExecution);
@@ -3307,6 +3307,13 @@ void MainWindow::openModuleEditor(NodeBase *node)
 {
     if (!node)
         return;
+    // P9：Operator 双击/右键进模块编辑的入口此前只查写闸与用户锁、不查角色——菜单禁了
+    // 但画布这条旁路能改参数。补角色闸（与 canEditScheme 同一判据）。
+    if (!SessionManager::instance()->canEditScheme()) {
+        QMessageBox::warning(this, tr("权限不足"),
+                             tr("当前账号没有编辑模块的权限（需要工程师或以上角色）。"));
+        return;
+    }
     // P0：写闸开启期间模块编辑面同禁。落库闸只拦「保存」，而「内存里改完参数/脚本立刻跑」
     // 这条路在重启前一直有效——闸要拦的正是这一格。已开着的编辑器一并收掉（锁不能从编辑器
     // 背后关上），拒因取写闸的单一判据串，不另写一份。
@@ -3902,8 +3909,8 @@ void MainWindow::onNodeRemoved(NodeBase *node)
         // 被删节点可能是当前选中节点的上游：图像源下拉/叠加候选里存的是它的裸指针，
         // 必须重建一次，否则下次展开/切换就会解引用已析构对象。
         refreshImageSourceCombo(m_selectedNode);
-        // 参数面板里的“图像源”下拉同样存上游裸指针：只有它真列了被删节点时才重建整页，
-        // 避免“删任意节点都重建参数面板”带来的无谓开销。
+        // 参数面板里的"图像源"下拉同样存上游裸指针：只有它真列了被删节点时才重建整页，
+        // 避免"删任意节点都重建参数面板"带来的无谓开销。
         if (m_selectedNode && ui->paramDockContents) {
             bool stale = false;
             if (QComboBox *c = ui->paramDockContents->findChild<QComboBox *>(
@@ -4002,7 +4009,7 @@ void MainWindow::onNewProject()
     if (m_auxPanels) {
         if (auto *rt = m_auxPanels->resultTablePanel())
             rt->clearResults();
-        // 图像区「模块结果」同样属于“上一方案”的数据，必须一起清
+        // 图像区「模块结果」同样属于"上一方案"的数据，必须一起清
         if (m_moduleResultPanel)
             m_moduleResultPanel->clearResults();
     }
@@ -4904,8 +4911,13 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
         return confirmOutsideSchemePaths(review);
     });
 
+    // P9：loadProject 内部会提前提交 lastFilePath/只读标志。若后续执行器停止超时而
+    // 中止打开，这些元数据会被污染成"未成功打开的方案"。先存旧值，超时分支回滚。
+    const QString prevFilePath = pm->lastFilePath();
+    const bool prevReadonly = pm->isReadonlyLoaded();
+
     // 先加载到临时列表：只有加载成功才销毁当前方案。
-    // 原实现是先 qDeleteAll 再加载，文件损坏时旧方案已丢、新方案为空，且仍报“加载成功”。
+    // 原实现是先 qDeleteAll 再加载，文件损坏时旧方案已丢、新方案为空，且仍报"加载成功"。
     QList<FlowScene*> loadedScenes;
     const bool success = pm->loadProject(fileName, loadedScenes, passphrase);
 
@@ -4961,6 +4973,12 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
         // 顺手释放本次已加载但未启用的新场景（loadedScenes 仍持有它们），否则泄漏。
         qDeleteAll(loadedScenes);
         loadedScenes.clear();
+        // P9：回滚 loadProject 提前提交的元数据，否则后续保存/相对路径基准指向未打开的方案
+        pm->setLastFilePath(prevFilePath);
+        if (prevReadonly)
+            pm->setReadonlyLoaded(true);
+        else
+            pm->resetReadonlyFlag();
         logMessage(tr("有流程执行线程超时未退出，已取消打开方案"));
         QMessageBox::warning(this, tr("提示"),
             tr("有流程仍在执行且未能在限定时间内退出，已取消打开方案以避免程序崩溃。"));
@@ -4994,7 +5012,7 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
     if (m_auxPanels) {
         if (auto *rt = m_auxPanels->resultTablePanel())
             rt->clearResults();
-        // 图像区「模块结果」同样属于“上一方案”的数据，必须一起清
+        // 图像区「模块结果」同样属于"上一方案"的数据，必须一起清
         if (m_moduleResultPanel)
             m_moduleResultPanel->clearResults();
     }
@@ -5786,7 +5804,7 @@ void MainWindow::maybeShowWelcomeOnStartup()
 void MainWindow::showWelcomePage()
 {
     // VM 4.4 口径：欢迎页是独立起步界面，出现时主编辑界面不应同时可见
-    //（否则就是截图里“欢迎窗浮在流程画布上”的共存状态）。关闭欢迎页后再回到主界面。
+    //（否则就是截图里"欢迎窗浮在流程画布上"的共存状态）。关闭欢迎页后再回到主界面。
     const bool hadMainVisible = isVisible();
     if (hadMainVisible)
         hide();
@@ -6976,7 +6994,7 @@ void MainWindow::onCurrentTabChanged(int index)
     // 图像源下拉按当前场景重置（等新场景选中节点后再填充）
     refreshImageSourceCombo(nullptr);
 
-    // 选区/参数/本地图/耗时角标都按“当前场景”语义：切页签后旧场景的节点不再是选中项。
+    // 选区/参数/本地图/耗时角标都按"当前场景"语义：切页签后旧场景的节点不再是选中项。
     // 不清理会让 m_selectedNode / m_localImageNode 继续指向旧场景节点（旧场景随后被关闭时
     // 就是悬垂指针，现场表现为切页签后再点一下随机闪退）。
     m_selectedNode = nullptr;
@@ -7681,7 +7699,7 @@ void MainWindow::setupDockWidgets()
     }
 
     // 恢复上次退出时的停靠布局（用户拖过的左右占比、面板显隐都要记住）。
-    // 键名带版本：旧版本存过“流程区被挤成一条缝”的布局，不能让它覆盖本次修正后的默认比例。
+    // 键名带版本：旧版本存过"流程区被挤成一条缝"的布局，不能让它覆盖本次修正后的默认比例。
     {
         QSettings settings;
         const QByteArray state =
@@ -8162,7 +8180,7 @@ void MainWindow::reorganizeMenuBar()
         }
     }
 
-    // 帮助：语言子菜单（实装 4.4 的“语言”位于帮助菜单内）
+    // 帮助：语言子菜单（实装 4.4 的"语言"位于帮助菜单内）
     if (m_helpMenu) {
         m_helpMenu->setTitle(tr("帮助"));
         QMenu *langMenu = new QMenu(tr("语言"), m_helpMenu);
@@ -8411,7 +8429,8 @@ void MainWindow::setupSystemMenu()
                         return;
                     }
                     const QString scheme = dir + QStringLiteral("/scheme.vfp");
-                    const ProjectPackager::Result r = ProjectPackager::pack(currentFlowScene(), scheme);
+                    // P9：多流程方案的所有页都要打包，不能只打当前页
+                    const ProjectPackager::Result r = ProjectPackager::pack(m_flowScenes, scheme);
                     if (!r.ok) {
                         QMessageBox::warning(this, tr("打包失败"), r.error);
                         return;
@@ -8808,7 +8827,7 @@ void MainWindow::retranslateUi()
                 QStringLiteral("图像显示"), QStringLiteral("Image Display"));
     m_texts.add([this](const QString &s) { ui->paramDock->setWindowTitle(s); },
                 QStringLiteral("算法参数"), QStringLiteral("Tool Parameters"));
-    // 实装 4.4 口径：左侧停靠面板叫“工具箱”（zh-cn.xaml: 工具箱 / Tool Box）
+    // 实装 4.4 口径：左侧停靠面板叫"工具箱"（zh-cn.xaml: 工具箱 / Tool Box）
     m_texts.add([this](const QString &s) { ui->toolDock->setWindowTitle(s); },
                 QStringLiteral("工具箱"), QStringLiteral("Toolbox"));
     m_texts.add([this](const QString &s) { ui->actionToggleToolDock->setText(s); },
@@ -9135,7 +9154,7 @@ void MainWindow::applyExtraOverlays(NodeBase *displayNode)
     Q_UNUSED(displayNode)
     if (!m_imageView)
         return;
-    // 实装 4.4：叠加的是“图像”而非 ROI/测量图元——把勾选模块的输出图以 50% 透明叠画
+    // 实装 4.4：叠加的是"图像"而非 ROI/测量图元——把勾选模块的输出图以 50% 透明叠画
     QVector<HalconCpp::HImage> images;
     FlowScene *scene = currentFlowScene();
     for (NodeBase *node : m_overlayNodes) {

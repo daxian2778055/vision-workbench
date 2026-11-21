@@ -33,6 +33,8 @@ public:
     /// 最近一次 loadProject 是否以只读形态加载（加密只读包 / 非加密只读包）。
     bool isReadonlyLoaded() const { return m_loadedReadonly; }
     void resetReadonlyFlag() { m_loadedReadonly = false; }
+    /// P9：中止载入（执行器超时）时回滚到载入前的只读状态
+    void setReadonlyLoaded(bool v) { m_loadedReadonly = v; }
 
     /// 最近一次 loadProject 成功载入文件的旧格式注记（176 行）：
     /// v1 明文打包无完整性校验位 / 裸 JSON 无信封——非空时 UI 载入侧加注一句；

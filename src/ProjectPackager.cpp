@@ -14,9 +14,15 @@
 
 ProjectPackager::Result ProjectPackager::pack(FlowScene *scene, const QString &schemeFilePath)
 {
+    return pack(QList<FlowScene *>{scene}, schemeFilePath);
+}
+
+ProjectPackager::Result ProjectPackager::pack(const QList<FlowScene *> &scenes,
+                                             const QString &schemeFilePath)
+{
     Result r;
     QHash<QString, QString> copiedBySource;   // 源绝对路径 -> assets 相对路径（同源只复制一次）
-    if (!scene) {
+    if (scenes.isEmpty() || !scenes.first()) {
         r.error = QStringLiteral("没有可用流程页");
         return r;
     }
@@ -48,9 +54,13 @@ ProjectPackager::Result ProjectPackager::pack(FlowScene *scene, const QString &s
     QStringList createdTargets;
 
     QList<NodeBase *> stableOrder;
-    for (NodeBase *n : scene->nodes())
-        if (n)
-            stableOrder.append(n);
+    // P9：多流程方案要打包所有页的依赖，不能只收当前页（此前换机后其它流程找不到模型）
+    for (FlowScene *sc : scenes) {
+        if (!sc) continue;
+        for (NodeBase *n : sc->nodes())
+            if (n)
+                stableOrder.append(n);
+    }
     std::sort(stableOrder.begin(), stableOrder.end(), [](NodeBase *a, NodeBase *b) {
         if (a->moduleId() != b->moduleId())
             return a->moduleId() < b->moduleId();

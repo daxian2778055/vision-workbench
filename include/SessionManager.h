@@ -47,7 +47,11 @@ public:
     /// 决策收在 SessionManager 这一处，MainWindow 的各处接线只是分发它（可单测）。
     bool canvasEditShouldBeLocked(bool runnerLockedGraph) const
     {
-        return runnerLockedGraph || m_writesBlocked;
+        // P9：Operator 角色无编辑权（canEditScheme 要求 Engineer 以上）。此前判据只有
+        // 运行锁/写闸，菜单被禁用但画布双击、右键编辑、双击工具库加节点仍可改流程——
+        // 把角色并进同一判据。未登录（CI/启动前）不额外锁，保持既有单测语义。
+        return runnerLockedGraph || m_writesBlocked
+               || (isLoggedIn() && !canEditScheme());
     }
 
 signals:
