@@ -86,6 +86,7 @@ void p9SystemGuards();                  // 角色闸、载入中止回滚、多�
 void p10CrossCutGuards();               // 会话信号有消费者、裸指针 QPointer 兜底、标题 tr（源码守卫）
 void f1DataPanelFollowupGuards();       // flush 三态、序号持久化、坏文件防护、查询上限提示、耗时有界
 void f2ValidationGuards();              // 搜索参数告警、同名拒绝、VOC 写失败、表头/系列编辑、预览红字
+void dockDefaultVisibilityGuards();     // 工具箱默认展开、结果表不 tabbed 遮住图像、图像最后 raise
 void runtimeDesignerHasOfficialDragAndClipboard();
 void runtimeDesignerHasOfficialSectionsAndAlign();
 void runtimeDesignerAlignHCenterAndRight();
@@ -976,6 +977,35 @@ void UiGuardsTest::f2ValidationGuards()
              "表头与系列名有序列化但无编辑入口必须补齐");
     QVERIFY2(des.contains(QStringLiteral("view->setKnownNodeNames(m_nodeNames)")),
              "预览必须做绑定失效体检，与运行态一致");
+}
+
+void UiGuardsTest::dockDefaultVisibilityGuards()
+{
+    QFile mw(QStringLiteral(SRC_DIR "/src/MainWindow.cpp"));
+    QVERIFY2(mw.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 MainWindow.cpp");
+    const QString src = QString::fromUtf8(mw.readAll());
+    mw.close();
+
+    // ① 工具箱默认展开（不能构造后又 setToolBrowserExpanded(false) 覆盖）
+    const int init = src.indexOf(QStringLiteral("setupToolCategoryBar();"));
+    const int after = src.indexOf(QStringLiteral("setToolBrowserExpanded("), init);
+    QVERIFY2(src.mid(after, 60).contains(QStringLiteral("true")),
+             "工具箱构造时必须默认展开，48px 竖条视觉上等于没显示");
+    QFile h(QStringLiteral(SRC_DIR "/include/MainWindow.h"));
+    QVERIFY2(h.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 MainWindow.h");
+    const QString header = QString::fromUtf8(h.readAll());
+    h.close();
+    QVERIFY2(header.contains(QStringLiteral("m_toolBrowserExpanded = true")),
+             "工具箱展开标志默认必须 true");
+
+    // ② 结果表用 splitDockWidget 放到图像下方，不能再 addDockWidget(Right) 与图像 tabbed
+    QVERIFY2(src.contains(QStringLiteral("splitDockWidget(ui->imageDock, resultDock, Qt::Vertical)")),
+             "结果表必须 split 到图像下方，不能与图像显示 tabbed 把图像页压到后面");
+
+    // ③ 最后再 raise 图像页
+    const int tail = src.indexOf(QStringLiteral("VFP_DEBUG << \"setupDockWidgets completed\""));
+    QVERIFY2(src.mid(tail - 400, 400).contains(QStringLiteral("ui->imageDock->raise()")),
+             "setupDockWidgets 收尾必须 raise 图像页，确保默认可见");
 }
 
 void UiGuardsTest::deleteShortcutIgnoredWhileEditingText()

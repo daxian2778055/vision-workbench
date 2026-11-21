@@ -7209,9 +7209,10 @@ void MainWindow::setupToolLibrary()
     // 为工具库添加拖拽事件过滤器
     ui->toolLibrary->viewport()->installEventFilter(this);
 
-    // 分类图标竖条（全部模块 + 各分组），默认收起为竖条
+    // 分类图标竖条（全部模块 + 各分组）。2026-11-21 现场反馈：默认收起成 48px 竖条
+    // 视觉上等于"工具箱没显示"，改为默认展开（用户仍可点"全部模块"再收起）。
     setupToolCategoryBar();
-    setToolBrowserExpanded(false);
+    setToolBrowserExpanded(true);
 }
 
 void MainWindow::setupToolCategoryBar()
@@ -7761,8 +7762,19 @@ void MainWindow::setupDockWidgets()
         if (resultDock->isFloating())
             resultDock->setFloating(false);
         removeDockWidget(resultDock);
-        addDockWidget(Qt::RightDockWidgetArea, resultDock);
+        // P10 现场反馈修复：结果区必须钉在"图像显示正下方"作为独立面板，
+        // 不能 addDockWidget(Right) —— 那会与 imageDock 自动 tabbed，结果页一 show
+        // 就把图像显示页压到后面，用户看到"右侧只有历史结果，没有图像显示"。
+        if (ui->imageDock && ui->imageDock->isVisible())
+            splitDockWidget(ui->imageDock, resultDock, Qt::Vertical);
+        else
+            addDockWidget(Qt::RightDockWidgetArea, resultDock);
         resultDock->show();
+    }
+    // 最后再 raise 一次图像页：上面的 split/restoreState/结果表 show 都可能改变页签当前项
+    if (ui->imageDock) {
+        ui->imageDock->show();
+        ui->imageDock->raise();
     }
 
     VFP_DEBUG << "setupDockWidgets completed";

@@ -421,7 +421,7 @@ protected:
     QWidget *m_toolBrowserPanel = nullptr;
     QVector<QToolButton *> m_toolCategoryButtons;
     QString m_toolActiveGroup;          ///< 当前分类（空 = 全部模块）
-    bool m_toolBrowserExpanded = false; ///< 模块列表是否展开（默认收起 = VM 图标竖条态）
+    bool m_toolBrowserExpanded = true;  ///< 模块列表默认展开（2026-11-21 现场反馈：收起态 48px 竖条视觉上等于没有工具箱）
     /// 图像显示路由与画布交互（显示决策/叠加/ROI 取点；逻辑见 ImageDisplayController）
     ImageDisplayController *m_imageDisplay = nullptr;
     FlowExecutor *m_executor;
