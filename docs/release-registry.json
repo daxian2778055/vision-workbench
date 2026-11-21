@@ -1351,6 +1351,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261121",
       "recorded_at": "2026-11-21",
       "recorded_note": "rc-20261117 之后累积发版包：上线 UI/操作性全量审查 P1-P10 十批约 60 处确定问题（菜单按入口切页、画布搜索定位与移动一次撤销、模块编辑钩子补齐、协议工具条按类型分发、相机参数缓存不冲默认值、运行界面 fromJson 不改状态、数据面板输出查看器与报警真删库、权限 Operator 画布旁路堵漏、会话信号有消费者等）；未修项推进两批（大文件 flush 三态/序号持久化/坏文件防护/上限提示、搜索参数告警/同名拒绝/VOC 写失败/设计器属性编辑）。部署自检 77 PASS / 0 FAIL / 3 SKIP，DeepOCR 合成图识别通过，exe 内嵌 HEAD 版本 yes。"
+    },
+    {
+      "tag": "rc-20261121.1",
+      "commit": "c6ab18d6d6d04dd84514e74fd386c94fe7243ff9",
+      "exe_md5": "43198e686f5868b4b9c98dd5a8077a24",
+      "exe_bytes": 13048832,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261121.1",
+      "recorded_at": "2026-11-21",
+      "recorded_note": "rc-20261121 之后现场反馈两修：启动默认展开工具箱（原 48px 竖条视觉上等于没有）、结果表改图像显示下方独立停靠并在收尾 raise 图像页；摘除读取图像算子，MVS 图像源补齐本地读图（修 m_isDirectory 致命缺陷、单文件/多图清单/索引切换/自动循环/mono8/结果字段与状态回读），本地图区与标定向导改由 MVS 驱动，旧算子类文件与注册一并删除。部署自检 76 PASS / 0 FAIL / 3 SKIP（较上一包少 1 条为退役算子专属腿），DeepOCR 合成图识别通过，exe 内嵌 HEAD 版本 yes。"
     }
   ],
   "legacy_backfilled": [
