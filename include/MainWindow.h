@@ -48,7 +48,6 @@ class MainWindow;
 
 class FlowScene;
 class FlowCanvasView;
-class ImageReadNode;
 class FlowExecutorToken;
 class ProjectManager;
 class AuxPanelManager;
@@ -410,7 +409,8 @@ protected:
     /// P2-6：图像区「本地图」区（仅在选中 ImageReadNode 时显示）
     QGroupBox *m_localImageGroup = nullptr;
     QListWidget *m_localImageList = nullptr;
-    ImageReadNode *m_localImageNode = nullptr;
+    /// 本地图区当前节点：MVS 图像源（本地文件模式）。原 ImageReadNode 已摘除。
+    class MvsImageSourceNode *m_localImageNode = nullptr;
     /// P2-6/实装 4.4：本地图导航与自动切换
     QToolButton *m_localPrevBtn = nullptr;
     QToolButton *m_localNextBtn = nullptr;

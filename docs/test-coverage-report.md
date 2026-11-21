@@ -144,7 +144,7 @@
 - ✅ TesseractOcrNode
 
 ### 图像采集（1 个）
-- ✅ ImageReadNode (集成测试)
+- ✅ MvsImageSourceNode (集成测试；2026-11-21 起本地读图统一由 MVS 承担)
 
 ### 输出显示（1 个）
 - ✅ DisplaySinkNode (集成测试)

@@ -1,7 +1,7 @@
 #include "NodeFactory.h"
 #include "NodeRegistry.h"
-#include "ImageReadNode.h"
 #include "HalconNode.h"
+#include "MvsImageSourceNode.h"
 #include "AppLog.h"
 
 NodeBase *NodeFactory::tryCreateNamedTool(QObject *parent, const QString &name)
@@ -64,8 +64,9 @@ NodeBase *NodeFactory::createDefaultForCategory(QObject *parent, NodeBase::NodeT
 {
     switch (category) {
     case NodeBase::IMAGE_ACQUISITION: {
-        auto *node = new ImageReadNode(parent);
-        node->setName(QStringLiteral("读取图像"));
+        // P10 摘除 ImageReadNode：分类兜底改为 MVS 图像源（工具箱里唯一的采集节点）
+        auto *node = new MvsImageSourceNode(parent);
+        node->setName(QStringLiteral("MVS图像源"));
         return node;
     }
     case NodeBase::IMAGE_PROCESSING: {

@@ -57,8 +57,8 @@ cv::Mat makePart(int w = 64, int h = 64)
 
 // 需要设备 / 网络 / 磁盘副作用 / 真实解释器的节点：本门禁不执行（不是"判定通过"）
 const QHash<QString, QString> kNeedsDeviceOrIo = {
-    {QStringLiteral("ImageReadNode"), QStringLiteral("读磁盘文件")},
-    {QStringLiteral("MvsImageSourceNode"), QStringLiteral("需 MVS 相机")},
+    // P10 摘除 ImageReadNode：本地读图由 MVS 承担，跳过清单只留 MVS 一项
+    {QStringLiteral("MvsImageSourceNode"), QStringLiteral("需 MVS 相机/本地文件")},
     // HalconImageSourceNode 已于 2026-11-08 移除注册（采集统一走 MVS），从跳过清单同步删除：
     // 保留会造成"跳过清单里有、注册表里没有"的 stale 项。
     {QStringLiteral("CameraIoNode"), QStringLiteral("需相机/GPIO 设备")},

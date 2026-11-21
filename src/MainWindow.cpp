@@ -38,7 +38,6 @@
 #include "HalconImageSourceNode.h"
 #include "DeepOcrNode.h"
 #include "ColorConversionNode.h"
-#include "ImageReadNode.h"
 #include "DataObject.h"
 #include "FlowExecutor.h"
 #include "ExecutionControlPolicy.h"   // 切片 B 首抽：四控制槽的判定核（判据见头件）
@@ -147,7 +146,6 @@
 #include <QFormLayout>
 #include <QDoubleSpinBox>
 #include <QColorDialog>
-#include "ImageReadNode.h"
 #include "Connection.h"
 
 #ifdef Q_OS_WIN
@@ -1195,8 +1193,6 @@ MainWindow::MainWindow(QWidget *parent, bool previewOnly) :
                         m_localImageNode->getParam(QStringLiteral("filePath")).toString());
                     if (dir.isEmpty())
                         return;
-                    m_localImageNode->setParam(QStringLiteral("mode"),
-                                               static_cast<int>(ImageReadNode::Mode::MultiImage));
                     m_localImageNode->setParam(QStringLiteral("filePath"), dir);
                     refreshLocalImagePanel(m_localImageNode);
                     logMessage(tr("本地图文件夹已设置：%1").arg(dir));
@@ -3799,57 +3795,18 @@ void MainWindow::onNodeAdded(NodeBase *node)
     // 节点添加时的处理
     VFP_DEBUG << "Node added:" << node->name();
     
-    // 连接ImageReadNode的imageRead信号 - 更新图像显示
-    ImageReadNode *imageReadNode = dynamic_cast<ImageReadNode*>(node);
-    if (imageReadNode) {
-        connect(imageReadNode, &ImageReadNode::imageRead, this, [this, imageReadNode](const HalconCpp::HImage &image) {
-            VFP_DEBUG << "ImageReadNode emitted imageRead signal";
-            // 使用统一规则：下拉框选择 > 画布选中 > 兜底
-            NodeBase *target = resolveDisplayNode(imageReadNode);
-            if (target == imageReadNode && m_imageView) {
-                m_imageView->requestImage(image, imageReadNode->fullName());
-                if (m_imageSourceLabel) {
-                    m_imageSourceLabel->setText(QString("图像来源: %1").arg(imageReadNode->fullName()));
-                }
-            }
-        });
-        
-        // 连接ImageReadNode的thumbnailUpdated信号 - 更新缩略图
-        connect(imageReadNode, &ImageReadNode::thumbnailUpdated, this, [this, imageReadNode]() {
-            VFP_DEBUG << "ImageReadNode emitted thumbnailUpdated signal";
-            // 检查参数面板是否存在
-            QWidget *parameterPanel = ui->paramDockContents;
-            if (parameterPanel) {
-                // 查找参数面板中的所有子控件，寻找缩略图布局
-                QList<QWidget*> childWidgets = parameterPanel->findChildren<QWidget*>();
-                for (QWidget *childWidget : childWidgets) {
-                    // 查找滚动区域，缩略图可能在滚动区域中
-                    QScrollArea *scrollArea = qobject_cast<QScrollArea*>(childWidget);
-                    if (scrollArea) {
-                        QWidget *scrollContent = scrollArea->widget();
-                        if (scrollContent) {
-                            QHBoxLayout *thumbnailLayout = qobject_cast<QHBoxLayout*>(scrollContent->layout());
-                            if (thumbnailLayout) {
-                                // 直接更新缩略图
-                                imageReadNode->updateThumbnails(thumbnailLayout);
-                                VFP_DEBUG << "缩略图已更新，黄色框应该显示";
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
-        });
-        VFP_DEBUG << "Connected ImageReadNode signals";
-    }
-    
-    // 连接MvsImageSourceNode的imageAcquired信号 - 只用于调试，不自动更新显示
+    // P10 摘除 ImageReadNode：本地图区信号全部由 MVS 图像源承担。
+    // imageAcquired 只调试；thumbnailUpdated 刷新本地图区（索引/清单变化后立即同步）。
     MvsImageSourceNode *mvsImageSourceNode = dynamic_cast<MvsImageSourceNode*>(node);
     if (mvsImageSourceNode) {
         connect(mvsImageSourceNode, &MvsImageSourceNode::imageAcquired, this, [this]() {
             VFP_DEBUG << "MvsImageSourceNode emitted imageAcquired signal";
         });
-        // 连接logMessage信号
+        connect(mvsImageSourceNode, &MvsImageSourceNode::thumbnailUpdated, this,
+                [this, mvsImageSourceNode]() {
+            if (m_localImageNode == mvsImageSourceNode)
+                refreshLocalImagePanel(mvsImageSourceNode);
+        });
         connect(mvsImageSourceNode, &MvsImageSourceNode::logMessage, this, &MainWindow::logMessage);
         VFP_DEBUG << "Connected MvsImageSourceNode signal";
     }
@@ -9204,9 +9161,10 @@ void MainWindow::refreshLocalImagePanel(NodeBase *node)
     if (!m_localImageGroup || !m_localImageList)
         return;
 
-    m_localImageNode = qobject_cast<ImageReadNode *>(node);
+    m_localImageNode = qobject_cast<MvsImageSourceNode *>(node);
     m_localImageList->clear();
-    if (!m_localImageNode) {
+    // 本地图区只服务 MVS 图像源的本地文件模式（ImageReadNode 已摘除）
+    if (!m_localImageNode || !m_localImageNode->isLocalFileSource()) {
         m_localImageGroup->setVisible(false);
         return;
     }

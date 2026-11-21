@@ -179,6 +179,9 @@ PathReview reviewScenes(const QList<FlowScene *> &scenes, const QString &schemeF
                 if (!raw.isEmpty())
                     tallyHit(review, hn->name(), kLegacyFilePathKey, raw,
                              classifySchemePath(raw, schemeFilePath));
+                // P10：MVS 的 getParam("filePath") 与 getFilePath() 同源，
+                // 不计入 covered 会让下面的遗传键补查把同一路径算第二遍
+                covered.append(QString(kLegacyFilePathKey));
             }
             /// 遗传三键：无规格覆盖时补查 filePath。
             if (!covered.contains(QString(kLegacyFilePathKey))) {

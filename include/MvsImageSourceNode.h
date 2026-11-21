@@ -71,6 +71,15 @@ public:
     void setFilePath(const QString &path);
     QString getFilePath() const;
 
+    // ---- 本地图像序列接口：MainWindow 本地图区驱动 MVS 本地文件模式的唯一契约 ----
+    QStringList localImageFiles() const;
+    bool isLocalFolderMode() const;
+    int currentLocalImageIndex() const;
+    void setLocalImageIndex(int index);
+    void clearLocalImages();
+    bool addLocalImageFiles(const QStringList &files);
+    bool isLocalFileSource() const;
+
     // 全局相机
     QStringList getAvailableCameras();
     QStringList getGlobalCameras();
@@ -88,6 +97,8 @@ public:
 
 signals:
     void imageAcquired(); // 移除了 Halcon 图像参数
+    /// 本地图像切换后通知 UI 重建缩略图（对齐 ImageReadNode::thumbnailUpdated）
+    void thumbnailUpdated();
     void cameraStatusChanged(bool opened);
     void globalCamerasUpdated(const QStringList &cameraNames);
     void paramChanged(const QString &name, const QVariant &value);
@@ -113,6 +124,13 @@ private:
     bool m_isDirectory;
     int m_currentImageIndex;
     QStringList m_imageFiles;
+    /// 本地序列：自动切换（每轮读下一张，循环）、mono8 转换、当前显示索引、图名
+    bool m_autoSwitch = false;
+    /// 本轮是否允许自动前进（run(false) 用于缩略图点选，只读当前张）
+    bool m_allowAutoAdvance = true;
+    bool m_mono8Mode = false;
+    int m_displayImageIndex = -1;
+    QString m_imageName;
 
     // 相机参数
     QString m_cameraName;

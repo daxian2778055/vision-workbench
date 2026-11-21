@@ -22,9 +22,9 @@ QVector<CalibrationWizardSpec> allSpecs()
         QStringLiteral("查看模块搭建及配置情况"),
         QStringLiteral("进入结果查看：执行标定并生成标定文件与标定矩阵")
     };
-    // 本实现已有算子链：读取图像(ImageReadNode) → 相机标定(OpencvCalibNode)
-    s.flowNodes = { QStringLiteral("读取图像"), QStringLiteral("相机标定") };
-    s.flowNodeIds = { QStringLiteral("ImageReadNode"), QStringLiteral("OpencvCalibNode") };
+    // P10 摘除 ImageReadNode：示例链改由 MVS 图像源（本地文件模式）供图
+    s.flowNodes = { QStringLiteral("MVS图像源"), QStringLiteral("相机标定") };
+    s.flowNodeIds = { QStringLiteral("MvsImageSourceNode"), QStringLiteral("OpencvCalibNode") };
     s.supported = true;
     specs.append(s);
 

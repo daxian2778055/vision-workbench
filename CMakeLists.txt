@@ -267,8 +267,7 @@ src/ModelCache.cpp
     src/HalconWindow.cpp
     src/Connection.cpp
     src/ConnectionGraphicsItem.cpp
-    src/ImageReadNode.cpp
-    src/NodeGraphicsItem.cpp
+       src/NodeGraphicsItem.cpp
     src/Port.cpp
     src/PortGraphicsItem.cpp
     src/PortDataType.cpp
@@ -555,8 +554,7 @@ set(HEADERS
     include/HalconWindow.h
     include/Connection.h
     include/ConnectionGraphicsItem.h
-    include/ImageReadNode.h
-    include/NodeGraphicsItem.h
+       include/NodeGraphicsItem.h
     include/Port.h
     include/PortGraphicsItem.h
     include/PortDataType.h

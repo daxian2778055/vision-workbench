@@ -27,6 +27,8 @@
 #include <vector>
 #include <QFileInfo>
 #include "FlowExecutor.h"
+#include "OpencvUtil.h"
+#include <opencv2/imgproc.hpp>
 
 // 后台线程类，用于执行相机操作
 class CameraOperationTask : public QRunnable
@@ -198,7 +200,15 @@ void MvsImageSourceNode::setParam(const QString &key, const QVariant &value)
     VFP_DEBUG << "MvsImageSourceNode::setParam key=" << key << "value=" << value;
     
     if (key == "sourceType") {
-        m_sourceType = static_cast<SourceType>(value.toInt());
+        const SourceType next = static_cast<SourceType>(value.toInt());
+        if (next != m_sourceType) {
+            m_sourceType = next;
+            // P10 补齐：切到本地模式时把 m_isDirectory 置位并刷新文件快照。
+            // 原实现只在构造/fromJson 赋值——新建节点切 LOCAL_FILE 后文件列表恒空、读不出图。
+            m_isDirectory = (m_sourceType == LOCAL_FILE);
+            m_currentImageIndex = 0;
+            updateImageFiles();
+        }
     } else if (key == "cameraName") {
         m_cameraName = value.toString();
     } else if (key == "globalCameraName") {
@@ -230,10 +240,20 @@ void MvsImageSourceNode::setParam(const QString &key, const QVariant &value)
         m_triggerMode = static_cast<TriggerMode>(value.toInt());
     } else if (key == "filePath") {
         m_filePath = value.toString();
+        // P10 补齐：写文件路径即视为选择"本地文件"图像源（与 ImageReadNode 行为等价——
+        // 它的 filePath 就是输入），否则默认 CAMERA 会忽略路径去等相机，流程读不到图。
+        m_sourceType = LOCAL_FILE;
+        m_isDirectory = true;
+        m_currentImageIndex = 0;
+        updateImageFiles();
     } else if (key == "imageWidth") {
         m_imageWidth = value.toInt();
     } else if (key == "imageHeight") {
         m_imageHeight = value.toInt();
+    } else if (key == "autoSwitch") {
+        m_autoSwitch = value.toBool();
+    } else if (key == "mono8Mode") {
+        m_mono8Mode = value.toBool();
     }
 
     emit paramChanged(key, value);
@@ -265,6 +285,23 @@ QVariant MvsImageSourceNode::getParam(const QString &key) const
         return m_imageWidth;
     if (key == "imageHeight")
         return m_imageHeight;
+    if (key == "autoSwitch")
+        return m_autoSwitch;
+    if (key == "mono8Mode")
+        return m_mono8Mode;
+    // P10 补齐：结果字段回读（对齐 ImageReadNode，结果表/变量面板可引用）
+    if (key == "outputImageWidth")
+        return m_outputImageWidth;
+    if (key == "outputImageHeight")
+        return m_outputImageHeight;
+    if (key == "outputPixelFormat")
+        return m_outputPixelFormat;
+    if (key == "imageName")
+        return m_imageName;
+    if (key == "localImageCount")
+        return m_imageFiles.size();
+    if (key == "currentLocalImageIndex")
+        return m_currentImageIndex;
     
     return QVariant();
 }
@@ -284,6 +321,16 @@ QJsonObject MvsImageSourceNode::toJson() const
     json["filePath"] = m_filePath;
     json["imageWidth"] = m_imageWidth;
     json["imageHeight"] = m_imageHeight;
+    json["autoSwitch"] = m_autoSwitch;
+    json["mono8Mode"] = m_mono8Mode;
+    // P10 补齐：本地多图清单/索引单独持久化（重开不丢选中项）
+    if (m_sourceType == LOCAL_FILE && !m_imageFiles.isEmpty()) {
+        QJsonArray files;
+        for (const QString &f : m_imageFiles)
+            files.append(f);
+        json["localImageFiles"] = files;
+        json["localImageIndex"] = m_currentImageIndex;
+    }
     return json;
 }
 
@@ -291,7 +338,11 @@ void MvsImageSourceNode::fromJson(const QJsonObject &json)
 {
     HalconNode::fromJson(json);
     QMutexLocker locker(&m_mutex);
-    m_sourceType = static_cast<SourceType>(json["sourceType"].toInt(static_cast<int>(CAMERA)));
+    // P10：没有显式 sourceType 但有 filePath ⇒ 视为本地文件模式（ImageReadNode 等价语义）
+    m_sourceType = json.contains("sourceType")
+                       ? static_cast<SourceType>(json["sourceType"].toInt(static_cast<int>(CAMERA)))
+                       : (json.contains("filePath") && !json["filePath"].toString().isEmpty()
+                              ? LOCAL_FILE : CAMERA);
     m_cameraName = json["cameraName"].toString("");
     m_globalCameraName = json["globalCameraName"].toString("");
     m_exposureTime = json["exposureTime"].toDouble(10000.0);
@@ -302,10 +353,28 @@ void MvsImageSourceNode::fromJson(const QJsonObject &json)
     m_filePath = json["filePath"].toString("");
     m_imageWidth = json["imageWidth"].toInt(0);
     m_imageHeight = json["imageHeight"].toInt(0);
+    m_autoSwitch = json["autoSwitch"].toBool(false);
+    m_mono8Mode = json["mono8Mode"].toBool(false);
     /// 179 行：目录/相机形态随 sourceType 还原，随后刷新快照列表——
     /// 相对目录形态在此经 ProjectPaths 按方案目录解析（updateImageFiles 内）。
     m_isDirectory = (m_sourceType != CAMERA);
     updateImageFiles();
+    // P10 补齐：优先恢复持久化的多图清单与索引（来自 addLocalImageFiles 多选），
+    // 没有清单时退回上面的目录快照。
+    if (json.contains("localImageFiles") && json["localImageFiles"].isArray()) {
+        QJsonArray arr = json["localImageFiles"].toArray();
+        QStringList restored;
+        for (const QJsonValue &v : arr) {
+            const QString f = v.toString();
+            if (!f.isEmpty())
+                restored.append(ProjectPaths::resolveExecutionPath(f));
+        }
+        if (!restored.isEmpty())
+            m_imageFiles = restored;
+    }
+    m_currentImageIndex = json["localImageIndex"].toInt(0);
+    if (!m_imageFiles.isEmpty())
+        m_currentImageIndex = qBound(0, m_currentImageIndex, m_imageFiles.size() - 1);
 
     // 如果加载的全局相机名非空，标记占用
     if (!m_globalCameraName.isEmpty()) {
@@ -329,6 +398,11 @@ void MvsImageSourceNode::run(bool autoSwitch)
     try {
         // 执行图像采集逻辑
         VFP_DEBUG << "开始执行MVS图像源节点";
+        // P10 补齐：run(false) 用于缩略图点选/运行选中，本轮不自动前进
+        {
+            QMutexLocker locker(&m_mutex);
+            m_allowAutoAdvance = autoSwitch;
+        }
         
         if (m_sourceType == CAMERA) {
             bool hasCamera = !m_cameraName.isEmpty() || !m_globalCameraName.isEmpty();
@@ -563,40 +637,80 @@ bool MvsImageSourceNode::grabImage()
 
 bool MvsImageSourceNode::loadImageFromFile()
 {
+    // P10 补齐：结果与状态回读、索引保护、mono8、自动切换——对齐 ImageReadNode 以替代之
+    QMutexLocker locker(&m_mutex);
+    const auto fail = [this](const QString &why) {
+        m_executionSuccess = false;
+        m_params[QStringLiteral("moduleStatus")] = false;
+        m_params[QStringLiteral("lastError")] = why;
+        VFP_DEBUG << "MVS 本地读图失败:" << why;
+        return false;
+    };
+
+    if (m_imageFiles.isEmpty())
+        return fail(QStringLiteral("没有可读取的本地图像（请选图片或文件夹）"));
+    if (m_currentImageIndex < 0 || m_currentImageIndex >= m_imageFiles.size())
+        return fail(QStringLiteral("当前图像索引越界"));
+
+    const QString filePath = m_imageFiles[m_currentImageIndex];
+    m_displayImageIndex = m_currentImageIndex;
     try {
-        if (m_imageFiles.isEmpty()) {
-            VFP_DEBUG << "没有要加载的图像文件";
-            return false;
-        }
-        
-        QString filePath = m_imageFiles[m_currentImageIndex];
-        
-        try {
-            HalconCpp::HImage image;
-            image.ReadImage(filePath.toLocal8Bit().data());
-            
-            m_outputImage = image;
-            if (m_outputImage.IsInitialized()) {
-                m_outputImageWidth = m_outputImage.Width();
-                m_outputImageHeight = m_outputImage.Height();
+        HalconCpp::HImage image;
+        image.ReadImage(filePath.toLocal8Bit().data());
+        if (!image.IsInitialized())
+            return fail(QStringLiteral("图像解码失败：") + filePath);
+
+        if (m_mono8Mode) {
+            HTuple channels;
+            CountChannels(image, &channels);
+            if (channels.I() > 1) {
+                try {
+                    cv::Mat src = OpencvUtil::himageToMat(image);
+                    cv::Mat gray;
+                    if (src.channels() == 3)
+                        cv::cvtColor(src, gray, cv::COLOR_BGR2GRAY);
+                    else
+                        gray = src;
+                    if (!gray.empty())
+                        image = OpencvUtil::matToHimage(gray);
+                } catch (...) {
+                    // 转换失败用原图，与 ImageReadNode 一致
+                }
             }
-            
-            QSharedPointer<DataObject> output(new DataObject(DataObject::DataType::Image, QVariant()));
-            output->setHImage(m_outputImage);
-            setOutputData(0, output);
-            
-            VFP_DEBUG << "加载图像成功:" << filePath;
-            return true;
-        } catch (...) {
-            VFP_DEBUG << "加载图像失败:" << filePath;
-            return false;
         }
+
+        m_outputImage = image;
+        m_outputImageWidth = image.Width();
+        m_outputImageHeight = image.Height();
+        HTuple channels;
+        CountChannels(image, &channels);
+        m_outputPixelFormat = (m_mono8Mode || channels.I() == 1)
+                                  ? QStringLiteral("mono8")
+                                  : (channels.I() == 3 ? QStringLiteral("RGB8") : QStringLiteral("unknown"));
+        m_imageName = QFileInfo(filePath).fileName();
+        m_imageWidth = m_outputImageWidth;
+        m_imageHeight = m_outputImageHeight;
+
+        QSharedPointer<DataObject> output(new DataObject(DataObject::DataType::Image, QVariant()));
+        output->setHImage(m_outputImage);
+        setOutputData(0, output);
+
+        m_executionSuccess = true;
+        m_params[QStringLiteral("moduleStatus")] = true;
+        m_params.remove(QStringLiteral("lastError"));
+
+        // 自动切换：本轮换下一张，取模循环（与 ImageReadNode 同口径）
+        if (m_autoSwitch && m_allowAutoAdvance && !m_imageFiles.isEmpty())
+            m_currentImageIndex = (m_currentImageIndex + 1) % m_imageFiles.size();
+        emit thumbnailUpdated();
+        return true;
+    } catch (const HException &e) {
+        return fail(QStringLiteral("图像读取异常：")
+                    + QString::fromStdString(e.ErrorMessage().TextA()));
     } catch (const std::exception &e) {
-        VFP_DEBUG << "loadImageFromFile异常:" << e.what();
-        return false;
+        return fail(QStringLiteral("图像读取异常：") + QString::fromUtf8(e.what()));
     } catch (...) {
-        VFP_DEBUG << "loadImageFromFile未知异常";
-        return false;
+        return fail(QStringLiteral("图像读取未知异常"));
     }
 }
 
@@ -604,12 +718,23 @@ void MvsImageSourceNode::updateImageFiles()
 {
     if (m_isDirectory && !m_filePath.isEmpty()) {
         /// 179 行：相对目录形态执行锚定方案目录（目录内拾取本就换相对形态存参）
-        QString resolved = ProjectPaths::resolveExecutionPath(m_filePath);
-        QDir dir(resolved);
-        m_imageFiles = dir.entryList({"*.bmp", "*.jpg", "*.png", "*.tif", "*.tiff"}, QDir::Files, QDir::Name);
-        for (int i = 0; i < m_imageFiles.size(); i++) {
-            m_imageFiles[i] = dir.absoluteFilePath(m_imageFiles[i]);
+        const QString resolved = ProjectPaths::resolveExecutionPath(m_filePath);
+        QFileInfo info(resolved);
+        if (info.isFile()) {
+            // P10 补齐：单文件形态（原实现把单文件也当目录，entryList 得空表）
+            m_imageFiles = QStringList{resolved};
+        } else if (info.isDir()) {
+            QDir dir(resolved);
+            // P10 补齐：补 *.jpeg（与 ImageReadNode 的过滤口径一致）
+            m_imageFiles = dir.entryList({"*.bmp", "*.jpg", "*.jpeg", "*.png", "*.tif", "*.tiff"},
+                                         QDir::Files, QDir::Name);
+            for (int i = 0; i < m_imageFiles.size(); i++)
+                m_imageFiles[i] = dir.absoluteFilePath(m_imageFiles[i]);
+        } else {
+            m_imageFiles.clear();
         }
+        if (!m_imageFiles.isEmpty())
+            m_currentImageIndex = qBound(0, m_currentImageIndex, m_imageFiles.size() - 1);
     }
 }
 
@@ -1206,6 +1331,77 @@ void MvsImageSourceNode::setFilePath(const QString &path)
 QString MvsImageSourceNode::getFilePath() const
 {
     return m_filePath;
+}
+
+QStringList MvsImageSourceNode::localImageFiles() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_imageFiles;
+}
+
+bool MvsImageSourceNode::isLocalFolderMode() const
+{
+    QMutexLocker locker(&m_mutex);
+    if (m_sourceType != LOCAL_FILE)
+        return false;
+    QFileInfo info(ProjectPaths::resolveExecutionPath(m_filePath));
+    return info.isDir();
+}
+
+int MvsImageSourceNode::currentLocalImageIndex() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_currentImageIndex;
+}
+
+void MvsImageSourceNode::setLocalImageIndex(int index)
+{
+    {
+        QMutexLocker locker(&m_mutex);
+        if (m_imageFiles.isEmpty())
+            return;
+        m_currentImageIndex = qBound(0, index, m_imageFiles.size() - 1);
+        m_displayImageIndex = m_currentImageIndex;
+    }
+    emit thumbnailUpdated();
+}
+
+void MvsImageSourceNode::clearLocalImages()
+{
+    {
+        QMutexLocker locker(&m_mutex);
+        m_imageFiles.clear();
+        m_currentImageIndex = 0;
+        m_filePath.clear();
+    }
+    emit thumbnailUpdated();
+}
+
+bool MvsImageSourceNode::addLocalImageFiles(const QStringList &files)
+{
+    {
+        QMutexLocker locker(&m_mutex);
+        // 与 ImageReadNode 同口径：显式清单直接成为本地序列（多图/单选文件都走这里）
+        m_sourceType = LOCAL_FILE;
+        m_isDirectory = false;
+        QStringList valid;
+        for (const QString &f : files) {
+            if (!f.isEmpty() && QFileInfo::exists(f))
+                valid.append(ProjectPaths::resolveExecutionPath(f));
+        }
+        if (valid.isEmpty())
+            return false;
+        m_imageFiles = valid;
+        m_currentImageIndex = 0;
+    }
+    emit thumbnailUpdated();
+    return true;
+}
+
+bool MvsImageSourceNode::isLocalFileSource() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_sourceType == LOCAL_FILE;
 }
 
 QString MvsImageSourceNode::name() const

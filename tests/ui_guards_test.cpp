@@ -87,6 +87,7 @@ void p10CrossCutGuards();               // 会话信号有消费者、裸指针 
 void f1DataPanelFollowupGuards();       // flush 三态、序号持久化、坏文件防护、查询上限提示、耗时有界
 void f2ValidationGuards();              // 搜索参数告警、同名拒绝、VOC 写失败、表头/系列编辑、预览红字
 void dockDefaultVisibilityGuards();     // 工具箱默认展开、结果表不 tabbed 遮住图像、图像最后 raise
+void mvsLocalSourceGuards();            // ImageReadNode 摘除 + MVS 本地读图能力等价
 void runtimeDesignerHasOfficialDragAndClipboard();
 void runtimeDesignerHasOfficialSectionsAndAlign();
 void runtimeDesignerAlignHCenterAndRight();
@@ -1006,6 +1007,35 @@ void UiGuardsTest::dockDefaultVisibilityGuards()
     const int tail = src.indexOf(QStringLiteral("VFP_DEBUG << \"setupDockWidgets completed\""));
     QVERIFY2(src.mid(tail - 400, 400).contains(QStringLiteral("ui->imageDock->raise()")),
              "setupDockWidgets 收尾必须 raise 图像页，确保默认可见");
+}
+
+void UiGuardsTest::mvsLocalSourceGuards()
+{
+    // ① ImageReadNode 彻底摘除：类文件与注册均已移除
+    QFile hdr(QStringLiteral(SRC_DIR "/include/ImageReadNode.h"));
+    QVERIFY2(!hdr.exists(), "ImageReadNode.h 必须已删除");
+    QFile impl(QStringLiteral(SRC_DIR "/src/ImageReadNode.cpp"));
+    QVERIFY2(!impl.exists(), "ImageReadNode.cpp 必须已删除");
+    QFile reg(QStringLiteral(SRC_DIR "/src/NodeRegistry.cpp"));
+    QVERIFY2(reg.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 NodeRegistry.cpp");
+    QVERIFY2(!QString::fromUtf8(reg.readAll()).contains(QStringLiteral("VFP_REG(ImageReadNode")),
+             "注册表不得再注册 ImageReadNode");
+
+    // ② MVS 本地模式能力：源类型切换刷新列表、单文件、自动切换、结果回读、持久化
+    QFile mvs(QStringLiteral(SRC_DIR "/src/MvsImageSourceNode.cpp"));
+    QVERIFY2(mvs.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 MvsImageSourceNode.cpp");
+    const QString src = QString::fromUtf8(mvs.readAll());
+    mvs.close();
+    QVERIFY2(src.contains(QStringLiteral("m_isDirectory = (m_sourceType == LOCAL_FILE)")),
+             "切本地模式必须置位目录标志（原致命 bug）");
+    QVERIFY2(src.contains(QStringLiteral("info.isFile()")),
+             "必须支持单文件路径");
+    QVERIFY2(src.contains(QStringLiteral("m_autoSwitch && m_allowAutoAdvance")),
+             "自动切换必须可循环且不误伤缩略图点选");
+    QVERIFY2(src.contains(QStringLiteral("localImageFiles")) && src.contains(QStringLiteral("thumbnailUpdated")),
+             "本地清单与缩略图通知必须齐备");
+    QVERIFY2(src.contains(QStringLiteral("m_params[QStringLiteral(\"lastError\")]")),
+             "读图失败必须写 lastError（结果表判红）");
 }
 
 void UiGuardsTest::deleteShortcutIgnoredWhileEditingText()

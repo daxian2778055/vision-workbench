@@ -65,7 +65,7 @@
 #include "ColorConversionNode.h"
 #include "HalconImageSourceNode.h"
 #include "HalconNode.h"
-#include "ImageReadNode.h"
+#include "MvsImageSourceNode.h"
 #include "NodeRegistry.h"
 #include "VariablePanel.h"
 
@@ -2155,7 +2155,7 @@ void ParamPanelBindingTest::testOperatorsWithoutParamSpecsAreExactlyThisRoster()
         // HalconImageSourceNode 已于 2026-11-08 移除注册（采集统一走 MVS，HALCON 采集插件
     // 不在打包白名单里）⇒ 名册同步删掉，否则 missing 判红。类本身仍保留在代码里。
         QStringLiteral("HistogramEqualizeNode"), QStringLiteral("ImageInvertNode"),
-        QStringLiteral("ImageReadNode"), QStringLiteral("MvsImageSourceNode"),
+        QStringLiteral("MvsImageSourceNode"),
         QStringLiteral("OpencvPixelStatsNode"), QStringLiteral("ProtocolParseNode"),
         QStringLiteral("ReceiveDataNode"), QStringLiteral("RecordNode"),
         QStringLiteral("ScriptNode"), QStringLiteral("SendDataNode"),
@@ -2262,7 +2262,7 @@ void ParamPanelBindingTest::testOperatorsWithoutParamSpecsAreExactlyThisRoster()
                                        " (see MISSING line above)").arg(missing.size())));
 
     // 空转闸：名单本身与分母都得对得上，否则"没红"不等于"拦得住"
-    QVERIFY2(expected.size() == 22,
+    QVERIFY2(expected.size() == 21,   // P10：ImageReadNode 摘除，名单 -1
              qPrintable(QStringLiteral("名单字面量自己变成 %1 条 ⇒ 本闸的基准已失效").arg(expected.size())));
     QVERIFY2(registry > 60,
              qPrintable(QStringLiteral("注册表只枚举到 %1 个算子 ⇒ 分母已失效").arg(registry)));
@@ -2678,9 +2678,9 @@ void ParamPanelBindingTest::testPendingSingleShotIsNotDetonatedByNextEventLoop()
             for (const auto &p : alive) delete p.second;
             if (emitAfterPanelDeath) {
                 for (const auto &p : alive) {
-                    ImageReadNode *ir = qobject_cast<ImageReadNode *>(p.first);
-                    if (!ir) { legProblems << QStringLiteral("%1:not-ImageReadNode").arg(p.first->name()); continue; }
-                    ir->thumbnailUpdated();   // 生产里的 emit 站点：src/ImageReadNode.cpp:102/:192/:352
+                    MvsImageSourceNode *mvs = qobject_cast<MvsImageSourceNode *>(p.first);
+                    if (!mvs) { legProblems << QStringLiteral("%1:not-MvsImageSourceNode").arg(p.first->name()); continue; }
+                    QMetaObject::invokeMethod(mvs, "thumbnailUpdated", Qt::DirectConnection);
                 }
             }
             QTest::qWait(200);
@@ -2722,7 +2722,7 @@ void ParamPanelBindingTest::testPendingSingleShotIsNotDetonatedByNextEventLoop()
     runLeg("ccNode", ccIds, false, false);
     runLeg("basePanel", baseIds, true, false);
     runLeg("baseNode", baseIds, false, false);
-    runLeg("imgStaleConnect", {QStringLiteral("ImageReadNode")}, true, true);
+    // P10：ImageReadNode 已摘除注册，其面板销毁竞态腿随之退役（MVS 面板无同类定时器）
 
     // ── sweep 面读数：哪些面板里真有那颗 inputImageCombo（＝真排了这条 100 ms 定时器）──
     // 判据用 objectName：全仓只有两处站点 setObjectName("inputImageCombo")（src/HalconNode.cpp:618、

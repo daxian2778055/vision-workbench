@@ -157,7 +157,7 @@ QString HelpViewer::createDefaultHelpContent(const QString &nodeId) const
     if (description.isEmpty()) {
         if (nodeId == QStringLiteral("DeepOcrNode"))
             description = QStringLiteral("HALCON DeepOCR：识别文字。需要 HALCON 运行时与模型。");
-        else if (nodeId == QStringLiteral("ImageReadNode")
+        else if (nodeId == QStringLiteral("MvsImageSourceNode")
                  || nodeId == QStringLiteral("HalconImageSourceNode"))
             description = QStringLiteral("HALCON 图像层（读图/采集）。日常算法走 OpenCV。");
         else if (nodeId.startsWith(QStringLiteral("Opencv"))

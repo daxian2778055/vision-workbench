@@ -57,7 +57,7 @@ void CalibrationWizardTest::testStaticFlowChainIsReal()
     QCOMPARE(s.steps.size(), 7);   // 官方静态标定引导子页的 7 个步骤
     QCOMPARE(s.flowNodes.size(), 2);
     QCOMPARE(s.flowNodeIds.size(), s.flowNodes.size());
-    QCOMPARE(s.flowNodeIds.at(0), QStringLiteral("ImageReadNode"));
+    QCOMPARE(s.flowNodeIds.at(0), QStringLiteral("MvsImageSourceNode"));
     QCOMPARE(s.flowNodeIds.at(1), QStringLiteral("OpencvCalibNode"));
     // 规格里的注册 ID 必须真的在册，否则「创建」会生成空节点
     for (const QString &id : s.flowNodeIds) {

@@ -66,7 +66,7 @@
 #include "MirrorNode.h"
 #include "OpencvRotateNode.h"
 #include "FormulaNode.h"
-#include "ImageReadNode.h"
+#include "MvsImageSourceNode.h"
 #include "DataObject.h"
 #include "OpencvUtil.h"
 #include "Port.h"
@@ -1399,7 +1399,8 @@ void NodeCoreTest::testImageReadAddSingleLocalFile()
     // 回归（2026-11-04 现场闪退）：addLocalImageFiles 在"加入后恰好 1 张"分支里
     // 先 setParam(mode=SingleImage) 再取 m_imageFiles.first()；前者会触发 updateImageFiles()
     // 把列表清空 ⇒ 对空表 first()，release 下越界读直接崩溃。
-    ImageReadNode node;
+    // P10 摘除 ImageReadNode：同一"加 1 张不越界"契约由 MVS 本地模式承担
+    MvsImageSourceNode node;
     node.init();
 
     QTemporaryDir dir;
@@ -1413,9 +1414,7 @@ void NodeCoreTest::testImageReadAddSingleLocalFile()
     files << path;
     QVERIFY2(node.addLocalImageFiles(files), "单张本地图应添加成功");
     QCOMPARE(node.localImageFiles().size(), 1);
-    QCOMPARE(node.getParam(QStringLiteral("filePath")).toString(), path);
-    QCOMPARE(node.getParam(QStringLiteral("mode")).toInt(),
-             static_cast<int>(ImageReadNode::Mode::SingleImage));
+    QVERIFY2(node.isLocalFileSource(), "加图后应切到本地文件模式");
 }
 
 // VM Blob 形状度量：数值腿。守三条曾出错的契约：

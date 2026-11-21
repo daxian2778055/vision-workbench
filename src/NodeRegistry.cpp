@@ -1,5 +1,4 @@
 #include "NodeRegistry.h"
-#include "ImageReadNode.h"
 #include "MvsImageSourceNode.h"
 #include "HalconImageSourceNode.h"
 #include "ColorConversionNode.h"
@@ -121,8 +120,7 @@ void registerAllNodes()
     auto &r = NodeRegistry::instance();
 
     // ===== 图像采集 =====
-    VFP_REG(ImageReadNode,        "ImageReadNode",        "\u8BFB\u53D6\u56FE\u50CF", "Read Image",
-            NodeBase::IMAGE_ACQUISITION, "\u56FE\u50CF\u91C7\u96C6");
+    // P10：ImageReadNode 已摘除，本地读图由 MVS 图像源的 LOCAL_FILE 模式承担
     VFP_REG(MvsImageSourceNode,   "MvsImageSourceNode",   "MVS\u56FE\u50CF\u6E90", "MVS Source",
             NodeBase::IMAGE_ACQUISITION, "\u56FE\u50CF\u91C7\u96C6");
     VFP_REG(OutputImageNode,      "OutputImageNode",      "\u8F93\u51FA\u56FE\u50CF", "Output Image",
@@ -418,10 +416,8 @@ void registerAllNodes()
 
     // ---- 算子简介（模块箱悬停提示 / 模块窗帮助共用同一份口径）----
     // 每个注册节点一条，说明“这个算子做什么、需要什么关键资源”，不写实现细节。
-    r.setDescription(QStringLiteral("ImageReadNode"),
-                     QStringLiteral("读取本地图像文件或文件夹（支持单图/多图轮换）"));
     r.setDescription(QStringLiteral("MvsImageSourceNode"),
-                     QStringLiteral("海康 MVS 相机取图（支持软触发/硬触发）"));
+                     QStringLiteral("图像源：海康 MVS 相机取图，或读取本地图像文件/文件夹（支持多图轮换）"));
     r.setDescription(QStringLiteral("OutputImageNode"),
                      QStringLiteral("把输入图像按命名规则保存到硬盘（支持大文件存图策略）"));
     r.setDescription(QStringLiteral("HalconImageSourceNode"),
