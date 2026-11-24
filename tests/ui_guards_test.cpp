@@ -140,6 +140,7 @@ void designerAlignCanBeUndone();
 void layoutSchemaContractRejectsFutureVersionsAndBadSubPageGraphs();
     void staleBindingsIgnoresValidAndUnbound();
     void staleBindingsTreatsUnknownNodeSetAsUnknown();
+    void previewBindingCheckRecomputesOnSetInterface();
     // r15 P1-9：切图保存必须写到「上一张」
     void annotationDialogDoesNotTruncateOnOpen();
     void annotationDialogSwitchSavesToPreviousImage();
@@ -364,6 +365,25 @@ void UiGuardsTest::staleBindingsTreatsUnknownNodeSetAsUnknown()
     c.bindKey = QStringLiteral("尚未载入的节点");
     itf.currentPage()->controls.append(c);
     QVERIFY2(itf.staleBindings({}, {}).isEmpty(), "空节点集却把节点绑定判为失效");
+}
+
+void UiGuardsTest::previewBindingCheckRecomputesOnSetInterface()
+{
+    // P10 修复的行为腿：设计器预览原按「先 setKnownNodeNames（空布局上算体检）再
+    // setInterface」调用，后者不重算 ⇒ 预览永不显示失效红字。这里故意沿用旧顺序，
+    // 断言装布局后体检已重算；任何调用顺序都必须抓到失效绑定。
+    RuntimeInterface layout;
+    RuntimeControl c;
+    c.type = RuntimeControlType::ValueDisplay;
+    c.bindType = QStringLiteral("global");
+    c.bindKey = QStringLiteral("missingVar");
+    layout.currentPage()->controls.append(c);
+
+    RuntimeInterfaceView view;
+    view.setKnownNodeNames({ QStringLiteral("节点A") });   // 旧预览的错误顺序
+    view.setInterface(layout);
+    QVERIFY2(view.staleBindings().contains(QStringLiteral("global:missingVar")),
+             "装载布局后必须重算失效绑定（设计器预览红字）");
 }
 namespace {
 
@@ -976,8 +996,10 @@ void UiGuardsTest::f2ValidationGuards()
     d.close();
     QVERIFY2(des.contains(QStringLiteral("编辑表头")) && des.contains(QStringLiteral("编辑系列名")),
              "表头与系列名有序列化但无编辑入口必须补齐");
-    QVERIFY2(des.contains(QStringLiteral("view->setKnownNodeNames(m_nodeNames)")),
-             "预览必须做绑定失效体检，与运行态一致");
+    const int setName = des.indexOf(QStringLiteral("view->setKnownNodeNames(m_nodeNames)"));
+    const int setLayout = des.indexOf(QStringLiteral("view->setInterface(m_layout)"));
+    QVERIFY2(setName >= 0 && setLayout >= 0 && setLayout < setName,
+             "预览必须先装布局再给节点名（体检不能算在空布局上）");
 }
 
 void UiGuardsTest::dockDefaultVisibilityGuards()

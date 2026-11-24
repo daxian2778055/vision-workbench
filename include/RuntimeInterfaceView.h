@@ -48,6 +48,8 @@ public:
 
     /// 控件数量（用于判断是否已配置运行界面）
     int controlCount() const { return m_current.totalControlCount(); }
+    /// 当前失效绑定（体检结果；设计器预览与测试可读）
+    QStringList staleBindings() const { return m_staleBindings; }
 
     /// 切到指定名称的页面（官方「界面链接」动作用）；找不到则忽略。
     void showPage(const QString &pageName);
@@ -112,6 +114,8 @@ private:
     /// 几何基准尺寸：多页取当前页容器（标签条占位后小于视图）；单页即视图自身
     QSize pageBaseSize() const;
     QStringList m_staleBindings;    /// 失效绑定（绘制在页面顶部）
+    /// 按当前布局与已知节点名重算失效绑定（setInterface 与 setKnownNodeNames 共用，消除顺序敏感）
+    void refreshStaleBindings();
     void rebuildWidgets();
     void clearWidgets();
     QWidget *createControlWidget(const RuntimeControl &ctrl);

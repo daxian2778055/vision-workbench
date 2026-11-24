@@ -447,6 +447,9 @@ void RuntimeInterfaceView::setInterface(const RuntimeInterface &layout)
     // 单页没有 QTabWidget 信号，统一走同一入口建内层标签条 + 显隐
     onCurrentPageChanged(m_current.currentPageIndex);
     update();
+    // P10 修复：载入布局后必须重算失效绑定。设计器预览原按「先 setKnownNodeNames 再
+    // setInterface」调用，体检落在默认空页上；此处重算让任何调用顺序都能抓到失效绑定。
+    refreshStaleBindings();
 }
 
 void RuntimeInterfaceView::setParameterValues(const QHash<QString, double> &values)
@@ -1984,9 +1987,8 @@ void RuntimeInterfaceView::resizeEvent(QResizeEvent *event)
     }
 }
 
-void RuntimeInterfaceView::setKnownNodeNames(const QStringList &names)
+void RuntimeInterfaceView::refreshStaleBindings()
 {
-    m_knownNodeNames = names;
     // 绑定体检（2026-10-27）：现场最容易踩的坑是"控件一直空白/旧值，不知道是没跑
     // 还是绑定没了"。这里把失效绑定列在页面顶部（红字），一眼可见。
     QSet<QString> globals, nodes;
@@ -1997,4 +1999,10 @@ void RuntimeInterfaceView::setKnownNodeNames(const QStringList &names)
         nodes.insert(n);
     m_staleBindings = m_current.staleBindings(globals, nodes);
     update();
+}
+
+void RuntimeInterfaceView::setKnownNodeNames(const QStringList &names)
+{
+    m_knownNodeNames = names;
+    refreshStaleBindings();
 }

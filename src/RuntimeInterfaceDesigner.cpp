@@ -2082,10 +2082,10 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
         previewDialog.resize(960, 620);
         auto *layout = new QVBoxLayout(&previewDialog);
         auto *view = new RuntimeInterfaceView(&previewDialog);
-        // P10 校验批：预览与真实运行同上绑定体检——不设 knownNames 时 staleBindings 恒空，
-        // 预览里看不到"绑定失效"红字，与运行态观感不一致
-        view->setKnownNodeNames(m_nodeNames);
+        // P10 修复：与生产路径同序——先装布局再给节点名（视图侧 setInterface 也会重算兜底，
+        // 任何顺序都不会再把体检算在空布局上）
         view->setInterface(m_layout);
+        view->setKnownNodeNames(m_nodeNames);
         layout->addWidget(view);
         previewDialog.exec();
     });
