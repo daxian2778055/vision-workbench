@@ -19,6 +19,7 @@
 #include "NodeBase.h"
 #include "ParamSpec.h"
 #include "ProjectManager.h"
+#include "GlobalVariableManager.h"
 #include "ProjectPaths.h"
 #include "SchemePackage.h"
 
@@ -48,6 +49,7 @@ private slots:
     void testFailedSaveRestoresAnchorAndReadonly();        // r12 P2-10：保存失败不带走锚与只读守卫；导出全链不动锚
     // U-219 钉位缺口②（U-216 拍板维持：内存入口不闸）
     void testApplyProjectJsonStaysUngated();               // 边界钉形：内存应用入口不叫确认器、也无锚
+    void testGlobalSnapshotRollback();                     // P9：中止载入后全局配置整组复原
 
 private:
     /// 造一份带指定 filePath 的方案文件（走真写侧序列化 buildProjectJson），返回是否落盘。
@@ -595,6 +597,27 @@ void ProjectPathsTest::testApplyProjectJsonStaysUngated()
     qDeleteAll(opened);
     opened.clear();
     ProjectPaths::setCurrentSchemeFilePath(QString());   // 腿尾净态（cleanupTestCase 兜底再清一次）
+}
+
+void ProjectPathsTest::testGlobalSnapshotRollback()
+{
+    // P9 修复的行为腿：loadProject 成功尾提前应用全局配置，执行器超时中止后必须整组复原，
+    // 否则场景没换、触发路由/通信设备/全局变量却已是新方案的"半切换"态。
+    auto *gvm = GlobalVariableManager::instance();
+    gvm->removeVariable(QStringLiteral("U220_ROLLBACK_PROBE"));
+    QVERIFY(gvm->addVariable(QStringLiteral("U220_ROLLBACK_PROBE"),
+                             GlobalVariableManager::IntType, 7));
+    ProjectManager pm;
+    const QJsonObject before = pm.snapshotGlobals();
+    QVERIFY2(before.contains(QStringLiteral("globalVariables")), "快照应含全局变量表");
+
+    // 模拟新方案已把该变量改成别的值
+    QVERIFY(gvm->setVariable(QStringLiteral("U220_ROLLBACK_PROBE"), 99));
+    QCOMPARE(gvm->getVariable(QStringLiteral("U220_ROLLBACK_PROBE")).toInt(), 99);
+
+    QVERIFY2(pm.restoreGlobals(before), "回滚应成功");
+    QCOMPARE(gvm->getVariable(QStringLiteral("U220_ROLLBACK_PROBE")).toInt(), 7);
+    gvm->removeVariable(QStringLiteral("U220_ROLLBACK_PROBE"));
 }
 
 QTEST_MAIN(ProjectPathsTest)

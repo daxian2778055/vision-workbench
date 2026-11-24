@@ -4893,6 +4893,8 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
     // 中止打开，这些元数据会被污染成"未成功打开的方案"。先存旧值，超时分支回滚。
     const QString prevFilePath = pm->lastFilePath();
     const bool prevReadonly = pm->isReadonlyLoaded();
+    // P9 修复：loadProject 成功尾已提前应用全局配置与布局文件；执行器超时中止时须整组回滚。
+    const QJsonObject globalsBefore = pm->snapshotGlobals();
 
     // 先加载到临时列表：只有加载成功才销毁当前方案。
     // 原实现是先 qDeleteAll 再加载，文件损坏时旧方案已丢、新方案为空，且仍报"加载成功"。
@@ -4957,6 +4959,10 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
             pm->setReadonlyLoaded(true);
         else
             pm->resetReadonlyFlag();
+        // P9 修复：全局配置与运行布局已在 loadProject 成功尾被新方案改写，必须一并回滚；
+        // applyReadonlyUI 在超时判定之前就跑过，中止后要按还原的只读态重算。
+        pm->restoreGlobals(globalsBefore);
+        applyReadonlyUI();
         logMessage(tr("有流程执行线程超时未退出，已取消打开方案"));
         QMessageBox::warning(this, tr("提示"),
             tr("有流程仍在执行且未能在限定时间内退出，已取消打开方案以避免程序崩溃。"));

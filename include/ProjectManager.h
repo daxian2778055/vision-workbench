@@ -36,6 +36,11 @@ public:
     /// P9：中止载入（执行器超时）时回滚到载入前的只读状态
     void setReadonlyLoaded(bool v) { m_loadedReadonly = v; }
 
+    /// P9 修复：loadProject 成功尾会提前应用全局配置与运行布局；执行器超时中止时须整组回滚。
+    /// 在调用 loadProject 之前取快照，中止分支用 restoreGlobals 复原，避免"场景没换、全局已换"的半切换。
+    QJsonObject snapshotGlobals() const;
+    bool restoreGlobals(const QJsonObject &snapshot);
+
     /// 最近一次 loadProject 成功载入文件的旧格式注记（176 行）：
     /// v1 明文打包无完整性校验位 / 裸 JSON 无信封——非空时 UI 载入侧加注一句；
     /// 加密信封与 v2 明文打包（带 HMAC 位）载入后为空。

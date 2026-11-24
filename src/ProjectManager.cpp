@@ -554,6 +554,48 @@ void ProjectManager::applyGlobalsFromJson(const QJsonObject &root)
     }
 }
 
+QJsonObject ProjectManager::snapshotGlobals() const
+{
+    // 与 applyGlobalsFromJson 同源的六类全局配置 + 运行布局文件，供执行器超时中止时整组回滚。
+    QJsonObject s;
+    s[QStringLiteral("globalVariables")] = GlobalVariableManager::instance()->toJson();
+    s[QStringLiteral("cameras")] = GlobalCameraManager::instance()->toJson();
+    s[QStringLiteral("communication")] = CommunicationManager::instance()->toJson();
+    s[QStringLiteral("globalTriggers")] = GlobalTriggerManager::instance()->toJson();
+    s[QStringLiteral("heartbeat")] = HeartbeatManager::instance()->toJson();
+    s[QStringLiteral("calibrations")] = CalibrationManager::instance()->toJson();
+    QFile layout(runtimeLayoutPath());
+    if (layout.open(QIODevice::ReadOnly))
+        s[QStringLiteral("runtimeLayout")] = QString::fromUtf8(layout.readAll());
+    return s;
+}
+
+bool ProjectManager::restoreGlobals(const QJsonObject &snapshot)
+{
+    // P9 修复：fromJson 各自重建内部表（不是叠加），故恢复的是快照而非新方案残留。
+    if (snapshot.contains(QStringLiteral("globalVariables")))
+        GlobalVariableManager::instance()->fromJson(snapshot[QStringLiteral("globalVariables")].toObject());
+    if (snapshot.contains(QStringLiteral("cameras")))
+        GlobalCameraManager::instance()->fromJson(snapshot[QStringLiteral("cameras")].toObject());
+    if (snapshot.contains(QStringLiteral("communication")))
+        CommunicationManager::instance()->fromJson(snapshot[QStringLiteral("communication")].toObject());
+    if (snapshot.contains(QStringLiteral("globalTriggers")))
+        GlobalTriggerManager::instance()->fromJson(snapshot[QStringLiteral("globalTriggers")].toObject());
+    if (snapshot.contains(QStringLiteral("heartbeat")))
+        HeartbeatManager::instance()->fromJson(snapshot[QStringLiteral("heartbeat")].toObject());
+    if (snapshot.contains(QStringLiteral("calibrations")))
+        CalibrationManager::instance()->fromJson(snapshot[QStringLiteral("calibrations")].toObject());
+
+    // 载入前没有布局文件就不新建（快照无该键）；有则原子写回，与 applyGlobalsFromJson 同口径。
+    if (!snapshot.contains(QStringLiteral("runtimeLayout")))
+        return true;
+    QSaveFile layoutFile(runtimeLayoutPath());
+    if (!layoutFile.open(QIODevice::WriteOnly | QIODevice::Text))
+        return false;
+    layoutFile.write(snapshot[QStringLiteral("runtimeLayout")].toString().toUtf8());
+    return layoutFile.commit();
+}
+
 QJsonObject ProjectManager::sceneToJson(FlowScene *scene) const
 {
     QJsonObject sceneJson;
