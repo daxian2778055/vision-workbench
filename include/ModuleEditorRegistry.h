@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QHash>
+#include <QObject>
 #include <QPointer>
 #include <functional>
 
@@ -15,8 +16,12 @@ class NodeBase;
 /// 变量引用注入 / show 前置）全留 MainWindow 调用位，并以回调交回命中刷新与工厂两钩子。
 /// GUI 与提示框不进本面：写闸拒因与「模块编辑被禁止」提示照旧在 MainWindow，拒序为
 /// 先 closeIfPresent 收既有窗再弹提示（窗自带 WA_DeleteOnClose，关窗即销毁即摘位）。
-class ModuleEditorRegistry final {
+/// 摘除连接的接收位改为登记簿自身（原接窗自身 + lambda 捕获裸 this：MainWindow 值成员先于
+/// 子对话框析构，退出时对话销毁回调会访问已析构的簿 ⇒ UAF）。继承 QObject 使连接随簿析构断开。
+class ModuleEditorRegistry final : public QObject {
 public:
+    explicit ModuleEditorRegistry(QObject *parent = nullptr) : QObject(parent) {}
+
     using EditorFactory = std::function<QDialog *()>;
     using HitRefresh = std::function<void(QDialog *)>;
 
@@ -30,6 +35,9 @@ public:
 
     /// 命中查询（只查不建）：供节点变化时刷新已开编辑窗的触点用，查无返回 nullptr。
     QDialog *lookup(NodeBase *node) const;
+
+    /// 权限降级/注销时收掉全部已授出的编辑窗（原 fail-open：窗开着可继续改参数）。
+    void closeAll();
 
 private:
     QHash<NodeBase *, QPointer<QDialog>> m_editors;   // P10：弱引用兜底，新工厂漏设 WA_DeleteOnClose 也不悬垂

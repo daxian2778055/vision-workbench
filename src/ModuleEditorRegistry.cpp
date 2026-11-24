@@ -20,7 +20,7 @@ QDialog *ModuleEditorRegistry::editorFor(NodeBase *node, const EditorFactory &ma
     if (!dlg)
         return nullptr;
     m_editors.insert(node, dlg);
-    QObject::connect(dlg, &QObject::destroyed, dlg, [this, node]() { m_editors.remove(node); });
+    QObject::connect(dlg, &QObject::destroyed, this, [this, node]() { m_editors.remove(node); });
     return dlg;
 }
 
@@ -33,4 +33,16 @@ void ModuleEditorRegistry::closeIfPresent(NodeBase *node)
 QDialog *ModuleEditorRegistry::lookup(NodeBase *node) const
 {
     return m_editors.value(node, nullptr);
+}
+
+void ModuleEditorRegistry::closeAll()
+{
+    // QPointer 随销毁自动置空；destroyed 连接（接收位是本簿）在 delete 时同步摘位，
+    // 随后 clear 只兜住少数未挂上连接的簿位。
+    const QList<QPointer<QDialog>> dialogs = m_editors.values();
+    for (const QPointer<QDialog> &d : dialogs) {
+        if (d)
+            delete d.data();
+    }
+    m_editors.clear();
 }

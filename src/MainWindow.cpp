@@ -5230,12 +5230,22 @@ void MainWindow::runHalconEnvCheck()
 
 void MainWindow::onAddFlowTab()
 {
+    // P9 修复：流程结构级写入口补角色闸（原只灰了菜单项，局部「＋」按钮与菜单旁路）
+    if (!SessionManager::instance()->canEditScheme()) {
+        logMessage(tr("当前角色无权新增流程（需工程师及以上）"));
+        return;
+    }
     // 添加流程标签页
     createNewFlow();
 }
 
 void MainWindow::onCloseFlowTab(int index)
 {
+    // P9 修复：删除流程同属结构级写操作，Operator 不得从 X 按钮、菜单或页签右键旁路
+    if (!SessionManager::instance()->canEditScheme()) {
+        logMessage(tr("当前角色无权删除流程（需工程师及以上）"));
+        return;
+    }
     if (index < 0 || index >= m_flowScenes.size() || index >= ui->flowTabs->count())
         return;
 
@@ -5438,6 +5448,15 @@ void MainWindow::showFlowTabContextMenu(const QPoint &pos)
             return;
         m_flowTimeouts[scene] = secs * 1000;
     });
+    // P9 修复：Operator 只保留只读的「导出 Prc」，写操作项不进菜单（原全部无角色闸）
+    if (!SessionManager::instance()->canEditScheme()) {
+        menu.removeAction(renameAct);
+        menu.removeAction(copyAct);
+        menu.removeAction(deleteAct);
+        menu.removeAction(intervalAct);
+        menu.removeAction(ngAct);
+        menu.removeAction(timeoutAct);
+    }
     menu.exec(bar->mapToGlobal(pos));
 }
 
@@ -8418,8 +8437,14 @@ void MainWindow::setupSystemMenu()
                         return;
                     // 选目录用的是嵌套事件循环（2026-10-29 r16 P2-13）：这段时间里外部触发
                     // 仍可能把流程拉起来，返回后必须再查一次，否则会往正在跑的流程里改路径。
-                    if (!SessionManager::instance()->canEditScheme()
-                        || (m_executor && !m_executor->allowsGraphEditing())) {
+                    // P9 修复：打包会改写所有页的节点路径，必须逐场景查执行器；
+                    // 原只看 m_executor，后台流程运行中时仍可向其写参数。
+                    bool anyRunning = false;
+                    for (auto it = m_flowExecutors.constBegin(); it != m_flowExecutors.constEnd(); ++it) {
+                        FlowExecutor *ex = it.value() ? it.value()->executor() : nullptr;
+                        if (ex && !ex->allowsGraphEditing()) { anyRunning = true; break; }
+                    }
+                    if (!SessionManager::instance()->canEditScheme() || anyRunning) {
                         QMessageBox::warning(
                             this, tr("暂时不能打包"),
                             tr("等待选择目录期间流程已开始运行。\n停止后再试。"));
@@ -8562,6 +8587,7 @@ void MainWindow::applyPermissionRestrictions()
             m_editMenu->setEnabled(false);
         if (m_actionAcquisitionStrategy)
             m_actionAcquisitionStrategy->setEnabled(false);
+        m_editors.closeAll();   // 未登录：已授出的编辑窗一并收掉（原 fail-open）
         return;
     }
 
@@ -8639,6 +8665,9 @@ void MainWindow::applyPermissionRestrictions()
                 sceneEx ? !sceneEx->allowsGraphEditing() : false));
         }
     }
+    // 原 fail-open：权限降级/注销后已开模块编辑窗仍可继续改参数——收掉
+    if (!canEdit)
+        m_editors.closeAll();
     // 角色变化后同步只读管控（只读态优先于角色权限禁用覆盖保存）
     applyReadonlyUI();
 }

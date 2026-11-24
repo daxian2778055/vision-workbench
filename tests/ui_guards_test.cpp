@@ -8,6 +8,7 @@
 //   2) 导出写检查——open() 成功不代表写成功，写完必须 flush + 查状态。
 #include "AnnotationLabelRule.h"
 #include "BoxAnnotatorDialog.h"
+#include "ModuleEditorRegistry.h"
 #include "YoloAnnotation.h"
 #include "RuntimeInterface.h"
 #include "RuntimeInterfaceView.h"
@@ -84,6 +85,7 @@ void p7TrainingToolGuards();            // 命令预览刷新、产物限定目�
 void p8DataPanelGuards();               // 输出查看器 setNode/连接、报警真删、汇总可见行、CSV 转义（源码守卫）
 void p9SystemGuards();                  // 角色闸、载入中止回滚、多流程打包（源码守卫）
 void p10CrossCutGuards();               // 会话信号有消费者、裸指针 QPointer 兜底、标题 tr（源码守卫）
+void moduleEditorRegistryCloseAll();    // 权限降级收窗：簿位真销毁
 void f1DataPanelFollowupGuards();       // flush 三态、序号持久化、坏文件防护、查询上限提示、耗时有界
 void f2ValidationGuards();              // 搜索参数告警、同名拒绝、VOC 写失败、表头/系列编辑、预览红字
 void dockDefaultVisibilityGuards();     // 工具箱默认展开、结果表不 tabbed 遮住图像、图像最后 raise
@@ -927,6 +929,43 @@ void UiGuardsTest::p9SystemGuards()
     pp.close();
     QVERIFY2(pack.contains(QStringLiteral("pack(const QList<FlowScene *> &scenes")),
              "打包器必须有多场景重载");
+
+    // ④ 权限类旁路收口：逐函数体查角色闸/收窗/逐场景执行器（非全文字符串命中）
+    auto bodyOf = [&main](const QString &fn) {
+        const int p = main.indexOf(fn);
+        if (p < 0)
+            return QString();
+        const int q = main.indexOf(QStringLiteral("\nvoid MainWindow::"), p + fn.size());
+        return q < 0 ? main.mid(p) : main.mid(p, q - p);
+    };
+    QVERIFY2(bodyOf(QStringLiteral("void MainWindow::onAddFlowTab")).contains(QStringLiteral("canEditScheme")),
+             "新增流程入口缺角色闸");
+    QVERIFY2(bodyOf(QStringLiteral("void MainWindow::onCloseFlowTab")).contains(QStringLiteral("canEditScheme")),
+             "删除流程入口缺角色闸");
+    QVERIFY2(bodyOf(QStringLiteral("void MainWindow::showFlowTabContextMenu")).contains(QStringLiteral("canEditScheme")),
+             "页签右键写操作缺角色闸");
+    QVERIFY2(bodyOf(QStringLiteral("void MainWindow::applyPermissionRestrictions"))
+                 .contains(QStringLiteral("m_editors.closeAll()")),
+             "权限降级未收已开编辑窗");
+    const int pkCheck = main.indexOf(QStringLiteral("等待选择目录期间流程已开始运行"));
+    QVERIFY2(pkCheck > 700 && main.mid(pkCheck - 700, 700).contains(QStringLiteral("m_flowExecutors")),
+             "打包入口必须逐场景查执行器（原只查当前页）");
+}
+
+void UiGuardsTest::moduleEditorRegistryCloseAll()
+{
+    // 权限降级的收窗机制（MainWindow 不可在 CI 实例化，故只测登记簿本体）：
+    // 收窗必须真销毁对话框并清空簿位，destroyed 连接不能访问已析构的簿。
+    ModuleEditorRegistry reg;
+    NodeBase *a = reinterpret_cast<NodeBase *>(0x1000);   // 只作键值，不解除引用
+    NodeBase *b = reinterpret_cast<NodeBase *>(0x2000);
+    QDialog *dlgA = reg.editorFor(a, []() { return new QDialog(); }, nullptr);
+    QDialog *dlgB = reg.editorFor(b, []() { return new QDialog(); }, nullptr);
+    QVERIFY(dlgA && dlgB);
+    QPointer<QDialog> watchA(dlgA);
+    reg.closeAll();
+    QVERIFY2(watchA.isNull(), "权限降级收窗必须真销毁编辑窗");
+    QVERIFY2(reg.lookup(a) == nullptr && reg.lookup(b) == nullptr, "收窗后簿位应清空");
 }
 
 void UiGuardsTest::p10CrossCutGuards()
