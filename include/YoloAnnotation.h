@@ -158,7 +158,14 @@ public:
         for (const QString &n : names)
             ts << n << '\n';
         ts.flush();
-        return ts.status() == QTextStream::Ok;
+        if (ts.status() != QTextStream::Ok)
+            return false;
+        // P10 复核：磁盘满/网络盘断开等失败在文件层才暴露——只查流状态会误报成功，
+        // 类别 ID 已写进 YOLO txt 却丢了 classes.txt，训练时会把类别解释错。
+        // 与 AnnotationDialog 的 classes.txt 写入同口径（flush + 文件层错误）。
+        if (!f.flush() || f.error() != QFileDevice::NoError)
+            return false;
+        return true;
     }
 
     /// 图像扩展名（VOC 互导与标注器共用一份）

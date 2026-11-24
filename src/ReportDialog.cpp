@@ -1,4 +1,5 @@
 #include "ReportDialog.h"
+#include "CsvEscape.h"
 #include "AppDatabase.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -202,15 +203,9 @@ void ReportDialog::onExport()
     // 显示成乱码（结果表与检测记录两处导出已经这么做了，这里补齐一致）。
     out << QChar(0xFEFF);
     out << QStringLiteral("\u6D41\u7A0B,\u603B\u6570,\u901A\u8FC7,\u5931\u8D25\n");
-    // P8：流程名可能含逗号/引号/换行，必须转义；否则导出的 CSV 列错位
+    // P8/P10：流程名可由用户改为公式样文本，转义收在公共工具（列结构＋公式注入）
     for (const auto &s : m_stats) {
-        QString name = s.flowName;
-        if (name.contains(QLatin1Char('"')) || name.contains(QLatin1Char(','))
-            || name.contains(QLatin1Char('\n'))) {
-            name.replace(QLatin1Char('"'), QStringLiteral("\"\""));
-            name = QLatin1Char('"') + name + QLatin1Char('"');
-        }
-        out << name << ',' << s.total << ',' << s.passed << ',' << s.failed << '\n';
+        out << csvField(s.flowName) << ',' << s.total << ',' << s.passed << ',' << s.failed << '\n';
     }
     out.flush();
     const bool writeOk = (out.status() == QTextStream::Ok);

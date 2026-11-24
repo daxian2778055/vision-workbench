@@ -9,6 +9,7 @@
 #include "AnnotationLabelRule.h"
 #include "BoxAnnotatorDialog.h"
 #include "ModuleEditorRegistry.h"
+#include "CsvEscape.h"
 #include "YoloAnnotation.h"
 #include "RuntimeInterface.h"
 #include "RuntimeInterfaceView.h"
@@ -86,6 +87,7 @@ void p8DataPanelGuards();               // 输出查看器 setNode/连接、报�
 void p9SystemGuards();                  // 角色闸、载入中止回滚、多流程打包（源码守卫）
 void p10CrossCutGuards();               // 会话信号有消费者、裸指针 QPointer 兜底、标题 tr（源码守卫）
 void moduleEditorRegistryCloseAll();    // 权限降级收窗：簿位真销毁
+void csvFieldEscapesFormulaInjection(); // 导出字段：列结构＋公式注入统一转义
 void f1DataPanelFollowupGuards();       // flush 三态、序号持久化、坏文件防护、查询上限提示、耗时有界
 void f2ValidationGuards();              // 搜索参数告警、同名拒绝、VOC 写失败、表头/系列编辑、预览红字
 void dockDefaultVisibilityGuards();     // 工具箱默认展开、结果表不 tabbed 遮住图像、图像最后 raise
@@ -878,8 +880,12 @@ void UiGuardsTest::p8DataPanelGuards()
     const QString result = QString::fromUtf8(rt.readAll());
     rt.close();
     const int cr = result.indexOf(QStringLiteral("void ResultTablePanel::clearResults"));
-    QVERIFY2(result.mid(cr, 400).contains(QStringLiteral("m_history")),
-             "清结果时必须同步清历史表");
+    const int crEnd = result.indexOf(QStringLiteral("void ResultTablePanel::"), cr + 10);
+    QVERIFY2(crEnd > cr && !result.mid(cr, crEnd - cr).contains(QStringLiteral("m_history")),
+             "每轮 clearResults 只清当前树，不得清历史表（P8 回归点）");
+    const int cs = result.indexOf(QStringLiteral("void ResultTablePanel::clearSchemeResults"));
+    QVERIFY2(cs > 0 && result.mid(cs, 300).contains(QStringLiteral("m_history")),
+             "切方案的 clearSchemeResults 才清历史表");
     const int us = result.indexOf(QStringLiteral("void ResultTablePanel::updateSummary"));
     QVERIFY2(result.mid(us, 700).contains(QStringLiteral("isHidden")),
              "汇总必须跳过筛选隐藏行");
@@ -892,8 +898,24 @@ void UiGuardsTest::p8DataPanelGuards()
     const int ex = perf.indexOf(QStringLiteral("void PerformancePanel::exportToCsv"));
     const int exEnd = perf.indexOf(QStringLiteral("void PerformancePanel::"), ex + 10);
     const QString exp = perf.mid(ex, exEnd - ex);
-    QVERIFY2(exp.contains(QStringLiteral("QTextStream::Ok")) && exp.contains(QStringLiteral("csv(")),
-             "性能 CSV 必须转义字段并检查写后状态");
+    QVERIFY2(exp.contains(QStringLiteral("QTextStream::Ok")) && exp.contains(QStringLiteral("csvField(")),
+             "性能 CSV 必须走公共转义并检查写后状态");
+
+    // ⑥ 报表导出同用公共转义；classes.txt 写失败必须查文件层
+    QFile rd(QStringLiteral(SRC_DIR "/src/ReportDialog.cpp"));
+    QVERIFY2(rd.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 ReportDialog.cpp");
+    const QString rep = QString::fromUtf8(rd.readAll());
+    rd.close();
+    QVERIFY2(rep.contains(QStringLiteral("csvField(s.flowName)")),
+             "报表 CSV 的流程名必须走公共转义（公式注入）");
+    QFile ya(QStringLiteral(SRC_DIR "/include/YoloAnnotation.h"));
+    QVERIFY2(ya.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 YoloAnnotation.h");
+    const QString yo = QString::fromUtf8(ya.readAll());
+    ya.close();
+    const int sc = yo.indexOf(QStringLiteral("static bool saveClasses"));
+    QVERIFY2(sc > 0 && yo.mid(sc, 700).contains(QStringLiteral("f.flush()"))
+             && yo.mid(sc, 700).contains(QStringLiteral("f.error()")),
+             "classes.txt 写失败必须查文件层 flush/error（不能只看流状态）");
 }
 
 void UiGuardsTest::p9SystemGuards()
@@ -966,6 +988,20 @@ void UiGuardsTest::moduleEditorRegistryCloseAll()
     reg.closeAll();
     QVERIFY2(watchA.isNull(), "权限降级收窗必须真销毁编辑窗");
     QVERIFY2(reg.lookup(a) == nullptr && reg.lookup(b) == nullptr, "收窗后簿位应清空");
+}
+
+void UiGuardsTest::csvFieldEscapesFormulaInjection()
+{
+    // P10 修复的行为腿：以 = + - @ 或制表/回车开头的现场输入（算子名/流程名可改）
+    // 在 Excel/WPS 打开导出 CSV 时会被当公式执行，必须置成文本再做列结构转义。
+    QCOMPARE(csvField(QStringLiteral("part")), QStringLiteral("part"));
+    QCOMPARE(csvField(QStringLiteral("=HYPERLINK(\"x\")")),
+             QStringLiteral("\"'=HYPERLINK(\"\"x\"\")\""));
+    QCOMPARE(csvField(QStringLiteral("+cmd")), QStringLiteral("'+cmd"));
+    QCOMPARE(csvField(QStringLiteral("-cmd")), QStringLiteral("'-cmd"));
+    QCOMPARE(csvField(QStringLiteral("@SUM(A1)")), QStringLiteral("'@SUM(A1)"));
+    QCOMPARE(csvField(QStringLiteral("a,b")), QStringLiteral("\"a,b\""));
+    QCOMPARE(csvField(QStringLiteral("a\r\nb")), QStringLiteral("\"a\r\nb\""));
 }
 
 void UiGuardsTest::p10CrossCutGuards()

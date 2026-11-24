@@ -1,4 +1,5 @@
 #include "PerformancePanel.h"
+#include "CsvEscape.h"
 #include "ComputeBackend.h"
 #include "FlowExecutor.h"
 #include "NodeBase.h"
@@ -247,21 +248,11 @@ void PerformancePanel::exportToCsv(const QString &filePath)
     // 写入表头
     stream << QStringLiteral("算子名称,类型,执行次数,总耗时(ms),平均耗时(ms),最小耗时(ms),最大耗时(ms)\n");
 
-    // P8：CSV 字段必须转义（算子名可能含逗号/引号/换行），否则列结构被破坏
-    auto csv = [](const QString &s) {
-        QString v = s;
-        if (v.contains(QLatin1Char('"')) || v.contains(QLatin1Char(','))
-            || v.contains(QLatin1Char('\n'))) {
-            v.replace(QLatin1Char('"'), QStringLiteral("\"\""));
-            v = QLatin1Char('"') + v + QLatin1Char('"');
-        }
-        return v;
-    };
-    // 写入数据
+    // P8/P10：字段转义收在公共工具（列结构＋公式注入，两处导出同形）
     for (auto it = m_nodeStats.begin(); it != m_nodeStats.end(); ++it) {
         const NodeStats &stats = it.value();
-        stream << csv(stats.nodeName) << ","
-               << csv(stats.nodeType) << ","
+        stream << csvField(stats.nodeName) << ","
+               << csvField(stats.nodeType) << ","
                << stats.executionCount << ","
                << stats.totalTime << ","
                << QString::number(stats.averageTime(), 'f', 2) << ","
