@@ -1075,6 +1075,19 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     pf.close();
     QVERIFY2(perf.contains(QStringLiteral("kMaxFlowTimes")),
              "流程耗时历史必须有界，防止连续运行无界增长");
+
+    // P10 存储健壮性：写侧单张上限、序号同域、两处 flush 告知
+    QVERIFY2(store.contains(QStringLiteral("encoded.size()) > kMaxEntryBytes")),
+             "写侧单张 PNG 必须与读侧共用上限，超限拒写");
+    QVERIFY2(store.contains(QStringLiteral("m_batchSeq = (m_batchSeq + 1) % 10000")),
+             "序号写出取模须与加载钳制 [0,9999] 同域，往返一致");
+    QFile mw2(QStringLiteral(SRC_DIR "/src/MainWindow.cpp"));
+    QVERIFY2(mw2.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 MainWindow.cpp");
+    const QString mwsrc = QString::fromUtf8(mw2.readAll());
+    mw2.close();
+    QVERIFY2(mwsrc.count(QStringLiteral("flush(&flushErr)")) >= 2
+             && mwsrc.count(QStringLiteral("FlushResult::Failed")) >= 2,
+             "退出前与停止时的 flush 失败都必须告知，不能静默丢数据");
 }
 
 void UiGuardsTest::f2ValidationGuards()

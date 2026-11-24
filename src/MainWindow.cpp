@@ -2445,7 +2445,15 @@ void MainWindow::closeEvent(QCloseEvent *event)
     // 记住停靠布局：用户拖过的左右占比/面板位置下次启动原样恢复
     QSettings().setValue(QStringLiteral("ui/mainWindowState2"), saveState());
     cleanupCameras();
-    LargeFileImageStore::instance()->flush();   // 采集策略：退出前把未满一批落盘
+    // P10 修复：flush 失败不得静默——未落盘数据会随退出丢失
+    {
+        QString flushErr;
+        if (LargeFileImageStore::instance()->flush(&flushErr)
+                == LargeFileImageStore::FlushResult::Failed) {
+            logMessage(tr("大文件存图落盘失败：%1").arg(flushErr));
+            qWarning() << "LargeFileImageStore flush failed on close:" << flushErr;
+        }
+    }
     if (m_trayIcon)
         m_trayIcon->hide();   // 正常退出时摘掉托盘图标，避免残留
     QMainWindow::closeEvent(event);
@@ -6647,8 +6655,12 @@ void MainWindow::onExecutionStopped()
         m_flowTimeoutTimer->stop();
     m_timeoutScene = nullptr;
     // 采集策略·大文件存图：停止时把未满一批落盘，避免下一轮继续攒而丢在重启边界
-    if (LargeFileImageStore::instance()->pendingCount() > 0)
-        LargeFileImageStore::instance()->flush();
+    if (LargeFileImageStore::instance()->pendingCount() > 0) {
+        QString flushErr;
+        if (LargeFileImageStore::instance()->flush(&flushErr)
+                == LargeFileImageStore::FlushResult::Failed)
+            logMessage(tr("大文件存图落盘失败：%1").arg(flushErr));
+    }
     m_execStatus->onStopped();   // 状态栏 + 耗时结算 + 按钮态
     refreshAllMvsPixelFormats();
     updateEditLockForCurrentScene();

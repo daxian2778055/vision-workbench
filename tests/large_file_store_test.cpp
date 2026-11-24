@@ -22,6 +22,7 @@ private slots:
     void settingsClampBatchSize();
     void flushReportsThreeStates();          // P10：无数据/写成功/写失败必须可区分
     void readBatchRejectsOversizedEntry();   // P10：坏文件声明超大长度不得触发巨量分配
+    void appendRejectsOversizedEntry();      // P10：写侧单张超上限必须拒写，与读侧同限
 
 private:
     LargeFileImageStore::Settings m_original;
@@ -229,6 +230,33 @@ void LargeFileStoreTest::readBatchRejectsOversizedEntry()
     QVERIFY2(!LargeFileImageStore::readBatch(bad, &entries, &error), qPrintable(error));
     QVERIFY2(!error.isEmpty(), "坏文件必须给出原因");
     QVERIFY(entries.isEmpty());
+}
+
+void LargeFileStoreTest::appendRejectsOversizedEntry()
+{
+    // P10 修复的行为腿：读侧单条上限 64MB，写侧此前只受 256MB 总预算——一张合法的大 PNG
+    // 可写进批次却随后解不开。现两侧共用同一上限，超限即拒写并给原因。
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    auto *store = LargeFileImageStore::instance();
+    LargeFileImageStore::Settings s;
+    s.enabled = true;
+    s.directory = dir.path();
+    s.batchSize = 100;
+    QString error;
+    QVERIFY2(store->setSettings(s, &error), qPrintable(error));
+
+    // 随机 3 通道 5000x5000 ≈ 75MB，PNG 几乎不能压缩，稳定超过 64MB 单条上限
+    cv::Mat big(5000, 5000, CV_8UC3);
+    cv::randu(big, cv::Scalar::all(0), cv::Scalar::all(255));
+    QString why;
+    QVERIFY2(!store->append(big, QStringLiteral("big"), nullptr, &why),
+             "单张超上限必须拒写（否则写出的批次自己读不回）");
+    QVERIFY2(why.contains(QStringLiteral("上限")), qPrintable(why));
+    QCOMPARE(store->pendingCount(), 0);
+
+    s.enabled = false;
+    QVERIFY2(store->setSettings(s, &error), qPrintable(error));
 }
 
 QTEST_MAIN(LargeFileStoreTest)

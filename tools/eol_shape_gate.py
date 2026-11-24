@@ -66,7 +66,11 @@ import sys
 # （207 -> 222）、tracked 同步 738 -> 753，差额一一对应，没有任何既有文件被改掉
 # 行尾形状。这 15 个是：3 个几何测量节点的 .h/.cpp（6）、FitRobust/FitPointSource
 # 的 .h/.cpp（4）、以及 5 个新测试文件。判据口径未变，只重冻结读数。
-EXPECTED_TOOL_WRITTEN = 222
+# Re-frozen at 2026-11-24 222 -> 223：上一批导出健壮性修复新增 include/CsvEscape.h，
+# 由编辑工具以 LF 落盘，git add 后本闸首次看到它，tool_written 净增恰好 1（223），
+# tracked 同步到 757；没有任何既有文件被改掉行尾形状。本批存储健壮性改动只触及既有
+# 文件并维持其原行尾，差额一一对应。理由记录在此，供下次读数变化时并排核对。
+EXPECTED_TOOL_WRITTEN = 223
 TAG = "EOL"
 
 

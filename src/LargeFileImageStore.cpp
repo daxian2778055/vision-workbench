@@ -114,6 +114,14 @@ bool LargeFileImageStore::append(const cv::Mat &image, const QString &sourceName
         if (error) *error = QStringLiteral("PNG 编码失败");
         return false;
     }
+    // P10 修复：读侧 readBounded 用 kMaxEntryBytes（64MB）防坏文件巨量分配；写侧此前只受
+    // 256MB 总预算约束，一张合法的大 PNG 可超过单条上限——写出的批次随后自己解不开。
+    // 两侧共用同一常量，超限即拒写并给原因。
+    if (static_cast<qint64>(encoded.size()) > kMaxEntryBytes) {
+        if (error) *error = QStringLiteral("单张 PNG 超过 %1 MB 上限（读侧同限，超限批次无法解包）")
+                                .arg(kMaxEntryBytes / (1024 * 1024));
+        return false;
+    }
 
     QMutexLocker locker(&m_mutex);
     if (!m_settings.enabled) {
@@ -207,7 +215,9 @@ bool LargeFileImageStore::writePendingBatchLocked(QString *outPath, QString *err
 
     m_pending.clear();
     m_pendingBytes = 0;
-    ++m_batchSeq;
+    // P10 修复：加载端把序号钳在 [0,9999]，写出端取模同域；此前无限 ++ 写满 10000
+    // 后重启回退到 9999，往返不一致（同秒落盘还可能撞名）。
+    m_batchSeq = (m_batchSeq + 1) % 10000;
     // P10：序号即时落盘，重启同秒再写从下一个号起（不依赖用户改设置才 persist）
     QSettings().setValue(QStringLiteral("acq/largeFileBatchSeq"), m_batchSeq);
     if (outPath) *outPath = finalPath;
