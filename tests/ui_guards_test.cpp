@@ -145,6 +145,7 @@ void layoutSchemaContractRejectsFutureVersionsAndBadSubPageGraphs();
     void annotationDialogDoesNotTruncateOnOpen();
     void annotationDialogSwitchSavesToPreviousImage();
     void annotationDialogRollsBackWhenSaveFails();
+    void annotationDialogClassComboDoesNotRewritePreviousImage();
     void helpViewerDeletesOnClose();
 };
 
@@ -503,6 +504,46 @@ void UiGuardsTest::annotationDialogRollsBackWhenSaveFails()
         if (l->text().contains(QStringLiteral("撤回")))
             sawRollback = true;
     QVERIFY2(sawRollback, "状态栏没有说明已撤回");
+}
+
+void UiGuardsTest::annotationDialogClassComboDoesNotRewritePreviousImage()
+{
+    // P7 修复的行为腿：新接的类别下拉槽在 reloadImages 重建下拉时被 addItem 触发，
+    // 此时 m_boxes/m_currentPath 仍属上一张图——原实现改 classId 并保存，写坏旧图。
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QDir().mkpath(tmp.path());
+    for (int i = 0; i < 2; ++i) {
+        QImage img(64, 48, QImage::Format_RGB32);
+        img.fill(QColor(128, 128, 128));
+        QVERIFY(img.save(QStringLiteral("%1/img%2.png").arg(tmp.path()).arg(i)));
+    }
+    {
+        QFile cls(tmp.path() + QStringLiteral("/classes.txt"));
+        QVERIFY(cls.open(QIODevice::WriteOnly | QIODevice::Text));
+        cls.write("part\nface\n");
+        cls.close();
+        const QString label0 = YoloAnnotation::labelPath(tmp.path() + QStringLiteral("/img0.png"));
+        QFile f(label0);
+        QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text));
+        f.write("1 0.500000 0.500000 0.500000 0.500000\n");   // 旧图的框是 classId=1
+        f.close();
+    }
+    const QString label0 = YoloAnnotation::labelPath(tmp.path() + QStringLiteral("/img0.png"));
+    const QString before = readAll(label0);
+    QVERIFY2(before.startsWith(QStringLiteral("1 ")), "前置：第一张的框应为 classId=1");
+
+    BoxAnnotatorDialog dlg(tmp.path());
+    QListWidget *boxList = nullptr;
+    for (QListWidget *w : dlg.findChildren<QListWidget *>())
+        if (w->count() > 0 && !w->item(0)->text().endsWith(QStringLiteral(".png")))
+            boxList = w;
+    QVERIFY2(boxList, "找不到标注列表");
+    boxList->setCurrentRow(0);   // 让 onClassComboChanged 的选中框条件成立
+
+    // 模拟换目录时的列表重建：m_loading=true 期间 clear/addItem 必发 currentIndexChanged(0)
+    QVERIFY(QMetaObject::invokeMethod(&dlg, "reloadImages", Qt::DirectConnection));
+    QCOMPARE(readAll(label0), before);   // 上一张的标注必须逐字不变
 }
 
 // 复核（扫描清单「设计器 Delete 快捷键劫持文本编辑」）：主窗口 Delete 用

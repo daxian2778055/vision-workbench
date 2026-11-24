@@ -290,13 +290,18 @@ void BoxAnnotatorDialog::reloadImages()
     m_imageList->clear();
     m_images.clear();
     m_classNames = YoloAnnotation::loadClasses(m_dir);
-    m_classCombo->clear();
+    {
+        // P7 修复：重建下拉期间屏蔽 currentIndexChanged——addItem 触发的索引变化不带旧图语义，
+        // 槽里若据此改框并保存会把上一张图的标注写坏（信号层与 m_loading 守卫双保险）。
+        const QSignalBlocker blocker(m_classCombo);
+        m_classCombo->clear();
+        for (const QString &n : m_classNames)
+            m_classCombo->addItem(n);
+    }
     if (m_classNames.isEmpty()) {
         // 没 classes.txt：给个占位，提示去补
         m_status->setText(QStringLiteral("目录下没有 classes.txt：先建一个（每行一个类名），或直接在框上用编号"));
     }
-    for (const QString &n : m_classNames)
-        m_classCombo->addItem(n);
 
     const QDir dir(m_dir);
     // P7：与 YoloAnnotation::imageFilters() 对齐——VOC 导入/导出认 tif/tiff，
@@ -451,6 +456,9 @@ void BoxAnnotatorDialog::onBoxSelected(int index)
 
 void BoxAnnotatorDialog::onClassComboChanged(int index)
 {
+    if (m_loading)
+        return;   // reloadImages 重建下拉时 addItem 会发 currentIndexChanged，此时旧 m_boxes/m_currentPath
+                  // 还属于上一张图——落进保存会把上一张的标注写坏（P7 复核 P1）
     if (index < 0 || !m_classCombo || index >= m_classCombo->count())
         return;
     const int row = m_boxList ? m_boxList->currentRow() : -1;

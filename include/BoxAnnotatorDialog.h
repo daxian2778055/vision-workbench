@@ -78,7 +78,7 @@ private slots:
     void onClearImage();
 
 private:
-    void reloadImages();
+    Q_INVOKABLE void reloadImages();   ///< 元对象可调用：行为腿需模拟「换目录重建列表」的时序
     void loadCurrentImage();
     /// 保存当前图（2026-10-29 复核 P2-12：返回是否真的写成功——磁盘满时不能装作已存）
     bool saveCurrentImage();
