@@ -1177,6 +1177,8 @@ MainWindow::MainWindow(QWidget *parent, bool previewOnly) :
                         index = (delta > 0) ? -1 : 0;
                     const int next = (index + delta + count) % count;
                     m_localImageNode->setLocalImageIndex(next);
+                    // P10 修复：本地图区"指定某张"不触发自动前进（此前只在无人调用的 run(false) 里设标志）
+                    m_localImageNode->setAdvanceThisRound(false);
                     executeNodeOnce(m_localImageNode);
                     refreshLocalImagePanel(m_localImageNode);
                 };
@@ -1208,6 +1210,7 @@ MainWindow::MainWindow(QWidget *parent, bool previewOnly) :
                     if (!m_localImageNode || m_localImageNode->localImageFiles().isEmpty())
                         return;
                     m_localImageNode->setLocalImageIndex(0);
+                    m_localImageNode->setAdvanceThisRound(false);
                     executeNodeOnce(m_localImageNode);
                     refreshLocalImagePanel(m_localImageNode);
                 });
@@ -1218,6 +1221,7 @@ MainWindow::MainWindow(QWidget *parent, bool previewOnly) :
                     if (row < 0)
                         return;
                     m_localImageNode->setLocalImageIndex(row);
+                    m_localImageNode->setAdvanceThisRound(false);
                     executeNodeOnce(m_localImageNode);
                     refreshLocalImagePanel(m_localImageNode);
                 });
@@ -1236,6 +1240,8 @@ MainWindow::MainWindow(QWidget *parent, bool previewOnly) :
                         if (!m_localImageNode)
                             break;
                         m_localImageNode->setLocalImageIndex(i);
+                        // 逐张显式跑全部：每张都只读当前张，不能再让自动前进跳号
+                        m_localImageNode->setAdvanceThisRound(false);
                         allOk = m_localImageNode->execute() && allOk;
                         QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
                     }
@@ -1251,6 +1257,7 @@ MainWindow::MainWindow(QWidget *parent, bool previewOnly) :
                                 return;
                             const int row = m_localImageList->row(item);
                             m_localImageNode->setLocalImageIndex(row);
+                            m_localImageNode->setAdvanceThisRound(false);
                             executeNodeOnce(m_localImageNode);
                             refreshLocalImagePanel(m_localImageNode);
                         });

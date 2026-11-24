@@ -80,6 +80,10 @@ public:
     bool addLocalImageFiles(const QStringList &files);
     bool isLocalFileSource() const;
 
+    /// 本地序列接口：指定某张执行（缩略图点选/上一张/下一张/首张/全部）——本轮读完不自动前进。
+    /// 一次性标志，loadImageFromFile 消费后自动恢复允许；不影响流程正常轮的前进语义。
+    void setAdvanceThisRound(bool enabled);
+
     // 全局相机
     QStringList getAvailableCameras();
     QStringList getGlobalCameras();

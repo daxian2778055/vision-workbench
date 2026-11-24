@@ -7,6 +7,7 @@
 #include <QJsonArray>
 
 // 节点头文件
+#include "ProjectPaths.h"
 #include "OpencvThresholdNode.h"
 #include "OpencvCropNode.h"
 #include "OpencvImageArithNode.h"
@@ -135,6 +136,8 @@ private slots:
     void testImageArithDivByZero();
     void testFormulaEvaluation();
     void testImageReadAddSingleLocalFile();
+    void testMvsLocalReadBehavior();
+    void testMvsLocalImageJsonRelPath();
     void testChannelSplitAndMergeRoundtrip();
     void testOutputImageSavesByRule();
     void testFitRoiBoundary_data();
@@ -1415,6 +1418,82 @@ void NodeCoreTest::testImageReadAddSingleLocalFile()
     QVERIFY2(node.addLocalImageFiles(files), "单张本地图应添加成功");
     QCOMPARE(node.localImageFiles().size(), 1);
     QVERIFY2(node.isLocalFileSource(), "加图后应切到本地文件模式");
+}
+
+void NodeCoreTest::testMvsLocalReadBehavior()
+{
+    // P10 修复 MVS 族的行为腿（原 mvsLocalSourceGuards 全是字符串断言，判据置死仍全绿）：
+    // ① 成功读图的结果字段/模块状态经 getParam 回退基类可读；② 本地图区"指定某张"不自动
+    // 前进且下一轮恢复；③ 失败原因 lastError 经 getParam 可读（结果表判红的真实链路）。
+    MvsImageSourceNode node;
+    node.init();
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    QImage img(16, 12, QImage::Format_Grayscale8);
+    img.fill(128);
+    const QString a = dir.filePath(QStringLiteral("a.png"));
+    const QString b = dir.filePath(QStringLiteral("b.png"));
+    QVERIFY2(img.save(a) && img.save(b), "测试图应能写入临时目录");
+
+    node.setParam(QStringLiteral("filePath"), dir.path());
+    node.setParam(QStringLiteral("autoSwitch"), true);
+
+    QVERIFY2(node.execute(), "本地读图应成功");
+    QCOMPARE(node.getParam(QStringLiteral("moduleStatus")).toBool(), true);
+    QCOMPARE(node.getParam(QStringLiteral("outputImageWidth")).toInt(), 16);
+    QCOMPARE(node.getParam(QStringLiteral("outputImageHeight")).toInt(), 12);
+    QVERIFY2(node.getParam(QStringLiteral("lastError")).toString().isEmpty(),
+             "成功轮不应残留失败原因");
+
+    // 一次性前进：显式禁止的本轮不前进（原实现标志只由无人调用的 run(false) 设置，恒 true）
+    node.setLocalImageIndex(0);
+    node.setAdvanceThisRound(false);
+    QVERIFY2(node.execute(), "指定张应能读出");
+    QCOMPARE(node.currentLocalImageIndex(), 0);
+    QVERIFY2(node.execute(), "下一轮应能读出");
+    QCOMPARE(node.currentLocalImageIndex(), 1);
+
+    // 失败原因可见：路径不存在 → fail() 写 m_params["lastError"]，getParam 必须取到
+    MvsImageSourceNode bad;
+    bad.init();
+    bad.setParam(QStringLiteral("filePath"), dir.filePath(QStringLiteral("not_there")));
+    QVERIFY2(!bad.execute(), "不存在的本地路径应判失败");
+    const QString why = bad.getParam(QStringLiteral("lastError")).toString();
+    QVERIFY2(!why.trimmed().isEmpty(), "失败原因必须经 getParam 可读（结果表判红）");
+    QCOMPARE(bad.getParam(QStringLiteral("moduleStatus")).toBool(), false);
+}
+
+void NodeCoreTest::testMvsLocalImageJsonRelPath()
+{
+    // P10 修复：方案目录内的本地图清单写相对形态，搬家后按新方案锚解析回新位置。
+    QTemporaryDir oldDir, newDir;
+    QVERIFY(oldDir.isValid() && newDir.isValid());
+    QImage img(8, 6, QImage::Format_Grayscale8);
+    img.fill(100);
+    const QString oldImg = oldDir.filePath(QStringLiteral("a.png"));
+    const QString newImg = newDir.filePath(QStringLiteral("a.png"));
+    QVERIFY2(img.save(oldImg) && QFile::copy(oldImg, newImg), "两处测试图应就位");
+
+    const QString oldScheme = oldDir.filePath(QStringLiteral("scheme.vfp"));
+    const QString newScheme = newDir.filePath(QStringLiteral("scheme.vfp"));
+    ProjectPaths::setCurrentSchemeFilePath(oldScheme);
+    MvsImageSourceNode src;
+    src.init();
+    src.setParam(QStringLiteral("filePath"), oldImg);
+    const QJsonObject json = src.toJson();
+    const QJsonArray files = json.value(QStringLiteral("localImageFiles")).toArray();
+    QCOMPARE(files.size(), 1);
+    const QString stored = files.at(0).toString();
+    QVERIFY2(!QFileInfo(stored).isAbsolute(), "方案内图必须写相对形态（原实现恒写绝对路径）");
+
+    ProjectPaths::setCurrentSchemeFilePath(newScheme);
+    MvsImageSourceNode dst;
+    dst.init();
+    dst.fromJson(json);
+    QCOMPARE(dst.localImageFiles().size(), 1);
+    QCOMPARE(dst.localImageFiles().at(0), newImg);
+    ProjectPaths::setCurrentSchemeFilePath(QString());   // 腿尾净态
 }
 
 // VM Blob 形状度量：数值腿。守三条曾出错的契约：

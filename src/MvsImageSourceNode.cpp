@@ -254,6 +254,11 @@ void MvsImageSourceNode::setParam(const QString &key, const QVariant &value)
         m_autoSwitch = value.toBool();
     } else if (key == "mono8Mode") {
         m_mono8Mode = value.toBool();
+    } else {
+        // P10 修复：lastError/moduleStatus/结果字段等公共键不在本类的硬件缓存分支内，
+        // 必须落进基类 m_params——否则 NodeBase::execute() 的异常兜底写入、
+        // FlowExecutor 的原因键枚举都取不到。基类 setParam 只写表不发信号，不重复 emit。
+        HalconNode::setParam(key, value);
     }
 
     emit paramChanged(key, value);
@@ -303,7 +308,10 @@ QVariant MvsImageSourceNode::getParam(const QString &key) const
     if (key == "currentLocalImageIndex")
         return m_currentImageIndex;
     
-    return QVariant();
+    // P10 修复：公共结果/原因键（lastError、moduleStatus 等）写入基类 m_params 后，
+    // 本覆写此前一律 return QVariant()，导致 FlowExecutor 枚举 getAllParamNames() 取不到原因、
+    // NodeBase::execute() 的 moduleStatus 判定与异常兜底同样读不到——回退基类让这些键可见。
+    return HalconNode::getParam(key);
 }
 
 QJsonObject MvsImageSourceNode::toJson() const
@@ -326,8 +334,13 @@ QJsonObject MvsImageSourceNode::toJson() const
     // P10 补齐：本地多图清单/索引单独持久化（重开不丢选中项）
     if (m_sourceType == LOCAL_FILE && !m_imageFiles.isEmpty()) {
         QJsonArray files;
-        for (const QString &f : m_imageFiles)
-            files.append(f);
+        for (const QString &f : m_imageFiles) {
+            // P10 修复：方案目录内的图写相对形态，搬动方案目录后仍按新锚解析；
+            // 目录外的绝对路径原样保留（既有 makeSchemeRelativeIfInside 口径）。
+            // fromJson 已逐项 resolveExecutionPath，往返闭合。
+            files.append(ProjectPaths::makeSchemeRelativeIfInside(
+                ProjectPaths::currentSchemeFilePath(), f));
+        }
         json["localImageFiles"] = files;
         json["localImageIndex"] = m_currentImageIndex;
     }
@@ -702,6 +715,9 @@ bool MvsImageSourceNode::loadImageFromFile()
         // 自动切换：本轮换下一张，取模循环（与 ImageReadNode 同口径）
         if (m_autoSwitch && m_allowAutoAdvance && !m_imageFiles.isEmpty())
             m_currentImageIndex = (m_currentImageIndex + 1) % m_imageFiles.size();
+        // P10 修复：m_allowAutoAdvance 是一次性"本轮不前进"标志（本地图区指定某张时置 false）。
+        // 读完即恢复允许，否则流程后续轮会永远停在同一张；run(bool) 每轮仍可显式改写它。
+        m_allowAutoAdvance = true;
         emit thumbnailUpdated();
         return true;
     } catch (const HException &e) {
@@ -1352,6 +1368,12 @@ int MvsImageSourceNode::currentLocalImageIndex() const
 {
     QMutexLocker locker(&m_mutex);
     return m_currentImageIndex;
+}
+
+void MvsImageSourceNode::setAdvanceThisRound(bool enabled)
+{
+    QMutexLocker locker(&m_mutex);
+    m_allowAutoAdvance = enabled;
 }
 
 void MvsImageSourceNode::setLocalImageIndex(int index)
