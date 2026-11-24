@@ -593,11 +593,17 @@ void ResultTablePanel::clearResults()
 {
     m_tree->clear();
     m_rows.clear();
-    // P8：历史页跨流程/新建流程必须一起清，否则上一方案的历史残留（主窗口在
-    // 新流程/载入流程时调的就是本函数）
+    // P8 修复：本函数同时被 beginRunRound（每轮开跑）与切方案调用。原在此处清历史，
+    // 导致每一轮执行都删掉跨轮对照——与 beginRunRound 文档「历史页保留此前各轮」矛盾。
+    // 这里只清当前树；切方案的整表清理由 clearSchemeResults 负责。
+    updateSummary();
+}
+
+void ResultTablePanel::clearSchemeResults()
+{
+    clearResults();
     if (m_history)
         m_history->setRowCount(0);
-    updateSummary();
 }
 
 int ResultTablePanel::moduleCount() const

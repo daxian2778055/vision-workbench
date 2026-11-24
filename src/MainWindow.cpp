@@ -3986,7 +3986,7 @@ void MainWindow::onNewProject()
     // 否则一直显示旧流程的模块与输出、变量引用菜单给出已失效的 moduleId。
     if (m_auxPanels) {
         if (auto *rt = m_auxPanels->resultTablePanel())
-            rt->clearResults();
+            rt->clearSchemeResults();
         // 图像区「模块结果」同样属于"上一方案"的数据，必须一起清
         if (m_moduleResultPanel)
             m_moduleResultPanel->clearResults();
@@ -4989,7 +4989,7 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
     // 否则一直显示旧流程的模块与输出、变量引用菜单给出已失效的 moduleId。
     if (m_auxPanels) {
         if (auto *rt = m_auxPanels->resultTablePanel())
-            rt->clearResults();
+            rt->clearSchemeResults();
         // 图像区「模块结果」同样属于"上一方案"的数据，必须一起清
         if (m_moduleResultPanel)
             m_moduleResultPanel->clearResults();

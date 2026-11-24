@@ -36,8 +36,10 @@ public:
     /// 标记某模块本轮被跳过（未激活分支 / 循环体调度）：状态列显示"跳过"（灰色），
     /// 与"失败"区分——现场排查"哪个算子没跑"靠它，而不是从"失败"里猜。
     void setModuleSkipped(int moduleId, const QString &moduleName);
-    /// 清空全部结果
+    /// 清空全部结果（仅当前结果树，保留历史页——每轮 beginRunRound 也走这里）
     void clearResults();
+    /// 切方案/新建流程时清结果：含历史页（与每轮「只清当前树」的口径分开）
+    void clearSchemeResults();
     /// 设置筛选关键字（按模块名/输出项/值模糊匹配；空串表示显示全部）
     void setFilterText(const QString &text);
     /// 当前已展示的模块行数

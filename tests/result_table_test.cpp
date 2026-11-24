@@ -28,7 +28,7 @@ private slots:
     void testPageVisibilitySplit();     // 图像区「模块结果」/ 底部结果区共用面板的页签裁剪
     void testSpecialFloatValues();      // 平铺分支的 NaN / ±Inf 必须与声明字段路径同口径
     void testHistoryFilterFollowsText(); // 文本筛选必须同时作用于历史结果页
-    void testClearResultsAlsoClearsHistory(); // P8：新建/载入流程清结果时历史不能残留
+    void testClearSchemeResultsKeepsRoundHistory(); // 每轮只清当前树、切方案才清历史
 };
 
 void ResultTableTest::testInPlaceUpdateAndCsv()
@@ -562,8 +562,11 @@ void ResultTableTest::testHistoryFilterFollowsText()
     QCOMPARE(restored, total);
 }
 
-void ResultTableTest::testClearResultsAlsoClearsHistory()
+void ResultTableTest::testClearSchemeResultsKeepsRoundHistory()
 {
+    // P8 修复的行为腿：原 testClearResultsAlsoClearsHistory 把"每轮清历史"钉成了正确行为，
+    // 而 beginRunRound 每轮必经 clearResults——跨轮对照全被删掉。现断言两轮后历史仍在、
+    // 只有显式切方案（clearSchemeResults）才清历史。
     ResultTablePanel panel;
     QVariantMap vars;
     vars.insert(QStringLiteral("v"), 1);
@@ -575,8 +578,14 @@ void ResultTableTest::testClearResultsAlsoClearsHistory()
     const int before = history->rowCount();
     QVERIFY2(before >= 2, "前置条件：应写入 2 条历史");
 
-    panel.clearResults();
-    QCOMPARE(history->rowCount(), 0);   // P8：此前只清当前结果树，历史残留上一方案
+    panel.beginRunRound();
+    QCOMPARE(history->rowCount(), before);   // 每轮开跑：当前树清空、历史保留
+    QCOMPARE(panel.moduleCount(), 0);
+    panel.beginRunRound();
+    QCOMPARE(history->rowCount(), before);   // 第二轮仍保留（P8 回归点）
+
+    panel.clearSchemeResults();
+    QCOMPARE(history->rowCount(), 0);        // 切方案才清历史
 }
 
 QTEST_MAIN(ResultTableTest)
