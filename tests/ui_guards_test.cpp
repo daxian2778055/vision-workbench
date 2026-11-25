@@ -1381,6 +1381,21 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              && cm2Src.contains(QStringLiteral("outsideWindow"))
              && cm2Src.contains(QStringLiteral("addr > 65535")),
              "主对话框必须按地址列判空白，并对窗口外地址提示、单元格钳制 65535");
+    // ⑰ PLC 轮询：锁只包住查表+改队列+推进，不跨 Modbus I/O 与失败 emit
+    QFile pc(QStringLiteral(SRC_DIR "/src/PlcCommNode.cpp"));
+    QVERIFY2(pc.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 PlcCommNode.cpp");
+    const QString pcSrc = QString::fromUtf8(pc.readAll());
+    pc.close();
+    const int pp = pcSrc.indexOf(QStringLiteral("void PlcCommNode::onPollTimeout"));
+    const int ppEnd = pcSrc.indexOf(QStringLiteral("bool PlcCommNode::readRegister"), pp);
+    const QString ppBody = pcSrc.mid(pp, ppEnd - pp);
+    QVERIFY2(ppBody.contains(QStringLiteral("if (!dispatch)"))
+             && ppBody.contains(QStringLiteral("readRegister"))
+             && ppBody.contains(QStringLiteral("reportReadFailure"))
+             && ppBody.indexOf(QStringLiteral("if (!dispatch)"))
+                < ppBody.indexOf(QStringLiteral("readRegister"))
+             && ppBody.count(QStringLiteral("m_pollMutex")) == 3,
+             "PLC 轮询只两处短锁引用（出锁后 I/O 与回滚各一），不持锁跨网络/下游回调");
 }
 
 void UiGuardsTest::f2ValidationGuards()

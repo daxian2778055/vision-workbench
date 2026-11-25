@@ -328,43 +328,53 @@ void PlcCommNode::stopPolling()
 
 void PlcCommNode::onPollTimeout()
 {
-    QMutexLocker locker(&m_pollMutex);
-    if (!m_connected || !m_modbus || m_registers.isEmpty()) return;
-    if (!m_pendingQueue.isEmpty()) return;
+    // P2 复核：锁只包住「查表 + 改队列 + 推进索引」，不跨 Modbus 网络 I/O 与
+    // 下游回调（报失败的 emit 必须放锁外，否则同步槽回头取 m_pollMutex 会互等）。
+    PendingRead pr;
+    bool dispatch = false;
+    int failedAddress = -1;
+    {
+        QMutexLocker locker(&m_pollMutex);
+        if (!m_connected || !m_modbus || m_registers.isEmpty()) return;
+        if (!m_pendingQueue.isEmpty()) return;
 
-    int startIdx = m_currentRegIdx;
-    for (int i = 0; i < m_registers.size(); ++i) {
-        int idx = (startIdx + i) % m_registers.size();
-        const auto &reg = m_registers[idx];
-        if (!reg.enabled) continue;
+        const int startIdx = m_currentRegIdx;
+        for (int i = 0; i < m_registers.size(); ++i) {
+            const int idx = (startIdx + i) % m_registers.size();
+            const auto &reg = m_registers.at(idx);
+            if (!reg.enabled) continue;
 
-        int byteCount = 2;
-        if (reg.dataType == QStringLiteral("int32") || reg.dataType == QStringLiteral("uint32")
-            || reg.dataType == QStringLiteral("float"))
-            byteCount = 4;
+            int byteCount = 2;
+            if (reg.dataType == QStringLiteral("int32") || reg.dataType == QStringLiteral("uint32")
+                || reg.dataType == QStringLiteral("float"))
+                byteCount = 4;
+            const int regCount = byteCount / 2;
+            const int slaveAddress = getParam(QStringLiteral("slaveAddress")).toInt();
 
-        int regCount = byteCount / 2;
-
-        // 从站号唯一来源：参数表（本轮取一次，保证同一批读用同一个从站号）
-        const int slaveAddress = getParam(QStringLiteral("slaveAddress")).toInt();
-
-        PendingRead pr;
-        pr.slaveAddr = slaveAddress;
-        pr.regAddr = reg.address;
-        pr.count = regCount;
-        pr.regIndex = idx;
-
-        m_pendingQueue.append(pr);
-        if (!readRegister(slaveAddress, reg.address, regCount)) {
-            // 请求未能发出（离线/忙）：立刻回滚队列条目，避免 pendingQueue 永久非空
-            // 导致轮询入口直接 return（轮询冻结且无报警）
-            m_pendingQueue.removeLast();
-            VFP_DEBUG << "PLC read dispatch failed at address" << reg.address;
-            reportReadFailure(QStringLiteral("PLC 读取失败(地址%1)").arg(reg.address));
+            pr.slaveAddr = slaveAddress;
+            pr.regAddr = reg.address;
+            pr.count = regCount;
+            pr.regIndex = idx;
+            m_pendingQueue.append(pr);
+            dispatch = true;
+            failedAddress = reg.address;
+            // 只推进一步（偶数寄存器时末尾再推进会让一半永不刷新）
+            m_currentRegIdx = (idx + 1) % m_registers.size();
+            break;
         }
-        // 只推进一步（历史缺陷：函数末尾又无条件推进一次 → 偶数个寄存器时一半永不刷新）
-        m_currentRegIdx = (idx + 1) % m_registers.size();
-        break;
+    }
+    if (!dispatch)
+        return;
+    // 网络 I/O 与失败上报放锁外：readRegister 走 sendReadRequest（发 Modbus 请求），
+    // reportReadFailure 内部会 emit communicationError（下游同步槽可能回取本锁）。
+    if (!readRegister(pr.slaveAddr, pr.regAddr, pr.count)) {
+        {
+            QMutexLocker locker(&m_pollMutex);
+            if (!m_pendingQueue.isEmpty() && m_pendingQueue.last().regIndex == pr.regIndex)
+                m_pendingQueue.removeLast();
+        }
+        VFP_DEBUG << "PLC read dispatch failed at address" << pr.regAddr;
+        reportReadFailure(QStringLiteral("PLC 读取失败(地址%1)").arg(failedAddress));
     }
 }
 
