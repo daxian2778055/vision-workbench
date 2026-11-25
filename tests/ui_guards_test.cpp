@@ -1546,6 +1546,16 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(feLocalSrc.count(QStringLiteral("captureViaAliveBlock(blockCopy, &subFlowDefs)")) >= 2
              && feLocalSrc.count(QStringLiteral("collectSubFlowBodies(subFlowDefs, nodes)")) >= 2,
              "executeUpTo/executeFrom 必须像 run() 一样带出并收集子流程定义");
+    // ㉝ 流程域 J1：缓存锁纪律、兜底时间戳、空算子文本兼容
+    const QString nbSrc = readSrc("src/NodeBase.cpp");
+    const int rib = feLocalSrc.indexOf(QStringLiteral("void FlowExecutor::releaseRoundOutputsOverBudget()"));
+    QVERIFY2(rib >= 0
+             && feLocalSrc.mid(rib, 400).contains(QStringLiteral("\n    QMutexLocker cacheLock(&m_graphCacheMutex);"))
+             && feLocalSrc.contains(QStringLiteral("r.timestamp.isValid()"))
+             && feLocalSrc.contains(QStringLiteral("QDateTime::currentDateTimeUtc()")),
+             "releaseRoundOutputsOverBudget 必须入缓存锁，JSONL 无效时间戳须回退当前 UTC");
+    QVERIFY2(nbSrc.contains(QStringLiteral("op.isEmpty() || op == QLatin1String(\"==\") || op == QLatin1String(\"!=\")")),
+             "空运算符的文本分支必须与数值分支同口径按 == 处理");
 }
 
 void UiGuardsTest::f2ValidationGuards()

@@ -615,6 +615,15 @@ void NodeCoreTest::testGenericResultJudgment()
     node.evaluateGenericResultJudgment(&reason);
     QVERIFY2(!reason.contains(QStringLiteral("不受支持")), qPrintable(reason));
 
+    // J 复核：空 op 的文本分支也须按 == 处理（数值分支早已兼容，文本漏了）
+    node.setParam(QStringLiteral("textField"), QStringLiteral("OK"));
+    QJsonArray emptyOpText;
+    emptyOpText.append(condition(QStringLiteral("textField"), QString(), QStringLiteral("OK")));
+    setConditions(0, emptyOpText);
+    reason.clear();
+    QVERIFY2(node.evaluateGenericResultJudgment(&reason),
+             qPrintable(QStringLiteral("空运算符的文本相等应判通过：%1").arg(reason)));
+
     node.setParam(QStringLiteral("emptyField"), QString());   // valid QVariant，但值为空串
     QJsonArray neEmptyActual;
     neEmptyActual.append(

@@ -1546,7 +1546,12 @@ bool FlowExecutor::spillBatchToDisk(const QString &dbPath, const QList<Inspectio
     for (const InspectionRecord &r : batch) {
         // 走 QJsonDocument 做转义（换行/引号/反斜杠都交它，自己拼容易漏）
         QJsonObject obj;
-        obj.insert(QStringLiteral("ts"), r.timestamp.toString(Qt::ISODateWithMs));
+        // J 复核：m_pendingResults 里的记录多为无效 QDateTime（正常写库由 DB 默认时间填），
+        // 直接 toString 会得到空串——兜底文件号称可重放，却丢了每条的原时刻顺序。
+        // 无效时退回当前 UTC，至少让 ts 非空、可按时间重放。
+        const QDateTime stamp = r.timestamp.isValid()
+            ? r.timestamp : QDateTime::currentDateTimeUtc();
+        obj.insert(QStringLiteral("ts"), stamp.toString(Qt::ISODateWithMs));
         obj.insert(QStringLiteral("flow"), r.flowName);
         obj.insert(QStringLiteral("node"), r.nodeName);
         obj.insert(QStringLiteral("passed"), r.passed);
@@ -1563,6 +1568,12 @@ bool FlowExecutor::spillBatchToDisk(const QString &dbPath, const QList<Inspectio
 
 void FlowExecutor::releaseRoundOutputsOverBudget()
 {
+    // J 复核：本函数整段读写 m_nodeData，必须与其它写者同持 m_graphCacheMutex。
+    // 此前是头文件钉死的缓存锁纪律的唯一例外：UI 侧 invalidateDownstreamOf /
+    // executeUpTo / executeFrom 判到 Idle 后释放 m_mutex、尚未取缓存锁的窗口里，
+    // worker 进入这里并发遍历/移除同一 QMap ⇒ Qt 容器结构可被破坏。
+    QMutexLocker cacheLock(&m_graphCacheMutex);
+
     // 每节点每端口只留最后一份（不是泄漏），但「图像节点数 × 单帧大小」会到百 MB 级：
     // 5MP RGB ≈ 15MB，10 个图像节点 ≈ 150MB，在轮与轮之间驻留。
     //

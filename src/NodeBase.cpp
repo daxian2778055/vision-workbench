@@ -314,8 +314,9 @@ bool NodeBase::evaluateResultJudgment(const QVariantMap &commonFields, QString *
                          .arg(key, op));
                 continue;
             }
-        } else if (op == QLatin1String("==") || op == QLatin1String("!=")) {
-            // 文本比较：期望值或实际值为空时不算「不等」，否则 != 会 100% 放行 → 漏检。
+        } else if (op.isEmpty() || op == QLatin1String("==") || op == QLatin1String("!=")) {
+            // 文本比较：空运算符与数值分支同口径（旧方案按 == 处理）。
+            // 期望值或实际值为空时不算「不等」，否则 != 会 100% 放行 → 漏检。
             const QString actualText = actualVar.toString();
             if (expectedText.trimmed().isEmpty() || actualText.isEmpty()) {
                 fail(QStringLiteral("%1 缺少可比较的值，无法用 %2 比较（实际 '%3'，期望 '%4'）")
@@ -323,7 +324,7 @@ bool NodeBase::evaluateResultJudgment(const QVariantMap &commonFields, QString *
                 continue;
             }
             const bool equal = actualText == expectedText;
-            pass = (op == QLatin1String("==")) ? equal : !equal;
+            pass = (op == QLatin1String("!=")) ? !equal : equal;   // 空 op ⇒ ==
         } else {
             fail(QStringLiteral("%1 不是数值，无法用 %2 比较（实际 %3）")
                      .arg(key, op, actualVar.toString()));

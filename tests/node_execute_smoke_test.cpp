@@ -973,6 +973,13 @@ void NodeExecuteSmokeTest::spillBatchWritesJsonl()
     b.value = QStringLiteral("NG");
     b.timestamp = a.timestamp;
     batch << b;
+    // J 复核：落库失败兜底的记录 timestamp 多为无效值，ts 不能写成空串
+    InspectionRecord c;
+    c.flowName = QStringLiteral("产线C");
+    c.nodeName = QStringLiteral("(无时间戳)");
+    c.passed = true;
+    c.value = QStringLiteral("OK");
+    batch << c;
 
     QString written;
     QVERIFY2(FlowExecutor::spillBatchToDisk(dbPath, batch, &written),
@@ -984,11 +991,13 @@ void NodeExecuteSmokeTest::spillBatchWritesJsonl()
     QVERIFY(f.open(QIODevice::ReadOnly | QIODevice::Text));
     const QStringList lines =
         QString::fromUtf8(f.readAll()).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
-    QCOMPARE(int(lines.size()), 2);
+    QCOMPARE(int(lines.size()), 3);
     for (const QString &line : lines) {
         const QJsonObject obj = QJsonDocument::fromJson(line.toUtf8()).object();
         QVERIFY2(!obj.isEmpty(), qPrintable(QStringLiteral("不是合法 JSONL：%1").arg(line)));
         QVERIFY(obj.contains(QStringLiteral("ts")));
+        QVERIFY2(!obj.value(QStringLiteral("ts")).toString().isEmpty(),
+                 "兜底记录的 ts 不得为空（否则无法按时刻重放）");
         QVERIFY(obj.contains(QStringLiteral("flow")));
         QVERIFY(obj.contains(QStringLiteral("node")));
         QVERIFY(obj.contains(QStringLiteral("passed")));
