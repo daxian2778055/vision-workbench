@@ -227,8 +227,11 @@ void CircleCircleMeasureNode::run(bool /*autoSwitch*/)
                                  circle1.center.y() + circle1.radius * unit.y());
             intersectCount = 1;
         } else if (relation == QStringLiteral("Inscribe")) {
-            intersect1 = QPointF(circle1.center.x() + circle1.radius * unit.x(),
-                                 circle1.center.y() + circle1.radius * unit.y());
+            // P2 复核：内切切点在小圆背离大圆的一侧。圆1为内圆(r1<r2)时须取负号——
+            // 原统一取正号落在两圆心之间，该点根本不在大圆上。
+            const double sign = (circle1.radius < circle2.radius) ? -1.0 : 1.0;
+            intersect1 = QPointF(circle1.center.x() + sign * circle1.radius * unit.x(),
+                                 circle1.center.y() + sign * circle1.radius * unit.y());
             intersectCount = 1;
         }
 

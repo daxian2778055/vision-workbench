@@ -297,6 +297,13 @@ void VmDeviceCreateDialog::buildUi()
             this, &VmDeviceCreateDialog::onTypeChanged);
     connect(m_nameEdit, &QLineEdit::textChanged,
             this, &VmDeviceCreateDialog::updateCreateButton);
+    // P2 复核：IP 段/串口名改动也要即时重算创建按钮可用态（原只连设备名）
+    for (int i = 0; i < 4; ++i)
+        connect(m_ipEdits[i], &QLineEdit::textChanged,
+                this, &VmDeviceCreateDialog::updateCreateButton);
+    if (m_serialPort)
+        connect(m_serialPort, &QComboBox::currentTextChanged,
+                this, &VmDeviceCreateDialog::updateCreateButton);
     connect(m_createBtn, &QPushButton::clicked, this, &QDialog::accept);
 
     onTypeChanged(m_typeCombo->currentIndex());
@@ -344,8 +351,18 @@ void VmDeviceCreateDialog::onTypeChanged(int index)
 
 void VmDeviceCreateDialog::updateCreateButton()
 {
+    // P2 复核：单窗口创建丢了旧流程的必填校验——网络类四段 IP 必须齐全、串口类
+    // portName 非空。QIntValidator 视空段为 intermediate，必须显式判空。
+    bool valid = !deviceName().isEmpty();
+    const QString t = deviceType();
+    if (valid && t != QStringLiteral("串口")) {
+        for (int i = 0; i < 4 && valid; ++i)
+            valid = m_ipEdits[i] && !m_ipEdits[i]->text().trimmed().isEmpty();
+    }
+    if (valid && t == QStringLiteral("串口"))
+        valid = m_serialPort && !m_serialPort->currentText().trimmed().isEmpty();
     if (m_createBtn)
-        m_createBtn->setEnabled(!deviceName().isEmpty());
+        m_createBtn->setEnabled(valid);
 }
 
 void VmDeviceCreateDialog::applyTypeVisibility()

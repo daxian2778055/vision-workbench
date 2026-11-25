@@ -114,6 +114,13 @@ void CircleCircleMeasureTest::testTangencies()
     QCOMPARE(node.getParam(QStringLiteral("relation")).toString(), QStringLiteral("Inscribe"));
     QCOMPARE(node.getParam(QStringLiteral("intersectCount")).toInt(), 1);
     QCOMPARE(node.getParam(QStringLiteral("intersect1X")).toDouble(), 100.0);
+
+    // P2 复核：圆1为内圆（r1=20 < r2=70，d=50=r2-r1），切点应在圆1背离圆2的一侧 (-20,0)，
+    // 原统一取正号算出 (20,0)，到圆2圆心距离 30≠70，根本不在大圆上。
+    setDrawn(node, QPointF(0, 0), 20.0, QPointF(50, 0), 70.0);
+    QVERIFY(node.execute());
+    QCOMPARE(node.getParam(QStringLiteral("relation")).toString(), QStringLiteral("Inscribe"));
+    QCOMPARE(node.getParam(QStringLiteral("intersect1X")).toDouble(), -20.0);
 }
 
 void CircleCircleMeasureTest::testSubscriptionFromMeasures()

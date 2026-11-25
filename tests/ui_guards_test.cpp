@@ -1354,6 +1354,17 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              && iaBody.contains(QStringLiteral("QStringLiteral(\"remoteIp\")"))
              && iaBody.contains(QStringLiteral("portKey")),
              "内联 IP/端口必须按设备类型分发到 host/targetIp/remoteIp/serverIp 与对应端口键");
+    // ⑮ 单窗口创建设备：必填校验不能丢（四段 IP 齐全 + 串口名非空），且改动即时重算按钮
+    QFile vc(QStringLiteral(SRC_DIR "/src/VmDeviceCreateDialog.cpp"));
+    QVERIFY2(vc.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 VmDeviceCreateDialog.cpp");
+    const QString vcSrc = QString::fromUtf8(vc.readAll());
+    vc.close();
+    const int uc = vcSrc.indexOf(QStringLiteral("void VmDeviceCreateDialog::updateCreateButton"));
+    const int ucEnd = vcSrc.indexOf(QStringLiteral("void VmDeviceCreateDialog::applyTypeVisibility"), uc);
+    const QString ucBody = vcSrc.mid(uc, ucEnd - uc);
+    QVERIFY2(ucBody.contains(QStringLiteral("m_ipEdits[i]->text().trimmed().isEmpty()"))
+             && ucBody.contains(QStringLiteral("m_serialPort")),
+             "创建按钮必须校验四段 IP 齐全与串口名非空，不能只判设备名");
 }
 
 void UiGuardsTest::f2ValidationGuards()
