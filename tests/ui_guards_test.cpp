@@ -684,6 +684,20 @@ void UiGuardsTest::p3ModuleEditorGuards()
     const int reloadEnd = src.indexOf(QStringLiteral("void ModuleEditorDialog::loadImage"), reload);
     QVERIFY2(src.mid(reload, reloadEnd - reload).contains(QStringLiteral("loadJudgeConditions")),
              "外部改参回填必须刷新结果判断条件表");
+
+    // ④ 结果判断页的非 ParamSpec 控件（判断方式/显示勾选/文本/颜色等）也必须随回滚回填
+    QVERIFY2(src.mid(restore, restoreEnd - restore).contains(QStringLiteral("refreshJudgePageControls"))
+             && src.mid(reload, reloadEnd - reload).contains(QStringLiteral("refreshJudgePageControls")),
+             "取消回滚与外部回填都必须同步结果判断页控件");
+    const int judgeFn = src.indexOf(QStringLiteral("void ModuleEditorDialog::refreshJudgePageControls"));
+    QVERIFY(judgeFn > 0);
+    const QString judgeBody = src.mid(judgeFn, 2600);
+    QVERIFY2(judgeBody.contains(QStringLiteral("m_judgeModeCombo"))
+             && judgeBody.contains(QStringLiteral("m_showResultImageCheck"))
+             && judgeBody.contains(QStringLiteral("m_showResultTextCheck"))
+             && judgeBody.contains(QStringLiteral("m_resultTextEdit"))
+             && judgeBody.contains(QStringLiteral("QSignalBlocker")),
+             "回填方法必须覆盖判断方式/显示勾选/文本等控件且用信号阻塞避免触发写回");
 }
 
 void UiGuardsTest::p4CommDomainGuards()

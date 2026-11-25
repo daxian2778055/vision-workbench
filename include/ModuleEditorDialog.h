@@ -123,6 +123,8 @@ private:
     /// 结果判断条件表 → 节点参数（JSON）
     void persistJudgeConditions();
     void loadJudgeConditions();
+    /// P2 复核：取消回滚/外部回填时同步结果判断页控件（它们不是 ParamSpec，统一面板回填覆盖不到）
+    void refreshJudgePageControls();
     void echoGeometry();
     /// 搜索区域（r19 批 A 第 4 步）：把 searchRegion* 画成青色框，并与结果叠加合并
     void refreshSearchOverlay();

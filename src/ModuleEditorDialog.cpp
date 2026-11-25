@@ -587,6 +587,7 @@ void ModuleEditorDialog::restoreParams()
     // 否则参数表已回到快照值、界面上显示的还是用户刚改的条件。
     if (m_judgeTable)
         loadJudgeConditions();
+    refreshJudgePageControls();
     refreshParamHooks();
 }
 
@@ -633,6 +634,7 @@ void ModuleEditorDialog::reloadFromNode()
     // 否则自动重算后用户看到的还是旧条件（此前只有自动面板控件会更新）。
     if (m_judgeTable)
         loadJudgeConditions();
+    refreshJudgePageControls();
     // 程序化回填参数不应触发自动重算（否则会与用户操作形成回路）
     m_paramHookBusy = true;
     if (QWidget *panel = m_paramHost->widget())
@@ -2145,6 +2147,58 @@ void ModuleEditorDialog::loadJudgeConditions()
         }
     }
     m_judgeTable->blockSignals(false);
+}
+
+void ModuleEditorDialog::refreshJudgePageControls()
+{
+    // P2 复核：结果判断页控件在构造期一次性从参数初始化，写回走 writeParam；它们不是
+    // ParamSpec，updateParamPanel 统一回填覆盖不到。取消回滚/外部回填后必须按节点参数
+    // 重新同步，否则界面显示刚改过的值而节点参数已回滚，长期不一致。
+    if (!m_node || !m_judgeModeCombo)
+        return;
+    const auto get = [this](const QString &key, const QVariant &def) {
+        const QVariant v = m_node->getParam(key);
+        return v.isValid() ? v : def;
+    };
+    const QSignalBlocker bMode(m_judgeModeCombo);
+    m_judgeModeCombo->setCurrentIndex(get(QStringLiteral("resJudgeMode"), 0).toInt() == 1 ? 1 : 0);
+    if (m_showResultImageCheck) {
+        const QSignalBlocker b(m_showResultImageCheck);
+        m_showResultImageCheck->setChecked(get(QStringLiteral("resShowImage"), true).toBool());
+    }
+    if (m_resultImageOpacitySpin) {
+        const QSignalBlocker b(m_resultImageOpacitySpin);
+        m_resultImageOpacitySpin->setValue(get(QStringLiteral("resImageOpacity"), 100).toInt());
+    }
+    if (m_resultImageLineWidthSpin) {
+        const QSignalBlocker b(m_resultImageLineWidthSpin);
+        m_resultImageLineWidthSpin->setValue(get(QStringLiteral("resImageLineWidth"), 2).toInt());
+    }
+    if (m_showResultTextCheck) {
+        const QSignalBlocker b(m_showResultTextCheck);
+        m_showResultTextCheck->setChecked(get(QStringLiteral("resShowText"), true).toBool());
+    }
+    if (m_resultTextEdit) {
+        const QSignalBlocker b(m_resultTextEdit);
+        m_resultTextEdit->setText(get(QStringLiteral("resTextContent"), QString()).toString());
+    }
+    if (m_resultTextSizeSpin) {
+        const QSignalBlocker b(m_resultTextSizeSpin);
+        m_resultTextSizeSpin->setValue(get(QStringLiteral("resTextFontSize"), 14).toInt());
+    }
+    if (m_resultTextOpacitySpin) {
+        const QSignalBlocker b(m_resultTextOpacitySpin);
+        m_resultTextOpacitySpin->setValue(get(QStringLiteral("resTextOpacity"), 100).toInt());
+    }
+    if (m_resultTextPosCombo) {
+        const QSignalBlocker b(m_resultTextPosCombo);
+        m_resultTextPosCombo->setCurrentIndex(get(QStringLiteral("resTextPosition"), 0).toInt() & 3);
+    }
+    m_resultImageColor = get(QStringLiteral("resImageColor"), QStringLiteral("#00C8FF")).toString();
+    m_resultTextColorNg = get(QStringLiteral("resTextColorNg"), QStringLiteral("#C02B1D")).toString();
+    const QString legacy = get(QStringLiteral("resTextColor"), QString()).toString();
+    m_resultTextColor = legacy.isEmpty()
+        ? get(QStringLiteral("resTextColorOk"), QStringLiteral("#FFFFFF")).toString() : legacy;
 }
 
 void ModuleEditorDialog::installParamHooks(QWidget *panel)
