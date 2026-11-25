@@ -1365,6 +1365,22 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(ucBody.contains(QStringLiteral("m_ipEdits[i]->text().trimmed().isEmpty()"))
              && ucBody.contains(QStringLiteral("m_serialPort")),
              "创建按钮必须校验四段 IP 齐全与串口名非空，不能只判设备名");
+    // ⑯ 空白行判据：文本单元格形态的寄存器表必须注入自己的判据（地址列为空），
+    //    否则默认 cellWidget 判据会把所有已配置行隐藏
+    QFile rs(QStringLiteral(SRC_DIR "/src/RegisterSpaceBar.cpp"));
+    QVERIFY2(rs.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 RegisterSpaceBar.cpp");
+    const QString rsSrc = QString::fromUtf8(rs.readAll());
+    rs.close();
+    QVERIFY2(rsSrc.contains(QStringLiteral("m_blankPredicate(m_table, r)")),
+             "RegisterSpaceBar 的隐藏空白行必须实际调用注入判据，不能写死 cellWidget 判据");
+    QFile cm2(QStringLiteral(SRC_DIR "/src/CommunicationManagerDialog.cpp"));
+    QVERIFY2(cm2.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 CommunicationManagerDialog.cpp");
+    const QString cm2Src = QString::fromUtf8(cm2.readAll());
+    cm2.close();
+    QVERIFY2(cm2Src.contains(QStringLiteral("addr->text().trimmed().isEmpty()"))
+             && cm2Src.contains(QStringLiteral("outsideWindow"))
+             && cm2Src.contains(QStringLiteral("addr > 65535")),
+             "主对话框必须按地址列判空白，并对窗口外地址提示、单元格钳制 65535");
 }
 
 void UiGuardsTest::f2ValidationGuards()

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QWidget>
+#include <functional>
 
 class QTableWidget;
 class QSpinBox;
@@ -20,8 +21,12 @@ class RegisterSpaceBar : public QWidget
 public:
     /// table = 寄存器表；space = 可最大化的地址空间容器（通常为所属分组框）；
     /// spaceHome = space 原来的父控件（最大化后还原用，必须非空）
+    /// 空白行判据：默认「数据类型列没有配置控件」；宿主若用文本单元格（而非控件）
+    /// 表示已配置寄存器，可注入自定义判据（如「地址列为空才是空白行」）。
+    using BlankPredicate = std::function<bool(QTableWidget *, int)>;
     RegisterSpaceBar(QTableWidget *table, QWidget *space, QWidget *spaceHome,
-                     QWidget *parent = nullptr);
+                     QWidget *parent = nullptr,
+                     BlankPredicate blankPredicate = BlankPredicate());
 
     // ---- 供回归测试直接驱动（按钮槽同样走这些入口）----
     /// 按首地址/个数补齐「只有地址」的空白行（已存在的地址不重复加），返回新增行数
@@ -54,6 +59,7 @@ protected:
 private:
     void maximizeSpace();
     void restoreSpace();
+    BlankPredicate m_blankPredicate;
 
     QTableWidget *m_table;
     QWidget *m_space;

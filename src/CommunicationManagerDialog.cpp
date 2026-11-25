@@ -506,7 +506,10 @@ void CommunicationManagerDialog::refreshAddressGrid()
                 cell = new QTableWidgetItem();
                 m_addressGrid->setItem(r, c, cell);
             }
-            cell->setText(QString::number(base + r * 10 + c));
+            // P2 复核：基址接近 65535 时 base+r*10+c 会越界，工具条添加时明明有钳制，
+            // 矩阵显示不能写出非法地址。
+            const long long addr = static_cast<long long>(base) + r * 10 + c;
+            cell->setText(addr > 65535 ? QString() : QString::number(addr));
             cell->setBackground(QColor(QStringLiteral("#ffffff")));
             cell->setForeground(QColor(QStringLiteral("#bbbbbb")));
             cell->setTextAlignment(Qt::AlignCenter);
@@ -524,6 +527,7 @@ void CommunicationManagerDialog::refreshAddressGrid()
     //   青 #2196F3 = 启用但 Write（只写，被写操作关联）
     //   白         = 未配置 / 禁用
     // 判定优先级：ReadWrite 优先显橙（同时具备轮询与可写，写能力更重要）。
+    int outsideWindow = 0;   // P2：落在 50 格矩阵窗口外的配置地址数（需提示，不能静默丢）
     for (int r = 0; r < m_registerTable->rowCount(); ++r) {
         auto *it = m_registerTable->item(r, 0);
         if (!it) continue;
@@ -533,8 +537,10 @@ void CommunicationManagerDialog::refreshAddressGrid()
         const int rr = (a - base) / 10;
         const int cc = (a - base) % 10;
         if (rr < 0 || rr >= m_addressGrid->rowCount()
-            || cc < 0 || cc >= m_addressGrid->columnCount())
+            || cc < 0 || cc >= m_addressGrid->columnCount()) {
+            ++outsideWindow;
             continue;
+        }
         auto *cell = m_addressGrid->item(rr, cc);
         if (!cell) continue;
 
@@ -553,6 +559,9 @@ void CommunicationManagerDialog::refreshAddressGrid()
         cell->setForeground(fill == QStringLiteral("#ffffff")
             ? QColor(QStringLiteral("#bbbbbb")) : QColor(Qt::white));
     }
+    // P2 复核：稀疏大地址落在矩阵窗口外时给明确提示，不再静默丢失可视化
+    if (outsideWindow > 0 && m_paramSummary && m_paramSummary->text().isEmpty())
+        m_paramSummary->setText(tr("有 %1 个寄存器地址超出当前 50 格矩阵窗口（配置仍保留）").arg(outsideWindow));
 }
 
 // ==================== gtd import / export ====================
@@ -1078,8 +1087,14 @@ void CommunicationManagerDialog::setupDeviceTab(QStackedWidget *stack)
     spaceLayout->addLayout(legend);
 
     // spaceHome = right（其 QVBoxLayout 供最大化时还原），与两个专用对话框的接法一致
+    // P2 复核：本对话框的寄存器表第1列是文本单元格（非 QComboBox 控件），
+    // 默认「cellWidget(r,1)==nullptr」会把所有已配置行误判空白——注入地址列判据。
     m_spaceBar = new RegisterSpaceBar(m_registerTable, m_registerSpace,
-                                      right, m_registerSpace);
+                                      right, m_registerSpace,
+                                      [](QTableWidget *table, int row) {
+                                          auto *addr = table->item(row, 0);
+                                          return !addr || addr->text().trimmed().isEmpty();
+                                      });
     m_spaceBar->setObjectName(QStringLiteral("commRegisterSpaceBar"));
     spaceLayout->insertWidget(0, m_spaceBar);
     connect(m_spaceBar, &RegisterSpaceBar::rowsChanged, this, [this]() {

@@ -12,8 +12,10 @@
 #include <QSet>
 
 RegisterSpaceBar::RegisterSpaceBar(QTableWidget *table, QWidget *space,
-                                   QWidget *spaceHome, QWidget *parent)
-    : QWidget(parent), m_table(table), m_space(space), m_spaceHome(spaceHome)
+                                   QWidget *spaceHome, QWidget *parent,
+                                   BlankPredicate blankPredicate)
+    : QWidget(parent), m_table(table), m_space(space), m_spaceHome(spaceHome),
+      m_blankPredicate(std::move(blankPredicate))
 {
     m_homeLayout = qobject_cast<QVBoxLayout *>(spaceHome->layout());
 
@@ -162,8 +164,11 @@ int RegisterSpaceBar::setBlankRowsHidden(bool hidden)
     m_blankHidden = hidden;
     int hiddenCount = 0;
     for (int r = 0; r < m_table->rowCount(); ++r) {
-        // 空白行 = 「数据类型」列没有配置控件（仅有地址）
-        const bool blank = m_table->cellWidget(r, 1) == nullptr;
+        // 空白行默认判据 = 「数据类型」列没有配置控件；宿主可注入自己的判据
+        // （文本单元格形态的寄存器表用「地址列为空」判空白，否则所有行都被隐藏）。
+        const bool blank = m_blankPredicate
+            ? m_blankPredicate(m_table, r)
+            : (m_table->cellWidget(r, 1) == nullptr);
         if (hidden && blank) {
             m_table->setRowHidden(r, true);
             ++hiddenCount;
