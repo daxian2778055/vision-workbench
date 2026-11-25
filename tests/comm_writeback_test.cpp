@@ -3667,6 +3667,13 @@ void CommWritebackTest::testCommunicationGtdExportImport()
                        "\"communication\":{\"devices\":{}},"
                        "\"globalTriggers\":{\"triggers\":[]},"
                        "\"heartbeat\":{\"heartbeats\":[]}}"),
+        // P2 复核：JSON 合法、五数组齐全，但 device 条目缺 name —— fromJson 先清空
+        // 现场设备再逐条 addDevice 失败，原实现不监听 deviceLoadFailed ⇒ 报"导入完成"
+        QStringLiteral("{\"format\":\"visionflow-communication\",\"version\":1,"
+                       "\"communication\":{\"devices\":[{\"name\":\"BAD\",\"type\":\"NO_SUCH_TYPE\"}],"
+                       "\"receiveEvents\":[],\"sendEvents\":[]},"
+                       "\"globalTriggers\":{\"triggers\":[]},"
+                       "\"heartbeat\":{\"heartbeats\":[]}}"),
     };
     for (int i = 0; i < halfPayloads.size(); ++i) {
         const QString p = dir.filePath(QStringLiteral("half_%1.gtd").arg(i));
@@ -4085,8 +4092,11 @@ void CommWritebackTest::vmCreateDialogBuildsConfigPerType()
     c = dlg.config();
     QCOMPARE(c.value(QStringLiteral("host")).toString(), QStringLiteral("127.0.0.1"));
     QCOMPARE(c.value(QStringLiteral("port")).toInt(), 502);
+    // P2 复核：节点 openConnection 只认 "TCP"/"RTU"——原产出 "TcpClient"
+    // 让新建设备进 RTU 分支、拿空串口号永远连不上。
     QCOMPARE(c.value(QStringLiteral("connectionType")).toString(),
-             QStringLiteral("TcpClient"));
+             QStringLiteral("TCP"));
+    QCOMPARE(c.value(QStringLiteral("role")).toString(), QStringLiteral("Client"));
     QVERIFY(c.value(QStringLiteral("pollInterval")).toInt() > 0);
     QVERIFY2(c.value(QStringLiteral("registers")).isArray(),
              "寄存器表应有空数组初值，创建后可在「配置」里补");

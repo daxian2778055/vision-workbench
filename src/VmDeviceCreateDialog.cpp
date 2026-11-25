@@ -435,15 +435,22 @@ QJsonObject VmDeviceCreateDialog::config() const
         c[QStringLiteral("stopBits")] = 1;
         c[QStringLiteral("parity")] = QStringLiteral("None");
         c[QStringLiteral("autoReconnect")] = autoReconnect;
+        c[QStringLiteral("dataUpload")] = dataUpload;
         c[QStringLiteral("frameTerminator")] = rxTerm ? QStringLiteral("\r\n") : QString();
     } else if (t == QStringLiteral("Modbus")) {
-        c[QStringLiteral("role")] = QStringLiteral("Client");
-        c[QStringLiteral("connectionType")] = m_commMode->currentData().toString();
+        // P2 复核：节点 openConnection 只认 "TCP"，其余一律走 RTU 分支——原产出
+        // "TcpClient/TcpServer/Rtu" 让新建的 TCP 设备进 RTU、拿空串口号永远连不上。
+        const QString commMode = m_commMode->currentData().toString();
+        const bool isServer = (commMode == QStringLiteral("TcpServer"));
+        c[QStringLiteral("role")] = isServer ? QStringLiteral("服务器") : QStringLiteral("Client");
+        c[QStringLiteral("connectionType")] =
+            (commMode == QStringLiteral("Rtu")) ? QStringLiteral("RTU") : QStringLiteral("TCP");
         c[QStringLiteral("host")] = ip;
         c[QStringLiteral("port")] = port;
         c[QStringLiteral("pollInterval")] = m_pollInterval->value();
         c[QStringLiteral("slaveAddress")] = 1;
         c[QStringLiteral("autoReconnect")] = autoReconnect;
+        c[QStringLiteral("dataUpload")] = dataUpload;
         c[QStringLiteral("registers")] = QJsonArray();
     } else if (t == QStringLiteral("PLC")) {
         c[QStringLiteral("plcBrand")] = QStringLiteral("Siemens");
@@ -452,6 +459,7 @@ QJsonObject VmDeviceCreateDialog::config() const
         c[QStringLiteral("pollInterval")] = m_pollInterval->value();
         c[QStringLiteral("slaveAddress")] = 1;
         c[QStringLiteral("autoReconnect")] = autoReconnect;
+        c[QStringLiteral("dataUpload")] = dataUpload;
         c[QStringLiteral("registers")] = QJsonArray();
     } else if (t.startsWith(QStringLiteral("FINS"))) {
         c[QStringLiteral("targetIp")] = ip;

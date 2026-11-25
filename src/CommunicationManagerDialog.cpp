@@ -640,8 +640,11 @@ void CommunicationManagerDialog::onImportGtd()
         != QMessageBox::Yes)
         return;
     if (!importGtdFrom(path)) {
-        QMessageBox::warning(this, QStringLiteral("导入失败"),
-                             QStringLiteral("文件不是有效的 gtd（JSON）通信配置。"));
+        const QString detail = m_gtdImportRejected.isEmpty()
+            ? QStringLiteral("文件不是有效的 gtd（JSON）通信配置。")
+            : tr("导入后通信设备未能全部建立，现场配置可能已变化：\n%1")
+                  .arg(m_gtdImportRejected.join(QStringLiteral("\n")));
+        QMessageBox::warning(this, QStringLiteral("导入失败"), detail);
         return;
     }
     if (!m_gtdImportRejected.isEmpty())
@@ -684,7 +687,57 @@ bool CommunicationManagerDialog::importGtdFrom(const QString &path)
         || !hasArray(heartbeat, QStringLiteral("heartbeats")))
         return false;
 
-    CommunicationManager::instance()->fromJson(comm);
+    // P2 复核：预校验 device 条目——name 非空且 type 为已知类型。任一不合法直接拒收，
+    // 不动现场（fromJson 会先清空再逐条建，失败时旧配置已丢）。备份回滚在恢复期同样
+    // 可能失败（恢复路径也走 addDevice），不如前置校验稳。
+    for (const QJsonValue &v : comm.value(QStringLiteral("devices")).toArray()) {
+        const QJsonObject d = v.toObject();
+        const QString name = d.value(QStringLiteral("name")).toString().trimmed();
+        const QString type = d.value(QStringLiteral("type")).toString().trimmed();
+        static const QStringList kKnownTypes{
+            QStringLiteral("TCP"), QStringLiteral("UDP"), QStringLiteral("串口"),
+            QStringLiteral("Serial"), QStringLiteral("Modbus"), QStringLiteral("PLC"),
+            QStringLiteral("FINS TCP"), QStringLiteral("FINS UDP")};
+        bool known = false;
+        for (const QString &k : kKnownTypes) {
+            if (type.compare(k, Qt::CaseInsensitive) == 0) { known = true; break; }
+        }
+        if (name.isEmpty() || !known)
+            return false;
+    }
+
+    // P2 复核：fromJson 先清空全部设备/事件再逐条 addDevice，失败条目只 emit
+    // deviceLoadFailed——原实现不监听，旧配置已丢、新配置没装进，界面还报"导入完成"。
+    // 与 ProjectManager 载入门禁同形：先备份现场配置，失败时整组回滚。
+    auto *cm = CommunicationManager::instance();
+    const QJsonObject backupComm = cm->toJson();
+    const QJsonObject backupTriggers = GlobalTriggerManager::instance()->toJson();
+    const QJsonObject backupHeartbeat = HeartbeatManager::instance()->toJson();
+    int rejectedDevices = 0;
+    const QMetaObject::Connection conn =
+        connect(cm, &CommunicationManager::deviceLoadFailed, this,
+                [&rejectedDevices](const QString &, const QString &, const QString &) {
+                    ++rejectedDevices;
+                });
+    cm->fromJson(comm);
+    disconnect(conn);
+    if (rejectedDevices > 0) {
+        // 旧配置已被 fromJson 清空——整组回滚，不让"导入失败"变成"配置丢失"
+        cm->fromJson(backupComm);
+        GlobalTriggerManager::instance()->fromJson(backupTriggers);
+        HeartbeatManager::instance()->fromJson(backupHeartbeat);
+        m_gtdImportRejected << tr("通信设备 %1 条未能建立，已回滚到导入前配置")
+                               .arg(rejectedDevices);
+        refreshDeviceTable();
+        refreshReceiveEventTable();
+        refreshSendEventTable();
+        refreshHeartbeatTable();
+        refreshResponseDeviceCombos();
+        loadResponseConfigToUi();
+        if (m_triggerDialog) m_triggerDialog->refreshTriggerTable();
+        return false;
+    }
+
     GlobalTriggerManager::instance()->fromJson(triggers, &m_gtdImportRejected);
     HeartbeatManager::instance()->fromJson(heartbeat);
 

@@ -1449,6 +1449,20 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
         QVERIFY2(s.count(QStringLiteral("noteSendWriteFailure")) >= 2,
                  "写回校验失败必须走 noteSendWriteFailure 记账，不能只 emit communicationError");
     }
+    // ㉒ gtd 导入失败整组回滚（不能清空现场还报完成）
+    QVERIFY2(cdSrc.contains(QStringLiteral("const QJsonObject backupComm = cm->toJson()"))
+             && cdSrc.contains(QStringLiteral("cm->fromJson(backupComm)"))
+             && cdSrc.contains(QStringLiteral("deviceLoadFailed"))
+             && cdSrc.contains(QStringLiteral("kKnownTypes")),
+             "gtd 导入必须预校验 device 条目并备份现场配置，失败时整组回滚并报失败");
+    // ㉓ 创建设备产出节点消费的键（connectionType TCP/RTU、三分支 dataUpload）
+    QFile vcd(QStringLiteral(SRC_DIR "/src/VmDeviceCreateDialog.cpp"));
+    QVERIFY2(vcd.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 VmDeviceCreateDialog.cpp");
+    const QString vcdSrc = QString::fromUtf8(vcd.readAll());
+    vcd.close();
+    QVERIFY2(vcdSrc.contains(QStringLiteral("QStringLiteral(\"RTU\") : QStringLiteral(\"TCP\")"))
+             && vcdSrc.count(QStringLiteral("c[QStringLiteral(\"dataUpload\")]")) >= 3,
+             "创建设备必须产出节点消费的 connectionType（TCP/RTU）且各分支写 dataUpload");
 }
 
 void UiGuardsTest::f2ValidationGuards()
