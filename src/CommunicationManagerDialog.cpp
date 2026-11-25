@@ -434,6 +434,18 @@ void CommunicationManagerDialog::applyInlineParamChange()
         cfg[QStringLiteral("frameTerminator")] =
             m_inlineRxTerm->isChecked() ? QStringLiteral("\r\n") : QString();
 
+    // F 复核：上传闸/自动重连/组帧终止符的运行期判据读的是**节点参数表**，
+    // 只写配置表不当场生效——关上传后现场仍在冒泡数据。三处即时同步到节点。
+    if (CommunicationNodeBase *node = cm->deviceNode(name)) {
+        if (m_inlineDataUpload)
+            node->setParam(QStringLiteral("dataUpload"), m_inlineDataUpload->isChecked());
+        if (m_inlineAutoReconnect)
+            node->setParam(QStringLiteral("autoReconnect"), m_inlineAutoReconnect->isChecked());
+        if (m_inlineRxTerm)
+            node->setParam(QStringLiteral("frameTerminator"),
+                           m_inlineRxTerm->isChecked() ? QStringLiteral("\r\n") : QString());
+    }
+
     // P1 复核：updateDeviceConfig 只写内存配置表，真正落盘在方案保存/显式导出时。
     // 原文案谎称已保存——改为写回口径并检查失败。
     if (!cm->updateDeviceConfig(name, cfg)) {

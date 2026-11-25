@@ -294,6 +294,7 @@ void ModbusConfigDialog::setupUI()
 
 void ModbusConfigDialog::setConfig(const QJsonObject &config)
 {
+    m_originalConfig = config;   // 保住 dataUpload 等无表单项的键
     loadConfigToForm(config);
 }
 
@@ -543,7 +544,7 @@ void ModbusConfigDialog::loadConfigToForm(const QJsonObject &config)
 
 QJsonObject ModbusConfigDialog::buildConfigFromForm() const
 {
-    QJsonObject cfg;
+    QJsonObject cfg = m_originalConfig;   // 无表单项的键（dataUpload 等）原样保留
     cfg[QStringLiteral("role")] = (m_roleCombo->currentIndex() == 1)
         ? QStringLiteral("\u670D\u52A1\u5668") : QStringLiteral("\u5BA2\u6237\u7AEF");
     cfg[QStringLiteral("connectionType")] = m_connType->currentText();

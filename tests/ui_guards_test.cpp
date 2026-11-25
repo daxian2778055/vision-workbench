@@ -1514,6 +1514,16 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(rsBarSrc.contains(QStringLiteral("QWidget *cur = m_space"))
              && rsBarSrc.contains(QStringLiteral("const auto siblings = parent->findChildren")),
              "最大化必须沿父子链逐层隐藏兄弟，不能藏掉地址空间的承载容器");
+    // ㉙ 轮 F：三个专用配置对话框保留原配置键 + 内联开关同步节点参数
+    for (const char *file : { "src/ModbusConfigDialog.cpp", "src/PlcConfigDialog.cpp",
+                              "src/FinsConfigDialog.cpp" }) {
+        const QString src = readSrc(file);
+        QVERIFY2(src.contains(QStringLiteral("m_originalConfig = "))
+                 && src.contains(QStringLiteral("QJsonObject cfg = m_originalConfig")),
+                 "三个专用配置对话框的 config() 必须从原配置起步，保住 dataUpload");
+    }
+    QVERIFY2(cdSrc.contains(QStringLiteral("node->setParam(QStringLiteral(\"dataUpload\"), m_inlineDataUpload->isChecked())")),
+             "内联上传开关必须同步节点参数，否则上传闸仍按旧值放行");
 }
 
 void UiGuardsTest::f2ValidationGuards()

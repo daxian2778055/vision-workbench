@@ -72,6 +72,7 @@
 #include "UdpCommNode.h"
 #include "CommDeviceConfigDialog.h"
 #include "ModbusConfigDialog.h"
+#include "FinsConfigDialog.h"
 #include "PlcConfigDialog.h"
 #include "registerbyteorder.h"   // S4：回写校验比对判定
 
@@ -231,6 +232,7 @@ private slots:
     void writeFailureAccountingAndAddressBounds();
     void inlineParamsEchoOnDeviceSwitchDespiteFocus();
     void registerSpaceMaximizeKeepsSpaceVisible();
+    void dedicatedConfigDialogsPreserveDataUpload();
     // 2026-11-17 盲区补审：UDP 发送失败必须计入 sendWriteFailureCount
     void udpSendFailureIsCounted();
     void sendFailureGoesToFlowContext();   // P0：真实队列路径失败记入发起方流程桶
@@ -4004,6 +4006,9 @@ void CommWritebackTest::communicationDialogInlineParamsWriteBack()
     upload->toggle();
     QCOMPARE(cm->deviceInfo(QStringLiteral("INLINE_DEV"))
                  .config.value(QStringLiteral("dataUpload")).toBool(), !before);
+    // F 复核：上传闸读的是节点参数，配置表写了但节点没同步＝现场仍在冒泡
+    QCOMPARE(cm->deviceNode(QStringLiteral("INLINE_DEV"))
+                 ->getParam(QStringLiteral("dataUpload")).toBool(), !before);
 
     QVERIFY(cm->removeDevice(QStringLiteral("INLINE_DEV")));
 }
@@ -4158,6 +4163,35 @@ void CommWritebackTest::commAddDeviceOpensSingleVmDialog()
 
 // 2026-11-13：VM4.4 截图 4「地址空间」——只在 Modbus/PLC/FINS 下出现，
 // 10 列矩阵（列 0-9、行 0/10/20…）标注已配置地址，工具条加地址后矩阵要跟着刷新。
+// F 复核：三个专用配置对话框不能把无表单项的 dataUpload 等键丢掉
+void CommWritebackTest::dedicatedConfigDialogsPreserveDataUpload()
+{
+    QJsonObject cfg;
+    cfg[QStringLiteral("host")] = QStringLiteral("127.0.0.1");
+    cfg[QStringLiteral("port")] = 502;
+    cfg[QStringLiteral("dataUpload")] = false;
+    {
+        ModbusConfigDialog dlg(QStringLiteral("modbus"), nullptr, nullptr);
+        dlg.setConfig(cfg);
+        auto out = dlg.config();
+        QVERIFY2(out.contains(QStringLiteral("dataUpload")), "Modbus 配置往返丢了 dataUpload");
+        QCOMPARE(out.value(QStringLiteral("dataUpload")).toBool(true), false);
+    }
+    {
+        PlcConfigDialog dlg(QStringLiteral("plc"), nullptr, nullptr);
+        dlg.setConfig(cfg);
+        auto out = dlg.config();
+        QVERIFY2(out.contains(QStringLiteral("dataUpload")), "PLC 配置往返丢了 dataUpload");
+        QCOMPARE(out.value(QStringLiteral("dataUpload")).toBool(true), false);
+    }
+    {
+        FinsConfigDialog dlg(QStringLiteral("FINS TCP"), cfg, nullptr);
+        auto out = dlg.config();
+        QVERIFY2(out.contains(QStringLiteral("dataUpload")), "FINS 配置往返丢了 dataUpload");
+        QCOMPARE(out.value(QStringLiteral("dataUpload")).toBool(true), false);
+    }
+}
+
 // E 复核：焦点守卫只防同设备异步刷新，切换设备时必须回显新设备参数
 void CommWritebackTest::inlineParamsEchoOnDeviceSwitchDespiteFocus()
 {

@@ -191,6 +191,7 @@ void PlcConfigDialog::setupUI()
 
 void PlcConfigDialog::setConfig(const QJsonObject &config)
 {
+    m_originalConfig = config;
     loadConfigToForm(config);
 }
 
@@ -351,7 +352,7 @@ void PlcConfigDialog::loadConfigToForm(const QJsonObject &config)
 
 QJsonObject PlcConfigDialog::buildConfigFromForm() const
 {
-    QJsonObject cfg;
+    QJsonObject cfg = m_originalConfig;   // 保住 dataUpload 等无表单项的键
     cfg[QStringLiteral("plcBrand")] = m_brandCombo->currentText();
     cfg[QStringLiteral("host")] = m_host->text();
     cfg[QStringLiteral("port")] = m_port->value();

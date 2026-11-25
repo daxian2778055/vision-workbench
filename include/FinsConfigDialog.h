@@ -39,6 +39,9 @@ private:
     /// 追加一行寄存器；reg 为空对象 = 默认行（DM/0/int16/Read/启用）
     void appendRegisterRow(const QJsonObject &reg);
 
+    /// 原始配置：config() 从它起步，保住无表单项的 dataUpload 等键
+    QJsonObject m_originalConfig;
+
     QLineEdit *m_targetIp = nullptr;
     QSpinBox *m_targetPort = nullptr;
     QSpinBox *m_pollInterval = nullptr;

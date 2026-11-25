@@ -45,6 +45,9 @@ private:
     void connectToNodeLiveUpdates();
     void refreshToggleSwitch();
 
+    /// 原始配置：config() 从它起步，保住无表单项的 dataUpload 等键
+    QJsonObject m_originalConfig;
+
     QComboBox *m_brandCombo = nullptr;
     QLineEdit *m_host = nullptr;
     QSpinBox *m_port = nullptr;

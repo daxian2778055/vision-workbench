@@ -191,6 +191,7 @@ void FinsConfigDialog::setupUI()
 
 void FinsConfigDialog::setConfig(const QJsonObject &initial)
 {
+    m_originalConfig = initial;
     // 先回默认值：重复 setConfig 时缺键的字段不残留上一台设备的取值。
     m_targetIp->setText(QStringLiteral("127.0.0.1"));
     m_targetPort->setValue(7920);
@@ -219,7 +220,7 @@ void FinsConfigDialog::setConfig(const QJsonObject &initial)
 
 QJsonObject FinsConfigDialog::config() const
 {
-    QJsonObject cfg;
+    QJsonObject cfg = m_originalConfig;   // 保住 dataUpload 等无表单项的键
     cfg[QStringLiteral("targetIp")] = m_targetIp->text().trimmed();
     cfg[QStringLiteral("targetPort")] = m_targetPort->value();
     cfg[QStringLiteral("pollInterval")] = m_pollInterval->value();

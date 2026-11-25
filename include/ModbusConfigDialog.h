@@ -52,6 +52,10 @@ private:
     /// 刷新连接切换开关文字/样式
     void refreshToggleSwitch();
 
+    /// setConfig 收到的原始配置：config() 从它起步再覆盖表单字段，
+    /// 保住 dataUpload 等本对话框没有表单项的键（否则改一次寄存器就把上传闸打开）。
+    QJsonObject m_originalConfig;
+
     QComboBox *m_roleCombo = nullptr;      ///< 客户端 / 服务器
     QComboBox *m_connType = nullptr;
     QLineEdit *m_host = nullptr;
