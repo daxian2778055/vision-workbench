@@ -312,6 +312,7 @@ void CommunicationManagerDialog::updateParamSummary()
         return;
     }
     applyRegisterSpaceVisibility(QString());   // 未选中设备 / 选中控制器都收起地址空间
+    m_lastEchoedDevice.clear();   // 下次再选中同一设备也必须重新回显
     const int ctlRow = m_controllerTable ? m_controllerTable->currentRow() : -1;
     if (ctlRow >= 0 && m_controllerTable->item(ctlRow, 0)) {
         m_paramSummary->setText(QStringLiteral(
@@ -351,8 +352,16 @@ void CommunicationManagerDialog::syncInlineParamsFromSelection(const CommDeviceI
     if (!m_paramForm) return;
     // P4：设备连接/断开触发的异步刷新链会走到这里。若用户正在编辑内联 IP/端口，
     // 无条件 setText/setValue 会把尚未失焦、尚未提交的输入静默覆盖掉。有编辑焦点则本次跳过回显。
+    // E 复核：焦点守卫只防「同一设备编辑中的异步刷新覆盖」，不能挡住切换到另一设备
+    // 的回显。取当前选中的设备名与上次成功回显的比较，换了设备就无条件回显。
+    QString selectedName;
+    if (m_deviceTable && m_deviceTable->currentRow() >= 0
+        && m_deviceTable->item(m_deviceTable->currentRow(), 0))
+        selectedName = m_deviceTable->item(m_deviceTable->currentRow(), 0)->text();
+    const bool deviceChanged = (selectedName != m_lastEchoedDevice);
+
     QWidget *focus = QApplication::focusWidget();
-    if (focus) {
+    if (focus && !deviceChanged) {
         for (QLineEdit *ed : m_ipEdits) {
             if (ed && ed == focus) return;
         }
@@ -386,6 +395,7 @@ void CommunicationManagerDialog::syncInlineParamsFromSelection(const CommDeviceI
         m_inlineRxTerm->setChecked(
             !info.config.value(QStringLiteral("frameTerminator")).toString().isEmpty());
     m_inlineLoading = false;
+    m_lastEchoedDevice = selectedName;
 }
 
 void CommunicationManagerDialog::applyInlineParamChange()

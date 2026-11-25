@@ -229,6 +229,8 @@ private slots:
     void inlineRegisterEditPreservesProtocolFields();
     void tcpServerClientSwapClosesOldLink();
     void writeFailureAccountingAndAddressBounds();
+    void inlineParamsEchoOnDeviceSwitchDespiteFocus();
+    void registerSpaceMaximizeKeepsSpaceVisible();
     // 2026-11-17 盲区补审：UDP 发送失败必须计入 sendWriteFailureCount
     void udpSendFailureIsCounted();
     void sendFailureGoesToFlowContext();   // P0：真实队列路径失败记入发起方流程桶
@@ -4156,6 +4158,75 @@ void CommWritebackTest::commAddDeviceOpensSingleVmDialog()
 
 // 2026-11-13：VM4.4 截图 4「地址空间」——只在 Modbus/PLC/FINS 下出现，
 // 10 列矩阵（列 0-9、行 0/10/20…）标注已配置地址，工具条加地址后矩阵要跟着刷新。
+// E 复核：焦点守卫只防同设备异步刷新，切换设备时必须回显新设备参数
+void CommWritebackTest::inlineParamsEchoOnDeviceSwitchDespiteFocus()
+{
+    auto *cm = CommunicationManager::instance();
+    QVERIFY(cm->addDevice(QStringLiteral("FOCUS_A"), QStringLiteral("TCP"),
+                          tcpClientConfig(7920)));
+    QVERIFY(cm->addDevice(QStringLiteral("FOCUS_B"), QStringLiteral("TCP"),
+                          tcpClientConfig(8100)));
+    DeviceCleanup cleanup{ { QStringLiteral("FOCUS_A"), QStringLiteral("FOCUS_B") } };
+
+    CommunicationManagerDialog dlg;
+    dlg.show();
+    QVERIFY(QTest::qWaitForWindowActive(&dlg, 2000));
+    auto *table = dlg.findChild<QTableWidget *>(QStringLiteral("deviceTable"));
+    auto *port = dlg.findChild<QSpinBox *>(QStringLiteral("commParamPort"));
+    QVERIFY(table && port);
+    auto selectDevice = [table](const QString &name) {
+        for (int row = 0; row < table->rowCount(); ++row)
+            if (table->item(row, 0) && table->item(row, 0)->text() == name) {
+                table->setCurrentCell(row, 0);
+                return true;
+            }
+        return false;
+    };
+
+    QVERIFY2(selectDevice(QStringLiteral("FOCUS_A")), "找不到设备 A");
+    QCOMPARE(port->value(), 7920);
+    port->setFocus();
+    QVERIFY2(port->hasFocus(), "测试前置：内联端口控件必须拿到焦点");
+
+    QVERIFY2(selectDevice(QStringLiteral("FOCUS_B")), "找不到设备 B");
+    QCOMPARE(port->value(), 8100);   // 切换设备时焦点仍在内联控件上也必须回显新设备端口
+}
+
+// E 复核：最大化地址空间不能把承载它的中央容器一起隐藏
+void CommWritebackTest::registerSpaceMaximizeKeepsSpaceVisible()
+{
+    auto *cm = CommunicationManager::instance();
+    QJsonObject cfg;
+    cfg[QStringLiteral("host")] = QStringLiteral("127.0.0.1");
+    cfg[QStringLiteral("port")] = 502;
+    QVERIFY(cm->addDevice(QStringLiteral("MAX_MB"), QStringLiteral("Modbus"), cfg));
+    DeviceCleanup cleanup{ { QStringLiteral("MAX_MB") } };
+
+    CommunicationManagerDialog dlg;
+    dlg.show();
+    QVERIFY(QTest::qWaitForWindowActive(&dlg, 2000));
+    auto *table = dlg.findChild<QTableWidget *>(QStringLiteral("deviceTable"));
+    auto *space = dlg.findChild<QWidget *>(QStringLiteral("commRegisterSpace"));
+    auto *bar = dlg.findChild<RegisterSpaceBar *>(QStringLiteral("commRegisterSpaceBar"));
+    QVERIFY(table && space && bar);
+    for (int row = 0; row < table->rowCount(); ++row)
+        if (table->item(row, 0) && table->item(row, 0)->text() == QStringLiteral("MAX_MB")) {
+            table->setCurrentCell(row, 0);
+            break;
+        }
+    QVERIFY2(space->isVisible(), "Modbus 设备应展开地址空间");
+
+    auto *maxBtn = bar->findChild<QPushButton *>(QStringLiteral("regSpaceMax"));
+    QVERIFY(maxBtn);
+    maxBtn->click();
+    QVERIFY2(bar->isMaximized(), "最大化按钮未生效");
+    QVERIFY2(space->isVisible(), "最大化后地址空间自己必须仍可见（原实现把中央容器一起藏了）");
+
+    maxBtn->click();
+    QVERIFY2(!bar->isMaximized(), "再次点击应退出最大化");
+    QVERIFY2(space->isVisible(), "退出最大化后地址空间应恢复可见");
+}
+
 // D 复核：TCP Server 替换客户端必须发 connectionClosed，让管理器清掉旧客户端的半帧
 void CommWritebackTest::tcpServerClientSwapClosesOldLink()
 {

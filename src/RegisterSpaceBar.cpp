@@ -239,13 +239,19 @@ void RegisterSpaceBar::maximizeSpace()
     if (!win || win == m_space) return;
     m_maxWindow = win;
     m_savedVisibility.clear();
-    // 藏掉地址空间以外的全部子控件（记录原可见态，退出时逐件还原）
-    const auto children = win->findChildren<QWidget *>(QString(), Qt::FindDirectChildrenOnly);
-    for (QWidget *w : children) {
-        if (w == m_space || m_space->isAncestorOf(w))
-            continue;
-        m_savedVisibility.append({w, w->isVisible()});
-        w->hide();
+    // 沿 m_space → 窗口的父子链逐层隐藏兄弟控件。原实现只取窗口的直接子控件并全部
+    // 隐藏，而地址空间嵌在中央容器里 —— 中央容器被藏，地址空间自己也跟着看不见。
+    QWidget *cur = m_space;
+    while (cur && cur != win) {
+        QWidget *parent = cur->parentWidget();
+        if (!parent) break;
+        const auto siblings = parent->findChildren<QWidget *>(QString(), Qt::FindDirectChildrenOnly);
+        for (QWidget *w : siblings) {
+            if (w == cur) continue;
+            m_savedVisibility.append({w, !w->isHidden()});   // 记录自身标记，父未显示时 isVisible 恒 false
+            w->hide();
+        }
+        cur = parent;
     }
     win->installEventFilter(this);
     win->showFullScreen();

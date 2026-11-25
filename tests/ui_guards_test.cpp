@@ -1357,8 +1357,8 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              "内联 IP/端口键映射必须按设备类型分发（host/targetIp/remoteIp/serverIp），"
              "回显与写回同用一套映射");
     const int se = cdSrc.indexOf(QStringLiteral("void CommunicationManagerDialog::syncInlineParamsFromSelection"));
-    QVERIFY2(cdSrc.mid(se, 1400).contains(QStringLiteral("info.config.value(ipKey)"))
-             && cdSrc.mid(se, 1400).contains(QStringLiteral("info.config.value(portKey)")),
+    QVERIFY2(cdSrc.mid(se, 2200).contains(QStringLiteral("info.config.value(ipKey)"))
+             && cdSrc.mid(se, 2200).contains(QStringLiteral("info.config.value(portKey)")),
              "回显必须读与写回相同的键（ipKey/portKey），否则切内联开关会把非 TCP 设备地址覆盖成 127.0.0.1:502");
     // ⑮ 单窗口创建设备：必填校验不能丢（四段 IP 齐全 + 串口名非空），且改动即时重算按钮
     QFile vc(QStringLiteral(SRC_DIR "/src/VmDeviceCreateDialog.cpp"));
@@ -1505,6 +1505,15 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              "Modbus 写失败与 65535 越界必须记账");
     QVERIFY2(plcNodeSrc.count(QStringLiteral("noteSendWriteFailure")) >= 5,
              "PLC 写失败必须记账");
+    // ㉗ 轮 E：焦点守卫按设备切换放行 + 最大化沿父子链隐藏兄弟
+    QVERIFY2(cdSrc.contains(QStringLiteral("const bool deviceChanged = (selectedName != m_lastEchoedDevice)"))
+             && cdSrc.contains(QStringLiteral("if (focus && !deviceChanged)"))
+             && cdSrc.contains(QStringLiteral("m_lastEchoedDevice = selectedName")),
+             "切换设备时必须绕过焦点守卫回显新设备参数");
+    const QString rsBarSrc = readSrc("src/RegisterSpaceBar.cpp");
+    QVERIFY2(rsBarSrc.contains(QStringLiteral("QWidget *cur = m_space"))
+             && rsBarSrc.contains(QStringLiteral("const auto siblings = parent->findChildren")),
+             "最大化必须沿父子链逐层隐藏兄弟，不能藏掉地址空间的承载容器");
 }
 
 void UiGuardsTest::f2ValidationGuards()

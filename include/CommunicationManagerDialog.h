@@ -172,6 +172,8 @@ private:
     QAbstractButton *m_inlineRxTerm = nullptr;
     /// 回显期间的守卫：true 时 applyInlineParamChange 直接返回，避免自触发写回
     bool m_inlineLoading = false;
+    /// 最近一次成功回显的设备名：切换设备时即便焦点还在内联控件上，也必须回显新设备参数
+    QString m_lastEchoedDevice;
 
     // VM4.4 截图 4「地址空间」：工具条 + 10 列矩阵预览 + 7 列寄存器配置表
     QWidget *m_registerSpace = nullptr;        // objectName commRegisterSpace
