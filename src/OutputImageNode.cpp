@@ -62,6 +62,7 @@ QString OutputImageNode::resolveSavePath(QString *error) const
     static const char *kExt0[] = { ".png", ".bmp", ".jpg", ".tif" };
     const QString ext0 = QString::fromLatin1(kExt0[fmtIdx0 >= 0 && fmtIdx0 < 4 ? fmtIdx0 : 0]);
     if (hasSeqToken) {
+        bool found = false;
         for (int seq = 1; seq <= 99999; ++seq) {
             const QString withSeq = QString(name).replace(
                 QStringLiteral("%n"), QString::number(seq).rightJustified(3, QLatin1Char('0')));
@@ -69,8 +70,13 @@ QString OutputImageNode::resolveSavePath(QString *error) const
                 withSeq.endsWith(ext0, Qt::CaseInsensitive) ? withSeq : withSeq + ext0);
             if (!QFileInfo::exists(candidateWithSeq)) {
                 name = withSeq;
+                found = true;
                 break;
             }
+        }
+        if (!found) {
+            if (error) *error = QStringLiteral("%n 序号已用尽（1~99999 均被占用）");
+            return QString();
         }
     }
     // 清掉路径分隔符与非法字符，避免命名规则越出保存目录
@@ -87,11 +93,20 @@ QString OutputImageNode::resolveSavePath(QString *error) const
     if (!overwrite) {
         const int dot = name.lastIndexOf(QLatin1Char('.'));
         const QString stem = dot > 0 ? name.left(dot) : name;
+        bool found = false;
         for (int seq = 1; seq <= 99999; ++seq) {
             candidate = QDir(dir).filePath(
                 stem + QStringLiteral("_%1").arg(seq, 3, 10, QLatin1Char('0')) + ext);
-            if (!QFileInfo::exists(candidate))
+            if (!QFileInfo::exists(candidate)) {
+                found = true;
                 break;
+            }
+        }
+        // P2 复核：序号用尽时原实现停在最后一个已存在路径直接 imwrite 覆盖——与
+        // overwrite=false 的"不覆盖"承诺相反。改为判红返回，不静默覆盖已有文件。
+        if (!found) {
+            if (error) *error = QStringLiteral("自动序号已用尽（1~99999 均被占用），未覆盖已有文件");
+            return QString();
         }
     }
     return candidate;

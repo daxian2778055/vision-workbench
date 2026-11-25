@@ -2242,6 +2242,15 @@ void ModuleEditorDialog::installParamHooks(QWidget *panel)
         for (const auto &hook : kHooks) {
             if (!w->inherits(hook.base))
                 continue;
+            // P2 复核：QPushButton 白名单只给"确认改参"的按钮（FilePath 浏览 / 变量引用）。
+            // 其它按钮（取消、颜色选择、确定/关闭等）点击并不改参，挂钩会制造"假脏"并触发
+            // 无谓重算。对真正改参的按钮，还要在 clicked 后比较参数是否真变——用户取消
+            // 文件对话框时 setParam 不会被调用，不能标脏。
+            const bool paramButton = qstrcmp(hook.base, "QPushButton") == 0
+                && (!w->property("_fileParamName").toString().isEmpty()
+                    || !w->property("_refParamName").toString().isEmpty());
+            if (qstrcmp(hook.base, "QPushButton") == 0 && !paramButton)
+                continue;
             const QByteArray norm = QMetaObject::normalizedSignature(hook.sig);
             if (w->metaObject()->indexOfSignal(norm.constData()) < 0)
                 continue;   // 控件没有该信号：先判存在，避免连接时打印告警
@@ -2251,7 +2260,31 @@ void ModuleEditorDialog::installParamHooks(QWidget *panel)
             const QByteArray sig = QByteArray("2") + norm;
             // 先断开旧连接：面板刷新时重复挂钩也不会重复触发
             QObject::disconnect(w, sig.constData(), this, SLOT(onParamWidgetEdited()));
-            QObject::connect(w, sig.constData(), this, SLOT(onParamWidgetEdited()));
+            if (paramButton && m_node) {
+                const QString key = w->property("_fileParamName").toString().isEmpty()
+                                    ? w->property("_refParamName").toString()
+                                    : w->property("_fileParamName").toString();
+                auto *paramBtn = qobject_cast<QPushButton *>(w);
+                // 先断开旧连接防重复挂钩（面板刷新会重挂）
+                QObject::disconnect(paramBtn, &QPushButton::pressed, this, nullptr);
+                QObject::disconnect(paramBtn, &QPushButton::clicked, this, nullptr);
+                // pressed 在按钮 lambda 改参之前触发，记录改前值；clicked 后（改参 lambda
+                // 已执行）比较——只有真变了才标脏/重算。
+                connect(paramBtn, &QPushButton::pressed, this, [this, key]() {
+                    m_paramButtonBefore = m_node ? m_node->getParam(key) : QVariant();
+                });
+                connect(paramBtn, &QPushButton::clicked, this, [this, key]() {
+                    if (!m_node || m_paramHookBusy)
+                        return;
+                    const QVariant after = m_node->getParam(key);
+                    if (m_paramButtonBefore.isValid() && after == m_paramButtonBefore)
+                        return;   // 用户取消对话框，参数没变——不标脏、不重算
+                    m_paramsDirty = true;
+                    scheduleAutoRecompute();
+                });
+            } else {
+                QObject::connect(w, sig.constData(), this, SLOT(onParamWidgetEdited()));
+            }
         }
         // 记录「最近被编辑的参数控件」，「变量引用」据此把引用插到正确位置
         w->installEventFilter(this);

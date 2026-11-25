@@ -1209,6 +1209,28 @@ void UiGuardsTest::p10CrossCutGuards()
     dc.close();
     QVERIFY2(dcSrc.contains(QStringLiteral("decodedContentIsValid(decodedLines)")),
              "空结果判红必须走可注入纯函数，不能只数 decodedStrings 个数");
+
+    // ⑧ 参数按钮假脏：QPushButton 钩子只给带 _fileParamName/_refParamName 的按钮，
+    //    且取消对话框（参数未变）不标脏
+    QFile me(QStringLiteral(SRC_DIR "/src/ModuleEditorDialog.cpp"));
+    QVERIFY2(me.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 ModuleEditorDialog.cpp");
+    const QString meSrc = QString::fromUtf8(me.readAll());
+    me.close();
+    const int ir = meSrc.indexOf(QStringLiteral("void ModuleEditorDialog::installParamHooks"));
+    const int irEnd = meSrc.indexOf(QStringLiteral("void ModuleEditorDialog::"), ir + 5);
+    const QString irBody = meSrc.mid(ir, irEnd - ir);
+    QVERIFY2(irBody.contains(QStringLiteral("_fileParamName"))
+             && irBody.contains(QStringLiteral("_refParamName"))
+             && irBody.contains(QStringLiteral("after == m_paramButtonBefore"))
+             && irBody.contains(QStringLiteral("== 0 && !paramButton)")),
+             "按钮钩子必须只给改参按钮、过滤无关按钮，且取消对话框参数未变时不标脏");
+    // ⑨ 命名序号用尽不得覆盖已有文件
+    QFile oi(QStringLiteral(SRC_DIR "/src/OutputImageNode.cpp"));
+    QVERIFY2(oi.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 OutputImageNode.cpp");
+    const QString oiSrc = QString::fromUtf8(oi.readAll());
+    oi.close();
+    QVERIFY2(oiSrc.count(QStringLiteral("序号已用尽")) >= 2,
+             "%n 与自动加序两条路径都必须在序号用尽时判红返回，不覆盖已有文件");
 }
 
 void UiGuardsTest::f1DataPanelFollowupGuards()

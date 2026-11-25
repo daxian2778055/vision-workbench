@@ -207,6 +207,8 @@ private:
     QTabWidget *m_vmTabs = nullptr;
     QMap<QString, QVariant> m_paramSnapshot;      /// 打开时的参数快照（取消回滚）
     bool m_paramsDirty = false;                   /// 本次编辑是否改过参数
+    /// P2 复核：FilePath/变量引用按钮按下时的参数值，clicked 后比较——取消对话框不改参则不标脏
+    QVariant m_paramButtonBefore;
 
     // P1-9 结果显示页配置控件（值写入节点参数，随方案保存）
     QComboBox *m_judgeModeCombo = nullptr;
