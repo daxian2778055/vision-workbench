@@ -141,6 +141,7 @@ private slots:
     void testMvsSetFilePathSwitchesToLocalMode();
     void testChannelSplitAndMergeRoundtrip();
     void testOutputImageSavesByRule();
+    void testOutputImagePercentNExpands();    // P10：%n 必须展开为序号，不得留下字面量
     void testFitRoiBoundary_data();
     void testFitRoiBoundary();
     void testFitFailureClearsResults_data();
@@ -3626,6 +3627,38 @@ void NodeCoreTest::testMvsSetFilePathSwitchesToLocalMode()
     QVERIFY2(!node.isLocalFileSource(), "切到相机源");
     node.setParam(QStringLiteral("sourceType"), MvsImageSourceNode::LOCAL_FILE);
     QVERIFY2(node.localImageFiles().isEmpty(), "切源后旧图清单必须清空，不得残留");
+}
+
+void NodeCoreTest::testOutputImagePercentNExpands()
+{
+    // P10 复核：默认命名规则含 %n，原实现只替换日期/时间，写出带字面量 %n 的文件名。
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    OutputImageNode node;
+    node.init();
+    node.setParam(QStringLiteral("saveDir"), tmp.path());
+    node.setParam(QStringLiteral("namePattern"), QStringLiteral("IMG_%yyyyMMdd%_%HHmmss%_%n"));
+    node.setParam(QStringLiteral("format"), 0);
+    node.setParam(QStringLiteral("overwrite"), false);
+
+    cv::Mat img(8, 6, CV_8UC3, cv::Scalar(12, 34, 56));
+    auto imgObj = QSharedPointer<DataObject>::create();
+    imgObj->setHImage(OpencvUtil::matToHimage(img));
+    node.setInputData(0, imgObj);
+    QVERIFY2(node.execute(), qPrintable(node.getParam(QStringLiteral("lastError")).toString()));
+    const QString first = node.getParam(QStringLiteral("lastSavedPath")).toString();
+    QVERIFY2(!first.contains(QLatin1Char('%')), qPrintable(first));
+    QVERIFY2(first.contains(QStringLiteral("_001.png")) || first.contains(QStringLiteral("_002.png")),
+             qPrintable(first));   // %n 展开为序号（不是日期占位的 001，而是序列位）
+
+    // 第二次运行：%n 应推进到下一个空闲序号，不覆盖第一次
+    auto imgObj2 = QSharedPointer<DataObject>::create();
+    imgObj2->setHImage(OpencvUtil::matToHimage(img));
+    node.setInputData(0, imgObj2);
+    QVERIFY2(node.execute(), qPrintable(node.getParam(QStringLiteral("lastError")).toString()));
+    const QString second = node.getParam(QStringLiteral("lastSavedPath")).toString();
+    QVERIFY2(second != first && !second.contains(QLatin1Char('%')), qPrintable(second));
+    QVERIFY2(QFileInfo::exists(first) && QFileInfo::exists(second), "两次都应留下独立文件");
 }
 
 QTEST_MAIN(NodeCoreTest)

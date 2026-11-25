@@ -55,6 +55,24 @@ QString OutputImageNode::resolveSavePath(QString *error) const
     const QDateTime now = QDateTime::currentDateTime();
     name.replace(QStringLiteral("%yyyyMMdd%"), now.toString(QStringLiteral("yyyyMMdd")));
     name.replace(QStringLiteral("%HHmmss%"), now.toString(QStringLiteral("HHmmss")));
+    // P10 复核：%n 此前从未展开，默认命名规则会写出带字面量 %n 的文件名。
+    // 有 %n 时展开为从 001 起的序号（与下面 overwrite=false 的自动加序同形）。
+    const bool hasSeqToken = name.contains(QStringLiteral("%n"));
+    const int fmtIdx0 = m_params.value(QStringLiteral("format"), 0).toInt();
+    static const char *kExt0[] = { ".png", ".bmp", ".jpg", ".tif" };
+    const QString ext0 = QString::fromLatin1(kExt0[fmtIdx0 >= 0 && fmtIdx0 < 4 ? fmtIdx0 : 0]);
+    if (hasSeqToken) {
+        for (int seq = 1; seq <= 99999; ++seq) {
+            const QString withSeq = QString(name).replace(
+                QStringLiteral("%n"), QString::number(seq).rightJustified(3, QLatin1Char('0')));
+            const QString candidateWithSeq = QDir(dir).filePath(
+                withSeq.endsWith(ext0, Qt::CaseInsensitive) ? withSeq : withSeq + ext0);
+            if (!QFileInfo::exists(candidateWithSeq)) {
+                name = withSeq;
+                break;
+            }
+        }
+    }
     // 清掉路径分隔符与非法字符，避免命名规则越出保存目录
     name.remove(QLatin1Char('/'));
     name.remove(QLatin1Char('\\'));
@@ -63,7 +81,8 @@ QString OutputImageNode::resolveSavePath(QString *error) const
     const QString ext = QString::fromLatin1(kExt[fmtIdx >= 0 && fmtIdx < 4 ? fmtIdx : 0]);
     if (!name.endsWith(ext, Qt::CaseInsensitive))
         name += ext;
-    const bool overwrite = m_params.value(QStringLiteral("overwrite"), false).toBool();
+    // %n 已展开为"第一个空闲序号"，名字已唯一，不再追加 _001（避免双重序号）
+    const bool overwrite = hasSeqToken || m_params.value(QStringLiteral("overwrite"), false).toBool();
     QString candidate = QDir(dir).filePath(name);
     if (!overwrite) {
         const int dot = name.lastIndexOf(QLatin1Char('.'));

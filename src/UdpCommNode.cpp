@@ -164,7 +164,6 @@ void UdpCommNode::onSendRequested(const QByteArray &data)
         // 必须与未连接/写失败走同一记账路径，FlowExecutor 才会按失败计数判 NG。
         const QString reason = QStringLiteral("UDP 未配置目标 IP（仅接收模式不可发送）");
         noteSendWriteFailure(reason);
-        emit communicationError(reason);
         return;
     }
     // 本地端口在 init() 已校验 0~65535，目标端口此前直接 static_cast<quint16>
@@ -175,7 +174,6 @@ void UdpCommNode::onSendRequested(const QByteArray &data)
         const QString reason =
             QStringLiteral("UDP 目标端口 %1 非法（应在 0~65535）").arg(rawPort);
         noteSendWriteFailure(reason);
-        emit communicationError(reason);
         return;
     }
     const quint16 port = static_cast<quint16>(rawPort);

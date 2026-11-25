@@ -698,6 +698,14 @@ void UiGuardsTest::p3ModuleEditorGuards()
              && judgeBody.contains(QStringLiteral("m_resultTextEdit"))
              && judgeBody.contains(QStringLiteral("QSignalBlocker")),
              "回填方法必须覆盖判断方式/显示勾选/文本等控件且用信号阻塞避免触发写回");
+
+    // ⑤ UDP 失败路径不得重复发错误信号（noteSendWriteFailure 内部已 emit）
+    QFile udp(QStringLiteral(SRC_DIR "/src/UdpCommNode.cpp"));
+    QVERIFY2(udp.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 UdpCommNode.cpp");
+    const QString udpSrc = QString::fromUtf8(udp.readAll());
+    udp.close();
+    QVERIFY2(!udpSrc.contains(QStringLiteral("noteSendWriteFailure(reason);\n        emit communicationError")),
+             "UDP 写失败只走 noteSendWriteFailure 一次 emit，不得重复发 communicationError");
 }
 
 void UiGuardsTest::p4CommDomainGuards()
