@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QObject>
+#include <memory>
+class FlowRunContext;
 #include <QMap>
 #include <QHash>
 #include <QString>
@@ -104,7 +106,11 @@ public:
     // ---- 操作 ----
     bool openDevice(const QString &name);
     bool closeDevice(const QString &name);
-    bool sendData(const QString &deviceName, const QByteArray &data);
+    /// data: 原始字节；flow: 发起方的流程上下文（SendDataNode 的 ownerContext），
+    /// 用于把稍后入队执行的写失败记回本轮——通信节点不在 FlowScene 节点之列，
+    /// 自身 ownerContext 恒空，必须由调用方传入。
+    bool sendData(const QString &deviceName, const QByteArray &data,
+                  const std::shared_ptr<FlowRunContext> &flow = std::shared_ptr<FlowRunContext>());
 
 signals:
     void deviceAdded(const QString &name, const QString &type);

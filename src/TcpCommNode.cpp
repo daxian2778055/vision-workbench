@@ -233,7 +233,10 @@ void TcpCommNode::onSendRequested(const QByteArray &data)
     // 成败只看 write 是否吞下全部字节：flush() 返回 false 只说明"写缓冲已空"
     // （数据早已交给内核），把它当失败会导致每次成功发送都误报通信错误（历史缺陷）。
     if (written != data.size()) {
-        emit communicationError(QStringLiteral("TCP\u53D1\u9001\u5931\u8D25: %1").arg(m_socket->errorString()));
+        // P0 复核：真实写失败必须与未连接路径同走 noteSendWriteFailure——
+        // 否则 success 计数不增，轮末判红拿不到这次失败（udp 三路径已同形）。
+        noteSendWriteFailure(
+            QStringLiteral("TCP 发送失败: %1").arg(m_socket->errorString()));
         // 写失败往往意味着连接已死（半开连接：对端异常断电时不发 FIN）——
         // 安排重连自愈，而不是等用户发现"发不出去"后手动重连
         // 半开自愈：必须先落"断开"状态再排重连——否则重连定时器检查 m_connected

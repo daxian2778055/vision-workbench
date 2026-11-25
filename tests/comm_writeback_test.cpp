@@ -38,6 +38,7 @@
 #include "SerialCommNode.h"
 #include <QSerialPort>
 #include "CommunicationNodeBase.h"
+#include "FlowRunContext.h"
 #include "CommunicationManager.h"
 #include "FlowExecutor.h"
 #include "FlowExecutorToken.h"
@@ -65,6 +66,7 @@
 #include "CommMonitorPane.h"
 #include "RegisterSpaceBar.h"
 #include "CommunicationNodeBase.h"
+#include "FlowRunContext.h"
 #include "CommunicationManagerDialog.h"
 #include "VmDeviceCreateDialog.h"
 #include "UdpCommNode.h"
@@ -226,6 +228,7 @@ private slots:
     void commAddressSpaceAppearsForRegisterProtocols();
     // 2026-11-17 盲区补审：UDP 发送失败必须计入 sendWriteFailureCount
     void udpSendFailureIsCounted();
+    void sendFailureGoesToFlowContext();   // P0：真实队列路径失败记入发起方流程桶
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -4259,6 +4262,27 @@ void CommWritebackTest::udpSendFailureIsCounted()
                  "越界端口不得写 lastSent 伪装成功");
     }
     CommunicationNodeBase::resetSendWriteFailureCount();
+}
+
+// P0 复核：真实队列路径 + 流程上下文归属——失败必须记入发起方的桶（不是 nullptr 桶）
+void CommWritebackTest::sendFailureGoesToFlowContext()
+{
+    auto ctx = std::make_shared<FlowRunContext>();
+    const void *key = ctx.get();
+    CommunicationNodeBase::resetSendWriteFailureCount(key);
+    const int before = CommunicationNodeBase::sendWriteFailureCount(key);
+
+    SerialCommNode node;   // 未连接：实际写必走失败路径
+    node.init();
+    node.setSendFlowContext(ctx);
+    node.requestSend(QByteArrayLiteral("x"));   // 真队列：入队后 GUI 线程执行 onSendRequested
+    for (int i = 0; i < 50 && CommunicationNodeBase::pendingSendCount(key) > 0; ++i)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+
+    QVERIFY2(CommunicationNodeBase::sendWriteFailureCount(key) == before + 1,
+             "真实队列路径的写失败必须记入发起方流程上下文的桶（否则轮末判红恒为 0）");
+    QCOMPARE(CommunicationNodeBase::pendingSendCount(key), 0);
+    CommunicationNodeBase::resetSendWriteFailureCount(key);
 }
 
 QTEST_MAIN(CommWritebackTest)

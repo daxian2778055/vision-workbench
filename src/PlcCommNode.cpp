@@ -246,12 +246,12 @@ void PlcCommNode::verifyWrittenValue(int address, double expected, const QString
             const double actual = RegisterByteOrder::parseRawToValue(
                 RegisterByteOrder::assembleRegisterBytes(words, byteOrder), dataType, byteOrder);
             if (!RegisterByteOrder::valueMatches(expected, actual, dataType)) {
-                emit communicationError(QStringLiteral("PLC回写校验失败(地址%1):期望%2 实读%3")
-                                            .arg(address).arg(expected).arg(actual));
+                noteSendWriteFailure(QStringLiteral("PLC回写校验失败(地址%1):期望%2 实读%3")
+                                         .arg(address).arg(expected).arg(actual));
             }
         } else {
-            emit communicationError(QStringLiteral("PLC回写校验读回失败(地址%1):%2")
-                                        .arg(address).arg(reply->errorString()));
+            noteSendWriteFailure(QStringLiteral("PLC回写校验读回失败(地址%1):%2")
+                                     .arg(address).arg(reply->errorString()));
         }
         reply->deleteLater();
     };

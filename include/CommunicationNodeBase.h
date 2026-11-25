@@ -46,10 +46,14 @@ public:
     void setDeviceName(const QString &name) { m_deviceName = name; }
     QString deviceName() const { return m_deviceName; }
 
+    /// 设置发起方流程上下文（由 CommunicationManager::sendData 传入），
+    /// 供入队后异步执行的写失败记回本轮——通信节点自身 ownerContext 恒空。
+    void setSendFlowContext(const std::shared_ptr<FlowRunContext> &ctx) { m_sendFlowContext = ctx; }
+
     /// 发送外部数据（由 CommunicationManager::sendData 触发，队列投递到节点线程执行）
     void requestSend(const QByteArray &data)
     {
-        bumpSendPending(ownerContext().get());
+        bumpSendPending(sendFlowContext());
         emit sendRequested(data);
     }
 
@@ -82,7 +86,16 @@ protected:
     /// 写失败的统一收口：计数 + 报错（各节点的发送失败路径都走它）
     static void bumpSendPending(const void *flow);
     static void dropSendPending(const void *flow);
-    void noteSendWriteFailure(const QString &why);
+    /// 发送归属流程上下文的读取：优先用 sendData 传入的发起方上下文，
+ /// 否则退回节点自身 ownerContext，都没有则落 nullptr 桶（非流程场景）。
+ const void *sendFlowContext() const
+ {
+     if (m_sendFlowContext) return m_sendFlowContext.get();
+     if (auto ctx = ownerContext()) return ctx.get();
+     return nullptr;
+ }
+ std::shared_ptr<FlowRunContext> m_sendFlowContext;
+ void noteSendWriteFailure(const QString &why);
     CommType m_commType;
     bool m_connected = false;
     QString m_deviceName;

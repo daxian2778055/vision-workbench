@@ -1,6 +1,7 @@
 #include <QElapsedTimer>
 #include <QThread>
 #include "CommunicationNodeBase.h"
+#include "FlowExecutor.h"
 #include <atomic>
 #include "DataObject.h"
 #include <QWidget>
@@ -95,13 +96,12 @@ bool CommunicationNodeBase::waitSendDrain(const void *flow, int timeoutMs)
 void CommunicationNodeBase::handleSendRequested(const QByteArray &data)
 {
     onSendRequested(data);                    // 子类实现（串口/网络…）
-    dropSendPending(ownerContext().get());    // 无论成败都销一条
+    dropSendPending(sendFlowContext());   // 无论成败都销一条
 }
 
 void CommunicationNodeBase::noteSendWriteFailure(const QString &why)
 {
-    // 归属本节点的流程上下文（没有上下文时记为 nullptr 桶，兼容非流程场景）
-    bumpFailure(ownerContext().get());
+    bumpFailure(sendFlowContext());
     emit communicationError(why);
 }
 

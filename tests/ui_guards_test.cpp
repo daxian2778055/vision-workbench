@@ -1418,6 +1418,37 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
         QVERIFY2(s.count(QStringLiteral("lastError")) >= 3,
                  "通道拆/合节点的校验失败与 catch 分支都必须写 lastError");
     }
+    // ⑳ 发送失败记账归属：sendData 传 context + 三处用 sendFlowContext
+    QFile cb(QStringLiteral(SRC_DIR "/src/CommunicationNodeBase.cpp"));
+    QVERIFY2(cb.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 CommunicationNodeBase.cpp");
+    const QString cbSrc = QString::fromUtf8(cb.readAll());
+    cb.close();
+    QVERIFY2(cbSrc.count(QStringLiteral("sendFlowContext()")) >= 2,
+             "requestSend/handleSendRequested/noteSendWriteFailure 三处必须用同一归属键");
+    const QString cmSrc2 = []() {
+        QFile f(QStringLiteral(SRC_DIR "/src/CommunicationManager.cpp"));
+        f.open(QIODevice::ReadOnly | QIODevice::Text);
+        const QString s = QString::fromUtf8(f.readAll());
+        f.close();
+        return s;
+    }();
+    QVERIFY2(cmSrc2.contains(QStringLiteral("node->setSendFlowContext(flow)")),
+             "sendData 必须把发起方流程上下文交给节点，否则轮末判红桶错位");
+    // ㉑ 轮末排空 + 写回校验记账
+    QFile fe(QStringLiteral(SRC_DIR "/src/FlowExecutor.cpp"));
+    QVERIFY2(fe.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 FlowExecutor.cpp");
+    const QString feSrc = QString::fromUtf8(fe.readAll());
+    fe.close();
+    QVERIFY2(feSrc.contains(QStringLiteral("waitSendDrain(m_runContext")),
+             "轮末判红取差值前必须先有界排空");
+    for (const char *file : { "src/ModbusNode.cpp", "src/PlcCommNode.cpp" }) {
+        QFile f(QStringLiteral(SRC_DIR "/") + QString::fromLatin1(file));
+        QVERIFY2(f.open(QIODevice::ReadOnly | QIODevice::Text), "打不开寄存器节点源码");
+        const QString s = QString::fromUtf8(f.readAll());
+        f.close();
+        QVERIFY2(s.count(QStringLiteral("noteSendWriteFailure")) >= 2,
+                 "写回校验失败必须走 noteSendWriteFailure 记账，不能只 emit communicationError");
+    }
 }
 
 void UiGuardsTest::f2ValidationGuards()

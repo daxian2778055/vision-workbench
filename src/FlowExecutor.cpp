@@ -861,6 +861,9 @@ void FlowExecutor::run()
         // 良率口径里，也不谎报。已执行节点的那几条记录照常落库，追溯不丢。
         // 发送失败计数（2026-10-30 r19 P1-11）：sendData 入队即报成功，真正的写在稍后
         // 执行；写失败原先只进界面日志，本轮仍记「通过」。这里在写结果前拦下。
+        // P1 复核：连续模式轮次不经 startExecution，轮首排空不覆盖本轮——
+        // 判红取差值前先有界排空，让本轮入队的发送在读取前落地并记账。
+        CommunicationNodeBase::waitSendDrain(m_runContext.get(), 2000);
         const int sendFailures =
             CommunicationNodeBase::sendWriteFailureCount(m_runContext.get()) - m_sendFailuresAtRoundStart;
         // 消费完就推进快照（r19 P1-11 复核）：原快照只在 startExecution 取一次，连续模式下

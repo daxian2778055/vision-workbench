@@ -80,7 +80,7 @@ bool SendDataNode::doSend()
         qWarning() << QStringLiteral("SendDataNode: 设备不存在，数据未发送：") << deviceName;
         return false;
     }
-    if (!cm->sendData(deviceName, dataStr.toUtf8())) {
+    if (!cm->sendData(deviceName, dataStr.toUtf8(), ownerContext())) {
         // 设备存在但未连接或投递失败：以前返回值被丢弃，同样没有任何痕迹
         qWarning() << QStringLiteral("SendDataNode: 发送失败（未连接或投递失败）：") << deviceName;
         return false;
