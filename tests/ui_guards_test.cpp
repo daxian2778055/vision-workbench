@@ -1530,6 +1530,13 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              && finsNodeSrc.contains(QStringLiteral("m_requestTimer->start(qMax(100"))
              && finsNodeSrc.count(QStringLiteral("m_requestTimer->stop()")) >= 1,
              "FINS/TCP 握手必须启动定时器，超时报错断链，握手成功后停表");
+    // ㉛ 流程域 H：waitForFinish 必须自己驱动收尾（不能空等尚未创建的信号量）
+    const QString tokSrc = readSrc("src/FlowExecutorToken.cpp");
+    QVERIFY2(tokSrc.contains(QStringLiteral("bool FlowExecutorToken::waitForFinish"))
+             && tokSrc.contains(QStringLiteral("ex->joinForDestroy(inlineMs)"))
+             && tokSrc.contains(QStringLiteral("startBackgroundCleanup(ex)"))
+             && tokSrc.contains(QStringLiteral("m_teardownStarted")),
+             "waitForFinish 必须在 reset() 前真正收尾：内联等待 + 后台兜底 + 防重复启动");
 }
 
 void UiGuardsTest::f2ValidationGuards()

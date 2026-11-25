@@ -59,6 +59,9 @@ private:
     std::shared_ptr<QSemaphore> m_finishSem;
     /// 超时未退出的收尾（r19 P1-13）：置可观测终态 + finished 自删，绝不 delete
     static void abandonBody(FlowExecutor *ex, int timeoutMs);
+    /// 后台收尾是否已启动（waitForFinish 与析构共用，避免重复启动/重复删除）
+    bool m_teardownStarted = false;
+    void startBackgroundCleanup(FlowExecutor *ex);
     /// 本体由本令牌拥有；收尾后交出（超时分支由自删路径接管）。
     FlowExecutor *m_owner = nullptr;
     /// 收尾策略（默认空 = joinForDestroy；测试可注入以钉超时分支）。

@@ -27,6 +27,7 @@ private slots:
     void testSharedTokenCleansUpOnce();   // 多个持有者只收尾一次
     void testExecutorUsableWhileHeld();   // 持有期间本体可调用
     void testReleaseIsSynchronous();      // 释放返回时本体已收干净（P3b 界面侧依赖的同步语义）
+    void testWaitForFinishDrivesTeardown(); // 流程域 P0：reset 前等待必须真的收尾（关窗删场景的前提）
     void testNodeBorrowsExecutorThroughToken();     // P3c：节点面经令牌借本体，收尾后借不到
     void testTriggerBindingBorrowsThroughToken();   // P3c：触发面经令牌取用，路由副本强持期间本体不死
     void testAbandonedExecutorEntersTerminalState(); // P3d：收尾超时 ⇒ 可观测终态，进程不中止
@@ -103,6 +104,20 @@ void FlowExecutorTokenTest::testReleaseIsSynchronous()
         // 释放返回时本体已收干净（不等事件循环、不等别的持有者）
         QVERIFY(watch.isNull());
     }
+    QVERIFY(watch.isNull());
+}
+
+// 流程域 P0：MainWindow 在 reset() 之前调用 waitForFinish，随后立刻删场景。
+// 该等待必须真正驱动收尾，否则工作线程仍持裸节点指针 ⇒ UAF。
+void FlowExecutorTokenTest::testWaitForFinishDrivesTeardown()
+{
+    FlowExecutor *ex = new FlowExecutor();
+    QPointer<FlowExecutor> watch(ex);
+    auto token = std::make_shared<FlowExecutorToken>(ex);
+    QVERIFY2(token->waitForFinish(3000), "显式等待应返回收尾成功");
+    QVERIFY2(watch.isNull(),
+             "waitForFinish 返回时本体必须已回收——MainWindow 随后就删场景/节点");
+    token.reset();
     QVERIFY(watch.isNull());
 }
 

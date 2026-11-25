@@ -34,7 +34,8 @@ std::shared_ptr<FlowExecutorToken> FlowExecutorToken::create(FlowExecutor *execu
 
 FlowExecutorToken::~FlowExecutorToken()
 {
-    if (!m_owner) {
+    if (!m_owner || m_teardownStarted) {
+        // 后台收尾已由 waitForFinish 启动：完成信号由线程强持，令牌此刻销毁安全。
         return;
     }
     FlowExecutor *ex = m_owner;
@@ -60,6 +61,12 @@ FlowExecutorToken::~FlowExecutorToken()
         delete ex;
         return;
     }
+    startBackgroundCleanup(ex);
+}
+
+void FlowExecutorToken::startBackgroundCleanup(FlowExecutor *ex)
+{
+    m_teardownStarted = true;
     // 完成信号（r19 P1-15）：shared_ptr 由线程持一份，令牌先销毁也不悬垂
     m_finishSem = std::make_shared<QSemaphore>();
     std::shared_ptr<QSemaphore> finishSem = m_finishSem;
@@ -84,9 +91,37 @@ FlowExecutorToken::~FlowExecutorToken()
 
 bool FlowExecutorToken::waitForFinish(int timeoutMs)
 {
-    if (!m_finishSem)
-        return true;   // 没走 detach 分支：析构里已经同步收干净
-    return m_finishSem->tryAcquire(1, timeoutMs);
+    // G/流程域复核：MainWindow 在 token.reset() **之前**调本函数——原实现此时
+    // m_finishSem 必空（信号量只在析构的 detach 分支里创建），立即返回 true；随后
+    // 析构只等 300ms 就 detach 并返回，调用方紧接着 qDeleteAll(m_flowScenes)，
+    // 工作线程仍持裸节点指针 ⇒ UAF。这里让本函数自己驱动收尾，而不是空等一个
+    // 还不存在的信号量。
+    if (m_teardownStarted)
+        return m_finishSem && m_finishSem->tryAcquire(1, timeoutMs);
+    if (!m_owner)
+        return true;   // 已经收干净
+
+    FlowExecutor *ex = m_owner;
+    if (m_finisher) {
+        const bool joined = m_finisher(ex, timeoutMs);
+        m_owner = nullptr;
+        if (joined) {
+            delete ex;
+            return true;
+        }
+        abandonBody(ex, timeoutMs);
+        return false;
+    }
+    const int inlineMs = qMin(300, timeoutMs);
+    if (ex->joinForDestroy(inlineMs)) {
+        delete ex;
+        m_owner = nullptr;
+        return true;
+    }
+    startBackgroundCleanup(ex);
+    m_owner = nullptr;   // 避免随后析构再次启动收尾/重复删除
+    const int rest = timeoutMs - inlineMs;
+    return rest > 0 && m_finishSem && m_finishSem->tryAcquire(1, rest);
 }
 
 void FlowExecutorToken::abandonBody(FlowExecutor *ex, int timeoutMs)
