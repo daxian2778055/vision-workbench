@@ -266,6 +266,8 @@ void ModbusConfigDialog::setupUI()
         m_writeBtn->setVisible(false);
         if (m_spaceBar) m_spaceBar->setVisible(false);
         m_toggleSwitch->setVisible(false);
+        // 只读窗连表格编辑触发器一并关掉，双击写路径在槽入口也有守卫（双保险）
+        m_registerTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     }
 
     connect(addBtn, &QPushButton::clicked, this, &ModbusConfigDialog::onAddRegister);
@@ -653,6 +655,9 @@ void ModbusConfigDialog::onRemoveRegister()
 
 void ModbusConfigDialog::onCellDoubleClicked(int row, int column)
 {
+    // P1 复核：监控窗（readOnly）原只隐藏写按钮，双击当前值列仍真写设备——封住这条写路径
+    if (m_readOnly)
+        return;
     if (column <= 1 && !qobject_cast<QComboBox *>(m_registerTable->cellWidget(row, 1))) {
         configureRow(row);   // 空白地址行：就地补配置控件
         return;
@@ -674,6 +679,9 @@ void ModbusConfigDialog::onCellDoubleClicked(int row, int column)
 
 void ModbusConfigDialog::onWriteValueToRegister(int row)
 {
+    // 双保险：任何调用方（写按钮/双击/程序化）在监控窗下都不得写设备
+    if (m_readOnly)
+        return;
     if (!m_modbusNode || !m_modbusNode->isConnected()) {
         QMessageBox::warning(this, QStringLiteral("\u63D0\u793A"),
             QStringLiteral("Modbus \u672A\u8FDE\u63A5\uFF0C\u65E0\u6CD5\u5199\u5165\u3002"));

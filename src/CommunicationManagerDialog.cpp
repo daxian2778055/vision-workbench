@@ -387,9 +387,15 @@ void CommunicationManagerDialog::applyInlineParamChange()
         cfg[QStringLiteral("frameTerminator")] =
             m_inlineRxTerm->isChecked() ? QStringLiteral("\r\n") : QString();
 
-    cm->updateDeviceConfig(name, cfg);
+    // P1 复核：updateDeviceConfig 只写内存配置表，真正落盘在方案保存/显式导出时。
+    // 原文案谎称已保存——改为写回口径并检查失败。
+    if (!cm->updateDeviceConfig(name, cfg)) {
+        if (m_paramSummary)
+            m_paramSummary->setText(tr("参数写回失败：设备不存在"));
+        return;
+    }
     if (m_paramSummary)
-        m_paramSummary->setText(QStringLiteral("\u53C2\u6570\u5DF2\u5373\u65F6\u4FDD\u5B58"));
+        m_paramSummary->setText(tr("参数已即时写回配置表（保存方案后落盘）"));
 }
 
 void CommunicationManagerDialog::applyRegisterSpaceVisibility(const QString &deviceType)
@@ -458,7 +464,8 @@ void CommunicationManagerDialog::persistRegistersFromSpace()
         regs.append(o);
     }
     cfg[QStringLiteral("registers")] = regs;
-    cm->updateDeviceConfig(name, cfg);
+    if (!cm->updateDeviceConfig(name, cfg) && m_paramSummary)
+        m_paramSummary->setText(tr("寄存器写回失败：设备不存在"));
 }
 
 void CommunicationManagerDialog::refreshAddressGrid()

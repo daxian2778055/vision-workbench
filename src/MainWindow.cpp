@@ -7148,6 +7148,9 @@ void MainWindow::setupToolLibrary()
     for (const QString &group : registry.groups()) {
         QTreeWidgetItem *groupItem = new QTreeWidgetItem(ui->toolLibrary);
         groupItem->setText(0, toolGroupDisplayName(group));
+        // P1 复核：显示名随语言变（英文下是 "Image Acquisition"），但过滤/分类按钮拿的是
+        // 注册表中文 key——比较必须走稳定 key，不能用显示文本。
+        groupItem->setData(0, Qt::UserRole, group);
 
         for (const NodeRegistration *reg : registry.byGroup(group)) {
             auto *item = new QTreeWidgetItem(groupItem);
@@ -7285,7 +7288,7 @@ void MainWindow::setToolBrowserExpanded(bool expanded, const QString &group)
     if (expanded && !group.isEmpty() && ui->toolLibrary) {
         for (int i = 0; i < ui->toolLibrary->topLevelItemCount(); ++i) {
             QTreeWidgetItem *groupItem = ui->toolLibrary->topLevelItem(i);
-            if (groupItem && groupItem->text(0) == group) {
+            if (groupItem && groupItem->data(0, Qt::UserRole).toString() == group) {
                 groupItem->setExpanded(true);
                 ui->toolLibrary->scrollToItem(groupItem, QAbstractItemView::PositionAtTop);
                 break;
@@ -7307,7 +7310,7 @@ void MainWindow::applyToolLibraryFilter()
     for (int gi = 0; gi < ui->toolLibrary->topLevelItemCount(); ++gi) {
         QTreeWidgetItem *group = ui->toolLibrary->topLevelItem(gi);
         const bool groupAllowed =
-            m_toolActiveGroup.isEmpty() || group->text(0) == m_toolActiveGroup;
+            m_toolActiveGroup.isEmpty() || group->data(0, Qt::UserRole).toString() == m_toolActiveGroup;
         int visible = 0;
         for (int ci = 0; ci < group->childCount(); ++ci) {
             QTreeWidgetItem *child = group->child(ci);

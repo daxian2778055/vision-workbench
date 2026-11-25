@@ -596,6 +596,13 @@ void UiGuardsTest::mainWindowP1ClosureGuards()
     const QString reset = src.mid(resetFn, nextFn - resetFn);
     QVERIFY2(reset.contains(QStringLiteral("actionToggleLogDock->setChecked(true)")),
              "恢复默认布局必须同步 logDock 勾选（同 tool/image/param 口径）");
+
+    // ⑤ 工具库分组过滤：英文模式下显示名变化，比较必须走稳定 key（UserRole）
+    QVERIFY2(src.contains(QStringLiteral("groupItem->setData(0, Qt::UserRole, group)")),
+             "分组项必须存注册表中文 key 到 UserRole");
+    QVERIFY2(src.contains(QStringLiteral("group->data(0, Qt::UserRole).toString() == m_toolActiveGroup"))
+             && src.contains(QStringLiteral("groupItem->data(0, Qt::UserRole).toString() == group")),
+             "过滤与自动展开必须比稳定 key，不得比随语言变化的显示文本");
 }
 
 void UiGuardsTest::p2CanvasEditGuards()
@@ -856,6 +863,25 @@ void UiGuardsTest::p7TrainingToolGuards()
 
 void UiGuardsTest::p8DataPanelGuards()
 {
+    // ① 通信监控窗只读：双击写路径必须在槽入口封住，配置表写回不得谎称已落盘
+    QFile mb(QStringLiteral(SRC_DIR "/src/ModbusConfigDialog.cpp"));
+    QVERIFY2(mb.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 ModbusConfigDialog.cpp");
+    const QString modbus = QString::fromUtf8(mb.readAll());
+    mb.close();
+    const int dbl = modbus.indexOf(QStringLiteral("void ModbusConfigDialog::onCellDoubleClicked"));
+    const int wr = modbus.indexOf(QStringLiteral("void ModbusConfigDialog::onWriteValueToRegister"));
+    QVERIFY2(dbl >= 0 && wr >= 0
+             && modbus.mid(dbl, 180).contains(QStringLiteral("if (m_readOnly)"))
+             && modbus.mid(wr, 180).contains(QStringLiteral("if (m_readOnly)")),
+             "只读监控窗的双击写入路径必须在两个槽入口都封住");
+    QFile cm(QStringLiteral(SRC_DIR "/src/CommunicationManagerDialog.cpp"));
+    QVERIFY2(cm.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 CommunicationManagerDialog.cpp");
+    const QString cmSrc = QString::fromUtf8(cm.readAll());
+    cm.close();
+    QVERIFY2(cmSrc.contains(QStringLiteral("if (!cm->updateDeviceConfig(name, cfg))"))
+             && cmSrc.contains(QStringLiteral("参数已即时写回配置表"))
+             && !cmSrc.contains(QStringLiteral("参数已即时保存")),
+             "内存配置表写回必须检查失败，不得谎称已落盘");
     // ① 输出查看器 setNode 先 clear 再设指针；状态标签复位；失败按 namedOutputs 清
     QFile v(QStringLiteral(SRC_DIR "/src/OutputDataViewer.cpp"));
     QVERIFY2(v.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 OutputDataViewer.cpp");
