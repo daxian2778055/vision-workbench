@@ -439,7 +439,7 @@ void CommunicationManagerDialog::applyRegisterSpaceVisibility(const QString &dev
 {
     const bool show = (deviceType == QStringLiteral("Modbus")
                        || deviceType == QStringLiteral("PLC")
-                       || deviceType.startsWith(QStringLiteral("FINS")));
+                       || deviceType.startsWith(QStringLiteral("FINS"), Qt::CaseInsensitive));
     if (m_registerSpace)
         m_registerSpace->setVisible(show);
 }
@@ -481,6 +481,7 @@ void CommunicationManagerDialog::persistRegistersFromSpace()
     auto *cm = CommunicationManager::instance();
     QJsonObject cfg = cm->deviceInfo(name).config;
     QJsonArray regs;
+    const QJsonArray oldRegs = cfg.value(QStringLiteral("registers")).toArray();
     for (int r = 0; r < m_registerTable->rowCount(); ++r) {
         auto *addr = m_registerTable->item(r, 0);
         if (!addr || addr->text().trimmed().isEmpty()) continue;
@@ -491,7 +492,14 @@ void CommunicationManagerDialog::persistRegistersFromSpace()
             auto *it = m_registerTable->item(r, col);
             return it ? it->text() : QString();
         };
+        // 内联表只展示地址/类型/访问/描述/启用五列，FINS 的 area、Modbus 的 byteOrder
+        // 等专属字段没有对应列——从原表按地址取回整条，再覆写内联可编辑的列，
+        // 否则编辑一次寄存器就把这些字段静默抹掉（专用配置页写的值白填）。
         QJsonObject o;
+        for (const QJsonValue &ov : oldRegs) {
+            const QJsonObject oo = ov.toObject();
+            if (oo.value(QStringLiteral("address")).toInt() == a) { o = oo; break; }
+        }
         o[QStringLiteral("address")] = a;
         o[QStringLiteral("dataType")] = cellText(1);
         o[QStringLiteral("accessMode")] = cellText(3);
@@ -1636,7 +1644,8 @@ void CommunicationManagerDialog::onConfigDevice()
             // N13：同 Modbus——断开移入 Accepted 分支（取消不掉线），应用后按原状态恢复连接。
             rebuildDeviceWithConfig(name, info.type, newConfig, info.config, wasConnected);
         }
-    } else if (info.type == QStringLiteral("FINS TCP") || info.type == QStringLiteral("FINS UDP")) {
+    } else if (info.type.startsWith(QStringLiteral("FINS TCP"), Qt::CaseInsensitive)
+               || info.type.startsWith(QStringLiteral("FINS UDP"), Qt::CaseInsensitive)) {
         // B5-2：与 Modbus/PLC 同款 remove+add（寄存器表长度/节点号都可能变，不能就地改参数）
         FinsConfigDialog dlg(info.type, info.config, this);
         if (dlg.exec() == QDialog::Accepted) {

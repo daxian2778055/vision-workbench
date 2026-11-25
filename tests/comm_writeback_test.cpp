@@ -226,6 +226,7 @@ private slots:
     void commAddDeviceOpensSingleVmDialog();
     // 2026-11-13：截图 4 地址空间（按协议显隐 + 10 列矩阵 + 工具条联动）
     void commAddressSpaceAppearsForRegisterProtocols();
+    void inlineRegisterEditPreservesProtocolFields();
     // 2026-11-17 盲区补审：UDP 发送失败必须计入 sendWriteFailureCount
     void udpSendFailureIsCounted();
     void sendFailureGoesToFlowContext();   // P0：真实队列路径失败记入发起方流程桶
@@ -4108,6 +4109,20 @@ void CommWritebackTest::vmCreateDialogBuildsConfigPerType()
              "串口必须生成 portName");
     QVERIFY2(c.value(QStringLiteral("baudRate")).toInt() > 0, "串口必须生成 baudRate");
     QVERIFY2(!c.contains(QStringLiteral("serverIp")), "串口不该生成 TCP 的 serverIp");
+
+    combo->setCurrentIndex(4);   // UDP
+    QCOMPARE(dlg.deviceType(), QStringLiteral("UDP"));
+    auto *bindEdit = dlg.findChild<QLineEdit *>(QStringLiteral("vmDevBindAddress"));
+    QVERIFY2(bindEdit, "缺绑定地址输入框（U-202 口径下 UDP 无 bindAddress 必拒启动）");
+    auto *bindRow = dlg.findChild<QWidget *>(QStringLiteral("vmRowBind"));
+    QVERIFY2(bindRow && !bindRow->isHidden(), "UDP 类型必须显示绑定地址行");
+    bindEdit->setText(QStringLiteral("127.0.0.1"));
+    c = dlg.config();
+    QCOMPARE(c.value(QStringLiteral("bindAddress")).toString(), QStringLiteral("127.0.0.1"));
+
+    combo->setCurrentIndex(0);   // TCP 客户端：绑定行应隐藏
+    bindRow = dlg.findChild<QWidget *>(QStringLiteral("vmRowBind"));
+    QVERIFY2(bindRow && bindRow->isHidden(), "TCP 客户端不该显示绑定地址行");
 }
 
 // 最关键的操作性回归：点「+」只弹一个 VmDeviceCreateDialog，
@@ -4139,6 +4154,61 @@ void CommWritebackTest::commAddDeviceOpensSingleVmDialog()
 
 // 2026-11-13：VM4.4 截图 4「地址空间」——只在 Modbus/PLC/FINS 下出现，
 // 10 列矩阵（列 0-9、行 0/10/20…）标注已配置地址，工具条加地址后矩阵要跟着刷新。
+// P2 复核：内联寄存器表只展示五列，编辑描述的写回不得抹掉 FINS area / Modbus byteOrder
+void CommWritebackTest::inlineRegisterEditPreservesProtocolFields()
+{
+    auto *cm = CommunicationManager::instance();
+    QJsonObject r;
+    r[QStringLiteral("address")] = 10;
+    r[QStringLiteral("dataType")] = QStringLiteral("Int16");
+    r[QStringLiteral("accessMode")] = QStringLiteral("Read");
+    r[QStringLiteral("enabled")] = true;
+    r[QStringLiteral("description")] = QStringLiteral("old");
+    r[QStringLiteral("byteOrder")] = QStringLiteral("BADC");
+    r[QStringLiteral("area")] = QStringLiteral("DM");
+    QJsonArray regs; regs.append(r);
+    QJsonObject cfg;
+    cfg[QStringLiteral("host")] = QStringLiteral("127.0.0.1");
+    cfg[QStringLiteral("port")] = 502;
+    cfg[QStringLiteral("registers")] = regs;
+    QVERIFY2(cm->addDevice(QStringLiteral("INL_REG_MB"), QStringLiteral("Modbus"), cfg),
+             "建立 Modbus 测试设备失败");
+    // 大小写混合的 FINS 类型（创建路径大小写不敏感，列表/内联也须同口径）
+    QJsonObject finsCfg = cfg;
+    QVERIFY2(cm->addDevice(QStringLiteral("INL_REG_FINS"), QStringLiteral("Fins TCP"), finsCfg),
+             "建立 Fins TCP 测试设备失败");
+
+    CommunicationManagerDialog dlg;
+    auto *table = dlg.findChild<QTableWidget *>(QStringLiteral("deviceTable"));
+    auto *cfgTable = dlg.findChild<QTableWidget *>(QStringLiteral("commRegisterTable"));
+    auto *space = dlg.findChild<QWidget *>(QStringLiteral("commRegisterSpace"));
+    QVERIFY(table && cfgTable && space);
+    auto selectDevice = [table](const QString &name) {
+        for (int row = 0; row < table->rowCount(); ++row)
+            if (table->item(row, 0) && table->item(row, 0)->text() == name) {
+                table->setCurrentCell(row, 0);
+                return true;
+            }
+        return false;
+    };
+
+    QVERIFY2(selectDevice(QStringLiteral("INL_REG_MB")), "找不到 Modbus 测试设备");
+    QCOMPARE(cfgTable->rowCount(), 1);
+    cfgTable->item(0, 5)->setText(QStringLiteral("new"));   // 触发 cellChanged → 写回
+    const QJsonObject after = cm->deviceInfo(QStringLiteral("INL_REG_MB")).config
+                                  .value(QStringLiteral("registers")).toArray().at(0).toObject();
+    QCOMPARE(after.value(QStringLiteral("description")).toString(), QStringLiteral("new"));
+    QCOMPARE(after.value(QStringLiteral("byteOrder")).toString(), QStringLiteral("BADC"));
+    QCOMPARE(after.value(QStringLiteral("area")).toString(), QStringLiteral("DM"));
+
+    QVERIFY2(selectDevice(QStringLiteral("INL_REG_FINS")), "找不到 Fins TCP 测试设备");
+    QVERIFY2(!space->isHidden(), "混合大小写的 Fins TCP 也应展开地址空间");
+    QCOMPARE(cfgTable->rowCount(), 1);
+
+    QVERIFY(cm->removeDevice(QStringLiteral("INL_REG_MB")));
+    QVERIFY(cm->removeDevice(QStringLiteral("INL_REG_FINS")));
+}
+
 void CommWritebackTest::commAddressSpaceAppearsForRegisterProtocols()
 {
     auto *cm = CommunicationManager::instance();

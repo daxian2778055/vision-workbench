@@ -192,6 +192,15 @@ void VmDeviceCreateDialog::buildUi()
     g1->addWidget(makeFieldLabel(QStringLiteral("\u76EE\u6807IP"), m_paramGroup), 0, 0);
     g1->addWidget(ipHost, 0, 1);
 
+    // 行 1b：本地绑定/监听地址（仅 UDP 与 TCP Server 有意义；空＝未配置＝拒启动）
+    auto *gb = makeRow(QStringLiteral("vmRowBind"));
+    m_bindAddressEdit = new QLineEdit(m_paramGroup);
+    m_bindAddressEdit->setObjectName(QStringLiteral("vmDevBindAddress"));
+    m_bindAddressEdit->setPlaceholderText(QStringLiteral(
+        "本机 127.0.0.1 / 全网卡 0.0.0.0；留空＝不监听（仅发送）"));
+    gb->addWidget(makeFieldLabel(QStringLiteral("\u7ED1\u5B9A\u5730\u5740"), m_paramGroup), 0, 0);
+    gb->addWidget(m_bindAddressEdit, 0, 1);
+
     // 行 2：目标端口 / 轮询间隔（各自显隐）
     auto *g2 = makeRow(QStringLiteral("vmRowPort"));
     m_port = new QSpinBox(m_paramGroup);
@@ -390,6 +399,14 @@ void VmDeviceCreateDialog::applyTypeVisibility()
     if (m_dataUpload)
         m_dataUpload->setVisible(!polled || modbus);
 
+    // U-202：本地绑定地址仅 UDP 与 Modbus Server 有意义；创建页 TCP 固定 Client、PLC/串口无监听面
+    const QString commMode = m_commMode ? m_commMode->currentData().toString() : QString();
+    const bool needBind = (t == QStringLiteral("UDP"))
+                          || (modbus && commMode == QStringLiteral("TcpServer"));
+    for (QWidget *row : m_paramRows)
+        if (row && row->objectName() == QStringLiteral("vmRowBind"))
+            row->setVisible(needBind);
+
     if (m_hint) {
         m_hint->setText(polled
             ? QStringLiteral("\u5BC4\u5B58\u5668\u7B49\u9AD8\u7EA7\u53C2\u6570\u8BF7\u5728\u521B\u5EFA\u540E\u70B9\u3010\u914D\u7F6E\u3011\u5B8C\u5584")
@@ -426,6 +443,8 @@ QJsonObject VmDeviceCreateDialog::config() const
         c[QStringLiteral("localPort")] = port;
         c[QStringLiteral("remoteIp")] = ip;
         c[QStringLiteral("remotePort")] = port;
+        c[QStringLiteral("bindAddress")] =
+            m_bindAddressEdit ? m_bindAddressEdit->text().trimmed() : QString();
         c[QStringLiteral("dataUpload")] = dataUpload;
         c[QStringLiteral("autoReconnect")] = autoReconnect;
     } else if (t == QStringLiteral("\u4E32\u53E3")) {
@@ -445,6 +464,9 @@ QJsonObject VmDeviceCreateDialog::config() const
         c[QStringLiteral("role")] = isServer ? QStringLiteral("服务器") : QStringLiteral("Client");
         c[QStringLiteral("connectionType")] =
             (commMode == QStringLiteral("Rtu")) ? QStringLiteral("RTU") : QStringLiteral("TCP");
+        if (isServer)
+            c[QStringLiteral("bindAddress")] =
+                m_bindAddressEdit ? m_bindAddressEdit->text().trimmed() : QString();
         c[QStringLiteral("host")] = ip;
         c[QStringLiteral("port")] = port;
         c[QStringLiteral("pollInterval")] = m_pollInterval->value();

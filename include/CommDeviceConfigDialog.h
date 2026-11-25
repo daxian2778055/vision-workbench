@@ -39,6 +39,8 @@ private:
     QComboBox *m_tcpModeCombo = nullptr;
     QLineEdit *m_tcpIpEdit = nullptr;
     QSpinBox *m_tcpPortSpin = nullptr;
+    /// U-202 收紧：空＝未配置＝拒启动；显式 IP 字面量原样绑定。两处配置页必须能填。
+    QLineEdit *m_tcpBindEdit = nullptr;
 
     QComboBox *m_serialPortCombo = nullptr;
     QComboBox *m_serialBaudCombo = nullptr;
@@ -49,6 +51,7 @@ private:
     QSpinBox *m_udpLocalPortSpin = nullptr;
     QLineEdit *m_udpRemoteIpEdit = nullptr;
     QSpinBox *m_udpRemotePortSpin = nullptr;
+    QLineEdit *m_udpBindEdit = nullptr;
 
     // 组帧（三类通用）
     QSpinBox *m_frameTimeoutSpin = nullptr;

@@ -55,6 +55,8 @@ private:
     QComboBox *m_typeCombo = nullptr;
     QLineEdit *m_nameEdit = nullptr;
     QLineEdit *m_ipEdits[4] = { nullptr, nullptr, nullptr, nullptr };
+    /// U-202：本地监听/绑定地址（空＝未配置＝拒启动）；仅 UDP 与 TCP Server 显示
+    QLineEdit *m_bindAddressEdit = nullptr;
     QSpinBox *m_port = nullptr;
     QSpinBox *m_pollInterval = nullptr;
     QComboBox *m_commMode = nullptr;

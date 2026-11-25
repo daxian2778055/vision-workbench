@@ -67,6 +67,11 @@ void CommDeviceConfigDialog::buildTcpForm(const QJsonObject &initial)
     form->addRow(QStringLiteral("模式"), m_tcpModeCombo);
     form->addRow(QStringLiteral("服务器 IP"), m_tcpIpEdit);
     form->addRow(QStringLiteral("端口"), m_tcpPortSpin);
+    m_tcpBindEdit = new QLineEdit(group);
+    m_tcpBindEdit->setText(initial.value(QStringLiteral("bindAddress")).toString());
+    m_tcpBindEdit->setPlaceholderText(QStringLiteral(
+        "Server 必填：监听 IP 字面量（仅本机写 127.0.0.1，全网卡写 0.0.0.0）"));
+    form->addRow(QStringLiteral("监听地址"), m_tcpBindEdit);
 
     auto *hint = new QLabel(QStringLiteral(
         "Client：主动连接外部服务器（支持断线自动重连）。\n"
@@ -242,6 +247,11 @@ void CommDeviceConfigDialog::buildUdpForm(const QJsonObject &initial)
     form->addRow(QStringLiteral("本地接收端口"), m_udpLocalPortSpin);
     form->addRow(QStringLiteral("目标 IP"), m_udpRemoteIpEdit);
     form->addRow(QStringLiteral("目标端口"), m_udpRemotePortSpin);
+    m_udpBindEdit = new QLineEdit(group);
+    m_udpBindEdit->setText(initial.value(QStringLiteral("bindAddress")).toString());
+    m_udpBindEdit->setPlaceholderText(QStringLiteral(
+        "本地端口大于 0（监听面）必填：绑定 IP 字面量；端口 0 仅发送可留空"));
+    form->addRow(QStringLiteral("绑定地址"), m_udpBindEdit);
 
     auto *hint = new QLabel(QStringLiteral(
         "本地端口 0 = 由系统随机分配（仅发送场景可用）。\n"
@@ -267,10 +277,19 @@ void CommDeviceConfigDialog::onAccept()
         m_config[QStringLiteral("mode")] = mode;
         m_config[QStringLiteral("serverIp")] = ip;
         m_config[QStringLiteral("port")] = m_tcpPortSpin->value();
+        const QString bind = m_tcpBindEdit ? m_tcpBindEdit->text().trimmed() : QString();
+        if (mode == QStringLiteral("Server") && bind.isEmpty()) {
+            QMessageBox::warning(this, QStringLiteral("参数不完整"),
+                                 QStringLiteral("服务端必须填写监听地址（如 127.0.0.1 或 0.0.0.0）"));
+            return;
+        }
+        m_config[QStringLiteral("bindAddress")] = bind;
     } else if (m_type == QStringLiteral("UDP")) {
         m_config[QStringLiteral("localPort")] = m_udpLocalPortSpin->value();
         m_config[QStringLiteral("remoteIp")] = m_udpRemoteIpEdit->text().trimmed();
         m_config[QStringLiteral("remotePort")] = m_udpRemotePortSpin->value();
+        m_config[QStringLiteral("bindAddress")] =
+            m_udpBindEdit ? m_udpBindEdit->text().trimmed() : QString();
     } else {
         const QString port = m_serialPortCombo->currentText().trimmed();
         if (port.isEmpty()) {

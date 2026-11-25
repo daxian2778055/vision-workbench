@@ -1461,8 +1461,25 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     const QString vcdSrc = QString::fromUtf8(vcd.readAll());
     vcd.close();
     QVERIFY2(vcdSrc.contains(QStringLiteral("QStringLiteral(\"RTU\") : QStringLiteral(\"TCP\")"))
-             && vcdSrc.count(QStringLiteral("c[QStringLiteral(\"dataUpload\")]")) >= 3,
-             "创建设备必须产出节点消费的 connectionType（TCP/RTU）且各分支写 dataUpload");
+             && vcdSrc.count(QStringLiteral("c[QStringLiteral(\"dataUpload\")]")) >= 4
+             && vcdSrc.count(QStringLiteral("c[QStringLiteral(\"bindAddress\")]")) >= 2
+             && vcdSrc.contains(QStringLiteral("vmRowBind")),
+             "创建设备必须产出节点消费的 connectionType（TCP/RTU）、各分支写 dataUpload、"
+             "UDP/Modbus Server 写 bindAddress");
+    // ㉔ 编辑设备配置页也必须有绑定地址（两处口径一致）
+    QFile cdd(QStringLiteral(SRC_DIR "/src/CommDeviceConfigDialog.cpp"));
+    QVERIFY2(cdd.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 CommDeviceConfigDialog.cpp");
+    const QString cddSrc = QString::fromUtf8(cdd.readAll());
+    cdd.close();
+    QVERIFY2(cddSrc.count(QStringLiteral("m_config[QStringLiteral(\"bindAddress\")]")) >= 2
+             && cddSrc.contains(QStringLiteral("服务端必须填写监听地址")),
+             "编辑设备配置页 TCP/UDP 必须写 bindAddress，且 Server 空地址必须拒收");
+    // ㉕ 内联寄存器写回保留协议专属字段 + FINS 类型大小写同口径
+    QVERIFY2(cdSrc.contains(QStringLiteral("const QJsonArray oldRegs = cfg.value"))
+             && cdSrc.contains(QStringLiteral("o = oo")),
+             "内联寄存器写回必须从原表按地址取回整条，否则 FINS area/Modbus byteOrder 被抹掉");
+    QVERIFY2(cdSrc.count(QStringLiteral("startsWith(QStringLiteral(\"FINS\"), Qt::CaseInsensitive)")) >= 3,
+             "FINS 类型判定在地址空间、配置分发、内联键三处必须大小写同口径");
 }
 
 void UiGuardsTest::f2ValidationGuards()
