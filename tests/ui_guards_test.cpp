@@ -1113,6 +1113,16 @@ void UiGuardsTest::f2ValidationGuards()
     QVERIFY2(tmpl.contains(QStringLiteral("下限大于上限，已自动交换"))
              && tmpl.contains(QStringLiteral("步长非法")),
              "搜索参数被静默纠正必须有告警");
+    // P7 复核：X/Y 尺度与横切角三路漏传 warnings，且 note 写在前导致补传也进不去
+    const int cw = tmpl.indexOf(QStringLiteral("QStringList rangesWarnings;"));
+    const int cwEnd = tmpl.indexOf(QStringLiteral("struct PosePair"), cw);
+    const QString calls = tmpl.mid(cw, cwEnd - cw);
+    QVERIFY2(calls.count(QStringLiteral("collectSearchValues(")) >= 5
+             && calls.count(QStringLiteral("rangesWarnings)")) >= 5,
+             "角度/整体尺度/X尺度/Y尺度/横切角五路都必须传告警表，不能丢进 ignored");
+    QVERIFY2(calls.contains(QStringLiteral("if (!xyMode)"))
+             && calls.contains(QStringLiteral("m_params[QStringLiteral(\"searchNote\")] = note")),
+             "XY 模式不查无关的整体尺度，且所有告警收齐后再落 searchNote");
 
     // ② 特征库同名拒绝
     QFile fs(QStringLiteral(SRC_DIR "/src/FeatureSearchNode.cpp"));

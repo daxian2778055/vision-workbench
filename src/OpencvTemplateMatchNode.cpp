@@ -1815,24 +1815,21 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         double sMax = m_params.value(QStringLiteral("scaleMax"), 1.0).toDouble();
         double sStep = m_params.value(QStringLiteral("scaleStep"), 0.05).toDouble();
         // VM 运行参数只有显式尺度范围（默认 1.00~1.00）；尺度模式属于模板配置，只管速度尺度。
-        collectSearchValues(sMin, sMax, sStep, 16, scales, rangesWarnings);
-        if (!rangesWarnings.isEmpty()) {
-            const QString note = QStringLiteral("搜索参数已自动纠正：%1")
-                                     .arg(rangesWarnings.join(QStringLiteral("；")));
-            m_params[QStringLiteral("searchNote")] = note;
-            VFP_DEBUG << note;
-        }
+        // P7 复核：XY 模式下整体尺度不参与搜索，不能因它的越界值产生无关告警。
+        const bool xyMode = (m_params.value(QStringLiteral("scaleRangeType"), 0).toInt() == 1);
+        if (!xyMode)
+            collectSearchValues(sMin, sMax, sStep, 16, scales, rangesWarnings);
 
         // 尺度范围类型（VM）：0=整体（scaleMin/Max），1=XY（X/Y 独立缩放）
         QVector<QPair<double, double>> scalePairs;
-        if (m_params.value(QStringLiteral("scaleRangeType"), 0).toInt() == 1) {
+        if (xyMode) {
             QVector<double> sx, sy;
             collectSearchValues(m_params.value(QStringLiteral("scaleMinX"), 1.0).toDouble(),
                                 m_params.value(QStringLiteral("scaleMaxX"), 1.0).toDouble(),
-                                sStep, 16, sx);
+                                sStep, 16, sx, rangesWarnings);
             collectSearchValues(m_params.value(QStringLiteral("scaleMinY"), 1.0).toDouble(),
                                 m_params.value(QStringLiteral("scaleMaxY"), 1.0).toDouble(),
-                                sStep, 16, sy);
+                                sStep, 16, sy, rangesWarnings);
             for (double x : sx)
                 for (double y : sy)
                     scalePairs.append({x, y});
@@ -1845,15 +1842,23 @@ void OpencvTemplateMatchNode::runSingle(bool /*autoSwitch*/)
         // 默认 0~0 表示只搜无横切目标，与旧行为逐字节一致。
         QVector<double> crossAngles;
         crossAngles.append(0.0);
-        if (m_params.value(QStringLiteral("scaleRangeType"), 0).toInt() == 1) {
+        if (xyMode) {
             QVector<double> cs;
             const double cStep =
                 qMax(0.5, m_params.value(QStringLiteral("angleStep"), 2.0).toDouble());
             collectSearchValues(m_params.value(QStringLiteral("crossAngleMin"), 0.0).toDouble(),
                                 m_params.value(QStringLiteral("crossAngleMax"), 0.0).toDouble(),
-                                cStep, 16, cs);
+                                cStep, 16, cs, rangesWarnings);
             if (!cs.isEmpty())
                 crossAngles = cs;
+        }
+        // P7 复核：所有 collectSearchValues 调用完成后统一落 searchNote——此前写在前，
+        // X/Y 尺度与横切角三路补传的告警根本进不了 note。
+        if (!rangesWarnings.isEmpty()) {
+            const QString note = QStringLiteral("搜索参数已自动纠正：%1")
+                                     .arg(rangesWarnings.join(QStringLiteral("；")));
+            m_params[QStringLiteral("searchNote")] = note;
+            VFP_DEBUG << note;
         }
 
         struct PosePair {
