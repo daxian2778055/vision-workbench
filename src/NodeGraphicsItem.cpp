@@ -198,13 +198,13 @@ void NodeGraphicsItem::mousePressEvent(QGraphicsSceneMouseEvent *event)
 {
     m_pressPos = pos();
     m_pushedMoveUndo = false;
-    // 两阶段撤销：按下时先把"移动前"快照压栈；松开若没真移动则丢弃（P2：
-    // 旧实现在松开后 recordUndo，压的是"移动后"快照 ⇒ 第一次 Ctrl+Z 毫无效果）。
+    // P2 复核：两阶段撤销改为"松开且真移动才压栈"。原实现按下即入撤销栈
+    // （无条件清 redo），单击节点选中（未移动）只 dropLastUndoSnapshot 不恢复 redo
+    // ⇒ 撤销后只是点一下节点就永久丢失重做。按下时只存快照，不入栈。
+    m_pressSnapshot = QJsonObject();
     if (FlowScene *scene = dynamic_cast<FlowScene *>(this->scene())) {
-        if (!scene->isEditLocked()) {
-            scene->pushUndoSnapshot(scene->currentSceneSnapshot());
-            m_pushedMoveUndo = true;
-        }
+        if (!scene->isEditLocked())
+            m_pressSnapshot = scene->currentSceneSnapshot();
     }
     QGraphicsItem::mousePressEvent(event);
 }
@@ -225,18 +225,18 @@ void NodeGraphicsItem::mouseMoveEvent(QGraphicsSceneMouseEvent *event)
 void NodeGraphicsItem::mouseReleaseEvent(QGraphicsSceneMouseEvent *event)
 {
     QGraphicsItem::mouseReleaseEvent(event);
-    // 移动结束：保留按下时压入的"移动前"快照；没真移动则丢弃，避免空撤销步
+    // 移动结束：仅当真移动过才把"移动前"快照压栈（一次 Ctrl+Z 即回到按下前）；
+    // 无移动则什么也不做——不清 redo、不误删别人的撤销点。
     if ((pos() - m_pressPos).manhattanLength() > 1.0) {
         if (FlowScene *scene = dynamic_cast<FlowScene *>(this->scene())) {
+            if (!m_pressSnapshot.isEmpty())
+                scene->pushUndoSnapshot(m_pressSnapshot);
             // 该算子若属于某个分组：框体要跟着收拢/长大，否则拖完算子后组框与成员就对不上了
             if (NodeGroupItem *group = scene->groupOfNode(m_node))
                 group->fitToMembers();
         }
-    } else if (m_pushedMoveUndo) {
-        if (FlowScene *scene = dynamic_cast<FlowScene *>(this->scene()))
-            scene->dropLastUndoSnapshot();
     }
-    m_pushedMoveUndo = false;
+    m_pressSnapshot = QJsonObject();
 }
 
 void NodeGraphicsItem::mouseDoubleClickEvent(QGraphicsSceneMouseEvent *event)

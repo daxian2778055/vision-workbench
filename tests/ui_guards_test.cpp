@@ -625,6 +625,19 @@ void UiGuardsTest::p2CanvasEditGuards()
     QVERIFY2(nodeSrc.count(QStringLiteral("scene->recordUndo()")) >= 4,
              "重命名/粘贴参数/启停/禁用上游四类右键编辑必须进撤销栈");
 
+    // P2 复核：单击节点不得清 redo——按下只存快照、松开且真移动才压栈
+    const int press = nodeSrc.indexOf(QStringLiteral("void NodeGraphicsItem::mousePressEvent"));
+    const int release = nodeSrc.indexOf(QStringLiteral("void NodeGraphicsItem::mouseReleaseEvent"));
+    QVERIFY(press >= 0 && release > press);
+    const QString pressBody = nodeSrc.mid(press, release - press);
+    const QString releaseBody = nodeSrc.mid(release, 700);
+    QVERIFY2(!pressBody.contains(QStringLiteral("pushUndoSnapshot"))
+             && pressBody.contains(QStringLiteral("m_pressSnapshot = scene->currentSceneSnapshot()")),
+             "mousePressEvent 只存快照不入撤销栈（原按下即压栈会清 redo）");
+    QVERIFY2(releaseBody.contains(QStringLiteral("manhattanLength()"))
+             && releaseBody.contains(QStringLiteral("scene->pushUndoSnapshot(m_pressSnapshot)")),
+             "只有松开且真移动才压栈，单击不产生撤销步也不清 redo");
+
     QFile m(QStringLiteral(SRC_DIR "/src/MainWindow.cpp"));
     QVERIFY2(m.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 MainWindow.cpp");
     const QString main = QString::fromUtf8(m.readAll());

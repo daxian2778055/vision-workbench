@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QGraphicsItem>
+#include <QJsonObject>
 #include <QPainter>
 #include <QRectF>
 #include <QGraphicsSceneMouseEvent>
@@ -42,5 +43,6 @@ private:
     QMap<Port *, PortGraphicsItem *> m_portItems;
     QRectF m_boundingRect;
     QPointF m_pressPos;        /// 鼠标按下时的位置（移动撤销判断）
-    bool m_pushedMoveUndo = false;  /// 按下时是否已预压"移动前"撤销快照
+    QJsonObject m_pressSnapshot;  /// 按下时的场景快照；仅松开且真移动时才压入撤销栈
+    bool m_pushedMoveUndo = false;  /// 保留字段兼容（现松开时才压栈，恒为 false 路径不使用）
 };

@@ -55,6 +55,7 @@ private slots:
     void testModuleIdRestoredOnLoad();
     void testNodeMoveUndoConvention();
     void testTwoPhaseMoveUndoRestoresInOneStep();   // P2：移动前快照一次撤销即复原
+    void testClickWithoutMoveKeepsRedo();            // P2：单击不移动不得清掉 redo 栈
 };
 
 namespace {
@@ -530,6 +531,43 @@ void NodeGroupTest::testTwoPhaseMoveUndoRestoresInOneStep()
     scene.pushUndoSnapshot(scene.currentSceneSnapshot());
     scene.dropLastUndoSnapshot();
     QCOMPARE(scene.undoDepth(), depth);
+}
+
+void NodeGroupTest::testClickWithoutMoveKeepsRedo()
+{
+    // P2 复核：撤销一步后只是"单击"节点选中（未拖动），不得清掉 redo 栈。
+    // 原实现 mousePressEvent 即 pushUndoSnapshot（内部 clear redo），单击就永久丢失重做。
+    FlowScene scene;
+    NodeBase *a = addNode(&scene, QStringLiteral("Delay"), QPointF(100, 100));
+    NodeBase *b = addNode(&scene, QStringLiteral("Delay"), QPointF(400, 100));
+    QVERIFY(a && b);
+    const QJsonObject snapshot = scene.currentSceneSnapshot();
+    scene.pushUndoSnapshot(snapshot);   // 建立一个可撤销的编辑步骤
+    NodeGraphicsItem *item = scene.getGraphicsItemForNode(a);
+    QVERIFY(item);
+    item->setPos(QPointF(120, 140));
+    item->syncNodeGeometry();
+    QVERIFY(scene.undo());
+    QVERIFY2(scene.canRedo() && scene.redoDepth() >= 1, "前置：撤销后应有可重做项");
+
+    // 真实鼠标路径：用 QGraphicsScene::sendEvent 走事件分发（mousePressEvent 是 protected）
+    const QPointF before = item->pos();
+    QGraphicsSceneMouseEvent press(QEvent::GraphicsSceneMousePress);
+    press.setButton(Qt::LeftButton);
+    press.setButtons(Qt::LeftButton);
+    press.setPos(before);
+    press.setScenePos(before);
+    scene.sendEvent(item, &press);
+    QGraphicsSceneMouseEvent release(QEvent::GraphicsSceneMouseRelease);
+    release.setButton(Qt::LeftButton);
+    release.setButtons(Qt::NoButton);
+    release.setPos(before);
+    release.setScenePos(before);
+    scene.sendEvent(item, &release);
+
+    QVERIFY2(scene.canRedo() && scene.redoDepth() >= 1,
+             "单击未移动不得清掉 redo 栈（原按下即压栈会清）");
+    QCOMPARE(item->pos(), before);
 }
 
 void NodeGroupTest::testCollapseHidesMembersAndExpandRestores()
