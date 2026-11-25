@@ -346,6 +346,13 @@ bool ModbusNode::setLocalRegisterValue(int address, double value)
     QVector<quint16> words;
     if (!RegisterByteOrder::disassembleValueToWords(value, dataType, byteOrder, words))
         return false;
+    if (words.isEmpty() || address < 0 || address + words.size() - 1 > 65535) {
+        // D 复核：32 位宽类型写在 65535 时第二字 static_cast<quint16>(65536)=0，
+        // 会把高字写进保持寄存器 0。与 syncServerRegisters 同一边界口径，越界直接拒写。
+        noteSendWriteFailure(
+            QStringLiteral("Modbus寄存器地址越界(地址%1，宽度%2)").arg(address).arg(words.size()));
+        return false;
+    }
 
     // 更新本地寄存器表（存解析值，供显示）
     for (auto &r : m_registers) {
@@ -798,7 +805,15 @@ bool ModbusNode::writeRegister(int address, double value)
     QVector<quint16> words;
     if (!RegisterByteOrder::disassembleValueToWords(value, dataType, byteOrder, words) || words.isEmpty())
         return false;
-    if (!m_connected || !m_modbus) return false;
+    if (address < 0 || address + words.size() - 1 > 65535) {
+        noteSendWriteFailure(
+            QStringLiteral("Modbus写寄存器地址越界(地址%1，宽度%2)").arg(address).arg(words.size()));
+        return false;
+    }
+    if (!m_connected || !m_modbus) {
+        noteSendWriteFailure(QStringLiteral("Modbus写寄存器失败:设备未连接"));
+        return false;
+    }
 
     QModbusDataUnit writeUnit(QModbusDataUnit::HoldingRegisters, address, words.size());
     for (int i = 0; i < words.size(); ++i)
@@ -818,7 +833,7 @@ bool ModbusNode::writeRegister(int address, double value)
                     verifyWrittenValue(address, value, dataType, byteOrder);
             } else {
                 VFP_DEBUG << "Modbus write error at address" << address << ":" << r2->errorString();
-                emit communicationError(
+                noteSendWriteFailure(
                     QStringLiteral("Modbus写寄存器失败(地址%1):%2")
                         .arg(address).arg(r2->errorString()));
             }
@@ -832,6 +847,7 @@ bool ModbusNode::writeRegister(int address, double value)
         }
         return true;
     }
+    noteSendWriteFailure(QStringLiteral("Modbus写寄存器失败:请求未能发出(地址%1)").arg(address));
     return false;
 }
 

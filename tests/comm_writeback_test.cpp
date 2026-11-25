@@ -227,6 +227,8 @@ private slots:
     // 2026-11-13：截图 4 地址空间（按协议显隐 + 10 列矩阵 + 工具条联动）
     void commAddressSpaceAppearsForRegisterProtocols();
     void inlineRegisterEditPreservesProtocolFields();
+    void tcpServerClientSwapClosesOldLink();
+    void writeFailureAccountingAndAddressBounds();
     // 2026-11-17 盲区补审：UDP 发送失败必须计入 sendWriteFailureCount
     void udpSendFailureIsCounted();
     void sendFailureGoesToFlowContext();   // P0：真实队列路径失败记入发起方流程桶
@@ -4154,6 +4156,107 @@ void CommWritebackTest::commAddDeviceOpensSingleVmDialog()
 
 // 2026-11-13：VM4.4 截图 4「地址空间」——只在 Modbus/PLC/FINS 下出现，
 // 10 列矩阵（列 0-9、行 0/10/20…）标注已配置地址，工具条加地址后矩阵要跟着刷新。
+// D 复核：TCP Server 替换客户端必须发 connectionClosed，让管理器清掉旧客户端的半帧
+void CommWritebackTest::tcpServerClientSwapClosesOldLink()
+{
+    auto *cm = CommunicationManager::instance();
+    const quint16 port = pickFreePort();
+    QVERIFY2(port > 0, "取不到可用临时端口");
+    QJsonObject cfg;
+    cfg[QStringLiteral("mode")] = QStringLiteral("Server");
+    cfg[QStringLiteral("bindAddress")] = QStringLiteral("127.0.0.1");
+    cfg[QStringLiteral("port")] = port;
+    cfg[QStringLiteral("frameTerminator")] = QStringLiteral("\r\n");
+    QVERIFY2(cm->addDevice(QStringLiteral("TCP_SWAP_SRV"), QStringLiteral("TCP"), cfg),
+             "建立 TCP Server 测试设备失败");
+    DeviceCleanup cleanup{ { QStringLiteral("TCP_SWAP_SRV") } };
+
+    QSignalSpy disconnected(cm, &CommunicationManager::deviceDisconnected);
+    QSignalSpy received(cm, &CommunicationManager::dataReceived);
+    QVERIFY2(cm->openDevice(QStringLiteral("TCP_SWAP_SRV")), "TCP Server 启动失败");
+
+    QTcpSocket first;
+    first.connectToHost(QHostAddress::LocalHost, port);
+    QVERIFY2(first.waitForConnected(2000), "第一客户端连接失败");
+    first.write("PARTIAL");
+    QVERIFY(first.waitForBytesWritten(1000));
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+
+    QTcpSocket second;
+    second.connectToHost(QHostAddress::LocalHost, port);
+    QVERIFY2(second.waitForConnected(2000), "第二客户端连接失败");
+    QTRY_VERIFY_WITH_TIMEOUT(disconnected.count() >= 1, 2000);
+    bool sawSwap = false;
+    for (const QList<QVariant> &args : disconnected)
+        if (args.value(0).toString() == QStringLiteral("TCP_SWAP_SRV")) sawSwap = true;
+    QVERIFY2(sawSwap, "替换客户端必须发 connectionClosed（否则旧半帧污染新客户端）");
+
+    second.write("OK\r\n");
+    QVERIFY(second.waitForBytesWritten(1000));
+    QTRY_VERIFY_WITH_TIMEOUT(received.count() >= 1, 2000);
+    bool gotClean = false;
+    for (const QList<QVariant> &args : received) {
+        if (args.value(0).toString() != QStringLiteral("TCP_SWAP_SRV")) continue;
+        const QByteArray payload = args.value(1).toByteArray();
+        QVERIFY2(!payload.contains("PARTIAL"), "旧客户端半帧污染了新客户端首帧");
+        if (payload == "OK\r\n") gotClean = true;
+    }
+    QVERIFY2(gotClean, "新客户端完整帧未被正确转发");
+}
+
+// D 复核：写失败（未连接/地址越界）必须记账且不得把高字回绕写到寄存器 0
+void CommWritebackTest::writeFailureAccountingAndAddressBounds()
+{
+    auto ctx = std::make_shared<FlowRunContext>();
+    const void *key = ctx.get();
+    CommunicationNodeBase::resetSendWriteFailureCount(key);
+
+    {   // 未连接的 Modbus 客户端写：以前静默 false，轮末判红拿不到失败
+        ModbusNode node;
+        node.init();
+        node.setSendFlowContext(ctx);
+        QVERIFY2(!node.writeRegister(0, 1.0), "未连接设备不该写成功");
+        QCOMPARE(CommunicationNodeBase::sendWriteFailureCount(key), 1);
+    }
+    {   // 未连接的 PLC 客户端写，同口径
+        PlcCommNode node;
+        node.init();
+        node.setSendFlowContext(ctx);
+        QVERIFY2(!node.writeRegister(0, 1.0), "未连接设备不该写成功");
+        QCOMPARE(CommunicationNodeBase::sendWriteFailureCount(key), 2);
+    }
+    {   // 服务器角色、寄存器 65535 为 float：拆成两字会回绕到 0
+        ModbusNode node;
+        node.init();
+        node.setSendFlowContext(ctx);
+        node.setParam(QStringLiteral("role"), QStringLiteral("服务器"));
+        node.setParam(QStringLiteral("bindAddress"), QStringLiteral("127.0.0.1"));
+        node.setParam(QStringLiteral("port"), pickFreePort());
+        QList<ModbusRegisterItem> regs;
+        ModbusRegisterItem edge;
+        edge.address = 65535;
+        edge.dataType = QStringLiteral("float");
+        edge.byteOrder = QStringLiteral("ABCD");
+        edge.accessMode = QStringLiteral("ReadWrite");
+        edge.enabled = true;
+        regs.append(edge);
+        ModbusRegisterItem zero;
+        zero.address = 0;
+        zero.dataType = QStringLiteral("int16");
+        zero.byteOrder = QStringLiteral("ABCD");
+        zero.accessMode = QStringLiteral("ReadWrite");
+        zero.enabled = true;
+        regs.append(zero);
+        node.setRegisters(regs);
+        QVERIFY2(node.openConnection(), "Modbus 服务器启动失败");
+        QSignalSpy changed(&node, &ModbusNode::registerCurrentValueChanged);
+        QVERIFY2(!node.setLocalRegisterValue(65535, 123.5), "越界宽类型写必须被拒");
+        QCOMPARE(CommunicationNodeBase::sendWriteFailureCount(key), 3);
+        QCOMPARE(changed.count(), 0);   // 不能有任何值回写（尤其不能把高字写到地址 0）
+    }
+    CommunicationNodeBase::resetSendWriteFailureCount(key);
+}
+
 // P2 复核：内联寄存器表只展示五列，编辑描述的写回不得抹掉 FINS area / Modbus byteOrder
 void CommWritebackTest::inlineRegisterEditPreservesProtocolFields()
 {

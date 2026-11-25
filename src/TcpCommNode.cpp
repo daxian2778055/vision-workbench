@@ -125,9 +125,17 @@ bool TcpCommNode::openConnection()
         connect(m_server, &QTcpServer::newConnection, this, [this]() {
             // 释放旧连接（同一节点只维护一个活动客户端）
             if (m_socket) {
-                m_socket->disconnectFromHost();
-                m_socket->deleteLater();
+                // D 复核：旧客户端断开必须走完整的 connectionClosed 通知链——
+                // CommunicationManager 据此清掉该设备的半帧缓冲、停组帧定时器。
+                // 先把旧 socket 摘出 m_socket，确保它随后发出的 disconnected/error 被
+                // hookSocket 的 sender 守卫挡掉；显式 emit 成为唯一通知路径。
+                QTcpSocket *old = m_socket;
                 m_socket = nullptr;
+                m_connected = false;
+                setParamDirect(QStringLiteral("connected"), false);
+                emit connectionClosed();
+                old->disconnectFromHost();
+                old->deleteLater();
             }
             QTcpSocket *client = m_server->nextPendingConnection();
             if (!client) return;

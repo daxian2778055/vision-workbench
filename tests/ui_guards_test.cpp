@@ -1480,6 +1480,31 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              "内联寄存器写回必须从原表按地址取回整条，否则 FINS area/Modbus byteOrder 被抹掉");
     QVERIFY2(cdSrc.count(QStringLiteral("startsWith(QStringLiteral(\"FINS\"), Qt::CaseInsensitive)")) >= 3,
              "FINS 类型判定在地址空间、配置分发、内联键三处必须大小写同口径");
+    // ㉖ 轮 D：状态机/边界记账
+    const QString tcpSrc = []() {
+        QFile f(QStringLiteral(SRC_DIR "/src/TcpCommNode.cpp"));
+        f.open(QIODevice::ReadOnly | QIODevice::Text);
+        const QString s = QString::fromUtf8(f.readAll());
+        f.close();
+        return s;
+    }();
+    QVERIFY2(tcpSrc.contains(QStringLiteral("QTcpSocket *old = m_socket"))
+             && tcpSrc.count(QStringLiteral("emit connectionClosed()")) >= 4,
+             "TCP Server 替换客户端必须先摘旧 socket 并发 connectionClosed 清半帧");
+    const auto readSrc = [](const char *rel) {
+        QFile f(QStringLiteral(SRC_DIR "/") + QString::fromLatin1(rel));
+        f.open(QIODevice::ReadOnly | QIODevice::Text);
+        const QString s = QString::fromUtf8(f.readAll());
+        f.close();
+        return s;
+    };
+    const QString mbNodeSrc = readSrc("src/ModbusNode.cpp");
+    const QString plcNodeSrc = readSrc("src/PlcCommNode.cpp");
+    QVERIFY2(mbNodeSrc.count(QStringLiteral("noteSendWriteFailure")) >= 7
+             && mbNodeSrc.contains(QStringLiteral("地址越界")),
+             "Modbus 写失败与 65535 越界必须记账");
+    QVERIFY2(plcNodeSrc.count(QStringLiteral("noteSendWriteFailure")) >= 5,
+             "PLC 写失败必须记账");
 }
 
 void UiGuardsTest::f2ValidationGuards()

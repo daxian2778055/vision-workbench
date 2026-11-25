@@ -180,7 +180,10 @@ bool PlcCommNode::writeRegister(int address, double value)
     QVector<quint16> words;
     if (!RegisterByteOrder::disassembleValueToWords(value, dataType, byteOrder, words) || words.isEmpty())
         return false;
-    if (!m_connected || !m_modbus) return false;
+    if (!m_connected || !m_modbus) {
+        noteSendWriteFailure(QStringLiteral("PLC写寄存器失败:设备未连接"));
+        return false;
+    }
 
     QModbusDataUnit writeUnit(QModbusDataUnit::HoldingRegisters, address, words.size());
     for (int i = 0; i < words.size(); ++i)
@@ -195,7 +198,7 @@ bool PlcCommNode::writeRegister(int address, double value)
         const auto handleWriteReply = [this, address, value, dataType, byteOrder](QModbusReply *r2) {
             if (r2->error() != QModbusDevice::NoError) {
                 VFP_DEBUG << "PLC write error at address" << address << ":" << r2->errorString();
-                emit communicationError(
+                noteSendWriteFailure(
                     QStringLiteral("PLC\u5199\u5BC4\u5B58\u5668\u5931\u8D25(\u5730\u5740%1):%2")
                         .arg(address).arg(r2->errorString()));
             } else if (getParam(QStringLiteral("writeVerify")).toBool()) {
@@ -212,6 +215,7 @@ bool PlcCommNode::writeRegister(int address, double value)
         }
         return true;
     }
+    noteSendWriteFailure(QStringLiteral("PLC写寄存器失败:请求未能发出(地址%1)").arg(address));
     return false;
 }
 
