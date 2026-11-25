@@ -74,6 +74,7 @@
 #include "ModbusConfigDialog.h"
 #include "FinsConfigDialog.h"
 #include "PlcConfigDialog.h"
+#include "FinsCommNode.h"
 #include "registerbyteorder.h"   // S4：回写校验比对判定
 
 namespace {
@@ -233,6 +234,7 @@ private slots:
     void inlineParamsEchoOnDeviceSwitchDespiteFocus();
     void registerSpaceMaximizeKeepsSpaceVisible();
     void dedicatedConfigDialogsPreserveDataUpload();
+    void finsTcpHandshakeTimeoutDropsLink();
     // 2026-11-17 盲区补审：UDP 发送失败必须计入 sendWriteFailureCount
     void udpSendFailureIsCounted();
     void sendFailureGoesToFlowContext();   // P0：真实队列路径失败记入发起方流程桶
@@ -4163,6 +4165,31 @@ void CommWritebackTest::commAddDeviceOpensSingleVmDialog()
 
 // 2026-11-13：VM4.4 截图 4「地址空间」——只在 Modbus/PLC/FINS 下出现，
 // 10 列矩阵（列 0-9、行 0/10/20…）标注已配置地址，工具条加地址后矩阵要跟着刷新。
+// G 复核：FINS/TCP 节点地址握手无超时——对端连上但不回地址响应时流程会永久挂住
+void CommWritebackTest::finsTcpHandshakeTimeoutDropsLink()
+{
+    QTcpServer silent;
+    QVERIFY2(silent.listen(QHostAddress::LocalHost, 0), "静默服务器启动失败");
+
+    FinsCommNode node(FinsCommNode::FinsTcp);
+    node.init();
+    node.setParam(QStringLiteral("targetIp"), QStringLiteral("127.0.0.1"));
+    node.setParam(QStringLiteral("targetPort"), silent.serverPort());
+    node.setParam(QStringLiteral("timeoutMs"), 150);
+    node.setParam(QStringLiteral("autoReconnect"), false);
+    QSignalSpy errors(&node, &CommunicationNodeBase::communicationError);
+    QVERIFY2(node.openConnection(), "FINS/TCP 连接发起失败");
+
+    QTRY_VERIFY_WITH_TIMEOUT(errors.count() >= 1, 3000);
+    bool sawHandshakeTimeout = false;
+    for (const QList<QVariant> &args : errors) {
+        if (args.value(0).toString().contains(QStringLiteral("握手超时")))
+            sawHandshakeTimeout = true;
+    }
+    QVERIFY2(sawHandshakeTimeout, "握手无响应必须在超时后报「握手超时」并断链，不能永久挂着");
+    QVERIFY2(!node.isConnected(), "握手超时后不得保留半连接状态");
+}
+
 // F 复核：三个专用配置对话框不能把无表单项的 dataUpload 等键丢掉
 void CommWritebackTest::dedicatedConfigDialogsPreserveDataUpload()
 {

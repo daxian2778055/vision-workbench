@@ -235,6 +235,11 @@ void FinsCommNode::onTcpConnected()
         return;
     }
     m_tcp->flush();
+    // G 复核：节点地址握手不能无限等——PLC 连上但不回地址响应时，轮询被
+    // !m_handshakeDone 永久挡住，流程就此挂死。启动与请求共用的单发定时器，
+    // 超时分支在 onRequestTimeout 里按"握手未完成"处理。
+    if (m_requestTimer)
+        m_requestTimer->start(qMax(100, getParam(QStringLiteral("timeoutMs")).toInt()));
 }
 
 void FinsCommNode::onTcpReadyRead()
@@ -280,6 +285,8 @@ void FinsCommNode::onTcpReadyRead()
             m_clientNode = client;
             m_serverNode = server;
             m_handshakeDone = true;
+            if (m_requestTimer)   // 握手已成功：停掉握手计时，后续计时交给轮询请求
+                m_requestTimer->stop();
             VFP_DEBUG << "FINS/TCP node address handshake: client" << client << "server" << server;
             if (!m_connected) {
                 m_connected = true;
@@ -345,6 +352,14 @@ void FinsCommNode::onUdpReadyRead()
 
 void FinsCommNode::onRequestTimeout()
 {
+    if (m_transport == FinsTcp && !m_handshakeDone) {
+        // 握手阶段没有 m_requestPending，必须在通用 pending 判据之前处理。
+        // 断链会清掉半连接状态并按配置安排重连，不再无限停在"已连接但不可轮询"。
+        emit communicationError(QStringLiteral("FINS/TCP 节点地址握手超时（%1 ms 内未收到响应）")
+                                    .arg(getParam(QStringLiteral("timeoutMs")).toInt()));
+        dropLink(QString());
+        return;
+    }
     if (!m_requestPending)
         return;
     m_requestPending = false;

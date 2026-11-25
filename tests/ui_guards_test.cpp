@@ -1524,6 +1524,12 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     }
     QVERIFY2(cdSrc.contains(QStringLiteral("node->setParam(QStringLiteral(\"dataUpload\"), m_inlineDataUpload->isChecked())")),
              "内联上传开关必须同步节点参数，否则上传闸仍按旧值放行");
+    // ㉚ 轮 G：FINS/TCP 握手必须有超时，不能永久挂在半连接
+    const QString finsNodeSrc = readSrc("src/FinsCommNode.cpp");
+    QVERIFY2(finsNodeSrc.contains(QStringLiteral("节点地址握手超时"))
+             && finsNodeSrc.contains(QStringLiteral("m_requestTimer->start(qMax(100"))
+             && finsNodeSrc.count(QStringLiteral("m_requestTimer->stop()")) >= 1,
+             "FINS/TCP 握手必须启动定时器，超时报错断链，握手成功后停表");
 }
 
 void UiGuardsTest::f2ValidationGuards()
