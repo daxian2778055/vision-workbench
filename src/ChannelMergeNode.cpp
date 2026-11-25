@@ -53,6 +53,7 @@ bool ChannelMergeNode::process()
 
         if (channels.size() < 2) {
             VFP_DEBUG << "ChannelMergeNode: need at least 2 channels, got" << channels.size();
+            m_params["lastError"] = QStringLiteral("通道合并失败：至少需要 2 个通道，实际 %1").arg(channels.size());
             return false;
         }
 
@@ -69,6 +70,7 @@ bool ChannelMergeNode::process()
             merged = channels[0].Compose4(channels[1], channels[2], channels[3]);
             break;
         default:
+            m_params["lastError"] = QStringLiteral("通道合并失败：通道数 %1 超出支持范围").arg(channels.size());
             return false;
         }
 
@@ -82,13 +84,18 @@ bool ChannelMergeNode::process()
     } catch (HOperatorException &e) {
         VFP_DEBUG << "ChannelMergeNode HALCON error:" << e.ErrorMessage().Text();
         m_params["moduleStatus"] = false;
+        m_params["lastError"] = QStringLiteral("通道合并失败：%1")
+                                    .arg(QString::fromStdString(e.ErrorMessage().Text()));
         return false;
     } catch (std::exception &e) {
         VFP_DEBUG << "ChannelMergeNode error:" << e.what();
         m_params["moduleStatus"] = false;
+        m_params["lastError"] = QStringLiteral("通道合并失败：%1")
+                                    .arg(QString::fromUtf8(e.what()));
         return false;
     } catch (...) {
         m_params["moduleStatus"] = false;
+        m_params["lastError"] = QStringLiteral("通道合并失败：未知异常");
         return false;
     }
 }

@@ -1396,6 +1396,22 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
                 < ppBody.indexOf(QStringLiteral("readRegister"))
              && ppBody.count(QStringLiteral("m_pollMutex")) == 3,
              "PLC 轮询只两处短锁引用（出锁后 I/O 与回滚各一），不持锁跨网络/下游回调");
+    // ⑱ 常量时间比较：长度差不得截断到 8 位
+    QFile ri(QStringLiteral(SRC_DIR "/src/RuntimeInterface.cpp"));
+    QVERIFY2(ri.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 RuntimeInterface.cpp");
+    const QString riSrc = QString::fromUtf8(ri.readAll());
+    ri.close();
+    QVERIFY2(riSrc.contains(QStringLiteral("static_cast<unsigned>(a.size() ^ b.size())")),
+             "constantTimeEquals 的长度差必须用足够宽的 unsigned，不能截断到 8 位");
+    // ⑲ ChannelSplit/Merge 失败路径必须写 lastError（现场红节点要有原因）
+    for (const char *file : { "src/ChannelSplitNode.cpp", "src/ChannelMergeNode.cpp" }) {
+        QFile f(QStringLiteral(SRC_DIR "/") + QString::fromLatin1(file));
+        QVERIFY2(f.open(QIODevice::ReadOnly | QIODevice::Text), "打不开通道节点源码");
+        const QString s = QString::fromUtf8(f.readAll());
+        f.close();
+        QVERIFY2(s.count(QStringLiteral("lastError")) >= 3,
+                 "通道拆/合节点的校验失败与 catch 分支都必须写 lastError");
+    }
 }
 
 void UiGuardsTest::f2ValidationGuards()
@@ -4029,6 +4045,13 @@ void UiGuardsTest::subPasswordIsHashedAndVerified()
     const QString plainNonHex = QStringLiteral("zzz-not-hex");
     const QString hNonHex = hashSubPassword(plainNonHex);
     QVERIFY2(!hNonHex.contains(plainNonHex), "摘要里不能出现明文密码");
+
+    // P3 复核：长度差截断到 8 位时，摘要 hex 后追加 512 个字符 '0'（=256 个零字节）
+    // 仍会通过（32^288=256→0）。用公开的 verifySubPassword 直接验证。
+    QVERIFY2(verifySubPassword(plainNonHex, hNonHex), "正确明文+摘要必须通过");
+    const QString stretched = hNonHex + QString(512, QLatin1Char('0'));
+    QVERIFY2(!verifySubPassword(plainNonHex, stretched),
+             "摘要后追加 256 个零字节必须判不相等（长度差不得截断到 8 位）");
 
     // ② 随机盐：同一密码两次哈希不相同
     const QString h2 = hashSubPassword(QStringLiteral("abc"));

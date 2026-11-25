@@ -3498,6 +3498,8 @@ void NodeCoreTest::testChannelSplitAndMergeRoundtrip()
         ChannelSplitNode splitE;
         splitE.init();
         QVERIFY2(!splitE.execute(), "空输入 split 必须判失败");
+        QVERIFY2(!splitE.getParam(QStringLiteral("lastError")).toString().trimmed().isEmpty(),
+                 "split 失败必须有可读原因（现场红节点要有 lastError）");
     }
 
     // ⑥ 负向：merge 只接一个通道必须判失败（不静默退化）
@@ -3508,6 +3510,8 @@ void NodeCoreTest::testChannelSplitAndMergeRoundtrip()
         only1->setHImage(OpencvUtil::matToHimage(cv::Mat(4, 4, CV_8UC1, cv::Scalar(100))));
         merge.setInputData(0, only1);
         QVERIFY2(!merge.execute(), "ChannelMerge 只接一个通道必须判失败");
+        QVERIFY2(!merge.getParam(QStringLiteral("lastError")).toString().trimmed().isEmpty(),
+                 "merge 失败必须有可读原因（现场红节点要有 lastError）");
     }
 
     // ⑥ HSV 只接受恰好 3 通道（2026-11-12 审核）：旧实现 `ch >= 3` 会把 4 通道

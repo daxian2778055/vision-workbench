@@ -59,6 +59,7 @@ bool ChannelSplitNode::process()
         }
         if (!valid) {
             VFP_DEBUG << "ChannelSplitNode: no valid input image";
+            m_params[QStringLiteral("lastError")] = QStringLiteral("通道拆分失败：无有效输入图像");
             return false;
         }
 
@@ -75,11 +76,15 @@ bool ChannelSplitNode::process()
         if (colorSpace == 1 && ch != 3) {
             VFP_DEBUG << "ChannelSplitNode: HSV requires exactly 3 channels, got" << ch;
             m_params[QStringLiteral("moduleStatus")] = false;
+            m_params[QStringLiteral("lastError")] =
+                QStringLiteral("通道拆分失败：HSV 需要恰好 3 通道，实际 %1").arg(ch);
             return false;
         }
         if (ch > kMaxChannels) {
             VFP_DEBUG << "ChannelSplitNode: too many channels:" << ch;
             m_params[QStringLiteral("moduleStatus")] = false;
+            m_params[QStringLiteral("lastError")] =
+                QStringLiteral("通道拆分失败：通道数 %1 超过上限 %2").arg(ch).arg(kMaxChannels);
             return false;
         }
 
@@ -112,13 +117,18 @@ bool ChannelSplitNode::process()
     } catch (HOperatorException &e) {
         VFP_DEBUG << "ChannelSplitNode HALCON error:" << e.ErrorMessage().Text();
         m_params["moduleStatus"] = false;
+        m_params["lastError"] = QStringLiteral("通道拆分失败：%1")
+                                    .arg(QString::fromStdString(e.ErrorMessage().Text()));
         return false;
     } catch (std::exception &e) {
         VFP_DEBUG << "ChannelSplitNode error:" << e.what();
         m_params["moduleStatus"] = false;
+        m_params["lastError"] = QStringLiteral("通道拆分失败：%1")
+                                    .arg(QString::fromUtf8(e.what()));
         return false;
     } catch (...) {
         m_params["moduleStatus"] = false;
+        m_params["lastError"] = QStringLiteral("通道拆分失败：未知异常");
         return false;
     }
 }

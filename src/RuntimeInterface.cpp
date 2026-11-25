@@ -189,7 +189,9 @@ constexpr int kSubPasswordIterations = 20000;
 /// 长度差本身也被 XOR 进 diff（(a.size() ^ b.size()) 不为 0 时 diff 立刻置位）。
 bool constantTimeEquals(const QByteArray &a, const QByteArray &b)
 {
-    unsigned char diff = static_cast<unsigned char>(a.size() ^ b.size()) & 0xFFu;
+    // P3 复核：原先把 a.size()^b.size() 截到 unsigned char（8 位），长度差为 256 的
+    // 倍数时该项为 0，摘要后追加 256 个零字节仍会通过校验。用足够宽的 unsigned 累积。
+    unsigned diff = static_cast<unsigned>(a.size() ^ b.size());
     const int n = qMax(a.size(), b.size());
     for (int i = 0; i < n; ++i) {
         const unsigned char ca = (i < a.size()) ? static_cast<unsigned char>(a.at(i)) : 0u;

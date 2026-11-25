@@ -20,7 +20,9 @@ inline QString unknownExceptionReason()
 }
 
 /// 规则：键 == "lastError" 或以 "Note" 结尾。
-/// 依据（2026-11-21 重测的写侧站点表，共 287 处）：lastError 207 / *Note 46 / trainStatus 34。
+/// 依据（2026-11-25 重测的写侧站点表，共 290 处）：lastError 210 / *Note 46 / trainStatus 34。
+/// 较上次 207 增 3：ChannelSplit/ChannelMerge 的失败路径补写 lastError（复核 P3），
+/// 使现场红节点有可读原因；总数与分项同步，旧记照抄在下方。
 /// 2026-11-18 的 +10 来自新增 OutputImageNode：保存路径/目录/写盘失败与三处 catch 均写原因。
 /// 上一次 +3 来自算子盲区补审：AreaNode 无区域判红与 catch、DataCode2DNode 空串判红与 catch。
 /// 数字一律以 `python tools/reason_key_sites.py` 的输出为准（`--check` 会与本注释比对，
