@@ -203,8 +203,10 @@ void MvsImageSourceNode::setParam(const QString &key, const QVariant &value)
         const SourceType next = static_cast<SourceType>(value.toInt());
         if (next != m_sourceType) {
             m_sourceType = next;
-            // P10 补齐：切到本地模式时把 m_isDirectory 置位并刷新文件快照。
-            // 原实现只在构造/fromJson 赋值——新建节点切 LOCAL_FILE 后文件列表恒空、读不出图。
+            // P10 复核：切源必须清理上一源的派生缓存。原只置 m_isDirectory，切到相机再切回
+            // 本地且 filePath 为空时，updateImageFiles 早退、旧 m_imageFiles 残留被继续读取。
+            m_imageFiles.clear();
+            m_filePath.clear();
             m_isDirectory = (m_sourceType == LOCAL_FILE);
             m_currentImageIndex = 0;
             updateImageFiles();
@@ -1340,8 +1342,9 @@ void MvsImageSourceNode::refreshPixelFormatCombo()
 
 void MvsImageSourceNode::setFilePath(const QString &path)
 {
-    m_filePath = path;
-    updateImageFiles();
+    // P10 复核：公开接口此前只写 m_filePath、不切模式，外部脚本/API 设路径后节点仍停在
+    // CAMERA 静默读不出图。统一委托 setParam（切 LOCAL_FILE + 刷列表），与面板同义。
+    setParam(QStringLiteral("filePath"), path);
 }
 
 QString MvsImageSourceNode::getFilePath() const
@@ -1395,8 +1398,12 @@ void MvsImageSourceNode::clearLocalImages()
         m_imageFiles.clear();
         m_currentImageIndex = 0;
         m_filePath.clear();
+        // P10 复核：清空后回到相机源，避免仍停在本地模式却无图可
+        m_sourceType = CAMERA;
+        m_isDirectory = false;
     }
     emit thumbnailUpdated();
+    emit paramChanged(QStringLiteral("filePath"), QString());
 }
 
 bool MvsImageSourceNode::addLocalImageFiles(const QStringList &files)

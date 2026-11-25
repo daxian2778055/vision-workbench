@@ -88,6 +88,7 @@ void p9SystemGuards();                  // 角色闸、载入中止回滚、多�
 void p10CrossCutGuards();               // 会话信号有消费者、裸指针 QPointer 兜底、标题 tr（源码守卫）
 void moduleEditorRegistryCloseAll();    // 权限降级收窗：簿位真销毁
 void csvFieldEscapesFormulaInjection(); // 导出字段：列结构＋公式注入统一转义
+void csvBomHeaderIsWritten();           // 实测：UTF-8 BOM 三字节必须真的落到文件头
 void f1DataPanelFollowupGuards();       // flush 三态、序号持久化、坏文件防护、查询上限提示、耗时有界
 void f2ValidationGuards();              // 搜索参数告警、同名拒绝、VOC 写失败、表头/系列编辑、预览红字
 void dockDefaultVisibilityGuards();     // 工具箱默认展开、结果表不 tabbed 遮住图像、图像最后 raise
@@ -1003,6 +1004,42 @@ void UiGuardsTest::moduleEditorRegistryCloseAll()
     QVERIFY2(reg.lookup(a) == nullptr && reg.lookup(b) == nullptr, "收窗后簿位应清空");
 }
 
+void UiGuardsTest::csvBomHeaderIsWritten()
+{
+    // P10 存疑项裁决：QTextStream(Utf8) << "\xEF\xBB\xBF" 与 << QChar(0xFEFF) 谁真写出 BOM？
+    QTemporaryFile f;
+    QVERIFY(f.open());
+    {
+        QTextStream s(&f);
+        s.setEncoding(QStringConverter::Utf8);
+        s << QChar(0xFEFF);   // 与 ReportDialog 同形
+        s << QStringLiteral("中文\n");
+    }
+    f.flush();
+    f.seek(0);
+    const QByteArray head = f.read(9);
+    QVERIFY2(head.startsWith(QByteArray::fromHex("EFBBBF")),
+             qPrintable(QStringLiteral("UTF-8 CSV 头三字节必须是 EF BB BF，实测=%1")
+                            .arg(QString::fromLatin1(head.toHex()))));
+    QVERIFY2(head.contains(QByteArray::fromHex("E4B8AD")),
+             "中文必须以 UTF-8 写入（BOM 存在才有意义）");
+
+    // 对照裁决：性能面板原写法 stream << "\xEF\xBB\xBF" 实测只写出正文（无 BOM），
+    // 现已统一改为 QChar(0xFEFF)。守卫钉住两处导出同形，防回退到 char* 写法。
+    QFile pf(QStringLiteral(SRC_DIR "/src/PerformancePanel.cpp"));
+    QVERIFY2(pf.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 PerformancePanel.cpp");
+    const QString perf = QString::fromUtf8(pf.readAll());
+    pf.close();
+    QFile rd(QStringLiteral(SRC_DIR "/src/ReportDialog.cpp"));
+    QVERIFY2(rd.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 ReportDialog.cpp");
+    const QString rep = QString::fromUtf8(rd.readAll());
+    rd.close();
+    QVERIFY2(perf.contains(QStringLiteral("stream << QChar(0xFEFF)"))
+             && rep.contains(QStringLiteral("out << QChar(0xFEFF)"))
+             && !perf.contains(QStringLiteral("\"\\xEF\\xBB\\xBF\"")),
+             "两处 CSV 导出必须用同一正确的 BOM 写法");
+}
+
 void UiGuardsTest::csvFieldEscapesFormulaInjection()
 {
     // P10 修复的行为腿：以 = + - @ 或制表/回车开头的现场输入（算子名/流程名可改）
@@ -1051,6 +1088,22 @@ void UiGuardsTest::p10CrossCutGuards()
              && main.contains(QStringLiteral("&FlowScene::nodeOutputDataRequested"))
              && main.contains(QStringLiteral("&FlowScene::executeToHereRequested")),
              "右键菜单转发的信号必须有消费者，否则菜单项点了没反应");
+
+    // ④ 摘除残留：onImageRead 死槽已删、G2 探针 A5 臂随算子摘除退役
+    QVERIFY2(!main.contains(QStringLiteral("void MainWindow::onImageRead")),
+             "ImageReadNode 摘除后 onImageRead 槽无连接者，应删除");
+    QFile mwh(QStringLiteral(SRC_DIR "/include/MainWindow.h"));
+    QVERIFY2(mwh.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 MainWindow.h");
+    const QString mhead = QString::fromUtf8(mwh.readAll());
+    mwh.close();
+    QVERIFY2(!mhead.contains(QStringLiteral("onImageRead")), "MainWindow.h 不得残留死槽声明");
+    QFile gp(QStringLiteral(SRC_DIR "/tools/probes/G2_ci_host_exit_probe.py"));
+    QVERIFY2(gp.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 G2 探针");
+    const QString probe = QString::fromUtf8(gp.readAll());
+    gp.close();
+    QVERIFY2(probe.contains(QStringLiteral("RETIRED"))
+             && probe.contains(QStringLiteral("MvsImageSourceNode.cpp")),
+             "G2 探针 A5 必须标记退役，不得再指向已删的 ImageReadNode.cpp");
 }
 
 void UiGuardsTest::f1DataPanelFollowupGuards()

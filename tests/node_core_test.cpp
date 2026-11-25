@@ -138,6 +138,7 @@ private slots:
     void testImageReadAddSingleLocalFile();
     void testMvsLocalReadBehavior();
     void testMvsLocalImageJsonRelPath();
+    void testMvsSetFilePathSwitchesToLocalMode();
     void testChannelSplitAndMergeRoundtrip();
     void testOutputImageSavesByRule();
     void testFitRoiBoundary_data();
@@ -3600,6 +3601,31 @@ void NodeCoreTest::testOutputImageSavesByRule()
     empty.execute();
     QVERIFY2(!empty.getParam(QStringLiteral("moduleStatus")).toBool(), "无输入图却判绿");
     QVERIFY2(!empty.getParam(QStringLiteral("lastError")).toString().isEmpty(), "无输入图没有原因");
+}
+
+void NodeCoreTest::testMvsSetFilePathSwitchesToLocalMode()
+{
+    // P10 复核：公开 setFilePath() 原只写成员不切模式，外部脚本/API 设路径后节点仍停 CAMERA
+    // 静默读不出图；现委托 setParam 与面板同义。切源清缓存亦在此一并钉住。
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    QImage img(16, 12, QImage::Format_Grayscale8);
+    img.fill(128);
+    QVERIFY(img.save(dir.filePath(QStringLiteral("a.png"))));
+
+    MvsImageSourceNode node;
+    node.init();
+    QVERIFY2(!node.isLocalFileSource(), "新节点默认相机源");
+
+    node.setFilePath(dir.filePath(QStringLiteral("a.png")));
+    QVERIFY2(node.isLocalFileSource(), "公开 setFilePath 必须切到本地文件模式");
+    QCOMPARE(node.localImageFiles().size(), 1);
+
+    // 切到相机再切回：旧图清单必须清掉，空 filePath 下不得残留
+    node.setParam(QStringLiteral("sourceType"), MvsImageSourceNode::CAMERA);
+    QVERIFY2(!node.isLocalFileSource(), "切到相机源");
+    node.setParam(QStringLiteral("sourceType"), MvsImageSourceNode::LOCAL_FILE);
+    QVERIFY2(node.localImageFiles().isEmpty(), "切源后旧图清单必须清空，不得残留");
 }
 
 QTEST_MAIN(NodeCoreTest)

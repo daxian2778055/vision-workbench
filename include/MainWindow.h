@@ -126,8 +126,7 @@ private slots:
     /// 节点删除后清理所有以裸指针键控的界面状态（选中/本地图/叠加/耗时/编辑窗/显示源）。
     /// 缺这条时 m_selectedNode 等会在节点析构后悬垂，下一次点击/刷新即随机闪退。
     void onNodeRemoved(NodeBase *node);
-    void onImageRead(const HalconCpp::HImage &image);
-    void onExit();
+        void onExit();
     void onManageGlobalCameras();  // 管理全局相机
     void onOpenNodeSearch();       // 打开算子搜索对话框 (Ctrl+F)
     void onOpenPerformancePanel(); // 打开性能分析面板

@@ -17,10 +17,8 @@ would not turn any default gate red until someone ran the tool by hand.
                                with the NOCTX needle naming HalconNode.cpp instead -> the gate is not
                                pinned to one file
   A4   restore            byte-for-byte + inventory rc=0
-  A5   blind spot (U-23)  drop the *receiver context* of connect(this, &ImageReadNode::thumbnailUpdated,
-                               thumbnailLayout, ...) at src/ImageReadNode.cpp:513 -> inventory stays
-                               rc=0 (it greps QTimer::singleShot only). Reported as a measured blind
-                               spot, not as coverage: this gate does not see stale connect lambdas.
+  A5   blind spot (U-23)  RETIRED: ImageReadNode was removed with the read-operator extraction;
+                               the arm had no live object left, so it is skipped (historical record only)
   A6   scope reading      the tool's scan root is src/; the same mechanical rule applied to tracked
                                .cpp/.h files outside src/ counts the context-less sites living there
                                (T16's mechanism leg + its comment), so widening the root would make
@@ -81,9 +79,11 @@ INJECTIONS = {
     "A3": ("src/HalconNode.cpp", 645, b", inputImageCombo"),
 }
 # A5: the U-23 shape -- the third argument of connect() is its receiver context object.
-A5_FILE = "src/ImageReadNode.cpp"
-A5_LINE = 513
-A5_DROP = b"thumbnailLayout, "          # occurs exactly once on that line (verified by the arm)
+# A5: RETIRED — ImageReadNode.cpp 随读图算子摘除已删除。常量保留仅为历史编号占位，
+# 不再参与任何注入/还原；原盲斑（connect 接收位缺失不在本闸可见范围）由 T16 覆盖。
+A5_FILE = "src/MvsImageSourceNode.cpp"  # 历史占位：MVS 接管本地读图，非原 A5 注入目标
+A5_LINE = 0
+A5_DROP = b""
 
 UPSTREAM_OK = ("[OK]   repo hygiene OK (",
                "[OK]   QtTest gate self-test OK (",
@@ -402,44 +402,12 @@ def main():
     note("[G2-INFO] ST2 cross-rejection on real logs: A1-as-A3 problems=%d, A3-as-A1 problems=%d"
          % (len(a1_as_a3), len(a3_as_a1)))
 
-    # ---- A5: measured blind spot -- the U-23 connect() shape stays green through this gate
-    a5_target = rel_path(A5_FILE)
-    a5_original = read_bytes(a5_target)
-    a5_measured = [i + 1 for i, l in enumerate(a5_original.splitlines())
-                   if b"connect(this, &ImageReadNode::thumbnailUpdated, thumbnailLayout," in l]
-    check(A5_LINE in a5_measured,
-          "A5: expected the receiver-context connect at %s:%d, found %s"
-          % (A5_FILE, A5_LINE, a5_measured))
-    a5_new = drop_on_line(a5_original, A5_LINE, A5_DROP)
-    if a5_new is None:
-        fail("A5: %s:%d does not contain %r exactly once, blind-spot arm has no object"
-             % (A5_FILE, A5_LINE, A5_DROP.decode()))
-        rc5 = -1
-    else:
-        with open(a5_target, "wb") as handle:
-            handle.write(a5_new)
-        rc5, text5 = run_inventory()
-        check(rc5 == 0, "A5: inventory rc=%s after dropping the connect receiver context" % rc5)
-        check("no_context=0" in text5, "A5: inventory no longer reports no_context=0")
-        check(NOCTX_NEEDLE % ("ImageReadNode.cpp", A5_LINE) not in text5,
-              "A5: inventory blamed an ImageReadNode site")
-        check("NOCTX" not in text5, "A5: inventory reported a NOCTX site for the connect-shape injection")
-        total5 = re.search(r"SINGLESHOT total=\d+ with_context=\d+ no_context=\d+", text5)
-        note("[G2-INFO] A5 blind spot measured: receiver context removed at %s:%d "
-             "(md5 %s -> %s, %d byte(s) shorter), inventory still rc=%s %s -- this gate greps "
-             "QTimer::singleShot only, stale connect lambdas are covered by T16, not here"
-             % (A5_FILE, A5_LINE, md5(a5_original)[:8], md5(a5_new)[:8],
-                len(a5_original) - len(a5_new), rc5,
-                total5.group(0) if total5 else "?"))
-        def line_of(blob):
-            return blob.splitlines()[A5_LINE - 1].decode("ascii", "replace").strip()
-        restore(A5_FILE)
-        note("[G2-INFO] A5 line %d before: %s" % (A5_LINE, line_of(a5_original)))
-        note("[G2-INFO] A5 line %d after : %s" % (A5_LINE, line_of(a5_new)))
-        check(md5(read_bytes(a5_target)) == copy_baseline[A5_FILE],
-              "A5: %s not restored byte-for-byte" % A5_FILE)
-        rc5b, _ = run_inventory()
-        check(rc5b == 0, "A5: inventory still red after restore (rc=%s)" % rc5b)
+    # ---- A5: RETIRED (ImageReadNode 已随算子摘除删除)。该臂原测 "connect 接收位缺失"
+    # 不在本闸可见范围；MVS 接管本地读图后没有同类 thumbnail connect 站点，硬挂新文件会
+    # 改变盲斑验证语义。保留编号仅作历史记录，不再执行注入/还原。
+    rc5 = 0
+    note("[G2-INFO] A5 retired: ImageReadNode removed with the read-operator extraction; "
+         "this blind-spot arm has no live object and is skipped (rc=0, no injection)")
 
     # ---- A6: the gate's scan root, and what the same rule sees outside it
     tool_src = read_bytes(os.path.join(ROOT, INVENTORY)).decode("utf-8", "replace")
@@ -478,9 +446,9 @@ def main():
         note("[G2-INFO] copy removed; %r"
              % decode(sh(["git", "worktree", "list"], cwd=ROOT).stdout).strip())
 
-    print("[G2-SUMMARY] A1 host rc=%s | A3 host rc=%s | A5 inventory rc=%s (blind spot, green by design) | "
+    print("[G2-SUMMARY] A1 host rc=%s | A3 host rc=%s | A5 retired (skipped, no injection) | "
           "outside-root sites=%d | failures=%d"
-          % (host_logs["A1"][0], host_logs["A3"][0], rc5, len(outside), len(FAILURES)))
+          % (host_logs["A1"][0], host_logs["A3"][0], len(outside), len(FAILURES)))
     if FAILURES:
         print("G-2 probe: %d problem(s)" % len(FAILURES))
         return 1

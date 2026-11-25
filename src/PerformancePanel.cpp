@@ -242,8 +242,10 @@ void PerformancePanel::exportToCsv(const QString &filePath)
     QTextStream stream(&file);
     stream.setEncoding(QStringConverter::Utf8);
 
-    // 写入 BOM
-    stream << "\xEF\xBB\xBF";
+    // BOM：此前用 C 字符串写三个字节，实测只写出中文正文、BOM 没落盘
+    // （Qt 把该字节串按本地 8 位解释，与 QTextStream 的 Utf8 编码不同步）。
+    // 与报表导出/本测试统一用 QChar(0xFEFF)，中文 Windows Excel 才不乱码。
+    stream << QChar(0xFEFF);
 
     // 写入表头
     stream << QStringLiteral("算子名称,类型,执行次数,总耗时(ms),平均耗时(ms),最小耗时(ms),最大耗时(ms)\n");

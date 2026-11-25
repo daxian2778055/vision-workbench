@@ -3916,15 +3916,6 @@ void MainWindow::onNodeRemoved(NodeBase *node)
     }
 }
 
-void MainWindow::onImageRead(const HalconCpp::HImage &image)
-{
-    // 显示读取的图像
-    m_imageView->requestImage(image, "读取图像");
-    if (m_imageSourceLabel) {
-        m_imageSourceLabel->setText("图像来源: 读取图像");
-    }
-}
-
 void MainWindow::onNewProject()
 {
     // 新建会丢弃当前方案：有未保存改动时先确认（与关窗/打开方案同一机制，
