@@ -2103,10 +2103,23 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
     // 统一用 QPointer 守卫：各 lambda 首行判空，体内只经 exGuard 访问。
     QPointer<FlowExecutor> exGuard(ex);
 
+    // I 复核：编辑锁必须按**执行器自身场景**更新，后台流程同样要锁/解。
+    // 原三个终态槽只处理 m_executor，后台流程启动时不锁、pause→resume→stop 后残留锁。
+    auto refreshEditLockForExecutor = [this, exGuard]() {
+        if (!exGuard)
+            return;
+        if (FlowScene *s = exGuard->flowScene()) {
+            s->setEditLocked(SessionManager::instance()->canvasEditShouldBeLocked(
+                !exGuard->allowsGraphEditing()));
+        }
+        applyPermissionRestrictions();
+    };
+
     // ── 全局 UI：运行状态 → 状态栏（状态/耗时/触发计数） ──
-    connect(ex, &FlowExecutor::executionStarted, this, [this, exGuard]() {
+    connect(ex, &FlowExecutor::executionStarted, this, [this, exGuard, refreshEditLockForExecutor]() {
         if (!exGuard) return;
         if (exGuard.data() == m_executor) onExecutionStarted();
+        refreshEditLockForExecutor();
     });
     // VM 5.2.5 流程控制响应：忙碌=开始、空闲=结束（不按当前激活流程过滤：后台流程状态同样要上报）。
     // 旧实现只在 executionFinished 发 IDLE，手动停止 / 运行错误 / 终局撤除时 PLC 会
@@ -2126,14 +2139,16 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
     connect(ex, &FlowExecutor::executionFinished, this, [reportIdle]() {
         reportIdle();
     });
-    connect(ex, &FlowExecutor::executionStopped, this, [this, exGuard, reportIdle]() {
+    connect(ex, &FlowExecutor::executionStopped, this, [this, exGuard, reportIdle, refreshEditLockForExecutor]() {
         if (!exGuard) return;
         if (exGuard.data() == m_executor) onExecutionStopped();
         reportIdle();
+        refreshEditLockForExecutor();
     });
-    connect(ex, &FlowExecutor::executionFinished, this, [this, exGuard]() {
+    connect(ex, &FlowExecutor::executionFinished, this, [this, exGuard, refreshEditLockForExecutor]() {
         if (!exGuard) return;
         if (exGuard.data() == m_executor) onExecutionFinished();
+        refreshEditLockForExecutor();
     });
     // 良率目标报警：**不按"当前激活流程"过滤**——后台流程的轮次同样要参与判定，
     // 否则多流程并发时报警会漏（哪条流程超差都得报）。节流在 checkYieldTarget 内部。

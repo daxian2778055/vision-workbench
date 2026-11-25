@@ -1537,6 +1537,15 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              && tokSrc.contains(QStringLiteral("startBackgroundCleanup(ex)"))
              && tokSrc.contains(QStringLiteral("m_teardownStarted")),
              "waitForFinish 必须在 reset() 前真正收尾：内联等待 + 后台兜底 + 防重复启动");
+    // ㉜ 流程域 I：后台流程编辑锁按自身场景更新、局部执行收集子流程定义
+    const QString mwSrc = readSrc("src/MainWindow.cpp");
+    QVERIFY2(mwSrc.contains(QStringLiteral("refreshEditLockForExecutor"))
+             && mwSrc.count(QStringLiteral("refreshEditLockForExecutor();")) >= 3,
+             "启动/停止/完成的编辑锁重算不得按 m_executor 过滤，后台流程也要更新");
+    const QString feLocalSrc = readSrc("src/FlowExecutor.cpp");
+    QVERIFY2(feLocalSrc.count(QStringLiteral("captureViaAliveBlock(blockCopy, &subFlowDefs)")) >= 2
+             && feLocalSrc.count(QStringLiteral("collectSubFlowBodies(subFlowDefs, nodes)")) >= 2,
+             "executeUpTo/executeFrom 必须像 run() 一样带出并收集子流程定义");
 }
 
 void UiGuardsTest::f2ValidationGuards()

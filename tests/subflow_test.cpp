@@ -30,6 +30,7 @@ private slots:
     void testDefineValidation();
     void testDefJsonRoundTrip();
     void testExecutionEndToEnd();
+    void testLocalExecutionCollectsSubFlowDefinitions();
     void testTwoCallersIsolation();
     void testRecursionRejected();
     void testUndefinedRejected();
@@ -261,6 +262,39 @@ void SubFlowTest::testExecutionEndToEnd()
 
     // 出口结果 → 调用点输出端口 0 → 下游
     QVERIFY(qAbs(readOutNumber(caller) - 42.0) < 1e-9);
+}
+
+// I 复核：executeUpTo/executeFrom 必须与 run() 同口径收集子流程定义，否则局部执行
+// 走到调用点时恒报「子流程未定义」。
+void SubFlowTest::testLocalExecutionCollectsSubFlowDefinitions()
+{
+    FlowScene scene;
+    NodeBase *gen = addFormula(&scene, QStringLiteral("42"), QPointF(0, 0));
+    NodeBase *caller = addCaller(&scene, QStringLiteral("局部预处理"), QPointF(220, 0));
+    NodeBase *sink = addFormula(&scene, QStringLiteral("p0"), QPointF(440, 0));
+    NodeBase *m1 = addDelay(&scene, QPointF(0, 220));
+    NodeBase *m2 = addDelay(&scene, QPointF(220, 220));
+    QVERIFY(gen && caller && sink && m1 && m2);
+    connectNodes(&scene, gen, caller);
+    connectNodes(&scene, caller, sink);
+    QVERIFY(scene.createConnection(m1->outputPorts().first(), m2->inputPorts().first(), true));
+    selectOnly(&scene, { m1, m2 });
+    QString err;
+    QVERIFY2(scene.defineSubFlowFromSelection(QStringLiteral("局部预处理"), &err), qPrintable(err));
+
+    auto token = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor *exec = token->executor();
+    QStringList errors;
+    QObject::connect(exec, &FlowExecutor::executionError, exec,
+                     [&errors](const QString &msg) { errors << msg; }, Qt::DirectConnection);
+    exec->setFlowName(QStringLiteral("SubFlowLocalTest"));
+    exec->setFlowMode(FlowMode::SoftwareTrigger);
+    exec->setFlowScene(&scene);
+    exec->executeUpTo(sink);   // 同步局部执行，不跑整轮
+    QVERIFY2(errors.isEmpty(), qPrintable(errors.join(QStringLiteral("\n"))));
+    QVERIFY2(qAbs(readOutNumber(caller) - 42.0) < 1e-9,
+             "局部执行必须能调用子流程并拿到出口结果");
+    exec->setFlowScene(nullptr);
 }
 
 void SubFlowTest::testTwoCallersIsolation()

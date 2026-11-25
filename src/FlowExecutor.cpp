@@ -2360,7 +2360,10 @@ void FlowExecutor::executeUpTo(NodeBase *endNode)
         QMutexLocker sceneLock(&m_mutex);
         blockCopy = m_aliveBlock;
     }
-    FlowScene::GraphSnapshotGuard graphSnapshot = captureViaAliveBlock(blockCopy);
+    // I 复核：局部执行也必须取子流程定义副本，否则 SubFlowNode 查不到成员集合，
+    // 「执行到此 / 从此重算」含子流程调用点时恒报"未定义"（与 run() 同口径）。
+    QList<SubFlowDef> subFlowDefs;
+    FlowScene::GraphSnapshotGuard graphSnapshot = captureViaAliveBlock(blockCopy, &subFlowDefs);
     if (!graphSnapshot.isHeld())
         return;
     const QList<NodeBase *> nodes = graphSnapshot.snapshot().nodes;
@@ -2374,6 +2377,7 @@ void FlowExecutor::executeUpTo(NodeBase *endNode)
         m_cachedSortedNodes = sorted;
         m_graphStructureDirty = false;
     }
+    collectSubFlowBodies(subFlowDefs, nodes);
 
     QSet<NodeBase *> keep;
     std::function<void(NodeBase *)> walkUp = [&](NodeBase *n) {
@@ -2400,6 +2404,9 @@ void FlowExecutor::executeUpTo(NodeBase *endNode)
 
     for (NodeBase *node : sorted) {
         if (!keep.contains(node))
+            continue;
+        // 与 run() 同口径：子流程体由调用点内联调度；用户显式选中的那个节点仍允许单独执行
+        if (node != endNode && m_subFlowBodyNodes.contains(node))
             continue;
         executeNode(node, node == endNode);
         if (!m_lastNodeSuccess && m_stopOnFailure)
@@ -2433,7 +2440,10 @@ void FlowExecutor::executeFrom(NodeBase *startNode)
         QMutexLocker sceneLock(&m_mutex);
         blockCopy = m_aliveBlock;
     }
-    FlowScene::GraphSnapshotGuard graphSnapshot = captureViaAliveBlock(blockCopy);
+    // I 复核：局部执行也必须取子流程定义副本，否则 SubFlowNode 查不到成员集合，
+    // 「执行到此 / 从此重算」含子流程调用点时恒报"未定义"（与 run() 同口径）。
+    QList<SubFlowDef> subFlowDefs;
+    FlowScene::GraphSnapshotGuard graphSnapshot = captureViaAliveBlock(blockCopy, &subFlowDefs);
     if (!graphSnapshot.isHeld())
         return;
     const QList<NodeBase *> nodes = graphSnapshot.snapshot().nodes;
@@ -2447,6 +2457,7 @@ void FlowExecutor::executeFrom(NodeBase *startNode)
         m_cachedSortedNodes = sorted;
         m_graphStructureDirty = false;
     }
+    collectSubFlowBodies(subFlowDefs, nodes);
 
     QSet<NodeBase *> keep;
     std::function<void(NodeBase *)> walkDown = [&](NodeBase *n) {
@@ -2487,6 +2498,9 @@ void FlowExecutor::executeFrom(NodeBase *startNode)
 
     for (NodeBase *node : sorted) {
         if (!keep.contains(node))
+            continue;
+        // 与 run() 同口径：子流程体由调用点内联调度；显式起点仍允许单独执行
+        if (node != startNode && m_subFlowBodyNodes.contains(node))
             continue;
         executeNode(node, node == lastKept);
         if (!m_lastNodeSuccess && m_stopOnFailure)
