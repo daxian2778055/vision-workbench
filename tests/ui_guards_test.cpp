@@ -1189,6 +1189,26 @@ void UiGuardsTest::p10CrossCutGuards()
     QVERIFY2(soak.contains(QStringLiteral("samples.at(i).rounds >= samples.at(i - 1).rounds"))
              && soak.contains(QStringLiteral("grewRounds")),
              "soak 必须有逐样本 rounds 单调判据与后段增长判据，不能只看末轮数");
+
+    // ⑥ 判断条件编辑态不被自动重算的全量重建吞掉
+    QFile mw2(QStringLiteral(SRC_DIR "/src/MainWindow.cpp"));
+    QVERIFY2(mw2.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 MainWindow.cpp");
+    const QString mw2src = QString::fromUtf8(mw2.readAll());
+    mw2.close();
+    const int ar = mw2src.indexOf(QStringLiteral("&ModuleEditorDialog::autoRecomputeRequested"));
+    QVERIFY(ar > 0);
+    const QString arBody = mw2src.mid(ar, 700);
+    QVERIFY2(arBody.contains(QStringLiteral("isJudgeTableEditing"))
+             && arBody.indexOf(QStringLiteral("isJudgeTableEditing"))
+                < arBody.indexOf(QStringLiteral("dlg->reloadFromNode()")),
+             "自动重算必须先看条件表是否编辑态，是则跳过 dlg->reloadFromNode() 全表重建");
+    // ⑦ DataCode2D 判据抽成可注入纯函数（行为腿有三组输入）
+    QFile dc(QStringLiteral(SRC_DIR "/src/DataCode2DNode.cpp"));
+    QVERIFY2(dc.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 DataCode2DNode.cpp");
+    const QString dcSrc = QString::fromUtf8(dc.readAll());
+    dc.close();
+    QVERIFY2(dcSrc.contains(QStringLiteral("decodedContentIsValid(decodedLines)")),
+             "空结果判红必须走可注入纯函数，不能只数 decodedStrings 个数");
 }
 
 void UiGuardsTest::f1DataPanelFollowupGuards()

@@ -25,6 +25,7 @@
 #include "OpencvDefectNode.h"
 #include "OpencvFeatureMatchNode.h"
 #include "ZxingBarcodeNode.h"
+#include "DataCode2DNode.h"
 #include "TesseractOcrNode.h"
 #include "DeepOcrNode.h"
 #include "DnnInferNode.h"
@@ -139,6 +140,7 @@ private slots:
     void testMvsLocalReadBehavior();
     void testMvsLocalImageJsonRelPath();
     void testMvsSetFilePathSwitchesToLocalMode();
+    void testDataCode2DDecodedContentGuard();   // P2：空串/全空白/有效串三组判据
     void testChannelSplitAndMergeRoundtrip();
     void testOutputImageSavesByRule();
     void testOutputImagePercentNExpands();    // P10：%n 必须展开为序号，不得留下字面量
@@ -3659,6 +3661,19 @@ void NodeCoreTest::testOutputImagePercentNExpands()
     const QString second = node.getParam(QStringLiteral("lastSavedPath")).toString();
     QVERIFY2(second != first && !second.contains(QLatin1Char('%')), qPrintable(second));
     QVERIFY2(QFileInfo::exists(first) && QFileInfo::exists(second), "两次都应留下独立文件");
+}
+
+void NodeCoreTest::testDataCode2DDecodedContentGuard()
+{
+    // P2 复核：码符号检出但内容为空/全空白时判红。纯函数注入三组输入，
+    // 原实现把判据改回 Length()>0 即可让此腿变红。
+    QVERIFY2(!DataCode2DNode::decodedContentIsValid({}), "空列表应判无效");
+    QVERIFY2(!DataCode2DNode::decodedContentIsValid({ QString() }), "单条空串应判无效");
+    QVERIFY2(!DataCode2DNode::decodedContentIsValid({ QStringLiteral("  "), QStringLiteral("\t") }),
+             "全空白串应判无效");
+    QVERIFY2(DataCode2DNode::decodedContentIsValid({ QStringLiteral("  "), QStringLiteral("HELLO") }),
+             "空串+有效串应判有效");
+    QVERIFY2(DataCode2DNode::decodedContentIsValid({ QStringLiteral("CODE128") }), "有效串应判有效");
 }
 
 QTEST_MAIN(NodeCoreTest)

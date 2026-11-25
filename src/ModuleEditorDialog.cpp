@@ -2149,6 +2149,17 @@ void ModuleEditorDialog::loadJudgeConditions()
     m_judgeTable->blockSignals(false);
 }
 
+bool ModuleEditorDialog::isJudgeTableEditing() const
+{
+    // QAbstractItemView::state() 是 protected；用公开可观察信号判断：焦点在表格的
+    // 行编辑器（QLineEdit 子控件）上即视为编辑态，此时 reloadFromNode 会吞掉未提交输入。
+    if (!m_judgeTable || !m_judgeTable->hasFocus())
+        return false;
+    QWidget *focus = QApplication::focusWidget();
+    return focus && focus != m_judgeTable && m_judgeTable->isAncestorOf(focus)
+           && qobject_cast<QLineEdit *>(focus) != nullptr;
+}
+
 void ModuleEditorDialog::refreshJudgePageControls()
 {
     // P2 复核：结果判断页控件在构造期一次性从参数初始化，写回走 writeParam；它们不是

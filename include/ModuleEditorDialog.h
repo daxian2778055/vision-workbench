@@ -139,6 +139,8 @@ private:
     HalconNode *halconNode() const;
 
 public:
+    /// P2 复核：条件表是否正处于单元格编辑态（自动重算据此跳过全量重建，防吞输入）
+    bool isJudgeTableEditing() const;
     /// 面板内容变化（含节点重建控件）后重新挂钩；由 rebuildParamPanel()/reloadFromNode() 调用
     void refreshParamHooks();
     /// 变量引用菜单的数据源（每次展开菜单时调用，保证列表是当前值）

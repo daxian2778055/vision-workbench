@@ -3392,9 +3392,11 @@ void MainWindow::openModuleEditor(NodeBase *node)
     // 自动重算（改参数/拖 ROI/涂掩膜）：静默执行，流程忙时直接跳过
     connect(dlg, &ModuleEditorDialog::autoRecomputeRequested, this, [this, node, dlg]() {
         recomputeDownstream(node, true);
-        // 自动重算后刷新结果叠加（r19 补全清单第 4 项）：与「执行算子」同款两行。
-        // 缺这两行时，改参数/拖 ROI 后画布上看不到新的匹配框（现场反馈"没有运行时渲染"）。
-        dlg->reloadFromNode();
+        // P2 复核：条件表正处于编辑态时不要 reloadFromNode——它会 setRowCount(0) 全量
+        // 重建，吞掉用户正在另一行输入的未提交值。结果叠加刷新不受影响。
+        if (!dlg->isJudgeTableEditing()) {
+            dlg->reloadFromNode();
+        }
         dlg->setResultOverlay(collectOverlayFromNode(node));
     });
     // P1-1：模块编辑窗左上角帮助入口（对标 VM「模块通用配置」的 ? 按钮）

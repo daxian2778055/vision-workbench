@@ -26,6 +26,17 @@ void DataCode2DNode::init()
     });
 }
 
+bool DataCode2DNode::decodedContentIsValid(const QStringList &decoded)
+{
+    // 码符号被检出但内容解码为空时 Length()>0 而元素全是空串——旧实现把空串当有效码值判绿。
+    // 与 Ocr/Barcode 的「空结果判红」口径统一；纯函数便于行为腿注入三组输入。
+    for (const QString &s : decoded) {
+        if (!s.trimmed().isEmpty())
+            return true;
+    }
+    return false;
+}
+
 void DataCode2DNode::run(bool)
 {
     try {
@@ -53,16 +64,15 @@ void DataCode2DNode::run(bool)
                        &resultHandles, &decodedStrings);
 
         QString result;
+        QStringList decodedLines;
         if (decodedStrings.Length() > 0) {
-            QStringList lines;
             for (int i = 0; i < decodedStrings.Length(); ++i)
-                lines << QString::fromStdString(decodedStrings[i].S().Text());
-            result = lines.join(QStringLiteral("\n"));
+                decodedLines << QString::fromStdString(decodedStrings[i].S().Text());
+            result = decodedLines.join(QStringLiteral("\n"));
         }
-        // 只数 decodedStrings 个数不够：码符号被检出但内容解码为空时 Length()>0
-        // 而元素全是空串，旧实现把空串当有效码值判绿。与 Ocr/Barcode 的
-        // 「空结果判红」口径统一。
-        if (result.trimmed().isEmpty()) {
+        // P2 复核：走纯函数判据（行为腿可注入三组输入），与 Ocr/Barcode 的
+        // 「空结果判红」口径统一，不再只数 decodedStrings 个数。
+        if (!DataCode2DNode::decodedContentIsValid(decodedLines)) {
             result = QStringLiteral("未识别到二维码内容");
             m_params[QStringLiteral("lastError")] = result;
             m_params[QStringLiteral("moduleStatus")] = false;
