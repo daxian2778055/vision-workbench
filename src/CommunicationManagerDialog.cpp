@@ -321,6 +321,31 @@ void CommunicationManagerDialog::updateParamSummary()
     m_paramSummary->setText(QStringLiteral("\u672A\u9009\u4E2D\u8BBE\u5907"));
 }
 
+QString CommunicationManagerDialog::inlineIpKey(const QString &type)
+{
+    if (type == QStringLiteral("Modbus") || type == QStringLiteral("PLC"))
+        return QStringLiteral("host");
+    if (type.startsWith(QStringLiteral("FINS"), Qt::CaseInsensitive))
+        return QStringLiteral("targetIp");
+    if (type == QStringLiteral("UDP"))
+        return QStringLiteral("remoteIp");
+    if (type == QStringLiteral("TCP"))
+        return QStringLiteral("serverIp");
+    return QString();   // 串口等设备无 IP 字段
+}
+
+QString CommunicationManagerDialog::inlinePortKey(const QString &type)
+{
+    if (type.startsWith(QStringLiteral("FINS"), Qt::CaseInsensitive))
+        return QStringLiteral("targetPort");
+    if (type == QStringLiteral("UDP"))
+        return QStringLiteral("remotePort");
+    if (type == QStringLiteral("TCP") || type == QStringLiteral("Modbus")
+        || type == QStringLiteral("PLC"))
+        return QStringLiteral("port");
+    return QString();   // 串口等设备无端口字段
+}
+
 void CommunicationManagerDialog::syncInlineParamsFromSelection(const CommDeviceInfo &info)
 {
     if (!m_paramForm) return;
@@ -336,15 +361,21 @@ void CommunicationManagerDialog::syncInlineParamsFromSelection(const CommDeviceI
     }
     // 回显期间所有 setChecked/setValue 都会发信号，用守卫让写回直接返回。
     m_inlineLoading = true;
-    const QString ip = info.config.value(QStringLiteral("serverIp"))
-                           .toString(QStringLiteral("127.0.0.1"));
+    // P1 复核：回显必须读与写回相同的键。原固定读 serverIp/port，非 TCP 设备回显成
+    // 127.0.0.1:502，任意内联开关切换都会把真实地址覆盖掉（比修复前更糟）。
+    const QString type = info.type;
+    const QString ipKey = inlineIpKey(type);
+    const QString portKey = inlinePortKey(type);
+    const QString ip = ipKey.isEmpty()
+        ? QStringLiteral("0.0.0.0")
+        : info.config.value(ipKey).toString(QStringLiteral("0.0.0.0"));
     const QStringList parts = ip.split(QLatin1Char('.'));
     for (int i = 0; i < 4; ++i) {
         if (m_ipEdits[i])
             m_ipEdits[i]->setText(parts.value(i, QStringLiteral("0")));
     }
     if (m_inlinePort)
-        m_inlinePort->setValue(info.config.value(QStringLiteral("port")).toInt(502));
+        m_inlinePort->setValue(portKey.isEmpty() ? 0 : info.config.value(portKey).toInt(0));
     if (m_inlineDataUpload)
         m_inlineDataUpload->setChecked(
             info.config.value(QStringLiteral("dataUpload")).toBool(true));
@@ -379,20 +410,11 @@ void CommunicationManagerDialog::applyInlineParamChange()
     // Modbus/PLC 读 host，FINS 读 targetIp/targetPort，UDP 读 remoteIp/remotePort，
     // 否则这五类设备的内联 IP/端口改动全部落在无效键上、节点读不到。
     const QString type = cm->deviceInfo(name).type;
-    const QString ipKey = (type == QStringLiteral("Modbus") || type == QStringLiteral("PLC"))
-                              ? QStringLiteral("host")
-                              : (type.startsWith(QStringLiteral("FINS"))
-                                     ? QStringLiteral("targetIp")
-                                     : (type == QStringLiteral("UDP")
-                                            ? QStringLiteral("remoteIp")
-                                            : QStringLiteral("serverIp")));
-    const QString portKey = type.startsWith(QStringLiteral("FINS"))
-                                ? QStringLiteral("targetPort")
-                                : (type == QStringLiteral("UDP") ? QStringLiteral("remotePort")
-                                                                 : QStringLiteral("port"));
-    if (complete)
+    const QString ipKey = inlineIpKey(type);
+    const QString portKey = inlinePortKey(type);
+    if (complete && !ipKey.isEmpty())
         cfg[ipKey] = segs.join(QLatin1Char('.'));
-    if (m_inlinePort)
+    if (m_inlinePort && !portKey.isEmpty())
         cfg[portKey] = m_inlinePort->value();
     if (m_inlineDataUpload)
         cfg[QStringLiteral("dataUpload")] = m_inlineDataUpload->isChecked();
@@ -559,9 +581,14 @@ void CommunicationManagerDialog::refreshAddressGrid()
         cell->setForeground(fill == QStringLiteral("#ffffff")
             ? QColor(QStringLiteral("#bbbbbb")) : QColor(Qt::white));
     }
-    // P2 复核：稀疏大地址落在矩阵窗口外时给明确提示，不再静默丢失可视化
-    if (outsideWindow > 0 && m_paramSummary && m_paramSummary->text().isEmpty())
-        m_paramSummary->setText(tr("有 %1 个寄存器地址超出当前 50 格矩阵窗口（配置仍保留）").arg(outsideWindow));
+    // P2 复核：原条件是 m_paramSummary->text().isEmpty()，但该标签构造时是「未选中设备」、
+    // 选中后是「name · type · 状态」，代码里从无置空处 ⇒ 提示死代码。改为追加一行。
+    if (outsideWindow > 0 && m_paramSummary) {
+        const QString hint = tr("有 %1 个寄存器地址超出当前 50 格矩阵窗口（配置仍保留）")
+                                 .arg(outsideWindow);
+        if (!m_paramSummary->text().contains(hint))
+            m_paramSummary->setText(m_paramSummary->text() + QStringLiteral("；") + hint);
+    }
 }
 
 // ==================== gtd import / export ====================

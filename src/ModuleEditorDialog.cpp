@@ -556,10 +556,13 @@ void ModuleEditorDialog::done(int r)
 void ModuleEditorDialog::snapshotParams()
 {
     m_paramSnapshot.clear();
+    m_initialParamNames.clear();
     if (!m_node)
         return;
-    for (const QString &name : m_node->getAllParamNames())
+    for (const QString &name : m_node->getAllParamNames()) {
         m_paramSnapshot.insert(name, m_node->getParam(name));
+        m_initialParamNames.insert(name);
+    }
 }
 
 void ModuleEditorDialog::restoreParams()
@@ -574,6 +577,15 @@ void ModuleEditorDialog::restoreParams()
             hn->setParam(it.key(), it.value());   // 一次回滚，避免每个参数各自触发预览
         else
             m_node->setParam(it.key(), it.value());
+    }
+    // P3 复核：编辑期经 writeParam/setParam 新增的 res* 键不在打开时快照里，
+    // 不放回无效值则"取消"后节点仍保留改动。无 removeParam API，用无效 QVariant
+    // 置回——结果字段消费者按 isValid() 过滤，等价于该参数未被编辑过。
+    if (auto *hn = qobject_cast<HalconNode *>(m_node)) {
+        for (const QString &name : hn->getAllParamNames()) {
+            if (!m_initialParamNames.contains(name))
+                hn->setParam(name, QVariant());
+        }
     }
     if (QWidget *panel = m_paramHost ? m_paramHost->widget() : nullptr)
         m_node->updateParamPanel(panel);
@@ -2210,6 +2222,52 @@ void ModuleEditorDialog::refreshJudgePageControls()
     const QString legacy = get(QStringLiteral("resTextColor"), QString()).toString();
     m_resultTextColor = legacy.isEmpty()
         ? get(QStringLiteral("resTextColorOk"), QStringLiteral("#FFFFFF")).toString() : legacy;
+
+    // P3 复核：X/Y 微调框、颜色按钮外观、模板匹配固定判断行都在构造期一次性初始化，
+    // 之前 refresh 漏掉——取消回滚后界面仍显示改过的值。全部按节点参数回填并阻断信号。
+    if (m_resultTextPosXSpin) {
+        const QSignalBlocker b(m_resultTextPosXSpin);
+        m_resultTextPosXSpin->setValue(get(QStringLiteral("resTextPosX"), -1.0).toDouble());
+    }
+    if (m_resultTextPosYSpin) {
+        const QSignalBlocker b(m_resultTextPosYSpin);
+        m_resultTextPosYSpin->setValue(get(QStringLiteral("resTextPosY"), -1.0).toDouble());
+    }
+    auto refreshColorButton = [this](QPushButton *btn, const QString &color, const QString &fallback) {
+        if (!btn) return;
+        const QSignalBlocker b(btn);
+        btn->setText(color.isEmpty() ? fallback : color);
+        btn->setStyleSheet(QStringLiteral("QPushButton { background-color: %1; color: #ffffff; }")
+                               .arg(color.isEmpty() ? fallback : color));
+    };
+    refreshColorButton(m_resultImageColorBtn, m_resultImageColor, QStringLiteral("#00C8FF"));
+    refreshColorButton(m_resultTextColorBtn, m_resultTextColor, QStringLiteral("#FFFFFF"));
+    refreshColorButton(m_resultTextColorNgBtn, m_resultTextColorNg, QStringLiteral("#C02B1D"));
+
+    // 模板匹配固定判断行（非 ParamSpec，写回走 writeParam）：按 objectName 找控件回填
+    if (auto *table = findChild<QTableWidget *>(QStringLiteral("templateJudgeTable"))) {
+        const QSignalBlocker bt(table);
+        for (int r = 0; r < table->rowCount(); ++r) {
+            // 列0 的 cellWidget 是承载 QCheckBox 的 QWidget，QCheckBox 的 objectName
+            // 形如 judgeEnable_<key>——由它取稳定 key（列1 是显示用 label，不能当 key）。
+            QWidget *host = table->cellWidget(r, 0);
+            QCheckBox *enable = host ? host->findChild<QCheckBox *>() : nullptr;
+            if (!enable) continue;
+            const QString key = enable->objectName();
+            if (!key.startsWith(QStringLiteral("judgeEnable_"))) continue;
+            const QString paramKey = key.mid(QStringLiteral("judgeEnable_").size());
+            const QSignalBlocker b(enable);
+            enable->setChecked(get(QStringLiteral("resJudge%1Enable").arg(paramKey), false).toBool());
+            if (auto *low = qobject_cast<QDoubleSpinBox *>(table->cellWidget(r, 2))) {
+                const QSignalBlocker bl(low);
+                low->setValue(get(QStringLiteral("resJudge%1Low").arg(paramKey), low->minimum()).toDouble());
+            }
+            if (auto *high = qobject_cast<QDoubleSpinBox *>(table->cellWidget(r, 3))) {
+                const QSignalBlocker bh(high);
+                high->setValue(get(QStringLiteral("resJudge%1High").arg(paramKey), high->minimum()).toDouble());
+            }
+        }
+    }
 }
 
 void ModuleEditorDialog::installParamHooks(QWidget *panel)

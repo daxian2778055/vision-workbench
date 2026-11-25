@@ -2,6 +2,7 @@
 
 #include "HalconNode.h"
 #include <QMutex>
+#include <QWaitCondition>
 
 class HalconImageSourceNode : public HalconNode
 {
@@ -23,6 +24,13 @@ public:
 
     explicit HalconImageSourceNode(QObject *parent = nullptr);
     ~HalconImageSourceNode() override;
+
+    /// P3 复核：相机检测在 QThreadPool 上跑，节点可能在检测中被删；析构必须等在途
+    /// 检测归零，否则 detectCamerasInThread() 正访问成员时 this 已悬垂（QPointer 入口
+    /// 判空只挡住「还没进函数」的情形，挡不住已进函数体的调用）。
+    void waitCameraDetectionDrained();
+    /// 在途检测结束：递减计数，归零时唤醒析构等待者（worker 任务末调用）
+    void finishCameraDetection();
 
     void init() override;
     void run(bool autoSwitch = true) override;
@@ -98,6 +106,9 @@ private:
     
     // 线程安全
     mutable QMutex m_mutex;
+    /// 在途相机检测计数 + 归零条件（析构等待用）
+    QWaitCondition m_detectDrained;
+    int m_detectInFlight = 0;
     
     // 防重复检测
     bool m_isDetectingCameras;

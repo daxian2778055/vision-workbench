@@ -4962,11 +4962,15 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
             pm->resetReadonlyFlag();
         // P9 修复：全局配置与运行布局已在 loadProject 成功尾被新方案改写，必须一并回滚；
         // applyReadonlyUI 在超时判定之前就跑过，中止后要按还原的只读态重算。
-        pm->restoreGlobals(globalsBefore);
+        const bool globalsRestored = pm->restoreGlobals(globalsBefore);
         applyReadonlyUI();
         logMessage(tr("有流程执行线程超时未退出，已取消打开方案"));
-        QMessageBox::warning(this, tr("提示"),
-            tr("有流程仍在执行且未能在限定时间内退出，已取消打开方案以避免程序崩溃。"));
+        QString msg = tr("有流程仍在执行且未能在限定时间内退出，已取消打开方案以避免程序崩溃。");
+        if (!globalsRestored) {
+            msg += tr("\n注意：全局配置或运行界面布局回滚失败，请检查后手动恢复。");
+            logMessage(msg);
+        }
+        QMessageBox::warning(this, tr("提示"), msg);
         return;
     }
 

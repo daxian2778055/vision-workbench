@@ -81,7 +81,25 @@ HalconImageSourceNode::HalconImageSourceNode(QObject *parent) : HalconNode(paren
 
 HalconImageSourceNode::~HalconImageSourceNode()
 {
+    waitCameraDetectionDrained();
     closeCamera();
+}
+
+void HalconImageSourceNode::waitCameraDetectionDrained()
+{
+    QMutexLocker locker(&m_mutex);
+    while (m_detectInFlight > 0)
+        m_detectDrained.wait(&m_mutex);
+}
+
+void HalconImageSourceNode::finishCameraDetection()
+{
+    QMutexLocker locker(&m_mutex);
+    if (m_detectInFlight > 0) {
+        --m_detectInFlight;
+        if (m_detectInFlight == 0)
+            m_detectDrained.wakeAll();
+    }
 }
 
 void HalconImageSourceNode::init()
@@ -1122,7 +1140,19 @@ QWidget *HalconImageSourceNode::createParamPanel()
         comboGuard->setEnabled(false);
         const QString selectedCamera = selfGuard->getSelectedCamera();
 
+        // P3 复核：入口判空只挡"尚未进函数"的情形——检测已开始后节点被删，
+        // detectCamerasInThread 正访问成员时 this 已悬垂。登记在途计数，析构等待归零。
+        {
+            QMutexLocker locker(&selfGuard->m_mutex);
+            if (selfGuard->m_detectInFlight == 0)
+                ++selfGuard->m_detectInFlight;
+        }
         QThreadPool::globalInstance()->start([selfGuard, comboGuard, selectedCamera]() {
+            // 在途计数的递减交给节点的成员方法（局部 struct 无外围类 private 访问权）
+            struct InFlightGuard {
+                HalconImageSourceNode *node;
+                ~InFlightGuard() { if (node) node->finishCameraDetection(); }
+            } inFlight{ selfGuard.data() };
             if (!selfGuard || !comboGuard) return;   // 节点或面板已销毁
             try {
                 QStringList detectedCameras = selfGuard->detectCamerasInThread();

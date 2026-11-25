@@ -120,6 +120,10 @@ private:
     void updateParamSummary();
     /// 内联表单改动 → 立即写回 CommunicationManager::updateDeviceConfig
     void applyInlineParamChange();
+ /// P1 复核：设备类型 → IP/端口键的共用映射（回显与写回必须同口径，否则切开关会把
+ /// 非 TCP 设备的真实地址覆盖成 127.0.0.1:502）。串口返回空键（无 IP/端口字段）。
+ static QString inlineIpKey(const QString &type);
+ static QString inlinePortKey(const QString &type);
     /// 选中变化时把设备配置灌进内联表单（阻断信号，避免回显触发写回）
     void syncInlineParamsFromSelection(const CommDeviceInfo &info);
     /// VM4.4 截图 4：地址空间只在寄存器类协议（Modbus/PLC/FINS）下出现

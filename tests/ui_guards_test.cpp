@@ -1347,13 +1347,19 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(cd.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 CommunicationManagerDialog.cpp");
     const QString cdSrc = QString::fromUtf8(cd.readAll());
     cd.close();
-    const int ia = cdSrc.indexOf(QStringLiteral("void CommunicationManagerDialog::applyInlineParamChange"));
-    const QString iaBody = cdSrc.mid(ia, 2600);
+    const int ia = cdSrc.indexOf(QStringLiteral("QString CommunicationManagerDialog::inlineIpKey"));
+    const QString iaBody = cdSrc.mid(ia, 1400);
     QVERIFY2(iaBody.contains(QStringLiteral("QStringLiteral(\"host\")"))
              && iaBody.contains(QStringLiteral("QStringLiteral(\"targetIp\")"))
              && iaBody.contains(QStringLiteral("QStringLiteral(\"remoteIp\")"))
-             && iaBody.contains(QStringLiteral("portKey")),
-             "内联 IP/端口必须按设备类型分发到 host/targetIp/remoteIp/serverIp 与对应端口键");
+             && cdSrc.contains(QStringLiteral("QString CommunicationManagerDialog::inlinePortKey"))
+             && cdSrc.contains(QStringLiteral("inlineIpKey(type)")),
+             "内联 IP/端口键映射必须按设备类型分发（host/targetIp/remoteIp/serverIp），"
+             "回显与写回同用一套映射");
+    const int se = cdSrc.indexOf(QStringLiteral("void CommunicationManagerDialog::syncInlineParamsFromSelection"));
+    QVERIFY2(cdSrc.mid(se, 1400).contains(QStringLiteral("info.config.value(ipKey)"))
+             && cdSrc.mid(se, 1400).contains(QStringLiteral("info.config.value(portKey)")),
+             "回显必须读与写回相同的键（ipKey/portKey），否则切内联开关会把非 TCP 设备地址覆盖成 127.0.0.1:502");
     // ⑮ 单窗口创建设备：必填校验不能丢（四段 IP 齐全 + 串口名非空），且改动即时重算按钮
     QFile vc(QStringLiteral(SRC_DIR "/src/VmDeviceCreateDialog.cpp"));
     QVERIFY2(vc.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 VmDeviceCreateDialog.cpp");

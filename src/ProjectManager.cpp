@@ -567,6 +567,10 @@ QJsonObject ProjectManager::snapshotGlobals() const
     QFile layout(runtimeLayoutPath());
     if (layout.open(QIODevice::ReadOnly))
         s[QStringLiteral("runtimeLayout")] = QString::fromUtf8(layout.readAll());
+    else
+        // P3 复核：显式记"原本无文件"——否则 restore 无法区分"没快照"与"原本无文件"，
+        // 被中止方案的布局会残留磁盘上，下次启动仍加载。
+        s[QStringLiteral("runtimeLayoutAbsent")] = true;
     return s;
 }
 
@@ -586,9 +590,13 @@ bool ProjectManager::restoreGlobals(const QJsonObject &snapshot)
     if (snapshot.contains(QStringLiteral("calibrations")))
         CalibrationManager::instance()->fromJson(snapshot[QStringLiteral("calibrations")].toObject());
 
-    // 载入前没有布局文件就不新建（快照无该键）；有则原子写回，与 applyGlobalsFromJson 同口径。
-    if (!snapshot.contains(QStringLiteral("runtimeLayout")))
+    // 载入前没有布局文件：删除中止方案新建的文件（显式标记，不是"没快照"）
+    if (!snapshot.contains(QStringLiteral("runtimeLayout"))) {
+        if (snapshot.value(QStringLiteral("runtimeLayoutAbsent")).toBool()
+            && QFile::exists(runtimeLayoutPath()))
+            return QFile::remove(runtimeLayoutPath());
         return true;
+    }
     QSaveFile layoutFile(runtimeLayoutPath());
     if (!layoutFile.open(QIODevice::WriteOnly | QIODevice::Text))
         return false;

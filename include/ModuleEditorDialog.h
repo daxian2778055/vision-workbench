@@ -4,6 +4,7 @@
 #include <QPointer>
 #include <QVector>
 #include <QMap>
+#include <QSet>
 #include <QVariant>
 #include <functional>
 #include "HalconWindow.h"
@@ -206,6 +207,8 @@ private:
     QTableWidget *m_paramSubscriptionTable = nullptr; /// P2-8 逐参数订阅表
     QTabWidget *m_vmTabs = nullptr;
     QMap<QString, QVariant> m_paramSnapshot;      /// 打开时的参数快照（取消回滚）
+    /// P3 复核：打开时存在的参数键集合——取消回滚要删掉编辑期新增的 res* 键
+    QSet<QString> m_initialParamNames;
     bool m_paramsDirty = false;                   /// 本次编辑是否改过参数
     /// P2 复核：FilePath/变量引用按钮按下时的参数值，clicked 后比较——取消对话框不改参则不标脏
     QVariant m_paramButtonBefore;
