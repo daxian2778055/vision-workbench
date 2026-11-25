@@ -1101,6 +1101,30 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(mwsrc.count(QStringLiteral("flush(&flushErr)")) >= 2
              && mwsrc.count(QStringLiteral("FlushResult::Failed")) >= 2,
              "退出前与停止时的 flush 失败都必须告知，不能静默丢数据");
+
+    // UI 细节三处（P10 复核）：split 分支可达 / 截断筛选下推 / 改名保留选中
+    const int splitAt = mwsrc.indexOf(QStringLiteral("splitDockWidget(ui->imageDock"));
+    QVERIFY2(splitAt > 0 && mwsrc.mid(splitAt - 120, 120).contains(QStringLiteral("if (ui->imageDock)")),
+             "结果区 split 必须由 imageDock 存在与否决定，不再依赖构造期为 false 的 isVisible()");
+    QFile id(QStringLiteral(SRC_DIR "/src/InspectionResultDialog.cpp"));
+    QVERIFY2(id.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 InspectionResultDialog.cpp");
+    const QString insp = QString::fromUtf8(id.readAll());
+    id.close();
+    QVERIFY2(insp.contains(QStringLiteral("queryResults(from, to, 501, flowFilter)"))
+             && insp.indexOf(QStringLiteral("const bool truncated")) < insp.indexOf(QStringLiteral("for (const auto &r : results)")),
+             "截断判定必须在流程名筛选之后（筛选下推 SQL）");
+    QFile dbh(QStringLiteral(SRC_DIR "/include/AppDatabase.h"));
+    QVERIFY2(dbh.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 AppDatabase.h");
+    const QString dbhead = QString::fromUtf8(dbh.readAll());
+    dbh.close();
+    QVERIFY2(dbhead.contains(QStringLiteral("flowNameFilter")), "queryResults 必须支持流程名下推");
+    QFile ds(QStringLiteral(SRC_DIR "/src/RuntimeInterfaceDesigner.cpp"));
+    QVERIFY2(ds.open(QIODevice::ReadOnly | QIODevice::Text), "打不开设计器");
+    const QString design = QString::fromUtf8(ds.readAll());
+    ds.close();
+    const int ren = design.indexOf(QStringLiteral("ctrl->columns[row].header = name.trimmed()"));
+    QVERIFY2(ren > 0 && design.mid(ren, 500).contains(QStringLiteral("setCurrentRow")),
+             "改名重建列表后必须恢复选中行");
 }
 
 void UiGuardsTest::f2ValidationGuards()

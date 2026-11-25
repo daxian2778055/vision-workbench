@@ -1434,6 +1434,12 @@ RuntimeInterfaceDesigner::RuntimeInterfaceDesigner(const QStringList &nodeFullNa
         pushUndo();
         ctrl->columns[row].header = name.trimmed();
         refreshPropertyPanel();
+        // P10 复核：refreshPropertyPanel 会 clear 并重建列列表，currentRow 回到 -1；
+        // 用户改完表头还需重新点选才能删除/再改名。恢复原选中行（阻断信号避免副作用）。
+        {
+            const QSignalBlocker blocker(m_columnList);
+            m_columnList->setCurrentRow(qMin(row, m_columnList->count() - 1));
+        }
         m_canvas->refreshControl(m_selected);
     });
 

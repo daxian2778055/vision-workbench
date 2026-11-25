@@ -7766,7 +7766,9 @@ void MainWindow::setupDockWidgets()
         // P10 现场反馈修复：结果区必须钉在"图像显示正下方"作为独立面板，
         // 不能 addDockWidget(Right) —— 那会与 imageDock 自动 tabbed，结果页一 show
         // 就把图像显示页压到后面，用户看到"右侧只有历史结果，没有图像显示"。
-        if (ui->imageDock && ui->imageDock->isVisible())
+        // P10 复核：构造期 imageDock 尚未 show，isVisible() 恒 false ⇒ 此分支是死代码，
+        // 实际永远走 Right 兜底。只要 imageDock 存在就 split，不依赖当时可见态。
+        if (ui->imageDock)
             splitDockWidget(ui->imageDock, resultDock, Qt::Vertical);
         else
             addDockWidget(Qt::RightDockWidgetArea, resultDock);

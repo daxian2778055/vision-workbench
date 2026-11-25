@@ -76,7 +76,7 @@ public:
     /// 空列表直接返回 true（不产生任何事务）。
     bool saveInspectionResults(const QList<InspectionRecord> &records);
     QList<InspectionRecord> queryResults(const QDateTime &from, const QDateTime &to,
-                                         int limit = 500) const;
+                                         int limit = 500, const QString &flowNameFilter = QString()) const;
 
     // ---- \u7528\u6237\u7BA1\u7406 ----
     bool addUser(const QString &name, const QString &password, const QString &role);

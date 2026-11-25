@@ -630,19 +630,25 @@ bool AppDatabase::saveInspectionResult(const QString &flowName, const QString &n
     return true;
 }
 
-QList<InspectionRecord> AppDatabase::queryResults(const QDateTime &from, const QDateTime &to, int limit) const
+QList<InspectionRecord> AppDatabase::queryResults(const QDateTime &from, const QDateTime &to,
+                                                  int limit, const QString &flowNameFilter) const
 {
     QList<InspectionRecord> records;
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
     if (!prepareRead(q, db, QStringLiteral(
                            "SELECT id, flow_name, node_name, passed, value, timestamp FROM inspection_results "
-                           "WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp DESC LIMIT ?"),
+                           "WHERE timestamp BETWEEN ? AND ? AND (? = '' OR flow_name LIKE ?) "
+                           "ORDER BY timestamp DESC LIMIT ?"),
                      QStringLiteral("queryResults"))) {
         return records;
     }
     q.addBindValue(utcBindText(from));
     q.addBindValue(utcBindText(to));
+    const QString filterText = flowNameFilter.isNull() ? QStringLiteral("") : flowNameFilter;
+    const QString pattern = filterText.isEmpty() ? QStringLiteral("") : QStringLiteral("%%1%").arg(filterText);
+    q.addBindValue(filterText);
+    q.addBindValue(pattern);
     q.addBindValue(limit);
     if (!execRead(q, db, QStringLiteral("queryResults"))) return records;
 

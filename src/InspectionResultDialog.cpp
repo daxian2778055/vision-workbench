@@ -147,19 +147,16 @@ void InspectionResultDialog::refreshResults()
     QDateTime from = m_fromDateTime->dateTime();
     QDateTime to = m_toDateTime->dateTime();
 
-    // P10：探测 500 条上限，截断时提示（多查 1 条判定）
-    auto results = AppDatabase::instance()->queryResults(from, to, 501);
+    // P10 复核：截断判定必须在筛选之后——原SQL先取全局 500 条、在内存里筛流程名，
+    // 筛后只剩几条却仍写"仅显示最近 500 条"，且真正匹配的行可能在被丢弃的那批里。
+    // 把流程名筛选下推到 SQL 的 WHERE，501 条探测与展示都是同一筛选集。
+    QString flowFilter = m_flowFilter->text().trimmed();
+    auto results = AppDatabase::instance()->queryResults(from, to, 501, flowFilter);
     const bool truncated = results.size() > 500;
     if (truncated)
         results.removeLast();
 
-    // Apply flow filter if set
-    QString flowFilter = m_flowFilter->text().trimmed();
-
     for (const auto &r : results) {
-        if (!flowFilter.isEmpty() && !r.flowName.contains(flowFilter, Qt::CaseInsensitive)) {
-            continue;
-        }
 
         int row = m_resultTable->rowCount();
         m_resultTable->insertRow(row);
