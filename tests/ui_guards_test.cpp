@@ -1305,6 +1305,33 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     const int ren = design.indexOf(QStringLiteral("ctrl->columns[row].header = name.trimmed()"));
     QVERIFY2(ren > 0 && design.mid(ren, 500).contains(QStringLiteral("setCurrentRow")),
              "改名重建列表后必须恢复选中行");
+
+    // ⑩ 审批握手丢唤醒：GUI 空闲时可能在 worker wait 前置 taken+wakeAll，
+    //    wait() 返回值不能当状态用——必须是 while (!taken) 谓词循环
+    QFile sp(QStringLiteral(SRC_DIR "/src/ScriptSecurityPolicy.cpp"));
+    QVERIFY2(sp.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 ScriptSecurityPolicy.cpp");
+    const QString spSrc = QString::fromUtf8(sp.readAll());
+    sp.close();
+    QVERIFY2(spSrc.contains(QStringLiteral("while (!hs->taken && !hs->abandoned)"))
+             && !spSrc.contains(QStringLiteral("wait(&hs->mutex, kGuiTakeoverTimeoutMs) ||")),
+             "GUI 接管等待必须用谓词循环，不能拿 wait() 返回值判状态（丢唤醒误拒绝）");
+    // ⑪ 通信寄存器转发连接：新增两条不得退回 context=this + 裸 node（UAF）
+    QFile cm(QStringLiteral(SRC_DIR "/src/CommunicationManager.cpp"));
+    QVERIFY2(cm.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 CommunicationManager.cpp");
+    const QString cmSrc = QString::fromUtf8(cm.readAll());
+    cm.close();
+    QVERIFY2(!cmSrc.contains(QStringLiteral("registerValueChanged, this,"))
+             && !cmSrc.contains(QStringLiteral("plcRegisterChanged, this,")),
+             "寄存器转发连接 context 必须是 node，节点删除时排队回调一并取消，避免裸 node UAF");
+    // ⑫ 相机刷新按钮 lambda：selfGuard 必须在节点存活时建好并按值捕获，lambda 首行判空
+    QFile hi(QStringLiteral(SRC_DIR "/src/HalconImageSourceNode.cpp"));
+    QVERIFY2(hi.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 HalconImageSourceNode.cpp");
+    const QString hiSrc = QString::fromUtf8(hi.readAll());
+    hi.close();
+    const int hc = hiSrc.indexOf(QStringLiteral("auto refreshCameras ="));
+    QVERIFY2(hc > 0 && hiSrc.mid(hc - 120, 120).contains(QStringLiteral("QPointer<HalconImageSourceNode> selfGuard(this)"))
+             && hiSrc.mid(hc, 200).contains(QStringLiteral("if (!selfGuard || !comboGuard) return;")),
+             "相机刷新 lambda 必须在节点存活时建 QPointer 并按值捕获，入口判空防 UAF");
 }
 
 void UiGuardsTest::f2ValidationGuards()

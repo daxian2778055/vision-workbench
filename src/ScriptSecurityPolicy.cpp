@@ -294,7 +294,14 @@ bool ScriptSecurityPolicy::requestConfirmation(const QString &language, const QS
         }, Qt::QueuedConnection);
 
         QMutexLocker locker(&hs->mutex);
-        if (!hs->cond.wait(&hs->mutex, kGuiTakeoverTimeoutMs) || !hs->taken) {
+        // P1 复核：不能用 wait() 返回值判"GUI 是否接管"——GUI 空闲时可能在 worker
+        // 进入 wait 前就置 taken=true 并 wakeAll，造成丢唤醒：wait 超时返回 false
+        // 却 taken 为真，误判卡死拒绝审批。改用谓词循环，只看状态位。
+        while (!hs->taken && !hs->abandoned) {
+            if (!hs->cond.wait(&hs->mutex, kGuiTakeoverTimeoutMs))
+                break;   // 真超时：GUI 未接管
+        }
+        if (!hs->taken) {
             hs->abandoned = true;
             qWarning() << "[ScriptSecurityPolicy] GUI 线程在" << kGuiTakeoverTimeoutMs
                        << "ms 内未接管脚本审批（很可能正阻塞在 FlowExecutor::wait），"

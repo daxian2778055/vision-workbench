@@ -558,32 +558,34 @@ bool CommunicationManager::createDeviceNode(const QString &name, const QString &
         });
 
         // Forward register value changes
-        connect(node, &CommunicationNodeBase::registerValueChanged, this,
+        // U-20/11-10 同族复核：与上面三条旧连接同口径——context 用 node，节点 deleteLater
+        // 时排队中的 lambda 一并取消；不能在回调里解引用已删除的裸 node。
+        connect(node, &CommunicationNodeBase::registerValueChanged, node,
                 [this, node](int address, const QByteArray &value, const QString &dataType) {
             Q_UNUSED(dataType)
-            // B4-3 寄存器级上传：dataUpload 关闭时，原始寄存器数据也不得冒泡到
-            // 下游（字符串触发/接收事件/脚本订阅）。与设备级闸同口径，按 deviceName 判定。
-            if (!isDataUploadEnabled(node->deviceName())) return;
+            const QString name = node->deviceName();
+            if (!isDataUploadEnabled(name)) return;
             // 发出通信设备收到的原始数据（供字符串触发和接收事件系统使用）
             QByteArray fullData;
             QDataStream stream(&fullData, QIODevice::WriteOnly);
             stream << address;
             fullData.append(value);
-            emit dataReceived(node->deviceName(), fullData);
+            emit dataReceived(name, fullData);
         });
 
         // Forward PLC register changes
         if (auto *plc = qobject_cast<PlcCommNode *>(node)) {
-            connect(plc, &PlcCommNode::plcRegisterChanged, this,
+            connect(plc, &PlcCommNode::plcRegisterChanged, node,
                     [this, node](const QString &, int address,
                                  const QByteArray &value, const QString &dataType) {
                 Q_UNUSED(dataType)
-                if (!isDataUploadEnabled(node->deviceName())) return;   // B4-3 寄存器级上传
+                const QString name = node->deviceName();
+                if (!isDataUploadEnabled(name)) return;   // B4-3 寄存器级上传
                 QByteArray fullData;
                 QDataStream stream(&fullData, QIODevice::WriteOnly);
                 stream << address;
                 fullData.append(value);
-                emit dataReceived(node->deviceName(), fullData);
+                emit dataReceived(name, fullData);
             });
         }
     }

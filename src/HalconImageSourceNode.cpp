@@ -1110,15 +1110,17 @@ QWidget *HalconImageSourceNode::createParamPanel()
     // getSelectedCamera()（成员函数且带锁）——节点先于面板销毁即 UAF。
     // 改为：GUI 线程先取好选中相机；工作线程与 queued 回调都用 QPointer 守卫；
     // queued 回调只碰 combo 与值捕获的数据，完全不触碰节点。
-    auto refreshCameras = [=]() {
-        cameraSelectCombo->clear();
-        cameraSelectCombo->addItem("正在检测相机...");
-        cameraSelectCombo->setEnabled(false);
-
-        QPointer<HalconImageSourceNode> selfGuard(this);
-        QPointer<QComboBox> comboGuard(cameraSelectCombo);
-        // 检测期间 combo 被禁用，启动时取值与回调里取值等价
-        const QString selectedCamera = getSelectedCamera();
+    // P1 复核：selfGuard 必须在 this 存活时（createParamPanel 内）建好并按值捕获——
+    // 原实现在按钮 lambda 执行时才 QPointer(this)，节点已删则构造即 UAF；
+    // 且下面的 getSelectedCamera() 成员调用触碰悬空 this。
+    QPointer<HalconImageSourceNode> selfGuard(this);
+    QPointer<QComboBox> comboGuard(cameraSelectCombo);
+    auto refreshCameras = [selfGuard, comboGuard]() {
+        if (!selfGuard || !comboGuard) return;
+        comboGuard->clear();
+        comboGuard->addItem("正在检测相机...");
+        comboGuard->setEnabled(false);
+        const QString selectedCamera = selfGuard->getSelectedCamera();
 
         QThreadPool::globalInstance()->start([selfGuard, comboGuard, selectedCamera]() {
             if (!selfGuard || !comboGuard) return;   // 节点或面板已销毁
