@@ -334,6 +334,20 @@ void SoakTest::testContinuousSoak()
         }
     }
 
+    // P0-2 复核：原判定只看末轮数 >=10，执行器第 10 轮后停摆也可绿（时长靠 timer 撑满）。
+    // 逐样本断言 rounds 单调不减，且后段相对基线有显著增长——节拍没停摆才是长稳。
+    QVERIFY2(samples.size() >= 10, "长稳采样点不足，无法判断节拍是否持续");
+    const Sample &baseSmp = samples.at(baseIdx);
+    const Sample &lastSmp = samples.last();
+    for (int i = 1; i < samples.size(); ++i)
+        QVERIFY2(samples.at(i).rounds >= samples.at(i - 1).rounds,
+                 qPrintable(QStringLiteral("轮次在第 %1 个采样点倒退：可能重置或回填").arg(i)));
+    const qint64 grewRounds = qint64(lastSmp.rounds) - qint64(baseSmp.rounds);
+    const qint64 grewSec = lastSmp.sec - baseSmp.sec;
+    QVERIFY2(grewSec <= 0 || grewRounds >= grewSec,
+             qPrintable(QStringLiteral("后段只增长 %1 轮/%2 秒，节拍疑似停摆")
+                            .arg(grewRounds).arg(grewSec)));
+
     QVERIFY2(finalStats.rounds >= 10,
              qPrintable(QStringLiteral("长跑期间只出了 %1 轮，节拍异常").arg(finalStats.rounds)));
     QVERIFY2(finalStats.failedRounds == 0,

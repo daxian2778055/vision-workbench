@@ -1165,6 +1165,30 @@ void UiGuardsTest::p10CrossCutGuards()
     QVERIFY2(probe.contains(QStringLiteral("RETIRED"))
              && probe.contains(QStringLiteral("MvsImageSourceNode.cpp")),
              "G2 探针 A5 必须标记退役，不得再指向已删的 ImageReadNode.cpp");
+
+    // ⑤ 测试有效性守卫：HelpViewer 腿须真 close()（非 delete）+ 源码钉生产持有/复用；
+    //    soak 须有逐样本单调判据（原只末轮数>=10，停摆可绿）
+    QFile ug(QStringLiteral(SRC_DIR "/tests/ui_guards_test.cpp"));
+    QVERIFY2(ug.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 ui_guards_test.cpp");
+    const QString ugSrc = QString::fromUtf8(ug.readAll());
+    ug.close();
+    // 字面量在守卫生效文本、注释、真正定义处各出现一次；取以 \n 开头且后跟 \r 的真正定义
+    const QString marker = QStringLiteral("\nvoid UiGuardsTest::helpViewerDeletesOnClose()");
+    const int hvDef = ugSrc.indexOf(marker);
+    QVERIFY(hvDef > 0);
+    const int hvEnd = ugSrc.indexOf(QStringLiteral("QTEST_MAIN"), hvDef);
+    const QString hvBody = ugSrc.mid(hvDef, hvEnd - hvDef);
+    QVERIFY2(hvBody.contains(QStringLiteral("viewer->close()"))
+             && hvBody.contains(QStringLiteral("viewer->show()"))
+             && hvBody.contains(QStringLiteral("destroyedCount")),
+             "HelpViewer 腿必须 show→close + destroyed 断言，不再用 delete 测局部指针");
+    QFile sk(QStringLiteral(SRC_DIR "/tests/soak_test.cpp"));
+    QVERIFY2(sk.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 soak_test.cpp");
+    const QString soak = QString::fromUtf8(sk.readAll());
+    sk.close();
+    QVERIFY2(soak.contains(QStringLiteral("samples.at(i).rounds >= samples.at(i - 1).rounds"))
+             && soak.contains(QStringLiteral("grewRounds")),
+             "soak 必须有逐样本 rounds 单调判据与后段增长判据，不能只看末轮数");
 }
 
 void UiGuardsTest::f1DataPanelFollowupGuards()
@@ -3991,8 +4015,32 @@ void UiGuardsTest::helpViewerDeletesOnClose()
     QPointer<HelpViewer> viewer = new HelpViewer;
     QVERIFY2(viewer->testAttribute(Qt::WA_DeleteOnClose),
              "帮助窗必须关窗即销毁，否则主窗口一直握着旧实例");
-    delete viewer.data();
+    // P0-1 复核：原腿用 delete 测局部 QPointer，判据置死也全绿。改为真走 close()，
+    // 断言 destroyed 触发且观察者指针置空（WA_DeleteOnClose 的契约）。
+    int destroyedCount = 0;
+    connect(viewer.data(), &QObject::destroyed, this, [&destroyedCount]() { ++destroyedCount; });
+    // WA_DeleteOnClose 只对"曾显示过"的窗口生效（Qt 语义），先 show 再 close
+    viewer->show();
+    QCoreApplication::processEvents();
+    viewer->close();
+    QCoreApplication::processEvents();
+    QCOMPARE(destroyedCount, 1);
     QVERIFY(viewer.isNull());
+
+    // 生产侧守卫：MainWindow 必须用 QPointer 持有且两处复用前判空重建
+    QFile mw(QStringLiteral(SRC_DIR "/src/MainWindow.cpp"));
+    QVERIFY2(mw.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 MainWindow.cpp");
+    const QString src = QString::fromUtf8(mw.readAll());
+    mw.close();
+    QFile mh(QStringLiteral(SRC_DIR "/include/MainWindow.h"));
+    QVERIFY2(mh.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 MainWindow.h");
+    const QString head = QString::fromUtf8(mh.readAll());
+    mh.close();
+    QVERIFY2(head.contains(QStringLiteral("QPointer<HelpViewer> m_helpViewer")),
+             "MainWindow 必须用 QPointer 持有帮助窗，裸指针在关窗销毁后悬垂");
+    const int reuse = src.indexOf(QStringLiteral("if (!m_helpViewer)"));
+    QVERIFY2(reuse >= 0 && src.indexOf(QStringLiteral("if (!m_helpViewer)"), reuse + 5) > reuse,
+             "两处帮助入口都必须在复用前判空重建（原只测测试自建指针，漏掉生产接线）");
 }
 
 QTEST_MAIN(UiGuardsTest)
