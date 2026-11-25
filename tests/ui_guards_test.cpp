@@ -1332,6 +1332,28 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(hc > 0 && hiSrc.mid(hc - 120, 120).contains(QStringLiteral("QPointer<HalconImageSourceNode> selfGuard(this)"))
              && hiSrc.mid(hc, 200).contains(QStringLiteral("if (!selfGuard || !comboGuard) return;")),
              "相机刷新 lambda 必须在节点存活时建 QPointer 并按值捕获，入口判空防 UAF");
+
+    // ⑬ 圆拟合选组：剔除点不能进选组评分，输出残差仍含全集
+    QFile fc(QStringLiteral(SRC_DIR "/src/OpencvFitCircleNode.cpp"));
+    QVERIFY2(fc.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 OpencvFitCircleNode.cpp");
+    const QString fcSrc = QString::fromUtf8(fc.readAll());
+    fc.close();
+    QVERIFY2(fcSrc.contains(QStringLiteral("candidate.selectionScore < best.selectionScore"))
+             && !fcSrc.contains(QStringLiteral("candidate.residual < best.residual"))
+             && fcSrc.contains(QStringLiteral("fitResidual\")] = choice.residual")),
+             "局部最优必须用保留点 RMS 选组，输出残差仍用含剔除点的全集 RMS");
+    // ⑭ 通信内联参数：IP 键必须按设备类型分发（serverIp 只有 TCP 消费）
+    QFile cd(QStringLiteral(SRC_DIR "/src/CommunicationManagerDialog.cpp"));
+    QVERIFY2(cd.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 CommunicationManagerDialog.cpp");
+    const QString cdSrc = QString::fromUtf8(cd.readAll());
+    cd.close();
+    const int ia = cdSrc.indexOf(QStringLiteral("void CommunicationManagerDialog::applyInlineParamChange"));
+    const QString iaBody = cdSrc.mid(ia, 2600);
+    QVERIFY2(iaBody.contains(QStringLiteral("QStringLiteral(\"host\")"))
+             && iaBody.contains(QStringLiteral("QStringLiteral(\"targetIp\")"))
+             && iaBody.contains(QStringLiteral("QStringLiteral(\"remoteIp\")"))
+             && iaBody.contains(QStringLiteral("portKey")),
+             "内联 IP/端口必须按设备类型分发到 host/targetIp/remoteIp/serverIp 与对应端口键");
 }
 
 void UiGuardsTest::f2ValidationGuards()

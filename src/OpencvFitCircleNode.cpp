@@ -21,7 +21,9 @@ struct CircleChoice
     double col = 0.0;
     double row = 0.0;
     double radius = 0.0;
-    double residual = 0.0;   ///< 径向残差 RMS（px）
+    double residual = 0.0;   ///< 径向残差 RMS（px，剔除前全集，给 fitResidual 输出）
+    /// P1 复核：选组用保留点 RMS——residual 含剔除点会让"剔除成功"的组被系统性 penalize
+    double selectionScore = 0.0;
     int usedPoints = 0;
     int rejectedPoints = 0;
     /// 与**本组输入点**一一对应的匹配掩码（未剔除的点为 true）
@@ -136,10 +138,17 @@ CircleChoice fitCircleGroup(const QVector<QPointF> &points, int needPoints,
         return choice;
 
     double sumSquares = 0.0;
+    double keptSquares = 0.0;
     for (const cv::Point2f &point : evalPoints) {
         const double distance = std::hypot(point.x - center.x, point.y - center.y);
         const double residual = distance - radius;
         sumSquares += residual * residual;
+    }
+    for (int index : usableIndex) {
+        const QPointF &point = points.at(index);
+        const double residual =
+            std::hypot(point.x() - center.x, point.y() - center.y) - radius;
+        keptSquares += residual * residual;
     }
 
     choice.valid = true;
@@ -148,6 +157,8 @@ CircleChoice fitCircleGroup(const QVector<QPointF> &points, int needPoints,
     choice.radius = radius;
     choice.residual = evalPoints.empty() ? 0.0
                         : std::sqrt(sumSquares / evalPoints.size());
+    choice.selectionScore = usable.empty() ? 0.0
+                            : std::sqrt(keptSquares / usable.size());
     choice.usedPoints = static_cast<int>(usable.size());
     choice.usedMask = QVector<bool>(points.size(), false);
     for (int index : usableIndex)
@@ -191,7 +202,8 @@ CircleChoice chooseCircle(const QVector<QVector<QPointF>> &groups,
                                                 rejectDistance);
         if (!candidate.valid)
             continue;
-        if (!best.valid || candidate.residual < best.residual) {
+        // P1 复核：用保留点 RMS 排序——含剔除点的 residual 会惩罚剔除成功的组
+        if (!best.valid || candidate.selectionScore < best.selectionScore) {
             // 候选掩码是本组相对下标：选中最优组后映射到全部候选点上
             QVector<bool> globalMask(allPoints.size(), false);
             for (int i = 0; i < group.size(); ++i)

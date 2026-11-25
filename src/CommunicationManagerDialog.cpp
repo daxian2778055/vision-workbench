@@ -375,10 +375,25 @@ void CommunicationManagerDialog::applyInlineParamChange()
         if (seg.isEmpty()) complete = false;
         segs << seg;
     }
+    // P1 复核：serverIp 只有 TCP 节点消费。按设备类型分发 IP 键——
+    // Modbus/PLC 读 host，FINS 读 targetIp/targetPort，UDP 读 remoteIp/remotePort，
+    // 否则这五类设备的内联 IP/端口改动全部落在无效键上、节点读不到。
+    const QString type = cm->deviceInfo(name).type;
+    const QString ipKey = (type == QStringLiteral("Modbus") || type == QStringLiteral("PLC"))
+                              ? QStringLiteral("host")
+                              : (type.startsWith(QStringLiteral("FINS"))
+                                     ? QStringLiteral("targetIp")
+                                     : (type == QStringLiteral("UDP")
+                                            ? QStringLiteral("remoteIp")
+                                            : QStringLiteral("serverIp")));
+    const QString portKey = type.startsWith(QStringLiteral("FINS"))
+                                ? QStringLiteral("targetPort")
+                                : (type == QStringLiteral("UDP") ? QStringLiteral("remotePort")
+                                                                 : QStringLiteral("port"));
     if (complete)
-        cfg[QStringLiteral("serverIp")] = segs.join(QLatin1Char('.'));
+        cfg[ipKey] = segs.join(QLatin1Char('.'));
     if (m_inlinePort)
-        cfg[QStringLiteral("port")] = m_inlinePort->value();
+        cfg[portKey] = m_inlinePort->value();
     if (m_inlineDataUpload)
         cfg[QStringLiteral("dataUpload")] = m_inlineDataUpload->isChecked();
     if (m_inlineAutoReconnect)
