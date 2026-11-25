@@ -818,6 +818,19 @@ void UiGuardsTest::p7TrainingToolGuards()
     QVERIFY2(tr.contains(QStringLiteral("重新扫描")),
              "执行导出命令后应有重新扫描产物的入口");
 
+    // ⑥ P7 复核三处失实点：data.yaml 预览、探测竞态、产物时间下限/手工选择保护
+    QVERIFY2(tr.contains(QStringLiteral("refreshOnEdit(m_dataYaml)")),
+             "data.yaml 参与 buildArgs，漏接刷新会让预览与实跑分叉");
+    const int probeFn = tr.indexOf(QStringLiteral("&QFutureWatcher<TrainingRunner::EnvStatus>::finished"));
+    QVERIFY2(probeFn > 0 && tr.mid(probeFn, 900).contains(QStringLiteral("st.pythonPath")),
+             "探测回调必须核对路径，旧路径绿灯不得覆盖已修改标记");
+    QVERIFY2(tr.mid(dis, disEnd - dis).contains(QStringLiteral("m_runStartedMs")),
+             "产物发现必须以本轮开始时刻为时间下限，历史 best*.onnx 不得误报");
+    QVERIFY2(tr.contains(QStringLiteral("m_onnxManuallyChosen = true"))
+             && tr.mid(tr.indexOf(QStringLiteral("void TrainingRunnerDialog::refreshArtifacts")), 400)
+                    .contains(QStringLiteral("m_onnxManuallyChosen")),
+             "重新扫描不得覆盖手工选择的 ONNX");
+
     // ④ 异常退出区分
     QFile r(QStringLiteral(SRC_DIR "/src/TrainingRunner.cpp"));
     QVERIFY2(r.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 TrainingRunner.cpp");

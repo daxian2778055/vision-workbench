@@ -89,6 +89,11 @@ private:
     /// 在界面线程同步等会让窗口像卡死。
     QFutureWatcher<TrainingRunner::EnvStatus> *m_probeWatcher = nullptr;
     bool m_envOk = false;
+    /// 本轮训练开始时刻（毫秒）；产物发现只认不早于此时间的 best*.onnx，
+    /// 否则 Ultralytics 每轮新建 trainN 目录时旧模型会被当成"本次产物"误报。
+    qint64 m_runStartedMs = -1;
+    /// 用户手工选过 ONNX 后，重新扫描只更新摘要、不覆盖手工路径。
+    bool m_onnxManuallyChosen = false;
     /// 用户点了关闭/Esc：收尾后自动关窗（2026-10-29，与训练向导同策略）
     bool m_closeRequested = false;
 };

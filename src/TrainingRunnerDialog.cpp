@@ -224,6 +224,7 @@ TrainingRunnerDialog::TrainingRunnerDialog(QWidget *parent) : QDialog(parent)
     refreshOnEdit(m_expOrWeights);
     refreshOnEdit(m_ckpt);
     refreshOnEdit(m_extra);
+    refreshOnEdit(m_dataYaml);   // P7 复核：Ultralytics 分支的 data= 来自此控件，漏接会让预览与实跑分叉
     connect(m_epochs, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &TrainingRunnerDialog::refreshCommand);
     connect(m_imgsz, QOverload<int>::of(&QSpinBox::valueChanged),
@@ -327,12 +328,16 @@ void TrainingRunnerDialog::onProbeEnv()
         m_probeWatcher = new QFutureWatcher<TrainingRunner::EnvStatus>(this);
         connect(m_probeWatcher, &QFutureWatcher<TrainingRunner::EnvStatus>::finished, this, [this]() {
             const TrainingRunner::EnvStatus st = m_probeWatcher->result();
-            m_envOk = st.ok;
+            // P7 复核：探测途中改了 Python 路径，旧路径的绿灯不能覆盖"路径已修改"的失效标记。
+            const bool stillSame = (m_python->text().trimmed() == st.pythonPath.trimmed());
+            m_envOk = st.ok && stillSame;
             m_envLabel->setText(st.ok
-                                    ? QStringLiteral("环境就绪：%1").arg(st.detail)
+                                    ? (stillSame
+                                           ? QStringLiteral("环境就绪：%1").arg(st.detail)
+                                           : QStringLiteral("探测期间路径已修改，请重新检测环境"))
                                     : QStringLiteral("环境不可用：%1（见 train-env/README.md）").arg(st.detail));
-            m_envLabel->setStyleSheet(st.ok ? QStringLiteral("color:#1a7f37;")
-                                            : QStringLiteral("color:#c22;"));
+            m_envLabel->setStyleSheet(st.ok && stillSame ? QStringLiteral("color:#1a7f37;")
+                                                        : QStringLiteral("color:#c22;"));
             if (m_probeBtn)
                 m_probeBtn->setEnabled(true);
             setRunning(m_runner && m_runner->running());
@@ -364,6 +369,8 @@ void TrainingRunnerDialog::onStart()
     saveSettings();
     setRunning(true);
     appendLog(QStringLiteral("[开始] 训练器：%1").arg(m_trainer->currentText()));
+    m_runStartedMs = QDateTime::currentMSecsSinceEpoch();   // 产物发现的时间下限（本轮起点）
+    m_onnxManuallyChosen = false;                            // 新一轮以新产物为准，不再沿用手工选择
     m_runner->start(program, args, m_yoloxDir->text().trimmed());
 }
 
@@ -542,6 +549,10 @@ QString TrainingRunnerDialog::discoverOnnx() const
                 continue;
             ++scanned;
             const qint64 mt = fi.lastModified().toMSecsSinceEpoch();
+            // P7 复核：Ultralytics 每轮新建 trainN 目录，旧 best*.onnx 仍在原处；不设时间下限
+            // 时本轮失败/未导出照样报"已发现 ONNX"。只认本轮起点之后的文件（留 1 分钟时钟余量）。
+            if (m_runStartedMs > 0 && mt < m_runStartedMs - 60000)
+                continue;
             if (mt > bestMtime) {
                 bestMtime = mt;
                 best = QDir::toNativeSeparators(path);
@@ -569,7 +580,12 @@ QString TrainingRunnerDialog::resolveClasses(const QString &modelPath) const
 
 void TrainingRunnerDialog::refreshArtifacts()
 {
-    m_lastOnnx = discoverOnnx();
+    const QString discovered = discoverOnnx();
+    // 手工选择的 ONNX 优先：重新扫描/训练结束的刷新只更新摘要，不覆盖用户显式选的路径
+    // （新一轮训练已在 onStart 清掉该标记，仍以新产物为准）。
+    if (m_onnxManuallyChosen && !discovered.isEmpty())
+        return;
+    m_lastOnnx = discovered;
     m_lastClasses = resolveClasses(m_lastOnnx);
     const bool ready = !m_lastOnnx.isEmpty();
     m_detectBtn->setEnabled(ready);
@@ -593,6 +609,7 @@ void TrainingRunnerDialog::onChooseOnnx()
         return;
     m_lastOnnx = QDir::toNativeSeparators(path);
     m_lastClasses = resolveClasses(m_lastOnnx);
+    m_onnxManuallyChosen = true;
     m_detectBtn->setEnabled(true);
     m_countBtn->setEnabled(true);
     m_artifactLabel->setText(m_lastOnnx
