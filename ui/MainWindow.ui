@@ -262,9 +262,6 @@
    <property name="text">
     <string>开始执行</string>
    </property>
-   <property name="icon">
-    <iconset>:/icons/start.png</iconset>
-   </property>
   </action>
   <action name="actionStopExecution">
    <property name="text">
@@ -272,9 +269,6 @@
    </property>
    <property name="enabled">
     <bool>false</bool>
-   </property>
-   <property name="icon">
-    <iconset>:/icons/stop.png</iconset>
    </property>
   </action>
   <action name="actionToggleToolDock">

@@ -42,6 +42,10 @@ public:
     void saveVisibility() const;
     void restoreVisibility();
 
+    /// 启动恢复主窗口几何前先创建全部辅助 dock：QMainWindow::restoreState 只能匹配
+    /// 当时已存在且带 objectName 的 dock，否则用户拖过的几何/浮窗态必然丢失。
+    void createAllDocks();
+
     /// 非模态打开辅助窗口：已开着就前置激活（不重复开），关闭后自动销毁。
     /// onShown 在新建与复用两条路径上都会调用，供同键多入口的对话框按入口切页。
     void showDialog(const QString &key, const std::function<QDialog *()> &create,

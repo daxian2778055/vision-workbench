@@ -1743,6 +1743,18 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(spEncSrc.contains(QStringLiteral("if (version != kFormatVersion)"))
              && spEncSrc.contains(QStringLiteral("declared > 64u * 1024u * 1024u")),
              "加密探测须校验版本；legacy 解压须设硬上限防 zip-bomb");
+    // ㊼ UI 布局/面板域 U1：场景窗随页签销毁、dock 几何恢复、图标回退
+    QVERIFY2(mwSrc.count(QStringLiteral("m_auxPanels->closeAllDialogs();")) >= 3
+             && mwSrc.contains(QStringLiteral("m_auxPanels->createAllDocks();"))
+             && mwSrc.contains(QStringLiteral("节点图标加载失败，已回退到分类图标")),
+             "切页签要销毁场景相关辅助窗；主窗口几何恢复前要创建全部 dock；图标失败要回退");
+    const QString apmSrc = readSrc("src/AuxPanelManager.cpp");
+    QVERIFY2(apmSrc.contains(QStringLiteral("setObjectName(QStringLiteral(\"performanceDock\"))"))
+             && apmSrc.contains(QStringLiteral("setObjectName(QStringLiteral(\"outputDataDock\"))"))
+             && apmSrc.contains(QStringLiteral("void AuxPanelManager::createAllDocks()")),
+             "辅助 dock 须有稳定 objectName 且在 restoreState 前创建，几何/浮窗态才能恢复");
+    QVERIFY2(!readSrc("ui/MainWindow.ui").contains(QStringLiteral(":/icons/start.png")),
+             "ui 中未注册的 qrc 图标引用应移除，避免静默空 QIcon");
 }
 
 void UiGuardsTest::f2ValidationGuards()

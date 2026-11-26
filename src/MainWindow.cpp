@@ -7104,6 +7104,10 @@ void MainWindow::onCurrentTabChanged(int index)
     m_overlayNodes.clear();
     if (m_imageView)
         m_imageView->clearHImageOverlays();
+    // U1 复核：流程变量/配方/参数搜索/代码导出等非模态窗按 key 缓存复用，内部持有
+    // 旧流程的场景快照；切页后必须真销毁，避免误写/误导出上一个流程。
+    if (m_auxPanels)
+        m_auxPanels->closeAllDialogs();
     if (m_imageView2)
         m_imageView2->clearHImageOverlays();
     // 图像源下拉按当前场景重置（等新场景选中节点后再填充）
@@ -7284,6 +7288,10 @@ void MainWindow::setupToolLibrary()
                 QIcon icon(reg->iconPath);
                 if (!icon.isNull()) {
                     item->setIcon(0, icon);
+                } else {
+                    // 路径非空但资源缺失/损坏时同样回退，不能静默变成无图标
+                    item->setIcon(0, NodeIconPalette::categoryIcon(reg->category));
+                    VFP_DEBUG << "节点图标加载失败，已回退到分类图标:" << reg->iconPath;
                 }
             } else {
                 // 根据节点类型生成默认图标
@@ -7827,6 +7835,10 @@ void MainWindow::setupDockWidgets()
 
     // 恢复上次退出时的停靠布局（用户拖过的左右占比、面板显隐都要记住）。
     // 键名带版本：旧版本存过"流程区被挤成一条缝"的布局，不能让它覆盖本次修正后的默认比例。
+    // U1 复核：restoreState 按 objectName 匹配"当时已存在"的 dock，而辅助 dock 原本
+    // 在 restoreAuxPanelVisibility 才懒创建 ⇒ 几何/浮窗态存档永远无法应用。
+    if (m_auxPanels)
+        m_auxPanels->createAllDocks();
     {
         QSettings settings;
         const QByteArray state =

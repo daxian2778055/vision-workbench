@@ -84,7 +84,10 @@ void AuxPanelManager::createPerformanceIfNeeded()
         return;
     m_performancePanel = new PerformancePanel(m_mainWindow);
     m_performanceDock = new QDockWidget(QStringLiteral("性能统计"), m_mainWindow);
+    m_performanceDock->setObjectName(QStringLiteral("performanceDock"));
     m_performanceDock->setWidget(m_performancePanel);
+    m_performanceDock->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable);
+    m_performanceDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
     m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_performanceDock);
 }
 
@@ -94,7 +97,10 @@ void AuxPanelManager::createOutputDataIfNeeded()
         return;
     m_outputDataViewer = new OutputDataViewer(m_mainWindow);
     m_outputViewerDock = new QDockWidget(QStringLiteral("输出数据"), m_mainWindow);
+    m_outputViewerDock->setObjectName(QStringLiteral("outputDataDock"));
     m_outputViewerDock->setWidget(m_outputDataViewer);
+    m_outputViewerDock->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable);
+    m_outputViewerDock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
     m_mainWindow->addDockWidget(Qt::RightDockWidgetArea, m_outputViewerDock);
 }
 
@@ -110,6 +116,14 @@ void AuxPanelManager::saveVisibility() const
                      m_performanceDock && m_performanceDock->isVisible());
     store.setVisible(QStringLiteral("outputData"),
                      m_outputViewerDock && m_outputViewerDock->isVisible());
+}
+
+void AuxPanelManager::createAllDocks()
+{
+    createResultTableIfNeeded();
+    createVariableIfNeeded();
+    createPerformanceIfNeeded();
+    createOutputDataIfNeeded();
 }
 
 void AuxPanelManager::restoreVisibility()
