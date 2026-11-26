@@ -73,7 +73,9 @@ bool SessionManager::canRunFlow() const
     // 173 行拍板（P0 余量：canRunFlow 只看登录）：翻成「登录且闸未开」。A1 的产线不停线
     // 原义不丢——正在跑的流程不被打断（运行态不经过本判定），闸拦的是新一次运行发起；
     // 改密成功后闸解除，运行自然恢复。原先的「有意不加闸」钉腿就地翻成两向（闸开拒/闸开解）。
-    return isLoggedIn() && !writesBlocked();
+    // V1 复核：Viewer（含 --preview-ui 只读预览）即使写闸被解除也不能发起运行，
+    // 否则单键改密就能把只读预览变成可跑流程的会话。
+    return isLoggedIn() && !writesBlocked() && hasRoleLevel(QStringLiteral("Operator"));
 }
 
 bool SessionManager::canConfigCommunications() const

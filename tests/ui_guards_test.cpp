@@ -1768,6 +1768,14 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
         QVERIFY2(tsSrc.contains(QStringLiteral("<source>") + key + QStringLiteral("</source>")),
                  qPrintable(QStringLiteral("翻译目录缺少核心文案: %1").arg(key)));
     }
+    // ㊾ 认证/权限域 V1：Viewer 不发跑、预览不解闸、方案写入/新建不走旁路
+    QVERIFY2(readSrc("src/SessionManager.cpp").contains(QStringLiteral("hasRoleLevel(QStringLiteral(\"Operator\"))")),
+             "canRunFlow 须有 Operator 角色门槛，不能让 Viewer 只读预览发跑");
+    QVERIFY2(mwSrc.contains(QStringLiteral("if (m_previewOnly) {"))
+             && mwSrc.contains(QStringLiteral("当前权限不允许发起运行"))
+             && mwSrc.contains(QStringLiteral("当前角色无权保存方案"))
+             && mwSrc.contains(QStringLiteral("当前角色无权打开或新建方案")),
+             "预览态不得解闸；本地图运行全部/保存/新建入口都要有角色判据");
 }
 
 void UiGuardsTest::f2ValidationGuards()

@@ -1229,6 +1229,12 @@ MainWindow::MainWindow(QWidget *parent, bool previewOnly) :
                 connect(runAllBtn, &QPushButton::clicked, this, [this]() {
                     if (!m_localImageNode || m_localImageNode->localImageFiles().isEmpty())
                         return;
+                    // V1 复核：本按钮此前直接 execute()，绕过了同面板其它按钮共用的
+                    // canRunFlow() 闸；出厂口令态/只读角色下仍可逐张跑完整个目录。
+                    if (!SessionManager::instance()->canRunFlow()) {
+                        ui->statusBar->showMessage(tr("当前权限不允许发起运行"), 5000);
+                        return;
+                    }
                     const int count = m_localImageNode->localImageFiles().size();
                     if (count > 200
                         && QMessageBox::question(this, tr("运行全部"),
@@ -3959,6 +3965,12 @@ void MainWindow::onNewProject()
 {
     // 新建会丢弃当前方案：有未保存改动时先确认（与关窗/打开方案同一机制，
     // 否则只保护了"退出"这一条路，新建/打开仍是静默丢弃）
+    // V1 复核：欢迎页「新建空白方案」绕过菜单灰化；统一在动作入口查角色
+    if (SessionManager::instance()->isLoggedIn()
+        && !SessionManager::instance()->canEditScheme()) {
+        QMessageBox::warning(this, tr("提示"), tr("当前角色无权新建方案"));
+        return;
+    }
     if (!confirmDiscardUnsavedChanges(tr("新建方案")))
         return;
 
@@ -4084,6 +4096,12 @@ ProjectManager *MainWindow::projectManager()
 
 bool MainWindow::saveProjectInteractively()
 {
+    // V1 复核：未保存确认框的「保存并继续/退出」与运行界面 scheme/save 都直达这里，
+    // 不能绕过菜单侧 canEditScheme() 的灰化（Operator 也可写盘）。
+    if (!SessionManager::instance()->canEditScheme()) {
+        QMessageBox::warning(this, tr("提示"), tr("当前角色无权保存方案"));
+        return false;
+    }
     // 保存项目（方案扩展名 .vfp，与需求文档一致）：文件对话框与结果提示在 ProjectManager
     ProjectManager *pm = projectManager();
     QString fileName;
@@ -4915,6 +4933,13 @@ void MainWindow::onLoadProject()
 bool MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore,
                                  const QString &schemeAnchorPath)
 {
+    // V1 复核：欢迎页/打开示例绕开菜单灰化直达这里的角色闸。
+    // 启动期的崩溃恢复（recoveryRestore=true，尚未登录）不受限，否则恢复链会被打断。
+    if (!recoveryRestore && SessionManager::instance()->isLoggedIn()
+        && !SessionManager::instance()->canEditScheme()) {
+        logMessage(tr("当前角色无权打开或新建方案"));
+        return false;
+    }
     // 崩溃恢复也走这条路径（复用唯一的"接管方案"实现），但它不算一次"打开方案"：
     // 不写"加载项目"日志、不记入最近文件、不把内容标为已落盘（详见函数末尾）。
     if (!recoveryRestore) {
@@ -8176,7 +8201,9 @@ void MainWindow::reorganizeMenuBar()
             file->addMenu(m_recentFiles->menu());
         if (m_actionOpenExample) {
             // 没装示例包时置灰，而不是留一个点了只会报错的死入口
-            m_actionOpenExample->setEnabled(!bundledExamplePath().isEmpty());
+            // 打开示例会整体替换当前方案，必须与新建/打开同一角色判据（V1）
+            m_actionOpenExample->setEnabled(!bundledExamplePath().isEmpty()
+                                            && SessionManager::instance()->canEditScheme());
             file->addAction(m_actionOpenExample);
         }
         file->addAction(ui->actionSaveScheme);
@@ -8441,7 +8468,8 @@ void MainWindow::setupSystemMenu()
             tr("修改管理员口令（解除写操作禁止）…"));
         // 该项刻意不受角色/写闸限制：它就是解除闸的唯一入口；
         // 而改密前必须填对当前出厂口令，非持有者点了也改不动任何东西。
-        retireAct->setEnabled(true);
+        // 预览只读会话不提供解除写闸的入口
+        retireAct->setEnabled(!m_previewOnly);
         m_menuRouter.direct(retireAct, this, [this]() { enforceFactoryPasswordPolicy(); });
     }
 
@@ -8828,6 +8856,13 @@ void MainWindow::applyPermissionRestrictions()
 
 void MainWindow::enforceFactoryPasswordPolicy()
 {
+    // 预览（只读）会话不能借"修改管理员口令"入口解除写闸——即使库里口令已退役，
+    // refreshWritesLock() 的重算也必须被预览决策拦住。
+    if (m_previewOnly) {
+        QMessageBox::information(this, tr("提示"), tr("界面预览为只读模式，不能修改管理员口令"));
+        applyPermissionRestrictions();
+        return;
+    }
     auto *session = SessionManager::instance();
     const AdminPasswordState state = FactoryPasswordGuard::refreshWritesLock();
     if (state == AdminPasswordState::Retired) {

@@ -120,6 +120,11 @@ void FactoryPasswordGuardTest::flowStartGate_refusesWhileWritesBlocked()
 
     s->setWritesBlocked(false);
     QVERIFY2(s->canRunFlow(), "闸解除后运行恢复（改密成功即恢复发跑，无需重登）");
+
+    // V1：Viewer（含 --preview-ui 只读预览）即使闸解除也不得发跑
+    s->login(QStringLiteral("viewer"), QStringLiteral("Viewer"));
+    QVERIFY2(!s->canRunFlow(), "只读预览角色不得发起运行");
+    s->login(QStringLiteral("operator"), QStringLiteral("Operator"));
 }
 
 void FactoryPasswordGuardTest::retire_refusesWhenFactoryPasswordWrong()
