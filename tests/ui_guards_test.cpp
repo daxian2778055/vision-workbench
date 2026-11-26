@@ -1680,6 +1680,15 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(cmdSrc.contains(QStringLiteral("（未选择）"))
              && cmdSrc.count(QStringLiteral("currentData().toString()")) >= 3,
              "响应设备下拉须有显式空项，写回用 data 而非显示文本");
+    // ㊹ 触发/心跳域 R3：字节组包真正使用 offset/length，事件类型下拉覆盖支持的类型
+    const QString seSrc = readSrc("src/SendEvent.cpp");
+    QVERIFY2(seSrc.contains(QStringLiteral("result.replace(pos, width, encoded)"))
+             && seSrc.contains(QStringLiteral("field.absoluteOffset"))
+             && seSrc.contains(QStringLiteral("field.length > 0")),
+             "组包字段 offset/length 必须真正生效，不能只按字段顺序追加");
+    const QString cedSrc = readSrc("src/CommEventEditDialogs.cpp");
+    QVERIFY2(cedSrc.contains(QStringLiteral("uint16")) && cedSrc.contains(QStringLiteral("byte")),
+             "事件类型下拉须覆盖底层支持的类型，未识别类型原样保留");
 }
 
 void UiGuardsTest::f2ValidationGuards()

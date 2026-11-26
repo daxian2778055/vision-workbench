@@ -217,6 +217,7 @@ private slots:
     // 2026-11-10 审核：终态补全后需边沿去重，否则一次停止连发多个 IDLE
     void responseFlowStateIsEdgeTriggered();
     void responseSchemeLoadCancelsStaleDelay();   // 快速切方案：延迟响应只发最新一份
+    void bytePackHonorsOffsetAndLength();         // 字节组包字段的 offset/length 必须真正生效
     // 2026-11-10：官方 5.2 设备管理页右下的收发数据区（内嵌而非独立对话框）
     void communicationDialogEmbedsMonitorPane();
     // 2026-11-11：16 位寄存器地址空间上界，以及「隐藏空白行」是否真的生效
@@ -3883,6 +3884,30 @@ void CommWritebackTest::responseFlowStateIsEdgeTriggered()
     QCOMPARE(spy.count(), 4);
 
     cm->setResponseConfig(QJsonObject());
+}
+
+// R3 复核：UI 可编辑的 offset/length 此前完全不参与组包，配置与上线报文不符。
+void CommWritebackTest::bytePackHonorsOffsetAndLength()
+{
+    QJsonArray fields;
+    QJsonObject head;
+    head[QStringLiteral("offset")] = 2;
+    head[QStringLiteral("length")] = 1;
+    head[QStringLiteral("dataType")] = QStringLiteral("byte");
+    head[QStringLiteral("fixedValue")] = 0x34;
+    fields.append(head);
+    QJsonObject word;
+    word[QStringLiteral("offset")] = 0;
+    word[QStringLiteral("length")] = 2;
+    word[QStringLiteral("dataType")] = QStringLiteral("int16");
+    word[QStringLiteral("fixedValue")] = 0x1234;
+    fields.append(word);
+    QJsonObject cfg;
+    cfg[QStringLiteral("fields")] = fields;
+
+    BytePackSendEvent ev(QStringLiteral("R_PACK"), QStringLiteral("NO_DEVICE"));
+    ev.fromJson(cfg);
+    QCOMPARE(ev.packData(QVariant()), QByteArray::fromHex(QByteArray("341234")));
 }
 
 // 快速连续切换方案：上一份带延迟的方案加载响应必须被取消，只发最新一份。

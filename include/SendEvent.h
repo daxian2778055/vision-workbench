@@ -75,6 +75,9 @@ struct BytePackField {
     int length = 2;
     QString dataType = QStringLiteral("int16");
     QVariant fixedValue;
+    /// 由 fromJson/UI 配置的字段按 offset 绝对定位；程序化 addField（历史调用）
+    /// 未显式给偏移时仍保持旧的"顺序追加"语义，避免静默改掉上线报文。
+    bool absoluteOffset = false;
 };
 
 class BytePackSendEvent : public SendEvent
@@ -93,7 +96,9 @@ public:
     QJsonObject toJson() const override;
     void fromJson(const QJsonObject &json) override;
 
-private:
+    /// 按字段 offset/length 布局后的原始字节（公开便于 UI 预览与行为测试）
     QByteArray packData(const QVariant &source) const;
+
+private:
     QList<BytePackField> m_fields;
 };

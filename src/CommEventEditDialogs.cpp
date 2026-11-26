@@ -113,8 +113,12 @@ void ReceiveEventEditDialog::loadFromEvent()
             m_rulesTable->setItem(row, 0, new QTableWidgetItem(QString::number(r.byteOffset)));
             m_rulesTable->setItem(row, 1, new QTableWidgetItem(QString::number(r.byteLength)));
             auto *typeCombo = new QComboBox(m_rulesTable);
-            typeCombo->addItems({ QStringLiteral("int16"), QStringLiteral("int32"),
-                                  QStringLiteral("float") });
+            QStringList types{ QStringLiteral("int16"), QStringLiteral("uint16"),
+                               QStringLiteral("int32"), QStringLiteral("uint32"),
+                               QStringLiteral("int8"), QStringLiteral("uint8"),
+                               QStringLiteral("float") };
+            if (!types.contains(r.dataType)) types << r.dataType;   // 未知类型原样保留，不被降级成 int16
+            typeCombo->addItems(types);
             typeCombo->setCurrentText(r.dataType);
             m_rulesTable->setCellWidget(row, 2, typeCombo);
             auto *orderCombo = new QComboBox(m_rulesTable);
@@ -318,8 +322,11 @@ void SendEventEditDialog::loadFromEvent()
             m_fieldsTable->setItem(row, 0, new QTableWidgetItem(QString::number(f.offset)));
             m_fieldsTable->setItem(row, 1, new QTableWidgetItem(QString::number(f.length)));
             auto *typeCombo = new QComboBox(m_fieldsTable);
-            typeCombo->addItems({ QStringLiteral("int16"), QStringLiteral("int32"),
-                                  QStringLiteral("float") });
+            QStringList types{ QStringLiteral("byte"), QStringLiteral("int16"),
+                               QStringLiteral("uint16"), QStringLiteral("int32"),
+                               QStringLiteral("uint32"), QStringLiteral("float") };
+            if (!types.contains(f.dataType)) types << f.dataType;   // 未知类型原样保留
+            typeCombo->addItems(types);
             typeCombo->setCurrentText(f.dataType);
             m_fieldsTable->setCellWidget(row, 2, typeCombo);
             m_fieldsTable->setItem(row, 3, new QTableWidgetItem(

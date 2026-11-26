@@ -123,12 +123,22 @@ void BytePackSendEvent::clearFields()
 QByteArray BytePackSendEvent::packData(const QVariant &source) const
 {
     QByteArray result;
-    QDataStream stream(&result, QIODevice::WriteOnly);
-    stream.setByteOrder(QDataStream::LittleEndian);
-
+    // R3 复核：offset/length 会写进 JSON、UI 也可编辑，但原 packData 完全没读它们，
+    // 只按字段顺序追加 ⇒ 界面配置的报文布局与实际上线报文不符。现按偏移落位：
+    // 默认宽度按类型（byte=1 / int16=2 / int32,float=4），length 可覆盖；
+    // 比自然宽度宽则高位补零，窄则保留低位（小端）；未覆盖的偏移补零。
     for (const auto &field : m_fields) {
-        QVariant value = field.fixedValue.isValid() ? field.fixedValue : source;
+        const QVariant value = field.fixedValue.isValid() ? field.fixedValue : source;
+        const int natural = (field.dataType == QStringLiteral("byte")) ? 1
+                          : (field.dataType == QStringLiteral("int16")) ? 2 : 4;
+        const int width = field.length > 0 ? field.length : natural;
+        const int pos = field.absoluteOffset ? field.offset : result.size();
+        if (pos < 0 || width <= 0)
+            continue;
 
+        QByteArray encoded;
+        QDataStream stream(&encoded, QIODevice::WriteOnly);
+        stream.setByteOrder(QDataStream::LittleEndian);
         if (field.dataType == QStringLiteral("int16")) {
             stream << static_cast<qint16>(value.toInt());
         } else if (field.dataType == QStringLiteral("int32")) {
@@ -136,10 +146,15 @@ QByteArray BytePackSendEvent::packData(const QVariant &source) const
         } else if (field.dataType == QStringLiteral("float")) {
             stream << static_cast<float>(value.toDouble());
         } else if (field.dataType == QStringLiteral("byte")) {
-            result.append(static_cast<char>(value.toInt()));
+            encoded.append(static_cast<char>(value.toInt()));
+        } else {
+            continue;   // 未知类型不静默降级成 int16
         }
+        encoded.resize(width, '\0');
+        if (result.size() < pos + width)
+            result.resize(pos + width, '\0');
+        result.replace(pos, width, encoded);
     }
-
     return result;
 }
 
@@ -188,6 +203,7 @@ void BytePackSendEvent::fromJson(const QJsonObject &json)
         QJsonObject fObj = v.toObject();
         BytePackField f;
         f.offset = fObj[QStringLiteral("offset")].toInt();
+        f.absoluteOffset = fObj.contains(QStringLiteral("offset"));
         f.length = fObj[QStringLiteral("length")].toInt(2);
         f.dataType = fObj[QStringLiteral("dataType")].toString(QStringLiteral("int16"));
         if (fObj.contains(QStringLiteral("fixedValue"))) {
