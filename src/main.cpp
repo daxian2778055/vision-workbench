@@ -387,6 +387,7 @@ int main(int argc, char *argv[])
         if (a.arguments().contains(QStringLiteral("--selftest-deepocr"))) {
             const QStringList args = a.arguments();
             const int idx = args.indexOf(QStringLiteral("--selftest-deepocr"));
+            QTextStream out(stdout);
             // 支持 --key 与 --key=value 两种形式；非法值必须显式失败，不能静默改写口径
             const auto argAfter = [&args](const QString &key) -> QString {
                 const int i = args.indexOf(key);
@@ -435,7 +436,6 @@ int main(int argc, char *argv[])
                 }
             }
             const QStringList images = DeepOcrSelfTest::collectImages(target, limit);
-            QTextStream out(stdout);
             if (images.isEmpty()) {
                 out << "未找到可测图片: " << target << Qt::endl;
                 return 2;
