@@ -22,6 +22,8 @@ public:
 
     /// 用某模块的输出变量更新「模块输出」分组（同一模块原地更新，不新增重复结点）
     void setModuleVars(int moduleId, const QString &moduleName, const QVariantMap &vars);
+    /// 删除节点/切换流程时撤销该模块的引用行（与 setModuleVars 对称）
+    void removeModuleVars(int moduleId);
     /// 重新读取全局变量（GlobalVariableManager 单例）
     void refreshGlobalVariables();
     /// 清空全部变量行

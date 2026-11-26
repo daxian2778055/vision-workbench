@@ -3888,6 +3888,11 @@ void MainWindow::onNodeRemoved(NodeBase *node)
     m_overlayNodes.remove(node);
     m_nodeElapsed.remove(node);
     m_nodeParameters.remove(node);
+    // S1 复核：模块号不回收，删除节点后 m_lastModuleVars/变量面板里的该模块引用
+    // 永远不可能再解析成功；必须在节点销毁前撤销（与切方案清缓存同口径）。
+    m_lastModuleVars.remove(node->moduleId());
+    if (VariablePanel *vp = m_auxPanels ? m_auxPanels->variablePanel() : nullptr)
+        vp->removeModuleVars(node->moduleId());
 
     // 显示控制器里按场景记忆的显示源、画布 ROI 取点/几何编辑目标都可能是它
     if (m_imageDisplay)
@@ -7107,6 +7112,14 @@ void MainWindow::onCurrentTabChanged(int index)
     }
     if (ResultTablePanel *history = m_auxPanels ? m_auxPanels->resultTablePanel() : nullptr)
         history->setHistoryOnlySelection(false);
+
+    // S1 复核：模块号进程内全局单调，流程 A 的模块变量绝不能带进流程 B 的
+    // 引用菜单/每轮上报（否则是永不解析的陈旧引用）。与切方案同一口径按节点清理。
+    if (VariablePanel *vp = m_auxPanels ? m_auxPanels->variablePanel() : nullptr) {
+        for (int id : m_lastModuleVars.keys())
+            vp->removeModuleVars(id);
+    }
+    m_lastModuleVars.clear();
 
     FlowScene *scene = m_flowScenes[index];
     // 一场景一执行器：切 tab 直接切换到该场景专属执行器（executorForScene 保证存在/自动创建），

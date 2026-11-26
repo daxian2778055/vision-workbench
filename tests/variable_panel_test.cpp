@@ -14,6 +14,7 @@ class VariablePanelTest : public QObject
 private slots:
     void testRefTextSyntax();
     void testModuleRowsInPlaceUpdate();
+    void testRemoveModuleVars();
     void testInsertIntoEditors();
 };
 
@@ -53,6 +54,23 @@ void VariablePanelTest::testModuleRowsInPlaceUpdate()
     GlobalVariableManager::instance()->removeVariable(varName);
 
     panel.clearAll();
+    QCOMPARE(panel.moduleCount(), 0);
+}
+
+void VariablePanelTest::testRemoveModuleVars()
+{
+    VariablePanel panel;
+    QVariantMap vars;
+    vars.insert(QStringLiteral("value"), 1.0);
+    panel.setModuleVars(3, QStringLiteral("被测模块"), vars);
+    panel.setModuleVars(4, QStringLiteral("另一模块"), vars);
+    QCOMPARE(panel.moduleCount(), 2);
+
+    panel.removeModuleVars(3);   // 模块被删除后其引用必须可撤销
+    QCOMPARE(panel.moduleCount(), 1);
+    panel.removeModuleVars(3);   // 幂等：重复撤销不应崩溃或误删别的模块
+    QCOMPARE(panel.moduleCount(), 1);
+    panel.removeModuleVars(4);
     QCOMPARE(panel.moduleCount(), 0);
 }
 

@@ -50,18 +50,22 @@ bool TextDirectSendEvent::send(const QVariant &data)
         // 多字段命名占位符：{模块号.参数名} / {global.变量名}（与流程"变量引用"同语法）。
         // 每轮结束时由 MainWindow 注入本轮结果，模板如 "{1.结果},{global.计数}".
         const QVariantMap map = data.toMap();
-        QString out = m_template;
-        static const QRegularExpression re(QStringLiteral("\\{([^{}]+)\\}"));
-        QList<QPair<QString, QString>> pairs;
+        // S1 复核：必须单次扫描拼接。原来收集 pairs 后在 out 上逐条 replace，
+        // 若前一条插入值恰好长得像后一条占位符，就会被二次替换（变量值含 {...} 时）。
+        QString out;
+        int last = 0;
+        const QRegularExpression re(QStringLiteral("\\{([^{}]+)\\}"));
         auto it = re.globalMatch(m_template);
         while (it.hasNext()) {
             const QRegularExpressionMatch m = it.next();
             const QString key = m.captured(1);
-            if (map.contains(key))
-                pairs.append({m.captured(0), map.value(key).toString()});
+            if (!map.contains(key))
+                continue;
+            out += m_template.mid(last, m.capturedStart() - last);
+            out += map.value(key).toString();
+            last = m.capturedEnd();
         }
-        for (const auto &p : pairs)
-            out.replace(p.first, p.second);
+        out += m_template.mid(last);
         text = out;
     } else if (data.typeId() == QMetaType::QString) {
         text = data.toString();

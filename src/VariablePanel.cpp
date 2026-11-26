@@ -183,6 +183,17 @@ void VariablePanel::setModuleVars(int moduleId, const QString &moduleName, const
     updateSummary();
 }
 
+void VariablePanel::removeModuleVars(int moduleId)
+{
+    if (!m_moduleGroup)
+        return;
+    if (QTreeWidgetItem *row = m_moduleRows.take(moduleId)) {
+        m_moduleGroup->removeChild(row);
+        delete row;
+        updateSummary();
+    }
+}
+
 void VariablePanel::refreshGlobalVariables()
 {
     if (!m_globalGroup)

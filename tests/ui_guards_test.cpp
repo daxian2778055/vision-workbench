@@ -1689,6 +1689,18 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     const QString cedSrc = readSrc("src/CommEventEditDialogs.cpp");
     QVERIFY2(cedSrc.contains(QStringLiteral("uint16")) && cedSrc.contains(QStringLiteral("byte")),
              "事件类型下拉须覆盖底层支持的类型，未识别类型原样保留");
+    // ㊺ 节点核心域 S1：模块变量引用清理与解析口径
+    QVERIFY2(mwSrc.count(QStringLiteral("removeModuleVars(")) >= 2
+             && mwSrc.contains(QStringLiteral("\n    m_lastModuleVars.remove(node->moduleId());")),
+             "删除节点与切页签都要撤销该模块的变量引用，不能留下永不解析的陈旧引用");
+    QVERIFY2(readSrc("include/VariablePanel.h").contains(QStringLiteral("removeModuleVars")),
+             "变量面板须提供与 setModuleVars 对称的按模块撤销接口");
+    QVERIFY2(seSrc.contains(QStringLiteral("out += m_template.mid(last, m.capturedStart() - last)")),
+             "发送模板须单次扫描拼接，插入值不得被当作后续占位符二次替换");
+    const QString feSrcRef = readSrc("src/FlowExecutor.cpp");
+    QVERIFY2(feSrcRef.count(QStringLiteral("QString::number(v.toDouble(), 'g', 10)")) >= 2
+             && feSrcRef.contains(QStringLiteral(R"(\{(\d+)(?:\.([^{}]+))?\})")),
+             "引用解析须与面板同精度，并支持非 ASCII 参数名");
 }
 
 void UiGuardsTest::f2ValidationGuards()

@@ -1791,7 +1791,7 @@ QString FlowExecutor::resolveParamRefs(const QString &raw) const
             if (gvm && gvm->variableExists(varName)) {
                 const QVariant v = gvm->getVariable(varName);
                 if (v.typeId() == QMetaType::Double || v.typeId() == QMetaType::Float)
-                    val = QString::number(v.toDouble());
+                    val = QString::number(v.toDouble(), 'g', 10);
                 else
                     val = v.toString();
             }
@@ -1802,7 +1802,7 @@ QString FlowExecutor::resolveParamRefs(const QString &raw) const
     }
     // 2) 模块引用 {模块号} / {模块号.参数名}
     static const QRegularExpression re(
-        QStringLiteral(R"(\{(\d+)(?:\.([A-Za-z0-9_]+))?\})"));
+        QStringLiteral(R"(\{(\d+)(?:\.([^{}]+))?\})"));
     QList<QPair<QString, QString>> repl;
     QRegularExpressionMatchIterator it = re.globalMatch(out);
     while (it.hasNext()) {
@@ -1820,7 +1820,7 @@ QString FlowExecutor::resolveParamRefs(const QString &raw) const
             if (vit != vars.cend()) {
                 const QVariant &v = vit.value();
                 if (v.typeId() == QMetaType::Double || v.typeId() == QMetaType::Float)
-                    val = QString::number(v.toDouble());
+                    val = QString::number(v.toDouble(), 'g', 10);
                 else
                     val = v.toString();
             }
