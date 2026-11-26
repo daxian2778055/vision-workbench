@@ -128,9 +128,13 @@ void ScriptNode::run(bool /*autoSwitch*/)
             m_outputImage = m_inputImage;
             return;
         }
-        if (!policy.requestConfirmation(lang, script)) {
-            policy.audit(lang, script, false, QStringLiteral("用户取消了脚本执行"));
-            m_params[QStringLiteral("lastOutput")] = QStringLiteral("用户取消了脚本执行");
+        // W2：审批失败原因必须如实上报/审计，不能把 GUI 卡死或决策超时都写成"用户取消"
+        QString confirmReason;
+        if (!policy.requestConfirmation(lang, script, &confirmReason)) {
+            if (confirmReason.isEmpty())
+                confirmReason = QStringLiteral("脚本审批未获批准");
+            policy.audit(lang, script, false, confirmReason);
+            m_params[QStringLiteral("lastOutput")] = confirmReason;
             m_lastRunFailed = true;
             m_outputImage = m_inputImage;
             return;

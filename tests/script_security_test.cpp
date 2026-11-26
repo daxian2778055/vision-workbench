@@ -44,6 +44,7 @@ private slots:
     void approvalProof_sessionOncePerContent();
     // 2026-11-12：GUI 线程阻塞时审批必须有界返回（旧版 BlockingQueuedConnection 会互等挂死）
     void approvalFailsClosedWhenGuiThreadBlocked();
+    void maxExecutionMsClamped();           // 非法超时值不得让两条执行路径语义相反
 };
 
 void ScriptSecurityPolicyTest::initTestCase()
@@ -340,6 +341,19 @@ void ScriptSecurityPolicyTest::approvalFailsClosedWhenGuiThreadBlocked()
 
     QVERIFY2(didReturn, "GUI 线程阻塞时审批必须超时返回，不能无限等（会挂死整窗）");
     QVERIFY2(!wasAccepted, "接管超时必须 fail-closed（拒绝脚本），不能放行");
+}
+
+void ScriptSecurityPolicyTest::maxExecutionMsClamped()
+{
+    ScriptSecurityPolicy &policy = ScriptSecurityPolicy::instance();
+    const int original = policy.maxExecutionMs();
+    policy.setMaxExecutionMs(0);
+    QVERIFY2(policy.maxExecutionMs() >= 1000, "0 会被 QProcess 路径当成秒杀，必须钳到合法下限");
+    policy.setMaxExecutionMs(-5);
+    QVERIFY2(policy.maxExecutionMs() >= 1000, "负值必须钳到合法下限");
+    policy.setMaxExecutionMs(5000000);
+    QVERIFY2(policy.maxExecutionMs() <= 3600000, "超大值必须钳到合法上限");
+    policy.setMaxExecutionMs(original);
 }
 
 QTEST_MAIN(ScriptSecurityPolicyTest)

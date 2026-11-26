@@ -51,7 +51,8 @@ public:
     void approveScript(const QString &language, const QString &script) const;
 
     int maxExecutionMs() const { return m_maxExecutionMs; }
-    void setMaxExecutionMs(int v) { m_maxExecutionMs = v; }
+    /// 超时必须有限且为正：0/负值会让两条执行路径语义相反（沙箱不限时 / QProcess 秒杀）
+    void setMaxExecutionMs(int v) { m_maxExecutionMs = qBound(1000, v, 3600000); }
 
     bool isolatedPython() const { return m_isolatedPython; }
     void setIsolatedPython(bool v) { m_isolatedPython = v; }
@@ -99,7 +100,9 @@ public:
     bool evaluate(const QString &language, const QString &script, QString &reason) const;
 
     /// 交互确认。requireConfirmation 为 false 时直接返回 true（即放行）。
-    bool requestConfirmation(const QString &language, const QString &script) const;
+    /// reason 非空时回传被拒原因（用户取消 / GUI 未接管 / 决策超时），避免审计误标
+    bool requestConfirmation(const QString &language, const QString &script,
+                             QString *reason = nullptr) const;
 
     /// 记录一次执行尝试到审计日志。
     void audit(const QString &language, const QString &script, bool allowed, const QString &reason) const;

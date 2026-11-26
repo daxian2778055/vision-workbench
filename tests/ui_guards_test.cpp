@@ -1803,6 +1803,12 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              "topK 须输出 K 个类；类别表须走缓存");
     QVERIFY2(readSrc("src/DnnNetCache.cpp").contains(QStringLiteral("sizeBytes")),
              "DNN 缓存键须含文件大小，防同 mtime 换型沿用旧模型");
+    // W2：审批失败原因如实上报、超时配置钳制
+    const QString spHeader = readSrc("include/ScriptSecurityPolicy.h");
+    QVERIFY2(spHeader.contains(QStringLiteral("QString *reason = nullptr"))
+             && spHeader.contains(QStringLiteral("qBound(1000, v, 3600000)"))
+             && readSrc("src/ScriptNode.cpp").contains(QStringLiteral("confirmReason")),
+             "审批失败须回传具体原因；maxExecutionMs 须钳制，不能两种沙箱语义相反");
 }
 
 void UiGuardsTest::f2ValidationGuards()

@@ -61,7 +61,9 @@ void ScriptSecurityPolicy::load()
         settings.value(QStringLiteral("requireConfirmation"), m_requireConfirmation.load())
             .toBool(),
         std::memory_order_relaxed);
-    m_maxExecutionMs = settings.value(QStringLiteral("maxExecutionMs"), m_maxExecutionMs).toInt();
+    m_maxExecutionMs = qBound(1000,
+                              settings.value(QStringLiteral("maxExecutionMs"), m_maxExecutionMs).toInt(),
+                              3600000);
     m_isolatedPython = settings.value(QStringLiteral("isolatedPython"), m_isolatedPython).toBool();
     m_stripEnvironment = settings.value(QStringLiteral("stripEnvironment"), m_stripEnvironment).toBool();
     m_auditLogEnabled = settings.value(QStringLiteral("auditLogEnabled"), m_auditLogEnabled).toBool();
@@ -246,9 +248,12 @@ void ScriptSecurityPolicy::approveScript(const QString &language, const QString 
     m_approvedScripts.insert(approvalCacheKey(language, script));
 }
 
-bool ScriptSecurityPolicy::requestConfirmation(const QString &language, const QString &script) const
+bool ScriptSecurityPolicy::requestConfirmation(const QString &language, const QString &script,
+                                               QString *reason) const
 {
+    auto setReason = [reason](const QString &text) { if (reason) *reason = text; };
     if (!m_requireConfirmation.load(std::memory_order_relaxed)) {
+        setReason(QStringLiteral("无需审批"));
         return true;
     }
     // 174 行式：会话内同内容已经用户同意 → 直接放行（连续/硬触发模式若逐轮弹窗会把
@@ -259,6 +264,7 @@ bool ScriptSecurityPolicy::requestConfirmation(const QString &language, const QS
 
     QApplication *app = qobject_cast<QApplication *>(QCoreApplication::instance());
     if (!app) {
+        setReason(QStringLiteral("无图形界面：按既定策略直接放行"));
         return true;   // 无 QApplication（如测试环境）：不弹窗直接放行
     }
 
@@ -306,6 +312,8 @@ bool ScriptSecurityPolicy::requestConfirmation(const QString &language, const QS
             qWarning() << "[ScriptSecurityPolicy] GUI 线程在" << kGuiTakeoverTimeoutMs
                        << "ms 内未接管脚本审批（很可能正阻塞在 FlowExecutor::wait），"
                           "本次按拒绝处理（fail-closed）";
+            setReason(QStringLiteral("审批被拒绝：GUI 线程 %1 ms 内未接管（可能正被阻塞）")
+                          .arg(kGuiTakeoverTimeoutMs));
             return false;
         }
         while (!hs->done) {
@@ -313,8 +321,15 @@ bool ScriptSecurityPolicy::requestConfirmation(const QString &language, const QS
                 break;   // 兜底超时：同样按拒绝处理
         }
         accepted = hs->done && hs->accepted;
+        if (!accepted && !hs->done)
+            setReason(QStringLiteral("审批被拒绝：用户 %1 ms 内未作出决定")
+                          .arg(kUserDecisionTimeoutMs));
+        else if (!accepted)
+            setReason(QStringLiteral("用户取消了脚本执行"));
     } else {
         accepted = showScriptConfirmationOnGuiThread(language, script);
+        if (!accepted)
+            setReason(QStringLiteral("用户取消了脚本执行"));
     }
     if (accepted) {
         approveScript(language, script);   // 只有真实的人工同意才进缓存（无头放行不记账）
