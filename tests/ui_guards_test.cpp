@@ -1809,6 +1809,16 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              && spHeader.contains(QStringLiteral("qBound(1000, v, 3600000)"))
              && readSrc("src/ScriptNode.cpp").contains(QStringLiteral("confirmReason")),
              "审批失败须回传具体原因；maxExecutionMs 须钳制，不能两种沙箱语义相反");
+    // W3：自检判据/CLI 校验/报告产物门禁
+    const QString ocrSelfSrc = readSrc("src/DeepOcrSelfTest.cpp");
+    QVERIFY2(ocrSelfSrc.contains(QStringLiteral("if (r.ok && mode != 1 && rawWordCount <= 0)"))
+             && ocrSelfSrc.contains(QStringLiteral("out.resize(maxCount)"))
+             && ocrSelfSrc.contains(QStringLiteral("csvField(r.text)")),
+             "自检零词不得判绿；--limit 须先排序再截断；CSV 须走统一转义");
+    QVERIFY2(readSrc("src/main.cpp").contains(QStringLiteral("allOk && csvOk"))
+             && readSrc("src/NodeSelfTest.cpp").contains(QStringLiteral("reportOk"))
+             && readSrc("tools/deploy.ps1").contains(QStringLiteral("DeepOCR 自检未执行/未通过")),
+             "CSV/报告写盘失败须影响退出码；部署脚本未跑成 OCR 不得放行");
 }
 
 void UiGuardsTest::f2ValidationGuards()

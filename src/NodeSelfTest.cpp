@@ -118,16 +118,22 @@ int runNodeSelfTest()
     const QString path = QDir(QCoreApplication::applicationDirPath())
                              .filePath(QStringLiteral("selftest_nodes_report.txt"));
     QFile f(path);
+    bool reportOk = true;
     if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
         QTextStream out(&f);
         for (const QString &line : report)
             out << line << '\n';
         f.close();
+    } else {
+        // 自检报告写不出去时，CLI 不能返回"成功"而让调用方误以为产物齐全
+        reportOk = false;
+        fprintf(stderr, "节点自检报告写入失败: %s\n", qPrintable(path));
+        fflush(stderr);
     }
     // 同时在 stdout 输出（调试终端可见）
     for (const QString &line : report)
         fprintf(stdout, "%s\n", qPrintable(line));
     fflush(stdout);
 
-    return fail > 0 ? 1 : 0;
+    return (fail > 0 || !reportOk) ? 1 : 0;
 }

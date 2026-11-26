@@ -2,6 +2,7 @@
 
 #include "DeepOcrNode.h"
 #include "OpencvUtil.h"
+#include "CsvEscape.h"
 
 #include <QDir>
 #include <QDirIterator>
@@ -37,9 +38,11 @@ QStringList collectImages(const QString &path, int maxCount)
     // 递归子目录：现场样本常按批次/日期分层存放，只扫一层会漏掉大部分图片。
     QDirIterator it(info.absoluteFilePath(), imageFilters(), QDir::Files,
                     QDirIterator::Subdirectories);
-    while (it.hasNext() && out.size() < maxCount)
+    while (it.hasNext())
         out << it.next();
-    out.sort();   // 全路径排序，保证多次运行顺序稳定
+    out.sort();   // 先按全路径排序，再取前 maxCount：QDirIterator 遍历序不保证稳定
+    if (out.size() > maxCount)
+        out.resize(maxCount);
     return out;
 }
 
@@ -68,6 +71,13 @@ ImageResult runOne(const QString &imagePath, int mode, double minConfidence)
     r.elapsedMs = timer.elapsed();
 
     r.ok = node.getParam(QStringLiteral("moduleStatus")).toBool();
+    // recognition/auto 自检要的是"能读到字"：过滤前词数 >0 才算证据。
+    // 否则 minConfidence 调高会把所有词滤掉却仍判绿，部署门禁随之放行。
+    const int rawWordCount = node.getParam(QStringLiteral("ocrRawWordCount")).toInt();
+    if (r.ok && mode != 1 && rawWordCount <= 0) {
+        r.ok = false;
+        r.error = QStringLiteral("自检未读到任何文字（过滤前词数为 0）");
+    }
     r.text = node.getParam(QStringLiteral("ocrText")).toString();
     r.wordCount = node.getParam(QStringLiteral("ocrCount")).toInt();
     r.avgConfidence = node.getParam(QStringLiteral("ocrAvgConfidence")).toDouble();
@@ -172,15 +182,24 @@ QString formatCsv(const QVector<ImageResult> &results)
     // mode 追加在末尾：保持既有 CSV 表头前缀不变（下游解析不破）。
     lines << QStringLiteral("file,ok,words,avg_confidence,max_confidence,elapsed_ms,text,error,mode");
     for (const ImageResult &r : results) {
-        QString text = r.text;
-        text.replace(QLatin1Char('"'), QStringLiteral("\"\""));
-        QString err = r.error;
-        err.replace(QLatin1Char('"'), QStringLiteral("\"\""));
+        // 统一 CSV 转义（含 =/+/-/@ 公式注入防护）
+        const QString text = csvField(r.text);
+        const QString err = csvField(r.error);
         // 递归后不同子目录可能有同名文件，优先写相对路径
         const QString displayPath =
             r.relativePath.isEmpty() ? QFileInfo(r.path).fileName() : r.relativePath;
-        lines << QStringLiteral("\"%1\",%2,%3,%4,%5,%6,\"%7\",\"%8\",%9")
-                     .arg(displayPath)
+        // 保留既有"路径列带引号"的输出契约，同时按统一规则挡公式注入
+        QString pathField = displayPath;
+        if (!pathField.isEmpty()) {
+            const QChar first = pathField.at(0);
+            if (first == QLatin1Char('=') || first == QLatin1Char('+')
+                || first == QLatin1Char('-') || first == QLatin1Char('@')
+                || first == QLatin1Char('\t') || first == QLatin1Char('\r'))
+                pathField.prepend(QLatin1Char('\''));
+        }
+        pathField.replace(QLatin1Char('"'), QStringLiteral("\"\""));
+        lines << QStringLiteral("\"%1\",%2,%3,%4,%5,%6,%7,%8,%9")
+                     .arg(pathField)
                      .arg(r.ok ? 1 : 0)
                      .arg(r.wordCount)
                      .arg(r.avgConfidence, 0, 'f', 4)

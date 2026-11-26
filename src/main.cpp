@@ -387,9 +387,15 @@ int main(int argc, char *argv[])
         if (a.arguments().contains(QStringLiteral("--selftest-deepocr"))) {
             const QStringList args = a.arguments();
             const int idx = args.indexOf(QStringLiteral("--selftest-deepocr"));
+            // 支持 --key 与 --key=value 两种形式；非法值必须显式失败，不能静默改写口径
             const auto argAfter = [&args](const QString &key) -> QString {
                 const int i = args.indexOf(key);
-                return (i >= 0 && i + 1 < args.size()) ? args.at(i + 1) : QString();
+                if (i >= 0 && i + 1 < args.size() && !args.at(i + 1).startsWith(QLatin1Char('-')))
+                    return args.at(i + 1);
+                const QString prefix = key + QLatin1Char('=');
+                for (const QString &a : args)
+                    if (a.startsWith(prefix)) return a.mid(prefix.size());
+                return QString();
             };
             const QString target =
                 (idx + 1 < args.size() && !args.at(idx + 1).startsWith(QLatin1Char('-')))
@@ -398,12 +404,36 @@ int main(int argc, char *argv[])
             // 默认 recognition(2)：实测 auto/detection 只返回检测结果、不含 word 数组，
             // 当前解析逻辑下拿不到识别文本，自检要的是"能读到字"这条最关键的证据。
             const QString modeText = argAfter(QStringLiteral("--mode"));
-            const int mode = modeText.isEmpty() ? 2 : modeText.toInt();
+            int mode = 2;
+            if (!modeText.isEmpty()) {
+                bool ok = false;
+                mode = modeText.toInt(&ok);
+                if (!ok || mode < 0 || mode > 2) {
+                    out << "非法 --mode（须为 0=auto/1=detection/2=recognition）: " << modeText << Qt::endl;
+                    return 2;
+                }
+            }
             const QString minConfText = argAfter(QStringLiteral("--min-conf"));
-            const double minConf = minConfText.isEmpty() ? 0.3 : minConfText.toDouble();
+            double minConf = 0.3;
+            if (!minConfText.isEmpty()) {
+                bool ok = false;
+                minConf = minConfText.toDouble(&ok);
+                if (!ok || minConf < 0.0 || minConf > 1.0) {
+                    out << "非法 --min-conf（须为 0..1）: " << minConfText << Qt::endl;
+                    return 2;
+                }
+            }
             // --limit：批量样本很多时可先跑前 N 张冒个头（默认 200 防止误扫超大目录）
             const QString limitText = argAfter(QStringLiteral("--limit"));
-            const int limit = limitText.isEmpty() ? 200 : qMax(1, limitText.toInt());
+            int limit = 200;
+            if (!limitText.isEmpty()) {
+                bool ok = false;
+                limit = limitText.toInt(&ok);
+                if (!ok || limit < 1) {
+                    out << "非法 --limit（须为正整数）: " << limitText << Qt::endl;
+                    return 2;
+                }
+            }
             const QStringList images = DeepOcrSelfTest::collectImages(target, limit);
             QTextStream out(stdout);
             if (images.isEmpty()) {
@@ -422,6 +452,7 @@ int main(int argc, char *argv[])
             for (DeepOcrSelfTest::ImageResult &r : results)
                 r.relativePath = rootDir.relativeFilePath(r.path);
             out << DeepOcrSelfTest::formatReport(results) << Qt::endl;
+            bool csvOk = true;
             const QString csvPath = argAfter(QStringLiteral("--csv"));
             if (!csvPath.isEmpty()) {
                 QFile csv(csvPath);
@@ -431,13 +462,14 @@ int main(int argc, char *argv[])
                     ts << QChar(0xFEFF) << DeepOcrSelfTest::formatCsv(results) << Qt::endl;
                     out << "CSV 已写出: " << csvPath << Qt::endl;
                 } else {
+                    csvOk = false;   // 声明了 --csv 却没产物：退出码不能报成功
                     out << "CSV 写出失败: " << csvPath << Qt::endl;
                 }
             }
             bool allOk = true;
             for (const DeepOcrSelfTest::ImageResult &r : results)
                 allOk = allOk && r.ok;
-            return allOk ? 0 : 1;
+            return (allOk && csvOk) ? 0 : 1;
         }
 
         // 节点自检模式：遍历全部注册节点实例化+init+空输入运行，输出报告后退出

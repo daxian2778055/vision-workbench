@@ -20,6 +20,7 @@ private slots:
     void testFormatReport();
     void testZeroWordsHintDependsOnMode();
     void testFormatCsv();
+    void testCollectImagesSortsBeforeLimit();
 };
 
 void DeepOcrToolTest::testCollectImages()
@@ -168,6 +169,23 @@ void DeepOcrToolTest::testFormatCsv()
              "有相对路径时 CSV 应写相对路径，避免子目录同名混淆");
     QVERIFY2(csv2.trimmed().endsWith(QStringLiteral(",2")),
              "CSV 最后一列应是 mode=2");
+}
+
+void DeepOcrToolTest::testCollectImagesSortsBeforeLimit()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    // 故意按非字典序落盘；limit=2 必须取排序后的 a.png、b.png
+    for (const char *n : { "z.png", "b.png", "a.png", "y.png" }) {
+        QImage img(8, 8, QImage::Format_Grayscale8);
+        img.fill(128);
+        QVERIFY(img.save(QDir(dir.path()).filePath(QString::fromLatin1(n))));
+    }
+    const QStringList picked = DeepOcrSelfTest::collectImages(dir.path(), 2);
+    QCOMPARE(picked.size(), 2);
+    QVERIFY2(picked.first().endsWith(QStringLiteral("/a.png")),
+             qPrintable(QStringLiteral("--limit 必须先排序再截断: %1").arg(picked.first())));
+    QVERIFY(picked.at(1).endsWith(QStringLiteral("/b.png")));
 }
 
 QTEST_MAIN(DeepOcrToolTest)

@@ -571,7 +571,8 @@ if (-not $SkipVerify) {
                 }
             }
         } catch {
-            # 打包机没有 System.Drawing 时不算失败，但必须让人看见"这项没验"
+            # 有 dl/ 却没跑成真实推理 = 这一格恰恰没验，必须计入失败，不能靠 warning 混过绿
+            $problems += 'DeepOCR 自检未执行/未通过（合成图生成或进程启动失败）'
             Write-Warning ('DeepOCR 自检未能执行（生成测试图失败）: ' + $_)
         } finally {
             Remove-Item -LiteralPath $ocrPng -ErrorAction SilentlyContinue
