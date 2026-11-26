@@ -752,6 +752,19 @@ void FlowExecutor::run()
         // 必须在 m_loopBodyNodes 填充之后：与循环体交叉的成员让位给循环体（v1 限制）。
         collectSubFlowBodies(subFlowDefs, nodes);
 
+        // L 复核：isLastNode 必须是"本轮真正执行完的最后一个节点"。原用整图拓扑下标，
+        // 若末尾节点是循环体/子流程体成员或未激活分支（主遍历都会 continue），整轮
+        // 没有任何 executeNode 拿到 isLastNode=true ⇒ imageReady 永不发出、主预览不刷新。
+        // 口径与 executeFrom() 的 lastKept 一致，跳过条件也必须与主遍历完全相同。
+        NodeBase *lastExecuted = nullptr;
+        for (NodeBase *n : sortedNodes) {
+            if (!n || m_loopBodyNodes.contains(n) || m_subFlowBodyNodes.contains(n))
+                continue;
+            if (!m_activeNodes.contains(n))
+                continue;
+            lastExecuted = n;
+        }
+
         for (int i = 0; i < sortedNodes.size(); i++) {
             NodeBase *node = sortedNodes[i];
             // 循环体节点由所属 LoopNode 统一调度执行，主遍历不再重复执行（P3）
@@ -811,7 +824,7 @@ void FlowExecutor::run()
             
             m_diagPhase.store(5, std::memory_order_relaxed);   // 诊断：节点循环
             m_diagNodeId.store(node->moduleId(), std::memory_order_relaxed);
-            executeNode(node, i == sortedNodes.size() - 1);
+            executeNode(node, node == lastExecuted);
             m_diagNodeId.store(-1, std::memory_order_relaxed);
             // 执行后激活下游（条件节点仅激活被选中分支）
             activateDownstream(node);
@@ -1605,20 +1618,20 @@ void FlowExecutor::releaseRoundOutputsOverBudget()
             const auto obj = pit.value();
             if (!obj)
                 continue;
-            const QVariant v = obj->getData();
-            if (v.canConvert<HImage>()) {
-                const HImage img = v.value<HImage>();
-                if (img.IsInitialized()) {
-                    HTuple w, h, ch;
-                    try {
-                        GetImageSize(img, &w, &h);
-                        CountChannels(img, &ch);
-                        const qint64 bytes = qint64(w.I()) * qint64(h.I()) * qint64(ch.I());
-                        total += bytes;
-                        images.append({it.key(), pit.key()});
-                    } catch (HException &) {
-                        // 取不到尺寸就按 0 计（不影响别的条目）
-                    }
+            // L 复核：setHImage 明确不再把 HImage 写进 m_data（图像只存在节点的
+            // m_outputData），原来走 getData()/canConvert<HImage>() 恒不成立 ⇒ 预算
+            // 统计永远为 0、这段释放逻辑从未生效。
+            const HImage img = obj->getHImage();
+            if (img.IsInitialized()) {
+                HTuple w, h, ch;
+                try {
+                    GetImageSize(img, &w, &h);
+                    CountChannels(img, &ch);
+                    const qint64 bytes = qint64(w.I()) * qint64(h.I()) * qint64(ch.I());
+                    total += bytes;
+                    images.append({it.key(), pit.key()});
+                } catch (HException &) {
+                    // 取不到尺寸就按 0 计（不影响别的条目）
                 }
             }
         }

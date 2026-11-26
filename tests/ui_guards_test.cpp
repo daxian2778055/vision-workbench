@@ -1589,6 +1589,20 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     const int spIndex = mvsSrc.indexOf(QStringLiteral("void MvsImageSourceNode::setParam"));
     QVERIFY2(spIndex >= 0 && mvsSrc.mid(spIndex, 700).contains(QStringLiteral("QMutexLocker locker(&m_mutex);")),
              "切全局相机的状态快照必须在锁内取，不能与取图线程并发读写");
+    // ㊱ 相机域 L：imageReady 末节点、RGB 行距、图像预算释放
+    const int lastExecIndex = feLocalSrc.indexOf(QStringLiteral("NodeBase *lastExecuted = nullptr;"));
+    QVERIFY2(lastExecIndex >= 0
+             && feLocalSrc.contains(QStringLiteral("executeNode(node, node == lastExecuted)"))
+             && !feLocalSrc.contains(QStringLiteral("executeNode(node, i == sortedNodes.size() - 1)")),
+             "imageReady 的 isLastNode 必须取本轮实际最后执行的节点，而非拓扑下标");
+    const QString hwSrc = readSrc("src/HalconWindow.cpp");
+    QVERIFY2(hwSrc.contains(QStringLiteral("const int srcStride = widthByte.I();"))
+             && hwSrc.contains(QStringLiteral("uchar *out = qImage.scanLine(y);")),
+             "RGB 转换必须按 HALCON 行距取源行、按 Qt 行距写目标行");
+    const int budgetIdx = feLocalSrc.indexOf(QStringLiteral("void FlowExecutor::releaseRoundOutputsOverBudget()"));
+    QVERIFY2(budgetIdx >= 0 && feLocalSrc.mid(budgetIdx, 1800).contains(QStringLiteral("obj->getHImage()"))
+             && !feLocalSrc.mid(budgetIdx, 1800).contains(QStringLiteral("v.canConvert<HImage>()")),
+             "图像预算统计必须走 getHImage()，不能走永远为空的 getData()/QVariant");
 }
 
 void UiGuardsTest::f2ValidationGuards()

@@ -211,15 +211,16 @@ QImage HalconWindow::convertHImageToQImage(const HImage &image)
                 const uchar *rData = (const uchar *)pointerR.L();
                 const uchar *gData = (const uchar *)pointerG.L();
                 const uchar *bData = (const uchar *)pointerB.L();
-                const int stride = w * 3;
+                // L 复核：HALCON 的 byte 行是 4 字节对齐的，widthByte 可能大于像素宽 w。
+                // 原实现源行写死 y*w，宽度非 4 倍数时每行偏移错一位 ⇒ 彩色斜纹。
+                const int srcStride = widthByte.I();
                 QImage qImage(w, h, QImage::Format_RGB888);
-                uchar *data = qImage.bits();
 
                 for (int y = 0; y < h; ++y) {
-                    uchar *out = data + y * stride;
-                    const uchar *r = rData + y * w;
-                    const uchar *g = gData + y * w;
-                    const uchar *b = bData + y * w;
+                    uchar *out = qImage.scanLine(y);
+                    const uchar *r = rData + static_cast<size_t>(y) * srcStride;
+                    const uchar *g = gData + static_cast<size_t>(y) * srcStride;
+                    const uchar *b = bData + static_cast<size_t>(y) * srcStride;
                     int x = 0;
                     // 4像素一块展开，减少循环开销
                     for (; x + 4 <= w; x += 4) {
