@@ -117,6 +117,7 @@ private slots:
     // 同一天的行全落在 BETWEEN 之外（凌晨查报表=0 行）、界面整体慢一个时区偏移。
     // 旧测试的下界是 addYears(-1)，永远大于库里的日期，绕过了"同一天"边界——所以这里用当天窗口。
     void testSameDayWindowFindsJustWrittenRow();
+    void testOperationLogUserFilterPushedDown();
     void testReadBackTimestampMatchesInsertInstant();
     void testPurgeKeepsRowsInsideRetentionWindow();
     // ⚠️ 必须排在最后：本腿会 DROP 掉 inspection_results 来复现"表不在"的写失败路径
@@ -1099,6 +1100,22 @@ void DatabaseTest::purgeAlsoCoversFeatureSamples()
                  "feature_samples 的过期行没被清理（P2）");
         QVERIFY2(names.contains(QStringLiteral("fresh")), "保留窗口内的行被误删");
     }
+}
+
+void DatabaseTest::testOperationLogUserFilterPushedDown()
+{
+    auto *db = AppDatabase::instance();
+    QVERIFY(db->logOperation(QStringLiteral("audit_user_a"), QStringLiteral("审计测试"), QStringLiteral("a")));
+    QVERIFY(db->logOperation(QStringLiteral("audit_user_b"), QStringLiteral("审计测试"), QStringLiteral("b")));
+
+    const QDateTime from = QDateTime::currentDateTime().addDays(-1);
+    const QDateTime to = QDateTime::currentDateTime().addDays(1);
+    const auto all = db->queryOperationLogs(from, to, 500);
+    const auto only = db->queryOperationLogs(from, to, 500, QStringLiteral("audit_user_b"));
+    QVERIFY(!only.isEmpty());
+    QVERIFY2(only.size() < all.size(), "用户过滤须下推到 SQL，不能先截断再内存过滤");
+    for (const OperationLogRecord &r : only)
+        QCOMPARE(r.user, QStringLiteral("audit_user_b"));
 }
 
 QTEST_MAIN(DatabaseTest)

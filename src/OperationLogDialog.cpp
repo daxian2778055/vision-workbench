@@ -56,7 +56,8 @@ void OperationLogDialog::setupUI()
     m_queryButton->setMinimumHeight(28);
     filterLayout->addWidget(m_queryButton);
 
-    m_clearButton = new QPushButton(QStringLiteral("\u6E05\u9664\u65E5\u5FD7"));
+    // 只清 UI 表格，不动数据库：按钮文案必须如实（V2）
+    m_clearButton = new QPushButton(QStringLiteral("\u6E05\u7A7A\u663E\u793A"));
     m_clearButton->setMinimumHeight(28);
     filterLayout->addWidget(m_clearButton);
 
@@ -92,16 +93,13 @@ void OperationLogDialog::setupUI()
 
 void OperationLogDialog::refreshLogs()
 {
+    // V2：用户过滤下推到 SQL，不能再"先 LIMIT 2000 再过滤"漏掉老记录
     auto logs = AppDatabase::instance()->queryOperationLogs(
-        m_fromDateTime->dateTime(), m_toDateTime->dateTime(), 2000);
+        m_fromDateTime->dateTime(), m_toDateTime->dateTime(), 2000,
+        m_userFilter->text().trimmed());
 
     m_logTable->setRowCount(0);
     for (const auto &log : logs) {
-        // 用户过滤
-        if (!m_userFilter->text().trimmed().isEmpty()
-            && log.user != m_userFilter->text().trimmed()) {
-            continue;
-        }
         int row = m_logTable->rowCount();
         m_logTable->insertRow(row);
         m_logTable->setItem(row, 0, new QTableWidgetItem(

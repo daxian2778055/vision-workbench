@@ -76,7 +76,8 @@ bool retireFactoryPassword(const QString &factoryPasswordInput,
         return fail(QStringLiteral("两次输入的新口令不一致。"));
     }
 
-    if (!db->changeUserPassword(kFactoryUser, newPassword)) {
+    // 已校验 admin 原口令的退役路径：显式走特权改密，绕开"出厂口令仍在用"的写闸
+    if (!db->changeUserPassword(kFactoryUser, newPassword, /*privileged=*/true)) {
         return fail(QStringLiteral("口令写入数据库失败：请检查数据库可写后重试。"));
     }
 

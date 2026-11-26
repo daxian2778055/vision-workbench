@@ -1776,6 +1776,21 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              && mwSrc.contains(QStringLiteral("当前角色无权保存方案"))
              && mwSrc.contains(QStringLiteral("当前角色无权打开或新建方案")),
              "预览态不得解闸；本地图运行全部/保存/新建入口都要有角色判据");
+    // ㊿ 认证/权限域 V2：审计失败可见、日志过滤下推、改密 fail-closed、CSV 注入防护
+    const QString dbSrc = readSrc("src/AppDatabase.cpp");
+    QVERIFY2(dbSrc.contains(QStringLiteral("qCWarning(vfpCat) << snapshot"))
+             && readSrc("include/AppDatabase.h").contains(QStringLiteral("bool logOperation"))
+             && dbSrc.contains(QStringLiteral("factory-recovery")),
+             "审计写失败默认可见；logOperation 回报成败；无会话改密审计记系统主体");
+    QVERIFY2(dbSrc.contains(QStringLiteral("? = '' OR user = ?"))
+             && dbSrc.contains(QStringLiteral("ORDER BY timestamp DESC, id DESC LIMIT ?"))
+             && readSrc("src/OperationLogDialog.cpp").contains(QStringLiteral("\\u6E05\\u7A7A\\u663E\\u793A")),
+             "操作日志用户过滤须下推 SQL，清除按钮文案须与行为一致");
+    QVERIFY2(dbSrc.contains(QStringLiteral("bool privileged"))
+             && readSrc("src/FactoryPasswordGuard.cpp").contains(QStringLiteral("privileged=*/true")),
+             "changeUserPassword 须补写闸/角色判据，退役路径显式走特权");
+    QVERIFY2(readSrc("src/StatisticsReport.cpp").contains(QStringLiteral("#include \"CsvEscape.h\"")),
+             "统计 CSV 须走统一转义（含公式注入防护）");
 }
 
 void UiGuardsTest::f2ValidationGuards()

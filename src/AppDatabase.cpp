@@ -152,7 +152,9 @@ void AppDatabase::noteFailure(const QString &op, const QSqlDatabase &db,
         m_lastDatabaseError = failureText(op, stage, db, driverReason);
         snapshot = m_lastDatabaseError;   // 锁内取副本，避免锁外读成员（r19 复核 P3）
     }
-    VFP_DEBUG << snapshot;
+    // V2 复核：qCDebug 在默认部署下被 Qt 过滤，审计写失败会完全不可见。
+    // 统一提升到 Warning，保证 crashLogHandler 的默认日志能留痕。
+    qCWarning(vfpCat) << snapshot;
 }
 
 bool AppDatabase::prepareWrite(QSqlQuery &q, const QSqlDatabase &db,
@@ -756,8 +758,17 @@ bool AppDatabase::authenticateUser(const QString &name, const QString &password,
     return true;
 }
 
-bool AppDatabase::changeUserPassword(const QString &name, const QString &newPassword)
+bool AppDatabase::changeUserPassword(const QString &name, const QString &newPassword,
+                                     bool privileged)
 {
+    // V2：与 addUser/removeUser 同层的 fail-closed。出厂口令退役流程已校验 admin 原口令，
+    // 通过 privileged=true 走特权路径；无会话（单测夹具）仍放行。
+    SessionManager *sm = SessionManager::instance();
+    if (!privileged
+        && (!sm->writeGateRefusal().isEmpty() || (sm->isLoggedIn() && !sm->canManageUsers()))) {
+        VFP_DEBUG << "改密被权限/写操作闸拒绝:" << name;
+        return false;
+    }
     WriteLock locker(&s_writeMutex);
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
@@ -874,7 +885,7 @@ bool AppDatabase::removeUser(const QString &name)
 
 // ---- Operation logs ----
 
-void AppDatabase::logOperation(const QString &user, const QString &action, const QString &detail)
+bool AppDatabase::logOperation(const QString &user, const QString &action, const QString &detail)
 {
     WriteLock locker(&s_writeMutex);
     const QSqlDatabase db = threadDatabase();
@@ -884,30 +895,37 @@ void AppDatabase::logOperation(const QString &user, const QString &action, const
     if (!prepareWrite(q, db,
                       QStringLiteral("INSERT INTO operation_logs (user, action, detail) VALUES (?, ?, ?)"),
                       QStringLiteral("logOperation"))) {
-        return;
+        return false;
     }
-    q.addBindValue(user);
+    q.addBindValue(user.isEmpty() ? QStringLiteral("factory-recovery") : user);
     q.addBindValue(action);
     q.addBindValue(detail);
     if (!q.exec()) {
         noteFailure(QStringLiteral("logOperation %1").arg(action), db, q.lastError().text());
+        return false;
     }
+    return true;
 }
 
 QList<OperationLogRecord> AppDatabase::queryOperationLogs(const QDateTime &from, const QDateTime &to,
-                                                           int limit) const
+                                                           int limit, const QString &userFilter) const
 {
     QList<OperationLogRecord> records;
     const QSqlDatabase db = threadDatabase();
     QSqlQuery q(db);
     if (!prepareRead(q, db, QStringLiteral(
                            "SELECT id, user, action, detail, timestamp FROM operation_logs "
-                           "WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp DESC LIMIT ?"),
+                           "WHERE timestamp BETWEEN ? AND ? AND (? = '' OR user = ?) "
+                           "ORDER BY timestamp DESC, id DESC LIMIT ?"),
                      QStringLiteral("queryOperationLogs"))) {
         return records;
     }
+    // QString() 绑定为 SQL NULL，NULL = '' 不成立 ⇒ 默认查询会返回 0 条；必须显式空串
+    const QString filter = userFilter.isNull() ? QStringLiteral("") : userFilter;
     q.addBindValue(utcBindText(from));
     q.addBindValue(utcBindText(to));
+    q.addBindValue(filter);
+    q.addBindValue(filter);
     q.addBindValue(limit);
     if (!execRead(q, db, QStringLiteral("queryOperationLogs"))) return records;
 

@@ -4,19 +4,9 @@
 #include <QTime>
 #include <algorithm>
 
-namespace {
+#include "CsvEscape.h"   // 统一 CSV 转义（含公式注入防护）
 
-/// CSV 字段转义：含逗号/引号/换行时用双引号包起来，内部引号翻倍（Excel 口径）
-QString csvField(const QString &s)
-{
-    if (s.contains(QLatin1Char(',')) || s.contains(QLatin1Char('"'))
-        || s.contains(QLatin1Char('\n')) || s.contains(QLatin1Char('\r'))) {
-        QString t = s;
-        t.replace(QLatin1Char('"'), QLatin1String("\"\""));
-        return QLatin1Char('"') + t + QLatin1Char('"');
-    }
-    return s;
-}
+namespace {
 
 QString csvLine(const QStringList &fields)
 {

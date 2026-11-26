@@ -105,7 +105,9 @@ public:
 
     /// 覆盖指定用户的口令（加盐迭代哈希后写回）。
     /// 返回 false：数据库写入失败**或该用户不存在**（影响 0 行）——调用方必须把失败显示出来。
-    bool changeUserPassword(const QString &name, const QString &newPassword);
+    /// privileged=true 仅供已通过出厂口令鉴权的 FactoryPasswordGuard 退役流程使用
+    bool changeUserPassword(const QString &name, const QString &newPassword,
+                            bool privileged = false);
 
     /// 出厂默认口令判定：InUse = admin 账户的哈希仍能匹配口令 "admin"；
     /// Retired = 已改掉、或读通了而根本没有 admin 账户；Unreadable = 这条判定今天做不出来。
@@ -115,9 +117,12 @@ public:
     AdminPasswordState adminPasswordState() const;
 
     // ---- \u64CD\u4F5C\u65E5\u5FD7 ----
-    void logOperation(const QString &user, const QString &action, const QString &detail);
+    /// 写操作审计；返回 false = 审计落库失败（调用方应通过错误通道留痕）
+    bool logOperation(const QString &user, const QString &action, const QString &detail);
+    /// userFilter 非空时下推到 SQL（避免 LIMIT 后再过滤漏行）
     QList<OperationLogRecord> queryOperationLogs(const QDateTime &from, const QDateTime &to,
-                                                  int limit = 500) const;
+                                                  int limit = 500,
+                                                  const QString &userFilter = QString()) const;
 
     /// \u83B7\u53D6\u6570\u636E\u5E93\u8DEF\u5F84
     QString databasePath() const { return m_dbPath; }
