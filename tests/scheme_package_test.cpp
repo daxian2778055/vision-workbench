@@ -186,6 +186,9 @@ void SchemePackageTest::plaintextV2RejectsEncryptedFlag() {
     bool readonly = false, ok = true, missing = false;
     SchemePackage::importScheme(env, QString(), &readonly, &ok, &missing);
     QVERIFY(!ok);
+    // 探测面必须与导入接受集合一致：不能对必然拒收的文件误判为"需要口令"
+    QVERIFY2(!SchemePackage::isEncryptedEnvelope(env),
+             "v2 带加密位应被导入拒收，探测也不应报加密信封");
 }
 
 // 旧 v1 明文打包（176 行前的历史格式，写侧不再产出）：手拼 magic + v1 + 只读标志 +

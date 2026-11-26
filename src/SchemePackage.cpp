@@ -172,6 +172,16 @@ QByteArray SchemePackage::importScheme(const QByteArray &envelope,
         return QByteArray();
     }
 
+    // T3 复核：legacy 明文分支没有 MAC 前置校验，qUncompress 会按压缩体前 4 字节
+    // 声明的长度直接分配解压缓冲；不可信文件可借此把内存打爆（zip-bomb）。
+    // 合法方案 JSON 不会超过 64MB，超限直接拒收。
+    if (compressed.size() >= 4) {
+        const auto *p = reinterpret_cast<const quint8 *>(compressed.constData());
+        const quint32 declared = (quint32(p[0]) << 24) | (quint32(p[1]) << 16)
+                               | (quint32(p[2]) << 8) | quint32(p[3]);
+        if (declared > 64u * 1024u * 1024u)
+            return QByteArray();
+    }
     QByteArray payload = qUncompress(compressed);
     if (payload.isEmpty()) // qUncompress 失败返回空（注意：空输入也返回空，但方案 JSON 不空）
         return QByteArray();
@@ -190,11 +200,19 @@ bool SchemePackage::isEnvelope(const QByteArray &data) {
 bool SchemePackage::isEncryptedEnvelope(const QByteArray &data) {
     if (!isEnvelope(data) || data.size() < 6)
         return false;
+    const quint8 version = static_cast<quint8>(data[4]);
+    // 探测面必须与 importScheme 的接受集合一致：只有 v1 才可能是加密信封，
+    // v2 带加密位与未知版本都会被导入拒收，不该对它们弹口令框。
+    if (version != kFormatVersion)
+        return false;
     return (static_cast<quint8>(data[5]) & kFlagEncrypted) != 0;
 }
 
 bool SchemePackage::peekReadonly(const QByteArray &data) {
     if (!isEnvelope(data) || data.size() < 6)
+        return false;
+    const quint8 version = static_cast<quint8>(data[4]);
+    if (version != kFormatVersion && version != kPlaintextFormatVersion)
         return false;
     return (static_cast<quint8>(data[5]) & kFlagReadonly) != 0;
 }

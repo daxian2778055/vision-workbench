@@ -1738,6 +1738,11 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              "打包须按入参方案锚点解析、真实路径不可信时跳过、补扫无规格 filePath");
     QVERIFY2(mwSrc.contains(QStringLiteral("r.skipped")),
              "打包界面须展示跳过项，不能把全部跳过说成没有依赖");
+    // ㊻ 加密打包/恢复域 T3：探测面版本一致、解压上限
+    const QString spEncSrc = readSrc("src/SchemePackage.cpp");
+    QVERIFY2(spEncSrc.contains(QStringLiteral("if (version != kFormatVersion)"))
+             && spEncSrc.contains(QStringLiteral("declared > 64u * 1024u * 1024u")),
+             "加密探测须校验版本；legacy 解压须设硬上限防 zip-bomb");
 }
 
 void UiGuardsTest::f2ValidationGuards()
