@@ -1701,6 +1701,15 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(feSrcRef.count(QStringLiteral("QString::number(v.toDouble(), 'g', 10)")) >= 2
              && feSrcRef.contains(QStringLiteral(R"(\{(\d+)(?:\.([^{}]+))?\})")),
              "引用解析须与面板同精度，并支持非 ASCII 参数名");
+    // ㊻ 节点核心域 S2：失败轮状态收口、Enum 钳制、模块号校验、非聚合端口枚举
+    const QString nbCoreSrc = readSrc("src/NodeBase.cpp");
+    QVERIFY2(nbCoreSrc.contains(QStringLiteral("if (!m_executionSuccess && !isResultNg())")),
+             "失败轮必须在 execute 唯一入口收口 moduleStatus，不能沿用上一轮 true");
+    const QString hnSrc = readSrc("src/HalconNode.cpp");
+    QVERIFY2(hnSrc.count(QStringLiteral("ParamType::Enum")) >= 4
+             && hnSrc.contains(QStringLiteral("setModuleId(storedId)"))
+             && hnSrc.contains(QStringLiteral("if (!aggregatesOutputPorts())")),
+             "Enum 索引须钳制；fromJson 模块号须走校验；非聚合节点须按全部端口枚举");
 }
 
 void UiGuardsTest::f2ValidationGuards()

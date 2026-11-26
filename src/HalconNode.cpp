@@ -163,6 +163,11 @@ bool HalconNode::requiresDataOutput() const
 
 QVector<QPair<QString, QSharedPointer<DataObject>>> HalconNode::namedOutputs() const
 {
+    // S2 复核：非聚合节点（如 ConditionalNode 的 TRUE/FALSE 分支端口）有多个真实端口，
+    // 原实现只取端口 0，运行界面与输出查看器都看不到其余分支。非聚合时回退到基类
+    // 按全部真实端口枚举；聚合节点才走"主端口 + attachedResults"折叠口径。
+    if (!aggregatesOutputPorts())
+        return NodeBase::namedOutputs();
     QVector<QPair<QString, QSharedPointer<DataObject>>> out;
     const QSharedPointer<DataObject> main = getOutputData(0);
     if (!main)
@@ -230,7 +235,7 @@ void HalconNode::setParam(const QString &name, const QVariant &value)
     // 节点内部写参）可以写入 300 这类越界阈值直达算法，造成不可预期的结果。
     // 此处只收窄数值，不改类型、不改枚举语义，避免影响既有节点行为。
     for (const ParamSpec &spec : m_paramSpecs) {
-        if (spec.name != name || !spec.hasRange)
+        if (spec.name != name || (!spec.hasRange && spec.type != ParamType::Enum))
             continue;
         if (spec.type == ParamType::Int) {
             bool ok = false;
@@ -246,6 +251,13 @@ void HalconNode::setParam(const QString &name, const QVariant &value)
             normalized = ok ? qBound(spec.minValue.toDouble(), doubleValue,
                                      spec.maxValue.toDouble())
                             : spec.defaultValue.toDouble();
+        } else if (spec.type == ParamType::Enum) {
+            // S2 复核：fromJson 会校验枚举索引，运行期 setParam 却放过越界值，
+            // 算法读到非法索引走静默缺省分支。与 validateParamValue 同口径回退默认值。
+            bool ok = false;
+            const int idx = value.toInt(&ok);
+            normalized = (ok && idx >= 0 && idx < spec.enumValues.size())
+                             ? idx : spec.defaultValue.toInt();
         }
         break;
     }
@@ -504,13 +516,11 @@ void HalconNode::fromJson(const QJsonObject &json)
     
     // 恢复模块ID（可选，因为模块ID是运行时生成的）
     if (json.contains("moduleId")) {
-        int storedId = json["moduleId"].toInt();
-        if (storedId != m_stateBody->moduleId) {
-            // 抬升全局计数器到 storedId 之上：新会话 s_nextId 从 1 重计，否则随后新建节点
-            // 会再次分配到同一号（S4：模块号不复用是为了不让"新节点"继承旧节点的输出变量表）。
-            NodeBase::reserveModuleId(storedId);
-            m_stateBody->moduleId = storedId;
-        }
+        const int storedId = json[QStringLiteral("moduleId")].toInt();
+        // S2 复核：原实现直接写 m_stateBody->moduleId，绕开 setModuleId 的 id<=0
+        // 防护，非法号会让订阅绑定被静默丢弃、{模块号} 引用与结果表键失效。
+        // setModuleId 内部已含 reserveModuleId 与正值校验，直接复用。
+        setModuleId(storedId);
     }
     
     // B2：恢复逻辑输入槽的订阅绑定（模块号此时已恢复，运行期按号解析源节点）
@@ -619,7 +629,7 @@ void HalconNode::normalizeRuntimeParams()
     // 就会静默变 0 或放行超大值（除零 / 负 vector size / 巨核 / 循环爆炸）。
     // 这里在每轮算法执行前统一按声明范围收口，一次覆盖全部派生算子。
     for (const ParamSpec &spec : m_paramSpecs) {
-        if (!spec.hasRange)
+        if (!spec.hasRange && spec.type != ParamType::Enum)
             continue;
         const QVariant cur = m_params.value(spec.name);
         if (!cur.isValid())
@@ -636,6 +646,12 @@ void HalconNode::normalizeRuntimeParams()
             m_params.insert(spec.name,
                             ok ? qBound(spec.minValue.toDouble(), v, spec.maxValue.toDouble())
                                : spec.defaultValue.toDouble());
+        } else if (spec.type == ParamType::Enum) {
+            bool ok = false;
+            const int idx = cur.toInt(&ok);
+            m_params.insert(spec.name,
+                            (ok && idx >= 0 && idx < spec.enumValues.size())
+                                ? idx : spec.defaultValue.toInt());
         }
     }
 }

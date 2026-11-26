@@ -142,6 +142,7 @@ private slots:
     void testMvsSetFilePathSwitchesToLocalMode();
     void testDataCode2DDecodedContentGuard();   // P2：空串/全空白/有效串三组判据
     void testChannelSplitAndMergeRoundtrip();
+    void testFailedRoundClearsStaleModuleStatus();
     void testOutputImageSavesByRule();
     void testOutputImagePercentNExpands();    // P10：%n 必须展开为序号，不得留下字面量
     void testFitRoiBoundary_data();
@@ -3687,6 +3688,24 @@ void NodeCoreTest::testDataCode2DDecodedContentGuard()
     QVERIFY2(DataCode2DNode::decodedContentIsValid({ QStringLiteral("  "), QStringLiteral("HELLO") }),
              "空串+有效串应判有效");
     QVERIFY2(DataCode2DNode::decodedContentIsValid({ QStringLiteral("CODE128") }), "有效串应判有效");
+}
+
+// S2 复核：process() 早退只写 lastError 不写 moduleStatus 的算子，上一轮成功留下的
+// moduleStatus=true 会让本轮失败在结果表/文本显示里仍被当成 OK。唯一入口须收口。
+void NodeCoreTest::testFailedRoundClearsStaleModuleStatus()
+{
+    ChannelSplitNode node;
+    node.init();
+    auto img = QSharedPointer<DataObject>::create();
+    img->setHImage(OpencvUtil::matToHimage(cv::Mat(8, 8, CV_8UC3, cv::Scalar(10, 20, 30))));
+    node.setInputData(0, img);
+    QVERIFY2(node.execute(), "有效三通道图应执行成功");
+    QVERIFY(node.getParam(QStringLiteral("moduleStatus")).toBool());
+
+    node.setInputData(0, QSharedPointer<DataObject>());   // 下一轮无输入 → process 早退 false
+    QVERIFY2(!node.execute(), "无输入必须判失败");
+    QVERIFY2(!node.getParam(QStringLiteral("moduleStatus")).toBool(),
+             "失败轮不得沿用上一轮遗留的 moduleStatus=true");
 }
 
 QTEST_MAIN(NodeCoreTest)

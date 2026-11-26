@@ -384,6 +384,11 @@ bool NodeBase::execute()
         QElapsedTimer nodeTimer;
         nodeTimer.start();
         m_executionSuccess = process();
+        // S2 复核：派生 process() 的早退分支常只写 lastError 不写 moduleStatus，
+        // 上一轮遗留的 true 会让本轮失败在结果表/文本显示里仍被当成 OK。
+        // 在唯一入口统一收口，不依赖每个算子自觉写位。
+        if (!m_executionSuccess && !isResultNg())
+            setParam(QStringLiteral("moduleStatus"), false);
         const qint64 elapsedMs = nodeTimer.elapsed();
         m_lastElapsedMs.store(elapsedMs, std::memory_order_relaxed);
 
