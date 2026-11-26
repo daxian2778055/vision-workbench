@@ -203,8 +203,10 @@ QJsonObject ProjectManager::buildProjectJson(const QList<FlowScene *> &scenes) c
 }
 
 bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &scenes,
-                                 const QString &passphrase)
+                                 const QString &passphrase,
+                                 const QString &schemeAnchorPath)
 {
+    const QString gatePath = schemeAnchorPath.isEmpty() ? filePath : schemeAnchorPath;
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly)) {
         VFP_DEBUG << "方案加载失败：无法读取" << filePath << file.errorString();
@@ -269,7 +271,7 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
         }
         /// U-201 载入门禁：方案目录外路径（目录外绝对或相对逃逸，U-215 起同权）须显式确认；
         /// 未确认即拒载——全局配置此刻尚未应用（拒载不留半装载现场）。
-        if (!confirmOutsideSchemePaths(scenes, filePath)) {
+        if (!confirmOutsideSchemePaths(scenes, gatePath)) {
             rollbackSnapshot();
             return false;
         }
@@ -297,7 +299,7 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
     }
     /// 应用方案内容（与崩溃恢复共用 applyProjectJson：场景 + 全局配置 + 运行界面布局）。
     /// U-201 载入门禁：同信封路径——目录外路径（绝对或相对逃逸）未获确认即拒载。
-    if (!confirmOutsideSchemePaths(scenes, filePath)) {
+    if (!confirmOutsideSchemePaths(scenes, gatePath)) {
         rollbackSnapshot();
         return false;
     }

@@ -22,7 +22,9 @@ public:
 
     bool saveProject(const QString &filePath, const QList<FlowScene *> &scenes);
     bool loadProject(const QString &filePath, QList<FlowScene *> &scenes,
-                     const QString &passphrase = QString());
+                     const QString &passphrase = QString(),
+                     /// 路径门禁/相对路径解析的原方案锚点；崩溃恢复传原路径而非临时导出路径
+                     const QString &schemeAnchorPath = QString());
 
     /// 导出加密 / 只读方案（G-P1-10）。
     /// passphrase 非空时加密（AES-256-CTR + PBKDF2-HMAC-SHA256）；readonly 置只读标志。

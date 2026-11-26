@@ -306,7 +306,9 @@ private:
     /// recoveryRestore=true（来自崩溃恢复）：不记入最近文件、不把内容标为"已落盘"——
     /// 恢复出来的内容还没写回原方案文件，关闭时仍须提示保存。
     /// 返回本次接管是否真正成功——崩溃恢复链据此决定是否删临时件/改锚/报成功。
-    bool loadProjectFile(const QString &fileName, bool recoveryRestore = false);
+    /// schemeAnchorPath 非空时用作路径门禁锚点（崩溃恢复传原方案路径而非临时导出路径）。
+    bool loadProjectFile(const QString &fileName, bool recoveryRestore = false,
+                         const QString &schemeAnchorPath = QString());
     /// U-201 载入门禁：本次载入含方案目录外绝对路径时弹模态确认（逐条列路径）；
     /// 返回 true = 操作员放行；false = 拒载（当前方案保持不变）。
     bool confirmOutsideSchemePaths(const ProjectPaths::PathReview &review);

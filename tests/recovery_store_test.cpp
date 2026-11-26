@@ -285,6 +285,22 @@ void RecoveryStoreTest::testEmptyProjectIsNotNagging()
     QVERIFY(RecoveryStore::isEmptyProject(
         QJsonObject{{QStringLiteral("scenes"), QJsonArray{}}}));
 
+    // 空场景但改了全局变量：真实未落盘数据，不能再判"无改动"
+    QJsonObject withGlobal = emptyJson;
+    QJsonObject gv = withGlobal.value(QStringLiteral("globalVariables")).toObject();
+    QJsonArray vars = gv.value(QStringLiteral("variables")).toArray();
+    QJsonObject probe;
+    probe[QStringLiteral("name")] = QStringLiteral("probe");
+    probe[QStringLiteral("type")] = 0;
+    probe[QStringLiteral("value")] = 1;
+    vars.append(probe);
+    gv[QStringLiteral("variables")] = vars;
+    withGlobal[QStringLiteral("globalVariables")] = gv;
+    // T1：新建空方案建立基线后，仅改全局变量也应被识别为未保存（不再依赖只看节点的特例）
+    store.markSaved(emptyJson);
+    QVERIFY(!store.hasUnsavedChanges(emptyJson));
+    QVERIFY(store.hasUnsavedChanges(withGlobal));
+
     // 加一个节点就算有内容 → 需要提示/自动保存
     empty->createNode(NodeBase::LOGIC, QPointF(0, 0), QStringLiteral("Delay"));
     const QJsonObject json = pm.buildProjectJson(scenes);

@@ -1723,6 +1723,13 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              "非聚合节点逻辑端口数须按真实端口计");
     QVERIFY2(readSrc("src/ReceiveEvent.cpp").contains(QStringLiteral("diff <= 1e-6 * scale")),
              "字节匹配 float 等于判定须用相对容差");
+    // ㊾ 加密打包/恢复域 T1：自动保存失败可见、恢复锚点、空方案全局改动
+    QVERIFY2(mwSrc.contains(QStringLiteral("自动保存失败：当前改动尚未形成恢复文件"))
+             && mwSrc.contains(QStringLiteral("loadProjectFile(restorePath, /*recoveryRestore=*/true, info.originalPath)"))
+             && mwSrc.contains(QStringLiteral("m_recovery.markSaved(m_projectManager->buildProjectJson(m_flowScenes))")),
+             "自动保存失败必须可见；恢复须以原方案路径为门禁锚点；启动空方案须建立基线");
+    QVERIFY2(pmSrc.contains(QStringLiteral("const QString gatePath = schemeAnchorPath.isEmpty()")),
+             "loadProject 须接受独立锚点，恢复时不能用临时导出目录判路径内外");
 }
 
 void UiGuardsTest::f2ValidationGuards()

@@ -1830,6 +1830,10 @@ MainWindow::MainWindow(QWidget *parent, bool previewOnly) :
         // 恢复询问延到窗口显示之后（见 showEvent → checkRecoveryOnStartup），
         // 否则构造期的模态框会挡住登录框。
         initCrashRecovery();
+        // 新建空方案也要建立内容基线：否则 hasUnsavedChanges 退化成"只看场景节点"，
+        // 仅改全局变量/布局时既无自动保存也无未保存提示（T1 复核）。
+        // 注意只标基线、不清恢复文件——启动时的恢复询问还要读它。
+        m_recovery.markSaved(m_projectManager->buildProjectJson(m_flowScenes));
         initReportAutoExport();
 
         // P1-3：流程超时监控（UI 层计时，单次触发；执行不会因监控而阻塞）
@@ -4557,6 +4561,12 @@ void MainWindow::autoSaveTick()
 
     if (m_recovery.saveRecovery(json, pm->lastFilePath()))
         ui->statusBar->showMessage(tr("已自动保存（异常退出后可恢复）"), 3000);
+    else {
+        // T1 复核：原实现没有 else，写盘失败只进 VFP_DEBUG（不转发 stderr），
+        // 用户全程以为有备份，崩溃时才发现根本没有恢复文件。
+        ui->statusBar->showMessage(tr("自动保存失败：当前改动尚未形成恢复文件，请检查应用数据目录是否可写"), 8000);
+        logMessage(tr("自动保存失败：恢复文件未写入，请检查应用数据目录权限或磁盘空间"));
+    }
 }
 
 void MainWindow::initReportAutoExport()
@@ -4693,7 +4703,7 @@ void MainWindow::checkRecoveryOnStartup()
     // 故把 lastFilePath 写回原方案路径（空 = 从未保存过的新方案）。
     // 恢复失败必须保留临时件、保持锚未载入、明确报错——否则下面的"删件+改锚+报成功"
     // 会让操作员以为已恢复，随后点保存把空方案写到原方案文件上。
-    if (!loadProjectFile(restorePath, /*recoveryRestore=*/true)) {
+    if (!loadProjectFile(restorePath, /*recoveryRestore=*/true, info.originalPath)) {
         QMessageBox::warning(this, tr("崩溃恢复"),
                              tr("自动保存内容载入失败，原方案保持不变；临时恢复文件已保留：\n%1")
                                  .arg(restorePath));
@@ -4702,6 +4712,7 @@ void MainWindow::checkRecoveryOnStartup()
     }
     QFile::remove(restorePath);
     projectManager()->setLastFilePath(info.originalPath);
+    updateSchemeLabel(info.originalPath);   // 标题不能停留在已删除的临时恢复文件名
 
     logMessage(tr("已从自动保存内容恢复（原方案：%1；自动保存时间：%2）。"
                   "请确认后用「保存」写回方案文件")
@@ -4899,7 +4910,8 @@ void MainWindow::onLoadProject()
     }
 }
 
-bool MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
+bool MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore,
+                                 const QString &schemeAnchorPath)
 {
     // 崩溃恢复也走这条路径（复用唯一的"接管方案"实现），但它不算一次"打开方案"：
     // 不写"加载项目"日志、不记入最近文件、不把内容标为已落盘（详见函数末尾）。
@@ -4940,7 +4952,7 @@ bool MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
     // 先加载到临时列表：只有加载成功才销毁当前方案。
     // 原实现是先 qDeleteAll 再加载，文件损坏时旧方案已丢、新方案为空，且仍报"加载成功"。
     QList<FlowScene*> loadedScenes;
-    const bool success = pm->loadProject(fileName, loadedScenes, passphrase);
+    const bool success = pm->loadProject(fileName, loadedScenes, passphrase, schemeAnchorPath);
 
     if (!success) {
         qDeleteAll(loadedScenes);
