@@ -1,4 +1,5 @@
 #include "DnnInferNode.h"
+#include "DnnDetectNode.h"   // 共用 loadClassNames 缓存
 #include "OpencvUtil.h"
 #include "DataObject.h"
 #include "AppLog.h"
@@ -142,26 +143,26 @@ void DnnInferNode::run(bool /*autoSwitch*/)
         std::partial_sort(idx.begin(), idx.begin() + std::min(topK, (int)idx.size()),
                           idx.end(), [&](int a, int b) { return prob[a] > prob[b]; });
 
-        QStringList classNames;
         QString clsPath = ProjectPaths::resolveExecutionPath(m_params.value(QStringLiteral("classNamesPath")).toString()).trimmed();
         if (clsPath.isEmpty())
             clsPath = QFileInfo(modelPath).absolutePath() + QStringLiteral("/classes.txt");
-        QFile clsFile(clsPath);
-        if (clsFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            QTextStream ts(&clsFile);
-            while (!ts.atEnd()) {
-                const QString line = ts.readLine().trimmed();
-                if (!line.isEmpty())
-                    classNames.append(line);
-            }
-        }
+        // W1：与检测/计数节点共用带 mtime 的线程安全缓存，不再每帧重读 classes.txt
+        const QStringList classNames = DnnDetectNode::loadClassNames(modelPath, clsPath);
         const QString className = (idx[0] >= 0 && idx[0] < classNames.size())
             ? classNames[idx[0]] : QString::number(idx[0]);
 
         m_params[QStringLiteral("topClass")] = idx[0];
         m_params[QStringLiteral("topClassName")] = className;
         m_params[QStringLiteral("topConfidence")] = prob[idx[0]];
-        m_params[QStringLiteral("topKClasses")] = className;
+        // W1：topK 此前只参与排序，输出恒为 top-1；按 K 个类落盘才与参数/字段名一致
+        QStringList topNames;
+        const int kCount = std::min(topK, static_cast<int>(idx.size()));
+        for (int i = 0; i < kCount; ++i) {
+            const int c = idx[static_cast<size_t>(i)];
+            topNames.append((c >= 0 && c < classNames.size()) ? classNames[c]
+                                                              : QString::number(c));
+        }
+        m_params[QStringLiteral("topKClasses")] = topNames.join(QLatin1Char('|'));
         m_params["moduleStatus"] = true;
         m_outputImage = m_inputImage;
 

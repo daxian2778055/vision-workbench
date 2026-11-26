@@ -1791,6 +1791,18 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              "changeUserPassword 须补写闸/角色判据，退役路径显式走特权");
     QVERIFY2(readSrc("src/StatisticsReport.cpp").contains(QStringLiteral("#include \"CsvEscape.h\"")),
              "统计 CSV 须走统一转义（含公式注入防护）");
+    // ㊿+ 脚本/AI 域 W1：DNN 输出几何/判红、缓存键、topK
+    QVERIFY2(readSrc("src/DnnSegmentNode.cpp").contains(QStringLiteral("b.x = (b.x - x0) / s")),
+             "实例分割框须按 letterbox 几何反映射回原图");
+    const QString adSrc = readSrc("src/AnomalyDetectNode.cpp");
+    QVERIFY2(adSrc.contains(QStringLiteral("setResultNg(ng)"))
+             && adSrc.contains(QStringLiteral("modelStamp(path)")),
+             "异常判 NG 须保留结果；同路径换模型须识别");
+    QVERIFY2(readSrc("src/DnnInferNode.cpp").contains(QStringLiteral("topNames.append"))
+             && readSrc("src/DnnInferNode.cpp").contains(QStringLiteral("DnnDetectNode::loadClassNames")),
+             "topK 须输出 K 个类；类别表须走缓存");
+    QVERIFY2(readSrc("src/DnnNetCache.cpp").contains(QStringLiteral("sizeBytes")),
+             "DNN 缓存键须含文件大小，防同 mtime 换型沿用旧模型");
 }
 
 void UiGuardsTest::f2ValidationGuards()

@@ -632,6 +632,30 @@ void DnnSegmentNode::run(bool /*autoSwitch*/)
         QVector<DetectionBox> finalBoxes = compBoxes;
         int outCount = compCount;
         if (useInstance) {
+            // W1 复核：parseYoloSegOutput 给的是网络输入空间框，而下方用 maskOrig（原图空间）
+            // 做面积门槛并输出 imageWidth/Height。必须先按 unletterboxMask 的同一几何
+            // 把框反映射回原图，否则 640 输入 + 1920x1080 图时框位置/尺寸全错。
+            if (keepRatio && inputW > 0 && inputH > 0 && img.cols > 0 && img.rows > 0) {
+                const double s = std::min(double(inputW) / img.cols, double(inputH) / img.rows);
+                if (s > 0.0) {
+                    const int nw = std::max(1, cvRound(img.cols * s));
+                    const int nh = std::max(1, cvRound(img.rows * s));
+                    const double x0 = double(inputW - nw) / 2.0;
+                    const double y0 = double(inputH - nh) / 2.0;
+                    for (DetectionBox &b : instBoxes) {
+                        b.x = (b.x - x0) / s;
+                        b.y = (b.y - y0) / s;
+                        b.w = b.w / s;
+                        b.h = b.h / s;
+                    }
+                }
+            } else if (!keepRatio && inputW > 0 && inputH > 0 && img.cols > 0 && img.rows > 0) {
+                const double sx = double(img.cols) / inputW;
+                const double sy = double(img.rows) / inputH;
+                for (DetectionBox &b : instBoxes) {
+                    b.x *= sx; b.y *= sy; b.w *= sx; b.h *= sy;
+                }
+            }
             // 实例模式：框数组用实例框（携带类别/置信度），面积门槛按"框内掩膜像素数"过滤
             const QString clsPath = ProjectPaths::resolveExecutionPath(
                 m_params.value(QStringLiteral("classNamesPath")).toString()).trimmed();

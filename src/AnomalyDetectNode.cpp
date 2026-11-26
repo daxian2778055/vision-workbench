@@ -6,8 +6,25 @@
 
 #include <opencv2/imgproc.hpp>
 #include <QWidget>
+#include <QFileInfo>
 #include <algorithm>
 #include <cmath>
+
+namespace {
+
+/// W1：同路径覆盖（解包/Copy-Item 可保留 mtime）也必须识别为换型。
+QString modelStamp(const QString &path)
+{
+    if (path.isEmpty())
+        return QString();
+    const QFileInfo fi(path);
+    return path + QLatin1Char('|')
+           + QString::number(fi.exists() ? fi.lastModified().toMSecsSinceEpoch() : 0)
+           + QLatin1Char('|')
+           + QString::number(fi.exists() ? fi.size() : 0);
+}
+
+}   // namespace
 
 AnomalyDetectNode::AnomalyDetectNode(QObject *parent) : HalconNode(parent)
 {
@@ -129,7 +146,7 @@ void AnomalyDetectNode::run(bool)
 
         // 换文件 = 换模型：内存里留着的那份必须按当前后端重新装载（推理）或直接清空（教学）。
         // 不这么做就是"拿 A 产品的模型判 B 产品"——现场表现成热图全红却查不出原因。
-        const bool stale = !path.isEmpty() && m_loadedFrom != path;
+        const bool stale = !path.isEmpty() && m_loadedFrom != modelStamp(path);
         if (stale) {
             m_baseline.clear();
             m_pca = AnomalyPcaModel();
@@ -150,7 +167,7 @@ void AnomalyDetectNode::run(bool)
             // 两种情况都必须当下绑定。教学尤其不能等"第一次成功落盘"再绑定：后端 B 是批量拟合，
             // 第 1 个样本拟合不出模型也就不会落盘，下一轮就会被本判定当成换文件再清空，
             // 样本永远攒不满。
-            m_loadedFrom = path;
+            m_loadedFrom = modelStamp(path);
         }
         if (trainMode == 1) {   // 覆盖式教学：旧模型（含另一个后端的）一律不用
             m_baseline.clear();
@@ -256,8 +273,15 @@ void AnomalyDetectNode::run(bool)
                               cv::Scalar(0, 0, 255), 2);
         }
 
+        // W1 复核：同 OpencvDefectNode 口径——NG 也是"判红但结果有效"，必须置 resultNg，
+        // 否则基类 process() 会把热图与 Measure 端口一并清空，现场只见红节点而无原因。
         const bool ng = totalArea >= m_params.value(QStringLiteral("ngArea"), 50.0).toDouble();
         m_params["moduleStatus"] = !ng;
+        setResultNg(ng);
+        if (ng)
+            m_params["lastError"] = QStringLiteral("异常面积 %1 超过阈值 %2")
+                                        .arg(totalArea)
+                                        .arg(m_params.value(QStringLiteral("ngArea"), 50.0).toDouble());
         m_outputImage = OpencvUtil::matToHimage(out);
 
         MeasureResult res;
@@ -323,7 +347,7 @@ bool AnomalyDetectNode::teachAndScorePixel(const cv::Mat &inspect, const QString
                 error = QStringLiteral("统计基线保存失败：%1").arg(saveErr);
                 return false;
             }
-            m_loadedFrom = path;
+            m_loadedFrom = modelStamp(path);
         }
     } else if (m_baseline.isEmpty()) {
         error = QStringLiteral("基线为空：先教学（或指定基线文件）");
@@ -379,7 +403,7 @@ bool AnomalyDetectNode::teachAndScorePca(const cv::Mat &inspect, const QString &
                 error = QStringLiteral("PCA 模型保存失败：%1").arg(saveErr);
                 return false;
             }
-            m_loadedFrom = path;
+            m_loadedFrom = modelStamp(path);
         }
     } else if (m_pca.isEmpty()) {
         error = QStringLiteral("PCA 模型为空：先教学（或指定模型文件，注意与统计基线文件不通用）");

@@ -31,14 +31,16 @@ DnnNetCache::ReadyHook &readyHook()
     return h;
 }
 
-/// 键：真实落点 + mtime（同路径换文件 → 重新加载）。联接/别名指向同一文件时共用一个条目。
-QString cacheKey(const QString &absPath, qint64 mtime, bool useOpenCL)
+/// 键：真实落点 + mtime + 文件大小 + 后端。同 mtime 换文件（Copy-Item 保留时间戳）时
+/// 仍会各缓存一份，避免旧模型被静默沿用。
+QString cacheKey(const QString &absPath, qint64 mtime, qint64 sizeBytes, bool useOpenCL)
 {
     // realpath（r19 P2 复核）：注释说"真实落点"，实现却是 cleanPath——联接/别名会各缓存一份。
     const QString canonical = QFileInfo(absPath).canonicalFilePath();
     const QString norm = canonical.isEmpty() ? QDir::cleanPath(absPath) : canonical;
     // backend 入键（r19 P2 复核）：两个节点同路径不同后端时，先加载者会赢。
     return norm + QLatin1Char('|') + QString::number(mtime) + QLatin1Char('|')
+           + QString::number(sizeBytes) + QLatin1Char('|')
            + (useOpenCL ? QStringLiteral("ocl") : QStringLiteral("cpu"));
 }
 
@@ -73,7 +75,8 @@ std::shared_ptr<DnnNetEntry> DnnNetCache::acquire(const QString &absPath, bool u
 
     const QFileInfo fi(path);
     const qint64 mtime = fi.exists() ? fi.lastModified().toMSecsSinceEpoch() : 0;
-    const QString key = cacheKey(path, mtime, useOpenCL);
+    const qint64 sizeBytes = fi.exists() ? fi.size() : 0;
+    const QString key = cacheKey(path, mtime, sizeBytes, useOpenCL);
 
     QHash<QString, std::shared_ptr<DnnNetEntry>>::iterator it = table().find(key);
     if (it != table().end())
