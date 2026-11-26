@@ -193,7 +193,18 @@ void MvsImageSourceNode::setParam(const QString &key, const QVariant &value)
     // 所以必须在下面这把锁**之前**做，否则自锁。
     if (key == QStringLiteral("globalCameraName")) {
         const QString next = value.toString().trimmed();
-        if (next != m_globalCameraName && (m_cameraOpened || m_hCamera))
+        QString oldGlobal;
+        bool wasOpen = false;
+        void *oldHandle = nullptr;
+        {
+            QMutexLocker locker(&m_mutex);
+            oldGlobal = m_globalCameraName;
+            wasOpen = m_cameraOpened;
+            oldHandle = m_hCamera;
+        }
+        // K/M 复核：原先在锁外读这三个成员并与执行线程取图并发，构成数据竞争；
+        // closeCamera() 自己取 m_mutex，必须先在锁内快照、解锁后再调用。
+        if (next != oldGlobal && (wasOpen || oldHandle))
             closeCamera();
     }
     QMutexLocker locker(&m_mutex);
@@ -1246,25 +1257,25 @@ QString MvsImageSourceNode::getGlobalCameraName()
 
 void MvsImageSourceNode::setGlobalCameraName(const QString &name)
 {
-    QString oldCamera;
-    {
-        QMutexLocker locker(&m_mutex);
-        oldCamera = m_globalCameraName;
-        if (oldCamera == name) return;
-        m_globalCameraName = name;
-        m_cameraOpened = false;
-        m_hCamera = nullptr;
-    }
+    // K 复核：面板下拉原来直接置 m_cameraOpened=false/m_hCamera=nullptr 并摘 consumer，
+    // 既不 closeCamera 也不等 CameraTaskLedger 排空；最后一个 consumer 一摘，对话框
+    // 就能拆掉仍有在飞任务的 SDK 句柄。统一走 setParam（先 closeCamera + 排空 + 改登）。
+    setParam(QStringLiteral("globalCameraName"), name);
 
-    // 标记占用状态
-    if (!oldCamera.isEmpty()) {
-        GlobalCameraManager::instance()->markCameraUnused(oldCamera, m_cameraConsumerId);
-    }
+    // M2 复核：原实现紧接着调 readCameraParams()，但 m_hCamera 已被 setParam 置空 ⇒
+    // 恒在入口早退，新绑相机的曝光/增益/帧率还是旧缓存。先取新句柄再读。
     if (!name.isEmpty()) {
-        GlobalCameraManager::instance()->markCameraUsed(name, m_cameraConsumerId);
-        readCameraParams();
+        void *handle = GlobalCameraManager::instance()->getCameraHandle(name);
+        if (handle) {
+            {
+                QMutexLocker locker(&m_mutex);
+                m_hCamera = handle;
+                m_cameraOpened = true;
+            }
+            QMutexLocker sdkLock(&GlobalCameraManager::sdkMutexFor(handle));
+            readCameraParams();
+        }
     }
-
     refreshPixelFormatCombo();
 }
 

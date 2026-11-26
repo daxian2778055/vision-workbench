@@ -1568,6 +1568,27 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     const QString escSrc = readSrc("src/ExecutionStatusController.cpp");
     QVERIFY2(escSrc.count(QStringLiteral("m_errorPending")) >= 4,
              "同轮 error→finished 不得覆盖错误态（粘滞标记由 started/finished 清除）");
+    // ㉟ 相机域 K：IO 节点 consumer 门闸、检测在飞计数、面板切相机排空与读参
+    const QString cioSrc = readSrc("src/CameraIoNode.cpp");
+    QVERIFY2(cioSrc.contains(QStringLiteral("syncCameraConsumer"))
+             && cioSrc.contains(QStringLiteral("markCameraUsed"))
+             && cioSrc.contains(QStringLiteral("markCameraUnused"))
+             && cioSrc.contains(QStringLiteral("Camera1")),
+             "相机 IO 节点必须登记/撤销 consumer，提示名用真实 Camera1");
+    const QString hisSrc = readSrc("src/HalconImageSourceNode.cpp");
+    QVERIFY2(hisSrc.contains(QStringLiteral("++selfGuard->m_detectInFlight;"))
+             && !hisSrc.contains(QStringLiteral("if (selfGuard->m_detectInFlight == 0)")),
+             "每个检测任务都必须无条件计入在飞计数");
+    const QString mvsSrc = readSrc("src/MvsImageSourceNode.cpp");
+    const int sgIndex = mvsSrc.indexOf(QStringLiteral("void MvsImageSourceNode::setGlobalCameraName"));
+    QVERIFY2(sgIndex >= 0
+             && mvsSrc.mid(sgIndex, 900).contains(QStringLiteral("setParam(QStringLiteral(\"globalCameraName\"), name)"))
+             && mvsSrc.mid(sgIndex, 900).contains(QStringLiteral("getCameraHandle(name)"))
+             && mvsSrc.mid(sgIndex, 900).contains(QStringLiteral("sdkMutexFor(handle)")),
+             "面板切相机必须走 setParam 排空路径，并用新句柄加锁读参数");
+    const int spIndex = mvsSrc.indexOf(QStringLiteral("void MvsImageSourceNode::setParam"));
+    QVERIFY2(spIndex >= 0 && mvsSrc.mid(spIndex, 700).contains(QStringLiteral("QMutexLocker locker(&m_mutex);")),
+             "切全局相机的状态快照必须在锁内取，不能与取图线程并发读写");
 }
 
 void UiGuardsTest::f2ValidationGuards()

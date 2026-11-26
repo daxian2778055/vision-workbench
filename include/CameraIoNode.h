@@ -15,10 +15,18 @@ public:
     ~CameraIoNode() override;
 
     void init() override;
+    /// cameraName 变化时同步 consumer 登记（setParam 与 fromJson 两条路径都要靠它）
+    void setParam(const QString &name, const QVariant &value) override;
     /// 继承来的"输入图像"端口只是 HalconNode::init() 的副产品：IO 控制读的是"值/执行"两个
     /// 数据端口，不消费图像 ⇒ 不能被空输入守卫/产出守卫按图像处理节点要求。
     bool requiresInputImage() const override { return false; }
     void run(bool autoSwitch = true) override;
     QWidget *createParamPanel() override;
     void updateParamPanel(QWidget *panel) override;
+
+private:
+    /// 把当前 cameraName 登记/改登/撤销到 GlobalCameraManager 的 consumer 门闸
+    void syncCameraConsumer(const QString &name);
+    QString m_registeredCamera;
+    QString m_consumerId;
 };

@@ -1144,8 +1144,9 @@ QWidget *HalconImageSourceNode::createParamPanel()
         // detectCamerasInThread 正访问成员时 this 已悬垂。登记在途计数，析构等待归零。
         {
             QMutexLocker locker(&selfGuard->m_mutex);
-            if (selfGuard->m_detectInFlight == 0)
-                ++selfGuard->m_detectInFlight;
+            // K 复核：每个投递的任务都必须记账。原来仅当计数为 0 时自增，快速连点两次
+            // 刷新会让第二个任务完全不被计数，析构的等待立即返回而在飞任务继续访问成员。
+            ++selfGuard->m_detectInFlight;
         }
         QThreadPool::globalInstance()->start([selfGuard, comboGuard, selectedCamera]() {
             // 在途计数的递减交给节点的成员方法（局部 struct 无外围类 private 访问权）

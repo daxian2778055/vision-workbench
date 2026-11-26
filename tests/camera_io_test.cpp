@@ -6,6 +6,7 @@
 #include <QString>
 
 #include "CameraIoNode.h"
+#include "GlobalCameraManager.h"
 #include "DataObject.h"
 #include "Port.h"
 
@@ -18,6 +19,7 @@ private slots:
     void testMissingCameraName();
     void testCameraNotOpen();
     void testWriteRequiresOutputMode();
+    void testRegistersCameraConsumer();
 };
 
 void CameraIoTest::testInitPortsAndParams()
@@ -90,6 +92,32 @@ void CameraIoTest::testCameraNotOpen()
              "相机未打开时 moduleStatus 应为 false");
     QCOMPARE(node.getParam(QStringLiteral("lastError")).toString(),
              QStringLiteral("相机未打开或不存在"));
+}
+
+// K 复核：相机 IO 节点持裸句柄，必须在 consumer 门闸登记，否则运行中解绑会拆在飞句柄
+void CameraIoTest::testRegistersCameraConsumer()
+{
+    auto *gcm = GlobalCameraManager::instance();
+    const QString camA = QStringLiteral("K_TEST_CAM_A");
+    const QString camB = QStringLiteral("K_TEST_CAM_B");
+    QVERIFY(!gcm->isCameraUsed(camA));
+    QVERIFY(!gcm->isCameraUsed(camB));
+    {
+        CameraIoNode node;
+        node.init();
+        node.setParam(QStringLiteral("cameraName"), camA);
+        QVERIFY2(gcm->isCameraUsed(camA), "设置相机名后必须登记 consumer");
+        QVERIFY2(!gcm->consumersForCamera(camA).isEmpty(), "consumer id 必须可列出");
+
+        node.setParam(QStringLiteral("cameraName"), camB);
+        QVERIFY2(!gcm->isCameraUsed(camA), "改名后旧相机 consumer 必须撤销");
+        QVERIFY(gcm->isCameraUsed(camB));
+
+        node.setParam(QStringLiteral("cameraName"), QString());
+        QVERIFY(!gcm->isCameraUsed(camB));
+    }
+    QVERIFY(!gcm->isCameraUsed(camA));
+    QVERIFY(!gcm->isCameraUsed(camB));
 }
 
 void CameraIoTest::testWriteRequiresOutputMode()

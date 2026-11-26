@@ -7,10 +7,33 @@ CameraIoNode::CameraIoNode(QObject *parent) : HalconNode(parent)
 {
     setName(QStringLiteral("相机IO控制"));
     m_type = NodeBase::OUTPUT;
+    m_consumerId = QStringLiteral("camio_%1")
+                       .arg(QString::number(reinterpret_cast<quintptr>(this), 16));
 }
 
 CameraIoNode::~CameraIoNode()
 {
+    syncCameraConsumer(QString());   // 撤销 consumer 门闸登记
+}
+
+void CameraIoNode::syncCameraConsumer(const QString &name)
+{
+    const QString next = name.trimmed();
+    if (next == m_registeredCamera)
+        return;
+    GlobalCameraManager *gcm = GlobalCameraManager::instance();
+    if (!m_registeredCamera.isEmpty())
+        gcm->markCameraUnused(m_registeredCamera, m_consumerId);
+    m_registeredCamera = next;
+    if (!next.isEmpty())
+        gcm->markCameraUsed(next, m_consumerId);
+}
+
+void CameraIoNode::setParam(const QString &name, const QVariant &value)
+{
+    HalconNode::setParam(name, value);
+    if (name == QStringLiteral("cameraName"))
+        syncCameraConsumer(value.toString());
 }
 
 void CameraIoNode::init()
@@ -26,7 +49,7 @@ void CameraIoNode::init()
     addOutputPort(QStringLiteral("错误"), PortDataType::String);
     registerParams({
         makeStringParam(QStringLiteral("cameraName"), QString(),
-                       QStringLiteral("全局相机名（需在相机管理绑定并打开，如 Camera 1）")),
+                       QStringLiteral("全局相机名（需在相机管理中绑定并打开，如 Camera1）")),
         makeIntParam(QStringLiteral("lineIndex"), 0, 0, 15,
                      QStringLiteral("IO 线序号（0 基，对应 Line1..）")),
         makeIntParam(QStringLiteral("lineMode"), 1, 0, 1,
@@ -53,6 +76,9 @@ void CameraIoNode::run(bool /*autoSwitch*/)
             return;
         }
         GlobalCameraManager *gcm = GlobalCameraManager::instance();
+        // K 复核：fromJson/参数绑定可能绕过 setParam 直接写 m_params，执行前再同步一次
+        // consumer 门闸——否则 GlobalCameraDialog 解绑时看不到消费者，拆掉在飞句柄。
+        syncCameraConsumer(cameraName);
 
         const int lineIndex = m_params.value(QStringLiteral("lineIndex"), 0).toInt();
         const int lineMode  = m_params.value(QStringLiteral("lineMode"), 1).toInt();
