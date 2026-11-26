@@ -87,7 +87,11 @@ QList<bool> YieldMonitor::collectRoundFlags(const QList<InspectionRecord> &recor
     }
     // 不假定来源（库查询）的返回顺序：按时间升序排（窗口取"最近 N 轮"，顺序错就会取到老数据）
     std::sort(rounds.begin(), rounds.end(), [](const InspectionRecord &a, const InspectionRecord &b) {
-        return a.timestamp < b.timestamp;
+        if (a.timestamp != b.timestamp)
+            return a.timestamp < b.timestamp;
+        // 时间戳只有秒精度，连续模式同一秒可有多轮；没有 id 次序并列时窗口边界
+        // 取哪一轮是不确定的，「最近 N 轮」会取到更老的那批。
+        return a.id < b.id;
     });
     QList<bool> okFlags;
     okFlags.reserve(rounds.size());

@@ -266,6 +266,8 @@ private:
     void clearNodeCachesOnException(NodeBase *node);
     /// 把按轮缓冲的节点记录批量落库（单个事务）。轮末与同步局部执行都用它（P2-B）。
     void flushPendingResults();
+    /// 线程安全地追加一条待落库记录（执行线程与局部执行都可能调用）
+    void appendPendingResult(const InspectionRecord &record);
     void resetState();
     /// 记录一个节点被跳过（未激活分支 / 循环体由外层调度），并对外发 nodeSkipped
     void recordNodeSkipped(NodeBase *node, const QString &reason);
@@ -342,6 +344,9 @@ private:
     QMap<NodeBase*, QMap<int, DataObjectPtr>> m_nodeData;
     /// 本轮待落库的检测结果（仅执行线程访问）：按轮缓冲，轮末用**单个事务**批量提交。
     /// 连续模式下"每节点一次自动提交"是主要固定开销（40 节点 = 40 次提交/轮）。
+    ///  · m_pendingResults 由本锁保护：轮次追加在执行线程，而 executeUpTo/executeFrom
+    ///    在 UI 线程也会 flush，二者在时间窗口内可并发（首检 Running/Paused 后worker才起）。
+    mutable QMutex m_pendingResultsMutex;
     QList<InspectionRecord> m_pendingResults;
     /// 输出仍然有效的节点：局部执行（executeUpTo/executeFrom）时，"输出可复用"的节点
     /// （见 NodeBase::reusesCachedOutput）若仍在此集合中，就不必再跑一遍（例如重新读图）。
@@ -357,8 +362,9 @@ private:
     ///  · **粒度**：只在函数内开短临界区，**绝不跨越**"会再触碰上述缓存的调用"
     ///    （executeNode → propagateData / collectNodeOutputVars 即此类，故各自在自己函数内加锁，
     ///     不使用递归锁）；
-    ///  · 不在本锁范围：m_pendingResults（仅执行线程）、m_activeNodes / m_loopBodyNodes
-    ///    （轮次内执行线程私有；轮首构建时持本锁）、端口数据（节点自身的锁）。
+    ///  · 不在本锁范围：m_activeNodes / m_loopBodyNodes
+    ///    （轮次内执行线程私有；轮首构建时持本锁）、端口数据（节点自身的锁）；
+    ///    m_pendingResults 改由 m_pendingResultsMutex 单独保护。
     mutable QMutex m_graphCacheMutex;
     bool m_graphStructureDirty {true};
     QList<NodeBase *> m_cachedSortedNodes;

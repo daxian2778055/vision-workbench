@@ -30,6 +30,7 @@ private slots:
     void testCollectFiltersBothKeys();      // U-172：双键过滤（汇总名 且 指定流程，缺一不可）
     void testCollectSortsByTimeAscending(); // U-172：不假定来源序，升序重排后投影（红臂靶腿）
     void testCollectEmptyOnNoMatch();       // U-172：无命中/空来源 → 空旗序列
+    void testCollectTiesBrokenById();       // 同秒多轮：按 id 定序，窗口边界取真正的最后一轮
 };
 
 namespace {
@@ -241,6 +242,27 @@ void YieldMonitorTest::testCollectSortsByTimeAscending()
 
     const QList<bool> flags = YieldMonitor::collectRoundFlags(records, flow);
     QCOMPARE(flags, QList<bool>({ false, true, true, false, false }));
+}
+
+void YieldMonitorTest::testCollectTiesBrokenById()
+{
+    // 时间戳只有秒精度，连续模式同一秒可有多轮；倒序输入时也必须按 (时间, id) 升序，
+    // 否则「最近 N 轮」的边界会取到更老的那批。
+    const QString flow = QStringLiteral("流程甲");
+    const QDateTime ts(QDate(2026, 1, 5), QTime(0, 0, 0));
+    InspectionRecord newer;
+    newer.id = 2;
+    newer.timestamp = ts;
+    newer.flowName = flow;
+    newer.nodeName = kRoundSummaryNodeName;
+    newer.passed = false;
+    InspectionRecord older = newer;
+    older.id = 1;
+    older.passed = true;
+    QList<InspectionRecord> records;
+    records << newer << older;   // 故意把 id 大的放前面
+
+    QCOMPARE(YieldMonitor::collectRoundFlags(records, flow), QList<bool>({ true, false }));
 }
 
 void YieldMonitorTest::testCollectEmptyOnNoMatch()

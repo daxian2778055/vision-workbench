@@ -1615,6 +1615,15 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              "MVS 节点本地拆句柄/触发配置/参数应用/像素格式刷新也须纳入同一把句柄锁");
     QVERIFY2(readSrc("src/GlobalCameraDialog.cpp").contains(QStringLiteral("sdkMutexFor(hCamera)")),
              "面板写像素格式也必须持同一把句柄锁");
+    // ㊳ 数据库/落库域：待落库缓冲跨线程保护 + 同秒多轮按 id 定序
+    const QString feHdrSrc = readSrc("include/FlowExecutor.h");
+    QVERIFY2(feHdrSrc.contains(QStringLiteral("m_pendingResultsMutex"))
+             && feLocalSrc.contains(QStringLiteral("appendPendingResult("))
+             && feLocalSrc.count(QStringLiteral("QMutexLocker locker(&m_pendingResultsMutex);")) >= 2,
+             "m_pendingResults 被工作线程追加、UI 线程局部执行 flush，必须跨线程同步");
+    QVERIFY2(readSrc("src/AppDatabase.cpp").contains(QStringLiteral("ORDER BY timestamp DESC, id DESC"))
+             && readSrc("src/YieldMonitor.cpp").contains(QStringLiteral("a.id < b.id")),
+             "同秒多轮须按 id 定序，最近 N 轮的窗口边界才不会取到更老批次");
 }
 
 void UiGuardsTest::f2ValidationGuards()

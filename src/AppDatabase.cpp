@@ -639,7 +639,7 @@ QList<InspectionRecord> AppDatabase::queryResults(const QDateTime &from, const Q
     if (!prepareRead(q, db, QStringLiteral(
                            "SELECT id, flow_name, node_name, passed, value, timestamp FROM inspection_results "
                            "WHERE timestamp BETWEEN ? AND ? AND (? = '' OR flow_name LIKE ?) "
-                           "ORDER BY timestamp DESC LIMIT ?"),
+                           "ORDER BY timestamp DESC, id DESC LIMIT ?"),
                      QStringLiteral("queryResults"))) {
         return records;
     }

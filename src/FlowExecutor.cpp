@@ -896,7 +896,7 @@ void FlowExecutor::run()
         if (m_roundAborted) {
             VFP_EXEC_DEBUG << "Round aborted by stop; round-summary row skipped";
         } else {
-        m_pendingResults.append(InspectionRecord{
+        appendPendingResult(InspectionRecord{
             0,
             this->flowName().isEmpty() ? QStringLiteral("(未命名流程)") : this->flowName(),
             kRoundSummaryNodeName,
@@ -1440,8 +1440,8 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
             }
             // 不在这里直接落库：按轮缓冲，轮末用**单个事务**批量提交（见 run() 中的轮末刷新）。
             // 连续模式下"每节点一次自动提交"是主要固定开销（40 节点 = 40 次提交/轮）。
-            m_pendingResults.append(InspectionRecord{ 0, flowName, node->fullName(), success,
-                                                      resultVal, QDateTime() });
+            appendPendingResult(InspectionRecord{ 0, flowName, node->fullName(), success,
+                                                  resultVal, QDateTime() });
             m_nodeRecordWritten = true;   // 已落库：异常出口据此不重复落库（P3-2）
             if (!success) {
                 AppDatabase::instance()->addAlarm(node->fullName(), QStringLiteral("Error"),
@@ -1647,6 +1647,12 @@ void FlowExecutor::releaseRoundOutputsOverBudget()
     VFP_EXEC_DEBUG << "released round image outputs over budget:" << total << "bytes";
 }
 
+void FlowExecutor::appendPendingResult(const InspectionRecord &record)
+{
+    QMutexLocker locker(&m_pendingResultsMutex);
+    m_pendingResults.append(record);
+}
+
 void FlowExecutor::flushPendingResults()
 {
     // 把按轮缓冲的节点记录批量落库（单个事务）。未启用数据库（databasePath 为空）时
@@ -1654,8 +1660,12 @@ void FlowExecutor::flushPendingResults()
     // 局部执行若不刷，节点记录会被拖到下一轮一起提交、时间戳被记成下一轮（P2-B）。
     if (m_pendingResults.isEmpty())
         return;
-    const QList<InspectionRecord> batch = m_pendingResults;
-    m_pendingResults.clear();
+    const QList<InspectionRecord> batch = [this]() {
+        QMutexLocker locker(&m_pendingResultsMutex);
+        const QList<InspectionRecord> copy = m_pendingResults;
+        m_pendingResults.clear();
+        return copy;
+    }();
     if (!AppDatabase::instance()->databasePath().isEmpty()) {
         // P1：这条返回值原来直接丢掉。连续模式下一旦写库失败（连接没开、表缺失、
         // 库被占用…），每轮的全部检测结果连同「整轮汇总」都会静默消失——
@@ -1725,8 +1735,8 @@ void FlowExecutor::clearNodeCachesOnException(NodeBase *node)
     // 同轮同节点出现 OK+NG 两条（2026-10-25 复核 P3-2）。
     if (!m_nodeRecordWritten && !AppDatabase::instance()->databasePath().isEmpty()) {
         const QString flowName = this->flowName().isEmpty() ? QStringLiteral("(未命名流程)") : this->flowName();
-        m_pendingResults.append(InspectionRecord{ 0, flowName, node->fullName(), false,
-                                                  QString(), QDateTime() });
+        appendPendingResult(InspectionRecord{ 0, flowName, node->fullName(), false,
+                                              QString(), QDateTime() });
         AppDatabase::instance()->addAlarm(node->fullName(), QStringLiteral("Error"),
                                           QStringLiteral("算子执行异常: %1").arg(node->name()));
     }
