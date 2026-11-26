@@ -673,8 +673,10 @@ bool AppDatabase::addUser(const QString &name, const QString &password, const QS
     // W-1①：闸必须落在这里。此前"用户管理需 Admin"只在菜单置灰上体现，而
     // enforceFactoryPasswordPolicy() 的文案宣称用户管理已被禁止——拿到出厂口令的人
     // 仍能建一个 Admin 账户当后门。落库层拒绝才是 fail-closed。
-    if (const QString refusal = SessionManager::instance()->writeGateRefusal(); !refusal.isEmpty()) {
-        VFP_DEBUG << "用户新增被写操作闸拒绝:" << name << refusal;
+    auto *sm = SessionManager::instance();
+    // W-1② + P 复核：已登录但非 Admin 必须 fail-closed；无会话（单测夹具）放行
+    if (!sm->writeGateRefusal().isEmpty() || (sm->isLoggedIn() && !sm->canManageUsers())) {
+        VFP_DEBUG << "用户新增被权限/写操作闸拒绝:" << name;
         return false;
     }
     const QSqlDatabase db = threadDatabase();
@@ -844,8 +846,9 @@ QList<UserRecord> AppDatabase::queryUsers() const
 bool AppDatabase::removeUser(const QString &name)
 {
     WriteLock locker(&s_writeMutex);
-    if (const QString refusal = SessionManager::instance()->writeGateRefusal(); !refusal.isEmpty()) {
-        VFP_DEBUG << "用户删除被写操作闸拒绝:" << name << refusal;
+    auto *sm = SessionManager::instance();
+    if (!sm->writeGateRefusal().isEmpty() || (sm->isLoggedIn() && !sm->canManageUsers())) {
+        VFP_DEBUG << "用户删除被权限/写操作闸拒绝:" << name;
         return false;
     }
     const QSqlDatabase db = threadDatabase();

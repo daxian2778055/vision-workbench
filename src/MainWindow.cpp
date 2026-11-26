@@ -8646,6 +8646,8 @@ void MainWindow::applyPermissionRestrictions()
         if (m_actionAcquisitionStrategy)
             m_actionAcquisitionStrategy->setEnabled(false);
         m_editors.closeAll();   // 未登录：已授出的编辑窗一并收掉（原 fail-open）
+        if (m_auxPanels)
+            m_auxPanels->closeAllDialogs();   // 用户管理/配方等非模态写能力窗同样必须真销毁
         return;
     }
 
@@ -8656,6 +8658,14 @@ void MainWindow::applyPermissionRestrictions()
     // 方案编辑/保存/载入需 Engineer 以上：同一判据覆盖文件菜单全部写入类入口
     // （打开/最近打开/另存为/导出加密/导入流程），避免只灰了保存按钮而旁路仍可用。
     const bool canEdit = session->canEditScheme();
+    // 角色降级/写闸开启时，已打开的非模态辅助窗仍持有写能力（用户管理可建 Admin 后门）。
+    // 只置灰菜单不够，必须真销毁缓存窗。
+    if (!canEdit || session->writesBlocked()) {
+        if (m_auxPanels)
+            m_auxPanels->closeAllDialogs();
+    }
+    if (ui->actionRecipeManager)
+        ui->actionRecipeManager->setEnabled(canEdit);   // 配方库写入与加载需 Engineer 以上
     if (ui->actionSave)
         ui->actionSave->setEnabled(canEdit);
     if (ui->actionLoad)

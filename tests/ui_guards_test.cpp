@@ -1634,6 +1634,21 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              && pmSrc.contains(QStringLiteral("restoreGlobals(globalsBefore)"))
              && pmSrc.contains(QStringLiteral("layoutFile.commit())")),
              "通信设备建不出来要拒收并回滚全局，布局写盘失败要留痕");
+    // ㊵ 方案域 P：辅助窗随权限降级真销毁、用户管理落库 fail-closed、配方身份剥离与排序
+    const QString auxSrc = readSrc("src/AuxPanelManager.cpp");
+    QVERIFY2(auxSrc.contains(QStringLiteral("void AuxPanelManager::closeAllDialogs()"))
+             && mwSrc.count(QStringLiteral("closeAllDialogs();")) >= 2
+             && mwSrc.contains(QStringLiteral("actionRecipeManager->setEnabled(canEdit)")),
+             "权限降级/注销必须真销毁辅助窗，配方入口按 Engineer 收口");
+    const QString umSrc = readSrc("src/UserManagementDialog.cpp");
+    QVERIFY2(umSrc.count(QStringLiteral("canManageUsers()")) >= 2
+             && readSrc("src/AppDatabase.cpp").count(QStringLiteral("canManageUsers()")) >= 2,
+             "用户管理动作与落库层都要按当前角色 fail-closed");
+    const QString rmSrc = readSrc("src/RecipeManager.cpp");
+    QVERIFY2(rmSrc.contains(QStringLiteral("payload.remove(QStringLiteral(\"moduleId\"))"))
+             && rmSrc.contains(QStringLiteral("qRound(pa.y() / 0.5)"))
+             && rmSrc.contains(QStringLiteral("recipeWriteAllowed()")),
+             "配方加载须剥离模块身份、排序须严格弱序、写入须过权限闸");
 }
 
 void UiGuardsTest::f2ValidationGuards()

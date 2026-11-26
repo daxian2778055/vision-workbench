@@ -2,6 +2,7 @@
 #include "FlowScene.h"
 #include "NodeBase.h"
 #include "AppLog.h"
+#include "SessionManager.h"
 #include <QFile>
 #include <QSaveFile>
 #include <QDir>
@@ -31,6 +32,14 @@ RecipeManager::~RecipeManager()
 }
 
 namespace {
+
+/// 配方库写入/导入的 fail-closed 判据：写闸开着一律拒绝；已登录会话需 Engineer 以上。
+/// 无会话（单测夹具）放行，不改变既有纯逻辑用例。
+bool recipeWriteAllowed()
+{
+    SessionManager *sm = SessionManager::instance();
+    return sm->writeGateRefusal().isEmpty() && (!sm->isLoggedIn() || sm->canEditScheme());
+}
 
 /// 仅测试用：非空时覆盖存储路径（见头文件说明）。
 /// storagePath() 在每次读/写时现算，所以"写之前设置"就能生效。
@@ -162,7 +171,11 @@ void sortByScreenOrder(QList<NodeBase *> &nodes)
         if (!a || !b) return a != nullptr;   // 空指针排到最后
         const QPointF pa = a->position();
         const QPointF pb = b->position();
-        if (qAbs(pa.y() - pb.y()) > 0.5) return pa.y() < pb.y();
+        // 先量化到 0.5 行的桶再比 x：原「y 差 ≤0.5 就比 x」不传递
+        //（A<B、B<C、C<A 可同时成立），std::sort 传非严格弱序比较器是 UB。
+        const int ya = qRound(pa.y() / 0.5);
+        const int yb = qRound(pb.y() / 0.5);
+        if (ya != yb) return ya < yb;
         return pa.x() < pb.x();
     });
 }
@@ -171,6 +184,7 @@ void sortByScreenOrder(QList<NodeBase *> &nodes)
 
 bool RecipeManager::saveRecipe(const QString &name, const QString &description, FlowScene *scene)
 {
+    if (!recipeWriteAllowed()) return false;
     if (name.isEmpty() || !scene) return false;
 
     Recipe r;
@@ -264,7 +278,15 @@ bool RecipeManager::loadRecipe(const QString &name, FlowScene *scene)
         const QByteArray jsonBytes = r.parameters[key].toString().toUtf8();
         QJsonDocument doc = QJsonDocument::fromJson(jsonBytes);
         if (!doc.isObject()) continue;
-        node->fromJson(doc.object());
+        // P 复核：配方只应覆盖"配方参数"，不能把保存时那台算子的模块号/订阅写回目标节点。
+        // 另三条复制路径（FlowScene/FlowSnippet/NodeTemplateStore）都显式剥掉这些身份键，
+        // 否则目标节点号被改成源方案号，与 {模块号.参数名} 引用、结果表键全面错位。
+        QJsonObject payload = doc.object();
+        payload.remove(QStringLiteral("moduleId"));
+        payload.remove(QStringLiteral("inputBindings"));
+        payload.remove(QStringLiteral("id"));
+        payload.remove(QStringLiteral("executionSuccess"));
+        node->fromJson(payload);
         ++applied;
     }
     VFP_DEBUG << "Applied recipe" << name << "to" << applied << "nodes (type mismatch skipped:"
@@ -277,6 +299,7 @@ bool RecipeManager::loadRecipe(const QString &name, FlowScene *scene)
 
 bool RecipeManager::deleteRecipe(const QString &name)
 {
+    if (!recipeWriteAllowed()) return false;
     if (!m_recipes.contains(name)) return false;
     m_recipes.remove(name);
     saveToStorage();
@@ -326,6 +349,7 @@ bool RecipeManager::exportRecipe(const QString &name, const QString &filePath)
 
 bool RecipeManager::importRecipe(const QString &filePath)
 {
+    if (!recipeWriteAllowed()) return false;
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly)) return false;
 

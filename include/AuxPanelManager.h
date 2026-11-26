@@ -46,6 +46,9 @@ public:
     /// onShown 在新建与复用两条路径上都会调用，供同键多入口的对话框按入口切页。
     void showDialog(const QString &key, const std::function<QDialog *()> &create,
                     const std::function<void(QDialog *)> &onShown = {});
+    /// 权限降级/注销时真销毁缓存的辅助窗（含用户管理/配方等写能力窗口），
+    /// 只置灰菜单不够——已打开的非模态窗仍可继续写入。
+    void closeAllDialogs();
 
 private:
     void createResultTableIfNeeded();

@@ -70,6 +70,13 @@ void UserManagementDialog::setupUI()
 
 void UserManagementDialog::onAddUser()
 {
+    // P 复核：窗口可能在 Admin 会话下打开，随后切换成 Operator 但未关闭（非模态缓存）。
+    // 动作发生时重查权限，不能依赖打开时的菜单置灰。
+    if (!SessionManager::instance()->canManageUsers()) {
+        QMessageBox::warning(this, QStringLiteral("失败"),
+                             QStringLiteral("当前角色无权管理用户"));
+        return;
+    }
     bool ok = false;
     QString username = QInputDialog::getText(this,
         QStringLiteral("\u6DFB\u52A0\u7528\u6237"),
@@ -110,6 +117,11 @@ void UserManagementDialog::onAddUser()
 
 void UserManagementDialog::onRemoveUser()
 {
+    if (!SessionManager::instance()->canManageUsers()) {
+        QMessageBox::warning(this, QStringLiteral("失败"),
+                             QStringLiteral("当前角色无权管理用户"));
+        return;
+    }
     int row = m_userTable->currentRow();
     if (row < 0) {
         QMessageBox::warning(this, QStringLiteral("\u63D0\u793A"), QStringLiteral("\u8BF7\u9009\u62E9\u8981\u5220\u9664\u7684\u7528\u6237"));

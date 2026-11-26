@@ -126,6 +126,16 @@ void AuxPanelManager::restoreVisibility()
     }
 }
 
+void AuxPanelManager::closeAllDialogs()
+{
+    const QStringList keys = m_auxDialogs.keys();
+    for (const QString &key : keys) {
+        QDialog *dlg = m_auxDialogs.take(key);
+        if (dlg)
+            delete dlg;   // destroyed 槽会再 remove 一次同 key，已无条目则无副作用
+    }
+}
+
 void AuxPanelManager::showDialog(const QString &key, const std::function<QDialog *()> &create,
                                  const std::function<void(QDialog *)> &onShown)
 {

@@ -886,11 +886,13 @@ void CommWritebackTest::testRecipeSaveAndLoad()
     NodeBase *sameName = otherScene.createNode(NodeBase::OUTPUT, QPointF(70, 70),
                                                QStringLiteral("配方算子"));
     QVERIFY2(sameName != nullptr, "无法创建算子");
+    const int targetModuleId = sameName->moduleId();
     QVERIFY2(rm->loadRecipe(QStringLiteral("VFP_TEST_RECIPE"), &otherScene),
              "同名算子跨工程加载失败");
     QCOMPARE(sameName->toJson().value(QStringLiteral("params")).toObject()
                  .value(QStringLiteral("sendText")).toString(),
              QStringLiteral("RECIPE-A"));
+    QCOMPARE(sameName->moduleId(), targetModuleId);   // 配方不得把源方案的模块号写回目标节点
 
     // ---- 同名重复算子：按屏幕顺序（上→下、左→右）编号，各自往返 ----
     FlowScene dupSource;
