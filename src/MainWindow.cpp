@@ -4675,7 +4675,15 @@ void MainWindow::checkRecoveryOnStartup()
     // 复用唯一的"接管方案"路径：停旧执行器、建标签页、注册触发、边界收尾都在 loadProjectFile 内。
     // 临时导出文件删掉即可（内容已在场景里）；恢复出来的方案不属于该临时文件，
     // 故把 lastFilePath 写回原方案路径（空 = 从未保存过的新方案）。
-    loadProjectFile(restorePath, /*recoveryRestore=*/true);
+    // 恢复失败必须保留临时件、保持锚未载入、明确报错——否则下面的"删件+改锚+报成功"
+    // 会让操作员以为已恢复，随后点保存把空方案写到原方案文件上。
+    if (!loadProjectFile(restorePath, /*recoveryRestore=*/true)) {
+        QMessageBox::warning(this, tr("崩溃恢复"),
+                             tr("自动保存内容载入失败，原方案保持不变；临时恢复文件已保留：\n%1")
+                                 .arg(restorePath));
+        logMessage(tr("崩溃恢复失败：临时恢复文件保留在 %1，请检查内容后重试").arg(restorePath));
+        return;
+    }
     QFile::remove(restorePath);
     projectManager()->setLastFilePath(info.originalPath);
 
@@ -4875,14 +4883,14 @@ void MainWindow::onLoadProject()
     }
 }
 
-void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
+bool MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
 {
     // 崩溃恢复也走这条路径（复用唯一的"接管方案"实现），但它不算一次"打开方案"：
     // 不写"加载项目"日志、不记入最近文件、不把内容标为已落盘（详见函数末尾）。
     if (!recoveryRestore) {
         // 打开方案会替换当前方案：有未保存改动时先确认（该检查覆盖"最近打开"等所有入口）
         if (!confirmDiscardUnsavedChanges(tr("打开方案")))
-            return;
+            return false;
         logMessage(tr("加载项目: %1").arg(fileName));
     }
 
@@ -4896,7 +4904,7 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
         passphrase = QInputDialog::getText(this, tr("打开加密方案"),
             tr("该方案已加密，请输入口令："), QLineEdit::Password, QString(), &ok);
         if (!ok)
-            return; // 用户取消
+            return false; // 用户取消
     }
 
     // U-201 载入门禁：方案目录外路径须显式确认（模态，逐条列路径；U-215 含相对逃逸形态）；
@@ -4909,6 +4917,7 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
     // 中止打开，这些元数据会被污染成"未成功打开的方案"。先存旧值，超时分支回滚。
     const QString prevFilePath = pm->lastFilePath();
     const bool prevReadonly = pm->isReadonlyLoaded();
+    const QString prevIntegrityNote = pm->lastIntegrityNote();
     // P9 修复：loadProject 成功尾已提前应用全局配置与布局文件；执行器超时中止时须整组回滚。
     const QJsonObject globalsBefore = pm->snapshotGlobals();
 
@@ -4927,18 +4936,12 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
             logMessage(tr("项目加载失败：口令错误或文件损坏（当前方案保持不变）"));
         else
             logMessage(tr("项目加载失败：文件不存在、格式损坏或内容为空（当前方案保持不变）"));
-        return;
+        return false;
     }
     applyReadonlyUI();
 
-    // 176 行（旧格式加注）：v1 明文打包与裸 JSON 成功载入后提示一次，不阻断、不逐项唠叨。
-    if (!recoveryRestore) {
-        const QString integrityNote = pm->lastIntegrityNote();
-        if (!integrityNote.isEmpty())
-            logMessage(tr("提示：该方案为%1（无完整性校验位），建议用「另存为」重新导出一次获得校验位")
-                           .arg(integrityNote));
-    }
-
+    // 注记提示移到"旧执行器停稳、切换确认成功"之后：否则超时中止时用户会看到
+    // 「已打开旧格式方案」而实际方案没换（P2 复核）。
     // 释放旧方案的执行器：先停全部并等待真正退出；超时则中止本次打开（N1）——保留旧方案
     // 场景与执行器，不删场景、不回收执行器。运行中的线程若此刻删场景 = UAF，比崩溃更该避免的是
     // 脏数据；这里直接中止切换，旧流程被 stop 后会在算子返回自然退出，方案保持原样可再用。
@@ -4971,6 +4974,7 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
         loadedScenes.clear();
         // P9：回滚 loadProject 提前提交的元数据，否则后续保存/相对路径基准指向未打开的方案
         pm->setLastFilePath(prevFilePath);
+        pm->setLastIntegrityNote(prevIntegrityNote);   // 中止回滚：注记也是 loadProject 提前提交的三件套之一
         if (prevReadonly)
             pm->setReadonlyLoaded(true);
         else
@@ -4986,7 +4990,15 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
             logMessage(msg);
         }
         QMessageBox::warning(this, tr("提示"), msg);
-        return;
+        return false;
+    }
+
+    // 176 行（旧格式加注）：切换真正成功后才提示一次，不阻断、不逐项唠叨。
+    if (!recoveryRestore) {
+        const QString integrityNote = pm->lastIntegrityNote();
+        if (!integrityNote.isEmpty())
+            logMessage(tr("提示：该方案为%1（无完整性校验位），建议用「另存为」重新导出一次获得校验位")
+                           .arg(integrityNote));
     }
 
     // 词条切片 C P3b 期：留一个占位令牌，其余令牌随表清空而释放 ⇒ 令牌析构执行收尾
@@ -5165,6 +5177,7 @@ void MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
     // 否则关窗时不会提示保存，用户会以为已经存好了——丢工作的经典路径。
     if (!recoveryRestore)
         markProjectSaved();
+    return true;
 }
 
 bool MainWindow::confirmOutsideSchemePaths(const ProjectPaths::PathReview &review)

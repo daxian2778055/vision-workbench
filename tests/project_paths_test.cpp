@@ -22,6 +22,7 @@
 #include "GlobalVariableManager.h"
 #include "ProjectPaths.h"
 #include "SchemePackage.h"
+#include "CommunicationManager.h"
 
 class ProjectPathsTest : public QObject
 {
@@ -50,6 +51,7 @@ private slots:
     // U-219 钉位缺口②（U-216 拍板维持：内存入口不闸）
     void testApplyProjectJsonStaysUngated();               // 边界钉形：内存应用入口不叫确认器、也无锚
     void testGlobalSnapshotRollback();                     // P9：中止载入后全局配置整组复原
+    void testApplyProjectJsonRejectsUnknownCommDevice();   // 通信设备建不出来 ⇒ 整份方案拒收 + 旧配置回滚
 
 private:
     /// 造一份带指定 filePath 的方案文件（走真写侧序列化 buildProjectJson），返回是否落盘。
@@ -597,6 +599,38 @@ void ProjectPathsTest::testApplyProjectJsonStaysUngated()
     qDeleteAll(opened);
     opened.clear();
     ProjectPaths::setCurrentSchemeFilePath(QString());   // 腿尾净态（cleanupTestCase 兜底再清一次）
+}
+
+// 通信设备建不出来时方案必须整份拒收，且载入前的设备表必须回滚（否则下次保存抹掉条目）。
+void ProjectPathsTest::testApplyProjectJsonRejectsUnknownCommDevice()
+{
+    auto *cm = CommunicationManager::instance();
+    QJsonObject existing;
+    existing[QStringLiteral("mode")] = QStringLiteral("Client");
+    existing[QStringLiteral("serverIp")] = QStringLiteral("127.0.0.1");
+    existing[QStringLiteral("port")] = 1;
+    QVERIFY(cm->addDevice(QStringLiteral("O_PROBE"), QStringLiteral("TCP"), existing));
+    const QJsonObject before = cm->toJson();
+
+    QJsonArray devices;
+    QJsonObject bad;
+    bad[QStringLiteral("name")] = QStringLiteral("BAD_DEV");
+    bad[QStringLiteral("type")] = QStringLiteral("NO_SUCH_TYPE");
+    devices.append(bad);
+    QJsonObject comm;
+    comm[QStringLiteral("devices")] = devices;
+    QJsonArray scenes;
+    scenes.append(QJsonObject());
+    QJsonObject root;
+    root[QStringLiteral("scenes")] = scenes;
+    root[QStringLiteral("communication")] = comm;
+
+    ProjectManager pm;
+    QList<FlowScene *> loaded;
+    QVERIFY2(!pm.applyProjectJson(root, loaded), "通信设备建不出来必须拒收整份方案");
+    qDeleteAll(loaded);
+    QCOMPARE(cm->toJson(), before);   // fromJson 先清空现场设备，失败须整组回滚
+    cm->removeDevice(QStringLiteral("O_PROBE"));
 }
 
 void ProjectPathsTest::testGlobalSnapshotRollback()

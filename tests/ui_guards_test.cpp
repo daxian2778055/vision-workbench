@@ -1624,6 +1624,16 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(readSrc("src/AppDatabase.cpp").contains(QStringLiteral("ORDER BY timestamp DESC, id DESC"))
              && readSrc("src/YieldMonitor.cpp").contains(QStringLiteral("a.id < b.id")),
              "同秒多轮须按 id 定序，最近 N 轮的窗口边界才不会取到更老批次");
+    // ㊴ 方案域 O：失败恢复回报、通信设备门禁与全局回滚、注记回滚、布局写盘留痕
+    QVERIFY2(mwSrc.contains(QStringLiteral("bool MainWindow::loadProjectFile"))
+             && mwSrc.contains(QStringLiteral("if (!loadProjectFile(restorePath"))
+             && mwSrc.contains(QStringLiteral("pm->setLastIntegrityNote(prevIntegrityNote)")),
+             "崩溃恢复失败必须保留临时件/改锚只发生在成功路径，中止要回滚注记");
+    const QString pmSrc = readSrc("src/ProjectManager.cpp");
+    QVERIFY2(pmSrc.contains(QStringLiteral("rejectedDevices > 0"))
+             && pmSrc.contains(QStringLiteral("restoreGlobals(globalsBefore)"))
+             && pmSrc.contains(QStringLiteral("layoutFile.commit())")),
+             "通信设备建不出来要拒收并回滚全局，布局写盘失败要留痕");
 }
 
 void UiGuardsTest::f2ValidationGuards()

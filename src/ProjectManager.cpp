@@ -276,7 +276,12 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
         // U-214：成功才提交三件（只读旗在此按信封标志立位，与确认通过同刻）。
         setLastFilePath(filePath);
         m_loadedReadonly = readonly;
-        applyGlobalsFromJson(doc.object());
+        const QJsonObject globalsBefore = snapshotGlobals();
+        if (!applyGlobalsFromJson(doc.object())) {
+            restoreGlobals(globalsBefore);
+            rollbackSnapshot();
+            return false;
+        }
         return true;
     }
 
@@ -306,7 +311,12 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
     setLastFilePath(filePath);
     m_loadedReadonly = false;   // 旧明文 JSON 即为可编辑方案（既有口径）
     m_lastIntegrityNote = QStringLiteral("旧明文 JSON 格式");
-    applyGlobalsFromJson(doc.object());
+    const QJsonObject globalsBefore = snapshotGlobals();
+    if (!applyGlobalsFromJson(doc.object())) {
+        restoreGlobals(globalsBefore);
+        rollbackSnapshot();
+        return false;
+    }
     return true;
 }
 
@@ -421,8 +431,7 @@ bool ProjectManager::applyProjectJson(const QJsonObject &root, QList<FlowScene *
     // U-219：不闸的边界钉成行为——目录外载荷经本入口放行且确认器不得被叫起（项目路径座腿）。
     if (!buildScenesFromJson(root, scenes))
         return false;
-    applyGlobalsFromJson(root);
-    return true;
+    return applyGlobalsFromJson(root);
 }
 
 bool ProjectManager::buildScenesFromJson(const QJsonObject &root, QList<FlowScene *> &scenes)
@@ -453,7 +462,7 @@ bool ProjectManager::buildScenesFromJson(const QJsonObject &root, QList<FlowScen
     return true;
 }
 
-void ProjectManager::applyGlobalsFromJson(const QJsonObject &root)
+bool ProjectManager::applyGlobalsFromJson(const QJsonObject &root)
 {
     // 恢复全局配置（兼容旧项目文件：缺失字段时跳过）
     if (root.contains(QStringLiteral("globalVariables")))
@@ -463,15 +472,29 @@ void ProjectManager::applyGlobalsFromJson(const QJsonObject &root)
     if (root.contains(QStringLiteral("communication"))) {
         // 通信设备建不出来时必须走与其它载入损失同一条上报通道（2026-10-25 复核 P3-12 残留）：
         // 静默丢设备 = "打开方案后设备不见了"，且下一次保存会把该条目整条抹掉。
+        // 同 GTD 导入门禁：fromJson 会先清空现场设备再逐条建，失败条目只 emit——
+        // 这里必须备份+计数+整组回滚，并让整次方案载入失败，不能只记一条 note 报成功。
         CommunicationManager *comm = CommunicationManager::instance();
+        const QJsonObject backupComm = comm->toJson();
+        const QJsonObject backupTriggers = GlobalTriggerManager::instance()->toJson();
+        const QJsonObject backupHeartbeat = HeartbeatManager::instance()->toJson();
+        int rejectedDevices = 0;
         const QMetaObject::Connection conn = connect(
             comm, &CommunicationManager::deviceLoadFailed, this,
-            [this](const QString &name, const QString &type, const QString &reason) {
-                reportLoadNote(QStringLiteral("警告：方案中的通信设备未能建立: %1（类型 %2：%3）")
-                                   .arg(name, type, reason));
+            [&rejectedDevices](const QString &, const QString &, const QString &) {
+                ++rejectedDevices;
             });
         comm->fromJson(root[QStringLiteral("communication")].toObject());
         disconnect(conn);
+        if (rejectedDevices > 0) {
+            comm->fromJson(backupComm);
+            GlobalTriggerManager::instance()->fromJson(backupTriggers);
+            HeartbeatManager::instance()->fromJson(backupHeartbeat);
+            reportLoadNote(QStringLiteral(
+                "方案载入失败：%1 条通信设备未能建立，已回滚到载入前配置；请先在新版本导出方案")
+                               .arg(rejectedDevices));
+            return false;
+        }
     }
     if (root.contains(QStringLiteral("globalTriggers"))) {
         // 同上条标定的痕迹形状（U-27）：加载面与配置面同一枚前缀歧义闸（U-154）——空串源
@@ -511,8 +534,12 @@ void ProjectManager::applyGlobalsFromJson(const QJsonObject &root)
             if (layoutDoc.isObject() && layoutCheck.fromJson(layoutDoc.object())) {
                 QSaveFile layoutFile(runtimeLayoutPath());
                 if (layoutFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                    layoutFile.write(layout.toUtf8());
-                    layoutFile.commit();
+                    const QByteArray payload = layout.toUtf8();
+                    if (layoutFile.write(payload) != payload.size() || !layoutFile.commit()) {
+                        reportLoadNote(QStringLiteral(
+                            "方案内 runtimeLayout 写入运行界面布局文件失败（%1），本次仍按旧布局运行")
+                                           .arg(layoutFile.errorString()));
+                    }
                 }
             } else {
                 const QString why = layoutCheck.lastLoadWarning().isEmpty()
@@ -552,6 +579,7 @@ void ProjectManager::applyGlobalsFromJson(const QJsonObject &root)
             "改写成通用算子的那一份；需要保留原始文件请先复制一份备份")
                            .arg(nodeSideLossCount).arg(m_loadNodeTypeLossCount).arg(m_loadEdgeLossCount));
     }
+    return true;
 }
 
 QJsonObject ProjectManager::snapshotGlobals() const

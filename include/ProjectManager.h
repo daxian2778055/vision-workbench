@@ -45,6 +45,8 @@ public:
     /// v1 明文打包无完整性校验位 / 裸 JSON 无信封——非空时 UI 载入侧加注一句；
     /// 加密信封与 v2 明文打包（带 HMAC 位）载入后为空。
     QString lastIntegrityNote() const { return m_lastIntegrityNote; }
+    /// 中止切换时回滚 loadProject 提前提交的注记（与 lastFilePath/readonly 同组）
+    void setLastIntegrityNote(const QString &note) { m_lastIntegrityNote = note; }
 
     /// 最近一次 loadProject 是否因「方案目录外绝对路径未获确认」而拒载（U-201）。
     /// 窗口侧据此给一句准确的话（而不是笼统的「文件不存在或格式损坏」）。
@@ -111,7 +113,8 @@ private:
     /// 载入改动，否则会出现「场景没接管、全局配置已换」的半装载现场。
     bool buildScenesFromJson(const QJsonObject &root, QList<FlowScene *> &scenes);
     /// 应用全局配置与运行界面布局（U-201：从 applyProjectJson 里拆出，与建场景分开）。
-    void applyGlobalsFromJson(const QJsonObject &root);
+    /// 返回 false = 全局配置未能完整装入（通信设备有条目建不出来），调用方须回滚并拒收方案
+    bool applyGlobalsFromJson(const QJsonObject &root);
     /// 路径审查 ＋ 显式确认（U-201）：本次载入含方案目录外绝对路径时必须取得一次确认；
     /// 未确认（含未装确认器）即拒载——清空场景清单（不留半装载）并留痕，返回 false。
     bool confirmOutsideSchemePaths(QList<FlowScene *> &scenes, const QString &schemeFilePath);
