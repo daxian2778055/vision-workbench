@@ -776,7 +776,7 @@ void MvsImageSourceNode::readCameraParams()
         VFP_DEBUG << "相机句柄为空，无法读取参数";
         return;
     }
-
+    QMutexLocker sdkLock(&GlobalCameraManager::sdkMutexFor(m_hCamera));
     try {
         // 使用真实 MVS SDK 读取参数
         {
@@ -971,6 +971,7 @@ void MvsImageSourceNode::closeCamera()
 
     if (m_hCamera && m_globalCameraName.isEmpty()) {
         // 仅关闭本地相机（非全局相机）
+        QMutexLocker sdkLock(&GlobalCameraManager::sdkMutexFor(m_hCamera));
         MV_CC_StopGrabbing(m_hCamera);
         MV_CC_CloseDevice(m_hCamera);
         MV_CC_DestroyHandle(m_hCamera);
@@ -1000,7 +1001,7 @@ void MvsImageSourceNode::applyTriggerConfig()
         mode = m_triggerMode;
     }
     if (!hCamera) return;
-
+    QMutexLocker sdkLock(&GlobalCameraManager::sdkMutexFor(hCamera));
     switch (mode) {
     case HARDWARE_TRIGGER:
         // 硬件触发：外部信号（默认 Line0）驱动帧
@@ -1045,6 +1046,9 @@ void MvsImageSourceNode::applyCameraParamsInThread()
         emit paramsApplyFailed(QStringLiteral("\u76F8\u673A\u53E5\u67C4\u4E3A\u7A7A\uFF0C\u65E0\u6CD5\u5E94\u7528\u53C2\u6570"));
         return;
     }
+    // M 复核：整段参数写入（含 Stop/StartGrabbing 与像素格式读回）必须与同句柄
+    // 取图串行；句柄锁改为递归锁，内部 readPixelFormatValue 再加锁也不会自锁。
+    QMutexLocker sdkLock(&GlobalCameraManager::sdkMutexFor(hCamera));
 
     // 先检查当前 Flow 是否处于连续模式或正在运行
     bool skipPixelFormat = false;
@@ -1272,8 +1276,7 @@ void MvsImageSourceNode::setGlobalCameraName(const QString &name)
                 m_hCamera = handle;
                 m_cameraOpened = true;
             }
-            QMutexLocker sdkLock(&GlobalCameraManager::sdkMutexFor(handle));
-            readCameraParams();
+            readCameraParams();   // 内部已按句柄加锁，调用方不再重复持有
         }
     }
     refreshPixelFormatCombo();
@@ -1334,6 +1337,7 @@ void MvsImageSourceNode::refreshPixelFormatCombo()
     // 尝试从硬件读取当前像素格式并选中
     QString currentPf;
     if (hCam) {
+        QMutexLocker sdkLock(&GlobalCameraManager::sdkMutexFor(hCam));
         unsigned int curEnum = GlobalCameraManager::readPixelFormatValue(hCam);
         currentPf = GlobalCameraManager::pixelFormatEnumToName(curEnum);
     }
@@ -1904,6 +1908,7 @@ bool MvsImageSourceNode::tryAutoReconnect()
     {
         QMutexLocker locker(&m_mutex);
         if (m_hCamera) {
+            QMutexLocker sdkLock(&GlobalCameraManager::sdkMutexFor(m_hCamera));
             MV_CC_StopGrabbing(m_hCamera);
             MV_CC_CloseDevice(m_hCamera);
             MV_CC_DestroyHandle(m_hCamera);

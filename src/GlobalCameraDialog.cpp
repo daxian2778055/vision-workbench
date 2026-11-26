@@ -441,8 +441,10 @@ void GlobalCameraDialog::onApplyParams()
     bool pixelFormatOk = true;
     if (hCamera) {
         unsigned int pfVal = static_cast<unsigned int>(m_pixelFormatComboBox->currentData().toULongLong());
-        if (pfVal != 0)
+        if (pfVal != 0) {
+            QMutexLocker sdkLock(&GlobalCameraManager::sdkMutexFor(hCamera));
             pixelFormatOk = GlobalCameraManager::writePixelFormatValue(hCamera, pfVal);
+        }
     }
     const bool paramsOk = manager->setCameraParams(cameraName, params);
     if (pixelFormatOk && paramsOk)

@@ -158,6 +158,7 @@ unsigned int GlobalCameraManager::pixelFormatNameToEnum(const QString &name)
 unsigned int GlobalCameraManager::readPixelFormatValue(void *hCamera)
 {
     if (!hCamera) return 0;
+    // 由调用方持同一把句柄锁（readCameraParams / 参数应用 / 面板刷新），避免嵌套自锁
     MVCC_ENUMVALUE stVal;
     memset(&stVal, 0, sizeof(MVCC_ENUMVALUE));
     if (MV_CC_GetEnumValue(hCamera, "PixelFormat", &stVal) != MV_OK)
@@ -168,6 +169,7 @@ unsigned int GlobalCameraManager::readPixelFormatValue(void *hCamera)
 bool GlobalCameraManager::writePixelFormatValue(void *hCamera, unsigned int enumValue)
 {
     if (!hCamera || enumValue == 0) return false;
+    // 调用方（相机管理面板「应用参数」）持同一把句柄锁，避免嵌套自锁
     MV_CC_StopGrabbing(hCamera);
     int nRet = MV_CC_SetEnumValue(hCamera, "PixelFormat", enumValue);
     MV_CC_StartGrabbing(hCamera);
@@ -190,6 +192,7 @@ bool GlobalCameraManager::setCameraParams(const QString &cameraName, const Camer
         hCamera = m_cameraHandles.value(cameraName, nullptr);
     }
     if (hCamera) {
+        QMutexLocker sdkLock(&sdkMutexFor(hCamera));
         int nRet = 0;
         bool allOk = true;
         nRet = MV_CC_SetFloatValue(hCamera, "ExposureTime", static_cast<float>(params.exposureTime));
@@ -413,7 +416,8 @@ bool GlobalCameraManager::readCameraParams(const QString &cameraName)
         VFP_DEBUG << "相机句柄无效:" << cameraName;
         return false;
     }
-    
+    QMutexLocker sdkLock(&sdkMutexFor(hCamera));   // 同一句柄的全部 SDK 读写串行（递归锁可嵌套）
+
     try {
         int nRet = 0;
         CameraParams params;
@@ -544,6 +548,7 @@ bool GlobalCameraManager::setCameraLineValue(const QString &cameraName, int line
         VFP_DEBUG << "setCameraLineValue 失败：相机未打开/未找到" << cameraName;
         return false;
     }
+    QMutexLocker sdkLock(&sdkMutexFor(hCamera));
     int nRet = MV_CC_SetEnumValue(hCamera, "LineSelector", static_cast<unsigned int>(lineIndex));
     if (nRet != MV_OK) {
         VFP_DEBUG << "setCameraLineValue LineSelector 失败，错误码:" << nRet;
@@ -575,6 +580,7 @@ bool GlobalCameraManager::getCameraLineValue(const QString &cameraName, int line
         VFP_DEBUG << "getCameraLineValue 失败：相机未打开/未找到" << cameraName;
         return false;
     }
+    QMutexLocker sdkLock(&sdkMutexFor(hCamera));
     int nRet = MV_CC_SetEnumValue(hCamera, "LineSelector", static_cast<unsigned int>(lineIndex));
     if (nRet != MV_OK) {
         VFP_DEBUG << "getCameraLineValue LineSelector 失败，错误码:" << nRet;
@@ -694,8 +700,11 @@ bool GlobalCameraManager::openCamera(const QString &cameraName)
             m_cameraHandles[cameraName] = hCamera;
         }
         
-        // 开始采集
-        nRet = MV_CC_StartGrabbing(hCamera);
+        // 开始采集（与取图/拆句柄同一把句柄锁）
+        {
+            QMutexLocker sdkLock(&sdkMutexFor(hCamera));
+            nRet = MV_CC_StartGrabbing(hCamera);
+        }
         if (nRet != MV_OK) {
             // P5：采集没起来就不能报"已打开"——UI 显示已打开但取图必失败。
             // 与 MVS 节点 openCameraInThread 对同一情况的处理对齐：拆句柄、报失败。
@@ -749,6 +758,8 @@ bool GlobalCameraManager::closeCamera(const QString &cameraName, bool force)
     
     VFP_DEBUG << "开始关闭相机:" << cameraName;
     try {
+        // 与取图线程串行：句柄在锁内拆除，锁外的旧句柄缓存不会再被 SDK 使用
+        QMutexLocker sdkLock(&sdkMutexFor(hCamera));
         MV_CC_StopGrabbing(hCamera);
         MV_CC_CloseDevice(hCamera);
         MV_CC_DestroyHandle(hCamera);
@@ -830,13 +841,23 @@ QJsonObject GlobalCameraManager::toJson() const
 void GlobalCameraManager::fromJson(const QJsonObject &json)
 {
     QJsonArray camerasArray = json["cameras"].toArray();
+    QStringList reboundOpen;   // 绑定设备变了且当前已打开的相机名
+    QHash<QString, QString> reboundDevice;
     {
         QMutexLocker locker(&m_mutex);
         for (const QJsonValue &val : camerasArray) {
             QJsonObject cameraObj = val.toObject();
             QString name = cameraObj["name"].toString();
             if (!m_cameras.contains(name)) continue;
-            m_cameras[name].deviceName = cameraObj["deviceName"].toString();
+            const QString nextDevice = cameraObj["deviceName"].toString();
+            // M 复核：从保存的方案/快照恢复时若同名相机改绑了别的物理设备，旧 SDK
+            // 句柄仍是上一台设备；后续 openCamera 见句柄非空早退，节点会用旧句柄采图。
+            if (m_cameras[name].deviceName != nextDevice
+                && m_cameraHandles.value(name, nullptr)) {
+                reboundOpen << name;
+                reboundDevice.insert(name, nextDevice);
+            }
+            m_cameras[name].deviceName = nextDevice;
             m_cameras[name].description = cameraObj["description"].toString();
 
             QJsonObject paramsObj = cameraObj["params"].toObject();
@@ -849,6 +870,12 @@ void GlobalCameraManager::fromJson(const QJsonObject &json)
             m_cameras[name].params.triggerMode = paramsObj["triggerMode"].toString();
             m_cameras[name].params.triggerSource = paramsObj["triggerSource"].toString();
         }
+    }
+    // 拆句柄必须发生在 m_mutex 之外（closeCamera 自己取锁）；持旧句柄的取图线程
+    // 由同一把 sdkMutexFor 串行化，拆句柄不会与在飞 SDK 调用并发。
+    for (const QString &name : reboundOpen) {
+        closeCamera(name, true);
+        emit cameraChanged(name, reboundDevice.value(name));
     }
 }
 

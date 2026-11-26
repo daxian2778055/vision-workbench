@@ -1584,7 +1584,7 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(sgIndex >= 0
              && mvsSrc.mid(sgIndex, 900).contains(QStringLiteral("setParam(QStringLiteral(\"globalCameraName\"), name)"))
              && mvsSrc.mid(sgIndex, 900).contains(QStringLiteral("getCameraHandle(name)"))
-             && mvsSrc.mid(sgIndex, 900).contains(QStringLiteral("sdkMutexFor(handle)")),
+             && mvsSrc.mid(sgIndex, 900).contains(QStringLiteral("readCameraParams();")),
              "面板切相机必须走 setParam 排空路径，并用新句柄加锁读参数");
     const int spIndex = mvsSrc.indexOf(QStringLiteral("void MvsImageSourceNode::setParam"));
     QVERIFY2(spIndex >= 0 && mvsSrc.mid(spIndex, 700).contains(QStringLiteral("QMutexLocker locker(&m_mutex);")),
@@ -1603,6 +1603,18 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(budgetIdx >= 0 && feLocalSrc.mid(budgetIdx, 1800).contains(QStringLiteral("obj->getHImage()"))
              && !feLocalSrc.mid(budgetIdx, 1800).contains(QStringLiteral("v.canConvert<HImage>()")),
              "图像预算统计必须走 getHImage()，不能走永远为空的 getData()/QVariant");
+    // ㊲ 相机域 M：句柄锁串行化所有 SDK 调用 + 方案改绑失效旧句柄
+    const QString gcmSrc = readSrc("src/GlobalCameraManager.cpp");
+    QVERIFY2(gcmSrc.count(QStringLiteral("sdkMutexFor(")) >= 7,
+             "句柄锁须覆盖参数/IO/启停/拆句柄全部 SDK 调用");
+    const int fjIdx = gcmSrc.indexOf(QStringLiteral("void GlobalCameraManager::fromJson"));
+    QVERIFY2(fjIdx >= 0 && gcmSrc.mid(fjIdx).contains(QStringLiteral("reboundOpen"))
+             && gcmSrc.mid(fjIdx, 2200).contains(QStringLiteral("closeCamera(name, true)")),
+             "方案改绑已打开的相机时必须强制拆掉旧句柄，不能让新场景用旧设备采图");
+    QVERIFY2(mvsSrc.count(QStringLiteral("sdkMutexFor(")) >= 9,
+             "MVS 节点本地拆句柄/触发配置/参数应用/像素格式刷新也须纳入同一把句柄锁");
+    QVERIFY2(readSrc("src/GlobalCameraDialog.cpp").contains(QStringLiteral("sdkMutexFor(hCamera)")),
+             "面板写像素格式也必须持同一把句柄锁");
 }
 
 void UiGuardsTest::f2ValidationGuards()
