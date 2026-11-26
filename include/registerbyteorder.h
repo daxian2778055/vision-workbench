@@ -132,7 +132,9 @@ inline bool disassembleValueToWords(double value, const QString &dataType, const
         } else if (dataType == QStringLiteral("int32")) {
             u = static_cast<quint32>(static_cast<qint32>(qRound(value)));   // 取有符号位模式
         } else {
-            u = static_cast<quint32>(qRound(value));
+            // S3 复核：qRound 返回 int，4000000000.0 先转 32 位有符号 int 会溢出成
+            // 0x80000000，写错且校验假通过。用 64 位取整再转 quint32。
+            u = static_cast<quint32>(static_cast<qint64>(std::llround(value)));
         }
         const quint16 hi = static_cast<quint16>((u >> 16) & 0xFFFFu);
         const quint16 lo = static_cast<quint16>(u & 0xFFFFu);
@@ -169,8 +171,13 @@ inline bool valueMatches(double expected, double actual, const QString &dataType
         return wrap16(expected) == wrap16(actual);
     }
     if (dataType == QStringLiteral("int32") || dataType == QStringLiteral("uint32")) {
+        // uint32 超出可表示范围时直接判不匹配，避免两侧都被截断成同一个值而假通过
+        if (dataType == QStringLiteral("uint32")
+            && (expected < 0.0 || expected > 4294967295.0
+                || actual < 0.0 || actual > 4294967295.0))
+            return false;
         const auto wrap32 = [](double v) {
-            return static_cast<quint32>(static_cast<qint64>(qRound(v)));
+            return static_cast<quint32>(static_cast<qint64>(std::llround(v)));
         };
         return wrap32(expected) == wrap32(actual);
     }

@@ -200,7 +200,15 @@ bool ByteMatchReceiveEvent::checkCondition(const ByteMatchRule &rule, double cur
         return (rule.lastValue > rule.compareValue && currentValue <= rule.compareValue);
     }
     if (rule.useEquals) {
-        // qFuzzyCompare 与 0 比较不可靠（(0,0) 恒 false）——历史缺陷：比较值填 0 永远不匹配
+        // S3 复核：float32 上报值与十进制阈值天然差 ~1e-6（100.1 → 100.099998…），
+        // qFuzzyIsNull 的 1e-12 绝对阈值让"等于"分支永不触发。与寄存器回写校验同口径
+        // 改用相对容差；整数继续走精确比较。
+        if (rule.dataType == QStringLiteral("float")) {
+            const double diff = std::fabs(currentValue - rule.compareValue);
+            const double scale = qMax(1.0, qMax(std::fabs(currentValue),
+                                                std::fabs(rule.compareValue)));
+            return diff <= 1e-6 * scale;
+        }
         return qFuzzyIsNull(currentValue - rule.compareValue);
     }
     return false;

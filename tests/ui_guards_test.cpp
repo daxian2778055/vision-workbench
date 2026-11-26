@@ -1710,6 +1710,19 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              && hnSrc.contains(QStringLiteral("setModuleId(storedId)"))
              && hnSrc.contains(QStringLiteral("if (!aggregatesOutputPorts())")),
              "Enum 索引须钳制；fromJson 模块号须走校验；非聚合节点须按全部端口枚举");
+    // ㊼ 节点核心域 S3：类型推断、uint32 取整、端口计数、float 容差、句柄锁
+    const QString dobjSrc = readSrc("src/DataObject.cpp");
+    QVERIFY2(dobjSrc.contains(QStringLiteral("if (m_type == DataType::Unknown)"))
+             && dobjSrc.count(QStringLiteral("QMutexLocker locker(&m_mutex);")) >= 6,
+             "setData 须推断 Unknown 类型；Region/XLD setter 须纳入递归锁");
+    const QString rboSrc = readSrc("include/registerbyteorder.h");
+    QVERIFY2(rboSrc.count(QStringLiteral("std::llround")) >= 2
+             && rboSrc.contains(QStringLiteral("expected > 4294967295.0")),
+             "uint32 写入与校验须用 64 位取整并拒绝越界");
+    QVERIFY2(readSrc("include/HalconNode.h").contains(QStringLiteral("aggregatesOutputPorts() ? 1 + m_logicalOutputs.size()")),
+             "非聚合节点逻辑端口数须按真实端口计");
+    QVERIFY2(readSrc("src/ReceiveEvent.cpp").contains(QStringLiteral("diff <= 1e-6 * scale")),
+             "字节匹配 float 等于判定须用相对容差");
 }
 
 void UiGuardsTest::f2ValidationGuards()

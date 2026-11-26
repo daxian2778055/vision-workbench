@@ -34,7 +34,11 @@ public:
     /// B1 统一输出：第一个输出端口 = 唯一「输出」，第 2 个及以后只登记为具名子结果
     virtual Port *addOutputPort(const QString &name, PortDataType dataType = PortDataType::Image) override;
     bool aggregatesOutputPorts() const override { return true; }
-    int logicalOutputPortCount() const override { return 1 + m_logicalOutputs.size(); }
+    /// 非聚合节点（如 ConditionalNode 的多分支端口）按真实端口数，异常清理/数据广播
+    /// 才不会漏掉端口 1..N；聚合节点仍按"主端口 + 具名子结果"计数。
+    int logicalOutputPortCount() const override {
+        return aggregatesOutputPorts() ? 1 + m_logicalOutputs.size() : outputPorts().size();
+    }
     virtual QVector<QPair<QString, QSharedPointer<DataObject>>> namedOutputs() const override;
     /// 逻辑子输出名（不含主端口），顺序 = 原端口 1..N 的顺序
     QVector<QPair<QString, PortDataType>> logicalOutputs() const { return m_logicalOutputs; }

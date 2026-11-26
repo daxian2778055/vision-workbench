@@ -38,6 +38,24 @@ void DataObject::setData(const QVariant &data)
 {
     QMutexLocker locker(&m_mutex);
     m_data = data;
+    // S3 复核：多个数据型算子只 setData(QString) 不 setType，输出长期停在 Unknown，
+    // 下游按类型取值全线失效（引用变量为空、界面状态灯不广播、查看器显示 Unknown）。
+    // 仅在 Unknown 时按 QVariant 推断，显式 setType 的优先级保持不变。
+    if (m_type == DataType::Unknown) {
+        switch (data.typeId()) {
+        case QMetaType::QString: m_type = DataType::String; break;
+        case QMetaType::Bool: m_type = DataType::Bool; break;
+        case QMetaType::Double:
+        case QMetaType::Float:
+        case QMetaType::Int:
+        case QMetaType::LongLong:
+        case QMetaType::UInt:
+        case QMetaType::ULongLong: m_type = DataType::Number; break;
+        case QMetaType::QStringList:
+        case QMetaType::QVariantList: m_type = DataType::Array; break;
+        default: break;
+        }
+    }
 }
 
 // HImage相关方法
@@ -93,6 +111,7 @@ HalconCpp::HRegion DataObject::getHRegion() const
 
 void DataObject::setHRegion(const HalconCpp::HRegion &region)
 {
+    QMutexLocker locker(&m_mutex);   // 递归锁：setHObject 内部再加锁不会自锁
     setHObject(HalconCpp::HObject(region));
     m_type = DataType::Region;
 }
@@ -107,6 +126,7 @@ HalconCpp::HXLDCont DataObject::getHXLDCont() const
 
 void DataObject::setHXLDCont(const HalconCpp::HXLDCont &xld)
 {
+    QMutexLocker locker(&m_mutex);
     setHObject(HalconCpp::HObject(xld));
     m_type = DataType::XLD;
 }

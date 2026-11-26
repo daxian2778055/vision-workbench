@@ -943,12 +943,31 @@ private slots:
 
     // r19 P1-1：落库失败时批次落 JSONL，绝不静默丢
     void spillBatchWritesJsonl();
+    void dataObjectInfersStringType();
 
 private:
     /// 「数据记录」算子落库用的临时库目录（与生产 data/visionflow.db 隔离）。
     /// 注：进程结束时这条连接仍未关，临时目录可能删不掉——与 DatabaseTest 的 m_tempDir 同现状。
     QTemporaryDir m_dbDir;
 };
+
+// S3 复核：只 setData(QString) 不 setType 的数据型节点，输出不能再停在 Unknown。
+void NodeExecuteSmokeTest::dataObjectInfersStringType()
+{
+    DataObject obj;
+    QCOMPARE(obj.getType(), DataObject::DataType::Unknown);
+    obj.setData(QStringLiteral("HELLO"));
+    QCOMPARE(obj.getType(), DataObject::DataType::String);
+
+    DataObject num;
+    num.setData(42.5);
+    QCOMPARE(num.getType(), DataObject::DataType::Number);
+
+    DataObject explicitType;
+    explicitType.setType(DataObject::DataType::Region);
+    explicitType.setData(QStringLiteral("x"));
+    QCOMPARE(explicitType.getType(), DataObject::DataType::Region);   // 显式类型优先
+}
 
 void NodeExecuteSmokeTest::spillBatchWritesJsonl()
 {

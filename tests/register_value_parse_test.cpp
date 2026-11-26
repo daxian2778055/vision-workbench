@@ -33,6 +33,7 @@ private slots:
     void testLengthGuards();            // 长度守卫与空载荷
     void testUnknownTypeZero();         // 未知类型按零值
     void testPairingWithAssemble();     // 与装配段严格配对（往返口径）
+    void testUint32AboveIntMax();       // > INT_MAX 的无符号值不得被 qRound(int) 截断
 };
 
 void RegisterValueParseTest::testInt16SignedAndUnsigned()
@@ -124,6 +125,21 @@ void RegisterValueParseTest::testPairingWithAssemble()
                                                                      QStringLiteral("ABCD"));
     QCOMPARE(RegisterByteOrder::parseRawToValue(wide, QStringLiteral("int32"),
                                                  QStringLiteral("ABCD")), 65536.0);
+}
+
+void RegisterValueParseTest::testUint32AboveIntMax()
+{
+    const double big = 4000000000.0;   // > INT_MAX，qRound(double) 返回 int 会溢出
+    QVector<quint16> words;
+    QVERIFY(RegisterByteOrder::disassembleValueToWords(
+        big, QStringLiteral("uint32"), QStringLiteral("ABCD"), words));
+    QCOMPARE(words.size(), 2);
+    const QByteArray raw = RegisterByteOrder::assembleRegisterBytes(words, QStringLiteral("ABCD"));
+    const double parsed = RegisterByteOrder::parseRawToValue(
+        raw, QStringLiteral("uint32"), QStringLiteral("ABCD"));
+    QCOMPARE(parsed, big);
+    QVERIFY(RegisterByteOrder::valueMatches(big, parsed, QStringLiteral("uint32")));
+    QVERIFY(!RegisterByteOrder::valueMatches(big, -1.0, QStringLiteral("uint32")));
 }
 
 QTEST_MAIN(RegisterValueParseTest)
