@@ -1,5 +1,6 @@
 #include <QElapsedTimer>
 #include "MainWindow.h"
+#include "SingleInstanceLock.h"
 #include "FocusGuard.h"
 #include "VmSharedText.h"
 #include "CalibrationWizardDialog.h"
@@ -2494,6 +2495,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
         QStringList args = QApplication::arguments();
         if (!args.isEmpty())
             args.removeFirst(); // 去掉程序自身路径
+        releaseSingleInstanceLock();   // 先交还锁，新进程才能在 tryLock(100) 内拿到
         QProcess::startDetached(path, args);
     }
 }

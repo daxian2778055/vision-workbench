@@ -1899,6 +1899,34 @@ Check that the program directory is writable; the designer stays open and edits 
         <source>视觉方案工作台</source>
         <translation>Vision Workbench</translation>
     </message>
+    <message>
+        <source>视觉方案工作台 - %1 [%2]</source>
+        <translation>Vision Workbench - %1 [%2]</translation>
+    </message>
+    <message>
+        <source>方案：%1</source>
+        <translation>Scheme: %1</translation>
+    </message>
+    <message>
+        <source>导出统计报表</source>
+        <translation>Export Statistics Report</translation>
+    </message>
+    <message>
+        <source>导出加密/只读</source>
+        <translation>Export Encrypted/Read-only</translation>
+    </message>
+    <message>
+        <source>打包模型与依赖</source>
+        <translation>Package Models and Dependencies</translation>
+    </message>
+    <message>
+        <source>运行界面</source>
+        <translation>Runtime View</translation>
+    </message>
+    <message>
+        <source>返回设计模式</source>
+        <translation>Return to Design Mode</translation>
+    </message>
 </context>
 <context>
     <name>ProjectManager</name>

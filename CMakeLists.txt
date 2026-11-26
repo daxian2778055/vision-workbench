@@ -114,6 +114,7 @@ set(MVS_LIBRARIES ${MVS_ROOT}/Development/Libraries/win64/MvCameraControl.lib)
 # 源文件
 set(SOURCES
     src/AppLog.cpp
+    src/SingleInstanceLock.cpp
     src/FlowRuntimeStats.cpp
     src/StatisticsReport.cpp
     src/StatisticsReportDialog.cpp

@@ -6,6 +6,7 @@
 #include "NodeSelfTest.h"
 #include "DeepOcrSelfTest.h"
 #include "I18n.h"
+#include "SingleInstanceLock.h"
 #include "VisionWorkbenchStyle.h"
 #include <QApplication>
 #include <QDebug>
@@ -307,6 +308,8 @@ int main(int argc, char *argv[])
     const QString lockPath =
         QDir::temp().filePath(QStringLiteral("VisionFlowPlatform.lock"));
     QLockFile instanceLock(lockPath);
+    // 供 MainWindow 的语言切换重启路径在 startDetached 前显式释放（锁本体仍在此作用域）
+    setSingleInstanceLock(&instanceLock);
     // 残留锁必须能自愈：此前 setStaleLockTime(0) = 永不视为过期，而锁文件放在 %TEMP% 不会随进程退出
     // 自动清除——任何一次崩溃/强杀/重启之后，之后每次启动都会走"已在运行"分支（且该分支自己会崩，
     // 见下），现场表现就是"软件再也打不开"。改用 QLockFile 默认的 30s：它只在"锁文件超时 **且**

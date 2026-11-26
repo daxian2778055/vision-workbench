@@ -1755,6 +1755,19 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              "辅助 dock 须有稳定 objectName 且在 restoreState 前创建，几何/浮窗态才能恢复");
     QVERIFY2(!readSrc("ui/MainWindow.ui").contains(QStringLiteral(":/icons/start.png")),
              "ui 中未注册的 qrc 图标引用应移除，避免静默空 QIcon");
+    // ㊽ UI 布局/面板域 U2：翻译目录补齐、语言重启先释放单实例锁
+    QVERIFY2(readSrc("src/main.cpp").contains(QStringLiteral("setSingleInstanceLock(&instanceLock)"))
+             && mwSrc.contains(QStringLiteral("releaseSingleInstanceLock();"))
+             && readSrc("CMakeLists.txt").contains(QStringLiteral("src/SingleInstanceLock.cpp")),
+             "语言切换重启前须释放单实例锁，释放点须在 vfp_core 内可链接");
+    const QString tsSrc = readSrc("translations/visionflow_en.ts");
+    for (const QString &key : { QStringLiteral("视觉方案工作台 - %1 [%2]"),
+                                QStringLiteral("方案：%1"),
+                                QStringLiteral("导出统计报表"),
+                                QStringLiteral("返回设计模式") }) {
+        QVERIFY2(tsSrc.contains(QStringLiteral("<source>") + key + QStringLiteral("</source>")),
+                 qPrintable(QStringLiteral("翻译目录缺少核心文案: %1").arg(key)));
+    }
 }
 
 void UiGuardsTest::f2ValidationGuards()
