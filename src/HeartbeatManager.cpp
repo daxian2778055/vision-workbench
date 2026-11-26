@@ -169,10 +169,24 @@ void HeartbeatManager::fromJson(const QJsonObject &json)
         QJsonObject obj = v.toObject();
         HeartbeatEntry e;
         e.deviceName = obj[QStringLiteral("deviceName")].toString();
-        e.intervalMs = obj[QStringLiteral("intervalMs")].toInt(1000);
+        // R1 复核：fromJson 必须与注册/UI 同口径钳制间隔，否则 0/负值会让基节拍
+        // 变成 10Hz 高频发包并刷报警；上限与 UI SpinBox 一致。
+        e.intervalMs = qBound(500, obj[QStringLiteral("intervalMs")].toInt(1000), 60000);
         e.pattern0 = obj[QStringLiteral("pattern0")].toString(QStringLiteral("HeartBeat0"));
         e.pattern1 = obj[QStringLiteral("pattern1")].toString(QStringLiteral("HeartBeat1"));
         e.active = obj[QStringLiteral("active")].toBool();
         m_entries[e.deviceName] = e;
+    }
+    // R1 复核：fromJson 此前只重建条目、不同步定时器 ⇒ UI 显示"启动"且配置写出
+    // active:true，但 onTick 永不执行，心跳与断线监测全部静默失效；反向还会留下空转定时器。
+    bool anyActive = false;
+    for (auto it = m_entries.constBegin(); it != m_entries.constEnd(); ++it) {
+        if (it.value().active) { anyActive = true; break; }
+    }
+    if (anyActive) {
+        if (!m_timer->isActive())
+            m_timer->start();
+    } else {
+        m_timer->stop();
     }
 }

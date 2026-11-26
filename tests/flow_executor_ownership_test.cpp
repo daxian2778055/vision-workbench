@@ -36,6 +36,7 @@ private slots:
     void testUnbindKeepsOwnership();        // ③ 解绑不清归属
     void testTriggerBindingUnregisteredOnDestruction();  // ④ 触发面按执行器身份配对注销
     void testTriggerRoutingRunsOnAppThread();  // ⑤ 触发路由与执行器析构同线程（线程前提）
+    void testRenameEventTriggerNoGhost();     // 重命名事件触发不得留下同源幽灵条目
     void testExecutorSleepStopsWithExecutor();  // ⑥ 执行器停后其可取消等待立即返回未完成（P2b 接线）
     void testAliveBlockGoneMarkedOnSceneDestruction();  // ⑦ 段二：场景亡⇒其块落墓碑（售票判走；红臂靶）
     void testAliveBlockPerSceneBindingServe();  // ⑧ 段二：每场景自代各自的块（在世服务面，死亡面由⑦照管）
@@ -106,6 +107,27 @@ void FlowExecutorOwnershipTest::testTriggerBindingUnregisteredOnDestruction()
     // P3c：绑定只持令牌的弱引用 ⇒ 释放最后一个强令牌即收尾，本体析构内按身份注销
     token.reset();
     QVERIFY(GlobalTriggerManager::instance()->executorForFlow(flowName) == nullptr);
+}
+
+// R1 复核：重命名事件触发到已被另一条触发占用的名字时，被覆盖条目的 id 必须
+// 从 m_allTriggers 撤下，否则保存/重载后两条同源项互相覆盖、落点静默翻转。
+void FlowExecutorOwnershipTest::testRenameEventTriggerNoGhost()
+{
+    auto *gtm = GlobalTriggerManager::instance();
+    const QString srcA = QStringLiteral("R_GHOST_A");
+    const QString srcB = QStringLiteral("R_GHOST_B");
+    gtm->removeEventTrigger(srcA);
+    gtm->removeEventTrigger(srcB);
+    QVERIFY(gtm->setEventTrigger(srcA, QStringLiteral("FlowA")));
+    QVERIFY(gtm->setEventTrigger(srcB, QStringLiteral("FlowB")));
+    QCOMPARE(gtm->allTriggers().size(), 2);
+
+    gtm->renameEventTrigger(srcA, srcB);
+    QCOMPARE(gtm->allTriggers().size(), 1);
+    QCOMPARE(gtm->flowForEventTrigger(srcB), QStringLiteral("FlowA"));
+
+    gtm->removeEventTrigger(srcB);
+    QVERIFY(gtm->allTriggers().isEmpty());
 }
 
 void FlowExecutorOwnershipTest::testTriggerRoutingRunsOnAppThread()

@@ -149,8 +149,12 @@ void GlobalTriggerManager::renameEventTrigger(const QString &oldEventId, const Q
     TriggerEntry entry = it.value();
     m_eventTriggers.erase(it);
     entry.triggerSource = newEventId;
+    // 目标名上可能已有另一条事件触发（例如源事件被删后重名）：覆盖前必须把被覆盖
+    // 条目的 id 从 m_allTriggers 撤下，否则保存/重载后两条同源项互相覆盖、目标翻转。
+    if (auto occupied = m_eventTriggers.find(newEventId); occupied != m_eventTriggers.end())
+        m_allTriggers.remove(occupied.value().id);
     m_eventTriggers[newEventId] = entry;
-    m_allTriggers[entry.id] = entry;   // 条目 id 与目标流程不变，仅触发源换名
+    m_allTriggers[entry.id] = entry;
 }
 
 QString GlobalTriggerManager::flowForEventTrigger(const QString &eventId) const
@@ -521,6 +525,9 @@ void GlobalTriggerManager::fromJson(const QJsonObject &json, QStringList *reject
                 continue;
             m_stringTriggers[e.triggerSource] = e;
         } else {
+            // 同源覆盖与字符串分支同口径：旧表项携 id 一并撤下，不留幽灵条目
+            if (auto occupied = m_eventTriggers.find(e.triggerSource); occupied != m_eventTriggers.end())
+                m_allTriggers.remove(occupied.value().id);
             m_eventTriggers[e.triggerSource] = e;
         }
         m_allTriggers[e.id] = e;

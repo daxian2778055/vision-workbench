@@ -132,6 +132,7 @@ private slots:
     void testModbusCoilWriteback();   // P0-4 切片①：线圈（数字 IO 协议基础）端到端回环
     void testPlcDataTriggersFlowAndWritesBack();
     void testHeartbeatActuallyGoesOnTheWire();
+    void testHeartbeatFromJsonConvergesTimer();
     void testSendEventsActuallySend();
     void testHeartbeatFailureRaisesAlarm();
     void testStringTriggerStartsFlow();
@@ -567,6 +568,36 @@ void CommWritebackTest::testPlcDataTriggersFlowAndWritesBack()
     exec->setFlowScene(nullptr);
     QVERIFY(cm->closeDevice(QStringLiteral("SIM_TRIG")));
     QVERIFY(cm->removeDevice(QStringLiteral("SIM_TRIG")));
+}
+
+// R1 复核：fromJson 恢复 active 条目时必须同步启动定时器；全 inactive 必须停表；
+// 且 fromJson 要按注册口同口径钳制 intervalMs（否则 0 会变成 10Hz 高频发包）。
+void CommWritebackTest::testHeartbeatFromJsonConvergesTimer()
+{
+    auto *hb = HeartbeatManager::instance();
+    auto makeJson = [](bool active, int interval) {
+        QJsonObject e;
+        e[QStringLiteral("deviceName")] = QStringLiteral("R_HB_PROBE");
+        e[QStringLiteral("intervalMs")] = interval;
+        e[QStringLiteral("pattern0")] = QStringLiteral("A");
+        e[QStringLiteral("pattern1")] = QStringLiteral("B");
+        e[QStringLiteral("active")] = active;
+        QJsonArray arr; arr.append(e);
+        QJsonObject root; root[QStringLiteral("heartbeats")] = arr;
+        return root;
+    };
+
+    QSignalSpy sent(hb, &HeartbeatManager::heartBeatSent);
+    hb->fromJson(makeJson(true, 0));   // 0 应被钳到 500，不能每 100ms 都发
+    QTRY_VERIFY_WITH_TIMEOUT(sent.count() >= 1, 1000);
+    const QJsonArray restored = hb->toJson().value(QStringLiteral("heartbeats")).toArray();
+    QVERIFY(restored.first().toObject().value(QStringLiteral("intervalMs")).toInt() >= 500);
+
+    // 全 inactive：定时器必须停下，不能留下空转基节拍
+    hb->fromJson(makeJson(false, 1000));
+    const int afterStop = sent.count();
+    QTest::qWait(350);
+    QCOMPARE(sent.count(), afterStop);
 }
 
 void CommWritebackTest::testHeartbeatActuallyGoesOnTheWire()

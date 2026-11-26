@@ -5077,16 +5077,27 @@ bool MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
     // 无名无映射 → 硬触发/外部触发全灭（触发链路静默失效）。
     m_flowModes.clear();   // S5：载入前清空旧流程模式映射，避免已删场景的 stale 条目被复用继承
 
+    // S2：优先用方案持久化的流程名（保持触发绑定身份），缺失时再按全局唯一名分配，
+    // 避免"按页签序号重建名"把触发绑定平移到别的流程（比空路由更危险的错触发）。
+    // R1 复核：旧实现不去重——两个同名场景都注册到 GTM（后者覆盖前者绑定），但
+    // triggerFired 按名广播，未被绑定的同名执行器也会被拉起 ⇒ 一次触发两条流程并发。
+    QSet<QString> usedFlowNames;
+    for (int i = 0; i < loadedScenes.size(); ++i) {
+        FlowScene *scene = loadedScenes[i];
+        QString flowName = scene->flowName();
+        if (flowName.isEmpty() || usedFlowNames.contains(flowName)) {
+            if (!flowName.isEmpty())
+                logMessage(tr("方案含重名流程「%1」，已为后一个分配唯一名以避免触发广播双跑").arg(flowName));
+            flowName = GlobalTriggerManager::instance()->allocFlowName();
+        }
+        usedFlowNames.insert(flowName);
+        scene->setFlowName(flowName);   // 回写，保证重新保存时身份一致
+    }
+
     for (int i = 0; i < loadedScenes.size(); ++i) {
         FlowScene *scene = loadedScenes[i];
         m_flowScenes.append(scene);
-
-        // S2：优先用方案持久化的流程名（保持触发绑定身份），缺失时再按全局唯一名分配，
-        // 避免"按页签序号重建名"把触发绑定平移到别的流程（比空路由更危险的错触发）。
-        QString flowName = scene->flowName();
-        if (flowName.isEmpty())
-            flowName = GlobalTriggerManager::instance()->allocFlowName();
-        scene->setFlowName(flowName);   // 回写，保证重新保存时身份一致
+        const QString flowName = scene->flowName();
 
         // 每流程运行模式：优先用方案里存的（不是所有流程都要连续），缺失/越界再回落软触发；
         // 同时写回 m_flowModes（组合框/按钮态都读它）并同步给该流程的执行器。

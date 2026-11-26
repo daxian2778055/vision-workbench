@@ -1658,6 +1658,16 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(ccIndex >= 0 && mvsSrc.mid(ccIndex, 400).contains(QStringLiteral("m_globalCameraName == cameraName"))
              && !mvsSrc.mid(ccIndex, 400).contains(QStringLiteral("deviceName.isEmpty()")),
              "相机解绑与改绑都要清节点缓存句柄，不能留下悬垂值");
+    // ㊷ 触发/心跳域 R1：同源触发覆盖清幽灵、方案流程名去重、心跳定时器收敛
+    const QString gtmSrc = readSrc("src/GlobalTriggerManager.cpp");
+    QVERIFY2(gtmSrc.count(QStringLiteral("m_allTriggers.remove(occupied.value().id);")) >= 2,
+             "重命名与 fromJson 同源覆盖都要把被覆盖条目 id 从 allTriggers 撤下");
+    QVERIFY2(mwSrc.contains(QStringLiteral("usedFlowNames.contains(flowName)")),
+             "载入方案须去重持久化 flowName，避免触发广播双跑");
+    const QString hbSrc = readSrc("src/HeartbeatManager.cpp");
+    QVERIFY2(hbSrc.contains(QStringLiteral("qBound(500"))
+             && hbSrc.contains(QStringLiteral("bool anyActive"))            ,
+             "心跳 fromJson 须钳制间隔并按 active 收敛定时器");
 }
 
 void UiGuardsTest::f2ValidationGuards()
