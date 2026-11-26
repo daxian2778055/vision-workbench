@@ -141,7 +141,9 @@ void MvsImageSourceNode::init()
     connect(GlobalCameraManager::instance(), &GlobalCameraManager::cameraChanged,
             this, [=](const QString &cameraName, const QString &deviceName) {
         QMutexLocker locker(&m_mutex);
-        if (m_globalCameraName == cameraName && deviceName.isEmpty()) {
+        if (m_globalCameraName == cameraName) {
+            // 解绑（deviceName 空）与改绑（非空）都会让缓存句柄失效——改绑后
+            // process() 会重新 getCameraHandle，留着旧句柄就是悬垂值。
             m_cameraOpened = false;
             m_hCamera = nullptr;
             emit cameraStatusChanged(false);

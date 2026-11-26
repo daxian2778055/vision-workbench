@@ -96,6 +96,10 @@ public:
     QString lastFilePath() const;
     QString annotationDir() const;
 
+    /// loadProject 成功解析出的 root；全局配置的提交由调用方在旧执行器停稳后显式调用
+    /// commitLoadedGlobals() 完成——避免"场景没换、相机却被强关"的半切换态。
+    QJsonObject lastLoadedRoot() const { return m_lastLoadedRoot; }
+    bool commitLoadedGlobals();
 
 signals:
     /// U-34（推进计划 §3.32 登记未修第 2 条那一格的可见面）：载入期每发生一条
@@ -124,6 +128,8 @@ private:
 
     QString m_lastFilePath;
     QString m_lastIntegrityNote;
+    /// 最近一次成功 loadProject 解析出的 root（全局配置延迟到执行器停稳后提交）
+    QJsonObject m_lastLoadedRoot;
     bool m_loadedReadonly = false;
     /// U-201：最近一次载入是否被「目录外绝对路径未获确认」拒载（每次载入复位）。
     bool m_lastLoadRefusedForOutsidePaths = false;

@@ -276,12 +276,7 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
         // U-214：成功才提交三件（只读旗在此按信封标志立位，与确认通过同刻）。
         setLastFilePath(filePath);
         m_loadedReadonly = readonly;
-        const QJsonObject globalsBefore = snapshotGlobals();
-        if (!applyGlobalsFromJson(doc.object())) {
-            restoreGlobals(globalsBefore);
-            rollbackSnapshot();
-            return false;
-        }
+        m_lastLoadedRoot = doc.object();   // 全局配置延迟到执行器停稳后提交
         return true;
     }
 
@@ -311,12 +306,7 @@ bool ProjectManager::loadProject(const QString &filePath, QList<FlowScene *> &sc
     setLastFilePath(filePath);
     m_loadedReadonly = false;   // 旧明文 JSON 即为可编辑方案（既有口径）
     m_lastIntegrityNote = QStringLiteral("旧明文 JSON 格式");
-    const QJsonObject globalsBefore = snapshotGlobals();
-    if (!applyGlobalsFromJson(doc.object())) {
-        restoreGlobals(globalsBefore);
-        rollbackSnapshot();
-        return false;
-    }
+    m_lastLoadedRoot = doc.object();   // 同上：全局配置延迟提交
     return true;
 }
 
@@ -578,6 +568,18 @@ bool ProjectManager::applyGlobalsFromJson(const QJsonObject &root)
             "的类型号从方案文件中去掉或换成当前实现、把未接回的连线整条不再写回，降级算子的端口清单也会被"
             "改写成通用算子的那一份；需要保留原始文件请先复制一份备份")
                            .arg(nodeSideLossCount).arg(m_loadNodeTypeLossCount).arg(m_loadEdgeLossCount));
+    }
+    return true;
+}
+
+bool ProjectManager::commitLoadedGlobals()
+{
+    if (m_lastLoadedRoot.isEmpty())
+        return false;   // 没有成功载入过的方案可提交
+    const QJsonObject globalsBefore = snapshotGlobals();
+    if (!applyGlobalsFromJson(m_lastLoadedRoot)) {
+        restoreGlobals(globalsBefore);
+        return false;
     }
     return true;
 }

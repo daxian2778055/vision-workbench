@@ -52,6 +52,7 @@ private slots:
     void testApplyProjectJsonStaysUngated();               // 边界钉形：内存应用入口不叫确认器、也无锚
     void testGlobalSnapshotRollback();                     // P9：中止载入后全局配置整组复原
     void testApplyProjectJsonRejectsUnknownCommDevice();   // 通信设备建不出来 ⇒ 整份方案拒收 + 旧配置回滚
+    void testGlobalsAppliedOnlyAfterExplicitCommit();       // P1-3：全局配置须在 commit 后才生效
 
 private:
     /// 造一份带指定 filePath 的方案文件（走真写侧序列化 buildProjectJson），返回是否落盘。
@@ -652,6 +653,32 @@ void ProjectPathsTest::testGlobalSnapshotRollback()
     QVERIFY2(pm.restoreGlobals(before), "回滚应成功");
     QCOMPARE(gvm->getVariable(QStringLiteral("U220_ROLLBACK_PROBE")).toInt(), 7);
     gvm->removeVariable(QStringLiteral("U220_ROLLBACK_PROBE"));
+}
+
+void ProjectPathsTest::testGlobalsAppliedOnlyAfterExplicitCommit()
+{
+    // P1-3：loadProject 只读解析，不能立刻改全局变量（更不能强关相机）；
+    // 调用方确认旧执行器停稳后 commitLoadedGlobals() 才提交。
+    auto *gvm = GlobalVariableManager::instance();
+    gvm->removeVariable(QStringLiteral("Q_COMMIT_PROBE"));
+    QVERIFY(gvm->addVariable(QStringLiteral("Q_COMMIT_PROBE"),
+                             GlobalVariableManager::IntType, 99));
+    FlowScene scene;
+    QList<FlowScene *> one{ &scene };
+    ProjectManager writer;
+    const QString path = m_tmp.filePath(QStringLiteral("q_commit.vfp"));
+    QVERIFY2(writer.saveProject(path, one), "写方案失败");
+    QVERIFY(gvm->setVariable(QStringLiteral("Q_COMMIT_PROBE"), 7));   // 内存里是旧方案的值
+
+    ProjectManager loader;
+    QList<FlowScene *> loaded;
+    QVERIFY2(loader.loadProject(path, loaded), "加载方案失败");
+    QCOMPARE(gvm->getVariable(QStringLiteral("Q_COMMIT_PROBE")).toInt(), 7);
+    QVERIFY2(loader.commitLoadedGlobals(), "提交全局配置失败");
+    QCOMPARE(gvm->getVariable(QStringLiteral("Q_COMMIT_PROBE")).toInt(), 99);
+
+    gvm->removeVariable(QStringLiteral("Q_COMMIT_PROBE"));
+    qDeleteAll(loaded);
 }
 
 QTEST_MAIN(ProjectPathsTest)

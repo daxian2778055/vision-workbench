@@ -4993,6 +4993,25 @@ bool MainWindow::loadProjectFile(const QString &fileName, bool recoveryRestore)
         return false;
     }
 
+    // P1-3 复核：相机/通信/触发/布局等全局配置推迟到这里才提交。原实现在 loadProject
+    // 成功尾就 applyGlobalsFromJson，此时旧执行器仍在跑；GlobalCameraManager::fromJson
+    // 对改绑相机会 force 拆句柄，随后若停执行器超时而中止，回滚 fromJson 不会重开相机，
+    // "保持不变"的旧方案里相机已变关闭态。现在确认停稳后才拆/装，失败则整组中止。
+    if (!pm->commitLoadedGlobals()) {
+        qDeleteAll(loadedScenes);
+        loadedScenes.clear();
+        pm->setLastFilePath(prevFilePath);
+        pm->setLastIntegrityNote(prevIntegrityNote);
+        if (prevReadonly)
+            pm->setReadonlyLoaded(true);
+        else
+            pm->resetReadonlyFlag();
+        applyReadonlyUI();
+        QMessageBox::warning(this, tr("提示"),
+                             tr("方案全局配置未能完整装入（通信设备可能建立失败），已取消打开方案，当前方案保持不变。"));
+        return false;
+    }
+
     // 176 行（旧格式加注）：切换真正成功后才提示一次，不阻断、不逐项唠叨。
     if (!recoveryRestore) {
         const QString integrityNote = pm->lastIntegrityNote();

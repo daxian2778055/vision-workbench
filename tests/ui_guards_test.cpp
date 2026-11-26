@@ -1649,6 +1649,15 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              && rmSrc.contains(QStringLiteral("qRound(pa.y() / 0.5)"))
              && rmSrc.contains(QStringLiteral("recipeWriteAllowed()")),
              "配方加载须剥离模块身份、排序须严格弱序、写入须过权限闸");
+    // ㊶ 方案域 Q：全局配置延迟提交（旧执行器停稳后），改绑相机清缓存句柄
+    QVERIFY2(pmSrc.contains(QStringLiteral("bool ProjectManager::commitLoadedGlobals()"))
+             && pmSrc.count(QStringLiteral("m_lastLoadedRoot = doc.object();")) >= 2
+             && mwSrc.contains(QStringLiteral("pm->commitLoadedGlobals()")),
+             "loadProject 不得提前应用全局配置；调用方停稳旧执行器后才 commit");
+    const int ccIndex = mvsSrc.indexOf(QStringLiteral("&GlobalCameraManager::cameraChanged"));
+    QVERIFY2(ccIndex >= 0 && mvsSrc.mid(ccIndex, 400).contains(QStringLiteral("m_globalCameraName == cameraName"))
+             && !mvsSrc.mid(ccIndex, 400).contains(QStringLiteral("deviceName.isEmpty()")),
+             "相机解绑与改绑都要清节点缓存句柄，不能留下悬垂值");
 }
 
 void UiGuardsTest::f2ValidationGuards()
