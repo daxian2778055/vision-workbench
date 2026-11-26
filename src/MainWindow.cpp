@@ -6683,9 +6683,25 @@ void MainWindow::onExecutionStopped()
         view->setFlowElapsedMs(m_execStatus->lastRunMs());
 }
 
+void MainWindow::restartFlowTimeoutForCurrentRound()
+{
+    if (!m_flowTimeoutTimer)
+        return;
+    FlowScene *scene = currentFlowScene();
+    const int timeoutMs = scene ? m_flowTimeouts.value(scene, 0) : 0;
+    if (timeoutMs > 0) {
+        m_timeoutScene = scene;
+        m_flowTimeoutTimer->start(timeoutMs);   // 单发计时器：按轮重启
+    }
+}
+
 void MainWindow::onExecutionFinished()
 {
     m_execStatus->onFinished();   // 状态栏 + 触发计数 + 耗时 + 按钮态（连续/触发模式判定在控制器内）
+    // J 复核：连续/硬触发模式不会重发 executionStarted，单发超时计时器若只在
+    // onExecutionStarted 起一次，就变成"从开始执行起的绝对时间"而非单轮耗时。
+    if (m_executor && m_executor->getState() == ExecutionState::Running)
+        restartFlowTimeoutForCurrentRound();
     fireSendEventsForRound();     // 每轮结束自动上报已启用的发送事件
     refreshAllMvsPixelFormats();
     updateEditLockForCurrentScene();

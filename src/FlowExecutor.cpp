@@ -653,7 +653,11 @@ FlowMode FlowExecutor::getFlowMode() const
 void FlowExecutor::run()
 {
     emit executionStarted();
-    
+
+    // J 复核：外层循环用于收口「退出窗口内又被 startExecution 启动」的情形——
+    // startExecution 见线程还活着只 wakeAll，不会另起线程；若此时直接退出 run()，
+    // 那一轮启动请求会被无条件 Idle 吞掉（按钮回空闲但什么都没跑）。
+    for (;;) {
     while (true) {
         QMutexLocker locker(&m_mutex);
         
@@ -953,7 +957,14 @@ void FlowExecutor::run()
     }
     
     QMutexLocker locker(&m_mutex);
+    if (m_runContext->state() == ExecutionState::Running) {
+        // 刚被重新启动：回到主循环执行它，而不是退出线程并把状态覆盖回 Idle
+        locker.unlock();
+        continue;
+    }
     setRunState(ExecutionState::Idle);
+    break;
+    }
 }
 
 bool FlowExecutor::topologicalSort(const QList<NodeBase *> &nodes, QList<NodeBase *> &outSorted)

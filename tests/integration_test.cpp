@@ -3482,6 +3482,11 @@ void IntegrationTest::testExecutionStatusController()
     QCOMPARE(ctrl.stateText(), QStringLiteral("状态: 空闲"));
     ctrl.onError(QStringLiteral("boom"));
     QCOMPARE(ctrl.stateText(), QStringLiteral("状态: 错误"));
+    // J 复核：失败轮先发 error、同轮再发 finished，状态栏不得被「执行完成/空闲」覆盖
+    ctrl.onFinished();
+    QCOMPARE(ctrl.stateText(), QStringLiteral("状态: 错误"));
+    QVERIFY2(bar.currentMessage().contains(QStringLiteral("boom")),
+             qPrintable(bar.currentMessage()));
     ctrl.onStopped();
     QCOMPARE(ctrl.stateText(), QStringLiteral("状态: 已停止"));
 

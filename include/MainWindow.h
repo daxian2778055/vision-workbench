@@ -119,6 +119,8 @@ private slots:
     void onExecutionStarted();
     void onExecutionStopped();
     void onExecutionFinished();
+    /// 连续/硬触发模式每轮结束后重启「单轮超时」计时（单发定时器只在 onExecutionStarted 起一次）
+    void restartFlowTimeoutForCurrentRound();
     void onExecutionError(const QString &error);
     void onNodeExecuted(NodeBase *node, bool success);
     void onCurrentTabChanged(int index);

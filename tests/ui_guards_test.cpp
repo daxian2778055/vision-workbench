@@ -1556,6 +1556,18 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              "releaseRoundOutputsOverBudget 必须入缓存锁，JSONL 无效时间戳须回退当前 UTC");
     QVERIFY2(nbSrc.contains(QStringLiteral("op.isEmpty() || op == QLatin1String(\"==\") || op == QLatin1String(\"!=\")")),
              "空运算符的文本分支必须与数值分支同口径按 == 处理");
+    // ㉞ 流程域 J2：轮末启动不被吞、单轮超时按轮重启、错误态不被 finished 覆盖
+    const int runStart = feLocalSrc.indexOf(QStringLiteral("void FlowExecutor::run()"));
+    QVERIFY2(runStart >= 0
+             && feLocalSrc.mid(runStart, 500).contains(QStringLiteral("for (;;)"))
+             && feLocalSrc.contains(QStringLiteral("刚被重新启动：回到主循环执行它")),
+             "run() 必须在退出窗口复核新启动请求，不能无条件写 Idle 后退出线程");
+    QVERIFY2(mwSrc.contains(QStringLiteral("restartFlowTimeoutForCurrentRound"))
+             && mwSrc.count(QStringLiteral("m_flowTimeoutTimer->start(timeoutMs)")) >= 2,
+             "连续模式每轮结束必须重启单轮超时计时器");
+    const QString escSrc = readSrc("src/ExecutionStatusController.cpp");
+    QVERIFY2(escSrc.count(QStringLiteral("m_errorPending")) >= 4,
+             "同轮 error→finished 不得覆盖错误态（粘滞标记由 started/finished 清除）");
 }
 
 void UiGuardsTest::f2ValidationGuards()

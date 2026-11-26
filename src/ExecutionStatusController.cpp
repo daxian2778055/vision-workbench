@@ -76,6 +76,7 @@ void ExecutionStatusController::updateButtons(ExecutionState state)
 
 void ExecutionStatusController::onStarted()
 {
+    m_errorPending = false;   // 新的一轮开始，清掉上一轮的粘滞错误
     if (m_statusBar) m_statusBar->showMessage(tr("执行开始"));
     m_runTimer.start();
     if (m_stateLabel) m_stateLabel->setText(QStringLiteral("状态: 运行中"));
@@ -100,11 +101,15 @@ void ExecutionStatusController::onFinished()
     const FlowMode currentMode = ex ? ex->getFlowMode() : FlowMode::SoftwareTrigger;
     if (currentMode == FlowMode::Continuous) {
         if (m_statusBar) m_statusBar->showMessage(tr("连续运行中..."));
+    } else if (m_errorPending) {
+        // J 复核：本轮已先发过 executionError，finished 不得把「错误」覆盖成
+        // 「执行完成/空闲」——操作员只看到瞬时错误就被完成吞掉，无法发现失败轮。
     } else {
         if (m_statusBar) m_statusBar->showMessage(tr("执行完成"));
         if (m_stateLabel) m_stateLabel->setText(QStringLiteral("状态: 空闲"));
-        updateButtons(ExecutionState::Stopped);
     }
+    m_errorPending = false;
+    updateButtons(ExecutionState::Stopped);
 
     // 每次流程完整执行一轮：触发计数 +1 并刷新耗时
     ++m_triggerCount;
@@ -118,6 +123,7 @@ void ExecutionStatusController::onFinished()
 
 void ExecutionStatusController::onError(const QString &error)
 {
+    m_errorPending = true;
     if (m_stateLabel) m_stateLabel->setText(QStringLiteral("状态: 错误"));
     if (m_statusBar) m_statusBar->showMessage(tr("执行错误: %1").arg(error));
     // 不再弹模态框：连续模式下错误可能每轮出现，模态框嵌套事件循环会把界面

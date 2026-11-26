@@ -76,4 +76,7 @@ private:
     QElapsedTimer m_runTimer;
     qint64 m_lastRunMs = 0;
     quint64 m_triggerCount = 0;
+    /// 同一轮里 executionError 先于 executionFinished 到达；finished 不得把错误态覆盖成
+    /// 「执行完成/空闲」。该标记在下一个 onStarted 或一次 finished 后清除。
+    bool m_errorPending = false;
 };
