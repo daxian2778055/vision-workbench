@@ -4,6 +4,7 @@
 //   ② 已在方案内的文件不重复复制；
 //   ③ 同名不同源自动加后缀，不互相覆盖。
 #include "ProjectPackager.h"
+#include "ProjectPaths.h"
 #include "FlowScene.h"
 #include "ObjectCountingNode.h"
 
@@ -20,6 +21,7 @@ private slots:
     void alreadyInsideIsNotCopiedAgain();
     void sameNameFromDifferentSourceGetsSuffix();
     void sameSourceIsCopiedOnce();
+    void usesGivenSchemePathAsAnchor();
 
 private:
     static void writeFile(const QString &path, const QByteArray &body);
@@ -150,6 +152,37 @@ void ProjectPackagerTest::sameSourceIsCopiedOnce()
     QCOMPARE(r.copied.size(), 1);   // 只复制一份
     QVERIFY2(!QFile::exists(schemeDir.path() + QStringLiteral("/assets/best_2.onnx")),
              "同源被复制成了两份（best_2.onnx 不应存在）");
+}
+
+void ProjectPackagerTest::usesGivenSchemePathAsAnchor()
+{
+    // 全局执行锚点与 pack() 入参目录不同：资源必须落到入参目录，参数也必须相对它。
+    QTemporaryDir outer;
+    QVERIFY(outer.isValid());
+    const QString schemeDir = outer.path() + QStringLiteral("/a/scheme");
+    const QString otherDir = outer.path() + QStringLiteral("/b/other/deep");
+    QVERIFY(QDir().mkpath(schemeDir) && QDir().mkpath(otherDir));
+    const QString model = outer.path() + QStringLiteral("/anchor.onnx");
+    writeFile(model, QByteArray("dummy"));
+
+    const QString prevAnchor = ProjectPaths::currentSchemeFilePath();
+    ProjectPaths::setCurrentSchemeFilePath(otherDir + QStringLiteral("/other.vfp"));
+
+    FlowScene scene;
+    auto *counting = new ObjectCountingNode;
+    counting->init();
+    scene.adoptNode(counting, QPointF(10, 10));
+    // 嵌套目录使两个锚点下的同一相对串指向不同文件（红臂靶点）
+    counting->setParam(QStringLiteral("modelPath"), QDir(schemeDir).relativeFilePath(model));
+
+    const ProjectPackager::Result r =
+        ProjectPackager::pack({ &scene }, schemeDir + QStringLiteral("/scheme.vfp"));
+    QVERIFY2(r.ok, qPrintable(r.error));
+    QVERIFY(QFile::exists(schemeDir + QStringLiteral("/assets/anchor.onnx")));
+    QVERIFY2(counting->getParam(QStringLiteral("modelPath")).toString()
+                 .startsWith(QStringLiteral("assets/")), "参数须相对 pack 入参目录");
+
+    ProjectPaths::setCurrentSchemeFilePath(prevAnchor);
 }
 
 QTEST_MAIN(ProjectPackagerTest)

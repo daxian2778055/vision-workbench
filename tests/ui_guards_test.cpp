@@ -1730,6 +1730,14 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              "自动保存失败必须可见；恢复须以原方案路径为门禁锚点；启动空方案须建立基线");
     QVERIFY2(pmSrc.contains(QStringLiteral("const QString gatePath = schemeAnchorPath.isEmpty()")),
              "loadProject 须接受独立锚点，恢复时不能用临时导出目录判路径内外");
+    // ㊺ 加密打包/恢复域 T2：打包按入参锚点、补扫 filePath、不可信路径 fail-closed
+    const QString pkgSrc = readSrc("src/ProjectPackager.cpp");
+    QVERIFY2(pkgSrc.contains(QStringLiteral("ProjectPaths::resolveSchemePath(raw, schemeFilePath)"))
+             && pkgSrc.contains(QStringLiteral("schemeRealForPack.isEmpty()"))
+             && pkgSrc.contains(QStringLiteral("filePathSpecSeen")),
+             "打包须按入参方案锚点解析、真实路径不可信时跳过、补扫无规格 filePath");
+    QVERIFY2(mwSrc.contains(QStringLiteral("r.skipped")),
+             "打包界面须展示跳过项，不能把全部跳过说成没有依赖");
 }
 
 void UiGuardsTest::f2ValidationGuards()

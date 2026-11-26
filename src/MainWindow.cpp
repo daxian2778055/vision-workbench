@@ -8587,6 +8587,12 @@ void MainWindow::setupSystemMenu()
                                            "节点参数已改为相对路径，请保存方案以生效。")
                                             .arg(r.copied.size())
                                             .arg(r.copied.join(QStringLiteral("\n")));
+                    if (!r.skipped.isEmpty())
+                        msg += tr("\n\n跳过 %1 项（详见日志）：\n%2")
+                                   .arg(r.skipped.size())
+                                   .arg(r.skipped.join(QStringLiteral("\n")));
+                    for (const QString &why : r.skipped)
+                        logMessage(tr("打包跳过：%1").arg(why));
                     QMessageBox::information(this, tr("打包完成"), msg);
                 });
         m_confirmScriptAct->setChecked(policy.requireConfirmation());

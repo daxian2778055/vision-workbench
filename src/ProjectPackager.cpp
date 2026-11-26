@@ -52,6 +52,71 @@ ProjectPackager::Result ProjectPackager::pack(const QList<FlowScene *> &scenes,
     // 本轮已复制出来的目标（2026-10-29 r15 P2-13）：失败时删掉，否则残留文件会把
     // 下一轮成功的拷贝挤成 name_2.ext
     QStringList createdTargets;
+    const QString schemeRealForPack = resolveFinalPath(schemeDir);
+    // T2：单参数处理收成一份，既走 ParamSpec::FilePath，也补扫无规格节点的 filePath。
+    auto processParam = [&](NodeBase *node, const QString &paramName) {
+        const QString raw = node->getParam(paramName).toString().trimmed();
+        if (raw.isEmpty())
+            return;
+        // 按入参方案文件锚定，而不是全局执行锚点：用户选的打包目录可能不是已载入方案目录
+        const QString abs = ProjectPaths::resolveSchemePath(raw, schemeFilePath);
+        const QFileInfo fi(abs);
+        if (!fi.exists() || !fi.isFile()) {
+            r.skipped << QStringLiteral("%1（不是文件：%2）").arg(paramName, raw);
+            return;
+        }
+        const QString srcReal0 = resolveFinalPath(fi.absoluteFilePath());
+        const QString srcAbs = srcReal0.isEmpty() ? fi.absoluteFilePath() : srcReal0;
+        const auto already = copiedBySource.find(srcAbs);
+        if (already != copiedBySource.end()) {
+            pending.append(PendingRewrite{node, paramName, already.value()});
+            r.skipped << QStringLiteral("%1（同源已打包）").arg(paramName);
+            return;
+        }
+        // 真实落点不可信时 fail-closed，不能当成"目录外"去复制
+        if (srcReal0.isEmpty() || schemeRealForPack.isEmpty()) {
+            r.skipped << QStringLiteral("%1（真实路径解析失败，已跳过：%2）").arg(paramName, raw);
+            return;
+        }
+        const QString schemeAbs = QDir(schemeDir).absolutePath() + QLatin1Char('/');
+        const bool insideByPath = fi.absoluteFilePath().startsWith(schemeAbs, Qt::CaseInsensitive);
+        const bool insideByReal = srcReal0 == schemeRealForPack
+            || srcReal0.startsWith(schemeRealForPack + QLatin1Char('/'));
+        if (insideByPath && insideByReal) {
+            const QString rel = fi.absoluteFilePath().mid(schemeAbs.size());
+            pending.append(PendingRewrite{node, paramName, rel});
+            r.skipped << QStringLiteral("%1（已在方案内）").arg(paramName);
+            return;
+        }
+        QString targetName = fi.fileName();
+        QString target = assetsDir + QLatin1Char('/') + targetName;
+        int suffix = 2;
+        while (QFile::exists(target)) {
+            const QString base = fi.completeBaseName();
+            const QString ext = fi.suffix().isEmpty() ? QString()
+                                                      : QLatin1Char('.') + fi.suffix();
+            target = assetsDir + QStringLiteral("/%1_%2%3").arg(base).arg(suffix++).arg(ext);
+        }
+        if (!QFile::copy(fi.absoluteFilePath(), target)) {
+            r.error = QStringLiteral("复制失败：%1 → %2").arg(fi.absoluteFilePath(), target);
+            QStringList notRemoved;
+            for (const QString &gone : createdTargets) {
+                if (!QFile::remove(gone))
+                    notRemoved << gone;
+            }
+            if (!notRemoved.isEmpty()) {
+                r.error += QStringLiteral("；另有 %1 个已复制的文件未能删除，请手动清理：%2")
+                               .arg(notRemoved.size())
+                               .arg(notRemoved.join(QStringLiteral(", ")));
+            }
+            return;
+        }
+        createdTargets << target;
+        const QString rel = QStringLiteral("assets/") + QFileInfo(target).fileName();
+        pending.append(PendingRewrite{node, paramName, rel});
+        copiedBySource.insert(srcAbs, rel);
+        r.copied << QStringLiteral("%1 → %2").arg(paramName, rel);
+    };
 
     QList<NodeBase *> stableOrder;
     // P9：多流程方案要打包所有页的依赖，不能只收当前页（此前换机后其它流程找不到模型）
@@ -69,83 +134,19 @@ ProjectPackager::Result ProjectPackager::pack(const QList<FlowScene *> &scenes,
     for (NodeBase *node : stableOrder) {
         if (!node)
             continue;
-        // paramSpecs 在 HalconNode 上（NodeBase 是基类，不假定所有节点都有）
         auto *hn = qobject_cast<HalconNode *>(node);
         if (!hn)
             continue;
+        bool filePathSpecSeen = false;
         for (const ParamSpec &spec : hn->paramSpecs()) {
             if (spec.type != ParamType::FilePath)
                 continue;
-            const QString raw = node->getParam(spec.name).toString().trimmed();
-            if (raw.isEmpty())
-                continue;
-            // 量的是"执行时解析后"的真实路径（相对路径可能是相对方案目录）
-            const QString abs = ProjectPaths::resolveExecutionPath(raw);
-            const QFileInfo fi(abs);
-            if (!fi.exists() || !fi.isFile()) {
-                r.skipped << QStringLiteral("%1（不是文件：%2）").arg(spec.name, raw);
-                continue;
-            }
-            // 同源去重（2026-10-28 复核 P3）：两个节点引用同一个外部模型时只复制一份，
-            // 否则 assets 里会出现 model.onnx 与 model_2.onnx 两份完全相同的内容。
-            // 去重键用真实落点（2026-10-29）：字面路径不同但指向同一文件的联接/别名，
-            // 否则仍会复制两份（与「是否在方案内」的真实落点口径不一致）。
-            const QString srcReal0 = resolveFinalPath(fi.absoluteFilePath());
-            const QString srcAbs = srcReal0.isEmpty() ? fi.absoluteFilePath() : srcReal0;
-            const auto already = copiedBySource.find(srcAbs);
-            if (already != copiedBySource.end()) {
-                pending.append(PendingRewrite{node, spec.name, already.value()});
-                r.skipped << QStringLiteral("%1（同源已打包）").arg(spec.name);
-                continue;
-            }
-            // 判"是否在方案内"用真实落点（2026-10-28 复核 P3）：联接/符号链接按字面路径
-            // 看是在方案内，实际目标在外部——换机后包就断。
-            const QString schemeAbs = QDir(schemeDir).absolutePath() + QLatin1Char('/');
-            const QString srcReal = resolveFinalPath(srcAbs);
-            const QString schemeReal = resolveFinalPath(schemeDir);
-            const bool insideByPath = fi.absoluteFilePath().startsWith(schemeAbs, Qt::CaseInsensitive);
-            const bool insideByReal = !srcReal.isEmpty() && !schemeReal.isEmpty()
-                                      && (srcReal == schemeReal
-                                          || srcReal.startsWith(schemeReal + QLatin1Char('/')));
-            if (insideByPath && insideByReal) {
-                const QString rel = fi.absoluteFilePath().mid(schemeAbs.size());
-                pending.append(PendingRewrite{node, spec.name, rel});
-                r.skipped << QStringLiteral("%1（已在方案内）").arg(spec.name);
-                continue;
-            }
-            // 复制进 assets，处理同名冲突
-            QString targetName = fi.fileName();
-            QString target = assetsDir + QLatin1Char('/') + targetName;
-            int suffix = 2;
-            while (QFile::exists(target)) {
-                const QString base = fi.completeBaseName();
-                const QString ext = fi.suffix().isEmpty() ? QString()
-                                                          : QLatin1Char('.') + fi.suffix();
-                target = assetsDir + QStringLiteral("/%1_%2%3").arg(base).arg(suffix++).arg(ext);
-            }
-            if (!QFile::copy(fi.absoluteFilePath(), target)) {
-                r.error = QStringLiteral("复制失败：%1 → %2").arg(fi.absoluteFilePath(), target);
-                // 回滚本轮已复制出的文件（P2-13）：不留下孤儿。
-                // 删不掉的要写进错误里（2026-10-30 r17 余量）：残留会把下一轮成功的拷贝
-                // 挤成 name_2.ext，而现场只看到一句"复制失败"。
-                QStringList notRemoved;
-                for (const QString &gone : createdTargets) {
-                    if (!QFile::remove(gone))
-                        notRemoved << gone;
-                }
-                if (!notRemoved.isEmpty()) {
-                    r.error += QStringLiteral("；另有 %1 个已复制的文件未能删除，请手动清理：%2")
-                                   .arg(notRemoved.size())
-                                   .arg(notRemoved.join(QStringLiteral(", ")));
-                }
-                return r;
-            }
-            createdTargets << target;
-            const QString rel = QStringLiteral("assets/") + QFileInfo(target).fileName();
-            pending.append(PendingRewrite{node, spec.name, rel});
-            copiedBySource.insert(srcAbs, rel);
-            r.copied << QStringLiteral("%1 → %2").arg(spec.name, rel);
+            if (spec.name == QStringLiteral("filePath")) filePathSpecSeen = true;
+            processParam(node, spec.name);
         }
+        // MVS/Halcon 图像源本地文件模式无 ParamSpec，但 filePath 是真实依赖
+        if (!filePathSpecSeen && node->getParam(QStringLiteral("filePath")).isValid())
+            processParam(node, QStringLiteral("filePath"));
     }
     // 全部复制成功后统一改写（P2-13）：失败时不会留下半套路径
     for (const PendingRewrite &w : pending) {
