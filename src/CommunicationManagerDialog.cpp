@@ -254,16 +254,18 @@ void CommunicationManagerDialog::loadResponseConfigToUi()
     if (!m_respSchemeEnable) return;   // 响应页尚未建（构造早期防御）
     for (QWidget *w : all) w->blockSignals(true);
     m_respSchemeEnable->setChecked(scheme.value(QStringLiteral("enabled")).toBool());
-    if (!scheme.value(QStringLiteral("device")).toString().isEmpty())
-        m_respSchemeDevice->setCurrentText(scheme.value(QStringLiteral("device")).toString());
+    auto respDevice = [](QComboBox *combo, const QString &device) {
+        const int idx = combo->findData(device);
+        combo->setCurrentIndex(idx >= 0 ? idx : 0);   // 空设备落到显式"（未选择）"项
+    };
+    respDevice(m_respSchemeDevice, scheme.value(QStringLiteral("device")).toString());
     m_respSchemeDelay->setValue(scheme.value(QStringLiteral("delaySec")).toInt());
     if (!scheme.value(QStringLiteral("terminator")).toString().isEmpty())
         m_respSchemeTerm->setCurrentText(scheme.value(QStringLiteral("terminator")).toString());
     m_respSchemeContent->setText(scheme.value(QStringLiteral("content")).toString());
 
     m_respFlowEnable->setChecked(flow.value(QStringLiteral("enabled")).toBool());
-    if (!flow.value(QStringLiteral("device")).toString().isEmpty())
-        m_respFlowDevice->setCurrentText(flow.value(QStringLiteral("device")).toString());
+    respDevice(m_respFlowDevice, flow.value(QStringLiteral("device")).toString());
     if (!flow.value(QStringLiteral("terminator")).toString().isEmpty())
         m_respFlowTerm->setCurrentText(flow.value(QStringLiteral("terminator")).toString());
     if (!flow.value(QStringLiteral("separator")).toString().isEmpty())
@@ -272,8 +274,7 @@ void CommunicationManagerDialog::loadResponseConfigToUi()
     m_respFlowBusy->setText(flow.value(QStringLiteral("busyContent")).toString());
 
     m_respCameraEnable->setChecked(camera.value(QStringLiteral("enabled")).toBool());
-    if (!camera.value(QStringLiteral("device")).toString().isEmpty())
-        m_respCameraDevice->setCurrentText(camera.value(QStringLiteral("device")).toString());
+    respDevice(m_respCameraDevice, camera.value(QStringLiteral("device")).toString());
     if (!camera.value(QStringLiteral("separator")).toString().isEmpty())
         m_respCameraSep->setCurrentText(camera.value(QStringLiteral("separator")).toString());
     m_respCameraOn->setText(camera.value(QStringLiteral("connectedContent")).toString());
@@ -1865,13 +1866,16 @@ void CommunicationManagerDialog::refreshResponseDeviceCombos()
     const QStringList devices = cm->deviceNames();
     const QList<QComboBox *> combos{m_respSchemeDevice, m_respFlowDevice, m_respCameraDevice};
     for (QComboBox *combo : combos) {
-        const QString keep = combo->currentText();
+        const QString keep = combo->currentData().toString();
         QSignalBlocker blocker(combo);   // 重建不下发"用户改动"，避免把空选择写回配置
         combo->clear();
-        combo->addItems(devices);
-        const int idx = combo->findText(keep);
-        if (idx >= 0) combo->setCurrentIndex(idx);
-        else if (!devices.isEmpty()) combo->setCurrentIndex(0);
+        // 显式空项：设备被删除/配置本就未选时， combo 不能静默落到第一台设备上，
+        // 否则下一次 apply 会把无关设备写回响应配置（响应发错设备）。
+        combo->addItem(QStringLiteral("（未选择）"), QString());
+        for (const QString &d : devices)
+            combo->addItem(d, d);
+        const int idx = combo->findData(keep);
+        combo->setCurrentIndex(idx >= 0 ? idx : 0);
     }
 }
 
@@ -1883,7 +1887,7 @@ void CommunicationManagerDialog::applyResponseConfig()
     QJsonObject root = cm->responseConfig();
     QJsonObject scheme;
     scheme[QStringLiteral("enabled")] = m_respSchemeEnable->isChecked();
-    scheme[QStringLiteral("device")] = m_respSchemeDevice->currentText();
+    scheme[QStringLiteral("device")] = m_respSchemeDevice->currentData().toString();
     scheme[QStringLiteral("delaySec")] = m_respSchemeDelay->value();
     scheme[QStringLiteral("terminator")] = m_respSchemeTerm->currentText();
     scheme[QStringLiteral("content")] = m_respSchemeContent->text();
@@ -1891,7 +1895,7 @@ void CommunicationManagerDialog::applyResponseConfig()
 
     QJsonObject flow;
     flow[QStringLiteral("enabled")] = m_respFlowEnable->isChecked();
-    flow[QStringLiteral("device")] = m_respFlowDevice->currentText();
+    flow[QStringLiteral("device")] = m_respFlowDevice->currentData().toString();
     flow[QStringLiteral("terminator")] = m_respFlowTerm->currentText();
     flow[QStringLiteral("separator")] = m_respFlowSep->currentText();
     flow[QStringLiteral("idleContent")] = m_respFlowIdle->text();
@@ -1900,7 +1904,7 @@ void CommunicationManagerDialog::applyResponseConfig()
 
     QJsonObject camera;
     camera[QStringLiteral("enabled")] = m_respCameraEnable->isChecked();
-    camera[QStringLiteral("device")] = m_respCameraDevice->currentText();
+    camera[QStringLiteral("device")] = m_respCameraDevice->currentData().toString();
     camera[QStringLiteral("separator")] = m_respCameraSep->currentText();
     camera[QStringLiteral("connectedContent")] = m_respCameraOn->text();
     camera[QStringLiteral("disconnectedContent")] = m_respCameraOff->text();

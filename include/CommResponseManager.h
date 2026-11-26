@@ -21,6 +21,9 @@ public:
     void handleFlowState(const QString &flowName, bool busy);
     /// 相机状态边沿（连接 / 掉线）。
     void handleCameraState(const QString &cameraName, bool open);
+    /// 方案切换点清空忙碌集合：旧流程 BUSY 未配对 IDLE 时会一直留在集合中，
+    /// 新方案同名流程再启动的 BUSY 会被边沿去重吞掉。
+    void clearBusyFlows();
 
 signals:
     /// 一条响应已交给 CommunicationManager（ok=false 表示设备不存在/未连接，报文未发出）
@@ -36,4 +39,6 @@ private:
     /// 当前处于忙碌态的流程名。流程状态是**边沿**语义：补了 stopped/error/abandoned
     /// 终态后，一次停止可能连发多个终态信号，必须去重否则 PLC 收到多条 IDLE。
     QSet<QString> m_busyFlows;
+    /// 方案加载延迟响应：新方案到来时取消上一份未发出的报文，避免陈旧/重复响应
+    QTimer *m_schemeLoadTimer = nullptr;
 };

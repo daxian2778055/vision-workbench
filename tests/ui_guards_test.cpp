@@ -1666,8 +1666,20 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              "载入方案须去重持久化 flowName，避免触发广播双跑");
     const QString hbSrc = readSrc("src/HeartbeatManager.cpp");
     QVERIFY2(hbSrc.contains(QStringLiteral("qBound(500"))
-             && hbSrc.contains(QStringLiteral("bool anyActive"))            ,
+             && hbSrc.contains(QStringLiteral("bool anyActive")),
              "心跳 fromJson 须钳制间隔并按 active 收敛定时器");
+    // ㊸ 触发/心跳域 R2：响应状态机生命周期、延迟响应代次、空设备显式项
+    QVERIFY2(mwSrc.contains(QStringLiteral("reportIdleForRound"))
+             && mwSrc.contains(QStringLiteral("busyFlowName")),
+             "轮末不得误报 IDLE；BUSY/IDLE 必须复用同一份捕获的流程名");
+    const QString respSrc = readSrc("src/CommResponseManager.cpp");
+    QVERIFY2(respSrc.contains(QStringLiteral("clearBusyFlows"))
+             && respSrc.contains(QStringLiteral("m_schemeLoadTimer")),
+             "方案切换须清 BUSY 集合并取消上一份延迟响应");
+    const QString cmdSrc = readSrc("src/CommunicationManagerDialog.cpp");
+    QVERIFY2(cmdSrc.contains(QStringLiteral("（未选择）"))
+             && cmdSrc.count(QStringLiteral("currentData().toString()")) >= 3,
+             "响应设备下拉须有显式空项，写回用 data 而非显示文本");
 }
 
 void UiGuardsTest::f2ValidationGuards()

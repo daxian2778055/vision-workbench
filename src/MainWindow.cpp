@@ -2125,19 +2125,30 @@ void MainWindow::connectExecutorSignals(FlowExecutor *ex)
     // 旧实现只在 executionFinished 发 IDLE，手动停止 / 运行错误 / 终局撤除时 PLC 会
     // 一直停在 BUSY（2026-11-10 审核）。统一用 reportIdle 覆盖全部终态，
     // 重复终态由 CommResponseManager 的边沿去重吞掉。
-    auto reportIdle = [exGuard]() {
+    // BUSY 时捕获一次流程名，终态复用同一份——终态信号排队到 UI 线程时
+    // flowScene() 可能已被切换方案置空/改成新场景，现读会发错名或漏发 IDLE。
+    auto busyFlowName = std::make_shared<QString>();
+    auto reportIdle = [exGuard, busyFlowName]() {
         if (!exGuard) return;
-        FlowScene *s = exGuard->flowScene();
-        CommResponseManager::instance()->handleFlowState(
-            s ? s->flowName() : QString(), false);
+        CommResponseManager::instance()->handleFlowState(*busyFlowName, false);
     };
-    connect(ex, &FlowExecutor::executionStarted, this, [exGuard]() {
+    // 连续/硬触发模式的轮次结束不是"流程结束"：只在真正的终态发 IDLE，
+    // 否则第一轮后就报告空闲、PLC 与实际运行状态永久失配，停止时的 IDLE 还被边沿去重吞掉。
+    auto reportIdleForRound = [exGuard, reportIdle]() {
+        if (!exGuard) return;
+        const FlowMode mode = exGuard->getFlowMode();
+        if (mode == FlowMode::Continuous || mode == FlowMode::HardwareTrigger)
+            return;
+        reportIdle();
+    };
+    connect(ex, &FlowExecutor::executionStarted, this, [exGuard, busyFlowName]() {
         if (!exGuard) return;
         FlowScene *s = exGuard->flowScene();
-        CommResponseManager::instance()->handleFlowState(s ? s->flowName() : QString(), true);
+        *busyFlowName = s ? s->flowName() : QString();
+        CommResponseManager::instance()->handleFlowState(*busyFlowName, true);
     });
-    connect(ex, &FlowExecutor::executionFinished, this, [reportIdle]() {
-        reportIdle();
+    connect(ex, &FlowExecutor::executionFinished, this, [reportIdleForRound]() {
+        reportIdleForRound();
     });
     connect(ex, &FlowExecutor::executionStopped, this, [this, exGuard, reportIdle, refreshEditLockForExecutor]() {
         if (!exGuard) return;

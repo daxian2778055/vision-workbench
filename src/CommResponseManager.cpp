@@ -37,8 +37,14 @@ void CommResponseManager::sendResponse(const QJsonObject &section, const QByteAr
     emit responseSent(device, payload, ok);
 }
 
+void CommResponseManager::clearBusyFlows()
+{
+    m_busyFlows.clear();
+}
+
 void CommResponseManager::notifySchemeLoaded()
 {
+    clearBusyFlows();   // 方案切换：旧流程的 BUSY 边沿不再有效
     const QJsonObject cfg = CommunicationManager::instance()->responseConfig();
     const QJsonObject sec = cfg.value(QStringLiteral("schemeLoad")).toObject();
     if (!sec.value(QStringLiteral("enabled")).toBool())
@@ -50,10 +56,25 @@ void CommResponseManager::notifySchemeLoaded()
         sendResponse(sec, payload);
         return;
     }
+    // 快速连续切换方案：上一份带延迟的报文必须在下一次 notify 时取消，
+    // 否则旧方案的内容会在新方案已生效后才发到 PLC（且新方案还发一份）。
+    if (m_schemeLoadTimer) {
+        m_schemeLoadTimer->stop();
+        m_schemeLoadTimer->deleteLater();
+        m_schemeLoadTimer = nullptr;
+    }
     // 通信超时时间：方案加载后延迟发送（context=this，管理器随进程常驻）
-    QTimer::singleShot(delaySec * 1000, this, [this, sec, payload]() {
+    m_schemeLoadTimer = new QTimer(this);
+    m_schemeLoadTimer->setSingleShot(true);
+    QTimer *timer = m_schemeLoadTimer;
+    connect(timer, &QTimer::timeout, this, [this, timer, sec, payload]() {
+        if (timer != m_schemeLoadTimer)
+            return;   // 已被新方案的定时器取代
+        m_schemeLoadTimer = nullptr;
+        timer->deleteLater();
         sendResponse(sec, payload);
     });
+    m_schemeLoadTimer->start(delaySec * 1000);
 }
 
 void CommResponseManager::handleFlowState(const QString &flowName, bool busy)

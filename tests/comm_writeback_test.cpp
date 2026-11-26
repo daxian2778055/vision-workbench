@@ -216,6 +216,7 @@ private slots:
     void deviceRemovalCleansReferencesButRecreateKeepsThem();
     // 2026-11-10 审核：终态补全后需边沿去重，否则一次停止连发多个 IDLE
     void responseFlowStateIsEdgeTriggered();
+    void responseSchemeLoadCancelsStaleDelay();   // 快速切方案：延迟响应只发最新一份
     // 2026-11-10：官方 5.2 设备管理页右下的收发数据区（内嵌而非独立对话框）
     void communicationDialogEmbedsMonitorPane();
     // 2026-11-11：16 位寄存器地址空间上界，以及「隐藏空白行」是否真的生效
@@ -3881,6 +3882,33 @@ void CommWritebackTest::responseFlowStateIsEdgeTriggered()
     rt->handleFlowState(flowName, false);
     QCOMPARE(spy.count(), 4);
 
+    cm->setResponseConfig(QJsonObject());
+}
+
+// 快速连续切换方案：上一份带延迟的方案加载响应必须被取消，只发最新一份。
+void CommWritebackTest::responseSchemeLoadCancelsStaleDelay()
+{
+    auto *cm = CommunicationManager::instance();
+    auto *rt = CommResponseManager::instance();
+    QJsonObject sec;
+    sec[QStringLiteral("enabled")] = true;
+    sec[QStringLiteral("device")] = QStringLiteral("RESP_DELAY_NO_DEVICE");
+    sec[QStringLiteral("delaySec")] = 1;
+    sec[QStringLiteral("content")] = QStringLiteral("STALE");
+    QJsonObject cfg;
+    cfg[QStringLiteral("schemeLoad")] = sec;
+    cm->setResponseConfig(cfg);
+
+    QSignalSpy spy(rt, &CommResponseManager::responseSent);
+    rt->notifySchemeLoaded();                 // 排上一份 STALE
+    sec[QStringLiteral("content")] = QStringLiteral("FRESH");
+    cfg[QStringLiteral("schemeLoad")] = sec;
+    cm->setResponseConfig(cfg);
+    rt->notifySchemeLoaded();                 // 新方案应取消上一份
+
+    QTest::qWait(1300);
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(1).toByteArray(), QByteArray("FRESH"));
     cm->setResponseConfig(QJsonObject());
 }
 
