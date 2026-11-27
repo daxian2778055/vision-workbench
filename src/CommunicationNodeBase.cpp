@@ -33,6 +33,7 @@ QHash<const void *, int> s_sendWriteFailures;
 namespace {
 QHash<const void *, int> s_pendingSends;   // 按流程统计排队中的发送
 QMutex s_pendingMutex;
+QWaitCondition s_pendingDrained;   // AG2：轮末排空改条件等待，不再 2ms 忙轮询
 }   // namespace
 
 int bumpFailure(const void *flow)
@@ -69,8 +70,10 @@ void CommunicationNodeBase::dropSendPending(const void *flow)
     QMutexLocker<QMutex> lock(&s_pendingMutex);
     auto it = s_pendingSends.find(flow);
     if (it != s_pendingSends.end()) {
-        if (--it.value() <= 0)
+        if (--it.value() <= 0) {
             s_pendingSends.erase(it);
+            s_pendingDrained.wakeAll();
+        }
     }
 }
 
@@ -82,13 +85,16 @@ int CommunicationNodeBase::pendingSendCount(const void *flow)
 
 bool CommunicationNodeBase::waitSendDrain(const void *flow, int timeoutMs)
 {
-    // 轮末有界等待：把"本轮入队、稍后才写"的发送打回本轮记账
+    // AG2：轮末有界等待改为条件变量——原实现每 2ms 醒来查一次计数，
+    // 在 2000ms 上限下最多空转 1000 次；写完即唤醒，既不忙等也不超过上限。
+    QMutexLocker<QMutex> lock(&s_pendingMutex);
     QElapsedTimer t;
     t.start();
-    while (pendingSendCount(flow) > 0) {
-        if (t.elapsed() >= timeoutMs)
+    while (s_pendingSends.value(flow, 0) > 0) {
+        const qint64 remain = qint64(timeoutMs) - t.elapsed();
+        if (remain <= 0)
             return false;
-        QThread::msleep(2);
+        s_pendingDrained.wait(&s_pendingMutex, static_cast<unsigned long>(remain));
     }
     return true;
 }

@@ -1948,6 +1948,10 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
                  QStringLiteral("findings.append(\"ms_per_round_regressed\")"))
              && readSrc("tools/measure_pipeline_bench.py").contains(QStringLiteral("--selfcheck")),
              "流水线基准须输出可解析读数，并提供相对回归判据与自测");
+    // AG2：轮末排空必须条件等待，不能 2ms 忙轮询
+    QVERIFY2(readSrc("src/CommunicationNodeBase.cpp").contains(QStringLiteral("s_pendingDrained.wait"))
+             && !readSrc("src/CommunicationNodeBase.cpp").contains(QStringLiteral("QThread::msleep(2)")),
+             "发送排空须由写完事件唤醒，不得每 2ms 空转");
     // X1：标定模型一致、多相机键隔离、方案切换清空、单例加锁
     QVERIFY2(readSrc("include/CalibrationManager.h").contains(QStringLiteral("QRecursiveMutex m_mutex")),
              "标定单例被多个工作线程与 GUI 并发读写，必须加锁");

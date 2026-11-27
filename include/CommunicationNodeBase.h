@@ -5,6 +5,7 @@
 #include <QHostAddress>
 #include <QThread>
 #include <QMutex>
+#include <QWaitCondition>
 
 /// 通信节点基类，提供统一的连接状态管理和线程模型
 class CommunicationNodeBase : public HalconNode
