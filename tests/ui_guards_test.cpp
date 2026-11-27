@@ -1968,6 +1968,9 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              && readSrc("tools/ci_exit_code_check.py").contains(
                  QStringLiteral("(\"Pipeline performance baseline\", \"20\")")),
              "流水线性能基线须接入 CI 退出码并登记冻结表");
+    QVERIFY2(readSrc("docs/performance_baseline.md").contains(QStringLiteral("BENCH-RESULT"))
+             && readSrc("docs/performance_baseline.md").contains(QStringLiteral("--selfcheck")),
+             "性能基线的测量口径与重冻流程必须随源码留存");
     // X1：标定模型一致、多相机键隔离、方案切换清空、单例加锁
     QVERIFY2(readSrc("include/CalibrationManager.h").contains(QStringLiteral("QRecursiveMutex m_mutex")),
              "标定单例被多个工作线程与 GUI 并发读写，必须加锁");
