@@ -305,13 +305,16 @@ def main():
     man_dirty = (man.get(KEY_DIRTY) or "").strip()
     if man_dirty:
         out("[RM] manifest_dirty=%s" % man_dirty)
-        try:
-            dirty_n = int(re.sub(r"[^0-9-]", "", man_dirty) or "0")
-        except ValueError:
-            dirty_n = -1
-        if dirty_n != 0:
-            finding("dirty_worktree",
-                    "manifest_dirty=%s（非 0 表示该包不对应任何提交）" % man_dirty)
+        # AB1：deploy.ps1 在 git 不可用时会写入 "unknown"；旧实现用 re.sub 清洗后
+        # 空串回落 "0"，把"读不出来"当成"工作树干净"——自称硬条件的闸门 fail-open。
+        if not re.fullmatch(r"\d+", man_dirty):
+            finding("dirty_unparseable",
+                    "manifest_dirty=%s 不是非负整数，不能当作干净工作树" % man_dirty)
+        else:
+            dirty_n = int(man_dirty)
+            if dirty_n != 0:
+                finding("dirty_worktree",
+                        "manifest_dirty=%s（非 0 表示该包不对应任何提交）" % man_dirty)
 
     # ---- 5b. tag 一致性（required_tag / man_tag 已在解析 tag 提交时取好）----
     out("[RM] manifest_tag=%s" % (man_tag or "none"))

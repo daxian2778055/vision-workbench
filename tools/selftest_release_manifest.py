@@ -286,6 +286,14 @@ def main():
         make_package(repo_tagged, commit_tagged, "rc-selftest", dirty="3")
         results.append(expect("dirty_red", repo_tagged, pkg_tagged_arg, 1, "RED", ["dirty_worktree"]))
 
+        # 6b) dirty 读不出来（deploy.ps1 在 git 不可用时真会写 unknown）也须 RED
+        make_package(repo_tagged, commit_tagged, "rc-selftest", dirty="unknown")
+        results.append(expect("dirty_unknown_red", repo_tagged, pkg_tagged_arg, 1, "RED",
+                              ["dirty_unparseable"]))
+        make_package(repo_tagged, commit_tagged, "rc-selftest", dirty="abc")
+        results.append(expect("dirty_abc_red", repo_tagged, pkg_tagged_arg, 1, "RED",
+                              ["dirty_unparseable"]))
+
         # 7) manifest tag 与 HEAD 的 rc tag 不一致 → RED
         make_package(repo_tagged, commit_tagged, "rc-other")
         results.append(expect("tag_mismatch_red", repo_tagged, pkg_tagged_arg, 1, "RED", ["manifest_tag_mismatch"]))
