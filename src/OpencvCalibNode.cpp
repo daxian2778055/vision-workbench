@@ -77,6 +77,9 @@ void OpencvCalibNode::run(bool /*autoSwitch*/)
         }
         cv::Mat gray = OpencvUtil::himageToMat(input);
         if (gray.empty()) {
+            // X3：与其余失败路径同口径——判红必须留下可读原因，不能只写一个 false
+            m_params[QStringLiteral("calibNote")] =
+                QStringLiteral("标定：输入图像无法转换为 OpenCV 矩阵");
             m_params["moduleStatus"] = false;
             return;
         }
@@ -193,6 +196,22 @@ void OpencvCalibNode::run(bool /*autoSwitch*/)
 
 bool OpencvCalibNode::performCalibration(QString *detail)
 {
+    // X3：每次解算入口先清上一轮的成功读数。失败时 resultDisplayFields 仍会展示这些键，
+    // 不先清就会变成"已标定=false + 很小的旧重投影误差/旧内参"，现场误判本次标定质量。
+    m_params[QStringLiteral("reprojectionError")] = 0.0;
+    m_params[QStringLiteral("calibFx")] = 0.0;
+    m_params[QStringLiteral("calibFy")] = 0.0;
+    m_params[QStringLiteral("calibCx")] = 0.0;
+    m_params[QStringLiteral("calibCy")] = 0.0;
+    m_params[QStringLiteral("calibK1")] = 0.0;
+    m_params[QStringLiteral("calibK2")] = 0.0;
+    m_params[QStringLiteral("calibK3")] = 0.0;
+    m_params[QStringLiteral("calibP1")] = 0.0;
+    m_params[QStringLiteral("calibP2")] = 0.0;
+    m_params[QStringLiteral("framesUsed")] = 0;
+    m_params[QStringLiteral("calibImageWidth")] = 0;
+    m_params[QStringLiteral("calibImageHeight")] = 0;
+
     if (m_cornerSets.size() < 3 || m_objectPoints.size() != m_cornerSets.size()) {
         if (detail) *detail = QStringLiteral("有效帧数不足（需 ≥3）");
         return false;
@@ -232,10 +251,8 @@ bool OpencvCalibNode::performCalibration(QString *detail)
         return false;
     }
 
-    m_params[QStringLiteral("framesUsed")] = static_cast<int>(m_cornerSets.size());
-    m_params[QStringLiteral("calibImageWidth")] = m_imageSize.width;
-    m_params[QStringLiteral("calibImageHeight")] = m_imageSize.height;
-
+    // X3：这三个展示键挪到成功路径后再写——放在阈值判定之前会让失败轮重新写上帧数/尺寸，
+    // 把入口处的清理覆盖掉，失败轮仍显示上一轮读数。
     // 重投影误差超阈值 ⇒ 判红且不写入单例（避免下游拿到坏内参）
     const double maxReproj = m_params.value(QStringLiteral("maxReprojError"), 0.0).toDouble();
     if (maxReproj > 0.0 && rms > maxReproj) {
@@ -275,6 +292,9 @@ bool OpencvCalibNode::performCalibration(QString *detail)
         return false;
     }
 
+    m_params[QStringLiteral("framesUsed")] = static_cast<int>(m_cornerSets.size());
+    m_params[QStringLiteral("calibImageWidth")] = m_imageSize.width;
+    m_params[QStringLiteral("calibImageHeight")] = m_imageSize.height;
     m_params[QStringLiteral("reprojectionError")] = rms;
     m_params[QStringLiteral("calibFx")] = fx;
     m_params[QStringLiteral("calibFy")] = fy;

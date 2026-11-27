@@ -69,6 +69,7 @@ private slots:
     void handEyeInsufficientPairsJudgeRed();// ⑦
     void calibNodeRecoversKnownIntrinsics();// ①②
     void calibNodeJudgeRedWithoutBoard();   // ① 失败面
+    void calibFailureClearsStaleReadings();     // X3：失败轮不得沿用上一轮内参读数
     void undistortRecoversKnownDistortion();     // ③ 正向（手填内参）
     void undistortConsumesStoredCamParams();     // ③ 读侧：单例 9 元组
     void undistortChainFromCalibration();        // ①②→③ 端到端
@@ -77,6 +78,7 @@ private slots:
     void undistortJudgeRedOnShortTuple();        // ③ 判红：项数不足 9
     void undistortJudgeRedOnOverlongTuple();     // ③ 判红：项数多于 9（R-5 上界方向）
     void undistortJudgeRedOnNonFiniteTuple();    // ③ 判红：含非有限值
+    void undistortJudgeRedOnResolutionMismatch();// X3：内参绑定标定分辨率
     void undistortNeverFallsBackToManual();      // ③ 判红：键缺失不得回退手填（R-2 形态）
     void undistortJudgeRedOnInvalidManualFx();   // ③ 判红：手填 fx/fy 非正
     void calibrationManagerRoundTripAndApply(); // ⑥
@@ -953,6 +955,39 @@ void CalibChainTest::calibNodeSecondCycleAlsoSucceeds()
              qPrintable(QStringLiteral("两轮连续标定不成立：") + problems.join(QStringLiteral("; "))));
 }
 
+// X3：先成功标定一次，再把重投影误差阈值收紧到不可能通过 ⇒ 失败轮不得继续展示
+// 上一轮的内参/误差（"已标定=false + 很小的旧误差"会让现场误判本次标定质量）。
+void CalibChainTest::calibFailureClearsStaleReadings()
+{
+    const std::vector<cv::Mat> frames = makeCalibFrames();
+    OpencvCalibNode node;
+    node.init();
+    node.setParam(QStringLiteral("patternW"), kPatternW);
+    node.setParam(QStringLiteral("patternH"), kPatternH);
+    node.setParam(QStringLiteral("squareSize"), kSquare);
+    node.setParam(QStringLiteral("requiredFrames"), int(frames.size()));
+
+    for (const cv::Mat &frame : frames) {
+        feedImage(node, OpencvUtil::matToHimage(frame));
+        QVERIFY(node.execute());
+    }
+    QVERIFY2(node.getParam(QStringLiteral("reprojectionError")).toDouble() > 0.0,
+             "首轮应成功写出重投影误差");
+    QVERIFY(node.getParam(QStringLiteral("calibFx")).toDouble() > 0.0);
+
+    node.setParam(QStringLiteral("maxReprojError"), 1e-9);
+    bool failed = false;
+    for (const cv::Mat &frame : frames) {
+        feedImage(node, OpencvUtil::matToHimage(frame));
+        if (!node.execute())
+            failed = true;
+    }
+    QVERIFY2(failed, "收紧误差阈值后本轮必须判红");
+    QCOMPARE(node.getParam(QStringLiteral("reprojectionError")).toDouble(), 0.0);
+    QCOMPARE(node.getParam(QStringLiteral("calibFx")).toDouble(), 0.0);
+    QCOMPARE(node.getParam(QStringLiteral("calibImageWidth")).toInt(), 0);
+}
+
 void CalibChainTest::calibNodeJudgeRedWithoutBoard()
 {
     OpencvCalibNode node;
@@ -1761,6 +1796,20 @@ void CalibChainTest::undistortJudgeRedOnNonFiniteTuple()
              qPrintable(QStringLiteral("判红原因没有指出是哪一项非有限：") + note));
 
     CalibrationManager::instance()->remove(key);
+}
+
+// X3：内参的像素口径绑定标定时的分辨率。手填合法内参 + 期望宽比当前帧大 1 ⇒ 必须判红，
+// 否则 initUndistortRectifyMap 拿旧 cx/cy/fx/fy 配新尺寸，静默产出错位的校正图。
+void CalibChainTest::undistortJudgeRedOnResolutionMismatch()
+{
+    OpencvUndistortNode node;
+    node.init();
+    setManualIntrinsics(node);
+    node.setParam(QStringLiteral("calibExpectedWidth"), kImgW + 1);
+    feedImage(node, blankImage());
+    QVERIFY2(!node.execute(), "标定分辨率与当前帧不一致时不得判绿");
+    QVERIFY2(undistortNote(node).contains(QStringLiteral("不一致")),
+             qPrintable(QStringLiteral("判红原因未说明分辨率不一致：") + undistortNote(node)));
 }
 
 // ③ 判红④（R-2 形态）：标定键不存在时**不得**回退到手填参数——手填值此刻完全合法、

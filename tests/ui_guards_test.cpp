@@ -1846,6 +1846,13 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(readSrc("src/ProjectManager.cpp").contains(QStringLiteral("CalibrationManager::instance()->clear();"))
              && mwSrc.contains(QStringLiteral("CalibrationManager::instance()->clear();")),
              "载入/回滚/新建方案须无条件清标定单例，防止跨方案串台");
+    // X3：失败轮读数收口 + 内参分辨率核对
+    QVERIFY2(readSrc("src/OpencvCalibNode.cpp").contains(QStringLiteral("m_params[QStringLiteral(\"calibFx\")] = 0.0;"))
+             && readSrc("src/OpencvCalibNode.cpp").contains(QStringLiteral("标定：输入图像无法转换为 OpenCV 矩阵")),
+             "标定失败轮须清上一轮内参读数；图转换失败须写原因");
+    QVERIFY2(readSrc("src/OpencvUndistortNode.cpp").contains(QStringLiteral("calibExpectedWidth"))
+             && readSrc("src/OpencvUndistortNode.cpp").contains(QStringLiteral("内参标定分辨率")),
+             "去畸变须能核对标定分辨率，不一致判红并写原因");
 }
 
 void UiGuardsTest::f2ValidationGuards()

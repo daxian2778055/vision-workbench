@@ -5,6 +5,7 @@
 #include "OpencvUtil.h"
 #include <opencv2/imgproc.hpp>
 #include <opencv2/calib3d.hpp>
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -81,6 +82,12 @@ void OpencvUndistortNode::init()
         makeDoubleParam(QStringLiteral("k2"), 0.0, -10.0, 10.0, QStringLiteral("径向 k2")),
         makeDoubleParam(QStringLiteral("p1"), 0.0, -1.0, 1.0, QStringLiteral("切向 p1")),
         makeDoubleParam(QStringLiteral("p2"), 0.0, -1.0, 1.0, QStringLiteral("切向 p2")),
+        // X3：内参的像素口径绑定标定时的分辨率；换分辨率后仍用旧 cx/cy/fx/fy 会采样错位。
+        // 填标定节点的「标定图像宽/高」后，当前帧尺寸不一致即判红（0=不校验，兼容旧方案）。
+        makeIntParam(QStringLiteral("calibExpectedWidth"), 0, 0, 100000,
+                     QStringLiteral("标定时的图像宽度（0=不核对）"), QStringLiteral("px")),
+        makeIntParam(QStringLiteral("calibExpectedHeight"), 0, 0, 100000,
+                     QStringLiteral("标定时的图像高度（0=不核对）"), QStringLiteral("px")),
     });
     // 结果字段（不进参数面板）：判红时输出端口会被 process() 清空，原因只能留在这里
     m_params[QStringLiteral("calibNote")] = QString();
@@ -141,6 +148,15 @@ void OpencvUndistortNode::run(bool)
         const cv::Mat src = OpencvUtil::himageToMat(m_inputImage);
         if (src.empty()) {
             fail(QStringLiteral("输入图像为空矩阵"));
+            return;
+        }
+        // X3：内参只在标定分辨率下成立；换相机/改分辨率后仍按旧 K 采样会得到静默错值。
+        const int expectW = std::max(0, m_params.value(QStringLiteral("calibExpectedWidth"), 0).toInt());
+        const int expectH = std::max(0, m_params.value(QStringLiteral("calibExpectedHeight"), 0).toInt());
+        if ((expectW > 0 && src.cols != expectW)
+            || (expectH > 0 && src.rows != expectH)) {
+            fail(QStringLiteral("内参标定分辨率 %1×%2 与当前帧 %3×%4 不一致，请重新标定或修改期望尺寸")
+                     .arg(expectW).arg(expectH).arg(src.cols).arg(src.rows));
             return;
         }
 
