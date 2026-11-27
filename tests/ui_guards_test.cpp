@@ -1914,6 +1914,10 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(readSrc("tools/repo_hygiene.py").contains(QStringLiteral("FAILURES.append(\"pyyaml missing"))
              && !readSrc("tools/repo_hygiene.py").contains(QStringLiteral("NOTES.append(\"pyyaml missing")),
              "缺 pyyaml 导致 workflow 语法检查无法运行必须判红，不能降级为 NOTE");
+    // AD1：exe 不是当前 HEAD 编出来的，部署必须直接拒收，不能只告警后还写出 manifest
+    QVERIFY2(readSrc("tools/deploy.ps1").contains(QStringLiteral("请先 cmake --build 再部署；禁止出包"))
+             && !readSrc("tools/deploy.ps1").contains(QStringLiteral("exe 内嵌版本哈希未匹配 HEAD {0} —— 这份 exe")),
+             "部署必须拒绝陈旧 exe，避免产出提交号不可信的发版件");
     // X1：标定模型一致、多相机键隔离、方案切换清空、单例加锁
     QVERIFY2(readSrc("include/CalibrationManager.h").contains(QStringLiteral("QRecursiveMutex m_mutex")),
              "标定单例被多个工作线程与 GUI 并发读写，必须加锁");

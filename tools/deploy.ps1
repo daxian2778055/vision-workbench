@@ -661,9 +661,14 @@ if ($gitRev -and $gitRev -ne "unknown") {
     if ($embeddedHash) {
         Write-Host ("  exe 内嵌版本哈希 = {0}，与 HEAD 一致" -f $embeddedHash) -ForegroundColor Green
     } else {
-        Write-Warning (("exe 内嵌版本哈希未匹配 HEAD {0} —— 这份 exe 很可能不是当前 HEAD 编出来的；" +
-                        "若刚提交过未重新构建，请先 cmake --build 再部署，否则 manifest 的提交号不可信") `
-                       -f $gitRev.Substring(0, 7))
+        # AD1：发版件必须来自当前 HEAD。此前只告警，仍会写出 manifest 并报"部署完成"，
+        # 上线靠 release_manifest_check 事后才拦住——这里直接 fail-closed，不产出误导性包。
+        # 注意：$problems 的统一汇总在写 manifest 之前，这里必须单独退出。
+        Write-Host "========================================" -ForegroundColor Red
+        Write-Host ("  exe 内嵌版本哈希未匹配 HEAD " + $gitRev.Substring(0, 7) +
+                    " —— 请先 cmake --build 再部署；禁止出包") -ForegroundColor Red
+        Write-Host "========================================" -ForegroundColor Red
+        exit 1
     }
 }
 # 不要用 Get-FileHash：受限/精简 PowerShell（如 CI 宿主、PSModulePath 被裁剪的子进程）里
