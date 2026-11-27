@@ -141,8 +141,12 @@ void PerformancePanel::onNodeExecutionTime(NodeBase *node, qint64 elapsedMs)
     stats.maxTime = qMax(stats.maxTime, elapsedMs);
     stats.lastTime = elapsedMs;
 
-    updateTable();
-    updateSummary();
+    // AG3：高帧率下每节点都重建整张表会把 GUI 事件队列堆满；统计每秒刷新 10 次足够读数。
+    if (!m_uiRefreshTimer.isValid() || m_uiRefreshTimer.elapsed() >= 100) {
+        m_uiRefreshTimer.restart();
+        updateTable();
+        updateSummary();
+    }
 }
 
 void PerformancePanel::onFlowExecutionTime(qint64 totalMs)
@@ -159,6 +163,7 @@ void PerformancePanel::clearStats()
 {
     m_nodeStats.clear();
     m_flowTimes.clear();
+    m_uiRefreshTimer.invalidate();
     m_table->setRowCount(0);
     m_flowTimeLabel->setText(QStringLiteral("流程总耗时: --"));
     m_summaryLabel->setText(QStringLiteral("共 0 个算子，总执行次数: 0"));

@@ -1952,6 +1952,10 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(readSrc("src/CommunicationNodeBase.cpp").contains(QStringLiteral("s_pendingDrained.wait"))
              && !readSrc("src/CommunicationNodeBase.cpp").contains(QStringLiteral("QThread::msleep(2)")),
              "发送排空须由写完事件唤醒，不得每 2ms 空转");
+    // AG3：性能面板 UI 刷新必须节流，不能每节点信号都重建全表
+    QVERIFY2(readSrc("include/PerformancePanel.h").contains(QStringLiteral("QElapsedTimer m_uiRefreshTimer"))
+             && readSrc("src/PerformancePanel.cpp").contains(QStringLiteral("m_uiRefreshTimer.elapsed() >= 100")),
+             "高帧率下性能表须节流刷新，统计仍逐节点累计");
     // X1：标定模型一致、多相机键隔离、方案切换清空、单例加锁
     QVERIFY2(readSrc("include/CalibrationManager.h").contains(QStringLiteral("QRecursiveMutex m_mutex")),
              "标定单例被多个工作线程与 GUI 并发读写，必须加锁");

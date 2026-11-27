@@ -10,6 +10,7 @@
 #include <QVector>
 #include <QPair>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <QPointer>
 
 class NodeBase;
@@ -76,4 +77,6 @@ private:
     QMap<NodeBase*, NodeStats> m_nodeStats;
     QVector<QPair<qint64, qint64>> m_flowTimes;  /// <开始时间, 耗时>
     QPointer<FlowExecutor> m_boundExecutor;
+    /// AG3：每节点信号都会到，但 UI 全表重建只需有限频率；统计照常累计，刷新节流。
+    QElapsedTimer m_uiRefreshTimer;
 };
