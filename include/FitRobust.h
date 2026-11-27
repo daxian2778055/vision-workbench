@@ -17,6 +17,9 @@ struct FitLineParams {
     int maxIterations = 100;        ///< Huber/Tukey 的 IRLS 迭代上限（最小二乘不用）
     int rejectPoints = 0;           ///< 最多剔除的离群点数（0 = 不剔除）
     double rejectDistance = 0.0;    ///< 剔除距离阈值 px（<=0 = 不剔除）
+    /// X2：剔除后仍须保留的最小点数（默认 2 保持纯函数面旧行为；节点传 minPoints）。
+    /// 否则可把 20 点剔到只剩 2 点，报出「零残差完美拟合」的假成功。
+    int minPoints = 2;
     bool angleConstrained = false;  ///< 是否启用直线角度约束
     double expectedAngleDeg = 0.0;  ///< 期望角度（度）
     double angleToleranceDeg = 10.0;///< 角度容忍范围（度）

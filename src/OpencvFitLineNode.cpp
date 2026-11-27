@@ -335,6 +335,8 @@ void OpencvFitLineNode::run(bool /*autoSwitch*/)
         // 稳健拟合（VM「图形生成 → 直线」参数面）：权重函数 / 迭代次数 / 剔除点 / 角度约束。
         // 默认（最小二乘、不剔除、不约束）与旧的 cv::fitLine(DIST_L2) 同口径。
         FitLineParams fitParams;
+        // X2：剔除下限必须用调用方的 minPoints，否则 20 点可被剔到 2 点还判绿
+        fitParams.minPoints = minPoints;
         const int weightIndex = m_params.value(QStringLiteral("weightFunc"), 0).toInt();
         fitParams.weight = (weightIndex == 1) ? FitWeight::Huber
                            : (weightIndex == 2) ? FitWeight::Tukey

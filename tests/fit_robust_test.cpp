@@ -16,6 +16,7 @@ private slots:
     void testAngleDifference();
     void testLeastSquaresMatchesLine();
     void testOutlierRejection();
+    void testRejectionCannotBypassMinPoints();   // X2
     void testRejectionDisabledByDefault();
     void testRobustWeightsResistOutliers();
     void testAngleConstraint();
@@ -121,6 +122,32 @@ void FitRobustTest::testOutlierRejection()
     QVERIFY2(partial.valid, qPrintable(partial.failureReason));
     QCOMPARE(partial.rejectedPoints, 1);
     QVERIFY(std::fabs(partial.angleDeg) > std::fabs(r.angleDeg));
+}
+
+void FitRobustTest::testRejectionCannotBypassMinPoints()
+{
+    // X2：40 个共线点 + 10 个远端离群点，minPoints=45。旧代码剔除下限写死 2，
+    // 会把 10 个离群点全剔掉只剩 40 点，却报"零残差完美拟合"。
+    // 内点需显著多于离群点，稳健初值的右半中位数才仍落在内点上（见 robustInitialLine）。
+    QVector<QPointF> pts = linePoints(40, 0, 50, 1, 0);
+    for (int i = 0; i < 10; ++i)
+        pts << QPointF(200.0 + i * 8.0, 400.0 - i * 3.0);
+
+    FitLineParams params;
+    params.minPoints = 45;
+    params.rejectPoints = 100;
+    params.rejectDistance = 10.0;
+    const FitLineResult r = FitRobust::fitLine(pts, params);
+    QVERIFY2(r.valid, qPrintable(r.failureReason));
+    QVERIFY2(r.usedPoints >= 45,
+             qPrintable(QStringLiteral("剔除后参与拟合点数 %1 低于 minPoints 45").arg(r.usedPoints)));
+    // 受 minPoints 约束只剔 5 个，余下 5 个离群点仍参与拟合（角度会被拉偏是预期代价，
+    // 不能用「零残差完美直线」换掉最小点数契约）
+    QCOMPARE(r.rejectedPoints, 5);
+    int usedMaskCount = 0;
+    for (bool used : r.usedMask)
+        usedMaskCount += used ? 1 : 0;
+    QCOMPARE(usedMaskCount, 45);
 }
 
 void FitRobustTest::testRejectionDisabledByDefault()

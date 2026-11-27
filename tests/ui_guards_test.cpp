@@ -1342,6 +1342,24 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              && !fcSrc.contains(QStringLiteral("candidate.residual < best.residual"))
              && fcSrc.contains(QStringLiteral("fitResidual\")] = choice.residual")),
              "局部最优必须用保留点 RMS 选组，输出残差仍用含剔除点的全集 RMS");
+    // X2：拟合/卡尺/边缘的失败口径守卫
+    const auto x2src = [](const char *rel) {
+        QFile f(QStringLiteral(SRC_DIR "/") + QString::fromLatin1(rel));
+        if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
+            return QString();
+        return QString::fromUtf8(f.readAll());
+    };
+    QVERIFY2(x2src("include/FitRobust.h").contains(QStringLiteral("int minPoints = 2;"))
+             && x2src("src/FitRobust.cpp").contains(QStringLiteral("usable.size()) - minKept"))
+             && x2src("src/OpencvFitLineNode.cpp").contains(QStringLiteral("fitParams.minPoints = minPoints;")),
+             "直线剔除下限必须走 minPoints，不能把点集剔到只剩 2 点还判绿");
+    QVERIFY2(x2src("src/OpencvCaliperNode.cpp").contains(QStringLiteral("nSig < 4"))
+             && x2src("src/OpencvCaliperNode.cpp").contains(QStringLiteral("qBound(3, static_cast<int>(L / step), 2048)"))
+             && x2src("src/OpencvCaliperNode.cpp").contains(QStringLiteral("卡尺：输入图像无法转换为 OpenCV 矩阵"))
+             && x2src("src/OpencvEdgeNode.cpp").contains(QStringLiteral("边缘检测：输入图像无法转换为 OpenCV 矩阵")),
+             "卡尺信号太短/转换失败与边缘图转换失败必须判红并写原因，不能静默 0 结果");
+    QVERIFY2(x2src("src/OpencvFitCircleNode.cpp").contains(QStringLiteral("移除该点后最小外接圆半径缩小量超过该值视为离群点")),
+             "圆拟合剔除距离的帮助文本须与实际『半径缩小量』判据同口径");
     // ⑭ 通信内联参数：IP 键必须按设备类型分发（serverIp 只有 TCP 消费）
     QFile cd(QStringLiteral(SRC_DIR "/src/CommunicationManagerDialog.cpp"));
     QVERIFY2(cd.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 CommunicationManagerDialog.cpp");

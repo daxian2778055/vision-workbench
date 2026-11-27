@@ -175,6 +175,7 @@ private slots:
     void testNonFiniteSubscribedPointsDoNotPoisonCircleFit();
     void testCircleRejectionKeepsInnerPointsAndHonestResidual();
     void testCircleRejectionCannotBypassMinPoints();
+    void testLineRejectionCannotBypassMinPoints();   // X2
     void testInputModeConflictsAreReported();
 };
 
@@ -761,6 +762,28 @@ void FitPointSourcingTest::testCircleRejectionCannotBypassMinPoints()
     QVERIFY(node.execute());
     QVERIFY2(node.getParam(QStringLiteral("fitPointCount")).toInt() >= 10,
              "剔除后参与拟合的点数不能低于 minPoints（旧代码能剔到剩 3 点）");
+}
+
+// X2：旧代码剔除下限写死 usable.size()-2，绕过节点 minPoints，
+// 能把 20 点剔到只剩 2 点并报出「零残差完美直线」（圆的同类问题已修，直线未同步）。
+void FitPointSourcingTest::testLineRejectionCannotBypassMinPoints()
+{
+    QVector<QPointF> pts = linePoints(20.0, 100.0, 0.0, 2.0, 40);
+    for (int i = 0; i < 10; ++i)
+        pts.append(QPointF(400.0 + i * 8.0, 500.0 - i * 3.0));
+
+    OpencvFitLineNode node;
+    node.init();
+    node.setParam(QStringLiteral("minPoints"), 45);
+    node.setParam(QStringLiteral("rejectPoints"), 100);
+    node.setParam(QStringLiteral("rejectDistance"), 1.0);
+    node.setInputData(OpencvFitLineNode::kPointSlot, makeXldData(pts));
+    node.setInputBinding(OpencvFitLineNode::kPointSlot, 42, 0);
+
+    QVERIFY(node.execute());
+    QVERIFY2(node.getParam(QStringLiteral("fitPointCount")).toInt() >= 45,
+             "剔除后参与拟合的点数不能低于 minPoints（旧代码能剔到剩 2 点）");
+    QCOMPARE(node.getParam(QStringLiteral("fitStatus")).toInt(), 1);
 }
 
 QTEST_MAIN(FitPointSourcingTest)

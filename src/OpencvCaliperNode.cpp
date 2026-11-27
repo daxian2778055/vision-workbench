@@ -85,8 +85,9 @@ void OpencvCaliperNode::init()
         grouped(makeDoubleParam(QStringLiteral("col2"), 100.0, 0.0, 100000.0,
                                 QStringLiteral("终点列")),
                 QStringLiteral("卡尺")),
-        grouped(makeIntParam(QStringLiteral("halfWidth"), 10, 1, 200,
-                             QStringLiteral("法线方向测量半宽"), QStringLiteral("px")),
+        grouped(makeIntParam(QStringLiteral("halfWidth"), 10, 2, 200,
+                             QStringLiteral("法线方向测量半宽（≥2，至少需要 4 点才能找梯度极值）"),
+                             QStringLiteral("px")),
                 QStringLiteral("卡尺")),
         grouped(makeDoubleParam(QStringLiteral("step"), 5.0, 1.0, 100.0,
                                 QStringLiteral("沿直线采样步长"), QStringLiteral("px")),
@@ -427,6 +428,8 @@ void OpencvCaliperNode::run(bool /*autoSwitch*/)
         }
         cv::Mat gray = OpencvUtil::himageToMat(input);
         if (gray.empty()) {
+            m_params[QStringLiteral("lastError")] =
+                QStringLiteral("卡尺：输入图像无法转换为 OpenCV 矩阵");
             m_params["moduleStatus"] = false;
             return;
         }
@@ -451,7 +454,7 @@ void OpencvCaliperNode::run(bool /*autoSwitch*/)
         // 参数边界必须夹到注册范围：直接 toInt/toDouble 时，手工编辑过的方案或
         // 参数引用解析出的越界值会让 std::vector 用负 size 构造、L/step 除零。
         // 回退值也要与 registerParams 的默认值一致（threshold 15 / edgeMode 1）。
-        const int half = qBound(1, m_params.value(QStringLiteral("halfWidth"), 10).toInt(), 200);
+        const int half = qBound(2, m_params.value(QStringLiteral("halfWidth"), 10).toInt(), 200);
         const double step = qBound(1.0, m_params.value(QStringLiteral("step"), 5.0).toDouble(), 100.0);
         const double thr = qBound(0.0, m_params.value(QStringLiteral("threshold"), 15.0).toDouble(), 255.0);
         // VM「模糊边缘」：官方说明是「增强候选边缘点集的提取能力，获取更多候选点集数」，
@@ -558,7 +561,8 @@ void OpencvCaliperNode::run(bool /*autoSwitch*/)
 
         // 剖面总数封顶：端点已夹到图像内，但 step=1 + 大图仍可能产生上万剖面，
     // 每剖面最多 401×101 次双线性采样 → 防御性封顶，正常参数远达不到。
-    const int K = qBound(1, static_cast<int>(L / step), 2048);
+    // X2：纵向投影的一维信号长度 = K+1，K<3 时 nSig<4，梯度循环一次都不跑 ⇒ 静默 0 边缘判绿。
+    const int K = qBound(3, static_cast<int>(L / step), 2048);
         const int M = half * 2 + 1; // 法线方向采样点数
         const int projHalf = std::max(0, (profileWidth - 1) / 2);   // 总采样数 = 2*projHalf+1 ≤ profileWidth
 
@@ -569,6 +573,14 @@ void OpencvCaliperNode::run(bool /*autoSwitch*/)
         // 纵向投影：          一维信号沿卡尺线 u，M 个剖面沿法线 n 排列。
         // 两种方向覆盖同一个矩形 ROI（卡尺线 × ±half），只是交换「信号轴」与「剖面轴」。
         const int nSig = longitudinal ? (K + 1) : M;
+        if (nSig < 4) {
+            m_params[QStringLiteral("lastError")] =
+                QStringLiteral("卡尺：一维信号点数不足（%1 < 4），无法定位梯度极值；"
+                               "请增大 halfWidth 或减小 step").arg(nSig);
+            m_params["moduleStatus"] = false;
+            m_outputImage = m_inputImage;
+            return;
+        }
         const int nProf = longitudinal ? M : (K + 1);
         const double sigHalf = longitudinal ? (K * 0.5) : half;
         const double sigSpacing = longitudinal ? (L / std::max(1, K)) : 1.0;

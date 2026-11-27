@@ -311,10 +311,12 @@ void OpencvFitCircleNode::init()
     setParamTooltip(QStringLiteral("initType"),
                     QStringLiteral("全局法把全部候选点合并成一个圆；局部最优逐轮廓拟合，"
                                    "取径向残差最小的圆（多轮廓时不再按点数多少先到先得）"));
+    // X2：实际判据是"移除该点后最小外接圆半径的缩小量"，不是点到初拟合圆圆周的径向距离；
+    // 对外说明必须与实现同口径，否则按帮助文本设阈值会得到完全不同的剔除结果。
     setParamTooltip(QStringLiteral("rejectPoints"),
-                    QStringLiteral("按初拟合圆的径向距离剔除最多该数量的离群轮廓点（0=不剔除）"));
+                    QStringLiteral("剔除最多该数量的离群轮廓点：按移除该点后外接圆半径的缩小量排序（0=不剔除）"));
     setParamTooltip(QStringLiteral("rejectDistance"),
-                    QStringLiteral("轮廓点到初拟合圆圆周的径向距离超过该值视为离群点（px）"));
+                    QStringLiteral("移除该点后最小外接圆半径缩小量超过该值视为离群点（px）"));
     m_params[QStringLiteral("fitRow")] = 0.0;
     m_params[QStringLiteral("fitCol")] = 0.0;
     m_params[QStringLiteral("fitRadius")] = 0.0;

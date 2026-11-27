@@ -239,8 +239,10 @@ FitLineResult FitRobust::fitLine(const QVector<QPointF> &points, const FitLinePa
             usableIndex.append(i);
         }
     }
-    if (usable.size() < 2) {
-        result.failureReason = QStringLiteral("有效点不足（%1 < 2），无法拟合直线").arg(usable.size());
+    const int minKept = std::max(2, params.minPoints);
+    if (usable.size() < minKept) {
+        result.failureReason = QStringLiteral("有效点不足（%1 < %2），无法拟合直线")
+                                   .arg(usable.size()).arg(minKept);
         return result;
     }
 
@@ -268,20 +270,20 @@ FitLineResult FitRobust::fitLine(const QVector<QPointF> &points, const FitLinePa
 
     // ② 离群点剔除：只做一轮，按残差从大到小最多剔除 rejectPoints 个超阈值点
     int rejected = 0;
-    if (params.rejectPoints > 0 && params.rejectDistance > 0.0 && usable.size() > 2) {
+    if (params.rejectPoints > 0 && params.rejectDistance > 0.0 && usable.size() > minKept) {
         QVector<int> candidates;
         for (int i = 0; i < usable.size(); ++i) {
             if (distanceToLine(usable.at(i), x0, y0, vx, vy) > params.rejectDistance)
                 candidates.append(i);
         }
         if (!candidates.isEmpty()) {
-            // 残差大的优先剔除；剔除后必须仍剩 >=2 点
+            // 残差大的优先剔除；剔除后必须仍剩 >= minPoints 点（X2）
             std::sort(candidates.begin(), candidates.end(), [&](int a, int b) {
                 return distanceToLine(usable.at(a), x0, y0, vx, vy)
                        > distanceToLine(usable.at(b), x0, y0, vx, vy);
             });
             const int candidatesCount = int(candidates.size());
-            const int removableCount = int(usable.size()) - 2;
+            const int removableCount = int(usable.size()) - minKept;
             const int maxRemove = std::min(params.rejectPoints,
                                            std::min(candidatesCount, removableCount));
             QVector<bool> removed(usable.size(), false);
