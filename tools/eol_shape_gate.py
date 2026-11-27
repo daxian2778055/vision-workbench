@@ -74,7 +74,9 @@ import sys
 # 由编辑工具以 LF 落盘；tracked 同步到 759，差额一一对应，既有文件行尾未变。
 # Re-frozen at 2026-11-27 224 -> 225：AG1 新增 tools/measure_pipeline_bench.py，
 # 由编辑工具以 LF 落盘；tracked 同步到 760，差额一一对应，既有文件行尾未变。
-EXPECTED_TOOL_WRITTEN = 225
+# Re-frozen at 2026-11-27 225 -> 227：AG4a 新增 include/LatestFrameQueue.h 与
+# tests/latest_frame_queue_test.cpp（纯数据面与其单测），tracked 同步到 763。
+EXPECTED_TOOL_WRITTEN = 227
 TAG = "EOL"
 
 
