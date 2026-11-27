@@ -207,6 +207,11 @@ void ObjectCountingNode::run(bool /*autoSwitch*/)
 {
     m_params[QStringLiteral("lastError")] = QString();
     setParamDirect(QStringLiteral("moduleStatus"), false);
+    // AA2：失败帧的「本帧新增/在跟」必须归零，不能沿用上一帧；累计计数是跨帧语义，
+    // 保留 m_totalCount 原值并通过 countNote 说明「本帧未完成」，避免把它误清成 0。
+    m_params[QStringLiteral("addedThisFrame")] = 0;
+    m_params[QStringLiteral("activeTracks")] = 0;
+    m_params[QStringLiteral("countNote")] = QStringLiteral("本帧未完成计数，累计沿用上次");
 
     if (m_params.value(QStringLiteral("resetCounter")).toBool()) {
         resetCounting();

@@ -45,6 +45,10 @@ void OpencvTrainClassifierNode::run(bool /*autoSwitch*/)
 {
     m_params[QStringLiteral("trainStatus")] = QString();
     m_params[QStringLiteral("lastError")] = QString();
+    // AA2：失败轮不得沿用上一轮的样本/类别/维度读数（与空 trainStatus 并列会自相矛盾）
+    m_params[QStringLiteral("sampleCount")] = 0;
+    m_params[QStringLiteral("classCount")] = 0;
+    m_params[QStringLiteral("featDim")] = 0;
     try {
         const QString trainDir = ProjectPaths::resolveExecutionPath(
             m_params.value(QStringLiteral("trainDir"), QString()).toString()).trimmed();

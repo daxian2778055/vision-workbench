@@ -136,6 +136,7 @@ private slots:
     void testImageArithAndHatOpenCv();
     void testCropBasic();
     void testImageFailureReasonsAndClampedRoiEcho();   // Y2
+    void testDnnFailureFieldsDoNotStale();             // AA2
     void testImageArithDivByZero();
     void testImageArithSecondImageSlot();      // Y1
     void testImageArithFailureReasons();       // Y1
@@ -1412,6 +1413,45 @@ void NodeCoreTest::testImageFailureReasonsAndClampedRoiEcho()
     QVERIFY2(!conv.execute(), "颜色转换无输入不得判绿");
     QVERIFY2(conv.getParam(QStringLiteral("lastError")).toString().contains(QStringLiteral("输入图像")),
              qPrintable(conv.getParam(QStringLiteral("lastError")).toString()));
+}
+
+void NodeCoreTest::testDnnFailureFieldsDoNotStale()
+{
+    // AA2-a：训练失败必须清掉上一轮的样本统计
+    OpencvTrainClassifierNode train;
+    train.init();
+    train.setParam(QStringLiteral("sampleCount"), 99);
+    train.setParam(QStringLiteral("classCount"), 7);
+    train.setParam(QStringLiteral("featDim"), 128);
+    train.setParam(QStringLiteral("trainDir"), QString());
+    train.setParam(QStringLiteral("saveModelPath"), QString());
+    train.run(false);
+    QVERIFY2(!train.getParam(QStringLiteral("moduleStatus")).toBool(), "训练缺路径必须判红");
+    QCOMPARE(train.getParam(QStringLiteral("sampleCount")).toInt(), 0);
+    QCOMPARE(train.getParam(QStringLiteral("classCount")).toInt(), 0);
+    QCOMPARE(train.getParam(QStringLiteral("featDim")).toInt(), 0);
+
+    // AA2-b：推理失败必须清掉类别名与 TopK（编号/置信度已在入口复位）
+    DnnInferNode infer;
+    infer.init();
+    infer.setParam(QStringLiteral("topClassName"), QStringLiteral("旧类别"));
+    infer.setParam(QStringLiteral("topKClasses"), QStringLiteral("旧类别|另一个"));
+    infer.run(false);
+    QVERIFY(infer.getParam(QStringLiteral("topClassName")).toString().isEmpty());
+    QVERIFY(infer.getParam(QStringLiteral("topKClasses")).toString().isEmpty());
+
+    // AA2-c：计数失败帧清「本帧新增/在跟」，累计计数保留跨帧语义
+    ObjectCountingNode counter;
+    counter.init();
+    counter.setParam(QStringLiteral("addedThisFrame"), 5);
+    counter.setParam(QStringLiteral("activeTracks"), 3);
+    counter.setParam(QStringLiteral("countNote"), QStringLiteral("上一帧正常"));
+    counter.run(false);
+    QVERIFY2(!counter.getParam(QStringLiteral("moduleStatus")).toBool(), "计数节点无输入必须判红");
+    QCOMPARE(counter.getParam(QStringLiteral("addedThisFrame")).toInt(), 0);
+    QCOMPARE(counter.getParam(QStringLiteral("activeTracks")).toInt(), 0);
+    QVERIFY2(counter.getParam(QStringLiteral("countNote")).toString().contains(QStringLiteral("本帧未完成")),
+             qPrintable(counter.getParam(QStringLiteral("countNote")).toString()));
 }
 
 void NodeCoreTest::testImageArithDivByZero()

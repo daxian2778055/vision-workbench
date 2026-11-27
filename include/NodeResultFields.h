@@ -20,7 +20,7 @@ inline QString unknownExceptionReason()
 }
 
 /// 规则：键 == "lastError" 或以 "Note" 结尾。
-/// 依据（2026-11-27 重测的写侧站点表，共 310 处）：lastError 229 / *Note 47 / trainStatus 34。
+/// 依据（2026-11-27 重测的写侧站点表，共 311 处）：lastError 229 / *Note 48 / trainStatus 34。
 /// X2 新增 3 处 lastError：卡尺图转换失败、卡尺信号点不足、边缘图转换失败。
 /// X3 新增 1 处 calibNote：标定输入图转 Mat 失败。
 /// 较上次 207 增 3：ChannelSplit/ChannelMerge 的失败路径补写 lastError（复核 P3），

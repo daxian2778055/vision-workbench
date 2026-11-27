@@ -1883,6 +1883,13 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(readSrc("src/TrainingWizardDialog.cpp").count(QStringLiteral("m_lastTrainOk")) >= 4
              && readSrc("src/TrainingWizardDialog.cpp").contains(QStringLiteral("本轮尚未训练成功")),
              "训练失败后不得发布/评估上一次的模型（发布与评估两处都要守）");
+    // AA2：失败帧/失败轮的结果字段不得残留上一轮读数
+    QVERIFY2(readSrc("src/OpencvTrainClassifierNode.cpp").contains(QStringLiteral("m_params[QStringLiteral(\"sampleCount\")] = 0;"))
+             && readSrc("src/DnnInferNode.cpp").contains(QStringLiteral("m_params[QStringLiteral(\"topClassName\")] = QString();")),
+             "训练与推理失败轮必须清空上一轮的结果读数");
+    QVERIFY2(readSrc("src/ObjectCountingNode.cpp").contains(QStringLiteral("m_params[QStringLiteral(\"addedThisFrame\")] = 0;"))
+             && readSrc("src/ObjectCountingNode.cpp").contains(QStringLiteral("本帧未完成计数")),
+             "计数失败帧必须清本帧新增/在跟，累计计数保留跨帧语义");
     // X1：标定模型一致、多相机键隔离、方案切换清空、单例加锁
     QVERIFY2(readSrc("include/CalibrationManager.h").contains(QStringLiteral("QRecursiveMutex m_mutex")),
              "标定单例被多个工作线程与 GUI 并发读写，必须加锁");

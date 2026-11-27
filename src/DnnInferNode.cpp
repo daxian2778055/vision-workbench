@@ -63,6 +63,8 @@ void DnnInferNode::run(bool /*autoSwitch*/)
 {
     m_params[QStringLiteral("topClass")] = -1;
     m_params[QStringLiteral("topConfidence")] = 0.0;
+    m_params[QStringLiteral("topClassName")] = QString();
+    m_params[QStringLiteral("topKClasses")] = QString();
     m_params[QStringLiteral("lastError")] = QString();
     try {
         HImage input(m_inputImage);
