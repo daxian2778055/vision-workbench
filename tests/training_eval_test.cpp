@@ -22,6 +22,8 @@ private slots:
     void holdoutExcludesValidationFromTraining();
     void augmentationNoiseIsZeroMean();
     void evalUsesTrainedRatioNotSlider();
+    void evalSplitMatchesTrainingHoldout();      // AA1
+    void noHoldoutIsReportedAsInSample();        // AA1
     void metaClassNameWithSpaceRoundTrips();
     void missingMetaWarns();
     void changedDatasetWarns();
@@ -225,6 +227,57 @@ void TrainingEvalTest::evalUsesTrainedRatioNotSlider()
     QVERIFY2(qAbs(ev.usedValidationRatio - 0.3) < 1e-6,
              qPrintable(QStringLiteral("评估用了外部比例 %1，应改用训练的 0.3")
                             .arg(ev.usedValidationRatio)));
+}
+
+// AA1：评估侧曾用 rng(seed+ci) 划分，训练侧用 rng(seed+ci*7919)，ci>=1 时抽中的样本不同。
+// 把"训练真正留出"的那几张改成另一类的图案：正确划分应 Eval 出错，旧划分仍会拿到干净样本而判 100%。
+void TrainingEvalTest::evalSplitMatchesTrainingHoldout()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    buildDataset(dir.path(), 30);
+    const std::string model = QDir(dir.path()).filePath(QStringLiteral("m.yaml")).toStdString();
+    QVERIFY(ClsTrainer::trainFromDir(dir.path().toStdString(), model, 0, 32, 300,
+                                     ClsTrainer::AugmentOptions(), 0.3, 42).ok);
+
+    const auto correct = ClsTrainer::validationSplit(30, 0.3, 42, 1);
+    // 旧公式；只为构造能区分两种实现的夹具，不作为产品代码
+    std::vector<size_t> order(30);
+    for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::mt19937 oldRng(42u + 1u);
+    std::shuffle(order.begin(), order.end(), oldRng);
+    const std::vector<size_t> wrong(order.begin(),
+                                    order.begin() + std::max<size_t>(1, size_t(30 * 0.3)));
+    QVERIFY2(correct != wrong, "夹具失效：两种划分抽中同一批样本，无法区分实现");
+
+    const QString cls1 = QDir(dir.path()).filePath(QStringLiteral("c1"));
+    for (size_t idx : correct) {
+        const QString f = QDir(cls1).filePath(QStringLiteral("%1.png")
+                                                  .arg(int(idx), 3, 10, QLatin1Char('0')));
+        cv::imwrite(f.toStdString(), makeSample(0, int(idx)));
+    }
+
+    const auto ev = ClsTrainer::evaluateFromDir(model, dir.path().toStdString(), 0, 0.3, 42);
+    QVERIFY2(ev.ok, qPrintable(QString::fromStdString(ev.error)));
+    QVERIFY2(ev.confusion[1][0] >= 7,
+             qPrintable(QStringLiteral("评估没有命中训练留出的那批样本（c1 错分为 c0 仅 %1）：%2/%3")
+                            .arg(ev.confusion[1][0]).arg(ev.correct).arg(ev.total)));
+}
+
+void TrainingEvalTest::noHoldoutIsReportedAsInSample()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    buildDataset(dir.path(), 10);
+    const std::string model = QDir(dir.path()).filePath(QStringLiteral("m.yaml")).toStdString();
+    // 训练节点默认 validationRatio=0（不留出）
+    QVERIFY(ClsTrainer::trainFromDir(dir.path().toStdString(), model, 0, 16, 150,
+                                     ClsTrainer::AugmentOptions(), 0.0, 42).ok);
+    const auto ev = ClsTrainer::evaluateFromDir(model, dir.path().toStdString(), 0, 0.3, 42);
+    QVERIFY2(ev.ok, qPrintable(QString::fromStdString(ev.error)));
+    QVERIFY2(ev.inSample, "ratio=0 的训练没有留出集，评估必须标记为样本内");
+    QVERIFY2(ev.warning.find("样本内") != std::string::npos,
+             qPrintable(QString::fromStdString(ev.warning)));
 }
 
 void TrainingEvalTest::metaClassNameWithSpaceRoundTrips()

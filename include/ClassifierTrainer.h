@@ -460,6 +460,7 @@ struct EvalResult {
     std::vector<std::vector<int>> confusion;             // confusion[真][预]
     std::string error;
     double usedValidationRatio = 0.0;   // 实际用的比例（模型 meta 优先）
+    bool inSample = false;              // AA1：训练时未留验证集（ratio=0）⇒ 样本内评估，不得当留出指标
     std::string warning;                // 非致命提示（meta 缺失/数据集已变等）
 };
 
@@ -486,6 +487,14 @@ inline EvalResult evaluateFromDir(const std::string &modelPath, const std::strin
             // 旧模型没有 .meta：比例只能用滑块值，可能已与训练时不一致——摘要必须说清
             ev.warning = "该模型没有 .meta（旧版本训练）：验证比例取自界面设置，可能与训练时不一致";
         }
+    }
+    // AA1：训练节点默认 validationRatio=0（不留出），此前评估侧把它钳到 0.05，
+    // 从 100% 参与过训练的样本里抽 5% 冒充"未参与训练"的留出集。明确标记样本内评估。
+    const bool noHoldout = (validationRatio <= 0.001);
+    ev.inSample = noHoldout;
+    if (noHoldout) {
+        if (!ev.warning.empty()) ev.warning += "；";
+        ev.warning += "该模型训练时未设置留出验证集，本次为样本内评估，不能作为留出准确率";
     }
     Model m = loadModel(modelPath);
     if (!m.loaded) {
@@ -529,7 +538,6 @@ inline EvalResult evaluateFromDir(const std::string &modelPath, const std::strin
     ev.confusion.assign(C, std::vector<int>(C, 0));
 
     const std::vector<std::string> exts = {".png", ".jpg", ".jpeg", ".bmp"};
-    const double ratio = (validationRatio < 0.05) ? 0.05 : (validationRatio > 0.95 ? 0.95 : validationRatio);
 
     int candidateFiles = 0;   // 与训练侧同口径：逐类候选文件数之和（2026-10-28 P2）
     for (size_t ci = 0; ci < C; ++ci) {
@@ -546,15 +554,17 @@ inline EvalResult evaluateFromDir(const std::string &modelPath, const std::strin
         std::sort(files.begin(), files.end());
         candidateFiles += int(files.size());
 
-        // 确定性划分：按 seed + 文件序做一次伪随机抽取，样本数为 0 时全留验证
-        std::vector<size_t> order(files.size());
-        for (size_t i = 0; i < order.size(); ++i) order[i] = i;
-        std::mt19937 rng(seed + (unsigned)ci);
-        std::shuffle(order.begin(), order.end(), rng);
-        const size_t valCount = std::max<size_t>(1, size_t(double(files.size()) * ratio));
-        for (size_t k = 0; k < order.size(); ++k) {
-            if (k >= valCount) continue;   // 只评验证集
-            const std::string &f = files[order[k]];
+        // AA1：必须与训练侧用同一个划分函数。旧代码评估侧用 seed+ci、训练侧用 seed+ci*7919，
+        // ci>=1 时抽中的文件不同，"留出验证集"里混入了训练样本，准确率虚高。
+        std::vector<size_t> valIdx;
+        if (noHoldout) {
+            valIdx.resize(files.size());
+            for (size_t i = 0; i < files.size(); ++i) valIdx[i] = i;
+        } else {
+            valIdx = validationSplit(files.size(), validationRatio, seed, ci);
+        }
+        for (size_t idx : valIdx) {
+            const std::string &f = files[idx];
             if (shouldCancel && shouldCancel()) {
                 ev.error = "评估被用户取消";
                 return ev;

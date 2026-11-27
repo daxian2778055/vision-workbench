@@ -116,6 +116,11 @@ TrainingWizardDialog::TrainingWizardDialog(QWidget *parent) : QDialog(parent)
     btns->addWidget(m_cancelBtn);
     m_publishBtn = new QPushButton(QStringLiteral("发布并插入分类节点"));
     connect(m_publishBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_lastTrainOk) {
+            QMessageBox::warning(this, QStringLiteral("失败"),
+                                 QStringLiteral("本轮尚未训练成功，不能发布旧模型；请先训练"));
+            return;
+        }
         if (!QFile::exists(modelPath())) {
             QMessageBox::warning(this, QStringLiteral("失败"),
                                  QStringLiteral("模型不存在，请先训练：%1").arg(modelPath()));
@@ -286,6 +291,7 @@ void TrainingWizardDialog::onTrain()
     aug.rotateDeg = m_augRotate->value();
     aug.noiseSigma = m_augNoise->value();
     // 验证比例同时作用于**训练留出**（2026-10-27 P2-2）：训练不得见验证样本
+    m_lastTrainOk = false;   // AA1：本轮成功回调才置回 true，失败后禁止发布/评估旧模型
     setRunning(true);
     const int featMode = m_featureMode->currentIndex();
     const int hidden = m_hidden->value();
@@ -310,6 +316,7 @@ void TrainingWizardDialog::onTrain()
         QMetaObject::invokeMethod(self, [self, st, savePath]() {
             if (!self) return;
             if (st.ok) {
+                self->m_lastTrainOk = true;
                 self->m_log->appendPlainText(
                     QStringLiteral("训练完成：%1 个样本 / %2 类 / 特征 %3 维\n模型已保存：%4")
                         .arg(st.samples).arg(st.classes).arg(st.featDim)
@@ -338,6 +345,11 @@ void TrainingWizardDialog::onTrain()
 void TrainingWizardDialog::onEvaluate()
 {
     if (m_running) return;   // 重入守卫（2026-10-28 P1）
+    if (!m_lastTrainOk) {
+        QMessageBox::warning(this, QStringLiteral("失败"),
+                             QStringLiteral("本轮尚未训练成功，不能评估旧模型；请先训练"));
+        return;
+    }
     const QString mp = modelPath();
     if (!QFile::exists(mp)) {
         QMessageBox::warning(this, QStringLiteral("失败"),
@@ -384,9 +396,13 @@ void TrainingWizardDialog::onEvaluate()
             if (!ev.warning.empty())
                 self->m_log->appendPlainText(
                     QStringLiteral("注意：%1").arg(QString::fromStdString(ev.warning)));
+            // AA1：ratio=0 的训练没有留出集，不能把样本内准确率写成"未参与训练"
             self->m_summary->setText(
-                QStringLiteral("留出验证集 %1 张（未参与训练），正确 %2，准确率 %3%")
-                    .arg(ev.total).arg(ev.correct).arg(ev.accuracy * 100.0, 0, 'f', 1));
+                ev.inSample
+                    ? QStringLiteral("样本内评估 %1 张（本轮未留验证集），正确 %2，准确率 %3%")
+                          .arg(ev.total).arg(ev.correct).arg(ev.accuracy * 100.0, 0, 'f', 1)
+                    : QStringLiteral("留出验证集 %1 张（未参与训练），正确 %2，准确率 %3%")
+                          .arg(ev.total).arg(ev.correct).arg(ev.accuracy * 100.0, 0, 'f', 1));
             const int n = int(ev.classNames.size());
             self->m_confusion->clear();
             self->m_confusion->setRowCount(n);

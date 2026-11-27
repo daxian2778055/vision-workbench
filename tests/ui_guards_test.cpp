@@ -1873,6 +1873,16 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(readSrc("src/CodeExportDialog.cpp").contains(QStringLiteral("connect(m_langCombo"))
              && readSrc("src/CodeExportDialog.cpp").contains(QStringLiteral("setDefaultSuffix")),
              "语言切换必须重生成，保存过滤器与后缀必须跟随当前语言");
+    // AA1：训练评估集与类名路径
+    QVERIFY2(readSrc("include/ClassifierTrainer.h").contains(QStringLiteral("validationSplit(files.size(), validationRatio, seed, ci)"))
+             && !readSrc("include/ClassifierTrainer.h").contains(QStringLiteral("std::mt19937 rng(seed + (unsigned)ci)")),
+             "评估必须与训练共用同一划分函数，不能另写 seed+ci");
+    QVERIFY2(readSrc("src/ObjectCountingNode.cpp").contains(
+                 QStringLiteral("const QString clsPath = ProjectPaths::resolveExecutionPath(")),
+             "目标计数的类名路径必须锚定方案目录，与其余 DNN 节点同口径");
+    QVERIFY2(readSrc("src/TrainingWizardDialog.cpp").count(QStringLiteral("m_lastTrainOk")) >= 4
+             && readSrc("src/TrainingWizardDialog.cpp").contains(QStringLiteral("本轮尚未训练成功")),
+             "训练失败后不得发布/评估上一次的模型（发布与评估两处都要守）");
     // X1：标定模型一致、多相机键隔离、方案切换清空、单例加锁
     QVERIFY2(readSrc("include/CalibrationManager.h").contains(QStringLiteral("QRecursiveMutex m_mutex")),
              "标定单例被多个工作线程与 GUI 并发读写，必须加锁");

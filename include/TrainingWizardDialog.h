@@ -59,6 +59,9 @@ private:
     std::shared_ptr<std::atomic<bool>> m_cancel =
         std::make_shared<std::atomic<bool>>(false);
     bool m_running = false;
+    /// AA1：最近一次训练是否成功。发布/评估不能只看模型文件是否存在——
+    /// 训练失败时旧模型仍在，会拿上一个数据集的类别顺序冒充当前结果。
+    bool m_lastTrainOk = false;
     /// 用户点了关闭/Esc（2026-10-28 复核）：worker 收尾后自动关窗，别让人再点一次
     bool m_closeRequested = false;
     bool m_stopLogged = false;

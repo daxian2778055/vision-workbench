@@ -303,8 +303,11 @@ void ObjectCountingNode::run(bool /*autoSwitch*/)
             m_params[QStringLiteral("lastError")] = QStringLiteral("检测输出无法解析（模型与输入尺寸不匹配？）");
             return;
         }
-        const QStringList classNames = DnnDetectNode::loadClassNames(
-            modelPath, m_params.value(QStringLiteral("classNamesPath")).toString());
+        // AA1：与 DnnDetect/DnnInfer/DnnSegment 同口径——方案保存时该路径被自动相对化，
+        // 不锚定到方案目录时会按进程 cwd 解析失败，所有目标都变成「(未分类)」。
+        const QString clsPath = ProjectPaths::resolveExecutionPath(
+            m_params.value(QStringLiteral("classNamesPath")).toString()).trimmed();
+        const QStringList classNames = DnnDetectNode::loadClassNames(modelPath, clsPath);
         for (auto &b : boxes)
             if (b.classId >= 0 && b.classId < classNames.size())
                 b.className = classNames[b.classId];
