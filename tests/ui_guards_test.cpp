@@ -1852,6 +1852,16 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              && readSrc("src/NodeSelfTest.cpp").contains(QStringLiteral("reportOk"))
              && readSrc("tools/deploy.ps1").contains(QStringLiteral("DeepOCR 自检未执行/未通过")),
              "CSV/报告写盘失败须影响退出码；部署脚本未跑成 OCR 不得放行");
+    // Z1：CLI CSV 必须查 flush/status；部署脚本的异步流读取不能裸取 Result；license 可选。
+    // 这里同时钉住部署脚本失败路径必须有退出码，不能因 stderr 句柄未关而永久挂住。
+    QVERIFY2(readSrc("src/main.cpp").contains(QStringLiteral("ts.status() == QTextStream::Ok"))
+             && readSrc("src/main.cpp").contains(QStringLiteral("const bool flushOk = csv.flush()")),
+             "自检 CSV 只查 open() 不够，flush/status 失败也必须让退出码为 1");
+    QVERIFY2(!readSrc("tools/deploy.ps1").contains(QStringLiteral("$errText = $errTask.Result"))
+             && readSrc("tools/deploy.ps1").contains(QStringLiteral("if ($errTask.Wait(2000))")),
+             "部署脚本超时分支不得裸取异步流 Result，否则 stderr 句柄未关时永久挂住");
+    QVERIFY2(!readSrc("tools/deploy.ps1").contains(QStringLiteral("'tessdata', 'dl', 'license'")),
+             "license 在部署说明中可选，不能列为出包硬条件");
     // X1：标定模型一致、多相机键隔离、方案切换清空、单例加锁
     QVERIFY2(readSrc("include/CalibrationManager.h").contains(QStringLiteral("QRecursiveMutex m_mutex")),
              "标定单例被多个工作线程与 GUI 并发读写，必须加锁");

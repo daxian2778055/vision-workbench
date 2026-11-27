@@ -460,9 +460,19 @@ int main(int argc, char *argv[])
                     QTextStream ts(&csv);
                     ts.setEncoding(QStringConverter::Utf8);
                     ts << QChar(0xFEFF) << DeepOcrSelfTest::formatCsv(results) << Qt::endl;
-                    out << "CSV 已写出: " << csvPath << Qt::endl;
+                    // Z1：open() 成功不代表写成功——磁盘满/网络盘断开在 flush/close 才暴露。
+                    // CLI 不能弹 ExportWriteCheck 的 MessageBox，但同样必须查 status + flush。
+                    ts.flush();
+                    const bool streamOk = ts.status() == QTextStream::Ok;
+                    const bool flushOk = csv.flush();
+                    csv.close();
+                    csvOk = streamOk && flushOk;   // 声明了 --csv 却没完整产物：退出码不能报成功
+                    if (csvOk)
+                        out << "CSV 已写出: " << csvPath << Qt::endl;
+                    else
+                        out << "CSV 写出失败: " << csvPath << " " << csv.errorString() << Qt::endl;
                 } else {
-                    csvOk = false;   // 声明了 --csv 却没产物：退出码不能报成功
+                    csvOk = false;
                     out << "CSV 写出失败: " << csvPath << Qt::endl;
                 }
             }

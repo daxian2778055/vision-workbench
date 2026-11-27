@@ -417,13 +417,15 @@ if (-not $SkipVerify) {
     Step "部署自检（离线可用性）"
 
     # 9.1 关键文件
+    # license 不列入硬条件：部署说明明确它可选（无 license 时 DeepOCR 实测仍可运行），
+    # 拷贝步骤找不到目录只告警，自检不得反过来把它变成必检项（Z1）。
     # Qt6Charts.dll: 统计报表（P1-11）用 Qt Charts 画趋势/分布图，缺它则报表打不开
     $mustHave = @('VisionFlowPlatform.exe', 'platforms\qwindows.dll', 'sqldrivers\qsqlite.dll',
                   'Qt6Core.dll', 'Qt6Sql.dll', 'Qt6Widgets.dll', 'Qt6Charts.dll', $OpenCvDllName,
                   'halconcpp.dll', 'halcondl.dll', 'MvCameraControl.dll', 'vcruntime140.dll', 'msvcp140.dll',
                   # dl 是 DeepOCR 预训练模型目录：只拷 DLL 不拷模型时，目标机 DeepOCR 会
                   # 报「需 HALCONROOT/dl 下的官方预训练模型」，而开发机永远复现不了。
-                  'tessdata', 'dl', 'license', 'data', 'logs', 'schemes')
+                  'tessdata', 'dl', 'data', 'logs', 'schemes')
     foreach ($n in $mustHave) {
         if (-not (Test-Path (Join-Path $OutDir $n))) { $problems += "缺文件: $n" }
     }
@@ -507,7 +509,12 @@ if (-not $SkipVerify) {
         Write-Host ("  自检退出码: " + $p.ExitCode)
         if ($p.ExitCode -ne 0) { $problems += "节点自检未通过（退出码 $($p.ExitCode)）" }
     }
-    $errText = $errTask.Result
+    # Z1：超时分支里 Wait(2000) 可能超时（子进程继承 stderr 句柄），裸 .Result 会永久阻塞。
+    # 所有异步流读取都走限时 Wait，读不到就当空串继续走到失败汇总，保证脚本一定有退出码。
+    $errText = ''
+    try {
+        if ($errTask.Wait(2000)) { $errText = [string]$errTask.Result }
+    } catch { $errText = '' }
     if ($errText -match 'QSQLITE') {
         # 部署目录内应能加载 Qt SQL 插件（数据库落库功能的前提）
         $problems += 'Qt SQL 驱动未加载（stderr 出现 QSQLITE 告警 -> 数据库功能不可用）'
