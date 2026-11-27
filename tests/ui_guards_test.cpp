@@ -1942,6 +1942,12 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(readSrc("src/FlowExecutor.cpp").contains(QStringLiteral("emit flowExecutionTime(roundMs)"))
              && readSrc("src/PerformancePanel.cpp").contains(QStringLiteral("onFlowExecutionTime")),
              "性能面板的流程总耗时信号必须有发射点");
+    // AG1：端到端流水线基线必须可复现、可自证判红，而不是只报数的死工具
+    QVERIFY2(readSrc("tests/soak_test.cpp").contains(QStringLiteral("BENCH-RESULT"))
+             && readSrc("tools/measure_pipeline_bench.py").contains(
+                 QStringLiteral("findings.append(\"ms_per_round_regressed\")"))
+             && readSrc("tools/measure_pipeline_bench.py").contains(QStringLiteral("--selfcheck")),
+             "流水线基准须输出可解析读数，并提供相对回归判据与自测");
     // X1：标定模型一致、多相机键隔离、方案切换清空、单例加锁
     QVERIFY2(readSrc("include/CalibrationManager.h").contains(QStringLiteral("QRecursiveMutex m_mutex")),
              "标定单例被多个工作线程与 GUI 并发读写，必须加锁");

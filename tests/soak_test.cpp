@@ -35,6 +35,7 @@
 #  include <windows.h>   // GetProcessTimes：进程累计 CPU 时间（O-1 节拍基线用）
 #endif
 
+#include "AppDatabase.h"
 #include "FlowScene.h"
 #include "FlowExecutor.h"
 #include "FlowRuntimeStats.h"
@@ -64,6 +65,7 @@ public:
 
 private slots:
     void testContinuousSoak();
+    void testPipelineBench();   // AG1：端到端流水线性能基线（只报数，不做绝对阈值判定）
 };
 
 namespace {
@@ -367,6 +369,124 @@ void SoakTest::testContinuousSoak()
         QVERIFY2(st.failures == 0,
                  qPrintable(QStringLiteral("节点 %1 出现 %2 次失败").arg(n->fullName()).arg(st.failures)));
     }
+}
+
+void SoakTest::testPipelineBench()
+{
+    // AG1：与 testContinuousSoak 同一条真实链路（读盘 → HALCON → OpenCV → 逻辑），
+    // 但输出的是可冻结的绝对读数，供 tools/measure_pipeline_bench.py 做相对回归判定。
+    // 这里只做结构性自检（必须有轮次、CPU 采样推进、失败轮为 0），不设机器相关的毫秒阈值。
+    bool ok = false;
+    int seconds = qEnvironmentVariable("VFP_BENCH_SECONDS").toInt(&ok);
+    if (!ok || seconds <= 0)
+        seconds = 8;
+    const bool withDb = (qEnvironmentVariable("VFP_BENCH_DB") == QStringLiteral("1"));
+    const QString reportPath = qEnvironmentVariable("VFP_BENCH_REPORT");
+
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    if (withDb)
+        QVERIFY2(AppDatabase::instance()->initialize(tmp.filePath(QStringLiteral("bench.db"))),
+                 "基准的数据库臂无法初始化");
+
+    const QString imgPath = tmp.filePath(QStringLiteral("bench.png"));
+    {
+        cv::Mat img(480, 640, CV_8UC1, cv::Scalar(30));
+        cv::rectangle(img, cv::Rect(200, 150, 120, 90), cv::Scalar(220), cv::FILLED);
+        cv::circle(img, cv::Point(420, 320), 40, cv::Scalar(180), cv::FILLED);
+        QVERIFY2(cv::imwrite(imgPath.toStdString(), img), "造图失败");
+    }
+
+    FlowScene scene;
+    auto execToken = FlowExecutorToken::create(new FlowExecutor());
+    FlowExecutor &exec = *execToken->executor();
+    exec.setFlowName(QStringLiteral("PipelineBench"));
+    exec.setFlowMode(FlowMode::Continuous);
+    exec.setLoopIntervalMs(0);
+    exec.setStatsLogIntervalMs(0);
+
+    const QList<FlowStep> steps = {
+        { NodeBase::IMAGE_ACQUISITION, "读取图像", QPointF(0, 0) },
+        { NodeBase::IMAGE_PROCESSING,  "形态学",   QPointF(180, 0) },
+        { NodeBase::IMAGE_PROCESSING,  "Blob分析", QPointF(360, 0) },
+        { NodeBase::LOGIC,             "公式计算", QPointF(540, 0) },
+        { NodeBase::LOGIC,             "条件计数", QPointF(720, 0) },
+        { NodeBase::LOGIC,             "延时",     QPointF(900, 0) },
+    };
+    QList<NodeBase *> nodes;
+    for (const FlowStep &s : steps) {
+        NodeBase *n = scene.createNode(s.category, s.pos, QString::fromUtf8(s.name));
+        QVERIFY2(n != nullptr, qPrintable(QStringLiteral("创建节点失败: %1").arg(QString::fromUtf8(s.name))));
+        nodes.append(n);
+    }
+    nodes[0]->setParam(QStringLiteral("filePath"), imgPath);
+    nodes[5]->setParam(QStringLiteral("delayMs"), 0);
+    nodes[3]->setParam(QStringLiteral("expression"), QStringLiteral("p0 * 2"));
+    for (int i = 0; i + 1 < nodes.size(); ++i) {
+        bool linked = false;
+        for (Port *out : nodes[i]->outputPorts()) {
+            for (Port *in : nodes[i + 1]->inputPorts()) {
+                if (PortConnectivity::canConnectPorts(out, in) && scene.createConnection(out, in)) {
+                    linked = true;
+                    break;
+                }
+            }
+            if (linked)
+                break;
+        }
+        QVERIFY2(linked, qPrintable(QStringLiteral("无法建立 %1 -> %2 连线")
+                                         .arg(nodes[i]->fullName(), nodes[i + 1]->fullName())));
+    }
+
+    exec.setFlowScene(&scene);
+    exec.resetRuntimeStats();
+    exec.startExecution();
+    QTRY_VERIFY_WITH_TIMEOUT(exec.getState() == ExecutionState::Running, 5000);
+    QTest::qWait(1000);   // 预热：首轮读图/懒初始化不进基线
+
+    const FlowRuntimeStats s0 = exec.runtimeStats();
+    const qint64 cpu0 = processCpuMs();
+    QElapsedTimer timer;
+    timer.start();
+    while (timer.elapsed() < qint64(seconds) * 1000)
+        QTest::qWait(100);
+    const qint64 windowMs = timer.elapsed();
+    const FlowRuntimeStats s1 = exec.runtimeStats();
+    const qint64 cpu1 = processCpuMs();
+
+    exec.stopExecution();
+    QVERIFY2(exec.wait(8000), "基准结束后执行器线程未退出");
+    exec.setFlowScene(nullptr);
+    QCoreApplication::processEvents();
+
+    const quint64 rounds = s1.rounds - s0.rounds;
+    const qint64 roundMs = qint64(s1.totalRoundMs - s0.totalRoundMs);
+    const quint64 failed = s1.failedRounds - s0.failedRounds;
+    const qint64 cpuUsed = (cpu0 >= 0 && cpu1 >= 0) ? (cpu1 - cpu0) : -1;
+    const double roundsPerS = double(rounds) * 1000.0 / double(qMax<qint64>(1, windowMs));
+    const double msPerRound = double(roundMs) / double(qMax<quint64>(1, rounds));
+    const double cpuPerRound = (cpuUsed >= 0) ? double(cpuUsed) / double(qMax<quint64>(1, rounds)) : -1.0;
+    const double cpuPct = (cpuUsed >= 0) ? 100.0 * double(cpuUsed) / double(qMax<qint64>(1, windowMs)) : -1.0;
+
+    const QString line =
+        QStringLiteral("BENCH-RESULT db=%1 seconds=%2 window_ms=%3 rounds=%4 failed=%5 "
+                       "rounds_per_s=%6 ms_per_round=%7 cpu_ms=%8 cpu_ms_per_round=%9 cpu_core_pct=%10 "
+                       "handles=%11 working_set_mb=%12")
+            .arg(withDb ? 1 : 0).arg(seconds).arg(windowMs).arg(rounds).arg(failed)
+            .arg(roundsPerS, 0, 'f', 2).arg(msPerRound, 0, 'f', 3)
+            .arg(cpuUsed).arg(cpuPerRound, 0, 'f', 3).arg(cpuPct, 0, 'f', 1)
+            .arg(s1.processHandleCount).arg(s1.processWorkingSetBytes / (1024 * 1024));
+    qInfo().noquote() << line;
+    if (!reportPath.isEmpty()) {
+        QFile f(reportPath);
+        if (f.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+            QTextStream(&f) << line << '\n';
+        }
+    }
+
+    QVERIFY2(rounds >= 3, qPrintable(QStringLiteral("基准窗口内轮次过少：%1").arg(rounds)));
+    QVERIFY2(failed == 0, qPrintable(QStringLiteral("基准窗口内出现失败轮：%1").arg(failed)));
+    QVERIFY2(cpuUsed > 0 && cpuPerRound > 0, "CPU 采样未推进，读数不可用");
 }
 
 QTEST_MAIN(SoakTest)
