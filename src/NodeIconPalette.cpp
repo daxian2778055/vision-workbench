@@ -1,4 +1,5 @@
 #include "NodeIconPalette.h"
+#include "DprIcon.h"
 
 #include <QPainter>
 #include <QPen>
@@ -31,11 +32,8 @@ QColor NodeIconPalette::categoryColor(NodeBase::NodeType category)
 
 QIcon NodeIconPalette::categoryIcon(NodeBase::NodeType category)
 {
-    QPixmap pixmap(16, 16);
-    pixmap.fill(Qt::transparent);
-
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing, true);
+    DprIcon::Canvas canvas(QSize(16, 16));
+    QPainter &painter = canvas.painter();
 
     // 实心圆（类别色）
     painter.setBrush(categoryColor(category));
@@ -47,5 +45,5 @@ QIcon NodeIconPalette::categoryIcon(NodeBase::NodeType category)
     painter.setBrush(Qt::NoBrush);
     painter.drawEllipse(2, 2, 12, 12);
 
-    return QIcon(pixmap);
+    return QIcon(canvas.finish());
 }

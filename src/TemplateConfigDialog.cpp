@@ -5,6 +5,7 @@
 #endif
 
 #include "TemplateConfigDialog.h"
+#include "DprIcon.h"
 
 #include "HalconWindow.h"
 #include "OpencvUtil.h"
@@ -44,10 +45,8 @@ namespace {
 /// VM 模板配置窗的工具图标：用 QPainter 画单色线稿，避免把第三方图标资源带进仓库。
 static QIcon vmToolIcon(const QString &kind)
 {
-    QPixmap pm(28, 28);
-    pm.fill(Qt::transparent);
-    QPainter p(&pm);
-    p.setRenderHint(QPainter::Antialiasing, true);
+    DprIcon::Canvas canvas(QSize(28, 28));
+    QPainter &p = canvas.painter();
     QPen pen(QColor(QStringLiteral("#5A5A5A")));
     pen.setWidthF(1.4);
     p.setPen(pen);
@@ -180,8 +179,7 @@ static QIcon vmToolIcon(const QString &kind)
         p.drawLine(QPointF(6, 16), QPointF(6, 22));
         p.drawLine(QPointF(6, 22), QPointF(12, 22));
     }
-    p.end();
-    return QIcon(pm);
+    return QIcon(canvas.finish());
 }
 
 /// VM 的开关样式（模板存图/全部屏蔽/输出掩膜）：灰底 → 橙底。

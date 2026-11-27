@@ -1,4 +1,5 @@
 #include "CommunicationManagerDialog.h"
+#include "DprIcon.h"
 #include "CommunicationManager.h"
 #include "CommunicationNodeBase.h"
 #include "GlobalTriggerDialog.h"
@@ -76,10 +77,8 @@ enum class NavIconKind { Device, Receive, Send, Trigger, Response, Heartbeat };
 /// 线性简笔图标（32×32）。不引入 qrc：项目出包时资源清单固定，新增资源会动登记。
 QPixmap makeNavIcon(NavIconKind kind, const QColor &color)
 {
-    QPixmap pm(32, 32);
-    pm.fill(Qt::transparent);
-    QPainter p(&pm);
-    p.setRenderHint(QPainter::Antialiasing, true);
+    DprIcon::Canvas canvas(QSize(32, 32));
+    QPainter &p = canvas.painter();
     QPen pen(color, 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
     p.setPen(pen);
     p.setBrush(Qt::NoBrush);
@@ -135,8 +134,7 @@ QPixmap makeNavIcon(NavIconKind kind, const QColor &color)
         p.drawEllipse(22, 20, 4, 4);
         break;
     }
-    p.end();
-    return pm;
+    return canvas.finish();
 }
 
 /// 设备列表卡片：序号 + 名称（大字）、类型（小字）、选中态浅橙底 + 2px 橙色下划线。

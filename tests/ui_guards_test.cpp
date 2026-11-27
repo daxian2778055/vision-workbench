@@ -1927,6 +1927,17 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              && readSrc("src/OperationLogDialog.cpp").contains(QStringLiteral("ExportWriteCheck::finishTextExport"))
              && readSrc("src/OperationLogDialog.cpp").contains(QStringLiteral("csvField(")),
              "操作日志导出须复用统一 CSV 转义与写盘收尾检查");
+    // AE2：本地绘制图标必须走 DPR 画布，不能在逻辑像素上直接画
+    int dprCanvasFiles = 0;
+    for (const char *path : { "src/NodeIconPalette.cpp", "src/MainWindow.cpp",
+                              "src/CommunicationManagerDialog.cpp",
+                              "src/ModuleEditorDialog.cpp", "src/TemplateConfigDialog.cpp" }) {
+        if (readSrc(path).contains(QStringLiteral("DprIcon::Canvas")))
+            ++dprCanvasFiles;
+    }
+    QVERIFY2(readSrc("include/DprIcon.h").contains(QStringLiteral("setDevicePixelRatio"))
+             && dprCanvasFiles == 5,
+             "所有本地绘制图标必须按设备像素比放大物理画布并保留逻辑尺寸");
     // X1：标定模型一致、多相机键隔离、方案切换清空、单例加锁
     QVERIFY2(readSrc("include/CalibrationManager.h").contains(QStringLiteral("QRecursiveMutex m_mutex")),
              "标定单例被多个工作线程与 GUI 并发读写，必须加锁");

@@ -2,6 +2,7 @@
 #include <QDoubleSpinBox>
 #include "TemplateSearchBudget.h"
 #include "ModuleEditorDialog.h"
+#include "DprIcon.h"
 #include "HalconNode.h"
 #include "OpencvTemplateMatchNode.h"
 #include "TemplateConfigDialog.h"
@@ -69,10 +70,8 @@ QString geometryStorePath()
 /// 检测区域每个输入框右侧的「图像取点」小图标（VM 同款：十字准星）。
 QIcon searchPickIcon()
 {
-    QPixmap pm(16, 16);
-    pm.fill(Qt::transparent);
-    QPainter p(&pm);
-    p.setRenderHint(QPainter::Antialiasing, true);
+    DprIcon::Canvas canvas(QSize(16, 16));
+    QPainter &p = canvas.painter();
     QPen pen(QColor(QStringLiteral("#FFFFFF")));
     pen.setWidthF(1.3);
     p.setPen(pen);
@@ -81,8 +80,7 @@ QIcon searchPickIcon()
     p.drawLine(QPointF(8, 12), QPointF(8, 15));
     p.drawLine(QPointF(1, 8), QPointF(4, 8));
     p.drawLine(QPointF(12, 8), QPointF(15, 8));
-    p.end();
-    return QIcon(pm);
+    return QIcon(canvas.finish());
 }
 }
 

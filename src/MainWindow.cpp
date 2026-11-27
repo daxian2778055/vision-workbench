@@ -90,6 +90,7 @@
 #include <QSignalBlocker>
 #include <QActionGroup>   // 系统菜单「脚本安全：执行前确认」开关
 #include "FactoryPasswordGuard.h"
+#include "DprIcon.h"
 #include "OperationLogDialog.h"
 #include "ParameterSearchDialog.h"
 #include "CodeExportDialog.h"
@@ -216,10 +217,8 @@ static QString toolGroupDisplayName(const QString &group)
 /// 只用 QPainter 本地绘制，不依赖外部图标资源（仓库内没有 VM 图标资产）。
 QIcon toolCategoryGlyph(const QString &group)
 {
-    QPixmap pixmap(24, 24);
-    pixmap.fill(Qt::transparent);
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing, true);
+    DprIcon::Canvas canvas(QSize(24, 24));
+    QPainter &painter = canvas.painter();
     // VM 左侧模块箱资产实测：字形 24–28px、亮部 ≈#afb4b4、笔画约 2px
     const QColor ink(0xb0, 0xb4, 0xb4);
     painter.setPen(QPen(ink, 1.8));
@@ -322,7 +321,7 @@ QIcon toolCategoryGlyph(const QString &group)
         painter.drawRect(QRectF(4, 13, 7, 7));
         painter.drawRect(QRectF(13, 13, 7, 7));
     }
-    return QIcon(pixmap);
+    return QIcon(canvas.finish());
 }
 
 /// 快捷工具条图标（实装 4.4）：与模块箱同风格的单色线框字形。
@@ -365,10 +364,8 @@ enum class ToolGlyph {
 QIcon toolbarGlyph(ToolGlyph glyph, const QColor &ink = QColor(0xc8, 0xc8, 0xc8),
                    qreal penWidth = 1.7)
 {
-    QPixmap pixmap(24, 24);
-    pixmap.fill(Qt::transparent);
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing, true);
+    DprIcon::Canvas canvas(QSize(24, 24));
+    QPainter &painter = canvas.painter();
     painter.setPen(QPen(ink, penWidth));
     painter.setBrush(Qt::NoBrush);
 
@@ -643,7 +640,7 @@ QIcon toolbarGlyph(ToolGlyph glyph, const QColor &ink = QColor(0xc8, 0xc8, 0xc8)
         break;
     }
     }
-    return QIcon(pixmap);
+    return QIcon(canvas.finish());
 }
 
 }   // namespace

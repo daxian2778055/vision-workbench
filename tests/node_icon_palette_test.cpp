@@ -9,6 +9,7 @@
 
 #include "NodeBase.h"
 #include "NodeIconPalette.h"
+#include "DprIcon.h"
 
 class NodeIconPaletteTest : public QObject
 {
@@ -18,6 +19,7 @@ private slots:
     void testCategoryColorsExact();      // 七式恒定（六枚举 + 越界灰）（红臂靶腿在测量位）
     void testIconCenterPixelMatches();   // 圆心像素 = 类别色（渲染腿；以逻辑紫与输出橙实证）
     void testIconCanvasAndRingShape();   // 画布 16px、角落透明、描边环亮白
+    void testDprCanvasPhysicalPixels();   // AE2：物理像素必须随 DPR 放大，逻辑尺寸保留
 };
 
 void NodeIconPaletteTest::testCategoryColorsExact()
@@ -37,6 +39,17 @@ void NodeIconPaletteTest::testCategoryColorsExact()
     // 界外枚举值（原体 default 同形）落缺省灰
     QCOMPARE(NodeIconPalette::categoryColor(static_cast<NodeBase::NodeType>(999)),
              QColor(0x8c, 0x8c, 0x8c));
+}
+
+void NodeIconPaletteTest::testDprCanvasPhysicalPixels()
+{
+    DprIcon::Canvas canvas(QSize(16, 16));
+    const QPixmap pm = canvas.finish();
+    const qreal dpr = pm.devicePixelRatio();
+    QVERIFY2(dpr >= 1.0, qPrintable(QStringLiteral("DPR 非法: %1").arg(dpr)));
+    // 逻辑尺寸 16 不变，物理缓冲按 DPR 放大——这正是高分屏不糊的判据
+    QCOMPARE(pm.width(), qRound(16 * dpr));
+    QCOMPARE(pm.height(), qRound(16 * dpr));
 }
 
 void NodeIconPaletteTest::testIconCenterPixelMatches()
