@@ -4115,6 +4115,11 @@ bool MainWindow::saveProjectInteractively()
     logMessage(tr("保存项目: %1").arg(fileName));
     if (success) {
         logMessage(tr("项目保存成功: %1").arg(fileName));
+        // AE1：方案保存是结构级写操作，此前只进 UI 日志，重启后无法追溯。
+        AppDatabase::instance()->logOperation(
+            SessionManager::instance()->currentUser(),
+            QStringLiteral("保存方案"),
+            tr("保存方案: %1").arg(fileName));
         m_recentFiles->add(fileName);
         // 内容已落盘：刷新"未保存判定"基线，并清掉恢复现场（干净退出语义）
         markProjectSaved();
@@ -5374,6 +5379,9 @@ void MainWindow::onCloseFlowTab(int index)
     FlowScene *scene = m_flowScenes[index];
     if (!confirmDeleteFlow(scene, index))
         return;
+    const QString deletedFlowName = scene->flowName().isEmpty()
+                                        ? QStringLiteral("流程 %1").arg(index + 1)
+                                        : scene->flowName();
 
     // 保存指针
     QWidget *tabWidget = ui->flowTabs->widget(index);
@@ -5429,6 +5437,11 @@ void MainWindow::onCloseFlowTab(int index)
 
     // 最后安全删除场景
     delete scene;
+    // AE1：流程删除同属结构级写操作；放在真正删完之后，取消/停止失败不会误记。
+    AppDatabase::instance()->logOperation(
+        SessionManager::instance()->currentUser(),
+        QStringLiteral("删除流程"),
+        tr("删除流程: %1").arg(deletedFlowName));
 }
 
 bool MainWindow::confirmDeleteFlow(FlowScene *scene, int index)

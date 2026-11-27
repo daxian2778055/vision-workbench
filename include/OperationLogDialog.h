@@ -17,6 +17,7 @@ public:
 private slots:
     void onQuery();
     void onClear();
+    void onExport();   // AE1：把当前查询结果导出为 CSV
 
 private:
     void setupUI();
@@ -28,5 +29,6 @@ private:
     QLineEdit *m_userFilter;
     QPushButton *m_queryButton;
     QPushButton *m_clearButton;
+    QPushButton *m_exportButton;
     QPushButton *m_closeButton;
 };

@@ -1,12 +1,17 @@
 #include "OperationLogDialog.h"
 #include "AppDatabase.h"
 #include "AppLog.h"
+#include "CsvEscape.h"
+#include "ExportWriteCheck.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
 #include <QGroupBox>
 #include <QDateTime>
+#include <QFileDialog>
+#include <QFile>
+#include <QTextStream>
 
 OperationLogDialog::OperationLogDialog(QWidget *parent)
     : QDialog(parent)
@@ -61,6 +66,10 @@ void OperationLogDialog::setupUI()
     m_clearButton->setMinimumHeight(28);
     filterLayout->addWidget(m_clearButton);
 
+    m_exportButton = new QPushButton(QStringLiteral("\u5BFC\u51FA CSV"));
+    m_exportButton->setMinimumHeight(28);
+    filterLayout->addWidget(m_exportButton);
+
     mainLayout->addWidget(filterGroup);
 
     m_logTable = new QTableWidget();
@@ -88,6 +97,7 @@ void OperationLogDialog::setupUI()
 
     connect(m_queryButton, &QPushButton::clicked, this, &OperationLogDialog::onQuery);
     connect(m_clearButton, &QPushButton::clicked, this, &OperationLogDialog::onClear);
+    connect(m_exportButton, &QPushButton::clicked, this, &OperationLogDialog::onExport);
     connect(m_closeButton, &QPushButton::clicked, this, &QDialog::accept);
 }
 
@@ -120,4 +130,34 @@ void OperationLogDialog::onClear()
 {
     // 操作日志由数据库持久化，此处仅清空当前显示（保留数据）
     m_logTable->setRowCount(0);
+}
+
+void OperationLogDialog::onExport()
+{
+    // AE1：导出的是当前查询结果（所见即所得），不另起一次可能漂移的查询。
+    const QString path = QFileDialog::getSaveFileName(
+        this, QStringLiteral("\u5BFC\u51FA\u64CD\u4F5C\u65E5\u5FD7"), QString(),
+        QStringLiteral("CSV (*.csv);;\u6587\u672C (*.txt)"));
+    if (path.isEmpty())
+        return;
+
+    QFile file(path);
+    if (!ExportWriteCheck::openForExport(this, file, path))
+        return;
+    QTextStream out(&file);
+    out.setEncoding(QStringConverter::Utf8);
+    out << QChar(0xFEFF);
+    out << csvField(QStringLiteral("\u65F6\u95F4")) << QLatin1Char(',')
+        << csvField(QStringLiteral("\u7528\u6237")) << QLatin1Char(',')
+        << csvField(QStringLiteral("\u64CD\u4F5C")) << QLatin1Char(',')
+        << csvField(QStringLiteral("\u8BE6\u60C5")) << Qt::endl;
+    for (int row = 0; row < m_logTable->rowCount(); ++row) {
+        QStringList cells;
+        for (int col = 0; col < m_logTable->columnCount(); ++col) {
+            QTableWidgetItem *item = m_logTable->item(row, col);
+            cells << csvField(item ? item->text() : QString());
+        }
+        out << cells.join(QLatin1Char(',')) << Qt::endl;
+    }
+    ExportWriteCheck::finishTextExport(this, file, out, path);
 }

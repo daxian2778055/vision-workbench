@@ -1918,6 +1918,15 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(readSrc("tools/deploy.ps1").contains(QStringLiteral("请先 cmake --build 再部署；禁止出包"))
              && !readSrc("tools/deploy.ps1").contains(QStringLiteral("exe 内嵌版本哈希未匹配 HEAD {0} —— 这份 exe")),
              "部署必须拒绝陈旧 exe，避免产出提交号不可信的发版件");
+    // AE1：关键写操作审计 + 操作日志导出
+    QVERIFY2(mwSrc.count(QStringLiteral("logOperation(")) >= 3
+             && mwSrc.contains(QStringLiteral("tr(\"保存方案: %1\")"))
+             && mwSrc.contains(QStringLiteral("tr(\"删除流程: %1\")")),
+             "方案保存与流程删除必须写入持久审计日志");
+    QVERIFY2(readSrc("src/OperationLogDialog.cpp").contains(QStringLiteral("void OperationLogDialog::onExport()"))
+             && readSrc("src/OperationLogDialog.cpp").contains(QStringLiteral("ExportWriteCheck::finishTextExport"))
+             && readSrc("src/OperationLogDialog.cpp").contains(QStringLiteral("csvField(")),
+             "操作日志导出须复用统一 CSV 转义与写盘收尾检查");
     // X1：标定模型一致、多相机键隔离、方案切换清空、单例加锁
     QVERIFY2(readSrc("include/CalibrationManager.h").contains(QStringLiteral("QRecursiveMutex m_mutex")),
              "标定单例被多个工作线程与 GUI 并发读写，必须加锁");
