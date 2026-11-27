@@ -189,15 +189,30 @@ Write-Ok "QtTest gate self-test OK ($hygieneExe)"
 # doc claim could not fail any gate (and on 2026-09-26 it did report exit 1 for a backticked path
 # of a file whose own sentence says it was deleted). Findings = exit 6, never a silent skip.
 Write-Step "Documentation check"
+# AC1：旧版硬编码 `powershell`。只有 pwsh 的主机上这是非终止错误，脚本继续跑且
+# $LASTEXITCODE 还是上一步的 0 ⇒ doc 闸根本没执行却报 OK。先探测解释器，再校验结果行。
+$docShell = Get-Command pwsh -ErrorAction SilentlyContinue
+if (-not $docShell) { $docShell = Get-Command powershell -ErrorAction SilentlyContinue }
+if (-not $docShell) {
+    Write-Err 'no PowerShell interpreter (pwsh/powershell) for tools/doc_check.ps1'
+    Pop-Location
+    exit 3
+}
 $docLog = Join-Path $RepoRoot 'ci-doc-check.log'
-& powershell -NoProfile -ExecutionPolicy Bypass -File 'tools/doc_check.ps1' 2>&1 | Tee-Object -FilePath $docLog | Out-Null
+& $docShell.Source -NoProfile -ExecutionPolicy Bypass -File 'tools/doc_check.ps1' 2>&1 | Tee-Object -FilePath $docLog | Out-Null
 $docCode = $LASTEXITCODE
 
 $docLines = @(Get-Content $docLog -ErrorAction SilentlyContinue)
 if ($docLines.Count -eq 0) { Write-Host '  (doc_check.ps1 produced no output)' }
 foreach ($line in $docLines) { Write-Host "  $line" }
-if ($docCode -ne 0) {
-    Write-Err "documentation check failed (exit $docCode); see $docLog"
+$docRan = @($docLines | Where-Object { $_ -like 'doc_check:*' }).Count -gt 0
+if (-not $docRan -or $docCode -ne 0) {
+    # 仍只保留一个 exit 6 出口：几何闸钉住每个 gate code 的唯一归属。
+    if (-not $docRan) {
+        Write-Err "doc_check.ps1 never produced its result line; refusing to reuse stale exit $docCode"
+    } else {
+        Write-Err "documentation check failed (exit $docCode); see $docLog"
+    }
     Pop-Location
     exit 6
 }

@@ -79,8 +79,10 @@ def check_plan_table():
     """The plan's anchor table claims to mirror ANCHORS; a hand edit would break that."""
     lines = read_lines(PLAN)
     if lines is None:
+        # AC1：发布声明找不到时该断言本应判红，不能当作"表没问题"放行
+        # （对照 reason_key_sites.py 的 fail-closed 口径）。
         print("doc-table=absent (plan doc not in tree; table not checked)")
-        return 0
+        return 1
     row = re.compile(r"^\| `(rm-[a-z0-9\-]+|srs-[a-z0-9\-]+)` \|[^|]*\| \*\*(\d+)\*\* \|$")
     table = {}
     for line in lines:

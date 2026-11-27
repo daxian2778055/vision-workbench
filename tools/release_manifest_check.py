@@ -176,6 +176,11 @@ def main():
     out("[RM] required_tag=%s" % (required_tag or "none"))
 
     if args.mode == "auto" and not head_rc_tags and not args.expect_tag:
+        # AC1：git 读不出来时上面已经记了 finding，不能因为"没有 tag"就折叠成 0 判 GREEN。
+        if findings:
+            out("[RM-INV] findings=%d skipped=0" % len(findings))
+            out("[RM-VERDICT] RED")
+            return 1
         # dev build：dist/ 被 gitignore，允许陈旧；但必须明确说出来，不能安静通过。
         out("[RM-INV] findings=0 skipped=1 reason=no_rc_tag_on_head")
         out("[RM-VERDICT] GREEN")

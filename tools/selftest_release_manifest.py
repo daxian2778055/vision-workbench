@@ -165,6 +165,13 @@ def main():
         make_package(repo_plain, commit_plain, "none")
         results.append(expect("no_tag_auto_skips", repo_plain, [], 0, "GREEN", []))
 
+        # 1b) git 不可读 + auto + 无 tag → 已记录的 finding 不得被 SKIP 抹成 GREEN (AC1)
+        repo_nogit = os.path.join(tmp, "repo_nogit")
+        os.makedirs(repo_nogit, exist_ok=True)
+        make_package(repo_nogit, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "none")
+        results.append(expect("git_unreadable_auto_red", repo_nogit, [], 1, "RED",
+                              ["git_head_unreadable"]))
+
         # 2) 无 tag + require → RED no_release_tag
         results.append(expect("no_tag_require_red", repo_plain, ["--mode", "require"], 1, "RED",
                               ["no_release_tag"]))

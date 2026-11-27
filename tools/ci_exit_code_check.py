@@ -92,11 +92,11 @@ GATE_CODE_OF_STEP = [
     ("Release package coherence (tag / manifest / exe md5)", "16"),
 ]
 
-# Frozen executable-stop counts of the gate codes. 3 reads 2 because the interpreter is required
-# twice before configure (preflight, then again where the hygiene step needs it); every other gate
-# code fires from exactly one place.
+# Frozen executable-stop counts of the gate codes. 3 reads 3 because the interpreter is required
+# three times before configure (preflight, hygiene, and the doc step's pwsh/powershell probe added
+# in AC1); every other gate code fires from exactly one place.
 FROZEN_GATE_COUNTS = {
-    "3": 2, "4": 1, "5": 1, "6": 1, "7": 1, "8": 1, "9": 1, "10": 1, "11": 1, "12": 1, "13": 1,
+    "3": 3, "4": 1, "5": 1, "6": 1, "7": 1, "8": 1, "9": 1, "10": 1, "11": 1, "12": 1, "13": 1,
     "14": 1, "15": 1, "16": 1, "17": 1, "18": 1, "19": 1,
 }
 SHARED_CODES = ("0", "1", "2", "3")

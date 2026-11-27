@@ -1899,6 +1899,14 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(readSrc("src/I18n.cpp").contains(QStringLiteral("英文翻译加载失败"))
              && readSrc("src/I18n.cpp").contains(QStringLiteral("return false;")),
              "英文 .qm 加载失败必须留痕，不再静默返回成功");
+    // AC1：CI 门禁链自身不得 fail-open
+    QVERIFY2(readSrc("tools/ci.ps1").contains(QStringLiteral("Get-Command pwsh"))
+             && readSrc("tools/ci.ps1").contains(QStringLiteral("$docRan")),
+             "doc 闸必须探测解释器并校验结果行，不能靠陈旧 LASTEXITCODE 判 OK");
+    QVERIFY2(readSrc("tools/release_manifest_check.py").contains(QStringLiteral("git 读不出来时上面已经记了 finding")),
+             "release auto SKIP 不得抹掉已记录的 git 读取失败");
+    QVERIFY2(readSrc("tools/doc_anchors.py").contains(QStringLiteral("发布声明找不到时该断言本应判红")),
+             "锚点基线文件缺失必须判红，不能当作表已核对放行");
     // X1：标定模型一致、多相机键隔离、方案切换清空、单例加锁
     QVERIFY2(readSrc("include/CalibrationManager.h").contains(QStringLiteral("QRecursiveMutex m_mutex")),
              "标定单例被多个工作线程与 GUI 并发读写，必须加锁");
