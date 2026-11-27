@@ -1862,6 +1862,17 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              "部署脚本超时分支不得裸取异步流 Result，否则 stderr 句柄未关时永久挂住");
     QVERIFY2(!readSrc("tools/deploy.ps1").contains(QStringLiteral("'tessdata', 'dl', 'license'")),
              "license 在部署说明中可选，不能列为出包硬条件");
+    // Z2：代码导出不得按中文显示名猜 HALCON 算子或输出非法标识符
+    QVERIFY2(!readSrc("src/CodeExportDialog.cpp").contains(QStringLiteral("read_image (Image"))
+             && !readSrc("src/CodeExportDialog.cpp").contains(QStringLiteral("threshold (Image"))
+             && !readSrc("src/CodeExportDialog.cpp").contains(QStringLiteral(" (Image, Result)")),
+             "导出不得拼接不存在的 HALCON 算子名或中文函数名");
+    QVERIFY2(readSrc("src/CodeExportDialog.cpp").contains(QStringLiteral("metaObject()->className()"))
+             && readSrc("src/CodeExportDialog.cpp").contains(QStringLiteral("getAllParamNames()")),
+             "导出须按节点真实类型与真实参数生成结构参考");
+    QVERIFY2(readSrc("src/CodeExportDialog.cpp").contains(QStringLiteral("connect(m_langCombo"))
+             && readSrc("src/CodeExportDialog.cpp").contains(QStringLiteral("setDefaultSuffix")),
+             "语言切换必须重生成，保存过滤器与后缀必须跟随当前语言");
     // X1：标定模型一致、多相机键隔离、方案切换清空、单例加锁
     QVERIFY2(readSrc("include/CalibrationManager.h").contains(QStringLiteral("QRecursiveMutex m_mutex")),
              "标定单例被多个工作线程与 GUI 并发读写，必须加锁");

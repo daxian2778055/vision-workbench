@@ -9,7 +9,7 @@
 class FlowScene;
 class NodeBase;
 
-/// 算子代码导出 — 将所选流程导出为 HALCON/C++ 代码
+/// 算子代码导出 — 将所选流程导出为结构参考代码（按节点类型与真实参数，不再拼接不存在的算子名）
 class CodeExportDialog : public QDialog
 {
     Q_OBJECT
@@ -27,7 +27,7 @@ private slots:
 private:
     void setupUI();
     void generateCode(int flowIndex);
-    QString nodeToHalcon(NodeBase *node) const;
+    QString nodeToSnippet(NodeBase *node, const QString &lang) const;
 
     QList<FlowScene *> m_flows;
     QComboBox *m_flowCombo = nullptr;

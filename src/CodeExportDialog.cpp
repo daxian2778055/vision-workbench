@@ -1,6 +1,7 @@
 #include "CodeExportDialog.h"
 #include "FlowScene.h"
 #include "NodeBase.h"
+#include "Port.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -10,6 +11,7 @@
 #include <QMessageBox>
 #include <QApplication>
 #include <QClipboard>
+#include <QSet>
 #include "ExportWriteCheck.h"
 
 CodeExportDialog::CodeExportDialog(const QList<FlowScene *> &flows, QWidget *parent)
@@ -82,6 +84,9 @@ void CodeExportDialog::setupUI()
 
     connect(m_flowCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &CodeExportDialog::onFlowChanged);
+    // Z2：切换语言必须立即重生成，否则复制/保存拿到的是上一语言的旧代码
+    connect(m_langCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &CodeExportDialog::onGenerate);
     connect(m_generateBtn, &QPushButton::clicked, this, &CodeExportDialog::onGenerate);
     connect(m_copyBtn, &QPushButton::clicked, this, &CodeExportDialog::onCopy);
     connect(m_saveBtn, &QPushButton::clicked, this, &CodeExportDialog::onSave);
@@ -97,39 +102,43 @@ void CodeExportDialog::onGenerate()
     generateCode(m_flowCombo->currentIndex());
 }
 
-QString CodeExportDialog::nodeToHalcon(NodeBase *node) const
+QString CodeExportDialog::nodeToSnippet(NodeBase *node, const QString &lang) const
 {
     if (!node) return QString();
-    // 生成 HDevelop 风格算子调用（伪代码级，含参数）
-    QString name = node->name();
-    QStringList calls;
-    QString lower = name.toLower();
+    // Z2：旧实现按中文显示名猜 HALCON 算子，79 个现役节点没有一个命中关键字，
+    // 兜底还会把中文显示名当成算子名输出这种根本不存在的标识符；即使命中，
+    // gauss_filter/equ_histo_image 等也只存在停用节点里、交付包没有运行时支撑。
+    // 这里改为按 Qt 元对象类型名 + 真实参数输出结构参考，绝不伪造可执行算子名。
+    const QString prefix = (lang == QStringLiteral("cpp")) ? QStringLiteral("// ")
+                                                           : QStringLiteral("* ");
+    const QString typeName = QString::fromLatin1(node->metaObject()->className());
+    QStringList lines;
+    lines << prefix + QStringLiteral("节点 %1 ｜ 类型 %2 ｜ 模块号 %3")
+                          .arg(node->name()).arg(typeName).arg(node->moduleId());
 
-    if (lower.contains(QStringLiteral("read")) || lower.contains(QStringLiteral("readimage"))) {
-        calls << QStringLiteral("read_image (Image, 'path')");
-    } else if (lower.contains(QStringLiteral("threshold"))) {
-        double minV = node->getParam(QStringLiteral("min")).toDouble();
-        double maxV = node->getParam(QStringLiteral("max")).toDouble();
-        calls << QStringLiteral("threshold (Image, Region, %1, %2)").arg(minV).arg(maxV);
-    } else if (lower.contains(QStringLiteral("blur"))) {
-        double sigma = node->getParam(QStringLiteral("sigma")).toDouble();
-        calls << QStringLiteral("gauss_filter (Image, ImageBlurred, %1)").arg(sigma);
-    } else if (lower.contains(QStringLiteral("dilate"))) {
-        calls << QStringLiteral("dilation_circle (Region, RegionDilation, 3.5)");
-    } else if (lower.contains(QStringLiteral("erode"))) {
-        calls << QStringLiteral("erosion_circle (Region, RegionErosion, 3.5)");
-    } else if (lower.contains(QStringLiteral("convert"))) {
-        calls << QStringLiteral("convert_image_type (Image, ImageConverted, 'byte')");
-    } else if (lower.contains(QStringLiteral("histogram"))) {
-        calls << QStringLiteral("equ_histo_image (Image, ImageEqualized)");
-    } else {
-        calls << QStringLiteral("%1 (Image, Result)").arg(name);
+    // 框架字段不是算法参数，导出会误导；只列节点自己声明的参数及当前值
+    static const QSet<QString> kFrameworkKeys = {
+        QStringLiteral("moduleStatus"), QStringLiteral("moduleName"),
+        QStringLiteral("lastError"), QStringLiteral("elapsedMs"),
+        QStringLiteral("resultNg"), QStringLiteral("calibNote")
+    };
+    QStringList pairs;
+    const QList<QString> names = node->getAllParamNames();
+    for (const QString &key : names) {
+        if (kFrameworkKeys.contains(key))
+            continue;
+        pairs << QStringLiteral("%1=%2").arg(key, node->getParam(key).toString());
     }
+    lines << prefix + QStringLiteral("参数: %1")
+                          .arg(pairs.isEmpty() ? QStringLiteral("（无）") : pairs.join(QStringLiteral(", ")));
 
-    QStringList indented;
-    for (const QString &c : calls)
-        indented << QStringLiteral("    ") + c;
-    return indented.join(QLatin1Char('\n'));
+    QStringList outputs;
+    for (Port *port : node->outputPorts())
+        if (port) outputs << port->name();
+    if (!outputs.isEmpty())
+        lines << prefix + QStringLiteral("输出: %1").arg(outputs.join(QStringLiteral(", ")));
+
+    return lines.join(QLatin1Char('\n'));
 }
 
 void CodeExportDialog::generateCode(int flowIndex)
@@ -142,32 +151,27 @@ void CodeExportDialog::generateCode(int flowIndex)
     QStringList lines;
 
     if (lang == QStringLiteral("cpp")) {
-        lines << QStringLiteral("// \u5BFC\u51FA\u7684 C++ \u4EE3\u7801 (HALCON C++)");
-        lines << QStringLiteral("#include <HalconCpp.h>");
-        lines << QStringLiteral("using namespace HalconCpp;");
+        lines << QStringLiteral("// flow structure reference (not compilable operator code)");
+        lines << QStringLiteral("// node type names and current parameters; configure operators in the app");
         lines << QStringLiteral("");
         lines << QStringLiteral("void RunFlow%1()").arg(flowIndex + 1);
         lines << QStringLiteral("{");
-        lines << QStringLiteral("    HImage image;");
-        lines << QStringLiteral("    HRegion region;");
-        lines << QStringLiteral("    HTuple value;");
         for (NodeBase *node : scene->nodes()) {
-            QString snippet = nodeToHalcon(node);
+            const QString snippet = nodeToSnippet(node, lang);
             if (!snippet.isEmpty())
                 lines << snippet;
         }
         lines << QStringLiteral("}");
     } else {
-        lines << QStringLiteral("* \u5BFC\u51FA\u7684 HDevelop \u4EE3\u7801");
-        lines << QStringLiteral("dev_update_off ()");
+        lines << QStringLiteral("* flow structure reference (not runnable HDevelop program)");
+        lines << QStringLiteral("* node type names and current parameters; configure operators in the app");
         lines << QStringLiteral("");
         for (NodeBase *node : scene->nodes()) {
-            QString snippet = nodeToHalcon(node);
+            const QString snippet = nodeToSnippet(node, lang);
             if (!snippet.isEmpty())
                 lines << snippet;
         }
     }
-
     m_codeView->setPlainText(lines.join(QLatin1Char('\n')));
 }
 
@@ -180,9 +184,19 @@ void CodeExportDialog::onCopy()
 
 void CodeExportDialog::onSave()
 {
-    QString path = QFileDialog::getSaveFileName(
-        this, QStringLiteral("\u4FDD\u5B58\u4EE3\u7801"), QString(),
-        QStringLiteral("HDevelop (*.hdev);;C++ (*.cpp);;\u6587\u672C (*.txt)"));
+    // Z2: save filter and default suffix must follow the selected language
+    const bool cpp = (m_langCombo->currentData().toString() == QStringLiteral("cpp"));
+    QFileDialog dlg(this, QStringLiteral("\u4FDD\u5B58\u4EE3\u7801"));
+    dlg.setAcceptMode(QFileDialog::AcceptSave);
+    dlg.setDefaultSuffix(cpp ? QStringLiteral("cpp") : QStringLiteral("hdev"));
+    dlg.setNameFilter(cpp ? QStringLiteral("C++ (*.cpp);;\u6587\u672C (*.txt)")
+                           : QStringLiteral("HDevelop (*.hdev);;\u6587\u672C (*.txt)"));
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+    const QStringList chosen = dlg.selectedFiles();
+    if (chosen.isEmpty())
+        return;
+    const QString path = chosen.first();
     if (path.isEmpty()) return;
 
     QFile file(path);
