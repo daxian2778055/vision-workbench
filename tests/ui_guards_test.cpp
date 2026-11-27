@@ -1890,6 +1890,15 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(readSrc("src/ObjectCountingNode.cpp").contains(QStringLiteral("m_params[QStringLiteral(\"addedThisFrame\")] = 0;"))
              && readSrc("src/ObjectCountingNode.cpp").contains(QStringLiteral("本帧未完成计数")),
              "计数失败帧必须清本帧新增/在跟，累计计数保留跨帧语义");
+    // AB2：翻译资源缺失不得在构建/部署/发布三道闸静默放行
+    QVERIFY2(readSrc("CMakeLists.txt").contains(QStringLiteral("缺少英文翻译构建条件")),
+             "构建机缺 lrelease 必须配置失败，不能静默跳过 .qm 生成");
+    QVERIFY2(readSrc("tools/deploy.ps1").contains(QStringLiteral("'translations/visionflow_en.qm'"))
+             && readSrc("tools/deploy.ps1").contains(QStringLiteral("$problems += \"找不到 $QmSrcDir")),
+             "部署必检项必须含 .qm，缺翻译必须计入 problems 而不是只告警");
+    QVERIFY2(readSrc("src/I18n.cpp").contains(QStringLiteral("英文翻译加载失败"))
+             && readSrc("src/I18n.cpp").contains(QStringLiteral("return false;")),
+             "英文 .qm 加载失败必须留痕，不再静默返回成功");
     // X1：标定模型一致、多相机键隔离、方案切换清空、单例加锁
     QVERIFY2(readSrc("include/CalibrationManager.h").contains(QStringLiteral("QRecursiveMutex m_mutex")),
              "标定单例被多个工作线程与 GUI 并发读写，必须加锁");

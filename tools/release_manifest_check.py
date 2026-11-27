@@ -191,6 +191,11 @@ def main():
     if os.path.isfile(manifest_path):
         out("[RM] manifest=%s" % manifest_path)
         man = parse_manifest(decode_text(manifest_path))
+        # AB2：资源类产物原来完全不在清单检查范围内——deploy 只告警，CI 照样绿。
+        # 英文包必须带 .qm，否则现场静默退回中文源文。
+        for rel in ("translations/visionflow_en.qm",):
+            if not os.path.isfile(os.path.join(package, *rel.split("/"))):
+                finding("resource_missing", rel)
         for key in (KEY_COMMIT, KEY_TAG, KEY_DIRTY, KEY_MD5, KEY_BYTES):
             if not man.get(key):
                 finding("manifest_key_missing", key)

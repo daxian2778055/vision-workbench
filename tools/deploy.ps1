@@ -110,6 +110,9 @@ if ($LASTEXITCODE -ne 0) {
     Write-Warning "windeployqt 返回非零退出码 $LASTEXITCODE（继续处理其它步骤）"
 }
 
+# AB2：自检 problems 从第一步就开始累积（翻译缺失等问题不能被后面的重置抹掉）
+$problems = @()
+
 # ---------- 2b. 本仓自己的翻译（windeployqt 那句 --no-translations 只管 Qt 自带的） ----------
 # 为什么必须有一步：src/I18n.cpp 里 .qm 缺失的设计是"降级为源文（中文），不阻断启动"，
 # 也就是说包里没有翻译文件时界面不会报错，英文现场只会安静地看到中文。
@@ -123,10 +126,10 @@ if (Test-Path -LiteralPath $QmSrcDir) {
     $qmCount = @(Get-ChildItem -Path $dstQm -Filter *.qm -ErrorAction SilentlyContinue).Count
     Write-Host "  -> translations/ 里现有 $qmCount 枚 .qm" -ForegroundColor Green
     if ($qmCount -eq 0) {
-        Write-Warning "$QmSrcDir 存在但里面没有 .qm —— 界面会静默退化成中文源文（先跑翻译构建）"
+        $problems += "$QmSrcDir 存在但里面没有 .qm —— 界面会静默退化成中文源文（先跑翻译构建）"
     }
 } else {
-    Write-Warning "找不到 $QmSrcDir —— 包内没有翻译，英文界面会静默显示中文（I18n 是降级不是报错）"
+    $problems += "找不到 $QmSrcDir —— 包内没有翻译，英文界面会静默显示中文（I18n 是降级不是报错）"
 }
 
 # ============================================================
@@ -412,7 +415,7 @@ Write-Host "  -> 部署说明.txt" -ForegroundColor Green
 # ============================================================
 # 目的：把"包能不能在目标机离线跑起来"变成可执行校验，而不是靠人工双击碰运气。
 # 判据三项：关键文件齐 → 主程序导入的 CRT 都在包里 → 从**部署目录本体**跑节点自检 0 失败。
-$problems = @()
+# AB2：$problems 已在脚本前部初始化，这里不再重置（否则会抹掉前面步骤记下的问题）
 if (-not $SkipVerify) {
     Step "部署自检（离线可用性）"
 
@@ -425,7 +428,7 @@ if (-not $SkipVerify) {
                   'halconcpp.dll', 'halcondl.dll', 'MvCameraControl.dll', 'vcruntime140.dll', 'msvcp140.dll',
                   # dl 是 DeepOCR 预训练模型目录：只拷 DLL 不拷模型时，目标机 DeepOCR 会
                   # 报「需 HALCONROOT/dl 下的官方预训练模型」，而开发机永远复现不了。
-                  'tessdata', 'dl', 'data', 'logs', 'schemes')
+                  'tessdata', 'dl', 'data', 'logs', 'schemes', 'translations/visionflow_en.qm')
     foreach ($n in $mustHave) {
         if (-not (Test-Path (Join-Path $OutDir $n))) { $problems += "缺文件: $n" }
     }

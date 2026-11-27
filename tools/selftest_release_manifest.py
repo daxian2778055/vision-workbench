@@ -76,7 +76,7 @@ def write_registry(root, tag, commit, md5, size, with_bytes=True):
 
 def make_package(root, commit, tag, dirty="0", md5_override=None, bytes_override=None,
                  manifest=True, pkg_subdir=None, embeds="yes", registry=True,
-                 registry_tag="rc-selftest"):
+                 registry_tag="rc-selftest", qm=True):
     pkg = os.path.join(root, pkg_subdir or os.path.join("dist", "VisionFlowPlatform"))
     os.makedirs(pkg, exist_ok=True)
     exe = os.path.join(pkg, EXE_NAME)
@@ -85,6 +85,16 @@ def make_package(root, commit, tag, dirty="0", md5_override=None, bytes_override
         fh.write(payload)
     real_md5 = hashlib.md5(payload).hexdigest()
     real_bytes = len(payload)
+    qm_dir = os.path.join(pkg, "translations")
+    if qm:
+        os.makedirs(qm_dir, exist_ok=True)
+        with open(os.path.join(qm_dir, "visionflow_en.qm"), "wb") as fh:
+            fh.write(b"selftest-qm")
+    else:
+        try:
+            os.remove(os.path.join(qm_dir, "visionflow_en.qm"))
+        except FileNotFoundError:
+            pass
     manifest_path = os.path.join(pkg, MANIFEST_NAME)
     if manifest:
         lines = [
@@ -294,6 +304,10 @@ def main():
         results.append(expect("dirty_abc_red", repo_tagged, pkg_tagged_arg, 1, "RED",
                               ["dirty_unparseable"]))
 
+        # 6c) 缺 .qm 资源 → RED (AB2)
+        make_package(repo_tagged, commit_tagged, "rc-selftest", qm=False)
+        results.append(expect("resource_missing_red", repo_tagged, pkg_tagged_arg, 1, "RED",
+                              ["resource_missing"]))
         # 7) manifest tag 与 HEAD 的 rc tag 不一致 → RED
         make_package(repo_tagged, commit_tagged, "rc-other")
         results.append(expect("tag_mismatch_red", repo_tagged, pkg_tagged_arg, 1, "RED", ["manifest_tag_mismatch"]))

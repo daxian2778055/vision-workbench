@@ -765,6 +765,11 @@ if(VFP_LRELEASE_EXECUTABLE AND EXISTS "${VFP_TS}")
                 "${CMAKE_CURRENT_SOURCE_DIR}/dist/VisionFlowPlatform/translations"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${VFP_QM}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/dist/VisionFlowPlatform/translations/")
+else()
+    # AB2：原来整段静默跳过——构建机没装 lrelease 时照样出包，英文现场拿到中文界面
+    # 而 CI/部署/发布三道闸全绿。源翻译存在就必须能生成 .qm，否则配置阶段直接失败。
+    message(FATAL_ERROR "缺少英文翻译构建条件：需要 translations/visionflow_en.ts 与 lrelease"
+                        "（Qt bin 目录），否则无法生成 visionflow_en.qm，禁止静默出包")
 endif()
 
 # 可选：HALCON 冒烟测试（验证测量链路算子参数与官方签名一致）

@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QDebug>
 #include <QDir>
 #include <QSettings>
 #include <QTranslator>
@@ -54,8 +55,10 @@ bool installTranslators(QApplication &app)
         app.installTranslator(&translator);
         return true;
     }
-    // .qm 缺失：降级为源文（中文），不阻断启动
-    return true;
+    // AB2：仍降级为源文（中文）不阻断启动，但必须留痕——英文现场此前是静默中文，
+    // 构建/部署/发布三道闸各自又都放行，现场和研发都看不出问题。
+    qWarning().noquote() << QStringLiteral("英文翻译加载失败：%1（界面将退回中文源文）").arg(qm);
+    return false;
 }
 
 } // namespace I18n
