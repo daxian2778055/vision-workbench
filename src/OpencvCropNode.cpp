@@ -38,6 +38,8 @@ void OpencvCropNode::run(bool /*autoSwitch*/)
         }
         cv::Mat mat = OpencvUtil::himageToMat(input);
         if (mat.empty()) {
+            m_params[QStringLiteral("lastError")] =
+                QStringLiteral("裁剪：输入图像无法转换为 OpenCV 矩阵");
             m_params["moduleStatus"] = false;
             return;
         }
@@ -54,6 +56,12 @@ void OpencvCropNode::run(bool /*autoSwitch*/)
         const int ch = qBound(1, h, mat.rows - y);
 
         cv::Mat cropped = mat(cv::Rect(x, y, cw, ch)).clone();
+        // Y2：回显必须与实际输出同口径。原来 geometryRoi 直接读未钳制的配置值，
+        // 裁剪框越界时结果表显示"区域在图外 100×100"，实际拿到的却是最后一列。
+        m_params[QStringLiteral("roiEffectiveCol")] = x;
+        m_params[QStringLiteral("roiEffectiveRow")] = y;
+        m_params[QStringLiteral("roiEffectiveWidth")] = cw;
+        m_params[QStringLiteral("roiEffectiveHeight")] = ch;
         m_params["moduleStatus"] = !cropped.empty();
         m_outputImage = OpencvUtil::matToHimage(cropped);
 
@@ -87,10 +95,14 @@ RoiShape OpencvCropNode::geometryRoi() const
 {
     RoiShape s;
     s.type = RoiType::Rect;
-    const double col = m_params.value(QStringLiteral("column"), 0).toDouble();
-    const double row = m_params.value(QStringLiteral("row"), 0).toDouble();
-    const double w = m_params.value(QStringLiteral("width"), 100).toDouble();
-    const double h = m_params.value(QStringLiteral("height"), 100).toDouble();
+    const double col = m_params.value(QStringLiteral("roiEffectiveCol"),
+                                      m_params.value(QStringLiteral("column"), 0)).toDouble();
+    const double row = m_params.value(QStringLiteral("roiEffectiveRow"),
+                                      m_params.value(QStringLiteral("row"), 0)).toDouble();
+    const double w = m_params.value(QStringLiteral("roiEffectiveWidth"),
+                                    m_params.value(QStringLiteral("width"), 100)).toDouble();
+    const double h = m_params.value(QStringLiteral("roiEffectiveHeight"),
+                                    m_params.value(QStringLiteral("height"), 100)).toDouble();
     s.p1 = QPointF(col, row);
     s.p2 = QPointF(col + w, row + h);
     return s;
@@ -111,4 +123,9 @@ void OpencvCropNode::applyGeometryRoi(const RoiShape &shape)
     setParam(QStringLiteral("row"), int(r.y() + 0.5));
     setParam(QStringLiteral("width"), qMax(1, int(r.width() + 0.5)));
     setParam(QStringLiteral("height"), qMax(1, int(r.height() + 0.5)));
+    // 用户重新框选后，上一轮的钳制回显必须失效，等下一次 run 重新计算
+    m_params.remove(QStringLiteral("roiEffectiveCol"));
+    m_params.remove(QStringLiteral("roiEffectiveRow"));
+    m_params.remove(QStringLiteral("roiEffectiveWidth"));
+    m_params.remove(QStringLiteral("roiEffectiveHeight"));
 }

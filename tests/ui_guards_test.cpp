@@ -1367,6 +1367,14 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(x2src("src/MedianFilterNode.cpp").contains(QStringLiteral("OpencvUtil::requireGray8(mat, &depthWhy)"))
              && x2src("src/MedianFilterNode.cpp").contains(QStringLiteral("中值滤波：输入图像无法转换为 OpenCV 矩阵")),
              "中值滤波必须显式拒绝非 8 位与空图，防止低字节垃圾与未初始化输出");
+    // Y2：失败原因与裁剪回显
+    QVERIFY2(x2src("src/OpencvAdaptiveThresholdNode.cpp").contains(QStringLiteral("OpencvUtil::requireGray8(mat, &depthWhy)"))
+             && x2src("src/ColorConversionNode.cpp").contains(QStringLiteral("颜色转换：未提供输入图像"))
+             && x2src("src/OpencvCropNode.cpp").contains(QStringLiteral("裁剪：输入图像无法转换为 OpenCV 矩阵")),
+             "图像族早退分支必须写可读原因，且自适应阈值与同族同口径拒绝非 8 位");
+    QVERIFY2(x2src("src/OpencvCropNode.cpp").contains(QStringLiteral("roiEffectiveWidth"))
+             && x2src("src/OpencvCropNode.cpp").contains(QStringLiteral("m_params.value(QStringLiteral(\"roiEffectiveCol\")")),
+             "裁剪结果表回显的 ROI 必须是钳制后实际生效的区域");
     // ⑭ 通信内联参数：IP 键必须按设备类型分发（serverIp 只有 TCP 消费）
     QFile cd(QStringLiteral(SRC_DIR "/src/CommunicationManagerDialog.cpp"));
     QVERIFY2(cd.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 CommunicationManagerDialog.cpp");

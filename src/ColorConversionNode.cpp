@@ -1,4 +1,5 @@
 #include "ColorConversionNode.h"
+#include "NodeResultFields.h"   // Y2：unknownExceptionReason
 #include "Port.h"
 #include "DataObject.h"
 #include "Connection.h"
@@ -48,6 +49,13 @@ void ColorConversionNode::init()
 bool ColorConversionNode::process()
 {
     try {
+        // Y2：所有早退出口统一写 lastError——process() 返回 false 时基类只写 moduleStatus，
+        // 原因栏会空白（结果表对空原因直接跳过，现场无从判断）。
+        const auto fail = [this](const QString &why) {
+            m_params[QStringLiteral("lastError")] = why;
+            m_params["moduleStatus"] = false;
+            return false;
+        };
         // 检查输入数据
         VFP_DEBUG << "ColorConversionNode::process() called";
         
@@ -93,7 +101,7 @@ bool ColorConversionNode::process()
             
             if (!m_inputData.contains(0) || !m_inputData[0]) {
                 VFP_DEBUG << "No input image provided";
-                return false;
+                return fail(QStringLiteral("颜色转换：未提供输入图像"));
             }
 
             // 获取输入图像
@@ -113,7 +121,7 @@ bool ColorConversionNode::process()
         
         if (!inputImageValid) {
             VFP_DEBUG << "Input image is not initialized";
-            return false;
+            return fail(QStringLiteral("颜色转换：输入图像未初始化"));
         }
 
         // 检查输入图像通道数
@@ -132,10 +140,11 @@ bool ColorConversionNode::process()
             VFP_DEBUG << "Performing RGB to Gray conversion";
             if (channelCount == 1) {
                 VFP_DEBUG << "Error: Input image is already grayscale, no need for conversion";
-                return false;
+                return fail(QStringLiteral("颜色转换：RGB→灰度要求多通道输入，当前已是单通道"));
             }
             cv::Mat src = OpencvUtil::himageToMat(inputImage);
-            if (src.empty()) return false;
+            if (src.empty())
+                return fail(QStringLiteral("颜色转换：输入图像无法转换为 OpenCV 矩阵"));
             cv::Mat gray;
             if (src.channels() == 3)
                 cv::cvtColor(src, gray, cv::COLOR_BGR2GRAY);
@@ -149,7 +158,8 @@ bool ColorConversionNode::process()
         case RGB_TO_HSL: {
             // OpenCV 实现（替换版环境 HALCON TransFromRgb H 通道计算错误，实测 H=85 vs 期望 120）
             cv::Mat src = OpencvUtil::himageToMat(inputImage);
-            if (src.empty()) return false;
+            if (src.empty())
+                return fail(QStringLiteral("颜色转换：输入图像无法转换为 OpenCV 矩阵"));
             cv::Mat out;
             if (conversionType == RGB_TO_HSV)
                 cv::cvtColor(src, out, cv::COLOR_BGR2HSV_FULL);
@@ -161,7 +171,8 @@ bool ColorConversionNode::process()
         case GRAY_TO_RGB: {
             VFP_DEBUG << "Performing Gray to RGB conversion";
             cv::Mat src = OpencvUtil::himageToMat(inputImage);
-            if (src.empty()) return false;
+            if (src.empty())
+                return fail(QStringLiteral("颜色转换：输入图像无法转换为 OpenCV 矩阵"));
             cv::Mat rgb;
             if (src.channels() == 1)
                 cv::cvtColor(src, rgb, cv::COLOR_GRAY2BGR);
@@ -174,7 +185,8 @@ bool ColorConversionNode::process()
         case HSL_TO_RGB: {
             // OpenCV 实现（与 TransFromRgb 同源缺陷，TransToRgb 一并改用 OpenCV）
             cv::Mat src = OpencvUtil::himageToMat(inputImage);
-            if (src.empty()) return false;
+            if (src.empty())
+                return fail(QStringLiteral("颜色转换：输入图像无法转换为 OpenCV 矩阵"));
             cv::Mat out;
             if (conversionType == HSV_TO_RGB)
                 cv::cvtColor(src, out, cv::COLOR_HSV2BGR_FULL);
@@ -185,7 +197,7 @@ bool ColorConversionNode::process()
         }
         default:
             VFP_DEBUG << "Unknown conversion type";
-            return false;
+            return fail(QStringLiteral("颜色转换：未知的转换类型"));
         }
 
         // 检查输出图像
@@ -221,19 +233,21 @@ bool ColorConversionNode::process()
     }
     catch (HOperatorException &e) {
         VFP_DEBUG << "Halcon exception in ColorConversionNode::process():" << e.ErrorMessage().Text();
-        // 设置模块状态为失败
+        m_params[QStringLiteral("lastError")] =
+            QStringLiteral("颜色转换失败: %1").arg(QString::fromStdString(e.ErrorMessage().Text()));
         m_params["moduleStatus"] = false;
         return false;
     }
     catch (std::exception &e) {
         VFP_DEBUG << "Exception in ColorConversionNode::process():" << e.what();
-        // 设置模块状态为失败
+        m_params[QStringLiteral("lastError")] =
+            QStringLiteral("颜色转换失败: %1").arg(QString::fromUtf8(e.what()));
         m_params["moduleStatus"] = false;
         return false;
     }
     catch (...) {
         VFP_DEBUG << "Unknown exception in ColorConversionNode::process()";
-        // 设置模块状态为失败
+        m_params[QStringLiteral("lastError")] = unknownExceptionReason();
         m_params["moduleStatus"] = false;
         return false;
     }

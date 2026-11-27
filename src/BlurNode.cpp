@@ -37,6 +37,8 @@ void BlurNode::run(bool /*autoSwitch*/)
         }
         cv::Mat mat = OpencvUtil::himageToMat(input);
         if (mat.empty()) {
+            m_params[QStringLiteral("lastError")] =
+                QStringLiteral("模糊：输入图像无法转换为 OpenCV 矩阵");
             m_params["moduleStatus"] = false;
             return;
         }

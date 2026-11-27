@@ -38,8 +38,17 @@ void OpencvAdaptiveThresholdNode::run(bool /*autoSwitch*/)
         }
         cv::Mat mat = OpencvUtil::himageToMat(input);
         if (mat.empty()) {
+            m_params[QStringLiteral("lastError")] =
+                QStringLiteral("自适应阈值：输入图像无法转换为 OpenCV 矩阵");
             m_params["moduleStatus"] = false;
             return;
+        }
+        // Y2：cv::adaptiveThreshold 硬性要求 CV_8UC1；同族已统一用可操作提示拒绝非 8 位，
+        // 这里放任它抛 OpenCV assert 会让现场拿到不可操作的英文堆栈。
+        {
+            QString depthWhy;
+            if (!OpencvUtil::requireGray8(mat, &depthWhy))
+                throw std::runtime_error(depthWhy.toStdString());
         }
         if (mat.channels() == 3) {
             cv::cvtColor(mat, mat, cv::COLOR_BGR2GRAY);

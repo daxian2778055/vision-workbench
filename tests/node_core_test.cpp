@@ -9,6 +9,7 @@
 // 节点头文件
 #include "ProjectPaths.h"
 #include "OpencvThresholdNode.h"
+#include "OpencvAdaptiveThresholdNode.h"
 #include "OpencvCropNode.h"
 #include "OpencvImageArithNode.h"
 #include "OpencvMorphNode.h"
@@ -134,6 +135,7 @@ private slots:
     void testAtomicNodeFlagsSerialization();
     void testImageArithAndHatOpenCv();
     void testCropBasic();
+    void testImageFailureReasonsAndClampedRoiEcho();   // Y2
     void testImageArithDivByZero();
     void testImageArithSecondImageSlot();      // Y1
     void testImageArithFailureReasons();       // Y1
@@ -1371,6 +1373,45 @@ void NodeCoreTest::testCropBasic()
 
     QCOMPARE(node.getParam(QStringLiteral("row")).toInt(), 50);
     QCOMPARE(node.getParam(QStringLiteral("column")).toInt(), 50);
+}
+
+void NodeCoreTest::testImageFailureReasonsAndClampedRoiEcho()
+{
+    // Y2-a：越界裁剪框的回显必须等于实际输出区域
+    OpencvCropNode crop;
+    crop.init();
+    crop.setParam(QStringLiteral("row"), 0);
+    crop.setParam(QStringLiteral("column"), 190);
+    crop.setParam(QStringLiteral("width"), 100);
+    crop.setParam(QStringLiteral("height"), 100);
+    crop.setInputImage(OpencvUtil::matToHimage(cv::Mat(10, 10, CV_8UC1, cv::Scalar(80))));
+    crop.run(false);
+    QVERIFY(crop.getParam(QStringLiteral("moduleStatus")).toBool());
+    const RoiShape roi = crop.geometryRoi();
+    QCOMPARE(roi.p1, QPointF(9, 0));
+    QCOMPARE(roi.p2, QPointF(10, 10));
+    const auto out = crop.getOutputData(1);
+    QVERIFY(out);
+    const cv::Mat cropped = OpencvUtil::himageToMat(out->getHImage());
+    QCOMPARE(cropped.cols, 1);
+    QCOMPARE(cropped.rows, 10);
+
+    // Y2-b：自适应阈值要求 8U，非 8 位须给出可操作原因而不是 OpenCV assert
+    OpencvAdaptiveThresholdNode adaptive;
+    adaptive.init();
+    adaptive.setInputImage(OpencvUtil::matToHimage(cv::Mat(8, 8, CV_16UC1, cv::Scalar(1000))));
+    adaptive.run(false);
+    QVERIFY2(!adaptive.getParam(QStringLiteral("moduleStatus")).toBool(),
+             "16 位输入不得直接进 cv::adaptiveThreshold");
+    QVERIFY2(adaptive.getParam(QStringLiteral("lastError")).toString().contains(QStringLiteral("8 位")),
+             qPrintable(adaptive.getParam(QStringLiteral("lastError")).toString()));
+
+    // Y2-c：颜色转换缺输入也必须写明原因
+    ColorConversionNode conv;
+    conv.init();
+    QVERIFY2(!conv.execute(), "颜色转换无输入不得判绿");
+    QVERIFY2(conv.getParam(QStringLiteral("lastError")).toString().contains(QStringLiteral("输入图像")),
+             qPrintable(conv.getParam(QStringLiteral("lastError")).toString()));
 }
 
 void NodeCoreTest::testImageArithDivByZero()
