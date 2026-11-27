@@ -1360,6 +1360,13 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              "卡尺信号太短/转换失败与边缘图转换失败必须判红并写原因，不能静默 0 结果");
     QVERIFY2(x2src("src/OpencvFitCircleNode.cpp").contains(QStringLiteral("移除该点后最小外接圆半径缩小量超过该值视为离群点")),
              "圆拟合剔除距离的帮助文本须与实际『半径缩小量』判据同口径");
+    // Y1：图像运算第二输入槽、中值滤波 8 位门闸
+    QVERIFY2(x2src("src/OpencvImageArithNode.cpp").contains(QStringLiteral("addInputSlot(QStringLiteral(\"图像2\"), PortDataType::Image)"))
+             && x2src("src/OpencvImageArithNode.cpp").contains(QStringLiteral("除数图像含 0 像素")),
+             "图像运算必须是可订阅的逻辑槽；缺输入/零除数须判红并写原因");
+    QVERIFY2(x2src("src/MedianFilterNode.cpp").contains(QStringLiteral("OpencvUtil::requireGray8(mat, &depthWhy)"))
+             && x2src("src/MedianFilterNode.cpp").contains(QStringLiteral("中值滤波：输入图像无法转换为 OpenCV 矩阵")),
+             "中值滤波必须显式拒绝非 8 位与空图，防止低字节垃圾与未初始化输出");
     // ⑭ 通信内联参数：IP 键必须按设备类型分发（serverIp 只有 TCP 消费）
     QFile cd(QStringLiteral(SRC_DIR "/src/CommunicationManagerDialog.cpp"));
     QVERIFY2(cd.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 CommunicationManagerDialog.cpp");

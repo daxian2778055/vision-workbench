@@ -135,6 +135,9 @@ private slots:
     void testImageArithAndHatOpenCv();
     void testCropBasic();
     void testImageArithDivByZero();
+    void testImageArithSecondImageSlot();      // Y1
+    void testImageArithFailureReasons();       // Y1
+    void testMedianFilterRejectsNon8Bit();     // Y1
     void testFormulaEvaluation();
     void testImageReadAddSingleLocalFile();
     void testMvsLocalReadBehavior();
@@ -1383,6 +1386,72 @@ void NodeCoreTest::testImageArithDivByZero()
     // 验证参数设置正确
     QCOMPARE(node.getParam(QStringLiteral("op")).toInt(), 3);
     QCOMPARE(node.getParam(QStringLiteral("constant")).toDouble(), 0.0);
+}
+
+void NodeCoreTest::testImageArithSecondImageSlot()
+{
+    OpencvImageArithNode node;
+    node.init();
+    QCOMPARE(node.logicalInputPortCount(), 2);   // 主图 + 逻辑槽「图像2」
+
+    cv::Mat a(8, 8, CV_8UC1, cv::Scalar(100));
+    cv::Mat b(8, 8, CV_8UC1, cv::Scalar(50));
+    node.setParam(QStringLiteral("operandType"), 1);
+    node.setParam(QStringLiteral("op"), 0);
+    node.setInputImage(OpencvUtil::matToHimage(a));
+    auto second = QSharedPointer<DataObject>::create();
+    second->setHImage(OpencvUtil::matToHimage(b));
+    node.setInputData(1, second);
+
+    node.run(false);
+    QVERIFY2(node.getParam(QStringLiteral("moduleStatus")).toBool(),
+             qPrintable(node.getParam(QStringLiteral("lastError")).toString()));
+    const auto out = node.getOutputData(1);
+    QVERIFY(out);
+    const cv::Mat result = OpencvUtil::himageToMat(out->getHImage());
+    QCOMPARE(result.at<uchar>(0, 0), uchar(150));
+}
+
+void NodeCoreTest::testImageArithFailureReasons()
+{
+    const cv::Mat a(8, 8, CV_8UC1, cv::Scalar(100));
+    OpencvImageArithNode node;
+    node.init();
+    node.setParam(QStringLiteral("operandType"), 1);
+    node.setParam(QStringLiteral("op"), 0);
+    node.setInputImage(OpencvUtil::matToHimage(a));
+
+    node.run(false);
+    QVERIFY2(!node.getParam(QStringLiteral("moduleStatus")).toBool(),
+             "缺少第二图像输入不得判绿");
+    QVERIFY2(node.getParam(QStringLiteral("lastError")).toString().contains(QStringLiteral("第二图像")),
+             qPrintable(node.getParam(QStringLiteral("lastError")).toString()));
+
+    // 除数图含 0：不再静默返回分子，也不得与常数除零口径分叉
+    cv::Mat b(8, 8, CV_8UC1, cv::Scalar(50));
+    b.at<uchar>(0, 0) = 0;
+    auto second = QSharedPointer<DataObject>::create();
+    second->setHImage(OpencvUtil::matToHimage(b));
+    node.setInputData(1, second);
+    node.setParam(QStringLiteral("op"), 3);
+    node.run(false);
+    QVERIFY2(!node.getParam(QStringLiteral("moduleStatus")).toBool(), "除数图含 0 不得判绿");
+    QVERIFY2(node.getParam(QStringLiteral("lastError")).toString().contains(QStringLiteral("含 0")),
+             qPrintable(node.getParam(QStringLiteral("lastError")).toString()));
+}
+
+void NodeCoreTest::testMedianFilterRejectsNon8Bit()
+{
+    MedianFilterNode node;
+    node.init();
+    node.setParam(QStringLiteral("kernelWidth"), 5);
+    node.setParam(QStringLiteral("kernelHeight"), 3);   // 矩形核走手写 uchar 直方图
+    node.setInputImage(OpencvUtil::matToHimage(cv::Mat(8, 8, CV_16UC1, cv::Scalar(1000))));
+    node.run(false);
+    QVERIFY2(!node.getParam(QStringLiteral("moduleStatus")).toBool(),
+             "16 位图上的矩形中值滤波不得静默产出低字节垃圾图");
+    QVERIFY2(node.getParam(QStringLiteral("lastError")).toString().contains(QStringLiteral("8 位")),
+             qPrintable(node.getParam(QStringLiteral("lastError")).toString()));
 }
 
 void NodeCoreTest::testFormulaEvaluation()

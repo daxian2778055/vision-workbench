@@ -94,8 +94,17 @@ void MedianFilterNode::run(bool /*autoSwitch*/)
         }
         cv::Mat mat = OpencvUtil::himageToMat(input);
         if (mat.empty()) {
+            m_params[QStringLiteral("lastError")] =
+                QStringLiteral("中值滤波：输入图像无法转换为 OpenCV 矩阵");
             m_params["moduleStatus"] = false;
             return;
+        }
+        // Y1：矩形/偶数核走手写 uchar 直方图，16 位图会被只读低字节；
+        // 同时 copyTo 掩膜回写在类型不一致时会把 ROI 内结果变成未初始化内存。显式拒绝非 8 位。
+        {
+            QString depthWhy;
+            if (!OpencvUtil::requireGray8(mat, &depthWhy))
+                throw std::runtime_error(depthWhy.toStdString());
         }
         if (mat.channels() == 3)
             cv::cvtColor(mat, mat, cv::COLOR_BGR2GRAY);

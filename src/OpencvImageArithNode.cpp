@@ -15,6 +15,9 @@ OpencvImageArithNode::OpencvImageArithNode(QObject *parent) : HalconNode(parent)
 void OpencvImageArithNode::init()
 {
     HalconNode::init();
+    // Y1：运算对象=图像时第二路输入走逻辑槽（画布仍只 1 个可见输入点）。
+    // 旧版没有这个槽 ⇒ setInputBinding 直接 return，m_inputData[1] 永不注入，图像分支恒判红。
+    addInputSlot(QStringLiteral("图像2"), PortDataType::Image);
     addOutputPort(QStringLiteral("结果图"), PortDataType::Image);
     registerParams({
         makeEnumParam(QStringLiteral("op"), 0, QStringList{"加法", "减法", "乘法", "除法"},
@@ -37,6 +40,8 @@ void OpencvImageArithNode::run(bool /*autoSwitch*/)
         }
         cv::Mat a = OpencvUtil::himageToMat(input);
         if (a.empty()) {
+            m_params[QStringLiteral("lastError")] =
+                QStringLiteral("图像运算：输入图像无法转换为 OpenCV 矩阵");
             m_params["moduleStatus"] = false;
             return;
         }
@@ -49,15 +54,31 @@ void OpencvImageArithNode::run(bool /*autoSwitch*/)
         cv::Mat b;
         if (operandType == 1) {
             // 图像运算对象：取端口 1（第二输入图像）
-            if (m_inputData.contains(1) && m_inputData[1]) {
-                b = OpencvUtil::himageToMat(m_inputData[1]->getHImage());
-                if (b.empty() || b.channels() == 3) {
-                    if (!b.empty()) cv::cvtColor(b, b, cv::COLOR_BGR2GRAY);
-                }
-            } else {
-                m_params[QStringLiteral("moduleStatus")] = false;
+            if (!m_inputData.contains(1) || !m_inputData[1]
+                || !m_inputData[1]->getHImage().IsInitialized()) {
+                m_params[QStringLiteral("lastError")] =
+                    QStringLiteral("图像运算：缺少第二图像输入（逻辑槽「图像2」未连接）");
+                m_params["moduleStatus"] = false;
                 return;
             }
+            b = OpencvUtil::himageToMat(m_inputData[1]->getHImage());
+            if (b.empty()) {
+                m_params[QStringLiteral("lastError")] =
+                    QStringLiteral("图像运算：第二图像无法转换为 OpenCV 矩阵");
+                m_params["moduleStatus"] = false;
+                return;
+            }
+            if (b.channels() == 3)
+                cv::cvtColor(b, b, cv::COLOR_BGR2GRAY);
+            if (b.size() != a.size()) {
+                m_params[QStringLiteral("lastError")] =
+                    QStringLiteral("图像运算：两幅图像尺寸不一致（%1×%2 vs %3×%4）")
+                        .arg(a.cols).arg(a.rows).arg(b.cols).arg(b.rows);
+                m_params["moduleStatus"] = false;
+                return;
+            }
+            if (b.type() != a.type())
+                b.convertTo(b, a.type());
         }
 
         cv::Mat out;
@@ -76,17 +97,24 @@ void OpencvImageArithNode::run(bool /*autoSwitch*/)
             break;
         case 3:  // 除
             if (operandType == 1) {
-                // 图像除图像：检查除数是否有零值
-                cv::Mat divisor = b.clone();
-                // 将零值替换为 1 避免除零，结果图中这些像素会是 255（饱和）
-                cv::Mat mask = (divisor == 0);
-                divisor.setTo(1, mask);
-                cv::divide(a, divisor, out);
+                // Y1：除数图含 0 时不再静默把 0 改成 1 返回分子（与注释也不符），
+                // 而是显式判红——常数除零早就判红，两条通路必须同口径。
+                cv::Mat zeroMask;
+                cv::compare(b, 0, zeroMask, cv::CMP_EQ);
+                if (cv::countNonZero(zeroMask) > 0) {
+                    m_params[QStringLiteral("lastError")] =
+                        QStringLiteral("图像运算：除数图像含 0 像素，无法做除法");
+                    m_params["moduleStatus"] = false;
+                    return;
+                }
+                cv::divide(a, b, out);
             } else {
                 // 常数除法：检查常数是否为零
                 if (qFuzzyIsNull(c)) {
+                    m_params[QStringLiteral("lastError")] =
+                        QStringLiteral("图像运算：除数常数为 0");
                     VFP_DEBUG << "OpencvImageArithNode: 除数常数为零，跳过除法运算";
-                    m_params[QStringLiteral("moduleStatus")] = false;
+                    m_params["moduleStatus"] = false;
                     return;
                 }
                 cv::divide(a, c, out);
