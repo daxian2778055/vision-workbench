@@ -501,6 +501,9 @@ bool ProjectManager::applyGlobalsFromJson(const QJsonObject &root)
     }
     if (root.contains(QStringLiteral("heartbeat")))
         HeartbeatManager::instance()->fromJson(root[QStringLiteral("heartbeat")].toObject());
+    // X1：无条件先清标定单例——旧项目文件缺 calibrations 字段时，若不先清会把上一方案的
+    // 内参/仿射带进新方案，下一次保存又把它写进新方案文件（持久化串台）。
+    CalibrationManager::instance()->clear();
     if (root.contains(QStringLiteral("calibrations"))) {
         // 被拒条目（键名空／值不是数组／元素不是有限数值／项数不足）不进表，但必须留痕：
         // 静默丢弃的表现是"方案打开后标定结果不见了"，现场无从下手（U-27）。
@@ -619,6 +622,8 @@ bool ProjectManager::restoreGlobals(const QJsonObject &snapshot)
         GlobalTriggerManager::instance()->fromJson(snapshot[QStringLiteral("globalTriggers")].toObject());
     if (snapshot.contains(QStringLiteral("heartbeat")))
         HeartbeatManager::instance()->fromJson(snapshot[QStringLiteral("heartbeat")].toObject());
+    // 回滚同样先清后装：快照里没有 calibrations 时表示载入前就是空表
+    CalibrationManager::instance()->clear();
     if (snapshot.contains(QStringLiteral("calibrations")))
         CalibrationManager::instance()->fromJson(snapshot[QStringLiteral("calibrations")].toObject());
 

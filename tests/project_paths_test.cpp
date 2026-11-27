@@ -19,6 +19,7 @@
 #include "NodeBase.h"
 #include "ParamSpec.h"
 #include "ProjectManager.h"
+#include "CalibrationManager.h"
 #include "GlobalVariableManager.h"
 #include "ProjectPaths.h"
 #include "SchemePackage.h"
@@ -53,6 +54,7 @@ private slots:
     void testGlobalSnapshotRollback();                     // P9：中止载入后全局配置整组复原
     void testApplyProjectJsonRejectsUnknownCommDevice();   // 通信设备建不出来 ⇒ 整份方案拒收 + 旧配置回滚
     void testGlobalsAppliedOnlyAfterExplicitCommit();       // P1-3：全局配置须在 commit 后才生效
+    void testApplyWithoutCalibrationsClearsStale();          // X1：旧方案标定不得带入新方案
 
 private:
     /// 造一份带指定 filePath 的方案文件（走真写侧序列化 buildProjectJson），返回是否落盘。
@@ -679,6 +681,23 @@ void ProjectPathsTest::testGlobalsAppliedOnlyAfterExplicitCommit()
 
     gvm->removeVariable(QStringLiteral("Q_COMMIT_PROBE"));
     qDeleteAll(loaded);
+}
+
+void ProjectPathsTest::testApplyWithoutCalibrationsClearsStale()
+{
+    auto *calib = CalibrationManager::instance();
+    QVERIFY(calib->setHomography(QStringLiteral("STALE_X1"), QVector<double>(9, 1.0)));
+    QVERIFY(calib->hasHomography(QStringLiteral("STALE_X1")));
+
+    QJsonArray scenes;
+    scenes.append(QJsonObject());   // buildScenesFromJson 要求至少一条场景
+    QJsonObject root;
+    root[QStringLiteral("scenes")] = scenes;   // 无 calibrations 字段（旧项目文件）
+    QList<FlowScene *> loaded;
+    ProjectManager pm;
+    QVERIFY(pm.applyProjectJson(root, loaded));
+    QVERIFY2(!calib->hasHomography(QStringLiteral("STALE_X1")),
+             "载入不含标定的方案必须先清空单例，不能把旧标定写进新方案");
 }
 
 QTEST_MAIN(ProjectPathsTest)

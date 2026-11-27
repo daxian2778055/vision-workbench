@@ -1,6 +1,7 @@
 #include "CalibrationManager.h"
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QMutexLocker>
 
 #include <cmath>
 
@@ -12,6 +13,7 @@ CalibrationManager *CalibrationManager::instance()
 
 bool CalibrationManager::setHomography(const QString &name, const QVector<double> &hom)
 {
+    QMutexLocker locker(&m_mutex);
     if (name.isEmpty())
         return false;
     const auto it = m_homographies.constFind(name);
@@ -23,26 +25,31 @@ bool CalibrationManager::setHomography(const QString &name, const QVector<double
 
 QVector<double> CalibrationManager::homography(const QString &name) const
 {
+    QMutexLocker locker(&m_mutex);
     return m_homographies.value(name);
 }
 
 bool CalibrationManager::hasHomography(const QString &name) const
 {
+    QMutexLocker locker(&m_mutex);
     return m_homographies.contains(name);
 }
 
 QStringList CalibrationManager::names() const
 {
+    QMutexLocker locker(&m_mutex);
     return m_homographies.keys();
 }
 
 void CalibrationManager::remove(const QString &name)
 {
+    QMutexLocker locker(&m_mutex);
     m_homographies.remove(name);
 }
 
 void CalibrationManager::clear()
 {
+    QMutexLocker locker(&m_mutex);
     m_homographies.clear();
 }
 
@@ -56,6 +63,7 @@ QPointF CalibrationManager::applyHomography(const QVector<double> &hom, double x
 
 QJsonObject CalibrationManager::toJson() const
 {
+    QMutexLocker locker(&m_mutex);
     QJsonObject o;
     for (auto it = m_homographies.constBegin(); it != m_homographies.constEnd(); ++it) {
         QJsonArray a;
@@ -68,6 +76,7 @@ QJsonObject CalibrationManager::toJson() const
 
 void CalibrationManager::fromJson(const QJsonObject &json, QStringList *rejected)
 {
+    QMutexLocker locker(&m_mutex);
     m_homographies.clear();
     for (auto it = json.constBegin(); it != json.constEnd(); ++it) {
         const QJsonValue value = it.value();

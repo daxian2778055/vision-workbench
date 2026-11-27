@@ -44,8 +44,13 @@ void OpencvCalibNode::init()
                       QStringLiteral("固定主点（只标定焦距与畸变）")),
         makeBoolParam(QStringLiteral("zeroTangentDist"), false,
                       QStringLiteral("切向畸变置零")),
-        makeBoolParam(QStringLiteral("fixK3"), false,
-                      QStringLiteral("固定 K3（仅估 K1/K2/P1/P2）")),
+        // X1：多相机标定时必须给不同相机分配不同的标定键，否则后标定的相机覆盖先标定的内参
+        makeStringParam(QStringLiteral("calibKey"), QStringLiteral("cam_params"),
+                        QStringLiteral("标定结果键（多相机时每台相机填不同键，与去畸变节点一致）")),
+        // X1 复核：持久化与去畸变只支持 K1/K2/P1/P2 四系数；若这里估 K3 会把 K3 只写进
+        // 面板展示字段，读侧 D[4] 恒 0 ⇒ 标定/校正模型不一致。默认固定 K3。
+        makeBoolParam(QStringLiteral("fixK3"), true,
+                      QStringLiteral("固定 K3（仅估 K1/K2/P1/P2，与去畸变侧同模型）")),
     });
     m_params[QStringLiteral("collectedFrames")] = 0;
     m_params[QStringLiteral("calibrated")] = false;
@@ -210,8 +215,9 @@ bool OpencvCalibNode::performCalibration(QString *detail)
         flags |= cv::CALIB_FIX_PRINCIPAL_POINT;
     if (m_params.value(QStringLiteral("zeroTangentDist"), false).toBool())
         flags |= cv::CALIB_ZERO_TANGENT_DIST;
-    if (m_params.value(QStringLiteral("fixK3"), false).toBool())
-        flags |= cv::CALIB_FIX_K3;
+    // X1：读侧 OpencvUndistortNode 的 D 只填 k1/k2/p1/p2，K3 无处存放；
+    // 因此无论参数怎么设都必须固定 K3，避免标定模型与校正模型分叉。
+    flags |= cv::CALIB_FIX_K3;
 
     double rms = 0.0;
     try {
@@ -254,13 +260,18 @@ bool OpencvCalibNode::performCalibration(QString *detail)
     const double k3 = distCoeffs.at<double>(4);
 
     QVector<double> params = {fx, fy, cx, cy, k1, k2, p1, p2, rms};
-    if (!CalibrationManager::instance()->setHomography(QStringLiteral("cam_params"), params)) {
-        // R-5：键 cam_params 上已有另一种项数的载荷（例如操作员把 N 点/手眼的 6 元矩阵存成了
-        // "cam_params"）⇒ 单例拒绝整条顶掉内参。此时不得继续报"标定成功"。
-        const auto held = CalibrationManager::instance()->homography(QStringLiteral("cam_params")).size();
+    // X1：键可由参数指定（多相机隔离），空值回落兼容默认键
+    QString calibKey = m_params.value(QStringLiteral("calibKey"), QStringLiteral("cam_params"))
+                           .toString().trimmed();
+    if (calibKey.isEmpty())
+        calibKey = QStringLiteral("cam_params");
+    if (!CalibrationManager::instance()->setHomography(calibKey, params)) {
+        // R-5：键上已有另一种项数的载荷（例如操作员把 N 点/手眼的 6 元矩阵存成了同键）
+        // ⇒ 单例拒绝整条顶掉内参。此时不得继续报"标定成功"。
+        const auto held = CalibrationManager::instance()->homography(calibKey).size();
         if (detail)
-            *detail = QStringLiteral("标定结果无法存入：键 cam_params 上已有 %1 项的另一种载荷，本次内参是 9 项")
-                          .arg(held);
+            *detail = QStringLiteral("标定结果无法存入：键 %1 上已有 %2 项的另一种载荷，本次内参是 9 项")
+                          .arg(calibKey).arg(held);
         return false;
     }
 

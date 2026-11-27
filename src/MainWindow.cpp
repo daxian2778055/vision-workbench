@@ -1,6 +1,7 @@
 #include <QElapsedTimer>
 #include "MainWindow.h"
 #include "SingleInstanceLock.h"
+#include "CalibrationManager.h"   // X1：新建空方案时清空标定单例
 #include "FocusGuard.h"
 #include "VmSharedText.h"
 #include "CalibrationWizardDialog.h"
@@ -4042,6 +4043,8 @@ void MainWindow::onNewProject()
             m_moduleResultPanel->clearResults();
     }
     m_lastModuleVars.clear();
+    // X1: clear calibration singleton on new empty project
+    CalibrationManager::instance()->clear();
 
     // 清空现有的流程场景
     qDeleteAll(m_flowScenes);

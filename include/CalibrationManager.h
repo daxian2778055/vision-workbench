@@ -6,6 +6,7 @@
 #include <QStringList>
 #include <QJsonObject>
 #include <QPointF>
+#include <QMutex>
 
 /// 标定数据管理单例：集中存储命名齐次变换矩阵（N点标定/手眼标定结果），
 /// 对标 VisionMaster 的标定模块，供坐标系换算算子复用。
@@ -48,5 +49,8 @@ public:
 
 private:
     CalibrationManager() = default;
+    // X1：标定节点在工作线程写表、另一流程的工作线程读表、GUI 保存遍历同一张表；
+    // 递归锁允许 fromJson 内部复用 clear() 等成员而不自锁。
+    mutable QRecursiveMutex m_mutex;
     QMap<QString, QVector<double>> m_homographies;
 };

@@ -1819,6 +1819,15 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              && readSrc("src/NodeSelfTest.cpp").contains(QStringLiteral("reportOk"))
              && readSrc("tools/deploy.ps1").contains(QStringLiteral("DeepOCR 自检未执行/未通过")),
              "CSV/报告写盘失败须影响退出码；部署脚本未跑成 OCR 不得放行");
+    // X1：标定模型一致、多相机键隔离、方案切换清空、单例加锁
+    QVERIFY2(readSrc("include/CalibrationManager.h").contains(QStringLiteral("QRecursiveMutex m_mutex")),
+             "标定单例被多个工作线程与 GUI 并发读写，必须加锁");
+    QVERIFY2(readSrc("src/OpencvCalibNode.cpp").contains(QStringLiteral("flags |= cv::CALIB_FIX_K3"))
+             && readSrc("src/OpencvCalibNode.cpp").contains(QStringLiteral("calibKey")),
+             "标定模型须与读侧四系数一致；多相机须可分配不同标定键");
+    QVERIFY2(readSrc("src/ProjectManager.cpp").contains(QStringLiteral("CalibrationManager::instance()->clear();"))
+             && mwSrc.contains(QStringLiteral("CalibrationManager::instance()->clear();")),
+             "载入/回滚/新建方案须无条件清标定单例，防止跨方案串台");
 }
 
 void UiGuardsTest::f2ValidationGuards()
