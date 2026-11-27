@@ -1938,6 +1938,10 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(readSrc("include/DprIcon.h").contains(QStringLiteral("setDevicePixelRatio"))
              && dprCanvasFiles == 5,
              "所有本地绘制图标必须按设备像素比放大物理画布并保留逻辑尺寸");
+    // AF1：流程耗时信号必须真发射，性能面板的接线才不是死线
+    QVERIFY2(readSrc("src/FlowExecutor.cpp").contains(QStringLiteral("emit flowExecutionTime(roundMs)"))
+             && readSrc("src/PerformancePanel.cpp").contains(QStringLiteral("onFlowExecutionTime")),
+             "性能面板的流程总耗时信号必须有发射点");
     // X1：标定模型一致、多相机键隔离、方案切换清空、单例加锁
     QVERIFY2(readSrc("include/CalibrationManager.h").contains(QStringLiteral("QRecursiveMutex m_mutex")),
              "标定单例被多个工作线程与 GUI 并发读写，必须加锁");

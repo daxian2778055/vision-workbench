@@ -909,7 +909,10 @@ void FlowExecutor::run()
         m_diagPhase.store(7, std::memory_order_relaxed);   // 诊断：轮末·落库后
 
         // 轮次统计 + 周期性进程资源采样/日志
-        recordRoundFinished(roundTimer.elapsed());
+        const qint64 roundMs = roundTimer.elapsed();
+        recordRoundFinished(roundMs);
+        // AF1：该信号此前只声明未发射，性能面板的「流程总耗时」永远不更新。
+        emit flowExecutionTime(roundMs);
         m_diagPhase.store(8, std::memory_order_relaxed);   // 诊断：轮末·统计后
 
         emit executionFinished();

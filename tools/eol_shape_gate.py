@@ -70,7 +70,9 @@ import sys
 # 由编辑工具以 LF 落盘，git add 后本闸首次看到它，tool_written 净增恰好 1（223），
 # tracked 同步到 757；没有任何既有文件被改掉行尾形状。本批存储健壮性改动只触及既有
 # 文件并维持其原行尾，差额一一对应。理由记录在此，供下次读数变化时并排核对。
-EXPECTED_TOOL_WRITTEN = 223
+# Re-frozen at 2026-11-27 223 -> 224：AE2 新增 include/DprIcon.h（DPR 画布 helper），
+# 由编辑工具以 LF 落盘；tracked 同步到 759，差额一一对应，既有文件行尾未变。
+EXPECTED_TOOL_WRITTEN = 224
 TAG = "EOL"
 
 
