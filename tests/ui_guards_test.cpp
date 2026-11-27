@@ -1962,6 +1962,12 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              && readSrc("tests/latest_frame_queue_test.cpp").contains(
                  QStringLiteral("testFrameNumberGapsAndDuplicates")),
              "最新帧队列须可单测帧号跳变/重复、本地覆盖与 SDK 丢包分离");
+    // AG5：性能基线必须真接进 CI，不能是写了没人调用的死工具
+    QVERIFY2(readSrc("tools/ci.ps1").contains(QStringLiteral("Write-Step \"Pipeline performance baseline\""))
+             && readSrc("tools/ci.ps1").contains(QStringLiteral("exit 20"))
+             && readSrc("tools/ci_exit_code_check.py").contains(
+                 QStringLiteral("(\"Pipeline performance baseline\", \"20\")")),
+             "流水线性能基线须接入 CI 退出码并登记冻结表");
     // X1：标定模型一致、多相机键隔离、方案切换清空、单例加锁
     QVERIFY2(readSrc("include/CalibrationManager.h").contains(QStringLiteral("QRecursiveMutex m_mutex")),
              "标定单例被多个工作线程与 GUI 并发读写，必须加锁");

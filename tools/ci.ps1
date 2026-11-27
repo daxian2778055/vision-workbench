@@ -48,6 +48,8 @@
       19 = a persisted field is read back but never written, so the value silently
            disappears on the next save/load round trip
            (tools/layout_field_pairing_gate.py -- layout and comm config)
+      20 = end-to-end pipeline performance regressed against its frozen same-host baseline
+            (tools/measure_pipeline_bench.py -- relative tolerance, not absolute milliseconds)
 
     Note: this script is intentionally ASCII-only, and therefore carries no UTF-8 BOM
     (PowerShell 5.1 only needs a BOM when a .ps1 contains non-ASCII text). The two-sided
@@ -1013,6 +1015,21 @@ if ($testCode -ne 0 -or $failed -gt 0 -or $total -eq 0) {
     exit 2
 }
 Write-Ok "all $total tests passed"
+
+# ------------------------------------------------- 5b. pipeline performance baseline
+# AG5: protect optimizations with a same-host relative regression gate. Absolute
+# milliseconds are machine-dependent; only significant degradation is red.
+Write-Step "Pipeline performance baseline"
+$benchLog = Join-Path $RepoRoot 'ci-pipeline-bench.log'
+$benchJson = Join-Path $RepoRoot 'ci-pipeline-bench.json'
+& $hygieneExe @hygienePre 'tools/measure_pipeline_bench.py' --seconds 8 --json $benchJson 2>&1 | Tee-Object -FilePath $benchLog | Out-Null
+$benchCode = $LASTEXITCODE
+if ($benchCode -ne 0) {
+    Write-Err "pipeline performance baseline failed (exit $benchCode); see $benchLog"
+    Pop-Location
+    exit 20
+}
+Write-Ok "pipeline performance baseline OK"
 
 # ---------------------------------------------------------------- 6. summary
 Write-Step 'Summary'

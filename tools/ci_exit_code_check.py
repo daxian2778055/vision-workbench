@@ -69,6 +69,7 @@ EXPECTED_STEPS = [
     "Build ($Config)",
     "Artifact freshness",
     "Tests (CTest / $Config)",
+    "Pipeline performance baseline",
 ]
 
 # gate step -> the one host code that step's red must produce. Codes 0/1/2 and the shared 3 are
@@ -90,6 +91,7 @@ GATE_CODE_OF_STEP = [
     ("Wiring checks", "18"),
     ("Version header single-source check", "17"),
     ("Release package coherence (tag / manifest / exe md5)", "16"),
+    ("Pipeline performance baseline", "20"),
 ]
 
 # Frozen executable-stop counts of the gate codes. 3 reads 3 because the interpreter is required
@@ -97,7 +99,7 @@ GATE_CODE_OF_STEP = [
 # in AC1); every other gate code fires from exactly one place.
 FROZEN_GATE_COUNTS = {
     "3": 3, "4": 1, "5": 1, "6": 1, "7": 1, "8": 1, "9": 1, "10": 1, "11": 1, "12": 1, "13": 1,
-    "14": 1, "15": 1, "16": 1, "17": 1, "18": 1, "19": 1,
+    "14": 1, "15": 1, "16": 1, "17": 1, "18": 1, "19": 1, "20": 1,
 }
 SHARED_CODES = ("0", "1", "2", "3")
 
