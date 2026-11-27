@@ -1907,6 +1907,13 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              "release auto SKIP 不得抹掉已记录的 git 读取失败");
     QVERIFY2(readSrc("tools/doc_anchors.py").contains(QStringLiteral("发布声明找不到时该断言本应判红")),
              "锚点基线文件缺失必须判红，不能当作表已核对放行");
+    // AC2：两条门禁不得把"读不到/缺依赖"降级成通过
+    QVERIFY2(readSrc("tools/version_header_check.py").contains(QStringLiteral("git_hash_unreadable"))
+             && !readSrc("tools/version_header_check.py").contains(QStringLiteral("return \"unknown\"")),
+             "git 哈希不可读必须判红，不能用与刷新脚本同值的 unknown 哨兵");
+    QVERIFY2(readSrc("tools/repo_hygiene.py").contains(QStringLiteral("FAILURES.append(\"pyyaml missing"))
+             && !readSrc("tools/repo_hygiene.py").contains(QStringLiteral("NOTES.append(\"pyyaml missing")),
+             "缺 pyyaml 导致 workflow 语法检查无法运行必须判红，不能降级为 NOTE");
     // X1：标定模型一致、多相机键隔离、方案切换清空、单例加锁
     QVERIFY2(readSrc("include/CalibrationManager.h").contains(QStringLiteral("QRecursiveMutex m_mutex")),
              "标定单例被多个工作线程与 GUI 并发读写，必须加锁");

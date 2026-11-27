@@ -68,11 +68,16 @@ def read_text(path):
 
 
 def git_short(repo):
-    p = subprocess.run(["git", "-C", repo, "rev-parse", "--short", "HEAD"],
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    """读不到 HEAD 返回 None，不能用 "unknown" 哨兵——刷新脚本同样会写 unknown，
+    下游的「赋值正确」和「两生成器等价」两条断言会因此恒真（AC2）。"""
+    try:
+        p = subprocess.run(["git", "-C", repo, "rev-parse", "--short", "HEAD"],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except FileNotFoundError:
+        return None
     if p.returncode != 0:
-        return "unknown"
-    return p.stdout.decode("utf-8", "replace").strip() or "unknown"
+        return None
+    return p.stdout.decode("utf-8", "replace").strip() or None
 
 
 def run_cmake(args):
@@ -96,6 +101,10 @@ def check(repo, template, refresh_script):
 
     # ---- B/C：已知输入跑 A → 断言赋值 → 同值跑 B → 逐字节比对 ----
     expected_hash = git_short(repo)
+    if not expected_hash:
+        finding(findings, "git_hash_unreadable",
+                "git rev-parse --short HEAD 失败：不能用 unknown 哨兵继续断言（会恒真）")
+        return findings
     expected_date = datetime.date.today().isoformat()
     out("[VHC] known_inputs version=%s hash=%s date=%s" % (VERSION_CONST, expected_hash, expected_date))
 
@@ -223,6 +232,16 @@ def selftest(repo, template, refresh_script):
             else:
                 problems.append("arm3_dead")
                 out("[VHC] selftest_arm3=FAIL（日期位塞版本号后仍判绿：这道闸有盲点）")
+        # 臂4：git 读不到 HEAD（AC2）。旧实现返回 "unknown"，与刷新脚本的哨兵相同，
+        # 赋值/等价两条断言恒真，整闸 GREEN。
+        no_git = os.path.join(tmp, "no_git_repo")
+        os.makedirs(no_git, exist_ok=True)
+        f4 = check(no_git, template, refresh_script)
+        if "git_hash_unreadable" in f4:
+            out("[VHC] selftest_arm4=ok（git 不可读时判红）")
+        else:
+            problems.append("arm4_dead")
+            out("[VHC] selftest_arm4=FAIL（git 不可读仍判绿：unknown 哨兵让断言恒真）")
     return problems
 
 

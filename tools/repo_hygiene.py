@@ -94,7 +94,9 @@ def check_workflows():
     try:
         import yaml
     except ImportError:
-        NOTES.append("pyyaml missing: workflow syntax check skipped (install it: pip install pyyaml)")
+        # AC2：workflow YAML 能解析是本闸明确编码过的硬条件，缺 pyyaml 不能降级为 NOTE——
+        # "没跑"和"语法正确"必须区分，否则环境缺依赖时这道闸恒绿。
+        FAILURES.append("pyyaml missing: workflow syntax check cannot run (pip install pyyaml)")
         yaml = None
 
     workflows = workflow_files()
