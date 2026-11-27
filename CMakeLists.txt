@@ -1025,6 +1025,13 @@ if(MSVC)
     set_tests_properties(SoakTest PROPERTIES ENVIRONMENT "VFP_SOAK_SECONDS=20")
 endif()
 
+# 最新帧队列纯数据契约（AG4a）：无需真机即可钉住有界/最新帧覆盖/帧号与丢帧计数
+if(MSVC)
+    add_executable(latest_frame_queue_test tests/latest_frame_queue_test.cpp)
+    target_link_libraries(latest_frame_queue_test PRIVATE vfp_core Qt6::Test)
+    vfp_add_qtest(NAME LatestFrameQueueTest TARGET latest_frame_queue_test)
+endif()
+
 # 相机 IO 控制功能测试（🥉：MVS 数字 IO 逻辑 + 序列化 + 缺相机降级）
 if(MSVC)
     add_executable(camera_io_test tests/camera_io_test.cpp)
@@ -1627,7 +1634,7 @@ if(MSVC)
                   CalibrationBoardTest DiagnosticsCollectorTest CalibrationWizardTest DeepOcrToolTest
                   FlowExecutorOwnershipTest RoiGeometryTest FixtureValidationTest
                   FlowRunContextTest NodeRunContextTest FlowExecutorTokenTest
-                  RegisterValueParseTest NodeStateBodyTest FinsTest)
+                  RegisterValueParseTest NodeStateBodyTest FinsTest LatestFrameQueueTest)
     if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
         # path_list_prepend 由 CMake 负责插入并处理平台路径分隔符，避免在
         # ENVIRONMENT 值里嵌套分号导致列表被错误拆分

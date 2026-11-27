@@ -1956,6 +1956,12 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(readSrc("include/PerformancePanel.h").contains(QStringLiteral("QElapsedTimer m_uiRefreshTimer"))
              && readSrc("src/PerformancePanel.cpp").contains(QStringLiteral("m_uiRefreshTimer.elapsed() >= 100")),
              "高帧率下性能表须节流刷新，统计仍逐节点累计");
+    // AG4a：采集解耦的纯数据面须有可测契约（当前不接入产品抓图路径）
+    QVERIFY2(readSrc("include/LatestFrameQueue.h").contains(QStringLiteral("与本地覆盖分开记"))
+             && readSrc("include/LatestFrameQueue.h").contains(QStringLiteral("takeLatest"))
+             && readSrc("tests/latest_frame_queue_test.cpp").contains(
+                 QStringLiteral("testFrameNumberGapsAndDuplicates")),
+             "最新帧队列须可单测帧号跳变/重复、本地覆盖与 SDK 丢包分离");
     // X1：标定模型一致、多相机键隔离、方案切换清空、单例加锁
     QVERIFY2(readSrc("include/CalibrationManager.h").contains(QStringLiteral("QRecursiveMutex m_mutex")),
              "标定单例被多个工作线程与 GUI 并发读写，必须加锁");
