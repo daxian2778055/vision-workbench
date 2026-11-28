@@ -1298,6 +1298,10 @@ void IntegrationTest::testSendFailureBaselineDeferred()
     FlowExecutor::reconcileSendFailureBaseline(deferred, true, 5, &baseline, &deferred);
     QCOMPARE(baseline, 5);
     QVERIFY(!deferred);
+
+    // 轮首仍未排空时抑制本轮记账，上一轮迟到失败不再算进本轮
+    QVERIFY(!FlowExecutor::shouldAccountSendFailures(true));
+    QVERIFY(FlowExecutor::shouldAccountSendFailures(false));
 }
 
 void IntegrationTest::testParamRefRestoredBeforeNodeSignals()

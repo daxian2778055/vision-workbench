@@ -84,6 +84,11 @@ void CommunicationNodeBase::dropSendPending(const void *flow)
 void CommunicationNodeBase::retainSendContext(const void *flow,
                                               const std::shared_ptr<FlowRunContext> &ctx)
 {
+    // AH1g：无流程上下文的请求（key 为 nullptr）也要计入本地持有表，析构时才能销 pending。
+    {
+        QMutexLocker heldLocker(&m_heldKeysMutex);
+        ++m_heldSendKeys[flow];
+    }
     if (!flow || !ctx)
         return;
     {
@@ -91,8 +96,6 @@ void CommunicationNodeBase::retainSendContext(const void *flow,
         ++s_liveSendRefs[flow];
         s_liveSendContexts[flow] = ctx;
     }
-    QMutexLocker heldLocker(&m_heldKeysMutex);
-    ++m_heldSendKeys[flow];
 }
 
 void CommunicationNodeBase::releaseSendContext(const void *flow)
@@ -105,6 +108,8 @@ void CommunicationNodeBase::releaseSendContext(const void *flow)
         if (--held.value() <= 0)
             m_heldSendKeys.erase(held);
     }
+    if (!flow)
+        return;   // 空 key 请求只在本地表记账，没有全局上下文引用
     QMutexLocker locker(&s_liveContextMutex);
     auto it = s_liveSendRefs.find(flow);
     if (it == s_liveSendRefs.end())

@@ -138,6 +138,8 @@ public:
     /// AH2c：按排空结果决定是否重取失败基线（纯逻辑，供回归单测驱动）
     static void reconcileSendFailureBaseline(bool deferred, bool drained, int currentCount,
                                              int *baseline, bool *deferredOut);
+    /// AH2f：排空未完成时本轮不得按旧基线记发送失败（纯逻辑，供回归单测）
+    static bool shouldAccountSendFailures(bool suppressed) { return !suppressed; }
     /// **诊断**：执行线程当前所处阶段（含正在执行的节点模块号），供定位"worker 不退出"类挂起。
     /// 由执行线程在关键点写入两个原子变量、任意线程可读；不参与任何业务逻辑，故可在挂起时安全轮询。
     QString workerPhaseName() const;
@@ -320,6 +322,8 @@ private:
     int m_sendFailuresAtRoundStart = 0;   /// 本轮是否出现失败节点（仅执行线程访问）
     /// AH2b：轮末排空超时时不推进基线；迟到失败留在已判 NG 的那一轮，不串到下一轮
     bool m_sendFailureBaselineDeferred = false;
+    /// AH2f：上一轮排空超时且轮首仍未排空时，本轮不按旧基线记发送失败，防重复记账
+    bool m_suppressSendAccounting = false;
     bool m_roundAborted = false;      /// 本轮是否被中途停止（仅执行线程访问）：半截流程不得计入整轮 OK
     /// 人为停止请求（界面线程置、执行线程读）：轮末据此判"中止"，而不是看 Stopped 状态
     /// ——失败停止同样是 Stopped，且被停止的算子可能自判失败（2026-10-25 复核 P2-1 残留）

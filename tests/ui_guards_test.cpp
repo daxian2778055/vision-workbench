@@ -1509,6 +1509,11 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(cbSrc.contains(QStringLiteral("for (int i = 0; i < it.value(); ++i)"))
              && cbSrc.contains(QStringLiteral("dropSendPending(it.key());")),
              "接收节点销毁时须替未执行的排队请求销掉 pending，避免排空永久超时");
+    QVERIFY2(cbSrc.indexOf(QStringLiteral("++m_heldSendKeys[flow];")) >= 0
+             && cbSrc.indexOf(QStringLiteral("++m_heldSendKeys[flow];"))
+                < cbSrc.indexOf(QStringLiteral("if (!flow || !ctx)"))
+             && cbSrc.contains(QStringLiteral("if (!flow)")),
+             "无流程上下文的空 key 请求也要计入本地持有表，析构时一并销 pending");
     // ㉑ 轮末排空 + 写回校验记账
     QFile fe(QStringLiteral(SRC_DIR "/src/FlowExecutor.cpp"));
     QVERIFY2(fe.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 FlowExecutor.cpp");
@@ -1534,6 +1539,10 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(feSrc.contains(QStringLiteral("Q_UNUSED(deferred);"))
              && feSrc.contains(QStringLiteral("Q_UNUSED(drained);")),
              "轮首不得以旧基线继续记账，即使排空仍未完成也须重取当前计数");
+    QVERIFY2(ahHead("include/FlowExecutor.h").contains(QStringLiteral("m_suppressSendAccounting"))
+             && feSrc.contains(QStringLiteral("shouldAccountSendFailures(m_suppressSendAccounting)"))
+             && feSrc.contains(QStringLiteral("m_suppressSendAccounting = true;")),
+             "轮首排空仍未完成时须抑制本轮发送记账，迟到失败不得重复计入");
     for (const char *file : { "src/ModbusNode.cpp", "src/PlcCommNode.cpp" }) {
         QFile f(QStringLiteral(SRC_DIR "/") + QString::fromLatin1(file));
         QVERIFY2(f.open(QIODevice::ReadOnly | QIODevice::Text), "打不开寄存器节点源码");
