@@ -327,6 +327,9 @@ private:
     /// AH2h：起轮前统一处理 deferred（有界排空 + 重取基线）；false 表示旧请求仍未排空，
     /// 调用方必须拒绝/跳过本轮，不能带着旧基线启动。
     bool drainDeferredSendBeforeRound();
+    /// AH2p：startExecution 的无锁包裹版本——调用方必须已持 m_mutex，供外部触发在同一把锁内
+    /// 完成"状态判断 + 启动/入队"的原子决策。
+    StartOutcome startExecutionLocked();
 
     bool m_roundAborted = false;      /// 本轮是否被中途停止（仅执行线程访问）：半截流程不得计入整轮 OK
     /// 人为停止请求（界面线程置、执行线程读）：轮末据此判"中止"，而不是看 Stopped 状态

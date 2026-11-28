@@ -1542,11 +1542,10 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              "triggerFired 不得在 requestExternalRound 之外二次启动流程，避免一次触发双跑");
     QVERIFY2(ahHead("include/FlowExecutor.h").contains(QStringLiteral("StartOutcome startExecution()"))
              && ahHead("include/FlowExecutor.h").contains(QStringLiteral("enum class StartOutcome"))
-             && feSrc.contains(QStringLiteral("outcome == StartOutcome::AlreadyRunning"))
-             && !feSrc.contains(QStringLiteral("if (false && outcome == StartOutcome::AlreadyRunning)"))
+             && feSrc.contains(QStringLiteral("return StartOutcome::AlreadyRunning;"))
              && !feSrc.contains(QStringLiteral("&& outcome == StartOutcome::DeferredRejected"))
-             && feSrc.contains(QStringLiteral("outcome = startExecution();"))
-             && feSrc.contains(QStringLiteral("retried = true;")),
+             && feSrc.contains(QStringLiteral("startExecutionLocked() == StartOutcome::Started"))
+             && feSrc.contains(QStringLiteral("AH2p：状态判断、启动与入队全部在同一把锁内完成")),
              "起轮须区分已运行与 deferred 拒绝；状态回转时重试，避免外部触发丢失");
     QVERIFY2(feSrc.contains(QStringLiteral("QThread::currentThread() == QCoreApplication::instance()->thread()"))
              && !feSrc.contains(QStringLiteral("if (false && QCoreApplication"))
