@@ -620,9 +620,10 @@ bool FlowExecutor::requestExternalRound()
     if (outcome != StartOutcome::Started) {
         QMutexLocker locker(&m_mutex);
         const ExecutionState now = m_runContext->state();
-        if (now != ExecutionState::Running && now != ExecutionState::Paused
-            && outcome == StartOutcome::DeferredRejected)
-            return false;   // 仍 Idle 且 deferred 未排空：拒绝且不计数
+        // AH2n：只在锁内确认真的 Running/Paused 才能入队——Idle 没有 worker 消费补跑队列，
+        // wakeAll 唤不醒已退出的线程；即便起轮时曾是 Running，回转后也必须拒绝。
+        if (now != ExecutionState::Running && now != ExecutionState::Paused)
+            return false;
         if (m_pendingExternalRounds < kMaxPendingExternalRounds) {
             ++m_pendingExternalRounds;
             m_waitCondition.wakeAll();
