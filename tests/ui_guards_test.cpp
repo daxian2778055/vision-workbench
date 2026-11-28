@@ -1545,7 +1545,8 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              && feSrc.contains(QStringLiteral("outcome == StartOutcome::AlreadyRunning"))
              && !feSrc.contains(QStringLiteral("if (false && outcome == StartOutcome::AlreadyRunning)"))
              && !feSrc.contains(QStringLiteral("&& outcome == StartOutcome::DeferredRejected"))
-             && feSrc.contains(QStringLiteral("outcome = startExecution();")),
+             && feSrc.contains(QStringLiteral("outcome = startExecution();"))
+             && feSrc.contains(QStringLiteral("retried = true;")),
              "起轮须区分已运行与 deferred 拒绝；状态回转时重试，避免外部触发丢失");
     QVERIFY2(feSrc.contains(QStringLiteral("QThread::currentThread() == QCoreApplication::instance()->thread()"))
              && !feSrc.contains(QStringLiteral("if (false && QCoreApplication"))

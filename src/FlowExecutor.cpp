@@ -605,37 +605,38 @@ bool FlowExecutor::requestExternalRound()
     // 执行器可能仍是 Idle（deferred 未排空，排队无人消费 ⇒ 必须拒绝），也可能在
     // 上面解锁后被另一线程抢先启动 ⇒ 已变 Running/Paused，此时应按忙时策略补跑，不能丢触发。
     StartOutcome outcome = startExecution();
-    // AH2l：曾在运行但复查前已回到 Idle ⇒ 重试一次起轮；状态回转不能把这次触发丢掉。
-    if (outcome == StartOutcome::AlreadyRunning) {
-        QMutexLocker locker(&m_mutex);
-        const bool idleNow = m_runContext->state() != ExecutionState::Running
-                             && m_runContext->state() != ExecutionState::Paused;
-        locker.unlock();
-        if (idleNow) {
-            outcome = startExecution();
-            if (outcome == StartOutcome::Started)
-                return true;
-        }
-    }
     if (outcome != StartOutcome::Started) {
-        QMutexLocker locker(&m_mutex);
-        const ExecutionState now = m_runContext->state();
-        // AH2n：只在锁内确认真的 Running/Paused 才能入队——Idle 没有 worker 消费补跑队列，
-        // wakeAll 唤不醒已退出的线程；即便起轮时曾是 Running，回转后也必须拒绝。
-        if (now != ExecutionState::Running && now != ExecutionState::Paused)
-            return false;
-        if (m_pendingExternalRounds < kMaxPendingExternalRounds) {
-            ++m_pendingExternalRounds;
-            m_waitCondition.wakeAll();
-            return true;
+        // AH2o：启动与入队在同一把锁内决定；Idle 时若失败原因是"曾在运行但状态回转"，
+        // 再尝试起轮一次（有界），避免这笔触发既没启动也没排队；deferred 拒绝仍直接拒绝。
+        bool retried = false;
+        for (;;) {
+            QMutexLocker locker(&m_mutex);
+            const ExecutionState now = m_runContext->state();
+            if (now == ExecutionState::Running || now == ExecutionState::Paused) {
+                if (m_pendingExternalRounds < kMaxPendingExternalRounds) {
+                    ++m_pendingExternalRounds;
+                    m_waitCondition.wakeAll();
+                    return true;
+                }
+                ++m_droppedExternalRounds;
+                const quint64 dropped = m_droppedExternalRounds;
+                locker.unlock();
+                VFP_RUNTIME_INFO.noquote()
+                    << QStringLiteral("警告：外部触发超出排队上限(%1)，丢弃最旧一笔；累计丢弃=%2")
+                           .arg(kMaxPendingExternalRounds).arg(dropped);
+                return false;
+            }
+            // Idle：没有 worker 消费补跑队列，不能入队
+            locker.unlock();
+            if (!retried && outcome == StartOutcome::AlreadyRunning) {
+                retried = true;
+                outcome = startExecution();
+                if (outcome == StartOutcome::Started)
+                    return true;
+                continue;   // 再按真实状态判定一次
+            }
+            return false;   // deferred 未排空或重试后仍 Idle：拒绝且不计数
         }
-        ++m_droppedExternalRounds;
-        const quint64 dropped = m_droppedExternalRounds;
-        locker.unlock();
-        VFP_RUNTIME_INFO.noquote()
-            << QStringLiteral("警告：外部触发超出排队上限(%1)，丢弃最旧一笔；累计丢弃=%2")
-                   .arg(kMaxPendingExternalRounds).arg(dropped);
-        return false;
     }
     return true;
 }
