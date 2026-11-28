@@ -430,6 +430,23 @@ void FlowExecutor::setFlowScene(FlowScene *scene)
     }
 }
 
+bool FlowExecutor::drainDeferredSendBeforeRound()
+{
+    if (!m_sendFailureBaselineDeferred)
+        return true;
+    bool drained = CommunicationNodeBase::waitSendDrain(m_runContext.get(), 200);
+    if (!drained)
+        drained = CommunicationNodeBase::waitSendDrain(m_runContext.get(), 2000);
+    if (!drained) {
+        emit executionError(QStringLiteral("上一轮发送仍未排空，拒绝/跳过新轮以避免错账"));
+        return false;
+    }
+    reconcileSendFailureBaseline(m_sendFailureBaselineDeferred, drained,
+                                 CommunicationNodeBase::sendWriteFailureCount(m_runContext.get()),
+                                 &m_sendFailuresAtRoundStart, &m_sendFailureBaselineDeferred);
+    return true;
+}
+
 void FlowExecutor::startExecution()
 {
     QMutexLocker locker(&m_mutex);
@@ -444,13 +461,14 @@ void FlowExecutor::startExecution()
     //   下一次正常生产轮即使全成功，轮末汇总仍写 NG 或干脆跳过。
     m_userStopRequested.store(false, std::memory_order_relaxed);
     m_roundHadFailure = false;
-    // r19 P2：先让本轮入队的发送落地，再读失败数（否则失败会被记到下一轮）
-    // AH2：轮首排空超时不能假装基线可靠——留一条可见告警，避免迟到失败静默串账。
+    // AH2h：手动启动 / 空闲外部触发也是起轮入口，必须与连续路径同口径处理 deferred；
+    // 旧请求仍未排空时拒绝启动，不能带着旧基线把迟到失败算进新轮。
+    if (!drainDeferredSendBeforeRound())
+        return;
     const bool startDrained = CommunicationNodeBase::waitSendDrain(m_runContext.get(), 200);
     if (!startDrained) {
         emit executionError(QStringLiteral("轮首发送排空超时，上一轮可能有未记账的异步写入"));
     }
-    // AH2c：deferred 必须真正被读取——超时轮的迟到失败折进基线，不再二次计入本轮。
     reconcileSendFailureBaseline(m_sendFailureBaselineDeferred, startDrained,
                                  CommunicationNodeBase::sendWriteFailureCount(m_runContext.get()),
                                  &m_sendFailuresAtRoundStart, &m_sendFailureBaselineDeferred);
@@ -689,20 +707,10 @@ void FlowExecutor::run()
 
         // AH2d：连续/硬触发轮次与软件触发补跑都回到这里，不经过 startExecution；
         // 若上一轮排空超时 deferred 仍置位，必须在每个新轮开始处理，否则迟到失败会串账。
-        if (m_sendFailureBaselineDeferred) {
-            // AH2g：先给旧轮的在途写入一次有界等待；仍未排空则跳过本轮，
-            // 既不吞掉本轮自己的失败，也不让旧轮迟到失败串进本轮账。
-            bool deferredDrained = CommunicationNodeBase::waitSendDrain(m_runContext.get(), 200);
-            if (!deferredDrained)
-                deferredDrained = CommunicationNodeBase::waitSendDrain(m_runContext.get(), 2000);
-            if (!deferredDrained) {
-                emit executionError(QStringLiteral("上一轮发送仍未排空，跳过本轮以避免错账"));
-                m_diagPhase.store(2, std::memory_order_relaxed);
-                continue;
-            }
-            reconcileSendFailureBaseline(m_sendFailureBaselineDeferred, deferredDrained,
-                                         CommunicationNodeBase::sendWriteFailureCount(m_runContext.get()),
-                                         &m_sendFailuresAtRoundStart, &m_sendFailureBaselineDeferred);
+        // AH2h：连续/硬触发轮次与手动启动共用一个 deferred 收口；未排空则跳过本轮。
+        if (!drainDeferredSendBeforeRound()) {
+            m_diagPhase.store(2, std::memory_order_relaxed);
+            continue;
         }
 
         // 本轮计时（运行期统计用）

@@ -321,6 +321,9 @@ private:
     int m_sendFailuresAtRoundStart = 0;   /// 本轮是否出现失败节点（仅执行线程访问）
     /// AH2b：轮末排空超时时不推进基线；迟到失败留在已判 NG 的那一轮，不串到下一轮
     bool m_sendFailureBaselineDeferred = false;
+    /// AH2h：起轮前统一处理 deferred（有界排空 + 重取基线）；false 表示旧请求仍未排空，
+    /// 调用方必须拒绝/跳过本轮，不能带着旧基线启动。
+    bool drainDeferredSendBeforeRound();
 
     bool m_roundAborted = false;      /// 本轮是否被中途停止（仅执行线程访问）：半截流程不得计入整轮 OK
     /// 人为停止请求（界面线程置、执行线程读）：轮末据此判"中止"，而不是看 Stopped 状态
