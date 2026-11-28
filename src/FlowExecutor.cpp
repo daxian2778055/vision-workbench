@@ -619,22 +619,11 @@ bool FlowExecutor::requestExternalRound()
             << QStringLiteral("写闸开启期间不受理外部触发的新运行（出厂口令未改，改密后恢复）");
         return false;
     }
-    // AH2i：只有真的起了一轮才让 GTM 计数/发 triggerFired；排空未完成时把触发保留为补跑，
-    // 等旧请求排空后由工作线程轮首处理，不虚报也不丢触发。
-    if (!startExecution()) {
-        QMutexLocker locker(&m_mutex);
-        if (m_pendingExternalRounds < kMaxPendingExternalRounds) {
-            ++m_pendingExternalRounds;
-            m_waitCondition.wakeAll();
-            return true;
-        }
-        ++m_droppedExternalRounds;
-        locker.unlock();
-        VFP_RUNTIME_INFO.noquote()
-            << QStringLiteral("警告：外部触发超出排队上限(%1)，丢弃最旧一笔；累计丢弃=%2")
-                   .arg(kMaxPendingExternalRounds).arg(m_droppedExternalRounds);
+    // AH2k：只有真的起了一轮才让 GTM 计数/发 triggerFired。startExecution 失败时
+    // 执行器仍是 Idle，没有工作线程消费补跑队列（wakeAll 唤不醒未启动的线程），
+    // 排队只会让触发永久挂起却已被计数——故直接拒绝，让触发管理器不计数、不发 triggerFired。
+    if (!startExecution())
         return false;
-    }
     return true;
 }
 
