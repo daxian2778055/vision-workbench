@@ -1369,6 +1369,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261128",
       "recorded_at": "2026-11-28",
       "recorded_note": "上线包：含通信归属/轮次账务/外部触发原子决策与性能基线的全部修复；离线自检 0 失败，DeepOCR 合成图识别通过，exe 内嵌 HEAD 版本 yes。"
+    },
+    {
+      "tag": "rc-20261129",
+      "commit": "71e26680776efeee6d2b5557788c7ccd821cfd87",
+      "exe_md5": "60d46cf5277ffc86ad52aa641037000f",
+      "exe_bytes": 13185536,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261129",
+      "recorded_at": "2026-11-29",
+      "recorded_note": "修复全新启动恢复基线空指针崩溃后的可运行包；GUI 实测持续运行，离线自检 0 失败，DeepOCR 合成图识别通过，exe 内嵌 HEAD 版本 yes。"
     }
   ],
   "legacy_backfilled": [
