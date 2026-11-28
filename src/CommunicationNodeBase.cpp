@@ -86,13 +86,21 @@ void CommunicationNodeBase::retainSendContext(const void *flow,
 {
     if (!flow || !ctx)
         return;
-    QMutexLocker locker(&s_liveContextMutex);
-    ++s_liveSendRefs[flow];
-    s_liveSendContexts[flow] = ctx;
+    {
+        QMutexLocker locker(&s_liveContextMutex);
+        ++s_liveSendRefs[flow];
+        s_liveSendContexts[flow] = ctx;
+    }
+    ++m_heldSendKeys[flow];
 }
 
 void CommunicationNodeBase::releaseSendContext(const void *flow)
 {
+    auto held = m_heldSendKeys.find(flow);
+    if (held == m_heldSendKeys.end())
+        return;
+    if (--held.value() <= 0)
+        m_heldSendKeys.erase(held);
     QMutexLocker locker(&s_liveContextMutex);
     auto it = s_liveSendRefs.find(flow);
     if (it == s_liveSendRefs.end())
@@ -101,6 +109,24 @@ void CommunicationNodeBase::releaseSendContext(const void *flow)
         s_liveSendRefs.erase(it);
         s_liveSendContexts.remove(flow);
     }
+}
+
+CommunicationNodeBase::~CommunicationNodeBase()
+{
+    // AH1d：排队事件随接收方销毁而丢弃，槽不会运行；析构时把本节点持有的引用全部还回去。
+    for (auto it = m_heldSendKeys.constBegin(); it != m_heldSendKeys.constEnd(); ++it) {
+        QMutexLocker locker(&s_liveContextMutex);
+        auto ref = s_liveSendRefs.find(it.key());
+        if (ref == s_liveSendRefs.end())
+            continue;
+        for (int i = 0; i < it.value() && ref.value() > 0; ++i)
+            --ref.value();
+        if (ref.value() <= 0) {
+            s_liveSendRefs.erase(ref);
+            s_liveSendContexts.remove(it.key());
+        }
+    }
+    m_heldSendKeys.clear();
 }
 
 int CommunicationNodeBase::pendingSendCount(const void *flow)

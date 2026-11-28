@@ -35,6 +35,8 @@ public:
     };
 
     explicit CommunicationNodeBase(QObject *parent = nullptr);
+    /// AH1d：节点销毁时释放所有仍在排队的上下文引用（接收方销毁后排队槽不会运行）
+    ~CommunicationNodeBase() override;
 
     void init() override;
     void run(bool autoSwitch = true) override;
@@ -61,11 +63,12 @@ public:
     /// AH1b：ctx 必须显式传入，避免"先 set 再 request"两步之间被另一流程覆盖。
     void requestSend(const QByteArray &data, const std::shared_ptr<FlowRunContext> &ctx)
     {
-        const void *key = ctx ? ctx.get()
-                              : (ownerContext() ? ownerContext().get() : nullptr);
+        // AH1d：ctx 缺省时也要保活 ownerContext，不能用空指针去 retain 一个非空 key。
+        const std::shared_ptr<FlowRunContext> effective = ctx ? ctx : ownerContext();
+        const void *key = effective ? effective.get() : nullptr;
         // AH1c：排队期间持有上下文强引用，流程提前关闭也不会释放该对象；
         // 地址不会被新流程复用，待处理请求结算时再释放。
-        retainSendContext(key, ctx);
+        retainSendContext(key, effective);
         bumpSendPending(key);
         emit sendRequested(data, key);
     }
@@ -101,8 +104,8 @@ protected:
     static void bumpSendPending(const void *flow);
     static void dropSendPending(const void *flow);
     /// AH1c：排队请求持有上下文强引用，完成时按引用计数释放
-    static void retainSendContext(const void *flow, const std::shared_ptr<FlowRunContext> &ctx);
-    static void releaseSendContext(const void *flow);
+    void retainSendContext(const void *flow, const std::shared_ptr<FlowRunContext> &ctx);
+    void releaseSendContext(const void *flow);
     /// 发送归属流程上下文的读取：优先用 sendData 传入的发起方上下文，
  /// 否则退回节点自身 ownerContext，都没有则落 nullptr 桶（非流程场景）。
  const void *sendFlowContext() const
@@ -115,6 +118,8 @@ protected:
  /// AH1: active key during async send; write failures use it instead of rereading a mutable member.
  const void *activeSendFlow() const { return m_activeSendFlow.load(std::memory_order_acquire); }
  mutable QMutex m_sendContextMutex;
+ /// AH1d：本节点仍持有的排队 key（析构时统一释放，防止接收方销毁导致槽不运行）
+ QHash<const void *, int> m_heldSendKeys;
  std::shared_ptr<FlowRunContext> m_sendFlowContext;
  std::atomic<const void *> m_activeSendFlow{nullptr};
  void noteSendWriteFailure(const QString &why);

@@ -687,6 +687,19 @@ void FlowExecutor::run()
         std::shared_ptr<FlowSceneAliveBlock> blockCopy = m_aliveBlock;
         locker.unlock();
 
+        // AH2d：连续/硬触发轮次与软件触发补跑都回到这里，不经过 startExecution；
+        // 若上一轮排空超时 deferred 仍置位，必须在每个新轮开始处理，否则迟到失败会串账。
+        if (m_sendFailureBaselineDeferred) {
+            const bool deferredDrained =
+                CommunicationNodeBase::waitSendDrain(m_runContext.get(), 200);
+            if (!deferredDrained) {
+                emit executionError(QStringLiteral("轮首发送排空超时，上一轮可能有未记账的异步写入"));
+            }
+            reconcileSendFailureBaseline(m_sendFailureBaselineDeferred, deferredDrained,
+                                         CommunicationNodeBase::sendWriteFailureCount(m_runContext.get()),
+                                         &m_sendFailuresAtRoundStart, &m_sendFailureBaselineDeferred);
+        }
+
         // 本轮计时（运行期统计用）
         QElapsedTimer roundTimer;
         roundTimer.start();

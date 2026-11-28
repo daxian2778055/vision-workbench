@@ -1494,10 +1494,15 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
                  QStringLiteral("const void *key = sendFlowContext();")),
              "异步发送不得从共享成员读取归属 key");
     // AH1c：排队请求必须持有上下文强引用，完成时释放
-    QVERIFY2(ahHead("include/CommunicationNodeBase.h").contains(QStringLiteral("retainSendContext(key, ctx)"))
+    QVERIFY2(ahHead("include/CommunicationNodeBase.h").contains(QStringLiteral("retainSendContext(key, effective)"))
              && cbSrc.contains(QStringLiteral("releaseSendContext(flowKey)"))
              && cbSrc.contains(QStringLiteral("s_liveSendContexts[flow] = ctx")),
              "排队期间必须保持流程上下文存活，防止关闭流程后旧指针悬空/地址复用");
+    QVERIFY2(ahHead("include/CommunicationNodeBase.h").contains(
+                 QStringLiteral("const std::shared_ptr<FlowRunContext> effective = ctx ? ctx : ownerContext()"))
+             && cbSrc.contains(QStringLiteral("CommunicationNodeBase::~CommunicationNodeBase()"))
+             && cbSrc.contains(QStringLiteral("m_heldSendKeys.clear()")),
+             "缺省 ctx 也要保活 ownerContext；接收方销毁时须释放排队引用");
     // ㉑ 轮末排空 + 写回校验记账
     QFile fe(QStringLiteral(SRC_DIR "/src/FlowExecutor.cpp"));
     QVERIFY2(fe.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 FlowExecutor.cpp");
@@ -1518,6 +1523,8 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
                  QStringLiteral("reconcileSendFailureBaseline(bool deferred, bool drained, int currentCount"))
              && feSrc.contains(QStringLiteral("reconcileSendFailureBaseline(m_sendFailureBaselineDeferred, startDrained")),
              "deferred 标记必须被真正读取并参与基线重算");
+    QVERIFY2(feSrc.count(QStringLiteral("if (m_sendFailureBaselineDeferred) {")) >= 1,
+             "连续/触发轮次每轮开始都必须处理 deferred 基线，不能只在 startExecution 处理");
     for (const char *file : { "src/ModbusNode.cpp", "src/PlcCommNode.cpp" }) {
         QFile f(QStringLiteral(SRC_DIR "/") + QString::fromLatin1(file));
         QVERIFY2(f.open(QIODevice::ReadOnly | QIODevice::Text), "打不开寄存器节点源码");
