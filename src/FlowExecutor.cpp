@@ -461,11 +461,11 @@ bool FlowExecutor::drainDeferredSendBeforeRound()
     return true;
 }
 
-bool FlowExecutor::startExecution()
+FlowExecutor::StartOutcome FlowExecutor::startExecution()
 {
     QMutexLocker locker(&m_mutex);
     if (m_runContext->state() == ExecutionState::Running) {
-        return false;
+        return StartOutcome::AlreadyRunning;
     }
 
     // 清掉上一轮/局部执行遗留的轮级标志（P2-1/P2-B 残留）：
@@ -478,7 +478,7 @@ bool FlowExecutor::startExecution()
     // AH2h：手动启动 / 空闲外部触发也是起轮入口，必须与连续路径同口径处理 deferred；
     // 旧请求仍未排空时拒绝启动，不能带着旧基线把迟到失败算进新轮。
     if (!drainDeferredSendBeforeRound())
-        return false;
+        return StartOutcome::DeferredRejected;
     const bool startDrained = CommunicationNodeBase::waitSendDrain(m_runContext.get(), 200);
     if (!startDrained) {
         emit executionError(QStringLiteral("轮首发送排空超时，上一轮可能有未记账的异步写入"));
@@ -495,7 +495,7 @@ bool FlowExecutor::startExecution()
     } else {
         m_waitCondition.wakeAll();
     }
-    return true;
+    return StartOutcome::Started;
 }
 
 void FlowExecutor::pauseExecution()
@@ -622,11 +622,25 @@ bool FlowExecutor::requestExternalRound()
     // AH2k：只有真的起了一轮才让 GTM 计数/发 triggerFired。startExecution 失败时
     // 执行器可能仍是 Idle（deferred 未排空，排队无人消费 ⇒ 必须拒绝），也可能在
     // 上面解锁后被另一线程抢先启动 ⇒ 已变 Running/Paused，此时应按忙时策略补跑，不能丢触发。
-    if (!startExecution()) {
+    StartOutcome outcome = startExecution();
+    // AH2l：曾在运行但复查前已回到 Idle ⇒ 重试一次起轮；状态回转不能把这次触发丢掉。
+    if (outcome == StartOutcome::AlreadyRunning) {
+        QMutexLocker locker(&m_mutex);
+        const bool idleNow = m_runContext->state() != ExecutionState::Running
+                             && m_runContext->state() != ExecutionState::Paused;
+        locker.unlock();
+        if (idleNow) {
+            outcome = startExecution();
+            if (outcome == StartOutcome::Started)
+                return true;
+        }
+    }
+    if (outcome != StartOutcome::Started) {
         QMutexLocker locker(&m_mutex);
         const ExecutionState now = m_runContext->state();
-        if (now != ExecutionState::Running && now != ExecutionState::Paused)
-            return false;   // 仍 Idle：deferred 未排空，拒绝且不计数
+        if (now != ExecutionState::Running && now != ExecutionState::Paused
+            && outcome == StartOutcome::DeferredRejected)
+            return false;   // 仍 Idle 且 deferred 未排空：拒绝且不计数
         if (m_pendingExternalRounds < kMaxPendingExternalRounds) {
             ++m_pendingExternalRounds;
             m_waitCondition.wakeAll();
