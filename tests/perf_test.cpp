@@ -16,6 +16,7 @@
 
 #include "FlowScene.h"
 #include "NodeBase.h"
+#include "PerformancePanel.h"
 #include "Port.h"
 #include "Connection.h"
 
@@ -31,6 +32,8 @@ private slots:
     void testUndoSnapshotScaling();
     /// 单条连线创建（含闭环检测）耗时
     void testCreateConnectionLatency();
+    /// AH4：节流期间统计照常累计，轮末必须把末批刷到界面
+    void testPerformancePanelFinalRefresh();
 
 private:
     void fillTo(int nodeCount);
@@ -163,6 +166,33 @@ void PerfTest::testCreateConnectionLatency()
                             .arg(overBudget)
                             .arg(steady.size())
                             .arg(toleratedOverBudget)));
+}
+
+void PerfTest::testPerformancePanelFinalRefresh()
+{
+    FlowScene scene;
+    NodeBase *node = scene.createNode(NodeBase::LOGIC, QPointF(0, 0),
+                                      QStringLiteral("perf_probe"));
+    QVERIFY(node);
+
+    PerformancePanel panel;
+    auto *table = panel.findChild<QTableWidget *>();
+    QVERIFY(table);
+    const auto feed = [&](qint64 ms) {
+        panel.onNodeExecutionTime(node->name(), static_cast<int>(node->type()),
+                                  node->moduleId(), ms);
+    };
+
+    feed(10);
+    QCOMPARE(table->item(0, 3)->text(), QStringLiteral("10"));
+    // 100ms 节流期内继续累计，但表格保持旧值
+    feed(20);
+    feed(30);
+    QCOMPARE(table->item(0, 3)->text(), QStringLiteral("10"));
+    // 轮末 flush 必须把末批显示出来（0ms 定时器合并刷新）
+    panel.onFlowExecutionTime(60);
+    QCoreApplication::processEvents();
+    QCOMPARE(table->item(0, 3)->text(), QStringLiteral("60"));
 }
 
 QTEST_MAIN(PerfTest)

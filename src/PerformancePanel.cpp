@@ -38,6 +38,10 @@ void PerformancePanel::unbindExecutor()
         disconnect(m_boundExecutor, nullptr, this, nullptr);
         m_boundExecutor = nullptr;
     }
+    // AH3/AH4：解绑时把已累计的终值刷到界面；统计是值数据，解绑后仍可读。
+    m_uiRefreshTimer.invalidate();
+    updateTable();
+    updateSummary();
 }
 
 void PerformancePanel::setupUi()
@@ -108,10 +112,9 @@ void PerformancePanel::setupUi()
         Q_UNUSED(column);
         QTableWidgetItem *item = m_table->item(row, 0);
         if (item) {
-            NodeBase *node = reinterpret_cast<NodeBase*>(item->data(Qt::UserRole).toULongLong());
-            if (node) {
-                emit nodeClicked(node);
-            }
+            const int moduleId = item->data(Qt::UserRole).toInt();
+            if (moduleId > 0)
+                emit nodeClicked(moduleId);
         }
     });
 
@@ -123,18 +126,16 @@ void PerformancePanel::setupUi()
     layout->addWidget(m_summaryLabel);
 }
 
-void PerformancePanel::onNodeExecutionTime(NodeBase *node, qint64 elapsedMs)
+void PerformancePanel::onNodeExecutionTime(const QString &nodeName, int nodeType,
+                                           int moduleId, qint64 elapsedMs)
 {
-    if (!node) return;
-
-    NodeStats &stats = m_nodeStats[node];
-    stats.nodeName = node->name();
+    NodeStats &stats = m_nodeStats[moduleId];
+    stats.nodeName = nodeName;
     // P8：表头是"类型"，此前却显示整数枚举值；改为可读分类名
     static const char *kTypeNames[] = {"图像采集", "图像处理", "形状分析", "测量", "逻辑", "输出"};
-    const int ti = static_cast<int>(node->type());
-    stats.nodeType = (ti >= 0 && ti < 6)
-                         ? QString::fromUtf8(kTypeNames[ti])
-                         : QString::number(ti);
+    stats.nodeType = (nodeType >= 0 && nodeType < 6)
+                         ? QString::fromUtf8(kTypeNames[nodeType])
+                         : QString::number(nodeType);
     stats.executionCount++;
     stats.totalTime += elapsedMs;
     stats.minTime = qMin(stats.minTime, elapsedMs);
@@ -157,6 +158,18 @@ void PerformancePanel::onFlowExecutionTime(qint64 totalMs)
     if (m_flowTimes.size() > kMaxFlowTimes)
         m_flowTimes.remove(0, m_flowTimes.size() - kMaxFlowTimes);
     m_flowTimeLabel->setText(QStringLiteral("流程总耗时: %1 ms").arg(totalMs));
+
+    // AH4：流程耗时在全部节点信号之后发出，是末批统计的天然 flush 点。
+    // 0ms 定时器把同一事件循环内的多轮 flush 合并，既保证终值可见又不破坏 100ms 节流。
+    if (!m_flushPending) {
+        m_flushPending = true;
+        QTimer::singleShot(0, this, [this]() {
+            m_flushPending = false;
+            m_uiRefreshTimer.invalidate();
+            updateTable();
+            updateSummary();
+        });
+    }
 }
 
 void PerformancePanel::clearStats()
@@ -184,11 +197,11 @@ void PerformancePanel::updateTable()
 
     int row = 0;
     for (auto it = m_nodeStats.begin(); it != m_nodeStats.end(); ++it, ++row) {
-        NodeBase *node = it.key();
+        const int moduleId = it.key();
         const NodeStats &stats = it.value();
 
         auto *nameItem = new QTableWidgetItem(stats.nodeName);
-        nameItem->setData(Qt::UserRole, reinterpret_cast<qulonglong>(node));
+        nameItem->setData(Qt::UserRole, moduleId);
         m_table->setItem(row, 0, nameItem);
 
         m_table->setItem(row, 1, new QTableWidgetItem(stats.nodeType));

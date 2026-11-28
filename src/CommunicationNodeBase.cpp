@@ -99,15 +99,20 @@ bool CommunicationNodeBase::waitSendDrain(const void *flow, int timeoutMs)
     return true;
 }
 
-void CommunicationNodeBase::handleSendRequested(const QByteArray &data)
+void CommunicationNodeBase::handleSendRequested(const QByteArray &data, const void *flowKey)
 {
+    // AH1：入队时冻结的 key 全程随事件走，绝不重读可能被别的流程覆盖的成员。
+    m_activeSendFlow.store(flowKey, std::memory_order_release);
     onSendRequested(data);                    // 子类实现（串口/网络…）
-    dropSendPending(sendFlowContext());   // 无论成败都销一条
+    m_activeSendFlow.store(nullptr, std::memory_order_release);
+    dropSendPending(flowKey);                 // 无论成败都销入队时的那条
 }
 
 void CommunicationNodeBase::noteSendWriteFailure(const QString &why)
 {
-    bumpFailure(sendFlowContext());
+    // 异步发送路径用活动 key；同步寄存器写入等没有活动发送时仍走原有归属回退。
+    const void *key = activeSendFlow();
+    bumpFailure(key ? key : sendFlowContext());
     emit communicationError(why);
 }
 

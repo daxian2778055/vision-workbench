@@ -191,7 +191,8 @@ signals:
     /// 流程运行模式变更（int 避免 Qt MOC 对 enum class 推导问题）
     void flowModeChanged(int mode);
     /// 单算子执行耗时信号（供性能面板接收）
-    void nodeExecutionTime(NodeBase *node, qint64 elapsedMs);
+    /// AH3：跨线程排队只传值，不传裸 NodeBase*；末尾 int 为模块号，供点击定位用。
+    void nodeExecutionTime(const QString &nodeName, int nodeType, int moduleId, qint64 elapsedMs);
     /// 节点执行后的输出变量快照（供结果数据表；跨线程排队传递，UI 侧无需加锁读缓存）
     void nodeOutputsUpdated(NodeBase *node, bool success, qint64 elapsedMs, const QVariantMap &vars);
     /// 节点被跳过（未激活分支 / 循环体由 LoopNode 调度）——三态可视化用，

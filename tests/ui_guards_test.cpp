@@ -1456,8 +1456,21 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(cb.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 CommunicationNodeBase.cpp");
     const QString cbSrc = QString::fromUtf8(cb.readAll());
     cb.close();
-    QVERIFY2(cbSrc.count(QStringLiteral("sendFlowContext()")) >= 2,
-             "requestSend/handleSendRequested/noteSendWriteFailure 三处必须用同一归属键");
+    QVERIFY2(cbSrc.count(QStringLiteral("sendFlowContext()")) >= 1,
+             "同步寄存器写入仍须有归属回退；异步路径改用入队时冻结的 key");
+    // AH1：归属 key 必须在入队时冻结并随事件传递，异步结算不得重读可变成员
+    const QString cbHead = []() {
+        QFile f(QStringLiteral(SRC_DIR "/include/CommunicationNodeBase.h"));
+        f.open(QIODevice::ReadOnly | QIODevice::Text);
+        const QString s = QString::fromUtf8(f.readAll());
+        f.close();
+        return s;
+    }();
+    QVERIFY2(cbHead.contains(QStringLiteral("emit sendRequested(data, key)"))
+             && cbSrc.contains(QStringLiteral("void CommunicationNodeBase::handleSendRequested(const QByteArray &data, const void *flowKey)"))
+             && cbSrc.contains(QStringLiteral("dropSendPending(flowKey)"))
+             && cbSrc.contains(QStringLiteral("activeSendFlow()")),
+             "异步发送的失败与 pending 必须记到入队时冻结的流程 key");
     const QString cmSrc2 = []() {
         QFile f(QStringLiteral(SRC_DIR "/src/CommunicationManager.cpp"));
         f.open(QIODevice::ReadOnly | QIODevice::Text);
@@ -1474,6 +1487,10 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     fe.close();
     QVERIFY2(feSrc.contains(QStringLiteral("waitSendDrain(m_runContext")),
              "轮末判红取差值前必须先有界排空");
+    // AH2：排空超时必须拦下本轮，不能继续写 passed=true
+    QVERIFY2(feSrc.contains(QStringLiteral("if (!CommunicationNodeBase::waitSendDrain(m_runContext.get(), 2000))"))
+             && feSrc.contains(QStringLiteral("轮末发送排空超时")),
+             "轮末排空超时必须判 NG，不能把未完成的异步写入记成通过");
     for (const char *file : { "src/ModbusNode.cpp", "src/PlcCommNode.cpp" }) {
         QFile f(QStringLiteral(SRC_DIR "/") + QString::fromLatin1(file));
         QVERIFY2(f.open(QIODevice::ReadOnly | QIODevice::Text), "打不开寄存器节点源码");
@@ -1942,6 +1959,18 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(readSrc("src/FlowExecutor.cpp").contains(QStringLiteral("emit flowExecutionTime(roundMs)"))
              && readSrc("src/PerformancePanel.cpp").contains(QStringLiteral("onFlowExecutionTime")),
              "性能面板的流程总耗时信号必须有发射点");
+    // AH3/AH4：跨线程信号只传值；关页先解绑；轮末强制刷新末批统计
+    QVERIFY2(readSrc("include/FlowExecutor.h").contains(
+                 QStringLiteral("void nodeExecutionTime(const QString &nodeName, int nodeType, int moduleId, qint64 elapsedMs)"))
+             && readSrc("src/PerformancePanel.cpp").contains(
+                 QStringLiteral("void PerformancePanel::onNodeExecutionTime(const QString &nodeName, int nodeType,")),
+             "性能统计跨线程不得传递裸 NodeBase*");
+    QVERIFY2(readSrc("src/MainWindow.cpp").contains(QStringLiteral("QCoreApplication::removePostedEvents(pp, QEvent::MetaCall)"))
+             && readSrc("src/MainWindow.cpp").contains(QStringLiteral("pp->unbindExecutor();")),
+             "关闭流程页必须在删场景前解绑性能面板并丢弃排队回调");
+    QVERIFY2(readSrc("src/PerformancePanel.cpp").contains(QStringLiteral("QTimer::singleShot(0, this"))
+             && readSrc("src/PerformancePanel.cpp").contains(QStringLiteral("m_uiRefreshTimer.invalidate();")),
+             "轮末必须安排一次合并刷新，确保末批统计可见且仍保留节流");
     // AG1：端到端流水线基线必须可复现、可自证判红，而不是只报数的死工具
     QVERIFY2(readSrc("tests/soak_test.cpp").contains(QStringLiteral("BENCH-RESULT"))
              && readSrc("tools/measure_pipeline_bench.py").contains(
@@ -1971,6 +2000,10 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(readSrc("docs/performance_baseline.md").contains(QStringLiteral("BENCH-RESULT"))
              && readSrc("docs/performance_baseline.md").contains(QStringLiteral("--selfcheck")),
              "性能基线的测量口径与重冻流程必须随源码留存");
+    // AH5：README 不得继续声称服务端缺省全网卡监听（现为必填、留空拒启动）
+    QVERIFY2(!readSrc("README.md").contains(QStringLiteral("服务端通信缺省绑定全部网卡"))
+             && readSrc("README.md").contains(QStringLiteral("服务端通信监听地址必填")),
+             "README 的监听地址口径须与代码一致");
     // X1：标定模型一致、多相机键隔离、方案切换清空、单例加锁
     QVERIFY2(readSrc("include/CalibrationManager.h").contains(QStringLiteral("QRecursiveMutex m_mutex")),
              "标定单例被多个工作线程与 GUI 并发读写，必须加锁");

@@ -241,6 +241,7 @@ private slots:
     // 2026-11-17 盲区补审：UDP 发送失败必须计入 sendWriteFailureCount
     void udpSendFailureIsCounted();
     void sendFailureGoesToFlowContext();   // P0：真实队列路径失败记入发起方流程桶
+    void sendFailureUsesFrozenFlowKey();   // AH1：入队后上下文被另一流程覆盖也不能串桶
 };
 
 void CommWritebackTest::testSendDataReachesSimulatedPlc()
@@ -4684,6 +4685,34 @@ void CommWritebackTest::sendFailureGoesToFlowContext()
              "真实队列路径的写失败必须记入发起方流程上下文的桶（否则轮末判红恒为 0）");
     QCOMPARE(CommunicationNodeBase::pendingSendCount(key), 0);
     CommunicationNodeBase::resetSendWriteFailureCount(key);
+}
+
+void CommWritebackTest::sendFailureUsesFrozenFlowKey()
+{
+    // AH1：A 入队后、异步写入执行前，B 覆盖了同一个节点的发送上下文。
+    auto a = std::make_shared<FlowRunContext>();
+    auto b = std::make_shared<FlowRunContext>();
+    const void *keyA = a.get();
+    const void *keyB = b.get();
+    CommunicationNodeBase::resetSendWriteFailureCount(keyA);
+    CommunicationNodeBase::resetSendWriteFailureCount(keyB);
+
+    SerialCommNode node;   // 未连接：实际写必走失败路径
+    node.init();
+    node.setSendFlowContext(a);
+    node.requestSend(QByteArrayLiteral("x"));
+    node.setSendFlowContext(b);   // 模拟另一流程随后覆盖上下文
+    for (int i = 0; i < 50 && CommunicationNodeBase::pendingSendCount(keyA) > 0; ++i)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+
+    QVERIFY2(CommunicationNodeBase::sendWriteFailureCount(keyA) == 1,
+             "A 的异步写失败必须记到入队时冻结的 A（当前实现会记到 B）");
+    QVERIFY2(CommunicationNodeBase::sendWriteFailureCount(keyB) == 0,
+             "B 没有发送过，不得替 A 背失败计数");
+    QCOMPARE(CommunicationNodeBase::pendingSendCount(keyA), 0);
+    QCOMPARE(CommunicationNodeBase::pendingSendCount(keyB), 0);
+    CommunicationNodeBase::resetSendWriteFailureCount(keyA);
+    CommunicationNodeBase::resetSendWriteFailureCount(keyB);
 }
 
 QTEST_MAIN(CommWritebackTest)

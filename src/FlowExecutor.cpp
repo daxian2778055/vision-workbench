@@ -445,7 +445,10 @@ void FlowExecutor::startExecution()
     m_userStopRequested.store(false, std::memory_order_relaxed);
     m_roundHadFailure = false;
     // r19 P2：先让本轮入队的发送落地，再读失败数（否则失败会被记到下一轮）
-    CommunicationNodeBase::waitSendDrain(m_runContext.get(), 200);
+    // AH2：轮首排空超时不能假装基线可靠——留一条可见告警，避免迟到失败静默串账。
+    if (!CommunicationNodeBase::waitSendDrain(m_runContext.get(), 200)) {
+        emit executionError(QStringLiteral("轮首发送排空超时，上一轮可能有未记账的异步写入"));
+    }
     m_sendFailuresAtRoundStart = CommunicationNodeBase::sendWriteFailureCount(m_runContext.get());   // P1-11 按流程
     m_roundAborted = false;
     setRunState(ExecutionState::Running);
@@ -880,7 +883,12 @@ void FlowExecutor::run()
         // 执行；写失败原先只进界面日志，本轮仍记「通过」。这里在写结果前拦下。
         // P1 复核：连续模式轮次不经 startExecution，轮首排空不覆盖本轮——
         // 判红取差值前先有界排空，让本轮入队的发送在读取前落地并记账。
-        CommunicationNodeBase::waitSendDrain(m_runContext.get(), 2000);
+        // AH2：在途写入未排空时不得判 OK——否则设备可能没收到指令，记录却是通过；
+        // 这是安全侧偏差：宁可本轮 NG，也不把真实失败放行或延迟到下一轮。
+        if (!CommunicationNodeBase::waitSendDrain(m_runContext.get(), 2000)) {
+            m_roundHadFailure = true;
+            emit executionError(QStringLiteral("轮末发送排空超时（2000ms），存在未完成的异步写入，本轮判 NG"));
+        }
         const int sendFailures =
             CommunicationNodeBase::sendWriteFailureCount(m_runContext.get()) - m_sendFailuresAtRoundStart;
         // 消费完就推进快照（r19 P1-11 复核）：原快照只在 startExecution 取一次，连续模式下
@@ -1383,7 +1391,8 @@ void FlowExecutor::executeNode(NodeBase *node, bool isLastNode)
         emit nodeExecuted(node, success);
 
         // 发出节点执行耗时信号
-        emit nodeExecutionTime(node, nodeElapsed);
+        emit nodeExecutionTime(node->name(), static_cast<int>(node->type()),
+                               node->moduleId(), nodeElapsed);
 
         // 输出变量快照 → 结果数据表（成功时带本轮各输出项；失败时带算子本轮写下的「原因」字段）
         {

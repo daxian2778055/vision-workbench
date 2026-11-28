@@ -38,15 +38,15 @@ public:
     void exportToCsv(const QString &filePath);
 
 public slots:
-    /// 接收单算子执行耗时
-    void onNodeExecutionTime(NodeBase *node, qint64 elapsedMs);
+    /// AH3：按值接收单算子执行耗时，不再解引用跨线程排队的裸节点指针
+    void onNodeExecutionTime(const QString &nodeName, int nodeType, int moduleId, qint64 elapsedMs);
 
     /// 接收整体流程执行耗时
     void onFlowExecutionTime(qint64 totalMs);
 
 signals:
     /// 点击节点时发出（供主窗口定位到画布）
-    void nodeClicked(NodeBase *node);
+    void nodeClicked(int moduleId);   ///< AH3：点击定位用模块号，节点已亡也不会解引用
 
 private:
     void setupUi();
@@ -74,9 +74,10 @@ private:
     QPushButton *m_clearBtn = nullptr;
     QPushButton *m_exportBtn = nullptr;
 
-    QMap<NodeBase*, NodeStats> m_nodeStats;
+    QMap<int, NodeStats> m_nodeStats;   ///< AH3：按模块号统计，不持有裸节点指针
     QVector<QPair<qint64, qint64>> m_flowTimes;  /// <开始时间, 耗时>
     QPointer<FlowExecutor> m_boundExecutor;
     /// AG3：每节点信号都会到，但 UI 全表重建只需有限频率；统计照常累计，刷新节流。
     QElapsedTimer m_uiRefreshTimer;
+    bool m_flushPending = false;   ///< AH4：把同一事件循环内的多次轮末刷新合并成一次
 };

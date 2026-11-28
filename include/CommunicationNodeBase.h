@@ -6,6 +6,7 @@
 #include <QThread>
 #include <QMutex>
 #include <QWaitCondition>
+#include <atomic>
 
 /// 通信节点基类，提供统一的连接状态管理和线程模型
 class CommunicationNodeBase : public HalconNode
@@ -47,15 +48,22 @@ public:
     void setDeviceName(const QString &name) { m_deviceName = name; }
     QString deviceName() const { return m_deviceName; }
 
-    /// 设置发起方流程上下文（由 CommunicationManager::sendData 传入），
-    /// 供入队后异步执行的写失败记回本轮——通信节点自身 ownerContext 恒空。
-    void setSendFlowContext(const std::shared_ptr<FlowRunContext> &ctx) { m_sendFlowContext = ctx; }
+    /// 设置发起方流程上下文（由 CommunicationManager::sendData 传入）。
+    /// AH1：该成员可能被另一流程覆盖，因此只作为「入队那一刻」取 key 的来源；
+    /// 异步执行阶段不得再读它，读写都在同一把锁内以消除数据竞争。
+    void setSendFlowContext(const std::shared_ptr<FlowRunContext> &ctx)
+    {
+        QMutexLocker locker(&m_sendContextMutex);
+        m_sendFlowContext = ctx;
+    }
 
     /// 发送外部数据（由 CommunicationManager::sendData 触发，队列投递到节点线程执行）
     void requestSend(const QByteArray &data)
     {
-        bumpSendPending(sendFlowContext());
-        emit sendRequested(data);
+        // AH1：归属 key 在入队时冻结，随事件一起传递；B 流程随后覆盖上下文也不影响 A。
+        const void *key = sendFlowContext();
+        bumpSendPending(key);
+        emit sendRequested(data, key);
     }
 
     /// 本节点是否支持「原始字节发送」。
@@ -72,15 +80,16 @@ signals:
     /// 寄存器值变化（供 Modbus 等使用）
     void registerValueChanged(int address, const QByteArray &value, const QString &dataType);
     /// 发送请求（跨线程安全：QueuedConnection 投递到节点所在线程）
-    void sendRequested(const QByteArray &data);
+    /// AH1：第二参数是入队时冻结的流程归属 key，异步结算只认它。
+    void sendRequested(const QByteArray &data, const void *flowKey);
 
 protected slots:
     /// 实际发送实现（子类覆盖：socket/串口 write）。默认空实现。
     virtual void onSendRequested(const QByteArray &data) { Q_UNUSED(data); }
 
 private slots:
-    /// 队列出口（r19 P2）：先跑子类的发送实现，再销掉一条 pending
-    void handleSendRequested(const QByteArray &data);
+    /// 队列出口（r19 P2）：先跑子类的发送实现，再销掉一条 pending（用入队时的 key）
+    void handleSendRequested(const QByteArray &data, const void *flowKey);
 
 protected:
 
@@ -91,11 +100,16 @@ protected:
  /// 否则退回节点自身 ownerContext，都没有则落 nullptr 桶（非流程场景）。
  const void *sendFlowContext() const
  {
+     QMutexLocker locker(&m_sendContextMutex);
      if (m_sendFlowContext) return m_sendFlowContext.get();
      if (auto ctx = ownerContext()) return ctx.get();
      return nullptr;
  }
+ /// AH1: active key during async send; write failures use it instead of rereading a mutable member.
+ const void *activeSendFlow() const { return m_activeSendFlow.load(std::memory_order_acquire); }
+ mutable QMutex m_sendContextMutex;
  std::shared_ptr<FlowRunContext> m_sendFlowContext;
+ std::atomic<const void *> m_activeSendFlow{nullptr};
  void noteSendWriteFailure(const QString &why);
     CommType m_commType;
     bool m_connected = false;

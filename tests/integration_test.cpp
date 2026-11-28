@@ -1305,7 +1305,9 @@ void IntegrationTest::testParamRefRestoredBeforeNodeSignals()
                                      [&](NodeBase *n, bool) { if (n == consumer) snapshot("nodeExecuted"); },
                                      Qt::DirectConnection);
     const auto h2 = QObject::connect(&exec, &FlowExecutor::nodeExecutionTime, &exec,
-                                     [&](NodeBase *n, qint64) { if (n == consumer) snapshot("nodeExecutionTime"); },
+                                     [&](const QString &, int, int moduleId, qint64) {
+                                         if (moduleId == consumer->moduleId()) snapshot("nodeExecutionTime");
+                                     },
                                      Qt::DirectConnection);
     const auto h3 = QObject::connect(&exec, &FlowExecutor::nodeOutputsUpdated, &exec,
                                      [&](NodeBase *n, bool, qint64, const QVariantMap &vars) {
