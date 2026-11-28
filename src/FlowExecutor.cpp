@@ -446,12 +446,14 @@ void FlowExecutor::startExecution()
     m_roundHadFailure = false;
     // r19 P2：先让本轮入队的发送落地，再读失败数（否则失败会被记到下一轮）
     // AH2：轮首排空超时不能假装基线可靠——留一条可见告警，避免迟到失败静默串账。
-    if (!CommunicationNodeBase::waitSendDrain(m_runContext.get(), 200)) {
+    const bool startDrained = CommunicationNodeBase::waitSendDrain(m_runContext.get(), 200);
+    if (!startDrained) {
         emit executionError(QStringLiteral("轮首发送排空超时，上一轮可能有未记账的异步写入"));
     }
-    m_sendFailuresAtRoundStart = CommunicationNodeBase::sendWriteFailureCount(m_runContext.get());   // P1-11 按流程
-    // AH2b：上一轮若因排空超时推迟了基线，这里统一重取，迟到失败不再二次计入本轮。
-    m_sendFailureBaselineDeferred = false;
+    // AH2c：deferred 必须真正被读取——超时轮的迟到失败折进基线，不再二次计入本轮。
+    reconcileSendFailureBaseline(m_sendFailureBaselineDeferred, startDrained,
+                                 CommunicationNodeBase::sendWriteFailureCount(m_runContext.get()),
+                                 &m_sendFailuresAtRoundStart, &m_sendFailureBaselineDeferred);
     m_roundAborted = false;
     setRunState(ExecutionState::Running);
     resetState();
@@ -2335,6 +2337,25 @@ void FlowExecutor::resetState()
                 n->resetRoundState();
             }
         }
+    }
+}
+
+void FlowExecutor::reconcileSendFailureBaseline(bool deferred, bool drained, int currentCount,
+                                                 int *baseline, bool *deferredOut)
+{
+    if (!baseline || !deferredOut)
+        return;
+    if (deferred) {
+        // 上一轮已因排空超时判 NG；只有本轮排空成功后才能把迟到失败折进基线，
+        // 否则继续沿用旧基线并保持 deferred，避免同一笔失败在两轮各记一次。
+        if (drained) {
+            *baseline = currentCount;
+            *deferredOut = false;
+        }
+    } else {
+        // 正常轮首：排空后重取基线（排空失败也重取，避免陈旧计数滚入本轮）
+        *baseline = currentCount;
+        *deferredOut = false;
     }
 }
 

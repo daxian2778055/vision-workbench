@@ -138,6 +138,7 @@ private slots:
     void testParamRefResolvesEachRound();   // E1：参数引用跨轮必须重新解析上游最新值
     // ---- A4（2026-09-25）：E1/E2/E3/E6 残留收口 ----
     void testParamRefRestoredBeforeNodeSignals();          // E1 残留①：信号窗口内不得看到解析值
+    void testSendFailureBaselineDeferred();                // AH2c：超时轮的迟到失败不串下一轮
     void testNonStdExceptionInBroadcastIsContained();      // E1 残留②：广播里抛非标准异常不得逃出
     void testParamRefRestoredWhenNodeThrowsBeforeSignals();// E1：还原点之前抛异常也必须还原表达式
     void testSkippedAndFailedNodesLoseReusableMark();      // E2：清空输出必须同步撤销"可复用"标记
@@ -1273,6 +1274,31 @@ public:
 };
 
 } // namespace
+
+void IntegrationTest::testSendFailureBaselineDeferred()
+{
+    // AH2c：首轮排空超时 deferred=true，迟到失败到达后下一轮排空成功 ⇒ 重取基线，
+    // 该失败只属于已判 NG 的首轮，不会在下一轮差值里再出现。
+    int baseline = 2;
+    bool deferred = true;
+    FlowExecutor::reconcileSendFailureBaseline(deferred, true, 3, &baseline, &deferred);
+    QCOMPARE(baseline, 3);
+    QVERIFY(!deferred);
+
+    // 下一轮若仍未排空，继续沿用旧基线并保持 deferred，不把在途失败提前记入本轮
+    baseline = 3;
+    deferred = true;
+    FlowExecutor::reconcileSendFailureBaseline(deferred, false, 4, &baseline, &deferred);
+    QCOMPARE(baseline, 3);
+    QVERIFY(deferred);
+
+    // 正常轮：排空后重取基线
+    baseline = 4;
+    deferred = false;
+    FlowExecutor::reconcileSendFailureBaseline(deferred, true, 5, &baseline, &deferred);
+    QCOMPARE(baseline, 5);
+    QVERIFY(!deferred);
+}
 
 void IntegrationTest::testParamRefRestoredBeforeNodeSignals()
 {

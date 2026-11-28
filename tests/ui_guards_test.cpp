@@ -1493,6 +1493,11 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              && !ahHead("include/CommunicationNodeBase.h").contains(
                  QStringLiteral("const void *key = sendFlowContext();")),
              "异步发送不得从共享成员读取归属 key");
+    // AH1c：排队请求必须持有上下文强引用，完成时释放
+    QVERIFY2(ahHead("include/CommunicationNodeBase.h").contains(QStringLiteral("retainSendContext(key, ctx)"))
+             && cbSrc.contains(QStringLiteral("releaseSendContext(flowKey)"))
+             && cbSrc.contains(QStringLiteral("s_liveSendContexts[flow] = ctx")),
+             "排队期间必须保持流程上下文存活，防止关闭流程后旧指针悬空/地址复用");
     // ㉑ 轮末排空 + 写回校验记账
     QFile fe(QStringLiteral(SRC_DIR "/src/FlowExecutor.cpp"));
     QVERIFY2(fe.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 FlowExecutor.cpp");
@@ -1509,6 +1514,10 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              && feSrc.contains(QStringLiteral("if (sendDrained) {"))
              && feSrc.contains(QStringLiteral("m_sendFailureBaselineDeferred = false;")),
              "排空超时不得推进失败基线，迟到失败不能重复计入下一轮");
+    QVERIFY2(ahHead("include/FlowExecutor.h").contains(
+                 QStringLiteral("reconcileSendFailureBaseline(bool deferred, bool drained, int currentCount"))
+             && feSrc.contains(QStringLiteral("reconcileSendFailureBaseline(m_sendFailureBaselineDeferred, startDrained")),
+             "deferred 标记必须被真正读取并参与基线重算");
     for (const char *file : { "src/ModbusNode.cpp", "src/PlcCommNode.cpp" }) {
         QFile f(QStringLiteral(SRC_DIR "/") + QString::fromLatin1(file));
         QVERIFY2(f.open(QIODevice::ReadOnly | QIODevice::Text), "打不开寄存器节点源码");
@@ -1987,6 +1996,11 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              && readSrc("src/MainWindow.cpp").contains(QStringLiteral("ppBoundBeforeClose == sceneEx && pp->boundExecutor() == sceneEx"))
              && !readSrc("src/MainWindow.cpp").contains(QStringLiteral("removePostedEvents(pp, QEvent::MetaCall)")),
              "关闭流程页只解绑即将销毁的执行器，不得清空面板全部排队信号");
+    // AH3c：重绑必须清空旧统计，并用代次过滤旧执行器的迟到信号
+    QVERIFY2(readSrc("include/PerformancePanel.h").contains(QStringLiteral("quint64 m_bindGeneration"))
+             && readSrc("src/PerformancePanel.cpp").contains(QStringLiteral("generation == m_bindGeneration"))
+             && readSrc("src/PerformancePanel.cpp").contains(QStringLiteral("clearStats();\n    m_boundExecutor = executor;")),
+             "切换执行器须清空旧流程统计并忽略旧代次迟到信号");
     QVERIFY2(readSrc("src/PerformancePanel.cpp").contains(QStringLiteral("QTimer::singleShot(0, this"))
              && readSrc("src/PerformancePanel.cpp").contains(QStringLiteral("m_uiRefreshTimer.invalidate();")),
              "轮末必须安排一次合并刷新，确保末批统计可见且仍保留节流");

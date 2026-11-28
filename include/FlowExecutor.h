@@ -135,6 +135,9 @@ public:
     // ---- 运行期统计（现场长跑诊断：轮次/耗时/失败/句柄/内存）----
     /// 取统计快照（线程安全；返回前会采样一次进程句柄数/内存，故资源字段为查询时刻值）
     FlowRuntimeStats runtimeStats() const;
+    /// AH2c：按排空结果决定是否重取失败基线（纯逻辑，供回归单测驱动）
+    static void reconcileSendFailureBaseline(bool deferred, bool drained, int currentCount,
+                                             int *baseline, bool *deferredOut);
     /// **诊断**：执行线程当前所处阶段（含正在执行的节点模块号），供定位"worker 不退出"类挂起。
     /// 由执行线程在关键点写入两个原子变量、任意线程可读；不参与任何业务逻辑，故可在挂起时安全轮询。
     QString workerPhaseName() const;

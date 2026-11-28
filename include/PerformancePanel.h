@@ -82,4 +82,9 @@ private:
     /// AG3：每节点信号都会到，但 UI 全表重建只需有限频率；统计照常累计，刷新节流。
     QElapsedTimer m_uiRefreshTimer;
     bool m_flushPending = false;   ///< AH4：把同一事件循环内的多次轮末刷新合并成一次
+    /// AH3c：每次绑定递增；旧执行器已排队的信号按代次过滤，重绑后不污染新流程统计。
+    quint64 m_bindGeneration = 0;
+    QMetaObject::Connection m_nodeTimeConnection;
+    QMetaObject::Connection m_flowTimeConnection;
+    QMetaObject::Connection m_startConnection;
 };

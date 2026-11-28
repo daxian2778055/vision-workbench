@@ -30,6 +30,10 @@ namespace {
 // 由 reset 清理）。
 QMutex s_failMutex;
 QHash<const void *, int> s_sendWriteFailures;
+// AH1c：同一流程可能有多笔在途发送，按 key 记引用数并持有上下文，防止排队期间被销毁/地址复用。
+QMutex s_liveContextMutex;
+QHash<const void *, std::shared_ptr<FlowRunContext>> s_liveSendContexts;
+QHash<const void *, int> s_liveSendRefs;
 namespace {
 QHash<const void *, int> s_pendingSends;   // 按流程统计排队中的发送
 QMutex s_pendingMutex;
@@ -77,6 +81,28 @@ void CommunicationNodeBase::dropSendPending(const void *flow)
     }
 }
 
+void CommunicationNodeBase::retainSendContext(const void *flow,
+                                              const std::shared_ptr<FlowRunContext> &ctx)
+{
+    if (!flow || !ctx)
+        return;
+    QMutexLocker locker(&s_liveContextMutex);
+    ++s_liveSendRefs[flow];
+    s_liveSendContexts[flow] = ctx;
+}
+
+void CommunicationNodeBase::releaseSendContext(const void *flow)
+{
+    QMutexLocker locker(&s_liveContextMutex);
+    auto it = s_liveSendRefs.find(flow);
+    if (it == s_liveSendRefs.end())
+        return;
+    if (--it.value() <= 0) {
+        s_liveSendRefs.erase(it);
+        s_liveSendContexts.remove(flow);
+    }
+}
+
 int CommunicationNodeBase::pendingSendCount(const void *flow)
 {
     QMutexLocker<QMutex> lock(&s_pendingMutex);
@@ -106,6 +132,7 @@ void CommunicationNodeBase::handleSendRequested(const QByteArray &data, const vo
     onSendRequested(data);                    // 子类实现（串口/网络…）
     m_activeSendFlow.store(nullptr, std::memory_order_release);
     dropSendPending(flowKey);                 // 无论成败都销入队时的那条
+    releaseSendContext(flowKey);              // AH1c：在途请求结算，释放排队期间持有的上下文
 }
 
 void CommunicationNodeBase::noteSendWriteFailure(const QString &why)

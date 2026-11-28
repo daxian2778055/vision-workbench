@@ -6,6 +6,7 @@
 #include <QThread>
 #include <QMutex>
 #include <QWaitCondition>
+#include <QHash>
 #include <atomic>
 
 /// 通信节点基类，提供统一的连接状态管理和线程模型
@@ -62,6 +63,9 @@ public:
     {
         const void *key = ctx ? ctx.get()
                               : (ownerContext() ? ownerContext().get() : nullptr);
+        // AH1c：排队期间持有上下文强引用，流程提前关闭也不会释放该对象；
+        // 地址不会被新流程复用，待处理请求结算时再释放。
+        retainSendContext(key, ctx);
         bumpSendPending(key);
         emit sendRequested(data, key);
     }
@@ -96,6 +100,9 @@ protected:
     /// 写失败的统一收口：计数 + 报错（各节点的发送失败路径都走它）
     static void bumpSendPending(const void *flow);
     static void dropSendPending(const void *flow);
+    /// AH1c：排队请求持有上下文强引用，完成时按引用计数释放
+    static void retainSendContext(const void *flow, const std::shared_ptr<FlowRunContext> &ctx);
+    static void releaseSendContext(const void *flow);
     /// 发送归属流程上下文的读取：优先用 sendData 传入的发起方上下文，
  /// 否则退回节点自身 ownerContext，都没有则落 nullptr 桶（非流程场景）。
  const void *sendFlowContext() const

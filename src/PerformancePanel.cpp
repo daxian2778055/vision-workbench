@@ -17,18 +17,34 @@ PerformancePanel::PerformancePanel(QWidget *parent)
 
 void PerformancePanel::bindExecutor(FlowExecutor *executor)
 {
-    if (m_boundExecutor) {
+    // AH3c：同一执行器重复绑定不清空统计（切页会反复调用），换执行器才重置。
+    if (m_boundExecutor == executor && executor)
+        return;
+    if (m_boundExecutor)
         unbindExecutor();
-    }
 
+    // AH3c：新绑定立即清空旧流程数据，即使新流程已在后台运行、启动信号早已发出。
+    clearStats();
     m_boundExecutor = executor;
+    const quint64 generation = ++m_bindGeneration;
     if (executor) {
-        connect(executor, &FlowExecutor::nodeExecutionTime,
-                this, &PerformancePanel::onNodeExecutionTime);
-        connect(executor, &FlowExecutor::flowExecutionTime,
-                this, &PerformancePanel::onFlowExecutionTime);
-        connect(executor, &FlowExecutor::executionStarted,
-                this, &PerformancePanel::clearStats);
+        m_nodeTimeConnection = connect(
+            executor, &FlowExecutor::nodeExecutionTime, this,
+            [this, generation](const QString &name, int type, int moduleId, qint64 ms) {
+                if (generation == m_bindGeneration)
+                    onNodeExecutionTime(name, type, moduleId, ms);
+            });
+        m_flowTimeConnection = connect(
+            executor, &FlowExecutor::flowExecutionTime, this,
+            [this, generation](qint64 ms) {
+                if (generation == m_bindGeneration)
+                    onFlowExecutionTime(ms);
+            });
+        m_startConnection = connect(
+            executor, &FlowExecutor::executionStarted, this, [this, generation]() {
+                if (generation == m_bindGeneration)
+                    clearStats();
+            });
     }
 }
 
@@ -39,6 +55,11 @@ FlowExecutor *PerformancePanel::boundExecutor() const
 
 void PerformancePanel::unbindExecutor()
 {
+    // AH3c：解绑也推进代次，已排队的旧信号即使投递进来也会被过滤。
+    ++m_bindGeneration;
+    disconnect(m_nodeTimeConnection);
+    disconnect(m_flowTimeConnection);
+    disconnect(m_startConnection);
     if (m_boundExecutor) {
         disconnect(m_boundExecutor, nullptr, this, nullptr);
         m_boundExecutor = nullptr;

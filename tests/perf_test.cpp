@@ -17,6 +17,8 @@
 #include "FlowScene.h"
 #include "NodeBase.h"
 #include "PerformancePanel.h"
+#include "FlowExecutor.h"
+#include "FlowExecutorToken.h"
 #include "Port.h"
 #include "Connection.h"
 
@@ -34,6 +36,8 @@ private slots:
     void testCreateConnectionLatency();
     /// AH4：节流期间统计照常累计，轮末必须把末批刷到界面
     void testPerformancePanelFinalRefresh();
+    /// AH3c：切换执行器必须清空旧流程统计
+    void testPerformancePanelRebindClearsOldStats();
 
 private:
     void fillTo(int nodeCount);
@@ -193,6 +197,26 @@ void PerfTest::testPerformancePanelFinalRefresh()
     panel.onFlowExecutionTime(60);
     QCoreApplication::processEvents();
     QCOMPARE(table->item(0, 3)->text(), QStringLiteral("60"));
+}
+
+void PerfTest::testPerformancePanelRebindClearsOldStats()
+{
+    auto first = FlowExecutorToken::create(new FlowExecutor());
+    auto second = FlowExecutorToken::create(new FlowExecutor());
+    QVERIFY(first && second);
+
+    PerformancePanel panel;
+    auto *table = panel.findChild<QTableWidget *>();
+    QVERIFY(table);
+    panel.bindExecutor(first->executor());
+    panel.onNodeExecutionTime(QStringLiteral("old"), 5, 1, 10);
+    QCOMPARE(table->rowCount(), 1);
+
+    panel.bindExecutor(second->executor());
+    QCOMPARE(table->rowCount(), 0);
+    panel.onNodeExecutionTime(QStringLiteral("new"), 5, 2, 20);
+    QCOMPARE(table->rowCount(), 1);
+    QCOMPARE(table->item(0, 0)->text(), QStringLiteral("new"));
 }
 
 QTEST_MAIN(PerfTest)
