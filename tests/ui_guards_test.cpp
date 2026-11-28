@@ -1551,6 +1551,16 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              && !feSrc.contains(QStringLiteral("if (false && QCoreApplication"))
              && feSrc.contains(QStringLiteral("pendingSendCount(m_runContext.get()) > 0")),
              "GUI 线程不得同步等待排空，避免饿死通信节点的 QueuedConnection 槽");
+    const QString ahMainWindow = []() {
+        QFile f(QStringLiteral(SRC_DIR "/src/MainWindow.cpp"));
+        f.open(QIODevice::ReadOnly | QIODevice::Text);
+        const QString s = QString::fromUtf8(f.readAll());
+        f.close();
+        return s;
+    }();
+    QVERIFY2(ahMainWindow.contains(QStringLiteral("m_recovery.markSaved(projectManager()->buildProjectJson(m_flowScenes))"))
+             && ahMainWindow.count(QStringLiteral("m_recovery.markSaved(m_projectManager->buildProjectJson")) == 1,
+             "构造期建立恢复基线必须走懒创建入口，避免全新启动空指针崩溃");
     QVERIFY2(feSrc.contains(QStringLiteral("Q_UNUSED(deferred);"))
              && feSrc.contains(QStringLiteral("Q_UNUSED(drained);")),
              "轮首不得以旧基线继续记账，即使排空仍未完成也须重取当前计数");

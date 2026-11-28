@@ -1838,7 +1838,9 @@ MainWindow::MainWindow(QWidget *parent, bool previewOnly) :
         // 新建空方案也要建立内容基线：否则 hasUnsavedChanges 退化成"只看场景节点"，
         // 仅改全局变量/布局时既无自动保存也无未保存提示（T1 复核）。
         // 注意只标基线、不清恢复文件——启动时的恢复询问还要读它。
-        m_recovery.markSaved(m_projectManager->buildProjectJson(m_flowScenes));
+        // AH2q：构造期 m_projectManager 尚未懒创建，必须走 projectManager() 统一入口，
+        // 否则全新启动（包首次运行）在这里解引用 nullptr，表现为双击打不开。
+        m_recovery.markSaved(projectManager()->buildProjectJson(m_flowScenes));
         initReportAutoExport();
 
         // P1-3：流程超时监控（UI 层计时，单次触发；执行不会因监控而阻塞）
