@@ -1539,10 +1539,10 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(feSrc.contains(QStringLiteral("Q_UNUSED(deferred);"))
              && feSrc.contains(QStringLiteral("Q_UNUSED(drained);")),
              "轮首不得以旧基线继续记账，即使排空仍未完成也须重取当前计数");
-    QVERIFY2(ahHead("include/FlowExecutor.h").contains(QStringLiteral("m_suppressSendAccounting"))
-             && feSrc.contains(QStringLiteral("shouldAccountSendFailures(m_suppressSendAccounting)"))
-             && feSrc.contains(QStringLiteral("m_suppressSendAccounting = true;")),
-             "轮首排空仍未完成时须抑制本轮发送记账，迟到失败不得重复计入");
+    QVERIFY2(feSrc.contains(QStringLiteral("上一轮发送仍未排空，跳过本轮以避免错账"))
+             && feSrc.contains(QStringLiteral("waitSendDrain(m_runContext.get(), 2000)"))
+             && !ahHead("include/FlowExecutor.h").contains(QStringLiteral("m_suppressSendAccounting")),
+             "旧轮未排空须跳过本轮，不能屏蔽整轮失败计数");
     for (const char *file : { "src/ModbusNode.cpp", "src/PlcCommNode.cpp" }) {
         QFile f(QStringLiteral(SRC_DIR "/") + QString::fromLatin1(file));
         QVERIFY2(f.open(QIODevice::ReadOnly | QIODevice::Text), "打不开寄存器节点源码");

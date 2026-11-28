@@ -689,19 +689,20 @@ void FlowExecutor::run()
 
         // AH2d：连续/硬触发轮次与软件触发补跑都回到这里，不经过 startExecution；
         // 若上一轮排空超时 deferred 仍置位，必须在每个新轮开始处理，否则迟到失败会串账。
-        m_suppressSendAccounting = false;
         if (m_sendFailureBaselineDeferred) {
-            const bool deferredDrained =
-                CommunicationNodeBase::waitSendDrain(m_runContext.get(), 200);
+            // AH2g：先给旧轮的在途写入一次有界等待；仍未排空则跳过本轮，
+            // 既不吞掉本轮自己的失败，也不让旧轮迟到失败串进本轮账。
+            bool deferredDrained = CommunicationNodeBase::waitSendDrain(m_runContext.get(), 200);
+            if (!deferredDrained)
+                deferredDrained = CommunicationNodeBase::waitSendDrain(m_runContext.get(), 2000);
             if (!deferredDrained) {
-                emit executionError(QStringLiteral("轮首发送排空超时，上一轮可能有未记账的异步写入"));
-                // AH2f：仍未排空就不开始新一轮发送记账，迟到失败不能既算上一轮又算本轮。
-                m_suppressSendAccounting = true;
-            } else {
-                reconcileSendFailureBaseline(m_sendFailureBaselineDeferred, deferredDrained,
-                                             CommunicationNodeBase::sendWriteFailureCount(m_runContext.get()),
-                                             &m_sendFailuresAtRoundStart, &m_sendFailureBaselineDeferred);
+                emit executionError(QStringLiteral("上一轮发送仍未排空，跳过本轮以避免错账"));
+                m_diagPhase.store(2, std::memory_order_relaxed);
+                continue;
             }
+            reconcileSendFailureBaseline(m_sendFailureBaselineDeferred, deferredDrained,
+                                         CommunicationNodeBase::sendWriteFailureCount(m_runContext.get()),
+                                         &m_sendFailuresAtRoundStart, &m_sendFailureBaselineDeferred);
         }
 
         // 本轮计时（运行期统计用）
@@ -913,20 +914,15 @@ void FlowExecutor::run()
             m_sendFailureBaselineDeferred = true;
             emit executionError(QStringLiteral("轮末发送排空超时（2000ms），存在未完成的异步写入，本轮判 NG"));
         }
-        // AH2f：轮首仍未排空时本轮不按旧基线记发送失败，避免上一轮迟到失败重复计入。
-        const bool accountSendFailures = shouldAccountSendFailures(m_suppressSendAccounting);
-        const int sendFailures = accountSendFailures
-                                     ? (CommunicationNodeBase::sendWriteFailureCount(m_runContext.get())
-                                        - m_sendFailuresAtRoundStart)
-                                     : 0;
+        const int sendFailures =
+            CommunicationNodeBase::sendWriteFailureCount(m_runContext.get()) - m_sendFailuresAtRoundStart;
         // 消费完就推进快照（r19 P1-11 复核）：原快照只在 startExecution 取一次，连续模式下
         // 第一次失败之后每一轮都差值 >0 → 永久判 NG，还要被别的流程连累。每轮只看自己这一窗。
-        // AH2f：排空成功即重取基线（含迟到失败），既不重复也不遗漏。
+        // AH2g：deferred 只在旧轮未排空时置位，该情形已在轮首跳过本轮；这里正常推进即可。
         if (sendDrained) {
             m_sendFailuresAtRoundStart = CommunicationNodeBase::sendWriteFailureCount(m_runContext.get());
             m_sendFailureBaselineDeferred = false;
         }
-        m_suppressSendAccounting = false;
 
         releaseRoundOutputsOverBudget();   // r19 P2-3：轮末按预算释放图像输出
         if (sendFailures > 0) {
