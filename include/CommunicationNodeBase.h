@@ -120,6 +120,7 @@ protected:
  mutable QMutex m_sendContextMutex;
  /// AH1d：本节点仍持有的排队 key（析构时统一释放，防止接收方销毁导致槽不运行）
  QHash<const void *, int> m_heldSendKeys;
+ mutable QMutex m_heldKeysMutex;   ///< AH1e：多流程线程入队与节点线程结算并发读写同一张表
  std::shared_ptr<FlowRunContext> m_sendFlowContext;
  std::atomic<const void *> m_activeSendFlow{nullptr};
  void noteSendWriteFailure(const QString &why);

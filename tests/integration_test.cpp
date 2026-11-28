@@ -1285,12 +1285,12 @@ void IntegrationTest::testSendFailureBaselineDeferred()
     QCOMPARE(baseline, 3);
     QVERIFY(!deferred);
 
-    // 下一轮若仍未排空，继续沿用旧基线并保持 deferred，不把在途失败提前记入本轮
+    // AH2e：即使仍未排空，也不得沿用旧基线（会让迟到失败在本轮差值里重复记账）
     baseline = 3;
     deferred = true;
     FlowExecutor::reconcileSendFailureBaseline(deferred, false, 4, &baseline, &deferred);
-    QCOMPARE(baseline, 3);
-    QVERIFY(deferred);
+    QCOMPARE(baseline, 4);
+    QVERIFY(!deferred);
 
     // 正常轮：排空后重取基线
     baseline = 4;

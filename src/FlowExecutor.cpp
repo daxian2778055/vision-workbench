@@ -2358,18 +2358,13 @@ void FlowExecutor::reconcileSendFailureBaseline(bool deferred, bool drained, int
 {
     if (!baseline || !deferredOut)
         return;
-    if (deferred) {
-        // 上一轮已因排空超时判 NG；只有本轮排空成功后才能把迟到失败折进基线，
-        // 否则继续沿用旧基线并保持 deferred，避免同一笔失败在两轮各记一次。
-        if (drained) {
-            *baseline = currentCount;
-            *deferredOut = false;
-        }
-    } else {
-        // 正常轮首：排空后重取基线（排空失败也重取，避免陈旧计数滚入本轮）
-        *baseline = currentCount;
-        *deferredOut = false;
-    }
+    // AH2e：无论是否 deferred/排空成功，轮首必须以当前计数重取基线并清掉 deferred。
+    // 沿用旧基线会让上一轮的迟到失败在本轮差值里再算一次；排空超时本轮已有告警。
+    // 真正区分"哪一轮的失败"需要按请求附轮次 ID，属后续架构项；这里先保证不重复记账。
+    Q_UNUSED(deferred);
+    Q_UNUSED(drained);
+    *baseline = currentCount;
+    *deferredOut = false;
 }
 
 FlowRuntimeStats FlowExecutor::runtimeStats() const

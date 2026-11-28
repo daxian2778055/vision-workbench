@@ -91,16 +91,20 @@ void CommunicationNodeBase::retainSendContext(const void *flow,
         ++s_liveSendRefs[flow];
         s_liveSendContexts[flow] = ctx;
     }
+    QMutexLocker heldLocker(&m_heldKeysMutex);
     ++m_heldSendKeys[flow];
 }
 
 void CommunicationNodeBase::releaseSendContext(const void *flow)
 {
-    auto held = m_heldSendKeys.find(flow);
-    if (held == m_heldSendKeys.end())
-        return;
-    if (--held.value() <= 0)
-        m_heldSendKeys.erase(held);
+    {
+        QMutexLocker heldLocker(&m_heldKeysMutex);
+        auto held = m_heldSendKeys.find(flow);
+        if (held == m_heldSendKeys.end())
+            return;
+        if (--held.value() <= 0)
+            m_heldSendKeys.erase(held);
+    }
     QMutexLocker locker(&s_liveContextMutex);
     auto it = s_liveSendRefs.find(flow);
     if (it == s_liveSendRefs.end())
@@ -113,8 +117,18 @@ void CommunicationNodeBase::releaseSendContext(const void *flow)
 
 CommunicationNodeBase::~CommunicationNodeBase()
 {
-    // AH1d：排队事件随接收方销毁而丢弃，槽不会运行；析构时把本节点持有的引用全部还回去。
-    for (auto it = m_heldSendKeys.constBegin(); it != m_heldSendKeys.constEnd(); ++it) {
+    // AH1e：先在同一把锁下取出并清空本地引用表，避免结算线程再写它。
+    QHash<const void *, int> held;
+    {
+        QMutexLocker heldLocker(&m_heldKeysMutex);
+        held = m_heldSendKeys;
+        m_heldSendKeys.clear();
+    }
+    // AH1f：排队事件随接收方销毁而丢弃，槽不会运行——必须替这些请求销掉 pending，
+    // 否则相关流程的 waitSendDrain 永远超时、轮次持续判 NG。
+    for (auto it = held.constBegin(); it != held.constEnd(); ++it) {
+        for (int i = 0; i < it.value(); ++i)
+            dropSendPending(it.key());
         QMutexLocker locker(&s_liveContextMutex);
         auto ref = s_liveSendRefs.find(it.key());
         if (ref == s_liveSendRefs.end())
@@ -126,7 +140,6 @@ CommunicationNodeBase::~CommunicationNodeBase()
             s_liveSendContexts.remove(it.key());
         }
     }
-    m_heldSendKeys.clear();
 }
 
 int CommunicationNodeBase::pendingSendCount(const void *flow)

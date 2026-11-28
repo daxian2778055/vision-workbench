@@ -1503,6 +1503,12 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              && cbSrc.contains(QStringLiteral("CommunicationNodeBase::~CommunicationNodeBase()"))
              && cbSrc.contains(QStringLiteral("m_heldSendKeys.clear()")),
              "缺省 ctx 也要保活 ownerContext；接收方销毁时须释放排队引用");
+    QVERIFY2(ahHead("include/CommunicationNodeBase.h").contains(QStringLiteral("m_heldKeysMutex"))
+             && cbSrc.contains(QStringLiteral("QMutexLocker heldLocker(&m_heldKeysMutex)")),
+             "本地持有表由多流程线程与节点线程并发读写，必须加锁");
+    QVERIFY2(cbSrc.contains(QStringLiteral("for (int i = 0; i < it.value(); ++i)"))
+             && cbSrc.contains(QStringLiteral("dropSendPending(it.key());")),
+             "接收节点销毁时须替未执行的排队请求销掉 pending，避免排空永久超时");
     // ㉑ 轮末排空 + 写回校验记账
     QFile fe(QStringLiteral(SRC_DIR "/src/FlowExecutor.cpp"));
     QVERIFY2(fe.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 FlowExecutor.cpp");
@@ -1525,6 +1531,9 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              "deferred 标记必须被真正读取并参与基线重算");
     QVERIFY2(feSrc.count(QStringLiteral("if (m_sendFailureBaselineDeferred) {")) >= 1,
              "连续/触发轮次每轮开始都必须处理 deferred 基线，不能只在 startExecution 处理");
+    QVERIFY2(feSrc.contains(QStringLiteral("Q_UNUSED(deferred);"))
+             && feSrc.contains(QStringLiteral("Q_UNUSED(drained);")),
+             "轮首不得以旧基线继续记账，即使排空仍未完成也须重取当前计数");
     for (const char *file : { "src/ModbusNode.cpp", "src/PlcCommNode.cpp" }) {
         QFile f(QStringLiteral(SRC_DIR "/") + QString::fromLatin1(file));
         QVERIFY2(f.open(QIODevice::ReadOnly | QIODevice::Text), "打不开寄存器节点源码");
