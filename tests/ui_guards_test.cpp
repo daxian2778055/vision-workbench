@@ -1537,6 +1537,9 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(feSrc.contains(QStringLiteral("bool FlowExecutor::drainDeferredSendBeforeRound()"))
              && feSrc.contains(QStringLiteral("if (!m_sendFailureBaselineDeferred)")),
              "deferred 收口集中到 helper，连续轮次与 startExecution 共用");
+    QVERIFY2(!feSrc.contains(QStringLiteral("&GlobalTriggerManager::triggerFired,"))
+             && feSrc.contains(QStringLiteral("AH2m：triggerFired 只是")),
+             "triggerFired 不得在 requestExternalRound 之外二次启动流程，避免一次触发双跑");
     QVERIFY2(ahHead("include/FlowExecutor.h").contains(QStringLiteral("StartOutcome startExecution()"))
              && ahHead("include/FlowExecutor.h").contains(QStringLiteral("enum class StartOutcome"))
              && feSrc.contains(QStringLiteral("outcome == StartOutcome::AlreadyRunning"))

@@ -54,27 +54,9 @@ FlowExecutor::FlowExecutor()
     // 触发路径因链路未建立而整条失效（假阴性 + 负向断言假阳性）。见 GlobalTriggerManager 构造。
     // 本执行器只接自己这一份 triggerFired（按 flowName 过滤，互不干扰）。
 
-    // 本执行器专属：外部触发 → 启动（按 flowName 过滤，互不干扰）
-    connect(GlobalTriggerManager::instance(), &GlobalTriggerManager::triggerFired,
-            this, [this](const QString &flowName, const QString &triggerSource) {
-        Q_UNUSED(triggerSource)
-        if (this->flowName() == flowName && m_runContext->state() == ExecutionState::Idle) {
-            // 硬触发模式禁止外部触发启动
-            if (!canTriggerFromExternal()) {
-                VFP_DEBUG << "Flow" << this->flowName()
-                          << "in hardware-trigger mode, external trigger ignored";
-                return;
-            }
-            // 173 行拍板：闸开不发新跑——GTM 直触在空闲位起跑也是新一次发起，随闸收。
-            // 引擎侧只判写闸本体不判会话（与 requestExternalRound 同口径，173 行登记）。
-            if (SessionManager::instance()->writesBlocked()) {
-                VFP_RUNTIME_INFO.noquote()
-                    << QStringLiteral("写闸开启期间不受理外部触发的新运行（出厂口令未改，改密后恢复）");
-                return;
-            }
-            startExecution();
-        }
-    });
+    // AH2m：triggerFired 只是"已受理"的通知，不再在这里二次启动。
+    // 字符串/事件两条触发路径都已通过 requestExternalRound() 完成"启动或排队"的原子决策；
+    // 若这里在 Idle 再 startExecution，一次触发会在补跑队列之外多跑一轮（双跑）。
 }
 
 /// 析构内两段有界等待（毫秒），常量本体在 FlowExecutor.h（腿座钉值可达）。
