@@ -1360,6 +1360,15 @@
       "package_dir": "dist/VisionFlowPlatform-rc-20261121.1",
       "recorded_at": "2026-11-21",
       "recorded_note": "rc-20261121 之后现场反馈两修：启动默认展开工具箱（原 48px 竖条视觉上等于没有）、结果表改图像显示下方独立停靠并在收尾 raise 图像页；摘除读取图像算子，MVS 图像源补齐本地读图（修 m_isDirectory 致命缺陷、单文件/多图清单/索引切换/自动循环/mono8/结果字段与状态回读），本地图区与标定向导改由 MVS 驱动，旧算子类文件与注册一并删除。部署自检 76 PASS / 0 FAIL / 3 SKIP（较上一包少 1 条为退役算子专属腿），DeepOCR 合成图识别通过，exe 内嵌 HEAD 版本 yes。"
+    },
+    {
+      "tag": "rc-20261128",
+      "commit": "ff60eddf8fa6273c0c18522ed5b651a3fcf97d00",
+      "exe_md5": "6fdb13dddcac499885b335e2a7799912",
+      "exe_bytes": 13185536,
+      "package_dir": "dist/VisionFlowPlatform-rc-20261128",
+      "recorded_at": "2026-11-28",
+      "recorded_note": "上线包：含通信归属/轮次账务/外部触发原子决策与性能基线的全部修复；离线自检 0 失败，DeepOCR 合成图识别通过，exe 内嵌 HEAD 版本 yes。"
     }
   ],
   "legacy_backfilled": [
