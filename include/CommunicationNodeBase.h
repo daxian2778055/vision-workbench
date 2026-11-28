@@ -48,9 +48,8 @@ public:
     void setDeviceName(const QString &name) { m_deviceName = name; }
     QString deviceName() const { return m_deviceName; }
 
-    /// 设置发起方流程上下文（由 CommunicationManager::sendData 传入）。
-    /// AH1：该成员可能被另一流程覆盖，因此只作为「入队那一刻」取 key 的来源；
-    /// 异步执行阶段不得再读它，读写都在同一把锁内以消除数据竞争。
+    /// AH1b：该成员只服务同步寄存器写入的归属回退；异步发送不再读它。
+    /// 异步路径的归属由 requestSend 的显式 ctx 参数随请求一起排队。
     void setSendFlowContext(const std::shared_ptr<FlowRunContext> &ctx)
     {
         QMutexLocker locker(&m_sendContextMutex);
@@ -58,10 +57,11 @@ public:
     }
 
     /// 发送外部数据（由 CommunicationManager::sendData 触发，队列投递到节点线程执行）
-    void requestSend(const QByteArray &data)
+    /// AH1b：ctx 必须显式传入，避免"先 set 再 request"两步之间被另一流程覆盖。
+    void requestSend(const QByteArray &data, const std::shared_ptr<FlowRunContext> &ctx)
     {
-        // AH1：归属 key 在入队时冻结，随事件一起传递；B 流程随后覆盖上下文也不影响 A。
-        const void *key = sendFlowContext();
+        const void *key = ctx ? ctx.get()
+                              : (ownerContext() ? ownerContext().get() : nullptr);
         bumpSendPending(key);
         emit sendRequested(data, key);
     }

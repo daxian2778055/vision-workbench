@@ -744,9 +744,8 @@ bool CommunicationManager::sendData(const QString &deviceName, const QByteArray 
     }
 
     // 通过信号队列投递到节点线程执行实际 write（跨线程安全）
-    // P0 复核：把发起方流程上下文交给节点，稍后入队执行的写失败才能记回本轮
-    node->setSendFlowContext(flow);
-    node->requestSend(data);
+    // AH1b：流程归属随请求显式传入，去掉"先 set、后 request"两步之间的覆盖窗口。
+    node->requestSend(data, flow);
     // 兼容旧逻辑：数据写入参数供节点/UI 读取
     node->setParam(QStringLiteral("sendData"), QString::fromLatin1(data));
     emit dataSent(deviceName, data);

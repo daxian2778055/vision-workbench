@@ -32,6 +32,11 @@ void PerformancePanel::bindExecutor(FlowExecutor *executor)
     }
 }
 
+FlowExecutor *PerformancePanel::boundExecutor() const
+{
+    return m_boundExecutor.data();
+}
+
 void PerformancePanel::unbindExecutor()
 {
     if (m_boundExecutor) {

@@ -30,6 +30,8 @@ public:
 
     /// 解绑执行器
     void unbindExecutor();
+    /// AH3b：当前绑定的执行器（供关闭流程页时只清理即将销毁的那一枚）
+    FlowExecutor *boundExecutor() const;
 
     /// 清空统计数据
     void clearStats();

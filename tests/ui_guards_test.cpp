@@ -1478,8 +1478,21 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
         f.close();
         return s;
     }();
-    QVERIFY2(cmSrc2.contains(QStringLiteral("node->setSendFlowContext(flow)")),
-             "sendData 必须把发起方流程上下文交给节点，否则轮末判红桶错位");
+    QVERIFY2(cmSrc2.contains(QStringLiteral("node->requestSend(data, flow)"))
+             && !cmSrc2.contains(QStringLiteral("node->setSendFlowContext(flow)")),
+             "sendData 必须把流程上下文随请求显式传入，不能先写共享成员再入队");
+    const auto ahHead = [](const char *path) {
+        QFile f(QStringLiteral(SRC_DIR "/") + QString::fromLatin1(path));
+        f.open(QIODevice::ReadOnly | QIODevice::Text);
+        const QString s = QString::fromUtf8(f.readAll());
+        f.close();
+        return s;
+    };
+    QVERIFY2(ahHead("include/CommunicationNodeBase.h").contains(
+                 QStringLiteral("void requestSend(const QByteArray &data, const std::shared_ptr<FlowRunContext> &ctx)"))
+             && !ahHead("include/CommunicationNodeBase.h").contains(
+                 QStringLiteral("const void *key = sendFlowContext();")),
+             "异步发送不得从共享成员读取归属 key");
     // ㉑ 轮末排空 + 写回校验记账
     QFile fe(QStringLiteral(SRC_DIR "/src/FlowExecutor.cpp"));
     QVERIFY2(fe.open(QIODevice::ReadOnly | QIODevice::Text), "打不开 FlowExecutor.cpp");
@@ -1488,9 +1501,14 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
     QVERIFY2(feSrc.contains(QStringLiteral("waitSendDrain(m_runContext")),
              "轮末判红取差值前必须先有界排空");
     // AH2：排空超时必须拦下本轮，不能继续写 passed=true
-    QVERIFY2(feSrc.contains(QStringLiteral("if (!CommunicationNodeBase::waitSendDrain(m_runContext.get(), 2000))"))
+    QVERIFY2(feSrc.contains(QStringLiteral("const bool sendDrained = CommunicationNodeBase::waitSendDrain(m_runContext.get(), 2000)"))
+             && feSrc.contains(QStringLiteral("if (!sendDrained)"))
              && feSrc.contains(QStringLiteral("轮末发送排空超时")),
              "轮末排空超时必须判 NG，不能把未完成的异步写入记成通过");
+    QVERIFY2(ahHead("include/FlowExecutor.h").contains(QStringLiteral("m_sendFailureBaselineDeferred"))
+             && feSrc.contains(QStringLiteral("if (sendDrained) {"))
+             && feSrc.contains(QStringLiteral("m_sendFailureBaselineDeferred = false;")),
+             "排空超时不得推进失败基线，迟到失败不能重复计入下一轮");
     for (const char *file : { "src/ModbusNode.cpp", "src/PlcCommNode.cpp" }) {
         QFile f(QStringLiteral(SRC_DIR "/") + QString::fromLatin1(file));
         QVERIFY2(f.open(QIODevice::ReadOnly | QIODevice::Text), "打不开寄存器节点源码");
@@ -1965,9 +1983,10 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              && readSrc("src/PerformancePanel.cpp").contains(
                  QStringLiteral("void PerformancePanel::onNodeExecutionTime(const QString &nodeName, int nodeType,")),
              "性能统计跨线程不得传递裸 NodeBase*");
-    QVERIFY2(readSrc("src/MainWindow.cpp").contains(QStringLiteral("QCoreApplication::removePostedEvents(pp, QEvent::MetaCall)"))
-             && readSrc("src/MainWindow.cpp").contains(QStringLiteral("pp->unbindExecutor();")),
-             "关闭流程页必须在删场景前解绑性能面板并丢弃排队回调");
+    QVERIFY2(readSrc("include/PerformancePanel.h").contains(QStringLiteral("boundExecutor() const"))
+             && readSrc("src/MainWindow.cpp").contains(QStringLiteral("ppBoundBeforeClose == sceneEx && pp->boundExecutor() == sceneEx"))
+             && !readSrc("src/MainWindow.cpp").contains(QStringLiteral("removePostedEvents(pp, QEvent::MetaCall)")),
+             "关闭流程页只解绑即将销毁的执行器，不得清空面板全部排队信号");
     QVERIFY2(readSrc("src/PerformancePanel.cpp").contains(QStringLiteral("QTimer::singleShot(0, this"))
              && readSrc("src/PerformancePanel.cpp").contains(QStringLiteral("m_uiRefreshTimer.invalidate();")),
              "轮末必须安排一次合并刷新，确保末批统计可见且仍保留节流");

@@ -315,6 +315,8 @@ private:
     bool m_roundHadFailure = false;
     /// 轮首的发送失败计数快照（r19 P1-11）：轮末对比，增加即本轮判失败
     int m_sendFailuresAtRoundStart = 0;   /// 本轮是否出现失败节点（仅执行线程访问）
+    /// AH2b：轮末排空超时时不推进基线；迟到失败留在已判 NG 的那一轮，不串到下一轮
+    bool m_sendFailureBaselineDeferred = false;
     bool m_roundAborted = false;      /// 本轮是否被中途停止（仅执行线程访问）：半截流程不得计入整轮 OK
     /// 人为停止请求（界面线程置、执行线程读）：轮末据此判"中止"，而不是看 Stopped 状态
     /// ——失败停止同样是 Stopped，且被停止的算子可能自判失败（2026-10-25 复核 P2-1 残留）

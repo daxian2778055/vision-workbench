@@ -5402,6 +5402,12 @@ void MainWindow::onCloseFlowTab(int index)
         }
     }
 
+    // AH3b：removeTab 会触发页签切换并把面板重绑到下一流程；先记下关闭前绑定的执行器，
+    // 后面只清理"即将销毁的那一枚"，不能无条件解绑仍在使用的面板。
+    FlowExecutor *ppBoundBeforeClose = nullptr;
+    if (auto *pp = m_auxPanels ? m_auxPanels->performancePanel() : nullptr)
+        ppBoundBeforeClose = pp->boundExecutor();
+
     // 先从列表中移除场景（这样 removeTab 触发 currentChanged 时索引已同步）
     m_flowScenes.removeAt(index);
 
@@ -5432,11 +5438,11 @@ void MainWindow::onCloseFlowTab(int index)
         }
     }
 
-    // AH3：先解除性能面板绑定并丢弃排队中的旧信号，再删场景——否则工作线程 emit 的
-    // 节点耗时回调会在节点析构后被投递，面板解引用悬垂指针（最后一页尤其稳）。
+    // AH3b：节点耗时信号已改传值，不再需要清空面板的全部 MetaCall（会误伤其它排队信号）。
+    // 仅在面板仍绑定着即将销毁的执行器时解绑；若 removeTab 已把它绑到下一流程，保持不动。
     if (auto *pp = m_auxPanels ? m_auxPanels->performancePanel() : nullptr) {
-        pp->unbindExecutor();
-        QCoreApplication::removePostedEvents(pp, QEvent::MetaCall);
+        if (ppBoundBeforeClose == sceneEx && pp->boundExecutor() == sceneEx)
+            pp->unbindExecutor();
     }
 
     // 最后安全删除场景
@@ -7126,13 +7132,9 @@ void MainWindow::updateEditLockForCurrentScene()
 
 void MainWindow::onCurrentTabChanged(int index)
 {
-    if (index < 0) {
-        // AH3：没有活动页时面板不能继续绑定旧/占位执行器（关闭最后一页的路径）
-        if (auto *pp = m_auxPanels ? m_auxPanels->performancePanel() : nullptr)
-            pp->unbindExecutor();
-        return;
-    }
-    if (index >= m_flowScenes.size())
+    // AH3b：index<0 不再无条件解绑——关闭非当前页时面板仍绑定着正在使用的执行器，
+    // 解绑会让剩余流程的性能统计停更；销毁侧的按需解绑在 onCloseFlowTab 里完成。
+    if (index < 0 || index >= m_flowScenes.size())
         return;
 
     // 运行/暂停中禁止切换流程：执行器绑定的是正在执行的场景，重绑会让"本轮还在

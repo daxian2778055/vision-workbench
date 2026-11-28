@@ -2788,7 +2788,7 @@ void CommWritebackTest::pendingSendDrainsToZero()
     const void *flow = node.ownerContext().get();
     const int before = CommunicationNodeBase::pendingSendCount(flow);
 
-    node.requestSend(QByteArrayLiteral("x"));
+    node.requestSend(QByteArrayLiteral("x"), node.ownerContext());
     QVERIFY2(CommunicationNodeBase::pendingSendCount(flow) == before + 1,
              "requestSend 之后排队计数没加一");
 
@@ -4676,8 +4676,7 @@ void CommWritebackTest::sendFailureGoesToFlowContext()
 
     SerialCommNode node;   // 未连接：实际写必走失败路径
     node.init();
-    node.setSendFlowContext(ctx);
-    node.requestSend(QByteArrayLiteral("x"));   // 真队列：入队后 GUI 线程执行 onSendRequested
+    node.requestSend(QByteArrayLiteral("x"), ctx);   // 真队列：入队后 GUI 线程执行 onSendRequested
     for (int i = 0; i < 50 && CommunicationNodeBase::pendingSendCount(key) > 0; ++i)
         QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
 
@@ -4699,9 +4698,8 @@ void CommWritebackTest::sendFailureUsesFrozenFlowKey()
 
     SerialCommNode node;   // 未连接：实际写必走失败路径
     node.init();
-    node.setSendFlowContext(a);
-    node.requestSend(QByteArrayLiteral("x"));
-    node.setSendFlowContext(b);   // 模拟另一流程随后覆盖上下文
+    node.requestSend(QByteArrayLiteral("x"), a);
+    node.setSendFlowContext(b);   // 模拟另一流程在入队后覆盖共享回退上下文，显式 ctx 不受影响
     for (int i = 0; i < 50 && CommunicationNodeBase::pendingSendCount(keyA) > 0; ++i)
         QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
 

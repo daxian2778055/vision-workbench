@@ -450,6 +450,8 @@ void FlowExecutor::startExecution()
         emit executionError(QStringLiteral("轮首发送排空超时，上一轮可能有未记账的异步写入"));
     }
     m_sendFailuresAtRoundStart = CommunicationNodeBase::sendWriteFailureCount(m_runContext.get());   // P1-11 按流程
+    // AH2b：上一轮若因排空超时推迟了基线，这里统一重取，迟到失败不再二次计入本轮。
+    m_sendFailureBaselineDeferred = false;
     m_roundAborted = false;
     setRunState(ExecutionState::Running);
     resetState();
@@ -885,15 +887,22 @@ void FlowExecutor::run()
         // 判红取差值前先有界排空，让本轮入队的发送在读取前落地并记账。
         // AH2：在途写入未排空时不得判 OK——否则设备可能没收到指令，记录却是通过；
         // 这是安全侧偏差：宁可本轮 NG，也不把真实失败放行或延迟到下一轮。
-        if (!CommunicationNodeBase::waitSendDrain(m_runContext.get(), 2000)) {
+        const bool sendDrained = CommunicationNodeBase::waitSendDrain(m_runContext.get(), 2000);
+        if (!sendDrained) {
             m_roundHadFailure = true;
+            // AH2b：超时不推进基线——迟到失败属于本轮，若推进基线会在下一轮差值里再算一次。
+            m_sendFailureBaselineDeferred = true;
             emit executionError(QStringLiteral("轮末发送排空超时（2000ms），存在未完成的异步写入，本轮判 NG"));
         }
         const int sendFailures =
             CommunicationNodeBase::sendWriteFailureCount(m_runContext.get()) - m_sendFailuresAtRoundStart;
         // 消费完就推进快照（r19 P1-11 复核）：原快照只在 startExecution 取一次，连续模式下
         // 第一次失败之后每一轮都差值 >0 → 永久判 NG，还要被别的流程连累。每轮只看自己这一窗。
-        m_sendFailuresAtRoundStart = CommunicationNodeBase::sendWriteFailureCount(m_runContext.get());
+        // AH2b：只有排空成功才推进；deferred 交由下一轮轮首补偿。
+        if (sendDrained) {
+            m_sendFailuresAtRoundStart = CommunicationNodeBase::sendWriteFailureCount(m_runContext.get());
+            m_sendFailureBaselineDeferred = false;
+        }
 
         releaseRoundOutputsOverBudget();   // r19 P2-3：轮末按预算释放图像输出
         if (sendFailures > 0) {
