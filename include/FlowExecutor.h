@@ -56,7 +56,8 @@ public:
     /// 只存**弱引用**——令牌拥有本体，令牌若被强持在执行器里就是环（本体↔令牌互等，析构永不到）
     /// ⇒ 执行器借令牌时用 lock()，令牌没了就借不到（此时本执行器已无持有者，是正常的收尾态）。
     void setLifetimeToken(const std::shared_ptr<class FlowExecutorToken> &token);
-    void startExecution();
+    /// AH2i：返回是否真的起了新轮；外部触发据此决定是否计数/发 triggerFired
+    bool startExecution();
 
     /// S9：外部触发受理。空闲→立即起一轮；忙（运行/暂停）→有界排队补跑（上限
     /// kMaxPendingExternalRounds）；超界→丢最旧一笔并累计 droppedExternalRounds（"丢"可见，不再静默）。

@@ -1,4 +1,5 @@
 #include <QMutex>
+#include <QCoreApplication>
 #include "FlowExecutor.h"
 #include "CommunicationNodeBase.h"   // r19 P1-11：轮级发送失败计数
 #include <QJsonDocument>
@@ -434,6 +435,19 @@ bool FlowExecutor::drainDeferredSendBeforeRound()
 {
     if (!m_sendFailureBaselineDeferred)
         return true;
+    // AH2j：GUI 线程不能同步等待——通信节点的 QueuedConnection 槽也在该线程，
+    // 等 2.2s 会把自己要等的槽饿死。GUI 入口只做非阻塞判定，拒绝并交由触发排队/工作线程重试。
+    if (QCoreApplication::instance()
+        && QThread::currentThread() == QCoreApplication::instance()->thread()) {
+        if (CommunicationNodeBase::pendingSendCount(m_runContext.get()) > 0) {
+            emit executionError(QStringLiteral("上一轮发送仍未排空，拒绝/跳过新轮以避免错账"));
+            return false;
+        }
+        reconcileSendFailureBaseline(m_sendFailureBaselineDeferred, true,
+                                     CommunicationNodeBase::sendWriteFailureCount(m_runContext.get()),
+                                     &m_sendFailuresAtRoundStart, &m_sendFailureBaselineDeferred);
+        return true;
+    }
     bool drained = CommunicationNodeBase::waitSendDrain(m_runContext.get(), 200);
     if (!drained)
         drained = CommunicationNodeBase::waitSendDrain(m_runContext.get(), 2000);
@@ -447,11 +461,11 @@ bool FlowExecutor::drainDeferredSendBeforeRound()
     return true;
 }
 
-void FlowExecutor::startExecution()
+bool FlowExecutor::startExecution()
 {
     QMutexLocker locker(&m_mutex);
     if (m_runContext->state() == ExecutionState::Running) {
-        return;
+        return false;
     }
 
     // 清掉上一轮/局部执行遗留的轮级标志（P2-1/P2-B 残留）：
@@ -464,7 +478,7 @@ void FlowExecutor::startExecution()
     // AH2h：手动启动 / 空闲外部触发也是起轮入口，必须与连续路径同口径处理 deferred；
     // 旧请求仍未排空时拒绝启动，不能带着旧基线把迟到失败算进新轮。
     if (!drainDeferredSendBeforeRound())
-        return;
+        return false;
     const bool startDrained = CommunicationNodeBase::waitSendDrain(m_runContext.get(), 200);
     if (!startDrained) {
         emit executionError(QStringLiteral("轮首发送排空超时，上一轮可能有未记账的异步写入"));
@@ -481,6 +495,7 @@ void FlowExecutor::startExecution()
     } else {
         m_waitCondition.wakeAll();
     }
+    return true;
 }
 
 void FlowExecutor::pauseExecution()
@@ -604,7 +619,22 @@ bool FlowExecutor::requestExternalRound()
             << QStringLiteral("写闸开启期间不受理外部触发的新运行（出厂口令未改，改密后恢复）");
         return false;
     }
-    startExecution();   // 空闲：语义同原 startExecution（立即起一轮）
+    // AH2i：只有真的起了一轮才让 GTM 计数/发 triggerFired；排空未完成时把触发保留为补跑，
+    // 等旧请求排空后由工作线程轮首处理，不虚报也不丢触发。
+    if (!startExecution()) {
+        QMutexLocker locker(&m_mutex);
+        if (m_pendingExternalRounds < kMaxPendingExternalRounds) {
+            ++m_pendingExternalRounds;
+            m_waitCondition.wakeAll();
+            return true;
+        }
+        ++m_droppedExternalRounds;
+        locker.unlock();
+        VFP_RUNTIME_INFO.noquote()
+            << QStringLiteral("警告：外部触发超出排队上限(%1)，丢弃最旧一笔；累计丢弃=%2")
+                   .arg(kMaxPendingExternalRounds).arg(m_droppedExternalRounds);
+        return false;
+    }
     return true;
 }
 
