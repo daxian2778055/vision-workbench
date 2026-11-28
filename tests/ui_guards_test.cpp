@@ -1538,9 +1538,10 @@ void UiGuardsTest::f1DataPanelFollowupGuards()
              && feSrc.contains(QStringLiteral("if (!m_sendFailureBaselineDeferred)")),
              "deferred 收口集中到 helper，连续轮次与 startExecution 共用");
     QVERIFY2(ahHead("include/FlowExecutor.h").contains(QStringLiteral("bool startExecution()"))
-             && feSrc.contains(QStringLiteral("if (!startExecution())"))
-             && !feSrc.contains(QStringLiteral("if (!startExecution()) {")),
-             "空闲启动失败时必须拒绝外部触发，不能把它排进无人消费的补跑队列");
+             && feSrc.contains(QStringLiteral("if (!startExecution()) {"))
+             && feSrc.contains(QStringLiteral("const ExecutionState now = m_runContext->state();"))
+             && feSrc.contains(QStringLiteral("now != ExecutionState::Running && now != ExecutionState::Paused")),
+             "启动失败后须复查状态：抢先启动则补跑，仍 Idle 才拒绝");
     QVERIFY2(feSrc.contains(QStringLiteral("QThread::currentThread() == QCoreApplication::instance()->thread()"))
              && !feSrc.contains(QStringLiteral("if (false && QCoreApplication"))
              && feSrc.contains(QStringLiteral("pendingSendCount(m_runContext.get()) > 0")),

@@ -620,10 +620,26 @@ bool FlowExecutor::requestExternalRound()
         return false;
     }
     // AH2k：只有真的起了一轮才让 GTM 计数/发 triggerFired。startExecution 失败时
-    // 执行器仍是 Idle，没有工作线程消费补跑队列（wakeAll 唤不醒未启动的线程），
-    // 排队只会让触发永久挂起却已被计数——故直接拒绝，让触发管理器不计数、不发 triggerFired。
-    if (!startExecution())
+    // 执行器可能仍是 Idle（deferred 未排空，排队无人消费 ⇒ 必须拒绝），也可能在
+    // 上面解锁后被另一线程抢先启动 ⇒ 已变 Running/Paused，此时应按忙时策略补跑，不能丢触发。
+    if (!startExecution()) {
+        QMutexLocker locker(&m_mutex);
+        const ExecutionState now = m_runContext->state();
+        if (now != ExecutionState::Running && now != ExecutionState::Paused)
+            return false;   // 仍 Idle：deferred 未排空，拒绝且不计数
+        if (m_pendingExternalRounds < kMaxPendingExternalRounds) {
+            ++m_pendingExternalRounds;
+            m_waitCondition.wakeAll();
+            return true;
+        }
+        ++m_droppedExternalRounds;
+        const quint64 dropped = m_droppedExternalRounds;
+        locker.unlock();
+        VFP_RUNTIME_INFO.noquote()
+            << QStringLiteral("警告：外部触发超出排队上限(%1)，丢弃最旧一笔；累计丢弃=%2")
+                   .arg(kMaxPendingExternalRounds).arg(dropped);
         return false;
+    }
     return true;
 }
 
